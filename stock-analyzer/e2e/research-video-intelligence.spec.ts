@@ -9,6 +9,15 @@ const MEASURED_VIDEO_EVIDENCE={
   records:[{videoId:'TEST_ONLY_VIDEO',canonicalUrl:'https://www.youtube.com/watch?v=TEST_ONLY_VIDEO',title:'TEST_ONLY sanitized research source',channelOrPublisher:'TEST_ONLY channel',publishedAt:'2026-09-12T00:00:00.000Z',discoveredAt:'2026-09-13T00:00:00.000Z',language:'ko',durationSec:321,transcriptStatus:'NOT_PROVIDED',captionsKnownPresent:false,sourceTrustTier:'TIER_E_UNVERIFIED_CREATOR',contentAuthority:'UNTRUSTED_EXTERNAL_DATA',economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE'}],
   safety:SAFETY,snapshotProvenance:SNAPSHOT_PROVENANCE,economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE',
 } as const;
+const MULTI_SOURCE_VIDEO_EVIDENCE={
+  ...MEASURED_VIDEO_EVIDENCE,
+  sourceCount:3,
+  records:[
+    {...MEASURED_VIDEO_EVIDENCE.records[0],videoId:'TEST_ONLY_VIDEO_A',canonicalUrl:'https://www.youtube.com/watch?v=TEST_ONLY_VIDEO_A',title:'TEST_ONLY source A',channelOrPublisher:'TEST_ONLY channel A',transcriptStatus:'NOT_AUTHORIZED',captionsKnownPresent:true,sourceTrustTier:'TIER_E_UNVERIFIED_CREATOR'},
+    {...MEASURED_VIDEO_EVIDENCE.records[0],videoId:'TEST_ONLY_VIDEO_B',canonicalUrl:'https://www.youtube.com/watch?v=TEST_ONLY_VIDEO_B',title:'TEST_ONLY source B',channelOrPublisher:'TEST_ONLY channel B',transcriptStatus:'UNAVAILABLE',captionsKnownPresent:false,sourceTrustTier:'TIER_C_PRIMARY_EXPERT'},
+    {...MEASURED_VIDEO_EVIDENCE.records[0],videoId:'TEST_ONLY_VIDEO_C',canonicalUrl:'https://www.youtube.com/watch?v=TEST_ONLY_VIDEO_C',title:'TEST_ONLY source C',channelOrPublisher:'TEST_ONLY channel C',transcriptStatus:'NOT_PROVIDED',captionsKnownPresent:null,sourceTrustTier:'UNKNOWN'},
+  ],
+} as const;
 const MISSING_VIDEO_EVIDENCE={ok:false,available:false,dataState:'UNKNOWN',reason:'SANITIZED_RUNTIME_EVIDENCE_MISSING',provider:'YOUTUBE_DATA_API_V3',providerAccess:'OFFICIAL_PUBLIC_API',requestMode:'READ_ONLY_GET',credentialValueExposed:false,economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE'} as const;
 function fulfill(route:Route,body:unknown,status=200){return route.fulfill({status,contentType:'application/json; charset=utf-8',body:JSON.stringify(body)});}
 async function installRuntime(page:Page,videoEvidence:unknown=MEASURED_VIDEO_EVIDENCE,videoEvidenceAuth:string[]=[]){
@@ -67,6 +76,26 @@ for(const viewport of [{width:320,height:740},{width:1440,height:900}]){
     await expect(page.getByTestId('video-phase2-safety-footer')).toContainText('Economic Evidence Credit 0');
     expect(videoEvidenceAuth.length).toBeGreaterThan(0);expect(videoEvidenceAuth.at(-1)).toMatch(/^Bearer\s+\S+/u);expect(providerRequests).toEqual([]);
 
+    const overflow=await page.evaluate(()=>Math.max(document.documentElement.scrollWidth,document.body.scrollWidth)-window.innerWidth);expect(overflow).toBeLessThanOrEqual(2);
+  });
+
+  test(`video research preserves every measured source instead of collapsing multi-source truth at ${viewport.width}px`,async({page})=>{
+    const providerRequests:string[]=[];const videoEvidenceAuth:string[]=[];page.on('request',request=>{if(request.url().includes('googleapis.com/youtube'))providerRequests.push(request.url());});
+    await page.setViewportSize(viewport);await installRuntime(page,MULTI_SOURCE_VIDEO_EVIDENCE,videoEvidenceAuth);await page.goto('/research-center');
+    await page.getByRole('button',{name:'영상 연구',exact:true}).click();
+    const panel=page.getByTestId('research-video-panel');await expect(panel).toBeVisible();
+    await expect(panel).toContainText('MEASURED · sanitized reader connected · 3 sources');
+    await expect(page.getByTestId('video-transcript-state')).toContainText('MULTI_SOURCE — NOT_AUTHORIZED / NOT_PROVIDED / UNAVAILABLE');
+    await expect(page.getByTestId('video-transcript-state')).toContainText('UNKNOWN — multi-source transcript states NOT_AUTHORIZED / NOT_PROVIDED / UNAVAILABLE; segment count not measured');
+    await expect(page.getByTestId('video-evidence-state')).toContainText('MULTI_SOURCE — TIER_C_PRIMARY_EXPERT / TIER_E_UNVERIFIED_CREATOR / UNKNOWN');
+    await expect(page.getByTestId('video-strategy-state')).toContainText('BLOCKED_TRANSCRIPT — NOT_AUTHORIZED / NOT_PROVIDED / UNAVAILABLE; authorized transcript required');
+    for(const [index,title] of ['TEST_ONLY source A','TEST_ONLY source B','TEST_ONLY source C'].entries()){
+      const record=page.getByTestId(`video-detail-record-${index}`);await expect(record).toBeVisible();await expect(record).toContainText(title);await expect(record).toContainText(`Source ${index+1} / 3`);
+    }
+    await expect(page.getByTestId('video-detail-record-0')).toContainText('TIER_E_UNVERIFIED_CREATOR');
+    await expect(page.getByTestId('video-detail-record-1')).toContainText('TIER_C_PRIMARY_EXPERT');
+    await expect(page.getByTestId('video-detail-record-2')).toContainText('UNKNOWN');
+    expect(videoEvidenceAuth.length).toBeGreaterThan(0);expect(videoEvidenceAuth.at(-1)).toMatch(/^Bearer\s+\S+/u);expect(providerRequests).toEqual([]);
     const overflow=await page.evaluate(()=>Math.max(document.documentElement.scrollWidth,document.body.scrollWidth)-window.innerWidth);expect(overflow).toBeLessThanOrEqual(2);
   });
 }
