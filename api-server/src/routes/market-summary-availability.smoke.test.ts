@@ -162,7 +162,6 @@ function videoEvidenceSnapshot() {
     query: 'TEST_ONLY video strategy',
     pagesUsed: 1,
     quotaState: 'BOUNDED_ESTIMATE_USED_100_UNITS',
-    credentialEnvName: 'YOUTUBE_DATA_API_KEY',
     credentialConfigured: true,
     credentialValueExposed: false,
     sourceCount: 1,
@@ -177,13 +176,23 @@ function videoEvidenceSnapshot() {
       durationSec: 321,
       transcriptStatus: 'NOT_PROVIDED',
       captionsKnownPresent: false,
-      sourceTrustTier: 'PUBLIC_PLATFORM_METADATA',
+      sourceTrustTier: 'UNKNOWN',
       contentAuthority: 'UNTRUSTED_EXTERNAL_DATA',
       economicEvidenceCredit: 0,
       profitabilityCredit: 0,
       executionAuthority: 'NONE',
     }],
     safety: VIDEO_SAFETY,
+    snapshotProvenance: {
+      schemaVersion: 'video-research-sanitized-snapshot-v1',
+      sourceHeadSha: 'a'.repeat(40),
+      observedAt: '2026-09-13T00:00:00.000Z',
+      publisherMode: 'LOCAL_ATOMIC_FILE',
+      providerRuntimeVersion: 'video-research-public-provider-runtime-v3',
+      economicEvidenceCredit: 0,
+      profitabilityCredit: 0,
+      executionAuthority: 'NONE',
+    },
   };
 }
 
@@ -237,6 +246,69 @@ test('video research evidence reader projects only sanitized official public run
   assert.equal(records[0]?.economicEvidenceCredit, 0);
   assert.equal(records[0]?.profitabilityCredit, 0);
   assert.equal(records[0]?.executionAuthority, 'NONE');
+  const provenance = result.body.snapshotProvenance as Record<string, unknown>;
+  assert.equal(provenance.schemaVersion, 'video-research-sanitized-snapshot-v1');
+  assert.equal(provenance.sourceHeadSha, 'a'.repeat(40));
+  assert.equal(provenance.observedAt, '2026-09-13T00:00:00.000Z');
+  assert.equal(provenance.publisherMode, 'LOCAL_ATOMIC_FILE');
+  assert.equal(provenance.executionAuthority, 'NONE');
+});
+
+test('video research evidence reader requires exact sanitized snapshot provenance before MEASURED', async () => {
+  const missingProvenance: Record<string, unknown> = { ...videoEvidenceSnapshot() };
+  delete missingProvenance.snapshotProvenance;
+  const missingResult = await requestVideoEvidence(async () => missingProvenance);
+  assert.equal(missingResult.body.available, false);
+  assert.equal(missingResult.body.dataState, 'UNKNOWN');
+  assert.equal(missingResult.body.reason, 'SANITIZED_RUNTIME_EVIDENCE_INVALID');
+  assert.equal(Object.prototype.hasOwnProperty.call(missingResult.body, 'sourceCount'), false);
+
+  const invalidSha = {
+    ...videoEvidenceSnapshot(),
+    snapshotProvenance: {
+      ...videoEvidenceSnapshot().snapshotProvenance,
+      sourceHeadSha: 'not-an-exact-sha',
+    },
+  };
+  const invalidShaResult = await requestVideoEvidence(async () => invalidSha);
+  assert.equal(invalidShaResult.body.available, false);
+  assert.equal(invalidShaResult.body.dataState, 'UNKNOWN');
+  assert.equal(invalidShaResult.body.reason, 'SANITIZED_RUNTIME_EVIDENCE_INVALID');
+
+  const nonCanonicalTimestamp = {
+    ...videoEvidenceSnapshot(),
+    snapshotProvenance: {
+      ...videoEvidenceSnapshot().snapshotProvenance,
+      observedAt: '2026-09-13T00:00:00Z',
+    },
+  };
+  const timestampResult = await requestVideoEvidence(async () => nonCanonicalTimestamp);
+  assert.equal(timestampResult.body.available, false);
+  assert.equal(timestampResult.body.dataState, 'UNKNOWN');
+  assert.equal(timestampResult.body.reason, 'SANITIZED_RUNTIME_EVIDENCE_INVALID');
+});
+
+test('video research evidence reader independently rejects malformed record provenance', async () => {
+  const wrongUrl = videoEvidenceSnapshot();
+  wrongUrl.records = [{ ...wrongUrl.records[0], canonicalUrl: 'https://example.com/watch?v=TEST_ONLY_VIDEO' }];
+  const wrongUrlResult = await requestVideoEvidence(async () => wrongUrl);
+  assert.equal(wrongUrlResult.body.available, false);
+  assert.equal(wrongUrlResult.body.dataState, 'UNKNOWN');
+  assert.equal(wrongUrlResult.body.reason, 'SANITIZED_RUNTIME_EVIDENCE_INVALID');
+
+  const inventedTranscriptStatus = videoEvidenceSnapshot();
+  inventedTranscriptStatus.records = [{ ...inventedTranscriptStatus.records[0], transcriptStatus: 'AVAILABLE_BY_GUESS' }];
+  const transcriptResult = await requestVideoEvidence(async () => inventedTranscriptStatus);
+  assert.equal(transcriptResult.body.available, false);
+  assert.equal(transcriptResult.body.dataState, 'UNKNOWN');
+  assert.equal(transcriptResult.body.reason, 'SANITIZED_RUNTIME_EVIDENCE_INVALID');
+
+  const inventedTrustTier = videoEvidenceSnapshot();
+  inventedTrustTier.records = [{ ...inventedTrustTier.records[0], sourceTrustTier: 'PUBLIC_PLATFORM_METADATA' }];
+  const trustResult = await requestVideoEvidence(async () => inventedTrustTier);
+  assert.equal(trustResult.body.available, false);
+  assert.equal(trustResult.body.dataState, 'UNKNOWN');
+  assert.equal(trustResult.body.reason, 'SANITIZED_RUNTIME_EVIDENCE_INVALID');
 });
 
 test('video research evidence reader fails closed on secret-bearing or authority-violating snapshots', async () => {
