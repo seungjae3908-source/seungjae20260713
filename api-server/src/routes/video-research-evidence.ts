@@ -27,6 +27,7 @@ const SAFE_CREDENTIAL_METADATA = new Set([
   'credentialConfigured',
   'credentialEnvName',
   'credentialValueExposed',
+  'credentialMutation',
 ]);
 const FORBIDDEN_KEY = /(api.?key|access.?token|refresh.?token|secret|password|credential)/iu;
 
