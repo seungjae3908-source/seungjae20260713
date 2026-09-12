@@ -37,7 +37,7 @@ function successfulRuntimeResult() {
       durationSec: 720,
       transcriptStatus: 'NOT_AUTHORIZED',
       captionsKnownPresent: true,
-      sourceTrustTier: 'PUBLIC_PLATFORM_METADATA',
+      sourceTrustTier: 'UNKNOWN',
       contentAuthority: 'UNTRUSTED_EXTERNAL_DATA',
       economicEvidenceCredit: 0,
       profitabilityCredit: 0,
@@ -72,6 +72,9 @@ test('sanitized snapshot strips credential metadata and binds exact source prove
   assert.equal(snapshot.credentialConfigured, true);
   assert.equal(snapshot.credentialValueExposed, false);
   assert.equal(Object.prototype.hasOwnProperty.call(snapshot, 'credentialEnvName'), false);
+  assert.equal(snapshot.records[0]?.canonicalUrl, 'https://www.youtube.com/watch?v=public-video-1');
+  assert.equal(snapshot.records[0]?.transcriptStatus, 'NOT_AUTHORIZED');
+  assert.equal(snapshot.records[0]?.sourceTrustTier, 'UNKNOWN');
   assert.equal(snapshot.snapshotProvenance.sourceHeadSha, HEAD);
   assert.equal(snapshot.snapshotProvenance.observedAt, '2026-09-12T18:20:00.000Z');
   assert.equal(snapshot.snapshotProvenance.publisherMode, 'LOCAL_ATOMIC_FILE');
@@ -103,6 +106,24 @@ test('publisher writes exactly one fixed-name atomic snapshot in a caller-select
     assert.equal(stored.safety.executionAuthority, 'NONE');
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('publisher fails closed on malformed record identity, transcript status, and trust tier', () => {
+  const wrongHost = successfulRuntimeResult();
+  wrongHost.records[0].canonicalUrl = 'https://example.invalid/watch?v=public-video-1';
+  const mismatchedVideoId = successfulRuntimeResult();
+  mismatchedVideoId.records[0].canonicalUrl = 'https://www.youtube.com/watch?v=another-video';
+  const invalidTranscriptStatus = successfulRuntimeResult();
+  invalidTranscriptStatus.records[0].transcriptStatus = 'AVAILABLE_BY_GUESS';
+  const invalidTrustTier = successfulRuntimeResult();
+  invalidTrustTier.records[0].sourceTrustTier = 'PUBLIC_PLATFORM_METADATA';
+
+  for (const result of [wrongHost, mismatchedVideoId, invalidTranscriptStatus, invalidTrustTier]) {
+    assert.throws(
+      () => createSanitizedVideoResearchSnapshotV1(result, { sourceHeadSha: HEAD, observedAt: OBSERVED_AT }),
+      (error) => error?.code === 'VIDEO_RESEARCH_SNAPSHOT_RECORD_INVALID',
+    );
   }
 });
 
