@@ -138,10 +138,14 @@ function buildBaseSnapshot(signal, gate, evidence, evaluatedAtMs, executionDirec
     horizon: signal.horizon,
     signalDirection: signal.direction,
     executionDirection,
+    candidateId: signal.strategyIdentity.candidateId ?? null,
+    strategyFamily: signal.strategyIdentity.strategyFamily ?? null,
     strategyId: signal.strategyIdentity.strategyId,
     strategyVersion: signal.strategyIdentity.strategyVersion,
     parameterHash: signal.strategyIdentity.parameterHash,
+    parameterDigest: signal.strategyIdentity.parameterDigest ?? null,
     researchCodeSha: signal.strategyIdentity.researchCodeSha.toLowerCase(),
+    accountMode: signal.strategyIdentity.accountMode ?? null,
     evaluatedAtMs,
   });
   return Object.freeze({

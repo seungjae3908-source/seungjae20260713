@@ -2,6 +2,10 @@ import path from 'node:path';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { logger } from '../lib/logger';
 import { sendTelegramAlert, type TelegramAlertInput } from './telegram-notification.service';
+import {
+  deliverMemberWatchlistTelegramForSignal,
+  type MemberWatchlistTelegramProducerResult,
+} from './member-watchlist-telegram-producer.service';
 
 const DEFAULT_URL = 'http://127.0.0.1:8790/v1/signals';
 const DEFAULT_INTERVAL_MS = 60_000;
@@ -40,6 +44,7 @@ type V3Snapshot = {
 
 type V3Envelope = { ok: true; serviceSha: string; snapshot: V3Snapshot; executionAuthority: 'NONE' };
 type Persisted = { version: 1; delivered: Record<string, string> };
+type WatchlistDeliverer = typeof deliverMemberWatchlistTelegramForSignal;
 
 function boundedInterval(value: unknown): number {
   const parsed = Number(value);
@@ -170,12 +175,23 @@ class DeliveryState {
   }
 }
 
+function mergePersonalResult(
+  result: { attempted: number; delivered: number; deduped: number; skipped: number; failed: number },
+  personal: MemberWatchlistTelegramProducerResult,
+): void {
+  result.attempted += personal.attempted;
+  result.delivered += personal.delivered;
+  result.skipped += personal.skipped;
+  result.failed += personal.failed;
+}
+
 export class SignalIntelligenceTelegramSubscriber {
   private running = false;
   constructor(
     private readonly store: DeliveryState,
     private readonly deliver: typeof sendTelegramAlert = sendTelegramAlert,
     private readonly fetchImpl: typeof fetch = fetch,
+    private readonly deliverWatchlist: WatchlistDeliverer = deliverMemberWatchlistTelegramForSignal,
   ) {}
 
   async runOnce(now = new Date()): Promise<{ attempted: number; delivered: number; deduped: number; skipped: number; failed: number }> {
@@ -197,6 +213,24 @@ export class SignalIntelligenceTelegramSubscriber {
         || !Array.isArray(snapshot?.events)) return result;
 
       for (const event of snapshot.events) {
+        try {
+          const personal = await this.deliverWatchlist({
+            type: event.type,
+            id: event.id,
+            serviceSha: snapshot.serviceSha,
+            market: event.market,
+            symbol: event.symbol,
+            strategy: event.strategy,
+            timeframe: event.timeframe,
+            direction: event.direction,
+            validationTier: event.validationTier,
+            occurredAt: now.toISOString(),
+          });
+          mergePersonalResult(result, personal);
+        } catch {
+          result.failed += 1;
+        }
+
         const alert = alertFromEvent(event, snapshot.serviceSha);
         if (!alert?.dedupeKey) { result.skipped += 1; continue; }
         if (await this.store.has(alert.dedupeKey)) { result.deduped += 1; continue; }

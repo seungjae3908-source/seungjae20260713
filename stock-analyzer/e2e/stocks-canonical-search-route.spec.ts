@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 
-const now = '2026-09-04T03:00:00.000Z';
+const now = new Date().toISOString();
 
 const krSamsung = {
   id: 'stock:KR:KOSPI:005930',
@@ -43,18 +43,24 @@ const usApple = {
 type SearchRequest = { q: string; asset: string | null; market: string | null };
 
 function successfulResponse(q: string, market: string | null, results: readonly unknown[]) {
+  const dataAsOf = new Date().toISOString();
   return {
     ok: true,
     state: results.length ? 'FULL' : 'EMPTY',
     q,
     asset: 'stock',
     market,
-    results,
+    results: results.map((result) => ({ ...(result as object), dataAsOf })),
     count: results.length,
-    dataAsOf: now,
+    dataAsOf,
     stale: false,
     partial: false,
-    providers: [],
+    providers: [
+      { provider: 'krx', status: 'ok', count: 1, dataAsOf },
+      { provider: 'finnhub', status: 'ok', count: 1, dataAsOf },
+      { provider: 'upbit', status: 'ok', count: 1, dataAsOf },
+      { provider: 'bitget', status: 'ok', count: 1, dataAsOf },
+    ],
     hiddenMatches: [],
   };
 }
@@ -132,7 +138,19 @@ async function installNonSearchApiMocks(page: Page) {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ ok: true, market, rows: [] }),
+      body: JSON.stringify({
+        ok: true,
+        provider: 'rule-based-engine',
+        analysisMode: 'rule-based',
+        aiConfigured: false,
+        analysisDescription: '검색 경로 검증 fixture',
+        market,
+        generatedAt: now,
+        rows: [],
+        excludedCount: 0,
+        excludedBreakdown: {},
+        dataQualityNote: '검증 fixture',
+      }),
     });
   });
 }
@@ -282,15 +300,21 @@ test('zero results, provider failure, and identity-only results remain truthfull
     const market = url.searchParams.get('market');
 
     if (q === 'provider-down') {
+      const unavailable = successfulResponse(q, market, []);
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          ...successfulResponse(q, market, []),
+          ...unavailable,
           state: 'DEGRADED',
-          stale: true,
+          stale: false,
           partial: true,
-          providers: [{ provider: 'KRX', status: 'error', count: 0, dataAsOf: null }],
+          providers: [
+            { provider: 'krx', status: 'error', count: 0, dataAsOf: null },
+            { provider: 'finnhub', status: 'ok', count: 1, dataAsOf: unavailable.dataAsOf },
+            { provider: 'upbit', status: 'ok', count: 1, dataAsOf: unavailable.dataAsOf },
+            { provider: 'bitget', status: 'ok', count: 1, dataAsOf: unavailable.dataAsOf },
+          ],
         }),
       });
       return;

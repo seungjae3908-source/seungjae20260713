@@ -393,8 +393,32 @@ async function installStockInfoMocks(page: Page, mode: StockInfoMode) {
     const requestUrl = new URL(route.request().url());
     const path = requestUrl.pathname;
     const quoteFixture = { ticker: 'AAPL', name: 'Apple', market: 'US', currency: 'USD', price: 231.45, changeAmount: 1.25, changePercent: 0.54, volume: 1_000_000, open: 229.5, high: 232.1, low: 228.9, tradingValue: 231_450_000, marketCap: 3_000_000_000_000, updatedAt: NOW, marketStatus: 'OPEN' };
-    const profileFixture = { ticker: 'AAPL', name: 'Apple', market: 'US', currency: 'USD', industry: 'Technology', sector: 'Information Technology', country: 'US' };
-    if (path === '/api/stocks/special-feed') return fulfill(route, { ok: true, asset: 'stock', market: 'US', items: [], count: 0, catalogSize: 1, updatedAt: NOW });
+    const profileFixture = {
+      ticker: 'AAPL',
+      name: 'Apple',
+      market: 'US',
+      currency: 'USD',
+      description: '',
+      industry: 'Technology',
+      sector: 'Information Technology',
+      country: 'US',
+      mainBusiness: '',
+      competitors: [] as string[],
+    };
+    if (path === '/api/stocks/special-feed') return fulfill(route, {
+      ok: true,
+      asset: 'stock',
+      market: 'US',
+      items: [],
+      count: 0,
+      catalogSize: 1,
+      scannedNow: 1,
+      nextCursor: 0,
+      updatedAt: new Date().toISOString(),
+      ttlMinutes: 60,
+      refreshSeconds: 30,
+      note: 'Deterministic empty US stock special-feed fixture.',
+    });
     if (path === '/api/quotes') return fulfill(route, { quotes: [quoteFixture] });
     if (path === '/api/stocks/AAPL/quote') return fulfill(route, quoteFixture);
     if (path === '/api/stocks/AAPL/company') return fulfill(route, { company: profileFixture });
@@ -402,17 +426,57 @@ async function installStockInfoMocks(page: Page, mode: StockInfoMode) {
     if (path === '/api/stocks/AAPL/financials') {
       financialCalls += 1;
       if (mode === 'slow-financial') await financialGate;
-      return fulfill(route, { financials: { source: 'live', quarterly: [{ period: '2026-Q2', periodLabel: '2026 Q2', revenue: 100_000_000, operatingIncome: 25_000_000, netIncome: 20_000_000, assets: 500_000_000, liabilities: 150_000_000, equity: 350_000_000, operatingCashFlow: 30_000_000 }], annual: [], ratios: { per: 18.2, pbr: 2.1, roe: 14.8, debtRatio: 42.5 } } });
+      const financials = {
+        source: 'live',
+        quarterly: [{ period: '2026-Q2', periodLabel: '2026 Q2', revenue: 100_000_000, operatingIncome: 25_000_000, netIncome: 20_000_000, assets: 500_000_000, liabilities: 150_000_000, equity: 350_000_000, operatingCashFlow: 30_000_000 }],
+        annual: [],
+        ratios: { per: 18.2, pbr: 2.1, roe: 14.8, debtRatio: 42.5 },
+      };
+      return fulfill(route, {
+        ticker: 'AAPL',
+        financials,
+        ...financials,
+        items: financials.annual,
+        summary: '실제 공개 재무 데이터를 불러왔습니다.',
+      });
     }
     if (path === '/api/stocks/AAPL/news') {
       newsCalls += 1;
       if (mode === 'slow-news') await newsGate;
       if (mode === 'news-failure') return fulfill(route, { ok: false, error: 'NEWS_PROVIDER_UNAVAILABLE', message: 'deterministic optional news failure' }, 502);
-      return fulfill(route, { news: [{ title: 'Apple deterministic public news', source: 'fixture-news', date: '2026-08-11', url: 'https://news.example.invalid/apple' }] });
+      const news = [{ title: 'Apple deterministic public news', source: 'fixture-news', date: '2026-08-11', url: 'https://news.example.invalid/apple' }];
+      return fulfill(route, { ticker: 'AAPL', news, items: news, summary: 'Apple deterministic public news' });
     }
-    if (path === '/api/stocks/AAPL/disclosures') return fulfill(route, { disclosures: [] });
-    if (path === '/api/stocks/AAPL/market-flow') return fulfill(route, { available: true, totals: { individual: 10, institution: 20, foreigner: 30 } });
-    if (path === '/api/stocks/AAPL/short-selling') return fulfill(route, { available: true, latest: { balance: 100 } });
+    if (path === '/api/stocks/AAPL/disclosures') return fulfill(route, {
+      ticker: 'AAPL',
+      disclosures: [],
+      filings: [],
+      items: [],
+      summary: '최근 공시가 없습니다.',
+    });
+    if (path === '/api/stocks/AAPL/market-flow') return fulfill(route, {
+      ticker: 'AAPL',
+      period: 'daily',
+      available: false,
+      rows: [],
+      totals: {
+        individual: null,
+        institution: null,
+        foreign: null,
+        program: null,
+        volume: null,
+        value: null,
+        tradeValue: null,
+      },
+      message: '해외 종목의 투자자별 수급은 현재 제공처에서 지원하지 않습니다.',
+    });
+    if (path === '/api/stocks/AAPL/short-selling') return fulfill(route, {
+      ticker: 'AAPL',
+      available: false,
+      rows: [],
+      latest: null,
+      message: '해외 공매도 데이터는 별도 제공처 연동이 필요합니다.',
+    });
     if (path.startsWith('/api/price-alert')) return fulfill(route, { ok: true, items: [], alerts: [] });
     return fulfill(route, { ok: true, items: [], rows: [], results: [], quotes: [], cards: [], alerts: [], markets: [], tickers: [] });
   });
@@ -470,9 +534,9 @@ test('portfolio exposes the existing unified journal as a primary tab', async ({
     error: { code: 'FIXTURE_UNAVAILABLE', message: 'fixture intentionally unavailable' },
   }, 503));
   await page.goto('/portfolio');
-  await expect(page.getByRole('heading', { name: '내 포트폴리오', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '포트폴리오', level: 1 })).toBeVisible();
 
-  await page.getByRole('button', { name: '매매일지' }).click();
+  await page.getByRole('tab', { name: '매매일지' }).click();
   await expect(page).toHaveURL(/\/portfolio\?tab=journal$/);
   await expect(page.getByTestId('portfolio-journal')).toBeVisible();
   await expect(page.getByTestId('unified-trade-journal')).toBeVisible();
@@ -480,7 +544,7 @@ test('portfolio exposes the existing unified journal as a primary tab', async ({
 
   await page.reload();
   await expect(page.getByTestId('portfolio-journal')).toBeVisible();
-  await expect(page.getByRole('button', { name: '매매일지' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('tab', { name: '매매일지' })).toHaveAttribute('aria-selected', 'true');
 });
 
 test('slow News stays secondary while stock-info primary quote and navigation remain usable', async ({ page }) => {

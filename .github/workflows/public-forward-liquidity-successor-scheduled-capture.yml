@@ -14,9 +14,12 @@ on:
       - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-seam-v1.mjs'
       - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-multi-lane-policy-v1.mjs'
       - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-v3.json'
       - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-multi-lane-prospective-policy-v1.json'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-multi-lane-policy-v1.test.mjs'
   schedule:
     - cron: '17 * * * *'
     - cron: '27 * * * *'
@@ -73,11 +76,12 @@ jobs:
           ! grep -Fq 'steps.attempt_name.outputs.name' "$workflow"
           ! grep -Eq '^[[:space:]]+RUNNER_NAME:' "$workflow"
 
-      - name: Syntax check existing seam, runner, and V3 reliability contract
+      - name: Syntax check existing seam, runner, V3 reliability, and Phase 2 policy contracts
         run: |
           node --check market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-seam-v1.mjs
           node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs
           node --check market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-multi-lane-policy-v1.mjs
 
       - name: Stash activation binding for preserved inactive regressions
         shell: bash
@@ -96,6 +100,7 @@ jobs:
           node --test
           market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-seam-v1.test.mjs
           market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-multi-lane-policy-v1.test.mjs
 
       - name: Run zero-network zero-capture runner self-check
         run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs self-check
@@ -222,16 +227,22 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: Fail closed unless this is one eligible PRESENT first-attempt V3 slot sample
+      - name: Fail closed unless this is eligible credit evidence or the exact UTC27 zero-credit diagnostic
         shell: bash
         env:
           CAPTURE_STATUS: ${{ steps.capture.outputs.capture_status }}
           PROSPECTIVE_SLOT_CREDIT: ${{ steps.capture.outputs.prospective_slot_credit }}
           RAW_BATCH_PRESENT: ${{ steps.capture.outputs.raw_batch_present }}
+          PHASE2_UTC27_DIAGNOSTIC: ${{ steps.capture.outputs.phase2_utc27_diagnostic }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
           test "$RUN_ATTEMPT" = '1'
-          test "$CAPTURE_STATUS" = 'PRESENT'
-          test "$PROSPECTIVE_SLOT_CREDIT" = '1'
           test "$RAW_BATCH_PRESENT" = 'true'
+          if [[ "$PHASE2_UTC27_DIAGNOSTIC" == 'true' ]]; then
+            test "$CAPTURE_STATUS" = 'PRESENT_ZERO_CREDIT'
+            test "$PROSPECTIVE_SLOT_CREDIT" = '0'
+          else
+            test "$CAPTURE_STATUS" = 'PRESENT'
+            test "$PROSPECTIVE_SLOT_CREDIT" = '1'
+          fi

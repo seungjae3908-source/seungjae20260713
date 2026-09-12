@@ -16,6 +16,7 @@ const FALLBACK_PROFILE_DESCRIPTION = '기업 정보를 확인 중입니다.';
 const APP_KR_INTERACTIVE_CANDLE_LIMIT = 300;
 export const APP_KR_INTRADAY_DEADLINE_MS = 2_000;
 const APP_KR_INTERACTIVE_YAHOO_HEDGE_DELAY_MS = 100;
+const MAX_PROVIDER_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const KR_INTERACTIVE_TIMEFRAMES = new Set([
   '1m',
   '3m',
@@ -46,6 +47,31 @@ export interface MarketDataCandlesMeta {
   fetchedAt: string;
   evidence?: CandleEvidenceMeta;
   fallbackFrom?: CandleProviderFallbackMeta;
+}
+
+export function normalizeQuoteEvidenceTimestamp(
+  value: unknown,
+  nowMs = Date.now(),
+): string | null {
+  if (typeof value !== 'string' || value.trim().length === 0) return null;
+
+  const timestampMs = Date.parse(value.trim());
+  if (!Number.isFinite(timestampMs)) return null;
+  if (timestampMs > nowMs + MAX_PROVIDER_CLOCK_SKEW_MS) return null;
+
+  return new Date(timestampMs).toISOString();
+}
+
+function requireQuoteEvidenceTimestamp(quote: Quote): Quote {
+  const updatedAt = normalizeQuoteEvidenceTimestamp((quote as { updatedAt?: unknown }).updatedAt);
+  if (!updatedAt) {
+    throw new Error('QUOTE_PROVIDER_TIMESTAMP_INVALID');
+  }
+
+  return {
+    ...quote,
+    updatedAt,
+  } as Quote;
 }
 
 function minimumUsefulCandles(timeframe: Timeframe): number {
@@ -208,12 +234,14 @@ async function getBoundedKrIntradayCandlesMeta(
 export class MarketDataService extends BaseMarketDataService {
   static async getQuote(ticker: string): Promise<Quote> {
     try {
-      return await super.getQuote(ticker);
+      const quote = await super.getQuote(ticker);
+      return requireQuoteEvidenceTimestamp(quote);
     } catch (primaryError) {
       if (!isTossConfigured()) throw primaryError;
       try {
         const entry = await super.getCatalogEntry(ticker);
-        return await getTossQuote(entry) as unknown as Quote;
+        const quote = await getTossQuote(entry) as unknown as Quote;
+        return requireQuoteEvidenceTimestamp(quote);
       } catch {
         throw primaryError;
       }

@@ -31,6 +31,7 @@ const ALLOWED_INPUTS = Object.freeze([
   'src/services/authoritative-paper-runtime-package.entry.ts',
   'src/services/bitget-futures-public-evidence.service.ts',
   'src/services/crypto-signal-scanner.service.ts',
+  'src/services/forward-calibration-gross-edge.service.ts',
   'src/services/forward-recommendation-observer-runtime.service.ts',
   'src/services/forward-recommendation-observer.service.ts',
   'src/services/market-price-precision.service.ts',

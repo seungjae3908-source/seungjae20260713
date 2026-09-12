@@ -1,5 +1,6 @@
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { resolveAssetDetailPath, type CanonicalAssetIdentity } from '@/lib/asset-navigation';
+import { parseUnifiedAssetSuggestResponse } from './unified-asset-search-response';
 
 export type UnifiedAssetFilter = 'all' | 'stock' | 'coin';
 export type UnifiedMarketFilter = 'KR' | 'US' | 'spot' | 'futures';
@@ -77,12 +78,14 @@ export async function fetchUnifiedAssetSuggestions(input: {
   limit?: number;
   signal?: AbortSignal;
 }): Promise<UnifiedAssetSuggestResponse> {
+  const asset = input.asset ?? 'all';
+  const market = input.market ?? null;
   const params = new URLSearchParams({
     q: input.q,
-    asset: input.asset ?? 'all',
+    asset,
     limit: String(Math.max(1, Math.min(50, input.limit ?? 25))),
   });
-  if (input.market) params.set('market', input.market);
+  if (market) params.set('market', market);
 
   const terminalController = new AbortController();
   let terminalTimedOut = false;
@@ -105,7 +108,7 @@ export async function fetchUnifiedAssetSuggestions(input: {
       error.name = payload.error ?? 'UNIFIED_SEARCH_ERROR';
       throw error;
     }
-    return payload as UnifiedAssetSuggestResponse;
+    return parseUnifiedAssetSuggestResponse(payload, { q: input.q, asset, market });
   } catch (error) {
     if (terminalTimedOut && !input.signal?.aborted) {
       const timeoutError = new Error('검색 응답이 지연되어 제한 시간 안에 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.');

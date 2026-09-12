@@ -5,8 +5,12 @@ import test from 'node:test';
 import { canonicalJson, sha256 } from '../src/public-forward-liquidity-calibration.mjs';
 import {
   SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+  SUCCESSOR_V3_GITHUB_PRIMARY_CRON_BOUNDARY_NORMALIZATION,
+  SUCCESSOR_V3_GITHUB_PRIMARY_CRON_BOUNDARY_SKEW_MS,
+  bindSuccessorV3GithubScheduleMetadataReceipt,
   buildSuccessorScheduleReliabilityV3SlotDescriptor,
   materializeSuccessorScheduleReliabilityV3Contract,
+  normalizeSuccessorV3GithubScheduleCreatedAt,
   verifySuccessorScheduleReliabilityV3Contract,
 } from '../src/public-forward-liquidity-successor-schedule-reliability-v3.mjs';
 import {
@@ -232,6 +236,97 @@ test('activation materialization requires at least one full-slot lead and primar
       'SUCCESSOR_V3_CUTOVER_NOT_ALIGNED_TO_PRIMARY_MINUTE',
     ),
   );
+});
+
+test('GitHub primary :17 created-at boundary skew is normalized while raw timestamp remains auditable', async () => {
+  const slot = buildSuccessorScheduleReliabilityV3SlotDescriptor(72, ACTIVE);
+  const rawCreatedAtMs = slot.nominalScheduledAtMs - 6_000;
+  const actualRunStartedAtMs = slot.nominalScheduledAtMs + 14_000;
+  const scheduleMetadata = normalizeSuccessorV3GithubScheduleCreatedAt({
+    scheduleExpression: '17 * * * *',
+    scheduledRunCreatedAtMs: rawCreatedAtMs,
+    actualRunStartedAtMs,
+    contract: ACTIVE,
+  });
+
+  assert.equal(scheduleMetadata.boundaryNormalized, true);
+  assert.equal(scheduleMetadata.rawCreatedAtMs, rawCreatedAtMs);
+  assert.equal(scheduleMetadata.authorityCreatedAtMs, slot.nominalScheduledAtMs);
+  assert.equal(
+    scheduleMetadata.normalization,
+    SUCCESSOR_V3_GITHUB_PRIMARY_CRON_BOUNDARY_NORMALIZATION,
+  );
+
+  let calls = 0;
+  const executed = await executeSuccessorScheduledCaptureSeamV3({
+    eventName: 'schedule',
+    scheduleExpression: '17 * * * *',
+    scheduledRunCreatedAtMs: scheduleMetadata.authorityCreatedAtMs,
+    actualRunStartedAtMs,
+    exactMainSha: EXACT_MAIN,
+    runAttempt: 1,
+    runId: '34003482815',
+    repository: 'seungjae3908-source/seungjae20260713',
+    contract: ACTIVE,
+    hasPriorCreditedSlot: async () => false,
+    getRemoteMainSha: sameMainResolver(EXACT_MAIN, EXACT_MAIN),
+    clock: () => actualRunStartedAtMs + 5_000,
+    collector: async () => {
+      calls += 1;
+      return validBatch();
+    },
+  });
+  const captureReceipt = bindSuccessorV3GithubScheduleMetadataReceipt({
+    captureReceipt: executed.captureReceipt,
+    scheduleMetadata,
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(captureReceipt.captureStatus, 'PRESENT');
+  assert.equal(captureReceipt.prospectiveSlotCredit, 1);
+  assert.equal(captureReceipt.slotIndex, 72);
+  assert.equal(captureReceipt.scheduledRunCreatedAtMs, slot.nominalScheduledAtMs);
+  assert.equal(captureReceipt.scheduledRunCreatedAtRawMs, rawCreatedAtMs);
+  assert.equal(captureReceipt.scheduledRunCreatedAtBoundaryNormalized, true);
+  assert.equal(
+    captureReceipt.scheduledRunCreatedAtNormalization,
+    SUCCESSOR_V3_GITHUB_PRIMARY_CRON_BOUNDARY_NORMALIZATION,
+  );
+  const { captureReceiptDigest, ...body } = captureReceipt;
+  assert.equal(captureReceiptDigest, sha256(canonicalJson(body)));
+  assert.equal(captureReceipt.replayCredit, 0);
+  assert.equal(captureReceipt.backfillCredit, 0);
+  assert.equal(captureReceipt.syntheticCredit, 0);
+  assert.equal(captureReceipt.profitabilityProven, false);
+  assert.equal(captureReceipt.executionAuthority, 'NONE');
+});
+
+test('one full cron-minute early is not normalized and remains zero-credit queue crossing', () => {
+  const slot = buildSuccessorScheduleReliabilityV3SlotDescriptor(72, ACTIVE);
+  const rawCreatedAtMs =
+    slot.nominalScheduledAtMs - SUCCESSOR_V3_GITHUB_PRIMARY_CRON_BOUNDARY_SKEW_MS;
+  const actualRunStartedAtMs = slot.nominalScheduledAtMs + 14_000;
+  const scheduleMetadata = normalizeSuccessorV3GithubScheduleCreatedAt({
+    scheduleExpression: '17 * * * *',
+    scheduledRunCreatedAtMs: rawCreatedAtMs,
+    actualRunStartedAtMs,
+    contract: ACTIVE,
+  });
+  assert.equal(scheduleMetadata.boundaryNormalized, false);
+  assert.equal(scheduleMetadata.authorityCreatedAtMs, rawCreatedAtMs);
+
+  const result = resolveSuccessorScheduledAuthorityV3({
+    eventName: 'schedule',
+    scheduleExpression: '17 * * * *',
+    scheduledRunCreatedAtMs: scheduleMetadata.authorityCreatedAtMs,
+    actualRunStartedAtMs,
+    runAttempt: 1,
+    contract: ACTIVE,
+  });
+  assert.equal(result.eligible, false);
+  assert.equal(result.captureStatus, 'SCHEDULE_PROVENANCE_INVALID');
+  assert.equal(result.blocker, 'SUCCESSOR_V3_SCHEDULE_QUEUE_CROSSED_SLOT_BOUNDARY');
+  assert.equal(result.prospectiveSlotCredit, 0);
 });
 
 test('all three frozen automatic trigger expressions share one hourly V3 slot authority', () => {

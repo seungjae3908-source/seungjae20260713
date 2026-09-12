@@ -42,6 +42,8 @@ import { cn } from "@/lib/utils";
 type AnyObj = Record<string, any>;
 type InterestTab = "watchlist" | "price-alert";
 type AlertDirection = "above" | "below";
+type KnownStockMarket = "KR" | "US";
+type KnownStockCurrency = "KRW" | "USD";
 
 type PriceAlertRow = {
   id: string;
@@ -56,6 +58,23 @@ type PriceAlertRow = {
   created_at?: string;
   updated_at?: string;
 };
+
+function finite(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().replace(/,/g, "").replace(/%$/u, "");
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function knownStockMarket(value: unknown): KnownStockMarket | null {
+  return value === "KR" || value === "US" ? value : null;
+}
+
+function knownStockCurrency(value: unknown): KnownStockCurrency | null {
+  return value === "KRW" || value === "USD" ? value : null;
+}
 
 export default function WatchlistPage() {
   const [, navigate] = useLocation();
@@ -333,12 +352,10 @@ function PriceAlertWorkspace({
     ? selectedQuoteQuery.data?.quotes?.[0] ??
       quoteMap.get(selected.ticker.toUpperCase())
     : undefined;
-  const selectedPrice = Number(selectedQuote?.price);
-  const currentPrice = Number.isFinite(selectedPrice) ? selectedPrice : null;
+  const currentPrice = finite(selectedQuote?.price);
   const selectedCurrency =
-    selectedQuote?.currency === "USD" || selected?.currency === "USD"
-      ? "USD"
-      : "KRW";
+    knownStockCurrency(selectedQuote?.currency) ??
+    knownStockCurrency(selected?.currency);
 
   const chooseStock = (item: SearchResult) => {
     setSelected(item);
@@ -485,7 +502,7 @@ function PriceAlertWorkspace({
                       {displayStockName(item.ticker, item.name, item.market)}
                     </p>
                     <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">
-                      {item.market === "KR" ? "국내" : "해외"} · {item.ticker}
+                      {item.market === "KR" ? "국내" : item.market === "US" ? "해외" : "시장 미확인"} · {item.ticker}
                     </p>
                   </div>
                   <span className="shrink-0 rounded-lg bg-primary/10 px-2 py-1 text-[10px] font-extrabold text-primary">
@@ -507,7 +524,11 @@ function PriceAlertWorkspace({
                 {displayStockName(selected.ticker, selected.name, selected.market)}
               </p>
               <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">
-                {selected.ticker} · 현재가 {formatAppPrice(currentPrice, selectedCurrency)}
+                {selected.ticker} · 현재가 {currentPrice == null
+                  ? "가격 미확인"
+                  : selectedCurrency == null
+                    ? "통화 미확인"
+                    : formatAppPrice(currentPrice, selectedCurrency)}
               </p>
             </div>
           </div>
@@ -614,11 +635,16 @@ function PriceAlertWorkspace({
           {alerts.map((row) => {
             const ticker = String(row.symbol ?? "").toUpperCase();
             const quote = quoteMap.get(ticker);
-            const market = row.market === "US" || quote?.market === "US" ? "US" : "KR";
-            const currency = quote?.currency === "USD" || market === "US" ? "USD" : "KRW";
-            const name = displayStockName(ticker, quote?.name ?? ticker, market);
-            const target = Number(row.target_price);
-            const active = Boolean(row.app_enabled || row.push_enabled);
+            const market = knownStockMarket(row.market) ?? knownStockMarket(quote?.market);
+            const currency = knownStockCurrency(quote?.currency);
+            const name = displayStockName(ticker, quote?.name ?? ticker, market ?? undefined);
+            const target = finite(row.target_price);
+            const alertState = row.app_enabled === true || row.push_enabled === true
+              ? "켜짐"
+              : row.app_enabled === false && row.push_enabled === false
+                ? "꺼짐"
+                : "상태 미확인";
+            const active = alertState === "켜짐";
 
             return (
               <article
@@ -639,7 +665,7 @@ function PriceAlertWorkspace({
                   >
                     <p className="truncate text-sm font-extrabold">{name}</p>
                     <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">
-                      {ticker} · {market === "KR" ? "국내" : "해외"}
+                      {ticker} · {market === "KR" ? "국내" : market === "US" ? "해외" : "시장 미확인"}
                     </p>
                   </button>
 
@@ -658,13 +684,17 @@ function PriceAlertWorkspace({
                   <div className="rounded-xl bg-secondary/70 p-2">
                     <p className="text-[9px] font-bold text-muted-foreground">조건</p>
                     <p className="mt-1 text-xs font-extrabold">
-                      {row.direction === "below" ? "이하" : "이상"}
+                      {row.direction === "below" ? "이하" : row.direction === "above" ? "이상" : "조건 미확인"}
                     </p>
                   </div>
                   <div className="rounded-xl bg-secondary/70 p-2">
                     <p className="text-[9px] font-bold text-muted-foreground">설정가</p>
                     <p className="mt-1 text-xs font-extrabold">
-                      {formatAppPrice(Number.isFinite(target) ? target : null, currency)}
+                      {target == null
+                        ? "설정가 미확인"
+                        : currency == null
+                          ? "통화 미확인"
+                          : formatAppPrice(target, currency)}
                     </p>
                   </div>
                   <div className="rounded-xl bg-secondary/70 p-2">
@@ -675,7 +705,7 @@ function PriceAlertWorkspace({
                         active ? "text-positive" : "text-muted-foreground",
                       )}
                     >
-                      {active ? "켜짐" : "꺼짐"}
+                      {alertState}
                     </p>
                   </div>
                 </div>
@@ -719,10 +749,12 @@ function WatchCard({
     row: WatchlistItem,
   ) => void;
 }) {
-  const market = row.market === "US" ? "US" : "KR";
-  const currency = row.currency === "USD" ? "USD" : "KRW";
-  const name = displayStockName(row.ticker, row.name, market);
-  const positive = (row.changePercent ?? 0) >= 0;
+  const market = knownStockMarket(row.market);
+  const currency = knownStockCurrency(row.currency);
+  const price = finite(row.price);
+  const changePercent = finite(row.changePercent);
+  const name = displayStockName(row.ticker, row.name, market ?? undefined);
+  const positive = changePercent == null ? null : changePercent >= 0;
 
   const classification = classifyStock({
     ...row,
@@ -747,7 +779,7 @@ function WatchCard({
           </h2>
 
           <p className="mt-0.5 text-xs font-bold text-muted-foreground">
-            {market === "US" ? `티커 ${row.ticker}` : row.ticker}
+            {market === "US" ? `티커 ${row.ticker}` : market === "KR" ? row.ticker : `${row.ticker} · 시장 미확인`}
           </p>
         </div>
 
@@ -766,7 +798,11 @@ function WatchCard({
           <p className="text-[11px] text-muted-foreground">현재가</p>
 
           <p className="mt-1 text-sm font-extrabold">
-            {formatAppPrice(row.price, currency)}
+            {price == null
+              ? "가격 미확인"
+              : currency == null
+                ? "통화 미확인"
+                : formatAppPrice(price, currency)}
           </p>
         </div>
 
@@ -776,16 +812,20 @@ function WatchCard({
           <p
             className={cn(
               "mt-1 flex items-center justify-center gap-1 text-sm font-extrabold",
-              positive ? "text-positive" : "text-destructive",
+              positive == null
+                ? "text-muted-foreground"
+                : positive
+                  ? "text-positive"
+                  : "text-destructive",
             )}
           >
-            {positive ? (
+            {positive == null ? null : positive ? (
               <TrendingUp className="h-3.5 w-3.5" />
             ) : (
               <TrendingDown className="h-3.5 w-3.5" />
             )}
 
-            {formatAppPercent(row.changePercent)}
+            {changePercent == null ? "등락 미확인" : formatAppPercent(changePercent)}
           </p>
         </div>
 

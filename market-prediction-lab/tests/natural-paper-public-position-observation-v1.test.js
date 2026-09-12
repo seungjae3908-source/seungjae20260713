@@ -76,13 +76,17 @@ function identity(overrides = {}) {
     market: "CRYPTO_FUTURES",
     symbol: SYMBOL,
     direction: "LONG",
+    candidateId: `paper-candidate-v1:${"a".repeat(64)}`,
+    strategyFamily: "CANONICAL_STRATEGY_FAMILY",
     signalTimeframe: "4h",
     horizon: 12,
     strategyId: "CANONICAL_STRATEGY",
     strategyVersion: "v1",
     parameterHash: "parameter-hash",
+    parameterDigest: "parameter-hash",
     researchCodeSha: RESEARCH_SHA,
     costPolicyVersion: COST_POLICY,
+    accountMode: "PAPER",
     ...overrides,
   });
 }
@@ -126,10 +130,14 @@ function position(overrides = {}) {
         executionDirection: "LONG",
         timeframe: "4h",
         horizon: 12,
+        candidateId: baseIdentity.candidateId,
+        strategyFamily: baseIdentity.strategyFamily,
         strategyId: "CANONICAL_STRATEGY",
         strategyVersion: "v1",
         parameterHash: "parameter-hash",
+        parameterDigest: "parameter-hash",
         researchCodeSha: RESEARCH_SHA,
+        accountMode: "PAPER",
       }),
       profitEvidence: Object.freeze({ costPolicyId: COST_POLICY }),
       entryEvidenceProvenance: Object.freeze({
@@ -230,7 +238,11 @@ test("one genuine OPEN Position emits fresh identity-bound public closed-frame o
   assert.equal(first.paperSampleId, SAMPLE_ID);
   assert.equal(first.entryId, SAMPLE_ID);
   assert.equal(first.signalId, SIGNAL_ID);
+  assert.equal(first.candidateId, identity().candidateId);
+  assert.equal(first.strategyFamily, identity().strategyFamily);
   assert.equal(first.strategyId, "CANONICAL_STRATEGY");
+  assert.equal(first.parameterDigest, identity().parameterHash);
+  assert.equal(first.accountMode, "PAPER");
   assert.equal(first.researchCodeSha, RESEARCH_SHA);
   assert.equal(first.riskPolicyId, "generic-risk-policy");
   assert.equal(first.riskPolicyVersion, "v1");

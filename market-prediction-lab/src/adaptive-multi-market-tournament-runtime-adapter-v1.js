@@ -5,6 +5,7 @@ import {
   canonicalSerializeAdaptiveTournamentV1,
   verifyAdaptiveMultiMarketTournamentPlanV1,
 } from "./adaptive-multi-market-tournament-orchestrator-v1.js";
+import { bindPhase4ProspectiveRuntimeIdentityV1 } from "./phase4-prospective-runtime-handoff-v1.js";
 
 export const ADAPTIVE_TOURNAMENT_RUNTIME_ADAPTER_CONTRACT_V1 =
   "adaptive-multi-market-tournament-runtime-adapter/v1";
@@ -546,6 +547,135 @@ export function buildAdaptiveTournamentRuntimeCompatibilityReportV1({ adapter } 
     profitabilityProven: false,
     currentValidatedChampion: "NONE",
     executionAuthority: "NONE",
+  });
+}
+
+export const PHASE4_ADAPTIVE_RUNTIME_OWNER_ROUTES_V1 = deepFreeze({
+  forward: {
+    stage: "FORWARD",
+    tournamentStage: "FORWARD_CANDIDATE",
+    ownerTarget: "CANONICAL_FORWARD_OWNER_CHAIN",
+  },
+  shadow: {
+    stage: "SHADOW",
+    tournamentStage: "SHADOW_CANDIDATE",
+    ownerTarget: "CANONICAL_SHADOW_OWNER",
+  },
+  paper: {
+    stage: "PAPER",
+    tournamentStage: "PAPER_ELIGIBLE",
+    ownerTarget: "CANONICAL_PAPER_OWNER_CHAIN",
+  },
+});
+
+function blockedPhase4OwnerRoute(bound) {
+  const firstZero = bound?.FIRST_ZERO ?? "PHASE4_RUNTIME_BINDING_BLOCKED";
+  return deepFreeze({
+    schemaVersion: 1,
+    contract: "adaptive-tournament-phase4-owner-routing/v1",
+    status: "BLOCKED",
+    FIRST_ZERO: firstZero,
+    reason: bound?.reason ?? firstZero,
+    binding: null,
+    ownerRoutes: null,
+    runtimeActivationAllowed: false,
+    dispatchAllowed: false,
+    economicCreditCreated: false,
+    sampleCredit: 0,
+    executionRealismCredit: 0,
+    profitabilityCredit: 0,
+    FULL_COST_READY: false,
+    NET_ALPHA_PROVEN: false,
+    PROFITABILITY_PROVEN: false,
+    CHAMPION: "NONE",
+    executionAuthority: "NONE",
+    LIVE_TRADING: false,
+    AUTO_TRADING: false,
+    REAL_ORDER_ENABLED: false,
+    PRIVATE_TRADING_API_ALLOWED: false,
+    actualOwnerCalls: 0,
+    actualForwardHandoffs: 0,
+    actualShadowHandoffs: 0,
+    actualPaperHandoffs: 0,
+  });
+}
+
+export function bindPhase4ChallengerToAdaptiveRuntimeOwnersV1({
+  phase4Result,
+  runtimeStrategyIdentity,
+} = {}) {
+  const bound = bindPhase4ProspectiveRuntimeIdentityV1({
+    phase4Result,
+    runtimeStrategyIdentity,
+  });
+  if (bound?.status !== "BOUND_NON_ACTIVATING" || !bound.binding) {
+    return blockedPhase4OwnerRoute(bound);
+  }
+
+  const identity = bound.binding.candidateStrategyIdentity;
+  const ownerRoutes = Object.fromEntries(
+    Object.entries(PHASE4_ADAPTIVE_RUNTIME_OWNER_ROUTES_V1).map(([key, route]) => {
+      const stageBinding = bound.binding.stageBindings[key];
+      if (
+        stageBinding?.stage !== route.stage
+        || stageBinding.status !== "BOUND_NON_ACTIVATING"
+        || stageBinding.candidateId !== bound.binding.candidateId
+        || stageBinding.activationAllowed !== false
+        || stageBinding.dispatchAllowed !== false
+        || stageBinding.economicCreditCreated !== false
+        || stageBinding.executionAuthority !== "NONE"
+      ) {
+        fail("PHASE4_RUNTIME_OWNER_ROUTE_BINDING_INVALID", { key, route, stageBinding });
+      }
+      return [key, {
+        stage: route.stage,
+        tournamentStage: route.tournamentStage,
+        ownerTarget: route.ownerTarget,
+        status: "ROUTED_NON_ACTIVATING",
+        candidateId: bound.binding.candidateId,
+        candidateStrategyIdentity: identity,
+        prospectiveBoundary: bound.binding.prospectiveBoundary,
+        prospectiveBoundaryMs: bound.binding.prospectiveBoundaryMs,
+        activationAllowed: false,
+        dispatchAllowed: false,
+        economicCreditCreated: false,
+        executionAuthority: "NONE",
+      }];
+    }),
+  );
+
+  return deepFreeze({
+    schemaVersion: 1,
+    contract: "adaptive-tournament-phase4-owner-routing/v1",
+    status: "BOUND_TO_EXISTING_OWNERS_NON_ACTIVATING",
+    FIRST_ZERO: null,
+    reason: null,
+    binding: bound.binding,
+    ownerRoutes,
+    candidateIdentityPreserved: true,
+    secondIdentityCreated: false,
+    remapPerformed: false,
+    rehashPerformed: false,
+    fallbackIdentityUsed: false,
+    runtimeActivationAllowed: false,
+    dispatchAllowed: false,
+    economicCreditCreated: false,
+    sampleCredit: 0,
+    executionRealismCredit: 0,
+    profitabilityCredit: 0,
+    FULL_COST_READY: false,
+    NET_ALPHA_PROVEN: false,
+    PROFITABILITY_PROVEN: false,
+    CHAMPION: "NONE",
+    executionAuthority: "NONE",
+    LIVE_TRADING: false,
+    AUTO_TRADING: false,
+    REAL_ORDER_ENABLED: false,
+    PRIVATE_TRADING_API_ALLOWED: false,
+    actualOwnerCalls: 0,
+    actualForwardHandoffs: 0,
+    actualShadowHandoffs: 0,
+    actualPaperHandoffs: 0,
   });
 }
 

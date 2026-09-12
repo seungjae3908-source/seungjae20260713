@@ -54,6 +54,10 @@ export function buildTrainingRecords(snapshot, options = {}) {
       source: snapshot.metadata.source,
     };
     const prediction = analyzeMarket(rawInput, options.model ? { model: options.model } : {});
+    if (prediction.inferenceEvaluation?.status !== "EVALUABLE") {
+      const blockers = prediction.inferenceEvaluation?.blockers?.join(",") || "INFERENCE_EVIDENCE_UNKNOWN";
+      throw new Error(`training record inference is not evaluable: ${blockers}`);
+    }
     const outcome = evaluatePrediction(prediction, future);
     const id = recordId([snapshot.metadata.market, snapshot.metadata.symbol, snapshot.metadata.timeframe, anchor.timestamp, horizon, prediction.modelVersion]);
     records.push(Object.freeze({

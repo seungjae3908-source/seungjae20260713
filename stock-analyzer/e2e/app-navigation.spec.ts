@@ -293,7 +293,7 @@ test('market submenu buttons reach the correct KR, US, spot, and futures screens
   assertClean();
 });
 
-test('technical menu reaches scanner, AI chart, and approval-order routes without information-route confusion', async ({ page }) => {
+test('technical menu reaches scanner, AI chart, and auto-trading routes without information-route confusion', async ({ page }) => {
   const assertClean = await installApprovedRuntime(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/stocks/kr');
@@ -301,7 +301,7 @@ test('technical menu reaches scanner, AI chart, and approval-order routes withou
   const cases = [
     ['AI 신호검색기', '/scanner', /AI 신호검색기/],
     ['AI 차트', '/ai-chart', /AI 차트 생중계/],
-    ['승인형 주문', '/auto-trading', /자동매매/],
+    ['자동매매', '/auto-trading', /자동매매/],
   ] as const;
 
   for (const [label, route, heading] of cases) {

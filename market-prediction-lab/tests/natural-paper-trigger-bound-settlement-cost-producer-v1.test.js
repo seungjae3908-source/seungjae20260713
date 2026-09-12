@@ -25,6 +25,12 @@ function sha(value) {
   return createHash("sha256").update(typeof value === "string" ? value : stable(value)).digest("hex");
 }
 
+function refreshExitExecutionId(identity) {
+  const payload = { ...identity };
+  delete payload.exitExecutionId;
+  identity.exitExecutionId = sha(payload);
+}
+
 function fixture() {
   const position = {
     positionId: "position-1",
@@ -33,11 +39,16 @@ function fixture() {
     market: "CRYPTO_SPOT",
     symbol: "KRW-BTC",
     direction: "BUY",
+    candidateId: `paper-candidate-v1:${"c".repeat(64)}`,
+    strategyFamily: "strategy-family-1",
     strategyId: "strategy-1",
     strategyVersion: "v1",
     parameterHash: "parameters-1",
+    parameterDigest: "parameters-1",
     researchCodeSha: "a".repeat(40),
     costPolicyVersion: "cost-v1",
+    accountMode: "PAPER",
+    sample: { identity: { timeframe: "4h", horizon: 6 } },
     lifecycle: {
       immutableContractDigest: "immutable-lifecycle-1",
       sampleEligibility: { provenanceClass: "NATURAL_FORWARD" },
@@ -46,11 +57,25 @@ function fixture() {
   const triggerPayload = {
     positionId: position.positionId,
     paperSampleId: position.paperSampleId,
+    candidateId: position.candidateId,
+    strategyId: position.strategyId,
+    strategyIdentity: {
+      candidateId: position.candidateId,
+      strategyFamily: position.strategyFamily,
+      strategyId: position.strategyId,
+      strategyVersion: position.strategyVersion,
+      parameterHash: position.parameterHash,
+      parameterDigest: position.parameterDigest,
+      researchCodeSha: position.researchCodeSha,
+      accountMode: position.accountMode,
+    },
+    researchCodeSha: position.researchCodeSha,
     costPolicyVersion: position.costPolicyVersion,
     positionLifecycleDigest: position.lifecycle.immutableContractDigest,
     triggerObservationId: "trigger-observation-1",
     triggeredAtMs: T0,
     bar: { open: 100, high: 106, low: 99, close: 105 },
+    source: "upbit-public-candles",
   };
   const trigger = { ...triggerPayload, exitTriggerId: sha(triggerPayload) };
   position.lifecycle.pendingExit = trigger;
@@ -62,12 +87,18 @@ function fixture() {
     signalId: position.signalId,
     market: position.market,
     symbol: position.symbol,
+    signalTimeframe: position.sample.identity.timeframe,
+    horizon: position.sample.identity.horizon,
     direction: position.direction,
+    candidateId: position.candidateId,
+    strategyFamily: position.strategyFamily,
     strategyId: position.strategyId,
     strategyVersion: position.strategyVersion,
     parameterHash: position.parameterHash,
+    parameterDigest: position.parameterDigest,
     researchCodeSha: position.researchCodeSha,
     costPolicyVersion: position.costPolicyVersion,
+    accountMode: position.accountMode,
   };
   const exitExecutionIdentity = {
     exitTriggerId: trigger.exitTriggerId,
@@ -75,9 +106,21 @@ function fixture() {
     triggeredAtMs: trigger.triggeredAtMs,
     positionId: position.positionId,
     paperSampleId: position.paperSampleId,
+    entryId: position.paperSampleId,
+    provider: null,
     market: position.market,
     symbol: position.symbol,
+    timeframe: position.sample.identity.timeframe,
+    horizon: position.sample.identity.horizon,
     direction: position.direction,
+    candidateId: position.candidateId,
+    strategyFamily: position.strategyFamily,
+    strategyId: position.strategyId,
+    strategyVersion: position.strategyVersion,
+    parameterHash: position.parameterHash,
+    parameterDigest: position.parameterDigest,
+    researchCodeSha: position.researchCodeSha,
+    accountMode: position.accountMode,
     costPolicyVersion: position.costPolicyVersion,
     sourceIdentity,
     provenanceId,
@@ -105,6 +148,7 @@ function fixture() {
   const settlementInput = {
     exitTriggerId: trigger.exitTriggerId,
     exitExecution: {
+      dataEvidence: { provider: trigger.source },
       costPolicy: {
         version: position.costPolicyVersion,
         commissionRate: 0.001,
@@ -122,7 +166,10 @@ function fixture() {
     pathBars: [],
     fundingEvidence: { complete: true, payments: [] },
   };
+  exitExecutionIdentity.provider = settlementInput.exitExecution.dataEvidence.provider;
   exitExecutionIdentity.exitExecutionDigest = sha(settlementInput.exitExecution);
+  refreshExitExecutionId(exitExecutionIdentity);
+  settlementInput.exitExecutionId = exitExecutionIdentity.exitExecutionId;
   const settlementCostEvidence = {
     schemaVersion: "authoritative-paper-execution-cost-sources-v1",
     status: "PRESENT",
@@ -132,6 +179,7 @@ function fixture() {
     provenanceId,
     positionIdentity,
     exitExecutionIdentity,
+    exitExecutionId: exitExecutionIdentity.exitExecutionId,
     exitTriggerId: trigger.exitTriggerId,
     components,
     costPolicyIdentity: { version: position.costPolicyVersion },
@@ -147,6 +195,7 @@ function fixture() {
     provenanceId,
     positionIdentity,
     exitExecutionIdentity,
+    exitExecutionId: exitExecutionIdentity.exitExecutionId,
     freshness: { observedAtMs, maximumAgeMs },
     settlementInput,
     settlementCostEvidence,
@@ -188,7 +237,11 @@ test("producer binds one authoritative Full Cost payload to the exact frozen exi
   const result = await producer(row);
   assert.equal(result.status, "PRESENT");
   assert.equal(result.exitTriggerId, row.trigger.exitTriggerId);
+  assert.equal(result.exitExecutionId, row.authoritativeEvidence.exitExecutionIdentity.exitExecutionId);
   assert.equal(result.observation.settlementInput.exitTriggerId, row.trigger.exitTriggerId);
+  assert.equal(result.observation.settlementInput.exitExecutionId, result.exitExecutionId);
+  assert.equal(result.observation.settlementCostEvidence.exitExecutionId, result.exitExecutionId);
+  assert.equal(result.observation.triggerBoundSettlementEvidence.exitExecutionId, result.exitExecutionId);
   assert.equal(result.observation.triggerBoundSettlementEvidence.executionAuthority, "NONE");
   assert.equal(result.observation.triggerBoundSettlementEvidence.naturalSampleCredit, 0);
   assert.equal(Object.isFrozen(result.observation), true);
@@ -206,6 +259,10 @@ test("Futures accepts observed realized funding but never a projected component"
   row.position.market = "CRYPTO_FUTURES";
   row.authoritativeEvidence.positionIdentity.market = "CRYPTO_FUTURES";
   row.authoritativeEvidence.exitExecutionIdentity.market = "CRYPTO_FUTURES";
+  refreshExitExecutionId(row.authoritativeEvidence.exitExecutionIdentity);
+  row.authoritativeEvidence.exitExecutionId = row.authoritativeEvidence.exitExecutionIdentity.exitExecutionId;
+  row.authoritativeEvidence.settlementInput.exitExecutionId = row.authoritativeEvidence.exitExecutionIdentity.exitExecutionId;
+  row.authoritativeEvidence.settlementCostEvidence.exitExecutionId = row.authoritativeEvidence.exitExecutionIdentity.exitExecutionId;
   const funding = row.authoritativeEvidence.settlementCostEvidence.components.funding;
   funding.quality = "OBSERVED";
   funding.realized = true;
@@ -217,6 +274,9 @@ test("Futures accepts observed realized funding but never a projected component"
 
 for (const [name, mutate] of [
   ["rewritten trigger", (e) => { e.exitExecutionIdentity.exitTriggerId = "f".repeat(64); }],
+  ["rewritten explicit execution id", (e) => { e.exitExecutionId = "f".repeat(64); }],
+  ["rewritten execution identity id", (e) => { e.exitExecutionIdentity.exitExecutionId = "f".repeat(64); }],
+  ["missing exit execution provider", (e) => { delete e.settlementInput.exitExecution.dataEvidence.provider; }],
   ["wrong Position", (e) => { e.positionIdentity.positionId = "other"; }],
   ["missing component source identity", (e) => { e.settlementCostEvidence.components.spread.sourceIdentity = ""; }],
   ["missing component provenance identity", (e) => { e.settlementCostEvidence.components.slippage.provenanceId = "missing"; }],
@@ -254,6 +314,25 @@ test("collector failure is a stable BLOCKED_DATA result and cannot mutate the tr
   assert.equal(result.status, "BLOCKED_DATA");
   assert.deepEqual(row.position.lifecycle.pendingExit, original);
   assert.deepEqual(result.blockers, ["PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_COST_PRODUCER_FAILED"]);
+});
+
+test("rehashed trigger cannot rewrite the frozen candidate lineage", async () => {
+  const row = fixture();
+  const { exitTriggerId: _ignored, ...payload } = row.trigger;
+  payload.candidateId = `paper-candidate-v1:${"d".repeat(64)}`;
+  payload.strategyIdentity.candidateId = payload.candidateId;
+  row.position.lifecycle.pendingExit = { ...payload, exitTriggerId: sha(payload) };
+  let collectorCalls = 0;
+  const producer = createNaturalPaperTriggerBoundSettlementCostProducer({
+    async collectAuthoritativeEvidence() {
+      collectorCalls += 1;
+      return row.authoritativeEvidence;
+    },
+  });
+  const result = await producer(row);
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.deepEqual(result.blockers, ["PAPER_POSITION_EXIT_TRIGGER_IDENTITY_MISMATCH"]);
+  assert.equal(collectorCalls, 0);
 });
 
 test("post-binding payload tampering invalidates the canonical digest", () => {

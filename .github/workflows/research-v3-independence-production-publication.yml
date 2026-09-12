@@ -10,6 +10,8 @@ on:
       - 'research-production/test/v3-liquidity-independence-state-publisher.test.mjs'
       - 'research-production/test/v3-liquidity-independence-production-caller.test.mjs'
       - 'scripts/agent_hub_rollover_v2.py'
+      - '.github/scripts/v3_publication_proof.py'
+      - '.github/scripts/test_v3_publication_proof.py'
   issue_comment:
     types: [created]
 
@@ -45,6 +47,9 @@ jobs:
           workflow=.github/workflows/research-v3-independence-production-publication.yml
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
           python3 scripts/agent_hub_rollover_v2.py self-test
+          python3 -m py_compile .github/scripts/v3_publication_proof.py
+          python3 .github/scripts/test_v3_publication_proof.py
+          python3 .github/scripts/v3_publication_proof.py code-proof "$GITHUB_WORKSPACE" "$(git rev-parse HEAD)" > /dev/null
           node --check research-production/bin/publish-v3-independence.mjs
           node --test \
             research-production/test/v3-liquidity-independence-state-publisher.test.mjs \
@@ -52,10 +57,13 @@ jobs:
           grep -Fq '/publish-v3-independence ' "$workflow"
           grep -Fq 'python3 scripts/agent_hub_rollover_v2.py resolve' "$workflow"
           grep -Fq 'SOURCE_PR_NUMBER: 897' "$workflow"
-          grep -Fq '/opt/investment-research/releases/$TARGET_SHA' "$workflow"
+          grep -Fq '/opt/investment-research/releases/$RUNTIME_SHA' "$workflow"
           grep -Fq '/var/lib/investment-research-production' "$workflow"
           grep -Fq 'runuser -u investment-research' "$workflow"
           grep -Fq 'env -i' "$workflow"
+          grep -Fq 'check-ancestor' "$workflow"
+          grep -Fq 'verify-readback' "$workflow"
+          grep -Fq 'extract-summary' "$workflow"
           # Scan only the runtime/control portion. The validation code itself contains
           # the forbidden-token regex and must not be allowed to self-match.
           awk 'BEGIN {copy=0} /^  authorize:$/ {copy=1} copy {print}' "$workflow" > "$RUNNER_TEMP/runtime-control.yml"
@@ -239,7 +247,13 @@ jobs:
       file_digest: ${{ steps.publish.outputs.file_digest }}
       report_digest: ${{ steps.publish.outputs.report_digest }}
       target_slot_index: ${{ steps.publish.outputs.target_slot_index }}
+      runtime_code_sha: ${{ steps.runtime.outputs.runtime_code_sha }}
+      source_bound_readback: ${{ steps.readback.outputs.verified }}
+      effective_n: ${{ steps.readback.outputs.effective_n }}
+      buy_n: ${{ steps.readback.outputs.buy_n }}
+      sell_n: ${{ steps.readback.outputs.sell_n }}
     env:
+      PROOF_SCRIPT: .github/scripts/v3_publication_proof.py
       TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
       SOURCE_RUN_ID: ${{ needs.authorize.outputs.source_run_id }}
       SOURCE_HEAD_SHA: ${{ needs.authorize.outputs.source_head_sha }}
@@ -258,7 +272,7 @@ jobs:
         with:
           ref: ${{ env.TARGET_SHA }}
           persist-credentials: false
-          fetch-depth: 1
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -269,6 +283,12 @@ jobs:
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
           actual_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')"
           test "$actual_main" = "$TARGET_SHA"
+      - name: Bind reviewed publisher code closure on approved control SHA
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          proof="$(python3 "$PROOF_SCRIPT" code-proof "$GITHUB_WORKSPACE" "$TARGET_SHA")"
+          printf 'CODE_PROOF_BASE64=%s\n' "$proof" >> "$GITHUB_ENV"
       - name: Download exact authenticated #813 artifact
         id: source
         shell: bash
@@ -276,8 +296,10 @@ jobs:
           set -Eeuo pipefail
           source_dir="$RUNNER_TEMP/v3-independence-source"
           mkdir -p "$source_dir"
-          gh run download "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" -n "$ARTIFACT_NAME" -D "$source_dir"
+          archive="$source_dir/source.zip"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > "$archive"
           summary="$source_dir/v3-authoritative-independence-summary.json"
+          python3 "$PROOF_SCRIPT" extract-summary "$archive" "$ARTIFACT_DIGEST" "$summary"
           test -f "$summary"
           test "$(wc -c < "$summary")" -le 1048576
           printf '%s\n' "summary_file=$summary" >> "$GITHUB_OUTPUT"
@@ -344,24 +366,23 @@ jobs:
           else
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
           fi
-      - name: Read-only Research server preflight
+      - name: Read-only Research server code-equivalence preflight
+        id: runtime
         shell: bash
         run: |
           set -Eeuo pipefail
-          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          proof_q="$(printf '%q' "$CODE_PROOF_BASE64")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
-            "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'REMOTE'
-          set -Eeuo pipefail
-          release="/opt/investment-research/releases/$TARGET_SHA"
-          current="$(readlink -f /opt/investment-research/current 2>/dev/null || true)"
-          test "$current" = "$release"
-          test -d "$release" && test ! -L "$release"
-          test "$(git -c safe.directory="$release" -C "$release" rev-parse HEAD)" = "$TARGET_SHA"
-          test -f "$release/research-production/bin/publish-v3-independence.mjs"
-          test -d /var/lib/investment-research-production
-          test ! -L /var/lib/investment-research-production
-          id investment-research >/dev/null 2>&1
-          REMOTE
+            "$SSH_USER@$SSH_HOST" "python3 - runtime-proof $proof_q" \
+            < "$PROOF_SCRIPT" > "$RUNNER_TEMP/runtime-proof.json"
+          python3 "$PROOF_SCRIPT" check-ancestor "$GITHUB_WORKSPACE" "$TARGET_SHA" \
+            "$RUNNER_TEMP/runtime-proof.json" > "$RUNNER_TEMP/runtime-ancestry.json"
+          runtime_sha="$(node -p "require(process.env.RUNNER_TEMP + '/runtime-ancestry.json').runtimeSha")"
+          [[ "$runtime_sha" =~ ^[0-9a-f]{40}$ ]]
+          printf 'RUNTIME_SHA=%s\n' "$runtime_sha" >> "$GITHUB_ENV"
+          printf 'runtime_code_sha=%s\n' "$runtime_sha" >> "$GITHUB_OUTPUT"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" 'id investment-research >/dev/null 2>&1'
       - name: Stage public evidence inputs on server
         id: stage
         env:
@@ -370,15 +391,23 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          actual_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')"
+          test "$actual_main" = "$TARGET_SHA"
+          proof_q="$(printf '%q' "$CODE_PROOF_BASE64")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "python3 - runtime-proof $proof_q" \
+            < "$PROOF_SCRIPT" > "$RUNNER_TEMP/pre-stage-runtime-proof.json"
+          cmp "$RUNNER_TEMP/runtime-proof.json" "$RUNNER_TEMP/pre-stage-runtime-proof.json"
           remote_dir="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" 'umask 077; mktemp -d /tmp/research-v3-independence-publish.XXXXXX')"
-          [[ "$remote_dir" == /tmp/research-v3-independence-publish.* ]]
+          [[ "$remote_dir" =~ ^/tmp/research-v3-independence-publish\.[A-Za-z0-9]{6}$ ]]
+          # Record immediately so a failed copy still cleans this exact temporary directory.
+          printf '%s\n' "remote_dir=$remote_dir" >> "$GITHUB_OUTPUT"
           scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" "$SUMMARY_FILE" "$SSH_USER@$SSH_HOST:$remote_dir/summary.json"
           scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" "$SOURCE_FILE" "$SSH_USER@$SSH_HOST:$remote_dir/source.json"
           remote_q="$(printf '%q' "$remote_dir")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" \
             "chmod 0755 $remote_q && chmod 0644 $remote_q/summary.json $remote_q/source.json"
-          printf '%s\n' "remote_dir=$remote_dir" >> "$GITHUB_OUTPUT"
       - name: Publish through existing fail-closed publisher
         id: publish
         env:
@@ -386,11 +415,23 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          remote_env="$(printf 'TARGET_SHA=%q REMOTE_DIR=%q' "$TARGET_SHA" "$REMOTE_DIR")"
+          actual_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')"
+          test "$actual_main" = "$TARGET_SHA"
+          proof_q="$(printf '%q' "$CODE_PROOF_BASE64")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "python3 - runtime-proof $proof_q" \
+            < "$PROOF_SCRIPT" > "$RUNNER_TEMP/pre-publish-runtime-proof.json"
+          cmp "$RUNNER_TEMP/runtime-proof.json" "$RUNNER_TEMP/pre-publish-runtime-proof.json"
+          caller_digest="$(node -p "require(process.env.RUNNER_TEMP + '/runtime-proof.json').files['research-production/bin/publish-v3-independence.mjs'].sha256")"
+          publisher_digest="$(node -p "require(process.env.RUNNER_TEMP + '/runtime-proof.json').files['research-production/src/v3-liquidity-independence-state-publisher.mjs'].sha256")"
+          remote_env="$(printf 'RUNTIME_SHA=%q REMOTE_DIR=%q CALLER_DIGEST=%q PUBLISHER_DIGEST=%q' "$RUNTIME_SHA" "$REMOTE_DIR" "$caller_digest" "$publisher_digest")"
           publication_json="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'REMOTE'
           set -Eeuo pipefail
-          release="/opt/investment-research/releases/$TARGET_SHA"
+          release="/opt/investment-research/releases/$RUNTIME_SHA"
+          test "$(readlink -f /opt/investment-research/current)" = "$release"
+          printf '%s  %s\n' "$CALLER_DIGEST" "$release/research-production/bin/publish-v3-independence.mjs" \
+            "$PUBLISHER_DIGEST" "$release/research-production/src/v3-liquidity-independence-state-publisher.mjs" | sha256sum --check --status
           state=/var/lib/investment-research-production
           command=(
             env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/nonexistent LANG=C.UTF-8 TZ=UTC
@@ -399,7 +440,7 @@ jobs:
             ORDER_AUTHORITY=false ORDER_SUBMISSION_ENABLED=false
             node "$release/research-production/bin/publish-v3-independence.mjs"
             --state-root "$state" --summary-file "$REMOTE_DIR/summary.json" --source-file "$REMOTE_DIR/source.json"
-            --repo-root "$release" --expected-code-sha "$TARGET_SHA"
+            --repo-root "$release" --expected-code-sha "$RUNTIME_SHA"
           )
           if [[ "$(id -u)" -eq 0 ]]; then
             command -v runuser >/dev/null
@@ -414,7 +455,7 @@ jobs:
           import { appendFileSync, readFileSync } from 'node:fs';
           const result = JSON.parse(readFileSync(process.env.RESULT_FILE, 'utf8'));
           if (!['PUBLISHED', 'UNCHANGED'].includes(result.status)
-              || result.codeSha !== process.env.TARGET_SHA
+              || result.codeSha !== process.env.RUNTIME_SHA
               || result.executionAuthority !== 'NONE'
               || result.liveTrading !== false || result.privateApi !== false || result.realOrders !== 0
               || result.oosOutcomeCredit !== 0 || result.fullCostReady !== false || result.evidenceComplete !== 0
@@ -430,6 +471,40 @@ jobs:
             '',
           ].join('\n'));
           NODE
+      - name: Verify source-bound state and live Dashboard readback
+        id: readback
+        env:
+          SUMMARY_FILE: ${{ steps.source.outputs.summary_file }}
+          SOURCE_FILE: ${{ steps.envelope.outputs.source_file }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          proof_q="$(printf '%q' "$CODE_PROOF_BASE64")"
+          runtime_q="$(printf '%q' "$RUNTIME_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "python3 - snapshot $proof_q $runtime_q" \
+            < "$PROOF_SCRIPT" > "$RUNNER_TEMP/source-bound-snapshot.json"
+          python3 "$PROOF_SCRIPT" verify-readback "$SUMMARY_FILE" "$SOURCE_FILE" \
+            "$RUNNER_TEMP/production-publication-result.json" "$RUNNER_TEMP/source-bound-snapshot.json" \
+            "$TARGET_SHA" "$RUNTIME_SHA" > "$RUNNER_TEMP/v3-publication-readback-proof.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const proof = JSON.parse(readFileSync(process.env.RUNNER_TEMP + '/v3-publication-readback-proof.json', 'utf8'));
+          if (proof.status !== 'VERIFIED' || proof.evidenceCredit !== 0 || proof.executionAuthority !== 'NONE') {
+            throw new Error('SOURCE_BOUND_READBACK_FAILED');
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, [
+            'verified=true', `effective_n=${proof.effectiveIndependentN}`,
+            `buy_n=${proof.independentBuyN}`, `sell_n=${proof.independentSellN}`, '',
+          ].join('\n'));
+          NODE
+      - name: Retain sanitized source-bound readback proof only
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-v3-publication-readback-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/v3-publication-readback-proof.json
+          if-no-files-found: error
+          retention-days: 90
       - name: Remove staged server inputs
         if: always() && steps.stage.outputs.remote_dir != ''
         env:
@@ -437,6 +512,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          [[ "$REMOTE_DIR" =~ ^/tmp/research-v3-independence-publish\.[A-Za-z0-9]{6}$ ]]
           remote_q="$(printf '%q' "$REMOTE_DIR")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "rm -rf -- $remote_q"
@@ -461,12 +537,25 @@ jobs:
           FILE_DIGEST: ${{ needs.publish.outputs.file_digest }}
           REPORT_DIGEST: ${{ needs.publish.outputs.report_digest }}
           TARGET_SLOT_INDEX: ${{ needs.publish.outputs.target_slot_index }}
+          RUNTIME_CODE_SHA: ${{ needs.publish.outputs.runtime_code_sha }}
+          SOURCE_BOUND_READBACK: ${{ needs.publish.outputs.source_bound_readback }}
+          EFFECTIVE_N: ${{ needs.publish.outputs.effective_n }}
+          BUY_N: ${{ needs.publish.outputs.buy_n }}
+          SELL_N: ${{ needs.publish.outputs.sell_n }}
         with:
           script: |
+            if (process.env.SOURCE_BOUND_READBACK !== 'true') {
+              core.setFailed('SOURCE_BOUND_READBACK_NOT_VERIFIED');
+              return;
+            }
             const mutation = process.env.PUBLICATION_STATUS === 'PUBLISHED' ? 1 : 0;
             const body = [
               '[RESEARCH_V3_INDEPENDENCE_PUBLICATION]', 'status: success',
-              `publication_status: ${process.env.PUBLICATION_STATUS}`,
+              `publication_status: ${process.env.PUBLICATION_STATUS}`, `workflow_run: ${context.runId}`,
+              `runtime_code_sha: ${process.env.RUNTIME_CODE_SHA}`, 'publisher_code_equivalence_verified: true',
+              'source_archive_sha256_verified: true', 'source_bound_http_readback_verified: true',
+              `effective_independent_n: ${process.env.EFFECTIVE_N}`,
+              `independent_buy_n: ${process.env.BUY_N}`, `independent_sell_n: ${process.env.SELL_N}`,
               `canonical_hub: #${process.env.ACTIVE_ISSUE}`, `target_sha: ${process.env.TARGET_SHA}`,
               `required_ci_run: ${process.env.APPLICATION_RUN_ID}`, `source_run_id: ${process.env.SOURCE_RUN_ID}`,
               `source_artifact_id: ${process.env.ARTIFACT_ID}`, `source_artifact_digest: ${process.env.ARTIFACT_DIGEST}`,

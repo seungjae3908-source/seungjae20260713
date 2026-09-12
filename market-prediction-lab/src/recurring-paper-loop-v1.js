@@ -43,6 +43,16 @@ function immutableSha(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/iu.test(value);
 }
 
+function digest(value) {
+  return typeof value === "string" && /^[0-9a-f]{64}$/iu.test(value);
+}
+
+function canonicalFrozenCandidateId(value) {
+  return typeof value === "string"
+    && (/^paper-candidate-v1:[0-9a-f]{64}$/u.test(value)
+      || /^phase3-candidate:sha256:[0-9a-f]{64}$/u.test(value));
+}
+
 function safetyEnvelope() {
   return Object.freeze({
     simulatedOnly: true,
@@ -159,7 +169,19 @@ function identityFingerprint(identity) {
   return hash({ ...identity, researchCodeSha: identity.researchCodeSha.toLowerCase() });
 }
 
-function candidateStrategyBlockers(strategyIdentity, runtimeIdentity) {
+function genuineNaturalForwardCandidate(candidate) {
+  const evidence = candidate?.naturalEvidence;
+  return candidate?.testOnly !== true
+    && evidence?.provenanceClass === "NATURAL_FORWARD"
+    && evidence.synthetic === false
+    && evidence.replay === false
+    && evidence.testOnly === false
+    && evidence.backfill === false
+    && evidence.historical === false
+    && evidence.duplicate === false;
+}
+
+function candidateStrategyBlockers(strategyIdentity, runtimeIdentity, requireFrozenCandidateIdentity) {
   if (!nonEmpty(strategyIdentity?.strategyId)
     || !nonEmpty(strategyIdentity?.strategyVersion)
     || !nonEmpty(strategyIdentity?.parameterHash)
@@ -169,7 +191,20 @@ function candidateStrategyBlockers(strategyIdentity, runtimeIdentity) {
   if (strategyIdentity.researchCodeSha.toLowerCase() !== runtimeIdentity.researchCodeSha.toLowerCase()) {
     return ["STRATEGY_RESEARCH_SHA_MISMATCH"];
   }
-  return [];
+  if (!requireFrozenCandidateIdentity) return [];
+  const blockers = [];
+  if (!canonicalFrozenCandidateId(strategyIdentity?.candidateId ?? "")) {
+    blockers.push("PAPER_CANDIDATE_ID_REQUIRED");
+  } else if (strategyIdentity.candidateId !== requireFrozenCandidateIdentity.candidateId) {
+    blockers.push("PAPER_CANDIDATE_IDENTITY_MISMATCH");
+  }
+  if (!nonEmpty(strategyIdentity?.strategyFamily)) blockers.push("PAPER_STRATEGY_FAMILY_REQUIRED");
+  if (!nonEmpty(strategyIdentity?.parameterDigest)) blockers.push("PAPER_PARAMETER_DIGEST_REQUIRED");
+  else if (strategyIdentity.parameterDigest !== strategyIdentity.parameterHash) {
+    blockers.push("PAPER_PARAMETER_IDENTITY_MISMATCH");
+  }
+  if (strategyIdentity?.accountMode !== "PAPER") blockers.push("PAPER_ACCOUNT_MODE_REQUIRED");
+  return blockers;
 }
 
 function assertSafety(value, code) {
@@ -251,7 +286,11 @@ function evidenceBlockers(candidate, evaluatedAtMs, runtimeIdentity) {
   if (!nonEmpty(candidate?.signal?.symbol)) blockers.push("SYMBOL_REQUIRED");
   if (!finite(candidate?.signal?.timestampMs)) blockers.push("SIGNAL_TIMESTAMP_REQUIRED");
   else if (candidate.signal.timestampMs > evaluatedAtMs) blockers.push("FUTURE_SIGNAL_FORBIDDEN");
-  blockers.push(...candidateStrategyBlockers(candidate?.signal?.strategyIdentity, runtimeIdentity));
+  blockers.push(...candidateStrategyBlockers(
+    candidate?.signal?.strategyIdentity,
+    runtimeIdentity,
+    genuineNaturalForwardCandidate(candidate) ? candidate : false,
+  ));
   if (candidate?.profitGate?.decision === "ELIGIBLE") {
     if (!nonEmpty(candidate?.profitEvidence?.costPolicyId) || !nonEmpty(candidate?.execution?.costPolicy?.version)) {
       blockers.push("PAPER_COST_POLICY_VERSION_REQUIRED");
@@ -314,10 +353,14 @@ function positionFromSample(sample, candidate) {
     market: sample.identity.market,
     symbol: sample.identity.symbol,
     direction: sample.identity.executionDirection,
+    candidateId: sample.identity.candidateId,
+    strategyFamily: sample.identity.strategyFamily,
     strategyId: sample.identity.strategyId,
     strategyVersion: sample.identity.strategyVersion,
     parameterHash: sample.identity.parameterHash,
+    parameterDigest: sample.identity.parameterDigest,
     researchCodeSha: sample.identity.researchCodeSha,
+    accountMode: sample.identity.accountMode,
     costPolicyVersion: sample.profitEvidence.costPolicyId,
     parityFingerprint: sample.parityFingerprint,
     entryTimestampMs: sample.identity.evaluatedAtMs,
@@ -629,7 +672,56 @@ export async function runRecurringPaperCycle({
       }
       continue;
     }
-    const settlementId = hash({ positionId: position.positionId, paperSampleId: settlement.paperSampleId, settledAtMs: settlement.settledAtMs });
+    const naturalSettlement = position.lifecycle?.sampleEligibility?.provenanceClass === "NATURAL_FORWARD";
+    if (naturalSettlement && (!digest(canonicalLifecycleEvidence?.exitTriggerId)
+      || !digest(canonicalLifecycleEvidence?.exitExecutionId)
+      || settlement.exitTriggerId !== canonicalLifecycleEvidence.exitTriggerId
+      || settlement.exitExecutionId !== canonicalLifecycleEvidence.exitExecutionId
+      || canonicalLifecycleEvidence.candidateId !== settlement.candidateId
+      || canonicalLifecycleEvidence.entryId !== settlement.paperSampleId
+      || canonicalLifecycleEvidence.positionId !== position.positionId
+      || canonicalLifecycleEvidence.costPolicyVersion !== settlement.costPolicyVersion
+      || canonicalLifecycleEvidence.exitExecutionIdentity?.entryId !== settlement.paperSampleId
+      || canonicalLifecycleEvidence.exitExecutionIdentity?.provider !== settlement.exitEvidenceProvenance?.provider
+      || canonicalLifecycleEvidence.exitExecutionIdentity?.market !== settlement.market
+      || canonicalLifecycleEvidence.exitExecutionIdentity?.symbol !== settlement.symbol
+      || canonicalLifecycleEvidence.exitExecutionIdentity?.timeframe !== settlement.timeframe
+      || canonicalLifecycleEvidence.exitExecutionIdentity?.direction !== settlement.entryDirection
+      || canonicalLifecycleEvidence.costEvidence?.exitTriggerId !== settlement.exitTriggerId
+      || canonicalLifecycleEvidence.costEvidence?.exitExecutionId !== settlement.exitExecutionId)) {
+      directReasons.push(loopReasonObservation({
+        sourceStage: "SETTLEMENT",
+        sourceCode: "PAPER_SETTLEMENT_IMMUTABLE_IDENTITY_MISMATCH",
+        provenance: "recurring-paper-loop-v1 Natural Settlement identity guard",
+        observedAt: cycle.evaluatedAtMs,
+        identity: cycle.identity,
+        observationId: canonicalLifecycleEvidence?.exitExecutionId ?? canonicalLifecycleEvidence?.exitTriggerId ?? null,
+      }));
+      continue;
+    }
+    const settlementIdentity = Object.freeze({
+      candidateId: settlement.candidateId,
+      entryId: settlement.paperSampleId,
+      positionId: position.positionId,
+      exitTriggerId: settlement.exitTriggerId,
+      exitExecutionId: settlement.exitExecutionId,
+      provider: settlement.exitEvidenceProvenance?.provider ?? null,
+      market: settlement.market,
+      symbol: settlement.symbol,
+      timeframe: settlement.timeframe,
+      side: settlement.entryDirection,
+      strategyFamily: settlement.strategyFamily,
+      strategyVersion: settlement.strategyVersion,
+      parameterDigest: settlement.parameterDigest,
+      accountMode: settlement.accountMode,
+      costPolicyVersion: settlement.costPolicyVersion,
+      costEvidenceDigest: canonicalLifecycleEvidence?.costEvidence?.evidenceDigest ?? null,
+      exitEvidenceProvenanceDigest: hash(settlement.exitEvidenceProvenance),
+      settledAtMs: settlement.settledAtMs,
+      netPnl: settlement.netPnl,
+      netReturnPercent: settlement.netReturnPercent,
+    });
+    const settlementId = hash(settlementIdentity);
     if (settlements.some((row) => row.settlementId === settlementId || row.paperSampleId === settlement.paperSampleId)) {
       directReasons.push(loopReasonObservation({
         sourceStage: "SETTLEMENT",
@@ -644,6 +736,8 @@ export async function runRecurringPaperCycle({
     const settlementRecord = Object.freeze({
       ...settlement,
       settlementId,
+      settlementIdentity,
+      entryId: settlement.paperSampleId,
       positionId: position.positionId,
       exitReason: exit.exitReason ?? "CANONICAL_EXTERNAL_EXIT",
       settlementRecordedAtMs: cycle.evaluatedAtMs,

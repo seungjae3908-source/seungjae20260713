@@ -5291,6 +5291,27 @@ function stableValue(value) {
 function strategyParameterHash(profile) {
   return createHash5("sha256").update(JSON.stringify(stableValue(profile))).digest("hex");
 }
+function strategyCandidateId(identity2) {
+  const candidateIdentity = {
+    schemaVersion: "paper-candidate-identity-v1",
+    strategyFamily: identity2.strategyFamily,
+    strategyId: identity2.strategyId,
+    strategyVersion: identity2.strategyVersion,
+    parameterHash: identity2.parameterHash,
+    market: identity2.market,
+    assetClass: identity2.assetClass,
+    symbol: identity2.symbol,
+    universe: identity2.universe,
+    timeframe: identity2.timeframe,
+    strategyHorizon: identity2.strategyHorizon,
+    direction: identity2.direction,
+    researchCodeSha: identity2.researchCodeSha,
+    costPolicyVersion: identity2.costPolicyVersion,
+    riskPolicyVersion: identity2.riskPolicyVersion
+  };
+  const digest2 = createHash5("sha256").update(JSON.stringify(stableValue(candidateIdentity))).digest("hex");
+  return `paper-candidate-v1:${digest2}`;
+}
 function assetClass(market) {
   if (market === "CRYPTO_FUTURES") return "CRYPTO_FUTURES";
   if (market === "CRYPTO_SPOT") return "CRYPTO_SPOT";
@@ -5720,7 +5741,9 @@ function resolveScannerCanonicalPaperIdentity(input) {
     return Object.freeze({ paperCandidate: null, blockers: Object.freeze([...new Set(blockers)]) });
   }
   const identity2 = promotion.record.identity;
+  const candidateId = strategyCandidateId(identity2);
   const paperCandidate = Object.freeze({
+    candidateId,
     signal: Object.freeze({
       signalId: input.card.signalId,
       market: input.market,
@@ -5734,11 +5757,15 @@ function resolveScannerCanonicalPaperIdentity(input) {
       direction,
       signalDirection: direction,
       strategyIdentity: Object.freeze({
+        candidateId,
+        strategyFamily: identity2.strategyFamily,
         strategyId: identity2.strategyId,
         strategyVersion: identity2.strategyVersion,
         parameterHash: identity2.parameterHash,
+        parameterDigest: identity2.parameterHash,
         researchCodeSha: identity2.researchCodeSha,
-        costPolicyVersion: identity2.costPolicyVersion
+        costPolicyVersion: identity2.costPolicyVersion,
+        accountMode: "PAPER"
       })
     }),
     executionAuthority: "NONE",

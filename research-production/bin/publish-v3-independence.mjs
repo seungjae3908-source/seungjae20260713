@@ -68,10 +68,14 @@ async function verifyCodeIdentity(repoRoot, expectedCodeSha) {
   const physicalRoot = await realpath(resolvedInput);
   let stdout;
   try {
-    ({ stdout } = await execFileAsync('git', ['-C', physicalRoot, 'rev-parse', 'HEAD'], {
-      encoding: 'utf8',
-      windowsHide: true,
-    }));
+    ({ stdout } = await execFileAsync(
+      'git',
+      ['-c', `safe.directory=${physicalRoot}`, '-C', physicalRoot, 'rev-parse', 'HEAD'],
+      {
+        encoding: 'utf8',
+        windowsHide: true,
+      },
+    ));
   } catch {
     fail('CODE_IDENTITY_INVALID', 'repoRoot is not a readable Git checkout');
   }

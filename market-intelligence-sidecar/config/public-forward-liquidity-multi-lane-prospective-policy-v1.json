@@ -1,0 +1,202 @@
+{
+  "policyVersion": "public-forward-liquidity-multi-lane-prospective-policy-v1",
+  "freezeStatus": "HUMAN_OPTION_B_BALANCED_APPROVED",
+  "authority": {
+    "canonicalHubIssue": 838,
+    "releaseControlIssue": 23,
+    "humanApprovalSource": "EXPLICIT_CODEX_CHAT_COMMAND",
+    "humanApprovalRecordedAt": "2026-09-11T04:05:18.088Z",
+    "humanApprovalRecordedAtMs": 1789099518088,
+    "sourceMainSha": "b36392aa868268dcfcced9fd206d628f626e6a1b",
+    "baselineRequiredCiRunId": 34551430547,
+    "baselineRequiredCi": "6/6_SUCCESS",
+    "option": "OPTION_B_BALANCED",
+    "marketOutcomeConsulted": false,
+    "profitabilityOutcomeConsulted": false,
+    "representativeOutcomeSelectionAllowed": false,
+    "aiNumericAuthority": "NONE",
+    "humanFinalPolicyAuthority": true
+  },
+  "v3Binding": {
+    "contractVersion": "public-forward-liquidity-successor-schedule-reliability-contract-v3",
+    "historyMutationAllowed": false,
+    "slotAndSplitSemanticsInherited": true,
+    "retroactiveMultiLaneCreditAllowed": false
+  },
+  "approvedCheckpoint": {
+    "checkpointKind": "IMMUTABLE_APPROVAL_TIME_ANCHOR",
+    "canonicalHubCommentId": 5628195737,
+    "sourceRunId": 34550480876,
+    "ingestRunId": 34550523120,
+    "independenceRunId": 34550647505,
+    "authoritativeIndexArtifactId": 10180662199,
+    "authoritativeIndexArtifactDigest": "5167e9ebc9d904c0b99941f0d17e00dbb07b7cfafa6aa77c654318f663656aea",
+    "evidenceProducerMainSha": "4cfa4b714b750dd83d1df42eb49682e30457a723",
+    "targetSlotIndex": 192,
+    "rawAcceptedN": 1025,
+    "effectiveIndependentN": 74,
+    "buyN": 39,
+    "sellN": 35,
+    "splitCounts": {
+      "TRAIN": 74,
+      "VALIDATION": 0,
+      "OOS": 0
+    },
+    "manualCredit": 0,
+    "replayCredit": 0,
+    "backfillCredit": 0,
+    "syntheticCredit": 0
+  },
+  "laneRegistry": [
+    {
+      "laneId": "P2_V3_BTCUSDT_UTC17",
+      "scheduleIdentity": "17 * * * *",
+      "market": "CRYPTO_FUTURES",
+      "provider": "BITGET_PUBLIC_UTA_V3",
+      "symbol": "BTCUSDT",
+      "timeframe": "EVENT_WINDOW",
+      "sidePolicy": "NATURAL_OBSERVED_BUY_OR_SELL",
+      "maxCreditPerSlot": 1,
+      "publicOnly": true
+    },
+    {
+      "laneId": "P2_V3_BTCUSDT_UTC37",
+      "scheduleIdentity": "37 * * * *",
+      "market": "CRYPTO_FUTURES",
+      "provider": "BITGET_PUBLIC_UTA_V3",
+      "symbol": "BTCUSDT",
+      "timeframe": "EVENT_WINDOW",
+      "sidePolicy": "NATURAL_OBSERVED_BUY_OR_SELL",
+      "maxCreditPerSlot": 1,
+      "publicOnly": true
+    }
+  ],
+  "utc27Policy": {
+    "scheduleIdentity": "27 * * * *",
+    "role": "EXISTING_FALLBACK_OR_DIAGNOSTIC_ONLY",
+    "laneId": null,
+    "additionalIndependentCredit": 0,
+    "thirdLaneAllowed": false
+  },
+  "creditPolicy": {
+    "maxCreditPerLanePerSlot": 1,
+    "maxTotalCreditPerSlot": 2,
+    "maxCreditPerDependencyComponent": 1,
+    "capsAreGuaranteedCredit": false,
+    "missingIndependenceCredit": 0,
+    "ambiguousIndependenceCredit": 0,
+    "unverifiableIndependenceCredit": 0,
+    "overlappingIndependenceCredit": 0,
+    "manualCredit": 0,
+    "replayCredit": 0,
+    "backfillCredit": 0,
+    "syntheticCredit": 0,
+    "operatorSelectedCredit": 0,
+    "rerunCredit": 0
+  },
+  "dependencyPolicy": {
+    "engine": "EXISTING_CANONICAL_PUBLIC_FORWARD_LIQUIDITY_INDEPENDENCE_AUDIT",
+    "laneIdentityProvesIndependence": false,
+    "scheduleSeparationProvesIndependence": false,
+    "differentRunIdProvesIndependence": false,
+    "sameCorrelationReasonMeansSameComponent": true,
+    "materiallyOverlappingEventWindowMeansSameComponent": true,
+    "unprovenSourceFrameIndependenceMeansSameComponent": true,
+    "uncertainCausalEventIndependenceMeansSameComponent": true,
+    "transitiveComponentsRequired": true,
+    "requiredEvidenceFields": [
+      "provider",
+      "market",
+      "symbol",
+      "timeframe",
+      "actualObservationTime",
+      "preEventBookTimestamp",
+      "preEventBookDigest",
+      "rawPublicTradeFrameDigest",
+      "normalizedObservationDigest",
+      "postEventBookTimestamps",
+      "postEventBookDigests",
+      "eventWindowIdentity",
+      "sourceFrameIdentity",
+      "publicEventIdentity",
+      "canonicalCorrelationReasons",
+      "transitiveDependencyComponent"
+    ],
+    "representativeOrder": [
+      "EARLIEST_GENUINE_NATURAL_OBSERVATION_TIMESTAMP",
+      "LEXICAL_LANE_ID",
+      "CANONICAL_SOURCE_RUN_IDENTITY"
+    ],
+    "performanceOrOutcomeSelectionAllowed": false
+  },
+  "balancingPolicy": {
+    "buyAndSellAreLanes": false,
+    "sideSource": "NATURAL_OBSERVED_OUTCOME",
+    "repairSelectionAllowed": false,
+    "genuineEvidenceDiscardForBalanceAllowed": false,
+    "sideRelabelAllowed": false,
+    "oppositeSideSynthesisAllowed": false,
+    "replayForDesiredSideAllowed": false,
+    "newNumericSufficiencyThreshold": null,
+    "publishLaneSplitSideCounts": true
+  },
+  "scopeCellDimensions": [
+    "policyDigest",
+    "cohortDigest",
+    "split",
+    "laneId",
+    "market",
+    "provider",
+    "symbol",
+    "side"
+  ],
+  "activationPolicy": {
+    "mode": "DERIVED_EXACT_MAIN_POST_MERGE_REQUIRED_CI",
+    "implementationMergeRequired": true,
+    "postMergeExactMainRequiredCi": "6/6_TERMINAL_SUCCESS",
+    "requiredCiWorkflowPath": ".github/workflows/futures-public-network-smoke.yml",
+    "requiredCiEvent": "workflow_dispatch",
+    "requiredSuccessfulJobs": [
+      "Typecheck, unit, smoke, and build",
+      "Playwright desktop and mobile application UI",
+      "Disposable PostgreSQL migration and RLS integration",
+      "Security input, bundle, and outbound safety verification",
+      "AI privacy, prompt, output, and outbound verification",
+      "Bitget public API smoke (non-blocking)"
+    ],
+    "completeHourlyLeadSlotN": 1,
+    "firstEligibleLaneScheduleMinuteUtc": 17,
+    "alreadyRunningAttemptUsesOldPolicy": true,
+    "preBoundaryObservationCredit": 0,
+    "manualWorkflowDispatchEligible": false,
+    "replayEligible": false,
+    "backfillEligible": false,
+    "finalPreCutoverIndexFreeze": "FIRST_POST_BOUNDARY_NATURAL_INGEST_DERIVES_IMMUTABLE_PRE_BOUNDARY_INDEX",
+    "activationBoundaryMutationAllowed": false
+  },
+  "splitPolicy": {
+    "mode": "INHERIT_EXISTING_V3_CHRONOLOGICAL_IMMUTABLE_SLOT_RANGE",
+    "trainToValidationRelabelAllowed": false,
+    "trainToOosRelabelAllowed": false,
+    "validationBackfillAllowed": false,
+    "oosBackfillAllowed": false,
+    "crossSplitPoolingAllowed": false,
+    "futureOutcomeLeakageAllowed": false
+  },
+  "safety": {
+    "publicDataOnly": true,
+    "executionAuthority": "NONE",
+    "privateTradingApiAllowed": false,
+    "liveTradingAllowed": false,
+    "autoTradingAllowed": false,
+    "realOrderAllowed": false,
+    "financialMutationAllowed": false,
+    "productionDeployAllowed": false,
+    "stagingDeployAllowed": false,
+    "databaseMutationAllowed": false,
+    "secretEnvServerMutationAllowed": false,
+    "replitAllowed": false,
+    "replitAgentAllowed": false,
+    "profitabilityProven": false
+  }
+}

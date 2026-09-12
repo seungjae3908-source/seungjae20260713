@@ -429,6 +429,29 @@ function buildFinancialAdapters({
   });
 }
 
+function bindRecurringPaperCycle({
+  identity,
+  settlementCostProducer = null,
+  runCycle = runRecurringPaperCycle,
+} = {}) {
+  if (settlementCostProducer != null && typeof settlementCostProducer !== "function") {
+    throw Object.assign(new TypeError("Paper Forward settlement cost producer must be a function"), {
+      code: "PAPER_FORWARD_SETTLEMENT_COST_PRODUCER_INVALID",
+    });
+  }
+  if (typeof runCycle !== "function") {
+    throw new TypeError("Paper Forward recurring cycle dependency must be a function");
+  }
+  return (input) => runCycle({
+    ...input,
+    settlementCostProducer,
+    cycle: Object.freeze({
+      ...input.cycle,
+      identity,
+    }),
+  });
+}
+
 export async function runPaperForwardScheduledInvocation({
   rootDirectory,
   researchCodeSha,
@@ -441,6 +464,7 @@ export async function runPaperForwardScheduledInvocation({
   leaseDurationMs = DEFAULT_LEASE_DURATION_MS,
   outcomeAccumulationEnabled = false,
   accountingEvidenceForSettlement,
+  settlementCostProducer = null,
   authoritativeAccountRequired = false,
   authoritativeAccountSeedSnapshot = null,
   expectedPublisherAccountIdSha256 = null,
@@ -476,6 +500,7 @@ export async function runPaperForwardScheduledInvocation({
   if (!finite(nowMs)) throw new TypeError("clock must return a finite number");
 
   const identity = buildIdentity(researchCodeSha, outcomeAccumulationEnabled, authoritativeAccountRequired);
+  const boundRunCycle = bindRecurringPaperCycle({ identity, settlementCostProducer });
   const state = await loadOrCreateState(paths, identity, nowMs, {
     authoritativeAccountRequired,
     authoritativeAccountSeedSnapshot,
@@ -519,13 +544,7 @@ export async function runPaperForwardScheduledInvocation({
       timeoutMs: 30_000,
     }),
     clock,
-    runCycle: (input) => runRecurringPaperCycle({
-      ...input,
-      cycle: Object.freeze({
-        ...input.cycle,
-        identity,
-      }),
-    }),
+    runCycle: boundRunCycle,
   });
 
   const persistedStatus = await runtimeStatusStore.load();
@@ -629,4 +648,5 @@ export const __paperForwardScheduleTestables = Object.freeze({
   initialLedger,
   activeRuntimeStatus,
   activationContract,
+  bindRecurringPaperCycle,
 });

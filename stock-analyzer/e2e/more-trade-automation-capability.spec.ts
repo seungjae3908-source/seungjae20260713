@@ -135,7 +135,8 @@ test('settings home opens mobile-friendly categories, returns home, and does not
   await expect(page.getByRole('button', { name: /화면/ })).toBeVisible();
 
   await page.getByRole('button', { name: /텔레그램/ }).click();
-  await expect(page.getByText('텔레그램 미연결 · 연결 전까지 앱 내부 상태만 표시합니다.')).toBeVisible();
+  await expect(page.getByText('연결 상태는 사용자 계정의 실제 연동 정보를 기준으로 확인합니다.')).toBeVisible();
+  await expect(page.getByText(/텔레그램 미연결/)).toHaveCount(0);
   await expect(page.getByRole('button', { name: /테스트 알림|Push 알림|브라우저 알림/ })).toHaveCount(0);
   await expect(page.getByText(/브라우저 Push|Notification|Sound/)).toHaveCount(0);
 

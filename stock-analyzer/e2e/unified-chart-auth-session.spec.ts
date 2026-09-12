@@ -455,7 +455,7 @@ test.describe('production auth session and AI chart route', () => {
     await expect(page.getByText('auth-stock-fixture', { exact: false })).toBeVisible();
 
     await navigateSpa(page, '/account');
-    await expect(page.getByText(USERS[0].displayName, { exact: true })).toBeVisible();
+    await expect(page.getByRole('main').getByText(USERS[0].displayName, { exact: true })).toBeVisible();
     await page.evaluate(() => {
       const advance = (
         window as typeof window & { __authE2eAdvanceTime?: (milliseconds: number) => void }
@@ -489,7 +489,7 @@ test.describe('production auth session and AI chart route', () => {
     await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toHaveCount(0);
 
     await login(page, USERS[1].loginName);
-    await expect(page.getByText(USERS[1].displayName, { exact: true })).toBeVisible();
+    await expect(page.getByRole('main').getByText(USERS[1].displayName, { exact: true })).toBeVisible();
     expect(profileCalls.get(SECOND_USER_ID)).toBe(1);
 
     await navigateSpa(

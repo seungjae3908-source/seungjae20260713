@@ -120,11 +120,15 @@ function positionIdentity(position) {
     signalTimeframe: sample.timeframe,
     horizon: sample.horizon,
     direction: position?.direction ?? sample.executionDirection,
+    candidateId: position?.candidateId ?? sample.candidateId,
+    strategyFamily: position?.strategyFamily ?? sample.strategyFamily,
     strategyId: position?.strategyId ?? sample.strategyId,
     strategyVersion: position?.strategyVersion ?? sample.strategyVersion,
     parameterHash: position?.parameterHash ?? sample.parameterHash,
+    parameterDigest: position?.parameterDigest ?? sample.parameterDigest,
     researchCodeSha: position?.researchCodeSha ?? sample.researchCodeSha,
     costPolicyVersion: position?.costPolicyVersion ?? position?.sample?.profitEvidence?.costPolicyId,
+    accountMode: position?.accountMode ?? sample.accountMode,
   };
   if ([
     identity.positionId,
@@ -133,11 +137,17 @@ function positionIdentity(position) {
     identity.market,
     identity.symbol,
     identity.direction,
+    identity.candidateId,
+    identity.strategyFamily,
     identity.strategyId,
     identity.strategyVersion,
     identity.parameterHash,
+    identity.parameterDigest,
     identity.costPolicyVersion,
-  ].some((value) => !nonEmpty(value)) || !exactSha(identity.researchCodeSha)
+    identity.accountMode,
+  ].some((value) => !nonEmpty(value)) || identity.parameterDigest !== identity.parameterHash
+    || identity.accountMode !== "PAPER" || !/^paper-candidate-v1:[0-9a-f]{64}$/u.test(identity.candidateId)
+    || !exactSha(identity.researchCodeSha)
     || !nonEmpty(identity.signalTimeframe) || !Number.isSafeInteger(identity.horizon) || identity.horizon <= 0) return null;
   return Object.freeze({
     ...identity,
@@ -156,11 +166,15 @@ function sameIdentity(left, right) {
     "signalTimeframe",
     "horizon",
     "direction",
+    "candidateId",
+    "strategyFamily",
     "strategyId",
     "strategyVersion",
     "parameterHash",
+    "parameterDigest",
     "researchCodeSha",
     "costPolicyVersion",
+    "accountMode",
   ].every((key) => String(left[key] ?? "") === String(right[key] ?? ""));
 }
 
@@ -422,10 +436,14 @@ function buildObservation({
     paperSampleId: identity.paperSampleId,
     entryId: identity.paperSampleId,
     signalId: identity.signalId,
+    candidateId: identity.candidateId,
+    strategyFamily: identity.strategyFamily,
     strategyId: identity.strategyId,
     strategyVersion: identity.strategyVersion,
     parameterHash: identity.parameterHash,
+    parameterDigest: identity.parameterDigest,
     researchCodeSha: identity.researchCodeSha,
+    accountMode: identity.accountMode,
     riskPolicyId: riskPolicyIdentity.policyId,
     riskPolicyVersion: riskPolicyIdentity.policyVersion,
     riskPolicySource: riskPolicyIdentity.source,

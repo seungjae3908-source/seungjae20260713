@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { BoundedTtlCache } from "../lib/bounded-ttl-cache";
 import { MarketDataService } from "../services/market-data.service";
 import {
 	placeKiwoomDomesticOrder,
@@ -24,26 +25,14 @@ import {
 
 const router: IRouter = Router();
 
-type TimedCacheEntry = { expiresAt: number; value: unknown };
-const liveDataCache = new Map<string, TimedCacheEntry>();
+const liveDataCache = new BoundedTtlCache(300);
 
 async function withLiveCache<T>(
 	key: string,
 	ttlMs: number,
 	loader: () => Promise<T>,
 ): Promise<T> {
-	const cached = liveDataCache.get(key);
-	if (cached && cached.expiresAt > Date.now()) return cached.value as T;
-
-	const value = await loader();
-	liveDataCache.set(key, { expiresAt: Date.now() + ttlMs, value });
-
-	if (liveDataCache.size > 300) {
-		for (const [cacheKey, entry] of liveDataCache) {
-			if (entry.expiresAt <= Date.now()) liveDataCache.delete(cacheKey);
-		}
-	}
-	return value;
+	return liveDataCache.getOrLoad(key, ttlMs, loader);
 }
 
 

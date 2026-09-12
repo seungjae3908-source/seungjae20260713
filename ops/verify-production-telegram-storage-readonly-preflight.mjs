@@ -38,6 +38,7 @@ assert(!/(^|\n)\s*(?:source|\.)\s+[^\n]+\.env/m.test(script), 'read-only preflig
 const sqlMatch = /const SQL = String\.raw`([\s\S]*?)`;/m.exec(script);
 assert(sqlMatch, 'fixed read-only SQL block is required');
 const sql = sqlMatch[1];
+const executableSql = sql.replace(/'(?:''|[^'])*'/g, "''");
 for (const forbidden of [
   /\bcreate\b/i,
   /\balter\b/i,
@@ -52,11 +53,47 @@ for (const forbidden of [
   /\bvacuum\b/i,
   /\breindex\b/i,
 ]) {
-  assert(!forbidden.test(sql), `read-only SQL contains forbidden mutation token: ${forbidden}`);
+  assert(!forbidden.test(executableSql), `read-only SQL contains forbidden executable mutation token: ${forbidden}`);
 }
 assert.match(sql, /^\s*\\set ON_ERROR_STOP on/m);
 assert.match(sql, /begin read only;/i);
 assert.match(sql, /commit;/i);
+
+for (const marker of [
+  'member_watchlist_items',
+  'member_watchlist_primary_key',
+  'member_watchlist_rls',
+  'member_watchlist_policies',
+  'primary_key_identity',
+  'relrowsecurity',
+  'relforcerowsecurity',
+  'member_watchlist_select_own',
+  'member_watchlist_insert_own',
+  'member_watchlist_update_own',
+  'member_watchlist_delete_own',
+  'member_watchlist_table_missing',
+  'member_watchlist_columns_missing',
+  'member_watchlist_primary_key_missing',
+  'member_watchlist_rls_not_enforced',
+  'member_watchlist_policy_contract_missing',
+]) {
+  assert(script.includes(marker), `member watchlist schema probe is missing contract marker: ${marker}`);
+}
+for (const column of [
+  'user_id',
+  'market',
+  'symbol',
+  'name',
+  'currency',
+  'target_price',
+  'created_at',
+  'updated_at',
+]) {
+  assert(sql.includes(`table_name='member_watchlist_items' and column_name='${column}'`), `member watchlist probe is missing column: ${column}`);
+}
+assert.match(sql, /array\['user_id', 'market', 'symbol'\]::text\[\]/);
+assert(!/\bfrom\s+(?:public\.)?member_watchlist_items\b/i.test(executableSql), 'member watchlist probe must never read member rows');
+assert(!/\bjoin\s+(?:public\.)?member_watchlist_items\b/i.test(executableSql), 'member watchlist probe must never join member rows');
 
 assert.match(workflow, /name:\s*Production Telegram Storage Read-only Preflight/);
 assert.match(workflow, /issue_comment:/);
