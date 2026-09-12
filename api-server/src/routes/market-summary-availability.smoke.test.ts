@@ -247,8 +247,10 @@ test('video research evidence reader fails closed on secret-bearing or authority
   assert.equal(secretResult.body.reason, 'SANITIZED_RUNTIME_EVIDENCE_INVALID');
   assert.equal(JSON.stringify(secretResult.body).includes('TEST_ONLY_MUST_NOT_LEAK'), false);
 
-  const authorityViolation = videoEvidenceSnapshot();
-  authorityViolation.safety = { ...authorityViolation.safety, scheduleActive: true } as typeof authorityViolation.safety;
+  const authorityViolation: unknown = {
+    ...videoEvidenceSnapshot(),
+    safety: { ...VIDEO_SAFETY, scheduleActive: true },
+  };
   const authorityResult = await requestVideoEvidence(async () => authorityViolation);
   assert.equal(authorityResult.body.available, false);
   assert.equal(authorityResult.body.dataState, 'UNKNOWN');
