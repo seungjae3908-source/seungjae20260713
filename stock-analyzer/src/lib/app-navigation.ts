@@ -52,6 +52,7 @@ export const APP_ROUTES = {
   login: '/login',
   admin: '/admin',
   adminUiLayouts: '/admin/ui-layouts',
+  adminAgentHub: '/admin/agent-hub',
   install: '/install',
   cryptoHomeRedirect: '/crypto',
   cryptoSearchRedirect: '/crypto/search',
@@ -295,6 +296,7 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
       APP_ROUTES.login,
       APP_ROUTES.admin,
       APP_ROUTES.adminUiLayouts,
+      APP_ROUTES.adminAgentHub,
     ],
     menu: [
       { id: 'settings', href: APP_ROUTES.settings, label: '앱 설정', icon: 'settings' },
@@ -336,6 +338,7 @@ export const APP_ROUTE_PRESENTATIONS: readonly AppRoutePresentation[] = [
   { id: 'account', title: '계정', breadcrumb: ['설정', '계정'], groupId: 'settings', exactPaths: [APP_ROUTES.account, APP_ROUTES.login] },
   { id: 'admin', title: '회원 관리', breadcrumb: ['설정', '회원 관리'], groupId: 'settings', exactPaths: [APP_ROUTES.admin] },
   { id: 'admin-ui-layouts', title: 'UI Builder Layout 통합', breadcrumb: ['설정', 'UI Builder Layout 통합'], groupId: 'settings', exactPaths: [APP_ROUTES.adminUiLayouts] },
+  { id: 'admin-agent-hub', title: 'Agent Hub', breadcrumb: ['설정', 'Agent Hub'], groupId: 'settings', exactPaths: [APP_ROUTES.adminAgentHub] },
   { id: 'install', title: '앱 설치', breadcrumb: ['앱 설치'], exactPaths: [APP_ROUTES.install] },
   { id: 'crypto-home-redirect', title: '암호화폐 홈 이동', breadcrumb: ['홈'], exactPaths: [APP_ROUTES.cryptoHomeRedirect], transient: true },
   { id: 'crypto-search-redirect', title: '암호화폐 검색 이동', breadcrumb: ['종목', '통합검색'], exactPaths: [APP_ROUTES.cryptoSearchRedirect], transient: true },
