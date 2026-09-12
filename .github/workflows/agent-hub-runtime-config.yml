@@ -57,18 +57,17 @@ jobs:
       - name: Inject Agent Hub credential into PM2 runtime without exposing it
         run: |
           set -Eeuo pipefail
-          printf '%s\n' "$AGENT_HUB_GITHUB_TOKEN" | \
-            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
-              "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          {
+            printf '%s\n' "$AGENT_HUB_GITHUB_TOKEN"
+            cat <<'REMOTE'
           set -Eeuo pipefail
           umask 077
-          IFS= read -r AGENT_HUB_GITHUB_TOKEN
-          [[ -n "$AGENT_HUB_GITHUB_TOKEN" ]] || {
+
+          [[ -n "${AGENT_HUB_GITHUB_TOKEN:-}" ]] || {
             echo '[agent-hub-config] credential missing on remote input' >&2
             exit 1
           }
 
-          export AGENT_HUB_GITHUB_TOKEN
           export LIVE_TRADING=false
           export AUTO_TRADING=false
           export REAL_ORDER_ENABLED=false
@@ -98,6 +97,9 @@ jobs:
           if (String(env.executionAuthority) !== "NONE") process.exit(1);
           '
           REMOTE
+          } | ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" \
+            'IFS= read -r AGENT_HUB_GITHUB_TOKEN; export AGENT_HUB_GITHUB_TOKEN; bash -s'
 
       - name: Verify application health after runtime refresh
         run: |
