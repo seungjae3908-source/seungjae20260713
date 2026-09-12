@@ -250,7 +250,7 @@ jobs:
             sourceInventoryDigest: inventory.inventoryDigest,
             targetSlotIndex: inventory.targetSlotIndex,
             genuineScheduledSlotN: inventory.genuineScheduledSlotN,
-            genuineScheduledLaneReceiptN: index.genuineScheduledLaneReceiptN,
+            genuineScheduledLaneReceiptN: inventory.genuineScheduledLaneReceiptN,
           })}\n`);
           NODE
 
@@ -299,6 +299,7 @@ jobs:
           import { createHash } from 'node:crypto';
           import { readFile, writeFile } from 'node:fs/promises';
           import { join } from 'node:path';
+          import { PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1 as phase2Policy } from './market-intelligence-sidecar/src/public-forward-liquidity-multi-lane-policy-v1.mjs';
           const root = process.env.STATE_ROOT;
           const inventory = JSON.parse(await readFile(join(root, 'portable-source-inventory.json'), 'utf8'));
           const result = JSON.parse(await readFile(join(root, 'independence-report.json'), 'utf8'));
