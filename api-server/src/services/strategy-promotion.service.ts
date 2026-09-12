@@ -203,6 +203,28 @@ export function strategyParameterHash(profile: ScannerStrategyProfile): string {
   return createHash('sha256').update(JSON.stringify(stableValue(profile))).digest('hex');
 }
 
+export function strategyCandidateId(identity: StrategyIdentity): string {
+  const candidateIdentity = {
+    schemaVersion: 'paper-candidate-identity-v1',
+    strategyFamily: identity.strategyFamily,
+    strategyId: identity.strategyId,
+    strategyVersion: identity.strategyVersion,
+    parameterHash: identity.parameterHash,
+    market: identity.market,
+    assetClass: identity.assetClass,
+    symbol: identity.symbol,
+    universe: identity.universe,
+    timeframe: identity.timeframe,
+    strategyHorizon: identity.strategyHorizon,
+    direction: identity.direction,
+    researchCodeSha: identity.researchCodeSha,
+    costPolicyVersion: identity.costPolicyVersion,
+    riskPolicyVersion: identity.riskPolicyVersion,
+  };
+  const digest = createHash('sha256').update(JSON.stringify(stableValue(candidateIdentity))).digest('hex');
+  return `paper-candidate-v1:${digest}`;
+}
+
 function assetClass(market: ScannerProfileMarket): StrategyAssetClass {
   if (market === 'CRYPTO_FUTURES') return 'CRYPTO_FUTURES';
   if (market === 'CRYPTO_SPOT') return 'CRYPTO_SPOT';

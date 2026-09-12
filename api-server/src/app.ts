@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import router from "./routes";
+import agentHubControlBridge from './routes/agent-hub-control-bridge';
 import deviceTrustRouter from './features/device-trust/device-trust.route';
 import { deviceTrustAppGate } from './features/device-trust/device-trust.middleware';
 import { logger } from "./lib/logger";
@@ -45,7 +46,7 @@ app.use(securityHeaders);
 app.use(cors({ origin(origin, callback) {
   if (!origin || process.env.NODE_ENV !== 'production' || allowedOrigins.includes(origin)) return callback(null, true);
   return callback(new Error('CORS origin rejected'));
-}, methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization', 'X-Auto-Trade-Key', 'X-Device-Session'] }));
+}, methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization', 'X-Auto-Trade-Key', 'X-Device-Session'] }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/api', apiRateLimit);
@@ -68,6 +69,9 @@ app.get("/api/healthz", (_req, res) => {
 // unless DEVICE_TRUST_ENFORCEMENT is exactly `required`.
 app.use('/api/device-trust', deviceTrustRouter);
 app.use('/api', deviceTrustAppGate);
+// Admin-only Agent Hub bridge stays behind the global device-trust gate and
+// performs its own authenticated/admin checks before any GitHub control-plane call.
+app.use('/api/admin/agent-hub', agentHubControlBridge);
 app.use("/api", router);
 
 if (existsSync(clientDist)) {

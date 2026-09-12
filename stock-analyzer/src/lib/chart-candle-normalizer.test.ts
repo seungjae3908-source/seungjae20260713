@@ -211,6 +211,32 @@ test('KR primary candle request survives the authenticated cold-start tail beyon
   assert.equal(result.normalization.candles.length, 2);
 });
 
+test('US primary candle request survives the bounded cold-start tail beyond the former 2.5s cutoff', async () => {
+  const calls: string[] = [];
+  const result = await fetchUnifiedChartData({
+    market: 'US',
+    symbol: 'AAPL',
+    timeframe: '1D',
+    fetcher: async (input, init) => {
+      calls.push(String(input));
+      if (calls.length > 1) throw new Error(`unexpected fallback request: ${String(input)}`);
+      await waitForAbortAwareDelay(3_000, init?.signal);
+      return new Response(JSON.stringify({
+        provider: 'test-primary',
+        fetchedAt: '2026-09-07T00:00:00.000Z',
+        candles: [
+          candle(1_700_000_000, 100),
+          candle(1_700_086_400, 101),
+        ],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+  assert.deepEqual(calls, ['/api/stocks/AAPL/candles?tf=1D']);
+  assert.equal(result.sourceUrl, '/api/stocks/AAPL/candles?tf=1D');
+  assert.equal(result.provider, 'test-primary');
+  assert.equal(result.normalization.candles.length, 2);
+});
+
 test('HTTP 429 is classified as retryable rate limiting without using the fallback route', async () => {
   let calls = 0;
   await assert.rejects(

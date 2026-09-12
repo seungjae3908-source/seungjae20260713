@@ -5,7 +5,7 @@ import express from 'express';
 import type { AddressInfo } from 'node:net';
 import { requireAuthenticated, requireCapability } from '../middleware/auth';
 import { MEMBER_CAPABILITIES, MEMBER_PERMISSION_MATRIX } from '../../../packages/member-access/src/index.js';
-import { classifyAdminReadFailure } from './admin';
+import { classifyAdminReadFailure, RESEARCH_OVERVIEW_TIMEOUT_MS } from './admin';
 
 async function startServer() {
   const app = express();
@@ -249,4 +249,10 @@ test('admin audit read storage failure is unavailable, never an empty result or 
     error: 'ADMIN_AUDIT_STORAGE_UNAVAILABLE',
     message: '권한 변경 감사 저장소를 확인할 수 없습니다.',
   });
+});
+
+test('research dashboard overview proxy deadline covers the verified loopback readback and stays bounded', () => {
+  assert.equal(RESEARCH_OVERVIEW_TIMEOUT_MS, 10_000);
+  assert.ok(RESEARCH_OVERVIEW_TIMEOUT_MS > 8_000);
+  assert.ok(RESEARCH_OVERVIEW_TIMEOUT_MS <= 15_000);
 });

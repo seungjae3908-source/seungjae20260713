@@ -92,6 +92,15 @@ async function installApprovedSessionWithInvalidHolding(page: Page) {
 }
 
 async function installGlobalReadOnlyShellFixtures(page: Page) {
+  await page.route('**/api/member-watchlist**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === 'GET' && url.pathname === '/api/member-watchlist') {
+      return fulfill(route, { ok: true, items: [], identitySource: 'AUTHENTICATED_MEMBER' });
+    }
+    return route.continue();
+  });
+
   await page.route('**/api/watchlist**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());

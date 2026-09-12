@@ -8,6 +8,9 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Sequence
 
+from agent_hub_natural_language_v5 import self_test as run_natural_language_gateway_self_test
+from agent_hub_autonomy_v5 import self_test as run_autonomy_self_test
+
 STATE_MARKER = "[HUB_COMPACT_STATE]"
 STATE_JSON_FIELD = "state_json"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -23,7 +26,7 @@ def _clean(value: Any, limit: int = 240) -> str:
     return text[:limit]
 
 
-def _string_list(value: Any) -> tuple[str, ...]:
+def _string_list(value: Any, *, field: str = "changed_files", limit: int = 100) -> tuple[str, ...]:
     if value is None:
         return ()
     parsed: Any = value
@@ -35,14 +38,14 @@ def _string_list(value: Any) -> tuple[str, ...]:
             try:
                 parsed = json.loads(text)
             except json.JSONDecodeError as exc:
-                raise StateError("changed_files must be valid JSON") from exc
+                raise StateError(f"{field} must be valid JSON") from exc
         else:
             parsed = [item.strip() for item in re.split(r"[,;|\n]", text) if item.strip()]
     if not isinstance(parsed, (list, tuple)) or any(not isinstance(item, str) for item in parsed):
-        raise StateError("changed_files must be a string list")
-    result = tuple(sorted(dict.fromkeys(_clean(item, 500) for item in parsed if _clean(item, 500))))
-    if len(result) > 100:
-        raise StateError("changed_files exceeds compact-state limit")
+        raise StateError(f"{field} must be a string list")
+    result = tuple(dict.fromkeys(_clean(item, 500) for item in parsed if _clean(item, 500)))
+    if len(result) > limit:
+        raise StateError(f"{field} exceeds compact-state limit")
     return result
 
 
@@ -68,10 +71,16 @@ class CompactState:
     changed_files: tuple[str, ...]
     checks_digest: str
     updated_at: str
+    task_id: str
+    goal: str
+    current_step: str
+    first_zero: str
+    remaining_steps: tuple[str, ...]
 
     def as_dict(self) -> dict[str, Any]:
         value = asdict(self)
         value["changed_files"] = list(self.changed_files)
+        value["remaining_steps"] = list(self.remaining_steps)
         return value
 
 
@@ -88,9 +97,14 @@ def build_current_state(fields: Mapping[str, Any], *, updated_at: str = "") -> C
         head_sha=_sha_or_none(fields.get("head_sha"), "head_sha"),
         pr_number=_clean(fields.get("pr_number"), 24) or "none",
         ci_run_id=_clean(fields.get("ci_run_id"), 32) or "none",
-        changed_files=_string_list(fields.get("changed_files")),
+        changed_files=_string_list(fields.get("changed_files"), field="changed_files"),
         checks_digest=digest,
         updated_at=_clean(updated_at or fields.get("updated_at"), 40) or "none",
+        task_id=_clean(fields.get("task_id"), 180) or "none",
+        goal=_clean(fields.get("goal"), 800) or "none",
+        current_step=_clean(fields.get("current_step"), 400) or "none",
+        first_zero=_clean(fields.get("first_zero"), 400) or "none",
+        remaining_steps=_string_list(fields.get("remaining_steps"), field="remaining_steps", limit=24),
     )
 
 
@@ -148,6 +162,47 @@ def latest_matching_state(
     return None
 
 
+def latest_task_state(
+    comments: Sequence[Mapping[str, Any]],
+    *,
+    repository: str,
+    task_id: str,
+) -> CompactState | None:
+    """Resolve the newest resumable task snapshot without guessing worker or branch."""
+    wanted = _clean(task_id, 180)
+    if not wanted or wanted == "none":
+        raise StateError("task_id is required for task resume")
+    for comment in reversed(comments):
+        body = str(comment.get("body") or "")
+        if STATE_MARKER not in body:
+            continue
+        try:
+            state = parse_state_snapshot(body)
+        except StateError:
+            continue
+        if state and state.repository == repository and state.task_id == wanted:
+            return state
+    return None
+
+
+def resumable_task_summary(state: CompactState) -> dict[str, Any]:
+    """Return only the bounded fields needed to continue a previously known task."""
+    return {
+        "task_id": state.task_id,
+        "goal": state.goal,
+        "status": state.status,
+        "current_step": state.current_step,
+        "first_zero": state.first_zero,
+        "remaining_steps": list(state.remaining_steps),
+        "worker": state.worker,
+        "branch": state.branch,
+        "head_sha": state.head_sha,
+        "pr_number": state.pr_number,
+        "ci_run_id": state.ci_run_id,
+        "updated_at": state.updated_at,
+    }
+
+
 def self_test() -> int:
     fields = {
         "repository": "owner/repo",
@@ -160,6 +215,11 @@ def self_test() -> int:
         "ci_run_id": "123",
         "changed_files": ["docs/b.md", "docs/a.md"],
         "checks": "success",
+        "task_id": "ai-chart-cold-start",
+        "goal": "finish the cold-start repair through Draft PR and exact-head CI",
+        "current_step": "run focused regression",
+        "first_zero": "cold first-usable p95 above gate",
+        "remaining_steps": ["focused test", "draft pr", "exact-head ci"],
     }
     current = build_current_state(fields, updated_at="2026-08-05T00:00:00Z")
     assert state_delta(current, current) == {}
@@ -168,8 +228,19 @@ def self_test() -> int:
     assert set(delta) == {"status", "head_sha", "updated_at"}
     body = format_state_snapshot(current)
     assert parse_state_snapshot(body) == current
-    assert latest_matching_state([{"body": body}], repository="owner/repo", worker="integration-planner", branch="feature/demo") == current
-    print(json.dumps({"compact_state_v2": "pass", "delta_fields": sorted(delta)}))
+    comments = [{"body": body}]
+    assert latest_matching_state(comments, repository="owner/repo", worker="integration-planner", branch="feature/demo") == current
+    assert latest_task_state(comments, repository="owner/repo", task_id="ai-chart-cold-start") == current
+    summary = resumable_task_summary(current)
+    assert summary["current_step"] == "run focused regression"
+    assert summary["remaining_steps"] == ["focused test", "draft pr", "exact-head ci"]
+
+    legacy = build_current_state({k: v for k, v in fields.items() if k not in {"task_id", "goal", "current_step", "first_zero", "remaining_steps"}})
+    assert legacy.task_id == "none"
+    assert legacy.remaining_steps == ()
+    assert run_natural_language_gateway_self_test() == 0
+    assert run_autonomy_self_test() == 0
+    print(json.dumps({"compact_state_v2": "pass", "task_resume_v5": "pass", "natural_language_gateway_v5": "pass", "autonomous_engine_v5": "pass", "delta_fields": sorted(delta)}))
     return 0
 
 

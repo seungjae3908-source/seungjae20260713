@@ -24,6 +24,28 @@
 	</head>
 	<body>
 		<div id="root"></div>
-		<script type="module" src="/src/main.tsx"></script>
+		<script type="module">
+			const directAiChartRoute = window.location.pathname.endsWith('/ai-chart');
+			const aiChartRoutePrewarm = directAiChartRoute
+				? import('/src/pages/ai-chart.tsx')
+				: null;
+			const startAiChartSharedWork = () => {
+				const aiChartSharedDataPrewarm = directAiChartRoute
+					? import('/src/lib/unified-chart-data.ts')
+					: null;
+				void import('/src/main.tsx');
+				if (aiChartRoutePrewarm && aiChartSharedDataPrewarm) {
+					void aiChartSharedDataPrewarm.then(() => import('/src/components/unified-analysis-chart.tsx'));
+				}
+			};
+			if (directAiChartRoute && aiChartRoutePrewarm) {
+				void aiChartRoutePrewarm.then(
+					startAiChartSharedWork,
+					startAiChartSharedWork,
+				);
+			} else {
+				startAiChartSharedWork();
+			}
+		</script>
 	</body>
 </html>

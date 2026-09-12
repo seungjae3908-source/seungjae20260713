@@ -8,6 +8,8 @@ import os
 import re
 from typing import Any
 
+from agent_hub_contract_v2 import validate_report
+
 REPORT_MARKER = "[WORKER_REPORT]"
 EXECUTOR_REPORT_MARKER = "<!-- agent-executor-report -->"
 SCHEMA_VERSION = "2"
@@ -189,7 +191,7 @@ def build_schema_v2_report(
         f"repository: {repository}",
         "base_branch: main",
         f"base_sha: {main_sha.lower()}",
-        "branch: main",
+        "branch: none",
         "status: partial",
         f"head_sha: {main_sha.lower()}",
         "pr_number: none",
@@ -246,13 +248,21 @@ replit_agent: 0
     report = result["report"]
     assert report.startswith("[WORKER_REPORT]\nschema_version: 2\n")
     assert "worker: agent-hub-validation" in report
-    assert "branch: main" in report and f"head_sha: {sha}" in report
+    assert "branch: none" in report and f"head_sha: {sha}" in report
     assert "status: partial" in report
     assert "pr_number: none" in report and "changed_files: []" in report
     assert "CANONICAL_HOST_READBACK_SURFACE_MISSING" in report
     assert "<!-- agent-executor-report -->" in report
     assert "<!-- agent-hub-manual-source:5472994117 -->" in report
     assert "<!-- agent-hub-processed:5472994117 -->" in report
+    validated = validate_report(
+        report,
+        comment_id=5472994118,
+        author="github-actions[bot]",
+        expected_repository="o/r",
+    )
+    assert validated.branch == "none"
+    assert validated.status == "partial"
 
     strict = "[WORKER_REPORT]\nschema_version: 2\ntask_id: x"
     assert build_schema_v2_report(
@@ -317,6 +327,7 @@ replit_agent: 0
         "missing_first_zero_fail_closed": 1,
         "source_consumed_marker": 1,
         "transport_marker_sanitization": 1,
+        "normalized_report_contract_compatible": 1,
     }, separators=(",", ":")))
     return 0
 

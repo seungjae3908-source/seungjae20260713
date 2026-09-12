@@ -4,16 +4,12 @@ import {
   type ChartCandleTimeframe,
 } from './chart-candle-normalizer';
 import type { AnalysisAssetType, AnalysisMarket } from './analysis-selection';
-
-export type UnifiedChartTimeframe =
-  | '1m'
-  | '3m'
-  | '5m'
-  | '15m'
-  | '30m'
-  | '1H'
-  | '4H'
-  | '1D';
+import { type UnifiedChartTimeframe } from './unified-chart-metadata';
+export {
+  UNIFIED_CHART_TIMEFRAMES,
+  unifiedMarketLabel,
+  type UnifiedChartTimeframe,
+} from './unified-chart-metadata';
 
 export type UnifiedChartDataStatus =
   | 'ok'
@@ -67,37 +63,13 @@ export function configureUnifiedChartFetch(fetcher: UnifiedChartFetch | null): v
 }
 
 const DEFAULT_TIMEOUT_MS = 12_000;
-const PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS = 2_500;
+const US_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS = 3_500;
 const KR_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS = 3_500;
-
-export const UNIFIED_CHART_TIMEFRAMES: Array<{
-  key: UnifiedChartTimeframe;
-  label: string;
-}> = [
-  { key: '1m', label: '1분' },
-  { key: '3m', label: '3분' },
-  { key: '5m', label: '5분' },
-  { key: '15m', label: '15분' },
-  { key: '30m', label: '30분' },
-  { key: '1H', label: '1시간' },
-  { key: '4H', label: '4시간' },
-  { key: '1D', label: '일봉' },
-];
 
 export function marketAssetType(market: AnalysisMarket): AnalysisAssetType {
   if (market === 'UPBIT') return 'coin_spot';
   if (market === 'BITGET') return 'coin_futures';
   return 'stock';
-}
-
-export function unifiedMarketLabel(market: AnalysisMarket): string {
-  const labels: Record<AnalysisMarket, string> = {
-    KR: '국내주식',
-    US: '미국주식',
-    UPBIT: '코인 현물',
-    BITGET: '코인 선물',
-  };
-  return labels[market];
 }
 
 export function defaultUnifiedSymbol(market: AnalysisMarket): {
@@ -250,15 +222,17 @@ function createLinkedSignal(external: AbortSignal | undefined, timeoutMs: number
 
 function primaryStockEndpointTimeoutMs(market: AnalysisMarket, totalTimeoutMs: number): number {
   /*
-   * The app-facing KR candle backend already has a 2s hard terminal after the
-   * request reaches the API. Authentication/session lookup and transport happen
-   * before that server budget, so the former 2.5s browser cutoff could abort a
-   * healthy bounded request. Keep the 5s release gate unchanged while allowing
-   * only a 1.5s auth/transport margin for KR; US keeps its existing 2.5s budget.
+   * The app-facing stock candle backends already terminate their live-provider
+   * work before the 5s release gate: KR has a 2s hard terminal, while a cold US
+   * request can spend up to 750ms on persistent cache lookup plus the 1.65s
+   * Yahoo hedge before auth/transport/JSON overhead. A 2.5s US browser cutoff
+   * can therefore abort a healthy bounded primary request and restart the same
+   * candle chain through /chart. Keep the 5s release gate unchanged and give
+   * both stock markets a 3.5s primary budget so bounded /candles can terminate.
    */
   const endpointBudgetMs = market === 'KR'
     ? KR_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS
-    : PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS;
+    : US_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS;
   return Math.min(endpointBudgetMs, Math.max(250, Math.floor(totalTimeoutMs / 2)));
 }
 

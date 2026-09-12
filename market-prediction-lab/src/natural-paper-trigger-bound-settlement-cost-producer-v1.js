@@ -97,38 +97,85 @@ function positionIdentity(position) {
     signalId: position?.signalId,
     market: position?.market,
     symbol: position?.symbol,
+    signalTimeframe: position?.sample?.identity?.timeframe,
+    horizon: position?.sample?.identity?.horizon,
     direction: position?.direction,
+    candidateId: position?.candidateId,
+    strategyFamily: position?.strategyFamily,
     strategyId: position?.strategyId,
     strategyVersion: position?.strategyVersion,
     parameterHash: position?.parameterHash,
+    parameterDigest: position?.parameterDigest,
     researchCodeSha: position?.researchCodeSha,
     costPolicyVersion: position?.costPolicyVersion,
+    accountMode: position?.accountMode,
   };
 }
 
-function exitExecutionIdentity(position, trigger, sourceIdentity, provenanceId, exitExecutionDigest) {
-  return {
+function frozenCandidateIdentityBlockers(position) {
+  const blockers = [];
+  if (!/^paper-candidate-v1:[0-9a-f]{64}$/u.test(position?.candidateId ?? "")) {
+    blockers.push("PAPER_POSITION_CANDIDATE_ID_REQUIRED");
+  }
+  if (!nonEmpty(position?.strategyFamily)) blockers.push("PAPER_POSITION_STRATEGY_FAMILY_REQUIRED");
+  if (!nonEmpty(position?.parameterDigest)) blockers.push("PAPER_POSITION_PARAMETER_DIGEST_REQUIRED");
+  else if (position.parameterDigest !== position.parameterHash) {
+    blockers.push("PAPER_POSITION_PARAMETER_IDENTITY_MISMATCH");
+  }
+  if (position?.accountMode !== "PAPER") blockers.push("PAPER_POSITION_ACCOUNT_MODE_REQUIRED");
+  return blockers;
+}
+
+function exitExecutionIdentity(position, trigger, sourceIdentity, provenanceId, exitExecution) {
+  const payload = {
     exitTriggerId: trigger?.exitTriggerId,
     triggerObservationId: trigger?.triggerObservationId,
     triggeredAtMs: trigger?.triggeredAtMs,
     positionId: position?.positionId,
     paperSampleId: position?.paperSampleId,
+    entryId: position?.paperSampleId,
+    provider: exitExecution?.dataEvidence?.provider,
     market: position?.market,
     symbol: position?.symbol,
+    timeframe: position?.sample?.identity?.timeframe,
+    horizon: position?.sample?.identity?.horizon,
     direction: position?.direction,
+    candidateId: position?.candidateId,
+    strategyFamily: position?.strategyFamily,
+    strategyId: position?.strategyId,
+    strategyVersion: position?.strategyVersion,
+    parameterHash: position?.parameterHash,
+    parameterDigest: position?.parameterDigest,
+    researchCodeSha: position?.researchCodeSha,
+    accountMode: position?.accountMode,
     costPolicyVersion: position?.costPolicyVersion,
     sourceIdentity,
     provenanceId,
-    exitExecutionDigest,
+    exitExecutionDigest: hash(exitExecution),
   };
+  return { ...payload, exitExecutionId: hash(payload) };
 }
 
 function triggerIdentityValid(position, trigger) {
   if (!trigger || typeof trigger !== "object" || !digest(trigger.exitTriggerId)) return false;
   const { exitTriggerId, ...payload } = trigger;
+  const expectedStrategyIdentity = {
+    candidateId: position?.candidateId,
+    strategyFamily: position?.strategyFamily,
+    strategyId: position?.strategyId,
+    strategyVersion: position?.strategyVersion,
+    parameterHash: position?.parameterHash,
+    parameterDigest: position?.parameterDigest,
+    researchCodeSha: position?.researchCodeSha?.toLowerCase(),
+    accountMode: position?.accountMode,
+  };
   return exitTriggerId === hash(payload)
     && trigger.positionId === position?.positionId
     && trigger.paperSampleId === position?.paperSampleId
+    && trigger.candidateId === position?.candidateId
+    && trigger.strategyId === position?.strategyId
+    && trigger.researchCodeSha?.toLowerCase() === position?.researchCodeSha?.toLowerCase()
+    && same(trigger.strategyIdentity, expectedStrategyIdentity)
     && trigger.costPolicyVersion === position?.costPolicyVersion
     && trigger.positionLifecycleDigest === position?.lifecycle?.immutableContractDigest;
 }
@@ -180,6 +227,7 @@ function componentIdentityBlockers({ component, name, expectedPosition, expected
 
 function bindingBlockers({ position, observation, trigger, evaluatedAtMs }) {
   const blockers = [];
+  blockers.push(...frozenCandidateIdentityBlockers(position));
   const binding = observation?.triggerBoundSettlementEvidence;
   const input = observation?.settlementInput;
   const cost = observation?.settlementCostEvidence;
@@ -210,9 +258,10 @@ function bindingBlockers({ position, observation, trigger, evaluatedAtMs }) {
     trigger,
     binding?.sourceIdentity,
     binding?.provenanceId,
-    hash(input?.exitExecution),
+    input?.exitExecution,
   );
-  if (!digest(expectedExecution.exitExecutionDigest)) {
+  if (!digest(expectedExecution.exitExecutionDigest) || !digest(expectedExecution.exitExecutionId)
+    || !nonEmpty(expectedExecution.provider) || !nonEmpty(expectedExecution.timeframe)) {
     blockers.push("PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_EXIT_EXECUTION_IDENTITY_MISMATCH");
   }
   if (!same(binding?.positionIdentity, expectedPosition)) {
@@ -233,6 +282,11 @@ function bindingBlockers({ position, observation, trigger, evaluatedAtMs }) {
     || cost?.exitTriggerId !== trigger?.exitTriggerId) {
     blockers.push("PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_EXIT_TRIGGER_MISMATCH");
   }
+  if (binding?.exitExecutionId !== expectedExecution.exitExecutionId
+    || input?.exitExecutionId !== expectedExecution.exitExecutionId
+    || cost?.exitExecutionId !== expectedExecution.exitExecutionId) {
+    blockers.push("PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_EXIT_EXECUTION_ID_MISMATCH");
+  }
   const settlementInputDigest = hash(input);
   const settlementCostEvidenceDigest = hash(cost);
   if (!digest(settlementInputDigest) || !digest(settlementCostEvidenceDigest)
@@ -243,6 +297,7 @@ function bindingBlockers({ position, observation, trigger, evaluatedAtMs }) {
   const bindingPayload = {
     schemaVersion: binding?.schemaVersion,
     exitTriggerId: binding?.exitTriggerId,
+    exitExecutionId: binding?.exitExecutionId,
     sourceIdentity: binding?.sourceIdentity,
     provenanceId: binding?.provenanceId,
     positionIdentity: binding?.positionIdentity,
@@ -298,6 +353,7 @@ export function validateNaturalPaperTriggerBoundSettlementEvidence({
     schemaVersion: NATURAL_PAPER_TRIGGER_BOUND_SETTLEMENT_COST_PRODUCER_VERSION,
     status: blockers.length === 0 ? "PRESENT" : "BLOCKED_DATA",
     fullCostReady: blockers.length === 0,
+    exitExecutionId: blockers.length === 0 ? observation?.triggerBoundSettlementEvidence?.exitExecutionId : null,
     blockers,
     unknownIsZero: false,
     unavailableCostConvertedToZero: false,
@@ -314,6 +370,7 @@ export function bindNaturalPaperTriggerBoundSettlementEvidence({
 } = {}) {
   const trigger = position?.lifecycle?.pendingExit;
   const blockers = [];
+  blockers.push(...frozenCandidateIdentityBlockers(position));
   if (!triggerIdentityValid(position, trigger)) blockers.push("PAPER_POSITION_EXIT_TRIGGER_IDENTITY_MISMATCH");
   if (!safeTime(evaluatedAtMs)) blockers.push("PAPER_POSITION_EVALUATED_AT_REQUIRED");
   if (authoritativeEvidence?.schemaVersion !== AUTHORITATIVE_NATURAL_PAPER_TRIGGER_SETTLEMENT_EVIDENCE_VERSION
@@ -342,9 +399,10 @@ export function bindNaturalPaperTriggerBoundSettlementEvidence({
     trigger,
     sourceIdentity,
     provenanceId,
-    hash(input?.exitExecution),
+    input?.exitExecution,
   );
-  if (!digest(expectedExecution.exitExecutionDigest)) {
+  if (!digest(expectedExecution.exitExecutionDigest) || !digest(expectedExecution.exitExecutionId)
+    || !nonEmpty(expectedExecution.provider) || !nonEmpty(expectedExecution.timeframe)) {
     blockers.push("PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_EXIT_EXECUTION_IDENTITY_MISMATCH");
   }
   if (!same(authoritativeEvidence?.positionIdentity, expectedPosition)) {
@@ -363,6 +421,11 @@ export function bindNaturalPaperTriggerBoundSettlementEvidence({
   if (input?.exitTriggerId !== trigger?.exitTriggerId
     || cost?.exitTriggerId !== trigger?.exitTriggerId) {
     blockers.push("PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_EXIT_TRIGGER_MISMATCH");
+  }
+  if (authoritativeEvidence?.exitExecutionId !== expectedExecution.exitExecutionId
+    || input?.exitExecutionId !== expectedExecution.exitExecutionId
+    || cost?.exitExecutionId !== expectedExecution.exitExecutionId) {
+    blockers.push("PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_EXIT_EXECUTION_ID_MISMATCH");
   }
   if (input?.exitBar?.timestampMs !== trigger?.triggeredAtMs
     || input?.exitBar?.open !== trigger?.bar?.open
@@ -386,6 +449,7 @@ export function bindNaturalPaperTriggerBoundSettlementEvidence({
   const bindingPayload = {
     schemaVersion: NATURAL_PAPER_TRIGGER_BOUND_SETTLEMENT_COST_PRODUCER_VERSION,
     exitTriggerId: trigger.exitTriggerId,
+    exitExecutionId: expectedExecution.exitExecutionId,
     sourceIdentity,
     provenanceId,
     positionIdentity: expectedPosition,
@@ -424,6 +488,7 @@ export function bindNaturalPaperTriggerBoundSettlementEvidence({
     fullCostReady: true,
     observation: boundObservation,
     exitTriggerId: trigger.exitTriggerId,
+    exitExecutionId: expectedExecution.exitExecutionId,
     evidenceDigest: triggerBoundSettlementEvidence.evidenceDigest,
     blockers: [],
     unknownIsZero: false,
@@ -439,7 +504,9 @@ export function createNaturalPaperTriggerBoundSettlementCostProducer({ collectAu
   }
   return async function produceTriggerBoundSettlementCost({ position, observation, evaluatedAtMs } = {}) {
     const trigger = position?.lifecycle?.pendingExit;
-    if (!triggerIdentityValid(position, trigger)) return blocked(["PAPER_POSITION_EXIT_TRIGGER_IDENTITY_MISMATCH"]);
+    const identityBlockers = frozenCandidateIdentityBlockers(position);
+    if (!triggerIdentityValid(position, trigger)) identityBlockers.push("PAPER_POSITION_EXIT_TRIGGER_IDENTITY_MISMATCH");
+    if (identityBlockers.length > 0) return blocked(unique(identityBlockers));
     let authoritativeEvidence;
     try {
       authoritativeEvidence = await collectAuthoritativeEvidence(deepFreeze({
