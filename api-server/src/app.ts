@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import router from "./routes";
+import agentHubControlBridge from './routes/agent-hub-control-bridge';
 import deviceTrustRouter from './features/device-trust/device-trust.route';
 import { deviceTrustAppGate } from './features/device-trust/device-trust.middleware';
 import { logger } from "./lib/logger";
@@ -69,6 +70,9 @@ app.get("/api/healthz", (_req, res) => {
 // unless DEVICE_TRUST_ENFORCEMENT is exactly `required`.
 app.use('/api/device-trust', deviceTrustRouter);
 app.use('/api', deviceTrustAppGate);
+// Admin-only Agent Hub bridge stays behind the global device-trust gate and
+// performs its own authenticated/admin checks before any GitHub control-plane call.
+app.use('/api/admin/agent-hub', agentHubControlBridge);
 
 // Browser auth bootstrap must not depend on a direct cross-origin PostgREST
 // profiles read. Reuse the canonical server-side authentication middleware,
