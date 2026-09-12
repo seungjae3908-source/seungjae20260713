@@ -36,7 +36,10 @@ test('Agent Hub V5 admin control route stays capability-gated and fail-closed', 
   expect(controlSource).toContain("bridgeRequest('/status', token)");
   expect(controlSource).toContain("bridgeRequest('/commands', token");
   expect(controlSource).toContain('bridgeRequest(`/commands/${commentId}/status`, token)');
-  expect(controlSource).toContain('setTimeout(() => void refresh(), 15_000)');
+  expect(controlSource).toContain('ACTIVE_POLL_MS = 15_000');
+  expect(controlSource).toContain('WAITING_POLL_MS = 60_000');
+  expect(controlSource).toContain("'WAITING_APPROVAL',\n  'NEEDS_CONTEXT',");
+  expect(controlSource).toContain('SLOW_POLL_COMMAND_STATES.has(executionState) ? WAITING_POLL_MS : ACTIVE_POLL_MS');
   expect(controlSource).toContain('Latest evidence #');
   expect(controlSource).not.toContain('api.github.com');
   expect(controlSource).not.toContain('AGENT_HUB_GITHUB_TOKEN');
