@@ -30,13 +30,16 @@ RESUME_TERMS = (
 )
 TERMINAL_STATUSES = {"completed", "expired", "superseded", "no_action"}
 
+# Task-domain intent must win over wording that merely names the Agent/Codex
+# persona. Otherwise commands such as "Codex Agent로 AI차트 오류 잡아" are
+# routed to the read-only agent-hub-validation worker instead of ai-chart.
 ROUTES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("agent-hub-validation", ("agent hub", "agent-hub", "코덱", "codex", "에이전트 허브")),
     ("ai-chart", ("ai차트", "ai 차트", "chart", "차트", "캔들", "indicator", "지표")),
     ("ai-signal-scanner", ("scanner", "스캐너", "신호검색", "신호 검색", "검색기", "signal")),
     ("test-runner", ("playwright", "browser", "브라우저", "e2e", "ui 테스트", "테스트")),
     ("security-inspector", ("security", "보안", "secret", "시크릿", "privacy", "개인정보")),
     ("market-information-room", ("news", "뉴스", "공시", "market info", "시장정보", "종목검색")),
+    ("agent-hub-validation", ("agent hub", "agent-hub", "코덱", "codex", "에이전트 허브")),
 )
 
 
@@ -208,6 +211,24 @@ def self_test() -> int:
     assert chart.action_hint == "inspect_repository"
     assert chart.authority == "NONE"
 
+    mixed_chart = compile_natural_language_command(
+        command="Codex Agent로 AI차트 오류 잡아",
+        repository="owner/repo",
+    )
+    assert mixed_chart.worker_hint == "ai-chart"
+
+    mixed_market = compile_natural_language_command(
+        command="Codex로 뉴스 공시 오류 봐",
+        repository="owner/repo",
+    )
+    assert mixed_market.worker_hint == "market-information-room"
+
+    hub_self = compile_natural_language_command(
+        command="Agent Hub 자체 검증",
+        repository="owner/repo",
+    )
+    assert hub_self.worker_hint == "agent-hub-validation"
+
     state = {
         "task_id": "profitability-proof",
         "goal": "finish genuine OOS evidence loop",
@@ -252,6 +273,9 @@ def self_test() -> int:
     print(json.dumps({
         "natural_language_gateway_v5": "pass",
         "new_command_route": chart.worker_hint,
+        "mixed_agent_chart_route": mixed_chart.worker_hint,
+        "mixed_agent_market_route": mixed_market.worker_hint,
+        "agent_hub_self_route": hub_self.worker_hint,
         "resume_task": resumed.task_id,
         "authority": resumed.authority,
         "ambiguous_resume_fail_closed": True,
