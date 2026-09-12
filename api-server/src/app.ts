@@ -8,6 +8,7 @@ import router from "./routes";
 import deviceTrustRouter from './features/device-trust/device-trust.route';
 import { deviceTrustAppGate } from './features/device-trust/device-trust.middleware';
 import { logger } from "./lib/logger";
+import { requireAuthenticated, type AuthenticatedRequest } from './middleware/auth';
 import { rejectPaperJournalQueryIdentity } from './middleware/paper-journal-query-identity';
 import { apiRateLimit, securityHeaders } from './middleware/security';
 
@@ -68,6 +69,45 @@ app.get("/api/healthz", (_req, res) => {
 // unless DEVICE_TRUST_ENFORCEMENT is exactly `required`.
 app.use('/api/device-trust', deviceTrustRouter);
 app.use('/api', deviceTrustAppGate);
+
+// Browser auth bootstrap must not depend on a direct cross-origin PostgREST
+// profiles read. Reuse the canonical server-side authentication middleware,
+// which verifies the bearer token and resolves the exact current database
+// profile for that user before this same-origin endpoint can return anything.
+app.get('/api/auth/profile', requireAuthenticated, (req: AuthenticatedRequest, res) => {
+  const profile = req.member;
+  const allowedStatuses = new Set(['pending', 'approved', 'rejected']);
+  if (
+    !profile
+    || typeof profile.id !== 'string'
+    || profile.id.length === 0
+    || typeof profile.login_name !== 'string'
+    || typeof profile.display_name !== 'string'
+    || typeof profile.role !== 'string'
+    || !allowedStatuses.has(profile.status)
+  ) {
+    return res.status(403).json({
+      code: 'PROFILE_INVALID',
+      message: 'Authenticated member profile is missing or invalid.',
+      details: null,
+      hint: null,
+    });
+  }
+
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  return res.status(200).json({
+    id: profile.id,
+    login_name: profile.login_name,
+    display_name: profile.display_name,
+    role: profile.role,
+    status: profile.status,
+    membership_level: profile.membership_level ?? null,
+    is_active: profile.is_active ?? null,
+    permissions_updated_at: profile.permissions_updated_at ?? null,
+    updated_at: profile.updated_at ?? null,
+  });
+});
+
 app.use("/api", router);
 
 if (existsSync(clientDist)) {
