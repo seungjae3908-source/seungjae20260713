@@ -85,6 +85,21 @@ def _is_native_schema_v2(body: str) -> bool:
     return _parse_fields(body).get("schema_version") == SCHEMA_VERSION
 
 
+def _is_informational_worker_report(body: str) -> bool:
+    """Return true only for an untagged, non-schema-v2 WORKER_REPORT envelope.
+
+    Informational lane reports are intentionally inert: they are neither normalized into
+    executable Agent Hub work nor treated as an adapter failure. Explicit tagged legacy
+    handoffs and schema-v2 reports continue through their existing fail-closed paths.
+    """
+    lines = [line.strip() for line in body.lstrip("\ufeff").splitlines() if line.strip()]
+    return bool(
+        lines
+        and lines[0] == REPORT_MARKER
+        and _parse_fields(body).get("schema_version") != SCHEMA_VERSION
+    )
+
+
 def _task_slug(tag: str) -> str:
     value = TASK_CLEAN_RE.sub("-", tag.strip()).strip("-._:")
     value = value[:100] or "manual-handoff"
@@ -127,6 +142,8 @@ def build_schema_v2_report(
 
     tag = _legacy_tag(body)
     if not tag:
+        if _is_informational_worker_report(body):
+            return {"status": "ignored", "reason": "informational_worker_report"}
         return {"status": "blocked", "reason": "unsupported_worker_report_marker"}
     if author_association.strip().upper() not in ALLOWED_ASSOCIATIONS:
         return {"status": "blocked", "reason": "untrusted_author_association"}
@@ -274,6 +291,33 @@ replit_agent: 0
         main_sha=sha,
     )["status"] == "native"
 
+    informational = """[WORKER_REPORT]
+root_task_id: agent-hub-command-status-readback-current-main-realign-20260913
+status: partial
+lane: Agent Hub / Codex Agent
+summary: informational lane progress only
+first_zero: #1041_FRESH_EXACT_HEAD_CI_NOT_TERMINAL
+"""
+    ignored = build_schema_v2_report(
+        body=informational,
+        comment_id=6,
+        author_login="owner",
+        author_association="OWNER",
+        repository="o/r",
+        main_sha=sha,
+    )
+    assert ignored == {"status": "ignored", "reason": "informational_worker_report"}
+
+    embedded = "prefix [WORKER_REPORT]\nstatus: partial"
+    assert build_schema_v2_report(
+        body=embedded,
+        comment_id=7,
+        author_login="owner",
+        author_association="OWNER",
+        repository="o/r",
+        main_sha=sha,
+    )["reason"] == "unsupported_worker_report_marker"
+
     stale = base.replace(sha, "a" * 40)
     assert build_schema_v2_report(
         body=stale,
@@ -321,6 +365,7 @@ replit_agent: 0
     print(json.dumps({
         "manual_report_adapter_v2": "pass",
         "native_schema_v2_passthrough": 1,
+        "informational_report_inert_ignore": 1,
         "legacy_readonly_normalization": 1,
         "main_drift_fail_closed": 1,
         "mutation_fail_closed": 1,
