@@ -37,12 +37,16 @@ type BridgeStatus = {
 };
 
 const TERMINAL_COMMAND_STATES = new Set<BridgeExecutionState>([
-  'WAITING_APPROVAL',
-  'NEEDS_CONTEXT',
   'BLOCKED',
   'COMPLETED',
   'FAILED_CLOSED',
 ]);
+const SLOW_POLL_COMMAND_STATES = new Set<BridgeExecutionState>([
+  'WAITING_APPROVAL',
+  'NEEDS_CONTEXT',
+]);
+const ACTIVE_POLL_MS = 15_000;
+const WAITING_POLL_MS = 60_000;
 
 function isCommandExecutionState(value: unknown): value is CommandExecutionState {
   return typeof value === 'string' && (COMMAND_STATES as readonly string[]).includes(value);
@@ -54,8 +58,8 @@ function commandStateMessage(state: BridgeExecutionState) {
     case 'NORMALIZED_FOR_COORDINATOR': return '명령 identity와 안전 경계가 정규화됐습니다. 다음 작업 결정을 기다립니다.';
     case 'READY_FOR_EXECUTOR': return '정책 검증을 통과해 안전한 실행 단계로 전달될 준비가 됐습니다.';
     case 'IN_PROGRESS': return 'Agent Hub 작업이 진행 중입니다.';
-    case 'WAITING_APPROVAL': return '사람의 별도 승인이 필요한 경계에서 안전하게 멈췄습니다.';
-    case 'NEEDS_CONTEXT': return '추가 GitHub 증거가 필요해 fail-closed 상태로 대기 중입니다.';
+    case 'WAITING_APPROVAL': return '사람의 별도 승인이 필요한 경계에서 안전하게 대기 중이며 상태 추적은 계속됩니다.';
+    case 'NEEDS_CONTEXT': return '추가 GitHub 증거가 필요해 fail-closed 상태로 대기 중이며 상태 추적은 계속됩니다.';
     case 'BLOCKED': return '현재 정책 또는 증거 조건 때문에 작업이 차단됐습니다.';
     case 'COMPLETED': return 'Agent Hub 작업이 완료됐습니다.';
     case 'FAILED_CLOSED': return '작업 또는 상태 확인이 fail-closed로 종료됐습니다.';
@@ -149,13 +153,14 @@ export default function AgentHubControlPage() {
         }));
         setMessage(commandStateMessage(executionState));
         if (!TERMINAL_COMMAND_STATES.has(executionState)) {
-          timer = setTimeout(() => void refresh(), 15_000);
+          const pollDelay = SLOW_POLL_COMMAND_STATES.has(executionState) ? WAITING_POLL_MS : ACTIVE_POLL_MS;
+          timer = setTimeout(() => void refresh(), pollDelay);
         }
       } catch (cause) {
         if (cancelled) return;
         const reason = cause instanceof Error ? cause.message : 'UNKNOWN';
         setMessage(`상태 확인 실패: ${reason}. 이전 확인 상태는 유지합니다.`);
-        timer = setTimeout(() => void refresh(), 15_000);
+        timer = setTimeout(() => void refresh(), WAITING_POLL_MS);
       }
     };
 
