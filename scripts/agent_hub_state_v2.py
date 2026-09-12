@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Sequence
 
 from agent_hub_natural_language_v5 import self_test as run_natural_language_gateway_self_test
+from agent_hub_autonomy_v5 import self_test as run_autonomy_self_test
 
 STATE_MARKER = "[HUB_COMPACT_STATE]"
 STATE_JSON_FIELD = "state_json"
@@ -238,7 +239,8 @@ def self_test() -> int:
     assert legacy.task_id == "none"
     assert legacy.remaining_steps == ()
     assert run_natural_language_gateway_self_test() == 0
-    print(json.dumps({"compact_state_v2": "pass", "task_resume_v5": "pass", "natural_language_gateway_v5": "pass", "delta_fields": sorted(delta)}))
+    assert run_autonomy_self_test() == 0
+    print(json.dumps({"compact_state_v2": "pass", "task_resume_v5": "pass", "natural_language_gateway_v5": "pass", "autonomous_engine_v5": "pass", "delta_fields": sorted(delta)}))
     return 0
 
 
