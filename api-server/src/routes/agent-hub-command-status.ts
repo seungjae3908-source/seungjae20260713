@@ -65,6 +65,15 @@ function commandState(status: string): AgentHubCommandExecutionState | null {
   }
 }
 
+export function applyAgentHubEvidenceWindow(
+  status: AgentHubCommandStatus,
+  evidenceWindowComplete: boolean,
+): AgentHubCommandStatus {
+  return evidenceWindowComplete
+    ? status
+    : { ...status, executionState: 'NEEDS_CONTEXT' };
+}
+
 export function resolveAgentHubCommandStatus(
   sourceCommentId: number,
   comments: AgentHubComment[],
