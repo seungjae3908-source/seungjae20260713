@@ -14,7 +14,7 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Sequence
 
-from agent_hub_policy import PolicyError, load_workers
+from agent_hub_policy import PolicyError, branch_allowed, load_workers
 
 GATEWAY_VERSION = "agent-hub-natural-language-v5.0"
 MAX_COMMAND_CHARS = 1200
@@ -68,15 +68,15 @@ def _valid_repository(repository: str) -> str:
     return value
 
 
-def _canonical_worker_ids() -> frozenset[str]:
-    """Load worker ids from the authoritative registry; never invent aliases."""
+def _canonical_workers() -> Mapping[str, Any]:
+    """Load authoritative worker policy; never invent aliases or branch scope."""
     try:
         workers = load_workers()
     except PolicyError as exc:
         raise NaturalLanguageGatewayError("canonical worker registry is unavailable") from exc
     if not workers:
         raise NaturalLanguageGatewayError("canonical worker registry is empty")
-    return frozenset(workers)
+    return workers
 
 
 def _is_resume(command: str) -> bool:
@@ -106,15 +106,20 @@ def _action_hint(command: str) -> str:
     return "inspect_repository"
 
 
-def _normalized_task(task: Mapping[str, Any], allowed_workers: frozenset[str]) -> dict[str, Any]:
+def _normalized_task(task: Mapping[str, Any], workers: Mapping[str, Any]) -> dict[str, Any]:
     task_id = _clean(task.get("task_id"), 180)
     if not task_id or task_id == "none":
         raise NaturalLanguageGatewayError("resumable task requires task_id")
     worker = _clean(task.get("worker"), 80)
     if not worker or worker == "none":
         raise NaturalLanguageGatewayError("resumable task requires registered worker")
-    if worker not in allowed_workers:
+    if worker not in workers:
         raise NaturalLanguageGatewayError(f"resumable task worker is not registered: {worker}")
+    branch = _clean(task.get("branch"), 180)
+    if not branch or branch == "none":
+        raise NaturalLanguageGatewayError("resumable task requires allowed branch")
+    if not branch_allowed(branch, workers[worker]):
+        raise NaturalLanguageGatewayError(f"resumable task branch is not allowed for worker: {branch}")
     remaining_raw = task.get("remaining_steps") or []
     if isinstance(remaining_raw, str):
         try:
@@ -133,7 +138,7 @@ def _normalized_task(task: Mapping[str, Any], allowed_workers: frozenset[str]) -
         "first_zero": _clean(task.get("first_zero"), 400) or "none",
         "remaining_steps": [_clean(item, 400) for item in parsed[:24] if _clean(item, 400)],
         "worker": worker,
-        "branch": _clean(task.get("branch"), 180) or "none",
+        "branch": branch,
         "head_sha": _clean(task.get("head_sha"), 80) or "none",
         "pr_number": _clean(task.get("pr_number"), 24) or "none",
         "ci_run_id": _clean(task.get("ci_run_id"), 32) or "none",
@@ -174,12 +179,13 @@ def compile_natural_language_command(
     if len(resumable_tasks) > MAX_TASKS:
         raise NaturalLanguageGatewayError("too many resumable tasks")
 
-    allowed_workers = _canonical_worker_ids()
+    workers = _canonical_workers()
+    allowed_workers = frozenset(workers)
     explicit_task = _clean(task_id, 180) if task_id else ""
     resume = _is_resume(normalized) or bool(explicit_task)
     selected: dict[str, Any] | None = None
 
-    tasks = [_normalized_task(item, allowed_workers) for item in resumable_tasks]
+    tasks = [_normalized_task(item, workers) for item in resumable_tasks]
     if resume:
         candidates = [item for item in tasks if item["status"] not in TERMINAL_STATUSES]
         if explicit_task:
@@ -303,6 +309,30 @@ def self_test() -> int:
     else:
         raise AssertionError("missing resumable worker was silently defaulted")
 
+    missing_branch = {**state, "branch": ""}
+    try:
+        compile_natural_language_command(
+            command="이어서 해",
+            repository="owner/repo",
+            resumable_tasks=[missing_branch],
+        )
+    except NaturalLanguageGatewayError as exc:
+        assert "requires allowed branch" in str(exc)
+    else:
+        raise AssertionError("missing resumable branch was accepted")
+
+    disallowed_branch = {**state, "branch": "main"}
+    try:
+        compile_natural_language_command(
+            command="이어서 해",
+            repository="owner/repo",
+            resumable_tasks=[disallowed_branch],
+        )
+    except NaturalLanguageGatewayError as exc:
+        assert "branch is not allowed" in str(exc)
+    else:
+        raise AssertionError("disallowed resumable branch was accepted")
+
     ambiguous = [state, {**state, "task_id": "ai-chart"}]
     try:
         compile_natural_language_command(command="계속 진행", repository="owner/repo", resumable_tasks=ambiguous)
@@ -328,6 +358,8 @@ def self_test() -> int:
         "authority": resumed.authority,
         "unknown_resume_worker_fail_closed": True,
         "missing_resume_worker_fail_closed": True,
+        "missing_resume_branch_fail_closed": True,
+        "disallowed_resume_branch_fail_closed": True,
         "ambiguous_resume_fail_closed": True,
     }, ensure_ascii=False, sort_keys=True))
     return 0
