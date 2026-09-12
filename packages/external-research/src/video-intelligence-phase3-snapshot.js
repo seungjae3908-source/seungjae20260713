@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { SOURCE_TRUST_TIERS_V2, VIDEO_TRANSCRIPT_STATUSES_V2 } from './video-intelligence-phase2.js';
 
 export const VIDEO_RESEARCH_SANITIZED_SNAPSHOT_FILE_V1 = 'video-research-public-provider-runtime-v3.json';
 export const VIDEO_RESEARCH_SANITIZED_SNAPSHOT_SCHEMA_V1 = 'video-research-sanitized-snapshot-v1';
@@ -16,6 +17,8 @@ const SAFE_CREDENTIAL_METADATA = new Set([
   'credentialMutation',
 ]);
 const FORBIDDEN_KEY = /(api.?key|access.?token|refresh.?token|secret|password|credential)/iu;
+const TRANSCRIPT_STATUSES = new Set(VIDEO_TRANSCRIPT_STATUSES_V2);
+const SOURCE_TRUST_TIERS = new Set(SOURCE_TRUST_TIERS_V2);
 const REQUIRED_SAFETY = Object.freeze({
   researchOnly: true,
   economicEvidenceCredit: 0,
@@ -74,10 +77,14 @@ function nullableString(value) {
   return undefined;
 }
 
+function canonicalYoutubeUrl(videoId) {
+  return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+}
+
 function sanitizeRecord(value) {
   if (!isRecord(value)) return null;
   if (typeof value.videoId !== 'string' || !value.videoId.trim()) return null;
-  if (typeof value.canonicalUrl !== 'string' || !value.canonicalUrl.startsWith('https://')) return null;
+  if (value.canonicalUrl !== canonicalYoutubeUrl(value.videoId)) return null;
   if (typeof value.title !== 'string' || !value.title.trim()) return null;
   const channelOrPublisher = nullableString(value.channelOrPublisher);
   const publishedAt = nullableString(value.publishedAt);
@@ -90,9 +97,9 @@ function sanitizeRecord(value) {
       ? value.durationSec
       : undefined;
   if (durationSec === undefined) return null;
-  if (typeof value.transcriptStatus !== 'string' || !value.transcriptStatus) return null;
+  if (typeof value.transcriptStatus !== 'string' || !TRANSCRIPT_STATUSES.has(value.transcriptStatus)) return null;
   if (value.captionsKnownPresent !== null && typeof value.captionsKnownPresent !== 'boolean') return null;
-  if (typeof value.sourceTrustTier !== 'string' || !value.sourceTrustTier) return null;
+  if (typeof value.sourceTrustTier !== 'string' || !SOURCE_TRUST_TIERS.has(value.sourceTrustTier)) return null;
   if (value.contentAuthority !== 'UNTRUSTED_EXTERNAL_DATA') return null;
   if (value.economicEvidenceCredit !== 0 || value.profitabilityCredit !== 0 || value.executionAuthority !== 'NONE') return null;
   return {
