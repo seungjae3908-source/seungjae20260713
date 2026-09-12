@@ -12,12 +12,23 @@ test('Agent Hub V5 admin control route stays capability-gated and fail-closed', 
   expect(appSource).toContain('<Route path="/admin/agent-hub" component={AgentHubControlAccess} />');
 
   expect(controlSource).toContain('Execution');
-  expect(controlSource).toContain('NOT_CONNECTED');
+  expect(controlSource).toContain('NOT_CONFIGURED');
+  expect(controlSource).toContain('CONFIGURED');
+  expect(controlSource).toContain('QUEUED_FOR_COORDINATOR');
+  expect(controlSource).toContain('FAILED_CLOSED');
   expect(controlSource).toContain('Authority');
   expect(controlSource).toContain('NONE');
   expect(controlSource).toContain('Ready / Merge 승인');
   expect(controlSource).toContain('Staging 승인');
   expect(controlSource.match(/disabled/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
-  expect(controlSource).not.toContain('fetch(');
+
+  expect(controlSource).toContain("fetch(`/api/admin/agent-hub${path}`");
+  expect(controlSource).toContain("authorization: `Bearer ${token}`");
+  expect(controlSource).toContain("bridgeRequest('/status', token)");
+  expect(controlSource).toContain("bridgeRequest('/commands', token");
+  expect(controlSource).not.toContain('api.github.com');
+  expect(controlSource).not.toContain('AGENT_HUB_GITHUB_TOKEN');
+  expect(controlSource).not.toContain('/orders');
+  expect(controlSource).not.toContain('/deploy');
   expect(controlSource).not.toContain('axios');
 });
