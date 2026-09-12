@@ -98,11 +98,12 @@ router.get('/commands/:commentId/status', async (req: AuthenticatedRequest, res)
     }
 
     const status = resolveAgentHubCommandStatus(sourceCommentId, comments);
+    const executionState = evidenceWindowComplete ? status.executionState : 'NEEDS_CONTEXT';
     return res.json({
       ok: true,
       configured: true,
       commentId: sourceCommentId,
-      executionState: status.executionState,
+      executionState,
       normalizedCommentId: status.normalizedCommentId,
       latestEvidenceCommentId: status.latestEvidenceCommentId,
       evidenceWindowComplete,
