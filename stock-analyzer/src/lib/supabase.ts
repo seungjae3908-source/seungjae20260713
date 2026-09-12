@@ -5,6 +5,7 @@
 // access is protected by Supabase Row Level Security policies.
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { AUTH_SESSION_BOOTSTRAP_TIMEOUT_MS } from '@/lib/auth-bootstrap';
+import { deviceTrustRequestHeaders } from '@/lib/device-trust';
 import { validatePortfolioHoldingRows } from '@/lib/portfolio-holding-truth';
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
@@ -77,6 +78,9 @@ function sameOriginSelfProfileHeaders(input: RequestInfo | URL, init: RequestIni
   const proxyHeaders = new Headers();
   proxyHeaders.set('Authorization', authorization!);
   proxyHeaders.set('Accept', 'application/json');
+  Object.entries(deviceTrustRequestHeaders()).forEach(([key, value]) => {
+    proxyHeaders.set(key, value);
+  });
   return proxyHeaders;
 }
 
