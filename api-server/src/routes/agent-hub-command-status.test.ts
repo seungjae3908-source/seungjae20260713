@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { resolveAgentHubCommandStatus } from './agent-hub-command-status';
+import {
+  applyAgentHubEvidenceWindow,
+  resolveAgentHubCommandStatus,
+} from './agent-hub-command-status';
 
 const sourceCommentId = 6000000001;
 const normalizedId = 6000000002;
@@ -50,6 +53,16 @@ describe('Agent Hub app command status readback', () => {
     assert.equal(blocked.executionState, 'FAILED_CLOSED');
     assert.equal(blocked.normalizedCommentId, null);
     assert.equal(blocked.latestEvidenceCommentId, normalizedId);
+  });
+
+  it('never promotes a partial bounded comment window to a terminal success', () => {
+    const complete = resolveAgentHubCommandStatus(sourceCommentId, [
+      { id: normalizedId, body: `[WORKER_REPORT]\nroot_task_id: ${rootTaskId}\nstatus: partial\n<!-- agent-hub-manual-source:${sourceCommentId} -->` },
+      { id: normalizedId + 1, body: `[WORKER_REPORT]\nroot_task_id: ${rootTaskId}\nstatus: completed` },
+    ]);
+    assert.equal(complete.executionState, 'COMPLETED');
+    assert.equal(applyAgentHubEvidenceWindow(complete, false).executionState, 'NEEDS_CONTEXT');
+    assert.equal(applyAgentHubEvidenceWindow(complete, true).executionState, 'COMPLETED');
   });
 
   it('rejects invalid source ids', () => {
