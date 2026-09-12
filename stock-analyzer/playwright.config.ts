@@ -36,9 +36,9 @@ export default defineConfig({
     hasTouch: true,
     actionTimeout: 20_000,
     navigationTimeout: 30_000,
-    screenshot: 'only-on-failure',
+    screenshot: stagingMode ? 'off' : 'only-on-failure',
     trace: stagingMode ? 'off' : 'retain-on-failure',
-    video: 'retain-on-failure',
+    video: stagingMode ? 'off' : 'retain-on-failure',
     ignoreHTTPSErrors: false,
   },
   webServer: stagingMode ? undefined : {
