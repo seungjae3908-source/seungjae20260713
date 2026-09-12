@@ -1,6 +1,30 @@
 import { useEffect, useState } from 'react';
 import { authorizedFetch } from '@/lib/auth-fetch';
 
+const RUNTIME_VERSION = 'video-research-public-provider-runtime-v3' as const;
+const SNAPSHOT_SCHEMA = 'video-research-sanitized-snapshot-v1' as const;
+const SNAPSHOT_PUBLISHER_MODE = 'LOCAL_ATOMIC_FILE' as const;
+const TRANSCRIPT_STATUSES = new Set([
+  'AVAILABLE',
+  'UNAVAILABLE',
+  'NOT_AUTHORIZED',
+  'NOT_PROVIDED',
+  'UNSUPPORTED',
+  'PROVIDER_NOT_CONFIGURED',
+  'RATE_LIMITED',
+  'QUOTA_EXCEEDED',
+  'PARSE_FAILED',
+  'UNKNOWN',
+]);
+const SOURCE_TRUST_TIERS = new Set([
+  'TIER_A_OFFICIAL',
+  'TIER_B_ACADEMIC',
+  'TIER_C_PRIMARY_EXPERT',
+  'TIER_D_SECONDARY_EDUCATIONAL',
+  'TIER_E_UNVERIFIED_CREATOR',
+  'UNKNOWN',
+]);
+
 type RuntimeRecord = {
   videoId: string;
   canonicalUrl: string;
@@ -19,18 +43,29 @@ type RuntimeRecord = {
   executionAuthority: 'NONE';
 };
 
+type SnapshotProvenance = {
+  schemaVersion: typeof SNAPSHOT_SCHEMA;
+  sourceHeadSha: string;
+  observedAt: string;
+  publisherMode: typeof SNAPSHOT_PUBLISHER_MODE;
+  providerRuntimeVersion: typeof RUNTIME_VERSION;
+  economicEvidenceCredit: 0;
+  profitabilityCredit: 0;
+  executionAuthority: 'NONE';
+};
+
 type RuntimeEvidence = {
   available: true;
   dataState: 'MEASURED';
-  runtimeVersion: 'video-research-public-provider-runtime-v3';
-  status: string;
+  runtimeVersion: typeof RUNTIME_VERSION;
+  status: 'SUCCESS';
   provider: 'YOUTUBE_DATA_API_V3';
   providerAccess: 'OFFICIAL_PUBLIC_API';
   requestMode: 'READ_ONLY_GET';
   query: string;
   pagesUsed: number;
   quotaState: string;
-  credentialConfigured: boolean;
+  credentialConfigured: true;
   credentialValueExposed: false;
   sourceCount: number;
   records: RuntimeRecord[];
@@ -48,6 +83,7 @@ type RuntimeEvidence = {
     credentialMutation: false;
     transcriptDownloadEnabled: false;
   };
+  snapshotProvenance: SnapshotProvenance;
   economicEvidenceCredit: 0;
   profitabilityCredit: 0;
   executionAuthority: 'NONE';
@@ -57,12 +93,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function nullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
+
+function canonicalIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string' || !value.trim()) return false;
+  const parsed = new Date(value);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
+}
+
+function canonicalYoutubeUrl(videoId: string): string {
+  return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+}
+
 function parseRuntimeEvidence(value: unknown): RuntimeEvidence | null {
   if (!isRecord(value) || value.available !== true || value.dataState !== 'MEASURED') return null;
-  if (value.runtimeVersion !== 'video-research-public-provider-runtime-v3') return null;
+  if (value.runtimeVersion !== RUNTIME_VERSION || value.status !== 'SUCCESS') return null;
   if (value.provider !== 'YOUTUBE_DATA_API_V3' || value.providerAccess !== 'OFFICIAL_PUBLIC_API' || value.requestMode !== 'READ_ONLY_GET') return null;
-  if (value.credentialValueExposed !== false || typeof value.credentialConfigured !== 'boolean') return null;
-  if (typeof value.status !== 'string' || typeof value.query !== 'string' || typeof value.quotaState !== 'string') return null;
+  if (value.credentialValueExposed !== false || value.credentialConfigured !== true) return null;
+  if (typeof value.query !== 'string' || !value.query.trim() || typeof value.quotaState !== 'string' || !value.quotaState.trim()) return null;
   if (typeof value.pagesUsed !== 'number' || !Number.isSafeInteger(value.pagesUsed) || value.pagesUsed < 0 || value.pagesUsed > 1) return null;
   if (typeof value.sourceCount !== 'number' || !Number.isSafeInteger(value.sourceCount) || value.sourceCount < 0 || value.sourceCount > 5) return null;
   if (!Array.isArray(value.records) || value.records.length !== value.sourceCount) return null;
@@ -72,10 +122,24 @@ function parseRuntimeEvidence(value: unknown): RuntimeEvidence | null {
   if (safety.paidProviderEnabled !== false || safety.scheduleActive !== false || safety.automaticDiscoveryEnabled !== false) return null;
   if (safety.liveTrading !== false || safety.privateTradingApi !== false || safety.realOrderEnabled !== false || safety.credentialMutation !== false || safety.transcriptDownloadEnabled !== false) return null;
   if (value.economicEvidenceCredit !== 0 || value.profitabilityCredit !== 0 || value.executionAuthority !== 'NONE') return null;
+
+  if (!isRecord(value.snapshotProvenance)) return null;
+  const provenance = value.snapshotProvenance;
+  if (provenance.schemaVersion !== SNAPSHOT_SCHEMA || provenance.publisherMode !== SNAPSHOT_PUBLISHER_MODE || provenance.providerRuntimeVersion !== RUNTIME_VERSION) return null;
+  if (typeof provenance.sourceHeadSha !== 'string' || !/^[0-9a-f]{40}$/u.test(provenance.sourceHeadSha)) return null;
+  if (!canonicalIsoTimestamp(provenance.observedAt)) return null;
+  if (provenance.economicEvidenceCredit !== 0 || provenance.profitabilityCredit !== 0 || provenance.executionAuthority !== 'NONE') return null;
+
   for (const record of value.records) {
     if (!isRecord(record)) return null;
-    if (typeof record.videoId !== 'string' || typeof record.canonicalUrl !== 'string' || typeof record.title !== 'string') return null;
-    if (typeof record.transcriptStatus !== 'string' || typeof record.sourceTrustTier !== 'string') return null;
+    if (typeof record.videoId !== 'string' || !record.videoId.trim()) return null;
+    if (record.canonicalUrl !== canonicalYoutubeUrl(record.videoId)) return null;
+    if (typeof record.title !== 'string' || !record.title.trim()) return null;
+    if (!nullableString(record.channelOrPublisher) || !nullableString(record.publishedAt) || !nullableString(record.discoveredAt) || !nullableString(record.language)) return null;
+    if (record.durationSec !== null && (typeof record.durationSec !== 'number' || !Number.isFinite(record.durationSec) || record.durationSec < 0)) return null;
+    if (typeof record.transcriptStatus !== 'string' || !TRANSCRIPT_STATUSES.has(record.transcriptStatus)) return null;
+    if (record.captionsKnownPresent !== null && typeof record.captionsKnownPresent !== 'boolean') return null;
+    if (typeof record.sourceTrustTier !== 'string' || !SOURCE_TRUST_TIERS.has(record.sourceTrustTier)) return null;
     if (record.contentAuthority !== 'UNTRUSTED_EXTERNAL_DATA' || record.economicEvidenceCredit !== 0 || record.profitabilityCredit !== 0 || record.executionAuthority !== 'NONE') return null;
   }
   return value as unknown as RuntimeEvidence;
@@ -151,7 +215,7 @@ export function ResearchVideoPanel() {
 
   const statusRows = [
     ['Video discovery', '수동 / 공식 public API runtime'],
-    ['Provider runtime', runtimeEvidence ? `${runtimeEvidence.provider} / ${runtimeEvidence.requestMode}` : 'SERVER READ_ONLY / browser credential 미노출'],
+    ['Provider runtime', runtimeEvidence ? `${runtimeEvidence.provider} / ${runtimeEvidence.requestMode}` : 'UNKNOWN — sanitized runtime snapshot unavailable'],
     ['Runtime evidence', runtimeState],
     ['Transcript access', latestRecord ? latestRecord.transcriptStatus : '승인된 입력만 허용'],
     ['Economic Evidence', '0'],
@@ -164,7 +228,7 @@ export function ResearchVideoPanel() {
       testId: 'video-discovery-state',
       rows: [
         ['검색 경로', 'YouTube Data API 공식/public metadata'],
-        ['Provider runtime', runtimeEvidence ? `${runtimeEvidence.providerAccess} / ${runtimeEvidence.requestMode}` : 'READ_ONLY SERVER RUNTIME AVAILABLE'],
+        ['Provider runtime', runtimeEvidence ? `${runtimeEvidence.providerAccess} / ${runtimeEvidence.requestMode}` : 'UNKNOWN — sanitized runtime snapshot unavailable'],
         ['Browser credential', 'NOT_EXPOSED'],
         ['최근 discovery evidence', runtimeEvidence ? `${runtimeEvidence.status} · ${runtimeEvidence.query}` : runtimeState],
         ['자동 수집', 'OFF'],
@@ -204,6 +268,7 @@ export function ResearchVideoPanel() {
         ['Academic / official', 'NOT_CHECKED'],
         ['Contradictions', 'UNKNOWN'],
         ['Source authority', latestRecord?.sourceTrustTier ?? 'UNKNOWN'],
+        ['Snapshot provenance', runtimeEvidence ? `${runtimeEvidence.snapshotProvenance.schemaVersion} · ${runtimeEvidence.snapshotProvenance.sourceHeadSha.slice(0, 12)} · ${runtimeEvidence.snapshotProvenance.observedAt}` : 'UNKNOWN — sanitized provenance unavailable'],
       ],
     },
     {
@@ -277,7 +342,7 @@ export function ResearchVideoPanel() {
                 <div><dt className="text-muted-foreground">Channel / Publisher</dt><dd className="break-words font-medium">{latestRecord.channelOrPublisher ?? 'UNKNOWN'}</dd></div>
                 <div><dt className="text-muted-foreground">Transcript</dt><dd className="font-medium">{latestRecord.transcriptStatus}</dd></div>
                 <div><dt className="text-muted-foreground">Strategy mining</dt><dd className="break-words font-medium">{strategyMiningState}</dd></div>
-                <div><dt className="text-muted-foreground">Provenance</dt><dd className="break-words font-medium">{runtimeEvidence?.providerAccess} · {latestRecord.contentAuthority}</dd></div>
+                <div><dt className="text-muted-foreground">Provenance</dt><dd className="break-words font-medium">{runtimeEvidence?.providerAccess} · {latestRecord.contentAuthority} · {runtimeEvidence?.snapshotProvenance.schemaVersion} · {runtimeEvidence?.snapshotProvenance.sourceHeadSha.slice(0, 12)}</dd></div>
               </dl>
             ) : runtimeEvidence ? (
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
