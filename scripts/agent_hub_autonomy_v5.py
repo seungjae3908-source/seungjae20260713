@@ -7,6 +7,8 @@ import json
 from dataclasses import dataclass, replace
 from typing import Any, Iterable, Sequence
 
+from agent_hub_policy import PolicyError, load_workers
+
 TERMINAL_TASK_STATES = {"completed", "blocked", "cancelled"}
 SAFE_AUTO_ACTIONS = {
     "inspect_repository", "inspect_branch", "inspect_pull_request", "analyze_ci_failure",
@@ -33,6 +35,17 @@ class AutonomyError(RuntimeError):
 def _clean(value: Any, limit: int = 500) -> str:
     text = "" if value is None else str(value)
     return " ".join(text.replace("\x00", "").split())[:limit]
+
+
+def _canonical_worker_ids() -> frozenset[str]:
+    """Load worker IDs from the authoritative registry; never invent defaults."""
+    try:
+        workers = load_workers()
+    except PolicyError as exc:
+        raise AutonomyError("canonical worker registry is unavailable") from exc
+    if not workers:
+        raise AutonomyError("canonical worker registry is empty")
+    return frozenset(workers)
 
 
 def _paths(value: Any) -> tuple[str, ...]:
@@ -196,7 +209,12 @@ class AutonomousTask:
 def start_task(*, task_id: str, goal: str, worker: str, branch: str, owner_pr: int | None = None) -> AutonomousTask:
     if not _clean(task_id, 180) or not _clean(goal, 800):
         raise AutonomyError("task_id and goal are required")
-    return AutonomousTask(_clean(task_id, 180), _clean(goal, 800), _clean(worker, 80) or "integration-planner", _clean(branch, 180), owner_pr, "planning", "resolve_owner", 0, "MISSING", ("inspect", "implement", "validate", "draft_pr", "exact_head_ci", "report"))
+    worker_id = _clean(worker, 80)
+    if not worker_id or worker_id == "none":
+        raise AutonomyError("autonomous task requires registered worker")
+    if worker_id not in _canonical_worker_ids():
+        raise AutonomyError(f"autonomous task worker is not registered: {worker_id}")
+    return AutonomousTask(_clean(task_id, 180), _clean(goal, 800), worker_id, _clean(branch, 180), owner_pr, "planning", "resolve_owner", 0, "MISSING", ("inspect", "implement", "validate", "draft_pr", "exact_head_ci", "report"))
 
 
 def advance_task(task: AutonomousTask, event: str, *, first_zero: str | None = None) -> AutonomousTask:
@@ -255,6 +273,19 @@ def self_test() -> int:
     assert len({record.digest for record in records}) == len(records)
 
     task = start_task(task_id="demo", goal="finish safely", worker="agent-hub-validation", branch="feature/demo")
+    try:
+        start_task(task_id="missing-worker", goal="fail closed", worker="", branch="feature/demo")
+    except AutonomyError as exc:
+        assert "requires registered worker" in str(exc)
+    else:
+        raise AssertionError("missing autonomous task worker was silently defaulted")
+    try:
+        start_task(task_id="rogue-worker", goal="fail closed", worker="rogue-worker", branch="feature/demo")
+    except AutonomyError as exc:
+        assert "not registered" in str(exc)
+    else:
+        raise AssertionError("unregistered autonomous task worker was accepted")
+
     for event in ("owner_resolved", "root_cause_found", "change_applied", "checks_passed", "draft_pr_created", "ci_passed"):
         task = advance_task(task, event)
     assert task.state == "waiting_approval"
@@ -265,7 +296,7 @@ def self_test() -> int:
     task = advance_task(task, "post_merge_ci_passed")
     assert task.state == "completed" and task.authority == "NONE"
 
-    print(json.dumps({"agent_hub_v5_3_owner_resolver": "pass", "agent_hub_v5_4_self_healing": "pass", "agent_hub_v5_5_evidence_engine": "pass", "agent_hub_v5_7_long_running_orchestrator": "pass", "replit_used": False, "authority": "NONE", "live_trading": False, "paid_fallback": False}, ensure_ascii=False))
+    print(json.dumps({"agent_hub_v5_3_owner_resolver": "pass", "agent_hub_v5_4_self_healing": "pass", "agent_hub_v5_5_evidence_engine": "pass", "agent_hub_v5_7_long_running_orchestrator": "pass", "task_worker_registry_fail_closed": True, "replit_used": False, "authority": "NONE", "live_trading": False, "paid_fallback": False}, ensure_ascii=False))
     return 0
 
 
