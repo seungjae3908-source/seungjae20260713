@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net';
 import test from 'node:test';
 import express from 'express';
 import marketSummaryAvailabilityRouter from './market-summary-availability';
+import { createVideoResearchEvidenceRouter } from './video-research-evidence';
 
 type Fixture = {
   status: number;
@@ -134,4 +135,123 @@ test('market summary does not downgrade unexpected backend failures', async () =
   assert.equal(status, 502);
   assert.equal(body.error, 'SUMMARY_PROVIDER_ERROR');
   assert.equal(body.dataState, undefined);
+});
+
+const VIDEO_SAFETY = {
+  researchOnly: true,
+  economicEvidenceCredit: 0,
+  profitabilityCredit: 0,
+  executionAuthority: 'NONE',
+  paidProviderEnabled: false,
+  scheduleActive: false,
+  automaticDiscoveryEnabled: false,
+  liveTrading: false,
+  privateTradingApi: false,
+  realOrderEnabled: false,
+  credentialMutation: false,
+  transcriptDownloadEnabled: false,
+} as const;
+
+function videoEvidenceSnapshot() {
+  return {
+    runtimeVersion: 'video-research-public-provider-runtime-v3',
+    status: 'SUCCESS',
+    provider: 'YOUTUBE_DATA_API_V3',
+    providerAccess: 'OFFICIAL_PUBLIC_API',
+    requestMode: 'READ_ONLY_GET',
+    query: 'TEST_ONLY video strategy',
+    pagesUsed: 1,
+    quotaState: 'BOUNDED_ESTIMATE_USED_100_UNITS',
+    credentialEnvName: 'YOUTUBE_DATA_API_KEY',
+    credentialConfigured: true,
+    credentialValueExposed: false,
+    sourceCount: 1,
+    records: [{
+      videoId: 'TEST_ONLY_VIDEO',
+      canonicalUrl: 'https://www.youtube.com/watch?v=TEST_ONLY_VIDEO',
+      title: 'TEST_ONLY sanitized research source',
+      channelOrPublisher: 'TEST_ONLY channel',
+      publishedAt: '2026-09-12T00:00:00.000Z',
+      discoveredAt: '2026-09-13T00:00:00.000Z',
+      language: 'ko',
+      durationSec: 321,
+      transcriptStatus: 'NOT_PROVIDED',
+      captionsKnownPresent: false,
+      sourceTrustTier: 'PUBLIC_PLATFORM_METADATA',
+      contentAuthority: 'UNTRUSTED_EXTERNAL_DATA',
+      economicEvidenceCredit: 0,
+      profitabilityCredit: 0,
+      executionAuthority: 'NONE',
+    }],
+    safety: VIDEO_SAFETY,
+  };
+}
+
+async function requestVideoEvidence(loadSnapshot: () => Promise<unknown>) {
+  const app = express();
+  app.use('/api/research/video/evidence', createVideoResearchEvidenceRouter(loadSnapshot));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  try {
+    const address = server.address() as AddressInfo;
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/research/video/evidence`);
+    return {
+      status: response.status,
+      cacheControl: response.headers.get('cache-control'),
+      body: await response.json() as Record<string, unknown>,
+    };
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+test('video research evidence reader keeps missing snapshot UNKNOWN without inventing measured zero', async () => {
+  const result = await requestVideoEvidence(async () => null);
+  assert.equal(result.status, 200);
+  assert.match(result.cacheControl ?? '', /no-store/u);
+  assert.equal(result.body.available, false);
+  assert.equal(result.body.dataState, 'UNKNOWN');
+  assert.equal(result.body.reason, 'SANITIZED_RUNTIME_EVIDENCE_MISSING');
+  assert.equal(Object.prototype.hasOwnProperty.call(result.body, 'sourceCount'), false);
+  assert.equal(result.body.economicEvidenceCredit, 0);
+  assert.equal(result.body.profitabilityCredit, 0);
+  assert.equal(result.body.executionAuthority, 'NONE');
+});
+
+test('video research evidence reader projects only sanitized official public runtime evidence', async () => {
+  const result = await requestVideoEvidence(async () => videoEvidenceSnapshot());
+  assert.equal(result.status, 200);
+  assert.equal(result.body.available, true);
+  assert.equal(result.body.dataState, 'MEASURED');
+  assert.equal(result.body.provider, 'YOUTUBE_DATA_API_V3');
+  assert.equal(result.body.providerAccess, 'OFFICIAL_PUBLIC_API');
+  assert.equal(result.body.requestMode, 'READ_ONLY_GET');
+  assert.equal(result.body.sourceCount, 1);
+  assert.equal(result.body.credentialValueExposed, false);
+  assert.equal(Object.prototype.hasOwnProperty.call(result.body, 'credentialEnvName'), false);
+  const records = result.body.records as Array<Record<string, unknown>>;
+  assert.equal(records[0]?.contentAuthority, 'UNTRUSTED_EXTERNAL_DATA');
+  assert.equal(records[0]?.economicEvidenceCredit, 0);
+  assert.equal(records[0]?.profitabilityCredit, 0);
+  assert.equal(records[0]?.executionAuthority, 'NONE');
+});
+
+test('video research evidence reader fails closed on secret-bearing or authority-violating snapshots', async () => {
+  const secretBearing = { ...videoEvidenceSnapshot(), apiKey: 'TEST_ONLY_MUST_NOT_LEAK' };
+  const secretResult = await requestVideoEvidence(async () => secretBearing);
+  assert.equal(secretResult.body.available, false);
+  assert.equal(secretResult.body.dataState, 'UNKNOWN');
+  assert.equal(secretResult.body.reason, 'SANITIZED_RUNTIME_EVIDENCE_INVALID');
+  assert.equal(JSON.stringify(secretResult.body).includes('TEST_ONLY_MUST_NOT_LEAK'), false);
+
+  const authorityViolation = videoEvidenceSnapshot();
+  authorityViolation.safety = { ...authorityViolation.safety, scheduleActive: true } as typeof authorityViolation.safety;
+  const authorityResult = await requestVideoEvidence(async () => authorityViolation);
+  assert.equal(authorityResult.body.available, false);
+  assert.equal(authorityResult.body.dataState, 'UNKNOWN');
+  assert.equal(authorityResult.body.reason, 'SANITIZED_RUNTIME_EVIDENCE_INVALID');
+  assert.equal(Object.prototype.hasOwnProperty.call(authorityResult.body, 'sourceCount'), false);
 });
