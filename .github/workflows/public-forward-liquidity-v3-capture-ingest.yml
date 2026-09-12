@@ -4,8 +4,11 @@ on:
   pull_request:
     paths:
       - 'market-intelligence-sidecar/src/public-forward-liquidity-v3-capture-ingest.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-multi-lane-policy-v1.mjs'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-multi-lane-prospective-policy-v1.json'
       - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-v3-capture-ingest.mjs'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-v3-capture-ingest.test.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-multi-lane-policy-v1.test.mjs'
       - '.github/workflows/public-forward-liquidity-v3-capture-ingest.yml'
   workflow_run:
     workflows:
@@ -50,6 +53,7 @@ jobs:
       - name: Syntax check V3 ingest path
         run: |
           node --check market-intelligence-sidecar/src/public-forward-liquidity-v3-capture-ingest.mjs
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-multi-lane-policy-v1.mjs
           node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-v3-capture-ingest.mjs
           node --check market-intelligence-sidecar/tests/public-forward-liquidity-v3-capture-ingest.test.mjs
 
@@ -63,6 +67,16 @@ jobs:
           node --test
           market-intelligence-sidecar/tests/public-forward-liquidity-v3-capture-ingest.test.mjs
           market-intelligence-sidecar/tests/public-forward-liquidity-capture-ingest.test.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-multi-lane-policy-v1.test.mjs
+
+      - name: Verify cumulative V3 history pagination contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKFLOW='.github/workflows/public-forward-liquidity-v3-capture-ingest.yml'
+          grep -Fq 'gh api --paginate --slurp' "$WORKFLOW"
+          grep -Fq "throw new Error('V3_RUN_HISTORY_PAGINATION_INVALID')" "$WORKFLOW"
+          grep -Fq 'pages.flatMap((page) => Array.isArray(page?.workflow_runs) ? page.workflow_runs : [])' "$WORKFLOW"
 
       - name: Verify fail-closed V3 authority boundary
         shell: bash
@@ -176,14 +190,18 @@ jobs:
           set -euo pipefail
           mkdir -p "$SOURCE_ROOT" "$STATE_ROOT"
           workflow_id="$(node -p "JSON.parse(require('fs').readFileSync(process.env.RUNNER_TEMP + '/source-run.json','utf8')).workflow_id")"
-          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs?event=schedule&branch=main&per_page=100" > "$RUNNER_TEMP/v3-runs.json"
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs?event=schedule&branch=main&per_page=100" \
+            > "$RUNNER_TEMP/v3-runs.json"
           node - <<'NODE' > "$RUNNER_TEMP/candidate-runs.txt"
           const fs = require('node:fs');
           const source = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/source-run.json', 'utf8'));
-          const listing = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/v3-runs.json', 'utf8'));
+          const pages = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/v3-runs.json', 'utf8'));
+          if (!Array.isArray(pages) || pages.length === 0) throw new Error('V3_RUN_HISTORY_PAGINATION_INVALID');
+          const listedRuns = pages.flatMap((page) => Array.isArray(page?.workflow_runs) ? page.workflow_runs : []);
           const limit = Date.parse(source.run_started_at ?? source.created_at);
           if (!Number.isFinite(limit)) throw new Error('SOURCE_RUN_TIME_INVALID');
-          const runs = (listing.workflow_runs ?? [])
+          const runs = listedRuns
             .filter((run) => run.name === source.name
               && run.event === 'schedule'
               && run.status === 'completed'
@@ -214,7 +232,7 @@ jobs:
           const successor = active.some((artifact) =>
             /^public-forward-liquidity-successor-v3-slot-receipt-/u.test(artifact.name));
           const rawPattern = successor
-            ? /^public-forward-liquidity-successor-slot-[0-9]+-[a-f0-9]{64}$/u
+            ? /^(?:public-forward-liquidity-successor-slot-[0-9]+|public-forward-liquidity-successor-lane-P2_V3_BTCUSDT_UTC(?:17|37)-slot-[0-9]+)-[a-f0-9]{64}(?:-diagnostic-[0-9]+-[0-9]+)?$/u
             : /^public-forward-liquidity-v3-slot-[0-9]+-[a-f0-9]{64}$/u;
           const receiptPattern = successor
             ? /^public-forward-liquidity-successor-v3-slot-receipt-[0-9]+-[0-9]+-[0-9]+$/u
@@ -275,17 +293,35 @@ jobs:
               && String(entry.capture?.runAttempt) === '1'
               && Number.isInteger(entry.capture?.slotIndex)
               && entry.capture.slotIndex <= targetSlotIndex)
-            .sort((a, b) => a.capture.slotIndex - b.capture.slotIndex || Number(a.runId) - Number(b.runId));
-          const slots = new Set();
+            .sort((a, b) => a.capture.slotIndex - b.capture.slotIndex
+              || String(a.capture.laneId ?? '').localeCompare(String(b.capture.laneId ?? ''))
+              || Number(a.runId) - Number(b.runId));
+          const creditKeys = new Set();
+          const slotModes = new Map();
+          const laneCountsBySlot = new Map();
           const entries = [];
           for (const entry of credited) {
-            if (slots.has(entry.capture.slotIndex)) throw new Error('DUPLICATE_CREDITED_V3_SLOT');
-            slots.add(entry.capture.slotIndex);
+            const laneId = entry.capture.laneId ?? null;
+            const mode = laneId === null ? 'LEGACY_SINGLE_LANE' : 'PHASE2_MULTI_LANE';
+            const priorMode = slotModes.get(entry.capture.slotIndex);
+            if (priorMode && priorMode !== mode) throw new Error('MIXED_CREDIT_POLICY_WITHIN_V3_SLOT');
+            slotModes.set(entry.capture.slotIndex, mode);
+            const creditKey = laneId === null
+              ? `legacy:${entry.capture.slotIndex}`
+              : `phase2:${entry.capture.slotIndex}:${laneId}`;
+            if (creditKeys.has(creditKey)) throw new Error('DUPLICATE_CREDITED_V3_LANE_SLOT');
+            creditKeys.add(creditKey);
+            const nextLaneCount = (laneCountsBySlot.get(entry.capture.slotIndex) ?? 0) + 1;
+            if (nextLaneCount > (laneId === null ? 1 : 2)) {
+              throw new Error('V3_GLOBAL_SLOT_CREDIT_CANDIDATE_CAP_EXCEEDED');
+            }
+            laneCountsBySlot.set(entry.capture.slotIndex, nextLaneCount);
             const rawBatchPath = join(root, entry.runId, 'raw', 'raw-batch.json');
             await readFile(rawBatchPath, 'utf8');
             entries.push({
               runId: entry.runId,
               slotIndex: entry.capture.slotIndex,
+              laneId,
               split: entry.capture.split,
               collectorCodeSha: entry.capture.collectorCodeSha,
               exactMainSha: entry.capture.exactMainSha,
@@ -296,10 +332,21 @@ jobs:
               artifactReceiptPath: join(root, entry.runId, 'receipt', 'artifact-receipt.json'),
             });
           }
-          const manifest = { targetSlotIndex, selectedRunId, creditedSlotN: entries.length, entries };
+          const manifest = {
+            targetSlotIndex,
+            selectedRunId,
+            creditedReceiptN: entries.length,
+            genuineScheduledSlotN: new Set(entries.map((entry) => entry.slotIndex)).size,
+            entries,
+          };
           await writeFile(join(root, 'credited-manifest.json'), JSON.stringify(manifest));
           const out = process.env.GITHUB_OUTPUT;
-          await import('node:fs').then(({ appendFileSync }) => appendFileSync(out, `target_slot_index=${targetSlotIndex}\ncredited_slot_n=${entries.length}\n`));
+          await import('node:fs').then(({ appendFileSync }) => appendFileSync(out, [
+            `target_slot_index=${targetSlotIndex}`,
+            `credited_receipt_n=${manifest.creditedReceiptN}`,
+            `genuine_scheduled_slot_n=${manifest.genuineScheduledSlotN}`,
+            '',
+          ].join('\n')));
           NODE
 
       - name: Rebuild cumulative canonical ingest state from genuine V3 source artifacts
@@ -344,7 +391,8 @@ jobs:
         env:
           PRODUCER_SHA: ${{ github.sha }}
           TARGET_SLOT_INDEX: ${{ steps.manifest.outputs.target_slot_index }}
-          CREDITED_SLOT_N: ${{ steps.manifest.outputs.credited_slot_n }}
+          CREDITED_RECEIPT_N: ${{ steps.manifest.outputs.credited_receipt_n }}
+          GENUINE_SCHEDULED_SLOT_N: ${{ steps.manifest.outputs.genuine_scheduled_slot_n }}
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
@@ -417,6 +465,12 @@ jobs:
               captureArtifactDigests: entries.map((entry) => entry.rawArtifactDigest),
               v3SlotIndexes: entries.map((entry) => entry.slotIndex),
               v3Splits: receipts.map((receipt) => receipt.sourceV3Lineage.split),
+              v3LaneIds: receipts.map((receipt) => receipt.sourceV3Lineage.laneId ?? null),
+              v3CreditPolicyDigests: receipts.map((receipt) =>
+                receipt.sourceV3Lineage.multiLanePolicyDigest
+                  ?? receipt.sourceV3Lineage.policyDigest),
+              v3LaneCreditKeyDigests: receipts.map((receipt) =>
+                receipt.sourceV3Lineage.laneCreditKeyDigest ?? null),
               v3PolicyDigest: receipts[0].sourceV3Lineage.policyDigest,
               v3CohortDigest: receipts[0].sourceV3Lineage.cohortDigest,
               insertedObservationCount: receipts.reduce((sum, receipt) => sum + receipt.insertedObservationCount, 0),
@@ -434,7 +488,8 @@ jobs:
             persistentResearchStateMutation: false,
             productionMutation: false,
             targetSlotIndex: Number(process.env.TARGET_SLOT_INDEX),
-            genuineScheduledSlotN: Number(process.env.CREDITED_SLOT_N),
+            genuineScheduledSlotN: Number(process.env.GENUINE_SCHEDULED_SLOT_N),
+            genuineScheduledLaneReceiptN: Number(process.env.CREDITED_RECEIPT_N),
             rawN,
             acceptedN: accepted,
             droppedN: dropped,
@@ -459,6 +514,7 @@ jobs:
             sourceInventoryDigest: inventory.inventoryDigest,
             sourceCount: sources.length,
             genuineScheduledSlotN: inventory.genuineScheduledSlotN,
+            genuineScheduledLaneReceiptN: inventory.genuineScheduledLaneReceiptN,
             targetSlotIndex: inventory.targetSlotIndex,
             canonicalDatasetDigests: sources.map((source) => source.datasetDigest),
             ingestReceiptDigests: sources.flatMap((source) => source.ingestReceiptDigests),

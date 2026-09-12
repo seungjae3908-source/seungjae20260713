@@ -53,10 +53,14 @@ function directionSign(direction) {
 function strategyIdentity(sample) {
   const identity = sample.identity;
   return Object.freeze({
+    candidateId: identity.candidateId,
+    strategyFamily: identity.strategyFamily,
     strategyId: identity.strategyId,
     strategyVersion: identity.strategyVersion,
     parameterHash: identity.parameterHash,
+    parameterDigest: identity.parameterDigest,
     researchCodeSha: identity.researchCodeSha,
+    accountMode: identity.accountMode,
   });
 }
 
@@ -204,10 +208,14 @@ function blocked(sample, status, blockers, extra = {}) {
     style: sample.identity.style,
     timeframe: sample.identity.timeframe,
     horizon: sample.identity.horizon,
+    candidateId: sample.identity.candidateId,
+    strategyFamily: sample.identity.strategyFamily,
     strategyId: sample.identity.strategyId,
     strategyVersion: sample.identity.strategyVersion,
     researchCodeSha: sample.identity.researchCodeSha,
     parameterHash: sample.identity.parameterHash,
+    parameterDigest: sample.identity.parameterDigest,
+    accountMode: sample.identity.accountMode,
     entryEvidenceProvenance: sample.entryEvidenceProvenance,
     status,
     blockers: Object.freeze([...blockers]),
@@ -226,6 +234,8 @@ function exitOrder({ type, quantity, direction, limitPrice, stopPrice }) {
 export function settleFourMarketPaperSample({
   sample,
   exitExecution,
+  exitTriggerId = null,
+  exitExecutionId = null,
   exitOrderType = "MARKET",
   exitLimitPrice = null,
   exitStopPrice = null,
@@ -301,15 +311,21 @@ export function settleFourMarketPaperSample({
   return Object.freeze({
     schemaVersion: 1,
     paperSampleId: sample.paperSampleId,
+    exitTriggerId,
+    exitExecutionId,
     market: sample.identity.market,
     symbol: sample.identity.symbol,
     style: sample.identity.style,
     timeframe: sample.identity.timeframe,
     horizon: sample.identity.horizon,
+    candidateId: sample.identity.candidateId,
+    strategyFamily: sample.identity.strategyFamily,
     strategyId: sample.identity.strategyId,
     strategyVersion: sample.identity.strategyVersion,
     researchCodeSha: sample.identity.researchCodeSha,
     parameterHash: sample.identity.parameterHash,
+    parameterDigest: sample.identity.parameterDigest,
+    accountMode: sample.identity.accountMode,
     signalDirection: sample.identity.signalDirection,
     entryDirection: entryDirection(sample),
     closeDirection,

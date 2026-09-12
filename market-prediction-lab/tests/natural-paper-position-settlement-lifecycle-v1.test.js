@@ -8,7 +8,10 @@ import {
 } from "../src/recurring-paper-loop-v1.js";
 import { FOUR_MARKET_EXECUTION_PROFILES } from "../src/four-market-execution-v2.js";
 import { createHash } from "node:crypto";
-import { adaptNaturalPaperSettlementFullCost } from "../src/natural-paper-position-settlement-lifecycle-v1.js";
+import {
+  adaptNaturalPaperSettlementFullCost,
+  advanceNaturalPaperPositionLifecycle,
+} from "../src/natural-paper-position-settlement-lifecycle-v1.js";
 import { runScheduledPaperCycle } from "../src/paper-scheduler-driver-v1.js";
 import { createNaturalPaperPublicPositionObservationProducer } from "../src/natural-paper-public-position-observation-v1.js";
 import { PAPER_FORWARD_PROVIDER_AUTHORITY } from "../src/paper-public-provider-authority-v1.js";
@@ -20,12 +23,16 @@ import {
 const T0 = 1_800_000_000_000;
 const SHA = "b".repeat(40);
 const identity = Object.freeze({
+  candidateId: `paper-candidate-v1:${"c".repeat(64)}`,
+  strategyFamily: "natural-lifecycle",
   strategyId: "natural-lifecycle-v1",
   strategyVersion: "v1",
   parameterHash: "parameter-hash-v1",
+  parameterDigest: "parameter-hash-v1",
   researchCodeSha: SHA,
   costPolicyVersion: "cost-v1",
   executionPolicyVersion: "execution-v1",
+  accountMode: "PAPER",
 });
 const RISK_POLICY_IDENTITY = Object.freeze({
   policyId: "paper-risk-v1",
@@ -335,6 +342,7 @@ function candidate(id = "entry-1", overrides = {}) {
   const signalTimestampMs = T0 - 2;
   const base = {
     testOnly: true,
+    candidateId: identity.candidateId,
     naturalEvidence: { provenanceClass: "TEST_ONLY", testOnly: true },
     signal: {
       signalId: id,
@@ -486,12 +494,18 @@ function authoritativeTriggerSettlementEvidence(position, trigger, triggerObserv
     signalId: position.signalId,
     market: position.market,
     symbol: position.symbol,
+    signalTimeframe: position.sample.identity.timeframe,
+    horizon: position.sample.identity.horizon,
     direction: position.direction,
+    candidateId: position.candidateId,
+    strategyFamily: position.strategyFamily,
     strategyId: position.strategyId,
     strategyVersion: position.strategyVersion,
     parameterHash: position.parameterHash,
+    parameterDigest: position.parameterDigest,
     researchCodeSha: position.researchCodeSha,
     costPolicyVersion: position.costPolicyVersion,
+    accountMode: position.accountMode,
   };
   const exitExecutionIdentity = {
     exitTriggerId: trigger.exitTriggerId,
@@ -499,14 +513,27 @@ function authoritativeTriggerSettlementEvidence(position, trigger, triggerObserv
     triggeredAtMs: trigger.triggeredAtMs,
     positionId: position.positionId,
     paperSampleId: position.paperSampleId,
+    entryId: position.paperSampleId,
+    provider: triggerObservation.settlementInput.exitExecution.dataEvidence.provider,
     market: position.market,
     symbol: position.symbol,
+    timeframe: position.sample.identity.timeframe,
+    horizon: position.sample.identity.horizon,
     direction: position.direction,
+    candidateId: position.candidateId,
+    strategyFamily: position.strategyFamily,
+    strategyId: position.strategyId,
+    strategyVersion: position.strategyVersion,
+    parameterHash: position.parameterHash,
+    parameterDigest: position.parameterDigest,
+    researchCodeSha: position.researchCodeSha,
+    accountMode: position.accountMode,
     costPolicyVersion: position.costPolicyVersion,
     sourceIdentity,
     provenanceId,
     exitExecutionDigest: sha256(stableJson(triggerObservation.settlementInput.exitExecution)),
   };
+  exitExecutionIdentity.exitExecutionId = sha256(stableJson(exitExecutionIdentity));
   const maximumAgeMs = 60_000;
   const observedAtMs = evaluatedAtMs - 1;
   const settlementCostEvidence = structuredClone(triggerObservation.settlementCostEvidence);
@@ -515,6 +542,7 @@ function authoritativeTriggerSettlementEvidence(position, trigger, triggerObserv
   settlementCostEvidence.provenanceId = provenanceId;
   settlementCostEvidence.positionIdentity = positionIdentity;
   settlementCostEvidence.exitExecutionIdentity = exitExecutionIdentity;
+  settlementCostEvidence.exitExecutionId = exitExecutionIdentity.exitExecutionId;
   settlementCostEvidence.projectedFundingRealized = false;
   for (const [name, component] of Object.entries(settlementCostEvidence.components)) {
     component.sourceIdentity = `CANONICAL_${name.toUpperCase()}_SOURCE_V1`;
@@ -536,10 +564,12 @@ function authoritativeTriggerSettlementEvidence(position, trigger, triggerObserv
     provenanceId,
     positionIdentity,
     exitExecutionIdentity,
+    exitExecutionId: exitExecutionIdentity.exitExecutionId,
     freshness: { observedAtMs, maximumAgeMs },
     settlementInput: {
       ...structuredClone(triggerObservation.settlementInput),
       exitTriggerId: trigger.exitTriggerId,
+      exitExecutionId: exitExecutionIdentity.exitExecutionId,
     },
     settlementCostEvidence,
     unknownIsZero: false,
@@ -566,11 +596,15 @@ function observation(position, id, now, bar, overrides = {}) {
     market: position.market,
     symbol: position.symbol,
     direction: position.direction,
+    candidateId: position.candidateId,
+    strategyFamily: position.strategyFamily,
     strategyId: position.strategyId,
     strategyVersion: position.strategyVersion,
     parameterHash: position.parameterHash,
+    parameterDigest: position.parameterDigest,
     researchCodeSha: position.researchCodeSha,
     costPolicyVersion: position.costPolicyVersion,
+    accountMode: position.accountMode,
     publicOnly: true,
     source: "public-market-fixture",
     provenance: "test-only natural lifecycle observation",
@@ -641,9 +675,85 @@ test("genuine Natural Position requires and immutably preserves canonical risk-p
   assert.deepEqual(position.lifecycle.riskPolicyIdentity, RISK_POLICY_IDENTITY);
   assert.equal(position.lifecycle.riskPolicyIdentityStatus, "PRESENT");
   assert.equal(position.lifecycle.sampleEligibility.provenanceClass, "NATURAL_FORWARD");
+  assert.equal(position.candidateId, identity.candidateId);
+  assert.equal(position.strategyFamily, identity.strategyFamily);
+  assert.equal(position.parameterDigest, identity.parameterHash);
+  assert.equal(position.accountMode, "PAPER");
+  assert.deepEqual(position.lifecycle.strategyIdentity, {
+    candidateId: identity.candidateId,
+    strategyFamily: identity.strategyFamily,
+    strategyId: identity.strategyId,
+    strategyVersion: identity.strategyVersion,
+    parameterHash: identity.parameterHash,
+    parameterDigest: identity.parameterHash,
+    researchCodeSha: identity.researchCodeSha,
+    accountMode: "PAPER",
+  });
 
   const restored = restoreRecurringPaperLoopState(serializeRecurringPaperLoopState(opened.state), identity);
   assert.deepEqual(restored.positions[0].lifecycle.riskPolicyIdentity, RISK_POLICY_IDENTITY);
+});
+
+test("rehashed lifecycle cannot rewrite the frozen candidate lineage", async () => {
+  const { state } = await naturalFixture();
+  const position = structuredClone(state.positions[0]);
+  position.lifecycle.strategyIdentity.candidateId = `paper-candidate-v1:${"d".repeat(64)}`;
+  position.lifecycle.immutableContractDigest = sha256(stableJson({
+    identity: position.lifecycle.identity,
+    strategyIdentity: position.lifecycle.strategyIdentity,
+    riskPolicyIdentity: position.lifecycle.riskPolicyIdentity,
+    riskPolicyIdentityStatus: position.lifecycle.riskPolicyIdentityStatus,
+    modelIdentity: position.lifecycle.modelIdentity,
+    modelIdentityStatus: position.lifecycle.modelIdentityStatus,
+    entry: position.lifecycle.entry,
+    exitPolicy: position.lifecycle.exitPolicy,
+    sampleEligibility: position.lifecycle.sampleEligibility,
+  }));
+  assert.throws(
+    () => advanceNaturalPaperPositionLifecycle({ position }),
+    /PAPER_POSITION_IMMUTABLE_LINEAGE_MISMATCH/,
+  );
+});
+
+test("genuine Natural entry fails closed for every missing or mutated frozen candidate identity field", async () => {
+  for (const [name, strategyIdentity, blocker] of [
+    ["candidate", { ...identity, candidateId: null }, "PAPER_CANDIDATE_ID_REQUIRED"],
+    ["family", { ...identity, strategyFamily: null }, "PAPER_STRATEGY_FAMILY_REQUIRED"],
+    ["digest", { ...identity, parameterDigest: null }, "PAPER_PARAMETER_DIGEST_REQUIRED"],
+    ["parameter-mismatch", { ...identity, parameterDigest: "different-parameters" }, "PAPER_PARAMETER_IDENTITY_MISMATCH"],
+    ["account", { ...identity, accountMode: "LIVE" }, "PAPER_ACCOUNT_MODE_REQUIRED"],
+  ]) {
+    const h = harness();
+    const result = await open(h, `natural-frozen-${name}`, {
+      testOnly: false,
+      naturalEvidence: naturalEvidence(`natural-frozen-${name}`, T0 - 1),
+      signal: { strategyIdentity },
+      riskEvidence: {
+        status: "APPROVED",
+        evaluatedAtMs: T0 - 1,
+        simulatedOnly: true,
+        policyIdentity: RISK_POLICY_IDENTITY,
+      },
+    });
+    assert.equal(result.state.positions.length, 0);
+    assert.equal(result.state.samples.at(-1).status, "BLOCKED");
+    assert.ok(result.state.samples.at(-1).blockers.includes(blocker));
+  }
+
+  const h = harness();
+  const result = await open(h, "natural-top-level-candidate-mismatch", {
+    candidateId: `paper-candidate-v1:${"d".repeat(64)}`,
+    testOnly: false,
+    naturalEvidence: naturalEvidence("natural-top-level-candidate-mismatch", T0 - 1),
+    riskEvidence: {
+      status: "APPROVED",
+      evaluatedAtMs: T0 - 1,
+      simulatedOnly: true,
+      policyIdentity: RISK_POLICY_IDENTITY,
+    },
+  });
+  assert.equal(result.state.positions.length, 0);
+  assert.ok(result.state.samples.at(-1).blockers.includes("PAPER_CANDIDATE_IDENTITY_MISMATCH"));
 });
 
 test("genuine Natural observation rejects mismatched scheduler risk-policy identity before mark mutation", async () => {
@@ -805,6 +915,8 @@ test("recurring caller freezes a new trigger before invoking the canonical cost 
   assert.equal(result.state.settlements[0].exitReason, "TAKE_PROFIT");
   assert.equal(result.state.settlements[0].settledAtMs, T0 + 1_000);
   assert.equal(collectedTrigger.exitTriggerId, result.state.settlements[0].lifecycleEvidence.exitTriggerId);
+  assert.equal(result.state.settlements[0].exitExecutionId, result.state.settlements[0].lifecycleEvidence.exitExecutionId);
+  assert.equal(result.state.settlements[0].settlementId, sha256(stableJson(result.state.settlements[0].settlementIdentity)));
   assert.equal(h.getSettlementMutations(), 1);
 });
 
@@ -1037,6 +1149,10 @@ test("Natural frozen exit trigger hashes scheduler identity lineage without Sett
   assert.equal(trigger.triggeredAtMs, now);
   assert.equal(trigger.positionId, state.positions[0].positionId);
   assert.equal(trigger.entryId, state.positions[0].paperSampleId);
+  assert.equal(trigger.candidateId, state.positions[0].candidateId);
+  assert.equal(trigger.strategyIdentity.candidateId, state.positions[0].candidateId);
+  assert.equal(trigger.strategyIdentity.parameterDigest, state.positions[0].parameterDigest);
+  assert.equal(trigger.strategyIdentity.accountMode, "PAPER");
   assert.equal(trigger.cycleId, cycleId);
   assert.equal(trigger.accountIdSha256, sha256(state.ledger.accountBinding.accountId));
   assert.equal(trigger.strategyId, state.positions[0].strategyId);
@@ -1118,6 +1234,13 @@ test("genuine Natural pending exit consumes only an exact later trigger-bound pr
   assert.equal(settled.state.settlements.length, 1);
   assert.equal(settled.state.settlements[0].settledAtMs, triggerAtMs);
   assert.equal(settled.state.settlements[0].lifecycleEvidence.exitTriggerId, trigger.exitTriggerId);
+  assert.equal(settled.state.settlements[0].entryId, position.paperSampleId);
+  assert.equal(settled.state.settlements[0].candidateId, position.candidateId);
+  assert.equal(settled.state.settlements[0].exitExecutionId, authoritativeEvidence.exitExecutionId);
+  assert.equal(settled.state.settlements[0].lifecycleEvidence.exitExecutionId, authoritativeEvidence.exitExecutionId);
+  assert.equal(settled.state.settlements[0].settlementIdentity.provider, authoritativeEvidence.exitExecutionIdentity.provider);
+  assert.equal(settled.state.settlements[0].settlementIdentity.timeframe, position.sample.identity.timeframe);
+  assert.equal(settled.state.settlements[0].settlementId, sha256(stableJson(settled.state.settlements[0].settlementIdentity)));
   assert.equal(settled.state.settlements[0].lifecycleEvidence.naturalSampleCredit, 1);
   assert.equal(settled.state.settlements[0].executionAuthority, "NONE");
   assert.equal(h.getSettlementMutations(), 1);

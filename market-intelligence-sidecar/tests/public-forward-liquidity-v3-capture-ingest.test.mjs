@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   normalizeBitgetPublicOrderBookFrame,
@@ -33,6 +34,11 @@ import {
 } from '../src/public-forward-liquidity-successor-schedule-reliability-v3.mjs';
 import { SUCCESSOR_OOS_HORIZON_CONTRACT } from '../src/public-forward-liquidity-successor-oos-outcome-horizon.mjs';
 import {
+  PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1,
+  derivePublicForwardLiquidityMultiLaneActivation,
+} from '../src/public-forward-liquidity-multi-lane-policy-v1.mjs';
+import { executeSuccessorScheduledCaptureSeamV3 } from '../src/public-forward-liquidity-successor-schedule-seam-v1.mjs';
+import {
   PUBLIC_FORWARD_LIQUIDITY_V3_ACTIVATION_CONTRACT_DIGEST,
   PUBLIC_FORWARD_LIQUIDITY_V3_ACTIVATION_CONTRACT_VERSION,
   PUBLIC_FORWARD_LIQUIDITY_V3_CAPTURE_ARTIFACT_RECEIPT_VERSION,
@@ -43,10 +49,19 @@ import {
 
 const SOURCE_MAIN_SHA = String(process.env.EXPECTED_SHA
   ?? execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()).toLowerCase();
-const REPO_ROOT = resolve(new URL('../..', import.meta.url).pathname);
+const REPO_ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const REPOSITORY = 'seungjae3908-source/seungjae20260713';
 const ARTIFACT_DIGEST = 'b'.repeat(64);
 assert.match(SOURCE_MAIN_SHA, /^[a-f0-9]{40}$/u);
+
+test('repository URL resolves to the native Git work tree used for blob proof', () => {
+  const gitRoot = execFileSync(
+    'git',
+    ['-C', REPO_ROOT, 'rev-parse', '--show-toplevel'],
+    { encoding: 'utf8' },
+  ).trim();
+  assert.equal(resolve(gitRoot), REPO_ROOT);
+});
 
 function bookFrame(offset = 0, { bids = [[100, 4], [99, 5]], asks = [[101, 3], [102, 6]] } = {}) {
   return normalizeBitgetPublicOrderBookFrame({
@@ -252,7 +267,9 @@ function successorArtifactReceipt(capture, artifactId, overrides = {}) {
     ...capture,
     schemaVersion: SUCCESSOR_V3_ARTIFACT_RECEIPT_SCHEMA,
     artifactId: String(artifactId),
-    artifactName: `public-forward-liquidity-successor-slot-${capture.slotIndex}-${capture.canonicalSlotKeyDigest}`,
+    artifactName: capture.laneId
+      ? `public-forward-liquidity-successor-lane-${capture.laneId}-slot-${capture.slotIndex}-${capture.laneCreditKeyDigest}`
+      : `public-forward-liquidity-successor-slot-${capture.slotIndex}-${capture.canonicalSlotKeyDigest}`,
     artifactDigest: ARTIFACT_DIGEST,
     artifactReference: `https://github.com/${REPOSITORY}/actions/runs/${capture.runId}/artifacts/${artifactId}`,
     ...overrides,
@@ -365,6 +382,110 @@ test('Run 36 shaped native Successor V3 receipt persists once and retains native
     assert.equal(duplicate.datasetDuplicateAttemptCount, 1);
   } finally {
     await rm(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test('Phase 2 lane receipt is admitted with lane-aware artifact and immutable credit lineage', {
+  skip: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound !== true
+    ? 'preserved inactive-contract regression mode'
+    : false,
+}, async () => {
+  const requiredJobs = PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1
+    .config.activationPolicy.requiredSuccessfulJobs;
+  const activation = derivePublicForwardLiquidityMultiLaneActivation({
+    exactMainSha: SOURCE_MAIN_SHA,
+    workflowRun: {
+      id: 41000000010,
+      event: 'workflow_dispatch',
+      head_branch: 'main',
+      head_sha: SOURCE_MAIN_SHA,
+      status: 'completed',
+      conclusion: 'success',
+    },
+    jobs: requiredJobs.map((name) => ({
+      name,
+      status: 'completed',
+      conclusion: 'success',
+      completed_at: '2026-09-11T06:05:00.000Z',
+    })),
+  });
+  const slot = buildSuccessorScheduleReliabilityV3SlotDescriptor(activation.activationSlotIndex);
+  const raw = batch(slot.nominalScheduledAtMs, 'phase2-lane-17');
+  const executed = await executeSuccessorScheduledCaptureSeamV3({
+    eventName: 'schedule',
+    scheduleExpression: '17 * * * *',
+    scheduledRunCreatedAtMs: slot.nominalScheduledAtMs,
+    actualRunStartedAtMs: slot.nominalScheduledAtMs,
+    runAttempt: 1,
+    runId: '41000000011',
+    repository: REPOSITORY,
+    exactMainSha: SOURCE_MAIN_SHA,
+    multiLaneActivation: activation,
+    hasPriorCreditedSlot: async () => false,
+    getRemoteMainSha: async () => SOURCE_MAIN_SHA,
+    clock: () => slot.nominalScheduledAtMs + 5_000,
+    collector: async () => raw,
+  });
+  const capture = executed.captureReceipt;
+  const stateRoot = await mkdtemp(join(tmpdir(), 'liquidity-phase2-lane-'));
+  const tamperRoot = await mkdtemp(join(tmpdir(), 'liquidity-phase2-tamper-'));
+  try {
+    const receipt = await ingest(
+      stateRoot,
+      raw,
+      capture,
+      successorArtifactReceipt(capture, 9914306488),
+      9914306488,
+    );
+    assert.equal(receipt.sourceV3Lineage.laneId, 'P2_V3_BTCUSDT_UTC17');
+    assert.equal(receipt.sourceV3Lineage.scheduleIdentity, '17 * * * *');
+    assert.equal(receipt.sourceV3Lineage.multiLanePolicyDigest,
+      PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyDigest);
+    assert.equal(receipt.sourceV3Lineage.maxCreditPerLanePerSlot, 1);
+    assert.equal(receipt.sourceV3Lineage.maxTotalCreditPerSlot, 2);
+    assert.equal(receipt.sourceV3Lineage.retroactiveMultiLaneCreditAllowed, false);
+    assert.equal(receipt.sourceV3Lineage.activationPostMergeRequiredCiHeadSha, SOURCE_MAIN_SHA);
+    assert.equal(receipt.sourceV3Lineage.activationCurrentMainBinding.currentMainSha, SOURCE_MAIN_SHA);
+
+    const changed = { ...capture, laneId: 'P2_V3_BTCUSDT_UTC37' };
+    const { captureReceiptDigest: _ignored, ...changedBody } = changed;
+    const tampered = { ...changedBody, captureReceiptDigest: sha256(canonicalJson(changedBody)) };
+    await assert.rejects(
+      ingest(
+        tamperRoot,
+        raw,
+        tampered,
+        successorArtifactReceipt(tampered, 9914306489),
+        9914306489,
+      ),
+      /PHASE2_CAPTURE_POLICY_BINDING_INVALID|PHASE2_CAPTURE_CREDIT_KEY_INVALID/,
+    );
+
+    const bindingChanged = {
+      ...capture,
+      activationCurrentMainBinding: {
+        ...capture.activationCurrentMainBinding,
+        currentMainSha: 'e'.repeat(40),
+      },
+    };
+    const { captureReceiptDigest: _bindingDigest, ...bindingChangedBody } = bindingChanged;
+    const bindingTampered = {
+      ...bindingChangedBody,
+      captureReceiptDigest: sha256(canonicalJson(bindingChangedBody)),
+    };
+    await assert.rejects(
+      ingest(
+        tamperRoot,
+        raw,
+        bindingTampered,
+        successorArtifactReceipt(bindingTampered, 9914306490),
+        9914306490,
+      ),
+      /PHASE2_CURRENT_MAIN_(?:BINDING|ANCESTRY)_INVALID/,
+    );
+  } finally {
+    await rm(stateRoot, { recursive: true, force: true });
+    await rm(tamperRoot, { recursive: true, force: true });
   }
 });
 
