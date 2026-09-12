@@ -32,13 +32,19 @@ for(const viewport of [{width:320,height:740},{width:1440,height:900}]){
     await expect(panel).toContainText('NOT_EXPOSED');
     await expect(panel).toContainText('SUCCESS · TEST_ONLY swing strategy');
     await expect(panel).toContainText('BOUNDED_ESTIMATE_USED_100_UNITS');
-    await expect(panel).toContainText('UNKNOWN — missing != 0');
+    await expect(panel).toContainText('UNKNOWN — transcript NOT_PROVIDED; segment count not measured');
     await expect(panel).toContainText('UNKNOWN_TIMESTAMP');
     await expect(panel).toContainText('NOT_EVALUATED');
     await expect(panel).not.toContainText('PROVIDER_NOT_CONFIGURED');
 
     for(const id of ['video-discovery-state','video-transcript-state','video-strategy-state','video-evidence-state','video-validation-state','video-detail-empty-state','video-cluster-empty-state'])await expect(page.getByTestId(id)).toBeVisible();
     for(const label of ['FACT','CREATOR CLAIM','AI INFERENCE','UNKNOWN','CONTRADICTED'])await expect(page.getByTestId('video-truth-legend')).toContainText(label);
+
+    const strategy=page.getByTestId('video-strategy-state');
+    await expect(strategy).toContainText('Strategy mining');
+    await expect(strategy).toContainText('BLOCKED_TRANSCRIPT_NOT_PROVIDED — authorized transcript required; no caption bypass');
+    const validation=page.getByTestId('video-validation-state');
+    await expect(validation).toContainText('BLOCKED — authorized transcript required before strategy extraction/compiler');
 
     const evidence=page.getByTestId('video-evidence-state');
     await expect(evidence).toContainText('Video sources');
@@ -47,7 +53,9 @@ for(const viewport of [{width:320,height:740},{width:1440,height:900}]){
     await expect(page.getByTestId('video-detail-empty-state')).toContainText('TEST_ONLY sanitized research source');
     await expect(page.getByTestId('video-detail-empty-state')).toContainText('TEST_ONLY channel');
     await expect(page.getByTestId('video-detail-empty-state')).toContainText('NOT_PROVIDED');
+    await expect(page.getByTestId('video-detail-empty-state')).toContainText('BLOCKED_TRANSCRIPT_NOT_PROVIDED');
     await expect(page.getByTestId('video-detail-empty-state')).toContainText('UNTRUSTED_EXTERNAL_DATA');
+    await expect(page.getByTestId('video-cluster-empty-state')).toContainText('cluster count는 0으로 만들지 않고 UNKNOWN으로 유지');
     await expect(panel).toContainText('Economic Evidence');await expect(panel).toContainText('Profitability Credit');await expect(panel).toContainText('Execution Authority');await expect(panel).toContainText('NONE');
     await expect(panel).toContainText('Independent source count는 경제적 표본 N이 아닙니다');
     await expect(page.getByTestId('video-phase2-safety-footer')).toContainText('Automatic discovery OFF');
@@ -64,10 +72,13 @@ test('video research keeps missing sanitized snapshot UNKNOWN instead of measure
   await page.getByRole('button',{name:'영상 연구',exact:true}).click();
   const panel=page.getByTestId('research-video-panel');await expect(panel).toBeVisible();
   await expect(panel).toContainText('UNKNOWN — sanitized runtime snapshot unavailable');
+  const strategy=page.getByTestId('video-strategy-state');
+  await expect(strategy).toContainText('UNKNOWN — strategy mining evidence missing != 0');
   const evidence=page.getByTestId('video-evidence-state');
   await expect(evidence).toContainText('UNKNOWN — missing runtime snapshot != 0');
   await expect(evidence).not.toContainText('Video sources0');
   await expect(page.getByTestId('video-detail-empty-state')).toContainText('0으로 단정하지 않고 UNKNOWN으로 유지');
+  await expect(page.getByTestId('video-cluster-empty-state')).toContainText('missing을 0으로 만들지 않습니다');
   await expect(panel).toContainText('Economic Evidence');await expect(panel).toContainText('Profitability Credit');await expect(panel).toContainText('Execution Authority');await expect(panel).toContainText('NONE');
   expect(videoEvidenceAuth.length).toBeGreaterThan(0);expect(videoEvidenceAuth.at(-1)).toMatch(/^Bearer\s+\S+/u);
 });
