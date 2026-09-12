@@ -39,7 +39,10 @@
 				}
 			};
 			if (directAiChartRoute && aiChartRoutePrewarm) {
-				window.setTimeout(startAiChartSharedWork, 0);
+				void aiChartRoutePrewarm.then(
+					startAiChartSharedWork,
+					startAiChartSharedWork,
+				);
 			} else {
 				startAiChartSharedWork();
 			}
