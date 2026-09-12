@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { authorizedFetch } from '@/lib/auth-fetch';
 
 type RuntimeRecord = {
   videoId: string;
@@ -94,9 +95,8 @@ export function ResearchVideoPanel() {
 
   useEffect(() => {
     const controller = new AbortController();
-    void fetch('/api/research/video/evidence', {
+    void authorizedFetch('/api/research/video/evidence', {
       method: 'GET',
-      credentials: 'include',
       headers: { Accept: 'application/json' },
       signal: controller.signal,
     })
