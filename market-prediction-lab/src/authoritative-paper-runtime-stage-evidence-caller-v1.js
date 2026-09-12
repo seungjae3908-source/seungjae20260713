@@ -196,6 +196,27 @@ function stageCount(stageMeasurements, stageName) {
   return row?.status === "MEASURED" && Number.isInteger(row.count) ? row.count : null;
 }
 
+function blockedStageEvidenceAdoption(paperRuntimeResult, error) {
+  const blocker = nonEmpty(error?.message) ? error.message : "PAPER_STAGE_EVIDENCE_RECONCILIATION_FAILED";
+  return freeze({
+    ...paperRuntimeResult,
+    stageEvidenceConnection: freeze({
+      schemaVersion: AUTHORITATIVE_PAPER_RUNTIME_STAGE_EVIDENCE_CALLER_VERSION,
+      status: "BLOCKED",
+      blocker,
+      sampleCredit: 0,
+      executionRealismCredit: 0,
+      profitabilityCredit: 0,
+      fullCostReady: false,
+      profitabilityProven: false,
+      executionAuthority: "NONE",
+      runtimeActivationAllowed: false,
+      scheduleActivationAllowed: false,
+      dispatchAllowed: false,
+    }),
+  });
+}
+
 export function reconcileAuthoritativePaperRuntimeStageEvidenceV1({
   paperRuntimeResult,
   recurringCycleResult,
@@ -266,6 +287,20 @@ export function reconcileSingleAuthoritativePaperRuntimeCandidateStageEvidenceV1
   });
 }
 
+export function adoptExistingAuthoritativePaperRuntimeStageEvidenceV1({
+  paperRuntimeResult,
+  recurringCycleResult,
+} = {}) {
+  try {
+    return reconcileSingleAuthoritativePaperRuntimeCandidateStageEvidenceV1({
+      paperRuntimeResult,
+      recurringCycleResult,
+    });
+  } catch (error) {
+    return blockedStageEvidenceAdoption(paperRuntimeResult, error);
+  }
+}
+
 export async function callAuthoritativePaperRuntimeWithStageEvidenceV1({
   paperRuntimeForMarket,
   runtimeInput = {},
@@ -284,23 +319,6 @@ export async function callAuthoritativePaperRuntimeWithStageEvidenceV1({
       expectedCandidateIdentity,
     });
   } catch (error) {
-    const blocker = nonEmpty(error?.message) ? error.message : "PAPER_STAGE_EVIDENCE_RECONCILIATION_FAILED";
-    return freeze({
-      ...paperRuntimeResult,
-      stageEvidenceConnection: freeze({
-        schemaVersion: AUTHORITATIVE_PAPER_RUNTIME_STAGE_EVIDENCE_CALLER_VERSION,
-        status: "BLOCKED",
-        blocker,
-        sampleCredit: 0,
-        executionRealismCredit: 0,
-        profitabilityCredit: 0,
-        fullCostReady: false,
-        profitabilityProven: false,
-        executionAuthority: "NONE",
-        runtimeActivationAllowed: false,
-        scheduleActivationAllowed: false,
-        dispatchAllowed: false,
-      }),
-    });
+    return blockedStageEvidenceAdoption(paperRuntimeResult, error);
   }
 }
