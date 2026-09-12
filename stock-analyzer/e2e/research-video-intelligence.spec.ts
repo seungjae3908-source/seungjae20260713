@@ -3,10 +3,11 @@ import { expect, test, type Page, type Route } from '@playwright/test';
 const USER='99999999-9999-4999-8999-999999999999';
 const AUTH_KEY='sb-127-auth-token';
 const SAFETY={researchOnly:true,economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE',paidProviderEnabled:false,scheduleActive:false,automaticDiscoveryEnabled:false,liveTrading:false,privateTradingApi:false,realOrderEnabled:false,credentialMutation:false,transcriptDownloadEnabled:false} as const;
+const SNAPSHOT_PROVENANCE={schemaVersion:'video-research-sanitized-snapshot-v1',sourceHeadSha:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',observedAt:'2026-09-13T00:00:00.000Z',publisherMode:'LOCAL_ATOMIC_FILE',providerRuntimeVersion:'video-research-public-provider-runtime-v3',economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE'} as const;
 const MEASURED_VIDEO_EVIDENCE={
   ok:true,available:true,dataState:'MEASURED',runtimeVersion:'video-research-public-provider-runtime-v3',status:'SUCCESS',provider:'YOUTUBE_DATA_API_V3',providerAccess:'OFFICIAL_PUBLIC_API',requestMode:'READ_ONLY_GET',query:'TEST_ONLY swing strategy',pagesUsed:1,quotaState:'BOUNDED_ESTIMATE_USED_100_UNITS',credentialConfigured:true,credentialValueExposed:false,sourceCount:1,
-  records:[{videoId:'TEST_ONLY_VIDEO',canonicalUrl:'https://www.youtube.com/watch?v=TEST_ONLY_VIDEO',title:'TEST_ONLY sanitized research source',channelOrPublisher:'TEST_ONLY channel',publishedAt:'2026-09-12T00:00:00.000Z',discoveredAt:'2026-09-13T00:00:00.000Z',language:'ko',durationSec:321,transcriptStatus:'NOT_PROVIDED',captionsKnownPresent:false,sourceTrustTier:'PUBLIC_PLATFORM_METADATA',contentAuthority:'UNTRUSTED_EXTERNAL_DATA',economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE'}],
-  safety:SAFETY,economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE',
+  records:[{videoId:'TEST_ONLY_VIDEO',canonicalUrl:'https://www.youtube.com/watch?v=TEST_ONLY_VIDEO',title:'TEST_ONLY sanitized research source',channelOrPublisher:'TEST_ONLY channel',publishedAt:'2026-09-12T00:00:00.000Z',discoveredAt:'2026-09-13T00:00:00.000Z',language:'ko',durationSec:321,transcriptStatus:'NOT_PROVIDED',captionsKnownPresent:false,sourceTrustTier:'TIER_E_UNVERIFIED_CREATOR',contentAuthority:'UNTRUSTED_EXTERNAL_DATA',economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE'}],
+  safety:SAFETY,snapshotProvenance:SNAPSHOT_PROVENANCE,economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE',
 } as const;
 const MISSING_VIDEO_EVIDENCE={ok:false,available:false,dataState:'UNKNOWN',reason:'SANITIZED_RUNTIME_EVIDENCE_MISSING',provider:'YOUTUBE_DATA_API_V3',providerAccess:'OFFICIAL_PUBLIC_API',requestMode:'READ_ONLY_GET',credentialValueExposed:false,economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE'} as const;
 function fulfill(route:Route,body:unknown,status=200){return route.fulfill({status,contentType:'application/json; charset=utf-8',body:JSON.stringify(body)});}
@@ -49,6 +50,9 @@ for(const viewport of [{width:320,height:740},{width:1440,height:900}]){
     const evidence=page.getByTestId('video-evidence-state');
     await expect(evidence).toContainText('Video sources');
     await expect(evidence).toContainText('1 — measured sanitized public-provider result');
+    await expect(evidence).toContainText('TIER_E_UNVERIFIED_CREATOR');
+    await expect(evidence).toContainText('video-research-sanitized-snapshot-v1');
+    await expect(evidence).toContainText('aaaaaaaaaaaa');
     await expect(evidence).not.toContainText('Video sources0');
     await expect(page.getByTestId('video-detail-empty-state')).toContainText('TEST_ONLY sanitized research source');
     await expect(page.getByTestId('video-detail-empty-state')).toContainText('TEST_ONLY channel');
@@ -76,9 +80,22 @@ test('video research keeps missing sanitized snapshot UNKNOWN instead of measure
   await expect(strategy).toContainText('UNKNOWN — strategy mining evidence missing != 0');
   const evidence=page.getByTestId('video-evidence-state');
   await expect(evidence).toContainText('UNKNOWN — missing runtime snapshot != 0');
+  await expect(evidence).toContainText('UNKNOWN — sanitized provenance unavailable');
   await expect(evidence).not.toContainText('Video sources0');
   await expect(page.getByTestId('video-detail-empty-state')).toContainText('0으로 단정하지 않고 UNKNOWN으로 유지');
   await expect(page.getByTestId('video-cluster-empty-state')).toContainText('missing을 0으로 만들지 않습니다');
   await expect(panel).toContainText('Economic Evidence');await expect(panel).toContainText('Profitability Credit');await expect(panel).toContainText('Execution Authority');await expect(panel).toContainText('NONE');
+  expect(videoEvidenceAuth.length).toBeGreaterThan(0);expect(videoEvidenceAuth.at(-1)).toMatch(/^Bearer\s+\S+/u);
+});
+
+test('video research rejects malformed sanitized provenance instead of laundering it as measured',async({page})=>{
+  const malformedEvidence={...MEASURED_VIDEO_EVIDENCE,snapshotProvenance:{...SNAPSHOT_PROVENANCE,sourceHeadSha:'not-a-canonical-sha'}};
+  const videoEvidenceAuth:string[]=[];await page.setViewportSize({width:1440,height:900});await installRuntime(page,malformedEvidence,videoEvidenceAuth);await page.goto('/research-center');
+  await page.getByRole('button',{name:'영상 연구',exact:true}).click();
+  const panel=page.getByTestId('research-video-panel');await expect(panel).toBeVisible();
+  await expect(panel).toContainText('UNKNOWN — sanitized runtime snapshot unavailable');
+  await expect(panel).not.toContainText('MEASURED · sanitized reader connected');
+  await expect(page.getByTestId('video-evidence-state')).toContainText('UNKNOWN — sanitized provenance unavailable');
+  await expect(page.getByTestId('video-evidence-state')).not.toContainText('1 — measured sanitized public-provider result');
   expect(videoEvidenceAuth.length).toBeGreaterThan(0);expect(videoEvidenceAuth.at(-1)).toMatch(/^Bearer\s+\S+/u);
 });
