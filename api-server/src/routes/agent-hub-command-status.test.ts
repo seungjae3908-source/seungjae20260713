@@ -55,6 +55,20 @@ describe('Agent Hub app command status readback', () => {
     assert.equal(blocked.latestEvidenceCommentId, normalizedId);
   });
 
+  it('maps executor stale and expired reports to explicit fail-closed user states', () => {
+    const normalized = { id: normalizedId, body: `[WORKER_REPORT]\nroot_task_id: ${rootTaskId}\nstatus: partial\n<!-- agent-hub-manual-source:${sourceCommentId} -->` };
+    const stale = resolveAgentHubCommandStatus(sourceCommentId, [
+      normalized,
+      { id: normalizedId + 1, body: `[WORKER_REPORT]\nroot_task_id: ${rootTaskId}\nstatus: stale` },
+    ]);
+    const expired = resolveAgentHubCommandStatus(sourceCommentId, [
+      normalized,
+      { id: normalizedId + 1, body: `[WORKER_REPORT]\nroot_task_id: ${rootTaskId}\nstatus: expired` },
+    ]);
+    assert.equal(stale.executionState, 'NEEDS_CONTEXT');
+    assert.equal(expired.executionState, 'BLOCKED');
+  });
+
   it('never promotes a partial bounded comment window to a terminal success', () => {
     const complete = resolveAgentHubCommandStatus(sourceCommentId, [
       { id: normalizedId, body: `[WORKER_REPORT]\nroot_task_id: ${rootTaskId}\nstatus: partial\n<!-- agent-hub-manual-source:${sourceCommentId} -->` },
