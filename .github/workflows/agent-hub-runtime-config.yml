@@ -1,0 +1,125 @@
+name: Agent Hub Runtime Config
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type CONFIGURE_AGENT_HUB_RUNTIME to continue
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-hub-runtime-config-production
+  cancel-in-progress: false
+
+jobs:
+  configure:
+    name: Configure Agent Hub production runtime credential
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      AGENT_HUB_GITHUB_TOKEN: ${{ secrets.AGENT_HUB_GITHUB_TOKEN }}
+    steps:
+      - name: Validate explicit approval and required secrets
+        run: |
+          set -Eeuo pipefail
+          [[ '${{ inputs.confirmation }}' == 'CONFIGURE_AGENT_HUB_RUNTIME' ]] || {
+            echo 'Exact confirmation phrase is required.' >&2
+            exit 1
+          }
+          [[ -n "$SSH_HOST" ]] || { echo 'Missing PROD_SSH_HOST' >&2; exit 1; }
+          [[ -n "$SSH_USER" ]] || { echo 'Missing PROD_SSH_USER' >&2; exit 1; }
+          [[ -n "$SSH_PRIVATE_KEY" ]] || { echo 'Missing PROD_SSH_PRIVATE_KEY' >&2; exit 1; }
+          [[ -n "$AGENT_HUB_GITHUB_TOKEN" ]] || { echo 'Missing AGENT_HUB_GITHUB_TOKEN' >&2; exit 1; }
+          echo "::add-mask::$AGENT_HUB_GITHUB_TOKEN"
+
+      - name: Configure SSH
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Inject Agent Hub credential into PM2 runtime without exposing it
+        run: |
+          set -Eeuo pipefail
+          {
+            printf '%s\n' "$AGENT_HUB_GITHUB_TOKEN"
+            cat <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+
+          [[ -n "${AGENT_HUB_GITHUB_TOKEN:-}" ]] || {
+            echo '[agent-hub-config] credential missing on remote input' >&2
+            exit 1
+          }
+
+          export LIVE_TRADING=false
+          export AUTO_TRADING=false
+          export REAL_ORDER_ENABLED=false
+          export PRIVATE_TRADING_API_ALLOWED=false
+          export executionAuthority=NONE
+
+          pm2 describe stock-app >/dev/null 2>&1 || {
+            echo '[agent-hub-config] PM2 process stock-app not found' >&2
+            exit 1
+          }
+
+          pm2 restart stock-app --update-env >/dev/null
+          pm2 save >/dev/null
+
+          pm2 jlist | node -e '
+          const fs = require("node:fs");
+          const processes = JSON.parse(fs.readFileSync(0, "utf8"));
+          const matches = processes.filter((item) => item?.name === "stock-app");
+          if (matches.length !== 1) process.exit(1);
+          const env = matches[0]?.pm2_env;
+          if (!env || env.status !== "online") process.exit(1);
+          if (typeof env.AGENT_HUB_GITHUB_TOKEN !== "string" || env.AGENT_HUB_GITHUB_TOKEN.length === 0) process.exit(1);
+          if (String(env.LIVE_TRADING) !== "false") process.exit(1);
+          if (String(env.AUTO_TRADING) !== "false") process.exit(1);
+          if (String(env.REAL_ORDER_ENABLED) !== "false") process.exit(1);
+          if (String(env.PRIVATE_TRADING_API_ALLOWED) !== "false") process.exit(1);
+          if (String(env.executionAuthority) !== "NONE") process.exit(1);
+          '
+          REMOTE
+          } | ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" \
+            'IFS= read -r AGENT_HUB_GITHUB_TOKEN; export AGENT_HUB_GITHUB_TOKEN; bash -s'
+
+      - name: Verify application health after runtime refresh
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" \
+            "curl --fail --silent --show-error --max-time 20 http://127.0.0.1:8080/api/health >/dev/null"
+
+      - name: Configuration summary
+        run: |
+          {
+            echo '## Agent Hub runtime configuration succeeded'
+            echo
+            echo '- Credential value: never printed'
+            echo '- PM2 process: `stock-app` online'
+            echo '- `AGENT_HUB_GITHUB_TOKEN`: configured (presence only)'
+            echo '- `LIVE_TRADING=false`'
+            echo '- `AUTO_TRADING=false`'
+            echo '- `REAL_ORDER_ENABLED=false`'
+            echo '- `PRIVATE_TRADING_API_ALLOWED=false`'
+            echo '- `executionAuthority=NONE`'
+            echo '- Production code deploy: not performed'
+          } >> "$GITHUB_STEP_SUMMARY"

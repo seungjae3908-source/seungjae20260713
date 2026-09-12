@@ -13,6 +13,14 @@ import {
   type SafeApiDiagnostic,
 } from './support/safe-api-diagnostic';
 import { expectUiBuilderStagingReadiness } from './support/ui-builder-staging-readiness';
+import {
+  canClassifyResearchReloadAbort,
+  getResearchReloadAppNavigation,
+  isResearchOverviewRequestIdentity,
+  isResearchReloadAbortCandidate,
+  responseBelongsToActiveDocument,
+  type ResearchReloadAcceptanceProof,
+} from './support/research-reload-abort-contract';
 import { APP_NAVIGATION } from '../src/lib/app-navigation';
 
 const stagingMode = process.env.PHASE10_STAGING_E2E === 'true';
@@ -54,6 +62,15 @@ type RouteTransitionObservation = {
   candidates: Diagnostic[];
   pendingGetRequests: Set<Request>;
 };
+type ResearchReloadObservation = {
+  origin: string;
+  route: string;
+  candidates: Array<{ diagnostic: Diagnostic; request: Request }>;
+  obsoleteResearchRequests: Set<Request>;
+  replacementResearchRequests: Set<Request>;
+  replacementResponseStatuses: number[];
+  reloadStarted: boolean;
+};
 type AuthFaultObservation = {
   kind: 'reject' | 'timeout' | 'retry';
   candidates: Diagnostic[];
@@ -85,6 +102,7 @@ type AiChartSessionTiming = {
   session: number;
   coldDocumentMs: number;
   coldChunkMs: number;
+  firstRouteChunkMs: number;
   firstShellMs: number;
   firstUsableChartMs: number;
   warmRouteMs: number;
@@ -109,6 +127,7 @@ type AuthenticatedViewportEvidence = {
 const activeLogoutObservations = new WeakMap<Page, LogoutObservation>();
 const confirmedLogoutAbortRequests = new WeakMap<Request, string>();
 const activeRouteTransitionObservations = new WeakMap<Page, RouteTransitionObservation>();
+const activeResearchReloadObservations = new WeakMap<Page, ResearchReloadObservation>();
 const activeAuthFaultObservations = new WeakMap<Page, AuthFaultObservation>();
 const pendingMutatingRequests = new WeakMap<Page, Set<Request>>();
 const pendingApiGetRequests = new WeakMap<Page, Set<Request>>();
@@ -121,6 +140,7 @@ const diagnostics: {
   expected_auth_faults: Diagnostic[];
   expected_scanner_aborts: Diagnostic[];
   expected_route_transition_aborts: Diagnostic[];
+  expected_research_reload_aborts: Diagnostic[];
   api_diagnostics: SafeApiDiagnostic[];
   authenticated_search: {
     samples: AuthenticatedSearchEvidence[];
@@ -140,6 +160,7 @@ const diagnostics: {
   expected_auth_faults: [],
   expected_scanner_aborts: [],
   expected_route_transition_aborts: [],
+  expected_research_reload_aborts: [],
   api_diagnostics: [],
   authenticated_search: { samples: [], summary: null },
   authenticated_ai_chart: { sessions: [], summary: null },
@@ -351,6 +372,17 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
       logoutObservation.logoutScopedReads.add(request);
     }
     if (isMutatingBrowserRequest(request)) mutations.add(request);
+    const researchReloadObservation = activeResearchReloadObservations.get(page);
+    if (
+      researchReloadObservation?.reloadStarted
+      && isResearchOverviewRequestIdentity({
+        method: request.method(),
+        rawUrl: request.url(),
+        origin: researchReloadObservation.origin,
+      })
+    ) {
+      researchReloadObservation.replacementResearchRequests.add(request);
+    }
     if (isSameOriginApiGet(request)) {
       apiGets.add(request);
       const routeObservation = activeRouteTransitionObservations.get(page);
@@ -385,6 +417,10 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
     recordUnhandled(testName, url, detail);
   });
   page.on('response', (response) => {
+    const researchReloadObservation = activeResearchReloadObservations.get(page);
+    if (researchReloadObservation?.replacementResearchRequests.has(response.request())) {
+      researchReloadObservation.replacementResponseStatuses.push(response.status());
+    }
     if (response.status() < 400) return;
     const authFault = activeAuthFaultObservations.get(page);
     if (authFault && authFault.kind !== 'timeout' && isExpectedAuthFault(response.request(), authFault)) {
@@ -412,6 +448,18 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
       status: 0,
       detail,
     };
+    const researchReloadObservation = activeResearchReloadObservations.get(page);
+    const researchReloadCandidate = researchReloadObservation ? {
+      method: request.method(),
+      rawUrl: request.url(),
+      errorText: request.failure()?.errorText,
+      origin: researchReloadObservation.origin,
+      startedBeforeReload: researchReloadObservation.obsoleteResearchRequests.has(request),
+    } : null;
+    if (researchReloadObservation && researchReloadCandidate && isResearchReloadAbortCandidate(researchReloadCandidate)) {
+      researchReloadObservation.candidates.push({ diagnostic, request });
+      return;
+    }
     const logoutObservation = activeLogoutObservations.get(page);
     if (logoutObservation && isExpectedLogoutAbort(request, logoutObservation)) {
       logoutObservation.candidates.push(diagnostic);
@@ -487,6 +535,41 @@ function loginSubmitButton(page: Page) {
   return page.locator('form').getByRole('button', { name: /^로그인$|sign in|log in/i });
 }
 
+function logoutButtons(page: Page) {
+  return page.getByRole('button', { name: /로그아웃|sign out/i });
+}
+
+async function firstVisibleLogoutButton(page: Page) {
+  const commandBarLogout = page
+    .getByTestId('professional-command-bar')
+    .getByRole('button', { name: /^로그아웃$|^sign out$/i });
+  if (await commandBarLogout.count() === 1 && await commandBarLogout.isVisible()) {
+    return commandBarLogout;
+  }
+
+  const candidates = logoutButtons(page);
+  const count = await candidates.count();
+  for (let index = 0; index < count; index += 1) {
+    const candidate = candidates.nth(index);
+    if (await candidate.isVisible()) return candidate;
+  }
+  return null;
+}
+
+async function expectVisibleLogoutButton(page: Page, timeout = 30_000) {
+  await expect.poll(
+    async () => Boolean(await firstVisibleLogoutButton(page)),
+    {
+      message: 'authenticated UI must expose at least one visible logout action',
+      timeout,
+      intervals: [100, 200, 300, 500],
+    },
+  ).toBe(true);
+  const logoutButton = await firstVisibleLogoutButton(page);
+  if (!logoutButton) throw new Error('visible logout action disappeared after authenticated UI proof');
+  return logoutButton;
+}
+
 async function login(page: Page, loginName: string, password: string) {
   await page.goto('/login');
   const nameInput = page.locator('input[type="email"], input[name="email"], input[autocomplete="username"]').first();
@@ -495,18 +578,21 @@ async function login(page: Page, loginName: string, password: string) {
   await nameInput.fill(loginName);
   await passwordInput.fill(password);
   await loginSubmitButton(page).click();
-  await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible({ timeout: 30_000 });
+  await expectVisibleLogoutButton(page, 30_000);
   await settle(page);
   await waitForPendingPersonalIntegrationReads(page);
 }
 
 async function logout(page: Page) {
-  const logoutButton = page.getByRole('button', { name: /로그아웃|sign out/i });
-  await expect(logoutButton).toBeVisible();
+  const logoutButton = await expectVisibleLogoutButton(page);
+  const origin = new URL(page.url()).origin;
   const observation: LogoutObservation = {
     candidates: [],
-    origin: new URL(page.url()).origin,
-    logoutScopedReads: new Set<Request>(),
+    origin,
+    logoutScopedReads: new Set(
+      [...(pendingApiGetRequests.get(page) ?? [])]
+        .filter((request) => isLogoutScopedRead(request, origin)),
+    ),
   };
   activeLogoutObservations.set(page, observation);
   let confirmed = false;
@@ -518,7 +604,7 @@ async function logout(page: Page) {
     await page.reload();
     await settle(page);
     await expect(loginSubmitButton(page)).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toHaveCount(0);
+    await expect(logoutButtons(page)).toHaveCount(0);
 
     const protectedResponse = await page.request.get('/api/paper-journal/snapshot');
     expect(
@@ -544,6 +630,141 @@ async function logout(page: Page) {
 
 async function expectMembership(page: Page, label: RegExp) {
   await expect(page.getByTestId('membership-label')).toContainText(label);
+}
+
+async function reloadResearchCenterWithAdminSessionProof(page: Page, nav: ReturnType<Page['locator']>) {
+  await settle(page);
+  const route = routeIdentity(page.url());
+  expect(route).toBe('/research-center');
+  const requestDocumentLifecycle = await page.evaluate(() => {
+    const value = `phase10-research-before-${performance.timeOrigin}`;
+    (window as typeof window & { __phase10ResearchDocument?: string }).__phase10ResearchDocument = value;
+    return value;
+  });
+  const expectedOrigin = new URL(page.url()).origin;
+  const pendingRequests = pendingApiGetRequests.get(page) ?? new Set<Request>();
+  const observation: ResearchReloadObservation = {
+    origin: expectedOrigin,
+    route,
+    candidates: [],
+    obsoleteResearchRequests: new Set([...pendingRequests].filter((request) => (
+      isResearchOverviewRequestIdentity({
+        method: request.method(),
+        rawUrl: request.url(),
+        origin: expectedOrigin,
+      })
+    ))),
+    replacementResearchRequests: new Set<Request>(),
+    replacementResponseStatuses: [],
+    reloadStarted: false,
+  };
+  activeResearchReloadObservations.set(page, observation);
+  let confirmed = false;
+  try {
+    observation.reloadStarted = true;
+    await page.reload();
+    await settle(page);
+    expect(routeIdentity(page.url())).toBe(observation.route);
+
+    const inheritedDocumentLifecycle = await page.evaluate(
+      () => (window as typeof window & { __phase10ResearchDocument?: string }).__phase10ResearchDocument ?? null,
+    );
+    expect(inheritedDocumentLifecycle, 'reload must create a new browser document lifecycle').toBeNull();
+    const activeDocumentLifecycle = await page.evaluate(() => {
+      const value = `phase10-research-after-${performance.timeOrigin}`;
+      (window as typeof window & { __phase10ResearchDocument?: string }).__phase10ResearchDocument = value;
+      return value;
+    });
+
+    await expect.poll(
+      () => observation.replacementResearchRequests.size,
+      {
+        message: 'Research reload must issue a fresh overview request for the new document',
+        timeout: 15_000,
+        intervals: [100, 200, 300, 500],
+      },
+    ).toBeGreaterThan(0);
+    await expect.poll(
+      () => observation.replacementResponseStatuses.includes(200),
+      {
+        message: 'the new Research document must receive a successful overview response',
+        timeout: 15_000,
+        intervals: [100, 200, 300, 500],
+      },
+    ).toBe(true);
+    await expect(page.getByTestId('research-overview-tab')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('research-error-state')).toHaveCount(0);
+    await expect(page.getByTestId('capability-denied')).toHaveCount(0);
+    await expect(loginSubmitButton(page)).toHaveCount(0);
+    await expect(page.getByTestId('professional-command-bar')).toBeVisible();
+    await expect(page.getByRole('button', { name: '계정 열기', exact: true })).toBeVisible();
+    await expect(
+      nav,
+      'authenticated app-shell navigation must remain visible after Research reload',
+    ).toBeVisible();
+
+    const protectedResponse = await requestWithBrowserSession(page, '/api/paper-journal/snapshot');
+    expect(protectedResponse.status(), 'protected read must remain authenticated after Research reload').toBe(200);
+    const adminResponse = await requestWithBrowserSession(page, '/api/admin/research/overview');
+    expect(adminResponse.status(), 'admin Research read must retain canManageMembers after reload').toBe(200);
+    const adminPayload = await adminResponse.json().catch(() => null) as { schemaVersion?: string } | null;
+    expect(adminPayload?.schemaVersion).toBe('research-dashboard-overview-v1');
+
+    await expect.poll(
+      () => [...observation.replacementResearchRequests]
+        .filter((request) => pendingApiGetRequests.get(page)?.has(request))
+        .length,
+      {
+        message: 'replacement Research overview requests must settle in the new document',
+        timeout: 15_000,
+        intervals: [100, 200, 300, 500],
+      },
+    ).toBe(0);
+
+    const proof: ResearchReloadAcceptanceProof = {
+      fromRoute: observation.route,
+      toRoute: routeIdentity(page.url()),
+      intentionalReload: observation.reloadStarted,
+      obsoleteByReload: observation.candidates.every(({ request }) => observation.obsoleteResearchRequests.has(request)),
+      browserLifecycleCancelled: observation.candidates.every(({ request }) => isResearchReloadAbortCandidate({
+        method: request.method(),
+        rawUrl: request.url(),
+        errorText: request.failure()?.errorText,
+        origin: observation.origin,
+        startedBeforeReload: observation.obsoleteResearchRequests.has(request),
+      })),
+      currentPageDataPresent: await page.getByTestId('research-overview-tab').isVisible(),
+      sessionRetained: protectedResponse.status() === 200,
+      capabilityRetained: adminResponse.status() === 200,
+      noUserVisibleError: await page.getByTestId('research-error-state').count() === 0
+        && await page.getByTestId('capability-denied').count() === 0
+        && await loginSubmitButton(page).count() === 0,
+      freshRequestIssued: observation.replacementResearchRequests.size > 0,
+      freshResponseStatus: observation.replacementResponseStatuses.includes(200) ? 200 : null,
+      staleResponseBlocked: inheritedDocumentLifecycle === null
+        && !responseBelongsToActiveDocument(requestDocumentLifecycle, activeDocumentLifecycle),
+    };
+    for (const { request } of observation.candidates) {
+      expect(canClassifyResearchReloadAbort({
+        method: request.method(),
+        rawUrl: request.url(),
+        errorText: request.failure()?.errorText,
+        origin: observation.origin,
+        startedBeforeReload: observation.obsoleteResearchRequests.has(request),
+      }, proof), 'only a fully proven obsolete Research reload abort may be expected').toBe(true);
+    }
+    confirmed = true;
+  } finally {
+    activeResearchReloadObservations.delete(page);
+    if (confirmed) {
+      diagnostics.expected_research_reload_aborts.push(...observation.candidates.map(({ diagnostic }) => diagnostic));
+    } else {
+      diagnostics.unexpected_http_errors.push(...observation.candidates.map(({ diagnostic }) => ({
+        ...diagnostic,
+        detail: `unconfirmed Research reload abort: ${diagnostic.detail}`,
+      })));
+    }
+  }
 }
 
 async function finishRouteTransition(
@@ -783,6 +1004,35 @@ function normalizedAssetSymbol(value: unknown) {
   return String(value ?? '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
 }
 
+async function selectVisibleUsAaplForAnalysis(page: Page) {
+  const option = page.getByRole('option').filter({ hasText: /AAPL/i }).first();
+  await expect(option).toBeVisible({ timeout: 5_000 });
+  await option.click();
+  await expect.poll(() => {
+    const url = new URL(page.url());
+    return `${url.pathname}|${url.searchParams.get('market')}|${url.searchParams.get('ticker')}`;
+  }, {
+    message: 'real AAPL selection must reach the canonical stock analysis route',
+    timeout: 5_000,
+    intervals: [100, 200, 400, 800],
+  }).toBe('/stock-info/analysis|US|AAPL');
+  await expect(page.getByTestId('canonical-stock-analysis')).toHaveAttribute('data-ticker', 'AAPL');
+  await expect.poll(async () => page.evaluate(() => {
+    try {
+      const raw = window.localStorage.getItem('sa-analysis-selection-v1');
+      if (!raw) return null;
+      const selection = JSON.parse(raw) as { market?: unknown; ticker?: unknown };
+      return `${String(selection.market ?? '')}:${String(selection.ticker ?? '')}`;
+    } catch {
+      return null;
+    }
+  }), {
+    message: 'real AAPL user selection must persist the exact AI Chart analysis identity',
+    timeout: 5_000,
+    intervals: [100, 200, 400, 800],
+  }).toBe('US:AAPL');
+}
+
 async function runAuthenticatedSearchCertification(page: Page) {
   const matrix = [
     { market: 'KR', label: '국내', query: '034730', acceptable: ['034730'] },
@@ -884,6 +1134,32 @@ async function runAuthenticatedSearchCertification(page: Page) {
   expect(summary.p95Ms, `authenticated Search p95 evidence: ${JSON.stringify(summary)}`).toBeLessThanOrEqual(2_000);
   expect(summary.maxMs, `authenticated Search max evidence: ${JSON.stringify(summary)}`).toBeLessThan(5_000);
   expect(summary.overFiveSeconds).toBe(0);
+
+  const usTab = page.getByRole('button', { name: '미국', exact: true });
+  await usTab.click();
+  await expect(usTab).toHaveAttribute('aria-pressed', 'true');
+  await input.fill('');
+  const selectionResponsePromise = page.waitForResponse((response) => {
+    try {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET'
+        && url.pathname === '/api/search/suggest'
+        && url.searchParams.get('market') === 'US'
+        && url.searchParams.get('q') === 'AAPL';
+    } catch {
+      return false;
+    }
+  }, { timeout: 5_000 });
+  await input.fill('AAPL');
+  const selectionResponse = await selectionResponsePromise;
+  expect(selectionResponse.status(), 'AI Chart analysis-selection search must return HTTP 200').toBe(200);
+  await expect.poll(async () => (await page.getByRole('option').allTextContents())
+    .map(normalizedAssetSymbol)
+    .some((text) => text.includes('AAPL')), {
+    timeout: 5_000,
+    intervals: [100, 200, 400, 800],
+  }).toBe(true);
+  await selectVisibleUsAaplForAnalysis(page);
 }
 
 async function waitForUsableAiChart(page: Page, startedAt: number) {
@@ -920,13 +1196,26 @@ async function runAuthenticatedAiChartCertification(
       const cold = await waitForUsableAiChart(page, coldStarted);
       const navigationTiming = await page.evaluate(() => {
         const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
-        const scriptEntries = performance.getEntriesByType('resource')
-          .filter((entry) => entry instanceof PerformanceResourceTiming && entry.initiatorType === 'script');
+        const resourceEntries = performance.getEntriesByType('resource')
+          .filter((entry): entry is PerformanceResourceTiming => entry instanceof PerformanceResourceTiming);
+        const scriptEntries = resourceEntries.filter((entry) => entry.initiatorType === 'script');
+        const routeChunkEntries = resourceEntries.filter((entry) => {
+          const pathname = new URL(entry.name).pathname;
+          return /\/assets\/ai-chart-[^/]+\.js$/.test(pathname)
+            || pathname.endsWith('/src/pages/ai-chart.tsx');
+        });
         return {
           documentMs: Math.round(navigation?.domContentLoadedEventEnd ?? 0),
           chunkMs: Math.round(scriptEntries.reduce((max, entry) => Math.max(max, entry.responseEnd), 0)),
+          firstRouteChunkMs: routeChunkEntries.length > 0
+            ? Math.round(routeChunkEntries.reduce((max, entry) => Math.max(max, entry.responseEnd), 0))
+            : null,
         };
       });
+      expect(
+        navigationTiming.firstRouteChunkMs,
+        'AI Chart route chunk timing must be present; missing timing is not zero',
+      ).not.toBeNull();
 
       await expectHealthyRoute(page, '/');
       const nav = page.locator('nav');
@@ -950,6 +1239,7 @@ async function runAuthenticatedAiChartCertification(
         session,
         coldDocumentMs: navigationTiming.documentMs,
         coldChunkMs: navigationTiming.chunkMs,
+        firstRouteChunkMs: navigationTiming.firstRouteChunkMs!,
         firstShellMs: cold.firstShellMs,
         firstUsableChartMs: cold.usableMs,
         warmRouteMs,
@@ -966,6 +1256,7 @@ async function runAuthenticatedAiChartCertification(
   const summary = {
     coldDocumentMs: performanceSummary(sessions.map((item) => item.coldDocumentMs)),
     coldChunkMs: performanceSummary(sessions.map((item) => item.coldChunkMs)),
+    firstRouteChunkMs: performanceSummary(sessions.map((item) => item.firstRouteChunkMs)),
     firstShellMs: performanceSummary(sessions.map((item) => item.firstShellMs)),
     firstUsableChartMs: performanceSummary(sessions.map((item) => item.firstUsableChartMs)),
     warmRouteMs: performanceSummary(sessions.map((item) => item.warmRouteMs)),
@@ -1115,6 +1406,25 @@ function errorsFor(testInfo: TestInfo) {
   };
 }
 
+test('logout selector remains deterministic with concurrent command-bar and route logout actions', async ({ page }) => {
+  await page.setContent(`
+    <div data-testid="professional-command-bar">
+      <button type="button" aria-label="로그아웃" data-owner="command-bar">global</button>
+    </div>
+    <section>
+      <button type="button" aria-label="로그아웃" data-owner="route">route</button>
+    </section>
+  `);
+  const commandBarLogout = await expectVisibleLogoutButton(page);
+  await expect(commandBarLogout).toHaveAttribute('data-owner', 'command-bar');
+
+  await page.getByTestId('professional-command-bar').evaluate((element) => {
+    (element as HTMLElement).style.display = 'none';
+  });
+  const routeLogout = await expectVisibleLogoutButton(page);
+  await expect(routeLogout).toHaveAttribute('data-owner', 'route');
+});
+
 test('logout abort proof keeps session-scoped account reads exact and query-free', () => {
   const origin = 'https://staging.example.test';
   for (const route of [
@@ -1232,7 +1542,7 @@ test.describe('real staging release readiness', () => {
       await page.reload();
       await settle(page);
       await waitForPendingPersonalIntegrationReads(page);
-      await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible();
+      await expectVisibleLogoutButton(page);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
       await logout(page);
     });
@@ -1372,7 +1682,7 @@ test.describe('real staging release readiness', () => {
       await expect(page.getByTestId('page-fallback')).toHaveCount(0);
       expect(requestCount, 'retry must create exactly one fresh profile request after the first failure').toBe(2);
       expect(observation.candidates, 'semantic first-attempt rejection must not create a network-error exemption').toHaveLength(0);
-      await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible();
+      await expectVisibleLogoutButton(page);
       confirmed = true;
     } finally {
       await page.unroute('**/rest/v1/profiles*');
@@ -1507,6 +1817,108 @@ test.describe('real staging release readiness', () => {
     await login(page, accounts.admin.loginName, accounts.admin.password);
     await expectMembership(page, /관리자/);
     await expectUiBuilderStagingReadiness(page, (route) => expectHealthyRoute(page, route));
+  });
+
+  test('admin: full product staging journey preserves navigation, reload, and strict session loss', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await login(page, accounts.admin.loginName, accounts.admin.password);
+    await expectMembership(page, /관리자/);
+    const nav = getResearchReloadAppNavigation(page);
+    await expect(
+      nav,
+      'authenticated app-shell navigation must be visible for the full admin journey',
+    ).toBeVisible();
+
+    const openMenuRoute = async (
+      groupId: 'assets' | 'technical' | 'information' | 'settings',
+      label: string,
+      expectedRoute: string,
+    ) => {
+      const group = APP_NAVIGATION.find((candidate) => candidate.id === groupId);
+      const target = group?.menu?.find((item) => item.label === label);
+      if (!group || !target) throw new Error(`missing full-product navigation target: ${groupId}/${label}`);
+      expect(target.href, `unexpected route for ${groupId}/${label}`).toBe(expectedRoute);
+      await settle(page);
+      await nav.getByRole('button', { name: group.label, exact: true }).click();
+      const item = page.getByRole('menuitem', { name: label, exact: true });
+      await expect(item).toBeVisible();
+      await expectNavigationTransition(page, target.href, async () => {
+        await item.click();
+      });
+    };
+
+    // Real unified-search user path. This intentionally observes the live staging
+    // response instead of installing a route fixture.
+    await openMenuRoute('assets', '통합검색', '/stocks');
+    const searchInput = page.getByRole('combobox', { name: '통합 자산 검색' });
+    await expect(searchInput).toBeEditable();
+    const usTab = page.getByRole('button', { name: '미국', exact: true });
+    await expect(usTab).toBeVisible();
+    await usTab.click();
+    await expect(usTab).toHaveAttribute('aria-pressed', 'true');
+    await searchInput.fill('');
+    const searchResponsePromise = page.waitForResponse((response) => {
+      try {
+        const url = new URL(response.url());
+        return response.request().method() === 'GET'
+          && url.pathname === '/api/search/suggest'
+          && url.searchParams.get('market') === 'US'
+          && url.searchParams.get('q') === 'AAPL';
+      } catch {
+        return false;
+      }
+    }, { timeout: 5_000 });
+    await searchInput.fill('AAPL');
+    const searchResponse = await searchResponsePromise;
+    expect(searchResponse.status(), 'full-product unified search must return HTTP 200').toBe(200);
+    const searchPayload = await searchResponse.json().catch(() => ({})) as {
+      ok?: boolean;
+      results?: Array<Record<string, unknown>>;
+    };
+    expect(searchPayload.ok, 'full-product unified search must return an explicit successful envelope').toBe(true);
+    const searchResults = Array.isArray(searchPayload.results) ? searchPayload.results : [];
+    expect(
+      searchResults.some((result) => [result.productCode, result.ticker, result.symbol, result.baseSymbol]
+        .map(normalizedAssetSymbol)
+        .includes('AAPL')),
+      'full-product unified search must contain the exact AAPL identity',
+    ).toBe(true);
+    await expect.poll(async () => (await page.getByRole('option').allTextContents())
+      .map(normalizedAssetSymbol)
+      .some((text) => text.includes('AAPL')), {
+      timeout: 5_000,
+      intervals: [100, 200, 400, 800],
+    }).toBe(true);
+    await selectVisibleUsAaplForAnalysis(page);
+
+    await openMenuRoute('technical', 'AI 차트', '/ai-chart');
+    await waitForUsableAiChart(page, Date.now());
+
+    await openMenuRoute('settings', '계정', '/account');
+    await waitForPendingPersonalIntegrationReads(page);
+
+    await openMenuRoute('information', '포트폴리오', '/portfolio');
+
+    await openMenuRoute('technical', '모의매매', '/paper-trading');
+    await expect(page.locator('body')).toContainText(/모의|paper/i);
+
+    await openMenuRoute('information', '연구센터', '/research-center');
+    await expect(page.getByTestId('capability-denied')).toHaveCount(0);
+    await expect(page.locator('body')).not.toBeEmpty();
+
+    await reloadResearchCenterWithAdminSessionProof(page, nav);
+
+    await openMenuRoute('settings', '계정', '/account');
+    await waitForPendingPersonalIntegrationReads(page);
+    await openMenuRoute('information', '연구센터', '/research-center');
+
+    await logout(page);
+    await page.goto('/research-center', { waitUntil: 'domcontentloaded' });
+    await expect(loginSubmitButton(page)).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('nav')).toHaveCount(0);
+    const protectedAfterSessionLoss = await page.request.get('/api/paper-journal/snapshot');
+    expect([401, 403], 'protected API must remain denied after strict full-product session loss')
+      .toContain(protectedAfterSessionLoss.status());
   });
 
   const certificationRoutes = [

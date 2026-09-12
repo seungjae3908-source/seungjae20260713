@@ -5,8 +5,11 @@ on:
     paths:
       - '.github/workflows/public-forward-liquidity-v3-independence.yml'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-v3-independence-binding.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-multi-lane-policy-v1.mjs'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-multi-lane-prospective-policy-v1.json'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-v3-independence-binding.test.mjs'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-v3-independence-workflow.test.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-multi-lane-policy-v1.test.mjs'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-independence-audit.mjs'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-ingest-receipt-chain.mjs'
       - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-independence-audit.mjs'
@@ -49,11 +52,13 @@ jobs:
         run: |
           set -euo pipefail
           node --check market-intelligence-sidecar/src/public-forward-liquidity-v3-independence-binding.mjs
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-multi-lane-policy-v1.mjs
           node --check market-intelligence-sidecar/tests/public-forward-liquidity-v3-independence-binding.test.mjs
           node --check market-intelligence-sidecar/tests/public-forward-liquidity-v3-independence-workflow.test.mjs
           node --test \
             market-intelligence-sidecar/tests/public-forward-liquidity-v3-independence-binding.test.mjs \
             market-intelligence-sidecar/tests/public-forward-liquidity-v3-independence-workflow.test.mjs \
+            market-intelligence-sidecar/tests/public-forward-liquidity-multi-lane-policy-v1.test.mjs \
             market-intelligence-sidecar/tests/public-forward-liquidity-ingest-receipt-chain.test.mjs \
             market-intelligence-sidecar/tests/public-forward-liquidity-independence-audit.test.mjs
 
@@ -176,6 +181,7 @@ jobs:
           import { createHash } from 'node:crypto';
           import { readFile, writeFile } from 'node:fs/promises';
           import { join } from 'node:path';
+          import { PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1 as phase2Policy } from './market-intelligence-sidecar/src/public-forward-liquidity-multi-lane-policy-v1.mjs';
           const root = process.env.STATE_ROOT;
           const sourceRun = JSON.parse(await readFile(process.env.RUNNER_TEMP + '/source-run.json', 'utf8'));
           const inventory = JSON.parse(await readFile(join(root, 'portable-source-inventory.json'), 'utf8'));
@@ -244,6 +250,7 @@ jobs:
             sourceInventoryDigest: inventory.inventoryDigest,
             targetSlotIndex: inventory.targetSlotIndex,
             genuineScheduledSlotN: inventory.genuineScheduledSlotN,
+            genuineScheduledLaneReceiptN: inventory.genuineScheduledLaneReceiptN,
           })}\n`);
           NODE
 
@@ -292,13 +299,14 @@ jobs:
           import { createHash } from 'node:crypto';
           import { readFile, writeFile } from 'node:fs/promises';
           import { join } from 'node:path';
+          import { PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1 as phase2Policy } from './market-intelligence-sidecar/src/public-forward-liquidity-multi-lane-policy-v1.mjs';
           const root = process.env.STATE_ROOT;
           const inventory = JSON.parse(await readFile(join(root, 'portable-source-inventory.json'), 'utf8'));
           const result = JSON.parse(await readFile(join(root, 'independence-report.json'), 'utf8'));
           const index = JSON.parse(await readFile(join(root, 'v3-independent-split-index.json'), 'utf8'));
           if (result.status !== 'PRESENT' || !result.audit || !result.splitSource
               || result.audit.counts.RAW_ACCEPTED_N !== inventory.acceptedN
-              || result.audit.counts.INDEPENDENT_N !== index.effectiveIndependentN
+              || result.audit.counts.INDEPENDENT_N !== index.preCapIndependentN
               || result.splitSource.splitAssignmentPerformed !== false
               || result.splitSource.oosValidationComplete !== false
               || result.splitSource.calibrationArtifactProduced !== false
@@ -313,6 +321,33 @@ jobs:
               || index.fullCostReady !== false) {
             throw new Error('V3_INDEPENDENCE_AUTHORITY_ESCALATION');
           }
+          if (!Array.isArray(result.audit.crossLanePairAssessments)
+              || !Array.isArray(result.audit.dependencyComponents)
+              || index.maxCreditPerLanePerSlot !== 1
+              || index.maxTotalCreditPerSlot !== 2
+              || index.maxCreditPerDependencyComponent !== 1
+              || index.utc27AdditionalIndependentCredit !== 0
+              || index.retroactiveMultiLaneCreditAllowed !== false
+              || !index.laneSplitSideCounts
+              || !Array.isArray(index.scopeCells)
+              || !Array.isArray(index.capRejections)
+              || index.effectiveIndependentN > index.preCapIndependentN) {
+            throw new Error('PHASE2_INDEPENDENCE_EVIDENCE_INVALID');
+          }
+          if (index.multiLanePolicyVersion !== null
+              && (index.multiLanePolicyVersion !== phase2Policy.policyVersion
+                || index.multiLanePolicyDigest !== phase2Policy.policyDigest
+                || index.laneRegistryDigest !== phase2Policy.laneRegistryDigest
+                || index.dependencyPolicyDigest !== phase2Policy.dependencyPolicyDigest
+                || index.balancingPolicyDigest !== phase2Policy.balancingPolicyDigest
+                || index.approvedCheckpointDigest !== phase2Policy.approvedCheckpointDigest
+                || index.approvedCheckpointArtifactId !== phase2Policy.config.approvedCheckpoint.authoritativeIndexArtifactId
+                || index.approvedCheckpointArtifactDigest !== phase2Policy.config.approvedCheckpoint.authoritativeIndexArtifactDigest
+                || !index.preCutoverIndexFreeze
+                || !/^[a-f0-9]{64}$/u.test(String(index.preCutoverIndexFreeze.preCutoverIndexDigest ?? ''))
+                || index.preCutoverIndexFreeze.retroactiveMultiLaneCreditAllowed !== false)) {
+            throw new Error('PHASE2_POLICY_OR_CUTOVER_BINDING_INVALID');
+          }
           const body = {
             schemaVersion: 'public-forward-liquidity-v3-authoritative-independence-summary-v1',
             producerSha: process.env.GITHUB_SHA,
@@ -323,13 +358,35 @@ jobs:
             targetSlotIndex: inventory.targetSlotIndex,
             genuineScheduledSlotN: inventory.genuineScheduledSlotN,
             rawAcceptedN: result.audit.counts.RAW_ACCEPTED_N,
-            effectiveIndependentN: result.audit.counts.INDEPENDENT_N,
-            independentBuyN: result.audit.counts.INDEPENDENT_BUY_N,
-            independentSellN: result.audit.counts.INDEPENDENT_SELL_N,
+            preCapIndependentN: index.preCapIndependentN,
+            effectiveIndependentN: index.effectiveIndependentN,
+            independentBuyN: index.counts.TRAIN_BUY + index.counts.VALIDATION_BUY + index.counts.OOS_BUY,
+            independentSellN: index.counts.TRAIN_SELL + index.counts.VALIDATION_SELL + index.counts.OOS_SELL,
             independenceAuditDigest: result.audit.auditDigest,
             independentSplitSourceDigest: result.splitSource.splitSourceDigest,
             v3IndependentSplitIndexDigest: index.indexDigest,
             frozenSplitCounts: index.counts,
+            multiLanePolicyVersion: index.multiLanePolicyVersion,
+            multiLanePolicyDigest: index.multiLanePolicyDigest,
+            laneRegistryDigest: index.laneRegistryDigest,
+            dependencyPolicyDigest: index.dependencyPolicyDigest,
+            balancingPolicyDigest: index.balancingPolicyDigest,
+            approvedCheckpointDigest: index.approvedCheckpointDigest,
+            approvedCheckpointArtifactId: index.approvedCheckpointArtifactId,
+            approvedCheckpointArtifactDigest: index.approvedCheckpointArtifactDigest,
+            preCutoverIndexFreeze: index.preCutoverIndexFreeze,
+            laneSplitSideCounts: index.laneSplitSideCounts,
+            scopeCells: index.scopeCells,
+            capRejections: index.capRejections,
+            laneSlotCapRejectedN: index.laneSlotCapRejectedN,
+            globalSlotCapRejectedN: index.globalSlotCapRejectedN,
+            crossLanePairAssessments: result.audit.crossLanePairAssessments,
+            dependencyComponents: result.audit.dependencyComponents,
+            maxCreditPerLanePerSlot: index.maxCreditPerLanePerSlot,
+            maxTotalCreditPerSlot: index.maxTotalCreditPerSlot,
+            maxCreditPerDependencyComponent: index.maxCreditPerDependencyComponent,
+            utc27AdditionalIndependentCredit: index.utc27AdditionalIndependentCredit,
+            retroactiveMultiLaneCreditAllowed: false,
             frozenV3SplitIndexPresent: true,
             v2SplitReceiptPresent: false,
             oosOutcomeCredit: 0,

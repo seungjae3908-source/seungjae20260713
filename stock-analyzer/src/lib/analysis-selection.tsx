@@ -41,14 +41,17 @@ export type AnalysisSelection = {
 const STORAGE_KEY = 'sa-analysis-selection-v1';
 
 function finite(value: unknown): number | undefined {
-  const parsed = Number(value);
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  if (!normalized) return undefined;
+  const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function finiteOrNull(value: unknown): number | null {
-  if (value == null) return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  const parsed = finite(value);
+  return parsed == null ? null : parsed;
 }
 
 function cleanString(value: unknown, max = 120): string {
