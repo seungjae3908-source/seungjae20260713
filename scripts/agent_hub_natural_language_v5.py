@@ -30,7 +30,7 @@ RESUME_TERMS = (
     "resume",
     "resume task",
 )
-TERMINAL_STATUSES = {"completed", "expired", "superseded", "no_action"}
+TERMINAL_STATUSES = {"completed", "blocked", "cancelled", "expired", "superseded", "no_action"}
 
 # Task-domain intent must win over wording that merely names the Agent/Codex
 # persona. Otherwise commands such as "Codex Agent로 AI차트 오류 잡아" are
@@ -285,6 +285,19 @@ def self_test() -> int:
     assert "[USER_INTENT]" in format_intent_for_coordinator(resumed)
     assert "[HUB_COMMAND]" not in format_intent_for_coordinator(resumed)
 
+    for terminal_status in ("blocked", "cancelled"):
+        terminal_task = {**state, "status": terminal_status}
+        try:
+            compile_natural_language_command(
+                command="이어서 해",
+                repository="owner/repo",
+                resumable_tasks=[terminal_task],
+            )
+        except NaturalLanguageGatewayError as exc:
+            assert "no resumable task" in str(exc)
+        else:
+            raise AssertionError(f"{terminal_status} task was resumed")
+
     rogue = {**state, "worker": "rogue-worker"}
     try:
         compile_natural_language_command(
@@ -356,6 +369,8 @@ def self_test() -> int:
         "agent_hub_self_route": hub_self.worker_hint,
         "resume_task": resumed.task_id,
         "authority": resumed.authority,
+        "blocked_resume_fail_closed": True,
+        "cancelled_resume_fail_closed": True,
         "unknown_resume_worker_fail_closed": True,
         "missing_resume_worker_fail_closed": True,
         "missing_resume_branch_fail_closed": True,
