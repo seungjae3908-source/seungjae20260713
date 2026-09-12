@@ -126,6 +126,26 @@ function exactFactoryCandidate(paperRuntimeResult, expectedCandidateIdentity) {
   return matches[0];
 }
 
+function singleFactoryCandidateIdentity(paperRuntimeResult) {
+  if (!safeFactoryEnvelope(paperRuntimeResult)) {
+    throw new Error("PAPER_STAGE_FACTORY_SAFETY_VIOLATION");
+  }
+  if (!Array.isArray(paperRuntimeResult?.paperBridge?.candidates)) {
+    throw new Error("PAPER_STAGE_FACTORY_CANDIDATES_REQUIRED");
+  }
+  factoryAdmissionMeasurement(paperRuntimeResult);
+  if (paperRuntimeResult.paperBridge.candidates.length !== 1) {
+    throw new Error(paperRuntimeResult.paperBridge.candidates.length === 0
+      ? "PAPER_STAGE_FACTORY_SINGLE_CANDIDATE_MISSING"
+      : "PAPER_STAGE_FACTORY_SINGLE_CANDIDATE_AMBIGUOUS");
+  }
+  const [candidate] = paperRuntimeResult.paperBridge.candidates;
+  if (!safeCandidateEnvelope(candidate)) {
+    throw new Error("PAPER_STAGE_FACTORY_CANDIDATE_SAFETY_VIOLATION");
+  }
+  return candidateIdentity(candidate);
+}
+
 function candidateBoundAdmissionResult(paperRuntimeResult, expectedCandidateIdentity) {
   const admission = factoryAdmissionMeasurement(paperRuntimeResult);
   exactFactoryCandidate(paperRuntimeResult, expectedCandidateIdentity);
@@ -231,6 +251,18 @@ export function reconcileAuthoritativePaperRuntimeStageEvidenceV1({
     exchangeRequestSent: false,
     productionMutationAllowed: false,
     profitabilityClaimAllowed: false,
+  });
+}
+
+export function reconcileSingleAuthoritativePaperRuntimeCandidateStageEvidenceV1({
+  paperRuntimeResult,
+  recurringCycleResult,
+} = {}) {
+  const expectedCandidateIdentity = singleFactoryCandidateIdentity(paperRuntimeResult);
+  return reconcileAuthoritativePaperRuntimeStageEvidenceV1({
+    paperRuntimeResult,
+    recurringCycleResult,
+    expectedCandidateIdentity,
   });
 }
 
