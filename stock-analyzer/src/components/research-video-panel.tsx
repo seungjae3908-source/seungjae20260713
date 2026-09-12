@@ -145,10 +145,14 @@ function parseRuntimeEvidence(value: unknown): RuntimeEvidence | null {
   return value as unknown as RuntimeEvidence;
 }
 
+function uniqueSorted(values: string[]) {
+  return [...new Set(values.map((value) => value.trim().toUpperCase()).filter(Boolean))].sort();
+}
+
 function describeStrategyMiningState(evidence: RuntimeEvidence | null) {
   if (!evidence) return 'UNKNOWN — strategy mining evidence missing != 0';
   if (evidence.sourceCount === 0) return 'NOT_APPLICABLE — measured video sourceCount 0';
-  const transcriptStatuses = [...new Set(evidence.records.map((record) => record.transcriptStatus.trim().toUpperCase()).filter(Boolean))].sort();
+  const transcriptStatuses = uniqueSorted(evidence.records.map((record) => record.transcriptStatus));
   if (transcriptStatuses.includes('AVAILABLE')) {
     return 'UNKNOWN — authorized transcript exists; source-bound strategy mining evidence not connected';
   }
@@ -159,6 +163,38 @@ function describeStrategyMiningState(evidence: RuntimeEvidence | null) {
     return `BLOCKED_TRANSCRIPT — ${transcriptStatuses.join(' / ')}; authorized transcript required`;
   }
   return 'UNKNOWN — transcript state missing != 0';
+}
+
+function describeRecordStrategyMiningState(record: RuntimeRecord) {
+  return record.transcriptStatus === 'AVAILABLE'
+    ? 'UNKNOWN — authorized transcript exists; source-bound strategy mining evidence not connected'
+    : `BLOCKED_TRANSCRIPT_${record.transcriptStatus} — authorized transcript required; no caption bypass`;
+}
+
+function describeTranscriptAccessState(evidence: RuntimeEvidence | null) {
+  if (!evidence) return '승인된 입력만 허용';
+  if (evidence.sourceCount === 0) return 'NOT_APPLICABLE — measured video sourceCount 0';
+  const statuses = uniqueSorted(evidence.records.map((record) => record.transcriptStatus));
+  return statuses.length === 1 ? statuses[0] : `MULTI_SOURCE — ${statuses.join(' / ')}`;
+}
+
+function describeTranscriptSegmentState(evidence: RuntimeEvidence | null) {
+  if (!evidence) return 'UNKNOWN — missing != 0';
+  if (evidence.sourceCount === 0) return 'NOT_APPLICABLE — measured video sourceCount 0';
+  const statuses = uniqueSorted(evidence.records.map((record) => record.transcriptStatus));
+  if (statuses.length === 1) {
+    return statuses[0] === 'AVAILABLE'
+      ? 'UNKNOWN — authorized transcript segment evidence not connected'
+      : `UNKNOWN — transcript ${statuses[0]}; segment count not measured`;
+  }
+  return `UNKNOWN — multi-source transcript states ${statuses.join(' / ')}; segment count not measured`;
+}
+
+function describeSourceAuthorityState(evidence: RuntimeEvidence | null) {
+  if (!evidence) return 'UNKNOWN';
+  if (evidence.sourceCount === 0) return 'NOT_APPLICABLE — measured video sourceCount 0';
+  const tiers = uniqueSorted(evidence.records.map((record) => record.sourceTrustTier));
+  return tiers.length === 1 ? tiers[0] : `MULTI_SOURCE — ${tiers.join(' / ')}`;
 }
 
 const truthBadges = [
@@ -194,7 +230,6 @@ export function ResearchVideoPanel() {
     return () => controller.abort();
   }, []);
 
-  const latestRecord = runtimeEvidence?.records[0] ?? null;
   const runtimeState = runtimeEvidence
     ? `MEASURED · sanitized reader connected · ${runtimeEvidence.sourceCount} source${runtimeEvidence.sourceCount === 1 ? '' : 's'}`
     : readerSettled
@@ -204,11 +239,9 @@ export function ResearchVideoPanel() {
     ? `${runtimeEvidence.sourceCount} — measured sanitized public-provider result`
     : 'UNKNOWN — missing runtime snapshot != 0';
   const strategyMiningState = describeStrategyMiningState(runtimeEvidence);
-  const transcriptSegmentState = latestRecord
-    ? latestRecord.transcriptStatus === 'AVAILABLE'
-      ? 'UNKNOWN — authorized transcript segment evidence not connected'
-      : `UNKNOWN — transcript ${latestRecord.transcriptStatus}; segment count not measured`
-    : 'UNKNOWN — missing != 0';
+  const transcriptAccessState = describeTranscriptAccessState(runtimeEvidence);
+  const transcriptSegmentState = describeTranscriptSegmentState(runtimeEvidence);
+  const sourceAuthorityState = describeSourceAuthorityState(runtimeEvidence);
   const compilerState = runtimeEvidence?.records.some((record) => record.transcriptStatus === 'AVAILABLE')
     ? 'NOT_EVALUATED — source-bound TESTABLE strategy evidence required'
     : 'BLOCKED — authorized transcript required before strategy extraction/compiler';
@@ -217,7 +250,7 @@ export function ResearchVideoPanel() {
     ['Video discovery', '수동 / 공식 public API runtime'],
     ['Provider runtime', runtimeEvidence ? `${runtimeEvidence.provider} / ${runtimeEvidence.requestMode}` : 'UNKNOWN — sanitized runtime snapshot unavailable'],
     ['Runtime evidence', runtimeState],
-    ['Transcript access', latestRecord ? latestRecord.transcriptStatus : '승인된 입력만 허용'],
+    ['Transcript access', transcriptAccessState],
     ['Economic Evidence', '0'],
     ['Execution Authority', 'NONE'],
   ] as const;
@@ -240,7 +273,7 @@ export function ResearchVideoPanel() {
       title: 'Transcript',
       testId: 'video-transcript-state',
       rows: [
-        ['상태', latestRecord?.transcriptStatus ?? 'UNKNOWN — authorized transcript evidence 없음'],
+        ['상태', runtimeEvidence ? transcriptAccessState : 'UNKNOWN — authorized transcript evidence 없음'],
         ['권한', '승인된 transcript만 ingest'],
         ['Segment', transcriptSegmentState],
         ['Timestamp coverage', 'UNKNOWN_TIMESTAMP'],
@@ -267,7 +300,7 @@ export function ResearchVideoPanel() {
         ['Independent sources', 'UNKNOWN — economic N 아님'],
         ['Academic / official', 'NOT_CHECKED'],
         ['Contradictions', 'UNKNOWN'],
-        ['Source authority', latestRecord?.sourceTrustTier ?? 'UNKNOWN'],
+        ['Source authority', sourceAuthorityState],
         ['Snapshot provenance', runtimeEvidence ? `${runtimeEvidence.snapshotProvenance.schemaVersion} · ${runtimeEvidence.snapshotProvenance.sourceHeadSha.slice(0, 12)} · ${runtimeEvidence.snapshotProvenance.observedAt}` : 'UNKNOWN — sanitized provenance unavailable'],
       ],
     },
@@ -336,14 +369,22 @@ export function ResearchVideoPanel() {
         <div className="grid gap-3 lg:grid-cols-2">
           <article className="min-w-0 rounded-2xl border border-card-border bg-card p-4" data-testid="video-detail-empty-state">
             <h2 className="font-semibold">Video detail</h2>
-            {latestRecord ? (
-              <dl className="mt-2 space-y-2 text-sm">
-                <div><dt className="text-muted-foreground">Title</dt><dd className="break-words font-medium">{latestRecord.title}</dd></div>
-                <div><dt className="text-muted-foreground">Channel / Publisher</dt><dd className="break-words font-medium">{latestRecord.channelOrPublisher ?? 'UNKNOWN'}</dd></div>
-                <div><dt className="text-muted-foreground">Transcript</dt><dd className="font-medium">{latestRecord.transcriptStatus}</dd></div>
-                <div><dt className="text-muted-foreground">Strategy mining</dt><dd className="break-words font-medium">{strategyMiningState}</dd></div>
-                <div><dt className="text-muted-foreground">Provenance</dt><dd className="break-words font-medium">{runtimeEvidence?.providerAccess} · {latestRecord.contentAuthority} · {runtimeEvidence?.snapshotProvenance.schemaVersion} · {runtimeEvidence?.snapshotProvenance.sourceHeadSha.slice(0, 12)}</dd></div>
-              </dl>
+            {runtimeEvidence?.records.length ? (
+              <div className="mt-3 space-y-3">
+                {runtimeEvidence.records.map((record, index) => (
+                  <div key={record.videoId} className="rounded-xl border border-card-border bg-muted/30 p-3" data-testid={`video-detail-record-${index}`}>
+                    <div className="text-xs text-muted-foreground">Source {index + 1} / {runtimeEvidence.sourceCount}</div>
+                    <dl className="mt-2 space-y-2 text-sm">
+                      <div><dt className="text-muted-foreground">Title</dt><dd className="break-words font-medium">{record.title}</dd></div>
+                      <div><dt className="text-muted-foreground">Channel / Publisher</dt><dd className="break-words font-medium">{record.channelOrPublisher ?? 'UNKNOWN'}</dd></div>
+                      <div><dt className="text-muted-foreground">Transcript</dt><dd className="font-medium">{record.transcriptStatus}</dd></div>
+                      <div><dt className="text-muted-foreground">Source authority</dt><dd className="break-words font-medium">{record.sourceTrustTier}</dd></div>
+                      <div><dt className="text-muted-foreground">Strategy mining</dt><dd className="break-words font-medium">{describeRecordStrategyMiningState(record)}</dd></div>
+                      <div><dt className="text-muted-foreground">Provenance</dt><dd className="break-words font-medium">{runtimeEvidence.providerAccess} · {record.contentAuthority} · {runtimeEvidence.snapshotProvenance.schemaVersion} · {runtimeEvidence.snapshotProvenance.sourceHeadSha.slice(0, 12)}</dd></div>
+                    </dl>
+                  </div>
+                ))}
+              </div>
             ) : runtimeEvidence ? (
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
                 bounded official/public discovery가 완료되어 sourceCount 0이 실제 측정되었습니다. 이 0은 missing 추론이 아니라 연결된 sanitized runtime 결과입니다.
