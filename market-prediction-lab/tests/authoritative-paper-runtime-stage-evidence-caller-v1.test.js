@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   AUTHORITATIVE_PAPER_RUNTIME_STAGE_EVIDENCE_CALLER_VERSION,
+  adoptExistingAuthoritativePaperRuntimeStageEvidenceV1,
   callAuthoritativePaperRuntimeWithStageEvidenceV1,
   reconcileAuthoritativePaperRuntimeStageEvidenceV1,
   reconcileSingleAuthoritativePaperRuntimeCandidateStageEvidenceV1,
@@ -193,6 +194,65 @@ test("single-candidate consumer helper derives the authoritative candidate ident
   assert.equal(result.executionRealismCredit, 0);
   assert.equal(result.profitabilityCredit, 0);
   assert.equal(result.executionAuthority, "NONE");
+});
+
+test("existing-result adoption seam consumes already-produced runtime and recurring results without dispatch or economic credit", () => {
+  const original = factoryResult();
+  const result = adoptExistingAuthoritativePaperRuntimeStageEvidenceV1({
+    paperRuntimeResult: original,
+    recurringCycleResult: recurringResult(),
+  });
+  assert.equal(original.stageMeasurements.find((row) => row.stage === "Entry")?.status, "UNKNOWN");
+  assert.equal(result.stageEvidenceConnection.status, "RECONCILED");
+  assert.equal(result.stageEvidenceConnection.candidateId, CANDIDATE_ID);
+  assert.equal(result.stageMeasurements.find((row) => row.stage === "Entry")?.status, "MEASURED");
+  assert.equal(result.stageMeasurements.find((row) => row.stage === "Position")?.status, "MEASURED");
+  assert.equal(result.stageMeasurements.find((row) => row.stage === "Settlement")?.status, "MEASURED");
+  assert.equal(result.sampleCredit, 0);
+  assert.equal(result.executionRealismCredit, 0);
+  assert.equal(result.profitabilityCredit, 0);
+  assert.equal(result.executionAuthority, "NONE");
+  assert.equal(result.stageEvidenceConnection.runtimeActivationAllowed, false);
+  assert.equal(result.stageEvidenceConnection.scheduleActivationAllowed, false);
+  assert.equal(result.stageEvidenceConnection.dispatchAllowed, false);
+});
+
+test("existing-result adoption seam fails closed on missing or ambiguous candidate identity without inventing lifecycle counts", () => {
+  const base = factoryResult();
+  const cases = [
+    {
+      runtime: Object.freeze({
+        ...base,
+        paperBridge: Object.freeze({ ...base.paperBridge, candidates: Object.freeze([]), eligible: 0 }),
+      }),
+      blocker: "PAPER_STAGE_FACTORY_SINGLE_CANDIDATE_MISSING",
+    },
+    {
+      runtime: Object.freeze({
+        ...base,
+        paperBridge: Object.freeze({ ...base.paperBridge, candidates: Object.freeze([candidate(), candidate()]), eligible: 2 }),
+      }),
+      blocker: "PAPER_STAGE_FACTORY_SINGLE_CANDIDATE_AMBIGUOUS",
+    },
+  ];
+  for (const { runtime, blocker } of cases) {
+    const result = adoptExistingAuthoritativePaperRuntimeStageEvidenceV1({
+      paperRuntimeResult: runtime,
+      recurringCycleResult: recurringResult(),
+    });
+    assert.equal(result.stageEvidenceConnection.status, "BLOCKED");
+    assert.equal(result.stageEvidenceConnection.blocker, blocker);
+    assert.equal(result.stageMeasurements.find((row) => row.stage === "Entry")?.status, "UNKNOWN");
+    assert.equal(result.entryCount, null);
+    assert.equal(result.settlementCount, null);
+    assert.equal(result.stageEvidenceConnection.sampleCredit, 0);
+    assert.equal(result.stageEvidenceConnection.executionRealismCredit, 0);
+    assert.equal(result.stageEvidenceConnection.profitabilityCredit, 0);
+    assert.equal(result.executionAuthority, "NONE");
+    assert.equal(result.stageEvidenceConnection.runtimeActivationAllowed, false);
+    assert.equal(result.stageEvidenceConnection.scheduleActivationAllowed, false);
+    assert.equal(result.stageEvidenceConnection.dispatchAllowed, false);
+  }
 });
 
 test("single-candidate consumer helper rejects missing or ambiguous Paper candidates instead of guessing identity", () => {
