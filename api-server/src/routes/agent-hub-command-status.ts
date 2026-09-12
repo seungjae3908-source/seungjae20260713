@@ -51,6 +51,8 @@ function reportState(status: string): AgentHubCommandExecutionState | null {
     case 'blocked': return 'BLOCKED';
     case 'waiting_approval': return 'WAITING_APPROVAL';
     case 'partial': return 'IN_PROGRESS';
+    case 'stale': return 'NEEDS_CONTEXT';
+    case 'expired': return 'BLOCKED';
     default: return null;
   }
 }
