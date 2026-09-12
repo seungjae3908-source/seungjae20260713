@@ -14,6 +14,8 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Sequence
 
+from agent_hub_policy import PolicyError, load_workers
+
 GATEWAY_VERSION = "agent-hub-natural-language-v5.0"
 MAX_COMMAND_CHARS = 1200
 MAX_GOAL_CHARS = 800
@@ -66,17 +68,33 @@ def _valid_repository(repository: str) -> str:
     return value
 
 
+def _canonical_worker_ids() -> frozenset[str]:
+    """Load worker ids from the authoritative registry; never invent aliases."""
+    try:
+        workers = load_workers()
+    except PolicyError as exc:
+        raise NaturalLanguageGatewayError("canonical worker registry is unavailable") from exc
+    if not workers:
+        raise NaturalLanguageGatewayError("canonical worker registry is empty")
+    return frozenset(workers)
+
+
 def _is_resume(command: str) -> bool:
     folded = command.casefold()
     return any(term.casefold() in folded for term in RESUME_TERMS)
 
 
-def _route_hint(command: str) -> str:
+def _route_hint(command: str, allowed_workers: frozenset[str]) -> str:
     folded = command.casefold()
     for worker, keywords in ROUTES:
         if any(keyword.casefold() in folded for keyword in keywords):
+            if worker not in allowed_workers:
+                raise NaturalLanguageGatewayError(f"route worker is not registered: {worker}")
             return worker
-    return "integration-planner"
+    fallback = "integration-planner"
+    if fallback not in allowed_workers:
+        raise NaturalLanguageGatewayError(f"route worker is not registered: {fallback}")
+    return fallback
 
 
 def _action_hint(command: str) -> str:
@@ -88,10 +106,15 @@ def _action_hint(command: str) -> str:
     return "inspect_repository"
 
 
-def _normalized_task(task: Mapping[str, Any]) -> dict[str, Any]:
+def _normalized_task(task: Mapping[str, Any], allowed_workers: frozenset[str]) -> dict[str, Any]:
     task_id = _clean(task.get("task_id"), 180)
     if not task_id or task_id == "none":
         raise NaturalLanguageGatewayError("resumable task requires task_id")
+    worker = _clean(task.get("worker"), 80)
+    if not worker or worker == "none":
+        raise NaturalLanguageGatewayError("resumable task requires registered worker")
+    if worker not in allowed_workers:
+        raise NaturalLanguageGatewayError(f"resumable task worker is not registered: {worker}")
     remaining_raw = task.get("remaining_steps") or []
     if isinstance(remaining_raw, str):
         try:
@@ -109,7 +132,7 @@ def _normalized_task(task: Mapping[str, Any]) -> dict[str, Any]:
         "current_step": _clean(task.get("current_step"), 400) or "none",
         "first_zero": _clean(task.get("first_zero"), 400) or "none",
         "remaining_steps": [_clean(item, 400) for item in parsed[:24] if _clean(item, 400)],
-        "worker": _clean(task.get("worker"), 80) or "integration-planner",
+        "worker": worker,
         "branch": _clean(task.get("branch"), 180) or "none",
         "head_sha": _clean(task.get("head_sha"), 80) or "none",
         "pr_number": _clean(task.get("pr_number"), 24) or "none",
@@ -151,11 +174,12 @@ def compile_natural_language_command(
     if len(resumable_tasks) > MAX_TASKS:
         raise NaturalLanguageGatewayError("too many resumable tasks")
 
+    allowed_workers = _canonical_worker_ids()
     explicit_task = _clean(task_id, 180) if task_id else ""
     resume = _is_resume(normalized) or bool(explicit_task)
     selected: dict[str, Any] | None = None
 
-    tasks = [_normalized_task(item) for item in resumable_tasks]
+    tasks = [_normalized_task(item, allowed_workers) for item in resumable_tasks]
     if resume:
         candidates = [item for item in tasks if item["status"] not in TERMINAL_STATUSES]
         if explicit_task:
@@ -176,7 +200,7 @@ def compile_natural_language_command(
         resume_context = selected
     else:
         goal = normalized[:MAX_GOAL_CHARS]
-        worker_hint = _route_hint(normalized)
+        worker_hint = _route_hint(normalized, allowed_workers)
         selected_task_id = "none"
         mode = "new"
         resume_context = {}
@@ -255,6 +279,30 @@ def self_test() -> int:
     assert "[USER_INTENT]" in format_intent_for_coordinator(resumed)
     assert "[HUB_COMMAND]" not in format_intent_for_coordinator(resumed)
 
+    rogue = {**state, "worker": "rogue-worker"}
+    try:
+        compile_natural_language_command(
+            command="이어서 해",
+            repository="owner/repo",
+            resumable_tasks=[rogue],
+        )
+    except NaturalLanguageGatewayError as exc:
+        assert "not registered" in str(exc)
+    else:
+        raise AssertionError("unregistered resumable worker was accepted")
+
+    missing_worker = {key: value for key, value in state.items() if key != "worker"}
+    try:
+        compile_natural_language_command(
+            command="이어서 해",
+            repository="owner/repo",
+            resumable_tasks=[missing_worker],
+        )
+    except NaturalLanguageGatewayError as exc:
+        assert "requires registered worker" in str(exc)
+    else:
+        raise AssertionError("missing resumable worker was silently defaulted")
+
     ambiguous = [state, {**state, "task_id": "ai-chart"}]
     try:
         compile_natural_language_command(command="계속 진행", repository="owner/repo", resumable_tasks=ambiguous)
@@ -278,6 +326,8 @@ def self_test() -> int:
         "agent_hub_self_route": hub_self.worker_hint,
         "resume_task": resumed.task_id,
         "authority": resumed.authority,
+        "unknown_resume_worker_fail_closed": True,
+        "missing_resume_worker_fail_closed": True,
         "ambiguous_resume_fail_closed": True,
     }, ensure_ascii=False, sort_keys=True))
     return 0
