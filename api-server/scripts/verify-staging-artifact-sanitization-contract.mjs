@@ -71,11 +71,24 @@ fixture((root) => {
 });
 
 fixture((root) => {
+  const video = write(root, 'playwright-test-results/case/video.webm', Buffer.concat([
+    Buffer.from([0, 1, 2, 3]),
+    Buffer.from('temporary-user@example.test'),
+  ]));
+  const screenshot = write(root, 'playwright-test-results/case/test-failed-1.png', Buffer.from([0, 1, 2, 3, 4]));
+  const result = sanitizeStagingArtifacts(root);
+  assert.equal(result.safe, true);
+  assert.equal(result.omittedVisualFiles, 2);
+  assert.equal(fs.existsSync(video), false);
+  assert.equal(fs.existsSync(screenshot), false);
+});
+
+fixture((root) => {
   const binary = Buffer.concat([
     Buffer.from([0, 1, 2, 3]),
     Buffer.from('Bearer binary-private-token-123456789'),
   ]);
-  write(root, 'video.webm', binary);
+  write(root, 'opaque.bin', binary);
   assert.throws(() => sanitizeStagingArtifacts(root), /Unsafe staging artifact content/);
 });
 
@@ -88,6 +101,7 @@ fixture((root) => {
   }));
   const result = sanitizeStagingArtifacts(root);
   assert.equal(result.redactionCount, 0);
+  assert.equal(result.omittedVisualFiles, 0);
 });
 
 const repositoryRoot = path.resolve(process.cwd(), '..');
