@@ -42,11 +42,17 @@ describe('Agent Hub app command status readback', () => {
     assert.equal(result.executionState, 'NORMALIZED_FOR_COORDINATOR');
   });
 
-  it('surfaces adapter blocking as fail-closed and rejects invalid source ids', () => {
+  it('keeps adapter blocking fail-closed even if unrelated worker evidence follows', () => {
     const blocked = resolveAgentHubCommandStatus(sourceCommentId, [
       { id: normalizedId, body: `[AUTO_LOOP_HANDOFF_BLOCKED]\n<!-- agent-hub-error:${sourceCommentId} -->` },
+      { id: normalizedId + 1, body: `[WORKER_REPORT]\nroot_task_id: ${rootTaskId}\nstatus: completed` },
     ]);
     assert.equal(blocked.executionState, 'FAILED_CLOSED');
+    assert.equal(blocked.normalizedCommentId, null);
+    assert.equal(blocked.latestEvidenceCommentId, normalizedId);
+  });
+
+  it('rejects invalid source ids', () => {
     assert.throws(() => resolveAgentHubCommandStatus(0, []), /INVALID_SOURCE_COMMENT_ID/u);
   });
 });
