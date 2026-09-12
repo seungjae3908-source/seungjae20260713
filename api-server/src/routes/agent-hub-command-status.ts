@@ -97,17 +97,13 @@ export function resolveAgentHubCommandStatus(
       normalizedCommentId = id;
       executionState = 'NORMALIZED_FOR_COORDINATOR';
       latestEvidenceCommentId = id;
+      continue;
     }
-  }
 
-  for (const comment of ordered) {
-    const id = commentId(comment);
-    const body = commentBody(comment);
-    if (!id || !body || body.includes(normalizedMarker) || body.includes(errorMarker)) continue;
+    if (!normalizedCommentId) continue;
     const fields = parseFields(body);
 
     if (
-      normalizedCommentId &&
       body.includes('[HUB_COMMAND]') &&
       fields.source_report_comment_id === String(normalizedCommentId)
     ) {
@@ -116,6 +112,7 @@ export function resolveAgentHubCommandStatus(
         executionState = state;
         latestEvidenceCommentId = id;
       }
+      continue;
     }
 
     if (body.includes('[WORKER_REPORT]') && fields.root_task_id === rootTaskId) {
