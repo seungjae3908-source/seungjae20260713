@@ -3,12 +3,14 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const supabasePath = fileURLToPath(new URL('../src/lib/supabase.ts', import.meta.url));
+const deviceTrustPath = fileURLToPath(new URL('../src/lib/device-trust.ts', import.meta.url));
 const appPath = fileURLToPath(new URL('../../api-server/src/app.ts', import.meta.url));
 const authMiddlewarePath = fileURLToPath(new URL('../../api-server/src/middleware/auth.ts', import.meta.url));
 
-test('auth bootstrap self-profile read is same-origin and exact-identity only', async () => {
-  const [supabaseSource, appSource, authSource] = await Promise.all([
+test('auth bootstrap self-profile read is same-origin, exact-identity, and device-trust aware', async () => {
+  const [supabaseSource, deviceTrustSource, appSource, authSource] = await Promise.all([
     readFile(supabasePath, 'utf8'),
+    readFile(deviceTrustPath, 'utf8'),
     readFile(appPath, 'utf8'),
     readFile(authMiddlewarePath, 'utf8'),
   ]);
@@ -19,6 +21,11 @@ test('auth bootstrap self-profile read is same-origin and exact-identity only', 
   expect(supabaseSource).toContain("await fetch('/api/auth/profile'");
   expect(supabaseSource).toContain("method: 'GET'");
   expect(supabaseSource).toContain("proxyHeaders.set('Authorization', authorization!)");
+  expect(supabaseSource).toContain("import { deviceTrustRequestHeaders } from '@/lib/device-trust';");
+  expect(supabaseSource).toContain('Object.entries(deviceTrustRequestHeaders())');
+  expect(deviceTrustSource).toContain("const DEVICE_SESSION_STORAGE_KEY = 'device-trust-session-v1';");
+  expect(deviceTrustSource).toContain('export function deviceTrustRequestHeaders()');
+  expect(deviceTrustSource).toContain("return session ? { 'X-Device-Session': session } : {};");
 
   const deviceTrustGate = appSource.indexOf("app.use('/api', deviceTrustAppGate);");
   const profileRoute = appSource.indexOf("app.get('/api/auth/profile', requireAuthenticated");
