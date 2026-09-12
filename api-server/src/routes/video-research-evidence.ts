@@ -98,8 +98,8 @@ function safeRecord(value: unknown): SafeRecord | null {
   if (channelOrPublisher === undefined || publishedAt === undefined || discoveredAt === undefined || language === undefined) return null;
   const durationSec = value.durationSec === null
     ? null
-    : Number.isFinite(value.durationSec) && Number(value.durationSec) >= 0
-      ? Number(value.durationSec)
+    : typeof value.durationSec === 'number' && Number.isFinite(value.durationSec) && value.durationSec >= 0
+      ? value.durationSec
       : undefined;
   if (durationSec === undefined) return null;
   if (typeof value.transcriptStatus !== 'string' || !value.transcriptStatus) return null;
@@ -139,9 +139,9 @@ export function sanitizeVideoResearchRuntimeEvidence(value: unknown): SafeEviden
   if (value.credentialValueExposed !== false || typeof value.credentialConfigured !== 'boolean') return null;
   if (typeof value.status !== 'string' || !value.status) return null;
   if (typeof value.query !== 'string' || !value.query.trim()) return null;
-  if (!Number.isSafeInteger(value.pagesUsed) || Number(value.pagesUsed) < 0 || Number(value.pagesUsed) > 1) return null;
+  if (typeof value.pagesUsed !== 'number' || !Number.isSafeInteger(value.pagesUsed) || value.pagesUsed < 0 || value.pagesUsed > 1) return null;
   if (typeof value.quotaState !== 'string' || !value.quotaState) return null;
-  if (!Number.isSafeInteger(value.sourceCount) || Number(value.sourceCount) < 0 || Number(value.sourceCount) > 5) return null;
+  if (typeof value.sourceCount !== 'number' || !Number.isSafeInteger(value.sourceCount) || value.sourceCount < 0 || value.sourceCount > 5) return null;
   if (!Array.isArray(value.records) || value.records.length !== value.sourceCount) return null;
   if (!safetyMatches(value.safety)) return null;
 
@@ -155,11 +155,11 @@ export function sanitizeVideoResearchRuntimeEvidence(value: unknown): SafeEviden
     providerAccess: PROVIDER_ACCESS,
     requestMode: REQUEST_MODE,
     query: value.query,
-    pagesUsed: Number(value.pagesUsed),
+    pagesUsed: value.pagesUsed,
     quotaState: value.quotaState,
     credentialConfigured: value.credentialConfigured,
     credentialValueExposed: false,
-    sourceCount: Number(value.sourceCount),
+    sourceCount: value.sourceCount,
     records: records as SafeRecord[],
     safety: REQUIRED_SAFETY,
   };
