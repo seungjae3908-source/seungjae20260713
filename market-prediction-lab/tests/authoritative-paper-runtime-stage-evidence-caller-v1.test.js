@@ -4,6 +4,7 @@ import {
   AUTHORITATIVE_PAPER_RUNTIME_STAGE_EVIDENCE_CALLER_VERSION,
   callAuthoritativePaperRuntimeWithStageEvidenceV1,
   reconcileAuthoritativePaperRuntimeStageEvidenceV1,
+  reconcileSingleAuthoritativePaperRuntimeCandidateStageEvidenceV1,
 } from "../src/authoritative-paper-runtime-stage-evidence-caller-v1.js";
 
 const RESEARCH_SHA = "c".repeat(40);
@@ -177,6 +178,41 @@ test("caller reconciles exact candidate-bound recurring Entry/Position/Settlemen
   assert.equal(result.stageEvidenceConnection.runtimeActivationAllowed, false);
   assert.equal(result.stageEvidenceConnection.scheduleActivationAllowed, false);
   assert.equal(result.stageEvidenceConnection.dispatchAllowed, false);
+});
+
+test("single-candidate consumer helper derives the authoritative candidate identity without caller-supplied identity", () => {
+  const result = reconcileSingleAuthoritativePaperRuntimeCandidateStageEvidenceV1({
+    paperRuntimeResult: factoryResult(),
+    recurringCycleResult: recurringResult(),
+  });
+  assert.equal(result.stageEvidenceConnection.status, "RECONCILED");
+  assert.equal(result.stageEvidenceConnection.candidateId, CANDIDATE_ID);
+  assert.equal(result.stageMeasurements.find((row) => row.stage === "Entry")?.candidateBound, true);
+  assert.equal(result.stageMeasurements.find((row) => row.stage === "Settlement")?.candidateBound, true);
+  assert.equal(result.sampleCredit, 0);
+  assert.equal(result.executionRealismCredit, 0);
+  assert.equal(result.profitabilityCredit, 0);
+  assert.equal(result.executionAuthority, "NONE");
+});
+
+test("single-candidate consumer helper rejects missing or ambiguous Paper candidates instead of guessing identity", () => {
+  const base = factoryResult();
+  const missing = Object.freeze({
+    ...base,
+    paperBridge: Object.freeze({ ...base.paperBridge, candidates: Object.freeze([]), eligible: 0 }),
+  });
+  const ambiguous = Object.freeze({
+    ...base,
+    paperBridge: Object.freeze({ ...base.paperBridge, candidates: Object.freeze([candidate(), candidate()]), eligible: 2 }),
+  });
+  assert.throws(() => reconcileSingleAuthoritativePaperRuntimeCandidateStageEvidenceV1({
+    paperRuntimeResult: missing,
+    recurringCycleResult: recurringResult(),
+  }), /PAPER_STAGE_FACTORY_SINGLE_CANDIDATE_MISSING/u);
+  assert.throws(() => reconcileSingleAuthoritativePaperRuntimeCandidateStageEvidenceV1({
+    paperRuntimeResult: ambiguous,
+    recurringCycleResult: recurringResult(),
+  }), /PAPER_STAGE_FACTORY_SINGLE_CANDIDATE_AMBIGUOUS/u);
 });
 
 test("caller preserves measured aggregate zero as UNKNOWN rather than candidate-bound zero", () => {
