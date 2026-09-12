@@ -81,6 +81,22 @@ function parseRuntimeEvidence(value: unknown): RuntimeEvidence | null {
   return value as unknown as RuntimeEvidence;
 }
 
+function describeStrategyMiningState(evidence: RuntimeEvidence | null) {
+  if (!evidence) return 'UNKNOWN — strategy mining evidence missing != 0';
+  if (evidence.sourceCount === 0) return 'NOT_APPLICABLE — measured video sourceCount 0';
+  const transcriptStatuses = [...new Set(evidence.records.map((record) => record.transcriptStatus.trim().toUpperCase()).filter(Boolean))].sort();
+  if (transcriptStatuses.includes('AVAILABLE')) {
+    return 'UNKNOWN — authorized transcript exists; source-bound strategy mining evidence not connected';
+  }
+  if (transcriptStatuses.length === 1) {
+    return `BLOCKED_TRANSCRIPT_${transcriptStatuses[0]} — authorized transcript required; no caption bypass`;
+  }
+  if (transcriptStatuses.length > 1) {
+    return `BLOCKED_TRANSCRIPT — ${transcriptStatuses.join(' / ')}; authorized transcript required`;
+  }
+  return 'UNKNOWN — transcript state missing != 0';
+}
+
 const truthBadges = [
   ['FACT', '확인된 원문/메타데이터'],
   ['CREATOR CLAIM', '출처의 주장'],
@@ -123,6 +139,15 @@ export function ResearchVideoPanel() {
   const sourceCountState = runtimeEvidence
     ? `${runtimeEvidence.sourceCount} — measured sanitized public-provider result`
     : 'UNKNOWN — missing runtime snapshot != 0';
+  const strategyMiningState = describeStrategyMiningState(runtimeEvidence);
+  const transcriptSegmentState = latestRecord
+    ? latestRecord.transcriptStatus === 'AVAILABLE'
+      ? 'UNKNOWN — authorized transcript segment evidence not connected'
+      : `UNKNOWN — transcript ${latestRecord.transcriptStatus}; segment count not measured`
+    : 'UNKNOWN — missing != 0';
+  const compilerState = runtimeEvidence?.records.some((record) => record.transcriptStatus === 'AVAILABLE')
+    ? 'NOT_EVALUATED — source-bound TESTABLE strategy evidence required'
+    : 'BLOCKED — authorized transcript required before strategy extraction/compiler';
 
   const statusRows = [
     ['Video discovery', '수동 / 공식 public API runtime'],
@@ -153,7 +178,7 @@ export function ResearchVideoPanel() {
       rows: [
         ['상태', latestRecord?.transcriptStatus ?? 'UNKNOWN — authorized transcript evidence 없음'],
         ['권한', '승인된 transcript만 ingest'],
-        ['Segment', 'UNKNOWN — missing != 0'],
+        ['Segment', transcriptSegmentState],
         ['Timestamp coverage', 'UNKNOWN_TIMESTAMP'],
         ['우회 다운로드', 'DISABLED'],
       ],
@@ -162,11 +187,12 @@ export function ResearchVideoPanel() {
       title: 'Strategy',
       testId: 'video-strategy-state',
       rows: [
+        ['Strategy mining', strategyMiningState],
         ['Strategy family', 'UNKNOWN'],
         ['Market / Side / Timeframe', 'UNSPECIFIED'],
         ['Entry / Exit', 'UNSPECIFIED'],
         ['SL / TP', 'UNSPECIFIED'],
-        ['Testability', 'UNKNOWN until source-bound strategy evidence is connected'],
+        ['Testability', strategyMiningState],
       ],
     },
     {
@@ -185,7 +211,7 @@ export function ResearchVideoPanel() {
       testId: 'video-validation-state',
       rows: [
         ['Cross-validation', 'NOT_CHECKED'],
-        ['Compiler', 'NOT_EVALUATED — source-bound testability evidence 필요'],
+        ['Compiler', compilerState],
         ['Backtester candidate', 'NOT_EVALUATED'],
         ['Economic Evidence', '0'],
         ['Profitability Credit', '0'],
@@ -250,6 +276,7 @@ export function ResearchVideoPanel() {
                 <div><dt className="text-muted-foreground">Title</dt><dd className="break-words font-medium">{latestRecord.title}</dd></div>
                 <div><dt className="text-muted-foreground">Channel / Publisher</dt><dd className="break-words font-medium">{latestRecord.channelOrPublisher ?? 'UNKNOWN'}</dd></div>
                 <div><dt className="text-muted-foreground">Transcript</dt><dd className="font-medium">{latestRecord.transcriptStatus}</dd></div>
+                <div><dt className="text-muted-foreground">Strategy mining</dt><dd className="break-words font-medium">{strategyMiningState}</dd></div>
                 <div><dt className="text-muted-foreground">Provenance</dt><dd className="break-words font-medium">{runtimeEvidence?.providerAccess} · {latestRecord.contentAuthority}</dd></div>
               </dl>
             ) : runtimeEvidence ? (
@@ -269,7 +296,9 @@ export function ResearchVideoPanel() {
           <article className="min-w-0 rounded-2xl border border-card-border bg-card p-4" data-testid="video-cluster-empty-state">
             <h2 className="font-semibold">Strategy cluster</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              discovery provenance가 연결돼도 strategy mining 결과가 없으면 cluster 개수는 UNKNOWN입니다. 향후 Video count, Independent source count, Supporting / Contradicting source count, Common / Conflicting / Missing rules를 source provenance와 분리해 표시합니다.
+              {runtimeEvidence
+                ? `${strategyMiningState}. Strategy mining evidence가 없으면 cluster count는 0으로 만들지 않고 UNKNOWN으로 유지합니다.`
+                : 'sanitized runtime evidence가 없으므로 strategy cluster 존재 여부도 UNKNOWN입니다. missing을 0으로 만들지 않습니다.'}
             </p>
             <div className="mt-3 rounded-xl bg-muted p-3 text-xs">
               Independent source count는 경제적 표본 N이 아닙니다. Economic Evidence Credit = 0을 유지합니다.
