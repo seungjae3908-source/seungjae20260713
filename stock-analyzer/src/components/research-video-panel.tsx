@@ -1,9 +1,9 @@
 const statusRows = [
-  ['Video discovery', '수동 / 비활성'],
-  ['Provider', 'PROVIDER_NOT_CONFIGURED'],
+  ['Video discovery', '수동 / 공식 public API runtime'],
+  ['Provider runtime', 'SERVER READ_ONLY / browser credential 미노출'],
+  ['Runtime evidence', 'UI reader 미연결 → UNKNOWN'],
   ['Transcript access', '승인된 입력만 허용'],
   ['Economic Evidence', '0'],
-  ['Profitability Credit', '0'],
   ['Execution Authority', 'NONE'],
 ] as const;
 
@@ -21,19 +21,21 @@ const phase2Sections = [
     testId: 'video-discovery-state',
     rows: [
       ['검색 경로', 'YouTube Data API 공식/public metadata'],
-      ['Provider 상태', 'PROVIDER_NOT_CONFIGURED'],
+      ['Provider runtime', 'READ_ONLY SERVER RUNTIME AVAILABLE'],
+      ['Browser credential', 'NOT_EXPOSED'],
+      ['최근 discovery evidence', 'UNKNOWN — UI evidence reader 미연결'],
       ['자동 수집', 'OFF'],
       ['Schedule', 'INACTIVE'],
-      ['Quota', 'UNKNOWN — provider 미설정'],
+      ['Quota', 'UNKNOWN — runtime evidence 미연결'],
     ],
   },
   {
     title: 'Transcript',
     testId: 'video-transcript-state',
     rows: [
-      ['상태', 'NOT_PROVIDED'],
+      ['상태', 'UNKNOWN — authorized transcript evidence 미연결'],
       ['권한', '승인된 transcript만 ingest'],
-      ['Segment', '0'],
+      ['Segment', 'UNKNOWN — missing != 0'],
       ['Timestamp coverage', 'UNKNOWN_TIMESTAMP'],
       ['우회 다운로드', 'DISABLED'],
     ],
@@ -46,15 +48,15 @@ const phase2Sections = [
       ['Market / Side / Timeframe', 'UNSPECIFIED'],
       ['Entry / Exit', 'UNSPECIFIED'],
       ['SL / TP', 'UNSPECIFIED'],
-      ['Testability', 'NON_TESTABLE until explicit rules exist'],
+      ['Testability', 'UNKNOWN until source-bound evidence is connected'],
     ],
   },
   {
     title: 'Evidence',
     testId: 'video-evidence-state',
     rows: [
-      ['Video sources', '0'],
-      ['Independent sources', '0 — economic N 아님'],
+      ['Video sources', 'UNKNOWN — UI runtime evidence 미연결'],
+      ['Independent sources', 'UNKNOWN — economic N 아님'],
       ['Academic / official', 'NOT_CHECKED'],
       ['Contradictions', 'UNKNOWN'],
       ['Source authority', 'UNKNOWN'],
@@ -65,7 +67,7 @@ const phase2Sections = [
     testId: 'video-validation-state',
     rows: [
       ['Cross-validation', 'NOT_CHECKED'],
-      ['Compiler', 'COMPILER_BLOCKED until TESTABLE'],
+      ['Compiler', 'NOT_EVALUATED — source-bound testability evidence 필요'],
       ['Backtester candidate', 'NOT_EVALUATED'],
       ['Economic Evidence', '0'],
       ['Profitability Credit', '0'],
@@ -127,17 +129,17 @@ export function ResearchVideoPanel() {
           <article className="min-w-0 rounded-2xl border border-card-border bg-card p-4" data-testid="video-detail-empty-state">
             <h2 className="font-semibold">Video detail</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              아직 승인된 실제 영상 연구 레코드가 없습니다. 수집 후 Metadata → Transcript → Timeline → Claims → Strategy → Missing rules → Cross-validation → Compiler 상태 순서로 원본 provenance와 함께 표시됩니다.
+              서버의 공식/public discovery runtime은 존재하지만, 그 sanitized runtime evidence를 이 화면으로 읽어오는 reader는 아직 연결되지 않았습니다. 따라서 실제 영상 레코드 존재 여부를 0으로 단정하지 않고 UNKNOWN으로 유지합니다.
             </p>
             <div className="mt-3 rounded-xl bg-muted p-3 text-xs">
-              Transcript unavailable은 빈 문자열이 아니라 UNAVAILABLE / NOT_AUTHORIZED / NOT_PROVIDED 등 명시 상태로 유지합니다.
+              Transcript unavailable은 빈 문자열이나 0이 아니라 UNAVAILABLE / NOT_AUTHORIZED / NOT_PROVIDED / UNKNOWN 같은 명시 상태로 유지합니다.
             </div>
           </article>
 
           <article className="min-w-0 rounded-2xl border border-card-border bg-card p-4" data-testid="video-cluster-empty-state">
             <h2 className="font-semibold">Strategy cluster</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              아직 cluster가 없습니다. 향후 Video count, Independent source count, Supporting / Contradicting source count, Common / Conflicting / Missing rules를 분리해 표시합니다.
+              runtime evidence reader가 연결되기 전에는 cluster 개수도 UNKNOWN입니다. 연결 후 Video count, Independent source count, Supporting / Contradicting source count, Common / Conflicting / Missing rules를 source provenance와 함께 분리해 표시합니다.
             </p>
             <div className="mt-3 rounded-xl bg-muted p-3 text-xs">
               Independent source count는 경제적 표본 N이 아닙니다. Economic Evidence Credit = 0을 유지합니다.
@@ -146,7 +148,7 @@ export function ResearchVideoPanel() {
         </div>
 
         <footer className="rounded-2xl border border-card-border bg-card p-4 text-xs leading-5 text-muted-foreground" data-testid="video-phase2-safety-footer">
-          Paid provider OFF · Automatic discovery OFF · Schedule OFF · No downloader bypass · No new Backtester · Existing canonical compiler only · Execution Authority NONE
+          Official public provider only · Browser credential NOT_EXPOSED · Automatic discovery OFF · Schedule OFF · No downloader bypass · No new Backtester · Existing canonical compiler only · Economic Evidence Credit 0 · Execution Authority NONE
         </footer>
       </div>
     </section>
