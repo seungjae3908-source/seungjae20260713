@@ -12,6 +12,7 @@ on:
       - .github/workflows/production-app-release-control.yml
       - api-server/supabase/migrations/2026081501_personal_telegram_storage.sql
       - api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql
+      - api-server/supabase/migrations/2026082701_personal_telegram_generic_outbox.sql
       - ops/apply-production-personal-telegram-storage.mjs
       - ops/verify-production-personal-telegram-storage.mjs
 
@@ -430,7 +431,8 @@ jobs:
           tar -czf "$archive" \
             ops/apply-production-personal-telegram-storage.mjs \
             api-server/supabase/migrations/2026081501_personal_telegram_storage.sql \
-            api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql
+            api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql \
+            api-server/supabase/migrations/2026082701_personal_telegram_generic_outbox.sql
           scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$archive" "$SSH_USER@$SSH_HOST:$remote_dir/tooling.tar.gz"
           remote_command="$(printf 'cd %q && tar -xzf tooling.tar.gz && IFS= read -r PROD_DATABASE_URL && export PROD_DATABASE_URL && EXPECTED_ACTIVE_SHA=%q APPROVED_TARGET_SHA=%q node ops/apply-production-personal-telegram-storage.mjs' \

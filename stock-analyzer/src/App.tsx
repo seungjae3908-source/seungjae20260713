@@ -48,6 +48,7 @@ const StrategyPromotionPage = lazy(() => import('@/pages/strategy-promotion'));
 const ResearchCenterPage = lazy(() => import('@/pages/research-center-workspace'));
 const AccountPage = lazy(() => import('@/pages/account'));
 const AdminPage = lazy(() => import('@/pages/admin'));
+const AgentHubControlPage = lazy(() => import('@/pages/agent-hub-control'));
 const InstallPage = lazy(() => import('@/pages/install'));
 const RecommendationsPage = lazy(() => import('@/pages/recommendations'));
 const BacktestsPage = lazy(() => import('@/pages/backtests'));
@@ -272,6 +273,7 @@ function PaperTradingAccess() {
 }
 function AutoTradingAccess() { return gated('canPlaceOrders', builder('AUTO_TRADING', <AutoTradingPage />)); }
 function AdminAccess() { return gated('canManageMembers', <AdminPage />); }
+function AgentHubControlAccess() { return gated('canManageMembers', <AgentHubControlPage />); }
 function UiBuilderAdminAccess() { return gated('canManageMembers', <UiBuilderLayoutControlPage />); }
 function BasicMarketInformationAccess() { return gated('canAccessBasicInfo', builder('STOCK_MARKET', <MarketInformationPage />)); }
 function SpotMarketInformationAccess() { return gated('canAccessSpot', builder('CRYPTO_MARKET', <MarketInformationPage />)); }
@@ -334,6 +336,7 @@ function ApprovedRouter() {
     <Route path="/position" component={PositionAccess} />
     <Route path="/strategy-promotion" component={StrategyPromotionAccess} />
     <Route path="/account" component={AccountConnectionAccess} />
+    <Route path="/admin/agent-hub" component={AgentHubControlAccess} />
     <Route path="/admin/ui-layouts" component={UiBuilderAdminAccess} />
     <Route path="/admin" component={AdminAccess} />
     <Route path="/more" component={SettingsAccess} />

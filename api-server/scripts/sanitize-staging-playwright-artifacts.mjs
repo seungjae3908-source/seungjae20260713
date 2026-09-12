@@ -7,6 +7,7 @@ const TEXT_EXTENSIONS = new Set([
   '.css', '.csv', '.html', '.htm', '.js', '.json', '.log', '.map', '.md',
   '.mjs', '.ndjson', '.svg', '.txt', '.xml', '.yaml', '.yml',
 ]);
+const VISUAL_EXTENSIONS = new Set(['.webm', '.png', '.jpg', '.jpeg', '.webp']);
 const TRACE_PATH_PATTERN = /(?:^|[\\/])(?:trace(?:\.[^\\/]*)?|traces)(?:$|[\\/])/i;
 const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 const JWT_PATTERN = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
@@ -22,6 +23,10 @@ function isTextFile(filePath, buffer) {
   if (buffer.length === 0) return true;
   const sample = buffer.subarray(0, Math.min(buffer.length, 8_192));
   return !sample.includes(0);
+}
+
+function isVisualArtifact(filePath) {
+  return VISUAL_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
 
 function sanitizeString(value) {
@@ -109,10 +114,16 @@ export function sanitizeStagingArtifacts(rootDirectory) {
   if (files.length === 0) throw new Error('Staging artifact directory is empty');
   let sanitizedFiles = 0;
   let redactionCount = 0;
+  let omittedVisualFiles = 0;
 
   for (const file of files) {
     if (TRACE_PATH_PATTERN.test(file.relative)) {
       throw new Error(`Raw Playwright trace is forbidden: ${file.relative}`);
+    }
+    if (isVisualArtifact(file.absolute)) {
+      fs.rmSync(file.absolute, { force: true });
+      omittedVisualFiles += 1;
+      continue;
     }
     const buffer = fs.readFileSync(file.absolute);
     if (!isTextFile(file.absolute, buffer)) continue;
@@ -130,6 +141,9 @@ export function sanitizeStagingArtifacts(rootDirectory) {
     if (TRACE_PATH_PATTERN.test(file.relative)) {
       throw new Error(`Raw Playwright trace is forbidden: ${file.relative}`);
     }
+    if (isVisualArtifact(file.absolute)) {
+      throw new Error(`Visual staging artifact survived sanitization: ${file.relative}`);
+    }
     const buffer = fs.readFileSync(file.absolute);
     const searchable = isTextFile(file.absolute, buffer)
       ? buffer.toString('utf8')
@@ -142,6 +156,7 @@ export function sanitizeStagingArtifacts(rootDirectory) {
     fileCount: verifiedFiles.length,
     sanitizedFiles,
     redactionCount,
+    omittedVisualFiles,
     rawTraceCount: 0,
     safe: true,
   };

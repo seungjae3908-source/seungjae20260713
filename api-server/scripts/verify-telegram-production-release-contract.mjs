@@ -4,8 +4,10 @@ import path from 'node:path';
 const root = process.cwd();
 const workflowPath = path.join(root, '.github/workflows/telegram-production-release.yml');
 const deployPath = path.join(root, 'ops/deploy-production.sh');
+const storageApplyPath = path.join(root, 'ops/apply-production-personal-telegram-storage.mjs');
 const source = fs.readFileSync(workflowPath, 'utf8');
 const deploySource = fs.readFileSync(deployPath, 'utf8');
+const storageApplySource = fs.readFileSync(storageApplyPath, 'utf8');
 const appReleaseSource = fs.readFileSync(path.join(root, '.github/workflows/production-app-release-control.yml'), 'utf8');
 
 const requiredFragments = [
@@ -65,6 +67,36 @@ const storageMigrationIndex = source.indexOf('Apply and verify Production person
 const productionDispatchIndex = source.indexOf('Dispatch existing Production Deploy and require exact-run success');
 if (storageMigrationIndex < 0 || productionDispatchIndex <= storageMigrationIndex) {
   console.error('[telegram-production-release-contract] atomic personal Telegram storage migration must precede Production deployment');
+  process.exit(1);
+}
+const storageUploadIndex = source.indexOf('Upload sanitized Production personal Telegram storage evidence', storageMigrationIndex);
+if (storageUploadIndex <= storageMigrationIndex) {
+  console.error('[telegram-production-release-contract] personal Telegram storage packaging block was not found');
+  process.exit(1);
+}
+const storageMigrationFiles = [...new Set(
+  storageApplySource.match(/api-server\/supabase\/migrations\/[0-9A-Za-z._-]+\.sql/g) ?? [],
+)];
+if (storageMigrationFiles.length === 0) {
+  console.error('[telegram-production-release-contract] storage apply script declares no migration sources');
+  process.exit(1);
+}
+const storageBlock = source.slice(storageMigrationIndex, storageUploadIndex);
+const pullRequestPathsStart = source.indexOf('  pull_request:');
+const pullRequestPathsEnd = source.indexOf('\npermissions:', pullRequestPathsStart);
+if (pullRequestPathsStart < 0 || pullRequestPathsEnd <= pullRequestPathsStart) {
+  console.error('[telegram-production-release-contract] pull request path gate was not found');
+  process.exit(1);
+}
+const pullRequestPathsBlock = source.slice(pullRequestPathsStart, pullRequestPathsEnd);
+const unpackagedMigrations = storageMigrationFiles.filter((migration) => !storageBlock.includes(migration));
+if (unpackagedMigrations.length > 0) {
+  console.error(`[telegram-production-release-contract] Production storage package is missing migrations: ${unpackagedMigrations.join(', ')}`);
+  process.exit(1);
+}
+const untriggeredMigrations = storageMigrationFiles.filter((migration) => !pullRequestPathsBlock.includes(migration));
+if (untriggeredMigrations.length > 0) {
+  console.error(`[telegram-production-release-contract] Production storage migration changes would bypass release-contract CI: ${untriggeredMigrations.join(', ')}`);
   process.exit(1);
 }
 const productionDbSecretReferences = source.match(/secrets\.PROD_DATABASE_URL/g) ?? [];
@@ -183,4 +215,4 @@ for (const name of secretNames) {
 }
 
 await import('./verify-production-telegram-preservation.mjs');
-console.log('[telegram-production-release-contract] owner gate, exact-main CI, staging evidence, stdin-only Production DB handoff, generic deployment non-elevation, canary OFF, Telegram-only activation, runtime identity, worker startup, sanitized Telegram proof, and zero-trading-authority contracts verified');
+console.log('[telegram-production-release-contract] owner gate, exact-main CI, staging evidence, complete storage migration packaging, stdin-only Production DB handoff, generic deployment non-elevation, canary OFF, Telegram-only activation, runtime identity, worker startup, sanitized Telegram proof, and zero-trading-authority contracts verified');
