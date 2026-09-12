@@ -7,7 +7,11 @@ import {
   normalizeWorkerHint,
   sanitizeAgentHubCommand,
 } from './agent-hub-control-contract';
-import { resolveAgentHubCommandStatus, type AgentHubComment } from './agent-hub-command-status';
+import {
+  applyAgentHubEvidenceWindow,
+  resolveAgentHubCommandStatus,
+  type AgentHubComment,
+} from './agent-hub-command-status';
 
 const router = Router();
 const STATUS_PAGE_SIZE = 100;
@@ -97,13 +101,13 @@ router.get('/commands/:commentId/status', async (req: AuthenticatedRequest, res)
       if (page === STATUS_PAGE_LIMIT) evidenceWindowComplete = false;
     }
 
-    const status = resolveAgentHubCommandStatus(sourceCommentId, comments);
-    const executionState = evidenceWindowComplete ? status.executionState : 'NEEDS_CONTEXT';
+    const rawStatus = resolveAgentHubCommandStatus(sourceCommentId, comments);
+    const status = applyAgentHubEvidenceWindow(rawStatus, evidenceWindowComplete);
     return res.json({
       ok: true,
       configured: true,
       commentId: sourceCommentId,
-      executionState,
+      executionState: status.executionState,
       normalizedCommentId: status.normalizedCommentId,
       latestEvidenceCommentId: status.latestEvidenceCommentId,
       evidenceWindowComplete,
