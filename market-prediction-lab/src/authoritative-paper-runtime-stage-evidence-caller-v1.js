@@ -230,12 +230,14 @@ export function reconcileAuthoritativePaperRuntimeStageEvidenceV1({
   paperRuntimeResult,
   recurringCycleResult,
   expectedCandidateIdentity,
+  runtimeIdentityMode = "CANDIDATE",
 } = {}) {
   exactFactoryCandidate(paperRuntimeResult, expectedCandidateIdentity);
   const reconciled = readAuthoritativePaperRuntimeStageEvidenceV1({
     paperRuntimeResult: candidateBoundAdmissionResult(paperRuntimeResult, expectedCandidateIdentity),
     recurringCycleResult,
     expectedCandidateIdentity,
+    runtimeIdentityMode,
   });
   const directByStage = reconciled.runtimeStageMeasurements;
   const stageMeasurements = freeze(paperRuntimeResult.stageMeasurements.map((stage) => {
@@ -287,23 +289,27 @@ export function reconcileAuthoritativePaperRuntimeStageEvidenceV1({
 export function reconcileSingleAuthoritativePaperRuntimeCandidateStageEvidenceV1({
   paperRuntimeResult,
   recurringCycleResult,
+  runtimeIdentityMode = "CANDIDATE",
 } = {}) {
   const expectedCandidateIdentity = singleFactoryCandidateIdentity(paperRuntimeResult);
   return reconcileAuthoritativePaperRuntimeStageEvidenceV1({
     paperRuntimeResult,
     recurringCycleResult,
     expectedCandidateIdentity,
+    runtimeIdentityMode,
   });
 }
 
 export function adoptExistingAuthoritativePaperRuntimeStageEvidenceV1({
   paperRuntimeResult,
   recurringCycleResult,
+  runtimeIdentityMode = "CANDIDATE",
 } = {}) {
   try {
     return reconcileSingleAuthoritativePaperRuntimeCandidateStageEvidenceV1({
       paperRuntimeResult,
       recurringCycleResult,
+      runtimeIdentityMode,
     });
   } catch (error) {
     return blockedStageEvidenceAdoption(paperRuntimeResult, error);
@@ -315,6 +321,7 @@ export async function callAuthoritativePaperRuntimeWithStageEvidenceV1({
   runtimeInput = {},
   recurringCycleResult,
   expectedCandidateIdentity,
+  runtimeIdentityMode = "CANDIDATE",
 } = {}) {
   if (typeof paperRuntimeForMarket !== "function") {
     throw new TypeError("authoritative paperRuntimeForMarket is required");
@@ -326,6 +333,7 @@ export async function callAuthoritativePaperRuntimeWithStageEvidenceV1({
       paperRuntimeResult,
       recurringCycleResult,
       expectedCandidateIdentity,
+      runtimeIdentityMode,
     });
   } catch (error) {
     return blockedStageEvidenceAdoption(paperRuntimeResult, error);
