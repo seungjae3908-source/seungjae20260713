@@ -1,11 +1,17 @@
 const RESEARCH_OVERVIEW_SCHEMA = 'research-dashboard-overview-v1';
 const V3_INDEPENDENCE_SUMMARY_SCHEMA = 'public-forward-liquidity-v3-authoritative-independence-summary-v1';
+const CANDIDATE_PERFORMANCE_SCHEMA = 'frozen-candidate-performance-reader-v1';
 const PROFILE_SET = new Set(['forward', 'fast-historical', 'long-history']);
 const V3_INDEPENDENCE_STATUS_SET = new Set(['MISSING', 'INVALID', 'PRESENT']);
+const CANDIDATE_PERFORMANCE_STATUS_SET = new Set(['MISSING', 'INVALID', 'BLOCKED', 'PRESENT']);
 const SHA_PATTERN = /^[0-9a-f]{40}$/i;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/i;
+const CANDIDATE_ID_PATTERN = /^(?:phase3-candidate:sha256:|paper-candidate-v1:)[0-9a-f]{64}$/i;
+const SAFE_ID_PATTERN = /^[A-Za-z0-9._:-]{1,160}$/;
 const DECIMAL_ID_PATTERN = /^[0-9]{6,20}$/;
 const PRIVATE_TEXT_PATTERN = /(?:^[a-z]:[\\/]|\/(?:var|home|root|etc|opt|srv|users)\/|-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:ghp|github_pat|sk_live|sk_test)_[a-z0-9_-]+)/i;
+const PRIVATE_EVIDENCE_KEY_PATTERN = /(?:secret|token|password|credential|private.?key|api.?key)/i;
+const FIXTURE_PROVENANCE_PATTERN = /(?:^|[^a-z])(fixture|fake|example|tests?)(?:[^a-z]|$)/i;
 const V3_SPLIT_COUNT_KEYS = Object.freeze([
   'TRAIN',
   'TRAIN_BUY',
@@ -17,6 +23,19 @@ const V3_SPLIT_COUNT_KEYS = Object.freeze([
   'OOS_BUY',
   'OOS_SELL',
 ]);
+const CANDIDATE_COUNT_KEYS = Object.freeze([
+  'effectiveIndependentMarketN', 'candidateMatchedN', 'LONG_SIGNAL_N', 'SHORT_SIGNAL_N', 'NO_TRADE_N',
+  'Entry_N', 'Position_N', 'PositionObservation_N', 'Settlement_N',
+  'TRAIN_N', 'VALIDATION_N', 'OOS_N', 'WIN_N', 'LOSS_N', 'BREAKEVEN_N',
+]);
+const CANDIDATE_METRIC_KEYS = Object.freeze([
+  'WIN_RATE', 'AVG_WIN', 'AVG_LOSS', 'PAYOFF_RATIO', 'GROSS_EXPECTANCY',
+  'PF', 'MDD', 'MFE', 'MAE', 'TIME_TO_EXIT', 'Gross_PnL', 'Net_PnL',
+]);
+const FULL_COST_KEYS = Object.freeze([
+  'commission', 'tax', 'spread', 'slippage', 'funding', 'latency', 'liquidityImpact', 'partialFillImpact',
+]);
+const FULL_COST_STATE_SET = new Set(['MEASURED', 'MODELED', 'UNKNOWN', 'BLOCKED_DATA']);
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -46,6 +65,47 @@ function safeTextOrNull(value: unknown, maximum = 240): string | null | undefine
   const text = value.trim();
   if (text.length === 0 || text.length > maximum || PRIVATE_TEXT_PATTERN.test(text)) return undefined;
   return text;
+}
+
+function unsafeCandidateEvidence(value: unknown, key = ''): boolean {
+  if (value == null) return false;
+  if (PRIVATE_EVIDENCE_KEY_PATTERN.test(key)) return true;
+  if (typeof value === 'string') {
+    return (/path/i.test(key) && PRIVATE_TEXT_PATTERN.test(value))
+      || (/(?:provenance|sourceOwner)/i.test(key) && FIXTURE_PROVENANCE_PATTERN.test(value));
+  }
+  if (Array.isArray(value)) return value.some((item) => unsafeCandidateEvidence(item, key));
+  const input = record(value);
+  return input ? Object.entries(input).some(([childKey, child]) => unsafeCandidateEvidence(child, childKey)) : false;
+}
+
+function unknownFullCostEvidence() {
+  return {
+    fullCostReady: false,
+    components: Object.fromEntries(FULL_COST_KEYS.map((key) => [key, {
+      state: 'UNKNOWN', valuePercent: null, provenance: null,
+    }])),
+  };
+}
+
+function sanitizeFullCostEvidence(value: unknown) {
+  const input = record(value);
+  const componentInput = record(input?.components);
+  if (!input || input.fullCostReady !== false || !componentInput) return null;
+  const components: UnknownRecord = {};
+  for (const key of FULL_COST_KEYS) {
+    const component = record(componentInput[key]);
+    const state = safeTextOrNull(component?.state, 24);
+    const valuePercent = finiteOrNull(component?.valuePercent);
+    const provenance = safeTextOrNull(component?.provenance, 160);
+    const valueReady = state === 'MEASURED' || state === 'MODELED';
+    if (!component || !state || !FULL_COST_STATE_SET.has(state)
+      || (valueReady && (valuePercent == null || valuePercent < 0))
+      || (!valueReady && valuePercent !== null)
+      || provenance === undefined) return null;
+    components[key] = { state, valuePercent, provenance };
+  }
+  return { fullCostReady: false, components };
 }
 
 function emptyLiquidityIndependence(status: 'MISSING' | 'INVALID', present: boolean) {
@@ -167,6 +227,121 @@ function sanitizeLiquidityIndependence(value: unknown) {
     evidenceComplete: 0,
     executionAuthority: 'NONE',
     reportDigest,
+  };
+}
+
+function emptyCandidatePerformance(status: 'MISSING' | 'INVALID' | 'BLOCKED', present: boolean, reason: string) {
+  return {
+    present,
+    status,
+    schemaVersion: null,
+    FIRST_ZERO: reason,
+    reason,
+    candidateId: null,
+    strategyId: null,
+    freezeTimestamp: null,
+    identity14Verified: false,
+    fullCostEvidence: unknownFullCostEvidence(),
+    ...Object.fromEntries(CANDIDATE_COUNT_KEYS.map((key) => [key, null])),
+    ...Object.fromEntries(CANDIDATE_METRIC_KEYS.map((key) => [key, null])),
+    FULL_COST_READY: false,
+    NET_ALPHA_PROVEN: false,
+    PROFITABILITY_PROVEN: false,
+    TRAIN_DIAGNOSTIC_ONLY: true,
+    VALIDATION_COMPLETE: false,
+    OOS_COMPLETE: false,
+    executionAuthority: 'NONE',
+  };
+}
+
+function sanitizeCandidatePerformance(value: unknown) {
+  if (value === undefined || value === null) {
+    return emptyCandidatePerformance('MISSING', false, 'CANDIDATE_PERFORMANCE_EVIDENCE_MISSING');
+  }
+  const input = record(value);
+  if (!input || typeof input.present !== 'boolean') return null;
+  if (unsafeCandidateEvidence(input)) return null;
+  const status = safeTextOrNull(input.status, 16);
+  if (!status || !CANDIDATE_PERFORMANCE_STATUS_SET.has(status)) return null;
+  const reason = safeTextOrNull(input.reason, 160);
+  if (!reason || !SAFE_ID_PATTERN.test(reason)) return null;
+  if (status === 'MISSING') {
+    return input.present === false
+      ? emptyCandidatePerformance('MISSING', false, reason)
+      : null;
+  }
+  if (status === 'INVALID') {
+    return input.present === true
+      ? emptyCandidatePerformance('INVALID', true, reason)
+      : null;
+  }
+  if (input.FULL_COST_READY !== false
+    || input.NET_ALPHA_PROVEN !== false
+    || input.PROFITABILITY_PROVEN !== false
+    || input.TRAIN_DIAGNOSTIC_ONLY !== true
+    || input.VALIDATION_COMPLETE !== false
+    || input.OOS_COMPLETE !== false
+    || input.executionAuthority !== 'NONE') return null;
+  const fullCostEvidence = sanitizeFullCostEvidence(input.fullCostEvidence);
+  if (!fullCostEvidence) return null;
+  const counts = Object.fromEntries(CANDIDATE_COUNT_KEYS.map((key) => [key, countOrNull(input[key])]));
+  const metrics = Object.fromEntries(CANDIDATE_METRIC_KEYS.map((key) => [key, finiteOrNull(input[key])]));
+  if (Object.values(counts).some((item) => item === undefined)
+    || Object.values(metrics).some((item) => item === undefined)) return null;
+  if (status === 'BLOCKED') {
+    const unavailable = [input.candidateId, input.strategyId, input.freezeTimestamp,
+      ...Object.values(counts), ...Object.values(metrics)].every((item) => item == null);
+    return input.present === true && unavailable
+      ? emptyCandidatePerformance('BLOCKED', true, reason)
+      : null;
+  }
+  if (status !== 'PRESENT' || input.present !== true || input.schemaVersion !== CANDIDATE_PERFORMANCE_SCHEMA) return null;
+  const candidateId = safeTextOrNull(input.candidateId, 100);
+  const strategyId = safeTextOrNull(input.strategyId, 160);
+  const freezeTimestamp = safeTextOrNull(input.freezeTimestamp, 40);
+  const freezeMs = Date.parse(String(freezeTimestamp ?? ''));
+  if (!candidateId || !CANDIDATE_ID_PATTERN.test(candidateId)
+    || !strategyId || !SAFE_ID_PATTERN.test(strategyId)
+    || !freezeTimestamp || !Number.isSafeInteger(freezeMs)
+    || new Date(freezeMs).toISOString() !== freezeTimestamp
+    || input.identity14Verified !== true) return null;
+  const directionCounts = [counts.LONG_SIGNAL_N, counts.SHORT_SIGNAL_N, counts.NO_TRADE_N];
+  const splitCounts = [counts.TRAIN_N, counts.VALIDATION_N, counts.OOS_N];
+  const matchValid = counts.candidateMatchedN == null
+    ? [...directionCounts, ...splitCounts].every((item) => item == null)
+    : directionCounts.every((item) => item != null)
+      && splitCounts.every((item) => item != null)
+      && directionCounts.reduce((sum, item) => sum + (item ?? 0), 0) === counts.candidateMatchedN
+      && splitCounts.reduce((sum, item) => sum + (item ?? 0), 0) === counts.candidateMatchedN;
+  const settlementCounts = [counts.WIN_N, counts.LOSS_N, counts.BREAKEVEN_N];
+  const settlementValid = counts.Settlement_N == null
+    ? settlementCounts.every((item) => item == null) && metrics.Gross_PnL == null
+    : settlementCounts.every((item) => item != null)
+      && settlementCounts.reduce((sum, item) => sum + (item ?? 0), 0) === counts.Settlement_N
+      && metrics.Gross_PnL != null;
+  const lifecycleValid = (counts.Entry_N == null || counts.Position_N == null || counts.Position_N <= counts.Entry_N)
+    && (counts.Position_N == null || counts.Settlement_N == null || counts.Settlement_N <= counts.Position_N);
+  if (!matchValid || !settlementValid || !lifecycleValid || metrics.Net_PnL != null) return null;
+  return {
+    present: true,
+    status: 'PRESENT',
+    schemaVersion: CANDIDATE_PERFORMANCE_SCHEMA,
+    FIRST_ZERO: reason,
+    reason,
+    candidateId,
+    strategyId,
+    freezeTimestamp,
+    identity14Verified: true,
+    fullCostEvidence,
+    ...counts,
+    ...metrics,
+    FULL_COST_READY: false,
+    NET_ALPHA_PROVEN: false,
+    PROFITABILITY_PROVEN: false,
+    TRAIN_DIAGNOSTIC_ONLY: true,
+    VALIDATION_COMPLETE: false,
+    OOS_COMPLETE: false,
+    executionAuthority: 'NONE',
   };
 }
 
@@ -301,10 +476,11 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
   const profitability = record(payload?.profitability);
   const runtime = sanitizePaperRuntime(paper?.runtime);
   const ledger = sanitizePaperLedger(paper?.ledger);
+  const candidatePerformance = sanitizeCandidatePerformance(paper?.candidatePerformance);
   const records = record(shadow?.records);
   const liquidityIndependence = sanitizeLiquidityIndependence(research?.liquidityIndependence);
   if (!payload || payload.schemaVersion !== RESEARCH_OVERVIEW_SCHEMA || !state || !safety || !research
-    || !paper || !shadow || !profitability || !runtime || !ledger || !records || !liquidityIndependence) return null;
+    || !paper || !shadow || !profitability || !runtime || !ledger || !candidatePerformance || !records || !liquidityIndependence) return null;
   if (safety.readOnlyDashboard !== true || safety.liveTrading !== false || safety.privateApi !== false || safety.orderAuthority !== false
     || typeof safety.authorityEvidenceComplete !== 'boolean' || typeof safety.forbiddenAuthorityObserved !== 'boolean') return null;
   const generatedAt = finiteOrNull(payload.generatedAt);
@@ -337,7 +513,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
       forbiddenAuthorityObserved: safety.forbiddenAuthorityObserved,
     },
     research: { status: researchStatus, failedTasks, blockedDataTasks, cycles, liquidityIndependence },
-    paper: { runtime, ledger },
+    paper: { runtime, ledger, candidatePerformance },
     shadow: { groups, records: { present: records.present, totalRecords, settledRecords, pendingRecords } },
     profitability: { proven: profitability.proven, status: profitabilityStatus, note: profitabilityNote },
   };
