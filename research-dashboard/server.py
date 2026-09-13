@@ -23,6 +23,31 @@ CONTENT_TYPES = {
     '.webmanifest': 'application/manifest+json; charset=utf-8',
     '.svg': 'image/svg+xml',
 }
+CANDIDATE_PERFORMANCE_SCHEMA = 'frozen-candidate-performance-reader-v1'
+CANDIDATE_ID_PATTERN = __import__('re').compile(r'^(?:phase3-candidate:sha256:|paper-candidate-v1:)[0-9a-f]{64}$')
+SAFE_ID_PATTERN = __import__('re').compile(r'^[A-Za-z0-9._:-]{1,160}$')
+CANDIDATE_COUNT_KEYS = (
+    'effectiveIndependentMarketN', 'candidateMatchedN', 'LONG_SIGNAL_N', 'SHORT_SIGNAL_N', 'NO_TRADE_N',
+    'Entry_N', 'Position_N', 'PositionObservation_N', 'Settlement_N',
+    'TRAIN_N', 'VALIDATION_N', 'OOS_N', 'WIN_N', 'LOSS_N', 'BREAKEVEN_N',
+)
+CANDIDATE_METRIC_KEYS = (
+    'WIN_RATE', 'AVG_WIN', 'AVG_LOSS', 'PAYOFF_RATIO', 'GROSS_EXPECTANCY',
+    'PF', 'MDD', 'MFE', 'MAE', 'TIME_TO_EXIT', 'Gross_PnL', 'Net_PnL',
+)
+CANDIDATE_IDENTITY_KEYS = (
+    'candidateId', 'strategyId', 'strategyVersion', 'parameterHash', 'researchCodeSha',
+    'market', 'provider', 'symbol', 'timeframe', 'sidePolicy', 'accountMode',
+    'costPolicyVersion', 'executionPolicyVersion',
+)
+FULL_COST_KEYS = (
+    'commission', 'tax', 'spread', 'slippage', 'funding', 'latency', 'liquidityImpact', 'partialFillImpact',
+)
+FULL_COST_STATES = frozenset(('MEASURED', 'MODELED', 'UNKNOWN', 'BLOCKED_DATA'))
+FORBIDDEN_EVIDENCE_KEY = __import__('re').compile(r'(?:secret|token|password|credential|private.?key|api.?key)', __import__('re').I)
+FORBIDDEN_PROVENANCE = __import__('re').compile(r'(?:^|[^a-z])(fixture|fake|example|tests?)(?:[^a-z]|$)', __import__('re').I)
+ABSOLUTE_PATH = __import__('re').compile(r'^(?:[a-z]:[\\/]|/)', __import__('re').I)
+CANDIDATE_VALUE_INVALID = object()
 
 
 def finite_number(value):
@@ -53,6 +78,70 @@ def optional_integer_count(value):
 
 def optional_boolean(value):
     return value if isinstance(value, bool) else None
+
+
+def candidate_count(value):
+    if value is None:
+        return None
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else CANDIDATE_VALUE_INVALID
+
+
+def candidate_metric(value):
+    if value is None:
+        return None
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) else CANDIDATE_VALUE_INVALID
+
+
+def unknown_full_cost_evidence():
+    return {
+        'fullCostReady': False,
+        'components': {
+            key: {'state': 'UNKNOWN', 'valuePercent': None, 'provenance': None}
+            for key in FULL_COST_KEYS
+        },
+    }
+
+
+def unsafe_browser_evidence(value, key=''):
+    if value is None:
+        return False
+    if FORBIDDEN_EVIDENCE_KEY.search(key):
+        return True
+    if isinstance(value, str):
+        return bool(('path' in key.lower() and ABSOLUTE_PATH.search(value))
+                    or (key.lower() in ('provenance', 'sourceowner') and FORBIDDEN_PROVENANCE.search(value)))
+    if isinstance(value, list):
+        return any(unsafe_browser_evidence(item, key) for item in value)
+    if isinstance(value, dict):
+        return any(unsafe_browser_evidence(child, child_key) for child_key, child in value.items())
+    return False
+
+
+def summarize_full_cost_evidence(value):
+    if not isinstance(value, dict) or value.get('fullCostReady') is not False or not isinstance(value.get('components'), dict):
+        return None
+    components = {}
+    for key in FULL_COST_KEYS:
+        component = value['components'].get(key)
+        if not isinstance(component, dict) or component.get('state') not in FULL_COST_STATES:
+            return None
+        value_ready = component['state'] in ('MEASURED', 'MODELED')
+        value_percent = candidate_metric(component.get('valuePercent'))
+        provenance = component.get('provenance')
+        if ((value_ready and (value_percent in (None, CANDIDATE_VALUE_INVALID) or value_percent < 0))
+                or (not value_ready and value_percent is not None)
+                or (provenance is not None and (
+                    not isinstance(provenance, str)
+                    or not SAFE_ID_PATTERN.fullmatch(provenance)
+                    or FORBIDDEN_PROVENANCE.search(provenance)
+                ))):
+            return None
+        components[key] = {
+            'state': component['state'],
+            'valuePercent': value_percent,
+            'provenance': provenance,
+        }
+    return {'fullCostReady': False, 'components': components}
 
 
 def read_json_optional(path):
@@ -184,6 +273,156 @@ def summarize_paper_ledger(value):
     }
 
 
+def empty_candidate_performance(status, present, reason=None):
+    return {
+        'present': present,
+        'status': status,
+        'schemaVersion': None,
+        'FIRST_ZERO': reason,
+        'reason': reason,
+        'candidateId': None,
+        'strategyId': None,
+        'freezeTimestamp': None,
+        'identity14Verified': False,
+        'fullCostEvidence': unknown_full_cost_evidence(),
+        **{key: None for key in CANDIDATE_COUNT_KEYS},
+        **{key: None for key in CANDIDATE_METRIC_KEYS},
+        'FULL_COST_READY': False,
+        'NET_ALPHA_PROVEN': False,
+        'PROFITABILITY_PROVEN': False,
+        'TRAIN_DIAGNOSTIC_ONLY': True,
+        'VALIDATION_COMPLETE': False,
+        'OOS_COMPLETE': False,
+        'executionAuthority': 'NONE',
+    }
+
+
+def summarize_candidate_performance(value, read_failed=False):
+    if read_failed:
+        return empty_candidate_performance('INVALID', True, 'CANDIDATE_PERFORMANCE_READ_FAILED')
+    if value is None:
+        return empty_candidate_performance('MISSING', False, 'CANDIDATE_PERFORMANCE_EVIDENCE_MISSING')
+    if not isinstance(value, dict) or value.get('schemaVersion') != CANDIDATE_PERFORMANCE_SCHEMA:
+        return empty_candidate_performance('INVALID', True, 'CANDIDATE_PERFORMANCE_EVIDENCE_INVALID')
+    if unsafe_browser_evidence(value):
+        return empty_candidate_performance('INVALID', True, 'CANDIDATE_PERFORMANCE_EVIDENCE_INVALID')
+    reason = value.get('reason') if isinstance(value.get('reason'), str) and SAFE_ID_PATTERN.fullmatch(value.get('reason')) else None
+    counts = {key: candidate_count(value.get(key)) for key in CANDIDATE_COUNT_KEYS}
+    metrics = {key: candidate_metric(value.get(key)) for key in CANDIDATE_METRIC_KEYS}
+    safety_valid = (
+        value.get('FULL_COST_READY') is False
+        and value.get('NET_ALPHA_PROVEN') is False
+        and value.get('PROFITABILITY_PROVEN') is False
+        and value.get('TRAIN_DIAGNOSTIC_ONLY') is True
+        and value.get('VALIDATION_COMPLETE') is False
+        and value.get('OOS_COMPLETE') is False
+        and all(value.get(key) == 0 for key in (
+            'sampleCredit', 'executionRealismCredit', 'profitabilityCredit', 'backfillCredit',
+            'replayCredit', 'syntheticCredit', 'manualEconomicCredit', 'realOrderCount',
+            'cancelCount', 'amendCount', 'transferCount', 'withdrawalCount',
+        ))
+        and value.get('executionAuthority') == 'NONE'
+        and value.get('LIVE_TRADING') is False
+        and value.get('AUTO_TRADING') is False
+        and value.get('REAL_ORDER_ENABLED') is False
+        and value.get('PRIVATE_TRADING_API_ALLOWED') is False
+        and value.get('Net_PnL') is None
+    )
+    full_cost_evidence = summarize_full_cost_evidence(value.get('fullCostEvidence'))
+    if (not safety_valid or reason is None or full_cost_evidence is None
+            or CANDIDATE_VALUE_INVALID in counts.values()
+            or CANDIDATE_VALUE_INVALID in metrics.values()):
+        return empty_candidate_performance('INVALID', True, 'CANDIDATE_PERFORMANCE_EVIDENCE_INVALID')
+    if value.get('status') == 'BLOCKED':
+        unavailable = all(item is None for item in (
+            value.get('candidateId'), value.get('strategyId'), value.get('freezeTimestamp'),
+            *counts.values(), *metrics.values(),
+        ))
+        return empty_candidate_performance(
+            'BLOCKED' if unavailable else 'INVALID',
+            True,
+            reason if unavailable else 'CANDIDATE_PERFORMANCE_BLOCKED_PARTIAL_EVIDENCE',
+        )
+    try:
+        freeze_timestamp = __import__('datetime').datetime.fromisoformat(str(value.get('freezeTimestamp')).replace('Z', '+00:00'))
+        freeze_valid = freeze_timestamp.tzinfo is not None and freeze_timestamp.isoformat(timespec='milliseconds').replace('+00:00', 'Z') == value.get('freezeTimestamp')
+    except (TypeError, ValueError):
+        freeze_valid = False
+    identity_valid = (
+        value.get('status') == 'PRESENT'
+        and isinstance(value.get('candidateId'), str) and CANDIDATE_ID_PATTERN.fullmatch(value.get('candidateId'))
+        and isinstance(value.get('strategyId'), str) and SAFE_ID_PATTERN.fullmatch(value.get('strategyId'))
+        and freeze_valid
+        and value.get('identity14Verified') is True
+        and isinstance(value.get('identity'), dict)
+        and all(isinstance(value['identity'].get(key), str) and value['identity'][key] for key in CANDIDATE_IDENTITY_KEYS)
+        and value['identity'].get('candidateId') == value.get('candidateId')
+        and value['identity'].get('strategyId') == value.get('strategyId')
+        and value['identity'].get('accountMode') == 'PAPER'
+        and bool(__import__('re').fullmatch(r'[0-9a-fA-F]{40}', value['identity'].get('researchCodeSha', '')))
+        and bool(__import__('re').fullmatch(r'[0-9a-fA-F]{64}', value['identity'].get('parameterHash', '')))
+        and value['identity'].get('parameterHash') == value['identity'].get('parameterDigest')
+        and isinstance(value.get('provenance'), dict)
+        and value['provenance'].get('evidenceClass') == 'PRODUCTION_AUTHORITATIVE'
+        and isinstance(value['provenance'].get('sourceOwner'), str) and bool(value['provenance']['sourceOwner'])
+        and value['provenance'].get('fixture') is False
+        and value['provenance'].get('synthetic') is False
+        and value['provenance'].get('replay') is False
+        and value['provenance'].get('backfill') is False
+        and value['provenance'].get('manual') is False
+    )
+    matched = counts['candidateMatchedN']
+    direction_counts = [counts[key] for key in ('LONG_SIGNAL_N', 'SHORT_SIGNAL_N', 'NO_TRADE_N')]
+    split_counts = [counts[key] for key in ('TRAIN_N', 'VALIDATION_N', 'OOS_N')]
+    match_valid = (
+        all(item is None for item in (*direction_counts, *split_counts)) if matched is None
+        else all(item is not None for item in (*direction_counts, *split_counts))
+        and sum(direction_counts) == matched and sum(split_counts) == matched
+    )
+    settlement = counts['Settlement_N']
+    settlement_counts = [counts[key] for key in ('WIN_N', 'LOSS_N', 'BREAKEVEN_N')]
+    settlement_valid = (
+        all(item is None for item in settlement_counts) and metrics['Gross_PnL'] is None if settlement is None
+        else all(item is not None for item in settlement_counts)
+        and sum(settlement_counts) == settlement and metrics['Gross_PnL'] is not None
+    )
+    lifecycle_valid = (
+        (counts['Entry_N'] is None or counts['Position_N'] is None or counts['Position_N'] <= counts['Entry_N'])
+        and (counts['Position_N'] is None or counts['Settlement_N'] is None or counts['Settlement_N'] <= counts['Position_N'])
+    )
+    if not identity_valid or not match_valid or not settlement_valid or not lifecycle_valid:
+        return empty_candidate_performance('INVALID', True, 'CANDIDATE_PERFORMANCE_EVIDENCE_INVALID')
+    return {
+        'present': True,
+        'status': 'PRESENT',
+        'schemaVersion': CANDIDATE_PERFORMANCE_SCHEMA,
+        'FIRST_ZERO': reason,
+        'reason': reason,
+        'candidateId': value.get('candidateId'),
+        'strategyId': value.get('strategyId'),
+        'freezeTimestamp': value.get('freezeTimestamp'),
+        'identity14Verified': True,
+        'fullCostEvidence': full_cost_evidence,
+        **counts,
+        **metrics,
+        'FULL_COST_READY': False,
+        'NET_ALPHA_PROVEN': False,
+        'PROFITABILITY_PROVEN': False,
+        'TRAIN_DIAGNOSTIC_ONLY': True,
+        'VALIDATION_COMPLETE': False,
+        'OOS_COMPLETE': False,
+        'executionAuthority': 'NONE',
+    }
+
+
+def read_candidate_performance(root):
+    path = root / 'forward' / 'paper' / 'status' / 'candidate-performance.json'
+    try:
+        return summarize_candidate_performance(read_json_optional(path))
+    except RuntimeError:
+        return summarize_candidate_performance(None, read_failed=True)
+
+
 def summarize_shadow_groups(value):
     if not isinstance(value, dict):
         return []
@@ -293,6 +532,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     shadow_records = count_shadow_records(shadow_state)
     shadow_canonical_handoffs = canonical_shadow_handoffs(shadow_state)
     liquidity_independence = read_v3_independence_summary(root, read_json_optional)
+    candidate_performance = read_candidate_performance(root)
     failed_tasks = sum_known_cycle_counts(cycles, 'failedCount')
     blocked_data_tasks = sum_known_cycle_counts(cycles, 'blockedDataCount')
     authority_evidence_complete = not paper_runtime.get('present') or paper_runtime.get('safetyEvidenceComplete') is True
@@ -308,7 +548,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     research_status = (
         'safety_block' if forbidden_authority_observed
         else 'safety_evidence_incomplete' if not authority_evidence_complete
-        else 'attention' if liquidity_independence.get('status') == 'INVALID'
+        else 'attention' if liquidity_independence.get('status') == 'INVALID' or candidate_performance.get('status') == 'INVALID'
         else 'evidence_incomplete' if failed_tasks is None or blocked_data_tasks is None
         else 'attention' if failed_tasks > 0
         else 'collecting'
@@ -317,7 +557,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
         'schemaVersion': 'research-dashboard-overview-v1',
         'generatedAt': int(__import__('time').time() * 1000),
         'state': {
-            'present': any(cycle.get('present') for cycle in cycles) or paper_runtime.get('present') or paper_ledger.get('present') or shadow_records.get('present') or liquidity_independence.get('present'),
+            'present': any(cycle.get('present') for cycle in cycles) or paper_runtime.get('present') or paper_ledger.get('present') or shadow_records.get('present') or liquidity_independence.get('present') or candidate_performance.get('present'),
             'latestCycleAt': latest_cycle_at,
         },
         'safety': {
@@ -335,7 +575,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
             'cycles': cycles,
             'liquidityIndependence': liquidity_independence,
         },
-        'paper': {'runtime': paper_runtime, 'ledger': paper_ledger},
+        'paper': {'runtime': paper_runtime, 'ledger': paper_ledger, 'candidatePerformance': candidate_performance},
         'shadow': {'groups': shadow_groups, 'records': shadow_records, 'canonicalHandoffs': shadow_canonical_handoffs},
         'profitability': {
             'proven': False,
