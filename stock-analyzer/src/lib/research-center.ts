@@ -51,6 +51,51 @@ export interface ResearchPaperLedger {
   settlementCount: number | null;
 }
 
+export interface ResearchCandidatePerformance {
+  present: boolean;
+  status: 'MISSING' | 'INVALID' | 'BLOCKED' | 'PRESENT';
+  schemaVersion: 'frozen-candidate-performance-reader-v1' | null;
+  FIRST_ZERO: string;
+  reason: string;
+  candidateId: string | null;
+  strategyId: string | null;
+  freezeTimestamp: string | null;
+  effectiveIndependentMarketN: number | null;
+  candidateMatchedN: number | null;
+  LONG_SIGNAL_N: number | null;
+  SHORT_SIGNAL_N: number | null;
+  NO_TRADE_N: number | null;
+  Entry_N: number | null;
+  Position_N: number | null;
+  PositionObservation_N: number | null;
+  Settlement_N: number | null;
+  TRAIN_N: number | null;
+  VALIDATION_N: number | null;
+  OOS_N: number | null;
+  WIN_N: number | null;
+  LOSS_N: number | null;
+  BREAKEVEN_N: number | null;
+  WIN_RATE: number | null;
+  AVG_WIN: number | null;
+  AVG_LOSS: number | null;
+  PAYOFF_RATIO: number | null;
+  GROSS_EXPECTANCY: number | null;
+  PF: number | null;
+  MDD: number | null;
+  MFE: number | null;
+  MAE: number | null;
+  TIME_TO_EXIT: number | null;
+  Gross_PnL: number | null;
+  Net_PnL: number | null;
+  FULL_COST_READY: false;
+  NET_ALPHA_PROVEN: false;
+  PROFITABILITY_PROVEN: false;
+  TRAIN_DIAGNOSTIC_ONLY: true;
+  VALIDATION_COMPLETE: false;
+  OOS_COMPLETE: false;
+  executionAuthority: 'NONE';
+}
+
 export interface ResearchShadowGroup {
   name: string;
   total: number | null;
@@ -102,10 +147,17 @@ export interface ResearchCenterOverview {
     failedTasks: number | null;
     blockedDataTasks: number | null;
     cycles: ResearchCycleSummary[];
+    liquidityIndependence?: {
+      present: boolean;
+      status: 'MISSING' | 'INVALID' | 'PRESENT';
+      effectiveIndependentN: number | null;
+      frozenSplitCounts: { TRAIN: number | null; VALIDATION: number | null; OOS: number | null };
+    };
   };
   paper: {
     runtime: ResearchPaperRuntime;
     ledger: ResearchPaperLedger;
+    candidatePerformance?: ResearchCandidatePerformance;
   };
   shadow: {
     groups: ResearchShadowGroup[];
