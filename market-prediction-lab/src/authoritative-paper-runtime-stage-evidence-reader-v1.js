@@ -8,6 +8,36 @@ const STAGES = Object.freeze([
   Object.freeze({ runtimeKey: "Position", evidenceKey: "position", idField: "positionId", collection: "positions" }),
   Object.freeze({ runtimeKey: "Settlement", evidenceKey: "settlement", idField: "settlementId", collection: "settlements" }),
 ]);
+const RUNTIME_IDENTITY_FIELDS = Object.freeze([
+  "candidateId",
+  "strategyFamily",
+  "strategyId",
+  "strategyVersion",
+  "parameterHash",
+  "parameterDigest",
+  "costPolicyVersion",
+  "executionPolicyVersion",
+  "accountMode",
+]);
+const STAGE_IDENTITY_FIELDS = Object.freeze([
+  "candidateId",
+  "strategyFamily",
+  "strategyId",
+  "strategyVersion",
+  "parameterHash",
+  "parameterDigest",
+  "costPolicyVersion",
+  "market",
+  "provider",
+  "symbol",
+  "timeframe",
+  "sidePolicy",
+  "accountMode",
+]);
+
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
 
 function nonEmpty(value) {
   return typeof value === "string" && value.trim().length > 0;
@@ -27,38 +57,118 @@ function canonicalCandidateId(value) {
       || /^paper-candidate-v1:[0-9a-f]{64}$/u.test(value));
 }
 
+function fieldCode(field) {
+  return field.replace(/([a-z0-9])([A-Z])/gu, "$1_$2").toUpperCase();
+}
+
 function assertExpectedIdentity(expected) {
   if (!canonicalCandidateId(expected?.candidateId)) throw new Error("PAPER_STAGE_EXPECTED_CANDIDATE_ID_REQUIRED");
-  for (const field of ["strategyFamily", "strategyId", "strategyVersion", "parameterHash", "parameterDigest", "costPolicyVersion"]) {
-    if (!nonEmpty(expected?.[field])) throw new Error(`PAPER_STAGE_EXPECTED_${field.toUpperCase()}_REQUIRED`);
+  for (const field of [
+    "strategyFamily",
+    "strategyId",
+    "strategyVersion",
+    "parameterHash",
+    "parameterDigest",
+    "costPolicyVersion",
+    "executionPolicyVersion",
+    "market",
+    "provider",
+    "symbol",
+    "timeframe",
+    "sidePolicy",
+  ]) {
+    if (!nonEmpty(expected?.[field])) throw new Error(`PAPER_STAGE_EXPECTED_${fieldCode(field)}_REQUIRED`);
   }
   if (expected.parameterHash !== expected.parameterDigest) throw new Error("PAPER_STAGE_EXPECTED_PARAMETER_IDENTITY_MISMATCH");
   if (!immutableSha(expected?.researchCodeSha)) throw new Error("PAPER_STAGE_EXPECTED_RESEARCH_SHA_REQUIRED");
   if (expected?.accountMode !== "PAPER") throw new Error("PAPER_STAGE_EXPECTED_ACCOUNT_MODE_REQUIRED");
 }
 
-function rowIdentity(row) {
-  const source = row?.identity && typeof row.identity === "object" ? row.identity : row;
+function runtimeIdentity(state) {
+  const identity = isRecord(state?.identity) ? state.identity : {};
   return Object.freeze({
-    candidateId: source?.candidateId ?? row?.candidateId ?? null,
-    strategyFamily: source?.strategyFamily ?? row?.strategyFamily ?? null,
-    strategyId: source?.strategyId ?? row?.strategyId ?? null,
-    strategyVersion: source?.strategyVersion ?? row?.strategyVersion ?? null,
-    parameterHash: source?.parameterHash ?? row?.parameterHash ?? null,
-    parameterDigest: source?.parameterDigest ?? row?.parameterDigest ?? null,
-    researchCodeSha: String(source?.researchCodeSha ?? row?.researchCodeSha ?? "").toLowerCase() || null,
-    costPolicyVersion: source?.costPolicyVersion ?? row?.costPolicyVersion ?? null,
-    accountMode: source?.accountMode ?? row?.accountMode ?? null,
+    candidateId: identity.candidateId ?? null,
+    strategyFamily: identity.strategyFamily ?? null,
+    strategyId: identity.strategyId ?? null,
+    strategyVersion: identity.strategyVersion ?? null,
+    parameterHash: identity.parameterHash ?? null,
+    parameterDigest: identity.parameterDigest ?? null,
+    researchCodeSha: String(identity.researchCodeSha ?? "").toLowerCase() || null,
+    costPolicyVersion: identity.costPolicyVersion ?? null,
+    executionPolicyVersion: identity.executionPolicyVersion ?? null,
+    accountMode: identity.accountMode ?? null,
+  });
+}
+
+function assertRuntimeIdentity(state, expected) {
+  const actual = runtimeIdentity(state);
+  for (const field of RUNTIME_IDENTITY_FIELDS) {
+    if (actual[field] !== expected[field]) {
+      throw new Error(`PAPER_STAGE_RUNTIME_${fieldCode(field)}_MISMATCH`);
+    }
+  }
+  if (actual.researchCodeSha !== expected.researchCodeSha.toLowerCase()) {
+    throw new Error("PAPER_STAGE_RUNTIME_RESEARCH_SHA_MISMATCH");
+  }
+}
+
+function rowProviders(row, sample) {
+  return [
+    row?.provider,
+    row?.identity?.provider,
+    row?.entryEvidenceProvenance?.provider,
+    row?.exitEvidenceProvenance?.provider,
+    sample?.entryEvidenceProvenance?.provider,
+    sample?.exitEvidenceProvenance?.provider,
+    sample?.identity?.provider,
+  ].filter(nonEmpty);
+}
+
+function rowIdentity(row, stage) {
+  const sample = isRecord(row?.sample) ? row.sample : null;
+  const sampleIdentity = isRecord(sample?.identity) ? sample.identity : {};
+  const source = isRecord(row?.identity) ? row.identity : isRecord(row) ? row : {};
+  const providers = rowProviders(row, sample);
+  if (new Set(providers).size > 1) {
+    throw new Error(`PAPER_STAGE_${stage.toUpperCase()}_PROVIDER_MISMATCH`);
+  }
+  return Object.freeze({
+    candidateId: source.candidateId ?? row?.candidateId ?? sampleIdentity.candidateId ?? null,
+    strategyFamily: source.strategyFamily ?? row?.strategyFamily ?? sampleIdentity.strategyFamily ?? null,
+    strategyId: source.strategyId ?? row?.strategyId ?? sampleIdentity.strategyId ?? null,
+    strategyVersion: source.strategyVersion ?? row?.strategyVersion ?? sampleIdentity.strategyVersion ?? null,
+    parameterHash: source.parameterHash ?? row?.parameterHash ?? sampleIdentity.parameterHash ?? null,
+    parameterDigest: source.parameterDigest ?? row?.parameterDigest ?? sampleIdentity.parameterDigest ?? null,
+    researchCodeSha: String(
+      source.researchCodeSha ?? row?.researchCodeSha ?? sampleIdentity.researchCodeSha ?? "",
+    ).toLowerCase() || null,
+    costPolicyVersion: source.costPolicyVersion
+      ?? row?.costPolicyVersion
+      ?? row?.profitEvidence?.costPolicyId
+      ?? sample?.profitEvidence?.costPolicyId
+      ?? null,
+    market: source.market ?? row?.market ?? sampleIdentity.market ?? null,
+    provider: providers[0] ?? null,
+    symbol: source.symbol ?? row?.symbol ?? sampleIdentity.symbol ?? null,
+    timeframe: source.timeframe ?? row?.timeframe ?? sampleIdentity.timeframe ?? null,
+    sidePolicy: source.executionDirection
+      ?? row?.entryDirection
+      ?? row?.direction
+      ?? source.signalDirection
+      ?? row?.signalDirection
+      ?? sampleIdentity.executionDirection
+      ?? sampleIdentity.signalDirection
+      ?? null,
+    accountMode: source.accountMode ?? row?.accountMode ?? sampleIdentity.accountMode ?? null,
   });
 }
 
 function assertExactIdentity(row, expected, stage) {
-  const actual = rowIdentity(row);
-  for (const field of [
-    "candidateId", "strategyFamily", "strategyId", "strategyVersion",
-    "parameterHash", "parameterDigest", "costPolicyVersion", "accountMode",
-  ]) {
-    if (actual[field] !== expected[field]) throw new Error(`PAPER_STAGE_${stage.toUpperCase()}_IDENTITY_MISMATCH`);
+  const actual = rowIdentity(row, stage);
+  for (const field of STAGE_IDENTITY_FIELDS) {
+    if (actual[field] !== expected[field]) {
+      throw new Error(`PAPER_STAGE_${stage.toUpperCase()}_${fieldCode(field)}_MISMATCH`);
+    }
   }
   if (actual.researchCodeSha !== expected.researchCodeSha.toLowerCase()) {
     throw new Error(`PAPER_STAGE_${stage.toUpperCase()}_RESEARCH_SHA_MISMATCH`);
@@ -150,6 +260,7 @@ export function readAuthoritativePaperRuntimeStageEvidenceV1({
 
   const state = recurringCycleResult?.state;
   const evidence = recurringCycleResult?.summary?.canonicalNaturalStageEvidence;
+  assertRuntimeIdentity(state, expectedCandidateIdentity);
   validateDirectEvidence(evidence, expectedCandidateIdentity);
 
   const runtimeStageMeasurements = {
