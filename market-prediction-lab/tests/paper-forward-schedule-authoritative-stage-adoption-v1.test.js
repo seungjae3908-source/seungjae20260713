@@ -17,6 +17,12 @@ const IDENTITY = Object.freeze({
   parameterDigest: DIGEST,
   researchCodeSha: RESEARCH_SHA,
   costPolicyVersion: "full-cost-v3",
+  executionPolicyVersion: "paper-exec-v1",
+  market: "CRYPTO_FUTURES",
+  provider: "bitget",
+  symbol: "BTCUSDT",
+  timeframe: "15m",
+  sidePolicy: "LONG",
   accountMode: "PAPER",
 });
 
@@ -32,10 +38,44 @@ function safety() {
   };
 }
 
-function candidate() {
+function strategyIdentity() {
   return Object.freeze({
-    signal: Object.freeze({ strategyIdentity: IDENTITY }),
-    paperIdentity: IDENTITY,
+    candidateId: IDENTITY.candidateId,
+    strategyFamily: IDENTITY.strategyFamily,
+    strategyId: IDENTITY.strategyId,
+    strategyVersion: IDENTITY.strategyVersion,
+    parameterHash: IDENTITY.parameterHash,
+    parameterDigest: IDENTITY.parameterDigest,
+    researchCodeSha: IDENTITY.researchCodeSha,
+    costPolicyVersion: IDENTITY.costPolicyVersion,
+    executionPolicyVersion: IDENTITY.executionPolicyVersion,
+    accountMode: IDENTITY.accountMode,
+  });
+}
+
+function candidate() {
+  const identity = strategyIdentity();
+  return Object.freeze({
+    signal: Object.freeze({
+      signalId: "signal-1",
+      market: IDENTITY.market,
+      symbol: IDENTITY.symbol,
+      timeframe: IDENTITY.timeframe,
+      direction: IDENTITY.sidePolicy,
+      signalDirection: IDENTITY.sidePolicy,
+      strategyIdentity: identity,
+    }),
+    execution: Object.freeze({
+      dataEvidence: Object.freeze({ provider: IDENTITY.provider }),
+    }),
+    paperIdentity: Object.freeze({
+      ...identity,
+      market: IDENTITY.market,
+      symbol: IDENTITY.symbol,
+      timeframe: IDENTITY.timeframe,
+      direction: IDENTITY.sidePolicy,
+      provider: IDENTITY.provider,
+    }),
     ...safety(),
   });
 }
@@ -85,13 +125,76 @@ function directStage(field, id) {
   });
 }
 
+function sample() {
+  return Object.freeze({
+    paperSampleId: "sample-1",
+    identity: Object.freeze({
+      candidateId: IDENTITY.candidateId,
+      strategyFamily: IDENTITY.strategyFamily,
+      strategyId: IDENTITY.strategyId,
+      strategyVersion: IDENTITY.strategyVersion,
+      parameterHash: IDENTITY.parameterHash,
+      parameterDigest: IDENTITY.parameterDigest,
+      researchCodeSha: IDENTITY.researchCodeSha,
+      accountMode: IDENTITY.accountMode,
+      market: IDENTITY.market,
+      symbol: IDENTITY.symbol,
+      timeframe: IDENTITY.timeframe,
+      executionDirection: IDENTITY.sidePolicy,
+    }),
+    profitEvidence: Object.freeze({ costPolicyId: IDENTITY.costPolicyVersion }),
+    entryEvidenceProvenance: Object.freeze({ provider: IDENTITY.provider }),
+  });
+}
+
+function position() {
+  return Object.freeze({
+    positionId: "position-1",
+    candidateId: IDENTITY.candidateId,
+    strategyFamily: IDENTITY.strategyFamily,
+    strategyId: IDENTITY.strategyId,
+    strategyVersion: IDENTITY.strategyVersion,
+    parameterHash: IDENTITY.parameterHash,
+    parameterDigest: IDENTITY.parameterDigest,
+    researchCodeSha: IDENTITY.researchCodeSha,
+    accountMode: IDENTITY.accountMode,
+    costPolicyVersion: IDENTITY.costPolicyVersion,
+    market: IDENTITY.market,
+    symbol: IDENTITY.symbol,
+    direction: IDENTITY.sidePolicy,
+    sample: sample(),
+  });
+}
+
+function settlement() {
+  return Object.freeze({
+    settlementId: "settlement-1",
+    candidateId: IDENTITY.candidateId,
+    strategyFamily: IDENTITY.strategyFamily,
+    strategyId: IDENTITY.strategyId,
+    strategyVersion: IDENTITY.strategyVersion,
+    parameterHash: IDENTITY.parameterHash,
+    parameterDigest: IDENTITY.parameterDigest,
+    researchCodeSha: IDENTITY.researchCodeSha,
+    accountMode: IDENTITY.accountMode,
+    costPolicyVersion: IDENTITY.costPolicyVersion,
+    market: IDENTITY.market,
+    symbol: IDENTITY.symbol,
+    timeframe: IDENTITY.timeframe,
+    entryDirection: IDENTITY.sidePolicy,
+    entryEvidenceProvenance: Object.freeze({ provider: IDENTITY.provider }),
+    exitEvidenceProvenance: Object.freeze({ provider: IDENTITY.provider }),
+  });
+}
+
 function recurringResult() {
   return Object.freeze({
     status: "COMPLETED",
     state: Object.freeze({
-      samples: Object.freeze([Object.freeze({ paperSampleId: "sample-1", identity: IDENTITY })]),
-      positions: Object.freeze([Object.freeze({ positionId: "position-1", identity: IDENTITY })]),
-      settlements: Object.freeze([Object.freeze({ settlementId: "settlement-1", identity: IDENTITY })]),
+      identity: strategyIdentity(),
+      samples: Object.freeze([sample()]),
+      positions: Object.freeze([position()]),
+      settlements: Object.freeze([settlement()]),
     }),
     summary: Object.freeze({
       canonicalNaturalStageEvidence: Object.freeze({
