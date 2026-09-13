@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  FROZEN_CANDIDATE_FULL_COST_EVIDENCE_VERSION,
   FROZEN_CANDIDATE_MATCH_EVIDENCE_VERSION,
   readFrozenCandidatePerformanceV1 as read,
 } from "../src/frozen-candidate-performance-reader-v1.js";
@@ -26,6 +27,15 @@ const IDENTITY = Object.freeze({
   sidePolicy: "LONG",
   accountMode: "PAPER",
 });
+const PROVENANCE = Object.freeze({
+  evidenceClass: "PRODUCTION_AUTHORITATIVE",
+  sourceOwner: "canonical-phase4-owner-v1",
+  fixture: false,
+  synthetic: false,
+  replay: false,
+  backfill: false,
+  manual: false,
+});
 
 function frozen(overrides = {}) {
   return Object.freeze({
@@ -34,6 +44,7 @@ function frozen(overrides = {}) {
     freezeTimestampMs: Date.parse("2026-09-13T00:00:00.000Z"),
     prospectiveOnly: true,
     retroactiveCreditAllowed: false,
+    provenance: PROVENANCE,
     ...overrides,
   });
 }
@@ -108,6 +119,8 @@ function matches(overrides = {}) {
   });
   return Object.freeze({
     schemaVersion: FROZEN_CANDIDATE_MATCH_EVIDENCE_VERSION,
+    status: "MEASURED",
+    provenance: PROVENANCE,
     replay: false,
     backfill: false,
     synthetic: false,
@@ -156,12 +169,16 @@ test("missing match and lifecycle evidence remains UNKNOWN rather than zero", ()
   const result = read({
     frozenCandidate: frozen(),
     reconciledStageEvidence: stageEvidence({ stages: { Entry: unknown, Position: unknown, Settlement: unknown } }),
-    recurringState: Object.freeze({ samples: [], positions: [], settlements: [] }),
+    recurringState: Object.freeze({
+      samples: [], positions: [], settlements: [],
+      ledger: Object.freeze({ sampleCount: 999, positionCount: 888, settlementCount: 777 }),
+    }),
   });
   for (const key of ["candidateMatchedN", "Entry_N", "Position_N", "PositionObservation_N", "Settlement_N", "Gross_PnL", "Net_PnL"]) {
     assert.equal(result[key], null, key);
   }
   assert.equal(result.FIRST_ZERO, "CANDIDATE_MATCH_EVIDENCE_UNKNOWN");
+  assert.equal(result.candidateMatchedN, null, "aggregate Paper ledger counts must never be borrowed");
 });
 
 test("full identity mismatch, replay, duplicate, and retroactive evidence fail closed", () => {
@@ -182,6 +199,113 @@ test("full identity mismatch, replay, duplicate, and retroactive evidence fail c
     assert.equal(result.candidateMatchedN, null);
     assert.equal(result.profitabilityCredit, 0);
   }
+});
+
+test("fixture, test-path, synthetic, replay, backfill, and manual evidence are rejected", () => {
+  const cases = [
+    matches({ provenance: Object.freeze({ ...PROVENANCE, sourceOwner: "fixture-loader" }) }),
+    matches({ provenance: Object.freeze({ ...PROVENANCE, sourcePath: "C:\\repo\\tests\\candidate.json" }) }),
+    matches({ synthetic: true }),
+    matches({ replay: true }),
+    matches({ backfill: true }),
+    matches({ manual: true }),
+  ];
+  for (const candidateMatchEvidence of cases) {
+    const result = read({
+      frozenCandidate: frozen(),
+      reconciledStageEvidence: stageEvidence(),
+      recurringState: state(),
+      candidateMatchEvidence,
+    });
+    assert.equal(result.status, "BLOCKED");
+    assert.equal(result.candidateMatchedN, null);
+    assert.equal(result.profitabilityCredit, 0);
+  }
+});
+
+test("candidate match rejects candidate, strategy, symbol, timeframe, and provider mismatches independently", () => {
+  const mismatches = {
+    candidateId: `phase3-candidate:sha256:${"d".repeat(64)}`,
+    strategyId: "other-strategy",
+    symbol: "ETHUSDT",
+    timeframe: "1h",
+    provider: "other-provider",
+  };
+  for (const [field, value] of Object.entries(mismatches)) {
+    const observations = matches().observations.map((row) => Object.freeze({
+      ...row,
+      identity: Object.freeze({ ...row.identity, [field]: value }),
+    }));
+    const result = read({
+      frozenCandidate: frozen(),
+      reconciledStageEvidence: stageEvidence(),
+      recurringState: state(),
+      candidateMatchEvidence: matches({ observations: Object.freeze(observations) }),
+    });
+    assert.equal(result.status, "BLOCKED", field);
+    assert.match(result.reason, new RegExp(`${field}_MISMATCH`, "u"), field);
+  }
+});
+
+test("measured zero remains zero and impossible lifecycle ordering fails closed", () => {
+  const zero = stage(0, []);
+  const measuredZero = read({
+    frozenCandidate: frozen(),
+    reconciledStageEvidence: stageEvidence({ stages: { Entry: zero, Position: zero, Settlement: zero } }),
+    recurringState: Object.freeze({ samples: [], positions: [], settlements: [] }),
+    candidateMatchEvidence: matches({ observations: Object.freeze([]) }),
+  });
+  for (const key of ["candidateMatchedN", "LONG_SIGNAL_N", "SHORT_SIGNAL_N", "NO_TRADE_N",
+    "Entry_N", "Position_N", "PositionObservation_N", "Settlement_N", "WIN_N", "LOSS_N", "BREAKEVEN_N", "Gross_PnL"]) {
+    assert.equal(measuredZero[key], 0, key);
+  }
+
+  const impossible = read({
+    frozenCandidate: frozen(),
+    reconciledStageEvidence: stageEvidence({
+      stages: {
+        Entry: stage(0, []),
+        Position: stage(1, ["position-1"]),
+        Settlement: stage(1, ["settlement-1"]),
+      },
+    }),
+    recurringState: state(),
+    candidateMatchEvidence: matches(),
+  });
+  assert.equal(impossible.status, "BLOCKED");
+  assert.equal(impossible.reason, "CANDIDATE_PERFORMANCE_POSITION_EXCEEDS_ENTRY");
+});
+
+test("full cost categories preserve independent measured, modeled, unknown, and blocked states", () => {
+  const components = Object.fromEntries([
+    ["commission", { state: "MEASURED", valuePercent: 0.04, provenance: "canonical-fee-ledger-v1" }],
+    ["tax", { state: "MODELED", valuePercent: 0, provenance: "canonical-tax-policy-v1" }],
+    ["spread", { state: "UNKNOWN", valuePercent: null, provenance: null }],
+    ["slippage", { state: "BLOCKED_DATA", valuePercent: null, provenance: null }],
+    ["funding", { state: "UNKNOWN", valuePercent: null, provenance: null }],
+    ["latency", { state: "UNKNOWN", valuePercent: null, provenance: null }],
+    ["liquidityImpact", { state: "UNKNOWN", valuePercent: null, provenance: null }],
+    ["partialFillImpact", { state: "UNKNOWN", valuePercent: null, provenance: null }],
+  ]);
+  const result = read({
+    frozenCandidate: frozen(),
+    reconciledStageEvidence: stageEvidence(),
+    recurringState: state(),
+    candidateMatchEvidence: matches(),
+    fullCostEvidence: Object.freeze({
+      schemaVersion: FROZEN_CANDIDATE_FULL_COST_EVIDENCE_VERSION,
+      fullCostReady: false,
+      components: Object.freeze(components),
+      provenance: PROVENANCE,
+    }),
+  });
+  assert.equal(result.status, "PRESENT");
+  assert.equal(result.fullCostEvidence.components.commission.state, "MEASURED");
+  assert.equal(result.fullCostEvidence.components.tax.state, "MODELED");
+  assert.equal(result.fullCostEvidence.components.spread.state, "UNKNOWN");
+  assert.equal(result.fullCostEvidence.components.slippage.state, "BLOCKED_DATA");
+  assert.equal(result.FULL_COST_READY, false);
+  assert.equal(result.Net_PnL, null);
 });
 
 test("duplicate lifecycle binding and missing freeze are blocked with no credit", () => {

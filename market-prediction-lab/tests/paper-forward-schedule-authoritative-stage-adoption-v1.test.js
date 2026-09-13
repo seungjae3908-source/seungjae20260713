@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   AUTHORITATIVE_PAPER_SCHEDULE_STAGE_ADOPTION_VERSION,
   runPaperForwardScheduledInvocationWithAuthoritativeStageEvidenceV1,
@@ -310,4 +313,30 @@ test("schedule callsite fails closed on ambiguous runtime evidence and keeps lif
   assert.equal(result.authoritativeRuntimeStageEvidenceConnection.profitabilityCredit, 0);
   assert.equal(result.authoritativeRuntimeStageEvidenceConnection.executionAuthority, "NONE");
   assert.equal(result.authoritativeRuntimeStageEvidenceConnection.dispatchAllowed, false);
+});
+
+test("production schedule callsite publishes candidate performance at its canonical status path", async (t) => {
+  const rootDirectory = await mkdtemp(join(tmpdir(), "paper-schedule-performance-"));
+  t.after(() => rm(rootDirectory, { recursive: true, force: true }));
+  const result = await runPaperForwardScheduledInvocationWithAuthoritativeStageEvidenceV1({
+    input: {
+      rootDirectory,
+      publicEvidenceProvider: Object.freeze({
+        async collectPublicEvidence() {
+          return evidence();
+        },
+      }),
+    },
+    runBase: async (input) => {
+      await input.publicEvidenceProvider.collectPublicEvidence({ market: "CRYPTO_FUTURES" });
+      return Object.freeze({ ...recurringResult(), rootDirectory });
+    },
+  });
+  const artifact = JSON.parse(await readFile(join(rootDirectory, "status", "candidate-performance.json"), "utf8"));
+  assert.equal(result.frozenCandidatePerformancePublication.status, "PUBLISHED");
+  assert.equal(result.frozenCandidatePerformancePublication.artifactRelativePath, "status/candidate-performance.json");
+  assert.equal(artifact.status, "BLOCKED");
+  assert.equal(artifact.FIRST_ZERO, "PHASE4_EXISTING_OWNER_PERFORMANCE_SOURCE_MISSING");
+  assert.equal(artifact.candidateMatchedN, null);
+  assert.equal(artifact.realOrderCount, 0);
 });

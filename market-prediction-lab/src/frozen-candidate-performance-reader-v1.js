@@ -3,9 +3,23 @@ export const FROZEN_CANDIDATE_PERFORMANCE_READER_VERSION =
 
 const STAGE_READER_VERSION = "authoritative-paper-runtime-stage-evidence-reader-v1";
 const MATCH_EVIDENCE_VERSION = "frozen-candidate-match-evidence-v1";
+const COST_EVIDENCE_VERSION = "frozen-candidate-full-cost-evidence-v1";
 const SHA40 = /^[0-9a-f]{40}$/iu;
 const DIGEST64 = /^[0-9a-f]{64}$/iu;
 const CANDIDATE_ID = /^(?:phase3-candidate:sha256:|paper-candidate-v1:)[0-9a-f]{64}$/u;
+const FORBIDDEN_PROVENANCE = /(?:^|[^a-z])(fixture|fake|example|tests?)(?:[^a-z]|$)/iu;
+const ABSOLUTE_PATH = /^(?:[a-z]:[\\/]|\/)/iu;
+const COST_KEYS = Object.freeze([
+  "commission",
+  "tax",
+  "spread",
+  "slippage",
+  "funding",
+  "latency",
+  "liquidityImpact",
+  "partialFillImpact",
+]);
+const COST_STATES = new Set(["MEASURED", "MODELED", "UNKNOWN", "BLOCKED_DATA"]);
 const IDENTITY_FIELDS = Object.freeze([
   "candidateId",
   "strategyFamily",
@@ -71,6 +85,22 @@ function safetyLocks() {
     REAL_ORDER_ENABLED: false,
     PRIVATE_TRADING_API_ALLOWED: false,
     realOrderCount: 0,
+    cancelCount: 0,
+    amendCount: 0,
+    transferCount: 0,
+    withdrawalCount: 0,
+  };
+}
+
+function unknownFullCostEvidence() {
+  return {
+    schemaVersion: COST_EVIDENCE_VERSION,
+    fullCostReady: false,
+    components: Object.freeze(Object.fromEntries(COST_KEYS.map((key) => [key, Object.freeze({
+      state: "UNKNOWN",
+      valuePercent: null,
+      provenance: null,
+    })]))),
   };
 }
 
@@ -114,10 +144,36 @@ function blocked(reason) {
     candidateId: null,
     strategyId: null,
     freezeTimestamp: null,
+    identity: null,
+    identity14Verified: false,
+    provenance: null,
     effectiveIndependentMarketN: null,
+    fullCostEvidence: unknownFullCostEvidence(),
     ...unknownMetrics(),
     ...safetyLocks(),
   });
+}
+
+export function blockedFrozenCandidatePerformanceV1(reason) {
+  return blocked(nonEmpty(reason) ? reason : "CANDIDATE_PERFORMANCE_READER_FAILED");
+}
+
+function assertProductionProvenance(provenance, prefix) {
+  if (!record(provenance)
+    || provenance.evidenceClass !== "PRODUCTION_AUTHORITATIVE"
+    || !nonEmpty(provenance.sourceOwner)
+    || provenance.fixture !== false
+    || provenance.synthetic !== false
+    || provenance.replay !== false
+    || provenance.backfill !== false
+    || provenance.manual !== false) {
+    throw new Error(`${prefix}_PROVENANCE_INVALID`);
+  }
+  for (const [key, value] of Object.entries(provenance)) {
+    if (typeof value !== "string") continue;
+    if (FORBIDDEN_PROVENANCE.test(value)) throw new Error(`${prefix}_FIXTURE_PROVENANCE_REJECTED`);
+    if (/path/iu.test(key) && ABSOLUTE_PATH.test(value)) throw new Error(`${prefix}_TEST_PATH_REJECTED`);
+  }
 }
 
 function assertIdentityShape(identity, prefix) {
@@ -152,6 +208,7 @@ function assertExactIdentity(actual, expected, prefix) {
 
 function frozenIdentity(candidate) {
   const source = record(candidate?.identity) ?? candidate;
+  assertProductionProvenance(candidate?.provenance, "FROZEN_CANDIDATE");
   assertIdentityShape(source, "FROZEN_CANDIDATE");
   const timestamp = Date.parse(String(candidate?.freezeTimestamp ?? ""));
   if (!Number.isSafeInteger(timestamp)
@@ -241,7 +298,7 @@ function stageRows(stageEvidence, state, expected) {
   for (const stage of STAGES) {
     const measurement = stageEvidence.runtimeStageMeasurements?.[stage.name];
     if (measurement?.status !== "MEASURED" || measurement.candidateBound !== true
-      || !Number.isInteger(measurement.count) || measurement.count <= 0
+      || !Number.isInteger(measurement.count) || measurement.count < 0
       || !Array.isArray(measurement.observationIds)
       || measurement.observationIds.length !== measurement.count
       || new Set(measurement.observationIds).size !== measurement.count) {
@@ -263,14 +320,22 @@ function stageRows(stageEvidence, state, expected) {
     });
     counts[stage.output] = measurement.count;
   }
+  if (counts.Entry_N != null && counts.Position_N != null && counts.Position_N > counts.Entry_N) {
+    throw new Error("CANDIDATE_PERFORMANCE_POSITION_EXCEEDS_ENTRY");
+  }
+  if (counts.Position_N != null && counts.Settlement_N != null && counts.Settlement_N > counts.Position_N) {
+    throw new Error("CANDIDATE_PERFORMANCE_SETTLEMENT_EXCEEDS_POSITION");
+  }
   return { counts: Object.freeze(counts), rows: Object.freeze(rows) };
 }
 
 function matchEvidence(value, expected, freezeTimestampMs) {
   if (value == null) return null;
+  assertProductionProvenance(value.provenance, "CANDIDATE_MATCH");
   if (value?.schemaVersion !== MATCH_EVIDENCE_VERSION
     || value.replay === true || value.backfill === true || value.synthetic === true || value.manual === true
-    || !Array.isArray(value.observations) || value.observations.length === 0) {
+    || value.status !== "MEASURED"
+    || !Array.isArray(value.observations)) {
     throw new Error("CANDIDATE_MATCH_EVIDENCE_INVALID");
   }
   const ids = new Set();
@@ -294,6 +359,40 @@ function matchEvidence(value, expected, freezeTimestampMs) {
   return Object.freeze({ count: ids.size, directions: Object.freeze(directions), splits: Object.freeze(splits) });
 }
 
+function fullCostEvidence(value) {
+  if (value == null) return Object.freeze(unknownFullCostEvidence());
+  assertProductionProvenance(value.provenance, "FULL_COST");
+  if (value.schemaVersion !== COST_EVIDENCE_VERSION
+    || value.fullCostReady !== false
+    || !record(value.components)) {
+    throw new Error("FULL_COST_EVIDENCE_INVALID");
+  }
+  const components = Object.fromEntries(COST_KEYS.map((key) => {
+    const component = record(value.components[key]);
+    if (!component || !COST_STATES.has(component.state)) throw new Error(`FULL_COST_${key}_STATE_INVALID`);
+    const valueReady = component.state === "MEASURED" || component.state === "MODELED";
+    if ((valueReady && (!finite(component.valuePercent) || component.valuePercent < 0))
+      || (!valueReady && component.valuePercent != null)) {
+      throw new Error(`FULL_COST_${key}_VALUE_INVALID`);
+    }
+    if (component.provenance != null && (!nonEmpty(component.provenance)
+      || FORBIDDEN_PROVENANCE.test(component.provenance)
+      || ABSOLUTE_PATH.test(component.provenance))) {
+      throw new Error(`FULL_COST_${key}_PROVENANCE_INVALID`);
+    }
+    return [key, Object.freeze({
+      state: component.state,
+      valuePercent: valueReady ? component.valuePercent : null,
+      provenance: component.provenance ?? null,
+    })];
+  }));
+  return Object.freeze({
+    schemaVersion: COST_EVIDENCE_VERSION,
+    fullCostReady: false,
+    components: Object.freeze(components),
+  });
+}
+
 function maximumDrawdown(returns) {
   let equity = 1;
   let peak = 1;
@@ -306,7 +405,10 @@ function maximumDrawdown(returns) {
   return drawdown;
 }
 
-function settlementMetrics(rows) {
+function settlementMetrics(rows, measuredCount) {
+  if (measuredCount === 0 && rows.length === 0) {
+    return { WIN_N: 0, LOSS_N: 0, BREAKEVEN_N: 0, Gross_PnL: 0 };
+  }
   if (rows.length === 0 || rows.some((row) => row?.status !== "SETTLED" || !finite(row.grossPnl))) {
     return {};
   }
@@ -358,6 +460,7 @@ export function readFrozenCandidatePerformanceV1({
   recurringState,
   candidateMatchEvidence = null,
   effectiveIndependentMarketN = null,
+  fullCostEvidence: fullCostInput = null,
 } = {}) {
   try {
     const frozen = frozenIdentity(frozenCandidate);
@@ -365,11 +468,14 @@ export function readFrozenCandidatePerformanceV1({
     const stages = stageRows(reconciledStageEvidence, recurringState, frozen.identity);
     const matches = matchEvidence(candidateMatchEvidence, frozen.identity, frozen.freezeTimestampMs);
     const positionRows = stages.rows.Position;
-    const positionObservationN = positionRows.length > 0
-      && positionRows.every((row) => Array.isArray(row?.lifecycle?.processedObservationIds))
-      ? new Set(positionRows.flatMap((row) => row.lifecycle.processedObservationIds)).size
-      : null;
-    const metrics = settlementMetrics(stages.rows.Settlement);
+    const positionObservationN = stages.counts.Position_N === 0
+      ? 0
+      : positionRows.length > 0
+        && positionRows.every((row) => Array.isArray(row?.lifecycle?.processedObservationIds))
+        ? new Set(positionRows.flatMap((row) => row.lifecycle.processedObservationIds)).size
+        : null;
+    const metrics = settlementMetrics(stages.rows.Settlement, stages.counts.Settlement_N);
+    const costs = fullCostEvidence(fullCostInput);
     const independentN = Number.isInteger(effectiveIndependentMarketN) && effectiveIndependentMarketN >= 0
       ? effectiveIndependentMarketN
       : null;
@@ -381,7 +487,11 @@ export function readFrozenCandidatePerformanceV1({
       candidateId: frozen.identity.candidateId,
       strategyId: frozen.identity.strategyId,
       freezeTimestamp: frozen.freezeTimestamp,
+      identity: frozen.identity,
+      identity14Verified: true,
+      provenance: frozenCandidate.provenance,
       effectiveIndependentMarketN: independentN,
+      fullCostEvidence: costs,
       ...unknownMetrics(),
       candidateMatchedN: matches?.count ?? null,
       LONG_SIGNAL_N: matches?.directions.LONG ?? null,
@@ -405,3 +515,4 @@ export function readFrozenCandidatePerformanceV1({
 }
 
 export const FROZEN_CANDIDATE_MATCH_EVIDENCE_VERSION = MATCH_EVIDENCE_VERSION;
+export const FROZEN_CANDIDATE_FULL_COST_EVIDENCE_VERSION = COST_EVIDENCE_VERSION;

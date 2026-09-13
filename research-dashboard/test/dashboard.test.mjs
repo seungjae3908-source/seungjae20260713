@@ -58,14 +58,32 @@ function v3Summary(overrides = {}) {
 }
 
 function candidatePerformance(overrides = {}) {
+  const candidateId = `phase3-candidate:sha256:${'7'.repeat(64)}`;
+  const parameterDigest = '8'.repeat(64);
   return {
     schemaVersion: 'frozen-candidate-performance-reader-v1',
     status: 'PRESENT',
     FIRST_ZERO: 'FULL_COST_EVIDENCE_NOT_READY',
     reason: 'FULL_COST_EVIDENCE_NOT_READY',
-    candidateId: `phase3-candidate:sha256:${'7'.repeat(64)}`,
+    candidateId,
     strategyId: 'strategy-alpha',
     freezeTimestamp: '2026-09-13T00:00:00.000Z',
+    identity14Verified: true,
+    identity: {
+      candidateId, strategyFamily: 'trend', strategyId: 'strategy-alpha', strategyVersion: 'v1',
+      parameterHash: parameterDigest, parameterDigest, researchCodeSha: '9'.repeat(40),
+      costPolicyVersion: 'cost-v1', executionPolicyVersion: 'paper-v1', market: 'CRYPTO_FUTURES',
+      provider: 'bitget', symbol: 'BTCUSDT', timeframe: '15m', sidePolicy: 'LONG', accountMode: 'PAPER',
+    },
+    provenance: {
+      evidenceClass: 'PRODUCTION_AUTHORITATIVE', sourceOwner: 'phase4-existing-owner-runtime-caller-v1',
+      fixture: false, synthetic: false, replay: false, backfill: false, manual: false,
+    },
+    fullCostEvidence: {
+      fullCostReady: false,
+      components: Object.fromEntries(['commission', 'tax', 'spread', 'slippage', 'funding', 'latency', 'liquidityImpact', 'partialFillImpact']
+        .map((key) => [key, { state: 'UNKNOWN', valuePercent: null, provenance: null }])),
+    },
     effectiveIndependentMarketN: 15,
     candidateMatchedN: 3,
     LONG_SIGNAL_N: 1,
@@ -112,6 +130,10 @@ function candidatePerformance(overrides = {}) {
     REAL_ORDER_ENABLED: false,
     PRIVATE_TRADING_API_ALLOWED: false,
     realOrderCount: 0,
+    cancelCount: 0,
+    amendCount: 0,
+    transferCount: 0,
+    withdrawalCount: 0,
     ...overrides,
   };
 }
@@ -229,6 +251,22 @@ test('candidate performance authority escalation invalidates every economic metr
   assert.equal(overview.paper.candidatePerformance.candidateMatchedN, null);
   assert.equal(overview.paper.candidatePerformance.Gross_PnL, null);
   assert.equal(overview.paper.candidatePerformance.PROFITABILITY_PROVEN, false);
+});
+
+test('candidate performance fixture provenance and impossible lifecycle fail closed', async () => {
+  const root = await fixture();
+  const path = join(root, 'forward', 'paper', 'status', 'candidate-performance.json');
+  await writeFile(path, JSON.stringify(candidatePerformance({ Position_N: 2 })));
+  let candidate = (await buildResearchOverview({ stateRoot: root })).paper.candidatePerformance;
+  assert.equal(candidate.status, 'INVALID');
+  assert.equal(candidate.Position_N, null);
+
+  await writeFile(path, JSON.stringify(candidatePerformance({
+    provenance: { ...candidatePerformance().provenance, sourceOwner: 'test-fixture-loader' },
+  })));
+  candidate = (await buildResearchOverview({ stateRoot: root })).paper.candidatePerformance;
+  assert.equal(candidate.status, 'INVALID');
+  assert.equal(candidate.candidateMatchedN, null);
 });
 
 test('missing V3 independence summary stays missing instead of becoming historical seven or zero', async () => {

@@ -35,6 +35,18 @@ CANDIDATE_METRIC_KEYS = (
     'WIN_RATE', 'AVG_WIN', 'AVG_LOSS', 'PAYOFF_RATIO', 'GROSS_EXPECTANCY',
     'PF', 'MDD', 'MFE', 'MAE', 'TIME_TO_EXIT', 'Gross_PnL', 'Net_PnL',
 )
+CANDIDATE_IDENTITY_KEYS = (
+    'candidateId', 'strategyId', 'strategyVersion', 'parameterHash', 'researchCodeSha',
+    'market', 'provider', 'symbol', 'timeframe', 'sidePolicy', 'accountMode',
+    'costPolicyVersion', 'executionPolicyVersion',
+)
+FULL_COST_KEYS = (
+    'commission', 'tax', 'spread', 'slippage', 'funding', 'latency', 'liquidityImpact', 'partialFillImpact',
+)
+FULL_COST_STATES = frozenset(('MEASURED', 'MODELED', 'UNKNOWN', 'BLOCKED_DATA'))
+FORBIDDEN_EVIDENCE_KEY = __import__('re').compile(r'(?:secret|token|password|credential|private.?key|api.?key)', __import__('re').I)
+FORBIDDEN_PROVENANCE = __import__('re').compile(r'(?:^|[^a-z])(fixture|fake|example|tests?)(?:[^a-z]|$)', __import__('re').I)
+ABSOLUTE_PATH = __import__('re').compile(r'^(?:[a-z]:[\\/]|/)', __import__('re').I)
 CANDIDATE_VALUE_INVALID = object()
 
 
@@ -78,6 +90,58 @@ def candidate_metric(value):
     if value is None:
         return None
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) else CANDIDATE_VALUE_INVALID
+
+
+def unknown_full_cost_evidence():
+    return {
+        'fullCostReady': False,
+        'components': {
+            key: {'state': 'UNKNOWN', 'valuePercent': None, 'provenance': None}
+            for key in FULL_COST_KEYS
+        },
+    }
+
+
+def unsafe_browser_evidence(value, key=''):
+    if value is None:
+        return False
+    if FORBIDDEN_EVIDENCE_KEY.search(key):
+        return True
+    if isinstance(value, str):
+        return bool(('path' in key.lower() and ABSOLUTE_PATH.search(value))
+                    or (key.lower() in ('provenance', 'sourceowner') and FORBIDDEN_PROVENANCE.search(value)))
+    if isinstance(value, list):
+        return any(unsafe_browser_evidence(item, key) for item in value)
+    if isinstance(value, dict):
+        return any(unsafe_browser_evidence(child, child_key) for child_key, child in value.items())
+    return False
+
+
+def summarize_full_cost_evidence(value):
+    if not isinstance(value, dict) or value.get('fullCostReady') is not False or not isinstance(value.get('components'), dict):
+        return None
+    components = {}
+    for key in FULL_COST_KEYS:
+        component = value['components'].get(key)
+        if not isinstance(component, dict) or component.get('state') not in FULL_COST_STATES:
+            return None
+        value_ready = component['state'] in ('MEASURED', 'MODELED')
+        value_percent = candidate_metric(component.get('valuePercent'))
+        provenance = component.get('provenance')
+        if ((value_ready and (value_percent in (None, CANDIDATE_VALUE_INVALID) or value_percent < 0))
+                or (not value_ready and value_percent is not None)
+                or (provenance is not None and (
+                    not isinstance(provenance, str)
+                    or not SAFE_ID_PATTERN.fullmatch(provenance)
+                    or FORBIDDEN_PROVENANCE.search(provenance)
+                ))):
+            return None
+        components[key] = {
+            'state': component['state'],
+            'valuePercent': value_percent,
+            'provenance': provenance,
+        }
+    return {'fullCostReady': False, 'components': components}
 
 
 def read_json_optional(path):
@@ -219,6 +283,8 @@ def empty_candidate_performance(status, present, reason=None):
         'candidateId': None,
         'strategyId': None,
         'freezeTimestamp': None,
+        'identity14Verified': False,
+        'fullCostEvidence': unknown_full_cost_evidence(),
         **{key: None for key in CANDIDATE_COUNT_KEYS},
         **{key: None for key in CANDIDATE_METRIC_KEYS},
         'FULL_COST_READY': False,
@@ -238,6 +304,8 @@ def summarize_candidate_performance(value, read_failed=False):
         return empty_candidate_performance('MISSING', False, 'CANDIDATE_PERFORMANCE_EVIDENCE_MISSING')
     if not isinstance(value, dict) or value.get('schemaVersion') != CANDIDATE_PERFORMANCE_SCHEMA:
         return empty_candidate_performance('INVALID', True, 'CANDIDATE_PERFORMANCE_EVIDENCE_INVALID')
+    if unsafe_browser_evidence(value):
+        return empty_candidate_performance('INVALID', True, 'CANDIDATE_PERFORMANCE_EVIDENCE_INVALID')
     reason = value.get('reason') if isinstance(value.get('reason'), str) and SAFE_ID_PATTERN.fullmatch(value.get('reason')) else None
     counts = {key: candidate_count(value.get(key)) for key in CANDIDATE_COUNT_KEYS}
     metrics = {key: candidate_metric(value.get(key)) for key in CANDIDATE_METRIC_KEYS}
@@ -251,6 +319,7 @@ def summarize_candidate_performance(value, read_failed=False):
         and all(value.get(key) == 0 for key in (
             'sampleCredit', 'executionRealismCredit', 'profitabilityCredit', 'backfillCredit',
             'replayCredit', 'syntheticCredit', 'manualEconomicCredit', 'realOrderCount',
+            'cancelCount', 'amendCount', 'transferCount', 'withdrawalCount',
         ))
         and value.get('executionAuthority') == 'NONE'
         and value.get('LIVE_TRADING') is False
@@ -259,7 +328,8 @@ def summarize_candidate_performance(value, read_failed=False):
         and value.get('PRIVATE_TRADING_API_ALLOWED') is False
         and value.get('Net_PnL') is None
     )
-    if (not safety_valid or reason is None
+    full_cost_evidence = summarize_full_cost_evidence(value.get('fullCostEvidence'))
+    if (not safety_valid or reason is None or full_cost_evidence is None
             or CANDIDATE_VALUE_INVALID in counts.values()
             or CANDIDATE_VALUE_INVALID in metrics.values()):
         return empty_candidate_performance('INVALID', True, 'CANDIDATE_PERFORMANCE_EVIDENCE_INVALID')
@@ -283,6 +353,23 @@ def summarize_candidate_performance(value, read_failed=False):
         and isinstance(value.get('candidateId'), str) and CANDIDATE_ID_PATTERN.fullmatch(value.get('candidateId'))
         and isinstance(value.get('strategyId'), str) and SAFE_ID_PATTERN.fullmatch(value.get('strategyId'))
         and freeze_valid
+        and value.get('identity14Verified') is True
+        and isinstance(value.get('identity'), dict)
+        and all(isinstance(value['identity'].get(key), str) and value['identity'][key] for key in CANDIDATE_IDENTITY_KEYS)
+        and value['identity'].get('candidateId') == value.get('candidateId')
+        and value['identity'].get('strategyId') == value.get('strategyId')
+        and value['identity'].get('accountMode') == 'PAPER'
+        and bool(__import__('re').fullmatch(r'[0-9a-fA-F]{40}', value['identity'].get('researchCodeSha', '')))
+        and bool(__import__('re').fullmatch(r'[0-9a-fA-F]{64}', value['identity'].get('parameterHash', '')))
+        and value['identity'].get('parameterHash') == value['identity'].get('parameterDigest')
+        and isinstance(value.get('provenance'), dict)
+        and value['provenance'].get('evidenceClass') == 'PRODUCTION_AUTHORITATIVE'
+        and isinstance(value['provenance'].get('sourceOwner'), str) and bool(value['provenance']['sourceOwner'])
+        and value['provenance'].get('fixture') is False
+        and value['provenance'].get('synthetic') is False
+        and value['provenance'].get('replay') is False
+        and value['provenance'].get('backfill') is False
+        and value['provenance'].get('manual') is False
     )
     matched = counts['candidateMatchedN']
     direction_counts = [counts[key] for key in ('LONG_SIGNAL_N', 'SHORT_SIGNAL_N', 'NO_TRADE_N')]
@@ -299,7 +386,11 @@ def summarize_candidate_performance(value, read_failed=False):
         else all(item is not None for item in settlement_counts)
         and sum(settlement_counts) == settlement and metrics['Gross_PnL'] is not None
     )
-    if not identity_valid or not match_valid or not settlement_valid:
+    lifecycle_valid = (
+        (counts['Entry_N'] is None or counts['Position_N'] is None or counts['Position_N'] <= counts['Entry_N'])
+        and (counts['Position_N'] is None or counts['Settlement_N'] is None or counts['Settlement_N'] <= counts['Position_N'])
+    )
+    if not identity_valid or not match_valid or not settlement_valid or not lifecycle_valid:
         return empty_candidate_performance('INVALID', True, 'CANDIDATE_PERFORMANCE_EVIDENCE_INVALID')
     return {
         'present': True,
@@ -310,6 +401,8 @@ def summarize_candidate_performance(value, read_failed=False):
         'candidateId': value.get('candidateId'),
         'strategyId': value.get('strategyId'),
         'freezeTimestamp': value.get('freezeTimestamp'),
+        'identity14Verified': True,
+        'fullCostEvidence': full_cost_evidence,
         **counts,
         **metrics,
         'FULL_COST_READY': False,

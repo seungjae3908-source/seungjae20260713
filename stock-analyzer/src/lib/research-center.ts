@@ -60,6 +60,14 @@ export interface ResearchCandidatePerformance {
   candidateId: string | null;
   strategyId: string | null;
   freezeTimestamp: string | null;
+  identity14Verified: boolean;
+  fullCostEvidence: {
+    fullCostReady: false;
+    components: Record<
+      'commission' | 'tax' | 'spread' | 'slippage' | 'funding' | 'latency' | 'liquidityImpact' | 'partialFillImpact',
+      { state: 'MEASURED' | 'MODELED' | 'UNKNOWN' | 'BLOCKED_DATA'; valuePercent: number | null; provenance: string | null }
+    >;
+  };
   effectiveIndependentMarketN: number | null;
   candidateMatchedN: number | null;
   LONG_SIGNAL_N: number | null;

@@ -104,15 +104,17 @@ export interface ResearchPipelineCard {
 export interface CostDisplayRow {
   key: FullCostKey;
   label: string;
-  state: 'measured' | 'unmeasured' | 'not-applicable' | 'insufficient';
+  state: 'measured' | 'modeled' | 'unmeasured' | 'not-applicable' | 'insufficient';
   value: string;
   quality: string | null;
 }
 
 type CanonicalCostComponent = {
   status?: unknown;
+  state?: unknown;
   valuePercent?: unknown;
   quality?: unknown;
+  provenance?: unknown;
 };
 
 export type CanonicalCostEvidence = {
@@ -519,8 +521,10 @@ const COST_LABELS: Readonly<Record<FullCostKey, string>> = Object.freeze({
 export function buildFullCostRows(evidence: CanonicalCostEvidence | null | undefined): CostDisplayRow[] {
   return FULL_COST_KEYS.map((key) => {
     const component = evidence?.components?.[key];
-    const status = normalized(component?.status);
-    const quality = typeof component?.quality === 'string' ? component.quality : null;
+    const status = normalized(component?.status ?? component?.state);
+    const quality = typeof component?.quality === 'string'
+      ? component.quality
+      : typeof component?.provenance === 'string' ? component.provenance : null;
     const value = finite(component?.valuePercent) && component.valuePercent >= 0 ? component.valuePercent : null;
     if (status === 'PRESENT' && quality === 'NOT_APPLICABLE' && value === 0) {
       return { key, label: COST_LABELS[key], state: 'not-applicable', value: '적용없음', quality };
@@ -528,7 +532,13 @@ export function buildFullCostRows(evidence: CanonicalCostEvidence | null | undef
     if (status === 'PRESENT' && value != null) {
       return { key, label: COST_LABELS[key], state: 'measured', value: formatCanonicalMetric(value, { digits: 4, suffix: '%' }), quality };
     }
-    if (status === 'MISSING' || status === 'NOT_EVIDENCED') {
+    if (status === 'MEASURED' && value != null) {
+      return { key, label: COST_LABELS[key], state: 'measured', value: formatCanonicalMetric(value, { digits: 4, suffix: '%' }), quality };
+    }
+    if (status === 'MODELED' && value != null) {
+      return { key, label: COST_LABELS[key], state: 'modeled', value: formatCanonicalMetric(value, { digits: 4, suffix: '%' }), quality };
+    }
+    if (status === 'MISSING' || status === 'NOT_EVIDENCED' || status === 'UNKNOWN') {
       return { key, label: COST_LABELS[key], state: 'unmeasured', value: '미측정', quality };
     }
     return { key, label: COST_LABELS[key], state: 'insufficient', value: '자료 부족', quality };
@@ -537,7 +547,7 @@ export function buildFullCostRows(evidence: CanonicalCostEvidence | null | undef
 
 export function isFullCostReady(evidence: CanonicalCostEvidence | null | undefined): boolean {
   if (evidence?.fullCostReady !== true) return false;
-  return buildFullCostRows(evidence).every((row) => row.state === 'measured' || row.state === 'not-applicable');
+  return buildFullCostRows(evidence).every((row) => row.state === 'measured' || row.state === 'modeled' || row.state === 'not-applicable');
 }
 
 export function answerCanonicalResearchQuestion(
