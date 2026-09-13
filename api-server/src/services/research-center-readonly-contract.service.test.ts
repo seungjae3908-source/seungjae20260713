@@ -57,6 +57,12 @@ function candidatePerformance() {
     candidateId: `phase3-candidate:sha256:${'8'.repeat(64)}`,
     strategyId: 'strategy-alpha',
     freezeTimestamp: '2026-09-13T00:00:00.000Z',
+    identity14Verified: true,
+    fullCostEvidence: {
+      fullCostReady: false,
+      components: Object.fromEntries(['commission', 'tax', 'spread', 'slippage', 'funding', 'latency', 'liquidityImpact', 'partialFillImpact']
+        .map((key) => [key, { state: 'UNKNOWN', valuePercent: null, provenance: null }])),
+    },
     effectiveIndependentMarketN: 15,
     candidateMatchedN: 3,
     LONG_SIGNAL_N: 1,
@@ -163,7 +169,7 @@ test('Research Center contract publishes a GET-only, authority-free allowlisted 
     accountId: 'private-account-id',
   });
   Object.assign(input.paper.runtime, { credential: 'secret', publisherAccount: 'private' });
-  Object.assign(input.paper.candidatePerformance, { accountId: 'private-account-id', statePath: '/var/lib/private-research/candidate.json' });
+  Object.assign(input.paper.candidatePerformance, { accountId: 'private-account-id' });
   Object.assign(input.research.liquidityIndependence, {
     artifactDownloadUrl: 'https://example.test/private-artifact',
     statePath: '/var/lib/private-research/v3.json',
@@ -216,6 +222,24 @@ test('candidate performance tamper fails the browser-facing DTO closed', () => {
   const inconsistent = validOverview();
   inconsistent.paper.candidatePerformance = { ...candidatePerformance(), LONG_SIGNAL_N: 3 };
   assert.equal(sanitizeResearchCenterOverview(inconsistent), null);
+
+  const impossible = validOverview();
+  impossible.paper.candidatePerformance = { ...candidatePerformance(), Position_N: 2 };
+  assert.equal(sanitizeResearchCenterOverview(impossible), null);
+
+  const invalidCost = validOverview();
+  const performance = candidatePerformance();
+  (performance.fullCostEvidence.components as Record<string, {
+    state: string; valuePercent: number | null; provenance: string | null;
+  }>).commission = {
+    state: 'UNKNOWN', valuePercent: 0, provenance: null,
+  };
+  invalidCost.paper.candidatePerformance = performance;
+  assert.equal(sanitizeResearchCenterOverview(invalidCost), null);
+
+  const privatePath = validOverview();
+  Object.assign(privatePath.paper.candidatePerformance, { statePath: '/var/lib/private-research/candidate.json' });
+  assert.equal(sanitizeResearchCenterOverview(privatePath), null);
 });
 
 test('Research Center contract fails closed on unsafe authority, malformed SHA, and filesystem text', () => {
