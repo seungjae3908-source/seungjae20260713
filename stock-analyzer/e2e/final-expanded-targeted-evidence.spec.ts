@@ -506,7 +506,7 @@ async function expectPrimaryStockInfoUsable(page: Page) {
   await page.keyboard.press('Escape');
   await navigation.getByRole('button', { name: '기술', exact: true }).click();
   await expect(page.getByRole('menu', { name: '기술 메뉴' })).toBeVisible();
-  await expect(page.getByRole('menuitem', { name: 'AI 차트', exact: true })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: 'AI차트', exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
 }
 
