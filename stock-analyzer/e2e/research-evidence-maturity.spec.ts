@@ -97,6 +97,21 @@ test('CASE F Full Cost complete requires eight explicit canonical components', (
   expect(metricAvailability(0)).toBe('ZERO_MEASURED');
   expect(mapResearchProductStatus('STALE')).toBe('stale');
   expect(classifySha('1'.repeat(40), '2'.repeat(40))).toBe('WRONG_SHA');
+
+  const independentStates = {
+    fullCostReady: false,
+    components: Object.fromEntries(FULL_COST_KEYS.map((key, index) => [key, {
+      state: index === 0 ? 'MEASURED' : index === 1 ? 'MODELED' : index === 2 ? 'BLOCKED_DATA' : 'UNKNOWN',
+      valuePercent: index < 2 ? 0.01 : null,
+      provenance: index < 2 ? 'canonical-cost-owner-v1' : null,
+    }])),
+  };
+  const rows = buildFullCostRows(independentStates);
+  expect(rows[0]?.state).toBe('measured');
+  expect(rows[1]?.state).toBe('modeled');
+  expect(rows[2]?.state).toBe('insufficient');
+  expect(rows[3]?.state).toBe('unmeasured');
+  expect(isFullCostReady(independentStates)).toBe(false);
 });
 
 test('read-only Research API allowlist drops private fields and rejects invalid evidence', () => {
