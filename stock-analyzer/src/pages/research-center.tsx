@@ -439,42 +439,8 @@ function CostRow({ row }: { row: CostDisplayRow }) {
 function PaperTab({ overview, cards }: { overview: ResearchCenterOverview; cards: ResearchPipelineCard[] }) {
   const paper = cards.find((card) => card.key === 'paper')!;
   const ledger = overview.paper.ledger;
-  const performance = overview.paper.candidatePerformance ?? {
-    status: 'MISSING' as const,
-    FIRST_ZERO: 'CANDIDATE_PERFORMANCE_EVIDENCE_MISSING',
-    candidateId: null,
-    strategyId: null,
-    freezeTimestamp: null,
-    candidateMatchedN: null,
-    LONG_SIGNAL_N: null,
-    SHORT_SIGNAL_N: null,
-    NO_TRADE_N: null,
-    Entry_N: null,
-    Position_N: null,
-    PositionObservation_N: null,
-    Settlement_N: null,
-    TRAIN_N: null,
-    VALIDATION_N: null,
-    OOS_N: null,
-    WIN_RATE: null,
-    PF: null,
-    MDD: null,
-    Gross_PnL: null,
-    Net_PnL: null,
-    FULL_COST_READY: false as const,
-    NET_ALPHA_PROVEN: false as const,
-    PROFITABILITY_PROVEN: false as const,
-    TRAIN_DIAGNOSTIC_ONLY: true as const,
-  };
-  const independentN = overview.research.liquidityIndependence?.effectiveIndependentN ?? null;
   const costRows = buildFullCostRows(null);
-  const fullCostReady = performance.FULL_COST_READY && isFullCostReady(null);
-  const candidateValue = (value: number | null, suffix = '') => value == null
-    ? 'UNKNOWN/BLOCKED'
-    : `${formatCanonicalMetric(value)}${suffix}`;
-  const candidateRate = (value: number | null) => value == null
-    ? 'UNKNOWN/BLOCKED'
-    : `${formatCanonicalMetric(value * 100, { digits: 2 })}%`;
+  const fullCostReady = isFullCostReady(null);
   const openPositionText = !ledger.present || ledger.positionCount == null
     ? '현재 포지션 자료 없음'
     : ledger.positionCount === 0
@@ -498,48 +464,18 @@ function PaperTab({ overview, cards }: { overview: ResearchCenterOverview; cards
         </div>
       </div>
 
-      <article className="rounded-2xl border border-card-border bg-card p-4 shadow-sm" data-testid="paper-candidate-performance">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">Frozen Candidate</p><h3 className="mt-1 text-sm font-black">후보별 성과 증거</h3></div>
-          <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black ${performance.status === 'PRESENT' ? STATUS_STYLE.accumulating : STATUS_STYLE.unmeasured}`}>{performance.status === 'PRESENT' ? 'EVIDENCE PRESENT' : 'UNKNOWN/BLOCKED'}</span>
-        </div>
-        <dl className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">candidateId</dt><dd className="mt-1 truncate font-mono font-bold" title={performance.candidateId ?? 'UNKNOWN/BLOCKED'}>{performance.candidateId ?? 'UNKNOWN/BLOCKED'}</dd></div>
-          <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">strategyId</dt><dd className="mt-1 font-mono font-bold">{performance.strategyId ?? 'UNKNOWN/BLOCKED'}</dd></div>
-          <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">freezeTimestamp</dt><dd className="mt-1 font-bold">{performance.freezeTimestamp ? formatDate(performance.freezeTimestamp) : 'UNKNOWN/BLOCKED'}</dd></div>
-          <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">CURRENT_FIRST_ZERO</dt><dd className="mt-1 break-all font-mono font-bold">{performance.FIRST_ZERO}</dd></div>
-        </dl>
-        <div className="mt-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-4 xl:grid-cols-6">
-          {[
-            ['effective independent N', independentN],
-            ['candidateMatchedN', performance.candidateMatchedN],
-            ['LONG signal N', performance.LONG_SIGNAL_N],
-            ['SHORT signal N', performance.SHORT_SIGNAL_N],
-            ['NO TRADE N', performance.NO_TRADE_N],
-            ['Entry', performance.Entry_N],
-            ['Position', performance.Position_N],
-            ['Position obs.', performance.PositionObservation_N],
-            ['Settlement', performance.Settlement_N],
-            ['TRAIN N', performance.TRAIN_N],
-            ['Validation N', performance.VALIDATION_N],
-            ['OOS N', performance.OOS_N],
-          ].map(([label, value]) => <div key={String(label)} className="rounded-xl border border-card-border bg-background p-2"><p className="text-[9px] font-bold text-muted-foreground">{label}</p><p className="mt-1 text-xs font-black tabular-nums">{candidateValue(value as number | null)}</p></div>)}
-        </div>
-        <p className="mt-3 text-[10px] text-muted-foreground">시장 독립 표본 N과 후보별 매치·거래 수를 분리합니다. 후보 증거가 없으면 일반 Paper ledger 수를 빌려오지 않습니다.</p>
-      </article>
-
       <section className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6" aria-label="모의매매 핵심 KPI">
         <PaperKpi label="모의 평가금액" value="미측정" state="unmeasured" />
-        <PaperKpi label="Gross PnL" value={candidateValue(performance.Gross_PnL)} state={countState(performance.Settlement_N)} />
+        <PaperKpi label="실현손익" value="미측정" state="unmeasured" />
         <PaperKpi label="미실현손익" value="미측정" state="unmeasured" />
-        <PaperKpi label="Net PnL" value={candidateValue(performance.Net_PnL)} state="unmeasured" />
-        <PaperKpi label="진입 수" value={candidateValue(performance.Entry_N)} state={countState(performance.Entry_N)} />
-        <PaperKpi label="후보 포지션" value={candidateValue(performance.Position_N)} state={countState(performance.Position_N)} />
-        <PaperKpi label="후보 Settlement" value={candidateValue(performance.Settlement_N)} state={countState(performance.Settlement_N)} />
-        <PaperKpi label="승률" value={candidateRate(performance.WIN_RATE)} state={countState(performance.Settlement_N)} />
-        <PaperKpi label="Profit Factor" value={candidateValue(performance.PF)} state={countState(performance.Settlement_N)} />
-        <PaperKpi label="MDD" value={candidateValue(performance.MDD, '%')} state={countState(performance.Settlement_N)} />
-        <PaperKpi label="후보 매치 N" value={candidateValue(performance.candidateMatchedN)} state={countState(performance.candidateMatchedN)} />
+        <PaperKpi label="순손익" value="미측정" state="unmeasured" />
+        <PaperKpi label="진입 수" value="미측정" state="unmeasured" />
+        <PaperKpi label="열린 포지션" value={formatCanonicalMetric(ledger.positionCount)} state={countState(ledger.positionCount)} />
+        <PaperKpi label="청산 수" value={formatCanonicalMetric(ledger.settlementCount)} state={countState(ledger.settlementCount)} />
+        <PaperKpi label="승률" value={ledger.settlementCount === 0 ? '표본 없음' : '미측정'} state={ledger.settlementCount === 0 ? 'waiting' : 'unmeasured'} />
+        <PaperKpi label="Profit Factor" value={ledger.settlementCount === 0 ? '-' : '미측정'} state={ledger.settlementCount === 0 ? 'waiting' : 'unmeasured'} />
+        <PaperKpi label="MDD" value="미측정" state="unmeasured" />
+        <PaperKpi label="표본 N" value={formatCanonicalMetric(ledger.settlementCount)} state={countState(ledger.settlementCount)} />
         <PaperKpi label="마지막 업데이트" value={formatDate(overview.state.latestCycleAt)} state={overview.state.latestCycleAt ? 'normal' : 'unmeasured'} />
       </section>
 
@@ -570,9 +506,8 @@ function PaperTab({ overview, cards }: { overview: ResearchCenterOverview; cards
         </article>
         <article className="rounded-2xl border border-card-border bg-card p-4 shadow-sm">
           <div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-primary" /><h3 className="text-sm font-black">수익성 검증</h3></div>
-          <p className="mt-3 text-lg font-black">{performance.PROFITABILITY_PROVEN ? '검증 충족' : '아직 검증되지 않음'}</p>
-          <p className="mt-2 text-xs text-muted-foreground">TRAIN_DIAGNOSTIC_ONLY={String(performance.TRAIN_DIAGNOSTIC_ONLY)} · VALIDATION={candidateValue(performance.VALIDATION_N)} · OOS={candidateValue(performance.OOS_N)}</p>
-          <p className="mt-1 text-xs text-muted-foreground">FULL_COST_READY={String(performance.FULL_COST_READY)} · NET_ALPHA_PROVEN={String(performance.NET_ALPHA_PROVEN)} · PROFITABILITY_PROVEN={String(performance.PROFITABILITY_PROVEN)}</p>
+          <p className="mt-3 text-lg font-black">{overview.profitability.proven ? '검증 충족' : '아직 검증되지 않음'}</p>
+          <p className="mt-2 text-xs text-muted-foreground">{ledger.settlementCount == null || ledger.settlementCount === 0 ? '추가 모의매매 표본 필요' : overview.profitability.note}</p>
           <p className="mt-1 text-xs text-muted-foreground">{cards.find((card) => card.key === 'champion')?.metrics[0]?.value ?? '검증된 Champion 근거 미수집'}</p>
         </article>
       </div>

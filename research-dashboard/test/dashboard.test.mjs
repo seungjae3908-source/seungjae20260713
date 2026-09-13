@@ -57,65 +57,6 @@ function v3Summary(overrides = {}) {
   return { ...body, reportDigest: reportDigest(body) };
 }
 
-function candidatePerformance(overrides = {}) {
-  return {
-    schemaVersion: 'frozen-candidate-performance-reader-v1',
-    status: 'PRESENT',
-    FIRST_ZERO: 'FULL_COST_EVIDENCE_NOT_READY',
-    reason: 'FULL_COST_EVIDENCE_NOT_READY',
-    candidateId: `phase3-candidate:sha256:${'7'.repeat(64)}`,
-    strategyId: 'strategy-alpha',
-    freezeTimestamp: '2026-09-13T00:00:00.000Z',
-    effectiveIndependentMarketN: 15,
-    candidateMatchedN: 3,
-    LONG_SIGNAL_N: 1,
-    SHORT_SIGNAL_N: 1,
-    NO_TRADE_N: 1,
-    Entry_N: 1,
-    Position_N: 1,
-    PositionObservation_N: 2,
-    Settlement_N: 1,
-    TRAIN_N: 3,
-    VALIDATION_N: 0,
-    OOS_N: 0,
-    WIN_N: 1,
-    LOSS_N: 0,
-    BREAKEVEN_N: 0,
-    WIN_RATE: 1,
-    AVG_WIN: 12,
-    AVG_LOSS: null,
-    PAYOFF_RATIO: null,
-    GROSS_EXPECTANCY: 12,
-    PF: null,
-    MDD: 0,
-    MFE: 2.1,
-    MAE: -0.4,
-    TIME_TO_EXIT: 60_000,
-    Gross_PnL: 12,
-    Net_PnL: null,
-    FULL_COST_READY: false,
-    NET_ALPHA_PROVEN: false,
-    PROFITABILITY_PROVEN: false,
-    TRAIN_DIAGNOSTIC_ONLY: true,
-    VALIDATION_COMPLETE: false,
-    OOS_COMPLETE: false,
-    sampleCredit: 0,
-    executionRealismCredit: 0,
-    profitabilityCredit: 0,
-    backfillCredit: 0,
-    replayCredit: 0,
-    syntheticCredit: 0,
-    manualEconomicCredit: 0,
-    executionAuthority: 'NONE',
-    LIVE_TRADING: false,
-    AUTO_TRADING: false,
-    REAL_ORDER_ENABLED: false,
-    PRIVATE_TRADING_API_ALLOWED: false,
-    realOrderCount: 0,
-    ...overrides,
-  };
-}
-
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'research-dashboard-'));
   await mkdir(join(root, 'latest'), { recursive: true });
@@ -167,10 +108,6 @@ async function fixture() {
     join(root, 'forward', 'liquidity', 'v3-authoritative-independence-summary.json'),
     JSON.stringify(v3Summary()),
   );
-  await writeFile(
-    join(root, 'forward', 'paper', 'status', 'candidate-performance.json'),
-    JSON.stringify(candidatePerformance()),
-  );
   return root;
 }
 
@@ -195,40 +132,7 @@ test('overview exposes only summarized read-only research evidence', async () =>
   assert.equal(overview.research.liquidityIndependence.independentSellN, 5);
   assert.equal(overview.research.liquidityIndependence.frozenSplitCounts.TRAIN, 15);
   assert.equal(overview.research.liquidityIndependence.frozenSplitCounts.OOS, 0);
-  assert.equal(overview.paper.candidatePerformance.status, 'PRESENT');
-  assert.equal(overview.paper.candidatePerformance.effectiveIndependentMarketN, 15);
-  assert.equal(overview.paper.candidatePerformance.candidateMatchedN, 3);
-  assert.equal(overview.paper.candidatePerformance.Entry_N, 1);
-  assert.equal(overview.paper.candidatePerformance.Position_N, 1);
-  assert.equal(overview.paper.candidatePerformance.Settlement_N, 1);
-  assert.equal(overview.paper.candidatePerformance.Net_PnL, null);
-  assert.equal(overview.paper.candidatePerformance.PROFITABILITY_PROVEN, false);
   assert.equal(overview.profitability.proven, false);
-});
-
-test('missing candidate performance remains UNKNOWN rather than borrowing market N or ledger totals', async () => {
-  const root = await fixture();
-  await rm(join(root, 'forward', 'paper', 'status', 'candidate-performance.json'));
-  const overview = await buildResearchOverview({ stateRoot: root });
-  assert.equal(overview.paper.candidatePerformance.status, 'MISSING');
-  assert.equal(overview.paper.candidatePerformance.candidateMatchedN, null);
-  assert.equal(overview.paper.candidatePerformance.Entry_N, null);
-  assert.equal(overview.paper.candidatePerformance.Settlement_N, null);
-  assert.equal(overview.paper.candidatePerformance.Gross_PnL, null);
-  assert.equal(overview.paper.candidatePerformance.Net_PnL, null);
-  assert.equal(overview.research.liquidityIndependence.effectiveIndependentN, 15);
-});
-
-test('candidate performance authority escalation invalidates every economic metric', async () => {
-  const root = await fixture();
-  const path = join(root, 'forward', 'paper', 'status', 'candidate-performance.json');
-  await writeFile(path, JSON.stringify(candidatePerformance({ PROFITABILITY_PROVEN: true })));
-  const overview = await buildResearchOverview({ stateRoot: root });
-  assert.equal(overview.research.status, 'attention');
-  assert.equal(overview.paper.candidatePerformance.status, 'INVALID');
-  assert.equal(overview.paper.candidatePerformance.candidateMatchedN, null);
-  assert.equal(overview.paper.candidatePerformance.Gross_PnL, null);
-  assert.equal(overview.paper.candidatePerformance.PROFITABILITY_PROVEN, false);
 });
 
 test('missing V3 independence summary stays missing instead of becoming historical seven or zero', async () => {
