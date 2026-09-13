@@ -10,6 +10,8 @@ const CANDIDATE_ID_PATTERN = /^(?:phase3-candidate:sha256:|paper-candidate-v1:)[
 const SAFE_ID_PATTERN = /^[A-Za-z0-9._:-]{1,160}$/;
 const DECIMAL_ID_PATTERN = /^[0-9]{6,20}$/;
 const PRIVATE_TEXT_PATTERN = /(?:^[a-z]:[\\/]|\/(?:var|home|root|etc|opt|srv|users)\/|-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:ghp|github_pat|sk_live|sk_test)_[a-z0-9_-]+)/i;
+const PRIVATE_EVIDENCE_KEY_PATTERN = /(?:secret|token|password|credential|private.?key|api.?key)/i;
+const FIXTURE_PROVENANCE_PATTERN = /(?:^|[^a-z])(fixture|fake|example|tests?)(?:[^a-z]|$)/i;
 const V3_SPLIT_COUNT_KEYS = Object.freeze([
   'TRAIN',
   'TRAIN_BUY',
@@ -30,6 +32,10 @@ const CANDIDATE_METRIC_KEYS = Object.freeze([
   'WIN_RATE', 'AVG_WIN', 'AVG_LOSS', 'PAYOFF_RATIO', 'GROSS_EXPECTANCY',
   'PF', 'MDD', 'MFE', 'MAE', 'TIME_TO_EXIT', 'Gross_PnL', 'Net_PnL',
 ]);
+const FULL_COST_KEYS = Object.freeze([
+  'commission', 'tax', 'spread', 'slippage', 'funding', 'latency', 'liquidityImpact', 'partialFillImpact',
+]);
+const FULL_COST_STATE_SET = new Set(['MEASURED', 'MODELED', 'UNKNOWN', 'BLOCKED_DATA']);
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -59,6 +65,47 @@ function safeTextOrNull(value: unknown, maximum = 240): string | null | undefine
   const text = value.trim();
   if (text.length === 0 || text.length > maximum || PRIVATE_TEXT_PATTERN.test(text)) return undefined;
   return text;
+}
+
+function unsafeCandidateEvidence(value: unknown, key = ''): boolean {
+  if (value == null) return false;
+  if (PRIVATE_EVIDENCE_KEY_PATTERN.test(key)) return true;
+  if (typeof value === 'string') {
+    return (/path/i.test(key) && PRIVATE_TEXT_PATTERN.test(value))
+      || (/(?:provenance|sourceOwner)/i.test(key) && FIXTURE_PROVENANCE_PATTERN.test(value));
+  }
+  if (Array.isArray(value)) return value.some((item) => unsafeCandidateEvidence(item, key));
+  const input = record(value);
+  return input ? Object.entries(input).some(([childKey, child]) => unsafeCandidateEvidence(child, childKey)) : false;
+}
+
+function unknownFullCostEvidence() {
+  return {
+    fullCostReady: false,
+    components: Object.fromEntries(FULL_COST_KEYS.map((key) => [key, {
+      state: 'UNKNOWN', valuePercent: null, provenance: null,
+    }])),
+  };
+}
+
+function sanitizeFullCostEvidence(value: unknown) {
+  const input = record(value);
+  const componentInput = record(input?.components);
+  if (!input || input.fullCostReady !== false || !componentInput) return null;
+  const components: UnknownRecord = {};
+  for (const key of FULL_COST_KEYS) {
+    const component = record(componentInput[key]);
+    const state = safeTextOrNull(component?.state, 24);
+    const valuePercent = finiteOrNull(component?.valuePercent);
+    const provenance = safeTextOrNull(component?.provenance, 160);
+    const valueReady = state === 'MEASURED' || state === 'MODELED';
+    if (!component || !state || !FULL_COST_STATE_SET.has(state)
+      || (valueReady && (valuePercent == null || valuePercent < 0))
+      || (!valueReady && valuePercent !== null)
+      || provenance === undefined) return null;
+    components[key] = { state, valuePercent, provenance };
+  }
+  return { fullCostReady: false, components };
 }
 
 function emptyLiquidityIndependence(status: 'MISSING' | 'INVALID', present: boolean) {
@@ -193,6 +240,8 @@ function emptyCandidatePerformance(status: 'MISSING' | 'INVALID' | 'BLOCKED', pr
     candidateId: null,
     strategyId: null,
     freezeTimestamp: null,
+    identity14Verified: false,
+    fullCostEvidence: unknownFullCostEvidence(),
     ...Object.fromEntries(CANDIDATE_COUNT_KEYS.map((key) => [key, null])),
     ...Object.fromEntries(CANDIDATE_METRIC_KEYS.map((key) => [key, null])),
     FULL_COST_READY: false,
@@ -211,6 +260,7 @@ function sanitizeCandidatePerformance(value: unknown) {
   }
   const input = record(value);
   if (!input || typeof input.present !== 'boolean') return null;
+  if (unsafeCandidateEvidence(input)) return null;
   const status = safeTextOrNull(input.status, 16);
   if (!status || !CANDIDATE_PERFORMANCE_STATUS_SET.has(status)) return null;
   const reason = safeTextOrNull(input.reason, 160);
@@ -232,6 +282,8 @@ function sanitizeCandidatePerformance(value: unknown) {
     || input.VALIDATION_COMPLETE !== false
     || input.OOS_COMPLETE !== false
     || input.executionAuthority !== 'NONE') return null;
+  const fullCostEvidence = sanitizeFullCostEvidence(input.fullCostEvidence);
+  if (!fullCostEvidence) return null;
   const counts = Object.fromEntries(CANDIDATE_COUNT_KEYS.map((key) => [key, countOrNull(input[key])]));
   const metrics = Object.fromEntries(CANDIDATE_METRIC_KEYS.map((key) => [key, finiteOrNull(input[key])]));
   if (Object.values(counts).some((item) => item === undefined)
@@ -251,7 +303,8 @@ function sanitizeCandidatePerformance(value: unknown) {
   if (!candidateId || !CANDIDATE_ID_PATTERN.test(candidateId)
     || !strategyId || !SAFE_ID_PATTERN.test(strategyId)
     || !freezeTimestamp || !Number.isSafeInteger(freezeMs)
-    || new Date(freezeMs).toISOString() !== freezeTimestamp) return null;
+    || new Date(freezeMs).toISOString() !== freezeTimestamp
+    || input.identity14Verified !== true) return null;
   const directionCounts = [counts.LONG_SIGNAL_N, counts.SHORT_SIGNAL_N, counts.NO_TRADE_N];
   const splitCounts = [counts.TRAIN_N, counts.VALIDATION_N, counts.OOS_N];
   const matchValid = counts.candidateMatchedN == null
@@ -266,7 +319,9 @@ function sanitizeCandidatePerformance(value: unknown) {
     : settlementCounts.every((item) => item != null)
       && settlementCounts.reduce((sum, item) => sum + (item ?? 0), 0) === counts.Settlement_N
       && metrics.Gross_PnL != null;
-  if (!matchValid || !settlementValid || metrics.Net_PnL != null) return null;
+  const lifecycleValid = (counts.Entry_N == null || counts.Position_N == null || counts.Position_N <= counts.Entry_N)
+    && (counts.Position_N == null || counts.Settlement_N == null || counts.Settlement_N <= counts.Position_N);
+  if (!matchValid || !settlementValid || !lifecycleValid || metrics.Net_PnL != null) return null;
   return {
     present: true,
     status: 'PRESENT',
@@ -276,6 +331,8 @@ function sanitizeCandidatePerformance(value: unknown) {
     candidateId,
     strategyId,
     freezeTimestamp,
+    identity14Verified: true,
+    fullCostEvidence,
     ...counts,
     ...metrics,
     FULL_COST_READY: false,

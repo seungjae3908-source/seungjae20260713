@@ -22,7 +22,7 @@ import {
   WalletCards,
 } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
-import { fetchResearchCenterOverview, type ResearchCenterOverview } from '@/lib/research-center';
+import { fetchResearchCenterOverview, type ResearchCandidatePerformance, type ResearchCenterOverview } from '@/lib/research-center';
 import {
   answerCanonicalResearchQuestion,
   buildFullCostRows,
@@ -422,12 +422,14 @@ function PaperKpi({ label, value, state }: { label: string; value: string; state
 function CostRow({ row }: { row: CostDisplayRow }) {
   const status: ResearchProductStatus = row.state === 'measured'
     ? 'verified'
+    : row.state === 'modeled'
+      ? 'attention'
     : row.state === 'not-applicable'
       ? 'inactive'
       : row.state === 'unmeasured'
         ? 'unmeasured'
         : 'insufficient';
-  const label = row.state === 'measured' ? '측정됨' : row.state === 'not-applicable' ? '적용없음' : row.state === 'unmeasured' ? '미측정' : '자료 부족';
+  const label = row.state === 'measured' ? '측정됨' : row.state === 'modeled' ? '모델값' : row.state === 'not-applicable' ? '적용없음' : row.state === 'unmeasured' ? '미측정' : '자료 부족';
   return (
     <div className="flex min-h-14 items-center justify-between gap-3 rounded-xl border border-card-border bg-background p-3">
       <div className="min-w-0"><p className="text-xs font-black">{row.label}</p><p className="mt-0.5 text-[10px] text-muted-foreground">{row.quality ?? 'Canonical quality 미수집'}</p></div>
@@ -445,6 +447,11 @@ function PaperTab({ overview, cards }: { overview: ResearchCenterOverview; cards
     candidateId: null,
     strategyId: null,
     freezeTimestamp: null,
+    identity14Verified: false,
+    fullCostEvidence: {
+      fullCostReady: false as const,
+      components: Object.fromEntries(['commission', 'tax', 'spread', 'slippage', 'funding', 'latency', 'liquidityImpact', 'partialFillImpact'].map((key) => [key, { state: 'UNKNOWN', valuePercent: null, provenance: null }])) as ResearchCandidatePerformance['fullCostEvidence']['components'],
+    },
     candidateMatchedN: null,
     LONG_SIGNAL_N: null,
     SHORT_SIGNAL_N: null,
@@ -467,8 +474,8 @@ function PaperTab({ overview, cards }: { overview: ResearchCenterOverview; cards
     TRAIN_DIAGNOSTIC_ONLY: true as const,
   };
   const independentN = overview.research.liquidityIndependence?.effectiveIndependentN ?? null;
-  const costRows = buildFullCostRows(null);
-  const fullCostReady = performance.FULL_COST_READY && isFullCostReady(null);
+  const costRows = buildFullCostRows(performance.fullCostEvidence);
+  const fullCostReady = performance.FULL_COST_READY && isFullCostReady(performance.fullCostEvidence);
   const candidateValue = (value: number | null, suffix = '') => value == null
     ? 'UNKNOWN/BLOCKED'
     : `${formatCanonicalMetric(value)}${suffix}`;
@@ -557,7 +564,7 @@ function PaperTab({ overview, cards }: { overview: ResearchCenterOverview; cards
       <article className="rounded-2xl border border-card-border bg-card p-4 shadow-sm" data-testid="paper-full-cost">
         <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">8 components</p><h3 className="mt-1 text-sm font-black">비용 분석</h3></div><span className="text-xs font-black">FULL_COST_READY · {fullCostReady ? '충족' : '자료 부족'}</span></div>
         <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">{costRows.map((row) => <CostRow key={row.key} row={row} />)}</div>
-        <p className="mt-3 text-[10px] text-muted-foreground">Canonical component evidence가 API에 없으므로 unavailable 비용을 0으로 바꾸지 않습니다.</p>
+        <p className="mt-3 text-[10px] text-muted-foreground">각 비용은 MEASURED / MODELED / UNKNOWN / BLOCKED_DATA를 독립 유지하며 unavailable 비용을 0으로 바꾸지 않습니다.</p>
       </article>
 
       <div className="grid gap-4 lg:grid-cols-2">
