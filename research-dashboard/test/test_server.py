@@ -63,6 +63,64 @@ def valid_v3_summary():
     return value
 
 
+def valid_candidate_performance():
+    return {
+        'schemaVersion': 'frozen-candidate-performance-reader-v1',
+        'status': 'PRESENT',
+        'FIRST_ZERO': 'FULL_COST_EVIDENCE_NOT_READY',
+        'reason': 'FULL_COST_EVIDENCE_NOT_READY',
+        'candidateId': f"phase3-candidate:sha256:{'7' * 64}",
+        'strategyId': 'strategy-alpha',
+        'freezeTimestamp': '2026-09-13T00:00:00.000Z',
+        'effectiveIndependentMarketN': 15,
+        'candidateMatchedN': 3,
+        'LONG_SIGNAL_N': 1,
+        'SHORT_SIGNAL_N': 1,
+        'NO_TRADE_N': 1,
+        'Entry_N': 1,
+        'Position_N': 1,
+        'PositionObservation_N': 2,
+        'Settlement_N': 1,
+        'TRAIN_N': 3,
+        'VALIDATION_N': 0,
+        'OOS_N': 0,
+        'WIN_N': 1,
+        'LOSS_N': 0,
+        'BREAKEVEN_N': 0,
+        'WIN_RATE': 1,
+        'AVG_WIN': 12,
+        'AVG_LOSS': None,
+        'PAYOFF_RATIO': None,
+        'GROSS_EXPECTANCY': 12,
+        'PF': None,
+        'MDD': 0,
+        'MFE': 2.1,
+        'MAE': -0.4,
+        'TIME_TO_EXIT': 60_000,
+        'Gross_PnL': 12,
+        'Net_PnL': None,
+        'FULL_COST_READY': False,
+        'NET_ALPHA_PROVEN': False,
+        'PROFITABILITY_PROVEN': False,
+        'TRAIN_DIAGNOSTIC_ONLY': True,
+        'VALIDATION_COMPLETE': False,
+        'OOS_COMPLETE': False,
+        'sampleCredit': 0,
+        'executionRealismCredit': 0,
+        'profitabilityCredit': 0,
+        'backfillCredit': 0,
+        'replayCredit': 0,
+        'syntheticCredit': 0,
+        'manualEconomicCredit': 0,
+        'executionAuthority': 'NONE',
+        'LIVE_TRADING': False,
+        'AUTO_TRADING': False,
+        'REAL_ORDER_ENABLED': False,
+        'PRIVATE_TRADING_API_ALLOWED': False,
+        'realOrderCount': 0,
+    }
+
+
 class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
     def fixture(self):
         temporary = tempfile.TemporaryDirectory()
@@ -164,6 +222,37 @@ class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
         self.assertIsNone(liquidity['frozenSplitCounts']['TRAIN'])
         self.assertIsNone(liquidity['frozenSplitCounts']['OOS'])
         self.assertFalse(overview['profitability']['proven'])
+
+    def test_candidate_performance_is_candidate_bound_and_missing_stays_unknown(self):
+        root = self.fixture()
+        write_json(root / 'forward' / 'paper' / 'status' / 'candidate-performance.json', valid_candidate_performance())
+        present = build_research_overview(root)['paper']['candidatePerformance']
+        self.assertEqual(present['status'], 'PRESENT')
+        self.assertEqual(present['candidateMatchedN'], 3)
+        self.assertEqual(present['Settlement_N'], 1)
+        self.assertEqual(present['VALIDATION_N'], 0)
+        self.assertIsNone(present['Net_PnL'])
+        self.assertFalse(present['PROFITABILITY_PROVEN'])
+
+        (root / 'forward' / 'paper' / 'status' / 'candidate-performance.json').unlink()
+        missing = build_research_overview(root)['paper']['candidatePerformance']
+        self.assertEqual(missing['status'], 'MISSING')
+        self.assertIsNone(missing['candidateMatchedN'])
+        self.assertIsNone(missing['Entry_N'])
+        self.assertIsNone(missing['Gross_PnL'])
+
+    def test_candidate_performance_tamper_fails_closed(self):
+        root = self.fixture()
+        value = valid_candidate_performance()
+        value['PROFITABILITY_PROVEN'] = True
+        write_json(root / 'forward' / 'paper' / 'status' / 'candidate-performance.json', value)
+        overview = build_research_overview(root)
+        candidate = overview['paper']['candidatePerformance']
+        self.assertEqual(overview['research']['status'], 'attention')
+        self.assertEqual(candidate['status'], 'INVALID')
+        self.assertIsNone(candidate['candidateMatchedN'])
+        self.assertIsNone(candidate['Gross_PnL'])
+        self.assertFalse(candidate['PROFITABILITY_PROVEN'])
 
     def test_v3_authority_escalation_fails_closed_and_hides_partial_counts(self):
         root = self.fixture()
