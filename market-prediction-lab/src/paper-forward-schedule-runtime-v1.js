@@ -132,6 +132,7 @@ export async function runPaperForwardScheduledInvocationWithAuthoritativeStageEv
         state: result?.state,
         summary: result?.summary,
       }),
+      runtimeIdentityMode: "SCHEDULE_PROCESS",
     });
   }
 
