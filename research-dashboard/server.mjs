@@ -16,26 +16,8 @@ const V3_INDEPENDENCE_SUMMARY_RELATIVE_PATH = Object.freeze([
   'v3-authoritative-independence-summary.json',
 ]);
 const V3_INDEPENDENCE_SUMMARY_SCHEMA = 'public-forward-liquidity-v3-authoritative-independence-summary-v1';
-const CANDIDATE_PERFORMANCE_SCHEMA = 'frozen-candidate-performance-reader-v1';
-const CANDIDATE_PERFORMANCE_RELATIVE_PATH = Object.freeze([
-  'forward',
-  'paper',
-  'status',
-  'candidate-performance.json',
-]);
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
-const CANDIDATE_ID_PATTERN = /^(?:phase3-candidate:sha256:|paper-candidate-v1:)[0-9a-f]{64}$/u;
-const SAFE_ID_PATTERN = /^[A-Za-z0-9._:-]{1,160}$/u;
-const CANDIDATE_COUNT_KEYS = Object.freeze([
-  'effectiveIndependentMarketN', 'candidateMatchedN', 'LONG_SIGNAL_N', 'SHORT_SIGNAL_N', 'NO_TRADE_N',
-  'Entry_N', 'Position_N', 'PositionObservation_N', 'Settlement_N',
-  'TRAIN_N', 'VALIDATION_N', 'OOS_N', 'WIN_N', 'LOSS_N', 'BREAKEVEN_N',
-]);
-const CANDIDATE_METRIC_KEYS = Object.freeze([
-  'WIN_RATE', 'AVG_WIN', 'AVG_LOSS', 'PAYOFF_RATIO', 'GROSS_EXPECTANCY',
-  'PF', 'MDD', 'MFE', 'MAE', 'TIME_TO_EXIT', 'Gross_PnL', 'Net_PnL',
-]);
 const SPLIT_COUNT_KEYS = Object.freeze([
   'TRAIN',
   'TRAIN_BUY',
@@ -71,16 +53,6 @@ function optionalIntegerCount(value) {
 
 function optionalBoolean(value) {
   return typeof value === 'boolean' ? value : null;
-}
-
-function candidateCount(value) {
-  if (value === null || value === undefined) return null;
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
-}
-
-function candidateMetric(value) {
-  if (value === null || value === undefined) return null;
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 async function readJsonOptional(path) {
@@ -223,123 +195,6 @@ async function readV3IndependenceSummary(root) {
     return summarizeV3Independence(await readJsonOptional(path));
   } catch {
     return summarizeV3Independence(null, true);
-  }
-}
-
-function emptyCandidatePerformance(status, present, reason = null) {
-  return Object.freeze({
-    present,
-    status,
-    schemaVersion: null,
-    FIRST_ZERO: reason,
-    reason,
-    candidateId: null,
-    strategyId: null,
-    freezeTimestamp: null,
-    ...Object.fromEntries(CANDIDATE_COUNT_KEYS.map((key) => [key, null])),
-    ...Object.fromEntries(CANDIDATE_METRIC_KEYS.map((key) => [key, null])),
-    FULL_COST_READY: false,
-    NET_ALPHA_PROVEN: false,
-    PROFITABILITY_PROVEN: false,
-    TRAIN_DIAGNOSTIC_ONLY: true,
-    VALIDATION_COMPLETE: false,
-    OOS_COMPLETE: false,
-    executionAuthority: 'NONE',
-  });
-}
-
-function summarizeCandidatePerformance(value, readFailed = false) {
-  if (readFailed) return emptyCandidatePerformance('INVALID', true, 'CANDIDATE_PERFORMANCE_READ_FAILED');
-  if (!value) return emptyCandidatePerformance('MISSING', false, 'CANDIDATE_PERFORMANCE_EVIDENCE_MISSING');
-  if (typeof value !== 'object' || Array.isArray(value) || value.schemaVersion !== CANDIDATE_PERFORMANCE_SCHEMA) {
-    return emptyCandidatePerformance('INVALID', true, 'CANDIDATE_PERFORMANCE_EVIDENCE_INVALID');
-  }
-  const status = value.status;
-  const reason = typeof value.reason === 'string' && SAFE_ID_PATTERN.test(value.reason) ? value.reason : null;
-  const counts = Object.fromEntries(CANDIDATE_COUNT_KEYS.map((key) => [key, candidateCount(value[key])]));
-  const metrics = Object.fromEntries(CANDIDATE_METRIC_KEYS.map((key) => [key, candidateMetric(value[key])]));
-  const safetyValid = value.FULL_COST_READY === false
-    && value.NET_ALPHA_PROVEN === false
-    && value.PROFITABILITY_PROVEN === false
-    && value.TRAIN_DIAGNOSTIC_ONLY === true
-    && value.VALIDATION_COMPLETE === false
-    && value.OOS_COMPLETE === false
-    && value.sampleCredit === 0
-    && value.executionRealismCredit === 0
-    && value.profitabilityCredit === 0
-    && value.backfillCredit === 0
-    && value.replayCredit === 0
-    && value.syntheticCredit === 0
-    && value.manualEconomicCredit === 0
-    && value.executionAuthority === 'NONE'
-    && value.LIVE_TRADING === false
-    && value.AUTO_TRADING === false
-    && value.REAL_ORDER_ENABLED === false
-    && value.PRIVATE_TRADING_API_ALLOWED === false
-    && value.realOrderCount === 0
-    && value.Net_PnL == null;
-  if (!safetyValid || !reason
-    || Object.values(counts).some((item) => item === undefined)
-    || Object.values(metrics).some((item) => item === undefined)) {
-    return emptyCandidatePerformance('INVALID', true, 'CANDIDATE_PERFORMANCE_EVIDENCE_INVALID');
-  }
-  if (status === 'BLOCKED') {
-    const unavailable = [value.candidateId, value.strategyId, value.freezeTimestamp,
-      ...Object.values(counts), ...Object.values(metrics)].every((item) => item == null);
-    return unavailable
-      ? emptyCandidatePerformance('BLOCKED', true, reason)
-      : emptyCandidatePerformance('INVALID', true, 'CANDIDATE_PERFORMANCE_BLOCKED_PARTIAL_EVIDENCE');
-  }
-  const freezeMs = Date.parse(String(value.freezeTimestamp ?? ''));
-  const identityValid = status === 'PRESENT'
-    && CANDIDATE_ID_PATTERN.test(String(value.candidateId ?? ''))
-    && SAFE_ID_PATTERN.test(String(value.strategyId ?? ''))
-    && Number.isSafeInteger(freezeMs)
-    && new Date(freezeMs).toISOString() === value.freezeTimestamp;
-  const matchedCounts = [counts.LONG_SIGNAL_N, counts.SHORT_SIGNAL_N, counts.NO_TRADE_N];
-  const splitCounts = [counts.TRAIN_N, counts.VALIDATION_N, counts.OOS_N];
-  const matchValid = counts.candidateMatchedN == null
-    ? [...matchedCounts, ...splitCounts].every((item) => item == null)
-    : matchedCounts.every((item) => item != null)
-      && splitCounts.every((item) => item != null)
-      && matchedCounts.reduce((sum, item) => sum + item, 0) === counts.candidateMatchedN
-      && splitCounts.reduce((sum, item) => sum + item, 0) === counts.candidateMatchedN;
-  const settlementCounts = [counts.WIN_N, counts.LOSS_N, counts.BREAKEVEN_N];
-  const settlementValid = counts.Settlement_N == null
-    ? settlementCounts.every((item) => item == null) && metrics.Gross_PnL == null
-    : settlementCounts.every((item) => item != null)
-      && settlementCounts.reduce((sum, item) => sum + item, 0) === counts.Settlement_N
-      && metrics.Gross_PnL != null;
-  if (!identityValid || !matchValid || !settlementValid) {
-    return emptyCandidatePerformance('INVALID', true, 'CANDIDATE_PERFORMANCE_EVIDENCE_INVALID');
-  }
-  return Object.freeze({
-    present: true,
-    status: 'PRESENT',
-    schemaVersion: CANDIDATE_PERFORMANCE_SCHEMA,
-    FIRST_ZERO: reason,
-    reason,
-    candidateId: value.candidateId,
-    strategyId: value.strategyId,
-    freezeTimestamp: value.freezeTimestamp,
-    ...counts,
-    ...metrics,
-    FULL_COST_READY: false,
-    NET_ALPHA_PROVEN: false,
-    PROFITABILITY_PROVEN: false,
-    TRAIN_DIAGNOSTIC_ONLY: true,
-    VALIDATION_COMPLETE: false,
-    OOS_COMPLETE: false,
-    executionAuthority: 'NONE',
-  });
-}
-
-async function readCandidatePerformance(root) {
-  const path = join(root, ...CANDIDATE_PERFORMANCE_RELATIVE_PATH);
-  try {
-    return summarizeCandidatePerformance(await readJsonOptional(path));
-  } catch {
-    return summarizeCandidatePerformance(null, true);
   }
 }
 
@@ -557,13 +412,12 @@ export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } =
   const root = resolve(stateRoot);
   const cycleValues = await Promise.all(PROFILES.map((profile) => readJsonOptional(join(root, 'latest', `${profile}.json`))));
   const cycles = cycleValues.map((value, index) => summarizeCycle(PROFILES[index], value));
-  const [paperRuntimeRaw, paperLedgerRaw, shadowSummaryRaw, shadowStateRaw, liquidityIndependence, candidatePerformance] = await Promise.all([
+  const [paperRuntimeRaw, paperLedgerRaw, shadowSummaryRaw, shadowStateRaw, liquidityIndependence] = await Promise.all([
     readJsonOptional(join(root, 'forward', 'paper', 'status', 'runtime-status.json')),
     readJsonOptional(join(root, 'forward', 'paper', 'state', 'recurring-paper-loop.json')),
     readJsonOptional(join(root, 'forward', 'shadow-summary.json')),
     readJsonOptional(join(root, 'forward', 'shadow-state.json')),
     readV3IndependenceSummary(root),
-    readCandidatePerformance(root),
   ]);
 
   const paperRuntime = summarizePaperRuntime(paperRuntimeRaw);
@@ -583,7 +437,7 @@ export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } =
     ? 'safety_block'
     : !authorityEvidenceComplete
       ? 'safety_evidence_incomplete'
-      : liquidityIndependence.status === 'INVALID' || candidatePerformance.status === 'INVALID'
+      : liquidityIndependence.status === 'INVALID'
         ? 'attention'
         : failedTasks === null || blockedDataTasks === null
           ? 'evidence_incomplete'
@@ -594,7 +448,7 @@ export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } =
     schemaVersion: 'research-dashboard-overview-v1',
     generatedAt: Date.now(),
     state: Object.freeze({
-      present: cycles.some((cycle) => cycle.present) || paperRuntime.present || paperLedger.present || shadowRecords.present || liquidityIndependence.present || candidatePerformance.present,
+      present: cycles.some((cycle) => cycle.present) || paperRuntime.present || paperLedger.present || shadowRecords.present || liquidityIndependence.present,
       latestCycleAt: newestTimestamp(cycles),
     }),
     safety: Object.freeze({
@@ -612,7 +466,7 @@ export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } =
       cycles,
       liquidityIndependence,
     }),
-    paper: Object.freeze({ runtime: paperRuntime, ledger: paperLedger, candidatePerformance }),
+    paper: Object.freeze({ runtime: paperRuntime, ledger: paperLedger }),
     shadow: Object.freeze({ groups: shadowGroups, records: shadowRecords, canonicalHandoffs: shadowCanonicalHandoffs }),
     profitability: Object.freeze({
       proven: false,

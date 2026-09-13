@@ -63,14 +63,6 @@ test('Research Center V2 source preserves the complete fail-closed maturity ladd
   expect(page).toContain('실주문 비활성');
   expect(page).toContain('LIVE_TRADING=false');
   expect(page).toContain('executionAuthority=NONE');
-  expect(page).toContain('data-testid="paper-candidate-performance"');
-  expect(page).toContain('candidateMatchedN');
-  expect(page).toContain('effective independent N');
-  expect(page).toContain('UNKNOWN/BLOCKED');
-  expect(page).toContain('TRAIN_DIAGNOSTIC_ONLY=');
-  expect(page).toContain('NET_ALPHA_PROVEN=');
-  expect(page).toContain('후보 증거가 없으면 일반 Paper ledger 수를 빌려오지 않습니다');
-  expect(api).toContain('sanitizeCandidatePerformance');
   expect(page).not.toContain("label: '한눈에 보기'");
   expect(page).not.toContain("label: 'AI 토론'");
   expect(page).not.toContain("label: '상세 증거'");
@@ -145,10 +137,6 @@ test('read-only Research API allowlist drops private fields and rejects invalid 
   expect(serialized).not.toContain('private-account-id');
   expect(RESEARCH_CENTER_READONLY_CONTRACT.methods).toEqual(['GET']);
   expect(RESEARCH_CENTER_READONLY_CONTRACT.executionAuthority).toBe('NONE');
-
-  const candidate = (sanitized?.paper as { candidatePerformance: { status: string; candidateMatchedN: number | null } }).candidatePerformance;
-  expect(candidate.status).toBe('MISSING');
-  expect(candidate.candidateMatchedN).toBeNull();
 
   expect(sanitizeResearchCenterOverview({ ...overview, safety: { ...overview.safety, liveTrading: true } })).toBeNull();
   const malformedSha = structuredClone(overview);

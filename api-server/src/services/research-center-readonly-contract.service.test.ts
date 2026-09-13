@@ -47,53 +47,6 @@ function liquidityIndependence() {
   };
 }
 
-function candidatePerformance() {
-  return {
-    present: true,
-    status: 'PRESENT',
-    schemaVersion: 'frozen-candidate-performance-reader-v1',
-    FIRST_ZERO: 'FULL_COST_EVIDENCE_NOT_READY',
-    reason: 'FULL_COST_EVIDENCE_NOT_READY',
-    candidateId: `phase3-candidate:sha256:${'8'.repeat(64)}`,
-    strategyId: 'strategy-alpha',
-    freezeTimestamp: '2026-09-13T00:00:00.000Z',
-    effectiveIndependentMarketN: 15,
-    candidateMatchedN: 3,
-    LONG_SIGNAL_N: 1,
-    SHORT_SIGNAL_N: 1,
-    NO_TRADE_N: 1,
-    Entry_N: 1,
-    Position_N: 1,
-    PositionObservation_N: 2,
-    Settlement_N: 1,
-    TRAIN_N: 3,
-    VALIDATION_N: 0,
-    OOS_N: 0,
-    WIN_N: 1,
-    LOSS_N: 0,
-    BREAKEVEN_N: 0,
-    WIN_RATE: 1,
-    AVG_WIN: 12,
-    AVG_LOSS: null,
-    PAYOFF_RATIO: null,
-    GROSS_EXPECTANCY: 12,
-    PF: null,
-    MDD: 0,
-    MFE: 2.1,
-    MAE: -0.4,
-    TIME_TO_EXIT: 60_000,
-    Gross_PnL: 12,
-    Net_PnL: null,
-    FULL_COST_READY: false,
-    NET_ALPHA_PROVEN: false,
-    PROFITABILITY_PROVEN: false,
-    TRAIN_DIAGNOSTIC_ONLY: true,
-    VALIDATION_COMPLETE: false,
-    OOS_COMPLETE: false,
-    executionAuthority: 'NONE',
-  };
-}
-
 function validOverview() {
   return {
     schemaVersion: 'research-dashboard-overview-v1',
@@ -145,7 +98,6 @@ function validOverview() {
         lanes: [],
       },
       ledger: { present: true, cycleCount: 1, sampleCount: 0, positionCount: 0, settlementCount: 0 },
-      candidatePerformance: candidatePerformance(),
     },
     shadow: {
       groups: [],
@@ -163,7 +115,6 @@ test('Research Center contract publishes a GET-only, authority-free allowlisted 
     accountId: 'private-account-id',
   });
   Object.assign(input.paper.runtime, { credential: 'secret', publisherAccount: 'private' });
-  Object.assign(input.paper.candidatePerformance, { accountId: 'private-account-id', statePath: '/var/lib/private-research/candidate.json' });
   Object.assign(input.research.liquidityIndependence, {
     artifactDownloadUrl: 'https://example.test/private-artifact',
     statePath: '/var/lib/private-research/v3.json',
@@ -180,10 +131,6 @@ test('Research Center contract publishes a GET-only, authority-free allowlisted 
   assert.equal(research.liquidityIndependence.effectiveIndependentN, 15);
   assert.equal(research.liquidityIndependence.independentBuyN, 10);
   assert.equal(research.liquidityIndependence.independentSellN, 5);
-  const paper = result.paper as { candidatePerformance: { candidateMatchedN: number; VALIDATION_N: number; Net_PnL: null } };
-  assert.equal(paper.candidatePerformance.candidateMatchedN, 3);
-  assert.equal(paper.candidatePerformance.VALIDATION_N, 0);
-  assert.equal(paper.candidatePerformance.Net_PnL, null);
   assert.deepEqual(RESEARCH_CENTER_READONLY_CONTRACT.methods, ['GET']);
   assert.equal(RESEARCH_CENTER_READONLY_CONTRACT.executionAuthority, 'NONE');
 });
@@ -196,26 +143,6 @@ test('older dashboard payloads without independence evidence remain backward-com
   assert.equal(research.liquidityIndependence.status, 'MISSING');
   assert.equal(research.liquidityIndependence.present, false);
   assert.equal(research.liquidityIndependence.effectiveIndependentN, null);
-});
-
-test('older dashboard payloads without candidate performance remain UNKNOWN and do not borrow ledger counts', () => {
-  const input = validOverview();
-  delete (input.paper as { candidatePerformance?: unknown }).candidatePerformance;
-  const result = sanitizeResearchCenterOverview(input)!;
-  const paper = result.paper as { candidatePerformance: { status: string; candidateMatchedN: null; Settlement_N: null } };
-  assert.equal(paper.candidatePerformance.status, 'MISSING');
-  assert.equal(paper.candidatePerformance.candidateMatchedN, null);
-  assert.equal(paper.candidatePerformance.Settlement_N, null);
-});
-
-test('candidate performance tamper fails the browser-facing DTO closed', () => {
-  const input = validOverview();
-  input.paper.candidatePerformance = { ...candidatePerformance(), NET_ALPHA_PROVEN: true };
-  assert.equal(sanitizeResearchCenterOverview(input), null);
-
-  const inconsistent = validOverview();
-  inconsistent.paper.candidatePerformance = { ...candidatePerformance(), LONG_SIGNAL_N: 3 };
-  assert.equal(sanitizeResearchCenterOverview(inconsistent), null);
 });
 
 test('Research Center contract fails closed on unsafe authority, malformed SHA, and filesystem text', () => {
@@ -252,13 +179,11 @@ test('invalid independence evidence carries no partial sample counts', () => {
 
 test('measured zero counts remain zero while unavailable counts remain null', () => {
   const result = sanitizeResearchCenterOverview(validOverview())!;
-  const paper = result.paper as { ledger: { sampleCount: number | null; positionCount: number | null }; candidatePerformance: { VALIDATION_N: number | null; Net_PnL: number | null } };
+  const paper = result.paper as { ledger: { sampleCount: number | null; positionCount: number | null } };
   const shadow = result.shadow as { records: { totalRecords: number | null } };
   const research = result.research as { liquidityIndependence: { frozenSplitCounts: { VALIDATION: number | null; OOS: number | null } } };
   assert.equal(paper.ledger.sampleCount, 0);
   assert.equal(paper.ledger.positionCount, 0);
-  assert.equal(paper.candidatePerformance.VALIDATION_N, 0);
-  assert.equal(paper.candidatePerformance.Net_PnL, null);
   assert.equal(shadow.records.totalRecords, null);
   assert.equal(research.liquidityIndependence.frozenSplitCounts.VALIDATION, 0);
   assert.equal(research.liquidityIndependence.frozenSplitCounts.OOS, 0);
