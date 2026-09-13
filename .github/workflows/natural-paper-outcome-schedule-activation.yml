@@ -127,29 +127,30 @@ jobs:
         with:
           script: |
             const target = process.env.TARGET_SHA;
-            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+            const name = `staging-postgres-auth-${target}`;
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              head_sha: target,
-              branch: 'main',
-              event: 'issue_comment',
-              status: 'completed',
+              name,
               per_page: 100,
             });
-            for (const run of runs) {
-              if (run.name !== 'Staging PostgreSQL Auth Gate'
-                || run.path !== '.github/workflows/staging-postgres-auth-gate.yml'
-                || run.conclusion !== 'success') continue;
-              const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
+            for (const artifact of artifacts) {
+              if (artifact.name !== name
+                || artifact.expired
+                || artifact.workflow_run?.head_sha !== target) continue;
+              const response = await github.rest.actions.getWorkflowRun({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                run_id: run.id,
-                per_page: 100,
+                run_id: artifact.workflow_run.id,
               });
-              const expected = `staging-postgres-auth-${target}`;
-              const artifact = (artifacts.data.artifacts ?? []).find((item) =>
-                item.name === expected && item.expired !== true && item.workflow_run?.head_sha === target);
-              if (artifact) {
+              const run = response.data;
+              if (run.name === 'Staging PostgreSQL Auth Gate'
+                && run.event === 'issue_comment'
+                && run.head_branch === 'main'
+                && run.head_sha === target
+                && run.path === '.github/workflows/staging-postgres-auth-gate.yml'
+                && run.status === 'completed'
+                && run.conclusion === 'success') {
                 core.setOutput('run_id', String(run.id));
                 return;
               }
