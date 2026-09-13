@@ -1,5 +1,3 @@
-import { createFrozenCandidatePerformanceSourceV1 } from "./frozen-candidate-performance-publisher-v1.js";
-
 const READY_RUNTIME_STATUSES = new Set(["PAPER_CANDIDATES_READY", "VALID_NO_TRADE"]);
 
 function freeze(value) {
@@ -186,7 +184,7 @@ function candidateIdentityBlockers(candidate, market, {
   return [...new Set(blockers)];
 }
 
-function blockedEvidence(base, runtime, blocker, exitEligibility = null, candidatePerformanceEvidenceSource = null) {
+function blockedEvidence(base, runtime, blocker, exitEligibility = null) {
   return freeze({
     ...base,
     status: "BLOCKED_DATA",
@@ -208,13 +206,12 @@ function blockedEvidence(base, runtime, blocker, exitEligibility = null, candida
       firstZeroReason: runtime?.firstZeroReason ?? blocker,
       ...naturalRuntimeMetadata(runtime),
       exitEligibilityEvidence: exitEligibility,
-      candidatePerformanceEvidenceSource,
       blocker,
     }),
   });
 }
 
-function readyEvidence(base, runtime, candidates, exits, exitEligibility, candidatePerformanceEvidenceSource) {
+function readyEvidence(base, runtime, candidates, exits, exitEligibility) {
   return freeze({
     ...base,
     candidates: freeze(candidates.map((row) => freeze(structuredClone(row)))),
@@ -231,7 +228,6 @@ function readyEvidence(base, runtime, candidates, exits, exitEligibility, candid
       firstZeroReason: runtime.firstZeroReason ?? null,
       ...naturalRuntimeMetadata(runtime),
       exitEligibilityEvidence: exitEligibility,
-      candidatePerformanceEvidenceSource,
       blocker: null,
     }),
   });
@@ -267,19 +263,6 @@ export function wrapPaperForwardProviderWithMeaningfulSearch({
       if (!runtime || runtime.market !== input.market || !safeEnvelope(runtime)) {
         return blockedEvidence(base, runtime, "PAPER_RUNTIME_CONTRACT_INVALID");
       }
-      let candidatePerformanceEvidenceSource = null;
-      if (runtime.phase4ExistingOwnerRuntimeResult != null) {
-        try {
-          candidatePerformanceEvidenceSource = createFrozenCandidatePerformanceSourceV1({
-            existingOwnerRuntimeResult: runtime.phase4ExistingOwnerRuntimeResult,
-            candidateMatchEvidence: runtime.candidateMatchEvidence ?? null,
-            fullCostEvidence: runtime.fullCostEvidence ?? null,
-            effectiveIndependentMarketN: runtime.effectiveIndependentMarketN ?? null,
-          });
-        } catch {
-          return blockedEvidence(base, runtime, "PHASE4_EXISTING_OWNER_PERFORMANCE_SOURCE_INVALID");
-        }
-      }
       const exitEligibility = exitEligibilityEvidence(runtime, input.openPositions);
       if (!READY_RUNTIME_STATUSES.has(runtime.status)) {
         const admissionBlockers = Array.isArray(runtime.admissionBlockers)
@@ -290,16 +273,16 @@ export function wrapPaperForwardProviderWithMeaningfulSearch({
           : runtime.status === "SEARCH_FAILURE_BLOCKED"
             ? "SEARCH_FAILURE"
             : runtime.status ?? "PAPER_RUNTIME_NOT_READY";
-        return blockedEvidence(base, runtime, blocker, exitEligibility, candidatePerformanceEvidenceSource);
+        return blockedEvidence(base, runtime, blocker, exitEligibility);
       }
 
       const candidates = runtime?.paperBridge?.candidates ?? [];
       const exits = runtime?.paperBridge?.exitSignals ?? [];
       if (!Array.isArray(candidates) || !Array.isArray(exits)) {
-        return blockedEvidence(base, runtime, "PAPER_RUNTIME_PAYLOAD_INVALID", exitEligibility, candidatePerformanceEvidenceSource);
+        return blockedEvidence(base, runtime, "PAPER_RUNTIME_PAYLOAD_INVALID", exitEligibility);
       }
       if (runtime.status === "VALID_NO_TRADE" && (candidates.length > 0 || exits.length > 0)) {
-        return blockedEvidence(base, runtime, "VALID_NO_TRADE_PAYLOAD_VIOLATION", exitEligibility, candidatePerformanceEvidenceSource);
+        return blockedEvidence(base, runtime, "VALID_NO_TRADE_PAYLOAD_VIOLATION", exitEligibility);
       }
 
       const candidateBlockers = candidates.flatMap((candidate) => candidateIdentityBlockers(candidate, input.market));
@@ -308,11 +291,9 @@ export function wrapPaperForwardProviderWithMeaningfulSearch({
         requireExitIntent: true,
       }));
       const blockers = [...new Set([...candidateBlockers, ...exitBlockers])];
-      if (blockers.length > 0) {
-        return blockedEvidence(base, runtime, blockers.join("|"), exitEligibility, candidatePerformanceEvidenceSource);
-      }
+      if (blockers.length > 0) return blockedEvidence(base, runtime, blockers.join("|"), exitEligibility);
 
-      return readyEvidence(base, runtime, candidates, exits, exitEligibility, candidatePerformanceEvidenceSource);
+      return readyEvidence(base, runtime, candidates, exits, exitEligibility);
     },
   });
 }
