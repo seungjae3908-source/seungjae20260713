@@ -6,13 +6,15 @@ const supabasePath = fileURLToPath(new URL('../src/lib/supabase.ts', import.meta
 const deviceTrustPath = fileURLToPath(new URL('../src/lib/device-trust.ts', import.meta.url));
 const appPath = fileURLToPath(new URL('../../api-server/src/app.ts', import.meta.url));
 const authMiddlewarePath = fileURLToPath(new URL('../../api-server/src/middleware/auth.ts', import.meta.url));
+const phase10StagingPath = fileURLToPath(new URL('./phase10-staging-readiness.spec.ts', import.meta.url));
 
 test('auth bootstrap self-profile read is same-origin, exact-identity, and device-trust aware', async () => {
-  const [supabaseSource, deviceTrustSource, appSource, authSource] = await Promise.all([
+  const [supabaseSource, deviceTrustSource, appSource, authSource, phase10StagingSource] = await Promise.all([
     readFile(supabasePath, 'utf8'),
     readFile(deviceTrustPath, 'utf8'),
     readFile(appPath, 'utf8'),
     readFile(authMiddlewarePath, 'utf8'),
+    readFile(phase10StagingPath, 'utf8'),
   ]);
 
   expect(supabaseSource).toContain("parsed.pathname.replace(/\\/+$/u, '') !== '/rest/v1/profiles'");
@@ -43,4 +45,22 @@ test('auth bootstrap self-profile read is same-origin, exact-identity, and devic
   expect(authSource).toContain(".eq('id', auth.user.id)");
   expect(authSource).toContain("res.status(401).json({ error: 'INVALID_SESSION' })");
   expect(authSource).toContain("res.status(403).json({ error: 'PROFILE_NOT_FOUND' })");
+
+  // Lock the exact Full Staging failure shape: a previously authenticated
+  // storage state is restored into fresh browser contexts, then the direct
+  // /ai-chart cold route must leave the global bootstrap fallback inside the
+  // existing frozen 5 second product gate. The repair above must apply to this
+  // path without weakening that gate or replacing it with a retry.
+  expect(phase10StagingSource).toContain(
+    'const storageState = await authenticatedPage.context().storageState();',
+  );
+  expect(phase10StagingSource).toContain('const context = await browser.newContext({');
+  expect(phase10StagingSource).toContain('storageState,');
+  expect(phase10StagingSource).toContain(
+    "const response = await page.goto('/ai-chart', { waitUntil: 'domcontentloaded' });",
+  );
+  expect(phase10StagingSource).toContain('const cold = await waitForUsableAiChart(page, coldStarted);');
+  expect(phase10StagingSource).toContain(
+    "page.getByRole('heading', { name: /AI 차트 생중계/, level: 1 })).toBeVisible({ timeout: 5_000 })",
+  );
 });
