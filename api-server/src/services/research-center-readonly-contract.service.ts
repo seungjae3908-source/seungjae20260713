@@ -1,9 +1,13 @@
 const RESEARCH_OVERVIEW_SCHEMA = 'research-dashboard-overview-v1';
 const V3_INDEPENDENCE_SUMMARY_SCHEMA = 'public-forward-liquidity-v3-authoritative-independence-summary-v1';
+const CANDIDATE_PERFORMANCE_SCHEMA = 'frozen-candidate-performance-reader-v1';
 const PROFILE_SET = new Set(['forward', 'fast-historical', 'long-history']);
 const V3_INDEPENDENCE_STATUS_SET = new Set(['MISSING', 'INVALID', 'PRESENT']);
+const CANDIDATE_PERFORMANCE_STATUS_SET = new Set(['MISSING', 'INVALID', 'BLOCKED', 'PRESENT']);
 const SHA_PATTERN = /^[0-9a-f]{40}$/i;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/i;
+const CANDIDATE_ID_PATTERN = /^(?:phase3-candidate:sha256:|paper-candidate-v1:)[0-9a-f]{64}$/i;
+const SAFE_ID_PATTERN = /^[A-Za-z0-9._:-]{1,160}$/;
 const DECIMAL_ID_PATTERN = /^[0-9]{6,20}$/;
 const PRIVATE_TEXT_PATTERN = /(?:^[a-z]:[\\/]|\/(?:var|home|root|etc|opt|srv|users)\/|-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:ghp|github_pat|sk_live|sk_test)_[a-z0-9_-]+)/i;
 const V3_SPLIT_COUNT_KEYS = Object.freeze([
@@ -16,6 +20,15 @@ const V3_SPLIT_COUNT_KEYS = Object.freeze([
   'OOS',
   'OOS_BUY',
   'OOS_SELL',
+]);
+const CANDIDATE_COUNT_KEYS = Object.freeze([
+  'effectiveIndependentMarketN', 'candidateMatchedN', 'LONG_SIGNAL_N', 'SHORT_SIGNAL_N', 'NO_TRADE_N',
+  'Entry_N', 'Position_N', 'PositionObservation_N', 'Settlement_N',
+  'TRAIN_N', 'VALIDATION_N', 'OOS_N', 'WIN_N', 'LOSS_N', 'BREAKEVEN_N',
+]);
+const CANDIDATE_METRIC_KEYS = Object.freeze([
+  'WIN_RATE', 'AVG_WIN', 'AVG_LOSS', 'PAYOFF_RATIO', 'GROSS_EXPECTANCY',
+  'PF', 'MDD', 'MFE', 'MAE', 'TIME_TO_EXIT', 'Gross_PnL', 'Net_PnL',
 ]);
 
 type UnknownRecord = Record<string, unknown>;
@@ -170,6 +183,111 @@ function sanitizeLiquidityIndependence(value: unknown) {
   };
 }
 
+function emptyCandidatePerformance(status: 'MISSING' | 'INVALID' | 'BLOCKED', present: boolean, reason: string) {
+  return {
+    present,
+    status,
+    schemaVersion: null,
+    FIRST_ZERO: reason,
+    reason,
+    candidateId: null,
+    strategyId: null,
+    freezeTimestamp: null,
+    ...Object.fromEntries(CANDIDATE_COUNT_KEYS.map((key) => [key, null])),
+    ...Object.fromEntries(CANDIDATE_METRIC_KEYS.map((key) => [key, null])),
+    FULL_COST_READY: false,
+    NET_ALPHA_PROVEN: false,
+    PROFITABILITY_PROVEN: false,
+    TRAIN_DIAGNOSTIC_ONLY: true,
+    VALIDATION_COMPLETE: false,
+    OOS_COMPLETE: false,
+    executionAuthority: 'NONE',
+  };
+}
+
+function sanitizeCandidatePerformance(value: unknown) {
+  if (value === undefined || value === null) {
+    return emptyCandidatePerformance('MISSING', false, 'CANDIDATE_PERFORMANCE_EVIDENCE_MISSING');
+  }
+  const input = record(value);
+  if (!input || typeof input.present !== 'boolean') return null;
+  const status = safeTextOrNull(input.status, 16);
+  if (!status || !CANDIDATE_PERFORMANCE_STATUS_SET.has(status)) return null;
+  const reason = safeTextOrNull(input.reason, 160);
+  if (!reason || !SAFE_ID_PATTERN.test(reason)) return null;
+  if (status === 'MISSING') {
+    return input.present === false
+      ? emptyCandidatePerformance('MISSING', false, reason)
+      : null;
+  }
+  if (status === 'INVALID') {
+    return input.present === true
+      ? emptyCandidatePerformance('INVALID', true, reason)
+      : null;
+  }
+  if (input.FULL_COST_READY !== false
+    || input.NET_ALPHA_PROVEN !== false
+    || input.PROFITABILITY_PROVEN !== false
+    || input.TRAIN_DIAGNOSTIC_ONLY !== true
+    || input.VALIDATION_COMPLETE !== false
+    || input.OOS_COMPLETE !== false
+    || input.executionAuthority !== 'NONE') return null;
+  const counts = Object.fromEntries(CANDIDATE_COUNT_KEYS.map((key) => [key, countOrNull(input[key])]));
+  const metrics = Object.fromEntries(CANDIDATE_METRIC_KEYS.map((key) => [key, finiteOrNull(input[key])]));
+  if (Object.values(counts).some((item) => item === undefined)
+    || Object.values(metrics).some((item) => item === undefined)) return null;
+  if (status === 'BLOCKED') {
+    const unavailable = [input.candidateId, input.strategyId, input.freezeTimestamp,
+      ...Object.values(counts), ...Object.values(metrics)].every((item) => item == null);
+    return input.present === true && unavailable
+      ? emptyCandidatePerformance('BLOCKED', true, reason)
+      : null;
+  }
+  if (status !== 'PRESENT' || input.present !== true || input.schemaVersion !== CANDIDATE_PERFORMANCE_SCHEMA) return null;
+  const candidateId = safeTextOrNull(input.candidateId, 100);
+  const strategyId = safeTextOrNull(input.strategyId, 160);
+  const freezeTimestamp = safeTextOrNull(input.freezeTimestamp, 40);
+  const freezeMs = Date.parse(String(freezeTimestamp ?? ''));
+  if (!candidateId || !CANDIDATE_ID_PATTERN.test(candidateId)
+    || !strategyId || !SAFE_ID_PATTERN.test(strategyId)
+    || !freezeTimestamp || !Number.isSafeInteger(freezeMs)
+    || new Date(freezeMs).toISOString() !== freezeTimestamp) return null;
+  const directionCounts = [counts.LONG_SIGNAL_N, counts.SHORT_SIGNAL_N, counts.NO_TRADE_N];
+  const splitCounts = [counts.TRAIN_N, counts.VALIDATION_N, counts.OOS_N];
+  const matchValid = counts.candidateMatchedN == null
+    ? [...directionCounts, ...splitCounts].every((item) => item == null)
+    : directionCounts.every((item) => item != null)
+      && splitCounts.every((item) => item != null)
+      && directionCounts.reduce((sum, item) => sum + (item ?? 0), 0) === counts.candidateMatchedN
+      && splitCounts.reduce((sum, item) => sum + (item ?? 0), 0) === counts.candidateMatchedN;
+  const settlementCounts = [counts.WIN_N, counts.LOSS_N, counts.BREAKEVEN_N];
+  const settlementValid = counts.Settlement_N == null
+    ? settlementCounts.every((item) => item == null) && metrics.Gross_PnL == null
+    : settlementCounts.every((item) => item != null)
+      && settlementCounts.reduce((sum, item) => sum + (item ?? 0), 0) === counts.Settlement_N
+      && metrics.Gross_PnL != null;
+  if (!matchValid || !settlementValid || metrics.Net_PnL != null) return null;
+  return {
+    present: true,
+    status: 'PRESENT',
+    schemaVersion: CANDIDATE_PERFORMANCE_SCHEMA,
+    FIRST_ZERO: reason,
+    reason,
+    candidateId,
+    strategyId,
+    freezeTimestamp,
+    ...counts,
+    ...metrics,
+    FULL_COST_READY: false,
+    NET_ALPHA_PROVEN: false,
+    PROFITABILITY_PROVEN: false,
+    TRAIN_DIAGNOSTIC_ONLY: true,
+    VALIDATION_COMPLETE: false,
+    OOS_COMPLETE: false,
+    executionAuthority: 'NONE',
+  };
+}
+
 function sanitizeTask(value: unknown) {
   const task = record(value);
   if (!task) return null;
@@ -301,10 +419,11 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
   const profitability = record(payload?.profitability);
   const runtime = sanitizePaperRuntime(paper?.runtime);
   const ledger = sanitizePaperLedger(paper?.ledger);
+  const candidatePerformance = sanitizeCandidatePerformance(paper?.candidatePerformance);
   const records = record(shadow?.records);
   const liquidityIndependence = sanitizeLiquidityIndependence(research?.liquidityIndependence);
   if (!payload || payload.schemaVersion !== RESEARCH_OVERVIEW_SCHEMA || !state || !safety || !research
-    || !paper || !shadow || !profitability || !runtime || !ledger || !records || !liquidityIndependence) return null;
+    || !paper || !shadow || !profitability || !runtime || !ledger || !candidatePerformance || !records || !liquidityIndependence) return null;
   if (safety.readOnlyDashboard !== true || safety.liveTrading !== false || safety.privateApi !== false || safety.orderAuthority !== false
     || typeof safety.authorityEvidenceComplete !== 'boolean' || typeof safety.forbiddenAuthorityObserved !== 'boolean') return null;
   const generatedAt = finiteOrNull(payload.generatedAt);
@@ -337,7 +456,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
       forbiddenAuthorityObserved: safety.forbiddenAuthorityObserved,
     },
     research: { status: researchStatus, failedTasks, blockedDataTasks, cycles, liquidityIndependence },
-    paper: { runtime, ledger },
+    paper: { runtime, ledger, candidatePerformance },
     shadow: { groups, records: { present: records.present, totalRecords, settledRecords, pendingRecords } },
     profitability: { proven: profitability.proven, status: profitabilityStatus, note: profitabilityNote },
   };
