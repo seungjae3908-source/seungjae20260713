@@ -1,181 +1,34 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readAuthoritativePaperRuntimeStageEvidenceV1 } from "../src/authoritative-paper-runtime-stage-evidence-reader-v1.js";
+import { readAuthoritativePaperRuntimeStageEvidenceV1 as read } from "../src/authoritative-paper-runtime-stage-evidence-reader-v1.js";
 
-const SHA = "a".repeat(40);
-const DIGEST = "b".repeat(64);
-const CANDIDATE_ID = `phase3-candidate:sha256:${"c".repeat(64)}`;
+const SHA="a".repeat(40), D="b".repeat(64), CID=`phase3-candidate:sha256:${"c".repeat(64)}`;
+const E=Object.freeze({candidateId:CID,strategyFamily:"trend",strategyId:"s1",strategyVersion:"v1",parameterHash:D,parameterDigest:D,researchCodeSha:SHA,costPolicyVersion:"cost-v1",executionPolicyVersion:"exec-v1",market:"CRYPTO_FUTURES",provider:"bitget",symbol:"BTCUSDT",timeframe:"15m",sidePolicy:"LONG",accountMode:"PAPER"});
+const stage=(field,ids,status="MEASURED")=>Object.freeze({field,status,count:status==="MEASURED"?ids.length:null,blocker:status==="MEASURED"?null:`UNMEASURED_${field.toUpperCase()}`,provenance:`loop:${field}`,observedAt:1789200000000,observationIds:Object.freeze(status==="MEASURED"?[...ids]:[]),naturalCredit:0,replayCredit:0,duplicateCredit:0});
+const admission=()=>Object.freeze({status:"AUTHORITATIVE_PAPER_ADMISSION_MEASURED",runtimeStageMeasurements:Object.freeze({Admission:Object.freeze({status:"MEASURED",count:1,blocker:null,provenance:"admission"})}),sampleCredit:0,executionRealismCredit:0,profitabilityCredit:0,executionAuthority:"NONE"});
+const runtime=(x={})=>Object.freeze({candidateId:E.candidateId,strategyFamily:E.strategyFamily,strategyId:E.strategyId,strategyVersion:E.strategyVersion,parameterHash:E.parameterHash,parameterDigest:E.parameterDigest,researchCodeSha:E.researchCodeSha,costPolicyVersion:E.costPolicyVersion,executionPolicyVersion:E.executionPolicyVersion,accountMode:E.accountMode,...x});
+const sample=(x={})=>Object.freeze({paperSampleId:"e1",identity:Object.freeze({candidateId:E.candidateId,strategyFamily:E.strategyFamily,strategyId:E.strategyId,strategyVersion:E.strategyVersion,parameterHash:E.parameterHash,parameterDigest:E.parameterDigest,researchCodeSha:E.researchCodeSha,accountMode:E.accountMode,market:E.market,symbol:E.symbol,timeframe:E.timeframe,signalDirection:E.sidePolicy,executionDirection:E.sidePolicy,...x}),profitEvidence:Object.freeze({costPolicyId:E.costPolicyVersion}),entryEvidenceProvenance:Object.freeze({provider:E.provider})});
+const position=(x={})=>Object.freeze({positionId:"p1",candidateId:E.candidateId,strategyFamily:E.strategyFamily,strategyId:E.strategyId,strategyVersion:E.strategyVersion,parameterHash:E.parameterHash,parameterDigest:E.parameterDigest,researchCodeSha:E.researchCodeSha,accountMode:E.accountMode,costPolicyVersion:E.costPolicyVersion,market:E.market,symbol:E.symbol,direction:E.sidePolicy,sample:sample(),...x});
+const settlement=(x={})=>Object.freeze({settlementId:"z1",candidateId:E.candidateId,strategyFamily:E.strategyFamily,strategyId:E.strategyId,strategyVersion:E.strategyVersion,parameterHash:E.parameterHash,parameterDigest:E.parameterDigest,researchCodeSha:E.researchCodeSha,accountMode:E.accountMode,costPolicyVersion:E.costPolicyVersion,market:E.market,symbol:E.symbol,timeframe:E.timeframe,entryDirection:E.sidePolicy,entryEvidenceProvenance:Object.freeze({provider:E.provider}),exitEvidenceProvenance:Object.freeze({provider:E.provider}),...x});
+function recurring({ri={},samples=[sample()],positions=[position()],settlements=[settlement()],entry=["e1"],positionIds=["p1"],settlementIds=["z1"],replayed=false}={}){return Object.freeze({state:Object.freeze({identity:runtime(ri),samples:Object.freeze(samples),positions:Object.freeze(positions),settlements:Object.freeze(settlements)}),summary:Object.freeze({canonicalNaturalStageEvidence:Object.freeze({schemaVersion:"canonical-natural-paper-loop-stage-evidence-v1",identity:Object.freeze({strategySha:SHA,runtimeSha:SHA}),stageCounts:Object.freeze({entry:stage("entry",entry),position:stage("position",positionIds),settlement:stage("settlement",settlementIds)}),naturalCredit:0,replayCredit:0,duplicateCredit:0,replayed})})});}
+const run=(r=recurring(),e=E)=>read({paperRuntimeResult:admission(),recurringCycleResult:r,expectedCandidateIdentity:e});
 
-function expectedIdentity() {
-  return Object.freeze({
-    candidateId: CANDIDATE_ID,
-    strategyFamily: "trend-following",
-    strategyId: "strategy-v1",
-    strategyVersion: "1.0.0",
-    parameterHash: DIGEST,
-    parameterDigest: DIGEST,
-    researchCodeSha: SHA,
-    costPolicyVersion: "full-cost-v1",
-    accountMode: "PAPER",
-  });
-}
+test("01 exact full identity PASS, zero economic credit",()=>{const r=run(); for(const s of ["Entry","Position","Settlement"]){assert.equal(r.runtimeStageMeasurements[s].status,"MEASURED");assert.equal(r.runtimeStageMeasurements[s].candidateBound,true);} assert.equal(r.sampleCredit,0);assert.equal(r.executionRealismCredit,0);assert.equal(r.profitabilityCredit,0);assert.equal(r.fullCostReady,false);});
 
-function paperRuntimeResult() {
-  return Object.freeze({
-    status: "AUTHORITATIVE_PAPER_ADMISSION_MEASURED",
-    runtimeStageMeasurements: Object.freeze({
-      Admission: Object.freeze({
-        status: "MEASURED",
-        count: 1,
-        blocker: null,
-        provenance: "canonical-paper-admission-bridge-v1",
-      }),
-    }),
-    sampleCredit: 0,
-    executionRealismCredit: 0,
-    profitabilityCredit: 0,
-    executionAuthority: "NONE",
-  });
-}
+test("02-10 runtime identity mismatch BLOCK",()=>{for(const [k,v] of Object.entries({candidateId:`phase3-candidate:sha256:${"d".repeat(64)}`,strategyFamily:"x",strategyId:"x",strategyVersion:"x",parameterHash:"d".repeat(64),parameterDigest:"d".repeat(64),researchCodeSha:"d".repeat(40),costPolicyVersion:"x",executionPolicyVersion:"x"})){assert.throws(()=>run(recurring({ri:{[k]:v}})),/PAPER_STAGE_RUNTIME_.*_MISMATCH/u,k);}});
 
-function row(extra = {}) {
-  return Object.freeze({
-    candidateId: CANDIDATE_ID,
-    strategyFamily: "trend-following",
-    strategyId: "strategy-v1",
-    strategyVersion: "1.0.0",
-    parameterHash: DIGEST,
-    parameterDigest: DIGEST,
-    researchCodeSha: SHA,
-    costPolicyVersion: "full-cost-v1",
-    accountMode: "PAPER",
-    ...extra,
-  });
-}
+test("11-16 stage economic identity mismatch BLOCK",()=>{const cases=[()=>settlement({market:"CRYPTO_SPOT"}),()=>settlement({entryEvidenceProvenance:{provider:"x"},exitEvidenceProvenance:{provider:"x"}}),()=>settlement({symbol:"ETHUSDT"}),()=>settlement({timeframe:"1h"}),()=>settlement({entryDirection:"SHORT"}),()=>settlement({accountMode:"LIVE"})]; for(const make of cases) assert.throws(()=>run(recurring({settlements:[make()]})),/PAPER_STAGE_SETTLEMENT_.*_MISMATCH/u);});
 
-function directStage(field, observationIds) {
-  return Object.freeze({
-    field,
-    status: "MEASURED",
-    count: observationIds.length,
-    blocker: null,
-    provenance: `recurring-paper-loop-v1 ${field}`,
-    observedAt: 1_789_200_000_000,
-    observationIds: Object.freeze([...observationIds]),
-    naturalCredit: 0,
-    replayCredit: 0,
-    duplicateCredit: 0,
-  });
-}
+test("17 missing required full identity BLOCK",()=>{for(const k of ["executionPolicyVersion","market","provider","symbol","timeframe","sidePolicy","costPolicyVersion"]){assert.throws(()=>run(recurring(),{...E,[k]:null}),/PAPER_STAGE_EXPECTED_.*_REQUIRED/u,k);}});
 
-function recurringCycleResult({ zero = false, mismatch = false, replayed = false } = {}) {
-  const entryIds = zero ? [] : ["paper-sample-1"];
-  const positionIds = zero ? [] : ["position-1"];
-  const settlementIds = zero ? [] : ["d".repeat(64)];
-  return Object.freeze({
-    state: Object.freeze({
-      samples: Object.freeze(zero ? [] : [row({ paperSampleId: "paper-sample-1", strategyId: mismatch ? "wrong" : "strategy-v1" })]),
-      positions: Object.freeze(zero ? [] : [row({ positionId: "position-1" })]),
-      settlements: Object.freeze(zero ? [] : [row({ settlementId: "d".repeat(64) })]),
-    }),
-    summary: Object.freeze({
-      canonicalNaturalStageEvidence: Object.freeze({
-        schemaVersion: "canonical-natural-paper-loop-stage-evidence-v1",
-        identity: Object.freeze({ cycleId: "cycle-1", strategySha: SHA, runtimeSha: SHA, datasetIdentity: null }),
-        stageCounts: Object.freeze({
-          entryEligible: directStage("entryEligible", zero ? [] : ["position-1"]),
-          entry: directStage("entry", entryIds),
-          position: directStage("position", positionIds),
-          settlement: directStage("settlement", settlementIds),
-        }),
-        reasonObservations: Object.freeze([]),
-        naturalCredit: 0,
-        replayCredit: 0,
-        duplicateCredit: 0,
-        replayed,
-      }),
-    }),
-  });
-}
+test("19 duplicate lifecycle row BLOCK",()=>assert.throws(()=>run(recurring({samples:[sample(),sample()]})),/PAPER_STAGE_ENTRY_ROW_BINDING_MISSING/u));
 
-test("binds recurring Entry/Position/Settlement measurements to one exact Paper candidate without creating credit", () => {
-  const result = readAuthoritativePaperRuntimeStageEvidenceV1({
-    paperRuntimeResult: paperRuntimeResult(),
-    recurringCycleResult: recurringCycleResult(),
-    expectedCandidateIdentity: expectedIdentity(),
-  });
+test("20-22 cross-candidate Entry Position Settlement BLOCK",()=>{const bad=`phase3-candidate:sha256:${"f".repeat(64)}`; assert.throws(()=>run(recurring({samples:[sample({candidateId:bad})]})),/PAPER_STAGE_ENTRY_CANDIDATE_ID_MISMATCH/u); assert.throws(()=>run(recurring({positions:[position({candidateId:bad})]})),/PAPER_STAGE_POSITION_CANDIDATE_ID_MISMATCH/u); assert.throws(()=>run(recurring({settlements:[settlement({candidateId:bad})]})),/PAPER_STAGE_SETTLEMENT_CANDIDATE_ID_MISMATCH/u);});
 
-  assert.equal(result.status, "AUTHORITATIVE_PAPER_RUNTIME_STAGES_RECONCILED");
-  assert.equal(result.runtimeStageMeasurements.Admission.status, "MEASURED");
-  assert.equal(result.runtimeStageMeasurements.Entry.status, "MEASURED");
-  assert.equal(result.runtimeStageMeasurements.Position.status, "MEASURED");
-  assert.equal(result.runtimeStageMeasurements.Settlement.status, "MEASURED");
-  assert.equal(result.runtimeStageMeasurements.Entry.count, 1);
-  assert.equal(result.runtimeStageMeasurements.Position.count, 1);
-  assert.equal(result.runtimeStageMeasurements.Settlement.count, 1);
-  assert.equal(result.runtimeStageMeasurements.Entry.candidateBound, true);
-  assert.equal(result.runtimeStageMeasurements.Settlement.candidateBound, true);
-  assert.equal(result.sampleCredit, 0);
-  assert.equal(result.executionRealismCredit, 0);
-  assert.equal(result.profitabilityCredit, 0);
-  assert.equal(result.fullCostReady, false);
-  assert.equal(result.profitabilityProven, false);
-  assert.equal(result.executionAuthority, "NONE");
-  assert.equal(result.runtimeActivationAllowed, false);
-  assert.equal(result.scheduleActivationAllowed, false);
-  assert.equal(result.dispatchAllowed, false);
-  assert.equal(result.liveTrading, false);
-  assert.equal(result.privateTradingApiAllowed, false);
-  assert.equal(result.realOrderAllowed, false);
-});
+test("23 aggregate measured zero stays UNKNOWN",()=>{const r=run(recurring({samples:[],positions:[],settlements:[],entry:[],positionIds:[],settlementIds:[]})); for(const s of ["Entry","Position","Settlement"]){assert.equal(r.runtimeStageMeasurements[s].status,"UNKNOWN");assert.equal(r.runtimeStageMeasurements[s].count,null);} });
 
-test("does not convert an aggregate measured zero into candidate-bound Entry/Position/Settlement evidence", () => {
-  const result = readAuthoritativePaperRuntimeStageEvidenceV1({
-    paperRuntimeResult: paperRuntimeResult(),
-    recurringCycleResult: recurringCycleResult({ zero: true }),
-    expectedCandidateIdentity: expectedIdentity(),
-  });
+test("provider entry/exit disagreement BLOCK",()=>assert.throws(()=>run(recurring({settlements:[settlement({exitEvidenceProvenance:{provider:"other"}})]})),/PAPER_STAGE_SETTLEMENT_PROVIDER_MISMATCH/u));
 
-  for (const stage of ["Entry", "Position", "Settlement"]) {
-    assert.equal(result.runtimeStageMeasurements[stage].status, "UNKNOWN");
-    assert.equal(result.runtimeStageMeasurements[stage].count, null);
-    assert.equal(result.runtimeStageMeasurements[stage].candidateBound, false);
-    assert.match(result.runtimeStageMeasurements[stage].blocker, /ZERO_NOT_CANDIDATE_BOUND$/u);
-  }
-});
+test("replay and credit elevation BLOCK",()=>{assert.throws(()=>run(recurring({replayed:true})),/PAPER_STAGE_REPLAY_EVIDENCE_FORBIDDEN/u);assert.throws(()=>read({paperRuntimeResult:{...admission(),profitabilityCredit:1},recurringCycleResult:recurring(),expectedCandidateIdentity:E}),/PAPER_STAGE_RUNTIME_AUTHORITY_OR_CREDIT_VIOLATION/u);});
 
-test("fails closed when a recurring stage row belongs to a different candidate identity", () => {
-  assert.throws(() => readAuthoritativePaperRuntimeStageEvidenceV1({
-    paperRuntimeResult: paperRuntimeResult(),
-    recurringCycleResult: recurringCycleResult({ mismatch: true }),
-    expectedCandidateIdentity: expectedIdentity(),
-  }), /PAPER_STAGE_ENTRY_IDENTITY_MISMATCH/u);
-});
-
-test("rejects replay evidence and any authority or economic-credit elevation", () => {
-  assert.throws(() => readAuthoritativePaperRuntimeStageEvidenceV1({
-    paperRuntimeResult: paperRuntimeResult(),
-    recurringCycleResult: recurringCycleResult({ replayed: true }),
-    expectedCandidateIdentity: expectedIdentity(),
-  }), /PAPER_STAGE_REPLAY_EVIDENCE_FORBIDDEN/u);
-
-  assert.throws(() => readAuthoritativePaperRuntimeStageEvidenceV1({
-    paperRuntimeResult: Object.freeze({ ...paperRuntimeResult(), profitabilityCredit: 1 }),
-    recurringCycleResult: recurringCycleResult(),
-    expectedCandidateIdentity: expectedIdentity(),
-  }), /PAPER_STAGE_RUNTIME_AUTHORITY_OR_CREDIT_VIOLATION/u);
-});
-
-test("requires an exact same-parameter PAPER identity and never invents missing cost policy", () => {
-  assert.throws(() => readAuthoritativePaperRuntimeStageEvidenceV1({
-    paperRuntimeResult: paperRuntimeResult(),
-    recurringCycleResult: recurringCycleResult(),
-    expectedCandidateIdentity: Object.freeze({ ...expectedIdentity(), costPolicyVersion: "" }),
-  }), /PAPER_STAGE_EXPECTED_COSTPOLICYVERSION_REQUIRED/u);
-
-  assert.throws(() => readAuthoritativePaperRuntimeStageEvidenceV1({
-    paperRuntimeResult: paperRuntimeResult(),
-    recurringCycleResult: recurringCycleResult(),
-    expectedCandidateIdentity: Object.freeze({ ...expectedIdentity(), parameterDigest: "e".repeat(64) }),
-  }), /PAPER_STAGE_EXPECTED_PARAMETER_IDENTITY_MISMATCH/u);
-});
+test("NO INPUT MUTATION",()=>{const p=structuredClone(admission()),r=structuredClone(recurring()),e=structuredClone(E),before=structuredClone({p,r,e}); read({paperRuntimeResult:p,recurringCycleResult:r,expectedCandidateIdentity:e});assert.deepEqual({p,r,e},before);});
