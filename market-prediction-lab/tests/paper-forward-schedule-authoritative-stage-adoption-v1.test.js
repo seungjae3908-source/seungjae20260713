@@ -53,6 +53,17 @@ function strategyIdentity() {
   });
 }
 
+function scheduleIdentity(researchCodeSha = RESEARCH_SHA) {
+  return Object.freeze({
+    strategyId: "paper-forward-authoritative-account-v1",
+    strategyVersion: "1.0.0",
+    parameterHash: "d".repeat(64),
+    researchCodeSha,
+    costPolicyVersion: "paper-forward-authoritative-accounting-v1",
+    executionPolicyVersion: "public-evidence-simulated-paper-v1",
+  });
+}
+
 function candidate() {
   const identity = strategyIdentity();
   return Object.freeze({
@@ -191,7 +202,7 @@ function recurringResult() {
   return Object.freeze({
     status: "COMPLETED",
     state: Object.freeze({
-      identity: strategyIdentity(),
+      identity: scheduleIdentity(),
       samples: Object.freeze([sample()]),
       positions: Object.freeze([position()]),
       settlements: Object.freeze([settlement()]),
@@ -247,6 +258,32 @@ test("schedule callsite adopts already-produced authoritative runtime and recurr
   assert.equal(result.authoritativeRuntimeStageEvidenceConnection.profitabilityCredit, 0);
   assert.equal(result.authoritativeRuntimeStageEvidenceConnection.executionAuthority, "NONE");
   assert.equal(result.authoritativeRuntimeStageEvidenceConnection.dispatchAllowed, false);
+});
+
+test("schedule process identity must bind to the same immutable research SHA", async () => {
+  const result = await runPaperForwardScheduledInvocationWithAuthoritativeStageEvidenceV1({
+    input: {
+      publicEvidenceProvider: Object.freeze({
+        async collectPublicEvidence() {
+          return evidence();
+        },
+      }),
+    },
+    runBase: async (input) => {
+      await input.publicEvidenceProvider.collectPublicEvidence({ market: "CRYPTO_FUTURES" });
+      const recurring = recurringResult();
+      return Object.freeze({
+        ...recurring,
+        state: Object.freeze({ ...recurring.state, identity: scheduleIdentity("d".repeat(40)) }),
+      });
+    },
+  });
+
+  assert.equal(result.authoritativeRuntimeStageEvidenceConnection.status, "BLOCKED");
+  assert.equal(result.authoritativeRuntimeStageEvidenceConnection.blocker, "PAPER_STAGE_SCHEDULE_RUNTIME_RESEARCH_SHA_MISMATCH");
+  assert.equal(result.authoritativeRuntimeStageMeasurements, null);
+  assert.equal(result.authoritativeRuntimeStageEvidenceConnection.profitabilityCredit, 0);
+  assert.equal(result.authoritativeRuntimeStageEvidenceConnection.executionAuthority, "NONE");
 });
 
 test("schedule callsite fails closed on ambiguous runtime evidence and keeps lifecycle measurements unavailable", async () => {

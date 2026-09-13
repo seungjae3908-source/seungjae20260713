@@ -19,6 +19,13 @@ const RUNTIME_IDENTITY_FIELDS = Object.freeze([
   "executionPolicyVersion",
   "accountMode",
 ]);
+const SCHEDULE_RUNTIME_IDENTITY_FIELDS = Object.freeze([
+  "strategyId",
+  "strategyVersion",
+  "parameterHash",
+  "costPolicyVersion",
+  "executionPolicyVersion",
+]);
 const STAGE_IDENTITY_FIELDS = Object.freeze([
   "candidateId",
   "strategyFamily",
@@ -100,7 +107,7 @@ function runtimeIdentity(state) {
   });
 }
 
-function assertRuntimeIdentity(state, expected) {
+function assertCandidateRuntimeIdentity(state, expected) {
   const actual = runtimeIdentity(state);
   for (const field of RUNTIME_IDENTITY_FIELDS) {
     if (actual[field] !== expected[field]) {
@@ -110,6 +117,33 @@ function assertRuntimeIdentity(state, expected) {
   if (actual.researchCodeSha !== expected.researchCodeSha.toLowerCase()) {
     throw new Error("PAPER_STAGE_RUNTIME_RESEARCH_SHA_MISMATCH");
   }
+}
+
+function assertScheduleRuntimeIdentity(state, expected) {
+  const actual = runtimeIdentity(state);
+  for (const field of SCHEDULE_RUNTIME_IDENTITY_FIELDS) {
+    if (!nonEmpty(actual[field])) {
+      throw new Error(`PAPER_STAGE_SCHEDULE_RUNTIME_${fieldCode(field)}_REQUIRED`);
+    }
+  }
+  if (!immutableSha(actual.researchCodeSha)) {
+    throw new Error("PAPER_STAGE_SCHEDULE_RUNTIME_RESEARCH_SHA_REQUIRED");
+  }
+  if (actual.researchCodeSha !== expected.researchCodeSha.toLowerCase()) {
+    throw new Error("PAPER_STAGE_SCHEDULE_RUNTIME_RESEARCH_SHA_MISMATCH");
+  }
+}
+
+function assertRuntimeIdentity(state, expected, mode) {
+  if (mode === "CANDIDATE") {
+    assertCandidateRuntimeIdentity(state, expected);
+    return;
+  }
+  if (mode === "SCHEDULE_PROCESS") {
+    assertScheduleRuntimeIdentity(state, expected);
+    return;
+  }
+  throw new Error("PAPER_STAGE_RUNTIME_IDENTITY_MODE_INVALID");
 }
 
 function rowProviders(row, sample) {
@@ -246,6 +280,7 @@ export function readAuthoritativePaperRuntimeStageEvidenceV1({
   paperRuntimeResult,
   recurringCycleResult,
   expectedCandidateIdentity,
+  runtimeIdentityMode = "CANDIDATE",
 } = {}) {
   assertExpectedIdentity(expectedCandidateIdentity);
   if (paperRuntimeResult?.status !== PAPER_RUNTIME_MEASURED) throw new Error("PAPER_STAGE_ADMISSION_RESULT_NOT_MEASURED");
@@ -260,7 +295,7 @@ export function readAuthoritativePaperRuntimeStageEvidenceV1({
 
   const state = recurringCycleResult?.state;
   const evidence = recurringCycleResult?.summary?.canonicalNaturalStageEvidence;
-  assertRuntimeIdentity(state, expectedCandidateIdentity);
+  assertRuntimeIdentity(state, expectedCandidateIdentity, runtimeIdentityMode);
   validateDirectEvidence(evidence, expectedCandidateIdentity);
 
   const runtimeStageMeasurements = {
