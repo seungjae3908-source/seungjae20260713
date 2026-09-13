@@ -14,6 +14,22 @@ const RUNTIME_STAGE_ORDER = Object.freeze([
   "Settlement",
 ]);
 const RECONCILED_STAGES = Object.freeze(["Entry", "Position", "Settlement"]);
+const EXACT_IDENTITY_FIELDS = Object.freeze([
+  "candidateId",
+  "strategyFamily",
+  "strategyId",
+  "strategyVersion",
+  "parameterHash",
+  "parameterDigest",
+  "costPolicyVersion",
+  "executionPolicyVersion",
+  "market",
+  "provider",
+  "symbol",
+  "timeframe",
+  "sidePolicy",
+  "accountMode",
+]);
 
 function freeze(value) {
   return Object.freeze(value);
@@ -49,7 +65,8 @@ function safeCandidateEnvelope(value) {
 }
 
 function candidateIdentity(candidate) {
-  const signalStrategy = candidate?.signal?.strategyIdentity;
+  const signal = isRecord(candidate?.signal) ? candidate.signal : {};
+  const signalStrategy = signal.strategyIdentity;
   const source = isRecord(signalStrategy)
     ? signalStrategy
     : isRecord(candidate?.strategyIdentity)
@@ -68,28 +85,20 @@ function candidateIdentity(candidate) {
     researchCodeSha: String(
       source.researchCodeSha ?? candidate?.researchCodeSha ?? paperIdentity.researchCodeSha ?? "",
     ).toLowerCase() || null,
-    costPolicyVersion: source.costPolicyVersion
-      ?? candidate?.costPolicyVersion
-      ?? paperIdentity.costPolicyVersion
-      ?? candidate?.profitEvidence?.costPolicyId
-      ?? candidate?.execution?.costPolicy?.version
-      ?? null,
+    costPolicyVersion: source.costPolicyVersion ?? null,
+    executionPolicyVersion: source.executionPolicyVersion ?? null,
+    market: signal.market ?? paperIdentity.market ?? null,
+    provider: candidate?.execution?.dataEvidence?.provider ?? paperIdentity.provider ?? null,
+    symbol: signal.symbol ?? paperIdentity.symbol ?? null,
+    timeframe: signal.timeframe ?? paperIdentity.timeframe ?? null,
+    sidePolicy: signal.signalDirection ?? signal.direction ?? candidate?.signalDirection ?? paperIdentity.direction ?? null,
     accountMode: source.accountMode ?? candidate?.accountMode ?? paperIdentity.accountMode ?? null,
   });
 }
 
 function exactIdentity(actual, expected) {
   if (!isRecord(expected)) return false;
-  for (const field of [
-    "candidateId",
-    "strategyFamily",
-    "strategyId",
-    "strategyVersion",
-    "parameterHash",
-    "parameterDigest",
-    "costPolicyVersion",
-    "accountMode",
-  ]) {
+  for (const field of EXACT_IDENTITY_FIELDS) {
     if (actual[field] !== expected[field]) return false;
   }
   return actual.researchCodeSha === String(expected.researchCodeSha ?? "").toLowerCase();
