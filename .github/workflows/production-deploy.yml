@@ -28,6 +28,7 @@ on:
       - api-server/scripts/production-ci-provenance.cjs
       - api-server/scripts/verify-production-ci-provenance-contract.mjs
       - api-server/scripts/verify-production-data-plane-probe-contract.mjs
+      - api-server/scripts/verify-production-verification-contract.mjs
       - api-server/scripts/verify-phase10-deployment-safety.mjs
       - api-server/scripts/build-staging-verdict.mjs
       - api-server/scripts/verify-staging-verdict.mjs
@@ -63,6 +64,8 @@ jobs:
         run: node api-server/scripts/verify-production-ci-provenance-contract.mjs
       - name: Verify Production data-plane probe contract
         run: node api-server/scripts/verify-production-data-plane-probe-contract.mjs
+      - name: Verify Production post-switch verification contract
+        run: node api-server/scripts/verify-production-verification-contract.mjs
 
   approval-gate:
     name: Validate immutable main revision, CI provenance, and exact staging verdict
@@ -239,7 +242,7 @@ jobs:
       TARGET_SHA: ${{ needs.approval-gate.outputs.target_sha }}
       DATA_PROBE_PATH: ${{ inputs.data_probe_path }}
       FORCE_REBUILD: ${{ inputs.force_rebuild }}
-      PUBLIC_BASE_URL: https://lsj119.duckdns.org
+      PUBLIC_BASE_URL: https://lsj119.com
       REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
     steps:
       - name: Validate production secrets
