@@ -110,6 +110,9 @@ def _normalized_task(task: Mapping[str, Any], workers: Mapping[str, Any]) -> dic
     task_id = _clean(task.get("task_id"), 180)
     if not task_id or task_id == "none":
         raise NaturalLanguageGatewayError("resumable task requires task_id")
+    status = _clean(task.get("status"), 40)
+    if not status or status == "none":
+        raise NaturalLanguageGatewayError("resumable task requires explicit status")
     worker = _clean(task.get("worker"), 80)
     if not worker or worker == "none":
         raise NaturalLanguageGatewayError("resumable task requires registered worker")
@@ -133,7 +136,7 @@ def _normalized_task(task: Mapping[str, Any], workers: Mapping[str, Any]) -> dic
     return {
         "task_id": task_id,
         "goal": _clean(task.get("goal"), MAX_GOAL_CHARS) or "none",
-        "status": _clean(task.get("status"), 40) or "none",
+        "status": status,
         "current_step": _clean(task.get("current_step"), 400) or "none",
         "first_zero": _clean(task.get("first_zero"), 400) or "none",
         "remaining_steps": [_clean(item, 400) for item in parsed[:24] if _clean(item, 400)],
@@ -298,6 +301,18 @@ def self_test() -> int:
         else:
             raise AssertionError(f"{terminal_status} task was resumed")
 
+    missing_status = {key: value for key, value in state.items() if key != "status"}
+    try:
+        compile_natural_language_command(
+            command="이어서 해",
+            repository="owner/repo",
+            resumable_tasks=[missing_status],
+        )
+    except NaturalLanguageGatewayError as exc:
+        assert "requires explicit status" in str(exc)
+    else:
+        raise AssertionError("statusless resumable task was treated as active")
+
     rogue = {**state, "worker": "rogue-worker"}
     try:
         compile_natural_language_command(
@@ -371,6 +386,7 @@ def self_test() -> int:
         "authority": resumed.authority,
         "blocked_resume_fail_closed": True,
         "cancelled_resume_fail_closed": True,
+        "missing_resume_status_fail_closed": True,
         "unknown_resume_worker_fail_closed": True,
         "missing_resume_worker_fail_closed": True,
         "missing_resume_branch_fail_closed": True,
