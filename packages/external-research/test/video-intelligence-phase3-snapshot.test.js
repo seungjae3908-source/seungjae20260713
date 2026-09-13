@@ -73,6 +73,8 @@ test('sanitized snapshot strips credential metadata and binds exact source prove
   assert.equal(snapshot.credentialValueExposed, false);
   assert.equal(Object.prototype.hasOwnProperty.call(snapshot, 'credentialEnvName'), false);
   assert.equal(snapshot.records[0]?.canonicalUrl, 'https://www.youtube.com/watch?v=public-video-1');
+  assert.equal(snapshot.records[0]?.publishedAt, '2026-09-11T00:00:00.000Z');
+  assert.equal(snapshot.records[0]?.discoveredAt, '2026-09-13T00:00:00.000Z');
   assert.equal(snapshot.records[0]?.transcriptStatus, 'NOT_AUTHORIZED');
   assert.equal(snapshot.records[0]?.sourceTrustTier, 'UNKNOWN');
   assert.equal(snapshot.snapshotProvenance.sourceHeadSha, HEAD);
@@ -109,17 +111,21 @@ test('publisher writes exactly one fixed-name atomic snapshot in a caller-select
   }
 });
 
-test('publisher fails closed on malformed record identity, transcript status, and trust tier', () => {
+test('publisher fails closed on malformed record identity, timestamps, transcript status, and trust tier', () => {
   const wrongHost = successfulRuntimeResult();
   wrongHost.records[0].canonicalUrl = 'https://example.invalid/watch?v=public-video-1';
   const mismatchedVideoId = successfulRuntimeResult();
   mismatchedVideoId.records[0].canonicalUrl = 'https://www.youtube.com/watch?v=another-video';
+  const invalidPublishedAt = successfulRuntimeResult();
+  invalidPublishedAt.records[0].publishedAt = 'not-a-timestamp';
+  const invalidDiscoveredAt = successfulRuntimeResult();
+  invalidDiscoveredAt.records[0].discoveredAt = '';
   const invalidTranscriptStatus = successfulRuntimeResult();
   invalidTranscriptStatus.records[0].transcriptStatus = 'AVAILABLE_BY_GUESS';
   const invalidTrustTier = successfulRuntimeResult();
   invalidTrustTier.records[0].sourceTrustTier = 'PUBLIC_PLATFORM_METADATA';
 
-  for (const result of [wrongHost, mismatchedVideoId, invalidTranscriptStatus, invalidTrustTier]) {
+  for (const result of [wrongHost, mismatchedVideoId, invalidPublishedAt, invalidDiscoveredAt, invalidTranscriptStatus, invalidTrustTier]) {
     assert.throws(
       () => createSanitizedVideoResearchSnapshotV1(result, { sourceHeadSha: HEAD, observedAt: OBSERVED_AT }),
       (error) => error?.code === 'VIDEO_RESEARCH_SNAPSHOT_RECORD_INVALID',
