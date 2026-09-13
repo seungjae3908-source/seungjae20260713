@@ -13,6 +13,7 @@ const productionBrowser = await read('.github/workflows/production-browser-smoke
 const productionComprehensive = await read('.github/workflows/production-comprehensive-readonly-qa.yml');
 const productionObserver = await read('.github/workflows/production-health-observer.yml');
 const deployScript = await read('ops/deploy-production.sh');
+const diagnostics = await read('ops/production-verification-diagnostics.sh');
 
 const officialProductionBaseUrl = 'https://lsj119.com';
 
@@ -35,20 +36,26 @@ for (const [name, workflow] of [
   );
 }
 
-assert(deployScript.includes('verify_gate()'), 'deploy script must expose a named post-switch verification gate helper');
+assert(
+  productionDeploy.includes('ops/production-verification-diagnostics.sh'),
+  'Production Deploy path contract must include the diagnostics hook',
+);
+assert(
+  productionDeploy.includes('BASH_ENV="$SOURCE_DIR/ops/production-verification-diagnostics.sh"'),
+  'Production Deploy must inject the read-only diagnostics hook into the deploy shell only',
+);
+assert(diagnostics.includes('unset BASH_ENV'), 'diagnostics hook must not propagate into child shells');
+assert(diagnostics.includes('trap production_verify_debug DEBUG'), 'diagnostics hook must observe the active post-switch gate');
+assert(diagnostics.includes('trap production_verify_error ERR'), 'diagnostics hook must report the failing gate');
 for (const gate of ['LOCAL_HEALTH', 'DATA_PLANE', 'PM2_RUNTIME', 'PUBLIC_HEALTH']) {
   assert(
-    deployScript.includes(`verify_gate ${gate}`),
-    `deploy script must log the ${gate} post-switch verification gate`,
+    diagnostics.includes(`PROD_VERIFY_CURRENT_GATE="${gate}"`),
+    `diagnostics hook must classify ${gate}`,
   );
 }
 assert(
-  deployScript.includes('[deploy][verify] ${gate_name}=PASS'),
-  'deploy script must emit sanitized PASS markers for named verification gates',
-);
-assert(
-  deployScript.includes('[deploy][verify] ${gate_name}=FAIL'),
-  'deploy script must emit sanitized FAIL markers for named verification gates',
+  diagnostics.includes('[deploy][verify] ${PROD_VERIFY_CURRENT_GATE}=FAIL'),
+  'diagnostics hook must emit a sanitized named failure marker',
 );
 assert(deployScript.includes('restore_backup'), 'automatic rollback must remain enabled');
 assert(
