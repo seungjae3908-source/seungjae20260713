@@ -27,6 +27,23 @@ test("Natural Paper activation remains a separate exact-owner production approva
   assert.doesNotMatch(naturalWorkflow, /deploy-production\.sh/u);
 });
 
+test("PostgreSQL Auth evidence lookup is artifact-first and validates exact run provenance", () => {
+  assert.match(naturalWorkflow, /const name = `staging-postgres-auth-\$\{target\}`/u);
+  assert.match(naturalWorkflow, /github\.paginate\(github\.rest\.actions\.listArtifactsForRepo/u);
+  assert.match(naturalWorkflow, /artifact\.name !== name/u);
+  assert.match(naturalWorkflow, /artifact\.expired/u);
+  assert.match(naturalWorkflow, /artifact\.workflow_run\?\.head_sha !== target/u);
+  assert.match(naturalWorkflow, /github\.rest\.actions\.getWorkflowRun/u);
+  assert.match(naturalWorkflow, /run\.name === 'Staging PostgreSQL Auth Gate'/u);
+  assert.match(naturalWorkflow, /run\.event === 'issue_comment'/u);
+  assert.match(naturalWorkflow, /run\.head_branch === 'main'/u);
+  assert.match(naturalWorkflow, /run\.head_sha === target/u);
+  assert.match(naturalWorkflow, /run\.path === '\.github\/workflows\/staging-postgres-auth-gate\.yml'/u);
+  assert.match(naturalWorkflow, /run\.status === 'completed'/u);
+  assert.match(naturalWorkflow, /run\.conclusion === 'success'/u);
+  assert.doesNotMatch(naturalWorkflow, /listWorkflowRunsForRepo/u);
+});
+
 test("legacy public-forward activation remains observation-only and is not silently upgraded", () => {
   assert.match(publicWorkflow, /\/activate-paper-forward-schedule <40-character-current-main-sha>/u);
   assert.match(publicWorkflow, /tradeOutcomeNotClaimed: invocation\.paperTradeOutcomeAccumulating === false/u);
