@@ -77,6 +77,12 @@ function nullableString(value) {
   return undefined;
 }
 
+function nullableIsoTimestamp(value) {
+  if (value === null) return null;
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  return isoTimestamp(value) ?? undefined;
+}
+
 function canonicalYoutubeUrl(videoId) {
   return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
 }
@@ -87,8 +93,8 @@ function sanitizeRecord(value) {
   if (value.canonicalUrl !== canonicalYoutubeUrl(value.videoId)) return null;
   if (typeof value.title !== 'string' || !value.title.trim()) return null;
   const channelOrPublisher = nullableString(value.channelOrPublisher);
-  const publishedAt = nullableString(value.publishedAt);
-  const discoveredAt = nullableString(value.discoveredAt);
+  const publishedAt = nullableIsoTimestamp(value.publishedAt);
+  const discoveredAt = nullableIsoTimestamp(value.discoveredAt);
   const language = nullableString(value.language);
   if (channelOrPublisher === undefined || publishedAt === undefined || discoveredAt === undefined || language === undefined) return null;
   const durationSec = value.durationSec === null
