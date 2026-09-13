@@ -6,6 +6,10 @@ import {
   runPaperForwardScheduledInvocation as runBasePaperForwardScheduledInvocation,
 } from "./paper-forward-schedule-runtime-base-v1.js";
 import { adoptExistingAuthoritativePaperRuntimeStageEvidenceV1 } from "./authoritative-paper-runtime-stage-evidence-caller-v1.js";
+import {
+  FROZEN_CANDIDATE_PERFORMANCE_RELATIVE_PATH,
+  publishFrozenCandidatePerformanceV1,
+} from "./frozen-candidate-performance-publisher-v1.js";
 
 export {
   PAPER_FORWARD_SCHEDULE_ACTIVATION_CONTRACT,
@@ -69,7 +73,18 @@ function wrapProvider(provider, capture) {
   });
 }
 
-function withAdoptionEvidence(result, adoption) {
+function blockedPublication(blocker) {
+  return Object.freeze({
+    schemaVersion: "frozen-candidate-performance-publisher-v1",
+    status: "BLOCKED",
+    artifactRelativePath: FROZEN_CANDIDATE_PERFORMANCE_RELATIVE_PATH,
+    FIRST_ZERO: blocker,
+    candidateId: null,
+    executionAuthority: "NONE",
+  });
+}
+
+function withAdoptionEvidence(result, adoption, publication) {
   const connection = adoption?.stageEvidenceConnection ?? null;
   const reconciled = connection?.status === "RECONCILED";
   const stageMeasurements = reconciled && Array.isArray(adoption?.stageMeasurements)
@@ -80,6 +95,7 @@ function withAdoptionEvidence(result, adoption) {
       ...result.summary,
       authoritativeRuntimeStageEvidenceConnection: connection,
       authoritativeRuntimeStageMeasurements: stageMeasurements,
+      frozenCandidatePerformancePublication: publication,
     })
     : result?.summary;
   return Object.freeze({
@@ -87,6 +103,7 @@ function withAdoptionEvidence(result, adoption) {
     summary,
     authoritativeRuntimeStageEvidenceConnection: connection,
     authoritativeRuntimeStageMeasurements: stageMeasurements,
+    frozenCandidatePerformancePublication: publication,
   });
 }
 
@@ -108,7 +125,7 @@ export async function runPaperForwardScheduledInvocationWithAuthoritativeStageEv
   const wrappedProvider = wrapProvider(provider, (evidence) => {
     futuresEvidenceObserved = true;
     const runtimeInput = safeRuntimeInputFromEvidence(evidence);
-    if (runtimeInput != null) captured.push(runtimeInput);
+    if (runtimeInput != null) captured.push(Object.freeze({ runtimeInput, evidence }));
   });
   const result = await runBase({ ...input, publicEvidenceProvider: wrappedProvider });
 
@@ -127,7 +144,7 @@ export async function runPaperForwardScheduledInvocationWithAuthoritativeStageEv
     });
   } else {
     adoption = adoptExistingAuthoritativePaperRuntimeStageEvidenceV1({
-      paperRuntimeResult: captured[0],
+      paperRuntimeResult: captured[0].runtimeInput,
       recurringCycleResult: Object.freeze({
         state: result?.state,
         summary: result?.summary,
@@ -136,7 +153,19 @@ export async function runPaperForwardScheduledInvocationWithAuthoritativeStageEv
     });
   }
 
-  return withAdoptionEvidence(result, adoption);
+  const rootDirectory = result?.rootDirectory ?? input.rootDirectory;
+  const publication = typeof rootDirectory === "string" && rootDirectory.trim()
+    ? await publishFrozenCandidatePerformanceV1({
+      rootDirectory,
+      source: captured.length === 1
+        ? captured[0].evidence?.paperCandidateSource?.candidatePerformanceEvidenceSource ?? null
+        : null,
+      reconciledStageEvidence: adoption?.recurringStageEvidence,
+      recurringState: result?.state,
+    })
+    : blockedPublication("PAPER_SCHEDULE_ROOT_DIRECTORY_NOT_AVAILABLE");
+
+  return withAdoptionEvidence(result, adoption, publication);
 }
 
 export async function runPaperForwardScheduledInvocation(input = {}) {
