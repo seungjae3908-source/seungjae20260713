@@ -51,6 +51,36 @@ function isDisabledMemberSession(member: MemberProfile): boolean {
     || (member.status === 'approved' && member.is_active === false);
 }
 
+function applyAuthenticatedProfile(
+  req: AuthenticatedRequest,
+  res: Response,
+  token: string,
+  authenticatedUserId: string,
+  profile: unknown,
+  profileError: unknown,
+): boolean {
+  if (
+    profileError
+    || !profile
+    || typeof profile !== 'object'
+    || (profile as MemberProfile).id !== authenticatedUserId
+  ) {
+    res.status(403).json({ error: 'PROFILE_NOT_FOUND' });
+    return false;
+  }
+
+  const member = profile as MemberProfile;
+  if (isDisabledMemberSession(member)) {
+    res.status(403).json({ error: 'MEMBER_SESSION_DISABLED' });
+    return false;
+  }
+
+  req.member = member;
+  req.accessToken = token;
+  req.membershipLevel = deriveMemberTier(member);
+  return true;
+}
+
 async function authenticate(
   req: AuthenticatedRequest,
   res: Response,
@@ -85,21 +115,7 @@ async function authenticate(
     .select('*')
     .eq('id', auth.user.id)
     .single();
-  if (error || !profile) {
-    res.status(403).json({ error: 'PROFILE_NOT_FOUND' });
-    return false;
-  }
-
-  const member = profile as unknown as MemberProfile;
-  if (isDisabledMemberSession(member)) {
-    res.status(403).json({ error: 'MEMBER_SESSION_DISABLED' });
-    return false;
-  }
-
-  req.member = member;
-  req.accessToken = token;
-  req.membershipLevel = deriveMemberTier(member);
-  return true;
+  return applyAuthenticatedProfile(req, res, token, auth.user.id, profile, error);
 }
 
 export async function requireAuthenticated(
@@ -109,6 +125,51 @@ export async function requireAuthenticated(
   dependencies: AuthDependencies = defaultAuthDependencies,
 ) {
   if (!(await authenticate(req, res, dependencies))) return;
+  return next();
+}
+
+/**
+ * The first browser profile read is on the application startup critical path.
+ * Verify the GoTrue user and perform the user-scoped RLS profile read in
+ * parallel, then require both results and their identities to agree before
+ * granting any capability. This removes additive network latency without
+ * trusting an unverified token claim or caching authorization state.
+ */
+export async function requireAuthenticatedProfileBootstrap(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction,
+  dependencies: AuthDependencies = defaultAuthDependencies,
+) {
+  if (req.member && req.accessToken) {
+    req.membershipLevel = deriveMemberTier(req.member);
+    return next();
+  }
+  if (!dependencies.isSupabaseConfigured()) {
+    return res.status(503).json({ error: 'AUTH_NOT_CONFIGURED' });
+  }
+
+  const token = bearerToken(req);
+  if (!token) return res.status(401).json({ error: 'LOGIN_REQUIRED' });
+
+  const authPromise = dependencies.getSupabase().auth.getUser(token);
+  const profilePromise = dependencies.getUserSupabase(token)
+    .from('profiles')
+    .select('*')
+    .maybeSingle();
+  const [authResult, profileResult] = await Promise.all([authPromise, profilePromise]);
+  const authUser = authResult.data?.user;
+  if (authResult.error || !authUser) {
+    return res.status(401).json({ error: 'INVALID_SESSION' });
+  }
+  if (!applyAuthenticatedProfile(
+    req,
+    res,
+    token,
+    authUser.id,
+    profileResult.data,
+    profileResult.error,
+  )) return;
   return next();
 }
 
