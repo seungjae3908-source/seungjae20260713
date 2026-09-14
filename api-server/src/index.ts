@@ -11,7 +11,10 @@ import { startTradeRecoveryWorker } from './services/trade-recovery-worker.servi
 import { startTelegramIntelligenceWorker } from './services/telegram-intelligence-worker.service';
 import { startSignalIntelligenceTelegramSubscriber } from './services/signal-intelligence-telegram-subscriber.service';
 import { startSignalIntelligenceAiWatch } from './services/signal-intelligence-ai-watch.service';
-import { isStagingReadonlyCredentialRuntime, resolveApiBindHost } from './lib/api-bind-host';
+import {
+  areBackgroundWorkersEnabled,
+  resolveApiBindHost,
+} from './lib/api-bind-host';
 import { readRuntimeDeploymentIdentity } from './lib/deployment-identity';
 import {
   FRONTEND_REVALIDATE_CACHE_CONTROL,
@@ -29,7 +32,7 @@ const port = Number(
     process.env.API_PORT ??
     8080,
 );
-const readonlyCredentialRuntime = isStagingReadonlyCredentialRuntime();
+const backgroundWorkersEnabled = areBackgroundWorkersEnabled();
 const bindHost = resolveApiBindHost();
 
 const deployMarkerPath = process.env.DEPLOY_MARKER_PATH?.trim()
@@ -47,7 +50,7 @@ function healthPayload(route: '/health' | '/api/health') {
     identityMatch: identity.identityMatch,
     identityStatus: identity.identityStatus,
     bindHost,
-    backgroundWorkersEnabled: !readonlyCredentialRuntime,
+    backgroundWorkersEnabled,
     time: new Date().toISOString(),
   };
 }
@@ -251,8 +254,8 @@ app.listen(
       }
     });
 
-    if (readonlyCredentialRuntime) {
-      console.log('[api-server] staging read-only credential runtime: background workers disabled');
+    if (!backgroundWorkersEnabled) {
+      console.log('[api-server] background workers disabled by runtime safety policy');
     } else {
       startPriceAlertMonitor();
       startTradeRecoveryWorker();
