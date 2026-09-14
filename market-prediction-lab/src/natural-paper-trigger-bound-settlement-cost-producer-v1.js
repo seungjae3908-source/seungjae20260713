@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isAdaptiveMultiEvidenceV2FrozenCandidateId } from "./adaptive-multi-evidence-natural-paper-v2.js";
 
 export const NATURAL_PAPER_TRIGGER_BOUND_SETTLEMENT_COST_PRODUCER_VERSION =
   "natural-paper-trigger-bound-settlement-cost-producer-v1";
@@ -114,7 +115,8 @@ function positionIdentity(position) {
 
 function frozenCandidateIdentityBlockers(position) {
   const blockers = [];
-  if (!/^paper-candidate-v1:[0-9a-f]{64}$/u.test(position?.candidateId ?? "")) {
+  if (!/^paper-candidate-v1:[0-9a-f]{64}$/u.test(position?.candidateId ?? "")
+      && !isAdaptiveMultiEvidenceV2FrozenCandidateId(position?.candidateId)) {
     blockers.push("PAPER_POSITION_CANDIDATE_ID_REQUIRED");
   }
   if (!nonEmpty(position?.strategyFamily)) blockers.push("PAPER_POSITION_STRATEGY_FAMILY_REQUIRED");
