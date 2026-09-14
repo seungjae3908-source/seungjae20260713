@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isAdaptiveMultiEvidenceV2FrozenCandidateId } from "./adaptive-multi-evidence-natural-paper-v2.js";
 import { PAPER_FORWARD_PROVIDER_AUTHORITY } from "./paper-public-provider-authority-v1.js";
 import { validateNaturalPaperTriggerBoundSettlementEvidence } from "./natural-paper-trigger-bound-settlement-cost-producer-v1.js";
 
@@ -41,7 +42,8 @@ function immutableSha(value) {
 function canonicalFrozenCandidateId(value) {
   return typeof value === "string"
     && (/^paper-candidate-v1:[0-9a-f]{64}$/u.test(value)
-      || /^phase3-candidate:sha256:[0-9a-f]{64}$/u.test(value));
+      || /^phase3-candidate:sha256:[0-9a-f]{64}$/u.test(value)
+      || isAdaptiveMultiEvidenceV2FrozenCandidateId(value));
 }
 
 function deepFreeze(value) {
