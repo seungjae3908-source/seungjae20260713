@@ -224,7 +224,7 @@ test('normal and empty connection load reaches one explicit HTTP 200 terminal an
   await page.goto('/account');
   const panel = page.getByTestId('user-broker-telegram-panel');
   await expect(panel).toHaveAttribute('data-user-integrations-request-state', 'success');
-  await expect(panel).toContainText('등록된 Broker 연결이 없습니다.');
+  await expect(panel).toContainText('등록된 계좌 제공사 연결이 없습니다.');
   await expect(panel).toContainText('연결 안 됨');
   expect(runtime.diagnostics.integrationRequests).toBe(1);
   expect(runtime.diagnostics.integrationResponses).toBe(1);
@@ -255,7 +255,7 @@ test('actual API failure remains visible and is not converted to an empty or dis
   const panel = page.getByTestId('user-broker-telegram-panel');
   await expect(panel).toHaveAttribute('data-user-integrations-request-state', 'failure');
   await expect(panel.getByRole('alert')).toContainText('USER_INTEGRATIONS_UPSTREAM_UNAVAILABLE');
-  await expect(panel).not.toContainText('등록된 Broker 연결이 없습니다.');
+  await expect(panel).not.toContainText('등록된 계좌 제공사 연결이 없습니다.');
   await expect(panel).not.toContainText('연결 안 됨');
   expect(runtime.diagnostics.integrationRequests).toBe(1);
   expect(runtime.diagnostics.integrationResponses).toBe(1);
@@ -271,7 +271,7 @@ test('malformed HTTP 200 fails closed before Account UI can show connected or em
   const panel = page.getByTestId('user-broker-telegram-panel');
   await expect(panel).toHaveAttribute('data-user-integrations-request-state', 'failure');
   await expect(panel.getByRole('alert')).toContainText('INVALID_USER_INTEGRATIONS_RESPONSE');
-  await expect(panel).not.toContainText('등록된 Broker 연결이 없습니다.');
+  await expect(panel).not.toContainText('등록된 계좌 제공사 연결이 없습니다.');
   await expect(panel).not.toContainText('연결됨');
   await expect(panel).not.toContainText('연결 안 됨');
   expect(runtime.diagnostics.integrationRequests).toBe(1);
@@ -329,7 +329,7 @@ test('route unmount cannot apply stale state and remount reuses the same termina
   });
   const panel = page.getByTestId('user-broker-telegram-panel');
   await expect(panel).toHaveAttribute('data-user-integrations-request-state', 'success');
-  await expect(panel).toContainText('등록된 Broker 연결이 없습니다.');
+  await expect(panel).toContainText('등록된 계좌 제공사 연결이 없습니다.');
   expect(runtime.diagnostics.integrationRequests).toBe(1);
   expect(runtime.diagnostics.integrationAborts).toBe(0);
   runtime.assertClean();

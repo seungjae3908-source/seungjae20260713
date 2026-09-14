@@ -110,7 +110,7 @@ test('unified trade journal separates performance, quality, snapshots, and free-
   await expect(page.getByTestId('unified-journal-list')).toContainText('BTCUSDT');
   await expect(page.getByTestId('unified-journal-detail')).toContainText('성과 점수');
   await expect(page.getByTestId('unified-journal-detail')).toContainText('매매 품질');
-  await expect(page.getByTestId('unified-journal-snapshot')).toContainText('PRE_TRADE_SNAPSHOT');
+  await expect(page.getByTestId('unified-journal-snapshot')).toContainText('진입 전 판단 근거');
   await expect(page.getByTestId('unified-journal-monthly')).toContainText('2026-08');
   expect(errors).toEqual([]);
 });
