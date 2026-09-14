@@ -122,15 +122,15 @@ probe_json() {
 probe_health() {
   local base_url="$1"
   local expected_sha="${2:-}"
-  local output_file
+  local output_file attempt
   output_file="$(mktemp /tmp/stock-app-health.XXXXXX)"
 
-  if ! probe_json "$base_url/api/health" "$output_file" 10 3; then
-    rm -f "$output_file"
-    return 1
-  fi
-
-  node - "$output_file" "$expected_sha" <<'NODE'
+  # A PM2 restart can leave the previous process serving valid JSON briefly.
+  # Keep the existing 10-attempt readiness budget, but require the complete
+  # health and exact deployment-identity contract on every attempt.
+  for ((attempt = 1; attempt <= 10; attempt += 1)); do
+    if curl --fail --silent --show-error --max-time 25 "$base_url/api/health" -o "$output_file" \
+      && node - "$output_file" "$expected_sha" <<'NODE'
 const fs = require('fs');
 const [file, expectedSha] = process.argv.slice(2);
 const value = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -146,9 +146,17 @@ if (expectedSha) {
   if (!identityValid) process.exit(1);
 }
 NODE
-  local result=$?
+    then
+      rm -f "$output_file"
+      return 0
+    fi
+
+    echo "[deploy] health identity not ready (attempt $attempt/10)" >&2
+    (( attempt < 10 )) && sleep 3
+  done
+
   rm -f "$output_file"
-  return "$result"
+  return 1
 }
 
 probe_data() {
