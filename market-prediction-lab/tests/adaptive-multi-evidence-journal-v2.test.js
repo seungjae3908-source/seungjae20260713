@@ -71,6 +71,7 @@ function takeInput(overrides = {}) {
     inferences: [{ statement: "trend may persist", evidenceIds: ["evidence-TREND"], uncertainty: "regime can change" }],
     uncertainties: ["future path unknown"],
     reasonCodes: ["ALL_GATES_PASS"],
+    decisionContext: { marketRegime: "TREND_UP", higherTimeframeContext: "ALIGNED" },
     positionPolicyEvidenceId: "position-policy-1",
     executionAuthority: "NONE",
     ...overrides,
