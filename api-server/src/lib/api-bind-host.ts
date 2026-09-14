@@ -23,6 +23,11 @@ export function isStagingReadonlyCredentialRuntime(environment: NodeJS.ProcessEn
     && mutationAuthorityDisabled;
 }
 
+export function areBackgroundWorkersEnabled(environment: NodeJS.ProcessEnv = process.env) {
+  return environment.BACKGROUND_WORKERS_ENABLED !== 'false'
+    && !isStagingReadonlyCredentialRuntime(environment);
+}
+
 export function resolveApiBindHost(environment: NodeJS.ProcessEnv = process.env) {
   // A staging runtime that temporarily receives real private-read credentials
   // is non-overridable: even an inherited API_BIND_HOST cannot widen it.
