@@ -3,12 +3,16 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const navigationPath = fileURLToPath(new URL('../src/lib/app-navigation.ts', import.meta.url));
+const stagingReadinessPath = fileURLToPath(new URL('./phase10-staging-readiness.spec.ts', import.meta.url));
 const labelsPath = fileURLToPath(new URL('../src/lib/labels.ts', import.meta.url));
 const promotionPagePath = fileURLToPath(new URL('../src/pages/strategy-promotion.tsx', import.meta.url));
 const promotionContractPath = fileURLToPath(new URL('../src/lib/strategy-promotion.ts', import.meta.url));
 
 test('primary user-facing navigation uses Korean-first terminology without changing internal routes', async () => {
-  const navigation = await readFile(navigationPath, 'utf8');
+  const [navigation, stagingReadiness] = await Promise.all([
+    readFile(navigationPath, 'utf8'),
+    readFile(stagingReadinessPath, 'utf8'),
+  ]);
 
   for (const label of [
     '국내주식',
@@ -52,6 +56,24 @@ test('primary user-facing navigation uses Korean-first terminology without chang
     "portfolio: '/portfolio'",
   ]) {
     expect(navigation).toContain(internalRoute);
+  }
+
+  for (const canonicalStagingLabel of [
+    "name: 'AI차트'",
+    "openMenuRoute('technical', 'AI차트'",
+    "openMenuRoute('technical', '모의자동매매'",
+    "['검색기', 'AI차트', '과거검증', '모의자동매매']",
+  ]) {
+    expect(stagingReadiness).toContain(canonicalStagingLabel);
+  }
+
+  for (const staleStagingLabel of [
+    "name: 'AI 차트'",
+    "openMenuRoute('technical', 'AI 차트'",
+    "openMenuRoute('technical', '모의매매'",
+    "['AI 신호검색기', 'AI 차트', '백테스트', '모의매매']",
+  ]) {
+    expect(stagingReadiness).not.toContain(staleStagingLabel);
   }
 });
 
