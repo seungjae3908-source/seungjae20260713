@@ -5,14 +5,26 @@ import { fileURLToPath } from 'node:url';
 const supabasePath = fileURLToPath(new URL('../src/lib/supabase.ts', import.meta.url));
 const deviceTrustPath = fileURLToPath(new URL('../src/lib/device-trust.ts', import.meta.url));
 const appPath = fileURLToPath(new URL('../../api-server/src/app.ts', import.meta.url));
+const runtimeEntryPath = fileURLToPath(new URL('../../api-server/src/index.ts', import.meta.url));
+const runtimeRouterPath = fileURLToPath(new URL('../../api-server/src/routes/index.ts', import.meta.url));
 const authMiddlewarePath = fileURLToPath(new URL('../../api-server/src/middleware/auth.ts', import.meta.url));
 const phase10StagingPath = fileURLToPath(new URL('./phase10-staging-readiness.spec.ts', import.meta.url));
 
 test('auth bootstrap self-profile read is same-origin, exact-identity, and device-trust aware', async () => {
-  const [supabaseSource, deviceTrustSource, appSource, authSource, phase10StagingSource] = await Promise.all([
+  const [
+    supabaseSource,
+    deviceTrustSource,
+    appSource,
+    runtimeEntrySource,
+    runtimeRouterSource,
+    authSource,
+    phase10StagingSource,
+  ] = await Promise.all([
     readFile(supabasePath, 'utf8'),
     readFile(deviceTrustPath, 'utf8'),
     readFile(appPath, 'utf8'),
+    readFile(runtimeEntryPath, 'utf8'),
+    readFile(runtimeRouterPath, 'utf8'),
     readFile(authMiddlewarePath, 'utf8'),
     readFile(phase10StagingPath, 'utf8'),
   ]);
@@ -41,6 +53,22 @@ test('auth bootstrap self-profile read is same-origin, exact-identity, and devic
   expect(routeBody).not.toContain('req.query');
   expect(routeBody).not.toContain('req.params');
   expect(routeBody).toContain("'Cache-Control', 'no-store, max-age=0'");
+
+  // Production and staging are built from src/index.ts, not src/app.ts. Lock
+  // the same endpoint into the router that the deployed entry actually mounts.
+  expect(runtimeEntrySource).toContain("import apiRouter from './routes';");
+  expect(runtimeEntrySource).toContain("app.use('/api', apiRouter);");
+  const runtimeProfileRoute = runtimeRouterSource.indexOf(
+    "router.get('/auth/profile', requireAuthenticated",
+  );
+  const runtimePrivateGate = runtimeRouterSource.indexOf('router.use(requireAuthenticated);');
+  expect(runtimeProfileRoute).toBeGreaterThanOrEqual(0);
+  expect(runtimePrivateGate).toBeGreaterThan(runtimeProfileRoute);
+  const runtimeRouteBody = runtimeRouterSource.slice(runtimeProfileRoute, runtimePrivateGate);
+  expect(runtimeRouteBody).toContain('const profile = req.member;');
+  expect(runtimeRouteBody).not.toContain('req.query');
+  expect(runtimeRouteBody).not.toContain('req.params');
+  expect(runtimeRouteBody).toContain("'Cache-Control', 'no-store, max-age=0'");
 
   expect(authSource).toContain(".eq('id', auth.user.id)");
   expect(authSource).toContain("res.status(401).json({ error: 'INVALID_SESSION' })");
