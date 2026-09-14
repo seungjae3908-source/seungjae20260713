@@ -64,6 +64,7 @@ export const USER_STATUS_KO: Readonly<Record<string, string>> = {
   FAILURE: '실패',
   BLOCKED: '차단됨',
   BLOCKED_DATA: '데이터 부족으로 차단',
+  EVIDENCE_REQUIRED: '근거 필요',
   INSUFFICIENT_SAMPLE: '표본 부족',
   STALE: '오래된 정보',
   INVALIDATED: '무효화',
