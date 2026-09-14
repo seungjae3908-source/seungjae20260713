@@ -36,6 +36,139 @@ export function signalTone(t: SignalTone): Tone {
   return t === 'positive' ? 'positive' : t === 'negative' ? 'destructive' : 'warning';
 }
 
+export const USER_MARKET_KO: Readonly<Record<string, string>> = {
+  KR: '국내주식',
+  KR_STOCK: '국내주식',
+  US: '미국주식',
+  US_STOCK: '미국주식',
+  CRYPTO_SPOT: '코인현물',
+  CRYPTO_FUTURES: '코인선물',
+};
+
+export const USER_DIRECTION_KO: Readonly<Record<string, string>> = {
+  BUY: '매수',
+  SELL: '매도',
+  LONG: '롱',
+  SHORT: '숏',
+  NO_TRADE: '거래 안 함',
+};
+
+export const USER_SIGNAL_KO: Readonly<Record<string, string>> = {
+  BUY: '매수',
+  LONG: '롱',
+  SHORT: '숏',
+  NO_TRADE: '거래 안 함',
+  PRICE_TARGET: '목표가',
+  STRATEGY_HEALTH: '전략 상태',
+  CHAMPION: '대표 전략',
+  RESEARCH: '연구',
+  SETTLEMENT: '정산 결과',
+  PROVIDER_SERVER_ERROR: '데이터·서버 오류',
+};
+
+export const USER_TRADE_SOURCE_KO: Readonly<Record<string, string>> = {
+  TOSS_MANUAL: 'Toss 수동',
+  TOSS_API: 'Toss API',
+  APP_PAPER: '모의자동매매',
+  APP_SHADOW: '실시간 추적검증',
+  APP_AUTO: '자동매매',
+};
+
+export const USER_CONTEXT_SOURCE_KO: Readonly<Record<string, string>> = {
+  PRE_TRADE_SNAPSHOT: '진입 전 판단 근거',
+  POST_HOC_RECONSTRUCTION: '사후 재구성',
+  NO_PRE_TRADE_CONTEXT: '진입 전 판단 근거 없음',
+};
+
+export const USER_METRIC_KO: Readonly<Record<string, string>> = {
+  PERFORMANCE: '성과표',
+  PROFITABILITY: '수익성 검증',
+  FULL_COST: '전체 거래비용 반영',
+  NET_ALPHA: '비용 차감 후 초과수익',
+  DRAWDOWN: '최대 낙폭',
+  WIN_RATE: '승률',
+  PROFIT_FACTOR: '손익비 지수',
+};
+
+export const USER_STATUS_KO: Readonly<Record<string, string>> = {
+  NOT_STARTED: '시작 전',
+  RUNNING: '진행 중',
+  IN_PROGRESS: '진행 중',
+  OPEN: '진행 중',
+  CLOSED: '종료',
+  CONNECTED: '연결됨',
+  DISCONNECTED: '연결 안 됨',
+  PASS: '통과',
+  SUCCESS: '정상',
+  FAIL: '실패',
+  FAILED: '실패',
+  FAILURE: '실패',
+  BLOCKED: '차단됨',
+  BLOCKED_DATA: '데이터 부족으로 차단',
+  EVIDENCE_REQUIRED: '근거 필요',
+  INSUFFICIENT_SAMPLE: '표본 부족',
+  STALE: '오래된 정보',
+  INVALIDATED: '무효화',
+  MISSING: '미수집',
+  UNKNOWN: '확인 불가',
+  READY: '준비됨',
+  NOT_READY: '준비 안 됨',
+  AVAILABLE: '사용 가능',
+  UNAVAILABLE: '사용 불가',
+  PARTIAL: '일부 수집',
+  COMPLETE: '완료',
+};
+
+export const PROMOTION_STAGE_KO: Readonly<Record<string, string>> = {
+  RESEARCH_DESIGN: '연구 설계',
+  HISTORICAL_BACKTEST: '과거검증',
+  OUT_OF_SAMPLE: '독립구간 검증',
+  PURGED_WALK_FORWARD: '누수 방지 순차검증',
+  COST_STRESS: '비용 스트레스 검증',
+  REGIME: '시장상태 검증',
+  FINAL_HOLDOUT: '최종검증',
+  PAPER: '모의자동매매',
+  SHADOW: '실시간 추적검증',
+  RECOMMENDATION_OUTCOMES: '추천 결과 검증',
+};
+
+export const PROMOTION_STATE_KO: Readonly<Record<string, string>> = {
+  RESEARCH: '연구 중',
+  BLOCKED_DATA: '데이터 부족으로 차단',
+  RESEARCH_HOLD: '연구 보류',
+  PAPER_CANDIDATE: '모의자동매매 후보',
+  PAPER_VALIDATED: '모의자동매매 검증 완료',
+  SHADOW_CANDIDATE: '실시간 추적검증 후보',
+  SHADOW_VALIDATED: '실시간 추적검증 완료',
+  PROMOTION_CANDIDATE: '승격 검토 후보',
+  SUSPENDED: '중단',
+  KILLED: '종료',
+};
+
+export const DRIFT_STATE_KO: Readonly<Record<string, string>> = {
+  HEALTHY: '정상',
+  WATCH: '관찰',
+  DEGRADED: '저하',
+  CRITICAL: '심각',
+  MEASURED: '측정됨',
+  INSUFFICIENT_SAMPLE: '표본 부족',
+};
+
+export const KILL_STATE_KO: Readonly<Record<string, string>> = {
+  NONE: '없음',
+  SUSPEND_RECOMMENDED: '중단 권고',
+  KILLED: '종료',
+};
+
+export function userFacingCodeLabel(
+  value: string | null | undefined,
+  labels: Readonly<Record<string, string>>,
+  missingLabel = '확인 불가',
+): string {
+  if (value == null || value.trim() === '') return missingLabel;
+  return labels[value] ?? value;
+}
+
 // Tailwind classes for the app's semantic colors (Green/Yellow/Red).
 export function toneText(t: Tone): string {
   switch (t) {

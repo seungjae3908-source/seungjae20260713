@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { authorizedFetch, type AuthorizedFetchOptions } from '@/lib/auth-fetch';
 import { useAuth } from '@/lib/auth';
 import { userIntegrationsRequestLifecycle } from '@/lib/user-integrations-request-lifecycle';
+import { USER_MARKET_KO, USER_SIGNAL_KO, USER_STATUS_KO, userFacingCodeLabel } from '@/lib/labels';
 
 type BrokerConnection = {
   exchange: string;
@@ -106,25 +107,14 @@ const preferenceLabels: Record<PreferenceKey, string> = {
   MANUAL_PORTFOLIO_ENTRY: '수동 포트폴리오 등록',
 };
 
-const marketLabels: Record<TelegramPolicyMarket, string> = {
-  KR: '국내주식',
-  US: '미국주식',
-  CRYPTO_SPOT: '코인 현물',
-  CRYPTO_FUTURES: '코인 선물',
-};
+const marketLabels: Record<TelegramPolicyMarket, string> = Object.fromEntries(
+  (['KR', 'US', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'] as const).map((market) => [market, userFacingCodeLabel(market, USER_MARKET_KO)]),
+) as Record<TelegramPolicyMarket, string>;
 
-const signalLabels: Record<TelegramPolicySignalType, string> = {
-  BUY: 'BUY',
-  LONG: '선물 LONG',
-  SHORT: '선물 SHORT',
-  NO_TRADE: 'NO TRADE',
-  PRICE_TARGET: '목표가',
-  STRATEGY_HEALTH: '전략 상태',
-  CHAMPION: 'Champion',
-  RESEARCH: 'Research',
-  SETTLEMENT: '정산 결과',
-  PROVIDER_SERVER_ERROR: '데이터·서버 오류',
-};
+const signalLabels: Record<TelegramPolicySignalType, string> = Object.fromEntries(
+  (['BUY', 'LONG', 'SHORT', 'NO_TRADE', 'PRICE_TARGET', 'STRATEGY_HEALTH', 'CHAMPION', 'RESEARCH', 'SETTLEMENT', 'PROVIDER_SERVER_ERROR'] as const)
+    .map((signal) => [signal, userFacingCodeLabel(signal, USER_SIGNAL_KO)]),
+) as Record<TelegramPolicySignalType, string>;
 
 const priorityLabels: Record<TelegramPolicyPriority, string> = {
   CRITICAL: '긴급',
@@ -277,8 +267,8 @@ export function UserBrokerTelegramPanel() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [policySaving, setPolicySaving] = useState(false);
-  const [testSending, setTestSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [testSending, setTestSending] = useState(false);  const [error, setError] = useState<string | null>(null);
+
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const [requestState, setRequestState] = useState<'pending' | 'success' | 'failure'>('pending');
   const mountedRef = useRef(false);
@@ -345,7 +335,7 @@ export function UserBrokerTelegramPanel() {
       if (!result.deepLink) throw new Error('TELEGRAM_BOT_USERNAME_NOT_CONFIGURED');
       setLink(result.deepLink);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Telegram 연결 링크를 만들지 못했습니다.');
+      setError(caught instanceof Error ? caught.message : '텔레그램 연결 링크를 만들지 못했습니다.');
     }
   }
 
@@ -357,7 +347,7 @@ export function UserBrokerTelegramPanel() {
       userIntegrationsRequestLifecycle.invalidate();
       await refresh(true);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Telegram 연결을 해제하지 못했습니다.');
+      setError(caught instanceof Error ? caught.message : '텔레그램 연결을 해제하지 못했습니다.');
     }
   }
 
@@ -368,9 +358,9 @@ export function UserBrokerTelegramPanel() {
     setSyncNotice(null);
     try {
       const result = await api<{ status: string; attempts: number }>('/api/user-integrations/telegram/test', { method: 'POST' });
-      setSyncNotice(`Telegram 테스트 메시지 전송 완료 · ${result.attempts}회 시도`);
+      setSyncNotice(`텔레그램 테스트 메시지 전송 완료 · ${result.attempts}회 시도`);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Telegram 테스트 메시지 전송에 실패했습니다.');
+      setError(caught instanceof Error ? caught.message : '텔레그램 테스트 메시지 전송에 실패했습니다.');
     } finally {
       setTestSending(false);
     }
@@ -408,7 +398,7 @@ export function UserBrokerTelegramPanel() {
       } : current);
       userIntegrationsRequestLifecycle.invalidate();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Telegram 투자 알림 설정 저장에 실패했습니다.');
+      setError(caught instanceof Error ? caught.message : '텔레그램 투자 알림 설정 저장에 실패했습니다.');
     } finally {
       setPolicySaving(false);
     }
@@ -417,17 +407,17 @@ export function UserBrokerTelegramPanel() {
   if (loading && !state) return <section aria-busy="true" className="rounded-3xl border border-card-border bg-card p-4" data-testid="user-broker-telegram-panel" data-user-integrations-request-state={requestState}>개인 연결 상태를 불러오는 중…</section>;
 
   const policyDisabled = policySaving || state?.alertPolicyStorageAvailable === false;
-
   return (
+
     <section aria-labelledby="user-integrations-title" className="rounded-3xl border border-card-border bg-card p-4 text-left shadow-sm" data-testid="user-broker-telegram-panel" data-user-integrations-request-state={requestState}>
-      <h2 id="user-integrations-title" className="text-sm font-extrabold">개인 Broker · Telegram 연결</h2>
-      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">실주문 활성화 화면이 아닙니다. 기존 Risk Engine과 승인된 OrderPlan 계약은 그대로 유지됩니다.</p>
+      <h2 id="user-integrations-title" className="text-sm font-extrabold">개인 계좌 제공사 · 텔레그램 연결</h2>
+      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">실주문 활성화 화면이 아닙니다. 기존 위험관리 엔진과 승인된 주문 계획 계약은 그대로 유지됩니다.</p>
 
       {error ? <div role="alert" className="mt-3 rounded-xl bg-destructive/10 p-3 text-xs text-destructive">{error}</div> : null}
       {syncNotice ? <p role="status" className="mt-3 rounded-xl bg-secondary p-3 text-xs font-bold">{syncNotice}</p> : null}
 
       {state ? <>
-        <h3 className="mt-4 text-xs font-extrabold">Broker 연결 상태</h3>
+        <h3 className="mt-4 text-xs font-extrabold">계좌 제공사 연결 상태</h3>
         {state.brokerConnections.length ? (
           <ul className="mt-2 space-y-2">
             {state.brokerConnections.map((connection) => (
@@ -435,24 +425,24 @@ export function UserBrokerTelegramPanel() {
                 <strong>{connection.exchange.toUpperCase()}</strong>{' '}
                 {connection.configured ? '연결 정보 있음' : '미연결'} · {connection.accountMode}
                 {connection.lastErrorCode ? ` · ${connection.lastErrorCode}` : ''}
-                <span className="mt-1 block text-[10px] text-muted-foreground">계좌·Secret 원문은 표시하지 않습니다.</span>
+                <span className="mt-1 block text-[10px] text-muted-foreground">계좌·인증정보 원문은 표시하지 않습니다.</span>
               </li>
             ))}
           </ul>
-        ) : <p className="mt-2 text-xs text-muted-foreground">등록된 Broker 연결이 없습니다.</p>}
+        ) : <p className="mt-2 text-xs text-muted-foreground">등록된 계좌 제공사 연결이 없습니다.</p>}
 
-        <h3 className="mt-4 text-xs font-extrabold">Telegram</h3>
-        <p className="mt-1 text-xs">{state.telegram.connected ? '연결됨' : '연결 안 됨'} · {state.telegram.status}</p>
+        <h3 className="mt-4 text-xs font-extrabold">텔레그램</h3>
+        <p className="mt-1 text-xs">{state.telegram.connected ? '연결됨' : '연결 안 됨'} · {userFacingCodeLabel(state.telegram.status, USER_STATUS_KO)}</p>
         {state.telegram.connected ? (
-          <button className="mt-2 min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold" type="button" onClick={() => void revokeTelegram()}>Telegram 연결 해제</button>
+          <button className="mt-2 min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold" type="button" onClick={() => void revokeTelegram()}>텔레그램 연결 해제</button>
         ) : (
-          <button className="mt-2 min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold" type="button" onClick={() => void createTelegramLink()}>Telegram 연결</button>
+          <button className="mt-2 min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold" type="button" onClick={() => void createTelegramLink()}>텔레그램 연결</button>
         )}
-        {link ? <p className="mt-2 text-xs"><a className="underline" href={link} target="_blank" rel="noreferrer">Telegram에서 연결 완료</a></p> : null}
+        {link ? <p className="mt-2 text-xs"><a className="underline" href={link} target="_blank" rel="noreferrer">텔레그램에서 연결 완료</a></p> : null}
 
         <div className="mt-3 rounded-2xl border border-card-border bg-background p-3" data-testid="telegram-runtime-health">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h4 className="text-[11px] font-extrabold">Telegram 서비스 상태</h4>
+            <h4 className="text-[11px] font-extrabold">텔레그램 서비스 상태</h4>
             <button
               type="button"
               className="min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold disabled:opacity-50"
@@ -467,25 +457,25 @@ export function UserBrokerTelegramPanel() {
             <div className="rounded-xl border border-card-border p-2 text-[11px]">연결 기능 · <strong>{statusLabel(state.telegramRuntime.linkingReady)}</strong></div>
             <div className="rounded-xl border border-card-border p-2 text-[11px]">주식방 · <strong>{statusLabel(state.telegramRuntime.stockRoomReady)}</strong></div>
             <div className="rounded-xl border border-card-border p-2 text-[11px]">코인방 · <strong>{statusLabel(state.telegramRuntime.cryptoRoomReady)}</strong></div>
-            <div className="rounded-xl border border-card-border p-2 text-[11px]">Rich 차트 · <strong>{state.telegramRuntime.richSignalEnabled ? '켜짐' : '꺼짐'}</strong></div>
+            <div className="rounded-xl border border-card-border p-2 text-[11px]">상세 차트 · <strong>{state.telegramRuntime.richSignalEnabled ? '켜짐' : '꺼짐'}</strong></div>
             <div className="rounded-xl border border-card-border p-2 text-[11px]">AI 설명 · <strong>{state.telegramRuntime.aiExplanationEnabled ? '켜짐' : '꺼짐'}</strong></div>
             <div className="rounded-xl border border-card-border p-2 text-[11px]">신호 후속 · <strong>{state.telegramRuntime.signalFollowupEnabled ? '켜짐' : '꺼짐'}</strong></div>
             <div className="rounded-xl border border-card-border p-2 text-[11px]">보유종목 개인알림 · <strong>{state.telegramRuntime.memberHoldingsEnabled ? '켜짐' : '꺼짐'}</strong></div>
           </div>
-          <p className="mt-2 text-[10px] text-muted-foreground">상태에는 Secret·chat ID를 표시하지 않습니다. 테스트 메시지는 투자 신호나 주문이 아닙니다.</p>
+          <p className="mt-2 text-[10px] text-muted-foreground">상태에는 인증정보·채팅 ID 원문을 표시하지 않습니다. 테스트 메시지는 투자 신호나 주문이 아닙니다.</p>
         </div>
 
         <div className="mt-4 rounded-2xl border border-card-border bg-background p-3" data-testid="telegram-alert-policy-center" aria-busy={policySaving}>
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
-              <h3 className="text-xs font-extrabold">Telegram 투자 알림센터</h3>
+              <h3 className="text-xs font-extrabold">텔레그램 투자 알림센터</h3>
               <p className="mt-1 text-[11px] text-muted-foreground">시장·신호·우선순위와 알림 빈도를 개인별로 설정합니다. 이 설정은 거래 판단이나 주문 권한을 바꾸지 않습니다.</p>
             </div>
-            <span className="rounded-full border border-card-border px-2 py-1 text-[10px] font-bold">{policySaving ? '저장 중…' : state.alertPolicySource}</span>
+            <span className="rounded-full border border-card-border px-2 py-1 text-[10px] font-bold">{policySaving ? '저장 중…' : `설정 출처 · ${state.alertPolicySource}`}</span>
           </div>
 
           {state.alertPolicyStorageAvailable === false ? (
-            <div role="alert" className="mt-3 rounded-xl bg-destructive/10 p-3 text-xs text-destructive">Telegram 개인 알림 저장소를 사용할 수 없어 설정 변경을 차단했습니다.</div>
+            <div role="alert" className="mt-3 rounded-xl bg-destructive/10 p-3 text-xs text-destructive">텔레그램 개인 알림 저장소를 사용할 수 없어 설정 변경을 차단했습니다.</div>
           ) : null}
 
           <label className="mt-3 flex min-h-11 items-center justify-between gap-3 rounded-xl border border-card-border px-3 text-xs font-bold">
@@ -557,8 +547,8 @@ export function UserBrokerTelegramPanel() {
               disabled={policyDisabled}
               onChange={(event) => void saveAlertPolicy({ quietHours: { enabled: event.currentTarget.checked } })}
             />
-            지정 시간에는 일반 알림 끄기
-          </label>
+            지정 시간에는 일반 알림 끄기          </label>
+
           <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
             <label className="text-[11px] text-muted-foreground">시작
               <input
@@ -697,8 +687,8 @@ export function UserBrokerTelegramPanel() {
             </div>
           </details>
         </div>
-
         <h3 className="mt-4 text-xs font-extrabold">주문·포지션 이벤트 알림</h3>
+
         <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
           {preferenceKeys.map((key) => (
             <label key={key} className="flex min-h-11 items-center gap-2 rounded-xl border border-card-border bg-background px-3 text-xs">
