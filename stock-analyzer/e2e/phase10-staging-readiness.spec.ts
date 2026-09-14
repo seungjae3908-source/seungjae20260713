@@ -1225,7 +1225,7 @@ async function runAuthenticatedAiChartCertification(
       await expectHealthyRoute(page, '/');
       const nav = page.locator('nav');
       await nav.getByRole('button', { name: '기술', exact: true }).click();
-      const aiChartItem = page.getByRole('menuitem', { name: 'AI 차트', exact: true });
+      const aiChartItem = page.getByRole('menuitem', { name: 'AI차트', exact: true });
       await expect(aiChartItem).toBeVisible();
       let warmRouteMs = 0;
       let warmUsableChartMs = 0;
@@ -1896,7 +1896,7 @@ test.describe('real staging release readiness', () => {
     }).toBe(true);
     await selectVisibleUsAaplForAnalysis(page);
 
-    await openMenuRoute('technical', 'AI 차트', '/ai-chart');
+    await openMenuRoute('technical', 'AI차트', '/ai-chart');
     await waitForUsableAiChart(page, Date.now());
 
     await openMenuRoute('settings', '계정', '/account');
@@ -1904,7 +1904,7 @@ test.describe('real staging release readiness', () => {
 
     await openMenuRoute('information', '포트폴리오', '/portfolio');
 
-    await openMenuRoute('technical', '모의매매', '/paper-trading');
+    await openMenuRoute('technical', '모의자동매매', '/paper-trading');
     await expect(page.locator('body')).toContainText(/모의|paper/i);
 
     await openMenuRoute('information', '연구센터', '/research-center');
@@ -2004,12 +2004,12 @@ test.describe('real staging release readiness', () => {
     await settle(page);
     await nav.getByRole('button', { name: '기술', exact: true }).click();
     await expect(page.getByRole('menuitem', { name: '승인형 주문', exact: true })).toHaveCount(0);
-    for (const label of ['AI 신호검색기', 'AI 차트', '백테스트', '모의매매']) {
+    for (const label of ['검색기', 'AI차트', '과거검증', '모의자동매매']) {
       const target = technicalMenu.find((menuItem) => menuItem.label === label);
       if (!target) throw new Error(`missing technical navigation item: ${label}`);
       const item = page.getByRole('menuitem', { name: label, exact: true });
       await expectNavigationTransition(page, target.href, async () => {
-        if (label === 'AI 신호검색기') {
+        if (label === '검색기') {
           await expectHealthyScannerRoute(page, {
             open: async () => {
               await item.click();
