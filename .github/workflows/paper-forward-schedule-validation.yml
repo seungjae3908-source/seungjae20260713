@@ -5,6 +5,39 @@ on:
     branches: [main, fix/natural-position-observation-clean-transport-20260830]
     paths:
       - market-prediction-lab/src/paper-public-provider-authority-v1.js
+      - market-prediction-lab/src/adaptive-multi-evidence-cost-liquidity-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-e2e-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-event-normalization-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-formula-tournament-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-global-risk-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-independence-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-journal-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-market-features-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-meta-decision-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-natural-paper-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-position-policy-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-price-structure-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-regime-router-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-research-ingest-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-strategy-health-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-strategy-portfolio-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-validation-v2.js
+      - market-prediction-lab/tests/adaptive-multi-evidence-cost-liquidity-v2.test.js
+      - market-prediction-lab/tests/adaptive-multi-evidence-e2e-v2.test.js
+      - market-prediction-lab/tests/adaptive-multi-evidence-event-normalization-v2.test.js
+      - market-prediction-lab/tests/adaptive-multi-evidence-formula-tournament-v2.test.js
+      - market-prediction-lab/tests/adaptive-multi-evidence-global-risk-v2.test.js
+      - market-prediction-lab/tests/adaptive-multi-evidence-independence-v2.test.js
+      - market-prediction-lab/tests/adaptive-multi-evidence-journal-v2.test.js
+      - market-prediction-lab/tests/adaptive-multi-evidence-market-features-v2.test.js
+      - market-prediction-lab/tests/adaptive-multi-evidence-meta-decision-v2.test.js
+      - market-prediction-lab/tests/adaptive-multi-evidence-natural-paper-v2.test.js
+      - market-prediction-lab/tests/adaptive-multi-evidence-position-policy-v2.test.js
+      - market-prediction-lab/tests/adaptive-multi-evidence-regime-router-v2.test.js
+      - market-prediction-lab/tests/adaptive-multi-evidence-research-ingest-v2.test.js
+      - market-prediction-lab/tests/adaptive-multi-evidence-strategy-health-v2.test.js
+      - market-prediction-lab/tests/adaptive-multi-evidence-strategy-portfolio-v2.test.js
+      - market-prediction-lab/tests/adaptive-multi-evidence-validation-v2.test.js
       - .github/workflows/authoritative-paper-runtime-factory-v1.yml
       - api-server/scripts/build-authoritative-paper-runtime-package.mjs
       - api-server/src/services/authoritative-paper-callback-owners.service.ts
@@ -208,6 +241,23 @@ jobs:
             market-intelligence-sidecar/tests/execution-quality.test.mjs
             market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
             market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
+            market-prediction-lab/src/adaptive-multi-evidence-cost-liquidity-v2.js
+            market-prediction-lab/src/adaptive-multi-evidence-e2e-v2.js
+            market-prediction-lab/src/adaptive-multi-evidence-event-normalization-v2.js
+            market-prediction-lab/src/adaptive-multi-evidence-formula-tournament-v2.js
+            market-prediction-lab/src/adaptive-multi-evidence-global-risk-v2.js
+            market-prediction-lab/src/adaptive-multi-evidence-independence-v2.js
+            market-prediction-lab/src/adaptive-multi-evidence-journal-v2.js
+            market-prediction-lab/src/adaptive-multi-evidence-market-features-v2.js
+            market-prediction-lab/src/adaptive-multi-evidence-meta-decision-v2.js
+            market-prediction-lab/src/adaptive-multi-evidence-natural-paper-v2.js
+            market-prediction-lab/src/adaptive-multi-evidence-position-policy-v2.js
+            market-prediction-lab/src/adaptive-multi-evidence-price-structure-v2.js
+            market-prediction-lab/src/adaptive-multi-evidence-regime-router-v2.js
+            market-prediction-lab/src/adaptive-multi-evidence-research-ingest-v2.js
+            market-prediction-lab/src/adaptive-multi-evidence-strategy-health-v2.js
+            market-prediction-lab/src/adaptive-multi-evidence-strategy-portfolio-v2.js
+            market-prediction-lab/src/adaptive-multi-evidence-validation-v2.js
             market-prediction-lab/src/authoritative-natural-paper-accounting-v1.js
             market-prediction-lab/src/authoritative-paper-evidence-source-ownership-v1.js
             market-prediction-lab/src/authoritative-paper-runtime-stage-evidence-caller-v1.js
@@ -239,6 +289,22 @@ jobs:
             market-prediction-lab/tests/authoritative-paper-runtime-factory-v1.test.js
             market-prediction-lab/tests/authoritative-paper-runtime-package-v1.test.js
             market-prediction-lab/tests/authoritative-paper-natural-funnel-v1.test.js
+            market-prediction-lab/tests/adaptive-multi-evidence-cost-liquidity-v2.test.js
+            market-prediction-lab/tests/adaptive-multi-evidence-e2e-v2.test.js
+            market-prediction-lab/tests/adaptive-multi-evidence-event-normalization-v2.test.js
+            market-prediction-lab/tests/adaptive-multi-evidence-formula-tournament-v2.test.js
+            market-prediction-lab/tests/adaptive-multi-evidence-global-risk-v2.test.js
+            market-prediction-lab/tests/adaptive-multi-evidence-independence-v2.test.js
+            market-prediction-lab/tests/adaptive-multi-evidence-journal-v2.test.js
+            market-prediction-lab/tests/adaptive-multi-evidence-market-features-v2.test.js
+            market-prediction-lab/tests/adaptive-multi-evidence-meta-decision-v2.test.js
+            market-prediction-lab/tests/adaptive-multi-evidence-natural-paper-v2.test.js
+            market-prediction-lab/tests/adaptive-multi-evidence-position-policy-v2.test.js
+            market-prediction-lab/tests/adaptive-multi-evidence-regime-router-v2.test.js
+            market-prediction-lab/tests/adaptive-multi-evidence-research-ingest-v2.test.js
+            market-prediction-lab/tests/adaptive-multi-evidence-strategy-health-v2.test.js
+            market-prediction-lab/tests/adaptive-multi-evidence-strategy-portfolio-v2.test.js
+            market-prediction-lab/tests/adaptive-multi-evidence-validation-v2.test.js
             market-prediction-lab/tests/canonical-paper-admission-bundle-injection-runtime-v1.test.js
             market-prediction-lab/tests/canonical-meaningful-search-paper-runtime-v1.test.js
             market-prediction-lab/tests/eth-v6-paper-forward-source-v1.test.js
