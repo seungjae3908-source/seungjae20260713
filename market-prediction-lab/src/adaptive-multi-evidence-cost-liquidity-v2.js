@@ -220,6 +220,11 @@ export function buildAdaptiveMultiEvidenceCostLiquidityV2(input = {}) {
   const liquidity = liquiditySnapshot(input.liquiditySnapshot, context, resolvedPolicy);
   const cost = {
     status: "PASS",
+    market: context.market,
+    symbol: context.symbol,
+    timeframe: context.timeframe,
+    strategyIdentity: context.strategyIdentity,
+    decisionTime: context.decisionTime,
     evidenceSetVersion: input.transactionCostEvidence.evidenceSetVersion,
     policyVersion: input.transactionCostEvidence.policy.version,
     pointBps: input.transactionCostEvidence.totalPointCostBps,
