@@ -13,6 +13,10 @@ import {
   withFiniteDeadline,
 } from '@/lib/auth-bootstrap';
 import {
+  claimInitialAuthBootstrap,
+  type InitialMemberProfile,
+} from '@/lib/auth-initial-bootstrap';
+import {
   prepareBackupForSessionEnd,
   resumeBackupForSession,
 } from '@/lib/backup-sync-lifecycle';
@@ -24,17 +28,7 @@ import {
   type MemberTier,
 } from '../../../packages/member-access/src/index.js';
 
-export type MemberProfile = {
-  id: string;
-  login_name: string;
-  display_name: string;
-  role: string;
-  status: 'pending' | 'approved' | 'rejected' | 'suspended' | 'withdrawn';
-  membership_level?: MemberTier | null;
-  is_active?: boolean | null;
-  permissions_updated_at?: string | null;
-  updated_at?: string | null;
-};
+export type MemberProfile = InitialMemberProfile;
 
 type AuthContextValue = {
   configured: boolean;
@@ -230,21 +224,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setBootstrapError(null);
     setLoading(true);
 
-    void runFiniteAuthBootstrap<Session | null>({
-      getSession: async () => {
-        const { data, error } = await getSupabase().auth.getSession();
-        if (error) throw error;
-        return data.session;
-      },
-      applySession: (next) => {
-        resolvedBootstrapUserId = next?.user.id ?? null;
-        if (mountedRef.current && bootstrapAttemptRef.current === attempt) applySession(next);
-      },
-      loadProfile: async (next, signal) => {
+    const primedBootstrap = claimInitialAuthBootstrap();
+    const bootstrap = primedBootstrap
+      ? primedBootstrap.then((result) => {
+        resolvedBootstrapUserId = result.session?.user.id ?? null;
         if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
-        await loadProfile(next?.user ?? null, { signal });
-      },
-    }).catch((cause) => {
+        applySession(result.session);
+        applyProfile(result.profile);
+      })
+      : runFiniteAuthBootstrap<Session | null>({
+        getSession: async () => {
+          const { data, error } = await getSupabase().auth.getSession();
+          if (error) throw error;
+          return data.session;
+        },
+        applySession: (next) => {
+          resolvedBootstrapUserId = next?.user.id ?? null;
+          if (mountedRef.current && bootstrapAttemptRef.current === attempt) applySession(next);
+        },
+        loadProfile: async (next, signal) => {
+          if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
+          await loadProfile(next?.user ?? null, { signal });
+        },
+      });
+
+    void bootstrap.catch((cause) => {
       if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
       setBootstrapError(authBootstrapErrorMessage(cause));
     }).finally(() => {

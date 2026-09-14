@@ -12,19 +12,16 @@ test('direct AI Chart prewarm prioritizes the route and starts the renderer when
   const rendererPrewarmImport = "import('/src/components/unified-analysis-chart.tsx')";
   const prewarmGuard = "const directAiChartRoute = window.location.pathname.endsWith('/ai-chart');";
   const routePromise = 'const aiChartRoutePrewarm = directAiChartRoute';
-  const sharedDataPromise = 'const aiChartSharedDataPrewarm = directAiChartRoute';
-  const sharedWorkGuard = 'if (aiChartSharedWorkStarted) return;';
-  const boundedBootstrap = 'window.setTimeout(startAiChartSharedWork, 750)';
-  const rendererSequence = "void aiChartSharedDataPrewarm.then(() => import('/src/components/unified-analysis-chart.tsx'));";
+  const appWorkGuard = 'if (appBootstrapStarted) return;';
+  const immediateAppBootstrap = 'window.setTimeout(startAppBootstrap, 0)';
+  const rendererSequence = ".then(() => import('/src/components/unified-analysis-chart.tsx'))";
   const root = '<div id="root"></div>';
   const moduleScripts = html.match(/<script\s+type="module"[^>]*>/g) ?? [];
 
   expect(html).toContain(prewarmGuard);
   expect(html).toContain(routePromise);
-  expect(html).toContain(sharedDataPromise);
-  expect(html).toContain(sharedWorkGuard);
-  expect(html).toContain(boundedBootstrap);
-  expect(html).toContain('window.clearTimeout(boundedBootstrap)');
+  expect(html).toContain(appWorkGuard);
+  expect(html).toContain(immediateAppBootstrap);
   expect(html).toContain(appEntryImport);
   expect(html).toContain(routePrewarmImport);
   expect(html).toContain(sharedDataPrewarmImport);
@@ -40,9 +37,9 @@ test('direct AI Chart prewarm prioritizes the route and starts the renderer when
   }
   expect(html.indexOf(root)).toBeLessThan(html.indexOf(prewarmGuard));
   expect(html.indexOf(prewarmGuard)).toBeLessThan(html.indexOf(routePrewarmImport));
-  expect(html.indexOf(routePrewarmImport)).toBeLessThan(html.indexOf(sharedDataPrewarmImport));
-  expect(html.indexOf(sharedDataPrewarmImport)).toBeLessThan(html.indexOf(appEntryImport));
-  expect(html.indexOf(appEntryImport)).toBeLessThan(html.indexOf(rendererSequence));
+  expect(html.indexOf(routePrewarmImport)).toBeLessThan(html.indexOf(appEntryImport));
+  expect(html.indexOf(appEntryImport)).toBeLessThan(html.indexOf(sharedDataPrewarmImport));
+  expect(html.indexOf(sharedDataPrewarmImport)).toBeLessThan(html.indexOf(rendererSequence));
   expect(rendererPrewarmImport).toBeTruthy();
 });
 
