@@ -43,6 +43,7 @@ function safety() {
     hardVetoOverridableBySoftEvidence: false,
     forcedPredictionAllowed: false,
     uncalibratedProbabilityAllowed: false,
+    frozenV1Contamination: 0,
     liveTrading: false,
     autoTrading: false,
     realOrderEnabled: false,

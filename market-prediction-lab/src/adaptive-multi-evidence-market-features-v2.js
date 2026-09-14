@@ -639,6 +639,7 @@ export function buildAdaptiveMultiEvidenceMarketFeaturesV2(input = {}) {
     volatilitySizingAuthority: "NONE",
     economicSampleCredit: 0,
     v1EconomicIdentityMutable: false,
+    frozenV1Contamination: 0,
     liveTrading: false,
     autoTrading: false,
     realOrderEnabled: false,

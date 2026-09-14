@@ -39,6 +39,7 @@ function safety() {
     profitabilityClaimAllowed: false,
     championPromotionAllowed: false,
     finalHoldoutPreAccessAllowed: false,
+    frozenV1Contamination: 0,
     liveTrading: false,
     autoTrading: false,
     realOrderEnabled: false,

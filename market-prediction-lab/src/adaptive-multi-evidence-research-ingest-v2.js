@@ -43,6 +43,7 @@ function safety() {
     literatureCanProveProfitability: false,
     youtubeCanProveProfitability: false,
     popularityCanProveProfitability: false,
+    frozenV1Contamination: 0,
     liveTrading: false,
     autoTrading: false,
     realOrderEnabled: false,

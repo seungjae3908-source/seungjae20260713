@@ -137,6 +137,11 @@ export function recordAdaptiveMultiEvidenceDecisionV2(input = {}) {
     marketRegime: text(input.decisionContext?.marketRegime),
     higherTimeframeContext: text(input.decisionContext?.higherTimeframeContext),
   };
+  const executionCostEstimate = action === "TAKE" ? {
+    totalExplicitCost: finite(input.executionCostEstimate?.totalExplicitCost),
+    slippageCost: finite(input.executionCostEstimate?.slippageCost),
+    evidenceId: text(input.executionCostEstimate?.evidenceId),
+  } : null;
   if (!resolvedFacts) blockers.push("V2_JOURNAL_FACT_SNAPSHOT_INCOMPLETE_OR_FUTURE");
   if (!resolvedInferences) blockers.push("V2_JOURNAL_INFERENCE_SNAPSHOT_INVALID");
   if (!uncertainties) blockers.push("V2_JOURNAL_UNCERTAINTY_SNAPSHOT_INVALID");
@@ -145,6 +150,11 @@ export function recordAdaptiveMultiEvidenceDecisionV2(input = {}) {
   }
   if (!decisionContext.marketRegime || !decisionContext.higherTimeframeContext) {
     blockers.push("V2_JOURNAL_DECISION_CONTEXT_INCOMPLETE");
+  }
+  if (action === "TAKE" && (executionCostEstimate.totalExplicitCost == null
+      || executionCostEstimate.totalExplicitCost < 0 || executionCostEstimate.slippageCost == null
+      || executionCostEstimate.slippageCost < 0 || !executionCostEstimate.evidenceId)) {
+    blockers.push("V2_JOURNAL_PRE_DECISION_COST_ESTIMATE_REQUIRED");
   }
   if (input.executionAuthority != null && input.executionAuthority !== "NONE") {
     blockers.push("V2_JOURNAL_EXECUTION_AUTHORITY_FORBIDDEN");
@@ -174,9 +184,10 @@ export function recordAdaptiveMultiEvidenceDecisionV2(input = {}) {
         simulatedOrder: handoff.candidate.order,
         positionPolicyEvidenceId: input.positionPolicyEvidenceId,
         naturalPaperHandoffDigest: handoff.handoffDigest,
+        costEstimate: executionCostEstimate,
       }
       : { status: "NOT_REQUESTED", simulatedOrder: null, positionPolicyEvidenceId: null,
-        naturalPaperHandoffDigest: null },
+        naturalPaperHandoffDigest: null, costEstimate: null },
     outcome: null,
   };
   const decisionRecordId = `adaptive-v2-decision:${sha256Canonical(recordCore)}`;
@@ -240,8 +251,8 @@ export function attributeAdaptiveMultiEvidenceOutcomeV2({ decisionRecord, settle
     association: item.status === "AVAILABLE" ? association(item.directionalStance, profitable) : "UNRESOLVED",
     causalClaim: false,
   }));
-  const estimatedCost = finite(settlement?.estimatedExplicitCost);
-  const estimatedSlippage = finite(settlement?.estimatedSlippageCost);
+  const estimatedCost = finite(record?.execution?.costEstimate?.totalExplicitCost);
+  const estimatedSlippage = finite(record?.execution?.costEstimate?.slippageCost);
   const realizedSlippage = finite(settlement?.realizedSlippageCost);
   const outcome = {
     settlementId: settlement.settlementId,
@@ -303,10 +314,19 @@ export function appendAdaptiveMultiEvidenceJournalRecordV2(ledger, entry) {
     throw new Error("V2_JOURNAL_ENTRY_INVALID");
   }
   const key = entry.record.decisionRecordId;
-  const existing = ledger.records.find((item) => item.decisionRecordId === key);
-  if (existing) {
-    if (sha256Canonical(existing) !== sha256Canonical(entry.record)) throw new Error("V2_JOURNAL_RECORD_CONFLICT");
-    return ledger;
+  const matching = ledger.records.filter((item) => item.decisionRecordId === key);
+  if (matching.some((item) => sha256Canonical(item) === sha256Canonical(entry.record))) return ledger;
+  if (entry.status === "PRE_DECISION_RECORDED") {
+    if (matching.length > 0) throw new Error("V2_JOURNAL_RECORD_CONFLICT");
+  } else {
+    const original = matching.find((item) => item.outcome === null);
+    if (!original) throw new Error("V2_JOURNAL_PRE_DECISION_MISSING");
+    if (matching.some((item) => item.outcome !== null)) throw new Error("V2_JOURNAL_OUTCOME_CONFLICT");
+    const { outcome: ignoredOutcome, ...completedPreDecision } = entry.record;
+    const { outcome: ignoredOriginalOutcome, ...originalPreDecision } = original;
+    if (sha256Canonical(completedPreDecision) !== sha256Canonical(originalPreDecision)) {
+      throw new Error("V2_JOURNAL_PRE_DECISION_REWRITE_DETECTED");
+    }
   }
   const records = [...ledger.records, entry.record];
   return deepFreeze({ ...ledger, records, recordCount: records.length, ledgerDigest: sha256Canonical(records) });

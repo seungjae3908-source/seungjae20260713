@@ -38,6 +38,7 @@ function safety() {
     strategyCanOverrideVeto: false,
     aiCanOverrideVeto: false,
     riskCheckCanPlaceOrder: false,
+    frozenV1Contamination: 0,
     liveTrading: false,
     autoTrading: false,
     realOrderEnabled: false,

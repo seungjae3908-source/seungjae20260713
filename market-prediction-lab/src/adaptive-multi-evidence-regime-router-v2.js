@@ -253,6 +253,7 @@ export function buildAdaptiveMultiEvidenceRegimeRouterV2({ marketFeatures, optio
     economicSampleCredit: 0,
     profitabilityProven: false,
     decisionAuthority: "NONE",
+    frozenV1Contamination: 0,
     liveTrading: false,
     autoTrading: false,
     realOrderEnabled: false,

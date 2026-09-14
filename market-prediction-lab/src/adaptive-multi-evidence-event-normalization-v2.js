@@ -41,6 +41,7 @@ function unique(values) {
 
 function safety() {
   return {
+    frozenV1Contamination: 0,
     liveTrading: false,
     autoTrading: false,
     realOrderEnabled: false,
