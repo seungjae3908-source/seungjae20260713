@@ -7,6 +7,7 @@ function source(relativePath: string) {
 }
 
 const panel = source('src/components/user-broker-telegram-panel.tsx');
+const labels = source('src/lib/labels.ts');
 const route = source('../api-server/src/routes/user-broker-telegram.ts');
 const testMessageService = source('../api-server/src/services/telegram-test-message.service.ts');
 
@@ -201,29 +202,31 @@ async function installTelegramButtonRuntime(page: Page) {
 test('Telegram settings center exposes the existing user-bound alert policy instead of inventing a second policy engine', () => {
   expect(panel).toContain("'/api/user-integrations/telegram-policy'");
   expect(panel).toContain("method: 'PATCH'");
-  expect(panel).toContain('Telegram 투자 알림센터');
+  expect(panel).toContain('텔레그램 투자 알림센터');
   expect(panel).toContain('투자 알림 전체');
   expect(panel).toContain('alertPolicyStorageAvailable');
-  expect(panel).toContain('Telegram 개인 알림 저장소를 사용할 수 없어 설정 변경을 차단했습니다.');
+  expect(panel).toContain('텔레그램 개인 알림 저장소를 사용할 수 없어 설정 변경을 차단했습니다.');
 });
 
 test('Telegram settings center covers all canonical markets and scanner-facing signal classes', () => {
-  for (const label of ['국내주식', '미국주식', '코인 현물', '코인 선물']) {
-    expect(panel).toContain(label);
+  expect(panel).toContain('USER_MARKET_KO');
+  expect(panel).toContain('USER_SIGNAL_KO');
+  for (const label of ['국내주식', '미국주식', '코인현물', '코인선물']) {
+    expect(labels).toContain(`'${label}'`);
   }
   for (const signal of [
-    "BUY: 'BUY'",
-    "LONG: '선물 LONG'",
-    "SHORT: '선물 SHORT'",
-    "NO_TRADE: 'NO TRADE'",
+    "BUY: '매수'",
+    "LONG: '롱'",
+    "SHORT: '숏'",
+    "NO_TRADE: '거래 안 함'",
     "PRICE_TARGET: '목표가'",
     "STRATEGY_HEALTH: '전략 상태'",
-    "CHAMPION: 'Champion'",
-    "RESEARCH: 'Research'",
+    "CHAMPION: '대표 전략'",
+    "RESEARCH: '연구'",
     "SETTLEMENT: '정산 결과'",
     "PROVIDER_SERVER_ERROR: '데이터·서버 오류'",
   ]) {
-    expect(panel).toContain(signal);
+    expect(labels).toContain(signal);
   }
 });
 
@@ -260,15 +263,15 @@ test('personal Telegram runtime health is sanitized and visible without trading 
   expect(route).not.toContain('TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN');
   expect(route).not.toContain('TELEGRAM_WEBHOOK_SECRET: process.env.TELEGRAM_WEBHOOK_SECRET');
 
-  expect(panel).toContain('Telegram 서비스 상태');
+  expect(panel).toContain('텔레그램 서비스 상태');
   expect(panel).toContain('개인 전송');
   expect(panel).toContain('주식방');
   expect(panel).toContain('코인방');
-  expect(panel).toContain('Rich 차트');
+  expect(panel).toContain('상세 차트');
   expect(panel).toContain('AI 설명');
   expect(panel).toContain('신호 후속');
   expect(panel).toContain('보유종목 개인알림');
-  expect(panel).toContain('상태에는 Secret·chat ID를 표시하지 않습니다.');
+  expect(panel).toContain('상태에는 인증정보·채팅 ID 원문을 표시하지 않습니다.');
 });
 
 test('personal Telegram link webhook accepts only the users private chat', () => {
@@ -314,9 +317,9 @@ test('actual Account UI clicks Telegram link on mobile and test-message on deskt
   await expect(integrationPanel).toHaveAttribute('data-user-integrations-request-state', 'success');
   await expect(integrationPanel).toContainText('연결 안 됨');
 
-  await page.getByRole('button', { name: 'Telegram 연결', exact: true }).click();
+  await page.getByRole('button', { name: '텔레그램 연결', exact: true }).click();
   await expect.poll(() => runtime.counters().linkRequests).toBe(1);
-  await expect(page.getByRole('link', { name: 'Telegram에서 연결 완료' }))
+  await expect(page.getByRole('link', { name: '텔레그램에서 연결 완료' }))
     .toHaveAttribute('href', 'https://t.me/InvestmentTestBot?start=safe-e2e-token');
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(391);
 
@@ -328,7 +331,7 @@ test('actual Account UI clicks Telegram link on mobile and test-message on deskt
   await expect(testButton).toBeEnabled();
   await testButton.click();
   await expect.poll(() => runtime.counters().testRequests).toBe(1);
-  await expect(integrationPanel.getByRole('status')).toContainText('Telegram 테스트 메시지 전송 완료 · 1회 시도');
+  await expect(integrationPanel.getByRole('status')).toContainText('텔레그램 테스트 메시지 전송 완료 · 1회 시도');
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1441);
 
   expect(runtime.counters().integrationReads).toBeGreaterThanOrEqual(2);
