@@ -54,6 +54,8 @@ function iso(value) {
 }
 
 function finite(value) {
+  if (value == null || typeof value === "boolean"
+      || (typeof value === "string" && value.trim() === "")) return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -96,7 +98,12 @@ function normalizeOptions(raw, blockers) {
   return options;
 }
 
-function normalizeClosedCandles(rawCandles, decisionTime, blockers, missingEvidence) {
+export function normalizeAdaptiveMultiEvidenceClosedCandlesV2(
+  rawCandles,
+  decisionTime,
+  blockers = [],
+  missingEvidence = [],
+) {
   if (!Array.isArray(rawCandles)) {
     blockers.push("V2_PRICE_STRUCTURE_CANDLES_ARRAY_REQUIRED");
     missingEvidence.push("candles");
@@ -409,7 +416,12 @@ export function buildAdaptiveMultiEvidencePriceStructureV2(input = {}) {
   const options = normalizeOptions(input.options, blockers);
   if (!decisionTime) return failure(blockers, missingEvidence);
 
-  const normalized = normalizeClosedCandles(input.candles, decisionTime, blockers, missingEvidence);
+  const normalized = normalizeAdaptiveMultiEvidenceClosedCandlesV2(
+    input.candles,
+    decisionTime,
+    blockers,
+    missingEvidence,
+  );
   const candles = normalized.candles;
   const minimumBars = options.atrPeriod == null || options.volumeLookback == null
     || options.pivotLeftBars == null || options.pivotRightBars == null
