@@ -29,32 +29,24 @@
 			const aiChartRoutePrewarm = directAiChartRoute
 				? import('/src/pages/ai-chart.tsx')
 				: null;
-			let aiChartSharedWorkStarted = false;
-			const startAiChartSharedWork = () => {
-				if (aiChartSharedWorkStarted) return;
-				aiChartSharedWorkStarted = true;
-				const aiChartSharedDataPrewarm = directAiChartRoute
-					? import('/src/lib/unified-chart-data.ts')
-					: null;
+			let appBootstrapStarted = false;
+			const startAppBootstrap = () => {
+				if (appBootstrapStarted) return;
+				appBootstrapStarted = true;
 				void import('/src/main.tsx');
-				if (aiChartRoutePrewarm && aiChartSharedDataPrewarm) {
-					void aiChartSharedDataPrewarm.then(() => import('/src/components/unified-analysis-chart.tsx'));
-				}
 			};
 			if (directAiChartRoute && aiChartRoutePrewarm) {
-				const boundedBootstrap = window.setTimeout(startAiChartSharedWork, 750);
+				window.setTimeout(startAppBootstrap, 0);
 				void aiChartRoutePrewarm.then(
 					() => {
-						window.clearTimeout(boundedBootstrap);
-						startAiChartSharedWork();
+						startAppBootstrap();
+						void import('/src/lib/unified-chart-data.ts')
+							.then(() => import('/src/components/unified-analysis-chart.tsx'));
 					},
-					() => {
-						window.clearTimeout(boundedBootstrap);
-						startAiChartSharedWork();
-					},
+					startAppBootstrap,
 				);
 			} else {
-				startAiChartSharedWork();
+				startAppBootstrap();
 			}
 		</script>
 	</body>

@@ -3,7 +3,7 @@ import { authorizedFetch } from '@/lib/auth-fetch';
 import { ACCENT_COLOR_KEY } from '@/lib/stock-display';
 import { configureUnifiedChartFetch } from '@/lib/unified-chart-data';
 import { installDeferredScannerResponseGuard } from '@/lib/scanner-response-guard-bootstrap';
-import App from './App';
+import { primeInitialAuthBootstrap } from '@/lib/auth-initial-bootstrap';
 import './index.css';
 import './unified-analysis-chart-touch.css';
 import './professional-ui-foundation.css';
@@ -46,9 +46,12 @@ function registerServiceWorker() {
 	});
 }
 
+void primeInitialAuthBootstrap()?.catch(() => undefined);
 configureUnifiedChartFetch(authorizedFetch);
 installDeferredScannerResponseGuard();
 applyInitialAccent();
 registerServiceWorker();
 
-createRoot(document.getElementById('root')!).render(<App />);
+void import('./App').then(({ default: App }) => {
+	createRoot(document.getElementById('root')!).render(<App />);
+});
