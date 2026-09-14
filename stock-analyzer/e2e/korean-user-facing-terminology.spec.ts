@@ -3,6 +3,9 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const navigationPath = fileURLToPath(new URL('../src/lib/app-navigation.ts', import.meta.url));
+const labelsPath = fileURLToPath(new URL('../src/lib/labels.ts', import.meta.url));
+const promotionPagePath = fileURLToPath(new URL('../src/pages/strategy-promotion.tsx', import.meta.url));
+const promotionContractPath = fileURLToPath(new URL('../src/lib/strategy-promotion.ts', import.meta.url));
 
 test('primary user-facing navigation uses Korean-first terminology without changing internal routes', async () => {
   const navigation = await readFile(navigationPath, 'utf8');
@@ -49,5 +52,68 @@ test('primary user-facing navigation uses Korean-first terminology without chang
     "portfolio: '/portfolio'",
   ]) {
     expect(navigation).toContain(internalRoute);
+  }
+});
+
+test('strategy promotion uses Korean-first presentation while preserving internal evidence codes', async () => {
+  const [labels, promotionPage, promotionContract] = await Promise.all([
+    readFile(labelsPath, 'utf8'),
+    readFile(promotionPagePath, 'utf8'),
+    readFile(promotionContractPath, 'utf8'),
+  ]);
+  const presentation = `${labels}\n${promotionPage}`;
+
+  for (const label of [
+    '전략 승격센터',
+    '연구 설계',
+    '과거검증',
+    '독립구간 검증',
+    '누수 방지 순차검증',
+    '비용 스트레스 검증',
+    '시장상태 검증',
+    '최종검증',
+    '모의자동매매',
+    '실시간 추적검증',
+    '추천 결과 검증',
+    '근거 필요',
+    '표본 부족',
+    '승격 검토 후보',
+    '근거 출처 및 담당',
+    '주문 실행 권한 없음',
+  ]) {
+    expect(presentation).toContain(label);
+  }
+
+  for (const legacyCopy of [
+    'Strategy Promotion Center',
+    'Research design',
+    'Historical backtest',
+    'Out-of-sample',
+    'Purged walk-forward',
+    'Cost stress',
+    'Regime validation',
+    'Final holdout',
+    'Evidence required',
+    'Promotion evidence timeline',
+    'Evidence and timeline',
+    'Loading linked evidence',
+    'Promotion evidence unavailable',
+    'Evidence source ownership',
+  ]) {
+    expect(promotionPage).not.toContain(legacyCopy);
+  }
+
+  for (const internalCode of [
+    "'KR_STOCK'",
+    "'US_STOCK'",
+    "'CRYPTO_SPOT'",
+    "'CRYPTO_FUTURES'",
+    "'PAPER'",
+    "'SHADOW'",
+    "'PASS'",
+    "'BLOCKED'",
+    "'PROMOTION_CANDIDATE'",
+  ]) {
+    expect(promotionContract).toContain(internalCode);
   }
 });
