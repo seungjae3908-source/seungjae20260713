@@ -33,6 +33,7 @@ const required = (name: string): string => {
 const targetSha = stagingMode ? required('STAGING_TARGET_SHA').toLowerCase() : '';
 const artifactDir = path.resolve(process.env.STAGING_ARTIFACT_DIR ?? '../staging-artifacts');
 const diagnosticsPath = path.join(artifactDir, 'staging-browser-results.json');
+const profileBootstrapRoute = '**/api/auth/profile';
 const emptyAccounts: StagingAccountCredentials = {
   pending: { loginName: '', password: '' },
   associate: { loginName: '', password: '' },
@@ -250,7 +251,11 @@ function isConfirmedLogoutAbort(request: Request) {
 function isProfileRequest(request: Request) {
   try {
     const parsed = new URL(request.url());
-    return request.method() === 'GET' && parsed.pathname === '/rest/v1/profiles';
+    return request.method() === 'GET'
+      && (
+        parsed.pathname === '/rest/v1/profiles'
+        || (parsed.pathname === '/api/auth/profile' && parsed.searchParams.size === 0)
+      );
   } catch {
     return false;
   }
@@ -1560,7 +1565,7 @@ test.describe('real staging release readiness', () => {
     activeAuthFaultObservations.set(page, observation);
     let requestCount = 0;
     let confirmed = false;
-    await page.route('**/rest/v1/profiles*', async (route) => {
+    await page.route(profileBootstrapRoute, async (route) => {
       const request = route.request();
       if (!isProfileRequest(request)) {
         await route.continue();
@@ -1584,7 +1589,7 @@ test.describe('real staging release readiness', () => {
       expect(observation.candidates, 'semantic bootstrap rejection must not create a network-error exemption').toHaveLength(0);
       confirmed = true;
     } finally {
-      await page.unroute('**/rest/v1/profiles*');
+      await page.unroute(profileBootstrapRoute);
       await finishAuthFault(page, observation, confirmed);
     }
   });
@@ -1602,7 +1607,7 @@ test.describe('real staging release readiness', () => {
     let requestCount = 0;
     let confirmed = false;
     let timeoutRouteSettled = Promise.resolve();
-    await page.route('**/rest/v1/profiles*', async (route) => {
+    await page.route(profileBootstrapRoute, async (route) => {
       const request = route.request();
       if (!isProfileRequest(request)) {
         await route.continue();
@@ -1635,7 +1640,7 @@ test.describe('real staging release readiness', () => {
       confirmed = true;
     } finally {
       await timeoutRouteSettled;
-      await page.unroute('**/rest/v1/profiles*');
+      await page.unroute(profileBootstrapRoute);
       await finishAuthFault(page, observation, confirmed);
     }
   });
@@ -1652,7 +1657,7 @@ test.describe('real staging release readiness', () => {
     activeAuthFaultObservations.set(page, observation);
     let requestCount = 0;
     let confirmed = false;
-    await page.route('**/rest/v1/profiles*', async (route) => {
+    await page.route(profileBootstrapRoute, async (route) => {
       const request = route.request();
       if (!isProfileRequest(request)) {
         await route.continue();
@@ -1685,7 +1690,7 @@ test.describe('real staging release readiness', () => {
       await expectVisibleLogoutButton(page);
       confirmed = true;
     } finally {
-      await page.unroute('**/rest/v1/profiles*');
+      await page.unroute(profileBootstrapRoute);
       await finishAuthFault(page, observation, confirmed);
     }
   });
