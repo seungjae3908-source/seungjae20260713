@@ -13,6 +13,8 @@ test('direct AI Chart prewarm prioritizes the route and starts the renderer when
   const prewarmGuard = "const directAiChartRoute = window.location.pathname.endsWith('/ai-chart');";
   const routePromise = 'const aiChartRoutePrewarm = directAiChartRoute';
   const sharedDataPromise = 'const aiChartSharedDataPrewarm = directAiChartRoute';
+  const sharedWorkGuard = 'if (aiChartSharedWorkStarted) return;';
+  const boundedBootstrap = 'window.setTimeout(startAiChartSharedWork, 750)';
   const rendererSequence = "void aiChartSharedDataPrewarm.then(() => import('/src/components/unified-analysis-chart.tsx'));";
   const root = '<div id="root"></div>';
   const moduleScripts = html.match(/<script\s+type="module"[^>]*>/g) ?? [];
@@ -20,6 +22,9 @@ test('direct AI Chart prewarm prioritizes the route and starts the renderer when
   expect(html).toContain(prewarmGuard);
   expect(html).toContain(routePromise);
   expect(html).toContain(sharedDataPromise);
+  expect(html).toContain(sharedWorkGuard);
+  expect(html).toContain(boundedBootstrap);
+  expect(html).toContain('window.clearTimeout(boundedBootstrap)');
   expect(html).toContain(appEntryImport);
   expect(html).toContain(routePrewarmImport);
   expect(html).toContain(sharedDataPrewarmImport);
@@ -54,6 +59,44 @@ test('direct AI Chart shell does not statically wait for the chart renderer grap
   expect(source).toContain('data-testid="ai-chart-renderer-loading"');
   expect(source).toContain('<LazyUnifiedAnalysisChart');
   expect(source).not.toMatch(/data-testid=["']unified-chart-canvas["'][\s\S]{0,500}차트 데이터와 렌더러를 준비/);
+});
+
+test('direct AI Chart route priority cannot block the app and auth bootstrap indefinitely', async ({ page }) => {
+  let releaseRoute = () => {};
+  let markRouteRequested = () => {};
+  let markRouteResponded = () => {};
+  let markMainRequested = () => {};
+  const routeRelease = new Promise<void>((resolve) => { releaseRoute = resolve; });
+  const routeRequested = new Promise<void>((resolve) => { markRouteRequested = resolve; });
+  const routeResponded = new Promise<void>((resolve) => { markRouteResponded = resolve; });
+  const mainRequested = new Promise<void>((resolve) => { markMainRequested = resolve; });
+
+  await page.route('**/src/pages/ai-chart.tsx*', async (route) => {
+    markRouteRequested();
+    await routeRelease;
+    await route.continue();
+  });
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.endsWith('/src/main.tsx')) markMainRequested();
+  });
+  page.on('response', (response) => {
+    if (new URL(response.url()).pathname.endsWith('/src/pages/ai-chart.tsx')) markRouteResponded();
+  });
+
+  try {
+    await page.goto('/ai-chart', { waitUntil: 'domcontentloaded' });
+    await routeRequested;
+    const bootstrapStartedAt = Date.now();
+    const bootstrapState = await Promise.race([
+      mainRequested.then(() => 'started'),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 2_000)),
+    ]);
+    expect(bootstrapState).toBe('started');
+    expect(Date.now() - bootstrapStartedAt).toBeLessThan(2_000);
+  } finally {
+    releaseRoute();
+    await routeResponded;
+  }
 });
 
 test('direct AI Chart paints its H1 before a delayed prewarmed chart renderer becomes usable', async ({ page }, testInfo) => {
