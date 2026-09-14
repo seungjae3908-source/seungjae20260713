@@ -44,6 +44,7 @@ function safety() {
     confidenceInflationAllowed: false,
     duplicateVoteCreditAllowed: false,
     economicSampleMutationAllowed: false,
+    frozenV1Contamination: 0,
     liveTrading: false,
     autoTrading: false,
     realOrderEnabled: false,

@@ -39,6 +39,7 @@ function safety() {
     missingLiquidityIsZero: false,
     grossEvCanOverrideCosts: false,
     privateMarketDataRequired: false,
+    frozenV1Contamination: 0,
     liveTrading: false,
     autoTrading: false,
     realOrderEnabled: false,

@@ -73,6 +73,7 @@ function takeInput(overrides = {}) {
     reasonCodes: ["ALL_GATES_PASS"],
     decisionContext: { marketRegime: "TREND_UP", higherTimeframeContext: "ALIGNED" },
     positionPolicyEvidenceId: "position-policy-1",
+    executionCostEstimate: { totalExplicitCost: 18, slippageCost: 4, evidenceId: "pre-decision-cost-1" },
     executionAuthority: "NONE",
     ...overrides,
   };
@@ -121,8 +122,6 @@ test("settled full-cost outcome is appended without rewriting pre-decision state
       netPnl: 100,
       netReturnPercent: 1,
       exitReason: "TAKE_PROFIT",
-      estimatedExplicitCost: 18,
-      estimatedSlippageCost: 4,
       realizedSlippageCost: 5,
     },
   });
@@ -157,13 +156,32 @@ test("future evidence, mismatched outcome, and incomplete costs fail closed", ()
 
 test("append-only ledger is idempotent and detects same-decision conflicts", () => {
   const decision = recordAdaptiveMultiEvidenceDecisionV2(takeInput());
+  const outcome = attributeAdaptiveMultiEvidenceOutcomeV2({
+    decisionRecord: decision,
+    attributedAtMs: T0 + 200,
+    settlement: {
+      candidateId: CID, signalId: "signal-1", paperSampleId: "paper-1", settlementId: "settlement-1",
+      settledAtMs: T0 + 100, grossPnl: 120, totalExplicitCost: 20, netPnl: 100,
+      netReturnPercent: 1, exitReason: "TAKE_PROFIT", realizedSlippageCost: 5,
+    },
+  });
   const empty = createAdaptiveMultiEvidenceJournalLedgerV2();
   const once = appendAdaptiveMultiEvidenceJournalRecordV2(empty, decision);
   const replay = appendAdaptiveMultiEvidenceJournalRecordV2(once, decision);
   assert.equal(replay, once);
   assert.equal(replay.recordCount, 1);
+  const completed = appendAdaptiveMultiEvidenceJournalRecordV2(replay, outcome);
+  const completedReplay = appendAdaptiveMultiEvidenceJournalRecordV2(completed, outcome);
+  assert.equal(completedReplay, completed);
+  assert.equal(completed.recordCount, 2);
+  assert.equal(completed.records[0].outcome, null);
+  assert.equal(completed.records[1].outcome.settlementId, "settlement-1");
   const changed = { ...decision, record: { ...decision.record, uncertainty: ["rewritten after outcome"] } };
   assert.throws(() => appendAdaptiveMultiEvidenceJournalRecordV2(once, changed), /V2_JOURNAL_RECORD_CONFLICT/);
+  const changedOutcome = { ...outcome, record: { ...outcome.record,
+    outcome: { ...outcome.record.outcome, exitReason: "REWRITTEN" } } };
+  assert.throws(() => appendAdaptiveMultiEvidenceJournalRecordV2(completed, changedOutcome),
+    /V2_JOURNAL_OUTCOME_CONFLICT/);
   assert.equal(replay.realOrderEnabled, false);
   assert.equal(replay.privateTradingApiAllowed, false);
   assert.equal(replay.executionAuthority, "NONE");
