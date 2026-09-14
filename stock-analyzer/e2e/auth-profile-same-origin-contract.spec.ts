@@ -91,4 +91,17 @@ test('auth bootstrap self-profile read is same-origin, exact-identity, and devic
   expect(phase10StagingSource).toContain(
     "page.getByRole('heading', { name: /AI 차트 생중계/, level: 1 })).toBeVisible({ timeout: 5_000 })",
   );
+
+  // Full Staging must inject reject, timeout, and retry faults at the same
+  // same-origin endpoint used by the deployed browser bundle. Intercepting
+  // PostgREST here would silently exercise the healthy proxy instead.
+  expect(phase10StagingSource).toContain(
+    "const profileBootstrapRoute = '**/api/auth/profile';",
+  );
+  expect(phase10StagingSource.match(/page\.route\(profileBootstrapRoute/g)).toHaveLength(3);
+  expect(phase10StagingSource.match(/page\.unroute\(profileBootstrapRoute/g)).toHaveLength(3);
+  expect(phase10StagingSource).not.toContain("page.route('**/rest/v1/profiles*'");
+  expect(phase10StagingSource).toContain(
+    "parsed.pathname === '/api/auth/profile' && parsed.searchParams.size === 0",
+  );
 });
