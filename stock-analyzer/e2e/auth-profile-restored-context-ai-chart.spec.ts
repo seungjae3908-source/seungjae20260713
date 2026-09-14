@@ -155,6 +155,7 @@ type RouteCounters = {
 
 type RouteOptions = {
   profileDelayMs?: number;
+  profileResponseBody?: unknown;
   routeModuleDelayMs?: number;
 };
 
@@ -199,7 +200,7 @@ async function installRoutes(
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(profilePayload()),
+      body: JSON.stringify(options.profileResponseBody ?? profilePayload()),
     });
   });
   await context.route('**/api/stocks/*/chart**', (route) => route.fulfill({
@@ -358,6 +359,54 @@ test.describe('restored authenticated context direct AI Chart bootstrap', () => 
     expect(restoredCounters.directSupabaseProfile).toBe(0);
     expect(restoredCounters.orderRequests).toEqual([]);
     expect(restoredCounters.bootstrapRequests[0]).toBe('/api/auth/profile');
+
+    await restoredContext.close();
+  });
+
+  test('semantic profile rejection preserves the deferred identity without a duplicate bootstrap request', async ({ browser }) => {
+    const loginCounters: RouteCounters = {
+      sameOriginProfile: 0,
+      directSupabaseProfile: 0,
+      orderRequests: [],
+      bootstrapRequests: [],
+    };
+    const loginContext = await browser.newContext({
+      baseURL: isolatedBaseURL,
+      viewport: { width: 1440, height: 900 },
+    });
+    await installRoutes(loginContext, loginCounters);
+    const loginPage = await loginContext.newPage();
+    await login(loginPage);
+    const storageState = await loginContext.storageState();
+    await loginContext.close();
+
+    const restoredCounters: RouteCounters = {
+      sameOriginProfile: 0,
+      directSupabaseProfile: 0,
+      orderRequests: [],
+      bootstrapRequests: [],
+    };
+    const restoredContext = await browser.newContext({
+      baseURL: isolatedBaseURL,
+      storageState,
+      viewport: { width: 1440, height: 900 },
+    });
+    await installRoutes(restoredContext, restoredCounters, {
+      profileResponseBody: [
+        { id: 'semantic-rejection-profile-a' },
+        { id: 'semantic-rejection-profile-b' },
+      ],
+    });
+    const restoredPage = await restoredContext.newPage();
+
+    const response = await restoredPage.goto('/', { waitUntil: 'domcontentloaded' });
+    if (response) expect(response.status()).toBeLessThan(400);
+    await expect(restoredPage.getByTestId('error-state')).toBeVisible({ timeout: 5_000 });
+    await expect(restoredPage.getByRole('button', { name: '다시 시도' })).toBeVisible();
+    expect(restoredCounters.sameOriginProfile).toBe(1);
+    expect(restoredCounters.directSupabaseProfile).toBe(0);
+    expect(restoredCounters.orderRequests).toEqual([]);
+    expect(restoredCounters.bootstrapRequests).toEqual(['/api/auth/profile']);
 
     await restoredContext.close();
   });
