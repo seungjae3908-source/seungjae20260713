@@ -116,26 +116,43 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: true, refetchOnReconnect: true, staleTime: 0, gcTime: 30 * 60 * 1000, retry: 2 } },
 });
 
-if (directAiChartPrewarmSelection) {
-  const { market, ticker, timeframe } = directAiChartPrewarmSelection;
-  const queryKey = ['unified-chart-data', market, ticker, timeframe] as const;
-  queryClient.setQueryDefaults(queryKey, {
-    staleTime: DIRECT_AI_CHART_PREWARM_STALE_MS,
-    retryOnMount: false,
-  });
-  queueMicrotask(() => {
+function DirectAiChartDataPrewarm() {
+  const auth = useAuth();
+  useEffect(() => {
+    if (
+      !directAiChartPrewarmSelection
+      || auth.loading
+      || !auth.isApproved
+      || !auth.can('canAccessRiskPreview')
+    ) return;
+
+    const { market, ticker, timeframe } = directAiChartPrewarmSelection;
+    const queryKey = ['unified-chart-data', market, ticker, timeframe] as const;
+    const resetDefaults = () => {
+      queryClient.setQueryDefaults(queryKey, {
+        staleTime: 0,
+        retryOnMount: true,
+      });
+    };
+    queryClient.setQueryDefaults(queryKey, {
+      staleTime: DIRECT_AI_CHART_PREWARM_STALE_MS,
+      retryOnMount: false,
+    });
     void queryClient.prefetchQuery({
       queryKey,
       queryFn: ({ signal }) => fetchUnifiedChartData({ market, symbol: ticker, timeframe, signal }),
       retry: retryUnifiedChartBootstrap,
     });
-  });
-  window.setTimeout(() => {
-    queryClient.setQueryDefaults(queryKey, {
-      staleTime: 0,
-      retryOnMount: true,
-    });
-  }, DIRECT_AI_CHART_PREWARM_DEFAULT_RESET_MS);
+    const resetTimer = window.setTimeout(
+      resetDefaults,
+      DIRECT_AI_CHART_PREWARM_DEFAULT_RESET_MS,
+    );
+    return () => {
+      window.clearTimeout(resetTimer);
+      resetDefaults();
+    };
+  }, [auth.loading, auth.isApproved, auth.membershipLevel]);
+  return null;
 }
 
 function installScannerAbortBridge(client: QueryClient) {
@@ -395,7 +412,7 @@ function AuthenticatedApp() {
 }
 
 function App() {
-  return <QueryClientProvider client={queryClient}><AuthProvider><SettingsProvider><AssetModeProvider><AnalysisSelectionProvider><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><AppShell><RootRouter /></AppShell></WouterRouter><Toaster /></TooltipProvider></AnalysisSelectionProvider></AssetModeProvider></SettingsProvider></AuthProvider></QueryClientProvider>;
+  return <QueryClientProvider client={queryClient}><AuthProvider><DirectAiChartDataPrewarm /><SettingsProvider><AssetModeProvider><AnalysisSelectionProvider><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><AppShell><RootRouter /></AppShell></WouterRouter><Toaster /></TooltipProvider></AnalysisSelectionProvider></AssetModeProvider></SettingsProvider></AuthProvider></QueryClientProvider>;
 }
 
 export default App;
