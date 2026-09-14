@@ -108,12 +108,17 @@ test('strategy promotion uses Korean-first presentation while preserving interna
     "'US_STOCK'",
     "'CRYPTO_SPOT'",
     "'CRYPTO_FUTURES'",
-    "'PAPER'",
-    "'SHADOW'",
     "'PASS'",
     "'BLOCKED'",
     "'PROMOTION_CANDIDATE'",
   ]) {
     expect(promotionContract).toContain(internalCode);
+  }
+
+  for (const stageMapperEntry of [
+    "PAPER: '모의자동매매'",
+    "SHADOW: '실시간 추적검증'",
+  ]) {
+    expect(labels).toContain(stageMapperEntry);
   }
 });
