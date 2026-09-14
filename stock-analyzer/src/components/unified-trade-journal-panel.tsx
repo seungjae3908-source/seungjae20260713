@@ -6,6 +6,15 @@ import {
   type UnifiedTradeCycle,
   type UnifiedTradeJournal,
 } from '@/lib/paper-journal-sync';
+import {
+  USER_CONTEXT_SOURCE_KO,
+  USER_DIRECTION_KO,
+  USER_MARKET_KO,
+  USER_METRIC_KO,
+  USER_STATUS_KO,
+  USER_TRADE_SOURCE_KO,
+  userFacingCodeLabel,
+} from '@/lib/labels';
 
 type Props = {
   loadApi?: typeof getUnifiedTradeJournal;
@@ -43,7 +52,9 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
   return <article className="min-w-0 space-y-4 rounded-2xl border border-border bg-card p-4" data-testid="unified-journal-detail">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0">
-        <div className="text-xs text-muted-foreground">{trade.source} · {trade.market} · {trade.positionSide}</div>
+        <div className="text-xs text-muted-foreground">
+          {userFacingCodeLabel(trade.source, USER_TRADE_SOURCE_KO)} · {userFacingCodeLabel(trade.market, USER_MARKET_KO)} · {userFacingCodeLabel(trade.positionSide, USER_DIRECTION_KO)}
+        </div>
         <h3 className="mt-1 break-words text-lg font-extrabold">{trade.symbol}</h3>
       </div>
       <Grade trade={trade} />
@@ -78,7 +89,7 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
     <section className="min-w-0 rounded-xl border border-border p-3" data-testid="unified-journal-snapshot">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h4 className="text-sm font-bold">진입 시점 분석 스냅샷</h4>
-        <span className="break-all text-[11px] font-semibold text-muted-foreground">{snapshot.contextSource}</span>
+        <span className="break-all text-[11px] font-semibold text-muted-foreground">{userFacingCodeLabel(snapshot.contextSource, USER_CONTEXT_SOURCE_KO)}</span>
       </div>
       {snapshot.contextSource === 'NO_PRE_TRADE_CONTEXT'
         ? <p className="mt-2 text-xs text-muted-foreground">진입 전 저장된 분석 정보가 없습니다. 현재 데이터로 과거 지표를 꾸며내지 않았습니다.</p>
@@ -157,8 +168,8 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
 
       <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
         <label className="grid min-w-0 gap-1 text-xs">기간<select className={controlClass} value={filters.range} onChange={(event) => change('range', event.target.value)}><option value="TODAY">오늘</option><option value="7D">7일</option><option value="30D">30일</option><option value="90D">90일</option><option value="1Y">1년</option><option value="ALL">전체</option></select></label>
-        <label className="grid min-w-0 gap-1 text-xs">시장<select className={controlClass} value={filters.market} onChange={(event) => change('market', event.target.value)}><option value="ALL">전체 시장</option><option value="KR_STOCK">국내주식</option><option value="US_STOCK">미국주식</option><option value="CRYPTO_SPOT">코인 현물</option><option value="CRYPTO_FUTURES">코인 선물</option></select></label>
-        <label className="grid min-w-0 gap-1 text-xs">출처<select className={controlClass} value={filters.source} onChange={(event) => change('source', event.target.value)}><option value="ALL">전체</option><option value="TOSS_MANUAL">Toss 수동</option><option value="TOSS_API">Toss API</option><option value="APP_PAPER">Paper</option><option value="APP_SHADOW">Shadow</option><option value="APP_AUTO">자동매매</option></select></label>
+        <label className="grid min-w-0 gap-1 text-xs">시장<select className={controlClass} value={filters.market} onChange={(event) => change('market', event.target.value)}><option value="ALL">전체 시장</option><option value="KR_STOCK">{USER_MARKET_KO.KR_STOCK}</option><option value="US_STOCK">{USER_MARKET_KO.US_STOCK}</option><option value="CRYPTO_SPOT">{USER_MARKET_KO.CRYPTO_SPOT}</option><option value="CRYPTO_FUTURES">{USER_MARKET_KO.CRYPTO_FUTURES}</option></select></label>
+        <label className="grid min-w-0 gap-1 text-xs">출처<select className={controlClass} value={filters.source} onChange={(event) => change('source', event.target.value)}><option value="ALL">전체</option><option value="TOSS_MANUAL">{USER_TRADE_SOURCE_KO.TOSS_MANUAL}</option><option value="TOSS_API">{USER_TRADE_SOURCE_KO.TOSS_API}</option><option value="APP_PAPER">{USER_TRADE_SOURCE_KO.APP_PAPER}</option><option value="APP_SHADOW">{USER_TRADE_SOURCE_KO.APP_SHADOW}</option><option value="APP_AUTO">{USER_TRADE_SOURCE_KO.APP_AUTO}</option></select></label>
         <label className="grid min-w-0 gap-1 text-xs">품질 등급<select className={controlClass} value={filters.grade} onChange={(event) => change('grade', event.target.value)}><option value="ALL">전체 등급</option><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option></select></label>
       </div>
     </div>
@@ -171,8 +182,8 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
         <h3 className="flex items-center gap-2 text-sm font-extrabold"><BarChart3 className="h-4 w-4" />성과 요약</h3>
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
           <Metric label="종료 거래" value={String(data.analytics.closedTrades)} />
-          <Metric label="승률" value={metric(data.analytics.winRate, '%')} />
-          <Metric label="Profit Factor" value={metric(data.analytics.profitFactor)} />
+          <Metric label={USER_METRIC_KO.WIN_RATE} value={metric(data.analytics.winRate, '%')} />
+          <Metric label={USER_METRIC_KO.PROFIT_FACTOR} value={metric(data.analytics.profitFactor)} />
           <Metric label="평균 수익률" value={metric(data.analytics.averageReturnPercent, '%')} />
           <Metric label="진행 중" value={String(data.analytics.openTrades)} />
           <Metric label="최대 연속 손실" value={String(data.analytics.maximumConsecutiveLosses)} />
@@ -197,7 +208,7 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
             onClick={() => setSelectedId(trade.id)}
           >
             <div className="flex min-w-0 items-start justify-between gap-2"><span className="min-w-0 break-words text-sm font-bold">{trade.symbol}</span><Grade trade={trade} /></div>
-            <div className="mt-2 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>{trade.source} · {trade.status}</span><span>{money(trade.netPnl, trade.currency)}</span></div>
+            <div className="mt-2 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>{userFacingCodeLabel(trade.source, USER_TRADE_SOURCE_KO)} · {userFacingCodeLabel(trade.status, USER_STATUS_KO)}</span><span>{money(trade.netPnl, trade.currency)}</span></div>
           </button>)}
         </div>
         {selected ? <TradeDetail trade={selected} /> : <div className="grid min-h-40 place-items-center rounded-2xl border border-border bg-card text-sm text-muted-foreground">거래를 선택하세요.</div>}
@@ -205,7 +216,7 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
 
       <div className="rounded-2xl border border-border bg-card p-4 text-xs" data-testid="unified-journal-monthly">
         <h3 className="text-sm font-bold">월간 리포트</h3>
-        {data.analytics.monthlyReport.length ? <div className="mt-3 space-y-2">{data.analytics.monthlyReport.map((month) => <div key={month.month} className="grid grid-cols-2 gap-2 rounded-xl border border-border p-3 sm:grid-cols-4"><span className="font-bold">{month.month}</span><span>{month.sampleSize}건</span><span>승률 {metric(month.winRate, '%')}</span><span>{month.netPnlByCurrency.map((item) => money(item.value, item.currency)).join(' · ') || 'N/A'}</span></div>)}</div> : <p className="mt-2 text-muted-foreground">표시할 월간 데이터가 없습니다.</p>}
+        {data.analytics.monthlyReport.length ? <div className="mt-3 space-y-2">{data.analytics.monthlyReport.map((month) => <div key={month.month} className="grid grid-cols-2 gap-2 rounded-xl border border-border p-3 sm:grid-cols-4"><span className="font-bold">{month.month}</span><span>{month.sampleSize}건</span><span>{USER_METRIC_KO.WIN_RATE} {metric(month.winRate, '%')}</span><span>{month.netPnlByCurrency.map((item) => money(item.value, item.currency)).join(' · ') || 'N/A'}</span></div>)}</div> : <p className="mt-2 text-muted-foreground">표시할 월간 데이터가 없습니다.</p>}
       </div>
     </> : null}
   </section>;
