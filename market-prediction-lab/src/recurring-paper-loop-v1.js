@@ -15,6 +15,7 @@ import {
   advanceNaturalPaperPositionLifecycle,
   createNaturalPaperPositionLifecycle,
 } from "./natural-paper-position-settlement-lifecycle-v1.js";
+import { isAdaptiveMultiEvidenceV2FrozenCandidateId } from "./adaptive-multi-evidence-natural-paper-v2.js";
 
 const MARKETS = Object.freeze(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"]);
 const MARKET_SET = new Set(MARKETS);
@@ -50,7 +51,8 @@ function digest(value) {
 function canonicalFrozenCandidateId(value) {
   return typeof value === "string"
     && (/^paper-candidate-v1:[0-9a-f]{64}$/u.test(value)
-      || /^phase3-candidate:sha256:[0-9a-f]{64}$/u.test(value));
+      || /^phase3-candidate:sha256:[0-9a-f]{64}$/u.test(value)
+      || isAdaptiveMultiEvidenceV2FrozenCandidateId(value));
 }
 
 function safetyEnvelope() {
