@@ -25,6 +25,7 @@ export type InitialAuthBootstrap = {
 
 let initialBootstrap: Promise<InitialAuthBootstrap> | null = null;
 let initialBootstrapClaimed = false;
+let initialBootstrapUserId: string | null | undefined;
 
 export function primeInitialAuthBootstrap(): Promise<InitialAuthBootstrap> | null {
   if (!isSupabaseConfigured) return null;
@@ -38,6 +39,7 @@ export function primeInitialAuthBootstrap(): Promise<InitialAuthBootstrap> | nul
     );
     if (error) throw error;
     const session = data.session;
+    initialBootstrapUserId = session?.user.id ?? null;
     if (!session) return { session: null, profile: null };
 
     const controller = new AbortController();
@@ -67,4 +69,8 @@ export function claimInitialAuthBootstrap(): Promise<InitialAuthBootstrap> | nul
   if (initialBootstrapClaimed) return null;
   initialBootstrapClaimed = true;
   return initialBootstrap;
+}
+
+export function getInitialAuthBootstrapUserId(): string | null | undefined {
+  return initialBootstrapUserId;
 }
