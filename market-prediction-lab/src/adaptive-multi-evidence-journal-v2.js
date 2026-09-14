@@ -133,11 +133,18 @@ export function recordAdaptiveMultiEvidenceDecisionV2(input = {}) {
   const resolvedInferences = inferences(input.inferences);
   const uncertainties = strings(input.uncertainties);
   const reasonCodes = strings(input.reasonCodes);
+  const decisionContext = {
+    marketRegime: text(input.decisionContext?.marketRegime),
+    higherTimeframeContext: text(input.decisionContext?.higherTimeframeContext),
+  };
   if (!resolvedFacts) blockers.push("V2_JOURNAL_FACT_SNAPSHOT_INCOMPLETE_OR_FUTURE");
   if (!resolvedInferences) blockers.push("V2_JOURNAL_INFERENCE_SNAPSHOT_INVALID");
   if (!uncertainties) blockers.push("V2_JOURNAL_UNCERTAINTY_SNAPSHOT_INVALID");
   if (!reasonCodes || ((action === "NO_TRADE" || action === "BLOCKED") && reasonCodes.length === 0)) {
     blockers.push("V2_JOURNAL_REASON_CODES_REQUIRED");
+  }
+  if (!decisionContext.marketRegime || !decisionContext.higherTimeframeContext) {
+    blockers.push("V2_JOURNAL_DECISION_CONTEXT_INCOMPLETE");
   }
   if (input.executionAuthority != null && input.executionAuthority !== "NONE") {
     blockers.push("V2_JOURNAL_EXECUTION_AUTHORITY_FORBIDDEN");
@@ -159,6 +166,7 @@ export function recordAdaptiveMultiEvidenceDecisionV2(input = {}) {
     fact: resolvedFacts,
     inference: resolvedInferences,
     uncertainty: uncertainties,
+    decisionContext,
     decision: { action, reasonCodes },
     execution: action === "TAKE"
       ? {
@@ -245,6 +253,9 @@ export function attributeAdaptiveMultiEvidenceOutcomeV2({ decisionRecord, settle
     netPnl,
     netReturnPercent: finite(settlement.netReturnPercent),
     exitReason: text(settlement.exitReason) ?? "UNKNOWN",
+    estimatedExplicitCost: estimatedCost,
+    estimatedSlippageCost: estimatedSlippage,
+    realizedSlippageCost: realizedSlippage,
     costEstimateError: estimatedCost == null ? null : totalExplicitCost - estimatedCost,
     slippageEstimateError: estimatedSlippage == null || realizedSlippage == null
       ? null : realizedSlippage - estimatedSlippage,
