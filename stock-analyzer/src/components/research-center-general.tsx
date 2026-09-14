@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Activity, Clock3, FlaskConical, RefreshCw, ShieldCheck, TrendingUp, WalletCards } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
+import { PROMOTION_STAGE_KO } from '@/lib/labels';
 import { fetchResearchCenterOverview, type ResearchCenterOverview } from '@/lib/research-center';
 
 function formatDate(value: number | null | undefined) {
@@ -40,7 +41,7 @@ function paperSample(overview: ResearchCenterOverview) {
 
 function shadowState(overview: ResearchCenterOverview) {
   const records = overview.shadow.records;
-  if (!records.present || records.totalRecords == null) return { value: '미확인', detail: 'Shadow 기록 근거가 아직 없습니다.', tone: 'neutral' as const };
+  if (!records.present || records.totalRecords == null) return { value: '미확인', detail: `${PROMOTION_STAGE_KO.SHADOW} 기록 근거가 아직 없습니다.`, tone: 'neutral' as const };
   return {
     value: `${records.totalRecords.toLocaleString('ko-KR')}건`,
     detail: records.settledRecords == null ? '정산 기록 수는 미확인입니다.' : `정산 ${records.settledRecords.toLocaleString('ko-KR')}건`,
@@ -134,7 +135,7 @@ export function ResearchCenterGeneral() {
                 <section className="grid grid-cols-2 gap-2 lg:grid-cols-3" aria-label="연구 핵심 상태">
                   <SummaryCard icon={<Activity className="h-5 w-5" />} label="연구 상태" {...research} />
                   <SummaryCard icon={<WalletCards className="h-5 w-5" />} label="모의매매 표본" {...sample} />
-                  <SummaryCard icon={<TrendingUp className="h-5 w-5" />} label="Shadow 기록" {...shadow} />
+                  <SummaryCard icon={<TrendingUp className="h-5 w-5" />} label={`${PROMOTION_STAGE_KO.SHADOW} 기록`} {...shadow} />
                   <SummaryCard icon={<FlaskConical className="h-5 w-5" />} label="수익성 검증" {...profitability} />
                   <SummaryCard icon={<ShieldCheck className="h-5 w-5" />} label="실행 권한" {...execution} />
                   <SummaryCard icon={<Clock3 className="h-5 w-5" />} label="마지막 업데이트" value={formatDate(overview.state.latestCycleAt)} detail="Asia/Seoul 기준" tone={overview.state.latestCycleAt ? 'normal' : 'neutral'} />
