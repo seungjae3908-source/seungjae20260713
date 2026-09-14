@@ -23,6 +23,7 @@ function safety() {
     statisticalProofClaimAllowed: false,
     profitabilityClaimAllowed: false,
     promotionAllowed: false,
+    frozenV1Contamination: 0,
     liveTrading: false,
     autoTrading: false,
     realOrderEnabled: false,
