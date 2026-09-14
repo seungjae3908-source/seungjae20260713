@@ -42,6 +42,7 @@ import {
   requireAdmin,
   requireAuthenticated,
   requireCapability,
+  type AuthenticatedRequest,
 } from '../middleware/auth';
 
 const router: IRouter = Router();
@@ -62,6 +63,43 @@ router.use('/telegram/webhook', telegramWebhookRouter);
 // Admin routes perform their own authenticated + admin capability checks.
 router.use('/admin', adminRouter);
 router.use('/admin/research/copilot', researchCopilotRouter);
+
+// The deployed server mounts this router from src/index.ts. Keep the browser
+// bootstrap endpoint on that runtime graph so authenticated Supabase profile
+// reads cannot fall through to API_ROUTE_NOT_FOUND.
+router.get('/auth/profile', requireAuthenticated, (req: AuthenticatedRequest, res) => {
+  const profile = req.member;
+  const allowedStatuses = new Set(['pending', 'approved', 'rejected']);
+  if (
+    !profile
+    || typeof profile.id !== 'string'
+    || profile.id.length === 0
+    || typeof profile.login_name !== 'string'
+    || typeof profile.display_name !== 'string'
+    || typeof profile.role !== 'string'
+    || !allowedStatuses.has(profile.status)
+  ) {
+    return res.status(403).json({
+      code: 'PROFILE_INVALID',
+      message: 'Authenticated member profile is missing or invalid.',
+      details: null,
+      hint: null,
+    });
+  }
+
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  return res.status(200).json({
+    id: profile.id,
+    login_name: profile.login_name,
+    display_name: profile.display_name,
+    role: profile.role,
+    status: profile.status,
+    membership_level: profile.membership_level ?? null,
+    is_active: profile.is_active ?? null,
+    permissions_updated_at: profile.permissions_updated_at ?? null,
+    updated_at: profile.updated_at ?? null,
+  });
+});
 
 router.use(requireAuthenticated);
 
