@@ -150,9 +150,19 @@ type RouteCounters = {
   sameOriginProfile: number;
   directSupabaseProfile: number;
   orderRequests: string[];
+  bootstrapRequests: string[];
 };
 
-async function installRoutes(context: BrowserContext, counters: RouteCounters) {
+type RouteOptions = {
+  profileDelayMs?: number;
+  routeModuleDelayMs?: number;
+};
+
+async function installRoutes(
+  context: BrowserContext,
+  counters: RouteCounters,
+  options: RouteOptions = {},
+) {
   await context.route(`https://${SUPABASE_HOST}/**`, (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -182,9 +192,10 @@ async function installRoutes(context: BrowserContext, counters: RouteCounters) {
     contentType: 'application/json',
     body: '{}',
   }));
-  await context.route('**/api/auth/profile', (route) => {
+  await context.route('**/api/auth/profile', async (route) => {
     counters.sameOriginProfile += 1;
     expect(route.request().headers()['authorization']).toBe(`Bearer ${ACCESS_TOKEN}`);
+    if (options.profileDelayMs) await wait(options.profileDelayMs);
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -211,7 +222,17 @@ async function installRoutes(context: BrowserContext, counters: RouteCounters) {
       candles: candles(80_000),
     }),
   }));
+  if (options.routeModuleDelayMs) {
+    await context.route('**/src/pages/ai-chart.tsx*', async (route) => {
+      await wait(options.routeModuleDelayMs!);
+      await route.continue();
+    });
+  }
   context.on('request', (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (pathname === '/api/auth/profile' || /\/api\/stocks\/[^/]+\/(?:candles|chart)$/.test(pathname)) {
+      counters.bootstrapRequests.push(pathname);
+    }
     if (request.method() !== 'GET' && ORDER_ENDPOINT.test(request.url())) {
       counters.orderRequests.push(`${request.method()} ${request.url()}`);
     }
@@ -242,12 +263,13 @@ test.describe('restored authenticated context direct AI Chart bootstrap', () => 
   test.beforeAll(async () => {
     const port = await findFreePort();
     isolatedBaseURL = `http://127.0.0.1:${port}`;
-    const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+    const vite = path.resolve(
+      analyzerDirectory(),
+      process.platform === 'win32' ? 'node_modules/.bin/vite.cmd' : 'node_modules/.bin/vite',
+    );
     isolatedVite = spawn(
-      pnpm,
+      vite,
       [
-        'exec',
-        'vite',
         '--config',
         'vite.config.ts',
         '--host',
@@ -264,6 +286,7 @@ test.describe('restored authenticated context direct AI Chart bootstrap', () => 
           VITE_SUPABASE_URL: `https://${SUPABASE_HOST}`,
           VITE_SUPABASE_ANON_KEY: ACCESS_TOKEN,
         },
+        shell: process.platform === 'win32',
         stdio: ['ignore', 'pipe', 'pipe'],
       },
     );
@@ -284,6 +307,7 @@ test.describe('restored authenticated context direct AI Chart bootstrap', () => 
       sameOriginProfile: 0,
       directSupabaseProfile: 0,
       orderRequests: [],
+      bootstrapRequests: [],
     };
     const loginContext = await browser.newContext({
       baseURL: isolatedBaseURL,
@@ -305,15 +329,20 @@ test.describe('restored authenticated context direct AI Chart bootstrap', () => 
       sameOriginProfile: 0,
       directSupabaseProfile: 0,
       orderRequests: [],
+      bootstrapRequests: [],
     };
     const restoredContext = await browser.newContext({
       baseURL: isolatedBaseURL,
       storageState,
       viewport: { width: 1440, height: 900 },
     });
-    await installRoutes(restoredContext, restoredCounters);
+    await installRoutes(restoredContext, restoredCounters, {
+      profileDelayMs: 3_500,
+      routeModuleDelayMs: 1_000,
+    });
     const restoredPage = await restoredContext.newPage();
 
+    const coldStartedAt = Date.now();
     const response = await restoredPage.goto(AI_CHART_PATH, { waitUntil: 'domcontentloaded' });
     if (response) expect(response.status()).toBeLessThan(400);
     await expect(
@@ -323,10 +352,12 @@ test.describe('restored authenticated context direct AI Chart bootstrap', () => 
     await expect(restoredPage.getByTestId('capability-denied')).toHaveCount(0);
     await expect(restoredPage.getByTestId('unified-chart-canvas')).toBeVisible();
     await expect(restoredPage.getByText('restored-context-stock-fixture', { exact: false })).toBeVisible();
+    expect(Date.now() - coldStartedAt).toBeLessThanOrEqual(5_000);
 
     expect(restoredCounters.sameOriginProfile).toBeGreaterThan(0);
     expect(restoredCounters.directSupabaseProfile).toBe(0);
     expect(restoredCounters.orderRequests).toEqual([]);
+    expect(restoredCounters.bootstrapRequests[0]).toBe('/api/auth/profile');
 
     await restoredContext.close();
   });
