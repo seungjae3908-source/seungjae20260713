@@ -53,10 +53,51 @@ export const USER_DIRECTION_KO: Readonly<Record<string, string>> = {
   NO_TRADE: '거래 안 함',
 };
 
+export const USER_SIGNAL_KO: Readonly<Record<string, string>> = {
+  BUY: '매수',
+  LONG: '롱',
+  SHORT: '숏',
+  NO_TRADE: '거래 안 함',
+  PRICE_TARGET: '목표가',
+  STRATEGY_HEALTH: '전략 상태',
+  CHAMPION: '대표 전략',
+  RESEARCH: '연구',
+  SETTLEMENT: '정산 결과',
+  PROVIDER_SERVER_ERROR: '데이터·서버 오류',
+};
+
+export const USER_TRADE_SOURCE_KO: Readonly<Record<string, string>> = {
+  TOSS_MANUAL: 'Toss 수동',
+  TOSS_API: 'Toss API',
+  APP_PAPER: '모의자동매매',
+  APP_SHADOW: '실시간 추적검증',
+  APP_AUTO: '자동매매',
+};
+
+export const USER_CONTEXT_SOURCE_KO: Readonly<Record<string, string>> = {
+  PRE_TRADE_SNAPSHOT: '진입 전 판단 근거',
+  POST_HOC_RECONSTRUCTION: '사후 재구성',
+  NO_PRE_TRADE_CONTEXT: '진입 전 판단 근거 없음',
+};
+
+export const USER_METRIC_KO: Readonly<Record<string, string>> = {
+  PERFORMANCE: '성과표',
+  PROFITABILITY: '수익성 검증',
+  FULL_COST: '전체 거래비용 반영',
+  NET_ALPHA: '비용 차감 후 초과수익',
+  DRAWDOWN: '최대 낙폭',
+  WIN_RATE: '승률',
+  PROFIT_FACTOR: '손익비 지수',
+};
+
 export const USER_STATUS_KO: Readonly<Record<string, string>> = {
   NOT_STARTED: '시작 전',
   RUNNING: '진행 중',
   IN_PROGRESS: '진행 중',
+  OPEN: '진행 중',
+  CLOSED: '종료',
+  CONNECTED: '연결됨',
+  DISCONNECTED: '연결 안 됨',
   PASS: '통과',
   SUCCESS: '정상',
   FAIL: '실패',
