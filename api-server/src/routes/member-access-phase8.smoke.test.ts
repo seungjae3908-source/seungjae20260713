@@ -100,9 +100,14 @@ function authRuntime({ authUser = { id: 'member-1' }, authError = null, profile 
   };
 }
 
-function authRequest() {
+function jwtForSubject(subject) {
+  const payload = Buffer.from(JSON.stringify({ sub: subject }), 'utf8').toString('base64url');
+  return `eyJhbGciOiJub25lIn0.${payload}.signature`;
+}
+
+function authRequest(token = 'valid-token') {
   return {
-    header: (name) => name.toLowerCase() === 'authorization' ? 'Bearer valid-token' : undefined,
+    header: (name) => name.toLowerCase() === 'authorization' ? `Bearer ${token}` : undefined,
   };
 }
 
@@ -142,7 +147,7 @@ test('browser profile bootstrap overlaps remote identity and RLS profile reads w
   const auth = deferred();
   const profile = deferred();
   const started = [];
-  const req = authRequest();
+  const req = authRequest(jwtForSubject('member-1'));
   const { response, state } = responseRecorder();
   let nextCalls = 0;
   const work = requireAuthenticatedProfileBootstrap(req, response, () => {
@@ -153,9 +158,13 @@ test('browser profile bootstrap overlaps remote identity and RLS profile reads w
       started.push('auth');
       return auth.promise;
     } } }),
-    getUserSupabase: () => ({ from: () => ({ select: () => ({ maybeSingle: () => {
-      started.push('profile');
-      return profile.promise;
+    getUserSupabase: () => ({ from: () => ({ select: () => ({ eq: (column, value) => {
+      assert.equal(column, 'id');
+      assert.equal(value, 'member-1');
+      return { maybeSingle: () => {
+        started.push('profile');
+        return profile.promise;
+      } };
     } }) }) }),
   });
 
@@ -172,7 +181,7 @@ test('browser profile bootstrap overlaps remote identity and RLS profile reads w
 });
 
 test('browser profile bootstrap rejects a profile identity that differs from the verified user', async () => {
-  const req = authRequest();
+  const req = authRequest(jwtForSubject('member-2'));
   const { response, state } = responseRecorder();
   let nextCalls = 0;
   await requireAuthenticatedProfileBootstrap(req, response, () => {
@@ -183,10 +192,14 @@ test('browser profile bootstrap rejects a profile identity that differs from the
       data: { user: { id: 'member-1' } },
       error: null,
     }) } }),
-    getUserSupabase: () => ({ from: () => ({ select: () => ({ maybeSingle: async () => ({
-      data: memberProfile({ id: 'member-2' }),
-      error: null,
-    }) }) }) }),
+    getUserSupabase: () => ({ from: () => ({ select: () => ({ eq: (column, value) => {
+      assert.equal(column, 'id');
+      assert.equal(value, 'member-2');
+      return { maybeSingle: async () => ({
+        data: memberProfile({ id: 'member-2' }),
+        error: null,
+      }) };
+    } }) }) }),
   });
 
   assert.equal(nextCalls, 0);
