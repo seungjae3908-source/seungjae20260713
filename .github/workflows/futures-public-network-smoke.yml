@@ -83,7 +83,7 @@ jobs:
     timeout-minutes: 35
     steps:
       - name: Publish pending Application CI status
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const sha = process.env.APPLICATION_STATUS_SHA;
@@ -144,7 +144,7 @@ jobs:
         run: pnpm --dir api-server run build:server
       - name: Publish verified Application CI result
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const result = '${{ job.status }}' || 'failure';
@@ -168,7 +168,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Publish pending browser UI status
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const sha = process.env.APPLICATION_STATUS_SHA;
@@ -209,7 +209,7 @@ jobs:
           retention-days: 7
       - name: Publish browser UI result
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const result = '${{ steps.browser.outcome }}' || 'failure';
@@ -253,7 +253,7 @@ jobs:
       PGDATABASE: phase8
     steps:
       - name: Publish pending database RLS status
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const sha = process.env.APPLICATION_STATUS_SHA;
@@ -285,7 +285,7 @@ jobs:
         run: bash api-server/scripts/verify-phase8-db.sh
       - name: Publish database RLS result
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const result = '${{ steps.database.outcome }}' || 'failure';
@@ -309,7 +309,7 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Publish pending security status
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const sha = process.env.APPLICATION_STATUS_SHA;
@@ -342,7 +342,7 @@ jobs:
         run: node ./scripts/verify-phase8-security.mjs
       - name: Publish security result
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const result = '${{ steps.security.outcome }}' || 'failure';
@@ -366,7 +366,7 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Publish pending AI privacy status
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const sha = process.env.APPLICATION_STATUS_SHA;
@@ -390,7 +390,7 @@ jobs:
         run: node ./scripts/verify-phase9-ai-privacy.mjs
       - name: Publish AI privacy result
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const result = '${{ steps.ai.outcome }}' || 'failure';
@@ -414,7 +414,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Publish pending network smoke status
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const sha = process.env.APPLICATION_STATUS_SHA;
@@ -443,7 +443,7 @@ jobs:
         run: pnpm --dir api-server run smoke:futures:network
       - name: Publish network smoke result
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const result = '${{ steps.network.outcome }}';
