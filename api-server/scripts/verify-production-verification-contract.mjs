@@ -15,6 +15,7 @@ const productionComprehensive = await read('.github/workflows/production-compreh
 const productionObserver = await read('.github/workflows/production-health-observer.yml');
 const deployScript = await read('ops/deploy-production.sh');
 const diagnostics = await read('ops/production-verification-diagnostics.sh');
+const apiPackage = JSON.parse(await read('api-server/package.json'));
 
 const officialProductionBaseUrl = 'https://lsj119.com';
 
@@ -69,6 +70,18 @@ assert(
 assert(
   !deployScript.includes('probe_json "$base_url/api/health" "$output_file" 10 3'),
   'Production health must not accept transport-valid JSON before exact identity is ready',
+);
+assert(
+  apiPackage.scripts?.start === 'NODE_ENV=production node --enable-source-maps ./dist/index.mjs',
+  'Production PM2 start must execute the prebuilt server directly',
+);
+assert(
+  !/\bbuild\b/u.test(apiPackage.scripts.start),
+  'Production PM2 start must not rebuild watched dist files and create a restart loop',
+);
+assert(
+  deployScript.includes('NODE_ENV=production pnpm --filter @workspace/api-server run build'),
+  'The immutable release must remain fully built before canary and live promotion',
 );
 assert(deployScript.includes('restore_backup'), 'automatic rollback must remain enabled');
 assert(
