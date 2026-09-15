@@ -10,8 +10,10 @@ const repoRoot = process.cwd();
 const sourceSpec = path.join(repoRoot, 'stock-analyzer/e2e/phase10-staging-readiness.spec.ts');
 const generatedRelative = 'e2e/phase10-staging-diagnostic.generated.spec.ts';
 const generatedSpec = path.join(repoRoot, 'stock-analyzer', generatedRelative);
-const marker = "test.describe.configure({ mode: 'serial' });";
-const replacement = "test.describe.configure({ mode: 'default' });";
+const serialMarker = "test.describe.configure({ mode: 'serial' });";
+const serialReplacement = "test.describe.configure({ mode: 'default' });";
+const diagnosticsMarker = "const diagnosticsPath = path.join(artifactDir, 'staging-browser-results.json');";
+const diagnosticsReplacement = "const diagnosticsPath = path.join(artifactDir, `staging-browser-results-${process.pid}.json`);";
 
 const scopePatterns = {
   all: null,
@@ -33,9 +35,13 @@ if (!(scope in scopePatterns)) fail(`Unsupported STAGING_DIAGNOSTIC_SCOPE: ${sco
 if (!fs.existsSync(sourceSpec)) fail(`Canonical staging spec is missing: ${sourceSpec}`);
 
 const source = fs.readFileSync(sourceSpec, 'utf8');
-const markerCount = source.split(marker).length - 1;
-if (markerCount !== 1) {
-  fail(`Expected exactly one canonical serial marker, found ${markerCount}. Refusing to generate a diagnostic variant.`);
+const serialMarkerCount = source.split(serialMarker).length - 1;
+const diagnosticsMarkerCount = source.split(diagnosticsMarker).length - 1;
+if (serialMarkerCount !== 1) {
+  fail(`Expected exactly one canonical serial marker, found ${serialMarkerCount}. Refusing to generate a diagnostic variant.`);
+}
+if (diagnosticsMarkerCount !== 1) {
+  fail(`Expected exactly one canonical diagnostics path marker, found ${diagnosticsMarkerCount}. Refusing to generate a diagnostic variant.`);
 }
 
 fs.mkdirSync(artifactDir, { recursive: true });
@@ -44,10 +50,13 @@ let exitCode = 2;
 let signal = null;
 
 try {
+  const diagnosticSource = source
+    .replace(serialMarker, serialReplacement)
+    .replace(diagnosticsMarker, diagnosticsReplacement);
   const generated = [
     '// GENERATED AT RUNTIME FOR DIAGNOSTIC COLLECTION ONLY.',
     '// Canonical certification source remains phase10-staging-readiness.spec.ts.',
-    source.replace(marker, replacement),
+    diagnosticSource,
   ].join('\n');
   fs.writeFileSync(generatedSpec, generated, 'utf8');
 
@@ -67,6 +76,7 @@ try {
   console.log(`[staging-diagnostic] target_sha=${targetSha}`);
   console.log('[staging-diagnostic] certification source mutation=false');
   console.log('[staging-diagnostic] generated suite mode=default; workers=1; retries=0; maxFailures=unbounded');
+  console.log('[staging-diagnostic] browser diagnostics are isolated per worker process and aggregated later');
 
   const result = spawnSync('pnpm', args, {
     cwd: repoRoot,
@@ -95,6 +105,7 @@ try {
     scope,
     canonical_certification_source_mutated: false,
     diagnostic_serial_override: 'default',
+    per_worker_browser_diagnostics: true,
     workers: 1,
     retries: 0,
     max_failures: 0,
