@@ -37,7 +37,7 @@ requireMatch(config, /workers:\s*1/u, 'Diagnostic Playwright config must remain 
 requireMatch(config, /retries:\s*0/u, 'Diagnostic Playwright config must not retry-to-pass.');
 
 requireMatch(canonical, /test\.describe\.configure\(\{ mode: 'serial' \}\);/u, 'Canonical certification suite must remain serial/fail-closed.');
-requireMatch(runner, /source\.replace\(serialMarker, serialReplacement\)/u, 'Diagnostic runner must derive its non-serial suite from the canonical source.');
+requireMatch(runner, /source\s*\.replace\(serialMarker, serialReplacement\)/u, 'Diagnostic runner must derive its non-serial suite from the canonical source.');
 requireMatch(runner, /test\.describe\.configure\(\{ mode: 'default' \}\);/u, 'Diagnostic runner must override serial mode only in the generated diagnostic copy.');
 requireMatch(runner, /fs\.rmSync\(generatedSpec, \{ force: true \}\)/u, 'Generated diagnostic source must be removed after execution.');
 requireMatch(runner, /'--workers=1'/u, 'Diagnostic runner must remain single-worker.');
