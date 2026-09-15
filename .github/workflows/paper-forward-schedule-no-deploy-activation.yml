@@ -5,6 +5,12 @@ on:
     branches: [main]
     paths:
       - .github/workflows/paper-forward-schedule-no-deploy-activation.yml
+      - ops/install-paper-forward-schedule.sh
+      - ops/bridge-paper-forward-no-deploy-snapshot.mjs
+      - ops/run-paper-forward-flat-snapshot-republish.mjs
+      - market-prediction-lab/tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js
+      - market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js
+      - market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
   workflow_dispatch:
     inputs:
       target_sha:
@@ -60,6 +66,9 @@ jobs:
           grep -F "REAL_ORDER_ENABLED='false'" "$install" >/dev/null
           grep -F "PRIVATE_TRADING_API_ALLOWED='false'" "$install" >/dev/null
           grep -F "PRIVATE_ACCOUNT_ACCESS='false'" "$install" >/dev/null
+          grep -F 'bridge-paper-forward-no-deploy-snapshot.mjs' "$install" >/dev/null
+          grep -F 'snapshotEconomicStatePreserved: true' "$install" >/dev/null
+          grep -F 'naturalCycleCredit: 0' "$install" >/dev/null
           grep -F 'exec /usr/bin/env -i' "$install" >/dev/null
           grep -F "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='\$OUTCOME_ACCUMULATION_ENABLED'" "$install" >/dev/null
           ! grep -F 'deploy-production.sh' "$operational_contract" >/dev/null
@@ -116,6 +125,9 @@ jobs:
           market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js
           market-prediction-lab/tests/adaptive-multi-evidence-natural-paper-v2.test.js
           market-prediction-lab/tests/adaptive-multi-evidence-e2e-v2.test.js
+          market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js
+          market-prediction-lab/tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js
+          market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
 
       - name: Bundle authenticated Paper snapshot transport regression
         run: >-
@@ -147,6 +159,9 @@ jobs:
           grep -F "REAL_ORDER_ENABLED='false'" "$install" >/dev/null
           grep -F "PRIVATE_TRADING_API_ALLOWED='false'" "$install" >/dev/null
           grep -F "PRIVATE_ACCOUNT_ACCESS='false'" "$install" >/dev/null
+          grep -F 'bridge-paper-forward-no-deploy-snapshot.mjs' "$install" >/dev/null
+          grep -F 'snapshotEconomicStatePreserved: true' "$install" >/dev/null
+          grep -F 'naturalCycleCredit: 0' "$install" >/dev/null
           grep -F 'exec /usr/bin/env -i' "$install" >/dev/null
           grep -F '/opt/stock-app-data/paper-forward-v1' "$install" >/dev/null
           grep -F 'productionAppDeployPerformed = false' "$active_contract" >/dev/null
@@ -593,6 +608,12 @@ jobs:
             || value.paperTradeOutcomeAccumulationEnabled !== true
             || value.simulatedFinancialAdaptersEnabled !== true
             || value.externalFinancialMutationAllowed !== false
+            || value.snapshotSourceShaAfter !== process.env.TARGET_SHA
+            || value.snapshotEconomicStatePreserved !== true
+            || ![0, 1].includes(value.snapshotMetadataMutationCount)
+            || value.naturalCycleCredit !== 0
+            || value.naturalSampleCredit !== 0
+            || value.naturalSettlementCredit !== 0
             || value.scheduleActive !== true
             || value.liveTrading !== false
             || value.privateAccountAccess !== false
