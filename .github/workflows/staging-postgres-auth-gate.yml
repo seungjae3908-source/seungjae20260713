@@ -11,7 +11,7 @@ permissions:
   statuses: read
 
 concurrency:
-  group: staging-postgres-auth-gate-${{ github.event.issue.number == 23 && startsWith(github.event.comment.body, '/run-staging-auth ') && 'command' || github.event.comment.id }}
+  group: staging-postgres-auth-gate-${{ github.event.issue.number == 23 && (startsWith(github.event.comment.body, '/run-staging-auth ') || startsWith(github.event.comment.body, '/run-staging-auth-only ')) && 'command' || github.event.comment.id }}
   cancel-in-progress: false
 
 jobs:
@@ -20,7 +20,8 @@ jobs:
     if: >-
       github.event.issue.number == 23 &&
       github.event.issue.title == 'Staging Readiness Control' &&
-      startsWith(github.event.comment.body, '/run-staging-auth ')
+      (startsWith(github.event.comment.body, '/run-staging-auth ') ||
+      startsWith(github.event.comment.body, '/run-staging-auth-only '))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: staging
@@ -44,20 +45,7 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
           COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
           AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
-        run: |
-          set -Eeuo pipefail
-          [[ "$COMMENT_AUTHOR" == "seungjae3908-source" ]] || { echo 'Only the repository owner may run the staging database authentication gate.' >&2; exit 1; }
-          [[ "$AUTHOR_ASSOCIATION" == "OWNER" ]] || { echo 'Command author is not the repository owner.' >&2; exit 1; }
-          node <<'NODE'
-          const fs = require('node:fs');
-          const body = String(process.env.COMMENT_BODY ?? '').trim();
-          const match = /^\/run-staging-auth ([0-9a-fA-F]{40})$/.exec(body);
-          if (!match) {
-            console.error('Exact command required: /run-staging-auth <40-character-current-main-sha>');
-            process.exit(1);
-          }
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1].toLowerCase()}\n`);
-          NODE
+        run: node api-server/scripts/staging-postgres-auth-command.mjs
 
       - name: Require exact current main SHA
         env:
@@ -76,6 +64,7 @@ jobs:
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
+          COMMAND_MODE: ${{ steps.command.outputs.mode }}
         with:
           script: |
             const required = [
@@ -94,9 +83,26 @@ jobs:
             });
             statuses.sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
             const latest = new Map();
-            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status.state);
-            const missing = required.filter((name) => latest.get(name) !== 'success');
+            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+            const evidence = required.map((name) => latest.get(name));
+            const missing = required.filter((name) => latest.get(name)?.state !== 'success');
             if (missing.length) core.setFailed(`Required successful statuses missing: ${missing.join(', ')}`);
+            if (missing.length || process.env.COMMAND_MODE !== 'auth-only') return;
+
+            const runIds = new Set(evidence.map((status) => /\/actions\/runs\/(\d+)/.exec(String(status?.target_url ?? ''))?.[1] ?? null));
+            if (runIds.size !== 1 || runIds.has(null)) {
+              core.setFailed('Auth-only Required CI 6/6 does not share one coherent provenance run.');
+              return;
+            }
+            const runId = Number([...runIds][0]);
+            const run = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            });
+            if (run.data.head_sha !== process.env.TARGET_SHA || run.data.status !== 'completed' || run.data.conclusion !== 'success') {
+              core.setFailed('Auth-only Required CI provenance is not an exact successful target run.');
+            }
 
       - name: Prepare authentication diagnostics
         run: mkdir -p "$STAGING_ARTIFACT_DIR"
@@ -107,10 +113,12 @@ jobs:
       - name: Run one read-only PostgreSQL authentication probe
         id: auth
         continue-on-error: true
+        env:
+          STAGING_AUTH_MODE: ${{ steps.command.outputs.mode }}
         run: node api-server/scripts/verify-staging-postgres-auth.mjs
 
       - name: Upload redacted authentication result
-        if: always()
+        if: always() && steps.auth.outcome != 'skipped'
         uses: actions/upload-artifact@v4
         with:
           name: staging-postgres-auth-${{ steps.command.outputs.sha }}
@@ -119,16 +127,18 @@ jobs:
           retention-days: 30
 
       - name: Report result and continue only after authentication success
-        if: always() && steps.command.outcome == 'success'
+        if: always() && steps.command.outcome == 'success' && steps.auth.outcome != 'skipped'
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
           AUTH_OUTCOME: ${{ steps.auth.outcome }}
           AUTH_ARTIFACT: ${{ env.STAGING_ARTIFACT_DIR }}/staging-postgres-auth-verification.json
+          COMMAND_MODE: ${{ steps.command.outputs.mode }}
           SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
         with:
           script: |
             const fs = require('node:fs');
+            const authOnly = process.env.COMMAND_MODE === 'auth-only';
             const artifact = fs.existsSync(process.env.AUTH_ARTIFACT)
               ? JSON.parse(fs.readFileSync(process.env.AUTH_ARTIFACT, 'utf8'))
               : {
@@ -143,13 +153,21 @@ jobs:
                   credentials_recorded: false,
                 };
 
-            if (process.env.AUTH_OUTCOME !== 'success' || artifact.status !== 'passed') {
+            const verified = artifact.status === 'passed'
+              && artifact.project_match === true
+              && artifact.read_only_probe === true
+              && artifact.transaction_rolled_back === true
+              && artifact.database_changed === false
+              && artifact.credentials_recorded === false;
+            if (process.env.AUTH_OUTCOME !== 'success' || !verified) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: 23,
                 body: [
-                  'Staging PostgreSQL authentication gate failed safely before deployment.',
+                  authOnly
+                    ? 'Paper-only PostgreSQL authentication gate failed safely without Staging dispatch.'
+                    : 'Staging PostgreSQL authentication gate failed safely before deployment.',
                   '',
                   `- Target SHA: \`${process.env.TARGET_SHA}\``,
                   `- Classification: \`${String(artifact.classification)}\``,
@@ -158,8 +176,10 @@ jobs:
                   `- Endpoint type: \`${String(artifact.endpoint_type)}\``,
                   `- Port: \`${String(artifact.port)}\``,
                   '- Read-only transaction probe: `true`',
+                  `- Read-only transaction rolled back: \`${Boolean(artifact.transaction_rolled_back)}\``,
                   '- Database changed: `false`',
                   '- Staging deployment dispatched: `false`',
+                  '- Full Staging validation dispatched: `false`',
                   '- Production Supabase changed: `false`',
                   '- Production deployment executed: `false`',
                   '- Secret values recorded: `false`',
@@ -167,7 +187,36 @@ jobs:
                   `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
                 ].join('\n'),
               });
-              core.setFailed(`Staging PostgreSQL authentication failed: ${String(artifact.classification)}`);
+              core.setFailed(`${authOnly ? 'Paper-only' : 'Staging'} PostgreSQL authentication failed: ${String(artifact.classification)}`);
+              return;
+            }
+
+            if (authOnly) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: 23,
+                body: [
+                  'Paper-only PostgreSQL authentication succeeded without Staging dispatch.',
+                  '',
+                  `- Target SHA: \`${process.env.TARGET_SHA}\``,
+                  '- Mode: `auth-only`',
+                  '- Classification: `authenticated`',
+                  `- Supabase project match: \`${Boolean(artifact.project_match)}\``,
+                  `- Endpoint type: \`${String(artifact.endpoint_type)}\``,
+                  `- Port: \`${String(artifact.port)}\``,
+                  '- Read-only transaction rolled back: `true`',
+                  '- Database changed by authentication probe: `false`',
+                  '- Staging deployment dispatched: `false`',
+                  '- Full Staging validation dispatched: `false`',
+                  '- Production deployment executed: `false`',
+                  '- Secret or environment changed: `false`',
+                  '- Paper activation executed: `false`',
+                  '- Secret values recorded: `false`',
+                  `- Auth Gate Run ID: \`${context.runId}\``,
+                  `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
+                ].join('\n'),
+              });
               return;
             }
 
