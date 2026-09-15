@@ -9,7 +9,11 @@ import agentHubControlBridge from './routes/agent-hub-control-bridge';
 import deviceTrustRouter from './features/device-trust/device-trust.route';
 import { deviceTrustAppGate } from './features/device-trust/device-trust.middleware';
 import { logger } from "./lib/logger";
-import { requireAuthenticated, type AuthenticatedRequest } from './middleware/auth';
+import {
+  requireAuthenticated,
+  requireAuthenticatedProfileBootstrap,
+  type AuthenticatedRequest,
+} from './middleware/auth';
 import { rejectPaperJournalQueryIdentity } from './middleware/paper-journal-query-identity';
 import { apiRateLimit, securityHeaders } from './middleware/security';
 
@@ -78,7 +82,7 @@ app.use('/api/admin/agent-hub', agentHubControlBridge);
 // profiles read. Reuse the canonical server-side authentication middleware,
 // which verifies the bearer token and resolves the exact current database
 // profile for that user before this same-origin endpoint can return anything.
-app.get('/api/auth/profile', requireAuthenticated, (req: AuthenticatedRequest, res) => {
+app.get('/api/auth/profile', requireAuthenticatedProfileBootstrap, (req: AuthenticatedRequest, res) => {
   const profile = req.member;
   const allowedStatuses = new Set(['pending', 'approved', 'rejected']);
   if (
