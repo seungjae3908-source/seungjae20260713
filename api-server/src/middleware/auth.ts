@@ -42,6 +42,21 @@ function bearerToken(req: Request): string | null {
   return value.toLowerCase().startsWith('bearer ') ? value.slice(7).trim() : null;
 }
 
+function unverifiedJwtSubject(token: string): string | null {
+  const parts = token.split('.');
+  if (parts.length !== 3 || !parts[1]) return null;
+  try {
+    const payload: unknown = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+    if (!payload || typeof payload !== 'object') return null;
+    const subject = (payload as { sub?: unknown }).sub;
+    return typeof subject === 'string' && subject.length > 0 && subject.length <= 256
+      ? subject
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function isDisabledMemberSession(member: MemberProfile): boolean {
   return member.status === 'suspended'
     || member.status === 'revoked'
@@ -153,15 +168,26 @@ export async function requireAuthenticatedProfileBootstrap(
   if (!token) return res.status(401).json({ error: 'LOGIN_REQUIRED' });
 
   const authPromise = dependencies.getSupabase().auth.getUser(token);
-  const profilePromise = dependencies.getUserSupabase(token)
+  const subjectCandidate = unverifiedJwtSubject(token);
+  const readOwnProfile = (userId: string) => dependencies.getUserSupabase(token)
     .from('profiles')
     .select('*')
+    .eq('id', userId)
     .maybeSingle();
-  const [authResult, profileResult] = await Promise.all([authPromise, profilePromise]);
+
+  // The unverified JWT subject is only a query-narrowing hint. Authorization
+  // still requires getUser() to verify the token and an exact identity match.
+  // Narrowing is required for admins because their RLS policy may expose more
+  // than one profile, which would make an unfiltered maybeSingle() fail.
+  const [authResult, concurrentProfileResult] = await Promise.all([
+    authPromise,
+    subjectCandidate ? readOwnProfile(subjectCandidate) : Promise.resolve(null),
+  ]);
   const authUser = authResult.data?.user;
   if (authResult.error || !authUser) {
     return res.status(401).json({ error: 'INVALID_SESSION' });
   }
+  const profileResult = concurrentProfileResult ?? await readOwnProfile(authUser.id);
   if (!applyAuthenticatedProfile(
     req,
     res,
