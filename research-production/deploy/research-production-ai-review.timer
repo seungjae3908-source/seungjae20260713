@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly isolated free AI review scan for new Research Production evidence
+
+[Timer]
+OnCalendar=*-*-* *:19:00 UTC
+Persistent=false
+RandomizedDelaySec=60
+Unit=research-production-ai-review.service
+
+[Install]
+WantedBy=timers.target
