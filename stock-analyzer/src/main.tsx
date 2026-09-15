@@ -17,6 +17,8 @@ const ACCENTS: Record<string, string> = {
 	pink: '330 81% 60%',
 };
 
+const AI_CHART_SERVICE_WORKER_DELAY_MS = 6_000;
+
 function applyInitialAccent() {
 	try {
 		const saved = window.localStorage.getItem(ACCENT_COLOR_KEY) || 'blue';
@@ -35,7 +37,7 @@ function registerServiceWorker() {
 	if (!('serviceWorker' in navigator)) return;
 
 	window.addEventListener('load', () => {
-		navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((registration) => {
+		const register = () => navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((registration) => {
 			const checkForUpdate = () => registration.update().catch(() => undefined);
 
 			void checkForUpdate();
@@ -43,6 +45,17 @@ function registerServiceWorker() {
 			window.addEventListener('pageshow', checkForUpdate);
 			window.setInterval(checkForUpdate, 5 * 60 * 1000);
 		}).catch(() => undefined);
+
+		// A fresh service worker precaches the complete application graph. On a
+		// direct AI Chart cold document, starting that background transfer during
+		// the five-second usability window can starve the route chunk itself.
+		// Keep PWA registration intact, but start it only after the critical chart
+		// window; all other routes retain their existing load-event behavior.
+		if (window.location.pathname.endsWith('/ai-chart')) {
+			window.setTimeout(register, AI_CHART_SERVICE_WORKER_DELAY_MS);
+			return;
+		}
+		void register();
 	});
 }
 
