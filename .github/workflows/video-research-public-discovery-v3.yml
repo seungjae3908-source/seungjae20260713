@@ -4,9 +4,14 @@ on:
   pull_request:
     types:
       - opened
+      - synchronize
     paths:
       - packages/external-research/src/video-intelligence-phase3-runtime.js
+      - packages/external-research/src/video-intelligence-phase3-snapshot.js
+      - packages/external-research/src/video-intelligence-phase3-snapshot-caller.js
       - packages/external-research/test/video-intelligence-phase3-runtime.test.js
+      - packages/external-research/test/video-intelligence-phase3-snapshot.test.js
+      - packages/external-research/test/video-intelligence-phase3-snapshot-caller.test.js
       - packages/external-research/scripts/video-public-discovery-v3.mjs
       - .github/workflows/video-research-public-discovery-v3.yml
   workflow_dispatch:
@@ -64,10 +69,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Run Phase 3 runtime safety tests
-        run: node --test packages/external-research/test/video-intelligence-phase3-runtime.test.js
+      - name: Run Phase 3 runtime and sanitized snapshot safety tests
+        run: >-
+          node --test
+          packages/external-research/test/video-intelligence-phase3-runtime.test.js
+          packages/external-research/test/video-intelligence-phase3-snapshot.test.js
+          packages/external-research/test/video-intelligence-phase3-snapshot-caller.test.js
 
   real-public-discovery:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.action == 'opened' }}
     name: Read-only real YouTube public discovery
     needs: phase3-runtime-contract
     runs-on: ubuntu-latest
@@ -103,23 +113,42 @@ jobs:
           fi
           echo "provider_credential_configured=true"
           echo "provider_credential_value_exposed=false"
-      - name: Execute one bounded read-only public discovery
+      - name: Execute bounded read-only discovery and publish sanitized runner-local snapshot
         shell: bash
         env:
           VIDEO_RESEARCH_QUERY: ${{ github.event.inputs.query || 'bitcoin technical analysis strategy' }}
+          VIDEO_RESEARCH_SNAPSHOT_OUTPUT_DIR: ${{ runner.temp }}/video-research-sanitized
         run: |
           set -euo pipefail
-          node packages/external-research/scripts/video-public-discovery-v3.mjs "$VIDEO_RESEARCH_QUERY" > "$RUNNER_TEMP/video-research-public-discovery-v3.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import { runAndPublishSanitizedVideoResearchSnapshotV1 } from './packages/external-research/src/video-intelligence-phase3-snapshot-caller.js';
+          const outcome = await runAndPublishSanitizedVideoResearchSnapshotV1({
+            query: process.env.VIDEO_RESEARCH_QUERY,
+            outputDir: process.env.VIDEO_RESEARCH_SNAPSHOT_OUTPUT_DIR,
+            sourceHeadSha: process.env.VIDEO_RESEARCH_EXPECTED_SHA,
+            observedAt: new Date().toISOString(),
+            env: process.env,
+          });
+          fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'video-research-public-discovery-v3.json'), `${JSON.stringify(outcome.result, null, 2)}\n`);
+          if (!outcome.published) {
+            console.error(`snapshot publication blocked: ${outcome.reason}`);
+            process.exit(2);
+          }
+          console.log('sanitized_snapshot_published=true');
+          console.log('sanitized_snapshot_scope=RUNNER_LOCAL_ONLY');
+          NODE
           cat "$RUNNER_TEMP/video-research-public-discovery-v3.json"
-      - name: Verify discovery truth and authority locks
+      - name: Verify discovery truth and sanitized snapshot authority locks
         shell: bash
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           import path from 'node:path';
-          const file = path.join(process.env.RUNNER_TEMP, 'video-research-public-discovery-v3.json');
-          const result = JSON.parse(fs.readFileSync(file, 'utf8'));
+          const result = JSON.parse(fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'video-research-public-discovery-v3.json'), 'utf8'));
+          const snapshot = JSON.parse(fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'video-research-sanitized', 'video-research-public-provider-runtime-v3.json'), 'utf8'));
           const fail = (message) => { console.error(message); process.exit(1); };
           if (result.status !== 'SUCCESS') fail(`discovery status=${result.status}`);
           if (result.provider !== 'YOUTUBE_DATA_API_V3') fail(`provider=${result.provider}`);
@@ -132,12 +161,18 @@ jobs:
           if (result.safety?.economicEvidenceCredit !== 0) fail('economicEvidenceCredit must remain 0');
           if (result.safety?.profitabilityCredit !== 0) fail('profitabilityCredit must remain 0');
           if (result.safety?.executionAuthority !== 'NONE') fail('executionAuthority must remain NONE');
+          if (snapshot.runtimeVersion !== 'video-research-public-provider-runtime-v3') fail('snapshot runtime version mismatch');
+          if (snapshot.snapshotProvenance?.sourceHeadSha !== process.env.VIDEO_RESEARCH_EXPECTED_SHA.toLowerCase()) fail('snapshot exact-head provenance mismatch');
+          if (snapshot.snapshotProvenance?.publisherMode !== 'LOCAL_ATOMIC_FILE') fail('snapshot publisher mode mismatch');
+          if ('credentialEnvName' in snapshot) fail('snapshot must not expose credential metadata name');
+          if (snapshot.safety?.economicEvidenceCredit !== 0 || snapshot.safety?.profitabilityCredit !== 0 || snapshot.safety?.executionAuthority !== 'NONE') fail('snapshot economic authority lock failed');
           for (const record of result.records ?? []) {
             if (record.economicEvidenceCredit !== 0 || record.profitabilityCredit !== 0 || record.executionAuthority !== 'NONE') fail('record economic truth lock failed');
           }
           console.log(`REAL_VIDEO_DISCOVERY_STATUS=${result.status}`);
           console.log(`REAL_VIDEO_DISCOVERY_SOURCE_COUNT=${result.sourceCount}`);
           console.log(`REAL_VIDEO_DISCOVERY_PAGES_USED=${result.pagesUsed}`);
+          console.log('SANITIZED_SNAPSHOT_SCOPE=RUNNER_LOCAL_ONLY');
           NODE
       - name: Publish sanitized evidence summary
         shell: bash
@@ -152,6 +187,7 @@ jobs:
           console.log(`- request mode: ${result.requestMode}`);
           console.log(`- source count: ${result.sourceCount}`);
           console.log(`- pages used: ${result.pagesUsed}`);
+          console.log('- sanitized snapshot: runner-local only');
           console.log('- paid provider: false');
           console.log('- schedule active: false');
           console.log('- live trading: false');
