@@ -52,6 +52,13 @@ installDeferredScannerResponseGuard();
 applyInitialAccent();
 registerServiceWorker();
 
+// Start the direct AI Chart route chunk alongside the application shell. App.tsx
+// requests the same module for React.lazy, so the browser module loader reuses
+// this in-flight request instead of waiting for the shell bundle to finish.
+if (window.location.pathname.endsWith('/ai-chart')) {
+	void import('@/pages/ai-chart').catch(() => undefined);
+}
+
 void import('./App').then(({ default: App }) => {
 	createRoot(document.getElementById('root')!).render(<App />);
 });
