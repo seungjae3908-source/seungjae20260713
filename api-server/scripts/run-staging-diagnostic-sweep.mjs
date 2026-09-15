@@ -63,7 +63,7 @@ try {
   const args = [
     '--dir', 'stock-analyzer',
     'exec', 'playwright', 'test',
-    '-c', 'playwright.config.ts',
+    '-c', 'playwright.staging-diagnostic.config.ts',
     generatedRelative,
     '--workers=1',
     '--retries=0',
@@ -75,6 +75,7 @@ try {
   console.log(`[staging-diagnostic] scope=${scope}`);
   console.log(`[staging-diagnostic] target_sha=${targetSha}`);
   console.log('[staging-diagnostic] certification source mutation=false');
+  console.log('[staging-diagnostic] global staging bootstrap disabled; diagnostic inspects already-deployed exact SHA');
   console.log('[staging-diagnostic] generated suite mode=default; workers=1; retries=0; maxFailures=unbounded');
   console.log('[staging-diagnostic] browser diagnostics are isolated per worker process and aggregated later');
 
@@ -104,6 +105,7 @@ try {
     target_sha: targetSha,
     scope,
     canonical_certification_source_mutated: false,
+    staging_global_bootstrap_executed: false,
     diagnostic_serial_override: 'default',
     per_worker_browser_diagnostics: true,
     workers: 1,
