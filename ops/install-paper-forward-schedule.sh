@@ -18,8 +18,11 @@ BACKUP_DIR="$STATE_ROOT/crontab-backups"
 IDENTITY_ARCHIVE_ROOT="$STATE_ROOT/identity-archives"
 IDENTITY_CUTOVER_ROOT="$STATE_ROOT/identity-cutovers"
 PUBLISHER_DIR="$STATE_ROOT/publisher"
+PUBLISHER_SNAPSHOT_ARCHIVE_ROOT="$PUBLISHER_DIR/snapshot-archives"
 PUBLISHER_BINDING_PATH="$STATE_ROOT/publisher-binding.json"
 PAPER_STATE_SNAPSHOT_PATH="$PUBLISHER_DIR/paper-state-v2.json"
+SNAPSHOT_BRIDGE_SCRIPT="$LIVE_DIR/ops/bridge-paper-forward-no-deploy-snapshot.mjs"
+AUTHORITATIVE_RUNTIME_ROOT="$SOURCE_LAB/runtime/authoritative-paper-runtime-v1"
 PUBLISHER_ACCOUNT_ID_SHA256="${PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256:-}"
 WRAPPER="$BIN_DIR/run-paper-forward-schedule"
 CRON_LOCK="$STATE_ROOT/cron.lock"
@@ -30,6 +33,11 @@ OUTCOME_ACCUMULATION_ENABLED="${PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED:-fals
 PREVIOUS_CRONTAB=""
 CRONTAB_MUTATED=0
 BACKUP_PATH=""
+SNAPSHOT_BRIDGE_APPLIED="false"
+SNAPSHOT_BRIDGE_STAGED_PATH=""
+SNAPSHOT_BRIDGE_ARCHIVE_PATH=""
+SNAPSHOT_BRIDGE_COMMITTED=0
+SNAPSHOT_SOURCE_SHA_BEFORE=""
 
 fail() {
   echo "[paper-forward-activate] $1" >&2
@@ -46,6 +54,14 @@ mark_disabled() {
 restore_on_error() {
   local status=$?
   trap - EXIT
+  if (( status != 0 )) && [[ "$SNAPSHOT_BRIDGE_COMMITTED" == 1 ]]; then
+    rm -f -- "$PAPER_STATE_SNAPSHOT_PATH"
+    mv -f -- "$SNAPSHOT_BRIDGE_ARCHIVE_PATH" "$PAPER_STATE_SNAPSHOT_PATH" || true
+    mark_disabled
+  fi
+  if (( status != 0 )) && [[ -n "$SNAPSHOT_BRIDGE_STAGED_PATH" ]]; then
+    rm -f -- "$SNAPSHOT_BRIDGE_STAGED_PATH"
+  fi
   if (( status != 0 )) && [[ "$CRONTAB_MUTATED" == 1 ]]; then
     printf '%s' "$PREVIOUS_CRONTAB" | crontab - || true
     mark_disabled
@@ -79,8 +95,8 @@ fi
 
 NODE_BIN="$(command -v node)"
 FLOCK_BIN="$(command -v flock)"
-mkdir -p "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$IDENTITY_ARCHIVE_ROOT" "$IDENTITY_CUTOVER_ROOT" "$RUNTIME_STATE_ROOT" "$PUBLISHER_DIR"
-chmod 700 "$STATE_ROOT" "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$IDENTITY_ARCHIVE_ROOT" "$IDENTITY_CUTOVER_ROOT" "$RUNTIME_STATE_ROOT" "$PUBLISHER_DIR"
+mkdir -p "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$IDENTITY_ARCHIVE_ROOT" "$IDENTITY_CUTOVER_ROOT" "$RUNTIME_STATE_ROOT" "$PUBLISHER_DIR" "$PUBLISHER_SNAPSHOT_ARCHIVE_ROOT"
+chmod 700 "$STATE_ROOT" "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$IDENTITY_ARCHIVE_ROOT" "$IDENTITY_CUTOVER_ROOT" "$RUNTIME_STATE_ROOT" "$PUBLISHER_DIR" "$PUBLISHER_SNAPSHOT_ARCHIVE_ROOT"
 
 if [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" ]]; then
   if [[ -n "$PUBLISHER_ACCOUNT_ID_SHA256" ]]; then
@@ -147,12 +163,41 @@ if [[ -n "$EXISTING_RESEARCH_SHA" && "$EXISTING_RESEARCH_SHA" != "$TARGET_SHA" ]
   [[ "$EXISTING_MANAGED_CRON_COUNT" == 0 ]] || fail "identity cutover requires the prior schedule to be disabled" 12
 fi
 
+ACCOUNT_SEED_SNAPSHOT_PATH="$PAPER_STATE_SNAPSHOT_PATH"
+if [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" && -r "$PAPER_STATE_SNAPSHOT_PATH" ]]; then
+  SNAPSHOT_SOURCE_SHA_BEFORE="$("$NODE_BIN" - "$PAPER_STATE_SNAPSHOT_PATH" <<'NODE'
+const fs = require('node:fs');
+const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const sourceSha = String(value?.sourceSha ?? '').trim().toLowerCase();
+if (!/^[0-9a-f]{40}$/.test(sourceSha)) process.exit(1);
+process.stdout.write(sourceSha);
+NODE
+)" || fail "existing Paper snapshot source SHA is invalid" 14
+  if [[ "$SNAPSHOT_SOURCE_SHA_BEFORE" != "$TARGET_SHA" ]]; then
+    [[ -r "$SNAPSHOT_BRIDGE_SCRIPT" ]] || fail "target snapshot bridge missing" 14
+    [[ -r "$AUTHORITATIVE_RUNTIME_ROOT/authoritative-paper-runtime-v1.mjs" ]] || fail "target authoritative Paper runtime missing" 14
+    [[ -r "$AUTHORITATIVE_RUNTIME_ROOT/authoritative-paper-runtime-v1.manifest.json" ]] || fail "target authoritative Paper runtime manifest missing" 14
+    SNAPSHOT_BRIDGE_STAGED_PATH="$PUBLISHER_DIR/.paper-state-v2.bridge-$TARGET_SHA-$$"
+    TARGET_SHA="$TARGET_SHA" \
+    PUBLISHER_ACCOUNT_ID_SHA256="$PUBLISHER_ACCOUNT_ID_SHA256" \
+    PUBLISHER_BINDING_PATH="$PUBLISHER_BINDING_PATH" \
+    PAPER_STATE_SNAPSHOT_PATH="$PAPER_STATE_SNAPSHOT_PATH" \
+    OUTPUT_PAPER_STATE_SNAPSHOT_PATH="$SNAPSHOT_BRIDGE_STAGED_PATH" \
+    AUTHORITATIVE_RUNTIME_BUNDLE_PATH="$AUTHORITATIVE_RUNTIME_ROOT/authoritative-paper-runtime-v1.mjs" \
+    AUTHORITATIVE_RUNTIME_MANIFEST_PATH="$AUTHORITATIVE_RUNTIME_ROOT/authoritative-paper-runtime-v1.manifest.json" \
+      "$NODE_BIN" "$SNAPSHOT_BRIDGE_SCRIPT" >/dev/null \
+      || fail "target Paper snapshot bridge failed" 14
+    ACCOUNT_SEED_SNAPSHOT_PATH="$SNAPSHOT_BRIDGE_STAGED_PATH"
+    SNAPSHOT_BRIDGE_APPLIED="true"
+  fi
+fi
+
 if [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" ]]; then
   PAPER_FORWARD_ROOT="$RUNTIME_STATE_ROOT" \
   PAPER_FORWARD_RESEARCH_SHA="$TARGET_SHA" \
-  PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH="$PAPER_STATE_SNAPSHOT_PATH" \
+  PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH="$ACCOUNT_SEED_SNAPSHOT_PATH" \
   PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$PUBLISHER_ACCOUNT_ID_SHA256" \
-  "$NODE_BIN" --input-type=module - "$SOURCE_LAB" "$RUNTIME_STATE_ROOT" "$PAPER_STATE_SNAPSHOT_PATH" "$PUBLISHER_ACCOUNT_ID_SHA256" "$TARGET_SHA" <<'NODE'
+  "$NODE_BIN" --input-type=module - "$SOURCE_LAB" "$RUNTIME_STATE_ROOT" "$ACCOUNT_SEED_SNAPSHOT_PATH" "$PUBLISHER_ACCOUNT_ID_SHA256" "$TARGET_SHA" <<'NODE'
 import fs from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -291,6 +336,17 @@ WRAPPER
 chmod 700 "$TEMP_WRAPPER"
 mv -f "$TEMP_WRAPPER" "$WRAPPER"
 
+if [[ "$SNAPSHOT_BRIDGE_APPLIED" == "true" ]]; then
+  SNAPSHOT_ARCHIVE_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+  SNAPSHOT_BRIDGE_ARCHIVE_PATH="$PUBLISHER_SNAPSHOT_ARCHIVE_ROOT/${SNAPSHOT_SOURCE_SHA_BEFORE}-to-${TARGET_SHA}-$SNAPSHOT_ARCHIVE_STAMP.json"
+  [[ ! -e "$SNAPSHOT_BRIDGE_ARCHIVE_PATH" ]] || fail "snapshot bridge archive path already exists" 14
+  mv -- "$PAPER_STATE_SNAPSHOT_PATH" "$SNAPSHOT_BRIDGE_ARCHIVE_PATH"
+  SNAPSHOT_BRIDGE_COMMITTED=1
+  mv -- "$SNAPSHOT_BRIDGE_STAGED_PATH" "$PAPER_STATE_SNAPSHOT_PATH"
+  chmod 600 "$PAPER_STATE_SNAPSHOT_PATH" "$SNAPSHOT_BRIDGE_ARCHIVE_PATH"
+  SNAPSHOT_BRIDGE_STAGED_PATH=""
+fi
+
 PREVIOUS_CRONTAB="$(crontab -l 2>/dev/null || true)"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_PATH="$BACKUP_DIR/$STAMP.crontab"
@@ -311,10 +367,11 @@ MATCH_COUNT="$(crontab -l | grep -Fxc "$CRON_LINE" || true)"
 
 RUNTIME_DIGEST="$(find "$RUNTIME_RELEASE" -type f -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}')"
 CRON_HASH="$(printf '%s' "$CRON_LINE" | sha256sum | awk '{print $1}')"
-"$NODE_BIN" - "$STATE_ROOT/activation.json" "$TARGET_SHA" "$DEPLOYED_SHA" "$ACTIVATION_AT_MS" "$RUNTIME_DIGEST" "$CRON_HASH" "$BACKUP_PATH" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" "$OUTCOME_ACCUMULATION_ENABLED" <<'NODE'
+"$NODE_BIN" - "$STATE_ROOT/activation.json" "$TARGET_SHA" "$DEPLOYED_SHA" "$ACTIVATION_AT_MS" "$RUNTIME_DIGEST" "$CRON_HASH" "$BACKUP_PATH" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" "$OUTCOME_ACCUMULATION_ENABLED" "$SNAPSHOT_BRIDGE_APPLIED" "$SNAPSHOT_SOURCE_SHA_BEFORE" "$SNAPSHOT_BRIDGE_ARCHIVE_PATH" <<'NODE'
 const fs = require('node:fs');
-const [path, targetSha, deployedSha, activationAtMs, runtimeDigest, cronHash, backupPath, identityCutoverRaw, archivedResearchShaRaw, outcomeAccumulationRaw] = process.argv.slice(2);
+const [path, targetSha, deployedSha, activationAtMs, runtimeDigest, cronHash, backupPath, identityCutoverRaw, archivedResearchShaRaw, outcomeAccumulationRaw, snapshotBridgeRaw, snapshotSourceShaBeforeRaw, snapshotArchivePathRaw] = process.argv.slice(2);
 const outcomeAccumulationEnabled = outcomeAccumulationRaw === 'true';
+const snapshotBridgeApplied = snapshotBridgeRaw === 'true';
 const value = {
   schemaVersion: 'paper-forward-schedule-activation-v2',
   status: 'ACTIVE_WAITING_FOR_NATURAL_CYCLE',
@@ -339,6 +396,15 @@ const value = {
   paperStatePublisherBindingConfigured: outcomeAccumulationEnabled,
   paperStateSnapshotPathConfigured: outcomeAccumulationEnabled,
   paperStatePublisherAccountBindingConfigured: outcomeAccumulationEnabled,
+  targetSnapshotBridgeApplied: snapshotBridgeApplied,
+  snapshotSourceShaBefore: snapshotSourceShaBeforeRaw || targetSha,
+  snapshotSourceShaAfter: targetSha,
+  snapshotArchivePath: snapshotBridgeApplied ? snapshotArchivePathRaw : null,
+  snapshotEconomicStatePreserved: true,
+  snapshotMetadataMutationCount: snapshotBridgeApplied ? 1 : 0,
+  naturalCycleCredit: 0,
+  naturalSampleCredit: 0,
+  naturalSettlementCredit: 0,
   liveTrading: false,
   privateAccountAccess: false,
   orderAuthority: false,
@@ -349,6 +415,7 @@ fs.renameSync(temp, path);
 NODE
 
 CRONTAB_MUTATED=0
+SNAPSHOT_BRIDGE_COMMITTED=0
 trap - EXIT
-printf '{"status":"ACTIVE_WAITING_FOR_NATURAL_CYCLE","targetSha":"%s","activationAtMs":%s,"scheduleActive":true,"paperTradeOutcomeAccumulationEnabled":%s,"simulatedFinancialAdaptersEnabled":%s,"externalFinancialMutationAllowed":false,"paperStatePublisherBindingConfigured":%s,"paperStateSnapshotPathConfigured":%s,"paperStatePublisherAccountBindingConfigured":%s,"identityCutover":%s,"archivedResearchSha":"%s","predecessorStatePreserved":true,"predecessorPerformanceMixed":false,"pollCadence":"EVERY_15_MINUTES","canonicalCycleIntervalMs":%s,"privateRequestCount":0,"financialMutationCount":0,"liveTrading":false}\n' \
-  "$TARGET_SHA" "$ACTIVATION_AT_MS" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" "$CANONICAL_CYCLE_MS"
+printf '{"status":"ACTIVE_WAITING_FOR_NATURAL_CYCLE","targetSha":"%s","activationAtMs":%s,"scheduleActive":true,"paperTradeOutcomeAccumulationEnabled":%s,"simulatedFinancialAdaptersEnabled":%s,"externalFinancialMutationAllowed":false,"paperStatePublisherBindingConfigured":%s,"paperStateSnapshotPathConfigured":%s,"paperStatePublisherAccountBindingConfigured":%s,"targetSnapshotBridgeApplied":%s,"snapshotEconomicStatePreserved":true,"snapshotMetadataMutationCount":%s,"naturalCycleCredit":0,"naturalSampleCredit":0,"naturalSettlementCredit":0,"identityCutover":%s,"archivedResearchSha":"%s","predecessorStatePreserved":true,"predecessorPerformanceMixed":false,"pollCadence":"EVERY_15_MINUTES","canonicalCycleIntervalMs":%s,"privateRequestCount":0,"financialMutationCount":0,"liveTrading":false}\n' \
+  "$TARGET_SHA" "$ACTIVATION_AT_MS" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$SNAPSHOT_BRIDGE_APPLIED" "$([[ "$SNAPSHOT_BRIDGE_APPLIED" == "true" ]] && printf 1 || printf 0)" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" "$CANONICAL_CYCLE_MS"
