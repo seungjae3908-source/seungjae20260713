@@ -41,6 +41,7 @@ import {
 import {
   requireAdmin,
   requireAuthenticated,
+  requireAuthenticatedProfileBootstrap,
   requireCapability,
   type AuthenticatedRequest,
 } from '../middleware/auth';
@@ -67,7 +68,7 @@ router.use('/admin/research/copilot', researchCopilotRouter);
 // The deployed server mounts this router from src/index.ts. Keep the browser
 // bootstrap endpoint on that runtime graph so authenticated Supabase profile
 // reads cannot fall through to API_ROUTE_NOT_FOUND.
-router.get('/auth/profile', requireAuthenticated, (req: AuthenticatedRequest, res) => {
+router.get('/auth/profile', requireAuthenticatedProfileBootstrap, (req: AuthenticatedRequest, res) => {
   const profile = req.member;
   const allowedStatuses = new Set(['pending', 'approved', 'rejected']);
   if (
