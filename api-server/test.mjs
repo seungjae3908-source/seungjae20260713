@@ -159,6 +159,8 @@ const groups = {
     path.join(root, 'src/routes/unified-search.smoke.test.ts'),
     path.join(root, 'src/routes/stock-orderbook.smoke.test.ts'),
     path.join(root, 'src/routes/market-summary-availability.smoke.test.ts'),
+    path.join(root, 'src/routes/agent-hub-control-contract.test.ts'),
+    path.join(root, 'src/routes/agent-hub-command-status.test.ts'),
   ],
 };
 
