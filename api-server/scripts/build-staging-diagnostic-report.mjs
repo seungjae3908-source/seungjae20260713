@@ -319,6 +319,36 @@ const readJson = (artifactDir, name) => {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
 };
 
+const mergeUnique = (values) => {
+  const seen = new Set();
+  const merged = [];
+  for (const value of values) {
+    const key = JSON.stringify(value);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(value);
+  }
+  return merged;
+};
+
+const readMergedBrowserDiagnostics = (artifactDir) => {
+  const workerFiles = fs.existsSync(artifactDir)
+    ? fs.readdirSync(artifactDir)
+      .filter((name) => /^staging-browser-results-\d+\.json$/u.test(name))
+      .sort()
+    : [];
+  if (workerFiles.length === 0) return readJson(artifactDir, 'staging-browser-results.json');
+  const values = workerFiles.map((name) => readJson(artifactDir, name)).filter(Boolean);
+  if (values.length === 0) return null;
+  return {
+    console_errors: mergeUnique(values.flatMap((value) => value.console_errors ?? [])),
+    page_errors: mergeUnique(values.flatMap((value) => value.page_errors ?? [])),
+    unhandled_rejections: mergeUnique(values.flatMap((value) => value.unhandled_rejections ?? [])),
+    unexpected_http_errors: mergeUnique(values.flatMap((value) => value.unexpected_http_errors ?? [])),
+    source_worker_files: workerFiles,
+  };
+};
+
 export const runCli = () => {
   const artifactDir = path.resolve(process.env.STAGING_ARTIFACT_DIR ?? 'staging-artifacts');
   const targetSha = String(process.env.TARGET_SHA ?? process.env.STAGING_TARGET_SHA ?? '').trim().toLowerCase();
@@ -326,7 +356,7 @@ export const runCli = () => {
     targetSha,
     runner: readJson(artifactDir, 'staging-diagnostic-run.json'),
     playwright: readJson(artifactDir, 'playwright-report.json'),
-    browser: readJson(artifactDir, 'staging-browser-results.json'),
+    browser: readMergedBrowserDiagnostics(artifactDir),
     accountProvisioning: readJson(artifactDir, 'staging-account-provisioning.json'),
     accountCleanup: readJson(artifactDir, 'staging-account-cleanup.json'),
     runtime: readJson(artifactDir, 'staging-diagnostic-runtime.json'),
