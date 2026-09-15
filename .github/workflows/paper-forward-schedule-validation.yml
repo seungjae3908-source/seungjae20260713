@@ -117,6 +117,7 @@ on:
       - market-prediction-lab/tests/natural-paper-trigger-bound-settlement-cost-producer-v1.test.js
       - market-prediction-lab/tests/recurring-paper-loop-v1.test.js
       - market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
+      - market-prediction-lab/tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js
       - research-production/deploy/prepare-paper-state-readonly-transport.mjs
       - research-production/deploy/research-production@.service
       - research-production/src/engine.mjs
@@ -128,6 +129,8 @@ on:
       - ops/research-production-readonly-evidence.sh
       - .github/workflows/research-production-natural-cycle-evidence.yml
       - ops/install-paper-forward-schedule.sh
+      - ops/bridge-paper-forward-no-deploy-snapshot.mjs
+      - ops/run-paper-forward-flat-snapshot-republish.mjs
       - ops/disable-paper-forward-schedule.sh
       - .github/workflows/paper-forward-schedule-activation.yml
       - .github/workflows/paper-forward-schedule-no-deploy-activation.yml
@@ -325,6 +328,7 @@ jobs:
             market-prediction-lab/tests/natural-paper-trigger-bound-settlement-cost-producer-v1.test.js
             market-prediction-lab/tests/recurring-paper-loop-v1.test.js
             market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
+            market-prediction-lab/tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js
             research-production/deploy/prepare-paper-state-readonly-transport.mjs
             research-production/deploy/research-production@.service
             research-production/src/engine.mjs
@@ -336,6 +340,8 @@ jobs:
             ops/research-production-readonly-evidence.sh
             .github/workflows/research-production-natural-cycle-evidence.yml
             ops/install-paper-forward-schedule.sh
+            ops/bridge-paper-forward-no-deploy-snapshot.mjs
+            ops/run-paper-forward-flat-snapshot-republish.mjs
             ops/disable-paper-forward-schedule.sh
             .github/workflows/paper-forward-schedule-activation.yml
             .github/workflows/paper-forward-schedule-no-deploy-activation.yml
@@ -405,6 +411,9 @@ jobs:
           node --check market-prediction-lab/tests/paper-forward-schedule-authoritative-stage-adoption-v1.test.js
           node --check market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
           node --check market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
+          node --check market-prediction-lab/tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js
+          node --check ops/bridge-paper-forward-no-deploy-snapshot.mjs
+          node --check ops/run-paper-forward-flat-snapshot-republish.mjs
           bash -n ops/install-paper-forward-schedule.sh
           bash -n ops/disable-paper-forward-schedule.sh
 
@@ -426,6 +435,7 @@ jobs:
             tests/paper-scheduler-driver-v1.test.js \
             tests/paper-forward-evidence-runtime-v1.test.js \
             tests/paper-forward-schedule-runtime-v1.test.js \
+            tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js \
             tests/research-production-paper-forward-cutover.test.js
           if [[ -f tests/natural-paper-position-settlement-lifecycle-v1.test.js ]]; then
             node --test tests/natural-paper-position-settlement-lifecycle-v1.test.js
@@ -477,6 +487,7 @@ jobs:
             market-prediction-lab/src/paper-forward-schedule-runtime-v1.js \
             market-prediction-lab/src/recurring-paper-loop-v1.js \
             market-prediction-lab/scripts/run-paper-forward-schedule.js \
+            ops/bridge-paper-forward-no-deploy-snapshot.mjs \
             ops/install-paper-forward-schedule.sh \
             ops/disable-paper-forward-schedule.sh
 
