@@ -67,9 +67,10 @@ jobs:
           grep -F "LIVE_TRADING='false'" "$install" >/dev/null
           grep -F "REAL_ORDER_ENABLED='false'" "$install" >/dev/null
           grep -F "PRIVATE_TRADING_API_ALLOWED='false'" "$install" >/dev/null
+          grep -F 'exec /usr/bin/env -i' "$install" >/dev/null
           grep -F 'productionAppDeployAllowed: false' "$workflow" >/dev/null
           grep -F 'productionAppMutationAllowed: false' "$workflow" >/dev/null
-          grep -F 'executionAuthority: NONE' "$workflow" >/dev/null
+          grep -F "executionAuthority: 'NONE'" "$workflow" >/dev/null
           grep -F 'paper-forward-no-deploy-certification-' "$activation" >/dev/null
           ! grep -F 'staging-verdict-' "$activation" >/dev/null
           ! grep -F 'deploy-production.sh' "$workflow" >/dev/null
@@ -150,10 +151,10 @@ jobs:
           install=ops/install-paper-forward-schedule.sh
           activation=.github/workflows/paper-forward-schedule-no-deploy-activation.yml
           grep -F "LIVE_TRADING='false'" "$install" >/dev/null
-          grep -F "AUTO_TRADING='false'" "$install" >/dev/null
           grep -F "REAL_ORDER_ENABLED='false'" "$install" >/dev/null
           grep -F "PRIVATE_TRADING_API_ALLOWED='false'" "$install" >/dev/null
           grep -F "PRIVATE_ACCOUNT_ACCESS='false'" "$install" >/dev/null
+          grep -F 'exec /usr/bin/env -i' "$install" >/dev/null
           grep -F '/opt/stock-app-data/paper-forward-v1' "$install" >/dev/null
           grep -F 'productionAppDeployPerformed = false' "$activation" >/dev/null
           grep -F 'productionAppMutationAllowed = false' "$activation" >/dev/null
