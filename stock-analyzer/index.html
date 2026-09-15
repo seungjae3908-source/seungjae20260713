@@ -24,30 +24,6 @@
 	</head>
 	<body>
 		<div id="root"></div>
-		<script type="module">
-			const directAiChartRoute = window.location.pathname.endsWith('/ai-chart');
-			const aiChartRoutePrewarm = directAiChartRoute
-				? import('/src/pages/ai-chart.tsx')
-				: null;
-			let appBootstrapStarted = false;
-			const startAppBootstrap = () => {
-				if (appBootstrapStarted) return;
-				appBootstrapStarted = true;
-				void import('/src/main.tsx');
-			};
-			if (directAiChartRoute && aiChartRoutePrewarm) {
-				window.setTimeout(startAppBootstrap, 0);
-				void aiChartRoutePrewarm.then(
-					() => {
-						startAppBootstrap();
-						void import('/src/lib/unified-chart-data.ts')
-							.then(() => import('/src/components/unified-analysis-chart.tsx'));
-					},
-					startAppBootstrap,
-				);
-			} else {
-				startAppBootstrap();
-			}
-		</script>
+		<script type="module" src="/src/main.tsx"></script>
 	</body>
 </html>
