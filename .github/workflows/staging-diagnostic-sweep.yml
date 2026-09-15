@@ -1,0 +1,194 @@
+name: Full Release Diagnostic Sweep
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact current-main SHA already deployed to isolated staging
+        required: true
+        type: string
+      scope:
+        description: Full diagnostic sweep or a bounded targeted verification lane
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - auth-admin
+          - ai-chart
+          - scanner-paper
+          - navigation-mobile
+          - account-session
+          - runtime-data
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stock-app-staging-diagnostic-${{ inputs.sha }}
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    name: Collect all safe staging findings without release certification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment: staging
+    env:
+      TARGET_SHA: ${{ inputs.sha }}
+      STAGING_TARGET_SHA: ${{ inputs.sha }}
+      STAGING_DIAGNOSTIC_SCOPE: ${{ inputs.scope }}
+      STAGING_ARTIFACT_DIR: ${{ github.workspace }}/staging-artifacts
+      STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+      STAGING_SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
+      STAGING_AI_API_KEY: ${{ secrets.STAGING_AI_API_KEY }}
+      STAGING_PENDING_EMAIL: ${{ secrets.STAGING_PENDING_EMAIL }}
+      STAGING_PENDING_PASSWORD: ${{ secrets.STAGING_PENDING_PASSWORD }}
+      STAGING_ASSOCIATE_EMAIL: ${{ secrets.STAGING_ASSOCIATE_EMAIL }}
+      STAGING_ASSOCIATE_PASSWORD: ${{ secrets.STAGING_ASSOCIATE_PASSWORD }}
+      STAGING_REGULAR_EMAIL: ${{ secrets.STAGING_REGULAR_EMAIL }}
+      STAGING_REGULAR_PASSWORD: ${{ secrets.STAGING_REGULAR_PASSWORD }}
+      STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
+      STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Require exact current main
+        id: exact_main
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || {
+            echo 'Exact 40-character SHA required.' >&2
+            exit 1
+          }
+          target="${TARGET_SHA,,}"
+          git fetch --no-tags origin main "$target"
+          actual_main="$(git rev-parse refs/remotes/origin/main)"
+          [[ "$target" == "$actual_main" ]] || {
+            echo "Diagnostic target is stale: target=$target current_main=$actual_main" >&2
+            exit 1
+          }
+          echo "TARGET_SHA=$target" >> "$GITHUB_ENV"
+          echo "STAGING_TARGET_SHA=$target" >> "$GITHUB_ENV"
+          echo "sha=$target" >> "$GITHUB_OUTPUT"
+
+      - name: Validate diagnostic report contract
+        run: node --test api-server/scripts/build-staging-diagnostic-report.test.mjs
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate frontend TypeScript including diagnostic config
+        run: pnpm --dir stock-analyzer exec tsc -p tsconfig.json --noEmit
+
+      - name: Require staging already deployed at exact target SHA
+        id: runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$STAGING_ARTIFACT_DIR"
+          raw="$STAGING_ARTIFACT_DIR/staging-diagnostic-runtime-raw.json"
+          safe="$STAGING_ARTIFACT_DIR/staging-diagnostic-runtime.json"
+          curl --fail --silent --show-error --max-time 20 "$STAGING_BASE_URL/api/health" > "$raw"
+          node - "$raw" "$safe" <<'NODE'
+          const fs = require('node:fs');
+          const [rawPath, safePath] = process.argv.slice(2);
+          const target = String(process.env.TARGET_SHA ?? '').toLowerCase();
+          const value = JSON.parse(fs.readFileSync(rawPath, 'utf8'));
+          const deployed = String(value.deploySha ?? value.sha ?? value.commitSha ?? '').toLowerCase();
+          const safe = {
+            ok: value.ok === true,
+            deploySha: deployed,
+            identityMatch: value.identityMatch === true || deployed === target,
+            service: typeof value.service === 'string' ? value.service.slice(0, 100) : '',
+            route: '/api/health',
+          };
+          fs.writeFileSync(safePath, `${JSON.stringify(safe, null, 2)}\n`);
+          fs.rmSync(rawPath, { force: true });
+          if (!safe.ok || safe.deploySha !== target || !safe.identityMatch) {
+            console.error(`STAGING_TARGET_NOT_DEPLOYED target=${target} deployed=${safe.deploySha || 'missing'}`);
+            process.exit(1);
+          }
+          NODE
+
+      - name: Install Chromium for diagnostic browser collection
+        if: steps.runtime.outcome == 'success'
+        run: pnpm --dir stock-analyzer exec playwright install chromium
+
+      - name: Run targeted or full non-serial diagnostic sweep
+        id: sweep
+        if: steps.runtime.outcome == 'success'
+        continue-on-error: true
+        run: node api-server/scripts/run-staging-diagnostic-sweep.mjs
+
+      - name: Build root-cause clustered diagnostic report
+        id: report
+        if: always() && steps.runtime.outcome == 'success'
+        run: node api-server/scripts/build-staging-diagnostic-report.mjs
+
+      - name: Sanitize browser evidence before upload
+        id: sanitize
+        if: always() && steps.runtime.outcome == 'success'
+        continue-on-error: true
+        run: node api-server/scripts/sanitize-staging-playwright-artifacts.mjs "$STAGING_ARTIFACT_DIR"
+
+      - name: Upload immutable diagnostic evidence
+        if: always() && steps.runtime.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-diagnostic-${{ steps.exact_main.outputs.sha }}-${{ github.run_id }}
+          path: staging-artifacts
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Write diagnostic summary
+        if: always()
+        shell: bash
+        run: |
+          node <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const file = path.join(process.env.STAGING_ARTIFACT_DIR, 'staging-diagnostic-report.json');
+          console.log('## Full Release Diagnostic & Certification System');
+          console.log('');
+          console.log(`- Target SHA: \`${String(process.env.TARGET_SHA ?? '')}\``);
+          console.log(`- Scope: \`${String(process.env.STAGING_DIAGNOSTIC_SCOPE ?? '')}\``);
+          console.log('- Mode: `DIAGNOSTIC / TARGETED VERIFY`');
+          console.log('- Certification authority: `false`');
+          console.log('- Production mutation: `0`');
+          console.log('- Live/private/order authority: `0`');
+          if (!fs.existsSync(file)) {
+            console.log('- Diagnostic status: `INCOMPLETE`');
+            console.log('- Report: `missing`');
+            process.exit(0);
+          }
+          const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+          console.log(`- Diagnostic status: \`${value.diagnostic_status}\``);
+          console.log(`- Tests: total=${value.tests.total}, passed=${value.tests.passed}, failed=${value.tests.failed}, skipped=${value.tests.skipped}`);
+          console.log(`- Console errors: \`${value.diagnostics.console_errors}\``);
+          console.log(`- Page errors: \`${value.diagnostics.page_errors}\``);
+          console.log(`- Unhandled rejections: \`${value.diagnostics.unhandled_rejections}\``);
+          console.log(`- Unexpected HTTP errors: \`${value.diagnostics.unexpected_http_errors}\``);
+          console.log(`- Failure clusters: \`${value.failure_clusters.length}\``);
+          if (value.primary_root_cause_candidate) {
+            console.log(`- Primary candidate: \`${value.primary_root_cause_candidate.surface}\` / \`${value.primary_root_cause_candidate.key}\``);
+          }
+          console.log('- A clean diagnostic run is not a release certification. Final release still requires the canonical Staging Readiness workflow with failed=0, skipped=0, release_ready=true.');
+          NODE
