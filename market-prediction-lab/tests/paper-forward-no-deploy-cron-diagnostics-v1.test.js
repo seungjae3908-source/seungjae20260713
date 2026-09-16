@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { access, cp, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import test from 'node:test';
@@ -389,25 +389,193 @@ test('production-shaped pinned Paper release closes startup module graph and rea
   });
 });
 
-test('Paper cron preserves the canonical generic risk policy source across the scrubbed environment', async () => {
-  const installerPath = fileURLToPath(new URL(
-    '../../ops/install-paper-forward-schedule.sh',
-    import.meta.url,
-  ));
-  const producerPath = fileURLToPath(new URL(
-    '../../api-server/src/services/authoritative-paper-generic-risk-policy-producer.service.ts',
-    import.meta.url,
-  ));
-  const [installer, producer] = await Promise.all([
-    readFile(installerPath, 'utf8'),
-    readFile(producerPath, 'utf8'),
-  ]);
-  const canonicalPath = '/opt/stock-app/api-server/data/generic-risk-policy-live-v1.json';
+const bashExecutable = process.platform === 'win32'
+  ? 'C:/Program Files/Git/bin/bash.exe' : '/bin/bash';
+const bashPath = (path) => process.platform === 'win32'
+  ? path.replaceAll('\\', '/').replace(/^([A-Za-z]):/u, (_, drive) => `/${drive.toLowerCase()}`)
+  : path;
+const permissionFlag = process.allowedNodeEnvironmentFlags.has('--permission')
+  ? '--permission' : '--experimental-permission';
 
-  assert.ok(producer.includes(canonicalPath), 'producer canonical risk-policy record path must remain authoritative');
-  assert.ok(installer.includes(`GENERIC_RISK_POLICY_LIVE_RECORD_PATH="\${GENERIC_RISK_POLICY_LIVE_RECORD_PATH:-${canonicalPath}}"`));
-  assert.ok(installer.includes('[[ "$GENERIC_RISK_POLICY_LIVE_RECORD_PATH" == /* ]] || fail "generic risk policy live record path must be absolute" 15'));
-  assert.ok(installer.includes('[[ -f "$GENERIC_RISK_POLICY_LIVE_RECORD_PATH" && -r "$GENERIC_RISK_POLICY_LIVE_RECORD_PATH" ]] || fail "generic risk policy live record is missing or unreadable" 15'));
-  assert.ok(installer.includes('exec /usr/bin/env -i'));
-  assert.ok(installer.includes("GENERIC_RISK_POLICY_LIVE_RECORD_PATH='$GENERIC_RISK_POLICY_LIVE_RECORD_PATH'"));
+// Only ordinary files and malformed input are used here. No policy values or
+// valid Risk Policy record are created, and no scheduled cycle is run.
+async function withRiskPolicyTransport(run) {
+  return withProductionShapedPinnedRelease(async ({ root, release }) => {
+    const installer = await readFile(join(repositoryRoot, 'ops', 'install-paper-forward-schedule.sh'), 'utf8');
+    const assignment = installer.match(/^PAPER_FORWARD_RISK_POLICY_RECORD_PATH=.*$/mu)?.[0];
+    const guard = installer.match(/if \[\[ "\$OUTCOME_ACCUMULATION_ENABLED" == "true"[^\n]*\n(?:(?!\nfi)[\s\S])*Paper risk policy source missing or unreadable[^\n]*\nfi/u)?.[0];
+    const whitelist = installer.match(/exec \/usr\/bin\/env -i[\s\S]*?(?=\nWRAPPER)/u)?.[0];
+    assert.ok(assignment && guard && whitelist, 'execute the actual installer config, preflight and env-i contract');
+    assert.equal(assignment, 'PAPER_FORWARD_RISK_POLICY_RECORD_PATH="${PAPER_FORWARD_RISK_POLICY_RECORD_PATH:-}"');
+    assert.doesNotMatch(installer, /GENERIC_RISK_POLICY_LIVE_RECORD_PATH|generic-risk-policy-live-v1\.json/u);
+    assert.match(guard, /-f "\$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" && -r "\$PAPER_FORWARD_RISK_POLICY_RECORD_PATH"/u);
+    const harness = join(release, 'policy-transport-harness.mjs');
+    await writeFile(harness, `
+      import assert from 'node:assert/strict';
+      import { runPaperForwardScheduleCli } from './scripts/run-paper-forward-schedule.js';
+      import { loadValidatedAuthoritativePaperRuntimePackage } from './src/authoritative-paper-runtime-package-v1.js';
+      const runtime = await loadValidatedAuthoritativePaperRuntimePackage();
+      let sources;
+      let result;
+      let callbackCount = 0;
+      // Inspect the runner's read-only adapter, with economic accumulation off.
+      await runPaperForwardScheduleCli({ ...process.env, PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED: 'false' }, {
+        authoritativePaperPackageLoader: async () => ({ ...runtime,
+          createAuthoritativePaperNaturalCycleEvidenceSourceWiring(input) {
+            sources = input.sources;
+            return runtime.createAuthoritativePaperNaturalCycleEvidenceSourceWiring(input);
+          },
+        }),
+        authoritativePaperDependenciesFactory: () => ({ publicEvidenceProvider: {},
+          sourceWiringAudit: { status: 'CALLBACKS_CONNECTED_BLOCKED_DATA', blockers: [], stageMeasurements: [] },
+        }),
+        async runScheduledInvocation(input) {
+          const request = { market: 'CRYPTO_FUTURES', symbol: 'BTCUSDT',
+            strategyScope: 'swing', researchCodeSha: ${JSON.stringify(TARGET_SHA)} };
+          if (process.permission) {
+            assert.equal(process.permission.has('fs.read', process.env.PAPER_FORWARD_RISK_POLICY_RECORD_PATH), false);
+          }
+          const raw = await sources.riskPolicyRecordForCard({ card: { symbol: 'BTCUSDT' } }, request);
+          const producer = runtime.createAuthoritativePaperGenericRiskPolicyProducer({
+            now: () => Number(process.env.PAPER_FORWARD_ACTIVATION_AT_MS),
+            readCanonicalRecord: async (policyRequest) => {
+              callbackCount += 1;
+              assert.deepEqual(policyRequest, request);
+              return sources.riskPolicyRecordForCard({ card: { symbol: 'BTCUSDT' } }, policyRequest);
+            },
+          });
+          const policy = await producer(request);
+          result = { path: process.env.PAPER_FORWARD_RISK_POLICY_RECORD_PATH, raw, policy, callbackCount,
+            unrelatedEnvironmentPreserved: process.env.TEST_UNRELATED_SECRET != null,
+            safety: Object.fromEntries(['LIVE_TRADING', 'LIVE_TRADING_ENABLED', 'REAL_ORDER_ENABLED',
+              'PRIVATE_API_ENABLED', 'PRIVATE_ACCOUNT_ACCESS', 'PRIVATE_TRADING_API_ALLOWED']
+              .map((key) => [key, process.env[key]])),
+            triggerSource: input.triggerSource, runtimeSha: input.researchCodeSha };
+          return { status: 'BLOCKED_DATA', mutationCount: 0 };
+        },
+      });
+      if (!result) throw new Error('scheduled caller never reached canonical record adapter');
+      console.log('POLICY_TRANSPORT_RESULT=' + JSON.stringify(result));
+    `);
+    const whitelistForInspection = whitelist.replace(
+      '"\\$NODE_BIN" "\\$RUNTIME_DIR/scripts/run-paper-forward-schedule.js"',
+      '"\\$NODE_BIN" "$HARNESS"',
+    );
+    assert.notEqual(whitelistForInspection, whitelist, 'only replace the final executable with the read-only inspector');
+    const nowMs = Date.now();
+    const recordPath = join(root, 'explicit-record with space.json');
+    await writeFile(recordPath, '{}');
+    function launch(path = bashPath(recordPath), preflight = true, denyRecordRead = false) {
+      const command = denyRecordRead
+        ? whitelistForInspection.replace('"\\$NODE_BIN" "$HARNESS"',
+          `"\\$NODE_BIN" ${permissionFlag} --allow-fs-read="$RUNTIME_DIR" --allow-fs-read="$STATE_ROOT/packages" --allow-fs-read="$STATE_ROOT/runtime-state/DISABLED" --allow-fs-read="$STATE_ROOT/runtime-state/state/recurring-paper-loop.json" "$HARNESS"`)
+        : whitelistForInspection;
+      const script = `set -Eeuo pipefail
+        PAPER_FORWARD_RISK_POLICY_RECORD_PATH="$TEST_CONTRACT_RECORD_PATH"
+        NODE_BIN="$TEST_CONTRACT_NODE"
+        HARNESS="$TEST_CONTRACT_HARNESS"
+        RUNTIME_DIR="$TEST_CONTRACT_RELEASE"
+        STATE_ROOT="$TEST_CONTRACT_ROOT"
+        RUNTIME_STATE_ROOT="$STATE_ROOT/runtime-state"
+        TARGET_SHA='${TARGET_SHA}'
+        ACTIVATION_AT_MS='${nowMs}'
+        OUTCOME_ACCUMULATION_ENABLED=true
+        PUBLISHER_BINDING_PATH=''
+        PAPER_STATE_SNAPSHOT_PATH=''
+        PUBLISHER_ACCOUNT_ID_SHA256=''
+        fail() { printf '%s\\n' "$1" >&2; exit "$2"; }
+        ${assignment}
+        ${preflight ? guard : ''}
+        TEMP_WRAPPER="$STATE_ROOT/inspect-wrapper"
+        cat > "$TEMP_WRAPPER" <<WRAPPER
+NODE_BIN='$NODE_BIN'
+${command}
+WRAPPER
+        bash "$TEMP_WRAPPER"`;
+      return spawnSync(bashExecutable, ['-c', script], {
+        env: { ...process.env, TEST_UNRELATED_SECRET: 'must-be-scrubbed',
+          TEST_CONTRACT_RECORD_PATH: path, TEST_CONTRACT_NODE: bashPath(process.execPath),
+          TEST_CONTRACT_RELEASE: bashPath(release),
+          TEST_CONTRACT_HARNESS: bashPath(harness), TEST_CONTRACT_ROOT: bashPath(root),
+          GENERIC_RISK_POLICY_LIVE_RECORD_PATH: bashPath(recordPath) },
+        encoding: 'utf8', timeout: 30_000,
+      });
+    }
+    const inspect = (path, preflight, denyRecordRead) => {
+      const result = launch(path, preflight, denyRecordRead);
+      assert.equal(result.status, 2, `read-only BLOCKED_DATA inspection must retain the runner's failure exit: ${result.stderr}`);
+      const row = String(result.stdout).split('\n').find((line) => line.startsWith('POLICY_TRANSPORT_RESULT='));
+      assert.ok(row, 'read-only inspector must report the actually consumed record');
+      return JSON.parse(row.slice('POLICY_TRANSPORT_RESULT='.length));
+    };
+    await run({ launch, inspect, recordPath, root });
+  });
+}
+
+test('Paper cron transports only the explicit reader path through env-i and retains canonical fail-closed validation', async () => {
+  await withRiskPolicyTransport(async ({ inspect, recordPath }) => {
+    const evidence = inspect();
+    assert.deepEqual(evidence.raw, {});
+    assert.equal(evidence.path.replaceAll('\\', '/'), recordPath.replaceAll('\\', '/'));
+    assert.equal(evidence.policy.status, 'BLOCKED_DATA');
+    assert.equal(evidence.policy.policyEvidence, null);
+    assert.ok(evidence.policy.blockers.includes('RISK_POLICY_CANONICAL_RECORD_SCHEMA_INVALID'));
+    assert.equal(evidence.callbackCount, 1);
+    assert.equal(evidence.triggerSource, 'cron');
+    assert.equal(evidence.runtimeSha, TARGET_SHA);
+    assert.equal(evidence.unrelatedEnvironmentPreserved, false);
+    assert.ok(Object.values(evidence.safety).every((value) => value === 'false'));
+    assert.equal(evidence.policy.executionAuthority, 'NONE');
+    for (const field of ['privateApiAllowed', 'liveTrading', 'realOrderAllowed', 'financialMutationAllowed']) {
+      assert.equal(evidence.policy[field], false);
+    }
+  });
+});
+
+test('missing canonical policy blocks before installer mutation and never becomes zero or a legacy-path fallback', async () => {
+  await withRiskPolicyTransport(async ({ launch, inspect, root }) => {
+    for (const path of ['', 'relative.json', bashPath(root), bashPath(join(root, 'absent.json')), "/tmp/unsafe'path", '/tmp/unsafe\npath', '/tmp/unsafe\rpath']) {
+      const result = launch(path);
+      assert.equal(result.status, 15, String(result.stderr));
+      assert.equal(String(result.stdout).includes('POLICY_TRANSPORT_RESULT='), false);
+    }
+    await assert.rejects(access(join(root, 'inspect-wrapper')), /ENOENT/u);
+    const evidence = inspect('', false);
+    assert.equal(evidence.raw, null);
+    assert.equal(evidence.policy.status, 'BLOCKED_DATA');
+    assert.equal(evidence.policy.policyEvidence, null);
+    assert.ok(evidence.policy.blockers.includes('RISK_POLICY_CANONICAL_RECORD_MISSING'));
+  });
+});
+
+test('malformed, absent and permission-denied files never become valid canonical policy evidence', async () => {
+  await withRiskPolicyTransport(async ({ launch, inspect, recordPath, root }) => {
+    for (const text of ['{}', '[]', 'null', '{invalid-json']) {
+      await writeFile(recordPath, text);
+      const evidence = inspect();
+      assert.equal(evidence.policy.status, 'BLOCKED_DATA');
+      assert.equal(evidence.policy.policyEvidence, null);
+      assert.deepEqual(evidence.raw, text === '{}' ? {} : null);
+    }
+    // Deny reads with Node's real filesystem permission gate on every platform.
+    await writeFile(recordPath, '{}');
+    for (const evidence of [inspect(undefined, true, true), inspect(bashPath(join(root, 'absent.json')), false)]) {
+      assert.equal(evidence.raw, null);
+      assert.equal(evidence.policy.status, 'BLOCKED_DATA');
+      assert.equal(evidence.policy.policyEvidence, null);
+      assert.ok(evidence.policy.blockers.includes('RISK_POLICY_CANONICAL_RECORD_MISSING'));
+    }
+    // POSIX CI also exercises the installer's real -r preflight. Windows uses
+    // the cross-platform permission-denied reader check above.
+    if (process.platform !== 'win32') {
+      await chmod(recordPath, 0);
+      try {
+        const result = launch();
+        assert.equal(result.status, 15, String(result.stderr));
+        assert.equal(String(result.stdout).includes('POLICY_TRANSPORT_RESULT='), false);
+      } finally {
+        await chmod(recordPath, 0o600);
+      }
+    }
+  });
 });
