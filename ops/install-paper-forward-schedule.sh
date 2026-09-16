@@ -9,8 +9,11 @@ STATE_ROOT="${PAPER_FORWARD_STATE_ROOT:-/opt/stock-app-data/paper-forward-v1}"
 RUNTIME_STATE_ROOT="$STATE_ROOT/runtime-state"
 DEPLOY_MARKER="$LIVE_DIR/.deploy/current-sha"
 SOURCE_LAB="$LIVE_DIR/market-prediction-lab"
+SOURCE_STRATEGY_HYPOTHESIS="$LIVE_DIR/packages/strategy-hypothesis"
+SOURCE_EXTERNAL_RESEARCH="$LIVE_DIR/packages/external-research"
 RELEASE_ROOT="$STATE_ROOT/releases"
-RUNTIME_RELEASE="$RELEASE_ROOT/$TARGET_SHA/market-prediction-lab"
+PINNED_RELEASE="$RELEASE_ROOT/$TARGET_SHA"
+RUNTIME_RELEASE="$PINNED_RELEASE/market-prediction-lab"
 CURRENT_LINK="$STATE_ROOT/current"
 BIN_DIR="$STATE_ROOT/bin"
 LOG_DIR="$STATE_ROOT/logs"
@@ -78,6 +81,8 @@ DEPLOYED_SHA="$(tr -d '[:space:]' < "$DEPLOY_MARKER")"
 [[ -r "$SOURCE_LAB/scripts/run-paper-forward-schedule.js" ]] || fail "Paper Forward schedule runner missing" 5
 [[ -r "$SOURCE_LAB/src/paper-forward-schedule-runtime-v1.js" ]] || fail "Paper Forward schedule runtime missing" 6
 [[ -r "$SOURCE_LAB/src/authoritative-natural-paper-accounting-v1.js" ]] || fail "authoritative Natural Paper accounting runtime missing" 6
+[[ -r "$SOURCE_STRATEGY_HYPOTHESIS/package.json" && -r "$SOURCE_STRATEGY_HYPOTHESIS/src/index.js" ]] || fail "strategy-hypothesis pinned dependency missing" 6
+[[ -r "$SOURCE_EXTERNAL_RESEARCH/package.json" && -r "$SOURCE_EXTERNAL_RESEARCH/src/index.js" ]] || fail "external-research pinned dependency missing" 6
 [[ "$STATE_ROOT" == /opt/stock-app-data/paper-forward-v1 ]] || fail "unexpected persistent state root" 7
 [[ "$STATE_ROOT" != "$LIVE_DIR" && "$STATE_ROOT" != "$LIVE_DIR/"* ]] || fail "state root must remain outside deploy tree" 8
 [[ "$PUBLISHER_BINDING_PATH" == "$STATE_ROOT/publisher-binding.json" ]] || fail "publisher binding path escaped persistent state root" 8
@@ -270,21 +275,32 @@ fi
 
 TEMP_RELEASE="$RELEASE_ROOT/.tmp-$TARGET_SHA-$$"
 rm -rf -- "$TEMP_RELEASE"
-mkdir -p "$TEMP_RELEASE/market-prediction-lab"
+mkdir -p \
+  "$TEMP_RELEASE/market-prediction-lab" \
+  "$TEMP_RELEASE/packages/strategy-hypothesis" \
+  "$TEMP_RELEASE/packages/external-research"
 rsync -a --delete \
   --exclude='node_modules/' \
   --exclude='*/node_modules/' \
   "$SOURCE_LAB/" "$TEMP_RELEASE/market-prediction-lab/"
-find "$TEMP_RELEASE/market-prediction-lab" -type f -exec chmod go-rwx {} +
-find "$TEMP_RELEASE/market-prediction-lab" -type d -exec chmod 700 {} +
+rsync -a --delete \
+  --exclude='node_modules/' \
+  --exclude='*/node_modules/' \
+  "$SOURCE_STRATEGY_HYPOTHESIS/" "$TEMP_RELEASE/packages/strategy-hypothesis/"
+rsync -a --delete \
+  --exclude='node_modules/' \
+  --exclude='*/node_modules/' \
+  "$SOURCE_EXTERNAL_RESEARCH/" "$TEMP_RELEASE/packages/external-research/"
+find "$TEMP_RELEASE" -type f -exec chmod go-rwx {} +
+find "$TEMP_RELEASE" -type d -exec chmod 700 {} +
 
-if [[ -e "$RUNTIME_RELEASE" ]]; then
-  EXISTING_DIGEST="$(find "$RUNTIME_RELEASE" -type f -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}')"
-  NEW_DIGEST="$(find "$TEMP_RELEASE/market-prediction-lab" -type f -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}')"
+if [[ -e "$PINNED_RELEASE" ]]; then
+  EXISTING_DIGEST="$(find "$PINNED_RELEASE" -type f -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}')"
+  NEW_DIGEST="$(find "$TEMP_RELEASE" -type f -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}')"
   [[ "$EXISTING_DIGEST" == "$NEW_DIGEST" ]] || fail "existing pinned runtime differs for target SHA" 11
   rm -rf -- "$TEMP_RELEASE"
 else
-  mv "$TEMP_RELEASE" "$RELEASE_ROOT/$TARGET_SHA"
+  mv "$TEMP_RELEASE" "$PINNED_RELEASE"
 fi
 
 ln -sfn "$RUNTIME_RELEASE" "$CURRENT_LINK.tmp"
@@ -365,7 +381,7 @@ rm -f "$STATE_ROOT/DISABLED" "$RUNTIME_STATE_ROOT/DISABLED"
 MATCH_COUNT="$(crontab -l | grep -Fxc "$CRON_LINE" || true)"
 [[ "$MATCH_COUNT" == 1 ]] || fail "exactly one Paper Forward cron entry is required" 12
 
-RUNTIME_DIGEST="$(find "$RUNTIME_RELEASE" -type f -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}')"
+RUNTIME_DIGEST="$(find "$PINNED_RELEASE" -type f -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}')"
 CRON_HASH="$(printf '%s' "$CRON_LINE" | sha256sum | awk '{print $1}')"
 "$NODE_BIN" - "$STATE_ROOT/activation.json" "$TARGET_SHA" "$DEPLOYED_SHA" "$ACTIVATION_AT_MS" "$RUNTIME_DIGEST" "$CRON_HASH" "$BACKUP_PATH" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" "$OUTCOME_ACCUMULATION_ENABLED" "$SNAPSHOT_BRIDGE_APPLIED" "$SNAPSHOT_SOURCE_SHA_BEFORE" "$SNAPSHOT_BRIDGE_ARCHIVE_PATH" <<'NODE'
 const fs = require('node:fs');
