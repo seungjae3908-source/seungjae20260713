@@ -10,6 +10,18 @@ if [[ ! "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
   exit 64
 fi
 
+# Validate explicit transport before any activation mutation (including traps).
+# Missing/empty remains missing; this does not read or publish a policy record.
+node <<'NODE'
+const { isAbsolute, resolve } = require('node:path').posix;
+const value = process.env.PAPER_FORWARD_RISK_POLICY_RECORD_PATH;
+if (value && (value.trim() !== value || /[\u0000-\u001f\u007f]/u.test(value)
+  || !isAbsolute(value) || resolve(value) !== value)) {
+  console.error('PAPER_FORWARD_RISK_POLICY_RECORD_PATH must be a normalized absolute path without control characters');
+  process.exit(64);
+}
+NODE
+
 require_base_tools() {
   command -v git >/dev/null
   command -v node >/dev/null
@@ -203,6 +215,14 @@ PRIVATE_TRADING_API_ALLOWED=false
 ORDER_AUTHORITY=false
 ORDER_SUBMISSION_ENABLED=false
 ENV
+  if [[ -n "${PAPER_FORWARD_RISK_POLICY_RECORD_PATH:-}" ]]; then
+    # systemd EnvironmentFile double quotes require escaping backslashes/quotes.
+    # printf data is never evaluated as shell code or expanded by systemd.
+    local risk_policy_record_path="$PAPER_FORWARD_RISK_POLICY_RECORD_PATH"
+    risk_policy_record_path="${risk_policy_record_path//\\/\\\\}"
+    risk_policy_record_path="${risk_policy_record_path//\"/\\\"}"
+    printf 'PAPER_FORWARD_RISK_POLICY_RECORD_PATH="%s"\n' "$risk_policy_record_path" >> "$env_tmp"
+  fi
   "${SUDO[@]}" install -o root -g investment-research -m 0640 "$env_tmp" "$ENV_FILE"
   rm -f "$env_tmp"
 
