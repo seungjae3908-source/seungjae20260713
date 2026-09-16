@@ -207,6 +207,10 @@ test('workflow binds OWNER command to a failed exact-target run and uses a mutat
   ]);
 
   assert.match(workflow, /AUTHOR_ASSOCIATION !== 'OWNER'/);
+  assert.match(workflow, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/u);
+  assert.match(workflow, /EXPECTED_SHA: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/u);
+  assert.match(workflow, /test "\$actual_sha" = "\$EXPECTED_SHA"/u);
+  assert.match(workflow, /checkout_mode=DETACHED/u);
   assert.match(workflow, /\^\\\/diagnose-paper-forward-no-deploy \(\[0-9a-f\]\{40\}\) \(\[1-9\]\[0-9\]\*\)\$/);
   assert.match(workflow, /run\.conclusion !== 'failure'/);
   assert.match(workflow, /activate\?\.conclusion !== 'failure'/);
