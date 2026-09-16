@@ -8,6 +8,7 @@ on:
       - .github/workflows/paper-forward-schedule-no-deploy-activation.yml
       - ops/collect-paper-forward-no-deploy-diagnostics.mjs
       - market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js
+      - market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v2.test.js
   issue_comment:
     types: [created]
 
@@ -39,7 +40,10 @@ jobs:
           set -Eeuo pipefail
           node --check ops/collect-paper-forward-no-deploy-diagnostics.mjs
           node --check market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js
-          node --test market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js
+          node --check market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v2.test.js
+          node --test \
+            market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js \
+            market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v2.test.js
 
   gate:
     if: >-
@@ -250,12 +254,15 @@ jobs:
           node - "$EVIDENCE_DIR/diagnostic.json" <<'NODE'
           const fs = require('node:fs');
           const evidence = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          const safe = evidence?.schemaVersion === 'paper-forward-no-deploy-readonly-diagnostic-v1'
+          const safe = evidence?.schemaVersion === 'paper-forward-no-deploy-readonly-diagnostic-v2'
             && evidence?.status === 'collected'
             && evidence?.mode === 'read-only'
             && evidence?.targetSha === process.env.TARGET_SHA
             && evidence?.failedActivationRunId === Number(process.env.FAILED_RUN_ID)
             && typeof evidence?.classification === 'string'
+            && Array.isArray(evidence?.cronLog?.startupFatalSignatures)
+            && Array.isArray(evidence?.cronLog?.startupFatalCategories)
+            && evidence?.cronLog?.safeFatalSignaturesOnly === true
             && Object.values(evidence?.safety ?? {}).every((value) => value === false)
             && evidence?.cronLog?.rawLogIncluded === false
             && evidence?.runtimeProcess?.processArgumentsIncluded === false
@@ -287,6 +294,7 @@ jobs:
               issue_number: 23,
               body: [
                 '[PAPER_FORWARD_NO_DEPLOY_READONLY_DIAGNOSTIC]',
+                `DIAGNOSTIC_SCHEMA=${evidence.schemaVersion}`,
                 `TARGET_SHA=${evidence.targetSha}`,
                 `FAILED_ACTIVATION_RUN_ID=${evidence.failedActivationRunId}`,
                 `REQUIRED_CI_RUN_ID=${process.env.REQUIRED_CI_RUN_ID}`,
@@ -294,6 +302,10 @@ jobs:
                 `EXPECTED_CRON_TICKS=${evidence.schedule.expectedCronTicksWithinFailureWindow}`,
                 `CRON_MARKERS=${evidence.cronLog.invocationMarkerCountAfterActivation}`,
                 `INVOCATION_RECORDS=${evidence.invocations.recordCountAfterActivation}`,
+                `STARTUP_FATAL_SIGNATURES=${(evidence.cronLog.startupFatalSignatures ?? []).join(',') || 'NONE'}`,
+                `STARTUP_FATAL_CATEGORIES=${(evidence.cronLog.startupFatalCategories ?? []).join(',') || 'NONE'}`,
+                `FAST_EXIT_OBSERVED=${evidence.cronLog.fastExitObserved}`,
+                `LATEST_MARKER_TO_LOG_MTIME_MS=${evidence.cronLog.latestMarkerToLogMtimeMs}`,
                 `MATCHING_PROCESSES=${evidence.runtimeProcess.matchingProcessCount}`,
                 `CRON_LOCK_HELD=${evidence.cronLock.cronLockHeld}`,
                 `MANAGED_CRON_ENTRIES=${evidence.schedule.managedCronEntryCount}`,
