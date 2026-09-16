@@ -6,12 +6,17 @@ import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const DIAGNOSTIC_SCHEMA_VERSION = 'paper-forward-no-deploy-readonly-diagnostic-v1';
+export const DIAGNOSTIC_SCHEMA_VERSION = 'paper-forward-no-deploy-readonly-diagnostic-v2';
 export const PAPER_FORWARD_ROOT = '/opt/stock-app-data/paper-forward-v1';
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 const CRON_INTERVAL_MS = 15 * 60 * 1000;
+const FAST_EXIT_WINDOW_MS = 30_000;
 const CRON_TAG = '# stock-app-paper-forward-v1';
+const SAFE_DOMAIN_FATAL_PATTERN =
+  /\b(?:PAPER_FORWARD|PAPER_STATE|AUTHORITATIVE)_[A-Z0-9_]{1,96}\b/g;
+const SAFE_NODE_FATAL_PATTERN =
+  /\b(?:ERR_MODULE_NOT_FOUND|ERR_PACKAGE_PATH_NOT_EXPORTED|ERR_UNSUPPORTED_DIR_IMPORT|ERR_INVALID_PACKAGE_CONFIG|ERR_UNKNOWN_FILE_EXTENSION|ERR_INVALID_MODULE_SPECIFIER|ERR_REQUIRE_ESM|MODULE_NOT_FOUND)\b/g;
 
 function parseJson(value) {
   if (typeof value !== 'string' || value.trim() === '') return null;
@@ -43,6 +48,44 @@ function safeStatus(value) {
 
 function sha256(value) {
   return createHash('sha256').update(String(value ?? '')).digest('hex');
+}
+
+function safeStartupFatalSignatures(text) {
+  const source = String(text ?? '');
+  const signatures = new Set([
+    ...(source.match(SAFE_DOMAIN_FATAL_PATTERN) ?? []),
+    ...(source.match(SAFE_NODE_FATAL_PATTERN) ?? []),
+  ]);
+  if (/\[paper-forward-cron\]\s+pinned runner missing\b/u.test(source)) {
+    signatures.add('PAPER_FORWARD_PINNED_RUNNER_MISSING');
+  }
+  if (/\bSyntaxError:/u.test(source)) signatures.add('NODE_SYNTAX_ERROR');
+  if (/\bReferenceError:/u.test(source)) signatures.add('NODE_REFERENCE_ERROR');
+  return [...signatures].sort().slice(0, 24);
+}
+
+function safeStartupFatalCategories(signatures) {
+  const values = Array.isArray(signatures) ? signatures : [];
+  const categories = [];
+  if (values.some((value) => value === 'PAPER_FORWARD_PINNED_RUNNER_MISSING')) {
+    categories.push('PINNED_RUNTIME');
+  }
+  if (values.some((value) => value.startsWith('ERR_')
+      || value === 'MODULE_NOT_FOUND'
+      || value.startsWith('NODE_'))) {
+    categories.push('NODE_MODULE_LOAD');
+  }
+  if (values.some((value) => value.startsWith('PAPER_STATE_'))) {
+    categories.push('PAPER_STATE');
+  }
+  if (values.some((value) => value.startsWith('AUTHORITATIVE_'))) {
+    categories.push('AUTHORITATIVE_RUNTIME');
+  }
+  if (values.some((value) => value.startsWith('PAPER_FORWARD_')
+      && value !== 'PAPER_FORWARD_PINNED_RUNNER_MISSING')) {
+    categories.push('PAPER_FORWARD_RUNTIME');
+  }
+  return categories;
 }
 
 function parseInvocations(text, activationAtMs) {
@@ -84,13 +127,26 @@ function inspectCronLog(text, activationAtMs, failedAtMs, metadata = {}) {
     if (Number.isFinite(atMs) && atMs >= activationAtMs) markers.push({ atMs, index: match.index ?? 0 });
   }
   const relevantText = markers.length > 0 ? source.slice(markers[0].index) : '';
-  const errorCodes = [...new Set(relevantText.match(/\bPAPER_FORWARD_[A-Z0-9_]{1,96}\b/g) ?? [])]
-    .sort()
+  const startupFatalSignatures = safeStartupFatalSignatures(relevantText);
+  const startupFatalCategories = safeStartupFatalCategories(startupFatalSignatures);
+  const errorCodes = startupFatalSignatures
+    .filter((value) => value.startsWith('PAPER_FORWARD_'))
     .slice(0, 20);
+  const modifiedAtMs = finiteOrNull(metadata.modifiedAtMs);
+  const latestMarkerAtMs = markers.at(-1)?.atMs ?? null;
+  const latestMarkerToLogMtimeMs = latestMarkerAtMs != null
+    && modifiedAtMs != null
+    && modifiedAtMs >= latestMarkerAtMs
+    ? modifiedAtMs - latestMarkerAtMs
+    : null;
+  const fastExitObserved = markers.length > 0
+    && latestMarkerToLogMtimeMs != null
+    && latestMarkerToLogMtimeMs <= FAST_EXIT_WINDOW_MS;
+
   return {
     available,
     sizeBytes: available ? nonNegativeIntegerOrNull(metadata.sizeBytes) : null,
-    modifiedAtMs: finiteOrNull(metadata.modifiedAtMs),
+    modifiedAtMs,
     sha256: available ? sha256(source) : null,
     invocationMarkerCountAfterActivation: available ? markers.length : null,
     invocationMarkerCountWithinFailureWindow: available
@@ -98,8 +154,14 @@ function inspectCronLog(text, activationAtMs, failedAtMs, metadata = {}) {
       : null,
     invocationMarkerCountAfterFailure: available ? markers.filter((item) => item.atMs > failedAtMs).length : null,
     firstInvocationMarkerAtMs: markers.at(0)?.atMs ?? null,
-    latestInvocationMarkerAtMs: markers.at(-1)?.atMs ?? null,
+    latestInvocationMarkerAtMs: latestMarkerAtMs,
+    latestMarkerToLogMtimeMs,
+    fastExitWindowMs: FAST_EXIT_WINDOW_MS,
+    fastExitObserved: available ? fastExitObserved : null,
     errorCodes: available ? errorCodes : null,
+    startupFatalSignatures: available ? startupFatalSignatures : null,
+    startupFatalCategories: available ? startupFatalCategories : null,
+    safeFatalSignaturesOnly: true,
     rawLogIncluded: false,
   };
 }
@@ -140,6 +202,23 @@ function expectedCronTicks(activationAtMs, failedAtMs) {
   return Math.max(0, Math.floor(failedAtMs / CRON_INTERVAL_MS) - Math.floor(activationAtMs / CRON_INTERVAL_MS));
 }
 
+function startupFailureClassification(cronLog) {
+  const categories = cronLog.startupFatalCategories ?? [];
+  if (categories.length === 1 && categories[0] === 'PINNED_RUNTIME') {
+    return 'CRON_STARTUP_PINNED_RUNTIME_FAILURE';
+  }
+  if (categories.length === 1 && categories[0] === 'NODE_MODULE_LOAD') {
+    return 'CRON_STARTUP_MODULE_LOAD_FAILURE';
+  }
+  if (categories.length === 1 && categories[0] === 'PAPER_STATE') {
+    return 'CRON_STARTUP_PAPER_STATE_FAILURE';
+  }
+  if (categories.length === 1 && categories[0] === 'AUTHORITATIVE_RUNTIME') {
+    return 'CRON_STARTUP_AUTHORITATIVE_RUNTIME_FAILURE';
+  }
+  return 'CRON_RUNTIME_FAILED_BEFORE_INVOCATION_RECORD';
+}
+
 function classify({ activation, invocationsAvailable, invocationRows, cronLog, processes, lock }) {
   if (activation.available !== true) return 'ACTIVATION_EVIDENCE_UNAVAILABLE';
   if (activation.targetShaMatches !== true) return 'SERVER_ACTIVATION_TARGET_MISMATCH';
@@ -152,8 +231,12 @@ function classify({ activation, invocationsAvailable, invocationRows, cronLog, p
     return 'COMPLETED_INVOCATION_PRESENT_BUT_GATE_REJECTED';
   }
   if (processes.matchingProcessCount > 0 || lock.cronLockHeld) return 'RUNTIME_IN_FLIGHT_OR_LOCKED';
-  if (cronLog.invocationMarkerCountAfterActivation > 0 && cronLog.errorCodes?.length > 0) {
-    return 'CRON_RUNTIME_FAILED_BEFORE_INVOCATION_RECORD';
+  if (cronLog.invocationMarkerCountAfterActivation > 0
+    && (cronLog.startupFatalSignatures?.length ?? 0) > 0) {
+    return startupFailureClassification(cronLog);
+  }
+  if (cronLog.invocationMarkerCountAfterActivation > 0 && cronLog.fastExitObserved === true) {
+    return 'CRON_FAST_EXIT_BEFORE_INVOCATION_RECORD';
   }
   if (cronLog.invocationMarkerCountAfterActivation > 0) return 'CRON_EXITED_OR_STALLED_BEFORE_INVOCATION_RECORD';
   if (cronLog.available !== true || invocationsAvailable !== true) return 'INSUFFICIENT_RUNTIME_EVIDENCE';
