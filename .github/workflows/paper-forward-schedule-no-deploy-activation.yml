@@ -8,7 +8,9 @@ on:
       - ops/install-paper-forward-schedule.sh
       - ops/bridge-paper-forward-no-deploy-snapshot.mjs
       - ops/run-paper-forward-flat-snapshot-republish.mjs
+      - ops/collect-paper-forward-no-deploy-diagnostics.mjs
       - market-prediction-lab/tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js
+      - market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js
       - market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js
       - market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
   workflow_dispatch:
@@ -721,6 +723,18 @@ jobs:
           echo 'No natural cron cycle observed within bounded window.' >&2
           exit 78
 
+      - name: Capture sanitized Paper cron failure diagnostics before disable
+        if: failure()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          failed_at_ms="$(date +%s%3N)"
+          printf -v remote_command 'node --input-type=module - %q %q %q' "$TARGET_SHA" "${{ github.run_id }}" "$failed_at_ms"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" \
+            < ops/collect-paper-forward-no-deploy-diagnostics.mjs \
+            > "$EVIDENCE_DIR/cron-diagnostic-before-disable.json"
+
       - name: Revalidate current main after natural cycle
         uses: actions/github-script@v7
         env:
@@ -737,6 +751,18 @@ jobs:
           set +e
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" 'bash -s' < ops/disable-paper-forward-schedule.sh > "$EVIDENCE_DIR/automatic-disable.json" 2>&1
           exit 0
+
+      - name: Capture sanitized Paper cron failure diagnostics after disable
+        if: failure()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          failed_at_ms="$(date +%s%3N)"
+          printf -v remote_command 'node --input-type=module - %q %q %q' "$TARGET_SHA" "${{ github.run_id }}" "$failed_at_ms"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" \
+            < ops/collect-paper-forward-no-deploy-diagnostics.mjs \
+            > "$EVIDENCE_DIR/cron-diagnostic-after-disable.json"
 
       - name: Upload sanitized activation evidence
         if: always()
