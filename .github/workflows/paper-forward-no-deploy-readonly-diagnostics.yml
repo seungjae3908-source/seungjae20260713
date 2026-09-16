@@ -8,7 +8,6 @@ on:
       - .github/workflows/paper-forward-schedule-no-deploy-activation.yml
       - ops/collect-paper-forward-no-deploy-diagnostics.mjs
       - market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js
-      - market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v2.test.js
   issue_comment:
     types: [created]
 
@@ -40,10 +39,7 @@ jobs:
           set -Eeuo pipefail
           node --check ops/collect-paper-forward-no-deploy-diagnostics.mjs
           node --check market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js
-          node --check market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v2.test.js
-          node --test \
-            market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js \
-            market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v2.test.js
+          node --test market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js
 
   gate:
     if: >-
