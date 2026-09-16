@@ -209,6 +209,17 @@ export function buildTaskPlan({
       env.PAPER_FORWARD_RESEARCH_SHA = pinnedSha;
       env.PAPER_FORWARD_ACTIVATION_AT_MS = String(Number.isFinite(activationAtMs) ? activationAtMs : Date.now());
       env.PAPER_FORWARD_TRIGGER_SOURCE = 'cron';
+      const riskPolicyRecordPath = inheritedEnv?.PAPER_FORWARD_RISK_POLICY_RECORD_PATH;
+      if (riskPolicyRecordPath != null && riskPolicyRecordPath !== '') {
+        if (typeof riskPolicyRecordPath !== 'string'
+          || riskPolicyRecordPath.trim() !== riskPolicyRecordPath
+          || /[\0\r\n]/u.test(riskPolicyRecordPath)
+          || !isAbsolute(riskPolicyRecordPath)
+          || resolve(riskPolicyRecordPath) !== riskPolicyRecordPath) {
+          throw new Error('Research Paper risk policy record path must be a normalized absolute path');
+        }
+        env.PAPER_FORWARD_RISK_POLICY_RECORD_PATH = riskPolicyRecordPath;
+      }
       const runtimeDirectory = String(inheritedEnv?.RUNTIME_DIRECTORY ?? '').trim();
       if (runtimeDirectory) {
         if (!isAbsolute(runtimeDirectory)) {
