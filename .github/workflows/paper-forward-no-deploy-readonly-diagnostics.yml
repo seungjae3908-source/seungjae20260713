@@ -1,0 +1,309 @@
+name: Paper Forward No-Deploy Read-only Diagnostics
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/paper-forward-no-deploy-readonly-diagnostics.yml
+      - .github/workflows/paper-forward-schedule-no-deploy-activation.yml
+      - ops/collect-paper-forward-no-deploy-diagnostics.mjs
+      - market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  statuses: read
+
+concurrency:
+  group: paper-forward-no-deploy-readonly-diagnostics-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate read-only diagnostic contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check ops/collect-paper-forward-no-deploy-diagnostics.mjs
+          node --check market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js
+          node --test market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js
+
+  gate:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      startsWith(github.event.comment.body, '/diagnose-paper-forward-no-deploy ')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      target_sha: ${{ steps.command.outputs.target_sha }}
+      failed_run_id: ${{ steps.command.outputs.failed_run_id }}
+      failed_at_ms: ${{ steps.command.outputs.failed_at_ms }}
+      control_sha: ${{ steps.command.outputs.control_sha }}
+      required_ci_run_id: ${{ steps.command.outputs.required_ci_run_id }}
+    steps:
+      - name: Validate exact owner diagnostic command and failed activation provenance
+        id: command
+        uses: actions/github-script@v7
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+        with:
+          script: |
+            if (process.env.COMMENT_AUTHOR !== 'seungjae3908-source'
+              || process.env.AUTHOR_ASSOCIATION !== 'OWNER') {
+              core.setFailed('Only the repository owner can request Production Paper diagnostics.');
+              return;
+            }
+            const body = String(process.env.COMMENT_BODY ?? '').trim();
+            const match = /^\/diagnose-paper-forward-no-deploy ([0-9a-f]{40}) ([1-9][0-9]*)$/.exec(body);
+            if (!match) {
+              core.setFailed('Exact command required: /diagnose-paper-forward-no-deploy <40-character-target-sha> <failed-activation-run-id>');
+              return;
+            }
+            const target = match[1];
+            const failedRunId = Number(match[2]);
+            if (!Number.isSafeInteger(failedRunId)) {
+              core.setFailed('Failed activation run ID is outside the safe integer range.');
+              return;
+            }
+            const main = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            const controlSha = main.data.commit.sha;
+            if (target !== controlSha) {
+              const comparison = await github.rest.repos.compareCommitsWithBasehead({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                basehead: `${target}...${controlSha}`,
+              });
+              if (comparison.data.status !== 'ahead'
+                || comparison.data.behind_by !== 0
+                || comparison.data.ahead_by < 1) {
+                core.setFailed(`Diagnostic target must be current main or its ancestor: target=${target} main=${controlSha}.`);
+                return;
+              }
+            }
+
+            const failedRun = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: failedRunId,
+            });
+            const run = failedRun.data;
+            if (run.name !== 'Paper Forward No-Deploy Schedule Activation'
+              || run.path !== '.github/workflows/paper-forward-schedule-no-deploy-activation.yml'
+              || run.event !== 'issue_comment'
+              || run.head_sha !== target
+              || run.status !== 'completed'
+              || run.conclusion !== 'failure') {
+              core.setFailed('Selected run is not a failed exact-target Paper Forward no-deploy activation.');
+              return;
+            }
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: failedRunId,
+              filter: 'latest',
+              per_page: 100,
+            });
+            const gate = jobs.find((job) => job.name === 'gate');
+            const activate = jobs.find((job) => job.name === 'activate');
+            if (gate?.conclusion !== 'success' || activate?.conclusion !== 'failure') {
+              core.setFailed('Selected run does not prove successful activation gating followed by activation failure.');
+              return;
+            }
+
+            const required = new Set([
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ]);
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: target,
+              per_page: 100,
+            });
+            const latest = new Map();
+            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+            const evidence = [...required].map((contextName) => latest.get(contextName));
+            if (evidence.length !== 6 || evidence.some((status) => status?.state !== 'success')) {
+              core.setFailed('Failed activation target does not retain Required CI 6/6 SUCCESS evidence.');
+              return;
+            }
+            const runIds = new Set(evidence.map((status) => /\/actions\/runs\/(\d+)/.exec(String(status.target_url ?? ''))?.[1] ?? null));
+            if (runIds.size !== 1 || runIds.has(null)) {
+              core.setFailed('Required CI 6/6 does not share one coherent provenance run.');
+              return;
+            }
+            const requiredCiRunId = Number([...runIds][0]);
+            const requiredCiRun = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: requiredCiRunId,
+            });
+            if (requiredCiRun.data.head_sha !== target
+              || requiredCiRun.data.status !== 'completed'
+              || requiredCiRun.data.conclusion !== 'success') {
+              core.setFailed('Required CI provenance is not an exact successful target run.');
+              return;
+            }
+
+            const failedAtMs = Date.parse(run.updated_at);
+            if (!Number.isFinite(failedAtMs)) {
+              core.setFailed('Failed activation completion timestamp is invalid.');
+              return;
+            }
+            core.setOutput('target_sha', target);
+            core.setOutput('failed_run_id', String(failedRunId));
+            core.setOutput('failed_at_ms', String(failedAtMs));
+            core.setOutput('control_sha', controlSha);
+            core.setOutput('required_ci_run_id', String(requiredCiRunId));
+
+  diagnose:
+    if: github.event_name == 'issue_comment'
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      TARGET_SHA: ${{ needs.gate.outputs.target_sha }}
+      FAILED_RUN_ID: ${{ needs.gate.outputs.failed_run_id }}
+      FAILED_AT_MS: ${{ needs.gate.outputs.failed_at_ms }}
+      CONTROL_SHA: ${{ needs.gate.outputs.control_sha }}
+      REQUIRED_CI_RUN_ID: ${{ needs.gate.outputs.required_ci_run_id }}
+      EVIDENCE_DIR: ${{ github.workspace }}/paper-forward-no-deploy-diagnostic
+    steps:
+      - name: Revalidate diagnostic control SHA after Production environment approval
+        uses: actions/github-script@v7
+        env:
+          CONTROL_SHA: ${{ env.CONTROL_SHA }}
+        with:
+          script: |
+            const main = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: 'main' });
+            if (main.data.commit.sha !== process.env.CONTROL_SHA) {
+              core.setFailed(`Diagnostic control changed while awaiting approval: ${process.env.CONTROL_SHA} != ${main.data.commit.sha}`);
+            }
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CONTROL_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate SSH secrets and configure read-only access
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh "$EVIDENCE_DIR"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Collect sanitized read-only Paper cron evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          printf -v remote_command 'node --input-type=module - %q %q %q' "$TARGET_SHA" "$FAILED_RUN_ID" "$FAILED_AT_MS"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" \
+            < ops/collect-paper-forward-no-deploy-diagnostics.mjs \
+            > "$EVIDENCE_DIR/diagnostic.json"
+
+      - name: Verify sanitized diagnostic contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node - "$EVIDENCE_DIR/diagnostic.json" <<'NODE'
+          const fs = require('node:fs');
+          const evidence = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const safe = evidence?.schemaVersion === 'paper-forward-no-deploy-readonly-diagnostic-v1'
+            && evidence?.status === 'collected'
+            && evidence?.mode === 'read-only'
+            && evidence?.targetSha === process.env.TARGET_SHA
+            && evidence?.failedActivationRunId === Number(process.env.FAILED_RUN_ID)
+            && typeof evidence?.classification === 'string'
+            && Object.values(evidence?.safety ?? {}).every((value) => value === false)
+            && evidence?.cronLog?.rawLogIncluded === false
+            && evidence?.runtimeProcess?.processArgumentsIncluded === false
+            && evidence?.runtimeProcess?.processIdsIncluded === false
+            && evidence?.cronLock?.lockOwnerIncluded === false;
+          if (!safe) process.exit(1);
+          NODE
+
+      - name: Upload immutable sanitized diagnostic evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-forward-no-deploy-diagnostic-${{ env.TARGET_SHA }}-run-${{ env.FAILED_RUN_ID }}
+          path: paper-forward-no-deploy-diagnostic/diagnostic.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report sanitized FIRST-ZERO classification
+        uses: actions/github-script@v7
+        env:
+          EVIDENCE_FILE: ${{ env.EVIDENCE_DIR }}/diagnostic.json
+        with:
+          script: |
+            const fs = require('node:fs');
+            const evidence = JSON.parse(fs.readFileSync(process.env.EVIDENCE_FILE, 'utf8'));
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                '[PAPER_FORWARD_NO_DEPLOY_READONLY_DIAGNOSTIC]',
+                `TARGET_SHA=${evidence.targetSha}`,
+                `FAILED_ACTIVATION_RUN_ID=${evidence.failedActivationRunId}`,
+                `REQUIRED_CI_RUN_ID=${process.env.REQUIRED_CI_RUN_ID}`,
+                `CLASSIFICATION=${evidence.classification}`,
+                `EXPECTED_CRON_TICKS=${evidence.schedule.expectedCronTicksWithinFailureWindow}`,
+                `CRON_MARKERS=${evidence.cronLog.invocationMarkerCountAfterActivation}`,
+                `INVOCATION_RECORDS=${evidence.invocations.recordCountAfterActivation}`,
+                `MATCHING_PROCESSES=${evidence.runtimeProcess.matchingProcessCount}`,
+                `CRON_LOCK_HELD=${evidence.cronLock.cronLockHeld}`,
+                `MANAGED_CRON_ENTRIES=${evidence.schedule.managedCronEntryCount}`,
+                'REMOTE_MUTATION_PERFORMED=false',
+                'PRODUCTION_APP_DEPLOY_PERFORMED=false',
+                'DATABASE_MUTATION_PERFORMED=false',
+                'SECRET_MUTATION_PERFORMED=false',
+                'ENVIRONMENT_MUTATION_PERFORMED=false',
+                'LIVE_TRADING_PERFORMED=false',
+                'REAL_ORDER_PERFORMED=false',
+                `DIAGNOSTIC_RUN=${runUrl}`,
+              ].join('\n'),
+            });
