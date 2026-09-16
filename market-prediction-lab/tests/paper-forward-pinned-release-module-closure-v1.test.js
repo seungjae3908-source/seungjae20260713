@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { cp, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -27,6 +27,26 @@ async function withIsolatedRelease(run) {
   }
 }
 
+function normalizePath(value, release) {
+  const text = String(value ?? "").trim().replace(/^file:\/\//u, "");
+  if (!text) return "UNKNOWN";
+  const normalizedRelease = release.replaceAll("\\", "/");
+  const normalized = text.replaceAll("\\", "/");
+  if (normalized.startsWith(`${normalizedRelease}/`)) {
+    return relative(release, normalized).replaceAll("\\", "/");
+  }
+  return normalized.startsWith("/") ? "ABSOLUTE_PATH_REDACTED" : normalized;
+}
+
+function moduleClosureFailure(stderr, release) {
+  const text = String(stderr ?? "");
+  const match = text.match(/Cannot find (?:package|module) '([^']+)' imported from ([^\n]+)/u);
+  if (!match) return "PINNED_RELEASE_MODULE_CLOSURE:missing=UNKNOWN;importedFrom=UNKNOWN";
+  const missing = normalizePath(match[1], release);
+  const importedFrom = normalizePath(match[2], release);
+  return `PINNED_RELEASE_MODULE_CLOSURE:missing=${missing};importedFrom=${importedFrom}`;
+}
+
 test("pinned Paper release closes the complete startup module graph without workspace node_modules", async () => {
   await withIsolatedRelease(async (release) => {
     const runner = join(release, "scripts", "run-paper-forward-schedule.js");
@@ -48,15 +68,13 @@ test("pinned Paper release closes the complete startup module graph without work
 
     const stderr = String(result.stderr ?? "");
     assert.equal(result.signal, null, `isolated runner terminated by signal: ${result.signal}`);
-    assert.equal(
-      stderr.includes("ERR_MODULE_NOT_FOUND"),
-      false,
-      `isolated pinned release has an unresolved startup module:\n${stderr}`,
-    );
+    if (stderr.includes("ERR_MODULE_NOT_FOUND")) {
+      assert.fail(moduleClosureFailure(stderr, release));
+    }
     assert.equal(
       result.status,
       64,
-      `isolated runner should reach the fail-closed inactive-schedule gate; status=${result.status}\nstderr=${stderr}`,
+      `isolated runner should reach the fail-closed inactive-schedule gate; status=${result.status}`,
     );
   });
 });
