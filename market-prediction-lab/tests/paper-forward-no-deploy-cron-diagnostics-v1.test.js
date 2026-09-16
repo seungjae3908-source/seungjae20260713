@@ -388,3 +388,26 @@ test('production-shaped pinned Paper release closes startup module graph and rea
     );
   });
 });
+
+test('Paper cron preserves the canonical generic risk policy source across the scrubbed environment', async () => {
+  const installerPath = fileURLToPath(new URL(
+    '../../ops/install-paper-forward-schedule.sh',
+    import.meta.url,
+  ));
+  const producerPath = fileURLToPath(new URL(
+    '../../api-server/src/services/authoritative-paper-generic-risk-policy-producer.service.ts',
+    import.meta.url,
+  ));
+  const [installer, producer] = await Promise.all([
+    readFile(installerPath, 'utf8'),
+    readFile(producerPath, 'utf8'),
+  ]);
+  const canonicalPath = '/opt/stock-app/api-server/data/generic-risk-policy-live-v1.json';
+
+  assert.ok(producer.includes(canonicalPath), 'producer canonical risk-policy record path must remain authoritative');
+  assert.ok(installer.includes(`GENERIC_RISK_POLICY_LIVE_RECORD_PATH="\${GENERIC_RISK_POLICY_LIVE_RECORD_PATH:-${canonicalPath}}"`));
+  assert.ok(installer.includes('[[ "$GENERIC_RISK_POLICY_LIVE_RECORD_PATH" == /* ]] || fail "generic risk policy live record path must be absolute" 15'));
+  assert.ok(installer.includes('[[ -f "$GENERIC_RISK_POLICY_LIVE_RECORD_PATH" && -r "$GENERIC_RISK_POLICY_LIVE_RECORD_PATH" ]] || fail "generic risk policy live record is missing or unreadable" 15'));
+  assert.ok(installer.includes('exec /usr/bin/env -i'));
+  assert.ok(installer.includes("GENERIC_RISK_POLICY_LIVE_RECORD_PATH='$GENERIC_RISK_POLICY_LIVE_RECORD_PATH'"));
+});
