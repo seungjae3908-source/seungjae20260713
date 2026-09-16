@@ -33,7 +33,9 @@ TAG="# stock-app-paper-forward-v1"
 CRON_EXPRESSION="*/15 * * * *"
 CANONICAL_CYCLE_MS="14400000"
 OUTCOME_ACCUMULATION_ENABLED="${PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED:-false}"
-GENERIC_RISK_POLICY_LIVE_RECORD_PATH="${GENERIC_RISK_POLICY_LIVE_RECORD_PATH:-/opt/stock-app/api-server/data/generic-risk-policy-live-v1.json}"
+# The scheduled runner owns this explicit read-only adapter. #772 owns record
+# validation, not a filename or investment-policy defaults.
+PAPER_FORWARD_RISK_POLICY_RECORD_PATH="${PAPER_FORWARD_RISK_POLICY_RECORD_PATH:-}"
 PREVIOUS_CRONTAB=""
 CRONTAB_MUTATED=0
 BACKUP_PATH=""
@@ -88,9 +90,11 @@ DEPLOYED_SHA="$(tr -d '[:space:]' < "$DEPLOY_MARKER")"
 [[ "$STATE_ROOT" != "$LIVE_DIR" && "$STATE_ROOT" != "$LIVE_DIR/"* ]] || fail "state root must remain outside deploy tree" 8
 [[ "$PUBLISHER_BINDING_PATH" == "$STATE_ROOT/publisher-binding.json" ]] || fail "publisher binding path escaped persistent state root" 8
 [[ "$PAPER_STATE_SNAPSHOT_PATH" == "$STATE_ROOT/publisher/paper-state-v2.json" ]] || fail "Paper snapshot path escaped persistent state root" 8
-if [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" ]]; then
-  [[ "$GENERIC_RISK_POLICY_LIVE_RECORD_PATH" == /* ]] || fail "generic risk policy live record path must be absolute" 15
-  [[ -f "$GENERIC_RISK_POLICY_LIVE_RECORD_PATH" && -r "$GENERIC_RISK_POLICY_LIVE_RECORD_PATH" ]] || fail "generic risk policy live record is missing or unreadable" 15
+if [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" || -n "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" ]]; then
+  [[ -n "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" ]] || fail "CANONICAL_RISK_POLICY_RECORD_MISSING: explicit Paper risk policy source required" 15
+  [[ "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" == /* ]] || fail "Paper risk policy record path must be absolute" 15
+  [[ "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" != *"'"* && "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" != *$'\n'* && "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" != *$'\r'* ]] || fail "Paper risk policy record path is unsafe for the pinned wrapper" 15
+  [[ -f "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" && -r "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" ]] || fail "CANONICAL_RISK_POLICY_RECORD_MISSING: Paper risk policy source missing or unreadable" 15
 fi
 
 for command_name in node flock crontab mkdir rm mv ln date sha256sum awk grep sed wc pgrep find sort xargs chmod tr rsync; do
@@ -346,7 +350,7 @@ exec /usr/bin/env -i \
   PAPER_FORWARD_PUBLISHER_BINDING_PATH='$PUBLISHER_BINDING_PATH' \
   PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH='$PAPER_STATE_SNAPSHOT_PATH' \
   PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256='$PUBLISHER_ACCOUNT_ID_SHA256' \
-  GENERIC_RISK_POLICY_LIVE_RECORD_PATH='$GENERIC_RISK_POLICY_LIVE_RECORD_PATH' \
+  PAPER_FORWARD_RISK_POLICY_RECORD_PATH='$PAPER_FORWARD_RISK_POLICY_RECORD_PATH' \
   LIVE_TRADING='false' \
   LIVE_TRADING_ENABLED='false' \
   REAL_ORDER_ENABLED='false' \
