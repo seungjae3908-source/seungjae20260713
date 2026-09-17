@@ -168,3 +168,26 @@ test('mounted source-only Scanner route does not prove admission or Paper execut
     assert.notEqual(result.status, 'PROVEN');
   }
 });
+
+test('matching owner contract observations cannot change required-probe closure', () => {
+  for (const id of ['CG011', 'CG012', 'CG013']) {
+    const edge = DEFAULT_EDGES.find(item => item.id === id);
+    const files = new Map(edge.observations.flatMap(probe => probe.paths.map(file =>
+      [file, probe.allOf.join(' ')])));
+    const result = evaluateEdge(files, edge);
+    assert.equal(result.observations[0].state, 'PROVEN');
+    assert.notEqual(result.status, 'PROVEN', id);
+    assert.equal(result.status, evaluateEdge(files, { ...edge, observations: [] }).status);
+  }
+});
+
+test('unavailable owner observation remains UNKNOWN and cannot mask a required gap', () => {
+  const edge = { id: 'X', from: 'A', to: 'B', severity: 'P1', lane: 'test',
+    required: [{ id: 'required', paths: ['readable.ts'], allOf: ['missing'] }],
+    observations: [{ id: 'owner', paths: ['unavailable.ts'], allOf: ['consumer'] }] };
+  const result = evaluateEdge(new Map([['readable.ts', 'no required evidence']]), edge);
+  assert.equal(result.status, 'MISSING');
+  assert.equal(result.observations[0].state, 'UNKNOWN');
+  assert.match(renderMarkdown(buildAudit(new Map([['readable.ts', 'no required evidence']]), [edge])),
+    /non-closure observation.*not issuer, persisted readback or runtime proof/u);
+});
