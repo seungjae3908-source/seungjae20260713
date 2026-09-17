@@ -80,6 +80,9 @@ function creationErrorMessage(code: string) {
     PAPER_ACCOUNT_MODE_REQUIRED: 'Paper 또는 허용된 mock 계정만 사용할 수 있습니다.',
     PAPER_ADAPTER_REQUIRED: '서버가 선택한 Paper/mock 어댑터만 사용할 수 있습니다.',
     LIVE_MODE_FORBIDDEN: '실전 계좌와 live 어댑터는 사용할 수 없습니다.',
+    CANONICAL_PAPER_EXECUTION_CONSUMER_NOT_CONNECTED: '서버 신호 identity는 대조했지만 canonical Paper 실행 consumer가 아직 연결되지 않았습니다. 계획·주문·포지션은 생성하지 않았습니다.',
+    PAPER_SOURCE_NOT_RESOLVABLE: '서버 신호 참조가 없거나 만료됐습니다. 기존 신호를 임의로 다른 후보로 대체하지 않았습니다.',
+    SERVER_LEVERAGE_PROVENANCE_REQUIRED: '서버가 검증한 leverage provenance가 필요합니다.',
   };
   return labels[code] ?? safeTradeErrorMessage(code, '서버 검증형 승인 계획을 만들지 못했습니다.');
 }
@@ -112,7 +115,7 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
     setCreating(false);
     setResult(null);
     setMessage('');
-  }, [selection.market, selection.ticker, selection.timeframe, conditions.join('|')]);
+  }, [selection.market, selection.ticker, selection.timeframe, selection.action, selection.searchRunId, selection.signalId, conditions.join('|')]);
 
   useEffect(() => () => {
     requestSequenceRef.current += 1;
@@ -130,6 +133,10 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
     }
     if (!conditions.length) {
       setMessage('AI 검색기에서 종목을 선택한 뒤 일치 조건이 전달돼야 합니다.');
+      return;
+    }
+    if (!selection.searchRunId || !selection.signalId || selection.action !== 'BUY') {
+      setMessage('서버 검색 run·signal 참조와 explicit BUY가 필요합니다. 누락 방향을 기본값으로 실행하지 않습니다.');
       return;
     }
     if (!amountValid) {
@@ -158,6 +165,9 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
           market: selection.market,
           symbol: selection.ticker,
           timeframe: selection.timeframe,
+          searchRunId: selection.searchRunId,
+          signalId: selection.signalId,
+          side: selection.action,
           selectedConditions: conditions,
           requestedInvestmentKrw: Math.round(amount),
           splitRatios: [40, 30, 30],
@@ -171,7 +181,7 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
       if (!response.ok || !payload.ok || !payload.plan || payload.serverVerified !== true) {
         throw new Error(payload.error ?? 'SCANNER_APPROVAL_FAILED');
       }
-      if (sequence !== requestSequenceRef.current) return;
+      if (sequence !== requestSequenceRef.current || controller.signal.aborted) return;
       setResult(payload);
       setMessage(payload.duplicate
         ? '같은 서버 검증 신호의 기존 승인 계획을 불러왔습니다.'
