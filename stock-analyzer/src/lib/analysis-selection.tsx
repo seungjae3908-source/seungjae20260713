@@ -147,6 +147,7 @@ export function selectionFromSearch(search: string): AnalysisSelection | null {
     ticker: params.get('ticker'),
     displayName: params.get('name'),
     timeframe: params.get('timeframe'),
+    action: params.get('action'),
     searchRunId: params.get('searchRunId'),
     selectedAt: new Date().toISOString(),
   });
@@ -162,6 +163,7 @@ export function selectionQuery(selection: AnalysisSelection): string {
     timeframe: selection.timeframe,
   });
   if (selection.searchRunId) params.set('searchRunId', selection.searchRunId);
+  if (selection.action) params.set('action', selection.action);
   return params.toString();
 }
 
