@@ -32,23 +32,31 @@ export function parseBacktestPaperHandoff(value) {
   });
 }
 
-export function backtestPaperHandoffPath(value) {
+export function backtestPaperHandoffPath(value, runId) {
   const handoff = parseBacktestPaperHandoff(value);
   if (!handoff) throw new Error('INVALID_BACKTEST_PAPER_HANDOFF');
   const encoded = JSON.stringify(handoff);
   if (encoded.length > MAX_HANDOFF_LENGTH) throw new Error('BACKTEST_PAPER_HANDOFF_TOO_LARGE');
-  return `/paper-trading?${new URLSearchParams({ backtestCandidate: encoded })}`;
+  const params = new URLSearchParams({ backtestCandidate: encoded });
+  if (runId !== undefined) {
+    if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(runId)) throw new Error('INVALID_BACKTEST_RUN_REFERENCE');
+    params.set('backtestRunId', runId);
+  }
+  return `/paper-trading?${params}`;
 }
 
 export function readBacktestPaperHandoff(search) {
-  const values = new URLSearchParams(search).getAll('backtestCandidate');
+  const params = new URLSearchParams(search);
+  const values = params.getAll('backtestCandidate');
+  const runs = params.getAll('backtestRunId');
+  const runId = runs.length === 1 && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(runs[0]) ? runs[0] : null;
   if (!values.length) return Object.freeze({ active: false, handoff: null, error: null });
   if (values.length !== 1 || values[0].length > MAX_HANDOFF_LENGTH) {
     return Object.freeze({ active: true, handoff: null, error: 'INVALID_BACKTEST_PAPER_HANDOFF' });
   }
   try {
     const handoff = parseBacktestPaperHandoff(JSON.parse(values[0]));
-    return Object.freeze({ active: true, handoff, error: handoff ? null : 'INVALID_BACKTEST_PAPER_HANDOFF' });
+    return Object.freeze({ active: true, handoff, runId, error: handoff ? null : 'INVALID_BACKTEST_PAPER_HANDOFF' });
   } catch {
     return Object.freeze({ active: true, handoff: null, error: 'INVALID_BACKTEST_PAPER_HANDOFF' });
   }

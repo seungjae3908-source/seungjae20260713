@@ -21,7 +21,7 @@ export interface BacktestPaperHandoff {
 }
 export const BACKTEST_PAPER_HANDOFF_VERSION: 'backtest-paper-reference-v1';
 export function parseBacktestPaperHandoff(value: unknown): BacktestPaperHandoff | null;
-export function backtestPaperHandoffPath(value: BacktestPaperHandoff): string;
+export function backtestPaperHandoffPath(value: BacktestPaperHandoff, runId?: string): string;
 export function readBacktestPaperHandoff(search: string): {
-  active: boolean; handoff: BacktestPaperHandoff | null; error: string | null;
+  active: boolean; handoff: BacktestPaperHandoff | null; error: string | null; runId?: string | null;
 };
