@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { buildFourMarketPaperSample } from '../../../market-prediction-lab/src/four-market-paper-sampler-v1.js';
 import { settleFourMarketPaperSample } from '../../../market-prediction-lab/src/four-market-paper-settlement-v1.js';
+import { buildRecurringPaperSettlementRecord } from '../../../market-prediction-lab/src/recurring-paper-loop-v1.js';
 import { adaptNaturalPaperSettlementFullCost, advanceNaturalPaperPositionLifecycle, NATURAL_SETTLEMENT_COST_COMPONENTS } from '../../../market-prediction-lab/src/natural-paper-position-settlement-lifecycle-v1.js';
 import { validateNaturalPaperTriggerBoundSettlementEvidence } from '../../../market-prediction-lab/src/natural-paper-trigger-bound-settlement-cost-producer-v1.js';
 import { PaperTradingError, positive } from './paper-trading-core.service';
@@ -192,6 +193,29 @@ export function prepareManualPaperCanonicalEvidence(
       && manualPaperEvidenceSha256(record.canonicalPaper.entryCostEvidence) === manualPaperEvidenceSha256(entryCostEvidence)
       && manualPaperEvidenceSha256(record.canonicalPaper.validationReceipt.receipt) === evidence.receiptVerification.receiptSha256,
     'CANONICAL_PAPER_PERSISTED_LINEAGE_MISMATCH');
+    const storedSettlement = record.canonicalPaper.settlement;
+    if (storedSettlement) {
+      const expected = buildRecurringPaperSettlementRecord({
+        settlement: storedSettlement, position,
+        canonicalLifecycleEvidence: storedSettlement.lifecycleEvidence,
+        exitReason: storedSettlement.exitReason,
+        settlementRecordedAtMs: storedSettlement.settlementRecordedAtMs,
+      });
+      requireEvidence(storedSettlement.settlementId === expected.settlementId
+        && manualPaperEvidenceSha256(storedSettlement.settlementIdentity) === manualPaperEvidenceSha256(expected.settlementIdentity)
+        && storedSettlement.positionId === position.positionId && storedSettlement.entryId === sample.paperSampleId
+        && storedSettlement.exitTriggerId === record.canonicalPaper.fullCost?.exitTriggerId
+        && storedSettlement.exitExecutionId === record.canonicalPaper.fullCost?.exitExecutionId
+        && expected.settlementIdentity.costEvidenceDigest === record.canonicalPaper.fullCost?.evidenceDigest
+        && manualPaperEvidenceSha256(storedSettlement.lifecycleEvidence?.costEvidence) === manualPaperEvidenceSha256(record.canonicalPaper.fullCost),
+      'CANONICAL_PAPER_SETTLEMENT_LINEAGE_MISMATCH');
+      for (const key of ['candidateId', 'strategyId', 'parameterHash', 'parameterDigest', 'market', 'symbol', 'timeframe', 'accountMode', 'researchCodeSha']) {
+        requireEvidence(storedSettlement[key] === identity[key as keyof ManualPaperCanonicalIdentity], 'CANONICAL_PAPER_SETTLEMENT_LINEAGE_MISMATCH');
+      }
+      requireEvidence(['BUY', 'LONG', 'SHORT'].includes(storedSettlement.entryDirection)
+        && (storedSettlement.entryDirection === 'SHORT' ? 'SHORT' : 'LONG') === identity.side,
+        'CANONICAL_PAPER_SETTLEMENT_LINEAGE_MISMATCH');
+    }
   }
   if (state.processedEventIds.includes(action.eventId)) return { lineage, sample };
   if (action.type === 'place_order') {
@@ -225,12 +249,16 @@ export function prepareManualPaperCanonicalEvidence(
     'CANONICAL_PAPER_TRIGGER_BOUND_FULL_COST_REQUIRED');
   const exit = advanceNaturalPaperPositionLifecycle(input);
   requireEvidence(exit.status === 'EXIT_ELIGIBLE', 'CANONICAL_PAPER_FROZEN_LIFECYCLE_EXIT_REQUIRED');
-  const settlement = settleFourMarketPaperSample({
+  const rawSettlement = settleFourMarketPaperSample({
     ...exit.settlementInput, sample, exitTriggerId: trigger.exitTriggerId,
     exitExecutionId: settlementBinding.exitExecutionId, evaluatedAtMs: exit.evidence.exitTriggerTimestampMs,
   });
-  requireEvidence(settlement.status === 'SETTLED' && Number.isFinite(settlement.netPnl)
-    && settlement.quantity === manualPosition.remainingQuantity, 'CANONICAL_PAPER_SETTLEMENT_REQUIRED');
+  requireEvidence(rawSettlement.status === 'SETTLED' && Number.isFinite(rawSettlement.netPnl)
+    && rawSettlement.quantity === manualPosition.remainingQuantity, 'CANONICAL_PAPER_SETTLEMENT_REQUIRED');
+  const settlement = buildRecurringPaperSettlementRecord({
+    settlement: rawSettlement, position, canonicalLifecycleEvidence: exit.evidence,
+    exitReason: exit.exitReason, settlementRecordedAtMs: nowMs,
+  });
   return { sample, settlement, lineage: { ...lineage, settlement: structuredClone(settlement),
     fullCost: structuredClone(fullCost), settlementBinding: structuredClone({ validation: settlementBinding,
       trigger, triggerBoundSettlementEvidence: observation.triggerBoundSettlementEvidence, costEvidence: observation.settlementCostEvidence }) } };
