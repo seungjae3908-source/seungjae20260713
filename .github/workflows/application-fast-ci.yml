@@ -1,0 +1,163 @@
+name: Application Fast CI
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+    paths:
+      - .github/**
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - package.json
+      - api-server/**
+      - stock-analyzer/**
+      - packages/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: application-fast-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  fast:
+    name: Changed-scope typecheck, tests, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    env:
+      FAST_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      FAST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.FAST_HEAD_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify immutable PR head
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          actual_branch="$(git symbolic-ref --quiet --short HEAD || true)"
+          [[ "$FAST_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || { echo '[INVALID_HEAD_SHA]' >&2; exit 1; }
+          [[ -z "$actual_branch" ]] || { echo "[UNEXPECTED_BRANCH] $actual_branch" >&2; exit 1; }
+          [[ "${actual_sha,,}" == "${FAST_HEAD_SHA,,}" ]] || { echo "[HEAD_SHA_MISMATCH] expected=$FAST_HEAD_SHA actual=$actual_sha" >&2; exit 1; }
+
+      - name: Classify changed scope
+        id: impact
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cat-file -e "$FAST_BASE_SHA^{commit}"
+          git diff --name-only "$FAST_BASE_SHA" "$FAST_HEAD_SHA" > /tmp/fast-ci-changed.txt
+          cat /tmp/fast-ci-changed.txt
+
+          flag() {
+            local name="$1"
+            local regex="$2"
+            if grep -Eq "$regex" /tmp/fast-ci-changed.txt; then
+              echo "$name=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "$name=false" >> "$GITHUB_OUTPUT"
+            fi
+          }
+
+          flag shared '^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|packages/)'
+          flag frontend '^(stock-analyzer/|packages/|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)'
+          flag backend '^(api-server/|packages/|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)'
+          flag phase2 '^(api-server/.*(futures|bitget|market|scanner)|packages/)'
+          flag phase5 '^(api-server/.*(backtest|research|strategy|candidate)|stock-analyzer/.*backtest)'
+          flag phase6 '^(api-server/.*(paper|position|settlement|scanner)|stock-analyzer/.*(paper|scanner))'
+          flag phase7 '^(api-server/.*(journal|portfolio)|stock-analyzer/.*(journal|portfolio))'
+          flag phase8 '^(api-server/.*(auth|member|account|security|migration|rls)|stock-analyzer/.*(account|admin|auth))'
+          flag phase9 '^(api-server/.*(ai|privacy|prompt)|stock-analyzer/.*(ai-|ai/))'
+          flag phase12 '^(api-server/.*(trade|approval|execution|order|automation)|stock-analyzer/.*(trade|approval|auto-trading))'
+          flag ci '^\.github/'
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install workspace dependencies
+        if: steps.impact.outputs.frontend == 'true' || steps.impact.outputs.backend == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend typecheck
+        if: steps.impact.outputs.frontend == 'true'
+        run: pnpm --dir stock-analyzer run typecheck
+
+      - name: Backend typecheck
+        if: steps.impact.outputs.backend == 'true'
+        run: pnpm --dir api-server run typecheck
+
+      - name: Backend unit tests
+        if: steps.impact.outputs.backend == 'true'
+        run: pnpm --dir api-server run test:unit
+
+      - name: Phase 2 impacted tests
+        if: steps.impact.outputs.phase2 == 'true'
+        run: pnpm --dir api-server run test:phase2
+
+      - name: Phase 5 impacted tests
+        if: steps.impact.outputs.phase5 == 'true'
+        run: pnpm --dir api-server run test:phase5
+
+      - name: Phase 6 impacted tests
+        if: steps.impact.outputs.phase6 == 'true'
+        run: pnpm --dir api-server run test:phase6
+
+      - name: Phase 7 impacted tests
+        if: steps.impact.outputs.phase7 == 'true'
+        run: pnpm --dir api-server run test:phase7
+
+      - name: Phase 8 impacted tests
+        if: steps.impact.outputs.phase8 == 'true'
+        run: pnpm --dir api-server run test:phase8
+
+      - name: Phase 9 impacted tests
+        if: steps.impact.outputs.phase9 == 'true'
+        run: pnpm --dir api-server run test:phase9
+
+      - name: Phase 12 impacted tests
+        if: steps.impact.outputs.phase12 == 'true'
+        run: pnpm --dir api-server run test:phase12
+
+      - name: API smoke tests
+        if: steps.impact.outputs.backend == 'true'
+        run: pnpm --dir api-server run test:smoke
+
+      - name: Frontend build
+        if: steps.impact.outputs.frontend == 'true'
+        run: pnpm --dir stock-analyzer run build
+
+      - name: Backend build
+        if: steps.impact.outputs.backend == 'true'
+        run: pnpm --dir api-server run build:server
+
+      - name: CI contract syntax checks
+        if: steps.impact.outputs.ci == 'true'
+        run: |
+          node --check .github/scripts/connection-graph-auditor.mjs 2>/dev/null || true
+          if compgen -G '.github/tests/pr-exact-head-*.test.mjs' > /dev/null; then
+            node --test .github/tests/pr-exact-head-*.test.mjs
+          fi
+
+      - name: Development-only boundary
+        run: |
+          echo 'Application Fast CI is a development accelerator only.'
+          echo 'It MUST NOT publish or replace any of the six Required CI contexts.'
+          echo 'Final Ready/Merge/Staging gates still require canonical Application CI 6/6.'
