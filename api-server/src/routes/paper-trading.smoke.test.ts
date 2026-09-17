@@ -10,6 +10,8 @@ import { join } from 'node:path';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import { createPaperTradingRouter } from './paper-trading';
 import { createPaperTradingState } from '../services/paper-trading-engine.service';
+import { manualCanonicalFixture } from '../services/manual-paper-canonical-contract.fixture';
+import { manualPaperEvidenceSha256 } from '../services/manual-paper-canonical-contract.service';
 import {
   PAPER_STATE_RUNTIME_BINDING_VERSION,
   publishAuthenticatedPaperTradingState,
@@ -53,6 +55,70 @@ const action = {
   price: 101,
   at: NOW.toISOString(),
 };
+
+test('actual evaluate route rejects client receipt/canonical claims when server owner source is absent', async () => {
+  const state = createPaperTradingState(10_000, NOW);
+  const f = await manualCanonicalFixture(state);
+  const { server, baseUrl } = await startServer();
+  try {
+    const response = await fetch(`${baseUrl}/api/paper-trading/evaluate`, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ state, now: f.now.toISOString(), canonicalEvidence: f.evidence,
+        action: { type: 'place_order', eventId: 'client-claim', request: { canonicalIdentity: f.canonicalIdentity } } }) });
+    const body = await safeJson(response);
+    assert.equal(response.status, 400);
+    assert.equal(body.code, 'SERVER_OWNED_CANONICAL_PAPER_EVIDENCE_REQUIRED');
+    assert.equal(body.orderSubmitted, false);
+    assert.equal(body.exchangeRequestSent, false);
+  } finally { await new Promise<void>(resolve => server.close(resolve)); }
+});
+
+test('actual authenticated route passes owner-resolved evidence to manual action/order/position and settlement journal', async () => {
+  const state = createPaperTradingState(10_000, NOW);
+  const f = await manualCanonicalFixture(state);
+  let reads = 0;
+  let ownerState = state;
+  let ownerNow = f.now;
+  const { server, baseUrl } = await startServer({
+    canonicalClock: () => ownerNow,
+    async canonicalEvidenceSource(input) {
+      reads += 1;
+      assert.equal(input.authenticatedAccountId, PUBLISHER_ACCOUNT_ID);
+      assert.equal(input.nowMs, ownerNow.getTime());
+      assert.equal(input.candidateId, f.canonicalIdentity.candidateId);
+      return { ...(input.action.type === 'close_position' ? f.exitEvidence : f.evidence), authenticatedAccountId: input.authenticatedAccountId,
+        paperStateSha256: manualPaperEvidenceSha256(ownerState) };
+    },
+    async publishState() { return { status: 'BLOCKED_DATA', invoked: false, reason: 'TEST_ONLY_NO_PUBLICATION' }; },
+  });
+  const evaluate = async (currentState, currentAction, now) => {
+    const response = await fetch(`${baseUrl}/api/paper-trading/evaluate`, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ state: currentState, action: currentAction, now: NOW.toISOString() }) });
+    const body = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(body.result.orderSubmitted, false);
+    assert.equal(body.result.exchangeRequestSent, false);
+    return body.result;
+  };
+  try {
+    const opened = await evaluate(state, { type: 'place_order', eventId: 'route-canonical-entry',
+      request: { symbol: f.canonicalIdentity.symbol, side: 'long', leverage: f.canonicalIdentity.leverage,
+        stopLossPrice: f.evidence.candidate.signal.learningSnapshot.stopLoss, orderType: 'market', canonicalIdentity: f.canonicalIdentity },
+      market: { warnings: [] }, contractRules: { warnings: [] }, riskInput: {} }, f.now);
+    assert.deepEqual(opened.position.canonicalPaper.identity, f.canonicalIdentity);
+    ownerState = opened.state;
+    ownerNow = f.exitNow;
+    const settled = await evaluate(opened.state, { type: 'close_position', eventId: 'route-canonical-exit',
+      positionId: opened.position.id, market: { symbol: f.canonicalIdentity.symbol, status: 'live',
+        bidPrice: 105, updatedAt: f.exitNow.toISOString(), warnings: [] } }, f.exitNow);
+    const journal = settled.state.journal[0];
+    assert.deepEqual(journal.canonicalPaper.identity, f.canonicalIdentity);
+    assert.deepEqual(journal.canonicalPaper.validationReceipt.receipt, f.evidence.validationReceipt);
+    assert.equal(journal.netPnl, journal.canonicalPaper.settlement.netPnl);
+    assert.equal(journal.canonicalPaper.fullCost.fullCostReady, true);
+    assert.equal(journal.canonicalPaper.naturalSampleCredit, 0);
+    assert.equal(reads, 2);
+  } finally { await new Promise<void>(resolve => server.close(resolve)); }
+});
 
 test('paper evaluate returns simulation-only safety contract', async () => {
   const { server, baseUrl } = await startServer();

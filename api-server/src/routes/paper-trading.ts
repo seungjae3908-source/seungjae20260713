@@ -11,12 +11,18 @@ import {
   publishAuthenticatedPaperTradingState,
   type PaperStateTransportPublishResult,
 } from '../services/paper-trading-state-publisher.service';
+import { manualPaperCanonicalCandidateId, type ManualPaperCanonicalEvidence } from '../services/manual-paper-canonical-contract.service';
 
 const MAX_REQUEST_BYTES = 128 * 1024;
 
 type PaperTradingDependencies = {
   evaluate: typeof applyPaperTradingAction;
   publishState: typeof publishAuthenticatedPaperTradingState;
+  canonicalClock: () => Date;
+  canonicalEvidenceSource: (input: Readonly<{
+    authenticatedAccountId: string; candidateId: string | null;
+    action: PaperTradingAction; state: PaperTradingState; nowMs: number;
+  }>) => Promise<ManualPaperCanonicalEvidence | undefined>;
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -103,10 +109,22 @@ export function createPaperTradingRouter(
     }
 
     try {
+      const state = req.body.state as PaperTradingState;
+      const action = req.body.action as PaperTradingAction;
+      const candidateId = manualPaperCanonicalCandidateId(state, action);
+      const authenticatedAccountId = req.member?.id ?? '';
+      const ownerNow = dependencies.canonicalClock?.() ?? new Date();
+      const canonicalEvidence = dependencies.canonicalEvidenceSource
+        ? await dependencies.canonicalEvidenceSource({ authenticatedAccountId, candidateId, action, state, nowMs: ownerNow.getTime() })
+        : undefined;
+      if (canonicalEvidence && canonicalEvidence.authenticatedAccountId !== authenticatedAccountId) {
+        throw new PaperTradingError('CANONICAL_PAPER_ACCOUNT_BINDING_MISMATCH', 'Canonical Paper account binding이 일치하지 않습니다.');
+      }
       const result = evaluate(
-        req.body.state as PaperTradingState,
-        req.body.action as PaperTradingAction,
-        now,
+        state,
+        action,
+        canonicalEvidence ? ownerNow : now,
+        canonicalEvidence,
       );
       let paperStateTransport: PaperStateTransportPublishResult;
       try {
@@ -114,7 +132,7 @@ export function createPaperTradingRouter(
           state: result.state,
           authenticatedPublisherAccountId: req.member?.id ?? '',
           sourceSha: String(process.env.DEPLOY_SHA ?? '').trim().toLowerCase(),
-          observedAtMs: now.getTime(),
+          observedAtMs: canonicalEvidence ? ownerNow.getTime() : now.getTime(),
         });
       } catch {
         paperStateTransport = blockedTransport('PAPER_STATE_PUBLISHER_UNAVAILABLE');

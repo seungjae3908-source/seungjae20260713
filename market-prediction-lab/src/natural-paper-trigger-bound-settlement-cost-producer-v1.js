@@ -116,6 +116,7 @@ function positionIdentity(position) {
 function frozenCandidateIdentityBlockers(position) {
   const blockers = [];
   if (!/^paper-candidate-v1:[0-9a-f]{64}$/u.test(position?.candidateId ?? "")
+      && !/^phase3-candidate:sha256:[0-9a-f]{64}$/u.test(position?.candidateId ?? "")
       && !isAdaptiveMultiEvidenceV2FrozenCandidateId(position?.candidateId)) {
     blockers.push("PAPER_POSITION_CANDIDATE_ID_REQUIRED");
   }
