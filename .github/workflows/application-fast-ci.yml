@@ -90,6 +90,14 @@ jobs:
             --markdown-output /tmp/connection-graph.md
           cat /tmp/connection-graph.md >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Run product integrity audit
+        run: |
+          set -euo pipefail
+          node .github/scripts/product-integrity-auditor.mjs \
+            --json-output /tmp/product-integrity.json \
+            --markdown-output /tmp/product-integrity.md
+          cat /tmp/product-integrity.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Set up pnpm 9
         uses: pnpm/action-setup@v4
         with:
@@ -164,10 +172,12 @@ jobs:
         run: |
           set -euo pipefail
           node --check .github/scripts/connection-graph-auditor.mjs
+          node --check .github/scripts/product-integrity-auditor.mjs
           if compgen -G '.github/tests/pr-exact-head-*.test.mjs' > /dev/null; then
             node --test .github/tests/pr-exact-head-*.test.mjs
           fi
           node --test .github/tests/connection-graph-auditor.test.mjs
+          node --test .github/tests/product-integrity-auditor.test.mjs
 
       - name: Development-only boundary
         run: |
