@@ -6,6 +6,7 @@ on:
       - opened
       - synchronize
       - reopened
+      - converted_to_draft
     paths:
       - .github/**
       - pnpm-lock.yaml
@@ -24,6 +25,7 @@ concurrency:
 
 jobs:
   fast:
+    if: github.event.pull_request.draft == true
     name: Changed-scope typecheck, tests, and build
     runs-on: ubuntu-latest
     timeout-minutes: 18
@@ -53,6 +55,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git fetch --no-tags origin "$FAST_BASE_SHA"
           git cat-file -e "$FAST_BASE_SHA^{commit}"
           git diff --name-only "$FAST_BASE_SHA" "$FAST_HEAD_SHA" > /tmp/fast-ci-changed.txt
           cat /tmp/fast-ci-changed.txt
@@ -151,9 +154,14 @@ jobs:
       - name: CI contract syntax checks
         if: steps.impact.outputs.ci == 'true'
         run: |
-          node --check .github/scripts/connection-graph-auditor.mjs 2>/dev/null || true
+          if [ -f .github/scripts/connection-graph-auditor.mjs ]; then
+            node --check .github/scripts/connection-graph-auditor.mjs
+          fi
           if compgen -G '.github/tests/pr-exact-head-*.test.mjs' > /dev/null; then
             node --test .github/tests/pr-exact-head-*.test.mjs
+          fi
+          if [ -f .github/tests/connection-graph-auditor.test.mjs ]; then
+            node --test .github/tests/connection-graph-auditor.test.mjs
           fi
 
       - name: Development-only boundary
