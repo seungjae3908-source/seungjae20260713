@@ -5,6 +5,8 @@ on:
     paths:
       - scripts/agent_hub_processor_window_recovery_v1.py
       - scripts/test_agent_hub_processor_window_recovery_v1.py
+      - scripts/agent_hub_stale_report_reconciliation_v1.py
+      - scripts/test_agent_hub_stale_report_reconciliation_v1.py
       - .github/workflows/agent-hub-processor-window-recovery.yml
   issue_comment:
     types: [created]
@@ -55,8 +57,14 @@ jobs:
           python -m py_compile
           scripts/agent_hub_processor_window_recovery_v1.py
           scripts/test_agent_hub_processor_window_recovery_v1.py
+          scripts/agent_hub_stale_report_reconciliation_v1.py
+          scripts/test_agent_hub_stale_report_reconciliation_v1.py
       - name: Run fail-closed recovery tests
-        run: python -m unittest scripts.test_agent_hub_processor_window_recovery_v1 -v
+        run: >-
+          python -m unittest
+          scripts.test_agent_hub_processor_window_recovery_v1
+          scripts.test_agent_hub_stale_report_reconciliation_v1
+          -v
 
   dispatch-owner-comment:
     if: >-
@@ -108,6 +116,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Reconcile provably stale overflow reports
+        if: env.RECOVERY_APPLY == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/agent_hub_stale_report_reconciliation_v1.py \
+            --source-issue "$RECOVERY_SOURCE_ISSUE" \
+            --confirmation "$RECOVERY_CONFIRMATION" \
+            --apply
       - name: Recover processor-window overflow
         shell: bash
         run: |
