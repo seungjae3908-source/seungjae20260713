@@ -394,7 +394,7 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
               <h3 className="text-sm font-black">같은 후보 Paper 전달</h3>
               <p className="mt-2 text-xs text-muted-foreground">서버 결과의 식별자와 정책 참조를 전달합니다. 현재는 참조 확인만 가능하며 자동 전략 실행·Natural Paper 증거가 아닙니다.</p>
               {result.paperHandoffs?.length ? <div className="mt-3 flex flex-wrap gap-2">
-                {result.paperHandoffs.map((handoff) => <Link key={handoff.side} href={backtestPaperHandoffPath(handoff)} className="inline-flex min-h-11 max-w-full items-center break-words rounded-xl border border-border px-3 text-xs font-bold">
+                {result.paperHandoffs.map((handoff) => <Link key={handoff.side} href={backtestPaperHandoffPath(handoff, result.paperHandoffRunId)} className="inline-flex min-h-11 max-w-full items-center break-words rounded-xl border border-border px-3 text-xs font-bold">
                   {handoff.symbol} · {handoff.side} · {handoff.candidateId ? '후보 참조 확인' : 'MISSING identity 확인'}
                 </Link>)}
               </div> : <p className="mt-2 text-xs font-bold">UNAVAILABLE — 서버 결과에 candidateId·strategyId·parameterHash 전달 계약이 없습니다.</p>}
