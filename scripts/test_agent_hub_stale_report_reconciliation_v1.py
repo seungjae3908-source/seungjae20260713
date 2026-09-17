@@ -15,19 +15,55 @@ from scripts.agent_hub_stale_report_reconciliation_v1 import (
 REPOSITORY = "owner/repo"
 OLD_SHA = "a" * 40
 CURRENT_SHA = "b" * 40
+LEGACY_CI_RUN = 34308483553
 
 
 class FakeGitHub:
     repository = REPOSITORY
 
-    def __init__(self, pulls: dict[int, str] | None = None) -> None:
+    def __init__(
+        self,
+        pulls: dict[int, str] | None = None,
+        *,
+        historical_ancestor: bool = True,
+        run_head_sha: str = OLD_SHA,
+        run_conclusion: str = "success",
+    ) -> None:
         self.pulls = pulls or {}
+        self.historical_ancestor = historical_ancestor
+        self.run_head_sha = run_head_sha
+        self.run_conclusion = run_conclusion
         self.requests: list[str] = []
 
     def request(self, method: str, path: str, payload=None) -> Any:
         if method != "GET":
             raise AssertionError("classification must be read-only")
         self.requests.append(path)
+        if "/compare/" in path:
+            source, current = path.rsplit("/compare/", 1)[-1].split("...", 1)
+            if self.historical_ancestor:
+                return {
+                    "status": "ahead",
+                    "behind_by": 0,
+                    "base_commit": {"sha": source},
+                    "merge_base_commit": {"sha": source},
+                    "head_commit": {"sha": current},
+                }
+            return {
+                "status": "diverged",
+                "behind_by": 1,
+                "base_commit": {"sha": source},
+                "merge_base_commit": {"sha": "c" * 40},
+                "head_commit": {"sha": current},
+            }
+        if "/actions/runs/" in path:
+            run_id = int(path.rsplit("/", 1)[-1])
+            return {
+                "id": run_id,
+                "head_sha": self.run_head_sha,
+                "status": "completed",
+                "conclusion": self.run_conclusion,
+            }
         number = int(path.rsplit("/", 1)[-1])
         if number not in self.pulls:
             raise AssertionError(f"unexpected PR lookup {number}")
@@ -47,7 +83,7 @@ def canonical_report(*, comment_id: int = 10, pr_number: str = "123") -> dict[st
         "status: partial",
         f"head_sha: {OLD_SHA}",
         f"pr_number: {pr_number}",
-        '["changed_files"]' if False else 'changed_files: ["tests/demo.test.ts"]',
+        'changed_files: ["tests/demo.test.ts"]',
         "checks: focused checks passed",
         "ci_run_id: none",
         "summary: bounded work",
@@ -136,6 +172,45 @@ def manual_snapshot(*, head_sha: str = OLD_SHA, comment_id: int = 20) -> dict[st
         "body": body,
         "user": {"login": "github-actions[bot]"},
         "author_association": "CONTRIBUTOR",
+    }
+
+
+def legacy_evidence_checkpoint(
+    *,
+    comment_id: int = 50,
+    exact_main: str = OLD_SHA,
+    owner: bool = True,
+    required_ci_run: int = LEGACY_CI_RUN,
+    downstream_credit: str = "0",
+) -> dict[str, Any]:
+    body = "\n".join([
+        "[WORKER_REPORT]",
+        "schema_version: 2",
+        "task_id: PROFITABILITY_CLOSED_LOOP_V3_INDEPENDENCE_N53_20260909_1406_KST",
+        "status: VERIFIED_EVIDENCE_INCREASE",
+        "canonical_hub: 838",
+        "release_control: 23",
+        f"exact_main: {exact_main}",
+        f"required_ci_run: {required_ci_run}",
+        "required_ci: 6/6 SUCCESS",
+        "source_contract_family: SUCCESSOR_SCHEDULE_RELIABILITY_V3",
+        "source_capture_run_id: 34311951975",
+        "ingest_run_id: 34311990346",
+        "independence_run_id: 34312134581",
+        "effective_independent_n: 53",
+        "full_cost_ready: false",
+        "net_alpha_ready: false",
+        "profitability_proven: false",
+        "execution_authority: NONE",
+        f"downstream_economic_credit_delta: {downstream_credit}",
+        "first_zero: FIRST_GENUINE_VALIDATION",
+        "forbidden_actions_performed: 0",
+    ])
+    return {
+        "id": comment_id,
+        "body": body,
+        "user": {"login": "owner" if owner else "contributor"},
+        "author_association": "OWNER" if owner else "CONTRIBUTOR",
     }
 
 
@@ -234,6 +309,60 @@ class StaleReportReconciliationTests(unittest.TestCase):
                 current_sha=CURRENT_SHA,
                 github=FakeGitHub(),
             )
+
+    def test_verified_owner_evidence_checkpoint_is_reconcilable_without_economic_closure(self) -> None:
+        github = FakeGitHub()
+        result = classify_pending_report(
+            legacy_evidence_checkpoint(),
+            repository=REPOSITORY,
+            current_sha=CURRENT_SHA,
+            github=github,
+        )
+        self.assertEqual(result.reason, "historical_owner_evidence_checkpoint")
+        self.assertIn(f"source_main:{OLD_SHA}", result.evidence)
+        self.assertIn(f"required_ci_run:{LEGACY_CI_RUN}:success", result.evidence)
+        self.assertTrue(any("/compare/" in request for request in github.requests))
+        self.assertTrue(any("/actions/runs/" in request for request in github.requests))
+
+    def test_evidence_checkpoint_requires_historical_main_ancestor(self) -> None:
+        with self.assertRaisesRegex(StaleReportReconciliationError, "noncanonical but not provably stale"):
+            classify_pending_report(
+                legacy_evidence_checkpoint(),
+                repository=REPOSITORY,
+                current_sha=CURRENT_SHA,
+                github=FakeGitHub(historical_ancestor=False),
+            )
+
+    def test_evidence_checkpoint_requires_ci_run_bound_to_source_sha(self) -> None:
+        with self.assertRaisesRegex(StaleReportReconciliationError, "noncanonical but not provably stale"):
+            classify_pending_report(
+                legacy_evidence_checkpoint(),
+                repository=REPOSITORY,
+                current_sha=CURRENT_SHA,
+                github=FakeGitHub(run_head_sha="d" * 40),
+            )
+
+    def test_evidence_checkpoint_with_economic_credit_stays_blocking(self) -> None:
+        github = FakeGitHub()
+        with self.assertRaisesRegex(StaleReportReconciliationError, "noncanonical but not provably stale"):
+            classify_pending_report(
+                legacy_evidence_checkpoint(downstream_credit="1"),
+                repository=REPOSITORY,
+                current_sha=CURRENT_SHA,
+                github=github,
+            )
+        self.assertEqual(github.requests, [])
+
+    def test_non_owner_evidence_checkpoint_stays_blocking_without_remote_proof(self) -> None:
+        github = FakeGitHub()
+        with self.assertRaisesRegex(StaleReportReconciliationError, "noncanonical but not provably stale"):
+            classify_pending_report(
+                legacy_evidence_checkpoint(owner=False),
+                repository=REPOSITORY,
+                current_sha=CURRENT_SHA,
+                github=github,
+            )
+        self.assertEqual(github.requests, [])
 
     def test_noncanonical_owner_lineage_requires_all_prs_closed(self) -> None:
         github = FakeGitHub({201: "closed", 202: "closed", 203: "closed"})
