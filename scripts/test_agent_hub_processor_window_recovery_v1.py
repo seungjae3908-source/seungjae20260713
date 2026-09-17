@@ -78,6 +78,31 @@ class ProcessorWindowRecoveryTests(unittest.TestCase):
         with self.assertRaises(ProcessorWindowRecoveryError):
             assert_manual_invocation(source_issue=660, confirmation="RECOVER_PROCESSOR_OVERFLOW", environ={})
 
+    def test_owner_issue_comment_is_allowed(self) -> None:
+        assert_manual_invocation(
+            source_issue=838,
+            confirmation="RECOVER_ISSUE_838_PROCESSOR_OVERFLOW",
+            environ={
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_EVENT_NAME": "issue_comment",
+                "GITHUB_ACTOR": "owner",
+                "GITHUB_REPOSITORY_OWNER": "owner",
+            },
+        )
+
+    def test_non_owner_issue_comment_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ProcessorWindowRecoveryError, "requires repository owner"):
+            assert_manual_invocation(
+                source_issue=838,
+                confirmation="RECOVER_ISSUE_838_PROCESSOR_OVERFLOW",
+                environ={
+                    "GITHUB_ACTIONS": "true",
+                    "GITHUB_EVENT_NAME": "issue_comment",
+                    "GITHUB_ACTOR": "contributor",
+                    "GITHUB_REPOSITORY_OWNER": "owner",
+                },
+            )
+
     def test_actions_non_dispatch_is_rejected(self) -> None:
         with self.assertRaises(ProcessorWindowRecoveryError):
             assert_manual_invocation(
