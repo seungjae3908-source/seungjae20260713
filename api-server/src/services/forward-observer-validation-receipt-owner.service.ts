@@ -4,7 +4,6 @@ import path from 'node:path';
 import {
   FORWARD_OBSERVATION_MINIMUM_SAMPLE_SIZE,
   buildForwardObservationProfitCalibration,
-  type ForwardObservationIdentity,
 } from './forward-recommendation-observer.service';
 import {
   validateForwardObserverRuntimeState,
@@ -31,11 +30,32 @@ const SOURCE = 'FORWARD_RECOMMENDATION_OBSERVER' as const;
 const PROVENANCE = 'PROSPECTIVE_PUBLIC_FORWARD' as const;
 const SHA256 = /^[0-9a-f]{64}$/u;
 const SHA40 = /^[0-9a-f]{40}$/u;
+const SUPPORTED_MARKETS = Object.freeze([
+  'KR_STOCK',
+  'US_STOCK',
+  'CRYPTO_SPOT',
+  'CRYPTO_FUTURES',
+] as const);
+
+type SupportedMarket = typeof SUPPORTED_MARKETS[number];
+
+type ExpectedForwardIdentity = Readonly<{
+  strategyId: string;
+  strategyVersion: string;
+  parameterHash: string;
+  researchCodeSha: string;
+  market: SupportedMarket;
+  symbol: string;
+  timeframe: string;
+  direction: StrategyDirection;
+}>;
 
 export type ForwardObserverValidationEvidence = Readonly<{
   source: typeof SOURCE;
   provenance: typeof PROVENANCE;
   observedAtMs: number;
+  prospectiveBoundaryMs: number;
+  oosBoundaryProven: true;
   sampleSize: number;
   minimumSampleSize: number;
   datasetDigest: string;
@@ -63,6 +83,15 @@ function requireCondition(condition: unknown, code: string, message: string): as
   if (!condition) throw new PaperTradingError(code, message, 409);
 }
 
+function supportedMarket(value: string): SupportedMarket {
+  requireCondition(
+    (SUPPORTED_MARKETS as readonly string[]).includes(value),
+    'FORWARD_VALIDATION_MARKET_UNSUPPORTED',
+    'Forward validation이 지원하는 canonical market identity가 필요합니다.',
+  );
+  return value as SupportedMarket;
+}
+
 function forwardDirection(identity: ManualPaperCanonicalIdentity): StrategyDirection {
   if (identity.market === 'CRYPTO_FUTURES') return identity.side;
   requireCondition(
@@ -73,14 +102,15 @@ function forwardDirection(identity: ManualPaperCanonicalIdentity): StrategyDirec
   return 'BUY';
 }
 
-function expectedForwardIdentity(identity: ManualPaperCanonicalIdentity): ForwardObservationIdentity {
+function expectedForwardIdentity(identity: ManualPaperCanonicalIdentity): ExpectedForwardIdentity {
   const direction = forwardDirection(identity);
+  const market = supportedMarket(identity.market);
   const service = new StrategyPromotionService({ sourceSha: identity.researchCodeSha });
-  const records = service.list({ market: identity.market as never }).items;
+  const records = service.list({ market }).items;
   const matches = records.filter((record) => record.identity.strategyId === identity.strategyId
     && record.identity.parameterHash === identity.parameterHash
     && record.identity.researchCodeSha === identity.researchCodeSha
-    && record.identity.market === identity.market
+    && record.identity.market === market
     && record.identity.timeframe === identity.timeframe
     && record.identity.direction === direction);
   requireCondition(
@@ -99,14 +129,9 @@ function expectedForwardIdentity(identity: ManualPaperCanonicalIdentity): Forwar
     strategyVersion: record.identity.strategyVersion,
     parameterHash: record.identity.parameterHash,
     researchCodeSha: record.identity.researchCodeSha,
-    market: record.identity.market,
+    market,
     symbol: identity.symbol,
     timeframe: record.identity.timeframe,
-    horizon: (() => {
-      const token = identity.timeframe === '60m' ? 1 : null;
-      requireCondition(token != null, 'FORWARD_VALIDATION_TIMEFRAME_UNSUPPORTED', 'Forward observer와 동일한 60m identity가 필요합니다.');
-      return token;
-    })(),
     direction,
   });
 }
@@ -193,31 +218,50 @@ export function createForwardObserverArtifactValidationEvidenceReader(input: Rea
       );
     }
 
+    const prospectiveBoundaryMs = Date.parse(state.createdAt);
+    requireCondition(
+      Number.isSafeInteger(prospectiveBoundaryMs) && prospectiveBoundaryMs >= 0,
+      'FORWARD_VALIDATION_PROSPECTIVE_BOUNDARY_REQUIRED',
+      'Forward observer immutable state 생성 경계를 OOS boundary로 검증할 수 없습니다.',
+    );
     requireCondition(
       summary.schemaVersion === 1
         && summary.researchCodeSha === manualIdentity.researchCodeSha
+        && summary.counts?.total === state.observations.length
+        && summary.counts?.settled === state.observations.filter((row) => row.status === 'SETTLED').length
         && summary.safety?.executionAuthority === 'NONE'
         && summary.safety?.profitabilityClaimAllowed === false,
       'FORWARD_VALIDATION_SUMMARY_INVALID',
-      'Forward observer summary identity/safety가 일치하지 않습니다.',
+      'Forward observer summary identity/safety/counts가 state와 일치하지 않습니다.',
     );
 
-    const rows = state.observations.filter((row) => row.status === 'SETTLED'
-      && row.identity.strategyId === expected.strategyId
-      && row.identity.strategyVersion === expected.strategyVersion
-      && row.identity.parameterHash === expected.parameterHash
-      && row.identity.researchCodeSha === expected.researchCodeSha
-      && row.identity.market === expected.market
-      && row.identity.symbol === expected.symbol
-      && row.identity.timeframe === expected.timeframe
-      && row.identity.direction === expected.direction);
+    const rows = state.observations.filter((row) => {
+      if (row.status !== 'SETTLED'
+        || row.identity.strategyId !== expected.strategyId
+        || row.identity.strategyVersion !== expected.strategyVersion
+        || row.identity.parameterHash !== expected.parameterHash
+        || row.identity.researchCodeSha !== expected.researchCodeSha
+        || row.identity.market !== expected.market
+        || row.identity.symbol !== expected.symbol
+        || row.identity.timeframe !== expected.timeframe
+        || row.identity.direction !== expected.direction) return false;
+      const signalAtMs = Date.parse(row.snapshot.timestamp);
+      const dataAtMs = Date.parse(row.dataTimestamp);
+      const settledAtMs = Date.parse(row.settledAt ?? '');
+      return Number.isFinite(signalAtMs)
+        && Number.isFinite(dataAtMs)
+        && Number.isFinite(settledAtMs)
+        && signalAtMs > prospectiveBoundaryMs
+        && dataAtMs <= signalAtMs
+        && settledAtMs >= signalAtMs;
+    });
     const calibration = buildForwardObservationProfitCalibration(rows);
     requireCondition(
       calibration.status === 'READY'
         && calibration.calibration.status === 'READY'
         && calibration.calibration.sampleSize >= FORWARD_OBSERVATION_MINIMUM_SAMPLE_SIZE,
       'FORWARD_VALIDATION_GENUINE_SAMPLE_INSUFFICIENT',
-      '동일 candidate의 genuine prospective Forward validation 표본이 아직 충분하지 않습니다.',
+      'immutable observer boundary 이후 동일 candidate의 genuine prospective OOS 표본이 아직 충분하지 않습니다.',
     );
 
     const settledTimes = rows.map((row) => Date.parse(row.settledAt ?? '')).filter(Number.isFinite);
@@ -229,6 +273,8 @@ export function createForwardObserverArtifactValidationEvidenceReader(input: Rea
     const observedAtMs = Math.max(...settledTimes);
     const datasetDigest = manualPaperEvidenceSha256(rows);
     const resultArtifactDigest = manualPaperEvidenceSha256({
+      immutableResearchSha: manualIdentity.researchCodeSha,
+      prospectiveBoundaryMs,
       manifest: {
         researchCodeSha: manifest.researchCodeSha,
         stateSha256: manifest.stateSha256,
@@ -245,6 +291,8 @@ export function createForwardObserverArtifactValidationEvidenceReader(input: Rea
       source: SOURCE,
       provenance: PROVENANCE,
       observedAtMs,
+      prospectiveBoundaryMs,
+      oosBoundaryProven: true as const,
       sampleSize: calibration.calibration.sampleSize,
       minimumSampleSize: FORWARD_OBSERVATION_MINIMUM_SAMPLE_SIZE,
       datasetDigest,
@@ -273,19 +321,23 @@ export function createForwardObserverValidationReceiptOwner(input: Readonly<{
       'FORWARD_VALIDATION_CLOCK_INVALID', 'Forward validation readback 시각이 유효하지 않습니다.');
     const evidence = await input.readValidationEvidence(identity);
     requireCondition(evidence.source === SOURCE && evidence.provenance === PROVENANCE
+      && evidence.oosBoundaryProven === true
+      && Number.isSafeInteger(evidence.prospectiveBoundaryMs)
+      && evidence.prospectiveBoundaryMs >= 0
+      && evidence.observedAtMs > evidence.prospectiveBoundaryMs
       && evidence.sampleSize >= evidence.minimumSampleSize
       && evidence.minimumSampleSize === FORWARD_OBSERVATION_MINIMUM_SAMPLE_SIZE
       && SHA256.test(evidence.datasetDigest)
       && SHA256.test(evidence.resultArtifactDigest)
       && Number.isSafeInteger(evidence.observedAtMs)
-      && evidence.observedAtMs > 0
       && evidence.observedAtMs <= nowMs,
-    'FORWARD_VALIDATION_GENUINE_EVIDENCE_INVALID', 'Forward validation genuine evidence가 유효하지 않습니다.');
+    'FORWARD_VALIDATION_GENUINE_EVIDENCE_INVALID', 'Forward validation genuine OOS evidence가 유효하지 않습니다.');
     requireCondition(nowMs - evidence.observedAtMs <= input.maximumAgeMs,
       'FORWARD_VALIDATION_EVIDENCE_STALE', 'Forward validation evidence가 허용된 freshness를 초과했습니다.');
 
     const receiptId = `forward-validation-v1:${manualPaperEvidenceSha256({
       identity,
+      prospectiveBoundaryMs: evidence.prospectiveBoundaryMs,
       datasetDigest: evidence.datasetDigest,
       resultArtifactDigest: evidence.resultArtifactDigest,
     })}`;
@@ -305,6 +357,8 @@ export function createForwardObserverValidationReceiptOwner(input: Readonly<{
       testOnly: false,
       datasetDigest: evidence.datasetDigest,
       resultArtifactDigest: evidence.resultArtifactDigest,
+      prospectiveBoundaryMs: evidence.prospectiveBoundaryMs,
+      oosBoundaryProven: true,
       sampleSize: evidence.sampleSize,
       minimumSampleSize: evidence.minimumSampleSize,
     });
