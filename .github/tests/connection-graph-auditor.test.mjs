@@ -132,3 +132,14 @@ test('generic Natural Paper workflow tokens cannot prove manual Full Cost or OOS
   ]);
   for (const id of ['CG011', 'CG013']) assert.equal(evaluateEdge(files, DEFAULT_EDGES.find(edge => edge.id === id)).status, 'PARTIAL', id);
 });
+
+test('every Scanner market requires canonical server identity and Paper consumer beyond a UI button', () => {
+  for (const id of ['CG003', 'CG004', 'CG005', 'CG006']) {
+    const edge = DEFAULT_EDGES.find(item => item.id === id);
+    const files = new Map(edge.required.flatMap(probe => (probe.paths ?? []).map(file => [file, [...(probe.allOf ?? []), ...(probe.anyOf ?? [])].join(' ')])));
+    files.set('api-server/src/routes/trade-automation.ts', "router.post('/scanner/plans' assertPaperApprovalEnvelope accountMode paper");
+    const result = evaluateEdge(files, edge);
+    assert.notEqual(result.status, 'PROVEN', id);
+    assert.equal(result.required.find(probe => probe.id === 'scanner-canonical-paper-server-consumer').state, 'MISSING', id);
+  }
+});
