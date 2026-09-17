@@ -1,4 +1,5 @@
 import type { RiskDataStatus, RiskEngineInput, RiskEngineResult } from './trading-risk-engine.service';
+import type { ManualPaperCanonicalIdentity, ManualPaperCanonicalLineage } from './manual-paper-canonical-contract.service';
 
 export type PaperAccount = {
   id: string;
@@ -19,6 +20,7 @@ export type PaperPositionStatus = 'open' | 'partially_closed' | 'closed';
 export type PaperSide = 'long' | 'short';
 
 export type PaperOrder = {
+  canonicalPaper?: ManualPaperCanonicalLineage;
   id: string;
   symbol: string;
   side: PaperSide;
@@ -57,6 +59,7 @@ export type PaperOrder = {
 };
 
 export type PaperPosition = {
+  canonicalPaper?: ManualPaperCanonicalLineage;
   id: string;
   symbol: string;
   side: PaperSide;
@@ -110,6 +113,8 @@ export type PaperFillReason =
   | 'manual_close';
 
 export type PaperFill = {
+  symbol?: string;
+  canonicalPaper?: ManualPaperCanonicalLineage;
   id: string;
   orderId: string;
   positionId: string;
@@ -128,6 +133,7 @@ export type PaperFill = {
 };
 
 export type PaperJournalEntry = {
+  canonicalPaper?: ManualPaperCanonicalLineage;
   id: string;
   tradeId: string;
   orderId: string;
@@ -229,6 +235,7 @@ export type PaperCandle = {
 };
 
 export type PaperOrderRequest = {
+  canonicalIdentity?: ManualPaperCanonicalIdentity;
   symbol: string;
   side: PaperSide;
   orderType: PaperOrderType;
