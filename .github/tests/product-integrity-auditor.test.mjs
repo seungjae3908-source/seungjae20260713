@@ -221,6 +221,23 @@ test('all-eight-field type declarations and preview still cannot prove a real Pa
   assert.equal(result.required.find(probe => probe.id === 'same-candidate-paper-position-consumer').state, 'MISSING');
 });
 
+test('owner-delegated contracts are diagnosed separately without closing issuer/readback gaps', () => {
+  const edges = ['CG011', 'CG012', 'CG013'].map(id => ({ id, from: 'Paper', to: 'Evidence',
+    severity: 'P1', status: 'PARTIAL', required: [{ id: 'authority', state: 'MISSING' }], blockers: [],
+    observations: [{ id: 'owner-consumer', state: 'PROVEN', matchedFiles: ['owner.ts'] }] }));
+  const ledger = buildErrorLedger({ edges }, [], []);
+  for (const entry of ledger) {
+    assert.equal(entry.status, 'OPEN');
+    assert.equal(entry.implementationGap, true);
+    assert.equal(entry.classification, 'EXISTING_OWNER');
+    assert.match(entry.owner, /#1089/u);
+    assert.match(entry.rootCause, /readback/u);
+    assert.ok(entry.currentProof.some(proof => proof.role === 'NON_CLOSURE_CONTEXT_ONLY'));
+    assert.ok(entry.currentProof.some(proof => proof.id === 'authority' && proof.state === 'MISSING'));
+    assert.doesNotMatch(entry.rootCause, /has no same-candidate validation-receipt consumer/u);
+  }
+});
+
 test('markdown keeps fail-closed proof boundaries visible', () => {
   const markdown = renderProductIntegrityMarkdown({
     generatedAt: '2026-09-17T00:00:00.000Z',
