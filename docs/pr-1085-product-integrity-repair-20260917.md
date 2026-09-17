@@ -1,5 +1,7 @@
 # PR #1085 Product Integrity Repair — Draft checkpoint
 
+Historical checkpoint for the earlier repair train. Current owner reconciliation, the subsequent AI selection repair and latest P0/P1 status supersede its counts: see `pr-1085-scope-reconciliation-20260917.md` and the regenerated companion Product Integrity audit. This document preserves earlier evidence/history, not current exact-head acceptance.
+
 ## Acceptance verdict
 
 **DRAFT_NOT_COMPLETE.** This is a verified repair checkpoint, not final Draft acceptance or release approval. Eleven P1 graph/identity findings remain OPEN. No automatic conversion of missing implementation into a proven blocker is permitted. Ready, Merge, Staging, Production, schedules, secrets, DB mutation and private/live trading remain outside this task.
