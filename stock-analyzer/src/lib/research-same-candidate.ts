@@ -17,11 +17,13 @@ export function validResearchSameCandidate(value: unknown, bundle: ResearchBundl
   if (Object.keys(stages).length !== STAGES.length || !STAGES.every(stage => {
     const item = row(stages[stage]);
     return item.stage === stage && ['MISSING_EVIDENCE', 'IDENTITY_MATCHED', 'IDENTITY_MISMATCH', 'BLOCKED_DATA'].includes(String(item.status))
-      && typeof item.matched === 'boolean' && item.matched === (item.status === 'IDENTITY_MATCHED') && reasons(item.blockers);
+      && typeof item.matched === 'boolean' && item.matched === (item.status === 'IDENTITY_MATCHED') && reasons(item.blockers)
+      && (!item.matched || (item.blockers as string[]).length === 0);
   })) return false;
   const allMatched = STAGES.every(stage => row(stages[stage]).matched === true);
   if (result.allIdentityStagesMatched !== allMatched) return false;
-  if (result.identityAnchor === null) return result.identityAnchorDigest === null && result.status === 'BLOCKED_DATA' && !allMatched;
+  if (result.identityAnchor === null) return result.identityAnchorDigest === null && result.status === 'BLOCKED_DATA'
+    && !allMatched && STAGES.every(stage => row(stages[stage]).status === 'MISSING_EVIDENCE');
   if (bundle.publicationStatus !== 'READBACK_VERIFIED' || !bundle.backtestCompleted || !bundle.receipt
     || typeof result.identityAnchorDigest !== 'string' || !/^[a-f0-9]{64}$/u.test(result.identityAnchorDigest)) return false;
   const anchor = row(result.identityAnchor);
