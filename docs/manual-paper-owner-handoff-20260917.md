@@ -10,6 +10,12 @@ The user's 2026-09-17 direct handoff authorizes Draft Paper contract implementat
 
 All three remain OPEN. Contract tests do not establish an existing genuine receipt, runtime wiring, or deployed economic evidence. No historical owner is credited with a new acceptance. #1085 retains Scanner/Backtest product wiring ownership under task `01a0ad1c-e395-7540-844a-88a01ac637ff`. Planned files and interface were shared with that active owner; the shared test registry and #1085 branch are preserved.
 
+## CG012 downstream settlement transport repair
+
+The manual close path now reuses `buildRecurringPaperSettlementRecord`, extracted without changing the existing `runRecurringPaperCycle` identity fields or hash construction. The persisted canonical payload includes the same `settlementId`, `settlementIdentity`, entry/position/exit references, lifecycle evidence and `costEvidenceDigest` used by the recurring cycle. Re-read manual canonical settlements reject inconsistent IDs, identity fields or cost lineage. Gross/NetPnL calculations remain in the original settler; evidence completeness remains the original validator's decision.
+
+Targeted transport contracts exercise the existing browser state storage and authenticated snapshot writer/file-owner reader using local temporary state and the pre-existing test-only owner stub. Those tests establish payload preservation, not a genuine all8 issuer, genuine validation receipt, deployed authoritative source or economic credit. Missing/partial cost evidence remains absent/blocked. CG012 remains OPEN/PARTIAL pending actual source and authoritative runtime readback proof. CG011 remains CG011-B with `COLLECT_AUTHORITATIVE_TRIGGER_BOUND_FULL_COST_NOT_CONNECTED`; CG013 remains CG013-F with `GENUINE_SAME_CANDIDATE_VALIDATION_EXECUTION_AND_RESULT_NOT_PROVEN`. #1085 execution and the bounded gate are unchanged.
+
 ## Consumer interface
 
 `applyPaperTradingAction(state, action, now, canonicalEvidence?)` reuses the existing manual engine. `ManualPaperCanonicalEvidence` is a server-only fourth argument from an authenticated read-only owner resolver. The actual `/api/paper-trading/evaluate` route accepts an optional `canonicalEvidenceSource` dependency and uses a server-owned clock. Neither HTTP body evidence nor browser timestamps grant canonical authority. The default route has no canonical source and fails closed for canonical requests/positions.
