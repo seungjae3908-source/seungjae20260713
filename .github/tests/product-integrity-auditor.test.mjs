@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   EVIDENCE_LEVEL,
+  GOLDEN_JOURNEYS,
+  IDENTITY_CONTRACTS,
+  PRODUCT_EDGES,
   DEFAULT_CAPABILITIES,
   INTEGRITY_STATUS,
   buildErrorLedger,
@@ -42,7 +45,7 @@ test('documentation and test references cannot conceal an orphan product page', 
   assert.deepEqual(findOrphanPages(files).map((item) => item.file), [file]);
 });
 
-test('contract proof ceiling remains CONTRACT_PROVEN', () => {
+test('contract tokens alone remain STATIC_PROVEN, not executed contract proof', () => {
   const files = new Map([['feature.ts', 'feature contract token']]);
   const result = evaluateCapability(files, {
     id: 'CAP',
@@ -52,7 +55,7 @@ test('contract proof ceiling remains CONTRACT_PROVEN', () => {
     contracts: [{ id: 'contract', paths: ['feature.ts'], allOf: ['contract', 'token'] }],
   });
   assert.equal(result.status, INTEGRITY_STATUS.PROVEN);
-  assert.equal(result.evidenceLevel, EVIDENCE_LEVEL.CONTRACT_PROVEN);
+  assert.equal(result.evidenceLevel, EVIDENCE_LEVEL.STATIC_PROVEN);
 });
 
 test('global capability probe reports readable absence as MISSING', () => {
@@ -132,6 +135,38 @@ test('P1 non-proven graph edges are emitted into the Error Ledger', () => {
   assert.equal(ledger.length, 1);
   assert.equal(ledger[0].id, 'EL-CGX');
   assert.equal(ledger[0].severity, 'P1');
+  assert.equal(ledger[0].status, 'OPEN');
+  for (const field of ['domain', 'producer', 'consumer', 'currentProof', 'rootCause', 'owner', 'repair', 'tests', 'remainingRuntimeProof']) assert.ok(field in ledger[0], field);
+});
+
+test('13 journeys include research stage readback, portfolio AI and scanner member delivery', () => {
+  assert.equal(GOLDEN_JOURNEYS.length, 13);
+  assert.equal(new Set(GOLDEN_JOURNEYS.map(item => item.id)).size, 13);
+  for (const id of ['GJ011', 'GJ012', 'GJ013']) assert.ok(GOLDEN_JOURNEYS.find(item => item.id === id));
+  assert.equal(new Set(PRODUCT_EDGES.map(item => item.id)).size, PRODUCT_EDGES.length);
+});
+
+test('complete reference dimensions cannot prove same-strategy Paper execution', () => {
+  const contract = IDENTITY_CONTRACTS.find(item => item.id === 'ID002');
+  const fields = contract.dimensions.join(' ');
+  const files = new Map([
+    [contract.sourcePaths[0], fields], [contract.destinationPaths[0], fields],
+    [contract.transport.paths[0], 'URLSearchParams backtestCandidate INVALID_BACKTEST_PAPER_HANDOFF'],
+    ['api-server/src/services/paper-trading.types.ts', 'manual PaperOrder strategyName'],
+  ]);
+  const result = evaluateIdentityContract(files, contract);
+  assert.equal(result.dimensions.every(item => item.status === 'PROVEN'), true);
+  assert.equal(result.transport.state, 'PROVEN');
+  assert.equal(result.status, 'PARTIAL');
+  const ledger = buildErrorLedger({ edges: [] }, [], [result]);
+  assert.match(ledger[0].reason, /same-strategy-paper-consumer:MISSING/u);
+  assert.equal(ledger[0].status, 'OPEN');
+});
+
+test('explicit safety blocker alone cannot silently close a P1 ledger item', () => {
+  const ledger = buildErrorLedger({ edges: [{ id: 'CG004', from: 'US', to: 'Paper', severity: 'P1', status: 'MISSING', lane: 'scanner-paper', required: [], blockers: [{ id: 'US_BLOCK', state: 'PROVEN', matched: true }] }] }, [], []);
+  assert.equal(ledger[0].classification, 'INTENTIONAL_SAFETY_BLOCK');
+  assert.equal(ledger[0].status, 'OPEN');
 });
 
 test('markdown keeps fail-closed proof boundaries visible', () => {

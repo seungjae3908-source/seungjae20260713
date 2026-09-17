@@ -111,3 +111,24 @@ test('uppercase canonical readonly contract and its consumer are recognized', ()
   ]);
   assert.equal(evaluateEdge(files, DEFAULT_EDGES.find((edge) => edge.id === 'CG015')).status, CONNECTION_STATUS.PROVEN);
 });
+
+test('tests and documentation cannot prove executable prefix consumers', () => {
+  const files = new Map([
+    ['api-server/src/consumer.test.ts', 'candidateId paper position'],
+    ['api-server/docs/consumer.md', 'candidateId paper position'],
+    ['api-server/src/consumer.ts', 'export const referenceOnly = true'],
+  ]);
+  assert.equal(evaluateProbe(files, { id: 'consumer', pathPrefix: 'api-server/', allOf: ['candidateId', 'paper', 'position'] }).state, 'MISSING');
+});
+
+test('generic Natural Paper workflow tokens cannot prove manual Full Cost or OOS continuity', () => {
+  const files = new Map([
+    ['api-server/src/services/unrelated-natural-paper.ts', 'FULL_COST_READY fullCost netPnl validationReceipt candidateId parameterHash'],
+    ['api-server/src/services/paper-trading.types.ts', 'PaperJournalEntry netPnl entryFee exitFee fundingCost'],
+    ['api-server/src/services/paper-trading-position.service.ts', 'entryFeeAllocation exitFee entrySlippageAllocation exitSlippage funding netPnl: netForJournal'],
+    ['.github/workflows/prediction-lab-settlement-profitability-evidence-gate.yml', 'settlement profit'],
+    ['.github/workflows/public-forward-liquidity-calibration-oos-validation.yml', 'OOS'],
+    ['.github/workflows/prediction-lab-final-holdout.yml', 'holdout OOS'],
+  ]);
+  for (const id of ['CG011', 'CG013']) assert.equal(evaluateEdge(files, DEFAULT_EDGES.find(edge => edge.id === id)).status, 'PARTIAL', id);
+});

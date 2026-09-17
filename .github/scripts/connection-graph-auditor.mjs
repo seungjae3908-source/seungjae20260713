@@ -64,6 +64,16 @@ export const DEFAULT_EDGES = [
         anyOf: ['useAnalysisSelection', 'analysisSelection'],
       },
       {
+        id: 'ai-chat-request-timeframe',
+        paths: ['stock-analyzer/src/pages/ai-chat.tsx'],
+        allOf: ['timeframe: selection.timeframe'],
+      },
+      {
+        id: 'ai-chat-backend-timeframe-consumer',
+        paths: ['api-server/src/services/ai-chat.service.ts'],
+        allOf: ['row.timeframe'],
+      },
+      {
         id: 'shared-analysis-selection-storage',
         paths: ['stock-analyzer/src/lib/analysis-selection.tsx'],
         anyOf: ['localStorage', 'sessionStorage'],
@@ -199,18 +209,28 @@ export const DEFAULT_EDGES = [
       },
       {
         id: 'backtest-identity-export',
-        paths: ['stock-analyzer/src/components/backtest-research-panel.tsx', 'stock-analyzer/src/lib/backtest.ts'],
-        allOf: ['candidateId', 'parameterHash', 'strategyId'],
+        paths: ['api-server/src/services/backtest-paper-handoff.service.ts'],
+        allOf: ['candidateId', 'parameterHash', 'strategyId', 'strategyCandidateId', 'resolveCanonicalStrategyIdentity'],
       },
       {
         id: 'paper-identity-import',
-        paths: ['stock-analyzer/src/components/paper-trading-panel.tsx', 'stock-analyzer/src/pages/paper-trading.tsx'],
-        allOf: ['candidateId', 'parameterHash', 'strategyId'],
+        paths: ['stock-analyzer/src/pages/paper-trading.tsx'],
+        allOf: ['readBacktestPaperHandoff(search)', 'imported.active ? <BacktestPaperCandidatePreview'],
       },
       {
         id: 'identity-dimensions',
-        paths: ['stock-analyzer/src/components/backtest-research-panel.tsx', 'stock-analyzer/src/components/paper-trading-panel.tsx'],
-        allOf: ['symbol', 'timeframe', 'side', 'strategy', 'leverage'],
+        paths: ['packages/strategy-hypothesis/src/backtest-paper-handoff.d.ts'],
+        allOf: ['candidateId', 'strategyId', 'parameterHash', 'market', 'symbol', 'timeframe', 'side', 'leverage', 'riskPolicyRef', 'costPolicyRef', 'exitPolicyRef'],
+      },
+      {
+        id: 'result-bound-url-handoff',
+        paths: ['stock-analyzer/src/components/backtest-research-panel.tsx'],
+        allOf: ['result.paperHandoffs.map', 'backtestPaperHandoffPath(handoff)'],
+      },
+      {
+        id: 'canonical-strategy-paper-execution-consumer',
+        paths: ['api-server/src/services/paper-trading.types.ts'],
+        allOf: ['candidateId', 'strategyId', 'parameterHash', 'exitPolicyRef'],
       },
     ],
   },
@@ -228,8 +248,8 @@ export const DEFAULT_EDGES = [
       },
       {
         id: 'paper-position-contract',
-        pathPrefix: 'api-server/',
-        allOf: ['paper', 'position'],
+        paths: ['api-server/src/services/paper-trading-position.service.ts'],
+        allOf: ['createPositionFromOrder', 'state.positions.push(position)'],
       },
     ],
   },
@@ -247,8 +267,8 @@ export const DEFAULT_EDGES = [
       },
       {
         id: 'server-exit-contract',
-        pathPrefix: 'api-server/',
-        allOf: ['position', 'exit'],
+        paths: ['api-server/src/services/paper-trading-candle.service.ts'],
+        allOf: ['closePosition', 'closePositionInternal'],
       },
     ],
   },
@@ -266,8 +286,8 @@ export const DEFAULT_EDGES = [
       },
       {
         id: 'settlement-runtime-contract',
-        pathPrefix: 'api-server/',
-        allOf: ['settlement', 'paper'],
+        paths: ['api-server/src/services/paper-trading-position.service.ts'],
+        allOf: ['upsertJournal(state, position, order, fill, reason)', 'netPnl: netForJournal'],
       },
     ],
   },
@@ -285,8 +305,13 @@ export const DEFAULT_EDGES = [
       },
       {
         id: 'cost-evidence-contract',
-        pathPrefix: 'api-server/',
-        anyOf: ['FULL_COST_READY', 'fullCost', 'full_cost'],
+        paths: ['api-server/src/services/paper-trading-position.service.ts'],
+        allOf: ['entryFeeAllocation', 'exitFee', 'entrySlippageAllocation', 'exitSlippage', 'funding'],
+      },
+      {
+        id: 'manual-paper-full-eight-component-cost-contract',
+        paths: ['api-server/src/services/paper-trading.types.ts'],
+        allOf: ['latency', 'liquidityImpact', 'partialFillImpact', 'tax'],
       },
     ],
   },
@@ -299,13 +324,18 @@ export const DEFAULT_EDGES = [
     required: [
       {
         id: 'full-cost-source',
-        pathPrefix: 'api-server/',
-        anyOf: ['FULL_COST_READY', 'fullCost', 'full_cost'],
+        paths: ['api-server/src/services/paper-trading-position.service.ts'],
+        allOf: ['entryFeeAllocation', 'exitFee', 'exitSlippage', 'funding'],
       },
       {
         id: 'net-pnl-source',
-        pathPrefix: 'api-server/',
-        anyOf: ['netPnl', 'net_pnl', 'NET_PNL'],
+        paths: ['api-server/src/services/paper-trading-position.service.ts'],
+        allOf: ['netPnl: netForJournal', 'upsertJournal'],
+      },
+      {
+        id: 'full-cost-components-preserved',
+        paths: ['api-server/src/services/paper-trading.types.ts'],
+        allOf: ['latency', 'liquidityImpact', 'partialFillImpact', 'tax'],
       },
     ],
   },
@@ -328,8 +358,13 @@ export const DEFAULT_EDGES = [
       },
       {
         id: 'net-pnl-evidence-source',
-        pathPrefix: 'api-server/',
-        anyOf: ['netPnl', 'net_pnl', 'NET_PNL'],
+        paths: ['api-server/src/services/paper-trading-position.service.ts'],
+        allOf: ['netPnl: netForJournal'],
+      },
+      {
+        id: 'same-candidate-manual-paper-validation-consumer',
+        paths: ['api-server/src/services/paper-trading.types.ts'],
+        allOf: ['candidateId', 'parameterHash', 'validationReceipt'],
       },
     ],
   },
@@ -441,6 +476,8 @@ function candidateFiles(files, probe) {
   }
   return [...files.entries()].filter(([file]) => {
     if (excluded.has(file)) return false;
+    if (/\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(file)) return false;
+    if (file.startsWith('docs/') || file.endsWith('.md')) return false;
     if (probe.pathPrefix && !file.startsWith(probe.pathPrefix)) return false;
     if (probe.pathIncludes && !file.includes(probe.pathIncludes)) return false;
     return true;
