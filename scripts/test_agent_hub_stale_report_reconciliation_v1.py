@@ -65,6 +65,47 @@ def canonical_report(*, comment_id: int = 10, pr_number: str = "123") -> dict[st
     }
 
 
+def legacy_bare_list_report(
+    *,
+    comment_id: int = 40,
+    pr_number: str = "914",
+    changed_files: str = "[stock-analyzer/e2e/full-product-browser-flow.spec.ts, stock-analyzer/e2e/support/full-product-evidence.ts]",
+    owner: bool = True,
+    extra_line: str | None = None,
+) -> dict[str, Any]:
+    lines = [
+        "[WORKER_REPORT]",
+        "schema_version: 2",
+        "task_id: legacy-browser-e2e",
+        "root_task_id: legacy-browser-root",
+        "worker: test-runner",
+        f"repository: {REPOSITORY}",
+        "base_branch: main",
+        f"base_sha: {OLD_SHA}",
+        "branch: test/full-product-browser-e2e",
+        "status: partial",
+        f"head_sha: {OLD_SHA}",
+        f"pr_number: {pr_number}",
+        f"changed_files: {changed_files}",
+        "checks: focused checks passed",
+        "ci_run_id: none",
+        "summary: bounded historical work",
+        "remaining: continue",
+        "dependencies: none",
+        "conflicts: none",
+        "approval_required: no",
+        "prohibited_actions_confirmed: yes, no prohibited actions performed",
+    ]
+    if extra_line:
+        lines.append(extra_line)
+    return {
+        "id": comment_id,
+        "body": "\n".join(lines),
+        "user": {"login": "owner" if owner else "contributor"},
+        "author_association": "OWNER" if owner else "CONTRIBUTOR",
+    }
+
+
 def manual_snapshot(*, head_sha: str = OLD_SHA, comment_id: int = 20) -> dict[str, Any]:
     body = "\n".join([
         "[WORKER_REPORT]",
@@ -130,6 +171,52 @@ class StaleReportReconciliationTests(unittest.TestCase):
         with self.assertRaisesRegex(StaleReportReconciliationError, "still owns open PR"):
             classify_pending_report(
                 canonical_report(), repository=REPOSITORY, current_sha=CURRENT_SHA, github=github
+            )
+
+    def test_closed_owner_legacy_bare_changed_files_is_reconcilable(self) -> None:
+        result = classify_pending_report(
+            legacy_bare_list_report(),
+            repository=REPOSITORY,
+            current_sha=CURRENT_SHA,
+            github=FakeGitHub({914: "closed"}),
+        )
+        self.assertEqual(result.reason, "closed_legacy_bare_list_pr_lineage")
+        self.assertIn("pr:914:closed", result.evidence)
+
+    def test_open_owner_legacy_bare_changed_files_remains_blocking(self) -> None:
+        with self.assertRaisesRegex(StaleReportReconciliationError, "still owns open PR #914"):
+            classify_pending_report(
+                legacy_bare_list_report(),
+                repository=REPOSITORY,
+                current_sha=CURRENT_SHA,
+                github=FakeGitHub({914: "open"}),
+            )
+
+    def test_unsafe_legacy_bare_changed_files_stays_blocking(self) -> None:
+        with self.assertRaisesRegex(StaleReportReconciliationError, "noncanonical but not provably stale"):
+            classify_pending_report(
+                legacy_bare_list_report(changed_files="[../escape.ts, safe.ts]"),
+                repository=REPOSITORY,
+                current_sha=CURRENT_SHA,
+                github=FakeGitHub({914: "closed"}),
+            )
+
+    def test_non_owner_legacy_bare_changed_files_stays_blocking(self) -> None:
+        with self.assertRaisesRegex(StaleReportReconciliationError, "noncanonical but not provably stale"):
+            classify_pending_report(
+                legacy_bare_list_report(owner=False),
+                repository=REPOSITORY,
+                current_sha=CURRENT_SHA,
+                github=FakeGitHub({914: "closed"}),
+            )
+
+    def test_legacy_adapter_does_not_hide_other_contract_errors(self) -> None:
+        with self.assertRaisesRegex(StaleReportReconciliationError, "noncanonical but not provably stale"):
+            classify_pending_report(
+                legacy_bare_list_report(extra_line="unsupported_legacy_field: value"),
+                repository=REPOSITORY,
+                current_sha=CURRENT_SHA,
+                github=FakeGitHub({914: "closed"}),
             )
 
     def test_old_manual_readonly_snapshot_is_reconcilable_without_claiming_resolution(self) -> None:

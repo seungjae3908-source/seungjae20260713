@@ -37,6 +37,7 @@ MANUAL_ADAPTER_CHECKS = ("manual_adapter_v2=pass", "read_only_zero_proof=1")
 OWNER_LINEAGE_RE = re.compile(r"(?im)^\s*-?\s*owner\s*:\s*#(\d+)\b.*$")
 LINEAGE_LINE_RE = re.compile(r"(?im)^\s*lineage\s*:\s*([^\n]+)$")
 PR_REF_RE = re.compile(r"#(\d+)")
+LEGACY_CHANGED_FILE_RE = re.compile(r"^[A-Za-z0-9_.@+/-]+$")
 
 
 class StaleReportReconciliationError(RuntimeError):
@@ -111,12 +112,72 @@ def _owner_lineage_prs(comment: Mapping[str, Any], fields: Mapping[str, str], cu
     return tuple(sorted(number for number in refs if number > 0))
 
 
+def _legacy_bare_changed_files_report(
+    comment: Mapping[str, Any],
+    *,
+    fields: Mapping[str, str],
+    repository: str,
+    comment_id: int,
+    author: str,
+) -> contract.WorkerReport | None:
+    """Normalize one historical OWNER-only bare-list field, then re-run the full contract.
+
+    Older schema-v2 reports sometimes emitted ``changed_files: [a, b]`` before the Hub
+    required JSON quoting.  This adapter is deliberately local to overflow reconciliation:
+    the canonical report validator remains strict, every other field is revalidated, and
+    unsafe/ambiguous paths still fail closed.
+    """
+    owner = repository.split("/", 1)[0] if "/" in repository else repository
+    if (
+        str(comment.get("author_association") or "").upper() != "OWNER"
+        or author != owner
+    ):
+        return None
+
+    raw = str(fields.get("changed_files") or "").strip()
+    if len(raw) < 2 or not raw.startswith("[") or not raw.endswith("]"):
+        return None
+    inner = raw[1:-1].strip()
+    if not inner or '"' in inner or "'" in inner:
+        return None
+
+    items = [item.strip() for item in inner.split(",")]
+    if any(not item or not LEGACY_CHANGED_FILE_RE.fullmatch(item) for item in items):
+        return None
+    try:
+        normalized_items = contract.parse_json_list(items, "changed_files", allow_empty=False)
+    except contract.ContractError:
+        return None
+
+    body = str(comment.get("body") or "")
+    replacement = "changed_files: " + json.dumps(list(normalized_items), separators=(",", ":"))
+    normalized_body, count = re.subn(
+        r"(?m)^\s*changed_files\s*:\s*.*$",
+        replacement,
+        body,
+        count=1,
+    )
+    if count != 1:
+        return None
+    try:
+        return contract.validate_report(
+            normalized_body,
+            comment_id=comment_id,
+            author=author,
+            expected_repository=repository,
+            allowed_workers=contract.WORKER_IDS,
+        )
+    except contract.ContractError:
+        return None
+
+
 def classify_pending_report(comment: Mapping[str, Any], *, repository: str, current_sha: str, github: Any) -> Reconciliation:
     """Prove one pending report is stale for rollover control, or fail closed."""
     cid = _comment_id(comment)
     body = str(comment.get("body") or "")
     fields = rollover.parse_fields(body)
     author = str((comment.get("user") or {}).get("login") or "unknown")
+    legacy_bare_list = False
 
     try:
         report = contract.validate_report(
@@ -127,36 +188,49 @@ def classify_pending_report(comment: Mapping[str, Any], *, repository: str, curr
             allowed_workers=contract.WORKER_IDS,
         )
     except contract.ContractError as exc:
-        if _historical_manual_snapshot(fields, current_sha):
+        report = None
+        if str(exc) == "changed_files must be a JSON list":
+            report = _legacy_bare_changed_files_report(
+                comment,
+                fields=fields,
+                repository=repository,
+                comment_id=cid,
+                author=author,
+            )
+            legacy_bare_list = report is not None
+        if report is None and _historical_manual_snapshot(fields, current_sha):
             return Reconciliation(
                 cid,
                 _task_id(fields, cid),
                 "historical_read_only_snapshot",
                 (f"source_head:{fields.get('head_sha', '')}", f"current_main:{current_sha}"),
             )
-        refs = _owner_lineage_prs(comment, fields, current_sha)
-        if refs:
-            states = tuple((number, _pull_state(github, number)) for number in refs)
-            if all(state == "closed" for _, state in states):
-                return Reconciliation(
-                    cid,
-                    _task_id(fields, cid),
-                    "closed_noncanonical_owner_lineage",
-                    tuple(f"pr:{number}:closed" for number, _ in states) + (f"current_main:{current_sha}",),
-                )
-        raise StaleReportReconciliationError(
-            f"pending report {cid} is noncanonical but not provably stale: {exc}"
-        ) from exc
+        if report is None:
+            refs = _owner_lineage_prs(comment, fields, current_sha)
+            if refs:
+                states = tuple((number, _pull_state(github, number)) for number in refs)
+                if all(state == "closed" for _, state in states):
+                    return Reconciliation(
+                        cid,
+                        _task_id(fields, cid),
+                        "closed_noncanonical_owner_lineage",
+                        tuple(f"pr:{number}:closed" for number, _ in states) + (f"current_main:{current_sha}",),
+                    )
+        if report is None:
+            raise StaleReportReconciliationError(
+                f"pending report {cid} is noncanonical but not provably stale: {exc}"
+            ) from exc
 
     pr_text = str(report.fields.get("pr_number") or "").strip().lower()
     if pr_text.isdigit():
         number = int(pr_text)
         state = _pull_state(github, number)
         if state == "closed":
+            reason = "closed_legacy_bare_list_pr_lineage" if legacy_bare_list else "closed_canonical_pr_lineage"
             return Reconciliation(
                 cid,
                 report.root_task_id,
-                "closed_canonical_pr_lineage",
+                reason,
                 (f"pr:{number}:closed", f"current_main:{current_sha}"),
             )
         raise StaleReportReconciliationError(f"pending report {cid} still owns open PR #{number}")
