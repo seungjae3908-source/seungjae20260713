@@ -39,6 +39,7 @@ LINEAGE_LINE_RE = re.compile(r"(?im)^\s*lineage\s*:\s*([^\n]+)$")
 PR_REF_RE = re.compile(r"#(\d+)")
 LEGACY_CHANGED_FILE_RE = re.compile(r"^[A-Za-z0-9_.@+/-]+$")
 LEGACY_EVIDENCE_STATUS = "VERIFIED_EVIDENCE_INCREASE"
+LEGACY_TRAIN_CI_CLOSED_STATUS = "VERIFIED_EVIDENCE_INCREASE_CI_CLOSED"
 LEGACY_EVIDENCE_RUN_FIELDS = (
     "required_ci_run",
     "source_capture_run_id",
@@ -126,9 +127,20 @@ def _verified_historical_main(github: Any, source_sha: str, current_sha: str) ->
     )
 
 
-def _successful_run_for_sha(github: Any, run_id: int, source_sha: str) -> bool:
+def _successful_run_for_sha(
+    github: Any,
+    run_id: int,
+    source_sha: str,
+    *,
+    expected_event: str | None = None,
+    expected_attempt: int | None = None,
+) -> bool:
     payload = github.request("GET", f"/repos/{github.repository}/actions/runs/{run_id}")
     if not isinstance(payload, dict) or int(payload.get("id") or 0) != run_id:
+        return False
+    if expected_event is not None and str(payload.get("event") or "").strip() != expected_event:
+        return False
+    if expected_attempt is not None and int(payload.get("run_attempt") or 0) != expected_attempt:
         return False
     return (
         str(payload.get("head_sha") or "").strip().lower() == source_sha
@@ -196,6 +208,226 @@ def _historical_owner_evidence_checkpoint(
         f"ingest_run:{run_values['ingest_run_id']}",
         f"independence_run:{run_values['independence_run_id']}",
         f"first_zero:{fields.get('first_zero', '')}",
+        f"current_main:{current_sha}",
+    )
+
+
+def _owner_comment(comment: Mapping[str, Any], repository: str) -> bool:
+    owner = repository.split("/", 1)[0] if "/" in repository else repository
+    return (
+        str(comment.get("author_association") or "").upper() == "OWNER"
+        and str((comment.get("user") or {}).get("login") or "") == owner
+    )
+
+
+def _positive_int(fields: Mapping[str, str], name: str) -> int | None:
+    value = str(fields.get(name) or "").strip()
+    if not value.isdigit() or int(value) <= 0:
+        return None
+    return int(value)
+
+
+def _legacy_train_original_shape(fields: Mapping[str, str]) -> bool:
+    exact_main = str(fields.get("exact_current_main") or "").strip().lower()
+    source_sha = str(fields.get("source_exact_main_at_capture") or "").strip().lower()
+    required_run = _positive_int(fields, "exact_current_main_required_ci_run")
+    source_run = _positive_int(fields, "source_run")
+    ingest_run = _positive_int(fields, "ingest_run")
+    independence_run = _positive_int(fields, "independence_run")
+    artifact_id = _positive_int(fields, "independence_artifact_id")
+    previous_run = _positive_int(fields, "previous_trusted_independence_run")
+    previous_artifact = _positive_int(fields, "previous_trusted_independence_artifact_id")
+    previous_n = _positive_int(fields, "previous_effective_independent_n")
+    current_n = _positive_int(fields, "current_effective_independent_n")
+    delta = _positive_int(fields, "independent_sample_delta")
+    buy_n = _positive_int(fields, "current_independent_buy_n")
+    sell_n = _positive_int(fields, "current_independent_sell_n")
+    train_n = _positive_int(fields, "train_n")
+    raw_accepted_n = _positive_int(fields, "raw_accepted_n")
+    source_slot = _positive_int(fields, "source_slot")
+    digest = str(fields.get("independence_artifact_digest") or "").strip().lower()
+    lineage = str(fields.get("lineage_comparison") or "").strip().upper()
+    return bool(
+        str(fields.get("schema_version") or "").strip() == "2"
+        and str(fields.get("status") or "").strip() == LEGACY_EVIDENCE_STATUS
+        and contract.TASK_RE.fullmatch(str(fields.get("task_id") or "").strip())
+        and str(fields.get("canonical_hub") or "").strip() == "838"
+        and str(fields.get("release_control") or "").strip() == "23"
+        and str(fields.get("profile") or "").strip() == "PROFITABILITY_PROOF"
+        and str(fields.get("target_branch") or "").strip() == "main"
+        and contract.SHA_RE.fullmatch(exact_main)
+        and contract.SHA_RE.fullmatch(source_sha)
+        and exact_main != source_sha
+        and all(value is not None for value in (
+            required_run, source_run, ingest_run, independence_run, artifact_id,
+            previous_run, previous_artifact, previous_n, current_n, delta,
+            buy_n, sell_n, train_n, raw_accepted_n, source_slot,
+        ))
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is not None
+        and str(fields.get("source_run_event") or "").strip() == "schedule"
+        and str(fields.get("source_split") or "").strip() == "TRAIN"
+        and str(fields.get("source_capture_status") or "").strip() == "PRESENT"
+        and str(fields.get("source_prospective_slot_credit") or "").strip() == "1"
+        and str(fields.get("source_run_attempt") or "").strip() == "1"
+        and str(fields.get("source_manual_credit") or "").strip() == "0"
+        and str(fields.get("source_replay_credit") or "").strip() == "0"
+        and str(fields.get("source_backfill_credit") or "").strip() == "0"
+        and str(fields.get("source_synthetic_credit") or "").strip() == "0"
+        and str(fields.get("source_private_api_used") or "").strip().lower() == "false"
+        and str(fields.get("source_live_trading") or "").strip().lower() == "false"
+        and str(fields.get("source_real_orders") or "").strip() == "0"
+        and previous_n is not None and current_n == previous_n + 1
+        and delta == 1
+        and buy_n is not None and sell_n is not None and current_n == buy_n + sell_n
+        and train_n == current_n
+        and str(fields.get("validation_n") or "").strip() == "0"
+        and str(fields.get("oos_n") or "").strip() == "0"
+        and raw_accepted_n is not None and current_n is not None and raw_accepted_n >= current_n
+        and str(fields.get("raw_n_equals_independent_n") or "").strip().lower() == "false"
+        and "STABLE_OBSERVATIONS_PRESERVED_PLUS_EXACTLY_ONE_NEW_" in lineage
+        and str(fields.get("removed_prior_independent_observations") or "").strip() == "0"
+        and str(fields.get("changed_prior_slot_event_side_assignments") or "").strip() == "0"
+        and str(fields.get("retrospective_split_selection") or "").strip().lower() == "false"
+        and str(fields.get("synthetic_split_assignment") or "").strip().lower() == "false"
+        and str(fields.get("oos_outcome_credit") or "").strip() == "0"
+        and str(fields.get("calibration_artifact_produced") or "").strip().lower() == "false"
+        and str(fields.get("liquidity_impact_status") or "").strip() == "BLOCKED_DATA"
+        and str(fields.get("full_cost_ready") or "").strip().lower() == "false"
+        and str(fields.get("evidence_complete") or "").strip() == "0"
+        and str(fields.get("profitability_proven") or "").strip().lower() == "false"
+        and str(fields.get("execution_authority") or "").strip() == "NONE"
+        and str(fields.get("first_zero") or "").strip() == "FIRST_GENUINE_VALIDATION"
+        and str(fields.get("active_same_purpose_new_owner") or "").strip() == "NONE_CREATED"
+        and str(fields.get("forbidden_actions_performed") or "").strip() == "NONE"
+    )
+
+
+def _legacy_train_closure_matches(original: Mapping[str, str], closure: Mapping[str, str]) -> bool:
+    same_fields = (
+        "exact_current_main",
+        "exact_current_main_required_ci_run",
+        "source_run",
+        "ingest_run",
+        "independence_run",
+        "previous_effective_independent_n",
+        "current_effective_independent_n",
+        "independent_sample_delta",
+        "train_n",
+        "validation_n",
+        "oos_n",
+        "first_zero",
+    )
+    return bool(
+        str(closure.get("schema_version") or "").strip() == "2"
+        and str(closure.get("status") or "").strip() == LEGACY_TRAIN_CI_CLOSED_STATUS
+        and contract.TASK_RE.fullmatch(str(closure.get("task_id") or "").strip())
+        and str(closure.get("canonical_hub") or "").strip() == "838"
+        and str(closure.get("release_control") or "").strip() == "23"
+        and str(closure.get("profile") or "").strip() == "PROFITABILITY_PROOF"
+        and all(str(closure.get(name) or "").strip() == str(original.get(name) or "").strip() for name in same_fields)
+        and str(closure.get("required_ci_total") or "").strip() == "6"
+        and str(closure.get("required_ci_success") or "").strip() == "6"
+        and all(str(closure.get(name) or "").strip() == "SUCCESS" for name in (
+            "application_ci_verified",
+            "browser_ui_verified",
+            "database_rls_verified",
+            "security_integration_verified",
+            "ai_privacy_verified",
+            "futures_public_network_smoke_verified",
+        ))
+        and str(closure.get("current_credited_slot") or "").strip() == str(original.get("source_slot") or "").strip()
+        and str(closure.get("economic_credit_change_beyond_independent_sample") or "").strip() == "0"
+        and str(closure.get("calibration_artifact_produced") or "").strip().lower() == "false"
+        and str(closure.get("liquidity_impact_status") or "").strip() == "BLOCKED_DATA"
+        and str(closure.get("full_cost_ready") or "").strip().lower() == "false"
+        and str(closure.get("profitability_proven") or "").strip().lower() == "false"
+        and str(closure.get("execution_authority") or "").strip() == "NONE"
+        and str(closure.get("active_same_purpose_new_owner") or "").strip() == "NONE_CREATED"
+        and str(closure.get("forbidden_actions_performed") or "").strip() == "NONE"
+    )
+
+
+def _historical_owner_train_evidence_pair(
+    comment: Mapping[str, Any],
+    *,
+    fields: Mapping[str, str],
+    repository: str,
+    current_sha: str,
+    github: Any,
+    pending_context: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...] | None:
+    """Close only a fully paired legacy TRAIN evidence checkpoint at the Hub-control layer.
+
+    This family carries one genuine immutable TRAIN credit, so unlike zero-credit checkpoints it
+    is never auto-terminalized in isolation. A later OWNER-authored CI-closure report must match
+    the same capture/ingest/independence lineage and counters exactly. All referenced runs are
+    then re-read from GitHub and must be successful on the recorded immutable SHAs. The source
+    economic evidence remains untouched; the terminal command only prevents an informational
+    historical report pair from blocking Hub rollover forever.
+    """
+    if not _owner_comment(comment, repository) or not pending_context:
+        return None
+    status = str(fields.get("status") or "").strip()
+    cid = _comment_id(comment)
+
+    candidates: list[tuple[Mapping[str, Any], Mapping[str, str], Mapping[str, Any], Mapping[str, str]]] = []
+    if status == LEGACY_EVIDENCE_STATUS and _legacy_train_original_shape(fields):
+        for other in pending_context:
+            if not _owner_comment(other, repository) or _comment_id(other) <= cid:
+                continue
+            other_fields = rollover.parse_fields(str(other.get("body") or ""))
+            if _legacy_train_closure_matches(fields, other_fields):
+                candidates.append((comment, fields, other, other_fields))
+    elif status == LEGACY_TRAIN_CI_CLOSED_STATUS:
+        for other in pending_context:
+            if not _owner_comment(other, repository) or _comment_id(other) >= cid:
+                continue
+            other_fields = rollover.parse_fields(str(other.get("body") or ""))
+            if _legacy_train_original_shape(other_fields) and _legacy_train_closure_matches(other_fields, fields):
+                candidates.append((other, other_fields, comment, fields))
+    else:
+        return None
+
+    if len(candidates) != 1:
+        return None
+    original_comment, original, closure_comment, _closure = candidates[0]
+    exact_main = str(original.get("exact_current_main") or "").strip().lower()
+    source_sha = str(original.get("source_exact_main_at_capture") or "").strip().lower()
+    required_ci_run = _positive_int(original, "exact_current_main_required_ci_run")
+    source_run = _positive_int(original, "source_run")
+    ingest_run = _positive_int(original, "ingest_run")
+    independence_run = _positive_int(original, "independence_run")
+    if None in {required_ci_run, source_run, ingest_run, independence_run}:
+        return None
+
+    if not _verified_historical_main(github, exact_main, current_sha):
+        return None
+    if not _verified_historical_main(github, source_sha, exact_main):
+        return None
+    if not _successful_run_for_sha(github, int(required_ci_run), exact_main):
+        return None
+    if not _successful_run_for_sha(
+        github, int(source_run), source_sha, expected_event="schedule", expected_attempt=1
+    ):
+        return None
+    if not _successful_run_for_sha(github, int(ingest_run), source_sha, expected_event="workflow_run", expected_attempt=1):
+        return None
+    if not _successful_run_for_sha(
+        github, int(independence_run), source_sha, expected_event="workflow_run", expected_attempt=1
+    ):
+        return None
+
+    return (
+        f"legacy_train_report:{_comment_id(original_comment)}",
+        f"legacy_train_ci_closure:{_comment_id(closure_comment)}",
+        f"source_main:{source_sha}",
+        f"report_main:{exact_main}",
+        f"required_ci_run:{required_ci_run}:success",
+        f"source_capture_run:{source_run}:success",
+        f"ingest_run:{ingest_run}:success",
+        f"independence_run:{independence_run}:success",
+        f"effective_independent_n:{original.get('current_effective_independent_n', '')}",
+        "economic_credit_preserved:1_train_only",
         f"current_main:{current_sha}",
     )
 
@@ -272,7 +504,14 @@ def _legacy_bare_changed_files_report(
         return None
 
 
-def classify_pending_report(comment: Mapping[str, Any], *, repository: str, current_sha: str, github: Any) -> Reconciliation:
+def classify_pending_report(
+    comment: Mapping[str, Any],
+    *,
+    repository: str,
+    current_sha: str,
+    github: Any,
+    pending_context: Sequence[Mapping[str, Any]] = (),
+) -> Reconciliation:
     """Prove one pending report is stale for rollover control, or fail closed."""
     cid = _comment_id(comment)
     body = str(comment.get("body") or "")
@@ -320,6 +559,22 @@ def classify_pending_report(comment: Mapping[str, Any], *, repository: str, curr
                     _task_id(fields, cid),
                     "historical_owner_evidence_checkpoint",
                     checkpoint_evidence,
+                )
+        if report is None:
+            train_pair_evidence = _historical_owner_train_evidence_pair(
+                comment,
+                fields=fields,
+                repository=repository,
+                current_sha=current_sha,
+                github=github,
+                pending_context=pending_context,
+            )
+            if train_pair_evidence is not None:
+                return Reconciliation(
+                    cid,
+                    _task_id(fields, cid),
+                    "historical_owner_train_evidence_ci_pair",
+                    train_pair_evidence,
                 )
         if report is None:
             refs = _owner_lineage_prs(comment, fields, current_sha)
@@ -442,7 +697,13 @@ def reconcile(*, source_issue: int, confirmation: str, apply: bool) -> dict[str,
     current_sha = _current_main_sha(github)
     pending = pending_report_comments(window.comments, repository=repository)
     plan = tuple(
-        classify_pending_report(comment, repository=repository, current_sha=current_sha, github=github)
+        classify_pending_report(
+            comment,
+            repository=repository,
+            current_sha=current_sha,
+            github=github,
+            pending_context=pending,
+        )
         for comment in pending
     )
 
