@@ -146,6 +146,16 @@ function exactScannerIdentity(
     && left.accountMode === right?.accountMode;
 }
 
+function serverIssuedLeverage(candidate: Readonly<Record<string, any>>, simulation: Readonly<Record<string, any>>) {
+  if (candidate.signal?.market !== 'CRYPTO_FUTURES') {
+    return Object.freeze({ leverage: null, leverageProvenance: 'NOT_APPLICABLE_CASH_OR_SPOT' as const });
+  }
+  const raw = simulation.execution?.dataEvidence?.leverage;
+  const leverage = Number(raw);
+  if (!Number.isFinite(leverage) || leverage <= 0) return null;
+  return Object.freeze({ leverage, leverageProvenance: 'CANONICAL_SIMULATION_DATA_EVIDENCE' as const });
+}
+
 function publicPlan(result: any, candidate: any) {
   const samples = Array.isArray(result?.state?.samples) ? result.state.samples : [];
   const positions = Array.isArray(result?.state?.positions) ? result.state.positions : [];
@@ -173,6 +183,8 @@ function publicPlan(result: any, candidate: any) {
       symbol: candidate.signal.symbol,
       timeframe: candidate.signal.timeframe,
       side: candidate.signal.direction,
+      leverage: candidate.leverage ?? null,
+      leverageProvenance: candidate.leverageProvenance,
       quantity: sample.fill?.filledQuantity ?? position.quantity ?? null,
       entryPrice: sample.fill?.fillPrice ?? position.entryFillPrice ?? null,
       notional: sample.fill?.notional ?? null,
@@ -296,8 +308,20 @@ export function createScannerPaperPlansRouter(dependencies: {
         });
       }
 
+      const leverage = serverIssuedLeverage(admission.candidate, simulation);
+      if (!leverage) {
+        return res.status(409).json({
+          ok: false,
+          error: 'SERVER_LEVERAGE_PROVENANCE_REQUIRED',
+          serverVerified: true,
+          executionConnected: false,
+          ...envelope,
+        });
+      }
+
       const candidate = Object.freeze({
         ...admission.candidate,
+        ...leverage,
         profitGate: ownerContext.profitGate,
         profitEvidence: ownerContext.profitEvidence,
         execution: simulation.execution,
@@ -311,6 +335,8 @@ export function createScannerPaperPlansRouter(dependencies: {
           executionPolicyVersion: simulation.executionPolicy?.version ?? null,
           orderPolicyVersion: simulation.orderPolicy?.version ?? null,
           sampleExecutionReady: true,
+          leverage: leverage.leverage,
+          leverageProvenance: leverage.leverageProvenance,
           executionAuthority: 'NONE',
           simulatedOnly: true,
           liveOrderAllowed: false,
