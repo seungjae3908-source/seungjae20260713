@@ -119,7 +119,7 @@ jobs:
         if: steps.impact.outputs.frontend == 'true'
         run: pnpm --dir stock-analyzer run typecheck
 
-      - name: Backtest Paper handoff rendered contract
+      - name: Backtest Paper and Research readback rendered contracts
         if: steps.impact.outputs.phase5 == 'true' || steps.impact.outputs.shared == 'true'
         run: node --test .github/tests/backtest-paper-handoff-ui.test.mjs
 
