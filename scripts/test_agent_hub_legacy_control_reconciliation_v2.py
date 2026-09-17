@@ -79,7 +79,7 @@ state: MERGED_OWNER_COMPLETE
 postmerge_exact_main: {OLD}
 profitability_credit: 0
 trusted_boundary: effective-independent N57 / TRAIN57 / VALIDATION0 / OOS0
-FIRST_ZERO: first genuine VALIDATION
+FIRST_ZERO: FIRST_GENUINE_VALIDATION
 full_cost_ready: false
 profitability_proven: false
 """
