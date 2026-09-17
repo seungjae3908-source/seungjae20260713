@@ -17,13 +17,68 @@ export type ManualPaperCanonicalIdentity = Readonly<{
   symbol: string; timeframe: string; side: 'LONG' | 'SHORT'; leverage: number;
   parameterDigest: string; signalDirection: string; accountMode: 'PAPER'; researchCodeSha: string;
 }>;
+export type ManualPaperCanonicalReceiptVerification = Readonly<{
+  ownerId: string; source: string; provenance: string; verifiedAtMs: number;
+  readbackVerified: true; validationPassed: true; receiptSha256: string;
+}>;
+export type ManualPaperCanonicalCostComponent = Row & Readonly<{
+  status: 'PRESENT';
+  source: string;
+  provenance: string;
+  quality: 'OBSERVED' | 'DOCUMENTED' | 'ESTIMATED' | 'NOT_APPLICABLE';
+  valuePercent: number;
+  observedAtMs: number;
+  policyIdentity: Row;
+  identity: ManualPaperCanonicalIdentity;
+  paperSampleId: string;
+  positionId: string;
+}>;
+export type ManualPaperCanonicalFullCostComponents = Readonly<{
+  commission: ManualPaperCanonicalCostComponent;
+  slippage: ManualPaperCanonicalCostComponent;
+  funding: ManualPaperCanonicalCostComponent;
+  spread: ManualPaperCanonicalCostComponent;
+  latency: ManualPaperCanonicalCostComponent;
+  liquidityImpact: ManualPaperCanonicalCostComponent;
+  partialFillImpact: ManualPaperCanonicalCostComponent;
+  tax: ManualPaperCanonicalCostComponent;
+}>;
+export type ManualPaperCanonicalEntryCostEvidence = Row & Readonly<{
+  status: 'PRESENT';
+  fullCostReady: true;
+  unknownIsZero: false;
+  unavailableCostConvertedToZero: false;
+  maximumAgeMs: number;
+  components: ManualPaperCanonicalFullCostComponents;
+}>;
+export type ManualPaperCanonicalValidationReceipt = Row & Readonly<{
+  identity: ManualPaperCanonicalIdentity;
+  receiptId: string;
+  receiptVersion: string;
+  source: string;
+  provenance: string;
+  status: 'VALIDATED';
+  observedAtMs: number;
+  maximumAgeMs: number;
+  synthetic: false;
+  replay: false;
+  backfill: false;
+  historical: false;
+  testOnly: false;
+  datasetDigest: string;
+  resultArtifactDigest: string;
+}>;
+export type ManualPaperCanonicalValidationReceiptEnvelope = Readonly<{
+  receipt: ManualPaperCanonicalValidationReceipt;
+  verification: ManualPaperCanonicalReceiptVerification;
+}>;
 export type ManualPaperCanonicalLineage = Readonly<{
   identity: ManualPaperCanonicalIdentity;
   naturalPositionId: string;
   paperSampleId: string;
   sample: Row;
-  entryCostEvidence: Row;
-  validationReceipt: Row;
+  entryCostEvidence: ManualPaperCanonicalEntryCostEvidence;
+  validationReceipt: ManualPaperCanonicalValidationReceiptEnvelope;
   settlement?: Row;
   fullCost?: Row;
   settlementBinding?: Row;
@@ -42,10 +97,7 @@ export type ManualPaperCanonicalEvidence = Readonly<{
   position: unknown;
   entryCostEvidence: unknown;
   validationReceipt: unknown;
-  receiptVerification: Readonly<{
-    ownerId: string; source: string; provenance: string; verifiedAtMs: number;
-    readbackVerified: true; validationPassed: true; receiptSha256: string;
-  }>;
+  receiptVerification: ManualPaperCanonicalReceiptVerification;
   settlement?: Readonly<{ observation: unknown; trigger: unknown }>;
 }>;
 
@@ -72,9 +124,9 @@ export function assertManualPaperCanonicalIdentity(expected: ManualPaperCanonica
   }
 }
 export function consumeManualSameCandidateValidationReceipt(
-  receiptValue: unknown, verification: ManualPaperCanonicalEvidence['receiptVerification'],
+  receiptValue: unknown, verification: ManualPaperCanonicalReceiptVerification,
   identity: ManualPaperCanonicalIdentity, nowMs: number,
-): Row {
+): ManualPaperCanonicalValidationReceiptEnvelope {
   const receipt = row(receiptValue);
   requireEvidence(verification?.readbackVerified === true && verification.validationPassed === true
     && text(verification.ownerId) && text(verification.source) && text(verification.provenance)
@@ -93,7 +145,7 @@ export function consumeManualSameCandidateValidationReceipt(
   for (const digest of ['datasetDigest', 'resultArtifactDigest']) {
     requireEvidence(typeof receipt[digest] === 'string' && /^[0-9a-f]{64}$/.test(receipt[digest]), 'SAME_CANDIDATE_VALIDATION_ARTIFACT_BINDING_REQUIRED');
   }
-  return structuredClone({ receipt, verification });
+  return structuredClone({ receipt, verification }) as ManualPaperCanonicalValidationReceiptEnvelope;
 }
 
 export function manualPaperCanonicalCandidateId(state: PaperTradingState, action: PaperTradingAction): string | null {
@@ -175,9 +227,10 @@ export function prepareManualPaperCanonicalEvidence(
     requireEvidence(component.paperSampleId === sample.paperSampleId && component.positionId === position.positionId,
       'CANONICAL_PAPER_ENTRY_COST_POSITION_BINDING_REQUIRED');
   }
+  const validatedEntryCostEvidence = structuredClone(entryCostEvidence) as ManualPaperCanonicalEntryCostEvidence;
   const lineage: ManualPaperCanonicalLineage = {
     identity, naturalPositionId: position.positionId, paperSampleId: sample.paperSampleId,
-    sample: structuredClone(sample), entryCostEvidence: structuredClone(entryCostEvidence), validationReceipt,
+    sample: structuredClone(sample), entryCostEvidence: validatedEntryCostEvidence, validationReceipt,
     naturalSampleCredit: 0, executionAuthority: 'NONE',
   };
   for (const record of [...state.orders, ...state.positions, ...state.fills, ...state.journal]) {
@@ -190,7 +243,7 @@ export function prepareManualPaperCanonicalEvidence(
     requireEvidence(record.canonicalPaper.paperSampleId === lineage.paperSampleId
       && record.canonicalPaper.naturalPositionId === lineage.naturalPositionId
       && manualPaperEvidenceSha256(record.canonicalPaper.sample) === manualPaperEvidenceSha256(sample)
-      && manualPaperEvidenceSha256(record.canonicalPaper.entryCostEvidence) === manualPaperEvidenceSha256(entryCostEvidence)
+      && manualPaperEvidenceSha256(record.canonicalPaper.entryCostEvidence) === manualPaperEvidenceSha256(validatedEntryCostEvidence)
       && manualPaperEvidenceSha256(record.canonicalPaper.validationReceipt.receipt) === evidence.receiptVerification.receiptSha256,
     'CANONICAL_PAPER_PERSISTED_LINEAGE_MISMATCH');
     const storedSettlement = record.canonicalPaper.settlement;
