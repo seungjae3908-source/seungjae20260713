@@ -26,10 +26,11 @@ const identity: ManualPaperCanonicalIdentity = Object.freeze({
   researchCodeSha: 'c'.repeat(40),
 });
 
-test('issues only from genuine prospective evidence and verifies durable readback', async () => {
+test('issues only from genuine post-boundary prospective evidence and verifies durable readback', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'forward-validation-receipt-'));
   try {
     const observedAtMs = Date.parse('2026-09-18T01:00:00.000Z');
+    const prospectiveBoundaryMs = observedAtMs - 60_000;
     const nowMs = observedAtMs + 60_000;
     const issue = createForwardObserverValidationReceiptOwner({
       receiptRoot: root,
@@ -40,6 +41,8 @@ test('issues only from genuine prospective evidence and verifies durable readbac
           source: 'FORWARD_RECOMMENDATION_OBSERVER',
           provenance: 'PROSPECTIVE_PUBLIC_FORWARD',
           observedAtMs,
+          prospectiveBoundaryMs,
+          oosBoundaryProven: true as const,
           sampleSize: 30,
           minimumSampleSize: 30,
           datasetDigest: 'd'.repeat(64),
@@ -79,15 +82,44 @@ test('fails closed when genuine evidence is stale', async () => {
       readValidationEvidence: async () => Object.freeze({
         source: 'FORWARD_RECOMMENDATION_OBSERVER',
         provenance: 'PROSPECTIVE_PUBLIC_FORWARD',
-        observedAtMs: 1_000,
+        observedAtMs: 2_000,
+        prospectiveBoundaryMs: 1_000,
+        oosBoundaryProven: true as const,
         sampleSize: 30,
         minimumSampleSize: 30,
         datasetDigest: 'd'.repeat(64),
         resultArtifactDigest: 'e'.repeat(64),
       }),
     });
-    await assert.rejects(() => issue(identity, 2_001), (error: unknown) => {
+    await assert.rejects(() => issue(identity, 3_001), (error: unknown) => {
       assert.equal((error as { code?: string }).code, 'FORWARD_VALIDATION_EVIDENCE_STALE');
+      return true;
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('fails closed when evidence does not occur after the immutable prospective boundary', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'forward-validation-boundary-'));
+  try {
+    const issue = createForwardObserverValidationReceiptOwner({
+      receiptRoot: root,
+      maximumAgeMs: 10_000,
+      readValidationEvidence: async () => Object.freeze({
+        source: 'FORWARD_RECOMMENDATION_OBSERVER',
+        provenance: 'PROSPECTIVE_PUBLIC_FORWARD',
+        observedAtMs: 2_000,
+        prospectiveBoundaryMs: 2_000,
+        oosBoundaryProven: true as const,
+        sampleSize: 30,
+        minimumSampleSize: 30,
+        datasetDigest: 'd'.repeat(64),
+        resultArtifactDigest: 'e'.repeat(64),
+      }),
+    });
+    await assert.rejects(() => issue(identity, 3_000), (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'FORWARD_VALIDATION_GENUINE_EVIDENCE_INVALID');
       return true;
     });
   } finally {
