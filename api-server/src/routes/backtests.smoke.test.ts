@@ -109,6 +109,15 @@ test('backtest route returns backtest-only result and never submits an order', a
     assert.equal(body.result.mode, 'backtest-only');
     assert.equal(body.result.orderSubmitted, false);
     assert.equal('order' in body, false);
+    assert.deepEqual(body.result.paperHandoffs.map((value: any) => value.side), ['LONG', 'SHORT']);
+    for (const value of body.result.paperHandoffs) {
+      assert.equal(value.symbol, validBody.symbol);
+      assert.equal(value.timeframe, validBody.timeframe);
+      assert.equal(value.leverage, validBody.leverage);
+      assert.equal(value.status, 'REFERENCE_ONLY');
+      assert.equal(value.evidenceCredit, 0);
+      assert.equal(value.executionAuthority, 'NONE');
+    }
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
