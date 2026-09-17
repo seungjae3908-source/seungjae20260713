@@ -27,6 +27,7 @@ export type AnalysisSelection = {
   displayName: string;
   timeframe: string;
   searchRunId?: string;
+  signalId?: string;
   signalScore?: number;
   signalRank?: number;
   confidence?: number;
@@ -116,6 +117,7 @@ export function normalizeAnalysisSelection(value: unknown): AnalysisSelection | 
     displayName: cleanString(row.displayName || ticker, 120),
     timeframe: cleanString(row.timeframe || '1D', 12),
     searchRunId: cleanString(row.searchRunId, 80) || undefined,
+    signalId: cleanString(row.signalId, 120) || undefined,
     signalScore: finite(row.signalScore),
     signalRank: finite(row.signalRank),
     confidence: finite(row.confidence),
@@ -149,6 +151,7 @@ export function selectionFromSearch(search: string): AnalysisSelection | null {
     timeframe: params.get('timeframe'),
     action: params.get('action'),
     searchRunId: params.get('searchRunId'),
+    signalId: params.get('signalId'),
     selectedAt: new Date().toISOString(),
   });
 }
@@ -163,6 +166,7 @@ export function selectionQuery(selection: AnalysisSelection): string {
     timeframe: selection.timeframe,
   });
   if (selection.searchRunId) params.set('searchRunId', selection.searchRunId);
+  if (selection.signalId) params.set('signalId', selection.signalId);
   if (selection.action) params.set('action', selection.action);
   return params.toString();
 }

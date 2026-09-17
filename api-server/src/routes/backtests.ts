@@ -1,4 +1,6 @@
 import { Router, type IRouter, type Request } from 'express';
+import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
+import { ProductPaperSourceError, productPaperSourceRegistry, type ProductPaperSourceRegistry } from '../services/product-paper-source-registry.service';
 import {
   BACKTEST_LIMITS,
   BacktestValidationError,
@@ -20,6 +22,7 @@ type BacktestDependencies = {
   loadContractRules: typeof getFuturesContractRules;
   execute: typeof runBacktest;
   researchCodeSha: () => string;
+  sourceRegistry: ProductPaperSourceRegistry;
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -50,7 +53,7 @@ function parseRequest(body: unknown): BacktestRequest {
   const request: BacktestRequest = {
     market: String(body.market ?? '') as BacktestRequest['market'],
     symbol: String(body.symbol ?? '').trim().toUpperCase(),
-    timeframe: String(body.timeframe ?? '15m'),
+    timeframe: String(body.timeframe ?? ''),
     startTime: numberField(body, 'startTime'),
     endTime: numberField(body, 'endTime'),
     initialCapital: numberField(body, 'initialCapital'),
@@ -142,6 +145,7 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
     loadContractRules: dependencies.loadContractRules ?? getFuturesContractRules,
     execute: dependencies.execute ?? runBacktest,
     researchCodeSha: dependencies.researchCodeSha ?? (() => String(process.env.DEPLOY_SHA ?? '').trim().toLowerCase()),
+    sourceRegistry: dependencies.sourceRegistry ?? productPaperSourceRegistry,
   };
 
   router.post('/backtests/run', async (req, res) => {
@@ -154,6 +158,7 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
     }
 
     const controller = new AbortController();
+    let acceptedRequestForHandoff: BacktestRequest | null = null;
     const detachAbort = attachAbort(req, controller);
     activeExecutions += 1;
     try {
@@ -174,12 +179,19 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
           contractRulesStatus: rules.status,
         };
         const result = deps.execute(acceptedRequest, history.candles);
+        acceptedRequestForHandoff = acceptedRequest;
         result.paperHandoffs = buildBacktestPaperHandoffs(acceptedRequest, history.candles, deps.researchCodeSha());
         const executionMs = performance.now() - started;
         result.warnings = [...new Set([...history.warnings, ...rules.warnings, ...result.warnings, `과거 캔들 제공자 요청 ${history.requestCount}회, 순수 계산 ${executionMs.toFixed(1)}ms`])];
         return result;
       })();
       const result = await withTimeout(execution, controller);
+      if (controller.signal.aborted) throw new BacktestValidationError('BACKTEST_ABORTED', '백테스트 요청이 취소되었습니다.');
+      const runReference = acceptedRequestForHandoff && deps.sourceRegistry.captureBacktest(
+        (req as AuthenticatedRequest).member?.id ?? '', acceptedRequestForHandoff,
+        result.paperHandoffs ?? [], deps.researchCodeSha(),
+      );
+      if (runReference) result.paperHandoffRunId = runReference;
       return res.json({
         ok: true,
         mode: 'backtest-only',
@@ -193,6 +205,22 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
     } finally {
       activeExecutions = Math.max(0, activeExecutions - 1);
       detachAbort();
+    }
+  });
+
+  router.post('/backtests/paper/validate', requireAdmin, (req: AuthenticatedRequest, res) => {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    const safety = { mode: 'paper-only', executionAuthority: 'NONE', evidenceCredit: 0,
+      orderSubmitted: false, exchangeRequestSent: false, privateTradingApiAllowed: false };
+    if (serializedSize(req.body) > MAX_REQUEST_BYTES) return res.status(413).json({ ok: false, code: 'REQUEST_TOO_LARGE', ...safety });
+    try {
+      const source = deps.sourceRegistry.resolveBacktest(req.member!.id, req.body, deps.researchCodeSha());
+      return res.status(503).json({ ok: false, code: 'CANONICAL_STRATEGY_PAPER_CONSUMER_UNAVAILABLE',
+        sourceValidated: true, executionConnected: false, backtestCandidate: source.handoff,
+        researchFrozenCandidateProven: false, validationReceiptProven: false, ...safety });
+    } catch (error) {
+      return res.status(error instanceof ProductPaperSourceError ? error.status : 400).json({ ok: false,
+        code: error instanceof ProductPaperSourceError ? error.code : 'BACKTEST_PAPER_SOURCE_INVALID', ...safety });
     }
   });
 
