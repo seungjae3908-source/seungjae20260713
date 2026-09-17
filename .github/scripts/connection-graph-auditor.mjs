@@ -88,6 +88,11 @@ export const DEFAULT_EDGES = [
         excludePaths: ['stock-analyzer/src/components/scanner-approval-composer.tsx'],
         anyOf: ['<ScannerApprovalComposer', 'ScannerApprovalComposer('],
       },
+      {
+        id: 'scanner-paper-server-route',
+        paths: ['api-server/src/routes/trade-automation.ts'],
+        allOf: ["router.post('/scanner/plans'", 'assertPaperApprovalEnvelope'],
+      },
     ],
   },
   {
@@ -126,8 +131,18 @@ export const DEFAULT_EDGES = [
     required: [
       {
         id: 'crypto-workspace-paper-handoff',
-        paths: ['stock-analyzer/src/components/crypto-trading-workspace.tsx'],
-        allOf: ['paper', 'approval'],
+        paths: ['stock-analyzer/src/pages/signal-scanner.tsx'],
+        allOf: ['<ScannerApprovalComposer', 'selectionFor', 'onOrderPreparation'],
+      },
+      {
+        id: 'spot-paper-supported-composer',
+        paths: ['stock-analyzer/src/components/scanner-approval-composer.tsx'],
+        allOf: ["selection.market === 'UPBIT'", "accountMode: 'paper'"],
+      },
+      {
+        id: 'scanner-paper-server-route',
+        paths: ['api-server/src/routes/trade-automation.ts'],
+        allOf: ["router.post('/scanner/plans'", 'assertPaperApprovalEnvelope'],
       },
       {
         id: 'scanner-paper-bridge-contract',
@@ -145,8 +160,18 @@ export const DEFAULT_EDGES = [
     required: [
       {
         id: 'futures-ui-paper-handoff',
-        paths: ['stock-analyzer/src/components/crypto-trading-workspace.tsx'],
-        allOf: ['LONG', 'SHORT', 'paper'],
+        paths: ['stock-analyzer/src/pages/signal-scanner.tsx'],
+        allOf: ['<ScannerApprovalComposer', 'LONG', 'SHORT', 'onOrderPreparation'],
+      },
+      {
+        id: 'futures-paper-supported-composer',
+        paths: ['stock-analyzer/src/components/scanner-approval-composer.tsx'],
+        allOf: ["selection.market === 'BITGET'", "accountMode: 'paper'"],
+      },
+      {
+        id: 'scanner-paper-server-route',
+        paths: ['api-server/src/routes/trade-automation.ts'],
+        allOf: ["router.post('/scanner/plans'", 'assertPaperApprovalEnvelope'],
       },
       {
         id: 'futures-paper-admission-contract',
@@ -347,7 +372,12 @@ export const DEFAULT_EDGES = [
       {
         id: 'readonly-response-contract',
         paths: ['stock-analyzer/src/lib/account-readonly-response.ts'],
-        anyOf: ['missing', 'partial', 'unavailable'],
+        allOf: ['UNAVAILABLE', 'requireAccountReadonlySnapshotResponse', 'readOnly', 'orderRequests !== 0', 'credentialsReturned !== false'],
+      },
+      {
+        id: 'readonly-response-enforced-consumer',
+        paths: ['stock-analyzer/src/lib/auth-fetch.ts'],
+        allOf: ['requireAccountReadonlySnapshotResponse(path, method', 'response.clone().json()'],
       },
     ],
   },
