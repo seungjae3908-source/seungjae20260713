@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Manual, fail-closed recovery for a Central Hub that exceeded the 1,000-comment processor window.
 
-This path is intentionally separate from the scheduled Agent Hub rollover. It may only
-run from workflow_dispatch with an explicit issue-scoped confirmation. It validates a
-bounded tail of at most PROCESSOR_COMMENT_WINDOW comments and never claims full-history
-validation.
+This path is intentionally separate from the scheduled Agent Hub rollover. It may run
+from workflow_dispatch with an explicit issue-scoped confirmation or from the exact
+repository-owner issue-comment command gate. It validates a bounded tail of at most
+PROCESSOR_COMMENT_WINDOW comments and never claims full-history validation.
 """
 from __future__ import annotations
 
@@ -116,8 +116,20 @@ def assert_manual_invocation(*, source_issue: int, confirmation: str, environ: M
         raise ProcessorWindowRecoveryError("source issue must be a positive integer")
     if confirmation.strip() != expected_confirmation(source_issue):
         raise ProcessorWindowRecoveryError("issue-scoped processor overflow confirmation is missing or invalid")
-    if env.get("GITHUB_ACTIONS", "").lower() == "true" and env.get("GITHUB_EVENT_NAME", "") != "workflow_dispatch":
-        raise ProcessorWindowRecoveryError("processor overflow recovery is workflow_dispatch-only in GitHub Actions")
+    if env.get("GITHUB_ACTIONS", "").lower() != "true":
+        return
+    event_name = env.get("GITHUB_EVENT_NAME", "")
+    if event_name == "workflow_dispatch":
+        return
+    if event_name == "issue_comment":
+        actor = env.get("GITHUB_ACTOR", "").strip()
+        repository_owner = env.get("GITHUB_REPOSITORY_OWNER", "").strip()
+        if actor and repository_owner and actor == repository_owner:
+            return
+        raise ProcessorWindowRecoveryError("processor overflow recovery issue_comment requires repository owner")
+    raise ProcessorWindowRecoveryError(
+        "processor overflow recovery requires workflow_dispatch or repository-owner issue_comment in GitHub Actions"
+    )
 
 
 def _comment_id(comment: Mapping[str, Any]) -> int:
