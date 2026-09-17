@@ -103,7 +103,7 @@ export const PRODUCT_EDGES = [
       },
       {
         id: 'member-capability-contract',
-        paths: ['packages/member-access/src/index.ts'],
+        paths: ['packages/member-access/src/index.js', 'packages/member-access/src/index.d.ts'],
         anyOf: ['MemberCapability', 'canAccessPaperTrading', 'canAccessBacktests'],
       },
     ],
@@ -145,8 +145,9 @@ export const PRODUCT_EDGES = [
         anyOf: ['alert', 'notification', '알림'],
       },
       {
-        id: 'telegram-contract-anywhere',
-        anyOf: ['telegram', 'Telegram', 'TELEGRAM'],
+        id: 'telegram-member-outbox-consumer',
+        paths: ['api-server/src/services/personal-telegram-alert.service.ts'],
+        allOf: ['getTelegramConnection', 'enqueueDelivery', 'evaluateTelegramAlertPolicy'],
       },
     ],
   },
@@ -177,7 +178,7 @@ export const DEFAULT_CAPABILITIES = [
   ['CAP022', 'Technical Workspace', 'P1', ['stock-analyzer/src/pages/technical-workspace.tsx']],
   ['CAP023', 'Admin', 'P1', ['stock-analyzer/src/pages/admin.tsx']],
   ['CAP024', 'Agent Hub', 'P2', ['stock-analyzer/src/pages/agent-hub-control.tsx']],
-  ['CAP025', 'Member Access Contract', 'P1', ['packages/member-access/src/index.ts']],
+  ['CAP025', 'Member Access Contract', 'P1', ['packages/member-access/src/index.js', 'packages/member-access/src/index.d.ts']],
   ['CAP026', 'Forward / OOS Evidence', 'P1', ['.github/workflows/public-forward-liquidity-calibration-oos-validation.yml']],
   ['CAP027', 'Shadow Evidence', 'P1', ['stock-analyzer/src/lib/research-center-product.ts']],
   ['CAP028', 'Settlement Evidence', 'P1', ['.github/workflows/four-market-paper-settlement-validation.yml']],
@@ -194,7 +195,7 @@ DEFAULT_CAPABILITIES.push({
   id: 'CAP031',
   name: 'Telegram Delivery',
   severity: 'P2',
-  presence: [{ id: 'telegram-token', anyOf: ['telegram', 'Telegram', 'TELEGRAM'] }],
+  presence: [{ id: 'telegram-sender', paths: ['api-server/src/services/telegram-notification.service.ts'], allOf: ['sendTelegramAlert', 'sendMessage'] }],
 });
 
 export const IDENTITY_CONTRACTS = [
@@ -293,7 +294,9 @@ export function findOrphanPages(files) {
     if (stem === 'not-found') return [];
     const tokens = [`@/pages/${stem}`, `./${stem}`, `../pages/${stem}`];
     const referencedBy = [...files.entries()]
-      .filter(([candidate, content]) => candidate !== file && typeof content === 'string' && tokens.some((token) => content.includes(token)))
+      .filter(([candidate, content]) => candidate !== file && candidate.startsWith('stock-analyzer/src/')
+        && !/\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(candidate)
+        && /\.[jt]sx?$/u.test(candidate) && typeof content === 'string' && tokens.some((token) => content.includes(token)))
       .map(([candidate]) => candidate);
     if (referencedBy.length) return [];
     return [{
