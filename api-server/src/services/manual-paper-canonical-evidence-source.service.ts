@@ -159,13 +159,15 @@ export function createManualPaperCanonicalEvidenceSource(
 
 /**
  * Default product wiring while the genuine validation/OOS issuer/readback owner
- * is absent. Non-canonical Paper remains available; canonical actions stop at
- * an explicit server-owner boundary instead of accepting client claims.
+ * is absent. Preserve the existing public API error while making the missing
+ * server owner source an explicit route dependency. Non-canonical Paper is
+ * unaffected and no client-supplied authority is accepted.
  */
 export const unavailableManualPaperCanonicalEvidenceSource: ManualPaperCanonicalEvidenceSource = async (input) => {
   if (input.candidateId === null) return undefined;
-  return ownerUnavailable(
-    'CANONICAL_PAPER_OWNER_EVIDENCE_SOURCE_UNAVAILABLE',
-    'Canonical Paper genuine owner evidence source가 아직 연결되지 않았습니다.',
+  throw new PaperTradingError(
+    'SERVER_OWNED_CANONICAL_PAPER_EVIDENCE_REQUIRED',
+    'Canonical Paper evidence가 누락되거나 동일 candidate와 일치하지 않습니다.',
+    400,
   );
 };
