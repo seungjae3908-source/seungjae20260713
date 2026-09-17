@@ -145,7 +145,7 @@ export function processCandle(state: PaperTradingState, action: ProcessPaperCand
   };
 }
 
-export function closePosition(state: PaperTradingState, action: ClosePaperPositionAction, now: Date): PaperTradingActionResult {
+export function closePosition(state: PaperTradingState, action: ClosePaperPositionAction, now: Date, canonical?: NonNullable<ReturnType<typeof import('./manual-paper-canonical-contract.service').prepareManualPaperCanonicalEvidence>>): PaperTradingActionResult {
   const at = toIso(action.at, now);
   const position = state.positions.find((item) => item.id === action.positionId);
   if (!position) throw new PaperTradingError('POSITION_NOT_FOUND', '청산할 모의포지션을 찾을 수 없습니다.');
@@ -166,7 +166,7 @@ export function closePosition(state: PaperTradingState, action: ClosePaperPositi
   const reason: PaperFillReason = quantity + EPSILON < position.remainingQuantity
     ? 'partial_close'
     : action.reason ?? 'manual_close';
-  const fill = closePositionInternal(state, position, quantity, reference, reason, action.eventId, at);
+  const fill = closePositionInternal(state, position, quantity, reference, reason, action.eventId, at, canonical);
   return {
     ok: true,
     mode: MODE,
