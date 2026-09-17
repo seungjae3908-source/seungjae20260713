@@ -98,6 +98,18 @@ jobs:
             --markdown-output /tmp/product-integrity.md
           cat /tmp/product-integrity.md >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Retain exact-head audit evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-integrity-audit-${{ env.FAST_HEAD_SHA }}
+          path: |
+            /tmp/connection-graph.json
+            /tmp/connection-graph.md
+            /tmp/product-integrity.json
+            /tmp/product-integrity.md
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Set up pnpm 9
         uses: pnpm/action-setup@v4
         with:
