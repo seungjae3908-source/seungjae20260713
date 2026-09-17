@@ -6,7 +6,8 @@ import express from 'express';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import { createPaperTradingRouter } from './paper-trading';
 import { createPaperTradingState } from '../services/paper-trading-engine.service';
@@ -16,7 +17,7 @@ import {
   PAPER_STATE_RUNTIME_BINDING_VERSION,
   publishAuthenticatedPaperTradingState,
 } from '../services/paper-trading-state-publisher.service';
-import { validateImmutablePaperTradingStateSnapshot } from '../services/paper-trading-state-snapshot.service';
+import { createImmutablePaperTradingStateSnapshot, validateImmutablePaperTradingStateSnapshot } from '../services/paper-trading-state-snapshot.service';
 
 const NOW = new Date('2026-08-02T02:30:00.000Z');
 const DEPLOY_SHA = '0123456789abcdef0123456789abcdef01234567';
@@ -73,6 +74,11 @@ test('actual evaluate route rejects client receipt/canonical claims when server 
 });
 
 test('actual authenticated route passes owner-resolved evidence to manual action/order/position and settlement journal', async () => {
+  // Real existing writer/reader, isolated local file; fixture is not issuer proof.
+  const root = await mkdtemp(join(tmpdir(), 'paper-canonical-settlement-roundtrip-'));
+  const snapshotPath = join(root, 'paper-state.json');
+  const env = Object.freeze({ PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH: snapshotPath,
+    PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256: PUBLISHER_ACCOUNT_ID_SHA256 });
   const state = createPaperTradingState(10_000, NOW);
   const f = await manualCanonicalFixture(state);
   let reads = 0;
@@ -88,7 +94,7 @@ test('actual authenticated route passes owner-resolved evidence to manual action
       return { ...(input.action.type === 'close_position' ? f.exitEvidence : f.evidence), authenticatedAccountId: input.authenticatedAccountId,
         paperStateSha256: manualPaperEvidenceSha256(ownerState) };
     },
-    async publishState() { return { status: 'BLOCKED_DATA', invoked: false, reason: 'TEST_ONLY_NO_PUBLICATION' }; },
+    publishState: input => publishAuthenticatedPaperTradingState({ ...input, sourceSha: DEPLOY_SHA }, { env }),
   });
   const evaluate = async (currentState, currentAction, now) => {
     const response = await fetch(`${baseUrl}/api/paper-trading/evaluate`, { method: 'POST', headers: { 'content-type': 'application/json' },
@@ -117,7 +123,29 @@ test('actual authenticated route passes owner-resolved evidence to manual action
     assert.equal(journal.canonicalPaper.fullCost.fullCostReady, true);
     assert.equal(journal.canonicalPaper.naturalSampleCredit, 0);
     assert.equal(reads, 2);
-  } finally { await new Promise<void>(resolve => server.close(resolve)); }
+    // Load the existing ESM reader as ESM: the API test runner bundles tests
+    // as CJS, while the runtime package legitimately uses import.meta.url.
+    const readerModuleUrl = pathToFileURL(resolve(process.cwd(), 'market-prediction-lab/src/authoritative-paper-runtime-package-v1.js')).href;
+    const { createLosslessPaperStateSnapshotFileOwner } = await import(readerModuleUrl);
+    const reader = createLosslessPaperStateSnapshotFileOwner({ snapshotPath,
+      expectedPublisherAccountIdSha256: PUBLISHER_ACCOUNT_ID_SHA256,
+      runtimePackage: { createImmutablePaperTradingStateSnapshot, validateImmutablePaperTradingStateSnapshot },
+      now: () => ownerNow.getTime() });
+    const readback = await reader.paperStateForCard();
+    for (const record of [readback.positions[0], readback.fills.at(-1), readback.journal[0]]) {
+      assert.deepEqual(record.canonicalPaper.settlement, journal.canonicalPaper.settlement);
+      assert.deepEqual(record.canonicalPaper.identity, f.canonicalIdentity);
+      assert.deepEqual(record.canonicalPaper.fullCost, journal.canonicalPaper.fullCost);
+    }
+    assert.equal(readback.journal[0].netPnl, journal.netPnl);
+    assert.match(readback.journal[0].canonicalPaper.settlement.settlementId, /^[0-9a-f]{64}$/);
+    assert.equal(reader.executionAuthority, 'NONE');
+    assert.equal(reader.privateApiAllowed, false);
+    assert.equal(reader.liveTrading, false);
+  } finally {
+    await new Promise<void>(resolve => server.close(resolve));
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('paper evaluate returns simulation-only safety contract', async () => {
