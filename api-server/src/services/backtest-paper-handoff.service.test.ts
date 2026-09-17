@@ -212,3 +212,33 @@ test('Scanner missing provenance and duplicate snapshot cannot refresh eligibili
   now += 30_000;
   assert.throws(() => registry.resolveScanner('owner', body, sha), /NOT_RESOLVABLE/);
 });
+
+test('bounded source saturation cannot evict or substitute an unexpired Scanner reference', () => {
+  let now = start;
+  const registry = new ProductPaperSourceRegistry(() => now);
+  const first = scannerSource('KR_STOCK', 'BUY', now);
+  registry.captureScanner('owner', first, sha);
+  const body = { ...approval, searchRunId: first.requestId, signalId: first.cards[0].signalId,
+    market: 'KR_STOCK', symbol: '005930', timeframe: first.timeframe, side: 'BUY' };
+  for (let index = 1; index < 256; index += 1) {
+    const response = scannerSource('KR_STOCK', 'BUY', now);
+    response.requestId = `capacity-${index}`;
+    registry.captureScanner('owner', response, sha);
+  }
+  const overflow = scannerSource('KR_STOCK', 'BUY', now);
+  overflow.requestId = 'capacity-overflow';
+  registry.captureScanner('owner', overflow, sha);
+  assert.equal(registry.resolveScanner('owner', body, sha).paperCandidate.signal.symbol, '005930');
+  assert.throws(() => registry.resolveScanner('owner', { ...body, searchRunId: overflow.requestId }, sha), /NOT_RESOLVABLE/);
+  assert.equal(registry.captureBacktest('owner', request, buildBacktestPaperHandoffs(request, candles, sha), sha), null,
+    'a saturated registry must not issue a Backtest run reference that it did not store');
+  first.cards[0].dataSources = [];
+  registry.captureScanner('owner', first, sha);
+  assert.equal(registry.resolveScanner('owner', body, sha).source.card.dataSources.length, 1);
+  now += 30_000;
+  const fresh = scannerSource('KR_STOCK', 'BUY', now);
+  fresh.requestId = 'fresh-after-expiry';
+  registry.captureScanner('owner', fresh, sha);
+  assert.equal(registry.resolveScanner('owner', { ...body, searchRunId: fresh.requestId }, sha).paperCandidate.signal.symbol, '005930');
+  assert.throws(() => registry.resolveScanner('owner', body, sha), /NOT_RESOLVABLE/);
+});
