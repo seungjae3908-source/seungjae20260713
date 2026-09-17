@@ -112,7 +112,7 @@ jobs:
       issues: write
     env:
       RECOVERY_SOURCE_ISSUE: ${{ inputs.source_issue }}
-      RECOVERY_CONFIRMATION: RECOVER_ISSUE_838_PROCESSOR_OVERFLOW
+      RECOVERY_CONFIRMATION: ${{ inputs.confirmation }}
       RECOVERY_APPLY: ${{ inputs.apply }}
       GITHUB_TOKEN: ${{ github.token }}
     steps:
