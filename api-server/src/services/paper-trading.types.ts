@@ -1,4 +1,31 @@
 import type { RiskDataStatus, RiskEngineInput, RiskEngineResult } from './trading-risk-engine.service';
+import type { ManualPaperCanonicalIdentity, ManualPaperCanonicalLineage } from './manual-paper-canonical-contract.service';
+
+// Persisted type contract only: these fields mirror the runtime-validated owner
+// lineage and never originate, synthesize, or promote economic evidence.
+export type PaperCanonicalPersistedFullCostComponents = Readonly<{
+  commission: ManualPaperCanonicalLineage['entryCostEvidence']['components']['commission'];
+  slippage: ManualPaperCanonicalLineage['entryCostEvidence']['components']['slippage'];
+  funding: ManualPaperCanonicalLineage['entryCostEvidence']['components']['funding'];
+  spread: ManualPaperCanonicalLineage['entryCostEvidence']['components']['spread'];
+  latency: ManualPaperCanonicalLineage['entryCostEvidence']['components']['latency'];
+  liquidityImpact: ManualPaperCanonicalLineage['entryCostEvidence']['components']['liquidityImpact'];
+  partialFillImpact: ManualPaperCanonicalLineage['entryCostEvidence']['components']['partialFillImpact'];
+  tax: ManualPaperCanonicalLineage['entryCostEvidence']['components']['tax'];
+}>;
+
+export type PaperCanonicalSameCandidateValidationContract = Readonly<{
+  candidateId: ManualPaperCanonicalIdentity['candidateId'];
+  parameterHash: ManualPaperCanonicalIdentity['parameterHash'];
+  validationReceipt: ManualPaperCanonicalLineage['validationReceipt'];
+}>;
+
+export type PaperCanonicalLineage = ManualPaperCanonicalLineage & Readonly<{
+  entryCostEvidence: ManualPaperCanonicalLineage['entryCostEvidence'] & Readonly<{
+    components: PaperCanonicalPersistedFullCostComponents;
+  }>;
+  validationReceipt: PaperCanonicalSameCandidateValidationContract['validationReceipt'];
+}>;
 
 export type PaperAccount = {
   id: string;
@@ -19,6 +46,7 @@ export type PaperPositionStatus = 'open' | 'partially_closed' | 'closed';
 export type PaperSide = 'long' | 'short';
 
 export type PaperOrder = {
+  canonicalPaper?: PaperCanonicalLineage;
   id: string;
   symbol: string;
   side: PaperSide;
@@ -57,6 +85,7 @@ export type PaperOrder = {
 };
 
 export type PaperPosition = {
+  canonicalPaper?: PaperCanonicalLineage;
   id: string;
   symbol: string;
   side: PaperSide;
@@ -110,6 +139,8 @@ export type PaperFillReason =
   | 'manual_close';
 
 export type PaperFill = {
+  symbol?: string;
+  canonicalPaper?: PaperCanonicalLineage;
   id: string;
   orderId: string;
   positionId: string;
@@ -128,6 +159,7 @@ export type PaperFill = {
 };
 
 export type PaperJournalEntry = {
+  canonicalPaper?: PaperCanonicalLineage;
   id: string;
   tradeId: string;
   orderId: string;
@@ -229,6 +261,7 @@ export type PaperCandle = {
 };
 
 export type PaperOrderRequest = {
+  canonicalIdentity?: ManualPaperCanonicalIdentity;
   symbol: string;
   side: PaperSide;
   orderType: PaperOrderType;

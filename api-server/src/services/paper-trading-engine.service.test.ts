@@ -15,6 +15,9 @@ import {
   type PaperTradingState,
 } from './paper-trading-engine.service.js';
 import type { RiskEngineInput } from './trading-risk-engine.service.js';
+import { manualCanonicalFixture } from './manual-paper-canonical-contract.fixture';
+import { MANUAL_PAPER_CANONICAL_FIELDS, manualPaperEvidenceSha256 } from './manual-paper-canonical-contract.service';
+import { settleFourMarketPaperSample } from '../../../market-prediction-lab/src/four-market-paper-settlement-v1.js';
 
 const NOW = new Date('2026-08-02T02:30:00.000Z');
 const NOW_ISO = NOW.toISOString();
@@ -605,4 +608,247 @@ test('order transition rejected to filled is blocked', () => {
   const rejected = place(undefined, { market: { status: 'delayed' } });
   const order = structuredClone(rejected.order) as PaperOrder;
   assert.throws(() => transitionPaperOrder(order, 'filled', NOW_ISO), /변경할 수 없습니다/);
+});
+
+function canonicalAction(fixture, eventId = 'canonical-entry') {
+  return { type: 'place_order', eventId,
+    request: request({ symbol: fixture.canonicalIdentity.symbol, side: fixture.canonicalIdentity.side.toLowerCase(),
+      leverage: fixture.canonicalIdentity.leverage, quantity: fixture.evidence.position.quantity,
+      canonicalIdentity: fixture.canonicalIdentity }),
+    market: market({ symbol: fixture.canonicalIdentity.symbol, updatedAt: fixture.now.toISOString() }),
+    contractRules: rules({ symbol: fixture.canonicalIdentity.symbol, updatedAt: fixture.now.toISOString() }),
+    riskInput: riskInput(),
+  };
+}
+function canonicalClose(fixture, opened, eventId = 'canonical-exit') {
+  return { type: 'close_position', eventId, positionId: opened.position.id, percentage: 100,
+    market: market({ symbol: fixture.canonicalIdentity.symbol, bidPrice: fixture.exitEvidence.settlement.observation.settlementInput.exitQuote.bid,
+      updatedAt: fixture.exitNow.toISOString() }), at: fixture.exitNow.toISOString() };
+}
+
+test('canonical manual actual action/order/position/full-cost settlement/journal consumes Natural contracts (test-only reader stub)', async () => {
+  const state = createPaperTradingState(10_000, NOW);
+  const f = await manualCanonicalFixture(state);
+  assert.equal(f.bound.status, 'PRESENT');
+  const opened = applyPaperTradingAction(state, canonicalAction(f), f.now, f.evidence);
+  assert.equal(opened.order.status, 'filled');
+  for (const record of [opened.order, opened.position, opened.fills[0]]) {
+    for (const key of MANUAL_PAPER_CANONICAL_FIELDS) assert.equal(record.canonicalPaper.identity[key], f.canonicalIdentity[key], key);
+    assert.equal(record.canonicalPaper.identity.parameterDigest, record.canonicalPaper.identity.parameterHash);
+    assert.equal(record.canonicalPaper.identity.signalDirection, f.evidence.position.sample.identity.signalDirection);
+    assert.equal(record.canonicalPaper.identity.accountMode, 'PAPER');
+    assert.deepEqual(record.canonicalPaper.validationReceipt.receipt, f.evidence.validationReceipt);
+    assert.equal(record.canonicalPaper.naturalSampleCredit, 0);
+  }
+  const settled = applyPaperTradingAction(opened.state, canonicalClose(f, opened), f.exitNow, { ...f.exitEvidence, paperStateSha256: manualPaperEvidenceSha256(opened.state) });
+  const journal = settled.state.journal[0];
+  const canonical = journal.canonicalPaper;
+  const settlement = canonical.settlement;
+  assert.match(settlement.settlementId, /^[0-9a-f]{64}$/);
+  assert.equal(settlement.entryId, f.evidence.position.paperSampleId);
+  assert.equal(settlement.positionId, f.evidence.position.positionId);
+  assert.equal(settlement.settlementIdentity.candidateId, f.canonicalIdentity.candidateId);
+  assert.equal(settlement.settlementIdentity.parameterDigest, f.canonicalIdentity.parameterHash);
+  assert.equal(settlement.settlementIdentity.costEvidenceDigest, canonical.fullCost.evidenceDigest);
+  assert.deepEqual(settlement.lifecycleEvidence.costEvidence, canonical.fullCost);
+  for (const key of ['candidateId', 'strategyId', 'parameterHash', 'market', 'symbol', 'timeframe']) {
+    assert.equal(settlement[key], f.canonicalIdentity[key], key);
+  }
+  // Compare against the same raw settler: enrichment must not change economics.
+  const raw = settleFourMarketPaperSample({
+    ...f.bound.observation.settlementInput, sample: f.evidence.position.sample,
+    exitTriggerId: settlement.exitTriggerId, exitExecutionId: settlement.exitExecutionId,
+    evaluatedAtMs: settlement.settledAtMs,
+  });
+  assert.equal(raw.status, 'SETTLED');
+  for (const key of ['grossPnl', 'entryCost', 'exitCost', 'fundingCost', 'netPnl']) {
+    assert.equal(settlement[key], raw[key], key);
+  }
+  assert.equal(settled.position.status, 'closed');
+  assert.equal(canonical.fullCost.fullCostReady, true);
+  assert.equal(canonical.settlementBinding.validation.status, 'PRESENT');
+  assert.equal(journal.netPnl, canonical.settlement.netPnl);
+  assert.equal(settled.fills[0].netPnl, journal.netPnl);
+  assert.equal(settled.position.realizedPnl, journal.netPnl);
+  assert.ok(Math.abs(settled.state.account.cashBalance - state.account.initialBalance - journal.netPnl) < 1e-8);
+  assert.equal(canonical.settlement.netPnl,
+    canonical.settlement.grossPnl - canonical.settlement.entryCost - canonical.settlement.exitCost - canonical.settlement.fundingCost);
+  for (const name of ['commission','tax','spread','slippage','funding','latency','liquidityImpact','partialFillImpact']) {
+    assert.deepEqual(canonical.fullCost.components[name], f.bound.observation.settlementCostEvidence.components[name]);
+    assert.deepEqual(canonical.entryCostEvidence.components[name], f.evidence.entryCostEvidence.components[name]);
+    assert.equal(canonical.fullCost.components[name].positionIdentity.candidateId, f.canonicalIdentity.candidateId);
+    assert.equal(canonical.fullCost.components[name].exitExecutionIdentity.exitExecutionId, canonical.settlement.exitExecutionId);
+  }
+  const restored = JSON.parse(JSON.stringify(settled.state));
+  assert.deepEqual(restored.journal[0].canonicalPaper, canonical);
+  assert.equal(restored.journal[0].canonicalPaper.naturalSampleCredit, 0);
+  assert.equal(settled.orderSubmitted, false);
+  assert.equal(settled.exchangeRequestSent, false);
+  assert.equal(canonical.executionAuthority, 'NONE');
+});
+
+test('persisted canonical settlement identity and evidence mismatch fails closed (test-only source, no genuine credit)', async () => {
+  const state = createPaperTradingState(10_000, NOW);
+  const f = await manualCanonicalFixture(state);
+  const opened = applyPaperTradingAction(state, canonicalAction(f), f.now, f.evidence);
+  const close = canonicalClose(f, opened);
+  const settled = applyPaperTradingAction(opened.state, close, f.exitNow,
+    { ...f.exitEvidence, paperStateSha256: manualPaperEvidenceSha256(opened.state) });
+  // A repeated event validates stored lineage before idempotent success.
+  for (const [label, mutate] of [
+    ['settlementId', s => { s.settlementId = '0'.repeat(64); }],
+    ['settlementIdentity', s => { s.settlementIdentity.netPnl += 1; }],
+    ['candidateId', s => { s.candidateId = 'different-candidate'; }],
+    ['positionId', s => { s.positionId = 'different-position'; }],
+    ['entryId', s => { s.entryId = 'different-entry'; }],
+    ['exitExecutionId', s => { s.exitExecutionId = 'different-exit'; }],
+    ['cost reference', s => { s.lifecycleEvidence.costEvidence.evidenceDigest = '0'.repeat(64); }],
+  ]) {
+    const changed = structuredClone(settled.state);
+    mutate(changed.journal[0].canonicalPaper.settlement);
+    const before = structuredClone(changed);
+    assert.throws(() => applyPaperTradingAction(changed, close, f.exitNow,
+      { ...f.exitEvidence, paperStateSha256: manualPaperEvidenceSha256(changed) }),
+    error => error.code === 'CANONICAL_PAPER_SETTLEMENT_LINEAGE_MISMATCH', label);
+    assert.deepEqual(changed, before);
+  }
+});
+
+test('canonical identity claims cannot select legacy success without server evidence', async () => {
+  const state = createPaperTradingState(10_000, NOW);
+  const f = await manualCanonicalFixture(state);
+  assert.throws(() => applyPaperTradingAction(state, canonicalAction(f), f.now),
+    error => error.code === 'SERVER_OWNED_CANONICAL_PAPER_EVIDENCE_REQUIRED');
+  assert.deepEqual(state.orders, []);
+});
+
+test('every canonical field mismatch fails before action/order mutation', async () => {
+  for (const key of MANUAL_PAPER_CANONICAL_FIELDS) {
+    const state = createPaperTradingState(10_000, NOW);
+    const f = await manualCanonicalFixture(state);
+    const action = canonicalAction(f);
+    action.request.canonicalIdentity = { ...f.canonicalIdentity, [key]: key === 'leverage' ? f.canonicalIdentity.leverage + 1 : 'MISMATCH' };
+    assert.throws(() => applyPaperTradingAction(state, action, f.now, f.evidence), error => error.code.includes('IDENTITY_MISMATCH'), key);
+    assert.deepEqual(state.orders, []);
+  }
+});
+
+test('same-candidate receipt missing, stale, unverified, mismatched, synthetic, preview-only fail closed', async () => {
+  for (const [label, mutate, refreshDigest] of [
+    ['missing', e => { e.validationReceipt = undefined; }, true],
+    ['unverified', e => { e.receiptVerification.readbackVerified = false; }, true],
+    ['stale', e => { e.validationReceipt.observedAtMs -= e.validationReceipt.maximumAgeMs + 1; }, true],
+    ['candidate mismatch', e => { e.validationReceipt.identity.candidateId = 'different-candidate'; }, true],
+    ['synthetic', e => { e.validationReceipt.synthetic = true; }, true],
+    ['test-only', e => { e.validationReceipt.testOnly = true; }, true],
+    ['preview', e => { e.validationReceipt.status = 'REFERENCE_ONLY'; }, true],
+    ['digest mismatch', e => { e.receiptVerification.receiptSha256 = '0'.repeat(64); }, false],
+  ]) {
+    const state = createPaperTradingState(10_000, NOW);
+    const f = await manualCanonicalFixture(state);
+    const bad = structuredClone(f.evidence);
+    mutate(bad);
+    if (bad.validationReceipt && refreshDigest) bad.receiptVerification.receiptSha256 = manualPaperEvidenceSha256(bad.validationReceipt);
+    assert.throws(() => applyPaperTradingAction(state, canonicalAction(f), f.now, bad), undefined, label);
+    assert.deepEqual(state.orders, []);
+  }
+});
+
+test('all eight costs are required at manual entry and settlement, with no missing-to-zero conversion', async () => {
+  for (const name of ['commission','tax','spread','slippage','funding','latency','liquidityImpact','partialFillImpact']) {
+    const state = createPaperTradingState(10_000, NOW);
+    const f = await manualCanonicalFixture(state);
+    const badEntry = structuredClone(f.evidence);
+    delete badEntry.entryCostEvidence.components[name];
+    assert.throws(() => applyPaperTradingAction(state, canonicalAction(f), f.now, badEntry));
+    const opened = applyPaperTradingAction(state, canonicalAction(f), f.now, f.evidence);
+    const before = JSON.stringify(opened.state);
+    const missing = await manualCanonicalFixture(state, { omitExitComponent: name });
+    assert.equal(missing.bound.status, 'BLOCKED_DATA', name);
+    assert.throws(() => applyPaperTradingAction(opened.state, canonicalClose(f, opened), f.exitNow, missing.exitEvidence));
+    assert.equal(JSON.stringify(opened.state), before);
+    assert.deepEqual(opened.state.journal, []);
+  }
+});
+
+test('BRIDGE_READY and sampleExecutionReady=false cannot authorize manual execution', async () => {
+  for (const change of [{ status: 'BRIDGE_READY' }, { sampleExecutionReady: false }]) {
+    const state = createPaperTradingState(10_000, NOW);
+    const f = await manualCanonicalFixture(state);
+    const bad = { ...f.evidence, candidate: { ...f.evidence.candidate, ...change } };
+    assert.throws(() => applyPaperTradingAction(state, canonicalAction(f), f.now, bad), error => error.code === 'CANONICAL_PAPER_EXECUTION_NOT_READY');
+  }
+});
+
+test('canonical positions cannot use legacy candle, partial close, missing binding, or copied producer observation', async () => {
+  const state = createPaperTradingState(10_000, NOW);
+  const f = await manualCanonicalFixture(state);
+  const opened = applyPaperTradingAction(state, canonicalAction(f), f.now, f.evidence);
+  const before = JSON.stringify(opened.state);
+  assert.throws(() => applyPaperTradingAction(opened.state, canonicalClose(f, opened), f.exitNow));
+  assert.throws(() => applyPaperTradingAction(opened.state, { ...canonicalClose(f, opened), percentage: 50 }, f.exitNow, { ...f.exitEvidence, paperStateSha256: manualPaperEvidenceSha256(opened.state) }));
+  assert.throws(() => applyPaperTradingAction(opened.state, canonicalClose(f, opened), f.exitNow, structuredClone(f.exitEvidence)));
+  assert.throws(() => applyPaperTradingAction(opened.state, { type: 'process_candle', eventId: 'no-bypass', candle: {} }, f.exitNow, { ...f.exitEvidence, paperStateSha256: manualPaperEvidenceSha256(opened.state) }));
+  assert.equal(JSON.stringify(opened.state), before);
+});
+
+test('Futures LONG/SHORT manual consumers preserve public leverage and original signal direction; mismatch fails closed', async () => {
+  // Existing four-market-paper-sampler-v1.test.js public-evidence fixture values.
+  const futuresEvidence = { provider: 'bitget', contractStatus: 'TRADABLE', tickSize: 0.1,
+    minQty: 0.001, qtyStep: 0.001, markPrice: 100, indexPrice: 100,
+    fundingRate: 0.0001, openInterest: 100_000, leverage: 2, maxLeverage: 20,
+    marginMode: 'ISOLATED', liquidationDistancePct: 30 };
+  for (const direction of ['LONG', 'SHORT']) {
+    const state = createPaperTradingState(10_000, NOW);
+    const f = await manualCanonicalFixture(state, { entryOnly: true, direction, futuresEvidence });
+    const opened = applyPaperTradingAction(state, canonicalAction(f), f.now, f.evidence);
+    assert.equal(opened.position.leverage, futuresEvidence.leverage);
+    assert.equal(opened.position.canonicalPaper.identity.leverage, futuresEvidence.leverage);
+    assert.equal(opened.position.canonicalPaper.identity.side, direction);
+    assert.equal(opened.position.canonicalPaper.identity.signalDirection, 'BUY');
+    const bad = structuredClone(f.evidence);
+    bad.position.accountingEvidence.leverage += 1;
+    assert.throws(() => applyPaperTradingAction(state, canonicalAction(f), f.now, bad), error => error.code === 'CANONICAL_PAPER_FUTURES_LEVERAGE_MISMATCH');
+    const missing = structuredClone(f.evidence);
+    delete missing.position.accountingEvidence.leverage;
+    assert.throws(() => applyPaperTradingAction(state, canonicalAction(f), f.now, missing), error => error.code === 'CANONICAL_PAPER_LEVERAGE_PROVENANCE_REQUIRED');
+  }
+});
+
+test('nonzero canonical spread/slippage/latency/liquidity rates reach actual settlement without double charging', async () => {
+  const state = createPaperTradingState(10_000, NOW);
+  // Reuse existing four-market sampler test policy rates, never runtime policy values.
+  const f = await manualCanonicalFixture(state, { exitBar: { open: 100, high: 101, low: 94, close: 94 }, executionCostPolicy: {
+    commissionRate: 0.0005, taxRate: 0, spreadRate: 0.0004, slippageRate: 0.0005,
+    latencyRate: 0.0001, liquidityImpactRate: 0.0002, partialFillImpactRate: 0.0001, fundingRate: 0,
+  } });
+  assert.equal(f.bound.status, 'PRESENT');
+  const opened = applyPaperTradingAction(state, canonicalAction(f), f.now, f.evidence);
+  const settled = applyPaperTradingAction(opened.state, canonicalClose(f, opened), f.exitNow, { ...f.exitEvidence, paperStateSha256: manualPaperEvidenceSha256(opened.state) });
+  const journal = settled.state.journal[0];
+  const result = journal.canonicalPaper.settlement;
+  assert.notEqual(result.entryFillPrice, f.evidence.candidate.quote.ask);
+  assert.notEqual(result.exitFillPrice, f.exitEvidence.settlement.observation.settlementInput.exitQuote.bid);
+  assert.equal(journal.netPnl, (result.exitFillPrice - result.entryFillPrice) * result.quantity
+    - result.entryCost - result.exitCost - result.fundingCost);
+  assert.ok(Math.abs(settled.state.account.cashBalance - state.account.initialBalance - journal.netPnl) < 1e-8);
+  for (const name of ['spread','slippage','latency','liquidityImpact','partialFillImpact']) {
+    assert.ok(journal.canonicalPaper.fullCost.components[name].valuePercent > 0);
+    assert.deepEqual(journal.canonicalPaper.fullCost.components[name], f.bound.observation.settlementCostEvidence.components[name]);
+  }
+});
+
+test('owner state readback and actual persisted side/leverage cannot be replaced by client claims', async () => {
+  const state = createPaperTradingState(10_000, NOW);
+  const f = await manualCanonicalFixture(state);
+  assert.throws(() => applyPaperTradingAction(state, canonicalAction(f), f.now,
+    { ...f.evidence, paperStateSha256: '0'.repeat(64) }), error => error.code === 'CANONICAL_PAPER_OWNER_STATE_READBACK_REQUIRED');
+  const opened = applyPaperTradingAction(state, canonicalAction(f), f.now, f.evidence);
+  for (const key of ['symbol','side','leverage']) {
+    const changed = structuredClone(opened.state);
+    changed.positions[0][key] = key === 'leverage' ? changed.positions[0].leverage + 1 : 'MISMATCH';
+    const ownerStub = { ...f.exitEvidence, paperStateSha256: manualPaperEvidenceSha256(changed) };
+    assert.throws(() => applyPaperTradingAction(changed, canonicalClose(f, opened), f.exitNow, ownerStub),
+      error => error.code === 'CANONICAL_PAPER_ACTUAL_CONSUMER_IDENTITY_MISMATCH', key);
+  }
 });
