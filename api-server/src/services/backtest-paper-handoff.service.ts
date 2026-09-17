@@ -27,7 +27,7 @@ export function buildBacktestPaperHandoffs(
     fundingIntervalHours: request.fundingIntervalHours ?? 8,
   };
   const riskPolicy = {
-    initialCapital: request.initialCapital, riskPercent: request.riskPercent, leverage: request.leverage,
+    riskPercent: request.riskPercent, leverage: request.leverage,
     maximumConcurrentPositions: request.maximumConcurrentPositions, maximumTradesPerDay: request.maximumTradesPerDay,
     quantityStep: request.quantityStep ?? null, quantityPrecision: request.quantityPrecision ?? null,
     minimumQuantity: request.minimumQuantity ?? null, minimumNotional: request.minimumNotional ?? null,

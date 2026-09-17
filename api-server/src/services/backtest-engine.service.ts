@@ -54,6 +54,7 @@ export type BacktestPerformanceSlice = { trades: number; wins: number; losses: n
 export type BacktestSegmentPerformance = BacktestPerformanceSlice & { name: 'training' | 'validation' | 'test'; startTime: number; endTime: number; maximumDrawdown: number; maximumDrawdownPercent: number };
 export type BacktestWalkForwardWindow = { startTime: number; endTime: number; totalTrades: number; netPnl: number; maximumDrawdown: number; expectancy: number };
 export type BacktestResult = {
+  paperHandoffRunId?: string;
   paperHandoffs?: readonly BacktestPaperHandoff[];
   ok: true; mode: 'backtest-only'; orderSubmitted: false; symbol: string; timeframe: string; strategy: BacktestStrategyType;
   startTime: number; endTime: number; initialCapital: number; finalCapital: number; totalReturnPercent: number;
