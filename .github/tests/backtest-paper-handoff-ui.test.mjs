@@ -61,6 +61,9 @@ test('rendered Paper/Research references preserve identity and grant no executio
         assert.equal(validResearchSameCandidate({ ...waiting, [key]: value }, bundle), false, key);
       }
       assert.equal(validResearchSameCandidate({ ...waiting, stages: { ...waiting.stages, PAPER: { ...waiting.stages.PAPER, matched: true } } }, bundle), false);
+      const blocked = { ...waiting, identityAnchor: null, identityAnchorDigest: null, status: 'BLOCKED_DATA' };
+      assert.equal(validResearchSameCandidate(blocked, bundle), true);
+      assert.equal(validResearchSameCandidate({ ...blocked, stages: { ...blocked.stages, PAPER: { stage: 'PAPER', matched: true, status: 'IDENTITY_MATCHED', blockers: [] } } }, bundle), false);
       const html = renderResearch(waiting);
       assert.match(html, /PREWIRED_WAITING_EVIDENCE/u); assert.match(html, /PAPER_RUNTIME_EVIDENCE_MISSING/u);
       assert.match(html, /evidenceCredit=0/u); assert.match(html, /executionAuthority=NONE/u);
