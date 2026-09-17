@@ -8,6 +8,7 @@ import {
 } from '../services/backtest-engine.service';
 import { loadHistoricalBacktestCandles } from '../services/backtest-data.service';
 import { getFuturesContractRules } from '../services/futures-contract-rules.service';
+import { buildBacktestPaperHandoffs } from '../services/backtest-paper-handoff.service';
 
 const MAX_REQUEST_BYTES = 64 * 1024;
 const EXECUTION_TIMEOUT_MS = 25_000;
@@ -18,6 +19,7 @@ type BacktestDependencies = {
   loadCandles: typeof loadHistoricalBacktestCandles;
   loadContractRules: typeof getFuturesContractRules;
   execute: typeof runBacktest;
+  researchCodeSha: () => string;
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -139,6 +141,7 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
     loadCandles: dependencies.loadCandles ?? loadHistoricalBacktestCandles,
     loadContractRules: dependencies.loadContractRules ?? getFuturesContractRules,
     execute: dependencies.execute ?? runBacktest,
+    researchCodeSha: dependencies.researchCodeSha ?? (() => String(process.env.DEPLOY_SHA ?? '').trim().toLowerCase()),
   };
 
   router.post('/backtests/run', async (req, res) => {
@@ -161,7 +164,7 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
           deps.loadContractRules(request.symbol),
         ]);
         const started = performance.now();
-        const result = deps.execute({
+        const acceptedRequest: BacktestRequest = {
           ...request,
           quantityStep: rules.quantityStep,
           quantityPrecision: rules.quantityPrecision,
@@ -169,7 +172,9 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
           minimumNotional: rules.minimumNotional,
           maximumLeverage: rules.maximumLeverage,
           contractRulesStatus: rules.status,
-        }, history.candles);
+        };
+        const result = deps.execute(acceptedRequest, history.candles);
+        result.paperHandoffs = buildBacktestPaperHandoffs(acceptedRequest, history.candles, deps.researchCodeSha());
         const executionMs = performance.now() - started;
         result.warnings = [...new Set([...history.warnings, ...rules.warnings, ...result.warnings, `과거 캔들 제공자 요청 ${history.requestCount}회, 순수 계산 ${executionMs.toFixed(1)}ms`])];
         return result;
