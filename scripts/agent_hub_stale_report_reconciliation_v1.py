@@ -34,7 +34,7 @@ except ModuleNotFoundError:
 POLICY_VERSION = "agent-hub-recovery-stale-report-v1"
 MANUAL_ADAPTER_WORKER = "agent-hub-validation"
 MANUAL_ADAPTER_CHECKS = ("manual_adapter_v2=pass", "read_only_zero_proof=1")
-OWNER_LINEAGE_RE = re.compile(r"(?im)^\s*-?\s*owner\s*:\s*#(\d+)\s*$")
+OWNER_LINEAGE_RE = re.compile(r"(?im)^\s*-?\s*owner\s*:\s*#(\d+)\b.*$")
 LINEAGE_LINE_RE = re.compile(r"(?im)^\s*lineage\s*:\s*([^\n]+)$")
 PR_REF_RE = re.compile(r"#(\d+)")
 
