@@ -115,11 +115,11 @@ test('canonical evidence resolver rejects owner packets that try to set server b
   );
 });
 
-test('default canonical source is explicit fail-closed while non-canonical Paper remains available', async () => {
+test('default canonical source preserves fail-closed public API while non-canonical Paper remains available', async () => {
   const state = createPaperTradingState(10_000, NOW);
   assert.equal(await unavailableManualPaperCanonicalEvidenceSource(input(state, null)), undefined);
   await assert.rejects(
     () => unavailableManualPaperCanonicalEvidenceSource(input(state, 'canonical-candidate')),
-    paperError('CANONICAL_PAPER_OWNER_EVIDENCE_SOURCE_UNAVAILABLE', 503),
+    paperError('SERVER_OWNED_CANONICAL_PAPER_EVIDENCE_REQUIRED', 400),
   );
 });
