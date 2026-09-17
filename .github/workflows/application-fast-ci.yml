@@ -82,6 +82,14 @@ jobs:
           flag phase12 '^(api-server/.*(trade|approval|execution|order|automation)|stock-analyzer/.*(trade|approval|auto-trading))'
           flag ci '^\.github/'
 
+      - name: Run static connection graph audit
+        run: |
+          set -euo pipefail
+          node .github/scripts/connection-graph-auditor.mjs \
+            --json-output /tmp/connection-graph.json \
+            --markdown-output /tmp/connection-graph.md
+          cat /tmp/connection-graph.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Set up pnpm 9
         uses: pnpm/action-setup@v4
         with:
@@ -151,18 +159,15 @@ jobs:
         if: steps.impact.outputs.backend == 'true'
         run: pnpm --dir api-server run build:server
 
-      - name: CI contract syntax checks
+      - name: CI and auditor contract checks
         if: steps.impact.outputs.ci == 'true'
         run: |
-          if [ -f .github/scripts/connection-graph-auditor.mjs ]; then
-            node --check .github/scripts/connection-graph-auditor.mjs
-          fi
+          set -euo pipefail
+          node --check .github/scripts/connection-graph-auditor.mjs
           if compgen -G '.github/tests/pr-exact-head-*.test.mjs' > /dev/null; then
             node --test .github/tests/pr-exact-head-*.test.mjs
           fi
-          if [ -f .github/tests/connection-graph-auditor.test.mjs ]; then
-            node --test .github/tests/connection-graph-auditor.test.mjs
-          fi
+          node --test .github/tests/connection-graph-auditor.test.mjs
 
       - name: Development-only boundary
         run: |
