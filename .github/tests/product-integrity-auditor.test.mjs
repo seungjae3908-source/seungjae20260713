@@ -53,8 +53,9 @@ test('global capability probe reports readable absence as MISSING', () => {
   assert.equal(result.evidenceLevel, EVIDENCE_LEVEL.NOT_PROVEN);
 });
 
-test('orphan detector accepts a page consumed by another routed page', () => {
+test('orphan detector accepts a routed root page and its child page', () => {
   const files = new Map([
+    ['stock-analyzer/src/App.tsx', "const Workspace = lazy(() => import('@/pages/workspace'));"],
     ['stock-analyzer/src/pages/workspace.tsx', "import Expert from './expert';"],
     ['stock-analyzer/src/pages/expert.tsx', 'export default function Expert() {}'],
     ['stock-analyzer/src/pages/orphan.tsx', 'export default function Orphan() {}'],
