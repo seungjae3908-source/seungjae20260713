@@ -100,8 +100,8 @@ export const DEFAULT_EDGES = [
       },
       {
         id: 'scanner-paper-server-route',
-        paths: ['api-server/src/routes/trade-automation.ts'],
-        allOf: ["router.post('/scanner/plans'", 'assertPaperApprovalEnvelope'],
+        paths: ['api-server/src/routes/scanner-paper-plans.ts'],
+        allOf: ["router.post('/scanner/plans'", 'requireAdmin', 'registry.resolveScanner('],
       },
     ],
   },
@@ -151,8 +151,8 @@ export const DEFAULT_EDGES = [
       },
       {
         id: 'scanner-paper-server-route',
-        paths: ['api-server/src/routes/trade-automation.ts'],
-        allOf: ["router.post('/scanner/plans'", 'assertPaperApprovalEnvelope'],
+        paths: ['api-server/src/routes/scanner-paper-plans.ts'],
+        allOf: ["router.post('/scanner/plans'", 'requireAdmin', 'registry.resolveScanner('],
       },
       {
         id: 'scanner-paper-bridge-contract',
@@ -180,8 +180,8 @@ export const DEFAULT_EDGES = [
       },
       {
         id: 'scanner-paper-server-route',
-        paths: ['api-server/src/routes/trade-automation.ts'],
-        allOf: ["router.post('/scanner/plans'", 'assertPaperApprovalEnvelope'],
+        paths: ['api-server/src/routes/scanner-paper-plans.ts'],
+        allOf: ["router.post('/scanner/plans'", 'requireAdmin', 'registry.resolveScanner('],
       },
       {
         id: 'futures-paper-admission-contract',
@@ -225,7 +225,7 @@ export const DEFAULT_EDGES = [
       {
         id: 'result-bound-url-handoff',
         paths: ['stock-analyzer/src/components/backtest-research-panel.tsx'],
-        allOf: ['result.paperHandoffs.map', 'backtestPaperHandoffPath(handoff)'],
+        allOf: ['result.paperHandoffs.map', 'backtestPaperHandoffPath(handoff, result.paperHandoffRunId)'],
       },
       {
         id: 'canonical-strategy-paper-execution-consumer',
@@ -446,12 +446,26 @@ export const DEFAULT_EDGES = [
 // not just a mounted button, frontend URL or an unrelated workflow.
 for (const edge of DEFAULT_EDGES.filter(item => ['CG003', 'CG004', 'CG005', 'CG006'].includes(item.id))) {
   edge.required.push({
-    id: 'scanner-canonical-paper-server-consumer',
+    id: 'scanner-paper-route-mounted',
     paths: ['api-server/src/routes/trade-automation.ts'],
-    allOf: ["router.post('/scanner/plans'", 'assertPaperApprovalEnvelope', 'resolveScannerCanonicalPaperIdentity(', 'resolveCanonicalPaperAdmissionBridgeCandidate(', 'runRecurringPaperCycle('],
+    allOf: ['router.use(createScannerPaperPlansRouter())'],
+  }, {
+    id: 'scanner-server-source-canonical-identity',
+    paths: ['api-server/src/services/product-paper-source-registry.service.ts'],
+    allOf: ['assertPaperApprovalEnvelope', "this.read('SCANNER'", 'resolveScannerCanonicalPaperIdentity(', 'SCANNER_DIRECTION_MISMATCH', 'SCANNER_TIMEFRAME_MISMATCH', 'SERVER_LEVERAGE_PROVENANCE_REQUIRED'],
+  });
+  edge.required.push({
+    id: 'scanner-canonical-paper-server-consumer',
+    paths: ['api-server/src/routes/scanner-paper-plans.ts'],
+    allOf: ["router.post('/scanner/plans'", 'registry.resolveScanner(', 'resolveCanonicalPaperAdmissionBridgeCandidate(', 'runRecurringPaperCycle('],
   });
 }
 const backtestPaperEdge = DEFAULT_EDGES.find(item => item.id === 'CG007');
+backtestPaperEdge.required.push({
+  id: 'backtest-server-run-reference-validation',
+  paths: ['api-server/src/routes/backtests.ts'],
+  allOf: ["router.post('/backtests/paper/validate'", 'requireAdmin', 'sourceRegistry.resolveBacktest(', 'sourceRegistry.captureBacktest('],
+});
 backtestPaperEdge.required.push({
   id: 'same-candidate-paper-position-consumer',
   paths: ['api-server/src/services/paper-trading-position.service.ts'],

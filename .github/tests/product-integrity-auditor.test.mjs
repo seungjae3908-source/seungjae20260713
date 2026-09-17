@@ -199,7 +199,12 @@ test('all eleven reconciled P1 scopes preserve implementation gaps and explicit 
   }
   assert.equal(ledger.filter(item => item.classification === 'EXISTING_OWNER').length, 3);
   assert.equal(ledger.filter(item => item.classification === '#1085_REAL_GAP').length, 8);
-  for (const id of ['EL-CG011', 'EL-CG012', 'EL-CG013']) assert.match(ledger.find(item => item.id === id).ownerAcknowledgement, /NOT_CONFIRMED/u);
+  for (const id of ['EL-CG011', 'EL-CG012', 'EL-CG013']) {
+    const item = ledger.find(item => item.id === id);
+    assert.match(item.ownerAcknowledgement, /ACCEPTED_DRAFT_IN_PROGRESS/u);
+    assert.equal(item.status, 'OPEN', 'responsibility acceptance is not implementation or receipt proof');
+    assert.equal(item.implementationGap, true);
+  }
 });
 
 test('all-eight-field type declarations and preview still cannot prove a real Paper position consumer', () => {
