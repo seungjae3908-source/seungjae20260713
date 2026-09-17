@@ -14,6 +14,8 @@ type CreatedPlan = {
   symbol: string;
   timeframe: string;
   side: string;
+  leverage: number | null;
+  leverageProvenance: 'CANONICAL_SIMULATION_DATA_EVIDENCE' | 'NOT_APPLICABLE_CASH_OR_SPOT';
   quantity: number | null;
   entryPrice: number | null;
   notional: number | null;
@@ -252,9 +254,9 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
         <div className="mt-3 rounded-2xl border border-positive/30 bg-positive/5 p-3 text-xs">
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <Metric label="시장/방향" value={`${result.plan.market} · ${result.plan.side}`} />
+            <Metric label="서버 leverage" value={result.plan.leverage == null ? 'N/A' : `${formatNumber(result.plan.leverage)}x`} />
             <Metric label="수량" value={formatNumber(result.plan.quantity)} />
             <Metric label="모의 진입가" value={formatNumber(result.plan.entryPrice)} />
-            <Metric label="명목금액" value={formatNumber(result.plan.notional)} />
           </div>
           <p className="mt-3 break-all font-bold">Candidate {result.plan.candidateId}</p>
           <p className="mt-1 break-keep text-[10px] font-bold text-muted-foreground">
