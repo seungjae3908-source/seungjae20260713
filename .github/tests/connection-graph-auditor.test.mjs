@@ -97,6 +97,7 @@ test('frontend endpoint text cannot prove KR scanner backend connection', () => 
     ['stock-analyzer/src/components/scanner-approval-composer.tsx', "selection.market === 'KR' /api/trade-automation/scanner/plans accountMode: 'paper' adapter: 'paper'"],
     ['stock-analyzer/src/pages/signal-scanner.tsx', '<ScannerApprovalComposer'],
     ['api-server/src/routes/trade-automation.ts', "router.post('/plans', handler)"],
+    ['api-server/src/routes/scanner-paper-plans.ts', ''],
   ]);
   const result = evaluateEdge(files, DEFAULT_EDGES.find((edge) => edge.id === 'CG003'));
   assert.equal(result.status, CONNECTION_STATUS.PARTIAL);
@@ -139,6 +140,7 @@ test('every Scanner market requires canonical server identity and Paper consumer
     const edge = DEFAULT_EDGES.find(item => item.id === id);
     const files = new Map(edge.required.flatMap(probe => (probe.paths ?? []).map(file => [file, [...(probe.allOf ?? []), ...(probe.anyOf ?? [])].join(' ')])));
     files.set('api-server/src/routes/trade-automation.ts', "router.post('/scanner/plans' assertPaperApprovalEnvelope accountMode paper");
+    files.set('api-server/src/routes/scanner-paper-plans.ts', "router.post('/scanner/plans' registry.resolveScanner( requireAdmin executionConnected: false");
     const result = evaluateEdge(files, edge);
     assert.notEqual(result.status, 'PROVEN', id);
     assert.equal(result.required.find(probe => probe.id === 'scanner-canonical-paper-server-consumer').state, 'MISSING', id);
@@ -152,5 +154,17 @@ test('declared canonical Paper consumer names resolve to existing owner exports'
   assert.match(manual, /export function applyPaperTradingAction\(/u);
   for (const id of ['CG003', 'CG004', 'CG005', 'CG006']) {
     assert.ok(DEFAULT_EDGES.find(edge => edge.id === id).required.find(probe => probe.id === 'scanner-canonical-paper-server-consumer').allOf.includes('runRecurringPaperCycle('));
+  }
+});
+
+test('mounted source-only Scanner route does not prove admission or Paper execution', () => {
+  for (const id of ['CG003', 'CG004', 'CG005', 'CG006']) {
+    const edge = DEFAULT_EDGES.find(item => item.id === id);
+    const files = new Map(edge.required.flatMap(probe => (probe.paths ?? []).map(file => [file, [...(probe.allOf ?? []), ...(probe.anyOf ?? [])].join(' ')])));
+    files.set('api-server/src/routes/scanner-paper-plans.ts', "router.post('/scanner/plans' requireAdmin registry.resolveScanner( executionConnected: false CANONICAL_PAPER_EXECUTION_CONSUMER_NOT_CONNECTED");
+    const result = evaluateEdge(files, edge);
+    assert.equal(result.required.find(probe => probe.id === 'scanner-server-source-canonical-identity').state, 'PROVEN');
+    assert.equal(result.required.find(probe => probe.id === 'scanner-canonical-paper-server-consumer').state, 'MISSING');
+    assert.notEqual(result.status, 'PROVEN');
   }
 });

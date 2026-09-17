@@ -55,6 +55,7 @@ export type BacktestTrade = {
   marketRegime: string;
 };
 export type BacktestResult = {
+  paperHandoffRunId?: string;
   paperHandoffs?: readonly BacktestPaperHandoff[];
   ok: true;
   mode: 'backtest-only';
@@ -155,6 +156,9 @@ export async function runBacktest(values: BacktestFormValues): Promise<BacktestR
     || body.result.paperHandoffs.length > 2 || body.result.paperHandoffs.some((value) => !parseBacktestPaperHandoff(value)
       || value.symbol !== body.result!.symbol || value.timeframe !== body.result!.timeframe))) {
     throw new Error('백테스트 후보 전달 계약을 확인하지 못했습니다.');
+  }
+  if (body.result.paperHandoffRunId !== undefined && !/^[0-9a-f-]{36}$/u.test(body.result.paperHandoffRunId)) {
+    throw new Error('백테스트 서버 참조를 확인하지 못했습니다.');
   }
   return body.result;
 }

@@ -13,6 +13,7 @@ import { createSupabaseSplitOrderRepository } from '../services/trade-split-orde
 import { credentialConfigurationStatus, encryptTradingCredentials } from '../services/trade-credential-vault.service';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
+import { createScannerPaperPlansRouter } from './scanner-paper-plans';
 import type {
   TradingExchange,
   TradingOrder,
@@ -22,6 +23,7 @@ import type {
 } from '../services/trade-automation.types';
 
 const router: IRouter = Router();
+router.use(createScannerPaperPlansRouter());
 const EXCHANGES = new Set<TradingExchange>(['bitget', 'upbit', 'kiwoom']);
 const CANCEL_RECONCILIATION_STATES = new Set([
   'SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED', 'RECOVERY_REQUIRED',

@@ -11,10 +11,60 @@ import {
   setTradingPlanMarketIntelligenceRunnerForTests,
 } from '../services/trade-market-intelligence.service';
 import type { TradingPlanInput } from '../services/trade-automation.types';
+import { createScannerPaperPlansRouter } from './scanner-paper-plans';
+import { ProductPaperSourceRegistry } from '../services/product-paper-source-registry.service';
+import type { ScannerResponse, ScannerSignalCard } from '../services/scanner-signal.types';
+import { getScannerStrategyProfile } from '../services/scanner-strategy-profile.service';
 
 const USER = '11111111-1111-1111-1111-111111111111';
 const repository = new InMemoryTradingRepository();
 const MASTER_KEY = Buffer.alloc(32, 9).toString('base64');
+
+test('actual Scanner HTTP route validates source but never claims a Paper plan or executes a generic trade', async () => {
+  const now = Date.UTC(2026, 8, 17);
+  const sha = 'a'.repeat(40);
+  const registry = new ProductPaperSourceRegistry(() => now);
+  const timeframe = getScannerStrategyProfile('KR_STOCK', 'SWING').primaryTimeframe;
+  const card: ScannerSignalCard = { signalId: 'server-signal', assetClass: 'stock', market: 'KR', symbol: '005930',
+    direction: 'LONG', action: 'BUY', strategyMode: 'swing', observedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + 24 * 60 * 60_000).toISOString(), strongSignalEligible: true,
+    signalState: 'READY_FOR_APPROVAL', dataState: 'complete', dataSources: ['test-only-public-source'], matched: ['trend_alignment'],
+    exchange: null, name: 'test-only', currency: 'KRW', assetType: 'stock', listingStatus: 'LISTED', price: 100,
+    changePercent: 1, score: 80, confidence: 80, dataCompleteness: 100, riskScore: 10, riskLevel: 'LOW', liquidity: 10000,
+    volume: 100, tradingValue: 10000, spreadPercent: 0.1, volatilityPercent: 1, notMatched: [], unverified: [], evidence: [], warnings: [],
+    pricePlan: { entryZone: { from: 99, to: 101 }, invalidation: 95, stopLoss: 95, targets: [110], riskReward: 2 } };
+  registry.captureScanner(USER, { requestId: 'server-run', timeframe, cards: [card], execution: { cancelled: false } } as ScannerResponse, sha);
+  const app = express();
+  app.use(express.json({ limit: '32kb' }));
+  app.use((req, _res, next) => {
+    const row = req as AuthenticatedRequest;
+    row.member = { id: USER, login_name: 'test', display_name: 'test', role: 'admin', membership_level: 'admin', status: 'approved', is_active: true };
+    next();
+  });
+  app.use('/api/trade-automation', createScannerPaperPlansRouter({ registry, sourceSha: () => sha }));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>(resolve => server.once('listening', resolve));
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/trade-automation/scanner/plans`;
+  const valid = { mode: 'approval', accountMode: 'paper', adapter: 'paper', market: 'KR', symbol: '005930',
+    timeframe, side: 'BUY', searchRunId: 'server-run', signalId: 'server-signal' };
+  try {
+    const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(valid) });
+    assert.equal(response.status, 503);
+    const payload = await response.json() as Record<string, any>;
+    assert.equal(payload.serverVerified, true);
+    assert.equal(payload.ok, false); assert.equal(payload.executionConnected, false);
+    assert.equal(payload.error, 'CANONICAL_PAPER_EXECUTION_CONSUMER_NOT_CONNECTED');
+    assert.equal(payload.plan, undefined); assert.equal(payload.position, undefined);
+    assert.equal(payload.orderSubmitted, false); assert.equal(payload.exchangeRequestSent, false);
+    assert.equal(payload.privateTradingApiAllowed, false); assert.equal(payload.evidenceCredit, 0);
+    for (const change of [{ side: undefined }, { accountMode: 'live' }, { canonicalEvidence: { genuine: true } }, { symbol: '000660' }]) {
+      const rejected = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...valid, ...change }) });
+      assert.ok(rejected.status >= 400 && rejected.status < 500);
+      const rejectedPayload = await rejected.json() as Record<string, any>;
+      assert.equal(rejectedPayload.orderSubmitted, false);
+    }
+  } finally { await close(server); }
+});
 
 async function unavailableMarketIntelligence(
   input: Pick<TradingPlanInput, 'exchange' | 'market' | 'symbol'>,
