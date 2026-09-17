@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   EVIDENCE_LEVEL,
+  DEFAULT_CAPABILITIES,
   INTEGRITY_STATUS,
   buildErrorLedger,
   evaluateCapability,
@@ -23,6 +24,22 @@ test('static capability proof never upgrades itself to runtime or E2E proof', ()
   assert.equal(result.evidenceLevel, EVIDENCE_LEVEL.STATIC_PROVEN);
   assert.notEqual(result.evidenceLevel, EVIDENCE_LEVEL.RUNTIME_PROVEN);
   assert.notEqual(result.evidenceLevel, EVIDENCE_LEVEL.E2E_PROVEN);
+});
+
+test('member access capability locates the canonical JS package, not a fictional TS entry', () => {
+  const capability = DEFAULT_CAPABILITIES.find((item) => item.id === 'CAP025');
+  const files = new Map([['packages/member-access/src/index.js', 'canAccessPaperTrading canAccessBacktests']]);
+  assert.equal(evaluateCapability(files, capability).status, INTEGRITY_STATUS.PROVEN);
+});
+
+test('documentation and test references cannot conceal an orphan product page', () => {
+  const file = 'stock-analyzer/src/pages/orphan.tsx';
+  const files = new Map([
+    [file, 'export default function Orphan() {}'],
+    ['docs/inventory.md', '@/pages/orphan'],
+    ['stock-analyzer/src/orphan.test.tsx', "import Orphan from '@/pages/orphan'"],
+  ]);
+  assert.deepEqual(findOrphanPages(files).map((item) => item.file), [file]);
 });
 
 test('contract proof ceiling remains CONTRACT_PROVEN', () => {

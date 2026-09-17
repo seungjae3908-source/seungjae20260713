@@ -90,3 +90,24 @@ test('default graph ids are unique and core repair lanes are represented', () =>
     assert.ok(DEFAULT_EDGES.some((edge) => edge.lane === lane), `missing lane ${lane}`);
   }
 });
+
+test('frontend endpoint text cannot prove KR scanner backend connection', () => {
+  const files = new Map([
+    ['stock-analyzer/src/components/scanner-approval-composer.tsx', "selection.market === 'KR' /api/trade-automation/scanner/plans accountMode: 'paper' adapter: 'paper'"],
+    ['stock-analyzer/src/pages/signal-scanner.tsx', '<ScannerApprovalComposer'],
+    ['api-server/src/routes/trade-automation.ts', "router.post('/plans', handler)"],
+  ]);
+  const result = evaluateEdge(files, DEFAULT_EDGES.find((edge) => edge.id === 'CG003'));
+  assert.equal(result.status, CONNECTION_STATUS.PARTIAL);
+  assert.equal(result.required.find((probe) => probe.id === 'scanner-paper-server-route').state, CONNECTION_STATUS.MISSING);
+});
+
+test('uppercase canonical readonly contract and its consumer are recognized', () => {
+  const files = new Map([
+    ['stock-analyzer/src/components/brokerage-account-connections.tsx', 'read only'],
+    ['stock-analyzer/src/pages/portfolio.tsx', 'positions'],
+    ['stock-analyzer/src/lib/account-readonly-response.ts', 'UNAVAILABLE requireAccountReadonlySnapshotResponse readOnly orderRequests !== 0 credentialsReturned !== false'],
+    ['stock-analyzer/src/lib/auth-fetch.ts', 'requireAccountReadonlySnapshotResponse(path, method response.clone().json()'],
+  ]);
+  assert.equal(evaluateEdge(files, DEFAULT_EDGES.find((edge) => edge.id === 'CG015')).status, CONNECTION_STATUS.PROVEN);
+});
