@@ -2,15 +2,15 @@
 """Fail-closed stale-report reconciliation for processor-window recovery.
 
 The normal Hub rollover intentionally refuses to move while a trusted schema-v2 report
-has no command record.  Very old overflowed Hubs can contain historical report records
+has no command record. Very old overflowed Hubs can contain historical report records
 whose owner work is already terminal, or read-only snapshots that were never executable
-worker tasks.  This helper does not declare the underlying product/economic issue fixed.
+worker tasks. This helper does not declare the underlying product/economic issue fixed.
 It only emits explicit terminal HUB_COMMAND continuity records after every pending report
 in the bounded processor window is conservatively proven stale/superseded.
 
 The helper is mutation-capable only for the same explicit workflow_dispatch + issue-scoped
-confirmation used by processor-window recovery.  Classification is all-or-nothing before
-any issue comment is posted.  Unknown or still-open work fails closed.
+confirmation used by processor-window recovery. Classification is all-or-nothing before
+any issue comment is posted. Unknown or still-open work fails closed.
 """
 from __future__ import annotations
 
@@ -38,6 +38,13 @@ OWNER_LINEAGE_RE = re.compile(r"(?im)^\s*-?\s*owner\s*:\s*#(\d+)\b.*$")
 LINEAGE_LINE_RE = re.compile(r"(?im)^\s*lineage\s*:\s*([^\n]+)$")
 PR_REF_RE = re.compile(r"#(\d+)")
 LEGACY_CHANGED_FILE_RE = re.compile(r"^[A-Za-z0-9_.@+/-]+$")
+LEGACY_EVIDENCE_STATUS = "VERIFIED_EVIDENCE_INCREASE"
+LEGACY_EVIDENCE_RUN_FIELDS = (
+    "required_ci_run",
+    "source_capture_run_id",
+    "ingest_run_id",
+    "independence_run_id",
+)
 
 
 class StaleReportReconciliationError(RuntimeError):
@@ -99,6 +106,100 @@ def _historical_manual_snapshot(fields: Mapping[str, str], current_sha: str) -> 
     )
 
 
+def _verified_historical_main(github: Any, source_sha: str, current_sha: str) -> bool:
+    """Require the legacy snapshot SHA to be an actual ancestor of current main."""
+    if not contract.SHA_RE.fullmatch(source_sha) or source_sha == current_sha:
+        return False
+    payload = github.request(
+        "GET",
+        f"/repos/{github.repository}/compare/{source_sha}...{current_sha}",
+    )
+    if not isinstance(payload, dict):
+        return False
+    base = str(((payload.get("base_commit") or {}).get("sha")) or "").strip().lower()
+    merge_base = str(((payload.get("merge_base_commit") or {}).get("sha")) or "").strip().lower()
+    return (
+        str(payload.get("status") or "").strip().lower() == "ahead"
+        and int(payload.get("behind_by") or 0) == 0
+        and base == source_sha
+        and merge_base == source_sha
+    )
+
+
+def _successful_run_for_sha(github: Any, run_id: int, source_sha: str) -> bool:
+    payload = github.request("GET", f"/repos/{github.repository}/actions/runs/{run_id}")
+    if not isinstance(payload, dict) or int(payload.get("id") or 0) != run_id:
+        return False
+    return (
+        str(payload.get("head_sha") or "").strip().lower() == source_sha
+        and str(payload.get("status") or "").strip().lower() == "completed"
+        and str(payload.get("conclusion") or "").strip().lower() == "success"
+    )
+
+
+def _historical_owner_evidence_checkpoint(
+    comment: Mapping[str, Any],
+    *,
+    fields: Mapping[str, str],
+    repository: str,
+    current_sha: str,
+    github: Any,
+) -> tuple[str, ...] | None:
+    """Recognize one strict historical evidence-only report family without inventing closure.
+
+    Early profitability evidence collectors posted OWNER-authored schema-v2 checkpoints before
+    the canonical worker-report fields existed. They did not own a PR or executable task; they
+    recorded immutable natural-evidence counters and an explicit next zero. Such a record may be
+    terminalized only for Hub control continuity when its old exact-main is a real ancestor of
+    current main and its referenced CI run is a real successful run for that exact old SHA.
+    Economic/runtime truth in the source report is preserved unchanged.
+    """
+    owner = repository.split("/", 1)[0] if "/" in repository else repository
+    author = str((comment.get("user") or {}).get("login") or "")
+    source_sha = str(fields.get("exact_main") or "").strip().lower()
+    run_values = {name: str(fields.get(name) or "").strip() for name in LEGACY_EVIDENCE_RUN_FIELDS}
+
+    if (
+        str(comment.get("author_association") or "").upper() != "OWNER"
+        or author != owner
+        or str(fields.get("schema_version") or "").strip() != "2"
+        or str(fields.get("status") or "").strip() != LEGACY_EVIDENCE_STATUS
+        or not contract.TASK_RE.fullmatch(str(fields.get("task_id") or "").strip())
+        or str(fields.get("canonical_hub") or "").strip() != "838"
+        or str(fields.get("release_control") or "").strip() != "23"
+        or str(fields.get("required_ci") or "").strip() != "6/6 SUCCESS"
+        or str(fields.get("execution_authority") or "").strip() != "NONE"
+        or str(fields.get("forbidden_actions_performed") or "").strip() != "0"
+        or str(fields.get("downstream_economic_credit_delta") or "").strip() != "0"
+        or str(fields.get("full_cost_ready") or "").strip().lower() != "false"
+        or str(fields.get("net_alpha_ready") or "").strip().lower() != "false"
+        or str(fields.get("profitability_proven") or "").strip().lower() != "false"
+        or not str(fields.get("source_contract_family") or "").strip()
+        or not str(fields.get("first_zero") or "").strip()
+        or str(fields.get("pr_number") or "").strip().lower() not in {"", "none", "n/a"}
+        or any(not value.isdigit() or int(value) <= 0 for value in run_values.values())
+        or not contract.SHA_RE.fullmatch(source_sha)
+        or source_sha == current_sha
+    ):
+        return None
+
+    if not _verified_historical_main(github, source_sha, current_sha):
+        return None
+    required_ci_run = int(run_values["required_ci_run"])
+    if not _successful_run_for_sha(github, required_ci_run, source_sha):
+        return None
+
+    return (
+        f"source_main:{source_sha}",
+        f"required_ci_run:{required_ci_run}:success",
+        f"source_capture_run:{run_values['source_capture_run_id']}",
+        f"ingest_run:{run_values['ingest_run_id']}",
+        f"independence_run:{run_values['independence_run_id']}",
+        f"first_zero:{fields.get('first_zero', '')}",
+        f"current_main:{current_sha}",
+    )
+
+
 def _owner_lineage_prs(comment: Mapping[str, Any], fields: Mapping[str, str], current_sha: str) -> tuple[int, ...]:
     if str(comment.get("author_association") or "").upper() != "OWNER":
         return ()
@@ -123,7 +224,7 @@ def _legacy_bare_changed_files_report(
     """Normalize one historical OWNER-only bare-list field, then re-run the full contract.
 
     Older schema-v2 reports sometimes emitted ``changed_files: [a, b]`` before the Hub
-    required JSON quoting.  This adapter is deliberately local to overflow reconciliation:
+    required JSON quoting. This adapter is deliberately local to overflow reconciliation:
     the canonical report validator remains strict, every other field is revalidated, and
     unsafe/ambiguous paths still fail closed.
     """
@@ -205,6 +306,21 @@ def classify_pending_report(comment: Mapping[str, Any], *, repository: str, curr
                 "historical_read_only_snapshot",
                 (f"source_head:{fields.get('head_sha', '')}", f"current_main:{current_sha}"),
             )
+        if report is None:
+            checkpoint_evidence = _historical_owner_evidence_checkpoint(
+                comment,
+                fields=fields,
+                repository=repository,
+                current_sha=current_sha,
+                github=github,
+            )
+            if checkpoint_evidence is not None:
+                return Reconciliation(
+                    cid,
+                    _task_id(fields, cid),
+                    "historical_owner_evidence_checkpoint",
+                    checkpoint_evidence,
+                )
         if report is None:
             refs = _owner_lineage_prs(comment, fields, current_sha)
             if refs:
