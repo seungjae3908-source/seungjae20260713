@@ -6,6 +6,8 @@ on:
       - scripts/agent_hub_processor_window_recovery_v1.py
       - scripts/test_agent_hub_processor_window_recovery_v1.py
       - .github/workflows/agent-hub-processor-window-recovery.yml
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       source_issue:
@@ -27,11 +29,20 @@ permissions:
   contents: read
 
 concurrency:
-  group: agent-hub-processor-window-recovery-${{ github.event.pull_request.number || github.run_id }}
+  group: agent-hub-processor-window-recovery-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
   cancel-in-progress: false
 
 jobs:
   test:
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (
+        github.event.action == 'created' &&
+        github.event.issue.pull_request == null &&
+        github.event.comment.user.login == github.repository_owner &&
+        github.event.comment.author_association == 'OWNER' &&
+        github.event.comment.body == '/recover-agent-hub-processor-window'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -48,7 +59,16 @@ jobs:
         run: python -m unittest scripts.test_agent_hub_processor_window_recovery_v1 -v
 
   recover:
-    if: github.event_name == 'workflow_dispatch'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.action == 'created' &&
+        github.event.issue.pull_request == null &&
+        github.event.comment.user.login == github.repository_owner &&
+        github.event.comment.author_association == 'OWNER' &&
+        github.event.comment.body == '/recover-agent-hub-processor-window'
+      )
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -56,9 +76,9 @@ jobs:
       contents: read
       issues: write
     env:
-      RECOVERY_SOURCE_ISSUE: ${{ inputs.source_issue }}
-      RECOVERY_CONFIRMATION: ${{ inputs.confirmation }}
-      RECOVERY_APPLY: ${{ inputs.apply }}
+      RECOVERY_SOURCE_ISSUE: ${{ github.event_name == 'workflow_dispatch' && inputs.source_issue || github.event.issue.number }}
+      RECOVERY_CONFIRMATION: ${{ github.event_name == 'workflow_dispatch' && inputs.confirmation || format('RECOVER_ISSUE_{0}_PROCESSOR_OVERFLOW', github.event.issue.number) }}
+      RECOVERY_APPLY: ${{ (github.event_name == 'workflow_dispatch' && inputs.apply) || github.event_name == 'issue_comment' }}
       GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
