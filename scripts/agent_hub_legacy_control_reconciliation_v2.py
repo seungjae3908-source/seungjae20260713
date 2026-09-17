@@ -47,6 +47,7 @@ ECONOMIC_ZERO_KEYS = (
     "economic_credit_delta_from_pr807",
     "downstream_economic_credit_delta",
     "ci_economic_credit",
+    "economicCredit",
 )
 
 
