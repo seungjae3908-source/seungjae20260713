@@ -8,7 +8,7 @@
     "sourceGitBlobSha": "7dc275b70f9379e32f3fd6c718a612b06ceb1c46",
     "sourceSha256": "8c7563936de865e9103d73d15c0442a44f1cf33426315e758abad83d96880e0c"
   },
-  "sourceGraphSha256": "ae4c7154d588812e201a39c4c5707322514b1715cae384f2b002d2b158fe1a06",
+  "sourceGraphSha256": "7a3f727e2184f68ce52d5518c2160d22ba4f331fa0ca2e1452a66c5a28787dd2",
   "sourceFiles": [
     "api-server/src/data/asset-type.ts",
     "api-server/src/lib/bounded-work-pool.ts",
@@ -70,7 +70,7 @@
     "api-server/src/services/forward-recommendation-observer.service.ts": "ac512d6f6988b404143e22577fab04a610836e3d06cc9c965c178491aedd5957",
     "api-server/src/services/market-price-precision.service.ts": "29030f177420c0227857ded9efdc5fe522e029a0f40540d1e42b4d1e7bc88a6b",
     "api-server/src/services/paper-simulated-execution-evidence.service.ts": "8610f2d7783ea0a3bf7d0e3089989a693c3940620d163842386afa4743017350",
-    "api-server/src/services/paper-trading-core.service.ts": "8e6a8965e32f75ec8bef6485ef3af8a4dd3d0480341b6506b9b8bdddfa07fb75",
+    "api-server/src/services/paper-trading-core.service.ts": "efc851fd04c953ba4f13283bfbee7b269e4e49641f9b24a6e0f19967ee309207",
     "api-server/src/services/paper-trading-state-snapshot.service.ts": "20afcc5ce5e415f038dbe48a3effd9d0edda792eac854931170e59d8ed26ab55",
     "api-server/src/services/public-market-http.ts": "f1ec00932db5a2e21c0e32d9c73026a4246cf162608eec153f05745079ddd9ce",
     "api-server/src/services/scanner-candidate-ranking.service.ts": "84c24ec9729e4a5e36f7360ad1a6f4de2b8a8ed40c5a6ae9071fa810cb2ae82d",
@@ -95,7 +95,7 @@
     "market-intelligence-sidecar/src/execution-quality.mjs": "f91139e1a06c26c3ac42920b3f95271aa96ee4bfacc228236ad4b313444c1cb8",
     "market-prediction-lab/src/bitget-position-tier-v1.js": "ddfa77300339b0968e719bd547a84389c890cc1d03982ec3d2d7d30859f6ed01"
   },
-  "bundleSha256": "ee070f3d764a034cb1a7c8e40b34a5fa158fdfd9da48c54dcd1d6a2fed37d198",
+  "bundleSha256": "7fe1d1a95efd44a750bf0d28a20643a2c1a04010abf9d88ca9c2272350434f35",
   "admissionBundleSchemaVersion": "scanner-paper-admission-evidence-bundle-v1",
   "paperStateSnapshotSchemaVersion": "paper-trading-state-snapshot-v2",
   "callbackOwnerContractSchemaVersion": "authoritative-paper-callback-owner-contract-v1",
