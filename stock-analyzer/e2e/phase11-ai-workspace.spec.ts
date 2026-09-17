@@ -221,6 +221,7 @@ test('AI chat handles send, refusal response, and cancellation-safe UI', async (
         answer: request.message.includes('주문')
           ? '주문 작업은 실행할 수 없습니다.'
           : 'RSI는 가격 변화의 상대적 강도를 보는 기술지표입니다.',
+        selection: request.context ?? {},
       }),
     }).catch(() => undefined);
   });
