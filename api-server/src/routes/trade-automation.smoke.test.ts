@@ -122,7 +122,8 @@ test('Scanner canonical Paper consumer preserves exact identity across all four 
         schemaVersion: 'canonical-paper-simulation-authority-v1', status: 'READY', blockers: [],
         marketAdapterIdentity: { market: candidate.signal.market }, executionPolicy: { version: 'public-evidence-simulated-paper-v1' },
         orderPolicy: { version: 'public-evidence-simulated-market-order-v1' },
-        execution: { dataEvidence: { dataQuality: 'READY' }, costPolicy: { version: candidate.signal.strategyIdentity.costPolicyVersion } },
+        execution: { dataEvidence: { dataQuality: 'READY', ...(candidate.signal.market === 'CRYPTO_FUTURES' ? { leverage: 3 } : {}) },
+          costPolicy: { version: candidate.signal.strategyIdentity.costPolicyVersion } },
         order: { type: 'MARKET', direction: candidate.signal.direction, quantity: 1 },
         quote: { bid: 99, ask: 100 }, executionAuthority: 'NONE', simulatedOnly: true, liveOrderAllowed: false,
         privateTradingApiAllowed: false, orderSubmitted: false, exchangeRequestSent: false, productionMutationAllowed: false,
@@ -152,6 +153,10 @@ test('Scanner canonical Paper consumer preserves exact identity across all four 
       assert.equal(body.ok, true); assert.equal(body.serverVerified, true); assert.equal(body.executionConnected, true);
       assert.equal(body.plan.candidateId, sourceCandidate.candidateId);
       assert.equal(body.plan.market, item.canonicalMarket); assert.equal(body.plan.side, item.action);
+      assert.equal(body.plan.leverage, item.canonicalMarket === 'CRYPTO_FUTURES' ? 3 : null);
+      assert.equal(body.plan.leverageProvenance, item.canonicalMarket === 'CRYPTO_FUTURES'
+        ? 'CANONICAL_SIMULATION_DATA_EVIDENCE' : 'NOT_APPLICABLE_CASH_OR_SPOT');
+      assert.equal(cycleCandidate.leverage, body.plan.leverage);
       assert.equal(body.position.candidateId, sourceCandidate.candidateId);
       assert.equal(cycleCandidate.signal.strategyIdentity.parameterHash, sourceCandidate.signal.strategyIdentity.parameterHash);
       assert.equal(cycleCandidate.signal.strategyIdentity.researchCodeSha, sha);
