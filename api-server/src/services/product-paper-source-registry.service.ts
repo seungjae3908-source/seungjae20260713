@@ -72,10 +72,11 @@ export class ProductPaperSourceRegistry {
   private put(key: string, source: Source) {
     this.prune();
     // A duplicate source reference cannot refresh its timestamp or substitute
-    // another result. Eviction makes old references unresolvable, never latest.
-    if (this.records.has(key)) return;
-    while (this.records.size >= MAX_RECORDS) this.records.delete(this.records.keys().next().value!);
+    // another result. Saturation rejects new references: evicting a still-live
+    // key would permit that reference to be rehydrated with another snapshot.
+    if (this.records.has(key) || this.records.size >= MAX_RECORDS) return false;
     this.records.set(key, freeze(structuredClone(source)));
+    return true;
   }
   captureScanner(accountId: string, response: ScannerResponse, sourceSha: string): void {
     const nowMs = this.now();
@@ -108,8 +109,7 @@ export class ProductPaperSourceRegistry {
         kind: 'BACKTEST', accountId, sourceId, sourceSha, storedAtMs: nowMs,
         expiresAtMs: nowMs + MAX_SOURCE_AGE_MS, request, handoff,
       };
-      this.put(this.key('BACKTEST', accountId, sourceId, handoff.candidateId), source);
-      count += 1;
+      if (this.put(this.key('BACKTEST', accountId, sourceId, handoff.candidateId), source)) count += 1;
     }
     return count ? sourceId : null;
   }
