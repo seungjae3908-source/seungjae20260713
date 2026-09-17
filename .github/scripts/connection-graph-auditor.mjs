@@ -477,6 +477,27 @@ backtestPaperEdge.required.push({
   allOf: ['backtestCandidate', 'resolveCanonicalStrategyIdentity(', 'applyPaperTradingAction', 'evaluate('],
 });
 
+// Owner-delegated consumers are useful diagnostic context, not closure evidence.
+// Keep every required probe unchanged: a typed consumer cannot originate genuine
+// cost measurements, persisted readback or an immutable validation receipt.
+const manualContractPath = 'api-server/src/services/manual-paper-canonical-contract.service.ts';
+DEFAULT_EDGES.find(edge => edge.id === 'CG011').observations = [{
+  id: 'owner-delegated-full-cost-consumer', paths: [manualContractPath],
+  allOf: ['prepareManualPaperCanonicalEvidence(', 'entryCostEvidence.components',
+    'validateNaturalPaperTriggerBoundSettlementEvidence(input)', 'adaptNaturalPaperSettlementFullCost(input)'],
+}];
+DEFAULT_EDGES.find(edge => edge.id === 'CG012').observations = [{
+  id: 'owner-canonical-net-pnl-forwarding',
+  paths: ['api-server/src/services/paper-trading-position.service.ts'],
+  allOf: ['canonical?.settlement?.netPnl', 'position.canonicalPaper = structuredClone(canonical.lineage)',
+    'netPnl: netForJournal', 'upsertJournal(state, position, order, fill, reason)'],
+}];
+DEFAULT_EDGES.find(edge => edge.id === 'CG013').observations = [{
+  id: 'owner-delegated-validation-receipt-consumer', paths: [manualContractPath],
+  allOf: ['consumeManualSameCandidateValidationReceipt(', 'receiptSha256',
+    'readbackVerified', 'assertManualPaperCanonicalIdentity(identity, receipt.identity)'],
+}];
+
 function slash(value) {
   return value.split(path.sep).join('/');
 }
@@ -558,6 +579,7 @@ export function evaluateProbe(files, probe) {
 export function evaluateEdge(files, edge) {
   const required = edge.required.map((probe) => evaluateProbe(files, probe));
   const blockers = (edge.blockers ?? []).map((probe) => evaluateProbe(files, probe));
+  const observations = (edge.observations ?? []).map((probe) => evaluateProbe(files, probe));
   const blockerMatched = blockers.some((probe) => probe.matched);
   const provenCount = required.filter((probe) => probe.state === CONNECTION_STATUS.PROVEN).length;
   const unknownCount = required.filter((probe) => probe.state === CONNECTION_STATUS.UNKNOWN).length;
@@ -585,6 +607,7 @@ export function evaluateEdge(files, edge) {
     scope: 'STATIC_WIRING_EVIDENCE_ONLY',
     required,
     blockers,
+    observations,
   };
 }
 
@@ -631,6 +654,9 @@ export function renderMarkdown(audit) {
     }
     for (const probe of edge.blockers) {
       lines.push(`- blocker \`${probe.id}\`: ${probe.matched ? 'PRESENT' : probe.state} — ${probe.matchedFiles.join(', ') || probe.reason}`);
+    }
+    for (const probe of edge.observations ?? []) {
+      lines.push(`- non-closure observation \`${probe.id}\`: ${probe.state} — ${probe.matchedFiles.join(', ') || probe.reason}; not issuer, persisted readback or runtime proof`);
     }
     lines.push('');
   }
