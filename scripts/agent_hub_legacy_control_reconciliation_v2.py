@@ -173,11 +173,11 @@ def _zero_split(body: str, name: str) -> bool:
 
 
 def _future_validation_zero(body: str) -> bool:
-    lowered = body.lower()
+    normalized = re.sub(r"[_-]+", " ", body.lower())
     return (
         _zero_split(body, "VALIDATION")
         and _zero_split(body, "OOS")
-        and "first genuine validation" in lowered
+        and "first genuine validation" in normalized
     )
 
 
