@@ -65,13 +65,13 @@ export const DEFAULT_EDGES = [
       },
       {
         id: 'ai-chat-request-timeframe',
-        paths: ['stock-analyzer/src/pages/ai-chat.tsx'],
+        paths: ['stock-analyzer/src/lib/ai-chat-selection.ts'],
         allOf: ['timeframe: selection.timeframe'],
       },
       {
         id: 'ai-chat-backend-timeframe-consumer',
         paths: ['api-server/src/services/ai-chat.service.ts'],
-        allOf: ['row.timeframe'],
+        allOf: ['row.timeframe', 'row.action', 'selection: context', 'publicQuestionPayload(message, publicContext'],
       },
       {
         id: 'shared-analysis-selection-storage',
@@ -441,6 +441,27 @@ export const DEFAULT_EDGES = [
     ],
   },
 ];
+
+// Every Scanner lane must prove the server's canonical identity/admission consumer,
+// not just a mounted button, frontend URL or an unrelated workflow.
+for (const edge of DEFAULT_EDGES.filter(item => ['CG003', 'CG004', 'CG005', 'CG006'].includes(item.id))) {
+  edge.required.push({
+    id: 'scanner-canonical-paper-server-consumer',
+    paths: ['api-server/src/routes/trade-automation.ts'],
+    allOf: ["router.post('/scanner/plans'", 'assertPaperApprovalEnvelope', 'resolveScannerCanonicalPaperIdentity(', 'resolveCanonicalPaperAdmissionBridgeCandidate(', 'createCanonicalMeaningfulSearchPaperRuntime('],
+  });
+}
+const backtestPaperEdge = DEFAULT_EDGES.find(item => item.id === 'CG007');
+backtestPaperEdge.required.push({
+  id: 'same-candidate-paper-position-consumer',
+  paths: ['api-server/src/services/paper-trading-position.service.ts'],
+  allOf: ['createPositionFromOrder', 'candidateId', 'strategyId', 'parameterHash', 'market', 'symbol', 'timeframe', 'side', 'leverage'],
+});
+backtestPaperEdge.required.push({
+  id: 'accepted-backtest-paper-execution-route',
+  paths: ['api-server/src/routes/paper-trading.ts'],
+  allOf: ['backtestCandidate', 'resolveCanonicalStrategyIdentity(', 'applyPaperAction'],
+});
 
 function slash(value) {
   return value.split(path.sep).join('/');

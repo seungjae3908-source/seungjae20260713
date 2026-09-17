@@ -251,7 +251,12 @@ export const IDENTITY_CONTRACTS = [
     sourcePaths: ['stock-analyzer/src/pages/scanner.tsx', 'stock-analyzer/src/pages/signal-scanner.tsx'],
     destinationPaths: ['stock-analyzer/src/pages/ai-chart.tsx', 'stock-analyzer/src/pages/ai-chat.tsx'],
     dimensions: ['market', 'ticker', 'timeframe', 'action'],
-    required: [{ id: 'ai-chat-backend-timeframe', paths: ['api-server/src/services/ai-chat.service.ts'], allOf: ['row.timeframe'] }],
+    required: [
+      { id: 'ai-chat-backend-timeframe', paths: ['api-server/src/services/ai-chat.service.ts'], allOf: ['row.timeframe', 'row.action', 'selection: context', 'publicQuestionPayload(message, publicContext'] },
+      { id: 'ai-chat-request-scope', paths: ['stock-analyzer/src/lib/ai-chat-selection.ts'], allOf: ['timeframe: selection.timeframe', 'action: selection.action', 'selectedAt: selection.selectedAt', 'signal.aborted'] },
+      { id: 'ai-chat-stale-selection-isolation', paths: ['stock-analyzer/src/pages/ai-chat.tsx'], allOf: ['key={aiChatSelectionKey(selection)}', 'acceptAiChatSelectionReply(payload.selection', 'controllerRef.current?.abort()'] },
+      { id: 'selection-url-direction', paths: ['stock-analyzer/src/lib/analysis-selection.tsx'], allOf: ["action: params.get('action')", "params.set('action', selection.action)"] },
+    ],
     transport: {
       paths: ['stock-analyzer/src/pages/scanner.tsx', 'stock-analyzer/src/lib/analysis-selection.tsx'],
       allOf: ['analysisSelection', 'timeframe'],
@@ -264,7 +269,11 @@ export const IDENTITY_CONTRACTS = [
     sourcePaths: ['api-server/src/services/backtest-paper-handoff.service.ts'],
     destinationPaths: ['stock-analyzer/src/components/backtest-paper-candidate-preview.tsx'],
     dimensions: ['candidateId', 'strategyId', 'parameterHash', 'market', 'symbol', 'timeframe', 'side', 'leverage', 'riskPolicyRef', 'costPolicyRef', 'exitPolicyRef'],
-    required: [{ id: 'same-strategy-paper-consumer', paths: ['api-server/src/services/paper-trading.types.ts'], allOf: ['candidateId', 'strategyId', 'parameterHash', 'exitPolicyRef'] }],
+    required: [
+      { id: 'same-strategy-paper-consumer', paths: ['api-server/src/services/paper-trading.types.ts'], allOf: ['candidateId', 'strategyId', 'parameterHash', 'market', 'symbol', 'timeframe', 'side', 'leverage', 'exitPolicyRef'] },
+      { id: 'same-candidate-paper-position-consumer', paths: ['api-server/src/services/paper-trading-position.service.ts'], allOf: ['createPositionFromOrder', 'candidateId', 'strategyId', 'parameterHash', 'market', 'symbol', 'timeframe', 'side', 'leverage'] },
+      { id: 'accepted-backtest-paper-execution-route', paths: ['api-server/src/routes/paper-trading.ts'], allOf: ['backtestCandidate', 'resolveCanonicalStrategyIdentity(', 'applyPaperAction'] },
+    ],
     transport: {
       paths: ['packages/strategy-hypothesis/src/backtest-paper-handoff.js'],
       allOf: ['URLSearchParams', 'backtestCandidate', 'INVALID_BACKTEST_PAPER_HANDOFF'],
@@ -276,7 +285,10 @@ export const IDENTITY_CONTRACTS = [
     severity: 'P1',
     sourcePaths: ['stock-analyzer/src/components/scanner-approval-composer.tsx'],
     destinationPaths: ['api-server/src/routes/trade-automation.ts'],
-    dimensions: ['market', 'symbol', 'side', 'accountMode'],
+    dimensions: ['candidateId', 'strategyId', 'parameterHash', 'market', 'symbol', 'timeframe', 'side', 'leverage', 'accountMode'],
+    required: [
+      { id: 'scanner-canonical-server-consumer', paths: ['api-server/src/routes/trade-automation.ts'], allOf: ["router.post('/scanner/plans'", 'assertPaperApprovalEnvelope', 'resolveScannerCanonicalPaperIdentity(', 'resolveCanonicalPaperAdmissionBridgeCandidate(', 'createCanonicalMeaningfulSearchPaperRuntime('] },
+    ],
     transport: {
       paths: ['stock-analyzer/src/components/scanner-approval-composer.tsx'],
       allOf: ['/api/trade-automation/scanner/plans', "accountMode: 'paper'"],
@@ -415,29 +427,50 @@ export function evaluateJourney(graph, journey) {
 
 const LEDGER_CONTEXT = Object.freeze({
   CG003: ['REAL_PRODUCT_GAP', 'KR composer calls an absent /scanner/plans backend route; frontend URL text was a false-positive connection proof.', 'Implement a server-revalidated Paper-only seam before enabling the UI; do not forward to generic live-capable /plans.'],
-  CG004: ['INTENTIONAL_SAFETY_BLOCK', 'US adapter blocker is explicit; no verified US Paper route/provider/side/risk semantics exists.', 'Keep the US blocker until a verified Paper-only adapter contract exists. Do not delete it to pass audit.'],
+  CG004: ['REAL_PRODUCT_GAP', 'US Paper server route/adapter semantics are unimplemented. The protective UI blocker does not turn that implementation gap into a safety-only finding.', 'Keep the protective UI blocker while implementing verified Paper-only wiring; coordinate adapter/admission contracts with the existing Paper owner.'],
   CG005: ['REAL_PRODUCT_GAP', 'Signal Scanner mounts the composer, but the composer supports KR only and its scanner backend route is absent.', 'Preserve existing admission workflows; connect an independently verified Spot Paper-only server consumer.'],
   CG006: ['REAL_PRODUCT_GAP', 'Futures UI action exists, but KR-only composer drops explicit LONG/SHORT and has no server scanner route.', 'Preserve LONG/SHORT separately and reject NO_TRADE/SIGNAL_CONFLICT at the server boundary before Paper admission.'],
   CG007: ['REAL_PRODUCT_GAP', 'Backtest result references now reach isolated Paper preview, but the manual Paper engine has no canonical same-strategy consumer.', 'Implement canonical strategy execution with the same policies; never credit reference preview or manual orders as Natural Paper.'],
   CG011: ['REAL_PRODUCT_GAP', 'Manual Paper fee/slippage/funding bookkeeping is not the eight-component canonical Full Cost contract.', 'Keep costs separated; integrate measured tax/latency/liquidity/partial-fill evidence without inventing zero values.'],
   CG012: ['REAL_PRODUCT_GAP', 'Manual Paper Net PnL does not preserve all eight canonical Full Cost components.', 'Preserve full measured cost lineage before claiming canonical full-cost Net PnL.'],
-  CG013: ['INTENTIONAL_SAFETY_BLOCK', 'Manual Paper journal and canonical Genuine OOS workflows are independent; no same-candidate validation receipt joins them.', 'Do not grant manual/replay/backfilled results Genuine OOS credit; obtain genuine candidate-bound validation evidence.'],
-  ID001: ['REAL_PRODUCT_GAP', 'Shared selection retains timeframe/action, but AI Chat sends market/symbol only and its backend context omits timeframe.', 'Carry and validate selection scope through the real backend request and public data consumer; reject stale replies.'],
+  CG013: ['REAL_PRODUCT_GAP', 'Manual Paper journal has no same-candidate validation-receipt consumer. Refusing false OOS credit is correct, but the missing implementation remains an open owner gap.', 'Existing Paper/validation owners must define the genuine identity-bound receipt consumer; never credit manual/replay/backfilled data.'],
+  ID001: ['REAL_PRODUCT_GAP', 'Selection serialization, backend validation/echo and stale-reply isolation must preserve market/symbol/timeframe/action together.', 'Carry and validate the shared selection scope into the real public-context/provider payload; missing selected-timeframe OHLCV remains explicitly unavailable.'],
   ID002: ['REAL_PRODUCT_GAP', 'All reference dimensions and strict URL import are present; canonical Paper execution still does not carry candidate identity.', 'Keep REFERENCE_ONLY until the real Paper strategy consumer and position/settlement lineage preserve canonical identity.'],
   ID003: ['REAL_PRODUCT_GAP', 'Scanner composer payload omits side; scanner backend route does not exist.', 'Connect explicit validated direction to a Paper-only server seam, without default BUY/LONG.'],
+});
+
+// Scope ownership is not completion evidence. Existing-owner implementation gaps stay OPEN.
+// Merged owner PR provenance was refreshed from REAL GitHub on 2026-09-17;
+// no active open Paper PR/writer or owner acceptance is inferred from historical authorship.
+export const P1_SCOPE_RECONCILIATION = Object.freeze({
+  CG003: { classification: '#1085_REAL_GAP', owner: '#1085 scanner KR server/canonical consumer wiring', dependencyOwner: 'Existing Paper admission/adapter owner (#999/#1001); policy owner (#1073/#1084)' },
+  CG004: { classification: '#1085_REAL_GAP', owner: '#1085 scanner US server/canonical consumer wiring', dependencyOwner: 'Existing Paper adapter/admission owner (#999/#1001); retain US UI protection' },
+  CG005: { classification: '#1085_REAL_GAP', owner: '#1085 Crypto Spot server/canonical consumer wiring', dependencyOwner: 'Existing Scanner #719 and Paper admission owner #999; no private adapter' },
+  CG006: { classification: '#1085_REAL_GAP', owner: '#1085 Crypto Futures LONG/SHORT server/canonical consumer wiring', dependencyOwner: 'Existing Scanner #719 and Paper admission owner #999; preserve directional safety' },
+  CG007: { classification: '#1085_REAL_GAP', owner: '#1085 Backtest-to-canonical-Paper consumer wiring', dependencyOwner: 'Existing Paper strategy execution/identity contract owner #999/#1019/#1021; preview is not completion' },
+  CG011: { classification: 'EXISTING_OWNER', owner: 'Existing Paper Full Cost owner #1001/#891', dependencyOwner: '#1085 integration must consume, not redefine, measured cost contract' },
+  CG012: { classification: 'EXISTING_OWNER', owner: 'Existing Paper settlement/Full Cost Net PnL owner #1001/#891', dependencyOwner: '#1085 integration must preserve all cost evidence, not default missing costs to zero' },
+  CG013: { classification: 'EXISTING_OWNER', owner: 'Existing Paper/validation receipt owners #1001 and open #547', dependencyOwner: '#1085 wiring after canonical genuine receipt contract; missing consumer is not merely a runtime-evidence gap' },
+  ID001: { classification: '#1085_REAL_GAP', owner: '#1085 shared AI selection request/consumer isolation', dependencyOwner: 'None for source/contract repair; provider/browser runtime proof separate' },
+  ID002: { classification: '#1085_REAL_GAP', owner: '#1085 all-eight-field same-candidate Paper continuity', dependencyOwner: 'Existing Paper execution/identity contract owner #999/#1019/#1021; no reference-only credit' },
+  ID003: { classification: '#1085_REAL_GAP', owner: '#1085 Scanner-to-canonical-Paper identity wiring', dependencyOwner: 'Existing Paper admission/adapter contract owner #999/#1001' },
 });
 
 function ledgerEntry(id, severity, area, wiringStatus, reason, evidenceLevel, details = {}) {
   const key = id.replace(/^EL-/u, '');
   const context = LEDGER_CONTEXT[key];
+  const scope = P1_SCOPE_RECONCILIATION[key];
   return {
     id, severity, area, domain: details.domain ?? 'product-integrity',
     producer: details.producer ?? area, consumer: details.consumer ?? 'UNVERIFIED_CONSUMER',
     status: 'OPEN', wiringStatus, reason, evidenceLevel,
-    classification: context?.[0] ?? (wiringStatus === INTEGRITY_STATUS.UNKNOWN ? null : 'REAL_PRODUCT_GAP'),
+    classification: scope?.classification ?? (wiringStatus === INTEGRITY_STATUS.UNKNOWN ? null : '#1085_REAL_GAP'),
     currentProof: details.currentProof ?? [],
     rootCause: context?.[1] ?? 'Declared static/identity consumer probes are incomplete. Review source before declaring a runtime defect.',
-    owner: '#1085 integration/auditor; preserve existing domain owners',
+    owner: scope?.owner ?? '#1085 integration/auditor; preserve existing domain owners',
+    dependencyOwner: scope?.dependencyOwner ?? 'OWNER_REVIEW_REQUIRED',
+    ownerAcknowledgement: scope?.classification === 'EXISTING_OWNER' ? 'NOT_CONFIRMED; existing domain provenance, not accepted handoff' : 'Current-chat #1085 scope authorized',
+    implementationGap: true,
     repair: context?.[2] ?? 'Repair the verified connection or document a separately proven authority/data blocker; static absence alone does not prove blocking.',
     tests: ['.github/tests/connection-graph-auditor.test.mjs', '.github/tests/product-integrity-auditor.test.mjs'],
     remainingRuntimeProof: 'NOT_PROVEN: exact identity-bound runtime receipt, authenticated desktop/mobile E2E, and production evidence. No activation authorized.',
@@ -550,6 +583,8 @@ export function renderProductIntegrityMarkdown(audit) {
       `- Current Proof: ${JSON.stringify(item.currentProof ?? [])}`,
       `- Root Cause: ${item.rootCause ?? item.reason}`,
       `- Owner: ${item.owner ?? 'OWNER_REVIEW_REQUIRED'}`,
+      `- Dependency Owner: ${item.dependencyOwner ?? 'OWNER_REVIEW_REQUIRED'}`,
+      `- Owner Acknowledgement: ${item.ownerAcknowledgement ?? 'NOT_CONFIRMED'}`,
       `- Repair: ${item.repair ?? 'NOT_IMPLEMENTED'}`,
       `- Tests: ${(item.tests ?? []).join(', ')}`,
       `- Remaining Runtime Proof: ${item.remainingRuntimeProof ?? 'NOT_PROVEN'}`);

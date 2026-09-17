@@ -6,6 +6,7 @@ import {
   GOLDEN_JOURNEYS,
   IDENTITY_CONTRACTS,
   PRODUCT_EDGES,
+  P1_SCOPE_RECONCILIATION,
   DEFAULT_CAPABILITIES,
   INTEGRITY_STATUS,
   buildErrorLedger,
@@ -179,8 +180,40 @@ test('complete reference dimensions cannot prove same-strategy Paper execution',
 
 test('explicit safety blocker alone cannot silently close a P1 ledger item', () => {
   const ledger = buildErrorLedger({ edges: [{ id: 'CG004', from: 'US', to: 'Paper', severity: 'P1', status: 'MISSING', lane: 'scanner-paper', required: [], blockers: [{ id: 'US_BLOCK', state: 'PROVEN', matched: true }] }] }, [], []);
-  assert.equal(ledger[0].classification, 'INTENTIONAL_SAFETY_BLOCK');
+  assert.equal(ledger[0].classification, '#1085_REAL_GAP');
   assert.equal(ledger[0].status, 'OPEN');
+});
+
+test('all eleven reconciled P1 scopes preserve implementation gaps and explicit owners', () => {
+  const allowed = ['#1085_REAL_GAP', 'EXISTING_OWNER', 'AUDITOR_FALSE_POSITIVE', 'INTENTIONAL_SAFETY_BLOCK', 'RUNTIME_EVIDENCE_MISSING'];
+  assert.equal(Object.keys(P1_SCOPE_RECONCILIATION).length, 11);
+  const edges = Object.keys(P1_SCOPE_RECONCILIATION).map(id => ({ id, from: 'producer', to: 'consumer', severity: 'P1', status: 'PARTIAL', required: [], blockers: [] }));
+  const ledger = buildErrorLedger({ edges }, [], []);
+  assert.equal(ledger.length, 11);
+  for (const item of ledger) {
+    assert.ok(allowed.includes(item.classification));
+    assert.equal(item.status, 'OPEN'); assert.equal(item.implementationGap, true);
+    assert.ok(item.owner.length > 10); assert.ok(item.dependencyOwner.length > 10);
+    assert.notEqual(item.classification, 'INTENTIONAL_SAFETY_BLOCK');
+    assert.notEqual(item.classification, 'RUNTIME_EVIDENCE_MISSING');
+  }
+  assert.equal(ledger.filter(item => item.classification === 'EXISTING_OWNER').length, 3);
+  assert.equal(ledger.filter(item => item.classification === '#1085_REAL_GAP').length, 8);
+  for (const id of ['EL-CG011', 'EL-CG012', 'EL-CG013']) assert.match(ledger.find(item => item.id === id).ownerAcknowledgement, /NOT_CONFIRMED/u);
+});
+
+test('all-eight-field type declarations and preview still cannot prove a real Paper position consumer', () => {
+  const contract = IDENTITY_CONTRACTS.find(item => item.id === 'ID002');
+  const fields = contract.dimensions.join(' ');
+  const files = new Map([
+    [contract.sourcePaths[0], fields], [contract.destinationPaths[0], fields],
+    [contract.transport.paths[0], 'URLSearchParams backtestCandidate INVALID_BACKTEST_PAPER_HANDOFF'],
+    ['api-server/src/services/paper-trading.types.ts', fields],
+    ['api-server/src/services/paper-trading-position.service.ts', 'createPositionFromOrder manual symbol side leverage'],
+  ]);
+  const result = evaluateIdentityContract(files, contract);
+  assert.equal(result.status, 'PARTIAL');
+  assert.equal(result.required.find(probe => probe.id === 'same-candidate-paper-position-consumer').state, 'MISSING');
 });
 
 test('markdown keeps fail-closed proof boundaries visible', () => {
