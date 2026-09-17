@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 const WORKFLOWS = {
   application: ".github/workflows/futures-public-network-smoke.yml",
   applicationFast: ".github/workflows/application-fast-ci.yml",
+  applicationReadyDispatch: ".github/workflows/application-full-ci-ready-dispatch.yml",
   research: ".github/workflows/prediction-lab-pr-head-unit.yml",
   multiMarket: ".github/workflows/prediction-lab-52d-validation.yml",
   longHistory: ".github/workflows/prediction-lab-long-history-v1.yml",
@@ -57,15 +58,22 @@ test("workflow syntax and PR event contracts are explicit", () => {
   }
 
   const fastPullRequest = indentedBlock(indentedBlock(documents.applicationFast, "on", 0), "pull_request", 2);
-  for (const activity of ["opened", "synchronize", "reopened"]) {
+  for (const activity of ["opened", "synchronize", "reopened", "converted_to_draft"]) {
     assert.match(fastPullRequest, new RegExp(`- ${activity}`, "u"));
   }
+  assert.match(documents.applicationFast, /if: github\.event\.pull_request\.draft == true/u);
 
   const fullPullRequest = indentedBlock(indentedBlock(documents.application, "on", 0), "pull_request", 2);
   assert.match(fullPullRequest, /- ready_for_review/u);
   for (const activity of ["opened", "synchronize", "reopened"]) {
     assert.doesNotMatch(fullPullRequest, new RegExp(`- ${activity}`, "u"));
   }
+
+  const readyDispatchPullRequest = indentedBlock(indentedBlock(documents.applicationReadyDispatch, "on", 0), "pull_request", 2);
+  for (const activity of ["opened", "synchronize", "reopened"]) {
+    assert.match(readyDispatchPullRequest, new RegExp(`- ${activity}`, "u"));
+  }
+  assert.match(documents.applicationReadyDispatch, /if: github\.event\.pull_request\.draft == false/u);
 
   for (const name of ["research", "multiMarket", "longHistory"]) {
     const pullRequest = indentedBlock(indentedBlock(documents[name], "on", 0), "pull_request", 2);
@@ -88,14 +96,16 @@ test("authoritative main push CI and required status publishers remain intact", 
   ]) {
     assert.match(documents.application, new RegExp(context.replaceAll("/", "\\/"), "u"));
     assert.doesNotMatch(documents.applicationFast, new RegExp(context.replaceAll("/", "\\/"), "u"));
+    assert.doesNotMatch(documents.applicationReadyDispatch, new RegExp(context.replaceAll("/", "\\/"), "u"));
   }
   for (const name of ["application", "multiMarket", "longHistory"]) {
     assert.match(indentedBlock(documents[name], "on", 0), /^\s+workflow_dispatch:/mu);
   }
   assert.doesNotMatch(indentedBlock(documents.applicationFast, "on", 0), /^\s+workflow_dispatch:/mu);
+  assert.doesNotMatch(indentedBlock(documents.applicationReadyDispatch, "on", 0), /^\s+workflow_dispatch:/mu);
 });
 
-test("fast CI is development-only and full CI remains the release authority", () => {
+test("fast CI is draft-only and full CI remains the release authority", () => {
   assert.match(documents.applicationFast, /Application Fast CI is a development accelerator only/u);
   assert.match(documents.applicationFast, /MUST NOT publish or replace any of the six Required CI contexts/u);
   assert.match(documents.applicationFast, /Final Ready\/Merge\/Staging gates still require canonical Application CI 6\/6/u);
@@ -107,16 +117,30 @@ test("fast CI is development-only and full CI remains the release authority", ()
   assert.match(documents.application, /Bitget public API smoke/u);
 });
 
+test("ready PR head changes dispatch canonical full CI again", () => {
+  const document = documents.applicationReadyDispatch;
+  assert.match(document, /actions: write/u);
+  assert.match(document, /workflowId = 'futures-public-network-smoke\.yml'/u);
+  assert.match(document, /createWorkflowDispatch/u);
+  assert.match(document, /target_sha: targetSha/u);
+  assert.match(document, /checkout_ref: targetSha/u);
+  assert.match(document, /github\.event\.pull_request\.head\.sha/u);
+  assert.match(document, /github\.event\.pull_request\.head\.ref/u);
+  assert.match(document, /grants no merge, staging, production, database, secret, environment, live-trading, or real-order authority/u);
+});
+
 test("each lane exposes a clear exact-head or fast check name", () => {
   assert.match(documents.application, /PR Exact Application CI/u);
   assert.match(documents.applicationFast, /Changed-scope typecheck, tests, and build/u);
+  assert.match(documents.applicationReadyDispatch, /Dispatch canonical full CI for exact ready PR head/u);
   assert.match(documents.multiMarket, /PR Exact Multi-Market/u);
   assert.match(documents.longHistory, /PR Exact Long-History/u);
   assert.match(documents.research, /PR Exact Research Tests/u);
 });
 
-test("each checkout verifies expected SHA, actual HEAD, and detached mode", () => {
-  for (const [name, document] of Object.entries(documents)) {
+test("checkout-based lanes verify expected SHA, actual HEAD, and detached mode", () => {
+  for (const name of ["application", "applicationFast", "research", "multiMarket", "longHistory"]) {
+    const document = documents[name];
     assert.match(document, /git rev-parse HEAD/u, `${name} does not read actual HEAD`);
     assert.match(document, /git symbolic-ref --quiet --short HEAD/u, `${name} does not reject branch checkout`);
     assert.match(document, /HEAD_SHA_MISMATCH/u, `${name} does not report SHA mismatch`);
