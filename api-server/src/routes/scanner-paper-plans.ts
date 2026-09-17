@@ -18,6 +18,13 @@ import {
 } from '../../../market-prediction-lab/src/recurring-paper-loop-v1.js';
 
 const MAX_REQUEST_BYTES = 16 * 1024;
+const CLIENT_INPUT_ERROR_CODES = new Set([
+  'APPROVAL_MODE_REQUIRED',
+  'AUTOMATIC_MODE_FORBIDDEN',
+  'PAPER_ACCOUNT_MODE_REQUIRED',
+  'PAPER_ADAPTER_REQUIRED',
+  'LIVE_MODE_FORBIDDEN',
+]);
 const CLIENT_AUTHORITY_KEYS = new Set([
   'admissionBundle',
   'paperAdmissionEvidenceBundle',
@@ -391,11 +398,15 @@ export function createScannerPaperPlansRouter(dependencies: {
       });
     } catch (error) {
       const sourceError = error instanceof ProductPaperSourceError ? error : null;
+      const clientInputError = error instanceof Error && CLIENT_INPUT_ERROR_CODES.has(error.message)
+        ? error.message
+        : null;
       const safeCode = sourceError?.code
+        ?? clientInputError
         ?? (error instanceof Error && /^[A-Z0-9_:-]{3,160}$/u.test(error.message)
           ? error.message
           : 'SCANNER_CANONICAL_PAPER_PLAN_FAILED');
-      return res.status(sourceError?.status ?? 500).json({ ok: false, error: safeCode, ...envelope });
+      return res.status(sourceError?.status ?? (clientInputError ? 400 : 500)).json({ ok: false, error: safeCode, ...envelope });
     }
   });
   return router;
