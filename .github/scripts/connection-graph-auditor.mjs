@@ -377,13 +377,18 @@ export const DEFAULT_EDGES = [
     required: [
       {
         id: 'crypto-alert-source',
-        paths: ['stock-analyzer/src/components/crypto-trading-workspace.tsx'],
-        anyOf: ['alert', 'notification', '알림'],
+        paths: ['stock-analyzer/src/pages/signal-scanner.tsx'],
+        allOf: ['data.alerts.map', 'alertTitle(alert)'],
       },
       {
         id: 'alert-center-crypto-consumer',
-        paths: ['stock-analyzer/src/pages/alerts.tsx', 'stock-analyzer/src/components/unified-notification-settings.tsx'],
-        anyOf: ['crypto', 'coin', 'futures', 'CRYPTO'],
+        paths: ['stock-analyzer/src/pages/alerts.tsx'],
+        allOf: ['/notifications/history?limit=200', 'parseNotificationHistory'],
+      },
+      {
+        id: 'scanner-alert-central-history-producer',
+        paths: ['api-server/src/services/scanner-telegram-delivery.service.ts'],
+        allOf: ['notification_history'],
       },
     ],
   },
