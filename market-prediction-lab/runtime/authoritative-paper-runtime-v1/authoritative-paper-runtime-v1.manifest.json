@@ -8,7 +8,7 @@
     "sourceGitBlobSha": "7dc275b70f9379e32f3fd6c718a612b06ceb1c46",
     "sourceSha256": "8c7563936de865e9103d73d15c0442a44f1cf33426315e758abad83d96880e0c"
   },
-  "sourceGraphSha256": "caed1e82fa700ec921010afd11c8b722bde5fe5ea996c116657e38b5f1c8547c",
+  "sourceGraphSha256": "ae4c7154d588812e201a39c4c5707322514b1715cae384f2b002d2b158fe1a06",
   "sourceFiles": [
     "api-server/src/data/asset-type.ts",
     "api-server/src/lib/bounded-work-pool.ts",
@@ -89,7 +89,7 @@
     "api-server/src/services/scanner-signal-lifecycle.service.ts": "6c8a85753f2484045371e16afa6232cd42f9ec24fb0852ffbc05818860be0c48",
     "api-server/src/services/scanner-strategy-profile.service.ts": "90a4406ca4b536ed863082840d39c932816418063f3941f6ec6a3465c10ae792",
     "api-server/src/services/signal-performance-learning.service.ts": "f4180691041a9f7f57cbfd7513ff6666260275efa6c49652c313ae6bc9195392",
-    "api-server/src/services/strategy-promotion.service.ts": "1ece3d92b50f5d50f1e11349173f84fb32c0adbf949a9ba6f0af98856f276d0f",
+    "api-server/src/services/strategy-promotion.service.ts": "d9a8590862f69b5b2da72e27a874b92665161f9eb4c8f9674a94c651bfb5ccd1",
     "api-server/src/services/trade-paper-market-contract.service.ts": "376ed9ba0bb91253fadb9da62f031a45ef3af1bc055622b4a1d8b46c9706f570",
     "api-server/src/services/trading-risk-engine.service.ts": "6005a12a69e8375913d7699ef864d0efa01ff3d80357c85cd355bb16cbdd96f2",
     "market-intelligence-sidecar/src/execution-quality.mjs": "f91139e1a06c26c3ac42920b3f95271aa96ee4bfacc228236ad4b313444c1cb8",
