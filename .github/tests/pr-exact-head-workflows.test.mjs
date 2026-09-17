@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 
 const WORKFLOWS = {
   application: ".github/workflows/futures-public-network-smoke.yml",
+  applicationFast: ".github/workflows/application-fast-ci.yml",
   research: ".github/workflows/prediction-lab-pr-head-unit.yml",
   multiMarket: ".github/workflows/prediction-lab-52d-validation.yml",
   longHistory: ".github/workflows/prediction-lab-long-history-v1.yml",
@@ -47,12 +48,27 @@ const documents = Object.fromEntries(await Promise.all(Object.entries(WORKFLOWS)
   await readFile(path, "utf8"),
 ])));
 
-test("workflow syntax and PR event contract are explicit", () => {
+test("workflow syntax and PR event contracts are explicit", () => {
   for (const document of Object.values(documents)) {
     assertBasicWorkflowSyntax(document);
     const pullRequest = indentedBlock(indentedBlock(document, "on", 0), "pull_request", 2);
     assert.doesNotMatch(pullRequest, /^\s+branches:/mu, "stacked PR bases must not be excluded");
     assert.doesNotMatch(document, /pull_request_target/u);
+  }
+
+  const fastPullRequest = indentedBlock(indentedBlock(documents.applicationFast, "on", 0), "pull_request", 2);
+  for (const activity of ["opened", "synchronize", "reopened"]) {
+    assert.match(fastPullRequest, new RegExp(`- ${activity}`, "u"));
+  }
+
+  const fullPullRequest = indentedBlock(indentedBlock(documents.application, "on", 0), "pull_request", 2);
+  assert.match(fullPullRequest, /- ready_for_review/u);
+  for (const activity of ["opened", "synchronize", "reopened"]) {
+    assert.doesNotMatch(fullPullRequest, new RegExp(`- ${activity}`, "u"));
+  }
+
+  for (const name of ["research", "multiMarket", "longHistory"]) {
+    const pullRequest = indentedBlock(indentedBlock(documents[name], "on", 0), "pull_request", 2);
     for (const activity of ["opened", "synchronize", "reopened"]) {
       assert.match(pullRequest, new RegExp(`- ${activity}`, "u"));
     }
@@ -71,14 +87,29 @@ test("authoritative main push CI and required status publishers remain intact", 
     "futures-public-network-smoke/verified",
   ]) {
     assert.match(documents.application, new RegExp(context.replaceAll("/", "\\/"), "u"));
+    assert.doesNotMatch(documents.applicationFast, new RegExp(context.replaceAll("/", "\\/"), "u"));
   }
   for (const name of ["application", "multiMarket", "longHistory"]) {
     assert.match(indentedBlock(documents[name], "on", 0), /^\s+workflow_dispatch:/mu);
   }
+  assert.doesNotMatch(indentedBlock(documents.applicationFast, "on", 0), /^\s+workflow_dispatch:/mu);
 });
 
-test("each lane exposes a clear PR exact check name", () => {
+test("fast CI is development-only and full CI remains the release authority", () => {
+  assert.match(documents.applicationFast, /Application Fast CI is a development accelerator only/u);
+  assert.match(documents.applicationFast, /MUST NOT publish or replace any of the six Required CI contexts/u);
+  assert.match(documents.applicationFast, /Final Ready\/Merge\/Staging gates still require canonical Application CI 6\/6/u);
+  assert.match(documents.application, /Publish verified Application CI result/u);
+  assert.match(documents.application, /Playwright desktop and mobile application UI/u);
+  assert.match(documents.application, /Disposable PostgreSQL migration and RLS integration/u);
+  assert.match(documents.application, /Security input, bundle, and outbound safety verification/u);
+  assert.match(documents.application, /AI privacy, prompt, output, and outbound verification/u);
+  assert.match(documents.application, /Bitget public API smoke/u);
+});
+
+test("each lane exposes a clear exact-head or fast check name", () => {
   assert.match(documents.application, /PR Exact Application CI/u);
+  assert.match(documents.applicationFast, /Changed-scope typecheck, tests, and build/u);
   assert.match(documents.multiMarket, /PR Exact Multi-Market/u);
   assert.match(documents.longHistory, /PR Exact Long-History/u);
   assert.match(documents.research, /PR Exact Research Tests/u);
@@ -111,7 +142,7 @@ test("multi-market PR data blocks stay truthful without weakening full dispatch 
   assert.match(documents.multiMarket, /github\.event_name == 'workflow_dispatch'[\s\S]*needs\.validate-and-train\.outputs\.research_ready == 'true'/u);
 });
 
-test("PR lane has no secret, deployment, timer, or trading authority", () => {
+test("PR lanes have no secret, deployment, timer, or trading authority", () => {
   for (const document of Object.values(documents)) {
     assert.doesNotMatch(document, /secrets\./u);
     assert.doesNotMatch(document, /^\s+(deploy|environment):/mu);
