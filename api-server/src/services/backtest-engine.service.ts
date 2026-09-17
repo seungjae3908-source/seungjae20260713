@@ -1,4 +1,5 @@
 import type { NormalizedCandle } from './futures-market-data.service';
+import type { BacktestPaperHandoff } from '../../../packages/strategy-hypothesis/src/backtest-paper-handoff.js';
 import {
   atrSeries,
   averageVolumeSeries,
@@ -53,6 +54,7 @@ export type BacktestPerformanceSlice = { trades: number; wins: number; losses: n
 export type BacktestSegmentPerformance = BacktestPerformanceSlice & { name: 'training' | 'validation' | 'test'; startTime: number; endTime: number; maximumDrawdown: number; maximumDrawdownPercent: number };
 export type BacktestWalkForwardWindow = { startTime: number; endTime: number; totalTrades: number; netPnl: number; maximumDrawdown: number; expectancy: number };
 export type BacktestResult = {
+  paperHandoffs?: readonly BacktestPaperHandoff[];
   ok: true; mode: 'backtest-only'; orderSubmitted: false; symbol: string; timeframe: string; strategy: BacktestStrategyType;
   startTime: number; endTime: number; initialCapital: number; finalCapital: number; totalReturnPercent: number;
   annualizedReturnPercent: number | null; totalTrades: number; winningTrades: number; losingTrades: number; winRate: number;
