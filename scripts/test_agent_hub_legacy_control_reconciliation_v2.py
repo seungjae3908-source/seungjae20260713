@@ -17,7 +17,7 @@ class FakeGitHub:
     def __init__(self, *, pulls=None, runs=None, ancestors=None) -> None:
         self.pulls = pulls or {}
         self.runs = runs or {}
-        self.ancestors = ancestors or {(OLD, CURRENT), (PRODUCER, OLD)}
+        self.ancestors = ancestors if ancestors is not None else {(OLD, CURRENT), (PRODUCER, OLD)}
         self.requests: list[str] = []
 
     def request(self, method: str, path: str, payload=None) -> Any:
