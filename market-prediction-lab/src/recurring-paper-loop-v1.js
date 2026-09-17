@@ -468,6 +468,51 @@ async function produceTriggerBoundSettlementObservation({
   return Object.freeze({ observation, blockers: Object.freeze([...new Set(blockers)]) });
 }
 
+// Preserve the existing recurring settlement identity and record shape for
+// consumers that persist canonical settlements outside this loop. This only
+// transports supplied evidence; it neither produces costs nor grants credit.
+export function buildRecurringPaperSettlementRecord({
+  settlement, position, canonicalLifecycleEvidence, exitReason, settlementRecordedAtMs,
+} = {}) {
+  const settlementIdentity = Object.freeze({
+    candidateId: settlement.candidateId,
+    entryId: settlement.paperSampleId,
+    positionId: position.positionId,
+    exitTriggerId: settlement.exitTriggerId,
+    exitExecutionId: settlement.exitExecutionId,
+    provider: settlement.exitEvidenceProvenance?.provider ?? null,
+    market: settlement.market,
+    symbol: settlement.symbol,
+    timeframe: settlement.timeframe,
+    side: settlement.entryDirection,
+    strategyFamily: settlement.strategyFamily,
+    strategyVersion: settlement.strategyVersion,
+    parameterDigest: settlement.parameterDigest,
+    accountMode: settlement.accountMode,
+    costPolicyVersion: settlement.costPolicyVersion,
+    costEvidenceDigest: canonicalLifecycleEvidence?.costEvidence?.evidenceDigest ?? null,
+    exitEvidenceProvenanceDigest: hash(settlement.exitEvidenceProvenance),
+    settledAtMs: settlement.settledAtMs,
+    netPnl: settlement.netPnl,
+    netReturnPercent: settlement.netReturnPercent,
+  });
+  return Object.freeze({
+    ...settlement,
+    settlementId: hash(settlementIdentity),
+    settlementIdentity,
+    entryId: settlement.paperSampleId,
+    positionId: position.positionId,
+    exitReason: exitReason ?? "CANONICAL_EXTERNAL_EXIT",
+    settlementRecordedAtMs,
+    positionLifecycle: position.lifecycle ?? null,
+    lifecycleEvidence: canonicalLifecycleEvidence,
+    naturalSampleCredit: canonicalLifecycleEvidence?.naturalSampleCredit ?? 0,
+    testOnlySampleCredit: 0,
+    executionAuthority: "NONE",
+    orderSubmitted: false,
+  });
+}
+
 export async function runRecurringPaperCycle({
   state: predecessor,
   cycle,
@@ -701,29 +746,14 @@ export async function runRecurringPaperCycle({
       }));
       continue;
     }
-    const settlementIdentity = Object.freeze({
-      candidateId: settlement.candidateId,
-      entryId: settlement.paperSampleId,
-      positionId: position.positionId,
-      exitTriggerId: settlement.exitTriggerId,
-      exitExecutionId: settlement.exitExecutionId,
-      provider: settlement.exitEvidenceProvenance?.provider ?? null,
-      market: settlement.market,
-      symbol: settlement.symbol,
-      timeframe: settlement.timeframe,
-      side: settlement.entryDirection,
-      strategyFamily: settlement.strategyFamily,
-      strategyVersion: settlement.strategyVersion,
-      parameterDigest: settlement.parameterDigest,
-      accountMode: settlement.accountMode,
-      costPolicyVersion: settlement.costPolicyVersion,
-      costEvidenceDigest: canonicalLifecycleEvidence?.costEvidence?.evidenceDigest ?? null,
-      exitEvidenceProvenanceDigest: hash(settlement.exitEvidenceProvenance),
-      settledAtMs: settlement.settledAtMs,
-      netPnl: settlement.netPnl,
-      netReturnPercent: settlement.netReturnPercent,
+    const settlementRecord = buildRecurringPaperSettlementRecord({
+      settlement,
+      position,
+      canonicalLifecycleEvidence,
+      exitReason: exit.exitReason,
+      settlementRecordedAtMs: cycle.evaluatedAtMs,
     });
-    const settlementId = hash(settlementIdentity);
+    const { settlementId } = settlementRecord;
     if (settlements.some((row) => row.settlementId === settlementId || row.paperSampleId === settlement.paperSampleId)) {
       directReasons.push(loopReasonObservation({
         sourceStage: "SETTLEMENT",
@@ -735,21 +765,6 @@ export async function runRecurringPaperCycle({
       }));
       continue;
     }
-    const settlementRecord = Object.freeze({
-      ...settlement,
-      settlementId,
-      settlementIdentity,
-      entryId: settlement.paperSampleId,
-      positionId: position.positionId,
-      exitReason: exit.exitReason ?? "CANONICAL_EXTERNAL_EXIT",
-      settlementRecordedAtMs: cycle.evaluatedAtMs,
-      positionLifecycle: position.lifecycle ?? null,
-      lifecycleEvidence: canonicalLifecycleEvidence,
-      naturalSampleCredit: canonicalLifecycleEvidence?.naturalSampleCredit ?? 0,
-      testOnlySampleCredit: 0,
-      executionAuthority: "NONE",
-      orderSubmitted: false,
-    });
     await learningAdapter.persistOutcome({
       cycle,
       identity: predecessor.identity,

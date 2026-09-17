@@ -12,3 +12,6 @@ declare module '*four-market-paper-sampler-v1.js' {
 declare module '*four-market-paper-settlement-v1.js' {
   export function settleFourMarketPaperSample(input: unknown): any;
 }
+declare module '*recurring-paper-loop-v1.js' {
+  export function buildRecurringPaperSettlementRecord(input: unknown): any;
+}

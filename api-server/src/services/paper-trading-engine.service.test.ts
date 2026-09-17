@@ -17,6 +17,7 @@ import {
 import type { RiskEngineInput } from './trading-risk-engine.service.js';
 import { manualCanonicalFixture } from './manual-paper-canonical-contract.fixture';
 import { MANUAL_PAPER_CANONICAL_FIELDS, manualPaperEvidenceSha256 } from './manual-paper-canonical-contract.service';
+import { settleFourMarketPaperSample } from '../../../market-prediction-lab/src/four-market-paper-settlement-v1.js';
 
 const NOW = new Date('2026-08-02T02:30:00.000Z');
 const NOW_ISO = NOW.toISOString();
@@ -642,6 +643,27 @@ test('canonical manual actual action/order/position/full-cost settlement/journal
   const settled = applyPaperTradingAction(opened.state, canonicalClose(f, opened), f.exitNow, { ...f.exitEvidence, paperStateSha256: manualPaperEvidenceSha256(opened.state) });
   const journal = settled.state.journal[0];
   const canonical = journal.canonicalPaper;
+  const settlement = canonical.settlement;
+  assert.match(settlement.settlementId, /^[0-9a-f]{64}$/);
+  assert.equal(settlement.entryId, f.evidence.position.paperSampleId);
+  assert.equal(settlement.positionId, f.evidence.position.positionId);
+  assert.equal(settlement.settlementIdentity.candidateId, f.canonicalIdentity.candidateId);
+  assert.equal(settlement.settlementIdentity.parameterDigest, f.canonicalIdentity.parameterHash);
+  assert.equal(settlement.settlementIdentity.costEvidenceDigest, canonical.fullCost.evidenceDigest);
+  assert.deepEqual(settlement.lifecycleEvidence.costEvidence, canonical.fullCost);
+  for (const key of ['candidateId', 'strategyId', 'parameterHash', 'market', 'symbol', 'timeframe']) {
+    assert.equal(settlement[key], f.canonicalIdentity[key], key);
+  }
+  // Compare against the same raw settler: enrichment must not change economics.
+  const raw = settleFourMarketPaperSample({
+    ...f.bound.observation.settlementInput, sample: f.evidence.position.sample,
+    exitTriggerId: settlement.exitTriggerId, exitExecutionId: settlement.exitExecutionId,
+    evaluatedAtMs: settlement.settledAtMs,
+  });
+  assert.equal(raw.status, 'SETTLED');
+  for (const key of ['grossPnl', 'entryCost', 'exitCost', 'fundingCost', 'netPnl']) {
+    assert.equal(settlement[key], raw[key], key);
+  }
   assert.equal(settled.position.status, 'closed');
   assert.equal(canonical.fullCost.fullCostReady, true);
   assert.equal(canonical.settlementBinding.validation.status, 'PRESENT');
@@ -663,6 +685,33 @@ test('canonical manual actual action/order/position/full-cost settlement/journal
   assert.equal(settled.orderSubmitted, false);
   assert.equal(settled.exchangeRequestSent, false);
   assert.equal(canonical.executionAuthority, 'NONE');
+});
+
+test('persisted canonical settlement identity and evidence mismatch fails closed (test-only source, no genuine credit)', async () => {
+  const state = createPaperTradingState(10_000, NOW);
+  const f = await manualCanonicalFixture(state);
+  const opened = applyPaperTradingAction(state, canonicalAction(f), f.now, f.evidence);
+  const close = canonicalClose(f, opened);
+  const settled = applyPaperTradingAction(opened.state, close, f.exitNow,
+    { ...f.exitEvidence, paperStateSha256: manualPaperEvidenceSha256(opened.state) });
+  // A repeated event validates stored lineage before idempotent success.
+  for (const [label, mutate] of [
+    ['settlementId', s => { s.settlementId = '0'.repeat(64); }],
+    ['settlementIdentity', s => { s.settlementIdentity.netPnl += 1; }],
+    ['candidateId', s => { s.candidateId = 'different-candidate'; }],
+    ['positionId', s => { s.positionId = 'different-position'; }],
+    ['entryId', s => { s.entryId = 'different-entry'; }],
+    ['exitExecutionId', s => { s.exitExecutionId = 'different-exit'; }],
+    ['cost reference', s => { s.lifecycleEvidence.costEvidence.evidenceDigest = '0'.repeat(64); }],
+  ]) {
+    const changed = structuredClone(settled.state);
+    mutate(changed.journal[0].canonicalPaper.settlement);
+    const before = structuredClone(changed);
+    assert.throws(() => applyPaperTradingAction(changed, close, f.exitNow,
+      { ...f.exitEvidence, paperStateSha256: manualPaperEvidenceSha256(changed) }),
+    error => error.code === 'CANONICAL_PAPER_SETTLEMENT_LINEAGE_MISMATCH', label);
+    assert.deepEqual(changed, before);
+  }
 });
 
 test('canonical identity claims cannot select legacy success without server evidence', async () => {
