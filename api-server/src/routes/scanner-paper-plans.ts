@@ -36,6 +36,7 @@ const CLIENT_AUTHORITY_KEYS = new Set([
   'executionPolicy',
   'marketAdapterIdentity',
   'order',
+  'leverage',
 ]);
 
 type ScannerPaperProfitGate = Readonly<{
