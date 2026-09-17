@@ -272,7 +272,7 @@ export const IDENTITY_CONTRACTS = [
     required: [
       { id: 'same-strategy-paper-consumer', paths: ['api-server/src/services/paper-trading.types.ts'], allOf: ['candidateId', 'strategyId', 'parameterHash', 'market', 'symbol', 'timeframe', 'side', 'leverage', 'exitPolicyRef'] },
       { id: 'same-candidate-paper-position-consumer', paths: ['api-server/src/services/paper-trading-position.service.ts'], allOf: ['createPositionFromOrder', 'candidateId', 'strategyId', 'parameterHash', 'market', 'symbol', 'timeframe', 'side', 'leverage'] },
-      { id: 'accepted-backtest-paper-execution-route', paths: ['api-server/src/routes/paper-trading.ts'], allOf: ['backtestCandidate', 'resolveCanonicalStrategyIdentity(', 'applyPaperAction'] },
+      { id: 'accepted-backtest-paper-execution-route', paths: ['api-server/src/routes/paper-trading.ts'], allOf: ['backtestCandidate', 'resolveCanonicalStrategyIdentity(', 'applyPaperTradingAction', 'evaluate('] },
     ],
     transport: {
       paths: ['packages/strategy-hypothesis/src/backtest-paper-handoff.js'],
@@ -287,7 +287,7 @@ export const IDENTITY_CONTRACTS = [
     destinationPaths: ['api-server/src/routes/trade-automation.ts'],
     dimensions: ['candidateId', 'strategyId', 'parameterHash', 'market', 'symbol', 'timeframe', 'side', 'leverage', 'accountMode'],
     required: [
-      { id: 'scanner-canonical-server-consumer', paths: ['api-server/src/routes/trade-automation.ts'], allOf: ["router.post('/scanner/plans'", 'assertPaperApprovalEnvelope', 'resolveScannerCanonicalPaperIdentity(', 'resolveCanonicalPaperAdmissionBridgeCandidate(', 'createCanonicalMeaningfulSearchPaperRuntime('] },
+      { id: 'scanner-canonical-server-consumer', paths: ['api-server/src/routes/trade-automation.ts'], allOf: ["router.post('/scanner/plans'", 'assertPaperApprovalEnvelope', 'resolveScannerCanonicalPaperIdentity(', 'resolveCanonicalPaperAdmissionBridgeCandidate(', 'runRecurringPaperCycle('] },
     ],
     transport: {
       paths: ['stock-analyzer/src/components/scanner-approval-composer.tsx'],

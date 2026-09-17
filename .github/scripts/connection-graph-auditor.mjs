@@ -448,7 +448,7 @@ for (const edge of DEFAULT_EDGES.filter(item => ['CG003', 'CG004', 'CG005', 'CG0
   edge.required.push({
     id: 'scanner-canonical-paper-server-consumer',
     paths: ['api-server/src/routes/trade-automation.ts'],
-    allOf: ["router.post('/scanner/plans'", 'assertPaperApprovalEnvelope', 'resolveScannerCanonicalPaperIdentity(', 'resolveCanonicalPaperAdmissionBridgeCandidate(', 'createCanonicalMeaningfulSearchPaperRuntime('],
+    allOf: ["router.post('/scanner/plans'", 'assertPaperApprovalEnvelope', 'resolveScannerCanonicalPaperIdentity(', 'resolveCanonicalPaperAdmissionBridgeCandidate(', 'runRecurringPaperCycle('],
   });
 }
 const backtestPaperEdge = DEFAULT_EDGES.find(item => item.id === 'CG007');
@@ -460,7 +460,7 @@ backtestPaperEdge.required.push({
 backtestPaperEdge.required.push({
   id: 'accepted-backtest-paper-execution-route',
   paths: ['api-server/src/routes/paper-trading.ts'],
-  allOf: ['backtestCandidate', 'resolveCanonicalStrategyIdentity(', 'applyPaperAction'],
+  allOf: ['backtestCandidate', 'resolveCanonicalStrategyIdentity(', 'applyPaperTradingAction', 'evaluate('],
 });
 
 function slash(value) {

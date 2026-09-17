@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import {
   CONNECTION_STATUS,
   DEFAULT_EDGES,
@@ -141,5 +142,15 @@ test('every Scanner market requires canonical server identity and Paper consumer
     const result = evaluateEdge(files, edge);
     assert.notEqual(result.status, 'PROVEN', id);
     assert.equal(result.required.find(probe => probe.id === 'scanner-canonical-paper-server-consumer').state, 'MISSING', id);
+  }
+});
+
+test('declared canonical Paper consumer names resolve to existing owner exports', async () => {
+  const recurring = await readFile(new URL('../../market-prediction-lab/src/recurring-paper-loop-v1.js', import.meta.url), 'utf8');
+  const manual = await readFile(new URL('../../api-server/src/services/paper-trading-engine.service.ts', import.meta.url), 'utf8');
+  assert.match(recurring, /export async function runRecurringPaperCycle\(/u);
+  assert.match(manual, /export function applyPaperTradingAction\(/u);
+  for (const id of ['CG003', 'CG004', 'CG005', 'CG006']) {
+    assert.ok(DEFAULT_EDGES.find(edge => edge.id === id).required.find(probe => probe.id === 'scanner-canonical-paper-server-consumer').allOf.includes('runRecurringPaperCycle('));
   }
 });
