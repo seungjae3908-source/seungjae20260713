@@ -79,7 +79,10 @@ def _field(body: str, key: str) -> str:
 
 def _sha_from(body: str, *keys: str) -> str:
     for key in keys:
-        match = re.search(rf"(?im)^\s*-?\s*{re.escape(key)}\s*:\s*{SHA_CAPTURE}\b", body)
+        match = re.search(
+            rf"(?im)^\s*-?\s*{re.escape(key)}\s*:\s*[\"']?{SHA_CAPTURE}[\"']?(?![0-9a-fA-F])",
+            body,
+        )
         if match:
             return match.group(1).lower()
     phrase = re.search(rf"(?i)exact current main\s*=\s*{SHA_CAPTURE}\b", body)
