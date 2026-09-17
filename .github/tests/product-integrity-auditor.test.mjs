@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { evaluateEdge } from '../scripts/connection-graph-auditor.mjs';
 import {
   EVIDENCE_LEVEL,
   GOLDEN_JOURNEYS,
@@ -144,6 +145,19 @@ test('13 journeys include research stage readback, portfolio AI and scanner memb
   assert.equal(new Set(GOLDEN_JOURNEYS.map(item => item.id)).size, 13);
   for (const id of ['GJ011', 'GJ012', 'GJ013']) assert.ok(GOLDEN_JOURNEYS.find(item => item.id === id));
   assert.equal(new Set(PRODUCT_EDGES.map(item => item.id)).size, PRODUCT_EDGES.length);
+});
+
+test('holdings Telegram recognizes the concrete personal-dispatch delegate, not a fictional direct call', () => {
+  const files = new Map([
+    ['api-server/src/services/member-watchlist-telegram-producer.service.ts', 'deliverPersonalTelegramAlert userId'],
+    ['api-server/src/services/member-holdings-telegram-producer.service.ts', "deliverMemberHoldingTelegramAlert hasCapability(profile, 'canConnectPersonalTelegram')"],
+    ['api-server/src/services/member-holdings-telegram-alert.service.ts', 'deliverMemberHoldingTelegramAlert return deliverPersonalTelegramAlert({'],
+    ['api-server/src/services/signal-intelligence-telegram-subscriber.service.ts', 'deliverMemberWatchlistTelegramForSignal'],
+  ]);
+  const edge = PRODUCT_EDGES.find(item => item.id === 'PI014');
+  assert.equal(evaluateEdge(files, edge).status, 'PROVEN');
+  files.set('api-server/src/services/member-holdings-telegram-alert.service.ts', 'unused helper');
+  assert.equal(evaluateEdge(files, edge).status, 'PARTIAL');
 });
 
 test('complete reference dimensions cannot prove same-strategy Paper execution', () => {
