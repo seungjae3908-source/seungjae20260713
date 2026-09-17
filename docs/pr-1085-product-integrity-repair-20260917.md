@@ -22,7 +22,7 @@ The same strengthened auditor was run against an archive of immutable CURRENT_MA
 |---|---:|---:|
 | Capability static presence | 31/31 | 31/31 |
 | Connection edges | 30 | 30 |
-| PROVEN / PARTIAL / MISSING / UNKNOWN | 17 / 12 / 1 / 0 | 18 / 11 / 1 / 0 |
+| PROVEN / PARTIAL / MISSING / UNKNOWN | 18 / 11 / 1 / 0 | 19 / 10 / 1 / 0 |
 | Critical identity continuity static proof | 0/3 | 0/3 |
 | Golden Journeys static proof | 4/13 | 5/13 |
 | Open P0 / P1 source-contract findings | 0 / 12 | 0 / 11 |
@@ -82,6 +82,8 @@ All entries below close auditor sub-findings only. They do not close unrelated e
 
 ## Error-first CI ledger
 
+Final probe review also corrected a Telegram auditor sub-finding: the holdings producer delegates to `deliverMemberHoldingTelegramAlert`, which then calls `deliverPersonalTelegramAlert`. Requiring a fictional direct producer call was an AUDITOR_FALSE_POSITIVE, now CLOSED at STATIC_PROVEN with a two-hop delegate regression test. The actual Scanner UI alert source is `signal-scanner.tsx`, not the unrelated crypto workspace. Central notification history lineage is still deliberately PARTIAL.
+
 ### EL-CI-MANIFEST
 
 - Severity / Domain: P1 / immutable runtime package integrity.
@@ -104,7 +106,7 @@ All entries below close auditor sub-findings only. They do not close unrelated e
 - Tests: trigger coverage PASS, bounded-diff rejection reproduced from exact-head GitHub logs. Subsequent checks SKIPPED, not success.
 - Remaining Runtime Proof: all activation/scheduler runtime checks in this failed lane are NOT_PROVEN.
 
-Fast CI runs 35174588372 and 35175205270 succeeded on their respective exact heads. No run was rerun to pass. Local smoke initially found a new HTTP 500 because parsed optional trailing-stop fields contained undefined; normalization to the actual engine defaults plus a regression test fixed the cause before the next test run. Smoke then passed 109/109; Phase 5 passed 87/87. Frontend/backend typecheck and builds passed. Auditor/exact-head workflow tests passed 34/34; rendered Paper/Research contract tests passed 2/2. SSR tests are not authenticated browser E2E.
+Fast CI runs 35174588372, 35175205270 and 35175565275 succeeded on their respective exact heads. No run was rerun to pass. Local smoke initially found a new HTTP 500 because parsed optional trailing-stop fields contained undefined; normalization to the actual engine defaults plus a regression test fixed the cause before the next test run. Smoke then passed 109/109; Phase 5 passed 87/87. Frontend/backend typecheck and builds passed. Auditor/exact-head workflow tests passed 35/35; rendered Paper/Research contract tests passed 2/2. SSR tests are not authenticated browser E2E.
 
 ## Full audit-scope findings
 
@@ -117,7 +119,7 @@ Fast CI runs 35174588372 and 35175205270 succeeded on their respective exact hea
 | Backtest | Accepted server request → canonical reference → strict URL → isolated preview | Actual candidate strategy execution/position/settlement lineage not implemented. Reference/URL data has no admission authority. Research, Scanner and AI candidates are not interchangeable backtest producers. |
 | Paper economics | Manual engine opens positions, closes them, records entry/exit fee, slippage, funding and Net PnL | Eight-component Full Cost and same-candidate Genuine OOS not joined. Missing cost components are not zero. Natural Paper has independent canonical accounting/CLI/workflow evidence contracts; actual natural samples not fetched. |
 | Account / Portfolio | Canonical response safety checks → auth-fetch → portfolio; holdings → chart overlay; canonical journal → Portfolio AI query | Provider account data, freshness, exact-user isolation and runtime overlay correctness remain unverified. AI advisor rejects client state authority and does not execute orders. |
-| Alert / Telegram | Main has real scanner delivery calls, freshness routing, personal policy/outbox, user delivery worker, holdings/watchlist producers and startup calls | Worker startup is safety-policy gated; watchlist producer is gated. No Telegram message was sent, schedule enabled or production storage read. Scanner→in-app alert proof remains partial; AI/Research/Position events are not assumed universally supported. |
+| Alert / Telegram | Main has real scanner delivery calls, freshness routing, personal policy/outbox, user delivery worker, holdings/watchlist producers and startup calls; holdings uses its concrete personal-dispatch delegate | Worker startup is safety-policy gated; watchlist producer is gated. No Telegram message was sent, schedule enabled or production storage read. Scanner alerts render in Signal Scanner, but the central notification_history producer join remains partial; AI/Research/Position events are not assumed universally supported. |
 | Auth / Member | Backend getUser(token), exact current profile and canonical capability checks; disabled/revoked/suspended/withdrawn checks | Session expiry/logout revocation across devices and admin/regular desktop/mobile behavior require runtime evidence. user_metadata display name is not member authority. No Auth/DB/environment settings changed. |
 | PC / Mobile | Existing shared scanner selections and composers; new responsive reference/readback sections use the same parsed identity, wrapping text and minimum-height controls | Static component/layout parity only. No real desktop/mobile authenticated browser or production certification was performed. |
 

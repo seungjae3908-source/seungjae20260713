@@ -192,7 +192,8 @@ PRODUCT_EDGES.push(
   ] },
   { id: 'PI014', from: 'Member Watchlist / Holdings', to: 'Personal Telegram alerts', severity: 'P2', lane: 'notifications', required: [
     { id: 'watchlist-alert-producer', paths: ['api-server/src/services/member-watchlist-telegram-producer.service.ts'], allOf: ['deliverPersonalTelegramAlert', 'userId'] },
-    { id: 'holdings-member-eligibility', paths: ['api-server/src/services/member-holdings-telegram-producer.service.ts'], allOf: ['deliverPersonalTelegramAlert', "hasCapability(profile, 'canConnectPersonalTelegram')"] },
+    { id: 'holdings-member-eligibility', paths: ['api-server/src/services/member-holdings-telegram-producer.service.ts'], allOf: ['deliverMemberHoldingTelegramAlert', "hasCapability(profile, 'canConnectPersonalTelegram')"] },
+    { id: 'holdings-personal-dispatch-delegate', paths: ['api-server/src/services/member-holdings-telegram-alert.service.ts'], allOf: ['deliverMemberHoldingTelegramAlert', 'return deliverPersonalTelegramAlert({'] },
     { id: 'watchlist-subscriber-call', paths: ['api-server/src/services/signal-intelligence-telegram-subscriber.service.ts'], allOf: ['deliverMemberWatchlistTelegramForSignal'] },
   ] },
 );
