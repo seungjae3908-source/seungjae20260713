@@ -203,3 +203,84 @@ jobs:
           echo 'Application Fast CI is a development accelerator only.'
           echo 'It MUST NOT publish or replace any of the six Required CI contexts.'
           echo 'Final Ready/Merge/Staging gates still require canonical Application CI 6/6.'
+  browser-critical:
+    name: Critical browser journeys before Ready
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    env:
+      FAST_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      FAST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.FAST_HEAD_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify immutable PR head
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          actual_branch="$(git symbolic-ref --quiet --short HEAD || true)"
+          [[ "$FAST_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || { echo '[INVALID_HEAD_SHA]' >&2; exit 1; }
+          [[ -z "$actual_branch" ]] || { echo "[UNEXPECTED_BRANCH] $actual_branch" >&2; exit 1; }
+          [[ "${actual_sha,,}" == "${FAST_HEAD_SHA,,}" ]] || { echo "[HEAD_SHA_MISMATCH] expected=$FAST_HEAD_SHA actual=$actual_sha" >&2; exit 1; }
+
+      - name: Classify critical browser impact
+        id: impact
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$FAST_BASE_SHA"
+          git diff --name-only "$FAST_BASE_SHA" "$FAST_HEAD_SHA" > /tmp/browser-critical-changed.txt
+          node .github/scripts/ci-impact-plan.mjs \
+            --base "$FAST_BASE_SHA" \
+            --head "$FAST_HEAD_SHA" \
+            --changed-files /tmp/browser-critical-changed.txt \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Skip browser critical lane when frontend and CI are unaffected
+        if: steps.impact.outputs.frontend != 'true' && steps.impact.outputs.ci != 'true'
+        run: echo 'Browser critical lane not impacted.'
+
+      - name: Set up pnpm 9
+        if: steps.impact.outputs.frontend == 'true' || steps.impact.outputs.ci == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Set up Node 20
+        if: steps.impact.outputs.frontend == 'true' || steps.impact.outputs.ci == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install workspace dependencies
+        if: steps.impact.outputs.frontend == 'true' || steps.impact.outputs.ci == 'true'
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Cache Playwright Chromium
+        if: steps.impact.outputs.frontend == 'true' || steps.impact.outputs.ci == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-chromium-1.61.1-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Playwright Chromium
+        if: steps.impact.outputs.frontend == 'true' || steps.impact.outputs.ci == 'true'
+        run: pnpm --dir stock-analyzer exec playwright install chromium
+
+      - name: Run critical browser journeys without retry-to-pass
+        if: steps.impact.outputs.frontend == 'true' || steps.impact.outputs.ci == 'true'
+        run: pnpm --dir stock-analyzer run test:e2e:critical
+
+      - name: Development-only boundary
+        run: |
+          echo 'Critical browser journeys are a Fast CI preflight only.'
+          echo 'They do not replace the canonical full Browser Required context.'
+
