@@ -485,7 +485,7 @@ function normalizeEconomicEvidence(value: FastProfitabilityEconomicEvidence): Fa
     outcomeClass: exactOutcome(value.outcomeClass),
     observedAtMs: safePositiveTime(value.observedAtMs, 'FAST_PROFITABILITY_ECONOMIC_OBSERVED_AT_INVALID'),
     evidence: structuredClone(value.evidence),
-    parallelEvidence: value.parallelEvidence == null ? undefined : structuredClone(value.parallelEvidence),
+    parallelEvidence: value.parallelEvidence == null ? null : structuredClone(value.parallelEvidence),
   });
 }
 
@@ -847,7 +847,11 @@ export function assertFastProfitabilityEightComponentFullCost(value: unknown): A
     throw new Error('FAST_PROFITABILITY_FULL_COST_CONTRACT_DRIFT');
   }
   for (const name of expected) {
-    const component = record(components[name]);
+    const rawComponent = components[name];
+    if (!rawComponent || typeof rawComponent !== 'object' || Array.isArray(rawComponent)) {
+      throw new Error(`FAST_PROFITABILITY_FULL_COST_${name.toUpperCase()}_MISSING`);
+    }
+    const component = rawComponent as AnyRecord;
     if (component.status !== 'PRESENT'
       || !Number.isFinite(component.valuePercent)
       || Number(component.valuePercent) < 0
