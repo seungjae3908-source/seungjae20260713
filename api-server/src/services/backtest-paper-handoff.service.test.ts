@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildBacktestPaperHandoffs } from './backtest-paper-handoff.service';
+import { buildBacktestPaperHandoffBundle, buildBacktestPaperHandoffs } from './backtest-paper-handoff.service';
 import { backtestPaperHandoffPath, readBacktestPaperHandoff, parseBacktestPaperHandoff } from '../../../packages/strategy-hypothesis/src/backtest-paper-handoff.js';
 import type { BacktestRequest } from './backtest-engine.service';
 import type { NormalizedCandle } from './futures-market-data.service';
@@ -35,7 +35,8 @@ test('server snapshot preserves minimum identity, separates LONG/SHORT and grant
     assert.equal(value.status, 'REFERENCE_ONLY'); assert.equal(value.evidenceCredit, 0);
     assert.equal(value.executionAuthority, 'NONE'); assert.equal(value.orderSubmitted, false);
     assert.equal(value.privateTradingApiAllowed, false);
-    assert.ok(value.blockers.includes('CANONICAL_STRATEGY_PAPER_CONSUMER_UNAVAILABLE'));
+    assert.equal(value.blockers.includes('CANONICAL_STRATEGY_PAPER_CONSUMER_UNAVAILABLE'), false);
+    assert.ok(value.blockers.includes('NATURAL_PAPER_EVIDENCE_NOT_PROVEN'));
     const path = backtestPaperHandoffPath(value);
     assert.deepEqual(readBacktestPaperHandoff(path.slice(path.indexOf('?'))).handoff, value);
   }
@@ -102,8 +103,9 @@ test('server Backtest source keeps all eight fields and immutable accepted strat
   let now = start;
   const registry = new ProductPaperSourceRegistry(() => now);
   const accepted = structuredClone(request);
-  const handoffs = buildBacktestPaperHandoffs(accepted, candles, sha);
-  const run = registry.captureBacktest('owner', accepted, handoffs, sha)!;
+  const bundle = buildBacktestPaperHandoffBundle(accepted, candles, sha);
+  const handoffs = bundle.handoffs;
+  const run = registry.captureBacktest('owner', accepted, handoffs, sha, bundle.strategyIdentityInputs)!;
   accepted.parameters.lookback = 99;
   for (const handoff of handoffs) {
     const source = registry.resolveBacktest('owner', { ...approval, backtestRunId: run, backtestCandidate: handoff }, sha);
@@ -121,8 +123,9 @@ test('server Backtest source keeps all eight fields and immutable accepted strat
 
 test('Backtest modified dimensions, private authority, unresolved run and latest fallback fail closed', () => {
   const registry = new ProductPaperSourceRegistry(() => start);
-  const handoff = buildBacktestPaperHandoffs(request, candles, sha)[0];
-  const run = registry.captureBacktest('owner', request, [handoff], sha)!;
+  const bundle = buildBacktestPaperHandoffBundle(request, candles, sha);
+  const handoff = bundle.handoffs[0];
+  const run = registry.captureBacktest('owner', request, [handoff], sha, bundle.strategyIdentityInputs)!;
   const body = { ...approval, backtestRunId: run, backtestCandidate: handoff };
   for (const change of [{ candidateId: `paper-candidate-v1:${'f'.repeat(64)}` }, { strategyId: 'BACKTEST_ENGINE:vwap_reclaim' },
     { parameterHash: 'f'.repeat(64) }, { market: 'US_STOCK' }, { symbol: 'BTCUSDT' }, { timeframe: '4H' }, { side: 'SHORT' }, { leverage: 3 }]) {
@@ -230,7 +233,8 @@ test('bounded source saturation cannot evict or substitute an unexpired Scanner 
   registry.captureScanner('owner', overflow, sha);
   assert.equal(registry.resolveScanner('owner', body, sha).paperCandidate.signal.symbol, '005930');
   assert.throws(() => registry.resolveScanner('owner', { ...body, searchRunId: overflow.requestId }, sha), /NOT_RESOLVABLE/);
-  assert.equal(registry.captureBacktest('owner', request, buildBacktestPaperHandoffs(request, candles, sha), sha), null,
+  const saturatedBacktestBundle = buildBacktestPaperHandoffBundle(request, candles, sha);
+  assert.equal(registry.captureBacktest('owner', request, saturatedBacktestBundle.handoffs, sha, saturatedBacktestBundle.strategyIdentityInputs), null,
     'a saturated registry must not issue a Backtest run reference that it did not store');
   first.cards[0].dataSources = [];
   registry.captureScanner('owner', first, sha);
