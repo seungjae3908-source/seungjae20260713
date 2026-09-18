@@ -782,7 +782,7 @@ export function routeFastProfitabilityCanonicalIndependentObservation(input: Rea
     independenceStatus: 'PROVEN',
     dependencyComponentCredit: 1,
     observedAtMs: component.representativeEventTimestampMs,
-  }) as Omit<FastProfitabilityAllocation, 'independenceAuditDigest'>;
+  });
   return Object.freeze({
     ...allocation,
     evidenceClass: FAST_PROFITABILITY_EXECUTION_CALIBRATION_CLASS,
@@ -842,7 +842,7 @@ function assertAllocation(policy: FastProfitabilityPolicy, allocation: FastProfi
     independenceStatus: 'PROVEN',
     dependencyComponentCredit: 1,
     observedAtMs: allocation.observedAtMs,
-  }) as Omit<FastProfitabilityAllocation, 'independenceAuditDigest'>;
+  });
   if (recomputed.split !== allocation.split
     || recomputed.bucket !== allocation.bucket
     || recomputed.allocationDigest !== allocation.allocationDigest) {
@@ -1074,6 +1074,10 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
         || stored.policyDigest !== policy.policyDigest
         || stored.candidateDigest !== policy.candidateDigest
         || stored.candidateId !== policy.candidate.candidateId
+        || stored.sourceClass !== FAST_PROFITABILITY_FORWARD_EVIDENCE_CLASS
+        || stored.sourceObservationId !== stored.allocation.publicEventIdentity
+        || !Number.isSafeInteger(stored.economicObservedAtMs)
+        || stored.economicObservedAtMs <= policy.eligibleAfterMs
         || recordDigest !== validationRecordDigest(withoutDigest)) {
         throw new Error('FAST_PROFITABILITY_VALIDATION_RECORD_INVALID');
       }
@@ -1130,7 +1134,7 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
     if (!outcomeClassesComplete) {
       throw new Error('FAST_PROFITABILITY_VALIDATION_OUTCOME_CLASSES_INCOMPLETE');
     }
-    const observedAtMs = Math.max(...records.map((entry) => entry.recordedAtMs));
+    const observedAtMs = Math.max(...records.map((entry) => entry.economicObservedAtMs));
     if (!Number.isSafeInteger(observedAtMs) || observedAtMs <= policy.eligibleAfterMs) {
       throw new Error('FAST_PROFITABILITY_VALIDATION_OBSERVED_AT_INVALID');
     }
@@ -1139,7 +1143,10 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
       allocationDigest: entry.allocation.allocationDigest,
       independenceAuditDigest: entry.allocation.independenceAuditDigest,
       dependencyComponentId: entry.allocation.dependencyComponentId,
+      sourceClass: entry.sourceClass,
+      sourceObservationId: entry.sourceObservationId,
       outcomeClass: entry.outcomeClass,
+      economicObservedAtMs: entry.economicObservedAtMs,
       economicEvidenceDigest: entry.economicEvidenceDigest,
       recordedAtMs: entry.recordedAtMs,
     }));
@@ -1288,31 +1295,26 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
 export function createFastProfitabilityValidationReceiptBridge(input: Readonly<{
   receiptRoot: string;
   maximumAgeMs: number;
-  policy?: unknown;
-  store?: Readonly<{
+  policy: unknown;
+  store: Readonly<{
     buildValidationEvidence: (
       policy: unknown,
       identity: ManualPaperCanonicalIdentity,
     ) => Promise<ForwardObserverValidationEvidence>;
   }>;
-  artifactRoot?: string;
-  readValidationEvidence?: ForwardObserverValidationEvidenceReader;
 }>) {
-  const readValidationEvidence = input.readValidationEvidence
-    ?? (input.store && input.policy
-      ? ((identity: ManualPaperCanonicalIdentity) => (
-        input.store!.buildValidationEvidence(input.policy, identity)
-      ))
-      : input.artifactRoot
-        ? createForwardObserverArtifactValidationEvidenceReader({ artifactRoot: input.artifactRoot })
-        : null);
-  if (!readValidationEvidence) {
-    throw new Error('FAST_PROFITABILITY_FORWARD_VALIDATION_EVIDENCE_READER_REQUIRED');
+  assertPolicy(input.policy);
+  if (!input.store || typeof input.store.buildValidationEvidence !== 'function') {
+    throw new Error('FAST_PROFITABILITY_VALIDATION_STORE_REQUIRED');
   }
+  const policy = input.policy as FastProfitabilityPolicy;
   const issue = createForwardObserverValidationReceiptOwner({
     receiptRoot: input.receiptRoot,
     maximumAgeMs: input.maximumAgeMs,
-    readValidationEvidence,
+    readValidationEvidence: async (identity) => {
+      assertFastProfitabilityManualIdentity(policy, identity);
+      return input.store.buildValidationEvidence(policy, identity);
+    },
   });
   return async (request: Readonly<{
     policy: unknown;
@@ -1320,7 +1322,10 @@ export function createFastProfitabilityValidationReceiptBridge(input: Readonly<{
     nowMs: number;
   }>): Promise<ForwardObserverValidationReceiptReadback> => {
     assertPolicy(request.policy);
-    assertFastProfitabilityManualIdentity(request.policy, request.identity);
+    if ((request.policy as FastProfitabilityPolicy).policyDigest !== policy.policyDigest) {
+      throw new Error('FAST_PROFITABILITY_RECEIPT_POLICY_MISMATCH');
+    }
+    assertFastProfitabilityManualIdentity(policy, request.identity);
     const result = await issue(request.identity, request.nowMs);
     consumeManualSameCandidateValidationReceipt(
       result.receipt,
