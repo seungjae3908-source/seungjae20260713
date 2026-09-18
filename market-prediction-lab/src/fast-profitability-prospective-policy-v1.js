@@ -75,6 +75,24 @@ function exactTimestamp(value, code) {
   return value;
 }
 
+function containsForbiddenAllocationKey(value, seen = new Set()) {
+  if (value === null || typeof value !== 'object') return false;
+  if (seen.has(value)) throw new Error('FAST_PROFITABILITY_ALLOCATION_INPUT_CYCLE_FORBIDDEN');
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.some((item) => containsForbiddenAllocationKey(item, seen));
+    }
+    for (const [key, child] of Object.entries(value)) {
+      if (FORBIDDEN_ALLOCATION_FIELDS.includes(key)) return true;
+      if (containsForbiddenAllocationKey(child, seen)) return true;
+    }
+    return false;
+  } finally {
+    seen.delete(value);
+  }
+}
+
 function canonicalize(value, path = 'value') {
   if (value === null) return null;
   if (typeof value === 'string' || typeof value === 'boolean') return value;
@@ -187,8 +205,11 @@ export function buildFastProfitabilityProspectivePolicyV1({
       allocationInput: Object.freeze([
         'policyDigest',
         'candidateDigest',
-        'publicEventIdentity',
+        'dependencyComponentId',
       ]),
+      independenceBeforeSplitRequired: true,
+      dependencyComponentIsAllocationAuthority: true,
+      publicEventIdentityMayInfluenceSplit: false,
       sourceFrameMayInfluenceSplit: false,
       outcomeMayInfluenceSplit: false,
       reassignmentAllowed: false,
@@ -209,6 +230,8 @@ export function buildFastProfitabilityProspectivePolicyV1({
     }),
     independencePolicy: Object.freeze({
       canonicalIndependenceAuditRequired: true,
+      splitAssignmentAfterIndependenceRequired: true,
+      dependencyComponentIsSplitAuthority: true,
       maximumCreditPerDependencyComponent: 1,
       duplicatePublicEventCrossSplitAllowed: false,
       overlappingObservationWindowIndependentCreditAllowed: false,
@@ -269,10 +292,17 @@ export function verifyFastProfitabilityProspectivePolicyV1(policy) {
   }
   if (policy.splitPolicy?.validationBasisPoints !== 5000
     || policy.splitPolicy?.sealedOosBasisPoints !== 5000
+    || policy.splitPolicy?.independenceBeforeSplitRequired !== true
+    || policy.splitPolicy?.dependencyComponentIsAllocationAuthority !== true
+    || policy.splitPolicy?.publicEventIdentityMayInfluenceSplit !== false
     || policy.splitPolicy?.outcomeMayInfluenceSplit !== false
     || policy.splitPolicy?.sourceFrameMayInfluenceSplit !== false
     || policy.splitPolicy?.reassignmentAllowed !== false
-    || policy.splitPolicy?.crossSplitMovementAllowed !== false) {
+    || policy.splitPolicy?.crossSplitMovementAllowed !== false
+    || policy.independencePolicy?.canonicalIndependenceAuditRequired !== true
+    || policy.independencePolicy?.splitAssignmentAfterIndependenceRequired !== true
+    || policy.independencePolicy?.dependencyComponentIsSplitAuthority !== true
+    || policy.independencePolicy?.maximumCreditPerDependencyComponent !== 1) {
     add('FAST_PROFITABILITY_SPLIT_POLICY_INVALID');
   }
   if (policy.validationPolicy?.minimumEffectiveIndependentN
@@ -329,10 +359,8 @@ export function verifyFastProfitabilityProspectivePolicyV1(policy) {
 
 function validateAllocationInput(observation) {
   if (!isPlainObject(observation)) throw new Error('FAST_PROFITABILITY_OBSERVATION_REQUIRED');
-  for (const field of FORBIDDEN_ALLOCATION_FIELDS) {
-    if (Object.prototype.hasOwnProperty.call(observation, field)) {
-      throw new Error('FAST_PROFITABILITY_OUTCOME_AWARE_ALLOCATION_FORBIDDEN');
-    }
+  if (containsForbiddenAllocationKey(observation)) {
+    throw new Error('FAST_PROFITABILITY_OUTCOME_AWARE_ALLOCATION_FORBIDDEN');
   }
   if (!nonEmpty(observation.publicEventIdentity)) {
     throw new Error('FAST_PROFITABILITY_PUBLIC_EVENT_IDENTITY_REQUIRED');
@@ -340,9 +368,17 @@ function validateAllocationInput(observation) {
   if (!nonEmpty(observation.sourceFrameIdentity)) {
     throw new Error('FAST_PROFITABILITY_SOURCE_FRAME_IDENTITY_REQUIRED');
   }
+  if (!nonEmpty(observation.dependencyComponentId)
+    || observation.independenceStatus !== 'PROVEN'
+    || observation.dependencyComponentCredit !== 1) {
+    throw new Error('FAST_PROFITABILITY_INDEPENDENCE_BEFORE_SPLIT_REQUIRED');
+  }
   return Object.freeze({
     publicEventIdentity: observation.publicEventIdentity.trim(),
     sourceFrameIdentity: observation.sourceFrameIdentity.trim(),
+    dependencyComponentId: observation.dependencyComponentId.trim(),
+    independenceStatus: 'PROVEN',
+    dependencyComponentCredit: 1,
     observedAtMs: exactTimestamp(
       observation.observedAtMs,
       'FAST_PROFITABILITY_OBSERVED_AT_INVALID',
@@ -361,7 +397,7 @@ export function allocateFastProfitabilitySplit(policy, observation) {
     schemaVersion: 'fast-profitability-allocation-v1',
     policyDigest: policy.policyDigest,
     candidateDigest: policy.candidateDigest,
-    publicEventIdentity: input.publicEventIdentity,
+    dependencyComponentId: input.dependencyComponentId,
   });
   const bucket = Number.parseInt(allocationDigest.slice(0, 8), 16) % 10_000;
   const split = bucket < policy.splitPolicy.validationBasisPoints
@@ -375,6 +411,7 @@ export function allocateFastProfitabilitySplit(policy, observation) {
     candidateDigest: policy.candidateDigest,
     publicEventIdentity: input.publicEventIdentity,
     sourceFrameIdentity: input.sourceFrameIdentity,
+    dependencyComponentId: input.dependencyComponentId,
     observedAtMs: input.observedAtMs,
     outcomeConsulted: false,
     reassignmentAllowed: false,
