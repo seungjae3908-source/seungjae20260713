@@ -9,18 +9,22 @@ import { cn } from '@/lib/utils';
 
 type CreatedPlan = {
   id: string;
+  candidateId: string;
+  market: string;
   symbol: string;
-  estimatedKrw: number;
+  timeframe: string;
+  side: string;
+  leverage: number | null;
+  leverageProvenance: 'CANONICAL_SIMULATION_DATA_EVIDENCE' | 'NOT_APPLICABLE_CASH_OR_SPOT';
   quantity: number | null;
-  stopPrice: number;
-  targetPrices: number[];
-  splitRatios: number[];
-  signalScore: number;
-  signalConfidence: number;
-  signalRiskReward: number | null;
+  entryPrice: number | null;
+  notional: number | null;
+  costPolicyVersion: string;
+  strategyId: string;
+  parameterHash: string;
   signalExpiresAt: string;
   state: string;
-  signalState: string;
+  executionAuthority: 'NONE';
 };
 
 type CreateResponse = {
@@ -29,18 +33,13 @@ type CreateResponse = {
   plan?: CreatedPlan;
   duplicate?: boolean;
   serverVerified?: boolean;
+  executionConnected?: boolean;
   liveOrderEnabled?: boolean;
-  scanner?: {
-    score?: number;
-    confidence?: number;
-    riskScore?: number | null;
-    matchedConditions?: string[];
-  };
-  orderbook?: {
-    ask?: number;
-    bid?: number;
-    spreadPercent?: number;
-  };
+  orderSubmitted?: boolean;
+  exchangeRequestSent?: boolean;
+  evidenceCredit?: number;
+  naturalSampleCredit?: number;
+  profitabilityClaimAllowed?: boolean;
 };
 
 type ScannerApprovalComposerProps = {
@@ -48,43 +47,42 @@ type ScannerApprovalComposerProps = {
   testOnlyCanPlaceOrders?: boolean;
 };
 
-const AMOUNT_STORAGE_KEY = 'scanner-approval-paper-amount-v1';
-const MINIMUM_AMOUNT_KRW = 5_000;
-const QUICK_AMOUNTS = [50_000, 100_000, 200_000, 500_000] as const;
 const CREATE_PLAN_TIMEOUT_MS = 10_000;
+const supportedMarkets = ['KR', 'US', 'UPBIT', 'BITGET'] as const;
+const US_ORDER_ADAPTER_AVAILABLE = supportedMarkets.includes('US');
 
-function loadAmount() {
-  if (typeof window === 'undefined') return 100_000;
-  const value = Number(window.localStorage.getItem(AMOUNT_STORAGE_KEY));
-  return Number.isFinite(value) && value >= MINIMUM_AMOUNT_KRW ? Math.round(value) : 100_000;
-}
-
-function formatNumber(value: number | null | undefined, digits = 0) {
+function formatNumber(value: number | null | undefined, digits = 4) {
   if (value == null || !Number.isFinite(Number(value))) return '-';
   return new Intl.NumberFormat('ko-KR', { maximumFractionDigits: digits }).format(Number(value));
 }
 
 function creationErrorMessage(code: string) {
   const labels: Record<string, string> = {
-    CAPABILITY_REQUIRED: '승인형 Paper 주문은 활성 관리자만 사용할 수 있습니다.',
-    US_ORDER_ADAPTER_NOT_AVAILABLE: '미국주식 주문 어댑터가 검증되기 전까지 승인 계획을 만들 수 없습니다.',
-    SCANNER_SIGNAL_NOT_FOUND: '서버 재검색에서 해당 종목의 신호가 더 이상 확인되지 않았습니다.',
-    SCANNER_AND_CONDITIONS_NOT_MAINTAINED: '선택했던 조건이 모두 유지되지 않아 승인 계획을 만들지 않았습니다.',
-    SCANNER_RISK_BLOCKED: '현재 위험 점수가 허용 범위를 넘어 승인 계획이 차단됐습니다.',
-    SCANNER_DUPLICATE_ACTIVE_SYMBOL: '같은 종목의 활성 계획 또는 주문이 이미 있어 중복 등록을 차단했습니다.',
-    SCANNER_RISK_CAPACITY_EXHAUSTED: '남은 운용한도 또는 종목 노출한도가 부족합니다.',
-    SCANNER_MINUTE_DATA_INSUFFICIENT: '1분 변동성 데이터가 부족해 계획 생성을 중단했습니다.',
-    SCANNER_ORDERBOOK_INVALID: '실시간 최우선 호가를 확인할 수 없어 계획 생성을 중단했습니다.',
-    APPROVAL_MODE_REQUIRED: '승인형 주문 모드만 사용할 수 있습니다.',
-    AUTOMATIC_MODE_FORBIDDEN: '자동 승인과 automatic 모드는 사용할 수 없습니다.',
-    PAPER_ACCOUNT_MODE_REQUIRED: 'Paper 또는 허용된 mock 계정만 사용할 수 있습니다.',
-    PAPER_ADAPTER_REQUIRED: '서버가 선택한 Paper/mock 어댑터만 사용할 수 있습니다.',
+    CAPABILITY_REQUIRED: '승인형 Paper 계획은 활성 관리자만 사용할 수 있습니다.',
+    SCANNER_SIGNAL_NOT_FOUND: '서버 재검색에서 해당 신호가 더 이상 확인되지 않았습니다.',
+    SCANNER_AND_CONDITIONS_NOT_MAINTAINED: '선택했던 조건이 유지되지 않아 Paper 계획을 만들지 않았습니다.',
+    APPROVAL_MODE_REQUIRED: '승인형 Paper 모드만 사용할 수 있습니다.',
+    PAPER_ACCOUNT_MODE_REQUIRED: 'Paper 계정 모드만 사용할 수 있습니다.',
+    PAPER_ADAPTER_REQUIRED: '서버가 선택한 Paper 어댑터만 사용할 수 있습니다.',
     LIVE_MODE_FORBIDDEN: '실전 계좌와 live 어댑터는 사용할 수 없습니다.',
-    CANONICAL_PAPER_EXECUTION_CONSUMER_NOT_CONNECTED: '서버 신호 identity는 대조했지만 canonical Paper 실행 consumer가 아직 연결되지 않았습니다. 계획·주문·포지션은 생성하지 않았습니다.',
-    PAPER_SOURCE_NOT_RESOLVABLE: '서버 신호 참조가 없거나 만료됐습니다. 기존 신호를 임의로 다른 후보로 대체하지 않았습니다.',
-    SERVER_LEVERAGE_PROVENANCE_REQUIRED: '서버가 검증한 leverage provenance가 필요합니다.',
+    CLIENT_PAPER_AUTHORITY_FORBIDDEN: '브라우저가 Paper evidence·실행 권한을 지정할 수 없습니다.',
+    SERVER_LEVERAGE_PROVENANCE_REQUIRED: '레버리지는 서버 evidence로만 결정됩니다.',
+    SERVER_OWNED_SCANNER_PAPER_EVIDENCE_REQUIRED: '서버가 보유한 Paper admission·위험·수익성 evidence가 아직 준비되지 않아 계획을 만들지 않았습니다.',
+    CANONICAL_PAPER_ADMISSION_BLOCKED: 'Canonical Paper admission 검증을 통과하지 못했습니다.',
+    SCANNER_CANONICAL_IDENTITY_CONTINUITY_MISMATCH: '검색 신호와 Paper candidate identity가 일치하지 않아 차단했습니다.',
+    CANONICAL_PAPER_SIMULATION_BLOCKED: '공개시장 evidence 기반 모의체결 조건을 충족하지 못했습니다.',
+    CANONICAL_PAPER_CYCLE_BLOCKED: 'Paper cycle의 진입 조건을 충족하지 못해 포지션을 만들지 않았습니다.',
+    PAPER_SOURCE_NOT_RESOLVABLE: '서버 신호 참조가 없거나 만료됐습니다.',
   };
-  return labels[code] ?? safeTradeErrorMessage(code, '서버 검증형 승인 계획을 만들지 못했습니다.');
+  return labels[code] ?? safeTradeErrorMessage(code, '서버 검증형 Paper 계획을 만들지 못했습니다.');
+}
+
+function marketDirectionSupported(selection: AnalysisSelection) {
+  if (selection.market === 'KR') return selection.action === 'BUY' && /^\d{6}(?:_(?:NX|AL))?$/.test(selection.ticker);
+  if (selection.market === 'US') return US_ORDER_ADAPTER_AVAILABLE && selection.action === 'BUY' && selection.ticker.trim().length > 0;
+  if (selection.market === 'UPBIT') return selection.action === 'BUY' && selection.ticker.trim().length > 0;
+  if (selection.market === 'BITGET') return (selection.action === 'LONG' || selection.action === 'SHORT') && selection.ticker.trim().length > 0;
+  return false;
 }
 
 export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = false }: ScannerApprovalComposerProps) {
@@ -95,7 +93,6 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
     && window.location.pathname === '/__phase12-trade-automation-e2e';
   const canPlaceOrders = auth.can('canPlaceOrders') || fixtureCanPlaceOrders;
   const [, navigate] = useLocation();
-  const [amount, setAmount] = useState(loadAmount);
   const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState('');
   const [result, setResult] = useState<CreateResponse | null>(null);
@@ -105,8 +102,8 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
     () => [...new Set((selection.matchedSignals ?? []).map(String).map((item) => item.trim()).filter(Boolean))].slice(0, 20),
     [selection.matchedSignals],
   );
-  const supported = selection.assetType === 'stock' && selection.market === 'KR' && /^\d{6}(?:_(?:NX|AL))?$/.test(selection.ticker);
-  const amountValid = Number.isFinite(amount) && amount >= MINIMUM_AMOUNT_KRW;
+  const supported = supportedMarkets.includes(selection.market as typeof supportedMarkets[number])
+    && marketDirectionSupported(selection);
 
   useEffect(() => {
     requestSequenceRef.current += 1;
@@ -126,21 +123,15 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
   async function createPlan() {
     if (!canPlaceOrders || creating) return;
     if (!supported) {
-      setMessage(selection.market === 'US'
-        ? '미국주식 주문 어댑터가 검증되기 전까지 승인 계획을 만들 수 없습니다.'
-        : '현재는 국내주식 검색 신호의 Paper 승인 계획만 지원합니다.');
+      setMessage('이 시장의 Paper 진입 방향이 명시되지 않았거나 지원 계약과 일치하지 않습니다.');
       return;
     }
     if (!conditions.length) {
       setMessage('AI 검색기에서 종목을 선택한 뒤 일치 조건이 전달돼야 합니다.');
       return;
     }
-    if (!selection.searchRunId || !selection.signalId || selection.action !== 'BUY') {
-      setMessage('서버 검색 run·signal 참조와 explicit BUY가 필요합니다. 누락 방향을 기본값으로 실행하지 않습니다.');
-      return;
-    }
-    if (!amountValid) {
-      setMessage(`희망 운용금액을 ${formatNumber(MINIMUM_AMOUNT_KRW)}원 이상 입력해 주세요.`);
+    if (!selection.searchRunId || !selection.signalId || !selection.action) {
+      setMessage('서버 검색 run·signal 참조와 explicit BUY/LONG/SHORT 방향이 필요합니다.');
       return;
     }
 
@@ -152,9 +143,8 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
     const timeout = window.setTimeout(() => controller.abort(), CREATE_PLAN_TIMEOUT_MS);
 
     setCreating(true);
-    setMessage('서버가 검색 조건·실시간 호가·캔들·위험 한도를 다시 계산하고 있습니다.');
+    setMessage('서버가 동일 신호 identity와 canonical Paper evidence를 다시 검증하고 있습니다.');
     try {
-      window.localStorage.setItem(AMOUNT_STORAGE_KEY, String(Math.round(amount)));
       const response = await authorizedFetch('/api/trade-automation/scanner/plans', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -169,28 +159,26 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
           signalId: selection.signalId,
           side: selection.action,
           selectedConditions: conditions,
-          requestedInvestmentKrw: Math.round(amount),
-          splitRatios: [40, 30, 30],
-          minimumScore: 70,
-          minimumConfidence: 60,
-          maximumRiskScore: 50,
         }),
         signal: controller.signal,
       });
       const payload = await response.json().catch(() => ({})) as CreateResponse;
-      if (!response.ok || !payload.ok || !payload.plan || payload.serverVerified !== true) {
+      if (!response.ok || !payload.ok || !payload.plan || payload.serverVerified !== true || payload.executionConnected !== true) {
         throw new Error(payload.error ?? 'SCANNER_APPROVAL_FAILED');
+      }
+      if (payload.orderSubmitted !== false || payload.exchangeRequestSent !== false || payload.evidenceCredit !== 0) {
+        throw new Error('SCANNER_PAPER_SAFETY_CONTRACT_VIOLATION');
       }
       if (sequence !== requestSequenceRef.current || controller.signal.aborted) return;
       setResult(payload);
       setMessage(payload.duplicate
-        ? '같은 서버 검증 신호의 기존 승인 계획을 불러왔습니다.'
-        : '서버 검증이 끝났습니다. 승인형 주문 화면에서 최종 승인할 수 있습니다.');
+        ? '같은 canonical signal의 기존 Paper 포지션을 확인했습니다.'
+        : '서버 canonical 검증을 통과해 Paper-only 포지션이 생성됐습니다.');
     } catch (error) {
       if (sequence !== requestSequenceRef.current) return;
       setResult(null);
       if (error instanceof Error && error.name === 'AbortError') {
-        setMessage('서버 재검증 시간이 초과되어 계획을 생성하지 않았습니다. 최신 조건을 확인한 뒤 다시 시도해 주세요.');
+        setMessage('서버 재검증 시간이 초과되어 계획을 만들지 않았습니다.');
         return;
       }
       const code = error instanceof Error ? error.message : 'SCANNER_APPROVAL_FAILED';
@@ -209,9 +197,7 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
           <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
           <div className="min-w-0">
             <h2 className="text-sm font-black">검색·분석 전용</h2>
-            <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">
-              신호검색과 차트 분석은 사용할 수 있지만 승인형 Paper 주문 등록은 활성 관리자에게만 제공됩니다.
-            </p>
+            <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">Paper 포지션 등록은 활성 관리자에게만 제공됩니다.</p>
           </div>
         </div>
       </section>
@@ -223,9 +209,9 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
       <div className="flex items-start gap-2">
         <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
         <div className="min-w-0">
-          <h2 className="text-sm font-black">승인 대기 등록</h2>
+          <h2 className="text-sm font-black">Canonical Paper 연결</h2>
           <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">
-            화면의 가격·점수를 주문값으로 사용하지 않고 서버가 같은 조건을 다시 검색한 뒤 Paper 계획을 생성합니다.
+            브라우저 값으로 체결을 만들지 않습니다. 서버가 동일 신호·전략 identity, 위험, 비용, 공개시장 evidence를 검증한 경우에만 모의 포지션을 생성합니다.
           </p>
         </div>
       </div>
@@ -234,63 +220,27 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="break-words font-extrabold">{selection.displayName} · {selection.ticker}</p>
-            <p className="mt-1 text-[10px] font-bold text-muted-foreground">{selection.market} · {selection.timeframe} · 조건 {conditions.length}개</p>
+            <p className="mt-1 text-[10px] font-bold text-muted-foreground">{selection.market} · {selection.timeframe} · {selection.action ?? '방향 없음'} · 조건 {conditions.length}개</p>
           </div>
           <span className={cn('shrink-0 rounded-full px-2 py-1 text-[10px] font-extrabold', supported ? 'bg-positive/10 text-positive' : 'bg-warning/10 text-warning')}>
-            {supported ? '국내 Paper 지원' : '주문 연결 미지원'}
+            {supported ? 'Paper 지원' : '진입 방향 미지원'}
           </span>
         </div>
         {conditions.length ? <div className="mt-2 flex flex-wrap gap-1">{conditions.slice(0, 6).map((item) => <span key={item} className="max-w-full break-words rounded-full bg-secondary px-2 py-1 text-[10px] font-bold">{item}</span>)}</div> : null}
       </div>
 
-      <div className="mt-3 rounded-2xl border border-card-border bg-background p-3">
-        <label className="block">
-          <span className="text-[10px] font-bold text-muted-foreground">희망 운용금액</span>
-          <div className={cn('mt-1 flex min-h-11 items-center gap-2 rounded-xl border px-3', amountValid ? 'border-card-border' : 'border-destructive/50')}>
-            <input
-              aria-label="승인 계획 희망 운용금액"
-              aria-invalid={!amountValid}
-              type="text"
-              inputMode="numeric"
-              value={formatNumber(amount)}
-              onChange={(event) => {
-                const digits = event.target.value.replace(/\D/g, '').slice(0, 12);
-                setAmount(digits ? Number(digits) : 0);
-              }}
-              className="min-w-0 flex-1 bg-transparent text-sm font-extrabold tabular-nums outline-none"
-            />
-            <span className="text-xs font-bold">원</span>
-          </div>
-        </label>
-        <div className="mt-2 grid grid-cols-4 gap-1.5" aria-label="희망 운용금액 빠른 선택">
-          {QUICK_AMOUNTS.map((value) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setAmount(value)}
-              aria-pressed={amount === value}
-              className={cn(
-                'min-h-11 rounded-xl border px-1 text-[10px] font-extrabold',
-                amount === value ? 'border-primary bg-primary/10 text-primary' : 'border-card-border bg-card',
-              )}
-            >
-              {formatNumber(value / 10_000)}만원
-            </button>
-          ))}
-        </div>
-        <p className={cn('mt-2 break-keep text-[10px] font-bold', amountValid ? 'text-muted-foreground' : 'text-destructive')}>
-          최소 {formatNumber(MINIMUM_AMOUNT_KRW)}원 · 실제 계획금액은 서버 위험한도에 따라 축소될 수 있습니다.
-        </p>
+      <div className="mt-3 rounded-2xl border border-card-border bg-background p-3 text-[10px] font-bold leading-5 text-muted-foreground">
+        KR·US·현물은 BUY, 선물은 LONG/SHORT만 허용합니다. 수량·레버리지·진입가격은 client가 지정하지 않고 서버 canonical risk/simulation owner가 결정합니다.
       </div>
 
       <button
         type="button"
         onClick={() => void createPlan()}
-        disabled={creating || !supported || !conditions.length || !amountValid}
+        disabled={creating || !supported || !conditions.length}
         className="mt-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-extrabold text-primary-foreground disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
       >
         {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-        {creating ? '서버 재검증 중...' : '승인 대기 등록'}
+        {creating ? 'Canonical 검증 중...' : 'Paper 포지션 준비'}
       </button>
 
       {message ? (
@@ -303,14 +253,18 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
       {result?.plan ? (
         <div className="mt-3 rounded-2xl border border-positive/30 bg-positive/5 p-3 text-xs">
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <Metric label="서버 AI 점수" value={`${formatNumber(result.plan.signalScore)}점`} />
-            <Metric label="서버 신뢰도" value={`${formatNumber(result.plan.signalConfidence)}%`} />
-            <Metric label="계획금액" value={`${formatNumber(result.plan.estimatedKrw)}원`} />
-            <Metric label="수량" value={result.plan.quantity == null ? '서버 계산' : `${formatNumber(result.plan.quantity)}주`} />
+            <Metric label="시장/방향" value={`${result.plan.market} · ${result.plan.side}`} />
+            <Metric label="서버 leverage" value={result.plan.leverage == null ? 'N/A' : `${formatNumber(result.plan.leverage)}x`} />
+            <Metric label="수량" value={formatNumber(result.plan.quantity)} />
+            <Metric label="모의 진입가" value={formatNumber(result.plan.entryPrice)} />
           </div>
-          <p className="mt-3 break-keep font-bold">분할 {result.plan.splitRatios.join('% / ')}% · 손절 {formatNumber(result.plan.stopPrice)} · 목표 {result.plan.targetPrices.map((item) => formatNumber(item)).join(' / ')}</p>
-          <p className="mt-1 text-[10px] font-bold text-muted-foreground">실주문 비활성 · 승인 만료 {new Date(result.plan.signalExpiresAt).toLocaleString('ko-KR')}</p>
-          <button type="button" onClick={() => navigate('/auto-trading')} className="mt-3 min-h-11 w-full rounded-xl border border-positive/30 bg-background px-3 font-extrabold text-positive">승인형 주문 화면에서 확인</button>
+          <p className="mt-3 break-all font-bold">Candidate {result.plan.candidateId}</p>
+          <p className="mt-1 break-keep text-[10px] font-bold text-muted-foreground">
+            executionAuthority=NONE · 실제 주문 없음 · 경제적 evidence credit=0 · 만료 {new Date(result.plan.signalExpiresAt).toLocaleString('ko-KR')}
+          </p>
+          <button type="button" onClick={() => navigate('/paper-trading')} className="mt-3 min-h-11 w-full rounded-xl border border-positive/30 bg-background px-3 font-extrabold text-positive">
+            모의매매 화면에서 확인
+          </button>
         </div>
       ) : null}
     </section>
