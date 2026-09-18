@@ -133,6 +133,7 @@ async function main(): Promise<void> {
   const activationRoot = path.resolve(required('activation-root'));
   const observerStatePath = path.resolve(required('observer-state'));
   const outputDir = path.resolve(required('output-dir'));
+  const sealingKeyPath = path.resolve(required('sealing-key'));
   const previousStateRootRaw = argument('previous-state-root');
   const parallelStateRootRaw = argument('parallel-state-root');
   const previousStateRoot = previousStateRootRaw ? path.resolve(previousStateRootRaw) : null;
@@ -143,7 +144,7 @@ async function main(): Promise<void> {
     await readFile(observerStatePath, 'utf8'),
   ) as ForwardObserverRuntimeState;
   const sealingKeyText = (
-    await readFile(path.join(activationRoot, 'private', 'sealing-key.b64'), 'utf8')
+    await readFile(sealingKeyPath, 'utf8')
   ).trim();
   const sealingKey = Buffer.from(sealingKeyText, 'base64');
   if (sealingKey.length !== 32) throw new Error('FAST_PROFITABILITY_COLLECTOR_SEALING_KEY_INVALID');
