@@ -352,7 +352,7 @@ jobs:
 
       - name: Run full Playwright shard without retry-to-pass
         id: browser
-        run: pnpm --dir stock-analyzer run test:e2e -- --shard=${{ matrix.shard }}/4 --retries=0
+        run: pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts --shard=${{ matrix.shard }}/4 --retries=0
 
       - name: Upload shard Playwright report and failure evidence
         if: always()
