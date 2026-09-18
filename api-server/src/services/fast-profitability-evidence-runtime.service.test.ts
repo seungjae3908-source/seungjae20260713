@@ -411,7 +411,13 @@ test('reuses the existing #1096 receipt owner and requires that verified same-ca
         verification: invalidVerification,
         nowMs: receiptObservedAtMs + 2,
       }),
-      /SAME_CANDIDATE_OWNER_VERIFIED_RECEIPT_REQUIRED/,
+      (error: unknown) => {
+        assert.equal(
+          (error as { code?: string }).code,
+          'SAME_CANDIDATE_OWNER_VERIFIED_RECEIPT_REQUIRED',
+        );
+        return true;
+      },
     );
   } finally {
     await rm(root, { recursive: true, force: true });
