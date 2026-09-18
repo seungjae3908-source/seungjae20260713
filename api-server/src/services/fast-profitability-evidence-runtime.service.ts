@@ -38,6 +38,7 @@ import {
 import {
   createForwardObserverArtifactValidationEvidenceReader,
   createForwardObserverValidationReceiptOwner,
+  type ForwardObserverValidationEvidence,
   type ForwardObserverValidationEvidenceReader,
   type ForwardObserverValidationReceiptReadback,
 } from './forward-observer-validation-receipt-owner.service';
@@ -664,6 +665,128 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
     return Object.freeze(structuredClone(stored));
   }
 
+  async function readValidationRecords(
+    policy: FastProfitabilityPolicy,
+  ): Promise<FastProfitabilityValidationStoreRecord[]> {
+    const validationDir = storeDirectory(
+      validationRoot,
+      policy.policyDigest,
+      policy.candidateDigest,
+      'validation',
+    );
+    let names: string[];
+    try {
+      names = (await readdir(validationDir)).filter((name) => name.endsWith('.json')).sort();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+    return Promise.all(names.map(async (name) => {
+      const stored = JSON.parse(
+        await readFile(path.join(validationDir, name), 'utf8'),
+      ) as FastProfitabilityValidationStoreRecord;
+      const { recordDigest, ...withoutDigest } = stored;
+      if (stored.schemaVersion !== FAST_PROFITABILITY_VALIDATION_RECORD_V1
+        || stored.policyDigest !== policy.policyDigest
+        || stored.candidateDigest !== policy.candidateDigest
+        || stored.candidateId !== policy.candidate.candidateId
+        || recordDigest !== validationRecordDigest(withoutDigest)) {
+        throw new Error('FAST_PROFITABILITY_VALIDATION_RECORD_INVALID');
+      }
+      assertAllocation(policy, stored.allocation);
+      if (stored.allocation.split !== 'VALIDATION') {
+        throw new Error('FAST_PROFITABILITY_VALIDATION_RECORD_SPLIT_INVALID');
+      }
+      return Object.freeze(structuredClone(stored));
+    }));
+  }
+
+  async function readSealedRecords(
+    policy: FastProfitabilityPolicy,
+  ): Promise<FastProfitabilitySealedOosMetadata[]> {
+    const sealedDir = storeDirectory(
+      sealedOosRoot,
+      policy.policyDigest,
+      policy.candidateDigest,
+      'sealed-oos',
+    );
+    let names: string[];
+    try {
+      names = (await readdir(sealedDir)).filter((name) => name.endsWith('.json')).sort();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+    return Promise.all(names.map((name) => (
+      readSealedMetadata({
+        policy,
+        allocationDigest: name.replace(/\.json$/u, ''),
+      })
+    )));
+  }
+
+  async function buildValidationEvidence(
+    policyValue: unknown,
+    identity: ManualPaperCanonicalIdentity,
+  ): Promise<ForwardObserverValidationEvidence> {
+    assertPolicy(policyValue);
+    const policy = policyValue as FastProfitabilityPolicy;
+    assertFastProfitabilityManualIdentity(policy, identity);
+    const records = await readValidationRecords(policy);
+    const outcomeCounts = Object.fromEntries(OUTCOME_CLASSES.map((name) => [
+      name,
+      records.filter((entry) => entry.outcomeClass === name).length,
+    ]));
+    const outcomeClassesComplete = OUTCOME_CLASSES.every(
+      (name) => Number(outcomeCounts[name]) > 0,
+    );
+    if (records.length < policy.validationPolicy.minimumEffectiveIndependentN) {
+      throw new Error('FAST_PROFITABILITY_VALIDATION_INDEPENDENT_N_INSUFFICIENT');
+    }
+    if (!outcomeClassesComplete) {
+      throw new Error('FAST_PROFITABILITY_VALIDATION_OUTCOME_CLASSES_INCOMPLETE');
+    }
+    const observedAtMs = Math.max(...records.map((entry) => entry.recordedAtMs));
+    if (!Number.isSafeInteger(observedAtMs) || observedAtMs <= policy.eligibleAfterMs) {
+      throw new Error('FAST_PROFITABILITY_VALIDATION_OBSERVED_AT_INVALID');
+    }
+    const canonicalRecords = records.map((entry) => ({
+      recordDigest: entry.recordDigest,
+      allocationDigest: entry.allocation.allocationDigest,
+      independenceAuditDigest: entry.allocation.independenceAuditDigest,
+      dependencyComponentId: entry.allocation.dependencyComponentId,
+      outcomeClass: entry.outcomeClass,
+      economicEvidenceDigest: entry.economicEvidenceDigest,
+      recordedAtMs: entry.recordedAtMs,
+    }));
+    const datasetDigest = fastProfitabilitySha256({
+      schemaVersion: 'fast-profitability-validation-dataset-v1',
+      policyDigest: policy.policyDigest,
+      candidateDigest: policy.candidateDigest,
+      records: canonicalRecords,
+    });
+    const resultArtifactDigest = fastProfitabilitySha256({
+      schemaVersion: 'fast-profitability-validation-result-v1',
+      policyDigest: policy.policyDigest,
+      candidateDigest: policy.candidateDigest,
+      datasetDigest,
+      sampleSize: records.length,
+      minimumSampleSize: policy.validationPolicy.minimumEffectiveIndependentN,
+      outcomeCounts,
+    });
+    return Object.freeze({
+      source: 'FORWARD_RECOMMENDATION_OBSERVER',
+      provenance: 'PROSPECTIVE_PUBLIC_FORWARD',
+      observedAtMs,
+      prospectiveBoundaryMs: policy.eligibleAfterMs,
+      oosBoundaryProven: true,
+      sampleSize: records.length,
+      minimumSampleSize: policy.validationPolicy.minimumEffectiveIndependentN,
+      datasetDigest,
+      resultArtifactDigest,
+    });
+  }
+
   async function revealSealedOos(inputReveal: Readonly<{
     policy: unknown;
     allocationDigest: string;
@@ -681,6 +804,24 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
       inputReveal.identity,
       inputReveal.nowMs,
     );
+    const expectedValidationEvidence = await buildValidationEvidence(
+      policy,
+      inputReveal.identity,
+    );
+    if (inputReveal.receipt.datasetDigest !== expectedValidationEvidence.datasetDigest
+      || inputReveal.receipt.resultArtifactDigest !== expectedValidationEvidence.resultArtifactDigest
+      || inputReveal.receipt.prospectiveBoundaryMs !== expectedValidationEvidence.prospectiveBoundaryMs
+      || inputReveal.receipt.sampleSize !== expectedValidationEvidence.sampleSize
+      || inputReveal.receipt.minimumSampleSize !== expectedValidationEvidence.minimumSampleSize) {
+      throw new Error('FAST_PROFITABILITY_VALIDATION_RECEIPT_STORE_BINDING_MISMATCH');
+    }
+    const readiness = await summarize(policy, {
+      receipt: inputReveal.receipt,
+      verification: inputReveal.verification,
+    });
+    if (readiness.sealedOosRevealAllowed !== true) {
+      throw new Error('FAST_PROFITABILITY_SEALED_OOS_REVEAL_NOT_READY');
+    }
     const stored = await readSealedMetadata({
       policy,
       allocationDigest: inputReveal.allocationDigest,
@@ -713,35 +854,8 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
   async function summarize(policyValue: unknown, receipt?: ForwardObserverValidationReceiptReadback | null) {
     assertPolicy(policyValue);
     const policy = policyValue as FastProfitabilityPolicy;
-    const validationDir = storeDirectory(validationRoot, policy.policyDigest, policy.candidateDigest, 'validation');
-    const sealedDir = storeDirectory(sealedOosRoot, policy.policyDigest, policy.candidateDigest, 'sealed-oos');
-    async function files(dir: string): Promise<string[]> {
-      try {
-        return (await readdir(dir)).filter((name) => name.endsWith('.json')).sort();
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-        throw error;
-      }
-    }
-    const validationFiles = await files(validationDir);
-    const sealedFiles = await files(sealedDir);
-    const validationRecords = await Promise.all(validationFiles.map(async (name) => {
-      const stored = JSON.parse(await readFile(path.join(validationDir, name), 'utf8')) as FastProfitabilityValidationStoreRecord;
-      const { recordDigest, ...withoutDigest } = stored;
-      if (stored.schemaVersion !== FAST_PROFITABILITY_VALIDATION_RECORD_V1
-        || stored.policyDigest !== policy.policyDigest
-        || stored.candidateDigest !== policy.candidateDigest
-        || recordDigest !== validationRecordDigest(withoutDigest)) {
-        throw new Error('FAST_PROFITABILITY_VALIDATION_RECORD_INVALID');
-      }
-      return stored;
-    }));
-    const sealedRecords = await Promise.all(sealedFiles.map((name) => (
-      readSealedMetadata({
-        policy,
-        allocationDigest: name.replace(/\.json$/u, ''),
-      })
-    )));
+    const validationRecords = await readValidationRecords(policy);
+    const sealedRecords = await readSealedRecords(policy);
     const outcomeCounts = Object.fromEntries(OUTCOME_CLASSES.map((name) => [
       name,
       validationRecords.filter((entry) => entry.outcomeClass === name).length,
@@ -767,6 +881,7 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
     recordValidation,
     recordSealedOos,
     readSealedMetadata,
+    buildValidationEvidence,
     revealSealedOos,
     summarize,
     destroyKeyCopy,
@@ -776,13 +891,24 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
 export function createFastProfitabilityValidationReceiptBridge(input: Readonly<{
   receiptRoot: string;
   maximumAgeMs: number;
+  policy?: unknown;
+  store?: Readonly<{
+    buildValidationEvidence: (
+      policy: unknown,
+      identity: ManualPaperCanonicalIdentity,
+    ) => Promise<ForwardObserverValidationEvidence>;
+  }>;
   artifactRoot?: string;
   readValidationEvidence?: ForwardObserverValidationEvidenceReader;
 }>) {
   const readValidationEvidence = input.readValidationEvidence
-    ?? (input.artifactRoot
-      ? createForwardObserverArtifactValidationEvidenceReader({ artifactRoot: input.artifactRoot })
-      : null);
+    ?? (input.store && input.policy
+      ? ((identity: ManualPaperCanonicalIdentity) => (
+        input.store!.buildValidationEvidence(input.policy, identity)
+      ))
+      : input.artifactRoot
+        ? createForwardObserverArtifactValidationEvidenceReader({ artifactRoot: input.artifactRoot })
+        : null);
   if (!readValidationEvidence) {
     throw new Error('FAST_PROFITABILITY_FORWARD_VALIDATION_EVIDENCE_READER_REQUIRED');
   }
