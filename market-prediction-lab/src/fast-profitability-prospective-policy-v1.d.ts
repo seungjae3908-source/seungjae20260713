@@ -28,6 +28,7 @@ export type FastProfitabilityProspectivePolicyV1 = Readonly<Record<string, any>>
     market: string;
     symbol: string;
     timeframe: string;
+    horizon: number;
     side: string;
     riskPolicyRef: string;
     costPolicyRef: string;
