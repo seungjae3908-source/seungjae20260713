@@ -222,6 +222,9 @@ export type FastProfitabilitySealedOosMetadata = Readonly<{
 export const FAST_PROFITABILITY_RUNTIME_SAFETY = Object.freeze({
   existingV3MutationAllowed: false,
   independenceBeforeSplitRequired: true,
+  candidateBoundForwardIndependenceRequired: true,
+  executionCalibrationIndependenceMayDefineStrategySplit: false,
+  causalGuardWindowRequired: true,
   dependencyComponentSplitAuthorityRequired: true,
   validationStoreCreateOnly: true,
   sealedOosEncryptedAtRestRequired: true,
@@ -821,7 +824,8 @@ function sealedRecordDigest(value: Omit<FastProfitabilitySealedOosMetadata, 'rec
 }
 
 function assertAllocation(policy: FastProfitabilityPolicy, allocation: FastProfitabilityAllocation): void {
-  if (allocation.policyDigest !== policy.policyDigest
+  if (allocation.evidenceClass !== FAST_PROFITABILITY_FORWARD_EVIDENCE_CLASS
+    || allocation.policyDigest !== policy.policyDigest
     || allocation.candidateDigest !== policy.candidateDigest
     || !SHA256.test(allocation.allocationDigest)
     || !SHA256.test(allocation.independenceAuditDigest)
@@ -847,7 +851,13 @@ function assertAllocation(policy: FastProfitabilityPolicy, allocation: FastProfi
 }
 
 function normalizeEconomicEvidence(value: FastProfitabilityEconomicEvidence): FastProfitabilityEconomicEvidence {
+  if (value.sourceClass !== FAST_PROFITABILITY_FORWARD_EVIDENCE_CLASS
+    || !SHA256.test(value.sourceObservationId)) {
+    throw new Error('FAST_PROFITABILITY_FORWARD_ECONOMIC_SOURCE_INVALID');
+  }
   return Object.freeze({
+    sourceClass: FAST_PROFITABILITY_FORWARD_EVIDENCE_CLASS,
+    sourceObservationId: value.sourceObservationId,
     outcomeClass: exactOutcome(value.outcomeClass),
     observedAtMs: safePositiveTime(value.observedAtMs, 'FAST_PROFITABILITY_ECONOMIC_OBSERVED_AT_INVALID'),
     evidence: structuredClone(value.evidence),
@@ -880,7 +890,10 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
       throw new Error('FAST_PROFITABILITY_VALIDATION_SPLIT_REQUIRED');
     }
     const economic = normalizeEconomicEvidence(inputRecord.evidence);
-    if (economic.observedAtMs < policy.eligibleAfterMs) {
+    if (economic.sourceObservationId !== inputRecord.allocation.publicEventIdentity) {
+      throw new Error('FAST_PROFITABILITY_FORWARD_ECONOMIC_ALLOCATION_MISMATCH');
+    }
+    if (economic.observedAtMs <= policy.eligibleAfterMs) {
       throw new Error('FAST_PROFITABILITY_PRE_BOUNDARY_ECONOMIC_EVIDENCE_FORBIDDEN');
     }
     const recordedAtMs = safePositiveTime(inputRecord.recordedAtMs, 'FAST_PROFITABILITY_RECORDED_AT_INVALID');
@@ -894,7 +907,10 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
       candidateDigest: policy.candidateDigest,
       candidateId: policy.candidate.candidateId,
       allocation: inputRecord.allocation,
+      sourceClass: economic.sourceClass,
+      sourceObservationId: economic.sourceObservationId,
       outcomeClass: economic.outcomeClass,
+      economicObservedAtMs: economic.observedAtMs,
       economicEvidenceDigest,
       economicEvidence: economic.evidence,
       parallelEvidence: economic.parallelEvidence ?? null,
@@ -926,7 +942,10 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
       throw new Error('FAST_PROFITABILITY_SEALED_OOS_SPLIT_REQUIRED');
     }
     const economic = normalizeEconomicEvidence(inputRecord.evidence);
-    if (economic.observedAtMs < policy.eligibleAfterMs) {
+    if (economic.sourceObservationId !== inputRecord.allocation.publicEventIdentity) {
+      throw new Error('FAST_PROFITABILITY_FORWARD_ECONOMIC_ALLOCATION_MISMATCH');
+    }
+    if (economic.observedAtMs <= policy.eligibleAfterMs) {
       throw new Error('FAST_PROFITABILITY_PRE_BOUNDARY_ECONOMIC_EVIDENCE_FORBIDDEN');
     }
     const recordedAtMs = safePositiveTime(inputRecord.recordedAtMs, 'FAST_PROFITABILITY_RECORDED_AT_INVALID');
