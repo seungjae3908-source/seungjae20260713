@@ -1,0 +1,72 @@
+name: Application Full CI Ready Dispatch
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+    paths:
+      - .github/**
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - package.json
+      - api-server/**
+      - stock-analyzer/**
+      - packages/**
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: application-full-ci-ready-dispatch-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  dispatch:
+    if: github.event.pull_request.draft == false
+    name: Dispatch canonical full CI for exact ready PR head
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require exact ready PR head
+        id: target
+        shell: bash
+        env:
+          TARGET_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || { echo '[INVALID_HEAD_SHA]' >&2; exit 1; }
+          echo "sha=${TARGET_SHA,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch canonical Application CI for exact head
+        uses: actions/github-script@v8
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        with:
+          script: |
+            const targetSha = process.env.TARGET_SHA;
+            const headRef = process.env.HEAD_REF;
+            if (!/^[0-9a-f]{40}$/u.test(targetSha)) {
+              core.setFailed('Exact 40-character ready PR head SHA required.');
+              return;
+            }
+            const workflowId = 'futures-public-network-smoke.yml';
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+              ref: headRef,
+              inputs: {
+                target_sha: targetSha,
+                checkout_ref: targetSha,
+              },
+            });
+            core.info(`Dispatched canonical full Application CI for exact ready PR head ${targetSha}.`);
+
+      - name: Boundary
+        run: |
+          echo 'This bridge dispatches the existing canonical full Application CI only for non-draft PRs.'
+          echo 'It grants no merge, staging, production, database, secret, environment, live-trading, or real-order authority.'

@@ -3,7 +3,9 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'wouter';
 import { BottomNav } from './bottom-nav';
 import { useAuth } from '@/lib/auth';
-import { fetchCopilotSnapshot, reviewCopilot, validateResearchDsl, submitResearchBacktest, readResearchBacktest, type CopilotReview, type CopilotTask, type DslValidation } from '@/lib/research-copilot';
+import { fetchCopilotSnapshot, reviewCopilot, validateResearchDsl, submitResearchBacktest, readResearchBacktest, readResearchSameCandidate, type CopilotReview, type CopilotTask, type DslValidation } from '@/lib/research-copilot';
+import type { ResearchSameCandidatePrewireResult } from '../../../api-server/src/services/research-same-candidate-prewire.service';
+import { ResearchSameCandidatePreview } from './research-same-candidate-preview';
 
 const ACTIONS: Array<[CopilotTask, string]> = [
   ['propose_candidates', '후보 가설 제안'], ['interpret_evidence', '검증 증거 해석'],
@@ -19,6 +21,7 @@ export function ResearchCopilotPanel() {
   const [review, setReview] = useState<CopilotReview | null>(null);
   const [dsl, setDsl] = useState('');
   const [validation, setValidation] = useState<DslValidation | null>(null);
+  const [sameCandidate, setSameCandidate] = useState<ResearchSameCandidatePrewireResult | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const pending = useRef<AbortController | null>(null);
@@ -27,7 +30,7 @@ export function ResearchCopilotPanel() {
   // React Query retains cached data on refetch failure. It must not look like current evidence.
   const data = snapshot.isError ? undefined : snapshot.data;
   useEffect(() => () => { sequence.current += 1; pending.current?.abort(); }, []);
-  useEffect(() => { sequence.current += 1; pending.current?.abort(); artifactPin.current = null; setReview(null); setValidation(null); setBusy(false); }, [profile?.id]);
+  useEffect(() => { sequence.current += 1; pending.current?.abort(); artifactPin.current = null; setReview(null); setValidation(null); setSameCandidate(null); setBusy(false); }, [profile?.id]);
   const visibleReview = !snapshot.isError && review?.evidenceDigest === data?.evidenceDigest && data?.freshness === 'FRESH' ? review : null;
 
   async function run(operation: (signal: AbortSignal) => Promise<void>) {
@@ -52,6 +55,7 @@ export function ResearchCopilotPanel() {
     });
   }
   function validate() {
+    setSameCandidate(null);
     artifactPin.current = null;
     setValidation(null);
     void run(async signal => {
@@ -65,6 +69,7 @@ export function ResearchCopilotPanel() {
   function submitBacktest() {
     const bundle = validation?.bundle;
     if (!bundle?.backtestExecutable || busy) return;
+    setSameCandidate(null);
     void run(async signal => {
       const result = await submitResearchBacktest(JSON.parse(dsl), bundle, signal);
       if (!signal.aborted) { artifactPin.current = result.resultArtifactDigest; setValidation(previous => previous ? { ...previous, bundle: result } : null); }
@@ -73,12 +78,22 @@ export function ResearchCopilotPanel() {
   function readBacktest() {
     const bundle = validation?.bundle;
     if (!bundle?.researchBundleReady || busy) return;
+    setSameCandidate(null);
     void run(async signal => {
       const result = await readResearchBacktest(JSON.parse(dsl), { ...bundle, resultArtifactDigest: artifactPin.current ?? bundle.resultArtifactDigest }, signal);
       if (!signal.aborted) {
         if (result.publicationStatus === 'READBACK_VERIFIED') artifactPin.current = result.resultArtifactDigest;
         setValidation(previous => previous ? { ...previous, bundle: result } : null);
       }
+    });
+  }
+  function readSameCandidate() {
+    const bundle = validation?.bundle;
+    if (!isAdmin || busy || bundle?.publicationStatus !== 'READBACK_VERIFIED' || !bundle.backtestCompleted) return;
+    setSameCandidate(null);
+    void run(async signal => {
+      const result = await readResearchSameCandidate(JSON.parse(dsl), bundle, signal);
+      if (!signal.aborted) setSameCandidate(result);
     });
   }
   return <main className="h-full overflow-y-auto bg-background pb-28" data-testid="research-copilot">
@@ -124,7 +139,7 @@ export function ResearchCopilotPanel() {
           <h2 className="font-bold">canonical DSL / Formula 검증</h2>
           <p className="mt-2 text-sm text-muted-foreground">기존 createSafeStrategyDslV1 검증기를 사용합니다. DSL 통과는 백테스트·수익성 통과가 아닙니다. AI가 만든 가설을 실행 코드로 변환하지 않습니다.</p>
           <label htmlFor="research-dsl" className="mt-4 block text-sm font-bold">연구 DSL JSON</label>
-          <textarea id="research-dsl" value={dsl} disabled={busy} maxLength={32_001} onChange={event => { artifactPin.current = null; setDsl(event.target.value); setValidation(null); }} rows={6} className="mt-2 w-full rounded-xl border border-border bg-background p-3 font-mono text-xs" spellCheck={false} />
+          <textarea id="research-dsl" value={dsl} disabled={busy} maxLength={32_001} onChange={event => { artifactPin.current = null; setDsl(event.target.value); setValidation(null); setSameCandidate(null); }} rows={6} className="mt-2 w-full rounded-xl border border-border bg-background p-3 font-mono text-xs" spellCheck={false} />
           <button className={button + ' mt-3'} disabled={busy || !dsl.trim()} onClick={validate}>DSL 검증</button>
           {validation ? <div role="status" className="mt-3 break-all text-sm"><p>{validation.status === 'ready' ? 'DSL 유효 · 전략 미평가' : 'DSL 차단: 지원 범위·필드·연산자·깊이를 확인하세요.'}</p>
             {validation.candidateId ? <p className="mt-2">{validation.candidateId}</p> : null}
@@ -147,7 +162,8 @@ export function ResearchCopilotPanel() {
             <section aria-label="선택 후보의 증거 연결" className="rounded-xl border border-border p-3">
               <h3 className="font-bold">이 후보의 다음 단절 지점</h3>
               <p className="mt-2">{!validation.bundle.researchBundleReady ? 'BLOCKED_DATA · 실행 가능한 canonical Bundle 부족' : !validation.bundle.backtestCompleted ? `Backtest · ${validation.bundle.backtestStatus}` : validation.bundle.publicationStatus !== 'READBACK_VERIFIED' ? 'MISSING_EVIDENCE · 영구 결과 재조회 미확인' : 'NOT_EVALUABLE · 동일 후보의 OOS/WF/Holdout 평가 증거 부족'}</p>
-              <p className="mt-2">Shadow · MISSING_EVIDENCE / Forward · MISSING_EVIDENCE</p>
+              <button className={button + ' mt-3'} disabled={busy || validation.bundle.publicationStatus !== 'READBACK_VERIFIED' || !validation.bundle.backtestCompleted} onClick={readSameCandidate}>동일 후보 Forward·Shadow·Paper·Settlement 증거 조회</button>
+              {sameCandidate ? <ResearchSameCandidatePreview result={sameCandidate} /> : <p className="mt-2">Forward / Shadow / Paper / Settlement · NOT_PROVEN — 이 후보의 서버 증거를 조회해야 합니다.</p>}
               <p className="mt-2">Feature·Model identity는 아래 계약 검증과 별개로 Shadow/Forward의 실제 소비가 필요합니다. Trial·Observation 연결과 genuine 독립 표본 수: 확인 불가. 전체 운영 집계를 이 후보의 표본으로 사용하지 않습니다.</p>
               <p className="mt-2">Full Cost / Health / Promotion 판정: NOT_EVALUABLE. 수익성 입증 없음 · 검증 Champion 없음.</p>
               <details className="mt-3">

@@ -5,7 +5,16 @@ on:
     paths:
       - scripts/agent_hub_processor_window_recovery_v1.py
       - scripts/test_agent_hub_processor_window_recovery_v1.py
+      - scripts/agent_hub_stale_report_reconciliation_v1.py
+      - scripts/test_agent_hub_stale_report_reconciliation_v1.py
+      - scripts/test_agent_hub_stale_report_train_evidence_pair_v1.py
+      - scripts/agent_hub_legacy_control_reconciliation_v2.py
+      - scripts/test_agent_hub_legacy_control_reconciliation_v2.py
+      - scripts/agent_hub_legacy_compact_train_reconciliation_v1.py
+      - scripts/test_agent_hub_legacy_compact_train_reconciliation_v1.py
       - .github/workflows/agent-hub-processor-window-recovery.yml
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       source_issue:
@@ -27,11 +36,20 @@ permissions:
   contents: read
 
 concurrency:
-  group: agent-hub-processor-window-recovery-${{ github.event.pull_request.number || github.run_id }}
+  group: agent-hub-processor-window-recovery-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
   cancel-in-progress: false
 
 jobs:
   test:
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (
+        github.event.action == 'created' &&
+        github.event.issue.pull_request == null &&
+        github.event.comment.user.login == github.repository_owner &&
+        github.event.comment.author_association == 'OWNER' &&
+        github.event.comment.body == '/recover-agent-hub-processor-window'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -44,8 +62,54 @@ jobs:
           python -m py_compile
           scripts/agent_hub_processor_window_recovery_v1.py
           scripts/test_agent_hub_processor_window_recovery_v1.py
+          scripts/agent_hub_stale_report_reconciliation_v1.py
+          scripts/test_agent_hub_stale_report_reconciliation_v1.py
+          scripts/test_agent_hub_stale_report_train_evidence_pair_v1.py
+          scripts/agent_hub_legacy_control_reconciliation_v2.py
+          scripts/test_agent_hub_legacy_control_reconciliation_v2.py
+          scripts/agent_hub_legacy_compact_train_reconciliation_v1.py
+          scripts/test_agent_hub_legacy_compact_train_reconciliation_v1.py
       - name: Run fail-closed recovery tests
-        run: python -m unittest scripts.test_agent_hub_processor_window_recovery_v1 -v
+        run: >-
+          python -m unittest
+          scripts.test_agent_hub_processor_window_recovery_v1
+          scripts.test_agent_hub_stale_report_reconciliation_v1
+          scripts.test_agent_hub_stale_report_train_evidence_pair_v1
+          scripts.test_agent_hub_legacy_control_reconciliation_v2
+          scripts.test_agent_hub_legacy_compact_train_reconciliation_v1
+          -v
+
+  dispatch-owner-comment:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.pull_request == null &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      github.event.comment.body == '/recover-agent-hub-processor-window'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Bridge trusted owner command into workflow_dispatch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sourceIssue = String(context.issue.number);
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'agent-hub-processor-window-recovery.yml',
+              ref: context.payload.repository.default_branch,
+              inputs: {
+                source_issue: sourceIssue,
+                confirmation: `RECOVER_ISSUE_${sourceIssue}_PROCESSOR_OVERFLOW`,
+                apply: 'true',
+              },
+            });
 
   recover:
     if: github.event_name == 'workflow_dispatch'
@@ -53,6 +117,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
+      actions: read
       contents: read
       issues: write
     env:
@@ -65,6 +130,33 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Reconcile compact historical TRAIN checkpoints
+        if: env.RECOVERY_APPLY == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/agent_hub_legacy_compact_train_reconciliation_v1.py \
+            --source-issue "$RECOVERY_SOURCE_ISSUE" \
+            --confirmation "$RECOVERY_CONFIRMATION" \
+            --apply
+      - name: Reconcile strict historical control-only reports
+        if: env.RECOVERY_APPLY == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/agent_hub_legacy_control_reconciliation_v2.py \
+            --source-issue "$RECOVERY_SOURCE_ISSUE" \
+            --confirmation "$RECOVERY_CONFIRMATION" \
+            --apply
+      - name: Reconcile provably stale overflow reports
+        if: env.RECOVERY_APPLY == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/agent_hub_stale_report_reconciliation_v1.py \
+            --source-issue "$RECOVERY_SOURCE_ISSUE" \
+            --confirmation "$RECOVERY_CONFIRMATION" \
+            --apply
       - name: Recover processor-window overflow
         shell: bash
         run: |
