@@ -6,6 +6,7 @@ import {
   randomUUID,
 } from 'node:crypto';
 import {
+  lstat,
   mkdir,
   readFile,
   readdir,
@@ -1355,6 +1356,310 @@ export function createFastProfitabilityValidationReceiptBridge(input: Readonly<{
       request.nowMs,
     );
     return result;
+  };
+}
+
+const FAST_PROFITABILITY_OWNER_STATE_MAX_BYTES = 64 * 1024 * 1024;
+const SHADOW_STATE_PUBLICATION_SCHEMA_VERSION = 'prediction-lab-shadow-state-publication-v1';
+const SHADOW_RUNTIME_EVIDENCE_SCHEMA_VERSION = 'prediction-lab-shadow-runtime-evidence-v1';
+const SHADOW_HEALTH_HANDOFF_SCHEMA_VERSION = 'prediction-lab-strategy-health-shadow-handoff-v1';
+
+async function readFastProfitabilityOwnerState(
+  stateRoot: string,
+  relativeSegments: readonly string[],
+  label: 'SHADOW' | 'NATURAL_PAPER',
+): Promise<AnyRecord> {
+  const root = safeRoot(stateRoot, label);
+  const target = path.resolve(root, ...relativeSegments);
+  const relative = path.relative(root, target);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(`FAST_PROFITABILITY_${label}_STATE_PATH_ESCAPE`);
+  }
+  let metadata;
+  try {
+    metadata = await lstat(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`FAST_PROFITABILITY_${label}_STATE_MISSING`);
+    }
+    throw error;
+  }
+  if (!metadata.isFile() || metadata.isSymbolicLink()) {
+    throw new Error(`FAST_PROFITABILITY_${label}_STATE_FILE_INVALID`);
+  }
+  if (metadata.size <= 0 || metadata.size > FAST_PROFITABILITY_OWNER_STATE_MAX_BYTES) {
+    throw new Error(`FAST_PROFITABILITY_${label}_STATE_SIZE_INVALID`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(target, 'utf8'));
+  } catch {
+    throw new Error(`FAST_PROFITABILITY_${label}_STATE_JSON_INVALID`);
+  }
+  return record(parsed);
+}
+
+function withoutEvidenceDigest(value: AnyRecord): AnyRecord {
+  const cloned = structuredClone(value);
+  delete cloned.evidenceDigest;
+  return cloned;
+}
+
+function isoTimeMs(value: unknown): number | null {
+  if (!nonEmpty(value)) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function fastShadowStrategyMatches(policy: FastProfitabilityPolicy, value: unknown): boolean {
+  const identity = optionalRecord(value);
+  if (!identity) return false;
+  return identity.strategyId === policy.candidate.strategyId
+    && identity.strategyVersion === policy.candidate.strategyVersion
+    && identity.parameterHash === policy.candidate.parameterHash
+    && String(identity.researchCodeSha ?? '').toLowerCase() === policy.candidate.researchCodeSha.toLowerCase()
+    && identity.market === policy.candidate.market
+    && identity.timeframe === policy.candidate.timeframe
+    && identity.direction === expectedForwardDirection(policy);
+}
+
+function fastPaperRecordMatches(policy: FastProfitabilityPolicy, value: unknown): boolean {
+  const row = optionalRecord(value);
+  if (!row) return false;
+  const identity = optionalRecord(row.identity) ?? row;
+  const direction = identity.executionDirection ?? identity.direction ?? row.direction;
+  const normalizedSide = direction === 'SHORT' ? 'SHORT' : 'LONG';
+  return identity.candidateId === policy.candidate.candidateId
+    && identity.strategyId === policy.candidate.strategyId
+    && identity.strategyVersion === policy.candidate.strategyVersion
+    && identity.parameterHash === policy.candidate.parameterHash
+    && String(identity.researchCodeSha ?? '').toLowerCase() === policy.candidate.researchCodeSha.toLowerCase()
+    && (identity.market ?? row.market) === policy.candidate.market
+    && (identity.symbol ?? row.symbol) === policy.candidate.symbol
+    && (identity.timeframe ?? identity.signalTimeframe ?? row.timeframe) === policy.candidate.timeframe
+    && Number(identity.horizon ?? row.horizon) === policy.candidate.horizon
+    && normalizedSide === manualIdentityPolicySide(policy);
+}
+
+export function createFastProfitabilityCanonicalShadowReadbackAdapter(input: Readonly<{
+  stateRoot: string;
+  clock?: () => number;
+}>) {
+  if (!nonEmpty(input.stateRoot)) throw new Error('FAST_PROFITABILITY_SHADOW_STATE_ROOT_REQUIRED');
+  const clock = input.clock ?? Date.now;
+  if (typeof clock !== 'function') throw new Error('FAST_PROFITABILITY_SHADOW_CLOCK_REQUIRED');
+
+  return async (context: AnyRecord): Promise<FastProfitabilityParallelEnvelope> => {
+    const policy = context.policy as FastProfitabilityPolicy | undefined;
+    if (!policy) throw new Error('FAST_PROFITABILITY_SHADOW_POLICY_REQUIRED');
+    assertPolicy(policy);
+    const nowMs = safePositiveTime(clock(), 'FAST_PROFITABILITY_SHADOW_CLOCK_INVALID');
+    const state = await readFastProfitabilityOwnerState(
+      input.stateRoot,
+      ['forward', 'shadow-state.json'],
+      'SHADOW',
+    );
+    if (state.schemaVersion !== 3 || !optionalRecord(state.groups)) {
+      throw new Error('FAST_PROFITABILITY_SHADOW_STATE_SCHEMA_INVALID');
+    }
+    const publication = record(state.canonicalPublication);
+    if (publication.schemaVersion !== SHADOW_STATE_PUBLICATION_SCHEMA_VERSION
+      || publication.PROFITABILITY_PROVEN !== false
+      || publication.FORWARD_EVIDENCE_SUFFICIENT !== false
+      || publication.replayArtifact !== false
+      || publication.duplicateArtifact !== false
+      || !SHA256.test(String(publication.evidenceDigest ?? ''))
+      || fastProfitabilitySha256(withoutEvidenceDigest(publication)) !== publication.evidenceDigest) {
+      throw new Error('FAST_PROFITABILITY_SHADOW_PUBLICATION_INVALID');
+    }
+    const safety = record(publication.safety);
+    if (safety.LIVE_TRADING !== false
+      || safety.AUTO_TRADING !== false
+      || safety.REAL_ORDER_ENABLED !== false
+      || safety.PRIVATE_TRADING_API_ALLOWED !== false
+      || safety.executionAuthority !== 'NONE'
+      || safety.orderSubmitted !== false) {
+      throw new Error('FAST_PROFITABILITY_SHADOW_SAFETY_INVALID');
+    }
+    const freshness = record(publication.freshness);
+    const checkedAtMs = isoTimeMs(freshness.checkedAt);
+    const expiresAtMs = isoTimeMs(freshness.expiresAt);
+    if (freshness.status !== 'FRESH'
+      || checkedAtMs == null
+      || expiresAtMs == null
+      || checkedAtMs > nowMs
+      || expiresAtMs <= nowMs) {
+      throw new Error('FAST_PROFITABILITY_SHADOW_FRESHNESS_INVALID');
+    }
+
+    const matches: Array<{
+      group: string;
+      handoff: AnyRecord;
+      canonical: AnyRecord;
+      observations: AnyRecord[];
+    }> = [];
+    for (const [group, rawRow] of Object.entries(record(state.groups))) {
+      const row = optionalRecord(rawRow);
+      const canonical = optionalRecord(row?.canonicalEvidence);
+      const outerHandoff = optionalRecord(canonical?.handoff);
+      const handoff = optionalRecord(outerHandoff?.strategyHealthHandoff);
+      if (!canonical || !handoff) continue;
+      if (canonical.schemaVersion !== SHADOW_RUNTIME_EVIDENCE_SCHEMA_VERSION
+        || canonical.PROFITABILITY_PROVEN !== false
+        || canonical.FORWARD_EVIDENCE_SUFFICIENT !== false
+        || handoff.schemaVersion !== SHADOW_HEALTH_HANDOFF_SCHEMA_VERSION
+        || handoff.executionAuthority !== 'NONE'
+        || !fastShadowStrategyMatches(policy, handoff.strategyIdentity)
+        || !SHA256.test(String(handoff.strategyIdentityDigest ?? ''))
+        || fastProfitabilitySha256(handoff.strategyIdentity) !== handoff.strategyIdentityDigest
+        || canonical.strategyIdentityDigest !== handoff.strategyIdentityDigest
+        || !SHA256.test(String(handoff.evidenceDigest ?? ''))
+        || fastProfitabilitySha256(withoutEvidenceDigest(handoff)) !== handoff.evidenceDigest
+        || record(publication.handoffEvidenceDigests)[group] !== handoff.evidenceDigest) {
+        continue;
+      }
+      const observations = Array.isArray(canonical.observations)
+        ? canonical.observations.map(optionalRecord).filter((item): item is AnyRecord => item !== null)
+        : [];
+      const symbolObservations = observations.filter((observation) => {
+        const provenance = optionalRecord(observation.sourceProvenance);
+        return observation.symbol === policy.candidate.symbol
+          && observation.market === policy.candidate.market
+          && observation.timeframe === policy.candidate.timeframe
+          && observation.direction === expectedForwardDirection(policy)
+          && observation.strategyIdentityDigest === handoff.strategyIdentityDigest
+          && Number(provenance?.horizon) === policy.candidate.horizon
+          && provenance?.capturedAtObservationTime === true
+          && provenance?.synthetic === false
+          && provenance?.replayed === false
+          && provenance?.historicalBackfill === false;
+      });
+      matches.push({ group, handoff, canonical, observations: symbolObservations });
+    }
+    if (matches.length !== 1) {
+      throw new Error(matches.length === 0
+        ? 'FAST_PROFITABILITY_SHADOW_OWNER_EVIDENCE_MISSING'
+        : 'FAST_PROFITABILITY_SHADOW_OWNER_EVIDENCE_AMBIGUOUS');
+    }
+    const matched = matches[0]!;
+    const settled = matched.observations.filter((row) => row.actualDirection != null);
+    const evidence = Object.freeze({
+      schemaVersion: 'fast-profitability-shadow-owner-readback-v1',
+      sourceOwner: 'canonical-shadow-state-root-v1',
+      group: matched.group,
+      publicationEvidenceDigest: publication.evidenceDigest,
+      handoffEvidenceDigest: matched.handoff.evidenceDigest,
+      strategyIdentityDigest: matched.handoff.strategyIdentityDigest,
+      symbol: policy.candidate.symbol,
+      timeframe: policy.candidate.timeframe,
+      horizon: policy.candidate.horizon,
+      observationCount: matched.observations.length,
+      settledObservationCount: settled.length,
+      checkedAtMs: nowMs,
+      freshnessExpiresAtMs: expiresAtMs,
+      executionAuthority: 'NONE',
+      profitabilityClaimAllowed: false,
+    });
+    return Object.freeze({
+      lane: 'SHADOW',
+      policyDigest: policy.policyDigest,
+      candidateDigest: policy.candidateDigest,
+      candidateId: policy.candidate.candidateId,
+      status: matched.observations.length > 0 ? 'PRESENT' : 'MISSING_EVIDENCE',
+      evidenceDigest: fastProfitabilitySha256(evidence),
+      evidence,
+      synthetic: false,
+      replay: false,
+      backfill: false,
+      executionAuthority: 'NONE',
+      profitabilityClaimAllowed: false,
+    });
+  };
+}
+
+export function createFastProfitabilityNaturalPaperReadbackAdapter(input: Readonly<{
+  stateRoot: string;
+  clock?: () => number;
+}>) {
+  if (!nonEmpty(input.stateRoot)) throw new Error('FAST_PROFITABILITY_NATURAL_PAPER_STATE_ROOT_REQUIRED');
+  const clock = input.clock ?? Date.now;
+  if (typeof clock !== 'function') throw new Error('FAST_PROFITABILITY_NATURAL_PAPER_CLOCK_REQUIRED');
+
+  return async (context: AnyRecord): Promise<FastProfitabilityParallelEnvelope> => {
+    const policy = context.policy as FastProfitabilityPolicy | undefined;
+    if (!policy) throw new Error('FAST_PROFITABILITY_NATURAL_PAPER_POLICY_REQUIRED');
+    assertPolicy(policy);
+    const nowMs = safePositiveTime(clock(), 'FAST_PROFITABILITY_NATURAL_PAPER_CLOCK_INVALID');
+    const state = await readFastProfitabilityOwnerState(
+      input.stateRoot,
+      ['forward', 'paper', 'state', 'recurring-paper-loop.json'],
+      'NATURAL_PAPER',
+    );
+    if (state.schemaVersion !== 'recurring-paper-loop-v1'
+      || !Array.isArray(state.cycles)
+      || !Array.isArray(state.samples)
+      || !Array.isArray(state.positions)
+      || !Array.isArray(state.settlements)) {
+      throw new Error('FAST_PROFITABILITY_NATURAL_PAPER_STATE_SCHEMA_INVALID');
+    }
+    const stateIdentity = record(state.identity);
+    const normalizedStateIdentity = {
+      ...stateIdentity,
+      researchCodeSha: String(stateIdentity.researchCodeSha ?? '').toLowerCase(),
+    };
+    if (!nonEmpty(state.identityFingerprint)
+      || state.identityFingerprint !== fastProfitabilitySha256(normalizedStateIdentity)
+      || stateIdentity.strategyId !== policy.candidate.strategyId
+      || stateIdentity.strategyVersion !== policy.candidate.strategyVersion
+      || stateIdentity.parameterHash !== policy.candidate.parameterHash
+      || String(stateIdentity.researchCodeSha ?? '').toLowerCase() !== policy.candidate.researchCodeSha.toLowerCase()) {
+      throw new Error('FAST_PROFITABILITY_NATURAL_PAPER_IDENTITY_MISMATCH');
+    }
+    if (state.simulatedOnly !== true
+      || state.liveOrderAllowed !== false
+      || state.privateTradingApiAllowed !== false
+      || state.orderSubmitted !== false
+      || state.exchangeRequestSent !== false
+      || state.productionMutationAllowed !== false
+      || state.profitabilityClaimAllowed !== false) {
+      throw new Error('FAST_PROFITABILITY_NATURAL_PAPER_SAFETY_INVALID');
+    }
+    const updatedAtMs = safePositiveTime(state.updatedAtMs, 'FAST_PROFITABILITY_NATURAL_PAPER_UPDATED_AT_INVALID');
+    if (updatedAtMs > nowMs) throw new Error('FAST_PROFITABILITY_NATURAL_PAPER_FUTURE_STATE_FORBIDDEN');
+
+    const samples = state.samples.filter((row: unknown) => fastPaperRecordMatches(policy, row));
+    const positions = state.positions.filter((row: unknown) => fastPaperRecordMatches(policy, row));
+    const settlements = state.settlements.filter((row: unknown) => fastPaperRecordMatches(policy, row));
+    const evidence = Object.freeze({
+      schemaVersion: 'fast-profitability-natural-paper-owner-readback-v1',
+      sourceOwner: 'recurring-paper-loop-v1',
+      stateIdentityFingerprint: state.identityFingerprint,
+      stateDigest: fastProfitabilitySha256(state),
+      sampleCount: samples.length,
+      openPositionCount: positions.length,
+      settlementCount: settlements.length,
+      sampleDigests: Object.freeze(samples.map((row: unknown) => fastProfitabilitySha256(row)).sort()),
+      positionDigests: Object.freeze(positions.map((row: unknown) => fastProfitabilitySha256(row)).sort()),
+      settlementDigests: Object.freeze(settlements.map((row: unknown) => fastProfitabilitySha256(row)).sort()),
+      updatedAtMs,
+      checkedAtMs: nowMs,
+      executionAuthority: 'NONE',
+      profitabilityClaimAllowed: false,
+    });
+    return Object.freeze({
+      lane: 'NATURAL_PAPER',
+      policyDigest: policy.policyDigest,
+      candidateDigest: policy.candidateDigest,
+      candidateId: policy.candidate.candidateId,
+      status: samples.length + positions.length + settlements.length > 0 ? 'PRESENT' : 'MISSING_EVIDENCE',
+      evidenceDigest: fastProfitabilitySha256(evidence),
+      evidence,
+      synthetic: false,
+      replay: false,
+      backfill: false,
+      executionAuthority: 'NONE',
+      profitabilityClaimAllowed: false,
+    });
   };
 }
 
