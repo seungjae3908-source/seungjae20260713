@@ -1,0 +1,375 @@
+name: Fast Profitability V1 Pre-Activation Forward Watch
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/fast-profitability-v1-preactivation-watch.yml'
+      - 'api-server/src/services/fast-profitability-activation.service.ts'
+      - 'api-server/src/services/fast-profitability-activation.service.test.ts'
+      - 'api-server/src/scripts/run-fast-profitability-preactivation-watch.ts'
+      - 'api-server/src/scripts/run-forward-recommendation-observer-cycle.ts'
+      - 'api-server/scripts/verify-fast-profitability-preactivation-watch-contract.mjs'
+      - 'api-server/scripts/verify-forward-recommendation-observer-runtime-contract.mjs'
+  schedule:
+    - cron: '*/15 * * * *'
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: fast-profitability-v1-preactivation-forward-watch
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate Fast preactivation watch contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+      - name: Verify exact pull request head
+        run: |
+          set -Eeuo pipefail
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck backend
+        run: pnpm --dir api-server run typecheck
+      - name: Run focused activation and observer tests
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server exec esbuild src/services/fast-profitability-activation.service.test.ts \
+            --bundle --platform=node --format=cjs --target=node20 \
+            --outfile="$RUNNER_TEMP/fast-profitability-activation.test.cjs"
+          node --test "$RUNNER_TEMP/fast-profitability-activation.test.cjs"
+          pnpm --dir api-server exec esbuild src/services/forward-recommendation-observer-runtime.service.test.ts \
+            --bundle --platform=node --format=cjs --target=node20 \
+            --outfile="$RUNNER_TEMP/forward-observer-runtime.test.cjs"
+          node --test "$RUNNER_TEMP/forward-observer-runtime.test.cjs"
+      - name: Bundle watch runtime
+        working-directory: api-server
+        run: |
+          set -Eeuo pipefail
+          pnpm exec esbuild src/scripts/run-forward-recommendation-observer-cycle.ts \
+            --bundle --packages=external --platform=node --format=esm --target=node20 \
+            --outfile="$RUNNER_TEMP/forward-observer.mjs"
+          pnpm exec esbuild src/scripts/run-fast-profitability-preactivation-watch.ts \
+            --bundle --packages=external --platform=node --format=esm --target=node20 \
+            --outfile="$RUNNER_TEMP/preactivation-watch.mjs"
+          node --check "$RUNNER_TEMP/forward-observer.mjs"
+          node --check "$RUNNER_TEMP/preactivation-watch.mjs"
+      - name: Verify public-data observer contract
+        run: node api-server/scripts/verify-forward-recommendation-observer-runtime-contract.mjs
+      - name: Verify preactivation watch contract
+        run: node api-server/scripts/verify-fast-profitability-preactivation-watch-contract.mjs
+      - name: Verify repository remained clean
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain=v1)"
+
+  watch:
+    name: Watch current-main canonical candidate
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.number == 1102 &&
+       github.event.comment.author_association == 'OWNER' &&
+       startsWith(github.event.comment.body, '/run-fast-profitability-preactivation-watch '))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve exact current main and safety gates
+        id: gate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const repoInfo = await github.rest.repos.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+            const main = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: repoInfo.data.default_branch,
+            });
+            const mainSha = String(main.data.commit.sha).toLowerCase();
+
+            let target = mainSha;
+            if (context.eventName === 'issue_comment') {
+              const body = String(context.payload.comment?.body ?? '').trim();
+              const match = /^\/run-fast-profitability-preactivation-watch ([0-9a-f]{40})$/.exec(body);
+              if (!match) {
+                core.setFailed('Exact command required: /run-fast-profitability-preactivation-watch <40-character-current-main-sha>');
+                return;
+              }
+              if (context.payload.comment?.author_association !== 'OWNER') {
+                core.setFailed('Repository OWNER command required.');
+                return;
+              }
+              target = match[1];
+              if (target !== mainSha) {
+                core.setFailed('Watch target is not exact current main: target=' + target + ' main=' + mainSha);
+                return;
+              }
+            }
+
+            core.setOutput('target_sha', target);
+
+            const combined = await github.rest.repos.getCombinedStatusForRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: target,
+              per_page: 100,
+            });
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const byContext = new Map();
+            for (const row of combined.data.statuses ?? []) {
+              if (!byContext.has(row.context)) byContext.set(row.context, row);
+            }
+            const missing = required.filter((name) => byContext.get(name)?.state !== 'success');
+            if (missing.length > 0) {
+              core.notice('Current main is not Required CI 6/6 yet; clean no-op: ' + missing.join(','));
+              core.setOutput('eligible', 'false');
+              core.setOutput('reason', 'CURRENT_MAIN_REQUIRED_CI_NOT_READY');
+              return;
+            }
+
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const active = artifacts.filter((artifact) =>
+              !artifact.expired && /^fast-profitability-v1-activation-[0-9a-f]{40}$/.test(artifact.name));
+            if (active.length > 0) {
+              core.notice('Active Fast binding exists; preactivation watch clean no-op.');
+              core.setOutput('eligible', 'false');
+              core.setOutput('reason', 'ACTIVE_BINDING_PRESENT');
+              return;
+            }
+
+            core.setOutput('eligible', 'true');
+            core.setOutput('reason', 'WATCH_ALLOWED');
+
+      - name: Clean no-op when watch is gated
+        if: steps.gate.outputs.eligible != 'true'
+        run: echo "Preactivation watch no-op reason=${{ steps.gate.outputs.reason }}"
+
+      - name: Locate prior exact-SHA watch state
+        if: steps.gate.outputs.eligible == 'true'
+        id: previous
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.gate.outputs.target_sha }}
+        with:
+          script: |
+            const name = 'fast-profitability-v1-preactivation-watch-state-' + process.env.TARGET_SHA;
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const rows = artifacts
+              .filter((artifact) => !artifact.expired && artifact.name === name)
+              .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)));
+            for (const artifact of rows) {
+              const run = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: artifact.workflow_run.id,
+              });
+              if (run.data.conclusion !== 'success') continue;
+              if (!String(run.data.path).endsWith('fast-profitability-v1-preactivation-watch.yml')) continue;
+              core.setOutput('found', 'true');
+              core.setOutput('name', artifact.name);
+              core.setOutput('run_id', String(artifact.workflow_run.id));
+              return;
+            }
+            core.setOutput('found', 'false');
+
+      - name: Download prior exact-SHA watch state
+        if: steps.gate.outputs.eligible == 'true' && steps.previous.outputs.found == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.previous.outputs.name }}
+          path: ${{ runner.temp }}/previous-watch
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.previous.outputs.run_id }}
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.eligible == 'true'
+        with:
+          ref: ${{ steps.gate.outputs.target_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact current-main checkout
+        if: steps.gate.outputs.eligible == 'true'
+        env:
+          TARGET_SHA: ${{ steps.gate.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+
+      - if: steps.gate.outputs.eligible == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - if: steps.gate.outputs.eligible == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - if: steps.gate.outputs.eligible == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build public observer and read-only watch CLI
+        if: steps.gate.outputs.eligible == 'true'
+        working-directory: api-server
+        run: |
+          set -Eeuo pipefail
+          mkdir -p .fast-profitability-runtime
+          pnpm exec esbuild src/scripts/run-forward-recommendation-observer-cycle.ts \
+            --bundle --packages=external --platform=node --format=esm --target=node20 \
+            --outfile=".fast-profitability-runtime/forward-observer.mjs"
+          pnpm exec esbuild src/scripts/run-fast-profitability-preactivation-watch.ts \
+            --bundle --packages=external --platform=node --format=esm --target=node20 \
+            --outfile=".fast-profitability-runtime/preactivation-watch.mjs"
+
+      - name: Run exactly one genuine public-data Forward cycle
+        if: steps.gate.outputs.eligible == 'true'
+        env:
+          TARGET_SHA: ${{ steps.gate.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$RUNNER_TEMP/current-observer"
+          mkdir -p "$RUNNER_TEMP/current-observer"
+          args=(
+            --research-sha "$TARGET_SHA"
+            --output-dir "$RUNNER_TEMP/current-observer"
+          )
+          if [[ '${{ steps.previous.outputs.found }}' == 'true' ]]; then
+            test -s "$RUNNER_TEMP/previous-watch/observer-state.json"
+            args+=(--state-input "$RUNNER_TEMP/previous-watch/observer-state.json")
+          fi
+          node api-server/.fast-profitability-runtime/forward-observer.mjs "${args[@]}"
+
+      - name: Inspect canonical candidate without activation
+        if: steps.gate.outputs.eligible == 'true'
+        env:
+          TARGET_SHA: ${{ steps.gate.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$RUNNER_TEMP/watch-output"
+          mkdir -p "$RUNNER_TEMP/watch-output"
+          args=(
+            --target-sha "$TARGET_SHA"
+            --observer-state "$RUNNER_TEMP/current-observer/state.json"
+            --output-dir "$RUNNER_TEMP/watch-output"
+          )
+          if [[ '${{ steps.previous.outputs.found }}' == 'true' ]]; then
+            test -s "$RUNNER_TEMP/previous-watch/watch-state.json"
+            args+=(--previous-watch-state "$RUNNER_TEMP/previous-watch/watch-state.json")
+          fi
+          node api-server/.fast-profitability-runtime/preactivation-watch.mjs "${args[@]}"
+          cp "$RUNNER_TEMP/current-observer/state.json" "$RUNNER_TEMP/watch-output/observer-state.json"
+          cp "$RUNNER_TEMP/current-observer/summary.json" "$RUNNER_TEMP/watch-output/observer-summary.json"
+
+      - name: Read watch summary
+        if: steps.gate.outputs.eligible == 'true'
+        id: summary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const s = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/watch-output/summary.json', 'utf8'));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'candidate_count=' + Number(s.candidateCount ?? 0) + '\n');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'new_candidate_count=' + Number(s.newCandidateCount ?? 0) + '\n');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'selected_candidate_id=' + String(s.selectedNewCandidate?.candidateId ?? '') + '\n');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'selected_observation_id=' + String(s.selectedNewCandidate?.observationId ?? '') + '\n');
+          NODE
+
+      - name: Upload exact-SHA cumulative watch state
+        if: steps.gate.outputs.eligible == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fast-profitability-v1-preactivation-watch-state-${{ steps.gate.outputs.target_sha }}
+          path: ${{ runner.temp }}/watch-output
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report newly observed canonical candidate
+        if: steps.gate.outputs.eligible == 'true' && steps.summary.outputs.new_candidate_count != '0'
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.gate.outputs.target_sha }}
+          SUMMARY_PATH: ${{ runner.temp }}/watch-output/summary.json
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = JSON.parse(fs.readFileSync(process.env.SUMMARY_PATH, 'utf8'));
+            const candidates = Array.isArray(summary.newCandidates) ? summary.newCandidates.slice(0, 5) : [];
+            const details = candidates.map((candidate, index) =>
+              'candidate_' + (index + 1) + '='
+              + candidate.candidateId + '|'
+              + candidate.observationId + '|'
+              + candidate.market + '|'
+              + candidate.symbol + '|'
+              + candidate.timeframe + '|'
+              + candidate.side);
+            const body = [
+              '[FAST_PROFITABILITY_PREACTIVATION_CANDIDATE]',
+              'target_sha=' + process.env.TARGET_SHA,
+              'run_id=' + context.runId,
+              'candidate_count=' + Number(summary.candidateCount ?? 0),
+              'new_candidate_count=' + Number(summary.newCandidateCount ?? 0),
+              'selection_rule=' + String(summary.selectionRule ?? ''),
+              ...details,
+              'auto_activation=false',
+              'activation_command_created=false',
+              'activation_binding_created=false',
+              'economic_credit_created=0',
+              'validation_credit=0',
+              'oos_credit=0',
+              'profitability_credit=0',
+              'executionAuthority=NONE',
+              'LIVE_TRADING=false',
+              'AUTO_TRADING=false',
+              'REAL_ORDER_ENABLED=false',
+              'PRIVATE_TRADING_API_ALLOWED=false',
+              'replay_backfill_synthetic_manual_credit=0',
+              'action=HUMAN_REVIEW_ONLY',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 1102,
+              body,
+            });
