@@ -83,6 +83,129 @@ function identity(): ManualPaperCanonicalIdentity {
   });
 }
 
+function forwardIdentity(p: FastProfitabilityPolicy): ForwardObservationIdentity {
+  return Object.freeze({
+    strategyId: p.candidate.strategyId,
+    strategyVersion: p.candidate.strategyVersion,
+    parameterHash: p.candidate.parameterHash,
+    researchCodeSha: p.candidate.researchCodeSha,
+    market: 'CRYPTO_FUTURES',
+    symbol: p.candidate.symbol,
+    timeframe: p.candidate.timeframe,
+    horizon: p.candidate.horizon,
+    direction: 'LONG',
+  });
+}
+
+function forwardSignalAt(p: FastProfitabilityPolicy, index: number): number {
+  const evaluationWindowMs = 15 * 60_000 * p.candidate.horizon;
+  const blockSpanMs = evaluationWindowMs * 2;
+  return p.eligibleAfterMs + index * blockSpanMs + 60_000;
+}
+
+function forwardCard(p: FastProfitabilityPolicy, index: number): ScannerSignalCard {
+  const signalAtMs = forwardSignalAt(p, index);
+  return {
+    signalId: `fast-forward-${index}`,
+    assetClass: 'coin_futures',
+    market: 'CRYPTO_FUTURES',
+    exchange: 'bitget',
+    symbol: p.candidate.symbol,
+    name: 'Bitcoin',
+    currency: 'USDT',
+    assetType: 'crypto',
+    listingStatus: 'LISTED',
+    price: 100,
+    changePercent: 1,
+    direction: 'LONG',
+    action: 'LONG',
+    signalState: 'CONFIRMED',
+    score: 82,
+    confidence: 76,
+    dataCompleteness: 100,
+    riskScore: 20,
+    riskLevel: 'LOW',
+    liquidity: 90,
+    volume: 1000,
+    tradingValue: 100000,
+    spreadPercent: 0.1,
+    volatilityPercent: 2,
+    matched: ['trend'],
+    notMatched: [],
+    unverified: [],
+    evidence: [],
+    pricePlan: {
+      entryZone: { from: 99, to: 101 },
+      invalidation: 95,
+      stopLoss: 95,
+      targets: [105, 110],
+      riskReward: 1.5,
+    },
+    dataState: 'complete',
+    dataSources: ['bitget-public-v2'],
+    observedAt: new Date(signalAtMs).toISOString(),
+    expiresAt: new Date(signalAtMs + 2 * 60 * 60_000).toISOString(),
+    strongSignalEligible: true,
+    warnings: [],
+    strategyMode: 'scalping',
+    signalGrade: 'A',
+    dataQuality: { state: 'TRUSTED', score: 100, strongSignalAllowed: true, issues: [] },
+    quantScore: {
+      technical: 80, trend: 85, momentum: 75, volume: 70,
+      liquidity: 90, volatility: 65, marketRegime: 80, risk: 80,
+    },
+    aiValidation: {
+      status: 'NOT_RUN', provider: null, counterEvidence: [],
+      missingData: [], risks: [], explanation: null,
+    },
+    backtestQuality: {
+      status: 'verified', regime: 'Bull', costsIncluded: true,
+      slippageIncluded: true, lookaheadGuarded: true,
+      survivorshipGuarded: true, oos: true, walkForward: true,
+    },
+  };
+}
+
+function preparedForward(p: FastProfitabilityPolicy, index: number): ForwardRecommendationObservation {
+  const card = forwardCard(p, index);
+  const prepared = prepareForwardRecommendationObservation({
+    card,
+    strategyIdentity: forwardIdentity(p),
+    dataTimestamp: card.observedAt,
+    dataMaxAgeMs: 60_000,
+    publicDataOnly: true,
+  });
+  assert.equal(prepared.status, 'OBSERVATION_READY');
+  assert.ok(prepared.observation);
+  return prepared.observation;
+}
+
+function settledForward(
+  p: FastProfitabilityPolicy,
+  index: number,
+  outcomeClass: 'TP' | 'SL' | 'EXPIRED',
+): ForwardRecommendationObservation {
+  const observation = preparedForward(p, index);
+  const signalAtMs = Date.parse(observation.snapshot.timestamp);
+  const expiryMs = Date.parse(observation.expiresAt);
+  const bar = outcomeClass === 'TP'
+    ? { timestamp: new Date(signalAtMs + 15 * 60_000).toISOString(), high: 106, low: 99, close: 105 }
+    : outcomeClass === 'SL'
+      ? { timestamp: new Date(signalAtMs + 15 * 60_000).toISOString(), high: 101, low: 94, close: 95 }
+      : { timestamp: new Date(expiryMs).toISOString(), high: 102, low: 98, close: 100 };
+  const evaluatedAt = outcomeClass === 'EXPIRED'
+    ? new Date(expiryMs).toISOString()
+    : bar.timestamp;
+  const advanced = advanceForwardRecommendationObservation({
+    observation,
+    bars: [bar],
+    evaluatedAt,
+    evidenceCompleteThrough: evaluatedAt,
+  });
+  assert.equal(advanced.status, 'SETTLED');
+  return advanced.observation;
+}
+
 function auditFor(
   p: FastProfitabilityPolicy,
   seed: string,
@@ -119,21 +242,34 @@ function allocationForSplit(
   p: FastProfitabilityPolicy,
   split: 'VALIDATION' | 'SEALED_OOS',
   start = 0,
-): { allocation: FastProfitabilityAllocation; audit: CanonicalIndependenceAudit; observationId: string } {
-  for (let index = start; index < start + 20_000; index += 1) {
-    const seed = `${split.toLowerCase()}:${index}`;
-    const audit = auditFor(p, seed, index + 1);
-    const observationId = audit.independentObservationRefs[0]!.observationId;
-    const allocation = routeFastProfitabilityCanonicalIndependentObservation({
+  outcomeClass: 'TP' | 'SL' | 'EXPIRED' = 'TP',
+): {
+  allocation: FastProfitabilityAllocation;
+  observation: ForwardRecommendationObservation;
+  economic: ReturnType<typeof fastProfitabilityEconomicEvidenceFromForwardObservation>;
+} {
+  for (let index = start; index < start + 1_000; index += 1) {
+    const observation = settledForward(p, index, outcomeClass);
+    const projection = buildFastProfitabilityForwardIndependenceProjection({
       policy: p,
-      independenceAudit: audit,
-      observationId,
+      observations: [observation],
     });
-    if (allocation.split === split) return { allocation, audit, observationId };
+    if (projection.components.length !== 1) continue;
+    const allocation = routeFastProfitabilityForwardRepresentative({
+      policy: p,
+      projection,
+      observationId: observation.observationId,
+    });
+    if (allocation.split !== split) continue;
+    const economic = fastProfitabilityEconomicEvidenceFromForwardObservation({
+      policy: p,
+      allocation,
+      observation,
+    });
+    return { allocation, observation, economic };
   }
-  throw new Error(`no deterministic ${split} fixture found`);
+  throw new Error(`no deterministic ${split} Forward fixture found`);
 }
-
 function fullCostFixture() {
   return {
     status: 'PRESENT',
