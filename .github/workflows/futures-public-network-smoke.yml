@@ -19,9 +19,6 @@ on:
         description: Optional pull request base ref for current-base validation.
         required: false
         type: string
-  pull_request:
-    types:
-      - ready_for_review
   push:
     branches:
       - main
@@ -306,11 +303,6 @@ jobs:
           persist-credentials: false
       - name: Set up pnpm 9
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
-          run_install: false
-      - name: Set up Node 20
-        uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: pnpm
