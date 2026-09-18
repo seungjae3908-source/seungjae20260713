@@ -191,3 +191,25 @@ test('unavailable owner observation remains UNKNOWN and cannot mask a required g
   assert.match(renderMarkdown(buildAudit(new Map([['readable.ts', 'no required evidence']]), [edge])),
     /non-closure observation.*not issuer, persisted readback or runtime proof/u);
 });
+
+
+test('crypto scanner central history requires the real member-scoped notification writer', () => {
+  const edge = DEFAULT_EDGES.find((item) => item.id === 'CG014');
+  assert.ok(edge);
+  const files = new Map([
+    ['stock-analyzer/src/pages/signal-scanner.tsx', 'data.alerts.map alertTitle(alert)'],
+    ['stock-analyzer/src/pages/alerts.tsx', '/notifications/history?limit=200 parseNotificationHistory'],
+    ['api-server/src/services/scanner-telegram-delivery.service.ts', 'deliverMemberNotification runScannerInAppNotification memberId'],
+    ['api-server/src/services/notification.service.ts', "from('notification_history') member_id: input.memberId"],
+  ]);
+  const proven = evaluateEdge(files, edge);
+  assert.equal(proven.status, CONNECTION_STATUS.PROVEN);
+
+  files.set('api-server/src/services/notification.service.ts', 'member-scoped writer missing');
+  const partial = evaluateEdge(files, edge);
+  assert.equal(partial.status, CONNECTION_STATUS.PARTIAL);
+  assert.equal(
+    partial.required.find((probe) => probe.id === 'notification-history-canonical-writer').state,
+    CONNECTION_STATUS.MISSING,
+  );
+});
