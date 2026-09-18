@@ -1,0 +1,98 @@
+name: Main Post-Merge Required CI Bridge
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: main-post-merge-required-ci-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch-required-ci:
+    name: Guarantee Required CI for exact main SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch canonical Application CI only when direct push coverage is absent
+        uses: actions/github-script@v8
+        with:
+          script: |
+            if (context.ref !== 'refs/heads/main') {
+              core.setFailed(`MAIN_REF_REQUIRED:${context.ref}`);
+              return;
+            }
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const targetSha = String(context.sha || '').trim().toLowerCase();
+            if (!/^[0-9a-f]{40}$/.test(targetSha)) {
+              core.setFailed('EXACT_MAIN_SHA_REQUIRED');
+              return;
+            }
+
+            const current = await github.rest.repos.getBranch({ owner, repo, branch: 'main' });
+            const currentMainSha = String(current.data.commit.sha || '').trim().toLowerCase();
+            if (currentMainSha !== targetSha) {
+              core.setFailed(`MAIN_MOVED_BEFORE_DISPATCH:${targetSha}:${currentMainSha}`);
+              return;
+            }
+
+            const directApplicationCiPath = (filename) => {
+              const path = String(filename || '');
+              return path === '.github/workflows/futures-public-network-smoke.yml'
+                || path === 'pnpm-lock.yaml'
+                || path === 'pnpm-workspace.yaml'
+                || path === 'package.json'
+                || path.startsWith('api-server/')
+                || path.startsWith('stock-analyzer/')
+                || path.startsWith('packages/');
+            };
+
+            const beforeSha = String(context.payload.before || '').trim().toLowerCase();
+            let changedFiles = [];
+            if (/^[0-9a-f]{40}$/.test(beforeSha) && !/^0{40}$/.test(beforeSha)) {
+              const comparison = await github.rest.repos.compareCommitsWithBasehead({
+                owner,
+                repo,
+                basehead: `${beforeSha}...${targetSha}`,
+                per_page: 100,
+              });
+              changedFiles = (comparison.data.files || []).map((file) => String(file.filename || ''));
+              if (changedFiles.length >= 300) {
+                core.warning('Changed-file comparison reached GitHub compare-file cap; fallback remains fail-safe because dispatching an extra canonical CI run is allowed while skipping one is not.');
+              }
+            } else {
+              core.warning(`No trustworthy before SHA in push payload: ${beforeSha || 'MISSING'}`);
+            }
+
+            if (changedFiles.some(directApplicationCiPath)) {
+              core.notice(`Canonical Application CI has native push coverage for exact main ${targetSha}; bridge dispatch not needed.`);
+              return;
+            }
+
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner,
+              repo,
+              head_sha: targetSha,
+              per_page: 100,
+            });
+            const existing = runs.find((run) => run.name === 'Application CI' && String(run.head_sha || '').toLowerCase() === targetSha);
+            if (existing) {
+              core.notice(`Canonical Application CI already exists for exact main ${targetSha}: run ${existing.id} (${existing.status}/${existing.conclusion || 'pending'}).`);
+              return;
+            }
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner,
+              repo,
+              workflow_id: 'futures-public-network-smoke.yml',
+              ref: 'main',
+              inputs: { target_sha: targetSha },
+            });
+            core.notice(`Dispatched canonical Required CI for exact main ${targetSha}.`);
