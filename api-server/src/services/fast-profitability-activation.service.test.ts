@@ -18,6 +18,7 @@ import {
   FAST_PROFITABILITY_COLLECTOR_CADENCE_MINUTES,
   buildFastProfitabilityActivationBundleV1,
   collectFastProfitabilityForwardEvidenceV1,
+  inspectFastProfitabilityPreActivationCandidatesV1,
   verifyFastProfitabilityActivationBundleV1,
 } from './fast-profitability-activation.service';
 
@@ -343,3 +344,48 @@ test('collector cleanly reports no future credit before the immutable 24-hour bo
     'FAST_PROFITABILITY_FUTURE_BOUNDARY_NOT_REACHED_OR_NO_MATCHING_OBSERVATION',
   ]);
 });
+
+test('preactivation inspector reuses the exact activation candidate ordering without creating a binding or credit', () => {
+  const record = promotion();
+  const pending = observationAt(record, 'watch-pending', ACTIVATION_AT - 5 * 60_000);
+  const inspection = inspectFastProfitabilityPreActivationCandidatesV1({
+    targetSha: SOURCE_SHA,
+    observerState: observerState([pending]),
+    inspectedAtMs: ACTIVATION_AT,
+  });
+
+  assert.equal(inspection.contract, 'fast-profitability-preactivation-inspection-v1');
+  assert.equal(inspection.selectionRule, FAST_PROFITABILITY_ACTIVATION_SELECTION_RULE_V1);
+  assert.equal(inspection.candidateCount, 1);
+  assert.equal(inspection.selectedCandidate?.observationId, pending.observationId);
+  assert.equal(inspection.selectedCandidate?.candidateId, strategyCandidateId(record.identity));
+  assert.equal(inspection.autoActivationAllowed, false);
+  assert.equal(inspection.activationBindingCreated, false);
+  assert.equal(inspection.economicCreditCreated, 0);
+  assert.equal(inspection.profitabilityClaimAllowed, false);
+  assert.equal(inspection.executionAuthority, 'NONE');
+});
+
+test('preactivation inspector returns zero candidates for expired observations and rejects a mismatched research SHA', () => {
+  const record = promotion();
+  const expired = observationAt(record, 'watch-expired', ACTIVATION_AT - 10 * 60 * 60_000, 1);
+  const empty = inspectFastProfitabilityPreActivationCandidatesV1({
+    targetSha: SOURCE_SHA,
+    observerState: observerState([expired]),
+    inspectedAtMs: ACTIVATION_AT,
+  });
+  assert.equal(empty.candidateCount, 0);
+  assert.equal(empty.selectedCandidate, null);
+
+  const wrongState = observerState([]);
+  wrongState.researchCodeSha = 'b'.repeat(40);
+  assert.throws(
+    () => inspectFastProfitabilityPreActivationCandidatesV1({
+      targetSha: SOURCE_SHA,
+      observerState: wrongState,
+      inspectedAtMs: ACTIVATION_AT,
+    }),
+    /FAST_PROFITABILITY_ACTIVATION_FORWARD_STATE_INVALID/,
+  );
+});
+

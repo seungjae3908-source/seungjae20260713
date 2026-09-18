@@ -129,6 +129,39 @@ export type FastProfitabilityCollectionResult = Readonly<{
   executionAuthority: 'NONE';
 }>;
 
+export type FastProfitabilityPreActivationCandidateV1 = Readonly<{
+  observationId: string;
+  observationIdentityKey: string;
+  observationTimestamp: string;
+  expiresAt: string;
+  candidateId: string;
+  strategyId: string;
+  strategyVersion: string;
+  parameterHash: string;
+  researchCodeSha: string;
+  market: string;
+  symbol: string;
+  timeframe: string;
+  horizon: number;
+  side: StrategyDirection;
+}>;
+
+export type FastProfitabilityPreActivationInspectionV1 = Readonly<{
+  schemaVersion: 1;
+  contract: 'fast-profitability-preactivation-inspection-v1';
+  targetSha: string;
+  inspectedAtMs: number;
+  selectionRule: typeof FAST_PROFITABILITY_ACTIVATION_SELECTION_RULE_V1;
+  candidateCount: number;
+  candidates: readonly FastProfitabilityPreActivationCandidateV1[];
+  selectedCandidate: FastProfitabilityPreActivationCandidateV1 | null;
+  autoActivationAllowed: false;
+  activationBindingCreated: false;
+  economicCreditCreated: 0;
+  profitabilityClaimAllowed: false;
+  executionAuthority: 'NONE';
+}>;
+
 type EvidenceStore = Readonly<{
   recordValidation(input: {
     policy: unknown;
@@ -318,6 +351,54 @@ function activationCandidateRows(
     left.identityKey.localeCompare(right.identityKey)
     || left.observation.observationId.localeCompare(right.observation.observationId));
   return rows;
+}
+
+export function inspectFastProfitabilityPreActivationCandidatesV1(input: Readonly<{
+  targetSha: string;
+  observerState: ForwardObserverRuntimeState;
+  inspectedAtMs: number;
+}>): FastProfitabilityPreActivationInspectionV1 {
+  const targetSha = exactSha40(
+    input.targetSha,
+    'FAST_PROFITABILITY_PREACTIVATION_TARGET_SHA_INVALID',
+  );
+  const inspectedAtMs = positiveSafeInteger(
+    input.inspectedAtMs,
+    'FAST_PROFITABILITY_PREACTIVATION_INSPECTED_AT_INVALID',
+  );
+  const rows = activationCandidateRows(input.observerState, targetSha, inspectedAtMs);
+  const candidates = rows.map((row): FastProfitabilityPreActivationCandidateV1 => Object.freeze({
+    observationId: row.observation.observationId,
+    observationIdentityKey: row.identityKey,
+    observationTimestamp: row.observation.snapshot.timestamp,
+    expiresAt: row.observation.expiresAt,
+    candidateId: row.candidate.candidateId,
+    strategyId: row.candidate.strategyId,
+    strategyVersion: row.candidate.strategyVersion,
+    parameterHash: row.candidate.parameterHash,
+    researchCodeSha: row.candidate.researchCodeSha,
+    market: row.candidate.market,
+    symbol: row.candidate.symbol,
+    timeframe: row.candidate.timeframe,
+    horizon: row.candidate.horizon,
+    side: row.candidate.side,
+  }));
+  const selectedCandidate = candidates[0] ?? null;
+  return Object.freeze({
+    schemaVersion: 1 as const,
+    contract: 'fast-profitability-preactivation-inspection-v1' as const,
+    targetSha,
+    inspectedAtMs,
+    selectionRule: FAST_PROFITABILITY_ACTIVATION_SELECTION_RULE_V1,
+    candidateCount: candidates.length,
+    candidates: Object.freeze(candidates),
+    selectedCandidate,
+    autoActivationAllowed: false as const,
+    activationBindingCreated: false as const,
+    economicCreditCreated: 0 as const,
+    profitabilityClaimAllowed: false as const,
+    executionAuthority: 'NONE' as const,
+  });
 }
 
 export function buildFastProfitabilityActivationBundleV1(input: Readonly<{
