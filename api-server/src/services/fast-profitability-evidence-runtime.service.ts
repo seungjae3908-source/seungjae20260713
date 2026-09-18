@@ -865,6 +865,25 @@ function normalizeEconomicEvidence(value: FastProfitabilityEconomicEvidence): Fa
   });
 }
 
+function assertCanonicalForwardEconomicEvidence(
+  policy: FastProfitabilityPolicy,
+  allocation: FastProfitabilityAllocation,
+  economic: FastProfitabilityEconomicEvidence,
+): void {
+  if (allocation.evidenceClass !== FAST_PROFITABILITY_FORWARD_EVIDENCE_CLASS) {
+    throw new Error('FAST_PROFITABILITY_FORWARD_ALLOCATION_REQUIRED');
+  }
+  const observation = economic.evidence as ForwardRecommendationObservation;
+  const canonical = fastProfitabilityEconomicEvidenceFromForwardObservation({
+    policy,
+    allocation,
+    observation,
+    parallelEvidence: economic.parallelEvidence,
+  });
+  if (fastProfitabilitySha256(canonical) !== fastProfitabilitySha256(economic)) {
+    throw new Error('FAST_PROFITABILITY_FORWARD_ECONOMIC_EVIDENCE_MISMATCH');
+  }
+}
 export function createFastProfitabilityEvidenceStore(input: Readonly<{
   validationRoot: string;
   sealedOosRoot: string;
@@ -890,6 +909,7 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
       throw new Error('FAST_PROFITABILITY_VALIDATION_SPLIT_REQUIRED');
     }
     const economic = normalizeEconomicEvidence(inputRecord.evidence);
+    assertCanonicalForwardEconomicEvidence(policy, inputRecord.allocation, economic);
     if (economic.sourceObservationId !== inputRecord.allocation.publicEventIdentity) {
       throw new Error('FAST_PROFITABILITY_FORWARD_ECONOMIC_ALLOCATION_MISMATCH');
     }
@@ -942,6 +962,7 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
       throw new Error('FAST_PROFITABILITY_SEALED_OOS_SPLIT_REQUIRED');
     }
     const economic = normalizeEconomicEvidence(inputRecord.evidence);
+    assertCanonicalForwardEconomicEvidence(policy, inputRecord.allocation, economic);
     if (economic.sourceObservationId !== inputRecord.allocation.publicEventIdentity) {
       throw new Error('FAST_PROFITABILITY_FORWARD_ECONOMIC_ALLOCATION_MISMATCH');
     }
