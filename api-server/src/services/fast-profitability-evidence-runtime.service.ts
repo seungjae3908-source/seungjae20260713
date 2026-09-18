@@ -378,6 +378,353 @@ export function assertFastProfitabilityManualIdentity(
   }
 }
 
+
+function expectedForwardDirection(policy: FastProfitabilityPolicy): 'BUY' | 'LONG' | 'SHORT' {
+  if (policy.candidate.market === 'CRYPTO_FUTURES') {
+    if (policy.candidate.side !== 'LONG' && policy.candidate.side !== 'SHORT') {
+      throw new Error('FAST_PROFITABILITY_FUTURES_SIDE_INVALID');
+    }
+    return policy.candidate.side;
+  }
+  if (policy.candidate.side !== 'BUY' && policy.candidate.side !== 'LONG') {
+    throw new Error('FAST_PROFITABILITY_CASH_VALIDATION_LONG_ONLY');
+  }
+  return 'BUY';
+}
+
+function timeframeDurationMs(timeframe: string): number {
+  const match = /^(\d+)(m|h|d)$/iu.exec(timeframe.trim());
+  if (!match) throw new Error('FAST_PROFITABILITY_FORWARD_TIMEFRAME_UNSUPPORTED');
+  const amount = Number(match[1]);
+  if (!Number.isSafeInteger(amount) || amount <= 0) {
+    throw new Error('FAST_PROFITABILITY_FORWARD_TIMEFRAME_UNSUPPORTED');
+  }
+  const unit = match[2]!.toLowerCase();
+  const multiplier = unit === 'm'
+    ? 60_000
+    : unit === 'h'
+      ? 60 * 60_000
+      : 24 * 60 * 60_000;
+  const duration = amount * multiplier;
+  if (!Number.isSafeInteger(duration) || duration <= 0) {
+    throw new Error('FAST_PROFITABILITY_FORWARD_TIMEFRAME_UNSUPPORTED');
+  }
+  return duration;
+}
+
+function canonicalForwardObservationId(observation: ForwardRecommendationObservation): string {
+  return sha256([
+    'LIVE_RECOMMENDATION',
+    observation.snapshot.signalId,
+    observation.snapshot.timestamp,
+    forwardObservationIdentityKey(observation.identity),
+  ].join('|'));
+}
+
+function validateForwardObservationForFastPolicy(
+  policy: FastProfitabilityPolicy,
+  observation: ForwardRecommendationObservation,
+): Readonly<{
+  signalAtMs: number;
+  dataAtMs: number;
+  evaluationWindowMs: number;
+  sourceFrameIdentity: string;
+}> {
+  const expectedDirection = expectedForwardDirection(policy);
+  const expectedIdentity = {
+    strategyId: policy.candidate.strategyId,
+    strategyVersion: policy.candidate.strategyVersion,
+    parameterHash: policy.candidate.parameterHash,
+    researchCodeSha: policy.candidate.researchCodeSha.toLowerCase(),
+    market: policy.candidate.market,
+    symbol: policy.candidate.symbol,
+    timeframe: policy.candidate.timeframe,
+    horizon: policy.candidate.horizon,
+    direction: expectedDirection,
+  };
+  if (fastProfitabilitySha256(observation.identity) !== fastProfitabilitySha256(expectedIdentity)) {
+    throw new Error('FAST_PROFITABILITY_FORWARD_IDENTITY_MISMATCH');
+  }
+  if (observation.schemaVersion !== 'forward-recommendation-observation-v2'
+    || observation.source !== 'LIVE_RECOMMENDATION'
+    || (observation.status !== 'PENDING' && observation.status !== 'SETTLED')
+    || observation.publicDataOnly !== true
+    || observation.executionAuthority !== 'NONE'
+    || observation.simulatedOnly !== true
+    || observation.financialMutationAllowed !== false
+    || observation.liveOrderAllowed !== false
+    || observation.privateTradingApiAllowed !== false
+    || observation.orderSubmitted !== false
+    || observation.exchangeRequestSent !== false
+    || observation.profitabilityClaimAllowed !== false) {
+    throw new Error('FAST_PROFITABILITY_FORWARD_SAFETY_INVALID');
+  }
+  if (!SHA256.test(observation.observationId)
+    || observation.observationId !== canonicalForwardObservationId(observation)) {
+    throw new Error('FAST_PROFITABILITY_FORWARD_OBSERVATION_ID_INVALID');
+  }
+  if (!nonEmpty(observation.snapshot.signalId)
+    || observation.snapshot.immutable !== true
+    || observation.snapshot.executionAuthority !== 'NONE'
+    || observation.snapshot.market !== observation.identity.market
+    || observation.snapshot.symbol !== observation.identity.symbol
+    || observation.snapshot.direction !== observation.identity.direction
+    || observation.snapshot.strategyProfileVersion !== observation.identity.strategyVersion
+    || observation.snapshot.timeframes[0] !== observation.identity.timeframe
+    || observation.snapshot.dataTimestamp !== observation.dataTimestamp) {
+    throw new Error('FAST_PROFITABILITY_FORWARD_SNAPSHOT_IDENTITY_INVALID');
+  }
+  const signalAtMs = Date.parse(observation.snapshot.timestamp);
+  const dataAtMs = Date.parse(observation.dataTimestamp);
+  if (!Number.isFinite(signalAtMs)
+    || !Number.isFinite(dataAtMs)
+    || signalAtMs < policy.eligibleAfterMs
+    || dataAtMs > signalAtMs
+    || !Number.isSafeInteger(observation.dataMaxAgeMs)
+    || observation.dataMaxAgeMs <= 0
+    || signalAtMs - dataAtMs > observation.dataMaxAgeMs) {
+    throw new Error('FAST_PROFITABILITY_FORWARD_CAUSAL_TIME_INVALID');
+  }
+  const timeframeMs = timeframeDurationMs(policy.candidate.timeframe);
+  const evaluationWindowMs = timeframeMs * policy.candidate.horizon;
+  if (!Number.isSafeInteger(evaluationWindowMs) || evaluationWindowMs <= 0) {
+    throw new Error('FAST_PROFITABILITY_FORWARD_EVALUATION_WINDOW_INVALID');
+  }
+  const sourceFrameIdentity = `forward-source-frame:${fastProfitabilitySha256({
+    signalId: observation.snapshot.signalId,
+    signalAtMs,
+    dataTimestamp: observation.dataTimestamp,
+    dataProvenance: observation.snapshot.dataProvenance,
+    market: observation.identity.market,
+    symbol: observation.identity.symbol,
+    timeframe: observation.identity.timeframe,
+  })}`;
+  return Object.freeze({
+    signalAtMs,
+    dataAtMs,
+    evaluationWindowMs,
+    sourceFrameIdentity,
+  });
+}
+
+export type FastProfitabilityForwardIndependenceProjection = Readonly<{
+  schemaVersion: typeof FAST_PROFITABILITY_FORWARD_INDEPENDENCE_V1;
+  policyDigest: string;
+  candidateDigest: string;
+  candidateId: string;
+  evaluationWindowMs: number;
+  guardWindowMs: number;
+  components: readonly Readonly<{
+    dependencyComponentId: string;
+    blockIndex: number;
+    blockStartMs: number;
+    creditWindowEndExclusiveMs: number;
+    blockEndExclusiveMs: number;
+    representativeObservationId: string;
+    memberObservationIds: readonly string[];
+    maximumEffectiveIndependentCredit: 1;
+    allocation: FastProfitabilityAllocation;
+  }>[];
+  guardRejectedObservationIds: readonly string[];
+  projectionDigest: string;
+  outcomeConsulted: false;
+  profitabilityCredit: 0;
+  executionAuthority: 'NONE';
+}>;
+
+export function buildFastProfitabilityForwardIndependenceProjection(input: Readonly<{
+  policy: unknown;
+  observations: readonly ForwardRecommendationObservation[];
+}>): FastProfitabilityForwardIndependenceProjection {
+  assertPolicy(input.policy);
+  const policy = input.policy as FastProfitabilityPolicy;
+  if (!Array.isArray(input.observations)) {
+    throw new Error('FAST_PROFITABILITY_FORWARD_OBSERVATIONS_REQUIRED');
+  }
+
+  const prepared = input.observations.map((observation) => {
+    const causal = validateForwardObservationForFastPolicy(policy, observation);
+    const blockSpanMs = causal.evaluationWindowMs * 2;
+    const elapsedMs = causal.signalAtMs - policy.eligibleAfterMs;
+    const blockIndex = Math.floor(elapsedMs / blockSpanMs);
+    const blockStartMs = policy.eligibleAfterMs + blockIndex * blockSpanMs;
+    const offsetMs = causal.signalAtMs - blockStartMs;
+    const inCreditWindow = offsetMs >= 0 && offsetMs < causal.evaluationWindowMs;
+    const componentDigest = fastProfitabilitySha256({
+      schemaVersion: FAST_PROFITABILITY_FORWARD_INDEPENDENCE_V1,
+      policyDigest: policy.policyDigest,
+      candidateDigest: policy.candidateDigest,
+      forwardIdentityKey: forwardObservationIdentityKey(observation.identity),
+      blockIndex,
+      blockStartMs,
+      evaluationWindowMs: causal.evaluationWindowMs,
+      guardWindowMs: causal.evaluationWindowMs,
+    });
+    return Object.freeze({
+      observation,
+      ...causal,
+      blockIndex,
+      blockStartMs,
+      blockEndExclusiveMs: blockStartMs + blockSpanMs,
+      creditWindowEndExclusiveMs: blockStartMs + causal.evaluationWindowMs,
+      inCreditWindow,
+      dependencyComponentId: `dependency-component:${componentDigest}`,
+    });
+  });
+
+  const eligible = prepared.filter((item) => item.inCreditWindow);
+  const guardRejectedObservationIds = Object.freeze(
+    prepared.filter((item) => !item.inCreditWindow).map((item) => item.observation.observationId).sort(),
+  );
+  const grouped = new Map<string, typeof eligible>();
+  for (const item of eligible) {
+    const bucket = grouped.get(item.dependencyComponentId) ?? [];
+    bucket.push(item);
+    grouped.set(item.dependencyComponentId, bucket);
+  }
+
+  const components = [...grouped.entries()].map(([dependencyComponentId, members]) => {
+    members.sort((left, right) => left.signalAtMs - right.signalAtMs
+      || left.observation.observationId.localeCompare(right.observation.observationId));
+    const representative = members[0]!;
+    const componentProof = Object.freeze({
+      schemaVersion: FAST_PROFITABILITY_FORWARD_INDEPENDENCE_V1,
+      policyDigest: policy.policyDigest,
+      candidateDigest: policy.candidateDigest,
+      candidateId: policy.candidate.candidateId,
+      dependencyComponentId,
+      blockIndex: representative.blockIndex,
+      blockStartMs: representative.blockStartMs,
+      creditWindowEndExclusiveMs: representative.creditWindowEndExclusiveMs,
+      blockEndExclusiveMs: representative.blockEndExclusiveMs,
+      evaluationWindowMs: representative.evaluationWindowMs,
+      representativeObservationId: representative.observation.observationId,
+      memberObservationIds: Object.freeze(members.map((item) => item.observation.observationId)),
+      maximumEffectiveIndependentCredit: 1,
+      outcomeConsulted: false,
+    });
+    const independenceAuditDigest = fastProfitabilitySha256(componentProof);
+    const baseAllocation = allocateFastProfitabilitySplit(policy, {
+      publicEventIdentity: representative.observation.observationId,
+      sourceFrameIdentity: representative.sourceFrameIdentity,
+      dependencyComponentId,
+      independenceStatus: 'PROVEN',
+      dependencyComponentCredit: 1,
+      observedAtMs: representative.signalAtMs,
+    });
+    const allocation: FastProfitabilityAllocation = Object.freeze({
+      ...baseAllocation,
+      evidenceClass: FAST_PROFITABILITY_FORWARD_EVIDENCE_CLASS,
+      independenceAuditDigest,
+    });
+    return Object.freeze({
+      dependencyComponentId,
+      blockIndex: representative.blockIndex,
+      blockStartMs: representative.blockStartMs,
+      creditWindowEndExclusiveMs: representative.creditWindowEndExclusiveMs,
+      blockEndExclusiveMs: representative.blockEndExclusiveMs,
+      representativeObservationId: representative.observation.observationId,
+      memberObservationIds: componentProof.memberObservationIds,
+      maximumEffectiveIndependentCredit: 1 as const,
+      allocation,
+    });
+  }).sort((left, right) => left.blockIndex - right.blockIndex
+    || left.representativeObservationId.localeCompare(right.representativeObservationId));
+
+  const projectionCore = Object.freeze({
+    schemaVersion: FAST_PROFITABILITY_FORWARD_INDEPENDENCE_V1,
+    policyDigest: policy.policyDigest,
+    candidateDigest: policy.candidateDigest,
+    candidateId: policy.candidate.candidateId,
+    evaluationWindowMs: prepared[0]?.evaluationWindowMs
+      ?? timeframeDurationMs(policy.candidate.timeframe) * policy.candidate.horizon,
+    guardWindowMs: prepared[0]?.evaluationWindowMs
+      ?? timeframeDurationMs(policy.candidate.timeframe) * policy.candidate.horizon,
+    components: Object.freeze(components),
+    guardRejectedObservationIds,
+    outcomeConsulted: false as const,
+    profitabilityCredit: 0 as const,
+    executionAuthority: 'NONE' as const,
+  });
+  return Object.freeze({
+    ...projectionCore,
+    projectionDigest: fastProfitabilitySha256(projectionCore),
+  });
+}
+
+export function routeFastProfitabilityForwardRepresentative(input: Readonly<{
+  policy: unknown;
+  projection: FastProfitabilityForwardIndependenceProjection;
+  observationId: string;
+}>): FastProfitabilityAllocation {
+  assertPolicy(input.policy);
+  const policy = input.policy as FastProfitabilityPolicy;
+  if (input.projection.schemaVersion !== FAST_PROFITABILITY_FORWARD_INDEPENDENCE_V1
+    || input.projection.policyDigest !== policy.policyDigest
+    || input.projection.candidateDigest !== policy.candidateDigest
+    || input.projection.candidateId !== policy.candidate.candidateId
+    || input.projection.outcomeConsulted !== false
+    || input.projection.profitabilityCredit !== 0
+    || input.projection.executionAuthority !== 'NONE') {
+    throw new Error('FAST_PROFITABILITY_FORWARD_PROJECTION_INVALID');
+  }
+  const { projectionDigest: _providedDigest, ...projectionCore } = input.projection;
+  if (_providedDigest !== fastProfitabilitySha256(projectionCore)) {
+    throw new Error('FAST_PROFITABILITY_FORWARD_PROJECTION_DIGEST_MISMATCH');
+  }
+  const matches = input.projection.components.filter(
+    (component) => component.representativeObservationId === input.observationId,
+  );
+  if (matches.length !== 1) {
+    throw new Error('FAST_PROFITABILITY_FORWARD_INDEPENDENT_REPRESENTATIVE_REQUIRED');
+  }
+  return matches[0]!.allocation;
+}
+
+export function fastProfitabilityEconomicEvidenceFromForwardObservation(input: Readonly<{
+  policy: unknown;
+  allocation: FastProfitabilityAllocation;
+  observation: ForwardRecommendationObservation;
+  parallelEvidence?: unknown;
+}>): FastProfitabilityEconomicEvidence {
+  assertPolicy(input.policy);
+  const policy = input.policy as FastProfitabilityPolicy;
+  if (input.allocation.evidenceClass !== FAST_PROFITABILITY_FORWARD_EVIDENCE_CLASS
+    || input.allocation.publicEventIdentity !== input.observation.observationId) {
+    throw new Error('FAST_PROFITABILITY_FORWARD_ALLOCATION_OBSERVATION_MISMATCH');
+  }
+  validateForwardObservationForFastPolicy(policy, input.observation);
+  if (input.observation.status !== 'SETTLED'
+    || !input.observation.outcome
+    || !nonEmpty(input.observation.settledAt)) {
+    throw new Error('FAST_PROFITABILITY_FORWARD_SETTLED_OUTCOME_REQUIRED');
+  }
+  const settledAtMs = Date.parse(input.observation.settledAt);
+  const signalAtMs = Date.parse(input.observation.snapshot.timestamp);
+  if (!Number.isFinite(settledAtMs) || settledAtMs < signalAtMs) {
+    throw new Error('FAST_PROFITABILITY_FORWARD_SETTLEMENT_TIME_INVALID');
+  }
+  const outcome = input.observation.outcome;
+  let outcomeClass: OutcomeClass;
+  if (outcome.target1Hit && !outcome.stopLossHit && outcome.outcome === 'WIN') {
+    outcomeClass = 'TP';
+  } else if (outcome.stopLossHit && outcome.outcome === 'LOSS') {
+    outcomeClass = 'SL';
+  } else if (!outcome.target1Hit && !outcome.stopLossHit && outcome.outcome === 'EXPIRED') {
+    outcomeClass = 'EXPIRED';
+  } else {
+    throw new Error('FAST_PROFITABILITY_FORWARD_OUTCOME_CLASS_UNSUPPORTED');
+  }
+  return Object.freeze({
+    sourceClass: FAST_PROFITABILITY_FORWARD_EVIDENCE_CLASS,
+    sourceObservationId: input.observation.observationId,
+    outcomeClass,
+    observedAtMs: settledAtMs,
+    evidence: structuredClone(input.observation),
+    parallelEvidence: input.parallelEvidence == null ? null : structuredClone(input.parallelEvidence),
+  });
+}
+
 function normalizeIndependenceAudit(value: unknown): CanonicalIndependenceAudit {
   const outer = record(value);
   if (outer.status === 'BLOCKED_DATA') throw new Error('FAST_PROFITABILITY_INDEPENDENCE_BLOCKED');
@@ -435,6 +782,7 @@ export function routeFastProfitabilityCanonicalIndependentObservation(input: Rea
   }) as Omit<FastProfitabilityAllocation, 'independenceAuditDigest'>;
   return Object.freeze({
     ...allocation,
+    evidenceClass: FAST_PROFITABILITY_EXECUTION_CALIBRATION_CLASS,
     independenceAuditDigest: audit.auditDigest,
   }) as FastProfitabilityAllocation;
 }
