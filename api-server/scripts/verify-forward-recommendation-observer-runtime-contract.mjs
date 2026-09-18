@@ -70,7 +70,18 @@ for (const forbidden of [
   assert(!runner.includes(forbidden) && !workflow.includes(forbidden), `forbidden runtime dependency present: ${forbidden}`);
 }
 assert(runner.includes('withYahooPublicOnlyStockData'), 'stock scanner must be isolated behind Yahoo public-only adapter');
-assert(runner.includes('finally') && runner.includes('originalCandles') && runner.includes('originalQuote'), 'temporary stock adapter must restore defaults');
+assert(runner.includes("'signal-intelligence-forward-observer-public-only'"), 'stock observer must select the existing scanner public-core guard');
+assert(runner.includes('memberId: FORWARD_OBSERVER_PUBLIC_STOCK_MEMBER_ID'), 'stock scanner call must use the public-core member identity');
+assert(runner.includes('getCandlesMeta(ticker: string, timeframe?: Timeframe)'), 'Yahoo adapter must cover the scanner getCandlesMeta seam');
+assert(runner.includes('mutable.getCandlesMeta = async') && runner.includes("provider: 'yahoo'"), 'scanner candle metadata must stay on Yahoo public data');
+assert(
+  runner.includes('finally')
+    && runner.includes('originalCandles')
+    && runner.includes('originalCandlesMeta')
+    && runner.includes('originalQuote')
+    && runner.includes('mutable.getCandlesMeta = originalCandlesMeta'),
+  'temporary stock adapter must restore getCandles/getCandlesMeta/getQuote defaults',
+);
 assert(tests.includes('missing matched evidence timestamps are blocked'), 'missing evidence timestamp regression test required');
 assert(tests.includes('ignores pre-signal bars'), 'future-only settlement regression test required');
 assert(tests.includes('idempotent'), 'idempotency regression test required');
