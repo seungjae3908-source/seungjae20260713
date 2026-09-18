@@ -130,6 +130,10 @@ function normalizedCandidate(candidate) {
     }
     normalized[field] = candidate[field].trim();
   }
+  if (!Number.isInteger(candidate.horizon) || candidate.horizon < 1) {
+    throw new Error('FAST_PROFITABILITY_CANDIDATE_HORIZON_REQUIRED');
+  }
+  normalized.horizon = candidate.horizon;
   if (!SHA40.test(normalized.researchCodeSha)) {
     throw new Error('FAST_PROFITABILITY_RESEARCH_SHA_INVALID');
   }
@@ -229,10 +233,13 @@ export function buildFastProfitabilityProspectivePolicyV1({
       economicOutcomeVisibleBeforeReveal: false,
     }),
     independencePolicy: Object.freeze({
-      canonicalIndependenceAuditRequired: true,
+      candidateBoundForwardIndependenceRequired: true,
+      executionCalibrationIndependenceMayDefineStrategySplit: false,
       splitAssignmentAfterIndependenceRequired: true,
       dependencyComponentIsSplitAuthority: true,
       maximumCreditPerDependencyComponent: 1,
+      causalGuardWindowRequired: true,
+      evaluationWindowDerivedFromFrozenTimeframeAndHorizon: true,
       duplicatePublicEventCrossSplitAllowed: false,
       overlappingObservationWindowIndependentCreditAllowed: false,
     }),
@@ -299,10 +306,13 @@ export function verifyFastProfitabilityProspectivePolicyV1(policy) {
     || policy.splitPolicy?.sourceFrameMayInfluenceSplit !== false
     || policy.splitPolicy?.reassignmentAllowed !== false
     || policy.splitPolicy?.crossSplitMovementAllowed !== false
-    || policy.independencePolicy?.canonicalIndependenceAuditRequired !== true
+    || policy.independencePolicy?.candidateBoundForwardIndependenceRequired !== true
+    || policy.independencePolicy?.executionCalibrationIndependenceMayDefineStrategySplit !== false
     || policy.independencePolicy?.splitAssignmentAfterIndependenceRequired !== true
     || policy.independencePolicy?.dependencyComponentIsSplitAuthority !== true
-    || policy.independencePolicy?.maximumCreditPerDependencyComponent !== 1) {
+    || policy.independencePolicy?.maximumCreditPerDependencyComponent !== 1
+    || policy.independencePolicy?.causalGuardWindowRequired !== true
+    || policy.independencePolicy?.evaluationWindowDerivedFromFrozenTimeframeAndHorizon !== true) {
     add('FAST_PROFITABILITY_SPLIT_POLICY_INVALID');
   }
   if (policy.validationPolicy?.minimumEffectiveIndependentN
