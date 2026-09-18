@@ -25,6 +25,7 @@ async function main(): Promise<void> {
   const targetSha = required('target-sha').toLowerCase();
   const observerStatePath = path.resolve(required('observer-state'));
   const outputDir = path.resolve(required('output-dir'));
+  const keyOutput = path.resolve(required('key-output'));
   const approvalCommentId = required('approval-comment-id');
   const approvalActor = required('approval-actor');
   const approvalCommand = required('approval-command');
@@ -45,7 +46,7 @@ async function main(): Promise<void> {
   verifyFastProfitabilityActivationBundleV1(bundle);
 
   await mkdir(outputDir, { recursive: true, mode: 0o700 });
-  await mkdir(path.join(outputDir, 'private'), { recursive: true, mode: 0o700 });
+  await mkdir(path.dirname(keyOutput), { recursive: true, mode: 0o700 });
   await mkdir(path.join(outputDir, 'fast-state', 'validation'), { recursive: true, mode: 0o700 });
   await mkdir(path.join(outputDir, 'fast-state', 'sealed-oos'), { recursive: true, mode: 0o700 });
 
@@ -53,7 +54,7 @@ async function main(): Promise<void> {
   await writeFile(path.join(outputDir, 'binding.json'), `${JSON.stringify(bundle.binding, null, 2)}\n`, { mode: 0o600 });
   await writeFile(path.join(outputDir, 'policy.json'), `${JSON.stringify(bundle.policy, null, 2)}\n`, { mode: 0o600 });
   await writeFile(path.join(outputDir, 'observer-state.json'), `${JSON.stringify(observerState, null, 2)}\n`, { mode: 0o600 });
-  await writeFile(path.join(outputDir, 'private', 'sealing-key.b64'), `${sealingKey}\n`, { mode: 0o600 });
+  await writeFile(keyOutput, `${sealingKey}\n`, { mode: 0o600 });
 
   const summary = Object.freeze({
     schemaVersion: 1,
