@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { resolveCanonicalStrategyIdentity } from '../../../market-prediction-lab/src/canonical-strategy-identity-v1.js';
 import type { BacktestRequest } from './backtest-engine.service';
 import type { BacktestPaperHandoff } from '../../../packages/strategy-hypothesis/src/backtest-paper-handoff.js';
 import { parseBacktestPaperHandoff } from '../../../packages/strategy-hypothesis/src/backtest-paper-handoff.js';
@@ -26,6 +27,7 @@ type BacktestSource = Readonly<{
   kind: 'BACKTEST'; accountId: string; sourceId: string; sourceSha: string;
   storedAtMs: number; expiresAtMs: number; request: BacktestRequest;
   handoff: BacktestPaperHandoff;
+  strategyIdentityInput: Readonly<Record<string, unknown>>;
 }>;
 type Source = ScannerSource | BacktestSource;
 
@@ -92,7 +94,10 @@ export class ProductPaperSourceRegistry {
       this.put(this.key('SCANNER', accountId, response.requestId, card.signalId), source);
     }
   }
-  captureBacktest(accountId: string, request: BacktestRequest, handoffs: readonly BacktestPaperHandoff[], sourceSha: string): string | null {
+  captureBacktest(
+    accountId: string, request: BacktestRequest, handoffs: readonly BacktestPaperHandoff[], sourceSha: string,
+    strategyIdentityInputs: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {},
+  ): string | null {
     if (!accountId || !SHA.test(sourceSha) || !handoffs.length) return null;
     const nowMs = this.now();
     // Run metadata, not a new candidate namespace. Same candidate on two
@@ -105,9 +110,18 @@ export class ProductPaperSourceRegistry {
       if (handoff.symbol !== request.symbol || handoff.timeframe !== request.timeframe || handoff.leverage !== request.leverage
         || handoff.strategyId !== `BACKTEST_ENGINE:${request.strategy}`
         || (request.side !== 'both' && handoff.side !== (request.side === 'long' ? 'LONG' : 'SHORT'))) continue;
+      const strategyIdentityInput = strategyIdentityInputs[handoff.candidateId];
+      const resolvedIdentity = resolveCanonicalStrategyIdentity(strategyIdentityInput);
+      if (resolvedIdentity.status !== 'IDENTITY_COMPLETE' || !resolvedIdentity.identity) continue;
+      const canonical = resolvedIdentity.identity;
+      if (canonical.strategyId !== handoff.strategyId || canonical.parameterHash !== handoff.parameterHash
+        || canonical.market !== handoff.market || canonical.direction !== handoff.side
+        || canonical.timeframe !== handoff.timeframe || canonical.researchCodeSha !== sourceSha
+        || canonical.costPolicyVersion !== handoff.costPolicyRef || canonical.riskPolicyVersion !== handoff.riskPolicyRef) continue;
       const source: BacktestSource = {
         kind: 'BACKTEST', accountId, sourceId, sourceSha, storedAtMs: nowMs,
         expiresAtMs: nowMs + MAX_SOURCE_AGE_MS, request, handoff,
+        strategyIdentityInput: freeze(structuredClone(strategyIdentityInput)),
       };
       if (this.put(this.key('BACKTEST', accountId, sourceId, handoff.candidateId), source)) count += 1;
     }
