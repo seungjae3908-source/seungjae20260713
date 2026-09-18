@@ -11,10 +11,163 @@ import {
   setTradingPlanMarketIntelligenceRunnerForTests,
 } from '../services/trade-market-intelligence.service';
 import type { TradingPlanInput } from '../services/trade-automation.types';
+import { createScannerPaperPlansRouter } from './scanner-paper-plans';
+import { ProductPaperSourceRegistry } from '../services/product-paper-source-registry.service';
+import type { ScannerResponse, ScannerSignalCard } from '../services/scanner-signal.types';
+import { getScannerStrategyProfile } from '../services/scanner-strategy-profile.service';
 
 const USER = '11111111-1111-1111-1111-111111111111';
 const repository = new InMemoryTradingRepository();
 const MASTER_KEY = Buffer.alloc(32, 9).toString('base64');
+
+function scannerCardFixture({ now, market, symbol, action }: { now: number; market: string; symbol: string; action: 'BUY' | 'LONG' | 'SHORT' }): ScannerSignalCard {
+  const assetClass = market === 'KR' || market === 'US' ? 'stock' : market === 'UPBIT_KRW' ? 'coin_spot' : 'coin_futures';
+  return {
+    signalId: `server-signal-${market}-${action}`, assetClass: assetClass as any, market: market as any, symbol,
+    direction: action === 'BUY' ? 'LONG' : action, action: action as any, strategyMode: 'swing',
+    observedAt: new Date(now).toISOString(), expiresAt: new Date(now + 24 * 60 * 60_000).toISOString(),
+    strongSignalEligible: true, signalState: 'READY_FOR_APPROVAL', dataState: 'complete',
+    dataSources: ['test-only-public-source'], matched: ['trend_alignment'], exchange: null, name: 'test-only',
+    currency: market === 'KR' ? 'KRW' : market === 'US' ? 'USD' : 'USDT', assetType: assetClass as any,
+    listingStatus: 'LISTED', price: 100, changePercent: 1, score: 80, confidence: 80,
+    dataCompleteness: 100, riskScore: 10, riskLevel: 'LOW', liquidity: 10000, volume: 100,
+    tradingValue: 10000, spreadPercent: 0.1, volatilityPercent: 1, notMatched: [], unverified: [],
+    evidence: [], warnings: [], pricePlan: { entryZone: { from: 99, to: 101 }, invalidation: 95, stopLoss: 95, targets: [110], riskReward: 2 },
+  } as ScannerSignalCard;
+}
+
+async function startScannerPlanServer(dependencies: Parameters<typeof createScannerPaperPlansRouter>[0]) {
+  const app = express();
+  app.use(express.json({ limit: '32kb' }));
+  app.use((req, _res, next) => {
+    const row = req as AuthenticatedRequest;
+    row.member = { id: USER, login_name: 'test', display_name: 'test', role: 'admin', membership_level: 'admin', status: 'approved', is_active: true };
+    next();
+  });
+  app.use('/api/trade-automation', createScannerPaperPlansRouter(dependencies));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>(resolve => server.once('listening', resolve));
+  return { server, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/trade-automation/scanner/plans` };
+}
+
+test('actual Scanner HTTP route remains fail-closed when the server-owned Paper evidence owner is absent', async () => {
+  const now = Date.UTC(2026, 8, 17);
+  const sha = 'a'.repeat(40);
+  const registry = new ProductPaperSourceRegistry(() => now);
+  const timeframe = getScannerStrategyProfile('KR_STOCK', 'SWING').primaryTimeframe;
+  const card = scannerCardFixture({ now, market: 'KR', symbol: '005930', action: 'BUY' });
+  registry.captureScanner(USER, { requestId: 'server-run', timeframe, cards: [card], execution: { cancelled: false } } as ScannerResponse, sha);
+  const { server, url } = await startScannerPlanServer({ registry, sourceSha: () => sha, now: () => now });
+  const valid = { mode: 'approval', accountMode: 'paper', adapter: 'paper', market: 'KR', symbol: '005930',
+    timeframe, side: 'BUY', searchRunId: 'server-run', signalId: card.signalId };
+  try {
+    const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(valid) });
+    assert.equal(response.status, 503);
+    const payload = await response.json() as Record<string, any>;
+    assert.equal(payload.serverVerified, true);
+    assert.equal(payload.ok, false); assert.equal(payload.executionConnected, false);
+    assert.equal(payload.error, 'SERVER_OWNED_SCANNER_PAPER_EVIDENCE_REQUIRED');
+    assert.equal(payload.plan, undefined); assert.equal(payload.position, undefined);
+    assert.equal(payload.orderSubmitted, false); assert.equal(payload.exchangeRequestSent, false);
+    assert.equal(payload.privateTradingApiAllowed, false); assert.equal(payload.evidenceCredit, 0);
+    for (const change of [{ side: undefined }, { accountMode: 'live' }, { canonicalEvidence: { genuine: true } }, { profitGate: { decision: 'ELIGIBLE' } }, { leverage: 3 }, { symbol: '000660' }]) {
+      const rejected = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...valid, ...change }) });
+      assert.ok(rejected.status >= 400 && rejected.status < 500);
+      const rejectedPayload = await rejected.json() as Record<string, any>;
+      assert.equal(rejectedPayload.orderSubmitted, false);
+      assert.equal(rejectedPayload.exchangeRequestSent, false);
+    }
+  } finally { await close(server); }
+});
+
+test('Scanner canonical Paper consumer preserves exact identity across all four market aliases and creates zero live/economic authority', async () => {
+  const now = Date.UTC(2026, 8, 17);
+  const sha = 'b'.repeat(40);
+  const cases = [
+    { requestMarket: 'KR', canonicalMarket: 'KR_STOCK', cardMarket: 'KR', symbol: '005930', action: 'BUY' },
+    { requestMarket: 'US', canonicalMarket: 'US_STOCK', cardMarket: 'US', symbol: 'AAPL', action: 'BUY' },
+    { requestMarket: 'UPBIT', canonicalMarket: 'CRYPTO_SPOT', cardMarket: 'UPBIT_KRW', symbol: 'KRW-BTC', action: 'BUY' },
+    { requestMarket: 'BITGET', canonicalMarket: 'CRYPTO_FUTURES', cardMarket: 'BITGET_USDT_FUTURES', symbol: 'BTCUSDT', action: 'SHORT' },
+  ] as const;
+  for (const item of cases) {
+    const registry = new ProductPaperSourceRegistry(() => now);
+    const timeframe = getScannerStrategyProfile(item.canonicalMarket, 'SWING').primaryTimeframe;
+    const card = scannerCardFixture({ now, market: item.cardMarket, symbol: item.symbol, action: item.action });
+    const runId = `server-run-${item.requestMarket}`;
+    registry.captureScanner(USER, { requestId: runId, timeframe, cards: [card], execution: { cancelled: false } } as ScannerResponse, sha);
+    let sourceCandidate: any = null;
+    let cycleCandidate: any = null;
+    const { server, url } = await startScannerPlanServer({
+      registry,
+      sourceSha: () => sha,
+      now: () => now,
+      ownerSource: async ({ paperCandidate }) => {
+        sourceCandidate = paperCandidate;
+        return {
+          admissionBundle: { schemaVersion: 'scanner-paper-admission-evidence-bundle-v1' } as any,
+          profitGate: { decision: 'ELIGIBLE', eligible: true, reasons: [], executionAuthority: 'NONE' },
+          profitEvidence: { status: 'READY', expectedNetEdge: 0.01, expectedNetReturn: 0.01, riskRewardRatio: 2, sampleSize: 30,
+            costPolicyId: paperCandidate.signal.strategyIdentity.costPolicyVersion, executionAuthority: 'NONE' },
+          state: { owner: 'server' }, cycle: { owner: 'server' }, ledgerAdapter: { owner: 'server' },
+          learningAdapter: { owner: 'server' }, stateStore: { owner: 'server' },
+          simulatedOnly: true, executionAuthority: 'NONE', liveOrderAllowed: false, privateTradingApiAllowed: false,
+          productionMutationAllowed: false, naturalSampleCredit: 0,
+        } as any;
+      },
+      resolveAdmission: ({ bundle }: any) => {
+        assert.equal(bundle.schemaVersion, 'scanner-paper-admission-evidence-bundle-v1');
+        return { status: 'BRIDGE_READY', blockers: [], candidate: sourceCandidate, evidenceDigest: '1'.repeat(64) } as any;
+      },
+      resolveSimulation: ({ candidate }: any) => ({
+        schemaVersion: 'canonical-paper-simulation-authority-v1', status: 'READY', blockers: [],
+        marketAdapterIdentity: { market: candidate.signal.market }, executionPolicy: { version: 'public-evidence-simulated-paper-v1' },
+        orderPolicy: { version: 'public-evidence-simulated-market-order-v1' },
+        execution: { dataEvidence: { dataQuality: 'READY', ...(candidate.signal.market === 'CRYPTO_FUTURES' ? { leverage: 3 } : {}) },
+          costPolicy: { version: candidate.signal.strategyIdentity.costPolicyVersion } },
+        order: { type: 'MARKET', direction: candidate.signal.direction, quantity: 1 },
+        quote: { bid: 99, ask: 100 }, executionAuthority: 'NONE', simulatedOnly: true, liveOrderAllowed: false,
+        privateTradingApiAllowed: false, orderSubmitted: false, exchangeRequestSent: false, productionMutationAllowed: false,
+      }) as any,
+      runCycle: async (input: any) => {
+        cycleCandidate = input.candidates[0];
+        const sample = {
+          paperSampleId: `sample-${item.requestMarket}`, status: 'OPEN',
+          identity: { candidateId: cycleCandidate.candidateId, signalId: cycleCandidate.signal.signalId },
+          fill: { filledQuantity: 1, fillPrice: 100, notional: 100 },
+        };
+        const position = {
+          positionId: `position-${item.requestMarket}`, candidateId: cycleCandidate.candidateId,
+          signalId: cycleCandidate.signal.signalId, market: cycleCandidate.signal.market, symbol: cycleCandidate.signal.symbol,
+          direction: cycleCandidate.signal.direction, quantity: 1, entryFillPrice: 100, lifecycleState: 'OPEN',
+        };
+        return { state: { samples: [sample], positions: [position] }, summary: { entries: 1, replayed: false } } as any;
+      },
+    });
+    try {
+      const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+        mode: 'approval', accountMode: 'paper', adapter: 'paper', market: item.requestMarket, symbol: item.symbol,
+        timeframe, side: item.action, searchRunId: runId, signalId: card.signalId,
+      }) });
+      const body = await response.json() as Record<string, any>;
+      assert.equal(response.status, 200, JSON.stringify(body));
+      assert.equal(body.ok, true); assert.equal(body.serverVerified, true); assert.equal(body.executionConnected, true);
+      assert.equal(body.plan.candidateId, sourceCandidate.candidateId);
+      assert.equal(body.plan.market, item.canonicalMarket); assert.equal(body.plan.side, item.action);
+      assert.equal(body.plan.leverage, item.canonicalMarket === 'CRYPTO_FUTURES' ? 3 : null);
+      assert.equal(body.plan.leverageProvenance, item.canonicalMarket === 'CRYPTO_FUTURES'
+        ? 'CANONICAL_SIMULATION_DATA_EVIDENCE' : 'NOT_APPLICABLE_CASH_OR_SPOT');
+      assert.equal(cycleCandidate.leverage, body.plan.leverage);
+      assert.equal(body.position.candidateId, sourceCandidate.candidateId);
+      assert.equal(cycleCandidate.signal.strategyIdentity.parameterHash, sourceCandidate.signal.strategyIdentity.parameterHash);
+      assert.equal(cycleCandidate.signal.strategyIdentity.researchCodeSha, sha);
+      assert.equal(cycleCandidate.sampleExecutionReady, true);
+      assert.equal(body.orderSubmitted, false); assert.equal(body.exchangeRequestSent, false);
+      assert.equal(body.privateTradingApiAllowed, false); assert.equal(body.liveOrderEnabled, false);
+      assert.equal(body.naturalSampleCredit, 0); assert.equal(body.evidenceCredit, 0);
+      assert.equal(body.profitabilityClaimAllowed, false);
+    } finally { await close(server); }
+  }
+});
 
 async function unavailableMarketIntelligence(
   input: Pick<TradingPlanInput, 'exchange' | 'market' | 'symbol'>,

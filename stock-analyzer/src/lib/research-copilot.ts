@@ -1,6 +1,8 @@
 import { authorizedFetch } from './auth-fetch';
 import type { CopilotSnapshot, CopilotReview, CopilotTask, DslValidation } from '../../../api-server/src/services/research-copilot.contract';
 import type { ResearchBundleResolution } from '../../../api-server/src/services/research-bundle.contract';
+import type { ResearchSameCandidatePrewireResult } from '../../../api-server/src/services/research-same-candidate-prewire.service';
+import { validResearchSameCandidate } from './research-same-candidate';
 export type { CopilotSnapshot, CopilotReview, CopilotTask, DslValidation };
 export type { ResearchBundleResolution };
 
@@ -51,6 +53,12 @@ export function submitResearchBacktest(dsl: unknown, bundle: ResearchBundleResol
   return request('/submit-backtest', { method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ dsl, bundleDigest: bundle.bundleDigest, strategyIdentityDigest: bundle.strategyIdentityDigest }) },
     value => validBundle(value) && (!record(value).backtestCompleted || validReceipt(record(value)) && matchesBundle(value, bundle)));
+}
+
+export function readResearchSameCandidate(dsl: unknown, bundle: ResearchBundleResolution, signal?: AbortSignal): Promise<ResearchSameCandidatePrewireResult> {
+  return request('/prewire-same-candidate', { method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ researchReadback: { dsl, bundleDigest: bundle.bundleDigest, strategyIdentityDigest: bundle.strategyIdentityDigest, resultArtifactDigest: bundle.resultArtifactDigest } }) },
+    value => validResearchSameCandidate(value, bundle));
 }
 
 async function request<T>(path: string, init: RequestInit, validate: (value: unknown) => boolean): Promise<T> {
