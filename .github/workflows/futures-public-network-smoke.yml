@@ -216,8 +216,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p .ci
-          printf '%s\n' "${APPLICATION_STATUS_SHA,,}" > .ci/application-build-sha
+          mkdir -p ci-artifacts
+          printf '%s\n' "${APPLICATION_STATUS_SHA,,}" > ci-artifacts/application-build-sha
           test -d stock-analyzer/dist
           test -d api-server/dist
       - name: Upload immutable exact-SHA application build
@@ -225,7 +225,7 @@ jobs:
         with:
           name: application-build-${{ env.APPLICATION_STATUS_SHA }}
           path: |
-            .ci/application-build-sha
+            ci-artifacts/application-build-sha
             stock-analyzer/dist
             api-server/dist
           if-no-files-found: error
@@ -241,11 +241,6 @@ jobs:
       matrix:
         mode: [phase2, risk, phase4, phase5, phase6, phase7, phase8, phase9, phase12, smoke]
     steps:
-      - name: Require reusable build producer
-        if: needs.application-build.result != 'success'
-        run: |
-          echo '[APPLICATION_BUILD_UNAVAILABLE]' >&2
-          exit 1
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -321,7 +316,12 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install workspace dependencies with frozen lockfile
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-chromium-1.61.1-${{ hashFiles('pnpm-lock.yaml') }}
       - name: Install Playwright Chromium
         run: pnpm --dir stock-analyzer exec playwright install chromium
       - name: Run Playwright desktop and mobile tests
@@ -465,7 +465,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install workspace dependencies with frozen lockfile
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --prefer-offline
       - name: Run Phase 8 security and load tests
         run: pnpm --dir api-server run test:phase8
       - name: Download immutable exact-SHA application build
@@ -477,7 +477,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$(cat .ci/application-build-sha)" == "${APPLICATION_STATUS_SHA,,}" ]] || { echo '[BUILD_SHA_MISMATCH]' >&2; exit 1; }
+          [[ "$(cat ci-artifacts/application-build-sha)" == "${APPLICATION_STATUS_SHA,,}" ]] || { echo '[BUILD_SHA_MISMATCH]' >&2; exit 1; }
           test -d stock-analyzer/dist
       - name: Scan source and production bundle
         id: security
@@ -529,7 +529,7 @@ jobs:
         with: { version: 9, run_install: false }
       - uses: actions/setup-node@v4
         with: { node-version: "20", cache: pnpm, cache-dependency-path: pnpm-lock.yaml }
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --prefer-offline
       - name: Run guarded mock provider and zero-outbound privacy tests
         run: pnpm --dir api-server run test:phase9
       - name: Download immutable exact-SHA application build
@@ -541,7 +541,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$(cat .ci/application-build-sha)" == "${APPLICATION_STATUS_SHA,,}" ]] || { echo '[BUILD_SHA_MISMATCH]' >&2; exit 1; }
+          [[ "$(cat ci-artifacts/application-build-sha)" == "${APPLICATION_STATUS_SHA,,}" ]] || { echo '[BUILD_SHA_MISMATCH]' >&2; exit 1; }
           test -d stock-analyzer/dist
       - name: Verify AI privacy and zero outbound contract
         id: ai
@@ -596,7 +596,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install workspace dependencies with frozen lockfile
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --prefer-offline
       - name: Run real Bitget public network smoke
         id: network
         continue-on-error: true
