@@ -6,11 +6,17 @@ import type { BacktestRequest } from './backtest-engine.service';
 import type { NormalizedCandle } from './futures-market-data.service';
 import { sanitizeClosedCandles } from './backtest-indicators.service';
 
+export type BacktestPaperCanonicalStrategyInput = Readonly<Record<string, unknown>>;
+export type BacktestPaperHandoffBundle = Readonly<{
+  handoffs: readonly BacktestPaperHandoff[];
+  strategyIdentityInputs: Readonly<Record<string, BacktestPaperCanonicalStrategyInput>>;
+}>;
+
 // All references describe the accepted server request, never the currently edited UI form.
 // Historical/manual references grant no Natural Paper, profitability or execution credit.
-export function buildBacktestPaperHandoffs(
+export function buildBacktestPaperHandoffBundle(
   request: BacktestRequest, candles: readonly NormalizedCandle[], researchCodeSha: string,
-): readonly BacktestPaperHandoff[] {
+): BacktestPaperHandoffBundle {
   const exitPolicy = {
     stopLossMode: request.stopLossMode, stopLossValue: request.stopLossValue,
     takeProfitMode: request.takeProfitMode, takeProfitValue: request.takeProfitValue,
@@ -47,8 +53,9 @@ export function buildBacktestPaperHandoffs(
   })));
   const sides: readonly ('LONG' | 'SHORT')[] = request.side === 'both' ? ['LONG', 'SHORT']
     : request.side === 'long' ? ['LONG'] : ['SHORT'];
-  return Object.freeze(sides.map((side) => {
-    const resolution = resolveCanonicalStrategyIdentity({
+  const strategyIdentityInputs: Record<string, BacktestPaperCanonicalStrategyInput> = {};
+  const handoffs = Object.freeze(sides.map((side) => {
+    const strategyIdentityInput = Object.freeze({
       strategyId, strategyFamily: 'BACKTEST_ENGINE', strategyVersion: 'phase5-backtest-v1',
       market: 'CRYPTO_FUTURES', direction: side, timeframe: request.timeframe, parameterHash,
       researchCodeSha, formulaIdentity: { strategy: request.strategy, parameters: request.parameters },
@@ -57,6 +64,7 @@ export function buildBacktestPaperHandoffs(
       costPolicyVersion: costPolicyRef, riskPolicyVersion: riskPolicyRef,
       evidenceSchemaVersion: BACKTEST_PAPER_HANDOFF_VERSION,
     });
+    const resolution = resolveCanonicalStrategyIdentity(strategyIdentityInput);
     const datasetMatches = consumedCandles.length > 0 && consumedCandles.every((candle) => candle.symbol === request.symbol
       && candle.timeframe === request.timeframe && candle.market === request.market);
     const candidateId = datasetMatches && resolution.status === 'IDENTITY_COMPLETE' ? strategyCandidateId({
@@ -65,6 +73,9 @@ export function buildBacktestPaperHandoffs(
       timeframe: request.timeframe, strategyHorizon: null, direction: side, researchCodeSha,
       costPolicyVersion: costPolicyRef, riskPolicyVersion: riskPolicyRef,
     }) : null;
+    if (candidateId && resolution.status === 'IDENTITY_COMPLETE') {
+      strategyIdentityInputs[candidateId] = strategyIdentityInput;
+    }
     return Object.freeze({
       schemaVersion: BACKTEST_PAPER_HANDOFF_VERSION, source: 'backtest-result' as const, status: 'REFERENCE_ONLY' as const,
       candidateId, strategyId, parameterHash, market: 'CRYPTO_FUTURES' as const, symbol: request.symbol,
@@ -72,10 +83,17 @@ export function buildBacktestPaperHandoffs(
       blockers: Object.freeze([
         ...resolution.blockers, ...resolution.missingFields.map((field) => `MISSING:${field}`),
         ...(datasetMatches ? [] : ['BACKTEST_DATASET_IDENTITY_MISMATCH']),
-        'CANONICAL_STRATEGY_PAPER_CONSUMER_UNAVAILABLE', 'NATURAL_PAPER_EVIDENCE_NOT_PROVEN',
+        'NATURAL_PAPER_EVIDENCE_NOT_PROVEN',
       ]),
       executionAuthority: 'NONE' as const, evidenceCredit: 0 as const, orderSubmitted: false as const,
       privateTradingApiAllowed: false as const,
     });
   }));
+  return Object.freeze({ handoffs, strategyIdentityInputs: Object.freeze(strategyIdentityInputs) });
+}
+
+export function buildBacktestPaperHandoffs(
+  request: BacktestRequest, candles: readonly NormalizedCandle[], researchCodeSha: string,
+): readonly BacktestPaperHandoff[] {
+  return buildBacktestPaperHandoffBundle(request, candles, researchCodeSha).handoffs;
 }
