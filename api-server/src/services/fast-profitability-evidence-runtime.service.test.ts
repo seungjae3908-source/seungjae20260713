@@ -612,30 +612,23 @@ test('readiness comes from durable Validation/OOS stores and cannot reveal OOS b
     let validationCursor = 1000;
     let sealedCursor = 1000;
     for (let index = 0; index < 30; index += 1) {
-      const validation = allocationForSplit(p, 'VALIDATION', validationCursor);
+      const outcomeClass = ['TP', 'SL', 'EXPIRED'][index % 3] as 'TP' | 'SL' | 'EXPIRED';
+      const validation = allocationForSplit(p, 'VALIDATION', validationCursor, outcomeClass);
       validationCursor += 100;
       await store.recordValidation({
         policy: p,
         allocation: validation.allocation,
-        evidence: {
-          outcomeClass: ['TP', 'SL', 'EXPIRED'][index % 3] as 'TP' | 'SL' | 'EXPIRED',
-          observedAtMs: validation.allocation.observedAtMs,
-          evidence: { result: `validation:${index}` },
-        },
-        recordedAtMs: validation.allocation.observedAtMs + 1,
+        evidence: validation.economic,
+        recordedAtMs: validation.economic.observedAtMs + 1,
       });
 
-      const sealed = allocationForSplit(p, 'SEALED_OOS', sealedCursor);
+      const sealed = allocationForSplit(p, 'SEALED_OOS', sealedCursor, outcomeClass);
       sealedCursor += 100;
       await store.recordSealedOos({
         policy: p,
         allocation: sealed.allocation,
-        evidence: {
-          outcomeClass: ['TP', 'SL', 'EXPIRED'][index % 3] as 'TP' | 'SL' | 'EXPIRED',
-          observedAtMs: sealed.allocation.observedAtMs,
-          evidence: { result: `sealed:${index}` },
-        },
-        recordedAtMs: sealed.allocation.observedAtMs + 1,
+        evidence: sealed.economic,
+        recordedAtMs: sealed.economic.observedAtMs + 1,
       });
     }
 
