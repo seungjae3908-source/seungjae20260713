@@ -199,7 +199,7 @@ check('malformed, mixed, unavailable and ambiguous states fail before restart', 
   }
 });
 check('disable during deployment cannot be undone by final cutover or rollback', () => {
-  const disable = `command node -e 'require("node:fs").writeFileSync(process.env.PM2_FIXTURE, JSON.stringify(${JSON.stringify(state('false', 'false'))}))'`;
+  const disable = `command node -e 'const fs=require("node:fs");const rows=JSON.parse(fs.readFileSync(process.env.PM2_FIXTURE,"utf8"));rows[0].pm2_env.LIVE_TELEGRAM_ACTIVATION_APPROVED="false";rows[0].pm2_env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED="false";fs.writeFileSync(process.env.PM2_FIXTURE,JSON.stringify(rows))'`;
   for (const failTarget of [false, true]) {
     const result = run(promotion, { rows: state('true', 'true'), before: disable, failTarget });
     assert.equal(result.status, failTarget ? 13 : 0, result.stderr);
