@@ -169,6 +169,9 @@ export function createPaperTradingRouter(
     try {
       const state = req.body.state as PaperTradingState;
       let action = req.body.action as PaperTradingAction;
+      if (action.type === 'place_order' && action.request.backtestCandidate) {
+        throw new ProductPaperSourceError('CLIENT_BACKTEST_PAPER_AUTHORITY_FORBIDDEN', 400);
+      }
       const authenticatedAccountId = req.member?.id ?? '';
       let backtestCandidate: PaperBacktestCandidateIdentity | undefined;
       const backtestRequested = req.body.backtestCandidate !== undefined || req.body.backtestRunId !== undefined;
@@ -176,7 +179,7 @@ export function createPaperTradingRouter(
         if (action.type !== 'place_order') {
           throw new ProductPaperSourceError('BACKTEST_PAPER_PLACE_ORDER_REQUIRED', 400);
         }
-        if (action.request.canonicalIdentity || action.request.backtestCandidate) {
+        if (action.request.canonicalIdentity) {
           throw new ProductPaperSourceError('CLIENT_BACKTEST_PAPER_AUTHORITY_FORBIDDEN', 400);
         }
         const source = sourceRegistry.resolveBacktest(authenticatedAccountId, {
