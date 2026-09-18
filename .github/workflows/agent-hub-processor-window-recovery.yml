@@ -10,6 +10,8 @@ on:
       - scripts/test_agent_hub_stale_report_train_evidence_pair_v1.py
       - scripts/agent_hub_legacy_control_reconciliation_v2.py
       - scripts/test_agent_hub_legacy_control_reconciliation_v2.py
+      - scripts/agent_hub_legacy_compact_train_reconciliation_v1.py
+      - scripts/test_agent_hub_legacy_compact_train_reconciliation_v1.py
       - .github/workflows/agent-hub-processor-window-recovery.yml
   issue_comment:
     types: [created]
@@ -65,6 +67,8 @@ jobs:
           scripts/test_agent_hub_stale_report_train_evidence_pair_v1.py
           scripts/agent_hub_legacy_control_reconciliation_v2.py
           scripts/test_agent_hub_legacy_control_reconciliation_v2.py
+          scripts/agent_hub_legacy_compact_train_reconciliation_v1.py
+          scripts/test_agent_hub_legacy_compact_train_reconciliation_v1.py
       - name: Run fail-closed recovery tests
         run: >-
           python -m unittest
@@ -72,6 +76,7 @@ jobs:
           scripts.test_agent_hub_stale_report_reconciliation_v1
           scripts.test_agent_hub_stale_report_train_evidence_pair_v1
           scripts.test_agent_hub_legacy_control_reconciliation_v2
+          scripts.test_agent_hub_legacy_compact_train_reconciliation_v1
           -v
 
   dispatch-owner-comment:
@@ -125,6 +130,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Reconcile compact historical TRAIN checkpoints
+        if: env.RECOVERY_APPLY == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/agent_hub_legacy_compact_train_reconciliation_v1.py \
+            --source-issue "$RECOVERY_SOURCE_ISSUE" \
+            --confirmation "$RECOVERY_CONFIRMATION" \
+            --apply
       - name: Reconcile strict historical control-only reports
         if: env.RECOVERY_APPLY == 'true'
         shell: bash
