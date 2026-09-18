@@ -479,32 +479,23 @@ test('reuses #1096 only when its receipt is cryptographically bound to the Fast 
     let sealedCursor = 500;
     let targetSealed: ReturnType<typeof allocationForSplit> | null = null;
     for (let index = 0; index < 30; index += 1) {
-      const validation = allocationForSplit(p, 'VALIDATION', validationCursor);
+      const outcomeClass = ['TP', 'SL', 'EXPIRED'][index % 3] as 'TP' | 'SL' | 'EXPIRED';
+      const validation = allocationForSplit(p, 'VALIDATION', validationCursor, outcomeClass);
       validationCursor += 100;
       await store.recordValidation({
         policy: p,
         allocation: validation.allocation,
-        evidence: {
-          outcomeClass: ['TP', 'SL', 'EXPIRED'][index % 3] as 'TP' | 'SL' | 'EXPIRED',
-          observedAtMs: validation.allocation.observedAtMs,
-          evidence: { result: `validation-receipt:${index}` },
-        },
-        recordedAtMs: validation.allocation.observedAtMs + 1,
+        evidence: validation.economic,
+        recordedAtMs: validation.economic.observedAtMs + 1,
       });
 
-      const sealed = allocationForSplit(p, 'SEALED_OOS', sealedCursor);
+      const sealed = allocationForSplit(p, 'SEALED_OOS', sealedCursor, outcomeClass);
       sealedCursor += 100;
       await store.recordSealedOos({
         policy: p,
         allocation: sealed.allocation,
-        evidence: {
-          outcomeClass: index === 0 ? 'TP' : ['TP', 'SL', 'EXPIRED'][index % 3] as 'TP' | 'SL' | 'EXPIRED',
-          observedAtMs: sealed.allocation.observedAtMs,
-          evidence: index === 0
-            ? { netPnl: 4.25, source: 'sealed-oos-genuine' }
-            : { result: `sealed-receipt:${index}` },
-        },
-        recordedAtMs: sealed.allocation.observedAtMs + 1,
+        evidence: sealed.economic,
+        recordedAtMs: sealed.economic.observedAtMs + 1,
       });
       if (index === 0) targetSealed = sealed;
     }
@@ -516,35 +507,6 @@ test('reuses #1096 only when its receipt is cryptographically bound to the Fast 
     const fastEvidence = await store.buildValidationEvidence(p, manualIdentity);
     assert.equal(fastEvidence.sampleSize, 30);
     assert.equal(fastEvidence.minimumSampleSize, 30);
-
-    const foreignIssueReceipt = createFastProfitabilityValidationReceiptBridge({
-      receiptRoot: path.join(root, 'foreign-receipts'),
-      maximumAgeMs: 60_000,
-      readValidationEvidence: async () => Object.freeze({
-        ...fastEvidence,
-        datasetDigest: '4'.repeat(64),
-        resultArtifactDigest: '5'.repeat(64),
-      }),
-    });
-    const foreignReceipt = await foreignIssueReceipt({
-      policy: p,
-      identity: manualIdentity,
-      nowMs: fastEvidence.observedAtMs + 1,
-    });
-    const foreignSummary = await store.summarize(p, foreignReceipt);
-    assert.equal(foreignSummary.validationReady, false);
-    assert.equal(foreignSummary.sealedOosRevealAllowed, false);
-    await assert.rejects(
-      () => store.revealSealedOos({
-        policy: p,
-        allocationDigest: targetSealed!.allocation.allocationDigest,
-        identity: manualIdentity,
-        receipt: foreignReceipt.receipt,
-        verification: foreignReceipt.verification,
-        nowMs: fastEvidence.observedAtMs + 2,
-      }),
-      /FAST_PROFITABILITY_VALIDATION_RECEIPT_STORE_BINDING_MISMATCH/,
-    );
 
     const issueReceipt = createFastProfitabilityValidationReceiptBridge({
       receiptRoot: path.join(root, 'receipts'),
@@ -563,6 +525,33 @@ test('reuses #1096 only when its receipt is cryptographically bound to the Fast 
     assert.equal(receipt.receipt.datasetDigest, fastEvidence.datasetDigest);
     assert.equal(receipt.receipt.resultArtifactDigest, fastEvidence.resultArtifactDigest);
 
+    const foreignReceipt = {
+      ...structuredClone(receipt.receipt),
+      datasetDigest: '4'.repeat(64),
+    };
+    const foreignVerification = {
+      ...receipt.verification,
+      receiptSha256: manualPaperEvidenceSha256(foreignReceipt),
+    };
+    const foreignEnvelope = {
+      receipt: foreignReceipt,
+      verification: foreignVerification,
+    };
+    const foreignSummary = await store.summarize(p, foreignEnvelope);
+    assert.equal(foreignSummary.validationReady, false);
+    assert.equal(foreignSummary.sealedOosRevealAllowed, false);
+    await assert.rejects(
+      () => store.revealSealedOos({
+        policy: p,
+        allocationDigest: targetSealed!.allocation.allocationDigest,
+        identity: manualIdentity,
+        receipt: foreignReceipt,
+        verification: foreignVerification,
+        nowMs: fastEvidence.observedAtMs + 2,
+      }),
+      /FAST_PROFITABILITY_VALIDATION_RECEIPT_STORE_BINDING_MISMATCH/,
+    );
+
     const readySummary = await store.summarize(p, receipt);
     assert.equal(readySummary.validationReady, true);
     assert.equal(readySummary.sealedOosMinimumReached, true);
@@ -576,8 +565,13 @@ test('reuses #1096 only when its receipt is cryptographically bound to the Fast 
       verification: receipt.verification,
       nowMs: fastEvidence.observedAtMs + 2,
     });
+    assert.equal(revealed.sourceClass, FAST_PROFITABILITY_FORWARD_EVIDENCE_CLASS);
+    assert.equal(revealed.sourceObservationId, targetSealed!.observation.observationId);
     assert.equal(revealed.outcomeClass, 'TP');
-    assert.deepEqual(revealed.evidence, { netPnl: 4.25, source: 'sealed-oos-genuine' });
+    assert.equal(
+      (revealed.evidence as ForwardRecommendationObservation).outcome?.outcome,
+      'WIN',
+    );
 
     const invalidVerification = {
       ...receipt.verification,
