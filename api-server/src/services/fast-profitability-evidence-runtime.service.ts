@@ -98,6 +98,7 @@ export type FastProfitabilityAllocation = Readonly<{
   publicEventIdentity: string;
   sourceFrameIdentity: string;
   dependencyComponentId: string;
+  independenceAuditDigest: string;
   observedAtMs: number;
   outcomeConsulted: false;
   reassignmentAllowed: false;
@@ -112,6 +113,7 @@ export type CanonicalIndependenceAudit = Readonly<{
     sourceFrameIdentity: string;
     dependencyComponentId: string;
   }>[];
+  auditDigest: string;
   dependencyComponents: readonly Readonly<{
     dependencyComponentId: string;
     representativeObservationId: string;
@@ -345,6 +347,9 @@ function normalizeIndependenceAudit(value: unknown): CanonicalIndependenceAudit 
   if (audit.schemaVersion !== CANONICAL_INDEPENDENCE_AUDIT_VERSION) {
     throw new Error('FAST_PROFITABILITY_INDEPENDENCE_AUDIT_VERSION_INVALID');
   }
+  if (!SHA256.test(String(audit.auditDigest ?? ''))) {
+    throw new Error('FAST_PROFITABILITY_INDEPENDENCE_AUDIT_DIGEST_INVALID');
+  }
   if (!Array.isArray(audit.independentObservationRefs)
     || !Array.isArray(audit.dependencyComponents)) {
     throw new Error('FAST_PROFITABILITY_INDEPENDENCE_AUDIT_INCOMPLETE');
@@ -386,8 +391,11 @@ export function routeFastProfitabilityCanonicalIndependentObservation(input: Rea
     independenceStatus: 'PROVEN',
     dependencyComponentCredit: 1,
     observedAtMs: component.representativeEventTimestampMs,
+  }) as Omit<FastProfitabilityAllocation, 'independenceAuditDigest'>;
+  return Object.freeze({
+    ...allocation,
+    independenceAuditDigest: audit.auditDigest,
   }) as FastProfitabilityAllocation;
-  return Object.freeze({ ...allocation });
 }
 
 function storeDirectory(
@@ -427,12 +435,25 @@ function assertAllocation(policy: FastProfitabilityPolicy, allocation: FastProfi
   if (allocation.policyDigest !== policy.policyDigest
     || allocation.candidateDigest !== policy.candidateDigest
     || !SHA256.test(allocation.allocationDigest)
-    || !SHA256.test(allocation.dependencyComponentId.replace(/^dependency-component:/u, ''))
-      && !nonEmpty(allocation.dependencyComponentId)
+    || !SHA256.test(allocation.independenceAuditDigest)
+    || !nonEmpty(allocation.dependencyComponentId)
     || allocation.outcomeConsulted !== false
     || allocation.reassignmentAllowed !== false
     || allocation.profitabilityCredit !== 0) {
     throw new Error('FAST_PROFITABILITY_ALLOCATION_INVALID');
+  }
+  const recomputed = allocateFastProfitabilitySplit(policy, {
+    publicEventIdentity: allocation.publicEventIdentity,
+    sourceFrameIdentity: allocation.sourceFrameIdentity,
+    dependencyComponentId: allocation.dependencyComponentId,
+    independenceStatus: 'PROVEN',
+    dependencyComponentCredit: 1,
+    observedAtMs: allocation.observedAtMs,
+  }) as Omit<FastProfitabilityAllocation, 'independenceAuditDigest'>;
+  if (recomputed.split !== allocation.split
+    || recomputed.bucket !== allocation.bucket
+    || recomputed.allocationDigest !== allocation.allocationDigest) {
+    throw new Error('FAST_PROFITABILITY_ALLOCATION_RECOMPUTE_MISMATCH');
   }
 }
 
