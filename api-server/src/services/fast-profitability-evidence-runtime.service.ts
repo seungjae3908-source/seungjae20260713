@@ -36,12 +36,14 @@ import {
   type ManualPaperCanonicalValidationReceipt,
 } from './manual-paper-canonical-contract.service';
 import {
-  createForwardObserverArtifactValidationEvidenceReader,
   createForwardObserverValidationReceiptOwner,
   type ForwardObserverValidationEvidence,
-  type ForwardObserverValidationEvidenceReader,
   type ForwardObserverValidationReceiptReadback,
 } from './forward-observer-validation-receipt-owner.service';
+import {
+  forwardObservationIdentityKey,
+  type ForwardRecommendationObservation,
+} from './forward-recommendation-observer.service';
 
 export const FAST_PROFITABILITY_RUNTIME_V1 = 'fast-profitability-evidence-runtime-v1' as const;
 export const FAST_PROFITABILITY_VALIDATION_RECORD_V1 =
@@ -51,6 +53,12 @@ export const FAST_PROFITABILITY_SEALED_OOS_RECORD_V1 =
 export const FAST_PROFITABILITY_SEALED_OOS_CIPHER_V1 = 'AES_256_GCM_V1' as const;
 export const CANONICAL_INDEPENDENCE_AUDIT_VERSION =
   'public-forward-liquidity-independence-audit-v1' as const;
+export const FAST_PROFITABILITY_FORWARD_INDEPENDENCE_V1 =
+  'fast-profitability-forward-independence-v1' as const;
+export const FAST_PROFITABILITY_FORWARD_EVIDENCE_CLASS =
+  'CANDIDATE_FORWARD_PERFORMANCE' as const;
+export const FAST_PROFITABILITY_EXECUTION_CALIBRATION_CLASS =
+  'EXECUTION_CALIBRATION_ONLY' as const;
 
 const SHA256 = /^[0-9a-f]{64}$/u;
 const PAPER_CANDIDATE = /^paper-candidate-v1:[0-9a-f]{64}$/u;
@@ -96,6 +104,7 @@ export type FastProfitabilityPolicy = Readonly<{
     market: string;
     symbol: string;
     timeframe: string;
+    horizon: number;
     side: string;
     riskPolicyRef: string;
     costPolicyRef: string;
@@ -111,6 +120,9 @@ export type FastProfitabilityPolicy = Readonly<{
 }> & AnyRecord;
 
 export type FastProfitabilityAllocation = Readonly<{
+  evidenceClass:
+    | typeof FAST_PROFITABILITY_FORWARD_EVIDENCE_CLASS
+    | typeof FAST_PROFITABILITY_EXECUTION_CALIBRATION_CLASS;
   split: 'VALIDATION' | 'SEALED_OOS';
   bucket: number;
   allocationDigest: string;
@@ -145,6 +157,8 @@ export type CanonicalIndependenceAudit = Readonly<{
 }>;
 
 export type FastProfitabilityEconomicEvidence = Readonly<{
+  sourceClass: typeof FAST_PROFITABILITY_FORWARD_EVIDENCE_CLASS;
+  sourceObservationId: string;
   outcomeClass: OutcomeClass;
   observedAtMs: number;
   evidence: unknown;
@@ -172,7 +186,10 @@ export type FastProfitabilityValidationStoreRecord = Readonly<{
   candidateDigest: string;
   candidateId: string;
   allocation: FastProfitabilityAllocation;
+  sourceClass: typeof FAST_PROFITABILITY_FORWARD_EVIDENCE_CLASS;
+  sourceObservationId: string;
   outcomeClass: OutcomeClass;
+  economicObservedAtMs: number;
   economicEvidenceDigest: string;
   economicEvidence: unknown;
   parallelEvidence: unknown | null;
