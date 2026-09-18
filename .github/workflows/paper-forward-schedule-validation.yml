@@ -53,6 +53,8 @@ on:
       - api-server/src/services/crypto-signal-scanner.service.test.ts
       - api-server/src/services/forward-observer-canonical-metadata.service.ts
       - api-server/src/services/forward-observer-canonical-metadata.service.test.ts
+      - api-server/src/services/forward-observer-validation-receipt-owner.service.ts
+      - api-server/src/services/forward-observer-validation-receipt-owner.service.test.ts
       - api-server/src/services/scanner-canonical-paper-identity.service.ts
       - api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts
       - api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.test.ts
@@ -235,6 +237,8 @@ jobs:
             api-server/src/services/crypto-signal-scanner.service.test.ts
             api-server/src/services/forward-observer-canonical-metadata.service.ts
             api-server/src/services/forward-observer-canonical-metadata.service.test.ts
+            api-server/src/services/forward-observer-validation-receipt-owner.service.ts
+            api-server/src/services/forward-observer-validation-receipt-owner.service.test.ts
             api-server/src/services/scanner-canonical-paper-identity.service.ts
             api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts
             api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.test.ts

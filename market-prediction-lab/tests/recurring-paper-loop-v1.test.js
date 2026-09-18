@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildRecurringPaperSettlementRecord,
   createRecurringPaperLoopState,
   restoreRecurringPaperLoopState,
   runRecurringPaperCycle,
@@ -273,6 +274,27 @@ test("valid future exit settles exactly once and replay cannot mutate ledger", a
   assert.equal(settled.summary.canonicalNaturalStageEvidence.stageCounts.settlement.count, 1);
   assert.equal(settled.summary.canonicalNaturalStageEvidence.stageCounts.settlement.observationIds.length, 1);
   assert.equal(settled.state.positions.length, 0);
+  const record = settled.state.settlements[0];
+  assert.match(record.settlementId, /^[0-9a-f]{64}$/);
+  assert.equal(record.positionId, positionId);
+  assert.equal(record.entryId, opened.state.positions[0].paperSampleId);
+  assert.equal(record.settlementIdentity.netPnl, record.netPnl);
+  assert.equal(record.netPnl, record.grossPnl - record.entryCost - record.exitCost - record.fundingCost);
+  // Legacy monetary PnL is not complete canonical evidence. Enrichment must
+  // keep an absent cost reference absent, not create an all8 completion claim.
+  assert.equal(record.settlementIdentity.costEvidenceDigest, null);
+  assert.equal(record.lifecycleEvidence, null);
+  assert.equal(record.fullCostReady, undefined);
+  assert.equal(record.naturalSampleCredit, 0);
+  assert.equal(record.orderSubmitted, false);
+  const partial = { costEvidence: { status: 'BLOCKED_DATA', fullCostReady: false, components: {} } };
+  const transported = buildRecurringPaperSettlementRecord({ settlement: record, position: opened.state.positions[0],
+    canonicalLifecycleEvidence: partial, settlementRecordedAtMs: T0 + 10 });
+  assert.equal(transported.settlementIdentity.costEvidenceDigest, null);
+  assert.deepEqual(transported.lifecycleEvidence, partial);
+  assert.equal(transported.lifecycleEvidence.costEvidence.fullCostReady, false);
+  assert.equal(transported.fullCostReady, undefined);
+  assert.equal(transported.netPnl, record.netPnl);
   const replay = await run(h, { state: settled.state, cycle: cycle("c3", T0 + 11), exits: [exit] });
   assert.equal(replay.summary.tradesSettled, 0);
   assert.equal(h.counts().settlementMutations, 1);
