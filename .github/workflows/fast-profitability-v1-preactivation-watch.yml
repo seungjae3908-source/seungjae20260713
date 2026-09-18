@@ -12,7 +12,7 @@ on:
       - 'api-server/scripts/verify-fast-profitability-preactivation-watch-contract.mjs'
       - 'api-server/scripts/verify-forward-recommendation-observer-runtime-contract.mjs'
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '7,22,37,52 * * * *'
   issue_comment:
     types: [created]
 
