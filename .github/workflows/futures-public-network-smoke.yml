@@ -11,6 +11,14 @@ on:
         description: Deprecated compatibility input; workflow_dispatch always validates target_sha or the exact dispatch SHA.
         required: false
         type: string
+      pr_number:
+        description: Optional pull request number for Ready Gate validation.
+        required: false
+        type: string
+      base_ref:
+        description: Optional pull request base ref for current-base validation.
+        required: false
+        type: string
   pull_request:
     types:
       - ready_for_review
@@ -29,11 +37,14 @@ on:
 permissions:
   actions: read
   contents: read
+  pull-requests: read
   statuses: write
 
 env:
   APPLICATION_STATUS_SHA: ${{ github.event.inputs.target_sha || github.event.pull_request.head.sha || github.sha }}
   APPLICATION_CHECKOUT_REF: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.target_sha || github.sha) || github.event.pull_request.head.sha || github.sha }}
+  APPLICATION_PR_NUMBER: ${{ github.event.inputs.pr_number || github.event.pull_request.number || '' }}
+  APPLICATION_BASE_REF: ${{ github.event.inputs.base_ref || github.event.pull_request.base.ref || '' }}
 
 concurrency:
   group: application-ci-${{ github.event.pull_request.number || github.event.inputs.target_sha || github.ref }}
@@ -74,17 +85,99 @@ jobs:
           echo "head_sha=${actual_sha,,}"
           echo "checkout_mode=DETACHED"
 
-  validate:
-    name: ${{ github.event_name == 'pull_request' && 'PR Exact Application CI' || 'Typecheck, unit, smoke, and build' }}
+  ready-gate:
+    name: Ready preflight and current-base virtual merge gate
+    needs: exact-head
+    if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 8
     steps:
+      - name: Require exact-head verification
+        shell: bash
+        env:
+          EXACT_HEAD_RESULT: ${{ needs.exact-head.result }}
+        run: |
+          set -euo pipefail
+          [[ "$EXACT_HEAD_RESULT" == "success" ]] || { echo "[EXACT_HEAD_GATE_FAILED] $EXACT_HEAD_RESULT" >&2; exit 1; }
+
       - name: Publish pending Application CI status
         uses: actions/github-script@v8
         with:
           script: |
             const sha = process.env.APPLICATION_STATUS_SHA;
-            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state: 'pending', target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Application CI run ${context.runId}: running`, context: 'application-ci/verified' });
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state: 'pending', target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Application CI run ${context.runId}: ready preflight`, context: 'application-ci/verified' });
+
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APPLICATION_CHECKOUT_REF }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Current-base virtual merge and product-integrity gate
+        if: env.APPLICATION_PR_NUMBER != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$APPLICATION_BASE_REF" ]] || { echo '[READY_BASE_REF_MISSING]' >&2; exit 1; }
+          git fetch --no-tags origin "$APPLICATION_BASE_REF"
+          git cat-file -e "origin/$APPLICATION_BASE_REF^{commit}"
+          node .github/scripts/pre-ci-v3.mjs \
+            --base "origin/$APPLICATION_BASE_REF" \
+            --head "$APPLICATION_CHECKOUT_REF" \
+            --virtual-merge --ready-gate --gate-only
+
+      - name: Verify exact PR identity, Fast CI, and unresolved review threads
+        if: env.APPLICATION_PR_NUMBER != ''
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const prNumber = Number(process.env.APPLICATION_PR_NUMBER || 0);
+            const targetSha = String(process.env.APPLICATION_STATUS_SHA || '').toLowerCase();
+            const baseRef = String(process.env.APPLICATION_BASE_REF || '');
+            if (!Number.isInteger(prNumber) || prNumber <= 0) { core.setFailed('Valid PR number required.'); return; }
+            const { data: pr } = await github.rest.pulls.get({ owner: context.repo.owner, repo: context.repo.repo, pull_number: prNumber });
+            if (String(pr.head.sha).toLowerCase() !== targetSha) { core.setFailed(`[READY_HEAD_MOVED] expected=${targetSha} actual=${pr.head.sha}`); return; }
+            if (pr.base.ref !== baseRef) { core.setFailed(`[READY_BASE_REF_MOVED] expected=${baseRef} actual=${pr.base.ref}`); return; }
+
+            let cursor = null;
+            let unresolved = 0;
+            do {
+              const data = await github.graphql(`query($owner:String!,$repo:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100,after:$cursor){nodes{isResolved}pageInfo{hasNextPage endCursor}}}}}`, { owner: context.repo.owner, repo: context.repo.repo, number: prNumber, cursor });
+              const threads = data.repository.pullRequest.reviewThreads;
+              unresolved += threads.nodes.filter((thread) => !thread.isResolved).length;
+              cursor = threads.pageInfo.hasNextPage ? threads.pageInfo.endCursor : null;
+            } while (cursor);
+            if (unresolved !== 0) { core.setFailed(`[READY_REVIEW_THREADS_OPEN] ${unresolved}`); return; }
+
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, { owner: context.repo.owner, repo: context.repo.repo, head_sha: targetSha, event: 'pull_request', per_page: 100 });
+            const fastRuns = runs.filter((run) => run.name === 'Application Fast CI' && String(run.head_sha).toLowerCase() === targetSha).sort((a, b) => b.id - a.id);
+            const latestFast = fastRuns[0];
+            if (!latestFast || latestFast.conclusion !== 'success') {
+              core.setFailed(`[READY_FAST_CI_NOT_GREEN] latest=${latestFast ? `${latestFast.id}:${latestFast.conclusion}` : 'MISSING'}`);
+              return;
+            }
+            core.info(`Ready Gate PASS for PR #${prNumber}, head ${targetSha}, Fast CI ${latestFast.id}.`);
+
+      - name: Non-PR dispatch boundary
+        if: env.APPLICATION_PR_NUMBER == ''
+        run: echo 'No PR metadata supplied; exact-SHA canonical CI remains allowed for main/manual control paths.'
+
+      - name: Publish Ready Gate failure
+        if: failure() || cancelled()
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const sha = process.env.APPLICATION_STATUS_SHA;
+            const state = '${{ job.status }}' === 'cancelled' ? 'error' : 'failure';
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Application CI run ${context.runId}: Ready Gate failed`, context: 'application-ci/verified' });
+
+  application-build:
+    name: Typecheck and build exact candidate once
+    needs: ready-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -110,56 +203,92 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install workspace dependencies with frozen lockfile
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --prefer-offline
       - name: Typecheck frontend
         run: pnpm --dir stock-analyzer run typecheck
       - name: Typecheck backend
         run: pnpm --dir stock-analyzer exec tsc -p ../api-server/tsconfig.json --noEmit
-      - name: Run Phase 2 futures tests
-        run: pnpm --dir api-server run test:phase2
-      - name: Run Phase 3 trading risk tests
-        run: pnpm --dir api-server run test:risk
-      - name: Run Phase 4 contract rules and risk regression tests
-        run: pnpm --dir api-server run test:phase4
-      - name: Run Phase 5 backtest tests
-        run: pnpm --dir api-server run test:phase5
-      - name: Run Phase 6 paper trading tests
-        run: pnpm --dir api-server run test:phase6
-      - name: Run Phase 7 journal sync and analytics tests
-        run: pnpm --dir api-server run test:phase7
-      - name: Run Phase 8 release candidate tests
-        run: pnpm --dir api-server run test:phase8
-      - name: Run Phase 9 privacy-safe AI review tests
-        run: pnpm --dir api-server run test:phase9
-      - name: Run trade automation safety and adapter tests
-        run: pnpm --dir api-server run test:phase12
-      - name: Run API smoke tests
-        run: pnpm --dir api-server run test:smoke
-      - name: Build frontend production bundle
+      - name: Build frontend production bundle once
         run: pnpm --dir stock-analyzer run build
-      - name: Build backend production bundle
+      - name: Build backend production bundle once
         run: pnpm --dir api-server run build:server
+      - name: Bind build artifact to exact SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci-artifacts
+          printf '%s\n' "${APPLICATION_STATUS_SHA,,}" > ci-artifacts/application-build-sha
+          test -d stock-analyzer/dist
+          test -d api-server/dist
+      - name: Upload immutable exact-SHA application build
+        uses: actions/upload-artifact@v4
+        with:
+          name: application-build-${{ env.APPLICATION_STATUS_SHA }}
+          path: |
+            ci-artifacts/application-build-sha
+            stock-analyzer/dist
+            api-server/dist
+          if-no-files-found: error
+          retention-days: 3
+
+  application-tests:
+    name: Application test lane — ${{ matrix.mode }}
+    needs: ready-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 28
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [phase2, risk, phase4, phase5, phase6, phase7, phase8, phase9, phase12, smoke]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APPLICATION_CHECKOUT_REF }}
+          persist-credentials: false
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install workspace dependencies with frozen lockfile
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Run exact application test lane
+        run: pnpm --dir api-server run test:${{ matrix.mode }}
+
+  application-result:
+    name: ${{ github.event_name == 'pull_request' && 'PR Exact Application CI' || 'Typecheck, unit, smoke, and build' }}
+    needs: [ready-gate, application-build, application-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
       - name: Publish verified Application CI result
-        if: always()
         uses: actions/github-script@v8
         with:
           script: |
-            const result = '${{ job.status }}' || 'failure';
+            const gate = '${{ needs.ready-gate.result }}';
+            const build = '${{ needs.application-build.result }}';
+            const tests = '${{ needs.application-tests.result }}';
+            const result = gate === 'success' && build === 'success' && tests === 'success'
+              ? 'success'
+              : [gate, build, tests].includes('cancelled') ? 'cancelled' : 'failure';
             const sha = process.env.APPLICATION_STATUS_SHA;
             const statusContext = 'application-ci/verified';
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, { owner: context.repo.owner, repo: context.repo.repo, ref: sha, per_page: 100 });
-            const latestStatus = statuses
-              .filter((status) => status.context === statusContext)
-              .sort((left, right) => right.id - left.id)[0];
-            if (latestStatus?.target_url !== runUrl) {
-              core.notice(`A newer run owns ${statusContext} for ${sha}; skipping stale application status update.`);
-              return;
-            }
+            const latestStatus = statuses.filter((status) => status.context === statusContext).sort((left, right) => right.id - left.id)[0];
+            if (latestStatus?.target_url !== runUrl) { core.notice(`A newer run owns ${statusContext} for ${sha}; skipping stale application status update.`); return; }
             const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: runUrl, description: `Application CI run ${context.runId}: ${result}`, context: statusContext });
-
   browser-ui:
+    needs: ready-gate
     name: Playwright desktop and mobile application UI
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -187,7 +316,12 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install workspace dependencies with frozen lockfile
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-chromium-1.61.1-${{ hashFiles('pnpm-lock.yaml') }}
       - name: Install Playwright Chromium
         run: pnpm --dir stock-analyzer exec playwright install chromium
       - name: Run Playwright desktop and mobile tests
@@ -225,6 +359,7 @@ jobs:
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: runUrl, description: `Browser UI run ${context.runId}: ${result}`, context: statusContext });
 
   database-rls:
+    needs: ready-gate
     name: Disposable PostgreSQL migration and RLS integration
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -301,6 +436,8 @@ jobs:
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: runUrl, description: `Database RLS run ${context.runId}: ${result}`, context: statusContext });
 
   security-integration:
+    needs: [ready-gate, application-build]
+    if: always() && needs.ready-gate.result == 'success'
     name: Security input, bundle, and outbound safety verification
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -328,11 +465,20 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install workspace dependencies with frozen lockfile
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --prefer-offline
       - name: Run Phase 8 security and load tests
         run: pnpm --dir api-server run test:phase8
-      - name: Build frontend for bundle inspection
-        run: pnpm --dir stock-analyzer run build
+      - name: Download immutable exact-SHA application build
+        uses: actions/download-artifact@v4
+        with:
+          name: application-build-${{ env.APPLICATION_STATUS_SHA }}
+          path: .
+      - name: Verify immutable build artifact identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(cat ci-artifacts/application-build-sha)" == "${APPLICATION_STATUS_SHA,,}" ]] || { echo '[BUILD_SHA_MISMATCH]' >&2; exit 1; }
+          test -d stock-analyzer/dist
       - name: Scan source and production bundle
         id: security
         working-directory: api-server
@@ -358,6 +504,8 @@ jobs:
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: runUrl, description: `Security integration run ${context.runId}: ${result}`, context: statusContext });
 
   ai-privacy:
+    needs: [ready-gate, application-build]
+    if: always() && needs.ready-gate.result == 'success'
     name: AI privacy, prompt, output, and outbound verification
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -368,6 +516,11 @@ jobs:
           script: |
             const sha = process.env.APPLICATION_STATUS_SHA;
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state: 'pending', target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `AI privacy run ${context.runId}: running`, context: 'ai-privacy/verified' });
+      - name: Require reusable build producer
+        if: needs.application-build.result != 'success'
+        run: |
+          echo '[APPLICATION_BUILD_UNAVAILABLE]' >&2
+          exit 1
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.APPLICATION_CHECKOUT_REF }}
@@ -376,11 +529,20 @@ jobs:
         with: { version: 9, run_install: false }
       - uses: actions/setup-node@v4
         with: { node-version: "20", cache: pnpm, cache-dependency-path: pnpm-lock.yaml }
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --prefer-offline
       - name: Run guarded mock provider and zero-outbound privacy tests
         run: pnpm --dir api-server run test:phase9
-      - name: Build frontend for secret inspection
-        run: pnpm --dir stock-analyzer run build
+      - name: Download immutable exact-SHA application build
+        uses: actions/download-artifact@v4
+        with:
+          name: application-build-${{ env.APPLICATION_STATUS_SHA }}
+          path: .
+      - name: Verify immutable build artifact identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(cat ci-artifacts/application-build-sha)" == "${APPLICATION_STATUS_SHA,,}" ]] || { echo '[BUILD_SHA_MISMATCH]' >&2; exit 1; }
+          test -d stock-analyzer/dist
       - name: Verify AI privacy and zero outbound contract
         id: ai
         working-directory: api-server
@@ -406,6 +568,7 @@ jobs:
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: runUrl, description: `AI privacy run ${context.runId}: ${result}`, context: statusContext });
 
   network-smoke:
+    needs: ready-gate
     name: Bitget public API smoke (non-blocking)
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -433,7 +596,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install workspace dependencies with frozen lockfile
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --prefer-offline
       - name: Run real Bitget public network smoke
         id: network
         continue-on-error: true

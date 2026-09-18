@@ -32,6 +32,7 @@ jobs:
     env:
       FAST_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       FAST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      FAST_BASE_REF: ${{ github.event.pull_request.base.ref }}
     steps:
       - name: Checkout exact PR head
         uses: actions/checkout@v4
@@ -50,7 +51,7 @@ jobs:
           [[ -z "$actual_branch" ]] || { echo "[UNEXPECTED_BRANCH] $actual_branch" >&2; exit 1; }
           [[ "${actual_sha,,}" == "${FAST_HEAD_SHA,,}" ]] || { echo "[HEAD_SHA_MISMATCH] expected=$FAST_HEAD_SHA actual=$actual_sha" >&2; exit 1; }
 
-      - name: Classify changed scope
+      - name: Classify changed scope from shared V3 planner
         id: impact
         shell: bash
         run: |
@@ -59,28 +60,23 @@ jobs:
           git cat-file -e "$FAST_BASE_SHA^{commit}"
           git diff --name-only "$FAST_BASE_SHA" "$FAST_HEAD_SHA" > /tmp/fast-ci-changed.txt
           cat /tmp/fast-ci-changed.txt
+          node .github/scripts/ci-impact-plan.mjs \
+            --base "$FAST_BASE_SHA" \
+            --head "$FAST_HEAD_SHA" \
+            --changed-files /tmp/fast-ci-changed.txt \
+            --github-output "$GITHUB_OUTPUT" \
+            --json-output /tmp/fast-ci-impact-plan.json
 
-          flag() {
-            local name="$1"
-            local regex="$2"
-            if grep -Eq "$regex" /tmp/fast-ci-changed.txt; then
-              echo "$name=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "$name=false" >> "$GITHUB_OUTPUT"
-            fi
-          }
+      - name: Fetch latest base for virtual merge preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$FAST_BASE_REF" ]] || { echo '[MISSING_BASE_REF]' >&2; exit 1; }
+          git fetch --no-tags origin "$FAST_BASE_REF"
+          git cat-file -e "origin/$FAST_BASE_REF^{commit}"
 
-          flag shared '^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|packages/)'
-          flag frontend '^(stock-analyzer/|packages/|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)'
-          flag backend '^(api-server/|packages/|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)'
-          flag phase2 '^(api-server/.*(futures|bitget|market|scanner)|packages/)'
-          flag phase5 '^(api-server/.*(backtest|research|strategy|candidate)|stock-analyzer/.*backtest)'
-          flag phase6 '^(api-server/.*(paper|position|settlement|scanner)|stock-analyzer/.*(paper|scanner))'
-          flag phase7 '^(api-server/.*(journal|portfolio)|stock-analyzer/.*(journal|portfolio))'
-          flag phase8 '^(api-server/.*(auth|member|account|security|migration|rls)|stock-analyzer/.*(account|admin|auth))'
-          flag phase9 '^(api-server/.*(ai|privacy|prompt)|stock-analyzer/.*(ai-|ai/))'
-          flag phase12 '^(api-server/.*(trade|approval|execution|order|automation)|stock-analyzer/.*(trade|approval|auto-trading))'
-          flag ci '^\.github/'
+      - name: Virtual merge static preflight
+        run: node .github/scripts/pre-ci-v3.mjs --base "origin/$FAST_BASE_REF" --head "$FAST_HEAD_SHA" --virtual-merge --gate-only
 
       - name: Run static connection graph audit
         run: |
@@ -146,6 +142,14 @@ jobs:
       - name: Phase 2 impacted tests
         if: steps.impact.outputs.phase2 == 'true'
         run: pnpm --dir api-server run test:phase2
+
+      - name: Phase 3 risk impacted tests
+        if: steps.impact.outputs.risk == 'true'
+        run: pnpm --dir api-server run test:risk
+
+      - name: Phase 4 contract impacted tests
+        if: steps.impact.outputs.phase4 == 'true'
+        run: pnpm --dir api-server run test:phase4
 
       - name: Phase 5 impacted tests
         if: steps.impact.outputs.phase5 == 'true'
