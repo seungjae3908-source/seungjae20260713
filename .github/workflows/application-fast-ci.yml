@@ -7,7 +7,6 @@ on:
       - synchronize
       - reopened
       - converted_to_draft
-      - ready_for_review
     paths:
       - .github/**
       - pnpm-lock.yaml
