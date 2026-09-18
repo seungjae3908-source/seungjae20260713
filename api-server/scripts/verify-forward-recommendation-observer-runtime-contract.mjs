@@ -75,6 +75,16 @@ assert(runner.includes('memberId: FORWARD_OBSERVER_PUBLIC_STOCK_MEMBER_ID'), 'st
 assert(runner.includes('getCandlesMeta(ticker: string, timeframe?: Timeframe)'), 'Yahoo adapter must cover the scanner getCandlesMeta seam');
 assert(runner.includes('mutable.getCandlesMeta = async') && runner.includes("provider: 'yahoo'"), 'scanner candle metadata must stay on Yahoo public data');
 assert(
+  runner.includes("process.env.SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE = 'true'"),
+  'stock observer must enable the existing public-only universe capability filter',
+);
+assert(
+  runner.includes('originalPublicOnlyUniverse')
+    && runner.includes('delete process.env.SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE')
+    && runner.includes('process.env.SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE = originalPublicOnlyUniverse'),
+  'public-only universe env must be restored after the temporary stock adapter',
+);
+assert(
   runner.includes('finally')
     && runner.includes('originalCandles')
     && runner.includes('originalCandlesMeta')
