@@ -83,6 +83,9 @@ jobs:
           grep -Fq "manualCredit: 0" "$service"
           grep -Fq 'api-server/.fast-profitability-runtime/forward-observer.mjs' .github/workflows/fast-profitability-v1-activation.yml
           grep -Fq 'api-server/.fast-profitability-runtime/fast-activation.mjs' .github/workflows/fast-profitability-v1-activation.yml
+          grep -Fq 'FAST_ACTIVATION_PREFLIGHT_MAX_CYCLES: "12"' .github/workflows/fast-profitability-v1-activation.yml
+          grep -Fq 'fast-profitability-v1-preactivation-forward-' .github/workflows/fast-profitability-v1-activation.yml
+          grep -Fq -- '--state-input "$RUNNER_TEMP/activation-observer-input.json"' .github/workflows/fast-profitability-v1-activation.yml
           ! grep -R -E 'LIVE_TRADING=.?(true|1)|AUTO_TRADING=.?(true|1)|REAL_ORDER_ENABLED=.?(true|1)|PRIVATE_TRADING_API_ALLOWED=.?(true|1)' \
             api-server/src/services/fast-profitability-activation.service.ts \
             api-server/src/scripts/run-fast-profitability-activation.ts \
@@ -177,6 +180,54 @@ jobs:
               core.setFailed('Existing non-expired Fast activation binding found: ' + active.map((x) => x.name).join(', '));
             }
 
+      - name: Locate previous durable preactivation Forward state
+        id: previous_preactivation
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const artifactName = `fast-profitability-v1-preactivation-forward-${target}`;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'fast-profitability-v1-activation.yml',
+              event: 'issue_comment',
+              status: 'completed',
+              per_page: 100,
+            });
+            for (const run of runs) {
+              if (Number(run.id) === Number(context.runId)) continue;
+              if (String(run.head_sha).toLowerCase() !== target) continue;
+              const response = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id,
+                per_page: 100,
+              });
+              const artifact = (response.data.artifacts ?? []).find((item) =>
+                item.name === artifactName && item.expired !== true);
+              if (!artifact) continue;
+              core.setOutput('found', 'true');
+              core.setOutput('run_id', String(run.id));
+              core.info(`Continuing durable preactivation Forward state from Run ${run.id}.`);
+              return;
+            }
+            core.setOutput('found', 'false');
+            core.setOutput('run_id', '');
+            core.info('No prior durable preactivation Forward state for this exact target SHA.');
+
+      - name: Download previous durable preactivation Forward state
+        if: steps.previous_preactivation.outputs.found == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: fast-profitability-v1-preactivation-forward-${{ steps.command.outputs.sha }}
+          path: ${{ runner.temp }}/previous-fast-preactivation
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.previous_preactivation.outputs.run_id }}
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ steps.command.outputs.sha }}
@@ -207,16 +258,105 @@ jobs:
           pnpm exec esbuild src/scripts/run-fast-profitability-activation.ts \
             --bundle --packages=external --platform=node --format=esm --target=node20 \
             --outfile=".fast-profitability-runtime/fast-activation.mjs"
-      - name: Run one clean public-data Forward preflight
+      - name: Run bounded stateful public-data Forward preflight
+        id: forward_preflight
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
+          PREVIOUS_FOUND: ${{ steps.previous_preactivation.outputs.found }}
+          PREVIOUS_DIR: ${{ runner.temp }}/previous-fast-preactivation
+          FAST_ACTIVATION_PREFLIGHT_MAX_CYCLES: "12"
         run: |
           set -Eeuo pipefail
           rm -rf "$RUNNER_TEMP/activation-observer"
           mkdir -p "$RUNNER_TEMP/activation-observer"
-          node api-server/.fast-profitability-runtime/forward-observer.mjs \
-            --research-sha "$TARGET_SHA" \
-            --output-dir "$RUNNER_TEMP/activation-observer"
+
+          input_state="$RUNNER_TEMP/activation-observer-input.json"
+          rm -f "$input_state"
+          if [[ "$PREVIOUS_FOUND" == "true" ]]; then
+            test -s "$PREVIOUS_DIR/state.json"
+            cp "$PREVIOUS_DIR/state.json" "$input_state"
+          fi
+
+          cursor_fingerprint() {
+            local file="$1"
+            node - "$file" <<'NODE'
+          const fs = require('fs');
+          const state = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const c = state.cursors ?? {};
+          const keys = ['KR_SWING_60M','US_SWING_60M','SPOT_SWING_60M','FUTURES_SWING_60M'];
+          process.stdout.write(keys.map((key) => String(c[key] ?? 0)).join('|'));
+          NODE
+          }
+
+          pending_unexpired_count() {
+            local file="$1"
+            node - "$file" <<'NODE'
+          const fs = require('fs');
+          const state = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const now = Date.now();
+          const rows = Array.isArray(state.observations) ? state.observations : [];
+          const count = rows.filter((row) =>
+            row?.status === 'PENDING'
+            && Number.isFinite(Date.parse(row?.expiresAt))
+            && Date.parse(row.expiresAt) > now).length;
+          process.stdout.write(String(count));
+          NODE
+          }
+
+          declare -A seen_cursor=()
+          if [[ -s "$input_state" ]]; then
+            initial_cursor="$(cursor_fingerprint "$input_state")"
+          else
+            initial_cursor='0|0|0|0'
+          fi
+          seen_cursor["$initial_cursor"]=1
+
+          cycles=0
+          pending=0
+          stop_reason='MAX_CYCLES'
+          for ((cycle = 1; cycle <= FAST_ACTIVATION_PREFLIGHT_MAX_CYCLES; cycle += 1)); do
+            cycles="$cycle"
+            args=(--research-sha "$TARGET_SHA" --output-dir "$RUNNER_TEMP/activation-observer")
+            if [[ -s "$input_state" ]]; then
+              args+=(--state-input "$RUNNER_TEMP/activation-observer-input.json")
+            fi
+
+            node api-server/.fast-profitability-runtime/forward-observer.mjs "${args[@]}"
+
+            state_file="$RUNNER_TEMP/activation-observer/state.json"
+            test -s "$state_file"
+            pending="$(pending_unexpired_count "$state_file")"
+            cursor="$(cursor_fingerprint "$state_file")"
+            echo "[fast-activation-preflight] cycle=$cycle pending_unexpired=$pending cursor=$cursor"
+
+            if (( pending > 0 )); then
+              stop_reason='PENDING_CANDIDATE_OBSERVED'
+              break
+            fi
+
+            if [[ -n "${seen_cursor[$cursor]:-}" ]]; then
+              stop_reason='CURSOR_REPEAT_OR_NO_PROGRESS'
+              break
+            fi
+            seen_cursor["$cursor"]=1
+            cp "$state_file" "$input_state"
+          done
+
+          echo "cycles=$cycles" >> "$GITHUB_OUTPUT"
+          echo "pending_unexpired=$pending" >> "$GITHUB_OUTPUT"
+          echo "stop_reason=$stop_reason" >> "$GITHUB_OUTPUT"
+          echo "[fast-activation-preflight] completed cycles=$cycles pending_unexpired=$pending stop_reason=$stop_reason"
+
+      - name: Upload durable preactivation Forward state
+        if: steps.forward_preflight.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fast-profitability-v1-preactivation-forward-${{ steps.command.outputs.sha }}
+          path: |
+            ${{ runner.temp }}/activation-observer/state.json
+            ${{ runner.temp }}/activation-observer/summary.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Freeze immutable binding and separated OOS key
         id: frozen
         env:
