@@ -1,0 +1,133 @@
+name: Fast Profitability V1 Phase B C Validation
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+    paths:
+      - 'market-prediction-lab/src/fast-profitability-prospective-policy-v1.js'
+      - 'market-prediction-lab/src/fast-profitability-prospective-policy-v1.d.ts'
+      - 'market-prediction-lab/tests/fast-profitability-prospective-policy-v1.test.js'
+      - 'api-server/src/services/fast-profitability-evidence-runtime.service.ts'
+      - 'api-server/src/services/fast-profitability-evidence-runtime.service.test.ts'
+      - '.github/workflows/fast-profitability-v1-phase-bc-validation.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fast-profitability-v1-phase-bc-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate Fast Profitability V1 Phase B C
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Checkout exact pull request head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact pull request head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck API server
+        run: pnpm --dir api-server run typecheck
+
+      - name: Bundle focused Phase B C runtime test
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_file="$RUNNER_TEMP/fast-profitability-phase-bc.test.cjs"
+          pnpm --dir api-server exec esbuild \
+            src/services/fast-profitability-evidence-runtime.service.test.ts \
+            --bundle \
+            --platform=node \
+            --format=cjs \
+            --target=node20 \
+            --outfile="$test_file"
+          node --test "$test_file"
+
+      - name: Run Fast Profitability policy regressions
+        run: node --test market-prediction-lab/tests/fast-profitability-prospective-policy-v1.test.js
+
+      - name: Run canonical Independence regression
+        run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-independence-audit.test.mjs
+
+      - name: Run Natural Paper Settlement and Full Cost regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test \
+            market-prediction-lab/tests/natural-paper-trigger-bound-settlement-cost-producer-v1.test.js \
+            market-prediction-lab/tests/natural-paper-position-settlement-lifecycle-v1.test.js
+
+      - name: Verify fail-closed Phase B C safety boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          service='api-server/src/services/fast-profitability-evidence-runtime.service.ts'
+          policy='market-prediction-lab/src/fast-profitability-prospective-policy-v1.js'
+
+          grep -Fq "CANONICAL_INDEPENDENCE_AUDIT_VERSION" "$service"
+          grep -Fq "dependencyComponentSplitAuthorityRequired: true" "$service"
+          grep -Fq "sealedOosEncryptedAtRestRequired: true" "$service"
+          grep -Fq "sealedOosRevealRequiresOwnerVerifiedValidationReceipt: true" "$service"
+          grep -Fq "createForwardObserverValidationReceiptOwner" "$service"
+          grep -Fq "consumeManualSameCandidateValidationReceipt" "$service"
+          grep -Fq "createNaturalPaperTriggerBoundSettlementCostProducer" "$service"
+          grep -Fq "adaptNaturalPaperSettlementFullCost" "$service"
+          grep -Fq "advanceNaturalPaperPositionLifecycle" "$service"
+          grep -Fq "allEightFullCostComponentsRequired: true" "$service"
+          grep -Fq "economicCreditCreated: false" "$service"
+          grep -Fq "profitabilityCredit: 0" "$service"
+          grep -Fq "runtimeActivationAllowed: false" "$service"
+          grep -Fq "scheduleActivationAllowed: false" "$service"
+          grep -Fq "executionAuthority: 'NONE'" "$service"
+          grep -Fq "existingV3PolicyMutationAllowed: false" "$policy"
+
+          if grep -Eq '^[[:space:]]{2}(workflow_dispatch|schedule):' .github/workflows/fast-profitability-v1-phase-bc-validation.yml; then
+            echo 'FAST_PROFITABILITY_ACTIVATION_TRIGGER_FORBIDDEN' >&2
+            exit 1
+          fi
+          if grep -Eq 'profitability(Credit|ClaimAllowed): (1|true)|championPromotionAllowed: true' "$service"; then
+            echo 'FAST_PROFITABILITY_PREMATURE_PROMOTION_FORBIDDEN' >&2
+            exit 1
+          fi
+
+      - name: Parse workflow YAML
+        run: ruby -e "require 'yaml'; abort('YAML_PARSE_FAILED') unless YAML.parse_file(ARGV.fetch(0))" .github/workflows/fast-profitability-v1-phase-bc-validation.yml
+
+      - name: Verify validation did not mutate repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          test -z "$(git status --porcelain=v1)"
