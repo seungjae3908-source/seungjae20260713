@@ -159,9 +159,13 @@ async function main(): Promise<void> {
   await mkdir(path.join(outputFastState, 'validation'), { recursive: true, mode: 0o700 });
   await mkdir(path.join(outputFastState, 'sealed-oos'), { recursive: true, mode: 0o700 });
 
+  const validationRoot = path.join(outputFastState, 'validation');
+  const sealedOosRoot = path.join(outputFastState, 'sealed-oos');
+  const validationCountBefore = await countJsonFiles(validationRoot);
+  const sealedOosCountBefore = await countJsonFiles(sealedOosRoot);
   const store = createFastProfitabilityEvidenceStore({
-    validationRoot: path.join(outputFastState, 'validation'),
-    sealedOosRoot: path.join(outputFastState, 'sealed-oos'),
+    validationRoot,
+    sealedOosRoot,
     sealingKey,
   });
   const nowMs = Date.now();
@@ -172,8 +176,13 @@ async function main(): Promise<void> {
     recordedAtMs: nowMs,
   });
   const readiness = await store.summarize(bundle.policy);
-  const validationCount = await countJsonFiles(path.join(outputFastState, 'validation'));
-  const sealedOosCount = await countJsonFiles(path.join(outputFastState, 'sealed-oos'));
+  const validationCount = await countJsonFiles(validationRoot);
+  const sealedOosCount = await countJsonFiles(sealedOosRoot);
+  const newValidationCount = validationCount - validationCountBefore;
+  const newSealedOosCount = sealedOosCount - sealedOosCountBefore;
+  if (newValidationCount < 0 || newSealedOosCount < 0) {
+    throw new Error('FAST_PROFITABILITY_COLLECTOR_STATE_COUNT_REGRESSION');
+  }
   const parallel = await parallelReadback(bundle, parallelStateRoot, nowMs);
 
   await writeFile(
@@ -195,6 +204,8 @@ async function main(): Promise<void> {
     readiness,
     validationCount,
     sealedOosCount,
+    newValidationCount,
+    newSealedOosCount,
     parallel,
     replayCredit: 0,
     backfillCredit: 0,
