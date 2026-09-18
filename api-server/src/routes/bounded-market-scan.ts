@@ -324,7 +324,7 @@ export function createBoundedMarketScanRouter(
         visibleResult.alerts,
         undefined,
         undefined,
-        { timeframe, generatedAt: visibleResult.generatedAt },
+        { timeframe, generatedAt: visibleResult.generatedAt, memberId: req.member!.id },
       );
       void deliverScannerTelegramFollowups(visibleResult.cards);
       res.setHeader('X-Scanner-Request-Id', result.requestId);
