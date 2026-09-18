@@ -62,6 +62,8 @@ jobs:
               inputs: {
                 target_sha: targetSha,
                 checkout_ref: targetSha,
+                pr_number: String(context.issue.number),
+                base_ref: context.payload.pull_request.base.ref,
               },
             });
             core.info(`Dispatched canonical full Application CI for exact ready PR head ${targetSha}.`);
