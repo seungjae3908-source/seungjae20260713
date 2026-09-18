@@ -1,6 +1,9 @@
 name: Application CI
 
 on:
+  pull_request:
+    types:
+      - ready_for_review
   workflow_dispatch:
     inputs:
       target_sha:
@@ -284,6 +287,7 @@ jobs:
             if (latestStatus?.target_url !== runUrl) { core.notice(`A newer run owns ${statusContext} for ${sha}; skipping stale application status update.`); return; }
             const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: runUrl, description: `Application CI run ${context.runId}: ${result}`, context: statusContext });
+
   browser-ui:
     needs: ready-gate
     name: Playwright desktop and mobile application UI
@@ -399,8 +403,6 @@ jobs:
             exit 0
           fi
 
-          # ubuntu-latest also contains optional third-party apt sources. A
-          # transient outage there must not block the disposable RLS check.
           if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
             sudo apt-get update -qq \
               -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources \
