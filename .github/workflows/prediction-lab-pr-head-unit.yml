@@ -7,6 +7,8 @@ on:
       - synchronize
       - reopened
     paths:
+      - research-production/src/engine.mjs
+      - research-production/test/paper-risk-policy-transport.test.mjs
       - market-prediction-lab/**
       - .github/scripts/pr-exact-head-contract.mjs
       - .github/tests/pr-exact-head-*.test.mjs

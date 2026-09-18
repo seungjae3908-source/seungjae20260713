@@ -136,7 +136,7 @@ function buildBaseSnapshot(signal, gate, evidence, evaluatedAtMs, executionDirec
     style: signal.style,
     timeframe: signal.timeframe,
     horizon: signal.horizon,
-    signalDirection: signal.direction,
+    signalDirection: signal.signalDirection ?? signal.direction,
     executionDirection,
     candidateId: signal.strategyIdentity.candidateId ?? null,
     strategyFamily: signal.strategyIdentity.strategyFamily ?? null,
@@ -182,6 +182,7 @@ export function buildFourMarketPaperSample({
 } = {}) {
   if (!finite(evaluatedAtMs)) throw new TypeError("evaluatedAtMs is required");
   validateSignalIdentity(signal);
+  if (signal.signalDirection != null && !nonEmpty(signal.signalDirection)) throw new TypeError("original signalDirection provenance is required");
   validateGate(profitGate);
   validateEvidence(profitEvidence, signal, profitGate);
 
