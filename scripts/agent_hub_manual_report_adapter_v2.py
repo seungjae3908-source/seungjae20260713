@@ -16,6 +16,8 @@ SCHEMA_VERSION = "2"
 ALLOWED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 LEGACY_MARKER_RE = re.compile(r"^\[WORKER_REPORT\]\[([A-Za-z0-9_.:-]{2,180})\]\s*$")
+CURRENT_MAIN_LINE_RE = re.compile(r"^\s*current_main\s*[:=]\s*`?([0-9a-f]{40})`?\s*$", re.IGNORECASE | re.MULTILINE)
+ACTUAL_MAIN_LINE_RE = re.compile(r"^\s*actual_main\s*:\s*`?([0-9a-f]{40})`?\s*$", re.IGNORECASE | re.MULTILINE)
 TASK_CLEAN_RE = re.compile(r"[^A-Za-z0-9._:-]+")
 
 READ_ONLY_ZERO_FIELDS = (
@@ -85,6 +87,40 @@ def _is_native_schema_v2(body: str) -> bool:
     return _parse_fields(body).get("schema_version") == SCHEMA_VERSION
 
 
+def _is_informational_worker_report(body: str) -> bool:
+    """Return true only for an untagged, non-schema-v2 WORKER_REPORT envelope.
+
+    Informational lane reports are intentionally inert: they are neither normalized into
+    executable Agent Hub work nor treated as an adapter failure. Explicit tagged legacy
+    handoffs and schema-v2 reports continue through their existing fail-closed paths.
+    """
+    lines = [line.strip() for line in body.lstrip("\ufeff").splitlines() if line.strip()]
+    return bool(
+        lines
+        and lines[0] == REPORT_MARKER
+        and _parse_fields(body).get("schema_version") != SCHEMA_VERSION
+    )
+
+
+def _is_tagged_informational_worker_report(body: str) -> bool:
+    """Recognize inert lane/status reports without weakening legacy handoff gates.
+
+    Some bounded lane reporters label an informational status envelope as
+    ``[WORKER_REPORT][<LANE>]`` and publish the observed ``current_main`` using either
+    ``=`` or ``:``. They are not handoff requests. A genuine legacy handoff is still
+    distinguished by the stricter ``actual_main:`` contract and/or explicit read-only
+    control-proof fields, so malformed explicit handoffs continue to fail closed.
+    """
+    if not _legacy_tag(body):
+        return False
+    if ACTUAL_MAIN_LINE_RE.search(body):
+        return False
+    for field in READ_ONLY_ZERO_FIELDS:
+        if re.search(rf"^\s*{re.escape(field)}\s*:", body, re.IGNORECASE | re.MULTILINE):
+            return False
+    return CURRENT_MAIN_LINE_RE.search(body) is not None
+
+
 def _task_slug(tag: str) -> str:
     value = TASK_CLEAN_RE.sub("-", tag.strip()).strip("-._:")
     value = value[:100] or "manual-handoff"
@@ -127,7 +163,11 @@ def build_schema_v2_report(
 
     tag = _legacy_tag(body)
     if not tag:
+        if _is_informational_worker_report(body):
+            return {"status": "ignored", "reason": "informational_worker_report"}
         return {"status": "blocked", "reason": "unsupported_worker_report_marker"}
+    if _is_tagged_informational_worker_report(body):
+        return {"status": "ignored", "reason": "informational_tagged_worker_report"}
     if author_association.strip().upper() not in ALLOWED_ASSOCIATIONS:
         return {"status": "blocked", "reason": "untrusted_author_association"}
     if comment_id <= 0 or "/" not in repository or not SHA_RE.fullmatch(main_sha.lower()):
@@ -274,6 +314,93 @@ replit_agent: 0
         main_sha=sha,
     )["status"] == "native"
 
+    informational = """[WORKER_REPORT]
+root_task_id: agent-hub-command-status-readback-current-main-realign-20260913
+status: partial
+lane: Agent Hub / Codex Agent
+summary: informational lane progress only
+first_zero: #1041_FRESH_EXACT_HEAD_CI_NOT_TERMINAL
+"""
+    ignored = build_schema_v2_report(
+        body=informational,
+        comment_id=6,
+        author_login="owner",
+        author_association="OWNER",
+        repository="o/r",
+        main_sha=sha,
+    )
+    assert ignored == {"status": "ignored", "reason": "informational_worker_report"}
+
+    tagged_informational = f"""[WORKER_REPORT][YOUTUBE_RESEARCH]
+task_id=YOUTUBE_RESEARCH_STRATEGY_MINING_BLOCKER_TRUTH_20260913
+worker=ChatGPT Direct Work
+status=partial_verified_draft
+current_main={sha}
+main_required_ci=6/6 SUCCESS
+owner_pr=#1042
+remaining=#1042_FRESH_EXACT_HEAD_REQUIRED_CI_NOT_TERMINAL
+[/WORKER_REPORT]
+"""
+    tagged_ignored = build_schema_v2_report(
+        body=tagged_informational,
+        comment_id=8,
+        author_login="owner",
+        author_association="OWNER",
+        repository="o/r",
+        main_sha=sha,
+    )
+    assert tagged_ignored == {"status": "ignored", "reason": "informational_tagged_worker_report"}
+
+    tagged_informational_colon = f"""[WORKER_REPORT][LANE_30_PAPER]
+CURRENT_MAIN: `{sha}`
+status: partial
+summary: informational lane progress only
+"""
+    assert build_schema_v2_report(
+        body=tagged_informational_colon,
+        comment_id=9,
+        author_login="owner",
+        author_association="OWNER",
+        repository="o/r",
+        main_sha=sha,
+    ) == {"status": "ignored", "reason": "informational_tagged_worker_report"}
+
+    malformed_tagged = """[WORKER_REPORT][EXPLICIT_LEGACY_HANDOFF]
+status: partial
+summary: no current-main or actual-main identity
+"""
+    assert build_schema_v2_report(
+        body=malformed_tagged,
+        comment_id=10,
+        author_login="owner",
+        author_association="OWNER",
+        repository="o/r",
+        main_sha=sha,
+    )["reason"] == "actual_main_missing_or_invalid"
+
+    current_main_with_control_proof = f"""[WORKER_REPORT][EXPLICIT_LEGACY_HANDOFF]
+current_main: {sha}
+code_mutation: 0
+"""
+    assert build_schema_v2_report(
+        body=current_main_with_control_proof,
+        comment_id=11,
+        author_login="owner",
+        author_association="OWNER",
+        repository="o/r",
+        main_sha=sha,
+    )["reason"] == "actual_main_missing_or_invalid"
+
+    embedded = "prefix [WORKER_REPORT]\nstatus: partial"
+    assert build_schema_v2_report(
+        body=embedded,
+        comment_id=7,
+        author_login="owner",
+        author_association="OWNER",
+        repository="o/r",
+        main_sha=sha,
+    )["reason"] == "unsupported_worker_report_marker"
+
     stale = base.replace(sha, "a" * 40)
     assert build_schema_v2_report(
         body=stale,
@@ -321,6 +448,9 @@ replit_agent: 0
     print(json.dumps({
         "manual_report_adapter_v2": "pass",
         "native_schema_v2_passthrough": 1,
+        "informational_report_inert_ignore": 1,
+        "tagged_informational_report_inert_ignore": 1,
+        "tagged_explicit_legacy_still_fail_closed": 1,
         "legacy_readonly_normalization": 1,
         "main_drift_fail_closed": 1,
         "mutation_fail_closed": 1,
