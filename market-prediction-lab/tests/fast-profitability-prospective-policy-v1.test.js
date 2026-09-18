@@ -41,10 +41,18 @@ function policy() {
   });
 }
 
-function allocationInput(p, id, sourceFrameIdentity = 'frame:1') {
+function allocationInput(
+  p,
+  id,
+  sourceFrameIdentity = 'frame:1',
+  dependencyComponentId = `component:${id}`,
+) {
   return {
     publicEventIdentity: id,
     sourceFrameIdentity,
+    dependencyComponentId,
+    independenceStatus: 'PROVEN',
+    dependencyComponentCredit: 1,
     observedAtMs: p.eligibleAfterMs + 1,
   };
 }
@@ -72,7 +80,7 @@ function genuineObservation(p, input, overrides = {}) {
     testOnly: false,
     independenceStatus: 'PROVEN',
     dependencyComponentCredit: 1,
-    dependencyComponentId: `component:${input.publicEventIdentity}`,
+    dependencyComponentId: input.dependencyComponentId,
     economicOutcomeVisible: false,
     ...overrides,
   };
@@ -136,15 +144,24 @@ test('candidate identity is frozen into the policy digest and tampering fails ve
   assert.ok(verdict.blockers.includes('FAST_PROFITABILITY_POLICY_DIGEST_MISMATCH'));
 });
 
-test('the same public event can never cross Validation and Sealed OOS because source frame is not allocation authority', () => {
+test('one dependency component can never cross Validation and Sealed OOS even when it contains different events or source frames', () => {
   const p = policy();
-  const first = allocateFastProfitabilitySplit(p, allocationInput(p, 'public-event:42', 'frame:a'));
-  const second = allocateFastProfitabilitySplit(p, allocationInput(p, 'public-event:42', 'frame:b'));
+  const componentId = 'dependency-component:shared-market-event';
+  const first = allocateFastProfitabilitySplit(
+    p,
+    allocationInput(p, 'public-event:42a', 'frame:a', componentId),
+  );
+  const second = allocateFastProfitabilitySplit(
+    p,
+    allocationInput(p, 'public-event:42b', 'frame:b', componentId),
+  );
 
   assert.equal(first.split, second.split);
   assert.equal(first.bucket, second.bucket);
   assert.equal(first.allocationDigest, second.allocationDigest);
+  assert.notEqual(first.publicEventIdentity, second.publicEventIdentity);
   assert.notEqual(first.sourceFrameIdentity, second.sourceFrameIdentity);
+  assert.equal(first.dependencyComponentId, componentId);
   assert.equal(first.outcomeConsulted, false);
 });
 
@@ -160,9 +177,24 @@ test('deterministic allocator produces both Validation and Sealed OOS while rema
   assert.throws(
     () => allocateFastProfitabilitySplit(p, {
       ...validation.input,
-      netPnl: 999,
+      metadata: { nested: { netPnl: 999 } },
     }),
     /FAST_PROFITABILITY_OUTCOME_AWARE_ALLOCATION_FORBIDDEN/,
+  );
+});
+
+test('split assignment is impossible before the canonical independence layer proves one-credit dependency membership', () => {
+  const p = policy();
+  assert.throws(
+    () => allocateFastProfitabilitySplit(p, {
+      publicEventIdentity: 'unfiltered-event',
+      sourceFrameIdentity: 'frame:unfiltered',
+      dependencyComponentId: 'component:unfiltered',
+      independenceStatus: 'DEPENDENT',
+      dependencyComponentCredit: 0,
+      observedAtMs: p.eligibleAfterMs + 1,
+    }),
+    /FAST_PROFITABILITY_INDEPENDENCE_BEFORE_SPLIT_REQUIRED/,
   );
 });
 
@@ -172,6 +204,9 @@ test('pre-boundary evidence can never enter the fast lane', () => {
     () => allocateFastProfitabilitySplit(p, {
       publicEventIdentity: 'too-early',
       sourceFrameIdentity: 'frame:too-early',
+      dependencyComponentId: 'component:too-early',
+      independenceStatus: 'PROVEN',
+      dependencyComponentCredit: 1,
       observedAtMs: p.eligibleAfterMs - 1,
     }),
     /FAST_PROFITABILITY_PRE_BOUNDARY_OBSERVATION_FORBIDDEN/,
