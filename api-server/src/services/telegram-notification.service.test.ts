@@ -21,6 +21,7 @@ import {
 } from './telegram-intelligence-worker.service';
 import {
   deliverScannerTelegramAlerts,
+  scannerInAppNotificationInput,
   scannerTelegramInput,
   scannerTelegramRoomChatId,
   scannerTelegramRoomFor,
@@ -258,6 +259,56 @@ test('maps stock/spot BUY only and futures LONG/SHORT to their dedicated Telegra
 
   assert.equal(scannerTelegramInput(scannerAlert({ direction: 'SHORT' }), testRoom), null);
   assert.equal(scannerTelegramInput(scannerAlert({ assetClass: 'coin_spot', direction: 'SHORT' }), testRoom), null);
+});
+
+
+test('scanner in-app history is member-scoped, push-off, and keeps missing member identity fail-closed', () => {
+  const alert = scannerAlert({
+    assetClass: 'coin_futures',
+    market: 'futures',
+    symbol: 'BTCUSDT',
+    direction: 'SHORT',
+  });
+  assert.equal(scannerInAppNotificationInput(alert), null);
+
+  const input = scannerInAppNotificationInput(alert, {
+    memberId: 'member-1',
+    timeframe: '15m',
+    generatedAt: '2026-09-18T00:00:00.000Z',
+  });
+  assert.ok(input);
+  assert.equal(input.memberId, 'member-1');
+  assert.equal(input.type, 'ai_sell_signal');
+  assert.equal(input.app, true);
+  assert.equal(input.push, false);
+  assert.equal(input.url, '/scanner');
+  assert.equal(input.metadata?.signalId, 'signal:test');
+  assert.equal(input.metadata?.direction, 'SHORT');
+});
+
+test('scanner central in-app history does not depend on a configured Telegram room', async () => {
+  const stored: Array<Parameters<typeof scannerInAppNotificationInput>[0] | unknown> = [];
+  let telegramCalls = 0;
+  await deliverScannerTelegramAlerts(
+    [scannerAlert({ assetClass: 'coin_futures', market: 'futures', symbol: 'BTCUSDT', direction: 'SHORT' })],
+    async () => {
+      telegramCalls += 1;
+      return { ok: true, attempts: 1 };
+    },
+    () => null,
+    { memberId: 'member-1', timeframe: '15m', generatedAt: '2026-09-18T00:00:00.000Z' },
+    async () => ({ status: 'DISABLED', matchedCount: 0, policyCount: 0, skippedCount: 0, errorCount: 0 }),
+    async (input) => {
+      stored.push(input);
+      return { appStored: true, pushSent: 0 };
+    },
+  );
+  assert.equal(telegramCalls, 0);
+  assert.equal(stored.length, 1);
+  const storedInput = stored[0] as { memberId: string; push: boolean; metadata?: Record<string, unknown> };
+  assert.equal(storedInput.memberId, 'member-1');
+  assert.equal(storedInput.push, false);
+  assert.equal(storedInput.metadata?.symbol, 'BTCUSDT');
 });
 
 test('scanner Telegram delivery is fail-open and uses the lifecycle idempotency key', async () => {
