@@ -25,6 +25,7 @@ function candidate(overrides = {}) {
     market: 'CRYPTO_FUTURES',
     symbol: 'BTCUSDT',
     timeframe: '15m',
+    horizon: 8,
     side: 'LONG',
     riskPolicyRef: 'risk-policy:fixture-v1',
     costPolicyRef: 'cost-policy:fixture-v1',
@@ -110,6 +111,10 @@ test('freezes a future-only inactive policy without mutating or importing canoni
   assert.equal(p.parallelEvidencePlan.fullCostCollectionMayRunBeforeValidationDecision, true);
   assert.equal(p.parallelEvidencePlan.shadowAndPaperMayRunBeforeValidationDecision, true);
 
+  assert.equal(p.candidate.horizon, 8);
+  assert.equal(p.independencePolicy.candidateBoundForwardIndependenceRequired, true);
+  assert.equal(p.independencePolicy.executionCalibrationIndependenceMayDefineStrategySplit, false);
+  assert.equal(p.independencePolicy.causalGuardWindowRequired, true);
   assert.equal(p.safety.existingV3PolicyMutationAllowed, false);
   assert.equal(p.safety.priorTrainImportedAsValidation, 0);
   assert.equal(p.safety.priorValidationImportedAsOos, 0);
@@ -130,6 +135,19 @@ test('rejects a policy that starts before the pre-registered future buffer', () 
       eligibleAfterMs: FROZEN_AT + FAST_PROFITABILITY_MINIMUM_FUTURE_BUFFER_MS - 1,
     }),
     /FAST_PROFITABILITY_FUTURE_BUFFER_TOO_SHORT/,
+  );
+});
+
+test('candidate horizon is mandatory because Forward independence derives the causal evaluation window from timeframe x horizon', () => {
+  const withoutHorizon = candidate();
+  delete withoutHorizon.horizon;
+  assert.throws(
+    () => buildFastProfitabilityProspectivePolicyV1({
+      candidate: withoutHorizon,
+      policyFrozenAtMs: FROZEN_AT,
+      eligibleAfterMs: FROZEN_AT + FAST_PROFITABILITY_MINIMUM_FUTURE_BUFFER_MS,
+    }),
+    /FAST_PROFITABILITY_CANDIDATE_HORIZON_REQUIRED/,
   );
 });
 
