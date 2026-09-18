@@ -415,3 +415,154 @@ test('paper evaluate never performs an outbound exchange request', async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+
+test('accepted Backtest reference is server-bound and injected into canonical Paper execution', async () => {
+  const state = createPaperTradingState(10_000, NOW);
+  const candidate = Object.freeze({
+    schemaVersion: 'backtest-paper-reference-v1',
+    source: 'backtest-result',
+    status: 'REFERENCE_ONLY',
+    candidateId: `paper-candidate-v1:${'1'.repeat(64)}`,
+    strategyId: 'BACKTEST_ENGINE:breakout',
+    parameterHash: '2'.repeat(64),
+    market: 'CRYPTO_FUTURES',
+    symbol: 'BTCUSDT',
+    timeframe: '15m',
+    side: 'LONG',
+    leverage: 2,
+    riskPolicyRef: `backtest-risk-v1:${'3'.repeat(64)}`,
+    costPolicyRef: `backtest-cost-v1:${'4'.repeat(64)}`,
+    exitPolicyRef: `backtest-exit-v1:${'5'.repeat(64)}`,
+    blockers: ['NATURAL_PAPER_EVIDENCE_NOT_PROVEN'],
+    executionAuthority: 'NONE',
+    evidenceCredit: 0,
+    orderSubmitted: false,
+    privateTradingApiAllowed: false,
+  });
+  const strategyIdentityInput = Object.freeze({
+    strategyId: candidate.strategyId,
+    strategyFamily: 'BACKTEST_ENGINE',
+    strategyVersion: 'phase5-backtest-v1',
+    market: candidate.market,
+    direction: candidate.side,
+    timeframe: candidate.timeframe,
+    parameterHash: candidate.parameterHash,
+    researchCodeSha: DEPLOY_SHA,
+    formulaIdentity: { strategy: 'breakout', parameters: { lookback: 20 } },
+    datasetId: 'backtest-candles:test-fixture',
+    datasetDigest: '6'.repeat(64),
+    datasetStart: '2026-01-01T00:00:00.000Z',
+    datasetEnd: '2026-01-02T00:00:00.000Z',
+    costPolicyVersion: candidate.costPolicyRef,
+    riskPolicyVersion: candidate.riskPolicyRef,
+    evidenceSchemaVersion: candidate.schemaVersion,
+  });
+  let sourceReads = 0;
+  let ownerReads = 0;
+  let injected = null;
+  const { server, baseUrl } = await startServer({
+    researchCodeSha: () => DEPLOY_SHA,
+    sourceRegistry: {
+      resolveBacktest(accountId, value, currentSha) {
+        sourceReads += 1;
+        assert.equal(accountId, PUBLISHER_ACCOUNT_ID);
+        assert.equal(currentSha, DEPLOY_SHA);
+        assert.equal(value.mode, 'approval');
+        assert.equal(value.accountMode, 'paper');
+        assert.equal(value.adapter, 'paper');
+        assert.equal(value.backtestRunId, '11111111-1111-1111-1111-111111111111');
+        assert.deepEqual(value.backtestCandidate, candidate);
+        return { sourceSha: DEPLOY_SHA, handoff: candidate, strategyIdentityInput };
+      },
+    },
+    async canonicalEvidenceSource(input) {
+      ownerReads += 1;
+      assert.equal(input.candidateId, candidate.candidateId);
+      return { authenticatedAccountId: input.authenticatedAccountId };
+    },
+    evaluate(currentState, currentAction) {
+      assert.equal(currentAction.type, 'place_order');
+      injected = currentAction.request.backtestCandidate;
+      assert.deepEqual(injected, {
+        candidateId: candidate.candidateId,
+        strategyId: candidate.strategyId,
+        parameterHash: candidate.parameterHash,
+        market: candidate.market,
+        symbol: candidate.symbol,
+        timeframe: candidate.timeframe,
+        side: candidate.side,
+        leverage: candidate.leverage,
+        riskPolicyRef: candidate.riskPolicyRef,
+        costPolicyRef: candidate.costPolicyRef,
+        exitPolicyRef: candidate.exitPolicyRef,
+      });
+      return {
+        ok: true,
+        mode: 'paper-only',
+        orderSubmitted: false,
+        exchangeRequestSent: false,
+        state: currentState,
+        order: { backtestCandidate: injected },
+        position: { backtestCandidate: injected },
+        fills: [],
+        warnings: [],
+        duplicateEvent: false,
+      };
+    },
+  });
+  try {
+    const response = await fetch(`${baseUrl}/api/paper-trading/evaluate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'approval',
+        accountMode: 'paper',
+        adapter: 'paper',
+        backtestRunId: '11111111-1111-1111-1111-111111111111',
+        backtestCandidate: candidate,
+        state,
+        now: NOW.toISOString(),
+        action: {
+          type: 'place_order',
+          eventId: 'backtest-canonical-entry',
+          request: { symbol: 'BTCUSDT', side: 'long', leverage: 2, stopLossPrice: 95, orderType: 'market' },
+          market: { warnings: [] },
+          contractRules: { warnings: [] },
+          riskInput: {},
+        },
+      }),
+    });
+    const body = await safeJson(response);
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(sourceReads, 1);
+    assert.equal(ownerReads, 1);
+    assert.deepEqual(body.result.position.backtestCandidate, injected);
+    assert.equal(body.orderSubmitted, false);
+    assert.equal(body.exchangeRequestSent, false);
+
+    const forged = await fetch(`${baseUrl}/api/paper-trading/evaluate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        state,
+        action: {
+          type: 'place_order',
+          eventId: 'forged-backtest-lineage',
+          request: {
+            symbol: 'BTCUSDT', side: 'long', leverage: 2, stopLossPrice: 95, orderType: 'market',
+            backtestCandidate: injected,
+          },
+          market: { warnings: [] },
+          contractRules: { warnings: [] },
+          riskInput: {},
+        },
+      }),
+    });
+    const forgedBody = await safeJson(forged);
+    assert.equal(forged.status, 400);
+    assert.equal(forgedBody.code, 'CLIENT_BACKTEST_PAPER_AUTHORITY_FORBIDDEN');
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
