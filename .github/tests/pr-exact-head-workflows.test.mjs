@@ -56,14 +56,17 @@ test("workflow syntax and PR event contracts are explicit", () => {
   }
 
   const fastPullRequest = indentedBlock(indentedBlock(documents.applicationFast, "on", 0), "pull_request", 2);
-  for (const activity of ["opened", "synchronize", "reopened", "converted_to_draft", "ready_for_review"]) {
+  for (const activity of ["opened", "synchronize", "reopened", "converted_to_draft"]) {
     assert.match(fastPullRequest, new RegExp(`- ${activity}`, "u"));
   }
+  assert.doesNotMatch(fastPullRequest, /- ready_for_review/u);
   assert.doesNotMatch(fastPullRequest, /^\s+branches:/mu, "stacked PR bases must not be excluded");
   assert.doesNotMatch(documents.applicationFast, /if: github\.event\.pull_request\.draft == true/u);
 
   const applicationOn = indentedBlock(documents.application, "on", 0);
-  assert.doesNotMatch(applicationOn, /^\s+pull_request:/mu, "canonical full CI must not race exact-head Fast CI on PR activity");
+  const applicationPullRequest = indentedBlock(applicationOn, "pull_request", 2);
+  assert.match(applicationPullRequest, /- ready_for_review/u);
+  assert.doesNotMatch(applicationPullRequest, /^\s+branches:/mu, "stacked PR bases must not be excluded");
   assert.match(applicationOn, /^\s+workflow_dispatch:/mu);
 
   const dispatcherOn = indentedBlock(documents.applicationReadyDispatch, "on", 0);
@@ -117,7 +120,7 @@ test("fast CI remains development-only while canonical full CI remains the relea
   assert.match(documents.application, /Bitget public API smoke/u);
 });
 
-test("successful exact-head Fast CI is the only PR sequencing source for canonical full CI", () => {
+test("successful exact-head Fast CI is required for both commit-change and Ready-transition full CI", () => {
   const document = documents.applicationReadyDispatch;
   assert.match(document, /actions: write/u);
   assert.match(document, /workflowId = 'futures-public-network-smoke\.yml'/u);
@@ -130,8 +133,10 @@ test("successful exact-head Fast CI is the only PR sequencing source for canonic
   assert.match(document, /Failed, skipped, cancelled, missing, stale, or Draft Fast CI cannot dispatch/u);
   assert.match(document, /grants no merge, staging, production, database, secret, environment, live-trading, or real-order authority/u);
 
-  const applicationOn = indentedBlock(documents.application, "on", 0);
-  assert.doesNotMatch(applicationOn, /^\s+pull_request:/mu);
+  const fastPullRequest = indentedBlock(indentedBlock(documents.applicationFast, "on", 0), "pull_request", 2);
+  assert.doesNotMatch(fastPullRequest, /- ready_for_review/u);
+  const applicationPullRequest = indentedBlock(indentedBlock(documents.application, "on", 0), "pull_request", 2);
+  assert.match(applicationPullRequest, /- ready_for_review/u);
   assert.match(documents.application, /READY_FAST_CI_NOT_GREEN/u);
   assert.match(documents.application, /latestFast\.conclusion !== 'success'/u);
 });
