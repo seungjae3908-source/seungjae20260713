@@ -35,17 +35,21 @@ test('pre-ci virtual merge and ready gate fail closed', async () => {
   assert.doesNotMatch(document, /--force-with-lease|push --force|git push/u);
 });
 
-test('fast CI runs for Draft and Ready exact heads while preserving the virtual merge gate', async () => {
+test('fast CI covers commit changes for Draft and Ready PRs without rerunning on Ready transition', async () => {
   const document = await readFile('.github/workflows/application-fast-ci.yml', 'utf8');
   assert.match(document, /ci-impact-plan\.mjs/u);
   assert.match(document, /pre-ci-v3\.mjs/u);
   assert.match(document, /--virtual-merge --gate-only/u);
-  assert.match(document, /ready_for_review/u);
+  assert.match(document, /- opened/u);
+  assert.match(document, /- synchronize/u);
+  assert.match(document, /- reopened/u);
+  assert.match(document, /- converted_to_draft/u);
+  assert.doesNotMatch(document, /- ready_for_review/u);
   assert.doesNotMatch(document, /if:\s*github\.event\.pull_request\.draft\s*==\s*true/u);
   assert.match(document, /Application Fast CI is a development accelerator only/u);
 });
 
-test('ready dispatcher sequences canonical full CI strictly after successful exact-head Fast CI', async () => {
+test('ready dispatcher sequences commit-change full CI strictly after successful exact-head Fast CI', async () => {
   const document = await readFile('.github/workflows/application-full-ci-ready-dispatch.yml', 'utf8');
   assert.match(document, /workflow_run:/u);
   assert.match(document, /Application Fast CI/u);
@@ -57,10 +61,11 @@ test('ready dispatcher sequences canonical full CI strictly after successful exa
   assert.match(document, /Failed, skipped, cancelled, missing, stale, or Draft Fast CI cannot dispatch/u);
 });
 
-test('canonical full CI has no racing direct Ready trigger and still requires green Fast CI', async () => {
+test('canonical full CI keeps direct Ready transition and independently requires green Fast CI', async () => {
   const document = await readFile('.github/workflows/futures-public-network-smoke.yml', 'utf8');
   const triggerSection = document.slice(0, document.indexOf('\npermissions:'));
-  assert.doesNotMatch(triggerSection, /pull_request:/u);
+  assert.match(triggerSection, /pull_request:/u);
+  assert.match(triggerSection, /ready_for_review/u);
   assert.match(document, /READY_FAST_CI_NOT_GREEN/u);
   assert.match(document, /latestFast\.conclusion !== 'success'/u);
   assert.match(document, /^  ready-gate:/mu);
