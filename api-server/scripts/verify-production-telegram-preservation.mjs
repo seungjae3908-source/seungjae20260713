@@ -72,7 +72,7 @@ const fs = require('node:fs');
 const rows = JSON.parse(fs.readFileSync(process.env.PM2_FIXTURE, 'utf8'));
 const row = Array.isArray(rows) ? rows.find((item) => item?.name === 'stock-app') : null;
 if (row?.pm2_env?.status === 'online' && Number(row?.pid) > 0) {
-  process.stdout.write(`LISTEN 0 511 127.0.0.1:8080 0.0.0.0:* users:(("node",pid=${row.pid},fd=20))\n`);
+  process.stdout.write('LISTEN 0 511 127.0.0.1:8080 0.0.0.0:* users:(("node",pid=' + row.pid + ',fd=20))\\n');
 }
 MOCK_NODE
     return 0
