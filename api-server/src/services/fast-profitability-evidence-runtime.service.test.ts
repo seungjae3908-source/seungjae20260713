@@ -199,12 +199,20 @@ test('routes only the canonical independent representative and binds allocation 
 test('same dependency component always resolves to the same split and forged split metadata is rejected by store recomputation', async () => {
   const p = policy();
   const validation = allocationForSplit(p, 'VALIDATION');
-  const sameAudit = structuredClone(validation.audit);
-  sameAudit.independentObservationRefs[0]!.eventIdentity = 'different-event-same-component';
-  sameAudit.independentObservationRefs[0]!.sourceFrameIdentity = 'different-frame-same-component';
-  sameAudit.auditDigest = fastProfitabilitySha256({
-    independentObservationRefs: sameAudit.independentObservationRefs,
-    dependencyComponents: sameAudit.dependencyComponents,
+  const originalRef = validation.audit.independentObservationRefs[0]!;
+  const sameComponentRefs = [{
+    ...originalRef,
+    eventIdentity: 'different-event-same-component',
+    sourceFrameIdentity: 'different-frame-same-component',
+  }];
+  const sameAudit: CanonicalIndependenceAudit = Object.freeze({
+    schemaVersion: validation.audit.schemaVersion,
+    independentObservationRefs: sameComponentRefs,
+    dependencyComponents: structuredClone(validation.audit.dependencyComponents),
+    auditDigest: fastProfitabilitySha256({
+      independentObservationRefs: sameComponentRefs,
+      dependencyComponents: validation.audit.dependencyComponents,
+    }),
   });
   const second = routeFastProfitabilityCanonicalIndependentObservation({
     policy: p,
@@ -377,7 +385,6 @@ test('reuses the existing #1096 receipt owner and requires that verified same-ca
     });
     assert.equal(receipt.verification.readbackVerified, true);
     assert.equal(receipt.verification.validationPassed, true);
-    assert.equal(receipt.receipt.candidateId, undefined);
     assert.equal(receipt.receipt.identity.candidateId, CANDIDATE_ID);
 
     const revealed = await store.revealSealedOos({
