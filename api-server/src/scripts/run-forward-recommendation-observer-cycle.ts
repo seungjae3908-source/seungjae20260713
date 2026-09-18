@@ -88,6 +88,8 @@ async function withYahooPublicOnlyStockData<T>(operation: () => Promise<T>): Pro
   const originalCandles = mutable.getCandles;
   const originalCandlesMeta = mutable.getCandlesMeta;
   const originalQuote = mutable.getQuote;
+  const originalPublicOnlyUniverse = process.env.SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE;
+  process.env.SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE = 'true';
   mutable.getCandles = async (ticker, timeframe = '1D') => yahoo.getCandles(ticker, timeframe);
   mutable.getCandlesMeta = async (ticker, timeframe = '1D') => ({
     candles: await yahoo.getCandles(ticker, timeframe),
@@ -101,6 +103,11 @@ async function withYahooPublicOnlyStockData<T>(operation: () => Promise<T>): Pro
     mutable.getCandles = originalCandles;
     mutable.getCandlesMeta = originalCandlesMeta;
     mutable.getQuote = originalQuote;
+    if (originalPublicOnlyUniverse === undefined) {
+      delete process.env.SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE;
+    } else {
+      process.env.SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE = originalPublicOnlyUniverse;
+    }
   }
 }
 
