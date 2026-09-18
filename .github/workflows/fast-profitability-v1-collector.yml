@@ -60,6 +60,8 @@ jobs:
           grep -Fq "backfillCredit: 0" api-server/src/scripts/run-fast-profitability-collector.ts
           grep -Fq "syntheticCredit: 0" api-server/src/scripts/run-fast-profitability-collector.ts
           grep -Fq "manualCredit: 0" api-server/src/scripts/run-fast-profitability-collector.ts
+          grep -Fq 'api-server/.fast-profitability-runtime/forward-observer.mjs' .github/workflows/fast-profitability-v1-collector.yml
+          grep -Fq 'api-server/.fast-profitability-runtime/fast-collector.mjs' .github/workflows/fast-profitability-v1-collector.yml
           git diff --exit-code
           test -z "$(git status --porcelain=v1)"
 
@@ -289,12 +291,13 @@ jobs:
         working-directory: api-server
         run: |
           set -Eeuo pipefail
+          mkdir -p .fast-profitability-runtime
           pnpm exec esbuild src/scripts/run-forward-recommendation-observer-cycle.ts \
             --bundle --packages=external --platform=node --format=esm --target=node20 \
-            --outfile="$RUNNER_TEMP/forward-observer.mjs"
+            --outfile=".fast-profitability-runtime/forward-observer.mjs"
           pnpm exec esbuild src/scripts/run-fast-profitability-collector.ts \
             --bundle --packages=external --platform=node --format=esm --target=node20 \
-            --outfile="$RUNNER_TEMP/fast-collector.mjs"
+            --outfile=".fast-profitability-runtime/fast-collector.mjs"
 
       - name: Run genuine public-data observer cycle
         if: steps.activation.outputs.found == 'true'
@@ -309,7 +312,7 @@ jobs:
           test -f "$input"
           rm -rf "$RUNNER_TEMP/current-observer"
           mkdir -p "$RUNNER_TEMP/current-observer"
-          node "$RUNNER_TEMP/forward-observer.mjs" \
+          node api-server/.fast-profitability-runtime/forward-observer.mjs \
             --research-sha "$TARGET_SHA" \
             --output-dir "$RUNNER_TEMP/current-observer" \
             --state-input "$input"
@@ -330,7 +333,7 @@ jobs:
           if [[ -f "$RUNNER_TEMP/parallel-root/forward/shadow-state.json" ]]; then
             args+=(--parallel-state-root "$RUNNER_TEMP/parallel-root")
           fi
-          node "$RUNNER_TEMP/fast-collector.mjs" "${args[@]}"
+          node api-server/.fast-profitability-runtime/fast-collector.mjs "${args[@]}"
 
       - name: Read summary
         if: steps.activation.outputs.found == 'true'
