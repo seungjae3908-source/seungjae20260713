@@ -55,6 +55,7 @@ export const CANONICAL_INDEPENDENCE_AUDIT_VERSION =
 const SHA256 = /^[0-9a-f]{64}$/u;
 const PAPER_CANDIDATE = /^paper-candidate-v1:[0-9a-f]{64}$/u;
 const PHASE3_CANDIDATE = /^phase3-candidate:sha256:[0-9a-f]{64}$/u;
+const DEPENDENCY_COMPONENT = /^dependency-component:[0-9a-f]{64}$/u;
 const OUTCOME_CLASSES = Object.freeze(['TP', 'SL', 'EXPIRED'] as const);
 
 type OutcomeClass = typeof OUTCOME_CLASSES[number];
@@ -372,6 +373,9 @@ export function routeFastProfitabilityCanonicalIndependentObservation(input: Rea
     throw new Error('FAST_PROFITABILITY_INDEPENDENT_REPRESENTATIVE_REQUIRED');
   }
   const reference = references[0]!;
+  if (!DEPENDENCY_COMPONENT.test(reference.dependencyComponentId)) {
+    throw new Error('FAST_PROFITABILITY_DEPENDENCY_COMPONENT_ID_INVALID');
+  }
   const components = audit.dependencyComponents.filter(
     (item) => item.dependencyComponentId === reference.dependencyComponentId
       && item.representativeObservationId === reference.observationId,
@@ -436,7 +440,7 @@ function assertAllocation(policy: FastProfitabilityPolicy, allocation: FastProfi
     || allocation.candidateDigest !== policy.candidateDigest
     || !SHA256.test(allocation.allocationDigest)
     || !SHA256.test(allocation.independenceAuditDigest)
-    || !nonEmpty(allocation.dependencyComponentId)
+    || !DEPENDENCY_COMPONENT.test(allocation.dependencyComponentId)
     || allocation.outcomeConsulted !== false
     || allocation.reassignmentAllowed !== false
     || allocation.profitabilityCredit !== 0) {
