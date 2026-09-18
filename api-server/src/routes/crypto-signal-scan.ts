@@ -283,7 +283,7 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
         visibleResult.alerts,
         undefined,
         undefined,
-        { timeframe: selectedTimeframe, generatedAt: visibleResult.generatedAt },
+        { timeframe: selectedTimeframe, generatedAt: visibleResult.generatedAt, memberId: req.member!.id },
       );
       void deliverScannerTelegramFollowups(visibleResult.cards);
       res.setHeader('Cache-Control', 'no-store, max-age=0');
