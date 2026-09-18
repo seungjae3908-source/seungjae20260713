@@ -32,7 +32,7 @@ if [[ ! -d "$LIVE_DIR" ]]; then
   exit 4
 fi
 
-for command_name in git node pnpm pm2 curl flock df awk rsync tar; do
+for command_name in git node pnpm pm2 curl flock df awk rsync tar ss readlink sed sort tr; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "[deploy] missing command: $command_name" >&2
     exit 5
@@ -207,6 +207,74 @@ process.stdout.write(`${approved} ${worker}\n`);
   ' "$PM2_NAME"
 }
 
+pm2_runtime_snapshot() {
+  pm2 jlist | node -e '
+const reject = () => process.exit(1);
+let rows;
+try { rows = JSON.parse(require("node:fs").readFileSync(0, "utf8")); } catch { reject(); }
+if (!Array.isArray(rows)) reject();
+const matches = rows.filter((row) => row?.name === process.argv[1]);
+if (matches.length !== 1) reject();
+const row = matches[0];
+const env = row?.pm2_env;
+if (!env || typeof env !== "object" || Array.isArray(env)) reject();
+const bool = (key) => {
+  const value = env[key];
+  if (value === undefined || value === false || value === "false") return "false";
+  if (value === true || value === "true") return "true";
+  reject();
+};
+const watched = env.watch === true || (Array.isArray(env.watch) && env.watch.length > 0);
+process.stdout.write([
+  String(Number(row?.pid ?? 0)),
+  String(env.status ?? "missing"),
+  String(env.pm_cwd ?? "missing"),
+  String(env.pm_exec_path ?? "missing"),
+  watched ? "true" : "false",
+  bool("LIVE_TRADING"),
+  bool("AUTO_TRADING"),
+  bool("REAL_ORDER_ENABLED"),
+  bool("PRIVATE_TRADING_API_ALLOWED"),
+  String(env.executionAuthority ?? "NONE"),
+].join("\t") + "\n");
+  ' "$PM2_NAME"
+}
+
+listener_pids() {
+  ss -H -ltnp 2>/dev/null \
+    | awk -v port="$LIVE_PORT" '$4 ~ (":" port "$") { print }' \
+    | sed -nE 's/.*pid=([0-9]+).*/\1/p' \
+    | sort -u
+}
+
+normalize_pm2_watch_before_restart() {
+  local snapshot pid status cwd exec_path watched _rest
+  snapshot="$(pm2_runtime_snapshot)" || {
+    echo "[deploy] unable to read PM2 runtime definition before restart" >&2
+    return 1
+  }
+  IFS=$'\t' read -r pid status cwd exec_path watched _rest <<< "$snapshot"
+  [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && "$status" == online ]] || {
+    echo "[deploy] PM2 runtime is not online before restart" >&2
+    return 1
+  }
+  [[ "$cwd" == "$LIVE_DIR" ]] || {
+    echo "[deploy] PM2 cwd differs from canonical Production root" >&2
+    return 1
+  }
+  [[ "$(readlink -m "$exec_path")" == "$LIVE_DIR/api-server/dist/index.mjs" ]] || {
+    echo "[deploy] PM2 entrypoint differs from canonical prebuilt Production API" >&2
+    return 1
+  }
+  if [[ "$watched" == true ]]; then
+    echo "[deploy] disabling PM2 watch before application restart"
+    pm2 stop "$PM2_NAME" --watch >/dev/null
+  elif [[ "$watched" != false ]]; then
+    echo "[deploy] PM2 watch state is ambiguous" >&2
+    return 1
+  fi
+}
+
 restart_application_preserving_telegram() {
   local TARGET_SHA="$1" current_state approved worker
   current_state="$(read_telegram_activation_state)" || return 1
@@ -216,19 +284,24 @@ restart_application_preserving_telegram() {
   if [[ "$TELEGRAM_PREDEPLOY_STATE" == "true true" && "$current_state" == "$TELEGRAM_PREDEPLOY_STATE" ]]; then
     read -r approved worker <<< "$TELEGRAM_PREDEPLOY_STATE"
   fi
+  normalize_pm2_watch_before_restart || return 1
   LIVE_TELEGRAM_ACTIVATION_APPROVED="$approved" TELEGRAM_INTELLIGENCE_WORKER_ENABLED="$worker" \
     LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false \
     executionAuthority=NONE DEPLOY_SHA="$TARGET_SHA" pm2 restart "$PM2_NAME" --update-env
 }
 
 application_runtime_ready() {
-  pm2 jlist | node -e '
-let processes;
-try { processes = JSON.parse(require("node:fs").readFileSync(0, "utf8")); } catch { process.exit(1); }
-if (!Array.isArray(processes)) process.exit(1);
-const matches = processes.filter(item => item?.name === process.argv[1]);
-if (matches.length !== 1 || matches[0]?.pm2_env?.status !== "online") process.exit(1);
-  ' "$PM2_NAME"
+  local snapshot pid status cwd exec_path watched live auto real private_api authority
+  snapshot="$(pm2_runtime_snapshot)" || return 1
+  IFS=$'\t' read -r pid status cwd exec_path watched live auto real private_api authority <<< "$snapshot"
+  [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && "$status" == online ]] || return 1
+  [[ "$cwd" == "$LIVE_DIR" ]] || return 1
+  [[ "$(readlink -m "$exec_path")" == "$LIVE_DIR/api-server/dist/index.mjs" ]] || return 1
+  [[ "$watched" == false ]] || return 1
+  [[ "$live" == false && "$auto" == false && "$real" == false && "$private_api" == false ]] || return 1
+  [[ "$authority" == NONE ]] || return 1
+  mapfile -t current_listeners < <(listener_pids)
+  [[ "${#current_listeners[@]}" -eq 1 && "${current_listeners[0]}" == "$pid" ]] || return 1
 }
 
 restore_backup() {
