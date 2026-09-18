@@ -10,16 +10,29 @@ import {
   buildFastProfitabilityProspectivePolicyV1,
   fastProfitabilitySha256,
 } from '../../../market-prediction-lab/src/fast-profitability-prospective-policy-v1.js';
-import type {
-  ManualPaperCanonicalIdentity,
-} from './manual-paper-canonical-contract.service';
 import {
+  manualPaperEvidenceSha256,
+  type ManualPaperCanonicalIdentity,
+} from './manual-paper-canonical-contract.service';
+import type { ScannerSignalCard } from './scanner-signal.types';
+import {
+  advanceForwardRecommendationObservation,
+  prepareForwardRecommendationObservation,
+  type ForwardObservationIdentity,
+  type ForwardRecommendationObservation,
+} from './forward-recommendation-observer.service';
+import {
+  FAST_PROFITABILITY_EXECUTION_CALIBRATION_CLASS,
+  FAST_PROFITABILITY_FORWARD_EVIDENCE_CLASS,
   assertFastProfitabilityEightComponentFullCost,
   assertFastProfitabilityManualIdentity,
+  buildFastProfitabilityForwardIndependenceProjection,
   createFastProfitabilityEvidenceStore,
   createFastProfitabilityParallelEvidenceBridge,
   createFastProfitabilityValidationReceiptBridge,
+  fastProfitabilityEconomicEvidenceFromForwardObservation,
   routeFastProfitabilityCanonicalIndependentObservation,
+  routeFastProfitabilityForwardRepresentative,
   type CanonicalIndependenceAudit,
   type FastProfitabilityAllocation,
   type FastProfitabilityPolicy,
