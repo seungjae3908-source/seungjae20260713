@@ -143,6 +143,14 @@ jobs:
         if: steps.impact.outputs.phase2 == 'true'
         run: pnpm --dir api-server run test:phase2
 
+      - name: Phase 3 risk impacted tests
+        if: steps.impact.outputs.risk == 'true'
+        run: pnpm --dir api-server run test:risk
+
+      - name: Phase 4 contract impacted tests
+        if: steps.impact.outputs.phase4 == 'true'
+        run: pnpm --dir api-server run test:phase4
+
       - name: Phase 5 impacted tests
         if: steps.impact.outputs.phase5 == 'true'
         run: pnpm --dir api-server run test:phase5
