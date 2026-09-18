@@ -321,6 +321,7 @@ test('routes only the canonical independent representative and binds allocation 
   });
 
   assert.ok(['VALIDATION', 'SEALED_OOS'].includes(allocation.split));
+  assert.equal(allocation.evidenceClass, FAST_PROFITABILITY_EXECUTION_CALIBRATION_CLASS);
   assert.equal(allocation.independenceAuditDigest, audit.auditDigest);
   assert.equal(allocation.dependencyComponentId, audit.dependencyComponents[0]!.dependencyComponentId);
   assert.equal(allocation.outcomeConsulted, false);
@@ -346,31 +347,13 @@ test('routes only the canonical independent representative and binds allocation 
   );
 });
 
-test('same dependency component always resolves to the same split and forged split metadata is rejected by store recomputation', async () => {
+test('Forward representative router produces candidate-performance allocation and forged split metadata is rejected by store recomputation', async () => {
   const p = policy();
-  const validation = allocationForSplit(p, 'VALIDATION');
-  const originalRef = validation.audit.independentObservationRefs[0]!;
-  const sameComponentRefs = [{
-    ...originalRef,
-    eventIdentity: 'different-event-same-component',
-    sourceFrameIdentity: 'different-frame-same-component',
-  }];
-  const sameAudit: CanonicalIndependenceAudit = Object.freeze({
-    schemaVersion: validation.audit.schemaVersion,
-    independentObservationRefs: sameComponentRefs,
-    dependencyComponents: structuredClone(validation.audit.dependencyComponents),
-    auditDigest: fastProfitabilitySha256({
-      independentObservationRefs: sameComponentRefs,
-      dependencyComponents: validation.audit.dependencyComponents,
-    }),
-  });
-  const second = routeFastProfitabilityCanonicalIndependentObservation({
-    policy: p,
-    independenceAudit: sameAudit,
-    observationId: validation.observationId,
-  });
-  assert.equal(second.split, validation.allocation.split);
-  assert.equal(second.allocationDigest, validation.allocation.allocationDigest);
+  const validation = allocationForSplit(p, 'VALIDATION', 10, 'TP');
+  assert.equal(validation.allocation.evidenceClass, FAST_PROFITABILITY_FORWARD_EVIDENCE_CLASS);
+  assert.equal(validation.allocation.publicEventIdentity, validation.observation.observationId);
+  assert.equal(validation.economic.sourceObservationId, validation.observation.observationId);
+  assert.equal(validation.economic.outcomeClass, 'TP');
 
   const root = await mkdtemp(path.join(os.tmpdir(), 'fast-profit-forged-'));
   try {
@@ -387,12 +370,8 @@ test('same dependency component always resolves to the same split and forged spl
       () => store.recordSealedOos({
         policy: p,
         allocation: forged,
-        evidence: {
-          outcomeClass: 'TP',
-          observedAtMs: forged.observedAtMs,
-          evidence: { netPnl: 1 },
-        },
-        recordedAtMs: forged.observedAtMs + 1,
+        evidence: validation.economic,
+        recordedAtMs: validation.economic.observedAtMs + 1,
       }),
       /FAST_PROFITABILITY_ALLOCATION_RECOMPUTE_MISMATCH/,
     );
