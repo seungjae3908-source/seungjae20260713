@@ -1427,7 +1427,7 @@ function fastPaperRecordMatches(policy: FastProfitabilityPolicy, value: unknown)
   const row = optionalRecord(value);
   if (!row) return false;
   const identity = optionalRecord(row.identity) ?? row;
-  const direction = identity.executionDirection ?? identity.direction ?? row.direction;
+  const direction = identity.executionDirection ?? identity.direction ?? row.direction ?? row.entryDirection;
   const normalizedSide = direction === 'SHORT' ? 'SHORT' : 'LONG';
   return identity.candidateId === policy.candidate.candidateId
     && identity.strategyId === policy.candidate.strategyId
@@ -1718,12 +1718,30 @@ export function assertFastProfitabilityEightComponentFullCost(value: unknown): A
 }
 
 export function createFastProfitabilityParallelEvidenceBridge(input: Readonly<{
-  collectShadowEvidence: (context: AnyRecord) => Promise<FastProfitabilityParallelEnvelope>;
-  collectNaturalPaperEvidence: (context: AnyRecord) => Promise<FastProfitabilityParallelEnvelope>;
+  collectShadowEvidence?: (context: AnyRecord) => Promise<FastProfitabilityParallelEnvelope>;
+  collectNaturalPaperEvidence?: (context: AnyRecord) => Promise<FastProfitabilityParallelEnvelope>;
+  shadowStateRoot?: string;
+  naturalPaperStateRoot?: string;
+  readbackClock?: () => number;
   collectAuthoritativeSettlementEvidence?: (context: unknown) => Promise<unknown>;
 }>) {
-  if (typeof input.collectShadowEvidence !== 'function'
-    || typeof input.collectNaturalPaperEvidence !== 'function') {
+  const shadowCollector = typeof input.collectShadowEvidence === 'function'
+    ? input.collectShadowEvidence
+    : nonEmpty(input.shadowStateRoot)
+      ? createFastProfitabilityCanonicalShadowReadbackAdapter({
+        stateRoot: input.shadowStateRoot,
+        clock: input.readbackClock,
+      })
+      : null;
+  const naturalPaperCollector = typeof input.collectNaturalPaperEvidence === 'function'
+    ? input.collectNaturalPaperEvidence
+    : nonEmpty(input.naturalPaperStateRoot)
+      ? createFastProfitabilityNaturalPaperReadbackAdapter({
+        stateRoot: input.naturalPaperStateRoot,
+        clock: input.readbackClock,
+      })
+      : null;
+  if (!shadowCollector || !naturalPaperCollector) {
     throw new Error('FAST_PROFITABILITY_PARALLEL_OWNER_COLLECTORS_REQUIRED');
   }
   const settlementProducer = input.collectAuthoritativeSettlementEvidence
@@ -1757,21 +1775,29 @@ export function createFastProfitabilityParallelEvidenceBridge(input: Readonly<{
     });
 
     const [shadowResult, naturalResult] = await Promise.allSettled([
-      input.collectShadowEvidence(common),
-      input.collectNaturalPaperEvidence(common),
+      shadowCollector(Object.freeze({ ...common, policy })),
+      naturalPaperCollector(Object.freeze({ ...common, policy })),
     ]);
     const blockers: string[] = [];
     let shadow: FastProfitabilityParallelEnvelope | null = null;
     let naturalPaper: FastProfitabilityParallelEnvelope | null = null;
     if (shadowResult.status === 'fulfilled') {
-      try { shadow = verifyParallelEnvelope(policy, 'SHADOW', shadowResult.value); }
-      catch { blockers.push('FAST_PROFITABILITY_SHADOW_EVIDENCE_INVALID'); }
+      try {
+        shadow = verifyParallelEnvelope(policy, 'SHADOW', shadowResult.value);
+        if (shadow.status !== 'PRESENT') blockers.push('FAST_PROFITABILITY_SHADOW_EVIDENCE_MISSING');
+      } catch {
+        blockers.push('FAST_PROFITABILITY_SHADOW_EVIDENCE_INVALID');
+      }
     } else {
       blockers.push('FAST_PROFITABILITY_SHADOW_EVIDENCE_UNAVAILABLE');
     }
     if (naturalResult.status === 'fulfilled') {
-      try { naturalPaper = verifyParallelEnvelope(policy, 'NATURAL_PAPER', naturalResult.value); }
-      catch { blockers.push('FAST_PROFITABILITY_NATURAL_PAPER_EVIDENCE_INVALID'); }
+      try {
+        naturalPaper = verifyParallelEnvelope(policy, 'NATURAL_PAPER', naturalResult.value);
+        if (naturalPaper.status !== 'PRESENT') blockers.push('FAST_PROFITABILITY_NATURAL_PAPER_EVIDENCE_MISSING');
+      } catch {
+        blockers.push('FAST_PROFITABILITY_NATURAL_PAPER_EVIDENCE_INVALID');
+      }
     } else {
       blockers.push('FAST_PROFITABILITY_NATURAL_PAPER_EVIDENCE_UNAVAILABLE');
     }
