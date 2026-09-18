@@ -311,7 +311,7 @@ jobs:
 
   browser-ui-shard:
     needs: [ready-gate, browser-ui-start]
-    name: Playwright desktop and mobile UI — shard ${{ matrix.shard }}/4
+    name: Playwright desktop and mobile application UI — shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
     timeout-minutes: 18
     strategy:
