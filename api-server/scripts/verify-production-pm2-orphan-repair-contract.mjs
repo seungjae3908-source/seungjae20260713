@@ -18,6 +18,10 @@ assert(script.includes('live-port listener is managed by a PM2 process; refusing
 assert(script.includes('pm2 stop "$PM2_NAME"'), 'repair must stop the restart loop before orphan termination');
 assert(script.includes('kill -TERM "$ORPHAN_PID"'), 'repair must try graceful orphan termination first');
 assert(script.includes('kill -KILL "$ORPHAN_PID"'), 'repair may hard-stop only the revalidated orphan after a grace period');
+assert(script.includes('trap repair_failure_cleanup EXIT'), 'repair must install a failure recovery trap after immutable preflight');
+assert(script.includes('repair failed after PM2 stop; attempting safe PM2 recovery'), 'repair must attempt PM2 recovery after any post-stop failure');
+assert(script.includes('PM2_STOPPED=1'), 'repair must arm recovery only after PM2 is actually stopped');
+assert(script.includes('REPAIR_COMPLETE=1'), 'repair must mark completion only after final PM2 save succeeds');
 assert(script.includes('POST_LISTENERS[0]}" == "$NEW_PM2_PID"'), 'repair must prove PM2 owns the live port afterward');
 assert(script.includes('probe_health_identity "http://127.0.0.1:$LIVE_PORT" "$ACTIVE_SHA"'), 'repair must prove exact local deployment identity');
 assert(script.includes('LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false'), 'repair must force trading/private authority off');
