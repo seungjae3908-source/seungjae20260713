@@ -180,18 +180,28 @@ if [[ -n "$PUBLIC_BASE_URL" ]]; then
   probe_health_identity "$PUBLIC_BASE_URL" "$ACTIVE_SHA" || fail 'current public Production health identity is not exact before repair'
 fi
 
+PM2_STOPPED=0
+REPAIR_COMPLETE=0
+repair_failure_cleanup() {
+  local status=$?
+  if (( status != 0 )) && [[ "$PM2_STOPPED" == "1" ]] && [[ "$REPAIR_COMPLETE" != "1" ]]; then
+    printf '[pm2-orphan-repair] repair failed after PM2 stop; attempting safe PM2 recovery\n' >&2
+    restart_pm2_with_safe_authority "$ACTIVE_SHA" "$TELEGRAM_APPROVED" "$TELEGRAM_WORKER" || true
+    pm2 save >/dev/null 2>&1 || true
+  fi
+  return "$status"
+}
+trap repair_failure_cleanup EXIT
+
 printf '[pm2-orphan-repair] validated stale listener; stopping PM2 restart loop\n'
 pm2 stop "$PM2_NAME" >/dev/null
+PM2_STOPPED=1
 
 mapfile -t STOP_LISTENERS < <(listener_pids)
 if [[ "${#STOP_LISTENERS[@]}" -ne 1 || "${STOP_LISTENERS[0]}" != "$ORPHAN_PID" ]]; then
-  restart_pm2_with_safe_authority "$ACTIVE_SHA" "$TELEGRAM_APPROVED" "$TELEGRAM_WORKER" || true
-  pm2 save >/dev/null 2>&1 || true
   fail 'listener ownership changed after PM2 stop; repair aborted without terminating a process'
 fi
 probe_health_identity "http://127.0.0.1:$LIVE_PORT" "$ACTIVE_SHA" || {
-  restart_pm2_with_safe_authority "$ACTIVE_SHA" "$TELEGRAM_APPROVED" "$TELEGRAM_WORKER" || true
-  pm2 save >/dev/null 2>&1 || true
   fail 'orphan listener stopped serving the exact active SHA after PM2 stop'
 }
 
@@ -210,8 +220,6 @@ if kill -0 "$ORPHAN_PID" 2>/dev/null; then
   done
 fi
 if kill -0 "$ORPHAN_PID" 2>/dev/null; then
-  restart_pm2_with_safe_authority "$ACTIVE_SHA" "$TELEGRAM_APPROVED" "$TELEGRAM_WORKER" || true
-  pm2 save >/dev/null 2>&1 || true
   fail 'validated orphan listener could not be terminated'
 fi
 
@@ -245,5 +253,6 @@ read -r FINAL_PM2_PID FINAL_PM2_STATUS FINAL_PM2_CWD FINAL_TELEGRAM_APPROVED FIN
 
 pm2 reset "$PM2_NAME" >/dev/null
 pm2 save >/dev/null
+REPAIR_COMPLETE=1
 
 printf '[pm2-orphan-repair] SUCCESS active_sha=%s pm2_owns_port=true trading_authority=NONE telegram_state_preserved=true\n' "$ACTIVE_SHA"
