@@ -498,6 +498,10 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
     if (economic.observedAtMs < policy.eligibleAfterMs) {
       throw new Error('FAST_PROFITABILITY_PRE_BOUNDARY_ECONOMIC_EVIDENCE_FORBIDDEN');
     }
+    const recordedAtMs = safePositiveTime(inputRecord.recordedAtMs, 'FAST_PROFITABILITY_RECORDED_AT_INVALID');
+    if (recordedAtMs < economic.observedAtMs) {
+      throw new Error('FAST_PROFITABILITY_RECORD_PRECEDES_ECONOMIC_EVIDENCE');
+    }
     const economicEvidenceDigest = fastProfitabilitySha256(economic);
     const withoutDigest = Object.freeze({
       schemaVersion: FAST_PROFITABILITY_VALIDATION_RECORD_V1,
@@ -509,7 +513,7 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
       economicEvidenceDigest,
       economicEvidence: economic.evidence,
       parallelEvidence: economic.parallelEvidence ?? null,
-      recordedAtMs: safePositiveTime(inputRecord.recordedAtMs, 'FAST_PROFITABILITY_RECORDED_AT_INVALID'),
+      recordedAtMs,
       economicCreditCreated: false as const,
       profitabilityCredit: 0 as const,
       executionAuthority: 'NONE' as const,
@@ -540,8 +544,37 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
     if (economic.observedAtMs < policy.eligibleAfterMs) {
       throw new Error('FAST_PROFITABILITY_PRE_BOUNDARY_ECONOMIC_EVIDENCE_FORBIDDEN');
     }
+    const recordedAtMs = safePositiveTime(inputRecord.recordedAtMs, 'FAST_PROFITABILITY_RECORDED_AT_INVALID');
+    if (recordedAtMs < economic.observedAtMs) {
+      throw new Error('FAST_PROFITABILITY_RECORD_PRECEDES_ECONOMIC_EVIDENCE');
+    }
     const plaintext = Buffer.from(JSON.stringify(economic));
     const payloadDigest = sha256(plaintext);
+    const dir = storeDirectory(sealedOosRoot, policy.policyDigest, policy.candidateDigest, 'sealed-oos');
+    const filePath = path.join(dir, `${inputRecord.allocation.allocationDigest}.json`);
+
+    try {
+      const existing = JSON.parse(await readFile(filePath, 'utf8')) as FastProfitabilitySealedOosMetadata;
+      const { recordDigest: existingRecordDigest, ...existingWithoutDigest } = existing;
+      if (existing.schemaVersion !== FAST_PROFITABILITY_SEALED_OOS_RECORD_V1
+        || existing.cipherVersion !== FAST_PROFITABILITY_SEALED_OOS_CIPHER_V1
+        || existing.policyDigest !== policy.policyDigest
+        || existing.candidateDigest !== policy.candidateDigest
+        || existing.allocation.allocationDigest !== inputRecord.allocation.allocationDigest
+        || existing.payloadDigest !== payloadDigest
+        || existingRecordDigest !== sealedRecordDigest(existingWithoutDigest)) {
+        throw new Error('FAST_PROFITABILITY_SEALED_OOS_IMMUTABLE_CONFLICT');
+      }
+      return Object.freeze(structuredClone(existing));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        if (error instanceof SyntaxError) {
+          throw new Error('FAST_PROFITABILITY_SEALED_OOS_RECORD_INVALID');
+        }
+        throw error;
+      }
+    }
+
     const iv = randomBytes(12);
     const aad = Buffer.from(`${policy.policyDigest}:${policy.candidateDigest}:${inputRecord.allocation.allocationDigest}`);
     const cipher = createCipheriv('aes-256-gcm', sealingKey, iv);
@@ -559,7 +592,7 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
       iv: iv.toString('base64'),
       authTag: authTag.toString('base64'),
       ciphertext: ciphertext.toString('base64'),
-      recordedAtMs: safePositiveTime(inputRecord.recordedAtMs, 'FAST_PROFITABILITY_RECORDED_AT_INVALID'),
+      recordedAtMs,
       economicOutcomeVisible: false as const,
       economicCreditCreated: false as const,
       profitabilityCredit: 0 as const,
@@ -569,10 +602,25 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
       ...withoutDigest,
       recordDigest: sealedRecordDigest(withoutDigest),
     });
-    const dir = storeDirectory(sealedOosRoot, policy.policyDigest, policy.candidateDigest, 'sealed-oos');
-    const filePath = path.join(dir, `${inputRecord.allocation.allocationDigest}.json`);
-    await writeCreateOnly(filePath, stored);
-    return stored;
+    await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+    try {
+      await writeFile(filePath, `${JSON.stringify(stored, null, 2)}\n`, {
+        encoding: 'utf8',
+        mode: 0o600,
+        flag: 'wx',
+      });
+      return stored;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const raced = JSON.parse(await readFile(filePath, 'utf8')) as FastProfitabilitySealedOosMetadata;
+      const { recordDigest: racedRecordDigest, ...racedWithoutDigest } = raced;
+      if (raced.payloadDigest !== payloadDigest
+        || raced.allocation.allocationDigest !== inputRecord.allocation.allocationDigest
+        || racedRecordDigest !== sealedRecordDigest(racedWithoutDigest)) {
+        throw new Error('FAST_PROFITABILITY_SEALED_OOS_IMMUTABLE_CONFLICT');
+      }
+      return Object.freeze(structuredClone(raced));
+    }
   }
 
   async function readSealedMetadata(inputRead: Readonly<{
@@ -618,6 +666,9 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
       policy,
       allocationDigest: inputReveal.allocationDigest,
     });
+    if (!Number.isSafeInteger(inputReveal.nowMs) || inputReveal.nowMs < stored.recordedAtMs) {
+      throw new Error('FAST_PROFITABILITY_SEALED_OOS_REVEAL_CLOCK_INVALID');
+    }
     if (stored.candidateId !== inputReveal.identity.candidateId) {
       throw new Error('FAST_PROFITABILITY_SEALED_OOS_CANDIDATE_MISMATCH');
     }
@@ -655,8 +706,22 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
     }
     const validationFiles = await files(validationDir);
     const sealedFiles = await files(sealedDir);
-    const validationRecords = await Promise.all(validationFiles.map(async (name) => (
-      JSON.parse(await readFile(path.join(validationDir, name), 'utf8')) as FastProfitabilityValidationStoreRecord
+    const validationRecords = await Promise.all(validationFiles.map(async (name) => {
+      const stored = JSON.parse(await readFile(path.join(validationDir, name), 'utf8')) as FastProfitabilityValidationStoreRecord;
+      const { recordDigest, ...withoutDigest } = stored;
+      if (stored.schemaVersion !== FAST_PROFITABILITY_VALIDATION_RECORD_V1
+        || stored.policyDigest !== policy.policyDigest
+        || stored.candidateDigest !== policy.candidateDigest
+        || recordDigest !== validationRecordDigest(withoutDigest)) {
+        throw new Error('FAST_PROFITABILITY_VALIDATION_RECORD_INVALID');
+      }
+      return stored;
+    }));
+    const sealedRecords = await Promise.all(sealedFiles.map((name) => (
+      readSealedMetadata({
+        policy,
+        allocationDigest: name.replace(/\.json$/u, ''),
+      })
     )));
     const outcomeCounts = Object.fromEntries(OUTCOME_CLASSES.map((name) => [
       name,
@@ -668,7 +733,7 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
     const validationPassed = validationReceiptReadbackVerified && receipt?.receipt.status === 'VALIDATED';
     return evaluateFastProfitabilityReadiness(policy, {
       validationEffectiveIndependentN: validationRecords.length,
-      sealedOosEffectiveIndependentN: sealedFiles.length,
+      sealedOosEffectiveIndependentN: sealedRecords.length,
       validationOutcomeCounts: outcomeCounts,
       validationReceiptReadbackVerified,
       validationPassed,
