@@ -12,7 +12,7 @@ const watcher = await read('api-server/src/scripts/run-fast-profitability-preact
 const activation = await read('api-server/src/services/fast-profitability-activation.service.ts');
 const tests = await read('api-server/src/services/fast-profitability-activation.service.test.ts');
 
-assert(workflow.includes("cron: '*/15 * * * *'"), '15-minute schedule is required');
+assert(workflow.includes("cron: '7,22,37,52 * * * *'"), '15-minute staggered schedule is required');
 assert(workflow.includes('issue_comment:'), 'owner-only one-shot validation command is required');
 assert(workflow.includes('/run-fast-profitability-preactivation-watch <40-character-current-main-sha>'), 'manual watch command contract missing');
 assert(workflow.includes('author_association') && workflow.includes("'OWNER'"), 'OWNER-only command gate required');
