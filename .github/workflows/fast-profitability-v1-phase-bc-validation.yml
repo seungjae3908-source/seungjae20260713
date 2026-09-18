@@ -8,6 +8,7 @@ on:
       - reopened
     paths:
       - 'market-prediction-lab/src/fast-profitability-prospective-policy-v1.js'
+      - 'market-prediction-lab/src/fast-profitability-prospective-policy-v1.d.ts'
       - 'market-prediction-lab/tests/fast-profitability-prospective-policy-v1.test.js'
       - 'api-server/src/services/fast-profitability-evidence-runtime.service.ts'
       - 'api-server/src/services/fast-profitability-evidence-runtime.service.test.ts'
@@ -112,7 +113,7 @@ jobs:
           grep -Fq "executionAuthority: 'NONE'" "$service"
           grep -Fq "existingV3PolicyMutationAllowed: false" "$policy"
 
-          if grep -Eq 'workflow_dispatch:|schedule:' .github/workflows/fast-profitability-v1-phase-bc-validation.yml; then
+          if grep -Eq '^[[:space:]]{2}(workflow_dispatch|schedule):' .github/workflows/fast-profitability-v1-phase-bc-validation.yml; then
             echo 'FAST_PROFITABILITY_ACTIVATION_TRIGGER_FORBIDDEN' >&2
             exit 1
           fi
