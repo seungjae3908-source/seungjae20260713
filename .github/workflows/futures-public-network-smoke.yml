@@ -288,67 +288,105 @@ jobs:
             const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: runUrl, description: `Application CI run ${context.runId}: ${result}`, context: statusContext });
 
-  browser-ui:
+  browser-ui-start:
     needs: ready-gate
-    name: Playwright desktop and mobile application UI
+    name: Publish Browser UI pending status
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 3
     steps:
       - name: Publish pending browser UI status
         uses: actions/github-script@v8
         with:
           script: |
             const sha = process.env.APPLICATION_STATUS_SHA;
-            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state: 'pending', target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Browser UI run ${context.runId}: running`, context: 'browser-ui/verified' });
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha,
+              state: 'pending',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              description: `Browser UI run ${context.runId}: 4-way shard running`,
+              context: 'browser-ui/verified',
+            });
+
+  browser-ui-shard:
+    needs: [ready-gate, browser-ui-start]
+    name: Playwright desktop and mobile UI — shard ${{ matrix.shard }}/4
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           ref: ${{ env.APPLICATION_CHECKOUT_REF }}
           persist-credentials: false
+
       - name: Set up pnpm 9
         uses: pnpm/action-setup@v4
         with:
           version: 9
           run_install: false
+
       - name: Set up Node 20
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+
       - name: Install workspace dependencies with frozen lockfile
         run: pnpm install --frozen-lockfile --prefer-offline
+
       - name: Cache Playwright Chromium
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-chromium-1.61.1-${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: Install Playwright Chromium
         run: pnpm --dir stock-analyzer exec playwright install chromium
-      - name: Run Playwright desktop and mobile tests
+
+      - name: Run full Playwright shard without retry-to-pass
         id: browser
-        run: pnpm --dir stock-analyzer run test:e2e
-      - name: Upload Playwright report and failure evidence
+        run: pnpm --dir stock-analyzer run test:e2e -- --shard=${{ matrix.shard }}/4 --retries=0
+
+      - name: Upload shard Playwright report and failure evidence
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: phase9-playwright-${{ github.run_id }}
+          name: phase9-playwright-${{ github.run_id }}-shard-${{ matrix.shard }}
           path: |
             stock-analyzer/test-results
             stock-analyzer/playwright-report
           if-no-files-found: warn
           retention-days: 7
-      - name: Publish browser UI result
-        if: always()
+
+  browser-ui-result:
+    needs: [browser-ui-start, browser-ui-shard]
+    if: always() && needs.browser-ui-start.result != 'skipped'
+    name: Aggregate Browser UI Required context
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Publish aggregate browser UI result
         uses: actions/github-script@v8
         with:
           script: |
-            const result = '${{ steps.browser.outcome }}' || 'failure';
+            const result = '${{ needs.browser-ui-shard.result }}' || 'failure';
             const sha = process.env.APPLICATION_STATUS_SHA;
             const statusContext = 'browser-ui/verified';
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, { owner: context.repo.owner, repo: context.repo.repo, ref: sha, per_page: 100 });
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: sha,
+              per_page: 100,
+            });
             const latestStatus = statuses
               .filter((status) => status.context === statusContext)
               .sort((left, right) => right.id - left.id)[0];
@@ -356,8 +394,20 @@ jobs:
               core.notice(`A newer run owns ${statusContext} for ${sha}; skipping stale browser status update.`);
               return;
             }
-            const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
-            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: runUrl, description: `Browser UI run ${context.runId}: ${result}`, context: statusContext });
+            const state = result === 'success'
+              ? 'success'
+              : result === 'cancelled'
+                ? 'error'
+                : 'failure';
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha,
+              state,
+              target_url: runUrl,
+              description: `Browser UI run ${context.runId}: 4-way shard ${result}`,
+              context: statusContext,
+            });
 
   database-rls:
     needs: ready-gate
