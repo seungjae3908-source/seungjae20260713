@@ -1,11 +1,37 @@
 import { calculateTradingRisk, floorQuantityToRules, type RiskEngineResult } from './trading-risk-engine.service';
-import type { CancelPaperOrderAction, MarkPaperPriceAction, PaperFill, PaperFillReason, PaperJournalEntry, PaperOrder, PaperOrderStatus, PaperPosition, PaperTradingActionResult, PaperTradingState, PlacePaperOrderAction } from './paper-trading.types';
+import type { CancelPaperOrderAction, MarkPaperPriceAction, PaperBacktestCandidateIdentity, PaperFill, PaperFillReason, PaperJournalEntry, PaperOrder, PaperOrderStatus, PaperPosition, PaperTradingActionResult, PaperTradingState, PlacePaperOrderAction } from './paper-trading.types';
 import {
   EPSILON, MODE, PaperTradingError, adverseFillPrice, buildRiskInput, createId, expectedEntry, finite,
   hasDuplicateSymbol, makeOrder, positive, referencePrice, safeNumber, toIso, unique, validateOrderRequest,
 } from './paper-trading-core.service';
 import type { prepareManualPaperCanonicalEvidence } from './manual-paper-canonical-contract.service';
 type CanonicalInput = NonNullable<ReturnType<typeof prepareManualPaperCanonicalEvidence>>;
+
+function assertBacktestSameCandidate(
+  candidate: PaperBacktestCandidateIdentity | undefined,
+  canonical: CanonicalInput | undefined,
+): void {
+  if (!candidate) return;
+  if (!canonical) {
+    throw new PaperTradingError('SERVER_OWNED_BACKTEST_PAPER_EVIDENCE_REQUIRED', 'Backtest 후보의 Canonical Paper owner evidence가 필요합니다.');
+  }
+  const identity = canonical.lineage.identity;
+  const expected = {
+    candidateId: identity.candidateId,
+    strategyId: identity.strategyId,
+    parameterHash: identity.parameterHash,
+    market: identity.market,
+    symbol: identity.symbol,
+    timeframe: identity.timeframe,
+    side: identity.side,
+    leverage: identity.leverage,
+  } as const;
+  for (const field of ['candidateId', 'strategyId', 'parameterHash', 'market', 'symbol', 'timeframe', 'side', 'leverage'] as const) {
+    if (candidate[field] !== expected[field]) {
+      throw new PaperTradingError(`BACKTEST_PAPER_IDENTITY_MISMATCH_${field.toUpperCase()}`, 'Backtest 후보와 Canonical Paper identity가 일치하지 않습니다.');
+    }
+  }
+}
 
 export function transitionPaperOrder(order: PaperOrder, next: PaperOrderStatus, at: string) {
   const allowed: Record<PaperOrderStatus, PaperOrderStatus[]> = {
@@ -118,6 +144,7 @@ export function createPositionFromOrder(
     dataStatusAtEntry: order.dataStatusAtSubmission,
     marketRegimeAtEntry: order.marketRegimeAtSubmission,
     warnings: [...order.warnings],
+    ...(order.backtestCandidate ? { backtestCandidate: structuredClone(order.backtestCandidate) } : {}),
     ...(canonical ? { canonicalPaper: structuredClone(canonical.lineage) } : {}),
   };
   const fill: PaperFill = {
@@ -136,6 +163,7 @@ export function createPositionFromOrder(
     referencePrice: reference,
     grossPnl: 0,
     netPnl: canonical ? -entryImmediateCost : -entryFee - slippageCost,
+    ...(order.backtestCandidate ? { backtestCandidate: structuredClone(order.backtestCandidate) } : {}),
     ...(canonical ? { symbol: canonical.lineage.identity.symbol, canonicalPaper: structuredClone(canonical.lineage) } : {}),
   };
   transitionPaperOrder(order, 'filled', at);
@@ -150,6 +178,7 @@ export function createPositionFromOrder(
 export function evaluatePlacePaperOrder(state: PaperTradingState, action: PlacePaperOrderAction, now: Date, canonical?: CanonicalInput): PaperTradingActionResult {
   const at = now.toISOString();
   const request = validateOrderRequest(action.request);
+  assertBacktestSameCandidate(request.backtestCandidate, canonical);
   const warnings = unique([
     ...(action.market.warnings ?? []),
     ...(action.contractRules.warnings ?? []),
@@ -210,6 +239,7 @@ export function evaluatePlacePaperOrder(state: PaperTradingState, action: PlaceP
     warnings,
     at,
   );
+  if (request.backtestCandidate) order.backtestCandidate = structuredClone(request.backtestCandidate);
   if (canonical) {
     order.canonicalPaper = structuredClone(canonical.lineage);
     const evidence = canonical.lineage.entryCostEvidence.components;
@@ -335,6 +365,7 @@ function upsertJournal(
     entry.status = position.status;
     entry.warnings = unique([...entry.warnings, ...position.warnings]);
   }
+  if (position.backtestCandidate) entry.backtestCandidate = structuredClone(position.backtestCandidate);
   if (position.canonicalPaper) entry.canonicalPaper = structuredClone(position.canonicalPaper);
 }
 
@@ -416,6 +447,7 @@ export function closePositionInternal(
     referencePrice: reference,
     grossPnl: referenceGrossPnl,
     netPnl: netForJournal,
+    ...(position.backtestCandidate ? { backtestCandidate: structuredClone(position.backtestCandidate) } : {}),
     ...(canonical ? { symbol: canonical.lineage.identity.symbol, canonicalPaper: structuredClone(canonical.lineage) } : {}),
   };
   state.fills.push(fill);
