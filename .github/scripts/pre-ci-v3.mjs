@@ -84,7 +84,8 @@ async function runAuditors(cwd, requireZeroLedger) {
 }
 
 async function runVirtualMergeGate(root, base, head, requireZeroLedger) {
-  const worktree = await mkdtemp(path.join(tmpdir(), 'ci-v3-virtual-merge-'));
+  const tempRoot = await mkdtemp(path.join(tmpdir(), 'ci-v3-virtual-merge-'));
+  const worktree = path.join(tempRoot, 'tree');
   try {
     runShell(`git worktree add --detach "${worktree}" "${head}"`, root);
     try {
@@ -96,7 +97,7 @@ async function runVirtualMergeGate(root, base, head, requireZeroLedger) {
     process.stdout.write(`[VIRTUAL_MERGE_PASS] base=${base} head=${head}\n`);
   } finally {
     try { runShell(`git worktree remove --force "${worktree}"`, root); } catch {}
-    await rm(worktree, { recursive: true, force: true });
+    await rm(tempRoot, { recursive: true, force: true });
   }
 }
 
