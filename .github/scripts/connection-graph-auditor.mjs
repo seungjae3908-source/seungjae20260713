@@ -388,7 +388,12 @@ export const DEFAULT_EDGES = [
       {
         id: 'scanner-alert-central-history-producer',
         paths: ['api-server/src/services/scanner-telegram-delivery.service.ts'],
-        allOf: ['notification_history'],
+        allOf: ['deliverMemberNotification', 'runScannerInAppNotification', 'memberId'],
+      },
+      {
+        id: 'notification-history-canonical-writer',
+        paths: ['api-server/src/services/notification.service.ts'],
+        allOf: ["from('notification_history')", 'member_id: input.memberId'],
       },
     ],
   },
