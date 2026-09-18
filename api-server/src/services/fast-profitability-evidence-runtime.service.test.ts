@@ -382,8 +382,8 @@ test('Forward representative router produces candidate-performance allocation an
 
 test('Validation store is create-only while Sealed OOS is encrypted, idempotent, and hides economic outcome at rest', async () => {
   const p = policy();
-  const validation = allocationForSplit(p, 'VALIDATION', 100);
-  const sealed = allocationForSplit(p, 'SEALED_OOS', 100);
+  const validation = allocationForSplit(p, 'VALIDATION', 100, 'TP');
+  const sealed = allocationForSplit(p, 'SEALED_OOS', 100, 'SL');
   const root = await mkdtemp(path.join(os.tmpdir(), 'fast-profit-store-'));
   try {
     const store = createFastProfitabilityEvidenceStore({
@@ -392,36 +392,34 @@ test('Validation store is create-only while Sealed OOS is encrypted, idempotent,
       sealingKey: Buffer.alloc(32, 7),
     });
 
+    const validationEconomic = fastProfitabilityEconomicEvidenceFromForwardObservation({
+      policy: p,
+      allocation: validation.allocation,
+      observation: validation.observation,
+      parallelEvidence: { fullCost: fullCostFixture() },
+    });
     const validationRecord = await store.recordValidation({
       policy: p,
       allocation: validation.allocation,
-      evidence: {
-        outcomeClass: 'TP',
-        observedAtMs: validation.allocation.observedAtMs,
-        evidence: { netPnl: 2.5, fullCost: fullCostFixture() },
-      },
-      recordedAtMs: validation.allocation.observedAtMs + 1,
+      evidence: validationEconomic,
+      recordedAtMs: validationEconomic.observedAtMs + 1,
     });
     assert.equal(validationRecord.outcomeClass, 'TP');
     assert.equal(validationRecord.economicCreditCreated, false);
     assert.equal(validationRecord.profitabilityCredit, 0);
 
-    const evidence = {
-      outcomeClass: 'SL' as const,
-      observedAtMs: sealed.allocation.observedAtMs,
-      evidence: { netPnl: -123.456, secretMarker: 'SEALED_ECONOMIC_OUTCOME' },
-    };
+    const evidence = sealed.economic;
     const first = await store.recordSealedOos({
       policy: p,
       allocation: sealed.allocation,
       evidence,
-      recordedAtMs: sealed.allocation.observedAtMs + 1,
+      recordedAtMs: evidence.observedAtMs + 1,
     });
     const second = await store.recordSealedOos({
       policy: p,
       allocation: sealed.allocation,
       evidence,
-      recordedAtMs: sealed.allocation.observedAtMs + 1,
+      recordedAtMs: evidence.observedAtMs + 1,
     });
     assert.equal(first.recordDigest, second.recordDigest);
     assert.equal(first.ciphertext, second.ciphertext);
@@ -436,9 +434,9 @@ test('Validation store is create-only while Sealed OOS is encrypted, idempotent,
       `${sealed.allocation.allocationDigest}.json`,
     );
     const raw = await readFile(filePath, 'utf8');
-    assert.equal(raw.includes('SEALED_ECONOMIC_OUTCOME'), false);
-    assert.equal(raw.includes('-123.456'), false);
+    assert.equal(raw.includes('"outcome":"LOSS"'), false);
     assert.equal(raw.includes('"outcomeClass"'), false);
+    assert.equal(raw.includes('"returnPercent"'), false);
 
     const metadata = await store.readSealedMetadata({
       policy: p,
@@ -447,15 +445,18 @@ test('Validation store is create-only while Sealed OOS is encrypted, idempotent,
     assert.equal(metadata.economicOutcomeVisible, false);
     assert.equal('outcomeClass' in metadata, false);
 
+    const changedEconomic = fastProfitabilityEconomicEvidenceFromForwardObservation({
+      policy: p,
+      allocation: sealed.allocation,
+      observation: sealed.observation,
+      parallelEvidence: { immutableConflictProbe: true },
+    });
     await assert.rejects(
       () => store.recordSealedOos({
         policy: p,
         allocation: sealed.allocation,
-        evidence: {
-          ...evidence,
-          evidence: { netPnl: 999 },
-        },
-        recordedAtMs: sealed.allocation.observedAtMs + 1,
+        evidence: changedEconomic,
+        recordedAtMs: changedEconomic.observedAtMs + 1,
       }),
       /FAST_PROFITABILITY_SEALED_OOS_IMMUTABLE_CONFLICT/,
     );
