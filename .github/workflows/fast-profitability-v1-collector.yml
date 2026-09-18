@@ -1,0 +1,390 @@
+name: Fast Profitability V1 Future Collector
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/fast-profitability-v1-collector.yml'
+      - 'api-server/src/services/fast-profitability-activation.service.ts'
+      - 'api-server/src/scripts/run-fast-profitability-collector.ts'
+  schedule:
+    - cron: '*/15 * * * *'
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: fast-profitability-v1-collector
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+      - name: Verify exact head
+        run: |
+          set -Eeuo pipefail
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck and bundle collector
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server run typecheck
+          pnpm --dir api-server exec esbuild src/scripts/run-fast-profitability-collector.ts \
+            --bundle --packages=external --platform=node --format=esm --target=node20 \
+            --outfile="$RUNNER_TEMP/fast-collector.mjs"
+          node --check "$RUNNER_TEMP/fast-collector.mjs"
+      - name: Verify fail-closed schedule
+        run: |
+          set -Eeuo pipefail
+          grep -Fq "cron: '*/15 * * * *'" .github/workflows/fast-profitability-v1-collector.yml
+          grep -Fq "executionAuthority: 'NONE'" api-server/src/scripts/run-fast-profitability-collector.ts
+          grep -Fq "replayCredit: 0" api-server/src/scripts/run-fast-profitability-collector.ts
+          grep -Fq "backfillCredit: 0" api-server/src/scripts/run-fast-profitability-collector.ts
+          grep -Fq "syntheticCredit: 0" api-server/src/scripts/run-fast-profitability-collector.ts
+          grep -Fq "manualCredit: 0" api-server/src/scripts/run-fast-profitability-collector.ts
+          git diff --exit-code
+          test -z "$(git status --porcelain=v1)"
+
+  collect:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Locate unique active binding
+        id: activation
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, per_page: 100,
+            });
+            const active = artifacts
+              .filter((a) => !a.expired && /^fast-profitability-v1-activation-[0-9a-f]{40}$/.test(a.name))
+              .sort((a,b) => String(b.created_at).localeCompare(String(a.created_at)));
+            if (active.length === 0) {
+              core.notice('No active Fast binding; clean no-op.');
+              core.setOutput('found', 'false');
+              return;
+            }
+            if (active.length !== 1) {
+              core.setFailed('Ambiguous Fast activation artifacts.');
+              return;
+            }
+            const a = active[0];
+            const run = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner, repo: context.repo.repo, run_id: a.workflow_run.id,
+            });
+            if (run.data.conclusion !== 'success'
+              || !String(run.data.path).endsWith('fast-profitability-v1-activation.yml')) {
+              core.setFailed('Activation artifact provenance invalid.');
+              return;
+            }
+            core.setOutput('found', 'true');
+            core.setOutput('name', a.name);
+            core.setOutput('run_id', String(a.workflow_run.id));
+
+      - name: Clean no-op without activation
+        if: steps.activation.outputs.found != 'true'
+        run: echo "No active Fast binding; no evidence collection."
+
+      - name: Download activation bundle
+        if: steps.activation.outputs.found == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.activation.outputs.name }}
+          path: ${{ runner.temp }}/activation
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.activation.outputs.run_id }}
+
+      - name: Validate binding
+        if: steps.activation.outputs.found == 'true'
+        id: binding
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const p = process.env.RUNNER_TEMP + '/activation/binding.json';
+          const b = JSON.parse(fs.readFileSync(p, 'utf8'));
+          if (b?.contract !== 'fast-profitability-activation-binding-v1'
+            || b?.status !== 'ACTIVE_FUTURE_ONLY'
+            || !/^[0-9a-f]{40}$/.test(b.targetSha)
+            || !/^[0-9a-f]{64}$/.test(b.activationDigest)
+            || b?.safety?.executionAuthority !== 'NONE'
+            || b?.safety?.liveTrading !== false
+            || b?.safety?.autoTrading !== false
+            || b?.safety?.realOrderEnabled !== false
+            || b?.safety?.privateTradingApiAllowed !== false
+            || b?.safety?.replayCredit !== 0
+            || b?.safety?.backfillCredit !== 0
+            || b?.safety?.syntheticCredit !== 0
+            || b?.safety?.manualCredit !== 0) {
+            throw new Error('FAST_PROFITABILITY_SCHEDULE_BINDING_INVALID');
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'target_sha=' + b.targetSha + '\n');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'activation_digest=' + b.activationDigest + '\n');
+          NODE
+
+      - name: Locate separated OOS key
+        if: steps.activation.outputs.found == 'true'
+        id: key
+        uses: actions/github-script@v7
+        env:
+          KEY_NAME: fast-profitability-v1-key-${{ steps.binding.outputs.activation_digest }}
+          ACTIVATION_RUN_ID: ${{ steps.activation.outputs.run_id }}
+        with:
+          script: |
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, per_page: 100,
+            });
+            const matches = artifacts.filter((a) => !a.expired && a.name === process.env.KEY_NAME);
+            if (matches.length !== 1) {
+              core.setFailed('Exactly one OOS key artifact required.');
+              return;
+            }
+            const a = matches[0];
+            if (String(a.workflow_run.id) !== process.env.ACTIVATION_RUN_ID) {
+              core.setFailed('OOS key run mismatch.');
+              return;
+            }
+            core.setOutput('name', a.name);
+            core.setOutput('run_id', String(a.workflow_run.id));
+
+      - name: Download OOS key
+        if: steps.activation.outputs.found == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.key.outputs.name }}
+          path: ${{ runner.temp }}/key
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.key.outputs.run_id }}
+
+      - name: Locate prior cumulative state
+        if: steps.activation.outputs.found == 'true'
+        id: previous
+        uses: actions/github-script@v7
+        env:
+          STATE_NAME: fast-profitability-v1-state-${{ steps.binding.outputs.activation_digest }}
+        with:
+          script: |
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, per_page: 100,
+            });
+            const rows = artifacts
+              .filter((a) => !a.expired && a.name === process.env.STATE_NAME)
+              .sort((a,b) => String(b.created_at).localeCompare(String(a.created_at)));
+            for (const a of rows) {
+              const run = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner, repo: context.repo.repo, run_id: a.workflow_run.id,
+              });
+              if (run.data.conclusion !== 'success'
+                || !String(run.data.path).endsWith('fast-profitability-v1-collector.yml')) continue;
+              core.setOutput('found', 'true');
+              core.setOutput('name', a.name);
+              core.setOutput('run_id', String(a.workflow_run.id));
+              return;
+            }
+            core.setOutput('found', 'false');
+
+      - name: Download prior cumulative state
+        if: steps.activation.outputs.found == 'true' && steps.previous.outputs.found == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.previous.outputs.name }}
+          path: ${{ runner.temp }}/previous-state
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.previous.outputs.run_id }}
+
+      - name: Locate latest successful Shadow artifact
+        if: steps.activation.outputs.found == 'true'
+        id: shadow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, per_page: 100,
+            });
+            const rows = artifacts
+              .filter((a) => !a.expired && /^prediction-lab-shadow-cycle-[0-9]+$/.test(a.name))
+              .sort((a,b) => String(b.created_at).localeCompare(String(a.created_at)));
+            for (const a of rows) {
+              const run = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner, repo: context.repo.repo, run_id: a.workflow_run.id,
+              });
+              if (run.data.conclusion !== 'success') continue;
+              core.setOutput('found', 'true');
+              core.setOutput('name', a.name);
+              core.setOutput('run_id', String(a.workflow_run.id));
+              return;
+            }
+            core.setOutput('found', 'false');
+
+      - name: Download Shadow artifact
+        if: steps.activation.outputs.found == 'true' && steps.shadow.outputs.found == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.shadow.outputs.name }}
+          path: ${{ runner.temp }}/shadow-artifact
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.shadow.outputs.run_id }}
+
+      - name: Materialize read-only Shadow state
+        if: steps.activation.outputs.found == 'true' && steps.shadow.outputs.found == 'true'
+        run: |
+          set -Eeuo pipefail
+          state="$(find "$RUNNER_TEMP/shadow-artifact" -type f -name shadow-state.json -print -quit)"
+          if [[ -n "$state" ]]; then
+            mkdir -p "$RUNNER_TEMP/parallel-root/forward"
+            cp "$state" "$RUNNER_TEMP/parallel-root/forward/shadow-state.json"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.activation.outputs.found == 'true'
+        with:
+          ref: ${{ steps.binding.outputs.target_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify activated SHA
+        if: steps.activation.outputs.found == 'true'
+        env:
+          TARGET_SHA: ${{ steps.binding.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+      - if: steps.activation.outputs.found == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - if: steps.activation.outputs.found == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+      - if: steps.activation.outputs.found == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build observer and collector
+        if: steps.activation.outputs.found == 'true'
+        working-directory: api-server
+        run: |
+          set -Eeuo pipefail
+          pnpm exec esbuild src/scripts/run-forward-recommendation-observer-cycle.ts \
+            --bundle --packages=external --platform=node --format=esm --target=node20 \
+            --outfile="$RUNNER_TEMP/forward-observer.mjs"
+          pnpm exec esbuild src/scripts/run-fast-profitability-collector.ts \
+            --bundle --packages=external --platform=node --format=esm --target=node20 \
+            --outfile="$RUNNER_TEMP/fast-collector.mjs"
+
+      - name: Run genuine public-data observer cycle
+        if: steps.activation.outputs.found == 'true'
+        env:
+          TARGET_SHA: ${{ steps.binding.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          input="$RUNNER_TEMP/activation/observer-state.json"
+          if [[ '${{ steps.previous.outputs.found }}' == 'true' ]]; then
+            input="$RUNNER_TEMP/previous-state/observer-state.json"
+          fi
+          test -f "$input"
+          rm -rf "$RUNNER_TEMP/current-observer"
+          mkdir -p "$RUNNER_TEMP/current-observer"
+          node "$RUNNER_TEMP/forward-observer.mjs" \
+            --research-sha "$TARGET_SHA" \
+            --output-dir "$RUNNER_TEMP/current-observer" \
+            --state-input "$input"
+
+      - name: Collect future-only evidence
+        if: steps.activation.outputs.found == 'true'
+        run: |
+          set -Eeuo pipefail
+          args=(
+            --activation-root "$RUNNER_TEMP/activation"
+            --sealing-key "$RUNNER_TEMP/key/sealing-key.b64"
+            --observer-state "$RUNNER_TEMP/current-observer/state.json"
+            --output-dir "$RUNNER_TEMP/collector-output"
+          )
+          if [[ '${{ steps.previous.outputs.found }}' == 'true' ]]; then
+            args+=(--previous-state-root "$RUNNER_TEMP/previous-state")
+          fi
+          if [[ -f "$RUNNER_TEMP/parallel-root/forward/shadow-state.json" ]]; then
+            args+=(--parallel-state-root "$RUNNER_TEMP/parallel-root")
+          fi
+          node "$RUNNER_TEMP/fast-collector.mjs" "${args[@]}"
+
+      - name: Read summary
+        if: steps.activation.outputs.found == 'true'
+        id: summary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const s = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/collector-output/summary.json', 'utf8'));
+          const nv = Number(s.newValidationCount ?? 0);
+          const no = Number(s.newSealedOosCount ?? 0);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'new_validation=' + nv + '\n');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'new_oos=' + no + '\n');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'new_total=' + (nv + no) + '\n');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'validation_total=' + Number(s.validationCount ?? 0) + '\n');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'oos_total=' + Number(s.sealedOosCount ?? 0) + '\n');
+          NODE
+
+      - name: Upload cumulative state
+        if: steps.activation.outputs.found == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fast-profitability-v1-state-${{ steps.binding.outputs.activation_digest }}
+          path: ${{ runner.temp }}/collector-output
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Report newly admitted records
+        if: steps.activation.outputs.found == 'true' && steps.summary.outputs.new_total != '0'
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.binding.outputs.target_sha }}
+          ACTIVATION_DIGEST: ${{ steps.binding.outputs.activation_digest }}
+          NEW_VALIDATION: ${{ steps.summary.outputs.new_validation }}
+          NEW_OOS: ${{ steps.summary.outputs.new_oos }}
+          VALIDATION_TOTAL: ${{ steps.summary.outputs.validation_total }}
+          OOS_TOTAL: ${{ steps.summary.outputs.oos_total }}
+        with:
+          script: |
+            const body = [
+              '[FAST_PROFITABILITY_V1_GENUINE_FUTURE_EVIDENCE]',
+              'target_sha=' + process.env.TARGET_SHA,
+              'activation_digest=' + process.env.ACTIVATION_DIGEST,
+              'new_validation=' + process.env.NEW_VALIDATION,
+              'new_sealed_oos=' + process.env.NEW_OOS,
+              'validation_total=' + process.env.VALIDATION_TOTAL,
+              'sealed_oos_total=' + process.env.OOS_TOTAL,
+              'profitability_credit=0',
+              'executionAuthority=NONE',
+              'replay_backfill_synthetic_manual_credit=0',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 1102,
+              body,
+            });
