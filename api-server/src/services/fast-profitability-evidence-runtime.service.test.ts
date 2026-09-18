@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -27,7 +27,9 @@ import {
   assertFastProfitabilityEightComponentFullCost,
   assertFastProfitabilityManualIdentity,
   buildFastProfitabilityForwardIndependenceProjection,
+  createFastProfitabilityCanonicalShadowReadbackAdapter,
   createFastProfitabilityEvidenceStore,
+  createFastProfitabilityNaturalPaperReadbackAdapter,
   createFastProfitabilityParallelEvidenceBridge,
   createFastProfitabilityValidationReceiptBridge,
   fastProfitabilityEconomicEvidenceFromForwardObservation,
@@ -658,6 +660,201 @@ test('readiness comes from durable Validation/OOS stores and cannot reveal OOS b
     assert.equal(afterReceipt.profitabilityCredit, 0);
     assert.equal(afterReceipt.profitabilityClaimAllowed, false);
     assert.equal(afterReceipt.championPromotionAllowed, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('read-only owner adapters connect canonical Shadow and Natural Paper state roots without callback or runtime activation', async () => {
+  const p = policy();
+  const validation = allocationForSplit(p, 'VALIDATION', 2600, 'TP');
+  const root = await mkdtemp(path.join(os.tmpdir(), 'fast-profit-owner-readback-'));
+  const nowMs = validation.economic.observedAtMs + 60_000;
+  try {
+    const strategyIdentity = {
+      strategyId: p.candidate.strategyId,
+      strategyVersion: p.candidate.strategyVersion,
+      parameterHash: p.candidate.parameterHash,
+      researchCodeSha: p.candidate.researchCodeSha,
+      market: p.candidate.market,
+      timeframe: p.candidate.timeframe,
+      direction: 'LONG',
+    };
+    const strategyIdentityDigest = fastProfitabilitySha256(strategyIdentity);
+    const handoffBody = {
+      schemaVersion: 'prediction-lab-strategy-health-shadow-handoff-v1',
+      strategyIdentity,
+      strategyIdentityDigest,
+      executionAuthority: 'NONE',
+    };
+    const handoff = {
+      ...handoffBody,
+      evidenceDigest: fastProfitabilitySha256(handoffBody),
+    };
+    const publicationBody = {
+      schemaVersion: 'prediction-lab-shadow-state-publication-v1',
+      sourceType: 'GITHUB_ACTIONS_ARTIFACT',
+      researchCodeSha: p.candidate.researchCodeSha,
+      handoffEvidenceDigests: { 'crypto-futures-15m': handoff.evidenceDigest },
+      freshness: {
+        status: 'FRESH',
+        checkedAt: new Date(nowMs - 1_000).toISOString(),
+        expiresAt: new Date(nowMs + 60_000).toISOString(),
+      },
+      replayArtifact: false,
+      duplicateArtifact: false,
+      PROFITABILITY_PROVEN: false,
+      FORWARD_EVIDENCE_SUFFICIENT: false,
+      safety: {
+        LIVE_TRADING: false,
+        AUTO_TRADING: false,
+        REAL_ORDER_ENABLED: false,
+        PRIVATE_TRADING_API_ALLOWED: false,
+        executionAuthority: 'NONE',
+        orderSubmitted: false,
+      },
+    };
+    const shadowState = {
+      schemaVersion: 3,
+      groups: {
+        'crypto-futures-15m': {
+          canonicalEvidence: {
+            schemaVersion: 'prediction-lab-shadow-runtime-evidence-v1',
+            PROFITABILITY_PROVEN: false,
+            FORWARD_EVIDENCE_SUFFICIENT: false,
+            strategyIdentityDigest,
+            handoff: { strategyHealthHandoff: handoff },
+            observations: [{
+              observationId: 'shadow-observation-1',
+              symbol: p.candidate.symbol,
+              market: p.candidate.market,
+              timeframe: p.candidate.timeframe,
+              direction: 'LONG',
+              strategyIdentityDigest,
+              observedAt: new Date(nowMs - 30_000).toISOString(),
+              actualDirection: 'bullish',
+              sourceProvenance: {
+                horizon: p.candidate.horizon,
+                capturedAtObservationTime: true,
+                synthetic: false,
+                replayed: false,
+                historicalBackfill: false,
+              },
+            }],
+          },
+        },
+      },
+      canonicalPublication: {
+        ...publicationBody,
+        evidenceDigest: fastProfitabilitySha256(publicationBody),
+      },
+    };
+    const shadowPath = path.join(root, 'forward', 'shadow-state.json');
+    await mkdir(path.dirname(shadowPath), { recursive: true });
+    await writeFile(shadowPath, JSON.stringify(shadowState), 'utf8');
+
+    const paperIdentity = {
+      strategyId: p.candidate.strategyId,
+      strategyVersion: p.candidate.strategyVersion,
+      parameterHash: p.candidate.parameterHash,
+      researchCodeSha: p.candidate.researchCodeSha,
+      costPolicyVersion: 'cost-policy-v1',
+      executionPolicyVersion: 'exit-policy-v1',
+    };
+    const paperRecordIdentity = {
+      candidateId: p.candidate.candidateId,
+      strategyId: p.candidate.strategyId,
+      strategyVersion: p.candidate.strategyVersion,
+      parameterHash: p.candidate.parameterHash,
+      parameterDigest: p.candidate.parameterHash,
+      researchCodeSha: p.candidate.researchCodeSha,
+      market: p.candidate.market,
+      symbol: p.candidate.symbol,
+      timeframe: p.candidate.timeframe,
+      horizon: p.candidate.horizon,
+      executionDirection: 'LONG',
+      accountMode: 'PAPER',
+    };
+    const paperState = {
+      schemaVersion: 'recurring-paper-loop-v1',
+      identity: paperIdentity,
+      identityFingerprint: fastProfitabilitySha256(paperIdentity),
+      createdAtMs: nowMs - 120_000,
+      updatedAtMs: nowMs - 1_000,
+      cycles: [],
+      samples: [{ identity: paperRecordIdentity }],
+      positions: [{
+        ...paperRecordIdentity,
+        direction: 'LONG',
+        positionId: 'position-1',
+      }],
+      settlements: [{
+        ...paperRecordIdentity,
+        entryDirection: 'LONG',
+        settlementId: 'settlement-1',
+      }],
+      ledger: {},
+      simulatedOnly: true,
+      liveOrderAllowed: false,
+      privateTradingApiAllowed: false,
+      orderSubmitted: false,
+      exchangeRequestSent: false,
+      productionMutationAllowed: false,
+      profitabilityClaimAllowed: false,
+    };
+    const paperPath = path.join(root, 'forward', 'paper', 'state', 'recurring-paper-loop.json');
+    await mkdir(path.dirname(paperPath), { recursive: true });
+    await writeFile(paperPath, JSON.stringify(paperState), 'utf8');
+
+    const shadowReader = createFastProfitabilityCanonicalShadowReadbackAdapter({
+      stateRoot: root,
+      clock: () => nowMs,
+    });
+    const paperReader = createFastProfitabilityNaturalPaperReadbackAdapter({
+      stateRoot: root,
+      clock: () => nowMs,
+    });
+    const context = {
+      policy: p,
+      policyDigest: p.policyDigest,
+      candidateDigest: p.candidateDigest,
+      candidateId: p.candidate.candidateId,
+    };
+    const shadow = await shadowReader(context);
+    const naturalPaper = await paperReader(context);
+    assert.equal(shadow.status, 'PRESENT');
+    assert.equal((shadow.evidence as Record<string, unknown>).observationCount, 1);
+    assert.equal((shadow.evidence as Record<string, unknown>).settledObservationCount, 1);
+    assert.equal(naturalPaper.status, 'PRESENT');
+    assert.equal((naturalPaper.evidence as Record<string, unknown>).sampleCount, 1);
+    assert.equal((naturalPaper.evidence as Record<string, unknown>).openPositionCount, 1);
+    assert.equal((naturalPaper.evidence as Record<string, unknown>).settlementCount, 1);
+
+    const bridge = createFastProfitabilityParallelEvidenceBridge({
+      shadowStateRoot: root,
+      naturalPaperStateRoot: root,
+      readbackClock: () => nowMs,
+    });
+    const result = await bridge({
+      policy: p,
+      allocation: validation.allocation,
+      observedAtMs: validation.economic.observedAtMs,
+    });
+    assert.equal(result.shadow?.status, 'PRESENT');
+    assert.equal(result.naturalPaper?.status, 'PRESENT');
+    assert.deepEqual(
+      result.blockers,
+      ['FAST_PROFITABILITY_SETTLEMENT_COLLECTOR_NOT_CONNECTED'],
+    );
+    assert.equal(result.fullCostReady, false);
+    assert.equal(result.economicCreditCreated, false);
+    assert.equal(result.profitabilityCredit, 0);
+    assert.equal(result.executionAuthority, 'NONE');
+
+    const shadowBytesAfter = await readFile(shadowPath, 'utf8');
+    const paperBytesAfter = await readFile(paperPath, 'utf8');
+    assert.equal(shadowBytesAfter, JSON.stringify(shadowState));
+    assert.equal(paperBytesAfter, JSON.stringify(paperState));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
