@@ -128,6 +128,15 @@ test('action refusal does not block ordinary public-information questions', () =
   assert.equal(actionRefusal('미국 주식의 PER 의미를 알려줘'), null);
 });
 
+test('POST /api/ai/chat preserves the selected scope and rejects unsupported timeframe before providers', async () => {
+  const context = { market: 'BITGET', symbol: 'ETHUSDT', ticker: 'ETHUSDT', timeframe: '4H', action: 'SHORT', selectedAt: '2026-09-01T00:00:00.000Z' };
+  const response = await postAiChatRoute({ message: '실제 주문 실행해줘', context });
+  assert.equal(response.statusCode, 200); assert.equal(response.body.kind, 'refusal');
+  assert.deepEqual(response.body.selection, context);
+  const invalid = await postAiChatRoute({ message: '시장 위험을 설명해줘', context: { ...context, timeframe: 'invented' } });
+  assert.equal(invalid.statusCode, 400); assert.equal(invalid.body.error, 'AI_CHAT_INVALID_CONTEXT');
+});
+
 test('GEMINI_API_KEY enables the free Gemini provider without a duplicate AI chat secret', async () => {
   const previous = snapshotAiEnvironment();
   clearAiEnvironment();

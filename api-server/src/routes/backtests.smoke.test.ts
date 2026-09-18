@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { createBacktestsRouter, resetBacktestRouteStateForTests } from './backtests';
 import type { NormalizedCandle } from '../services/futures-market-data.service';
 import type { BacktestResult } from '../services/backtest-engine.service';
+import type { AuthenticatedRequest } from '../middleware/auth';
 
 const START = Date.UTC(2026, 0, 1);
 const STEP = 15 * 60_000;
@@ -52,10 +53,15 @@ const validBody = {
   intrabarPriority: 'stop_first',
 };
 
-async function withServer(execute?: (request: any, rows: readonly NormalizedCandle[]) => BacktestResult) {
+async function withServer(execute?: (request: any, rows: readonly NormalizedCandle[]) => BacktestResult, authenticated = false) {
   resetBacktestRouteStateForTests();
   const app = express();
   app.use(express.json({ limit: '128kb' }));
+  if (authenticated) app.use((req, _res, next) => {
+    (req as AuthenticatedRequest).member = { id: '11111111-1111-1111-1111-111111111111', login_name: 'test', display_name: 'test',
+      role: 'admin', membership_level: 'admin', status: 'approved', is_active: true };
+    next();
+  });
   app.use('/api', createBacktestsRouter({
     loadCandles: async () => ({ candles, warnings: [], requestCount: 1 }),
     loadContractRules: async () => ({
@@ -76,6 +82,7 @@ async function withServer(execute?: (request: any, rows: readonly NormalizedCand
       warnings: [],
     }),
     execute,
+    researchCodeSha: authenticated ? () => 'a'.repeat(40) : undefined,
   }));
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve, reject) => {
@@ -93,6 +100,29 @@ async function safeJson(response: Response) {
   return JSON.parse(text) as Record<string, any>;
 }
 
+test('actual Backtest run→server source validation preserves identity, rejects URL edits and grants no execution credit', async () => {
+  const { server, baseUrl } = await withServer(undefined, true);
+  try {
+    const run = await fetch(`${baseUrl}/api/backtests/run`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(validBody) });
+    assert.equal(run.status, 200);
+    const result = (await run.json() as { result: BacktestResult }).result;
+    assert.ok(result.paperHandoffRunId);
+    const candidate = result.paperHandoffs![0];
+    const request = { mode: 'approval', accountMode: 'paper', adapter: 'paper', backtestRunId: result.paperHandoffRunId, backtestCandidate: candidate };
+    const validated = await fetch(`${baseUrl}/api/backtests/paper/validate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request) });
+    assert.equal(validated.status, 503);
+    const payload = await validated.json() as Record<string, any>;
+    assert.equal(payload.sourceValidated, true); assert.equal(payload.executionConnected, false);
+    assert.deepEqual(payload.backtestCandidate, candidate);
+    assert.equal(payload.researchFrozenCandidateProven, false); assert.equal(payload.validationReceiptProven, false);
+    assert.equal(payload.evidenceCredit, 0); assert.equal(payload.orderSubmitted, false);
+    for (const change of [{ side: candidate.side === 'LONG' ? 'SHORT' : 'LONG' }, { leverage: 3 }, { parameterHash: 'f'.repeat(64) }]) {
+      const rejected = await fetch(`${baseUrl}/api/backtests/paper/validate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...request, backtestCandidate: { ...candidate, ...change } }) });
+      assert.equal(rejected.status, 409);
+    }
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+});
+
 test('backtest route returns backtest-only result and never submits an order', async () => {
   const { server, baseUrl } = await withServer();
   try {
@@ -109,6 +139,15 @@ test('backtest route returns backtest-only result and never submits an order', a
     assert.equal(body.result.mode, 'backtest-only');
     assert.equal(body.result.orderSubmitted, false);
     assert.equal('order' in body, false);
+    assert.deepEqual(body.result.paperHandoffs.map((value: any) => value.side), ['LONG', 'SHORT']);
+    for (const value of body.result.paperHandoffs) {
+      assert.equal(value.symbol, validBody.symbol);
+      assert.equal(value.timeframe, validBody.timeframe);
+      assert.equal(value.leverage, validBody.leverage);
+      assert.equal(value.status, 'REFERENCE_ONLY');
+      assert.equal(value.evidenceCredit, 0);
+      assert.equal(value.executionAuthority, 'NONE');
+    }
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

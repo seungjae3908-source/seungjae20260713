@@ -147,7 +147,7 @@ export function validateState(state: PaperTradingState) {
 
 export function validateOrderRequest(request: PaperOrderRequest) {
   const symbol = String(request.symbol ?? '').trim().toUpperCase();
-  if (!/^[A-Z0-9]{2,20}$/.test(symbol)) {
+  if (!(request.canonicalIdentity ? /^[A-Z0-9][A-Z0-9.:-]{1,39}$/ : /^[A-Z0-9]{2,20}$/).test(symbol)) {
     throw new PaperTradingError('INVALID_SYMBOL', '종목 형식이 올바르지 않습니다.');
   }
   if (!['long', 'short'].includes(request.side)) {
