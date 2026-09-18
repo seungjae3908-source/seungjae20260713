@@ -8,6 +8,8 @@ export const IMPACT_RULES = Object.freeze({
   frontend: /^(stock-analyzer\/|packages\/|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)/u,
   backend: /^(api-server\/|packages\/|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)/u,
   phase2: /^(api-server\/.*(futures|bitget|market|scanner)|packages\/)/u,
+  risk: /^(api-server\/.*(risk|trade|execution|order)|packages\/)/u,
+  phase4: /^(api-server\/.*(risk|contract-rules|futures-contract)|packages\/)/u,
   phase5: /^(api-server\/.*(backtest|research|strategy|candidate)|stock-analyzer\/.*backtest)/u,
   phase6: /^(api-server\/.*(paper|position|settlement|scanner)|stock-analyzer\/.*(paper|scanner))/u,
   phase7: /^(api-server\/.*(journal|portfolio)|stock-analyzer\/.*(journal|portfolio))/u,
@@ -40,7 +42,7 @@ export function commandsForImpact(impact, { includeBuild = true } = {}) {
     commands.push('pnpm --dir api-server run typecheck');
     commands.push('pnpm --dir api-server run test:unit');
   }
-  for (const phase of ['phase2', 'phase5', 'phase6', 'phase7', 'phase8', 'phase9', 'phase12']) {
+  for (const phase of ['phase2', 'risk', 'phase4', 'phase5', 'phase6', 'phase7', 'phase8', 'phase9', 'phase12']) {
     if (impact[phase]) commands.push(`pnpm --dir api-server run test:${phase}`);
   }
   if (impact.backend) commands.push('pnpm --dir api-server run test:smoke');
