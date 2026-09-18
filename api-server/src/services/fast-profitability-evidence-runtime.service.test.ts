@@ -42,6 +42,7 @@ function policy(): FastProfitabilityPolicy {
       market: 'CRYPTO_FUTURES',
       symbol: 'BTCUSDT',
       timeframe: '15m',
+      horizon: 8,
       side: 'LONG',
       riskPolicyRef: 'risk-policy:fast-v1',
       costPolicyRef: 'cost-policy:fast-v1',
