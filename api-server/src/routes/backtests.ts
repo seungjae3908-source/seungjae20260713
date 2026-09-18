@@ -10,7 +10,7 @@ import {
 } from '../services/backtest-engine.service';
 import { loadHistoricalBacktestCandles } from '../services/backtest-data.service';
 import { getFuturesContractRules } from '../services/futures-contract-rules.service';
-import { buildBacktestPaperHandoffs } from '../services/backtest-paper-handoff.service';
+import { buildBacktestPaperHandoffBundle, type BacktestPaperCanonicalStrategyInput } from '../services/backtest-paper-handoff.service';
 
 const MAX_REQUEST_BYTES = 64 * 1024;
 const EXECUTION_TIMEOUT_MS = 25_000;
@@ -159,6 +159,7 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
 
     const controller = new AbortController();
     let acceptedRequestForHandoff: BacktestRequest | null = null;
+    let acceptedStrategyIdentityInputs: Readonly<Record<string, BacktestPaperCanonicalStrategyInput>> = {};
     const detachAbort = attachAbort(req, controller);
     activeExecutions += 1;
     try {
@@ -179,8 +180,10 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
           contractRulesStatus: rules.status,
         };
         const result = deps.execute(acceptedRequest, history.candles);
+        const paperHandoffBundle = buildBacktestPaperHandoffBundle(acceptedRequest, history.candles, deps.researchCodeSha());
         acceptedRequestForHandoff = acceptedRequest;
-        result.paperHandoffs = buildBacktestPaperHandoffs(acceptedRequest, history.candles, deps.researchCodeSha());
+        acceptedStrategyIdentityInputs = paperHandoffBundle.strategyIdentityInputs;
+        result.paperHandoffs = paperHandoffBundle.handoffs;
         const executionMs = performance.now() - started;
         result.warnings = [...new Set([...history.warnings, ...rules.warnings, ...result.warnings, `과거 캔들 제공자 요청 ${history.requestCount}회, 순수 계산 ${executionMs.toFixed(1)}ms`])];
         return result;
@@ -189,7 +192,7 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
       if (controller.signal.aborted) throw new BacktestValidationError('BACKTEST_ABORTED', '백테스트 요청이 취소되었습니다.');
       const runReference = acceptedRequestForHandoff && deps.sourceRegistry.captureBacktest(
         (req as AuthenticatedRequest).member?.id ?? '', acceptedRequestForHandoff,
-        result.paperHandoffs ?? [], deps.researchCodeSha(),
+        result.paperHandoffs ?? [], deps.researchCodeSha(), acceptedStrategyIdentityInputs,
       );
       if (runReference) result.paperHandoffRunId = runReference;
       return res.json({
