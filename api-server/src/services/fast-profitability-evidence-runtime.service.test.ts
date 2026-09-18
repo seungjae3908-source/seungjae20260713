@@ -335,9 +335,8 @@ test('Validation store is create-only while Sealed OOS is encrypted, idempotent,
   }
 });
 
-test('reuses the existing #1096 receipt owner and requires that verified same-candidate receipt before Sealed OOS reveal', async () => {
+test('reuses #1096 only when its receipt is cryptographically bound to the Fast durable Validation store before Sealed OOS reveal', async () => {
   const p = policy();
-  const sealed = allocationForSplit(p, 'SEALED_OOS', 500);
   const root = await mkdtemp(path.join(os.tmpdir(), 'fast-profit-receipt-'));
   try {
     const store = createFastProfitabilityEvidenceStore({
@@ -345,55 +344,107 @@ test('reuses the existing #1096 receipt owner and requires that verified same-ca
       sealedOosRoot: path.join(root, 'sealed'),
       sealingKey: Buffer.alloc(32, 11),
     });
-    await store.recordSealedOos({
-      policy: p,
-      allocation: sealed.allocation,
-      evidence: {
-        outcomeClass: 'TP',
-        observedAtMs: sealed.allocation.observedAtMs,
-        evidence: { netPnl: 4.25, source: 'sealed-oos-genuine' },
-      },
-      recordedAtMs: sealed.allocation.observedAtMs + 1,
-    });
+
+    let validationCursor = 500;
+    let sealedCursor = 500;
+    let targetSealed: ReturnType<typeof allocationForSplit> | null = null;
+    for (let index = 0; index < 30; index += 1) {
+      const validation = allocationForSplit(p, 'VALIDATION', validationCursor);
+      validationCursor += 100;
+      await store.recordValidation({
+        policy: p,
+        allocation: validation.allocation,
+        evidence: {
+          outcomeClass: ['TP', 'SL', 'EXPIRED'][index % 3] as 'TP' | 'SL' | 'EXPIRED',
+          observedAtMs: validation.allocation.observedAtMs,
+          evidence: { result: `validation-receipt:${index}` },
+        },
+        recordedAtMs: validation.allocation.observedAtMs + 1,
+      });
+
+      const sealed = allocationForSplit(p, 'SEALED_OOS', sealedCursor);
+      sealedCursor += 100;
+      await store.recordSealedOos({
+        policy: p,
+        allocation: sealed.allocation,
+        evidence: {
+          outcomeClass: index === 0 ? 'TP' : ['TP', 'SL', 'EXPIRED'][index % 3] as 'TP' | 'SL' | 'EXPIRED',
+          observedAtMs: sealed.allocation.observedAtMs,
+          evidence: index === 0
+            ? { netPnl: 4.25, source: 'sealed-oos-genuine' }
+            : { result: `sealed-receipt:${index}` },
+        },
+        recordedAtMs: sealed.allocation.observedAtMs + 1,
+      });
+      if (index === 0) targetSealed = sealed;
+    }
+    assert.ok(targetSealed);
 
     const manualIdentity = identity();
     assert.doesNotThrow(() => assertFastProfitabilityManualIdentity(p, manualIdentity));
 
-    const receiptObservedAtMs = sealed.allocation.observedAtMs + 10;
+    const fastEvidence = await store.buildValidationEvidence(p, manualIdentity);
+    assert.equal(fastEvidence.sampleSize, 30);
+    assert.equal(fastEvidence.minimumSampleSize, 30);
+
+    const foreignIssueReceipt = createFastProfitabilityValidationReceiptBridge({
+      receiptRoot: path.join(root, 'foreign-receipts'),
+      maximumAgeMs: 60_000,
+      readValidationEvidence: async () => Object.freeze({
+        ...fastEvidence,
+        datasetDigest: '4'.repeat(64),
+        resultArtifactDigest: '5'.repeat(64),
+      }),
+    });
+    const foreignReceipt = await foreignIssueReceipt({
+      policy: p,
+      identity: manualIdentity,
+      nowMs: fastEvidence.observedAtMs + 1,
+    });
+    const foreignSummary = await store.summarize(p, foreignReceipt);
+    assert.equal(foreignSummary.validationReady, false);
+    assert.equal(foreignSummary.sealedOosRevealAllowed, false);
+    await assert.rejects(
+      () => store.revealSealedOos({
+        policy: p,
+        allocationDigest: targetSealed!.allocation.allocationDigest,
+        identity: manualIdentity,
+        receipt: foreignReceipt.receipt,
+        verification: foreignReceipt.verification,
+        nowMs: fastEvidence.observedAtMs + 2,
+      }),
+      /FAST_PROFITABILITY_VALIDATION_RECEIPT_STORE_BINDING_MISMATCH/,
+    );
+
     const issueReceipt = createFastProfitabilityValidationReceiptBridge({
       receiptRoot: path.join(root, 'receipts'),
       maximumAgeMs: 60_000,
-      readValidationEvidence: async (actualIdentity) => {
-        assert.deepEqual(actualIdentity, manualIdentity);
-        return Object.freeze({
-          source: 'FORWARD_RECOMMENDATION_OBSERVER',
-          provenance: 'PROSPECTIVE_PUBLIC_FORWARD',
-          observedAtMs: receiptObservedAtMs,
-          prospectiveBoundaryMs: p.eligibleAfterMs,
-          oosBoundaryProven: true as const,
-          sampleSize: 30,
-          minimumSampleSize: 30,
-          datasetDigest: '4'.repeat(64),
-          resultArtifactDigest: '5'.repeat(64),
-        });
-      },
+      policy: p,
+      store,
     });
     const receipt = await issueReceipt({
       policy: p,
       identity: manualIdentity,
-      nowMs: receiptObservedAtMs + 1,
+      nowMs: fastEvidence.observedAtMs + 1,
     });
     assert.equal(receipt.verification.readbackVerified, true);
     assert.equal(receipt.verification.validationPassed, true);
     assert.equal(receipt.receipt.identity.candidateId, CANDIDATE_ID);
+    assert.equal(receipt.receipt.datasetDigest, fastEvidence.datasetDigest);
+    assert.equal(receipt.receipt.resultArtifactDigest, fastEvidence.resultArtifactDigest);
+
+    const readySummary = await store.summarize(p, receipt);
+    assert.equal(readySummary.validationReady, true);
+    assert.equal(readySummary.sealedOosMinimumReached, true);
+    assert.equal(readySummary.sealedOosRevealAllowed, true);
 
     const revealed = await store.revealSealedOos({
       policy: p,
-      allocationDigest: sealed.allocation.allocationDigest,
+      allocationDigest: targetSealed!.allocation.allocationDigest,
       identity: manualIdentity,
       receipt: receipt.receipt,
       verification: receipt.verification,
-      nowMs: receiptObservedAtMs + 2,
+      nowMs: fastEvidence.observedAtMs + 2,
     });
     assert.equal(revealed.outcomeClass, 'TP');
     assert.deepEqual(revealed.evidence, { netPnl: 4.25, source: 'sealed-oos-genuine' });
@@ -405,11 +456,11 @@ test('reuses the existing #1096 receipt owner and requires that verified same-ca
     await assert.rejects(
       () => store.revealSealedOos({
         policy: p,
-        allocationDigest: sealed.allocation.allocationDigest,
+        allocationDigest: targetSealed!.allocation.allocationDigest,
         identity: manualIdentity,
         receipt: receipt.receipt,
         verification: invalidVerification,
-        nowMs: receiptObservedAtMs + 2,
+        nowMs: fastEvidence.observedAtMs + 2,
       }),
       (error: unknown) => {
         assert.equal(
@@ -470,25 +521,17 @@ test('readiness comes from durable Validation/OOS stores and cannot reveal OOS b
     assert.equal(beforeReceipt.sealedOosRevealAllowed, false);
 
     const manualIdentity = identity();
+    const fastEvidence = await store.buildValidationEvidence(p, manualIdentity);
     const issueReceipt = createFastProfitabilityValidationReceiptBridge({
       receiptRoot: path.join(root, 'receipts'),
       maximumAgeMs: 60_000,
-      readValidationEvidence: async () => Object.freeze({
-        source: 'FORWARD_RECOMMENDATION_OBSERVER',
-        provenance: 'PROSPECTIVE_PUBLIC_FORWARD',
-        observedAtMs: ELIGIBLE_AT + 50_000,
-        prospectiveBoundaryMs: ELIGIBLE_AT,
-        oosBoundaryProven: true as const,
-        sampleSize: 30,
-        minimumSampleSize: 30,
-        datasetDigest: '6'.repeat(64),
-        resultArtifactDigest: '7'.repeat(64),
-      }),
+      policy: p,
+      store,
     });
     const receipt = await issueReceipt({
       policy: p,
       identity: manualIdentity,
-      nowMs: ELIGIBLE_AT + 50_001,
+      nowMs: fastEvidence.observedAtMs + 1,
     });
     const afterReceipt = await store.summarize(p, receipt);
     assert.equal(afterReceipt.validationReady, true);
