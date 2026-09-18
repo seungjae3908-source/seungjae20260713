@@ -31,7 +31,7 @@ function refreshExitExecutionId(identity) {
   identity.exitExecutionId = sha(payload);
 }
 
-function fixture() {
+function fixture(candidateId = `paper-candidate-v1:${"c".repeat(64)}`) {
   const position = {
     positionId: "position-1",
     paperSampleId: "sample-1",
@@ -39,7 +39,7 @@ function fixture() {
     market: "CRYPTO_SPOT",
     symbol: "KRW-BTC",
     direction: "BUY",
-    candidateId: `paper-candidate-v1:${"c".repeat(64)}`,
+    candidateId,
     strategyFamily: "strategy-family-1",
     strategyId: "strategy-1",
     strategyVersion: "v1",
@@ -363,4 +363,15 @@ test("copying a valid-looking binding cannot bypass the canonical producer capab
   assert.equal(validation.blockers.includes(
     "PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_CANONICAL_PRODUCER_REQUIRED",
   ), true);
+});
+
+test("phase3 frozen namespace retains the exact candidate through real trigger-bound producer validation", () => {
+  const candidateId = `phase3-candidate:sha256:${"c".repeat(64)}`;
+  const row = fixture(candidateId);
+  const bound = bindNaturalPaperTriggerBoundSettlementEvidence(row);
+  assert.equal(bound.status, "PRESENT");
+  assert.equal(bound.observation.triggerBoundSettlementEvidence.positionIdentity.candidateId, candidateId);
+  assert.equal(validateNaturalPaperTriggerBoundSettlementEvidence({ position: row.position,
+    observation: bound.observation, evaluatedAtMs: row.evaluatedAtMs }).status, "PRESENT");
+  assert.equal(bound.naturalSampleCredit, 0);
 });

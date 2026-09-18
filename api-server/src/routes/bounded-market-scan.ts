@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Router, type IRouter, type NextFunction, type Response } from 'express';
+import { productPaperSourceRegistry } from '../services/product-paper-source-registry.service';
 import {
   requireAuthenticated,
   requireCapability,
@@ -318,11 +319,12 @@ export function createBoundedMarketScanRouter(
       if (controller.signal.aborted || res.writableEnded) return;
       const canonicalResult = withScannerCanonicalActions(result);
       const visibleResult = withScannerOutcome(filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined));
+      productPaperSourceRegistry.captureScanner(req.member!.id, visibleResult, String(process.env.DEPLOY_SHA ?? '').trim().toLowerCase());
       void deliverScannerTelegramAlerts(
         visibleResult.alerts,
         undefined,
         undefined,
-        { timeframe, generatedAt: visibleResult.generatedAt },
+        { timeframe, generatedAt: visibleResult.generatedAt, memberId: req.member!.id },
       );
       void deliverScannerTelegramFollowups(visibleResult.cards);
       res.setHeader('X-Scanner-Request-Id', result.requestId);
