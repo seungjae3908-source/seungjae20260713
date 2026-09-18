@@ -860,7 +860,20 @@ export function createFastProfitabilityEvidenceStore(input: Readonly<{
       name,
       validationRecords.filter((entry) => entry.outcomeClass === name).length,
     ]));
-    const validationReceiptReadbackVerified = receipt?.verification.readbackVerified === true
+    let receiptStoreBound = false;
+    if (receipt) {
+      const expectedEvidence = await buildValidationEvidence(
+        policy,
+        receipt.receipt.identity as ManualPaperCanonicalIdentity,
+      );
+      receiptStoreBound = receipt.receipt.datasetDigest === expectedEvidence.datasetDigest
+        && receipt.receipt.resultArtifactDigest === expectedEvidence.resultArtifactDigest
+        && receipt.receipt.prospectiveBoundaryMs === expectedEvidence.prospectiveBoundaryMs
+        && receipt.receipt.sampleSize === expectedEvidence.sampleSize
+        && receipt.receipt.minimumSampleSize === expectedEvidence.minimumSampleSize;
+    }
+    const validationReceiptReadbackVerified = receiptStoreBound
+      && receipt?.verification.readbackVerified === true
       && receipt.verification.validationPassed === true
       && receipt.verification.receiptSha256 === manualPaperEvidenceSha256(receipt.receipt);
     const validationPassed = validationReceiptReadbackVerified && receipt?.receipt.status === 'VALIDATED';
