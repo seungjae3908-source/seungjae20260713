@@ -81,6 +81,8 @@ jobs:
           grep -Fq "backfillCredit: 0" "$service"
           grep -Fq "syntheticCredit: 0" "$service"
           grep -Fq "manualCredit: 0" "$service"
+          grep -Fq 'api-server/.fast-profitability-runtime/forward-observer.mjs' .github/workflows/fast-profitability-v1-activation.yml
+          grep -Fq 'api-server/.fast-profitability-runtime/fast-activation.mjs' .github/workflows/fast-profitability-v1-activation.yml
           ! grep -R -E 'LIVE_TRADING=.?(true|1)|AUTO_TRADING=.?(true|1)|REAL_ORDER_ENABLED=.?(true|1)|PRIVATE_TRADING_API_ALLOWED=.?(true|1)' \
             api-server/src/services/fast-profitability-activation.service.ts \
             api-server/src/scripts/run-fast-profitability-activation.ts \
@@ -198,12 +200,13 @@ jobs:
         working-directory: api-server
         run: |
           set -Eeuo pipefail
+          mkdir -p .fast-profitability-runtime
           pnpm exec esbuild src/scripts/run-forward-recommendation-observer-cycle.ts \
             --bundle --packages=external --platform=node --format=esm --target=node20 \
-            --outfile="$RUNNER_TEMP/forward-observer.mjs"
+            --outfile=".fast-profitability-runtime/forward-observer.mjs"
           pnpm exec esbuild src/scripts/run-fast-profitability-activation.ts \
             --bundle --packages=external --platform=node --format=esm --target=node20 \
-            --outfile="$RUNNER_TEMP/fast-activation.mjs"
+            --outfile=".fast-profitability-runtime/fast-activation.mjs"
       - name: Run one clean public-data Forward preflight
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
@@ -211,7 +214,7 @@ jobs:
           set -Eeuo pipefail
           rm -rf "$RUNNER_TEMP/activation-observer"
           mkdir -p "$RUNNER_TEMP/activation-observer"
-          node "$RUNNER_TEMP/forward-observer.mjs" \
+          node api-server/.fast-profitability-runtime/forward-observer.mjs \
             --research-sha "$TARGET_SHA" \
             --output-dir "$RUNNER_TEMP/activation-observer"
       - name: Freeze immutable binding and separated OOS key
@@ -222,7 +225,7 @@ jobs:
           set -Eeuo pipefail
           rm -rf "$RUNNER_TEMP/fast-profitability-activation" "$RUNNER_TEMP/fast-profitability-key"
           mkdir -p "$RUNNER_TEMP/fast-profitability-key"
-          node "$RUNNER_TEMP/fast-activation.mjs" \
+          node api-server/.fast-profitability-runtime/fast-activation.mjs \
             --target-sha "$TARGET_SHA" \
             --observer-state "$RUNNER_TEMP/activation-observer/state.json" \
             --output-dir "$RUNNER_TEMP/fast-profitability-activation" \
