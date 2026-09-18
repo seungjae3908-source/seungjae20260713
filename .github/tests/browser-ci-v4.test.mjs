@@ -52,8 +52,8 @@ test('Full Browser Required context is four-way sharded and aggregated once', as
   assert.doesNotMatch(workflow, /^  browser-ui:$/mu);
   assert.match(workflow, /shard:\s*\[1, 2, 3, 4\]/u);
   assert.match(workflow, /fail-fast:\s*false/u);
-  assert.match(workflow, /--shard=\$\{\{ matrix\.shard \}\}\/4/u);
-  assert.match(workflow, /--retries=0/u);
+  assert.match(workflow, /pnpm --dir stock-analyzer exec playwright test -c playwright\.config\.ts --shard=\$\{\{ matrix\.shard \}\}\/4 --retries=0/u);
+  assert.doesNotMatch(workflow, /run test:e2e -- --shard=/u);
   assert.match(workflow, /needs:\s*\[browser-ui-start, browser-ui-shard\]/u);
   assert.match(workflow, /Aggregate Browser UI Required context/u);
   assert.match(workflow, /browser-ui\/verified/u);
