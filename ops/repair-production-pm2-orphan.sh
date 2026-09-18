@@ -133,32 +133,37 @@ NODE
   rm -f "$output_file"
 }
 
-assert_expected_orphan() {
+cmdline_resolves_expected_entry() {
   local pid="$1"
-  local pm2_pid="$2"
-  local process_cwd process_exe resolved_arg found_entry=0 arg
+  local process_cwd arg resolved_arg
 
-  [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 ]] || fail 'invalid live-port listener PID'
-  [[ "$pid" != "$pm2_pid" ]] || fail 'live port is already owned by the PM2 stock-app process; no orphan repair is needed'
-  [[ -r "/proc/$pid/cmdline" && -r "/proc/$pid/environ" && -e "/proc/$pid/cwd" && -e "/proc/$pid/exe" ]] || fail 'listener disappeared before validation'
-  [[ "$(ps -o uid= -p "$pid" | tr -d '[:space:]')" == "$(id -u)" ]] || fail 'listener is not owned by the Production service account'
-
-  process_exe="$(readlink -f "/proc/$pid/exe")"
-  [[ "${process_exe##*/}" == node ]] || fail 'live-port listener is not the expected Node runtime'
   process_cwd="$(readlink -f "/proc/$pid/cwd")"
-  [[ "$process_cwd" == "$LIVE_DIR" || "$process_cwd" == "$LIVE_DIR/"* ]] || fail 'live-port listener cwd is outside the Production application root'
-
   while IFS= read -r -d '' arg; do
     case "$arg" in
       /*) resolved_arg="$(readlink -m "$arg")" ;;
       *) resolved_arg="$(readlink -m "$process_cwd/$arg")" ;;
     esac
     if [[ "$resolved_arg" == "$EXPECTED_ENTRY" ]]; then
-      found_entry=1
-      break
+      return 0
     fi
   done < "/proc/$pid/cmdline"
-  [[ "$found_entry" == 1 ]] || fail 'live-port listener command does not resolve to the canonical Production API entrypoint'
+  return 1
+}
+
+assert_expected_orphan() {
+  local pid="$1"
+  local pm2_pid="$2"
+  local process_cwd process_exe
+
+  [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 ]] || fail 'invalid live-port listener PID'
+  [[ "$pid" != "$pm2_pid" ]] || fail 'live port is already owned by the PM2 stock-app process; no orphan repair is needed'
+  [[ -r "/proc/$pid/cmdline" && -r "/proc/$pid/environ" && -r "/proc/$pid/stat" && -e "/proc/$pid/cwd" && -e "/proc/$pid/exe" ]] || fail 'listener disappeared before validation'
+  [[ "$(ps -o uid= -p "$pid" | tr -d '[:space:]')" == "$(id -u)" ]] || fail 'listener is not owned by the Production service account'
+
+  process_exe="$(readlink -f "/proc/$pid/exe")"
+  [[ "${process_exe##*/}" == node ]] || fail 'live-port listener is not the expected Node runtime'
+  process_cwd="$(readlink -f "/proc/$pid/cwd")"
+  [[ "$process_cwd" == "$LIVE_DIR" || "$process_cwd" == "$LIVE_DIR/"* ]] || fail 'live-port listener cwd is outside the Production application root'
 
   if all_pm2_pids | grep -Fx "$pid" >/dev/null; then
     fail 'live-port listener is managed by a PM2 process; refusing orphan termination'
@@ -170,11 +175,14 @@ declare -a ORPHAN_ENV_FULL=()
 declare -a APP_ENV=()
 declare -A ORPHAN_ENV_MAP=()
 ORPHAN_CWD=""
+ORPHAN_START_TICKS=""
 
 capture_orphan_runtime() {
   local pid="$1"
   local arg entry key value
   ORPHAN_CWD="$(readlink -f "/proc/$pid/cwd")"
+  ORPHAN_START_TICKS="$(awk '{print $22}' "/proc/$pid/stat")"
+  [[ "$ORPHAN_START_TICKS" =~ ^[0-9]+$ ]] || fail 'validated orphan process start identity is unavailable'
   while IFS= read -r -d '' arg; do
     ORPHAN_CMD+=("$arg")
   done < "/proc/$pid/cmdline"
@@ -196,6 +204,16 @@ capture_orphan_runtime() {
     esac
     APP_ENV+=("$entry")
   done < "/proc/$pid/environ"
+}
+
+assert_same_orphan_identity() {
+  local pid="$1"
+  local pm2_pid="$2"
+  local current_start_ticks
+
+  assert_expected_orphan "$pid" "$pm2_pid"
+  current_start_ticks="$(awk '{print $22}' "/proc/$pid/stat")"
+  [[ "$current_start_ticks" == "$ORPHAN_START_TICKS" ]] || fail 'validated orphan PID was reused or process identity changed before termination'
 }
 
 orphan_bool() {
@@ -278,6 +296,13 @@ ORPHAN_PID="${PRE_LISTENERS[0]}"
 assert_expected_orphan "$ORPHAN_PID" "$PM2_PID"
 capture_orphan_runtime "$ORPHAN_PID"
 
+ORPHAN_ENTRY_MODE=direct
+if ! cmdline_resolves_expected_entry "$ORPHAN_PID"; then
+  ORPHAN_ENTRY_MODE=legacy
+fi
+ORPHAN_DEPLOY_SHA="${ORPHAN_ENV_MAP[DEPLOY_SHA]-}"
+[[ "$ORPHAN_DEPLOY_SHA" == "$ACTIVE_SHA" ]] || fail 'serving orphan DEPLOY_SHA does not match exact active Production SHA'
+
 ORPHAN_LIVE_TRADING="$(orphan_bool LIVE_TRADING)"
 ORPHAN_AUTO_TRADING="$(orphan_bool AUTO_TRADING)"
 ORPHAN_REAL_ORDER="$(orphan_bool REAL_ORDER_ENABLED)"
@@ -298,6 +323,9 @@ fi
 probe_health_identity "http://127.0.0.1:$LIVE_PORT" "$ACTIVE_SHA" || fail 'current local Production health identity is not exact before repair'
 if [[ -n "$PUBLIC_BASE_URL" ]]; then
   probe_health_identity "$PUBLIC_BASE_URL" "$ACTIVE_SHA" || fail 'current public Production health identity is not exact before repair'
+fi
+if [[ "$ORPHAN_ENTRY_MODE" == legacy ]]; then
+  printf '[pm2-orphan-repair] validated legacy orphan listener via exact runtime identity gates\n'
 fi
 
 PM2_STOPPED=0
@@ -325,6 +353,7 @@ PM2_STOPPED=1
 mapfile -t STOP_LISTENERS < <(listener_pids)
 [[ "${#STOP_LISTENERS[@]}" -eq 1 && "${STOP_LISTENERS[0]}" == "$ORPHAN_PID" ]] \
   || fail 'listener ownership changed after PM2 stop; repair aborted without terminating a process'
+assert_same_orphan_identity "$ORPHAN_PID" "0"
 probe_health_identity "http://127.0.0.1:$LIVE_PORT" "$ACTIVE_SHA" \
   || fail 'orphan listener stopped serving the exact active SHA after PM2 stop'
 
@@ -335,7 +364,7 @@ for _ in {1..15}; do
   sleep 1
 done
 if kill -0 "$ORPHAN_PID" 2>/dev/null; then
-  assert_expected_orphan "$ORPHAN_PID" "0"
+  assert_same_orphan_identity "$ORPHAN_PID" "0"
   kill -KILL "$ORPHAN_PID"
   for _ in {1..5}; do
     kill -0 "$ORPHAN_PID" 2>/dev/null || break
