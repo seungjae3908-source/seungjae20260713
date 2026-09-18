@@ -26,9 +26,8 @@ import {
   adaptNaturalPaperSettlementFullCost,
   advanceNaturalPaperPositionLifecycle,
 } from '../../../market-prediction-lab/src/natural-paper-position-settlement-lifecycle-v1.js';
-import {
-  createNaturalPaperTriggerBoundSettlementCostProducer,
-} from '../../../market-prediction-lab/src/natural-paper-trigger-bound-settlement-cost-producer-v1.js';
+import * as NaturalSettlementCostProducerModule
+  from '../../../market-prediction-lab/src/natural-paper-trigger-bound-settlement-cost-producer-v1.js';
 import {
   consumeManualSameCandidateValidationReceipt,
   manualPaperEvidenceSha256,
@@ -57,6 +56,26 @@ const PAPER_CANDIDATE = /^paper-candidate-v1:[0-9a-f]{64}$/u;
 const PHASE3_CANDIDATE = /^phase3-candidate:sha256:[0-9a-f]{64}$/u;
 const DEPENDENCY_COMPONENT = /^dependency-component:[0-9a-f]{64}$/u;
 const OUTCOME_CLASSES = Object.freeze(['TP', 'SL', 'EXPIRED'] as const);
+
+type NaturalSettlementProducer = (input?: Readonly<{
+  position?: unknown;
+  observation?: unknown;
+  evaluatedAtMs?: number;
+}>) => Promise<unknown>;
+
+type NaturalSettlementProducerFactory = (input?: Readonly<{
+  collectAuthoritativeEvidence?: (context: unknown) => Promise<unknown>;
+}>) => NaturalSettlementProducer;
+
+const createNaturalPaperTriggerBoundSettlementCostProducer = (
+  NaturalSettlementCostProducerModule as unknown as Readonly<{
+    createNaturalPaperTriggerBoundSettlementCostProducer: NaturalSettlementProducerFactory;
+  }>
+).createNaturalPaperTriggerBoundSettlementCostProducer;
+
+if (typeof createNaturalPaperTriggerBoundSettlementCostProducer !== 'function') {
+  throw new Error('FAST_PROFITABILITY_CANONICAL_SETTLEMENT_PRODUCER_EXPORT_MISSING');
+}
 
 type OutcomeClass = typeof OUTCOME_CLASSES[number];
 type AnyRecord = Record<string, unknown>;
