@@ -243,7 +243,7 @@ test('only genuine independently credited observations are admitted', () => {
         dependencyComponentCredit: 0,
       }),
     ),
-    /FAST_PROFITABILITY_INDEPENDENCE_PROOF_REQUIRED/,
+    /FAST_PROFITABILITY_INDEPENDENCE_BEFORE_SPLIT_REQUIRED/,
   );
 });
 
