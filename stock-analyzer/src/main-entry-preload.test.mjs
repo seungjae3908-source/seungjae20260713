@@ -16,3 +16,14 @@ test('starts the application entry before the direct AI Chart route chunk', () =
   assert.equal(appLoadIndex < aiChartPreloadIndex, true);
   assert.match(mainSource, /appModulePromise\.then\(\(\{ default: App \}\) =>/);
 });
+
+test('defers service-worker precache beyond the direct AI Chart cold usability window', () => {
+  const mainSource = readFileSync(new URL('./main.tsx', import.meta.url), 'utf8');
+
+  assert.match(mainSource, /const AI_CHART_SERVICE_WORKER_DELAY_MS = 6_000;/);
+  assert.match(
+    mainSource,
+    /if \(window\.location\.pathname\.endsWith\('\/ai-chart'\)\) \{\s*window\.setTimeout\(register, AI_CHART_SERVICE_WORKER_DELAY_MS\);\s*return;/,
+  );
+  assert.match(mainSource, /void register\(\);/);
+});
