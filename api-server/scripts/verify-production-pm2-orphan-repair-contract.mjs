@@ -13,7 +13,12 @@ assert(script.includes('flock -n 9'), 'repair must serialize against Production 
 assert(script.includes('active Production marker differs from approved repair target'), 'repair must pin exact active Production SHA');
 assert(script.includes('expected exactly one listener on the Production live port'), 'repair must require one unambiguous live-port listener');
 assert(script.includes('live port is already owned by the PM2 stock-app process; no orphan repair is needed'), 'repair must refuse already-healthy PM2 ownership');
-assert(script.includes('live-port listener command does not resolve to the canonical Production API entrypoint'), 'repair must validate the serving entrypoint before mutation');
+assert(script.includes('cmdline_resolves_expected_entry'), 'repair must still inspect the listener command for the canonical direct entrypoint');
+assert(script.includes('ORPHAN_ENTRY_MODE=legacy'), 'repair must classify non-canonical legacy listeners explicitly instead of silently weakening the direct-entry check');
+assert(script.includes('serving orphan DEPLOY_SHA does not match exact active Production SHA'), 'legacy repair must require exact process DEPLOY_SHA identity');
+assert(script.includes('validated legacy orphan listener via exact runtime identity gates'), 'legacy acceptance must occur only behind the explicit exact-identity gate');
+assert(script.includes('ORPHAN_START_TICKS'), 'repair must capture process start identity to defend against PID reuse');
+assert(script.includes('validated orphan PID was reused or process identity changed before termination'), 'repair must revalidate process identity before termination');
 assert(script.includes('live-port listener is managed by a PM2 process; refusing orphan termination'), 'repair must never terminate another PM2-managed process');
 assert(script.includes('capture_orphan_runtime "$ORPHAN_PID"'), 'repair must capture the serving runtime in memory before mutation');
 assert(script.includes('serving orphan trading authority flags are not fail-closed'), 'repair must verify the serving process has no trading authority');
