@@ -25,8 +25,10 @@ const promotion = between('set +e', 'echo "[deploy] production deployment succee
 const capture = between('TELEGRAM_PREDEPLOY_STATE="$(read_telegram_activation_state)"', 'if [[ "$CURRENT_SHA" == "$TARGET_SHA" ]]');
 const target = 'a'.repeat(40);
 const previous = 'b'.repeat(40);
-const state = (approved, worker, extra = {}) => [{ name: 'stock-app', pm2_env: {
-  status: 'online', DEPLOY_SHA: previous,
+const state = (approved, worker, extra = {}) => [{ name: 'stock-app', pid: 4242, pm2_env: {
+  status: 'online', DEPLOY_SHA: previous, watch: false,
+  LIVE_TRADING: 'false', AUTO_TRADING: 'false', REAL_ORDER_ENABLED: 'false',
+  PRIVATE_TRADING_API_ALLOWED: 'false', executionAuthority: 'NONE',
   ...(approved === undefined ? {} : { LIVE_TELEGRAM_ACTIVATION_APPROVED: approved }),
   ...(worker === undefined ? {} : { TELEGRAM_INTELLIGENCE_WORKER_ENABLED: worker }), ...extra,
 } }];
@@ -50,8 +52,32 @@ fs.writeFileSync(process.env.PM2_FIXTURE, JSON.stringify(rows));
 MOCK_NODE
       ;;
     save) return 0 ;;
+    stop)
+      [[ "$2" == stock-app && "$3" == --watch ]] || return 93
+      command node - <<'MOCK_NODE'
+const fs = require('node:fs');
+const rows = JSON.parse(fs.readFileSync(process.env.PM2_FIXTURE, 'utf8'));
+rows[0].pm2_env.status = 'stopped';
+rows[0].pm2_env.watch = false;
+fs.writeFileSync(process.env.PM2_FIXTURE, JSON.stringify(rows));
+MOCK_NODE
+      ;;
     *) echo 'unexpected mocked PM2 operation' >&2; return 92 ;;
   esac
+}
+ss() {
+  if [[ "$1" == "-H" && "$2" == "-ltnp" ]]; then
+    command node - <<'MOCK_NODE'
+const fs = require('node:fs');
+const rows = JSON.parse(fs.readFileSync(process.env.PM2_FIXTURE, 'utf8'));
+const row = Array.isArray(rows) ? rows.find((item) => item?.name === 'stock-app') : null;
+if (row?.pm2_env?.status === 'online' && Number(row?.pid) > 0) {
+  process.stdout.write(`LISTEN 0 511 127.0.0.1:8080 0.0.0.0:* users:(("node",pid=${row.pid},fd=20))\n`);
+}
+MOCK_NODE
+    return 0
+  fi
+  return 0
 }
 sync_source_tree() { :; }
 cp() { :; }
@@ -77,7 +103,19 @@ function run(fragment, { rows = state('false', 'false'), same = false, stale = f
     }
     const marker = path.join(temp, 'live/.deploy/current-sha');
     fs.writeFileSync(marker, same ? target : previous);
-    fs.writeFileSync(path.join(temp, 'pm2.json'), JSON.stringify(rows));
+    const runtimeRows = structuredClone(rows);
+    if (Array.isArray(runtimeRows) && runtimeRows[0]?.pm2_env && typeof runtimeRows[0].pm2_env === 'object') {
+      runtimeRows[0].pid = Number(runtimeRows[0].pid || 4242);
+      runtimeRows[0].pm2_env.pm_cwd ??= path.join(temp, 'live');
+      runtimeRows[0].pm2_env.pm_exec_path ??= path.join(temp, 'live/api-server/dist/index.mjs');
+      runtimeRows[0].pm2_env.watch ??= false;
+      runtimeRows[0].pm2_env.LIVE_TRADING ??= 'false';
+      runtimeRows[0].pm2_env.AUTO_TRADING ??= 'false';
+      runtimeRows[0].pm2_env.REAL_ORDER_ENABLED ??= 'false';
+      runtimeRows[0].pm2_env.PRIVATE_TRADING_API_ALLOWED ??= 'false';
+      runtimeRows[0].pm2_env.executionAuthority ??= 'NONE';
+    }
+    fs.writeFileSync(path.join(temp, 'pm2.json'), JSON.stringify(runtimeRows));
     fs.writeFileSync(path.join(temp, 'canary.env'), 'LIVE_TELEGRAM_ACTIVATION_APPROVED=true\nTELEGRAM_INTELLIGENCE_WORKER_ENABLED=true\n');
     fs.writeFileSync(path.join(temp, 'release/api-server/dist/index.mjs'), `import fs from 'node:fs';
       fs.appendFileSync(process.env.PM2_EVENTS, JSON.stringify({ kind: 'canary',
