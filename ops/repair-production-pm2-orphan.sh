@@ -17,7 +17,7 @@ fail() {
   exit 1
 }
 
-for command_name in pm2 ss node curl flock readlink awk sed sort tr kill id grep ps mktemp sleep; do
+for command_name in pm2 ss node curl flock readlink awk sed sort tr kill id grep ps mktemp sleep nohup env; do
   command -v "$command_name" >/dev/null 2>&1 || fail "missing command: $command_name"
 done
 
@@ -50,7 +50,6 @@ process.stdin.on("end", () => {
     if (value === true || value === "true") return "true";
     process.exit(4);
   };
-  const executionAuthority = String(env.executionAuthority ?? "NONE");
   process.stdout.write([
     String(Number(row?.pid ?? 0)),
     String(env.status ?? "missing"),
@@ -61,8 +60,25 @@ process.stdin.on("end", () => {
     bool("AUTO_TRADING"),
     bool("REAL_ORDER_ENABLED"),
     bool("PRIVATE_TRADING_API_ALLOWED"),
-    executionAuthority,
+    String(env.executionAuthority ?? "NONE"),
   ].join("\t") + "\n");
+});
+  ' "$PM2_NAME"
+}
+
+pm2_definition() {
+  pm2 jlist | node -e '
+let input="";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => input += chunk);
+process.stdin.on("end", () => {
+  const rows = JSON.parse(input);
+  const matches = rows.filter(row => row?.name === process.argv[1]);
+  if (matches.length !== 1) process.exit(2);
+  const env = matches[0]?.pm2_env;
+  if (!env || typeof env !== "object" || Array.isArray(env)) process.exit(3);
+  const watched = env.watch === true || (Array.isArray(env.watch) && env.watch.length > 0);
+  process.stdout.write(String(env.pm_exec_path ?? "missing") + "\t" + (watched ? "true" : "false") + "\n");
 });
   ' "$PM2_NAME"
 }
@@ -124,7 +140,7 @@ assert_expected_orphan() {
 
   [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 ]] || fail 'invalid live-port listener PID'
   [[ "$pid" != "$pm2_pid" ]] || fail 'live port is already owned by the PM2 stock-app process; no orphan repair is needed'
-  [[ -r "/proc/$pid/cmdline" && -e "/proc/$pid/cwd" && -e "/proc/$pid/exe" ]] || fail 'listener disappeared before validation'
+  [[ -r "/proc/$pid/cmdline" && -r "/proc/$pid/environ" && -e "/proc/$pid/cwd" && -e "/proc/$pid/exe" ]] || fail 'listener disappeared before validation'
   [[ "$(ps -o uid= -p "$pid" | tr -d '[:space:]')" == "$(id -u)" ]] || fail 'listener is not owned by the Production service account'
 
   process_exe="$(readlink -f "/proc/$pid/exe")"
@@ -149,15 +165,101 @@ assert_expected_orphan() {
   fi
 }
 
-restart_pm2_with_safe_authority() {
+declare -a ORPHAN_CMD=()
+declare -a ORPHAN_ENV_FULL=()
+declare -a APP_ENV=()
+declare -A ORPHAN_ENV_MAP=()
+ORPHAN_CWD=""
+
+capture_orphan_runtime() {
+  local pid="$1"
+  local arg entry key value
+  ORPHAN_CWD="$(readlink -f "/proc/$pid/cwd")"
+  while IFS= read -r -d '' arg; do
+    ORPHAN_CMD+=("$arg")
+  done < "/proc/$pid/cmdline"
+  [[ "${#ORPHAN_CMD[@]}" -ge 2 ]] || fail 'validated orphan command line is incomplete'
+
+  while IFS= read -r -d '' entry; do
+    ORPHAN_ENV_FULL+=("$entry")
+    key="${entry%%=*}"
+    value="${entry#*=}"
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    ORPHAN_ENV_MAP["$key"]="$value"
+    case "$key" in
+      HOME|PATH|PWD|OLDPWD|SHLVL|_|PM2_HOME|NODE_APP_INSTANCE|NODE_ENV|PORT|API_PORT|DEPLOY_SHA|LIVE_TELEGRAM_ACTIVATION_APPROVED|TELEGRAM_INTELLIGENCE_WORKER_ENABLED|LIVE_TRADING|AUTO_TRADING|REAL_ORDER_ENABLED|PRIVATE_TRADING_API_ALLOWED|executionAuthority)
+        continue
+        ;;
+      pm_*|axm_*)
+        continue
+        ;;
+    esac
+    APP_ENV+=("$entry")
+  done < "/proc/$pid/environ"
+}
+
+orphan_bool() {
+  local key="$1"
+  local value="${ORPHAN_ENV_MAP[$key]-}"
+  case "$value" in
+    ''|false) printf 'false\n' ;;
+    true) printf 'true\n' ;;
+    *) fail "validated orphan has malformed boolean runtime flag: $key" ;;
+  esac
+}
+
+start_direct_pm2_with_safe_authority() {
   local target_sha="$1"
   local telegram_approved="$2"
   local telegram_worker="$3"
-  LIVE_TELEGRAM_ACTIVATION_APPROVED="$telegram_approved" \
-  TELEGRAM_INTELLIGENCE_WORKER_ENABLED="$telegram_worker" \
-  LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false \
-  executionAuthority=NONE DEPLOY_SHA="$target_sha" \
-    pm2 restart "$PM2_NAME" --update-env >/dev/null
+  env -i \
+    HOME="$HOME" \
+    PATH="$PATH" \
+    "${APP_ENV[@]}" \
+    NODE_ENV=production \
+    PORT="$LIVE_PORT" \
+    API_PORT="$LIVE_PORT" \
+    LIVE_TELEGRAM_ACTIVATION_APPROVED="$telegram_approved" \
+    TELEGRAM_INTELLIGENCE_WORKER_ENABLED="$telegram_worker" \
+    LIVE_TRADING=false \
+    AUTO_TRADING=false \
+    REAL_ORDER_ENABLED=false \
+    PRIVATE_TRADING_API_ALLOWED=false \
+    executionAuthority=NONE \
+    DEPLOY_SHA="$target_sha" \
+    pm2 start "$EXPECTED_ENTRY" --name "$PM2_NAME" --cwd "$LIVE_DIR" --interpreter "$(command -v node)" >/dev/null
+}
+
+pm2_owns_live_port() {
+  local metadata pm2_pid pm2_status _rest
+  metadata="$(pm2_metadata 2>/dev/null)" || return 1
+  read -r pm2_pid pm2_status _rest <<< "$(printf '%s' "$metadata" | tr '\t' ' ')"
+  [[ "$pm2_pid" =~ ^[0-9]+$ && "$pm2_pid" -gt 1 && "$pm2_status" == online ]] || return 1
+  mapfile -t current_listeners < <(listener_pids)
+  [[ "${#current_listeners[@]}" -eq 1 && "${current_listeners[0]}" == "$pm2_pid" ]]
+}
+
+restore_orphan_runtime() {
+  if probe_health_identity "http://127.0.0.1:$LIVE_PORT" "$ACTIVE_SHA"; then
+    return 0
+  fi
+  [[ -n "$ORPHAN_CWD" && "${#ORPHAN_CMD[@]}" -ge 2 && "${#ORPHAN_ENV_FULL[@]}" -gt 0 ]] || return 1
+  printf '[pm2-orphan-repair] restoring previous serving process after failed repair\n' >&2
+  (
+    cd "$ORPHAN_CWD"
+    nohup env -i \
+      "${ORPHAN_ENV_FULL[@]}" \
+      HOME="${ORPHAN_ENV_MAP[HOME]-$HOME}" \
+      PATH="${ORPHAN_ENV_MAP[PATH]-$PATH}" \
+      "${ORPHAN_CMD[@]}" >/dev/null 2>&1 &
+  )
+  for _ in {1..20}; do
+    if probe_health_identity "http://127.0.0.1:$LIVE_PORT" "$ACTIVE_SHA"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 read -r PM2_PID PM2_STATUS PM2_CWD TELEGRAM_APPROVED TELEGRAM_WORKER LIVE_TRADING AUTO_TRADING REAL_ORDER PRIVATE_API EXECUTION_AUTHORITY \
@@ -174,6 +276,24 @@ mapfile -t PRE_LISTENERS < <(listener_pids)
 [[ "${#PRE_LISTENERS[@]}" -eq 1 ]] || fail 'expected exactly one listener on the Production live port'
 ORPHAN_PID="${PRE_LISTENERS[0]}"
 assert_expected_orphan "$ORPHAN_PID" "$PM2_PID"
+capture_orphan_runtime "$ORPHAN_PID"
+
+ORPHAN_LIVE_TRADING="$(orphan_bool LIVE_TRADING)"
+ORPHAN_AUTO_TRADING="$(orphan_bool AUTO_TRADING)"
+ORPHAN_REAL_ORDER="$(orphan_bool REAL_ORDER_ENABLED)"
+ORPHAN_PRIVATE_API="$(orphan_bool PRIVATE_TRADING_API_ALLOWED)"
+ORPHAN_EXECUTION_AUTHORITY="${ORPHAN_ENV_MAP[executionAuthority]-NONE}"
+[[ "$ORPHAN_LIVE_TRADING" == false && "$ORPHAN_AUTO_TRADING" == false && "$ORPHAN_REAL_ORDER" == false && "$ORPHAN_PRIVATE_API" == false ]] \
+  || fail 'serving orphan trading authority flags are not fail-closed'
+[[ "$ORPHAN_EXECUTION_AUTHORITY" == NONE ]] || fail 'serving orphan executionAuthority is not NONE'
+
+ORPHAN_TELEGRAM_APPROVED="$(orphan_bool LIVE_TELEGRAM_ACTIVATION_APPROVED)"
+ORPHAN_TELEGRAM_WORKER="$(orphan_bool TELEGRAM_INTELLIGENCE_WORKER_ENABLED)"
+[[ "$ORPHAN_TELEGRAM_APPROVED" == "$ORPHAN_TELEGRAM_WORKER" ]] || fail 'serving orphan Telegram state is ambiguous'
+EFFECTIVE_TELEGRAM=false
+if [[ "$TELEGRAM_APPROVED" == true && "$ORPHAN_TELEGRAM_APPROVED" == true ]]; then
+  EFFECTIVE_TELEGRAM=true
+fi
 
 probe_health_identity "http://127.0.0.1:$LIVE_PORT" "$ACTIVE_SHA" || fail 'current local Production health identity is not exact before repair'
 if [[ -n "$PUBLIC_BASE_URL" ]]; then
@@ -181,13 +301,18 @@ if [[ -n "$PUBLIC_BASE_URL" ]]; then
 fi
 
 PM2_STOPPED=0
+ORPHAN_TERMINATED=0
 REPAIR_COMPLETE=0
 repair_failure_cleanup() {
   local status=$?
   if (( status != 0 )) && [[ "$PM2_STOPPED" == "1" ]] && [[ "$REPAIR_COMPLETE" != "1" ]]; then
-    printf '[pm2-orphan-repair] repair failed after PM2 stop; attempting safe PM2 recovery\n' >&2
-    restart_pm2_with_safe_authority "$ACTIVE_SHA" "$TELEGRAM_APPROVED" "$TELEGRAM_WORKER" || true
-    pm2 save >/dev/null 2>&1 || true
+    printf '[pm2-orphan-repair] repair failed after PM2 stop; preserving exact active service\n' >&2
+    if pm2_owns_live_port && probe_health_identity "http://127.0.0.1:$LIVE_PORT" "$ACTIVE_SHA"; then
+      pm2 save >/dev/null 2>&1 || true
+    elif [[ "$ORPHAN_TERMINATED" == "1" ]]; then
+      pm2 delete "$PM2_NAME" >/dev/null 2>&1 || true
+      restore_orphan_runtime || printf '[pm2-orphan-repair] CRITICAL: previous serving process could not be restored\n' >&2
+    fi
   fi
   return "$status"
 }
@@ -198,12 +323,10 @@ pm2 stop "$PM2_NAME" >/dev/null
 PM2_STOPPED=1
 
 mapfile -t STOP_LISTENERS < <(listener_pids)
-if [[ "${#STOP_LISTENERS[@]}" -ne 1 || "${STOP_LISTENERS[0]}" != "$ORPHAN_PID" ]]; then
-  fail 'listener ownership changed after PM2 stop; repair aborted without terminating a process'
-fi
-probe_health_identity "http://127.0.0.1:$LIVE_PORT" "$ACTIVE_SHA" || {
-  fail 'orphan listener stopped serving the exact active SHA after PM2 stop'
-}
+[[ "${#STOP_LISTENERS[@]}" -eq 1 && "${STOP_LISTENERS[0]}" == "$ORPHAN_PID" ]] \
+  || fail 'listener ownership changed after PM2 stop; repair aborted without terminating a process'
+probe_health_identity "http://127.0.0.1:$LIVE_PORT" "$ACTIVE_SHA" \
+  || fail 'orphan listener stopped serving the exact active SHA after PM2 stop'
 
 printf '[pm2-orphan-repair] terminating validated orphan listener\n'
 kill -TERM "$ORPHAN_PID"
@@ -219,18 +342,15 @@ if kill -0 "$ORPHAN_PID" 2>/dev/null; then
     sleep 1
   done
 fi
-if kill -0 "$ORPHAN_PID" 2>/dev/null; then
-  fail 'validated orphan listener could not be terminated'
-fi
+kill -0 "$ORPHAN_PID" 2>/dev/null && fail 'validated orphan listener could not be terminated'
+ORPHAN_TERMINATED=1
 
-restart_pm2_with_safe_authority "$ACTIVE_SHA" "$TELEGRAM_APPROVED" "$TELEGRAM_WORKER"
+pm2 delete "$PM2_NAME" >/dev/null
+start_direct_pm2_with_safe_authority "$ACTIVE_SHA" "$EFFECTIVE_TELEGRAM" "$EFFECTIVE_TELEGRAM"
 
 OWNERSHIP_OK=0
 for _ in {1..20}; do
-  read -r NEW_PM2_PID NEW_PM2_STATUS _REST < <(pm2_metadata | tr '\t' ' ')
-  mapfile -t POST_LISTENERS < <(listener_pids)
-  if [[ "$NEW_PM2_STATUS" == online && "${#POST_LISTENERS[@]}" -eq 1 && "${POST_LISTENERS[0]}" == "$NEW_PM2_PID" ]] \
-    && probe_health_identity "http://127.0.0.1:$LIVE_PORT" "$ACTIVE_SHA"; then
+  if pm2_owns_live_port && probe_health_identity "http://127.0.0.1:$LIVE_PORT" "$ACTIVE_SHA"; then
     OWNERSHIP_OK=1
     break
   fi
@@ -244,9 +364,12 @@ fi
 
 read -r FINAL_PM2_PID FINAL_PM2_STATUS FINAL_PM2_CWD FINAL_TELEGRAM_APPROVED FINAL_TELEGRAM_WORKER FINAL_LIVE_TRADING FINAL_AUTO_TRADING FINAL_REAL_ORDER FINAL_PRIVATE_API FINAL_EXECUTION_AUTHORITY \
   < <(pm2_metadata | tr '\t' ' ')
+read -r FINAL_EXEC_PATH FINAL_WATCH < <(pm2_definition | tr '\t' ' ')
 [[ "$FINAL_PM2_STATUS" == online && "$FINAL_PM2_CWD" == "$LIVE_DIR" ]] || fail 'final PM2 runtime metadata is invalid'
-[[ "$FINAL_TELEGRAM_APPROVED" == "$TELEGRAM_APPROVED" && "$FINAL_TELEGRAM_WORKER" == "$TELEGRAM_WORKER" ]] \
-  || fail 'Telegram activation state changed during repair'
+[[ "$(readlink -m "$FINAL_EXEC_PATH")" == "$EXPECTED_ENTRY" ]] || fail 'final PM2 entrypoint is not the canonical Production API entrypoint'
+[[ "$FINAL_WATCH" == false ]] || fail 'final PM2 watch mode must be disabled'
+[[ "$FINAL_TELEGRAM_APPROVED" == "$EFFECTIVE_TELEGRAM" && "$FINAL_TELEGRAM_WORKER" == "$EFFECTIVE_TELEGRAM" ]] \
+  || fail 'Telegram activation state violated preserve-never-elevate policy during repair'
 [[ "$FINAL_LIVE_TRADING" == false && "$FINAL_AUTO_TRADING" == false && "$FINAL_REAL_ORDER" == false && "$FINAL_PRIVATE_API" == false ]] \
   || fail 'trading authority changed during repair'
 [[ "$FINAL_EXECUTION_AUTHORITY" == NONE ]] || fail 'executionAuthority changed during repair'
@@ -255,4 +378,4 @@ pm2 reset "$PM2_NAME" >/dev/null
 pm2 save >/dev/null
 REPAIR_COMPLETE=1
 
-printf '[pm2-orphan-repair] SUCCESS active_sha=%s pm2_owns_port=true trading_authority=NONE telegram_state_preserved=true\n' "$ACTIVE_SHA"
+printf '[pm2-orphan-repair] SUCCESS active_sha=%s pm2_owns_port=true direct_entry=true watch=false trading_authority=NONE telegram_never_elevated=true\n' "$ACTIVE_SHA"
