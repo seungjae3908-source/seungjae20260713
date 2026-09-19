@@ -30,6 +30,7 @@ const groups = {
   ],
   phase7: [
     path.join(root, 'src/services/paper-journal-sync.service.test.ts'),
+    path.join(root, 'src/services/paper-journal-service-role.repository.test.ts'),
     path.join(root, 'src/services/paper-journal-analytics.service.test.ts'),
     path.join(root, 'src/services/unified-trade-journal.service.test.ts'),
     path.join(root, 'src/services/paper-journal-migration.test.ts'),
