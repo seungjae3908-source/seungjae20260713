@@ -160,12 +160,14 @@ export async function assembleResearchCanonicalBundleV1(input: {
     now: input.validationNow,
   });
   const resolution = await service.resolve(dsl);
+  const assemblyOnlyBlockers = ['DURABLE_SUBMISSION_STORE_MISSING'];
   if (!resolution.dslValid
     || !DIGEST64.test(String(resolution.dslDigest ?? ''))
     || !DIGEST64.test(String(resolution.bundleDigest ?? ''))
     || !resolution.researchBundleReady
-    || !resolution.backtestExecutable
-    || resolution.blockers.length !== 0
+    || resolution.backtestExecutable !== false
+    || resolution.backtestStatus !== 'BLOCKED_DATA'
+    || JSON.stringify(resolution.blockers) !== JSON.stringify(assemblyOnlyBlockers)
     || resolution.components.some((component) => component.status !== 'READY')
     || resolution.evidenceCredit !== 0
     || resolution.profitabilityProven !== false
@@ -196,7 +198,9 @@ export async function assembleResearchCanonicalBundleV1(input: {
     componentDigests: Object.freeze({ ...componentDigests }),
     evidenceClass: 'CANONICAL' as const,
     researchBundleReady: true as const,
-    backtestExecutable: true as const,
+    componentReadinessVerified: true as const,
+    backtestExecutableAtAssembly: false as const,
+    durableSubmissionStoreRequired: true as const,
     evidenceCredit: 0 as const,
     profitabilityProven: false as const,
     promotionEligible: false as const,
@@ -224,6 +228,8 @@ export async function assembleResearchCanonicalBundleV1(input: {
     recordDigest: record.recordDigest,
     safety: Object.freeze({
       componentAssemblyOnly: true,
+      publisherRevalidationRequired: true,
+      durableSubmissionStoreBypassed: false,
       generatedEvidence: false,
       allowTestEvidence: false,
       syntheticBundleAllowed: false,
