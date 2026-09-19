@@ -83,8 +83,17 @@ function candidate({
     },
     riskEvidence: {
       status: "APPROVED",
+      source: "TRADING_RISK_ENGINE",
       evaluatedAtMs: NOW - 500,
       simulatedOnly: true,
+      allowed: true,
+      blockCodes: [],
+      recommendedQuantity: 1,
+      actualRiskPercent: 0.4,
+      riskReward1: 1.8,
+      riskReward2: 2.4,
+      policyIdentity: null,
+      executionAuthority: "NONE",
     },
     execution: {
       marketAdapterIdentity: { id: "public-adapter-v1", version: "1" },
@@ -137,6 +146,8 @@ test("builds a deterministic immutable public-only handoff", () => {
   assert.equal(value.entries[0].identity.signalId, "signal-1");
   assert.equal(value.entries[0].signal.learningSnapshot.stopLoss, 95);
   assert.equal(value.entries[0].execution.dataEvidence.publicOnly, true);
+  assert.equal(value.entries[0].riskEvidence.recommendedQuantity, 1);
+  assert.equal(value.entries[0].riskEvidence.source, "TRADING_RISK_ENGINE");
   assert.equal(value.entries[0].safety.executionAuthority, "NONE");
   assert.equal(value.entries[0].safety.privateTradingApiAllowed, false);
   assert.equal(Object.isFrozen(value), true);
