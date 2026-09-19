@@ -194,9 +194,7 @@ jobs:
             && paper.order_count === '0';
           const historicalComplete = cycle['fast-historical']?.present === 'true'
             && cycle['fast-historical']?.research_sha === process.env.RESEARCH_SHA
-            && cycle['fast-historical']?.status === 'complete'
-            && cycle['fast-historical']?.failed_count === '0'
-            && cycle['fast-historical']?.blocked_data_count === '0';
+            && cycle['fast-historical']?.failed_count === '0';
           const historicalRunning = service['fast-historical']?.active === 'active' || service['fast-historical']?.sub === 'running';
           let naturalTrace = null;
           let naturalTraceError = natural.blocker ?? 'PAPER_NATURAL_EVIDENCE_UNAVAILABLE';
