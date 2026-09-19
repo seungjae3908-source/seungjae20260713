@@ -95,9 +95,9 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
     newEntriesStopped: input.newEntriesStopped === true,
     marketEnabled,
     exchangeEnabled: {
-      bitget: input.exchangeEnabled?.bitget ?? marketEnabled.crypto_futures,
-      upbit: input.exchangeEnabled?.upbit ?? marketEnabled.crypto_spot,
-      kiwoom: input.exchangeEnabled?.kiwoom ?? (marketEnabled.domestic_stock || marketEnabled.us_stock),
+      bitget: input.exchangeEnabled?.bitget ?? DEFAULT_TRADING_POLICY.exchangeEnabled.bitget,
+      upbit: input.exchangeEnabled?.upbit ?? DEFAULT_TRADING_POLICY.exchangeEnabled.upbit,
+      kiwoom: input.exchangeEnabled?.kiwoom ?? DEFAULT_TRADING_POLICY.exchangeEnabled.kiwoom,
     },
     enabledAssets: {
       bitget: normalizedList(input.enabledAssets?.bitget, 100).map((item) => item.toUpperCase()),
@@ -233,8 +233,7 @@ export function evaluateTradingPlan(
     && snapshot.availableLiquidityKrw < plan.estimatedKrw) add(blockCodes, 'LIQUIDITY_LIMIT');
   if (!plan.strategyId.trim() || !plan.signalId.trim()) add(blockCodes, 'SIGNAL_ID_REQUIRED');
 
-  if (policy.mode === 'automatic') {
-    if (!policy.automaticEnabled) add(blockCodes, 'AUTOMATIC_MODE_NOT_CONFIRMED');
+  if (policy.mode === 'automatic' && policy.automaticEnabled) {
     const assetClass = assetClassForPlan(plan);
     if (!policy.marketEnabled[assetClass]) add(blockCodes, 'MARKET_NOT_ENABLED');
     if (!policy.exchangeEnabled[plan.exchange]) add(blockCodes, 'EXCHANGE_NOT_ENABLED');
