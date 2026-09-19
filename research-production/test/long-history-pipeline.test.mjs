@@ -24,7 +24,7 @@ async function fakeRepo() {
   for (const relative of required) {
     const target = join(lab, relative);
     await mkdir(join(target, '..'), { recursive: true });
-    let body = 'console.log("ok")\n';
+    let body = relative === 'package.json' ? '{"type":"module"}\n' : 'console.log("ok")\n';
     if (relative.endsWith('run-long-history-v1-with-retry.js')) {
       body = `import {mkdirSync,writeFileSync} from 'node:fs'; mkdirSync('long-history-v1',{recursive:true}); writeFileSync('long-history-v1/seed.txt','ready'); console.log('v1-ready');\n`;
     } else if (/run-v[3-6]-history[.]js$/.test(relative)) {
