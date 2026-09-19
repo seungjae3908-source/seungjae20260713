@@ -193,8 +193,8 @@ export function buildResearchFactoryDualAiGateV1({
   const factory = validateFactoryStatus(factoryStatus);
   const failures = validateFailureSummary(failureSummary);
   if (!factory) {
-    const core = {
-      schemaVersion: 1 as const,
+    const core: Omit<ResearchFactoryDualAiGate, 'gateDigest'> = {
+      schemaVersion: 1,
       contract: RESEARCH_FACTORY_DUAL_AI_GATE_CONTRACT_V1,
       status: 'BLOCKED_FACTORY_INVALID' as const,
       reason: 'FACTORY_STATUS_INVALID',
@@ -248,8 +248,8 @@ export function buildResearchFactoryDualAiGateV1({
       ])
     : Object.freeze([]);
 
-  const core = {
-    schemaVersion: 1 as const,
+  const core: Omit<ResearchFactoryDualAiGate, 'gateDigest'> = {
+    schemaVersion: 1,
     contract: RESEARCH_FACTORY_DUAL_AI_GATE_CONTRACT_V1,
     status: gate.status,
     reason: gate.reason,
