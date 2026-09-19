@@ -41,7 +41,8 @@ async function startScannerPlanServer(dependencies: Parameters<typeof createScan
   app.use(express.json({ limit: '32kb' }));
   app.use((req, _res, next) => {
     const row = req as AuthenticatedRequest;
-    row.member = { id: USER, login_name: 'test', display_name: 'test', role: 'admin', membership_level: 'admin', status: 'approved', is_active: true };
+    row.member = { id: USER, login_name: 'test', display_name: 'test', role: 'user', membership_level: 'associate', status: 'approved', is_active: true };
+    row.membershipLevel = 'associate';
     next();
   });
   app.use('/api/trade-automation', createScannerPaperPlansRouter(dependencies));
