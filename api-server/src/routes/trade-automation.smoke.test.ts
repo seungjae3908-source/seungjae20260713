@@ -213,7 +213,7 @@ test.after(() => {
   delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
 });
 
-test('status is authenticated, defaults off, and never returns credential values', async () => {
+test('status is authenticated, automatic execution defaults off, and never returns credential values', async () => {
   const unauthenticated = await startServer(false);
   try {
     const response = await fetch(`${unauthenticated.baseUrl}/api/trade-automation/status`);
@@ -230,7 +230,7 @@ test('status is authenticated, defaults off, and never returns credential values
       policy: { mode: string; automaticEnabled: boolean };
       actualOrderSubmittedByStatusRequest: boolean;
     };
-    assert.equal(body.policy.mode, 'approval');
+    assert.equal(body.policy.mode, 'automatic');
     assert.equal(body.policy.automaticEnabled, false);
     assert.equal(body.actualOrderSubmittedByStatusRequest, false);
   } finally { await close(authenticated.server); }
@@ -326,87 +326,132 @@ test('connection registration rejects withdrawal permission and does not echo se
   } finally { await close(server); }
 });
 
-test('approval route blocks unapproved calls and paper execution makes no external request', async () => {
+test('automatic policy executes US-stock Paper without per-order approval or private credentials', async () => {
   const { server, baseUrl } = await startServer();
   const nativeFetch = globalThis.fetch;
   let outbound = 0;
   try {
-    const observedAt = new Date().toISOString();
-    const body = {
-      exchange: 'upbit', accountMode: 'paper', strategyId: 'breakout-v1', signalId: 'api-signal',
-      symbol: 'BTC', market: 'KRW', side: 'buy', orderType: 'market', quoteAmount: 100000,
-      quantity: null, limitPrice: null, estimatedKrw: 100000, stopPrice: 90000, targetPrices: [110000],
-      splitRatios: [100], signalReasons: ['trend'], marketSnapshot: {
-        observedAt, riskObservedAt: observedAt, dataDelayMs: 0, oneMinuteMovePercent: 0,
-        spreadPercent: 0.1, orderbookGapPercent: 0.1, halted: false, availableBalance: 1000000,
-        accountValueKrw: 5000000, dailyPnlPercent: 0, assetExposurePercent: 0,
-        openPositionCount: 0, dailyOrderCount: 0, consecutiveLosses: 0,
-        currentPrice: 100000, plannedPrice: 100000, marketStatus: 'OPEN',
-        availableLiquidityKrw: 1000000, estimatedSlippagePercent: 0.1, estimatedFeePercent: 0.05,
-        signalState: 'entry_ready', signalObservedAt: observedAt,
-      },
-    };
-    const planned = await nativeFetch(`${baseUrl}/api/trade-automation/plans`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    const policyResponse = await nativeFetch(`${baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'automatic',
+        automaticEnabled: true,
+        marketEnabled: {
+          domestic_stock: true,
+          us_stock: true,
+          crypto_spot: true,
+          crypto_futures: true,
+        },
+        exchangeEnabled: { bitget: true, upbit: true, kiwoom: true },
+        enabledAssets: { bitget: [], upbit: [], kiwoom: [] },
+        enabledStrategies: [],
+        confirmation: { acknowledged: true },
+      }),
     });
-    assert.equal(planned.status, 200);
-    const plannedBody = await planned.json() as { plan: { id: string; state: string; riskEnvelope?: unknown } };
-    const planId = plannedBody.plan.id;
-    assert.equal(plannedBody.plan.state, 'APPROVAL_PENDING');
-    assert.equal(plannedBody.plan.riskEnvelope, undefined);
-
-    const queueResponse = await nativeFetch(`${baseUrl}/api/trade-automation/approval-queue`);
-    assert.equal(queueResponse.status, 200);
-    const queueBody = await queueResponse.json() as {
-      items: Array<{ id: string; approval: { approvalEnabled: boolean }; order: unknown }>;
-      orderSubmitted: boolean;
-      orderCanceled: boolean;
-      privateTradingRequestSent: boolean;
+    assert.equal(policyResponse.status, 200);
+    const savedPolicy = await policyResponse.json() as {
+      policy: { mode: string; automaticEnabled: boolean; marketEnabled: Record<string, boolean> };
     };
-    const queuedPlan = queueBody.items.find((item) => item.id === planId);
-    assert.equal(queuedPlan?.approval.approvalEnabled, true);
-    assert.equal(queuedPlan?.order, null);
-    assert.equal(queueBody.orderSubmitted, false);
-    assert.equal(queueBody.orderCanceled, false);
-    assert.equal(queueBody.privateTradingRequestSent, false);
-
-    const approvalStatusResponse = await nativeFetch(`${baseUrl}/api/trade-automation/plans/${planId}/approval-status`);
-    assert.equal(approvalStatusResponse.status, 200);
-    const approvalStatusBody = await approvalStatusResponse.json() as {
-      approval: { approvalEnabled: boolean; signalState: string; planState: string };
-      orderSubmitted: boolean;
-      orderCanceled: boolean;
-      privateTradingRequestSent: boolean;
-    };
-    assert.equal(approvalStatusBody.approval.approvalEnabled, true);
-    assert.equal(approvalStatusBody.approval.signalState, 'READY_FOR_APPROVAL');
-    assert.equal(approvalStatusBody.approval.planState, 'APPROVAL_PENDING');
-    assert.equal(approvalStatusBody.orderSubmitted, false);
-    assert.equal(approvalStatusBody.orderCanceled, false);
-    assert.equal(approvalStatusBody.privateTradingRequestSent, false);
-
-    const denied = await nativeFetch(`${baseUrl}/api/trade-automation/plans/${planId}/approve`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    assert.equal(savedPolicy.policy.mode, 'automatic');
+    assert.equal(savedPolicy.policy.automaticEnabled, true);
+    assert.deepEqual(savedPolicy.policy.marketEnabled, {
+      domestic_stock: true,
+      us_stock: true,
+      crypto_spot: true,
+      crypto_futures: true,
     });
-    assert.equal(denied.status, 409);
 
     globalThis.fetch = async (input, init) => {
       const url = String(input);
-      if (!url.startsWith(baseUrl)) { outbound += 1; throw new Error('external blocked'); }
+      if (!url.startsWith(baseUrl)) {
+        outbound += 1;
+        throw new Error('external blocked');
+      }
       return nativeFetch(input, init);
     };
-    const approved = await globalThis.fetch(`${baseUrl}/api/trade-automation/plans/${planId}/approve`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ approved: true }),
-    });
-    assert.equal(approved.status, 200);
-    const approvedBody = await approved.json() as {
-      plan: { riskEnvelope: { version: number; investmentKrw: number; maxSplitCount: number } };
-      order: { state: string };
+
+    const observedAt = new Date().toISOString();
+    const body = {
+      exchange: 'kiwoom',
+      accountMode: 'paper',
+      strategyId: 'trend-breakout-v1',
+      signalId: 'us-paper-auto-signal',
+      symbol: 'AAPL',
+      market: 'US',
+      side: 'buy',
+      orderType: 'market',
+      quoteAmount: null,
+      quantity: 10,
+      limitPrice: null,
+      estimatedKrw: 100000,
+      stopPrice: 90,
+      targetPrices: [110],
+      splitRatios: [100],
+      signalReasons: ['trend', 'breakout'],
+      marketSnapshot: {
+        observedAt,
+        riskObservedAt: observedAt,
+        dataDelayMs: 0,
+        oneMinuteMovePercent: 0,
+        spreadPercent: 0.1,
+        orderbookGapPercent: 0.1,
+        halted: false,
+        availableBalance: 1000000,
+        accountValueKrw: 5000000,
+        dailyPnlPercent: 0,
+        assetExposurePercent: 0,
+        openPositionCount: 0,
+        dailyOrderCount: 0,
+        consecutiveLosses: 0,
+        currentPrice: 100,
+        plannedPrice: 100,
+        marketStatus: 'OPEN',
+        availableLiquidityKrw: 1000000,
+        estimatedSlippagePercent: 0.1,
+        estimatedFeePercent: 0.05,
+        signalState: 'entry_ready',
+        signalObservedAt: observedAt,
+      },
     };
-    assert.equal(approvedBody.plan.riskEnvelope.version, 1);
-    assert.equal(approvedBody.plan.riskEnvelope.investmentKrw, 100000);
-    assert.equal(approvedBody.plan.riskEnvelope.maxSplitCount, 1);
-    assert.equal(approvedBody.order.state, 'FILLED');
+
+    const response = await globalThis.fetch(`${baseUrl}/api/trade-automation/plans`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json() as {
+      ok: boolean;
+      plan: { id: string; state: string; riskEnvelope?: { version: number; investmentKrw: number } };
+      order: { state: string; exchangeOrderId: string | null };
+      automaticExecutionTriggered: boolean;
+      orderSubmitted: boolean;
+    };
+    assert.equal(response.status, 200, JSON.stringify(payload));
+    assert.equal(payload.ok, true);
+    assert.equal(payload.plan.state, 'SUBMITTED');
+    assert.equal(payload.plan.riskEnvelope?.version, 1);
+    assert.equal(payload.plan.riskEnvelope?.investmentKrw, 100000);
+    assert.equal(payload.automaticExecutionTriggered, true);
+    assert.equal(payload.order.state, 'FILLED');
+    assert.match(String(payload.order.exchangeOrderId), /^paper-/u);
+    assert.equal(payload.orderSubmitted, false);
     assert.equal(outbound, 0);
-  } finally { globalThis.fetch = nativeFetch; await close(server); }
+
+    const queueResponse = await globalThis.fetch(`${baseUrl}/api/trade-automation/approval-queue`);
+    assert.equal(queueResponse.status, 200);
+    const queueBody = await queueResponse.json() as { items: Array<{ id: string }> };
+    assert.equal(queueBody.items.some((item) => item.id === payload.plan.id), false);
+
+    const redundantApproval = await globalThis.fetch(`${baseUrl}/api/trade-automation/plans/${payload.plan.id}/approve`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ approved: true }),
+    });
+    assert.equal(redundantApproval.status, 400);
+    assert.equal((await redundantApproval.json() as { error: string }).error, 'TRADE_PLAN_NOT_APPROVAL_PENDING');
+  } finally {
+    globalThis.fetch = nativeFetch;
+    await close(server);
+  }
 });
