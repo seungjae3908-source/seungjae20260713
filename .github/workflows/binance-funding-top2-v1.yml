@@ -1,0 +1,37 @@
+name: Binance Funding Top2 V1
+on:
+  push:
+    branches: [research/four-market-profitability-scan-v1-20260919]
+    paths:
+      - market-prediction-lab/scripts/run-binance-funding-top2-v1.py
+      - .github/workflows/binance-funding-top2-v1.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: python -m py_compile market-prediction-lab/scripts/run-binance-funding-top2-v1.py
+      - run: python market-prediction-lab/scripts/run-binance-funding-top2-v1.py
+      - name: Verify safety/provenance
+        run: |
+          python - <<'PY'
+          import json
+          d=json.load(open("market-prediction-lab/artifacts/binance-funding-top2-v1/result.json"))
+          assert d["researchOnly"] and d["publicDataOnly"] and not d["liveTrading"] and not d["privateApi"] and d["ordersSubmitted"]==0
+          assert d["formula"]["lookahead"] is False
+          assert all(v["fundingStatus"]=="BINANCE_VISION_OK" for v in d["provenance"].values())
+          print("FUNDING_TOP2_CONTRACT=PASS")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binance-funding-top2-v1-${{ github.sha }}
+          path: market-prediction-lab/artifacts/binance-funding-top2-v1/
+          if-no-files-found: error
+          retention-days: 30
