@@ -105,6 +105,15 @@ function isoMs(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+export function resolveMemberStockBroker(
+  policy: TradingPolicy,
+  market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
+): 'kiwoom' | 'toss' | null {
+  if (market === 'KR_STOCK') return policy.stockBrokerByMarket?.domestic_stock ?? 'kiwoom';
+  if (market === 'US_STOCK') return policy.stockBrokerByMarket?.us_stock ?? 'kiwoom';
+  return null;
+}
+
 function marketMapping(
   market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
   policy: TradingPolicy,
@@ -119,7 +128,7 @@ function marketMapping(
       exchange: 'kiwoom',
       assetClass: 'domestic_stock',
       planMarket: 'KR',
-      stockBroker: policy.stockBrokerByMarket.domestic_stock,
+      stockBroker: resolveMemberStockBroker(policy, market),
     };
   }
   if (market === 'US_STOCK') {
@@ -127,7 +136,7 @@ function marketMapping(
       exchange: 'kiwoom',
       assetClass: 'us_stock',
       planMarket: 'US',
-      stockBroker: policy.stockBrokerByMarket.us_stock,
+      stockBroker: resolveMemberStockBroker(policy, market),
     };
   }
   if (market === 'CRYPTO_SPOT') {
