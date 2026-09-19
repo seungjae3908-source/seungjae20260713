@@ -93,14 +93,20 @@ def align(data):
     maps={s:{b.t:b for b in data[s][0]} for s in SYMBOLS}
     return ts,{s:[maps[s][t] for t in ts] for s in SYMBOLS}
 
-def target_daily(bars,i,mode):
+def target_daily(bars,i,mode,market_idx=None):
     if mode=="OFI_D1_LS_TOP2":
         ranked=sorted(((flow(bars[s][i-1]),s) for s in SYMBOLS),reverse=True)
         w={s:0.0 for s in SYMBOLS}
         for _,s in ranked[:2]:w[s]=0.25
         for _,s in ranked[-2:]:w[s]=-0.25
         return w
-    if mode=="OFI_5D_LONG_TOP2":
+    if mode in ("OFI_5D_LONG_TOP2","OFI_5D_LONG_TOP2_REGIME"):
+        if mode=="OFI_5D_LONG_TOP2_REGIME":
+            if market_idx is None or i<201:
+                return {s:0.0 for s in SYMBOLS}
+            ma=sum(market_idx[i-200:i])/200
+            if market_idx[i-1] <= ma:
+                return {s:0.0 for s in SYMBOLS}
         vals=[]
         for s in SYMBOLS:
             avg=sum(flow(bars[s][j]) for j in range(i-5,i))/5
@@ -122,16 +128,16 @@ def summarize(rs,curve,turnover,days):
             "mdd":mdd,"win_rate":len(wins)/len(rs) if rs else 0,"pf":gp/gl if gl else None,
             "avg_daily":sum(rs)/len(rs) if rs else 0,"turnover":turnover}
 
-def simulate(ts,bars,funding,mode,cost,start_index=5):
+def simulate(ts,bars,funding,mode,cost,start_index=5,market_idx=None):
     cur={s:0.0 for s in SYMBOLS};eq=1.;curve=[1.];rs=[];turn=0.;i=max(5,start_index)
     next_rebalance=i
     while i<len(ts)-1:
         reb=(mode=="OFI_D1_LS_TOP2") or (i>=next_rebalance)
         if reb:
-            target=target_daily(bars,i,mode)
+            target=target_daily(bars,i,mode,market_idx)
             tv=sum(abs(target[s]-cur[s]) for s in SYMBOLS);turn+=tv
             eq*=max(0.01,1-tv*cost);cur=target
-            if mode=="OFI_5D_LONG_TOP2":next_rebalance=i+5
+            if mode in ("OFI_5D_LONG_TOP2","OFI_5D_LONG_TOP2_REGIME"):next_rebalance=i+5
         daily=0.
         for s in SYMBOLS:
             if cur[s]==0:continue
@@ -163,17 +169,22 @@ def main():
     ts,bars=align(data)
     if len(ts)<1200:raise RuntimeError(f"common days too small {len(ts)}")
     recent=int(len(ts)*0.70)
+    market_idx=[]
+    base_close={s:bars[s][0].c for s in SYMBOLS}
+    for i in range(len(ts)):
+        market_idx.append(sum(bars[s][i].c/base_close[s] for s in SYMBOLS)/len(SYMBOLS))
     results={}
-    for mode in ["OFI_D1_LS_TOP2","OFI_5D_LONG_TOP2"]:
+    for mode in ["OFI_D1_LS_TOP2","OFI_5D_LONG_TOP2","OFI_5D_LONG_TOP2_REGIME"]:
         results[mode]={}
         for cname,cost in COSTS.items():
-            results[mode][cname]={"full":simulate(ts,bars,fund,mode,cost,5),"recent30pct":simulate(ts,bars,fund,mode,cost,recent)}
+            results[mode][cname]={"full":simulate(ts,bars,fund,mode,cost,5,market_idx),"recent30pct":simulate(ts,bars,fund,mode,cost,recent,market_idx)}
     bench={c:{"full":benchmark(ts,bars,fund,cost,5),"recent30pct":benchmark(ts,bars,fund,cost,recent)} for c,cost in COSTS.items()}
     payload={"schemaVersion":1,"kind":"binance-cross-sectional-orderflow-v1","research_only":True,"public_data_only":True,
              "live_trading":False,"private_api":False,"orders_submitted":0,"lookahead_free":True,
              "formula":{"daily_flow":"(2*taker_buy_volume-total_volume)/total_volume from completed UTC day",
                         "OFI_D1_LS_TOP2":"next-open long top2 / short bottom2, gross 1.0, daily rebalance",
-                        "OFI_5D_LONG_TOP2":"5-day mean flow, positive top2 long only, rebalance every 5 days"},
+                        "OFI_5D_LONG_TOP2":"5-day mean flow, positive top2 long only, rebalance every 5 days",
+                        "OFI_5D_LONG_TOP2_REGIME":"same, but only while equal-weight crypto index completed close is above its 200-day SMA"},
              "symbols":SYMBOLS,"months":MONTHS,"costs":COSTS,"common_days":len(ts),"provenance":prov,"results":results,"benchmark_equal_weight_long":bench}
     (OUT/"result.json").write_text(json.dumps(payload,indent=2),encoding="utf-8")
     lines=["# Binance Cross-Sectional Order Flow V1","","RESEARCH ONLY / PUBLIC DATA ONLY / NO ORDERS","",
