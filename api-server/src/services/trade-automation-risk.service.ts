@@ -239,9 +239,9 @@ export function evaluateTradingPlan(
     if (!policy.marketEnabled[assetClass]) add(blockCodes, 'MARKET_NOT_ENABLED');
     if (!policy.exchangeEnabled[plan.exchange]) add(blockCodes, 'EXCHANGE_NOT_ENABLED');
     const normalizedSymbol = plan.exchange === 'upbit' ? plan.symbol.toUpperCase().replace(/^KRW-/, '') : plan.symbol.toUpperCase();
-    if (!policy.enabledAssets[plan.exchange].includes(normalizedSymbol)) add(blockCodes, 'ASSET_NOT_ENABLED');
+    if (policy.enabledAssets[plan.exchange].length > 0 && !policy.enabledAssets[plan.exchange].includes(normalizedSymbol)) add(blockCodes, 'ASSET_NOT_ENABLED');
     if (policy.enabledStrategies.length > 0 && !policy.enabledStrategies.includes(plan.strategyId)) add(blockCodes, 'STRATEGY_NOT_ENABLED');
-    if (!plan.economics) add(blockCodes, 'AUTOMATIC_ECONOMICS_REQUIRED');
+    if (plan.accountMode !== 'paper' && !plan.economics) add(blockCodes, 'AUTOMATIC_ECONOMICS_REQUIRED');
   }
   if (plan.accountMode === 'live' && !options.serverLiveEnabled) add(blockCodes, 'LIVE_EXECUTION_DISABLED');
 
