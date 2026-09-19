@@ -41,6 +41,7 @@
       <article class="metric-card"><span>Paper Positions</span><strong id="paper-positions">—</strong><small>현재 Paper 포지션</small></article>
       <article class="metric-card"><span>Shadow Settled</span><strong id="shadow-settled">—</strong><small>방향 검증 완료</small></article>
       <article class="metric-card"><span>Temporal Evidence</span><strong id="temporal-observations">—</strong><small>공개 시계열 관측 누적</small></article>
+      <article class="metric-card"><span>Research Factory</span><strong id="factory-state">—</strong><small>다음 단계 blocker 상태</small></article>
       <article class="metric-card"><span>Failed Tasks</span><strong id="failed-tasks">—</strong><small>최근 연구 실패</small></article>
     </section>
 
@@ -80,6 +81,20 @@
       </dl>
       <div id="temporal-symbols" class="chip-row"></div>
       <p id="temporal-empty" class="empty">아직 Temporal evidence 수집 기록이 없습니다.</p>
+    </section>
+
+    <section class="panel">
+      <div class="section-heading">
+        <div><p class="eyebrow">RESEARCH FACTORY</p><h2>Control Plane</h2></div>
+        <span id="factory-status" class="pill neutral">—</span>
+      </div>
+      <dl class="detail-grid">
+        <div><dt>정책</dt><dd id="factory-policy">—</dd></div>
+        <div><dt>준비 시장</dt><dd id="factory-markets">—</dd></div>
+        <div><dt>준비 프로필</dt><dd id="factory-profiles">—</dd></div>
+        <div><dt>최근 상태</dt><dd id="factory-updated">—</dd></div>
+      </dl>
+      <p class="muted">FIRST ZERO: <strong id="factory-first-zero">—</strong></p>
     </section>
 
     <section class="panel">
