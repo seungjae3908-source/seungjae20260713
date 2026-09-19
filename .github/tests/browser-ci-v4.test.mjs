@@ -55,7 +55,8 @@ test('Full Browser Required context stays four-way, retry-free, and aggregated o
   assert.match(workflow, /browser-runtime-shard-plan\.mjs/u);
   assert.match(workflow, /--lane "\$\{\{ matrix\.shard \}\}"/u);
   assert.match(workflow, /browser-runtime-lane-runner\.mjs/u);
-  assert.match(workflow, /--retries=0/u);
+  const runner = await readFile('.github/scripts/browser-runtime-lane-runner.mjs', 'utf8');
+  assert.match(runner, /'--retries=0'/u);
   assert.doesNotMatch(workflow, /--shard=\$\{\{ matrix\.shard \}\}\/4/u);
   assert.doesNotMatch(workflow, /run test:e2e -- --shard=/u);
   assert.match(workflow, /needs:\s*\[browser-ui-start, browser-ui-shard\]/u);
