@@ -240,7 +240,7 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
         href: APP_ROUTES.autoTrading,
         label: '자동매매',
         icon: 'power',
-        capability: 'canPlaceOrders',
+        capability: 'canAccessAutoTrading',
       },
       {
         id: 'backtests',
@@ -252,7 +252,7 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
       {
         id: 'paper-trading',
         href: APP_ROUTES.paperTrading,
-        label: '모의자동매매',
+        label: '모의매매',
         icon: 'power',
         capability: 'canAccessPaperTrading',
       },
