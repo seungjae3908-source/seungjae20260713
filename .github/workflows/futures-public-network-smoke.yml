@@ -332,14 +332,16 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const workflowId = 'futures-public-network-smoke.yml';
-            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+            const { data: runPage } = await github.rest.actions.listWorkflowRuns({
               owner, repo, workflow_id: workflowId, branch: 'main', event: 'push', status: 'success', per_page: 20,
             });
+            const runs = runPage.workflow_runs ?? [];
             for (const run of runs) {
               if (Number(run.id) === Number(context.runId)) continue;
-              const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              const { data: artifactPage } = await github.rest.actions.listWorkflowRunArtifacts({
                 owner, repo, run_id: run.id, per_page: 100,
               });
+              const artifacts = artifactPage.artifacts ?? [];
               const artifact = artifacts
                 .filter((item) => !item.expired && item.name.startsWith('browser-runtime-weights-next-'))
                 .sort((left, right) => new Date(right.created_at) - new Date(left.created_at))[0];
