@@ -62,6 +62,22 @@ function availableBindings(){
   ]));
 }
 
+test('missing human-approved adaptive policy blocks cleanly without inventing a candidate budget',()=>{
+  const result=buildResearchFactoryControlPlaneV1({
+    researchSha:SHA,
+    observedAt:AT,
+    evidenceByMarket:{},
+    adaptive:{},
+  });
+  assert.equal(result.status,'BLOCKED_POLICY_MISSING');
+  assert.equal(result.nextAction.kind,'FREEZE_HUMAN_APPROVED_ADAPTIVE_POLICY');
+  assert.equal(result.canonicalAdaptive.policyStatus,'MISSING');
+  assert.equal(result.canonicalAdaptive.initialCandidateFamilySize,null);
+  assert.equal(result.safety.candidateBudgetInvented,false);
+  assert.equal(result.safety.runtimeExecutionAttempted,false);
+  assert.equal(result.safety.executionAuthority,'NONE');
+});
+
 test('control-plane does not duplicate the canonical tournament or stage sequence',()=>{
   const result=buildResearchFactoryControlPlaneV1({
     researchSha:SHA,observedAt:AT,evidenceByMarket:{},
