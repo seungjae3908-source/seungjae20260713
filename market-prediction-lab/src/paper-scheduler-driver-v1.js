@@ -7,6 +7,7 @@ import {
   runRecurringPaperCycle,
 } from "./recurring-paper-loop-v1.js";
 import { isAdaptiveMultiEvidenceV2FrozenCandidateId } from "./adaptive-multi-evidence-natural-paper-v2.js";
+import { buildMemberAutoTradingPaperHandoff } from "./member-auto-trading-paper-handoff-v1.js";
 
 export const PAPER_SCHEDULER_OWNER_LIVENESS = Object.freeze({
   ALIVE: "ALIVE",
@@ -936,6 +937,12 @@ export async function runScheduledPaperCycle({
       });
     }
 
+    const memberAutoTradingHandoff = buildMemberAutoTradingPaperHandoff({
+      cycleId: cycle.cycleId,
+      evaluatedAtMs: evidenceEvaluatedAtMs,
+      lanes,
+    });
+
     await leaseStore.assertOwned({
       leaseKey: cycle.leaseKey,
       ownerId,
@@ -976,6 +983,7 @@ export async function runScheduledPaperCycle({
       completedAtMs,
       ...result,
       positionObservationHandoff,
+      memberAutoTradingHandoff,
       safety: PAPER_SCHEDULER_CONTRACT,
     });
   } finally {
