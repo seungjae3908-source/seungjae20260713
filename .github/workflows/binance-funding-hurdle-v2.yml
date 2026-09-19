@@ -1,0 +1,48 @@
+name: Binance Funding Hurdle V2
+
+on:
+  push:
+    branches:
+      - research/pit-us-orderflow-v1-20260919
+    paths:
+      - market-prediction-lab/scripts/run-binance-funding-hurdle-v2.py
+      - .github/workflows/binance-funding-hurdle-v2.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Syntax check
+        run: python -m py_compile market-prediction-lab/scripts/run-binance-funding-hurdle-v2.py
+      - name: Run funding hurdle validation
+        run: python market-prediction-lab/scripts/run-binance-funding-hurdle-v2.py
+      - name: Verify safety contract
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path("market-prediction-lab/artifacts/binance-funding-hurdle-v2/result.json").read_text())
+          assert d["researchOnly"] is True
+          assert d["publicDataOnly"] is True
+          assert d["liveTrading"] is False
+          assert d["privateApi"] is False
+          assert d["ordersSubmitted"] == 0
+          assert d["formula"]["modes"] == ["TOP2_POSITIVE","COST_HURDLE"]
+          assert all(v["fundingStatus"]=="BINANCE_VISION_OK" for v in d["provenance"].values())
+          print("FUNDING_HURDLE_V2_CONTRACT=PASS")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binance-funding-hurdle-v2-${{ github.sha }}
+          path: market-prediction-lab/artifacts/binance-funding-hurdle-v2/
+          if-no-files-found: error
+          retention-days: 30
