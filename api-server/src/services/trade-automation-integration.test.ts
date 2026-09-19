@@ -48,6 +48,68 @@ test('automatic trading and every exchange default to OFF', () => {
   assert.equal(policy.bitgetLeverage, 2);
 });
 
+test('stock broker selection is per market, backward compatible, and enforced for automatic stock Paper plans', () => {
+  const legacy = normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, stockBrokerByMarket: undefined });
+  assert.deepEqual(legacy.stockBrokerByMarket, { domestic_stock: 'kiwoom', us_stock: 'kiwoom' });
+
+  const policy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    mode: 'automatic',
+    automaticEnabled: true,
+    marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true },
+    stockBrokerByMarket: { domestic_stock: 'toss', us_stock: 'kiwoom' },
+    exchangeEnabled: { bitget: true, upbit: true, kiwoom: true },
+  });
+
+  const domesticToss = evaluateTradingPlan(
+    plan({
+      exchange: 'kiwoom',
+      stockBroker: 'toss',
+      accountMode: 'paper',
+      market: 'KR',
+      symbol: '005930',
+      side: 'buy',
+      quantity: 1,
+      quoteAmount: null,
+    }),
+    policy,
+    { emergencyStopped: false, serverLiveEnabled: true },
+  );
+  assert.equal(domesticToss.blockCodes.includes('STOCK_BROKER_MISMATCH'), false);
+
+  const domesticWrongBroker = evaluateTradingPlan(
+    plan({
+      exchange: 'kiwoom',
+      stockBroker: 'kiwoom',
+      accountMode: 'paper',
+      market: 'KR',
+      symbol: '005930',
+      side: 'buy',
+      quantity: 1,
+      quoteAmount: null,
+    }),
+    policy,
+    { emergencyStopped: false, serverLiveEnabled: true },
+  );
+  assert.ok(domesticWrongBroker.blockCodes.includes('STOCK_BROKER_MISMATCH'));
+
+  const usKiwoom = evaluateTradingPlan(
+    plan({
+      exchange: 'kiwoom',
+      stockBroker: 'kiwoom',
+      accountMode: 'paper',
+      market: 'US',
+      symbol: 'AAPL',
+      side: 'buy',
+      quantity: 1,
+      quoteAmount: null,
+    }),
+    policy,
+    { emergencyStopped: false, serverLiveEnabled: true },
+  );
+  assert.equal(usKiwoom.blockCodes.includes('STOCK_BROKER_MISMATCH'), false);
+});
+
 test('automatic policy fields restrict eligibility and standing activation removes per-order approval', async () => {
   const automatic = normalizeTradingPolicy({
     ...DEFAULT_TRADING_POLICY,
