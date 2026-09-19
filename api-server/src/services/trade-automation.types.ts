@@ -65,7 +65,7 @@ export type TradingProtectionOrder = {
 };
 
 export const DEFAULT_TRADING_POLICY = Object.freeze({
-  mode: 'automatic' as TradingMode,
+  mode: 'approval' as TradingMode,
   automaticEnabled: false,
   emergencyStopped: false,
   newEntriesStopped: false,
