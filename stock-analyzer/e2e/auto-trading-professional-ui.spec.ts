@@ -20,19 +20,21 @@ test('auto trading keeps the user-facing name 자동매매 everywhere in its she
   expect(navigation).not.toContain("label: '승인형 주문'");
 });
 
-test('auto trading shell keeps the professional typography and safety summary without altering approval components', () => {
+test('auto trading shell keeps professional typography and the standing-authorization safety contract', () => {
   const page = source('src/pages/auto-trading.tsx');
 
   expect(page).toContain('data-testid="auto-trading-safety-summary"');
-  expect(page).toContain('주문 안전 상태');
-  expect(page).toContain('실전 주문');
-  expect(page).toContain('비활성');
-  expect(page).toContain('사용자 승인');
+  expect(page).toContain('자동매매 실행 방식');
+  expect(page).toContain('주문별 승인');
+  expect(page).toContain('불필요');
+  expect(page).toContain('4시장 개별 ON/OFF');
   expect(page).toContain('위험검사');
+  expect(page).toContain('미국주식 실전 자동주문');
   expect(page).not.toContain('text-[10px]');
   expect(page).not.toContain('text-[11px]');
   expect(page).not.toContain('font-black');
-  expect(page).toContain('<TradeApprovalQueue fixture={approvalFixture} />');
+  expect(page).not.toContain('TradeApprovalQueue');
+  expect(page).not.toContain('approvalFixture');
   expect(page).toContain('<TradeAutomationSettings fixture={fixture} />');
   expect(page).toContain('<UserBrokerTelegramPanel />');
 });

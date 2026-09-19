@@ -54,7 +54,7 @@ export default function AutoTradingPage({ fixture, embedded = false }: AutoTradi
         <div className="rounded-xl bg-background p-3"><p className="font-bold">코인현물</p><p className="mt-1 text-muted-foreground">모의 + 연결된 실전</p></div>
         <div className="rounded-xl bg-background p-3"><p className="font-bold">코인선물</p><p className="mt-1 text-muted-foreground">모의 + LONG/SHORT</p></div>
       </div>
-      <p className="mt-3 break-keep text-[11px] leading-5 text-muted-foreground">
+      <p className="mt-3 break-keep text-xs leading-5 text-muted-foreground">
         미국주식 실전 자동주문은 검증된 주문 어댑터가 연결되기 전까지 차단됩니다. 시장 토글이 ON이어도 서버 실행 게이트와 사전 위험검사를 통과하지 못하면 실제 주문은 전송되지 않습니다.
       </p>
     </section>
