@@ -197,6 +197,9 @@ jobs:
           fi
           node --test .github/tests/connection-graph-auditor.test.mjs
           node --test .github/tests/product-integrity-auditor.test.mjs
+          if compgen -G '.github/tests/browser-ci-v4*.test.mjs' > /dev/null; then
+            node --test .github/tests/browser-ci-v4*.test.mjs
+          fi
 
       - name: Development-only boundary
         run: |
