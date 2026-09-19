@@ -248,7 +248,16 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
         ? 'normal'
         : 'insufficient';
   const staleCount = cards.filter((card) => card.status === 'stale').length;
-  const temporal = overview.dataFactory.temporalCryptoFutures;
+  const temporal = overview.dataFactory?.temporalCryptoFutures ?? {
+    present: false,
+    status: 'MISSING' as const,
+    generatedAt: null,
+    researchSha: null,
+    failedCount: null,
+    observationCount: null,
+    ledgerDigest: null,
+    results: [],
+  };
   const temporalStatus: ResearchProductStatus = !temporal.present
     ? 'unmeasured'
     : temporal.status === 'INVALID'
