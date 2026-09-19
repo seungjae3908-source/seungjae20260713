@@ -9,7 +9,7 @@ function latestPriorOpenInterest(ledger,symbol,beforeTimestamp){
     .sort((a,b)=>b.observedAt-a.observedAt)[0]??null;
 }
 
-function genuineObservation({symbol,feature,value,observedAt,availableAt,source='bitget-public-v2'}){
+function genuineObservation({symbol,feature,value,observedAt,availableAt,producerSha,source='bitget-public-v2'}){
   return Object.freeze({
     market:'CRYPTO_FUTURES',
     symbol,
@@ -19,6 +19,7 @@ function genuineObservation({symbol,feature,value,observedAt,availableAt,source=
     availableAt,
     recordedAt:availableAt,
     source,
+    producerSha,
     publicDataOnly:true,
     synthetic:false,
     replay:false,
@@ -33,11 +34,13 @@ export function buildCryptoFuturesTemporalObservationsV1({
   context,
   longShortRecords=[],
   collectedAt,
+  producerSha,
 }={}){
   if(!ledger||!Array.isArray(ledger.observations)) throw new TypeError('temporal ledger required');
   if(typeof symbol!=='string'||!/^[A-Z0-9]{3,30}$/.test(symbol)) throw new TypeError('symbol invalid');
   if(!context||typeof context!=='object') throw new TypeError('Bitget futures context required');
   if(!Number.isSafeInteger(collectedAt)||collectedAt<=0) throw new TypeError('collectedAt invalid');
+  if(typeof producerSha!=='string'||!/^[0-9a-f]{40}$/i.test(producerSha)) throw new TypeError('producerSha invalid');
   const observations=[];
 
   if(Number.isFinite(context.fundingRate)){
@@ -46,7 +49,7 @@ export function buildCryptoFuturesTemporalObservationsV1({
       : collectedAt;
     observations.push(genuineObservation({
       symbol,feature:'fundingRate',value:context.fundingRate,
-      observedAt,availableAt:collectedAt,
+      observedAt,availableAt:collectedAt,producerSha,
     }));
   }
 
@@ -57,13 +60,13 @@ export function buildCryptoFuturesTemporalObservationsV1({
     const prior=latestPriorOpenInterest(ledger,symbol,observedAt);
     observations.push(genuineObservation({
       symbol,feature:'openInterestRaw',value:context.openInterest,
-      observedAt,availableAt:collectedAt,
+      observedAt,availableAt:collectedAt,producerSha,
     }));
     if(prior&&prior.value>0&&observedAt>prior.observedAt){
       observations.push(genuineObservation({
         symbol,feature:'openInterestChange',
         value:(context.openInterest-prior.value)/prior.value,
-        observedAt,availableAt:collectedAt,
+        observedAt,availableAt:collectedAt,producerSha,
         source:'bitget-public-v2-derived-oi-change',
       }));
     }
@@ -75,7 +78,7 @@ export function buildCryptoFuturesTemporalObservationsV1({
     // availableAt is the actual collection time, so only future anchors may use them.
     observations.push(genuineObservation({
       symbol,feature:'longShortRatio',value:raw.ratio,
-      observedAt:raw.timestamp,availableAt:collectedAt,
+      observedAt:raw.timestamp,availableAt:collectedAt,producerSha,
     }));
   }
 
@@ -88,6 +91,7 @@ export async function collectCryptoFuturesTemporalEvidenceV1({
   longShortPeriod='1h',
   client=new BitgetPublicClient({minIntervalMs:1100,maxRetries:4,timeoutMs:12_000}),
   now=()=>Date.now(),
+  producerSha,
 }={}){
   let current=ledger;
   const results=[];
@@ -99,7 +103,7 @@ export async function collectCryptoFuturesTemporalEvidenceV1({
         collectLongShortRatioHistory({client,symbol,period:longShortPeriod}),
       ]);
       const observations=buildCryptoFuturesTemporalObservationsV1({
-        ledger:current,symbol,context,longShortRecords:longShort.records,collectedAt,
+        ledger:current,symbol,context,longShortRecords:longShort.records,collectedAt,producerSha,
       });
       const before=current.observations.length;
       current=appendTemporalEvidenceBatchV1(current,observations);
