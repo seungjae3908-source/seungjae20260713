@@ -390,9 +390,9 @@ router.post('/plans', async (req: AuthenticatedRequest, res) => {
     return res.json({
       ok: true,
       plan,
-      duplicate: result.duplicate,
       automaticExecutionTriggered: automaticExecution != null,
       ...(automaticExecution ?? {}),
+      duplicate: automaticExecution?.duplicate ?? result.duplicate,
       orderSubmitted: input.accountMode === 'live' && automaticExecution != null,
     });
   } catch (error) { return errorResponse(res, error); }
