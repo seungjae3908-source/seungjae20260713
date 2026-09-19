@@ -7,6 +7,7 @@ import {
 import {
   buildClosedCandleAdaptiveReceiptV1,
   buildStockUniverseAdaptiveReceiptsV1,
+  buildTransactionCostPolicyAdaptiveReceiptsV1,
 } from '../src/research-canonical-receipt-producers.mjs';
 
 const SHA='a'.repeat(40);
@@ -73,6 +74,40 @@ function stockAuditInput(market){
   };
 }
 
+function readyCostEvidence(market='US_STOCK'){
+  const now=Date.UTC(2026,8,20,0,0,0);
+  const components={};
+  for(const component of [
+    'commissionBps','taxBps','spreadBps','slippageBps','latencyBps','liquidityImpactBps','partialFillImpactBps',
+  ]){
+    components[component]={
+      sourceType:'STATIC_POLICY',
+      source:'canonical-cost-policy',
+      valueBps:1,
+      asOf:now,
+      policyVersion:'broker-cost-v1',
+    };
+  }
+  components.fundingBps=market==='CRYPTO_FUTURES'
+    ? {
+        sourceType:'STATIC_POLICY',
+        source:'canonical-funding-policy',
+        valueBps:1,
+        asOf:now,
+        policyVersion:'funding-cost-v1',
+      }
+    : {
+        sourceType:'NOT_APPLICABLE',
+        notApplicableReason:'cash market has no perpetual funding',
+      };
+  return {
+    market,
+    evidenceSetVersion:'full-cost-set-v1',
+    now,
+    components,
+  };
+}
+
 function candles(){
   const interval=15*60*1000;
   const start=Date.UTC(2026,8,19,0,0,0);
@@ -118,6 +153,34 @@ test('current-list-only or missing removed-name history cannot produce stock rec
   assert.throws(()=>buildStockUniverseAdaptiveReceiptsV1({
     datasetManifest:dataset,auditInput:input,observedAt:'2026-09-20T00:10:00.000Z',
   }),/STOCK_UNIVERSE_AUDIT_NOT_READY/);
+});
+
+test('READY transaction-cost evidence emits cost-policy identity receipts for every market horizon',()=>{
+  const dataset=manifest('US_STOCK');
+  const result=buildTransactionCostPolicyAdaptiveReceiptsV1({
+    datasetManifest:dataset,
+    costEvidenceInput:readyCostEvidence('US_STOCK'),
+  });
+  assert.equal(result.receiptCount,3);
+  assert.equal(result.policyVersion,'MIS_TRANSACTION_COST_EVIDENCE_V1');
+  assert.equal(result.receipts.every(r=>r.requirement==='COST_POLICY_IDENTITY'),true);
+  assert.equal(result.receipts.every(r=>r.datasetSnapshotHash===dataset.datasetSnapshotHash),true);
+  assert.equal(result.receipts.every(r=>r.executionAuthority==='NONE'),true);
+});
+
+test('incomplete or cross-market cost evidence cannot create cost-policy receipts',()=>{
+  const dataset=manifest('US_STOCK');
+  const incomplete=readyCostEvidence('US_STOCK');
+  delete incomplete.components.slippageBps;
+  assert.throws(()=>buildTransactionCostPolicyAdaptiveReceiptsV1({
+    datasetManifest:dataset,
+    costEvidenceInput:incomplete,
+  }),/TRANSACTION_COST_EVIDENCE_NOT_READY/);
+
+  assert.throws(()=>buildTransactionCostPolicyAdaptiveReceiptsV1({
+    datasetManifest:dataset,
+    costEvidenceInput:readyCostEvidence('KR_STOCK'),
+  }),/TRANSACTION_COST_DATASET_MARKET_MISMATCH/);
 });
 
 test('closed Bitget candles produce exact-timeframe receipt for matching adaptive horizon',()=>{
