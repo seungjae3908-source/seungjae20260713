@@ -27,6 +27,9 @@ on:
       - main
     paths:
       - .github/workflows/futures-public-network-smoke.yml
+      - .github/scripts/**
+      - .github/tests/**
+      - .github/fixtures/**
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
       - package.json
@@ -305,12 +308,93 @@ jobs:
               sha,
               state: 'pending',
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-              description: `Browser UI run ${context.runId}: 4-way shard running`,
+              description: `Browser UI run ${context.runId}: adaptive 4-way shard running`,
               context: 'browser-ui/verified',
             });
 
-  browser-ui-shard:
+  browser-ui-weights:
     needs: [ready-gate, browser-ui-start]
+    name: Resolve safe adaptive Browser weights
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APPLICATION_CHECKOUT_REF }}
+          persist-credentials: false
+
+      - name: Find latest successful main adaptive weights
+        id: adaptive
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const workflowId = 'futures-public-network-smoke.yml';
+            const { data: runPage } = await github.rest.actions.listWorkflowRuns({
+              owner, repo, workflow_id: workflowId, branch: 'main', event: 'push', status: 'success', per_page: 20,
+            });
+            const runs = runPage.workflow_runs ?? [];
+            for (const run of runs) {
+              if (Number(run.id) === Number(context.runId)) continue;
+              const { data: artifactPage } = await github.rest.actions.listWorkflowRunArtifacts({
+                owner, repo, run_id: run.id, per_page: 100,
+              });
+              const artifacts = artifactPage.artifacts ?? [];
+              const artifact = artifacts
+                .filter((item) => !item.expired && item.name.startsWith('browser-runtime-weights-next-'))
+                .sort((left, right) => new Date(right.created_at) - new Date(left.created_at))[0];
+              if (!artifact) continue;
+              core.setOutput('found', 'true');
+              core.setOutput('run_id', String(run.id));
+              core.setOutput('artifact_name', artifact.name);
+              core.setOutput('source_sha', String(run.head_sha || '').toLowerCase());
+              core.info(`Adaptive Browser weights found: run=${run.id} sha=${run.head_sha} artifact=${artifact.name}`);
+              return;
+            }
+            core.setOutput('found', 'false');
+            core.info('No prior successful main adaptive Browser weights; using repository baseline.');
+
+      - name: Download prior adaptive Browser weights
+        if: steps.adaptive.outputs.found == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.adaptive.outputs.artifact_name }}
+          run-id: ${{ steps.adaptive.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: /tmp/browser-prior-adaptive
+
+      - name: Select and verify active Browser weights
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/browser-active
+          if [[ '${{ steps.adaptive.outputs.found }}' == 'true' ]]; then
+            adaptive_file="$(find /tmp/browser-prior-adaptive -type f -name 'browser-runtime-weights-next.json' -print -quit)"
+            [[ -n "$adaptive_file" ]] || { echo '[ADAPTIVE_BROWSER_WEIGHTS_FILE_MISSING]' >&2; exit 1; }
+            cp "$adaptive_file" /tmp/browser-active/browser-runtime-weights-active.json
+            echo 'weight_source=ADAPTIVE_MAIN_ARTIFACT' >> "$GITHUB_STEP_SUMMARY"
+            echo 'source_run=${{ steps.adaptive.outputs.run_id }}' >> "$GITHUB_STEP_SUMMARY"
+            echo 'source_sha=${{ steps.adaptive.outputs.source_sha }}' >> "$GITHUB_STEP_SUMMARY"
+          else
+            cp .github/fixtures/browser-runtime-weights-v1.json /tmp/browser-active/browser-runtime-weights-active.json
+            echo 'weight_source=REPOSITORY_BASELINE' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          node .github/scripts/browser-runtime-shard-plan.mjs \
+            --weights /tmp/browser-active/browser-runtime-weights-active.json \
+            --lanes 4 --verify
+
+      - name: Upload exact-run active Browser weights
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-runtime-active-weights-${{ env.APPLICATION_STATUS_SHA }}
+          path: /tmp/browser-active/browser-runtime-weights-active.json
+          if-no-files-found: error
+          retention-days: 3
+
+  browser-ui-shard:
+    needs: [ready-gate, browser-ui-start, browser-ui-weights]
     name: Playwright desktop and mobile application UI — shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
     timeout-minutes: 18
@@ -350,28 +434,44 @@ jobs:
       - name: Install Playwright Chromium
         run: pnpm --dir stock-analyzer exec playwright install chromium
 
-      - name: Verify runtime-weighted browser shard plan
-        run: node .github/scripts/browser-runtime-shard-plan.mjs --lanes 4 --verify
+      - name: Download exact-run active Browser weights
+        uses: actions/download-artifact@v4
+        with:
+          name: browser-runtime-active-weights-${{ env.APPLICATION_STATUS_SHA }}
+          path: /tmp/browser-active
 
-      - name: Select runtime-weighted browser shard
+      - name: Verify adaptive runtime-weighted browser shard plan
+        run: node .github/scripts/browser-runtime-shard-plan.mjs --weights /tmp/browser-active/browser-runtime-weights-active.json --lanes 4 --verify
+
+      - name: Select adaptive runtime-weighted browser shard
         shell: bash
         run: |
           set -euo pipefail
           node .github/scripts/browser-runtime-shard-plan.mjs \
+            --weights /tmp/browser-active/browser-runtime-weights-active.json \
             --lanes 4 \
             --lane "${{ matrix.shard }}" \
             --format lines > /tmp/browser-runtime-shard-specs.txt
           test -s /tmp/browser-runtime-shard-specs.txt
           cat /tmp/browser-runtime-shard-specs.txt
 
-      - name: Run full Playwright runtime-weighted shard without retry-to-pass
+      - name: Run full Playwright adaptive runtime-weighted shard without retry-to-pass
         id: browser
+        run: node .github/scripts/browser-runtime-lane-runner.mjs --lane "${{ matrix.shard }}" --spec-list /tmp/browser-runtime-shard-specs.txt --telemetry "/tmp/browser-runtime-lane-${{ matrix.shard }}.json"
+
+      - name: Require telemetry after successful Browser shard
+        if: steps.browser.outcome == 'success'
         shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t browser_specs < /tmp/browser-runtime-shard-specs.txt
-          [ "${#browser_specs[@]}" -gt 0 ]
-          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts "${browser_specs[@]}" --retries=0
+        run: test -s "/tmp/browser-runtime-lane-${{ matrix.shard }}.json"
+
+      - name: Upload Browser runtime telemetry
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-runtime-telemetry-${{ github.run_id }}-lane-${{ matrix.shard }}
+          path: /tmp/browser-runtime-lane-${{ matrix.shard }}.json
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Upload shard Playwright report and failure evidence
         if: always()
@@ -424,9 +524,55 @@ jobs:
               sha,
               state,
               target_url: runUrl,
-              description: `Browser UI run ${context.runId}: 4-way shard ${result}`,
+              description: `Browser UI run ${context.runId}: adaptive 4-way shard ${result}`,
               context: statusContext,
             });
+
+  browser-runtime-adapt:
+    needs: [browser-ui-weights, browser-ui-shard, browser-ui-result]
+    if: always() && needs.browser-ui-weights.result == 'success' && needs.browser-ui-shard.result == 'success' && needs.browser-ui-result.result == 'success'
+    name: Derive next-run adaptive Browser weights
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APPLICATION_CHECKOUT_REF }}
+          persist-credentials: false
+
+      - name: Download exact-run active Browser weights
+        uses: actions/download-artifact@v4
+        with:
+          name: browser-runtime-active-weights-${{ env.APPLICATION_STATUS_SHA }}
+          path: /tmp/browser-active
+
+      - name: Download successful Browser telemetry lanes
+        uses: actions/download-artifact@v4
+        with:
+          pattern: browser-runtime-telemetry-${{ github.run_id }}-lane-*
+          path: /tmp/browser-runtime-telemetry
+          merge-multiple: true
+
+      - name: Derive next-run adaptive weights
+        run: |
+          set -euo pipefail
+          node .github/scripts/browser-adaptive-weights.mjs \
+            --base /tmp/browser-active/browser-runtime-weights-active.json \
+            --telemetry-dir /tmp/browser-runtime-telemetry \
+            --output /tmp/browser-runtime-weights-next.json \
+            --alpha 0.5
+          node .github/scripts/browser-runtime-shard-plan.mjs \
+            --weights /tmp/browser-runtime-weights-next.json \
+            --lanes 4 --verify
+
+      - name: Upload next-run adaptive Browser weights
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-runtime-weights-next-${{ env.APPLICATION_STATUS_SHA }}
+          path: /tmp/browser-runtime-weights-next.json
+          if-no-files-found: error
+          retention-days: 30
 
   database-rls:
     needs: ready-gate
