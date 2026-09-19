@@ -124,10 +124,11 @@ export async function runHistoricalPipelines({ repoRoot, stateRoot, researchSha,
   const results = []; let cursor = 0; const safeConcurrency = Math.max(1, Math.min(Number(concurrency) || 1, 3));
   try {
     await Promise.all(Array.from({ length: safeConcurrency }, async () => { while (cursor < HISTORICAL_PIPELINES.length) { const index = cursor++; const pipeline = HISTORICAL_PIPELINES[index]; try { results[index] = await runPipeline({ pipeline, labRoot, stateRoot, cycleId, env: { ...env, RESEARCH_CODE_SHA: researchSha } }); } catch (error) { results[index] = { id: pipeline.id, status: 'failed', error: String(error?.stack ?? error).slice(0, 4000), stepCount: 0, liveTrading: false, privateApi: false, orderAuthority: false }; } } }));
-    const failedCount = results.filter((r) => r.status === 'failed').length;
+    const technicalFailureCount = results.filter((r) => r.status === 'failed').length;
     const blockedDataCount = results.filter((r) => r.status === 'blocked_data').length;
     const successCount = results.filter((r) => r.status === 'success').length;
-    const summary = { schemaVersion: 'research-production-historical-cycle-v2', cycleId, profile: 'fast-historical', researchSha, generatedAt: Date.now(), concurrency: safeConcurrency, taskCount: results.length, plannedStepCount: HISTORICAL_PIPELINES.reduce((sum, p) => sum + p.steps.length, 0), executedStepCount: results.reduce((sum, r) => sum + (r.stepCount ?? 0), 0), successCount, blockedDataCount, failedCount, status: failedCount > 0 ? 'partial_failure' : blockedDataCount > 0 ? 'blocked_data' : 'complete', results, safety: preflight.safety };
+    const failedCount = technicalFailureCount + blockedDataCount;
+    const summary = { schemaVersion: 'research-production-historical-cycle-v2', cycleId, profile: 'fast-historical', researchSha, generatedAt: Date.now(), concurrency: safeConcurrency, taskCount: results.length, plannedStepCount: HISTORICAL_PIPELINES.reduce((sum, p) => sum + p.steps.length, 0), executedStepCount: results.reduce((sum, r) => sum + (r.stepCount ?? 0), 0), successCount, blockedDataCount, technicalFailureCount, failedCount, status: technicalFailureCount > 0 ? 'partial_failure' : blockedDataCount > 0 ? 'blocked_data' : 'complete', results, safety: preflight.safety };
     await atomicJson(join(stateRoot, 'runs', cycleId, 'cycle.json'), summary); await atomicJson(join(stateRoot, 'latest', 'fast-historical.json'), summary); return summary;
   } finally { await rm(lockPath, { force: true }); }
 }
