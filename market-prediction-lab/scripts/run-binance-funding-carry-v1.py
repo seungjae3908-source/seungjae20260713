@@ -52,7 +52,12 @@ def fetch_kline_month(symbol,month,kind):
         text=io.TextIOWrapper(z.open(member),encoding="utf-8")
         for r in csv.reader(text):
             if not r or not r[0].isdigit(): continue
-            rows.append(Bar(int(r[0]),float(r[1]),float(r[2]),float(r[3]),float(r[4]),float(r[5])))
+            ts=int(r[0])
+            # Binance Spot archive switched to microsecond timestamps for newer files;
+            # normalize both spot and USD-M futures to milliseconds before alignment.
+            if ts > 100_000_000_000_000:
+                ts //= 1000
+            rows.append(Bar(ts,float(r[1]),float(r[2]),float(r[3]),float(r[4]),float(r[5])))
     return month,rows,digest
 
 def fetch_funding_month(symbol,month):
