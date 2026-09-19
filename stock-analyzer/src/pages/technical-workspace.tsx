@@ -42,7 +42,7 @@ const WORKSPACE_TITLES: Record<Workspace, string> = {
 
 const TECHNICAL_INFO_ITEMS = [
   '검색·차트·백테스트는 읽기·분석 중심 화면이며 권한이 없는 기능은 잠금 상태로 유지됩니다.',
-  '자동매매 화면은 권한과 승인 절차가 있는 경우에만 열리며 실거래는 활성화하지 않습니다.',
+  '자동매매 화면은 준회원 이상 자동매매 권한과 저장된 위험 설정을 기준으로 열리며 주문별 승인을 요구하지 않습니다.',
 ] as const;
 
 function useDesktopWorkspace() {
@@ -222,13 +222,13 @@ export default function TechnicalWorkspacePage() {
     && location.startsWith('/__phase11-technical-workspace-e2e');
   const canAccessRiskPreview = phase11FullCapabilityFixture || auth.can('canAccessRiskPreview');
   const canAccessBacktests = phase11FullCapabilityFixture || auth.can('canAccessBacktests');
-  const canPlaceOrders = phase11FullCapabilityFixture || auth.can('canPlaceOrders');
+  const canAccessAutoTrading = phase11FullCapabilityFixture || auth.can('canAccessAutoTrading');
 
   const workspaceAllowed = (value: Workspace) => {
     if (value === 'signal') return true;
     if (value === 'chart') return canAccessRiskPreview;
     if (value === 'backtest') return canAccessBacktests;
-    return canPlaceOrders;
+    return canAccessAutoTrading;
   };
 
   const workspaceTabs = WORKSPACE_TABS.map((tab) => {
@@ -238,14 +238,14 @@ export default function TechnicalWorkspacePage() {
       : tab.value === 'backtest'
         ? '백테스트 권한이 필요합니다.'
         : tab.value === 'trade'
-          ? '주문 승인 권한이 필요합니다.'
+          ? '자동매매 권한이 필요합니다.'
           : undefined;
     return { ...tab, disabled, disabledReason };
   });
 
   useEffect(() => {
     if (!workspaceAllowed(workspace)) setWorkspace('signal');
-  }, [canAccessBacktests, canAccessRiskPreview, canPlaceOrders, workspace]);
+  }, [canAccessAutoTrading, canAccessBacktests, canAccessRiskPreview, workspace]);
 
   const desktopLayout = useMemo(() => {
     const raw = readStoredUiBuilderSignalScannerLayout('desktop');
