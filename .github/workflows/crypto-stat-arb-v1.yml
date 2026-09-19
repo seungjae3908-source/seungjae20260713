@@ -1,0 +1,62 @@
+name: Crypto Statistical Arbitrage V1
+
+on:
+  push:
+    branches:
+      - research/crypto-stat-arb-v1-20260919
+    paths:
+      - market-prediction-lab/scripts/run-crypto-stat-arb-v1.py
+      - .github/workflows/crypto-stat-arb-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Syntax check
+        run: python -m py_compile market-prediction-lab/scripts/run-crypto-stat-arb-v1.py
+
+      - name: Run walk-forward statistical arbitrage
+        run: python market-prediction-lab/scripts/run-crypto-stat-arb-v1.py
+
+      - name: Verify research-only contract
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path("market-prediction-lab/artifacts/crypto-stat-arb-v1/result.json").read_text())
+          assert d["research_only"] is True
+          assert d["public_data_only"] is True
+          assert d["live_trading"] is False
+          assert d["private_api"] is False
+          assert d["orders_submitted"] == 0
+          assert d["leverage"] == 1
+          assert d["lookahead_free"] is True
+          assert len(d["symbols"]) == 8
+          assert d["formula"]["selection_uses_future"] is False
+          assert d["formula"]["funding_included"] is True
+          assert all(v["funding_status"]=="BINANCE_VISION_OK" for v in d["provenance"].values())
+          print("CRYPTO_STAT_ARB_CONTRACT=PASS")
+          PY
+
+      - name: Publish summary
+        run: cat market-prediction-lab/artifacts/crypto-stat-arb-v1/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crypto-stat-arb-v1-${{ github.sha }}
+          path: market-prediction-lab/artifacts/crypto-stat-arb-v1/
+          if-no-files-found: error
+          retention-days: 30
