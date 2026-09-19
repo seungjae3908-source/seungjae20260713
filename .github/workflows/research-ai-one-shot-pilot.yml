@@ -9,6 +9,8 @@ on:
     paths:
       - api-server/src/services/research-dual-free-ai.service.ts
       - api-server/src/services/research-dual-free-ai.service.test.ts
+      - api-server/src/services/research-factory-ai-advisory.service.ts
+      - api-server/src/services/research-factory-ai-advisory.service.test.ts
       - api-server/scripts/run-dual-free-ai-research.ts
       - .github/workflows/research-ai-one-shot-pilot.yml
   push:
@@ -17,6 +19,8 @@ on:
     paths:
       - api-server/src/services/research-dual-free-ai.service.ts
       - api-server/src/services/research-dual-free-ai.service.test.ts
+      - api-server/src/services/research-factory-ai-advisory.service.ts
+      - api-server/src/services/research-factory-ai-advisory.service.test.ts
       - api-server/scripts/run-dual-free-ai-research.ts
       - .github/workflows/research-ai-one-shot-pilot.yml
 
@@ -70,6 +74,11 @@ jobs:
           ! grep -Eq 'HUB_ISSUE_NUMBER.{0,12}62|github\.event\.issue\.number\s*==\s*62|pulls/555|PR_NUMBER.{0,12}555' "$workflow"
           ! grep -Eq 'generativelanguage\.googleapis\.com|api\.groq\.com|api\.openai\.com' "$service" "$runner"
           grep -Fq "answerAiChat" "$runner"
+          advisory=api-server/src/services/research-factory-ai-advisory.service.ts
+          grep -Fq "providerCallsAllowed" "$advisory"
+          grep -Fq "candidateSelectionAuthority: false" "$advisory"
+          grep -Fq "championPromotionAuthority: false" "$advisory"
+          grep -Fq "numericPerformanceAuthority: false" "$advisory"
           grep -Fq "delete process.env.GROQ_API_KEY" "$runner"
           grep -Fq "delete process.env.GEMINI_API_KEY" "$runner"
           grep -Fq "PAID_FALLBACK: \"false\"" "$workflow"
@@ -109,6 +118,15 @@ jobs:
 
       - name: Run isolated dual-free-ai contract tests
         run: node --test /tmp/research-dual-free-ai.service.test.cjs
+
+      - name: Bundle Factory dual-free-ai advisory tests
+        run: >-
+          pnpm --dir api-server exec esbuild src/services/research-factory-ai-advisory.service.test.ts
+          --bundle --platform=node --format=cjs
+          --outfile=/tmp/research-factory-ai-advisory.service.test.cjs
+
+      - name: Run Factory dual-free-ai advisory tests
+        run: node --test /tmp/research-factory-ai-advisory.service.test.cjs
 
       - name: Compile provider-isolated runner without executing providers
         run: >-
