@@ -65,11 +65,12 @@ export type TradingProtectionOrder = {
 };
 
 export const DEFAULT_TRADING_POLICY = Object.freeze({
-  mode: 'approval' as TradingMode,
+  mode: 'automatic' as TradingMode,
   automaticEnabled: false,
   emergencyStopped: false,
   newEntriesStopped: false,
-  exchangeEnabled: { bitget: false, upbit: false, kiwoom: false },
+  marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true } as Record<TradingAssetClass, boolean>,
+  exchangeEnabled: { bitget: true, upbit: true, kiwoom: true },
   enabledAssets: { bitget: [] as string[], upbit: [] as string[], kiwoom: [] as string[] },
   enabledStrategies: [] as string[],
   totalCapitalKrw: 1_000_000,
@@ -107,6 +108,7 @@ export type TradingPolicy = {
   automaticEnabled: boolean;
   emergencyStopped: boolean;
   newEntriesStopped: boolean;
+  marketEnabled: Record<TradingAssetClass, boolean>;
   exchangeEnabled: Record<TradingExchange, boolean>;
   enabledAssets: Record<TradingExchange, string[]>;
   enabledStrategies: string[];
