@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { planResearchFactoryCycle } from '../src/research-factory-controller.mjs';
+import { buildResearchFactoryControlPlaneV1 } from '../src/research-factory-controller.mjs';
 
 function argument(name) {
   const index = process.argv.indexOf(name);
@@ -12,13 +12,15 @@ function argument(name) {
 try {
   const inputPath = resolve(argument('--input'));
   const input = JSON.parse(await readFile(inputPath, 'utf8'));
-  const plan = planResearchFactoryCycle(input);
-  process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
+  const result = buildResearchFactoryControlPlaneV1(input);
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 } catch (error) {
   process.stderr.write(`${JSON.stringify({
-    schemaVersion: 'research-factory-plan-v1',
-    status: 'failed_closed',
+    schemaVersion: 1,
+    contract: 'research-factory-control-plane/v1',
+    status: 'FAILED_CLOSED',
     error: String(error?.message ?? error).slice(0, 500),
+    runtimeExecutionAttempted: false,
     liveTrading: false,
     autoTrading: false,
     executionAuthority: 'NONE',
