@@ -1,0 +1,30 @@
+name: US 52W High Momentum V1
+
+on:
+  push:
+    branches:
+      - research/four-market-profitability-scan-v1-20260919
+    paths:
+      - market-prediction-lab/scripts/run-us-sector-52w-high-v1.js
+      - .github/workflows/us-sector-52w-high-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Run 52-week-high momentum
+        run: node market-prediction-lab/scripts/run-us-sector-52w-high-v1.js market-prediction-lab/artifacts/us-sector-52w-high-v1/result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: us-sector-52w-high-${{ github.sha }}
+          path: market-prediction-lab/artifacts/us-sector-52w-high-v1/result.json
+          if-no-files-found: error
