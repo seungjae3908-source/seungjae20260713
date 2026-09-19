@@ -1904,7 +1904,7 @@ test.describe('real staging release readiness', () => {
 
     await openMenuRoute('information', '포트폴리오', '/portfolio');
 
-    await openMenuRoute('technical', '모의자동매매', '/paper-trading');
+    await openMenuRoute('technical', '모의매매', '/paper-trading');
     await expect(page.locator('body')).toContainText(/모의|paper/i);
 
     await openMenuRoute('information', '연구센터', '/research-center');
@@ -2004,7 +2004,7 @@ test.describe('real staging release readiness', () => {
     await settle(page);
     await nav.getByRole('button', { name: '기술', exact: true }).click();
     await expect(page.getByRole('menuitem', { name: '승인형 주문', exact: true })).toHaveCount(0);
-    for (const label of ['검색기', 'AI차트', '과거검증', '모의자동매매']) {
+    for (const label of ['검색기', 'AI차트', '과거검증', '모의매매']) {
       const target = technicalMenu.find((menuItem) => menuItem.label === label);
       if (!target) throw new Error(`missing technical navigation item: ${label}`);
       const item = page.getByRole('menuitem', { name: label, exact: true });
