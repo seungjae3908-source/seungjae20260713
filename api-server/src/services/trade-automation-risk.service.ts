@@ -242,7 +242,7 @@ export function evaluateTradingPlan(
     const assetClass = assetClassForPlan(plan);
     if (!policy.marketEnabled[assetClass]) add(blockCodes, 'MARKET_NOT_ENABLED');
     if (assetClass === 'domestic_stock' || assetClass === 'us_stock') {
-      const selectedBroker = policy.stockBrokerByMarket[assetClass];
+      const selectedBroker = policy.stockBrokerByMarket?.[assetClass] ?? 'kiwoom';
       const planBroker = plan.stockBroker ?? 'kiwoom';
       if (planBroker !== selectedBroker) add(blockCodes, 'STOCK_BROKER_MISMATCH');
     } else if (plan.stockBroker != null) {
