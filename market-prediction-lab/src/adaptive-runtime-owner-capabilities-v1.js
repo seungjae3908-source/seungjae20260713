@@ -264,9 +264,14 @@ function statisticalProof(){
   });
 }
 
-export function validateCanonicalBundlePublicationV1(value){
-  if(!value||typeof value!=="object"||Array.isArray(value)) return false;
-  return value.schemaVersion==="research-canonical-bundle-publication-v1"
+export const CANONICAL_BUNDLE_OFFLINE_PUBLICATION_RECEIPT_CONTRACT_V1 =
+  "research-canonical-bundle-offline-publication-receipt/v1";
+
+function validateRawCanonicalBundlePublication(value){
+  return Boolean(value)
+    &&typeof value==="object"
+    &&!Array.isArray(value)
+    &&value.schemaVersion==="research-canonical-bundle-publication-v1"
     &&HASH64.test(value.dslDigest??"")
     &&HASH64.test(value.bundleDigest??"")
     &&value.publicationStatus==="READBACK_VERIFIED"
@@ -275,22 +280,88 @@ export function validateCanonicalBundlePublicationV1(value){
     &&value.executionAuthority==="NONE";
 }
 
+export function createCanonicalBundleOfflinePublicationReceiptV1({
+  researchCodeSha,
+  publication,
+  publishedAt,
+}={}){
+  const sha=exactSha(researchCodeSha);
+  if(!validateRawCanonicalBundlePublication(publication)){
+    throw new Error("CANONICAL_BUNDLE_RAW_PUBLICATION_INVALID");
+  }
+  const at=String(publishedAt??"");
+  const parsed=Date.parse(at);
+  if(!Number.isFinite(parsed)||new Date(parsed).toISOString()!==at){
+    throw new TypeError("publishedAt must be canonical ISO-8601 UTC");
+  }
+  const core={
+    schemaVersion:1,
+    contract:CANONICAL_BUNDLE_OFFLINE_PUBLICATION_RECEIPT_CONTRACT_V1,
+    researchCodeSha:sha,
+    publishedAt:at,
+    publisherMode:"OFFLINE_OWNER_CONTROLLED",
+    catalogReadbackVerified:true,
+    dslDigest:publication.dslDigest,
+    bundleDigest:publication.bundleDigest,
+    publicationStatus:publication.publicationStatus,
+    evidenceCredit:publication.evidenceCredit,
+    profitabilityProven:publication.profitabilityProven,
+    executionAuthority:publication.executionAuthority,
+  };
+  return freeze({...core,receiptDigest:digest(core)});
+}
+
+export function validateCanonicalBundlePublicationV1(value,expectedSourceSha=null){
+  if(!value||typeof value!=="object"||Array.isArray(value)) return false;
+  if(value.schemaVersion!==1
+    ||value.contract!==CANONICAL_BUNDLE_OFFLINE_PUBLICATION_RECEIPT_CONTRACT_V1
+    ||!SHA40.test(value.researchCodeSha??"")
+    ||typeof value.publishedAt!=="string"
+    ||!Number.isFinite(Date.parse(value.publishedAt))
+    ||new Date(Date.parse(value.publishedAt)).toISOString()!==value.publishedAt
+    ||value.publisherMode!=="OFFLINE_OWNER_CONTROLLED"
+    ||value.catalogReadbackVerified!==true
+    ||!HASH64.test(value.dslDigest??"")
+    ||!HASH64.test(value.bundleDigest??"")
+    ||value.publicationStatus!=="READBACK_VERIFIED"
+    ||value.evidenceCredit!==0
+    ||value.profitabilityProven!==false
+    ||value.executionAuthority!=="NONE"
+    ||!HASH64.test(value.receiptDigest??"")){
+    return false;
+  }
+  if(expectedSourceSha!=null){
+    const expected=String(expectedSourceSha).trim().toLowerCase();
+    if(!SHA40.test(expected)||value.researchCodeSha!==expected) return false;
+  }
+  const core={...value};
+  delete core.receiptDigest;
+  return digest(core)===value.receiptDigest;
+}
+
 function bundleBinding(sourceSha,bundlePublication){
-  if(!validateCanonicalBundlePublicationV1(bundlePublication)){
+  if(!validateCanonicalBundlePublicationV1(bundlePublication,sourceSha)){
     return missing("CANONICAL_BUNDLE_READBACK_VERIFIED_PUBLICATION_REQUIRED");
   }
   return available("canonicalBundleSource",sourceSha,freeze({
     ownerRefs:["#821","#833"],
     publication:{
       schemaVersion:bundlePublication.schemaVersion,
+      contract:bundlePublication.contract,
+      researchCodeSha:bundlePublication.researchCodeSha,
+      publishedAt:bundlePublication.publishedAt,
+      publisherMode:bundlePublication.publisherMode,
+      catalogReadbackVerified:bundlePublication.catalogReadbackVerified,
       dslDigest:bundlePublication.dslDigest,
       bundleDigest:bundlePublication.bundleDigest,
       publicationStatus:bundlePublication.publicationStatus,
       evidenceCredit:bundlePublication.evidenceCredit,
       profitabilityProven:bundlePublication.profitabilityProven,
       executionAuthority:bundlePublication.executionAuthority,
+      receiptDigest:bundlePublication.receiptDigest,
     },
     authenticOwnerPublishedCatalogRequired:true,
+    exactResearchCodeShaRequired:true,
     testFixtureCreditAllowed:false,
     syntheticBundleAllowed:false,
   }));
