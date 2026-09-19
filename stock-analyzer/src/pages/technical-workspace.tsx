@@ -42,7 +42,7 @@ const WORKSPACE_TITLES: Record<Workspace, string> = {
 
 const TECHNICAL_INFO_ITEMS = [
   '검색·차트·백테스트는 읽기·분석 중심 화면이며 권한이 없는 기능은 잠금 상태로 유지됩니다.',
-  '자동매매 화면은 준회원 이상 자동매매 권한과 저장된 위험 설정을 기준으로 열리며 주문별 승인을 요구하지 않습니다.',
+  '자동매매 화면은 준회원 이상 자동매매 권한과 저장된 위험 설정을 기준으로 열리며 주문별 승인을 요구하지 않습니다. 실거래는 활성화하지 않습니다.',
 ] as const;
 
 function useDesktopWorkspace() {
