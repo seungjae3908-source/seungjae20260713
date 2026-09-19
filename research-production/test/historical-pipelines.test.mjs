@@ -17,7 +17,7 @@ async function fakeRepo() {
   for (const relative of scripts) {
     const target = join(lab, relative);
     let body = 'console.log("ok")\n';
-    if (relative.endsWith('run-market-suite.js')) body = `import {mkdirSync,writeFileSync} from 'node:fs'; mkdirSync('docs/candidate-models',{recursive:true}); writeFileSync('docs/candidate-models/seed','ok');\n`;
+    if (relative.endsWith('run-market-suite.js')) body = `import {mkdirSync,writeFileSync} from 'node:fs'; mkdirSync('docs/candidate-models',{recursive:true}); writeFileSync('docs/candidate-models/seed','ok'); writeFileSync('docs/market-suite-result.json',JSON.stringify({status:'pass'}));\n`;
     if (relative.endsWith('run-derivatives-suite.js')) body = `import {existsSync} from 'node:fs'; if(!existsSync('docs/candidate-models/seed')) process.exit(9);\n`;
     if (relative.endsWith('run-stock-market-suite.js')) body = `import {mkdirSync,writeFileSync} from 'node:fs'; mkdirSync('docs',{recursive:true}); writeFileSync('docs/stock-seed','ok');\n`;
     if (relative.endsWith('run-stock-pnl-suite.js')) body = `import {existsSync} from 'node:fs'; if(!existsSync('docs/stock-seed')) process.exit(8);\n`;
@@ -45,4 +45,31 @@ test('historical pipelines share predecessor artifacts inside pipeline and isola
   assert.equal(result.executedStepCount, 14);
   assert.equal(new Set(result.results.map((r) => r.workspace)).size, 3);
   assert.ok(result.results.every((r) => r.status === 'success'));
+});
+
+
+test('historical pipeline preserves intentional data_blocked instead of converting it into technical failure', async () => {
+  const repoRoot = await fakeRepo();
+  const stateRoot = join(repoRoot, 'state');
+  await writeFile(
+    join(repoRoot, 'market-prediction-lab', 'scripts', 'run-market-suite.js'),
+    `import {mkdirSync,writeFileSync} from 'node:fs'; mkdirSync('docs',{recursive:true}); writeFileSync('docs/market-suite-result.json',JSON.stringify({status:'data_blocked',blockers:['MISSING_TEMPORAL_REQUIRED_FEATURE_EVIDENCE:funding']}));\n`,
+  );
+  const result = await runHistoricalPipelines({
+    repoRoot,
+    stateRoot,
+    researchSha: SHA,
+    concurrency: 3,
+    env: { PATH: process.env.PATH, RESEARCH_MIN_FREE_BYTES: '0' },
+    verifyGitHead: false,
+  });
+  assert.equal(result.status, 'blocked_data');
+  assert.equal(result.successCount, 2);
+  assert.equal(result.blockedDataCount, 1);
+  assert.equal(result.failedCount, 0);
+  const futures = result.results.find((row) => row.id === 'crypto-futures-derivatives');
+  assert.equal(futures.status, 'blocked_data');
+  assert.equal(futures.stepCount, 1);
+  assert.equal(futures.steps[0].status, 'blocked_data');
+  assert.equal(futures.steps[0].reportStatus, 'data_blocked');
 });
