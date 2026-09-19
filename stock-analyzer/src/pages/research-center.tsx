@@ -248,10 +248,24 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
         ? 'normal'
         : 'insufficient';
   const staleCount = cards.filter((card) => card.status === 'stale').length;
+  const temporal = overview.dataFactory.temporalCryptoFutures;
+  const temporalStatus: ResearchProductStatus = !temporal.present
+    ? 'unmeasured'
+    : temporal.status === 'INVALID'
+      ? 'error'
+      : temporal.status === 'partial_failure'
+        ? 'attention'
+        : 'accumulating';
+  const temporalDetail = !temporal.present
+    ? 'Temporal evidence 미수집'
+    : temporal.status === 'INVALID'
+      ? 'Temporal evidence 무결성 확인 필요'
+      : `${temporal.results.length}개 심볼 · 실패 ${temporal.failedCount ?? 0}개`;
   return (
     <section id="research-tab-overview" role="tabpanel" aria-labelledby="research-tab-overview-trigger" className="space-y-4" data-testid="research-overview-tab">
-      <section className="grid grid-cols-2 gap-2 lg:grid-cols-5" aria-label="연구 핵심 상태">
+      <section className="grid grid-cols-2 gap-2 lg:grid-cols-6" aria-label="연구 핵심 상태">
         <TopStatus label="연구 시스템" value={statusLabel(systemStatus)} status={systemStatus} detail={overview.state.present ? 'Canonical overview 연결됨' : 'Canonical evidence 미수집'} />
+        <TopStatus label="데이터 팩토리" value={temporal.observationCount == null ? statusLabel(temporalStatus) : `${temporal.observationCount.toLocaleString('ko-KR')}건`} status={temporalStatus} detail={temporalDetail} />
         <TopStatus label="실거래" value="비활성" status="inactive" detail="executionAuthority=NONE" />
         <TopStatus label="모의매매" value={statusLabel(paper.status)} status={paper.status} detail={blockerCopy(paper)} />
         <TopStatus label="수익성 검증" value={overview.profitability.proven ? '충족' : '미검증'} status={overview.profitability.proven ? 'verified' : 'waiting'} detail="미검증은 수익성 없음과 다릅니다" />
