@@ -240,7 +240,7 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
         href: APP_ROUTES.autoTrading,
         label: '자동매매',
         icon: 'power',
-        capability: 'canPlaceOrders',
+        capability: 'canAccessAutoTrading',
       },
       {
         id: 'backtests',
@@ -252,7 +252,7 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
       {
         id: 'paper-trading',
         href: APP_ROUTES.paperTrading,
-        label: '모의자동매매',
+        label: '모의매매',
         icon: 'power',
         capability: 'canAccessPaperTrading',
       },
@@ -327,7 +327,7 @@ export const APP_ROUTE_PRESENTATIONS: readonly AppRoutePresentation[] = [
   { id: 'ai-chart', title: 'AI차트', breadcrumb: ['기술', 'AI차트'], groupId: 'technical', exactPaths: [APP_ROUTES.aiChart] },
   { id: 'auto-trading', title: '자동매매', breadcrumb: ['기술', '자동매매'], groupId: 'technical', exactPaths: [APP_ROUTES.autoTrading] },
   { id: 'backtests', title: '과거검증', breadcrumb: ['기술', '과거검증'], groupId: 'technical', exactPaths: [APP_ROUTES.backtests] },
-  { id: 'paper-trading', title: '모의자동매매', breadcrumb: ['기술', '모의자동매매'], groupId: 'technical', exactPaths: [APP_ROUTES.paperTrading] },
+  { id: 'paper-trading', title: '모의매매', breadcrumb: ['기술', '모의매매'], groupId: 'technical', exactPaths: [APP_ROUTES.paperTrading] },
   { id: 'strategy-promotion', title: '전략 승격센터', breadcrumb: ['기술', '전략 승격센터'], groupId: 'technical', exactPaths: [APP_ROUTES.strategyPromotion] },
   { id: 'learn', title: '투자 공부', breadcrumb: ['정보', '투자 공부'], groupId: 'information', exactPaths: [APP_ROUTES.learn] },
   { id: 'ai-chat', title: 'AI 정보', breadcrumb: ['정보', 'AI 정보'], groupId: 'information', exactPaths: [APP_ROUTES.aiChat] },

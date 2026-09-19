@@ -63,6 +63,13 @@ type RouteTransitionObservation = {
   candidates: Diagnostic[];
   pendingGetRequests: Set<Request>;
 };
+type CapabilityDenialObservation = {
+  route: string;
+  origin: string;
+  requests: Set<Request>;
+  httpCandidates: Diagnostic[];
+  consoleCandidates: Diagnostic[];
+};
 type ResearchReloadObservation = {
   origin: string;
   route: string;
@@ -128,6 +135,7 @@ type AuthenticatedViewportEvidence = {
 const activeLogoutObservations = new WeakMap<Page, LogoutObservation>();
 const confirmedLogoutAbortRequests = new WeakMap<Request, string>();
 const activeRouteTransitionObservations = new WeakMap<Page, RouteTransitionObservation>();
+const activeCapabilityDenialObservations = new WeakMap<Page, CapabilityDenialObservation>();
 const activeResearchReloadObservations = new WeakMap<Page, ResearchReloadObservation>();
 const activeAuthFaultObservations = new WeakMap<Page, AuthFaultObservation>();
 const pendingMutatingRequests = new WeakMap<Page, Set<Request>>();
@@ -141,6 +149,8 @@ const diagnostics: {
   expected_auth_faults: Diagnostic[];
   expected_scanner_aborts: Diagnostic[];
   expected_route_transition_aborts: Diagnostic[];
+  expected_capability_denials: Diagnostic[];
+  expected_capability_console_errors: Diagnostic[];
   expected_research_reload_aborts: Diagnostic[];
   api_diagnostics: SafeApiDiagnostic[];
   authenticated_search: {
@@ -161,6 +171,8 @@ const diagnostics: {
   expected_auth_faults: [],
   expected_scanner_aborts: [],
   expected_route_transition_aborts: [],
+  expected_capability_denials: [],
+  expected_capability_console_errors: [],
   expected_research_reload_aborts: [],
   api_diagnostics: [],
   authenticated_search: { samples: [], summary: null },
@@ -340,6 +352,37 @@ function isSameOriginApiGet(request: Request) {
   }
 }
 
+function isCapabilityDenialApiGet(request: Request, observation: CapabilityDenialObservation) {
+  try {
+    const parsed = new URL(request.url());
+    return request.method() === 'GET'
+      && parsed.origin === observation.origin
+      && parsed.pathname.startsWith('/api/');
+  } catch {
+    return false;
+  }
+}
+
+function isExpectedCapabilityDenialResponse(
+  response: { status: () => number; url: () => string; request: () => Request },
+  observation: CapabilityDenialObservation,
+) {
+  try {
+    const parsed = new URL(response.url());
+    return (response.status() === 401 || response.status() === 403)
+      && observation.requests.has(response.request())
+      && response.request().method() === 'GET'
+      && parsed.origin === observation.origin
+      && parsed.pathname.startsWith('/api/');
+  } catch {
+    return false;
+  }
+}
+
+function isExpectedCapabilityDenialConsole(detail: string) {
+  return /Failed to load resource:.*status of (?:401|403)/i.test(detail);
+}
+
 function isMutatingBrowserRequest(request: Request) {
   try {
     const parsed = new URL(request.url());
@@ -377,6 +420,10 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
       logoutObservation.logoutScopedReads.add(request);
     }
     if (isMutatingBrowserRequest(request)) mutations.add(request);
+    const capabilityDenial = activeCapabilityDenialObservations.get(page);
+    if (capabilityDenial && isCapabilityDenialApiGet(request, capabilityDenial)) {
+      capabilityDenial.requests.add(request);
+    }
     const researchReloadObservation = activeResearchReloadObservations.get(page);
     if (
       researchReloadObservation?.reloadStarted
@@ -412,6 +459,11 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
     if (message.type() !== 'error') return;
     const detail = diagnosticText(message.text());
     const url = diagnosticUrl(page.url());
+    const capabilityDenial = activeCapabilityDenialObservations.get(page);
+    if (capabilityDenial && isExpectedCapabilityDenialConsole(detail)) {
+      capabilityDenial.consoleCandidates.push({ test: testName, url, detail });
+      return;
+    }
     diagnostics.console_errors.push({ test: testName, url, detail });
     recordUnhandled(testName, url, detail);
   });
@@ -427,6 +479,16 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
       researchReloadObservation.replacementResponseStatuses.push(response.status());
     }
     if (response.status() < 400) return;
+    const capabilityDenial = activeCapabilityDenialObservations.get(page);
+    if (capabilityDenial && isExpectedCapabilityDenialResponse(response, capabilityDenial)) {
+      capabilityDenial.httpCandidates.push({
+        test: testName,
+        url: diagnosticUrl(response.url()),
+        status: response.status(),
+        detail: diagnosticText(`${response.request().method()} ${response.status()} ${response.statusText()}`),
+      });
+      return;
+    }
     const authFault = activeAuthFaultObservations.get(page);
     if (authFault && authFault.kind !== 'timeout' && isExpectedAuthFault(response.request(), authFault)) {
       authFault.candidates.push({
@@ -878,14 +940,23 @@ async function expectHealthyRoute(page: Page, route: string) {
 
 async function expectDeniedRoute(page: Page, route: string) {
   await settle(page);
+  const origin = new URL(page.url()).origin;
   const observation: RouteTransitionObservation = {
     fromRoute: routeIdentity(page.url()),
     toRoute: routeIdentity(route, page.url()),
-    origin: new URL(page.url()).origin,
+    origin,
     candidates: [],
     pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
   };
+  const denialObservation: CapabilityDenialObservation = {
+    route: observation.toRoute,
+    origin,
+    requests: new Set<Request>(),
+    httpCandidates: [],
+    consoleCandidates: [],
+  };
   activeRouteTransitionObservations.set(page, observation);
+  activeCapabilityDenialObservations.set(page, denialObservation);
   let confirmed = false;
   try {
     await page.goto(route, { waitUntil: 'domcontentloaded' });
@@ -894,7 +965,27 @@ async function expectDeniedRoute(page: Page, route: string) {
     expect(routeIdentity(page.url())).toBe(observation.toRoute);
     confirmed = true;
   } finally {
+    // Keep the denial observer alive until every GET started by the denied route
+    // has settled. In the real staging browser, the 401/403 response and its
+    // resource console message can arrive after the capability-denied UI itself.
     await finishRouteTransition(page, observation, confirmed);
+    if (confirmed) {
+      await waitForPresentationFrame(page);
+    }
+    activeCapabilityDenialObservations.delete(page);
+    if (confirmed) {
+      diagnostics.expected_capability_denials.push(...denialObservation.httpCandidates);
+      diagnostics.expected_capability_console_errors.push(...denialObservation.consoleCandidates);
+    } else {
+      diagnostics.unexpected_http_errors.push(...denialObservation.httpCandidates.map((item) => ({
+        ...item,
+        detail: `unconfirmed capability denial: ${item.detail}`,
+      })));
+      diagnostics.console_errors.push(...denialObservation.consoleCandidates.map((item) => ({
+        ...item,
+        detail: `unconfirmed capability denial console error: ${item.detail}`,
+      })));
+    }
   }
 }
 
@@ -1430,6 +1521,46 @@ test('logout selector remains deterministic with concurrent command-bar and rout
   await expect(routeLogout).toHaveAttribute('data-owner', 'route');
 });
 
+test('capability denial diagnostics admit only same-origin API GET 401/403 and matching resource console errors', () => {
+  const observation: CapabilityDenialObservation = {
+    route: '/coins/futures',
+    origin: 'https://staging.example.test',
+    requests: new Set<Request>(),
+    httpCandidates: [],
+    consoleCandidates: [],
+  };
+  const request = (url: string, method = 'GET') => ({
+    url: () => url,
+    method: () => method,
+  }) as unknown as Request;
+  const response = (status: number, req: Request) => ({
+    status: () => status,
+    url: () => req.url(),
+    request: () => req,
+  });
+  const snapshot = request('https://staging.example.test/api/crypto/futures/BTCUSDT/snapshot');
+  const privateRead = request('https://staging.example.test/api/private');
+  observation.requests.add(snapshot);
+  observation.requests.add(privateRead);
+  expect(isExpectedCapabilityDenialResponse(response(403, snapshot), observation)).toBe(true);
+  expect(isExpectedCapabilityDenialResponse(response(401, privateRead), observation)).toBe(true);
+  expect(isExpectedCapabilityDenialResponse(response(404, privateRead), observation)).toBe(false);
+  const notApi = request('https://staging.example.test/not-api');
+  observation.requests.add(notApi);
+  expect(isExpectedCapabilityDenialResponse(response(403, notApi), observation)).toBe(false);
+  const crossOrigin = request('https://other.example.test/api/private');
+  observation.requests.add(crossOrigin);
+  expect(isExpectedCapabilityDenialResponse(response(403, crossOrigin), observation)).toBe(false);
+  const post = request('https://staging.example.test/api/private', 'POST');
+  observation.requests.add(post);
+  expect(isExpectedCapabilityDenialResponse(response(403, post), observation)).toBe(false);
+  const unobserved = request('https://staging.example.test/api/unobserved');
+  expect(isExpectedCapabilityDenialResponse(response(403, unobserved), observation)).toBe(false);
+  expect(isExpectedCapabilityDenialConsole('Failed to load resource: the server responded with a status of 403 ()')).toBe(true);
+  expect(isExpectedCapabilityDenialConsole('Failed to load resource: the server responded with a status of 401 ()')).toBe(true);
+  expect(isExpectedCapabilityDenialConsole('TypeError: failed to fetch')).toBe(false);
+});
+
 test('logout abort proof keeps session-scoped account reads exact and query-free', () => {
   const origin = 'https://staging.example.test';
   for (const route of [
@@ -1757,16 +1888,18 @@ test.describe('real staging release readiness', () => {
     expect(response.status()).toBe(403);
   });
 
-  test('associate: basic stock, spot, and scanner access allowed; futures, AI-risk, portfolio, and APIs denied', async ({ page }) => {
+  test('associate: basic stock, spot, scanner, paper/auto trading, and portfolio allowed; futures, AI-risk, and privileged APIs denied', async ({ page }) => {
     await login(page, accounts.associate.loginName, accounts.associate.password);
     await expectMembership(page, /준회원/);
     await expectHealthyRoute(page, '/');
     await expectHealthyRoute(page, '/stock-info?asset=stock&market=KR&ticker=005930');
     await expectHealthyRoute(page, '/stock-info?asset=coin&coinMarket=spot&symbol=BTC');
+    await expectHealthyRoute(page, '/paper-trading');
+    await expectHealthyRoute(page, '/auto-trading');
+    await expectHealthyRoute(page, '/portfolio');
 
     await expectDeniedRoute(page, '/stock-info?asset=coin&coinMarket=futures&symbol=BTCUSDT');
     await expectScannerAfterFutures(page);
-    await expectDeniedRoute(page, '/portfolio');
 
     const response = await requestWithBrowserSession(
       page,
@@ -1904,7 +2037,7 @@ test.describe('real staging release readiness', () => {
 
     await openMenuRoute('information', '포트폴리오', '/portfolio');
 
-    await openMenuRoute('technical', '모의자동매매', '/paper-trading');
+    await openMenuRoute('technical', '모의매매', '/paper-trading');
     await expect(page.locator('body')).toContainText(/모의|paper/i);
 
     await openMenuRoute('information', '연구센터', '/research-center');
@@ -2004,7 +2137,7 @@ test.describe('real staging release readiness', () => {
     await settle(page);
     await nav.getByRole('button', { name: '기술', exact: true }).click();
     await expect(page.getByRole('menuitem', { name: '승인형 주문', exact: true })).toHaveCount(0);
-    for (const label of ['검색기', 'AI차트', '과거검증', '모의자동매매']) {
+    for (const label of ['검색기', 'AI차트', '과거검증', '모의매매']) {
       const target = technicalMenu.find((menuItem) => menuItem.label === label);
       if (!target) throw new Error(`missing technical navigation item: ${label}`);
       const item = page.getByRole('menuitem', { name: label, exact: true });
