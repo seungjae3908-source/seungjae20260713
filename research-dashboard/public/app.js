@@ -76,6 +76,24 @@ function renderPaper(paper) {
   }
 }
 
+function renderDataFactory(dataFactory) {
+  const temporal = dataFactory?.temporalCryptoFutures ?? {};
+  $('#temporal-observations').textContent = number(temporal.observationCount);
+  $('#temporal-failed').textContent = number(temporal.failedCount);
+  $('#temporal-updated').textContent = temporal.generatedAt ? date(temporal.generatedAt) : '—';
+  setPill($('#temporal-status'), temporal.status || 'MISSING', statusTone(temporal.status));
+
+  const target = $('#temporal-symbols');
+  target.replaceChildren();
+  for (const row of temporal.results ?? []) {
+    const chip = document.createElement('span');
+    chip.className = `chip ${statusTone(row.status)}`;
+    chip.textContent = `${row.symbol}: ${row.status} · +${number(row.appendedCount)}`;
+    target.append(chip);
+  }
+  $('#temporal-empty').hidden = (temporal.results?.length ?? 0) > 0;
+}
+
 function renderShadow(shadow) {
   const records = shadow?.records ?? {};
   $('#shadow-settled').textContent = number(records.settledRecords);
@@ -120,6 +138,7 @@ function render(data) {
   $('#updated-at').textContent = `업데이트 ${date(data.generatedAt)}`;
   $('#profitability-state').textContent = data.profitability?.proven ? 'PROVEN' : 'EVIDENCE COLLECTION';
   renderCycles(data.research?.cycles);
+  renderDataFactory(data.dataFactory);
   renderPaper(data.paper);
   renderShadow(data.shadow);
 }
