@@ -319,3 +319,112 @@ export function buildMemberAutoTradingPaperHandoff({
     handoffDigest: digest(core),
   });
 }
+
+function handoffSafetyValid(value) {
+  return value?.executionAuthority === "NONE"
+    && value?.publicDataOnly === true
+    && value?.simulatedOnly === true
+    && value?.liveTrading === false
+    && value?.privateTradingApiAllowed === false
+    && value?.orderSubmitted === false;
+}
+
+function entrySafetyValid(value) {
+  return value?.executionAuthority === "NONE"
+    && value?.simulatedOnly === true
+    && value?.liveOrderAllowed === false
+    && value?.privateTradingApiAllowed === false
+    && value?.orderSubmitted === false
+    && value?.exchangeRequestSent === false;
+}
+
+function validatePersistedEntry(entry, cycleId, evaluatedAtMs, nowMs) {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    throw new Error("HANDOFF_ENTRY_REQUIRED");
+  }
+  if (entry.cycleId !== cycleId || entry.evaluatedAtMs !== evaluatedAtMs) {
+    throw new Error("HANDOFF_ENTRY_CYCLE_MISMATCH");
+  }
+  if (!entrySafetyValid(entry.safety)) throw new Error("HANDOFF_ENTRY_SAFETY_INVALID");
+  const identity = entry.identity;
+  const signal = entry.signal;
+  if (!identity || !signal || identity.signalId !== signal.signalId
+    || identity.market !== signal.market || identity.symbol !== signal.symbol
+    || identity.timeframe !== signal.timeframe || identity.horizon !== signal.horizon
+    || identity.direction !== signal.direction
+    || !allowedDirection(identity.market, identity.direction)
+    || identity.executionAuthority !== "NONE") {
+    throw new Error("HANDOFF_ENTRY_IDENTITY_INVALID");
+  }
+  if (!immutableSha(identity.researchCodeSha)
+    || identity.researchCodeSha !== String(signal.strategyIdentity?.researchCodeSha ?? "").toLowerCase()
+    || identity.strategyId !== signal.strategyIdentity?.strategyId
+    || identity.strategyVersion !== signal.strategyIdentity?.strategyVersion
+    || identity.parameterHash !== signal.strategyIdentity?.parameterHash
+    || identity.costPolicyVersion !== entry.execution?.costPolicy?.version
+    || identity.costPolicyVersion !== entry.profitEvidence?.costPolicyId) {
+    throw new Error("HANDOFF_ENTRY_STRATEGY_IDENTITY_INVALID");
+  }
+
+  const evidence = entry.execution?.dataEvidence;
+  if (evidence?.publicOnly !== true || evidence?.dataQuality !== "READY"
+    || !nonEmpty(evidence?.provenance) || !finite(evidence?.asOfMs) || !positive(evidence?.maxAgeMs)) {
+    throw new Error("HANDOFF_ENTRY_PUBLIC_EVIDENCE_INVALID");
+  }
+  if (evidence.asOfMs > nowMs || nowMs - evidence.asOfMs > evidence.maxAgeMs) {
+    throw new Error("HANDOFF_ENTRY_STALE");
+  }
+  for (const [name, value] of [
+    ["dataEvidence", evidence],
+    ["simulatedOrder", entry.simulatedOrder],
+    ["publicQuote", entry.publicQuote],
+    ["learningSnapshot", entry.signal?.learningSnapshot],
+  ]) {
+    const unsafe = unsafeEvidenceKey(value);
+    if (unsafe) throw new Error(`HANDOFF_PRIVATE_FIELD_FORBIDDEN:${name}.${unsafe}`);
+  }
+
+  const { handoffId, ...payload } = entry;
+  const expected = `paper-auto-handoff:sha256:${digest(payload)}`;
+  if (handoffId !== expected) throw new Error("HANDOFF_ENTRY_DIGEST_MISMATCH");
+}
+
+export function validateMemberAutoTradingPaperHandoff(value, nowMs = Date.now()) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("MEMBER_AUTO_TRADING_HANDOFF_REQUIRED");
+  }
+  if (value.schemaVersion !== MEMBER_AUTO_TRADING_PAPER_HANDOFF_VERSION
+    || !nonEmpty(value.cycleId)
+    || !finite(value.evaluatedAtMs)
+    || value.evaluatedAtMs <= 0
+    || !handoffSafetyValid(value.safety)
+    || !Array.isArray(value.entries)
+    || !Array.isArray(value.blockers)) {
+    throw new Error("MEMBER_AUTO_TRADING_HANDOFF_CONTRACT_INVALID");
+  }
+  if (!finite(nowMs) || nowMs <= 0 || nowMs < value.evaluatedAtMs) {
+    throw new Error("MEMBER_AUTO_TRADING_HANDOFF_TIME_INVALID");
+  }
+
+  if (value.status === "BLOCKED_DATA") {
+    if (value.entryCount !== 0 || value.entries.length !== 0 || value.blockers.length === 0) {
+      throw new Error("MEMBER_AUTO_TRADING_BLOCKED_HANDOFF_INVALID");
+    }
+    return deepFreeze(clone(value));
+  }
+  if (value.status !== "READY" || value.entryCount !== value.entries.length || value.blockers.length !== 0) {
+    throw new Error("MEMBER_AUTO_TRADING_READY_HANDOFF_INVALID");
+  }
+
+  const signalIds = new Set();
+  for (const entry of value.entries) {
+    validatePersistedEntry(entry, value.cycleId, value.evaluatedAtMs, nowMs);
+    if (signalIds.has(entry.identity.signalId)) throw new Error("HANDOFF_DUPLICATE_SIGNAL_ID");
+    signalIds.add(entry.identity.signalId);
+  }
+  const { handoffDigest, ...core } = value;
+  if (!/^[0-9a-f]{64}$/u.test(String(handoffDigest ?? "")) || handoffDigest !== digest(core)) {
+    throw new Error("MEMBER_AUTO_TRADING_HANDOFF_DIGEST_MISMATCH");
+  }
+  return deepFreeze(clone(value));
+}
