@@ -190,7 +190,7 @@ router.use('/', paperTradingRouter);
 router.use('/paper-journal', requireCapability('canAccessJournalSync'));
 router.use('/paper-journal/sync', manualPortfolioNotificationBridge);
 router.use('/', paperJournalRouter);
-router.use('/trade-automation', requireCapability('canPlaceOrders'));
+router.use('/trade-automation', requireCapability('canAccessAutoTrading'));
 router.use('/trade-automation', tradeAutomationRouter);
 router.use('/user-integrations', requireCapability('canConnectPersonalTelegram'));
 router.use('/user-integrations', userBrokerTelegramRouter);

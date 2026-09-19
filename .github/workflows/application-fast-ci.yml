@@ -278,6 +278,10 @@ jobs:
         if: steps.impact.outputs.frontend == 'true' || steps.impact.outputs.ci == 'true'
         run: pnpm --dir stock-analyzer exec playwright install chromium
 
+      - name: Pre-Ready runtime capability drift gate
+        if: steps.impact.outputs.frontend == 'true' || steps.impact.outputs.ci == 'true'
+        run: pnpm --dir stock-analyzer run test:e2e:runtime-drift
+
       - name: Run critical browser journeys without retry-to-pass
         if: steps.impact.outputs.frontend == 'true' || steps.impact.outputs.ci == 'true'
         run: pnpm --dir stock-analyzer run test:e2e:critical

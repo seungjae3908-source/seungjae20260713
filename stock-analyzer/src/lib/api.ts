@@ -578,7 +578,15 @@ export interface SectorPopularData {
   market: 'KR' | 'US';
   sortBasis: string;
   sectors: SectorPopularGroup[];
-  error?: string;
+  updatedAt: string;
+  ok?: boolean;
+  available?: boolean;
+  partial?: boolean;
+  dataState?: 'ready' | 'provider_error';
+  retryable?: boolean;
+  error?: string | null;
+  errorCode?: string | null;
+  message?: string;
 }
 
 export interface LatestBackupResponse {

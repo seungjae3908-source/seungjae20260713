@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { InMemoryTradingRepository } from './trade-automation.repository';
+import {
+  InMemoryTradingRepository,
+  createServiceRoleTradingRepository,
+} from './trade-automation.repository';
 import {
   buildPrivateExecutionLeaseKey,
   buildPrivateProviderScopeKey,
@@ -320,4 +323,17 @@ test('execution lease identities cannot collide across users or provider account
   assert.equal(lease.includes(USER_ID), false);
   assert.equal(lease.includes('futures-account-a'), false);
   assert.equal(lease.includes('client-order-shared'), false);
+});
+
+test('service-role repository is still hard-scoped to exactly one member before database access', async () => {
+  const repository = createServiceRoleTradingRepository(USER_ID, {} as never);
+
+  await assert.rejects(() => repository.getPolicy(OTHER_USER_ID), /USER_SCOPE_MISMATCH/);
+  await assert.rejects(() => repository.listPlans(OTHER_USER_ID), /USER_SCOPE_MISMATCH/);
+  await assert.rejects(
+    () => repository.saveConnection(makeConnection(OTHER_USER_ID, 'encrypted-cross-user')),
+    /USER_SCOPE_MISMATCH/,
+  );
+
+  assert.equal(await repository.getGlobalEmergencyStop(), true);
 });

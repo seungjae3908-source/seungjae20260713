@@ -58,7 +58,7 @@ function formatNumber(value: number | null | undefined, digits = 4) {
 
 function creationErrorMessage(code: string) {
   const labels: Record<string, string> = {
-    CAPABILITY_REQUIRED: '승인형 Paper 계획은 활성 관리자만 사용할 수 있습니다.',
+    CAPABILITY_REQUIRED: '모의매매는 준회원 이상에서 사용할 수 있습니다.',
     SCANNER_SIGNAL_NOT_FOUND: '서버 재검색에서 해당 신호가 더 이상 확인되지 않았습니다.',
     SCANNER_AND_CONDITIONS_NOT_MAINTAINED: '선택했던 조건이 유지되지 않아 Paper 계획을 만들지 않았습니다.',
     APPROVAL_MODE_REQUIRED: '승인형 Paper 모드만 사용할 수 있습니다.',
@@ -91,7 +91,7 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
     && testOnlyCanPlaceOrders
     && typeof window !== 'undefined'
     && window.location.pathname === '/__phase12-trade-automation-e2e';
-  const canPlaceOrders = auth.can('canPlaceOrders') || fixtureCanPlaceOrders;
+  const canAccessPaperTrading = auth.can('canAccessPaperTrading') || fixtureCanPlaceOrders;
   const [, navigate] = useLocation();
   const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState('');
@@ -121,7 +121,7 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
   }, []);
 
   async function createPlan() {
-    if (!canPlaceOrders || creating) return;
+    if (!canAccessPaperTrading || creating) return;
     if (!supported) {
       setMessage('이 시장의 Paper 진입 방향이 명시되지 않았거나 지원 계약과 일치하지 않습니다.');
       return;
@@ -190,14 +190,14 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
     }
   }
 
-  if (!canPlaceOrders) {
+  if (!canAccessPaperTrading) {
     return (
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="scanner-approval-admin-only">
         <div className="flex items-start gap-2">
           <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
           <div className="min-w-0">
             <h2 className="text-sm font-black">검색·분석 전용</h2>
-            <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">Paper 포지션 등록은 활성 관리자에게만 제공됩니다.</p>
+            <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">모의매매는 준회원 이상에서 사용할 수 있습니다.</p>
           </div>
         </div>
       </section>
