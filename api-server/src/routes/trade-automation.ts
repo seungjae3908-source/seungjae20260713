@@ -364,7 +364,7 @@ router.put('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
 
 router.post('/plans', async (req: AuthenticatedRequest, res) => {
   try {
-    const { userId, repository, automation } = context(req);
+    const { userId, repository, automation, execution, splitExecution } = context(req);
     const input = req.body as TradingPlanInput;
     exchangeValue(input.exchange);
     const [policy, existingOrders, persistentGlobalStop] = await Promise.all([
