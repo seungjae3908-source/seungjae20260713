@@ -13,7 +13,7 @@ spec.loader.exec_module(base)
 OUT=Path("market-prediction-lab/artifacts/vol-exp-flow-sealed-oos-v1")
 OUT.mkdir(parents=True,exist_ok=True)
 OOS_START=int(datetime(2026,8,1,tzinfo=timezone.utc).timestamp()*1000)
-OOS_END=int(datetime(2026,9,19,tzinfo=timezone.utc).timestamp()*1000)
+OOS_END=int(datetime(2026,9,1,tzinfo=timezone.utc).timestamp()*1000)
 MIN_OOS_TRADES=20
 DAILY_KBASE="https://data.binance.vision/data/futures/um/daily/klines"
 DAILY_FBASE="https://data.binance.vision/data/futures/um/daily/fundingRate"
@@ -54,10 +54,6 @@ def load_sealed(sym):
     for month in ("2026-07","2026-08"):
         _,rows,d=base.fetch_kline_month(sym,month);bars.extend(rows);kchecks[month]=d
         _,fr,fd=base.fetch_funding_month(sym,month);fund.extend(fr);fchecks[month]=fd
-    for day in range(1,19):
-        date=f"2026-09-{day:02d}"
-        _,rows,d=fetch_daily_kline(sym,date);bars.extend(rows);kchecks[date]=d
-        _,fr,fd=fetch_daily_funding(sym,date);fund.extend(fr);fchecks[date]=fd
     bars=sorted({b.t:b for b in bars}.values(),key=lambda b:b.t)
     fund=sorted({t:r for t,r in fund}.items())
     if not bars or not fund:raise RuntimeError(f"{sym} sealed data empty")
@@ -144,17 +140,18 @@ def main():
              "sealed_contract":{
                "source_research_end":"2026-07-31",
                "oos_start":"2026-08-01T00:00:00Z",
-               "oos_end_exclusive":"2026-09-19T00:00:00Z",
+               "oos_end_exclusive":"2026-09-01T00:00:00Z",
                "opened_once":True,
                "min_candidate_trades":MIN_OOS_TRADES,
                "candidate":"FLOW_THRESHOLD_M005",
                "no_post_oos_retuning":True,
              },
+             "archive_note":"September partial-month funding archive is unavailable; sealed OOS is restricted to fully archived August 2026 without changing strategy parameters or minimum sample gate",
              "evidence_status":evidence_status,"symbols":base.SYMBOLS,"costs":base.COSTS,
              "provenance":prov,"results":results}
     (OUT/"result.json").write_text(json.dumps(payload,indent=2),encoding="utf-8")
     lines=["# VOL_EXP Flow Sealed OOS V1","","RESEARCH ONLY / PUBLIC DATA ONLY / NO ORDERS","",
-           f"Sealed window: 2026-08-01 through 2026-09-18; status: **{evidence_status}**","",
+           f"Sealed window: 2026-08-01 through 2026-08-31; status: **{evidence_status}**","",
            "| Strategy | Cost | Trades | EW return | Positive | Avg MDD | Median PF |",
            "|---|---|---:|---:|---:|---:|---:|"]
     for name in STRATS:
