@@ -1,0 +1,48 @@
+name: Crypto Factor Reproduction V1
+
+on:
+  push:
+    branches:
+      - research/four-market-profitability-scan-v1-20260919
+    paths:
+      - market-prediction-lab/scripts/run-crypto-futures-cs-momentum-v1.py
+      - .github/workflows/crypto-factor-reproduction-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  momentum:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Syntax
+        run: python -m py_compile market-prediction-lab/scripts/run-crypto-futures-cs-momentum-v1.py
+      - name: Run academic cross-sectional momentum reproduction
+        run: python market-prediction-lab/scripts/run-crypto-futures-cs-momentum-v1.py
+      - name: Safety contract
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path("market-prediction-lab/artifacts/crypto-futures-cs-momentum-v1/result.json").read_text())
+          assert d["research_only"] is True
+          assert d["public_data_only"] is True
+          assert d["live_trading"] is False
+          assert d["private_api"] is False
+          assert d["orders_submitted"] == 0
+          assert d["lookahead_free"] is True
+          assert all(v["funding_status"]=="BINANCE_VISION_OK" for v in d["provenance"].values())
+          print("SAFETY_CONTRACT=PASS")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crypto-factor-momentum-${{ github.sha }}
+          path: market-prediction-lab/artifacts/crypto-futures-cs-momentum-v1/
+          if-no-files-found: error
+          retention-days: 30
