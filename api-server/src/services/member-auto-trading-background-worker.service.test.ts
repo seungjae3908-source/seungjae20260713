@@ -293,6 +293,8 @@ test('associate automatic policy creates exactly one Paper FILLED order through 
   assert.equal(first.privateTradingRequests, 0);
   assert.equal(first.createdPlans, 1);
   assert.equal(first.filledOrders, 1);
+  assert.equal(first.positionLifecycles, 1);
+  assert.equal(first.lifecycleIdempotent, 0);
   assert.equal(first.failures, 0);
 
   const orders = await repository.listOrders(USER);
@@ -304,11 +306,21 @@ test('associate automatic policy creates exactly one Paper FILLED order through 
   assert.equal(plan?.market, 'KRW');
   assert.equal(plan?.signalId, 'signal-worker-1');
   assert.equal(orders[0].exchangeOrderId?.startsWith('paper-'), true);
+  const lifecycleEvents = (await repository.listEvents(USER))
+    .filter((event) => event.reason === 'PAPER_POSITION_LIFECYCLE_OPENED');
+  assert.equal(lifecycleEvents.length, 1);
+  assert.equal(lifecycleEvents[0]?.toState, 'FILLED');
+  assert.equal((lifecycleEvents[0]?.metadata?.safety as any).executionAuthority, 'NONE');
+  assert.equal((lifecycleEvents[0]?.metadata?.safety as any).economicSampleCredit, 0);
 
   const second = await withFetchMock(() => worker.runOnce(new Date(nowMs + 1_000)));
   assert.equal((await repository.listOrders(USER)).length, 1);
   assert.equal(second.createdPlans, 0);
   assert.ok(second.duplicates >= 1);
+  assert.equal(second.positionLifecycles, 0);
+  assert.equal(second.lifecycleIdempotent, 1);
+  assert.equal((await repository.listEvents(USER))
+    .filter((event) => event.reason === 'PAPER_POSITION_LIFECYCLE_OPENED').length, 1);
   assert.equal(second.liveOrders, 0);
 });
 
