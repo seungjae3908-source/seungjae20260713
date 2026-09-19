@@ -43,7 +43,7 @@ test('Fast CI requires critical browser journeys for frontend or CI changes', as
   assert.doesNotMatch(workflow, /browser-ui\/verified/u);
 });
 
-test('Full Browser Required context is four-way runtime-weighted and aggregated once', async () => {
+test('Full Browser Required context stays four-way, retry-free, and aggregated once', async () => {
   const workflow = await readFile('.github/workflows/futures-public-network-smoke.yml', 'utf8');
 
   assert.match(workflow, /^  browser-ui-start:/mu);
@@ -54,8 +54,8 @@ test('Full Browser Required context is four-way runtime-weighted and aggregated 
   assert.match(workflow, /fail-fast:\s*false/u);
   assert.match(workflow, /browser-runtime-shard-plan\.mjs/u);
   assert.match(workflow, /--lane "\$\{\{ matrix\.shard \}\}"/u);
-  assert.match(workflow, /mapfile -t browser_specs/u);
-  assert.match(workflow, /playwright test -c playwright\.config\.ts "\$\{browser_specs\[@\]\}" --retries=0/u);
+  assert.match(workflow, /browser-runtime-lane-runner\.mjs/u);
+  assert.match(workflow, /--retries=0/u);
   assert.doesNotMatch(workflow, /--shard=\$\{\{ matrix\.shard \}\}\/4/u);
   assert.doesNotMatch(workflow, /run test:e2e -- --shard=/u);
   assert.match(workflow, /needs:\s*\[browser-ui-start, browser-ui-shard\]/u);
@@ -67,7 +67,7 @@ test('Full Browser Required context is four-way runtime-weighted and aggregated 
     workflow.indexOf('  browser-ui-shard:'),
     workflow.indexOf('  browser-ui-result:'),
   );
-  assert.doesNotMatch(browserShard, /continue-on-error:\s*true[\s\S]*Run full Playwright runtime-weighted shard/u);
+  assert.doesNotMatch(browserShard, /continue-on-error:\s*true[\s\S]*Run full Playwright adaptive runtime-weighted shard/u);
 });
 
 test('Browser CI V4 adds no deployment or trading authority', async () => {
