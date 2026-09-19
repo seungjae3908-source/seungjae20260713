@@ -6,7 +6,6 @@ on:
     paths:
       - .github/workflows/research-production-activation.yml
       - research-production/**
-      - scripts/agent_hub_rollover_v2.py
   issue_comment:
     types: [created]
 
@@ -40,15 +39,14 @@ jobs:
           bash -n research-production/deploy/activate-server.sh
           grep -q '/activate-research-production' .github/workflows/research-production-activation.yml
           grep -Fq "startsWith(github.event.comment.body, '/activate-research-production ')" .github/workflows/research-production-activation.yml
-          python3 scripts/agent_hub_rollover_v2.py self-test
-          grep -Fq 'python3 scripts/agent_hub_rollover_v2.py resolve' .github/workflows/research-production-activation.yml
-          grep -Fq 'HUB_ISSUE_NUMBER' .github/workflows/research-production-activation.yml
-          if grep -Eq 'github[.]event[.]issue[.]number == (6[6]0|8[3]8)' .github/workflows/research-production-activation.yml; then
-            echo 'Activation command routing must not target an archived Hub.' >&2
+          test "$(grep -Ec 'github[.]event[.]issue[.]number == 8[3]8' .github/workflows/research-production-activation.yml)" -eq 1
+          test "$(grep -Ec 'issue_number: 8[3]8' .github/workflows/research-production-activation.yml)" -eq 2
+          if grep -Eq 'github[.]event[.]issue[.]number == 6[6]0' .github/workflows/research-production-activation.yml; then
+            echo 'Activation command routing regressed to archived Hub #660.' >&2
             exit 1
           fi
-          if grep -Eq 'issue_number: (6[6]0|8[3]8)' .github/workflows/research-production-activation.yml; then
-            echo 'Activation result reporting must not target an archived Hub.' >&2
+          if grep -Eq 'issue_number: 6[6]0' .github/workflows/research-production-activation.yml; then
+            echo 'Activation result reporting regressed to archived Hub #660.' >&2
             exit 1
           fi
           grep -q 'successfulActivationReceipt' .github/workflows/research-production-activation.yml
@@ -68,9 +66,8 @@ jobs:
   authorize:
     if: >-
       github.event_name == 'issue_comment' &&
-      !github.event.issue.pull_request &&
+      github.event.issue.number == 838 &&
       github.event.comment.user.login == github.repository_owner &&
-      github.event.comment.author_association == 'OWNER' &&
       startsWith(github.event.comment.body, '/activate-research-production ')
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -81,42 +78,18 @@ jobs:
       source_application_run_id: ${{ steps.gate.outputs.source_application_run_id }}
       application_run_id: ${{ steps.gate.outputs.application_run_id }}
       target_application_run_id: ${{ steps.gate.outputs.target_application_run_id }}
-      hub_issue: ${{ steps.hub.outputs.active_issue }}
     env:
       PR_NUMBER: 357
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-          persist-credentials: false
-          fetch-depth: 1
-
-      - name: Resolve canonical Central Hub
-        id: hub
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python3 scripts/agent_hub_rollover_v2.py resolve
-
       - name: Authorize immutable main, Research ancestry, and coherent exact-head CI
         id: gate
         uses: actions/github-script@v7
-        env:
-          HUB_ISSUE_NUMBER: ${{ steps.hub.outputs.active_issue }}
         with:
           script: |
             const body = String(context.payload.comment?.body ?? '').trim();
             const match = body.match(/^\/activate-research-production ([0-9a-f]{40})$/i);
             if (!match) {
               core.setFailed('Expected /activate-research-production <40-char-main-sha>');
-              return;
-            }
-            const canonicalHub = Number(process.env.HUB_ISSUE_NUMBER ?? 0);
-            const eventIssue = Number(context.payload.issue?.number ?? 0);
-            if (!Number.isInteger(canonicalHub) || canonicalHub <= 0 || eventIssue !== canonicalHub) {
-              core.setFailed(`Activation command must be posted on canonical Hub #${canonicalHub || 'UNKNOWN'}; got #${eventIssue || 'UNKNOWN'}.`);
               return;
             }
             const targetSha = match[1].toLowerCase();
@@ -368,7 +341,6 @@ jobs:
       SOURCE_APPLICATION_RUN_ID: ${{ needs.authorize.outputs.source_application_run_id }}
       APPLICATION_RUN_ID: ${{ needs.authorize.outputs.application_run_id }}
       TARGET_APPLICATION_RUN_ID: ${{ needs.authorize.outputs.target_application_run_id }}
-      HUB_ISSUE_NUMBER: ${{ needs.authorize.outputs.hub_issue }}
       SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
       SSH_USER: ${{ secrets.PROD_SSH_USER }}
       SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
@@ -439,7 +411,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: Number(process.env.HUB_ISSUE_NUMBER),
+              issue_number: 838,
               body: [
                 '[RESEARCH_PRODUCTION_ACTIVATION]',
                 'status: success',
@@ -469,7 +441,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: Number(process.env.HUB_ISSUE_NUMBER),
+              issue_number: 838,
               body: [
                 '[RESEARCH_PRODUCTION_ACTIVATION]',
                 'status: failed_closed',
