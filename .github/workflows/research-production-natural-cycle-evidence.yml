@@ -7,6 +7,7 @@ on:
       - '.github/workflows/research-production-natural-cycle-evidence.yml'
       - 'ops/research-production-readonly-evidence.sh'
       - 'market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js'
+      - 'scripts/agent_hub_rollover_v2.py'
   issue_comment:
     types: [created]
 
@@ -55,17 +56,16 @@ jobs:
           grep -Fq "const observed = (value) => measured && value ? value : 'unknown';" .github/workflows/research-production-natural-cycle-evidence.yml
           grep -q 'PAPER_NATURAL' ops/research-production-readonly-evidence.sh
           grep -q 'buildNaturalPaperFirstZeroTraceFromRuntime' .github/workflows/research-production-natural-cycle-evidence.yml
+          python3 scripts/agent_hub_rollover_v2.py self-test
           grep -Fq 'python3 scripts/agent_hub_rollover_v2.py resolve' .github/workflows/research-production-natural-cycle-evidence.yml
           grep -Fq 'CANONICAL_HUB' .github/workflows/research-production-natural-cycle-evidence.yml
           grep -Fq 'HUB_ISSUE_NUMBER' .github/workflows/research-production-natural-cycle-evidence.yml
-          legacy_issue_filter='github.event.issue.number == '"838"
-          legacy_report_target='issue_number: '"838"
-          if grep -Fq "$legacy_issue_filter" .github/workflows/research-production-natural-cycle-evidence.yml; then
-            echo 'Natural evidence command routing is pinned to archived Hub.' >&2
+          if grep -Eq 'github[.]event[.]issue[.]number == (6[6]0|8[3]8)' .github/workflows/research-production-natural-cycle-evidence.yml; then
+            echo 'Natural evidence command routing must not target an archived Hub.' >&2
             exit 1
           fi
-          if grep -Fq "$legacy_report_target" .github/workflows/research-production-natural-cycle-evidence.yml; then
-            echo 'Natural evidence reporting is pinned to archived Hub.' >&2
+          if grep -Eq 'issue_number: (6[6]0|8[3]8)' .github/workflows/research-production-natural-cycle-evidence.yml; then
+            echo 'Natural evidence reporting must not target an archived Hub.' >&2
             exit 1
           fi
           node --test market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
