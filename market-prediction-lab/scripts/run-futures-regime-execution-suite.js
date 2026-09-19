@@ -32,7 +32,20 @@ function serializeError(error) {
 
 async function loadFrozenModel() {
   const path = resolve("docs/candidate-models", `${FUTURES_REGIME_EXECUTION_CANDIDATE.modelGroup}.json`);
-  const artifact = JSON.parse(await readFile(path, "utf8"));
+  let artifact;
+  try {
+    artifact = JSON.parse(await readFile(path, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return Object.freeze({
+        status: "research_hold",
+        reason: "FROZEN_MODEL_ARTIFACT_MISSING",
+        sourceCandidateStatus: "missing",
+        model: null,
+      });
+    }
+    throw error;
+  }
   if (artifact?.status !== "shadow_candidate") {
     return Object.freeze({
       status: "research_hold",
