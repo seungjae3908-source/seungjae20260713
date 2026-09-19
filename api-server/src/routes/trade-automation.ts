@@ -320,12 +320,13 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
     const { userId, repository } = context(req);
     const policy = normalizeTradingPolicy(req.body);
     const enablingAutomatic = policy.mode === 'automatic' || policy.automaticEnabled
-      || Object.values(policy.exchangeEnabled).some(Boolean);
+      || Object.values(policy.marketEnabled).some(Boolean) || Object.values(policy.exchangeEnabled).some(Boolean);
     if (enablingAutomatic && req.body?.confirmation?.acknowledged !== true) {
       return res.status(409).json({ ok: false, error: 'AUTOMATIC_TRADING_CONFIRMATION_REQUIRED' });
     }
     if (policy.mode !== 'automatic') {
       policy.automaticEnabled = false;
+      policy.marketEnabled = { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false };
       policy.exchangeEnabled = { bitget: false, upbit: false, kiwoom: false };
       policy.enabledAssets = { bitget: [], upbit: [], kiwoom: [] };
     }
@@ -378,7 +379,22 @@ router.post('/plans', async (req: AuthenticatedRequest, res) => {
     const result = await automation.createPlan(userId, input, policy,
       policy.emergencyStopped || persistentGlobalStop || process.env.TRADING_EMERGENCY_STOP === 'true');
     if (!result.plan) return res.status(409).json({ ok: false, error: 'RISK_CHECK_BLOCKED', decision: result.decision, orderSubmitted: false });
-    return res.json({ ok: true, plan: result.plan, duplicate: result.duplicate, orderSubmitted: false });
+    let plan = result.plan;
+    let automaticExecution = null;
+    if (policy.mode === 'automatic' && policy.automaticEnabled) {
+      if (plan.state === 'APPROVAL_PENDING') plan = await automation.beginAutomaticPlan(userId, plan.id);
+      if (plan.state === 'SUBMITTED') {
+        automaticExecution = await executeSubmittedPlan(userId, plan, automation, execution, splitExecution);
+      }
+    }
+    return res.json({
+      ok: true,
+      plan,
+      duplicate: result.duplicate,
+      automaticExecutionTriggered: automaticExecution != null,
+      ...(automaticExecution ?? {}),
+      orderSubmitted: input.accountMode === 'live' && automaticExecution != null,
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 
@@ -407,7 +423,8 @@ router.post('/emergency-stop', async (req: AuthenticatedRequest, res) => {
     const { userId, repository } = context(req);
     const current = await repository.getPolicy(userId);
     const policy = normalizeTradingPolicy({
-      ...current, automaticEnabled: false, emergencyStopped: true, mode: 'approval',
+      ...current, automaticEnabled: false, emergencyStopped: true, mode: 'automatic',
+      marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false },
       exchangeEnabled: { bitget: false, upbit: false, kiwoom: false },
     });
     await repository.savePolicy(userId, policy);
