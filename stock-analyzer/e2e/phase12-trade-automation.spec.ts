@@ -67,10 +67,10 @@ for (const width of [360, 390, 430]) {
       await expect(page.getByTestId(`auto-market-${market}`)).toHaveAttribute('aria-pressed', 'true');
     }
 
-    await expect(page.getByText('국내주식', { exact: true })).toBeVisible();
-    await expect(page.getByText('미국주식', { exact: true })).toBeVisible();
-    await expect(page.getByText('코인현물', { exact: true })).toBeVisible();
-    await expect(page.getByText('코인선물', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('auto-market-domestic_stock')).toContainText('국내주식');
+    await expect(page.getByTestId('auto-market-us_stock')).toContainText('미국주식');
+    await expect(page.getByTestId('auto-market-crypto_spot')).toContainText('코인현물');
+    await expect(page.getByTestId('auto-market-crypto_futures')).toContainText('코인선물');
     await expect(page.getByTestId('auto-trading-runtime-summary')).toContainText('미국주식');
     await expect(page.getByTestId('auto-trading-runtime-summary')).toContainText('실전 주문은 어댑터 연결 전까지 차단');
 
