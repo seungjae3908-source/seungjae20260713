@@ -150,6 +150,7 @@ test('failure memory is reduced to qualitative state and digest-bound evidence o
   });
   assert.equal(gate.status,'READY');
   assert.match(gate.evidenceSummary,/known_failure_memory_present/);
-  assert.doesNotMatch(gate.evidenceSummary,/observationCount|strategyIdentityCount|performance/);
+  assert.doesNotMatch(gate.evidenceSummary,/observationCount|strategyIdentityCount|SHADOW:|NATURAL_PAPER:/);
+  assert.match(gate.evidenceSummary,/Numeric performance/);
   assert.equal(gate.authority.numericPerformanceAuthority,false);
 });
