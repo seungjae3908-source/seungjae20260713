@@ -305,6 +305,14 @@ for (const tier of ['pending', 'associate', 'regular', 'admin']) {
   }
 }
 
+test('associate receives paper and auto trading access without broad order-placement capability', () => {
+  assert.equal(MEMBER_PERMISSION_MATRIX.associate.canAccessPaperTrading, true);
+  assert.equal(MEMBER_PERMISSION_MATRIX.associate.canAccessAutoTrading, true);
+  assert.equal(MEMBER_PERMISSION_MATRIX.associate.canPlaceOrders, false);
+  assert.equal(MEMBER_PERMISSION_MATRIX.pending.canAccessPaperTrading, false);
+  assert.equal(MEMBER_PERMISSION_MATRIX.pending.canAccessAutoTrading, false);
+});
+
 test('capability route blocks unauthenticated request', async () => {
   const { server, baseUrl } = await startServer();
   try {
