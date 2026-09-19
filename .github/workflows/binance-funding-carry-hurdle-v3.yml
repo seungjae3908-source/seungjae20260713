@@ -1,0 +1,51 @@
+name: Binance Funding Carry Hurdle V3
+
+on:
+  push:
+    branches:
+      - research/pit-us-orderflow-v1-20260919
+    paths:
+      - market-prediction-lab/scripts/run-binance-funding-carry-hurdle-v3.py
+      - .github/workflows/binance-funding-carry-hurdle-v3.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Syntax check
+        run: python -m py_compile market-prediction-lab/scripts/run-binance-funding-carry-hurdle-v3.py
+      - name: Run validated 30d carry with cost hurdles
+        run: python market-prediction-lab/scripts/run-binance-funding-carry-hurdle-v3.py
+      - name: Verify safety and formula contract
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path("market-prediction-lab/artifacts/binance-funding-carry-hurdle-v3/result.json").read_text())
+          assert d["research_only"] is True
+          assert d["public_data_only"] is True
+          assert d["live_trading"] is False
+          assert d["private_api"] is False
+          assert d["orders_submitted"] == 0
+          assert len(d["symbols"]) == 4
+          assert "dynamic_top2_positive30d" in d["results"]["base"]
+          assert "dynamic_top2_hurdle1x30d" in d["results"]["base"]
+          assert "dynamic_top2_hurdle2x30d" in d["results"]["base"]
+          assert all(v["funding_status"]=="BINANCE_VISION_OK" for v in d["provenance"].values())
+          print("FUNDING_CARRY_HURDLE_V3_CONTRACT=PASS")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binance-funding-carry-hurdle-v3-${{ github.sha }}
+          path: market-prediction-lab/artifacts/binance-funding-carry-hurdle-v3/
+          if-no-files-found: error
+          retention-days: 30
