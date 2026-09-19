@@ -1,0 +1,49 @@
+name: VOL_EXP Flow Economics V2
+
+on:
+  push:
+    branches:
+      - research/pit-us-orderflow-v1-20260919
+    paths:
+      - market-prediction-lab/scripts/run-vol-exp-flow-economics-v2.py
+      - .github/workflows/vol-exp-flow-economics-v2.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Syntax check
+        run: python -m py_compile market-prediction-lab/scripts/run-vol-exp-flow-economics-v2.py
+      - name: Run funding and cost-aware flow short research
+        run: python market-prediction-lab/scripts/run-vol-exp-flow-economics-v2.py
+      - name: Verify safety contract
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path("market-prediction-lab/artifacts/vol-exp-flow-economics-v2/result.json").read_text())
+          assert d["research_only"] is True
+          assert d["public_data_only"] is True
+          assert d["live_trading"] is False
+          assert d["private_api"] is False
+          assert d["orders_submitted"] == 0
+          assert d["leverage"] == 1
+          assert len(d["symbols"]) == 8
+          assert all(v["funding_status"]=="BINANCE_VISION_OK" for v in d["provenance"].values())
+          print("VOL_EXP_FLOW_ECONOMICS_CONTRACT=PASS")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vol-exp-flow-economics-v2-${{ github.sha }}
+          path: market-prediction-lab/artifacts/vol-exp-flow-economics-v2/
+          if-no-files-found: error
+          retention-days: 30
