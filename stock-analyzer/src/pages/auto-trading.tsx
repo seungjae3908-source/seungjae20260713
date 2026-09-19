@@ -9,7 +9,6 @@ type TradeAutomationFixture = ComponentProps<typeof TradeAutomationSettings>['fi
 
 type AutoTradingPageProps = {
   fixture?: TradeAutomationFixture;
-  approvalFixture?: unknown[];
   embedded?: boolean;
 };
 
