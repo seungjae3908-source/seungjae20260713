@@ -1,0 +1,65 @@
+name: Frozen Scalp Swing Tournament V1
+
+on:
+  push:
+    branches:
+      - research/frozen-scalp-swing-tournament-v1-20260919
+    paths:
+      - market-prediction-lab/scripts/run-frozen-scalp-swing-tournament-v1.py
+      - .github/workflows/frozen-scalp-swing-tournament-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tournament:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Checkout exact research revision
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Syntax check
+        run: python -m py_compile market-prediction-lab/scripts/run-frozen-scalp-swing-tournament-v1.py
+
+      - name: Run public-data-only frozen tournament
+        run: python market-prediction-lab/scripts/run-frozen-scalp-swing-tournament-v1.py
+
+      - name: Verify safety and result contract
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path("market-prediction-lab/artifacts/frozen-scalp-swing-tournament-v1/result.json")
+          data=json.loads(p.read_text())
+          assert data["research_only"] is True
+          assert data["live_trading"] is False
+          assert data["private_api"] is False
+          assert data["orders_submitted"] == 0
+          assert len(data["symbols"]) == 8
+          assert data["months"][0] == "2025-01"
+          assert data["months"][-1] == "2026-07"
+          assert data["results"]
+          print("SAFETY_CONTRACT=PASS")
+          PY
+
+      - name: Publish markdown summary
+        run: cat market-prediction-lab/artifacts/frozen-scalp-swing-tournament-v1/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload immutable research artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frozen-scalp-swing-tournament-v1-${{ github.sha }}
+          path: market-prediction-lab/artifacts/frozen-scalp-swing-tournament-v1/
+          if-no-files-found: error
+          retention-days: 30
