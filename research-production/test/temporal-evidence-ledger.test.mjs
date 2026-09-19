@@ -15,7 +15,7 @@ const T=Date.UTC(2026,8,19,0,0,0);
 function row(overrides={}){
   return {
     market:'CRYPTO_FUTURES',symbol:'BTCUSDT',feature:'openInterestChange',value:0.01,
-    observedAt:T,availableAt:T,recordedAt:T,source:'bitget-public-v2',publicDataOnly:true,
+    observedAt:T,availableAt:T,recordedAt:T,source:'bitget-public-v2',producerSha:SHA,publicDataOnly:true,
     synthetic:false,replay:false,backfill:false,manual:false,...overrides,
   };
 }
