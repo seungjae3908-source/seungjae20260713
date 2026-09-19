@@ -178,7 +178,7 @@ export interface ResearchCenterOverview {
       frozenSplitCounts: { TRAIN: number | null; VALIDATION: number | null; OOS: number | null };
     };
   };
-  dataFactory: {
+  dataFactory?: {
     temporalCryptoFutures: ResearchTemporalCryptoSummary;
   };
   paper: {
