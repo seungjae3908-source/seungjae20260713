@@ -157,6 +157,27 @@ class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
             'blockedDataCount': 0, 'failedCount': 0,
             'results': [{'id': 'shadow-forward', 'status': 'success'}],
         })
+        write_json(root / 'latest' / 'temporal-crypto-futures.json', {
+            'schemaVersion': 'crypto-futures-temporal-public-collection-v1',
+            'generatedAt': 1_800_000_000_000,
+            'researchSha': 'a' * 40,
+            'status': 'complete',
+            'failedCount': 0,
+            'results': [
+                {'symbol': 'BTCUSDT', 'status': 'success', 'observedCount': 3, 'appendedCount': 2},
+                {'symbol': 'ETHUSDT', 'status': 'success', 'observedCount': 3, 'appendedCount': 3},
+            ],
+            'observationCount': 42,
+            'ledgerDigest': 'c' * 64,
+            'safety': {
+                'publicDataOnly': True,
+                'privateApi': False,
+                'liveTrading': False,
+                'realOrders': False,
+                'historicalCurrentValueBackfill': False,
+                'executionAuthority': 'NONE',
+            },
+        })
         write_json(root / 'forward' / 'paper' / 'status' / 'runtime-status.json', {
             'status': 'running', 'privateRequestCount': 0, 'financialMutationCount': 0,
             'orderCount': 0, 'liveTrading': False, 'orderAuthority': False,
@@ -200,6 +221,11 @@ class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
         self.assertEqual(len(overview['shadow']['canonicalHandoffs']), 1)
         self.assertEqual(overview['shadow']['canonicalHandoffs'][0]['group'], '15m')
         self.assertEqual(overview['shadow']['canonicalHandoffs'][0]['handoff']['evidenceDigest'], 'b' * 64)
+        self.assertTrue(overview['dataFactory']['temporalCryptoFutures']['present'])
+        self.assertEqual(overview['dataFactory']['temporalCryptoFutures']['status'], 'complete')
+        self.assertEqual(overview['dataFactory']['temporalCryptoFutures']['observationCount'], 42)
+        self.assertEqual(overview['dataFactory']['temporalCryptoFutures']['failedCount'], 0)
+        self.assertNotIn('error', overview['dataFactory']['temporalCryptoFutures']['results'][0])
 
     def test_missing_runtime_values_remain_null_instead_of_becoming_zero_or_false(self):
         root = self.fixture()
@@ -217,6 +243,49 @@ class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
         self.assertIsNone(overview['paper']['ledger']['sampleCount'])
         self.assertIsNone(overview['paper']['ledger']['settlementCount'])
         self.assertIsNone(overview['shadow']['records']['totalRecords'])
+
+    def test_missing_temporal_summary_is_missing_not_zero(self):
+        root = self.fixture()
+        (root / 'latest' / 'temporal-crypto-futures.json').unlink()
+        temporal = build_research_overview(root)['dataFactory']['temporalCryptoFutures']
+        self.assertFalse(temporal['present'])
+        self.assertEqual(temporal['status'], 'MISSING')
+        self.assertIsNone(temporal['observationCount'])
+        self.assertIsNone(temporal['failedCount'])
+
+    def test_temporal_summary_tamper_fails_closed_without_raw_error_leak(self):
+        root = self.fixture()
+        path = root / 'latest' / 'temporal-crypto-futures.json'
+        value = json.loads(path.read_text(encoding='utf-8'))
+        value['safety']['privateApi'] = True
+        value['results'][0]['error'] = 'secret provider diagnostic'
+        write_json(path, value)
+        overview = build_research_overview(root)
+        temporal = overview['dataFactory']['temporalCryptoFutures']
+        self.assertEqual(overview['research']['status'], 'attention')
+        self.assertTrue(temporal['present'])
+        self.assertEqual(temporal['status'], 'INVALID')
+        self.assertIsNone(temporal['observationCount'])
+        self.assertNotIn('secret provider diagnostic', json.dumps(overview))
+
+    def test_temporal_partial_failure_preserves_good_symbols_and_hides_errors(self):
+        root = self.fixture()
+        path = root / 'latest' / 'temporal-crypto-futures.json'
+        value = json.loads(path.read_text(encoding='utf-8'))
+        value['status'] = 'partial_failure'
+        value['failedCount'] = 1
+        value['results'][1] = {
+            'symbol': 'ETHUSDT', 'status': 'failed', 'observedCount': 0, 'appendedCount': 0,
+            'error': 'temporary upstream failure',
+        }
+        write_json(path, value)
+        overview = build_research_overview(root)
+        temporal = overview['dataFactory']['temporalCryptoFutures']
+        self.assertEqual(overview['research']['status'], 'attention')
+        self.assertEqual(temporal['status'], 'partial_failure')
+        self.assertEqual(temporal['failedCount'], 1)
+        self.assertEqual(temporal['results'][0]['symbol'], 'BTCUSDT')
+        self.assertNotIn('temporary upstream failure', json.dumps(overview))
 
     def test_python_runtime_exposes_authenticated_v3_independence_without_economic_promotion(self):
         root = self.fixture()
