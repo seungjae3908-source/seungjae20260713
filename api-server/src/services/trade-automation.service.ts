@@ -192,7 +192,7 @@ export class TradeAutomationService {
     const expectedVersion = planVersion(plan);
     const policy = await this.repository.getPolicy(userId);
     if (policy.mode !== 'automatic' || !policy.automaticEnabled) {
-      throw new Error('AUTOMATIC_TRADING_NOT_ENABLED');
+      throw new Error('USER_APPROVAL_REQUIRED');
     }
     const intelligence = await this.marketIntelligenceDecision(plan);
     if (!intelligence.allowed) {
