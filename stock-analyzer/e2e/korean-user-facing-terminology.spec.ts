@@ -22,7 +22,7 @@ test('primary user-facing navigation uses Korean-first terminology without chang
     '검색기',
     'AI차트',
     '자동매매',
-    '모의자동매매',
+    '모의매매',
     '과거검증',
     '연구센터',
     '포트폴리오',
@@ -38,7 +38,7 @@ test('primary user-facing navigation uses Korean-first terminology without chang
     "label: 'AI 신호검색기'",
     "label: 'AI 차트'",
     "label: '백테스트'",
-    "label: '모의매매'",
+    "label: '모의자동매매'",
     "title: 'Strategy Promotion Center'",
     "title: 'UI Builder Layout 통합'",
     "title: 'Agent Hub'",
@@ -62,7 +62,7 @@ test('primary user-facing navigation uses Korean-first terminology without chang
     "name: 'AI차트'",
     "openMenuRoute('technical', 'AI차트'",
     "openMenuRoute('technical', '모의자동매매'",
-    "['검색기', 'AI차트', '과거검증', '모의자동매매']",
+    "['검색기', 'AI차트', '과거검증', '모의매매']",
   ]) {
     expect(stagingReadiness).toContain(canonicalStagingLabel);
   }
@@ -71,7 +71,7 @@ test('primary user-facing navigation uses Korean-first terminology without chang
     "name: 'AI 차트'",
     "openMenuRoute('technical', 'AI 차트'",
     "openMenuRoute('technical', '모의매매'",
-    "['AI 신호검색기', 'AI 차트', '백테스트', '모의매매']",
+    "['AI 신호검색기', 'AI 차트', '백테스트', '모의자동매매']",
   ]) {
     expect(stagingReadiness).not.toContain(staleStagingLabel);
   }
@@ -94,7 +94,7 @@ test('strategy promotion uses Korean-first presentation while preserving interna
     '비용 스트레스 검증',
     '시장상태 검증',
     '최종검증',
-    '모의자동매매',
+    '모의매매',
     '실시간 추적검증',
     '추천 결과 검증',
     '근거 필요',
@@ -138,7 +138,7 @@ test('strategy promotion uses Korean-first presentation while preserving interna
   }
 
   for (const stageMapperEntry of [
-    "PAPER: '모의자동매매'",
+    "PAPER: '모의매매'",
     "SHADOW: '실시간 추적검증'",
   ]) {
     expect(labels).toContain(stageMapperEntry);
