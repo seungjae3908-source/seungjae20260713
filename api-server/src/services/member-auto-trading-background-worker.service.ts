@@ -18,7 +18,7 @@ import { TradeExecutionService } from './trade-execution.service';
 import {
   createServiceRolePaperJournalRepository,
 } from './paper-journal-supabase.repository';
-import type { PaperJournalRepository, StoredPaperJournalRecord } from './paper-journal-sync.service';
+import type { PaperJournalRepository } from './paper-journal-sync.service';
 import type {
   TradingAssetClass,
   TradingExchange,
@@ -254,6 +254,7 @@ function exposureState(
   runtime: MemberRuntimeState,
   policy: TradingPolicy,
   entry: MemberAutoTradingPaperHandoffEntry,
+  nowMs: number,
 ) {
   const active = activePlans(runtime.plans, runtime.orders);
   const mapping = marketMapping(entry.identity.market);
@@ -274,7 +275,7 @@ function exposureState(
     openPositionCount: active.length,
     dailyOrderCount: runtime.orders.filter((order) => {
       const at = Date.parse(order.createdAt);
-      return Number.isFinite(at) && at >= Date.now() - 24 * 60 * 60_000;
+      return Number.isFinite(at) && at >= nowMs - 24 * 60 * 60_000;
     }).length,
     existingPositionSide: sameInstrument.find((plan) => plan.side === side)?.side
       ?? sameInstrument[0]?.side
@@ -333,7 +334,7 @@ function buildPlanInput(
   const estimatedKrw = quantity * quote.executionPrice * fx.krwPerQuoteCurrency;
   if (!positive(estimatedKrw)) throw new Error('BACKGROUND_ORDER_KRW_INVALID');
 
-  const exposure = exposureState(runtime, member.policy, entry);
+  const exposure = exposureState(runtime, member.policy, entry, nowMs);
   const slippage = costPercent(entry, 'slippageRate');
   const fee = costPercent(entry, 'commissionRate');
   const averageSpread = costPercent(entry, 'spreadRate');
