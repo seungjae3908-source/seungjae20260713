@@ -129,6 +129,69 @@ export function buildResearchFactoryControlPlaneV1(raw = {}) {
     evidenceByMarket: raw.evidenceByMarket ?? {},
   });
   const adaptive = raw.adaptive ?? {};
+  if (adaptive.plan == null && adaptive.policy == null) {
+    const core = {
+      schemaVersion: 1,
+      contract: RESEARCH_FACTORY_CONTROL_PLANE_CONTRACT_V1,
+      researchSha,
+      observedAt,
+      status: 'BLOCKED_POLICY_MISSING',
+      dataFactory,
+      canonicalAdaptive: {
+        policyStatus: 'MISSING',
+        planDigest: null,
+        planStatus: null,
+        readyProfileCount: null,
+        blockedProfileCount: null,
+        initialCandidateFamilySize: null,
+        localFirstZero: 'HUMAN_APPROVED_ADAPTIVE_POLICY_MISSING',
+        runtimeAdapterDigest: null,
+        runtimeStatus: null,
+        nextFirstZero: 'HUMAN_APPROVED_ADAPTIVE_POLICY_MISSING',
+        compatibility: null,
+      },
+      parallelDataWork: dataWork(dataFactory),
+      nextAction: {
+        kind: 'FREEZE_HUMAN_APPROVED_ADAPTIVE_POLICY',
+        priority: 100,
+        reason: 'HUMAN_APPROVED_ADAPTIVE_POLICY_MISSING',
+        executionAuthority: 'NONE',
+      },
+      ownership: {
+        adaptivePlanOwner: 'market-prediction-lab/adaptive-multi-market-tournament-orchestrator-v1',
+        runtimeAdapterOwner: 'market-prediction-lab/adaptive-multi-market-tournament-runtime-adapter-v1',
+        checkpointResumeOwner: 'market-prediction-lab/research-tournament-stage-checkpoint-resume-v1',
+        backtesterOwner: '#690',
+        statisticalFirewallOwner: '#547',
+        formulaCompilerOwner: '#550/#551',
+      },
+      safety: {
+        orchestrationDuplicated: false,
+        candidateBudgetInvented: false,
+        stageSequenceInvented: false,
+        runtimeExecutionAttempted: false,
+        runtimeActivationAllowed: false,
+        scheduleMutationAllowed: false,
+        deploymentAllowed: false,
+        finalHoldoutAccessAllowed: false,
+        oosFeedbackToGeneratorAllowed: false,
+        forwardFeedbackToGeneratorAllowed: false,
+        paperFeedbackToGeneratorAllowed: false,
+        missingEvidenceNumericSubstitutionAllowed: false,
+        branchWrite: false,
+        databaseMutation: false,
+        secretMutation: false,
+        liveTrading: false,
+        autoTrading: false,
+        privateTradingApi: false,
+        realOrder: false,
+        championPromotion: false,
+        profitabilityClaim: false,
+        executionAuthority: 'NONE',
+      },
+    };
+    return Object.freeze({ ...core, controlPlaneDigest: digest(core) });
+  }
   const plan = canonicalAdaptivePlan({ researchSha, observedAt, adaptive });
   if (!verifyAdaptiveMultiMarketTournamentPlanV1(plan)) throw new Error('CANONICAL_ADAPTIVE_PLAN_INVALID_AFTER_BUILD');
   const runtimeAdapter = canonicalRuntimeAdapter({ plan, observedAt, adaptive });
