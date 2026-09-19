@@ -350,9 +350,28 @@ jobs:
       - name: Install Playwright Chromium
         run: pnpm --dir stock-analyzer exec playwright install chromium
 
-      - name: Run full Playwright shard without retry-to-pass
+      - name: Verify runtime-weighted browser shard plan
+        run: node .github/scripts/browser-runtime-shard-plan.mjs --lanes 4 --verify
+
+      - name: Select runtime-weighted browser shard
+        shell: bash
+        run: |
+          set -euo pipefail
+          node .github/scripts/browser-runtime-shard-plan.mjs \
+            --lanes 4 \
+            --lane "${{ matrix.shard }}" \
+            --format lines > /tmp/browser-runtime-shard-specs.txt
+          test -s /tmp/browser-runtime-shard-specs.txt
+          cat /tmp/browser-runtime-shard-specs.txt
+
+      - name: Run full Playwright runtime-weighted shard without retry-to-pass
         id: browser
-        run: pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts --shard=${{ matrix.shard }}/4 --retries=0
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t browser_specs < /tmp/browser-runtime-shard-specs.txt
+          [ "${#browser_specs[@]}" -gt 0 ]
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts "${browser_specs[@]}" --retries=0
 
       - name: Upload shard Playwright report and failure evidence
         if: always()
