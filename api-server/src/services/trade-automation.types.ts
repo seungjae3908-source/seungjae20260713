@@ -70,7 +70,7 @@ export const DEFAULT_TRADING_POLICY = Object.freeze({
   emergencyStopped: false,
   newEntriesStopped: false,
   marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true } as Record<TradingAssetClass, boolean>,
-  exchangeEnabled: { bitget: true, upbit: true, kiwoom: true },
+  exchangeEnabled: { bitget: false, upbit: false, kiwoom: false },
   enabledAssets: { bitget: [] as string[], upbit: [] as string[], kiwoom: [] as string[] },
   enabledStrategies: [] as string[],
   totalCapitalKrw: 1_000_000,
