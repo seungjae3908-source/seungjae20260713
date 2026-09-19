@@ -169,8 +169,8 @@ def portfolio(symres):
       "avg_exposure":sum(symres[s]["exposure"] for s in names)/len(names),
     }
 
-def simulate_dynamic_top2(data,costs):
-    # Cross-sectional carry: every 7 days, rank trailing realized 7d funding.
+def simulate_dynamic_top2(data,costs,lookback_days,rebalance_days):
+    # Cross-sectional carry: rank trailing realized funding on a fixed schedule.
     # Hold up to the top 2 positive-funding delta-neutral pairs.
     row_maps={sym:{s.t:(s,f) for s,f in data[sym][0]} for sym in SYMBOLS}
     common=sorted(set.intersection(*(set(row_maps[sym]) for sym in SYMBOLS)))
@@ -179,20 +179,19 @@ def simulate_dynamic_top2(data,costs):
     eq=1.0; peak=1.0; mdd=0.0
     weights={sym:0.0 for sym in SYMBOLS}
     one_way_pair_cost=(costs["spot"]+costs["futures"])/2
-    start=8; rebalance_days=7
-    period_entry_eq=None; periods=[]
+    start=max(8,lookback_days+1)
+    daily_returns=[]
     turnover_total=0.0; exposure_sum=0.0
     funding_contrib=0.0; basis_contrib=0.0
     selection_count={sym:0 for sym in SYMBOLS}
 
     for i in range(start,len(common)-1):
         t=common[i]; tn=common[i+1]
+        eq_before=eq
         if (i-start)%rebalance_days==0:
-            if period_entry_eq is not None:
-                periods.append(eq/period_entry_eq-1)
             ranking=[]
             for sym in SYMBOLS:
-                trailing=trailing_funding(data[sym][1],t,7)
+                trailing=trailing_funding(data[sym][1],t,lookback_days)
                 if trailing>0:
                     ranking.append((trailing,sym))
             ranking.sort(reverse=True)
@@ -208,7 +207,6 @@ def simulate_dynamic_top2(data,costs):
                 eq*=max(0.0,1-turnover*one_way_pair_cost)
                 turnover_total+=turnover
             weights=target
-            period_entry_eq=eq
             peak=max(peak,eq); mdd=min(mdd,eq/peak-1)
 
         exposure_sum+=sum(weights.values())
@@ -225,25 +223,28 @@ def simulate_dynamic_top2(data,costs):
             basis_contrib+=w*(spot_r-fut_r)/2
         daily=max(daily,-0.99)
         eq*=1+daily
+        daily_returns.append(eq/eq_before-1)
         peak=max(peak,eq); mdd=min(mdd,eq/peak-1)
 
-    if period_entry_eq is not None:
-        periods.append(eq/period_entry_eq-1)
     closing_turnover=sum(weights.values())
     if closing_turnover:
+        eq_before=eq
         eq*=max(0.0,1-closing_turnover*one_way_pair_cost)
         turnover_total+=closing_turnover
+        daily_returns.append(eq/eq_before-1)
         peak=max(peak,eq); mdd=min(mdd,eq/peak-1)
 
-    wins=[x for x in periods if x>0]; losses=[x for x in periods if x<0]
+    wins=[x for x in daily_returns if x>0]; losses=[x for x in daily_returns if x<0]
     gp=sum(wins); gl=-sum(losses)
     years=(common[-1]-common[start])/(365.25*86400000)
     return {
       "return":eq-1,
       "annualized_return":eq**(1/years)-1 if years>0 and eq>0 else None,
       "mdd":mdd,
-      "rebalance_periods":len(periods),
-      "win_rate":len(wins)/len(periods) if periods else 0.0,
+      "lookback_days":lookback_days,
+      "rebalance_days":rebalance_days,
+      "daily_observations":len(daily_returns),
+      "win_rate":len(wins)/len(daily_returns) if daily_returns else 0.0,
       "pf":gp/gl if gl else None,
       "avg_exposure":exposure_sum/max(1,len(common)-1-start),
       "turnover_units":turnover_total,
@@ -274,16 +275,18 @@ def main():
         for mode in ("always","positive_7d"):
             by={sym:simulate(*data[sym],costs,mode) for sym in SYMBOLS}
             results[cname][mode]={"portfolio":portfolio(by),"symbols":by}
-        results[cname]["dynamic_top2_positive7d"]=simulate_dynamic_top2(data,costs)
+        results[cname]["dynamic_top2_positive7d"]=simulate_dynamic_top2(data,costs,7,7)
+        results[cname]["dynamic_top2_positive30d"]=simulate_dynamic_top2(data,costs,30,30)
     payload={
       "schemaVersion":1,"kind":"binance-funding-carry-v1","research_only":True,"public_data_only":True,
       "live_trading":False,"private_api":False,"orders_submitted":0,
       "formula":{
         "legs":"long spot 1x + short USD-M perpetual 1x",
         "capital_measure":"fully funded two-leg capital; daily pnl divided by 2",
-        "modes":["always","positive_7d","dynamic_top2_positive7d"],
+        "modes":["always","positive_7d","dynamic_top2_positive7d","dynamic_top2_positive30d"],
         "positive_7d":"hold only when trailing seven-day realized funding sum at decision time is positive",
         "dynamic_top2_positive7d":"every 7 days rank the four symbols by trailing realized 7d funding; hold up to top 2 with positive funding, equal-weighted",
+        "dynamic_top2_positive30d":"every 30 days rank the four symbols by trailing realized 30d funding; hold up to top 2 with positive funding, equal-weighted",
         "execution":"daily UTC open-to-open; signals use funding observed at or before decision time",
       },
       "symbols":SYMBOLS,"months":MONTHS,"costs":COSTS,"provenance":provenance,"results":results,
@@ -301,12 +304,13 @@ def main():
         x=results["base"]["positive_7d"]["symbols"][sym]
         pf="NA" if x["pf"] is None else f'{x["pf"]:.3f}'
         lines.append(f'| {sym} | {x["return"]*100:.2f}% | {x["annualized_return"]*100:.2f}% | {pf} | {x["mdd"]*100:.2f}% | {x["exposure"]*100:.1f}% | {x["funding_contribution_simple"]*100:.2f}% | {x["spot_minus_perp_contribution_simple"]*100:.2f}% |')
-    lines+=["","## Dynamic top-2 positive funding","","| Cost | Return | Ann. | PF | MDD | Exposure | Turnover |","|---|---:|---:|---:|---:|---:|---:|"]
+    lines+=["","## Dynamic top-2 positive funding","","| Cost | Mode | Return | Ann. | PF* | MDD | Exposure | Turnover |","|---|---|---:|---:|---:|---:|---:|---:|"]
     for cname in COSTS:
-        x=results[cname]["dynamic_top2_positive7d"]
-        pf="NA" if x["pf"] is None else f'{x["pf"]:.3f}'
-        lines.append(f'| {cname} | {x["return"]*100:.2f}% | {x["annualized_return"]*100:.2f}% | {pf} | {x["mdd"]*100:.2f}% | {x["avg_exposure"]*100:.1f}% | {x["turnover_units"]:.2f} |')
-    lines+=["","*Contribution fields are simple sums for decomposition, not compounded attribution."]
+        for mode in ("dynamic_top2_positive7d","dynamic_top2_positive30d"):
+            x=results[cname][mode]
+            pf="NA" if x["pf"] is None else f'{x["pf"]:.3f}'
+            lines.append(f'| {cname} | {mode} | {x["return"]*100:.2f}% | {x["annualized_return"]*100:.2f}% | {pf} | {x["mdd"]*100:.2f}% | {x["avg_exposure"]*100:.1f}% | {x["turnover_units"]:.2f} |')
+    lines+=["","*Dynamic PF is computed from daily net equity changes including rebalance costs. Contribution fields are simple sums for decomposition, not compounded attribution."]
     (OUT/"summary.md").write_text("\n".join(lines)+"\n",encoding="utf-8")
     print("\n".join(lines))
 
