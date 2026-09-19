@@ -80,6 +80,10 @@ async function publishWriteOnce(directoryPath: string, fileName: string, value: 
   } catch (error) {
     const code = row(error).code;
     if (code !== 'EEXIST') throw error;
+    const info = await lstat(finalPath);
+    if (!info.isFile() || info.isSymbolicLink() || resolve(await realpath(finalPath)) !== finalPath) {
+      throw new Error('PUBLICATION_RECEIPT_PATH_UNSAFE');
+    }
     const existing = JSON.parse(await readFile(finalPath, 'utf8'));
     if (digest(existing) !== digest(value)) throw new Error('PUBLICATION_RECEIPT_CONFLICT');
     return Object.freeze({ status: 'already_present' as const, path: finalPath });
