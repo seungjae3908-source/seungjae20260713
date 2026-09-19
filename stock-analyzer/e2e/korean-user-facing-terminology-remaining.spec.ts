@@ -17,7 +17,7 @@ test('remaining Korean-first presentation preserves internal Telegram and journa
   for (const label of [
     '개인 계좌 제공사 · 텔레그램 연결', '위험관리 엔진', '주문 계획', '상세 차트',
     '매수', '롱', '숏', '거래 안 함', '대표 전략', '코인현물', '코인선물',
-    '모의자동매매', '실시간 추적검증', '손익비 지수', '진입 전 판단 근거',
+    '모의매매', '실시간 추적검증', '손익비 지수', '진입 전 판단 근거',
     '준비됨', '진행 중', '차단됨', '미수집', '확인 불가', '오래된 정보', '실패', '정상', '표본 부족',
   ]) expect(presentation).toContain(label);
 
