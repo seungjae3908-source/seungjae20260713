@@ -105,6 +105,7 @@ const groups = {
     path.join(root, 'src/services/trade-automation-integration.test.ts'),
     path.join(root, 'src/services/member-auto-trading-fx.service.test.ts'),
     path.join(root, 'src/services/member-auto-trading-background-worker.service.test.ts'),
+    path.join(root, 'src/services/member-auto-trading-paper-position-bridge.service.test.ts'),
     path.join(root, 'src/services/trade-market-intelligence-integration.test.ts'),
     path.join(root, 'src/services/trade-automation-repository-compatibility.test.ts'),
     path.join(root, 'src/services/trade-kill-switch.test.ts'),
