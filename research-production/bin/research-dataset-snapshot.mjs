@@ -17,8 +17,9 @@ try{
   const manifest=buildResearchDatasetSnapshotManifestV1({
     researchSha:process.env.RESEARCH_CODE_SHA,
     createdAt:new Date().toISOString(),
-    market:String(input.market??''),
+    profileId:String(input.profileId??''),
     evidence:input.evidence??{},
+    scope:input.scope??null,
   });
   const persisted=await persistResearchDatasetSnapshotManifestV1({
     stateRoot:process.env.RESEARCH_STATE_ROOT??'/var/lib/investment-research-production',
