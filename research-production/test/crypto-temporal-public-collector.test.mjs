@@ -9,7 +9,7 @@ const T=Date.UTC(2026,8,19,0,0,0);
 test('first OI snapshot is stored but cannot invent an OI change',()=>{
   const ledger=createTemporalEvidenceLedgerV1({researchSha:SHA});
   const observations=buildCryptoFuturesTemporalObservationsV1({
-    ledger,symbol:'BTCUSDT',collectedAt:T+1000,
+    ledger,symbol:'BTCUSDT',producerSha:SHA,collectedAt:T+1000,
     context:{openInterest:100,openInterestTimestamp:T,fundingRate:0.0001},
     longShortRecords:[],
   });
@@ -21,10 +21,10 @@ test('OI change is derived only from two genuine snapshots in temporal order',()
   let ledger=createTemporalEvidenceLedgerV1({researchSha:SHA});
   ledger=appendTemporalEvidenceV1(ledger,{
     market:'CRYPTO_FUTURES',symbol:'BTCUSDT',feature:'openInterestRaw',value:100,
-    observedAt:T,availableAt:T,recordedAt:T,source:'bitget-public-v2',publicDataOnly:true,
+    observedAt:T,availableAt:T,recordedAt:T,source:'bitget-public-v2',producerSha:SHA,publicDataOnly:true,
   });
   const observations=buildCryptoFuturesTemporalObservationsV1({
-    ledger,symbol:'BTCUSDT',collectedAt:T+3600000+1000,
+    ledger,symbol:'BTCUSDT',producerSha:SHA,collectedAt:T+3600000+1000,
     context:{openInterest:110,openInterestTimestamp:T+3600000},
     longShortRecords:[],
   });
@@ -37,7 +37,7 @@ test('OI change is derived only from two genuine snapshots in temporal order',()
 test('retrieved historical long-short rows receive collection-time availability and cannot leak backwards',()=>{
   const ledger=createTemporalEvidenceLedgerV1({researchSha:SHA});
   const observations=buildCryptoFuturesTemporalObservationsV1({
-    ledger,symbol:'BTCUSDT',collectedAt:T+10*3600000,
+    ledger,symbol:'BTCUSDT',producerSha:SHA,collectedAt:T+10*3600000,
     context:{},longShortRecords:[{timestamp:T,ratio:1.2,ratioRaw:'1.2'}],
   });
   const next=appendTemporalEvidenceV1(ledger,observations[0]);
@@ -61,7 +61,7 @@ test('collector keeps independent symbols and fails partially without deleting g
     },
   };
   const result=await collectCryptoFuturesTemporalEvidenceV1({
-    ledger,symbols:['BTCUSDT','ETHUSDT'],client,now:()=>T+3600000,
+    ledger,symbols:['BTCUSDT','ETHUSDT'],client,now:()=>T+3600000,producerSha:SHA,
   });
   assert.equal(result.status,'partial_failure');
   assert.equal(result.results[0].status,'success');
