@@ -45,11 +45,17 @@ export function buildRuntimeWeightedPlan(specs, weightsDocument, laneCount = 4) 
   }));
 
   const weighted = [...specs]
-    .map((file) => ({
-      file,
-      seconds: Number(weightsDocument.weightsSeconds?.[file] ?? defaultSeconds),
-      observed: Object.prototype.hasOwnProperty.call(weightsDocument.weightsSeconds ?? {}, file),
-    }))
+    .map((file) => {
+      const seconds = Number(weightsDocument.weightsSeconds?.[file] ?? defaultSeconds);
+      if (!(Number.isFinite(seconds) && seconds > 0)) {
+        throw new Error(`[INVALID_BROWSER_WEIGHT] ${file}`);
+      }
+      return {
+        file,
+        seconds,
+        observed: Object.prototype.hasOwnProperty.call(weightsDocument.weightsSeconds ?? {}, file),
+      };
+    })
     .sort((left, right) => right.seconds - left.seconds || left.file.localeCompare(right.file));
 
   for (const item of weighted) {
