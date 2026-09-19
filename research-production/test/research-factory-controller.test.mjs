@@ -1,63 +1,145 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planResearchFactoryCycle, RESEARCH_FACTORY_STAGE_SEQUENCE } from '../src/research-factory-controller.mjs';
+
+import {
+  ADAPTIVE_MULTI_MARKET_PROFILES_V1,
+  ADAPTIVE_TOURNAMENT_STAGES_V1,
+  buildAdaptiveMultiMarketTournamentPlanV1,
+} from '../../market-prediction-lab/src/adaptive-multi-market-tournament-orchestrator-v1.js';
+import {
+  ADAPTIVE_TOURNAMENT_RUNTIME_BINDING_REQUIREMENTS_V1,
+  buildAdaptiveTournamentRuntimeAdapterV1,
+} from '../../market-prediction-lab/src/adaptive-multi-market-tournament-runtime-adapter-v1.js';
+import { buildResearchFactoryControlPlaneV1 } from '../src/research-factory-controller.mjs';
 
 const SHA='a'.repeat(40);
-const H1='1'.repeat(64);
-const H2='2'.repeat(64);
-const H3='3'.repeat(64);
-const SNAP='4'.repeat(64);
-const base={researchSha:SHA,observedAt:'2026-09-19T18:40:00+09:00'};
+const AT='2026-09-19T10:00:00.000Z';
 
-function candidate(overrides={}){
+function policy(overrides={}){
+  const caps=[16,16,12,10,6,4,3,2,2,1,1,1,1];
+  const ratios=[1,1,0.75,0.625,0.375,0.25,0.1875,0.125,0.125,0.0625,0.0625,0.0625,0.0625];
   return {
-    candidateId:'candidate:A', familyId:'family:trend', market:'CRYPTO_FUTURES', researchSha:SHA,
-    strategyHash:H1, parameterHash:H2, datasetSnapshotHash:SNAP, completedStages:[], stageAuthorizations:{}, ...overrides,
+    policyId:'human-approved-policy-v1',
+    totalCandidateBudget:16,
+    minimumCandidatesPerReadyProfile:16,
+    maximumCandidatesPerReadyProfile:16,
+    diagnosticWeights:{dataCompleteness:0.3,signalCoverage:0.2,costCoverage:0.2,familyDiversity:0.2,computeCapacity:0.1},
+    stagePolicy:ADAPTIVE_TOURNAMENT_STAGES_V1.map((stage,index)=>({stage,retentionRatio:ratios[index],maximumPerProfile:caps[index]})),
+    maximumParetoSurvivorsPerSpecialist:2,
+    ...overrides,
   };
 }
 
-test('data gaps outrank candidate work and block candidate advancement',()=>{
-  const plan=planResearchFactoryCycle({...base,markets:{CRYPTO_FUTURES:{ready:false,missingFeatures:['fundingRate','benchmarkReturn']}},candidates:[candidate()]});
-  assert.equal(plan.queue[0].kind,'DATA_EVIDENCE');
-  assert.equal(plan.queue[0].priority,100);
-  assert.equal(plan.summary.marketReadyCount,0);
-  assert.ok(plan.blockers.some((row)=>row.code==='CANDIDATE_DATA_BLOCKED'));
-  assert.equal(plan.safety.executionAuthority,'NONE');
+function evidenceCell(requirement){
+  return {status:'PRESENT',evidenceId:`evidence:${requirement}`,observedAt:AT};
+}
+
+function readyProfileInput(profileId='CRYPTO_FUTURES:SWING'){
+  const profile=ADAPTIVE_MULTI_MARKET_PROFILES_V1.find((row)=>row.profileId===profileId);
+  const evidenceCatalog={
+    [profileId]:Object.fromEntries(profile.requiredEvidence.map((requirement)=>[requirement,evidenceCell(requirement)])),
+  };
+  const developmentDiagnostics={
+    [profileId]:{
+      sourceRole:'DEVELOPMENT_ONLY',evidenceId:'development:1',
+      dataCompleteness:0.9,signalCoverage:0.8,costCoverage:0.8,familyDiversity:0.7,computeCapacity:0.9,
+    },
+  };
+  return {evidenceCatalog,developmentDiagnostics,policy:policy()};
+}
+
+function availableBindings(){
+  return Object.fromEntries(Object.entries(ADAPTIVE_TOURNAMENT_RUNTIME_BINDING_REQUIREMENTS_V1).map(([key,requirement])=>[
+    key,{
+      status:'AVAILABLE',
+      ownerRefs:[...requirement.ownerRefs],
+      capability:requirement.capability,
+      sourceSha:SHA,
+      evidenceId:`binding:${key}`,
+      properties:requirement.properties,
+      reason:null,
+    },
+  ]));
+}
+
+test('control-plane does not duplicate the canonical tournament or stage sequence',()=>{
+  const result=buildResearchFactoryControlPlaneV1({
+    researchSha:SHA,observedAt:AT,evidenceByMarket:{},
+    adaptive:{evidenceCatalog:{},developmentDiagnostics:{},policy:policy()},
+  });
+  assert.equal(result.status,'BLOCKED_NO_READY_PROFILES');
+  assert.equal(result.nextAction.kind,'COLLECT_CANONICAL_PROFILE_EVIDENCE');
+  assert.equal(result.safety.orchestrationDuplicated,false);
+  assert.equal(result.safety.stageSequenceInvented,false);
+  assert.equal(result.safety.candidateBudgetInvented,false);
+  assert.equal(result.ownership.backtesterOwner,'#690');
+  assert.equal(result.ownership.statisticalFirewallOwner,'#547');
+  assert.equal(result.safety.executionAuthority,'NONE');
 });
 
-test('candidate resumes at exactly the next canonical stage',()=>{
-  const completed=RESEARCH_FACTORY_STAGE_SEQUENCE.slice(0,6);
-  const plan=planResearchFactoryCycle({...base,markets:{CRYPTO_FUTURES:{ready:true,datasetSnapshotHash:SNAP}},candidates:[candidate({completedStages:completed})]});
-  const task=plan.queue.find((row)=>row.kind==='RUN_STAGE');
-  assert.equal(task.stage,'COST_STRESS');
-  assert.equal(task.canonicalOwner,'market-prediction-lab/research-tournament');
+test('ready canonical profiles proceed to missing owner bindings while Data Factory gaps continue in parallel',()=>{
+  const adaptive=readyProfileInput();
+  const result=buildResearchFactoryControlPlaneV1({
+    researchSha:SHA,observedAt:AT,evidenceByMarket:{},adaptive,
+  });
+  assert.equal(result.canonicalAdaptive.readyProfileCount,1);
+  assert.equal(result.status,'BLOCKED_RUNTIME_BINDINGS');
+  assert.equal(result.nextAction.kind,'BIND_EXISTING_CANONICAL_RUNTIME_OWNERS');
+  assert.ok(result.nextAction.missingBindings.length>0);
+  assert.equal(result.parallelDataWork.length,4);
+  assert.equal(result.safety.runtimeExecutionAttempted,false);
 });
 
-test('guarded stages never auto-activate without explicit stage authorization',()=>{
-  const completed=RESEARCH_FACTORY_STAGE_SEQUENCE.slice(0,9);
-  const plan=planResearchFactoryCycle({...base,markets:{CRYPTO_FUTURES:{ready:true,datasetSnapshotHash:SNAP}},candidates:[candidate({completedStages:completed})]});
-  assert.equal(plan.queue.some((row)=>row.kind==='RUN_STAGE'),false);
-  assert.ok(plan.blockers.some((row)=>row.code==='STAGE_AUTHORIZATION_REQUIRED'&&row.stage==='FINAL_HOLDOUT'));
+test('fully bound canonical adapter is ready but still cannot activate or execute from the control-plane',()=>{
+  const adaptiveInput=readyProfileInput();
+  const plan=buildAdaptiveMultiMarketTournamentPlanV1({
+    sourceSha:SHA,createdAt:AT,
+    evidenceCatalog:adaptiveInput.evidenceCatalog,
+    developmentDiagnostics:adaptiveInput.developmentDiagnostics,
+    policy:adaptiveInput.policy,
+  });
+  const runtimeAdapter=buildAdaptiveTournamentRuntimeAdapterV1({
+    plan,bindings:availableBindings(),createdAt:AT,
+  });
+  const result=buildResearchFactoryControlPlaneV1({
+    researchSha:SHA,observedAt:AT,evidenceByMarket:{},
+    adaptive:{plan,runtimeAdapter},
+  });
+  assert.equal(result.status,'READY_NON_ACTIVATING');
+  assert.equal(result.nextAction.kind,'CANONICAL_RUNTIME_READY_FOR_SEPARATE_EXECUTION');
+  assert.equal(result.canonicalAdaptive.runtimeStatus,'READY_NON_ACTIVATING');
+  assert.equal(result.safety.runtimeActivationAllowed,false);
+  assert.equal(result.safety.runtimeExecutionAttempted,false);
+  assert.equal(result.safety.finalHoldoutAccessAllowed,false);
+  assert.equal(result.safety.profitabilityClaim,false);
 });
 
-test('known failed strategy is remembered and not re-run',()=>{
-  const plan=planResearchFactoryCycle({...base,markets:{CRYPTO_FUTURES:{ready:true,datasetSnapshotHash:SNAP}},candidates:[candidate()],failureMemory:[{strategyHash:H1,failureCode:'OOS_FAILED'}]});
-  assert.equal(plan.queue.some((row)=>row.kind==='RUN_STAGE'),false);
-  assert.ok(plan.blockers.some((row)=>row.code==='KNOWN_FAILED_STRATEGY'));
+test('tampered canonical plan is rejected rather than normalized or reimplemented',()=>{
+  const adaptiveInput=readyProfileInput();
+  const plan=buildAdaptiveMultiMarketTournamentPlanV1({
+    sourceSha:SHA,createdAt:AT,
+    evidenceCatalog:adaptiveInput.evidenceCatalog,
+    developmentDiagnostics:adaptiveInput.developmentDiagnostics,
+    policy:adaptiveInput.policy,
+  });
+  const tampered=structuredClone(plan);
+  tampered.allocation.initialCandidateFamilySize+=1;
+  assert.throws(()=>buildResearchFactoryControlPlaneV1({
+    researchSha:SHA,observedAt:AT,evidenceByMarket:{},
+    adaptive:{plan:tampered},
+  }),/CANONICAL_ADAPTIVE_PLAN_INVALID/);
 });
 
-test('free-only AI proposal is low priority and bounded by research budget',()=>{
-  const plan=planResearchFactoryCycle({...base,budget:{maxQueue:2,maxConcurrentJobs:2,maxAiCallsPerCycle:1,maxCandidatesPerFamily:32},markets:{CRYPTO_FUTURES:{ready:true,datasetSnapshotHash:SNAP}},candidates:[candidate({strategyHash:H3})],ai:{enabled:true,freeOnly:true,allowNewHypotheses:true,callsUsed:0}});
-  assert.equal(plan.queue.length,2);
-  assert.equal(plan.queue[0].kind,'RUN_STAGE');
-  assert.equal(plan.queue[1].kind,'AI_PROPOSE');
-  assert.equal(plan.queue[1].providerPolicy,'FREE_ONLY');
-  assert.equal(plan.queue[1].evidenceCredit,0);
-  assert.equal(plan.safety.paidAiFallback,false);
-});
-
-test('dataset snapshot mismatch fails closed',()=>{
-  const plan=planResearchFactoryCycle({...base,markets:{CRYPTO_FUTURES:{ready:true,datasetSnapshotHash:'5'.repeat(64)}},candidates:[candidate()]});
-  assert.equal(plan.queue.some((row)=>row.kind==='RUN_STAGE'),false);
-  assert.ok(plan.blockers.some((row)=>row.code==='DATASET_SNAPSHOT_MISMATCH'));
+test('source SHA mismatch fails closed across canonical artifacts',()=>{
+  const adaptiveInput=readyProfileInput();
+  const plan=buildAdaptiveMultiMarketTournamentPlanV1({
+    sourceSha:SHA,createdAt:AT,
+    evidenceCatalog:adaptiveInput.evidenceCatalog,
+    developmentDiagnostics:adaptiveInput.developmentDiagnostics,
+    policy:adaptiveInput.policy,
+  });
+  assert.throws(()=>buildResearchFactoryControlPlaneV1({
+    researchSha:'b'.repeat(40),observedAt:AT,evidenceByMarket:{},
+    adaptive:{plan},
+  }),/SOURCE_SHA_MISMATCH/);
 });
