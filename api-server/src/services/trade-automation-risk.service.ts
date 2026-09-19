@@ -89,7 +89,7 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
     crypto_futures: input.marketEnabled?.crypto_futures ?? DEFAULT_TRADING_POLICY.marketEnabled.crypto_futures,
   };
   return {
-    mode: input.mode === 'approval' ? 'approval' : 'automatic',
+    mode: input.mode === 'automatic' ? 'automatic' : 'approval',
     automaticEnabled: input.automaticEnabled === true,
     emergencyStopped: input.emergencyStopped === true,
     newEntriesStopped: input.newEntriesStopped === true,
