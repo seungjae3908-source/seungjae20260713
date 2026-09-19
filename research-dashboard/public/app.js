@@ -20,7 +20,7 @@ function statusTone(status) {
   const value = String(status ?? '').toLowerCase();
   if (['complete', 'success', 'collecting', 'ready'].includes(value)) return 'good';
   if (['attention', 'partial_failure', 'blocked_data'].includes(value)) return 'warn';
-  if (['failed', 'safety_block'].includes(value)) return 'bad';
+  if (['failed', 'safety_block', 'invalid'].includes(value)) return 'bad';
   return 'neutral';
 }
 
@@ -79,6 +79,7 @@ function renderPaper(paper) {
 function renderDataFactory(dataFactory) {
   const temporal = dataFactory?.temporalCryptoFutures ?? {};
   $('#temporal-observations').textContent = number(temporal.observationCount);
+  $('#temporal-observations-detail').textContent = number(temporal.observationCount);
   $('#temporal-failed').textContent = number(temporal.failedCount);
   $('#temporal-updated').textContent = temporal.generatedAt ? date(temporal.generatedAt) : '—';
   setPill($('#temporal-status'), temporal.status || 'MISSING', statusTone(temporal.status));
