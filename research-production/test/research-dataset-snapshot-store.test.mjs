@@ -74,9 +74,10 @@ test('blocked Data Factory evidence cannot create a snapshot manifest',()=>{
   }),/DATASET_NOT_RESEARCH_READY/);
 });
 
-test('profile timeframe and canonical symbol scope are enforced',()=>{
+test('profile timeframe is enforced, symbol order is canonicalized, and duplicates are rejected',()=>{
   assert.throws(()=>build({scope:scope({timeframe:'15m'})}),/TIMEFRAME_MISMATCH/);
-  assert.throws(()=>build({scope:scope({symbols:['ETHUSDT','BTCUSDT']})}),/unique canonical symbols/);
+  const sorted=build({scope:scope({symbols:['ETHUSDT','BTCUSDT']})});
+  assert.deepEqual(sorted.scope.symbols,['BTCUSDT','ETHUSDT']);
   assert.throws(()=>build({scope:scope({symbols:['BTCUSDT','BTCUSDT']})}),/unique canonical symbols/);
 });
 
