@@ -20,12 +20,15 @@ try {
     inputRoot: resolve(requiredEnv('RESEARCH_CANONICAL_BUNDLE_INPUT_ROOT')),
     dslPath: resolve(requiredArg('--dsl')),
     bundlePath: resolve(requiredArg('--bundle')),
+    researchCodeSha: requiredEnv('RESEARCH_CODE_SHA'),
   });
   process.stdout.write(`${JSON.stringify({
     status: result.status,
+    researchCodeSha: result.researchCodeSha,
     dslDigest: result.publication.dslDigest,
     bundleDigest: result.publication.bundleDigest,
     publicationStatus: result.publication.publicationStatus,
+    receiptDigest: result.publication.receiptDigest,
     receiptPath: result.receiptPath,
     recordPath: result.recordPath,
     recoveredExistingCatalog: result.recoveredExistingCatalog,
