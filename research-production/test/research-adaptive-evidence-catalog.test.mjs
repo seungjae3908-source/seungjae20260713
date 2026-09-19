@@ -9,6 +9,7 @@ import {
 } from '../src/research-dataset-snapshot-store.mjs';
 import {
   buildAdaptiveEvidenceCatalogFromDataFactoryV1,
+  createAdaptiveEvidenceReceiptV1,
 } from '../src/research-adaptive-evidence-catalog.mjs';
 
 const SHA='a'.repeat(40);
@@ -31,15 +32,14 @@ function futuresManifest(){
 }
 
 function receipt(profileId,requirement,hash){
-  return {
+  return createAdaptiveEvidenceReceiptV1({
     profileId,
     requirement,
     evidenceId:`canonical:${profileId}:${requirement}`,
     observedAt:AT,
     datasetSnapshotHash:hash,
-    publicDataOnly:true,
-    executionAuthority:'NONE',
-  };
+    sourceDigest:H('9'),
+  });
 }
 
 test('Dataset Snapshot automatically owns immutable identity and public-source requirements only',()=>{
@@ -95,8 +95,21 @@ test('duplicate and unknown canonical receipts fail closed',()=>{
     datasetManifestsByMarket:{CRYPTO_FUTURES:manifest},
     receipts:[row,row],
   }),/DUPLICATE_RECEIPT/);
+  assert.throws(()=>createAdaptiveEvidenceReceiptV1({
+    profileId:'CRYPTO_FUTURES:SWING',
+    requirement:'MADE_UP_REQUIREMENT',
+    evidenceId:'canonical:made-up',
+    observedAt:AT,
+    datasetSnapshotHash:manifest.datasetSnapshotHash,
+    sourceDigest:H('9'),
+  }),/REQUIREMENT_UNKNOWN/);
+});
+
+test('receipt tampering is rejected before readiness credit',()=>{
+  const manifest=futuresManifest();
+  const row=receipt('CRYPTO_FUTURES:SWING','MARK_PRICE',manifest.datasetSnapshotHash);
   assert.throws(()=>buildAdaptiveEvidenceCatalogFromDataFactoryV1({
     datasetManifestsByMarket:{CRYPTO_FUTURES:manifest},
-    receipts:[{...row,requirement:'MADE_UP_REQUIREMENT'}],
-  }),/REQUIREMENT_UNKNOWN/);
+    receipts:[{...row,evidenceId:'canonical:tampered'}],
+  }),/RECEIPT_DIGEST_MISMATCH/);
 });
