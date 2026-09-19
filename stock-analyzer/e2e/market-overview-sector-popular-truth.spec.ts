@@ -80,6 +80,67 @@ function sectorPayload(now: string, withEvidence: boolean) {
   };
 }
 
+async function installProviderUnavailableMocks(page: Page) {
+  await installSession(page);
+
+  await page.route('**/__e2e-supabase/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const now = new Date().toISOString();
+    if (path.endsWith('/rest/v1/profiles')) {
+      return fulfill(route, {
+        id: E2E_USER_ID,
+        login_name: 'market-overview-truth',
+        display_name: '시황 QA',
+        role: 'admin',
+        status: 'approved',
+        membership_level: 'admin',
+        is_active: true,
+        permissions_updated_at: now,
+        updated_at: now,
+      });
+    }
+    if (path.endsWith('/auth/v1/user')) {
+      return fulfill(route, {
+        id: E2E_USER_ID,
+        aud: 'authenticated',
+        role: 'authenticated',
+        email: 'market-overview-truth@accounts.invalid',
+        app_metadata: { provider: 'email', providers: ['email'] },
+        user_metadata: { display_name: '시황 QA' },
+        identities: [],
+        created_at: now,
+      });
+    }
+    return fulfill(route, { ok: true });
+  });
+
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const now = new Date().toISOString();
+    if (path === '/api/market/summary') return fulfill(route, summary());
+    if (path === '/api/market/sector-popular') {
+      return fulfill(route, {
+        ok: false,
+        available: false,
+        partial: false,
+        dataState: 'provider_error',
+        retryable: true,
+        market: 'KR',
+        sortBasis: '거래대금 기준',
+        sectors: [],
+        updatedAt: now,
+        error: 'SECTOR_POPULAR_PROVIDER_UNAVAILABLE',
+        errorCode: 'SECTOR_POPULAR_PROVIDER_UNAVAILABLE',
+        message: '섹터 인기종목 공개 공급자의 실데이터 응답을 확인하지 못했습니다.',
+      });
+    }
+    if (path === '/api/market/briefing') return fulfill(route, briefing(now));
+    if (path === '/api/notifications/price-alerts') return fulfill(route, { alerts: [] });
+    if (path === '/api/watchlist/sync') return fulfill(route, { ok: true, items: [] });
+    return fulfill(route, { ok: true });
+  });
+}
+
 async function installMocks(page: Page, withSectorEvidence: boolean) {
   await installSession(page);
 
@@ -125,6 +186,25 @@ async function installMocks(page: Page, withSectorEvidence: boolean) {
     return fulfill(route, { ok: true });
   });
 }
+
+test('provider unavailable envelope fails closed without browser-visible transport errors', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const errors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(message.text());
+  });
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  await installProviderUnavailableMocks(page);
+  await page.goto('/market-overview');
+  await expect(page.getByTestId('market-overview-page')).toBeVisible();
+  await page.getByRole('button', { name: '섹터', exact: true }).click();
+
+  const section = page.getByTestId('market-overview-sectors');
+  await expect(section.getByText('섹터 확인 실패')).toBeVisible({ timeout: 15_000 });
+  await expect(section.getByText('섹터 데이터 없음')).toHaveCount(0);
+  await expect.poll(() => errors).toEqual([]);
+});
 
 test('malformed HTTP 200 with no sector ranking evidence fails closed', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
