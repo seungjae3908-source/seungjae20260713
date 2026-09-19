@@ -1,4 +1,6 @@
 export type TradingExchange = 'bitget' | 'upbit' | 'kiwoom';
+export type StockBroker = 'kiwoom' | 'toss';
+export type StockTradingAssetClass = 'domestic_stock' | 'us_stock';
 export type TradingMode = 'approval' | 'automatic';
 export type TradingAccountMode = 'paper' | 'mock' | 'live';
 export type TradingSide = 'buy' | 'sell' | 'long' | 'short';
@@ -70,6 +72,7 @@ export const DEFAULT_TRADING_POLICY = Object.freeze({
   emergencyStopped: false,
   newEntriesStopped: false,
   marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true } as Record<TradingAssetClass, boolean>,
+  stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'kiwoom' } as Record<StockTradingAssetClass, StockBroker>,
   exchangeEnabled: { bitget: false, upbit: false, kiwoom: false },
   enabledAssets: { bitget: [] as string[], upbit: [] as string[], kiwoom: [] as string[] },
   enabledStrategies: [] as string[],
@@ -109,6 +112,7 @@ export type TradingPolicy = {
   emergencyStopped: boolean;
   newEntriesStopped: boolean;
   marketEnabled: Record<TradingAssetClass, boolean>;
+  stockBrokerByMarket: Record<StockTradingAssetClass, StockBroker>;
   exchangeEnabled: Record<TradingExchange, boolean>;
   enabledAssets: Record<TradingExchange, string[]>;
   enabledStrategies: string[];
@@ -216,6 +220,7 @@ export type TradingEconomics = {
 export type TradingPlanInput = {
   exchange: TradingExchange;
   accountMode: TradingAccountMode;
+  stockBroker?: StockBroker | null;
   strategyId: string;
   signalId: string;
   symbol: string;
@@ -294,6 +299,7 @@ export type TradingOrder = {
   userId: string;
   planId: string;
   exchange: TradingExchange;
+  stockBroker?: StockBroker | null;
   clientOrderId: string;
   exchangeOrderId: string | null;
   state: TradingOrderState;
