@@ -76,6 +76,7 @@ def fsum(funding,t0,t1):
     return sum(r for ts,r in funding if t0<ts<=t1)
 
 def simulate(data,cost,start_fraction=0.0,mode="TOP2_POSITIVE"):
+    avg_cost=(cost["spot"]+cost["fut"])/2
     roundtrip_cost=2*avg_cost
     # Project 7d realized funding to 30d, divide by 2 because pair uses two fully-funded legs.
     # Cost hurdle uses 2x modeled round-trip cost (safety margin), not a fitted return threshold.
@@ -83,7 +84,6 @@ def simulate(data,cost,start_fraction=0.0,mode="TOP2_POSITIVE"):
 
     dates=data["dates"];start=max(7,int(len(dates)*start_fraction))
     cash=1.0;pair={s:0.0 for s in SYMBOLS};peak=1.0;mdd=0.0;fees=0.0;selections=[];curve=[1.0]
-    avg_cost=(cost["spot"]+cost["fut"])/2
     for i in range(start,len(dates)-1):
         t,t1=dates[i],dates[i+1]
         if (i-start)%7==0:
