@@ -307,11 +307,11 @@ test('older dashboard payloads without Factory runtime remain explicit MISSING',
 
 test('Factory runtime tamper fails browser DTO closed instead of leaking partial readiness', () => {
   const invalidPolicy = validOverview();
-  invalidPolicy.factory.policyDigest = 'e'.repeat(64);
+  (invalidPolicy.factory as { policyDigest: string | null }).policyDigest = 'e'.repeat(64);
   assert.equal(sanitizeResearchCenterOverview(invalidPolicy), null);
 
   const malformed = validOverview();
-  malformed.factory.readyProfileCount = -1;
+  (malformed.factory as { readyProfileCount: number | null }).readyProfileCount = -1;
   assert.equal(sanitizeResearchCenterOverview(malformed), null);
 });
 
