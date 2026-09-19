@@ -112,7 +112,7 @@ export type TradingPolicy = {
   emergencyStopped: boolean;
   newEntriesStopped: boolean;
   marketEnabled: Record<TradingAssetClass, boolean>;
-  stockBrokerByMarket: Record<StockTradingAssetClass, StockBroker>;
+  stockBrokerByMarket?: Record<StockTradingAssetClass, StockBroker>;
   exchangeEnabled: Record<TradingExchange, boolean>;
   enabledAssets: Record<TradingExchange, string[]>;
   enabledStrategies: string[];
