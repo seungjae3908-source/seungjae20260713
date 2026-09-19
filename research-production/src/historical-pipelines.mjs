@@ -8,11 +8,11 @@ import { finished } from 'node:stream/promises';
 import { assertResearchSafety, preflightResearchProduction, sanitizeChildEnv } from './engine.mjs';
 
 const STEP_TIMEOUT = 45 * 60_000;
-const step = (id, args) => Object.freeze({ id, args: Object.freeze(args), timeoutMs: STEP_TIMEOUT });
+const step = (id, args, options = {}) => Object.freeze({ id, args: Object.freeze(args), timeoutMs: STEP_TIMEOUT, resultPath: options.resultPath ?? null, blockedStatuses: Object.freeze(options.blockedStatuses ?? []) });
 
 export const HISTORICAL_PIPELINES = Object.freeze([
   Object.freeze({ id: 'crypto-futures-derivatives', steps: Object.freeze([
-    step('market-dataset-candidates', ['scripts/run-market-suite.js', 'live-market-suite', 'docs/market-suite-result.json', 'docs/candidate-models']),
+    step('market-dataset-candidates', ['scripts/run-market-suite.js', 'live-market-suite', 'docs/market-suite-result.json', 'docs/candidate-models'], { resultPath: 'docs/market-suite-result.json', blockedStatuses: ['data_blocked'] }),
     step('futures-generalization', ['scripts/run-futures-generalization-suite.js', 'docs/futures-generalization-suite-result.json']),
     step('futures-pnl', ['scripts/run-futures-pnl-suite.js', 'docs/futures-pnl-suite-result.json']),
     step('futures-regime', ['scripts/run-futures-regime-execution-suite.js', 'docs/futures-regime-execution-suite-result.json']),
@@ -84,7 +84,20 @@ async function runStep({ entry, workspace, taskDir, env }) {
   const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); setTimeout(() => child.kill('SIGKILL'), 5_000).unref(); }, entry.timeoutMs); timer.unref();
   const { code, signal } = await new Promise((resolvePromise, rejectPromise) => { child.once('error', rejectPromise); child.once('close', (code, signal) => resolvePromise({ code, signal })); }).finally(() => clearTimeout(timer));
   await Promise.allSettled([finished(out), finished(err)]);
-  const record = { id: entry.id, args: entry.args, startedAt, endedAt: Date.now(), exitCode: code, signal, timedOut, status: !timedOut && code === 0 ? 'success' : 'failed' };
+  let status = !timedOut && code === 0 ? 'success' : 'failed';
+  let reportStatus = null;
+  if (status === 'success' && entry.resultPath) {
+    try {
+      const report = JSON.parse(await readFile(join(workspace, entry.resultPath), 'utf8'));
+      reportStatus = typeof report?.status === 'string' ? report.status : null;
+      if (entry.blockedStatuses.includes(reportStatus)) status = 'blocked_data';
+      else if (reportStatus == null) status = 'failed';
+    } catch {
+      reportStatus = 'missing_or_invalid';
+      status = 'failed';
+    }
+  }
+  const record = { id: entry.id, args: entry.args, startedAt, endedAt: Date.now(), exitCode: code, signal, timedOut, status, reportStatus };
   await atomicJson(join(dir, 'result.json'), record); return record;
 }
 
@@ -93,7 +106,14 @@ async function runPipeline({ pipeline, labRoot, stateRoot, cycleId, env }) {
   await mkdir(dirname(workspace), { recursive: true, mode: 0o700 }); await cp(labRoot, workspace, { recursive: true, force: false, errorOnExist: true, dereference: false });
   const steps = []; const startedAt = Date.now();
   for (const entry of pipeline.steps) { const result = await runStep({ entry, workspace, taskDir, env }); steps.push(result); if (result.status !== 'success') break; }
-  const record = { schemaVersion: 'research-production-historical-task-v2', id: pipeline.id, startedAt, endedAt: Date.now(), status: steps.length === pipeline.steps.length && steps.every((s) => s.status === 'success') ? 'success' : 'failed', stepCount: steps.length, plannedStepCount: pipeline.steps.length, workspace, steps };
+  const pipelineStatus = steps.some((row) => row.status === 'failed')
+    ? 'failed'
+    : steps.some((row) => row.status === 'blocked_data')
+      ? 'blocked_data'
+      : steps.length === pipeline.steps.length
+        ? 'success'
+        : 'failed';
+  const record = { schemaVersion: 'research-production-historical-task-v2', id: pipeline.id, startedAt, endedAt: Date.now(), status: pipelineStatus, stepCount: steps.length, plannedStepCount: pipeline.steps.length, workspace, steps };
   await atomicJson(join(taskDir, 'result.json'), record); return record;
 }
 
@@ -104,7 +124,10 @@ export async function runHistoricalPipelines({ repoRoot, stateRoot, researchSha,
   const results = []; let cursor = 0; const safeConcurrency = Math.max(1, Math.min(Number(concurrency) || 1, 3));
   try {
     await Promise.all(Array.from({ length: safeConcurrency }, async () => { while (cursor < HISTORICAL_PIPELINES.length) { const index = cursor++; const pipeline = HISTORICAL_PIPELINES[index]; try { results[index] = await runPipeline({ pipeline, labRoot, stateRoot, cycleId, env: { ...env, RESEARCH_CODE_SHA: researchSha } }); } catch (error) { results[index] = { id: pipeline.id, status: 'failed', error: String(error?.stack ?? error).slice(0, 4000), stepCount: 0, liveTrading: false, privateApi: false, orderAuthority: false }; } } }));
-    const summary = { schemaVersion: 'research-production-historical-cycle-v2', cycleId, profile: 'fast-historical', researchSha, generatedAt: Date.now(), concurrency: safeConcurrency, taskCount: results.length, plannedStepCount: HISTORICAL_PIPELINES.reduce((sum, p) => sum + p.steps.length, 0), executedStepCount: results.reduce((sum, r) => sum + (r.stepCount ?? 0), 0), failedCount: results.filter((r) => r.status === 'failed').length, status: results.every((r) => r.status === 'success') ? 'complete' : 'partial_failure', results, safety: preflight.safety };
+    const failedCount = results.filter((r) => r.status === 'failed').length;
+    const blockedDataCount = results.filter((r) => r.status === 'blocked_data').length;
+    const successCount = results.filter((r) => r.status === 'success').length;
+    const summary = { schemaVersion: 'research-production-historical-cycle-v2', cycleId, profile: 'fast-historical', researchSha, generatedAt: Date.now(), concurrency: safeConcurrency, taskCount: results.length, plannedStepCount: HISTORICAL_PIPELINES.reduce((sum, p) => sum + p.steps.length, 0), executedStepCount: results.reduce((sum, r) => sum + (r.stepCount ?? 0), 0), successCount, blockedDataCount, failedCount, status: failedCount > 0 ? 'partial_failure' : blockedDataCount > 0 ? 'blocked_data' : 'complete', results, safety: preflight.safety };
     await atomicJson(join(stateRoot, 'runs', cycleId, 'cycle.json'), summary); await atomicJson(join(stateRoot, 'latest', 'fast-historical.json'), summary); return summary;
   } finally { await rm(lockPath, { force: true }); }
 }
