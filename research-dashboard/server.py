@@ -27,6 +27,14 @@ CANDIDATE_PERFORMANCE_SCHEMA = 'frozen-candidate-performance-reader-v1'
 TEMPORAL_CRYPTO_SUMMARY_SCHEMA = 'crypto-futures-temporal-public-collection-v1'
 TEMPORAL_COLLECTION_STATUSES = frozenset(('complete', 'partial_failure'))
 TEMPORAL_SYMBOL_STATUSES = frozenset(('success', 'failed'))
+FACTORY_RUNTIME_CONTRACT = 'research-factory-runtime-status/v1'
+FACTORY_RUNTIME_STATUSES = frozenset((
+    'BLOCKED_POLICY_MISSING',
+    'BLOCKED_POLICY_INVALID',
+    'BLOCKED_NO_READY_PROFILES',
+    'BLOCKED_RUNTIME_BINDINGS',
+    'READY_NON_ACTIVATING',
+))
 SHA40_PATTERN = __import__('re').compile(r'^[0-9a-f]{40}$')
 DIGEST64_PATTERN = __import__('re').compile(r'^[0-9a-f]{64}$')
 TEMPORAL_SYMBOL_PATTERN = __import__('re').compile(r'^[A-Z0-9]{3,30}$')
@@ -612,6 +620,133 @@ def read_temporal_crypto_summary(root):
         return empty_temporal_crypto_summary('INVALID', True)
 
 
+def empty_factory_runtime_summary(status='MISSING', present=False):
+    return {
+        'present': present,
+        'status': status,
+        'generatedAt': None,
+        'researchSha': None,
+        'firstZero': None,
+        'policyPresent': None,
+        'policyValid': None,
+        'policyDigest': None,
+        'readyMarketCount': None,
+        'blockedMarketCount': None,
+        'readyProfileCount': None,
+        'blockedProfileCount': None,
+        'runtimeStatus': None,
+        'nextFirstZero': None,
+        'controlPlaneDigest': None,
+    }
+
+
+def summarize_factory_runtime_status(value, read_failed=False):
+    if read_failed:
+        return empty_factory_runtime_summary('INVALID', True)
+    if value is None:
+        return empty_factory_runtime_summary()
+    if not isinstance(value, dict) or value.get('contract') != FACTORY_RUNTIME_CONTRACT:
+        return empty_factory_runtime_summary('INVALID', True)
+    if value.get('status') not in FACTORY_RUNTIME_STATUSES:
+        return empty_factory_runtime_summary('INVALID', True)
+    try:
+        generated_at = int(__import__('datetime').datetime.fromisoformat(
+            str(value.get('generatedAt')).replace('Z', '+00:00')
+        ).timestamp() * 1000)
+    except (TypeError, ValueError):
+        return empty_factory_runtime_summary('INVALID', True)
+    research_sha = value.get('researchSha')
+    first_zero = value.get('firstZero')
+    policy = value.get('policy')
+    data_factory = value.get('dataFactory')
+    adaptive = value.get('canonicalAdaptive')
+    safety = value.get('safety')
+    if (
+        not isinstance(research_sha, str) or not SHA40_PATTERN.fullmatch(research_sha)
+        or not isinstance(first_zero, str) or not SAFE_ID_PATTERN.fullmatch(first_zero)
+        or not isinstance(policy, dict)
+        or not isinstance(data_factory, dict)
+        or not isinstance(adaptive, dict)
+        or not isinstance(safety, dict)
+    ):
+        return empty_factory_runtime_summary('INVALID', True)
+    if not (
+        safety.get('runtimeExecutionAttempted') is False
+        and safety.get('runtimeActivationAllowed') is False
+        and safety.get('scheduleMutationAllowed') is False
+        and safety.get('deploymentAllowed') is False
+        and safety.get('databaseMutationAllowed') is False
+        and safety.get('secretMutationAllowed') is False
+        and safety.get('liveTrading') is False
+        and safety.get('autoTrading') is False
+        and safety.get('privateTradingApi') is False
+        and safety.get('realOrder') is False
+        and safety.get('profitabilityClaim') is False
+        and safety.get('executionAuthority') == 'NONE'
+    ):
+        return empty_factory_runtime_summary('INVALID', True)
+
+    def nullable_count(raw):
+        if raw is None:
+            return None
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+            raise ValueError('invalid count')
+        return raw
+
+    try:
+        ready_market = nullable_count(data_factory.get('readyMarketCount'))
+        blocked_market = nullable_count(data_factory.get('blockedMarketCount'))
+        ready_profile = nullable_count(adaptive.get('readyProfileCount'))
+        blocked_profile = nullable_count(adaptive.get('blockedProfileCount'))
+    except ValueError:
+        return empty_factory_runtime_summary('INVALID', True)
+
+    policy_present = policy.get('present')
+    policy_valid = policy.get('valid')
+    if not isinstance(policy_present, bool) or not isinstance(policy_valid, bool):
+        return empty_factory_runtime_summary('INVALID', True)
+    policy_digest = policy.get('policyDigest')
+    control_digest = value.get('controlPlaneDigest')
+    if policy_digest is not None and (not isinstance(policy_digest, str) or not DIGEST64_PATTERN.fullmatch(policy_digest)):
+        return empty_factory_runtime_summary('INVALID', True)
+    if control_digest is not None and (not isinstance(control_digest, str) or not DIGEST64_PATTERN.fullmatch(control_digest)):
+        return empty_factory_runtime_summary('INVALID', True)
+    if not policy_present and (policy_valid or policy_digest is not None):
+        return empty_factory_runtime_summary('INVALID', True)
+
+    runtime_status = adaptive.get('runtimeStatus')
+    next_first_zero = adaptive.get('nextFirstZero')
+    if runtime_status is not None and (not isinstance(runtime_status, str) or not SAFE_ID_PATTERN.fullmatch(runtime_status)):
+        return empty_factory_runtime_summary('INVALID', True)
+    if next_first_zero is not None and (not isinstance(next_first_zero, str) or not SAFE_ID_PATTERN.fullmatch(next_first_zero)):
+        return empty_factory_runtime_summary('INVALID', True)
+
+    return {
+        'present': True,
+        'status': value.get('status'),
+        'generatedAt': generated_at,
+        'researchSha': research_sha.lower(),
+        'firstZero': first_zero,
+        'policyPresent': policy_present,
+        'policyValid': policy_valid,
+        'policyDigest': policy_digest.lower() if isinstance(policy_digest, str) else None,
+        'readyMarketCount': ready_market,
+        'blockedMarketCount': blocked_market,
+        'readyProfileCount': ready_profile,
+        'blockedProfileCount': blocked_profile,
+        'runtimeStatus': runtime_status,
+        'nextFirstZero': next_first_zero,
+        'controlPlaneDigest': control_digest.lower() if isinstance(control_digest, str) else None,
+    }
+
+
+def read_factory_runtime_summary(root):
+    try:
+        return summarize_factory_runtime_status(read_json_optional(root / 'latest' / 'research-factory.json'))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return empty_factory_runtime_summary('INVALID', True)
+
+
 def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     root = Path(state_root).resolve()
     cycles = [summarize_cycle(profile, read_json_optional(root / 'latest' / f'{profile}.json')) for profile in PROFILES]
@@ -624,6 +759,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     liquidity_independence = read_v3_independence_summary(root, read_json_optional)
     candidate_performance = read_candidate_performance(root)
     temporal_crypto = read_temporal_crypto_summary(root)
+    factory_runtime = read_factory_runtime_summary(root)
     failed_tasks = sum_known_cycle_counts(cycles, 'failedCount')
     blocked_data_tasks = sum_known_cycle_counts(cycles, 'blockedDataCount')
     authority_evidence_complete = not paper_runtime.get('present') or paper_runtime.get('safetyEvidenceComplete') is True
@@ -643,6 +779,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
             liquidity_independence.get('status') == 'INVALID'
             or candidate_performance.get('status') == 'INVALID'
             or temporal_crypto.get('status') in ('INVALID', 'partial_failure')
+            or factory_runtime.get('status') in ('INVALID', 'BLOCKED_POLICY_INVALID')
         )
         else 'evidence_incomplete' if failed_tasks is None or blocked_data_tasks is None
         else 'attention' if failed_tasks > 0
@@ -652,7 +789,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
         'schemaVersion': 'research-dashboard-overview-v1',
         'generatedAt': int(__import__('time').time() * 1000),
         'state': {
-            'present': any(cycle.get('present') for cycle in cycles) or paper_runtime.get('present') or paper_ledger.get('present') or shadow_records.get('present') or liquidity_independence.get('present') or candidate_performance.get('present') or temporal_crypto.get('present'),
+            'present': any(cycle.get('present') for cycle in cycles) or paper_runtime.get('present') or paper_ledger.get('present') or shadow_records.get('present') or liquidity_independence.get('present') or candidate_performance.get('present') or temporal_crypto.get('present') or factory_runtime.get('present'),
             'latestCycleAt': latest_cycle_at,
         },
         'safety': {
@@ -671,6 +808,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
             'liquidityIndependence': liquidity_independence,
         },
         'dataFactory': {'temporalCryptoFutures': temporal_crypto},
+        'factory': factory_runtime,
         'paper': {'runtime': paper_runtime, 'ledger': paper_ledger, 'candidatePerformance': candidate_performance},
         'shadow': {'groups': shadow_groups, 'records': shadow_records, 'canonicalHandoffs': shadow_canonical_handoffs},
         'profitability': {
