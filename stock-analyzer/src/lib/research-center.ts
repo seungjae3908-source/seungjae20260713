@@ -151,6 +151,24 @@ export interface StrategyHealthBinding {
   executionAuthority: 'NONE';
 }
 
+export interface ResearchFactoryRuntimeSummary {
+  present: boolean;
+  status: 'MISSING' | 'INVALID' | 'BLOCKED_POLICY_MISSING' | 'BLOCKED_POLICY_INVALID' | 'BLOCKED_NO_READY_PROFILES' | 'BLOCKED_RUNTIME_BINDINGS' | 'READY_NON_ACTIVATING';
+  generatedAt: number | null;
+  researchSha: string | null;
+  firstZero: string | null;
+  policyPresent: boolean | null;
+  policyValid: boolean | null;
+  policyDigest: string | null;
+  readyMarketCount: number | null;
+  blockedMarketCount: number | null;
+  readyProfileCount: number | null;
+  blockedProfileCount: number | null;
+  runtimeStatus: string | null;
+  nextFirstZero: string | null;
+  controlPlaneDigest: string | null;
+}
+
 export interface ResearchCenterOverview {
   schemaVersion: 'research-dashboard-overview-v1';
   generatedAt: number;
@@ -181,6 +199,7 @@ export interface ResearchCenterOverview {
   dataFactory?: {
     temporalCryptoFutures: ResearchTemporalCryptoSummary;
   };
+  factory?: ResearchFactoryRuntimeSummary;
   paper: {
     runtime: ResearchPaperRuntime;
     ledger: ResearchPaperLedger;
