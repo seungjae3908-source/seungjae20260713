@@ -62,6 +62,7 @@ test('workflow consumes active planner weights and never falls back to Playwrigh
   assert.match(workflow, /browser-runtime-shard-specs\.txt/u);
   assert.match(workflow, /browser-runtime-active-weights/u);
   assert.match(workflow, /browser-runtime-lane-runner\.mjs/u);
-  assert.match(workflow, /--retries=0/u);
+  const runner = await readFile('.github/scripts/browser-runtime-lane-runner.mjs', 'utf8');
+  assert.match(runner, /'--retries=0'/u);
   assert.doesNotMatch(workflow, /--shard=/u);
 });
