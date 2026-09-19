@@ -1,0 +1,68 @@
+name: TSMOM28 Long Flat V1
+
+on:
+  push:
+    branches:
+      - research/tsmom28-long-flat-v1-20260919
+    paths:
+      - market-prediction-lab/scripts/run-tsmom28-long-flat-v1.py
+      - .github/workflows/tsmom28-long-flat-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Checkout exact research revision
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Syntax check
+        run: python -m py_compile market-prediction-lab/scripts/run-tsmom28-long-flat-v1.py
+
+      - name: Run public-data-only TSMOM28 test
+        run: python market-prediction-lab/scripts/run-tsmom28-long-flat-v1.py
+
+      - name: Verify safety, funding and frozen formula
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path("market-prediction-lab/artifacts/tsmom28-long-flat-v1/result.json")
+          d=json.loads(p.read_text())
+          assert d["research_only"] is True
+          assert d["public_data_only"] is True
+          assert d["live_trading"] is False
+          assert d["private_api"] is False
+          assert d["orders_submitted"] == 0
+          assert d["leverage"] == 1
+          assert d["formula"]["lookback_days"] == 28
+          assert d["formula"]["rebalance_days"] == 5
+          assert d["formula"]["shorting"] is False
+          assert len(d["symbols"]) == 8
+          assert all(v == "BINANCE_VISION_OK" for v in d["funding_status"].values())
+          print("SAFETY_AND_FUNDING_CONTRACT=PASS")
+          PY
+
+      - name: Publish summary
+        run: cat market-prediction-lab/artifacts/tsmom28-long-flat-v1/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload immutable research artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsmom28-long-flat-v1-${{ github.sha }}
+          path: market-prediction-lab/artifacts/tsmom28-long-flat-v1/
+          if-no-files-found: error
+          retention-days: 30
