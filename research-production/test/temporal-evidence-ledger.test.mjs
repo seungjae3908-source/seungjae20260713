@@ -14,10 +14,14 @@ const SHA='a'.repeat(40);
 const T=Date.UTC(2026,8,19,0,0,0);
 
 function row(overrides={}){
+  const observedAt=overrides.observedAt??T;
+  const availableAt=overrides.availableAt??observedAt;
+  const recordedAt=overrides.recordedAt??availableAt;
   return {
     market:'CRYPTO_FUTURES',symbol:'BTCUSDT',feature:'openInterestChange',value:0.01,
-    observedAt:T,availableAt:T,recordedAt:T,source:'bitget-public-v2',producerSha:SHA,publicDataOnly:true,
-    synthetic:false,replay:false,backfill:false,manual:false,...overrides,
+    source:'bitget-public-v2',producerSha:SHA,publicDataOnly:true,
+    synthetic:false,replay:false,backfill:false,manual:false,
+    ...overrides,observedAt,availableAt,recordedAt,
   };
 }
 
