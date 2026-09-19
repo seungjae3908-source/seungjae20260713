@@ -1,0 +1,66 @@
+name: Frozen Candidate Followup V1
+
+on:
+  push:
+    branches:
+      - research/four-market-profitability-scan-v1-20260919
+    paths:
+      - market-prediction-lab/scripts/run-kr-frozen-breakout-fresh-v1.js
+      - market-prediction-lab/scripts/run-upbit-mom30-top2-v1.js
+      - .github/workflows/frozen-candidate-followup-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kr-fresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Run frozen KR breakout on fresh symbols
+        run: node market-prediction-lab/scripts/run-kr-frozen-breakout-fresh-v1.js
+      - name: Verify contract
+        run: |
+          node --input-type=module - <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const d=JSON.parse(await readFile("market-prediction-lab/artifacts/kr-frozen-breakout-fresh-v1/result.json","utf8"));
+          if(d.status!=="pass"||d.researchOnly!==true||d.publicDataOnly!==true||d.actualOrders!==0||d.sourceParamsFrozenBeforeFreshSymbols!==true) process.exit(1);
+          console.log("KR_FROZEN_CONTRACT=PASS");
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kr-frozen-breakout-fresh-v1-${{ github.sha }}
+          path: market-prediction-lab/artifacts/kr-frozen-breakout-fresh-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+  upbit-mom30:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Run Upbit 30d momentum
+        run: node market-prediction-lab/scripts/run-upbit-mom30-top2-v1.js
+      - name: Verify no-lookahead and safety contract
+        run: |
+          node --input-type=module - <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const d=JSON.parse(await readFile("market-prediction-lab/artifacts/upbit-mom30-top2-v1/result.json","utf8"));
+          if(d.status!=="pass"||d.researchOnly!==true||d.publicDataOnly!==true||d.actualOrders!==0) process.exit(1);
+          if(!String(d.formula.execution).includes("next 4h bar open")) process.exit(1);
+          console.log("UPBIT_MOMENTUM_CONTRACT=PASS");
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: upbit-mom30-top2-v1-${{ github.sha }}
+          path: market-prediction-lab/artifacts/upbit-mom30-top2-v1/
+          if-no-files-found: error
+          retention-days: 30
