@@ -86,6 +86,8 @@ on:
       - market-prediction-lab/src/four-market-paper-sampler-v1.js
       - market-prediction-lab/src/four-market-paper-settlement-v1.js
       - market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js
+      - market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js
+      - market-prediction-lab/src/member-auto-trading-paper-handoff-v1.d.ts
       - market-prediction-lab/src/paper-forward-evidence-runtime-v1.js
       - market-prediction-lab/src/natural-paper-public-position-observation-v1.js
       - market-prediction-lab/src/paper-scheduler-driver-v1.js
@@ -105,6 +107,7 @@ on:
       - market-prediction-lab/tests/eth-v6-paper-settlement-source-v1.test.js
       - market-prediction-lab/tests/four-market-paper-settlement-v1.test.js
       - market-prediction-lab/tests/meaningful-search-scheduled-paper-provider-v1.test.js
+      - market-prediction-lab/tests/member-auto-trading-paper-handoff-v1.test.js
       - market-prediction-lab/tests/natural-paper-account-cli-contract-v1.test.js
       - market-prediction-lab/tests/paper-forward-canonical-admission-cutover-v1.test.js
       - market-prediction-lab/tests/paper-forward-research-natural-source-integration-v1.test.js
@@ -285,6 +288,8 @@ jobs:
             market-prediction-lab/src/eth-v6-paper-forward-source-v1.js
             market-prediction-lab/src/eth-v6-paper-settlement-source-v1.js
             market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js
+            market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js
+            market-prediction-lab/src/member-auto-trading-paper-handoff-v1.d.ts
             market-prediction-lab/src/four-market-paper-sampler-v1.js
             market-prediction-lab/src/four-market-paper-settlement-v1.js
             market-prediction-lab/src/paper-forward-evidence-runtime-v1.js
@@ -323,6 +328,7 @@ jobs:
             market-prediction-lab/tests/eth-v6-paper-settlement-source-v1.test.js
             market-prediction-lab/tests/four-market-paper-settlement-v1.test.js
             market-prediction-lab/tests/meaningful-search-scheduled-paper-provider-v1.test.js
+            market-prediction-lab/tests/member-auto-trading-paper-handoff-v1.test.js
             market-prediction-lab/tests/natural-paper-account-cli-contract-v1.test.js
             market-prediction-lab/tests/paper-forward-canonical-admission-cutover-v1.test.js
             market-prediction-lab/tests/paper-forward-research-natural-source-integration-v1.test.js
@@ -409,6 +415,7 @@ jobs:
           node --check market-prediction-lab/src/eth-v6-paper-forward-source-v1.js
           node --check market-prediction-lab/src/eth-v6-paper-settlement-source-v1.js
           node --check market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js
+          node --check market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js
           node --check market-intelligence-sidecar/src/execution-quality.mjs
           node --check market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
           node --check market-prediction-lab/scripts/run-paper-forward-schedule.js
@@ -418,6 +425,7 @@ jobs:
           node --check market-prediction-lab/tests/authoritative-paper-natural-funnel-v1.test.js
           node --check market-prediction-lab/tests/canonical-paper-admission-bundle-injection-runtime-v1.test.js
           node --check market-prediction-lab/tests/meaningful-search-scheduled-paper-provider-v1.test.js
+          node --check market-prediction-lab/tests/member-auto-trading-paper-handoff-v1.test.js
           node --check market-prediction-lab/tests/natural-paper-account-cli-contract-v1.test.js
           node --check market-prediction-lab/tests/paper-forward-evidence-runtime-v1.test.js
           node --check market-prediction-lab/tests/paper-scheduler-driver-v1.test.js
@@ -446,6 +454,7 @@ jobs:
             tests/eth-v6-paper-forward-source-v1.test.js \
             tests/eth-v6-paper-settlement-source-v1.test.js \
             tests/meaningful-search-scheduled-paper-provider-v1.test.js \
+            tests/member-auto-trading-paper-handoff-v1.test.js \
             tests/paper-forward-schedule-authoritative-source-wiring-v1.test.js \
             tests/paper-forward-schedule-authoritative-stage-adoption-v1.test.js \
             tests/paper-scheduler-driver-v1.test.js \
