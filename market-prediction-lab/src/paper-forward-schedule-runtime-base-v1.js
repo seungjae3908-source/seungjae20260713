@@ -553,13 +553,20 @@ export async function runPaperForwardScheduledInvocation({
   });
 
   let persistedMemberAutoTradingHandoff = null;
-  if (result?.memberAutoTradingHandoff != null) {
-    try {
-      persistedMemberAutoTradingHandoff = validateMemberAutoTradingPaperHandoff(
-        result.memberAutoTradingHandoff,
-        result.evidenceEvaluatedAtMs,
-      );
-    } catch {
+  const shouldInvalidatePreviousHandoff = result?.status === "BLOCKED_DATA"
+    || (result?.status === "COMPLETED" && result?.memberAutoTradingHandoff == null);
+  if (result?.memberAutoTradingHandoff != null || shouldInvalidatePreviousHandoff) {
+    if (result?.memberAutoTradingHandoff != null) {
+      try {
+        persistedMemberAutoTradingHandoff = validateMemberAutoTradingPaperHandoff(
+          result.memberAutoTradingHandoff,
+          result.evidenceEvaluatedAtMs,
+        );
+      } catch {
+        persistedMemberAutoTradingHandoff = null;
+      }
+    }
+    if (persistedMemberAutoTradingHandoff == null) {
       persistedMemberAutoTradingHandoff = Object.freeze({
         schemaVersion: MEMBER_AUTO_TRADING_PAPER_HANDOFF_VERSION,
         status: "BLOCKED_DATA",
@@ -567,7 +574,11 @@ export async function runPaperForwardScheduledInvocation({
         evaluatedAtMs: finite(result?.evidenceEvaluatedAtMs) ? result.evidenceEvaluatedAtMs : nowMs,
         entries: Object.freeze([]),
         entryCount: 0,
-        blockers: Object.freeze(["HANDOFF_PERSISTENCE_VALIDATION_FAILED"]),
+        blockers: Object.freeze([
+          result?.status === "BLOCKED_DATA"
+            ? "HANDOFF_SOURCE_CYCLE_BLOCKED"
+            : "HANDOFF_PERSISTENCE_VALIDATION_FAILED",
+        ]),
         safety: Object.freeze({
           executionAuthority: "NONE",
           publicDataOnly: true,
