@@ -27,7 +27,12 @@ CANDIDATE_PERFORMANCE_SCHEMA = 'frozen-candidate-performance-reader-v1'
 TEMPORAL_CRYPTO_SUMMARY_SCHEMA = 'crypto-futures-temporal-public-collection-v1'
 TEMPORAL_COLLECTION_STATUSES = frozenset(('complete', 'partial_failure'))
 TEMPORAL_SYMBOL_STATUSES = frozenset(('success', 'failed'))
-SHA40_PATTERN = __import__('re').compile(r'^[0-9a-f]{40}CANDIDATE_COUNT_KEYS = (
+SHA40_PATTERN = __import__('re').compile(r'^[0-9a-f]{40}$')
+DIGEST64_PATTERN = __import__('re').compile(r'^[0-9a-f]{64}$')
+TEMPORAL_SYMBOL_PATTERN = __import__('re').compile(r'^[A-Z0-9]{3,30}$')
+CANDIDATE_ID_PATTERN = __import__('re').compile(r'^(?:phase3-candidate:sha256:|paper-candidate-v1:)[0-9a-f]{64}$')
+SAFE_ID_PATTERN = __import__('re').compile(r'^[A-Za-z0-9._:-]{1,160}$')
+CANDIDATE_COUNT_KEYS = (
     'effectiveIndependentMarketN', 'candidateMatchedN', 'LONG_SIGNAL_N', 'SHORT_SIGNAL_N', 'NO_TRADE_N',
     'Entry_N', 'Position_N', 'PositionObservation_N', 'Settlement_N',
     'TRAIN_N', 'VALIDATION_N', 'OOS_N', 'WIN_N', 'LOSS_N', 'BREAKEVEN_N',
