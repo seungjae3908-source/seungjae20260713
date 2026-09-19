@@ -2,10 +2,9 @@ import { createSafeStrategyDslV1 } from "./autonomous-strategy-formula-generator
 
 export const EVIDENCE_BACKED_FORMULA_SEED_CATALOG_VERSION = 1;
 export const EVIDENCE_BACKED_FORMULA_FAMILIES = Object.freeze([
-  "TREND_ADX",
-  "MOMENTUM_RVOL",
-  "BREAKOUT_RVOL",
-  "MEAN_REVERSION_RECOVERY",
+  "TREND_BREAKOUT",
+  "TIME_SERIES_MOMENTUM",
+  "TREND_PULLBACK",
 ]);
 
 const MARKETS = Object.freeze(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"]);
@@ -144,49 +143,14 @@ function commonExit(config) {
 }
 
 function familyCore(family, config) {
-  if (family === "TREND_ADX") {
+  if (family === "TREND_BREAKOUT") {
     return {
-      strategyFamily: "TREND_ADX",
+      strategyFamily: "TREND_BREAKOUT",
       parameters: [
         period("emaFast", config.emaFast),
         period("emaSlow", config.emaSlow),
         period("adxPeriod", config.adxPeriod),
         number("adxMin", "NON_NEGATIVE_VALUE", config.adxMin),
-      ],
-      entryDsl: {
-        action: "LONG",
-        rules: [
-          op("CROSSOVER", [
-            indicator("EMA", "close", { period: "emaFast" }),
-            indicator("EMA", "close", { period: "emaSlow" }),
-          ]),
-          op("GT", [indicator("ADX", "ohlc", { period: "adxPeriod" }), paramNode("adxMin")]),
-        ],
-      },
-    };
-  }
-  if (family === "MOMENTUM_RVOL") {
-    return {
-      strategyFamily: "MOMENTUM_RVOL",
-      parameters: [
-        period("rocPeriod", config.rocPeriod),
-        number("rocMin", "NON_NEGATIVE_VALUE", config.rocMin),
-        period("rvolPeriod", config.rvolPeriod),
-        number("rvolMin", "NON_NEGATIVE_VALUE", config.rvolMin),
-      ],
-      entryDsl: {
-        action: "LONG",
-        rules: [
-          op("GT", [indicator("ROC", "close", { period: "rocPeriod" }), paramNode("rocMin")]),
-          op("GT", [indicator("RVOL", "volume", { period: "rvolPeriod" }), paramNode("rvolMin")]),
-        ],
-      },
-    };
-  }
-  if (family === "BREAKOUT_RVOL") {
-    return {
-      strategyFamily: "BREAKOUT_RVOL",
-      parameters: [
         period("breakoutPeriod", config.breakoutPeriod),
         number("breakoutThreshold", "NON_NEGATIVE_VALUE", config.breakoutThreshold),
         period("rvolPeriod", config.rvolPeriod),
@@ -195,16 +159,49 @@ function familyCore(family, config) {
       entryDsl: {
         action: "LONG",
         rules: [
+          op("GT", [
+            indicator("EMA", "close", { period: "emaFast" }),
+            indicator("EMA", "close", { period: "emaSlow" }),
+          ]),
+          op("GT", [indicator("ADX", "ohlc", { period: "adxPeriod" }), paramNode("adxMin")]),
           op("GT", [indicator("BREAKOUT", "close", { period: "breakoutPeriod" }), paramNode("breakoutThreshold")]),
           op("GT", [indicator("RVOL", "volume", { period: "rvolPeriod" }), paramNode("rvolMin")]),
         ],
       },
     };
   }
-  if (family === "MEAN_REVERSION_RECOVERY") {
+  if (family === "TIME_SERIES_MOMENTUM") {
     return {
-      strategyFamily: "MEAN_REVERSION_RECOVERY",
+      strategyFamily: "TIME_SERIES_MOMENTUM",
       parameters: [
+        period("emaFast", config.emaFast),
+        period("emaSlow", config.emaSlow),
+        period("rocPeriod", config.rocPeriod),
+        number("rocMin", "NON_NEGATIVE_VALUE", config.rocMin),
+        period("adxPeriod", config.adxPeriod),
+        number("adxMin", "NON_NEGATIVE_VALUE", config.adxMin),
+      ],
+      entryDsl: {
+        action: "LONG",
+        rules: [
+          op("GT", [
+            indicator("EMA", "close", { period: "emaFast" }),
+            indicator("EMA", "close", { period: "emaSlow" }),
+          ]),
+          op("GT", [indicator("ROC", "close", { period: "rocPeriod" }), paramNode("rocMin")]),
+          op("GT", [indicator("ADX", "ohlc", { period: "adxPeriod" }), paramNode("adxMin")]),
+        ],
+      },
+    };
+  }
+  if (family === "TREND_PULLBACK") {
+    return {
+      strategyFamily: "TREND_PULLBACK",
+      parameters: [
+        period("emaFast", config.emaFast),
+        period("emaSlow", config.emaSlow),
+        period("adxPeriod", config.adxPeriod),
+        number("adxMin", "NON_NEGATIVE_VALUE", config.adxMin),
         period("rsiPeriod", config.rsiPeriod),
         number("rsiRecover", "RSI_LEVEL", config.rsiRecover),
         number("rsiCeiling", "RSI_LEVEL", config.rsiCeiling),
@@ -212,6 +209,11 @@ function familyCore(family, config) {
       entryDsl: {
         action: "LONG",
         rules: [
+          op("GT", [
+            indicator("EMA", "close", { period: "emaFast" }),
+            indicator("EMA", "close", { period: "emaSlow" }),
+          ]),
+          op("GT", [indicator("ADX", "ohlc", { period: "adxPeriod" }), paramNode("adxMin")]),
           op("CROSSOVER", [indicator("RSI", "close", { period: "rsiPeriod" }), paramNode("rsiRecover")]),
           op("LT", [indicator("RSI", "close", { period: "rsiPeriod" }), paramNode("rsiCeiling")]),
         ],
