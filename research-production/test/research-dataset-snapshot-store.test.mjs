@@ -71,18 +71,19 @@ test('tampered persisted manifest is rejected instead of overwritten',async()=>{
   );
 });
 
-test('same evidence with different creation time does not overwrite same content address',async()=>{
+test('same evidence with different observation time reuses the existing immutable content address',async()=>{
   const root=await mkdtemp(join(tmpdir(),'research-dataset-store-'));
   const first=buildResearchDatasetSnapshotManifestV1({
     researchSha:SHA,createdAt:AT,market:'CRYPTO_FUTURES',evidence:futuresEvidence(),
   });
-  await persistResearchDatasetSnapshotManifestV1({stateRoot:root,manifest:first});
+  const created=await persistResearchDatasetSnapshotManifestV1({stateRoot:root,manifest:first});
   const later=buildResearchDatasetSnapshotManifestV1({
     researchSha:SHA,createdAt:'2026-09-20T01:00:00.000Z',market:'CRYPTO_FUTURES',evidence:futuresEvidence(),
   });
   assert.equal(later.datasetSnapshotHash,first.datasetSnapshotHash);
-  await assert.rejects(
-    persistResearchDatasetSnapshotManifestV1({stateRoot:root,manifest:later}),
-    /CONTENT_ADDRESS_CONFLICT/,
-  );
+  const reused=await persistResearchDatasetSnapshotManifestV1({stateRoot:root,manifest:later});
+  assert.equal(created.status,'created');
+  assert.equal(reused.status,'already_present');
+  assert.equal(reused.manifestDigest,first.manifestDigest);
+  assert.equal(reused.createdAt,AT);
 });
