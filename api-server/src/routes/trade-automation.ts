@@ -319,8 +319,10 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
     const policy = normalizeTradingPolicy(req.body);
-    const enablingAutomatic = policy.mode === 'automatic' || policy.automaticEnabled
-      || Object.values(policy.marketEnabled).some(Boolean) || Object.values(policy.exchangeEnabled).some(Boolean);
+    const enablingAutomatic = policy.mode === 'automatic'
+      && (policy.automaticEnabled
+        || Object.values(policy.marketEnabled).some(Boolean)
+        || Object.values(policy.exchangeEnabled).some(Boolean));
     if (enablingAutomatic && req.body?.confirmation?.acknowledged !== true) {
       return res.status(409).json({ ok: false, error: 'AUTOMATIC_TRADING_CONFIRMATION_REQUIRED' });
     }
