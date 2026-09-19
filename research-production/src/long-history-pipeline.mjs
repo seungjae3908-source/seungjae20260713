@@ -155,10 +155,10 @@ export async function runLongHistoryPipeline({
       dereference: false,
     });
 
-    for (const task of PROFILES['long-history']) {
-      const prior = results.at(-1);
-      if (prior && prior.status !== 'success') {
-        results.push(dependencyFailure(task, { ...prior, researchSha: preflight.researchSha }));
+    for (const [index, task] of PROFILES['long-history'].entries()) {
+      const seed = results[0];
+      if (index > 0 && seed?.status !== 'success') {
+        results.push(dependencyFailure(task, { ...seed, researchSha: preflight.researchSha }));
         continue;
       }
       const result = await runSharedTask({
