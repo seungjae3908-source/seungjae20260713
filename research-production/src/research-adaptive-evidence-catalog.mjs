@@ -21,10 +21,7 @@ function canonical(value){
   return Object.fromEntries(Object.keys(value).sort().map(k=>[k,canonical(value[k])]));
 }
 function digest(value){return createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');}
-
-function missing(){
-  return Object.freeze({status:'MISSING',evidenceId:null,observedAt:null});
-}
+function missing(){return Object.freeze({status:'MISSING',evidenceId:null,observedAt:null});}
 function present(evidenceId,observedAt){
   if(typeof evidenceId!=='string'||!SAFE_ID.test(evidenceId)) throw new TypeError('evidenceId invalid');
   if(typeof observedAt!=='string'||!ISO.test(observedAt)) throw new TypeError('observedAt invalid');
@@ -33,6 +30,7 @@ function present(evidenceId,observedAt){
 function profileMap(){
   return new Map(ADAPTIVE_MULTI_MARKET_PROFILES_V1.map(row=>[row.profileId,row]));
 }
+
 export function createAdaptiveEvidenceReceiptV1({
   profileId,
   requirement,
@@ -70,14 +68,23 @@ export function createAdaptiveEvidenceReceiptV1({
 }
 
 function normalizeManifests(input={}){
-  const byMarket={};
-  for(const [market,manifest] of Object.entries(input)){
-    assertResearchDatasetSnapshotManifestV1(manifest);
-    if(manifest.market!==market) throw new Error('DATASET_MANIFEST_MARKET_MISMATCH');
-    byMarket[market]=manifest;
+  if(!input||typeof input!=='object'||Array.isArray(input)){
+    throw new TypeError('datasetManifestsByProfile must be an object');
   }
-  return Object.freeze(byMarket);
+  const profiles=profileMap();
+  const byProfile={};
+  for(const [profileId,manifest] of Object.entries(input)){
+    const profile=profiles.get(profileId);
+    if(!profile) throw new Error('DATASET_MANIFEST_PROFILE_UNKNOWN');
+    assertResearchDatasetSnapshotManifestV1(manifest);
+    if(manifest.profileId!==profileId) throw new Error('DATASET_MANIFEST_PROFILE_MISMATCH');
+    if(manifest.market!==profile.market) throw new Error('DATASET_MANIFEST_MARKET_MISMATCH');
+    if(manifest.scope?.timeframe!==profile.timeframe) throw new Error('DATASET_MANIFEST_TIMEFRAME_MISMATCH');
+    byProfile[profileId]=manifest;
+  }
+  return Object.freeze(byProfile);
 }
+
 function normalizeReceipts(receipts=[],manifests){
   if(!Array.isArray(receipts)) throw new TypeError('receipts must be an array');
   const profiles=profileMap();
@@ -112,7 +119,7 @@ function normalizeReceipts(receipts=[],manifests){
     if(typeof raw.datasetSnapshotHash!=='string'||!HASH64.test(raw.datasetSnapshotHash)){
       throw new Error('ADAPTIVE_EVIDENCE_DATASET_HASH_INVALID');
     }
-    const manifest=manifests[profile.market];
+    const manifest=manifests[raw.profileId];
     if(!manifest||manifest.datasetSnapshotHash!==raw.datasetSnapshotHash){
       throw new Error('ADAPTIVE_EVIDENCE_DATASET_BINDING_MISMATCH');
     }
@@ -125,15 +132,15 @@ function normalizeReceipts(receipts=[],manifests){
 }
 
 export function buildAdaptiveEvidenceCatalogFromDataFactoryV1({
-  datasetManifestsByMarket={},
+  datasetManifestsByProfile={},
   receipts=[],
 }={}){
-  const manifests=normalizeManifests(datasetManifestsByMarket);
+  const manifests=normalizeManifests(datasetManifestsByProfile);
   const receiptMap=normalizeReceipts(receipts,manifests);
   const evidenceCatalog={};
 
   for(const profile of ADAPTIVE_MULTI_MARKET_PROFILES_V1){
-    const manifest=manifests[profile.market]??null;
+    const manifest=manifests[profile.profileId]??null;
     const supplied={};
     for(const requirement of profile.requiredEvidence){
       if(requirement==='IMMUTABLE_DATASET_IDENTITY'){
@@ -160,18 +167,23 @@ export function buildAdaptiveEvidenceCatalogFromDataFactoryV1({
     evidenceCatalog:Object.freeze(evidenceCatalog),
     readiness,
     datasetBindings:Object.freeze(Object.fromEntries(
-      Object.entries(manifests).map(([market,manifest])=>[
-        market,
+      Object.entries(manifests).map(([profileId,manifest])=>[
+        profileId,
         Object.freeze({
+          market:manifest.market,
+          timeframe:manifest.scope.timeframe,
           datasetSnapshotHash:manifest.datasetSnapshotHash,
           manifestDigest:manifest.manifestDigest,
           evidenceDigest:manifest.evidenceDigest,
+          primaryDatasetDigest:manifest.scope.primaryDatasetDigest,
         }),
       ]),
     )),
     safety:Object.freeze({
+      profileScopedDatasetRequired:true,
       missingEvidenceNumericSubstitutionAllowed:false,
       crossDatasetEvidenceAllowed:false,
+      crossProfileEvidenceAllowed:false,
       syntheticEvidenceAllowed:false,
       backfillCreditAllowed:false,
       executionAuthority:'NONE',
