@@ -230,7 +230,7 @@ test('status is authenticated, automatic execution defaults off, and never retur
       policy: { mode: string; automaticEnabled: boolean };
       actualOrderSubmittedByStatusRequest: boolean;
     };
-    assert.equal(body.policy.mode, 'automatic');
+    assert.equal(body.policy.mode, 'approval');
     assert.equal(body.policy.automaticEnabled, false);
     assert.equal(body.actualOrderSubmittedByStatusRequest, false);
   } finally { await close(authenticated.server); }
