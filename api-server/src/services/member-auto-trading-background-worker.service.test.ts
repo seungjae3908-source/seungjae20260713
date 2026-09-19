@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { DEFAULT_TRADING_POLICY, type TradingPolicy } from './trade-automation.types';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
-import type { PaperJournalRepository } from './paper-journal-sync.service';
+import type { PaperJournalRepository } from './paper-journal.types';
 import {
   MemberAutoTradingBackgroundWorker,
   startMemberAutoTradingBackgroundWorker,
