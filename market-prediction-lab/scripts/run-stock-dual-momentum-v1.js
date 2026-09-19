@@ -91,6 +91,33 @@ function summarize(curve,periods,years,fees){
   };
 }
 
+function simulateEqualWeightBuyHold(data,symbols,cost,startIndex){
+  const minStart=Math.max(MOM_LONG+2,TREND_MA+2);
+  const begin=Math.max(minStart,startIndex);
+  const weights=1/symbols.length;
+  let equity=Math.max(0,1-cost);
+  const units=Object.fromEntries(symbols.map(s=>[s,weights*equity/data.opens[s][begin]]));
+  const curve=[equity];
+  for(let i=begin;i<data.timestamps.length;i++){
+    const value=symbols.reduce((sum,s)=>sum+units[s]*data.opens[s][i],0);
+    curve.push(value);
+  }
+  const last=data.timestamps.length-1;
+  let finalEquity=symbols.reduce((sum,s)=>sum+units[s]*data.closes[s][last],0);
+  finalEquity=Math.max(0,finalEquity*(1-cost));
+  curve.push(finalEquity);
+  let peak=curve[0]??1,mdd=0;
+  for(const e of curve){peak=Math.max(peak,e);mdd=Math.max(mdd,(peak-e)/peak);}
+  const years=(data.timestamps.at(-1)-data.timestamps[begin])/(365.25*DAY);
+  const ret=finalEquity/(curve[0]??1)-1;
+  return {
+    return:ret,
+    annualizedReturn:years>0?Math.pow(Math.max(1e-9,1+ret),1/years)-1:null,
+    maxDrawdown:mdd,
+    entryExitFeesApprox:cost*2,
+  };
+}
+
 function simulate(data,symbols,cost,startIndex){
   const minStart=Math.max(MOM_LONG+2,TREND_MA+2);
   const begin=Math.max(minStart,startIndex);
@@ -143,6 +170,10 @@ try{
       stressFull:simulate(data,spec.symbols,spec.cost*1.5,0),
       recent30pct:simulate(data,spec.symbols,spec.cost,recentStart),
       recent30pctStress:simulate(data,spec.symbols,spec.cost*1.5,recentStart),
+      equalWeightBuyHold:{
+        full:simulateEqualWeightBuyHold(data,spec.symbols,spec.cost,0),
+        recent30pct:simulateEqualWeightBuyHold(data,spec.symbols,spec.cost,recentStart),
+      },
       provenance,
     };
   }
