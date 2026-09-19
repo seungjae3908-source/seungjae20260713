@@ -18,6 +18,10 @@ import {
 } from "./paper-simulated-adapters-v1.js";
 import { createFilePaperSchedulerLeaseStore } from "./paper-scheduler-driver-v1.js";
 import {
+  MEMBER_AUTO_TRADING_PAPER_HANDOFF_VERSION,
+  validateMemberAutoTradingPaperHandoff,
+} from "./member-auto-trading-paper-handoff-v1.js";
+import {
   authoritativeNaturalPaperAccountingSummary,
   createAuthoritativeNaturalPaperLedgerAdapter,
   createAuthoritativeNaturalPaperLedgerFromSnapshot,
@@ -261,6 +265,7 @@ function statePaths(root) {
     state: join(root, "state", "recurring-paper-loop.json"),
     runtimeStatus: join(root, "status", "runtime-status.json"),
     invocations: join(root, "status", "invocations.jsonl"),
+    memberAutoTradingHandoff: join(root, "handoff", "member-auto-trading-latest.json"),
     leases: join(root, "leases"),
     cycleReceipts: join(root, "cycles"),
     learning: join(root, "learning"),
@@ -547,6 +552,35 @@ export async function runPaperForwardScheduledInvocation({
     runCycle: boundRunCycle,
   });
 
+  let persistedMemberAutoTradingHandoff = null;
+  if (result?.memberAutoTradingHandoff != null) {
+    try {
+      persistedMemberAutoTradingHandoff = validateMemberAutoTradingPaperHandoff(
+        result.memberAutoTradingHandoff,
+        result.evidenceEvaluatedAtMs,
+      );
+    } catch {
+      persistedMemberAutoTradingHandoff = Object.freeze({
+        schemaVersion: MEMBER_AUTO_TRADING_PAPER_HANDOFF_VERSION,
+        status: "BLOCKED_DATA",
+        cycleId: result?.cycleId ?? "UNKNOWN_CYCLE",
+        evaluatedAtMs: finite(result?.evidenceEvaluatedAtMs) ? result.evidenceEvaluatedAtMs : nowMs,
+        entries: Object.freeze([]),
+        entryCount: 0,
+        blockers: Object.freeze(["HANDOFF_PERSISTENCE_VALIDATION_FAILED"]),
+        safety: Object.freeze({
+          executionAuthority: "NONE",
+          publicDataOnly: true,
+          simulatedOnly: true,
+          liveTrading: false,
+          privateTradingApiAllowed: false,
+          orderSubmitted: false,
+        }),
+      });
+    }
+    await atomicWriteJson(paths.memberAutoTradingHandoff, persistedMemberAutoTradingHandoff);
+  }
+
   const persistedStatus = await runtimeStatusStore.load();
   const newPublicEvidenceAccepted = triggerSource === "cron"
     && result?.status === "COMPLETED"
@@ -599,6 +633,14 @@ export async function runPaperForwardScheduledInvocation({
     orderCount: 0,
     liveTrading: false,
     orderAuthority: false,
+    memberAutoTradingHandoff: persistedMemberAutoTradingHandoff == null ? null : Object.freeze({
+      schemaVersion: persistedMemberAutoTradingHandoff.schemaVersion,
+      status: persistedMemberAutoTradingHandoff.status,
+      entryCount: persistedMemberAutoTradingHandoff.entryCount,
+      handoffDigest: persistedMemberAutoTradingHandoff.handoffDigest ?? null,
+      blockers: Object.freeze([...(persistedMemberAutoTradingHandoff.blockers ?? [])]),
+      executionAuthority: "NONE",
+    }),
   });
   await appendJsonl(paths.invocations, record);
   return Object.freeze({
@@ -615,6 +657,7 @@ export async function readPaperForwardScheduleSnapshot(rootDirectory) {
   const paths = statePaths(root);
   const state = await readJsonOrNull(paths.state);
   const runtimeStatus = await readJsonOrNull(paths.runtimeStatus);
+  const memberAutoTradingHandoff = await readJsonOrNull(paths.memberAutoTradingHandoff);
   let lastInvocation = null;
   try {
     const lines = (await readFile(paths.invocations, "utf8")).trim().split("\n").filter(Boolean);
@@ -634,6 +677,20 @@ export async function readPaperForwardScheduleSnapshot(rootDirectory) {
     authoritativeAccount,
     runtimeStatus,
     lastInvocation,
+    memberAutoTradingHandoff: memberAutoTradingHandoff == null ? null : Object.freeze({
+      schemaVersion: memberAutoTradingHandoff.schemaVersion ?? null,
+      status: memberAutoTradingHandoff.status ?? "INVALID",
+      cycleId: memberAutoTradingHandoff.cycleId ?? null,
+      evaluatedAtMs: memberAutoTradingHandoff.evaluatedAtMs ?? null,
+      entryCount: Number.isInteger(memberAutoTradingHandoff.entryCount)
+        ? memberAutoTradingHandoff.entryCount
+        : null,
+      handoffDigest: memberAutoTradingHandoff.handoffDigest ?? null,
+      blockers: Object.freeze(Array.isArray(memberAutoTradingHandoff.blockers)
+        ? memberAutoTradingHandoff.blockers
+        : []),
+      executionAuthority: "NONE",
+    }),
     privateRequestCount: 0,
     financialMutationCount: 0,
     liveTrading: false,
@@ -649,4 +706,5 @@ export const __paperForwardScheduleTestables = Object.freeze({
   activeRuntimeStatus,
   activationContract,
   bindRecurringPaperCycle,
+  statePaths,
 });
