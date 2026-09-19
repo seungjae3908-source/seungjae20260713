@@ -211,7 +211,7 @@ test('approval rechecks signal freshness and expires stale plans before order cr
   assert.equal(await repository.findOrderByPlan(USER_A, created.plan!.id), null);
 });
 
-test('persistent global emergency stop blocks plan creation and approval; automatic policy still cannot submit', async () => {
+test('persistent global emergency stop blocks new work and standing automatic resumes only after stop clears', async () => {
   const repository = new InMemoryTradingRepository();
   const service = new TradeAutomationService(repository);
   const approvalPolicy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
@@ -224,21 +224,39 @@ test('persistent global emergency stop blocks plan creation and approval; automa
   assert.equal(blocked.plan, null);
   assert.ok(blocked.decision.blockCodes.includes('EMERGENCY_STOP_ACTIVE'));
 
-  await repository.setGlobalEmergencyStop(false, USER_A);
   const automaticPolicy = normalizeTradingPolicy({
     ...DEFAULT_TRADING_POLICY,
-    mode: 'automatic', automaticEnabled: true,
+    mode: 'automatic',
+    automaticEnabled: true,
+    marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true },
     exchangeEnabled: { bitget: false, upbit: true, kiwoom: false },
     enabledAssets: { bitget: [], upbit: ['BTC'], kiwoom: [] },
     enabledStrategies: ['breakout-v1'],
   });
   await repository.savePolicy(USER_A, automaticPolicy);
-  const automaticPlan = await service.createPlan(USER_A, plan({ signalId: 'global-stop-automatic' }), automaticPolicy, false);
+
+  const whileStopped = await service.createPlan(
+    USER_A,
+    plan({ signalId: 'global-stop-automatic-blocked' }),
+    automaticPolicy,
+    false,
+  );
+  assert.equal(whileStopped.plan, null);
+  assert.ok(whileStopped.decision.blockCodes.includes('EMERGENCY_STOP_ACTIVE'));
+
+  await repository.setGlobalEmergencyStop(false, USER_A);
+  const automaticPlan = await service.createPlan(
+    USER_A,
+    plan({ signalId: 'global-stop-automatic-resumed' }),
+    automaticPolicy,
+    false,
+  );
   assert.equal(automaticPlan.plan?.state, 'APPROVAL_PENDING');
-  await assert.rejects(() => service.beginAutomaticPlan(USER_A, automaticPlan.plan!.id), /USER_APPROVAL_REQUIRED/);
+  const submitted = await service.beginAutomaticPlan(USER_A, automaticPlan.plan!.id);
+  assert.equal(submitted.state, 'SUBMITTED');
+  assert.ok(submitted.riskEnvelope);
   assert.equal(await repository.findOrderByPlan(USER_A, automaticPlan.plan!.id), null);
 });
-
 test('paper execution has zero outbound calls and restart scan marks an accepted order for reconciliation', async () => {
   const repository = new InMemoryTradingRepository();
   const automation = new TradeAutomationService(repository);
