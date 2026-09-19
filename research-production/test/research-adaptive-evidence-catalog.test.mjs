@@ -15,18 +15,34 @@ import {
 const SHA='a'.repeat(40);
 const H=(x)=>x.repeat(64);
 const AT='2026-09-20T00:00:00.000Z';
+const START=Date.UTC(2025,0,1);
+const END=Date.UTC(2025,11,31);
 
-function futuresManifest(){
+function futuresEvidence(){
+  return {
+    benchmarkDatasetDigest:H('1'),
+    fundingHistoryDigest:H('2'),fundingCoverage:0.95,
+    longShortHistoryDigest:H('3'),longShortCoverage:0.96,longShortTrainingParityConfirmed:true,
+    openInterestHistoryDigest:H('4'),openInterestCoverage:0.97,openInterestTrainingParityConfirmed:true,
+    sentimentHistoryDigest:H('5'),sentimentCoverage:0.93,sentimentTemporalParityConfirmed:true,
+  };
+}
+
+function futuresManifest(profileId='CRYPTO_FUTURES:SWING'){
+  const profile=ADAPTIVE_MULTI_MARKET_PROFILES_V1.find(row=>row.profileId===profileId);
   return buildResearchDatasetSnapshotManifestV1({
     researchSha:SHA,
     createdAt:AT,
-    market:'CRYPTO_FUTURES',
-    evidence:{
-      benchmarkDatasetDigest:H('1'),
-      fundingHistoryDigest:H('2'),fundingCoverage:0.95,
-      longShortHistoryDigest:H('3'),longShortCoverage:0.96,longShortTrainingParityConfirmed:true,
-      openInterestHistoryDigest:H('4'),openInterestCoverage:0.97,openInterestTrainingParityConfirmed:true,
-      sentimentHistoryDigest:H('5'),sentimentCoverage:0.93,sentimentTemporalParityConfirmed:true,
+    profileId,
+    evidence:futuresEvidence(),
+    scope:{
+      timeframe:profile.timeframe,
+      symbols:['BTCUSDT','ETHUSDT'],
+      startTime:START,
+      endTime:END,
+      primaryDatasetDigest:H(profile.horizon==='SHORT'?'6':profile.horizon==='SWING'?'7':'8'),
+      universeDigest:null,
+      publicDataOnly:true,
     },
   });
 }
@@ -42,28 +58,30 @@ function receipt(profileId,requirement,hash){
   });
 }
 
-test('Dataset Snapshot automatically owns immutable identity and public-source requirements only',()=>{
-  const manifest=futuresManifest();
+test('Dataset Snapshot owns identity/public-source only for its exact profile',()=>{
+  const swing=futuresManifest('CRYPTO_FUTURES:SWING');
   const result=buildAdaptiveEvidenceCatalogFromDataFactoryV1({
-    datasetManifestsByMarket:{CRYPTO_FUTURES:manifest},
+    datasetManifestsByProfile:{'CRYPTO_FUTURES:SWING':swing},
   });
-  const row=result.readiness.profiles.find(p=>p.profileId==='CRYPTO_FUTURES:SWING');
-  assert.equal(row.evidence.find(x=>x.requirement==='IMMUTABLE_DATASET_IDENTITY').status,'PRESENT');
-  assert.equal(row.evidence.find(x=>x.requirement==='PUBLIC_ONLY_SOURCE').status,'PRESENT');
-  assert.equal(row.evidence.find(x=>x.requirement==='MARK_PRICE').status,'MISSING');
-  assert.equal(row.status,'BLOCKED_MISSING_EVIDENCE');
-  assert.equal(result.safety.missingEvidenceNumericSubstitutionAllowed,false);
-  assert.equal(result.safety.crossDatasetEvidenceAllowed,false);
+  const swingRow=result.readiness.profiles.find(p=>p.profileId==='CRYPTO_FUTURES:SWING');
+  const shortRow=result.readiness.profiles.find(p=>p.profileId==='CRYPTO_FUTURES:SHORT');
+  assert.equal(swingRow.evidence.find(x=>x.requirement==='IMMUTABLE_DATASET_IDENTITY').status,'PRESENT');
+  assert.equal(swingRow.evidence.find(x=>x.requirement==='PUBLIC_ONLY_SOURCE').status,'PRESENT');
+  assert.equal(swingRow.evidence.find(x=>x.requirement==='MARK_PRICE').status,'MISSING');
+  assert.equal(shortRow.evidence.find(x=>x.requirement==='IMMUTABLE_DATASET_IDENTITY').status,'MISSING');
+  assert.equal(result.datasetBindings['CRYPTO_FUTURES:SWING'].timeframe,'1h');
+  assert.equal(result.safety.profileScopedDatasetRequired,true);
+  assert.equal(result.safety.crossProfileEvidenceAllowed,false);
 });
 
-test('profile becomes READY only when every non-Factory canonical receipt is same-snapshot bound',()=>{
+test('profile becomes READY only when every non-Factory receipt binds the exact profile snapshot',()=>{
   const manifest=futuresManifest();
   const profile=ADAPTIVE_MULTI_MARKET_PROFILES_V1.find(p=>p.profileId==='CRYPTO_FUTURES:SWING');
   const receipts=profile.requiredEvidence
     .filter(req=>!['IMMUTABLE_DATASET_IDENTITY','PUBLIC_ONLY_SOURCE'].includes(req))
     .map(req=>receipt(profile.profileId,req,manifest.datasetSnapshotHash));
   const result=buildAdaptiveEvidenceCatalogFromDataFactoryV1({
-    datasetManifestsByMarket:{CRYPTO_FUTURES:manifest},
+    datasetManifestsByProfile:{[profile.profileId]:manifest},
     receipts,
   });
   const row=result.readiness.profiles.find(p=>p.profileId===profile.profileId);
@@ -72,18 +90,30 @@ test('profile becomes READY only when every non-Factory canonical receipt is sam
   assert.equal(result.readiness.readyProfileCount,1);
 });
 
-test('cross-dataset receipt is rejected rather than credited',()=>{
-  const manifest=futuresManifest();
+test('cross-dataset and cross-profile receipts are rejected rather than credited',()=>{
+  const swing=futuresManifest('CRYPTO_FUTURES:SWING');
+  const short=futuresManifest('CRYPTO_FUTURES:SHORT');
   assert.throws(()=>buildAdaptiveEvidenceCatalogFromDataFactoryV1({
-    datasetManifestsByMarket:{CRYPTO_FUTURES:manifest},
+    datasetManifestsByProfile:{'CRYPTO_FUTURES:SWING':swing},
     receipts:[receipt('CRYPTO_FUTURES:SWING','MARK_PRICE',H('f'))],
   }),/DATASET_BINDING_MISMATCH/);
+  assert.throws(()=>buildAdaptiveEvidenceCatalogFromDataFactoryV1({
+    datasetManifestsByProfile:{'CRYPTO_FUTURES:SWING':swing},
+    receipts:[receipt('CRYPTO_FUTURES:SHORT','MARK_PRICE',short.datasetSnapshotHash)],
+  }),/DATASET_BINDING_MISMATCH/);
+});
+
+test('manifest map key must equal the immutable manifest profile',()=>{
+  const swing=futuresManifest('CRYPTO_FUTURES:SWING');
+  assert.throws(()=>buildAdaptiveEvidenceCatalogFromDataFactoryV1({
+    datasetManifestsByProfile:{'CRYPTO_FUTURES:SHORT':swing},
+  }),/PROFILE_MISMATCH/);
 });
 
 test('Factory-owned identity and public-source receipts cannot be overridden',()=>{
   const manifest=futuresManifest();
   assert.throws(()=>buildAdaptiveEvidenceCatalogFromDataFactoryV1({
-    datasetManifestsByMarket:{CRYPTO_FUTURES:manifest},
+    datasetManifestsByProfile:{'CRYPTO_FUTURES:SWING':manifest},
     receipts:[receipt('CRYPTO_FUTURES:SWING','IMMUTABLE_DATASET_IDENTITY',manifest.datasetSnapshotHash)],
   }),/FACTORY_OWNED/);
 });
@@ -92,7 +122,7 @@ test('duplicate and unknown canonical receipts fail closed',()=>{
   const manifest=futuresManifest();
   const row=receipt('CRYPTO_FUTURES:SWING','MARK_PRICE',manifest.datasetSnapshotHash);
   assert.throws(()=>buildAdaptiveEvidenceCatalogFromDataFactoryV1({
-    datasetManifestsByMarket:{CRYPTO_FUTURES:manifest},
+    datasetManifestsByProfile:{'CRYPTO_FUTURES:SWING':manifest},
     receipts:[row,row],
   }),/DUPLICATE_RECEIPT/);
   assert.throws(()=>createAdaptiveEvidenceReceiptV1({
@@ -109,7 +139,7 @@ test('receipt tampering is rejected before readiness credit',()=>{
   const manifest=futuresManifest();
   const row=receipt('CRYPTO_FUTURES:SWING','MARK_PRICE',manifest.datasetSnapshotHash);
   assert.throws(()=>buildAdaptiveEvidenceCatalogFromDataFactoryV1({
-    datasetManifestsByMarket:{CRYPTO_FUTURES:manifest},
+    datasetManifestsByProfile:{'CRYPTO_FUTURES:SWING':manifest},
     receipts:[{...row,evidenceId:'canonical:tampered'}],
   }),/RECEIPT_DIGEST_MISMATCH/);
 });
