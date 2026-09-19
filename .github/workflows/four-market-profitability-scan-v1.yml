@@ -6,6 +6,8 @@ on:
       - research/four-market-profitability-scan-v1-20260919
     paths:
       - market-prediction-lab/scripts/run-binance-funding-carry-v1.py
+      - market-prediction-lab/scripts/run-kr-frozen-breakout-fresh-v1.js
+      - market-prediction-lab/scripts/run-upbit-mom30-top2-v1.js
       - .github/workflows/four-market-profitability-scan-v1.yml
   workflow_dispatch:
 
@@ -186,3 +188,37 @@ jobs:
           path: market-prediction-lab/artifacts/binance-funding-carry-v1/
           if-no-files-found: error
           retention-days: 30
+
+  kr-fresh-breakout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Run frozen KR breakout on fresh symbols
+        run: node market-prediction-lab/scripts/run-kr-frozen-breakout-fresh-v1.js market-prediction-lab/artifacts/kr-frozen-breakout-fresh-v1/result.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: four-market-kr-fresh-breakout-${{ github.sha }}
+          path: market-prediction-lab/artifacts/kr-frozen-breakout-fresh-v1/result.json
+          if-no-files-found: error
+
+  upbit-mom30:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Run Upbit 30-day relative momentum
+        run: node market-prediction-lab/scripts/run-upbit-mom30-top2-v1.js market-prediction-lab/artifacts/upbit-mom30-top2-v1/result.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: four-market-upbit-mom30-${{ github.sha }}
+          path: market-prediction-lab/artifacts/upbit-mom30-top2-v1/result.json
+          if-no-files-found: error
