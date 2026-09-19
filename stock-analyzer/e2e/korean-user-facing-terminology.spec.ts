@@ -61,7 +61,7 @@ test('primary user-facing navigation uses Korean-first terminology without chang
   for (const canonicalStagingLabel of [
     "name: 'AI차트'",
     "openMenuRoute('technical', 'AI차트'",
-    "openMenuRoute('technical', '모의자동매매'",
+    "openMenuRoute('technical', '모의매매'",
     "['검색기', 'AI차트', '과거검증', '모의매매']",
   ]) {
     expect(stagingReadiness).toContain(canonicalStagingLabel);
@@ -70,7 +70,7 @@ test('primary user-facing navigation uses Korean-first terminology without chang
   for (const staleStagingLabel of [
     "name: 'AI 차트'",
     "openMenuRoute('technical', 'AI 차트'",
-    "openMenuRoute('technical', '모의매매'",
+    "openMenuRoute('technical', '모의자동매매'",
     "['AI 신호검색기', 'AI 차트', '백테스트', '모의자동매매']",
   ]) {
     expect(stagingReadiness).not.toContain(staleStagingLabel);
