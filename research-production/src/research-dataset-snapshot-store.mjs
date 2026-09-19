@@ -2,13 +2,16 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
+import {
+  ADAPTIVE_MULTI_MARKET_PROFILES_V1,
+} from '../../market-prediction-lab/src/adaptive-multi-market-tournament-orchestrator-v1.js';
 import { buildResearchDataReadinessV1 } from './research-data-factory.mjs';
 
 export const RESEARCH_DATASET_SNAPSHOT_MANIFEST_CONTRACT_V1 = 'research-dataset-snapshot-manifest/v1';
 
 const SHA40=/^[0-9a-f]{40}$/i;
 const HASH64=/^[0-9a-f]{64}$/i;
-const MARKET=/^(KR_STOCK|US_STOCK|CRYPTO_SPOT|CRYPTO_FUTURES)$/;
+const SYMBOL=/^[A-Z0-9._:-]{1,64}$/;
 
 function canonical(value){
   if(Array.isArray(value)) return value.map(canonical);
@@ -35,6 +38,44 @@ function safeRoot(value){
   }
   return root;
 }
+function profile(profileId){
+  const row=ADAPTIVE_MULTI_MARKET_PROFILES_V1.find(item=>item.profileId===profileId);
+  if(!row) throw new TypeError('profileId invalid');
+  return row;
+}
+function normalizeScope(raw,expectedProfile){
+  if(!raw||typeof raw!=='object'||Array.isArray(raw)) throw new TypeError('scope is required');
+  if(raw.timeframe!==expectedProfile.timeframe) throw new Error('DATASET_SCOPE_TIMEFRAME_MISMATCH');
+  if(!Array.isArray(raw.symbols)||raw.symbols.length===0||raw.symbols.length>5000){
+    throw new TypeError('scope.symbols invalid');
+  }
+  const symbols=[...new Set(raw.symbols.map(value=>String(value??'').trim().toUpperCase()))].sort();
+  if(symbols.length!==raw.symbols.length||symbols.some(value=>!SYMBOL.test(value))){
+    throw new TypeError('scope.symbols must be unique canonical symbols');
+  }
+  if(!Number.isSafeInteger(raw.startTime)||raw.startTime<=0
+    ||!Number.isSafeInteger(raw.endTime)||raw.endTime<=raw.startTime){
+    throw new TypeError('scope time range invalid');
+  }
+  if(typeof raw.primaryDatasetDigest!=='string'||!HASH64.test(raw.primaryDatasetDigest)){
+    throw new TypeError('scope.primaryDatasetDigest invalid');
+  }
+  const universeDigest=raw.universeDigest==null?null:String(raw.universeDigest).toLowerCase();
+  if(universeDigest!=null&&!HASH64.test(universeDigest)) throw new TypeError('scope.universeDigest invalid');
+  if(raw.publicDataOnly!==true) throw new Error('DATASET_SCOPE_PUBLIC_ONLY_REQUIRED');
+  return Object.freeze({
+    timeframe:expectedProfile.timeframe,
+    symbols:Object.freeze(symbols),
+    startTime:raw.startTime,
+    endTime:raw.endTime,
+    primaryDatasetDigest:String(raw.primaryDatasetDigest).toLowerCase(),
+    universeDigest,
+    publicDataOnly:true,
+  });
+}
+function snapshotIdentity({market,profileId,scope,marketReadinessHash,evidenceDigest}){
+  return digest({market,profileId,scope,marketReadinessHash,evidenceDigest});
+}
 function core(manifest){
   const row={...manifest};
   delete row.manifestDigest;
@@ -44,19 +85,21 @@ function core(manifest){
 export function buildResearchDatasetSnapshotManifestV1({
   researchSha,
   createdAt,
-  market,
+  profileId,
   evidence,
+  scope,
 }={}){
   const sha=exactSha(researchSha);
   const at=exactIso(createdAt);
-  if(typeof market!=='string'||!MARKET.test(market)) throw new TypeError('market invalid');
-  const readiness=buildResearchDataReadinessV1({market,evidence});
+  const adaptiveProfile=profile(profileId);
+  const readiness=buildResearchDataReadinessV1({market:adaptiveProfile.market,evidence});
   if(readiness.ready!==true||!HASH64.test(readiness.datasetSnapshotHash??'')){
     const error=new Error('DATASET_NOT_RESEARCH_READY');
     error.code='DATASET_NOT_RESEARCH_READY';
     error.blockers=readiness.blockers;
     throw error;
   }
+  const normalizedScope=normalizeScope(scope,adaptiveProfile);
   const featureManifest=readiness.features.map(row=>Object.freeze({
     feature:row.feature,
     state:row.state,
@@ -66,19 +109,30 @@ export function buildResearchDatasetSnapshotManifestV1({
     replayCreditAllowed:false,
     backfillCreditAllowed:false,
   }));
+  const datasetSnapshotHash=snapshotIdentity({
+    market:adaptiveProfile.market,
+    profileId:adaptiveProfile.profileId,
+    scope:normalizedScope,
+    marketReadinessHash:readiness.datasetSnapshotHash,
+    evidenceDigest:readiness.evidenceDigest,
+  });
   const body={
     schemaVersion:1,
     contract:RESEARCH_DATASET_SNAPSHOT_MANIFEST_CONTRACT_V1,
     researchSha:sha,
     createdAt:at,
-    market,
-    datasetSnapshotHash:readiness.datasetSnapshotHash,
+    market:adaptiveProfile.market,
+    profileId:adaptiveProfile.profileId,
+    datasetSnapshotHash,
+    marketReadinessHash:readiness.datasetSnapshotHash,
     evidenceDigest:readiness.evidenceDigest,
+    scope:normalizedScope,
     requiredFeatures:Object.freeze([...readiness.requiredFeatures]),
     features:Object.freeze(featureManifest),
     safety:Object.freeze({
       immutable:true,
       contentAddressed:true,
+      profileScoped:true,
       publicDataOnly:true,
       syntheticImputation:false,
       zeroImputation:false,
@@ -96,12 +150,14 @@ export function assertResearchDatasetSnapshotManifestV1(manifest){
     ||manifest.schemaVersion!==1
     ||!SHA40.test(manifest.researchSha??'')
     ||!HASH64.test(manifest.datasetSnapshotHash??'')
+    ||!HASH64.test(manifest.marketReadinessHash??'')
     ||!HASH64.test(manifest.evidenceDigest??'')
     ||!HASH64.test(manifest.manifestDigest??'')
     ||!Array.isArray(manifest.requiredFeatures)
     ||!Array.isArray(manifest.features)
     ||manifest.safety?.immutable!==true
     ||manifest.safety?.contentAddressed!==true
+    ||manifest.safety?.profileScoped!==true
     ||manifest.safety?.publicDataOnly!==true
     ||manifest.safety?.syntheticImputation!==false
     ||manifest.safety?.zeroImputation!==false
@@ -111,6 +167,18 @@ export function assertResearchDatasetSnapshotManifestV1(manifest){
     ||manifest.safety?.executionAuthority!=='NONE'){
     throw new TypeError('invalid dataset snapshot manifest');
   }
+  const adaptiveProfile=profile(manifest.profileId);
+  if(adaptiveProfile.market!==manifest.market) throw new Error('DATASET_MANIFEST_PROFILE_MARKET_MISMATCH');
+  const normalizedScope=normalizeScope(manifest.scope,adaptiveProfile);
+  if(JSON.stringify(normalizedScope)!==JSON.stringify(manifest.scope)) throw new Error('DATASET_SCOPE_NOT_CANONICAL');
+  const expectedSnapshot=snapshotIdentity({
+    market:manifest.market,
+    profileId:manifest.profileId,
+    scope:manifest.scope,
+    marketReadinessHash:manifest.marketReadinessHash,
+    evidenceDigest:manifest.evidenceDigest,
+  });
+  if(expectedSnapshot!==manifest.datasetSnapshotHash) throw new Error('DATASET_SNAPSHOT_HASH_MISMATCH');
   if(digest(core(manifest))!==manifest.manifestDigest) throw new Error('DATASET_MANIFEST_DIGEST_MISMATCH');
   return manifest;
 }
@@ -131,6 +199,7 @@ export async function persistResearchDatasetSnapshotManifestV1({
       status:'created',
       datasetSnapshotHash:manifest.datasetSnapshotHash,
       manifestDigest:manifest.manifestDigest,
+      profileId:manifest.profileId,
       executionAuthority:'NONE',
     });
   }catch(error){
@@ -139,11 +208,14 @@ export async function persistResearchDatasetSnapshotManifestV1({
     assertResearchDatasetSnapshotManifestV1(existing);
     const sameContent =
       existing.datasetSnapshotHash===manifest.datasetSnapshotHash
-      && existing.evidenceDigest===manifest.evidenceDigest
-      && existing.market===manifest.market
-      && JSON.stringify(existing.requiredFeatures)===JSON.stringify(manifest.requiredFeatures)
-      && JSON.stringify(existing.features)===JSON.stringify(manifest.features)
-      && JSON.stringify(existing.safety)===JSON.stringify(manifest.safety);
+      &&existing.evidenceDigest===manifest.evidenceDigest
+      &&existing.marketReadinessHash===manifest.marketReadinessHash
+      &&existing.market===manifest.market
+      &&existing.profileId===manifest.profileId
+      &&JSON.stringify(existing.scope)===JSON.stringify(manifest.scope)
+      &&JSON.stringify(existing.requiredFeatures)===JSON.stringify(manifest.requiredFeatures)
+      &&JSON.stringify(existing.features)===JSON.stringify(manifest.features)
+      &&JSON.stringify(existing.safety)===JSON.stringify(manifest.safety);
     if(!sameContent){
       throw new Error('DATASET_SNAPSHOT_CONTENT_ADDRESS_CONFLICT');
     }
@@ -151,6 +223,7 @@ export async function persistResearchDatasetSnapshotManifestV1({
       status:'already_present',
       datasetSnapshotHash:existing.datasetSnapshotHash,
       manifestDigest:existing.manifestDigest,
+      profileId:existing.profileId,
       createdByResearchSha:existing.researchSha,
       createdAt:existing.createdAt,
       executionAuthority:'NONE',
