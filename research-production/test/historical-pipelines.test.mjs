@@ -66,7 +66,8 @@ test('historical pipeline preserves intentional data_blocked instead of converti
   assert.equal(result.status, 'blocked_data');
   assert.equal(result.successCount, 2);
   assert.equal(result.blockedDataCount, 1);
-  assert.equal(result.failedCount, 0);
+  assert.equal(result.technicalFailureCount, 0);
+  assert.equal(result.failedCount, 1);
   const futures = result.results.find((row) => row.id === 'crypto-futures-derivatives');
   assert.equal(futures.status, 'blocked_data');
   assert.equal(futures.stepCount, 1);
