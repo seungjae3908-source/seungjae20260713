@@ -117,9 +117,28 @@ const candle: NormalizedCandle = { timestamp: Date.parse('2026-08-02T02:45:00Z')
   quoteVolume: 10_000_000, timeframe: '15m', symbol: 'BTCUSDT', market: 'crypto-futures', source: 'fixture', isClosed: true, isDelayed: false, updatedAt: NOW };
 
 export default function Phase6PaperTradingE2EPage() {
-  const errorMode = new URLSearchParams(window.location.search).get('mode') === 'error';
+  const params = new URLSearchParams(window.location.search);
+  const errorMode = params.get('mode') === 'error';
+  const futuresEnabled = params.get('futures') !== 'off';
+  const fixtureWindow = window as typeof window & { __phase6PaperFuturesLoaderCalls?: number };
+  fixtureWindow.__phase6PaperFuturesLoaderCalls = 0;
   const fixtureExecute = errorMode
     ? async () => { await new Promise((resolve) => setTimeout(resolve, 120)); throw new Error('모의거래 fixture 오류입니다.'); }
     : execute;
-  return <PaperTradingPanel compact execute={fixtureExecute} loadMarket={async () => snapshot} loadRules={async () => rules} loadCandle={async () => candle} />;
+  const loadMarket = async () => {
+    fixtureWindow.__phase6PaperFuturesLoaderCalls = (fixtureWindow.__phase6PaperFuturesLoaderCalls ?? 0) + 1;
+    return snapshot;
+  };
+  const loadRules = async () => {
+    fixtureWindow.__phase6PaperFuturesLoaderCalls = (fixtureWindow.__phase6PaperFuturesLoaderCalls ?? 0) + 1;
+    return rules;
+  };
+  return <PaperTradingPanel
+    compact
+    execute={fixtureExecute}
+    loadMarket={loadMarket}
+    loadRules={loadRules}
+    loadCandle={async () => candle}
+    futuresEnabled={futuresEnabled}
+  />;
 }
