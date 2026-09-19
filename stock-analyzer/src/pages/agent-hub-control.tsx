@@ -9,15 +9,64 @@ const SAFETY = [
   ['Force push', 'BLOCKED'],
 ] as const;
 
+const COMMAND_STATES = [
+  'QUEUED_FOR_COORDINATOR',
+  'NORMALIZED_FOR_COORDINATOR',
+  'READY_FOR_EXECUTOR',
+  'IN_PROGRESS',
+  'WAITING_APPROVAL',
+  'NEEDS_CONTEXT',
+  'BLOCKED',
+  'COMPLETED',
+  'FAILED_CLOSED',
+] as const;
+
+type CommandExecutionState = (typeof COMMAND_STATES)[number];
+type BridgeExecutionState = 'NOT_CONFIGURED' | 'CONFIGURED' | CommandExecutionState;
+
 type BridgeStatus = {
   configured: boolean;
-  executionState: 'NOT_CONFIGURED' | 'CONFIGURED' | 'QUEUED_FOR_COORDINATOR' | 'FAILED_CLOSED';
+  executionState: BridgeExecutionState;
   repository?: string;
   hubIssue?: number;
   authority?: string;
   commentId?: number | null;
   currentMainSha?: string;
+  latestEvidenceCommentId?: number | null;
+  evidenceWindowComplete?: boolean;
 };
+
+const TERMINAL_COMMAND_STATES = new Set<BridgeExecutionState>([
+  'BLOCKED',
+  'COMPLETED',
+  'FAILED_CLOSED',
+]);
+const SLOW_POLL_COMMAND_STATES = new Set<BridgeExecutionState>([
+  'WAITING_APPROVAL',
+  'NEEDS_CONTEXT',
+]);
+const ACTIVE_POLL_MS = 15_000;
+const WAITING_POLL_MS = 60_000;
+
+function isCommandExecutionState(value: unknown): value is CommandExecutionState {
+  return typeof value === 'string' && (COMMAND_STATES as readonly string[]).includes(value);
+}
+
+function commandStateMessage(state: BridgeExecutionState) {
+  switch (state) {
+    case 'QUEUED_FOR_COORDINATOR': return 'Canonical Agent Hub에 접수됐습니다. Coordinator 검증 대기 중입니다.';
+    case 'NORMALIZED_FOR_COORDINATOR': return '명령 identity와 안전 경계가 정규화됐습니다. 다음 작업 결정을 기다립니다.';
+    case 'READY_FOR_EXECUTOR': return '정책 검증을 통과해 안전한 실행 단계로 전달될 준비가 됐습니다.';
+    case 'IN_PROGRESS': return 'Agent Hub 작업이 진행 중입니다.';
+    case 'WAITING_APPROVAL': return '사람의 별도 승인이 필요한 경계에서 안전하게 대기 중이며 상태 추적은 계속됩니다.';
+    case 'NEEDS_CONTEXT': return '추가 GitHub 증거가 필요해 fail-closed 상태로 대기 중이며 상태 추적은 계속됩니다.';
+    case 'BLOCKED': return '현재 정책 또는 증거 조건 때문에 작업이 차단됐습니다.';
+    case 'COMPLETED': return 'Agent Hub 작업이 완료됐습니다.';
+    case 'FAILED_CLOSED': return '작업 또는 상태 확인이 fail-closed로 종료됐습니다.';
+    case 'NOT_CONFIGURED': return '서버 Agent Hub 연결이 아직 설정되지 않았습니다.';
+    default: return 'Agent Hub 연결이 준비됐습니다.';
+  }
+}
 
 function classifyCommand(value: string) {
   const normalized = value.trim().toLowerCase();
@@ -80,6 +129,48 @@ export default function AgentHubControlPage() {
     return () => { cancelled = true; };
   }, [auth.isAdmin, token]);
 
+  useEffect(() => {
+    const commentId = status.commentId;
+    if (!auth.isAdmin || !token || !commentId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const refresh = async () => {
+      try {
+        const payload = await bridgeRequest(`/commands/${commentId}/status`, token);
+        if (cancelled) return;
+        const executionState = isCommandExecutionState(payload.executionState)
+          ? payload.executionState
+          : 'FAILED_CLOSED';
+        setStatus((previous) => ({
+          ...previous,
+          configured: true,
+          executionState,
+          latestEvidenceCommentId: typeof payload.latestEvidenceCommentId === 'number'
+            ? payload.latestEvidenceCommentId
+            : previous.latestEvidenceCommentId,
+          evidenceWindowComplete: payload.evidenceWindowComplete === true,
+        }));
+        setMessage(commandStateMessage(executionState));
+        if (!TERMINAL_COMMAND_STATES.has(executionState)) {
+          const pollDelay = SLOW_POLL_COMMAND_STATES.has(executionState) ? WAITING_POLL_MS : ACTIVE_POLL_MS;
+          timer = setTimeout(() => void refresh(), pollDelay);
+        }
+      } catch (cause) {
+        if (cancelled) return;
+        const reason = cause instanceof Error ? cause.message : 'UNKNOWN';
+        setMessage(`상태 확인 실패: ${reason}. 이전 확인 상태는 유지합니다.`);
+        timer = setTimeout(() => void refresh(), WAITING_POLL_MS);
+      }
+    };
+
+    void refresh();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [auth.isAdmin, status.commentId, token]);
+
   async function submitCommand() {
     const value = command.trim();
     if (!value || busy || !token) return;
@@ -96,8 +187,10 @@ export default function AgentHubControlPage() {
         executionState: 'QUEUED_FOR_COORDINATOR',
         commentId: typeof payload.commentId === 'number' ? payload.commentId : null,
         currentMainSha: typeof payload.currentMainSha === 'string' ? payload.currentMainSha : undefined,
+        latestEvidenceCommentId: null,
+        evidenceWindowComplete: false,
       }));
-      setMessage('Canonical Agent Hub에 명령을 전달했습니다. Coordinator 검증 대기 상태입니다.');
+      setMessage(commandStateMessage('QUEUED_FOR_COORDINATOR'));
     } catch (cause) {
       const reason = cause instanceof Error ? cause.message : 'UNKNOWN';
       const notConfigured = reason === 'AGENT_HUB_BRIDGE_NOT_CONFIGURED';
@@ -106,7 +199,7 @@ export default function AgentHubControlPage() {
         configured: notConfigured ? false : previous.configured,
         executionState: notConfigured ? 'NOT_CONFIGURED' : 'FAILED_CLOSED',
       }));
-      setMessage(notConfigured ? '서버 Agent Hub 연결이 아직 설정되지 않았습니다.' : `명령 전달 실패: ${reason}`);
+      setMessage(notConfigured ? commandStateMessage('NOT_CONFIGURED') : `명령 전달 실패: ${reason}`);
     } finally {
       setBusy(false);
     }
@@ -156,7 +249,11 @@ export default function AgentHubControlPage() {
             {busy ? '전달 중...' : 'Agent Hub에 명령 보내기'}
           </button>
           {message ? <p className="mt-3 rounded-xl border border-border bg-muted/30 p-3 text-sm" role="status">{message}</p> : null}
-          {status.commentId ? <p className="mt-2 text-xs text-muted-foreground">Hub comment #{status.commentId}</p> : null}
+          {status.commentId ? <p className="mt-2 text-xs text-muted-foreground">Hub command #{status.commentId}</p> : null}
+          {status.latestEvidenceCommentId ? <p className="mt-1 text-xs text-muted-foreground">Latest evidence #{status.latestEvidenceCommentId}</p> : null}
+          {status.evidenceWindowComplete === false && status.commentId ? (
+            <p className="mt-1 text-[11px] text-muted-foreground">최근 Hub evidence 범위에서 상태를 추적 중입니다.</p>
+          ) : null}
           <p className="mt-2 break-all text-[11px] text-muted-foreground">
             {status.repository ? `${status.repository} · Issue #${status.hubIssue ?? '?'}` : 'Canonical Hub 상태 확인 중'}
             {status.currentMainSha ? ` · main ${status.currentMainSha.slice(0, 12)}` : ''}
