@@ -103,6 +103,7 @@ const groups = {
     path.join(root, 'src/services/three-provider-predeploy-readiness.service.test.ts'),
     path.join(root, 'src/services/trade-approval-paper-guard.service.test.ts'),
     path.join(root, 'src/services/trade-automation-integration.test.ts'),
+    path.join(root, 'src/services/member-auto-trading-fx.service.test.ts'),
     path.join(root, 'src/services/trade-market-intelligence-integration.test.ts'),
     path.join(root, 'src/services/trade-automation-repository-compatibility.test.ts'),
     path.join(root, 'src/services/trade-kill-switch.test.ts'),
