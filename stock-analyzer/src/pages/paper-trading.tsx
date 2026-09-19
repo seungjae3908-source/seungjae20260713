@@ -12,8 +12,9 @@ import { createUserPaperStorage } from '@/lib/paper-journal-sync-storage';
 export default function PaperTradingPage() {
   const search = useSearch();
   const imported = useMemo(() => readBacktestPaperHandoff(search), [search]);
-  const { user, profile } = useAuth();
+  const { user, profile, can } = useAuth();
   const userId = user?.id ?? profile?.id ?? '';
+  const canAccessFutures = can('canAccessFutures');
   const [showJournalTools, setShowJournalTools] = useState(false);
   const [paperRevision, setPaperRevision] = useState(0);
   const paperStorage = useMemo(
@@ -26,7 +27,7 @@ export default function PaperTradingPage() {
   }
 
   return <div className="relative h-full min-h-0 overflow-hidden pb-[calc(5rem+env(safe-area-inset-bottom))]" data-testid="paper-trading-shell">
-    {imported.active ? <BacktestPaperCandidatePreview imported={imported} /> : <PaperTradingPanel key={`${userId}:${paperRevision}`} storage={paperStorage} />}
+    {imported.active ? <BacktestPaperCandidatePreview imported={imported} /> : <PaperTradingPanel key={`${userId}:${paperRevision}`} storage={paperStorage} futuresEnabled={canAccessFutures} />}
     <button
       type="button"
       className="absolute right-4 top-4 z-30 inline-flex min-h-10 items-center gap-2 rounded-xl border border-border bg-background/95 px-3 text-sm font-bold shadow-lg backdrop-blur"
