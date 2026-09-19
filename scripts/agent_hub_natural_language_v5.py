@@ -14,6 +14,8 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Sequence
 
+from agent_hub_policy import PolicyError, branch_allowed, load_workers
+
 GATEWAY_VERSION = "agent-hub-natural-language-v5.0"
 MAX_COMMAND_CHARS = 1200
 MAX_GOAL_CHARS = 800
@@ -28,15 +30,18 @@ RESUME_TERMS = (
     "resume",
     "resume task",
 )
-TERMINAL_STATUSES = {"completed", "expired", "superseded", "no_action"}
+TERMINAL_STATUSES = {"completed", "blocked", "cancelled", "expired", "superseded", "no_action"}
 
+# Task-domain intent must win over wording that merely names the Agent/Codex
+# persona. Otherwise commands such as "Codex Agent로 AI차트 오류 잡아" are
+# routed to the read-only agent-hub-validation worker instead of ai-chart.
 ROUTES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("agent-hub-validation", ("agent hub", "agent-hub", "코덱", "codex", "에이전트 허브")),
     ("ai-chart", ("ai차트", "ai 차트", "chart", "차트", "캔들", "indicator", "지표")),
     ("ai-signal-scanner", ("scanner", "스캐너", "신호검색", "신호 검색", "검색기", "signal")),
     ("test-runner", ("playwright", "browser", "브라우저", "e2e", "ui 테스트", "테스트")),
     ("security-inspector", ("security", "보안", "secret", "시크릿", "privacy", "개인정보")),
     ("market-information-room", ("news", "뉴스", "공시", "market info", "시장정보", "종목검색")),
+    ("agent-hub-validation", ("agent hub", "agent-hub", "코덱", "codex", "에이전트 허브")),
 )
 
 
@@ -63,17 +68,33 @@ def _valid_repository(repository: str) -> str:
     return value
 
 
+def _canonical_workers() -> Mapping[str, Any]:
+    """Load authoritative worker policy; never invent aliases or branch scope."""
+    try:
+        workers = load_workers()
+    except PolicyError as exc:
+        raise NaturalLanguageGatewayError("canonical worker registry is unavailable") from exc
+    if not workers:
+        raise NaturalLanguageGatewayError("canonical worker registry is empty")
+    return workers
+
+
 def _is_resume(command: str) -> bool:
     folded = command.casefold()
     return any(term.casefold() in folded for term in RESUME_TERMS)
 
 
-def _route_hint(command: str) -> str:
+def _route_hint(command: str, allowed_workers: frozenset[str]) -> str:
     folded = command.casefold()
     for worker, keywords in ROUTES:
         if any(keyword.casefold() in folded for keyword in keywords):
+            if worker not in allowed_workers:
+                raise NaturalLanguageGatewayError(f"route worker is not registered: {worker}")
             return worker
-    return "integration-planner"
+    fallback = "integration-planner"
+    if fallback not in allowed_workers:
+        raise NaturalLanguageGatewayError(f"route worker is not registered: {fallback}")
+    return fallback
 
 
 def _action_hint(command: str) -> str:
@@ -85,10 +106,23 @@ def _action_hint(command: str) -> str:
     return "inspect_repository"
 
 
-def _normalized_task(task: Mapping[str, Any]) -> dict[str, Any]:
+def _normalized_task(task: Mapping[str, Any], workers: Mapping[str, Any]) -> dict[str, Any]:
     task_id = _clean(task.get("task_id"), 180)
     if not task_id or task_id == "none":
         raise NaturalLanguageGatewayError("resumable task requires task_id")
+    status = _clean(task.get("status"), 40)
+    if not status or status == "none":
+        raise NaturalLanguageGatewayError("resumable task requires explicit status")
+    worker = _clean(task.get("worker"), 80)
+    if not worker or worker == "none":
+        raise NaturalLanguageGatewayError("resumable task requires registered worker")
+    if worker not in workers:
+        raise NaturalLanguageGatewayError(f"resumable task worker is not registered: {worker}")
+    branch = _clean(task.get("branch"), 180)
+    if not branch or branch == "none":
+        raise NaturalLanguageGatewayError("resumable task requires allowed branch")
+    if not branch_allowed(branch, workers[worker]):
+        raise NaturalLanguageGatewayError(f"resumable task branch is not allowed for worker: {branch}")
     remaining_raw = task.get("remaining_steps") or []
     if isinstance(remaining_raw, str):
         try:
@@ -102,12 +136,12 @@ def _normalized_task(task: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "task_id": task_id,
         "goal": _clean(task.get("goal"), MAX_GOAL_CHARS) or "none",
-        "status": _clean(task.get("status"), 40) or "none",
+        "status": status,
         "current_step": _clean(task.get("current_step"), 400) or "none",
         "first_zero": _clean(task.get("first_zero"), 400) or "none",
         "remaining_steps": [_clean(item, 400) for item in parsed[:24] if _clean(item, 400)],
-        "worker": _clean(task.get("worker"), 80) or "integration-planner",
-        "branch": _clean(task.get("branch"), 180) or "none",
+        "worker": worker,
+        "branch": branch,
         "head_sha": _clean(task.get("head_sha"), 80) or "none",
         "pr_number": _clean(task.get("pr_number"), 24) or "none",
         "ci_run_id": _clean(task.get("ci_run_id"), 32) or "none",
@@ -148,11 +182,13 @@ def compile_natural_language_command(
     if len(resumable_tasks) > MAX_TASKS:
         raise NaturalLanguageGatewayError("too many resumable tasks")
 
+    workers = _canonical_workers()
+    allowed_workers = frozenset(workers)
     explicit_task = _clean(task_id, 180) if task_id else ""
     resume = _is_resume(normalized) or bool(explicit_task)
     selected: dict[str, Any] | None = None
 
-    tasks = [_normalized_task(item) for item in resumable_tasks]
+    tasks = [_normalized_task(item, workers) for item in resumable_tasks]
     if resume:
         candidates = [item for item in tasks if item["status"] not in TERMINAL_STATUSES]
         if explicit_task:
@@ -173,7 +209,7 @@ def compile_natural_language_command(
         resume_context = selected
     else:
         goal = normalized[:MAX_GOAL_CHARS]
-        worker_hint = _route_hint(normalized)
+        worker_hint = _route_hint(normalized, allowed_workers)
         selected_task_id = "none"
         mode = "new"
         resume_context = {}
@@ -208,6 +244,24 @@ def self_test() -> int:
     assert chart.action_hint == "inspect_repository"
     assert chart.authority == "NONE"
 
+    mixed_chart = compile_natural_language_command(
+        command="Codex Agent로 AI차트 오류 잡아",
+        repository="owner/repo",
+    )
+    assert mixed_chart.worker_hint == "ai-chart"
+
+    mixed_market = compile_natural_language_command(
+        command="Codex로 뉴스 공시 오류 봐",
+        repository="owner/repo",
+    )
+    assert mixed_market.worker_hint == "market-information-room"
+
+    hub_self = compile_natural_language_command(
+        command="Agent Hub 자체 검증",
+        repository="owner/repo",
+    )
+    assert hub_self.worker_hint == "agent-hub-validation"
+
     state = {
         "task_id": "profitability-proof",
         "goal": "finish genuine OOS evidence loop",
@@ -234,6 +288,79 @@ def self_test() -> int:
     assert "[USER_INTENT]" in format_intent_for_coordinator(resumed)
     assert "[HUB_COMMAND]" not in format_intent_for_coordinator(resumed)
 
+    for terminal_status in ("blocked", "cancelled"):
+        terminal_task = {**state, "status": terminal_status}
+        try:
+            compile_natural_language_command(
+                command="이어서 해",
+                repository="owner/repo",
+                resumable_tasks=[terminal_task],
+            )
+        except NaturalLanguageGatewayError as exc:
+            assert "no resumable task" in str(exc)
+        else:
+            raise AssertionError(f"{terminal_status} task was resumed")
+
+    missing_status = {key: value for key, value in state.items() if key != "status"}
+    try:
+        compile_natural_language_command(
+            command="이어서 해",
+            repository="owner/repo",
+            resumable_tasks=[missing_status],
+        )
+    except NaturalLanguageGatewayError as exc:
+        assert "requires explicit status" in str(exc)
+    else:
+        raise AssertionError("statusless resumable task was treated as active")
+
+    rogue = {**state, "worker": "rogue-worker"}
+    try:
+        compile_natural_language_command(
+            command="이어서 해",
+            repository="owner/repo",
+            resumable_tasks=[rogue],
+        )
+    except NaturalLanguageGatewayError as exc:
+        assert "not registered" in str(exc)
+    else:
+        raise AssertionError("unregistered resumable worker was accepted")
+
+    missing_worker = {key: value for key, value in state.items() if key != "worker"}
+    try:
+        compile_natural_language_command(
+            command="이어서 해",
+            repository="owner/repo",
+            resumable_tasks=[missing_worker],
+        )
+    except NaturalLanguageGatewayError as exc:
+        assert "requires registered worker" in str(exc)
+    else:
+        raise AssertionError("missing resumable worker was silently defaulted")
+
+    missing_branch = {**state, "branch": ""}
+    try:
+        compile_natural_language_command(
+            command="이어서 해",
+            repository="owner/repo",
+            resumable_tasks=[missing_branch],
+        )
+    except NaturalLanguageGatewayError as exc:
+        assert "requires allowed branch" in str(exc)
+    else:
+        raise AssertionError("missing resumable branch was accepted")
+
+    disallowed_branch = {**state, "branch": "main"}
+    try:
+        compile_natural_language_command(
+            command="이어서 해",
+            repository="owner/repo",
+            resumable_tasks=[disallowed_branch],
+        )
+    except NaturalLanguageGatewayError as exc:
+        assert "branch is not allowed" in str(exc)
+    else:
+        raise AssertionError("disallowed resumable branch was accepted")
+
     ambiguous = [state, {**state, "task_id": "ai-chart"}]
     try:
         compile_natural_language_command(command="계속 진행", repository="owner/repo", resumable_tasks=ambiguous)
@@ -252,8 +379,18 @@ def self_test() -> int:
     print(json.dumps({
         "natural_language_gateway_v5": "pass",
         "new_command_route": chart.worker_hint,
+        "mixed_agent_chart_route": mixed_chart.worker_hint,
+        "mixed_agent_market_route": mixed_market.worker_hint,
+        "agent_hub_self_route": hub_self.worker_hint,
         "resume_task": resumed.task_id,
         "authority": resumed.authority,
+        "blocked_resume_fail_closed": True,
+        "cancelled_resume_fail_closed": True,
+        "missing_resume_status_fail_closed": True,
+        "unknown_resume_worker_fail_closed": True,
+        "missing_resume_worker_fail_closed": True,
+        "missing_resume_branch_fail_closed": True,
+        "disallowed_resume_branch_fail_closed": True,
         "ambiguous_resume_fail_closed": True,
     }, ensure_ascii=False, sort_keys=True))
     return 0
