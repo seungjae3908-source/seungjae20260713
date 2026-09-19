@@ -1757,16 +1757,18 @@ test.describe('real staging release readiness', () => {
     expect(response.status()).toBe(403);
   });
 
-  test('associate: basic stock, spot, and scanner access allowed; futures, AI-risk, portfolio, and APIs denied', async ({ page }) => {
+  test('associate: basic stock, spot, scanner, paper/auto trading, and portfolio allowed; futures, AI-risk, and privileged APIs denied', async ({ page }) => {
     await login(page, accounts.associate.loginName, accounts.associate.password);
     await expectMembership(page, /준회원/);
     await expectHealthyRoute(page, '/');
     await expectHealthyRoute(page, '/stock-info?asset=stock&market=KR&ticker=005930');
     await expectHealthyRoute(page, '/stock-info?asset=coin&coinMarket=spot&symbol=BTC');
+    await expectHealthyRoute(page, '/paper-trading');
+    await expectHealthyRoute(page, '/auto-trading');
+    await expectHealthyRoute(page, '/portfolio');
 
     await expectDeniedRoute(page, '/stock-info?asset=coin&coinMarket=futures&symbol=BTCUSDT');
     await expectScannerAfterFutures(page);
-    await expectDeniedRoute(page, '/portfolio');
 
     const response = await requestWithBrowserSession(
       page,
