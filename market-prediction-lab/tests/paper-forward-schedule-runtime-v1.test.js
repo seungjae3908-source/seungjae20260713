@@ -76,6 +76,66 @@ test("natural cron invocation persists one canonical 4h cycle and active status"
     assert.equal(snapshot.stateCycleCount, 1);
     assert.equal(snapshot.lastInvocation.status, "COMPLETED");
     assert.equal(snapshot.lastInvocation.privateRequestCount, 0);
+    assert.equal(snapshot.memberAutoTradingHandoff.status, "READY");
+    assert.equal(snapshot.memberAutoTradingHandoff.entryCount, 0);
+    assert.match(snapshot.memberAutoTradingHandoff.handoffDigest, /^[0-9a-f]{64}$/u);
+
+    const persistedHandoff = JSON.parse(await readFile(
+      join(root, "handoff", "member-auto-trading-latest.json"),
+      "utf8",
+    ));
+    assert.equal(persistedHandoff.status, "READY");
+    assert.equal(persistedHandoff.entryCount, 0);
+    assert.equal(persistedHandoff.safety.executionAuthority, "NONE");
+    assert.equal(persistedHandoff.safety.liveTrading, false);
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
+});
+
+test("blocked new cycle overwrites the prior READY member automation handoff", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "paper-forward-handoff-blocked-"));
+  const root = join(sandbox, "persistent-state");
+  let nowMs = 1_800_000_000_000;
+  try {
+    const first = await runPaperForwardScheduledInvocation({
+      rootDirectory: root,
+      researchCodeSha: RESEARCH_SHA,
+      triggerSource: "cron",
+      activationAtMs: nowMs - 10_000,
+      ownerId: "test-owner:handoff-ready",
+      clock: () => nowMs,
+      publicEvidenceProvider: readyProvider(nowMs),
+    });
+    assert.equal(first.memberAutoTradingHandoff.status, "READY");
+
+    nowMs += 4 * 60 * 60 * 1000;
+    const blocked = await runPaperForwardScheduledInvocation({
+      rootDirectory: root,
+      researchCodeSha: RESEARCH_SHA,
+      triggerSource: "cron",
+      activationAtMs: nowMs - 10_000,
+      ownerId: "test-owner:handoff-blocked",
+      clock: () => nowMs,
+      publicEvidenceProvider: readyProvider(nowMs),
+      runRuntime: async () => ({
+        status: "BLOCKED_DATA",
+        cycleId: "blocked-cycle-2",
+        mutationCount: 0,
+        evidenceEvaluatedAtMs: nowMs,
+        blockers: [{ market: "US_STOCK", reason: "PROVIDER_FAILED" }],
+      }),
+    });
+    assert.equal(blocked.status, "BLOCKED_DATA");
+    assert.equal(blocked.invocation.memberAutoTradingHandoff.status, "BLOCKED_DATA");
+
+    const latest = JSON.parse(await readFile(
+      join(root, "handoff", "member-auto-trading-latest.json"),
+      "utf8",
+    ));
+    assert.equal(latest.status, "BLOCKED_DATA");
+    assert.equal(latest.entryCount, 0);
+    assert.deepEqual(latest.blockers, ["HANDOFF_SOURCE_CYCLE_BLOCKED"]);
   } finally {
     await rm(sandbox, { recursive: true, force: true });
   }
