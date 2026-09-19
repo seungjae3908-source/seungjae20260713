@@ -256,7 +256,7 @@ def fetch_funding(symbol,start_ms,end_ms):
     try:
         while cur<end_ms:
             q=urllib.parse.urlencode({"symbol":symbol,"startTime":cur,"endTime":end_ms,"limit":1000})
-            data=json.loads(get_bytes("https://fapi.binance.com/fapi/v1/fundingRate?"+q,timeout=30,retries=2))
+            data=json.loads(get_bytes("https://fapi.binance.com/fapi/v1/fundingRate?"+q,timeout=5,retries=0))
             if not data:break
             for x in data:rows.append((int(x["fundingTime"]),float(x["fundingRate"])))
             nxt=int(data[-1]["fundingTime"])+1
