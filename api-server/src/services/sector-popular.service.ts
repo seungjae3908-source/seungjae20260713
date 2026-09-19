@@ -39,6 +39,20 @@ export interface SectorPopularResult {
   updatedAt: string;
 }
 
+export type SectorPopularAvailabilityErrorCode =
+  | 'SECTOR_POPULAR_PROVIDER_EVIDENCE_UNAVAILABLE'
+  | 'SECTOR_POPULAR_CLASSIFICATION_EVIDENCE_UNAVAILABLE';
+
+export class SectorPopularAvailabilityError extends Error {
+  constructor(
+    readonly code: SectorPopularAvailabilityErrorCode,
+    readonly market: 'KR' | 'US',
+  ) {
+    super(`${code}:${market}`);
+    this.name = 'SectorPopularAvailabilityError';
+  }
+}
+
 const SORT_BASIS = '거래대금 기준';
 const MAX_PER_SECTOR = 10;
 const US_ENRICH_CAP = 40; // 과도한 야후 호출 방지: movers 상위 N만 sector 보강
@@ -176,7 +190,10 @@ async function loadUniverse(market: 'KR' | 'US'): Promise<QuoteRow[]> {
   }
   const unique = uniqueRows(rows);
   if (unique.length === 0) {
-    throw new Error(`SECTOR_POPULAR_PROVIDER_EVIDENCE_UNAVAILABLE:${market}`);
+    throw new SectorPopularAvailabilityError(
+      'SECTOR_POPULAR_PROVIDER_EVIDENCE_UNAVAILABLE',
+      market,
+    );
   }
   return unique;
 }
@@ -186,7 +203,10 @@ function requireSectorEvidence(
   sectors: SectorPopularGroup[],
 ): SectorPopularGroup[] {
   if (!sectors.some((sector) => sector.rows.length > 0)) {
-    throw new Error(`SECTOR_POPULAR_CLASSIFICATION_EVIDENCE_UNAVAILABLE:${market}`);
+    throw new SectorPopularAvailabilityError(
+      'SECTOR_POPULAR_CLASSIFICATION_EVIDENCE_UNAVAILABLE',
+      market,
+    );
   }
   return sectors;
 }
