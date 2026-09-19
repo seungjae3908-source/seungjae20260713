@@ -47,6 +47,63 @@ jobs:
           grep -q 'ProtectSystem=strict' research-production/deploy/research-production@.service
           grep -q '^CapabilityBoundingSet=$' research-production/deploy/research-production@.service
           ! grep -q 'MemoryDenyWriteExecute=true' research-production/deploy/research-production@.service
+          grep -q 'NoNewPrivileges=true' research-production/deploy/research-production-temporal-evidence.service
+          grep -q 'ProtectSystem=strict' research-production/deploy/research-production-temporal-evidence.service
+          grep -q '^CapabilityBoundingSet=
+      - name: Validate systemd service and schedules
+        shell: bash
+        run: |
+          set -euo pipefail
+          systemd-analyze verify \
+            research-production/deploy/research-production@.service \
+            research-production/deploy/research-production-fast-historical.timer \
+            research-production/deploy/research-production-long-history.timer \
+            research-production/deploy/research-production-forward.timer \
+            research-production/deploy/research-production-temporal-evidence.service \
+            research-production/deploy/research-production-temporal-evidence.timer
+          systemd-analyze calendar '*-*-* 02:17:00 UTC' >/dev/null
+          systemd-analyze calendar 'Sun *-*-* 03:43:00 UTC' >/dev/null
+          systemd-analyze calendar '*-*-* *:11:00 UTC' >/dev/null
+          systemd-analyze calendar '*-*-* *:05:00 UTC' >/dev/null
+          node --check research-production/bin/collect-temporal-evidence.mjs
+
+      - name: Unit tests
+        working-directory: research-production
+        run: npm test
+
+      - name: Exact-SHA preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$RUNNER_TEMP/investment-research-production" \
+            --research-sha "$GITHUB_SHA"
+
+      - name: Build deterministic full plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$RUNNER_TEMP/investment-research-production" \
+            --research-sha "$GITHUB_SHA" > "$RUNNER_TEMP/research-plan.json"
+          node -e "const p=require(process.argv[1]); if(p.taskCount !== 10 || p.stepCount !== 21 || p.liveTrading || p.privateApi || p.orderAuthority) process.exit(1)" "$RUNNER_TEMP/research-plan.json"
+
+      - name: Safety summary
+        run: |
+          printf '%s\n' \
+            'researchProductionValidation=PASS' \
+            'productionDeploy=false' \
+            'liveTrading=false' \
+            'privateApi=false' \
+            'orderAuthority=false' \
+            'existingPaperShadowStateMutation=false' \
+            'temporalEvidenceTimerActivated=false' \
+            'temporalHistoricalCurrentValueBackfill=false'
+ research-production/deploy/research-production-temporal-evidence.service
+          ! grep -Eq 'PRIVATE|ORDER|LIVE_TRADING=true' research-production/deploy/research-production-temporal-evidence.service
 
       - name: Validate systemd service and schedules
         shell: bash
