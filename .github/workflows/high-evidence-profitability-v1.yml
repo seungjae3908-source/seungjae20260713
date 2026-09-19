@@ -1,0 +1,64 @@
+name: High Evidence Profitability V1
+
+on:
+  push:
+    branches:
+      - research/four-market-profitability-scan-v1-20260919
+    paths:
+      - market-prediction-lab/scripts/run-upbit-mom30-top2-v1.js
+      - market-prediction-lab/scripts/run-stock-dual-momentum-v1.js
+      - market-prediction-lab/scripts/run-us-pullback-fresh-v1.js
+      - .github/workflows/high-evidence-profitability-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  upbit-momentum:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Run lookahead-free Upbit momentum
+        run: node market-prediction-lab/scripts/run-upbit-mom30-top2-v1.js market-prediction-lab/artifacts/upbit-mom30-top2-v1/result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: high-evidence-upbit-momentum-${{ github.sha }}
+          path: market-prediction-lab/artifacts/upbit-mom30-top2-v1/result.json
+          if-no-files-found: error
+
+  stock-dual-momentum:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Run fixed KR/US 12-1 dual momentum
+        run: node market-prediction-lab/scripts/run-stock-dual-momentum-v1.js market-prediction-lab/artifacts/stock-dual-momentum-v1/result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: high-evidence-stock-dual-momentum-${{ github.sha }}
+          path: market-prediction-lab/artifacts/stock-dual-momentum-v1/result.json
+          if-no-files-found: error
+
+  us-pullback-fresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Run frozen US pullback on fresh symbols
+        run: node market-prediction-lab/scripts/run-us-pullback-fresh-v1.js market-prediction-lab/artifacts/us-pullback-fresh-v1/result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: high-evidence-us-pullback-fresh-${{ github.sha }}
+          path: market-prediction-lab/artifacts/us-pullback-fresh-v1/result.json
+          if-no-files-found: error
