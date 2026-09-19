@@ -5,6 +5,7 @@ const MARKETS=new Set(['KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES']);
 const FEATURE=/^[A-Za-z][A-Za-z0-9._-]{0,79}$/;
 const SYMBOL=/^[A-Za-z0-9._:-]{1,64}$/;
 const SOURCE=/^[A-Za-z0-9._:/-]{1,160}$/;
+const SHA40=/^[0-9a-f]{40}$/i;
 
 function canonical(value){
   if(Array.isArray(value)) return value.map(canonical);
@@ -26,6 +27,8 @@ function normalizeObservation(raw){
   if(typeof raw.feature!=='string'||!FEATURE.test(raw.feature)) throw new TypeError('observation feature invalid');
   if(typeof raw.symbol!=='string'||!SYMBOL.test(raw.symbol)) throw new TypeError('observation symbol invalid');
   if(typeof raw.source!=='string'||!SOURCE.test(raw.source)) throw new TypeError('observation source invalid');
+  const producerSha=String(raw.producerSha??'').toLowerCase();
+  if(!SHA40.test(producerSha)) throw new TypeError('observation producerSha invalid');
   const observedAt=timestamp(raw.observedAt,'observedAt');
   const availableAt=timestamp(raw.availableAt??observedAt,'availableAt');
   const recordedAt=timestamp(raw.recordedAt??availableAt,'recordedAt');
@@ -43,6 +46,7 @@ function normalizeObservation(raw){
     availableAt,
     recordedAt,
     source:raw.source,
+    producerSha,
     publicDataOnly:raw.publicDataOnly===true,
     synthetic:false,
     replay:false,
@@ -52,7 +56,7 @@ function normalizeObservation(raw){
   return Object.freeze({
     ...core,
     observationId:`temporal:sha256:${digest({
-      market:core.market,symbol:core.symbol,feature:core.feature,observedAt:core.observedAt,source:core.source,
+      market:core.market,symbol:core.symbol,feature:core.feature,observedAt:core.observedAt,source:core.source,producerSha:core.producerSha,
     })}`,
     evidenceDigest:digest(core),
   });
@@ -63,8 +67,8 @@ function sortRows(rows){
 }
 
 export function createTemporalEvidenceLedgerV1({researchSha}={}){
-  if(typeof researchSha!=='string'||!/^[0-9a-f]{40}$/i.test(researchSha)) throw new TypeError('researchSha must be exact SHA');
-  const core={schemaVersion:TEMPORAL_EVIDENCE_LEDGER_SCHEMA,researchSha:researchSha.toLowerCase(),observations:[]};
+  if(typeof researchSha!=='string'||!SHA40.test(researchSha)) throw new TypeError('researchSha must be exact SHA');
+  const core={schemaVersion:TEMPORAL_EVIDENCE_LEDGER_SCHEMA,createdByResearchSha:researchSha.toLowerCase(),observations:[]};
   return Object.freeze({...core,ledgerDigest:digest(core),executionAuthority:'NONE'});
 }
 
@@ -77,7 +81,7 @@ export function appendTemporalEvidenceV1(ledger,rawObservation){
     return ledger;
   }
   const observations=Object.freeze(sortRows([...ledger.observations,observation]));
-  const core={schemaVersion:TEMPORAL_EVIDENCE_LEDGER_SCHEMA,researchSha:ledger.researchSha,observations};
+  const core={schemaVersion:TEMPORAL_EVIDENCE_LEDGER_SCHEMA,createdByResearchSha:ledger.createdByResearchSha,observations};
   return Object.freeze({...core,ledgerDigest:digest(core),executionAuthority:'NONE'});
 }
 
@@ -116,6 +120,7 @@ export function readTemporalFeatureAtV1(ledger,{market,symbol,feature,anchorTime
     availableAt:row.availableAt,
     ageMs:anchorTimestamp-row.observedAt,
     source:row.source,
+    producerSha:row.producerSha,
   }):Object.freeze({status:'MISSING',value:null,observationId:null,evidenceDigest:null,observedAt:null,availableAt:null,ageMs:null,source:null});
 }
 
