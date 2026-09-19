@@ -11,11 +11,18 @@ const TOP_N=3;
 
 const SPECS=Object.freeze({
   KR_STOCK:Object.freeze({
+    marketCode:"KR_STOCK",
     symbols:Object.freeze(["005490","012330","066570","028260","032830","086790","017670","096770","009150","018260","030200","034730","010950","011170","024110","033780"]),
     cost:0.0025,
   }),
   US_STOCK:Object.freeze({
+    marketCode:"US_STOCK",
     symbols:Object.freeze(["AAPL","MSFT","NVDA","AMZN","GOOGL","META","JPM","XOM","AVGO","COST","WMT","V","MA","HD","UNH","PG"]),
+    cost:0.0015,
+  }),
+  US_SECTOR_ETF:Object.freeze({
+    marketCode:"US_STOCK",
+    symbols:Object.freeze(["XLB","XLE","XLF","XLI","XLK","XLP","XLU","XLV","XLY"]),
     cost:0.0015,
   }),
 });
@@ -122,7 +129,7 @@ try{
   for(const [market,spec] of Object.entries(SPECS)){
     const histories={},provenance={};
     for(const symbol of spec.symbols){
-      const h=await collectYahooStockHistory({market,symbol,startTime,endTime});
+      const h=await collectYahooStockHistory({market:spec.marketCode,symbol,startTime,endTime});
       histories[symbol]=h;
       provenance[symbol]={providerSymbol:h.providerSymbol,candleCount:h.candleCount,firstTimestamp:h.firstTimestamp,lastTimestamp:h.lastTimestamp,source:h.source};
     }
@@ -150,7 +157,7 @@ try{
       execution:"signal from completed daily close i-1; trade at next session open i",
       longOnly:true,
     },
-    limitations:["fixed current large-cap universe creates survivorship bias","Yahoo public chart data","no point-in-time index membership"],
+    limitations:["individual-stock universes use current large caps and therefore have survivorship bias","US_SECTOR_ETF uses long-lived sector ETFs to reduce constituent survivorship bias","Yahoo public chart data","no point-in-time index membership for individual-stock universes"],
     markets,
   };
   await save(output,report);console.log(JSON.stringify(report,null,2));
