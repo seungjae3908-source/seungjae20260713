@@ -137,14 +137,22 @@ export async function persistResearchDatasetSnapshotManifestV1({
     if(error?.code!=='EEXIST') throw error;
     const existing=JSON.parse(await readFile(path,'utf8'));
     assertResearchDatasetSnapshotManifestV1(existing);
-    if(existing.manifestDigest!==manifest.manifestDigest
-      ||existing.datasetSnapshotHash!==manifest.datasetSnapshotHash){
+    const sameContent =
+      existing.datasetSnapshotHash===manifest.datasetSnapshotHash
+      && existing.evidenceDigest===manifest.evidenceDigest
+      && existing.market===manifest.market
+      && JSON.stringify(existing.requiredFeatures)===JSON.stringify(manifest.requiredFeatures)
+      && JSON.stringify(existing.features)===JSON.stringify(manifest.features)
+      && JSON.stringify(existing.safety)===JSON.stringify(manifest.safety);
+    if(!sameContent){
       throw new Error('DATASET_SNAPSHOT_CONTENT_ADDRESS_CONFLICT');
     }
     return Object.freeze({
       status:'already_present',
       datasetSnapshotHash:existing.datasetSnapshotHash,
       manifestDigest:existing.manifestDigest,
+      createdByResearchSha:existing.researchSha,
+      createdAt:existing.createdAt,
       executionAuthority:'NONE',
     });
   }
