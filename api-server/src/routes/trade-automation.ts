@@ -423,7 +423,7 @@ router.post('/emergency-stop', async (req: AuthenticatedRequest, res) => {
     const { userId, repository } = context(req);
     const current = await repository.getPolicy(userId);
     const policy = normalizeTradingPolicy({
-      ...current, automaticEnabled: false, emergencyStopped: true, mode: 'automatic',
+      ...current, automaticEnabled: false, emergencyStopped: true, mode: 'approval',
       marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false },
       exchangeEnabled: { bitget: false, upbit: false, kiwoom: false },
     });
