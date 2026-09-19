@@ -17,3 +17,15 @@ test('AI Chart Bitget public context uses the authenticated app API transport', 
   expect(authFetch).toContain("headers.set('Authorization', `Bearer ${token}`)");
   expect(authFetch).toContain('fetch(input, { ...init, headers, signal: controller.signal });');
 });
+
+test('futures market status panel does not prefetch protected data without futures capability', () => {
+  const panel = source('src/components/futures-market-status-panel.tsx');
+
+  expect(panel).toContain("import { useAuth } from '@/lib/auth';");
+  expect(panel).toContain("const canAccessFutures = !auth.loading && auth.isApproved && auth.can('canAccessFutures');");
+  expect(panel).toContain('enabled: canAccessFutures,');
+  expect(panel).toContain('enabled: canAccessFutures && Boolean(symbol),');
+  expect(panel).toContain('if (!canAccessFutures) return;');
+  expect(panel).toContain('if (!canAccessFutures) return null;');
+});
+
