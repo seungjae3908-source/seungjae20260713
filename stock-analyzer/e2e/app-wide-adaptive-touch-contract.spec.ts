@@ -17,8 +17,8 @@ test('shared structural layouts use the 1200px desktop contract', async () => {
   expect(technical).toContain('ADAPTIVE_VIEWPORT_BREAKPOINTS.desktopMin');
   expect(tabs).toContain('min-[1200px]:grid');
   expect(tabs).not.toContain('lg:grid lg:overflow-visible');
-  expect(autoTrading).toContain('min-[1200px]:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]');
-  expect(autoTrading).not.toContain('lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]');
+  expect(autoTrading).toContain('min-[1200px]:grid-cols-[minmax(0,1.05fr)_minmax(380px,0.95fr)]');
+  expect(autoTrading).not.toContain('lg:grid-cols-[minmax(0,1.05fr)_minmax(380px,0.95fr)]');
 });
 
 test('alert filters preserve the app-wide 44px touch target and 12px minimum caption contract', async () => {
