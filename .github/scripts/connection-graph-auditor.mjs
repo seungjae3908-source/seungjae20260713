@@ -101,7 +101,7 @@ export const DEFAULT_EDGES = [
       {
         id: 'scanner-paper-server-route',
         paths: ['api-server/src/routes/scanner-paper-plans.ts'],
-        allOf: ["router.post('/scanner/plans'", 'requireAdmin', 'registry.resolveScanner('],
+        allOf: ["router.post('/scanner/plans'", "requireCapability('canAccessPaperTrading')", 'registry.resolveScanner('],
       },
     ],
   },
@@ -152,7 +152,7 @@ export const DEFAULT_EDGES = [
       {
         id: 'scanner-paper-server-route',
         paths: ['api-server/src/routes/scanner-paper-plans.ts'],
-        allOf: ["router.post('/scanner/plans'", 'requireAdmin', 'registry.resolveScanner('],
+        allOf: ["router.post('/scanner/plans'", "requireCapability('canAccessPaperTrading')", 'registry.resolveScanner('],
       },
       {
         id: 'scanner-paper-bridge-contract',
@@ -181,7 +181,7 @@ export const DEFAULT_EDGES = [
       {
         id: 'scanner-paper-server-route',
         paths: ['api-server/src/routes/scanner-paper-plans.ts'],
-        allOf: ["router.post('/scanner/plans'", 'requireAdmin', 'registry.resolveScanner('],
+        allOf: ["router.post('/scanner/plans'", "requireCapability('canAccessPaperTrading')", 'registry.resolveScanner('],
       },
       {
         id: 'futures-paper-admission-contract',
