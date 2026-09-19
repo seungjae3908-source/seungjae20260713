@@ -13,8 +13,6 @@ on:
       - 'api-server/scripts/verify-forward-recommendation-observer-runtime-contract.mjs'
   schedule:
     - cron: '7,22,37,52 * * * *'
-  issue_comment:
-    types: [created]
 
 permissions:
   actions: read
@@ -22,7 +20,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: fast-profitability-v1-preactivation-forward-watch
+  group: fast-profitability-v1-preactivation-forward-watch-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'schedule' }}
   cancel-in-progress: false
 
 jobs:
@@ -86,12 +84,7 @@ jobs:
 
   watch:
     name: Watch current-main canonical candidate
-    if: >-
-      github.event_name == 'schedule' ||
-      (github.event_name == 'issue_comment' &&
-       github.event.issue.number == 1102 &&
-       github.event.comment.author_association == 'OWNER' &&
-       startsWith(github.event.comment.body, '/run-fast-profitability-preactivation-watch '))
+    if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -111,25 +104,7 @@ jobs:
             });
             const mainSha = String(main.data.commit.sha).toLowerCase();
 
-            let target = mainSha;
-            if (context.eventName === 'issue_comment') {
-              const body = String(context.payload.comment?.body ?? '').trim();
-              const match = /^\/run-fast-profitability-preactivation-watch ([0-9a-f]{40})$/.exec(body);
-              if (!match) {
-                core.setFailed('Exact command required: /run-fast-profitability-preactivation-watch <40-character-current-main-sha>');
-                return;
-              }
-              if (context.payload.comment?.author_association !== 'OWNER') {
-                core.setFailed('Repository OWNER command required.');
-                return;
-              }
-              target = match[1];
-              if (target !== mainSha) {
-                core.setFailed('Watch target is not exact current main: target=' + target + ' main=' + mainSha);
-                return;
-              }
-            }
-
+            const target = mainSha;
             core.setOutput('target_sha', target);
 
             const combined = await github.rest.repos.getCombinedStatusForRef({
@@ -203,6 +178,7 @@ jobs:
                 run_id: artifact.workflow_run.id,
               });
               if (run.data.conclusion !== 'success') continue;
+              if (run.data.event !== 'schedule') continue;
               if (!String(run.data.path).endsWith('fast-profitability-v1-preactivation-watch.yml')) continue;
               core.setOutput('found', 'true');
               core.setOutput('name', artifact.name);
