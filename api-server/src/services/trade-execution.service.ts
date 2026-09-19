@@ -329,16 +329,18 @@ export class TradeExecutionService {
     }
 
     const connection = await this.repository.getConnection(userId, plan.exchange);
-    if (!connection?.configured || !connection.encryptedCredentials) {
-      return this.automation.transition(order, 'REJECTED', 'EXCHANGE_CONNECTION_NOT_CONFIGURED', {
-        errorCode: 'EXCHANGE_CONNECTION_NOT_CONFIGURED',
-        orderSubmissionAttempted: false,
-      });
-    }
-    if (connection.accountMode !== plan.accountMode) {
-      return this.automation.transition(order, 'REJECTED', 'ACCOUNT_MODE_MISMATCH', {
-        errorCode: 'ACCOUNT_MODE_MISMATCH', orderSubmissionAttempted: false,
-      });
+    if (plan.accountMode !== 'paper') {
+      if (!connection?.configured || !connection.encryptedCredentials) {
+        return this.automation.transition(order, 'REJECTED', 'EXCHANGE_CONNECTION_NOT_CONFIGURED', {
+          errorCode: 'EXCHANGE_CONNECTION_NOT_CONFIGURED',
+          orderSubmissionAttempted: false,
+        });
+      }
+      if (connection.accountMode !== plan.accountMode) {
+        return this.automation.transition(order, 'REJECTED', 'ACCOUNT_MODE_MISMATCH', {
+          errorCode: 'ACCOUNT_MODE_MISMATCH', orderSubmissionAttempted: false,
+        });
+      }
     }
 
     const mockKiwoom = plan.exchange === 'kiwoom' && plan.accountMode === 'mock';
@@ -377,6 +379,7 @@ export class TradeExecutionService {
         });
       }
 
+      if (!connection?.encryptedCredentials) throw new Error('EXCHANGE_CONNECTION_NOT_CONFIGURED');
       const credentials = decryptTradingCredentials(connection.encryptedCredentials);
       const result = plan.exchange === 'bitget'
         ? await this.executeBitget(userId, plan, order, credentials as BitgetCredentials)
