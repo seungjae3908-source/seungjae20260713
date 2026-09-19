@@ -7,7 +7,7 @@ export type MemberAutoTradingFxMarket =
   | 'CRYPTO_SPOT'
   | 'CRYPTO_FUTURES';
 
-type YahooQuoteLoader = (ticker: string) => Promise<Record<string, unknown>>;
+type YahooQuoteLoader = (ticker: string) => Promise<{ price?: unknown; currentPrice?: unknown; regularMarketPrice?: unknown; updatedAt?: unknown }>;
 type PublicJsonLoader = typeof fetchPublicMarketJson;
 
 export type MemberAutoTradingFxQuote = Readonly<{
