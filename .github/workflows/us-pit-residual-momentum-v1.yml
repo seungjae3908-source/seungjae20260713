@@ -1,0 +1,67 @@
+name: US PIT Residual Momentum V1
+
+on:
+  push:
+    branches:
+      - research/cross-venue-funding-v1-20260919
+    paths:
+      - market-prediction-lab/scripts/run-us-pit-residual-momentum-v1.py
+      - .github/workflows/us-pit-residual-momentum-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Syntax check
+        run: python -m py_compile market-prediction-lab/scripts/run-us-pit-residual-momentum-v1.py
+
+      - name: Run PIT residual momentum validation
+        run: python market-prediction-lab/scripts/run-us-pit-residual-momentum-v1.py
+
+      - name: Verify safety and research contract
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path("market-prediction-lab/artifacts/us-pit-residual-momentum-v1/result.json").read_text())
+          assert d["research_only"] is True
+          assert d["public_data_only"] is True
+          assert d["live_trading"] is False
+          assert d["private_api"] is False
+          assert d["orders_submitted"] == 0
+          assert d["lookahead_free"] is True
+          assert d["symbol_count"] >= 500
+          assert set(d["variants"]) == {
+            "TOTAL_12_1",
+            "MARKET_RESIDUAL_12_1",
+            "VOL_ADJ_MARKET_RESIDUAL_12_1",
+          }
+          assert all(
+            d["results"][v]["base"]["avg_coverage"] >= 0.70
+            for v in d["variants"]
+          )
+          print("US_PIT_RESIDUAL_CONTRACT=PASS")
+          PY
+
+      - name: Publish summary
+        run: cat market-prediction-lab/artifacts/us-pit-residual-momentum-v1/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: us-pit-residual-momentum-v1-${{ github.sha }}
+          path: market-prediction-lab/artifacts/us-pit-residual-momentum-v1/
+          if-no-files-found: error
+          retention-days: 30
