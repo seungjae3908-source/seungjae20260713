@@ -33,7 +33,8 @@ function executionState(overview: ResearchCenterOverview) {
 }
 
 function dataFactoryState(overview: ResearchCenterOverview) {
-  const temporal = overview.dataFactory.temporalCryptoFutures;
+  const temporal = overview.dataFactory?.temporalCryptoFutures;
+  if (!temporal) return { value: '미수집', detail: 'Temporal evidence 수집 기록이 없습니다.', tone: 'neutral' as const };
   if (!temporal.present) return { value: '미수집', detail: 'Temporal evidence 수집 기록이 없습니다.', tone: 'neutral' as const };
   if (temporal.status === 'INVALID') return { value: '확인 필요', detail: 'Temporal evidence 무결성 검증에 실패했습니다.', tone: 'warning' as const };
   if (temporal.status === 'partial_failure') {
