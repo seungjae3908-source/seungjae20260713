@@ -142,6 +142,7 @@ function candidateBlockers(candidate, market, evaluatedAtMs) {
     ["order", candidate?.order],
     ["quote", candidate?.quote],
     ["learningSnapshot", signal?.learningSnapshot],
+    ["riskEvidence", candidate?.riskEvidence],
   ]) {
     const unsafe = unsafeEvidenceKey(value);
     if (unsafe) blockers.push(`HANDOFF_PRIVATE_FIELD_FORBIDDEN:${name}.${unsafe}`);
@@ -189,13 +190,7 @@ function safeEntry(candidate, cycleId, evaluatedAtMs) {
       learningSnapshot: clone(signal.learningSnapshot ?? null),
     },
     profitEvidence: clone(candidate.profitEvidence),
-    riskEvidence: candidate.riskEvidence == null
-      ? null
-      : {
-        status: candidate.riskEvidence.status ?? null,
-        evaluatedAtMs: candidate.riskEvidence.evaluatedAtMs ?? null,
-        simulatedOnly: candidate.riskEvidence.simulatedOnly === true,
-      },
+    riskEvidence: clone(candidate.riskEvidence ?? null),
     execution: {
       marketAdapterIdentity: clone(candidate.execution?.marketAdapterIdentity ?? null),
       costPolicy: clone(candidate.execution?.costPolicy ?? null),
@@ -366,6 +361,15 @@ function validatePersistedEntry(entry, cycleId, evaluatedAtMs, nowMs) {
     throw new Error("HANDOFF_ENTRY_STRATEGY_IDENTITY_INVALID");
   }
 
+  const risk = entry.riskEvidence;
+  if (risk?.status !== "APPROVED" || risk?.source !== "TRADING_RISK_ENGINE"
+    || risk?.allowed !== true || risk?.simulatedOnly !== true || risk?.executionAuthority !== "NONE"
+    || !Array.isArray(risk?.blockCodes) || risk.blockCodes.length !== 0
+    || !positive(risk?.recommendedQuantity) || !finite(risk?.evaluatedAtMs)
+    || risk.evaluatedAtMs > nowMs) {
+    throw new Error("HANDOFF_RISK_EVIDENCE_INVALID");
+  }
+
   const evidence = entry.execution?.dataEvidence;
   if (evidence?.publicOnly !== true || evidence?.dataQuality !== "READY"
     || !nonEmpty(evidence?.provenance) || !finite(evidence?.asOfMs) || !positive(evidence?.maxAgeMs)) {
@@ -379,6 +383,7 @@ function validatePersistedEntry(entry, cycleId, evaluatedAtMs, nowMs) {
     ["simulatedOrder", entry.simulatedOrder],
     ["publicQuote", entry.publicQuote],
     ["learningSnapshot", entry.signal?.learningSnapshot],
+    ["riskEvidence", entry.riskEvidence],
   ]) {
     const unsafe = unsafeEvidenceKey(value);
     if (unsafe) throw new Error(`HANDOFF_PRIVATE_FIELD_FORBIDDEN:${name}.${unsafe}`);
