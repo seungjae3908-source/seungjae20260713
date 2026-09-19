@@ -222,3 +222,54 @@ jobs:
           name: four-market-upbit-mom30-${{ github.sha }}
           path: market-prediction-lab/artifacts/upbit-mom30-top2-v1/result.json
           if-no-files-found: error
+
+
+  kr-frozen-breakout-fresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Run frozen KR breakout on fresh symbols
+        run: node market-prediction-lab/scripts/run-kr-frozen-breakout-fresh-v1.js market-prediction-lab/artifacts/kr-frozen-breakout-fresh-v1/result.json
+      - name: Verify research-only contract
+        run: |
+          node - <<'NODE'
+          const fs=require("fs");
+          const d=JSON.parse(fs.readFileSync("market-prediction-lab/artifacts/kr-frozen-breakout-fresh-v1/result.json","utf8"));
+          if(d.researchOnly!==true || d.liveExecutionAllowed!==false || d.actualOrders!==0 || d.sourceParamsFrozenBeforeFreshSymbols!==true) process.exit(1);
+          console.log("KR_FRESH_CONTRACT=PASS");
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: four-market-kr-frozen-fresh-${{ github.sha }}
+          path: market-prediction-lab/artifacts/kr-frozen-breakout-fresh-v1/
+          if-no-files-found: error
+          retention-days: 30
+
+  upbit-momentum30:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Run Upbit 30-day relative momentum
+        run: node market-prediction-lab/scripts/run-upbit-mom30-top2-v1.js market-prediction-lab/artifacts/upbit-mom30-top2-v1/result.json
+      - name: Verify research-only contract
+        run: |
+          node - <<'NODE'
+          const fs=require("fs");
+          const d=JSON.parse(fs.readFileSync("market-prediction-lab/artifacts/upbit-mom30-top2-v1/result.json","utf8"));
+          if(d.researchOnly!==true || d.liveExecutionAllowed!==false || d.actualOrders!==0 || d.formula.lookbackDays!==30 || d.formula.rebalanceDays!==7) process.exit(1);
+          console.log("UPBIT_MOMENTUM_CONTRACT=PASS");
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: four-market-upbit-momentum30-${{ github.sha }}
+          path: market-prediction-lab/artifacts/upbit-mom30-top2-v1/
+          if-no-files-found: error
+          retention-days: 30
