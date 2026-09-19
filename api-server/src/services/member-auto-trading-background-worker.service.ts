@@ -428,11 +428,11 @@ function buildPlanInput(
       signalState: 'entry_ready',
       signalObservedAt,
     },
-    entryPrice: quote.executionPrice,
-    entryZoneLow: Math.min(quote.bid, quote.ask),
-    entryZoneHigh: Math.max(quote.bid, quote.ask),
-    estimatedSlippagePercent: slippage,
-    averageSpreadPercent: averageSpread,
+    entryPrice: null,
+    entryZoneLow: null,
+    entryZoneHigh: null,
+    estimatedSlippagePercent: null,
+    averageSpreadPercent: null,
     economics: null,
   };
 }
