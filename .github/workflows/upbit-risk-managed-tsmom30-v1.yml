@@ -1,0 +1,39 @@
+name: Upbit Risk Managed TSMOM30 V1
+
+on:
+  push:
+    branches:
+      - research/four-market-profitability-scan-v1-20260919
+    paths:
+      - market-prediction-lab/scripts/run-upbit-risk-managed-tsmom30-v1.js
+      - .github/workflows/upbit-risk-managed-tsmom30-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Run Upbit risk-managed TSMOM30
+        run: node market-prediction-lab/scripts/run-upbit-risk-managed-tsmom30-v1.js
+      - name: Verify research-only formula contract
+        run: |
+          node --input-type=module - <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const d=JSON.parse(await readFile("market-prediction-lab/artifacts/upbit-risk-managed-tsmom30-v1/result.json","utf8"));
+          if(d.status!=="pass"||d.researchOnly!==true||d.publicDataOnly!==true||d.actualOrders!==0||d.formula.lookbackDays!==30||d.formula.drawdownGate!==0.15||d.formula.deriskMultiplier!==0.5) process.exit(1);
+          console.log("UPBIT_RISK_TSMOM_CONTRACT=PASS");
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: upbit-risk-managed-tsmom30-v1-${{ github.sha }}
+          path: market-prediction-lab/artifacts/upbit-risk-managed-tsmom30-v1/
+          if-no-files-found: error
+          retention-days: 30
