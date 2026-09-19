@@ -1,0 +1,65 @@
+name: Structural Profitability V2
+
+on:
+  push:
+    branches:
+      - research/four-market-profitability-scan-v1-20260919
+    paths:
+      - market-prediction-lab/scripts/run-market-benchmarks-v1.js
+      - market-prediction-lab/scripts/run-binance-funding-carry-v1.py
+      - .github/workflows/structural-profitability-v2.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmarks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Run stock benchmarks
+        run: node market-prediction-lab/scripts/run-market-benchmarks-v1.js market-prediction-lab/artifacts/market-benchmarks-v1/result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: structural-benchmarks-${{ github.sha }}
+          path: market-prediction-lab/artifacts/market-benchmarks-v1/result.json
+          if-no-files-found: error
+
+  funding-carry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Syntax
+        run: python -m py_compile market-prediction-lab/scripts/run-binance-funding-carry-v1.py
+      - name: Run carry and dynamic top-2
+        run: python market-prediction-lab/scripts/run-binance-funding-carry-v1.py
+      - name: Safety contract
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path("market-prediction-lab/artifacts/binance-funding-carry-v1/result.json").read_text())
+          assert d["research_only"] is True
+          assert d["public_data_only"] is True
+          assert d["live_trading"] is False
+          assert d["private_api"] is False
+          assert d["orders_submitted"] == 0
+          assert all(v["funding_status"]=="BINANCE_VISION_OK" for v in d["provenance"].values())
+          assert "dynamic_top2_positive7d" in d["results"]["base"]
+          print("SAFETY_CONTRACT=PASS")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: structural-funding-carry-${{ github.sha }}
+          path: market-prediction-lab/artifacts/binance-funding-carry-v1/
+          if-no-files-found: error
+          retention-days: 30
