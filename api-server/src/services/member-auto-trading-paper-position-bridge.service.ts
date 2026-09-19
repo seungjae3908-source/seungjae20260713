@@ -1,6 +1,16 @@
 import { createHash } from 'node:crypto';
 import type { MemberAutoTradingPaperHandoffEntry } from '../../../market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js';
-import { createNaturalPaperPositionLifecycle } from '../../../market-prediction-lab/src/natural-paper-position-settlement-lifecycle-v1.js';
+import * as naturalPaperLifecycleModule from '../../../market-prediction-lab/src/natural-paper-position-settlement-lifecycle-v1.js';
+
+const createNaturalPaperPositionLifecycle = (
+  naturalPaperLifecycleModule as unknown as {
+    createNaturalPaperPositionLifecycle(input: {
+      position: Record<string, unknown>;
+      sample: Record<string, unknown>;
+      candidate: Record<string, unknown>;
+    }): Record<string, unknown>;
+  }
+).createNaturalPaperPositionLifecycle;
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
 
 export const MEMBER_AUTO_TRADING_PAPER_POSITION_BRIDGE_VERSION =
