@@ -18,8 +18,8 @@ function date(value) {
 
 function statusTone(status) {
   const value = String(status ?? '').toLowerCase();
-  if (['complete', 'success', 'collecting', 'ready'].includes(value)) return 'good';
-  if (['attention', 'partial_failure', 'blocked_data'].includes(value)) return 'warn';
+  if (['complete', 'success', 'collecting', 'ready', 'ready_non_activating'].includes(value)) return 'good';
+  if (['attention', 'partial_failure', 'blocked_data'].includes(value) || value.startsWith('blocked_')) return 'warn';
   if (['failed', 'safety_block', 'invalid'].includes(value)) return 'bad';
   return 'neutral';
 }
@@ -95,6 +95,21 @@ function renderDataFactory(dataFactory) {
   $('#temporal-empty').hidden = (temporal.results?.length ?? 0) > 0;
 }
 
+function renderFactory(factory) {
+  const value = factory ?? {};
+  $('#factory-state').textContent = value.present ? String(value.status ?? 'UNKNOWN') : 'MISSING';
+  $('#factory-first-zero').textContent = value.firstZero ?? '—';
+  $('#factory-policy').textContent = value.policyPresent === null || value.policyPresent === undefined
+    ? '—'
+    : value.policyPresent
+      ? value.policyValid ? 'APPROVED' : 'INVALID'
+      : 'MISSING';
+  $('#factory-markets').textContent = value.readyMarketCount == null ? '—' : `${number(value.readyMarketCount)}/4`;
+  $('#factory-profiles').textContent = value.readyProfileCount == null ? '—' : `${number(value.readyProfileCount)}/12`;
+  $('#factory-updated').textContent = value.generatedAt ? date(value.generatedAt) : '—';
+  setPill($('#factory-status'), value.status || 'MISSING', statusTone(value.status));
+}
+
 function renderShadow(shadow) {
   const records = shadow?.records ?? {};
   $('#shadow-settled').textContent = number(records.settledRecords);
@@ -140,6 +155,7 @@ function render(data) {
   $('#profitability-state').textContent = data.profitability?.proven ? 'PROVEN' : 'EVIDENCE COLLECTION';
   renderCycles(data.research?.cycles);
   renderDataFactory(data.dataFactory);
+  renderFactory(data.factory);
   renderPaper(data.paper);
   renderShadow(data.shadow);
 }
