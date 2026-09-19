@@ -530,14 +530,19 @@ test.describe('mobile scanner legacy ChartBroadcastPanel contract', () => {
     expect(evidence.orderRequests).toEqual([]);
   });
 
-  test('scanner auto view mounts the same legacy panel without sending an order request', async ({ page }) => {
+  test('scanner auto workspace opens the canonical automatic surface without sending an order request', async ({ page }) => {
     const state: MockState = { scenario: 'normal' };
     const evidence = monitorBrowser(page);
     await openScanner(page, state);
 
     await page.getByRole('button', { name: '자동매매', exact: true }).click();
-    await expect(page.getByRole('heading', { name: '차트 불러오기', level: 2 })).toBeVisible();
-    await expect(page.getByRole('heading', { name: '자동매매 후보 종목', level: 2 })).toBeVisible();
+    const safety = page.getByTestId('auto-trading-safety-summary');
+    await expect(safety).toBeVisible();
+    await expect(safety).toContainText('주문별 승인');
+    await expect(safety).toContainText('불필요');
+    await expect(safety).toContainText('4시장 개별 ON/OFF');
+    await expect(page.getByRole('heading', { name: '차트 불러오기', level: 2 })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: '자동매매 후보 종목', level: 2 })).toHaveCount(0);
     await expect(page).toHaveURL(/\/__phase11-ai-workspace-e2e$/);
     await page.waitForTimeout(750);
 
@@ -547,5 +552,6 @@ test.describe('mobile scanner legacy ChartBroadcastPanel contract', () => {
     expect(evidence.unhandledRejections).toEqual([]);
     expect(evidence.unexpectedRequestFailures).toEqual([]);
     expect(evidence.apiHttpErrors).toEqual([]);
+
   });
 });
