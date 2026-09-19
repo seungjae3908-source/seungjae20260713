@@ -55,12 +55,13 @@ test('heavy historical specs are spread across distinct runtime-weighted lanes',
   assert.equal(new Set(heavy.map((file) => owner.get(file))).size, 4);
 });
 
-test('workflow consumes planner-selected files and never falls back to Playwright count sharding', async () => {
+test('workflow consumes active planner weights and never falls back to Playwright count sharding', async () => {
   const workflow = await readFile('.github/workflows/futures-public-network-smoke.yml', 'utf8');
-  assert.match(workflow, /Verify runtime-weighted browser shard plan/u);
-  assert.match(workflow, /Select runtime-weighted browser shard/u);
+  assert.match(workflow, /Verify adaptive runtime-weighted browser shard plan/u);
+  assert.match(workflow, /Select adaptive runtime-weighted browser shard/u);
   assert.match(workflow, /browser-runtime-shard-specs\.txt/u);
-  assert.match(workflow, /browser_specs\[@\]/u);
+  assert.match(workflow, /browser-runtime-active-weights/u);
+  assert.match(workflow, /browser-runtime-lane-runner\.mjs/u);
   assert.match(workflow, /--retries=0/u);
   assert.doesNotMatch(workflow, /--shard=/u);
 });
