@@ -76,6 +76,18 @@ test("natural cron invocation persists one canonical 4h cycle and active status"
     assert.equal(snapshot.stateCycleCount, 1);
     assert.equal(snapshot.lastInvocation.status, "COMPLETED");
     assert.equal(snapshot.lastInvocation.privateRequestCount, 0);
+    assert.equal(snapshot.memberAutoTradingHandoff.status, "READY");
+    assert.equal(snapshot.memberAutoTradingHandoff.entryCount, 0);
+    assert.match(snapshot.memberAutoTradingHandoff.handoffDigest, /^[0-9a-f]{64}$/u);
+
+    const persistedHandoff = JSON.parse(await readFile(
+      join(root, "handoff", "member-auto-trading-latest.json"),
+      "utf8",
+    ));
+    assert.equal(persistedHandoff.status, "READY");
+    assert.equal(persistedHandoff.entryCount, 0);
+    assert.equal(persistedHandoff.safety.executionAuthority, "NONE");
+    assert.equal(persistedHandoff.safety.liveTrading, false);
   } finally {
     await rm(sandbox, { recursive: true, force: true });
   }
