@@ -103,7 +103,14 @@ async function environment() {
   const bundlePath = join(inputRoot, 'bundle.json');
   await writeFile(dslPath, JSON.stringify(f.dsl));
   await writeFile(bundlePath, JSON.stringify(f.bundle));
-  return { stateRoot, inputRoot, dslPath, bundlePath, f };
+  return {
+    stateRoot,
+    inputRoot,
+    dslPath,
+    bundlePath,
+    f,
+    researchCodeSha: f.bundle.strategy.researchCodeSha,
+  };
 }
 
 test('offline publisher publishes genuine CANONICAL bundle and durable READBACK_VERIFIED receipt', async () => {
@@ -114,10 +121,17 @@ test('offline publisher publishes genuine CANONICAL bundle and durable READBACK_
       inputRoot: env.inputRoot,
       dslPath: env.dslPath,
       bundlePath: env.bundlePath,
+      researchCodeSha: env.researchCodeSha,
       validationNow: () => NOW,
     });
     assert.equal(result.status, 'published');
     assert.equal(result.recoveredExistingCatalog, false);
+    assert.equal(result.researchCodeSha, env.researchCodeSha);
+    assert.equal(result.publication.contract, 'research-canonical-bundle-offline-publication-receipt/v1');
+    assert.equal(result.publication.researchCodeSha, env.researchCodeSha);
+    assert.equal(result.publication.publisherMode, 'OFFLINE_OWNER_CONTROLLED');
+    assert.equal(result.publication.catalogReadbackVerified, true);
+    assert.match(result.publication.receiptDigest, /^[0-9a-f]{64}$/);
     assert.equal(result.publication.publicationStatus, 'READBACK_VERIFIED');
     assert.equal(result.publication.evidenceCredit, 0);
     assert.equal(result.publication.profitabilityProven, false);
@@ -129,6 +143,7 @@ test('offline publisher publishes genuine CANONICAL bundle and durable READBACK_
     const receipt = JSON.parse(await readFile(result.receiptPath, 'utf8'));
     const record = JSON.parse(await readFile(result.recordPath, 'utf8'));
     assert.deepEqual(receipt, result.publication);
+    assert.equal(record.researchCodeSha, env.researchCodeSha);
     assert.equal(record.dslDigest, result.publication.dslDigest);
     assert.equal(record.bundleDigest, result.publication.bundleDigest);
     assert.equal(record.publicationStatus, 'READBACK_VERIFIED');
@@ -160,6 +175,7 @@ test('publisher recovers after catalog publish succeeded before receipt persiste
       inputRoot: env.inputRoot,
       dslPath: env.dslPath,
       bundlePath: env.bundlePath,
+      researchCodeSha: env.researchCodeSha,
       validationNow: () => NOW,
     });
     assert.equal(recovered.status, 'verified_existing_catalog');
@@ -174,6 +190,7 @@ test('publisher recovers after catalog publish succeeded before receipt persiste
       inputRoot: env.inputRoot,
       dslPath: env.dslPath,
       bundlePath: env.bundlePath,
+      researchCodeSha: env.researchCodeSha,
       validationNow: () => NOW,
     });
     assert.equal(repeated.status, 'verified_existing_catalog');
@@ -197,6 +214,7 @@ test('TEST_ONLY bundle remains rejected and produces no publication receipt', as
         inputRoot: env.inputRoot,
         dslPath: env.dslPath,
         bundlePath: env.bundlePath,
+        researchCodeSha: testOnly.bundle.strategy.researchCodeSha,
         validationNow: () => NOW,
       }),
       /RESEARCH_CATALOG_SOURCE_INVALID/,
@@ -219,6 +237,7 @@ test('publisher refuses input files outside owner-controlled input root', async 
         inputRoot: env.inputRoot,
         dslPath: env.dslPath,
         bundlePath: outside,
+        researchCodeSha: env.researchCodeSha,
         validationNow: () => NOW,
       }),
       /BUNDLE_OUTSIDE_INPUT_ROOT/,
@@ -238,6 +257,7 @@ test('tampered existing receipt conflicts instead of being silently replaced', a
       inputRoot: env.inputRoot,
       dslPath: env.dslPath,
       bundlePath: env.bundlePath,
+      researchCodeSha: env.researchCodeSha,
       validationNow: () => NOW,
     });
     const receipt = JSON.parse(await readFile(first.receiptPath, 'utf8'));
@@ -249,9 +269,36 @@ test('tampered existing receipt conflicts instead of being silently replaced', a
         inputRoot: env.inputRoot,
         dslPath: env.dslPath,
         bundlePath: env.bundlePath,
+        researchCodeSha: env.researchCodeSha,
         validationNow: () => NOW,
       }),
       /PUBLICATION_RECEIPT_CONFLICT/,
+    );
+  } finally {
+    await rm(env.stateRoot, { recursive: true, force: true });
+    await rm(env.inputRoot, { recursive: true, force: true });
+  }
+});
+
+test('stale or mismatched research SHA is rejected before catalog publication', async () => {
+  const env = await environment();
+  try {
+    await assert.rejects(
+      publishResearchCanonicalBundleOfflineV1({
+        stateRoot: env.stateRoot,
+        inputRoot: env.inputRoot,
+        dslPath: env.dslPath,
+        bundlePath: env.bundlePath,
+        researchCodeSha: 'f'.repeat(40),
+        validationNow: () => NOW,
+      }),
+      /BUNDLE_RESEARCH_CODE_SHA_MISMATCH/,
+    );
+    assert.deepEqual(await import('node:fs/promises').then(({ readdir }) =>
+      readdir(join(env.stateRoot, 'catalog'))), []);
+    await assert.rejects(
+      readFile(join(env.stateRoot, 'publication-receipts', 'missing.json')),
+      /ENOENT/,
     );
   } finally {
     await rm(env.stateRoot, { recursive: true, force: true });
@@ -264,5 +311,6 @@ test('production CLI does not import test fixtures or expose validation clock/te
     join(process.cwd(), 'api-server', 'scripts', 'publish-research-canonical-bundle.ts'),
     'utf8',
   );
+  assert.match(source, /RESEARCH_CODE_SHA/);
   assert.doesNotMatch(source, /test-fixtures|allowTestEvidence|validationNow|--now|TEST_ONLY/);
 });
