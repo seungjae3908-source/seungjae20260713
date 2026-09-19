@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   appendTemporalEvidenceBatchV1,
   appendTemporalEvidenceV1,
+  assertTemporalEvidenceLedgerV1,
   createTemporalEvidenceLedgerV1,
   projectTemporalFeatureProviderV1,
   readTemporalFeatureAtV1,
@@ -27,6 +28,13 @@ test('ledger is append-only, deterministic and idempotent for exact duplicate ob
   assert.equal(once.observations.length,1);
   assert.equal(twice.observations.length,1);
   assert.equal(twice.ledgerDigest,once.ledgerDigest);
+});
+
+test('persisted ledger tampering is detected before any new evidence is accepted',()=>{
+  const valid=appendTemporalEvidenceV1(createTemporalEvidenceLedgerV1({researchSha:SHA}),row());
+  const tampered={...valid,observations:[{...valid.observations[0],value:999}]};
+  assert.throws(()=>assertTemporalEvidenceLedgerV1(tampered),/digest mismatch/);
+  assert.throws(()=>appendTemporalEvidenceV1(tampered,row({observedAt:T+3600000,availableAt:T+3600000,recordedAt:T+3600000})),/digest mismatch/);
 });
 
 test('conflicting observation identity fails closed',()=>{
