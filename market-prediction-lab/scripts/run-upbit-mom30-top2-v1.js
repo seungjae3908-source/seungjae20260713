@@ -19,32 +19,37 @@ function metrics(curve,periodReturns,years,fees){
 }
 function simulate(data,mode,costRate,startIndex){
   const timestamps=data.timestamps, opens=data.opens, closes=data.closes;
-  let cash=1,units=Object.fromEntries(SYMBOLS.map(s=>[s,0])),curve=[1],periodReturns=[],fees=0,lastRebalanceEquity=1;
+  let cash=1,units=Object.fromEntries(SYMBOLS.map(s=>[s,0])),curve=[1],periodReturns=[],fees=0,lastPostRebalanceEquity=null;
   const begin=Math.max(LOOKBACK,startIndex);
-  for(let i=begin;i<timestamps.length-1;i++){
-    const prices=Object.fromEntries(SYMBOLS.map(s=>[s,opens[s][i]]));
-    let equity=cash+SYMBOLS.reduce((sum,s)=>sum+units[s]*prices[s],0);
-    curve.push(equity);
-    if((i-begin)%REBALANCE!==0) continue;
-    if(i>begin) periodReturns.push(equity/lastRebalanceEquity-1);
-    const ranked=SYMBOLS.map(s=>({s,mom:closes[s][i]/closes[s][i-LOOKBACK]-1})).sort((a,b)=>b.mom-a.mom);
+  for(let signalIndex=begin;signalIndex<timestamps.length-1;signalIndex+=REBALANCE){
+    const execIndex=signalIndex+1;
+    const execPrices=Object.fromEntries(SYMBOLS.map(s=>[s,opens[s][execIndex]]));
+    let equity=cash+SYMBOLS.reduce((sum,s)=>sum+units[s]*execPrices[s],0);
+    const ranked=SYMBOLS.map(s=>({s,mom:closes[s][signalIndex]/closes[s][signalIndex-LOOKBACK]-1})).sort((a,b)=>b.mom-a.mom);
     let selected=ranked.slice(0,2);
     if(mode==="positive_only") selected=selected.filter(x=>x.mom>0);
     const weights=Object.fromEntries(SYMBOLS.map(s=>[s,0]));
     for(const x of selected) weights[x.s]=0.5;
     const grossTargets=Object.fromEntries(SYMBOLS.map(s=>[s,weights[s]*equity]));
-    const current=Object.fromEntries(SYMBOLS.map(s=>[s,units[s]*prices[s]]));
+    const current=Object.fromEntries(SYMBOLS.map(s=>[s,units[s]*execPrices[s]]));
     const traded=SYMBOLS.reduce((sum,s)=>sum+Math.abs(grossTargets[s]-current[s]),0);
     const fee=traded*costRate; fees+=fee; equity-=fee;
-    for(const s of SYMBOLS) units[s]=weights[s]*equity/prices[s];
+    if(lastPostRebalanceEquity!=null) periodReturns.push(equity/lastPostRebalanceEquity-1);
+    for(const s of SYMBOLS) units[s]=weights[s]*equity/execPrices[s];
     cash=(1-Object.values(weights).reduce((a,b)=>a+b,0))*equity;
-    lastRebalanceEquity=equity;
+    lastPostRebalanceEquity=equity;
+    const nextExec=Math.min(signalIndex+REBALANCE+1,timestamps.length-1);
+    for(let k=execIndex;k<=nextExec;k++){
+      const mark=Object.fromEntries(SYMBOLS.map(s=>[s,opens[s][k]]));
+      curve.push(cash+SYMBOLS.reduce((sum,s)=>sum+units[s]*mark[s],0));
+    }
   }
   const i=timestamps.length-1,prices=Object.fromEntries(SYMBOLS.map(s=>[s,closes[s][i]]));
   let equity=cash+SYMBOLS.reduce((sum,s)=>sum+units[s]*prices[s],0);
-  periodReturns.push(equity/lastRebalanceEquity-1);
   const traded=SYMBOLS.reduce((sum,s)=>sum+Math.abs(units[s]*prices[s]),0);
-  const fee=traded*costRate;fees+=fee;equity-=fee;curve.push(equity);
+  const fee=traded*costRate;fees+=fee;equity-=fee;
+  if(lastPostRebalanceEquity!=null) periodReturns.push(equity/lastPostRebalanceEquity-1);
+  curve.push(equity);
   const years=(timestamps.at(-1)-timestamps[begin])/(365.25*DAY);
   return metrics(curve,periodReturns,years,fees);
 }
@@ -73,7 +78,7 @@ try{
   }
   const report={schemaVersion:1,status:"pass",kind:"upbit-mom30-top2-v1",researchOnly:true,publicDataOnly:true,
     liveExecutionAllowed:false,privateAccountRequestAllowed:false,actualOrders:0,
-    formula:{lookbackDays:30,rebalanceDays:7,topCount:2,modes:["top2","positive_only"],execution:"rank using completed 4h close; rebalance from same bar open approximation at scheduled boundary",longOnly:true},
+    formula:{lookbackDays:30,rebalanceDays:7,topCount:2,modes:["top2","positive_only"],execution:"rank using completed 4h close; rebalance at next 4h bar open",longOnly:true},
     costs:COSTS,symbols:SYMBOLS,commonBars:data.timestamps.length,provenance,results};
   await save(output,report);console.log(JSON.stringify(report,null,2));
 }catch(error){
