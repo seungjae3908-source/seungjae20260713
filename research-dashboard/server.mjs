@@ -30,6 +30,14 @@ const TEMPORAL_CRYPTO_SUMMARY_RELATIVE_PATH = Object.freeze([
 const TEMPORAL_CRYPTO_SUMMARY_SCHEMA = 'crypto-futures-temporal-public-collection-v1';
 const TEMPORAL_COLLECTION_STATUSES = new Set(['complete', 'partial_failure']);
 const TEMPORAL_SYMBOL_STATUSES = new Set(['success', 'failed']);
+const FACTORY_RUNTIME_CONTRACT = 'research-factory-runtime-status/v1';
+const FACTORY_RUNTIME_STATUSES = new Set([
+  'BLOCKED_POLICY_MISSING',
+  'BLOCKED_POLICY_INVALID',
+  'BLOCKED_NO_READY_PROFILES',
+  'BLOCKED_RUNTIME_BINDINGS',
+  'READY_NON_ACTIVATING',
+]);
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const CANDIDATE_ID_PATTERN = /^(?:phase3-candidate:sha256:|paper-candidate-v1:)[0-9a-f]{64}$/u;
@@ -713,11 +721,113 @@ function summarizeTemporalCryptoSummary(value) {
   });
 }
 
+function emptyFactoryRuntimeSummary(status = 'MISSING', present = false) {
+  return Object.freeze({
+    present,
+    status,
+    generatedAt: null,
+    researchSha: null,
+    firstZero: null,
+    policyPresent: null,
+    policyValid: null,
+    policyDigest: null,
+    readyMarketCount: null,
+    blockedMarketCount: null,
+    readyProfileCount: null,
+    blockedProfileCount: null,
+    runtimeStatus: null,
+    nextFirstZero: null,
+    controlPlaneDigest: null,
+  });
+}
+
+function summarizeFactoryRuntimeStatus(value) {
+  if (value == null) return emptyFactoryRuntimeSummary();
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || value.contract !== FACTORY_RUNTIME_CONTRACT
+    || !FACTORY_RUNTIME_STATUSES.has(value.status)
+    || typeof value.generatedAt !== 'string'
+    || !Number.isFinite(Date.parse(value.generatedAt))
+    || !SHA_PATTERN.test(String(value.researchSha ?? ''))
+    || typeof value.firstZero !== 'string' || !SAFE_ID_PATTERN.test(value.firstZero)
+    || !value.policy || typeof value.policy !== 'object' || Array.isArray(value.policy)
+    || typeof value.policy.present !== 'boolean' || typeof value.policy.valid !== 'boolean'
+    || !value.dataFactory || typeof value.dataFactory !== 'object' || Array.isArray(value.dataFactory)
+    || !value.canonicalAdaptive || typeof value.canonicalAdaptive !== 'object' || Array.isArray(value.canonicalAdaptive)
+    || !value.safety || typeof value.safety !== 'object' || Array.isArray(value.safety)
+    || value.safety.runtimeExecutionAttempted !== false
+    || value.safety.runtimeActivationAllowed !== false
+    || value.safety.scheduleMutationAllowed !== false
+    || value.safety.deploymentAllowed !== false
+    || value.safety.databaseMutationAllowed !== false
+    || value.safety.secretMutationAllowed !== false
+    || value.safety.liveTrading !== false
+    || value.safety.autoTrading !== false
+    || value.safety.privateTradingApi !== false
+    || value.safety.realOrder !== false
+    || value.safety.profitabilityClaim !== false
+    || value.safety.executionAuthority !== 'NONE') {
+    return emptyFactoryRuntimeSummary('INVALID', true);
+  }
+
+  const nullableCount = (raw) => raw == null ? null : Number.isInteger(raw) && raw >= 0 ? raw : undefined;
+  const readyMarketCount = nullableCount(value.dataFactory.readyMarketCount);
+  const blockedMarketCount = nullableCount(value.dataFactory.blockedMarketCount);
+  const readyProfileCount = nullableCount(value.canonicalAdaptive.readyProfileCount);
+  const blockedProfileCount = nullableCount(value.canonicalAdaptive.blockedProfileCount);
+  if ([readyMarketCount, blockedMarketCount, readyProfileCount, blockedProfileCount].some((item) => item === undefined)) {
+    return emptyFactoryRuntimeSummary('INVALID', true);
+  }
+
+  const policyDigest = value.policy.policyDigest == null ? null : String(value.policy.policyDigest).toLowerCase();
+  const controlPlaneDigest = value.controlPlaneDigest == null ? null : String(value.controlPlaneDigest).toLowerCase();
+  if ((policyDigest != null && !DIGEST_PATTERN.test(policyDigest))
+    || (controlPlaneDigest != null && !DIGEST_PATTERN.test(controlPlaneDigest))) {
+    return emptyFactoryRuntimeSummary('INVALID', true);
+  }
+  if (!value.policy.present && (value.policy.valid || policyDigest != null)) {
+    return emptyFactoryRuntimeSummary('INVALID', true);
+  }
+
+  const runtimeStatus = value.canonicalAdaptive.runtimeStatus == null ? null : String(value.canonicalAdaptive.runtimeStatus);
+  const nextFirstZero = value.canonicalAdaptive.nextFirstZero == null ? null : String(value.canonicalAdaptive.nextFirstZero);
+  if ((runtimeStatus != null && !SAFE_ID_PATTERN.test(runtimeStatus))
+    || (nextFirstZero != null && !SAFE_ID_PATTERN.test(nextFirstZero))) {
+    return emptyFactoryRuntimeSummary('INVALID', true);
+  }
+
+  return Object.freeze({
+    present: true,
+    status: value.status,
+    generatedAt: Date.parse(value.generatedAt),
+    researchSha: String(value.researchSha).toLowerCase(),
+    firstZero: value.firstZero,
+    policyPresent: value.policy.present,
+    policyValid: value.policy.valid,
+    policyDigest,
+    readyMarketCount,
+    blockedMarketCount,
+    readyProfileCount,
+    blockedProfileCount,
+    runtimeStatus,
+    nextFirstZero,
+    controlPlaneDigest,
+  });
+}
+
+async function readFactoryRuntimeSummary(root) {
+  try {
+    return summarizeFactoryRuntimeStatus(await readJsonOptional(join(root, 'latest', 'research-factory.json')));
+  } catch {
+    return emptyFactoryRuntimeSummary('INVALID', true);
+  }
+}
+
 export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } = {}) {
   const root = resolve(stateRoot);
   const cycleValues = await Promise.all(PROFILES.map((profile) => readJsonOptional(join(root, 'latest', `${profile}.json`))));
   const cycles = cycleValues.map((value, index) => summarizeCycle(PROFILES[index], value));
-  const [paperRuntimeRaw, paperLedgerRaw, shadowSummaryRaw, shadowStateRaw, liquidityIndependence, candidatePerformance, temporalCryptoRaw] = await Promise.all([
+  const [paperRuntimeRaw, paperLedgerRaw, shadowSummaryRaw, shadowStateRaw, liquidityIndependence, candidatePerformance, temporalCryptoRaw, factoryRuntime] = await Promise.all([
     readJsonOptional(join(root, 'forward', 'paper', 'status', 'runtime-status.json')),
     readJsonOptional(join(root, 'forward', 'paper', 'state', 'recurring-paper-loop.json')),
     readJsonOptional(join(root, 'forward', 'shadow-summary.json')),
@@ -725,6 +835,7 @@ export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } =
     readV3IndependenceSummary(root),
     readCandidatePerformance(root),
     readJsonOptional(join(root, ...TEMPORAL_CRYPTO_SUMMARY_RELATIVE_PATH)),
+    readFactoryRuntimeSummary(root),
   ]);
 
   const paperRuntime = summarizePaperRuntime(paperRuntimeRaw);
@@ -747,6 +858,7 @@ export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } =
       ? 'safety_evidence_incomplete'
       : liquidityIndependence.status === 'INVALID' || candidatePerformance.status === 'INVALID'
         || temporalCrypto.status === 'INVALID' || temporalCrypto.status === 'partial_failure'
+        || factoryRuntime.status === 'INVALID' || factoryRuntime.status === 'BLOCKED_POLICY_INVALID'
         ? 'attention'
         : failedTasks === null || blockedDataTasks === null
           ? 'evidence_incomplete'
@@ -757,7 +869,7 @@ export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } =
     schemaVersion: 'research-dashboard-overview-v1',
     generatedAt: Date.now(),
     state: Object.freeze({
-      present: cycles.some((cycle) => cycle.present) || paperRuntime.present || paperLedger.present || shadowRecords.present || liquidityIndependence.present || candidatePerformance.present || temporalCrypto.present,
+      present: cycles.some((cycle) => cycle.present) || paperRuntime.present || paperLedger.present || shadowRecords.present || liquidityIndependence.present || candidatePerformance.present || temporalCrypto.present || factoryRuntime.present,
       latestCycleAt: newestTimestamp(cycles),
     }),
     safety: Object.freeze({
@@ -778,6 +890,7 @@ export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } =
     dataFactory: Object.freeze({
       temporalCryptoFutures: temporalCrypto,
     }),
+    factory: factoryRuntime,
     paper: Object.freeze({ runtime: paperRuntime, ledger: paperLedger, candidatePerformance }),
     shadow: Object.freeze({ groups: shadowGroups, records: shadowRecords, canonicalHandoffs: shadowCanonicalHandoffs }),
     profitability: Object.freeze({
