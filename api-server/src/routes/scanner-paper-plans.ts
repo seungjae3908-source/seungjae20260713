@@ -1,5 +1,5 @@
 import { Router, type IRouter } from 'express';
-import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
+import { requireCapability, type AuthenticatedRequest } from '../middleware/auth';
 import {
   ProductPaperSourceError,
   productPaperSourceRegistry,
@@ -236,7 +236,7 @@ export function createScannerPaperPlansRouter(dependencies: {
   const resolveCanonicalPaperSimulationAuthority = dependencies.resolveSimulation ?? canonicalSimulationAuthorityOwner;
   const runRecurringPaperCycle = dependencies.runCycle ?? recurringPaperCycleOwner;
 
-  router.post('/scanner/plans', requireAdmin, async (req: AuthenticatedRequest, res) => {
+  router.post('/scanner/plans', requireCapability('canAccessPaperTrading'), async (req: AuthenticatedRequest, res) => {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     const envelope = safety();
     let length: number;

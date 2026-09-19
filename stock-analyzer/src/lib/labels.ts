@@ -69,7 +69,7 @@ export const USER_SIGNAL_KO: Readonly<Record<string, string>> = {
 export const USER_TRADE_SOURCE_KO: Readonly<Record<string, string>> = {
   TOSS_MANUAL: 'Toss 수동',
   TOSS_API: 'Toss API',
-  APP_PAPER: '모의자동매매',
+  APP_PAPER: '모의매매',
   APP_SHADOW: '실시간 추적검증',
   APP_AUTO: '자동매매',
 };
@@ -127,7 +127,7 @@ export const PROMOTION_STAGE_KO: Readonly<Record<string, string>> = {
   COST_STRESS: '비용 스트레스 검증',
   REGIME: '시장상태 검증',
   FINAL_HOLDOUT: '최종검증',
-  PAPER: '모의자동매매',
+  PAPER: '모의매매',
   SHADOW: '실시간 추적검증',
   RECOMMENDATION_OUTCOMES: '추천 결과 검증',
 };
@@ -136,8 +136,8 @@ export const PROMOTION_STATE_KO: Readonly<Record<string, string>> = {
   RESEARCH: '연구 중',
   BLOCKED_DATA: '데이터 부족으로 차단',
   RESEARCH_HOLD: '연구 보류',
-  PAPER_CANDIDATE: '모의자동매매 후보',
-  PAPER_VALIDATED: '모의자동매매 검증 완료',
+  PAPER_CANDIDATE: '모의매매 후보',
+  PAPER_VALIDATED: '모의매매 검증 완료',
   SHADOW_CANDIDATE: '실시간 추적검증 후보',
   SHADOW_VALIDATED: '실시간 추적검증 완료',
   PROMOTION_CANDIDATE: '승격 검토 후보',
