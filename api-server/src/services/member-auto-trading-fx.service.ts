@@ -1,4 +1,4 @@
-import { getQuote as getYahooQuote } from '../providers/yahoo';
+import { getIndexQuote as getYahooIndexQuote } from '../providers/yahoo';
 import { fetchPublicMarketJson } from './public-market-http';
 
 export type MemberAutoTradingFxMarket =
@@ -7,7 +7,7 @@ export type MemberAutoTradingFxMarket =
   | 'CRYPTO_SPOT'
   | 'CRYPTO_FUTURES';
 
-type YahooQuoteLoader = (ticker: string) => Promise<{ price?: unknown; currentPrice?: unknown; regularMarketPrice?: unknown; updatedAt?: unknown }>;
+type YahooQuoteLoader = (ticker: string) => Promise<{ price: number; updatedAt: string }>;
 type PublicJsonLoader = typeof fetchPublicMarketJson;
 
 export type MemberAutoTradingFxQuote = Readonly<{
@@ -59,8 +59,8 @@ export async function resolveMemberAutoTradingKrwRate(
   }
 
   if (market === 'US_STOCK') {
-    const quote = await (options.yahooQuote ?? getYahooQuote)('USDKRW=X');
-    const price = Number(quote.price ?? quote.currentPrice ?? quote.regularMarketPrice);
+    const quote = await (options.yahooQuote ?? getYahooIndexQuote)('USDKRW=X');
+    const price = Number(quote.price);
     const observedAtMs = timestamp(quote.updatedAt);
     if (!positive(price)) throw new Error('BACKGROUND_USDKRW_RATE_INVALID');
     assertFresh(observedAtMs, nowMs, 24 * 60 * 60_000, 'BACKGROUND_USDKRW_RATE_STALE');
