@@ -58,7 +58,7 @@ function hypothesisAndDecision() {
   const paper = supportingPaper();
   const hypothesis = createStrategyHypothesisV1({
     title: "US swing evidence-backed formula seed hypothesis",
-    statement: "Trend, momentum, breakout, or recovery structures may justify bounded out-of-sample research.",
+    statement: "Trend-breakout, time-series momentum, and trend-pullback structures may justify bounded out-of-sample research.",
     marketScope: ["US_LARGE_CAP"],
     assetClass: "EQUITY",
     timeframeScope: ["1h"],
@@ -146,13 +146,13 @@ test("catalog exposes exactly 12 market-horizon profiles with 9 cash READY and 3
   }
 });
 
-test("every ready profile builds four deterministic #550-compatible safe DSL templates", () => {
+test("every ready profile builds three deterministic early-profit safe DSL templates", () => {
   const catalog = buildEvidenceBackedFormulaSeedCatalogV1();
   for (const profile of catalog.profiles.filter((entry) => entry.status === "READY")) {
     const first = createEvidenceBackedFormulaTemplatesV1({ profileId: profile.profileId, hypothesisBinding: fakeBinding() });
     const second = createEvidenceBackedFormulaTemplatesV1({ profileId: profile.profileId, hypothesisBinding: fakeBinding() });
     assert.equal(first.status, "READY", profile.profileId);
-    assert.equal(first.templates.length, 4, profile.profileId);
+    assert.equal(first.templates.length, 3, profile.profileId);
     assert.deepEqual(first, second, profile.profileId);
     assert.equal(Object.isFrozen(first), true);
     assert.equal(Object.isFrozen(first.templates), true);
@@ -173,6 +173,29 @@ test("every ready profile builds four deterministic #550-compatible safe DSL tem
       assert.equal(template.direction, "LONG");
       assert.ok(EVIDENCE_BACKED_FORMULA_FAMILIES.includes(template.strategyFamily));
     }
+  }
+});
+
+test("three seed families preserve the intended entry structure and common ATR/target/time exits", () => {
+  const result = createEvidenceBackedFormulaTemplatesV1({
+    profileId: "US_STOCK:SWING",
+    hypothesisBinding: fakeBinding(),
+  });
+  assert.equal(result.status, "READY");
+  const families = Object.fromEntries(result.templates.map((template) => [template.strategyFamily, template]));
+  assert.deepEqual(Object.keys(families).sort(), [...EVIDENCE_BACKED_FORMULA_FAMILIES].sort());
+
+  const breakout = JSON.stringify(families.TREND_BREAKOUT.entryDsl);
+  for (const token of ["EMA", "ADX", "BREAKOUT", "RVOL"]) assert.match(breakout, new RegExp(token));
+
+  const momentum = JSON.stringify(families.TIME_SERIES_MOMENTUM.entryDsl);
+  for (const token of ["EMA", "ROC", "ADX"]) assert.match(momentum, new RegExp(token));
+
+  const pullback = JSON.stringify(families.TREND_PULLBACK.entryDsl);
+  for (const token of ["EMA", "ADX", "RSI", "CROSSOVER"]) assert.match(pullback, new RegExp(token));
+
+  for (const template of result.templates) {
+    assert.deepEqual(template.exitDsl.rules.map((rule) => rule.type), ["ATR_STOP", "TARGET", "TIME_EXIT"]);
   }
 });
 
@@ -212,7 +235,7 @@ test("US swing seeds compile into FormulaCandidateV1 only as NOT_EVALUATED resea
     templates: seedResult.templates,
     policy: compilerPolicy(),
   });
-  assert.equal(candidates.length, 4);
+  assert.equal(candidates.length, 3);
   assert.deepEqual(candidates.map((candidate) => candidate.strategyFamily).sort(), [...EVIDENCE_BACKED_FORMULA_FAMILIES].sort());
   for (const candidate of candidates) {
     assert.equal(candidate.market, "US_STOCK");
