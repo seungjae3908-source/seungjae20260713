@@ -58,12 +58,14 @@ jobs:
           grep -Fq 'python3 scripts/agent_hub_rollover_v2.py resolve' .github/workflows/research-production-natural-cycle-evidence.yml
           grep -Fq 'CANONICAL_HUB' .github/workflows/research-production-natural-cycle-evidence.yml
           grep -Fq 'HUB_ISSUE_NUMBER' .github/workflows/research-production-natural-cycle-evidence.yml
-          if grep -Fq 'github.event.issue.number == 838' .github/workflows/research-production-natural-cycle-evidence.yml; then
-            echo 'Natural evidence command routing is pinned to archived Hub #838.' >&2
+          legacy_issue_filter='github.event.issue.number == '"838"
+          legacy_report_target='issue_number: '"838"
+          if grep -Fq "$legacy_issue_filter" .github/workflows/research-production-natural-cycle-evidence.yml; then
+            echo 'Natural evidence command routing is pinned to archived Hub.' >&2
             exit 1
           fi
-          if grep -Fq 'issue_number: 838' .github/workflows/research-production-natural-cycle-evidence.yml; then
-            echo 'Natural evidence reporting is pinned to archived Hub #838.' >&2
+          if grep -Fq "$legacy_report_target" .github/workflows/research-production-natural-cycle-evidence.yml; then
+            echo 'Natural evidence reporting is pinned to archived Hub.' >&2
             exit 1
           fi
           node --test market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
@@ -128,7 +130,6 @@ jobs:
         id: source
         env:
           RESEARCH_SHA: ${{ steps.command.outputs.research_sha }}
-          HUB_ISSUE_NUMBER: ${{ steps.command.outputs.hub_issue }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -292,6 +293,7 @@ jobs:
         uses: actions/github-script@v7
         env:
           RESEARCH_SHA: ${{ steps.command.outputs.research_sha }}
+          HUB_ISSUE_NUMBER: ${{ steps.command.outputs.hub_issue }}
           SOURCE_OUTCOME: ${{ steps.source.outcome }}
           EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
           VERDICT_OUTCOME: ${{ steps.verdict.outcome }}
