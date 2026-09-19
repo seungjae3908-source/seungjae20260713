@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { MemberAutoTradingPaperHandoffEntry } from '../../../market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js';
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
+import { InMemoryTradingRepository } from './trade-automation.repository';
 import {
   buildMemberAutoTradingPaperPositionBridge,
+  persistMemberAutoTradingPaperPositionBridge,
   MEMBER_AUTO_TRADING_PAPER_POSITION_BRIDGE_VERSION,
 } from './member-auto-trading-paper-position-bridge.service';
 
@@ -112,4 +114,81 @@ test('bridge identity is deterministic and user scoped', () => {
   const mismatch=buildMemberAutoTradingPaperPositionBridge({userId:'22222222-2222-2222-2222-222222222222',plan:plan(),order:order(),entry:entry()});
   assert.equal(mismatch.status,'BLOCKED_DATA');
   assert.ok(mismatch.blockers.includes('PAPER_POSITION_BRIDGE_USER_IDENTITY_MISMATCH'));
+});
+
+
+test('persists one append-only lifecycle event and becomes idempotent on repeat', async () => {
+  const repository = new InMemoryTradingRepository();
+  const first = await persistMemberAutoTradingPaperPositionBridge({
+    repository,
+    userId: USER,
+    plan: plan(),
+    order: order(),
+    entry: entry(),
+    now: new Date(NOW),
+  });
+  assert.equal(first.status, 'PERSISTED');
+  assert.equal(first.event?.fromState, 'FILLED');
+  assert.equal(first.event?.toState, 'FILLED');
+  assert.equal(first.event?.reason, 'PAPER_POSITION_LIFECYCLE_OPENED');
+  assert.equal(first.event?.metadata?.bridgeId, first.bridge.bridgeId);
+  assert.equal((first.event?.metadata?.safety as any).executionAuthority, 'NONE');
+  assert.equal((first.event?.metadata?.safety as any).liveTrading, false);
+  assert.equal((first.event?.metadata?.safety as any).privateTradingApiAllowed, false);
+  assert.equal((first.event?.metadata?.safety as any).economicSampleCredit, 0);
+
+  const second = await persistMemberAutoTradingPaperPositionBridge({
+    repository,
+    userId: USER,
+    plan: plan(),
+    order: order(),
+    entry: entry(),
+    now: new Date(NOW),
+  });
+  assert.equal(second.status, 'IDEMPOTENT');
+  const events = (await repository.listEvents(USER))
+    .filter((event) => event.reason === 'PAPER_POSITION_LIFECYCLE_OPENED');
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.id, first.event?.id);
+});
+
+test('conflicting lifecycle event for the same FILLED order fails closed without overwrite', async () => {
+  const repository = new InMemoryTradingRepository();
+  await repository.appendEvent({
+    id: '11111111-1111-5111-8111-111111111111',
+    userId: USER,
+    orderId: 'order-1',
+    fromState: 'FILLED',
+    toState: 'FILLED',
+    reason: 'PAPER_POSITION_LIFECYCLE_OPENED',
+    metadata: { bridgeId: 'member-auto-position-bridge:sha256:' + 'f'.repeat(64) },
+    createdAt: NOW,
+  });
+  const result = await persistMemberAutoTradingPaperPositionBridge({
+    repository,
+    userId: USER,
+    plan: plan(),
+    order: order(),
+    entry: entry(),
+    now: new Date(NOW),
+  });
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.deepEqual(result.blockers, ['PAPER_POSITION_BRIDGE_EVENT_CONFLICT']);
+  assert.equal((await repository.listEvents(USER)).length, 1);
+});
+
+test('blocked bridge never appends a lifecycle event', async () => {
+  const repository = new InMemoryTradingRepository();
+  const pending = order();
+  pending.state = 'ACCEPTED';
+  const result = await persistMemberAutoTradingPaperPositionBridge({
+    repository,
+    userId: USER,
+    plan: plan(),
+    order: pending,
+    entry: entry(),
+    now: new Date(NOW),
+  });
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.equal((await repository.listEvents(USER)).length, 0);
 });
