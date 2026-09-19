@@ -18,7 +18,7 @@ import { TradeExecutionService } from './trade-execution.service';
 import {
   createServiceRolePaperJournalRepository,
 } from './paper-journal-supabase.repository';
-import type { PaperJournalRepository } from './paper-journal-sync.service';
+import type { PaperJournalRepository } from './paper-journal.types';
 import type {
   TradingAssetClass,
   TradingExchange,
