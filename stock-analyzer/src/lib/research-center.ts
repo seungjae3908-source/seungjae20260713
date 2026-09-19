@@ -153,7 +153,7 @@ export interface StrategyHealthBinding {
 
 export interface ResearchFactoryRuntimeSummary {
   present: boolean;
-  status: 'MISSING' | 'INVALID' | 'BLOCKED_POLICY_MISSING' | 'BLOCKED_POLICY_INVALID' | 'BLOCKED_NO_READY_PROFILES' | 'BLOCKED_RUNTIME_BINDINGS' | 'READY_NON_ACTIVATING';
+  status: 'MISSING' | 'INVALID' | 'BLOCKED_POLICY_MISSING' | 'BLOCKED_POLICY_INVALID' | 'BLOCKED_NO_READY_PROFILES' | 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_MISSING' | 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_INVALID' | 'BLOCKED_RUNTIME_BINDINGS' | 'READY_NON_ACTIVATING';
   generatedAt: number | null;
   researchSha: string | null;
   firstZero: string | null;
