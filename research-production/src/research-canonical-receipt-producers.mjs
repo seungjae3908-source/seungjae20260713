@@ -10,6 +10,9 @@ import {
   BITGET_TIMEFRAME_MS,
 } from '../../market-prediction-lab/src/bitget-candle-collector.js';
 import {
+  evaluateTransactionCostEvidence,
+} from '../../market-intelligence-sidecar/src/transaction-cost-evidence.mjs';
+import {
   createAdaptiveEvidenceReceiptV1,
 } from './research-adaptive-evidence-catalog.mjs';
 import {
@@ -122,6 +125,58 @@ function validateClosedCandleCollection(collection){
     previous=row.timestamp;
   }
   return collection;
+}
+
+export function buildTransactionCostPolicyAdaptiveReceiptsV1({
+  datasetManifest,
+  costEvidenceInput,
+  policyInput={},
+}={}){
+  assertResearchDatasetSnapshotManifestV1(datasetManifest);
+  const evaluated=evaluateTransactionCostEvidence(costEvidenceInput,policyInput);
+  if(evaluated.market!==datasetManifest.market) throw new Error('TRANSACTION_COST_DATASET_MARKET_MISMATCH');
+  if(evaluated.status!=='READY'
+    ||evaluated.readyForNetAlpha!==true
+    ||evaluated.safety?.executionAuthority!=='NONE'
+    ||evaluated.safety?.numericalAuthority!=='EVIDENCE_NORMALIZATION_ONLY'
+    ||evaluated.safety?.promotionAuthority!==false
+    ||evaluated.safety?.liveTradingAuthority!==false
+    ||evaluated.safety?.orderAllowed!==false
+    ||evaluated.safety?.privateTradingApiAllowed!==false){
+    const error=new Error('TRANSACTION_COST_EVIDENCE_NOT_READY');
+    error.reasons=evaluated.reasons;
+    throw error;
+  }
+  if(!evaluated.policy?.version||typeof evaluated.policy.version!=='string'){
+    throw new Error('TRANSACTION_COST_POLICY_VERSION_MISSING');
+  }
+  const at=evaluated.newestEvidenceAt==null
+    ? datasetManifest.createdAt
+    : new Date(evaluated.newestEvidenceAt).toISOString();
+  const sourceDigest=digest(evaluated);
+  const receipts=[];
+  for(const profile of profilesForMarket(datasetManifest.market)){
+    if(!profile.requiredEvidence.includes('COST_POLICY_IDENTITY')) continue;
+    receipts.push(createAdaptiveEvidenceReceiptV1({
+      profileId:profile.profileId,
+      requirement:'COST_POLICY_IDENTITY',
+      evidenceId:`transaction-cost-policy:${evaluated.policy.version}:${evaluated.evidenceSetVersion}:${sourceDigest}`,
+      observedAt:at,
+      datasetSnapshotHash:datasetManifest.datasetSnapshotHash,
+      sourceDigest,
+    }));
+  }
+  return Object.freeze({
+    schemaVersion:1,
+    contract:RESEARCH_CANONICAL_RECEIPT_PRODUCERS_CONTRACT_V1,
+    kind:'TRANSACTION_COST_POLICY',
+    policyVersion:evaluated.policy.version,
+    evidenceSetVersion:evaluated.evidenceSetVersion,
+    sourceDigest,
+    receiptCount:receipts.length,
+    receipts:Object.freeze(receipts),
+    executionAuthority:'NONE',
+  });
 }
 
 export function buildClosedCandleAdaptiveReceiptV1({
