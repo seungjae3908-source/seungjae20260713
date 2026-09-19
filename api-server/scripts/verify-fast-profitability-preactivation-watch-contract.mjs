@@ -13,9 +13,15 @@ const activation = await read('api-server/src/services/fast-profitability-activa
 const tests = await read('api-server/src/services/fast-profitability-activation.service.test.ts');
 
 assert(workflow.includes("cron: '7,22,37,52 * * * *'"), '15-minute staggered schedule is required');
-assert(workflow.includes('issue_comment:'), 'owner-only one-shot validation command is required');
-assert(workflow.includes('/run-fast-profitability-preactivation-watch <40-character-current-main-sha>'), 'manual watch command contract missing');
-assert(workflow.includes('author_association') && workflow.includes("'OWNER'"), 'OWNER-only command gate required');
+assert(!workflow.includes('issue_comment:'), 'scheduled watch must not subscribe to issue_comment');
+assert(workflow.includes("if: github.event_name == 'schedule'"), 'watch job must be schedule-only');
+assert(!workflow.includes("startsWith(github.event.comment.body, '/run-fast-profitability-preactivation-watch ')"), 'manual comment watch command must be absent');
+assert(!workflow.includes('author_association'), 'scheduled watch must not depend on comment author metadata');
+assert(
+  workflow.includes("group: fast-profitability-v1-preactivation-forward-watch-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'schedule' }}"),
+  'schedule and pull-request validation concurrency must be isolated',
+);
+assert(workflow.includes("run.data.event !== 'schedule'"), 'prior watch state must come from a natural schedule run');
 assert(workflow.includes('getBranch') && workflow.includes('mainSha'), 'current-main resolution required');
 for (const status of [
   'application-ci/verified',
