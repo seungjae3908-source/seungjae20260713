@@ -10,6 +10,7 @@ from pathlib import Path
 SYMBOLS = ["BTCUSDT","ETHUSDT","SOLUSDT","XRPUSDT","DOGEUSDT","BNBUSDT","LINKUSDT","ADAUSDT"]
 MONTHS = [f"{y}-{m:02d}" for y,m0,m1 in [(2025,1,12),(2026,1,7)] for m in range(m0,m1+1)]
 BASE = "https://data.binance.vision/data/futures/um/monthly/klines"
+FUND_BASE = "https://data.binance.vision/data/futures/um/monthly/fundingRate"
 OUT = Path("market-prediction-lab/artifacts/frozen-scalp-swing-tournament-v1")
 OUT.mkdir(parents=True, exist_ok=True)
 UA = {"User-Agent":"investment-platform-public-research/1.0"}
@@ -251,19 +252,44 @@ STRATS = {
  "SWING_RASCHKE_PULLBACK_V1":("15m",sig_raschke_15m),
 }
 
+def fetch_funding_month(symbol, month):
+    name=f"{symbol}-fundingRate-{month}.zip"
+    url=f"{FUND_BASE}/{symbol}/{name}"
+    data=get_bytes(url, timeout=20, retries=3)
+    chk=get_bytes(url+".CHECKSUM", timeout=20, retries=3).decode("utf-8","replace").strip().split()[0]
+    actual=hashlib.sha256(data).hexdigest()
+    if chk.lower()!=actual.lower():
+        raise RuntimeError(f"funding checksum mismatch {name}")
+    z=zipfile.ZipFile(io.BytesIO(data))
+    rows=[]
+    for member in z.namelist():
+        if not member.endswith(".csv"): continue
+        text=io.TextIOWrapper(z.open(member), encoding="utf-8")
+        reader=csv.DictReader(text)
+        for row in reader:
+            try:
+                ts=int(float(row.get("calc_time") or row.get("fundingTime") or 0))
+                rate=float(row.get("last_funding_rate") or row.get("funding_rate") or row.get("fundingRate"))
+                if ts>0: rows.append((ts,rate))
+            except Exception:
+                continue
+    return month, rows, actual
+
 def fetch_funding(symbol,start_ms,end_ms):
-    rows=[]; cur=start_ms
+    parts={}
+    checks={}
     try:
-        while cur<end_ms:
-            q=urllib.parse.urlencode({"symbol":symbol,"startTime":cur,"endTime":end_ms,"limit":1000})
-            data=json.loads(get_bytes("https://fapi.binance.com/fapi/v1/fundingRate?"+q,timeout=5,retries=0))
-            if not data:break
-            for x in data:rows.append((int(x["fundingTime"]),float(x["fundingRate"])))
-            nxt=int(data[-1]["fundingTime"])+1
-            if nxt<=cur:break
-            cur=nxt
-            if len(data)<1000:break
-        return sorted(set(rows)), "OK"
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futs={ex.submit(fetch_funding_month,symbol,m):m for m in MONTHS}
+            for f in as_completed(futs):
+                m,rows,digest=f.result()
+                parts[m]=rows
+                checks[m]=digest
+        merged=[]
+        for m in MONTHS: merged.extend(parts.get(m,[]))
+        ded={ts:rate for ts,rate in merged if start_ms <= ts <= end_ms}
+        rows=sorted(ded.items())
+        return rows, "BINANCE_VISION_OK"
     except Exception as e:
         return [], f"UNAVAILABLE:{type(e).__name__}"
 
