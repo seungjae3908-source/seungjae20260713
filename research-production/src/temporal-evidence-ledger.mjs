@@ -72,8 +72,39 @@ export function createTemporalEvidenceLedgerV1({researchSha}={}){
   return Object.freeze({...core,ledgerDigest:digest(core),executionAuthority:'NONE'});
 }
 
+export function assertTemporalEvidenceLedgerV1(ledger){
+  if(!ledger||typeof ledger!=='object'||Array.isArray(ledger)||ledger.schemaVersion!==TEMPORAL_EVIDENCE_LEDGER_SCHEMA){
+    throw new TypeError('valid temporal ledger required');
+  }
+  if(typeof ledger.createdByResearchSha!=='string'||!SHA40.test(ledger.createdByResearchSha)) throw new Error('temporal ledger creator SHA invalid');
+  if(!Array.isArray(ledger.observations)) throw new Error('temporal ledger observations invalid');
+  const seen=new Set();
+  const normalized=[];
+  for(const row of ledger.observations){
+    const observation=normalizeObservation(row);
+    if(row.observationId!==observation.observationId||row.evidenceDigest!==observation.evidenceDigest){
+      throw new Error('temporal observation digest mismatch');
+    }
+    if(seen.has(row.observationId)) throw new Error('duplicate temporal observation identity');
+    seen.add(row.observationId);
+    normalized.push(observation);
+  }
+  const sorted=sortRows(normalized);
+  if(sorted.some((row,index)=>row.observationId!==ledger.observations[index]?.observationId)){
+    throw new Error('temporal ledger ordering invalid');
+  }
+  const core={
+    schemaVersion:TEMPORAL_EVIDENCE_LEDGER_SCHEMA,
+    createdByResearchSha:ledger.createdByResearchSha.toLowerCase(),
+    observations:ledger.observations,
+  };
+  if(ledger.ledgerDigest!==digest(core)) throw new Error('temporal ledger digest mismatch');
+  if(ledger.executionAuthority!=='NONE') throw new Error('temporal ledger execution authority invalid');
+  return ledger;
+}
+
 export function appendTemporalEvidenceV1(ledger,rawObservation){
-  if(!ledger||ledger.schemaVersion!==TEMPORAL_EVIDENCE_LEDGER_SCHEMA) throw new TypeError('valid temporal ledger required');
+  assertTemporalEvidenceLedgerV1(ledger);
   const observation=normalizeObservation(rawObservation);
   const existing=ledger.observations.find(row=>row.observationId===observation.observationId);
   if(existing){
@@ -103,7 +134,7 @@ function latestAdmissible(rows,anchorTimestamp,maxAgeMs){
 }
 
 export function readTemporalFeatureAtV1(ledger,{market,symbol,feature,anchorTimestamp,maxAgeMs}={}){
-  if(!ledger||ledger.schemaVersion!==TEMPORAL_EVIDENCE_LEDGER_SCHEMA) throw new TypeError('valid temporal ledger required');
+  assertTemporalEvidenceLedgerV1(ledger);
   if(!MARKETS.has(market)||typeof symbol!=='string'||!SYMBOL.test(symbol)||typeof feature!=='string'||!FEATURE.test(feature)){
     throw new TypeError('temporal feature query invalid');
   }
