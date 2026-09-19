@@ -66,6 +66,7 @@ type RouteTransitionObservation = {
 type CapabilityDenialObservation = {
   route: string;
   origin: string;
+  requests: Set<Request>;
   httpCandidates: Diagnostic[];
   consoleCandidates: Diagnostic[];
 };
@@ -351,13 +352,25 @@ function isSameOriginApiGet(request: Request) {
   }
 }
 
+function isCapabilityDenialApiGet(request: Request, observation: CapabilityDenialObservation) {
+  try {
+    const parsed = new URL(request.url());
+    return request.method() === 'GET'
+      && parsed.origin === observation.origin
+      && parsed.pathname.startsWith('/api/');
+  } catch {
+    return false;
+  }
+}
+
 function isExpectedCapabilityDenialResponse(
-  response: { status: () => number; url: () => string; request: () => { method: () => string } },
+  response: { status: () => number; url: () => string; request: () => Request },
   observation: CapabilityDenialObservation,
 ) {
   try {
     const parsed = new URL(response.url());
     return (response.status() === 401 || response.status() === 403)
+      && observation.requests.has(response.request())
       && response.request().method() === 'GET'
       && parsed.origin === observation.origin
       && parsed.pathname.startsWith('/api/');
@@ -407,6 +420,10 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
       logoutObservation.logoutScopedReads.add(request);
     }
     if (isMutatingBrowserRequest(request)) mutations.add(request);
+    const capabilityDenial = activeCapabilityDenialObservations.get(page);
+    if (capabilityDenial && isCapabilityDenialApiGet(request, capabilityDenial)) {
+      capabilityDenial.requests.add(request);
+    }
     const researchReloadObservation = activeResearchReloadObservations.get(page);
     if (
       researchReloadObservation?.reloadStarted
@@ -934,6 +951,7 @@ async function expectDeniedRoute(page: Page, route: string) {
   const denialObservation: CapabilityDenialObservation = {
     route: observation.toRoute,
     origin,
+    requests: new Set<Request>(),
     httpCandidates: [],
     consoleCandidates: [],
   };
@@ -947,6 +965,13 @@ async function expectDeniedRoute(page: Page, route: string) {
     expect(routeIdentity(page.url())).toBe(observation.toRoute);
     confirmed = true;
   } finally {
+    // Keep the denial observer alive until every GET started by the denied route
+    // has settled. In the real staging browser, the 401/403 response and its
+    // resource console message can arrive after the capability-denied UI itself.
+    await finishRouteTransition(page, observation, confirmed);
+    if (confirmed) {
+      await waitForPresentationFrame(page);
+    }
     activeCapabilityDenialObservations.delete(page);
     if (confirmed) {
       diagnostics.expected_capability_denials.push(...denialObservation.httpCandidates);
@@ -961,7 +986,6 @@ async function expectDeniedRoute(page: Page, route: string) {
         detail: `unconfirmed capability denial console error: ${item.detail}`,
       })));
     }
-    await finishRouteTransition(page, observation, confirmed);
   }
 }
 
@@ -1501,20 +1525,37 @@ test('capability denial diagnostics admit only same-origin API GET 401/403 and m
   const observation: CapabilityDenialObservation = {
     route: '/coins/futures',
     origin: 'https://staging.example.test',
+    requests: new Set<Request>(),
     httpCandidates: [],
     consoleCandidates: [],
   };
-  const response = (status: number, url: string, method = 'GET') => ({
-    status: () => status,
+  const request = (url: string, method = 'GET') => ({
     url: () => url,
-    request: () => ({ method: () => method }),
+    method: () => method,
+  }) as unknown as Request;
+  const response = (status: number, req: Request) => ({
+    status: () => status,
+    url: () => req.url(),
+    request: () => req,
   });
-  expect(isExpectedCapabilityDenialResponse(response(403, 'https://staging.example.test/api/crypto/futures/BTCUSDT/snapshot'), observation)).toBe(true);
-  expect(isExpectedCapabilityDenialResponse(response(401, 'https://staging.example.test/api/private'), observation)).toBe(true);
-  expect(isExpectedCapabilityDenialResponse(response(404, 'https://staging.example.test/api/private'), observation)).toBe(false);
-  expect(isExpectedCapabilityDenialResponse(response(403, 'https://staging.example.test/not-api'), observation)).toBe(false);
-  expect(isExpectedCapabilityDenialResponse(response(403, 'https://other.example.test/api/private'), observation)).toBe(false);
-  expect(isExpectedCapabilityDenialResponse(response(403, 'https://staging.example.test/api/private', 'POST'), observation)).toBe(false);
+  const snapshot = request('https://staging.example.test/api/crypto/futures/BTCUSDT/snapshot');
+  const privateRead = request('https://staging.example.test/api/private');
+  observation.requests.add(snapshot);
+  observation.requests.add(privateRead);
+  expect(isExpectedCapabilityDenialResponse(response(403, snapshot), observation)).toBe(true);
+  expect(isExpectedCapabilityDenialResponse(response(401, privateRead), observation)).toBe(true);
+  expect(isExpectedCapabilityDenialResponse(response(404, privateRead), observation)).toBe(false);
+  const notApi = request('https://staging.example.test/not-api');
+  observation.requests.add(notApi);
+  expect(isExpectedCapabilityDenialResponse(response(403, notApi), observation)).toBe(false);
+  const crossOrigin = request('https://other.example.test/api/private');
+  observation.requests.add(crossOrigin);
+  expect(isExpectedCapabilityDenialResponse(response(403, crossOrigin), observation)).toBe(false);
+  const post = request('https://staging.example.test/api/private', 'POST');
+  observation.requests.add(post);
+  expect(isExpectedCapabilityDenialResponse(response(403, post), observation)).toBe(false);
+  const unobserved = request('https://staging.example.test/api/unobserved');
+  expect(isExpectedCapabilityDenialResponse(response(403, unobserved), observation)).toBe(false);
   expect(isExpectedCapabilityDenialConsole('Failed to load resource: the server responded with a status of 403 ()')).toBe(true);
   expect(isExpectedCapabilityDenialConsole('Failed to load resource: the server responded with a status of 401 ()')).toBe(true);
   expect(isExpectedCapabilityDenialConsole('TypeError: failed to fetch')).toBe(false);
