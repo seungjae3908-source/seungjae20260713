@@ -8,13 +8,16 @@ import {
   buildAndPersistResearchRuntimeBindingsV1,
   loadPersistedResearchRuntimeBindingsV1,
 } from '../src/research-runtime-bindings-store.mjs';
+import {
+  createCanonicalBundleOfflinePublicationReceiptV1,
+} from '../../market-prediction-lab/src/adaptive-runtime-owner-capabilities-v1.js';
 
 const SHA='a'.repeat(40);
 const HASH='b'.repeat(64);
 const AT='2026-09-20T00:00:00.000Z';
 
 function publication(overrides={}){
-  return {
+  const raw={
     schemaVersion:'research-canonical-bundle-publication-v1',
     dslDigest:HASH,
     bundleDigest:'c'.repeat(64),
@@ -22,6 +25,13 @@ function publication(overrides={}){
     evidenceCredit:0,
     profitabilityProven:false,
     executionAuthority:'NONE',
+  };
+  return {
+    ...createCanonicalBundleOfflinePublicationReceiptV1({
+      researchCodeSha:SHA,
+      publishedAt:AT,
+      publication:raw,
+    }),
     ...overrides,
   };
 }
