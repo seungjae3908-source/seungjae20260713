@@ -261,7 +261,7 @@ test('tampered existing receipt conflicts instead of being silently replaced', a
 
 test('production CLI does not import test fixtures or expose validation clock/test-evidence bypasses', async () => {
   const source = await readFile(
-    new URL('../../scripts/publish-research-canonical-bundle.ts', import.meta.url),
+    join(process.cwd(), 'api-server', 'scripts', 'publish-research-canonical-bundle.ts'),
     'utf8',
   );
   assert.doesNotMatch(source, /test-fixtures|allowTestEvidence|validationNow|--now|TEST_ONLY/);
