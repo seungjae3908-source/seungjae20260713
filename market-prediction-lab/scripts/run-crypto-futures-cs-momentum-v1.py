@@ -191,6 +191,101 @@ def simulate(maps,funding,common,lookback_days,cost,start_index=0):
     out["short_selection_count"]=short_counts
     return out
 
+def build_plain_weeks(maps,funding,common,lookback_days):
+    skip=1;rebalance=7
+    start=lookback_days+skip+2
+    weeks=[]
+    for i in range(start,len(common)-1,rebalance):
+        formation_end=i-1-skip
+        formation_start=formation_end-lookback_days
+        if formation_start<0: continue
+        ranked=[]
+        for sym in SYMBOLS:
+            c1=maps[sym][common[formation_end]].c
+            c0=maps[sym][common[formation_start]].c
+            ranked.append((c1/c0-1,sym))
+        ranked.sort()
+        target={s:0.0 for s in SYMBOLS}
+        for _,s in ranked[-2:]: target[s]=0.25
+        for _,s in ranked[:2]: target[s]=-0.25
+        end=min(i+rebalance,len(common)-1)
+        plain_eq=1.0
+        for d in range(i,end):
+            t=common[d];tn=common[d+1]
+            r=0.0
+            for sym,w in target.items():
+                if w==0: continue
+                b=maps[sym][t];bn=maps[sym][tn]
+                fr=funding_between(funding[sym],t,tn)
+                r+=w*(bn.o/b.o-1)-w*fr
+            plain_eq*=1+max(r,-0.99)
+        weeks.append({"start_index":i,"end_index":end,"weights":target,"plain_return":plain_eq-1})
+    return weeks
+
+def simulate_risk_managed(maps,funding,common,lookback_days,cost,start_index=0,vol_window_weeks=8,target_weekly_vol=0.10,max_gross=3.0):
+    # Barroso/Santa-Clara-style inverse-volatility scaling applied to the
+    # canonical 2-week crypto WML factor, with a practical gross cap.
+    weeks=build_plain_weeks(maps,funding,common,lookback_days)
+    first_week=next((k for k,w in enumerate(weeks) if w["start_index"]>=start_index and k>=vol_window_weeks),None)
+    if first_week is None:
+        raise RuntimeError("risk-managed window has insufficient weekly history")
+    eq=1.0;curve=[1.0];daily_returns=[];prev={s:0.0 for s in SYMBOLS}
+    turnover_total=0.0;cost_paid=0.0;funding_pnl=0.0
+    scales=[];gross_days=0.0;day_count=0
+
+    for k in range(first_week,len(weeks)):
+        wspec=weeks[k]
+        hist=[weeks[j]["plain_return"] for j in range(k-vol_window_weeks,k)]
+        sigma=(sum(r*r for r in hist)/vol_window_weeks)**0.5
+        scale=max_gross if sigma<=1e-12 else min(max_gross,target_weekly_vol/sigma)
+        scales.append(scale)
+        target={s:wspec["weights"][s]*scale for s in SYMBOLS}
+        turnover=sum(abs(target[s]-prev[s]) for s in SYMBOLS)
+        eq_before=eq
+        fee=turnover*cost
+        eq*=max(0.0,1-fee)
+        turnover_total+=turnover;cost_paid+=fee
+        if fee:
+            daily_returns.append(eq/eq_before-1);curve.append(eq)
+
+        for d in range(wspec["start_index"],wspec["end_index"]):
+            t=common[d];tn=common[d+1]
+            eq_before=eq;r=0.0
+            for sym,weight in target.items():
+                if weight==0: continue
+                b=maps[sym][t];bn=maps[sym][tn]
+                fr=funding_between(funding[sym],t,tn)
+                r+=weight*(bn.o/b.o-1)-weight*fr
+                funding_pnl+=-weight*fr
+            r=max(r,-0.99)
+            eq*=1+r
+            daily_returns.append(eq/eq_before-1);curve.append(eq)
+            gross_days+=sum(abs(x) for x in target.values());day_count+=1
+        prev=target
+
+    closing=sum(abs(x) for x in prev.values())
+    if closing:
+        eq_before=eq;fee=closing*cost
+        eq*=max(0.0,1-fee);cost_paid+=fee;turnover_total+=closing
+        daily_returns.append(eq/eq_before-1);curve.append(eq)
+
+    start_t=common[weeks[first_week]["start_index"]]
+    years=(common[-1]-start_t)/(365.25*86400000)
+    out=summarize(curve,daily_returns,years,turnover_total,cost_paid,funding_pnl)
+    out.update({
+      "lookback_days":lookback_days,
+      "vol_window_weeks":vol_window_weeks,
+      "target_weekly_vol":target_weekly_vol,
+      "gross_cap":max_gross,
+      "avg_gross_exposure":gross_days/max(1,day_count),
+      "avg_scale":sum(scales)/len(scales) if scales else 0,
+      "max_scale_used":max(scales) if scales else 0,
+      "min_scale_used":min(scales) if scales else 0,
+      "paper_exact":False,
+      "paper_difference":"inverse 8-week RMS scaling with 10% weekly target, but gross exposure capped at 3x for practical safety",
+    })
+    return out
+
 def main():
     maps,funding,common,provenance=prepare()
     recent_start=int(len(common)*0.70)
@@ -202,6 +297,12 @@ def main():
               "full":simulate(maps,funding,common,lookback,cost,0),
               "recent30pct":simulate(maps,funding,common,lookback,cost,recent_start),
             }
+    results["MOM14_RM8_CAP3"]={}
+    for cname,cost in COSTS.items():
+        results["MOM14_RM8_CAP3"][cname]={
+          "full":simulate_risk_managed(maps,funding,common,14,cost,0,8,0.10,3.0),
+          "recent30pct":simulate_risk_managed(maps,funding,common,14,cost,recent_start,8,0.10,3.0),
+        }
 
     payload={
       "schemaVersion":1,"kind":"crypto-futures-cross-sectional-momentum-v1",
@@ -212,6 +313,7 @@ def main():
         "portfolio":"long top2 + short bottom2, each 25% absolute weight, gross exposure 1x, net 0",
         "execution":"rank from completed daily closes ending one skipped day before rebalance; trade at next scheduled daily open",
         "funding":"historical Binance Vision funding applied with correct long/short sign",
+        "risk_managed":"MOM14_RM8_CAP3 scales the 14d factor by inverse prior 8-week RMS return volatility toward a 10% weekly target, capped at 3x gross",
       },
       "symbols":SYMBOLS,"months":MONTHS,"costs":COSTS,"common_rows":len(common),"provenance":provenance,"results":results,
     }
@@ -219,7 +321,7 @@ def main():
     lines=["# Crypto Futures Cross-Sectional Momentum V1","","RESEARCH ONLY / PUBLIC DATA ONLY / NO ORDERS","",
       "| Strategy | Cost | Window | Return | Ann. | PF | MDD | Turnover |",
       "|---|---|---|---:|---:|---:|---:|---:|"]
-    for strat in ("MOM14","MOM28"):
+    for strat in ("MOM14","MOM28","MOM14_RM8_CAP3"):
         for cname in ("base","stress"):
             for window in ("full","recent30pct"):
                 x=results[strat][cname][window]
