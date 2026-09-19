@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   MEMBER_AUTO_TRADING_PAPER_HANDOFF_VERSION,
   buildMemberAutoTradingPaperHandoff,
+  validateMemberAutoTradingPaperHandoff,
 } from "../src/member-auto-trading-paper-handoff-v1.js";
 
 const NOW = Date.parse("2026-09-19T02:00:00.000Z");
@@ -235,4 +236,50 @@ test("cash markets reject short-entry substitution", () => {
   });
   assert.equal(value.status, "BLOCKED_DATA");
   assert.ok(value.blockers.some((code) => code.includes("HANDOFF_DIRECTION_INVALID")));
+});
+
+test("persisted READY handoff is revalidated by digest and market-data freshness", () => {
+  const value = buildMemberAutoTradingPaperHandoff({
+    cycleId: "cycle-readback",
+    evaluatedAtMs: NOW,
+    lanes: [lane("CRYPTO_SPOT", [candidate()])],
+  });
+  const readback = validateMemberAutoTradingPaperHandoff(structuredClone(value), NOW + 1_000);
+  assert.deepEqual(readback, value);
+  assert.equal(Object.isFrozen(readback.entries[0]), true);
+
+  const stale = structuredClone(value);
+  assert.throws(
+    () => validateMemberAutoTradingPaperHandoff(stale, NOW + 61_000),
+    /HANDOFF_ENTRY_STALE/u,
+  );
+});
+
+test("persisted handoff rejects payload tampering even when safety flags are unchanged", () => {
+  const value = buildMemberAutoTradingPaperHandoff({
+    cycleId: "cycle-tamper",
+    evaluatedAtMs: NOW,
+    lanes: [lane("CRYPTO_SPOT", [candidate()])],
+  });
+  const tampered = structuredClone(value);
+  tampered.entries[0].signal.learningSnapshot.target1 = 999;
+  assert.throws(
+    () => validateMemberAutoTradingPaperHandoff(tampered, NOW + 1_000),
+    /HANDOFF_ENTRY_DIGEST_MISMATCH/u,
+  );
+});
+
+test("persisted BLOCKED handoff is valid only as zero-entry latest state", () => {
+  const blocked = buildMemberAutoTradingPaperHandoff({
+    cycleId: "cycle-blocked-readback",
+    evaluatedAtMs: NOW,
+    lanes: [lane("CRYPTO_SPOT", [candidate({ overrides: { liveOrderAllowed: true } })])],
+  });
+  assert.equal(validateMemberAutoTradingPaperHandoff(blocked, NOW).status, "BLOCKED_DATA");
+  const forged = structuredClone(blocked);
+  forged.entries.push({});
+  assert.throws(
+    () => validateMemberAutoTradingPaperHandoff(forged, NOW),
+    /MEMBER_AUTO_TRADING_BLOCKED_HANDOFF_INVALID/u,
+  );
 });
