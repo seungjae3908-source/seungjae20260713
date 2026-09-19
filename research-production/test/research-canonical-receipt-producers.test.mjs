@@ -7,6 +7,7 @@ import {
 } from '../src/research-dataset-snapshot-store.mjs';
 import {
   buildClosedCandleAdaptiveReceiptV1,
+  buildStockCorporateActionAdaptiveReceiptV1,
   buildStockUniverseAdaptiveReceiptsV1,
   buildTransactionCostPolicyAdaptiveReceiptV1,
 } from '../src/research-canonical-receipt-producers.mjs';
@@ -66,6 +67,55 @@ function stockAuditInput(market='US_STOCK'){
     minExitedCoverage:0.8,
     memberships,
     histories,
+  };
+}
+
+function stockCorporateEvidence(market='US_STOCK'){
+  const audit=stockAuditInput(market);
+  const memberships=audit.memberships.map(row=>({
+    listingId:`${market}-${row.symbol}-PRIMARY`,
+    symbol:row.symbol,
+    activeFrom:row.activeFrom,
+    activeTo:row.activeTo,
+    sourceId:row.sourceId,
+    exchange:market==='US_STOCK'?'NYSE_NASDAQ':'KRX',
+    exitReason:row.exitReason,
+  }));
+  const priceHistories=audit.histories.map((row,index)=>({
+    listingId:`${market}-${row.symbol}-PRIMARY`,
+    symbol:row.symbol,
+    sourceId:row.source,
+    adjustmentPolicy:'SPLIT_ADJUSTED',
+    terminalEventPolicy:index===0?'LAST_TRADABLE_PRICE':null,
+    observations:[
+      {timestampMs:row.firstTimestamp,price:100+index},
+      {timestampMs:audit.evaluationStartTime,price:101+index},
+      {timestampMs:audit.evaluationEndTime,price:102+index},
+      {timestampMs:row.lastTimestamp,price:103+index},
+    ],
+  }));
+  const removed=memberships.find(row=>row.activeTo!=null);
+  return {
+    market,
+    evaluationStartTime:audit.evaluationStartTime,
+    evaluationEndTime:audit.evaluationEndTime,
+    frozenAt:audit.frozenAt,
+    toleranceMs:audit.toleranceMs,
+    memberships,
+    priceHistories,
+    corporateActions:[{
+      listingId:removed.listingId,
+      symbol:removed.symbol,
+      type:'DELISTING',
+      effectiveAt:removed.activeTo,
+      sourceId:'canonical-corporate-actions-v1',
+    }],
+    corporateActionCoverage:{
+      startTime:audit.evaluationStartTime-86400000,
+      endTime:audit.evaluationEndTime+86400000,
+      sourceId:'canonical-corporate-actions-v1',
+      complete:true,
+    },
   };
 }
 
@@ -202,6 +252,80 @@ test('current-list-only or missing removed-name history cannot produce stock rec
   assert.throws(()=>buildStockUniverseAdaptiveReceiptsV1({
     datasetManifest:dataset,auditInput:input,observedAt:'2026-09-20T00:10:00.000Z',
   }),/DIGEST_MISMATCH|NOT_READY/);
+});
+
+test('merged point-in-time owner emits CORPORATE_ACTIONS only for the exact stock profile snapshot',()=>{
+  const auditInput=stockAuditInput('US_STOCK');
+  const dataset=stockManifest('US_STOCK:POSITION',auditInput);
+  const evidence=stockCorporateEvidence('US_STOCK');
+  const result=buildStockCorporateActionAdaptiveReceiptV1({
+    datasetManifest:dataset,
+    pointInTimeEvidence:evidence,
+    observedAt:'2026-09-20T00:15:00.000Z',
+  });
+  assert.equal(result.kind,'STOCK_POINT_IN_TIME_CORPORATE_ACTIONS');
+  assert.equal(result.profileId,'US_STOCK:POSITION');
+  assert.equal(result.receipt.profileId,'US_STOCK:POSITION');
+  assert.equal(result.receipt.requirement,'CORPORATE_ACTIONS');
+  assert.equal(result.receipt.datasetSnapshotHash,dataset.datasetSnapshotHash);
+  assert.equal(result.receipt.sourceDigest,result.sourceDigest);
+  assert.match(result.sourceDigest,/^[0-9a-f]{64}$/);
+  assert.equal(result.executionAuthority,'NONE');
+});
+
+test('corporate-action receipt stays blocked for missing coverage or unsafe RAW-price action crossing',()=>{
+  const auditInput=stockAuditInput('US_STOCK');
+  const dataset=stockManifest('US_STOCK:POSITION',auditInput);
+  const missing=stockCorporateEvidence('US_STOCK');
+  missing.corporateActionCoverage=null;
+  assert.throws(()=>buildStockCorporateActionAdaptiveReceiptV1({
+    datasetManifest:dataset,
+    pointInTimeEvidence:missing,
+    observedAt:'2026-09-20T00:15:00.000Z',
+  }),/EVIDENCE_NOT_READY/);
+
+  const unsafe=stockCorporateEvidence('US_STOCK');
+  const live=unsafe.memberships.find(row=>row.activeTo==null);
+  unsafe.priceHistories=unsafe.priceHistories.map(row=>row.listingId===live.listingId
+    ? {...row,adjustmentPolicy:'RAW'}
+    : row);
+  unsafe.corporateActions=[
+    ...unsafe.corporateActions,
+    {
+      listingId:live.listingId,
+      symbol:live.symbol,
+      type:'SPLIT',
+      effectiveAt:unsafe.evaluationStartTime+86400000,
+      sourceId:'canonical-corporate-actions-v1',
+      ratio:2,
+    },
+  ];
+  assert.throws(()=>buildStockCorporateActionAdaptiveReceiptV1({
+    datasetManifest:dataset,
+    pointInTimeEvidence:unsafe,
+    observedAt:'2026-09-20T00:15:00.000Z',
+  }),/EVIDENCE_NOT_READY/);
+});
+
+test('corporate-action receipt cannot cross snapshot universe digest or evaluation range',()=>{
+  const auditInput=stockAuditInput('US_STOCK');
+  const dataset=stockManifest('US_STOCK:POSITION',auditInput);
+  const evidence=stockCorporateEvidence('US_STOCK');
+  assert.throws(()=>buildStockCorporateActionAdaptiveReceiptV1({
+    datasetManifest:dataset,
+    pointInTimeEvidence:{...evidence,evaluationEndTime:evidence.evaluationEndTime-86400000},
+    observedAt:'2026-09-20T00:15:00.000Z',
+  }),/EVIDENCE_NOT_READY/);
+
+  const wrong=buildResearchDatasetSnapshotManifestV1({
+    researchSha:SHA,createdAt:AT,profileId:'US_STOCK:POSITION',evidence:stockEvidence(),
+    scope:{...dataset.scope,universeDigest:H('f')},
+  });
+  assert.throws(()=>buildStockCorporateActionAdaptiveReceiptV1({
+    datasetManifest:wrong,
+    pointInTimeEvidence:evidence,
+    observedAt:'2026-09-20T00:15:00.000Z',
+  }),/EVIDENCE_NOT_READY/);
 });
 
 test('READY transaction-cost evidence emits one cost-policy receipt for the exact profile',()=>{
