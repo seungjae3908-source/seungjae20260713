@@ -82,15 +82,22 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
     crypto_spot: clampNumber(classLimits?.crypto_spot, 5_000, totalCapitalKrw, totalCapitalKrw),
     crypto_futures: clampNumber(classLimits?.crypto_futures, 5_000, totalCapitalKrw, totalCapitalKrw),
   };
+  const marketEnabled: Record<TradingAssetClass, boolean> = {
+    domestic_stock: input.marketEnabled?.domestic_stock ?? DEFAULT_TRADING_POLICY.marketEnabled.domestic_stock,
+    us_stock: input.marketEnabled?.us_stock ?? DEFAULT_TRADING_POLICY.marketEnabled.us_stock,
+    crypto_spot: input.marketEnabled?.crypto_spot ?? DEFAULT_TRADING_POLICY.marketEnabled.crypto_spot,
+    crypto_futures: input.marketEnabled?.crypto_futures ?? DEFAULT_TRADING_POLICY.marketEnabled.crypto_futures,
+  };
   return {
-    mode: input.mode === 'automatic' ? 'automatic' : 'approval',
+    mode: input.mode === 'approval' ? 'approval' : 'automatic',
     automaticEnabled: input.automaticEnabled === true,
     emergencyStopped: input.emergencyStopped === true,
     newEntriesStopped: input.newEntriesStopped === true,
+    marketEnabled,
     exchangeEnabled: {
-      bitget: input.exchangeEnabled?.bitget === true,
-      upbit: input.exchangeEnabled?.upbit === true,
-      kiwoom: input.exchangeEnabled?.kiwoom === true,
+      bitget: input.exchangeEnabled?.bitget ?? marketEnabled.crypto_futures,
+      upbit: input.exchangeEnabled?.upbit ?? marketEnabled.crypto_spot,
+      kiwoom: input.exchangeEnabled?.kiwoom ?? (marketEnabled.domestic_stock || marketEnabled.us_stock),
     },
     enabledAssets: {
       bitget: normalizedList(input.enabledAssets?.bitget, 100).map((item) => item.toUpperCase()),
@@ -228,10 +235,13 @@ export function evaluateTradingPlan(
 
   if (policy.mode === 'automatic') {
     if (!policy.automaticEnabled) add(blockCodes, 'AUTOMATIC_MODE_NOT_CONFIRMED');
+    const assetClass = assetClassForPlan(plan);
+    if (!policy.marketEnabled[assetClass]) add(blockCodes, 'MARKET_NOT_ENABLED');
     if (!policy.exchangeEnabled[plan.exchange]) add(blockCodes, 'EXCHANGE_NOT_ENABLED');
     const normalizedSymbol = plan.exchange === 'upbit' ? plan.symbol.toUpperCase().replace(/^KRW-/, '') : plan.symbol.toUpperCase();
     if (!policy.enabledAssets[plan.exchange].includes(normalizedSymbol)) add(blockCodes, 'ASSET_NOT_ENABLED');
-    if (!policy.enabledStrategies.includes(plan.strategyId)) add(blockCodes, 'STRATEGY_NOT_ENABLED');
+    if (policy.enabledStrategies.length > 0 && !policy.enabledStrategies.includes(plan.strategyId)) add(blockCodes, 'STRATEGY_NOT_ENABLED');
+    if (!plan.economics) add(blockCodes, 'AUTOMATIC_ECONOMICS_REQUIRED');
   }
   if (plan.accountMode === 'live' && !options.serverLiveEnabled) add(blockCodes, 'LIVE_EXECUTION_DISABLED');
 
@@ -253,7 +263,10 @@ export function evaluateTradingPlan(
     if (plan.orderType === 'limit' && finitePositive(plan.limitPrice) && !isAlignedToStep(plan.limitPrice, upbitKrwPriceStep(plan.limitPrice))) add(blockCodes, 'UPBIT_PRICE_TICK');
   }
   if (plan.exchange === 'kiwoom') {
-    if (plan.market !== 'KR' || (plan.side !== 'buy' && plan.side !== 'sell')) add(blockCodes, 'KIWOOM_DOMESTIC_ONLY');
+    const stockMarketAllowed = plan.accountMode === 'paper'
+      ? plan.market === 'KR' || plan.market === 'US'
+      : plan.market === 'KR';
+    if (!stockMarketAllowed || (plan.side !== 'buy' && plan.side !== 'sell')) add(blockCodes, 'STOCK_MARKET_NOT_SUPPORTED');
     if (!Number.isSafeInteger(plan.quantity) || Number(plan.quantity) <= 0) add(blockCodes, 'KIWOOM_QUANTITY_INVALID');
   }
   if (snapshot.availableBalance < plan.estimatedKrw && plan.exchange !== 'bitget') add(blockCodes, 'INSUFFICIENT_BALANCE');
