@@ -271,13 +271,11 @@ function orderRow(order: TradingOrder) {
   };
 }
 
-export function createSupabaseTradingRepository(accessToken: string, authenticatedUserId: string): TradingRepository {
-  if (!accessToken || !authenticatedUserId) throw new Error('LOGIN_REQUIRED');
-  const client = getUserSupabase(accessToken);
-  const secureClient = () => {
-    if (!hasSupabaseServerKey()) throw new Error('TRADE_CREDENTIAL_STORAGE_UNAVAILABLE');
-    return getSupabase();
-  };
+function createScopedTradingRepository(
+  client: SupabaseClient,
+  secureClient: () => SupabaseClient,
+  authenticatedUserId: string,
+): TradingRepository {
   const owned = (userId: string) => assertOwner(userId, authenticatedUserId);
 
   const selectPlanByIdempotency = async (userId: string, key: string) => {
@@ -297,9 +295,8 @@ export function createSupabaseTradingRepository(accessToken: string, authenticat
 
   return {
     async getGlobalEmergencyStop() {
-      if (!hasSupabaseServerKey()) return true;
       try {
-        const { data, error } = await getSupabase().from('trade_system_controls')
+        const { data, error } = await secureClient().from('trade_system_controls')
           .select('emergency_stopped').eq('control_key', 'global').maybeSingle();
         if (error || !data) return true;
         return data.emergency_stopped === true;
@@ -480,6 +477,31 @@ export function createSupabaseTradingRepository(accessToken: string, authenticat
       return (data ?? []).map((row) => row.payload as TradingOrderEvent);
     },
   };
+}
+
+export function createSupabaseTradingRepository(
+  accessToken: string,
+  authenticatedUserId: string,
+): TradingRepository {
+  if (!accessToken || !authenticatedUserId) throw new Error('LOGIN_REQUIRED');
+  const client = getUserSupabase(accessToken);
+  const secureClient = () => {
+    if (!hasSupabaseServerKey()) throw new Error('TRADE_CREDENTIAL_STORAGE_UNAVAILABLE');
+    return getSupabase();
+  };
+  return createScopedTradingRepository(client, secureClient, authenticatedUserId);
+}
+
+export function createServiceRoleTradingRepository(
+  authenticatedUserId: string,
+  injectedClient?: SupabaseClient,
+): TradingRepository {
+  if (!authenticatedUserId) throw new Error('LOGIN_REQUIRED');
+  if (!injectedClient && !hasSupabaseServerKey()) {
+    throw new Error('TRADE_AUTOMATION_SERVICE_ROLE_REQUIRED');
+  }
+  const client = injectedClient ?? getSupabase();
+  return createScopedTradingRepository(client, () => client, authenticatedUserId);
 }
 
 function toConnection(row: Record<string, unknown>): ExchangeConnection {

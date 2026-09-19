@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { getUserSupabase } from '../lib/supabase';
+import { getSupabase, getUserSupabase, hasSupabaseServerKey } from '../lib/supabase';
 import {
   PaperJournalError,
   type PaperJournalConflict,
@@ -57,9 +57,10 @@ async function readAllRows(client: SupabaseClient, table: string, userId: string
   return rows;
 }
 
-export function createSupabasePaperJournalRepository(accessToken: string, authenticatedUserId: string): PaperJournalRepository {
-  if (!accessToken || !authenticatedUserId) throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
-  const client = getUserSupabase(accessToken);
+function createScopedPaperJournalRepository(
+  client: SupabaseClient,
+  authenticatedUserId: string,
+): PaperJournalRepository {
   const assertOwner = (userId: string) => {
     if (userId !== authenticatedUserId) throw new PaperJournalError('USER_SCOPE_MISMATCH', '사용자 범위가 일치하지 않습니다.', 403);
   };
@@ -159,6 +160,31 @@ export function createSupabasePaperJournalRepository(accessToken: string, authen
       };
     },
   };
+}
+
+export function createSupabasePaperJournalRepository(
+  accessToken: string,
+  authenticatedUserId: string,
+): PaperJournalRepository {
+  if (!accessToken || !authenticatedUserId) {
+    throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
+  }
+  return createScopedPaperJournalRepository(getUserSupabase(accessToken), authenticatedUserId);
+}
+
+export function createServiceRolePaperJournalRepository(
+  authenticatedUserId: string,
+  injectedClient?: SupabaseClient,
+): PaperJournalRepository {
+  if (!authenticatedUserId) throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
+  if (!injectedClient && !hasSupabaseServerKey()) {
+    throw new PaperJournalError(
+      'PAPER_JOURNAL_SERVICE_ROLE_REQUIRED',
+      '서버 거래일지 권한이 필요합니다.',
+      503,
+    );
+  }
+  return createScopedPaperJournalRepository(injectedClient ?? getSupabase(), authenticatedUserId);
 }
 
 export type { PaperJournalSyncRecord };
