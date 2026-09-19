@@ -94,7 +94,7 @@ function publication(overrides={}){
 
 test("owner capability builder leaves canonical bundle missing without durable readback receipt",()=>{
   const result=buildAdaptiveRuntimeOwnerBindingsV1({sourceSha:SHA});
-  assert.deepEqual(result.availableKeys.sort(),[
+  assert.deepEqual([...result.availableKeys].sort(),[
     "canonicalBacktester","formulaCompiler","stageCheckpointExecutor","statisticalFirewall",
   ]);
   assert.deepEqual(result.missingKeys,["canonicalBundleSource"]);
