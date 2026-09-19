@@ -30,6 +30,7 @@ const groups = {
   ],
   phase7: [
     path.join(root, 'src/services/paper-journal-sync.service.test.ts'),
+    path.join(root, 'src/services/paper-journal-service-role.repository.test.ts'),
     path.join(root, 'src/services/paper-journal-analytics.service.test.ts'),
     path.join(root, 'src/services/unified-trade-journal.service.test.ts'),
     path.join(root, 'src/services/paper-journal-migration.test.ts'),
@@ -102,6 +103,8 @@ const groups = {
     path.join(root, 'src/services/three-provider-predeploy-readiness.service.test.ts'),
     path.join(root, 'src/services/trade-approval-paper-guard.service.test.ts'),
     path.join(root, 'src/services/trade-automation-integration.test.ts'),
+    path.join(root, 'src/services/member-auto-trading-fx.service.test.ts'),
+    path.join(root, 'src/services/member-auto-trading-background-worker.service.test.ts'),
     path.join(root, 'src/services/trade-market-intelligence-integration.test.ts'),
     path.join(root, 'src/services/trade-automation-repository-compatibility.test.ts'),
     path.join(root, 'src/services/trade-kill-switch.test.ts'),
