@@ -9,7 +9,7 @@
 - 정확한 40자 Git SHA를 고정하지 않으면 실행을 거부합니다.
 - Paper와 Shadow는 `/var/lib/investment-research-production/forward` 아래의 **독립 상태**만 사용하여 기존 Paper/Shadow evidence chain과 충돌하지 않습니다.
 - 연구 실패는 fail-closed로 기록하되 다른 독립 lane을 중단시키지 않습니다.
-- 독립 task는 `stateRoot/runs/<cycle>/<task>/workspace`에 격리합니다. 단, `long-history`는 V3/V4/V5/V6가 V1의 frozen 산출물을 입력으로 사용하므로 한 cycle 안에서 V1→V3/V4/V5/V6 순서의 shared workspace를 사용합니다.
+- 병렬 task마다 `stateRoot/runs/<cycle>/<task>/workspace`에 `market-prediction-lab`을 복제하여 생성 산출물이 서로 덮어쓰지 않도록 합니다.
 - 서버의 일반 환경변수는 자식 연구 프로세스로 그대로 전달하지 않으며 PATH/LANG/TZ 등 최소 실행 환경만 전달하여 Token/API key/DB credential 전파를 차단합니다.
 - `RESEARCH_CODE_SHA`와 실제 checkout `git rev-parse HEAD`가 다르면 실행을 거부합니다.
 - Paper Forward activation timestamp는 첫 실행 때 상태 저장소에 고정되고 이후 변경을 거부합니다.
@@ -24,7 +24,7 @@
   - Crypto Spot: Upbit public → 비용/PnL → 대안전략
   - Stocks: KR/US public → 비용/PnL → unseen-symbol/rolling generalization → US pullback → regime
   - 총 14개 역사연구 단계를 3개 격리 workspace에서 병렬 처리합니다.
-- `long-history`: V1을 먼저 실행한 뒤 같은 immutable cycle workspace에서 V3/V4/V5/V6를 실행합니다. V1 산출물 의존성을 보존하며, V3~V6 중 하나의 실패가 다른 variant 실행을 막지는 않습니다.
+- `long-history`: V1/V3/V4/V5/V6 long-history 연구를 병렬 실행합니다.
 - `forward`: 별도 state root로 Paper Forward + Shadow를 실행합니다. 미래 시간은 압축하지 않습니다.
 - `all`: 배포/감사용 **계획 출력만** 허용하며 실제 실행은 세 프로필을 따로 실행하게 강제해 장시간 단일 프로세스와 state 충돌을 피합니다.
 
