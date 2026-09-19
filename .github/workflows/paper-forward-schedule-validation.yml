@@ -87,6 +87,9 @@ on:
       - market-prediction-lab/src/four-market-paper-settlement-v1.js
       - market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js
       - market-prediction-lab/src/paper-forward-evidence-runtime-v1.js
+      - market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js
+      - market-prediction-lab/src/member-auto-trading-paper-handoff-v1.d.ts
+      - market-prediction-lab/tests/member-auto-trading-paper-handoff-v1.test.js
       - market-prediction-lab/src/natural-paper-public-position-observation-v1.js
       - market-prediction-lab/src/paper-scheduler-driver-v1.js
       - market-prediction-lab/src/paper-forward-schedule-runtime-base-v1.js
@@ -288,6 +291,9 @@ jobs:
             market-prediction-lab/src/four-market-paper-sampler-v1.js
             market-prediction-lab/src/four-market-paper-settlement-v1.js
             market-prediction-lab/src/paper-forward-evidence-runtime-v1.js
+            market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js
+            market-prediction-lab/src/member-auto-trading-paper-handoff-v1.d.ts
+            market-prediction-lab/tests/member-auto-trading-paper-handoff-v1.test.js
             market-prediction-lab/src/paper-public-provider-authority-v1.js
             market-prediction-lab/src/natural-paper-public-position-observation-v1.js
             market-prediction-lab/src/paper-scheduler-driver-v1.js
@@ -396,6 +402,8 @@ jobs:
           fi
           node --check market-prediction-lab/src/authoritative-natural-paper-accounting-v1.js
           node --check market-prediction-lab/src/paper-forward-evidence-runtime-v1.js
+          node --check market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js
+          node --check market-prediction-lab/tests/member-auto-trading-paper-handoff-v1.test.js
           node --check market-prediction-lab/src/paper-scheduler-driver-v1.js
           node --check market-prediction-lab/src/paper-forward-schedule-runtime-base-v1.js
           node --check market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
@@ -450,6 +458,7 @@ jobs:
             tests/paper-forward-schedule-authoritative-stage-adoption-v1.test.js \
             tests/paper-scheduler-driver-v1.test.js \
             tests/paper-forward-evidence-runtime-v1.test.js \
+            tests/member-auto-trading-paper-handoff-v1.test.js \
             tests/paper-forward-schedule-runtime-v1.test.js \
             tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js \
             tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js \
@@ -501,6 +510,7 @@ jobs:
             market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js \
             market-prediction-lab/src/paper-forward-evidence-runtime-v1.js \
             market-prediction-lab/src/paper-forward-schedule-runtime-base-v1.js \
+            market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js \
             market-prediction-lab/src/paper-forward-schedule-runtime-v1.js \
             market-prediction-lab/src/recurring-paper-loop-v1.js \
             market-prediction-lab/scripts/run-paper-forward-schedule.js \
