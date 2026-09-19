@@ -1,0 +1,39 @@
+name: Stock 52W High V1
+
+on:
+  push:
+    branches:
+      - research/four-market-profitability-scan-v1-20260919
+    paths:
+      - market-prediction-lab/scripts/run-stock-52w-high-v1.js
+      - .github/workflows/stock-52w-high-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Run fixed 52-week-high momentum
+        run: node market-prediction-lab/scripts/run-stock-52w-high-v1.js
+      - name: Verify research-only contract
+        run: |
+          node --input-type=module - <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const d=JSON.parse(await readFile("market-prediction-lab/artifacts/stock-52w-high-v1/result.json","utf8"));
+          if(d.status!=="pass"||d.researchOnly!==true||d.publicDataOnly!==true||d.actualOrders!==0||d.formula.topN!==3) process.exit(1);
+          console.log("STOCK_52W_HIGH_CONTRACT=PASS");
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stock-52w-high-v1-${{ github.sha }}
+          path: market-prediction-lab/artifacts/stock-52w-high-v1/
+          if-no-files-found: error
+          retention-days: 30
