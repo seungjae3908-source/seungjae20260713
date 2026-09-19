@@ -65,7 +65,7 @@ function withMarketIntelligenceWarnings(decision: TradingRiskDecision, warnings:
 
 export function tradingIdempotencyKey(userId: string, input: TradingPlanInput) {
   return createHash('sha256').update([
-    userId, input.exchange, input.signalId, input.strategyId, input.market, input.symbol.toUpperCase(), input.side,
+    userId, input.exchange, input.stockBroker ?? 'none', input.signalId, input.strategyId, input.market, input.symbol.toUpperCase(), input.side,
   ].join(':')).digest('hex');
 }
 
@@ -74,8 +74,8 @@ export function liveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
   const perExchange = {
     bitget: process.env.BITGET_LIVE_ORDER_ENABLED === 'true',
     upbit: process.env.UPBIT_LIVE_ORDER_ENABLED === 'true',
-    // Canonical stock execution authority is Toss. The legacy Kiwoom adapter remains available
-    // only for non-live compatibility paths until a separately verified Toss execution adapter exists.
+    // Stock live execution stays disabled regardless of the user's Toss/Kiwoom Paper broker choice
+    // until each broker's private order adapter is separately verified and activated.
     kiwoom: false,
   };
   return global && perExchange[exchange];
@@ -239,6 +239,7 @@ export class TradeAutomationService {
     const now = new Date().toISOString();
     const order: TradingOrder = {
       id: randomUUID(), userId, planId: plan.id, exchange: plan.exchange,
+      stockBroker: plan.stockBroker ?? null,
       clientOrderId: `sj-${plan.exchange}-${plan.idempotencyKey.slice(0, 20)}`,
       exchangeOrderId: null, state: 'SUBMITTED', version: 0,
       requestedQuantity: plan.quantity ?? null,
