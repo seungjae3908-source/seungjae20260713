@@ -51,6 +51,27 @@ function dataFactoryState(overview: ResearchCenterOverview) {
   };
 }
 
+function factoryRuntimeState(overview: ResearchCenterOverview) {
+  const factory = overview.factory;
+  if (!factory?.present) return { value: '상태 미수집', detail: '리서치 팩토리 상태 기록이 아직 없습니다.', tone: 'neutral' as const };
+  if (factory.status === 'INVALID' || factory.status === 'BLOCKED_POLICY_INVALID') {
+    return { value: '확인 필요', detail: '팩토리 상태 또는 승인 정책 무결성을 확인해야 합니다.', tone: 'warning' as const };
+  }
+  if (factory.status === 'BLOCKED_POLICY_MISSING') {
+    return { value: '정책 확정 필요', detail: '후보 수·단계별 축소 정책이 아직 승인되지 않았습니다.', tone: 'warning' as const };
+  }
+  if (factory.status === 'BLOCKED_NO_READY_PROFILES') {
+    return { value: '연구 데이터 대기', detail: 'Canonical 시장 프로필 근거가 준비되는 중입니다.', tone: 'progress' as const };
+  }
+  if (factory.status === 'BLOCKED_RUNTIME_BINDINGS') {
+    return { value: '엔진 연결 중', detail: '기존 백테스터·검증 owner 연결 근거를 기다립니다.', tone: 'progress' as const };
+  }
+  if (factory.status === 'READY_NON_ACTIVATING') {
+    return { value: '연구 준비됨', detail: '자동 실행 전 단계까지 검증됐으며 실행 권한은 없습니다.', tone: 'normal' as const };
+  }
+  return { value: '상태 확인 중', detail: factory.firstZero ?? '팩토리 상태를 확인하고 있습니다.', tone: 'neutral' as const };
+}
+
 function paperSample(overview: ResearchCenterOverview) {
   const value = overview.paper.ledger.sampleCount ?? overview.paper.ledger.settlementCount;
   if (value == null) return { value: '미확인', detail: '모의매매 표본 수 근거가 없습니다.', tone: 'neutral' as const };
@@ -146,6 +167,7 @@ export function ResearchCenterGeneral() {
           {overview ? (() => {
             const research = researchState(overview);
             const dataFactory = dataFactoryState(overview);
+            const factoryRuntime = factoryRuntimeState(overview);
             const sample = paperSample(overview);
             const shadow = shadowState(overview);
             const profitability = profitabilityState(overview);
@@ -155,6 +177,7 @@ export function ResearchCenterGeneral() {
                 <section className="grid grid-cols-2 gap-2 lg:grid-cols-4" aria-label="연구 핵심 상태">
                   <SummaryCard icon={<Activity className="h-5 w-5" />} label="연구 상태" {...research} />
                   <SummaryCard icon={<Database className="h-5 w-5" />} label="데이터 팩토리" {...dataFactory} />
+                  <SummaryCard icon={<FlaskConical className="h-5 w-5" />} label="리서치 팩토리" {...factoryRuntime} />
                   <SummaryCard icon={<WalletCards className="h-5 w-5" />} label="모의매매 표본" {...sample} />
                   <SummaryCard icon={<TrendingUp className="h-5 w-5" />} label={`${PROMOTION_STAGE_KO.SHADOW} 기록`} {...shadow} />
                   <SummaryCard icon={<FlaskConical className="h-5 w-5" />} label="수익성 검증" {...profitability} />
