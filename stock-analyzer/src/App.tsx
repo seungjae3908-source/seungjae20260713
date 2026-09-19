@@ -288,7 +288,7 @@ function PaperTradingAccess() {
     </Suspense>,
   );
 }
-function AutoTradingAccess() { return gated('canPlaceOrders', builder('AUTO_TRADING', <AutoTradingPage />)); }
+function AutoTradingAccess() { return gated('canAccessAutoTrading', builder('AUTO_TRADING', <AutoTradingPage />)); }
 function AdminAccess() { return gated('canManageMembers', <AdminPage />); }
 function AgentHubControlAccess() { return gated('canManageMembers', <AgentHubControlPage />); }
 function UiBuilderAdminAccess() { return gated('canManageMembers', <UiBuilderLayoutControlPage />); }
