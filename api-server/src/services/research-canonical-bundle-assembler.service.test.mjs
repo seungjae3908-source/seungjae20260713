@@ -137,7 +137,11 @@ test('assembler accepts only independently canonical-ready components and writes
     assert.equal(bundle.evidenceClass, 'CANONICAL');
     assert.equal(bundle.strategy.researchCodeSha, env.researchCodeSha);
     assert.equal(record.researchBundleReady, true);
-    assert.equal(record.backtestExecutable, true);
+    assert.equal(record.componentReadinessVerified, true);
+    assert.equal(record.backtestExecutableAtAssembly, false);
+    assert.equal(record.durableSubmissionStoreRequired, true);
+    assert.equal(result.safety.publisherRevalidationRequired, true);
+    assert.equal(result.safety.durableSubmissionStoreBypassed, false);
     assert.equal(record.evidenceCredit, 0);
     assert.equal(record.profitabilityProven, false);
     assert.equal(record.executionAuthority, 'NONE');
