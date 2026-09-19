@@ -34,7 +34,6 @@ function policy(): TradingPolicy {
       crypto_spot: 500_000,
       crypto_futures: 500_000,
     },
-    riskOptimizationEnabled: false,
   });
 }
 
