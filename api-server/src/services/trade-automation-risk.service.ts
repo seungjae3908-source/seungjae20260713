@@ -88,12 +88,17 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
     crypto_spot: input.marketEnabled?.crypto_spot ?? DEFAULT_TRADING_POLICY.marketEnabled.crypto_spot,
     crypto_futures: input.marketEnabled?.crypto_futures ?? DEFAULT_TRADING_POLICY.marketEnabled.crypto_futures,
   };
+  const stockBrokerByMarket = {
+    domestic_stock: input.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' as const : 'kiwoom' as const,
+    us_stock: input.stockBrokerByMarket?.us_stock === 'toss' ? 'toss' as const : 'kiwoom' as const,
+  };
   return {
     mode: input.mode === 'automatic' ? 'automatic' : 'approval',
     automaticEnabled: input.automaticEnabled === true,
     emergencyStopped: input.emergencyStopped === true,
     newEntriesStopped: input.newEntriesStopped === true,
     marketEnabled,
+    stockBrokerByMarket,
     exchangeEnabled: {
       bitget: input.exchangeEnabled?.bitget ?? DEFAULT_TRADING_POLICY.exchangeEnabled.bitget,
       upbit: input.exchangeEnabled?.upbit ?? DEFAULT_TRADING_POLICY.exchangeEnabled.upbit,
@@ -236,6 +241,13 @@ export function evaluateTradingPlan(
   if (policy.mode === 'automatic' && policy.automaticEnabled) {
     const assetClass = assetClassForPlan(plan);
     if (!policy.marketEnabled[assetClass]) add(blockCodes, 'MARKET_NOT_ENABLED');
+    if (assetClass === 'domestic_stock' || assetClass === 'us_stock') {
+      const selectedBroker = policy.stockBrokerByMarket[assetClass];
+      const planBroker = plan.stockBroker ?? 'kiwoom';
+      if (planBroker !== selectedBroker) add(blockCodes, 'STOCK_BROKER_MISMATCH');
+    } else if (plan.stockBroker != null) {
+      add(blockCodes, 'STOCK_BROKER_NOT_APPLICABLE');
+    }
     if (!policy.exchangeEnabled[plan.exchange]) add(blockCodes, 'EXCHANGE_NOT_ENABLED');
     const normalizedSymbol = plan.exchange === 'upbit' ? plan.symbol.toUpperCase().replace(/^KRW-/, '') : plan.symbol.toUpperCase();
     if (policy.enabledAssets[plan.exchange].length > 0 && !policy.enabledAssets[plan.exchange].includes(normalizedSymbol)) add(blockCodes, 'ASSET_NOT_ENABLED');
