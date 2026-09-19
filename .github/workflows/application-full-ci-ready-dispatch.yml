@@ -49,6 +49,7 @@ jobs:
               candidates = associated.data;
             }
 
+            const openCandidates = [];
             const openMatches = [];
             for (const candidate of candidates) {
               const number = Number(candidate.number);
@@ -59,12 +60,23 @@ jobs:
                 pull_number: number,
               });
               if (pr.state !== 'open') continue;
+              openCandidates.push(pr);
               if (String(pr.head.sha).toLowerCase() !== targetSha) continue;
               openMatches.push(pr);
             }
 
+            if (openMatches.length === 0 && openCandidates.length === 1) {
+              const pr = openCandidates[0];
+              const currentHeadSha = String(pr.head.sha || '').toLowerCase();
+              if (currentHeadSha !== targetSha) {
+                core.notice(`[SUPERSEDED_FAST_HEAD] Fast CI ${run.id} completed for old head ${targetSha}, while PR #${pr.number} is now at ${currentHeadSha}; canonical full CI dispatch is intentionally skipped.`);
+                core.setOutput('dispatch', 'false');
+                return;
+              }
+            }
+
             if (openMatches.length !== 1) {
-              core.setFailed(`[READY_FAST_CI_PR_RESOLUTION_FAILED] matches=${openMatches.length} sha=${targetSha}`);
+              core.setFailed(`[READY_FAST_CI_PR_RESOLUTION_FAILED] matches=${openMatches.length} open_candidates=${openCandidates.length} sha=${targetSha}`);
               return;
             }
 
@@ -119,4 +131,5 @@ jobs:
         run: |
           echo 'This bridge can dispatch canonical full Application CI only after natural exact-head Fast CI success.'
           echo 'Failed, skipped, cancelled, missing, stale, or Draft Fast CI cannot dispatch canonical full CI.'
+          echo 'A uniquely resolved PR whose head has advanced past the successful Fast CI SHA is a superseded no-op and cannot dispatch.'
           echo 'It grants no merge, staging, production, database, secret, environment, live-trading, or real-order authority.'
