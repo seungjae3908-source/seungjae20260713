@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Activity, Clock3, FlaskConical, RefreshCw, ShieldCheck, TrendingUp, WalletCards } from 'lucide-react';
+import { Activity, Clock3, Database, FlaskConical, RefreshCw, ShieldCheck, TrendingUp, WalletCards } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { PROMOTION_STAGE_KO } from '@/lib/labels';
 import { fetchResearchCenterOverview, type ResearchCenterOverview } from '@/lib/research-center';
@@ -30,6 +30,24 @@ function executionState(overview: ResearchCenterOverview) {
     return { value: '실거래 비활성', detail: '읽기 전용 · 실행 권한 없음', tone: 'normal' as const };
   }
   return { value: '확인 필요', detail: '전문가 보기에서 권한 근거를 확인하세요.', tone: 'warning' as const };
+}
+
+function dataFactoryState(overview: ResearchCenterOverview) {
+  const temporal = overview.dataFactory.temporalCryptoFutures;
+  if (!temporal.present) return { value: '미수집', detail: 'Temporal evidence 수집 기록이 없습니다.', tone: 'neutral' as const };
+  if (temporal.status === 'INVALID') return { value: '확인 필요', detail: 'Temporal evidence 무결성 검증에 실패했습니다.', tone: 'warning' as const };
+  if (temporal.status === 'partial_failure') {
+    return {
+      value: temporal.observationCount == null ? '부분 실패' : `${temporal.observationCount.toLocaleString('ko-KR')}건`,
+      detail: `심볼 실패 ${temporal.failedCount ?? 0}건 · 정상 증거는 보존`,
+      tone: 'warning' as const,
+    };
+  }
+  return {
+    value: temporal.observationCount == null ? '누적 중' : `${temporal.observationCount.toLocaleString('ko-KR')}건`,
+    detail: `${temporal.results.length.toLocaleString('ko-KR')}개 심볼 · public temporal evidence`,
+    tone: 'progress' as const,
+  };
 }
 
 function paperSample(overview: ResearchCenterOverview) {
@@ -126,14 +144,16 @@ export function ResearchCenterGeneral() {
 
           {overview ? (() => {
             const research = researchState(overview);
+            const dataFactory = dataFactoryState(overview);
             const sample = paperSample(overview);
             const shadow = shadowState(overview);
             const profitability = profitabilityState(overview);
             const execution = executionState(overview);
             return (
               <>
-                <section className="grid grid-cols-2 gap-2 lg:grid-cols-3" aria-label="연구 핵심 상태">
+                <section className="grid grid-cols-2 gap-2 lg:grid-cols-4" aria-label="연구 핵심 상태">
                   <SummaryCard icon={<Activity className="h-5 w-5" />} label="연구 상태" {...research} />
+                  <SummaryCard icon={<Database className="h-5 w-5" />} label="데이터 팩토리" {...dataFactory} />
                   <SummaryCard icon={<WalletCards className="h-5 w-5" />} label="모의매매 표본" {...sample} />
                   <SummaryCard icon={<TrendingUp className="h-5 w-5" />} label={`${PROMOTION_STAGE_KO.SHADOW} 기록`} {...shadow} />
                   <SummaryCard icon={<FlaskConical className="h-5 w-5" />} label="수익성 검증" {...profitability} />
