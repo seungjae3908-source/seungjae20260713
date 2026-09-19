@@ -26,6 +26,22 @@ export interface ResearchCycleSummary {
   tasks: ResearchCycleTask[];
 }
 
+export interface ResearchTemporalCryptoSummary {
+  present: boolean;
+  status: 'MISSING' | 'INVALID' | 'complete' | 'partial_failure';
+  generatedAt: number | null;
+  researchSha: string | null;
+  failedCount: number | null;
+  observationCount: number | null;
+  ledgerDigest: string | null;
+  results: Array<{
+    symbol: string;
+    status: 'success' | 'failed';
+    observedCount: number;
+    appendedCount: number;
+  }>;
+}
+
 export interface ResearchPaperRuntime {
   present: boolean;
   status: string;
@@ -161,6 +177,9 @@ export interface ResearchCenterOverview {
       effectiveIndependentN: number | null;
       frozenSplitCounts: { TRAIN: number | null; VALIDATION: number | null; OOS: number | null };
     };
+  };
+  dataFactory: {
+    temporalCryptoFutures: ResearchTemporalCryptoSummary;
   };
   paper: {
     runtime: ResearchPaperRuntime;
