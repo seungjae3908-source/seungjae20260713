@@ -13,6 +13,12 @@ export const QUALITY_DAYTRADE_PREENTRY_CONTRACT_VERSION = "us-quality-daytrade-p
 function safeResult(fields) {
   return Object.freeze({
     contractVersion: QUALITY_DAYTRADE_PREENTRY_CONTRACT_VERSION,
+    entryReady: false,
+    paperAdmissible: false,
+    candidateBound: false,
+    sourceBoundAdmissionRequired: true,
+    selectionEligible: false,
+    orderAuthority: false,
     executionAuthority: "NONE",
     liveTradingAllowed: false,
     privateApiAllowed: false,
