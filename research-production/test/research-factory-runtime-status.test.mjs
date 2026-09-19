@@ -162,7 +162,7 @@ test('complete development-only diagnostic advances past diagnostic blocker and 
     runtimeBindings:{},
   });
   assert.equal(result.status,'BLOCKED_RUNTIME_BINDINGS');
-  assert.equal(result.firstZero,'STAGE_CHECKPOINT_EXECUTOR_MISSING');
+  assert.equal(result.firstZero,'RESEARCH_TOURNAMENT_STAGE_CHECKPOINT_RESUME_PORT_MISSING');
   assert.equal(result.canonicalAdaptive.readyProfileCount,1);
   assert.equal(result.safety.executionAuthority,'NONE');
 });
