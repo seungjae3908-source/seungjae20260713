@@ -10,7 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:e2e": "playwright test -c playwright.config.ts",
     "test:e2e:critical": "playwright test -c playwright.critical.config.ts",
-    "test:e2e:runtime-drift": "playwright test e2e/member-capability-runtime-drift.spec.ts -c playwright.config.ts"
+    "test:e2e:runtime-drift": "playwright test e2e/member-capability-runtime-drift.spec.ts e2e/market-overview-sector-popular-truth.spec.ts -c playwright.config.ts"
   },
   "dependencies": {
     "@radix-ui/react-toast": "^1.2.18",
