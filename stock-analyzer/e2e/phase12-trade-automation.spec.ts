@@ -72,7 +72,7 @@ for (const width of [360, 390, 430]) {
     await expect(page.getByTestId('auto-market-crypto_spot')).toContainText('코인현물');
     await expect(page.getByTestId('auto-market-crypto_futures')).toContainText('코인선물');
     await expect(page.getByTestId('auto-trading-runtime-summary')).toContainText('미국주식');
-    await expect(page.getByTestId('auto-trading-runtime-summary')).toContainText('실전 주문은 어댑터 연결 전까지 차단');
+    await expect(page.getByTestId('auto-trading-runtime-summary')).toContainText('미국주식 실전 자동주문은 검증된 주문 어댑터가 연결되기 전까지 차단됩니다.');
 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     expectNoBrowserFailures(failures);
