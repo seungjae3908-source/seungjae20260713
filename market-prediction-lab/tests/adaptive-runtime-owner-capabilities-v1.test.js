@@ -12,6 +12,7 @@ import {
 } from "../src/adaptive-multi-market-tournament-runtime-adapter-v1.js";
 import {
   buildAdaptiveRuntimeOwnerBindingsV1,
+  createCanonicalBundleOfflinePublicationReceiptV1,
   validateCanonicalBundlePublicationV1,
 } from "../src/adaptive-runtime-owner-capabilities-v1.js";
 
@@ -79,7 +80,7 @@ function readyPlan(){
   });
 }
 
-function publication(overrides={}){
+function rawPublication(overrides={}){
   return {
     schemaVersion:"research-canonical-bundle-publication-v1",
     dslDigest:HASH,
@@ -90,6 +91,19 @@ function publication(overrides={}){
     executionAuthority:"NONE",
     ...overrides,
   };
+}
+
+function publication(overrides={}){
+  const researchCodeSha=overrides.researchCodeSha??SHA;
+  const publishedAt=overrides.publishedAt??AT;
+  const rawOverrides={...overrides};
+  delete rawOverrides.researchCodeSha;
+  delete rawOverrides.publishedAt;
+  return createCanonicalBundleOfflinePublicationReceiptV1({
+    researchCodeSha,
+    publishedAt,
+    publication:rawPublication(rawOverrides),
+  });
 }
 
 test("owner capability builder leaves canonical bundle missing without durable readback receipt",()=>{
@@ -153,15 +167,19 @@ test("runtime adapter accepts capability envelopes and becomes READY_NON_ACTIVAT
   );
 });
 
-test("tampered or economically authoritative bundle publication remains missing instead of being credited",()=>{
-  for(const bad of [
-    publication({publicationStatus:"MISSING_EVIDENCE"}),
-    publication({evidenceCredit:1}),
-    publication({profitabilityProven:true}),
-    publication({executionAuthority:"TRADING"}),
-    publication({bundleDigest:"not-a-digest"}),
-  ]){
-    assert.equal(validateCanonicalBundlePublicationV1(bad),false);
+test("tampered, stale-SHA or economically authoritative bundle publication remains missing instead of being credited",()=>{
+  const valid=publication();
+  const badRows=[
+    {...valid,researchCodeSha:"d".repeat(40)},
+    {...valid,publishedAt:"2026-09-20T00:00:01.000Z"},
+    {...valid,evidenceCredit:1},
+    {...valid,profitabilityProven:true},
+    {...valid,executionAuthority:"TRADING"},
+    {...valid,bundleDigest:"not-a-digest"},
+    rawPublication(),
+  ];
+  for(const bad of badRows){
+    assert.equal(validateCanonicalBundlePublicationV1(bad,SHA),false);
     const result=buildAdaptiveRuntimeOwnerBindingsV1({
       sourceSha:SHA,
       bundlePublication:bad,
@@ -169,6 +187,17 @@ test("tampered or economically authoritative bundle publication remains missing 
     assert.equal(result.bindings.canonicalBundleSource.status,"MISSING");
     assert.equal(result.allBindingsAvailable,false);
   }
+});
+
+test("offline publication receipt creator rejects invalid raw publication and binds exact source SHA",()=>{
+  const receipt=publication();
+  assert.equal(validateCanonicalBundlePublicationV1(receipt,SHA),true);
+  assert.equal(validateCanonicalBundlePublicationV1(receipt,"f".repeat(40)),false);
+  assert.throws(()=>createCanonicalBundleOfflinePublicationReceiptV1({
+    researchCodeSha:SHA,
+    publishedAt:AT,
+    publication:rawPublication({evidenceCredit:1}),
+  }),/RAW_PUBLICATION_INVALID/);
 });
 
 test("source SHA is exact and capability proof cannot be rebound to symbolic refs",()=>{
