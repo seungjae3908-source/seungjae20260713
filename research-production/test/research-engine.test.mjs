@@ -136,6 +136,111 @@ test('parallel cycle uses isolated per-task workspaces', async () => {
   }
 });
 
+test('resource governor is opt-in and leaves existing concurrency unchanged by default', async () => {
+  const repoRoot = await fakeRepo();
+  const stateRoot = join(repoRoot, 'research-state');
+  const result = await runResearchCycle({
+    repoRoot,
+    stateRoot,
+    researchSha: SHA,
+    profile: 'fast-historical',
+    concurrency: 4,
+    env: { PATH: process.env.PATH },
+    resourceSnapshot: {
+      cpuCount: 8,
+      load1: 8.8,
+      totalMemoryBytes: 16 * 1024 ** 3,
+      freeMemoryBytes: 512 * 1024 ** 2,
+      freeDiskBytes: 100 * 1024 ** 3,
+      minimumFreeDiskBytes: 5 * 1024 ** 3,
+    },
+    verifyGitHead: false,
+  });
+  assert.equal(result.status, 'complete');
+  assert.equal(result.concurrency, 4);
+  assert.equal(result.resourceBudget, null);
+});
+
+test('enabled resource governor throttles historical concurrency before tasks start', async () => {
+  const repoRoot = await fakeRepo();
+  const stateRoot = join(repoRoot, 'research-state');
+  const result = await runResearchCycle({
+    repoRoot,
+    stateRoot,
+    researchSha: SHA,
+    profile: 'fast-historical',
+    concurrency: 4,
+    env: { PATH: process.env.PATH, RESEARCH_RESOURCE_GOVERNOR_ENABLED: 'true' },
+    resourceSnapshot: {
+      cpuCount: 8,
+      load1: 6.4,
+      totalMemoryBytes: 16 * 1024 ** 3,
+      freeMemoryBytes: 8 * 1024 ** 3,
+      freeDiskBytes: 100 * 1024 ** 3,
+      minimumFreeDiskBytes: 5 * 1024 ** 3,
+    },
+    verifyGitHead: false,
+  });
+  assert.equal(result.status, 'complete');
+  assert.equal(result.resourceBudget.status, 'THROTTLED');
+  assert.equal(result.resourceBudget.maxConcurrentJobs, 2);
+  assert.equal(result.concurrency, 2);
+});
+
+test('enabled resource governor holds cycle before launching tasks under critical pressure', async () => {
+  const repoRoot = await fakeRepo();
+  const stateRoot = join(repoRoot, 'research-state');
+  const result = await runResearchCycle({
+    repoRoot,
+    stateRoot,
+    researchSha: SHA,
+    profile: 'fast-historical',
+    concurrency: 4,
+    env: { PATH: process.env.PATH, RESEARCH_RESOURCE_GOVERNOR_ENABLED: '1' },
+    resourceSnapshot: {
+      cpuCount: 8,
+      load1: 2,
+      totalMemoryBytes: 16 * 1024 ** 3,
+      freeMemoryBytes: 512 * 1024 ** 2,
+      freeDiskBytes: 100 * 1024 ** 3,
+      minimumFreeDiskBytes: 5 * 1024 ** 3,
+    },
+    verifyGitHead: false,
+  });
+  assert.equal(result.status, 'resource_hold');
+  assert.equal(result.concurrency, 0);
+  assert.equal(result.taskCount, 0);
+  assert.equal(result.resourceBudget.status, 'HOLD');
+  assert.ok(result.resourceBudget.reasons.includes('MEMORY_CRITICAL'));
+});
+
+test('enabled resource governor never raises forward concurrency above one', async () => {
+  const repoRoot = await fakeRepo();
+  const stateRoot = join(repoRoot, 'research-state');
+  const result = await runResearchCycle({
+    repoRoot,
+    stateRoot,
+    researchSha: SHA,
+    profile: 'forward',
+    concurrency: 16,
+    env: { PATH: process.env.PATH, RESEARCH_RESOURCE_GOVERNOR_ENABLED: 'true' },
+    resourceSnapshot: {
+      cpuCount: 32,
+      load1: 1,
+      totalMemoryBytes: 32 * 1024 ** 3,
+      freeMemoryBytes: 24 * 1024 ** 3,
+      freeDiskBytes: 100 * 1024 ** 3,
+      minimumFreeDiskBytes: 5 * 1024 ** 3,
+    },
+    activationAtMs: 123456789,
+    verifyGitHead: false,
+  });
+  assert.equal(result.status, 'complete');
+  assert.equal(result.resourceBudget.status, 'RUN');
+  assert.equal(result.resourceBudget.maxConcurrentJobs, 1);
+  assert.equal(result.concurrency, 1);
+});
+
 test('Paper activation timestamp is persisted and forward execution is serialized Shadow then Paper', async () => {
   const repoRoot = await fakeRepo();
   const stateRoot = join(repoRoot, 'research-state');
