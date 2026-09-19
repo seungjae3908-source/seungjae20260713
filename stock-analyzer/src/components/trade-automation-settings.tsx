@@ -254,6 +254,7 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
       onClick={toggleAutomatic}
       className="mt-4 flex w-full items-center justify-between rounded-2xl border border-card-border bg-background p-4"
       data-testid="automatic-trading-master-toggle"
+      aria-pressed={draft.automaticEnabled}
     >
       <span>
         <span className="block text-sm font-extrabold">자동매매</span>
@@ -272,6 +273,7 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
           onClick={() => toggleMarket(market)}
           className="flex min-w-0 items-center justify-between gap-3 rounded-2xl border border-card-border bg-background p-3 text-left"
           data-testid={`auto-market-${market}`}
+          aria-pressed={draft.marketEnabled[market]}
         >
           <span className="min-w-0">
             <span className="block text-xs font-extrabold">{MARKET_LABELS[market]}</span>
