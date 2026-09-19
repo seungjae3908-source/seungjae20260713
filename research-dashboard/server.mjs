@@ -23,6 +23,13 @@ const CANDIDATE_PERFORMANCE_RELATIVE_PATH = Object.freeze([
   'status',
   'candidate-performance.json',
 ]);
+const TEMPORAL_CRYPTO_SUMMARY_RELATIVE_PATH = Object.freeze([
+  'latest',
+  'temporal-crypto-futures.json',
+]);
+const TEMPORAL_CRYPTO_SUMMARY_SCHEMA = 'crypto-futures-temporal-public-collection-v1';
+const TEMPORAL_COLLECTION_STATUSES = new Set(['complete', 'partial_failure']);
+const TEMPORAL_SYMBOL_STATUSES = new Set(['success', 'failed']);
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const CANDIDATE_ID_PATTERN = /^(?:phase3-candidate:sha256:|paper-candidate-v1:)[0-9a-f]{64}$/u;
@@ -642,17 +649,82 @@ function sumKnownCycleCounts(cycles, key) {
   return presentCycles.reduce((sum, cycle) => sum + (cycle[key] ?? 0), 0);
 }
 
+function emptyTemporalCryptoSummary(status = 'MISSING', present = false) {
+  return Object.freeze({
+    present,
+    status,
+    generatedAt: null,
+    researchSha: null,
+    failedCount: null,
+    observationCount: null,
+    ledgerDigest: null,
+    results: Object.freeze([]),
+  });
+}
+
+function summarizeTemporalCryptoSummary(value) {
+  if (value == null) return emptyTemporalCryptoSummary();
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || value.schemaVersion !== TEMPORAL_CRYPTO_SUMMARY_SCHEMA
+    || !TEMPORAL_COLLECTION_STATUSES.has(value.status)
+    || !Number.isSafeInteger(value.generatedAt) || value.generatedAt <= 0
+    || !SHA_PATTERN.test(String(value.researchSha ?? ''))
+    || !Number.isInteger(value.failedCount) || value.failedCount < 0
+    || !Number.isInteger(value.observationCount) || value.observationCount < 0
+    || !DIGEST_PATTERN.test(String(value.ledgerDigest ?? ''))
+    || !Array.isArray(value.results)
+    || value.results.length > 50
+    || value.safety?.publicDataOnly !== true
+    || value.safety?.privateApi !== false
+    || value.safety?.liveTrading !== false
+    || value.safety?.realOrders !== false
+    || value.safety?.historicalCurrentValueBackfill !== false
+    || value.safety?.executionAuthority !== 'NONE') {
+    return emptyTemporalCryptoSummary('INVALID', true);
+  }
+  const results = [];
+  for (const raw of value.results) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)
+      || typeof raw.symbol !== 'string' || !/^[A-Z0-9]{3,30}$/u.test(raw.symbol)
+      || !TEMPORAL_SYMBOL_STATUSES.has(raw.status)
+      || !Number.isInteger(raw.observedCount) || raw.observedCount < 0
+      || !Number.isInteger(raw.appendedCount) || raw.appendedCount < 0
+      || raw.appendedCount > raw.observedCount) {
+      return emptyTemporalCryptoSummary('INVALID', true);
+    }
+    results.push(Object.freeze({
+      symbol: raw.symbol,
+      status: raw.status,
+      observedCount: raw.observedCount,
+      appendedCount: raw.appendedCount,
+    }));
+  }
+  const observedFailures = results.filter((row) => row.status === 'failed').length;
+  if (observedFailures !== value.failedCount) return emptyTemporalCryptoSummary('INVALID', true);
+  return Object.freeze({
+    present: true,
+    status: value.status,
+    generatedAt: value.generatedAt,
+    researchSha: String(value.researchSha).toLowerCase(),
+    failedCount: value.failedCount,
+    observationCount: value.observationCount,
+    ledgerDigest: String(value.ledgerDigest).toLowerCase(),
+    results: Object.freeze(results),
+  });
+}
+
 export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } = {}) {
   const root = resolve(stateRoot);
   const cycleValues = await Promise.all(PROFILES.map((profile) => readJsonOptional(join(root, 'latest', `${profile}.json`))));
   const cycles = cycleValues.map((value, index) => summarizeCycle(PROFILES[index], value));
-  const [paperRuntimeRaw, paperLedgerRaw, shadowSummaryRaw, shadowStateRaw, liquidityIndependence, candidatePerformance] = await Promise.all([
+  const [paperRuntimeRaw, paperLedgerRaw, shadowSummaryRaw, shadowStateRaw, liquidityIndependence, candidatePerformance, temporalCryptoRaw] = await Promise.all([
     readJsonOptional(join(root, 'forward', 'paper', 'status', 'runtime-status.json')),
     readJsonOptional(join(root, 'forward', 'paper', 'state', 'recurring-paper-loop.json')),
     readJsonOptional(join(root, 'forward', 'shadow-summary.json')),
     readJsonOptional(join(root, 'forward', 'shadow-state.json')),
     readV3IndependenceSummary(root),
     readCandidatePerformance(root),
+    readJsonOptional(join(root, ...TEMPORAL_CRYPTO_SUMMARY_RELATIVE_PATH)),
   ]);
 
   const paperRuntime = summarizePaperRuntime(paperRuntimeRaw);
@@ -660,6 +732,7 @@ export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } =
   const shadowGroups = summarizeShadowGroups(shadowSummaryRaw);
   const shadowRecords = countShadowRecords(shadowStateRaw);
   const shadowCanonicalHandoffs = canonicalShadowHandoffs(shadowStateRaw);
+  const temporalCrypto = summarizeTemporalCryptoSummary(temporalCryptoRaw);
   const failedTasks = sumKnownCycleCounts(cycles, 'failedCount');
   const blockedDataTasks = sumKnownCycleCounts(cycles, 'blockedDataCount');
   const authorityEvidenceComplete = !paperRuntime.present || paperRuntime.safetyEvidenceComplete;
@@ -673,6 +746,7 @@ export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } =
     : !authorityEvidenceComplete
       ? 'safety_evidence_incomplete'
       : liquidityIndependence.status === 'INVALID' || candidatePerformance.status === 'INVALID'
+        || temporalCrypto.status === 'INVALID' || temporalCrypto.status === 'partial_failure'
         ? 'attention'
         : failedTasks === null || blockedDataTasks === null
           ? 'evidence_incomplete'
@@ -683,7 +757,7 @@ export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } =
     schemaVersion: 'research-dashboard-overview-v1',
     generatedAt: Date.now(),
     state: Object.freeze({
-      present: cycles.some((cycle) => cycle.present) || paperRuntime.present || paperLedger.present || shadowRecords.present || liquidityIndependence.present || candidatePerformance.present,
+      present: cycles.some((cycle) => cycle.present) || paperRuntime.present || paperLedger.present || shadowRecords.present || liquidityIndependence.present || candidatePerformance.present || temporalCrypto.present,
       latestCycleAt: newestTimestamp(cycles),
     }),
     safety: Object.freeze({
@@ -700,6 +774,9 @@ export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } =
       blockedDataTasks,
       cycles,
       liquidityIndependence,
+    }),
+    dataFactory: Object.freeze({
+      temporalCryptoFutures: temporalCrypto,
     }),
     paper: Object.freeze({ runtime: paperRuntime, ledger: paperLedger, candidatePerformance }),
     shadow: Object.freeze({ groups: shadowGroups, records: shadowRecords, canonicalHandoffs: shadowCanonicalHandoffs }),
