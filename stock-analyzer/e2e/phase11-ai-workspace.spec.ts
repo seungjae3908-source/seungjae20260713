@@ -180,7 +180,7 @@ test('desktop technical workspace keeps AI signal scanner, chart broadcast, and 
   await expect(page.getByText('000660 · 국내주식 · 1D', { exact: true })).toBeVisible();
 });
 
-test('technical workspace uses canonical standing automatic trading with zero legacy order mutations', async ({ page }) => {
+test('technical workspace routes auto trading to the canonical surface with zero legacy order mutations', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   let legacyOrderMutations = 0;
   await mockWorkspace(page);
@@ -196,18 +196,8 @@ test('technical workspace uses canonical standing automatic trading with zero le
   await page.goto('/__phase11-ai-workspace-e2e');
   await page.getByRole('button', { name: '자동매매', exact: true }).click();
 
-  const safety = page.getByTestId('auto-trading-safety-summary');
-  await expect(safety).toBeVisible();
-  await expect(safety).toContainText('주문별 승인');
-  await expect(safety).toContainText('불필요');
-  await expect(safety).toContainText('4시장 개별 ON/OFF');
-  await expect(page.getByTestId('automatic-trading-master-toggle')).toBeVisible();
-  await expect(page.getByTestId('auto-market-domestic_stock')).toBeVisible();
-  await expect(page.getByTestId('auto-market-us_stock')).toBeVisible();
-  await expect(page.getByTestId('auto-market-crypto_spot')).toBeVisible();
-  await expect(page.getByTestId('auto-market-crypto_futures')).toBeVisible();
-  await expect(page.getByRole('button', { name: '실제 주문 꺼짐', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '주문 승인모드 켜짐', exact: true })).toHaveCount(0);
+  await expect(page).toHaveURL(/\/auto-trading$/);
+  await expect(page.getByRole('heading', { name: '자동매매 후보 종목', level: 2 })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '조건 주문 실행', exact: true })).toHaveCount(0);
   expect(legacyOrderMutations).toBe(0);
 });
