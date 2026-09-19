@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import importlib.util, json
+import importlib.util, json, sys
 from pathlib import Path
 
 BASE_PATH=Path("market-prediction-lab/scripts/run-binance-orderflow-v1.py")
 spec=importlib.util.spec_from_file_location("orderflow_v1",BASE_PATH)
 base=importlib.util.module_from_spec(spec)
+sys.modules[spec.name]=base
 spec.loader.exec_module(base)
 
 OUT=Path("market-prediction-lab/artifacts/vol-exp-flow-economics-v2")
