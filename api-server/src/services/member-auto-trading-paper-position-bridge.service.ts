@@ -11,7 +11,8 @@ const createNaturalPaperPositionLifecycle = (
     }): Record<string, unknown>;
   }
 ).createNaturalPaperPositionLifecycle;
-import type { TradingOrder, TradingPlan } from './trade-automation.types';
+import type { TradingRepository } from './trade-automation.repository';
+import type { TradingOrder, TradingOrderEvent, TradingPlan } from './trade-automation.types';
 
 export const MEMBER_AUTO_TRADING_PAPER_POSITION_BRIDGE_VERSION =
   'member-auto-trading-paper-position-bridge-v1';
@@ -38,6 +39,15 @@ export type MemberAutoTradingPaperPositionBridge = Readonly<{
   safety: BridgeSafety;
 }>;
 
+export type MemberAutoTradingPaperPositionPersistenceResult = Readonly<{
+  status: 'PERSISTED' | 'IDEMPOTENT' | 'BLOCKED_DATA';
+  bridge: MemberAutoTradingPaperPositionBridge;
+  event: TradingOrderEvent | null;
+  blockers: readonly string[];
+}>;
+
+const POSITION_OPEN_EVENT_REASON = 'PAPER_POSITION_LIFECYCLE_OPENED';
+
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
@@ -49,6 +59,14 @@ function nonEmpty(value: unknown): value is string {
 }
 function sha256(value: unknown) {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+function deterministicUuid(seed: string) {
+  const hex = createHash('sha256').update(seed).digest('hex').slice(0, 32).split('');
+  hex[12] = '5';
+  const variant = Number.parseInt(hex[16]!, 16);
+  hex[16] = ((variant & 0x3) | 0x8).toString(16);
+  const compact = hex.join('');
+  return `${compact.slice(0, 8)}-${compact.slice(8, 12)}-${compact.slice(12, 16)}-${compact.slice(16, 20)}-${compact.slice(20)}`;
 }
 function deepFreeze<T>(value: T): T {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
@@ -271,5 +289,94 @@ export function buildMemberAutoTradingPaperPositionBridge(input: {
     position,
     blockers: [],
     safety: safety(),
+  });
+}
+
+
+function bridgeIdFromEvent(event: TradingOrderEvent) {
+  if (event.reason !== POSITION_OPEN_EVENT_REASON || event.toState !== 'FILLED') return null;
+  const value = event.metadata?.bridgeId;
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+export async function persistMemberAutoTradingPaperPositionBridge(input: {
+  repository: TradingRepository;
+  userId: string;
+  plan: TradingPlan;
+  order: TradingOrder;
+  entry: MemberAutoTradingPaperHandoffEntry;
+  now?: Date;
+}): Promise<MemberAutoTradingPaperPositionPersistenceResult> {
+  const { repository, userId, plan, order, entry } = input;
+  const bridge = buildMemberAutoTradingPaperPositionBridge({ userId, plan, order, entry });
+  if (bridge.status !== 'READY' || !bridge.bridgeId || !bridge.position) {
+    return deepFreeze({
+      status: 'BLOCKED_DATA' as const,
+      bridge,
+      event: null,
+      blockers: bridge.blockers,
+    });
+  }
+
+  const current = (await repository.listEvents(userId))
+    .filter((event) => event.orderId === order.id && event.reason === POSITION_OPEN_EVENT_REASON);
+  const exact = current.find((event) => bridgeIdFromEvent(event) === bridge.bridgeId);
+  if (exact) {
+    return deepFreeze({
+      status: 'IDEMPOTENT' as const,
+      bridge,
+      event: exact,
+      blockers: [],
+    });
+  }
+  if (current.length > 0) {
+    return deepFreeze({
+      status: 'BLOCKED_DATA' as const,
+      bridge,
+      event: null,
+      blockers: ['PAPER_POSITION_BRIDGE_EVENT_CONFLICT'],
+    });
+  }
+
+  const at = (input.now ?? new Date(order.updatedAt)).toISOString();
+  const event: TradingOrderEvent = {
+    id: deterministicUuid(`${POSITION_OPEN_EVENT_REASON}:${order.id}:${bridge.bridgeId}`),
+    userId,
+    orderId: order.id,
+    fromState: 'FILLED',
+    toState: 'FILLED',
+    reason: POSITION_OPEN_EVENT_REASON,
+    metadata: {
+      schemaVersion: MEMBER_AUTO_TRADING_PAPER_POSITION_BRIDGE_VERSION,
+      bridgeId: bridge.bridgeId,
+      sourceTradePlanId: bridge.sourceTradePlanId,
+      sourceTradeOrderId: bridge.sourceTradeOrderId,
+      sourceHandoffId: bridge.sourceHandoffId,
+      position: structuredClone(bridge.position),
+      safety: structuredClone(bridge.safety),
+    },
+    createdAt: at,
+  };
+
+  try {
+    await repository.appendEvent(event);
+  } catch (error) {
+    const after = (await repository.listEvents(userId))
+      .find((candidate) => candidate.orderId === order.id
+        && candidate.reason === POSITION_OPEN_EVENT_REASON
+        && bridgeIdFromEvent(candidate) === bridge.bridgeId);
+    if (!after) throw error;
+    return deepFreeze({
+      status: 'IDEMPOTENT' as const,
+      bridge,
+      event: after,
+      blockers: [],
+    });
+  }
+  return deepFreeze({
+    status: 'PERSISTED' as const,
+    bridge,
+    event,
+    blockers: [],
   });
 }
