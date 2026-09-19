@@ -6,7 +6,10 @@ import {
   type MarketListingDiagnostics,
 } from '../services/market-listing.service';
 import { ThemesService } from '../services/themes.service';
-import { SectorPopularService } from '../services/sector-popular.service';
+import {
+  SectorPopularAvailabilityError,
+  SectorPopularService,
+} from '../services/sector-popular.service';
 import { SignalService } from '../services/signal.service';
 import { RecommendationService } from '../services/recommendation.service';
 
@@ -44,6 +47,27 @@ function normalizeTicker(value: unknown): string {
 
 function uniqueTickers(values: string[]): string[] {
   return Array.from(new Set(values.map(normalizeTicker).filter(Boolean)));
+}
+
+export function sectorPopularUnavailablePayload(
+  market: 'KR' | 'US',
+  error: SectorPopularAvailabilityError,
+) {
+  return {
+    ok: false,
+    market,
+    provider: 'public-market-providers',
+    sortBasis: '거래대금 기준',
+    sectors: [],
+    updatedAt: new Date().toISOString(),
+    available: false,
+    partial: false,
+    dataState: 'provider_error' as const,
+    retryable: true,
+    error: 'SECTOR_POPULAR_PROVIDER_UNAVAILABLE',
+    errorCode: error.code,
+    message: '섹터 순위 공개 데이터 제공기관의 근거를 확인하지 못했습니다. 임의 순위를 만들지 않으며 다시 확인할 수 있습니다.',
+  };
 }
 
 function uniqueRows(rows: QuoteRow[]): QuoteRow[] {
@@ -267,13 +291,26 @@ router.get('/market/sector-popular', async (req, res) => {
   const market = String(req.query.market ?? 'KR').toUpperCase() === 'US' ? 'US' : 'KR';
   try {
     const result = await SectorPopularService.getSectorPopular(market);
-    return res.json(result);
+    return res.json({
+      ...result,
+      ok: true,
+      available: true,
+      partial: false,
+      dataState: 'ready',
+      retryable: false,
+      error: null,
+      errorCode: null,
+    });
   } catch (error) {
+    if (error instanceof SectorPopularAvailabilityError) {
+      return res.status(200).json(sectorPopularUnavailablePayload(market, error));
+    }
     console.error('market sector-popular error:', error);
     return res.status(502).json({
       market,
       sortBasis: '거래대금 기준',
       sectors: [],
+      updatedAt: new Date().toISOString(),
       error: 'SECTOR_POPULAR_PROVIDER_ERROR',
     });
   }
