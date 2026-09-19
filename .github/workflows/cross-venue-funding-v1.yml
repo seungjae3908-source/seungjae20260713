@@ -1,0 +1,61 @@
+name: Cross Venue Funding V1
+
+on:
+  push:
+    branches:
+      - research/cross-venue-funding-v1-20260919
+    paths:
+      - market-prediction-lab/scripts/run-cross-venue-funding-v1.py
+      - .github/workflows/cross-venue-funding-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Syntax check
+        run: python -m py_compile market-prediction-lab/scripts/run-cross-venue-funding-v1.py
+
+      - name: Run public cross-venue funding validation
+        run: python market-prediction-lab/scripts/run-cross-venue-funding-v1.py
+
+      - name: Verify safety and formula contract
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path("market-prediction-lab/artifacts/cross-venue-funding-v1/result.json").read_text())
+          assert d["research_only"] is True
+          assert d["public_data_only"] is True
+          assert d["live_trading"] is False
+          assert d["private_api"] is False
+          assert d["orders_submitted"] == 0
+          assert d["leverage"] == 1
+          assert d["formula"]["venues"] == ["Hyperliquid","Bybit"]
+          assert d["formula"]["basis_pnl_included"] is True
+          assert d["formula"]["funding_pnl_included"] is True
+          assert set(d["symbols"]) == {"BTC","ETH","SOL"}
+          print("CROSS_VENUE_FUNDING_CONTRACT=PASS")
+          PY
+
+      - name: Publish summary
+        run: cat market-prediction-lab/artifacts/cross-venue-funding-v1/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cross-venue-funding-v1-${{ github.sha }}
+          path: market-prediction-lab/artifacts/cross-venue-funding-v1/
+          if-no-files-found: error
+          retention-days: 30
