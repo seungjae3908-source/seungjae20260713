@@ -9,6 +9,10 @@ import {
 } from './research-bundle-file-store.service.ts';
 import { ResearchBundleService } from './research-bundle.service.ts';
 import { sha256Canonical as hash } from '../../../market-prediction-lab/src/research-cache-provenance.js';
+import {
+  createCanonicalBundleOfflinePublicationReceiptV1,
+  validateCanonicalBundlePublicationV1,
+} from '../../../market-prediction-lab/src/adaptive-runtime-owner-capabilities-v1.js';
 
 export const RESEARCH_CANONICAL_BUNDLE_OFFLINE_PUBLICATION_RECORD_V1 =
   'research-canonical-bundle-offline-publication-record-v1';
@@ -16,6 +20,7 @@ export const RESEARCH_CANONICAL_BUNDLE_OFFLINE_PUBLICATION_RECORD_V1 =
 type Row = Record<string, unknown>;
 const MAX_INPUT_BYTES = 64 * 1024 * 1024;
 const DIGEST = /^[0-9a-f]{64}$/u;
+const SHA40 = /^[0-9a-f]{40}$/u;
 
 function row(value: unknown): Row {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Row : {};
@@ -50,7 +55,7 @@ async function safeInputFile(root: string, pathValue: string, name: string): Pro
   if (resolve(await realpath(absolute)) !== absolute) throw new Error(`${name}_PATH_UNSAFE`);
   return JSON.parse(await readFile(absolute, 'utf8'));
 }
-function publicationValid(value: unknown): value is ResearchCanonicalBundlePublication {
+function rawPublicationValid(value: unknown): value is ResearchCanonicalBundlePublication {
   const r = row(value);
   return r.schemaVersion === 'research-canonical-bundle-publication-v1'
     && typeof r.dslDigest === 'string' && DIGEST.test(r.dslDigest)
@@ -59,6 +64,16 @@ function publicationValid(value: unknown): value is ResearchCanonicalBundlePubli
     && r.evidenceCredit === 0
     && r.profitabilityProven === false
     && r.executionAuthority === 'NONE';
+}
+function exactResearchSha(value: unknown): string {
+  const sha = String(value ?? '').trim().toLowerCase();
+  if (!SHA40.test(sha)) throw new Error('RESEARCH_CODE_SHA_INVALID');
+  return sha;
+}
+function bundleResearchSha(value: unknown): string {
+  const strategy = row(row(value).strategy);
+  const sha = exactResearchSha(strategy.researchCodeSha);
+  return sha;
 }
 async function syncDirectory(path: string) {
   if (process.platform === 'win32') return;
@@ -133,6 +148,7 @@ export async function publishResearchCanonicalBundleOfflineV1(input: {
   inputRoot: string;
   dslPath: string;
   bundlePath: string;
+  researchCodeSha: string;
   /** Focused test harness only. The production CLI never passes this. */
   validationNow?: () => number;
 }) {
@@ -140,11 +156,16 @@ export async function publishResearchCanonicalBundleOfflineV1(input: {
   const inputRoot = await safeDirectory(input.inputRoot, 'RESEARCH_CANONICAL_BUNDLE_INPUT_ROOT');
   const dsl = await safeInputFile(inputRoot, input.dslPath, 'DSL');
   const bundle = await safeInputFile(inputRoot, input.bundlePath, 'BUNDLE');
+  const researchCodeSha = exactResearchSha(input.researchCodeSha);
+  const embeddedResearchCodeSha = bundleResearchSha(bundle);
+  if (embeddedResearchCodeSha !== researchCodeSha) {
+    throw new Error('BUNDLE_RESEARCH_CODE_SHA_MISMATCH');
+  }
 
-  let publication: ResearchCanonicalBundlePublication;
+  let rawPublication: ResearchCanonicalBundlePublication;
   let recoveredExistingCatalog = false;
   try {
-    publication = await publishResearchCanonicalBundleSource({
+    rawPublication = await publishResearchCanonicalBundleSource({
       stateRoot,
       dsl,
       bundle,
@@ -152,16 +173,26 @@ export async function publishResearchCanonicalBundleOfflineV1(input: {
     });
   } catch (error) {
     if (String(row(error).message ?? error) !== 'RESEARCH_CATALOG_ENTRY_EXISTS') throw error;
-    publication = await verifyExistingCatalog(stateRoot, dsl, bundle, input.validationNow);
+    rawPublication = await verifyExistingCatalog(stateRoot, dsl, bundle, input.validationNow);
     recoveredExistingCatalog = true;
   }
-  if (!publicationValid(publication)) throw new Error('CANONICAL_BUNDLE_PUBLICATION_INVALID');
+  if (!rawPublicationValid(rawPublication)) throw new Error('CANONICAL_BUNDLE_PUBLICATION_INVALID');
+  const publishedAt = new Date(input.validationNow?.() ?? Date.now()).toISOString();
+  const publication = createCanonicalBundleOfflinePublicationReceiptV1({
+    researchCodeSha,
+    publication: rawPublication,
+    publishedAt,
+  });
+  if (!validateCanonicalBundlePublicationV1(publication, researchCodeSha)) {
+    throw new Error('CANONICAL_BUNDLE_OFFLINE_PUBLICATION_RECEIPT_INVALID');
+  }
 
-  const inputDigest = digest({ dsl, bundle });
+  const inputDigest = digest({ dsl, bundle, researchCodeSha });
   const publicationDigest = digest(publication);
   const recordCore = Object.freeze({
     schemaVersion: 1,
     contract: RESEARCH_CANONICAL_BUNDLE_OFFLINE_PUBLICATION_RECORD_V1,
+    researchCodeSha,
     dslDigest: publication.dslDigest,
     bundleDigest: publication.bundleDigest,
     inputDigest,
@@ -189,6 +220,7 @@ export async function publishResearchCanonicalBundleOfflineV1(input: {
     contract: 'research-canonical-bundle-offline-publisher/v1',
     status: recoveredExistingCatalog ? 'verified_existing_catalog' : 'published',
     recoveredExistingCatalog,
+    researchCodeSha,
     publication,
     receiptStatus: receiptWrite.status,
     recordStatus: recordWrite.status,
