@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { collectUpbitSpotHistory } from "../src/upbit-spot-history.js";
 
 const DAY=86_400_000;
+const HISTORY_DAYS=1460;
 const BARS_PER_DAY=6;
 const LOOKBACK=30*BARS_PER_DAY;
 const REBALANCE=7*BARS_PER_DAY;
@@ -69,6 +70,30 @@ function targetWeights(data,openIndex,mode){
     for(const x of selected) weights[x.s]=w;
   }
   return weights;
+}
+
+function buyHoldEqualWeight(data,costRate,startIndex){
+  const begin=Math.max(1,startIndex);
+  const end=data.timestamps.length-1;
+  let invested=1-costRate;
+  const units=Object.fromEntries(SYMBOLS.map(s=>[s,(invested/SYMBOLS.length)/data.opens[s][begin]]));
+  const curve=[invested];
+  let peak=invested,mdd=0;
+  for(let i=begin;i<=end;i++){
+    const eq=SYMBOLS.reduce((sum,s)=>sum+units[s]*data.closes[s][i],0);
+    curve.push(eq);
+    peak=Math.max(peak,eq);
+    mdd=Math.max(mdd,(peak-eq)/peak);
+  }
+  let equity=curve.at(-1)*(1-costRate);
+  const ret=equity-1;
+  const years=(data.timestamps[end]-data.timestamps[begin])/(365.25*DAY);
+  return{
+    return:ret,
+    annualizedReturn:years>0?Math.pow(Math.max(1e-9,1+ret),1/years)-1:null,
+    maxDrawdown:mdd,
+    feesPaid:(1-invested)+curve.at(-1)*costRate,
+  };
 }
 
 function simulate(data,mode,costRate,startIndex){
@@ -143,11 +168,11 @@ function align(histories){
 const output=resolve(process.argv[2]??"market-prediction-lab/artifacts/upbit-mom30-top2-v1/result.json");
 try{
   const endTime=Date.now();
-  const startTime=endTime-730*DAY;
+  const startTime=endTime-HISTORY_DAYS*DAY;
   const histories={};
   const provenance={};
   for(const s of SYMBOLS){
-    const h=await collectUpbitSpotHistory({symbol:s,startTime,endTime,maxPages:40,minIntervalMs:120});
+    const h=await collectUpbitSpotHistory({symbol:s,startTime,endTime,maxPages:60,minIntervalMs:120});
     histories[s]=h;
     provenance[s]={
       providerMarket:h.providerMarket,
@@ -158,6 +183,7 @@ try{
   }
   const data=align(histories);
   const recentStart=Math.floor(data.timestamps.length*0.70);
+  const benchmarkStart=Math.max(BTC_TREND+1,LOOKBACK+1);
   const results={};
   for(const mode of ["top2","positive_only","positive_btc200"]){
     results[mode]={
@@ -191,6 +217,13 @@ try{
       longOnly:true,
     },
     costs:COSTS,
+    requestedHistoryDays:HISTORY_DAYS,
+    benchmark:{
+      equalWeightBuyHold:{
+        base:buyHoldEqualWeight(data,COSTS.base,benchmarkStart),
+        stress:buyHoldEqualWeight(data,COSTS.stress,benchmarkStart),
+      },
+    },
     symbols:SYMBOLS,
     commonBars:data.timestamps.length,
     provenance,
