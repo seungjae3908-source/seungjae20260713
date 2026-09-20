@@ -136,6 +136,8 @@ on:
       - market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
       - ops/research-production-readonly-evidence.sh
       - .github/workflows/research-production-natural-cycle-evidence.yml
+      - .github/workflows/research-production-forward-one-shot.yml
+      - research-production/test/research-production-forward-one-shot-workflow.test.mjs
       - ops/install-paper-forward-schedule.sh
       - ops/bridge-paper-forward-no-deploy-snapshot.mjs
       - ops/run-paper-forward-flat-snapshot-republish.mjs
@@ -357,6 +359,8 @@ jobs:
             market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
             ops/research-production-readonly-evidence.sh
             .github/workflows/research-production-natural-cycle-evidence.yml
+            .github/workflows/research-production-forward-one-shot.yml
+            research-production/test/research-production-forward-one-shot-workflow.test.mjs
             ops/install-paper-forward-schedule.sh
             ops/bridge-paper-forward-no-deploy-snapshot.mjs
             ops/run-paper-forward-flat-snapshot-republish.mjs
