@@ -104,7 +104,7 @@ test('profile source digest binding is mandatory and per-symbol row digest is in
   assert.throws(()=>buildCanonicalDatasetComponentV1({
     datasetSnapshotManifest:m,datasetId:'dataset:v1',symbol:'BTCUSDT',rows,
     splitAssignments:split,metadata:metadata({sourceDigest:H('f')}),observedAtMs:END+1000,
-  }),/datasetDigest does not match canonical rows|sourceDigest/);
+  }),/DATASET_SOURCE_DIGEST_ROWS_MISMATCH|datasetDigest does not match canonical rows|sourceDigest/);
 });
 
 test('persists dataset component and record write-once',async()=>{
