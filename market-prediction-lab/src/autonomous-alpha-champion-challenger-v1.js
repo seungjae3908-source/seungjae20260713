@@ -113,8 +113,14 @@ export function buildSourceResearchReputationV1({
     ]),
   );
 
+  const seenClaimOutcomes = new Set();
   for (const outcome of claimOutcomes) {
     const claimId = text(outcome?.claimId);
+    if (claimId && seenClaimOutcomes.has(claimId)) {
+      blockers.push("SOURCE_REPUTATION_DUPLICATE_CLAIM_OUTCOME");
+      continue;
+    }
+    if (claimId) seenClaimOutcomes.add(claimId);
     const sourceId = claimToSource.get(claimId);
     if (!sourceId || !sourceRows.has(sourceId)) {
       blockers.push("SOURCE_REPUTATION_UNKNOWN_CLAIM");
