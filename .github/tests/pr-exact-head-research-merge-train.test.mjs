@@ -81,6 +81,14 @@ test("local validation failure blocks a candidate without granting any authority
   assert.equal(passed.localValidation.status, "PASS");
 });
 
+test("workflow keeps GitHub expressions unescaped so checkout and matrix refs resolve", async () => {
+  const workflow = await readFile(".github/workflows/research-merge-train-pre-ready.yml", "utf8");
+  assert.doesNotMatch(workflow, /\\\\\$\{\{/u);
+  assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/u);
+  assert.match(workflow, /matrix: \$\{\{ fromJson\(needs\.discover\.outputs\.matrix\) \}\}/u);
+  assert.match(workflow, /ref: \$\{\{ matrix\.head_sha \}\}/u);
+});
+
 test("workflow is manual, read-only, bounded-parallel and cannot Ready/Merge/Deploy/Activate", async () => {
   const workflow = await readFile(".github/workflows/research-merge-train-pre-ready.yml", "utf8");
   assert.match(workflow, /^on:\n  workflow_dispatch:/mu);
