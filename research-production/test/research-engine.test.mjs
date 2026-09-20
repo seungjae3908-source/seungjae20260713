@@ -93,8 +93,36 @@ test('forward plan isolates state and orders natural Shadow before Paper', () =>
   assert.equal(paper.env.LIVE_TRADING, 'false');
   assert.deepEqual(paper.sharedPackages, ['strategy-hypothesis', 'external-research']);
   assert.equal(shadow.sharedPackages, undefined);
+  assert.deepEqual(shadow.acceptedExitCodes, [0, 2]);
   assert.equal(shadow.args.at(-2), join(stateRoot, 'forward', 'shadow-state.json'));
   assert.equal(shadow.args.at(-1), join(stateRoot, 'forward', 'shadow-summary.json'));
+});
+
+test('Shadow NOT_EVALUABLE is fail-closed BLOCKED_DATA with explicit missing evidence and no fallback values', async () => {
+  const source = await readFile(
+    new URL('../../market-prediction-lab/scripts/run-shadow-cycle.js', import.meta.url),
+    'utf8',
+  );
+
+  for (const token of [
+    'SHADOW_INFERENCE_NOT_EVALUABLE',
+    'MISSING_REQUIRED_INFERENCE_EVIDENCE',
+    'missingRequiredFeatures',
+    'candidateMissingRequiredFeatures',
+    'referenceMissingRequiredFeatures',
+    'EXISTING_TEMPORAL_EVIDENCE_ONLY',
+    'defaultFeatureFallbackAllowed: false',
+    'syntheticFeatureFallbackAllowed: false',
+    'if (inferenceBlocker) throw inferenceBlocker',
+    'if (nextSummary.status === "blocked_data") process.exitCode = 2',
+  ]) {
+    assert.ok(source.includes(token), `missing Shadow BLOCKED_DATA contract: ${token}`);
+  }
+
+  assert.equal(source.includes('candidate.probabilities ??'), false);
+  assert.equal(source.includes('reference.probabilities ??'), false);
+  assert.equal(source.includes('candidate.probabilities ||'), false);
+  assert.equal(source.includes('reference.probabilities ||'), false);
 });
 
 test('forward plan preserves missing Paper state as missing when no runtime transport exists', () => {
