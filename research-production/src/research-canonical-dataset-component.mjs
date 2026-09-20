@@ -111,6 +111,8 @@ export function buildCanonicalDatasetComponentV1({
     throw new Error('DATASET_PROFILE_SOURCE_DIGEST_MISMATCH');
   }
   if(!HASH64.test(String(metadata.sourceDigest??''))) throw new Error('DATASET_SOURCE_DIGEST_INVALID');
+  const canonicalRowsDigest=hash(rows);
+  if(metadata.sourceDigest!==canonicalRowsDigest) throw new Error('DATASET_SOURCE_DIGEST_ROWS_MISMATCH');
   if(metadata.missingIntervalCount!==0||metadata.duplicateRowCount!==0||metadata.dataQualityStatus!=='VERIFIED'){
     throw new Error('DATASET_QUALITY_NOT_VERIFIED');
   }
