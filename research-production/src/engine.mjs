@@ -50,19 +50,18 @@ const REQUIRED_LAB_FILES = Object.freeze([
   'scripts/run-shadow-cycle.js',
 ]);
 
-const REQUIRED_SHARED_PACKAGE_FILES = Object.freeze([
-  'packages/strategy-hypothesis/package.json',
-  'packages/strategy-hypothesis/src/index.js',
-  'packages/strategy-hypothesis/src/contract.js',
-  'packages/external-research/package.json',
-  'packages/external-research/src/index.js',
-  'packages/external-research/src/contract.js',
-]);
-
-const WORKSPACE_SHARED_PACKAGES = Object.freeze([
-  'strategy-hypothesis',
-  'external-research',
-]);
+const SHARED_PACKAGE_REQUIREMENTS = Object.freeze({
+  'strategy-hypothesis': Object.freeze([
+    'package.json',
+    'src/index.js',
+    'src/contract.js',
+  ]),
+  'external-research': Object.freeze([
+    'package.json',
+    'src/index.js',
+    'src/contract.js',
+  ]),
+});
 
 export const PROFILES = Object.freeze({
   'fast-historical': Object.freeze([
@@ -84,7 +83,14 @@ export const PROFILES = Object.freeze({
   ]),
   forward: Object.freeze([
     Object.freeze({ id: 'shadow-forward', kind: 'shadow', args: ['scripts/run-shadow-cycle.js'], timeoutMs: 30 * 60_000 }),
-    Object.freeze({ id: 'paper-forward', kind: 'paper', args: ['scripts/run-paper-forward-schedule.js'], timeoutMs: 20 * 60_000, acceptedExitCodes: [0, 2] }),
+    Object.freeze({
+      id: 'paper-forward',
+      kind: 'paper',
+      args: ['scripts/run-paper-forward-schedule.js'],
+      timeoutMs: 20 * 60_000,
+      acceptedExitCodes: [0, 2],
+      sharedPackages: Object.freeze(['strategy-hypothesis', 'external-research']),
+    }),
   ]),
 });
 
@@ -167,10 +173,7 @@ export async function preflightResearchProduction({ repoRoot, stateRoot, researc
   for (const relative of REQUIRED_LAB_FILES) {
     if (!(await exists(join(labRoot, relative)))) missing.push(relative);
   }
-  for (const relative of REQUIRED_SHARED_PACKAGE_FILES) {
-    if (!(await exists(join(root, relative)))) missing.push(relative);
-  }
-  if (missing.length > 0) throw new Error(`research runtime prerequisites missing: ${missing.join(', ')}`);
+  if (missing.length > 0) throw new Error(`research lab prerequisites missing: ${missing.join(', ')}`);
   await mkdir(stateRoot, { recursive: true, mode: 0o700 });
   const probe = join(stateRoot, `.write-probe-${process.pid}`);
   await writeFile(probe, 'ok\n', { mode: 0o600 });
@@ -290,7 +293,7 @@ function taskFingerprint({ task, researchSha }) {
   return createHash('sha256').update(JSON.stringify({ id: task.id, args: task.args, researchSha })).digest('hex');
 }
 
-export async function prepareResearchTaskWorkspace({ labRoot, taskDir } = {}) {
+export async function prepareResearchTaskWorkspace({ labRoot, taskDir, sharedPackages = [] } = {}) {
   const sourceLabRoot = resolve(String(labRoot ?? ''));
   const destinationTaskDir = resolve(String(taskDir ?? ''));
   if (!isAbsolute(sourceLabRoot) || !isAbsolute(destinationTaskDir)) {
@@ -307,8 +310,14 @@ export async function prepareResearchTaskWorkspace({ labRoot, taskDir } = {}) {
     dereference: false,
   });
 
+  const requestedSharedPackages = [...new Set(
+    Array.isArray(sharedPackages) ? sharedPackages.map((value) => String(value)) : [],
+  )];
   const copiedSharedPackages = [];
-  for (const packageName of WORKSPACE_SHARED_PACKAGES) {
+  for (const packageName of requestedSharedPackages) {
+    if (!Object.hasOwn(SHARED_PACKAGE_REQUIREMENTS, packageName)) {
+      throw new Error(`unsupported Research shared package: ${packageName}`);
+    }
     const source = join(repoRoot, 'packages', packageName);
     const destination = join(workspaceParent, 'packages', packageName);
     await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
@@ -327,10 +336,40 @@ export async function prepareResearchTaskWorkspace({ labRoot, taskDir } = {}) {
   });
 }
 
+export async function validateResearchTaskSharedPackages({ repoRoot, plan } = {}) {
+  const root = resolve(String(repoRoot ?? ''));
+  const requested = [...new Set(
+    (Array.isArray(plan) ? plan : [])
+      .flatMap((task) => Array.isArray(task?.sharedPackages) ? task.sharedPackages : [])
+      .map((value) => String(value)),
+  )];
+  const missing = [];
+  for (const packageName of requested) {
+    const requiredFiles = SHARED_PACKAGE_REQUIREMENTS[packageName];
+    if (!requiredFiles) {
+      throw new Error(`unsupported Research shared package: ${packageName}`);
+    }
+    for (const relative of requiredFiles) {
+      const path = join(root, 'packages', packageName, relative);
+      if (!(await exists(path))) {
+        missing.push(`packages/${packageName}/${relative}`);
+      }
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(`research task shared-package prerequisites missing: ${missing.join(', ')}`);
+  }
+  return Object.freeze({ requestedPackages: Object.freeze(requested) });
+}
+
 async function runTask({ task, labRoot, stateRoot, researchSha, cycleId, inheritedEnv = process.env }) {
   const taskDir = join(stateRoot, 'runs', cycleId, task.id);
   await mkdir(taskDir, { recursive: true, mode: 0o700 });
-  const workspace = await prepareResearchTaskWorkspace({ labRoot, taskDir });
+  const workspace = await prepareResearchTaskWorkspace({
+    labRoot,
+    taskDir,
+    sharedPackages: task.sharedPackages ?? [],
+  });
   const workspaceRoot = workspace.workspaceRoot;
   const stdoutPath = join(taskDir, 'stdout.log');
   const stderrPath = join(taskDir, 'stderr.log');
@@ -427,6 +466,10 @@ export async function runResearchCycle({ repoRoot, stateRoot, researchSha, profi
     researchSha: preflight.researchSha,
     activationAtMs: stableActivationAtMs,
     env,
+  });
+  await validateResearchTaskSharedPackages({
+    repoRoot: preflight.repoRoot,
+    plan,
   });
   const requestedConcurrency = Math.max(1, Math.min(Number(concurrency) || 1, 16, plan.length));
   const safeConcurrency = profile === 'forward' ? 1 : requestedConcurrency;
