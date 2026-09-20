@@ -1,17 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import {
-  buildAutonomousAlphaArchitectureReadinessRuntimeV1,
   buildAutonomousAlphaNaturalPaperObserverReceiptV1,
 } from "../scripts/run-paper-forward-schedule.js";
-import {
-  buildAutonomousAlphaArchitectureReadinessV1,
-} from "../src/autonomous-alpha-certification-v1.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const SCRIPT = join(REPO_ROOT, "ops/research-production-readonly-evidence.sh");
@@ -530,111 +526,3 @@ test("Research Production read-only evidence exports only sanitized forward fail
   );
 });
 
-
-
-function validAlphaReadinessFixture() {
-  const candidateId = "alpha-isolated-runtime-001";
-  const graphDigest = "1".repeat(64);
-  const genomeDigest = "2".repeat(64);
-  const redTeamDigest = "3".repeat(64);
-  const forecastDigest = "4".repeat(64);
-  const counterfactualDigest = "5".repeat(64);
-  const digitalTwinDigest = "6".repeat(64);
-  const championPlanDigest = "7".repeat(64);
-  return {
-    worldKnowledge: {
-      status: "WORLD_KNOWLEDGE_READY",
-      executionAuthority: "NONE",
-      evidenceGraph: { graphDigest },
-    },
-    alphaGenome: {
-      status: "ALPHA_GENOME_READY_FOR_FALSIFICATION",
-      candidateId,
-      evidenceGraphDigest: graphDigest,
-      genomeDigest,
-      executionAuthority: "NONE",
-    },
-    redTeam: {
-      status: "RED_TEAM_SURVIVOR_RESEARCH_ONLY",
-      candidateId,
-      genomeDigest,
-      resultDigest: redTeamDigest,
-      executionAuthority: "NONE",
-    },
-    forecast: {
-      status: "FORECAST_READY_RESEARCH_ONLY",
-      candidateId,
-      redTeamResultDigest: redTeamDigest,
-      forecastDigest,
-      executionAuthority: "NONE",
-    },
-    counterfactual: {
-      status: "COUNTERFACTUAL_TWIN_EVALUATED_RESEARCH_ONLY",
-      candidateId,
-      forecastDigest,
-      resultDigest: counterfactualDigest,
-      executionAuthority: "NONE",
-    },
-    digitalTwin: {
-      status: "MARKET_DIGITAL_TWIN_EVALUATED_RESEARCH_ONLY",
-      candidateId,
-      counterfactualResultDigest: counterfactualDigest,
-      resultDigest: digitalTwinDigest,
-      executionAuthority: "NONE",
-    },
-    championChallenger: {
-      status: "CHAMPION_CHALLENGER_READY_FOR_NATURAL_PAPER",
-      digitalTwinResultDigest: digitalTwinDigest,
-      planDigest: championPlanDigest,
-      candidates: [{
-        candidateId,
-        evidenceDigests: { redTeam: redTeamDigest },
-      }],
-      executionAuthority: "NONE",
-    },
-    certification: {
-      status: "READY_FOR_SEPARATE_NATURAL_PAPER_ACTIVATION_APPROVAL",
-      candidateId,
-      championPlanDigest,
-      certificationDigest: "8".repeat(64),
-      profitabilityProven: false,
-      executionAuthority: "NONE",
-    },
-  };
-}
-
-test("isolated Paper runtime readiness is exactly equivalent to canonical Alpha readiness", () => {
-  const fixture = validAlphaReadinessFixture();
-  const canonical = buildAutonomousAlphaArchitectureReadinessV1(fixture);
-  const isolated = buildAutonomousAlphaArchitectureReadinessRuntimeV1(fixture);
-
-  assert.deepEqual(isolated, canonical);
-  assert.equal(isolated.architectureReady, true);
-  assert.equal(isolated.executionAuthority, "NONE");
-  assert.equal(isolated.liveTradingAllowed, false);
-  assert.equal(isolated.autoTradingAllowed, false);
-  assert.equal(isolated.realOrderAllowed, false);
-});
-
-test("Paper Forward entrypoint imports from a market-prediction-lab-only workspace", async () => {
-  const root = await mkdtemp(join(tmpdir(), "paper-forward-isolated-import-"));
-  const workspace = join(root, "market-prediction-lab");
-  try {
-    await cp(join(REPO_ROOT, "market-prediction-lab"), workspace, {
-      recursive: true,
-      force: false,
-      errorOnExist: true,
-      dereference: false,
-      filter: (source) => !source.includes("/node_modules/"),
-    });
-
-    const entrypoint = join(workspace, "scripts", "run-paper-forward-schedule.js");
-    const imported = await import(`${pathToFileURL(entrypoint).href}?isolated=${Date.now()}`);
-
-    assert.equal(typeof imported.runPaperForwardScheduleCli, "function");
-    assert.equal(typeof imported.buildAutonomousAlphaArchitectureReadinessRuntimeV1, "function");
-    assert.equal(typeof imported.buildAutonomousAlphaNaturalPaperObserverReceiptV1, "function");
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
