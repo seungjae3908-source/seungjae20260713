@@ -49,6 +49,7 @@ const groups = {
     path.join(root, 'src/services/research-dual-free-ai.service.test.ts'),
     path.join(root, 'src/services/research-canonical-bundle-offline-publisher.service.test.mjs'),
     path.join(root, 'src/services/research-canonical-bundle-assembler.service.test.mjs'),
+    path.join(root, 'src/services/research-canonical-component-store.service.test.mjs'),
     path.join(root, 'src/services/strategy-health-research-adapter.service.test.ts'),
     path.join(root, 'src/services/trading-ai-review-phase9.test.ts'),
     path.join(root, 'src/routes/paper-journal-ai-preview-privileges.test.ts'),
