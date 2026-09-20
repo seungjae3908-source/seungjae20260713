@@ -82,7 +82,7 @@ export const PROFILES = Object.freeze({
     Object.freeze({ id: 'long-v6', args: ['scripts/run-v6-history.js'], timeoutMs: 90 * 60_000 }),
   ]),
   forward: Object.freeze([
-    Object.freeze({ id: 'shadow-forward', kind: 'shadow', args: ['scripts/run-shadow-cycle.js'], timeoutMs: 30 * 60_000 }),
+    Object.freeze({ id: 'shadow-forward', kind: 'shadow', args: ['scripts/run-shadow-cycle.js'], timeoutMs: 30 * 60_000, acceptedExitCodes: [0, 2] }),
     Object.freeze({
       id: 'paper-forward',
       kind: 'paper',
