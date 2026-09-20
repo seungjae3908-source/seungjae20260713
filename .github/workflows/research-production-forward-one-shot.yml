@@ -182,8 +182,6 @@ jobs:
       SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
       SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
       SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
-      EVIDENCE_FILE: ${{ runner.temp }}/research-production-forward-one-shot-evidence.txt
-      SERVICE_FILE: ${{ runner.temp }}/research-production-forward-one-shot-service.txt
     steps:
       - uses: actions/checkout@v4
         with:
@@ -232,6 +230,8 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          SERVICE_FILE="$RUNNER_TEMP/research-production-forward-one-shot-service.txt"
+          echo "service_file=$SERVICE_FILE" >> "$GITHUB_OUTPUT"
           remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
           set +e
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$SSH_USER@$SSH_HOST" "$remote_env bash -s" > "$SERVICE_FILE" 2>&1 <<'REMOTE'
@@ -253,9 +253,12 @@ jobs:
           cat "$SERVICE_FILE"
 
       - name: Collect post-run evidence read-only
+        id: evidence
         shell: bash
         run: |
           set -Eeuo pipefail
+          EVIDENCE_FILE="$RUNNER_TEMP/research-production-forward-one-shot-evidence.txt"
+          echo "evidence_file=$EVIDENCE_FILE" >> "$GITHUB_OUTPUT"
           remote_env="$(printf 'TARGET_RESEARCH_SHA=%q' "$TARGET_SHA")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$SSH_USER@$SSH_HOST" "$remote_env bash -s"             < ops/research-production-readonly-evidence.sh > "$EVIDENCE_FILE"
           grep -Fx 'RESEARCH_PRODUCTION_READONLY_EVIDENCE_BEGIN' "$EVIDENCE_FILE" >/dev/null
@@ -273,6 +276,10 @@ jobs:
       - name: Classify one-shot result
         id: verdict
         shell: bash
+        env:
+          EVIDENCE_FILE: ${{ steps.evidence.outputs.evidence_file }}
+          SERVICE_FILE: ${{ steps.service.outputs.service_file }}
+          TARGET_SHA: ${{ env.TARGET_SHA }}
         run: |
           set -Eeuo pipefail
           node <<'NODE'
@@ -349,8 +356,6 @@ jobs:
           }
           if (status === 'FAIL_CLOSED') process.exitCode = 1;
           NODE
-        env:
-          TARGET_SHA: ${{ env.TARGET_SHA }}
 
       - name: Report one-shot evidence to Central Hub
         if: always()
