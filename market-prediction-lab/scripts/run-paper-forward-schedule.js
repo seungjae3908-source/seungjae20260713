@@ -24,7 +24,7 @@ import {
 } from "../src/paper-forward-schedule-runtime-v1.js";
 import {
   buildAutonomousAlphaArchitectureReadinessV1,
-} from "../src/autonomous-alpha-certification-v1.js";
+} from "../src/autonomous-alpha-architecture-readiness-v1.js";
 
 const TRUTHY = new Set(["1", "true", "yes", "on", "enabled"]);
 const forbiddenActivationKeys = [
