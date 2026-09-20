@@ -27,13 +27,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      count: \${{ steps.discover.outputs.count }}
-      matrix: \${{ steps.discover.outputs.matrix }}
+      count: ${{ steps.discover.outputs.count }}
+      matrix: ${{ steps.discover.outputs.matrix }}
     steps:
       - name: Checkout immutable auditor source
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 1
 
@@ -52,13 +52,13 @@ jobs:
       - name: Build read-only target matrix
         id: discover
         env:
-          GITHUB_TOKEN: \${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           node .github/scripts/research-merge-train-pre-ready.mjs discover \
             --repository "\${GITHUB_REPOSITORY}" \
-            --min "\${{ inputs.target_min }}" \
-            --max "\${{ inputs.target_max }}" \
+            --min "${{ inputs.target_min }}" \
+            --max "${{ inputs.target_max }}" \
             --github-output "\${GITHUB_OUTPUT}" \
             --json-output /tmp/research-merge-train-discovery.json
 
@@ -71,7 +71,7 @@ jobs:
           retention-days: 7
 
   audit:
-    name: Pre-Ready audit PR #\${{ matrix.pr }}
+    name: Pre-Ready audit PR #${{ matrix.pr }}
     needs: discover
     if: needs.discover.outputs.count != '0'
     runs-on: ubuntu-latest
@@ -79,12 +79,12 @@ jobs:
     strategy:
       fail-fast: false
       max-parallel: 6
-      matrix: \${{ fromJson(needs.discover.outputs.matrix) }}
+      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
     steps:
       - name: Checkout immutable auditor source
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.sha }}
+          ref: ${{ github.sha }}
           path: auditor
           persist-credentials: false
           fetch-depth: 1
@@ -92,7 +92,7 @@ jobs:
       - name: Checkout exact target PR head
         uses: actions/checkout@v4
         with:
-          ref: \${{ matrix.head_sha }}
+          ref: ${{ matrix.head_sha }}
           path: target
           persist-credentials: false
           fetch-depth: 1
@@ -105,7 +105,7 @@ jobs:
       - name: Verify exact detached target HEAD
         shell: bash
         env:
-          EXPECTED_SHA: \${{ matrix.head_sha }}
+          EXPECTED_SHA: ${{ matrix.head_sha }}
         run: |
           set -euo pipefail
           actual="$(git -C target rev-parse HEAD)"
@@ -116,18 +116,18 @@ jobs:
       - name: Read drift, dependency, review and existing CI state
         id: audit
         env:
-          GITHUB_TOKEN: \${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/research-train
           node auditor/.github/scripts/research-merge-train-pre-ready.mjs audit \
             --repository "\${GITHUB_REPOSITORY}" \
-            --pr "\${{ matrix.pr }}" \
-            --head-sha "\${{ matrix.head_sha }}" \
-            --parent-pr "\${{ matrix.parent_pr }}" \
+            --pr "${{ matrix.pr }}" \
+            --head-sha "${{ matrix.head_sha }}" \
+            --parent-pr "${{ matrix.parent_pr }}" \
             --github-output "\${GITHUB_OUTPUT}" \
-            --json-output "/tmp/research-train/pr-\${{ matrix.pr }}.audit.json" \
-            --markdown-output "/tmp/research-train/pr-\${{ matrix.pr }}.audit.md"
+            --json-output "/tmp/research-train/pr-${{ matrix.pr }}.audit.json" \
+            --markdown-output "/tmp/research-train/pr-${{ matrix.pr }}.audit.md"
 
       - name: Static connection and product-integrity auditors
         id: static_auditors
@@ -185,26 +185,26 @@ jobs:
       - name: Finalize per-PR diagnostic result
         if: always()
         env:
-          STATIC_AUDIT_OUTCOME: \${{ steps.static_auditors.outcome }}
-          RESEARCH_PRODUCTION_OUTCOME: \${{ steps.research_production.outcome }}
-          RESEARCH_DASHBOARD_OUTCOME: \${{ steps.research_dashboard.outcome }}
-          PREDICTION_LAB_OUTCOME: \${{ steps.prediction_lab.outcome }}
-          CI_CONTRACTS_OUTCOME: \${{ steps.ci_contracts.outcome }}
+          STATIC_AUDIT_OUTCOME: ${{ steps.static_auditors.outcome }}
+          RESEARCH_PRODUCTION_OUTCOME: ${{ steps.research_production.outcome }}
+          RESEARCH_DASHBOARD_OUTCOME: ${{ steps.research_dashboard.outcome }}
+          PREDICTION_LAB_OUTCOME: ${{ steps.prediction_lab.outcome }}
+          CI_CONTRACTS_OUTCOME: ${{ steps.ci_contracts.outcome }}
         run: |
           set -euo pipefail
           node auditor/.github/scripts/research-merge-train-pre-ready.mjs finalize \
-            --input "/tmp/research-train/pr-\${{ matrix.pr }}.audit.json" \
-            --json-output "/tmp/research-train/pr-\${{ matrix.pr }}.json" \
-            --markdown-output "/tmp/research-train/pr-\${{ matrix.pr }}.md"
+            --input "/tmp/research-train/pr-${{ matrix.pr }}.audit.json" \
+            --json-output "/tmp/research-train/pr-${{ matrix.pr }}.json" \
+            --markdown-output "/tmp/research-train/pr-${{ matrix.pr }}.md"
 
       - name: Retain exact-head Pre-Ready evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: research-merge-train-pr-\${{ matrix.pr }}
+          name: research-merge-train-pr-${{ matrix.pr }}
           path: |
-            /tmp/research-train/pr-\${{ matrix.pr }}.json
-            /tmp/research-train/pr-\${{ matrix.pr }}.md
+            /tmp/research-train/pr-${{ matrix.pr }}.json
+            /tmp/research-train/pr-${{ matrix.pr }}.md
           if-no-files-found: error
           retention-days: 7
 
@@ -220,7 +220,7 @@ jobs:
       - name: Checkout immutable auditor source
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 1
 
