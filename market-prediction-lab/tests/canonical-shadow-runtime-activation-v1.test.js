@@ -130,7 +130,11 @@ test("publisher workflow clean-skips artifactless source runs before mutation ga
 
 test("stranded recovery workflow is approval-gated, one-shot, and refuses a second bootstrap lineage", () => {
   const workflow = fs.readFileSync(new URL("../../.github/workflows/prediction-lab-canonical-shadow-cycle.yml", import.meta.url), "utf8");
-  assert.match(workflow, /issues\/838\/comments\?per_page=100/);
+  assert.match(workflow, /HUB_ISSUE_NUMBER/);
+  assert.match(workflow, /issues\/\$HUB_ISSUE_NUMBER\/comments\?per_page=100/);
+  assert.match(workflow, /agent_hub_rollover_v2\.py resolve/);
+  assert.doesNotMatch(workflow, /issues\/(?:660|838)\/comments\?per_page=100/);
+  assert.doesNotMatch(workflow, /issue\?\.number !== (?:660|838)/);
   assert.match(workflow, /--paginate --slurp/);
   assert.match(workflow, /approve-canonical-shadow-recovery/);
   assert.match(workflow, /actions\/artifacts\?per_page=100/);
