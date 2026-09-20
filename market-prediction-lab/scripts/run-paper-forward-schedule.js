@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { access, appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -23,6 +22,10 @@ import { wrapPaperForwardProviderWithMeaningfulSearch } from "../src/meaningful-
 import {
   runPaperForwardScheduledInvocation,
 } from "../src/paper-forward-schedule-runtime-v1.js";
+import {
+  buildAutonomousAlphaArchitectureReadinessV1,
+} from "../src/autonomous-alpha-certification-v1.js";
+
 const TRUTHY = new Set(["1", "true", "yes", "on", "enabled"]);
 const forbiddenActivationKeys = [
   "LIVE_TRADING",
@@ -34,176 +37,6 @@ const forbiddenActivationKeys = [
 ];
 const PAPER_STATE_BINDING_VERSION = "paper-state-publisher-runtime-binding-v1";
 const PAPER_STATE_SNAPSHOT_VERSION = "paper-trading-state-snapshot-v2";
-
-function alphaCanonical(value) {
-  if (Array.isArray(value)) return value.map(alphaCanonical);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.keys(value).sort().map((key) => [key, alphaCanonical(value[key])]),
-  );
-}
-
-function alphaDigest(value) {
-  return createHash("sha256")
-    .update(JSON.stringify(alphaCanonical(value)))
-    .digest("hex");
-}
-
-function alphaDeepFreeze(value) {
-  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
-  for (const child of Object.values(value)) alphaDeepFreeze(child);
-  return Object.freeze(value);
-}
-
-function alphaText(value) {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function alphaSafety() {
-  return {
-    paperOnlyUntilSeparateLiveApproval: true,
-    automaticLivePromotionAllowed: false,
-    automaticChampionSwapAllowed: false,
-    automaticCapitalMutationAllowed: false,
-    liveTradingAllowed: false,
-    autoTradingAllowed: false,
-    realOrderAllowed: false,
-    privateTradingApiAllowed: false,
-    executionAuthority: "NONE",
-  };
-}
-
-export function buildAutonomousAlphaArchitectureReadinessRuntimeV1({
-  worldKnowledge,
-  alphaGenome,
-  redTeam,
-  forecast,
-  counterfactual,
-  digitalTwin,
-  championChallenger,
-  certification,
-} = {}) {
-  const stages = [
-    ["WORLD_KNOWLEDGE", worldKnowledge, ["WORLD_KNOWLEDGE_READY", "WORLD_KNOWLEDGE_PARTIAL"]],
-    ["ALPHA_GENOME", alphaGenome, ["ALPHA_GENOME_READY_FOR_FALSIFICATION"]],
-    ["ALPHA_RED_TEAM", redTeam, ["RED_TEAM_SURVIVOR_RESEARCH_ONLY"]],
-    ["MULTI_HORIZON_FORECAST", forecast, ["FORECAST_READY_RESEARCH_ONLY", "FORECAST_ABSTAINED"]],
-    ["COUNTERFACTUAL_TWIN", counterfactual, ["COUNTERFACTUAL_TWIN_EVALUATED_RESEARCH_ONLY"]],
-    ["MARKET_DIGITAL_TWIN", digitalTwin, ["MARKET_DIGITAL_TWIN_EVALUATED_RESEARCH_ONLY"]],
-    ["CHAMPION_CHALLENGER", championChallenger, ["CHAMPION_CHALLENGER_READY_FOR_NATURAL_PAPER"]],
-    ["CERTIFICATION", certification, [
-      "READY_FOR_SEPARATE_NATURAL_PAPER_ACTIVATION_APPROVAL",
-      "RESEARCH_HOLD_COLLECT_GENUINE_FORWARD_EVIDENCE",
-      "PROFITABILITY_REVIEW_READY_NOT_LIVE",
-    ]],
-  ];
-
-  const acceptance = stages.map(([name, value, allowed]) => ({
-    name,
-    status: value?.status ?? null,
-    passed: allowed.includes(value?.status)
-      && value?.executionAuthority === "NONE",
-  }));
-
-  const lineageChecks = [
-    {
-      name: "WORLD_TO_GENOME",
-      passed: alphaText(worldKnowledge?.evidenceGraph?.graphDigest) != null
-        && alphaGenome?.evidenceGraphDigest === worldKnowledge.evidenceGraph.graphDigest,
-    },
-    {
-      name: "GENOME_TO_RED_TEAM",
-      passed: alphaText(alphaGenome?.genomeDigest) != null
-        && redTeam?.genomeDigest === alphaGenome.genomeDigest,
-    },
-    {
-      name: "RED_TEAM_TO_FORECAST",
-      passed: alphaText(redTeam?.resultDigest) != null
-        && forecast?.redTeamResultDigest === redTeam.resultDigest,
-    },
-    {
-      name: "FORECAST_TO_COUNTERFACTUAL",
-      passed: alphaText(forecast?.forecastDigest) != null
-        && counterfactual?.forecastDigest === forecast.forecastDigest,
-    },
-    {
-      name: "COUNTERFACTUAL_TO_DIGITAL_TWIN",
-      passed: alphaText(counterfactual?.resultDigest) != null
-        && digitalTwin?.counterfactualResultDigest === counterfactual.resultDigest,
-    },
-    {
-      name: "DIGITAL_TWIN_TO_CHAMPION",
-      passed: alphaText(digitalTwin?.resultDigest) != null
-        && championChallenger?.digitalTwinResultDigest === digitalTwin.resultDigest,
-    },
-    {
-      name: "RED_TEAM_TO_CHAMPION_EVIDENCE",
-      passed: alphaText(redTeam?.resultDigest) != null
-        && Array.isArray(championChallenger?.candidates)
-        && championChallenger.candidates.some((candidate) =>
-          candidate?.candidateId === alphaGenome?.candidateId
-          && candidate?.evidenceDigests?.redTeam === redTeam.resultDigest),
-    },
-    {
-      name: "CHAMPION_TO_CERTIFICATION",
-      passed: alphaText(championChallenger?.planDigest) != null
-        && certification?.championPlanDigest === championChallenger.planDigest,
-    },
-  ];
-
-  const candidateIds = [
-    alphaGenome?.candidateId,
-    redTeam?.candidateId,
-    forecast?.candidateId,
-    counterfactual?.candidateId,
-    digitalTwin?.candidateId,
-    certification?.candidateId,
-  ].map(alphaText);
-  lineageChecks.push({
-    name: "CANDIDATE_ID_CONTINUITY",
-    passed: candidateIds.every(Boolean) && new Set(candidateIds).size === 1,
-  });
-
-  const blockers = [
-    ...acceptance
-      .filter((row) => !row.passed)
-      .map((row) => `ARCH_${row.name}_INVALID`),
-    ...lineageChecks
-      .filter((row) => !row.passed)
-      .map((row) => `ARCH_LINEAGE_${row.name}_INVALID`),
-  ];
-
-  const profitabilityProven =
-    certification?.status === "PROFITABILITY_REVIEW_READY_NOT_LIVE"
-    && certification?.profitabilityProven === true;
-
-  const core = {
-    acceptance,
-    lineageChecks,
-    profitabilityProven,
-    certificationDigest: certification?.certificationDigest ?? null,
-  };
-
-  return alphaDeepFreeze({
-    schemaVersion: "autonomous-alpha-certification-v1",
-    artifactType: "AUTONOMOUS_ALPHA_ARCHITECTURE_READINESS",
-    status: blockers.length > 0
-      ? "ARCHITECTURE_BLOCKED"
-      : profitabilityProven
-        ? "ARCHITECTURE_AND_PROFITABILITY_REVIEW_READY_INACTIVE"
-        : "ARCHITECTURE_READY_EVIDENCE_PENDING_INACTIVE",
-    blockers,
-    acceptance,
-    lineageChecks,
-    architectureReady: blockers.length === 0,
-    profitabilityProven,
-    readinessDigest: alphaDigest(core),
-    finalHumanStop: profitabilityProven
-      ? "SEPARATE_LIVE_TRADING_REVIEW_AND_APPROVAL_REQUIRED"
-      : "NO_LIVE_REVIEW_UNTIL_PROFITABILITY_EVIDENCE_PROVEN",
-    ...alphaSafety(),
-  });
-}
 
 function truthy(value) {
   return TRUTHY.has(String(value ?? "").trim().toLowerCase());
@@ -451,7 +284,7 @@ export async function buildAutonomousAlphaNaturalPaperObserverReceiptV1({
   rootDirectory,
   researchCodeSha,
   paperOutput,
-  architectureReadinessBuilder = buildAutonomousAlphaArchitectureReadinessRuntimeV1,
+  architectureReadinessBuilder = buildAutonomousAlphaArchitectureReadinessV1,
   readHandoff = readConfiguredEvidenceRecord,
   observedAtMs = Date.now(),
 } = {}) {
@@ -944,7 +777,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
   authoritativePaperPackageLoader = loadValidatedAuthoritativePaperRuntimePackage,
   paperStateOwnerFactory = createLosslessPaperStateSnapshotFileOwner,
   paperStateSourceFactory = null,
-  alphaArchitectureReadinessBuilder = buildAutonomousAlphaArchitectureReadinessRuntimeV1,
+  alphaArchitectureReadinessBuilder = buildAutonomousAlphaArchitectureReadinessV1,
   alphaHandoffReader = readConfiguredEvidenceRecord,
 } = {}) {
   if (!truthy(env.PAPER_FORWARD_SCHEDULE_ACTIVE)) {
