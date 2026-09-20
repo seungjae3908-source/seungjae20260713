@@ -1241,17 +1241,43 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       liveTrading: false,
       orderAuthority: false,
     };
-    const autonomousAlphaObserver = await buildAutonomousAlphaNaturalPaperObserverReceiptV1({
-      rootDirectory,
-      researchCodeSha,
-      paperOutput: baseOutput,
-      architectureReadinessBuilder: alphaArchitectureReadinessBuilder,
-      readHandoff: alphaHandoffReader,
-    });
-    await persistAutonomousAlphaNaturalPaperObserverReceiptV1({
-      rootDirectory,
-      receipt: autonomousAlphaObserver,
-    });
+    let autonomousAlphaObserver;
+    try {
+      autonomousAlphaObserver = await buildAutonomousAlphaNaturalPaperObserverReceiptV1({
+        rootDirectory,
+        researchCodeSha,
+        paperOutput: baseOutput,
+        architectureReadinessBuilder: alphaArchitectureReadinessBuilder,
+        readHandoff: alphaHandoffReader,
+      });
+      const naturalCreditableCycle = result?.invocation?.naturalScheduleInvocation === true
+        && result.status !== "BLOCKED_DATA"
+        && result.status !== "REPLAYED";
+      if (naturalCreditableCycle) {
+        await persistAutonomousAlphaNaturalPaperObserverReceiptV1({
+          rootDirectory,
+          receipt: autonomousAlphaObserver,
+        });
+      }
+    } catch (error) {
+      autonomousAlphaObserver = Object.freeze({
+        schemaVersion: "autonomous-alpha-natural-paper-observer-v1",
+        status: "OBSERVER_ERROR_FAIL_CLOSED",
+        blockers: Object.freeze(["ALPHA_OBSERVER_INTERNAL_ERROR"]),
+        errorCode: String(error?.code ?? error?.message ?? "UNKNOWN").slice(0, 120),
+        sourceSha: researchCodeSha,
+        paperOnly: true,
+        observerOnly: true,
+        liveTrading: false,
+        autoTrading: false,
+        realOrderEnabled: false,
+        privateTradingApiAllowed: false,
+        executionAuthority: "NONE",
+        privateRequestCount: 0,
+        realOrderCount: 0,
+        profitabilityProven: false,
+      });
+    }
     const output = Object.freeze({
       ...baseOutput,
       autonomousAlphaObserver,
