@@ -337,6 +337,7 @@ export function evaluateCounterfactualTwinSwarmV1({
     status: blockers.length === 0 ? "COUNTERFACTUAL_TWIN_EVALUATED_RESEARCH_ONLY" : "BLOCKED_DATA",
     blockers: [...new Set(blockers)].sort(),
     candidateId: plan.candidateId,
+    forecastDigest: plan.forecastDigest,
     planDigest: plan.planDigest,
     marketPathDigest: pathDigests.size === 1 ? [...pathDigests][0] : null,
     outcomes: normalized,
