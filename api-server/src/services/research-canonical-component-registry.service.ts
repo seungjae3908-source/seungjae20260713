@@ -29,6 +29,9 @@ function canonical(value: unknown): unknown {
 function digest(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 }
+function digestBytes(value: Uint8Array): string {
+  return createHash('sha256').update(value).digest('hex');
+}
 function exactSha(value: unknown): string {
   const sha = String(value ?? '').trim().toLowerCase();
   if (!SHA40.test(sha)) throw new Error('COMPONENT_RESEARCH_CODE_SHA_INVALID');
@@ -60,7 +63,7 @@ async function safeDirectory(pathValue: string, name: string): Promise<string> {
   }
   return normalized;
 }
-async function safePayloadFile(inputRoot: string, pathValue: string): Promise<{ path: string; payload: unknown }> {
+async function safePayloadFile(inputRoot: string, pathValue: string): Promise<{ path: string; payload: unknown; bytes: Buffer }> {
   const path = resolve(pathValue);
   const rel = relative(inputRoot, path);
   if (!isAbsolute(path) || rel === '' || rel === '..' || rel.startsWith(`..${sep}`)) {
@@ -71,13 +74,41 @@ async function safePayloadFile(inputRoot: string, pathValue: string): Promise<{ 
     throw new Error('COMPONENT_PAYLOAD_FILE_INVALID');
   }
   if (resolve(await realpath(path)) !== path) throw new Error('COMPONENT_PAYLOAD_PATH_UNSAFE');
-  return { path, payload: JSON.parse(await readFile(path, 'utf8')) };
+  const bytes = await readFile(path);
+  let payload: unknown;
+  try { payload = JSON.parse(bytes.toString('utf8')); } catch { throw new Error('COMPONENT_PAYLOAD_JSON_INVALID'); }
+  return { path, payload, bytes };
 }
 async function syncDirectory(path: string) {
   if (process.platform === 'win32') return;
   const handle = await open(path, 'r');
   try { await handle.sync(); } finally { await handle.close(); }
 }
+async function publishBytesOnce(directoryPath: string, fileName: string, bytes: Buffer) {
+  await mkdir(directoryPath, { recursive: true, mode: 0o700 });
+  const finalPath = join(directoryPath, basename(fileName));
+  if (bytes.byteLength <= 0 || bytes.byteLength > MAX_BYTES) throw new Error('COMPONENT_PAYLOAD_BYTES_INVALID');
+  const temporary = join(directoryPath, `.pending-${randomUUID()}`);
+  const handle = await open(temporary, 'wx', 0o600);
+  try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
+  try {
+    await link(temporary, finalPath);
+    await syncDirectory(directoryPath);
+    return Object.freeze({ status: 'created' as const, path: finalPath });
+  } catch (error) {
+    if (row(error).code !== 'EEXIST') throw error;
+    const info = await lstat(finalPath);
+    if (!info.isFile() || info.isSymbolicLink() || resolve(await realpath(finalPath)) !== finalPath) {
+      throw new Error('COMPONENT_REGISTRY_EXISTING_PATH_UNSAFE');
+    }
+    const existing = await readFile(finalPath);
+    if (digestBytes(existing) !== digestBytes(bytes)) throw new Error('COMPONENT_REGISTRY_CONTENT_CONFLICT');
+    return Object.freeze({ status: 'already_present' as const, path: finalPath });
+  } finally {
+    try { await unlink(temporary); } catch {}
+  }
+}
+
 async function publishWriteOnce(directoryPath: string, fileName: string, value: unknown) {
   await mkdir(directoryPath, { recursive: true, mode: 0o700 });
   const finalPath = join(directoryPath, basename(fileName));
@@ -134,8 +165,9 @@ export async function registerCanonicalBundleComponentV1(input: {
   const key = componentKey(input.key);
   const owner = ownerRef(input.ownerRef);
   const bindingDigest = canonicalBundleComponentBindingDigestV1(input.binding);
-  const { payload } = await safePayloadFile(inputRoot, input.payloadPath);
+  const { payload, bytes } = await safePayloadFile(inputRoot, input.payloadPath);
   const payloadDigest = digest(payload);
+  const sourceByteDigest = digestBytes(bytes);
   const binding = Object.freeze({
     researchCodeSha: exactSha(input.binding.researchCodeSha),
     strategyIdentityDigest: exactDigest(input.binding.strategyIdentityDigest, 'STRATEGY_IDENTITY_DIGEST'),
@@ -150,6 +182,7 @@ export async function registerCanonicalBundleComponentV1(input: {
     key,
     ownerRef: owner,
     payloadDigest,
+    sourceByteDigest,
     executionAuthority: 'NONE' as const,
   });
   const envelope = Object.freeze({
@@ -159,7 +192,7 @@ export async function registerCanonicalBundleComponentV1(input: {
 
   const registryDir = join(inputRoot, 'registry', bindingDigest);
   const payloadDir = join(inputRoot, 'registered-components', bindingDigest);
-  const payloadWrite = await publishWriteOnce(payloadDir, `${key}.json`, payload);
+  const payloadWrite = await publishBytesOnce(payloadDir, `${key}.json`, bytes);
   const envelopeWrite = await publishWriteOnce(registryDir, `${key}.json`, envelope);
 
   return Object.freeze({
@@ -172,6 +205,7 @@ export async function registerCanonicalBundleComponentV1(input: {
     key,
     ownerRef: owner,
     payloadDigest,
+    sourceByteDigest,
     payloadPath: payloadWrite.path,
     envelopePath: envelopeWrite.path,
     executionAuthority: 'NONE' as const,
@@ -209,9 +243,11 @@ async function readRegisteredComponent(
     || envelope.key !== key
     || envelope.executionAuthority !== 'NONE'
     || !HASH64.test(String(envelope.payloadDigest ?? ''))
+    || !HASH64.test(String(envelope.sourceByteDigest ?? ''))
     || !HASH64.test(String(envelope.envelopeDigest ?? ''))
     || digest(envelopeCore) !== envelope.envelopeDigest
-    || digest(payload) !== envelope.payloadDigest) {
+    || digest(payload) !== envelope.payloadDigest
+    || digestBytes(await readFile(payloadPath)) !== envelope.sourceByteDigest) {
     throw new Error('COMPONENT_REGISTRY_TAMPER_DETECTED');
   }
   return Object.freeze({
