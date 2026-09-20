@@ -285,3 +285,23 @@ test('malformed successful payload is rejected and an empty candle list stays ex
   });
   assert.equal(empty.normalization.candles.length, 0);
 });
+
+test('a transient successful-but-empty candle payload is retried before becoming terminal', async () => {
+  let calls = 0;
+  const recovered = await fetchUnifiedChartData({
+    market: 'UPBIT',
+    symbol: 'BTC',
+    timeframe: '1m',
+    fetcher: async () => {
+      calls += 1;
+      return new Response(JSON.stringify({
+        provider: 'upbit-test',
+        candles: calls === 1
+          ? []
+          : [candle(1_700_000_000, 100), candle(1_700_000_060, 101)],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(recovered.normalization.candles.length, 2);
+});
