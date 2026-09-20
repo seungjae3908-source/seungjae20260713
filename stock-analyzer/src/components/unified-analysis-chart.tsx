@@ -780,7 +780,15 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
       : '이 시장은 공개 WebSocket owner 범위가 아니므로 REST polling으로 읽기 전용 갱신합니다.';
 
   return (
-    <div className="space-y-4" data-testid="unified-analysis-chart">
+    <div
+      className="space-y-4"
+      data-testid="unified-analysis-chart"
+      data-chart-market={market}
+      data-chart-timeframe={timeframe}
+      data-chart-query-fetching={chartQuery.isFetching ? 'true' : 'false'}
+      data-chart-data-market={chartQuery.data?.market ?? ''}
+      data-chart-data-timeframe={chartQuery.data?.timeframe ?? ''}
+    >
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
         <div className="flex items-start justify-between gap-3">
           <div><p className="text-[11px] font-extrabold text-primary">시장·종목 선택</p><h2 className="mt-1 text-base font-black">실제 차트 데이터</h2></div>
