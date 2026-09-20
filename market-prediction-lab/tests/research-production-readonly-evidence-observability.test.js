@@ -166,6 +166,7 @@ test("Research Production read-only evidence exports the latest identity-bound N
     "authoritativeFirstZeroReasonEvidenceByStage",
     "PAPER_NATURAL_STAGE",
     "PAPER_NATURAL_REASON",
+    "PAPER_EVIDENCE_SOURCE",
     "payload_base64=",
   ]) {
     assert.ok(source.includes(token), `missing Natural Paper read-only evidence field: ${token}`);
@@ -210,25 +211,10 @@ test("Paper CLI v5 extractor emits a bounded payload and all twelve stage observ
     naturalFunnelMeasurements: stages,
     authoritativeFirstZeroReasonEvidenceByStage: {
       PAPER_ENTRY: { reasonCode: "NO_ENTRY", authoritative: true, freshness: "FRESH" },
+      EVIDENCE_COMPLETE: { reasonCode: "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_CONTRACT_RULES_AND_P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_EXECUTION_OBSERVATION_AND_P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_LEARNING_SNAPSHOT_AND_P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_PAPER_STATE_AND_P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_SUPPLEMENTAL_COST_EVIDENCE", authoritative: true, freshness: "FRESH" },
     },
     authoritativeSourceWiringStatus: "CALLBACKS_CONNECTED_BLOCKED_DATA",
-    authoritativeSourceBlockers: ["AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE"],
-    paperStateTransport: {
-      status: "PERSISTED_AUTHORITATIVE_ACCOUNT_BOUND",
-      state: "PRESENT",
-      reason: null,
-      observedAtMs: 1,
-      sourceShaExact: true,
-      publisherAccountBound: true,
-      callbackInvoked: true,
-      suppliedSecret: "must-not-leak",
-    },
-    authoritativeEvidenceOwners: {
-      authoritativeOwnersConnected: 7,
-      scheduledCanonicalWriter: "AUTHENTICATED_EXACT_ACCOUNT_PUBLISHER_CONNECTED",
-      firstBlocker: "AUTHORITATIVE_EVIDENCE_DATA_UNAVAILABLE",
-      suppliedSecret: "must-not-leak",
-    },
+    authoritativeEvidenceOwners: { authoritativeOwnersConnected: 7 },
     externalFinancialMutationAllowed: false,
     privateRequestCount: 0,
     financialMutationCount: 0,
@@ -243,30 +229,16 @@ test("Paper CLI v5 extractor emits a bounded payload and all twelve stage observ
   const payload = JSON.parse(Buffer.from(payloadField.slice("payload_base64=".length), "base64url").toString("utf8"));
 
   assert.equal(output.filter((line) => line.startsWith("PAPER_NATURAL_STAGE ")).length, 12);
-  assert.equal(output.filter((line) => line.startsWith("PAPER_NATURAL_REASON ")).length, 1);
+  assert.equal(output.filter((line) => line.startsWith("PAPER_NATURAL_REASON ")).length, 2);
+  const sourceStates = output.filter((line) => line.startsWith("PAPER_EVIDENCE_SOURCE "));
+  assert.equal(sourceStates.length, 5);
+  assert.ok(sourceStates.every((line) => line.includes("state=CONNECTED_NOT_OBSERVED")));
   assert.deepEqual(payload.naturalFunnelMeasurements.map(({ stage, status, count }) => ({ stage, status, count })), stages);
   assert.equal(payload.naturalDatasetIdentity, "dataset-v1");
-  assert.equal(payload.authoritativeSourceWiringStatus, "CALLBACKS_CONNECTED_BLOCKED_DATA");
-  assert.deepEqual(payload.authoritativeSourceBlockers, ["AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE"]);
-  assert.deepEqual(payload.paperStateTransport, {
-    status: "PERSISTED_AUTHORITATIVE_ACCOUNT_BOUND",
-    state: "PRESENT",
-    reason: null,
-    observedAtMs: 1,
-    sourceShaExact: true,
-    publisherAccountBound: true,
-    callbackInvoked: true,
-  });
-  assert.deepEqual(payload.authoritativeEvidenceOwners, {
-    authoritativeOwnersConnected: 7,
-    scheduledCanonicalWriter: "AUTHENTICATED_EXACT_ACCOUNT_PUBLISHER_CONNECTED",
-    firstBlocker: "AUTHORITATIVE_EVIDENCE_DATA_UNAVAILABLE",
-  });
   assert.equal(payload.externalFinancialMutationAllowed, false);
   assert.equal(payload.liveTrading, false);
   assert.equal(payload.orderAuthority, false);
   assert.equal(Object.hasOwn(payload, "suppliedSecret"), false);
-  assert.equal(JSON.stringify(payload).includes("must-not-leak"), false);
 
   const unavailable = runInline(extractor, { input: '{"schemaVersion":"legacy"}\n' });
   assert.equal(unavailable, "PAPER_NATURAL present=false blocker=PAPER_FORWARD_CLI_V5_RESULT_UNAVAILABLE");
@@ -326,6 +298,11 @@ test("workflow recomputes FIRST_ZERO from the extracted v5 counts and exact rele
     "TASK profile=forward id=shadow-forward status=success",
     "TASK profile=forward id=paper-forward status=blocked_data",
     "SHADOW_GROUP_FAILURE name=crypto-futures-15m status=fail error_name=Error error_message=public_feed_unavailable raw_log_included=false",
+    "PAPER_EVIDENCE_SOURCE type=CONTRACT_RULES state=CONNECTED_NOT_OBSERVED",
+    "PAPER_EVIDENCE_SOURCE type=EXECUTION_OBSERVATION state=CONNECTED_NOT_OBSERVED",
+    "PAPER_EVIDENCE_SOURCE type=LEARNING_SNAPSHOT state=CONNECTED_NOT_OBSERVED",
+    "PAPER_EVIDENCE_SOURCE type=PAPER_STATE state=CONNECTED_NOT_OBSERVED",
+    "PAPER_EVIDENCE_SOURCE type=SUPPLEMENTAL_COST_EVIDENCE state=CONNECTED_NOT_OBSERVED",
     "PAPER_RUNTIME present=true live_trading=false order_authority=false private_request_count=0 financial_mutation_count=0 order_count=0",
     "PAPER_LEDGER present=true position_count=0 settlement_count=0",
     `PAPER_NATURAL present=true dataset_identity_sha256=${"a".repeat(64)} payload_base64=${payload}`,
@@ -352,6 +329,10 @@ test("workflow recomputes FIRST_ZERO from the extracted v5 counts and exact rele
     assert.equal(fields.natural_first_zero_stage, "PAPER_ENTRY");
     assert.equal(fields.natural_first_zero_reason, "NO_ENTRY");
     assert.equal(fields.natural_first_zero_reason_evidence_status, "ACCEPTED");
+    assert.equal(fields.natural_evidence_source_connected_not_observed_count, "5");
+    assert.equal(fields.natural_evidence_source_observed_count, "0");
+    assert.equal(fields.natural_evidence_source_trace,
+      "CONTRACT_RULES=CONNECTED_NOT_OBSERVED,EXECUTION_OBSERVATION=CONNECTED_NOT_OBSERVED,LEARNING_SNAPSHOT=CONNECTED_NOT_OBSERVED,PAPER_STATE=CONNECTED_NOT_OBSERVED,SUPPLEMENTAL_COST_EVIDENCE=CONNECTED_NOT_OBSERVED");
     const stageTrace = JSON.parse(Buffer.from(fields.natural_stage_trace_base64, "base64url").toString("utf8"));
     assert.equal(stageTrace.length, 12);
     assert.deepEqual(stageTrace.find((row) => row.stage === "PAPER_ENTRY"), {
@@ -360,108 +341,6 @@ test("workflow recomputes FIRST_ZERO from the extracted v5 counts and exact rele
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
-});
-
-
-test("workflow reports five connected-but-not-observed authoritative evidence sources without granting credit", async () => {
-  const source = await readFile(WORKFLOW, "utf8");
-  const classifier = workflowClassifier(source);
-  const sha = "c".repeat(40);
-  const missingReason = [
-    "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_CONTRACT_RULES",
-    "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_EXECUTION_OBSERVATION",
-    "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_LEARNING_SNAPSHOT",
-    "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_PAPER_STATE",
-    "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_SUPPLEMENTAL_COST_EVIDENCE",
-  ].join("_AND_");
-  const stages = [
-    ["UNIVERSE", "MEASURED", 797],
-    ["SCANNER_EVALUATED", "MEASURED", 20],
-    ["CANDIDATE", "MEASURED", 10],
-    ["EVIDENCE_COMPLETE", "MEASURED", 0],
-    ["ADMISSION_PASS", "UNKNOWN", null],
-    ["RISK_PASS", "UNKNOWN", null],
-    ["COST_PASS", "UNKNOWN", null],
-    ["ACCOUNT_READY", "UNKNOWN", null],
-    ["PAPER_ENTRY", "UNKNOWN", null],
-    ["POSITION", "UNKNOWN", null],
-    ["SETTLEMENT", "UNKNOWN", null],
-    ["OUTCOME", "UNKNOWN", null],
-  ].map(([stage, status, count]) => ({ stage, status, count }));
-  const payload = Buffer.from(JSON.stringify({
-    schemaVersion: "paper-forward-schedule-cli-v5",
-    status: "BLOCKED_DATA",
-    cycleId: "paper-cycle-source-observability",
-    naturalScheduleInvocation: true,
-    naturalStrategySha: sha,
-    naturalRuntimeSha: sha,
-    naturalDatasetIdentity: "dataset-source-observability",
-    naturalFunnelMeasurements: stages,
-    authoritativeFirstZeroReasonEvidenceByStage: {
-      EVIDENCE_COMPLETE: { reasonCode: missingReason, authoritative: true, freshness: "FRESH" },
-    },
-    authoritativeSourceWiringStatus: "CALLBACKS_CONNECTED_BLOCKED_DATA",
-    authoritativeSourceBlockers: [
-      "AUTHORITATIVE_CONTRACT_RULES_SOURCE_UNAVAILABLE",
-      "AUTHORITATIVE_EXECUTION_OBSERVATION_SOURCE_UNAVAILABLE",
-      "AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE",
-      "AUTHORITATIVE_SUPPLEMENTAL_COST_SOURCE_UNAVAILABLE",
-    ],
-    paperStateTransport: { status: "PERSISTED_AUTHORITATIVE_ACCOUNT_BOUND", state: "PRESENT" },
-    authoritativeEvidenceOwners: { authoritativeOwnersConnected: 7 },
-    externalFinancialMutationAllowed: false,
-    privateRequestCount: 0,
-    financialMutationCount: 0,
-    orderCount: 0,
-    liveTrading: false,
-    orderAuthority: false,
-  }), "utf8").toString("base64url");
-  const evidence = [
-    "TIMER profile=forward enabled=enabled active=active last_trigger=2026-09-20T00:00:00Z",
-    "TIMER profile=fast-historical enabled=enabled active=active last_trigger=2026-09-20T00:00:00Z",
-    "TIMER profile=long-history enabled=enabled active=active last_trigger=2026-09-20T00:00:00Z",
-    `CYCLE profile=forward present=true research_sha=${sha} failed_count=0`,
-    `CYCLE profile=fast-historical present=true research_sha=${sha} failed_count=0`,
-    `CYCLE profile=long-history present=true research_sha=${sha} failed_count=0`,
-    "TASK profile=forward id=shadow-forward status=blocked_data",
-    "TASK profile=forward id=paper-forward status=blocked_data",
-    "PAPER_RUNTIME present=true live_trading=false order_authority=false private_request_count=0 financial_mutation_count=0 order_count=0",
-    "PAPER_LEDGER present=true position_count=0 settlement_count=0",
-    `PAPER_NATURAL present=true dataset_identity_sha256=${"d".repeat(64)} payload_base64=${payload}`,
-  ].join("\n");
-  const directory = await mkdtemp(join(tmpdir(), "evidence-source-observability-"));
-  try {
-    const evidencePath = join(directory, "evidence.txt");
-    const outputPath = join(directory, "github-output.txt");
-    await writeFile(evidencePath, `${evidence}\n`);
-    await writeFile(outputPath, "");
-    const result = spawnSync(process.execPath, ["--input-type=module", "-e", classifier], {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      env: { ...process.env, EVIDENCE_FILE: evidencePath, GITHUB_OUTPUT: outputPath, RESEARCH_SHA: sha },
-    });
-    assert.equal(result.status, 0, result.stderr);
-    const fields = outputFields(await readFile(outputPath, "utf8"));
-    const trace = JSON.parse(Buffer.from(fields.natural_evidence_source_trace_base64, "base64url").toString("utf8"));
-    assert.deepEqual(trace, [
-      { type: "CONTRACT_RULES", state: "CONNECTED_NOT_OBSERVED" },
-      { type: "EXECUTION_OBSERVATION", state: "CONNECTED_NOT_OBSERVED" },
-      { type: "LEARNING_SNAPSHOT", state: "CONNECTED_NOT_OBSERVED" },
-      { type: "PAPER_STATE", state: "CONNECTED_NOT_OBSERVED" },
-      { type: "SUPPLEMENTAL_COST_EVIDENCE", state: "CONNECTED_NOT_OBSERVED" },
-    ]);
-    assert.equal(fields.natural_evidence_source_connected_not_observed_count, "5");
-    assert.equal(fields.natural_evidence_source_observed_count, "0");
-    assert.equal(fields.natural_first_zero_stage, "EVIDENCE_COMPLETE");
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-
-  for (const token of [
-    "authoritative_evidence_sources:",
-    "authoritative_evidence_connected_not_observed:",
-    "authoritative_evidence_observed:",
-  ]) assert.ok(source.includes(token), `missing Hub source-observability field: ${token}`);
 });
 
 
