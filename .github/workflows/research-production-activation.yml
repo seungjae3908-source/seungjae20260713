@@ -64,8 +64,6 @@ jobs:
           grep -q 'PRIVATE_API_ENABLED=false' research-production/deploy/activate-server.sh
           grep -q 'ORDER_AUTHORITY=false' research-production/deploy/activate-server.sh
           grep -q 'research-production-forward.timer' research-production/deploy/activate-server.sh
-          grep -q 'autonomous-alpha-observer' research-production/src/engine.mjs
-          grep -q 'run-autonomous-alpha-natural-paper-observer.js' research-production/src/engine.mjs
 
   authorize:
     if: >-
@@ -356,7 +354,7 @@ jobs:
             --repo-root "$GITHUB_WORKSPACE" \
             --state-root "$RUNNER_TEMP/research-production-preflight" \
             --research-sha "$TARGET_SHA" > "$RUNNER_TEMP/research-plan.json"
-          node -e "const p=require(process.argv[1]);if(p.taskCount!==11||p.stepCount!==22||p.liveTrading||p.privateApi||p.orderAuthority)process.exit(1)" \
+          node -e "const p=require(process.argv[1]);if(p.taskCount!==10||p.stepCount!==21||p.liveTrading||p.privateApi||p.orderAuthority)process.exit(1)" \
             "$RUNNER_TEMP/research-plan.json"
 
   activate:
