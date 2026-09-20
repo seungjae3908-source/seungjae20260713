@@ -326,6 +326,23 @@ else
             ...boundedEvidence(evidence),
           }]))
         : {};
+      const sourceBlockers = Array.isArray(value.authoritativeSourceBlockers)
+        ? value.authoritativeSourceBlockers.slice(0, 24).map(item => String(item).slice(0, 200))
+        : [];
+      const authoritativeEvidenceTransports = {
+        wiringStatus: value.authoritativeSourceWiringStatus ?? null,
+        sourceBlockers,
+        paperState: {
+          status: value.paperStateTransport?.status ?? null,
+          state: value.paperStateTransport?.state ?? null,
+          reason: value.paperStateTransport?.reason ?? null,
+          sourceShaExact: value.paperStateTransport?.sourceShaExact ?? null,
+          publisherAccountBound: value.paperStateTransport?.publisherAccountBound ?? null,
+          callbackInvoked: value.paperStateTransport?.callbackInvoked ?? null,
+        },
+        riskPolicyRecord: value.authoritativeRuntimePackage?.riskPolicyRecordTransport ?? null,
+        supplementalCost: value.authoritativeRuntimePackage?.supplementalCostTransport ?? null,
+      };
       const selected = {
         schemaVersion: value.schemaVersion,
         status: value.status ?? null,
@@ -336,6 +353,7 @@ else
         naturalDatasetIdentity: datasetIdentity,
         naturalFunnelMeasurements: measurements,
         authoritativeFirstZeroReasonEvidenceByStage: reasons,
+        authoritativeEvidenceTransports,
         externalFinancialMutationAllowed: value.externalFinancialMutationAllowed,
         privateRequestCount: value.privateRequestCount,
         financialMutationCount: value.financialMutationCount,
@@ -364,6 +382,19 @@ else
         `dataset_identity_sha256=${clean(datasetIdentitySha256)}`,
         `payload_base64=${payload}`,
       ].join(" "));
+      console.log([
+        "PAPER_EVIDENCE_TRANSPORT",
+        `wiring_status=${clean(authoritativeEvidenceTransports.wiringStatus)}`,
+        `paper_state_status=${clean(authoritativeEvidenceTransports.paperState.status)}`,
+        `paper_state_state=${clean(authoritativeEvidenceTransports.paperState.state)}`,
+        `paper_state_reason=${clean(authoritativeEvidenceTransports.paperState.reason)}`,
+        `paper_state_source_sha_exact=${clean(authoritativeEvidenceTransports.paperState.sourceShaExact)}`,
+        `paper_state_publisher_account_bound=${clean(authoritativeEvidenceTransports.paperState.publisherAccountBound)}`,
+        `paper_state_callback_invoked=${clean(authoritativeEvidenceTransports.paperState.callbackInvoked)}`,
+        `risk_policy_record=${clean(authoritativeEvidenceTransports.riskPolicyRecord)}`,
+        `supplemental_cost=${clean(authoritativeEvidenceTransports.supplementalCost)}`,
+        `source_blockers=${clean(authoritativeEvidenceTransports.sourceBlockers.join("|"))}`,
+      ].join(" "));
       for (const measurement of selected.naturalFunnelMeasurements) {
         console.log([
           "PAPER_NATURAL_STAGE",
@@ -386,9 +417,6 @@ else
       const evidenceReason = String(
         selected.authoritativeFirstZeroReasonEvidenceByStage?.EVIDENCE_COMPLETE?.reasonCode ?? "",
       );
-      const sourceBlockers = Array.isArray(value.authoritativeSourceBlockers)
-        ? value.authoritativeSourceBlockers.map(item => String(item))
-        : [];
       const ownerCount = Number(value.authoritativeEvidenceOwners?.authoritativeOwnersConnected);
       const wiringStatus = String(value.authoritativeSourceWiringStatus ?? "");
       const connected = (Number.isFinite(ownerCount) && ownerCount >= 5)
