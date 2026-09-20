@@ -17,6 +17,7 @@ on:
       - packages/**
       - research-production/**
       - market-prediction-lab/**
+      - market-prediction-lab/src/derivatives-history.js
 
 permissions:
   contents: read
