@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { adaptCrossrefMetadata } from "../../packages/external-research/src/providers/crossref.js";
+import { adaptCrossrefMetadata } from "../../packages/external-research/src/index.js";
 import {
   createResearchVideoSourceV1,
   createVideoStrategyHypothesisV1,
@@ -117,13 +117,25 @@ test("existing ResearchPaperV2 adapts into rights-aware world knowledge without 
 });
 
 test("paper adapter preserves partial-date semantics by not inventing a full publication timestamp", () => {
-  const p = paper();
-  const partial = structuredClone(p);
-  partial.publishedAt = "2025-02";
+  const partial = adaptCrossrefMetadata({
+    status: "ok",
+    "message-type": "work",
+    "message-version": "1.0.0",
+    message: {
+      DOI: "10.1234/alpha.partial",
+      title: ["Partial Date Alpha Research"],
+      author: [{ given: "Ada", family: "Researcher" }],
+      "published-online": { "date-parts": [[2025, 2]] },
+      indexed: { "date-time": "2026-09-19T00:00:00Z", version: "1" },
+    },
+  }, {
+    retrievedAt,
+    retrievedFrom: "https://api.crossref.org/works/10.1234/alpha.partial",
+  });
   const receipt = adaptResearchPaperV2ToWorldKnowledgeReceiptV1({
     paper: partial,
     sourceType: "ACADEMIC_PAPER",
-    claims: paperClaims(),
+    claims: paperClaims().map((claim) => ({ ...claim, claimId: "claim-paper-alpha-partial" })),
     contentAccessEvidence: {
       accessMode: "PUBLIC_METADATA",
       derivedFactsAllowed: true,
@@ -134,7 +146,8 @@ test("paper adapter preserves partial-date semantics by not inventing a full pub
       licenseOrTermsUrl: "https://example.org/terms",
     },
   });
-  assert.equal(receipt.status, "BLOCKED_DATA");
+  assert.equal(receipt.status, "WORLD_KNOWLEDGE_RECEIPT_READY");
+  assert.equal(receipt.source.publishedAt, null);
 });
 
 test("authorized existing video hypothesis becomes a derived claim without transcript persistence", () => {
@@ -204,7 +217,8 @@ test("broker and public-book records require explicit rights and provenance", ()
 
   assert.equal(receipt.status, "WORLD_KNOWLEDGE_RECEIPT_READY");
   assert.equal(receipt.source.contentPolicy, undefined);
-  assert.equal(receipt.source.rights, undefined);
+  assert.equal(receipt.source.rights.accessMode, "TERMS_GOVERNED");
+  assert.equal(receipt.source.rights.fullTextStorageAllowed, false);
   assert.equal(receipt.source.rawContentPersisted, false);
 });
 
