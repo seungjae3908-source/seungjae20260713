@@ -6,7 +6,9 @@ on:
     paths:
       - '.github/workflows/research-production-natural-cycle-evidence.yml'
       - 'ops/research-production-readonly-evidence.sh'
+      - 'ops/research-production-task-failure-signature.mjs'
       - 'market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js'
+      - 'research-production/test/research-task-failure-signature.test.mjs'
       - 'scripts/agent_hub_rollover_v2.py'
   issue_comment:
     types: [created]
@@ -36,6 +38,7 @@ jobs:
           set -Eeuo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
           bash -n ops/research-production-readonly-evidence.sh
+          node --check ops/research-production-task-failure-signature.mjs
           grep -q 'server_files_written=0' ops/research-production-readonly-evidence.sh
           grep -q 'server_processes_restarted=0' ops/research-production-readonly-evidence.sh
           grep -q 'deployment_executed=0' ops/research-production-readonly-evidence.sh
@@ -69,6 +72,7 @@ jobs:
             exit 1
           fi
           node --test market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
+          node --test research-production/test/research-task-failure-signature.test.mjs
           node --test research-production/test/natural-cycle-verdict-trace.test.mjs research-production/test/natural-cycle-verdict-trace-v5-runtime.test.mjs
 
   observe:
@@ -201,6 +205,10 @@ jobs:
           const service = Object.fromEntries(all('SERVICE ').map((line) => { const v=fields(line); return [v.profile, v]; }));
           const cycle = Object.fromEntries(all('CYCLE ').map((line) => { const v=fields(line); return [v.profile, v]; }));
           const tasks = all('TASK ').map((line) => fields(line));
+          const taskFailures = all('TASK_FAILURE_SIGNATURE ').map((line) => fields(line));
+          const taskFailure = (id) => taskFailures.find((row) => row.profile === 'forward' && row.id === id) ?? {};
+          const shadowFailure = taskFailure('shadow-forward');
+          const paperFailure = taskFailure('paper-forward');
           const paper = fields(find('PAPER_RUNTIME '));
           const ledger = fields(find('PAPER_LEDGER '));
           const natural = fields(find('PAPER_NATURAL '));
@@ -261,6 +269,16 @@ jobs:
           fs.appendFileSync(out, `historical_running=${historicalRunning}\n`);
           fs.appendFileSync(out, `paper_positions=${ledger.position_count ?? 'unknown'}\n`);
           fs.appendFileSync(out, `paper_settlements=${ledger.settlement_count ?? 'unknown'}\n`);
+          writeOutput('shadow_failure_present', shadowFailure.present);
+          writeOutput('shadow_failure_blocker', shadowFailure.blocker);
+          writeOutput('shadow_failure_signatures', shadowFailure.signatures);
+          writeOutput('shadow_failure_categories', shadowFailure.categories);
+          writeOutput('shadow_failure_stderr_sha256', shadowFailure.stderr_tail_sha256);
+          writeOutput('paper_failure_present', paperFailure.present);
+          writeOutput('paper_failure_blocker', paperFailure.blocker);
+          writeOutput('paper_failure_signatures', paperFailure.signatures);
+          writeOutput('paper_failure_categories', paperFailure.categories);
+          writeOutput('paper_failure_stderr_sha256', paperFailure.stderr_tail_sha256);
           writeOutput('natural_trace_status', naturalTrace?.status);
           writeOutput('natural_trace_error', naturalTraceError);
           writeOutput('natural_cycle_id', naturalTrace?.cycleId);
@@ -305,6 +323,16 @@ jobs:
           HISTORICAL_RUNNING: ${{ steps.verdict.outputs.historical_running }}
           PAPER_POSITIONS: ${{ steps.verdict.outputs.paper_positions }}
           PAPER_SETTLEMENTS: ${{ steps.verdict.outputs.paper_settlements }}
+          SHADOW_FAILURE_PRESENT: ${{ steps.verdict.outputs.shadow_failure_present }}
+          SHADOW_FAILURE_BLOCKER: ${{ steps.verdict.outputs.shadow_failure_blocker }}
+          SHADOW_FAILURE_SIGNATURES: ${{ steps.verdict.outputs.shadow_failure_signatures }}
+          SHADOW_FAILURE_CATEGORIES: ${{ steps.verdict.outputs.shadow_failure_categories }}
+          SHADOW_FAILURE_STDERR_SHA256: ${{ steps.verdict.outputs.shadow_failure_stderr_sha256 }}
+          PAPER_FAILURE_PRESENT: ${{ steps.verdict.outputs.paper_failure_present }}
+          PAPER_FAILURE_BLOCKER: ${{ steps.verdict.outputs.paper_failure_blocker }}
+          PAPER_FAILURE_SIGNATURES: ${{ steps.verdict.outputs.paper_failure_signatures }}
+          PAPER_FAILURE_CATEGORIES: ${{ steps.verdict.outputs.paper_failure_categories }}
+          PAPER_FAILURE_STDERR_SHA256: ${{ steps.verdict.outputs.paper_failure_stderr_sha256 }}
           NATURAL_TRACE_STATUS: ${{ steps.verdict.outputs.natural_trace_status }}
           NATURAL_TRACE_ERROR: ${{ steps.verdict.outputs.natural_trace_error }}
           NATURAL_CYCLE_ID: ${{ steps.verdict.outputs.natural_cycle_id }}
@@ -345,6 +373,16 @@ jobs:
               `fast_historical_running: ${observed(process.env.HISTORICAL_RUNNING)}`,
               `paper_positions: ${observed(process.env.PAPER_POSITIONS)}`,
               `paper_settlements: ${observed(process.env.PAPER_SETTLEMENTS)}`,
+              `shadow_failure_present: ${observed(process.env.SHADOW_FAILURE_PRESENT)}`,
+              `shadow_failure_blocker: ${observed(process.env.SHADOW_FAILURE_BLOCKER)}`,
+              `shadow_failure_signatures: ${observed(process.env.SHADOW_FAILURE_SIGNATURES)}`,
+              `shadow_failure_categories: ${observed(process.env.SHADOW_FAILURE_CATEGORIES)}`,
+              `shadow_failure_stderr_sha256: ${observed(process.env.SHADOW_FAILURE_STDERR_SHA256)}`,
+              `paper_failure_present: ${observed(process.env.PAPER_FAILURE_PRESENT)}`,
+              `paper_failure_blocker: ${observed(process.env.PAPER_FAILURE_BLOCKER)}`,
+              `paper_failure_signatures: ${observed(process.env.PAPER_FAILURE_SIGNATURES)}`,
+              `paper_failure_categories: ${observed(process.env.PAPER_FAILURE_CATEGORIES)}`,
+              `paper_failure_stderr_sha256: ${observed(process.env.PAPER_FAILURE_STDERR_SHA256)}`,
               `natural_trace_status: ${observed(process.env.NATURAL_TRACE_STATUS)}`,
               `natural_trace_error: ${observed(process.env.NATURAL_TRACE_ERROR)}`,
               `natural_cycle_id: ${observed(process.env.NATURAL_CYCLE_ID)}`,
