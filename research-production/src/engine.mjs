@@ -50,6 +50,20 @@ const REQUIRED_LAB_FILES = Object.freeze([
   'scripts/run-shadow-cycle.js',
 ]);
 
+const REQUIRED_SHARED_PACKAGE_FILES = Object.freeze([
+  'packages/strategy-hypothesis/package.json',
+  'packages/strategy-hypothesis/src/index.js',
+  'packages/strategy-hypothesis/src/contract.js',
+  'packages/external-research/package.json',
+  'packages/external-research/src/index.js',
+  'packages/external-research/src/contract.js',
+]);
+
+const WORKSPACE_SHARED_PACKAGES = Object.freeze([
+  'strategy-hypothesis',
+  'external-research',
+]);
+
 export const PROFILES = Object.freeze({
   'fast-historical': Object.freeze([
     Object.freeze({ id: 'stocks-core', args: ['scripts/run-stock-market-suite.js'], timeoutMs: 45 * 60_000 }),
@@ -153,7 +167,10 @@ export async function preflightResearchProduction({ repoRoot, stateRoot, researc
   for (const relative of REQUIRED_LAB_FILES) {
     if (!(await exists(join(labRoot, relative)))) missing.push(relative);
   }
-  if (missing.length > 0) throw new Error(`research lab prerequisites missing: ${missing.join(', ')}`);
+  for (const relative of REQUIRED_SHARED_PACKAGE_FILES) {
+    if (!(await exists(join(root, relative)))) missing.push(relative);
+  }
+  if (missing.length > 0) throw new Error(`research runtime prerequisites missing: ${missing.join(', ')}`);
   await mkdir(stateRoot, { recursive: true, mode: 0o700 });
   const probe = join(stateRoot, `.write-probe-${process.pid}`);
   await writeFile(probe, 'ok\n', { mode: 0o600 });
@@ -273,12 +290,48 @@ function taskFingerprint({ task, researchSha }) {
   return createHash('sha256').update(JSON.stringify({ id: task.id, args: task.args, researchSha })).digest('hex');
 }
 
+export async function prepareResearchTaskWorkspace({ labRoot, taskDir } = {}) {
+  const sourceLabRoot = resolve(String(labRoot ?? ''));
+  const destinationTaskDir = resolve(String(taskDir ?? ''));
+  if (!isAbsolute(sourceLabRoot) || !isAbsolute(destinationTaskDir)) {
+    throw new Error('research workspace roots must be absolute');
+  }
+  const repoRoot = dirname(sourceLabRoot);
+  const workspaceParent = join(destinationTaskDir, 'workspace');
+  const workspaceRoot = join(workspaceParent, 'market-prediction-lab');
+  await mkdir(workspaceParent, { recursive: true, mode: 0o700 });
+  await cp(sourceLabRoot, workspaceRoot, {
+    recursive: true,
+    force: false,
+    errorOnExist: true,
+    dereference: false,
+  });
+
+  const copiedSharedPackages = [];
+  for (const packageName of WORKSPACE_SHARED_PACKAGES) {
+    const source = join(repoRoot, 'packages', packageName);
+    const destination = join(workspaceParent, 'packages', packageName);
+    await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
+    await cp(source, destination, {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+      dereference: false,
+    });
+    copiedSharedPackages.push(packageName);
+  }
+
+  return Object.freeze({
+    workspaceRoot,
+    copiedSharedPackages: Object.freeze(copiedSharedPackages),
+  });
+}
+
 async function runTask({ task, labRoot, stateRoot, researchSha, cycleId, inheritedEnv = process.env }) {
   const taskDir = join(stateRoot, 'runs', cycleId, task.id);
   await mkdir(taskDir, { recursive: true, mode: 0o700 });
-  const workspaceRoot = join(taskDir, 'workspace', 'market-prediction-lab');
-  await mkdir(dirname(workspaceRoot), { recursive: true, mode: 0o700 });
-  await cp(labRoot, workspaceRoot, { recursive: true, force: false, errorOnExist: true, dereference: false });
+  const workspace = await prepareResearchTaskWorkspace({ labRoot, taskDir });
+  const workspaceRoot = workspace.workspaceRoot;
   const stdoutPath = join(taskDir, 'stdout.log');
   const stderrPath = join(taskDir, 'stderr.log');
   const startedAt = Date.now();
