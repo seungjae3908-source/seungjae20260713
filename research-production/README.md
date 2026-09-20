@@ -25,7 +25,7 @@
   - Stocks: KR/US public → 비용/PnL → unseen-symbol/rolling generalization → US pullback → regime
   - 총 14개 역사연구 단계를 3개 격리 workspace에서 병렬 처리합니다.
 - `long-history`: V1/V3/V4/V5/V6 long-history 연구를 병렬 실행합니다.
-- `forward`: 별도 state root로 Shadow → Paper Forward → Autonomous Alpha Scientist Observer를 직렬 실행합니다. 미래 시간은 압축하지 않습니다. Alpha Observer는 Paper 상태를 읽기만 하며 실주문·private API·자동매매 권한을 갖지 않습니다. 유효한 Alpha handoff가 없으면 `WAITING_FOR_ALPHA_HANDOFF`를 기록하고 기존 Natural Paper 수집은 계속합니다.
+- `forward`: 별도 state root로 Paper Forward + Shadow를 실행합니다. 미래 시간은 압축하지 않습니다.
 - `all`: 배포/감사용 **계획 출력만** 허용하며 실제 실행은 세 프로필을 따로 실행하게 강제해 장시간 단일 프로세스와 state 충돌을 피합니다.
 
 기존 Quant Lab의 `bounded_coarse_narrow_fine` candidate narrowing, OOS/walk-forward/holdout 안전계약과 Automated V1 adapter는 서버 preflight에서 **현재 exact SHA 모듈을 직접 import**하여 검증합니다. 시장 연구 알고리즘은 재작성하지 않고 기존 검증 suite를 재사용합니다. 따라서 속도 향상은 독립 시장 파이프라인의 병렬화에서 얻고, 동일 시장의 선행 산출물 의존성은 보존합니다.
