@@ -193,7 +193,7 @@ test('KR primary candle request survives the authenticated cold-start tail beyon
     timeframe: '5m',
     fetcher: async (input, init) => {
       calls.push(String(input));
-      if (calls.length > 1) throw new Error(`unexpected fallback request: ${String(input)}`);
+      if (calls.length > 1) throw new Error(`hedged fallback not selected: ${String(input)}`);
       await waitForAbortAwareDelay(2_700, init?.signal);
       return new Response(JSON.stringify({
         provider: 'test-primary',
@@ -205,7 +205,10 @@ test('KR primary candle request survives the authenticated cold-start tail beyon
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     },
   });
-  assert.deepEqual(calls, ['/api/stocks/005930/candles?tf=5m']);
+  assert.deepEqual(calls, [
+    '/api/stocks/005930/candles?tf=5m',
+    '/api/stocks/005930/chart?tf=5m',
+  ]);
   assert.equal(result.sourceUrl, '/api/stocks/005930/candles?tf=5m');
   assert.equal(result.provider, 'test-primary');
   assert.equal(result.normalization.candles.length, 2);
@@ -219,7 +222,7 @@ test('US primary candle request survives the bounded cold-start tail beyond the 
     timeframe: '1D',
     fetcher: async (input, init) => {
       calls.push(String(input));
-      if (calls.length > 1) throw new Error(`unexpected fallback request: ${String(input)}`);
+      if (calls.length > 1) throw new Error(`hedged fallback not selected: ${String(input)}`);
       await waitForAbortAwareDelay(3_000, init?.signal);
       return new Response(JSON.stringify({
         provider: 'test-primary',
@@ -231,7 +234,10 @@ test('US primary candle request survives the bounded cold-start tail beyond the 
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     },
   });
-  assert.deepEqual(calls, ['/api/stocks/AAPL/candles?tf=1D']);
+  assert.deepEqual(calls, [
+    '/api/stocks/AAPL/candles?tf=1D',
+    '/api/stocks/AAPL/chart?tf=1D',
+  ]);
   assert.equal(result.sourceUrl, '/api/stocks/AAPL/candles?tf=1D');
   assert.equal(result.provider, 'test-primary');
   assert.equal(result.normalization.candles.length, 2);
