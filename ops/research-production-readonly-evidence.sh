@@ -135,6 +135,39 @@ emit_cycle forward
 emit_cycle fast-historical
 emit_cycle long-history
 
+emit_task_failure_signature() {
+  local profile="$1"
+  local task_id="$2"
+  local cycle_file="$STATE/latest/$profile.json"
+  local extractor="$CURRENT/ops/research-production-task-failure-signature.mjs"
+  if ! file_exists "$cycle_file"; then
+    printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=CYCLE_MISSING raw_log_included=false\n' "$profile" "$task_id"
+    return 0
+  fi
+  if ! file_exists "$extractor"; then
+    printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=SIGNATURE_EXTRACTOR_MISSING raw_log_included=false\n' "$profile" "$task_id"
+    return 0
+  fi
+
+  local task_failure_path=""
+  task_failure_path="$(read_file "$cycle_file" | "${SUDO[@]}" node "$extractor" resolve-path "$STATE" "$task_id" "$TARGET_RESEARCH_SHA" 2>/dev/null || true)"
+  if [[ -z "$task_failure_path" ]]; then
+    printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=FAILED_TASK_STDERR_PATH_UNAVAILABLE raw_log_included=false\n' "$profile" "$task_id"
+    return 0
+  fi
+  if ! file_exists "$task_failure_path"; then
+    printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=FAILED_TASK_STDERR_MISSING raw_log_included=false\n' "$profile" "$task_id"
+    return 0
+  fi
+
+  if ! "${SUDO[@]}" tail -c 65536 -- "$task_failure_path" | "${SUDO[@]}" node "$extractor" extract "$profile" "$task_id"; then
+    printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=SIGNATURE_EXTRACTION_FAILED raw_log_included=false\n' "$profile" "$task_id"
+  fi
+}
+
+emit_task_failure_signature forward shadow-forward
+emit_task_failure_signature forward paper-forward
+
 forward_cycle="$STATE/latest/forward.json"
 paper_stdout_path=""
 if file_exists "$forward_cycle"; then
