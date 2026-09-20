@@ -186,19 +186,19 @@ emit_task_failure_signature() {
       const profile = String(process.argv[1] ?? "");
       const taskId = String(process.argv[2] ?? "");
       const signatures = new Set();
-      const domain = /\\b(?:PAPER_FORWARD|PAPER_STATE|AUTHORITATIVE|SHADOW|ETH_V6|RESEARCH)_[A-Z0-9_]{2,96}\\b/gu;
+      const domain = /\b(?:PAPER_FORWARD|PAPER_STATE|AUTHORITATIVE|SHADOW|ETH_V6|RESEARCH)_[A-Z0-9_]{2,96}\b/gu;
       for (const match of raw.match(domain) ?? []) signatures.add(match);
       for (const code of [
         "ERR_MODULE_NOT_FOUND", "ERR_PACKAGE_PATH_NOT_EXPORTED", "ERR_UNSUPPORTED_DIR_IMPORT",
         "ERR_INVALID_PACKAGE_CONFIG", "ERR_UNKNOWN_FILE_EXTENSION", "ERR_INVALID_MODULE_SPECIFIER",
         "ERR_REQUIRE_ESM", "MODULE_NOT_FOUND",
       ]) if (raw.includes(code)) signatures.add(code);
-      if (/\\bSyntaxError\\b/u.test(raw)) signatures.add("NODE_SYNTAX_ERROR");
-      if (/\\bReferenceError\\b/u.test(raw)) signatures.add("NODE_REFERENCE_ERROR");
-      if (/\\bTypeError\\b/u.test(raw)) signatures.add("NODE_TYPE_ERROR");
-      if (/\\bENOENT\\b/u.test(raw)) signatures.add("FS_ENOENT");
-      if (/\\bEACCES\\b/u.test(raw)) signatures.add("FS_EACCES");
-      if (/\\bERR_ACCESS_DENIED\\b/u.test(raw)) signatures.add("FS_ACCESS_DENIED");
+      if (/\bSyntaxError\b/u.test(raw)) signatures.add("NODE_SYNTAX_ERROR");
+      if (/\bReferenceError\b/u.test(raw)) signatures.add("NODE_REFERENCE_ERROR");
+      if (/\bTypeError\b/u.test(raw)) signatures.add("NODE_TYPE_ERROR");
+      if (/\bENOENT\b/u.test(raw)) signatures.add("FS_ENOENT");
+      if (/\bEACCES\b/u.test(raw)) signatures.add("FS_EACCES");
+      if (/\bERR_ACCESS_DENIED\b/u.test(raw)) signatures.add("FS_ACCESS_DENIED");
       const values = [...signatures].sort().slice(0, 24);
       const categories = new Set();
       for (const value of values) {
