@@ -293,14 +293,17 @@ export async function fetchUnifiedChartData(input: {
   const alternateHedge = urls.length > 1
     ? createLinkedSignal(linked.signal, totalTimeoutMs)
     : null;
-  let releaseAlternateHedge: (() => void) | null = null;
-  const alternateRelease = alternateHedge
-    ? new Promise<void>((resolve) => { releaseAlternateHedge = resolve; })
+  const alternateGate = alternateHedge
+    ? (() => {
+        let release: () => void = () => undefined;
+        const promise = new Promise<void>((resolve) => { release = resolve; });
+        return { promise, release };
+      })()
     : null;
-  const alternateResponse = alternateHedge && alternateRelease
+  const alternateResponse = alternateHedge && alternateGate
     ? Promise.race([
         waitForSignalAwareDelay(STOCK_ALTERNATE_HEDGE_DELAY_MS, alternateHedge.signal),
-        alternateRelease,
+        alternateGate.promise,
       ]).then(() => fetcher(urls[1], requestInit(alternateHedge.signal)))
     : null;
   void alternateResponse?.catch(() => undefined);
@@ -322,7 +325,7 @@ export async function fetchUnifiedChartData(input: {
           const error = httpError(response.status, payload);
           if (alternateAvailable && canTryAlternateEndpoint(error)) {
             lastError = error;
-            releaseAlternateHedge?.();
+            alternateGate?.release();
             continue;
           }
           throw error;
@@ -360,7 +363,7 @@ export async function fetchUnifiedChartData(input: {
         if (error instanceof UnifiedChartDataError) {
           lastError = error;
           if (alternateAvailable && canTryAlternateEndpoint(error)) {
-            releaseAlternateHedge?.();
+            alternateGate?.release();
             continue;
           }
           alternateHedge?.abort();
@@ -376,7 +379,7 @@ export async function fetchUnifiedChartData(input: {
           );
           lastError = timeoutError;
           if (alternateAvailable) {
-            releaseAlternateHedge?.();
+            alternateGate?.release();
             continue;
           }
           throw timeoutError;
