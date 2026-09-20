@@ -299,11 +299,37 @@ async function exerciseVisibleTabs(page: Page) {
   return failures;
 }
 
+async function navigateInMountedApp(page: Page, route: string) {
+  await expect(page.getByTestId('app-shell')).toBeVisible({ timeout: 1_000 });
+  const target = new URL(route, baseUrl);
+  const targetPath = `${target.pathname}${target.search}${target.hash}`;
+  const current = new URL(page.url());
+  const resetPath = current.pathname === target.pathname
+    && `${current.search}${current.hash}` !== `${target.search}${target.hash}`
+    ? (target.pathname === '/' ? '/stocks' : '/')
+    : null;
+  await page.evaluate(async ({ nextPath, intermediatePath }) => {
+    const transition = (path: string) => {
+      window.history.pushState({}, '', path);
+      window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state }));
+    };
+    if (intermediatePath) {
+      transition(intermediatePath);
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    }
+    transition(nextPath);
+  }, { nextPath: targetPath, intermediatePath: resetPath });
+  await expect.poll(() => {
+    const current = new URL(page.url());
+    return `${current.pathname}${current.search}${current.hash}`;
+  }, { timeout: 1_000, intervals: [50, 100, 200] }).toBe(targetPath);
+}
+
 async function auditRoute(page: Page, route: string, testInfo: TestInfo): Promise<RouteAudit> {
   const started = Date.now();
   let navigationError: string | null = null;
   let fallbackTimedOut = false;
-  await page.goto(route, { waitUntil: 'commit', timeout: 15_000 }).catch((error) => {
+  await navigateInMountedApp(page, route).catch((error) => {
     navigationError = String(error).slice(0, 240);
   });
   if (!page.isClosed()) {
@@ -456,6 +482,18 @@ async function chartMatrix(page: Page, onProgress: (audits: ChartAudit[]) => voi
         await page.getByTestId(`timeframe-${timeframe}`).click({ timeout: 2_500 });
         await expect(page).toHaveURL(new RegExp(`timeframe=${timeframe.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), { timeout: 3_000 }).catch(() => undefined);
         terminal = await expect.poll(async () => {
+          const chart = page.getByTestId('unified-analysis-chart');
+          const [selectedMarket, selectedTimeframe, queryFetching, dataMarket, dataTimeframe] = await Promise.all([
+            chart.getAttribute('data-chart-market'),
+            chart.getAttribute('data-chart-timeframe'),
+            chart.getAttribute('data-chart-query-fetching'),
+            chart.getAttribute('data-chart-data-market'),
+            chart.getAttribute('data-chart-data-timeframe'),
+          ]);
+          if (selectedMarket !== market || selectedTimeframe !== timeframe) return 'timeout';
+          if (statuses.length === 0 || queryFetching === 'true') return 'timeout';
+          if (statuses.some((status) => status >= 200 && status < 300)
+            && (dataMarket !== market || dataTimeframe !== timeframe)) return 'timeout';
           if (await page.getByTestId('unified-chart-canvas').isVisible({ timeout: 200 }).catch(() => false)) return 'canvas';
           if (await page.getByTestId('chart-empty-state').isVisible({ timeout: 200 }).catch(() => false)) return 'empty';
           if (await page.getByTestId('chart-error-state').isVisible({ timeout: 200 }).catch(() => false)) return 'error';
