@@ -139,18 +139,35 @@ emit_task_failure_signature() {
   local profile="$1"
   local task_id="$2"
   local cycle_file="$STATE/latest/$profile.json"
-  local extractor="$CURRENT/ops/research-production-task-failure-signature.mjs"
   if ! file_exists "$cycle_file"; then
     printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=CYCLE_MISSING raw_log_included=false\n' "$profile" "$task_id"
     return 0
   fi
-  if ! file_exists "$extractor"; then
-    printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=SIGNATURE_EXTRACTOR_MISSING raw_log_included=false\n' "$profile" "$task_id"
-    return 0
-  fi
 
   local task_failure_path=""
-  task_failure_path="$(read_file "$cycle_file" | node "$extractor" resolve-path "$STATE" "$task_id" "$TARGET_RESEARCH_SHA" 2>/dev/null || true)"
+  task_failure_path="$(read_file "$cycle_file" | node -e '
+    const { isAbsolute, join, resolve, sep } = require("node:path");
+    let raw="";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", chunk => raw += chunk);
+    process.stdin.on("end", () => {
+      const stateRoot = resolve(process.argv[1]);
+      const taskId = String(process.argv[2] ?? "");
+      const targetSha = String(process.argv[3] ?? "").toLowerCase();
+      const cycle = JSON.parse(raw);
+      if (cycle?.researchSha !== targetSha) return;
+      if (!/^[a-z0-9][a-z0-9-]{1,80}$/u.test(taskId)) return;
+      const row = (Array.isArray(cycle?.results) ? cycle.results : [])
+        .find(item => item?.id === taskId && item?.status === "failed");
+      const candidate = String(row?.stderrPath ?? "");
+      if (!isAbsolute(candidate)) return;
+      const resolved = resolve(candidate);
+      const runsRoot = join(stateRoot, "runs") + sep;
+      if (!resolved.startsWith(runsRoot)) return;
+      if (!resolved.endsWith(sep + taskId + sep + "stderr.log")) return;
+      process.stdout.write(resolved);
+    });
+  ' "$STATE" "$task_id" "$TARGET_RESEARCH_SHA" 2>/dev/null || true)"
   if [[ -z "$task_failure_path" ]]; then
     printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=FAILED_TASK_STDERR_PATH_UNAVAILABLE raw_log_included=false\n' "$profile" "$task_id"
     return 0
@@ -160,7 +177,55 @@ emit_task_failure_signature() {
     return 0
   fi
 
-  if ! "${SUDO[@]}" tail -c 65536 -- "$task_failure_path" | node "$extractor" extract "$profile" "$task_id"; then
+  if ! "${SUDO[@]}" tail -c 65536 -- "$task_failure_path" | node -e '
+    const { createHash } = require("node:crypto");
+    let raw="";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", chunk => raw += chunk);
+    process.stdin.on("end", () => {
+      const profile = String(process.argv[1] ?? "");
+      const taskId = String(process.argv[2] ?? "");
+      const signatures = new Set();
+      const domain = /\\b(?:PAPER_FORWARD|PAPER_STATE|AUTHORITATIVE|SHADOW|ETH_V6|RESEARCH)_[A-Z0-9_]{2,96}\\b/gu;
+      for (const match of raw.match(domain) ?? []) signatures.add(match);
+      for (const code of [
+        "ERR_MODULE_NOT_FOUND", "ERR_PACKAGE_PATH_NOT_EXPORTED", "ERR_UNSUPPORTED_DIR_IMPORT",
+        "ERR_INVALID_PACKAGE_CONFIG", "ERR_UNKNOWN_FILE_EXTENSION", "ERR_INVALID_MODULE_SPECIFIER",
+        "ERR_REQUIRE_ESM", "MODULE_NOT_FOUND",
+      ]) if (raw.includes(code)) signatures.add(code);
+      if (/\\bSyntaxError\\b/u.test(raw)) signatures.add("NODE_SYNTAX_ERROR");
+      if (/\\bReferenceError\\b/u.test(raw)) signatures.add("NODE_REFERENCE_ERROR");
+      if (/\\bTypeError\\b/u.test(raw)) signatures.add("NODE_TYPE_ERROR");
+      if (/\\bENOENT\\b/u.test(raw)) signatures.add("FS_ENOENT");
+      if (/\\bEACCES\\b/u.test(raw)) signatures.add("FS_EACCES");
+      if (/\\bERR_ACCESS_DENIED\\b/u.test(raw)) signatures.add("FS_ACCESS_DENIED");
+      const values = [...signatures].sort().slice(0, 24);
+      const categories = new Set();
+      for (const value of values) {
+        if (value.startsWith("PAPER_FORWARD_")) categories.add("PAPER_FORWARD_RUNTIME");
+        else if (value.startsWith("PAPER_STATE_")) categories.add("PAPER_STATE");
+        else if (value.startsWith("AUTHORITATIVE_")) categories.add("AUTHORITATIVE_RUNTIME");
+        else if (value.startsWith("SHADOW_") || value.startsWith("ETH_V6_")) categories.add("SHADOW_RUNTIME");
+        else if (value.startsWith("RESEARCH_")) categories.add("RESEARCH_RUNTIME");
+        else if (value.startsWith("ERR_") || value.startsWith("MODULE_") || value.startsWith("NODE_")) categories.add("NODE_RUNTIME");
+        else if (value.startsWith("FS_")) categories.add("FILESYSTEM");
+      }
+      const clean = value => String(value ?? "").replace(/[^A-Za-z0-9_.:,-]/gu, "_").slice(0, 1024);
+      const stderrSha = createHash("sha256").update(raw).digest("hex");
+      console.log([
+        "TASK_FAILURE_SIGNATURE",
+        "profile=" + clean(profile),
+        "id=" + clean(taskId),
+        "present=true",
+        "signature_count=" + values.length,
+        "signatures=" + clean(values.length ? values.join(",") : "NONE"),
+        "categories=" + clean(categories.size ? [...categories].sort().join(",") : "UNCLASSIFIED"),
+        "stderr_tail_size_bytes=" + Buffer.byteLength(raw, "utf8"),
+        "stderr_tail_sha256=" + stderrSha,
+        "raw_log_included=false",
+      ].join(" "));
+    });
+  ' "$profile" "$task_id"; then
     printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=SIGNATURE_EXTRACTION_FAILED raw_log_included=false\n' "$profile" "$task_id"
   fi
 }
