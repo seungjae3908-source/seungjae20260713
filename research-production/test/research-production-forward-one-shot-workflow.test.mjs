@@ -67,6 +67,8 @@ test('forward one-shot preserves Paper-only safety and captures fail-closed evid
     "grep -Fx 'order_authority=false'",
     "grep -Fx 'real_order_count=0'",
     'TASK_FAILURE_SIGNATURE',
+    'SHADOW_GROUP_FAILURE',
+    'shadow_failure_details',
     'ERR_MODULE_NOT_FOUND',
     'MODULE_NOT_FOUND',
     "paper_module_failure",
