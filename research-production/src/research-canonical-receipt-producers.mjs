@@ -7,6 +7,9 @@ import {
   auditStockUniverseBias,
 } from '../../market-prediction-lab/src/stock-universe-bias-audit.js';
 import {
+  createStockPointInTimeEvidenceAdapter,
+} from '../../market-prediction-lab/src/stock-point-in-time-evidence-adapter-v1.js';
+import {
   BITGET_TIMEFRAME_MS,
 } from '../../market-prediction-lab/src/bitget-candle-collector.js';
 import {
@@ -98,6 +101,64 @@ export function buildStockUniverseAdaptiveReceiptsV1({
     sourceDigest,
     receiptCount:receipts.length,
     receipts:Object.freeze(receipts),
+    executionAuthority:'NONE',
+  });
+}
+
+export function buildStockCorporateActionAdaptiveReceiptV1({
+  datasetManifest,
+  pointInTimeEvidence,
+  observedAt,
+}={}){
+  const profile=profileForManifest(datasetManifest);
+  if(!['KR_STOCK','US_STOCK'].includes(profile.market)){
+    throw new Error('STOCK_CORPORATE_ACTION_RECEIPT_MARKET_INVALID');
+  }
+  if(!profile.requiredEvidence.includes('CORPORATE_ACTIONS')){
+    throw new Error('STOCK_CORPORATE_ACTION_REQUIREMENT_NOT_PRESENT');
+  }
+  const adapter=createStockPointInTimeEvidenceAdapter({
+    ...(pointInTimeEvidence??{}),
+    market:profile.market,
+  });
+  if(adapter.status!=='READY'
+    ||adapter.evidenceStatus!=='EVIDENCED'
+    ||adapter.market!==profile.market
+    ||adapter.evaluationStartTime!==datasetManifest.scope.startTime
+    ||adapter.evaluationEndTime!==datasetManifest.scope.endTime
+    ||adapter.biasAudit?.status!=='point_in_time_bias_gate_passed'
+    ||adapter.biasAudit?.manifestSha256!==datasetManifest.scope.universeDigest
+    ||typeof adapter.evidenceSha256!=='string'
+    ||!/^[0-9a-f]{64}$/.test(adapter.evidenceSha256)
+    ||adapter.safeguards?.currentMembershipBackfillForbidden!==true
+    ||adapter.safeguards?.futureMembershipAtQueryForbidden!==true
+    ||adapter.safeguards?.syntheticHistoricalDataForbidden!==true
+    ||adapter.safeguards?.corporateActionCoverageRequired!==true
+    ||adapter.safeguards?.rawPricesWithCorporateActionsForbidden!==true
+    ||adapter.safeguards?.removedListingsRequireTerminalEvidence!==true
+    ||adapter.safeguards?.liveExecutionAllowed!==false
+    ||adapter.safeguards?.privateAccountRequestAllowed!==false
+    ||adapter.safeguards?.actualOrders!==0){
+    const error=new Error('STOCK_CORPORATE_ACTION_EVIDENCE_NOT_READY');
+    error.reason=adapter.reason??null;
+    throw error;
+  }
+  const at=exactIso(observedAt,'observedAt');
+  const receipt=createAdaptiveEvidenceReceiptV1({
+    profileId:profile.profileId,
+    requirement:'CORPORATE_ACTIONS',
+    evidenceId:`stock-point-in-time-corporate-actions:${adapter.evidenceSha256}`,
+    observedAt:at,
+    datasetSnapshotHash:datasetManifest.datasetSnapshotHash,
+    sourceDigest:adapter.evidenceSha256,
+  });
+  return Object.freeze({
+    schemaVersion:1,
+    contract:RESEARCH_CANONICAL_RECEIPT_PRODUCERS_CONTRACT_V1,
+    kind:'STOCK_POINT_IN_TIME_CORPORATE_ACTIONS',
+    profileId:profile.profileId,
+    sourceDigest:adapter.evidenceSha256,
+    receipt,
     executionAuthority:'NONE',
   });
 }
