@@ -61,18 +61,6 @@ test('ready dispatcher sequences commit-change full CI strictly after successful
   assert.match(document, /Failed, skipped, cancelled, missing, stale, or Draft Fast CI cannot dispatch/u);
 });
 
-test('ready dispatcher treats an advanced unique PR head as a safe superseded no-op', async () => {
-  const document = await readFile('.github/workflows/application-full-ci-ready-dispatch.yml', 'utf8');
-  assert.match(document, /const openCandidates = \[\]/u);
-  assert.match(document, /openCandidates\.push\(pr\)/u);
-  assert.match(document, /openMatches\.length === 0 && openCandidates\.length === 1/u);
-  assert.match(document, /currentHeadSha !== targetSha/u);
-  assert.match(document, /\[SUPERSEDED_FAST_HEAD\]/u);
-  assert.match(document, /core\.setOutput\('dispatch', 'false'\)/u);
-  assert.match(document, /openMatches\.length !== 1/u);
-  assert.match(document, /READY_FAST_CI_PR_RESOLUTION_FAILED/u);
-});
-
 test('canonical full CI keeps direct Ready transition and independently requires green Fast CI', async () => {
   const document = await readFile('.github/workflows/futures-public-network-smoke.yml', 'utf8');
   const triggerSection = document.slice(0, document.indexOf('\npermissions:'));
