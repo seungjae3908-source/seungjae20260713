@@ -42,6 +42,18 @@ export function normalizeFundingRateRecord(raw, index = 0) {
   return Object.freeze({ timestamp, rate, rateRaw });
 }
 
+export function normalizeLongShortRatioRecord(raw, index = 0) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new TypeError(`longShort[${index}] is invalid`);
+  const ratioRaw = String(raw.ratioRaw ?? raw.longShortRatio ?? raw.ratio ?? "").trim();
+  if (!/^[+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(ratioRaw)) {
+    throw new TypeError(`longShort[${index}].longShortRatio is invalid`);
+  }
+  const ratio = finiteNumber(ratioRaw, `longShort[${index}].longShortRatio`);
+  if (ratio < 0) throw new TypeError(`longShort[${index}].longShortRatio cannot be negative`);
+  const timestamp = positiveTimestamp(raw.timestamp ?? raw.ts, `longShort[${index}].timestamp`);
+  return Object.freeze({ timestamp, ratio, ratioRaw });
+}
+
 export function normalizeOpenInterestSnapshot(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new TypeError("open-interest snapshot is invalid");
   const timestamp = positiveTimestamp(raw.timestamp ?? raw.openInterestTimestamp ?? raw.collectedAt, "openInterest.timestamp");
@@ -114,6 +126,28 @@ export async function collectFundingRateHistory({
   });
 }
 
+export async function collectLongShortRatioHistory({
+  client,
+  symbol,
+  period = "1h",
+  endpoint = "/api/v2/mix/market/long-short",
+} = {}) {
+  if (!client || typeof client.get !== "function") throw new TypeError("client.get is required");
+  assertSymbol(symbol);
+  const supported = new Set(["5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1Dutc"]);
+  if (!supported.has(period)) throw new TypeError("unsupported long-short period");
+  const payload = await client.get(endpoint, { symbol, period });
+  if (!Array.isArray(payload.data)) throw new TypeError("Bitget long-short data must be an array");
+  const records = uniqueSorted(payload.data.map(normalizeLongShortRatioRecord), "ratioRaw");
+  return Object.freeze({
+    schemaVersion: 1,
+    provider: "bitget-public-v2",
+    symbol,
+    period,
+    records: Object.freeze(records),
+  });
+}
+
 function lastIndexAtOrBefore(records, timestamp) {
   let low = 0;
   let high = records.length - 1;
@@ -133,18 +167,28 @@ function lastIndexAtOrBefore(records, timestamp) {
 export function createTemporalDerivativesProvider({
   fundingHistory = [],
   openInterestSnapshots = [],
+  longShortHistory = [],
   openInterestTrainingParityConfirmed = false,
+  longShortTrainingParityConfirmed = false,
   fundingMaxAgeMs = 12 * 60 * 60 * 1000,
   openInterestMaxAgeMs = 2 * 60 * 60 * 1000,
+  longShortMaxAgeMs = 2 * 60 * 60 * 1000,
 } = {}) {
   if (typeof openInterestTrainingParityConfirmed !== "boolean") {
     throw new TypeError("openInterestTrainingParityConfirmed must be boolean");
   }
+  if (typeof longShortTrainingParityConfirmed !== "boolean") {
+    throw new TypeError("longShortTrainingParityConfirmed must be boolean");
+  }
   if (!Number.isInteger(fundingMaxAgeMs) || fundingMaxAgeMs <= 0) throw new TypeError("fundingMaxAgeMs must be positive");
   if (!Number.isInteger(openInterestMaxAgeMs) || openInterestMaxAgeMs <= 0) throw new TypeError("openInterestMaxAgeMs must be positive");
+  if (!Number.isInteger(longShortMaxAgeMs) || longShortMaxAgeMs <= 0) throw new TypeError("longShortMaxAgeMs must be positive");
   const funding = uniqueSorted(fundingHistory.map(normalizeFundingRateRecord), "rateRaw");
   const oi = openInterestTrainingParityConfirmed
     ? uniqueSorted(openInterestSnapshots.map(normalizeOpenInterestSnapshot), "valueRaw")
+    : [];
+  const longShort = longShortTrainingParityConfirmed
+    ? uniqueSorted(longShortHistory.map(normalizeLongShortRatioRecord), "ratioRaw")
     : [];
 
   return ({ anchorTimestamp }) => {
@@ -157,6 +201,9 @@ export function createTemporalDerivativesProvider({
       openInterestKnown: false,
       openInterestTimestamp: null,
       openInterestAgeMs: null,
+      longShortKnown: false,
+      longShortTimestamp: null,
+      longShortAgeMs: null,
     };
 
     const fundingIndex = lastIndexAtOrBefore(funding, anchor);
@@ -184,6 +231,18 @@ export function createTemporalDerivativesProvider({
       }
     }
 
+    const longShortIndex = lastIndexAtOrBefore(longShort, anchor);
+    if (longShortIndex >= 0) {
+      const record = longShort[longShortIndex];
+      const age = anchor - record.timestamp;
+      if (age <= longShortMaxAgeMs) {
+        features.longShortRatio = record.ratio;
+        availability.longShortKnown = true;
+        availability.longShortTimestamp = record.timestamp;
+        availability.longShortAgeMs = age;
+      }
+    }
+
     return Object.freeze({
       derivativesFeatures: Object.freeze(features),
       featureAvailability: Object.freeze(availability),
@@ -196,11 +255,14 @@ export function summarizeTemporalCoverage(records) {
   const total = records.length;
   const fundingKnown = records.filter((record) => record.featureAvailability?.fundingKnown).length;
   const openInterestKnown = records.filter((record) => record.featureAvailability?.openInterestKnown).length;
+  const longShortKnown = records.filter((record) => record.featureAvailability?.longShortKnown).length;
   return Object.freeze({
     total,
     fundingKnown,
     openInterestKnown,
+    longShortKnown,
     fundingCoverage: total === 0 ? 0 : fundingKnown / total,
     openInterestCoverage: total === 0 ? 0 : openInterestKnown / total,
+    longShortCoverage: total === 0 ? 0 : longShortKnown / total,
   });
 }
