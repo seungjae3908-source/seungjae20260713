@@ -18,6 +18,7 @@ const championPlan = Object.freeze({
   artifactType: "CHAMPION_CHALLENGER_RESEARCH_PLAN",
   status: "CHAMPION_CHALLENGER_READY_FOR_NATURAL_PAPER",
   planDigest: "b".repeat(64),
+  candidates: [{ candidateId }],
   executionAuthority: "NONE",
 });
 
@@ -172,20 +173,64 @@ test("architecture readiness distinguishes completed code path from profitabilit
     naturalPaperCandidate,
   });
 
+  const graphDigest = "1".repeat(64);
+  const genomeDigest = "2".repeat(64);
+  const redTeamDigest = "3".repeat(64);
+  const forecastDigest = "4".repeat(64);
+  const counterfactualDigest = "5".repeat(64);
+  const digitalTwinDigest = "6".repeat(64);
   const readiness = buildAutonomousAlphaArchitectureReadinessV1({
-    worldKnowledge: { status: "WORLD_KNOWLEDGE_READY", executionAuthority: "NONE" },
-    alphaGenome: { status: "ALPHA_GENOME_READY_FOR_FALSIFICATION", executionAuthority: "NONE" },
-    redTeam: { status: "RED_TEAM_SURVIVOR_RESEARCH_ONLY", executionAuthority: "NONE" },
-    forecast: { status: "FORECAST_READY_RESEARCH_ONLY", executionAuthority: "NONE" },
-    counterfactual: { status: "COUNTERFACTUAL_TWIN_EVALUATED_RESEARCH_ONLY", executionAuthority: "NONE" },
-    digitalTwin: { status: "MARKET_DIGITAL_TWIN_EVALUATED_RESEARCH_ONLY", executionAuthority: "NONE" },
-    championChallenger: championPlan,
+    worldKnowledge: {
+      status: "WORLD_KNOWLEDGE_READY",
+      executionAuthority: "NONE",
+      evidenceGraph: { graphDigest },
+    },
+    alphaGenome: {
+      status: "ALPHA_GENOME_READY_FOR_FALSIFICATION",
+      candidateId,
+      evidenceGraphDigest: graphDigest,
+      genomeDigest,
+      executionAuthority: "NONE",
+    },
+    redTeam: {
+      status: "RED_TEAM_SURVIVOR_RESEARCH_ONLY",
+      candidateId,
+      genomeDigest,
+      resultDigest: redTeamDigest,
+      executionAuthority: "NONE",
+    },
+    forecast: {
+      status: "FORECAST_READY_RESEARCH_ONLY",
+      candidateId,
+      redTeamResultDigest: redTeamDigest,
+      forecastDigest,
+      executionAuthority: "NONE",
+    },
+    counterfactual: {
+      status: "COUNTERFACTUAL_TWIN_EVALUATED_RESEARCH_ONLY",
+      candidateId,
+      forecastDigest,
+      resultDigest: counterfactualDigest,
+      executionAuthority: "NONE",
+    },
+    digitalTwin: {
+      status: "MARKET_DIGITAL_TWIN_EVALUATED_RESEARCH_ONLY",
+      candidateId,
+      counterfactualResultDigest: counterfactualDigest,
+      resultDigest: digitalTwinDigest,
+      executionAuthority: "NONE",
+    },
+    championChallenger: {
+      ...championPlan,
+      digitalTwinResultDigest: digitalTwinDigest,
+    },
     certification,
   });
 
   assert.equal(readiness.status, "ARCHITECTURE_READY_EVIDENCE_PENDING_INACTIVE");
   assert.equal(readiness.architectureReady, true);
   assert.equal(readiness.profitabilityProven, false);
+  assert.equal(readiness.lineageChecks.every((row) => row.passed), true);
   assert.equal(readiness.finalHumanStop, "NO_LIVE_REVIEW_UNTIL_PROFITABILITY_EVIDENCE_PROVEN");
 });
 
