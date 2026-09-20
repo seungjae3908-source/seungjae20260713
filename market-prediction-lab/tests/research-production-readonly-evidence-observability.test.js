@@ -11,6 +11,7 @@ import {
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const SCRIPT = join(REPO_ROOT, "ops/research-production-readonly-evidence.sh");
+const FAILURE_SIGNATURE = join(REPO_ROOT, "ops/research-production-task-failure-signature.mjs");
 const WORKFLOW = join(REPO_ROOT, ".github/workflows/research-production-natural-cycle-evidence.yml");
 
 function inlineNodeScript(source, marker) {
@@ -436,9 +437,10 @@ test("Autonomous Alpha observer fails closed on unsafe Paper runtime or unsafe h
 
 
 test("Research Production read-only evidence exports only sanitized forward failure signatures", async () => {
-  const [source, workflow] = await Promise.all([
+  const [source, workflow, extractor] = await Promise.all([
     readFile(SCRIPT, "utf8"),
     readFile(WORKFLOW, "utf8"),
+    readFile(FAILURE_SIGNATURE, "utf8"),
   ]);
 
   for (const token of [
