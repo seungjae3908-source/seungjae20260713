@@ -155,3 +155,29 @@ const require = __createRequire(import.meta.url);
 });
 
 console.log('[api-server] built canonical research component registry tools');
+
+
+await build({
+	entryPoints: [path.resolve(rootDir, 'scripts/finalize-research-canonical-bundle.ts')],
+	outfile: path.resolve(outDir, 'tools/finalize-research-canonical-bundle.mjs'),
+	bundle: true,
+	platform: 'node',
+	format: 'esm',
+	target: 'node20',
+	sourcemap: true,
+	minify: false,
+	packages: 'external',
+	external,
+	banner: {
+		js: `
+import { createRequire as __createRequire } from 'node:module';
+const require = __createRequire(import.meta.url);
+`,
+	},
+	define: {
+		'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'development'),
+	},
+	logLevel: 'info',
+});
+
+console.log('[api-server] built dist/tools/finalize-research-canonical-bundle.mjs');
