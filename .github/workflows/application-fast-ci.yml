@@ -15,6 +15,9 @@ on:
       - api-server/**
       - stock-analyzer/**
       - packages/**
+      - research-production/**
+      - market-prediction-lab/**
+      - market-prediction-lab/src/derivatives-history.js
 
 permissions:
   contents: read
@@ -104,6 +107,10 @@ jobs:
             /tmp/product-integrity.md
           if-no-files-found: error
           retention-days: 7
+
+      - name: Verify exact-head workflow contracts when CI lane is otherwise unaffected
+        if: steps.impact.outputs.ci != 'true'
+        run: node --test .github/tests/pr-exact-head-workflows.test.mjs
 
       - name: Set up pnpm 9
         uses: pnpm/action-setup@v4
