@@ -47,6 +47,7 @@ const REQUIRED_LAB_FILES = Object.freeze([
   'scripts/run-v5-history.js',
   'scripts/run-v6-history.js',
   'scripts/run-paper-forward-schedule.js',
+  'scripts/run-autonomous-alpha-natural-paper-observer.js',
   'scripts/run-shadow-cycle.js',
 ]);
 
@@ -71,6 +72,7 @@ export const PROFILES = Object.freeze({
   forward: Object.freeze([
     Object.freeze({ id: 'shadow-forward', kind: 'shadow', args: ['scripts/run-shadow-cycle.js'], timeoutMs: 30 * 60_000 }),
     Object.freeze({ id: 'paper-forward', kind: 'paper', args: ['scripts/run-paper-forward-schedule.js'], timeoutMs: 20 * 60_000, acceptedExitCodes: [0, 2] }),
+    Object.freeze({ id: 'autonomous-alpha-observer', kind: 'alpha-observer', args: ['scripts/run-autonomous-alpha-natural-paper-observer.js'], timeoutMs: 5 * 60_000, acceptedExitCodes: [0, 2] }),
   ]),
 });
 
@@ -229,6 +231,18 @@ export function buildTaskPlan({
         env.PAPER_FORWARD_PUBLISHER_BINDING_PATH = join(transportRoot, 'publisher-binding.json');
         env.PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH = join(transportRoot, 'paper-state-v2.json');
       }
+    }
+    if (task.kind === 'alpha-observer') {
+      env.PAPER_FORWARD_ROOT = join(stateRoot, 'forward', 'paper');
+      env.PAPER_FORWARD_RESEARCH_SHA = pinnedSha;
+      env.AUTONOMOUS_ALPHA_OBSERVER_ACTIVE = 'true';
+      env.AUTONOMOUS_ALPHA_HANDOFF_PATH = join(
+        stateRoot,
+        'forward',
+        'paper',
+        'autonomous-alpha',
+        'handoff-v1.json',
+      );
     }
     if (task.kind === 'shadow') {
       args.push(join(stateRoot, 'forward', 'shadow-state.json'));
