@@ -150,7 +150,7 @@ emit_task_failure_signature() {
   fi
 
   local task_failure_path=""
-  task_failure_path="$(read_file "$cycle_file" | "${SUDO[@]}" node "$extractor" resolve-path "$STATE" "$task_id" "$TARGET_RESEARCH_SHA" 2>/dev/null || true)"
+  task_failure_path="$(read_file "$cycle_file" | node "$extractor" resolve-path "$STATE" "$task_id" "$TARGET_RESEARCH_SHA" 2>/dev/null || true)"
   if [[ -z "$task_failure_path" ]]; then
     printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=FAILED_TASK_STDERR_PATH_UNAVAILABLE raw_log_included=false\n' "$profile" "$task_id"
     return 0
@@ -160,7 +160,7 @@ emit_task_failure_signature() {
     return 0
   fi
 
-  if ! "${SUDO[@]}" tail -c 65536 -- "$task_failure_path" | "${SUDO[@]}" node "$extractor" extract "$profile" "$task_id"; then
+  if ! "${SUDO[@]}" tail -c 65536 -- "$task_failure_path" | node "$extractor" extract "$profile" "$task_id"; then
     printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=SIGNATURE_EXTRACTION_FAILED raw_log_included=false\n' "$profile" "$task_id"
   fi
 }
