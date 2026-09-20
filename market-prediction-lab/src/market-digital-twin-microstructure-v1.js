@@ -468,6 +468,7 @@ export function evaluateMarketDigitalTwinV1({
       : "BLOCKED_DATA",
     blockers: [...new Set(blockers)].sort(),
     candidateId: plan.candidateId,
+    counterfactualResultDigest: plan.counterfactualResultDigest,
     planDigest: plan.planDigest,
     scenarioResults: normalized,
     observedReplay,
