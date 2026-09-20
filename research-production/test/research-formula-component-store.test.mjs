@@ -4,80 +4,13 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import {
-  compileStrategyHypothesisToFormulaCandidatesV1,
-  generateBoundedFormulaCandidatesV1,
-} from '../../market-prediction-lab/src/autonomous-strategy-formula-generator-v1.js';
-import { createStrategyHypothesisV1, createHypothesisDecisionV1 } from '../../packages/strategy-hypothesis/src/index.js';
+import { compiledMomentumFormula } from '../../market-prediction-lab/tests/research-bundle-formula-fixture.js';
 import {
   exportResearchFormulaComponentsV1,
 } from '../src/research-formula-component-store.mjs';
 
 function fixture(){
-  const hypothesis=createStrategyHypothesisV1({
-    title:'component export hypothesis',
-    statement:'bounded momentum may persist in research.',
-    marketScope:['US'],
-    assetClass:'EQUITY',
-    timeframeScope:['15m'],
-    directionality:'POSITIVE',
-    rationale:'test research-only provenance',
-    supportingPaperIds:[],
-    contradictoryPaperIds:[],
-    evidenceStrength:{supporting:'NONE',contradictory:'NONE'},
-    expectedEffect:{observable:'NEXT_WINDOW_EXCESS_RETURN',direction:'INCREASE',minimumMagnitude:null,unit:'DECIMAL_RETURN',evaluationWindow:'15m'},
-    falsificationCriteria:{observable:'NEXT_WINDOW_EXCESS_RETURN',metric:'MEAN_CONDITIONAL_EXCESS_RETURN',operator:'LTE',threshold:0,unit:'DECIMAL_RETURN',evaluationWindow:'15m',minimumObservations:10,rejectionStatement:'reject'},
-    requiredData:[{dataset:'BARS',fields:['close'],frequency:'15m',provenanceRequired:true,licenseRequired:false}],
-    knownLimitations:['test'],
-    createdAt:'2026-09-20T00:00:00.000Z',
-    generator:{name:'component-test',version:'1.0.0'},
-    evidencePolicy:{requireKnownContentLicense:false,requireResolvedCorrections:true},
-  },[]);
-  const decision=createHypothesisDecisionV1({
-    hypothesis,papers:[],verdict:'APPROVE_FOR_RESEARCH',rationale:'test',
-    decidedAt:'2026-09-20T00:01:00.000Z',
-    committee:{name:'test',version:'1.0.0',members:['a']},
-  });
-  const template={
-    templateId:'component-template',
-    hypothesisBinding:{
-      hypothesisId:hypothesis.hypothesisId,
-      hypothesisConfigHash:hypothesis.configHash,
-      decisionId:decision.decisionId,
-      decisionHash:decision.decisionHash,
-    },
-    strategyFamily:'MOMENTUM',
-    market:'US_STOCK',
-    timeframe:'15m',
-    direction:'LONG',
-    entryDsl:{action:'LONG',rules:[{kind:'OPERATOR',operator:'GT',operands:[
-      {kind:'INDICATOR',name:'SMA',input:'close',parameters:{period:'lookback'}},
-      {kind:'INDICATOR',name:'EMA',input:'close',parameters:{period:'lookback'}},
-    ]}]},
-    exitDsl:{rules:[{type:'TIME_EXIT',barsParameter:'bars'}]},
-    parameterSpace:[
-      {name:'bars',domain:'BAR_COUNT',valueType:'INTEGER',min:2,max:2,step:1},
-      {name:'lookback',domain:'PERIOD',valueType:'INTEGER',min:5,max:5,step:1},
-    ],
-    limits:{maxAstDepth:6,maxIndicatorCount:8,maxRuleCount:8,maxAstNodes:64},
-  };
-  const budget={
-    maxCandidatesPerRun:4,maxCandidatesPerHypothesis:4,maxGenerations:1,
-    maxParameterCombinations:10,maxAstNodes:64,maxRuntimeMs:10000,maxCpuMs:5000,
-    maxMemoryBytes:1024*1024,
-  };
-  const formula=compileStrategyHypothesisToFormulaCandidatesV1({
-    hypothesis,decision,templates:[template],
-    policy:{
-      compilerId:'safe',compilerVersion:'1.0.0',
-      costPolicyIdentity:'COST_V1',riskPolicyIdentity:'RISK_V1',
-      datasetIdentity:'dataset:train:v1',datasetRole:'TRAIN',budget,
-    },
-  })[0];
-  const generated=generateBoundedFormulaCandidatesV1({
-    formulaCandidates:[formula],budget,
-    search:{method:'BOUNDED_GRID',seed:1,requestedCandidates:1,datasetIdentity:'dataset:train:v1',finalHoldoutAccess:false},
-  }).generatedCandidates[0];
+  const {formula,generated}=compiledMomentumFormula();
   return {
     formula,generated,
     candidate:{
