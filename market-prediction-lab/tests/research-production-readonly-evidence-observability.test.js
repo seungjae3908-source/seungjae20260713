@@ -214,7 +214,22 @@ test("Paper CLI v5 extractor emits a bounded payload and all twelve stage observ
       EVIDENCE_COMPLETE: { reasonCode: "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_CONTRACT_RULES_AND_P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_EXECUTION_OBSERVATION_AND_P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_LEARNING_SNAPSHOT_AND_P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_PAPER_STATE_AND_P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_SUPPLEMENTAL_COST_EVIDENCE", authoritative: true, freshness: "FRESH" },
     },
     authoritativeSourceWiringStatus: "CALLBACKS_CONNECTED_BLOCKED_DATA",
+    authoritativeSourceBlockers: ["AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE"],
     authoritativeEvidenceOwners: { authoritativeOwnersConnected: 7 },
+    authoritativeRuntimePackage: {
+      riskPolicyRecordTransport: "MISSING",
+      supplementalCostTransport: "MISSING",
+      suppliedSecret: "must-not-leak",
+    },
+    paperStateTransport: {
+      status: "BLOCKED_DATA_CONFIG_ABSENT",
+      state: "MISSING",
+      reason: "PAPER_STATE_SNAPSHOT_MISSING",
+      sourceShaExact: null,
+      publisherAccountBound: null,
+      callbackInvoked: false,
+      snapshotPath: "/must/not/leak",
+    },
     externalFinancialMutationAllowed: false,
     privateRequestCount: 0,
     financialMutationCount: 0,
@@ -233,12 +248,28 @@ test("Paper CLI v5 extractor emits a bounded payload and all twelve stage observ
   const sourceStates = output.filter((line) => line.startsWith("PAPER_EVIDENCE_SOURCE "));
   assert.equal(sourceStates.length, 5);
   assert.ok(sourceStates.every((line) => line.includes("state=CONNECTED_NOT_OBSERVED")));
+  assert.ok(output.includes("PAPER_EVIDENCE_TRANSPORT wiring_status=CALLBACKS_CONNECTED_BLOCKED_DATA paper_state_status=BLOCKED_DATA_CONFIG_ABSENT paper_state_state=MISSING paper_state_reason=PAPER_STATE_SNAPSHOT_MISSING paper_state_source_sha_exact=null paper_state_publisher_account_bound=null paper_state_callback_invoked=false risk_policy_record=MISSING supplemental_cost=MISSING source_blockers=AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE"));
   assert.deepEqual(payload.naturalFunnelMeasurements.map(({ stage, status, count }) => ({ stage, status, count })), stages);
   assert.equal(payload.naturalDatasetIdentity, "dataset-v1");
+  assert.deepEqual(payload.authoritativeEvidenceTransports, {
+    wiringStatus: "CALLBACKS_CONNECTED_BLOCKED_DATA",
+    sourceBlockers: ["AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE"],
+    paperState: {
+      status: "BLOCKED_DATA_CONFIG_ABSENT",
+      state: "MISSING",
+      reason: "PAPER_STATE_SNAPSHOT_MISSING",
+      sourceShaExact: null,
+      publisherAccountBound: null,
+      callbackInvoked: false,
+    },
+    riskPolicyRecord: "MISSING",
+    supplementalCost: "MISSING",
+  });
   assert.equal(payload.externalFinancialMutationAllowed, false);
   assert.equal(payload.liveTrading, false);
   assert.equal(payload.orderAuthority, false);
   assert.equal(Object.hasOwn(payload, "suppliedSecret"), false);
+  assert.equal(Object.hasOwn(payload.authoritativeEvidenceTransports.paperState, "snapshotPath"), false);
 
   const unavailable = runInline(extractor, { input: '{"schemaVersion":"legacy"}\n' });
   assert.equal(unavailable, "PAPER_NATURAL present=false blocker=PAPER_FORWARD_CLI_V5_RESULT_UNAVAILABLE");
@@ -303,6 +334,7 @@ test("workflow recomputes FIRST_ZERO from the extracted v5 counts and exact rele
     "PAPER_EVIDENCE_SOURCE type=LEARNING_SNAPSHOT state=CONNECTED_NOT_OBSERVED",
     "PAPER_EVIDENCE_SOURCE type=PAPER_STATE state=CONNECTED_NOT_OBSERVED",
     "PAPER_EVIDENCE_SOURCE type=SUPPLEMENTAL_COST_EVIDENCE state=CONNECTED_NOT_OBSERVED",
+    "PAPER_EVIDENCE_TRANSPORT wiring_status=CALLBACKS_CONNECTED_BLOCKED_DATA paper_state_status=BLOCKED_DATA_CONFIG_ABSENT paper_state_state=MISSING paper_state_reason=PAPER_STATE_SNAPSHOT_MISSING paper_state_source_sha_exact=null paper_state_publisher_account_bound=null paper_state_callback_invoked=false risk_policy_record=MISSING supplemental_cost=MISSING source_blockers=AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE",
     "PAPER_RUNTIME present=true live_trading=false order_authority=false private_request_count=0 financial_mutation_count=0 order_count=0",
     "PAPER_LEDGER present=true position_count=0 settlement_count=0",
     `PAPER_NATURAL present=true dataset_identity_sha256=${"a".repeat(64)} payload_base64=${payload}`,
@@ -331,6 +363,14 @@ test("workflow recomputes FIRST_ZERO from the extracted v5 counts and exact rele
     assert.equal(fields.natural_first_zero_reason_evidence_status, "ACCEPTED");
     assert.equal(fields.natural_evidence_source_connected_not_observed_count, "5");
     assert.equal(fields.natural_evidence_source_observed_count, "0");
+    assert.equal(fields.evidence_source_wiring_status, "CALLBACKS_CONNECTED_BLOCKED_DATA");
+    assert.equal(fields.paper_state_transport_status, "BLOCKED_DATA_CONFIG_ABSENT");
+    assert.equal(fields.paper_state_transport_state, "MISSING");
+    assert.equal(fields.paper_state_transport_reason, "PAPER_STATE_SNAPSHOT_MISSING");
+    assert.equal(fields.paper_state_callback_invoked, "false");
+    assert.equal(fields.risk_policy_record_transport, "MISSING");
+    assert.equal(fields.supplemental_cost_transport, "MISSING");
+    assert.equal(fields.authoritative_source_blockers, "AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE");
     assert.equal(fields.natural_evidence_source_trace,
       "CONTRACT_RULES=CONNECTED_NOT_OBSERVED,EXECUTION_OBSERVATION=CONNECTED_NOT_OBSERVED,LEARNING_SNAPSHOT=CONNECTED_NOT_OBSERVED,PAPER_STATE=CONNECTED_NOT_OBSERVED,SUPPLEMENTAL_COST_EVIDENCE=CONNECTED_NOT_OBSERVED");
     const stageTrace = JSON.parse(Buffer.from(fields.natural_stage_trace_base64, "base64url").toString("utf8"));
