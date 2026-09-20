@@ -34,6 +34,7 @@ test('registry is write-once, binding-scoped and reports exact missing component
   try{
     const dslPath=join(f.sourceDir,'dsl.json');
     await writeFile(dslPath,JSON.stringify({kind:'dsl',value:1}));
+    const sourceBytes=await readFile(dslPath);
     const first=await registerCanonicalBundleComponentV1({
       inputRoot:f.root,binding,key:'dsl',ownerRef:'#550',payloadPath:dslPath,
     });
@@ -43,6 +44,8 @@ test('registry is write-once, binding-scoped and reports exact missing component
     assert.equal(first.status,'registered');
     assert.equal(second.status,'already_present');
     assert.equal(first.bindingDigest,canonicalBundleComponentBindingDigestV1(binding));
+    assert.match(first.sourceByteDigest,/^[0-9a-f]{64}$/);
+    assert.deepEqual(await readFile(first.payloadPath),sourceBytes);
 
     const readiness=await buildCanonicalBundleComponentReadinessV1({
       inputRoot:f.root,binding,
@@ -74,6 +77,10 @@ test('all exact components produce a COMPLETE assembler-ready path spec',async()
     assert.deepEqual(readiness.missingKeys,[]);
     assert.equal(Object.keys(readiness.componentPaths).length,RESEARCH_CANONICAL_BUNDLE_COMPONENT_KEYS_V1.length);
     assert.equal(Object.values(readiness.payloadDigests).every(x=>/^[0-9a-f]{64}$/.test(x)),true);
+    for(const key of RESEARCH_CANONICAL_BUNDLE_COMPONENT_KEYS_V1){
+      const envelope=JSON.parse(await readFile(join(f.root,'registry',readiness.bindingDigest,`${key}.json`),'utf8'));
+      assert.match(envelope.sourceByteDigest,/^[0-9a-f]{64}$/);
+    }
     assert.match(readiness.readinessDigest,/^[0-9a-f]{64}$/);
   }finally{
     await rm(f.root,{recursive:true,force:true});
@@ -94,6 +101,26 @@ test('cross-binding registration cannot satisfy another candidate bundle',async(
     });
     assert.equal(readiness.presentKeys.length,0);
     assert.equal(readiness.missingKeys.length,RESEARCH_CANONICAL_BUNDLE_COMPONENT_KEYS_V1.length);
+  }finally{
+    await rm(f.root,{recursive:true,force:true});
+  }
+});
+
+test('same payload bytes cannot be rebound to a different owner inside the same binding/key',async()=>{
+  const f=await fixture();
+  try{
+    const path=join(f.sourceDir,'dsl.json');
+    await writeFile(path,'{\n  "value": 1\n}\n');
+    const first=await registerCanonicalBundleComponentV1({
+      inputRoot:f.root,binding,key:'dsl',ownerRef:'#550',payloadPath:path,
+    });
+    assert.deepEqual(await readFile(first.payloadPath),await readFile(path));
+    await assert.rejects(
+      registerCanonicalBundleComponentV1({
+        inputRoot:f.root,binding,key:'dsl',ownerRef:'#551',payloadPath:path,
+      }),
+      /CONTENT_CONFLICT/,
+    );
   }finally{
     await rm(f.root,{recursive:true,force:true});
   }
