@@ -32,12 +32,12 @@ test.afterEach(() => {
 });
 
 test('browser runtime wires the authenticated fetcher into unified chart requests', async () => {
-  const mainSource = fs.readFileSync(
-    path.join(analyzerDirectory(), 'src/main.tsx'),
+  const runtimeSource = fs.readFileSync(
+    path.join(analyzerDirectory(), 'src/app-runtime.tsx'),
     'utf8',
   );
-  expect(mainSource).toContain("import { authorizedFetch } from '@/lib/auth-fetch';");
-  expect(mainSource).toContain('configureUnifiedChartFetch(authorizedFetch);');
+  expect(runtimeSource).toContain("import { authorizedFetch } from '@/lib/auth-fetch';");
+  expect(runtimeSource).toContain('configureUnifiedChartFetch(authorizedFetch);');
 
   let globalFetchCalls = 0;
   globalThis.fetch = async () => {
