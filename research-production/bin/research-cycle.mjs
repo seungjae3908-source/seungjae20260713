@@ -3,6 +3,7 @@ import { cpus } from 'node:os';
 import { resolve } from 'node:path';
 import { assertResearchSafety, buildTaskPlan, preflightResearchProduction, runResearchCycle } from '../src/engine.mjs';
 import { buildHistoricalPipelinePlan, preflightHistoricalPipelines, runHistoricalPipelines } from '../src/historical-pipelines.mjs';
+import { runLongHistoryPipeline } from '../src/long-history-pipeline.mjs';
 
 function parse(argv) {
   const command = argv[2] ?? 'plan'; const options = {};
@@ -43,7 +44,11 @@ try {
     console.log(JSON.stringify({ ...base, historical: historical?.historical ?? null }, null, 2));
   } else if (command === 'run') {
     if (config.profile === 'all') throw new Error('run profile=all is intentionally disabled; run fast-historical, long-history and forward independently');
-    const result = config.profile === 'fast-historical' ? await runHistoricalPipelines(config) : await runResearchCycle(config);
+    const result = config.profile === 'fast-historical'
+      ? await runHistoricalPipelines(config)
+      : config.profile === 'long-history'
+        ? await runLongHistoryPipeline(config)
+        : await runResearchCycle(config);
     console.log(JSON.stringify(result, null, 2)); if (result.status === 'partial_failure') process.exitCode = 1;
   } else throw new Error(`unsupported command: ${command}`);
 } catch (error) {
