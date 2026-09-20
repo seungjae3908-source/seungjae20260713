@@ -468,10 +468,24 @@ if file_exists "$shadow_summary"; then
       const root = JSON.parse(raw);
       const clean = x => String(x ?? "null").replace(/[\t\r\n ]/g, "_").slice(0, 300);
       const compact = x => x == null ? "null" : JSON.stringify(x);
-      console.log("SHADOW_SUMMARY present=true");
+      console.log(`SHADOW_SUMMARY present=true status=${clean(root.status)}`);
       const candidates = root.groups && typeof root.groups === "object" ? root.groups : root;
       for (const [name, value] of Object.entries(candidates)) {
         if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+        const failure = value.error && typeof value.error === "object" && !Array.isArray(value.error)
+          ? value.error
+          : null;
+        if (value.status === "fail" || value.status === "technical_failure" || failure) {
+          console.log([
+            "SHADOW_GROUP_FAILURE",
+            `name=${clean(name)}`,
+            `status=${clean(value.status)}`,
+            `error_name=${clean(failure?.name)}`,
+            `error_message=${clean(failure?.message)}`,
+            `error_details=${clean(compact(failure?.details))}`,
+            "raw_log_included=false",
+          ].join(" "));
+        }
         const candidate = value.candidate && typeof value.candidate === "object" && !Array.isArray(value.candidate)
           ? value.candidate
           : value;
