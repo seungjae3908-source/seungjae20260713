@@ -55,6 +55,7 @@ jobs:
           grep -q "preflight_failed" .github/workflows/research-production-natural-cycle-evidence.yml
           grep -Fq "const observed = (value) => measured && value ? value : 'unknown';" .github/workflows/research-production-natural-cycle-evidence.yml
           grep -q 'PAPER_NATURAL' ops/research-production-readonly-evidence.sh
+          grep -q 'PAPER_EVIDENCE_TRANSPORT' ops/research-production-readonly-evidence.sh
           grep -q 'buildNaturalPaperFirstZeroTraceFromRuntime' .github/workflows/research-production-natural-cycle-evidence.yml
           python3 scripts/agent_hub_rollover_v2.py self-test
           grep -Fq 'python3 scripts/agent_hub_rollover_v2.py resolve' .github/workflows/research-production-natural-cycle-evidence.yml
@@ -218,6 +219,7 @@ jobs:
           const ledger = fields(find('PAPER_LEDGER '));
           const natural = fields(find('PAPER_NATURAL '));
           const evidenceSources = all('PAPER_EVIDENCE_SOURCE ').map(fields);
+          const evidenceTransport = fields(find('PAPER_EVIDENCE_TRANSPORT '));
           const timersHealthy = ['forward','fast-historical','long-history'].every((p) => timer[p]?.enabled === 'enabled' && timer[p]?.active === 'active');
           const forwardTasks = tasks.filter((row) => row.profile === 'forward');
           const forwardProven = timer.forward?.last_trigger && !/^n\/a|^null|^$/.test(timer.forward.last_trigger)
@@ -306,6 +308,16 @@ jobs:
             evidenceSources.filter((row) => row.state === 'CONNECTED_NOT_OBSERVED').length);
           writeOutput('natural_evidence_source_observed_count',
             evidenceSources.filter((row) => row.state === 'OBSERVED').length);
+          writeOutput('evidence_source_wiring_status', evidenceTransport.wiring_status);
+          writeOutput('paper_state_transport_status', evidenceTransport.paper_state_status);
+          writeOutput('paper_state_transport_state', evidenceTransport.paper_state_state);
+          writeOutput('paper_state_transport_reason', evidenceTransport.paper_state_reason);
+          writeOutput('paper_state_source_sha_exact', evidenceTransport.paper_state_source_sha_exact);
+          writeOutput('paper_state_publisher_account_bound', evidenceTransport.paper_state_publisher_account_bound);
+          writeOutput('paper_state_callback_invoked', evidenceTransport.paper_state_callback_invoked);
+          writeOutput('risk_policy_record_transport', evidenceTransport.risk_policy_record);
+          writeOutput('supplemental_cost_transport', evidenceTransport.supplemental_cost);
+          writeOutput('authoritative_source_blockers', evidenceTransport.source_blockers);
           if (status === 'failed') process.exitCode = 1;
           NODE
         env:
@@ -363,6 +375,16 @@ jobs:
           NATURAL_EVIDENCE_SOURCE_TRACE: ${{ steps.verdict.outputs.natural_evidence_source_trace }}
           NATURAL_EVIDENCE_SOURCE_CONNECTED_NOT_OBSERVED_COUNT: ${{ steps.verdict.outputs.natural_evidence_source_connected_not_observed_count }}
           NATURAL_EVIDENCE_SOURCE_OBSERVED_COUNT: ${{ steps.verdict.outputs.natural_evidence_source_observed_count }}
+          EVIDENCE_SOURCE_WIRING_STATUS: ${{ steps.verdict.outputs.evidence_source_wiring_status }}
+          PAPER_STATE_TRANSPORT_STATUS: ${{ steps.verdict.outputs.paper_state_transport_status }}
+          PAPER_STATE_TRANSPORT_STATE: ${{ steps.verdict.outputs.paper_state_transport_state }}
+          PAPER_STATE_TRANSPORT_REASON: ${{ steps.verdict.outputs.paper_state_transport_reason }}
+          PAPER_STATE_SOURCE_SHA_EXACT: ${{ steps.verdict.outputs.paper_state_source_sha_exact }}
+          PAPER_STATE_PUBLISHER_ACCOUNT_BOUND: ${{ steps.verdict.outputs.paper_state_publisher_account_bound }}
+          PAPER_STATE_CALLBACK_INVOKED: ${{ steps.verdict.outputs.paper_state_callback_invoked }}
+          RISK_POLICY_RECORD_TRANSPORT: ${{ steps.verdict.outputs.risk_policy_record_transport }}
+          SUPPLEMENTAL_COST_TRANSPORT: ${{ steps.verdict.outputs.supplemental_cost_transport }}
+          AUTHORITATIVE_SOURCE_BLOCKERS: ${{ steps.verdict.outputs.authoritative_source_blockers }}
         with:
           script: |
             const measured = process.env.EVIDENCE_OUTCOME === 'success';
@@ -414,6 +436,16 @@ jobs:
               `authoritative_evidence_sources: ${observed(process.env.NATURAL_EVIDENCE_SOURCE_TRACE)}`,
               `authoritative_evidence_connected_not_observed: ${observed(process.env.NATURAL_EVIDENCE_SOURCE_CONNECTED_NOT_OBSERVED_COUNT)}`,
               `authoritative_evidence_observed: ${observed(process.env.NATURAL_EVIDENCE_SOURCE_OBSERVED_COUNT)}`,
+              `evidence_source_wiring_status: ${observed(process.env.EVIDENCE_SOURCE_WIRING_STATUS)}`,
+              `paper_state_transport_status: ${observed(process.env.PAPER_STATE_TRANSPORT_STATUS)}`,
+              `paper_state_transport_state: ${observed(process.env.PAPER_STATE_TRANSPORT_STATE)}`,
+              `paper_state_transport_reason: ${observed(process.env.PAPER_STATE_TRANSPORT_REASON)}`,
+              `paper_state_source_sha_exact: ${observed(process.env.PAPER_STATE_SOURCE_SHA_EXACT)}`,
+              `paper_state_publisher_account_bound: ${observed(process.env.PAPER_STATE_PUBLISHER_ACCOUNT_BOUND)}`,
+              `paper_state_callback_invoked: ${observed(process.env.PAPER_STATE_CALLBACK_INVOKED)}`,
+              `risk_policy_record_transport: ${observed(process.env.RISK_POLICY_RECORD_TRANSPORT)}`,
+              `supplemental_cost_transport: ${observed(process.env.SUPPLEMENTAL_COST_TRANSPORT)}`,
+              `authoritative_source_blockers: ${observed(process.env.AUTHORITATIVE_SOURCE_BLOCKERS)}`,
               `FIRST_ZERO_STAGE: ${observed(process.env.NATURAL_FIRST_ZERO_STAGE)}`,
               `FIRST_ZERO_REASON: ${observed(process.env.NATURAL_FIRST_ZERO_REASON)}`,
               `FIRST_ZERO_REASON_EVIDENCE_STATUS: ${observed(process.env.NATURAL_FIRST_ZERO_REASON_EVIDENCE_STATUS)}`,
