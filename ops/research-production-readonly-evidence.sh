@@ -326,6 +326,32 @@ else
             ...boundedEvidence(evidence),
           }]))
         : {};
+      const sourceBlockers = Array.isArray(value.authoritativeSourceBlockers)
+        ? value.authoritativeSourceBlockers.slice(0, 16)
+          .map(item => typeof item === "string" ? item.slice(0, 240) : null)
+          .filter(Boolean)
+        : [];
+      const paperStateTransport = value.paperStateTransport && typeof value.paperStateTransport === "object"
+        && !Array.isArray(value.paperStateTransport)
+        ? {
+            status: value.paperStateTransport.status,
+            state: value.paperStateTransport.state,
+            reason: value.paperStateTransport.reason,
+            observedAtMs: value.paperStateTransport.observedAtMs,
+            sourceShaExact: value.paperStateTransport.sourceShaExact,
+            publisherAccountBound: value.paperStateTransport.publisherAccountBound,
+            callbackInvoked: value.paperStateTransport.callbackInvoked,
+          }
+        : null;
+      const authoritativeEvidenceOwners = value.authoritativeEvidenceOwners
+        && typeof value.authoritativeEvidenceOwners === "object"
+        && !Array.isArray(value.authoritativeEvidenceOwners)
+        ? {
+            authoritativeOwnersConnected: value.authoritativeEvidenceOwners.authoritativeOwnersConnected,
+            scheduledCanonicalWriter: value.authoritativeEvidenceOwners.scheduledCanonicalWriter,
+            firstBlocker: value.authoritativeEvidenceOwners.firstBlocker,
+          }
+        : null;
       const selected = {
         schemaVersion: value.schemaVersion,
         status: value.status ?? null,
@@ -336,6 +362,10 @@ else
         naturalDatasetIdentity: datasetIdentity,
         naturalFunnelMeasurements: measurements,
         authoritativeFirstZeroReasonEvidenceByStage: reasons,
+        authoritativeSourceWiringStatus: value.authoritativeSourceWiringStatus ?? null,
+        authoritativeSourceBlockers: sourceBlockers,
+        paperStateTransport,
+        authoritativeEvidenceOwners,
         externalFinancialMutationAllowed: value.externalFinancialMutationAllowed,
         privateRequestCount: value.privateRequestCount,
         financialMutationCount: value.financialMutationCount,
