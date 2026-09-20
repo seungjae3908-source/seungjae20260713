@@ -11,7 +11,6 @@ import {
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const SCRIPT = join(REPO_ROOT, "ops/research-production-readonly-evidence.sh");
-const FAILURE_SIGNATURE = join(REPO_ROOT, "ops/research-production-task-failure-signature.mjs");
 const WORKFLOW = join(REPO_ROOT, ".github/workflows/research-production-natural-cycle-evidence.yml");
 
 function inlineNodeScript(source, marker) {
@@ -437,20 +436,20 @@ test("Autonomous Alpha observer fails closed on unsafe Paper runtime or unsafe h
 
 
 test("Research Production read-only evidence exports only sanitized forward failure signatures", async () => {
-  const [source, workflow, extractor] = await Promise.all([
+  const [source, workflow] = await Promise.all([
     readFile(SCRIPT, "utf8"),
     readFile(WORKFLOW, "utf8"),
-    readFile(FAILURE_SIGNATURE, "utf8"),
   ]);
 
   for (const token of [
     "TASK_FAILURE_SIGNATURE",
-    "research-production-task-failure-signature.mjs",
     "tail -c 65536",
     "raw_log_included=false",
     "FAILED_TASK_STDERR_PATH_UNAVAILABLE",
     "FAILED_TASK_STDERR_MISSING",
     "SIGNATURE_EXTRACTION_FAILED",
+    "ERR_MODULE_NOT_FOUND",
+    "PAPER_FORWARD_RUNTIME",
   ]) {
     assert.ok(source.includes(token), `missing safe task failure diagnostic token: ${token}`);
   }
@@ -466,11 +465,55 @@ test("Research Production read-only evidence exports only sanitized forward fail
     assert.ok(workflow.includes(token), `missing sanitized Hub failure field: ${token}`);
   }
 
-  assert.ok(
-    source.includes('resolved.endsWith(`${sep}${id}${sep}stderr.log`)')
-      || source.includes('stderr.log'),
-    "failure stderr resolver must remain task-scoped",
+  const stateRoot = resolve("fixture-research-production-state");
+  const sha = "a".repeat(40);
+  const canonicalStderr = join(stateRoot, "runs", "cycle-1", "paper-forward", "stderr.log");
+  const resolver = inlineNodeScript(source, 'task_failure_path="$(read_file');
+  const canonicalCycle = JSON.stringify({
+    researchSha: sha,
+    results: [{ id: "paper-forward", status: "failed", stderrPath: canonicalStderr }],
+  });
+  assert.equal(
+    runInline(resolver, { input: canonicalCycle, args: [stateRoot, "paper-forward", sha] }),
+    canonicalStderr,
   );
+
+  const outsideCycle = JSON.stringify({
+    researchSha: sha,
+    results: [{ id: "paper-forward", status: "failed", stderrPath: resolve("outside", "paper-forward", "stderr.log") }],
+  });
+  assert.equal(
+    runInline(resolver, { input: outsideCycle, args: [stateRoot, "paper-forward", sha] }),
+    "",
+  );
+  assert.equal(
+    runInline(resolver, { input: canonicalCycle, args: [stateRoot, "paper-forward", "b".repeat(40)] }),
+    "",
+  );
+
+  const extractor = inlineNodeScript(source, 'tail -c 65536 -- "$task_failure_path"');
+  const secret = "super-secret-token-value";
+  const extracted = runInline(extractor, {
+    input: [
+      "Error [ERR_MODULE_NOT_FOUND]: Cannot find package private-package",
+      "PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_BINDING_REQUIRED",
+      "ReferenceError: missingThing is not defined",
+      "ENOENT: /private/path",
+      secret,
+    ].join("\n"),
+    args: ["forward", "paper-forward"],
+  });
+  assert.ok(extracted.startsWith("TASK_FAILURE_SIGNATURE "));
+  assert.ok(extracted.includes("ERR_MODULE_NOT_FOUND"));
+  assert.ok(extracted.includes("PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_BINDING_REQUIRED"));
+  assert.ok(extracted.includes("NODE_REFERENCE_ERROR"));
+  assert.ok(extracted.includes("FS_ENOENT"));
+  assert.ok(extracted.includes("raw_log_included=false"));
+  assert.match(extracted, /stderr_tail_sha256=[0-9a-f]{64}/u);
+  assert.equal(extracted.includes(secret), false);
+  assert.equal(extracted.includes("private-package"), false);
+  assert.equal(extracted.includes("/private/path"), false);
+
   assert.equal(
     source.includes('printf \'%s\\n\' "$task_failure_path"'),
     false,
@@ -482,3 +525,4 @@ test("Research Production read-only evidence exports only sanitized forward fail
     "Hub reporting must never carry raw stderr",
   );
 });
+
