@@ -97,6 +97,7 @@ on:
       - market-prediction-lab/src/natural-paper-trigger-bound-settlement-cost-producer-v1.js
       - market-prediction-lab/src/recurring-paper-loop-v1.js
       - market-prediction-lab/scripts/run-paper-forward-schedule.js
+      - market-prediction-lab/scripts/run-shadow-cycle.js
       - market-prediction-lab/tests/authoritative-natural-paper-accounting-v1.test.js
       - market-prediction-lab/tests/authoritative-paper-runtime-factory-v1.test.js
       - market-prediction-lab/tests/authoritative-paper-runtime-package-v1.test.js
@@ -136,6 +137,8 @@ on:
       - market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
       - ops/research-production-readonly-evidence.sh
       - .github/workflows/research-production-natural-cycle-evidence.yml
+      - .github/workflows/research-production-forward-one-shot.yml
+      - research-production/test/research-production-forward-one-shot-workflow.test.mjs
       - ops/install-paper-forward-schedule.sh
       - ops/bridge-paper-forward-no-deploy-snapshot.mjs
       - ops/run-paper-forward-flat-snapshot-republish.mjs
@@ -302,6 +305,7 @@ jobs:
             market-prediction-lab/src/natural-paper-trigger-bound-settlement-cost-producer-v1.js
             market-prediction-lab/src/recurring-paper-loop-v1.js
             market-prediction-lab/scripts/run-paper-forward-schedule.js
+            market-prediction-lab/scripts/run-shadow-cycle.js
             market-prediction-lab/tests/authoritative-natural-paper-accounting-v1.test.js
             market-prediction-lab/tests/authoritative-paper-runtime-factory-v1.test.js
             market-prediction-lab/tests/authoritative-paper-runtime-package-v1.test.js
@@ -357,6 +361,8 @@ jobs:
             market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
             ops/research-production-readonly-evidence.sh
             .github/workflows/research-production-natural-cycle-evidence.yml
+            .github/workflows/research-production-forward-one-shot.yml
+            research-production/test/research-production-forward-one-shot-workflow.test.mjs
             ops/install-paper-forward-schedule.sh
             ops/bridge-paper-forward-no-deploy-snapshot.mjs
             ops/run-paper-forward-flat-snapshot-republish.mjs
