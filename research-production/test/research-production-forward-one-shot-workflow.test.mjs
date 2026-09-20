@@ -95,3 +95,16 @@ test('forward one-shot readback is exact-release-bound and uses existing read-on
   assert.ok(source.includes('deployment_executed=0'));
   assert.ok(source.includes('database_changes=0'));
 });
+
+
+test('forward one-shot resolves temporary files at step runtime instead of job-level runner context', async () => {
+  const source = await readFile(WORKFLOW, 'utf8');
+
+  assert.equal(source.includes('${{ runner.temp }}'), false);
+  assert.ok(source.includes('SERVICE_FILE="$RUNNER_TEMP/research-production-forward-one-shot-service.txt"'));
+  assert.ok(source.includes('EVIDENCE_FILE="$RUNNER_TEMP/research-production-forward-one-shot-evidence.txt"'));
+  assert.ok(source.includes('service_file=$SERVICE_FILE'));
+  assert.ok(source.includes('evidence_file=$EVIDENCE_FILE'));
+  assert.ok(source.includes('steps.service.outputs.service_file'));
+  assert.ok(source.includes('steps.evidence.outputs.evidence_file'));
+});
