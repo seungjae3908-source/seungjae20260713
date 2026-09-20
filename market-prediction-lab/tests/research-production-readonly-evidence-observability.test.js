@@ -433,3 +433,50 @@ test("Autonomous Alpha observer fails closed on unsafe Paper runtime or unsafe h
   assert.equal(unsafeHandoff.status, "BLOCKED_DATA");
   assert.deepEqual(unsafeHandoff.blockers, ["ALPHA_HANDOFF_INVALID_OR_UNSAFE"]);
 });
+
+
+test("Research Production read-only evidence exports only sanitized forward failure signatures", async () => {
+  const [source, workflow] = await Promise.all([
+    readFile(SCRIPT, "utf8"),
+    readFile(WORKFLOW, "utf8"),
+  ]);
+
+  for (const token of [
+    "TASK_FAILURE_SIGNATURE",
+    "research-production-task-failure-signature.mjs",
+    "tail -c 65536",
+    "raw_log_included=false",
+    "FAILED_TASK_STDERR_PATH_UNAVAILABLE",
+    "FAILED_TASK_STDERR_MISSING",
+    "SIGNATURE_EXTRACTION_FAILED",
+  ]) {
+    assert.ok(source.includes(token), `missing safe task failure diagnostic token: ${token}`);
+  }
+
+  for (const token of [
+    "shadow_failure_signatures",
+    "shadow_failure_categories",
+    "shadow_failure_stderr_sha256",
+    "paper_failure_signatures",
+    "paper_failure_categories",
+    "paper_failure_stderr_sha256",
+  ]) {
+    assert.ok(workflow.includes(token), `missing sanitized Hub failure field: ${token}`);
+  }
+
+  assert.ok(
+    source.includes('resolved.endsWith(`${sep}${id}${sep}stderr.log`)')
+      || source.includes('stderr.log'),
+    "failure stderr resolver must remain task-scoped",
+  );
+  assert.equal(
+    source.includes('printf \'%s\\n\' "$task_failure_path"'),
+    false,
+    "raw server stderr path must not be printed",
+  );
+  assert.equal(
+    workflow.includes("raw_stderr"),
+    false,
+    "Hub reporting must never carry raw stderr",
+  );
+});
