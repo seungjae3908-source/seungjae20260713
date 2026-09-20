@@ -32,9 +32,9 @@ concurrency:
 
 env:
   LAB_DIR: market-prediction-lab
-  ARTIFACT_NAME: prediction-lab-rule0-1h-shadow-state-v6
+  ARTIFACT_NAME: prediction-lab-rule0-1h-shadow-state-v7
   WORKFLOW_FILE: prediction-lab-rule0-1h-shadow-sidecar.yml
-  CHAIN_CONTRACT: rule0-1h-artifact-chain-v6
+  CHAIN_CONTRACT: rule0-1h-artifact-chain-v7
   CANONICAL_OI_PARITY_BLOB: a8d57ada7685cc7dc081ce9205718d83d99cd5b0
   EXECUTION_FINGERPRINT_SCRIPT: market-prediction-lab/scripts/compute-rule0-1h-execution-fingerprint.js
 
@@ -94,7 +94,7 @@ jobs:
         working-directory: ${{ env.LAB_DIR }}
         run: node --test tests/derivatives-history.test.js tests/rule-model-shadow-challenger.test.js tests/rule0-execution-fingerprint.test.js
 
-      - name: Resolve latest v6 predecessor artifact on this branch
+      - name: Resolve latest chain predecessor artifact on this branch
         id: predecessor
         shell: bash
         env:
@@ -123,7 +123,7 @@ jobs:
             echo "artifact_id=$artifact_id" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Restore and verify v6 predecessor state
+      - name: Restore and verify chain predecessor state
         if: steps.predecessor.outputs.found == 'true'
         shell: bash
         env:
@@ -211,7 +211,7 @@ jobs:
           console.log(JSON.stringify({ status: summary.status, inferenceBlockedSymbols: Object.keys(blockers), total: summary.metrics?.total, settled: summary.metrics?.settled, pending: summary.metrics?.pending, gate: summary.gate?.status }, null, 2));
           NODE
 
-      - name: Build immutable v6 artifact-chain manifest
+      - name: Build immutable artifact-chain manifest
         shell: bash
         env:
           RESEARCH_SHA: ${{ steps.resolve.outputs.ref }}
@@ -268,7 +268,7 @@ jobs:
           fs.writeFileSync('sidecar-artifact/manifest.json', `${JSON.stringify(manifest, null, 2)}\n`);
           NODE
 
-      - name: Upload immutable v6 sidecar state artifact
+      - name: Upload immutable sidecar state artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
