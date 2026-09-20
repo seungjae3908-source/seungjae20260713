@@ -381,6 +381,32 @@ else
           `freshness=${clean(evidence?.freshness)}`,
         ].join(" "));
       }
+      const evidenceComplete = selected.naturalFunnelMeasurements
+        .find(item => (item?.stage ?? item?.name) === "EVIDENCE_COMPLETE");
+      const evidenceReason = String(
+        selected.authoritativeFirstZeroReasonEvidenceByStage?.EVIDENCE_COMPLETE?.reasonCode ?? "",
+      );
+      const sourceBlockers = Array.isArray(value.authoritativeSourceBlockers)
+        ? value.authoritativeSourceBlockers.map(item => String(item))
+        : [];
+      const ownerCount = Number(value.authoritativeEvidenceOwners?.authoritativeOwnersConnected);
+      const wiringStatus = String(value.authoritativeSourceWiringStatus ?? "");
+      const connected = (Number.isFinite(ownerCount) && ownerCount >= 5)
+        || /CONNECTED|CALLABLES_READY|READY/u.test(wiringStatus);
+      for (const [type, reasonToken, blockerToken] of [
+        ["CONTRACT_RULES", "MISSING_CONTRACT_RULES", "AUTHORITATIVE_CONTRACT_RULES_SOURCE_UNAVAILABLE"],
+        ["EXECUTION_OBSERVATION", "MISSING_EXECUTION_OBSERVATION", "AUTHORITATIVE_EXECUTION_OBSERVATION_SOURCE_UNAVAILABLE"],
+        ["LEARNING_SNAPSHOT", "MISSING_LEARNING_SNAPSHOT", "AUTHORITATIVE_LEARNING_SNAPSHOT_SOURCE_UNAVAILABLE"],
+        ["PAPER_STATE", "MISSING_PAPER_STATE", "AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE"],
+        ["SUPPLEMENTAL_COST_EVIDENCE", "MISSING_SUPPLEMENTAL_COST_EVIDENCE", "AUTHORITATIVE_SUPPLEMENTAL_COST_SOURCE_UNAVAILABLE"],
+      ]) {
+        const missingNow = evidenceReason.includes(reasonToken)
+          || sourceBlockers.some(item => item.includes(blockerToken));
+        const state = missingNow
+          ? (connected ? "CONNECTED_NOT_OBSERVED" : "CODE_EXISTS_NOT_CONNECTED")
+          : (Number(evidenceComplete?.count) > 0 ? "OBSERVED" : "MISSING");
+        console.log(`PAPER_EVIDENCE_SOURCE type=${type} state=${state}`);
+      }
     });
   '
 fi
