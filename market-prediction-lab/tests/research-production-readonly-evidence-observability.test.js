@@ -5,6 +5,9 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  buildAutonomousAlphaNaturalPaperObserverReceiptV1,
+} from "../scripts/run-paper-forward-schedule.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const SCRIPT = join(REPO_ROOT, "ops/research-production-readonly-evidence.sh");
@@ -285,4 +288,148 @@ test("workflow recomputes FIRST_ZERO from the extracted v5 counts and exact rele
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+
+test("Autonomous Alpha observer remains Paper-only while waiting for a runtime handoff", async () => {
+  const receipt = await buildAutonomousAlphaNaturalPaperObserverReceiptV1({
+    rootDirectory: "/var/lib/investment-research-production/forward/paper",
+    researchCodeSha: "a".repeat(40),
+    observedAtMs: 1,
+    paperOutput: {
+      scheduleActive: true,
+      externalFinancialMutationAllowed: false,
+      privateRequestCount: 0,
+      financialMutationCount: 0,
+      orderCount: 0,
+      liveTrading: false,
+      orderAuthority: false,
+      cycleId: "cycle-1",
+      naturalScheduleInvocation: true,
+      canonicalEntryCount: 0,
+      canonicalPositionCount: 0,
+      canonicalSettlementCount: 0,
+    },
+    readHandoff: async () => null,
+  });
+
+  assert.equal(receipt.status, "WAITING_FOR_ALPHA_HANDOFF");
+  assert.deepEqual(receipt.blockers, ["ALPHA_HANDOFF_MISSING"]);
+  assert.equal(receipt.paperOnly, true);
+  assert.equal(receipt.observerOnly, true);
+  assert.equal(receipt.liveTrading, false);
+  assert.equal(receipt.autoTrading, false);
+  assert.equal(receipt.realOrderEnabled, false);
+  assert.equal(receipt.privateTradingApiAllowed, false);
+  assert.equal(receipt.executionAuthority, "NONE");
+  assert.equal(receipt.privateRequestCount, 0);
+  assert.equal(receipt.realOrderCount, 0);
+  assert.equal(receipt.profitabilityProven, false);
+});
+
+test("Autonomous Alpha observer revalidates a handoff through the lineage firewall without gaining authority", async () => {
+  let readinessInput = null;
+  const receipt = await buildAutonomousAlphaNaturalPaperObserverReceiptV1({
+    rootDirectory: "/var/lib/investment-research-production/forward/paper",
+    researchCodeSha: "b".repeat(40),
+    observedAtMs: 2,
+    paperOutput: {
+      scheduleActive: true,
+      externalFinancialMutationAllowed: false,
+      privateRequestCount: 0,
+      financialMutationCount: 0,
+      orderCount: 0,
+      liveTrading: false,
+      orderAuthority: false,
+      cycleId: "cycle-2",
+      naturalScheduleInvocation: true,
+      canonicalEntryCount: 1,
+      canonicalPositionCount: 1,
+      canonicalSettlementCount: 0,
+    },
+    readHandoff: async () => ({
+      schemaVersion: "autonomous-alpha-runtime-handoff-v1",
+      sourceSha: "b".repeat(40),
+      handoffDigest: "c".repeat(64),
+      executionAuthority: "NONE",
+      liveTrading: false,
+      autoTrading: false,
+      realOrderEnabled: false,
+      privateTradingApiAllowed: false,
+      worldKnowledge: { status: "WORLD_KNOWLEDGE_READY" },
+      alphaGenome: { status: "ALPHA_GENOME_READY_FOR_FALSIFICATION" },
+      redTeam: { status: "RED_TEAM_SURVIVOR_RESEARCH_ONLY" },
+      forecast: { status: "FORECAST_READY_RESEARCH_ONLY" },
+      counterfactual: { status: "COUNTERFACTUAL_TWIN_EVALUATED_RESEARCH_ONLY" },
+      digitalTwin: { status: "MARKET_DIGITAL_TWIN_EVALUATED_RESEARCH_ONLY" },
+      championChallenger: { status: "CHAMPION_CHALLENGER_READY_FOR_NATURAL_PAPER" },
+      certification: { status: "READY_FOR_SEPARATE_NATURAL_PAPER_ACTIVATION_APPROVAL" },
+    }),
+    architectureReadinessBuilder: (input) => {
+      readinessInput = input;
+      return {
+        status: "ARCHITECTURE_READY_EVIDENCE_PENDING_INACTIVE",
+        architectureReady: true,
+        profitabilityProven: false,
+        blockers: [],
+        readinessDigest: "d".repeat(64),
+        executionAuthority: "NONE",
+        liveTradingAllowed: false,
+        autoTradingAllowed: false,
+        realOrderAllowed: false,
+      };
+    },
+  });
+
+  assert.equal(receipt.status, "ALPHA_OBSERVING_NATURAL_PAPER");
+  assert.equal(receipt.alphaHandoffPresent, true);
+  assert.equal(receipt.alphaHandoffDigest, "c".repeat(64));
+  assert.equal(receipt.naturalPaper.entryCount, 1);
+  assert.equal(receipt.profitabilityProven, false);
+  assert.equal(receipt.executionAuthority, "NONE");
+  assert.equal(receipt.realOrderCount, 0);
+  assert.equal(readinessInput.worldKnowledge.status, "WORLD_KNOWLEDGE_READY");
+  assert.equal(readinessInput.certification.status, "READY_FOR_SEPARATE_NATURAL_PAPER_ACTIVATION_APPROVAL");
+});
+
+test("Autonomous Alpha observer fails closed on unsafe Paper runtime or unsafe handoff", async () => {
+  const unsafePaper = await buildAutonomousAlphaNaturalPaperObserverReceiptV1({
+    rootDirectory: "/var/lib/investment-research-production/forward/paper",
+    researchCodeSha: "a".repeat(40),
+    observedAtMs: 3,
+    paperOutput: {
+      scheduleActive: true,
+      externalFinancialMutationAllowed: false,
+      privateRequestCount: 0,
+      financialMutationCount: 0,
+      orderCount: 1,
+      liveTrading: false,
+      orderAuthority: false,
+    },
+    readHandoff: async () => null,
+  });
+  assert.equal(unsafePaper.status, "BLOCKED_DATA");
+  assert.deepEqual(unsafePaper.blockers, ["ALPHA_OBSERVER_PAPER_RUNTIME_UNSAFE"]);
+
+  const unsafeHandoff = await buildAutonomousAlphaNaturalPaperObserverReceiptV1({
+    rootDirectory: "/var/lib/investment-research-production/forward/paper",
+    researchCodeSha: "a".repeat(40),
+    observedAtMs: 4,
+    paperOutput: {
+      scheduleActive: true,
+      externalFinancialMutationAllowed: false,
+      privateRequestCount: 0,
+      financialMutationCount: 0,
+      orderCount: 0,
+      liveTrading: false,
+      orderAuthority: false,
+    },
+    readHandoff: async () => ({
+      schemaVersion: "autonomous-alpha-runtime-handoff-v1",
+      sourceSha: "a".repeat(40),
+      executionAuthority: "LIVE",
+    }),
+  });
+  assert.equal(unsafeHandoff.status, "BLOCKED_DATA");
+  assert.deepEqual(unsafeHandoff.blockers, ["ALPHA_HANDOFF_INVALID_OR_UNSAFE"]);
 });
