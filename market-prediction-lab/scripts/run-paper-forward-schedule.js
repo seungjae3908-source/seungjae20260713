@@ -944,7 +944,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
   authoritativePaperPackageLoader = loadValidatedAuthoritativePaperRuntimePackage,
   paperStateOwnerFactory = createLosslessPaperStateSnapshotFileOwner,
   paperStateSourceFactory = null,
-  alphaArchitectureReadinessBuilder = buildAutonomousAlphaArchitectureReadinessV1,
+  alphaArchitectureReadinessBuilder = buildAutonomousAlphaArchitectureReadinessRuntimeV1,
   alphaHandoffReader = readConfiguredEvidenceRecord,
 } = {}) {
   if (!truthy(env.PAPER_FORWARD_SCHEDULE_ACTIVE)) {
