@@ -55,6 +55,7 @@ jobs:
           grep -q "preflight_failed" .github/workflows/research-production-natural-cycle-evidence.yml
           grep -Fq "const observed = (value) => measured && value ? value : 'unknown';" .github/workflows/research-production-natural-cycle-evidence.yml
           grep -q 'PAPER_NATURAL' ops/research-production-readonly-evidence.sh
+          grep -q 'PAPER_EVIDENCE_TRANSPORT' ops/research-production-readonly-evidence.sh
           grep -q 'buildNaturalPaperFirstZeroTraceFromRuntime' .github/workflows/research-production-natural-cycle-evidence.yml
           python3 scripts/agent_hub_rollover_v2.py self-test
           grep -Fq 'python3 scripts/agent_hub_rollover_v2.py resolve' .github/workflows/research-production-natural-cycle-evidence.yml
@@ -205,9 +206,20 @@ jobs:
           const taskFailure = (id) => taskFailures.find((row) => row.profile === 'forward' && row.id === id) ?? {};
           const shadowFailure = taskFailure('shadow-forward');
           const paperFailure = taskFailure('paper-forward');
+          const shadowGroupFailures = all('SHADOW_GROUP_FAILURE ').map((line) => fields(line));
+          const shadowFailureDetails = shadowGroupFailures.length
+            ? shadowGroupFailures.map((row) => [
+                row.name ?? 'unknown',
+                row.status ?? 'unknown',
+                row.error_name ?? 'unknown',
+                row.error_message ?? 'unknown',
+              ].join(':')).join('|').slice(0, 1800)
+            : 'none';
           const paper = fields(find('PAPER_RUNTIME '));
           const ledger = fields(find('PAPER_LEDGER '));
           const natural = fields(find('PAPER_NATURAL '));
+          const evidenceSources = all('PAPER_EVIDENCE_SOURCE ').map(fields);
+          const evidenceTransport = fields(find('PAPER_EVIDENCE_TRANSPORT '));
           const timersHealthy = ['forward','fast-historical','long-history'].every((p) => timer[p]?.enabled === 'enabled' && timer[p]?.active === 'active');
           const forwardTasks = tasks.filter((row) => row.profile === 'forward');
           const forwardProven = timer.forward?.last_trigger && !/^n\/a|^null|^$/.test(timer.forward.last_trigger)
@@ -270,6 +282,7 @@ jobs:
           writeOutput('shadow_failure_signatures', shadowFailure.signatures);
           writeOutput('shadow_failure_categories', shadowFailure.categories);
           writeOutput('shadow_failure_stderr_sha256', shadowFailure.stderr_tail_sha256);
+          writeOutput('shadow_failure_details', shadowFailureDetails);
           writeOutput('paper_failure_present', paperFailure.present);
           writeOutput('paper_failure_blocker', paperFailure.blocker);
           writeOutput('paper_failure_signatures', paperFailure.signatures);
@@ -288,6 +301,23 @@ jobs:
           writeOutput('natural_measurement_source', naturalTrace?.runtimeAdapter.selectedMeasurementSource);
           const stageTrace = naturalTrace?.stages.map(({ stage, count, status: stageStatus }) => ({ stage, count, status: stageStatus })) ?? null;
           writeOutput('natural_stage_trace_base64', stageTrace == null ? null : Buffer.from(JSON.stringify(stageTrace), 'utf8').toString('base64url'));
+          writeOutput('natural_evidence_source_trace', evidenceSources.length
+            ? evidenceSources.map((row) => `${row.type}=${row.state}`).join(',')
+            : null);
+          writeOutput('natural_evidence_source_connected_not_observed_count',
+            evidenceSources.filter((row) => row.state === 'CONNECTED_NOT_OBSERVED').length);
+          writeOutput('natural_evidence_source_observed_count',
+            evidenceSources.filter((row) => row.state === 'OBSERVED').length);
+          writeOutput('evidence_source_wiring_status', evidenceTransport.wiring_status);
+          writeOutput('paper_state_transport_status', evidenceTransport.paper_state_status);
+          writeOutput('paper_state_transport_state', evidenceTransport.paper_state_state);
+          writeOutput('paper_state_transport_reason', evidenceTransport.paper_state_reason);
+          writeOutput('paper_state_source_sha_exact', evidenceTransport.paper_state_source_sha_exact);
+          writeOutput('paper_state_publisher_account_bound', evidenceTransport.paper_state_publisher_account_bound);
+          writeOutput('paper_state_callback_invoked', evidenceTransport.paper_state_callback_invoked);
+          writeOutput('risk_policy_record_transport', evidenceTransport.risk_policy_record);
+          writeOutput('supplemental_cost_transport', evidenceTransport.supplemental_cost);
+          writeOutput('authoritative_source_blockers', evidenceTransport.source_blockers);
           if (status === 'failed') process.exitCode = 1;
           NODE
         env:
@@ -324,6 +354,7 @@ jobs:
           SHADOW_FAILURE_SIGNATURES: ${{ steps.verdict.outputs.shadow_failure_signatures }}
           SHADOW_FAILURE_CATEGORIES: ${{ steps.verdict.outputs.shadow_failure_categories }}
           SHADOW_FAILURE_STDERR_SHA256: ${{ steps.verdict.outputs.shadow_failure_stderr_sha256 }}
+          SHADOW_FAILURE_DETAILS: ${{ steps.verdict.outputs.shadow_failure_details }}
           PAPER_FAILURE_PRESENT: ${{ steps.verdict.outputs.paper_failure_present }}
           PAPER_FAILURE_BLOCKER: ${{ steps.verdict.outputs.paper_failure_blocker }}
           PAPER_FAILURE_SIGNATURES: ${{ steps.verdict.outputs.paper_failure_signatures }}
@@ -341,6 +372,19 @@ jobs:
           NATURAL_FIRST_ZERO_REASON_EVIDENCE_STATUS: ${{ steps.verdict.outputs.natural_first_zero_reason_evidence_status }}
           NATURAL_MEASUREMENT_SOURCE: ${{ steps.verdict.outputs.natural_measurement_source }}
           NATURAL_STAGE_TRACE_BASE64: ${{ steps.verdict.outputs.natural_stage_trace_base64 }}
+          NATURAL_EVIDENCE_SOURCE_TRACE: ${{ steps.verdict.outputs.natural_evidence_source_trace }}
+          NATURAL_EVIDENCE_SOURCE_CONNECTED_NOT_OBSERVED_COUNT: ${{ steps.verdict.outputs.natural_evidence_source_connected_not_observed_count }}
+          NATURAL_EVIDENCE_SOURCE_OBSERVED_COUNT: ${{ steps.verdict.outputs.natural_evidence_source_observed_count }}
+          EVIDENCE_SOURCE_WIRING_STATUS: ${{ steps.verdict.outputs.evidence_source_wiring_status }}
+          PAPER_STATE_TRANSPORT_STATUS: ${{ steps.verdict.outputs.paper_state_transport_status }}
+          PAPER_STATE_TRANSPORT_STATE: ${{ steps.verdict.outputs.paper_state_transport_state }}
+          PAPER_STATE_TRANSPORT_REASON: ${{ steps.verdict.outputs.paper_state_transport_reason }}
+          PAPER_STATE_SOURCE_SHA_EXACT: ${{ steps.verdict.outputs.paper_state_source_sha_exact }}
+          PAPER_STATE_PUBLISHER_ACCOUNT_BOUND: ${{ steps.verdict.outputs.paper_state_publisher_account_bound }}
+          PAPER_STATE_CALLBACK_INVOKED: ${{ steps.verdict.outputs.paper_state_callback_invoked }}
+          RISK_POLICY_RECORD_TRANSPORT: ${{ steps.verdict.outputs.risk_policy_record_transport }}
+          SUPPLEMENTAL_COST_TRANSPORT: ${{ steps.verdict.outputs.supplemental_cost_transport }}
+          AUTHORITATIVE_SOURCE_BLOCKERS: ${{ steps.verdict.outputs.authoritative_source_blockers }}
         with:
           script: |
             const measured = process.env.EVIDENCE_OUTCOME === 'success';
@@ -374,6 +418,7 @@ jobs:
               `shadow_failure_signatures: ${observed(process.env.SHADOW_FAILURE_SIGNATURES)}`,
               `shadow_failure_categories: ${observed(process.env.SHADOW_FAILURE_CATEGORIES)}`,
               `shadow_failure_stderr_sha256: ${observed(process.env.SHADOW_FAILURE_STDERR_SHA256)}`,
+              `shadow_failure_details: ${observed(process.env.SHADOW_FAILURE_DETAILS)}`,
               `paper_failure_present: ${observed(process.env.PAPER_FAILURE_PRESENT)}`,
               `paper_failure_blocker: ${observed(process.env.PAPER_FAILURE_BLOCKER)}`,
               `paper_failure_signatures: ${observed(process.env.PAPER_FAILURE_SIGNATURES)}`,
@@ -388,6 +433,19 @@ jobs:
               `natural_identity_complete: ${observed(process.env.NATURAL_IDENTITY_COMPLETE)}`,
               `natural_measurement_source: ${observed(process.env.NATURAL_MEASUREMENT_SOURCE)}`,
               `natural_stage_trace: ${naturalStageTrace}`,
+              `authoritative_evidence_sources: ${observed(process.env.NATURAL_EVIDENCE_SOURCE_TRACE)}`,
+              `authoritative_evidence_connected_not_observed: ${observed(process.env.NATURAL_EVIDENCE_SOURCE_CONNECTED_NOT_OBSERVED_COUNT)}`,
+              `authoritative_evidence_observed: ${observed(process.env.NATURAL_EVIDENCE_SOURCE_OBSERVED_COUNT)}`,
+              `evidence_source_wiring_status: ${observed(process.env.EVIDENCE_SOURCE_WIRING_STATUS)}`,
+              `paper_state_transport_status: ${observed(process.env.PAPER_STATE_TRANSPORT_STATUS)}`,
+              `paper_state_transport_state: ${observed(process.env.PAPER_STATE_TRANSPORT_STATE)}`,
+              `paper_state_transport_reason: ${observed(process.env.PAPER_STATE_TRANSPORT_REASON)}`,
+              `paper_state_source_sha_exact: ${observed(process.env.PAPER_STATE_SOURCE_SHA_EXACT)}`,
+              `paper_state_publisher_account_bound: ${observed(process.env.PAPER_STATE_PUBLISHER_ACCOUNT_BOUND)}`,
+              `paper_state_callback_invoked: ${observed(process.env.PAPER_STATE_CALLBACK_INVOKED)}`,
+              `risk_policy_record_transport: ${observed(process.env.RISK_POLICY_RECORD_TRANSPORT)}`,
+              `supplemental_cost_transport: ${observed(process.env.SUPPLEMENTAL_COST_TRANSPORT)}`,
+              `authoritative_source_blockers: ${observed(process.env.AUTHORITATIVE_SOURCE_BLOCKERS)}`,
               `FIRST_ZERO_STAGE: ${observed(process.env.NATURAL_FIRST_ZERO_STAGE)}`,
               `FIRST_ZERO_REASON: ${observed(process.env.NATURAL_FIRST_ZERO_REASON)}`,
               `FIRST_ZERO_REASON_EVIDENCE_STATUS: ${observed(process.env.NATURAL_FIRST_ZERO_REASON_EVIDENCE_STATUS)}`,
