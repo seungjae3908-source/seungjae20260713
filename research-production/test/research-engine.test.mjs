@@ -63,7 +63,8 @@ test('forward plan isolates state and orders natural Shadow before Paper', () =>
   });
   const paper = plan.find((task) => task.id === 'paper-forward');
   const shadow = plan.find((task) => task.id === 'shadow-forward');
-  assert.deepEqual(plan.map((task) => task.id), ['shadow-forward', 'paper-forward']);
+  const alphaObserver = plan.find((task) => task.id === 'autonomous-alpha-observer');
+  assert.deepEqual(plan.map((task) => task.id), ['shadow-forward', 'paper-forward', 'autonomous-alpha-observer']);
   assert.equal(paper.env.PAPER_FORWARD_ROOT, join(stateRoot, 'forward', 'paper'));
   assert.equal(paper.env.PAPER_FORWARD_RESEARCH_SHA, SHA);
   assert.equal(paper.env.PAPER_FORWARD_ACTIVATION_AT_MS, '12345');
@@ -76,6 +77,17 @@ test('forward plan isolates state and orders natural Shadow before Paper', () =>
     join(runtimeDirectory, 'paper-state', 'paper-state-v2.json'),
   );
   assert.equal(paper.env.LIVE_TRADING, 'false');
+  assert.equal(alphaObserver.env.PAPER_FORWARD_ROOT, join(stateRoot, 'forward', 'paper'));
+  assert.equal(alphaObserver.env.PAPER_FORWARD_RESEARCH_SHA, SHA);
+  assert.equal(alphaObserver.env.AUTONOMOUS_ALPHA_OBSERVER_ACTIVE, 'true');
+  assert.equal(
+    alphaObserver.env.AUTONOMOUS_ALPHA_HANDOFF_PATH,
+    join(stateRoot, 'forward', 'paper', 'autonomous-alpha', 'handoff-v1.json'),
+  );
+  assert.equal(alphaObserver.env.LIVE_TRADING, 'false');
+  assert.equal(alphaObserver.env.PRIVATE_TRADING_API_ALLOWED, 'false');
+  assert.equal(alphaObserver.env.ORDER_AUTHORITY, 'false');
+  assert.deepEqual(alphaObserver.acceptedExitCodes, [0, 2]);
   assert.equal(shadow.args.at(-2), join(stateRoot, 'forward', 'shadow-state.json'));
   assert.equal(shadow.args.at(-1), join(stateRoot, 'forward', 'shadow-summary.json'));
 });
@@ -136,7 +148,7 @@ test('parallel cycle uses isolated per-task workspaces', async () => {
   }
 });
 
-test('Paper activation timestamp is persisted and forward execution is serialized Shadow then Paper', async () => {
+test('Paper activation timestamp is persisted and forward execution is serialized Shadow then Paper then Alpha observer', async () => {
   const repoRoot = await fakeRepo();
   const stateRoot = join(repoRoot, 'research-state');
   const first = await runResearchCycle({
@@ -151,7 +163,7 @@ test('Paper activation timestamp is persisted and forward execution is serialize
   });
   assert.equal(first.status, 'complete');
   assert.equal(first.concurrency, 1);
-  assert.deepEqual(first.results.map((row) => row.id), ['shadow-forward', 'paper-forward']);
+  assert.deepEqual(first.results.map((row) => row.id), ['shadow-forward', 'paper-forward', 'autonomous-alpha-observer']);
   const activation = JSON.parse(await readFile(join(stateRoot, 'forward', 'activation.json'), 'utf8'));
   assert.equal(activation.activationAtMs, 123456789);
   await new Promise((resolve) => setTimeout(resolve, 3));
