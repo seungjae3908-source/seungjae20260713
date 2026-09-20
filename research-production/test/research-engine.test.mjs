@@ -7,6 +7,7 @@ import {
   assertResearchSafety,
   buildTaskPlan,
   preflightResearchProduction,
+  prepareResearchTaskWorkspace,
   PROFILES,
   runResearchCycle,
   sanitizeChildEnv,
@@ -25,6 +26,19 @@ async function fakeRepo() {
     const target = join(lab, relative);
     await mkdir(join(target, '..'), { recursive: true });
     await writeFile(target, relative.endsWith('.json') ? '{}\n' : 'console.log("ok")\n');
+  }
+  const sharedFiles = [
+    'packages/strategy-hypothesis/package.json',
+    'packages/strategy-hypothesis/src/index.js',
+    'packages/strategy-hypothesis/src/contract.js',
+    'packages/external-research/package.json',
+    'packages/external-research/src/index.js',
+    'packages/external-research/src/contract.js',
+  ];
+  for (const relative of sharedFiles) {
+    const target = join(root, relative);
+    await mkdir(join(target, '..'), { recursive: true });
+    await writeFile(target, relative.endsWith('.json') ? '{}\n' : `export const marker = "${relative}";\n`);
   }
   return root;
 }
@@ -112,6 +126,39 @@ test('preflight requires exact SHA and validates lab layout', async () => {
   assert.equal(result.checkoutSha, null);
   assert.equal(result.safety.liveTrading, false);
   await assert.rejects(() => preflightResearchProduction({ repoRoot, stateRoot, researchSha: 'main', env: {}, verifyGitHead: false }), /exact 40-character/);
+});
+
+test('preflight fails closed when required shared Research packages are missing', async () => {
+  const repoRoot = await fakeRepo();
+  const stateRoot = join(repoRoot, 'research-state-missing-shared');
+  await import('node:fs/promises').then(({ rm }) =>
+    rm(join(repoRoot, 'packages', 'strategy-hypothesis'), { recursive: true, force: true }));
+
+  await assert.rejects(
+    () => preflightResearchProduction({
+      repoRoot,
+      stateRoot,
+      researchSha: SHA,
+      env: {},
+      verifyGitHead: false,
+    }),
+    /research runtime prerequisites missing: packages\/strategy-hypothesis/,
+  );
+});
+
+test('task workspace copies only the bounded shared package set beside market-prediction-lab', async () => {
+  const repoRoot = await fakeRepo();
+  const taskDir = join(repoRoot, 'research-state', 'runs', 'cycle-1', 'paper-forward');
+  const result = await prepareResearchTaskWorkspace({
+    labRoot: join(repoRoot, 'market-prediction-lab'),
+    taskDir,
+  });
+
+  assert.equal(result.workspaceRoot, join(taskDir, 'workspace', 'market-prediction-lab'));
+  assert.deepEqual(result.copiedSharedPackages, ['strategy-hypothesis', 'external-research']);
+  await access(join(taskDir, 'workspace', 'market-prediction-lab', 'package.json'));
+  await access(join(taskDir, 'workspace', 'packages', 'strategy-hypothesis', 'src', 'contract.js'));
+  await access(join(taskDir, 'workspace', 'packages', 'external-research', 'src', 'index.js'));
 });
 
 test('parallel cycle uses isolated per-task workspaces', async () => {
