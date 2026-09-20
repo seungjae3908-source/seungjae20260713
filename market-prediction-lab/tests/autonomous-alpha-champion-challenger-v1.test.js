@@ -55,18 +55,28 @@ function world() {
   });
 }
 
-const digitalTwinResult = Object.freeze({
-  schemaVersion: MARKET_DIGITAL_TWIN_MICROSTRUCTURE_V1,
-  artifactType: "MARKET_DIGITAL_TWIN_RESULT",
-  status: "MARKET_DIGITAL_TWIN_EVALUATED_RESEARCH_ONLY",
-  resultDigest: "d".repeat(64),
-  executionAuthority: "NONE",
-});
+function digitalTwinResult(candidateId = "balanced") {
+  return Object.freeze({
+    schemaVersion: MARKET_DIGITAL_TWIN_MICROSTRUCTURE_V1,
+    artifactType: "MARKET_DIGITAL_TWIN_RESULT",
+    status: "MARKET_DIGITAL_TWIN_EVALUATED_RESEARCH_ONLY",
+    candidateId,
+    resultDigest: "d".repeat(64),
+    executionAuthority: "NONE",
+  });
+}
 
 function candidate(candidateId, metrics) {
   return {
     candidateId,
     metrics,
+    evidenceDigests: {
+      sealedOos: "a".repeat(64),
+      redTeam: "b".repeat(64),
+      digitalTwin: "d".repeat(64),
+      strategyHealth: "c".repeat(64),
+      fullCost: "e".repeat(64),
+    },
     sealedOosPassed: true,
     redTeamPassed: true,
     digitalTwinEvaluated: true,
@@ -164,7 +174,7 @@ test("champion challenger plan uses Pareto comparison instead of a scalar score"
   ];
 
   const result = buildChampionChallengerResearchPlanV1({
-    digitalTwinResult,
+    digitalTwinResult: digitalTwinResult("balanced"),
     candidates,
     incumbentCandidateId: "balanced",
   });
@@ -186,7 +196,7 @@ test("source reputation is explicitly excluded from candidate performance rankin
     claimOutcomes: [],
   });
   const result = buildChampionChallengerResearchPlanV1({
-    digitalTwinResult,
+    digitalTwinResult: digitalTwinResult("a"),
     candidates: [
       candidate("a", {
         costAdjustedExpectancy: 0.01,
@@ -222,7 +232,7 @@ test("champion challenger rejects candidates missing any evidence firewall", () 
   broken.fullCostApplied = false;
 
   const result = buildChampionChallengerResearchPlanV1({
-    digitalTwinResult,
+    digitalTwinResult: digitalTwinResult("broken"),
     candidates: [broken],
   });
 
@@ -233,7 +243,7 @@ test("champion challenger rejects candidates missing any evidence firewall", () 
 
 test("failure-memory persistence remains delegated to the existing owner", () => {
   const result = buildChampionChallengerResearchPlanV1({
-    digitalTwinResult,
+    digitalTwinResult: digitalTwinResult("a"),
     candidates: [
       candidate("a", {
         costAdjustedExpectancy: 0.01,
