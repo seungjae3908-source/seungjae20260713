@@ -128,6 +128,27 @@ test("source reputation is research-priority only and cannot become trust or tra
   assert.equal(reputation.executionAuthority, "NONE");
 });
 
+test("source reputation rejects duplicate claim outcomes instead of inflating research priority", () => {
+  const row = {
+    claimId: "claim-academic",
+    oosPass: true,
+    redTeamPass: true,
+    forwardPass: true,
+    failed: false,
+    pointInTimeSafe: true,
+    frozenCandidate: true,
+    finalHoldoutUsed: false,
+    executionAuthority: "NONE",
+  };
+  const reputation = buildSourceResearchReputationV1({
+    worldKnowledgeIngest: world(),
+    claimOutcomes: [row, { ...row }],
+  });
+
+  assert.equal(reputation.status, "BLOCKED_DATA");
+  assert.ok(reputation.blockers.includes("SOURCE_REPUTATION_DUPLICATE_CLAIM_OUTCOME"));
+});
+
 test("source reputation rejects contaminated final-holdout outcomes", () => {
   const reputation = buildSourceResearchReputationV1({
     worldKnowledgeIngest: world(),
