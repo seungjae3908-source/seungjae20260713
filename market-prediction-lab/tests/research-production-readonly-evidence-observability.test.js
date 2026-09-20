@@ -433,3 +433,96 @@ test("Autonomous Alpha observer fails closed on unsafe Paper runtime or unsafe h
   assert.equal(unsafeHandoff.status, "BLOCKED_DATA");
   assert.deepEqual(unsafeHandoff.blockers, ["ALPHA_HANDOFF_INVALID_OR_UNSAFE"]);
 });
+
+
+test("Research Production read-only evidence exports only sanitized forward failure signatures", async () => {
+  const [source, workflow] = await Promise.all([
+    readFile(SCRIPT, "utf8"),
+    readFile(WORKFLOW, "utf8"),
+  ]);
+
+  for (const token of [
+    "TASK_FAILURE_SIGNATURE",
+    "tail -c 65536",
+    "raw_log_included=false",
+    "FAILED_TASK_STDERR_PATH_UNAVAILABLE",
+    "FAILED_TASK_STDERR_MISSING",
+    "SIGNATURE_EXTRACTION_FAILED",
+    "ERR_MODULE_NOT_FOUND",
+    "PAPER_FORWARD_RUNTIME",
+  ]) {
+    assert.ok(source.includes(token), `missing safe task failure diagnostic token: ${token}`);
+  }
+
+  for (const token of [
+    "shadow_failure_signatures",
+    "shadow_failure_categories",
+    "shadow_failure_stderr_sha256",
+    "paper_failure_signatures",
+    "paper_failure_categories",
+    "paper_failure_stderr_sha256",
+  ]) {
+    assert.ok(workflow.includes(token), `missing sanitized Hub failure field: ${token}`);
+  }
+
+  const stateRoot = resolve("fixture-research-production-state");
+  const sha = "a".repeat(40);
+  const canonicalStderr = join(stateRoot, "runs", "cycle-1", "paper-forward", "stderr.log");
+  const resolver = inlineNodeScript(source, 'task_failure_path="$(read_file');
+  const canonicalCycle = JSON.stringify({
+    researchSha: sha,
+    results: [{ id: "paper-forward", status: "failed", stderrPath: canonicalStderr }],
+  });
+  assert.equal(
+    runInline(resolver, { input: canonicalCycle, args: [stateRoot, "paper-forward", sha] }),
+    canonicalStderr,
+  );
+
+  const outsideCycle = JSON.stringify({
+    researchSha: sha,
+    results: [{ id: "paper-forward", status: "failed", stderrPath: resolve("outside", "paper-forward", "stderr.log") }],
+  });
+  assert.equal(
+    runInline(resolver, { input: outsideCycle, args: [stateRoot, "paper-forward", sha] }),
+    "",
+  );
+  assert.equal(
+    runInline(resolver, { input: canonicalCycle, args: [stateRoot, "paper-forward", "b".repeat(40)] }),
+    "",
+  );
+
+  const extractor = inlineNodeScript(source, 'tail -c 65536 -- "$task_failure_path"');
+  const secret = "super-secret-token-value";
+  const extracted = runInline(extractor, {
+    input: [
+      "Error [ERR_MODULE_NOT_FOUND]: Cannot find package private-package",
+      "PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_BINDING_REQUIRED",
+      "ReferenceError: missingThing is not defined",
+      "ENOENT: /private/path",
+      secret,
+    ].join("\n"),
+    args: ["forward", "paper-forward"],
+  });
+  assert.ok(extracted.startsWith("TASK_FAILURE_SIGNATURE "));
+  assert.ok(extracted.includes("ERR_MODULE_NOT_FOUND"));
+  assert.ok(extracted.includes("PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_BINDING_REQUIRED"));
+  assert.ok(extracted.includes("NODE_REFERENCE_ERROR"));
+  assert.ok(extracted.includes("FS_ENOENT"));
+  assert.ok(extracted.includes("raw_log_included=false"));
+  assert.match(extracted, /stderr_tail_sha256=[0-9a-f]{64}/u);
+  assert.equal(extracted.includes(secret), false);
+  assert.equal(extracted.includes("private-package"), false);
+  assert.equal(extracted.includes("/private/path"), false);
+
+  assert.equal(
+    source.includes('printf \'%s\\n\' "$task_failure_path"'),
+    false,
+    "raw server stderr path must not be printed",
+  );
+  assert.equal(
+    workflow.includes("raw_stderr"),
+    false,
+    "Hub reporting must never carry raw stderr",
+  );
+});
+
