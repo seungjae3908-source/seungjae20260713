@@ -18,7 +18,10 @@ const championPlan = Object.freeze({
   artifactType: "CHAMPION_CHALLENGER_RESEARCH_PLAN",
   status: "CHAMPION_CHALLENGER_READY_FOR_NATURAL_PAPER",
   planDigest: "b".repeat(64),
-  candidates: [{ candidateId }],
+  candidates: [{
+    candidateId,
+    evidenceDigests: { redTeam: "3".repeat(64) },
+  }],
   executionAuthority: "NONE",
 });
 
