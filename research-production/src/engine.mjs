@@ -47,7 +47,6 @@ const REQUIRED_LAB_FILES = Object.freeze([
   'scripts/run-v5-history.js',
   'scripts/run-v6-history.js',
   'scripts/run-paper-forward-schedule.js',
-  'src/autonomous-alpha-architecture-readiness-v1.js',
   'scripts/run-shadow-cycle.js',
 ]);
 
