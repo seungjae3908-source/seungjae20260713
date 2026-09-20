@@ -35,6 +35,11 @@ function finite(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function digest64(value) {
+  const normalized = text(value)?.toLowerCase() ?? null;
+  return normalized && /^[0-9a-f]{64}$/u.test(normalized) ? normalized : null;
+}
+
 function safety() {
   return {
     researchOnly: true,
@@ -191,9 +196,19 @@ function normalizeCandidate(raw) {
     walkForwardStability: finite(raw?.metrics?.walkForwardStability),
     calibrationError: finite(raw?.metrics?.calibrationError),
   };
+  const evidenceDigests = {
+    sealedOos: digest64(raw?.evidenceDigests?.sealedOos),
+    redTeam: digest64(raw?.evidenceDigests?.redTeam),
+    digitalTwin: digest64(raw?.evidenceDigests?.digitalTwin),
+    strategyHealth: digest64(raw?.evidenceDigests?.strategyHealth),
+    fullCost: digest64(raw?.evidenceDigests?.fullCost),
+  };
   const reasons = [];
   if (!candidateId) reasons.push("CHALLENGER_CANDIDATE_ID_REQUIRED");
   if (Object.values(metrics).some((value) => value == null)) reasons.push("CHALLENGER_METRICS_REQUIRED");
+  if (Object.values(evidenceDigests).some((value) => value == null)) {
+    reasons.push("CHALLENGER_EVIDENCE_DIGESTS_REQUIRED");
+  }
   if (metrics.profitFactor != null && metrics.profitFactor < 0) reasons.push("CHALLENGER_PROFIT_FACTOR_INVALID");
   if (metrics.maximumDrawdown != null && metrics.maximumDrawdown < 0) reasons.push("CHALLENGER_DRAWDOWN_INVALID");
   if (metrics.calibrationError != null && metrics.calibrationError < 0) reasons.push("CHALLENGER_CALIBRATION_INVALID");
@@ -210,6 +225,7 @@ function normalizeCandidate(raw) {
   return deepFreeze({
     candidateId: candidateId ?? null,
     metrics,
+    evidenceDigests,
     eligibleForResearchCompetition: reasons.length === 0,
     reasons: [...new Set(reasons)].sort(),
   });
@@ -262,6 +278,13 @@ export function buildChampionChallengerResearchPlanV1({
   }
   const ids = normalized.map((candidate) => candidate.candidateId);
   if (new Set(ids).size !== ids.length) blockers.push("CHALLENGER_DUPLICATE_CANDIDATE_ID");
+  const digitalTwinCandidateId = text(digitalTwinResult?.candidateId);
+  const digitalTwinCandidate = normalized.find((candidate) => candidate.candidateId === digitalTwinCandidateId);
+  if (!digitalTwinCandidateId || !digitalTwinCandidate) {
+    blockers.push("CHALLENGER_DIGITAL_TWIN_CANDIDATE_MISSING");
+  } else if (digitalTwinCandidate.evidenceDigests.digitalTwin !== digitalTwinResult.resultDigest) {
+    blockers.push("CHALLENGER_DIGITAL_TWIN_LINEAGE_MISMATCH");
+  }
 
   if (blockers.length > 0) {
     return deepFreeze({
