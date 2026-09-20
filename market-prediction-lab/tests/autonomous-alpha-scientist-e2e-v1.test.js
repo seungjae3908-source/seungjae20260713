@@ -311,7 +311,7 @@ function buildDigitalTwin(counterfactual) {
   return evaluateMarketDigitalTwinV1({ plan, scenarioResults });
 }
 
-function buildChampion(digitalTwin) {
+function buildChampion(digitalTwin, redTeam) {
   return buildChampionChallengerResearchPlanV1({
     digitalTwinResult: digitalTwin,
     candidates: [{
@@ -325,7 +325,7 @@ function buildChampion(digitalTwin) {
       },
       evidenceDigests: {
         sealedOos: HEX("2"),
-        redTeam: HEX("3"),
+        redTeam: redTeam.resultDigest,
         digitalTwin: digitalTwin.resultDigest,
         strategyHealth: HEX("4"),
         fullCost: HEX("5"),
@@ -363,7 +363,7 @@ test("Autonomous Alpha Scientist eight-stage chain is lineage-continuous and sto
   const forecast = buildForecast(redTeam);
   const counterfactual = buildCounterfactual(forecast);
   const digitalTwin = buildDigitalTwin(counterfactual);
-  const championChallenger = buildChampion(digitalTwin);
+  const championChallenger = buildChampion(digitalTwin, redTeam);
   const certification = buildAutonomousAlphaCertificationV1({
     championChallengerPlan: championChallenger,
     naturalPaperCandidate: inactiveNaturalPaperCandidate(),
@@ -406,7 +406,7 @@ test("end-to-end readiness fails closed if one middle-stage lineage digest is sw
   const forecast = buildForecast(redTeam);
   const counterfactual = buildCounterfactual(forecast);
   const digitalTwin = buildDigitalTwin(counterfactual);
-  const championChallenger = buildChampion(digitalTwin);
+  const championChallenger = buildChampion(digitalTwin, redTeam);
   const certification = buildAutonomousAlphaCertificationV1({
     championChallengerPlan: championChallenger,
     naturalPaperCandidate: inactiveNaturalPaperCandidate(),
