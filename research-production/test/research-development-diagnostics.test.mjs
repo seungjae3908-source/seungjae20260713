@@ -78,6 +78,23 @@ test('profile identity and source evidence digests are mandatory',()=>{
   assert.throws(()=>buildResearchDevelopmentDiagnosticV1(input({sourceRole:'OOS'})),/DEVELOPMENT_ONLY_SOURCE_REQUIRED/);
 });
 
+test('diagnostic persistence refuses relative and protected application storage roots',async()=>{
+  await assert.rejects(
+    persistResearchDevelopmentDiagnosticsV1({
+      stateRoot:'relative/research-state',
+      profiles:[input()],
+    }),
+    /stateRoot must be absolute/,
+  );
+  await assert.rejects(
+    persistResearchDevelopmentDiagnosticsV1({
+      stateRoot:'/var/lib/stock-app/research',
+      profiles:[input()],
+    }),
+    /overlaps protected app storage/,
+  );
+});
+
 test('persisted output is exactly the Factory diagnostic map plus a separate provenance record',async()=>{
   const root=await mkdtemp(join(tmpdir(),'development-diagnostics-'));
   const result=await persistResearchDevelopmentDiagnosticsV1({
