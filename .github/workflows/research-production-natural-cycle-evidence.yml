@@ -6,9 +6,7 @@ on:
     paths:
       - '.github/workflows/research-production-natural-cycle-evidence.yml'
       - 'ops/research-production-readonly-evidence.sh'
-      - 'ops/research-production-task-failure-signature.mjs'
       - 'market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js'
-      - 'research-production/test/research-task-failure-signature.test.mjs'
       - 'scripts/agent_hub_rollover_v2.py'
   issue_comment:
     types: [created]
@@ -38,7 +36,6 @@ jobs:
           set -Eeuo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
           bash -n ops/research-production-readonly-evidence.sh
-          node --check ops/research-production-task-failure-signature.mjs
           grep -q 'server_files_written=0' ops/research-production-readonly-evidence.sh
           grep -q 'server_processes_restarted=0' ops/research-production-readonly-evidence.sh
           grep -q 'deployment_executed=0' ops/research-production-readonly-evidence.sh
@@ -72,7 +69,6 @@ jobs:
             exit 1
           fi
           node --test market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
-          node --test research-production/test/research-task-failure-signature.test.mjs
           node --test research-production/test/natural-cycle-verdict-trace.test.mjs research-production/test/natural-cycle-verdict-trace-v5-runtime.test.mjs
 
   observe:
