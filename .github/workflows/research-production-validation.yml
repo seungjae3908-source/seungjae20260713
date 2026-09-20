@@ -47,6 +47,10 @@ jobs:
           grep -q 'ProtectSystem=strict' research-production/deploy/research-production@.service
           grep -q '^CapabilityBoundingSet=$' research-production/deploy/research-production@.service
           ! grep -q 'MemoryDenyWriteExecute=true' research-production/deploy/research-production@.service
+          grep -q 'NoNewPrivileges=true' research-production/deploy/research-production-temporal-evidence.service
+          grep -q 'ProtectSystem=strict' research-production/deploy/research-production-temporal-evidence.service
+          grep -q '^CapabilityBoundingSet=$' research-production/deploy/research-production-temporal-evidence.service
+          ! grep -Eq 'PRIVATE|ORDER|LIVE_TRADING=true' research-production/deploy/research-production-temporal-evidence.service
 
       - name: Validate systemd service and schedules
         shell: bash
@@ -56,10 +60,15 @@ jobs:
             research-production/deploy/research-production@.service \
             research-production/deploy/research-production-fast-historical.timer \
             research-production/deploy/research-production-long-history.timer \
-            research-production/deploy/research-production-forward.timer
+            research-production/deploy/research-production-forward.timer \
+            research-production/deploy/research-production-temporal-evidence.service \
+            research-production/deploy/research-production-temporal-evidence.timer
           systemd-analyze calendar '*-*-* 02:17:00 UTC' >/dev/null
           systemd-analyze calendar 'Sun *-*-* 03:43:00 UTC' >/dev/null
           systemd-analyze calendar '*-*-* *:11:00 UTC' >/dev/null
+          systemd-analyze calendar '*-*-* *:05:00 UTC' >/dev/null
+          node --check research-production/bin/collect-temporal-evidence.mjs
+          node --check research-production/bin/research-factory-plan.mjs
 
       - name: Unit tests
         working-directory: research-production
@@ -93,4 +102,6 @@ jobs:
             'liveTrading=false' \
             'privateApi=false' \
             'orderAuthority=false' \
-            'existingPaperShadowStateMutation=false'
+            'existingPaperShadowStateMutation=false' \
+            'temporalEvidenceTimerActivated=false' \
+            'temporalHistoricalCurrentValueBackfill=false'
