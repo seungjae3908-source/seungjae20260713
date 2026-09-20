@@ -101,6 +101,10 @@ export function buildAutonomousAlphaCertificationV1({
     ?? naturalPaperCandidate?.candidateId
     ?? null;
   if (!text(candidateId)) blockers.push("CERT_CANDIDATE_ID_REQUIRED");
+  if (!Array.isArray(championChallengerPlan?.candidates)
+      || !championChallengerPlan.candidates.some((candidate) => candidate?.candidateId === candidateId)) {
+    blockers.push("CERT_CANDIDATE_NOT_IN_CHALLENGER_PLAN");
+  }
 
   if (blockers.length > 0) {
     return deepFreeze({
@@ -109,6 +113,7 @@ export function buildAutonomousAlphaCertificationV1({
       status: "BLOCKED_DATA",
       blockers: [...new Set(blockers)].sort(),
       candidateId,
+      championPlanDigest: championChallengerPlan?.planDigest ?? null,
       profitabilityProven: false,
       nextAction: null,
       ...safety(),
@@ -127,6 +132,7 @@ export function buildAutonomousAlphaCertificationV1({
       status: "READY_FOR_SEPARATE_NATURAL_PAPER_ACTIVATION_APPROVAL",
       blockers: [],
       candidateId,
+      championPlanDigest: championChallengerPlan.planDigest,
       certificationDigest: digest(core),
       profitabilityProven: false,
       economicSampleCredit: 0,
@@ -206,6 +212,7 @@ export function buildAutonomousAlphaCertificationV1({
     blockers: [...new Set(evidenceBlockers)].sort(),
     holdReasons: [...new Set(holdReasons)].sort(),
     candidateId,
+    championPlanDigest: championChallengerPlan.planDigest,
     certificationDigest: digest(core),
     activationPerformed: true,
     paperOnly: true,
@@ -251,11 +258,65 @@ export function buildAutonomousAlphaArchitectureReadinessV1({
     passed: allowed.includes(value?.status)
       && value?.executionAuthority === "NONE",
   }));
-  const blockers = acceptance.filter((row) => !row.passed).map((row) => `ARCH_${row.name}_INVALID`);
+  const lineageChecks = [
+    {
+      name: "WORLD_TO_GENOME",
+      passed: text(worldKnowledge?.evidenceGraph?.graphDigest) != null
+        && alphaGenome?.evidenceGraphDigest === worldKnowledge.evidenceGraph.graphDigest,
+    },
+    {
+      name: "GENOME_TO_RED_TEAM",
+      passed: text(alphaGenome?.genomeDigest) != null
+        && redTeam?.genomeDigest === alphaGenome.genomeDigest,
+    },
+    {
+      name: "RED_TEAM_TO_FORECAST",
+      passed: text(redTeam?.resultDigest) != null
+        && forecast?.redTeamResultDigest === redTeam.resultDigest,
+    },
+    {
+      name: "FORECAST_TO_COUNTERFACTUAL",
+      passed: text(forecast?.forecastDigest) != null
+        && counterfactual?.forecastDigest === forecast.forecastDigest,
+    },
+    {
+      name: "COUNTERFACTUAL_TO_DIGITAL_TWIN",
+      passed: text(counterfactual?.resultDigest) != null
+        && digitalTwin?.counterfactualResultDigest === counterfactual.resultDigest,
+    },
+    {
+      name: "DIGITAL_TWIN_TO_CHAMPION",
+      passed: text(digitalTwin?.resultDigest) != null
+        && championChallenger?.digitalTwinResultDigest === digitalTwin.resultDigest,
+    },
+    {
+      name: "CHAMPION_TO_CERTIFICATION",
+      passed: text(championChallenger?.planDigest) != null
+        && certification?.championPlanDigest === championChallenger.planDigest,
+    },
+  ];
+  const candidateIds = [
+    alphaGenome?.candidateId,
+    redTeam?.candidateId,
+    forecast?.candidateId,
+    counterfactual?.candidateId,
+    digitalTwin?.candidateId,
+    certification?.candidateId,
+  ].map(text);
+  lineageChecks.push({
+    name: "CANDIDATE_ID_CONTINUITY",
+    passed: candidateIds.every(Boolean) && new Set(candidateIds).size === 1,
+  });
+
+  const blockers = [
+    ...acceptance.filter((row) => !row.passed).map((row) => `ARCH_${row.name}_INVALID`),
+    ...lineageChecks.filter((row) => !row.passed).map((row) => `ARCH_LINEAGE_${row.name}_INVALID`),
+  ];
   const profitabilityProven = certification?.status === "PROFITABILITY_REVIEW_READY_NOT_LIVE"
     && certification?.profitabilityProven === true;
   const core = {
     acceptance,
+    lineageChecks,
     profitabilityProven,
     certificationDigest: certification?.certificationDigest ?? null,
   };
@@ -270,6 +331,7 @@ export function buildAutonomousAlphaArchitectureReadinessV1({
         : "ARCHITECTURE_READY_EVIDENCE_PENDING_INACTIVE",
     blockers,
     acceptance,
+    lineageChecks,
     architectureReady: blockers.length === 0,
     profitabilityProven,
     readinessDigest: digest(core),
