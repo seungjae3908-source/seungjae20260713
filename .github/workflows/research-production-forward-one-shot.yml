@@ -300,6 +300,15 @@ jobs:
           const tasks = all('TASK ').map(fields).filter((row) => row.profile === 'forward');
           const failureRows = all('TASK_FAILURE_SIGNATURE ').map(fields)
             .filter((row) => row.profile === 'forward');
+          const shadowGroupFailures = all('SHADOW_GROUP_FAILURE ').map(fields);
+          const shadowFailureDetails = shadowGroupFailures.length
+            ? shadowGroupFailures.map((row) => [
+                row.name ?? 'unknown',
+                row.status ?? 'unknown',
+                row.error_name ?? 'unknown',
+                row.error_message ?? 'unknown',
+              ].join(':')).join('|').slice(0, 1800)
+            : 'none';
           const task = (id) => tasks.find((row) => row.id === id) ?? {};
           const failure = (id) => failureRows.find((row) => row.id === id) ?? {};
           const paperRuntime = fields(find('PAPER_RUNTIME '));
@@ -341,6 +350,7 @@ jobs:
             shadow_exit_code: shadow.exit_code ?? 'unknown',
             shadow_failure_signatures: shadowFailure.signatures ?? 'unknown',
             shadow_failure_categories: shadowFailure.categories ?? 'unknown',
+            shadow_failure_details: shadowFailureDetails,
             paper_status: paper.status ?? 'unknown',
             paper_exit_code: paper.exit_code ?? 'unknown',
             paper_failure_signatures: paperFailure.signatures ?? 'unknown',
@@ -371,6 +381,7 @@ jobs:
           SHADOW_EXIT_CODE: ${{ steps.verdict.outputs.shadow_exit_code }}
           SHADOW_FAILURE_SIGNATURES: ${{ steps.verdict.outputs.shadow_failure_signatures }}
           SHADOW_FAILURE_CATEGORIES: ${{ steps.verdict.outputs.shadow_failure_categories }}
+          SHADOW_FAILURE_DETAILS: ${{ steps.verdict.outputs.shadow_failure_details }}
           PAPER_STATUS: ${{ steps.verdict.outputs.paper_status }}
           PAPER_EXIT_CODE: ${{ steps.verdict.outputs.paper_exit_code }}
           PAPER_FAILURE_SIGNATURES: ${{ steps.verdict.outputs.paper_failure_signatures }}
@@ -397,6 +408,7 @@ jobs:
               `shadow_exit_code: ${clean(process.env.SHADOW_EXIT_CODE)}`,
               `shadow_failure_signatures: ${clean(process.env.SHADOW_FAILURE_SIGNATURES)}`,
               `shadow_failure_categories: ${clean(process.env.SHADOW_FAILURE_CATEGORIES)}`,
+              `shadow_failure_details: ${clean(process.env.SHADOW_FAILURE_DETAILS)}`,
               `paper_status: ${clean(process.env.PAPER_STATUS)}`,
               `paper_exit_code: ${clean(process.env.PAPER_EXIT_CODE)}`,
               `paper_failure_signatures: ${clean(process.env.PAPER_FAILURE_SIGNATURES)}`,
