@@ -168,6 +168,18 @@ export function buildResearchDevelopmentDiagnosticsMapV1({profiles=[]}={}){
   });
 }
 
+function safeStateRoot(value){
+  const raw=String(value??'').trim();
+  if(!isAbsolute(raw)) throw new TypeError('stateRoot must be absolute');
+  const root=resolve(raw);
+  for(const forbidden of ['/opt/stock-app-data','/srv/stock-app','/var/lib/stock-app']){
+    if(root===forbidden||root.startsWith(`${forbidden}/`)){
+      throw new Error('development diagnostics state overlaps protected app storage');
+    }
+  }
+  return root;
+}
+
 async function atomicJson(path,value){
   await mkdir(dirname(path),{recursive:true,mode:0o700});
   const temp=`${path}.tmp-${process.pid}-${Date.now()}`;
@@ -179,8 +191,7 @@ export async function persistResearchDevelopmentDiagnosticsV1({
   stateRoot,
   profiles=[],
 }={}){
-  const root=resolve(String(stateRoot??''));
-  if(!isAbsolute(root)) throw new TypeError('stateRoot must be absolute');
+  const root=safeStateRoot(stateRoot);
   const built=buildResearchDevelopmentDiagnosticsMapV1({profiles});
   const diagnosticsPath=resolve(root,'latest','adaptive-development-diagnostics.json');
   const recordPath=resolve(root,'latest','adaptive-development-diagnostics-record.json');
