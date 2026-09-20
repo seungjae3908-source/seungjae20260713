@@ -303,20 +303,23 @@ async function auditRoute(page: Page, route: string, testInfo: TestInfo): Promis
   const started = Date.now();
   let navigationError: string | null = null;
   let fallbackTimedOut = false;
-  await page.goto(route, { waitUntil: 'domcontentloaded', timeout: 15_000 }).catch((error) => {
+  await page.goto(route, { waitUntil: 'commit', timeout: 15_000 }).catch((error) => {
     navigationError = String(error).slice(0, 240);
   });
   if (!page.isClosed()) {
     try {
-      await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 5_000 });
+      await expect.poll(async () => {
+        const shellVisible = await page.getByTestId('app-shell').isVisible({ timeout: 250 }).catch(() => false);
+        if (!shellVisible) return 'APP_SHELL_PENDING';
+        const fallbackVisible = await page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false);
+        const visibleBusy = await page.locator('[aria-busy="true"]:visible').count().catch(() => -1);
+        return !fallbackVisible && visibleBusy === 0 ? 'READY' : 'LOADING';
+      }, { timeout: 5_000, intervals: [100, 200, 400, 800] }).toBe('READY');
     } catch {
       fallbackTimedOut = true;
     }
   }
   const busy = page.locator('[aria-busy="true"]:visible');
-  if (!page.isClosed() && await busy.count()) {
-    await expect(busy).toHaveCount(0, { timeout: 5_000 }).catch(() => undefined);
-  }
   const busyAfter5s = page.isClosed() ? -1 : await busy.count().catch(() => -1);
   const layout = page.isClosed() ? {
     horizontalOverflowPx: -1,
