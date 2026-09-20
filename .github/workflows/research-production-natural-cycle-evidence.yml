@@ -217,6 +217,7 @@ jobs:
           const paper = fields(find('PAPER_RUNTIME '));
           const ledger = fields(find('PAPER_LEDGER '));
           const natural = fields(find('PAPER_NATURAL '));
+          const evidenceSources = all('PAPER_EVIDENCE_SOURCE ').map(fields);
           const timersHealthy = ['forward','fast-historical','long-history'].every((p) => timer[p]?.enabled === 'enabled' && timer[p]?.active === 'active');
           const forwardTasks = tasks.filter((row) => row.profile === 'forward');
           const forwardProven = timer.forward?.last_trigger && !/^n\/a|^null|^$/.test(timer.forward.last_trigger)
@@ -298,49 +299,13 @@ jobs:
           writeOutput('natural_measurement_source', naturalTrace?.runtimeAdapter.selectedMeasurementSource);
           const stageTrace = naturalTrace?.stages.map(({ stage, count, status: stageStatus }) => ({ stage, count, status: stageStatus })) ?? null;
           writeOutput('natural_stage_trace_base64', stageTrace == null ? null : Buffer.from(JSON.stringify(stageTrace), 'utf8').toString('base64url'));
-
-          let evidenceSourceTrace = null;
-          if (natural.present === 'true' && natural.payload_base64) {
-            try {
-              const payload = JSON.parse(Buffer.from(natural.payload_base64, 'base64url').toString('utf8'));
-              const reason = String(naturalTrace?.firstZeroReason ?? '');
-              const blockers = Array.isArray(payload.authoritativeSourceBlockers)
-                ? payload.authoritativeSourceBlockers.map((value) => String(value))
-                : [];
-              const ownersConnected = Number(payload.authoritativeEvidenceOwners?.authoritativeOwnersConnected);
-              const wiringStatus = String(payload.authoritativeSourceWiringStatus ?? '');
-              const connected = (Number.isFinite(ownersConnected) && ownersConnected >= 5)
-                || /CONNECTED|CALLABLES_READY|READY/u.test(wiringStatus);
-              const evidenceStage = naturalTrace?.stages.find((row) => row.stage === 'EVIDENCE_COMPLETE');
-              const evidenceObserved = Number(evidenceStage?.count) > 0;
-              const specs = [
-                ['CONTRACT_RULES', 'MISSING_CONTRACT_RULES', 'AUTHORITATIVE_CONTRACT_RULES_SOURCE_UNAVAILABLE'],
-                ['EXECUTION_OBSERVATION', 'MISSING_EXECUTION_OBSERVATION', 'AUTHORITATIVE_EXECUTION_OBSERVATION_SOURCE_UNAVAILABLE'],
-                ['LEARNING_SNAPSHOT', 'MISSING_LEARNING_SNAPSHOT', 'AUTHORITATIVE_LEARNING_SNAPSHOT_SOURCE_UNAVAILABLE'],
-                ['PAPER_STATE', 'MISSING_PAPER_STATE', 'AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE'],
-                ['SUPPLEMENTAL_COST_EVIDENCE', 'MISSING_SUPPLEMENTAL_COST_EVIDENCE', 'AUTHORITATIVE_SUPPLEMENTAL_COST_SOURCE_UNAVAILABLE'],
-              ];
-              evidenceSourceTrace = specs.map(([type, reasonToken, blockerToken]) => {
-                const missingNow = reason.includes(reasonToken) || blockers.some((item) => item.includes(blockerToken));
-                const state = missingNow
-                  ? (connected ? 'CONNECTED_NOT_OBSERVED' : 'CODE_EXISTS_NOT_CONNECTED')
-                  : (evidenceObserved ? 'OBSERVED' : 'MISSING');
-                return { type, state };
-              });
-            } catch {}
-          }
-          writeOutput(
-            'natural_evidence_source_trace_base64',
-            evidenceSourceTrace == null ? null : Buffer.from(JSON.stringify(evidenceSourceTrace), 'utf8').toString('base64url'),
-          );
-          writeOutput(
-            'natural_evidence_source_connected_not_observed_count',
-            evidenceSourceTrace?.filter((row) => row.state === 'CONNECTED_NOT_OBSERVED').length ?? null,
-          );
-          writeOutput(
-            'natural_evidence_source_observed_count',
-            evidenceSourceTrace?.filter((row) => row.state === 'OBSERVED').length ?? null,
-          );
+          writeOutput('natural_evidence_source_trace', evidenceSources.length
+            ? evidenceSources.map((row) => `${row.type}=${row.state}`).join(',')
+            : null);
+          writeOutput('natural_evidence_source_connected_not_observed_count',
+            evidenceSources.filter((row) => row.state === 'CONNECTED_NOT_OBSERVED').length);
+          writeOutput('natural_evidence_source_observed_count',
+            evidenceSources.filter((row) => row.state === 'OBSERVED').length);
           if (status === 'failed') process.exitCode = 1;
           NODE
         env:
@@ -395,7 +360,7 @@ jobs:
           NATURAL_FIRST_ZERO_REASON_EVIDENCE_STATUS: ${{ steps.verdict.outputs.natural_first_zero_reason_evidence_status }}
           NATURAL_MEASUREMENT_SOURCE: ${{ steps.verdict.outputs.natural_measurement_source }}
           NATURAL_STAGE_TRACE_BASE64: ${{ steps.verdict.outputs.natural_stage_trace_base64 }}
-          NATURAL_EVIDENCE_SOURCE_TRACE_BASE64: ${{ steps.verdict.outputs.natural_evidence_source_trace_base64 }}
+          NATURAL_EVIDENCE_SOURCE_TRACE: ${{ steps.verdict.outputs.natural_evidence_source_trace }}
           NATURAL_EVIDENCE_SOURCE_CONNECTED_NOT_OBSERVED_COUNT: ${{ steps.verdict.outputs.natural_evidence_source_connected_not_observed_count }}
           NATURAL_EVIDENCE_SOURCE_OBSERVED_COUNT: ${{ steps.verdict.outputs.natural_evidence_source_observed_count }}
         with:
@@ -409,17 +374,6 @@ jobs:
               try {
                 const stages = JSON.parse(Buffer.from(process.env.NATURAL_STAGE_TRACE_BASE64, 'base64url').toString('utf8'));
                 naturalStageTrace = stages.map((row) => `${row.stage}=${row.count ?? 'unknown'}(${row.status})`).join(',');
-              } catch {}
-            }
-            let evidenceSourceTrace = 'unknown';
-            if (measured && process.env.NATURAL_EVIDENCE_SOURCE_TRACE_BASE64
-              && process.env.NATURAL_EVIDENCE_SOURCE_TRACE_BASE64 !== 'unknown') {
-              try {
-                const sources = JSON.parse(Buffer.from(
-                  process.env.NATURAL_EVIDENCE_SOURCE_TRACE_BASE64,
-                  'base64url',
-                ).toString('utf8'));
-                evidenceSourceTrace = sources.map((row) => `${row.type}=${row.state}`).join(',');
               } catch {}
             }
             const body = [
@@ -457,7 +411,7 @@ jobs:
               `natural_identity_complete: ${observed(process.env.NATURAL_IDENTITY_COMPLETE)}`,
               `natural_measurement_source: ${observed(process.env.NATURAL_MEASUREMENT_SOURCE)}`,
               `natural_stage_trace: ${naturalStageTrace}`,
-              `authoritative_evidence_sources: ${evidenceSourceTrace}`,
+              `authoritative_evidence_sources: ${observed(process.env.NATURAL_EVIDENCE_SOURCE_TRACE)}`,
               `authoritative_evidence_connected_not_observed: ${observed(process.env.NATURAL_EVIDENCE_SOURCE_CONNECTED_NOT_OBSERVED_COUNT)}`,
               `authoritative_evidence_observed: ${observed(process.env.NATURAL_EVIDENCE_SOURCE_OBSERVED_COUNT)}`,
               `FIRST_ZERO_STAGE: ${observed(process.env.NATURAL_FIRST_ZERO_STAGE)}`,
