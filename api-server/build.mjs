@@ -107,3 +107,28 @@ const require = __createRequire(import.meta.url);
 });
 
 console.log('[api-server] built dist/tools/assemble-research-canonical-bundle.mjs');
+
+await build({
+	entryPoints: [path.resolve(rootDir, 'scripts/manage-research-canonical-components.ts')],
+	outfile: path.resolve(outDir, 'tools/manage-research-canonical-components.mjs'),
+	bundle: true,
+	platform: 'node',
+	format: 'esm',
+	target: 'node20',
+	sourcemap: true,
+	minify: false,
+	packages: 'external',
+	external,
+	banner: {
+		js: `
+import { createRequire as __createRequire } from 'node:module';
+const require = __createRequire(import.meta.url);
+`,
+	},
+	define: {
+		'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'development'),
+	},
+	logLevel: 'info',
+});
+
+console.log('[api-server] built dist/tools/manage-research-canonical-components.mjs');
