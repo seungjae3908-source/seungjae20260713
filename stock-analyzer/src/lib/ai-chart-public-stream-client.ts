@@ -284,11 +284,18 @@ export function createAiChartPublicStreamClient(
     };
     nextSocket.onclose = () => {
       if (stopped || socket !== nextSocket) return;
+      const opened = connectedAtMs != null;
       socket = null;
       clearRuntimeTimers();
       clearPendingWork();
       connectedAtMs = null;
       if (stopped || status === 'FALLBACK_POLLING') return;
+      // A close before onopen is a rejected/blocked handshake, not an
+      // established stream interruption. Repeating the same public handshake
+      // only amplifies provider throttling (for example an Upbit HTTP 429) and
+      // produces no additional evidence, so move directly to bounded REST
+      // polling. Established streams retain the normal reconnect policy.
+      if (!opened) { forceFallback('PREOPEN_CONNECTION_CLOSED'); return; }
       reconnectAttempts += 1;
       if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) { forceFallback('RECONNECT_LIMIT_REACHED'); return; }
       publish('RECOVERING', 'SOCKET_CLOSED');
