@@ -290,6 +290,14 @@ export function buildAutonomousAlphaArchitectureReadinessV1({
         && championChallenger?.digitalTwinResultDigest === digitalTwin.resultDigest,
     },
     {
+      name: "RED_TEAM_TO_CHAMPION_EVIDENCE",
+      passed: text(redTeam?.resultDigest) != null
+        && Array.isArray(championChallenger?.candidates)
+        && championChallenger.candidates.some((candidate) =>
+          candidate?.candidateId === alphaGenome?.candidateId
+          && candidate?.evidenceDigests?.redTeam === redTeam.resultDigest),
+    },
+    {
       name: "CHAMPION_TO_CERTIFICATION",
       passed: text(championChallenger?.planDigest) != null
         && certification?.championPlanDigest === championChallenger.planDigest,
