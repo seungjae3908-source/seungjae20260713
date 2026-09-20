@@ -115,6 +115,41 @@ test("Research Production read-only evidence follows canonical nested Shadow can
   );
 });
 
+test("Research Production read-only evidence exposes bounded Shadow summary failures from stdout state", async () => {
+  const source = await readFile(SCRIPT, "utf8");
+  const extractor = inlineNodeScript(source, 'read_file "$shadow_summary" | node -e');
+  const summary = {
+    schemaVersion: 3,
+    status: "fail",
+    groups: {
+      "crypto-futures-15m": {
+        status: "fail",
+        error: {
+          name: "Error",
+          message: "not enough shadow candles for BTCUSDT 15m",
+          details: { provider: "bitget-public-v2" },
+          stack: ["must-not-leak"],
+        },
+      },
+      "crypto-futures-1h": {
+        status: "pass",
+        candidate: { total: 4, settled: 1, pending: 3 },
+      },
+    },
+  };
+
+  const output = runInline(extractor, { input: JSON.stringify(summary) }).split(/\r?\n/);
+  assert.ok(output.includes("SHADOW_SUMMARY present=true status=fail"));
+  const failure = output.find((line) => line.startsWith("SHADOW_GROUP_FAILURE "));
+  assert.ok(failure);
+  assert.ok(failure.includes("name=crypto-futures-15m"));
+  assert.ok(failure.includes("status=fail"));
+  assert.ok(failure.includes("error_name=Error"));
+  assert.ok(failure.includes("error_message=not_enough_shadow_candles_for_BTCUSDT_15m"));
+  assert.ok(failure.includes("raw_log_included=false"));
+  assert.equal(failure.includes("must-not-leak"), false);
+});
+
 test("Research Production read-only evidence exports the latest identity-bound Natural Paper funnel", async () => {
   const source = await readFile(SCRIPT, "utf8");
   for (const token of [
@@ -255,6 +290,7 @@ test("workflow recomputes FIRST_ZERO from the extracted v5 counts and exact rele
     `CYCLE profile=long-history present=true research_sha=${sha} failed_count=0`,
     "TASK profile=forward id=shadow-forward status=success",
     "TASK profile=forward id=paper-forward status=blocked_data",
+    "SHADOW_GROUP_FAILURE name=crypto-futures-15m status=fail error_name=Error error_message=public_feed_unavailable raw_log_included=false",
     "PAPER_RUNTIME present=true live_trading=false order_authority=false private_request_count=0 financial_mutation_count=0 order_count=0",
     "PAPER_LEDGER present=true position_count=0 settlement_count=0",
     `PAPER_NATURAL present=true dataset_identity_sha256=${"a".repeat(64)} payload_base64=${payload}`,
@@ -273,6 +309,7 @@ test("workflow recomputes FIRST_ZERO from the extracted v5 counts and exact rele
     assert.equal(result.status, 0, result.stderr);
     const fields = outputFields(await readFile(outputPath, "utf8"));
     assert.equal(fields.status, "passed");
+    assert.equal(fields.shadow_failure_details, "crypto-futures-15m:fail:Error:public_feed_unavailable");
     assert.equal(fields.natural_trace_status, "BLOCKED");
     assert.equal(fields.natural_trace_error, "none");
     assert.equal(fields.natural_identity_complete, "true");
