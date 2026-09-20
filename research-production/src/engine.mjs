@@ -50,6 +50,19 @@ const REQUIRED_LAB_FILES = Object.freeze([
   'scripts/run-shadow-cycle.js',
 ]);
 
+const SHARED_PACKAGE_REQUIREMENTS = Object.freeze({
+  'strategy-hypothesis': Object.freeze([
+    'package.json',
+    'src/index.js',
+    'src/contract.js',
+  ]),
+  'external-research': Object.freeze([
+    'package.json',
+    'src/index.js',
+    'src/contract.js',
+  ]),
+});
+
 export const PROFILES = Object.freeze({
   'fast-historical': Object.freeze([
     Object.freeze({ id: 'stocks-core', args: ['scripts/run-stock-market-suite.js'], timeoutMs: 45 * 60_000 }),
@@ -70,7 +83,14 @@ export const PROFILES = Object.freeze({
   ]),
   forward: Object.freeze([
     Object.freeze({ id: 'shadow-forward', kind: 'shadow', args: ['scripts/run-shadow-cycle.js'], timeoutMs: 30 * 60_000 }),
-    Object.freeze({ id: 'paper-forward', kind: 'paper', args: ['scripts/run-paper-forward-schedule.js'], timeoutMs: 20 * 60_000, acceptedExitCodes: [0, 2] }),
+    Object.freeze({
+      id: 'paper-forward',
+      kind: 'paper',
+      args: ['scripts/run-paper-forward-schedule.js'],
+      timeoutMs: 20 * 60_000,
+      acceptedExitCodes: [0, 2],
+      sharedPackages: Object.freeze(['strategy-hypothesis', 'external-research']),
+    }),
   ]),
 });
 
@@ -273,12 +293,84 @@ function taskFingerprint({ task, researchSha }) {
   return createHash('sha256').update(JSON.stringify({ id: task.id, args: task.args, researchSha })).digest('hex');
 }
 
+export async function prepareResearchTaskWorkspace({ labRoot, taskDir, sharedPackages = [] } = {}) {
+  const sourceLabRoot = resolve(String(labRoot ?? ''));
+  const destinationTaskDir = resolve(String(taskDir ?? ''));
+  if (!isAbsolute(sourceLabRoot) || !isAbsolute(destinationTaskDir)) {
+    throw new Error('research workspace roots must be absolute');
+  }
+  const repoRoot = dirname(sourceLabRoot);
+  const workspaceParent = join(destinationTaskDir, 'workspace');
+  const workspaceRoot = join(workspaceParent, 'market-prediction-lab');
+  await mkdir(workspaceParent, { recursive: true, mode: 0o700 });
+  await cp(sourceLabRoot, workspaceRoot, {
+    recursive: true,
+    force: false,
+    errorOnExist: true,
+    dereference: false,
+  });
+
+  const requestedSharedPackages = [...new Set(
+    Array.isArray(sharedPackages) ? sharedPackages.map((value) => String(value)) : [],
+  )];
+  const copiedSharedPackages = [];
+  for (const packageName of requestedSharedPackages) {
+    if (!Object.hasOwn(SHARED_PACKAGE_REQUIREMENTS, packageName)) {
+      throw new Error(`unsupported Research shared package: ${packageName}`);
+    }
+    const source = join(repoRoot, 'packages', packageName);
+    const destination = join(workspaceParent, 'packages', packageName);
+    await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
+    await cp(source, destination, {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+      dereference: false,
+    });
+    copiedSharedPackages.push(packageName);
+  }
+
+  return Object.freeze({
+    workspaceRoot,
+    copiedSharedPackages: Object.freeze(copiedSharedPackages),
+  });
+}
+
+export async function validateResearchTaskSharedPackages({ repoRoot, plan } = {}) {
+  const root = resolve(String(repoRoot ?? ''));
+  const requested = [...new Set(
+    (Array.isArray(plan) ? plan : [])
+      .flatMap((task) => Array.isArray(task?.sharedPackages) ? task.sharedPackages : [])
+      .map((value) => String(value)),
+  )];
+  const missing = [];
+  for (const packageName of requested) {
+    const requiredFiles = SHARED_PACKAGE_REQUIREMENTS[packageName];
+    if (!requiredFiles) {
+      throw new Error(`unsupported Research shared package: ${packageName}`);
+    }
+    for (const relative of requiredFiles) {
+      const path = join(root, 'packages', packageName, relative);
+      if (!(await exists(path))) {
+        missing.push(`packages/${packageName}/${relative}`);
+      }
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(`research task shared-package prerequisites missing: ${missing.join(', ')}`);
+  }
+  return Object.freeze({ requestedPackages: Object.freeze(requested) });
+}
+
 async function runTask({ task, labRoot, stateRoot, researchSha, cycleId, inheritedEnv = process.env }) {
   const taskDir = join(stateRoot, 'runs', cycleId, task.id);
   await mkdir(taskDir, { recursive: true, mode: 0o700 });
-  const workspaceRoot = join(taskDir, 'workspace', 'market-prediction-lab');
-  await mkdir(dirname(workspaceRoot), { recursive: true, mode: 0o700 });
-  await cp(labRoot, workspaceRoot, { recursive: true, force: false, errorOnExist: true, dereference: false });
+  const workspace = await prepareResearchTaskWorkspace({
+    labRoot,
+    taskDir,
+    sharedPackages: task.sharedPackages ?? [],
+  });
+  const workspaceRoot = workspace.workspaceRoot;
   const stdoutPath = join(taskDir, 'stdout.log');
   const stderrPath = join(taskDir, 'stderr.log');
   const startedAt = Date.now();
@@ -374,6 +466,10 @@ export async function runResearchCycle({ repoRoot, stateRoot, researchSha, profi
     researchSha: preflight.researchSha,
     activationAtMs: stableActivationAtMs,
     env,
+  });
+  await validateResearchTaskSharedPackages({
+    repoRoot: preflight.repoRoot,
+    plan,
   });
   const requestedConcurrency = Math.max(1, Math.min(Number(concurrency) || 1, 16, plan.length));
   const safeConcurrency = profile === 'forward' ? 1 : requestedConcurrency;
