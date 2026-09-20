@@ -50,6 +50,7 @@ const groups = {
     path.join(root, 'src/services/research-canonical-bundle-offline-publisher.service.test.mjs'),
     path.join(root, 'src/services/research-canonical-bundle-assembler.service.test.mjs'),
     path.join(root, 'src/services/research-canonical-component-registry.service.test.mjs'),
+    path.join(root, 'src/services/research-canonical-bundle-finalizer.service.test.mjs'),
     path.join(root, 'src/services/strategy-health-research-adapter.service.test.ts'),
     path.join(root, 'src/services/trading-ai-review-phase9.test.ts'),
     path.join(root, 'src/routes/paper-journal-ai-preview-privileges.test.ts'),
