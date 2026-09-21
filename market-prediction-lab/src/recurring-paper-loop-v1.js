@@ -67,6 +67,28 @@ function safetyEnvelope() {
   });
 }
 
+function deepFreeze(value, seen = new WeakSet()) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value) || seen.has(value)) return value;
+  seen.add(value);
+  for (const child of Object.values(value)) deepFreeze(child, seen);
+  return Object.freeze(value);
+}
+
+function settlementExecutionPolicyFromCandidate(candidate) {
+  const execution = candidate?.execution;
+  if (!execution || typeof execution !== "object") return null;
+  const template = {
+    marketAdapterIdentity: structuredClone(execution.marketAdapterIdentity ?? null),
+    executionPolicy: structuredClone(execution.executionPolicy ?? null),
+    strategyIdentity: structuredClone(execution.strategyIdentity ?? null),
+    costPolicyIdentity: {
+      version: execution.costPolicy?.version ?? null,
+    },
+    entryDataEvidence: structuredClone(execution.dataEvidence ?? null),
+  };
+  return deepFreeze(template);
+}
+
 function directLoopStage(field, count, observationIds, provenance, observedAt) {
   const measured = Number.isInteger(count) && count >= 0;
   return Object.freeze({
@@ -370,6 +392,7 @@ function positionFromSample(sample, candidate) {
     entryFillPrice: sample.fill.fillPrice,
     lifecycleState: "OPEN",
     accountingEvidence,
+    settlementExecutionPolicy: settlementExecutionPolicyFromCandidate(candidate),
     sample,
   };
   return Object.freeze({
