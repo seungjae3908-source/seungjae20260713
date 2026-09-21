@@ -58,6 +58,7 @@ export type AiChartPublicStreamClient = {
 };
 
 const MAX_RECONNECT_ATTEMPTS = 5;
+const providerFallbackUntilMs = new Map<string, number>();
 
 function defaultSocketFactory(url: string): WebSocketLike {
   if (typeof WebSocket === 'undefined') throw new Error('WEBSOCKET_UNAVAILABLE');
@@ -80,6 +81,8 @@ export function createAiChartPublicStreamClient(
   const expectedSymbol = options.market === 'UPBIT'
     ? options.symbol.trim().toUpperCase().replace(/^KRW[-_:]?/, '')
     : options.symbol.trim().toUpperCase().replace(/[-_/]/g, '');
+  const fallbackKey = `${options.market}:${expectedSymbol}`;
+  const usesDefaultSocketFactory = options.socketFactory == null;
   const now = options.now ?? (() => Date.now());
   const setTimeoutFn = options.setTimeoutFn ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   const clearTimeoutFn = options.clearTimeoutFn ?? ((handle) => clearTimeout(handle));
@@ -152,6 +155,9 @@ export function createAiChartPublicStreamClient(
     const active = socket;
     socket = null;
     try { active?.close(1000, 'polling-fallback'); } catch { /* fail closed */ }
+    if (usesDefaultSocketFactory && reason === 'PREOPEN_CONNECTION_CLOSED') {
+      providerFallbackUntilMs.set(fallbackKey, now() + subscription.staleAfterMs * 2);
+    }
     publish('FALLBACK_POLLING', reason);
   };
   const scheduleHeartbeat = () => {
@@ -198,7 +204,6 @@ export function createAiChartPublicStreamClient(
       scheduleWatchdog();
     }, cadence);
   };
-
 
   const scheduleFlush = (expectedSocket: WebSocketLike) => {
     if (flushFrame != null) return;
@@ -284,11 +289,18 @@ export function createAiChartPublicStreamClient(
     };
     nextSocket.onclose = () => {
       if (stopped || socket !== nextSocket) return;
+      const opened = connectedAtMs != null;
       socket = null;
       clearRuntimeTimers();
       clearPendingWork();
       connectedAtMs = null;
       if (stopped || status === 'FALLBACK_POLLING') return;
+      // A close before onopen is a rejected/blocked handshake, not an
+      // established stream interruption. Repeating the same public handshake
+      // only amplifies provider throttling (for example an Upbit HTTP 429) and
+      // produces no additional evidence, so move directly to bounded REST
+      // polling. Established streams retain the normal reconnect policy.
+      if (!opened) { forceFallback('PREOPEN_CONNECTION_CLOSED'); return; }
       reconnectAttempts += 1;
       if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) { forceFallback('RECONNECT_LIMIT_REACHED'); return; }
       publish('RECOVERING', 'SOCKET_CLOSED');
@@ -305,6 +317,14 @@ export function createAiChartPublicStreamClient(
       connectedAtMs = null;
       lastEventAtMs = null;
       status = 'DISCONNECTED';
+      if (usesDefaultSocketFactory) {
+        const fallbackUntilMs = providerFallbackUntilMs.get(fallbackKey) ?? 0;
+        if (fallbackUntilMs > now()) {
+          publish('FALLBACK_POLLING', 'PROVIDER_FALLBACK_COOLDOWN');
+          return;
+        }
+        providerFallbackUntilMs.delete(fallbackKey);
+      }
       connect();
     },
     stop: () => {

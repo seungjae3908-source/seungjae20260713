@@ -20,6 +20,12 @@ if (value && (value.trim() !== value || /[\u0000-\u001f\u007f]/u.test(value)
   console.error('PAPER_FORWARD_RISK_POLICY_RECORD_PATH must be a normalized absolute path without control characters');
   process.exit(64);
 }
+const supplemental = process.env.PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH;
+if (supplemental && (supplemental.trim() !== supplemental || /[\u0000-\u001f\u007f]/u.test(supplemental)
+  || !isAbsolute(supplemental) || resolve(supplemental) !== supplemental)) {
+  console.error('PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH must be a normalized absolute path without control characters');
+  process.exit(64);
+}
 NODE
 
 require_base_tools() {
@@ -222,6 +228,12 @@ ENV
     risk_policy_record_path="${risk_policy_record_path//\\/\\\\}"
     risk_policy_record_path="${risk_policy_record_path//\"/\\\"}"
     printf 'PAPER_FORWARD_RISK_POLICY_RECORD_PATH="%s"\n' "$risk_policy_record_path" >> "$env_tmp"
+  fi
+  if [[ -n "${PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH:-}" ]]; then
+    local supplemental_cost_evidence_path="$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH"
+    supplemental_cost_evidence_path="${supplemental_cost_evidence_path//\\/\\\\}"
+    supplemental_cost_evidence_path="${supplemental_cost_evidence_path//\"/\\\"}"
+    printf 'PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH="%s"\n' "$supplemental_cost_evidence_path" >> "$env_tmp"
   fi
   "${SUDO[@]}" install -o root -g investment-research -m 0640 "$env_tmp" "$ENV_FILE"
   rm -f "$env_tmp"
