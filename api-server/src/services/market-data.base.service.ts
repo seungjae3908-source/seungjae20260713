@@ -21,6 +21,7 @@ import { getKrUniverse } from '../providers/krx';
 import { providerStatus } from '../lib/config';
 import { getKiwoomChartCandles } from '../kiwoom-chart';
 import { cached, TTL } from '../lib/cache';
+import { aggregateOneMinuteCandles } from '../lib/intraday-candle-aggregation';
 import type {
   Candle,
   CompanyProfile,
@@ -1252,7 +1253,7 @@ export class MarketDataService {
     if (derivationSize) {
       const oneMinuteDisk = await readCandleDiskCache(ticker, '1m');
       if (oneMinuteDisk?.candles.length && oneMinuteDisk.candles.length >= derivationSize * 2) {
-        const derived = aggregateCachedCandles(oneMinuteDisk.candles, derivationSize);
+        const derived = aggregateOneMinuteCandles(oneMinuteDisk.candles, derivationSize);
         if (derived.length >= 2) {
           void cached(cacheKey, candleCacheTtl(timeframeText), load).catch((error) => {
             console.error('chart background refresh failed:', error);
