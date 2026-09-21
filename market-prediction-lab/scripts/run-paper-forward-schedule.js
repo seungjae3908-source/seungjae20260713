@@ -25,6 +25,8 @@ import {
 import {
   buildAutonomousAlphaArchitectureReadinessV1,
 } from "../src/autonomous-alpha-certification-v1.js";
+import { createNaturalPaperTriggerBoundSettlementCostProducer } from "../src/natural-paper-trigger-bound-settlement-cost-producer-v1.js";
+import { createNaturalPaperAuthoritativeSettlementCostCollector } from "../src/natural-paper-authoritative-settlement-cost-collector-v1.js";
 
 const TRUTHY = new Set(["1", "true", "yes", "on", "enabled"]);
 const forbiddenActivationKeys = [
@@ -838,6 +840,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
     let paperStateSnapshotForCard = async () => null;
     let compatibilityPaperStateForCard = null;
     let resolvedAuthoritativeSourceWiring = authoritativePaperSourceWiring ?? {};
+    let settlementCostProducer = null;
     let cutover = Object.freeze({ identityCutover: false, archivedResearchSha: null, archivedStrategyId: null });
 
     if (researchProduction) {
@@ -1037,6 +1040,15 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         env,
         "PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH",
       );
+      const collectAuthoritativeEvidence = createNaturalPaperAuthoritativeSettlementCostCollector({
+        runtimePackage,
+        readSupplementalCostInput: async () => readConfiguredEvidenceRecord(
+          supplementalCostEvidencePath,
+        ),
+      });
+      settlementCostProducer = createNaturalPaperTriggerBoundSettlementCostProducer({
+        collectAuthoritativeEvidence,
+      });
       const canonicalNaturalWiring = runtimePackage
         .createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
           researchCodeSha,
@@ -1074,6 +1086,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         naturalCycleSourceGraph: canonicalNaturalWiring.naturalCycleSourceGraph,
         riskPolicyRecordTransport: riskPolicyRecordPath == null ? "MISSING" : "CONFIGURED_READ_ONLY",
         supplementalCostTransport: supplementalCostEvidencePath == null ? "MISSING" : "CONFIGURED_READ_ONLY",
+        settlementCostProducerBinding: "BOUND_FAIL_CLOSED",
       });
     }
 
@@ -1086,6 +1099,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       authoritativeAccountRequired,
       authoritativeAccountSeedSnapshot,
       expectedPublisherAccountIdSha256,
+      ...(settlementCostProducer == null ? {} : { settlementCostProducer }),
     };
     if (publicEvidenceProvider != null) {
       invocation.publicEvidenceProvider = meaningfulSearchPaperRuntimeForMarket == null
