@@ -9,6 +9,7 @@ import {
   type PartialFillCalibrationContext,
 } from './authoritative-paper-partial-fill-cost-evidence.service';
 import type { PercentCostEvidence } from './scanner-profit-cost-evidence-adapter.service';
+// @ts-expect-error Canonical sidecar ESM is JavaScript-owned and has no TypeScript declaration file.
 import {
   buildPublicForwardLiquidityRuntimeCostEvidence,
 } from '../../../market-intelligence-sidecar/src/public-forward-liquidity-runtime-cost-evidence.mjs';
