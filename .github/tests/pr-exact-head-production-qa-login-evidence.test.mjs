@@ -30,7 +30,7 @@ test('Production comprehensive QA preserves fail-closed login attribution eviden
   );
   assert.match(
     source,
-    /membership-label'\)\.toBeVisible\(\{ timeout: 15_000 \}\)/,
+    /membership-label'\)\)\.toBeVisible\(\{ timeout: 15_000 \}\)/,
     'login gate must remain fail-closed at the existing bound',
   );
 });
