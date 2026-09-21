@@ -33,15 +33,19 @@ const WatchlistPage = lazy(() => import('@/pages/watchlist'));
 const AlertsPage = lazy(() => import('@/pages/alerts'));
 const ScannerPage = lazy(() => import('@/pages/scanner'));
 const SignalScannerPage = lazy(() => import('@/pages/signal-scanner'));
-const StockInfoPage = lazy(() => import('@/pages/stock-info'));
-const DetailPage = lazy(() => import('@/pages/detail'));
-const MarketInformationPage = lazy(() => import('@/pages/market-information'));
+const loadStockInfoPage = () => import('@/pages/stock-info');
+const StockInfoPage = lazy(loadStockInfoPage);
+const loadDetailPage = () => import('@/pages/detail');
+const DetailPage = lazy(loadDetailPage);
+const loadMarketInformationPage = () => import('@/pages/market-information');
+const MarketInformationPage = lazy(loadMarketInformationPage);
 const MarketOverviewPage = lazy(() => import('@/pages/market-overview'));
 const StocksPage = lazy(() => import('@/pages/stocks'));
 const UnifiedAssetSearchPage = lazy(() => import('@/pages/unified-asset-search'));
 const ThemesPage = lazy(() => import('@/pages/themes'));
 const LearnPage = lazy(() => import('@/pages/learn'));
-const MorePage = lazy(() => import('@/pages/more'));
+const loadMorePage = () => import('@/pages/more');
+const MorePage = lazy(loadMorePage);
 const PortfolioPage = lazy(() => import('@/pages/portfolio'));
 const PortfolioV2Page = lazy(() => import('@/pages/portfolio-v2'));
 const StrategyPromotionPage = lazy(() => import('@/pages/strategy-promotion'));
@@ -51,7 +55,8 @@ const AdminPage = lazy(() => import('@/pages/admin'));
 const AgentHubControlPage = lazy(() => import('@/pages/agent-hub-control'));
 const InstallPage = lazy(() => import('@/pages/install'));
 const RecommendationsPage = lazy(() => import('@/pages/recommendations'));
-const BacktestsPage = lazy(() => import('@/pages/backtests'));
+const loadBacktestsPage = () => import('@/pages/backtests');
+const BacktestsPage = lazy(loadBacktestsPage);
 const loadPaperTradingPage = () => import('@/pages/paper-trading');
 const PaperTradingPage = lazy(loadPaperTradingPage);
 const AutoTradingPage = lazy(() => import('@/pages/auto-trading'));
@@ -405,6 +410,16 @@ function Phase11AutoTradingRoute() {
 function AuthenticatedApp() {
   const auth = useAuth();
   useEffect(() => { if (auth.isApproved) ensureWatchlistSync(); }, [auth.isApproved]);
+  useEffect(() => {
+    if (!auth.isApproved || directAiChartColdRoute) return;
+    void Promise.allSettled([
+      loadMarketInformationPage(),
+      loadBacktestsPage(),
+      loadMorePage(),
+      loadStockInfoPage(),
+      loadDetailPage(),
+    ]);
+  }, [auth.isApproved]);
   useEffect(() => {
     if (auth.isApproved && auth.can('canAccessPaperTrading')) {
       void loadPaperTradingPage();
