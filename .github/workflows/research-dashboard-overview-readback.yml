@@ -51,6 +51,12 @@ jobs:
           grep -Fq 'production_deploy: 0' "$workflow"
           grep -Fq 'production_db_mutation: 0' "$workflow"
           grep -Fq 'secret_env_mutation: 0' "$workflow"
+          grep -Fq 'MAX_HUB_CHAIN_DEPTH = 32' "$workflow"
+          grep -Fq 'agent-hub-predecessor:' "$workflow"
+          grep -Fq 'agent-hub-successor:' "$workflow"
+          grep -Fq 'activation_receipt_hub:' "$workflow"
+          grep -Fq "github-actions[bot]" "$workflow"
+          grep -Fq 'canonical_hub:' "$workflow"
           if grep -Eiq '(systemctl[[:space:]]+(start|stop|restart|enable|disable)|pm2[[:space:]]+(start|stop|restart|delete)|rsync[[:space:]]|scp[[:space:]]|psql[[:space:]]|kubectl[[:space:]]|docker[[:space:]]+(run|exec|compose)|curl[^\n]*(--request|-X)[[:space:]]*(POST|PUT|PATCH|DELETE))' "$workflow"; then
             echo 'Read-only workflow contains a prohibited mutation command.' >&2
             exit 1
@@ -68,6 +74,7 @@ jobs:
     outputs:
       target_sha: ${{ steps.gate.outputs.target_sha }}
       activated_sha: ${{ steps.gate.outputs.activated_sha }}
+      activated_hub: ${{ steps.gate.outputs.activated_hub }}
       hub_issue: ${{ steps.hub.outputs.active_issue }}
     steps:
       - uses: actions/checkout@v4
@@ -133,40 +140,96 @@ jobs:
               return;
             }
 
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: canonicalHub,
-              per_page: 100,
-            });
-            let activatedSha = null;
-            for (const comment of [...comments].reverse()) {
-              const receipt = String(comment.body ?? '');
-              if (!receipt.includes('[RESEARCH_DASHBOARD_INTERNAL_ACTIVATION]') || !receipt.includes('status: success')) continue;
-              const activationMatch = receipt.match(/(?:^|\n)target_sha:\s*([0-9a-f]{40})(?:\n|$)/i);
-              if (!activationMatch) continue;
-              const candidate = activationMatch[1].toLowerCase();
-              try {
-                const comparison = await github.rest.repos.compareCommits({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  base: candidate,
-                  head: targetSha,
-                });
-                if (['ahead', 'identical'].includes(comparison.data.status)) {
-                  activatedSha = candidate;
-                  break;
+            const MAX_HUB_CHAIN_DEPTH = 32;
+            const predecessorFromBody = (value) => {
+              const matches = [...String(value ?? '').matchAll(/<!--\\s*agent-hub-predecessor:(\\d+)\\s*-->/g)]
+                .map((row) => Number(row[1]))
+                .filter((row) => Number.isInteger(row) && row > 0);
+              if (matches.length === 0) return null;
+              if (new Set(matches).size !== 1) throw new Error('Conflicting Central Hub predecessor markers.');
+              return matches[0];
+            };
+            const successorFromBody = (value) => {
+              const matches = [...String(value ?? '').matchAll(/<!--\\s*agent-hub-successor:(\\d+)\\s*-->/g)]
+                .map((row) => Number(row[1]))
+                .filter((row) => Number.isInteger(row) && row > 0);
+              if (matches.length === 0) return null;
+              if (new Set(matches).size !== 1) throw new Error('Conflicting Central Hub successor markers.');
+              return matches[0];
+            };
+            const findActivationOnHub = async (issueNumber) => {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                per_page: 100,
+              });
+              for (const comment of [...comments].reverse()) {
+                const receipt = String(comment.body ?? '');
+                if (String(comment.user?.login ?? '') !== 'github-actions[bot]') continue;
+                if (!receipt.includes('[RESEARCH_DASHBOARD_INTERNAL_ACTIVATION]') || !receipt.includes('status: success')) continue;
+                const activationMatch = receipt.match(/(?:^|\\n)target_sha:\\s*([0-9a-f]{40})(?:\\n|$)/i);
+                const hubMatch = receipt.match(/(?:^|\\n)canonical_hub:\\s*#(\\d+)(?:\\n|$)/i);
+                if (!activationMatch || Number(hubMatch?.[1] ?? 0) !== issueNumber) continue;
+                const candidate = activationMatch[1].toLowerCase();
+                try {
+                  const comparison = await github.rest.repos.compareCommits({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    base: candidate,
+                    head: targetSha,
+                  });
+                  if (['ahead', 'identical'].includes(comparison.data.status)) return candidate;
+                } catch {
+                  // Keep searching older successful activation receipts.
                 }
-              } catch {
-                // Keep searching older successful activation receipts.
               }
+              return null;
+            };
+
+            let activatedSha = null;
+            let activatedHub = null;
+            let searchHub = canonicalHub;
+            const seenHubs = new Set();
+            for (let depth = 0; depth < MAX_HUB_CHAIN_DEPTH && searchHub; depth += 1) {
+              if (seenHubs.has(searchHub)) {
+                core.setFailed('Central Hub predecessor chain contains a cycle.');
+                return;
+              }
+              seenHubs.add(searchHub);
+
+              activatedSha = await findActivationOnHub(searchHub);
+              if (activatedSha) {
+                activatedHub = searchHub;
+                break;
+              }
+
+              const currentIssue = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: searchHub,
+              });
+              const predecessor = predecessorFromBody(currentIssue.data.body);
+              if (!predecessor) break;
+
+              const priorIssue = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: predecessor,
+              });
+              if (successorFromBody(priorIssue.data.body) !== searchHub) {
+                core.setFailed(`Central Hub predecessor provenance mismatch: #${predecessor} does not attest successor #${searchHub}.`);
+                return;
+              }
+              searchHub = predecessor;
             }
-            if (!activatedSha) {
-              core.setFailed('No successful Research Dashboard activation receipt is an ancestor of exact current main.');
+            if (!activatedSha || !activatedHub) {
+              core.setFailed('No successful Research Dashboard activation receipt is an ancestor of exact current main across the trusted Hub chain.');
               return;
             }
             core.setOutput('target_sha', targetSha);
             core.setOutput('activated_sha', activatedSha);
+            core.setOutput('activated_hub', String(activatedHub));
 
   readback:
     needs: authorize
@@ -175,6 +238,7 @@ jobs:
     env:
       TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
       ACTIVATED_SHA: ${{ needs.authorize.outputs.activated_sha }}
+      ACTIVATED_HUB: ${{ needs.authorize.outputs.activated_hub }}
       HUB_ISSUE_NUMBER: ${{ needs.authorize.outputs.hub_issue }}
       SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
       SSH_USER: ${{ secrets.PROD_SSH_USER }}
@@ -288,6 +352,7 @@ jobs:
                 'status: success',
                 `target_main_sha: ${process.env.TARGET_SHA}`,
                 `activated_dashboard_sha: ${process.env.ACTIVATED_SHA}`,
+                `activation_receipt_hub: #${process.env.ACTIVATED_HUB}`,
                 `workflow_run: ${context.runId}`,
                 'endpoint: 127.0.0.1:18090/api/research/overview',
                 `effective_independent_n: ${process.env.EFFECTIVE_N}`,
