@@ -29,7 +29,8 @@ import type { MemberCapability } from '../../packages/member-access/src/index.js
 import HomePage from '@/pages/home';
 import SearchPage from '@/pages/search';
 
-const WatchlistPage = lazy(() => import('@/pages/watchlist'));
+const loadWatchlistPage = () => import('@/pages/watchlist');
+const WatchlistPage = lazy(loadWatchlistPage);
 const AlertsPage = lazy(() => import('@/pages/alerts'));
 const ScannerPage = lazy(() => import('@/pages/scanner'));
 const loadSignalScannerPage = () => import('@/pages/signal-scanner');
@@ -425,6 +426,7 @@ function AuthenticatedApp() {
     if (!auth.isApproved || directAiChartColdRoute) return;
     void Promise.allSettled([
       loadMarketInformationPage(),
+      loadWatchlistPage(),
       loadBacktestsPage(),
       loadMorePage(),
       loadStockInfoPage(),
