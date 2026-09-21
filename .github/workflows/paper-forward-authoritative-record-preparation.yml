@@ -1,0 +1,84 @@
+name: Paper Forward Authoritative Record Preparation Validation
+
+on:
+  pull_request:
+    paths:
+      - 'api-server/src/services/paper-forward-authoritative-record-preparation.service.ts'
+      - 'api-server/src/services/paper-forward-authoritative-record-preparation.service.test.ts'
+      - 'api-server/src/scripts/prepare-paper-forward-authoritative-records.ts'
+      - '.github/workflows/paper-forward-authoritative-record-preparation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact pull request head
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck API server
+        run: pnpm --dir api-server run typecheck
+
+      - name: Bundle and run preparation tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server exec esbuild             src/services/paper-forward-authoritative-record-preparation.service.test.ts             --bundle --platform=node --format=cjs --target=node20             --outfile="$RUNNER_TEMP/paper-forward-authoritative-record-preparation.test.cjs"
+          node --test "$RUNNER_TEMP/paper-forward-authoritative-record-preparation.test.cjs"
+
+      - name: Bundle preparation CLI
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server exec esbuild             src/scripts/prepare-paper-forward-authoritative-records.ts             --bundle --platform=node --format=esm --target=node20             --outfile="$RUNNER_TEMP/prepare-paper-forward-authoritative-records.mjs"
+          node --check "$RUNNER_TEMP/prepare-paper-forward-authoritative-records.mjs"
+
+      - name: Run canonical upstream evidence regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --test market-intelligence-sidecar/tests/public-forward-liquidity-runtime-cost-evidence.test.mjs
+          pnpm --dir api-server exec esbuild             src/services/authoritative-paper-partial-fill-cost-evidence.service.test.ts             --bundle --platform=node --format=cjs --target=node20             --outfile="$RUNNER_TEMP/authoritative-paper-partial-fill-cost-evidence.test.cjs"
+          node --test "$RUNNER_TEMP/authoritative-paper-partial-fill-cost-evidence.test.cjs"
+
+      - name: Verify no activation or trading authority
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          FILE='api-server/src/services/paper-forward-authoritative-record-preparation.service.ts'
+          grep -Fq "riskPolicyDefaultsAllowed: false" "$FILE"
+          grep -Fq "missingCostConvertedToZero: false" "$FILE"
+          grep -Fq "scheduleActivationAuthority: false" "$FILE"
+          grep -Fq "serverMutationAuthority: false" "$FILE"
+          grep -Fq "executionAuthority: 'NONE'" "$FILE"
+          if grep -Eq '^[[:space:]]+schedule:' .github/workflows/paper-forward-authoritative-record-preparation.yml; then
+            echo 'SCHEDULE_TRIGGER_FORBIDDEN' >&2
+            exit 1
+          fi
+          git diff --exit-code
+          test -z "$(git status --porcelain=v1)"
