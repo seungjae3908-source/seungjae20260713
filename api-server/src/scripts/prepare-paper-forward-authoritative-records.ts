@@ -3,7 +3,7 @@ import { readFile, mkdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 
-import { preparePaperForwardAuthoritativeRecords } from '../services/paper-forward-authoritative-record-preparation.service';
+import {\n  createPaperForwardCanonicalPreparationDependencies,\n  preparePaperForwardAuthoritativeRecords,\n} from '../services/paper-forward-authoritative-record-preparation.service';
 
 async function readJson(filePath: string): Promise<unknown> {
   return JSON.parse(await readFile(filePath, 'utf8'));
@@ -34,7 +34,7 @@ async function atomicWriteJson(filePath: string, value: unknown) {
 async function main() {
   const { values } = parseArgs({
     options: {
-      'target-sha': { type: 'string' },
+      'repo-root': { type: 'string' },\n      'target-sha': { type: 'string' },
       market: { type: 'string', default: 'CRYPTO_FUTURES' },
       symbol: { type: 'string' },
       'strategy-scope': { type: 'string' },
@@ -50,7 +50,7 @@ async function main() {
     strict: true,
   });
 
-  const targetSha = required(values, 'target-sha');
+  const repoRoot = absoluteOutput(required(values, 'repo-root'), 'repo-root');\n  const targetSha = required(values, 'target-sha');
   const market = required(values, 'market');
   const symbol = required(values, 'symbol');
   const strategyScope = required(values, 'strategy-scope');
@@ -74,7 +74,7 @@ async function main() {
       readJson(partialFillExpectedPath),
     ]);
 
-  const result = await preparePaperForwardAuthoritativeRecords({
+  const dependencies = createPaperForwardCanonicalPreparationDependencies({ repoRoot });\n\n  const result = await preparePaperForwardAuthoritativeRecords({
     targetSha,
     market,
     symbol,
@@ -84,8 +84,7 @@ async function main() {
     riskPolicyRecord,
     liquidityRuntimeInput,
     partialFillArtifact: partialFillArtifact as never,
-    partialFillExpected: partialFillExpected as never,
-  });
+    partialFillExpected: partialFillExpected as never,\n  }, dependencies);
 
   if (result.status !== 'PREPARED' || !result.riskPolicyRecord || !result.supplementalCostRecord) {
     process.stdout.write(JSON.stringify(result, null, 2) + '\n');
