@@ -9,6 +9,7 @@ import { buildTaskPlan } from '../src/engine.mjs';
 const source = readFileSync(new URL('../deploy/activate-server.sh', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
 const SHA = 'a'.repeat(40);
 const KEY = 'PAPER_FORWARD_RISK_POLICY_RECORD_PATH';
+const COST_KEY = 'PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH';
 const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
 const shellPath = (path) => process.platform === 'win32'
   ? path.replaceAll('\\', '/').replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`) : path;
@@ -57,7 +58,7 @@ switch (name) {
 }
 `;
 
-function activate(value, { mode = 'activate', legacy } = {}) {
+function activate(value, { mode = 'activate', legacy, supplemental } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'server-risk-env-'));
   const shellRoot = shellPath(root);
   try {
@@ -84,8 +85,10 @@ function activate(value, { mode = 'activate', legacy } = {}) {
       TARGET_SHA: SHA, HARNESS_ROOT: shellRoot, HARNESS_ROOT_NATIVE: root, REAL_NODE: shellPath(process.execPath),
       MSYS2_ENV_CONV_EXCL: '*' };
     delete env[KEY];
+    delete env[COST_KEY];
     delete env.GENERIC_RISK_POLICY_LIVE_RECORD_PATH;
     if (value !== undefined) env[KEY] = value;
+    if (supplemental !== undefined) env[COST_KEY] = supplemental;
     if (legacy !== undefined) env.GENERIC_RISK_POLICY_LIVE_RECORD_PATH = legacy;
     const result = spawnSync(bash, ['-s', '--', mode], { env,
       input: 'export PATH="$HARNESS_ROOT/bin:$PATH"\n' + script, cwd: root, encoding: 'utf8', timeout: 30_000 });
@@ -147,6 +150,42 @@ test('invalid paths fail before preflight or activation tools, env writes, symli
       const result = activate(value, { mode });
       assert.equal(result.status, 64, `${mode} ${JSON.stringify(value)}: ${result.stderr}`);
       assert.match(result.stderr, /normalized absolute path/);
+      assert.equal(result.environment, null);
+      assert.deepEqual(result.events, []);
+    }
+  }
+});
+
+test('supplemental cost path survives server EnvironmentFile into Paper only; missing stays absent', () => {
+  for (const supplemental of [undefined, '']) {
+    const result = activate(undefined, { supplemental });
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.environment, /PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH=/);
+  }
+  const value = '/owner supplied/cost \'"back\\slash $HOME $(touch sentinel) `touch sentinel` #%;/record.json';
+  const result = activate(undefined, { supplemental: value });
+  assert.equal(result.status, 0, result.stderr);
+  const expected = `${COST_KEY}="${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
+  assert.deepEqual(result.environment.split('\n').filter(line => line.startsWith(`${COST_KEY}=`)), [expected]);
+  const decoded = expected.slice(COST_KEY.length + 2, -1).replace(/\\(["\\`$])/gu, '$1');
+  assert.equal(decoded, value);
+  if (process.platform !== 'win32') {
+    const plan = buildTaskPlan({ profile: 'forward', stateRoot: '/sandbox/state', researchSha: SHA,
+      activationAtMs: 12345, env: { [COST_KEY]: decoded } });
+    assert.equal(plan.find(task => task.kind === 'paper').env[COST_KEY], value);
+    assert.equal(Object.hasOwn(plan.find(task => task.kind === 'shadow').env, COST_KEY), false);
+  }
+  assert.equal(result.sentinelPresent, false);
+  assert.ok(result.events.every(event => !event.slice(1).includes(value)));
+});
+
+test('unsafe supplemental cost paths fail before server activation mutation', () => {
+  for (const mode of ['preflight', 'activate']) {
+    for (const supplemental of ['relative/cost.json', '/owner/../cost.json',
+      '/owner/cost\nREAL_ORDER_ENABLED=true', '/owner/cost\r.json']) {
+      const result = activate(undefined, { mode, supplemental });
+      assert.equal(result.status, 64, `${mode} ${JSON.stringify(supplemental)}: ${result.stderr}`);
+      assert.match(result.stderr, /PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH must be a normalized absolute path/);
       assert.equal(result.environment, null);
       assert.deepEqual(result.events, []);
     }
