@@ -240,6 +240,17 @@ export function buildTaskPlan({
         }
         env.PAPER_FORWARD_RISK_POLICY_RECORD_PATH = riskPolicyRecordPath;
       }
+      const supplementalCostEvidencePath = inheritedEnv?.PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH;
+      if (supplementalCostEvidencePath != null && supplementalCostEvidencePath !== '') {
+        if (typeof supplementalCostEvidencePath !== 'string'
+          || supplementalCostEvidencePath.trim() !== supplementalCostEvidencePath
+          || /[\0\r\n]/u.test(supplementalCostEvidencePath)
+          || !isAbsolute(supplementalCostEvidencePath)
+          || resolve(supplementalCostEvidencePath) !== supplementalCostEvidencePath) {
+          throw new Error('Research Paper supplemental cost evidence path must be a normalized absolute path');
+        }
+        env.PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH = supplementalCostEvidencePath;
+      }
       const runtimeDirectory = String(inheritedEnv?.RUNTIME_DIRECTORY ?? '').trim();
       if (runtimeDirectory) {
         if (!isAbsolute(runtimeDirectory)) {
