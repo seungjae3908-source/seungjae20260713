@@ -77,3 +77,64 @@ test('pre-open provider rejection stays on REST fallback across recreated defaul
     });
   }
 });
+
+test('connect timeout stays on REST fallback across recreated default clients', () => {
+  const originalWebSocket = globalThis.WebSocket;
+
+  try {
+    DefaultSocketFake.instances = [];
+    Object.defineProperty(globalThis, 'WebSocket', {
+      configurable: true,
+      writable: true,
+      value: DefaultSocketFake,
+    });
+
+    let connectTimeout: (() => void) | null = null;
+    const firstStatuses: Array<{ status: string; reason: string }> = [];
+    const first = createAiChartPublicStreamClient({
+      market: 'UPBIT',
+      symbol: 'TIMEOUTGUARD',
+      now: () => 2_000,
+      setTimeoutFn: (callback) => {
+        connectTimeout = callback;
+        return 1 as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeoutFn: () => {},
+      onStatus: (status, reason) => firstStatuses.push({ status, reason }),
+    });
+
+    first.start();
+    expect(DefaultSocketFake.instances).toHaveLength(1);
+    expect(connectTimeout).not.toBeNull();
+    connectTimeout?.();
+    expect(first.snapshot().status).toBe('FALLBACK_POLLING');
+    expect(firstStatuses.at(-1)).toEqual({
+      status: 'FALLBACK_POLLING',
+      reason: 'CONNECT_TIMEOUT',
+    });
+    first.stop();
+
+    const secondStatuses: Array<{ status: string; reason: string }> = [];
+    const second = createAiChartPublicStreamClient({
+      market: 'UPBIT',
+      symbol: 'TIMEOUTGUARD',
+      now: () => 2_000,
+      onStatus: (status, reason) => secondStatuses.push({ status, reason }),
+    });
+
+    second.start();
+    expect(DefaultSocketFake.instances).toHaveLength(1);
+    expect(second.snapshot().status).toBe('FALLBACK_POLLING');
+    expect(secondStatuses).toEqual([{
+      status: 'FALLBACK_POLLING',
+      reason: 'PROVIDER_FALLBACK_COOLDOWN',
+    }]);
+    second.stop();
+  } finally {
+    Object.defineProperty(globalThis, 'WebSocket', {
+      configurable: true,
+      writable: true,
+      value: originalWebSocket,
+    });
+  }
+});
