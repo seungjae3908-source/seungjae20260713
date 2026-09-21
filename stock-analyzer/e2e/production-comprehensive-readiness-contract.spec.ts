@@ -61,3 +61,14 @@ test('Production chart audit waits for the matching settled query before accepti
   expect(matrix).toContain("dataMarket !== market || dataTimeframe !== timeframe");
   expect(matrix).toContain("{ timeout: 8_500, intervals: [100, 250, 500, 1_000] }");
 });
+
+test('Production cold-route modules prewarm after approval without competing with direct AI Chart bootstrap', () => {
+  const app = source('src/App.tsx');
+  expect(app).toContain('void Promise.allSettled([');
+  expect(app).toContain('loadMarketInformationPage()');
+  expect(app).toContain('loadBacktestsPage()');
+  expect(app).toContain('loadMorePage()');
+  expect(app).toContain('loadStockInfoPage()');
+  expect(app).toContain('loadDetailPage()');
+  expect(app).toContain('if (!auth.isApproved || directAiChartColdRoute) return;');
+});
