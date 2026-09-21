@@ -465,5 +465,8 @@ test('interactive fallback classification keeps deadline/abort/upstream timeout 
     /if \(isBoundedKrInteractiveRequest\(ticker, timeframe\)\) \{\s*return getBoundedKrInteractiveCandlesMeta\(ticker, timeframe\);\s*\}/,
   );
   assert.match(source, /KR_INTERACTIVE_TIMEFRAMES[\s\S]*'1D'/);
-  assert.match(source, /Promise\.race\(\[\s*Promise\.any\(\[kiwoomAttempt, yahooAttempt\]\),\s*terminalDeadline,\s*\]\)/);
+  assert.match(source, /const providerAttempts:[\s\S]*kiwoomAttempt,[\s\S]*yahooAttempt,[\s\S]*tossAttempt/);
+  assert.match(source, /Promise\.race\(\[\s*Promise\.any\(providerAttempts\),\s*terminalDeadline,\s*\]\)/);
+  assert.match(source, /String\(timeframe\) === '1m'[\s\S]*String\(timeframe\) === '1D'/);
+  assert.match(source, /getTossCandles\(entry, timeframe, 200\)/);
 });

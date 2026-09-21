@@ -66,6 +66,8 @@ jobs:
     if: >-
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.name == 'Public Forward Liquidity V3 Canonical Ingest' &&
+       (github.event.workflow_run.event == 'workflow_run' ||
+        github.event.workflow_run.event == 'issue_comment') &&
        github.event.workflow_run.status == 'completed' &&
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
