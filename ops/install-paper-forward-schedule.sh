@@ -36,7 +36,12 @@ OUTCOME_ACCUMULATION_ENABLED="${PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED:-fals
 # The scheduled runner owns this explicit read-only adapter. #772 owns record
 # validation, not a filename or investment-policy defaults.
 PAPER_FORWARD_RISK_POLICY_RECORD_PATH="${PAPER_FORWARD_RISK_POLICY_RECORD_PATH:-}"
+PAPER_FORWARD_RISK_POLICY_DECISION_PATH="${PAPER_FORWARD_RISK_POLICY_DECISION_PATH:-}"
 PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH="${PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH:-}"
+RISK_POLICY_MATERIALIZER="$SOURCE_LAB/scripts/materialize-paper-risk-policy-record.mjs"
+RISK_POLICY_RECORD_DIR="$STATE_ROOT/policy"
+RISK_POLICY_SOURCE_MODE=""
+RISK_POLICY_DECISION_RELATIVE_PATH=""
 PREVIOUS_CRONTAB=""
 CRONTAB_MUTATED=0
 BACKUP_PATH=""
@@ -91,11 +96,29 @@ DEPLOYED_SHA="$(tr -d '[:space:]' < "$DEPLOY_MARKER")"
 [[ "$STATE_ROOT" != "$LIVE_DIR" && "$STATE_ROOT" != "$LIVE_DIR/"* ]] || fail "state root must remain outside deploy tree" 8
 [[ "$PUBLISHER_BINDING_PATH" == "$STATE_ROOT/publisher-binding.json" ]] || fail "publisher binding path escaped persistent state root" 8
 [[ "$PAPER_STATE_SNAPSHOT_PATH" == "$STATE_ROOT/publisher/paper-state-v2.json" ]] || fail "Paper snapshot path escaped persistent state root" 8
-if [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" || -n "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" ]]; then
-  [[ -n "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" ]] || fail "CANONICAL_RISK_POLICY_RECORD_MISSING: explicit Paper risk policy source required" 15
-  [[ "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" == /* ]] || fail "Paper risk policy record path must be absolute" 15
-  [[ "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" != *"'"* && "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" != *$'\n'* && "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" != *$'\r'* ]] || fail "Paper risk policy record path is unsafe for the pinned wrapper" 15
-  [[ -f "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" && -r "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" ]] || fail "CANONICAL_RISK_POLICY_RECORD_MISSING: Paper risk policy source missing or unreadable" 15
+if [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" || -n "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" || -n "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" ]]; then
+  if [[ -n "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" && -n "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" ]]; then
+    fail "CANONICAL_RISK_POLICY_SOURCE_AMBIGUOUS: provide either an explicit record or approved decision, not both" 15
+  fi
+  if [[ -n "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" ]]; then
+    [[ "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" == /* ]] || fail "Paper risk policy record path must be absolute" 15
+    [[ "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" != *"'"* && "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" != *$'\n'* && "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" != *$'\r'* ]] || fail "Paper risk policy record path is unsafe for the pinned wrapper" 15
+    [[ -f "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" && -r "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" ]] || fail "CANONICAL_RISK_POLICY_RECORD_MISSING: Paper risk policy source missing or unreadable" 15
+    RISK_POLICY_SOURCE_MODE="EXPLICIT_RECORD"
+  else
+    [[ -n "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" ]] || fail "CANONICAL_RISK_POLICY_RECORD_MISSING: explicit Paper risk policy source required" 15
+    [[ "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" == /* ]] || fail "Paper risk policy decision path must be absolute" 15
+    [[ "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" != *"'"* && "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" != *$'\n'* && "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" != *$'\r'* ]] || fail "Paper risk policy decision path is unsafe for the pinned wrapper" 15
+    [[ -f "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" && -r "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" ]] || fail "CANONICAL_RISK_POLICY_DECISION_MISSING: approved policy decision missing or unreadable" 15
+    [[ -f "$RISK_POLICY_MATERIALIZER" && -r "$RISK_POLICY_MATERIALIZER" ]] || fail "CANONICAL_RISK_POLICY_MATERIALIZER_MISSING" 15
+    case "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" in
+      "$SOURCE_LAB"/*) ;;
+      *) fail "Paper risk policy decision must be pinned inside the exact source tree" 15 ;;
+    esac
+    RISK_POLICY_DECISION_RELATIVE_PATH="${PAPER_FORWARD_RISK_POLICY_DECISION_PATH#"$SOURCE_LAB/"}"
+    [[ -n "$RISK_POLICY_DECISION_RELATIVE_PATH" && "$RISK_POLICY_DECISION_RELATIVE_PATH" != ../* && "$RISK_POLICY_DECISION_RELATIVE_PATH" != */../* ]] || fail "Paper risk policy decision relative path invalid" 15
+    RISK_POLICY_SOURCE_MODE="APPROVED_DECISION"
+  fi
 fi
 
 if [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" || -n "$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" ]]; then
@@ -119,6 +142,19 @@ NODE_BIN="$(command -v node)"
 FLOCK_BIN="$(command -v flock)"
 mkdir -p "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$IDENTITY_ARCHIVE_ROOT" "$IDENTITY_CUTOVER_ROOT" "$RUNTIME_STATE_ROOT" "$PUBLISHER_DIR" "$PUBLISHER_SNAPSHOT_ARCHIVE_ROOT"
 chmod 700 "$STATE_ROOT" "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$IDENTITY_ARCHIVE_ROOT" "$IDENTITY_CUTOVER_ROOT" "$RUNTIME_STATE_ROOT" "$PUBLISHER_DIR" "$PUBLISHER_SNAPSHOT_ARCHIVE_ROOT"
+
+if [[ "$RISK_POLICY_SOURCE_MODE" == "APPROVED_DECISION" ]]; then
+  mkdir -p "$RISK_POLICY_RECORD_DIR"
+  chmod 700 "$RISK_POLICY_RECORD_DIR"
+  PAPER_FORWARD_RISK_POLICY_RECORD_PATH="$RISK_POLICY_RECORD_DIR/risk-policy-record.json"
+  "$NODE_BIN" "$RISK_POLICY_MATERIALIZER" \
+    --decision "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" \
+    --research-sha "$TARGET_SHA" \
+    --output "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" >/dev/null \
+    || fail "CANONICAL_RISK_POLICY_DECISION_MATERIALIZATION_FAILED" 15
+  [[ -f "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" && -r "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" ]] \
+    || fail "CANONICAL_RISK_POLICY_RECORD_MISSING: materialized policy record unavailable" 15
+fi
 
 if [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" ]]; then
   if [[ -n "$PUBLISHER_ACCOUNT_ID_SHA256" ]]; then
@@ -344,6 +380,12 @@ if [[ -f "\$LOG_FILE" ]] && [[ "\$(wc -c < "\$LOG_FILE")" -gt 5242880 ]]; then
 fi
 exec >>"\$LOG_FILE" 2>&1
 printf '[paper-forward-cron] invoked_at=%s\n' "\$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+if [[ '$RISK_POLICY_SOURCE_MODE' == 'APPROVED_DECISION' ]]; then
+  '$NODE_BIN' '$RUNTIME_RELEASE/scripts/materialize-paper-risk-policy-record.mjs' \
+    --decision '$RUNTIME_RELEASE/$RISK_POLICY_DECISION_RELATIVE_PATH' \
+    --research-sha '$TARGET_SHA' \
+    --output '$PAPER_FORWARD_RISK_POLICY_RECORD_PATH' >/dev/null
+fi
 exec /usr/bin/env -i \
   HOME="\${HOME:-/tmp}" \
   PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \

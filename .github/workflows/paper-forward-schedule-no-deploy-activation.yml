@@ -13,6 +13,9 @@ on:
       - market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js
       - market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js
       - market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
+      - market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v1.json
+      - market-prediction-lab/scripts/materialize-paper-risk-policy-record.mjs
+      - market-prediction-lab/tests/paper-risk-policy-human-approval-v1.test.js
   workflow_dispatch:
     inputs:
       target_sha:
@@ -72,6 +75,10 @@ jobs:
           grep -F 'snapshotEconomicStatePreserved: true' "$install" >/dev/null
           grep -F 'naturalCycleCredit: 0' "$install" >/dev/null
           grep -F 'exec /usr/bin/env -i' "$install" >/dev/null
+          grep -F 'PAPER_FORWARD_RISK_POLICY_DECISION_PATH' "$install" >/dev/null
+          grep -F 'materialize-paper-risk-policy-record.mjs' "$install" >/dev/null
+          grep -F 'financialValuesFromApprovedDecision:true' market-prediction-lab/scripts/materialize-paper-risk-policy-record.mjs >/dev/null
+          grep -F '"maximumLeverage": 5' market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v1.json >/dev/null
           grep -F "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='\$OUTCOME_ACCUMULATION_ENABLED'" "$install" >/dev/null
           ! grep -F 'deploy-production.sh' "$operational_contract" >/dev/null
           ! grep -E 'pm2 (start|restart|reload|delete|stop)|systemctl .*caddy|caddy reload|supabase db|psql .*-(c|f)' "$operational_contract" >/dev/null
@@ -130,6 +137,7 @@ jobs:
           market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js
           market-prediction-lab/tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js
           market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
+          market-prediction-lab/tests/paper-risk-policy-human-approval-v1.test.js
 
       - name: Bundle authenticated Paper snapshot transport regression
         run: >-
@@ -165,6 +173,8 @@ jobs:
           grep -F 'snapshotEconomicStatePreserved: true' "$install" >/dev/null
           grep -F 'naturalCycleCredit: 0' "$install" >/dev/null
           grep -F 'exec /usr/bin/env -i' "$install" >/dev/null
+          grep -F 'PAPER_FORWARD_RISK_POLICY_DECISION_PATH' "$install" >/dev/null
+          grep -F 'materialize-paper-risk-policy-record.mjs' "$install" >/dev/null
           grep -F '/opt/stock-app-data/paper-forward-v1' "$install" >/dev/null
           grep -F 'productionAppDeployPerformed = false' "$active_contract" >/dev/null
           grep -F 'productionAppMutationAllowed = false' "$active_contract" >/dev/null
@@ -575,6 +585,7 @@ jobs:
           printf '%s\n' "$TARGET_SHA" > "$SOURCE_DIR/.deploy/current-sha"
           LIVE_DIR="$SOURCE_DIR" PAPER_FORWARD_STATE_ROOT="$STATE_ROOT" PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=true \
             PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256" \
+            PAPER_FORWARD_RISK_POLICY_DECISION_PATH="$SOURCE_DIR/market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v1.json" \
             "$SOURCE_DIR/ops/install-paper-forward-schedule.sh" "$TARGET_SHA" >/dev/null
           PRODUCTION_APP_SHA="$PRODUCTION_APP_SHA" TARGET_SHA="$TARGET_SHA" node - "$STATE_ROOT/activation.json" <<'NODE'
           const fs = require('node:fs');
