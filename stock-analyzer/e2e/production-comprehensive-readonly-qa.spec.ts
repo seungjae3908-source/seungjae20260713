@@ -148,11 +148,18 @@ async function installSafety(page: Page, blocked: Diagnostic[]) {
 }
 
 async function login(page: Page) {
-  await page.goto('/login', { waitUntil: 'domcontentloaded', timeout: 15_000 });
+  // Gate on the actual interactive login surface, not the document-wide
+  // DOMContentLoaded event. A slow unrelated resource must not make a healthy
+  // login UI look unavailable, while the same 15s navigation bound remains.
+  await page.goto('/login', { waitUntil: 'commit', timeout: 15_000 });
+  const loginButton = page.getByRole('button', { name: '로그인', exact: true });
+  await expect(page.getByLabel('아이디')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel('비밀번호')).toBeVisible({ timeout: 10_000 });
+  await expect(loginButton).toBeVisible({ timeout: 10_000 });
   await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 10_000 });
   await page.getByLabel('아이디').fill(qaLogin, { timeout: 3_000 });
   await page.getByLabel('비밀번호').fill(qaPassword, { timeout: 3_000 });
-  await page.getByRole('button', { name: '로그인', exact: true }).click({ timeout: 3_000 });
+  await loginButton.click({ timeout: 3_000 });
   await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: 15_000 });
 }
 
