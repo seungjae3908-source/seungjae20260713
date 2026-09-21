@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, type QueryClient } from '@tanstack/react-query';
 import { AlertTriangle, BarChart3, ChevronRight, RefreshCw, WifiOff } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
@@ -72,6 +72,19 @@ async function requestRoom(route: MarketInformationRoute, signal: AbortSignal) {
   }
 
   return parseMarketInformationText(text, route);
+}
+
+export async function prefetchMarketInformationRoom(
+  client: QueryClient,
+  path = '/stocks/kr',
+): Promise<void> {
+  const route = marketInformationRoute(path);
+  if (!route) return;
+  await client.prefetchQuery({
+    queryKey: ['market-information-room', route.id],
+    queryFn: ({ signal }) => requestRoom(route, signal),
+    staleTime: route.id === 'coins-futures' ? 10_000 : route.id === 'coins-spot' ? 15_000 : 30_000,
+  });
 }
 
 function formatDate(value: string | null): string {
