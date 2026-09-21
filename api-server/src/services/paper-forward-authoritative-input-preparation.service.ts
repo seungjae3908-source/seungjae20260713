@@ -10,9 +10,7 @@ import {
 } from './authoritative-paper-partial-fill-cost-evidence.service';
 import type { PercentCostEvidence } from './scanner-profit-cost-evidence-adapter.service';
 // @ts-expect-error Canonical sidecar ESM is JavaScript-owned and has no TypeScript declaration file.
-import {
-  buildPublicForwardLiquidityRuntimeCostEvidence,
-} from '../../../market-intelligence-sidecar/src/public-forward-liquidity-runtime-cost-evidence.mjs';
+import { buildPublicForwardLiquidityRuntimeCostEvidence } from '../../../market-intelligence-sidecar/src/public-forward-liquidity-runtime-cost-evidence.mjs';
 
 export const PAPER_FORWARD_AUTHORITATIVE_INPUT_PREPARATION_VERSION =
   'paper-forward-authoritative-input-preparation-v1' as const;
