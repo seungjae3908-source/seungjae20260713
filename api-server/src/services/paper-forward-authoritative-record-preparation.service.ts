@@ -1,4 +1,5 @@
-import { buildPublicForwardLiquidityRuntimeCostEvidence } from '../../../market-intelligence-sidecar/src/public-forward-liquidity-runtime-cost-evidence.mjs';
+import { isAbsolute, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   buildAuthoritativePaperPartialFillCostEvidence,
   type PartialFillCalibrationArtifact,
@@ -32,7 +33,7 @@ type RiskValidationResult = Readonly<{
   financialMutationAllowed?: boolean;
 }>;
 
-type Dependencies = Readonly<{
+export type PaperForwardAuthoritativeRecordPreparationDependencies = Readonly<{
   validateRiskPolicy(input: Readonly<{
     record: unknown;
     request: Readonly<{
@@ -43,7 +44,7 @@ type Dependencies = Readonly<{
     }>;
     nowMs: number;
   }>): Promise<RiskValidationResult>;
-  buildLiquidityEvidence(input: unknown): unknown;
+  buildLiquidityEvidence(input: unknown): unknown | Promise<unknown>;
   buildPartialFillEvidence(input: Readonly<{
     artifact?: PartialFillCalibrationArtifact | null;
     expected: PartialFillCalibrationContext;
@@ -202,25 +203,57 @@ function exactScopeBlockers(
   return blockers;
 }
 
-const DEFAULT_DEPENDENCIES: Dependencies = Object.freeze({
-  async validateRiskPolicy({ record: canonicalRecord, request, nowMs }) {
-    const producer = createAuthoritativePaperGenericRiskPolicyProducer({
-      readCanonicalRecord: async () => canonicalRecord,
-      now: () => nowMs,
-    });
-    return producer(request);
-  },
-  buildLiquidityEvidence(input) {
-    return buildPublicForwardLiquidityRuntimeCostEvidence(input as Record<string, unknown>);
-  },
-  buildPartialFillEvidence(input) {
-    return buildAuthoritativePaperPartialFillCostEvidence(input);
-  },
-});
+async function validateCanonicalRiskPolicy({
+  record: canonicalRecord,
+  request,
+  nowMs,
+}: Readonly<{
+  record: unknown;
+  request: Readonly<{
+    market: 'CRYPTO_FUTURES';
+    symbol: string;
+    strategyScope: string;
+    researchCodeSha: string;
+  }>;
+  nowMs: number;
+}>) {
+  const producer = createAuthoritativePaperGenericRiskPolicyProducer({
+    readCanonicalRecord: async () => canonicalRecord,
+    now: () => nowMs,
+  });
+  return producer(request);
+}
+
+export function createPaperForwardCanonicalPreparationDependencies(input: Readonly<{
+  repoRoot: string;
+}>): PaperForwardAuthoritativeRecordPreparationDependencies {
+  if (!nonEmpty(input?.repoRoot) || !isAbsolute(input.repoRoot) || resolve(input.repoRoot) !== input.repoRoot) {
+    throw new TypeError('AUTHORITATIVE_RECORD_REPO_ROOT_MUST_BE_NORMALIZED_ABSOLUTE');
+  }
+  const liquidityModuleUrl = pathToFileURL(resolve(
+    input.repoRoot,
+    'market-intelligence-sidecar/src/public-forward-liquidity-runtime-cost-evidence.mjs',
+  )).href;
+  return Object.freeze({
+    validateRiskPolicy: validateCanonicalRiskPolicy,
+    async buildLiquidityEvidence(value) {
+      const module = await import(liquidityModuleUrl) as Readonly<{
+        buildPublicForwardLiquidityRuntimeCostEvidence?: (payload?: Readonly<Record<string, unknown>>) => unknown;
+      }>;
+      if (typeof module.buildPublicForwardLiquidityRuntimeCostEvidence !== 'function') {
+        throw new Error('CANONICAL_LIQUIDITY_RUNTIME_COST_BUILDER_MISSING');
+      }
+      return module.buildPublicForwardLiquidityRuntimeCostEvidence(value as Readonly<Record<string, unknown>>);
+    },
+    buildPartialFillEvidence(value) {
+      return buildAuthoritativePaperPartialFillCostEvidence(value);
+    },
+  });
+}
 
 export async function preparePaperForwardAuthoritativeRecords(
   input: PaperForwardAuthoritativeRecordPreparationInput,
-  dependencies: Dependencies = DEFAULT_DEPENDENCIES,
+  dependencies: PaperForwardAuthoritativeRecordPreparationDependencies,
 ): Promise<PaperForwardAuthoritativeRecordPreparationResult> {
   const blockers = exactScopeBlockers(input);
   const nowMs = positive(input.nowMs) ? input.nowMs : Date.now();
@@ -250,7 +283,7 @@ export async function preparePaperForwardAuthoritativeRecords(
   }
 
   const liquidityInput = record(input.liquidityRuntimeInput);
-  const liquidityResult = record(dependencies.buildLiquidityEvidence({
+  const liquidityResult = record(await dependencies.buildLiquidityEvidence({
     ...(liquidityInput ?? {}),
     nowMs,
   }));
