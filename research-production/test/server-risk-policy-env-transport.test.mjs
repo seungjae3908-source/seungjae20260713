@@ -164,8 +164,8 @@ test('supplemental cost path survives server EnvironmentFile; missing stays abse
   }
   const combined = activate('/owner/policy.record', { supplemental: '/owner/cost.record' });
   assert.equal(combined.status, 0, combined.stderr);
-  assert.match(combined.environment, /^PAPER_FORWARD_RISK_POLICY_RECORD_PATH="\\/owner\\/policy\\.record"$/m);
-  assert.match(combined.environment, /^PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH="\\/owner\\/cost\\.record"$/m);
+  assert.ok(combined.environment.split('\n').includes('PAPER_FORWARD_RISK_POLICY_RECORD_PATH="/owner/policy.record"'));
+  assert.ok(combined.environment.split('\n').includes('PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH="/owner/cost.record"'));
   const value = '/owner supplied/cost \'"back\\slash $HOME $(touch sentinel) `touch sentinel` #%;/record.json';
   const result = activate(undefined, { supplemental: value });
   assert.equal(result.status, 0, result.stderr);
