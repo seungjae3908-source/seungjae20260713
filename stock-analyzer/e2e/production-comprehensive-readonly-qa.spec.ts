@@ -113,6 +113,14 @@ function requestPath(rawUrl: string) {
   try { return new URL(rawUrl).pathname; } catch { return 'unknown'; }
 }
 
+function sanitizeLoginDiagnostics(items: Diagnostic[]) {
+  return items.map((item) => ({
+    ...item,
+    path: item.path.split('?')[0].slice(0, 300),
+    detail: item.detail.slice(0, 300),
+  }));
+}
+
 function attachDiagnostics(page: Page, diagnostics: Diagnostic[]) {
   page.on('console', (message) => {
     if (message.type() !== 'error') return;
@@ -149,35 +157,73 @@ async function installSafety(page: Page, blocked: Diagnostic[]) {
 
 const LOGIN_READY_BUDGET_MS = 15_000;
 
-async function login(page: Page) {
-  // Judge readiness by the actual interactive login surface while preserving
-  // one total 15s readiness budget. Do not extend the gate through serial waits.
-  const readinessStartedAt = Date.now();
-  const remainingReadinessMs = () =>
-    Math.max(1, LOGIN_READY_BUDGET_MS - (Date.now() - readinessStartedAt));
+async function login(
+  page: Page,
+  testInfo: TestInfo,
+  diagnostics: Diagnostic[],
+  blocked: Diagnostic[],
+  evidenceName: string,
+) {
+  const startedAt = Date.now();
+  const diagnosticStart = diagnostics.length;
+  const blockedStart = blocked.length;
+  try {
+    // Judge readiness by the actual interactive login surface while preserving
+    // one total 15s readiness budget. Do not extend the gate through serial waits.
+    const readinessStartedAt = Date.now();
+    const remainingReadinessMs = () =>
+      Math.max(1, LOGIN_READY_BUDGET_MS - (Date.now() - readinessStartedAt));
 
-  await page.goto('/login', { waitUntil: 'commit', timeout: remainingReadinessMs() });
-  const loginId = page.getByLabel('아이디');
-  const loginPassword = page.getByLabel('비밀번호');
-  const loginButton = page.getByRole('button', { name: '로그인', exact: true });
+    await page.goto('/login', { waitUntil: 'commit', timeout: remainingReadinessMs() });
+    const loginId = page.getByLabel('아이디');
+    const loginPassword = page.getByLabel('비밀번호');
+    const loginButton = page.getByRole('button', { name: '로그인', exact: true });
 
-  await expect.poll(async () => {
-    const [idVisible, passwordVisible, buttonVisible, fallbackVisible] = await Promise.all([
-      loginId.isVisible({ timeout: 250 }).catch(() => false),
-      loginPassword.isVisible({ timeout: 250 }).catch(() => false),
-      loginButton.isVisible({ timeout: 250 }).catch(() => false),
-      page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false),
-    ]);
-    return idVisible && passwordVisible && buttonVisible && !fallbackVisible ? 'READY' : 'PENDING';
-  }, {
-    timeout: remainingReadinessMs(),
-    intervals: [100, 200, 400, 800],
-  }).toBe('READY');
+    await expect.poll(async () => {
+      const [idVisible, passwordVisible, buttonVisible, fallbackVisible] = await Promise.all([
+        loginId.isVisible({ timeout: 250 }).catch(() => false),
+        loginPassword.isVisible({ timeout: 250 }).catch(() => false),
+        loginButton.isVisible({ timeout: 250 }).catch(() => false),
+        page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false),
+      ]);
+      return idVisible && passwordVisible && buttonVisible && !fallbackVisible ? 'READY' : 'PENDING';
+    }, {
+      timeout: remainingReadinessMs(),
+      intervals: [100, 200, 400, 800],
+    }).toBe('READY');
 
-  await loginId.fill(qaLogin, { timeout: 3_000 });
-  await loginPassword.fill(qaPassword, { timeout: 3_000 });
-  await loginButton.click({ timeout: 3_000 });
-  await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: 15_000 });
+    await loginId.fill(qaLogin, { timeout: 3_000 });
+    await loginPassword.fill(qaPassword, { timeout: 3_000 });
+    await loginButton.click({ timeout: 3_000 });
+    await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: 15_000 });
+  } catch (error) {
+    const finalPath = currentPath(page);
+    const loginDiagnostics = sanitizeLoginDiagnostics(diagnostics.slice(diagnosticStart));
+    const loginBlocked = sanitizeLoginDiagnostics(blocked.slice(blockedStart));
+    const [loginSurfaceVisible, membershipVisible, fallbackVisible] = page.isClosed()
+      ? [false, false, false]
+      : await Promise.all([
+        page.getByRole('button', { name: '로그인', exact: true }).isVisible({ timeout: 250 }).catch(() => false),
+        page.getByTestId('membership-label').isVisible({ timeout: 250 }).catch(() => false),
+        page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false),
+      ]);
+    writeJson(`${slug(testInfo.project.name)}-${slug(evidenceName)}-login-failure.json`, {
+      project: testInfo.project.name,
+      evidenceName,
+      authenticated: false,
+      durationMs: Date.now() - startedAt,
+      finalPath,
+      ui: { loginSurfaceVisible, membershipVisible, fallbackVisible },
+      diagnostics: loginDiagnostics,
+      blocked: loginBlocked,
+      complete: true,
+    });
+    const summary = loginDiagnostics.slice(-8)
+      .map((item) => `${item.kind}:${item.status ?? '-'}:${item.path}:${item.detail}`)
+      .join(' | ') || 'NO_CAPTURED_DIAGNOSTIC';
+    const original = error instanceof Error ? error.message.split('\n')[0].slice(0, 160) : 'login assertion failed';
+    throw new Error(`[PRODUCTION_QA_AUTH_NOT_ESTABLISHED] finalPath=${finalPath}; diagnostics=${summary}; original=${original}`);
+  }
 }
 
 async function auditLayout(page: Page) {
@@ -549,7 +595,7 @@ test.describe('Production comprehensive read-only QA', () => {
     const blocked: Diagnostic[] = [];
     attachDiagnostics(page, diagnostics);
     await installSafety(page, blocked);
-    await login(page);
+    await login(page, testInfo, diagnostics, blocked, 'routes');
     const routes = full ? FULL_ROUTES : CRITICAL_ROUTES;
     const audits: RouteAudit[] = [];
     const tabFailures: Array<{ route: string; failures: string[] }> = [];
@@ -581,7 +627,7 @@ test.describe('Production comprehensive read-only QA', () => {
     const blocked: Diagnostic[] = [];
     attachDiagnostics(page, diagnostics);
     await installSafety(page, blocked);
-    await login(page);
+    await login(page, testInfo, diagnostics, blocked, 'search');
     const perMarket = testInfo.project.name === 'prod-desktop-1440' ? 20 : 5;
     const filename = `${slug(testInfo.project.name)}-search.json`;
     const audits = await searchMatrix(page, ['국내','미국','코인 현물','코인 선물'], perMarket, (progress) => {
@@ -601,7 +647,7 @@ test.describe('Production comprehensive read-only QA', () => {
     const blocked: Diagnostic[] = [];
     attachDiagnostics(page, diagnostics);
     await installSafety(page, blocked);
-    await login(page);
+    await login(page, testInfo, diagnostics, blocked, 'charts');
     const filename = `${slug(testInfo.project.name)}-charts.json`;
     const audits = await chartMatrix(page, (progress) => {
       writeJson(filename, { project: testInfo.project.name, audits: progress, diagnostics, blocked, complete: false });
