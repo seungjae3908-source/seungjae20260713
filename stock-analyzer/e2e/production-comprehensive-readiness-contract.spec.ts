@@ -65,7 +65,7 @@ test('Production chart audit waits for the matching settled query before accepti
   expect(matrix).toContain("dataMarket !== market || dataTimeframe !== timeframe");
   expect(matrix).toContain("{ timeout: 8_500, intervals: [100, 250, 500, 1_000] }");
   expect(marketData).toContain("const oneMinuteDisk = await readCandleDiskCache(ticker, '1m')");
-  expect(marketData).toContain('aggregateCachedCandles(oneMinuteDisk.candles, derivationSize)');
+  expect(marketData).toContain('aggregateOneMinuteCandles(oneMinuteDisk.candles, derivationSize)');
   expect(marketData).toContain('void cached(cacheKey, candleCacheTtl(timeframeText), load)');
 });
 
