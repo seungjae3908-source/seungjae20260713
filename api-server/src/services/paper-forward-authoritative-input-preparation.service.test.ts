@@ -196,10 +196,10 @@ test('invalid exact research SHA fails closed', async () => {
 });
 
 
-test('default canonical liquidity validator is executable and fails closed on missing genuine evidence', async () => {
+test('service fails closed when canonical liquidity runtime builder is not explicitly bound', async () => {
   const result = await preparePaperForwardAuthoritativeInputs(baseInput());
   assert.equal(result.status, 'BLOCKED_DATA');
-  assert.ok(result.blockers.some((code) => code.startsWith('LIQUIDITY:')));
+  assert.ok(result.blockers.includes('LIQUIDITY:CANONICAL_LIQUIDITY_RUNTIME_BUILDER_NOT_BOUND'));
   assert.equal(result.economicCreditCreated, false);
   assert.equal(result.executionAuthority, 'NONE');
 });
