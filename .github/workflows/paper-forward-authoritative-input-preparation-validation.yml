@@ -36,7 +36,6 @@ jobs:
           pnpm --dir api-server exec esbuild \
             src/services/paper-forward-authoritative-input-preparation.service.test.ts \
             --bundle --packages=external --platform=node --format=cjs --target=node20 \
-            --external:../../../market-intelligence-sidecar/src/public-forward-liquidity-runtime-cost-evidence.mjs \
             --outfile="$RUNNER_TEMP/paper-forward-authoritative-input-preparation.test.cjs"
           node --test "$RUNNER_TEMP/paper-forward-authoritative-input-preparation.test.cjs"
       - name: Bundle CLI
@@ -45,9 +44,9 @@ jobs:
           pnpm --dir api-server exec esbuild \
             src/scripts/prepare-paper-forward-authoritative-inputs.ts \
             --bundle --packages=external --platform=node --format=esm --target=node20 \
-            --external:../../../market-intelligence-sidecar/src/public-forward-liquidity-runtime-cost-evidence.mjs \
             --outfile="$RUNNER_TEMP/prepare-paper-forward-authoritative-inputs.mjs"
           node --check "$RUNNER_TEMP/prepare-paper-forward-authoritative-inputs.mjs"
+          node "$RUNNER_TEMP/prepare-paper-forward-authoritative-inputs.mjs" --help
       - name: Verify fail-closed safety boundary
         run: |
           set -Eeuo pipefail
