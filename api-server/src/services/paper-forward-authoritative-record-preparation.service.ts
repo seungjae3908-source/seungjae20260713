@@ -324,11 +324,11 @@ export async function preparePaperForwardAuthoritativeRecords(
     liquidityImpact,
     partialFillImpact,
     evidenceBindings: Object.freeze({
-      liquidityImpactArtifactDigest: digest(liquidityResult.liquidityImpactArtifactDigest)
-        ? String(liquidityResult.liquidityImpactArtifactDigest).toLowerCase()
+      liquidityImpactArtifactDigest: digest(liquidityResult?.liquidityImpactArtifactDigest)
+        ? String(liquidityResult?.liquidityImpactArtifactDigest).toLowerCase()
         : null,
-      partialFillArtifactDigest: digest(partialResult.artifactDigest)
-        ? String(partialResult.artifactDigest).toLowerCase()
+      partialFillArtifactDigest: digest(partialResult?.artifactDigest)
+        ? String(partialResult?.artifactDigest).toLowerCase()
         : null,
     }),
     unknownCostIsZero: false,

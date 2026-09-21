@@ -6,6 +6,7 @@ on:
       - 'api-server/src/services/paper-forward-authoritative-record-preparation.service.ts'
       - 'api-server/src/services/paper-forward-authoritative-record-preparation.service.test.ts'
       - 'api-server/src/scripts/prepare-paper-forward-authoritative-records.ts'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-runtime-cost-evidence.d.mts'
       - '.github/workflows/paper-forward-authoritative-record-preparation.yml'
 
 permissions:
