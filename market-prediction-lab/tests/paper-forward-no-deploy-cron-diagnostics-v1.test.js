@@ -407,13 +407,15 @@ async function withRiskPolicyTransport(run) {
   return withProductionShapedPinnedRelease(async ({ root, release }) => {
     const installer = await readFile(join(repositoryRoot, 'ops', 'install-paper-forward-schedule.sh'), 'utf8');
     const assignment = installer.match(/^PAPER_FORWARD_RISK_POLICY_RECORD_PATH=.*$/mu)?.[0];
-    const guard = installer.match(/if \[\[ "\$OUTCOME_ACCUMULATION_ENABLED" == "true"[^\n]*\n(?:(?!\nfi)[\s\S])*Paper risk policy source missing or unreadable[^\n]*\nfi/u)?.[0];
+    const decisionAssignment = installer.match(/^PAPER_FORWARD_RISK_POLICY_DECISION_PATH=.*$/mu)?.[0];
+    const guard = installer.match(/if \[\[ "\$OUTCOME_ACCUMULATION_ENABLED" == "true" \|\| -n "\$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" \|\| -n "\$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" \]\]; then[\s\S]*?RISK_POLICY_SOURCE_MODE="APPROVED_DECISION"\n  fi\nfi/u)?.[0];
     const costAssignment = installer.match(/^PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH=.*$/mu)?.[0];
     const costGuard = installer.match(/if \[\[ "\$OUTCOME_ACCUMULATION_ENABLED" == "true" \|\| -n "\$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" \]\]; then[\s\S]*?\nfi/u)?.[0];
     const whitelist = installer.match(/exec \/usr\/bin\/env -i[\s\S]*?(?=\nWRAPPER)/u)?.[0];
-    assert.ok(assignment && guard && costAssignment && costGuard && whitelist,
+    assert.ok(assignment && decisionAssignment && guard && costAssignment && costGuard && whitelist,
       'execute the actual installer config, preflight and env-i contract');
     assert.equal(assignment, 'PAPER_FORWARD_RISK_POLICY_RECORD_PATH="${PAPER_FORWARD_RISK_POLICY_RECORD_PATH:-}"');
+    assert.equal(decisionAssignment, 'PAPER_FORWARD_RISK_POLICY_DECISION_PATH="${PAPER_FORWARD_RISK_POLICY_DECISION_PATH:-}"');
     assert.equal(costAssignment, 'PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH="${PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH:-}"');
     assert.doesNotMatch(installer, /GENERIC_RISK_POLICY_LIVE_RECORD_PATH|generic-risk-policy-live-v1\.json/u);
     assert.match(guard, /-f "\$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" && -r "\$PAPER_FORWARD_RISK_POLICY_RECORD_PATH"/u);
@@ -486,7 +488,12 @@ async function withRiskPolicyTransport(run) {
         : whitelistForInspection;
       const script = `set -Eeuo pipefail
         PAPER_FORWARD_RISK_POLICY_RECORD_PATH="$TEST_CONTRACT_RECORD_PATH"
+        PAPER_FORWARD_RISK_POLICY_DECISION_PATH=''
         PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH="$TEST_COST_RECORD_PATH"
+        RISK_POLICY_MATERIALIZER=''
+        RISK_POLICY_DECISION_RELATIVE_PATH=''
+        RISK_POLICY_SOURCE_MODE=''
+        SOURCE_LAB="$TEST_CONTRACT_RELEASE"
         NODE_BIN="$TEST_CONTRACT_NODE"
         HARNESS="$TEST_CONTRACT_HARNESS"
         RUNTIME_DIR="$TEST_CONTRACT_RELEASE"
@@ -500,6 +507,7 @@ async function withRiskPolicyTransport(run) {
         PUBLISHER_ACCOUNT_ID_SHA256=''
         fail() { printf '%s\\n' "$1" >&2; exit "$2"; }
         ${assignment}
+        ${decisionAssignment}
         ${preflight ? guard : ''}
         ${costAssignment}
         ${preflight ? costGuard : ''}
