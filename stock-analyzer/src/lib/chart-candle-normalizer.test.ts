@@ -185,6 +185,42 @@ test('stock chart falls back only after a missing primary route and keeps strict
   assert.equal(result.provider, 'test');
 });
 
+test('stock chart uses the alternate endpoint after repeated HTTP 200 payloads remain insufficient', async () => {
+  const calls: string[] = [];
+  const result = await fetchUnifiedChartData({
+    market: 'KR',
+    symbol: '005930',
+    timeframe: '1m',
+    fetcher: async (input) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes('/candles?')) {
+        return new Response(JSON.stringify({
+          provider: 'primary-insufficient',
+          candles: [],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        provider: 'alternate-real',
+        fetchedAt: '2026-09-21T06:30:00.000Z',
+        candles: [
+          candle(1_700_000_000, 100),
+          candle(1_700_000_060, 101),
+        ],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+
+  assert.deepEqual(calls, [
+    '/api/stocks/005930/candles?tf=1m',
+    '/api/stocks/005930/candles?tf=1m',
+    '/api/stocks/005930/chart?tf=1m',
+  ]);
+  assert.equal(result.sourceUrl, '/api/stocks/005930/chart?tf=1m');
+  assert.equal(result.provider, 'alternate-real');
+  assert.equal(result.normalization.candles.length, 2);
+});
+
 test('KR primary candle request survives the authenticated cold-start tail beyond the former 2.5s cutoff', async () => {
   const calls: string[] = [];
   const result = await fetchUnifiedChartData({
