@@ -50,6 +50,9 @@ jobs:
           if (!liveJob.includes('PRODUCTION_BASE_URL: https://lsj119.com')) {
             throw new Error('Live comprehensive QA must target the official Production hostname');
           }
+          if (!liveJob.includes('ref: ${{ inputs.sha }}')) {
+            throw new Error('Live comprehensive QA repository checkout must remain pinned to the deployed SHA input');
+          }
           if (!config.includes("trace: 'off'")) {
             throw new Error('Authenticated Production QA must not retain Playwright traces');
           }
@@ -78,6 +81,14 @@ jobs:
       EXPECTED_DEPLOY_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || '' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 1
+
+      - name: Require pinned QA harness checkout identity
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_DEPLOY_SHA"
 
       - uses: pnpm/action-setup@v4
         with:
