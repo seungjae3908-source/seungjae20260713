@@ -44,7 +44,8 @@ const MarketOverviewPage = lazy(() => import('@/pages/market-overview'));
 const StocksPage = lazy(() => import('@/pages/stocks'));
 const UnifiedAssetSearchPage = lazy(() => import('@/pages/unified-asset-search'));
 const ThemesPage = lazy(() => import('@/pages/themes'));
-const LearnPage = lazy(() => import('@/pages/learn'));
+const loadLearnPage = () => import('@/pages/learn');
+const LearnPage = lazy(loadLearnPage);
 const loadMorePage = () => import('@/pages/more');
 const MorePage = lazy(loadMorePage);
 const PortfolioPage = lazy(() => import('@/pages/portfolio'));
@@ -431,6 +432,7 @@ function AuthenticatedApp() {
       loadTechnicalWorkspacePage(),
       loadSignalScannerPage(),
       loadAiChartPage(),
+      loadLearnPage(),
     ]).then(() => prewarmPrimaryMarketInformation()).catch(() => undefined);
   }, [auth.isApproved]);
   useEffect(() => {
