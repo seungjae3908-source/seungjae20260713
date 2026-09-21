@@ -47,12 +47,96 @@ jobs:
             --outfile="$RUNNER_TEMP/prepare-paper-forward-authoritative-inputs.mjs"
           node --check "$RUNNER_TEMP/prepare-paper-forward-authoritative-inputs.mjs"
           node "$RUNNER_TEMP/prepare-paper-forward-authoritative-inputs.mjs" --help
+
+      - name: Exercise bundled CLI against canonical sidecar checkout
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -Eeuo pipefail
+          input="$RUNNER_TEMP/preparation-input.json"
+          output="$RUNNER_TEMP/preparation-output"
+          node - "$input" <<'NODE'
+          const fs = require('node:fs');
+          const path = process.argv[2];
+          const now = Date.now();
+          const sha = process.env.EXPECTED_SHA;
+          const value = {
+            researchCodeSha: sha,
+            riskPolicyRecord: {
+              schemaVersion: 'authoritative-paper-generic-risk-policy-record-v1',
+              recordId: 'ci-explicit-risk-record',
+              recordVersion: 'v1',
+              policyId: 'ci-paper-risk-v1',
+              policyVersion: 'v1',
+              source: 'CI_CONTRACT_FIXTURE_ZERO_CREDIT',
+              provenance: ['CI_CONTRACT_FIXTURE_ZERO_CREDIT'],
+              observedAtMs: now - 1000,
+              maximumAgeMs: 30000,
+              researchCodeSha: sha,
+              marketScopes: ['CRYPTO_FUTURES'],
+              strategyScopes: ['ci-strategy-v1'],
+              symbolScopes: ['BTCUSDT'],
+              riskPercent: 0.5,
+              requestedLeverage: 2,
+              maximumLeverage: 10,
+              marginMode: 'isolated'
+            },
+            riskPolicyRequest: {
+              market: 'CRYPTO_FUTURES',
+              symbol: 'BTCUSDT',
+              strategyScope: 'ci-strategy-v1',
+              researchCodeSha: sha
+            },
+            costPolicyId: 'ci-cost-policy-v1',
+            liquidity: {
+              calibrationArtifactInput: {},
+              producerOutput: {},
+              liquidityImpactFirewallInput: {
+                expected: { market: 'CRYPTO_FUTURES', symbol: 'BTCUSDT', side: 'LONG' }
+              },
+              bridge: {}
+            },
+            partialFill: {
+              artifact: null,
+              expected: {
+                market: 'CRYPTO_FUTURES',
+                symbol: 'BTCUSDT',
+                side: 'LONG',
+                quantityNotionalBucketIdentity: 'ci-bucket',
+                volatilityRegimeIdentity: 'ci-vol',
+                liquidityRegimeIdentity: 'ci-liq',
+                producerCodeSha: sha,
+                calibrationCodeSha: sha,
+                nowMs: now,
+                maximumAgeMs: 30000,
+                competingCostEvidence: []
+              }
+            },
+            nowMs: now,
+            maximumAgeMs: 30000
+          };
+          fs.writeFileSync(path, JSON.stringify(value));
+          NODE
+          set +e
+          node "$RUNNER_TEMP/prepare-paper-forward-authoritative-inputs.mjs"             --repo-root "$GITHUB_WORKSPACE"             --input "$input"             --output-dir "$output"
+          status=$?
+          set -e
+          test "$status" -eq 2
+          node - "$output/preparation-receipt.json" <<'NODE'
+          const fs = require('node:fs');
+          const receipt = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (receipt.status !== 'BLOCKED_DATA'
+            || !receipt.blockers.some((code) => String(code).startsWith('LIQUIDITY:'))
+            || receipt.economicCreditCreated !== false
+            || receipt.executionAuthority !== 'NONE') process.exit(1);
+          NODE
       - name: Verify fail-closed safety boundary
         run: |
           set -Eeuo pipefail
           FILE=api-server/src/services/paper-forward-authoritative-input-preparation.service.ts
           grep -Fq "riskPolicyValuesInvented: false" "$FILE"
           grep -Fq "liquidityImpactInvented: false" "$FILE"
+          grep -Fq "canonicalLiquidityRuntimeBuilderMustBeExplicitlyBound: true" "$FILE"
           grep -Fq "partialFillImpactInvented: false" "$FILE"
           grep -Fq "replayBackfillSyntheticManualEconomicCredit: 0" "$FILE"
           grep -Fq "scheduleActivationAuthority: false" "$FILE"
