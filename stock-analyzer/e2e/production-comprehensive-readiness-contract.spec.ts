@@ -35,8 +35,9 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(auditRoute).toContain('await navigateInMountedApp(page, route)');
   expect(auditRoute).not.toContain('page.goto(route');
   expect(qa).toContain("page.goto('/login', { waitUntil: 'domcontentloaded', timeout: 15_000 })");
-  expect(qa).toContain('for (let attempt = 0; attempt < 2; attempt += 1)');
-  expect(qa).toContain('if (navigationError) throw navigationError');
+  const login = qa.slice(qa.indexOf('async function login('), qa.indexOf('async function auditLayout'));
+  expect(login.match(/page\.goto\(/g)).toHaveLength(1);
+  expect(login).not.toContain('catch');
   expect(auditRoute).not.toContain("expect(page.getByTestId('page-fallback')).toHaveCount(0");
   expect(qa).toContain("expect(audits.filter((item) => item.busyAfter5s > 0)");
 });
