@@ -194,6 +194,24 @@ test("four markets and futures SHORT enter once with canonical public evidence",
   assert.equal(h.counts().learnedSignals, 5);
 });
 
+
+test("new positions preserve an immutable settlement execution policy without backfilling old state", async () => {
+  const h = harness();
+  const row = genuineNaturalCandidate("CRYPTO_FUTURES", "settlement-policy");
+  const result = await run(h, { state: h.state, cycle: cycle("policy-cycle"), candidates: [row] });
+  assert.equal(result.summary.entries, 1);
+  assert.equal(result.state.positions.length, 1);
+  const position = result.state.positions[0];
+  assert.notEqual(position.settlementExecutionPolicy, row.execution);
+  assert.deepEqual(position.settlementExecutionPolicy.marketAdapterIdentity, row.execution.marketAdapterIdentity);
+  assert.deepEqual(position.settlementExecutionPolicy.executionPolicy, row.execution.executionPolicy);
+  assert.deepEqual(position.settlementExecutionPolicy.entryDataEvidence, row.execution.dataEvidence);
+  assert.equal(position.settlementExecutionPolicy.costPolicyIdentity.version, row.execution.costPolicy.version);
+  assert.equal(Object.isFrozen(position.settlementExecutionPolicy), true);
+  assert.equal(Object.isFrozen(position.settlementExecutionPolicy.executionPolicy), true);
+  assert.equal(Object.isFrozen(position.settlementExecutionPolicy.entryDataEvidence), true);
+});
+
 test("canonical Phase3 candidate ID is preserved unchanged through genuine recurring Paper entry", async () => {
   const h = harness();
   const row = genuineNaturalCandidate("CRYPTO_SPOT", "phase3");

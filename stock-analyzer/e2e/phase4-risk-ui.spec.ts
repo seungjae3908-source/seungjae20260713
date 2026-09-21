@@ -1,6 +1,25 @@
 import { expect, test, type Page } from '@playwright/test';
+import { installFullProductFixtures } from './support/full-product-fixtures';
 
 const FIXED_AT = '2026-08-02T00:00:00.000Z';
+
+test.beforeEach(async ({ page }) => {
+  await installFullProductFixtures(page);
+  await page.goto('/login');
+  const nameInput = page.locator('input[type="email"], input[name="email"], input[autocomplete="username"]').first();
+  const passwordInput = page.locator('input[type="password"], input[name="password"], input[autocomplete="current-password"]').first();
+  await expect(nameInput).toBeVisible();
+  await nameInput.fill('full-product-e2e');
+  await passwordInput.fill('full-product-e2e-password');
+  await page.locator('form').getByRole('button', { name: /^로그인$|sign in|log in/i }).click();
+  await page.waitForFunction(() => {
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (key && /^sb-[a-z0-9]+-auth-token$/i.test(key) && window.localStorage.getItem(key)) return true;
+    }
+    return false;
+  });
+});
 
 function candleRows() {
   const end = Date.parse(FIXED_AT);
