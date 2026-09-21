@@ -4,12 +4,13 @@ import assert from 'node:assert/strict';
 import {
   PAPER_FORWARD_AUTHORITATIVE_INPUT_PREPARATION_VERSION,
   preparePaperForwardAuthoritativeInputs,
+  type PaperForwardAuthoritativeInputPreparationInput,
 } from './paper-forward-authoritative-input-preparation.service';
 
 const SHA = 'a'.repeat(40);
 const NOW = 1_800_000_000_000;
 
-function baseInput() {
+function baseInput(): PaperForwardAuthoritativeInputPreparationInput {
   return {
     researchCodeSha: SHA,
     riskPolicyRecord: {
@@ -71,7 +72,7 @@ function baseInput() {
   };
 }
 
-function readyDependencies() {
+function readyDependencies(): any {
   return {
     createRiskProducer: () => async () => ({
       status: 'PRESENT',
@@ -169,7 +170,7 @@ test('stale evidence cannot be packaged as zero or READY', async () => {
 });
 
 test('cross-source scope mismatch fails before validator execution', async () => {
-  const input = baseInput();
+  const input = structuredClone(baseInput()) as any;
   input.partialFill.expected.symbol = 'ETHUSDT';
   const result = await preparePaperForwardAuthoritativeInputs(input, {
     createRiskProducer: () => {
@@ -187,7 +188,7 @@ test('cross-source scope mismatch fails before validator execution', async () =>
 });
 
 test('invalid exact research SHA fails closed', async () => {
-  const input = baseInput();
+  const input = structuredClone(baseInput()) as any;
   input.researchCodeSha = 'not-a-sha';
   const result = await preparePaperForwardAuthoritativeInputs(input, {});
   assert.equal(result.status, 'BLOCKED_DATA');
