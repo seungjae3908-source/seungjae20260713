@@ -84,6 +84,7 @@ export async function prefetchMarketInformationRoom(
     queryKey: ['market-information-room', route.id],
     queryFn: ({ signal }) => requestRoom(route, signal),
     staleTime: route.id === 'coins-futures' ? 10_000 : route.id === 'coins-spot' ? 15_000 : 30_000,
+    retry: false,
   });
 }
 
