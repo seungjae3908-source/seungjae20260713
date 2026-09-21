@@ -88,5 +88,6 @@ test('Production cold-route modules settle before primary market data prewarm wi
   expect(app).toContain('loadTechnicalWorkspacePage()');
   expect(app).toContain('loadSignalScannerPage()');
   expect(app).toContain('loadAiChartPage()');
+  expect(app).toContain('loadLearnPage()');
   expect(app).toContain('if (!auth.isApproved || directAiChartColdRoute) return;');
 });
