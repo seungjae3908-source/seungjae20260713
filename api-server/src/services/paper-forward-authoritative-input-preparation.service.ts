@@ -69,17 +69,14 @@ type Dependencies = Readonly<{
   buildPartialFill: typeof buildAuthoritativePaperPartialFillCostEvidence;
 }>;
 
-async function buildCanonicalLiquidityRuntimeCostEvidence(
-  input: Record<string, unknown>,
-): Promise<Readonly<Record<string, unknown>>> {
-  // @ts-expect-error Canonical sidecar ESM is JavaScript-owned and has no TypeScript declaration file.
-  const module = await import('../../../market-intelligence-sidecar/src/public-forward-liquidity-runtime-cost-evidence.mjs');
-  return module.buildPublicForwardLiquidityRuntimeCostEvidence(input) as Readonly<Record<string, unknown>>;
-}
-
 const DEFAULT_DEPENDENCIES: Dependencies = Object.freeze({
   createRiskProducer: createAuthoritativePaperGenericRiskPolicyProducer,
-  buildLiquidity: buildCanonicalLiquidityRuntimeCostEvidence,
+  buildLiquidity: async () => Object.freeze({
+    status: 'BLOCKED_DATA',
+    liquidityImpactStatus: 'BLOCKED_DATA',
+    evidence: null,
+    blockers: Object.freeze(['CANONICAL_LIQUIDITY_RUNTIME_BUILDER_NOT_BOUND']),
+  }),
   buildPartialFill: buildAuthoritativePaperPartialFillCostEvidence,
 });
 
@@ -289,6 +286,7 @@ export async function preparePaperForwardAuthoritativeInputs(
 export const PAPER_FORWARD_AUTHORITATIVE_INPUT_PREPARATION_SAFETY = Object.freeze({
   riskPolicyValuesInvented: false,
   liquidityImpactInvented: false,
+  canonicalLiquidityRuntimeBuilderMustBeExplicitlyBound: true,
   partialFillImpactInvented: false,
   latencyPreparedAheadOfRuntime: false,
   fundingPreparedAheadOfCandidate: false,
