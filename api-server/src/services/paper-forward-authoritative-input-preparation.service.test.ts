@@ -203,3 +203,12 @@ test('service fails closed when canonical liquidity runtime builder is not expli
   assert.equal(result.economicCreditCreated, false);
   assert.equal(result.executionAuthority, 'NONE');
 });
+
+
+test('preparation freshness cannot exceed Natural runtime 30 second contract', async () => {
+  const input = structuredClone(baseInput()) as any;
+  input.maximumAgeMs = 30_001;
+  const result = await preparePaperForwardAuthoritativeInputs(input, readyDependencies());
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.ok(result.blockers.includes('PREPARATION_MAXIMUM_AGE_EXCEEDS_NATURAL_RUNTIME'));
+});
