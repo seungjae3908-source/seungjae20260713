@@ -23,10 +23,16 @@ async function atomicJson(path: string, value: unknown): Promise<void> {
   await rename(temp, path);
 }
 
+const usage = 'usage: prepare-paper-forward-authoritative-inputs --input <absolute-json> --output-dir <absolute-dir>';
+if (process.argv.includes('--help')) {
+  process.stdout.write(`${usage}\n`);
+  process.exit(0);
+}
+
 const inputPath = argument('--input');
 const outputDir = argument('--output-dir');
 if (!inputPath || !outputDir || !isAbsolute(inputPath) || !isAbsolute(outputDir)) {
-  console.error('usage: prepare-paper-forward-authoritative-inputs --input <absolute-json> --output-dir <absolute-dir>');
+  console.error(usage);
   process.exit(64);
 }
 
