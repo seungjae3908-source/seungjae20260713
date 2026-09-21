@@ -121,6 +121,14 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: true, refetchOnReconnect: true, staleTime: 0, gcTime: 30 * 60 * 1000, retry: 2 } },
 });
 
+async function prewarmPrimaryMarketInformation(): Promise<void> {
+  const marketInformation = await loadMarketInformationPage();
+  if (typeof window === 'undefined') return;
+  const currentPath = window.location.pathname.replace(/\/+$/, '') || '/';
+  if (currentPath !== '/' && !currentPath.endsWith('/home')) return;
+  await marketInformation.prefetchMarketInformationRoom(queryClient, '/stocks/kr');
+}
+
 function DirectAiChartDataPrewarm() {
   const auth = useAuth();
   useEffect(() => {
@@ -413,7 +421,7 @@ function AuthenticatedApp() {
   useEffect(() => {
     if (!auth.isApproved || directAiChartColdRoute) return;
     void Promise.allSettled([
-      loadMarketInformationPage(),
+      prewarmPrimaryMarketInformation(),
       loadBacktestsPage(),
       loadMorePage(),
       loadStockInfoPage(),
