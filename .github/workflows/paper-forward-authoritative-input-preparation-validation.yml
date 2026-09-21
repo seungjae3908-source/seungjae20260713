@@ -35,9 +35,9 @@ jobs:
           set -Eeuo pipefail
           pnpm --dir api-server exec esbuild \
             src/services/paper-forward-authoritative-input-preparation.service.test.ts \
-            --bundle --packages=external --platform=node --format=cjs --target=node20 \
-            --outfile="$RUNNER_TEMP/paper-forward-authoritative-input-preparation.test.cjs"
-          node --test "$RUNNER_TEMP/paper-forward-authoritative-input-preparation.test.cjs"
+            --bundle --packages=external --platform=node --format=esm --target=node20 \
+            --outfile="$RUNNER_TEMP/paper-forward-authoritative-input-preparation.test.mjs"
+          node --test "$RUNNER_TEMP/paper-forward-authoritative-input-preparation.test.mjs"
       - name: Bundle CLI
         run: |
           set -Eeuo pipefail
