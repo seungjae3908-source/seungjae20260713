@@ -35,6 +35,8 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(auditRoute).toContain('await navigateInMountedApp(page, route)');
   expect(auditRoute).not.toContain('page.goto(route');
   expect(qa).toContain("page.goto('/login', { waitUntil: 'domcontentloaded', timeout: 15_000 })");
+  expect(qa).toContain('for (let attempt = 0; attempt < 2; attempt += 1)');
+  expect(qa).toContain('if (navigationError) throw navigationError');
   expect(auditRoute).not.toContain("expect(page.getByTestId('page-fallback')).toHaveCount(0");
   expect(qa).toContain("expect(audits.filter((item) => item.busyAfter5s > 0)");
 });
@@ -42,6 +44,7 @@ test('Production route audit keeps the authenticated document mounted during str
 test('Production chart audit waits for the matching settled query before accepting terminal UI', () => {
   const chart = source('src/components/unified-analysis-chart.tsx');
   const qa = source('e2e/production-comprehensive-readonly-qa.spec.ts');
+  const marketData = source('../api-server/src/services/market-data.base.service.ts');
   const matrixStart = qa.indexOf('async function chartMatrix');
   const matrixEnd = qa.indexOf("test.describe('Production comprehensive read-only QA'", matrixStart);
   const matrix = qa.slice(matrixStart, matrixEnd);
@@ -60,12 +63,20 @@ test('Production chart audit waits for the matching settled query before accepti
   expect(matrix).toContain("selectedMarket !== market || selectedTimeframe !== timeframe");
   expect(matrix).toContain("dataMarket !== market || dataTimeframe !== timeframe");
   expect(matrix).toContain("{ timeout: 8_500, intervals: [100, 250, 500, 1_000] }");
+  expect(marketData).toContain("const oneMinuteDisk = await readCandleDiskCache(ticker, '1m')");
+  expect(marketData).toContain('aggregateCachedCandles(oneMinuteDisk.candles, derivationSize)');
+  expect(marketData).toContain('void cached(cacheKey, candleCacheTtl(timeframeText), load)');
 });
 
 test('Production cold-route modules prewarm after approval without competing with direct AI Chart bootstrap', () => {
   const app = source('src/App.tsx');
+  const marketInformation = source('src/pages/market-information.tsx');
   expect(app).toContain('void Promise.allSettled([');
   expect(app).toContain('loadMarketInformationPage()');
+  expect(app).toContain('prewarmPrimaryMarketInformation()');
+  expect(app).toContain("prefetchMarketInformationRoom(queryClient, '/stocks/kr')");
+  expect(marketInformation).toContain('export async function prefetchMarketInformationRoom(');
+  expect(marketInformation).toContain("queryKey: ['market-information-room', route.id]");
   expect(app).toContain('loadBacktestsPage()');
   expect(app).toContain('loadMorePage()');
   expect(app).toContain('loadStockInfoPage()');

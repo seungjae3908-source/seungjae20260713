@@ -121,6 +121,16 @@ function candleCacheTtl(timeframe: string): number {
     : 12 * 60 * 60 * 1000;
 }
 
+function oneMinuteDerivationSize(timeframe: string): number | null {
+  const size = ({
+    '3m': 3,
+    '5m': 5,
+    '15m': 15,
+    '30m': 30,
+  } as Record<string, number>)[timeframe];
+  return size ?? null;
+}
+
 async function readCandleDiskCache(
   ticker: string,
   timeframe: string,
@@ -1230,6 +1240,30 @@ export class MarketDataService {
         provider: disk.provider,
         fetchedAt: new Date(disk.savedAt).toISOString(),
       };
+    }
+
+    /*
+     * A completed one-minute public-provider response is a truthful source for
+     * the higher intraday bars. Reuse it immediately while refreshing the
+     * provider-native timeframe in the background. This removes a second cold
+     * upstream dependency without fabricating prices or timestamps.
+     */
+    const derivationSize = oneMinuteDerivationSize(timeframeText);
+    if (derivationSize) {
+      const oneMinuteDisk = await readCandleDiskCache(ticker, '1m');
+      if (oneMinuteDisk?.candles.length && oneMinuteDisk.candles.length >= derivationSize * 2) {
+        const derived = aggregateCachedCandles(oneMinuteDisk.candles, derivationSize);
+        if (derived.length >= 2) {
+          void cached(cacheKey, candleCacheTtl(timeframeText), load).catch((error) => {
+            console.error('chart background refresh failed:', error);
+          });
+          return {
+            candles: derived,
+            provider: `${oneMinuteDisk.provider}:aggregated-1m-${timeframeText}`,
+            fetchedAt: new Date(oneMinuteDisk.savedAt).toISOString(),
+          };
+        }
+      }
     }
 
     const result = await cached(cacheKey, candleCacheTtl(timeframeText), load);
