@@ -125,6 +125,9 @@ on:
       - market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
       - market-prediction-lab/tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js
       - market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js
+      - market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v1.json
+      - market-prediction-lab/scripts/materialize-paper-risk-policy-record.mjs
+      - market-prediction-lab/tests/paper-risk-policy-human-approval-v1.test.js
       - research-production/deploy/prepare-paper-state-readonly-transport.mjs
       - research-production/deploy/research-production@.service
       - research-production/src/engine.mjs
@@ -349,6 +352,9 @@ jobs:
             market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
             market-prediction-lab/tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js
             market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js
+            market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v1.json
+            market-prediction-lab/scripts/materialize-paper-risk-policy-record.mjs
+            market-prediction-lab/tests/paper-risk-policy-human-approval-v1.test.js
             research-production/deploy/prepare-paper-state-readonly-transport.mjs
             research-production/deploy/research-production@.service
             research-production/src/engine.mjs
@@ -441,6 +447,8 @@ jobs:
           node --check market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
           node --check market-prediction-lab/tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js
           node --check market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js
+          node --check market-prediction-lab/scripts/materialize-paper-risk-policy-record.mjs
+          node --check market-prediction-lab/tests/paper-risk-policy-human-approval-v1.test.js
           node --check ops/bridge-paper-forward-no-deploy-snapshot.mjs
           node --check ops/run-paper-forward-flat-snapshot-republish.mjs
           node --check ops/collect-paper-forward-no-deploy-diagnostics.mjs
@@ -468,6 +476,7 @@ jobs:
             tests/paper-forward-schedule-runtime-v1.test.js \
             tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js \
             tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js \
+            tests/paper-risk-policy-human-approval-v1.test.js \
             tests/research-production-paper-forward-cutover.test.js
           if [[ -f tests/natural-paper-position-settlement-lifecycle-v1.test.js ]]; then
             node --test tests/natural-paper-position-settlement-lifecycle-v1.test.js
@@ -494,6 +503,13 @@ jobs:
           grep -F 'paper-forward-identity-clean-cutover-v1' ops/install-paper-forward-schedule.sh >/dev/null
           grep -F 'predecessorStatePreserved: true' ops/install-paper-forward-schedule.sh >/dev/null
           grep -F 'predecessorPerformanceMixed: false' ops/install-paper-forward-schedule.sh >/dev/null
+          grep -F 'PAPER_FORWARD_RISK_POLICY_DECISION_PATH' ops/install-paper-forward-schedule.sh >/dev/null
+          grep -F 'materialize-paper-risk-policy-record.mjs' ops/install-paper-forward-schedule.sh >/dev/null
+          grep -F '"riskPercent": 0.5' market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v1.json >/dev/null
+          grep -F '"requestedLeverage": 2' market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v1.json >/dev/null
+          grep -F '"maximumLeverage": 5' market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v1.json >/dev/null
+          grep -F '"marginMode": "isolated"' market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v1.json >/dev/null
+          grep -F 'financialValuesFromApprovedDecision:true' market-prediction-lab/scripts/materialize-paper-risk-policy-record.mjs >/dev/null
           grep -F 'canonicalCycleIntervalMs: FOUR_HOURS_MS' "$schedule_runtime_base" >/dev/null
           grep -F 'financialMutationAdaptersEnabled: false' "$schedule_runtime_base" >/dev/null
           grep -F 'externalFinancialMutationAllowed: false' "$schedule_runtime_base" >/dev/null
