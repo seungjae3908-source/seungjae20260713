@@ -9,7 +9,6 @@ import {
   type PartialFillCalibrationContext,
 } from './authoritative-paper-partial-fill-cost-evidence.service';
 import type { PercentCostEvidence } from './scanner-profit-cost-evidence-adapter.service';
-import { buildPublicForwardLiquidityRuntimeCostEvidence } from '../../../market-intelligence-sidecar/src/public-forward-liquidity-runtime-cost-evidence.mjs';
 export const PAPER_FORWARD_AUTHORITATIVE_INPUT_PREPARATION_VERSION =
   'paper-forward-authoritative-input-preparation-v1' as const;
 
@@ -70,9 +69,17 @@ type Dependencies = Readonly<{
   buildPartialFill: typeof buildAuthoritativePaperPartialFillCostEvidence;
 }>;
 
+async function buildCanonicalLiquidityRuntimeCostEvidence(
+  input: Record<string, unknown>,
+): Promise<Readonly<Record<string, unknown>>> {
+  // @ts-expect-error Canonical sidecar ESM is JavaScript-owned and has no TypeScript declaration file.
+  const module = await import('../../../market-intelligence-sidecar/src/public-forward-liquidity-runtime-cost-evidence.mjs');
+  return module.buildPublicForwardLiquidityRuntimeCostEvidence(input) as Readonly<Record<string, unknown>>;
+}
+
 const DEFAULT_DEPENDENCIES: Dependencies = Object.freeze({
   createRiskProducer: createAuthoritativePaperGenericRiskPolicyProducer,
-  buildLiquidity: (input) => buildPublicForwardLiquidityRuntimeCostEvidence(input) as Readonly<Record<string, unknown>>,
+  buildLiquidity: buildCanonicalLiquidityRuntimeCostEvidence,
   buildPartialFill: buildAuthoritativePaperPartialFillCostEvidence,
 });
 
