@@ -200,9 +200,41 @@ async function getBoundedKrInteractiveCandlesMeta(
     };
   })();
 
+  // Toss is already an approved read-only stock-data provider and supports
+  // native 1m/1D candles. Include it in the same bounded interactive race so a
+  // slow Kiwoom/Yahoo pair does not turn real available KR 1m evidence into a
+  // misleading 200 + empty response. No synthetic candles are created.
+  const tossTimeframeSupported = String(timeframe) === '1m' || String(timeframe) === '1D';
+  const tossAttempt: Promise<MarketDataCandlesMeta> | null =
+    isTossConfigured() && tossTimeframeSupported
+      ? (async () => {
+          const entry = await BaseMarketDataService.getCatalogEntry(String(ticker).trim());
+          if (controller.signal.aborted) throw interactiveAbortError();
+          const candles = await getTossCandles(entry, timeframe, 200);
+          if (candles.length < minimumUsefulCandles(timeframe)) {
+            throw new Error('TOSS_INSUFFICIENT_CANDLES');
+          }
+          return {
+            candles,
+            provider: 'toss',
+            fetchedAt: new Date().toISOString(),
+            fallbackFrom: {
+              provider: 'kiwoom',
+              reason: kiwoomFailure ?? 'TOSS_HEDGE_WON_BEFORE_KIWOOM_TERMINAL',
+            },
+          };
+        })()
+      : null;
+
+  const providerAttempts: Promise<MarketDataCandlesMeta>[] = [
+    kiwoomAttempt,
+    yahooAttempt,
+    ...(tossAttempt ? [tossAttempt] : []),
+  ];
+
   try {
     return await Promise.race([
-      Promise.any([kiwoomAttempt, yahooAttempt]),
+      Promise.any(providerAttempts),
       terminalDeadline,
     ]);
   } catch (error) {
