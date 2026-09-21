@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 const WORKFLOWS = {
@@ -48,6 +49,9 @@ const documents = Object.fromEntries(await Promise.all(Object.entries(WORKFLOWS)
   name,
   await readFile(path, "utf8"),
 ])));
+
+const rule0Sidecar = await readFile(".github/workflows/prediction-lab-rule0-1h-shadow-sidecar.yml", "utf8");
+const derivativesHistory = await readFile("market-prediction-lab/src/derivatives-history.js");
 
 test("workflow syntax and PR event contracts are explicit", () => {
   for (const document of Object.values(documents)) {
@@ -176,6 +180,18 @@ test("multi-market PR data blocks stay truthful without weakening full dispatch 
   assert.match(documents.multiMarket, /steps\.market_suite\.outputs\.research_ready == 'true'/u);
   assert.match(documents.multiMarket, /github\.event_name != 'pull_request' && steps\.market_suite\.outputs\.research_ready != 'true'/u);
   assert.match(documents.multiMarket, /github\.event_name == 'workflow_dispatch'[\s\S]*needs\.validate-and-train\.outputs\.research_ready == 'true'/u);
+});
+
+test("Rule0 OI parity lock tracks the exact derivatives-history Git blob before merge", () => {
+  const match = rule0Sidecar.match(/^\s*CANONICAL_OI_PARITY_BLOB:\s*([0-9a-f]{40})\s*$/mu);
+  assert.ok(match, "Rule0 sidecar must pin a canonical OI parity blob");
+
+  const gitHeader = Buffer.from(`blob ${derivativesHistory.length}\0`);
+  const actualBlob = createHash("sha1").update(gitHeader).update(derivativesHistory).digest("hex");
+  assert.equal(match[1], actualBlob, "Rule0 sidecar OI parity blob drifted from derivatives-history.js");
+
+  const fastPullRequest = indentedBlock(indentedBlock(documents.applicationFast, "on", 0), "pull_request", 2);
+  assert.match(fastPullRequest, /- market-prediction-lab\/src\/derivatives-history\.js/u);
 });
 
 test("PR lanes have no secret, deployment, timer, or trading authority", () => {

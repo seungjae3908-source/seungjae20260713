@@ -74,6 +74,18 @@ test('T07 actual child transport reads no record and preserves direct-spawn path
       await mkdir(dirname(target), { recursive: true });
       await writeFile(target, relative === 'package.json' ? '{}\n' : probe);
     }
+    for (const relative of [
+      'packages/strategy-hypothesis/package.json',
+      'packages/strategy-hypothesis/src/index.js',
+      'packages/strategy-hypothesis/src/contract.js',
+      'packages/external-research/package.json',
+      'packages/external-research/src/index.js',
+      'packages/external-research/src/contract.js',
+    ]) {
+      const target = join(repoRoot, relative);
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, relative.endsWith('.json') ? '{}\n' : 'export const fixture = true;\n');
+    }
     await assert.rejects(access(path), { code: 'ENOENT' });
     const result = await runResearchCycle({ repoRoot, stateRoot, researchSha: SHA,
       profile: 'forward', env: { PATH: process.env.PATH, [KEY]: path },

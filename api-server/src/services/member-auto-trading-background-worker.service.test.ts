@@ -6,6 +6,7 @@ import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import type { PaperJournalRepository } from './paper-journal.types';
 import {
   MemberAutoTradingBackgroundWorker,
+  resolveMemberStockBroker,
   startMemberAutoTradingBackgroundWorker,
   type MemberAutoTradingBackgroundSource,
 } from './member-auto-trading-background-worker.service';
@@ -270,6 +271,21 @@ async function withFetchMock<T>(run: () => Promise<T>) {
   globalThis.fetch = async () => sidecarPaperOnly();
   try { return await run(); } finally { globalThis.fetch = original; }
 }
+
+test('member stock broker routing is user-selectable for stocks and fixed away from crypto', () => {
+  const selected = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    stockBrokerByMarket: { domestic_stock: 'toss', us_stock: 'kiwoom' },
+  });
+  assert.equal(resolveMemberStockBroker(selected, 'KR_STOCK'), 'toss');
+  assert.equal(resolveMemberStockBroker(selected, 'US_STOCK'), 'kiwoom');
+  assert.equal(resolveMemberStockBroker(selected, 'CRYPTO_SPOT'), null);
+  assert.equal(resolveMemberStockBroker(selected, 'CRYPTO_FUTURES'), null);
+
+  const legacy = normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, stockBrokerByMarket: undefined });
+  assert.equal(resolveMemberStockBroker(legacy, 'KR_STOCK'), 'kiwoom');
+  assert.equal(resolveMemberStockBroker(legacy, 'US_STOCK'), 'kiwoom');
+});
 
 test('background worker is default OFF without explicit activation flag', () => {
   const previous = process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED;
