@@ -147,12 +147,36 @@ async function installSafety(page: Page, blocked: Diagnostic[]) {
   });
 }
 
+const LOGIN_READY_BUDGET_MS = 15_000;
+
 async function login(page: Page) {
-  await page.goto('/login', { waitUntil: 'domcontentloaded', timeout: 15_000 });
-  await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 10_000 });
-  await page.getByLabel('아이디').fill(qaLogin, { timeout: 3_000 });
-  await page.getByLabel('비밀번호').fill(qaPassword, { timeout: 3_000 });
-  await page.getByRole('button', { name: '로그인', exact: true }).click({ timeout: 3_000 });
+  // Judge readiness by the actual interactive login surface while preserving
+  // one total 15s readiness budget. Do not extend the gate through serial waits.
+  const readinessStartedAt = Date.now();
+  const remainingReadinessMs = () =>
+    Math.max(1, LOGIN_READY_BUDGET_MS - (Date.now() - readinessStartedAt));
+
+  await page.goto('/login', { waitUntil: 'commit', timeout: remainingReadinessMs() });
+  const loginId = page.getByLabel('아이디');
+  const loginPassword = page.getByLabel('비밀번호');
+  const loginButton = page.getByRole('button', { name: '로그인', exact: true });
+
+  await expect.poll(async () => {
+    const [idVisible, passwordVisible, buttonVisible, fallbackVisible] = await Promise.all([
+      loginId.isVisible({ timeout: 250 }).catch(() => false),
+      loginPassword.isVisible({ timeout: 250 }).catch(() => false),
+      loginButton.isVisible({ timeout: 250 }).catch(() => false),
+      page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false),
+    ]);
+    return idVisible && passwordVisible && buttonVisible && !fallbackVisible ? 'READY' : 'PENDING';
+  }, {
+    timeout: remainingReadinessMs(),
+    intervals: [100, 200, 400, 800],
+  }).toBe('READY');
+
+  await loginId.fill(qaLogin, { timeout: 3_000 });
+  await loginPassword.fill(qaPassword, { timeout: 3_000 });
+  await loginButton.click({ timeout: 3_000 });
   await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: 15_000 });
 }
 
@@ -299,24 +323,53 @@ async function exerciseVisibleTabs(page: Page) {
   return failures;
 }
 
+async function navigateInMountedApp(page: Page, route: string) {
+  await expect(page.getByTestId('app-shell')).toBeVisible({ timeout: 1_000 });
+  const target = new URL(route, baseUrl);
+  const targetPath = `${target.pathname}${target.search}${target.hash}`;
+  const current = new URL(page.url());
+  const resetPath = current.pathname === target.pathname
+    && `${current.search}${current.hash}` !== `${target.search}${target.hash}`
+    ? (target.pathname === '/' ? '/stocks' : '/')
+    : null;
+  await page.evaluate(async ({ nextPath, intermediatePath }) => {
+    const transition = (path: string) => {
+      window.history.pushState({}, '', path);
+      window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state }));
+    };
+    if (intermediatePath) {
+      transition(intermediatePath);
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    }
+    transition(nextPath);
+  }, { nextPath: targetPath, intermediatePath: resetPath });
+  await expect.poll(() => {
+    const current = new URL(page.url());
+    return `${current.pathname}${current.search}${current.hash}`;
+  }, { timeout: 1_000, intervals: [50, 100, 200] }).toBe(targetPath);
+}
+
 async function auditRoute(page: Page, route: string, testInfo: TestInfo): Promise<RouteAudit> {
   const started = Date.now();
   let navigationError: string | null = null;
   let fallbackTimedOut = false;
-  await page.goto(route, { waitUntil: 'domcontentloaded', timeout: 15_000 }).catch((error) => {
+  await navigateInMountedApp(page, route).catch((error) => {
     navigationError = String(error).slice(0, 240);
   });
   if (!page.isClosed()) {
     try {
-      await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 5_000 });
+      await expect.poll(async () => {
+        const shellVisible = await page.getByTestId('app-shell').isVisible({ timeout: 250 }).catch(() => false);
+        if (!shellVisible) return 'APP_SHELL_PENDING';
+        const fallbackVisible = await page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false);
+        const visibleBusy = await page.locator('[aria-busy="true"]:visible').count().catch(() => -1);
+        return !fallbackVisible && visibleBusy === 0 ? 'READY' : 'LOADING';
+      }, { timeout: 5_000, intervals: [100, 200, 400, 800] }).toBe('READY');
     } catch {
       fallbackTimedOut = true;
     }
   }
   const busy = page.locator('[aria-busy="true"]:visible');
-  if (!page.isClosed() && await busy.count()) {
-    await expect(busy).toHaveCount(0, { timeout: 5_000 }).catch(() => undefined);
-  }
   const busyAfter5s = page.isClosed() ? -1 : await busy.count().catch(() => -1);
   const layout = page.isClosed() ? {
     horizontalOverflowPx: -1,
@@ -453,6 +506,18 @@ async function chartMatrix(page: Page, onProgress: (audits: ChartAudit[]) => voi
         await page.getByTestId(`timeframe-${timeframe}`).click({ timeout: 2_500 });
         await expect(page).toHaveURL(new RegExp(`timeframe=${timeframe.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), { timeout: 3_000 }).catch(() => undefined);
         terminal = await expect.poll(async () => {
+          const chart = page.getByTestId('unified-analysis-chart');
+          const [selectedMarket, selectedTimeframe, queryFetching, dataMarket, dataTimeframe] = await Promise.all([
+            chart.getAttribute('data-chart-market'),
+            chart.getAttribute('data-chart-timeframe'),
+            chart.getAttribute('data-chart-query-fetching'),
+            chart.getAttribute('data-chart-data-market'),
+            chart.getAttribute('data-chart-data-timeframe'),
+          ]);
+          if (selectedMarket !== market || selectedTimeframe !== timeframe) return 'timeout';
+          if (statuses.length === 0 || queryFetching === 'true') return 'timeout';
+          if (statuses.some((status) => status >= 200 && status < 300)
+            && (dataMarket !== market || dataTimeframe !== timeframe)) return 'timeout';
           if (await page.getByTestId('unified-chart-canvas').isVisible({ timeout: 200 }).catch(() => false)) return 'canvas';
           if (await page.getByTestId('chart-empty-state').isVisible({ timeout: 200 }).catch(() => false)) return 'empty';
           if (await page.getByTestId('chart-error-state').isVisible({ timeout: 200 }).catch(() => false)) return 'error';
