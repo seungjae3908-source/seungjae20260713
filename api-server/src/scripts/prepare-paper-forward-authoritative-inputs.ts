@@ -2,6 +2,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 import {
@@ -40,6 +41,23 @@ if (!repoRoot || !inputPath || !outputDir
 }
 
 const canonicalRepoRoot = resolve(repoRoot);
+const manifest = await readJson(resolve(inputPath));
+const manifestRecord = manifest && typeof manifest === 'object' && !Array.isArray(manifest)
+  ? manifest as Record<string, unknown>
+  : null;
+const expectedResearchSha = String(manifestRecord?.researchCodeSha ?? '').trim().toLowerCase();
+if (!/^[0-9a-f]{40}$/u.test(expectedResearchSha)) {
+  throw new Error('CANONICAL_REPOSITORY_RESEARCH_SHA_REQUIRED');
+}
+const repositorySha = execFileSync(
+  'git',
+  ['-C', canonicalRepoRoot, 'rev-parse', 'HEAD^{commit}'],
+  { encoding: 'utf8' },
+).trim().toLowerCase();
+if (repositorySha !== expectedResearchSha) {
+  throw new Error('CANONICAL_REPOSITORY_SHA_MISMATCH');
+}
+
 const liquidityModulePath = resolve(
   canonicalRepoRoot,
   'market-intelligence-sidecar/src/public-forward-liquidity-runtime-cost-evidence.mjs',
@@ -49,7 +67,6 @@ if (typeof liquidityModule.buildPublicForwardLiquidityRuntimeCostEvidence !== 'f
   throw new Error('CANONICAL_LIQUIDITY_RUNTIME_BUILDER_EXPORT_MISSING');
 }
 
-const manifest = await readJson(resolve(inputPath));
 const result = await preparePaperForwardAuthoritativeInputs(
   manifest as Parameters<typeof preparePaperForwardAuthoritativeInputs>[0],
   {
