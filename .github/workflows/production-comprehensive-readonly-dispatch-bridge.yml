@@ -111,9 +111,20 @@ jobs:
             const active = runs
               .filter((run) => run.status !== 'completed')
               .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
-            if (active.length > 0) {
-              core.setFailed(`Another Production Comprehensive QA run is active (run=${active[0].id}, head=${active[0].head_sha}); refusing to dispatch and cancel healthy work.`);
+            const currentMain = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            const currentMainSha = String(currentMain.data.commit.sha).toLowerCase();
+            const currentGeneration = active.find((run) =>
+              run.head_branch === 'main' && String(run.head_sha).toLowerCase() === currentMainSha);
+            if (currentGeneration) {
+              core.setFailed(`Another current-main Production Comprehensive QA run is active (run=${currentGeneration.id}, head=${currentGeneration.head_sha}); refusing duplicate dispatch.`);
               return;
+            }
+            for (const stale of active) {
+              core.warning(`Superseded Production Comprehensive QA run will be replaced by workflow concurrency: run=${stale.id}, head=${stale.head_sha}, currentMain=${currentMainSha}`);
             }
 
             const response = await github.rest.actions.createWorkflowDispatch({
