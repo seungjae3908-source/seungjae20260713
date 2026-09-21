@@ -108,15 +108,44 @@ function isoMs(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function marketMapping(market: MemberAutoTradingPaperHandoffEntry['identity']['market']): {
+export function resolveMemberStockBroker(
+  policy: TradingPolicy,
+  market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
+): 'kiwoom' | 'toss' | null {
+  if (market === 'KR_STOCK') return policy.stockBrokerByMarket?.domestic_stock ?? 'kiwoom';
+  if (market === 'US_STOCK') return policy.stockBrokerByMarket?.us_stock ?? 'kiwoom';
+  return null;
+}
+
+function marketMapping(
+  market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
+  policy: TradingPolicy,
+): {
   exchange: TradingExchange;
   assetClass: TradingAssetClass;
   planMarket: string;
+  stockBroker: 'kiwoom' | 'toss' | null;
 } {
-  if (market === 'KR_STOCK') return { exchange: 'kiwoom', assetClass: 'domestic_stock', planMarket: 'KR' };
-  if (market === 'US_STOCK') return { exchange: 'kiwoom', assetClass: 'us_stock', planMarket: 'US' };
-  if (market === 'CRYPTO_SPOT') return { exchange: 'upbit', assetClass: 'crypto_spot', planMarket: 'KRW' };
-  return { exchange: 'bitget', assetClass: 'crypto_futures', planMarket: 'USDT-FUTURES' };
+  if (market === 'KR_STOCK') {
+    return {
+      exchange: 'kiwoom',
+      assetClass: 'domestic_stock',
+      planMarket: 'KR',
+      stockBroker: resolveMemberStockBroker(policy, market),
+    };
+  }
+  if (market === 'US_STOCK') {
+    return {
+      exchange: 'kiwoom',
+      assetClass: 'us_stock',
+      planMarket: 'US',
+      stockBroker: resolveMemberStockBroker(policy, market),
+    };
+  }
+  if (market === 'CRYPTO_SPOT') {
+    return { exchange: 'upbit', assetClass: 'crypto_spot', planMarket: 'KRW', stockBroker: null };
+  }
+  return { exchange: 'bitget', assetClass: 'crypto_futures', planMarket: 'USDT-FUTURES', stockBroker: null };
 }
 
 function sideFor(direction: MemberAutoTradingPaperHandoffEntry['identity']['direction']): TradingSide {
@@ -174,8 +203,8 @@ function costPercent(entry: MemberAutoTradingPaperHandoffEntry, key: string) {
 }
 
 function policyAllowsEntry(member: EligibleMember, entry: MemberAutoTradingPaperHandoffEntry) {
-  const mapping = marketMapping(entry.identity.market);
   const policy = member.policy;
+  const mapping = marketMapping(entry.identity.market, policy);
   if (policy.mode !== 'automatic' || !policy.automaticEnabled || policy.emergencyStopped || policy.newEntriesStopped) return false;
   if (!policy.marketEnabled[mapping.assetClass] || !policy.exchangeEnabled[mapping.exchange]) return false;
   const symbol = mapping.exchange === 'upbit'
@@ -260,7 +289,7 @@ function exposureState(
   nowMs: number,
 ) {
   const active = activePlans(runtime.plans, runtime.orders);
-  const mapping = marketMapping(entry.identity.market);
+  const mapping = marketMapping(entry.identity.market, policy);
   const side = sideFor(entry.identity.direction);
   const sameInstrument = active.filter((plan) => plan.exchange === mapping.exchange
     && plan.symbol.toUpperCase() === entry.identity.symbol.toUpperCase());
@@ -320,7 +349,7 @@ function buildPlanInput(
   fx: MemberAutoTradingFxQuote,
   nowMs: number,
 ): TradingPlanInput {
-  const mapping = marketMapping(entry.identity.market);
+  const mapping = marketMapping(entry.identity.market, member.policy);
   const quote = currentPrice(entry);
   const exits = exitPlan(entry);
   const evidence = record(entry.execution.dataEvidence);
@@ -370,6 +399,7 @@ function buildPlanInput(
   return {
     exchange: mapping.exchange,
     accountMode: 'paper',
+    stockBroker: mapping.stockBroker,
     strategyId: entry.identity.strategyId,
     signalId: entry.identity.signalId,
     symbol: entry.identity.symbol,
@@ -391,6 +421,7 @@ function buildPlanInput(
       'CANONICAL_PAPER_HANDOFF',
       `HANDOFF_ID:${entry.handoffId}`,
       `FX:${fx.source}`,
+      ...(mapping.stockBroker ? [`STOCK_BROKER:${mapping.stockBroker.toUpperCase()}`] : []),
       'TOP_OF_BOOK_GAP_PROXY',
     ],
     marketSnapshot: {

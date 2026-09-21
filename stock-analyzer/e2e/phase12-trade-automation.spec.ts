@@ -71,6 +71,10 @@ for (const width of [360, 390, 430]) {
     await expect(page.getByTestId('auto-market-us_stock')).toContainText('미국주식');
     await expect(page.getByTestId('auto-market-crypto_spot')).toContainText('코인현물');
     await expect(page.getByTestId('auto-market-crypto_futures')).toContainText('코인선물');
+    await expect(page.getByTestId('stock-broker-routing')).toContainText('Toss');
+    await expect(page.getByTestId('stock-broker-routing')).toContainText('Kiwoom');
+    await expect(page.getByTestId('stock-broker-routing')).toContainText('Upbit 고정');
+    await expect(page.getByTestId('stock-broker-routing')).toContainText('Bitget 고정');
     await expect(page.getByTestId('auto-trading-runtime-summary')).toContainText('미국주식');
     await expect(page.getByTestId('auto-trading-runtime-summary')).toContainText('미국주식 실전 자동주문은 검증된 주문 어댑터가 연결되기 전까지 차단됩니다.');
 
@@ -87,6 +91,14 @@ test('automatic trading is standing authorization with independent market switch
   await master.click();
   await expect(master).toHaveAttribute('aria-pressed', 'true');
 
+  const domesticBroker = page.getByTestId('stock-broker-domestic_stock');
+  const usBroker = page.getByTestId('stock-broker-us_stock');
+  await expect(domesticBroker).toHaveValue('kiwoom');
+  await expect(usBroker).toHaveValue('kiwoom');
+  await domesticBroker.selectOption('toss');
+  await expect(domesticBroker).toHaveValue('toss');
+  await expect(usBroker).toHaveValue('kiwoom');
+
   const us = page.getByTestId('auto-market-us_stock');
   await us.click();
   await expect(us).toHaveAttribute('aria-pressed', 'false');
@@ -100,8 +112,13 @@ test('automatic trading is standing authorization with independent market switch
   await expect(dialog).toContainText('주문마다 묻는 승인이 아닙니다.');
   await expect(dialog).toContainText('국내주식, 코인현물, 코인선물');
   await expect(dialog).not.toContainText('국내주식, 미국주식, 코인현물, 코인선물');
-  await expect(dialog).toContainText('미국주식');
-  await expect(dialog).toContainText('실전 주문은 어댑터 연결 전까지 차단');
+  await expect(dialog).toContainText('국내주식 증권사');
+  await expect(dialog).toContainText('Toss');
+  await expect(dialog).toContainText('미국주식 증권사');
+  await expect(dialog).toContainText('Kiwoom');
+  await expect(dialog).toContainText('Upbit 고정');
+  await expect(dialog).toContainText('Bitget 고정');
+  await expect(dialog).toContainText('private-order 어댑터 검증 전까지 차단');
   await dialog.getByRole('button', { name: '설정 적용' }).click();
   await expect(page.getByRole('status')).toContainText('테스트 설정이 저장되었습니다.');
 
