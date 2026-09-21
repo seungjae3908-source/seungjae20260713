@@ -8,6 +8,7 @@ import type {
   ReadonlyCredentialProvider,
 } from './account-readonly.repository';
 import { createVaultBackedAccountReaders } from './account-readonly.runtime';
+import { collectProviderEvidence, observeProviderRequest, type EvidenceProvider, type ProviderRequestObservation } from './staging-account-readonly-evidence-diagnostics';
 
 const EVIDENCE_USER_ID = 'staging-account-readonly-no-db-evidence';
 const EVIDENCE_ACCESS_TOKEN = 'NO_DB_EVIDENCE_SCOPE_ONLY';
@@ -32,6 +33,7 @@ type RequestAudit = {
   oauthTokenPosts: number;
   readonlyGets: number;
   rejectedRequests: number;
+  observations: ProviderRequestObservation[];
 };
 
 function requiredEnv(name: string): string {
@@ -183,12 +185,14 @@ function createAuditedFetch(audit: RequestAudit): typeof fetch {
 
     if (url.origin === TOSS_OAUTH_ORIGIN && url.pathname === '/oauth2/token' && method === 'POST') {
       audit.oauthTokenPosts += 1;
-      return tunneledFetch(input, init);
+      return observeProviderRequest(audit.observations, 'toss', 'OAUTH_TOKEN', () => tunneledFetch(input, init));
     }
 
     if (READONLY_PROVIDER_ORIGINS.has(url.origin) && method === 'GET') {
       audit.readonlyGets += 1;
-      return tunneledFetch(input, init);
+      const provider: EvidenceProvider = url.origin === TOSS_API_ORIGIN ? 'toss'
+        : url.origin === UPBIT_API_ORIGIN ? 'upbit' : 'bitget';
+      return observeProviderRequest(audit.observations, provider, 'READONLY_GET', () => tunneledFetch(input, init));
     }
 
     audit.rejectedRequests += 1;
@@ -240,7 +244,7 @@ async function main() {
   const artifactDir = requiredEnv('STAGING_ARTIFACT_DIR');
   const credentials = credentialMap();
   const storageAudit = { reads: 0, writeAttempts: 0 };
-  const requestAudit: RequestAudit = { oauthTokenPosts: 0, readonlyGets: 0, rejectedRequests: 0 };
+  const requestAudit: RequestAudit = { oauthTokenPosts: 0, readonlyGets: 0, rejectedRequests: 0, observations: [] };
   const repository = createReadOnlyMemoryRepository(credentials, storageAudit);
 
   const readers = createVaultBackedAccountReaders({
@@ -253,23 +257,18 @@ async function main() {
   });
 
   const scope = { userId: EVIDENCE_USER_ID, accessToken: EVIDENCE_ACCESS_TOKEN };
-  const toss = await readers.toss!(scope);
-  const upbit = await readers.upbit!(scope);
-  const bitget = await readers.bitget!(scope);
-
-  assertReadOnlySnapshot('toss', toss);
-  assertReadOnlySnapshot('upbit', upbit);
-  assertReadOnlySnapshot('bitget', bitget);
-
-  if (storageAudit.reads !== 3 || storageAudit.writeAttempts !== 0) {
-    throw new Error('EVIDENCE_STORAGE_AUDIT_FAILED');
-  }
-  if (requestAudit.oauthTokenPosts !== 1 || requestAudit.readonlyGets !== 5 || requestAudit.rejectedRequests !== 0) {
-    throw new Error('EVIDENCE_PROVIDER_REQUEST_AUDIT_FAILED');
-  }
+  const providerResults = await collectProviderEvidence(async (provider) => {
+    const snapshot = await readers[provider]!(scope);
+    assertReadOnlySnapshot(provider, snapshot);
+    return sanitizedProviderSummary(snapshot);
+  });
+  const storagePassed = storageAudit.reads === 3 && storageAudit.writeAttempts === 0;
+  const requestsPassed = requestAudit.oauthTokenPosts === 1 && requestAudit.readonlyGets === 5 && requestAudit.rejectedRequests === 0;
+  const passed = providerResults.every((result) => result.verdict === 'PASS') && storagePassed && requestsPassed;
 
   const evidence = {
     schemaVersion: 1,
+    verdict: passed ? 'PASS' : 'FAIL',
     targetSha,
     mode: 'CANONICAL_ACCOUNT_RUNTIME_NO_DB',
     providerTransport: 'STAGING_SSH_TCP_TUNNEL',
@@ -278,7 +277,10 @@ async function main() {
     providerSecretPlaintextExposedToStagingHost: false,
     databaseAccessRequired: false,
     credentialSource: 'ACTIONS_SECRET_MEMORY_ONLY',
-    providerResults: [toss, upbit, bitget].map(sanitizedProviderSummary),
+    providerResults: providerResults.map((result) => result.verdict === 'PASS'
+      ? { ...result.summary, verdict: result.verdict } : result),
+    storagePassed,
+    requestsPassed,
     storageAudit: {
       backend: 'READ_ONLY_MEMORY_REPOSITORY',
       credentialReads: storageAudit.reads,
@@ -289,6 +291,7 @@ async function main() {
       tossOauthTokenPosts: requestAudit.oauthTokenPosts,
       providerReadonlyGets: requestAudit.readonlyGets,
       rejectedRequests: requestAudit.rejectedRequests,
+      observations: requestAudit.observations,
       orderRequests: 0,
       cancelRequests: 0,
       amendRequests: 0,
@@ -304,17 +307,18 @@ async function main() {
     targetSha,
     mode: evidence.mode,
     providerTransport: evidence.providerTransport,
-    providersConnected: 3,
+    verdict: evidence.verdict,
+    providersConnected: providerResults.filter((result) => result.verdict === 'PASS').length,
     databaseAccessRequired: false,
     persistentRowsCreated: 0,
     providerReadonlyGets: requestAudit.readonlyGets,
     tossOauthTokenPosts: requestAudit.oauthTokenPosts,
     nonReadonlyRequests: requestAudit.rejectedRequests,
   }));
+  if (!passed) throw new Error('ACCOUNT_READONLY_EVIDENCE_FAILED');
 }
 
 main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : 'ACCOUNT_READONLY_NO_DB_EVIDENCE_FAILED';
-  console.error(message);
+  console.error('ACCOUNT_READONLY_NO_DB_EVIDENCE_FAILED');
   process.exitCode = 1;
 });
