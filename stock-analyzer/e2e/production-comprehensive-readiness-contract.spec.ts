@@ -37,7 +37,7 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(qa).toContain('const LOGIN_READY_BUDGET_MS = 15_000;');
   const login = qa.slice(qa.indexOf('async function login('), qa.indexOf('async function auditLayout'));
   const loginNavigation = login.slice(login.indexOf("await page.goto('/login'"), login.indexOf('const loginId'));
-  expect(login.match(/page\.goto\(/g)).toHaveLength(1);
+  expect(login.match(/page\.goto\(/g)).toHaveLength(2);
   expect(login).toContain("page.goto('/login', { waitUntil: 'commit', timeout: remainingReadinessMs() })");
   expect(login).toContain('Math.max(1, LOGIN_READY_BUDGET_MS - (Date.now() - readinessStartedAt))');
   expect(login).toContain("page.getByLabel('아이디')");
@@ -46,6 +46,15 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(login).toContain("}).toBe('READY')");
   expect(login).not.toContain('timeout: 10_000');
   expect(loginNavigation).not.toContain('catch');
+  expect(qa).toContain('const authStateByViewport = new Map<string, CachedAuthState>();');
+  expect(login).toContain('const cached = authStateByViewport.get(cacheKey);');
+  expect(login).toContain('await restoreCachedAuthState(page, cached);');
+  expect(login).toContain("await page.goto('/', { waitUntil: 'commit', timeout: LOGIN_READY_BUDGET_MS })");
+  expect(login).toContain('const state = await page.context().storageState();');
+  expect(login).toContain('authStateByViewport.set(cacheKey, state);');
+  const cachedBranch = login.slice(login.indexOf('if (cached) {'), login.indexOf('// Judge readiness'));
+  expect(cachedBranch).not.toContain('loginButton.click');
+  expect(cachedBranch).not.toContain('loginPassword.fill');
   expect(auditRoute).not.toContain("expect(page.getByTestId('page-fallback')).toHaveCount(0");
   expect(qa).toContain("expect(audits.filter((item) => item.busyAfter5s > 0)");
 });
