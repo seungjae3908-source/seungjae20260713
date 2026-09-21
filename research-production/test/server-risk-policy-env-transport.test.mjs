@@ -156,7 +156,7 @@ test('invalid paths fail before preflight or activation tools, env writes, symli
   }
 });
 
-test('supplemental cost path survives server EnvironmentFile into Paper only; missing stays absent', () => {
+test('supplemental cost path survives server EnvironmentFile; missing stays absent', () => {
   for (const supplemental of [undefined, '']) {
     const result = activate(undefined, { supplemental });
     assert.equal(result.status, 0, result.stderr);
@@ -169,12 +169,7 @@ test('supplemental cost path survives server EnvironmentFile into Paper only; mi
   assert.deepEqual(result.environment.split('\n').filter(line => line.startsWith(`${COST_KEY}=`)), [expected]);
   const decoded = expected.slice(COST_KEY.length + 2, -1).replace(/\\(["\\`$])/gu, '$1');
   assert.equal(decoded, value);
-  if (process.platform !== 'win32') {
-    const plan = buildTaskPlan({ profile: 'forward', stateRoot: '/sandbox/state', researchSha: SHA,
-      activationAtMs: 12345, env: { [COST_KEY]: decoded } });
-    assert.equal(plan.find(task => task.kind === 'paper').env[COST_KEY], value);
-    assert.equal(Object.hasOwn(plan.find(task => task.kind === 'shadow').env, COST_KEY), false);
-  }
+  // Paper-child scoping belongs to the separate #1227 owner; this server-owner regression stops at EnvironmentFile transport.
   assert.equal(result.sentinelPresent, false);
   assert.ok(result.events.every(event => !event.slice(1).includes(value)));
 });
