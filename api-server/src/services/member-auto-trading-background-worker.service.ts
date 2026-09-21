@@ -32,6 +32,7 @@ import {
   resolveMemberAutoTradingKrwRate,
   type MemberAutoTradingFxQuote,
 } from './member-auto-trading-fx.service';
+import { persistMemberAutoTradingPaperPositionBridge } from './member-auto-trading-paper-position-bridge.service';
 
 const DEFAULT_INTERVAL_MS = 30_000;
 const MIN_INTERVAL_MS = 10_000;
@@ -79,6 +80,8 @@ export type MemberAutoTradingBackgroundRunResult = {
   blocked: number;
   createdPlans: number;
   filledOrders: number;
+  positionLifecycles: number;
+  lifecycleIdempotent: number;
   duplicates: number;
   failures: number;
   liveOrders: 0;
@@ -495,6 +498,8 @@ export class MemberAutoTradingBackgroundWorker {
       blocked: 0,
       createdPlans: 0,
       filledOrders: 0,
+      positionLifecycles: 0,
+      lifecycleIdempotent: 0,
       duplicates: 0,
       failures: 0,
       liveOrders: 0,
@@ -574,8 +579,22 @@ export class MemberAutoTradingBackgroundWorker {
             const order = createdOrder.duplicate
               ? createdOrder.order
               : await execution.execute(member.userId, plan, createdOrder.order);
-            if (order.state === 'FILLED') result.filledOrders += createdOrder.duplicate ? 0 : 1;
-            else if (order.state === 'REJECTED' || order.state === 'RECOVERY_REQUIRED') result.blocked += 1;
+            if (order.state === 'FILLED') {
+              result.filledOrders += createdOrder.duplicate ? 0 : 1;
+              const lifecycle = await persistMemberAutoTradingPaperPositionBridge({
+                repository,
+                userId: member.userId,
+                plan,
+                order,
+                entry,
+                now,
+              });
+              if (lifecycle.status === 'PERSISTED') result.positionLifecycles += 1;
+              else if (lifecycle.status === 'IDEMPOTENT') result.lifecycleIdempotent += 1;
+              else result.blocked += 1;
+            } else if (order.state === 'REJECTED' || order.state === 'RECOVERY_REQUIRED') {
+              result.blocked += 1;
+            }
           } catch (error) {
             const code = errorCode(error);
             if (code.startsWith('BACKGROUND_')
