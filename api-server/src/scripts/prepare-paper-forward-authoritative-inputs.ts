@@ -2,6 +2,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 
 import {
   preparePaperForwardAuthoritativeInputs,
@@ -23,21 +24,38 @@ async function atomicJson(path: string, value: unknown): Promise<void> {
   await rename(temp, path);
 }
 
-const usage = 'usage: prepare-paper-forward-authoritative-inputs --input <absolute-json> --output-dir <absolute-dir>';
+const usage = 'usage: prepare-paper-forward-authoritative-inputs --repo-root <absolute-repo-root> --input <absolute-json> --output-dir <absolute-dir>';
 if (process.argv.includes('--help')) {
   process.stdout.write(`${usage}\n`);
   process.exit(0);
 }
 
+const repoRoot = argument('--repo-root');
 const inputPath = argument('--input');
 const outputDir = argument('--output-dir');
-if (!inputPath || !outputDir || !isAbsolute(inputPath) || !isAbsolute(outputDir)) {
+if (!repoRoot || !inputPath || !outputDir
+  || !isAbsolute(repoRoot) || !isAbsolute(inputPath) || !isAbsolute(outputDir)) {
   console.error(usage);
   process.exit(64);
 }
 
+const canonicalRepoRoot = resolve(repoRoot);
+const liquidityModulePath = resolve(
+  canonicalRepoRoot,
+  'market-intelligence-sidecar/src/public-forward-liquidity-runtime-cost-evidence.mjs',
+);
+const liquidityModule = await import(pathToFileURL(liquidityModulePath).href);
+if (typeof liquidityModule.buildPublicForwardLiquidityRuntimeCostEvidence !== 'function') {
+  throw new Error('CANONICAL_LIQUIDITY_RUNTIME_BUILDER_EXPORT_MISSING');
+}
+
 const manifest = await readJson(resolve(inputPath));
-const result = await preparePaperForwardAuthoritativeInputs(manifest as Parameters<typeof preparePaperForwardAuthoritativeInputs>[0]);
+const result = await preparePaperForwardAuthoritativeInputs(
+  manifest as Parameters<typeof preparePaperForwardAuthoritativeInputs>[0],
+  {
+    buildLiquidity: liquidityModule.buildPublicForwardLiquidityRuntimeCostEvidence,
+  },
+);
 
 await atomicJson(resolve(outputDir, 'preparation-receipt.json'), result);
 
