@@ -345,6 +345,15 @@ export async function fetchUnifiedChartData(input: {
             input.timeframe as ChartCandleTimeframe,
           );
         }
+        // A successful HTTP response is not usable chart evidence when fewer
+        // than two real candles survive normalization. For stock markets, use
+        // the already-defined alternate endpoint instead of presenting a
+        // misleading terminal empty state. Single-endpoint markets stay
+        // explicit and never synthesize candles.
+        if (normalization.candles.length < 2 && alternateAvailable) {
+          alternateGate?.release();
+          continue;
+        }
         alternateHedge?.abort();
         return {
           market: input.market,
