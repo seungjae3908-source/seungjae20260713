@@ -9,9 +9,6 @@ import {
   type PartialFillCalibrationContext,
 } from './authoritative-paper-partial-fill-cost-evidence.service';
 import type { PercentCostEvidence } from './scanner-profit-cost-evidence-adapter.service';
-// @ts-expect-error Canonical sidecar ESM is JavaScript-owned and has no TypeScript declaration file.
-import { buildPublicForwardLiquidityRuntimeCostEvidence } from '../../../market-intelligence-sidecar/src/public-forward-liquidity-runtime-cost-evidence.mjs';
-
 export const PAPER_FORWARD_AUTHORITATIVE_INPUT_PREPARATION_VERSION =
   'paper-forward-authoritative-input-preparation-v1' as const;
 
@@ -68,13 +65,21 @@ export type PaperForwardAuthoritativeInputPreparationResult = Readonly<{
 
 type Dependencies = Readonly<{
   createRiskProducer: typeof createAuthoritativePaperGenericRiskPolicyProducer;
-  buildLiquidity(input: Record<string, unknown>): Readonly<Record<string, unknown>>;
+  buildLiquidity(input: Record<string, unknown>): Readonly<Record<string, unknown>> | Promise<Readonly<Record<string, unknown>>>;
   buildPartialFill: typeof buildAuthoritativePaperPartialFillCostEvidence;
 }>;
 
+async function buildCanonicalLiquidityRuntimeCostEvidence(
+  input: Record<string, unknown>,
+): Promise<Readonly<Record<string, unknown>>> {
+  // @ts-expect-error Canonical sidecar ESM is JavaScript-owned and has no TypeScript declaration file.
+  const module = await import('../../../market-intelligence-sidecar/src/public-forward-liquidity-runtime-cost-evidence.mjs');
+  return module.buildPublicForwardLiquidityRuntimeCostEvidence(input) as Readonly<Record<string, unknown>>;
+}
+
 const DEFAULT_DEPENDENCIES: Dependencies = Object.freeze({
   createRiskProducer: createAuthoritativePaperGenericRiskPolicyProducer,
-  buildLiquidity: buildPublicForwardLiquidityRuntimeCostEvidence as Dependencies['buildLiquidity'],
+  buildLiquidity: buildCanonicalLiquidityRuntimeCostEvidence,
   buildPartialFill: buildAuthoritativePaperPartialFillCostEvidence,
 });
 
@@ -206,7 +211,7 @@ export async function preparePaperForwardAuthoritativeInputs(
     }
   }
 
-  const liquidityResult = dependencies.buildLiquidity({
+  const liquidityResult = await dependencies.buildLiquidity({
     ...(record(input.liquidity) ?? {}),
     nowMs,
   });
