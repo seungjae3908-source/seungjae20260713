@@ -36,6 +36,7 @@ OUTCOME_ACCUMULATION_ENABLED="${PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED:-fals
 # The scheduled runner owns this explicit read-only adapter. #772 owns record
 # validation, not a filename or investment-policy defaults.
 PAPER_FORWARD_RISK_POLICY_RECORD_PATH="${PAPER_FORWARD_RISK_POLICY_RECORD_PATH:-}"
+PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH="${PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH:-}"
 PREVIOUS_CRONTAB=""
 CRONTAB_MUTATED=0
 BACKUP_PATH=""
@@ -95,6 +96,13 @@ if [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" || -n "$PAPER_FORWARD_RISK_POLIC
   [[ "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" == /* ]] || fail "Paper risk policy record path must be absolute" 15
   [[ "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" != *"'"* && "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" != *$'\n'* && "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" != *$'\r'* ]] || fail "Paper risk policy record path is unsafe for the pinned wrapper" 15
   [[ -f "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" && -r "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" ]] || fail "CANONICAL_RISK_POLICY_RECORD_MISSING: Paper risk policy source missing or unreadable" 15
+fi
+
+if [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" || -n "$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" ]]; then
+  [[ -n "$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" ]] || fail "CANONICAL_SUPPLEMENTAL_COST_EVIDENCE_MISSING: explicit Paper cost source required" 15
+  [[ "$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" == /* ]] || fail "Paper supplemental cost path must be absolute" 15
+  [[ "$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" != *"'"* && "$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" != *$'\n'* && "$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" != *$'\r'* ]] || fail "Paper supplemental cost path is unsafe for the pinned wrapper" 15
+  [[ -f "$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" && -r "$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" ]] || fail "CANONICAL_SUPPLEMENTAL_COST_EVIDENCE_MISSING: Paper cost source missing or unreadable" 15
 fi
 
 for command_name in node flock crontab mkdir rm mv ln date sha256sum awk grep sed wc pgrep find sort xargs chmod tr rsync; do
@@ -351,6 +359,7 @@ exec /usr/bin/env -i \
   PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH='$PAPER_STATE_SNAPSHOT_PATH' \
   PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256='$PUBLISHER_ACCOUNT_ID_SHA256' \
   PAPER_FORWARD_RISK_POLICY_RECORD_PATH='$PAPER_FORWARD_RISK_POLICY_RECORD_PATH' \
+  PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH='$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH' \
   LIVE_TRADING='false' \
   LIVE_TRADING_ENABLED='false' \
   REAL_ORDER_ENABLED='false' \
