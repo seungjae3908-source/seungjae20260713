@@ -12,6 +12,7 @@ import {
   wrapPaperForwardProviderWithEthV6Source,
 } from "./eth-v6-paper-forward-source-v1.js";
 import { wrapPaperForwardProviderWithMeaningfulSearch } from "./meaningful-search-scheduled-paper-provider-v1.js";
+import { adoptPaperForwardStageEvidenceV1 } from "./paper-forward-stage-evidence-adoption-v1.js";
 import {
   createNaturalPaperPublicPositionObservationProducer,
   wrapPaperForwardProviderWithNaturalPositionObservations,
@@ -392,6 +393,7 @@ export async function runPaperForwardEvidenceRuntime({
   if (!publicEvidenceProvider || typeof publicEvidenceProvider.collectPublicEvidence !== "function") throw new TypeError("public evidence provider is required");
   if (typeof runtimeClock !== "function") throw new TypeError("runtimeClock must be a function");
   const observed = new Map();
+  const authoritativeEvidence = new Map();
   const trackingProvider = Object.freeze({
     async collectPublicEvidence(input) {
       try {
@@ -400,6 +402,7 @@ export async function runPaperForwardEvidenceRuntime({
           openPositions: openPositionsForMarket(scheduledInput.state, input.market),
         });
         observed.set(input.market, sanitizeLane(input.market, evidence));
+        if (input.market === "CRYPTO_FUTURES") authoritativeEvidence.set(input.market, evidence);
         return evidence;
       } catch (error) {
         observed.set(input.market, sanitizeLane(input.market, { status: "BLOCKED_DATA", blocker: safeReason(error) }));
@@ -408,6 +411,10 @@ export async function runPaperForwardEvidenceRuntime({
     },
   });
   const result = await runScheduled({ ...scheduledInput, publicEvidenceProvider: trackingProvider });
+  const authoritativePaperStageEvidence = adoptPaperForwardStageEvidenceV1({
+    scheduledEvidence: authoritativeEvidence.get("CRYPTO_FUTURES") ?? null,
+    recurringCycleResult: result,
+  });
   const previous = await runtimeStatusStore?.load?.() ?? null;
   const updatedAtMs = runtimeClock();
   if (!finite(updatedAtMs)) throw new TypeError("runtimeClock must return a finite number");
@@ -435,5 +442,5 @@ export async function runPaperForwardEvidenceRuntime({
     ...PAPER_FORWARD_RUNTIME_CONTRACT,
   });
   await runtimeStatusStore?.save?.(status);
-  return Object.freeze({ ...result, runtimeStatus: status });
+  return Object.freeze({ ...result, runtimeStatus: status, authoritativePaperStageEvidence });
 }
