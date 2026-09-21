@@ -1,6 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
+import { installFullProductFixtures } from './support/full-product-fixtures';
 
 const FIXED_AT = '2026-08-02T00:00:00.000Z';
+
+test.beforeEach(async ({ page }) => {
+  await installFullProductFixtures(page);
+});
 
 function candleRows() {
   const end = Date.parse(FIXED_AT);
