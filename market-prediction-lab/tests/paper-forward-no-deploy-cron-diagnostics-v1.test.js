@@ -408,9 +408,13 @@ async function withRiskPolicyTransport(run) {
     const installer = await readFile(join(repositoryRoot, 'ops', 'install-paper-forward-schedule.sh'), 'utf8');
     const assignment = installer.match(/^PAPER_FORWARD_RISK_POLICY_RECORD_PATH=.*$/mu)?.[0];
     const guard = installer.match(/if \[\[ "\$OUTCOME_ACCUMULATION_ENABLED" == "true"[^\n]*\n(?:(?!\nfi)[\s\S])*Paper risk policy source missing or unreadable[^\n]*\nfi/u)?.[0];
+    const costAssignment = installer.match(/^PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH=.*$/mu)?.[0];
+    const costGuard = installer.match(/if \[\[ "\$OUTCOME_ACCUMULATION_ENABLED" == "true" \|\| -n "\$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" \]\]; then[\s\S]*?\nfi/u)?.[0];
     const whitelist = installer.match(/exec \/usr\/bin\/env -i[\s\S]*?(?=\nWRAPPER)/u)?.[0];
-    assert.ok(assignment && guard && whitelist, 'execute the actual installer config, preflight and env-i contract');
+    assert.ok(assignment && guard && costAssignment && costGuard && whitelist,
+      'execute the actual installer config, preflight and env-i contract');
     assert.equal(assignment, 'PAPER_FORWARD_RISK_POLICY_RECORD_PATH="${PAPER_FORWARD_RISK_POLICY_RECORD_PATH:-}"');
+    assert.equal(costAssignment, 'PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH="${PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH:-}"');
     assert.doesNotMatch(installer, /GENERIC_RISK_POLICY_LIVE_RECORD_PATH|generic-risk-policy-live-v1\.json/u);
     assert.match(guard, /-f "\$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" && -r "\$PAPER_FORWARD_RISK_POLICY_RECORD_PATH"/u);
     const harness = join(release, 'policy-transport-harness.mjs');
@@ -440,6 +444,7 @@ async function withRiskPolicyTransport(run) {
             assert.equal(process.permission.has('fs.read', process.env.PAPER_FORWARD_RISK_POLICY_RECORD_PATH), false);
           }
           const raw = await sources.riskPolicyRecordForCard({ card: { symbol: 'BTCUSDT' } }, request);
+          const supplemental = await sources.supplementalCostInputForCard({ card: { symbol: 'BTCUSDT' } }, request);
           const producer = runtime.createAuthoritativePaperGenericRiskPolicyProducer({
             now: () => Number(process.env.PAPER_FORWARD_ACTIVATION_AT_MS),
             readCanonicalRecord: async (policyRequest) => {
@@ -450,6 +455,8 @@ async function withRiskPolicyTransport(run) {
           });
           const policy = await producer(request);
           result = { path: process.env.PAPER_FORWARD_RISK_POLICY_RECORD_PATH, raw, policy, callbackCount,
+            supplementalPath: process.env.PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH, supplemental,
+            economicCredit: 0,
             unrelatedEnvironmentPreserved: process.env.TEST_UNRELATED_SECRET != null,
             safety: Object.fromEntries(['LIVE_TRADING', 'LIVE_TRADING_ENABLED', 'REAL_ORDER_ENABLED',
               'PRIVATE_API_ENABLED', 'PRIVATE_ACCOUNT_ACCESS', 'PRIVATE_TRADING_API_ALLOWED']
@@ -468,14 +475,18 @@ async function withRiskPolicyTransport(run) {
     assert.notEqual(whitelistForInspection, whitelist, 'only replace the final executable with the read-only inspector');
     const nowMs = Date.now();
     const recordPath = join(root, 'explicit-record with space.json');
+    const costRecordPath = join(root, 'explicit-cost with space.json');
     await writeFile(recordPath, '{}');
-    function launch(path = bashPath(recordPath), preflight = true, denyRecordRead = false) {
+    await writeFile(costRecordPath, '{"schemaVersion":"test-only-invalid","economicCredit":0}');
+    function launch(path = bashPath(recordPath), preflight = true, denyRecordRead = false,
+      supplementalPath = bashPath(costRecordPath)) {
       const command = denyRecordRead
         ? whitelistForInspection.replace('"\\$NODE_BIN" "$HARNESS"',
           `"\\$NODE_BIN" ${permissionFlag} --allow-fs-read="$RUNTIME_DIR" --allow-fs-read="$STATE_ROOT/packages" --allow-fs-read="$STATE_ROOT/runtime-state/DISABLED" --allow-fs-read="$STATE_ROOT/runtime-state/state/recurring-paper-loop.json" "$HARNESS"`)
         : whitelistForInspection;
       const script = `set -Eeuo pipefail
         PAPER_FORWARD_RISK_POLICY_RECORD_PATH="$TEST_CONTRACT_RECORD_PATH"
+        PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH="$TEST_COST_RECORD_PATH"
         NODE_BIN="$TEST_CONTRACT_NODE"
         HARNESS="$TEST_CONTRACT_HARNESS"
         RUNTIME_DIR="$TEST_CONTRACT_RELEASE"
@@ -490,6 +501,8 @@ async function withRiskPolicyTransport(run) {
         fail() { printf '%s\\n' "$1" >&2; exit "$2"; }
         ${assignment}
         ${preflight ? guard : ''}
+        ${costAssignment}
+        ${preflight ? costGuard : ''}
         TEMP_WRAPPER="$STATE_ROOT/inspect-wrapper"
         cat > "$TEMP_WRAPPER" <<WRAPPER
 NODE_BIN='$NODE_BIN'
@@ -499,6 +512,7 @@ WRAPPER
       return spawnSync(bashExecutable, ['-c', script], {
         env: { ...process.env, TEST_UNRELATED_SECRET: 'must-be-scrubbed',
           TEST_CONTRACT_RECORD_PATH: path, TEST_CONTRACT_NODE: bashPath(process.execPath),
+          TEST_COST_RECORD_PATH: supplementalPath,
           TEST_CONTRACT_RELEASE: bashPath(release),
           TEST_CONTRACT_HARNESS: bashPath(harness), TEST_CONTRACT_ROOT: bashPath(root),
           GENERIC_RISK_POLICY_LIVE_RECORD_PATH: bashPath(recordPath) },
@@ -512,15 +526,18 @@ WRAPPER
       assert.ok(row, 'read-only inspector must report the actually consumed record');
       return JSON.parse(row.slice('POLICY_TRANSPORT_RESULT='.length));
     };
-    await run({ launch, inspect, recordPath, root });
+    await run({ launch, inspect, recordPath, costRecordPath, root });
   });
 }
 
-test('Paper cron transports only the explicit reader path through env-i and retains canonical fail-closed validation', async () => {
-  await withRiskPolicyTransport(async ({ inspect, recordPath }) => {
+test('Paper cron transports explicit risk and supplemental cost paths through env-i without economic credit', async () => {
+  await withRiskPolicyTransport(async ({ inspect, recordPath, costRecordPath }) => {
     const evidence = inspect();
     assert.deepEqual(evidence.raw, {});
     assert.equal(evidence.path.replaceAll('\\', '/'), recordPath.replaceAll('\\', '/'));
+    assert.equal(evidence.supplementalPath.replaceAll('\\', '/'), costRecordPath.replaceAll('\\', '/'));
+    assert.deepEqual(evidence.supplemental, { schemaVersion: 'test-only-invalid', economicCredit: 0 });
+    assert.equal(evidence.economicCredit, 0);
     assert.equal(evidence.policy.status, 'BLOCKED_DATA');
     assert.equal(evidence.policy.policyEvidence, null);
     assert.ok(evidence.policy.blockers.includes('RISK_POLICY_CANONICAL_RECORD_SCHEMA_INVALID'));
@@ -533,6 +550,18 @@ test('Paper cron transports only the explicit reader path through env-i and reta
     for (const field of ['privateApiAllowed', 'liveTrading', 'realOrderAllowed', 'financialMutationAllowed']) {
       assert.equal(evidence.policy[field], false);
     }
+  });
+});
+
+test('missing supplemental cost source blocks before pinned wrapper creation', async () => {
+  await withRiskPolicyTransport(async ({ launch, root }) => {
+    for (const path of ['', 'relative.json', bashPath(root),
+      bashPath(join(root, 'absent-cost.json')), "/tmp/unsafe'path", '/tmp/unsafe\npath']) {
+      const result = launch(undefined, true, false, path);
+      assert.equal(result.status, 15, String(result.stderr));
+      assert.equal(String(result.stdout).includes('POLICY_TRANSPORT_RESULT='), false);
+    }
+    await assert.rejects(access(join(root, 'inspect-wrapper')), /ENOENT/u);
   });
 });
 
