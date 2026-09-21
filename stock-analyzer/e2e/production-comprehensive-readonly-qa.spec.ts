@@ -148,7 +148,18 @@ async function installSafety(page: Page, blocked: Diagnostic[]) {
 }
 
 async function login(page: Page) {
-  await page.goto('/login', { waitUntil: 'domcontentloaded', timeout: 15_000 });
+  let navigationError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await page.goto('/login', { waitUntil: 'domcontentloaded', timeout: 15_000 });
+      navigationError = undefined;
+      break;
+    } catch (error) {
+      navigationError = error;
+      if (attempt === 0) await page.waitForTimeout(250);
+    }
+  }
+  if (navigationError) throw navigationError;
   await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 10_000 });
   await page.getByLabel('아이디').fill(qaLogin, { timeout: 3_000 });
   await page.getByLabel('비밀번호').fill(qaPassword, { timeout: 3_000 });
