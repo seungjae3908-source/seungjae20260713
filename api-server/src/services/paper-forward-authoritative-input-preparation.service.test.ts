@@ -194,3 +194,12 @@ test('invalid exact research SHA fails closed', async () => {
   assert.equal(result.status, 'BLOCKED_DATA');
   assert.ok(result.blockers.includes('PREPARATION_EXACT_RESEARCH_SHA_REQUIRED'));
 });
+
+
+test('default canonical liquidity validator is executable and fails closed on missing genuine evidence', async () => {
+  const result = await preparePaperForwardAuthoritativeInputs(baseInput());
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.ok(result.blockers.some((code) => code.startsWith('LIQUIDITY:')));
+  assert.equal(result.economicCreditCreated, false);
+  assert.equal(result.executionAuthority, 'NONE');
+});
