@@ -130,6 +130,29 @@ jobs:
             || receipt.economicCreditCreated !== false
             || receipt.executionAuthority !== 'NONE') process.exit(1);
           NODE
+
+      - name: Reject mismatched repository SHA before canonical loading
+        run: |
+          set -Eeuo pipefail
+          input="$RUNNER_TEMP/mismatch-input.json"
+          output="$RUNNER_TEMP/mismatch-output"
+          node - "$input" <<'NODE'
+          const fs = require('node:fs');
+          const source = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/preparation-input.json', 'utf8'));
+          source.researchCodeSha = 'b'.repeat(40);
+          source.riskPolicyRecord.researchCodeSha = source.researchCodeSha;
+          source.riskPolicyRequest.researchCodeSha = source.researchCodeSha;
+          source.partialFill.expected.producerCodeSha = source.researchCodeSha;
+          source.partialFill.expected.calibrationCodeSha = source.researchCodeSha;
+          fs.writeFileSync(process.argv[2], JSON.stringify(source));
+          NODE
+          set +e
+          mismatch_log="$RUNNER_TEMP/mismatch.log"
+          node "$RUNNER_TEMP/prepare-paper-forward-authoritative-inputs.mjs"             --repo-root "$GITHUB_WORKSPACE"             --input "$input"             --output-dir "$output" >"$mismatch_log" 2>&1
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -Fq 'CANONICAL_REPOSITORY_SHA_MISMATCH' "$mismatch_log"
       - name: Verify fail-closed safety boundary
         run: |
           set -Eeuo pipefail
@@ -137,6 +160,8 @@ jobs:
           grep -Fq "riskPolicyValuesInvented: false" "$FILE"
           grep -Fq "liquidityImpactInvented: false" "$FILE"
           grep -Fq "canonicalLiquidityRuntimeBuilderMustBeExplicitlyBound: true" "$FILE"
+          grep -Fq "naturalRuntimeMaximumAgeMs: NATURAL_RUNTIME_MAXIMUM_AGE_MS" "$FILE"
+          grep -Fq "CANONICAL_REPOSITORY_SHA_MISMATCH" api-server/src/scripts/prepare-paper-forward-authoritative-inputs.ts
           grep -Fq "partialFillImpactInvented: false" "$FILE"
           grep -Fq "replayBackfillSyntheticManualEconomicCredit: 0" "$FILE"
           grep -Fq "scheduleActivationAuthority: false" "$FILE"
