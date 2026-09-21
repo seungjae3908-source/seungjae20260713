@@ -155,7 +155,10 @@ export function createAiChartPublicStreamClient(
     const active = socket;
     socket = null;
     try { active?.close(1000, 'polling-fallback'); } catch { /* fail closed */ }
-    if (usesDefaultSocketFactory && reason === 'PREOPEN_CONNECTION_CLOSED') {
+    if (
+      usesDefaultSocketFactory
+      && (reason === 'PREOPEN_CONNECTION_CLOSED' || reason === 'CONNECT_TIMEOUT')
+    ) {
       providerFallbackUntilMs.set(fallbackKey, now() + subscription.staleAfterMs * 2);
     }
     publish('FALLBACK_POLLING', reason);
