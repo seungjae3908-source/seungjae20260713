@@ -147,18 +147,35 @@ async function installSafety(page: Page, blocked: Diagnostic[]) {
   });
 }
 
+const LOGIN_READY_BUDGET_MS = 15_000;
+
 async function login(page: Page) {
-  // Gate on the actual interactive login surface, not the document-wide
-  // DOMContentLoaded event. A slow unrelated resource must not make a healthy
-  // login UI look unavailable, while the same 15s navigation bound remains.
-  await page.goto('/login', { waitUntil: 'commit', timeout: 15_000 });
+  // Judge readiness by the actual interactive login surface while preserving
+  // one total 15s readiness budget. Do not extend the gate through serial waits.
+  const readinessStartedAt = Date.now();
+  const remainingReadinessMs = () =>
+    Math.max(1, LOGIN_READY_BUDGET_MS - (Date.now() - readinessStartedAt));
+
+  await page.goto('/login', { waitUntil: 'commit', timeout: remainingReadinessMs() });
+  const loginId = page.getByLabel('아이디');
+  const loginPassword = page.getByLabel('비밀번호');
   const loginButton = page.getByRole('button', { name: '로그인', exact: true });
-  await expect(page.getByLabel('아이디')).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByLabel('비밀번호')).toBeVisible({ timeout: 10_000 });
-  await expect(loginButton).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 10_000 });
-  await page.getByLabel('아이디').fill(qaLogin, { timeout: 3_000 });
-  await page.getByLabel('비밀번호').fill(qaPassword, { timeout: 3_000 });
+
+  await expect.poll(async () => {
+    const [idVisible, passwordVisible, buttonVisible, fallbackVisible] = await Promise.all([
+      loginId.isVisible({ timeout: 250 }).catch(() => false),
+      loginPassword.isVisible({ timeout: 250 }).catch(() => false),
+      loginButton.isVisible({ timeout: 250 }).catch(() => false),
+      page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false),
+    ]);
+    return idVisible && passwordVisible && buttonVisible && !fallbackVisible ? 'READY' : 'PENDING';
+  }, {
+    timeout: remainingReadinessMs(),
+    intervals: [100, 200, 400, 800],
+  }).toBe('READY');
+
+  await loginId.fill(qaLogin, { timeout: 3_000 });
+  await loginPassword.fill(qaPassword, { timeout: 3_000 });
   await loginButton.click({ timeout: 3_000 });
   await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: 15_000 });
 }
