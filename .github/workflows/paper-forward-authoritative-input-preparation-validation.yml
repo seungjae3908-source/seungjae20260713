@@ -1,0 +1,60 @@
+name: Paper Forward Authoritative Input Preparation Validation
+
+on:
+  pull_request:
+    paths:
+      - 'api-server/src/services/paper-forward-authoritative-input-preparation.service.ts'
+      - 'api-server/src/services/paper-forward-authoritative-input-preparation.service.test.ts'
+      - 'api-server/src/scripts/prepare-paper-forward-authoritative-inputs.ts'
+      - '.github/workflows/paper-forward-authoritative-input-preparation-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck API server
+        run: pnpm --dir api-server run typecheck
+      - name: Bundle and run focused preparation tests
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server exec esbuild \
+            src/services/paper-forward-authoritative-input-preparation.service.test.ts \
+            --bundle --packages=external --platform=node --format=cjs --target=node20 \
+            --outfile="$RUNNER_TEMP/paper-forward-authoritative-input-preparation.test.cjs"
+          node --test "$RUNNER_TEMP/paper-forward-authoritative-input-preparation.test.cjs"
+      - name: Bundle CLI
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server exec esbuild \
+            src/scripts/prepare-paper-forward-authoritative-inputs.ts \
+            --bundle --packages=external --platform=node --format=esm --target=node20 \
+            --outfile="$RUNNER_TEMP/prepare-paper-forward-authoritative-inputs.mjs"
+          node --check "$RUNNER_TEMP/prepare-paper-forward-authoritative-inputs.mjs"
+      - name: Verify fail-closed safety boundary
+        run: |
+          set -Eeuo pipefail
+          FILE=api-server/src/services/paper-forward-authoritative-input-preparation.service.ts
+          grep -Fq "riskPolicyValuesInvented: false" "$FILE"
+          grep -Fq "liquidityImpactInvented: false" "$FILE"
+          grep -Fq "partialFillImpactInvented: false" "$FILE"
+          grep -Fq "replayBackfillSyntheticManualEconomicCredit: 0" "$FILE"
+          grep -Fq "scheduleActivationAuthority: false" "$FILE"
+          grep -Fq "deploymentAuthority: false" "$FILE"
+          grep -Fq "executionAuthority: 'NONE'" "$FILE"
+          git diff --exit-code
