@@ -32,7 +32,8 @@ import SearchPage from '@/pages/search';
 const WatchlistPage = lazy(() => import('@/pages/watchlist'));
 const AlertsPage = lazy(() => import('@/pages/alerts'));
 const ScannerPage = lazy(() => import('@/pages/scanner'));
-const SignalScannerPage = lazy(() => import('@/pages/signal-scanner'));
+const loadSignalScannerPage = () => import('@/pages/signal-scanner');
+const SignalScannerPage = lazy(loadSignalScannerPage);
 const loadStockInfoPage = () => import('@/pages/stock-info');
 const StockInfoPage = lazy(loadStockInfoPage);
 const loadDetailPage = () => import('@/pages/detail');
@@ -43,7 +44,8 @@ const MarketOverviewPage = lazy(() => import('@/pages/market-overview'));
 const StocksPage = lazy(() => import('@/pages/stocks'));
 const UnifiedAssetSearchPage = lazy(() => import('@/pages/unified-asset-search'));
 const ThemesPage = lazy(() => import('@/pages/themes'));
-const LearnPage = lazy(() => import('@/pages/learn'));
+const loadLearnPage = () => import('@/pages/learn');
+const LearnPage = lazy(loadLearnPage);
 const loadMorePage = () => import('@/pages/more');
 const MorePage = lazy(loadMorePage);
 const PortfolioPage = lazy(() => import('@/pages/portfolio'));
@@ -97,7 +99,8 @@ if (directAiChartColdRoute) {
 }
 const AiChartPage = lazy(loadAiChartPage);
 const AiChatPage = lazy(() => import('@/pages/ai-chat'));
-const TechnicalWorkspacePage = lazy(() => import('@/pages/technical-workspace'));
+const loadTechnicalWorkspacePage = () => import('@/pages/technical-workspace');
+const TechnicalWorkspacePage = lazy(loadTechnicalWorkspacePage);
 const Phase12TradeAutomationE2EPage = lazy(() => import('@/pages/phase12-trade-automation-e2e'));
 
 const phase4E2EEnabled = import.meta.env.VITE_PHASE4_E2E === 'true';
@@ -421,12 +424,16 @@ function AuthenticatedApp() {
   useEffect(() => {
     if (!auth.isApproved || directAiChartColdRoute) return;
     void Promise.allSettled([
-      prewarmPrimaryMarketInformation(),
+      loadMarketInformationPage(),
       loadBacktestsPage(),
       loadMorePage(),
       loadStockInfoPage(),
       loadDetailPage(),
-    ]);
+      loadTechnicalWorkspacePage(),
+      loadSignalScannerPage(),
+      loadAiChartPage(),
+      loadLearnPage(),
+    ]).then(() => prewarmPrimaryMarketInformation()).catch(() => undefined);
   }, [auth.isApproved]);
   useEffect(() => {
     if (auth.isApproved && auth.can('canAccessPaperTrading')) {
