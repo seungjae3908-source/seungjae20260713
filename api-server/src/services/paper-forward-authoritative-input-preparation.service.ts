@@ -81,6 +81,7 @@ const DEFAULT_DEPENDENCIES: Dependencies = Object.freeze({
 });
 
 const SHA40 = /^[0-9a-f]{40}$/u;
+const NATURAL_RUNTIME_MAXIMUM_AGE_MS = 30_000;
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -168,6 +169,7 @@ export async function preparePaperForwardAuthoritativeInputs(
 
   if (!exactSha(normalizedSha)) blockers.push('PREPARATION_EXACT_RESEARCH_SHA_REQUIRED');
   if (!positive(nowMs) || !positive(maximumAgeMs)) blockers.push('PREPARATION_CLOCK_OR_MAXIMUM_AGE_INVALID');
+  else if (maximumAgeMs > NATURAL_RUNTIME_MAXIMUM_AGE_MS) blockers.push('PREPARATION_MAXIMUM_AGE_EXCEEDS_NATURAL_RUNTIME');
   if (!nonEmpty(input?.costPolicyId)) blockers.push('PREPARATION_COST_POLICY_ID_REQUIRED');
   if (!riskRecord) blockers.push('PREPARATION_RISK_POLICY_RECORD_REQUIRED');
   if (riskRequest?.market !== 'CRYPTO_FUTURES') blockers.push('PREPARATION_CRYPTO_FUTURES_ONLY');
@@ -287,6 +289,7 @@ export const PAPER_FORWARD_AUTHORITATIVE_INPUT_PREPARATION_SAFETY = Object.freez
   riskPolicyValuesInvented: false,
   liquidityImpactInvented: false,
   canonicalLiquidityRuntimeBuilderMustBeExplicitlyBound: true,
+  naturalRuntimeMaximumAgeMs: NATURAL_RUNTIME_MAXIMUM_AGE_MS,
   partialFillImpactInvented: false,
   latencyPreparedAheadOfRuntime: false,
   fundingPreparedAheadOfCandidate: false,
