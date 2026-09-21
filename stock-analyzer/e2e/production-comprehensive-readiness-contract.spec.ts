@@ -69,10 +69,13 @@ test('Production chart audit waits for the matching settled query before accepti
   expect(marketData).toContain('void cached(cacheKey, candleCacheTtl(timeframeText), load)');
 });
 
-test('Production cold-route modules prewarm after approval without competing with direct AI Chart bootstrap', () => {
+test('Production cold-route modules settle before primary market data prewarm without competing with direct AI Chart bootstrap', () => {
   const app = source('src/App.tsx');
   const marketInformation = source('src/pages/market-information.tsx');
-  expect(app).toContain('void Promise.allSettled([');
+  const moduleWarmup = app.indexOf('void Promise.allSettled([');
+  const marketDataWarmup = app.indexOf(']).then(() => prewarmPrimaryMarketInformation())', moduleWarmup);
+  expect(moduleWarmup).toBeGreaterThanOrEqual(0);
+  expect(marketDataWarmup).toBeGreaterThan(moduleWarmup);
   expect(app).toContain('loadMarketInformationPage()');
   expect(app).toContain('prewarmPrimaryMarketInformation()');
   expect(app).toContain("prefetchMarketInformationRoom(queryClient, '/stocks/kr')");
@@ -82,5 +85,8 @@ test('Production cold-route modules prewarm after approval without competing wit
   expect(app).toContain('loadMorePage()');
   expect(app).toContain('loadStockInfoPage()');
   expect(app).toContain('loadDetailPage()');
+  expect(app).toContain('loadTechnicalWorkspacePage()');
+  expect(app).toContain('loadSignalScannerPage()');
+  expect(app).toContain('loadAiChartPage()');
   expect(app).toContain('if (!auth.isApproved || directAiChartColdRoute) return;');
 });
