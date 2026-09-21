@@ -5,13 +5,17 @@ import { cn } from '@/lib/utils';
 
 type Exchange = 'bitget' | 'upbit' | 'kiwoom';
 type Market = 'domestic_stock' | 'us_stock' | 'crypto_spot' | 'crypto_futures';
+type StockMarket = 'domestic_stock' | 'us_stock';
+type StockBroker = 'kiwoom' | 'toss';
 type MarketSwitches = Record<Market, boolean>;
+type StockBrokerByMarket = Record<StockMarket, StockBroker>;
 
 type Policy = {
   mode: 'approval' | 'automatic';
   automaticEnabled: boolean;
   emergencyStopped: boolean;
   marketEnabled?: MarketSwitches;
+  stockBrokerByMarket?: StockBrokerByMarket;
   exchangeEnabled: Record<Exchange, boolean>;
   enabledAssets: Record<Exchange, string[]>;
   enabledStrategies: string[];
@@ -25,7 +29,10 @@ type Policy = {
   bitgetLeverage: 2 | 3;
 };
 
-type UiPolicy = Omit<Policy, 'marketEnabled'> & { marketEnabled: MarketSwitches };
+type UiPolicy = Omit<Policy, 'marketEnabled' | 'stockBrokerByMarket'> & {
+  marketEnabled: MarketSwitches;
+  stockBrokerByMarket: StockBrokerByMarket;
+};
 
 type Status = {
   policy: Policy;
@@ -41,7 +48,12 @@ type Status = {
 const EXCHANGE_LABELS: Record<Exchange, string> = {
   bitget: 'Bitget 코인선물',
   upbit: 'Upbit 코인현물',
-  kiwoom: '주식 실행 연결',
+  kiwoom: 'Kiwoom 주식 실행 연결',
+};
+
+const STOCK_BROKER_LABELS: Record<StockBroker, string> = {
+  kiwoom: 'Kiwoom',
+  toss: 'Toss',
 };
 
 const MARKET_LABELS: Record<Market, string> = {
@@ -52,10 +64,10 @@ const MARKET_LABELS: Record<Market, string> = {
 };
 
 const MARKET_DESCRIPTIONS: Record<Market, string> = {
-  domestic_stock: '모의매매 지원 · 실전은 서버 실행 어댑터 검증 후',
-  us_stock: '모의매매 지원 · 현재 실전 주문 어댑터 미연결',
-  crypto_spot: '모의매매 지원 · Upbit 실전 연결 시 서버 게이트 적용',
-  crypto_futures: '모의매매 지원 · Bitget LONG/SHORT, 2~3배 제한',
+  domestic_stock: '모의매매 지원 · Toss/Kiwoom 중 사용자별 선택',
+  us_stock: '모의매매 지원 · Toss/Kiwoom 중 사용자별 선택',
+  crypto_spot: 'Upbit 고정 · 모의매매 지원',
+  crypto_futures: 'Bitget 고정 · LONG/SHORT, 2~3배 제한',
 };
 
 const DEFAULT_MARKETS: MarketSwitches = {
@@ -70,6 +82,7 @@ const DEFAULT_POLICY: UiPolicy = {
   automaticEnabled: false,
   emergencyStopped: false,
   marketEnabled: DEFAULT_MARKETS,
+  stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'kiwoom' },
   exchangeEnabled: { bitget: true, upbit: true, kiwoom: true },
   enabledAssets: { bitget: [], upbit: [], kiwoom: [] },
   enabledStrategies: [],
@@ -91,10 +104,15 @@ function normalizeUiPolicy(policy?: Policy | null): UiPolicy {
     crypto_spot: policy.exchangeEnabled.upbit,
     crypto_futures: policy.exchangeEnabled.bitget,
   };
+  const stockBrokerByMarket: StockBrokerByMarket = {
+    domestic_stock: policy.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' : 'kiwoom',
+    us_stock: policy.stockBrokerByMarket?.us_stock === 'toss' ? 'toss' : 'kiwoom',
+  };
   return {
     ...policy,
     mode: 'automatic',
     marketEnabled,
+    stockBrokerByMarket,
     exchangeEnabled: {
       bitget: marketEnabled.crypto_futures,
       upbit: marketEnabled.crypto_spot,
@@ -160,6 +178,13 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
         exchangeEnabled: exchangesForMarkets(marketEnabled),
       };
     });
+  }
+
+  function selectStockBroker(market: StockMarket, broker: StockBroker) {
+    setDraft((current) => ({
+      ...current,
+      stockBrokerByMarket: { ...current.stockBrokerByMarket, [market]: broker },
+    }));
   }
 
   async function save(confirmed: boolean) {
@@ -284,6 +309,37 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
       ))}
     </div>
 
+    <div className="mt-4 rounded-2xl border border-card-border bg-background p-3" data-testid="stock-broker-routing">
+      <p className="text-xs font-extrabold">주식 증권사 선택</p>
+      <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
+        국내·미국주식은 사용자마다 Toss 또는 Kiwoom을 선택합니다. 코인현물은 Upbit, 코인선물은 Bitget으로 고정됩니다.
+      </p>
+      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {(['domestic_stock', 'us_stock'] as StockMarket[]).map((market) => (
+          <label key={market} className="rounded-xl border border-card-border bg-card p-3 text-xs font-extrabold">
+            {MARKET_LABELS[market]} 증권사
+            <select
+              data-testid={`stock-broker-${market}`}
+              aria-label={`${MARKET_LABELS[market]} 증권사`}
+              value={draft.stockBrokerByMarket[market]}
+              onChange={(event) => selectStockBroker(market, event.target.value === 'toss' ? 'toss' : 'kiwoom')}
+              className="mt-2 h-10 w-full rounded-xl border border-card-border bg-background px-3 text-xs"
+            >
+              <option value="kiwoom">Kiwoom</option>
+              <option value="toss">Toss</option>
+            </select>
+          </label>
+        ))}
+      </div>
+      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 text-[11px] font-semibold text-muted-foreground">
+        <p className="rounded-xl bg-secondary/60 p-2">코인현물 · Upbit 고정</p>
+        <p className="rounded-xl bg-secondary/60 p-2">코인선물 · Bitget 고정</p>
+      </div>
+      <p className="mt-2 text-[10px] leading-4 text-muted-foreground">
+        현재 증권사 선택은 Paper 자동매매 라우팅에 적용됩니다. Toss/Kiwoom 실전 주문은 각각 검증된 private-order 어댑터가 활성화되기 전까지 차단됩니다.
+      </p>
+    </div>
+
     <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
       {(Object.keys(EXCHANGE_LABELS) as Exchange[]).map((exchange) => {
         const connection = connections[exchange];
@@ -401,7 +457,11 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
           <dt className="font-bold">일일 손실</dt><dd>-{draft.dailyLossLimitPercent}% 도달 시 차단</dd>
           <dt className="font-bold">레버리지</dt><dd>Bitget 최대 {draft.bitgetLeverage}배</dd>
           <dt className="font-bold">허용 전략</dt><dd>{draft.enabledStrategies.join(', ') || '위험검사 통과 전략 전체'}</dd>
-          <dt className="font-bold">미국주식</dt><dd>모의매매 가능 · 실전 주문은 어댑터 연결 전까지 차단</dd>
+          <dt className="font-bold">국내주식 증권사</dt><dd>{STOCK_BROKER_LABELS[draft.stockBrokerByMarket.domestic_stock]}</dd>
+          <dt className="font-bold">미국주식 증권사</dt><dd>{STOCK_BROKER_LABELS[draft.stockBrokerByMarket.us_stock]}</dd>
+          <dt className="font-bold">코인현물</dt><dd>Upbit 고정</dd>
+          <dt className="font-bold">코인선물</dt><dd>Bitget 고정</dd>
+          <dt className="font-bold">주식 실전주문</dt><dd>Toss/Kiwoom private-order 어댑터 검증 전까지 차단</dd>
           <dt className="font-bold">긴급정지</dt><dd>누르면 4시장 신규 주문 즉시 OFF</dd>
         </dl>
         <div className="mt-5 grid grid-cols-2 gap-2">
