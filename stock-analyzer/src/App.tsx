@@ -123,6 +123,9 @@ const queryClient = new QueryClient({
 
 async function prewarmPrimaryMarketInformation(): Promise<void> {
   const marketInformation = await loadMarketInformationPage();
+  if (typeof window === 'undefined') return;
+  const currentPath = window.location.pathname.replace(/\/+$/, '') || '/';
+  if (currentPath !== '/' && !currentPath.endsWith('/home')) return;
   await marketInformation.prefetchMarketInformationRoom(queryClient, '/stocks/kr');
 }
 
