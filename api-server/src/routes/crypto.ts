@@ -2,6 +2,7 @@ import { Router, type IRouter } from 'express';
 import { createHmac, randomUUID } from 'node:crypto';
 import { requireMember } from '../middleware/auth';
 import { fetchNonEmptyPublicCandleRows } from '../lib/public-candle-retry';
+import { absoluteUpbitCandleTime } from '../lib/upbit-candle-time';
 import cryptoAutoRouter from './crypto-auto';
 
 const router: IRouter = Router();
@@ -187,7 +188,7 @@ router.get('/crypto/spot/candles', async (req, res) => {
     : `${UPBIT_BASE}/v1/candles/minutes/${unit}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${count}`;
   try {
     const rows = await fetchNonEmptyPublicCandleRows(() => fetchJson<any[]>(url));
-    const candles = rows.reverse().map((row) => ({ time: row.candle_date_time_kst, open: finite(row.opening_price), high: finite(row.high_price), low: finite(row.low_price), close: finite(row.trade_price), volume: finite(row.candle_acc_trade_volume), tradingValue: finite(row.candle_acc_trade_price) }));
+    const candles = rows.reverse().map((row) => ({ time: absoluteUpbitCandleTime(row), open: finite(row.opening_price), high: finite(row.high_price), low: finite(row.low_price), close: finite(row.trade_price), volume: finite(row.candle_acc_trade_volume), tradingValue: finite(row.candle_acc_trade_price) }));
     return res.json({ ok: true, provider: 'upbit', fetchedAt: new Date().toISOString(), exchange: 'UPBIT', market: `KRW-${symbol}`, unit: tfPath ? tf : `${unit}m`, candles, count: candles.length, updatedAt: new Date().toISOString() });
   } catch (error) {
     console.error('upbit candles error:', error);
