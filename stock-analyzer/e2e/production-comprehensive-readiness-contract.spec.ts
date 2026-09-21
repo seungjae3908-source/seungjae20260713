@@ -34,10 +34,18 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(auditRoute).toContain("{ timeout: 5_000, intervals: [100, 200, 400, 800] }).toBe('READY')");
   expect(auditRoute).toContain('await navigateInMountedApp(page, route)');
   expect(auditRoute).not.toContain('page.goto(route');
-  expect(qa).toContain("page.goto('/login', { waitUntil: 'domcontentloaded', timeout: 15_000 })");
+  expect(qa).toContain('const LOGIN_READY_BUDGET_MS = 15_000;');
   const login = qa.slice(qa.indexOf('async function login('), qa.indexOf('async function auditLayout'));
+  const loginNavigation = login.slice(login.indexOf("await page.goto('/login'"), login.indexOf('const loginId'));
   expect(login.match(/page\.goto\(/g)).toHaveLength(1);
-  expect(login).not.toContain('catch');
+  expect(login).toContain("page.goto('/login', { waitUntil: 'commit', timeout: remainingReadinessMs() })");
+  expect(login).toContain('Math.max(1, LOGIN_READY_BUDGET_MS - (Date.now() - readinessStartedAt))');
+  expect(login).toContain("page.getByLabel('아이디')");
+  expect(login).toContain("page.getByLabel('비밀번호')");
+  expect(login).toContain("page.getByTestId('page-fallback').isVisible");
+  expect(login).toContain("}).toBe('READY')");
+  expect(login).not.toContain('timeout: 10_000');
+  expect(loginNavigation).not.toContain('catch');
   expect(auditRoute).not.toContain("expect(page.getByTestId('page-fallback')).toHaveCount(0");
   expect(qa).toContain("expect(audits.filter((item) => item.busyAfter5s > 0)");
 });
@@ -77,6 +85,7 @@ test('Production cold-route modules settle before primary market data prewarm wi
   expect(moduleWarmup).toBeGreaterThanOrEqual(0);
   expect(marketDataWarmup).toBeGreaterThan(moduleWarmup);
   expect(app).toContain('loadMarketInformationPage()');
+  expect(app).toContain('loadWatchlistPage()');
   expect(app).toContain('prewarmPrimaryMarketInformation()');
   expect(app).toContain("prefetchMarketInformationRoom(queryClient, '/stocks/kr')");
   expect(marketInformation).toContain('export async function prefetchMarketInformationRoom(');
