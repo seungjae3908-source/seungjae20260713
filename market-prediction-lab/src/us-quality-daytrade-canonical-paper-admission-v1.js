@@ -1,5 +1,6 @@
 import { resolveCanonicalPaperAdmissionBridgeCandidate } from "./canonical-paper-admission-bridge-v1.js";
 import { resolveCanonicalPaperSimulationAuthority } from "./canonical-paper-simulation-authority-v1.js";
+import { runCanonicalMeaningfulSearchPaperMarketWithAdmissionBundles } from "./canonical-paper-admission-bundle-injection-runtime-v1.js";
 
 export const QUALITY_DAYTRADE_CANONICAL_PAPER_ADMISSION_VERSION =
   "us-quality-daytrade-canonical-paper-admission-v1";
@@ -214,4 +215,31 @@ export function createUsQualityDaytradeCanonicalPaperAdmissionBundleForCard({
 
     return resolved.canonicalBundle;
   };
+}
+
+
+export async function runUsQualityDaytradeCanonicalPaperMarket({
+  scanBatch,
+  candidateBindingForCard,
+  canonicalBundleForCard,
+  now = () => Date.now(),
+  ...runtimeOptions
+} = {}) {
+  if (typeof scanBatch !== "function") throw new TypeError("scanBatch must be a function");
+  if (typeof now !== "function") throw new TypeError("now must be a function");
+
+  const paperAdmissionBundleForCard =
+    createUsQualityDaytradeCanonicalPaperAdmissionBundleForCard({
+      candidateBindingForCard,
+      canonicalBundleForCard,
+      now,
+    });
+
+  return runCanonicalMeaningfulSearchPaperMarketWithAdmissionBundles({
+    ...runtimeOptions,
+    market: "US_STOCK",
+    scanBatch,
+    paperAdmissionBundleForCard,
+    now,
+  });
 }
