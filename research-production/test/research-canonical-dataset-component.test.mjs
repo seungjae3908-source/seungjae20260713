@@ -177,3 +177,34 @@ test('componentRoot must be absolute and must not traverse a symlink root',async
     /componentRoot must not contain symbolic links/,
   );
 });
+
+
+test('observedAt requires a fully closed scope and cannot be future evidence',()=>{
+  const m=manifest();
+  const base={
+    datasetSnapshotManifest:m,datasetId:'dataset:v1',symbol:'BTCUSDT',rows,
+    splitAssignments:split,metadata:metadata(),
+  };
+  assert.throws(
+    ()=>buildCanonicalDatasetComponentV1({...base,observedAtMs:END-1,nowMs:END+10_000}),
+    /DATASET_OBSERVED_AT_INVALID/,
+  );
+  assert.throws(
+    ()=>buildCanonicalDatasetComponentV1({...base,observedAtMs:END+2_000,nowMs:END+1_000}),
+    /DATASET_OBSERVED_AT_INVALID/,
+  );
+});
+
+test('dataset-components symlink output is rejected before writing outside componentRoot',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'dataset-component-safe-root-'));
+  const outside=await mkdtemp(join(tmpdir(),'dataset-component-outside-'));
+  await symlink(outside,join(root,'dataset-components'),'dir');
+  const m=manifest();
+  await assert.rejects(
+    persistCanonicalDatasetComponentV1({
+      componentRoot:root,datasetSnapshotManifest:m,datasetId:'dataset:v1',symbol:'BTCUSDT',
+      rows,splitAssignments:split,metadata:metadata(),observedAtMs:END+1000,
+    }),
+    /dataset-components must be a regular non-symlink directory|must not traverse symbolic links/,
+  );
+});
