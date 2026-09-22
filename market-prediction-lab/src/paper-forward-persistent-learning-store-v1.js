@@ -95,6 +95,9 @@ export function createFilePaperLearningStore({ directory } = {}) {
         if (record?.schemaVersion !== "paper-forward-learning-record-v1" || !nonEmpty(record?.key)) {
           throw new Error("PAPER_FORWARD_LEARNING_RECORD_INVALID");
         }
+        if (name !== `${sha256(record.key)}.json`) {
+          throw new Error("PAPER_FORWARD_LEARNING_RECORD_FILENAME_MISMATCH");
+        }
         assertSafeLearningValue(record.value);
         rows.push(Object.freeze({ key: record.key, value: structuredClone(record.value) }));
       }
