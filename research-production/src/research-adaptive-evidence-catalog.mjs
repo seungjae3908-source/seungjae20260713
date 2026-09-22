@@ -22,9 +22,16 @@ function canonical(value){
 }
 function digest(value){return createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');}
 function missing(){return Object.freeze({status:'MISSING',evidenceId:null,observedAt:null});}
+function validCanonicalIso(value){
+  if(typeof value!=='string'||!ISO.test(value)) return false;
+  const date=new Date(value);
+  if(!Number.isFinite(date.getTime())) return false;
+  const normalized=value.includes('.')?value:value.replace(/Z$/u,'.000Z');
+  return date.toISOString()===normalized;
+}
 function present(evidenceId,observedAt){
   if(typeof evidenceId!=='string'||!SAFE_ID.test(evidenceId)) throw new TypeError('evidenceId invalid');
-  if(typeof observedAt!=='string'||!ISO.test(observedAt)) throw new TypeError('observedAt invalid');
+  if(!validCanonicalIso(observedAt)) throw new TypeError('observedAt invalid');
   return Object.freeze({status:'PRESENT',evidenceId,observedAt});
 }
 function profileMap(){
