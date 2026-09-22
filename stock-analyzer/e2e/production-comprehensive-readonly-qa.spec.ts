@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { expect, test, type Page, type Request, type TestInfo } from '@playwright/test';
+import { expect, test, type BrowserContext, type Page, type Request, type TestInfo } from '@playwright/test';
 import {
   installProductionReadOnlyPolicy,
   isIgnorableProductionRequestFailure,
@@ -156,6 +156,29 @@ async function installSafety(page: Page, blocked: Diagnostic[]) {
 }
 
 const LOGIN_READY_BUDGET_MS = 15_000;
+type CachedAuthState = Awaited<ReturnType<BrowserContext['storageState']>>;
+const authStateByViewport = new Map<string, CachedAuthState>();
+
+function authCacheKey(page: Page) {
+  const viewport = page.viewportSize();
+  return viewport ? `${viewport.width}x${viewport.height}` : 'default';
+}
+
+async function restoreCachedAuthState(page: Page, state: CachedAuthState) {
+  if (state.cookies.length > 0) {
+    await page.context().addCookies(state.cookies);
+  }
+  const originState = state.origins.find((entry) => entry.origin === productionOrigin);
+  const localStorageEntries = originState?.localStorage ?? [];
+  if (localStorageEntries.length > 0) {
+    await page.addInitScript(({ origin, entries }) => {
+      if (window.location.origin !== origin) return;
+      for (const entry of entries) {
+        window.localStorage.setItem(entry.name, entry.value);
+      }
+    }, { origin: productionOrigin, entries: localStorageEntries });
+  }
+}
 
 async function login(
   page: Page,
@@ -167,7 +190,19 @@ async function login(
   const startedAt = Date.now();
   const diagnosticStart = diagnostics.length;
   const blockedStart = blocked.length;
+  const cacheKey = authCacheKey(page);
   try {
+    const cached = authStateByViewport.get(cacheKey);
+    if (cached) {
+      // Validate the real password-login path once per viewport, then reuse the
+      // exact in-memory authenticated browser state for later read-only tests.
+      // Cached-session failure remains fail-closed; there is no login retry.
+      await restoreCachedAuthState(page, cached);
+      await page.goto('/', { waitUntil: 'commit', timeout: LOGIN_READY_BUDGET_MS });
+      await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: LOGIN_READY_BUDGET_MS });
+      return;
+    }
+
     // Judge readiness by the actual interactive login surface while preserving
     // one total 15s readiness budget. Do not extend the gate through serial waits.
     const readinessStartedAt = Date.now();
@@ -196,6 +231,13 @@ async function login(
     await loginPassword.fill(qaPassword, { timeout: 3_000 });
     await loginButton.click({ timeout: 3_000 });
     await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: 15_000 });
+
+    const state = await page.context().storageState();
+    const originState = state.origins.find((entry) => entry.origin === productionOrigin);
+    if (state.cookies.length === 0 && (originState?.localStorage.length ?? 0) === 0) {
+      throw new Error('Authenticated Production QA session produced no reusable browser state');
+    }
+    authStateByViewport.set(cacheKey, state);
   } catch (error) {
     const finalPath = currentPath(page);
     const loginDiagnostics = sanitizeLoginDiagnostics(diagnostics.slice(diagnosticStart));
