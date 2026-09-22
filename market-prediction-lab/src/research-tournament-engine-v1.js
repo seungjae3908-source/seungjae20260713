@@ -137,6 +137,8 @@ function elimination({ stage, code, reason, record, strategyHash, parameterIdent
 }
 function terminalCandidate({ formula, generated, records, failure = null, observation = null, survivor = false }) {
   return Object.freeze({
+    formulaCandidate: formula ? snapshot(formula) : null,
+    generatedCandidate: generated ? snapshot(generated) : null,
     formulaCandidateId: formula?.candidateId ?? generated?.formulaCandidateId ?? null,
     generatedCandidateId: generated?.generatedCandidateId ?? null,
     strategyHash: formula?.formulaHash ?? generated?.formulaHash ?? null,
