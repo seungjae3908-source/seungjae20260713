@@ -64,7 +64,9 @@ async function safeDirectory(pathValue: string, name: string): Promise<string> {
   return normalized;
 }
 async function safePayloadFile(inputRoot: string, pathValue: string): Promise<{ path: string; payload: unknown; bytes: Buffer }> {
-  const path = resolve(pathValue);
+  const raw = String(pathValue ?? '').trim();
+  if (!raw || !isAbsolute(raw)) throw new Error('COMPONENT_PAYLOAD_PATH_MUST_BE_ABSOLUTE');
+  const path = resolve(raw);
   const rel = relative(inputRoot, path);
   if (!isAbsolute(path) || rel === '' || rel === '..' || rel.startsWith(`..${sep}`)) {
     throw new Error('COMPONENT_PAYLOAD_OUTSIDE_INPUT_ROOT');
@@ -84,8 +86,27 @@ async function syncDirectory(path: string) {
   const handle = await open(path, 'r');
   try { await handle.sync(); } finally { await handle.close(); }
 }
+async function ensureSafeChildDirectory(root: string, pathValue: string, name: string): Promise<string> {
+  const path = resolve(pathValue);
+  const rel = relative(root, path);
+  if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`)) {
+    throw new Error(`${name}_OUTSIDE_ROOT`);
+  }
+  try {
+    await mkdir(path, { mode: 0o700 });
+  } catch (error) {
+    if (row(error).code !== 'EEXIST') throw error;
+  }
+  const info = await lstat(path);
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`${name}_UNSAFE`);
+  const canonical = resolve(await realpath(path));
+  const canonicalRel = relative(root, canonical);
+  if (canonical !== path || canonicalRel === '' || canonicalRel === '..' || canonicalRel.startsWith(`..${sep}`)) {
+    throw new Error(`${name}_UNSAFE`);
+  }
+  return path;
+}
 async function publishBytesOnce(directoryPath: string, fileName: string, bytes: Buffer) {
-  await mkdir(directoryPath, { recursive: true, mode: 0o700 });
   const finalPath = join(directoryPath, basename(fileName));
   if (bytes.byteLength <= 0 || bytes.byteLength > MAX_BYTES) throw new Error('COMPONENT_PAYLOAD_BYTES_INVALID');
   const temporary = join(directoryPath, `.pending-${randomUUID()}`);
@@ -110,7 +131,6 @@ async function publishBytesOnce(directoryPath: string, fileName: string, bytes: 
 }
 
 async function publishWriteOnce(directoryPath: string, fileName: string, value: unknown) {
-  await mkdir(directoryPath, { recursive: true, mode: 0o700 });
   const finalPath = join(directoryPath, basename(fileName));
   const bytes = JSON.stringify(value) + '\n';
   if (Buffer.byteLength(bytes) > MAX_BYTES) throw new Error('COMPONENT_REGISTRY_RECORD_TOO_LARGE');
@@ -190,8 +210,26 @@ export async function registerCanonicalBundleComponentV1(input: {
     envelopeDigest: digest(componentCore),
   });
 
-  const registryDir = join(inputRoot, 'registry', bindingDigest);
-  const payloadDir = join(inputRoot, 'registered-components', bindingDigest);
+  const registryRoot = await ensureSafeChildDirectory(
+    inputRoot,
+    join(inputRoot, 'registry'),
+    'COMPONENT_REGISTRY_ROOT',
+  );
+  const registryDir = await ensureSafeChildDirectory(
+    registryRoot,
+    join(registryRoot, bindingDigest),
+    'COMPONENT_REGISTRY_BINDING_DIR',
+  );
+  const payloadRoot = await ensureSafeChildDirectory(
+    inputRoot,
+    join(inputRoot, 'registered-components'),
+    'COMPONENT_PAYLOAD_ROOT',
+  );
+  const payloadDir = await ensureSafeChildDirectory(
+    payloadRoot,
+    join(payloadRoot, bindingDigest),
+    'COMPONENT_PAYLOAD_BINDING_DIR',
+  );
   const payloadWrite = await publishBytesOnce(payloadDir, `${key}.json`, bytes);
   const envelopeWrite = await publishWriteOnce(registryDir, `${key}.json`, envelope);
 
