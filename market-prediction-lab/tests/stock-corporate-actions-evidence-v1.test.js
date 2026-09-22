@@ -142,3 +142,15 @@ test("complete corporate-action coverage cannot extend beyond observedAt",()=>{
     /CORPORATE_ACTION_FUTURE_COVERAGE_FORBIDDEN/,
   );
 });
+
+
+test("canonical observedAt accepts whole-second UTC and rejects impossible dates",()=>{
+  const accepted=createStockCorporateActionsEvidenceV1(evidence({
+    observedAt:"2026-09-20T00:00:00Z",
+  }));
+  assert.equal(accepted.observedAt,"2026-09-20T00:00:00.000Z");
+
+  assert.throws(()=>createStockCorporateActionsEvidenceV1(evidence({
+    observedAt:"2026-02-30T00:00:00Z",
+  })),/OBSERVED_AT_INVALID/);
+});
