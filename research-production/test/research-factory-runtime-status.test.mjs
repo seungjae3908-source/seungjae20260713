@@ -1,5 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { mkdtemp, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
 import { ADAPTIVE_TOURNAMENT_STAGES_V1 } from '../../market-prediction-lab/src/adaptive-multi-market-tournament-orchestrator-v1.js';
 import { createAdaptivePolicyRecordV1 } from '../src/adaptive-policy-record.mjs';
@@ -7,6 +13,8 @@ import { buildResearchFactoryRuntimeStatusV1 } from '../src/research-factory-run
 
 const SHA='a'.repeat(40);
 const AT='2026-09-19T11:10:00.000Z';
+const execFileAsync=promisify(execFile);
+const FACTORY_STATUS_CLI=join(dirname(fileURLToPath(import.meta.url)),'../bin/research-factory-status.mjs');
 
 function policy(){
   const caps=[16,16,12,10,6,4,3,2,2,1,1,1,1];
@@ -65,4 +73,46 @@ test('valid approved policy with no profile evidence stays blocked on canonical 
   assert.equal(result.canonicalAdaptive.readyProfileCount,0);
   assert.equal(result.canonicalAdaptive.runtimeStatus,'BLOCKED_NO_READY_PROFILES');
   assert.equal(result.safety.executionAuthority,'NONE');
+});
+
+
+test('Factory status CLI rejects relative and symlink state roots',async()=>{
+  await assert.rejects(
+    execFileAsync(process.execPath,[FACTORY_STATUS_CLI],{
+      env:{...process.env,RESEARCH_CODE_SHA:SHA,RESEARCH_STATE_ROOT:'relative-factory-state'},
+    }),
+    (error)=>{
+      assert.match(String(error.stderr??''),/RESEARCH_STATE_ROOT must be absolute/);
+      return true;
+    },
+  );
+
+  const target=await mkdtemp(join(tmpdir(),'factory-status-target-'));
+  const holder=await mkdtemp(join(tmpdir(),'factory-status-holder-'));
+  const linkRoot=join(holder,'state-link');
+  await symlink(target,linkRoot,'dir');
+  await assert.rejects(
+    execFileAsync(process.execPath,[FACTORY_STATUS_CLI],{
+      env:{...process.env,RESEARCH_CODE_SHA:SHA,RESEARCH_STATE_ROOT:linkRoot},
+    }),
+    (error)=>{
+      assert.match(String(error.stderr??''),/Factory state root must not contain symbolic links/);
+      return true;
+    },
+  );
+});
+
+test('Factory status CLI rejects symlink latest output directory',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'factory-status-safe-'));
+  const outside=await mkdtemp(join(tmpdir(),'factory-status-outside-'));
+  await symlink(outside,join(root,'latest'),'dir');
+  await assert.rejects(
+    execFileAsync(process.execPath,[FACTORY_STATUS_CLI],{
+      env:{...process.env,RESEARCH_CODE_SHA:SHA,RESEARCH_STATE_ROOT:root},
+    }),
+    (error)=>{
+      assert.match(String(error.stderr??''),/Factory latest must be a regular non-symlink directory|must not traverse symbolic links/);
+      return true;
+    },
+  );
 });
