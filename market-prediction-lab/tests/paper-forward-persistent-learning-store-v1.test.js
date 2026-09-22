@@ -92,6 +92,26 @@ test("unsafe learning payload cannot be persisted", async () => {
   }
 });
 
+test("lossy JSON learning payloads fail closed before persistence", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "paper-learning-json-fidelity-"));
+  const directory = join(sandbox, "learning");
+  try {
+    const store = createFilePaperLearningStore({ directory });
+    for (const lossyValue of [Number.NaN, Number.POSITIVE_INFINITY, undefined]) {
+      await assert.rejects(
+        store.putIfAbsent({
+          key: "paper-signal:signal-1",
+          value: safeValue({ executionQuality: { slippageBps: lossyValue } }),
+        }),
+        /PAPER_FORWARD_LEARNING_VALUE_NOT_JSON_SAFE/u,
+      );
+    }
+    assert.equal((await store.snapshot()).length, 0);
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
+});
+
 test("snapshot rejects a copied learning record whose filename is not bound to its key", async () => {
   const sandbox = await mkdtemp(join(tmpdir(), "paper-learning-filename-truth-"));
   const directory = join(sandbox, "learning");
