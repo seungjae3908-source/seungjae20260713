@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -172,5 +172,48 @@ test('manifest symlink inputs are rejected before evidence catalog build',async(
       generatedAt:AT,
     }),
     /regular non-symlink file|real path must remain below stateRoot/,
+  );
+});
+
+
+test('latest output and persisted readback symlinks are rejected',async()=>{
+  const m=manifest();
+  const root=await mkdtemp(join(tmpdir(),'adaptive-catalog-output-safe-'));
+  const inputs=join(root,'inputs');
+  await import('node:fs/promises').then(({mkdir})=>mkdir(inputs,{recursive:true}));
+  const manifestPath=join(inputs,'manifest.json');
+  await writeFile(manifestPath,JSON.stringify(m));
+
+  const outside=await mkdtemp(join(tmpdir(),'adaptive-catalog-output-outside-'));
+  await symlink(outside,join(root,'latest'),'dir');
+  await assert.rejects(
+    buildAndPersistAdaptiveEvidenceCatalogV1({
+      stateRoot:root,
+      manifestPathsByProfile:{[m.profileId]:manifestPath},
+      receiptPaths:[],
+      generatedAt:AT,
+    }),
+    /latest output directory must be a regular non-symlink directory|real path must remain below stateRoot/,
+  );
+
+  const root2=await mkdtemp(join(tmpdir(),'adaptive-catalog-readback-safe-'));
+  const inputs2=join(root2,'inputs');
+  await import('node:fs/promises').then(({mkdir})=>mkdir(inputs2,{recursive:true}));
+  const manifestPath2=join(inputs2,'manifest.json');
+  await writeFile(manifestPath2,JSON.stringify(m));
+  await buildAndPersistAdaptiveEvidenceCatalogV1({
+    stateRoot:root2,
+    manifestPathsByProfile:{[m.profileId]:manifestPath2},
+    receiptPaths:[],
+    generatedAt:AT,
+  });
+  const rawPath=join(root2,'latest','adaptive-evidence-catalog.json');
+  const outsideRaw=join(await mkdtemp(join(tmpdir(),'adaptive-catalog-readback-outside-')),'raw.json');
+  await writeFile(outsideRaw,JSON.stringify({}));
+  await unlink(rawPath);
+  await symlink(outsideRaw,rawPath);
+  await assert.rejects(
+    loadPersistedAdaptiveEvidenceCatalogV1({stateRoot:root2}),
+    /persisted raw catalog must be a regular non-symlink file|real path must remain below stateRoot/,
   );
 });
