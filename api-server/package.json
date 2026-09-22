@@ -26,7 +26,9 @@
     "test:smoke": "node ./test.mjs smoke",
     "smoke:futures:network": "node ./network-smoke.mjs",
     "publish:research-bundle": "node --enable-source-maps ./dist/tools/publish-research-canonical-bundle.mjs",
-    "assemble:research-bundle": "node --enable-source-maps ./dist/tools/assemble-research-canonical-bundle.mjs"
+    "assemble:research-bundle": "node --enable-source-maps ./dist/tools/assemble-research-canonical-bundle.mjs",
+    "register:research-component": "node --enable-source-maps ./dist/tools/register-research-canonical-component.mjs",
+    "check:research-components": "node --enable-source-maps ./dist/tools/check-research-canonical-component-readiness.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.2",

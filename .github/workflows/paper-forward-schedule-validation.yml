@@ -77,6 +77,7 @@ on:
       - market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
       - market-prediction-lab/src/authoritative-paper-natural-funnel-v1.js
       - market-prediction-lab/src/canonical-paper-admission-bridge-v1.js
+      - market-prediction-lab/tests/canonical-paper-admission-bridge-v1.test.js
       - market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js
       - market-prediction-lab/src/canonical-meaningful-search-paper-runtime-v1.js
       - market-prediction-lab/src/bitget-position-tier-v1.js
@@ -289,6 +290,7 @@ jobs:
             market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
             market-prediction-lab/src/authoritative-paper-natural-funnel-v1.js
             market-prediction-lab/src/canonical-paper-admission-bridge-v1.js
+            market-prediction-lab/tests/canonical-paper-admission-bridge-v1.test.js
             market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js
             market-prediction-lab/src/canonical-meaningful-search-paper-runtime-v1.js
             market-prediction-lab/src/bitget-position-tier-v1.js
@@ -429,6 +431,8 @@ jobs:
           node --check market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
           node --check market-prediction-lab/src/authoritative-paper-natural-funnel-v1.js
           node --check market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js
+          node --check market-prediction-lab/src/canonical-paper-admission-bridge-v1.js
+          node --check market-prediction-lab/tests/canonical-paper-admission-bridge-v1.test.js
           node --check market-prediction-lab/src/bitget-position-tier-v1.js
           node --check market-prediction-lab/src/eth-v6-paper-forward-source-v1.js
           node --check market-prediction-lab/src/eth-v6-paper-settlement-source-v1.js
@@ -468,6 +472,7 @@ jobs:
             tests/authoritative-natural-paper-accounting-v1.test.js \
             tests/authoritative-paper-natural-funnel-v1.test.js \
             tests/canonical-paper-admission-bundle-injection-runtime-v1.test.js \
+            tests/canonical-paper-admission-bridge-v1.test.js \
             tests/natural-paper-account-cli-contract-v1.test.js \
             tests/authoritative-paper-runtime-factory-v1.test.js \
             tests/authoritative-paper-runtime-package-v1.test.js \
