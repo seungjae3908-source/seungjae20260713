@@ -30,14 +30,10 @@ export type ForwardObserverLane = Readonly<{
   timeframe: typeof FORWARD_OBSERVER_TIMEFRAME;
 }>;
 
-// Forward-only batch sizes must fit the scanners' existing bounded execution
-// budgets without raising timeouts or weakening fail-closed partial-result gates.
-// KR: ceil(12 / 6) * 4_000ms = 8_000ms <= 8_500ms deadline.
-// Spot: ceil(15 / 5) * 3_500ms = 10_500ms <= 12_000ms deadline.
 export const FORWARD_OBSERVER_LANES: readonly ForwardObserverLane[] = Object.freeze([
-  { id: 'KR_SWING_60M', market: 'KR_STOCK', scannerMarket: 'KR', batchSize: 12, timeframe: FORWARD_OBSERVER_TIMEFRAME },
+  { id: 'KR_SWING_60M', market: 'KR_STOCK', scannerMarket: 'KR', batchSize: 20, timeframe: FORWARD_OBSERVER_TIMEFRAME },
   { id: 'US_SWING_60M', market: 'US_STOCK', scannerMarket: 'US', batchSize: 20, timeframe: FORWARD_OBSERVER_TIMEFRAME },
-  { id: 'SPOT_SWING_60M', market: 'CRYPTO_SPOT', scannerMarket: 'spot', batchSize: 15, timeframe: FORWARD_OBSERVER_TIMEFRAME },
+  { id: 'SPOT_SWING_60M', market: 'CRYPTO_SPOT', scannerMarket: 'spot', batchSize: 20, timeframe: FORWARD_OBSERVER_TIMEFRAME },
   { id: 'FUTURES_SWING_60M', market: 'CRYPTO_FUTURES', scannerMarket: 'futures', batchSize: 20, timeframe: FORWARD_OBSERVER_TIMEFRAME },
 ]);
 
