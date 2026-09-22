@@ -143,6 +143,35 @@ test("JSON-ignored own properties fail closed before persistence", async () => {
   }
 });
 
+test("accessor-backed learning properties fail closed before persistence", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "paper-learning-json-accessor-"));
+  const directory = join(sandbox, "learning");
+  try {
+    const store = createFilePaperLearningStore({ directory });
+    const accessorPayload = safeValue();
+    let reads = 0;
+    Object.defineProperty(accessorPayload, "executionQuality", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        reads += 1;
+        return reads === 1
+          ? { slippageBps: 1 }
+          : { slippageBps: Number.NaN };
+      },
+    });
+
+    await assert.rejects(
+      store.putIfAbsent({ key: "paper-signal:signal-1", value: accessorPayload }),
+      /PAPER_FORWARD_LEARNING_VALUE_NOT_JSON_SAFE/u,
+    );
+    assert.equal(reads, 0);
+    assert.equal((await store.snapshot()).length, 0);
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
+});
+
 test("snapshot rejects a copied learning record whose filename is not bound to its key", async () => {
   const sandbox = await mkdtemp(join(tmpdir(), "paper-learning-filename-truth-"));
   const directory = join(sandbox, "learning");
