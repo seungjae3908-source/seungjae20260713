@@ -24,10 +24,12 @@ function positiveTimestamp(value,name){
 }
 function canonicalIso(value){
   const text=String(value??"");
-  if(!ISO.test(text)||!Number.isFinite(Date.parse(text))||new Date(text).toISOString()!==text){
+  const date=new Date(text);
+  const normalized=text.includes(".")?text:text.replace(/Z$/u,".000Z");
+  if(!ISO.test(text)||!Number.isFinite(date.getTime())||date.toISOString()!==normalized){
     throw new TypeError("OBSERVED_AT_INVALID");
   }
-  return text;
+  return date.toISOString();
 }
 function canonicalDate(value,name){
   const text=String(value??"");
