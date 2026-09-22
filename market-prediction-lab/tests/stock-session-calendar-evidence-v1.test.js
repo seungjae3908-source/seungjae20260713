@@ -90,3 +90,15 @@ test('invalid calendar dates and future coverage fail closed',()=>{
     /SESSION_CALENDAR_FUTURE_COVERAGE_FORBIDDEN/,
   );
 });
+
+
+test('canonical observedAt accepts whole-second UTC while rejecting impossible dates',()=>{
+  const wholeSecond=evidence();
+  wholeSecond.observedAt='2026-09-20T00:00:00Z';
+  const accepted=createStockSessionCalendarEvidenceV1(wholeSecond);
+  assert.equal(accepted.observedAt,'2026-09-20T00:00:00.000Z');
+
+  const impossible=evidence();
+  impossible.observedAt='2026-02-30T00:00:00Z';
+  assert.throws(()=>createStockSessionCalendarEvidenceV1(impossible),/OBSERVED_AT_INVALID/);
+});
