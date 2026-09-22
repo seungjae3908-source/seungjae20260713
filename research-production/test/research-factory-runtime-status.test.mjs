@@ -166,3 +166,20 @@ test('complete development-only diagnostic advances past diagnostic blocker and 
   assert.equal(result.canonicalAdaptive.readyProfileCount,1);
   assert.equal(result.safety.executionAuthority,'NONE');
 });
+
+
+test('Factory runtime timestamp is canonical and rejects impossible dates',()=>{
+  const wholeSecond=buildResearchFactoryRuntimeStatusV1({
+    researchSha:SHA,
+    observedAt:'2026-09-19T11:10:00Z',
+  });
+  assert.equal(wholeSecond.generatedAt,'2026-09-19T11:10:00.000Z');
+
+  assert.throws(
+    ()=>buildResearchFactoryRuntimeStatusV1({
+      researchSha:SHA,
+      observedAt:'2026-02-30T00:00:00Z',
+    }),
+    /observedAt invalid/,
+  );
+});
