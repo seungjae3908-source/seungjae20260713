@@ -1,0 +1,64 @@
+import { expect, test } from '@playwright/test';
+import { parsePortfolioChartOverlays } from '../src/lib/portfolio-overlay';
+
+const VALID_OVERLAY = {
+  ticker: 'AAPL',
+  name: 'Apple',
+  market: 'US',
+  currency: 'USD',
+  averagePrice: 200,
+  quantity: 2,
+  purchaseDate: '2026-09-01',
+  currentPrice: 220,
+  rate: 10,
+  updatedAt: '2026-09-22T03:00:00.000Z',
+} as const;
+
+test('portfolio overlay cache accepts only internally consistent persisted truth', () => {
+  expect(parsePortfolioChartOverlays([VALID_OVERLAY])).toEqual([VALID_OVERLAY]);
+
+  expect(parsePortfolioChartOverlays([{
+    ...VALID_OVERLAY,
+    currency: 'KRW',
+  }])).toEqual([]);
+
+  expect(parsePortfolioChartOverlays([{
+    ...VALID_OVERLAY,
+    quantity: 0,
+  }])).toEqual([]);
+
+  expect(parsePortfolioChartOverlays([{
+    ...VALID_OVERLAY,
+    currentPrice: 220,
+    rate: 0,
+  }])).toEqual([]);
+});
+
+test('portfolio overlay cache never resurrects malformed or duplicate rows after reload parsing', () => {
+  const malformed = {
+    ...VALID_OVERLAY,
+    ticker: 'MSFT',
+    updatedAt: 'not-a-time',
+  };
+  const duplicate = {
+    ...VALID_OVERLAY,
+    name: 'tampered duplicate',
+  };
+
+  expect(parsePortfolioChartOverlays({ rows: [VALID_OVERLAY] })).toEqual([]);
+  expect(parsePortfolioChartOverlays([VALID_OVERLAY, malformed, duplicate])).toEqual([VALID_OVERLAY]);
+});
+
+test('portfolio overlay cache keeps nullable market facts coherent', () => {
+  const noMarketPrice = {
+    ...VALID_OVERLAY,
+    currentPrice: null,
+    rate: null,
+  };
+
+  expect(parsePortfolioChartOverlays([noMarketPrice])).toEqual([noMarketPrice]);
+  expect(parsePortfolioChartOverlays([{
+    ...noMarketPrice,
+    rate: 1,
+  }])).toEqual([]);
+});
