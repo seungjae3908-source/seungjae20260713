@@ -193,6 +193,10 @@ test('observedAt requires a fully closed scope and cannot be future evidence',()
     ()=>buildCanonicalDatasetComponentV1({...base,observedAtMs:END+2_000,nowMs:END+1_000}),
     /DATASET_OBSERVED_AT_INVALID/,
   );
+  assert.throws(
+    ()=>buildCanonicalDatasetComponentV1({...base,observedAtMs:END+2_000,nowMs:0}),
+    /DATASET_NOW_INVALID/,
+  );
 });
 
 test('dataset-components symlink output is rejected before writing outside componentRoot',async()=>{
