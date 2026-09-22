@@ -157,6 +157,90 @@ export async function collectBitgetCandles({
   });
 }
 
+export async function collectBitgetFuturesReferenceCandles({
+  client,
+  priceType,
+  symbol,
+  timeframe,
+  startTime,
+  endTime = Date.now(),
+  maxCandles = 50_000,
+  productType = "usdt-futures",
+  onPage,
+}) {
+  if (!client || typeof client.get !== "function") throw new TypeError("client.get is required");
+  assertSymbol(symbol);
+  assertTimeframe(timeframe);
+  if (!new Set(["mark", "index"]).has(priceType)) throw new TypeError("priceType must be mark or index");
+  if (!Number.isInteger(startTime) || startTime <= 0) throw new TypeError("startTime must be a positive integer");
+  if (!Number.isInteger(endTime) || endTime <= startTime) throw new TypeError("endTime must be greater than startTime");
+  if (!Number.isInteger(maxCandles) || maxCandles < 60 || maxCandles > 500_000) {
+    throw new TypeError("maxCandles must be between 60 and 500000");
+  }
+
+  const intervalMs = TIMEFRAME_MS[timeframe];
+  const endpoint = priceType === "mark"
+    ? BITGET_ENDPOINTS.futuresHistoryMarkCandles
+    : BITGET_ENDPOINTS.futuresHistoryIndexCandles;
+  const granularity = FUTURES_GRANULARITY[timeframe];
+  const pageLimit = 200;
+  const all = [];
+  let cursorEnd = alignDown(endTime, intervalMs);
+  let page = 0;
+  let previousOldest = Number.POSITIVE_INFINITY;
+
+  while (cursorEnd > startTime && all.length < maxCandles) {
+    const payload = await client.get(endpoint, {
+      symbol,
+      productType,
+      granularity,
+      endTime: cursorEnd,
+      limit: pageLimit,
+    });
+    if (!Array.isArray(payload.data)) throw new TypeError("Bitget reference candle response data must be an array");
+    if (payload.data.length === 0) break;
+
+    const normalizedPage = sortAndDeduplicate(payload.data.map(normalizeBitgetCandle));
+    const batch = normalizedPage.filter((candle) => candle.timestamp >= startTime && candle.timestamp < cursorEnd);
+    const rawOldest = normalizedPage[0]?.timestamp;
+    if (!Number.isFinite(rawOldest)) throw new TypeError("Bitget reference candle page has no valid timestamp");
+    if (rawOldest >= previousOldest) {
+      throw new Error("reference candle pagination did not move backward");
+    }
+
+    if (batch.length > 0) {
+      all.push(...batch);
+      page += 1;
+      await onPage?.(Object.freeze({
+        page,
+        priceType,
+        received: batch.length,
+        oldest: batch[0].timestamp,
+        newest: batch.at(-1).timestamp,
+      }));
+    }
+    previousOldest = rawOldest;
+    cursorEnd = rawOldest;
+    if (payload.data.length < pageLimit) break;
+  }
+
+  const candles = sortAndDeduplicate(all)
+    .filter((candle) => candle.timestamp >= startTime && candle.timestamp < alignDown(endTime, intervalMs))
+    .slice(-maxCandles);
+  if (candles.length < 60) throw new Error(`not enough ${priceType} candles collected: ${candles.length}`);
+  return Object.freeze({
+    schemaVersion: 1,
+    provider: "bitget-public-v2",
+    priceType,
+    collectedAt: Date.now(),
+    market: "CRYPTO_FUTURES",
+    symbol,
+    timeframe,
+    productType,
+    candles: Object.freeze(candles),
+  });
+}
+
 export async function collectBitgetFuturesContext({ client, symbol, productType = "usdt-futures" }) {
   assertSymbol(symbol);
   const common = { symbol, productType };
