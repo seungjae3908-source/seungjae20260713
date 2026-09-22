@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { mkdir, open, readFile, readdir } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { link, mkdir, open, readFile, readdir, unlink } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 
 function nonEmpty(value) {
@@ -53,6 +53,14 @@ async function readEnvelope(path) {
   return JSON.parse(await readFile(path, "utf8"));
 }
 
+async function removeTemp(path) {
+  try {
+    await unlink(path);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
+
 export function createFilePaperLearningStore({ directory } = {}) {
   const root = assertDirectory(directory);
 
@@ -62,19 +70,30 @@ export function createFilePaperLearningStore({ directory } = {}) {
       assertSafeLearningValue(value);
       const record = envelope(key, value);
       const path = fileFor(root, key);
+      const tempPath = join(root, `.${sha256(key)}.${process.pid}.${randomUUID()}.tmp`);
       await mkdir(root, { recursive: true, mode: 0o700 });
+
+      let published = false;
       try {
-        const handle = await open(path, "wx", 0o600);
+        const handle = await open(tempPath, "wx", 0o600);
         try {
           await handle.writeFile(`${JSON.stringify(record)}\n`, "utf8");
           await handle.sync();
         } finally {
           await handle.close();
         }
-        return Object.freeze({ inserted: true });
-      } catch (error) {
-        if (error?.code !== "EEXIST") throw error;
+
+        try {
+          await link(tempPath, path);
+          published = true;
+        } catch (error) {
+          if (error?.code !== "EEXIST") throw error;
+        }
+      } finally {
+        await removeTemp(tempPath);
       }
+
+      if (published) return Object.freeze({ inserted: true });
 
       const existing = await readEnvelope(path);
       if (existing?.schemaVersion !== "paper-forward-learning-record-v1"
@@ -94,6 +113,9 @@ export function createFilePaperLearningStore({ directory } = {}) {
         const record = await readEnvelope(join(root, name));
         if (record?.schemaVersion !== "paper-forward-learning-record-v1" || !nonEmpty(record?.key)) {
           throw new Error("PAPER_FORWARD_LEARNING_RECORD_INVALID");
+        }
+        if (name !== `${sha256(record.key)}.json`) {
+          throw new Error("PAPER_FORWARD_LEARNING_RECORD_FILENAME_MISMATCH");
         }
         assertSafeLearningValue(record.value);
         rows.push(Object.freeze({ key: record.key, value: structuredClone(record.value) }));
