@@ -18,6 +18,13 @@ function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function assertDataProperty(value, name) {
+  const descriptor = Object.getOwnPropertyDescriptor(value, name);
+  if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+    throw new Error("PAPER_FORWARD_LEARNING_VALUE_NOT_JSON_SAFE");
+  }
+}
+
 function assertJsonOwnPropertyShape(value) {
   if (Object.getOwnPropertySymbols(value).length > 0) {
     throw new Error("PAPER_FORWARD_LEARNING_VALUE_NOT_JSON_SAFE");
@@ -30,6 +37,7 @@ function assertJsonOwnPropertyShape(value) {
       if (!/^(0|[1-9]\d*)$/u.test(name) || Number(name) >= value.length) {
         throw new Error("PAPER_FORWARD_LEARNING_VALUE_NOT_JSON_SAFE");
       }
+      assertDataProperty(value, name);
     }
     return;
   }
@@ -37,6 +45,7 @@ function assertJsonOwnPropertyShape(value) {
   if (ownNames.length !== Object.keys(value).length) {
     throw new Error("PAPER_FORWARD_LEARNING_VALUE_NOT_JSON_SAFE");
   }
+  for (const name of ownNames) assertDataProperty(value, name);
 }
 
 function assertJsonSafe(value, seen = new Set()) {
