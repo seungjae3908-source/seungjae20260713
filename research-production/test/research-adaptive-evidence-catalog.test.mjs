@@ -143,3 +143,16 @@ test('receipt tampering is rejected before readiness credit',()=>{
     receipts:[{...row,evidenceId:'canonical:tampered'}],
   }),/RECEIPT_DIGEST_MISMATCH/);
 });
+
+
+test('invalid calendar timestamps cannot receive adaptive evidence credit',()=>{
+  const manifest=futuresManifest();
+  assert.throws(()=>createAdaptiveEvidenceReceiptV1({
+    profileId:'CRYPTO_FUTURES:SWING',
+    requirement:'MARK_PRICE',
+    evidenceId:'canonical:bad-calendar-time',
+    observedAt:'2026-02-30T00:00:00Z',
+    datasetSnapshotHash:manifest.datasetSnapshotHash,
+    sourceDigest:H('9'),
+  }),/observedAt invalid/);
+});
