@@ -43,7 +43,10 @@ function exactKeys(value, expected) {
     && actual.every((key, index) => key === wanted[index]);
 }
 
-export function verifyV4FutureActivationBinding(binding = {}) {
+export function verifyV4FutureActivationBinding(
+  binding = {},
+  { expectedTargetMainSha = null } = {},
+) {
   const blockers = [];
   const expectedKeys = [
     'schemaVersion',
@@ -74,9 +77,18 @@ export function verifyV4FutureActivationBinding(binding = {}) {
   if (!SAFE_AUTHORITY_REF.test(String(binding?.humanAuthorityRef ?? '').trim())) {
     blockers.push('V4_FUTURE_ACTIVATION_HUMAN_AUTHORITY_REF_INVALID');
   }
-  if (!SHA40.test(String(binding?.targetMainSha ?? '').trim().toLowerCase())) {
+
+  const bindingTargetMainSha = String(binding?.targetMainSha ?? '').trim().toLowerCase();
+  const normalizedExpectedTargetMainSha = String(expectedTargetMainSha ?? '').trim().toLowerCase();
+  if (!SHA40.test(bindingTargetMainSha)) {
     blockers.push('V4_FUTURE_ACTIVATION_TARGET_MAIN_SHA_INVALID');
   }
+  if (!SHA40.test(normalizedExpectedTargetMainSha)) {
+    blockers.push('V4_FUTURE_ACTIVATION_EXPECTED_MAIN_SHA_INVALID');
+  } else if (bindingTargetMainSha !== normalizedExpectedTargetMainSha) {
+    blockers.push('V4_FUTURE_ACTIVATION_TARGET_MAIN_SHA_MISMATCH');
+  }
+
   if (!Number.isSafeInteger(binding?.approvedAtMs) || binding.approvedAtMs <= 0) {
     blockers.push('V4_FUTURE_ACTIVATION_APPROVED_AT_INVALID');
   }
@@ -90,8 +102,12 @@ export function verifyV4FutureActivationBinding(binding = {}) {
 export async function evaluateV4InactiveIntegrationGate({
   activationBinding = null,
   collector = null,
+  expectedTargetMainSha = null,
 } = {}) {
-  const verification = verifyV4FutureActivationBinding(activationBinding ?? {});
+  const verification = verifyV4FutureActivationBinding(
+    activationBinding ?? {},
+    { expectedTargetMainSha },
+  );
   const readyForSeparateActivationPr = verification.valid;
 
   return Object.freeze({
