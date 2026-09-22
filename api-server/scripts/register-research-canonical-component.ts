@@ -18,14 +18,14 @@ function requiredArg(name: string): string {
 }
 
 try{
-  const inputRoot=resolve(requiredEnv('RESEARCH_CANONICAL_BUNDLE_INPUT_ROOT'));
+  const inputRoot=requiredEnv('RESEARCH_CANONICAL_BUNDLE_INPUT_ROOT');
   const binding=JSON.parse(await readFile(resolve(requiredArg('--binding')),'utf8'));
   const result=await registerCanonicalBundleComponentV1({
     inputRoot,
     binding,
     key:requiredArg('--key'),
     ownerRef:requiredArg('--owner'),
-    payloadPath:resolve(requiredArg('--payload')),
+    payloadPath:requiredArg('--payload'),
   });
   process.stdout.write(`${JSON.stringify({
     status:result.status,
