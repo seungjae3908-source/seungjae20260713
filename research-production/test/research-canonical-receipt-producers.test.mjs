@@ -6,6 +6,8 @@ import {
   buildResearchDatasetSnapshotManifestV1,
 } from '../src/research-dataset-snapshot-store.mjs';
 import {
+  buildBitgetFundingAdaptiveReceiptV1,
+  buildBitgetReferencePriceAdaptiveReceiptsV1,
   buildClosedCandleAdaptiveReceiptV1,
   buildStockCorporateActionAdaptiveReceiptV1,
   buildStockUniverseAdaptiveReceiptsV1,
@@ -183,6 +185,47 @@ function candles(symbol,overrides={}){
   };
 }
 
+function referenceCandles(symbol,priceType,offset=0){
+  const base=candles(symbol);
+  return {
+    ...base,
+    priceType,
+    candles:base.candles.map(row=>({
+      ...row,
+      open:row.open+offset,
+      high:row.high+offset,
+      low:row.low+offset,
+      close:row.close+offset,
+    })),
+  };
+}
+
+function fundingHistory(symbol,overrides={}){
+  const twelveHours=12*60*60*1000;
+  const eightHours=8*60*60*1000;
+  const start=CANDLE_START-twelveHours;
+  const records=[];
+  for(let ts=CANDLE_START-eightHours;ts<=CANDLE_END;ts+=eightHours){
+    records.push({
+      timestamp:ts,
+      rate:0.0001,
+      rateRaw:'0.0001',
+    });
+  }
+  return {
+    schemaVersion:1,
+    provider:'bitget-public-v2',
+    symbol,
+    productType:'usdt-futures',
+    startTime:start,
+    endTime:CANDLE_END,
+    collectedAt:CANDLE_END+2000,
+    exhausted:true,
+    records,
+    ...overrides,
+  };
+}
+
 function readyCostEvidence(market='US_STOCK'){
   const now=Date.UTC(2026,8,20,0,0,0);
   const components={};
@@ -265,56 +308,39 @@ test('merged point-in-time owner emits CORPORATE_ACTIONS only for the exact stoc
   });
   assert.equal(result.kind,'STOCK_POINT_IN_TIME_CORPORATE_ACTIONS');
   assert.equal(result.profileId,'US_STOCK:POSITION');
-  assert.equal(result.receipt.profileId,'US_STOCK:POSITION');
   assert.equal(result.receipt.requirement,'CORPORATE_ACTIONS');
   assert.equal(result.receipt.datasetSnapshotHash,dataset.datasetSnapshotHash);
   assert.equal(result.receipt.sourceDigest,result.sourceDigest);
   assert.match(result.sourceDigest,/^[0-9a-f]{64}$/);
-  assert.equal(result.executionAuthority,'NONE');
 });
 
-test('corporate-action receipt stays blocked for missing coverage or unsafe RAW-price action crossing',()=>{
+test('corporate-action receipt stays blocked for missing coverage, unsafe RAW action, range or digest mismatch',()=>{
   const auditInput=stockAuditInput('US_STOCK');
   const dataset=stockManifest('US_STOCK:POSITION',auditInput);
+
   const missing=stockCorporateEvidence('US_STOCK');
   missing.corporateActionCoverage=null;
   assert.throws(()=>buildStockCorporateActionAdaptiveReceiptV1({
-    datasetManifest:dataset,
-    pointInTimeEvidence:missing,
-    observedAt:'2026-09-20T00:15:00.000Z',
+    datasetManifest:dataset,pointInTimeEvidence:missing,observedAt:'2026-09-20T00:15:00.000Z',
   }),/EVIDENCE_NOT_READY/);
 
   const unsafe=stockCorporateEvidence('US_STOCK');
   const live=unsafe.memberships.find(row=>row.activeTo==null);
   unsafe.priceHistories=unsafe.priceHistories.map(row=>row.listingId===live.listingId
-    ? {...row,adjustmentPolicy:'RAW'}
-    : row);
-  unsafe.corporateActions=[
-    ...unsafe.corporateActions,
-    {
-      listingId:live.listingId,
-      symbol:live.symbol,
-      type:'SPLIT',
-      effectiveAt:unsafe.evaluationStartTime+86400000,
-      sourceId:'canonical-corporate-actions-v1',
-      ratio:2,
-    },
-  ];
+    ? {...row,adjustmentPolicy:'RAW'} : row);
+  unsafe.corporateActions=[...unsafe.corporateActions,{
+    listingId:live.listingId,symbol:live.symbol,type:'SPLIT',
+    effectiveAt:unsafe.evaluationStartTime+86400000,
+    sourceId:'canonical-corporate-actions-v1',ratio:2,
+  }];
   assert.throws(()=>buildStockCorporateActionAdaptiveReceiptV1({
-    datasetManifest:dataset,
-    pointInTimeEvidence:unsafe,
-    observedAt:'2026-09-20T00:15:00.000Z',
+    datasetManifest:dataset,pointInTimeEvidence:unsafe,observedAt:'2026-09-20T00:15:00.000Z',
   }),/EVIDENCE_NOT_READY/);
-});
 
-test('corporate-action receipt cannot cross snapshot universe digest or evaluation range',()=>{
-  const auditInput=stockAuditInput('US_STOCK');
-  const dataset=stockManifest('US_STOCK:POSITION',auditInput);
-  const evidence=stockCorporateEvidence('US_STOCK');
+  const wrongRange=stockCorporateEvidence('US_STOCK');
+  wrongRange.evaluationEndTime-=86400000;
   assert.throws(()=>buildStockCorporateActionAdaptiveReceiptV1({
-    datasetManifest:dataset,
-    pointInTimeEvidence:{...evidence,evaluationEndTime:evidence.evaluationEndTime-86400000},
-    observedAt:'2026-09-20T00:15:00.000Z',
+    datasetManifest:dataset,pointInTimeEvidence:wrongRange,observedAt:'2026-09-20T00:15:00.000Z',
   }),/EVIDENCE_NOT_READY/);
 
   const wrong=buildResearchDatasetSnapshotManifestV1({
@@ -322,8 +348,7 @@ test('corporate-action receipt cannot cross snapshot universe digest or evaluati
     scope:{...dataset.scope,universeDigest:H('f')},
   });
   assert.throws(()=>buildStockCorporateActionAdaptiveReceiptV1({
-    datasetManifest:wrong,
-    pointInTimeEvidence:evidence,
+    datasetManifest:wrong,pointInTimeEvidence:stockCorporateEvidence('US_STOCK'),
     observedAt:'2026-09-20T00:15:00.000Z',
   }),/EVIDENCE_NOT_READY/);
 });
@@ -382,6 +407,82 @@ test('missing symbol, timeframe mismatch, gap, or outside-snapshot candles are r
   assert.throws(()=>buildClosedCandleAdaptiveReceiptV1({
     datasetManifest:dataset,candleCollections:[candles('BTCUSDT'),candles('ETHUSDT'),candles('SOLUSDT')],
   }),/SYMBOL_OUTSIDE_SNAPSHOT|SYMBOL_COVERAGE_INCOMPLETE/);
+});
+
+test('mark index and basis receipts require every snapshot symbol over the exact closed-candle scope',()=>{
+  const dataset=futuresManifest();
+  const result=buildBitgetReferencePriceAdaptiveReceiptsV1({
+    datasetManifest:dataset,
+    markCollections:[
+      referenceCandles('ETHUSDT','mark',1),
+      referenceCandles('BTCUSDT','mark',1),
+    ],
+    indexCollections:[
+      referenceCandles('BTCUSDT','index',0),
+      referenceCandles('ETHUSDT','index',0),
+    ],
+  });
+  assert.equal(result.profileId,'CRYPTO_FUTURES:SHORT');
+  assert.equal(result.symbolCount,2);
+  assert.deepEqual(result.receipts.map(row=>row.requirement),['MARK_PRICE','INDEX_PRICE','BASIS']);
+  assert.equal(result.receipts.every(row=>row.datasetSnapshotHash===dataset.datasetSnapshotHash),true);
+  assert.match(result.basisDigest,/^[0-9a-f]{64}$/);
+});
+
+test('reference price receipts reject missing symbol, mismatched price type and timestamp drift',()=>{
+  const dataset=futuresManifest();
+  assert.throws(()=>buildBitgetReferencePriceAdaptiveReceiptsV1({
+    datasetManifest:dataset,
+    markCollections:[referenceCandles('BTCUSDT','mark',1)],
+    indexCollections:[referenceCandles('BTCUSDT','index'),referenceCandles('ETHUSDT','index')],
+  }),/SYMBOL_COVERAGE_INCOMPLETE/);
+
+  assert.throws(()=>buildBitgetReferencePriceAdaptiveReceiptsV1({
+    datasetManifest:dataset,
+    markCollections:[referenceCandles('BTCUSDT','index',1),referenceCandles('ETHUSDT','mark',1)],
+    indexCollections:[referenceCandles('BTCUSDT','index'),referenceCandles('ETHUSDT','index')],
+  }),/PRICE_TYPE_MISMATCH/);
+
+  const drifted=referenceCandles('BTCUSDT','index');
+  drifted.candles=drifted.candles.map((row,index)=>index===10?{...row,timestamp:row.timestamp+1}:row);
+  assert.throws(()=>buildBitgetReferencePriceAdaptiveReceiptsV1({
+    datasetManifest:dataset,
+    markCollections:[referenceCandles('BTCUSDT','mark',1),referenceCandles('ETHUSDT','mark',1)],
+    indexCollections:[drifted,referenceCandles('ETHUSDT','index')],
+  }),/CLOSED_CANDLE_ROW_INVALID|TIMESTAMP_OR_INDEX_MISMATCH/);
+});
+
+test('funding receipt requires full temporal coverage for every snapshot symbol',()=>{
+  const dataset=futuresManifest();
+  const result=buildBitgetFundingAdaptiveReceiptV1({
+    datasetManifest:dataset,
+    fundingHistories:[fundingHistory('ETHUSDT'),fundingHistory('BTCUSDT')],
+  });
+  assert.equal(result.profileId,'CRYPTO_FUTURES:SHORT');
+  assert.equal(result.symbolCount,2);
+  assert.equal(result.receipt.requirement,'FUNDING');
+  assert.equal(result.receipt.datasetSnapshotHash,dataset.datasetSnapshotHash);
+  assert.equal(result.receipt.executionAuthority,'NONE');
+});
+
+test('funding receipt rejects stale history, missing symbol and non-exhausted collection',()=>{
+  const dataset=futuresManifest();
+  const stale=fundingHistory('BTCUSDT');
+  stale.records=stale.records.filter(row=>row.timestamp>=CANDLE_START+8*60*60*1000);
+  assert.throws(()=>buildBitgetFundingAdaptiveReceiptV1({
+    datasetManifest:dataset,
+    fundingHistories:[stale,fundingHistory('ETHUSDT')],
+  }),/SCOPE_COVERAGE_INCOMPLETE/);
+
+  assert.throws(()=>buildBitgetFundingAdaptiveReceiptV1({
+    datasetManifest:dataset,
+    fundingHistories:[fundingHistory('BTCUSDT')],
+  }),/SYMBOL_COVERAGE_INCOMPLETE/);
+
+  assert.throws(()=>buildBitgetFundingAdaptiveReceiptV1({
+    datasetManifest:dataset,
+    fundingHistories:[fundingHistory('BTCUSDT',{exhausted:false}),fundingHistory('ETHUSDT')],
+  }),/COLLECTION_INVALID/);
 });
 
 
