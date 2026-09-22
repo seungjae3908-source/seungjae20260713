@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 import {
   ADAPTIVE_MULTI_MARKET_PROFILES_V1,
@@ -30,11 +30,33 @@ function exactIso(value){
   if(!Number.isFinite(date.getTime())) throw new TypeError('createdAt invalid');
   return date.toISOString();
 }
-function safeRoot(value){
-  const root=resolve(String(value??''));
-  if(!root.startsWith('/')) throw new TypeError('stateRoot must be absolute');
+function assertProtectedRoot(root){
   for(const forbidden of ['/opt/stock-app-data','/srv/stock-app','/var/lib/stock-app']){
-    if(root===forbidden||root.startsWith(`${forbidden}/`)) throw new Error('dataset snapshot store overlaps protected app storage');
+    if(root===forbidden||root.startsWith(`${forbidden}/`)) {
+      throw new Error('dataset snapshot store overlaps protected app storage');
+    }
+  }
+}
+async function safeRoot(value){
+  const raw=String(value??'').trim();
+  if(!raw||!isAbsolute(raw)) throw new TypeError('stateRoot must be absolute');
+  const root=resolve(raw);
+  assertProtectedRoot(root);
+
+  let probe=root;
+  while(true){
+    try{
+      const info=await lstat(probe);
+      if(info.isSymbolicLink()) throw new Error('dataset snapshot stateRoot must not contain symbolic links');
+      const canonical=resolve(await realpath(probe));
+      if(canonical!==probe) throw new Error('dataset snapshot stateRoot must not contain symbolic links');
+      break;
+    }catch(error){
+      if(error?.code!=='ENOENT') throw error;
+      const parent=dirname(probe);
+      if(parent===probe) throw error;
+      probe=parent;
+    }
   }
   return root;
 }
@@ -188,7 +210,7 @@ export async function persistResearchDatasetSnapshotManifestV1({
   manifest,
 }={}){
   assertResearchDatasetSnapshotManifestV1(manifest);
-  const root=safeRoot(stateRoot);
+  const root=await safeRoot(stateRoot);
   const directory=join(root,'datasets',manifest.datasetSnapshotHash);
   const path=join(directory,'manifest.json');
   await mkdir(directory,{recursive:true,mode:0o700});
