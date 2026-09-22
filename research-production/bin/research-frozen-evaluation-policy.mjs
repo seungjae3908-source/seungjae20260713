@@ -11,7 +11,7 @@ function reqArg(name){
 try{
   const input=JSON.parse(await readFile(resolve(reqArg('--input')),'utf8'));
   const result=await persistFrozenResearchEvaluationPoliciesV1({
-    componentRoot:resolve(process.env.RESEARCH_CANONICAL_BUNDLE_INPUT_ROOT??''),
+    componentRoot:process.env.RESEARCH_CANONICAL_BUNDLE_INPUT_ROOT??'',
     input,
   });
   process.stdout.write(`${JSON.stringify(result,null,2)}\n`);
