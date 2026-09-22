@@ -469,3 +469,28 @@ class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+def test_development_diagnostic_blocker_is_visible_without_raw_diagnostic(self):
+        root = self.fixture()
+        path = root / 'latest' / 'research-factory.json'
+        value = json.loads(path.read_text(encoding='utf-8'))
+        value['status'] = 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_INVALID'
+        value['firstZero'] = 'DEVELOPMENT_DIAGNOSTIC_INVALID'
+        value['controlPlaneDigest'] = None
+        value['diagnostic'] = 'HINDSIGHT_FEEDBACK_FORBIDDEN: secret internal detail'
+        value['policy']['present'] = True
+        value['policy']['valid'] = True
+        value['policy']['policyDigest'] = 'e' * 64
+        value['canonicalAdaptive']['readyProfileCount'] = 1
+        value['canonicalAdaptive']['blockedProfileCount'] = 11
+        value['canonicalAdaptive']['runtimeStatus'] = 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_INVALID'
+        value['canonicalAdaptive']['nextFirstZero'] = 'DEVELOPMENT_DIAGNOSTIC_INVALID'
+        write_json(path, value)
+        overview = build_research_overview(root)
+        factory = overview['factory']
+        self.assertEqual(factory['status'], 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_INVALID')
+        self.assertEqual(factory['firstZero'], 'DEVELOPMENT_DIAGNOSTIC_INVALID')
+        self.assertEqual(factory['readyProfileCount'], 1)
+        self.assertEqual(factory['blockedProfileCount'], 11)
+        self.assertNotIn('HINDSIGHT_FEEDBACK_FORBIDDEN', json.dumps(overview))
+        self.assertNotIn('secret internal detail', json.dumps(overview))
