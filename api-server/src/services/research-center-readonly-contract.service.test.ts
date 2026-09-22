@@ -398,3 +398,32 @@ test('measured zero counts remain zero while unavailable counts remain null', ()
   assert.equal(research.liquidityIndependence.frozenSplitCounts.VALIDATION, 0);
   assert.equal(research.liquidityIndependence.frozenSplitCounts.OOS, 0);
 });
+
+test('development diagnostic Factory blockers pass the browser allowlist without raw diagnostic leakage', () => {
+  const input = validOverview();
+  Object.assign(input.factory, {
+    status: 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_MISSING',
+    firstZero: 'DEVELOPMENT_DIAGNOSTIC_REQUIRED',
+    policyPresent: true,
+    policyValid: true,
+    policyDigest: 'e'.repeat(64),
+    readyProfileCount: 1,
+    blockedProfileCount: 11,
+    runtimeStatus: 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_MISSING',
+    nextFirstZero: 'DEVELOPMENT_DIAGNOSTIC_REQUIRED',
+    controlPlaneDigest: null,
+    diagnostic: 'profile ids must not cross browser boundary',
+  });
+  const result = sanitizeResearchCenterOverview(input)!;
+  const factory = result.factory as {
+    status: string;
+    firstZero: string;
+    readyProfileCount: number;
+    blockedProfileCount: number;
+  };
+  assert.equal(factory.status, 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_MISSING');
+  assert.equal(factory.firstZero, 'DEVELOPMENT_DIAGNOSTIC_REQUIRED');
+  assert.equal(factory.readyProfileCount, 1);
+  assert.equal(factory.blockedProfileCount, 11);
+  assert.equal(JSON.stringify(result).includes('profile ids must not cross browser boundary'), false);
+});
