@@ -1,11 +1,14 @@
 import { createHash } from 'node:crypto';
 
 import { buildResearchFactoryControlPlaneV1 } from './research-factory-controller.mjs';
+import { buildResearchDataFactoryOverviewV1 } from './research-data-factory.mjs';
 import { validateAdaptivePolicyRecordV1 } from './adaptive-policy-record.mjs';
+import { assessAdaptiveProfileReadinessV1 } from '../../market-prediction-lab/src/adaptive-multi-market-tournament-orchestrator-v1.js';
 
 export const RESEARCH_FACTORY_RUNTIME_STATUS_CONTRACT_V1 = 'research-factory-runtime-status/v1';
 
 const SHA40 = /^[0-9a-f]{40}$/i;
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -24,8 +27,14 @@ function exactSha(value) {
 }
 
 function exactIso(value) {
-  const date = new Date(String(value ?? ''));
-  if (!Number.isFinite(date.getTime())) throw new TypeError('observedAt invalid');
+  const text = String(value ?? '');
+  const date = new Date(text);
+  const normalized = text.includes('.') ? text : text.replace(/Z$/u, '.000Z');
+  if (!ISO.test(text)
+    || !Number.isFinite(date.getTime())
+    || date.toISOString() !== normalized) {
+    throw new TypeError('observedAt invalid');
+  }
   return date.toISOString();
 }
 
@@ -56,6 +65,54 @@ function invalidPolicyStatus({ researchSha, observedAt, error }) {
     },
     controlPlaneDigest: null,
     diagnostic: String(error?.message ?? error).replace(/[\r\n]/g, '_').slice(0, 240),
+    safety: {
+      runtimeExecutionAttempted: false,
+      runtimeActivationAllowed: false,
+      scheduleMutationAllowed: false,
+      deploymentAllowed: false,
+      databaseMutationAllowed: false,
+      secretMutationAllowed: false,
+      liveTrading: false,
+      autoTrading: false,
+      privateTradingApi: false,
+      realOrder: false,
+      profitabilityClaim: false,
+      executionAuthority: 'NONE',
+    },
+  };
+  return Object.freeze({ ...core, statusDigest: digest(core) });
+}
+
+function developmentDiagnosticsBlockedStatus({
+  researchSha,
+  observedAt,
+  policyMeta,
+  dataFactory,
+  readiness,
+  status,
+  firstZero,
+  diagnostic,
+}) {
+  const core = {
+    schemaVersion: 1,
+    contract: RESEARCH_FACTORY_RUNTIME_STATUS_CONTRACT_V1,
+    generatedAt: observedAt,
+    researchSha,
+    status,
+    firstZero,
+    policy: policyMeta,
+    dataFactory: {
+      readyMarketCount: dataFactory.readyMarketCount,
+      blockedMarketCount: dataFactory.blockedMarketCount,
+    },
+    canonicalAdaptive: {
+      readyProfileCount: readiness.readyProfileCount,
+      blockedProfileCount: readiness.blockedProfileCount,
+      runtimeStatus: status,
+      nextFirstZero: firstZero,
+    },
+    controlPlaneDigest: null,
+    diagnostic: String(diagnostic ?? firstZero).replace(/[\r\n]/g, '_').slice(0, 240),
     safety: {
       runtimeExecutionAttempted: false,
       runtimeActivationAllowed: false,
@@ -111,19 +168,72 @@ export function buildResearchFactoryRuntimeStatusV1({
     };
   }
 
-  const control = buildResearchFactoryControlPlaneV1({
-    researchSha: sha,
-    observedAt: at,
-    evidenceByMarket: dataEvidenceByMarket,
-    adaptive: policy == null
-      ? {}
-      : {
-          policy,
-          evidenceCatalog: adaptiveEvidenceCatalog,
-          developmentDiagnostics,
-          bindings: runtimeBindings,
-        },
-  });
+  if (policy != null) {
+    const readiness = assessAdaptiveProfileReadinessV1({
+      evidenceCatalog: adaptiveEvidenceCatalog,
+    });
+    const readyProfileIds = readiness.profiles
+      .filter((profile) => profile.status === 'READY')
+      .map((profile) => profile.profileId);
+    const diagnostics = developmentDiagnostics && typeof developmentDiagnostics === 'object'
+      && !Array.isArray(developmentDiagnostics)
+      ? developmentDiagnostics
+      : {};
+    const missingProfileIds = readyProfileIds.filter((profileId) =>
+      !Object.prototype.hasOwnProperty.call(diagnostics, profileId)
+    );
+    if (missingProfileIds.length > 0) {
+      return developmentDiagnosticsBlockedStatus({
+        researchSha: sha,
+        observedAt: at,
+        policyMeta,
+        dataFactory: buildResearchDataFactoryOverviewV1({
+          evidenceByMarket: dataEvidenceByMarket,
+        }),
+        readiness,
+        status: 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_MISSING',
+        firstZero: 'DEVELOPMENT_DIAGNOSTIC_REQUIRED',
+        diagnostic: `missingProfileCount=${missingProfileIds.length};profiles=${missingProfileIds.join(',')}`,
+      });
+    }
+  }
+
+  let control;
+  try {
+    control = buildResearchFactoryControlPlaneV1({
+      researchSha: sha,
+      observedAt: at,
+      evidenceByMarket: dataEvidenceByMarket,
+      adaptive: policy == null
+        ? {}
+        : {
+            policy,
+            evidenceCatalog: adaptiveEvidenceCatalog,
+            developmentDiagnostics,
+            bindings: runtimeBindings,
+          },
+    });
+  } catch (error) {
+    const code = String(error?.code ?? error?.message ?? '');
+    if (/^(?:DEVELOPMENT_|HINDSIGHT_FEEDBACK_FORBIDDEN)/.test(code)) {
+      const readiness = assessAdaptiveProfileReadinessV1({
+        evidenceCatalog: adaptiveEvidenceCatalog,
+      });
+      return developmentDiagnosticsBlockedStatus({
+        researchSha: sha,
+        observedAt: at,
+        policyMeta,
+        dataFactory: buildResearchDataFactoryOverviewV1({
+          evidenceByMarket: dataEvidenceByMarket,
+        }),
+        readiness,
+        status: 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_INVALID',
+        firstZero: 'DEVELOPMENT_DIAGNOSTIC_INVALID',
+        diagnostic: code,
+      });
+    }
+    throw error;
+  }
 
   const core = {
     schemaVersion: 1,
