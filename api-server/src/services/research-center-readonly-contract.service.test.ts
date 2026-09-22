@@ -133,6 +133,38 @@ function validOverview() {
       }],
       liquidityIndependence: liquidityIndependence(),
     },
+    dataFactory: {
+      temporalCryptoFutures: {
+        present: true,
+        status: 'complete',
+        generatedAt: 1_799_999_999_500,
+        researchSha: SHA,
+        failedCount: 0,
+        observationCount: 42,
+        ledgerDigest: 'c'.repeat(64),
+        results: [
+          { symbol: 'BTCUSDT', status: 'success', observedCount: 3, appendedCount: 2 },
+          { symbol: 'ETHUSDT', status: 'success', observedCount: 3, appendedCount: 3 },
+        ],
+      },
+    },
+    factory: {
+      present: true,
+      status: 'BLOCKED_POLICY_MISSING',
+      generatedAt: 1_799_999_999_750,
+      researchSha: SHA,
+      firstZero: 'HUMAN_APPROVED_ADAPTIVE_POLICY_MISSING',
+      policyPresent: false,
+      policyValid: false,
+      policyDigest: null,
+      readyMarketCount: 0,
+      blockedMarketCount: 4,
+      readyProfileCount: null,
+      blockedProfileCount: null,
+      runtimeStatus: null,
+      nextFirstZero: 'HUMAN_APPROVED_ADAPTIVE_POLICY_MISSING',
+      controlPlaneDigest: 'd'.repeat(64),
+    },
     paper: {
       runtime: {
         present: true,
@@ -170,6 +202,10 @@ test('Research Center contract publishes a GET-only, authority-free allowlisted 
   });
   Object.assign(input.paper.runtime, { credential: 'secret', publisherAccount: 'private' });
   Object.assign(input.paper.candidatePerformance, { accountId: 'private-account-id' });
+  Object.assign(input.factory, {
+    statePath: '/var/lib/private-research/factory.json',
+    diagnostic: 'secret internal diagnostic',
+  });
   Object.assign(input.research.liquidityIndependence, {
     artifactDownloadUrl: 'https://example.test/private-artifact',
     statePath: '/var/lib/private-research/v3.json',
@@ -182,10 +218,31 @@ test('Research Center contract publishes a GET-only, authority-free allowlisted 
   assert.equal(serialized.includes('private-account-id'), false);
   assert.equal(serialized.includes('credential'), false);
   assert.equal(serialized.includes('artifactDownloadUrl'), false);
+  assert.equal(serialized.includes('secret internal diagnostic'), false);
   const research = result.research as { liquidityIndependence: { effectiveIndependentN: number; independentBuyN: number; independentSellN: number } };
   assert.equal(research.liquidityIndependence.effectiveIndependentN, 15);
   assert.equal(research.liquidityIndependence.independentBuyN, 10);
   assert.equal(research.liquidityIndependence.independentSellN, 5);
+  const dataFactory = result.dataFactory as { temporalCryptoFutures: { observationCount: number; failedCount: number; results: Array<{ symbol: string }> } };
+  assert.equal(dataFactory.temporalCryptoFutures.observationCount, 42);
+  assert.equal(dataFactory.temporalCryptoFutures.failedCount, 0);
+  assert.equal(dataFactory.temporalCryptoFutures.results[0]?.symbol, 'BTCUSDT');
+  const factory = result.factory as {
+    status: string;
+    firstZero: string;
+    policyPresent: boolean;
+    readyMarketCount: number;
+    blockedMarketCount: number;
+    readyProfileCount: null;
+    controlPlaneDigest: string;
+  };
+  assert.equal(factory.status, 'BLOCKED_POLICY_MISSING');
+  assert.equal(factory.firstZero, 'HUMAN_APPROVED_ADAPTIVE_POLICY_MISSING');
+  assert.equal(factory.policyPresent, false);
+  assert.equal(factory.readyMarketCount, 0);
+  assert.equal(factory.blockedMarketCount, 4);
+  assert.equal(factory.readyProfileCount, null);
+  assert.equal(factory.controlPlaneDigest, 'd'.repeat(64));
   const paper = result.paper as { candidatePerformance: { candidateMatchedN: number; VALIDATION_N: number; Net_PnL: null } };
   assert.equal(paper.candidatePerformance.candidateMatchedN, 3);
   assert.equal(paper.candidatePerformance.VALIDATION_N, 0);
@@ -202,6 +259,60 @@ test('older dashboard payloads without independence evidence remain backward-com
   assert.equal(research.liquidityIndependence.status, 'MISSING');
   assert.equal(research.liquidityIndependence.present, false);
   assert.equal(research.liquidityIndependence.effectiveIndependentN, null);
+});
+
+test('older dashboard payloads without Data Factory evidence remain explicit MISSING', () => {
+  const input = validOverview();
+  delete (input as { dataFactory?: unknown }).dataFactory;
+  const result = sanitizeResearchCenterOverview(input)!;
+  const dataFactory = result.dataFactory as { temporalCryptoFutures: { present: boolean; status: string; observationCount: null } };
+  assert.equal(dataFactory.temporalCryptoFutures.present, false);
+  assert.equal(dataFactory.temporalCryptoFutures.status, 'MISSING');
+  assert.equal(dataFactory.temporalCryptoFutures.observationCount, null);
+});
+
+test('Data Factory DTO rejects private/tampered fields and impossible symbol counts', () => {
+  const unsafe = validOverview();
+  Object.assign(unsafe.dataFactory.temporalCryptoFutures, {
+    statePath: '/var/lib/private-research/temporal.json',
+    token: 'ghp_should-never-leak',
+  });
+  const sanitized = sanitizeResearchCenterOverview(unsafe)!;
+  const serialized = JSON.stringify(sanitized);
+  assert.equal(serialized.includes('/var/lib/private-research'), false);
+  assert.equal(serialized.includes('ghp_should-never-leak'), false);
+
+  const invalid = validOverview();
+  invalid.dataFactory.temporalCryptoFutures.results[0]!.appendedCount = 4;
+  assert.equal(sanitizeResearchCenterOverview(invalid), null);
+});
+
+test('older dashboard payloads without Factory runtime remain explicit MISSING', () => {
+  const input = validOverview();
+  delete (input as { factory?: unknown }).factory;
+  const result = sanitizeResearchCenterOverview(input)!;
+  const factory = result.factory as {
+    present: boolean;
+    status: string;
+    policyPresent: null;
+    readyMarketCount: null;
+    readyProfileCount: null;
+  };
+  assert.equal(factory.present, false);
+  assert.equal(factory.status, 'MISSING');
+  assert.equal(factory.policyPresent, null);
+  assert.equal(factory.readyMarketCount, null);
+  assert.equal(factory.readyProfileCount, null);
+});
+
+test('Factory runtime tamper fails browser DTO closed instead of leaking partial readiness', () => {
+  const invalidPolicy = validOverview();
+  (invalidPolicy.factory as { policyDigest: string | null }).policyDigest = 'e'.repeat(64);
+  assert.equal(sanitizeResearchCenterOverview(invalidPolicy), null);
+
+  const malformed = validOverview();
+  (malformed.factory as { readyProfileCount: number | null }).readyProfileCount = -1;
+  assert.equal(sanitizeResearchCenterOverview(malformed), null);
 });
 
 test('older dashboard payloads without candidate performance remain UNKNOWN and do not borrow ledger counts', () => {
