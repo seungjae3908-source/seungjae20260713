@@ -506,3 +506,34 @@ test('health endpoint declares zero trading authority', async () => {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });
+
+test('development diagnostic Factory blockers remain visible without leaking diagnostic text', async () => {
+  const root = await fixture();
+  const path = join(root, 'latest', 'research-factory.json');
+  const value = JSON.parse(await readFile(path, 'utf8'));
+  Object.assign(value, {
+    status: 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_MISSING',
+    firstZero: 'DEVELOPMENT_DIAGNOSTIC_REQUIRED',
+    controlPlaneDigest: null,
+    diagnostic: 'missingProfileCount=1;profiles=CRYPTO_FUTURES:SHORT',
+  });
+  Object.assign(value.policy, {
+    present: true,
+    valid: true,
+    policyDigest: 'e'.repeat(64),
+  });
+  Object.assign(value.canonicalAdaptive, {
+    readyProfileCount: 1,
+    blockedProfileCount: 11,
+    runtimeStatus: 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_MISSING',
+    nextFirstZero: 'DEVELOPMENT_DIAGNOSTIC_REQUIRED',
+  });
+  await writeFile(path, JSON.stringify(value));
+  const overview = await buildResearchOverview({ stateRoot: root });
+  assert.equal(overview.factory.status, 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_MISSING');
+  assert.equal(overview.factory.firstZero, 'DEVELOPMENT_DIAGNOSTIC_REQUIRED');
+  assert.equal(overview.factory.readyProfileCount, 1);
+  assert.equal(overview.factory.blockedProfileCount, 11);
+  assert.equal(JSON.stringify(overview).includes('missingProfileCount'), false);
+  assert.equal(JSON.stringify(overview).includes('CRYPTO_FUTURES:SHORT'), false);
+});
