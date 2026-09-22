@@ -107,6 +107,7 @@ export function UnifiedAssetSearch({
   const inputRef = useRef<HTMLInputElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
   const requestSequence = useRef(0);
+  const activeRequestController = useRef<AbortController | null>(null);
   const [query, setQuery] = useState('');
   const [focused, setFocused] = useState(false);
   const [composing, setComposing] = useState(false);
@@ -209,6 +210,14 @@ export function UnifiedAssetSearch({
     return () => document.removeEventListener('pointerdown', handlePointerDown);
   }, []);
 
+  const cancelActiveRequest = useCallback(() => {
+    requestSequence.current += 1;
+    activeRequestController.current?.abort();
+    activeRequestController.current = null;
+  }, []);
+
+  useEffect(() => () => cancelActiveRequest(), [cancelActiveRequest]);
+
   const runSearch = useCallback(async (value: string, signal?: AbortSignal) => {
     const sequence = ++requestSequence.current;
     setLoading(true);
@@ -228,6 +237,7 @@ export function UnifiedAssetSearch({
   }, [asset, filterResponse, market]);
 
   useEffect(() => {
+    cancelActiveRequest();
     if (!trimmed || composing) {
       setResponse(null);
       setLoading(false);
@@ -236,14 +246,34 @@ export function UnifiedAssetSearch({
       return;
     }
     const controller = new AbortController();
+    activeRequestController.current = controller;
     const timer = window.setTimeout(() => void runSearch(trimmed, controller.signal), 200);
     return () => {
       window.clearTimeout(timer);
       controller.abort();
+      if (activeRequestController.current === controller) activeRequestController.current = null;
     };
-  }, [composing, filteredRecent.length, runSearch, trimmed]);
+  }, [cancelActiveRequest, composing, filteredRecent.length, runSearch, trimmed]);
+
+  const updateQuery = (nextQuery: string) => {
+    cancelActiveRequest();
+    setLoading(false);
+    setError(null);
+    setQuery(nextQuery);
+  };
+
+  const retrySearch = () => {
+    if (!trimmed) return;
+    cancelActiveRequest();
+    const controller = new AbortController();
+    activeRequestController.current = controller;
+    void runSearch(trimmed, controller.signal).finally(() => {
+      if (activeRequestController.current === controller) activeRequestController.current = null;
+    });
+  };
 
   const selectItem = (item: UnifiedAssetSuggestion) => {
+    cancelActiveRequest();
     saveRecent(item);
     setRecent(readRecent());
     setFocused(false);
@@ -289,14 +319,14 @@ export function UnifiedAssetSearch({
           autoFocus={autoFocus}
           value={query}
           onFocus={() => { setFocused(true); updatePopupPosition(); }}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => updateQuery(event.target.value)}
           onCompositionStart={() => setComposing(true)}
-          onCompositionEnd={(event) => { setComposing(false); setQuery(event.currentTarget.value); }}
+          onCompositionEnd={(event) => { setComposing(false); updateQuery(event.currentTarget.value); }}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           className="h-12 w-full rounded-2xl border border-card-border bg-card pl-12 pr-12 text-base font-bold outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
         />
-        {query && <button type="button" aria-label="검색어 지우기" onClick={() => { setQuery(''); inputRef.current?.focus(); }} className="absolute right-1 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-xl text-muted-foreground active:bg-muted"><X className="h-4 w-4" /></button>}
+        {query && <button type="button" aria-label="검색어 지우기" onClick={() => { updateQuery(''); inputRef.current?.focus(); }} className="absolute right-1 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-xl text-muted-foreground active:bg-muted"><X className="h-4 w-4" /></button>}
       </div>
 
       {open && (
@@ -304,8 +334,8 @@ export function UnifiedAssetSearch({
           {!trimmed && filteredRecent.length > 0 && <div className="flex items-center gap-2 border-b border-card-border px-4 py-3 text-xs font-extrabold text-muted-foreground"><Clock3 className="h-4 w-4" /> 최근 검색</div>}
           {loading && !hasLastGoodResults && <div className="space-y-3 px-4 py-5" aria-live="polite" data-testid="unified-search-skeleton"><div className="flex items-center gap-2 text-sm font-bold text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> 검색 인덱스에서 찾는 중입니다.</div><div className="h-12 animate-pulse rounded-xl bg-muted" /><div className="h-12 animate-pulse rounded-xl bg-muted" /></div>}
           {loading && hasLastGoodResults && <div className="flex items-center gap-2 border-b border-primary/20 bg-primary/5 px-4 py-2 text-xs font-bold text-muted-foreground" aria-live="polite" data-testid="unified-search-refreshing"><Loader2 className="h-4 w-4 animate-spin" /> 이전 결과를 유지하며 새 검색을 확인 중입니다.</div>}
-          {error && !hasLastGoodResults && <div className="space-y-3 px-4 py-5 text-center" data-testid="unified-search-outcome"><AlertTriangle className="mx-auto h-6 w-6 text-warning" /><p className="text-xs font-black text-warning">DATA_UNAVAILABLE · 검색 데이터 사용 불가</p><p className="break-keep text-sm font-bold">{error}</p><button type="button" onClick={() => { if (trimmed) void runSearch(trimmed); }} className="h-11 rounded-xl border border-card-border px-4 text-sm font-extrabold">재시도</button></div>}
-          {error && hasLastGoodResults && <div className="flex flex-wrap items-center justify-between gap-2 border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs font-bold text-warning" data-testid="unified-search-last-good"><span>새 검색에 실패해 마지막 정상 결과를 표시합니다.</span><button type="button" onClick={() => { if (trimmed) void runSearch(trimmed); }} className="h-9 rounded-lg border border-warning/40 px-3 font-extrabold">재시도</button></div>}
+          {error && !hasLastGoodResults && <div className="space-y-3 px-4 py-5 text-center" data-testid="unified-search-outcome"><AlertTriangle className="mx-auto h-6 w-6 text-warning" /><p className="text-xs font-black text-warning">DATA_UNAVAILABLE · 검색 데이터 사용 불가</p><p className="break-keep text-sm font-bold">{error}</p><button type="button" onClick={retrySearch} className="h-11 rounded-xl border border-card-border px-4 text-sm font-extrabold">재시도</button></div>}
+          {error && hasLastGoodResults && <div className="flex flex-wrap items-center justify-between gap-2 border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs font-bold text-warning" data-testid="unified-search-last-good"><span>새 검색에 실패해 마지막 정상 결과를 표시합니다.</span><button type="button" onClick={retrySearch} className="h-9 rounded-lg border border-warning/40 px-3 font-extrabold">재시도</button></div>}
           {!error && trimmed && errorProviders.length > 0 && <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs font-bold text-destructive">공급자 연결 실패: {providerNames(errorProviders)}. 해당 시장 결과가 누락될 수 있습니다.</div>}
           {!error && trimmed && staleProviders.length > 0 && <div className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs font-bold text-warning">마지막 정상 인덱스 사용: {providerNames(staleProviders)}.</div>}
           {!error && trimmed && response?.stale && <div className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs font-bold text-warning">가장 오래된 데이터 기준시각: {response.dataAsOf ? new Date(response.dataAsOf).toLocaleString('ko-KR') : '확인 필요'}</div>}
