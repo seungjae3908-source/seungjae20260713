@@ -56,8 +56,17 @@ async function safeChildFile(root,value,name){
   }
   return path;
 }
+async function safeOutputDirectory(root,path,name){
+  const rel=relative(root,path);
+  if(rel===''||rel==='..'||rel.startsWith(`..${sep}`)) throw new Error(`${name} must be below stateRoot`);
+  await mkdir(path,{recursive:true,mode:0o700});
+  const info=await lstat(path);
+  if(!info.isDirectory()||info.isSymbolicLink()) throw new Error(`${name} must be a regular non-symlink directory`);
+  const canonical=resolve(await realpath(path));
+  if(canonical!==path) throw new Error(`${name} real path must remain below stateRoot`);
+  return path;
+}
 async function atomicJson(path,value){
-  await mkdir(dirname(path),{recursive:true,mode:0o700});
   const temp=`${path}.tmp-${process.pid}-${Date.now()}`;
   await writeFile(temp,`${JSON.stringify(value,null,2)}\n`,{mode:0o600});
   await rename(temp,path);
@@ -156,8 +165,9 @@ export async function persistAdaptiveEvidenceCatalogV1({
 }={}){
   const root=await rootPath(stateRoot);
   const record=buildAdaptiveEvidenceCatalogStoreRecordV1({catalog,generatedAt});
-  const rawPath=resolve(root,'latest','adaptive-evidence-catalog.json');
-  const recordPath=resolve(root,'latest','adaptive-evidence-catalog-record.json');
+  const latest=await safeOutputDirectory(root,resolve(root,'latest'),'latest output directory');
+  const rawPath=resolve(latest,'adaptive-evidence-catalog.json');
+  const recordPath=resolve(latest,'adaptive-evidence-catalog-record.json');
   await atomicJson(rawPath,catalog.evidenceCatalog);
   await atomicJson(recordPath,record);
   return Object.freeze({
@@ -175,8 +185,10 @@ export async function persistAdaptiveEvidenceCatalogV1({
 
 export async function loadPersistedAdaptiveEvidenceCatalogV1({stateRoot}={}){
   const root=await rootPath(stateRoot);
-  const rawCatalog=JSON.parse(await readFile(resolve(root,'latest','adaptive-evidence-catalog.json'),'utf8'));
-  const record=JSON.parse(await readFile(resolve(root,'latest','adaptive-evidence-catalog-record.json'),'utf8'));
+  const rawPath=await safeChildFile(root,resolve(root,'latest','adaptive-evidence-catalog.json'),'persisted raw catalog');
+  const recordPath=await safeChildFile(root,resolve(root,'latest','adaptive-evidence-catalog-record.json'),'persisted catalog record');
+  const rawCatalog=JSON.parse(await readFile(rawPath,'utf8'));
+  const record=JSON.parse(await readFile(recordPath,'utf8'));
   return assertAdaptiveEvidenceCatalogStoreRecordV1({rawCatalog,record});
 }
 
