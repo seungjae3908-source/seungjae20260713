@@ -179,3 +179,27 @@ test('active V3 schedule and capture seam do not reference the inactive V4 propo
     assert.doesNotMatch(source, /collectBitgetForwardLiquidityObservationBatchV4/u);
   }
 });
+
+
+test('v4 rejects any numeric-policy drift under the same technical identity', async () => {
+  const neverFetch = async () => {
+    throw new Error('network fetch must not occur before frozen-policy validation');
+  };
+
+  for (const overrides of [
+    { eventObservationDelayMs: 1_999 },
+    { postObservationDelaysMs: [1_000, 4_999] },
+    { maxPreEventBookAgeMs: 4_999 },
+  ]) {
+    await assert.rejects(
+      collectBitgetForwardLiquidityObservationBatchV4({
+        collectorCodeSha,
+        fetchOrderBookFrame: neverFetch,
+        fetchTradesFrame: neverFetch,
+        sleep: async () => undefined,
+        ...overrides,
+      }),
+      /V4_FROZEN_CAPTURE_POLICY_MISMATCH/,
+    );
+  }
+});
