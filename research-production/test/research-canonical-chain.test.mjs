@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -153,4 +153,35 @@ test('chain refuses incomplete bindings even after valid publication',async()=>{
     /RUNTIME_BINDINGS_NOT_COMPLETE/,
   );
   assert.equal(calls,3);
+});
+
+
+test('relative roots are rejected before any subprocess invocation',async()=>{
+  const e=await env();
+  let calls=0;
+  await assert.rejects(
+    runResearchCanonicalChainV1({
+      repoRoot:'relative-repo',researchSha:SHA,inputRoot:e.input,bundleStateRoot:e.bundleState,
+      researchStateRoot:e.researchState,componentsPath:e.components,runner:()=>{calls+=1;return {status:0,stdout:'{}',stderr:''};},
+    }),
+    /repoRoot must be absolute/,
+  );
+  assert.equal(calls,0);
+});
+
+test('components symlink is rejected before parsing or subprocess invocation',async()=>{
+  const e=await env();
+  const outside=join(e.repo,'outside-components.json');
+  await writeFile(outside,JSON.stringify({dsl:e.dsl}));
+  const link=join(e.input,'components-link.json');
+  await symlink(outside,link);
+  let calls=0;
+  await assert.rejects(
+    runResearchCanonicalChainV1({
+      repoRoot:e.repo,researchSha:SHA,inputRoot:e.input,bundleStateRoot:e.bundleState,
+      researchStateRoot:e.researchState,componentsPath:link,runner:()=>{calls+=1;return {status:0,stdout:'{}',stderr:''};},
+    }),
+    /componentsPath must be a regular non-symlink file/,
+  );
+  assert.equal(calls,0);
 });
