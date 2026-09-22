@@ -9,6 +9,8 @@ import {
   verifyV4FutureActivationBinding,
 } from '../src/public-forward-liquidity-v4-inactive-integration-gate.mjs';
 
+const EXPECTED_MAIN_SHA = 'b'.repeat(40);
+
 function validFutureBinding() {
   return {
     schemaVersion: PUBLIC_FORWARD_LIQUIDITY_V4_FUTURE_ACTIVATION_BINDING_SCHEMA,
@@ -18,7 +20,7 @@ function validFutureBinding() {
       PUBLIC_FORWARD_LIQUIDITY_V4_INACTIVE_INTEGRATION_GATE.technicalIdentityDigest,
     activationDecision: 'APPROVED_FOR_SEPARATE_ACTIVATION_PR_ONLY',
     humanAuthorityRef: 'human-authority:future-v4:test-only',
-    targetMainSha: 'a'.repeat(40),
+    targetMainSha: EXPECTED_MAIN_SHA,
     approvedAtMs: 1_800_000_000_000,
   };
 }
@@ -26,6 +28,7 @@ function validFutureBinding() {
 test('missing activation binding fails closed with zero collector invocation and zero credit', async () => {
   let collectorCalls = 0;
   const result = await evaluateV4InactiveIntegrationGate({
+    expectedTargetMainSha: EXPECTED_MAIN_SHA,
     collector: async () => {
       collectorCalls += 1;
       throw new Error('collector must never run');
@@ -46,12 +49,15 @@ test('missing activation binding fails closed with zero collector invocation and
 test('even a valid future human binding only makes a separate activation PR ready and still cannot run V4', async () => {
   let collectorCalls = 0;
   const binding = validFutureBinding();
-  const verification = verifyV4FutureActivationBinding(binding);
+  const verification = verifyV4FutureActivationBinding(binding, {
+    expectedTargetMainSha: EXPECTED_MAIN_SHA,
+  });
   assert.equal(verification.valid, true);
   assert.deepEqual(verification.blockers, []);
 
   const result = await evaluateV4InactiveIntegrationGate({
     activationBinding: binding,
+    expectedTargetMainSha: EXPECTED_MAIN_SHA,
     collector: async () => {
       collectorCalls += 1;
       throw new Error('collector must never run');
@@ -73,9 +79,42 @@ test('even a valid future human binding only makes a separate activation PR read
 test('technical identity drift invalidates the future activation binding', () => {
   const binding = validFutureBinding();
   binding.technicalIdentityDigest = 'f'.repeat(64);
-  const result = verifyV4FutureActivationBinding(binding);
+  const result = verifyV4FutureActivationBinding(binding, {
+    expectedTargetMainSha: EXPECTED_MAIN_SHA,
+  });
   assert.equal(result.valid, false);
   assert.ok(result.blockers.includes('V4_FUTURE_ACTIVATION_TECHNICAL_DIGEST_MISMATCH'));
+});
+
+test('stale or arbitrary target main cannot make a separate activation PR ready', async () => {
+  let collectorCalls = 0;
+  const binding = validFutureBinding();
+  binding.targetMainSha = 'a'.repeat(40);
+
+  const verification = verifyV4FutureActivationBinding(binding, {
+    expectedTargetMainSha: EXPECTED_MAIN_SHA,
+  });
+  assert.equal(verification.valid, false);
+  assert.ok(verification.blockers.includes('V4_FUTURE_ACTIVATION_TARGET_MAIN_SHA_MISMATCH'));
+
+  const result = await evaluateV4InactiveIntegrationGate({
+    activationBinding: binding,
+    expectedTargetMainSha: EXPECTED_MAIN_SHA,
+    collector: async () => {
+      collectorCalls += 1;
+    },
+  });
+  assert.equal(result.status, 'BLOCKED_ACTIVATION');
+  assert.equal(result.readyForSeparateActivationPr, false);
+  assert.equal(result.collectorInvoked, false);
+  assert.equal(collectorCalls, 0);
+  assert.equal(result.prospectiveEconomicCredit, 0);
+});
+
+test('missing expected exact-main identity fails closed', () => {
+  const result = verifyV4FutureActivationBinding(validFutureBinding());
+  assert.equal(result.valid, false);
+  assert.ok(result.blockers.includes('V4_FUTURE_ACTIVATION_EXPECTED_MAIN_SHA_INVALID'));
 });
 
 test('current scheduled workflow remains V3-only and does not reference the V4 integration gate', async () => {
