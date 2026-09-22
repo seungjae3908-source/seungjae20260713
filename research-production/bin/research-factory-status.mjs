@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { buildResearchFactoryRuntimeStatusV1 } from '../src/research-factory-runtime-status.mjs';
@@ -10,11 +10,26 @@ function exactSha(value) {
   return sha;
 }
 
-function stateRoot(value) {
-  const root=resolve(String(value??'/var/lib/investment-research-production'));
-  if(!isAbsolute(root)) throw new Error('RESEARCH_STATE_ROOT must be absolute');
+async function stateRoot(value) {
+  const raw=String(value??'/var/lib/investment-research-production').trim();
+  if(!raw||!isAbsolute(raw)) throw new Error('RESEARCH_STATE_ROOT must be absolute');
+  const root=resolve(raw);
   for(const forbidden of ['/opt/stock-app-data','/srv/stock-app','/var/lib/stock-app']){
     if(root===forbidden||root.startsWith(`${forbidden}/`)) throw new Error('Factory state overlaps protected app storage');
+  }
+  let probe=root;
+  while(true){
+    try{
+      const info=await lstat(probe);
+      if(info.isSymbolicLink()) throw new Error('Factory state root must not contain symbolic links');
+      if(resolve(await realpath(probe))!==probe) throw new Error('Factory state root must not contain symbolic links');
+      break;
+    }catch(error){
+      if(error?.code!=='ENOENT') throw error;
+      const parent=dirname(probe);
+      if(parent===probe) throw error;
+      probe=parent;
+    }
   }
   return root;
 }
@@ -31,8 +46,24 @@ async function readOptionalJson(path) {
   return JSON.parse(await readFile(path,'utf8'));
 }
 
+async function ensureSafeDirectory(path,name,{recursive=false}={}) {
+  try{
+    await mkdir(path,{recursive,mode:0o700});
+  }catch(error){
+    if(error?.code!=='EEXIST') throw error;
+  }
+  const info=await lstat(path);
+  if(!info.isDirectory()||info.isSymbolicLink()) throw new Error(`${name} must be a regular non-symlink directory`);
+  if(resolve(await realpath(path))!==path) throw new Error(`${name} must not traverse symbolic links`);
+  return path;
+}
+
 async function atomicJson(path,value) {
-  await mkdir(dirname(path),{recursive:true,mode:0o700});
+  const directory=dirname(path);
+  const info=await lstat(directory);
+  if(!info.isDirectory()||info.isSymbolicLink()||resolve(await realpath(directory))!==directory){
+    throw new Error('Factory output directory unsafe');
+  }
   const temp=`${path}.tmp-${process.pid}-${Date.now()}`;
   await writeFile(temp,`${JSON.stringify(value,null,2)}\n`,{mode:0o600});
   await rename(temp,path);
@@ -41,8 +72,10 @@ async function atomicJson(path,value) {
 let outputPath=null;
 try{
   const researchSha=exactSha(process.env.RESEARCH_CODE_SHA);
-  const root=stateRoot(process.env.RESEARCH_STATE_ROOT);
-  outputPath=join(root,'latest','research-factory.json');
+  const root=await stateRoot(process.env.RESEARCH_STATE_ROOT);
+  await ensureSafeDirectory(root,'Factory state root',{recursive:true});
+  const latest=await ensureSafeDirectory(join(root,'latest'),'Factory latest');
+  outputPath=join(latest,'research-factory.json');
   const policyPath=optionalAbsolute(process.env.RESEARCH_ADAPTIVE_POLICY_RECORD_PATH,'RESEARCH_ADAPTIVE_POLICY_RECORD_PATH');
   const dataEvidencePath=optionalAbsolute(process.env.RESEARCH_DATA_FACTORY_EVIDENCE_PATH,'RESEARCH_DATA_FACTORY_EVIDENCE_PATH');
   const adaptiveEvidencePath=optionalAbsolute(process.env.RESEARCH_ADAPTIVE_EVIDENCE_CATALOG_PATH,'RESEARCH_ADAPTIVE_EVIDENCE_CATALOG_PATH');
