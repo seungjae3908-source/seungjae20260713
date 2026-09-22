@@ -27,6 +27,7 @@ interface PortfolioOverlayInput {
 
 const STORAGE_KEY = "sa-portfolio-chart-overlays-v1";
 const PURCHASE_DATE_KEY = "sa-portfolio-purchase-dates-v1";
+const RATE_EPSILON = 1e-8;
 
 function hasStorage() {
   return typeof window !== "undefined" && Boolean(window.localStorage);
@@ -41,6 +42,69 @@ function normalizeDate(value: unknown) {
   if (Number.isNaN(parsed.getTime())) return "";
 
   return parsed.toISOString().slice(0, 10);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPositiveFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function isValidPortfolioChartOverlay(value: unknown): value is PortfolioChartOverlay {
+  if (!isRecord(value)) return false;
+
+  const ticker = typeof value.ticker === "string" ? value.ticker.trim().toUpperCase() : "";
+  const name = typeof value.name === "string" ? value.name.trim() : "";
+  if (!ticker || !name || value.ticker !== ticker) return false;
+
+  if (value.market !== "KR" && value.market !== "US") return false;
+  const expectedCurrency = value.market === "US" ? "USD" : "KRW";
+  if (value.currency !== expectedCurrency) return false;
+
+  if (!isPositiveFiniteNumber(value.averagePrice) || !isPositiveFiniteNumber(value.quantity)) {
+    return false;
+  }
+
+  if (typeof value.purchaseDate !== "string" || normalizeDate(value.purchaseDate) !== value.purchaseDate) {
+    return false;
+  }
+
+  if (typeof value.updatedAt !== "string" || !Number.isFinite(Date.parse(value.updatedAt))) {
+    return false;
+  }
+
+  if (value.currentPrice === null) {
+    return value.rate === null;
+  }
+
+  if (!isPositiveFiniteNumber(value.currentPrice)
+    || typeof value.rate !== "number"
+    || !Number.isFinite(value.rate)) {
+    return false;
+  }
+
+  const expectedRate = ((value.currentPrice - value.averagePrice) / value.averagePrice) * 100;
+  return Math.abs(value.rate - expectedRate) <= RATE_EPSILON;
+}
+
+export function parsePortfolioChartOverlays(value: unknown): PortfolioChartOverlay[] {
+  if (!Array.isArray(value)) return [];
+
+  const overlays: PortfolioChartOverlay[] = [];
+  const seenTickers = new Set<string>();
+
+  for (const row of value) {
+    if (!isValidPortfolioChartOverlay(row) || seenTickers.has(row.ticker)) {
+      continue;
+    }
+
+    seenTickers.add(row.ticker);
+    overlays.push(row);
+  }
+
+  return overlays;
 }
 
 function readPurchaseDates(): Record<string, string> {
@@ -183,7 +247,7 @@ export function loadPortfolioChartOverlays(): PortfolioChartOverlay[] {
 
   try {
     const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "[]");
-    return Array.isArray(parsed) ? parsed : [];
+    return parsePortfolioChartOverlays(parsed);
   } catch {
     return [];
   }
