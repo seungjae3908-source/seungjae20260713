@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -133,4 +133,25 @@ test('same exact data scope with later observation time reuses existing immutabl
   assert.equal(reused.status,'already_present');
   assert.equal(reused.manifestDigest,first.manifestDigest);
   assert.equal(reused.createdAt,AT);
+});
+
+
+test('relative stateRoot is rejected before snapshot persistence',async()=>{
+  const manifest=build();
+  await assert.rejects(
+    persistResearchDatasetSnapshotManifestV1({stateRoot:'relative-state-root',manifest}),
+    /stateRoot must be absolute/,
+  );
+});
+
+test('stateRoot symlink is rejected before snapshot persistence',async()=>{
+  const target=await mkdtemp(join(tmpdir(),'research-dataset-target-'));
+  const holder=await mkdtemp(join(tmpdir(),'research-dataset-link-holder-'));
+  const link=join(holder,'state-link');
+  await symlink(target,link,'dir');
+  const manifest=build();
+  await assert.rejects(
+    persistResearchDatasetSnapshotManifestV1({stateRoot:link,manifest}),
+    /stateRoot must not contain symbolic links/,
+  );
 });
