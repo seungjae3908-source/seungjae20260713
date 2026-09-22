@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { lstat, readFile, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
@@ -13,14 +13,21 @@ function exactSha(value){
   return sha;
 }
 function absolute(value,name){
-  const path=resolve(String(value??''));
-  if(!isAbsolute(path)) throw new TypeError(`${name} must be absolute`);
-  return path;
+  const raw=String(value??'').trim();
+  if(!raw||!isAbsolute(raw)) throw new TypeError(`${name} must be absolute`);
+  return resolve(raw);
 }
 function below(root,pathValue,name){
   const path=absolute(pathValue,name);
   const rel=relative(root,path);
   if(rel===''||rel==='..'||rel.startsWith(`..${sep}`)) throw new Error(`${name} must be below expected root`);
+  return path;
+}
+async function safeExistingFileBelow(root,pathValue,name){
+  const path=below(root,pathValue,name);
+  const info=await lstat(path);
+  if(!info.isFile()||info.isSymbolicLink()) throw new Error(`${name} must be a regular non-symlink file`);
+  if(resolve(await realpath(path))!==path) throw new Error(`${name} real path must remain below expected root`);
   return path;
 }
 function parseJson(text,name){
@@ -64,9 +71,9 @@ export async function runResearchCanonicalChainV1({
   const input=absolute(inputRoot,'inputRoot');
   const bundleState=absolute(bundleStateRoot,'bundleStateRoot');
   const researchState=absolute(researchStateRoot,'researchStateRoot');
-  const specPath=below(input,componentsPath,'componentsPath');
+  const specPath=await safeExistingFileBelow(input,componentsPath,'componentsPath');
   const spec=parseJson(await readFile(specPath,'utf8'),'COMPONENT_SPEC');
-  const dslPath=below(input,spec?.dsl,'dslPath');
+  const dslPath=await safeExistingFileBelow(input,spec?.dsl,'dslPath');
 
   const assemble=runStep(runner,{
     cwd:repo,
