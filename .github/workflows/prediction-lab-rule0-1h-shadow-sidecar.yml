@@ -32,9 +32,9 @@ concurrency:
 
 env:
   LAB_DIR: market-prediction-lab
-  ARTIFACT_NAME: prediction-lab-rule0-1h-shadow-state-v7
+  ARTIFACT_NAME: prediction-lab-rule0-1h-shadow-state-v8
   WORKFLOW_FILE: prediction-lab-rule0-1h-shadow-sidecar.yml
-  CHAIN_CONTRACT: rule0-1h-artifact-chain-v7
+  CHAIN_CONTRACT: rule0-1h-artifact-chain-v8
   CANONICAL_OI_PARITY_BLOB: 29edf3eaf816eb5dcf5c135d8d84d0147d1a25e7
   EXECUTION_FINGERPRINT_SCRIPT: market-prediction-lab/scripts/compute-rule0-1h-execution-fingerprint.js
 
