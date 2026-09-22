@@ -7,7 +7,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { ADAPTIVE_TOURNAMENT_STAGES_V1 } from '../../market-prediction-lab/src/adaptive-multi-market-tournament-orchestrator-v1.js';
+import {
+  ADAPTIVE_MULTI_MARKET_PROFILES_V1,
+  ADAPTIVE_TOURNAMENT_STAGES_V1,
+} from '../../market-prediction-lab/src/adaptive-multi-market-tournament-orchestrator-v1.js';
 import { createAdaptivePolicyRecordV1 } from '../src/adaptive-policy-record.mjs';
 import { buildResearchFactoryRuntimeStatusV1 } from '../src/research-factory-runtime-status.mjs';
 
@@ -15,6 +18,27 @@ const SHA='a'.repeat(40);
 const AT='2026-09-19T11:10:00.000Z';
 const execFileAsync=promisify(execFile);
 const FACTORY_STATUS_CLI=join(dirname(fileURLToPath(import.meta.url)),'../bin/research-factory-status.mjs');
+
+function readyProfileEvidence(profileId='CRYPTO_FUTURES:SHORT'){
+  const profile=ADAPTIVE_MULTI_MARKET_PROFILES_V1.find((row)=>row.profileId===profileId);
+  return {
+    profile,
+    evidenceCatalog:{
+      [profile.profileId]:Object.fromEntries(profile.requiredEvidence.map((requirement)=>[
+        requirement,
+        {status:'PRESENT',evidenceId:`fixture:${profile.profileId}:${requirement}`,observedAt:AT},
+      ])),
+    },
+  };
+}
+
+function approvedPolicyRecord(){
+  return createAdaptivePolicyRecordV1({
+    policy:policy(),
+    approvedAt:'2026-09-19T11:00:00.000Z',
+    approvalEvidenceId:'github-comment:123456',
+  });
+}
 
 function policy(){
   const caps=[16,16,12,10,6,4,3,2,2,1,1,1,1];
@@ -73,6 +97,99 @@ test('valid approved policy with no profile evidence stays blocked on canonical 
   assert.equal(result.canonicalAdaptive.readyProfileCount,0);
   assert.equal(result.canonicalAdaptive.runtimeStatus,'BLOCKED_NO_READY_PROFILES');
   assert.equal(result.safety.executionAuthority,'NONE');
+});
+
+
+test('ready profile with no development diagnostic becomes explicit missing-diagnostic blocker',()=>{
+  const {profile,evidenceCatalog}=readyProfileEvidence();
+  const result=buildResearchFactoryRuntimeStatusV1({
+    researchSha:SHA,
+    observedAt:AT,
+    policyRecord:approvedPolicyRecord(),
+    adaptiveEvidenceCatalog:evidenceCatalog,
+    developmentDiagnostics:{},
+  });
+  assert.equal(result.status,'BLOCKED_DEVELOPMENT_DIAGNOSTICS_MISSING');
+  assert.equal(result.firstZero,'DEVELOPMENT_DIAGNOSTIC_REQUIRED');
+  assert.equal(result.canonicalAdaptive.readyProfileCount,1);
+  assert.equal(result.canonicalAdaptive.blockedProfileCount,11);
+  assert.equal(result.canonicalAdaptive.runtimeStatus,'BLOCKED_DEVELOPMENT_DIAGNOSTICS_MISSING');
+  assert.match(result.diagnostic,new RegExp(profile.profileId));
+  assert.equal(result.controlPlaneDigest,null);
+  assert.equal(result.safety.runtimeExecutionAttempted,false);
+  assert.equal(result.safety.executionAuthority,'NONE');
+});
+
+test('development diagnostic containing forbidden hindsight feedback is explicit INVALID blocker',()=>{
+  const {profile,evidenceCatalog}=readyProfileEvidence();
+  const result=buildResearchFactoryRuntimeStatusV1({
+    researchSha:SHA,
+    observedAt:AT,
+    policyRecord:approvedPolicyRecord(),
+    adaptiveEvidenceCatalog:evidenceCatalog,
+    developmentDiagnostics:{
+      [profile.profileId]:{
+        sourceRole:'DEVELOPMENT_ONLY',
+        evidenceId:'development-diagnostic:unsafe',
+        dataCompleteness:1,
+        signalCoverage:0.8,
+        costCoverage:1,
+        familyDiversity:0.7,
+        computeCapacity:0.9,
+        oosWinRate:0.99,
+      },
+    },
+  });
+  assert.equal(result.status,'BLOCKED_DEVELOPMENT_DIAGNOSTICS_INVALID');
+  assert.equal(result.firstZero,'DEVELOPMENT_DIAGNOSTIC_INVALID');
+  assert.equal(result.canonicalAdaptive.readyProfileCount,1);
+  assert.match(result.diagnostic,/HINDSIGHT_FEEDBACK_FORBIDDEN/);
+  assert.equal(JSON.stringify(result).includes('0.99'),false);
+  assert.equal(result.safety.runtimeExecutionAttempted,false);
+  assert.equal(result.safety.executionAuthority,'NONE');
+});
+
+test('complete development-only diagnostic advances past diagnostic blocker and leaves next gate truthful',()=>{
+  const {profile,evidenceCatalog}=readyProfileEvidence();
+  const result=buildResearchFactoryRuntimeStatusV1({
+    researchSha:SHA,
+    observedAt:AT,
+    policyRecord:approvedPolicyRecord(),
+    adaptiveEvidenceCatalog:evidenceCatalog,
+    developmentDiagnostics:{
+      [profile.profileId]:{
+        sourceRole:'DEVELOPMENT_ONLY',
+        evidenceId:'development-diagnostic:safe',
+        dataCompleteness:1,
+        signalCoverage:0.8,
+        costCoverage:1,
+        familyDiversity:0.7,
+        computeCapacity:0.9,
+      },
+    },
+    runtimeBindings:{},
+  });
+  assert.equal(result.status,'BLOCKED_RUNTIME_BINDINGS');
+  assert.equal(result.firstZero,'RESEARCH_TOURNAMENT_STAGE_CHECKPOINT_RESUME_PORT_MISSING');
+  assert.equal(result.canonicalAdaptive.readyProfileCount,1);
+  assert.equal(result.safety.executionAuthority,'NONE');
+});
+
+
+test('Factory runtime timestamp is canonical and rejects impossible dates',()=>{
+  const wholeSecond=buildResearchFactoryRuntimeStatusV1({
+    researchSha:SHA,
+    observedAt:'2026-09-19T11:10:00Z',
+  });
+  assert.equal(wholeSecond.generatedAt,'2026-09-19T11:10:00.000Z');
+
+  assert.throws(
+    ()=>buildResearchFactoryRuntimeStatusV1({
+      researchSha:SHA,
+      observedAt:'2026-02-30T00:00:00Z',
+    }),
+    /observedAt invalid/,
+  );
 });
 
 
