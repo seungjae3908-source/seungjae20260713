@@ -8,6 +8,7 @@ import { assessAdaptiveProfileReadinessV1 } from '../../market-prediction-lab/sr
 export const RESEARCH_FACTORY_RUNTIME_STATUS_CONTRACT_V1 = 'research-factory-runtime-status/v1';
 
 const SHA40 = /^[0-9a-f]{40}$/i;
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -26,8 +27,14 @@ function exactSha(value) {
 }
 
 function exactIso(value) {
-  const date = new Date(String(value ?? ''));
-  if (!Number.isFinite(date.getTime())) throw new TypeError('observedAt invalid');
+  const text = String(value ?? '');
+  const date = new Date(text);
+  const normalized = text.includes('.') ? text : text.replace(/Z$/u, '.000Z');
+  if (!ISO.test(text)
+    || !Number.isFinite(date.getTime())
+    || date.toISOString() !== normalized) {
+    throw new TypeError('observedAt invalid');
+  }
   return date.toISOString();
 }
 
