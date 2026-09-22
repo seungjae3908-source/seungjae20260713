@@ -126,7 +126,7 @@ test('v4 uses a second public fills frame only when the first frame has no stric
     'book',
   ]);
   assert.equal(batch.observations.length, 1);
-  assert.equal(batch.observations[0].publicExecutionId, 'fresh-after-book');
+  assert.equal(batch.observations[0].rawSourceProvenance.publicTrade.publicExecutionId, 'fresh-after-book');
   assert.equal(batch.v4TechnicalSelection.maxTradeFrameFetchN, 2);
   assert.equal(batch.v4TechnicalSelection.tradeFrameFetchN, 2);
   assert.equal(batch.v4TechnicalSelection.selectedTradeFrameFetchIndex, 1);
