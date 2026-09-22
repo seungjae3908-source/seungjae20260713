@@ -38,6 +38,30 @@ test("file learning store survives restart and replays the same record idempoten
   }
 });
 
+test("concurrent identical learning writes publish exactly one complete canonical record", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "paper-learning-concurrent-"));
+  const directory = join(sandbox, "learning");
+  try {
+    const store = createFilePaperLearningStore({ directory });
+    const results = await Promise.all(Array.from({ length: 32 }, () => (
+      store.putIfAbsent({ key: "paper-signal:signal-1", value: safeValue() })
+    )));
+    assert.equal(results.filter((result) => result.inserted).length, 1);
+    assert.equal(results.filter((result) => !result.inserted).length, 31);
+
+    const names = await readdir(directory);
+    assert.equal(names.length, 1);
+    assert.match(names[0], /^[a-f0-9]{64}\.json$/u);
+    const persisted = JSON.parse(await readFile(join(directory, names[0]), "utf8"));
+    assert.equal(persisted.key, "paper-signal:signal-1");
+
+    const restartedStore = createFilePaperLearningStore({ directory });
+    assert.equal((await restartedStore.snapshot()).length, 1);
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
+});
+
 test("same learning key with a different payload fails closed", async () => {
   const sandbox = await mkdtemp(join(tmpdir(), "paper-learning-conflict-"));
   const directory = join(sandbox, "learning");
