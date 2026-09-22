@@ -33,10 +33,12 @@ function positiveTimestamp(value,name){
 }
 function canonicalIso(value,name){
   const text=String(value??"");
-  if(!ISO.test(text)||!Number.isFinite(Date.parse(text))||new Date(text).toISOString()!==text){
+  const date=new Date(text);
+  const normalized=text.includes(".")?text:text.replace(/Z$/u,".000Z");
+  if(!ISO.test(text)||!Number.isFinite(date.getTime())||date.toISOString()!==normalized){
     throw new TypeError(`${name}_INVALID`);
   }
-  return text;
+  return date.toISOString();
 }
 function safeId(value,name){
   const text=String(value??"").trim();
