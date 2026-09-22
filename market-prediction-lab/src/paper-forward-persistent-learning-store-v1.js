@@ -18,8 +18,31 @@ function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function assertJsonSafe(value, seen = new Set()) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("PAPER_FORWARD_LEARNING_VALUE_NOT_JSON_SAFE");
+    return;
+  }
+  if (!value || typeof value !== "object") {
+    throw new Error("PAPER_FORWARD_LEARNING_VALUE_NOT_JSON_SAFE");
+  }
+  if (seen.has(value)) throw new Error("PAPER_FORWARD_LEARNING_VALUE_NOT_JSON_SAFE");
+
+  const prototype = Object.getPrototypeOf(value);
+  if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) {
+    throw new Error("PAPER_FORWARD_LEARNING_VALUE_NOT_JSON_SAFE");
+  }
+
+  seen.add(value);
+  const children = Array.isArray(value) ? value : Object.values(value);
+  for (const child of children) assertJsonSafe(child, seen);
+  seen.delete(value);
+}
+
 function assertSafeLearningValue(value) {
   if (!value || typeof value !== "object") throw new Error("PAPER_FORWARD_LEARNING_VALUE_REQUIRED");
+  assertJsonSafe(value);
   if (value.simulatedOnly !== true
     || value.liveOrderAllowed !== false
     || value.privateTradingApiAllowed !== false
