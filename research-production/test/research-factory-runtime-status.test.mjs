@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -232,4 +232,80 @@ test('Factory status CLI rejects symlink latest output directory',async()=>{
       return true;
     },
   );
+});
+
+
+test('Factory status CLI auto-discovers default development diagnostics path and fails closed on tamper',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'factory-status-default-diagnostic-'));
+  const latest=join(root,'latest');
+  await mkdir(latest,{recursive:true});
+  await writeFile(join(latest,'adaptive-development-diagnostics.json'),'{not-json');
+  await assert.rejects(
+    execFileAsync(process.execPath,[FACTORY_STATUS_CLI],{
+      env:{
+        ...process.env,
+        RESEARCH_CODE_SHA:SHA,
+        RESEARCH_STATE_ROOT:root,
+        RESEARCH_ADAPTIVE_DEVELOPMENT_DIAGNOSTICS_PATH:'',
+        RESEARCH_ADAPTIVE_RUNTIME_BINDINGS_PATH:'',
+      },
+    }),
+    (error)=>{
+      assert.match(String(error.stderr??''),/FACTORY_RUNTIME_STATUS_INPUT_INVALID/);
+      return true;
+    },
+  );
+});
+
+test('Factory status CLI auto-discovers default runtime bindings path and fails closed on tamper',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'factory-status-default-bindings-'));
+  const latest=join(root,'latest');
+  await mkdir(latest,{recursive:true});
+  await writeFile(join(latest,'adaptive-development-diagnostics.json'),'{}');
+  await writeFile(join(latest,'adaptive-runtime-bindings.json'),'{not-json');
+  await assert.rejects(
+    execFileAsync(process.execPath,[FACTORY_STATUS_CLI],{
+      env:{
+        ...process.env,
+        RESEARCH_CODE_SHA:SHA,
+        RESEARCH_STATE_ROOT:root,
+        RESEARCH_ADAPTIVE_DEVELOPMENT_DIAGNOSTICS_PATH:'',
+        RESEARCH_ADAPTIVE_RUNTIME_BINDINGS_PATH:'',
+      },
+    }),
+    (error)=>{
+      assert.match(String(error.stderr??''),/FACTORY_RUNTIME_STATUS_INPUT_INVALID/);
+      return true;
+    },
+  );
+});
+
+test('Factory status CLI rejects symlinked default diagnostics and runtime bindings files',async()=>{
+  for(const fileName of ['adaptive-development-diagnostics.json','adaptive-runtime-bindings.json']){
+    const root=await mkdtemp(join(tmpdir(),'factory-status-default-symlink-'));
+    const latest=join(root,'latest');
+    const outside=await mkdtemp(join(tmpdir(),'factory-status-default-symlink-outside-'));
+    await mkdir(latest,{recursive:true});
+    const outsideFile=join(outside,'payload.json');
+    await writeFile(outsideFile,'{}');
+    if(fileName==='adaptive-runtime-bindings.json'){
+      await writeFile(join(latest,'adaptive-development-diagnostics.json'),'{}');
+    }
+    await symlink(outsideFile,join(latest,fileName),'file');
+    await assert.rejects(
+      execFileAsync(process.execPath,[FACTORY_STATUS_CLI],{
+        env:{
+          ...process.env,
+          RESEARCH_CODE_SHA:SHA,
+          RESEARCH_STATE_ROOT:root,
+          RESEARCH_ADAPTIVE_DEVELOPMENT_DIAGNOSTICS_PATH:'',
+          RESEARCH_ADAPTIVE_RUNTIME_BINDINGS_PATH:'',
+        },
+      }),
+      (error)=>{
+        assert.match(String(error.stderr??''),/FACTORY_RUNTIME_STATUS_INPUT_INVALID/);
+        return true;
+      },
+    );
+  }
 });
