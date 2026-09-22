@@ -7,8 +7,6 @@ on:
       - '.github/workflows/fast-profitability-v1-preactivation-watch.yml'
       - 'api-server/src/services/fast-profitability-activation.service.ts'
       - 'api-server/src/services/fast-profitability-activation.service.test.ts'
-      - 'api-server/src/services/forward-recommendation-observer-runtime.service.ts'
-      - 'api-server/src/services/forward-recommendation-observer-runtime.service.test.ts'
       - 'api-server/src/scripts/run-fast-profitability-preactivation-watch.ts'
       - 'api-server/src/scripts/run-forward-recommendation-observer-cycle.ts'
       - 'api-server/scripts/verify-fast-profitability-preactivation-watch-contract.mjs'
