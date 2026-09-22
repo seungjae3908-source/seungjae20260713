@@ -99,7 +99,6 @@ test('valid approved policy with no profile evidence stays blocked on canonical 
   assert.equal(result.safety.executionAuthority,'NONE');
 });
 
-
 test('ready profile with no development diagnostic becomes explicit missing-diagnostic blocker',()=>{
   const {profile,evidenceCatalog}=readyProfileEvidence();
   const result=buildResearchFactoryRuntimeStatusV1({
@@ -175,7 +174,6 @@ test('complete development-only diagnostic advances past diagnostic blocker and 
   assert.equal(result.safety.executionAuthority,'NONE');
 });
 
-
 test('Factory runtime timestamp is canonical and rejects impossible dates',()=>{
   const wholeSecond=buildResearchFactoryRuntimeStatusV1({
     researchSha:SHA,
@@ -191,7 +189,6 @@ test('Factory runtime timestamp is canonical and rejects impossible dates',()=>{
     /observedAt invalid/,
   );
 });
-
 
 test('Factory status CLI rejects relative and symlink state roots',async()=>{
   await assert.rejects(
@@ -233,7 +230,6 @@ test('Factory status CLI rejects symlink latest output directory',async()=>{
     },
   );
 });
-
 
 test('Factory status CLI auto-discovers default development diagnostics path and fails closed on tamper',async()=>{
   const root=await mkdtemp(join(tmpdir(),'factory-status-default-diagnostic-'));
@@ -308,4 +304,19 @@ test('Factory status CLI rejects symlinked default diagnostics and runtime bindi
       },
     );
   }
+});
+
+test('adaptive policy record accepts whole-second UTC and rejects impossible approval dates',()=>{
+  const record=createAdaptivePolicyRecordV1({
+    policy:policy(),
+    approvedAt:'2026-09-19T11:00:00Z',
+    approvalEvidenceId:'github-comment:123456',
+  });
+  assert.equal(record.approvedAt,'2026-09-19T11:00:00.000Z');
+
+  assert.throws(()=>createAdaptivePolicyRecordV1({
+    policy:policy(),
+    approvedAt:'2026-02-30T11:00:00Z',
+    approvalEvidenceId:'github-comment:123456',
+  }),/approvedAt must be canonical ISO-8601 UTC/);
 });
