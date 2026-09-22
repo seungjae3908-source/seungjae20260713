@@ -112,6 +112,37 @@ test("lossy JSON learning payloads fail closed before persistence", async () => 
   }
 });
 
+test("JSON-ignored own properties fail closed before persistence", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "paper-learning-json-own-properties-"));
+  const directory = join(sandbox, "learning");
+  try {
+    const store = createFilePaperLearningStore({ directory });
+
+    const symbolPayload = safeValue();
+    symbolPayload[Symbol("ignored")] = "would-be-dropped";
+
+    const arrayWithExtraProperty = [1, 2];
+    arrayWithExtraProperty.extra = "would-be-dropped";
+    const arrayPayload = safeValue({ diagnostics: arrayWithExtraProperty });
+
+    const nonEnumerablePayload = safeValue();
+    Object.defineProperty(nonEnumerablePayload, "hidden", {
+      value: "would-be-dropped",
+      enumerable: false,
+    });
+
+    for (const value of [symbolPayload, arrayPayload, nonEnumerablePayload]) {
+      await assert.rejects(
+        store.putIfAbsent({ key: "paper-signal:signal-1", value }),
+        /PAPER_FORWARD_LEARNING_VALUE_NOT_JSON_SAFE/u,
+      );
+    }
+    assert.equal((await store.snapshot()).length, 0);
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
+});
+
 test("snapshot rejects a copied learning record whose filename is not bound to its key", async () => {
   const sandbox = await mkdtemp(join(tmpdir(), "paper-learning-filename-truth-"));
   const directory = join(sandbox, "learning");
