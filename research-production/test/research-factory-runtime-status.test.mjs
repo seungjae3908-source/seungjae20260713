@@ -116,3 +116,19 @@ test('Factory status CLI rejects symlink latest output directory',async()=>{
     },
   );
 });
+
+
+test('adaptive policy record accepts whole-second UTC and rejects impossible approval dates',()=>{
+  const record=createAdaptivePolicyRecordV1({
+    policy:policy(),
+    approvedAt:'2026-09-19T11:00:00Z',
+    approvalEvidenceId:'github-comment:123456',
+  });
+  assert.equal(record.approvedAt,'2026-09-19T11:00:00.000Z');
+
+  assert.throws(()=>createAdaptivePolicyRecordV1({
+    policy:policy(),
+    approvedAt:'2026-02-30T11:00:00Z',
+    approvalEvidenceId:'github-comment:123456',
+  }),/approvedAt must be canonical ISO-8601 UTC/);
+});
