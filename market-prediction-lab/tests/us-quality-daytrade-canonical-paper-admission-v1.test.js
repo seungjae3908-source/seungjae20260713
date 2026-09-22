@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   createUsQualityDaytradeCanonicalPaperAdmissionBundleForCard,
   resolveUsQualityDaytradeCanonicalPaperAdmission,
+  runUsQualityDaytradeCanonicalPaperMarket,
 } from "../src/us-quality-daytrade-canonical-paper-admission-v1.js";
 
 const NOW = 1_800_000_000_000;
@@ -335,4 +336,86 @@ test("factory fits existing admission-bundle injection callback and fail-closes 
       return true;
     },
   );
+});
+
+
+function runtimeResponse(cards = []) {
+  return {
+    universe: {
+      totalCount: cards.length,
+      nextCursor: null,
+      source: "public-live",
+      partial: false,
+      stale: false,
+    },
+    execution: {
+      requestedCount: cards.length,
+      completedCount: cards.length,
+      providerAcceptedCount: cards.length,
+      providerErrorCount: 0,
+      timeoutCount: 0,
+      insufficientDataCount: 0,
+      hardFilterPassCount: cards.length,
+      hardFilterRejectedCount: 0,
+      softCandidateCount: cards.length,
+      filteredByStrategyCount: 0,
+    },
+    cards,
+    failures: [],
+  };
+}
+
+function profitableInput() {
+  return {
+    probabilities: { tp: 0.7, sl: 0.2, expire: 0.1 },
+    returns: { target: 0.05, stop: 0.02, expire: 0 },
+    costs: {
+      status: "READY",
+      costPolicyId: COST_POLICY,
+      components: {
+        commission: 0.0005,
+        tax: 0,
+        spread: 0.0004,
+        slippage: 0.0005,
+        funding: 0,
+        latency: 0.0001,
+        liquidityImpact: 0.0002,
+        partialFillImpact: 0.0001,
+      },
+    },
+    calibration: { status: "READY", sampleSize: 200, tpFirstCount: 140 },
+  };
+}
+
+test("runtime wrapper traverses existing canonical Paper admission and simulation path", async () => {
+  const canonical = validBundle();
+  const result = await runUsQualityDaytradeCanonicalPaperMarket({
+    scanBatch: async () => runtimeResponse([{
+      market: "US_STOCK",
+      symbol: "MRK",
+      signalId: EVIDENCE_ID,
+      signalGrade: "A",
+      paperCandidate: canonical.paperCandidate,
+    }]),
+    candidateBindingForCard: async () => binding(),
+    canonicalBundleForCard: async () => canonical,
+    profitInputForCard: async () => profitableInput(),
+    now: () => NOW,
+  });
+
+  assert.equal(result.market, "US_STOCK");
+  assert.equal(result.admissionBridgeReadyCandidates, 1);
+  assert.equal(result.admissionBlockedCandidates, 0);
+  assert.equal(result.simulationReadyCandidates, 1);
+  assert.equal(result.simulationBlockedCandidates, 0);
+  assert.equal(result.bridgeEligibleCandidates, 1);
+  assert.equal(result.paperBridge.candidates.length, 1);
+  assert.equal(result.paperBridge.candidates[0].paperIdentity.signalId, EVIDENCE_ID);
+  assert.equal(result.paperBridge.candidates[0].paperIdentity.market, "US_STOCK");
+  assert.equal(result.executionAuthority, "NONE");
+  assert.equal(result.liveOrderAllowed, false);
+  assert.equal(result.privateTradingApiAllowed, false);
+  assert.equal(result.orderSubmitted, false);
+  assert.equal(result.exchangeRequestSent, false);
+  assert.equal(result.profitabilityClaimAllowed, false);
 });
