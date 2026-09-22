@@ -36,11 +36,13 @@ test("funding collector paginates backward, deduplicates and respects the reques
     symbol: "BTCUSDT",
     startTime: START + 20 * 8 * HOUR,
     endTime: START + 220 * 8 * HOUR,
+    now: () => START + 300 * 8 * HOUR,
   });
   assert.equal(result.records.length, 201);
   assert.equal(new Set(result.records.map((row) => row.timestamp)).size, result.records.length);
   assert.ok(result.records.every((row) => row.timestamp >= START + 20 * 8 * HOUR));
   assert.ok(result.records.every((row) => row.timestamp <= START + 220 * 8 * HOUR));
+  assert.equal(result.collectedAt, START + 300 * 8 * HOUR);
 });
 
 test("funding collector rejects stalled pagination", async () => {
