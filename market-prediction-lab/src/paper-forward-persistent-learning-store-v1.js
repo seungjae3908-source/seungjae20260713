@@ -84,6 +84,15 @@ async function removeTemp(path) {
   }
 }
 
+async function syncDirectory(path) {
+  const handle = await open(path, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
 export function createFilePaperLearningStore({ directory } = {}) {
   const root = assertDirectory(directory);
 
@@ -113,7 +122,13 @@ export function createFilePaperLearningStore({ directory } = {}) {
           if (error?.code !== "EEXIST") throw error;
         }
       } finally {
-        await removeTemp(tempPath);
+        try {
+          await removeTemp(tempPath);
+        } finally {
+          // A file fsync does not make link/unlink directory-entry changes durable.
+          // Persist the atomic publication boundary before reporting success.
+          await syncDirectory(root);
+        }
       }
 
       if (published) return Object.freeze({ inserted: true });
