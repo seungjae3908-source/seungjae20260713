@@ -52,8 +52,18 @@ async function safeComponentRoot(value){
 function seal(id,payload){
   return Object.freeze({id:String(id),payload:Object.freeze(structuredClone(payload)),digest:hash(payload)});
 }
+async function ensureSafeDirectory(path,name,{recursive=false}={}){
+  try{
+    await mkdir(path,{recursive,mode:0o700});
+  }catch(error){
+    if(error?.code!=='EEXIST') throw error;
+  }
+  const info=await lstat(path);
+  if(!info.isDirectory()||info.isSymbolicLink()) throw new Error(`${name} must be a regular non-symlink directory`);
+  if(resolve(await realpath(path))!==path) throw new Error(`${name} must not traverse symbolic links`);
+  return path;
+}
 async function writeOnce(directory,fileName,value){
-  await mkdir(directory,{recursive:true,mode:0o700});
   const finalPath=join(directory,basename(fileName));
   const temp=join(directory,`.pending-${randomUUID()}`);
   const handle=await open(temp,'wx',0o600);
@@ -113,6 +123,7 @@ export function buildCanonicalDatasetComponentV1({
   splitAssignments,
   metadata,
   observedAtMs,
+  nowMs=Date.now(),
 }={}){
   assertResearchDatasetSnapshotManifestV1(datasetSnapshotManifest);
   const manifest=datasetSnapshotManifest;
@@ -199,6 +210,8 @@ export function buildCanonicalDatasetComponentV1({
     datasetIdentityId:identity.datasetIdentityId,
     rowCount:rows.length,
   }));
+  const now=Number(nowMs);
+  if(!Number.isSafeInteger(now)||now<=0) throw new Error('DATASET_NOW_INVALID');
   const component=Object.freeze({
     id:scope.datasetId,
     identity,
@@ -212,8 +225,8 @@ export function buildCanonicalDatasetComponentV1({
     receipt,
   });
   if(!Number.isSafeInteger(component.observedAtMs)
-    ||component.observedAtMs<identity.actualEnd
-    ||component.observedAtMs>Date.now()+365*24*60*60*1000){
+    ||component.observedAtMs<manifest.scope.endTime
+    ||component.observedAtMs>now){
     throw new Error('DATASET_OBSERVED_AT_INVALID');
   }
   const core=Object.freeze({
@@ -248,7 +261,10 @@ export async function persistCanonicalDatasetComponentV1({
 }={}){
   const root=await safeComponentRoot(componentRoot);
   const built=buildCanonicalDatasetComponentV1(input);
-  const directory=join(root,'dataset-components',built.record.datasetSnapshotHash,built.record.symbol);
+  await ensureSafeDirectory(root,'componentRoot',{recursive:true});
+  const componentsRoot=await ensureSafeDirectory(join(root,'dataset-components'),'dataset-components');
+  const snapshotRoot=await ensureSafeDirectory(join(componentsRoot,built.record.datasetSnapshotHash),'dataset snapshot directory');
+  const directory=await ensureSafeDirectory(join(snapshotRoot,built.record.symbol),'dataset symbol directory');
   const componentWrite=await writeOnce(directory,'dataset.json',built.component);
   const recordWrite=await writeOnce(directory,'record.json',built.record);
   return Object.freeze({
