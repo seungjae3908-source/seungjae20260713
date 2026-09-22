@@ -85,6 +85,7 @@ function settlementExecutionPolicyFromCandidate(candidate) {
       version: execution.costPolicy?.version ?? null,
     },
     entryDataEvidence: structuredClone(execution.dataEvidence ?? null),
+    entryCostProvenance: structuredClone(execution.costProvenance ?? null),
   };
   return deepFreeze(template);
 }
@@ -392,6 +393,8 @@ function positionFromSample(sample, candidate) {
     entryFillPrice: sample.fill.fillPrice,
     lifecycleState: "OPEN",
     accountingEvidence,
+    entryCandidate: deepFreeze(structuredClone(candidate)),
+    entryCostProvenance: deepFreeze(structuredClone(candidate?.execution?.costProvenance ?? null)),
     settlementExecutionPolicy: settlementExecutionPolicyFromCandidate(candidate),
     sample,
   };

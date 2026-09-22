@@ -213,6 +213,14 @@ test("valid #529 bundle becomes a bridge-ready Paper candidate with exact eviden
   assert.equal(resolved.candidate.execution.dataEvidence.dataQuality, "READY");
   assert.equal(resolved.candidate.execution.costPolicy.version, COST_POLICY);
   assert.equal(resolved.candidate.execution.costPolicy.commissionRate, 0.001);
+  assert.deepEqual(
+    resolved.candidate.execution.costProvenance,
+    bundle.executionEvidence.costProvenance,
+  );
+  assert.notEqual(
+    resolved.candidate.execution.costProvenance,
+    bundle.executionEvidence.costProvenance,
+  );
   assert.equal(resolved.candidate.admissionEvidence.crossRuntimeVerified, true);
 });
 
@@ -230,6 +238,11 @@ test("bridge-ready candidate satisfies existing #512 Paper admission contract on
   assert.equal(bridge.submitToPaper, true);
   assert.deepEqual(bridge.blockers, []);
   assert.equal(bridge.candidate.paperIdentity.costPolicyVersion, COST_POLICY);
+  assert.deepEqual(
+    bridge.candidate.execution.costProvenance,
+    validBundle().executionEvidence.costProvenance,
+  );
+  assert.equal(Object.isFrozen(bridge.candidate.execution.costProvenance), true);
   assert.equal(bridge.candidate.executionAuthority, "NONE");
 });
 
