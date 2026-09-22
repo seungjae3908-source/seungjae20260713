@@ -248,10 +248,74 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
         ? 'normal'
         : 'insufficient';
   const staleCount = cards.filter((card) => card.status === 'stale').length;
+  const factory = overview.factory ?? {
+    present: false,
+    status: 'MISSING' as const,
+    generatedAt: null,
+    researchSha: null,
+    firstZero: null,
+    policyPresent: null,
+    policyValid: null,
+    policyDigest: null,
+    readyMarketCount: null,
+    blockedMarketCount: null,
+    readyProfileCount: null,
+    blockedProfileCount: null,
+    runtimeStatus: null,
+    nextFirstZero: null,
+    controlPlaneDigest: null,
+  };
+  const factoryStatus: ResearchProductStatus = !factory.present
+    ? 'unmeasured'
+    : factory.status === 'INVALID' || factory.status === 'BLOCKED_POLICY_INVALID'
+      ? 'error'
+      : factory.status === 'READY_NON_ACTIVATING'
+        ? 'normal'
+        : 'attention';
+  const factoryValue = factory.status === 'READY_NON_ACTIVATING'
+    ? '검증 준비'
+    : factory.status === 'BLOCKED_POLICY_MISSING'
+      ? '정책 미확정'
+      : factory.status === 'BLOCKED_NO_READY_PROFILES'
+        ? '데이터 대기'
+        : factory.status === 'BLOCKED_RUNTIME_BINDINGS'
+          ? '연결 대기'
+          : factory.status === 'BLOCKED_POLICY_INVALID'
+            ? '정책 오류'
+            : factory.status === 'INVALID'
+              ? '근거 오류'
+              : '미측정';
+  const factoryDetail = factory.present
+    ? `시장 ${factory.readyMarketCount ?? '—'}/4 · 프로필 ${factory.readyProfileCount ?? '—'}/12 · ${factory.firstZero ?? 'FIRST_ZERO 미확인'}`
+    : 'Factory runtime status 미수집';
+  const temporal = overview.dataFactory?.temporalCryptoFutures ?? {
+    present: false,
+    status: 'MISSING' as const,
+    generatedAt: null,
+    researchSha: null,
+    failedCount: null,
+    observationCount: null,
+    ledgerDigest: null,
+    results: [],
+  };
+  const temporalStatus: ResearchProductStatus = !temporal.present
+    ? 'unmeasured'
+    : temporal.status === 'INVALID'
+      ? 'error'
+      : temporal.status === 'partial_failure'
+        ? 'attention'
+        : 'accumulating';
+  const temporalDetail = !temporal.present
+    ? 'Temporal evidence 미수집'
+    : temporal.status === 'INVALID'
+      ? 'Temporal evidence 무결성 확인 필요'
+      : `${temporal.results.length}개 심볼 · 실패 ${temporal.failedCount ?? 0}개`;
   return (
     <section id="research-tab-overview" role="tabpanel" aria-labelledby="research-tab-overview-trigger" className="space-y-4" data-testid="research-overview-tab">
-      <section className="grid grid-cols-2 gap-2 lg:grid-cols-5" aria-label="연구 핵심 상태">
+      <section className="grid grid-cols-2 gap-2 lg:grid-cols-7" aria-label="연구 핵심 상태">
         <TopStatus label="연구 시스템" value={statusLabel(systemStatus)} status={systemStatus} detail={overview.state.present ? 'Canonical overview 연결됨' : 'Canonical evidence 미수집'} />
+        <TopStatus label="데이터 팩토리" value={temporal.observationCount == null ? statusLabel(temporalStatus) : `${temporal.observationCount.toLocaleString('ko-KR')}건`} status={temporalStatus} detail={temporalDetail} />
+        <TopStatus label="리서치 팩토리" value={factoryValue} status={factoryStatus} detail={factoryDetail} />
         <TopStatus label="실거래" value="비활성" status="inactive" detail="executionAuthority=NONE" />
         <TopStatus label="모의매매" value={statusLabel(paper.status)} status={paper.status} detail={blockerCopy(paper)} />
         <TopStatus label="수익성 검증" value={overview.profitability.proven ? '충족' : '미검증'} status={overview.profitability.proven ? 'verified' : 'waiting'} detail="미검증은 수익성 없음과 다릅니다" />

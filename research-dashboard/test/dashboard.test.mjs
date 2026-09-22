@@ -150,6 +150,65 @@ async function fixture() {
     concurrency: 1, taskCount: 2, successCount: 2, blockedDataCount: 0, failedCount: 0,
     results: [{ id: 'paper-forward', status: 'success', durationMs: 1000 }, { id: 'shadow-forward', status: 'success', durationMs: 2000 }],
   }));
+  await writeFile(join(root, 'latest', 'temporal-crypto-futures.json'), JSON.stringify({
+    schemaVersion: 'crypto-futures-temporal-public-collection-v1',
+    generatedAt: now,
+    researchSha: 'a'.repeat(40),
+    status: 'complete',
+    failedCount: 0,
+    results: [
+      { symbol: 'BTCUSDT', status: 'success', observedCount: 3, appendedCount: 2 },
+      { symbol: 'ETHUSDT', status: 'success', observedCount: 3, appendedCount: 3 },
+    ],
+    observationCount: 42,
+    ledgerDigest: 'c'.repeat(64),
+    safety: {
+      publicDataOnly: true,
+      privateApi: false,
+      liveTrading: false,
+      realOrders: false,
+      historicalCurrentValueBackfill: false,
+      executionAuthority: 'NONE',
+    },
+  }));
+  await writeFile(join(root, 'latest', 'research-factory.json'), JSON.stringify({
+    schemaVersion: 1,
+    contract: 'research-factory-runtime-status/v1',
+    generatedAt: new Date(now).toISOString(),
+    researchSha: 'a'.repeat(40),
+    status: 'BLOCKED_POLICY_MISSING',
+    firstZero: 'HUMAN_APPROVED_ADAPTIVE_POLICY_MISSING',
+    policy: {
+      present: false,
+      valid: false,
+      policyDigest: null,
+      approvalEvidenceId: null,
+      approvedAt: null,
+    },
+    dataFactory: { readyMarketCount: 0, blockedMarketCount: 4 },
+    canonicalAdaptive: {
+      readyProfileCount: null,
+      blockedProfileCount: null,
+      runtimeStatus: null,
+      nextFirstZero: 'HUMAN_APPROVED_ADAPTIVE_POLICY_MISSING',
+    },
+    controlPlaneDigest: 'd'.repeat(64),
+    diagnostic: null,
+    safety: {
+      runtimeExecutionAttempted: false,
+      runtimeActivationAllowed: false,
+      scheduleMutationAllowed: false,
+      deploymentAllowed: false,
+      databaseMutationAllowed: false,
+      secretMutationAllowed: false,
+      liveTrading: false,
+      autoTrading: false,
+      privateTradingApi: false,
+      realOrder: false,
+      profitabilityClaim: false,
+      executionAuthority: 'NONE',
+    },
+  }));
   await writeFile(join(root, 'forward', 'paper', 'status', 'runtime-status.json'), JSON.stringify({
     status: 'running', scheduleActive: true, allProvidersReady: true,
     publicForwardEvidenceAccumulating: true, paperTradeOutcomeAccumulating: true,
@@ -225,7 +284,88 @@ test('overview exposes only summarized read-only research evidence', async () =>
   assert.equal(overview.paper.candidatePerformance.Settlement_N, 1);
   assert.equal(overview.paper.candidatePerformance.Net_PnL, null);
   assert.equal(overview.paper.candidatePerformance.PROFITABILITY_PROVEN, false);
+  assert.equal(overview.dataFactory.temporalCryptoFutures.present, true);
+  assert.equal(overview.dataFactory.temporalCryptoFutures.status, 'complete');
+  assert.equal(overview.dataFactory.temporalCryptoFutures.observationCount, 42);
+  assert.equal(overview.dataFactory.temporalCryptoFutures.failedCount, 0);
+  assert.equal(overview.dataFactory.temporalCryptoFutures.results[0].symbol, 'BTCUSDT');
+  assert.equal(Object.hasOwn(overview.dataFactory.temporalCryptoFutures.results[0], 'error'), false);
+  assert.equal(overview.factory.present, true);
+  assert.equal(overview.factory.status, 'BLOCKED_POLICY_MISSING');
+  assert.equal(overview.factory.firstZero, 'HUMAN_APPROVED_ADAPTIVE_POLICY_MISSING');
+  assert.equal(overview.factory.policyPresent, false);
+  assert.equal(overview.factory.readyMarketCount, 0);
+  assert.equal(overview.factory.blockedMarketCount, 4);
+  assert.equal(overview.factory.readyProfileCount, null);
+  assert.equal(overview.factory.controlPlaneDigest, 'd'.repeat(64));
   assert.equal(overview.profitability.proven, false);
+});
+
+test('missing Factory runtime summary stays MISSING without fabricating policy or readiness counts', async () => {
+  const root = await fixture();
+  await rm(join(root, 'latest', 'research-factory.json'));
+  const overview = await buildResearchOverview({ stateRoot: root });
+  assert.equal(overview.factory.present, false);
+  assert.equal(overview.factory.status, 'MISSING');
+  assert.equal(overview.factory.policyPresent, null);
+  assert.equal(overview.factory.readyMarketCount, null);
+  assert.equal(overview.factory.readyProfileCount, null);
+});
+
+test('unsafe Factory runtime status fails closed and leaks no diagnostic text or partial counts', async () => {
+  const root = await fixture();
+  const path = join(root, 'latest', 'research-factory.json');
+  const status = JSON.parse(await readFile(path, 'utf8'));
+  status.safety.runtimeExecutionAttempted = true;
+  status.diagnostic = 'secret internal runtime diagnostic';
+  await writeFile(path, JSON.stringify(status));
+  const overview = await buildResearchOverview({ stateRoot: root });
+  assert.equal(overview.research.status, 'attention');
+  assert.equal(overview.factory.present, true);
+  assert.equal(overview.factory.status, 'INVALID');
+  assert.equal(overview.factory.readyMarketCount, null);
+  assert.equal(overview.factory.controlPlaneDigest, null);
+  assert.equal(JSON.stringify(overview).includes('secret internal runtime diagnostic'), false);
+});
+
+test('missing temporal collector summary stays explicit MISSING without inventing zero observations', async () => {
+  const root = await fixture();
+  await rm(join(root, 'latest', 'temporal-crypto-futures.json'));
+  const overview = await buildResearchOverview({ stateRoot: root });
+  assert.equal(overview.dataFactory.temporalCryptoFutures.present, false);
+  assert.equal(overview.dataFactory.temporalCryptoFutures.status, 'MISSING');
+  assert.equal(overview.dataFactory.temporalCryptoFutures.observationCount, null);
+  assert.equal(overview.dataFactory.temporalCryptoFutures.failedCount, null);
+});
+
+test('unsafe or inconsistent temporal summary fails closed and leaks no provider error text', async () => {
+  const root = await fixture();
+  const path = join(root, 'latest', 'temporal-crypto-futures.json');
+  const summary = JSON.parse(await readFile(path, 'utf8'));
+  summary.safety.privateApi = true;
+  summary.results[0].error = 'secret provider diagnostic';
+  await writeFile(path, JSON.stringify(summary));
+  const overview = await buildResearchOverview({ stateRoot: root });
+  assert.equal(overview.research.status, 'attention');
+  assert.equal(overview.dataFactory.temporalCryptoFutures.present, true);
+  assert.equal(overview.dataFactory.temporalCryptoFutures.status, 'INVALID');
+  assert.equal(overview.dataFactory.temporalCryptoFutures.observationCount, null);
+  assert.equal(JSON.stringify(overview).includes('secret provider diagnostic'), false);
+});
+
+test('partial temporal symbol failure is visible as attention without exposing raw errors', async () => {
+  const root = await fixture();
+  const path = join(root, 'latest', 'temporal-crypto-futures.json');
+  const summary = JSON.parse(await readFile(path, 'utf8'));
+  summary.status = 'partial_failure';
+  summary.failedCount = 1;
+  summary.results[1] = { symbol: 'ETHUSDT', status: 'failed', observedCount: 0, appendedCount: 0, error: 'temporary upstream failure' };
+  await writeFile(path, JSON.stringify(summary));
+  const overview = await buildResearchOverview({ stateRoot: root });
+  assert.equal(overview.research.status, 'attention');
+  assert.equal(overview.dataFactory.temporalCryptoFutures.status, 'partial_failure');
+  assert.equal(overview.dataFactory.temporalCryptoFutures.failedCount, 1);
+  assert.equal(JSON.stringify(overview).includes('temporary upstream failure'), false);
 });
 
 test('missing candidate performance remains UNKNOWN rather than borrowing market N or ledger totals', async () => {
