@@ -4452,7 +4452,10 @@ function createCryptoSignalScannerService(providers = defaultProviders) {
         }
         throw error instanceof CryptoScannerProviderError ? error : new CryptoScannerProviderError(error instanceof Error ? error.message : "CRYPTO_UNIVERSE_UNAVAILABLE");
       }
-      const batchSize = Math.max(5, Math.min(MAX_BATCH_SIZE, Math.floor(request.batchSize) || 24));
+      const requestedBatchSize = Math.floor(request.batchSize) || 24;
+      const forwardPublicSpot = request.market === "spot" && request.memberId === "forward-observer-public-only";
+      const effectiveMaxBatchSize = forwardPublicSpot ? 5 : MAX_BATCH_SIZE;
+      const batchSize = Math.max(5, Math.min(effectiveMaxBatchSize, requestedBatchSize));
       const cursor = Math.max(0, Math.min(universe.rows.length, Math.floor(request.cursor) || 0));
       const batch = universe.rows.slice(cursor, cursor + batchSize);
       const nextCursor = cursor + batch.length < universe.rows.length ? cursor + batch.length : null;
