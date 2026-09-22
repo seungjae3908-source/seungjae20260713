@@ -13,6 +13,9 @@ import {
   BITGET_TIMEFRAME_MS,
 } from '../../market-prediction-lab/src/bitget-candle-collector.js';
 import {
+  createTemporalDerivativesProvider,
+} from '../../market-prediction-lab/src/derivatives-history.js';
+import {
   evaluateTransactionCostEvidence,
 } from '../../market-intelligence-sidecar/src/transaction-cost-evidence.mjs';
 import {
@@ -306,6 +309,185 @@ export function buildClosedCandleAdaptiveReceiptV1({
     profileId:profile.profileId,
     sourceDigest,
     symbolCount:normalized.length,
+    receipt,
+    executionAuthority:'NONE',
+  });
+}
+ 
+
+function normalizeReferenceCollections(collections,manifest,profile,priceType){
+  if(!Array.isArray(collections)) throw new TypeError(`${priceType} collections must be an array`);
+  const bySymbol=new Map();
+  for(const raw of collections){
+    const collection=validateClosedCandleCollection(raw,manifest,profile);
+    if(collection.priceType!==priceType) throw new Error('REFERENCE_PRICE_TYPE_MISMATCH');
+    if(bySymbol.has(collection.symbol)) throw new Error('REFERENCE_PRICE_DUPLICATE_SYMBOL');
+    bySymbol.set(collection.symbol,collection);
+  }
+  if(bySymbol.size!==manifest.scope.symbols.length
+    ||manifest.scope.symbols.some(symbol=>!bySymbol.has(symbol))){
+    throw new Error('REFERENCE_PRICE_SYMBOL_COVERAGE_INCOMPLETE');
+  }
+  return manifest.scope.symbols.map(symbol=>bySymbol.get(symbol));
+}
+
+export function buildBitgetReferencePriceAdaptiveReceiptsV1({
+  datasetManifest,
+  markCollections=[],
+  indexCollections=[],
+}={}){
+  const profile=profileForManifest(datasetManifest);
+  if(profile.market!=='CRYPTO_FUTURES') throw new Error('REFERENCE_PRICE_FUTURES_PROFILE_REQUIRED');
+  for(const requirement of ['MARK_PRICE','INDEX_PRICE','BASIS']){
+    if(!profile.requiredEvidence.includes(requirement)) throw new Error('REFERENCE_PRICE_REQUIREMENT_NOT_PRESENT');
+  }
+  const marks=normalizeReferenceCollections(markCollections,datasetManifest,profile,'mark');
+  const indexes=normalizeReferenceCollections(indexCollections,datasetManifest,profile,'index');
+  const markDigest=digest(marks.map(row=>({
+    provider:row.provider,symbol:row.symbol,timeframe:row.timeframe,productType:row.productType??null,candles:row.candles,
+  })));
+  const indexDigest=digest(indexes.map(row=>({
+    provider:row.provider,symbol:row.symbol,timeframe:row.timeframe,productType:row.productType??null,candles:row.candles,
+  })));
+  const basis=[];
+  for(let symbolIndex=0;symbolIndex<datasetManifest.scope.symbols.length;symbolIndex+=1){
+    const symbol=datasetManifest.scope.symbols[symbolIndex];
+    const mark=marks[symbolIndex];
+    const index=indexes[symbolIndex];
+    const rows=[];
+    for(let candleIndex=0;candleIndex<mark.candles.length;candleIndex+=1){
+      const markCandle=mark.candles[candleIndex];
+      const indexCandle=index.candles[candleIndex];
+      if(markCandle.timestamp!==indexCandle.timestamp||indexCandle.close<=0){
+        throw new Error('REFERENCE_PRICE_TIMESTAMP_OR_INDEX_MISMATCH');
+      }
+      const value=(markCandle.close-indexCandle.close)/indexCandle.close;
+      if(!Number.isFinite(value)) throw new Error('REFERENCE_BASIS_INVALID');
+      rows.push(Object.freeze({timestamp:markCandle.timestamp,value}));
+    }
+    basis.push(Object.freeze({symbol,rows:Object.freeze(rows)}));
+  }
+  const basisDigest=digest(basis);
+  const observedAt=new Date(Math.max(
+    ...marks.map(row=>row.collectedAt),
+    ...indexes.map(row=>row.collectedAt),
+  )).toISOString();
+  const receipts=[
+    createAdaptiveEvidenceReceiptV1({
+      profileId:profile.profileId,
+      requirement:'MARK_PRICE',
+      evidenceId:`bitget-mark-history:${markDigest}`,
+      observedAt,
+      datasetSnapshotHash:datasetManifest.datasetSnapshotHash,
+      sourceDigest:markDigest,
+    }),
+    createAdaptiveEvidenceReceiptV1({
+      profileId:profile.profileId,
+      requirement:'INDEX_PRICE',
+      evidenceId:`bitget-index-history:${indexDigest}`,
+      observedAt,
+      datasetSnapshotHash:datasetManifest.datasetSnapshotHash,
+      sourceDigest:indexDigest,
+    }),
+    createAdaptiveEvidenceReceiptV1({
+      profileId:profile.profileId,
+      requirement:'BASIS',
+      evidenceId:`bitget-mark-index-basis:${basisDigest}`,
+      observedAt,
+      datasetSnapshotHash:datasetManifest.datasetSnapshotHash,
+      sourceDigest:basisDigest,
+    }),
+  ];
+  return Object.freeze({
+    schemaVersion:1,
+    contract:RESEARCH_CANONICAL_RECEIPT_PRODUCERS_CONTRACT_V1,
+    kind:'BITGET_REFERENCE_PRICE_HISTORY',
+    profileId:profile.profileId,
+    symbolCount:datasetManifest.scope.symbols.length,
+    markDigest,
+    indexDigest,
+    basisDigest,
+    receipts:Object.freeze(receipts),
+    executionAuthority:'NONE',
+  });
+}
+
+function normalizeFundingHistories(histories,manifest,profile,maxAgeMs){
+  if(!Array.isArray(histories)) throw new TypeError('fundingHistories must be an array');
+  const bySymbol=new Map();
+  for(const history of histories){
+    if(!history||typeof history!=='object'||Array.isArray(history)
+      ||history.schemaVersion!==1
+      ||history.provider!=='bitget-public-v2'
+      ||typeof history.symbol!=='string'
+      ||!manifest.scope.symbols.includes(history.symbol)
+      ||!Number.isSafeInteger(history.startTime)
+      ||history.startTime>manifest.scope.startTime-maxAgeMs
+      ||!Number.isSafeInteger(history.endTime)
+      ||history.endTime<manifest.scope.endTime
+      ||!Number.isSafeInteger(history.collectedAt)
+      ||history.collectedAt<manifest.scope.endTime
+      ||history.exhausted!==true
+      ||!Array.isArray(history.records)){
+      throw new Error('FUNDING_HISTORY_COLLECTION_INVALID');
+    }
+    if(bySymbol.has(history.symbol)) throw new Error('FUNDING_HISTORY_DUPLICATE_SYMBOL');
+    const provider=createTemporalDerivativesProvider({
+      fundingHistory:history.records,
+      fundingMaxAgeMs:maxAgeMs,
+    });
+    const interval=BITGET_TIMEFRAME_MS[profile.timeframe];
+    for(let anchor=manifest.scope.startTime;anchor<manifest.scope.endTime;anchor+=interval){
+      const row=provider({anchorTimestamp:anchor});
+      if(row.featureAvailability?.fundingKnown!==true){
+        throw new Error('FUNDING_HISTORY_SCOPE_COVERAGE_INCOMPLETE');
+      }
+    }
+    bySymbol.set(history.symbol,history);
+  }
+  if(bySymbol.size!==manifest.scope.symbols.length
+    ||manifest.scope.symbols.some(symbol=>!bySymbol.has(symbol))){
+    throw new Error('FUNDING_HISTORY_SYMBOL_COVERAGE_INCOMPLETE');
+  }
+  return manifest.scope.symbols.map(symbol=>bySymbol.get(symbol));
+}
+
+export function buildBitgetFundingAdaptiveReceiptV1({
+  datasetManifest,
+  fundingHistories=[],
+  fundingMaxAgeMs=12*60*60*1000,
+}={}){
+  const profile=profileForManifest(datasetManifest);
+  if(profile.market!=='CRYPTO_FUTURES'||!profile.requiredEvidence.includes('FUNDING')){
+    throw new Error('FUNDING_FUTURES_PROFILE_REQUIRED');
+  }
+  if(!Number.isSafeInteger(fundingMaxAgeMs)||fundingMaxAgeMs<=0){
+    throw new TypeError('fundingMaxAgeMs invalid');
+  }
+  const histories=normalizeFundingHistories(fundingHistories,datasetManifest,profile,fundingMaxAgeMs);
+  const sourceDigest=digest(histories.map(history=>({
+    symbol:history.symbol,
+    productType:history.productType??null,
+    startTime:history.startTime,
+    endTime:history.endTime,
+    records:history.records,
+  })));
+  const observedAt=new Date(Math.max(...histories.map(row=>row.collectedAt))).toISOString();
+  const receipt=createAdaptiveEvidenceReceiptV1({
+    profileId:profile.profileId,
+    requirement:'FUNDING',
+    evidenceId:`bitget-funding-history:${sourceDigest}`,
+    observedAt,
+    datasetSnapshotHash:datasetManifest.datasetSnapshotHash,
+    sourceDigest,
+  });
+  return Object.freeze({
+    schemaVersion:1,
+    contract:RESEARCH_CANONICAL_RECEIPT_PRODUCERS_CONTRACT_V1,
+    kind:'BITGET_FUNDING_HISTORY',
+    profileId:profile.profileId,
+    symbolCount:histories.length,
+    sourceDigest,
     receipt,
     executionAuthority:'NONE',
   });
