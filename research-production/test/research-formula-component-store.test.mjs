@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -79,5 +79,43 @@ test('existing component mutation causes conflict instead of overwrite',async()=
   await assert.rejects(
     exportResearchFormulaComponentsV1({componentRoot:root,candidate:f.candidate}),
     /CONTENT_CONFLICT/,
+  );
+});
+
+
+test('relative and symlink component roots are rejected',async()=>{
+  const f=fixture();
+  await assert.rejects(
+    exportResearchFormulaComponentsV1({
+      componentRoot:'relative-formula-root',
+      candidate:f.candidate,
+    }),
+    /componentRoot must be absolute/,
+  );
+
+  const target=await mkdtemp(join(tmpdir(),'formula-component-target-'));
+  const holder=await mkdtemp(join(tmpdir(),'formula-component-holder-'));
+  const linkRoot=join(holder,'formula-link');
+  await symlink(target,linkRoot,'dir');
+  await assert.rejects(
+    exportResearchFormulaComponentsV1({
+      componentRoot:linkRoot,
+      candidate:f.candidate,
+    }),
+    /componentRoot must not contain symbolic links/,
+  );
+});
+
+test('formula-components symlink output is rejected',async()=>{
+  const f=fixture();
+  const root=await mkdtemp(join(tmpdir(),'formula-component-safe-root-'));
+  const outside=await mkdtemp(join(tmpdir(),'formula-component-outside-'));
+  await symlink(outside,join(root,'formula-components'),'dir');
+  await assert.rejects(
+    exportResearchFormulaComponentsV1({
+      componentRoot:root,
+      candidate:f.candidate,
+    }),
+    /formula-components must be a regular non-symlink directory|must not traverse symbolic links/,
   );
 });
