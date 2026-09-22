@@ -18,10 +18,13 @@ function digest(value) {
 function exactIso(value, name) {
   const text = String(value ?? '');
   const date = new Date(text);
-  if (!Number.isFinite(date.getTime()) || date.toISOString() !== text) {
+  const normalized = text.includes('.') ? text : text.replace(/Z$/u, '.000Z');
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(text)
+    || !Number.isFinite(date.getTime())
+    || date.toISOString() !== normalized) {
     throw new TypeError(`${name} must be canonical ISO-8601 UTC`);
   }
-  return text;
+  return date.toISOString();
 }
 
 function approvalEvidenceId(value) {
