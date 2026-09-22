@@ -76,6 +76,7 @@ export async function collectFundingRateHistory({
   maxPages = DEFAULT_MAX_PAGES,
   endpoint = "/api/v2/mix/market/history-fund-rate",
   onPage,
+  now = () => Date.now(),
 }) {
   if (!client || typeof client.get !== "function") throw new TypeError("client.get is required");
   assertSymbol(symbol);
@@ -121,6 +122,7 @@ export async function collectFundingRateHistory({
     productType,
     startTime,
     endTime,
+    collectedAt: now(),
     exhausted,
     records: Object.freeze(records),
   });
