@@ -18,7 +18,7 @@ function requiredArg(name: string): string {
 }
 
 try{
-  const inputRoot=resolve(requiredEnv('RESEARCH_CANONICAL_BUNDLE_INPUT_ROOT'));
+  const inputRoot=requiredEnv('RESEARCH_CANONICAL_BUNDLE_INPUT_ROOT');
   const binding=JSON.parse(await readFile(resolve(requiredArg('--binding')),'utf8'));
   const result=await buildCanonicalBundleComponentReadinessV1({inputRoot,binding});
   const outputIndex=process.argv.indexOf('--output');
