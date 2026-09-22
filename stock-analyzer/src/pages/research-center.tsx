@@ -278,13 +278,17 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
       ? '정책 미확정'
       : factory.status === 'BLOCKED_NO_READY_PROFILES'
         ? '데이터 대기'
-        : factory.status === 'BLOCKED_RUNTIME_BINDINGS'
-          ? '연결 대기'
-          : factory.status === 'BLOCKED_POLICY_INVALID'
-            ? '정책 오류'
-            : factory.status === 'INVALID'
-              ? '근거 오류'
-              : '미측정';
+        : factory.status === 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_MISSING'
+          ? '개발 진단 필요'
+          : factory.status === 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_INVALID'
+            ? '개발 진단 오류'
+            : factory.status === 'BLOCKED_RUNTIME_BINDINGS'
+              ? '연결 대기'
+              : factory.status === 'BLOCKED_POLICY_INVALID'
+                ? '정책 오류'
+                : factory.status === 'INVALID'
+                  ? '근거 오류'
+                  : '미측정';
   const factoryDetail = factory.present
     ? `시장 ${factory.readyMarketCount ?? '—'}/4 · 프로필 ${factory.readyProfileCount ?? '—'}/12 · ${factory.firstZero ?? 'FIRST_ZERO 미확인'}`
     : 'Factory runtime status 미수집';
