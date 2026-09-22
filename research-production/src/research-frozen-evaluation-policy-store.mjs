@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { link, lstat, mkdir, open, readFile, realpath, unlink } from 'node:fs/promises';
-import { basename, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 import {
   buildFrozenResearchEvaluationPoliciesV1,
@@ -11,12 +11,40 @@ export const RESEARCH_FROZEN_EVALUATION_POLICY_STORE_CONTRACT_V1 =
   'research-frozen-evaluation-policy-store/v1';
 
 function absolute(value,name){
-  const path=resolve(String(value??''));
-  if(!isAbsolute(path)) throw new TypeError(`${name} must be absolute`);
+  const raw=String(value??'').trim();
+  if(!raw||!isAbsolute(raw)) throw new TypeError(`${name} must be absolute`);
+  return resolve(raw);
+}
+async function safeComponentRoot(value){
+  const root=absolute(value,'componentRoot');
+  let probe=root;
+  while(true){
+    try{
+      const info=await lstat(probe);
+      if(info.isSymbolicLink()) throw new Error('componentRoot must not contain symbolic links');
+      if(resolve(await realpath(probe))!==probe) throw new Error('componentRoot must not contain symbolic links');
+      break;
+    }catch(error){
+      if(error?.code!=='ENOENT') throw error;
+      const parent=dirname(probe);
+      if(parent===probe) throw error;
+      probe=parent;
+    }
+  }
+  return root;
+}
+async function ensureSafeDirectory(path,name,{recursive=false}={}){
+  try{
+    await mkdir(path,{recursive,mode:0o700});
+  }catch(error){
+    if(error?.code!=='EEXIST') throw error;
+  }
+  const info=await lstat(path);
+  if(!info.isDirectory()||info.isSymbolicLink()) throw new Error(`${name} must be a regular non-symlink directory`);
+  if(resolve(await realpath(path))!==path) throw new Error(`${name} must not traverse symbolic links`);
   return path;
 }
 async function writeOnce(directory,fileName,value){
-  await mkdir(directory,{recursive:true,mode:0o700});
   const finalPath=join(directory,basename(fileName));
   const temp=join(directory,`.pending-${randomUUID()}`);
   const bytes=`${JSON.stringify(value,null,2)}\n`;
@@ -48,9 +76,11 @@ export async function persistFrozenResearchEvaluationPoliciesV1({
   componentRoot,
   input,
 }={}){
-  const root=absolute(componentRoot,'componentRoot');
+  const root=await safeComponentRoot(componentRoot);
   const policies=buildFrozenResearchEvaluationPoliciesV1(input);
-  const directory=join(root,'evaluation-policies',policies.policySetDigest);
+  await ensureSafeDirectory(root,'componentRoot',{recursive:true});
+  const policiesRoot=await ensureSafeDirectory(join(root,'evaluation-policies'),'evaluation-policies');
+  const directory=await ensureSafeDirectory(join(policiesRoot,policies.policySetDigest),'evaluation policy set directory');
   const entries=[
     ['splitPolicy','splitPolicy.json',policies.splitPolicy],
     ['splitReceipt','splitReceipt.json',policies.splitReceipt],
