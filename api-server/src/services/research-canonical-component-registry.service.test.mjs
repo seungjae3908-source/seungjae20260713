@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -170,5 +170,61 @@ test('payload outside input root and invalid binding identity are refused',async
   }finally{
     await rm(f.root,{recursive:true,force:true});
     await rm(outsideRoot,{recursive:true,force:true});
+  }
+});
+
+
+test('relative root and payload paths fail closed',async()=>{
+  const f=await fixture();
+  try{
+    const path=join(f.sourceDir,'dsl.json');
+    await writeFile(path,JSON.stringify({value:1}));
+    await assert.rejects(
+      registerCanonicalBundleComponentV1({
+        inputRoot:'relative-registry-root',
+        binding,
+        key:'dsl',
+        ownerRef:'#550',
+        payloadPath:path,
+      }),
+      /MUST_BE_ABSOLUTE/,
+    );
+    await assert.rejects(
+      registerCanonicalBundleComponentV1({
+        inputRoot:f.root,
+        binding,
+        key:'dsl',
+        ownerRef:'#550',
+        payloadPath:'relative-payload.json',
+      }),
+      /PAYLOAD_PATH_MUST_BE_ABSOLUTE/,
+    );
+  }finally{
+    await rm(f.root,{recursive:true,force:true});
+  }
+});
+
+test('registry and registered-components symlink outputs are rejected before write',async()=>{
+  for(const unsafeName of ['registry','registered-components']){
+    const f=await fixture();
+    const outside=await mkdtemp(join(tmpdir(),'canonical-component-registry-outside-'));
+    try{
+      const path=join(f.sourceDir,'dsl.json');
+      await writeFile(path,JSON.stringify({value:1}));
+      await symlink(outside,join(f.root,unsafeName),'dir');
+      await assert.rejects(
+        registerCanonicalBundleComponentV1({
+          inputRoot:f.root,
+          binding,
+          key:'dsl',
+          ownerRef:'#550',
+          payloadPath:path,
+        }),
+        /COMPONENT_(REGISTRY_ROOT|PAYLOAD_ROOT)_UNSAFE/,
+      );
+    }finally{
+      await rm(f.root,{recursive:true,force:true});
+      await rm(outside,{recursive:true,force:true});
+    }
   }
 });
