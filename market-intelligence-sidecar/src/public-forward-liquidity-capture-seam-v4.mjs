@@ -88,6 +88,18 @@ export async function collectBitgetForwardLiquidityObservationBatchV4({
   if (!Array.isArray(postObservationDelaysMs)) {
     throw new Error('V4_POST_OBSERVATION_DELAYS_INVALID');
   }
+  const postDelays = postObservationDelaysMs.map((rawDelay) =>
+    finiteNonNegative(rawDelay, 'V4_POST_OBSERVATION_DELAY_INVALID'));
+  const frozen =
+    PUBLIC_FORWARD_LIQUIDITY_V4_TECHNICAL_IDENTITY_PROPOSAL.captureParameterPolicy;
+  const frozenPolicyMatches =
+    eventDelay === frozen.eventObservationDelayMs
+    && maxBookAge === frozen.maxPreEventBookAgeMs
+    && postDelays.length === frozen.postObservationDelaysMs.length
+    && postDelays.every((delayMs, index) => delayMs === frozen.postObservationDelaysMs[index]);
+  if (!frozenPolicyMatches) {
+    throw new Error('V4_FROZEN_CAPTURE_POLICY_MISMATCH');
+  }
 
   const preEventBook = await fetchOrderBookFrame(symbol);
   const maxTradeFrameFetchN = deriveMaxTradeFrameFetchN(eventDelay, maxBookAge);
@@ -110,8 +122,7 @@ export async function collectBitgetForwardLiquidityObservationBatchV4({
   if (!tradeFrame) throw new Error('V4_PUBLIC_TRADE_FRAME_MISSING');
 
   const postEventBooks = [];
-  for (const rawDelay of postObservationDelaysMs) {
-    const delayMs = finiteNonNegative(rawDelay, 'V4_POST_OBSERVATION_DELAY_INVALID');
+  for (const delayMs of postDelays) {
     if (delayMs > 0) await sleep(delayMs);
     postEventBooks.push(await fetchOrderBookFrame(symbol));
   }
@@ -132,6 +143,7 @@ export async function collectBitgetForwardLiquidityObservationBatchV4({
       policy:
         PUBLIC_FORWARD_LIQUIDITY_V4_TECHNICAL_IDENTITY_PROPOSAL.tradeFrameSelectionPolicy,
       eventObservationDelayMs: eventDelay,
+      postObservationDelaysMs: Object.freeze([...postDelays]),
       maxPreEventBookAgeMs: maxBookAge,
       maxTradeFrameFetchN,
       tradeFrameFetchN,
