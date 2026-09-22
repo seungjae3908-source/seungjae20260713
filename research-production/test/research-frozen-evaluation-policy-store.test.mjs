@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -70,5 +70,41 @@ test('tampered existing component conflicts instead of overwrite',async()=>{
   await assert.rejects(
     persistFrozenResearchEvaluationPoliciesV1({componentRoot:root,input:input()}),
     /CONTENT_CONFLICT/,
+  );
+});
+
+
+test('relative and symlink component roots are rejected',async()=>{
+  await assert.rejects(
+    persistFrozenResearchEvaluationPoliciesV1({
+      componentRoot:'relative-policy-root',
+      input:input(),
+    }),
+    /componentRoot must be absolute/,
+  );
+
+  const target=await mkdtemp(join(tmpdir(),'evaluation-policy-target-'));
+  const holder=await mkdtemp(join(tmpdir(),'evaluation-policy-holder-'));
+  const linkRoot=join(holder,'policy-link');
+  await symlink(target,linkRoot,'dir');
+  await assert.rejects(
+    persistFrozenResearchEvaluationPoliciesV1({
+      componentRoot:linkRoot,
+      input:input(),
+    }),
+    /componentRoot must not contain symbolic links/,
+  );
+});
+
+test('evaluation-policies symlink output is rejected',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'evaluation-policy-safe-root-'));
+  const outside=await mkdtemp(join(tmpdir(),'evaluation-policy-outside-'));
+  await symlink(outside,join(root,'evaluation-policies'),'dir');
+  await assert.rejects(
+    persistFrozenResearchEvaluationPoliciesV1({
+      componentRoot:root,
+      input:input(),
+    }),
+    /evaluation-policies must be a regular non-symlink directory|must not traverse symbolic links/,
   );
 });
