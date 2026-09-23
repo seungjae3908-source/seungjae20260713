@@ -56,6 +56,7 @@ test('stale established stream stays on REST fallback across recreated default c
         return frames.length;
       },
       cancelAnimationFrameFn: () => {},
+      onTrade: () => {},
       onStatus: (status, reason) => firstStatuses.push({ status, reason }),
     });
 
