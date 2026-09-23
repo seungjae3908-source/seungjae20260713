@@ -8,7 +8,9 @@ test('unified journal never turns unavailable canonical costs into numeric zero'
   expect(types).toContain('fees:number|null; tax:number|null; costEvidence:UnifiedJournalCostEvidence; netPnl:number|null');
   expect(types).toContain('maximumConsecutiveLosses:number|null');
   expect(panel).toContain("return value == null ? 'N/A'");
-  expect(panel).toContain("trade.costEvidence.status !== 'READY'");
+  expect(panel).toContain("trade.costEvidence?.status !== 'READY'");
+  expect(panel).toContain('const totalCost = trade.fees + trade.tax');
+  expect(panel).toContain('return money(totalCost, trade.currency)');
   expect(panel).toContain('value={costMoney(trade)}');
   expect(panel).toContain('value={metric(data.analytics.maximumConsecutiveLosses)}');
   expect(panel).not.toContain('money(trade.fees + trade.tax');
