@@ -9,6 +9,7 @@ import {
 import {
   PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY,
   PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_COMPONENT_AUTHORITIES,
+  PUBLIC_FORWARD_PARTIAL_FILL_V3_DRAFT_COHORT_TEMPLATE,
   PUBLIC_FORWARD_PARTIAL_FILL_V3_SAFETY,
   buildPublicForwardPartialFillV3ModeledObservation,
   buildPublicForwardPartialFillV3ProspectiveCohort,
@@ -142,6 +143,48 @@ function observation(
     ...overrides,
   };
 }
+
+test('defines a non-active V3 prospective cohort Draft without changing frozen V2 criteria', () => {
+  const draft = PUBLIC_FORWARD_PARTIAL_FILL_V3_DRAFT_COHORT_TEMPLATE;
+  const authority = PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY;
+  assert.equal(draft.kind, 'DRAFT_PROSPECTIVE_PUBLIC_ONLY_PARTIAL_FILL_V3_COHORT');
+  assert.equal(draft.freezeStatus, 'NOT_FROZEN');
+  assert.equal(draft.cohortFrozenAtMs, null);
+  assert.equal(draft.effectiveStartMs, null);
+  assert.equal(draft.effectiveStartRule, 'STRICTLY_AFTER_EXPLICIT_COHORT_FREEZE');
+  assert.equal(draft.scheduleTrigger, 'NONE');
+  assert.equal(draft.scheduleActivationAllowed, false);
+  assert.equal(draft.predecessorV2PolicyDigest, authority.policyDigest);
+  assert.equal(draft.predecessorV2CohortDigest, authority.cohortDigest);
+  assert.deepEqual(draft.inheritedNumericCriteria, {
+    totalSlotN: 1024,
+    trainSlotN: 512,
+    validationSlotN: 256,
+    oosSlotN: 256,
+    perScopeEffectiveIndependentMinimum: 178,
+    scopeCellCount: 4,
+    mechanicalFloorEffectiveIndependent: 712,
+  });
+  assert.equal(draft.actualExecutionTruthStatus, 'UNKNOWN_UNTIL_OBSERVED');
+  assert.equal(draft.modeledEvidenceMayBecomeActualEvidence, false);
+  assert.equal(draft.economicCreditAllowed, false);
+  assert.equal(draft.profitabilityCredit, 0);
+  assert.equal(draft.fullCostReady, false);
+  assert.equal(draft.evidenceComplete, 0);
+  assert.equal(draft.executionAuthority, 'NONE');
+  assert.equal(Object.isFrozen(draft), true);
+  assert.equal(Object.isFrozen(draft.inheritedNumericCriteria), true);
+});
+
+test('Draft cohort cannot be converted into an active cohort without explicit freeze and future start', () => {
+  assert.throws(() => buildPublicForwardPartialFillV3ProspectiveCohort({
+    cohortIdentity: PUBLIC_FORWARD_PARTIAL_FILL_V3_DRAFT_COHORT_TEMPLATE.cohortIdentity,
+    cohortVersion: PUBLIC_FORWARD_PARTIAL_FILL_V3_DRAFT_COHORT_TEMPLATE.cohortVersion,
+    cohortFrozenAtMs: PUBLIC_FORWARD_PARTIAL_FILL_V3_DRAFT_COHORT_TEMPLATE.cohortFrozenAtMs as never,
+    effectiveStartMs: PUBLIC_FORWARD_PARTIAL_FILL_V3_DRAFT_COHORT_TEMPLATE.effectiveStartMs as never,
+    methodology: methodology(),
+  }), /COHORT_FROZEN_AT_INVALID.*COHORT_EFFECTIVE_START_INVALID/);
+});
 
 test('builds immutable V3 methodology by reference without relaxing predecessor criteria', () => {
   const value = methodology();
