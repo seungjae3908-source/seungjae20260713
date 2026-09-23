@@ -9,6 +9,8 @@ import { buildTaskPlan } from '../src/engine.mjs';
 const source = readFileSync(new URL('../deploy/activate-server.sh', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
 const SHA = 'a'.repeat(40);
 const KEY = 'PAPER_FORWARD_RISK_POLICY_RECORD_PATH';
+const DECISION_KEY = 'PAPER_FORWARD_RISK_POLICY_DECISION_PATH';
+const COST_KEY = 'PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH';
 const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
 const shellPath = (path) => process.platform === 'win32'
   ? path.replaceAll('\\', '/').replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`) : path;
@@ -57,7 +59,7 @@ switch (name) {
 }
 `;
 
-function activate(value, { mode = 'activate', legacy } = {}) {
+function activate(value, { mode = 'activate', legacy, supplemental, decision } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'server-risk-env-'));
   const shellRoot = shellPath(root);
   try {
@@ -75,6 +77,10 @@ function activate(value, { mode = 'activate', legacy } = {}) {
         writeFileSync(path, 'sandbox release fixture\n');
       }
     }
+    const decisionFixture = join(root, 'research', 'releases', SHA, 'market-prediction-lab',
+      'config', 'paper-risk-policy', 'natural-paper-btcusdt-v1.json');
+    mkdirSync(resolve(decisionFixture, '..'), { recursive: true });
+    writeFileSync(decisionFixture, '{}\n');
     const script = source.replaceAll('/opt/investment-research', `${shellRoot}/research`)
       .replaceAll('/var/lib/investment-research-production', `${shellRoot}/state`)
       .replaceAll('/etc/investment-research', `${shellRoot}/etc/research`)
@@ -84,8 +90,13 @@ function activate(value, { mode = 'activate', legacy } = {}) {
       TARGET_SHA: SHA, HARNESS_ROOT: shellRoot, HARNESS_ROOT_NATIVE: root, REAL_NODE: shellPath(process.execPath),
       MSYS2_ENV_CONV_EXCL: '*' };
     delete env[KEY];
+    delete env[DECISION_KEY];
+    delete env[COST_KEY];
     delete env.GENERIC_RISK_POLICY_LIVE_RECORD_PATH;
     if (value !== undefined) env[KEY] = value;
+    if (decision === 'PINNED_FIXTURE') env[DECISION_KEY] = shellPath(decisionFixture);
+    else if (decision !== undefined) env[DECISION_KEY] = decision;
+    if (supplemental !== undefined) env[COST_KEY] = supplemental;
     if (legacy !== undefined) env.GENERIC_RISK_POLICY_LIVE_RECORD_PATH = legacy;
     const result = spawnSync(bash, ['-s', '--', mode], { env,
       input: 'export PATH="$HARNESS_ROOT/bin:$PATH"\n' + script, cwd: root, encoding: 'utf8', timeout: 30_000 });
@@ -150,5 +161,63 @@ test('invalid paths fail before preflight or activation tools, env writes, symli
       assert.equal(result.environment, null);
       assert.deepEqual(result.events, []);
     }
+  }
+});
+
+test('supplemental cost path survives server EnvironmentFile; missing stays absent', () => {
+  for (const supplemental of [undefined, '']) {
+    const result = activate(undefined, { supplemental });
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.environment, /PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH=/);
+  }
+  const combined = activate('/owner/policy.record', { supplemental: '/owner/cost.record' });
+  assert.equal(combined.status, 0, combined.stderr);
+  assert.ok(combined.environment.split('\n').includes('PAPER_FORWARD_RISK_POLICY_RECORD_PATH="/owner/policy.record"'));
+  assert.ok(combined.environment.split('\n').includes('PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH="/owner/cost.record"'));
+  const value = '/owner supplied/cost \'"back\\slash $HOME $(touch sentinel) `touch sentinel` #%;/record.json';
+  const result = activate(undefined, { supplemental: value });
+  assert.equal(result.status, 0, result.stderr);
+  const expected = `${COST_KEY}="${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
+  assert.deepEqual(result.environment.split('\n').filter(line => line.startsWith(`${COST_KEY}=`)), [expected]);
+  const decoded = expected.slice(COST_KEY.length + 2, -1).replace(/\\(["\\`$])/gu, '$1');
+  assert.equal(decoded, value);
+  // Paper-child scoping belongs to the separate #1227 owner; this server-owner regression stops at EnvironmentFile transport.
+  assert.equal(result.sentinelPresent, false);
+  assert.ok(result.events.every(event => !event.slice(1).includes(value)));
+});
+
+test('unsafe supplemental cost paths fail before server activation mutation', () => {
+  for (const mode of ['preflight', 'activate']) {
+    for (const supplemental of ['relative/cost.json', '/owner/../cost.json',
+      '/owner/cost\nREAL_ORDER_ENABLED=true', '/owner/cost\r.json']) {
+      const result = activate(undefined, { mode, supplemental });
+      assert.equal(result.status, 64, `${mode} ${JSON.stringify(supplemental)}: ${result.stderr}`);
+      assert.match(result.stderr, /PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH must be a normalized absolute path/);
+      assert.equal(result.environment, null);
+      assert.deepEqual(result.events, []);
+    }
+  }
+});
+
+test('owner-approved decision path is persisted only when pinned inside the exact Research release', () => {
+  const result = activate(undefined, { decision: 'PINNED_FIXTURE' });
+  assert.equal(result.status, 0, result.stderr);
+  const lines = result.environment.split('\n').filter(line => line.startsWith(`${DECISION_KEY}=`));
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /market-prediction-lab\/config\/paper-risk-policy\/natural-paper-btcusdt-v1[.]json/u);
+  assert.doesNotMatch(result.environment, /PAPER_FORWARD_RISK_POLICY_RECORD_PATH=/u);
+  assert.equal(result.sentinelPresent, false);
+});
+
+test('Research server activation rejects ambiguous or unpinned risk-policy decision sources before timer activation', () => {
+  const ambiguous = activate('/owner/policy.record', { decision: 'PINNED_FIXTURE' });
+  assert.equal(ambiguous.status, 64, ambiguous.stderr);
+  assert.match(ambiguous.stderr, /CANONICAL_RISK_POLICY_SOURCE_AMBIGUOUS/u);
+  assert.equal(ambiguous.environment, null);
+
+  for (const decision of ['/owner/decision.json', 'relative/decision.json', '/owner/../decision.json']) {
+    const result = activate(undefined, { decision });
+    assert.equal(result.status, 64, `${decision}: ${result.stderr}`);
+    assert.equal(result.environment, null);
   }
 });

@@ -25,14 +25,14 @@ test('shared changes expand to frontend and backend checks', () => {
   assert.equal(impact.backend, true);
 });
 
-test('pre-ci virtual merge and ready gate fail closed', async () => {
+test('pre-ci virtual merge and ready gate fail closed with command-scoped merge identity', async () => {
   const document = await readFile('.github/scripts/pre-ci-v3.mjs', 'utf8');
   assert.match(document, /VIRTUAL_MERGE_CONFLICT/u);
   assert.match(document, /READY_BASE_STALE/u);
   assert.match(document, /READY_PRODUCT_INTEGRITY_BLOCKED/u);
   assert.match(document, /git worktree add --detach/u);
-  assert.match(document, /git merge --no-commit --no-ff/u);
-  assert.doesNotMatch(document, /--force-with-lease|push --force|git push/u);
+  assert.match(document, /git -c user\.name=pre-ci-v3 -c user\.email=pre-ci-v3@invalid\.local merge --no-commit --no-ff/u);
+  assert.doesNotMatch(document, /git config --global|--force-with-lease|push --force|git push/u);
 });
 
 test('fast CI covers commit changes for Draft and Ready PRs without rerunning on Ready transition', async () => {

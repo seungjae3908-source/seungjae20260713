@@ -10,6 +10,7 @@ import {
 import { formatFundingRatePercent } from '@/lib/futures-market-format';
 import { TradingRiskPreviewPanel } from '@/components/trading-risk-preview-panel';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/lib/auth';
 
 const STATUS_LABEL: Record<DataStatus, string> = {
   live: '실시간',
@@ -56,9 +57,13 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 export function FuturesMarketStatusPanel({ symbol }: { symbol: string }) {
+  const auth = useAuth();
+  const canAccessFutures = !auth.loading && auth.isApproved && auth.can('canAccessFutures');
+
   const statusQuery = useQuery({
     queryKey: ['futures-public-status'],
     queryFn: getFuturesMarketStatus,
+    enabled: canAccessFutures,
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
     retry: 1,
@@ -66,7 +71,7 @@ export function FuturesMarketStatusPanel({ symbol }: { symbol: string }) {
   const snapshotQuery = useQuery({
     queryKey: ['futures-public-snapshot', symbol],
     queryFn: () => getFuturesMarketSnapshot(symbol),
-    enabled: Boolean(symbol),
+    enabled: canAccessFutures && Boolean(symbol),
     refetchInterval: 10_000,
     refetchIntervalInBackground: false,
     retry: 1,
@@ -74,7 +79,7 @@ export function FuturesMarketStatusPanel({ symbol }: { symbol: string }) {
   const contractRulesQuery = useQuery({
     queryKey: ['futures-public-contract-rules', symbol],
     queryFn: () => getFuturesContractRules(symbol),
-    enabled: Boolean(symbol),
+    enabled: canAccessFutures && Boolean(symbol),
     staleTime: 5 * 60_000,
     refetchInterval: 10 * 60_000,
     refetchIntervalInBackground: false,
@@ -96,12 +101,15 @@ export function FuturesMarketStatusPanel({ symbol }: { symbol: string }) {
   );
 
   const refresh = async () => {
+    if (!canAccessFutures) return;
     await Promise.allSettled([
       statusQuery.refetch(),
       snapshotQuery.refetch(),
       contractRulesQuery.refetch(),
     ]);
   };
+
+  if (!canAccessFutures) return null;
 
   return (
     <div className="min-w-0 space-y-4" data-testid="futures-market-and-risk-panels">
