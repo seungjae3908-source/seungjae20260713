@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import {
   parsePortfolioChartOverlays,
   parsePortfolioPurchaseDates,
+  syncPortfolioChartOverlays,
 } from '../src/lib/portfolio-overlay';
 
 const VALID_OVERLAY = {
@@ -112,4 +113,39 @@ test('portfolio purchase-date cache accepts only normalized ticker and real cale
     TSLA: 20260901,
     NVDA: 'not-a-date',
   })).toEqual({});
+});
+
+test('portfolio overlay sync rejects market/currency identity mismatch before persistence', () => {
+  expect(() => syncPortfolioChartOverlays([{
+    ticker: 'AAPL',
+    name: 'Apple',
+    market: 'US',
+    currency: 'KRW',
+    average_price: 200,
+    quantity: 1,
+    currentPrice: 220,
+  }])).toThrow('PORTFOLIO_OVERLAY_IDENTITY_INVALID: AAPL');
+});
+
+test('portfolio overlay sync rejects same-ticker cross-market aggregation before persistence', () => {
+  expect(() => syncPortfolioChartOverlays([
+    {
+      ticker: 'ABC',
+      name: 'US ABC',
+      market: 'US',
+      currency: 'USD',
+      average_price: 100,
+      quantity: 2,
+      currentPrice: 110,
+    },
+    {
+      ticker: 'ABC',
+      name: 'KR ABC',
+      market: 'KR',
+      currency: 'KRW',
+      average_price: 200,
+      quantity: 3,
+      currentPrice: 210,
+    },
+  ])).toThrow('PORTFOLIO_OVERLAY_IDENTITY_CONFLICT: ABC');
 });
