@@ -191,7 +191,9 @@ export async function preparePaperForwardAuthoritativeInputs(
 
   const firewall = record(input?.liquidity?.liquidityImpactFirewallInput);
   const liquidityExpected = record(firewall?.expected);
-  if (liquidityExpected) {
+  if (!liquidityExpected) {
+    blockers.push('PREPARATION_LIQUIDITY_SCOPE_REQUIRED');
+  } else {
     const liquiditySymbol = symbol(liquidityExpected.symbol);
     if (String(liquidityExpected.market ?? '') !== 'CRYPTO_FUTURES'
       || !riskSymbol
