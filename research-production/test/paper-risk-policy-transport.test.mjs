@@ -10,10 +10,12 @@ import { runPaperForwardScheduledInvocation } from '../../market-prediction-lab/
 
 const SHA = 'a'.repeat(40);
 const KEY = 'PAPER_FORWARD_RISK_POLICY_RECORD_PATH';
+const DECISION_KEY = 'PAPER_FORWARD_RISK_POLICY_DECISION_PATH';
 const COST_KEY = 'PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH';
 const SAFETY_KEYS = ['LIVE_TRADING', 'REAL_ORDER_ENABLED', 'PRIVATE_API_ENABLED',
   'PRIVATE_ACCOUNT_ACCESS', 'PRIVATE_TRADING_API_ALLOWED', 'ORDER_AUTHORITY'];
 const EXPLICIT_PATH = resolve(tmpdir(), 'owner supplied policy.record');
+const DECISION_PATH = resolve(tmpdir(), 'owner approved policy decision.json');
 const COST_PATH = resolve(tmpdir(), 'owner supplied cost.record');
 
 function plan(env = {}, profile = 'forward') {
@@ -212,6 +214,97 @@ test('T09/T10 real reader and producer keep missing records blocked without econ
       }
       await assert.rejects(access(explicitPath), { code: 'ENOENT' });
     }
+  } finally {
+    process.exitCode = previousExitCode;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test('approved risk-policy decision path is transported to Paper only and never competes with an explicit record', () => {
+  const task = paper({ [DECISION_KEY]: DECISION_PATH });
+  assert.equal(task.env[DECISION_KEY], DECISION_PATH);
+  assert.equal(Object.hasOwn(task.env, KEY), false);
+  assert.equal(Object.hasOwn(sanitizeChildEnv({ [DECISION_KEY]: DECISION_PATH }), DECISION_KEY), false);
+  for (const row of plan({ [DECISION_KEY]: DECISION_PATH }, 'all')) {
+    assert.equal(Object.hasOwn(row.env, DECISION_KEY), row.kind === 'paper');
+  }
+  assert.throws(
+    () => paper({ [KEY]: EXPLICIT_PATH, [DECISION_KEY]: DECISION_PATH }),
+    /canonical risk policy source is ambiguous/u,
+  );
+  for (const value of ['relative/decision.json', `${DECISION_PATH} `, `${DECISION_PATH}\n`,
+    `${dirname(DECISION_PATH)}/../decision.json`, 123]) {
+    assert.throws(
+      () => paper({ [DECISION_KEY]: value }),
+      /risk policy decision path must be a normalized absolute path/u,
+    );
+  }
+});
+
+test('Research Paper materializes the owner-approved decision freshly at canonical reader call time', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'research-risk-decision-materialization-'));
+  const previousExitCode = process.exitCode;
+  const decisionPath = join(root, 'approved-decision.json');
+  try {
+    const approvedDecision = JSON.parse(await readFile(
+      new URL('../../market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v1.json', import.meta.url),
+      'utf8',
+    ));
+    await writeFile(decisionPath, JSON.stringify(approvedDecision));
+    const task = paper({ [DECISION_KEY]: decisionPath });
+    const runtimePackage = await loadValidatedAuthoritativePaperRuntimePackage();
+    let reader = null;
+    const policyResults = [];
+    const packageWithReaderCapture = {
+      ...runtimePackage,
+      createAuthoritativePaperNaturalCycleEvidenceSourceWiring(input) {
+        reader = input.sources.riskPolicyRecordForCard;
+        return runtimePackage.createAuthoritativePaperNaturalCycleEvidenceSourceWiring(input);
+      },
+    };
+    const output = await runPaperForwardScheduleCli({
+      ...task.env,
+      PAPER_FORWARD_ROOT: join(root, 'paper'),
+    }, {
+      authoritativePaperPackageLoader: async () => packageWithReaderCapture,
+      publicEvidenceProvider: {
+        async collectPublicEvidence() {
+          assert.equal(typeof reader, 'function');
+          const producer = runtimePackage.createAuthoritativePaperGenericRiskPolicyProducer({
+            readCanonicalRecord: reader,
+          });
+          const policy = await producer({
+            market: 'CRYPTO_FUTURES',
+            symbol: 'BTCUSDT',
+            strategyScope: 'CRYPTO_FUTURES_SWING_V1_LONG',
+            researchCodeSha: SHA,
+          });
+          policyResults.push(policy);
+          return {
+            status: 'BLOCKED_DATA',
+            candidates: [],
+            exits: [],
+            blocker: 'TEST_STOP_AFTER_POLICY_READ',
+          };
+        },
+      },
+    });
+    assert.ok(policyResults.length > 0);
+    for (const policy of policyResults) {
+      assert.equal(policy.status, 'PRESENT');
+      assert.equal(policy.policyEvidence?.policyId, 'NATURAL_PAPER_BTCUSDT_CRYPTO_FUTURES_V1');
+      assert.equal(policy.policyEvidence?.researchCodeSha, SHA);
+      assert.equal(policy.policyEvidence?.riskPercent, approvedDecision.riskPercent);
+      assert.equal(policy.policyEvidence?.requestedLeverage, approvedDecision.requestedLeverage);
+      assert.equal(policy.policyEvidence?.maximumLeverage, approvedDecision.maximumLeverage);
+      assert.equal(policy.policyEvidence?.marginMode, approvedDecision.marginMode);
+      assert.ok(Date.now() - policy.policyEvidence.observedAtMs < 30_000);
+    }
+    assert.equal(output.status, 'BLOCKED_DATA');
+    assert.equal(output.privateRequestCount, 0);
+    assert.equal(output.financialMutationCount, 0);
+    assert.equal(output.orderCount, 0);
   } finally {
     process.exitCode = previousExitCode;
     await rm(root, { recursive: true, force: true });

@@ -2,10 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  PAPER_FORWARD_AUTHORITATIVE_INPUT_PREPARATION_SAFETY,
   PAPER_FORWARD_AUTHORITATIVE_INPUT_PREPARATION_VERSION,
   preparePaperForwardAuthoritativeInputs,
   type PaperForwardAuthoritativeInputPreparationInput,
 } from './paper-forward-authoritative-input-preparation.service';
+import {
+  PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
+} from './authoritative-paper-partial-fill-cost-evidence.service';
 
 const SHA = 'a'.repeat(40);
 const NOW = 1_800_000_000_000;
@@ -118,6 +122,52 @@ test('READY packages only existing validated evidence and creates zero credit', 
   assert.equal(result.liveTrading, false);
 });
 
+test('preparation passes frozen calibration freshness separately from runtime freshness', async () => {
+  const deps = readyDependencies();
+  let receivedExpected: any = null;
+  const result = await preparePaperForwardAuthoritativeInputs(baseInput(), {
+    ...deps,
+    buildPartialFill: (value: any) => {
+      receivedExpected = value.expected;
+      return deps.buildPartialFill(value);
+    },
+  });
+  assert.equal(result.status, 'READY');
+  assert.equal(receivedExpected.maximumAgeMs, 30_000);
+  assert.equal(
+    receivedExpected.calibrationMaximumAgeMs,
+    PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
+  );
+  assert.equal(
+    PAPER_FORWARD_AUTHORITATIVE_INPUT_PREPARATION_SAFETY.partialFillCalibrationMaximumAgeMs,
+    PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
+  );
+  assert.equal(
+    PAPER_FORWARD_AUTHORITATIVE_INPUT_PREPARATION_SAFETY.partialFillCalibrationAndRuntimeFreshnessSeparated,
+    true,
+  );
+});
+
+test('caller cannot widen the frozen calibration freshness through preparation input', async () => {
+  const input = structuredClone(baseInput()) as any;
+  input.partialFill.expected.calibrationMaximumAgeMs =
+    PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS * 10;
+  const deps = readyDependencies();
+  let receivedExpected: any = null;
+  const result = await preparePaperForwardAuthoritativeInputs(input, {
+    ...deps,
+    buildPartialFill: (value: any) => {
+      receivedExpected = value.expected;
+      return deps.buildPartialFill(value);
+    },
+  });
+  assert.equal(result.status, 'READY');
+  assert.equal(
+    receivedExpected.calibrationMaximumAgeMs,
+    PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
+  );
+});
+
 test('missing liquidity evidence remains BLOCKED_DATA and no files become ready', async () => {
   const deps = readyDependencies();
   const result = await preparePaperForwardAuthoritativeInputs(baseInput(), {
@@ -169,6 +219,47 @@ test('stale evidence cannot be packaged as zero or READY', async () => {
   assert.ok(result.blockers.includes('LIQUIDITY:EVIDENCE_STALE_AT_PREPARATION'));
 });
 
+test('future-dated liquidity evidence cannot bypass preparation freshness', async () => {
+  const deps = readyDependencies();
+  const result = await preparePaperForwardAuthoritativeInputs(baseInput(), {
+    ...deps,
+    buildLiquidity: () => ({
+      status: 'PRESENT',
+      liquidityImpactStatus: 'PRESENT',
+      evidence: {
+        valuePercent: 0.02,
+        quality: 'ESTIMATED',
+        source: 'GENUINE_LIQUIDITY_RUNTIME',
+        observedAtMs: NOW + 1,
+      },
+      blockers: [],
+    }),
+  });
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.equal(result.supplementalCostInput, null);
+  assert.ok(result.blockers.includes('LIQUIDITY:EVIDENCE_FROM_FUTURE_AT_PREPARATION'));
+});
+
+test('future-dated partial-fill evidence cannot bypass preparation freshness', async () => {
+  const deps = readyDependencies();
+  const result = await preparePaperForwardAuthoritativeInputs(baseInput(), {
+    ...deps,
+    buildPartialFill: () => ({
+      status: 'PRESENT',
+      evidence: {
+        valuePercent: 0.01,
+        quality: 'ESTIMATED',
+        source: 'GENUINE_PARTIAL_FILL_CALIBRATION',
+        observedAtMs: NOW + 1,
+      },
+      blockers: [],
+    }),
+  });
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.equal(result.supplementalCostInput, null);
+  assert.ok(result.blockers.includes('PARTIAL_FILL:EVIDENCE_FROM_FUTURE_AT_PREPARATION'));
+});
+
 test('cross-source scope mismatch fails before validator execution', async () => {
   const input = structuredClone(baseInput()) as any;
   input.partialFill.expected.symbol = 'ETHUSDT';
@@ -185,6 +276,70 @@ test('cross-source scope mismatch fails before validator execution', async () =>
   });
   assert.equal(result.status, 'BLOCKED_DATA');
   assert.ok(result.blockers.includes('PREPARATION_PARTIAL_FILL_SCOPE_MISMATCH'));
+});
+
+test('separator-distinct partial-fill symbol identities fail closed before validator execution', async () => {
+  const input = structuredClone(baseInput()) as any;
+  input.riskPolicyRequest.symbol = 'BTC-USDT';
+  input.riskPolicyRecord.symbolScopes = ['BTC-USDT'];
+  input.liquidity.liquidityImpactFirewallInput.expected.symbol = 'BTC-USDT';
+  input.partialFill.expected.symbol = 'BTC_USDT';
+  const result = await preparePaperForwardAuthoritativeInputs(input, {
+    createRiskProducer: () => {
+      throw new Error('must not execute');
+    },
+    buildLiquidity: () => {
+      throw new Error('must not execute');
+    },
+    buildPartialFill: () => {
+      throw new Error('must not execute');
+    },
+  });
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.ok(result.blockers.includes('PREPARATION_PARTIAL_FILL_SCOPE_MISMATCH'));
+});
+
+test('separator-distinct liquidity symbol identities fail closed before validator execution', async () => {
+  const input = structuredClone(baseInput()) as any;
+  input.riskPolicyRequest.symbol = 'BTC-USDT';
+  input.riskPolicyRecord.symbolScopes = ['BTC-USDT'];
+  input.partialFill.expected.symbol = 'BTC-USDT';
+  input.liquidity.liquidityImpactFirewallInput.expected.symbol = 'BTC_USDT';
+  const result = await preparePaperForwardAuthoritativeInputs(input, {
+    createRiskProducer: () => {
+      throw new Error('must not execute');
+    },
+    buildLiquidity: () => {
+      throw new Error('must not execute');
+    },
+    buildPartialFill: () => {
+      throw new Error('must not execute');
+    },
+  });
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.ok(result.blockers.includes('PREPARATION_LIQUIDITY_SCOPE_MISMATCH'));
+});
+
+test('same invalid symbol identity fails closed before validator execution', async () => {
+  const input = structuredClone(baseInput()) as any;
+  input.riskPolicyRequest.symbol = 'BTC/USDT';
+  input.riskPolicyRecord.symbolScopes = ['BTC/USDT'];
+  input.partialFill.expected.symbol = 'BTC/USDT';
+  input.liquidity.liquidityImpactFirewallInput.expected.symbol = 'BTC/USDT';
+  const result = await preparePaperForwardAuthoritativeInputs(input, {
+    createRiskProducer: () => {
+      throw new Error('must not execute');
+    },
+    buildLiquidity: () => {
+      throw new Error('must not execute');
+    },
+    buildPartialFill: () => {
+      throw new Error('must not execute');
+    },
+  });
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.ok(result.blockers.includes('PREPARATION_PARTIAL_FILL_SCOPE_MISMATCH'));
+  assert.ok(result.blockers.includes('PREPARATION_LIQUIDITY_SCOPE_MISMATCH'));
 });
 
 test('invalid exact research SHA fails closed', async () => {

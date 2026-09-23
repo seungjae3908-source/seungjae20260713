@@ -4,6 +4,19 @@ const CANDIDATE_PERFORMANCE_SCHEMA = 'frozen-candidate-performance-reader-v1';
 const PROFILE_SET = new Set(['forward', 'fast-historical', 'long-history']);
 const V3_INDEPENDENCE_STATUS_SET = new Set(['MISSING', 'INVALID', 'PRESENT']);
 const CANDIDATE_PERFORMANCE_STATUS_SET = new Set(['MISSING', 'INVALID', 'BLOCKED', 'PRESENT']);
+const TEMPORAL_COLLECTION_STATUS_SET = new Set(['MISSING', 'INVALID', 'complete', 'partial_failure']);
+const TEMPORAL_SYMBOL_STATUS_SET = new Set(['success', 'failed']);
+const FACTORY_RUNTIME_STATUS_SET = new Set([
+  'MISSING',
+  'INVALID',
+  'BLOCKED_POLICY_MISSING',
+  'BLOCKED_POLICY_INVALID',
+  'BLOCKED_NO_READY_PROFILES',
+  'BLOCKED_DEVELOPMENT_DIAGNOSTICS_MISSING',
+  'BLOCKED_DEVELOPMENT_DIAGNOSTICS_INVALID',
+  'BLOCKED_RUNTIME_BINDINGS',
+  'READY_NON_ACTIVATING',
+]);
 const SHA_PATTERN = /^[0-9a-f]{40}$/i;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/i;
 const CANDIDATE_ID_PATTERN = /^(?:phase3-candidate:sha256:|paper-candidate-v1:)[0-9a-f]{64}$/i;
@@ -444,6 +457,141 @@ function sanitizePaperLedger(value: unknown) {
   return { present: ledger.present, cycleCount, sampleCount, positionCount, settlementCount };
 }
 
+function emptyTemporalCryptoSummary(status: 'MISSING' | 'INVALID' = 'MISSING', present = false) {
+  return {
+    present,
+    status,
+    generatedAt: null,
+    researchSha: null,
+    failedCount: null,
+    observationCount: null,
+    ledgerDigest: null,
+    results: [] as Array<{ symbol: string; status: 'success' | 'failed'; observedCount: number; appendedCount: number }>,
+  };
+}
+
+function sanitizeTemporalCryptoSummary(value: unknown) {
+  if (value === undefined || value === null) return emptyTemporalCryptoSummary();
+  const input = record(value);
+  if (!input || typeof input.present !== 'boolean') return null;
+  const status = safeTextOrNull(input.status, 32);
+  if (!status || !TEMPORAL_COLLECTION_STATUS_SET.has(status)) return null;
+  if (status === 'MISSING') return input.present === false ? emptyTemporalCryptoSummary() : null;
+  if (status === 'INVALID') return input.present === true ? emptyTemporalCryptoSummary('INVALID', true) : null;
+  if (input.present !== true) return null;
+  const generatedAt = finiteOrNull(input.generatedAt);
+  const researchSha = safeTextOrNull(input.researchSha, 40);
+  const failedCount = countOrNull(input.failedCount);
+  const observationCount = countOrNull(input.observationCount);
+  const ledgerDigest = safeTextOrNull(input.ledgerDigest, 64);
+  if (generatedAt === null || generatedAt === undefined || generatedAt <= 0
+    || !researchSha || !SHA_PATTERN.test(researchSha)
+    || failedCount === null || failedCount === undefined
+    || observationCount === null || observationCount === undefined
+    || !ledgerDigest || !DIGEST_PATTERN.test(ledgerDigest)
+    || !Array.isArray(input.results) || input.results.length > 50) return null;
+  const results = input.results.map((raw) => {
+    const row = record(raw);
+    const symbol = safeTextOrNull(row?.symbol, 30);
+    const rowStatus = safeTextOrNull(row?.status, 16);
+    const observedCount = countOrNull(row?.observedCount);
+    const appendedCount = countOrNull(row?.appendedCount);
+    if (!row || !symbol || !/^[A-Z0-9]{3,30}$/.test(symbol)
+      || !rowStatus || !TEMPORAL_SYMBOL_STATUS_SET.has(rowStatus)
+      || observedCount === null || observedCount === undefined
+      || appendedCount === null || appendedCount === undefined
+      || appendedCount > observedCount) return null;
+    return { symbol, status: rowStatus as 'success' | 'failed', observedCount, appendedCount };
+  });
+  if (results.some((row) => !row) || results.filter((row) => row?.status === 'failed').length !== failedCount) return null;
+  return {
+    present: true,
+    status,
+    generatedAt,
+    researchSha: researchSha.toLowerCase(),
+    failedCount,
+    observationCount,
+    ledgerDigest: ledgerDigest.toLowerCase(),
+    results,
+  };
+}
+
+function emptyFactoryRuntimeSummary(status: 'MISSING' | 'INVALID' = 'MISSING', present = false) {
+  return {
+    present,
+    status,
+    generatedAt: null,
+    researchSha: null,
+    firstZero: null,
+    policyPresent: null,
+    policyValid: null,
+    policyDigest: null,
+    readyMarketCount: null,
+    blockedMarketCount: null,
+    readyProfileCount: null,
+    blockedProfileCount: null,
+    runtimeStatus: null,
+    nextFirstZero: null,
+    controlPlaneDigest: null,
+  };
+}
+
+function sanitizeFactoryRuntimeSummary(value: unknown) {
+  if (value === undefined || value === null) return emptyFactoryRuntimeSummary();
+  const input = record(value);
+  if (!input || typeof input.present !== 'boolean') return null;
+  const status = safeTextOrNull(input.status, 64);
+  if (!status || !FACTORY_RUNTIME_STATUS_SET.has(status)) return null;
+  if (status === 'MISSING') return input.present === false ? emptyFactoryRuntimeSummary() : null;
+  if (status === 'INVALID') return input.present === true ? emptyFactoryRuntimeSummary('INVALID', true) : null;
+  if (input.present !== true) return null;
+
+  const generatedAt = finiteOrNull(input.generatedAt);
+  const researchSha = safeTextOrNull(input.researchSha, 40);
+  const firstZero = safeTextOrNull(input.firstZero, 160);
+  const policyPresent = booleanOrNull(input.policyPresent);
+  const policyValid = booleanOrNull(input.policyValid);
+  const policyDigest = safeTextOrNull(input.policyDigest, 64);
+  const readyMarketCount = countOrNull(input.readyMarketCount);
+  const blockedMarketCount = countOrNull(input.blockedMarketCount);
+  const readyProfileCount = countOrNull(input.readyProfileCount);
+  const blockedProfileCount = countOrNull(input.blockedProfileCount);
+  const runtimeStatus = safeTextOrNull(input.runtimeStatus, 80);
+  const nextFirstZero = safeTextOrNull(input.nextFirstZero, 160);
+  const controlPlaneDigest = safeTextOrNull(input.controlPlaneDigest, 64);
+
+  if (generatedAt === null || generatedAt === undefined || generatedAt <= 0
+    || !researchSha || !SHA_PATTERN.test(researchSha)
+    || !firstZero || !SAFE_ID_PATTERN.test(firstZero)
+    || policyPresent === null || policyPresent === undefined
+    || policyValid === null || policyValid === undefined
+    || readyMarketCount === undefined || blockedMarketCount === undefined
+    || readyProfileCount === undefined || blockedProfileCount === undefined
+    || (policyDigest != null && !DIGEST_PATTERN.test(policyDigest))
+    || (controlPlaneDigest != null && !DIGEST_PATTERN.test(controlPlaneDigest))
+    || (runtimeStatus != null && !SAFE_ID_PATTERN.test(runtimeStatus))
+    || (nextFirstZero != null && !SAFE_ID_PATTERN.test(nextFirstZero))
+    || (!policyPresent && (policyValid || policyDigest != null))) return null;
+
+  return {
+    present: true,
+    status,
+    generatedAt,
+    researchSha: researchSha.toLowerCase(),
+    firstZero,
+    policyPresent,
+    policyValid,
+    policyDigest: policyDigest?.toLowerCase() ?? null,
+    readyMarketCount,
+    blockedMarketCount,
+    readyProfileCount,
+    blockedProfileCount,
+    runtimeStatus,
+    nextFirstZero,
+    controlPlaneDigest: controlPlaneDigest?.toLowerCase() ?? null,
+  };
+}
+
 function sanitizeShadowGroup(value: unknown) {
   const group = record(value);
   const name = safeTextOrNull(group?.name, 120);
@@ -474,13 +622,16 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
   const paper = record(payload?.paper);
   const shadow = record(payload?.shadow);
   const profitability = record(payload?.profitability);
+  const dataFactory = record(payload?.dataFactory);
+  const factory = sanitizeFactoryRuntimeSummary(payload?.factory);
   const runtime = sanitizePaperRuntime(paper?.runtime);
   const ledger = sanitizePaperLedger(paper?.ledger);
   const candidatePerformance = sanitizeCandidatePerformance(paper?.candidatePerformance);
+  const temporalCryptoFutures = sanitizeTemporalCryptoSummary(dataFactory?.temporalCryptoFutures);
   const records = record(shadow?.records);
   const liquidityIndependence = sanitizeLiquidityIndependence(research?.liquidityIndependence);
   if (!payload || payload.schemaVersion !== RESEARCH_OVERVIEW_SCHEMA || !state || !safety || !research
-    || !paper || !shadow || !profitability || !runtime || !ledger || !candidatePerformance || !records || !liquidityIndependence) return null;
+    || !paper || !shadow || !profitability || !runtime || !ledger || !candidatePerformance || !temporalCryptoFutures || !factory || !records || !liquidityIndependence) return null;
   if (safety.readOnlyDashboard !== true || safety.liveTrading !== false || safety.privateApi !== false || safety.orderAuthority !== false
     || typeof safety.authorityEvidenceComplete !== 'boolean' || typeof safety.forbiddenAuthorityObserved !== 'boolean') return null;
   const generatedAt = finiteOrNull(payload.generatedAt);
@@ -513,6 +664,8 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
       forbiddenAuthorityObserved: safety.forbiddenAuthorityObserved,
     },
     research: { status: researchStatus, failedTasks, blockedDataTasks, cycles, liquidityIndependence },
+    dataFactory: { temporalCryptoFutures },
+    factory,
     paper: { runtime, ledger, candidatePerformance },
     shadow: { groups, records: { present: records.present, totalRecords, settledRecords, pendingRecords } },
     profitability: { proven: profitability.proven, status: profitabilityStatus, note: profitabilityNote },

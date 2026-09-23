@@ -212,6 +212,60 @@ test("new positions preserve an immutable settlement execution policy without ba
   assert.equal(Object.isFrozen(position.settlementExecutionPolicy.entryDataEvidence), true);
 });
 
+test("entry candidate and authoritative cost provenance survive durable recurring state unchanged", async () => {
+  const h = harness();
+  const row = genuineNaturalCandidate("CRYPTO_FUTURES", "entry-provenance");
+  const component = (valuePercent, source, quality = "OBSERVED") => ({
+    valuePercent,
+    source,
+    quality,
+    observedAtMs: T0 - 1,
+  });
+  const provenance = {
+    market: "CRYPTO_FUTURES",
+    policyId: "cost-v1",
+    paperCostPolicyVersion: "cost-v1",
+    providerProvenance: "public-fixture",
+    components: {
+      commission: component(0.10, "public:commission"),
+      tax: component(0, "public:tax", "NOT_APPLICABLE"),
+      spread: component(0.02, "public:spread"),
+      slippage: component(0.03, "public:slippage", "ESTIMATED"),
+      funding: component(0.01, "public:funding"),
+      latency: component(0.01, "public:latency", "ESTIMATED"),
+      liquidityImpact: component(0.02, "public:liquidity", "ESTIMATED"),
+      partialFillImpact: component(0.03, "public:partial-fill", "ESTIMATED"),
+    },
+  };
+  row.execution = { ...row.execution, costProvenance: provenance };
+
+  const result = await run(h, {
+    state: h.state,
+    cycle: cycle("entry-provenance-cycle"),
+    candidates: [row],
+  });
+  assert.equal(result.summary.entries, 1);
+  const position = result.state.positions[0];
+  assert.notEqual(position.entryCandidate, row);
+  assert.deepEqual(position.entryCandidate.execution.costProvenance, provenance);
+  assert.deepEqual(position.entryCostProvenance, provenance);
+  assert.deepEqual(position.settlementExecutionPolicy.entryCostProvenance, provenance);
+  assert.equal(Object.isFrozen(position.entryCandidate), true);
+  assert.equal(Object.isFrozen(position.entryCostProvenance), true);
+  assert.equal(Object.isFrozen(position.settlementExecutionPolicy.entryCostProvenance), true);
+
+  const restored = restoreRecurringPaperLoopState(
+    serializeRecurringPaperLoopState(result.state),
+    identity,
+  );
+  assert.deepEqual(restored.positions[0].entryCandidate, position.entryCandidate);
+  assert.deepEqual(restored.positions[0].entryCostProvenance, position.entryCostProvenance);
+  assert.deepEqual(
+    restored.positions[0].settlementExecutionPolicy.entryCostProvenance,
+    position.settlementExecutionPolicy.entryCostProvenance,
+  );
+});
+
 test("canonical Phase3 candidate ID is preserved unchanged through genuine recurring Paper entry", async () => {
   const h = harness();
   const row = genuineNaturalCandidate("CRYPTO_SPOT", "phase3");

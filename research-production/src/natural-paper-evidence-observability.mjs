@@ -192,10 +192,8 @@ function stageObservation(input, descriptor, identity, verifiedAtMs, rootIdentit
   const observedAtMs = sourceTimestamp(source);
   const timestampValid = observedAtMs !== null && observedAtMs <= verifiedAtMs + MAX_FUTURE_SKEW_MS;
   const canonical = descriptor.kind === 'canonical';
-  const stageIdentityMatches = canonical
-    ? rootIdentityMatches({ identity: source?.identity }, identity)
-    : identity.complete;
-  const identityMatches = canonical ? rootIdentityValid && stageIdentityMatches : identity.complete;
+  const stageIdentityMatches = rootIdentityMatches({ identity: source?.identity }, identity);
+  const identityMatches = canonical ? rootIdentityValid && stageIdentityMatches : stageIdentityMatches;
   const creditValid = !canonical || (
     source?.naturalCredit === sourceCount
     && source?.replayCredit === 0
@@ -325,15 +323,7 @@ function collectedReasonRows(input, identity, naturalEligible) {
     if (row.historicalCredit !== undefined && row.historicalCredit !== 0) continue;
     if (row.authoritative === false || row.freshness === 'STALE') continue;
     const sourceIdentity = row.identity && typeof row.identity === 'object' ? row.identity : row;
-    const sourceDatasetDigest = digest(sourceIdentity.datasetIdentityDigest)
-      ?? (nonEmpty(sourceIdentity.datasetIdentity) ? sha256(sourceIdentity.datasetIdentity.trim()) : null);
-    const reasonIdentityMatches = exactSha(sourceIdentity.strategySha) === identity.research.exactCodeSha
-      && exactSha(sourceIdentity.runtimeSha) === identity.runtimeSha
-      && sourceDatasetDigest === identity.datasetIdentityDigest
-      && (!nonEmpty(sourceIdentity.cycleId) || sourceIdentity.cycleId.trim() === identity.cycleId)
-      && (!nonEmpty(sourceIdentity.triggerSource)
-        || sourceIdentity.triggerSource.trim().toLowerCase() === identity.triggerSource);
-    if (!reasonIdentityMatches) continue;
+    if (!rootIdentityMatches({ identity: sourceIdentity }, identity)) continue;
     const category = reasonCategory(row);
     if (!category) continue;
     const observationIdDigests = reasonIdentityDigests(row);
