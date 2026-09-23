@@ -6,6 +6,24 @@ export const AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_VERSION =
 export const AUTHORITATIVE_PAPER_PARTIAL_FILL_CALIBRATION_VERSION =
   'authoritative-paper-partial-fill-calibration-v1' as const;
 
+export const PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS =
+  14 * 24 * 60 * 60 * 1_000;
+
+export const PARTIAL_FILL_CALIBRATION_FRESHNESS_AUTHORITY = Object.freeze({
+  businessToleranceIdentity: 'PUBLIC_FORWARD_PARTIAL_FILL_BUSINESS_TOLERANCE_V1',
+  businessToleranceVersion: 'V1',
+  freezeArtifactUrl:
+    'https://github.com/seungjae3908-source/seungjae20260713/issues/838#issuecomment-5489589062',
+  completeValidationReceiptUrl:
+    'https://github.com/seungjae3908-source/seungjae20260713/issues/838#issuecomment-5489626816',
+  freezePayloadDigest: 'adef3bbf8f6647f0314a35ca5b0d48eebefed614a0e66ab28e93f6d3dc2a0f7c',
+  toleranceIdentity: 'TOL09_CALIBRATION_FRESHNESS_LIMIT',
+  ageReference: 'AUTHORITATIVE_CALIBRATION_FREEZE_TIMESTAMP',
+  maximumAgeCalendarDays: 14,
+  maximumAgeMs: PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
+  prospectiveOnly: true,
+} as const);
+
 export type PartialFillCostOwner =
   | 'SPREAD'
   | 'VISIBLE_L2_BOOK_WALK_SLIPPAGE'
@@ -122,6 +140,7 @@ export type PartialFillCalibrationContext = Readonly<{
   calibrationCodeSha: string;
   nowMs: number;
   maximumAgeMs: number;
+  calibrationMaximumAgeMs?: number;
   competingCostEvidence: readonly CompetingCostEvidenceIdentity[];
 }>;
 
@@ -307,10 +326,17 @@ export function buildAuthoritativePaperPartialFillCostEvidence(input: Readonly<{
   if (!sameText(artifact.volatilityRegimeIdentity, expected?.volatilityRegimeIdentity)) add('PARTIAL_FILL_VOLATILITY_REGIME_MISMATCH');
   if (!sameText(artifact.liquidityRegimeIdentity, expected?.liquidityRegimeIdentity)) add('PARTIAL_FILL_LIQUIDITY_REGIME_MISMATCH');
 
-  if (!positive(expected?.nowMs) || !positive(expected?.maximumAgeMs)) add('PARTIAL_FILL_VALIDATION_CLOCK_INVALID');
+  const calibrationMaximumAgeMs = expected?.calibrationMaximumAgeMs ?? expected?.maximumAgeMs;
+  if (!positive(expected?.nowMs) || !positive(expected?.maximumAgeMs) || !positive(calibrationMaximumAgeMs)) {
+    add('PARTIAL_FILL_VALIDATION_CLOCK_INVALID');
+  }
+  if (positive(calibrationMaximumAgeMs)
+    && calibrationMaximumAgeMs > PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS) {
+    add('PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_EXCEEDED');
+  }
   if (!positive(artifact.calibratedAtMs) || !positive(artifact.maximumAgeMs)) add('PARTIAL_FILL_CALIBRATION_TIME_INVALID');
-  if (positive(artifact.maximumAgeMs) && positive(expected?.maximumAgeMs)
-    && artifact.maximumAgeMs > expected.maximumAgeMs) add('PARTIAL_FILL_MAXIMUM_AGE_EXCEEDS_POLICY');
+  if (positive(artifact.maximumAgeMs) && positive(calibrationMaximumAgeMs)
+    && artifact.maximumAgeMs > calibrationMaximumAgeMs) add('PARTIAL_FILL_MAXIMUM_AGE_EXCEEDS_POLICY');
   if (positive(artifact.calibratedAtMs) && positive(expected?.nowMs)) {
     if (artifact.calibratedAtMs > expected.nowMs) add('PARTIAL_FILL_CALIBRATION_FROM_FUTURE');
     else if (positive(artifact.maximumAgeMs) && expected.nowMs - artifact.calibratedAtMs > artifact.maximumAgeMs) {
@@ -416,7 +442,7 @@ export function buildAuthoritativePaperPartialFillCostEvidence(input: Readonly<{
     valuePercent: artifact.estimatedPartialFillImpactPercent,
     quality: 'ESTIMATED',
     source: `INDEPENDENT_PARTIAL_FILL_CALIBRATION:${artifact.artifactId.trim()}:${artifact.methodologyVersion.trim()}`,
-    observedAtMs: artifact.calibratedAtMs,
+    observedAtMs: positive(expected?.nowMs) ? expected.nowMs : artifact.calibratedAtMs,
   });
   return Object.freeze({
     schemaVersion: AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_VERSION,
@@ -449,6 +475,10 @@ export const AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_SAFETY = Object.free
   testFixtureRuntimeCredit: 0,
   missingDataMayProduceZeroCost: false,
   measuredZeroRequiresIndependentEvidence: true,
+  calibrationFreshnessAuthorityBound: true,
+  calibrationMaximumAgeMs: PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
+  runtimeEvidenceRevalidatedAtReadTime: true,
+  calibrationTimestampRewritten: false,
   publicDepthIsRealFillProof: false,
   realFillObserved: false,
   executionAuthority: 'NONE',
