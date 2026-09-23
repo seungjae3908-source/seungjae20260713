@@ -42,6 +42,26 @@ test('portfolio overlay cache accepts only internally consistent persisted truth
   }])).toEqual([]);
 });
 
+test('portfolio overlay cache rejects noncanonical or unbounded ticker identities', () => {
+  for (const ticker of [
+    'aapl',
+    ' AAPL ',
+    '__PROTO__',
+    'AAPL/USD',
+    'A'.repeat(33),
+  ]) {
+    expect(parsePortfolioChartOverlays([{
+      ...VALID_OVERLAY,
+      ticker,
+    }])).toEqual([]);
+  }
+
+  expect(parsePortfolioChartOverlays([{
+    ...VALID_OVERLAY,
+    ticker: 'BRK.B',
+  }])).toHaveLength(1);
+});
+
 test('portfolio overlay cache never resurrects malformed or duplicate rows after reload parsing', () => {
   const malformed = {
     ...VALID_OVERLAY,
