@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+  issue_comment:
+    types: [created]
 
 permissions:
   actions: write
@@ -16,6 +18,14 @@ concurrency:
 
 jobs:
   ensure-exact-main-ci:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'issue_comment' &&
+       !github.event.issue.pull_request &&
+       github.event.issue.number == 23 &&
+       github.event.comment.user.login == github.repository_owner &&
+       github.event.comment.author_association == 'OWNER' &&
+       startsWith(github.event.comment.body, '/run-application-ci-main '))
     name: Ensure exact main SHA receives verified Application CI
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -34,7 +44,20 @@ jobs:
             } = require(`${process.env.GITHUB_WORKSPACE}/api-server/scripts/production-ci-provenance.cjs`);
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const sha = context.sha;
+            let sha = String(context.sha ?? '').toLowerCase();
+            if (context.eventName === 'issue_comment') {
+              const body = String(context.payload.comment?.body ?? '').trim();
+              const match = /^\/run-application-ci-main ([0-9a-f]{40})$/u.exec(body);
+              if (!match) {
+                core.setFailed('Exact command required: /run-application-ci-main <40-character-current-main-sha>');
+                return;
+              }
+              sha = match[1].toLowerCase();
+            }
+            if (!/^[0-9a-f]{40}$/u.test(sha)) {
+              core.setFailed('Exact 40-character current-main SHA required.');
+              return;
+            }
             const officialWorkflowId = 'futures-public-network-smoke.yml';
             const officialPath = '.github/workflows/futures-public-network-smoke.yml';
             const runUrlPattern = /\/actions\/runs\/(\d+)(?:[/?#]|$)/;
