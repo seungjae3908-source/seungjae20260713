@@ -30,6 +30,36 @@ export const PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY = Object.f
   priorEligibleBoundaryReuseAllowed: false,
 } as const);
 
+export const PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_COMPONENT_AUTHORITIES = Object.freeze({
+  businessTolerance: Object.freeze({
+    identity: 'PUBLIC_FORWARD_PARTIAL_FILL_BUSINESS_TOLERANCE_V1',
+    version: 'V1',
+    digest: 'adef3bbf8f6647f0314a35ca5b0d48eebefed614a0e66ab28e93f6d3dc2a0f7c',
+    sourceReference: 'https://github.com/seungjae3908-source/seungjae20260713/issues/838#issuecomment-5489589062',
+  }),
+  statisticalMethodology: Object.freeze({
+    identity: 'PUBLIC_FORWARD_PARTIAL_FILL_STATISTICAL_METHODOLOGY_V1',
+    version: 'V1',
+    digest: '1b60b2f3719556b14d8d360a25f2043f5e45b0c24089c1636f3d66d784801308',
+    sourceReference: 'https://github.com/seungjae3908-source/seungjae20260713/issues/838#issuecomment-5492123059',
+  }),
+  scopeUniverse: Object.freeze({
+    identity: 'PUBLIC_FORWARD_PARTIAL_FILL_SCOPE_UNIVERSE_V1',
+    version: 'V1',
+    digest: '55bbbf79b89040bffe7485b48b97fa56d6175a0796d72dfb8985d1923d64e244',
+    sourceReference: 'https://github.com/seungjae3908-source/seungjae20260713/issues/838#issuecomment-5492547947',
+  }),
+  numericMinimumArtifact: Object.freeze({
+    identity: 'PUBLIC_FORWARD_PARTIAL_FILL_NUMERIC_MINIMUM_V1',
+    version: 'V1',
+    digest: '8c3ded9d0862b9c81f04a466fb6d4df03ee39185cc1f59bc08c41923231b8e29',
+    sourceReference: 'https://github.com/seungjae3908-source/seungjae20260713/issues/838#issuecomment-5497188794',
+    perScopeMinimumEffectiveIndependentN: 178,
+    scopeCellCount: 4,
+    aggregateEffectiveIndependentCellCreditFloor: 712,
+  }),
+} as const);
+
 export const PUBLIC_FORWARD_PARTIAL_FILL_V3_SAFETY = Object.freeze({
   publicOnly: true,
   predecessorV2MutationAllowed: false,
@@ -296,6 +326,20 @@ function validateExactPredecessorV2Authority(
   return blockers;
 }
 
+function validateExactFrozenComponent(
+  name: keyof typeof PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_COMPONENT_AUTHORITIES,
+  value: PublicForwardPartialFillV3FrozenRef | undefined,
+): string[] {
+  const expected = PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_COMPONENT_AUTHORITIES[name];
+  if (!value
+    || value.identity !== expected.identity
+    || value.version !== expected.version
+    || value.digest !== expected.digest) {
+    return [`${name.toUpperCase()}_EXACT_FROZEN_AUTHORITY_MISMATCH`];
+  }
+  return [];
+}
+
 export function computePublicForwardPartialFillV3MethodologyDigest(
   methodology: Omit<PublicForwardPartialFillV3ProspectiveMethodology, 'methodologyDigest'>
     | PublicForwardPartialFillV3ProspectiveMethodology,
@@ -317,9 +361,13 @@ export function buildPublicForwardPartialFillV3ProspectiveMethodology(
   blockers.push(...validateFrozenRef('predecessor_v2', input?.predecessorV2, input?.methodologyFrozenAtMs));
   blockers.push(...validateExactPredecessorV2Authority(input?.predecessorV2));
   blockers.push(...validateFrozenRef('business_tolerance', input?.businessTolerance, input?.methodologyFrozenAtMs));
+  blockers.push(...validateExactFrozenComponent('businessTolerance', input?.businessTolerance));
   blockers.push(...validateFrozenRef('statistical_methodology', input?.statisticalMethodology, input?.methodologyFrozenAtMs));
+  blockers.push(...validateExactFrozenComponent('statisticalMethodology', input?.statisticalMethodology));
   blockers.push(...validateFrozenRef('numeric_minimum_artifact', input?.numericMinimumArtifact, input?.methodologyFrozenAtMs));
+  blockers.push(...validateExactFrozenComponent('numericMinimumArtifact', input?.numericMinimumArtifact));
   blockers.push(...validateFrozenRef('scope_universe', input?.scopeUniverse, input?.methodologyFrozenAtMs));
+  blockers.push(...validateExactFrozenComponent('scopeUniverse', input?.scopeUniverse));
 
   const modeled = input?.modeledLane;
   if (modeled?.evidenceClass !== 'MODELED_PUBLIC_ONLY'
