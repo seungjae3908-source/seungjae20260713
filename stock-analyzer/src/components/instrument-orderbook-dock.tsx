@@ -470,6 +470,7 @@ export function InstrumentOrderbookDock({
 
   const currency = data?.currency ?? (market === 'US' ? 'USD' : market === 'BITGET' ? 'USDT' : 'KRW');
   const imbalance = useMemo(() => data?.imbalance == null ? '-' : `${(data.imbalance * 100).toFixed(1)}%`, [data?.imbalance]);
+  const diagnostic = error ?? data?.reason ?? null;
 
   return (
     <>
@@ -527,10 +528,10 @@ export function InstrumentOrderbookDock({
                 <span className="text-right">Depth imbalance: {imbalance}</span>
               </div>
 
-              {error ? (
+              {diagnostic ? (
                 <div className="flex items-start gap-2 border-b border-border bg-amber-500/10 px-3 py-2 text-xs" role="status">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-                  <span>{error}</span>
+                  <span>{diagnostic}</span>
                 </div>
               ) : null}
 
