@@ -142,7 +142,7 @@ jobs:
 
             const MAX_HUB_CHAIN_DEPTH = 32;
             const predecessorFromBody = (value) => {
-              const matches = [...String(value ?? '').matchAll(/<!--\\s*agent-hub-predecessor:(\\d+)\\s*-->/g)]
+              const matches = [...String(value ?? '').matchAll(/<!--\s*agent-hub-predecessor:(\d+)\s*-->/g)]
                 .map((row) => Number(row[1]))
                 .filter((row) => Number.isInteger(row) && row > 0);
               if (matches.length === 0) return null;
@@ -150,7 +150,7 @@ jobs:
               return matches[0];
             };
             const successorFromBody = (value) => {
-              const matches = [...String(value ?? '').matchAll(/<!--\\s*agent-hub-successor:(\\d+)\\s*-->/g)]
+              const matches = [...String(value ?? '').matchAll(/<!--\s*agent-hub-successor:(\d+)\s*-->/g)]
                 .map((row) => Number(row[1]))
                 .filter((row) => Number.isInteger(row) && row > 0);
               if (matches.length === 0) return null;
@@ -168,8 +168,8 @@ jobs:
                 const receipt = String(comment.body ?? '');
                 if (String(comment.user?.login ?? '') !== 'github-actions[bot]') continue;
                 if (!receipt.includes('[RESEARCH_DASHBOARD_INTERNAL_ACTIVATION]') || !receipt.includes('status: success')) continue;
-                const activationMatch = receipt.match(/(?:^|\\n)target_sha:\\s*([0-9a-f]{40})(?:\\n|$)/i);
-                const hubMatch = receipt.match(/(?:^|\\n)canonical_hub:\\s*#(\\d+)(?:\\n|$)/i);
+                const activationMatch = receipt.match(/(?:^|\n)target_sha:\s*([0-9a-f]{40})(?:\n|$)/i);
+                const hubMatch = receipt.match(/(?:^|\n)canonical_hub:\s*#(\d+)(?:\n|$)/i);
                 if (!activationMatch || Number(hubMatch?.[1] ?? 0) !== issueNumber) continue;
                 const candidate = activationMatch[1].toLowerCase();
                 try {
