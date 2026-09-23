@@ -140,11 +140,36 @@ function isValidPortfolioChartOverlay(value: unknown): value is PortfolioChartOv
 export function parsePortfolioChartOverlays(value: unknown): PortfolioChartOverlay[] {
   if (!Array.isArray(value)) return [];
 
+  const validRows = value.filter(isValidPortfolioChartOverlay);
+  const identities = new Map<
+    string,
+    { market: "KR" | "US"; currency: "KRW" | "USD" }
+  >();
+  const conflictedTickers = new Set<string>();
+
+  for (const row of validRows) {
+    const previous = identities.get(row.ticker);
+    if (
+      previous &&
+      (previous.market !== row.market || previous.currency !== row.currency)
+    ) {
+      conflictedTickers.add(row.ticker);
+      continue;
+    }
+
+    if (!previous) {
+      identities.set(row.ticker, {
+        market: row.market,
+        currency: row.currency,
+      });
+    }
+  }
+
   const overlays: PortfolioChartOverlay[] = [];
   const seenTickers = new Set<string>();
 
-  for (const row of value) {
-    if (!isValidPortfolioChartOverlay(row) || seenTickers.has(row.ticker)) {
+  for (const row of validRows) {
+    if (conflictedTickers.has(row.ticker) || seenTickers.has(row.ticker)) {
       continue;
     }
 
