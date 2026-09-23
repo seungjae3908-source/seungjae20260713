@@ -192,10 +192,8 @@ function stageObservation(input, descriptor, identity, verifiedAtMs, rootIdentit
   const observedAtMs = sourceTimestamp(source);
   const timestampValid = observedAtMs !== null && observedAtMs <= verifiedAtMs + MAX_FUTURE_SKEW_MS;
   const canonical = descriptor.kind === 'canonical';
-  const stageIdentityMatches = canonical
-    ? rootIdentityMatches({ identity: source?.identity }, identity)
-    : identity.complete;
-  const identityMatches = canonical ? rootIdentityValid && stageIdentityMatches : identity.complete;
+  const stageIdentityMatches = rootIdentityMatches({ identity: source?.identity }, identity);
+  const identityMatches = canonical ? rootIdentityValid && stageIdentityMatches : stageIdentityMatches;
   const creditValid = !canonical || (
     source?.naturalCredit === sourceCount
     && source?.replayCredit === 0
