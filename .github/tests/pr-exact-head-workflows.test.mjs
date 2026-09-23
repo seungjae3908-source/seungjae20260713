@@ -53,6 +53,7 @@ const documents = Object.fromEntries(await Promise.all(Object.entries(WORKFLOWS)
 
 const rule0Sidecar = await readFile(".github/workflows/prediction-lab-rule0-1h-shadow-sidecar.yml", "utf8");
 const derivativesHistory = await readFile("market-prediction-lab/src/derivatives-history.js");
+const dashboardReadback = await readFile(".github/workflows/research-dashboard-overview-readback.yml", "utf8");
 
 test("workflow syntax and PR event contracts are explicit", () => {
   for (const document of Object.values(documents)) {
@@ -219,4 +220,28 @@ test("PR lanes have no secret, deployment, timer, or trading authority", () => {
     assert.doesNotMatch(document, /^\s+schedule:/mu);
     assert.doesNotMatch(document, /REAL_ORDER_ENABLED\s*:\s*true/u);
   }
+});
+
+
+test("Research Dashboard readback receipt parser uses real regex escapes", () => {
+  assert.ok(
+    dashboardReadback.includes("matchAll(/<!--\\s*agent-hub-predecessor:(\\d+)\\s*-->/g)"),
+    "predecessor marker parser must use regex whitespace/digit tokens",
+  );
+  assert.ok(
+    dashboardReadback.includes("matchAll(/<!--\\s*agent-hub-successor:(\\d+)\\s*-->/g)"),
+    "successor marker parser must use regex whitespace/digit tokens",
+  );
+  assert.ok(
+    dashboardReadback.includes("receipt.match(/(?:^|\\n)target_sha:\\s*([0-9a-f]{40})(?:\\n|$)/i)"),
+    "activation target parser must use newline/whitespace regex tokens",
+  );
+  assert.ok(
+    dashboardReadback.includes("receipt.match(/(?:^|\\n)canonical_hub:\\s*#(\\d+)(?:\\n|$)/i)"),
+    "activation hub parser must use newline/whitespace/digit regex tokens",
+  );
+  assert.equal(dashboardReadback.includes("matchAll(/<!--\\\\s*agent-hub-predecessor:"), false);
+  assert.equal(dashboardReadback.includes("matchAll(/<!--\\\\s*agent-hub-successor:"), false);
+  assert.equal(dashboardReadback.includes("receipt.match(/(?:^|\\\\n)target_sha:\\\\s*"), false);
+  assert.equal(dashboardReadback.includes("receipt.match(/(?:^|\\\\n)canonical_hub:\\\\s*"), false);
 });
