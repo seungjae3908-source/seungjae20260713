@@ -19,9 +19,11 @@ export interface MarketInformationRoomReader {
 
 export interface MarketInformationRouterOptions {
   stockFirstPaintTimeoutMs?: number;
+  stockWarmupDeadlineMs?: number;
 }
 
 const DEFAULT_STOCK_FIRST_PAINT_TIMEOUT_MS = 4_000;
+const DEFAULT_STOCK_WARMUP_DEADLINE_MS = 12_000;
 const FIRST_PAINT_TIMEOUT_CODE = 'MARKET_INFORMATION_FIRST_PAINT_TIMEOUT';
 type StockRoom = Extract<MarketInformationRoomId, 'stocks-kr' | 'stocks-us'>;
 
@@ -29,6 +31,13 @@ class MarketInformationFirstPaintTimeoutError extends Error {
   constructor(readonly timeoutMs: number) {
     super(`Stock market information exceeded the ${timeoutMs}ms first-paint budget`);
     this.name = 'MarketInformationFirstPaintTimeoutError';
+  }
+}
+
+class MarketInformationWarmupDeadlineError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super(`Stock market information warmup exceeded the ${timeoutMs}ms request budget`);
+    this.name = 'MarketInformationWarmupDeadlineError';
   }
 }
 
@@ -41,6 +50,17 @@ function resolveStockFirstPaintTimeout(options: MarketInformationRouterOptions):
   if (configured == null) return DEFAULT_STOCK_FIRST_PAINT_TIMEOUT_MS;
   if (!Number.isInteger(configured) || configured < 10 || configured > 30_000) {
     throw new Error('stockFirstPaintTimeoutMs must be an integer between 10 and 30000');
+  }
+  return configured;
+}
+
+function resolveStockWarmupDeadline(
+  options: MarketInformationRouterOptions,
+  firstPaintTimeoutMs: number,
+): number {
+  const configured = options.stockWarmupDeadlineMs ?? DEFAULT_STOCK_WARMUP_DEADLINE_MS;
+  if (!Number.isInteger(configured) || configured <= firstPaintTimeoutMs || configured > 60_000) {
+    throw new Error('stockWarmupDeadlineMs must be an integer greater than stockFirstPaintTimeoutMs and at most 60000');
   }
   return configured;
 }
@@ -102,6 +122,7 @@ export function createMarketInformationRouter(
 ): IRouter {
   const router: IRouter = Router();
   const stockFirstPaintTimeoutMs = resolveStockFirstPaintTimeout(options);
+  const stockWarmupDeadlineMs = resolveStockWarmupDeadline(options, stockFirstPaintTimeoutMs);
 
   router.get('/:room', async (req, res) => {
     const room = req.params.room;
@@ -115,23 +136,34 @@ export function createMarketInformationRouter(
     }
 
     const controller = new AbortController();
-    const abort = () => {
-      if (!controller.signal.aborted) controller.abort();
+    const abortWithReason = (reason?: unknown) => {
+      if (!controller.signal.aborted) controller.abort(reason);
     };
+    const abort = () => abortWithReason();
     const abortOnPrematureResponseClose = () => {
       if (!res.writableEnded) abort();
     };
     req.once('aborted', abort);
     res.once('close', abortOnPrematureResponseClose);
     let firstPaintTimer: ReturnType<typeof setTimeout> | undefined;
+    let warmupDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    let detachedWarmup = false;
 
     try {
       const roomPromise = service.getRoom(room, controller.signal);
+      const clearWarmupDeadline = () => {
+        if (warmupDeadlineTimer) clearTimeout(warmupDeadlineTimer);
+      };
+      void roomPromise.then(clearWarmupDeadline, clearWarmupDeadline);
       const result = isStockRoom(room)
         ? await Promise.race([
           roomPromise,
           new Promise<MarketInformationResponse>((_resolve, reject) => {
             firstPaintTimer = setTimeout(() => {
+              detachedWarmup = true;
+              warmupDeadlineTimer = setTimeout(() => {
+                abortWithReason(new MarketInformationWarmupDeadlineError(stockWarmupDeadlineMs));
+              }, stockWarmupDeadlineMs - stockFirstPaintTimeoutMs);
               reject(new MarketInformationFirstPaintTimeoutError(stockFirstPaintTimeoutMs));
             }, stockFirstPaintTimeoutMs);
           }),
@@ -168,6 +200,7 @@ export function createMarketInformationRouter(
       });
     } finally {
       if (firstPaintTimer) clearTimeout(firstPaintTimer);
+      if (!detachedWarmup && warmupDeadlineTimer) clearTimeout(warmupDeadlineTimer);
       req.removeListener('aborted', abort);
       res.removeListener('close', abortOnPrematureResponseClose);
     }

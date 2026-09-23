@@ -5,6 +5,9 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  buildAutonomousAlphaNaturalPaperObserverReceiptV1,
+} from "../scripts/run-paper-forward-schedule.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const SCRIPT = join(REPO_ROOT, "ops/research-production-readonly-evidence.sh");
@@ -112,6 +115,41 @@ test("Research Production read-only evidence follows canonical nested Shadow can
   );
 });
 
+test("Research Production read-only evidence exposes bounded Shadow summary failures from stdout state", async () => {
+  const source = await readFile(SCRIPT, "utf8");
+  const extractor = inlineNodeScript(source, 'read_file "$shadow_summary" | node -e');
+  const summary = {
+    schemaVersion: 3,
+    status: "fail",
+    groups: {
+      "crypto-futures-15m": {
+        status: "fail",
+        error: {
+          name: "Error",
+          message: "not enough shadow candles for BTCUSDT 15m",
+          details: { provider: "bitget-public-v2" },
+          stack: ["must-not-leak"],
+        },
+      },
+      "crypto-futures-1h": {
+        status: "pass",
+        candidate: { total: 4, settled: 1, pending: 3 },
+      },
+    },
+  };
+
+  const output = runInline(extractor, { input: JSON.stringify(summary) }).split(/\r?\n/);
+  assert.ok(output.includes("SHADOW_SUMMARY present=true status=fail"));
+  const failure = output.find((line) => line.startsWith("SHADOW_GROUP_FAILURE "));
+  assert.ok(failure);
+  assert.ok(failure.includes("name=crypto-futures-15m"));
+  assert.ok(failure.includes("status=fail"));
+  assert.ok(failure.includes("error_name=Error"));
+  assert.ok(failure.includes("error_message=not_enough_shadow_candles_for_BTCUSDT_15m"));
+  assert.ok(failure.includes("raw_log_included=false"));
+  assert.equal(failure.includes("must-not-leak"), false);
+});
+
 test("Research Production read-only evidence exports the latest identity-bound Natural Paper funnel", async () => {
   const source = await readFile(SCRIPT, "utf8");
   for (const token of [
@@ -128,6 +166,7 @@ test("Research Production read-only evidence exports the latest identity-bound N
     "authoritativeFirstZeroReasonEvidenceByStage",
     "PAPER_NATURAL_STAGE",
     "PAPER_NATURAL_REASON",
+    "PAPER_EVIDENCE_SOURCE",
     "payload_base64=",
   ]) {
     assert.ok(source.includes(token), `missing Natural Paper read-only evidence field: ${token}`);
@@ -172,6 +211,24 @@ test("Paper CLI v5 extractor emits a bounded payload and all twelve stage observ
     naturalFunnelMeasurements: stages,
     authoritativeFirstZeroReasonEvidenceByStage: {
       PAPER_ENTRY: { reasonCode: "NO_ENTRY", authoritative: true, freshness: "FRESH" },
+      EVIDENCE_COMPLETE: { reasonCode: "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_CONTRACT_RULES_AND_P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_EXECUTION_OBSERVATION_AND_P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_LEARNING_SNAPSHOT_AND_P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_PAPER_STATE_AND_P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_SUPPLEMENTAL_COST_EVIDENCE", authoritative: true, freshness: "FRESH" },
+    },
+    authoritativeSourceWiringStatus: "CALLBACKS_CONNECTED_BLOCKED_DATA",
+    authoritativeSourceBlockers: ["AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE"],
+    authoritativeEvidenceOwners: { authoritativeOwnersConnected: 7 },
+    authoritativeRuntimePackage: {
+      riskPolicyRecordTransport: "MISSING",
+      supplementalCostTransport: "MISSING",
+      suppliedSecret: "must-not-leak",
+    },
+    paperStateTransport: {
+      status: "BLOCKED_DATA_CONFIG_ABSENT",
+      state: "MISSING",
+      reason: "PAPER_STATE_SNAPSHOT_MISSING",
+      sourceShaExact: null,
+      publisherAccountBound: null,
+      callbackInvoked: false,
+      snapshotPath: "/must/not/leak",
     },
     externalFinancialMutationAllowed: false,
     privateRequestCount: 0,
@@ -187,13 +244,32 @@ test("Paper CLI v5 extractor emits a bounded payload and all twelve stage observ
   const payload = JSON.parse(Buffer.from(payloadField.slice("payload_base64=".length), "base64url").toString("utf8"));
 
   assert.equal(output.filter((line) => line.startsWith("PAPER_NATURAL_STAGE ")).length, 12);
-  assert.equal(output.filter((line) => line.startsWith("PAPER_NATURAL_REASON ")).length, 1);
+  assert.equal(output.filter((line) => line.startsWith("PAPER_NATURAL_REASON ")).length, 2);
+  const sourceStates = output.filter((line) => line.startsWith("PAPER_EVIDENCE_SOURCE "));
+  assert.equal(sourceStates.length, 5);
+  assert.ok(sourceStates.every((line) => line.includes("state=CONNECTED_NOT_OBSERVED")));
+  assert.ok(output.includes("PAPER_EVIDENCE_TRANSPORT wiring_status=CALLBACKS_CONNECTED_BLOCKED_DATA paper_state_status=BLOCKED_DATA_CONFIG_ABSENT paper_state_state=MISSING paper_state_reason=PAPER_STATE_SNAPSHOT_MISSING paper_state_source_sha_exact=null paper_state_publisher_account_bound=null paper_state_callback_invoked=false risk_policy_record=MISSING supplemental_cost=MISSING source_blockers=AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE"));
   assert.deepEqual(payload.naturalFunnelMeasurements.map(({ stage, status, count }) => ({ stage, status, count })), stages);
   assert.equal(payload.naturalDatasetIdentity, "dataset-v1");
+  assert.deepEqual(payload.authoritativeEvidenceTransports, {
+    wiringStatus: "CALLBACKS_CONNECTED_BLOCKED_DATA",
+    sourceBlockers: ["AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE"],
+    paperState: {
+      status: "BLOCKED_DATA_CONFIG_ABSENT",
+      state: "MISSING",
+      reason: "PAPER_STATE_SNAPSHOT_MISSING",
+      sourceShaExact: null,
+      publisherAccountBound: null,
+      callbackInvoked: false,
+    },
+    riskPolicyRecord: "MISSING",
+    supplementalCost: "MISSING",
+  });
   assert.equal(payload.externalFinancialMutationAllowed, false);
   assert.equal(payload.liveTrading, false);
   assert.equal(payload.orderAuthority, false);
   assert.equal(Object.hasOwn(payload, "suppliedSecret"), false);
+  assert.equal(Object.hasOwn(payload.authoritativeEvidenceTransports.paperState, "snapshotPath"), false);
 
   const unavailable = runInline(extractor, { input: '{"schemaVersion":"legacy"}\n' });
   assert.equal(unavailable, "PAPER_NATURAL present=false blocker=PAPER_FORWARD_CLI_V5_RESULT_UNAVAILABLE");
@@ -252,6 +328,13 @@ test("workflow recomputes FIRST_ZERO from the extracted v5 counts and exact rele
     `CYCLE profile=long-history present=true research_sha=${sha} failed_count=0`,
     "TASK profile=forward id=shadow-forward status=success",
     "TASK profile=forward id=paper-forward status=blocked_data",
+    "SHADOW_GROUP_FAILURE name=crypto-futures-15m status=fail error_name=Error error_message=public_feed_unavailable raw_log_included=false",
+    "PAPER_EVIDENCE_SOURCE type=CONTRACT_RULES state=CONNECTED_NOT_OBSERVED",
+    "PAPER_EVIDENCE_SOURCE type=EXECUTION_OBSERVATION state=CONNECTED_NOT_OBSERVED",
+    "PAPER_EVIDENCE_SOURCE type=LEARNING_SNAPSHOT state=CONNECTED_NOT_OBSERVED",
+    "PAPER_EVIDENCE_SOURCE type=PAPER_STATE state=CONNECTED_NOT_OBSERVED",
+    "PAPER_EVIDENCE_SOURCE type=SUPPLEMENTAL_COST_EVIDENCE state=CONNECTED_NOT_OBSERVED",
+    "PAPER_EVIDENCE_TRANSPORT wiring_status=CALLBACKS_CONNECTED_BLOCKED_DATA paper_state_status=BLOCKED_DATA_CONFIG_ABSENT paper_state_state=MISSING paper_state_reason=PAPER_STATE_SNAPSHOT_MISSING paper_state_source_sha_exact=null paper_state_publisher_account_bound=null paper_state_callback_invoked=false risk_policy_record=MISSING supplemental_cost=MISSING source_blockers=AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE",
     "PAPER_RUNTIME present=true live_trading=false order_authority=false private_request_count=0 financial_mutation_count=0 order_count=0",
     "PAPER_LEDGER present=true position_count=0 settlement_count=0",
     `PAPER_NATURAL present=true dataset_identity_sha256=${"a".repeat(64)} payload_base64=${payload}`,
@@ -270,6 +353,7 @@ test("workflow recomputes FIRST_ZERO from the extracted v5 counts and exact rele
     assert.equal(result.status, 0, result.stderr);
     const fields = outputFields(await readFile(outputPath, "utf8"));
     assert.equal(fields.status, "passed");
+    assert.equal(fields.shadow_failure_details, "crypto-futures-15m:fail:Error:public_feed_unavailable");
     assert.equal(fields.natural_trace_status, "BLOCKED");
     assert.equal(fields.natural_trace_error, "none");
     assert.equal(fields.natural_identity_complete, "true");
@@ -277,6 +361,18 @@ test("workflow recomputes FIRST_ZERO from the extracted v5 counts and exact rele
     assert.equal(fields.natural_first_zero_stage, "PAPER_ENTRY");
     assert.equal(fields.natural_first_zero_reason, "NO_ENTRY");
     assert.equal(fields.natural_first_zero_reason_evidence_status, "ACCEPTED");
+    assert.equal(fields.natural_evidence_source_connected_not_observed_count, "5");
+    assert.equal(fields.natural_evidence_source_observed_count, "0");
+    assert.equal(fields.evidence_source_wiring_status, "CALLBACKS_CONNECTED_BLOCKED_DATA");
+    assert.equal(fields.paper_state_transport_status, "BLOCKED_DATA_CONFIG_ABSENT");
+    assert.equal(fields.paper_state_transport_state, "MISSING");
+    assert.equal(fields.paper_state_transport_reason, "PAPER_STATE_SNAPSHOT_MISSING");
+    assert.equal(fields.paper_state_callback_invoked, "false");
+    assert.equal(fields.risk_policy_record_transport, "MISSING");
+    assert.equal(fields.supplemental_cost_transport, "MISSING");
+    assert.equal(fields.authoritative_source_blockers, "AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE");
+    assert.equal(fields.natural_evidence_source_trace,
+      "CONTRACT_RULES=CONNECTED_NOT_OBSERVED,EXECUTION_OBSERVATION=CONNECTED_NOT_OBSERVED,LEARNING_SNAPSHOT=CONNECTED_NOT_OBSERVED,PAPER_STATE=CONNECTED_NOT_OBSERVED,SUPPLEMENTAL_COST_EVIDENCE=CONNECTED_NOT_OBSERVED");
     const stageTrace = JSON.parse(Buffer.from(fields.natural_stage_trace_base64, "base64url").toString("utf8"));
     assert.equal(stageTrace.length, 12);
     assert.deepEqual(stageTrace.find((row) => row.stage === "PAPER_ENTRY"), {
@@ -286,3 +382,240 @@ test("workflow recomputes FIRST_ZERO from the extracted v5 counts and exact rele
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+
+test("Autonomous Alpha observer remains Paper-only while waiting for a runtime handoff", async () => {
+  const receipt = await buildAutonomousAlphaNaturalPaperObserverReceiptV1({
+    rootDirectory: "/var/lib/investment-research-production/forward/paper",
+    researchCodeSha: "a".repeat(40),
+    observedAtMs: 1,
+    paperOutput: {
+      scheduleActive: true,
+      externalFinancialMutationAllowed: false,
+      privateRequestCount: 0,
+      financialMutationCount: 0,
+      orderCount: 0,
+      liveTrading: false,
+      orderAuthority: false,
+      cycleId: "cycle-1",
+      naturalScheduleInvocation: true,
+      canonicalEntryCount: 0,
+      canonicalPositionCount: 0,
+      canonicalSettlementCount: 0,
+    },
+    readHandoff: async () => null,
+  });
+
+  assert.equal(receipt.status, "WAITING_FOR_ALPHA_HANDOFF");
+  assert.deepEqual(receipt.blockers, ["ALPHA_HANDOFF_MISSING"]);
+  assert.equal(receipt.paperOnly, true);
+  assert.equal(receipt.observerOnly, true);
+  assert.equal(receipt.liveTrading, false);
+  assert.equal(receipt.autoTrading, false);
+  assert.equal(receipt.realOrderEnabled, false);
+  assert.equal(receipt.privateTradingApiAllowed, false);
+  assert.equal(receipt.executionAuthority, "NONE");
+  assert.equal(receipt.privateRequestCount, 0);
+  assert.equal(receipt.realOrderCount, 0);
+  assert.equal(receipt.profitabilityProven, false);
+});
+
+test("Autonomous Alpha observer revalidates a handoff through the lineage firewall without gaining authority", async () => {
+  let readinessInput = null;
+  const receipt = await buildAutonomousAlphaNaturalPaperObserverReceiptV1({
+    rootDirectory: "/var/lib/investment-research-production/forward/paper",
+    researchCodeSha: "b".repeat(40),
+    observedAtMs: 2,
+    paperOutput: {
+      scheduleActive: true,
+      externalFinancialMutationAllowed: false,
+      privateRequestCount: 0,
+      financialMutationCount: 0,
+      orderCount: 0,
+      liveTrading: false,
+      orderAuthority: false,
+      cycleId: "cycle-2",
+      naturalScheduleInvocation: true,
+      canonicalEntryCount: 1,
+      canonicalPositionCount: 1,
+      canonicalSettlementCount: 0,
+    },
+    readHandoff: async () => ({
+      schemaVersion: "autonomous-alpha-runtime-handoff-v1",
+      sourceSha: "b".repeat(40),
+      handoffDigest: "c".repeat(64),
+      executionAuthority: "NONE",
+      liveTrading: false,
+      autoTrading: false,
+      realOrderEnabled: false,
+      privateTradingApiAllowed: false,
+      worldKnowledge: { status: "WORLD_KNOWLEDGE_READY" },
+      alphaGenome: { status: "ALPHA_GENOME_READY_FOR_FALSIFICATION" },
+      redTeam: { status: "RED_TEAM_SURVIVOR_RESEARCH_ONLY" },
+      forecast: { status: "FORECAST_READY_RESEARCH_ONLY" },
+      counterfactual: { status: "COUNTERFACTUAL_TWIN_EVALUATED_RESEARCH_ONLY" },
+      digitalTwin: { status: "MARKET_DIGITAL_TWIN_EVALUATED_RESEARCH_ONLY" },
+      championChallenger: { status: "CHAMPION_CHALLENGER_READY_FOR_NATURAL_PAPER" },
+      certification: { status: "READY_FOR_SEPARATE_NATURAL_PAPER_ACTIVATION_APPROVAL" },
+    }),
+    architectureReadinessBuilder: (input) => {
+      readinessInput = input;
+      return {
+        status: "ARCHITECTURE_READY_EVIDENCE_PENDING_INACTIVE",
+        architectureReady: true,
+        profitabilityProven: false,
+        blockers: [],
+        readinessDigest: "d".repeat(64),
+        executionAuthority: "NONE",
+        liveTradingAllowed: false,
+        autoTradingAllowed: false,
+        realOrderAllowed: false,
+      };
+    },
+  });
+
+  assert.equal(receipt.status, "ALPHA_OBSERVING_NATURAL_PAPER");
+  assert.equal(receipt.alphaHandoffPresent, true);
+  assert.equal(receipt.alphaHandoffDigest, "c".repeat(64));
+  assert.equal(receipt.naturalPaper.entryCount, 1);
+  assert.equal(receipt.profitabilityProven, false);
+  assert.equal(receipt.executionAuthority, "NONE");
+  assert.equal(receipt.realOrderCount, 0);
+  assert.equal(readinessInput.worldKnowledge.status, "WORLD_KNOWLEDGE_READY");
+  assert.equal(readinessInput.certification.status, "READY_FOR_SEPARATE_NATURAL_PAPER_ACTIVATION_APPROVAL");
+});
+
+test("Autonomous Alpha observer fails closed on unsafe Paper runtime or unsafe handoff", async () => {
+  const unsafePaper = await buildAutonomousAlphaNaturalPaperObserverReceiptV1({
+    rootDirectory: "/var/lib/investment-research-production/forward/paper",
+    researchCodeSha: "a".repeat(40),
+    observedAtMs: 3,
+    paperOutput: {
+      scheduleActive: true,
+      externalFinancialMutationAllowed: false,
+      privateRequestCount: 0,
+      financialMutationCount: 0,
+      orderCount: 1,
+      liveTrading: false,
+      orderAuthority: false,
+    },
+    readHandoff: async () => null,
+  });
+  assert.equal(unsafePaper.status, "BLOCKED_DATA");
+  assert.deepEqual(unsafePaper.blockers, ["ALPHA_OBSERVER_PAPER_RUNTIME_UNSAFE"]);
+
+  const unsafeHandoff = await buildAutonomousAlphaNaturalPaperObserverReceiptV1({
+    rootDirectory: "/var/lib/investment-research-production/forward/paper",
+    researchCodeSha: "a".repeat(40),
+    observedAtMs: 4,
+    paperOutput: {
+      scheduleActive: true,
+      externalFinancialMutationAllowed: false,
+      privateRequestCount: 0,
+      financialMutationCount: 0,
+      orderCount: 0,
+      liveTrading: false,
+      orderAuthority: false,
+    },
+    readHandoff: async () => ({
+      schemaVersion: "autonomous-alpha-runtime-handoff-v1",
+      sourceSha: "a".repeat(40),
+      executionAuthority: "LIVE",
+    }),
+  });
+  assert.equal(unsafeHandoff.status, "BLOCKED_DATA");
+  assert.deepEqual(unsafeHandoff.blockers, ["ALPHA_HANDOFF_INVALID_OR_UNSAFE"]);
+});
+
+
+test("Research Production read-only evidence exports only sanitized forward failure signatures", async () => {
+  const [source, workflow] = await Promise.all([
+    readFile(SCRIPT, "utf8"),
+    readFile(WORKFLOW, "utf8"),
+  ]);
+
+  for (const token of [
+    "TASK_FAILURE_SIGNATURE",
+    "tail -c 65536",
+    "raw_log_included=false",
+    "FAILED_TASK_STDERR_PATH_UNAVAILABLE",
+    "FAILED_TASK_STDERR_MISSING",
+    "SIGNATURE_EXTRACTION_FAILED",
+    "ERR_MODULE_NOT_FOUND",
+    "PAPER_FORWARD_RUNTIME",
+  ]) {
+    assert.ok(source.includes(token), `missing safe task failure diagnostic token: ${token}`);
+  }
+
+  for (const token of [
+    "shadow_failure_signatures",
+    "shadow_failure_categories",
+    "shadow_failure_stderr_sha256",
+    "paper_failure_signatures",
+    "paper_failure_categories",
+    "paper_failure_stderr_sha256",
+  ]) {
+    assert.ok(workflow.includes(token), `missing sanitized Hub failure field: ${token}`);
+  }
+
+  const stateRoot = resolve("fixture-research-production-state");
+  const sha = "a".repeat(40);
+  const canonicalStderr = join(stateRoot, "runs", "cycle-1", "paper-forward", "stderr.log");
+  const resolver = inlineNodeScript(source, 'task_failure_path="$(read_file');
+  const canonicalCycle = JSON.stringify({
+    researchSha: sha,
+    results: [{ id: "paper-forward", status: "failed", stderrPath: canonicalStderr }],
+  });
+  assert.equal(
+    runInline(resolver, { input: canonicalCycle, args: [stateRoot, "paper-forward", sha] }),
+    canonicalStderr,
+  );
+
+  const outsideCycle = JSON.stringify({
+    researchSha: sha,
+    results: [{ id: "paper-forward", status: "failed", stderrPath: resolve("outside", "paper-forward", "stderr.log") }],
+  });
+  assert.equal(
+    runInline(resolver, { input: outsideCycle, args: [stateRoot, "paper-forward", sha] }),
+    "",
+  );
+  assert.equal(
+    runInline(resolver, { input: canonicalCycle, args: [stateRoot, "paper-forward", "b".repeat(40)] }),
+    "",
+  );
+
+  const extractor = inlineNodeScript(source, 'tail -c 65536 -- "$task_failure_path"');
+  const secret = "super-secret-token-value";
+  const extracted = runInline(extractor, {
+    input: [
+      "Error [ERR_MODULE_NOT_FOUND]: Cannot find package private-package",
+      "PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_BINDING_REQUIRED",
+      "ReferenceError: missingThing is not defined",
+      "ENOENT: /private/path",
+      secret,
+    ].join("\n"),
+    args: ["forward", "paper-forward"],
+  });
+  assert.ok(extracted.startsWith("TASK_FAILURE_SIGNATURE "));
+  assert.ok(extracted.includes("ERR_MODULE_NOT_FOUND"));
+  assert.ok(extracted.includes("PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_BINDING_REQUIRED"));
+  assert.ok(extracted.includes("NODE_REFERENCE_ERROR"));
+  assert.ok(extracted.includes("FS_ENOENT"));
+  assert.ok(extracted.includes("raw_log_included=false"));
+  assert.match(extracted, /stderr_tail_sha256=[0-9a-f]{64}/u);
+  assert.equal(extracted.includes(secret), false);
+  assert.equal(extracted.includes("private-package"), false);
+  assert.equal(extracted.includes("/private/path"), false);
+
+  assert.equal(
+    source.includes('printf \'%s\\n\' "$task_failure_path"'),
+    false,
+    "raw server stderr path must not be printed",
+  );
+  assert.equal(
+    workflow.includes("raw_stderr"),
+    false,
+    "Hub reporting must never carry raw stderr",
+  );
+});
+

@@ -4452,7 +4452,10 @@ function createCryptoSignalScannerService(providers = defaultProviders) {
         }
         throw error instanceof CryptoScannerProviderError ? error : new CryptoScannerProviderError(error instanceof Error ? error.message : "CRYPTO_UNIVERSE_UNAVAILABLE");
       }
-      const batchSize = Math.max(5, Math.min(MAX_BATCH_SIZE, Math.floor(request.batchSize) || 24));
+      const requestedBatchSize = Math.floor(request.batchSize) || 24;
+      const forwardPublicSpot = request.market === "spot" && request.memberId === "forward-observer-public-only";
+      const effectiveMaxBatchSize = forwardPublicSpot ? 5 : MAX_BATCH_SIZE;
+      const batchSize = Math.max(5, Math.min(effectiveMaxBatchSize, requestedBatchSize));
       const cursor = Math.max(0, Math.min(universe.rows.length, Math.floor(request.cursor) || 0));
       const batch = universe.rows.slice(cursor, cursor + batchSize);
       const nextCursor = cursor + batch.length < universe.rows.length ? cursor + batch.length : null;
@@ -8461,8 +8464,8 @@ function createAuthoritativePaperGenericRiskPolicyProducer(input) {
   return async function produceAuthoritativePaperGenericRiskPolicy(request) {
     const requestBlockers = validateRequest(request);
     if (requestBlockers.length > 0) return blocked5(request ?? {}, requestBlockers);
-    const nowMs = now();
-    if (!positive10(nowMs)) return blocked5(request, ["RISK_POLICY_SOURCE_CLOCK_INVALID"]);
+    const sourceReadStartedAtMs = now();
+    if (!positive10(sourceReadStartedAtMs)) return blocked5(request, ["RISK_POLICY_SOURCE_CLOCK_INVALID"]);
     let rawRecord;
     try {
       rawRecord = await input.readCanonicalRecord(Object.freeze({
@@ -8473,6 +8476,10 @@ function createAuthoritativePaperGenericRiskPolicyProducer(input) {
       }));
     } catch {
       return blocked5(request, ["RISK_POLICY_CANONICAL_RECORD_SOURCE_ERROR"]);
+    }
+    const nowMs = now();
+    if (!positive10(nowMs) || nowMs < sourceReadStartedAtMs) {
+      return blocked5(request, ["RISK_POLICY_SOURCE_CLOCK_INVALID"]);
     }
     const checked = validateRecordEnvelope(rawRecord, request, nowMs);
     if (!checked.record) return blocked5(request, checked.blockers);

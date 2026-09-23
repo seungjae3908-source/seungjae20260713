@@ -27,6 +27,7 @@ import {
   answerCanonicalResearchQuestion,
   buildFullCostRows,
   buildResearchPipeline,
+  classifySha,
   formatCanonicalMetric,
   isFullCostReady,
   statusLabel,
@@ -248,10 +249,78 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
         ? 'normal'
         : 'insufficient';
   const staleCount = cards.filter((card) => card.status === 'stale').length;
+  const factory = overview.factory ?? {
+    present: false,
+    status: 'MISSING' as const,
+    generatedAt: null,
+    researchSha: null,
+    firstZero: null,
+    policyPresent: null,
+    policyValid: null,
+    policyDigest: null,
+    readyMarketCount: null,
+    blockedMarketCount: null,
+    readyProfileCount: null,
+    blockedProfileCount: null,
+    runtimeStatus: null,
+    nextFirstZero: null,
+    controlPlaneDigest: null,
+  };
+  const factoryStatus: ResearchProductStatus = !factory.present
+    ? 'unmeasured'
+    : factory.status === 'INVALID' || factory.status === 'BLOCKED_POLICY_INVALID'
+      ? 'error'
+      : factory.status === 'READY_NON_ACTIVATING'
+        ? 'normal'
+        : 'attention';
+  const factoryValue = factory.status === 'READY_NON_ACTIVATING'
+    ? '검증 준비'
+    : factory.status === 'BLOCKED_POLICY_MISSING'
+      ? '정책 미확정'
+      : factory.status === 'BLOCKED_NO_READY_PROFILES'
+        ? '데이터 대기'
+        : factory.status === 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_MISSING'
+          ? '개발 진단 필요'
+          : factory.status === 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_INVALID'
+            ? '개발 진단 오류'
+            : factory.status === 'BLOCKED_RUNTIME_BINDINGS'
+              ? '연결 대기'
+              : factory.status === 'BLOCKED_POLICY_INVALID'
+                ? '정책 오류'
+                : factory.status === 'INVALID'
+                  ? '근거 오류'
+                  : '미측정';
+  const factoryDetail = factory.present
+    ? `시장 ${factory.readyMarketCount ?? '—'}/4 · 프로필 ${factory.readyProfileCount ?? '—'}/12 · ${factory.firstZero ?? 'FIRST_ZERO 미확인'}`
+    : 'Factory runtime status 미수집';
+  const temporal = overview.dataFactory?.temporalCryptoFutures ?? {
+    present: false,
+    status: 'MISSING' as const,
+    generatedAt: null,
+    researchSha: null,
+    failedCount: null,
+    observationCount: null,
+    ledgerDigest: null,
+    results: [],
+  };
+  const temporalStatus: ResearchProductStatus = !temporal.present
+    ? 'unmeasured'
+    : temporal.status === 'INVALID'
+      ? 'error'
+      : temporal.status === 'partial_failure'
+        ? 'attention'
+        : 'accumulating';
+  const temporalDetail = !temporal.present
+    ? 'Temporal evidence 미수집'
+    : temporal.status === 'INVALID'
+      ? 'Temporal evidence 무결성 확인 필요'
+      : `${temporal.results.length}개 심볼 · 실패 ${temporal.failedCount ?? 0}개`;
   return (
     <section id="research-tab-overview" role="tabpanel" aria-labelledby="research-tab-overview-trigger" className="space-y-4" data-testid="research-overview-tab">
-      <section className="grid grid-cols-2 gap-2 lg:grid-cols-5" aria-label="연구 핵심 상태">
+      <section className="grid grid-cols-2 gap-2 lg:grid-cols-7" aria-label="연구 핵심 상태">
         <TopStatus label="연구 시스템" value={statusLabel(systemStatus)} status={systemStatus} detail={overview.state.present ? 'Canonical overview 연결됨' : 'Canonical evidence 미수집'} />
+        <TopStatus label="데이터 팩토리" value={temporal.observationCount == null ? statusLabel(temporalStatus) : `${temporal.observationCount.toLocaleString('ko-KR')}건`} status={temporalStatus} detail={temporalDetail} />
+        <TopStatus label="리서치 팩토리" value={factoryValue} status={factoryStatus} detail={factoryDetail} />
         <TopStatus label="실거래" value="비활성" status="inactive" detail="executionAuthority=NONE" />
         <TopStatus label="모의매매" value={statusLabel(paper.status)} status={paper.status} detail={blockerCopy(paper)} />
         <TopStatus label="수익성 검증" value={overview.profitability.proven ? '충족' : '미검증'} status={overview.profitability.proven ? 'verified' : 'waiting'} detail="미검증은 수익성 없음과 다릅니다" />
@@ -358,6 +427,14 @@ function EvidenceTab({ overview, promotion, cards }: {
   cards: ResearchPipelineCard[];
 }) {
   const sourceSha = promotion?.sourceSha && /^[0-9a-f]{40}$/i.test(promotion.sourceSha) ? promotion.sourceSha : '미수집';
+  const factory = overview.factory;
+  const liquidity = overview.research.liquidityIndependence;
+  const runtimeSha = factory?.researchSha && /^[0-9a-f]{40}$/i.test(factory.researchSha) ? factory.researchSha : '미수집';
+  const researchShaBinding = sourceSha === '미수집' || runtimeSha === '미수집' ? 'MISSING' : classifySha(sourceSha, runtimeSha);
+  const firstZero = overview.paper.candidatePerformance?.FIRST_ZERO
+    ?? factory?.firstZero
+    ?? factory?.nextFirstZero
+    ?? '미수집';
   const datasets = new Set(cards.flatMap((card) => card.records.map((record) => record.datasetId).filter(Boolean)));
   const stale = cards.filter((card) => card.status === 'stale').length;
   const wrongSha = cards.filter((card) => card.evidenceState === 'WRONG_SHA').length;
@@ -370,15 +447,15 @@ function EvidenceTab({ overview, promotion, cards }: {
       </div>
 
       <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        <EvidenceItem label="Current main SHA" value="미수집" />
+        <EvidenceItem label="Research runtime SHA" value={runtimeSha} state={runtimeSha === '미수집' ? 'unmeasured' : 'verified'} />
         <EvidenceItem label="Research source SHA" value={sourceSha} state={sourceSha === '미수집' ? 'unmeasured' : 'verified'} />
         <EvidenceItem label="Dataset identity" value={datasets.size ? `${datasets.size}개 canonical dataset` : '미수집'} state={datasets.size ? 'verified' : 'unmeasured'} />
         <EvidenceItem label="Strategy identity" value={promotion ? `${promotion.items.length}개` : '미수집'} state={promotion ? 'normal' : 'unmeasured'} />
-        <EvidenceItem label="Model digest" value="미수집" />
-        <EvidenceItem label="Workflow run ID" value="미수집" />
-        <EvidenceItem label="Artifact ID" value="미수집" />
-        <EvidenceItem label="Canonical receipt" value="미수집" />
-        <EvidenceItem label="Exact-head / exact-main CI" value="미수집" />
+        <EvidenceItem label="Control-plane digest" value={factory?.controlPlaneDigest ?? '미수집'} state={factory?.controlPlaneDigest ? 'verified' : 'unmeasured'} />
+        <EvidenceItem label="Workflow run ID" value={liquidity?.upstreamIngestRunId ?? '미수집'} state={liquidity?.upstreamIngestRunId ? 'verified' : 'unmeasured'} />
+        <EvidenceItem label="Artifact ID" value={liquidity?.upstreamIngestArtifactId ?? '미수집'} state={liquidity?.upstreamIngestArtifactId ? 'verified' : 'unmeasured'} />
+        <EvidenceItem label="Canonical receipt" value={liquidity?.reportDigest ?? '미수집'} state={liquidity?.reportDigest ? 'verified' : 'unmeasured'} />
+        <EvidenceItem label="Research SHA binding" value={researchShaBinding} state={researchShaBinding === 'PRESENT' ? 'verified' : researchShaBinding === 'WRONG_SHA' ? 'attention' : 'unmeasured'} />
         <EvidenceItem label="Publication timestamp" value={formatDate(overview.state.latestCycleAt)} state={overview.state.latestCycleAt ? 'normal' : 'unmeasured'} />
         <EvidenceItem label="Freshness" value={stale ? `STALE ${stale}개` : 'Canonical max-age 미수집'} state={stale ? 'stale' : 'unmeasured'} />
         <EvidenceItem label="SHA binding" value={wrongSha ? `WRONG_SHA ${wrongSha}개` : '명시적 mismatch 없음'} state={wrongSha ? 'attention' : 'normal'} />
@@ -391,7 +468,7 @@ function EvidenceTab({ overview, promotion, cards }: {
         <EvidenceItem label="Paper runtime proof" value={overview.paper.runtime.present ? 'PRESENT' : 'MISSING'} state={overview.paper.runtime.present ? 'normal' : 'unmeasured'} />
         <EvidenceItem label="Profitability proof" value={overview.profitability.proven ? 'PROVEN' : 'NOT_PROVEN'} state={overview.profitability.proven ? 'verified' : 'waiting'} />
         <EvidenceItem label="Champion" value={champion.metrics[0]?.value ?? '자료 없음'} state={champion.status} />
-        <EvidenceItem label="FIRST_ZERO" value="미수집" state="unmeasured" />
+        <EvidenceItem label="FIRST_ZERO" value={firstZero} state={firstZero === '미수집' ? 'unmeasured' : 'attention'} />
       </dl>
 
       <details className="rounded-2xl border border-card-border bg-card p-4">
