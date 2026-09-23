@@ -58,3 +58,20 @@ test('fails closed when declared spread disagrees with canonical best ask and bi
   await expect(dialog.getByTestId('ask-levels')).toBeEmpty();
   await expect(dialog.getByTestId('bid-levels')).toBeEmpty();
 });
+
+test('preserves crossed-book diagnosis even when a stale declared spread disagrees', async ({ page }) => {
+  const dialog = await serve(page, {
+    ...readyFixture,
+    bestAsk: 70000,
+    bestBid: 70100,
+    asks: [{ rank: 1, price: 70000, quantity: 1, cumulativeQuantity: 1 }],
+    bids: [{ rank: 1, price: 70100, quantity: 1, cumulativeQuantity: 1 }],
+    spread: 100,
+  });
+
+  await expect(dialog.getByText('Invalid', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('ORDERBOOK_CROSSED')).toBeVisible();
+  await expect(dialog.getByText(/교차 호가가 감지되어 클라이언트에서도 표시를 차단했습니다/)).toBeVisible();
+  await expect(dialog.getByTestId('ask-levels')).toBeEmpty();
+  await expect(dialog.getByTestId('bid-levels')).toBeEmpty();
+});
