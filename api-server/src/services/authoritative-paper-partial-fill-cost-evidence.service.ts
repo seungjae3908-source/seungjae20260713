@@ -442,7 +442,7 @@ export function buildAuthoritativePaperPartialFillCostEvidence(input: Readonly<{
     valuePercent: artifact.estimatedPartialFillImpactPercent,
     quality: 'ESTIMATED',
     source: `INDEPENDENT_PARTIAL_FILL_CALIBRATION:${artifact.artifactId.trim()}:${artifact.methodologyVersion.trim()}`,
-    observedAtMs: expected.nowMs,
+    observedAtMs: positive(expected?.nowMs) ? expected.nowMs : artifact.calibratedAtMs,
   });
   return Object.freeze({
     schemaVersion: AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_VERSION,
