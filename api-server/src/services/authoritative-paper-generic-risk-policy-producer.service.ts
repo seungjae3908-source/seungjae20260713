@@ -260,8 +260,8 @@ export function createAuthoritativePaperGenericRiskPolicyProducer(input: Readonl
     const requestBlockers = validateRequest(request);
     if (requestBlockers.length > 0) return blocked(request ?? {}, requestBlockers);
 
-    const sourceReadStartedAtMs = now();
-    if (!positive(sourceReadStartedAtMs)) return blocked(request, ['RISK_POLICY_SOURCE_CLOCK_INVALID']);
+    const nowMs = now();
+    if (!positive(nowMs)) return blocked(request, ['RISK_POLICY_SOURCE_CLOCK_INVALID']);
 
     let rawRecord: unknown;
     try {
@@ -275,10 +275,6 @@ export function createAuthoritativePaperGenericRiskPolicyProducer(input: Readonl
       return blocked(request, ['RISK_POLICY_CANONICAL_RECORD_SOURCE_ERROR']);
     }
 
-    const nowMs = now();
-    if (!positive(nowMs) || nowMs < sourceReadStartedAtMs) {
-      return blocked(request, ['RISK_POLICY_SOURCE_CLOCK_INVALID']);
-    }
     const checked = validateRecordEnvelope(rawRecord, request, nowMs);
     if (!checked.record) return blocked(request, checked.blockers);
     const canonicalRecord = checked.record;
