@@ -230,6 +230,11 @@ export function buildTaskPlan({
       env.PAPER_FORWARD_ACTIVATION_AT_MS = String(Number.isFinite(activationAtMs) ? activationAtMs : Date.now());
       env.PAPER_FORWARD_TRIGGER_SOURCE = 'cron';
       const riskPolicyRecordPath = inheritedEnv?.PAPER_FORWARD_RISK_POLICY_RECORD_PATH;
+      const riskPolicyDecisionPath = inheritedEnv?.PAPER_FORWARD_RISK_POLICY_DECISION_PATH;
+      if (riskPolicyRecordPath != null && riskPolicyRecordPath !== ''
+        && riskPolicyDecisionPath != null && riskPolicyDecisionPath !== '') {
+        throw new Error('Research Paper canonical risk policy source is ambiguous');
+      }
       if (riskPolicyRecordPath != null && riskPolicyRecordPath !== '') {
         if (typeof riskPolicyRecordPath !== 'string'
           || riskPolicyRecordPath.trim() !== riskPolicyRecordPath
@@ -239,6 +244,16 @@ export function buildTaskPlan({
           throw new Error('Research Paper risk policy record path must be a normalized absolute path');
         }
         env.PAPER_FORWARD_RISK_POLICY_RECORD_PATH = riskPolicyRecordPath;
+      }
+      if (riskPolicyDecisionPath != null && riskPolicyDecisionPath !== '') {
+        if (typeof riskPolicyDecisionPath !== 'string'
+          || riskPolicyDecisionPath.trim() !== riskPolicyDecisionPath
+          || /[\0\r\n]/u.test(riskPolicyDecisionPath)
+          || !isAbsolute(riskPolicyDecisionPath)
+          || resolve(riskPolicyDecisionPath) !== riskPolicyDecisionPath) {
+          throw new Error('Research Paper risk policy decision path must be a normalized absolute path');
+        }
+        env.PAPER_FORWARD_RISK_POLICY_DECISION_PATH = riskPolicyDecisionPath;
       }
       const supplementalCostEvidencePath = inheritedEnv?.PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH;
       if (supplementalCostEvidencePath != null && supplementalCostEvidencePath !== '') {

@@ -8,7 +8,7 @@
     "sourceGitBlobSha": "7dc275b70f9379e32f3fd6c718a612b06ceb1c46",
     "sourceSha256": "8c7563936de865e9103d73d15c0442a44f1cf33426315e758abad83d96880e0c"
   },
-  "sourceGraphSha256": "357d4856c0d9d7ec4fea60db63c827406c34bfa8273dab8ebd7538c94f3a8c12",
+  "sourceGraphSha256": "ac0be66e7443d9c89355f6b15dc6c712ae72baa6a71347587e258a0cc3bd1bfb",
   "sourceFiles": [
     "api-server/src/data/asset-type.ts",
     "api-server/src/lib/bounded-work-pool.ts",
@@ -59,7 +59,7 @@
     "api-server/src/services/authoritative-paper-callback-owners.service.ts": "7812af2bfa71d255796ac6034108844038f54a06da2ef710c9f6d8f32ddfdae0",
     "api-server/src/services/authoritative-paper-evidence-sources.service.ts": "70e9452a544d2f13d8eb70118c39331a293351ff5ef542f029a3b199c05d3dc1",
     "api-server/src/services/authoritative-paper-execution-cost-sources.service.ts": "b9f22e37fd45988a642078203fdf3fcba045ef94f9161a5a73a68fd0bcdcbc76",
-    "api-server/src/services/authoritative-paper-generic-risk-policy-producer.service.ts": "0d0a188033aa96e965eb94c3f52f2c59b0deb3e962c991e42d628f24219d06b5",
+    "api-server/src/services/authoritative-paper-generic-risk-policy-producer.service.ts": "e8748709c4bb7d8d2a6fad7df258b09157073cbd746bdb4961286b1c09802851",
     "api-server/src/services/authoritative-paper-latency-cost-evidence.service.ts": "cd4c7e361881e795390c47234e5f2150c8254886ecdc0460a5cb5efd50680c76",
     "api-server/src/services/authoritative-paper-risk-sizing-source.service.ts": "aa9775518fd8cf13b804ba10ab21a195f1634b41060c7d5ba63189cb5b94ce1a",
     "api-server/src/services/authoritative-paper-runtime-package.entry.ts": "f81bdb451227e8a18aead8e2572ff27ba60b3207fdf2c7b4b27634a7e70413be",
@@ -95,7 +95,7 @@
     "market-intelligence-sidecar/src/execution-quality.mjs": "f91139e1a06c26c3ac42920b3f95271aa96ee4bfacc228236ad4b313444c1cb8",
     "market-prediction-lab/src/bitget-position-tier-v1.js": "ddfa77300339b0968e719bd547a84389c890cc1d03982ec3d2d7d30859f6ed01"
   },
-  "bundleSha256": "d425745a193d24a2a2fea7fa30afe6b9c6841e4adddf98b273394ebffaa77169",
+  "bundleSha256": "659e2f3b41184cbc2bd34c10d2b98d7090ac21399abd865a0d3f567278ad9d37",
   "admissionBundleSchemaVersion": "scanner-paper-admission-evidence-bundle-v1",
   "paperStateSnapshotSchemaVersion": "paper-trading-state-snapshot-v2",
   "callbackOwnerContractSchemaVersion": "authoritative-paper-callback-owner-contract-v1",
