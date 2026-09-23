@@ -514,6 +514,19 @@ function kstDateKey(value: string | Date = new Date()) {
 	}).format(date);
 }
 
+function closedAutoTradeOutcomePercent(entry: AutoTradeSafetyJournalEntry): number | null {
+	const entryPrice = safeNumber(entry.entryPrice, Number.NaN);
+	const quantity = safeNumber(entry.quantity, Number.NaN);
+	if (!Number.isFinite(entryPrice) || entryPrice <= 0 || !Number.isFinite(quantity) || quantity <= 0) return null;
+
+	const explicit = safeNumber(entry.profitPercent, Number.NaN);
+	if (Number.isFinite(explicit)) return explicit;
+
+	const exitPrice = safeNumber(entry.exitPrice, Number.NaN);
+	if (!Number.isFinite(exitPrice) || exitPrice < 0) return null;
+	return ((exitPrice - entryPrice) / entryPrice) * 100;
+}
+
 export function calculateAutoTradeSafetySnapshot(
 	entries: AutoTradeSafetyJournalEntry[],
 	settings: Pick<
@@ -540,9 +553,11 @@ export function calculateAutoTradeSafetySnapshot(
 				new Date(a.closedAt ?? 0).getTime(),
 		);
 
+	const incompleteClosedOutcome = closed.some((entry) => closedAutoTradeOutcomePercent(entry) == null);
 	let consecutiveLosses = 0;
 	for (const entry of closed) {
-		const profitPercent = safeNumber(entry.profitPercent, 0);
+		const profitPercent = closedAutoTradeOutcomePercent(entry);
+		if (profitPercent == null) break;
 		if (profitPercent < 0) consecutiveLosses += 1;
 		else break;
 	}
@@ -550,23 +565,20 @@ export function calculateAutoTradeSafetySnapshot(
 	const dailyLossAmount = closed
 		.filter((entry) => kstDateKey(entry.closedAt ?? "") === today)
 		.reduce((sum, entry) => {
-			const quantity = Math.max(0, safeNumber(entry.quantity, 0));
-			const entryPrice = Math.max(0, safeNumber(entry.entryPrice, 0));
-			const exitPrice = safeNumber(entry.exitPrice, Number.NaN);
-			if (Number.isFinite(exitPrice) && exitPrice < entryPrice) {
-				return sum + (entryPrice - exitPrice) * quantity;
-			}
-			const profitPercent = safeNumber(entry.profitPercent, 0);
-			if (profitPercent < 0) {
-				return sum + entryPrice * quantity * (Math.abs(profitPercent) / 100);
-			}
-			return sum;
+			const profitPercent = closedAutoTradeOutcomePercent(entry);
+			if (profitPercent == null || profitPercent >= 0) return sum;
+			const quantity = safeNumber(entry.quantity, Number.NaN);
+			const entryPrice = safeNumber(entry.entryPrice, Number.NaN);
+			if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(entryPrice) || entryPrice <= 0) return sum;
+			return sum + entryPrice * quantity * (Math.abs(profitPercent) / 100);
 		}, 0);
 	const accountValue = Math.max(1, safeNumber(settings.accountValue, 1));
 	const dailyLossPercent = (dailyLossAmount / accountValue) * 100;
 
 	let blockedReason: string | null = null;
-	if (openPositions >= settings.maxOpenPositions) {
+	if (incompleteClosedOutcome) {
+		blockedReason = "종료 거래 손익 근거가 불완전하여 신규주문을 중지했습니다.";
+	} else if (openPositions >= settings.maxOpenPositions) {
 		blockedReason = `동시 보유 한도 ${settings.maxOpenPositions}종목에 도달했습니다.`;
 	} else if (dailyOrders >= settings.maxDailyOrders) {
 		blockedReason = `오늘 신규주문 한도 ${settings.maxDailyOrders}회에 도달했습니다.`;
