@@ -247,13 +247,19 @@ test("Research Dashboard readback receipt parser uses real regex escapes", () =>
 });
 
 
-test("Research Dashboard readback validates live count relationships instead of stale snapshot literals", () => {
+test("Research Dashboard readback validates frozen multi-lane live count relationships instead of stale snapshot literals", () => {
   assert.ok(dashboardReadback.includes("const measuredCounts = {"));
+  assert.ok(dashboardReadback.includes("targetSlotIndex: li.targetSlotIndex"));
   assert.ok(dashboardReadback.includes("Number.isSafeInteger(value)"));
-  assert.ok(dashboardReadback.includes("li.genuineScheduledSlotN < li.effectiveIndependentN"));
+  assert.equal(dashboardReadback.includes("li.genuineScheduledSlotN < li.effectiveIndependentN"), false);
+  assert.ok(dashboardReadback.includes("li.genuineScheduledSlotN > li.targetSlotIndex + 1"));
+  assert.ok(dashboardReadback.includes("li.effectiveIndependentN > li.genuineScheduledSlotN * 2"));
   assert.ok(dashboardReadback.includes("li.rawAcceptedN < li.effectiveIndependentN"));
   assert.ok(dashboardReadback.includes("li.effectiveIndependentN !== li.independentBuyN + li.independentSellN"));
   assert.ok(dashboardReadback.includes("li.effectiveIndependentN !== counts.TRAIN + counts.VALIDATION + counts.OOS"));
+  assert.ok(dashboardReadback.includes("counts.TRAIN > 512 || counts.VALIDATION > 256 || counts.OOS > 256"));
+  assert.ok(dashboardReadback.includes("li.targetSlotIndex < 512"));
+  assert.ok(dashboardReadback.includes("li.targetSlotIndex < 768"));
   assert.ok(dashboardReadback.includes("counts.VALIDATION !== 0"));
   assert.ok(dashboardReadback.includes("counts.OOS !== 0"));
   assert.equal(dashboardReadback.includes("li.genuineScheduledSlotN !== 15"), false);
