@@ -278,6 +278,48 @@ test('cross-source scope mismatch fails before validator execution', async () =>
   assert.ok(result.blockers.includes('PREPARATION_PARTIAL_FILL_SCOPE_MISMATCH'));
 });
 
+test('separator-distinct partial-fill symbol identities fail closed before validator execution', async () => {
+  const input = structuredClone(baseInput()) as any;
+  input.riskPolicyRequest.symbol = 'BTC-USDT';
+  input.riskPolicyRecord.symbolScopes = ['BTC-USDT'];
+  input.liquidity.liquidityImpactFirewallInput.expected.symbol = 'BTC-USDT';
+  input.partialFill.expected.symbol = 'BTC_USDT';
+  const result = await preparePaperForwardAuthoritativeInputs(input, {
+    createRiskProducer: () => {
+      throw new Error('must not execute');
+    },
+    buildLiquidity: () => {
+      throw new Error('must not execute');
+    },
+    buildPartialFill: () => {
+      throw new Error('must not execute');
+    },
+  });
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.ok(result.blockers.includes('PREPARATION_PARTIAL_FILL_SCOPE_MISMATCH'));
+});
+
+test('separator-distinct liquidity symbol identities fail closed before validator execution', async () => {
+  const input = structuredClone(baseInput()) as any;
+  input.riskPolicyRequest.symbol = 'BTC-USDT';
+  input.riskPolicyRecord.symbolScopes = ['BTC-USDT'];
+  input.partialFill.expected.symbol = 'BTC-USDT';
+  input.liquidity.liquidityImpactFirewallInput.expected.symbol = 'BTC_USDT';
+  const result = await preparePaperForwardAuthoritativeInputs(input, {
+    createRiskProducer: () => {
+      throw new Error('must not execute');
+    },
+    buildLiquidity: () => {
+      throw new Error('must not execute');
+    },
+    buildPartialFill: () => {
+      throw new Error('must not execute');
+    },
+  });
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.ok(result.blockers.includes('PREPARATION_LIQUIDITY_SCOPE_MISMATCH'));
+});
+
 test('invalid exact research SHA fails closed', async () => {
   const input = structuredClone(baseInput()) as any;
   input.researchCodeSha = 'not-a-sha';
