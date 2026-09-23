@@ -3,6 +3,7 @@ import { lstat, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/pro
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { buildResearchFactoryRuntimeStatusV1 } from '../src/research-factory-runtime-status.mjs';
+import { validateResearchDevelopmentDiagnosticsV1 } from '../src/research-development-diagnostics.mjs';
 
 function exactSha(value) {
   const sha=String(value??'').trim().toLowerCase();
@@ -96,9 +97,19 @@ try{
     'RESEARCH_ADAPTIVE_RUNTIME_BINDINGS_PATH',
   );
   const diagnosticsPath=configuredDiagnosticsPath??join(latest,'adaptive-development-diagnostics.json');
+  const diagnosticsRecordPath=configuredDiagnosticsPath
+    ? join(dirname(configuredDiagnosticsPath),'adaptive-development-diagnostics-record.json')
+    : join(latest,'adaptive-development-diagnostics-record.json');
   const bindingsPath=configuredBindingsPath??join(latest,'adaptive-runtime-bindings.json');
 
-  const [policyRecord,dataEvidenceByMarket,adaptiveEvidenceCatalog,developmentDiagnostics,runtimeBindings]=await Promise.all([
+  const [
+    policyRecord,
+    dataEvidenceByMarket,
+    adaptiveEvidenceCatalog,
+    developmentDiagnostics,
+    developmentDiagnosticsRecord,
+    runtimeBindings,
+  ]=await Promise.all([
     readOptionalJson(policyPath,{name:'adaptive policy record'}),
     readOptionalJson(dataEvidencePath,{name:'Data Factory evidence'}),
     readOptionalJson(adaptiveEvidencePath,{name:'adaptive evidence catalog'}),
@@ -106,11 +117,19 @@ try{
       missingAsNull:configuredDiagnosticsPath==null,
       name:'adaptive development diagnostics',
     }),
+    readOptionalJson(diagnosticsRecordPath,{
+      missingAsNull:configuredDiagnosticsPath==null,
+      name:'adaptive development diagnostics provenance record',
+    }),
     readOptionalJson(bindingsPath,{
       missingAsNull:configuredBindingsPath==null,
       name:'adaptive runtime bindings',
     }),
   ]);
+  const verifiedDevelopmentDiagnostics=validateResearchDevelopmentDiagnosticsV1({
+    diagnostics:developmentDiagnostics,
+    record:developmentDiagnosticsRecord,
+  });
 
   const status=buildResearchFactoryRuntimeStatusV1({
     researchSha,
@@ -118,7 +137,7 @@ try{
     policyRecord,
     dataEvidenceByMarket:dataEvidenceByMarket??{},
     adaptiveEvidenceCatalog:adaptiveEvidenceCatalog??{},
-    developmentDiagnostics:developmentDiagnostics??{},
+    developmentDiagnostics:verifiedDevelopmentDiagnostics,
     runtimeBindings:runtimeBindings??{},
   });
   await atomicJson(outputPath,status);
