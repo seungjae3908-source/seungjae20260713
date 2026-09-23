@@ -22,7 +22,11 @@ const WORKFLOW_NAME = 'Public Forward Liquidity V3 Independence Consume';
 const SOURCE_EVENT = 'workflow_run';
 const SOURCE_BRANCH = 'main';
 const SOURCE_CONCLUSION = 'success';
-const MAX_SUMMARY_BYTES = 1024 * 1024;
+const MAX_SUMMARY_BYTES = 8 * 1024 * 1024;
+const MULTI_LANE_POLICY_VERSION = 'public-forward-liquidity-multi-lane-prospective-policy-v1';
+const MULTI_LANE_MAX_CREDIT_PER_LANE_PER_SLOT = 1;
+const MULTI_LANE_MAX_TOTAL_CREDIT_PER_SLOT = 2;
+const MULTI_LANE_MAX_CREDIT_PER_DEPENDENCY_COMPONENT = 1;
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const GITHUB_ARTIFACT_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;
@@ -97,6 +101,62 @@ function exactDigest(value, field) {
     fail('SOURCE_INVALID', `${field} must be a lowercase sha256 digest`);
   }
   return stringValue;
+}
+
+function assertIndependentCreditCapacity(summary) {
+  const multiLanePolicyVersion = summary.multiLanePolicyVersion ?? null;
+  if (multiLanePolicyVersion === null) {
+    if (summary.effectiveIndependentN > summary.genuineScheduledSlotN) {
+      fail('SOURCE_INVALID', 'legacy single-lane effectiveIndependentN cannot exceed genuineScheduledSlotN');
+    }
+    return;
+  }
+
+  if (multiLanePolicyVersion !== MULTI_LANE_POLICY_VERSION) {
+    fail('SOURCE_INVALID', 'unexpected multiLanePolicyVersion');
+  }
+  for (const field of [
+    'multiLanePolicyDigest',
+    'laneRegistryDigest',
+    'dependencyPolicyDigest',
+    'balancingPolicyDigest',
+  ]) {
+    exactDigest(summary[field], field);
+  }
+
+  const maxCreditPerLanePerSlot = integerCount(
+    summary.maxCreditPerLanePerSlot,
+    'maxCreditPerLanePerSlot',
+  );
+  const maxTotalCreditPerSlot = integerCount(
+    summary.maxTotalCreditPerSlot,
+    'maxTotalCreditPerSlot',
+  );
+  const maxCreditPerDependencyComponent = integerCount(
+    summary.maxCreditPerDependencyComponent,
+    'maxCreditPerDependencyComponent',
+  );
+  const preCapIndependentN = integerCount(summary.preCapIndependentN, 'preCapIndependentN');
+  integerCount(summary.laneSlotCapRejectedN, 'laneSlotCapRejectedN');
+  integerCount(summary.globalSlotCapRejectedN, 'globalSlotCapRejectedN');
+
+  if (maxCreditPerLanePerSlot !== MULTI_LANE_MAX_CREDIT_PER_LANE_PER_SLOT
+      || maxTotalCreditPerSlot !== MULTI_LANE_MAX_TOTAL_CREDIT_PER_SLOT
+      || maxCreditPerDependencyComponent !== MULTI_LANE_MAX_CREDIT_PER_DEPENDENCY_COMPONENT) {
+    fail('SOURCE_INVALID', 'multi-lane credit caps do not match frozen policy');
+  }
+  if (summary.utc27AdditionalIndependentCredit !== 0
+      || summary.retroactiveMultiLaneCreditAllowed !== false) {
+    fail('SOURCE_INVALID', 'multi-lane retrospective or extra credit is forbidden');
+  }
+  if (preCapIndependentN < summary.effectiveIndependentN) {
+    fail('SOURCE_INVALID', 'preCapIndependentN cannot be smaller than effectiveIndependentN');
+  }
+  const maximumIndependentN = summary.genuineScheduledSlotN * maxTotalCreditPerSlot;
+  if (!Number.isSafeInteger(maximumIndependentN)
+      || summary.effectiveIndependentN > maximumIndependentN) {
+    fail('SOURCE_INVALID', 'effectiveIndependentN exceeds frozen multi-lane slot capacity');
+  }
 }
 
 function assertFrozenSplitPolicy(summary, counts) {
@@ -176,9 +236,7 @@ export function validateV3LiquidityIndependenceSummary(value) {
   if (normalized.rawAcceptedN < normalized.effectiveIndependentN) {
     fail('SOURCE_INVALID', 'rawAcceptedN cannot be smaller than effectiveIndependentN');
   }
-  if (normalized.genuineScheduledSlotN < normalized.effectiveIndependentN) {
-    fail('SOURCE_INVALID', 'genuineScheduledSlotN cannot be smaller than effectiveIndependentN');
-  }
+  assertIndependentCreditCapacity({ ...value, ...normalized });
   if (normalized.effectiveIndependentN !== normalized.independentBuyN + normalized.independentSellN) {
     fail('SOURCE_INVALID', 'independent side counts do not reconcile');
   }
