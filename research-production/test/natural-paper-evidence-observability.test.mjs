@@ -192,6 +192,30 @@ test('reports EVIDENCE as the first zero and counts the authoritative missing-ev
   assert.equal(artifact.funnel.entryCreatedCount, null);
 });
 
+for (const missingIdentityField of ['cycleId', 'triggerSource']) {
+  test(`does not accept first-zero reason evidence missing ${missingIdentityField}`, () => {
+    const input = fixture({
+      counts: { candidate: 5, evidence: 0, risk: 0, admission: 0, entry: 0, position: 0, exitEligible: 0, settlement: 0 },
+      downstreamMeasured: false,
+    });
+    const reason = {
+      reasonCode: 'P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING',
+      authoritative: true,
+      freshness: 'FRESH',
+      observedAtMs: OBSERVED_AT,
+      ...reasonIdentity(`missing-${missingIdentityField}`),
+    };
+    delete reason[missingIdentityField];
+    input.authoritativeFirstZeroReasonEvidenceByStage.EVIDENCE_COMPLETE = reason;
+    const artifact = build(input);
+    assert.equal(artifact.firstZeroStage, 'EVIDENCE');
+    assert.equal(artifact.firstZeroReason, 'MISSING_EVIDENCE');
+    assert.equal(artifact.firstZeroReasonEvidenceStatus, 'MISSING_OR_AMBIGUOUS');
+    assert.equal(artifact.reasonEvidence.length, 0);
+    assert.equal(artifact.reasonCounts.MISSING_EVIDENCE, 0);
+  });
+}
+
 test('does not let unknown evidence masquerade as a measured zero', () => {
   const input = fixture();
   input.naturalFunnelMeasurements = [{
