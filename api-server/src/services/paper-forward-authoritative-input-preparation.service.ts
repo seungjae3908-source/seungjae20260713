@@ -4,6 +4,7 @@ import {
   type AuthoritativePaperGenericRiskPolicyRequest,
 } from './authoritative-paper-generic-risk-policy-producer.service';
 import {
+  PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
   buildAuthoritativePaperPartialFillCostEvidence,
   type PartialFillCalibrationArtifact,
   type PartialFillCalibrationContext,
@@ -81,6 +82,7 @@ const DEFAULT_DEPENDENCIES: Dependencies = Object.freeze({
 });
 
 const SHA40 = /^[0-9a-f]{40}$/u;
+const PAPER_INSTRUMENT_SYMBOL = /^[A-Z0-9._:-]{1,40}$/u;
 const NATURAL_RUNTIME_MAXIMUM_AGE_MS = 30_000;
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -103,8 +105,8 @@ function exactSha(value: unknown): value is string {
 
 function symbol(value: unknown): string | null {
   if (!nonEmpty(value)) return null;
-  const normalized = value.trim().toUpperCase().replace(/[^A-Z0-9]/gu, '');
-  return normalized.length > 0 ? normalized : null;
+  const normalized = value.trim().toUpperCase();
+  return PAPER_INSTRUMENT_SYMBOL.test(normalized) ? normalized : null;
 }
 
 function blockersFrom(value: unknown): string[] {
@@ -178,16 +180,23 @@ export async function preparePaperForwardAuthoritativeInputs(
   }
 
   const expectedPartial = input?.partialFill?.expected;
+  const riskSymbol = symbol(riskRequest?.symbol);
+  const partialSymbol = symbol(expectedPartial?.symbol);
   if (expectedPartial?.market !== 'CRYPTO_FUTURES'
-    || symbol(expectedPartial?.symbol) !== symbol(riskRequest?.symbol)) {
+    || !riskSymbol
+    || !partialSymbol
+    || partialSymbol !== riskSymbol) {
     blockers.push('PREPARATION_PARTIAL_FILL_SCOPE_MISMATCH');
   }
 
   const firewall = record(input?.liquidity?.liquidityImpactFirewallInput);
   const liquidityExpected = record(firewall?.expected);
   if (liquidityExpected) {
+    const liquiditySymbol = symbol(liquidityExpected.symbol);
     if (String(liquidityExpected.market ?? '') !== 'CRYPTO_FUTURES'
-      || symbol(liquidityExpected.symbol) !== symbol(riskRequest?.symbol)
+      || !riskSymbol
+      || !liquiditySymbol
+      || liquiditySymbol !== riskSymbol
       || String(liquidityExpected.side ?? '') !== String(expectedPartial?.side ?? '')) {
       blockers.push('PREPARATION_LIQUIDITY_SCOPE_MISMATCH');
     }
@@ -231,6 +240,7 @@ export async function preparePaperForwardAuthoritativeInputs(
       ...input.partialFill.expected,
       nowMs,
       maximumAgeMs,
+      calibrationMaximumAgeMs: PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
     }),
   });
   const partialFillEvidence = partialResult.status === 'PRESENT'
@@ -243,6 +253,12 @@ export async function preparePaperForwardAuthoritativeInputs(
     }
   }
 
+  if (liquidityEvidence && liquidityEvidence.observedAtMs > nowMs) {
+    blockers.push('LIQUIDITY:EVIDENCE_FROM_FUTURE_AT_PREPARATION');
+  }
+  if (partialFillEvidence && partialFillEvidence.observedAtMs > nowMs) {
+    blockers.push('PARTIAL_FILL:EVIDENCE_FROM_FUTURE_AT_PREPARATION');
+  }
   if (liquidityEvidence && nowMs - liquidityEvidence.observedAtMs > maximumAgeMs) {
     blockers.push('LIQUIDITY:EVIDENCE_STALE_AT_PREPARATION');
   }
@@ -290,6 +306,8 @@ export const PAPER_FORWARD_AUTHORITATIVE_INPUT_PREPARATION_SAFETY = Object.freez
   liquidityImpactInvented: false,
   canonicalLiquidityRuntimeBuilderMustBeExplicitlyBound: true,
   naturalRuntimeMaximumAgeMs: NATURAL_RUNTIME_MAXIMUM_AGE_MS,
+  partialFillCalibrationMaximumAgeMs: PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
+  partialFillCalibrationAndRuntimeFreshnessSeparated: true,
   partialFillImpactInvented: false,
   latencyPreparedAheadOfRuntime: false,
   fundingPreparedAheadOfCandidate: false,
