@@ -313,7 +313,7 @@ test('Research Center V2 exposes exactly four tabs and every required click-thro
 
   await page.getByRole('tab', { name: '검증 리포트' }).click();
   await expect(page.getByTestId('research-evidence-tab')).toContainText(RESEARCH_SHA);
-  await expect(page.getByTestId('research-evidence-tab')).toContainText('Current main SHA');
+  await expect(page.getByTestId('research-evidence-tab')).toContainText('Research runtime SHA');
   await expect(page.getByTestId('research-evidence-tab')).toContainText('미수집');
   await captureScreenshot(page, 'after-desktop-validation-report.png');
   await expectNoHorizontalOverflow(page);
