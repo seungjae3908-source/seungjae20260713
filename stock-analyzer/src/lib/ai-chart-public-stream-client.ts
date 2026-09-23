@@ -163,6 +163,7 @@ export function createAiChartPublicStreamClient(
         || reason === 'STREAM_STALE'
         || reason === 'STREAM_BUFFER_OVERFLOW'
         || reason === 'SUBSCRIBE_SEND_FAILED'
+        || reason === 'HEARTBEAT_SEND_FAILED'
         || reason === 'RECONNECT_LIMIT_REACHED')
     ) {
       providerFallbackUntilMs.set(fallbackKey, now() + subscription.staleAfterMs * 2);
