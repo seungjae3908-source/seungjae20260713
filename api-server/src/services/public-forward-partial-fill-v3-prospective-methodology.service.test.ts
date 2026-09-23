@@ -8,6 +8,7 @@ import {
 } from './public-forward-partial-fill-calibration-collector.service';
 import {
   PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY,
+  PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_COMPONENT_AUTHORITIES,
   PUBLIC_FORWARD_PARTIAL_FILL_V3_SAFETY,
   buildPublicForwardPartialFillV3ModeledObservation,
   buildPublicForwardPartialFillV3ProspectiveCohort,
@@ -27,6 +28,20 @@ function frozenRef(identity: string, frozenAtMs = 1_000): PublicForwardPartialFi
     identity,
     version: 'v1',
     digest: sha256(identity),
+    frozenAtMs,
+    status: 'FROZEN' as const,
+  });
+}
+
+function exactComponentRef(
+  name: keyof typeof PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_COMPONENT_AUTHORITIES,
+  frozenAtMs = 1_000,
+): PublicForwardPartialFillV3FrozenRef {
+  const authority = PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_COMPONENT_AUTHORITIES[name];
+  return Object.freeze({
+    identity: authority.identity,
+    version: authority.version,
+    digest: authority.digest,
     frozenAtMs,
     status: 'FROZEN' as const,
   });
@@ -58,10 +73,10 @@ function methodology() {
     methodologyVersion: 'v3-test',
     methodologyFrozenAtMs: METHODOLOGY_FROZEN_AT,
     predecessorV2: predecessorV2(),
-    businessTolerance: frozenRef('TEST_ONLY_EXISTING_BUSINESS_TOLERANCE'),
-    statisticalMethodology: frozenRef('TEST_ONLY_EXISTING_STATISTICAL_METHODOLOGY'),
-    numericMinimumArtifact: frozenRef('TEST_ONLY_EXISTING_NUMERIC_MINIMUM'),
-    scopeUniverse: frozenRef('TEST_ONLY_EXISTING_SCOPE_UNIVERSE'),
+    businessTolerance: exactComponentRef('businessTolerance'),
+    statisticalMethodology: exactComponentRef('statisticalMethodology'),
+    numericMinimumArtifact: exactComponentRef('numericMinimumArtifact'),
+    scopeUniverse: exactComponentRef('scopeUniverse'),
     modeledLane: {
       evidenceClass: 'MODELED_PUBLIC_ONLY',
       modelIdentity: 'TEST_ONLY_OPPORTUNITY_BOUND_MODEL',
@@ -162,10 +177,10 @@ test('rejects any predecessor V2 digest or numeric-criteria drift', () => {
       policyDigest: sha256('tampered-v2-policy'),
       totalSlotN: 1025,
     },
-    businessTolerance: frozenRef('TEST_ONLY_EXISTING_BUSINESS_TOLERANCE'),
-    statisticalMethodology: frozenRef('TEST_ONLY_EXISTING_STATISTICAL_METHODOLOGY'),
-    numericMinimumArtifact: frozenRef('TEST_ONLY_EXISTING_NUMERIC_MINIMUM'),
-    scopeUniverse: frozenRef('TEST_ONLY_EXISTING_SCOPE_UNIVERSE'),
+    businessTolerance: exactComponentRef('businessTolerance'),
+    statisticalMethodology: exactComponentRef('statisticalMethodology'),
+    numericMinimumArtifact: exactComponentRef('numericMinimumArtifact'),
+    scopeUniverse: exactComponentRef('scopeUniverse'),
     modeledLane: {
       evidenceClass: 'MODELED_PUBLIC_ONLY',
       modelIdentity: 'TEST_ONLY_OPPORTUNITY_BOUND_MODEL',
@@ -180,16 +195,43 @@ test('rejects any predecessor V2 digest or numeric-criteria drift', () => {
   }), /PREDECESSOR_V2_AUTHORITY_DIGEST_MISMATCH.*PREDECESSOR_V2_NUMERIC_CRITERIA_MISMATCH/);
 });
 
+test('rejects frozen component identity or digest substitution', () => {
+  assert.throws(() => buildPublicForwardPartialFillV3ProspectiveMethodology({
+    methodologyIdentity: 'TEST_ONLY_PUBLIC_ONLY_PARTIAL_FILL_V3',
+    methodologyVersion: 'v3-test',
+    methodologyFrozenAtMs: METHODOLOGY_FROZEN_AT,
+    predecessorV2: predecessorV2(),
+    businessTolerance: {
+      ...exactComponentRef('businessTolerance'),
+      digest: sha256('tampered-business-tolerance'),
+    },
+    statisticalMethodology: exactComponentRef('statisticalMethodology'),
+    numericMinimumArtifact: exactComponentRef('numericMinimumArtifact'),
+    scopeUniverse: exactComponentRef('scopeUniverse'),
+    modeledLane: {
+      evidenceClass: 'MODELED_PUBLIC_ONLY',
+      modelIdentity: 'TEST_ONLY_OPPORTUNITY_BOUND_MODEL',
+      modelVersion: 'v1',
+      modelDigest: sha256('TEST_ONLY_OPPORTUNITY_BOUND_MODEL'),
+      modelFrozenAtMs: 9_000,
+      conservativeOpportunityBoundOnly: true,
+      actualExecutionSubstitutionAllowed: false,
+      actualFillInferenceAllowed: false,
+      queuePositionInferenceAllowed: false,
+    },
+  }), /BUSINESSTOLERANCE_EXACT_FROZEN_AUTHORITY_MISMATCH/);
+});
+
 test('rejects V3 methodology when a frozen authority is newer than methodology freeze', () => {
   assert.throws(() => buildPublicForwardPartialFillV3ProspectiveMethodology({
     methodologyIdentity: 'TEST_ONLY_PUBLIC_ONLY_PARTIAL_FILL_V3',
     methodologyVersion: 'v3-test',
     methodologyFrozenAtMs: METHODOLOGY_FROZEN_AT,
     predecessorV2: predecessorV2(),
-    businessTolerance: frozenRef('TEST_ONLY_EXISTING_BUSINESS_TOLERANCE'),
-    statisticalMethodology: frozenRef('TEST_ONLY_EXISTING_STATISTICAL_METHODOLOGY'),
-    numericMinimumArtifact: frozenRef('TEST_ONLY_EXISTING_NUMERIC_MINIMUM', METHODOLOGY_FROZEN_AT + 1),
-    scopeUniverse: frozenRef('TEST_ONLY_EXISTING_SCOPE_UNIVERSE'),
+    businessTolerance: exactComponentRef('businessTolerance'),
+    statisticalMethodology: exactComponentRef('statisticalMethodology'),
+    numericMinimumArtifact: exactComponentRef('numericMinimumArtifact', METHODOLOGY_FROZEN_AT + 1),
+    scopeUniverse: exactComponentRef('scopeUniverse'),
     modeledLane: {
       evidenceClass: 'MODELED_PUBLIC_ONLY',
       modelIdentity: 'TEST_ONLY_OPPORTUNITY_BOUND_MODEL',
@@ -210,10 +252,10 @@ test('rejects modeled lane that attempts to infer actual fill or queue position'
     methodologyVersion: 'v3-test',
     methodologyFrozenAtMs: METHODOLOGY_FROZEN_AT,
     predecessorV2: predecessorV2(),
-    businessTolerance: frozenRef('TEST_ONLY_EXISTING_BUSINESS_TOLERANCE'),
-    statisticalMethodology: frozenRef('TEST_ONLY_EXISTING_STATISTICAL_METHODOLOGY'),
-    numericMinimumArtifact: frozenRef('TEST_ONLY_EXISTING_NUMERIC_MINIMUM'),
-    scopeUniverse: frozenRef('TEST_ONLY_EXISTING_SCOPE_UNIVERSE'),
+    businessTolerance: exactComponentRef('businessTolerance'),
+    statisticalMethodology: exactComponentRef('statisticalMethodology'),
+    numericMinimumArtifact: exactComponentRef('numericMinimumArtifact'),
+    scopeUniverse: exactComponentRef('scopeUniverse'),
     modeledLane: {
       evidenceClass: 'MODELED_PUBLIC_ONLY',
       modelIdentity: 'TEST_ONLY_OPPORTUNITY_BOUND_MODEL',
@@ -330,6 +372,22 @@ test('non-natural, replay-like sample class cannot enter the prospective V3 lane
 });
 
 test('safety contract forbids V2 mutation, evidence promotion and economic authority', () => {
+  assert.equal(
+    PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_COMPONENT_AUTHORITIES.businessTolerance.digest,
+    'adef3bbf8f6647f0314a35ca5b0d48eebefed614a0e66ab28e93f6d3dc2a0f7c',
+  );
+  assert.equal(
+    PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_COMPONENT_AUTHORITIES.statisticalMethodology.digest,
+    '1b60b2f3719556b14d8d360a25f2043f5e45b0c24089c1636f3d66d784801308',
+  );
+  assert.equal(
+    PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_COMPONENT_AUTHORITIES.scopeUniverse.digest,
+    '55bbbf79b89040bffe7485b48b97fa56d6175a0796d72dfb8985d1923d64e244',
+  );
+  assert.equal(
+    PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_COMPONENT_AUTHORITIES.numericMinimumArtifact.digest,
+    '8c3ded9d0862b9c81f04a466fb6d4df03ee39185cc1f59bc08c41923231b8e29',
+  );
   assert.equal(PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY.totalSlotN, 1024);
   assert.equal(PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY.trainSlotN, 512);
   assert.equal(PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY.validationSlotN, 256);
