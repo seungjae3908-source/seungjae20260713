@@ -29,6 +29,8 @@ const STORAGE_KEY = "sa-portfolio-chart-overlays-v1";
 const PURCHASE_DATE_KEY = "sa-portfolio-purchase-dates-v1";
 const RATE_EPSILON = 1e-8;
 const PORTFOLIO_TICKER_PATTERN = /^[A-Z0-9][A-Z0-9.-]{0,31}$/;
+const PORTFOLIO_OVERLAY_IDENTITY_INVALID = "PORTFOLIO_OVERLAY_IDENTITY_INVALID";
+const PORTFOLIO_OVERLAY_IDENTITY_CONFLICT = "PORTFOLIO_OVERLAY_IDENTITY_CONFLICT";
 
 function hasStorage() {
   return typeof window !== "undefined" && Boolean(window.localStorage);
@@ -55,6 +57,47 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isPositiveFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function assertPortfolioOverlayInputIdentities(rows: PortfolioOverlayInput[]): void {
+  const identities = new Map<
+    string,
+    { market: "KR" | "US"; currency: "KRW" | "USD" }
+  >();
+
+  for (const row of rows) {
+    const ticker = typeof row.ticker === "string"
+      ? row.ticker.trim().toUpperCase()
+      : "";
+    const market = row.market;
+    const expectedCurrency = market === "US"
+      ? "USD"
+      : market === "KR"
+        ? "KRW"
+        : null;
+
+    if (
+      !ticker ||
+      !PORTFOLIO_TICKER_PATTERN.test(ticker) ||
+      !expectedCurrency ||
+      row.currency !== expectedCurrency
+    ) {
+      throw new Error(`${PORTFOLIO_OVERLAY_IDENTITY_INVALID}: ${ticker || "UNKNOWN"}`);
+    }
+
+    const previous = identities.get(ticker);
+    if (
+      previous &&
+      (previous.market !== market || previous.currency !== row.currency)
+    ) {
+      throw new Error(`${PORTFOLIO_OVERLAY_IDENTITY_CONFLICT}: ${ticker}`);
+    }
+
+    identities.set(ticker, {
+      market,
+      currency: row.currency,
+    });
+  }
 }
 
 function isValidPortfolioChartOverlay(value: unknown): value is PortfolioChartOverlay {
@@ -161,6 +204,11 @@ export function rememberPurchaseDate(ticker: string, date: string) {
 }
 
 export function syncPortfolioChartOverlays(rows: PortfolioOverlayInput[]) {
+  // A ticker is the persisted chart-overlay identity. Validate its market/currency
+  // binding before aggregation so two different asset identities can never be
+  // collapsed into one average-cost/PnL row that still looks internally valid.
+  assertPortfolioOverlayInputIdentities(rows);
+
   // PortfolioPage currently falls back from missing currentPrice to average_price
   // when rendering value/PnL. Stop before that safe-looking projection can become
   // visible: missing current-market evidence is an explicit failure, never 0%.
