@@ -66,6 +66,15 @@ test('Research Center V2 source preserves the complete fail-closed maturity ladd
   expect(page).toContain('data-testid="paper-candidate-performance"');
   expect(page).toContain('candidateMatchedN');
   expect(page).toContain('effective independent N');
+  expect(page).toContain("const factory = overview.factory;");
+  expect(page).toContain("const liquidity = overview.research.liquidityIndependence;");
+  expect(page).toContain('label="Research runtime SHA" value={runtimeSha}');
+  expect(page).toContain('label="Workflow run ID" value={liquidity?.upstreamIngestRunId');
+  expect(page).toContain('label="Artifact ID" value={liquidity?.upstreamIngestArtifactId');
+  expect(page).toContain('label="Canonical receipt" value={liquidity?.reportDigest');
+  expect(page).toContain('label="Research SHA binding" value={researchShaBinding}');
+  expect(page).toContain('label="FIRST_ZERO" value={firstZero}');
+  expect(page).not.toContain('label="FIRST_ZERO" value="미수집"');
   expect(page).toContain('UNKNOWN/BLOCKED');
   expect(page).toContain('TRAIN_DIAGNOSTIC_ONLY=');
   expect(page).toContain('NET_ALPHA_PROVEN=');
