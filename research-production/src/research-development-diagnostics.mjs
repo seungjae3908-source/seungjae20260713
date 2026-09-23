@@ -12,6 +12,14 @@ export const RESEARCH_DEVELOPMENT_DIAGNOSTICS_CONTRACT_V1 =
 const HASH64=/^[0-9a-f]{64}$/i;
 const ISO=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const PROFILE_IDS=new Set(ADAPTIVE_MULTI_MARKET_PROFILES_V1.map(row=>row.profileId));
+const DIAGNOSTIC_KEYS=[
+  'sourceRole','evidenceId','dataCompleteness','signalCoverage','costCoverage','familyDiversity','computeCapacity',
+];
+const SOURCE_DIGEST_KEYS=['dataset','signals','costs','families','compute'];
+const RECORD_SAFETY_KEYS=[
+  'developmentOnly','oosInputAllowed','forwardInputAllowed','paperInputAllowed',
+  'holdoutInputAllowed','profitabilityInputAllowed','executionAuthority',
+];
 
 function canonical(value){
   if(Array.isArray(value)) return value.map(canonical);
@@ -67,6 +75,10 @@ function exactIso(value){
     throw new TypeError('OBSERVED_AT_INVALID');
   }
   return date.toISOString();
+}
+function unitMetric(value,name){
+  if(!Number.isFinite(value)||value<0||value>1) throw new TypeError(`${name}_INVALID`);
+  return value;
 }
 function developmentInput(raw){
   exactKeys(raw,[
@@ -170,6 +182,92 @@ export function buildResearchDevelopmentDiagnosticsMapV1({profiles=[]}={}){
     diagnostics:Object.freeze(diagnostics),
     record:Object.freeze({...recordCore,recordDigest:digest(recordCore)}),
   });
+}
+
+export function validateResearchDevelopmentDiagnosticsV1({diagnostics=null,record=null}={}){
+  if(diagnostics==null&&record==null) return Object.freeze({});
+  if(!diagnostics||typeof diagnostics!=='object'||Array.isArray(diagnostics)){
+    throw new TypeError('DEVELOPMENT_DIAGNOSTICS_MAP_INVALID');
+  }
+  if(record==null) throw new Error('DEVELOPMENT_DIAGNOSTICS_RECORD_REQUIRED');
+  exactKeys(record,[
+    'schemaVersion','contract','profileCount','records','safety','recordDigest',
+  ],'DEVELOPMENT_DIAGNOSTICS_RECORD_SHAPE_INVALID');
+  if(record.schemaVersion!==1||record.contract!=='research-development-diagnostics-record/v1'){
+    throw new Error('DEVELOPMENT_DIAGNOSTICS_RECORD_CONTRACT_INVALID');
+  }
+  const profileIds=Object.keys(diagnostics).sort();
+  if(record.profileCount!==profileIds.length) throw new Error('DEVELOPMENT_DIAGNOSTICS_PROFILE_COUNT_MISMATCH');
+  exactKeys(record.records,profileIds,'DEVELOPMENT_DIAGNOSTICS_RECORD_PROFILE_SET_MISMATCH');
+  exactKeys(record.safety,RECORD_SAFETY_KEYS,'DEVELOPMENT_DIAGNOSTICS_RECORD_SAFETY_SHAPE_INVALID');
+  if(record.safety.developmentOnly!==true
+    || record.safety.oosInputAllowed!==false
+    || record.safety.forwardInputAllowed!==false
+    || record.safety.paperInputAllowed!==false
+    || record.safety.holdoutInputAllowed!==false
+    || record.safety.profitabilityInputAllowed!==false
+    || record.safety.executionAuthority!=='NONE'){
+    throw new Error('DEVELOPMENT_DIAGNOSTICS_RECORD_SAFETY_INVALID');
+  }
+
+  const normalizedDiagnostics={};
+  const normalizedRecords={};
+  for(const profileId of profileIds){
+    if(!PROFILE_IDS.has(profileId)) throw new Error('DEVELOPMENT_PROFILE_UNKNOWN');
+    const diagnostic=diagnostics[profileId];
+    exactKeys(diagnostic,DIAGNOSTIC_KEYS,'DEVELOPMENT_DIAGNOSTIC_SHAPE_INVALID');
+    if(diagnostic.sourceRole!=='DEVELOPMENT_ONLY') throw new Error('DEVELOPMENT_ONLY_SOURCE_REQUIRED');
+    const metrics={
+      dataCompleteness:unitMetric(diagnostic.dataCompleteness,'DATA_COMPLETENESS'),
+      signalCoverage:unitMetric(diagnostic.signalCoverage,'SIGNAL_COVERAGE'),
+      costCoverage:unitMetric(diagnostic.costCoverage,'COST_COVERAGE'),
+      familyDiversity:unitMetric(diagnostic.familyDiversity,'FAMILY_DIVERSITY'),
+      computeCapacity:unitMetric(diagnostic.computeCapacity,'COMPUTE_CAPACITY'),
+    };
+    const row=record.records[profileId];
+    exactKeys(row,['observedAt','evidenceDigest','sourceDigests'],'DEVELOPMENT_DIAGNOSTICS_RECORD_ROW_SHAPE_INVALID');
+    const observedAt=exactIso(row.observedAt);
+    exactKeys(row.sourceDigests,SOURCE_DIGEST_KEYS,'DEVELOPMENT_DIAGNOSTICS_SOURCE_DIGESTS_SHAPE_INVALID');
+    const sourceDigests=Object.fromEntries(SOURCE_DIGEST_KEYS.map(key=>[
+      key,evidenceDigest(row.sourceDigests[key],`${key.toUpperCase()}_EVIDENCE_DIGEST`),
+    ]));
+    const evidenceCore={
+      contract:RESEARCH_DEVELOPMENT_DIAGNOSTICS_CONTRACT_V1,
+      profileId,
+      observedAt,
+      sourceDigests,
+      metrics,
+    };
+    const expectedEvidenceDigest=digest(evidenceCore);
+    if(String(row.evidenceDigest??'').toLowerCase()!==expectedEvidenceDigest){
+      throw new Error('DEVELOPMENT_DIAGNOSTICS_EVIDENCE_DIGEST_MISMATCH');
+    }
+    if(diagnostic.evidenceId!==`development-diagnostic:sha256:${expectedEvidenceDigest}`){
+      throw new Error('DEVELOPMENT_DIAGNOSTICS_EVIDENCE_ID_MISMATCH');
+    }
+    normalizedDiagnostics[profileId]=Object.freeze({
+      sourceRole:'DEVELOPMENT_ONLY',
+      evidenceId:diagnostic.evidenceId,
+      ...metrics,
+    });
+    normalizedRecords[profileId]=Object.freeze({
+      observedAt,
+      evidenceDigest:expectedEvidenceDigest,
+      sourceDigests:Object.freeze(sourceDigests),
+    });
+  }
+
+  const recordCore={
+    schemaVersion:1,
+    contract:'research-development-diagnostics-record/v1',
+    profileCount:profileIds.length,
+    records:Object.freeze(normalizedRecords),
+    safety:Object.freeze({...record.safety}),
+  };
+  if(String(record.recordDigest??'').toLowerCase()!==digest(recordCore)){
+    throw new Error('DEVELOPMENT_DIAGNOSTICS_RECORD_DIGEST_MISMATCH');
+  }
+  return Object.freeze(normalizedDiagnostics);
 }
 
 async function safeStateRoot(value){
