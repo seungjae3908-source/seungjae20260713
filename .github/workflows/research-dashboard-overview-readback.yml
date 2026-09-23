@@ -290,6 +290,7 @@ jobs:
           if (v?.profitability?.proven !== false) fail('profitability must remain unproven');
           if (li?.present !== true || li?.status !== 'PRESENT') fail('V3 independence summary is not PRESENT');
           const measuredCounts = {
+            targetSlotIndex: li.targetSlotIndex,
             genuineScheduledSlotN: li.genuineScheduledSlotN,
             rawAcceptedN: li.rawAcceptedN,
             effectiveIndependentN: li.effectiveIndependentN,
@@ -300,7 +301,14 @@ jobs:
           for (const [name, value] of Object.entries(measuredCounts)) {
             if (!Number.isSafeInteger(value) || value < 0) fail(`${name} must be a non-negative safe integer: ${value}`);
           }
-          if (li.genuineScheduledSlotN < li.effectiveIndependentN) fail('genuineScheduledSlotN must cover effectiveIndependentN');
+          // The Dashboard consumer has already validated whether the source is legacy
+          // single-lane or frozen Phase2 multi-lane before exposing status=PRESENT.
+          // The overview projection does not expose the policy identity/digests, so this
+          // read-only verifier must not re-impose the legacy one-slot/one-credit rule.
+          // Preserve only policy-independent frozen bounds here.
+          if (li.targetSlotIndex > 1023) fail('targetSlotIndex exceeds frozen V3 cohort');
+          if (li.genuineScheduledSlotN > li.targetSlotIndex + 1) fail('genuineScheduledSlotN exceeds elapsed frozen slots');
+          if (li.effectiveIndependentN > li.genuineScheduledSlotN * 2) fail('effectiveIndependentN exceeds frozen two-credit-per-slot capacity');
           if (li.rawAcceptedN < li.effectiveIndependentN) fail('rawAcceptedN must cover effectiveIndependentN');
           if (li.effectiveIndependentN !== li.independentBuyN + li.independentSellN) fail('independent side counts must sum to effectiveIndependentN');
           if (counts.TRAIN !== counts.TRAIN_BUY + counts.TRAIN_SELL) fail('TRAIN side counts mismatch');
@@ -309,8 +317,13 @@ jobs:
           if (li.effectiveIndependentN !== counts.TRAIN + counts.VALIDATION + counts.OOS) fail('frozen split counts must sum to effectiveIndependentN');
           if (li.independentBuyN !== counts.TRAIN_BUY + counts.VALIDATION_BUY + counts.OOS_BUY) fail('BUY split counts mismatch');
           if (li.independentSellN !== counts.TRAIN_SELL + counts.VALIDATION_SELL + counts.OOS_SELL) fail('SELL split counts mismatch');
-          if (counts.VALIDATION !== 0 || counts.VALIDATION_BUY !== 0 || counts.VALIDATION_SELL !== 0) fail('VALIDATION counts must remain zero');
-          if (counts.OOS !== 0 || counts.OOS_BUY !== 0 || counts.OOS_SELL !== 0) fail('OOS counts must remain zero');
+          if (counts.TRAIN > 512 || counts.VALIDATION > 256 || counts.OOS > 256) fail('frozen split capacity exceeded');
+          if (li.targetSlotIndex < 512 && (counts.VALIDATION !== 0 || counts.VALIDATION_BUY !== 0 || counts.VALIDATION_SELL !== 0)) {
+            fail('future VALIDATION credit is not allowed during TRAIN');
+          }
+          if (li.targetSlotIndex < 768 && (counts.OOS !== 0 || counts.OOS_BUY !== 0 || counts.OOS_SELL !== 0)) {
+            fail('future OOS credit is not allowed before slot 768');
+          }
           if (li.oosOutcomeCredit !== 0) fail(`oosOutcomeCredit mismatch: ${li.oosOutcomeCredit}`);
           if (li.calibrationArtifactProduced !== false) fail('calibrationArtifactProduced must remain false');
           if (li.liquidityImpactStatus !== 'BLOCKED_DATA') fail(`liquidityImpactStatus mismatch: ${li.liquidityImpactStatus}`);
