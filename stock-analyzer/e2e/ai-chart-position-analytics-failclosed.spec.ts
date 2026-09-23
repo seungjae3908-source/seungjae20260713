@@ -8,8 +8,9 @@ import {
   type PositionAnalyticsPosition,
 } from '../src/lib/ai-chart-position-analytics';
 
-function position(side: string | null): PositionAnalyticsPosition {
+function position(side: string | null, market: string | null = 'BITGET'): PositionAnalyticsPosition {
   return {
+    market,
     quantity: 2,
     averageEntryPrice: 100,
     currentPrice: 110,
@@ -19,7 +20,7 @@ function position(side: string | null): PositionAnalyticsPosition {
   };
 }
 
-test('fails closed when position side is missing or unsupported', () => {
+test('fails closed when futures position side is missing or unsupported', () => {
   for (const side of [null, '', 'SIDEWAYS', 'UNKNOWN', 'buy', 'sell']) {
     const value = position(side);
     expect(positionDirection(value)).toBeNull();
@@ -46,7 +47,27 @@ test('fails closed when position side is missing or unsupported', () => {
   }
 });
 
-test('preserves canonical long and short direction', () => {
+test('preserves canonical futures direction', () => {
   expect(positionDirection(position('LONG'))).toBe(1);
   expect(positionDirection(position(' short '))).toBe(-1);
+});
+
+test('preserves long-only spot and cash truth without fabricating a futures side', () => {
+  for (const market of ['KR', 'US', 'UPBIT'] as const) {
+    const value = position(null, market);
+    expect(positionDirection(value)).toBe(1);
+    expect(projectPriceOutcome({ market, position: value, chartPrice: 110, price: 120 })).toMatchObject({
+      priceReturnPercent: 20,
+      pnlAmount: 40,
+      pnlSource: 'POSITION_QUANTITY',
+    });
+  }
+});
+
+test('rejects contradictory side on spot and cash identities', () => {
+  for (const market of ['KR', 'US', 'UPBIT'] as const) {
+    const value = position('short', market);
+    expect(positionDirection(value)).toBeNull();
+    expect(projectPriceOutcome({ market, position: value, chartPrice: 110, price: 120 })).toBeNull();
+  }
 });
