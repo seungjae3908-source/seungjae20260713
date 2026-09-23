@@ -35,7 +35,9 @@ test('buffer overflow keeps recreated default stream clients on bounded REST fal
       value: DefaultSocketFake,
     });
 
-    const currentNow = 5_000;
+    // Keep every fixture event at-or-before the receive clock. The stream parser
+    // intentionally rejects future-dated provider events before buffer accounting.
+    const currentNow = 6_000;
     const firstStatuses: Array<{ status: string; reason: string }> = [];
     const first = createAiChartPublicStreamClient({
       market: 'BITGET',
