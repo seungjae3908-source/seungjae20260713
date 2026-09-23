@@ -56,6 +56,10 @@ function safePath(rawUrl: string) {
   }
 }
 
+function shouldRecordHttpFailure(status: number) {
+  return status === 401 || status === 403 || status === 429 || status >= 500;
+}
+
 function attachDiagnostics(page: Page, diagnostics: Diagnostic[], currentRoute: () => string) {
   page.on('console', (message) => {
     if (message.type() !== 'error') return;
@@ -75,7 +79,7 @@ function attachDiagnostics(page: Page, diagnostics: Diagnostic[], currentRoute: 
     });
   });
   page.on('response', (response) => {
-    if (response.status() < 500) return;
+    if (!shouldRecordHttpFailure(response.status())) return;
     let url: URL;
     try { url = new URL(response.url()); } catch { return; }
     if (url.origin !== productionOrigin) return;
@@ -114,7 +118,7 @@ async function visitRoute(page: Page, route: string, diagnostics: Diagnostic[]):
   try {
     const response = await page.goto(route, { waitUntil: 'domcontentloaded', timeout: 15_000 });
     const status = response?.status() ?? null;
-    if (status !== null && status >= 500) {
+    if (status !== null && shouldRecordHttpFailure(status)) {
       diagnostics.push({ kind: 'http', route, path: route, status, detail: `navigation HTTP ${status}` });
     }
     await page.waitForTimeout(800);
@@ -138,6 +142,11 @@ async function visitRoute(page: Page, route: string, diagnostics: Diagnostic[]):
 function artifactName(testInfo: TestInfo) {
   return `observer-${testInfo.project.name.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase()}.json`;
 }
+
+test('Production observer records auth, authorization, rate-limit, and server HTTP failures', () => {
+  expect([401, 403, 429, 500, 503].filter(shouldRecordHttpFailure)).toEqual([401, 403, 429, 500, 503]);
+  expect([200, 204, 302, 400, 404, 499].filter(shouldRecordHttpFailure)).toEqual([]);
+});
 
 test('public Production critical routes remain reachable and read-only', async ({ page }, testInfo) => {
   test.skip(!baseUrl || process.env.PRODUCTION_READONLY_E2E !== 'true', 'Production observer is not enabled');
