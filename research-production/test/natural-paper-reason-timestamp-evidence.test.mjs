@@ -133,6 +133,35 @@ for (const [name, observedAtMs] of [
   });
 }
 
+test('fails closed on authoritative reason evidence without observation identity', () => {
+  const reason = authoritativeReason(OBSERVED_AT);
+  delete reason.observationId;
+  const artifact = buildNaturalPaperEvidenceObservabilityArtifact(
+    fixture(reason),
+    { verifiedAtMs: VERIFIED_AT },
+  );
+
+  assert.equal(artifact.firstZeroStage, 'EVIDENCE');
+  assert.equal(artifact.firstZeroReason, 'MISSING_EVIDENCE');
+  assert.equal(artifact.firstZeroReasonEvidenceStatus, 'MISSING_OR_AMBIGUOUS');
+  assert.equal(artifact.reasonEvidence.length, 0);
+  assert.equal(artifact.reasonCounts.MISSING_EVIDENCE, 0);
+});
+
+test('fails closed on authoritative reason evidence with malformed observation digest', () => {
+  const reason = authoritativeReason(OBSERVED_AT);
+  delete reason.observationId;
+  reason.observationIdDigest = 'not-a-sha256-digest';
+  const artifact = buildNaturalPaperEvidenceObservabilityArtifact(
+    fixture(reason),
+    { verifiedAtMs: VERIFIED_AT },
+  );
+
+  assert.equal(artifact.firstZeroReasonEvidenceStatus, 'MISSING_OR_AMBIGUOUS');
+  assert.equal(artifact.reasonEvidence.length, 0);
+  assert.equal(artifact.reasonCounts.MISSING_EVIDENCE, 0);
+});
+
 test('keeps fresh exact-identity reason evidence authoritative', () => {
   const artifact = buildNaturalPaperEvidenceObservabilityArtifact(
     fixture(authoritativeReason(OBSERVED_AT)),
@@ -144,5 +173,6 @@ test('keeps fresh exact-identity reason evidence authoritative', () => {
   assert.equal(artifact.firstZeroReasonEvidenceStatus, 'AUTHORITATIVE');
   assert.equal(artifact.reasonEvidence.length, 1);
   assert.equal(artifact.reasonEvidence[0].sourceTimestampMs, OBSERVED_AT);
+  assert.equal(artifact.reasonEvidence[0].observationIdDigests.length, 1);
   assert.equal(artifact.reasonCounts.MISSING_EVIDENCE, 5);
 });
