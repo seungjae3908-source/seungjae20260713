@@ -60,6 +60,51 @@ export const PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_COMPONENT_AUTHORITIES = Objec
   }),
 } as const);
 
+export const PUBLIC_FORWARD_PARTIAL_FILL_V3_DRAFT_COHORT_TEMPLATE = Object.freeze({
+  schemaVersion: 'public-forward-partial-fill-v3-prospective-cohort-draft-v1',
+  kind: 'DRAFT_PROSPECTIVE_PUBLIC_ONLY_PARTIAL_FILL_V3_COHORT',
+  cohortIdentity: 'PUBLIC_FORWARD_PARTIAL_FILL_V3_PROSPECTIVE_COHORT',
+  cohortVersion: 'V3-DRAFT-1',
+  predecessorV2PolicyDigest: PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY.policyDigest,
+  predecessorV2CohortDigest: PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY.cohortDigest,
+  inheritedNumericCriteria: Object.freeze({
+    totalSlotN: PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY.totalSlotN,
+    trainSlotN: PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY.trainSlotN,
+    validationSlotN: PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY.validationSlotN,
+    oosSlotN: PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY.oosSlotN,
+    perScopeEffectiveIndependentMinimum:
+      PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY.perScopeEffectiveIndependentMinimum,
+    scopeCellCount: PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY.scopeCellCount,
+    mechanicalFloorEffectiveIndependent:
+      PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY.mechanicalFloorEffectiveIndependent,
+  }),
+  freezeStatus: 'NOT_FROZEN',
+  cohortFrozenAtMs: null,
+  effectiveStartMs: null,
+  effectiveStartRule: 'STRICTLY_AFTER_EXPLICIT_COHORT_FREEZE',
+  scheduleTrigger: 'NONE',
+  scheduleActivationAllowed: false,
+  retrospectiveCreditAllowed: false,
+  replayCreditAllowed: false,
+  backfillCreditAllowed: false,
+  manualCreditAllowed: false,
+  syntheticCreditAllowed: false,
+  modeledEvidenceAuthority: 'RESEARCH_ONLY_NON_ECONOMIC',
+  actualExecutionTruthStatus: 'UNKNOWN_UNTIL_OBSERVED',
+  modeledEvidenceMayBecomeActualEvidence: false,
+  economicCreditAllowed: false,
+  profitabilityCredit: 0,
+  fullCostReady: false,
+  evidenceComplete: 0,
+  executionAuthority: 'NONE',
+  privateApiAllowed: false,
+  liveTrading: false,
+  realOrderEnabled: false,
+} as const);
+
+export type PublicForwardPartialFillV3DraftCohortTemplate =
+  typeof PUBLIC_FORWARD_PARTIAL_FILL_V3_DRAFT_COHORT_TEMPLATE;
+
 export const PUBLIC_FORWARD_PARTIAL_FILL_V3_SAFETY = Object.freeze({
   publicOnly: true,
   predecessorV2MutationAllowed: false,
