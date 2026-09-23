@@ -4,6 +4,7 @@ import {
   type AuthoritativePaperGenericRiskPolicyRequest,
 } from './authoritative-paper-generic-risk-policy-producer.service';
 import {
+  PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
   buildAuthoritativePaperPartialFillCostEvidence,
   type PartialFillCalibrationArtifact,
   type PartialFillCalibrationContext,
@@ -231,6 +232,7 @@ export async function preparePaperForwardAuthoritativeInputs(
       ...input.partialFill.expected,
       nowMs,
       maximumAgeMs,
+      calibrationMaximumAgeMs: PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
     }),
   });
   const partialFillEvidence = partialResult.status === 'PRESENT'
@@ -290,6 +292,8 @@ export const PAPER_FORWARD_AUTHORITATIVE_INPUT_PREPARATION_SAFETY = Object.freez
   liquidityImpactInvented: false,
   canonicalLiquidityRuntimeBuilderMustBeExplicitlyBound: true,
   naturalRuntimeMaximumAgeMs: NATURAL_RUNTIME_MAXIMUM_AGE_MS,
+  partialFillCalibrationMaximumAgeMs: PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
+  partialFillCalibrationAndRuntimeFreshnessSeparated: true,
   partialFillImpactInvented: false,
   latencyPreparedAheadOfRuntime: false,
   fundingPreparedAheadOfCandidate: false,

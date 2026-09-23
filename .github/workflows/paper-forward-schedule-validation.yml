@@ -43,7 +43,6 @@ on:
       - api-server/src/services/authoritative-paper-callback-owners.service.ts
       - api-server/src/services/authoritative-paper-evidence-sources.service.ts
       - api-server/src/services/authoritative-paper-execution-cost-sources.service.ts
-      - api-server/src/services/authoritative-paper-generic-risk-policy-producer.service.ts
       - api-server/src/services/authoritative-paper-runtime-package.entry.ts
       - api-server/src/services/paper-trading-state-snapshot.service.ts
       - api-server/src/services/paper-trading-state-publisher.service.ts
@@ -240,7 +239,6 @@ jobs:
             api-server/src/services/authoritative-paper-callback-owners.service.ts
             api-server/src/services/authoritative-paper-evidence-sources.service.ts
             api-server/src/services/authoritative-paper-execution-cost-sources.service.ts
-            api-server/src/services/authoritative-paper-generic-risk-policy-producer.service.ts
             api-server/src/services/authoritative-paper-runtime-package.entry.ts
             api-server/src/services/paper-trading-state-snapshot.service.ts
             api-server/src/services/paper-trading-state-publisher.service.ts
