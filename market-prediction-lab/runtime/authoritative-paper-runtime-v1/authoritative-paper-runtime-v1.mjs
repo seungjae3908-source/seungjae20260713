@@ -8464,8 +8464,8 @@ function createAuthoritativePaperGenericRiskPolicyProducer(input) {
   return async function produceAuthoritativePaperGenericRiskPolicy(request) {
     const requestBlockers = validateRequest(request);
     if (requestBlockers.length > 0) return blocked5(request ?? {}, requestBlockers);
-    const nowMs = now();
-    if (!positive10(nowMs)) return blocked5(request, ["RISK_POLICY_SOURCE_CLOCK_INVALID"]);
+    const sourceReadStartedAtMs = now();
+    if (!positive10(sourceReadStartedAtMs)) return blocked5(request, ["RISK_POLICY_SOURCE_CLOCK_INVALID"]);
     let rawRecord;
     try {
       rawRecord = await input.readCanonicalRecord(Object.freeze({
@@ -8476,6 +8476,10 @@ function createAuthoritativePaperGenericRiskPolicyProducer(input) {
       }));
     } catch {
       return blocked5(request, ["RISK_POLICY_CANONICAL_RECORD_SOURCE_ERROR"]);
+    }
+    const nowMs = now();
+    if (!positive10(nowMs) || nowMs < sourceReadStartedAtMs) {
+      return blocked5(request, ["RISK_POLICY_SOURCE_CLOCK_INVALID"]);
     }
     const checked = validateRecordEnvelope(rawRecord, request, nowMs);
     if (!checked.record) return blocked5(request, checked.blockers);
