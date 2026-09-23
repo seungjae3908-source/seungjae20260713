@@ -88,6 +88,7 @@ jobs:
           grep -Fq 'queuePositionKnown: false' "$FILE"
           grep -Fq 'partialFillCostPercent: null' "$FILE"
           grep -Fq 'economicCreditCreated: false' "$FILE"
+          grep -Fq "blockers.push('SOURCE_ECONOMIC_OR_EXECUTION_CREDIT_FORBIDDEN')" "$FILE"
           grep -Fq 'profitabilityCredit: 0' "$FILE"
           grep -Fq 'fullCostReady: false' "$FILE"
           grep -Fq 'evidenceComplete: 0' "$FILE"
