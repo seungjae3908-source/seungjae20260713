@@ -6,7 +6,9 @@ import { join } from 'node:path';
 
 import {
   buildResearchDevelopmentDiagnosticV1,
+  buildResearchDevelopmentDiagnosticsMapV1,
   persistResearchDevelopmentDiagnosticsV1,
+  validateResearchDevelopmentDiagnosticsV1,
 } from '../src/research-development-diagnostics.mjs';
 
 const H=(x)=>x.repeat(64);
@@ -37,6 +39,42 @@ test('diagnostic metrics are deterministic ratios or normalized entropy from DEV
   assert.match(result.diagnostic.evidenceId,/^development-diagnostic:sha256:[0-9a-f]{64}$/);
   assert.equal(result.safety.performanceMetricInputAllowed,false);
   assert.equal(result.safety.executionAuthority,'NONE');
+});
+
+test('diagnostic provenance record binds every consumed metric and source digest',()=>{
+  const built=buildResearchDevelopmentDiagnosticsMapV1({profiles:[input()]});
+  const verified=validateResearchDevelopmentDiagnosticsV1(built);
+  assert.deepEqual(verified,built.diagnostics);
+
+  const profileId='CRYPTO_FUTURES:SWING';
+  const tamperedDiagnostics={
+    ...built.diagnostics,
+    [profileId]:{
+      ...built.diagnostics[profileId],
+      dataCompleteness:0.1,
+    },
+  };
+  assert.throws(
+    ()=>validateResearchDevelopmentDiagnosticsV1({
+      diagnostics:tamperedDiagnostics,
+      record:built.record,
+    }),
+    /DEVELOPMENT_DIAGNOSTICS_EVIDENCE_DIGEST_MISMATCH/,
+  );
+
+  const tamperedRecord={...built.record,recordDigest:H('f')};
+  assert.throws(
+    ()=>validateResearchDevelopmentDiagnosticsV1({
+      diagnostics:built.diagnostics,
+      record:tamperedRecord,
+    }),
+    /DEVELOPMENT_DIAGNOSTICS_RECORD_DIGEST_MISMATCH/,
+  );
+  assert.throws(
+    ()=>validateResearchDevelopmentDiagnosticsV1({diagnostics:built.diagnostics,record:null}),
+    /DEVELOPMENT_DIAGNOSTICS_RECORD_REQUIRED/,
+  );
+  assert.deepEqual(validateResearchDevelopmentDiagnosticsV1(),{});
 });
 
 test('single strategy family has zero diversity without fabricating a positive score',()=>{
@@ -113,6 +151,7 @@ test('persisted output is exactly the Factory diagnostic map plus a separate pro
   assert.equal(record.safety.oosInputAllowed,false);
   assert.equal(record.safety.executionAuthority,'NONE');
   assert.match(record.recordDigest,/^[0-9a-f]{64}$/);
+  assert.deepEqual(validateResearchDevelopmentDiagnosticsV1({diagnostics,record}),diagnostics);
 });
 
 
