@@ -1,5 +1,8 @@
 import { expect, test } from '@playwright/test';
-import { parsePortfolioChartOverlays } from '../src/lib/portfolio-overlay';
+import {
+  parsePortfolioChartOverlays,
+  parsePortfolioPurchaseDates,
+} from '../src/lib/portfolio-overlay';
 
 const VALID_OVERLAY = {
   ticker: 'AAPL',
@@ -32,6 +35,11 @@ test('portfolio overlay cache accepts only internally consistent persisted truth
     currentPrice: 220,
     rate: 0,
   }])).toEqual([]);
+
+  expect(parsePortfolioChartOverlays([{
+    ...VALID_OVERLAY,
+    purchaseDate: '2026-02-31',
+  }])).toEqual([]);
 });
 
 test('portfolio overlay cache never resurrects malformed or duplicate rows after reload parsing', () => {
@@ -61,4 +69,27 @@ test('portfolio overlay cache keeps nullable market facts coherent', () => {
     ...noMarketPrice,
     rate: 1,
   }])).toEqual([]);
+});
+
+test('portfolio purchase-date cache accepts only normalized ticker and real calendar dates', () => {
+  expect(parsePortfolioPurchaseDates({
+    AAPL: '2026-09-01',
+    '005930': '2026-09-02',
+  })).toEqual({
+    AAPL: '2026-09-01',
+    '005930': '2026-09-02',
+  });
+
+  expect(parsePortfolioPurchaseDates([
+    ['AAPL', '2026-09-01'],
+  ])).toEqual({});
+
+  expect(parsePortfolioPurchaseDates({
+    aapl: '2026-09-01',
+    ' AAPL ': '2026-09-01',
+    '__proto__': '2026-09-01',
+    MSFT: '2026-02-31',
+    TSLA: 20260901,
+    NVDA: 'not-a-date',
+  })).toEqual({});
 });
