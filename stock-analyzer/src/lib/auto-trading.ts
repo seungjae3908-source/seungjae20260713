@@ -519,9 +519,12 @@ function closedAutoTradeOutcomePercent(entry: AutoTradeSafetyJournalEntry): numb
 	const quantity = safeNumber(entry.quantity, Number.NaN);
 	if (!Number.isFinite(entryPrice) || entryPrice <= 0 || !Number.isFinite(quantity) || quantity <= 0) return null;
 
-	const explicit = safeNumber(entry.profitPercent, Number.NaN);
-	if (Number.isFinite(explicit)) return explicit;
+	if (entry.profitPercent != null && String(entry.profitPercent).trim() !== "") {
+		const explicit = safeNumber(entry.profitPercent, Number.NaN);
+		if (Number.isFinite(explicit)) return explicit;
+	}
 
+	if (entry.exitPrice == null || String(entry.exitPrice).trim() === "") return null;
 	const exitPrice = safeNumber(entry.exitPrice, Number.NaN);
 	if (!Number.isFinite(exitPrice) || exitPrice < 0) return null;
 	return ((exitPrice - entryPrice) / entryPrice) * 100;
