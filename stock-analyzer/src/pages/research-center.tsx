@@ -27,6 +27,7 @@ import {
   answerCanonicalResearchQuestion,
   buildFullCostRows,
   buildResearchPipeline,
+  classifySha,
   formatCanonicalMetric,
   isFullCostReady,
   statusLabel,
@@ -426,6 +427,14 @@ function EvidenceTab({ overview, promotion, cards }: {
   cards: ResearchPipelineCard[];
 }) {
   const sourceSha = promotion?.sourceSha && /^[0-9a-f]{40}$/i.test(promotion.sourceSha) ? promotion.sourceSha : '미수집';
+  const factory = overview.factory;
+  const liquidity = overview.research.liquidityIndependence;
+  const runtimeSha = factory?.researchSha && /^[0-9a-f]{40}$/i.test(factory.researchSha) ? factory.researchSha : '미수집';
+  const researchShaBinding = sourceSha === '미수집' || runtimeSha === '미수집' ? 'MISSING' : classifySha(sourceSha, runtimeSha);
+  const firstZero = overview.paper.candidatePerformance?.FIRST_ZERO
+    ?? factory?.firstZero
+    ?? factory?.nextFirstZero
+    ?? '미수집';
   const datasets = new Set(cards.flatMap((card) => card.records.map((record) => record.datasetId).filter(Boolean)));
   const stale = cards.filter((card) => card.status === 'stale').length;
   const wrongSha = cards.filter((card) => card.evidenceState === 'WRONG_SHA').length;
@@ -438,15 +447,15 @@ function EvidenceTab({ overview, promotion, cards }: {
       </div>
 
       <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        <EvidenceItem label="Current main SHA" value="미수집" />
+        <EvidenceItem label="Research runtime SHA" value={runtimeSha} state={runtimeSha === '미수집' ? 'unmeasured' : 'verified'} />
         <EvidenceItem label="Research source SHA" value={sourceSha} state={sourceSha === '미수집' ? 'unmeasured' : 'verified'} />
         <EvidenceItem label="Dataset identity" value={datasets.size ? `${datasets.size}개 canonical dataset` : '미수집'} state={datasets.size ? 'verified' : 'unmeasured'} />
         <EvidenceItem label="Strategy identity" value={promotion ? `${promotion.items.length}개` : '미수집'} state={promotion ? 'normal' : 'unmeasured'} />
-        <EvidenceItem label="Model digest" value="미수집" />
-        <EvidenceItem label="Workflow run ID" value="미수집" />
-        <EvidenceItem label="Artifact ID" value="미수집" />
-        <EvidenceItem label="Canonical receipt" value="미수집" />
-        <EvidenceItem label="Exact-head / exact-main CI" value="미수집" />
+        <EvidenceItem label="Control-plane digest" value={factory?.controlPlaneDigest ?? '미수집'} state={factory?.controlPlaneDigest ? 'verified' : 'unmeasured'} />
+        <EvidenceItem label="Workflow run ID" value={liquidity?.upstreamIngestRunId ?? '미수집'} state={liquidity?.upstreamIngestRunId ? 'verified' : 'unmeasured'} />
+        <EvidenceItem label="Artifact ID" value={liquidity?.upstreamIngestArtifactId ?? '미수집'} state={liquidity?.upstreamIngestArtifactId ? 'verified' : 'unmeasured'} />
+        <EvidenceItem label="Canonical receipt" value={liquidity?.reportDigest ?? '미수집'} state={liquidity?.reportDigest ? 'verified' : 'unmeasured'} />
+        <EvidenceItem label="Research SHA binding" value={researchShaBinding} state={researchShaBinding === 'PRESENT' ? 'verified' : researchShaBinding === 'WRONG_SHA' ? 'attention' : 'unmeasured'} />
         <EvidenceItem label="Publication timestamp" value={formatDate(overview.state.latestCycleAt)} state={overview.state.latestCycleAt ? 'normal' : 'unmeasured'} />
         <EvidenceItem label="Freshness" value={stale ? `STALE ${stale}개` : 'Canonical max-age 미수집'} state={stale ? 'stale' : 'unmeasured'} />
         <EvidenceItem label="SHA binding" value={wrongSha ? `WRONG_SHA ${wrongSha}개` : '명시적 mismatch 없음'} state={wrongSha ? 'attention' : 'normal'} />
@@ -459,7 +468,7 @@ function EvidenceTab({ overview, promotion, cards }: {
         <EvidenceItem label="Paper runtime proof" value={overview.paper.runtime.present ? 'PRESENT' : 'MISSING'} state={overview.paper.runtime.present ? 'normal' : 'unmeasured'} />
         <EvidenceItem label="Profitability proof" value={overview.profitability.proven ? 'PROVEN' : 'NOT_PROVEN'} state={overview.profitability.proven ? 'verified' : 'waiting'} />
         <EvidenceItem label="Champion" value={champion.metrics[0]?.value ?? '자료 없음'} state={champion.status} />
-        <EvidenceItem label="FIRST_ZERO" value="미수집" state="unmeasured" />
+        <EvidenceItem label="FIRST_ZERO" value={firstZero} state={firstZero === '미수집' ? 'unmeasured' : 'attention'} />
       </dl>
 
       <details className="rounded-2xl border border-card-border bg-card p-4">
