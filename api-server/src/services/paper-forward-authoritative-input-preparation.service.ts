@@ -82,6 +82,7 @@ const DEFAULT_DEPENDENCIES: Dependencies = Object.freeze({
 });
 
 const SHA40 = /^[0-9a-f]{40}$/u;
+const PAPER_INSTRUMENT_SYMBOL = /^[A-Z0-9._:-]{1,40}$/u;
 const NATURAL_RUNTIME_MAXIMUM_AGE_MS = 30_000;
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -104,8 +105,8 @@ function exactSha(value: unknown): value is string {
 
 function symbol(value: unknown): string | null {
   if (!nonEmpty(value)) return null;
-  const normalized = value.trim().toUpperCase().replace(/[^A-Z0-9]/gu, '');
-  return normalized.length > 0 ? normalized : null;
+  const normalized = value.trim().toUpperCase();
+  return PAPER_INSTRUMENT_SYMBOL.test(normalized) ? normalized : null;
 }
 
 function blockersFrom(value: unknown): string[] {
