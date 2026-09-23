@@ -43,6 +43,7 @@ on:
       - api-server/src/services/authoritative-paper-callback-owners.service.ts
       - api-server/src/services/authoritative-paper-evidence-sources.service.ts
       - api-server/src/services/authoritative-paper-execution-cost-sources.service.ts
+      - api-server/src/services/authoritative-paper-generic-risk-policy-producer.service.ts
       - api-server/src/services/authoritative-paper-runtime-package.entry.ts
       - api-server/src/services/paper-trading-state-snapshot.service.ts
       - api-server/src/services/paper-trading-state-publisher.service.ts
@@ -77,6 +78,7 @@ on:
       - market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
       - market-prediction-lab/src/authoritative-paper-natural-funnel-v1.js
       - market-prediction-lab/src/canonical-paper-admission-bridge-v1.js
+      - market-prediction-lab/tests/canonical-paper-admission-bridge-v1.test.js
       - market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js
       - market-prediction-lab/src/canonical-meaningful-search-paper-runtime-v1.js
       - market-prediction-lab/src/bitget-position-tier-v1.js
@@ -95,6 +97,7 @@ on:
       - market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
       - market-prediction-lab/src/natural-paper-position-settlement-lifecycle-v1.js
       - market-prediction-lab/src/natural-paper-trigger-bound-settlement-cost-producer-v1.js
+      - market-prediction-lab/src/natural-paper-authoritative-settlement-cost-collector-v1.js
       - market-prediction-lab/src/recurring-paper-loop-v1.js
       - market-prediction-lab/scripts/run-paper-forward-schedule.js
       - market-prediction-lab/scripts/run-shadow-cycle.js
@@ -121,6 +124,7 @@ on:
       - market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
       - market-prediction-lab/tests/natural-paper-position-settlement-lifecycle-v1.test.js
       - market-prediction-lab/tests/natural-paper-trigger-bound-settlement-cost-producer-v1.test.js
+      - market-prediction-lab/tests/natural-paper-authoritative-settlement-cost-collector-v1.test.js
       - market-prediction-lab/tests/recurring-paper-loop-v1.test.js
       - market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
       - market-prediction-lab/tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js
@@ -236,6 +240,7 @@ jobs:
             api-server/src/services/authoritative-paper-callback-owners.service.ts
             api-server/src/services/authoritative-paper-evidence-sources.service.ts
             api-server/src/services/authoritative-paper-execution-cost-sources.service.ts
+            api-server/src/services/authoritative-paper-generic-risk-policy-producer.service.ts
             api-server/src/services/authoritative-paper-runtime-package.entry.ts
             api-server/src/services/paper-trading-state-snapshot.service.ts
             api-server/src/services/paper-trading-state-publisher.service.ts
@@ -287,6 +292,7 @@ jobs:
             market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
             market-prediction-lab/src/authoritative-paper-natural-funnel-v1.js
             market-prediction-lab/src/canonical-paper-admission-bridge-v1.js
+            market-prediction-lab/tests/canonical-paper-admission-bridge-v1.test.js
             market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js
             market-prediction-lab/src/canonical-meaningful-search-paper-runtime-v1.js
             market-prediction-lab/src/bitget-position-tier-v1.js
@@ -306,6 +312,7 @@ jobs:
             market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
             market-prediction-lab/src/natural-paper-position-settlement-lifecycle-v1.js
             market-prediction-lab/src/natural-paper-trigger-bound-settlement-cost-producer-v1.js
+            market-prediction-lab/src/natural-paper-authoritative-settlement-cost-collector-v1.js
             market-prediction-lab/src/recurring-paper-loop-v1.js
             market-prediction-lab/scripts/run-paper-forward-schedule.js
             market-prediction-lab/scripts/run-shadow-cycle.js
@@ -348,6 +355,7 @@ jobs:
             market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
             market-prediction-lab/tests/natural-paper-position-settlement-lifecycle-v1.test.js
             market-prediction-lab/tests/natural-paper-trigger-bound-settlement-cost-producer-v1.test.js
+            market-prediction-lab/tests/natural-paper-authoritative-settlement-cost-collector-v1.test.js
             market-prediction-lab/tests/recurring-paper-loop-v1.test.js
             market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
             market-prediction-lab/tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js
@@ -418,11 +426,15 @@ jobs:
           node --check market-prediction-lab/src/paper-forward-schedule-runtime-base-v1.js
           node --check market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
           node --check market-prediction-lab/src/recurring-paper-loop-v1.js
+          node --check market-prediction-lab/src/natural-paper-authoritative-settlement-cost-collector-v1.js
+          node --check market-prediction-lab/tests/natural-paper-authoritative-settlement-cost-collector-v1.test.js
           node --check market-prediction-lab/src/authoritative-paper-evidence-source-ownership-v1.js
           node --check market-prediction-lab/src/authoritative-paper-runtime-factory-v1.js
           node --check market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
           node --check market-prediction-lab/src/authoritative-paper-natural-funnel-v1.js
           node --check market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js
+          node --check market-prediction-lab/src/canonical-paper-admission-bridge-v1.js
+          node --check market-prediction-lab/tests/canonical-paper-admission-bridge-v1.test.js
           node --check market-prediction-lab/src/bitget-position-tier-v1.js
           node --check market-prediction-lab/src/eth-v6-paper-forward-source-v1.js
           node --check market-prediction-lab/src/eth-v6-paper-settlement-source-v1.js
@@ -462,6 +474,7 @@ jobs:
             tests/authoritative-natural-paper-accounting-v1.test.js \
             tests/authoritative-paper-natural-funnel-v1.test.js \
             tests/canonical-paper-admission-bundle-injection-runtime-v1.test.js \
+            tests/canonical-paper-admission-bridge-v1.test.js \
             tests/natural-paper-account-cli-contract-v1.test.js \
             tests/authoritative-paper-runtime-factory-v1.test.js \
             tests/authoritative-paper-runtime-package-v1.test.js \
@@ -476,6 +489,7 @@ jobs:
             tests/paper-forward-schedule-runtime-v1.test.js \
             tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js \
             tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js \
+            tests/natural-paper-authoritative-settlement-cost-collector-v1.test.js \
             tests/paper-risk-policy-human-approval-v1.test.js \
             tests/research-production-paper-forward-cutover.test.js
           if [[ -f tests/natural-paper-position-settlement-lifecycle-v1.test.js ]]; then
@@ -534,6 +548,7 @@ jobs:
             market-prediction-lab/src/paper-forward-schedule-runtime-base-v1.js \
             market-prediction-lab/src/paper-forward-schedule-runtime-v1.js \
             market-prediction-lab/src/recurring-paper-loop-v1.js \
+            market-prediction-lab/src/natural-paper-authoritative-settlement-cost-collector-v1.js \
             market-prediction-lab/scripts/run-paper-forward-schedule.js \
             ops/bridge-paper-forward-no-deploy-snapshot.mjs \
             ops/collect-paper-forward-no-deploy-diagnostics.mjs \
