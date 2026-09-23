@@ -29,19 +29,26 @@ import type { MemberCapability } from '../../packages/member-access/src/index.js
 import HomePage from '@/pages/home';
 import SearchPage from '@/pages/search';
 
-const WatchlistPage = lazy(() => import('@/pages/watchlist'));
+const loadWatchlistPage = () => import('@/pages/watchlist');
+const WatchlistPage = lazy(loadWatchlistPage);
 const AlertsPage = lazy(() => import('@/pages/alerts'));
 const ScannerPage = lazy(() => import('@/pages/scanner'));
-const SignalScannerPage = lazy(() => import('@/pages/signal-scanner'));
-const StockInfoPage = lazy(() => import('@/pages/stock-info'));
-const DetailPage = lazy(() => import('@/pages/detail'));
-const MarketInformationPage = lazy(() => import('@/pages/market-information'));
+const loadSignalScannerPage = () => import('@/pages/signal-scanner');
+const SignalScannerPage = lazy(loadSignalScannerPage);
+const loadStockInfoPage = () => import('@/pages/stock-info');
+const StockInfoPage = lazy(loadStockInfoPage);
+const loadDetailPage = () => import('@/pages/detail');
+const DetailPage = lazy(loadDetailPage);
+const loadMarketInformationPage = () => import('@/pages/market-information');
+const MarketInformationPage = lazy(loadMarketInformationPage);
 const MarketOverviewPage = lazy(() => import('@/pages/market-overview'));
 const StocksPage = lazy(() => import('@/pages/stocks'));
 const UnifiedAssetSearchPage = lazy(() => import('@/pages/unified-asset-search'));
 const ThemesPage = lazy(() => import('@/pages/themes'));
-const LearnPage = lazy(() => import('@/pages/learn'));
-const MorePage = lazy(() => import('@/pages/more'));
+const loadLearnPage = () => import('@/pages/learn');
+const LearnPage = lazy(loadLearnPage);
+const loadMorePage = () => import('@/pages/more');
+const MorePage = lazy(loadMorePage);
 const PortfolioPage = lazy(() => import('@/pages/portfolio'));
 const PortfolioV2Page = lazy(() => import('@/pages/portfolio-v2'));
 const StrategyPromotionPage = lazy(() => import('@/pages/strategy-promotion'));
@@ -51,7 +58,8 @@ const AdminPage = lazy(() => import('@/pages/admin'));
 const AgentHubControlPage = lazy(() => import('@/pages/agent-hub-control'));
 const InstallPage = lazy(() => import('@/pages/install'));
 const RecommendationsPage = lazy(() => import('@/pages/recommendations'));
-const BacktestsPage = lazy(() => import('@/pages/backtests'));
+const loadBacktestsPage = () => import('@/pages/backtests');
+const BacktestsPage = lazy(loadBacktestsPage);
 const loadPaperTradingPage = () => import('@/pages/paper-trading');
 const PaperTradingPage = lazy(loadPaperTradingPage);
 const AutoTradingPage = lazy(() => import('@/pages/auto-trading'));
@@ -92,7 +100,8 @@ if (directAiChartColdRoute) {
 }
 const AiChartPage = lazy(loadAiChartPage);
 const AiChatPage = lazy(() => import('@/pages/ai-chat'));
-const TechnicalWorkspacePage = lazy(() => import('@/pages/technical-workspace'));
+const loadTechnicalWorkspacePage = () => import('@/pages/technical-workspace');
+const TechnicalWorkspacePage = lazy(loadTechnicalWorkspacePage);
 const Phase12TradeAutomationE2EPage = lazy(() => import('@/pages/phase12-trade-automation-e2e'));
 
 const phase4E2EEnabled = import.meta.env.VITE_PHASE4_E2E === 'true';
@@ -115,6 +124,14 @@ function retryUnifiedChartBootstrap(failureCount: number, error: unknown): boole
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: true, refetchOnReconnect: true, staleTime: 0, gcTime: 30 * 60 * 1000, retry: 2 } },
 });
+
+async function prewarmPrimaryMarketInformation(): Promise<void> {
+  const marketInformation = await loadMarketInformationPage();
+  if (typeof window === 'undefined') return;
+  const currentPath = window.location.pathname.replace(/\/+$/, '') || '/';
+  if (currentPath !== '/' && !currentPath.endsWith('/home')) return;
+  await marketInformation.prefetchMarketInformationRoom(queryClient, '/stocks/kr');
+}
 
 function DirectAiChartDataPrewarm() {
   const auth = useAuth();
@@ -232,7 +249,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const legacyScannerE2E = phase11E2EEnabled && location.startsWith('/__phase11-ai-workspace-e2e');
   const scannerRoute = location.startsWith('/scanner') || legacyScannerE2E;
   const wide = scannerRoute || location.startsWith('/ai-chart') || location.startsWith('/__phase11-technical-workspace-e2e');
-  return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 w-full flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-screen-xl'}`}><OfflineBanner />{scannerRoute ? <ScannerReadinessStatus /> : null}<ProfessionalCommandBar /><div className="min-h-0 flex-1 overflow-hidden">{children}</div></div><OrderbookRouteDock /></div>;
+  return <div data-testid="app-shell" className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 w-full flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-screen-xl'}`}><OfflineBanner />{scannerRoute ? <ScannerReadinessStatus /> : null}<ProfessionalCommandBar /><div className="min-h-0 flex-1 overflow-hidden">{children}</div></div><OrderbookRouteDock /></div>;
 }
 
 function gated(capability: MemberCapability, child: React.ReactNode) {
@@ -405,6 +422,21 @@ function Phase11AutoTradingRoute() {
 function AuthenticatedApp() {
   const auth = useAuth();
   useEffect(() => { if (auth.isApproved) ensureWatchlistSync(); }, [auth.isApproved]);
+  useEffect(() => {
+    if (!auth.isApproved || directAiChartColdRoute) return;
+    void Promise.allSettled([
+      loadMarketInformationPage(),
+      loadWatchlistPage(),
+      loadBacktestsPage(),
+      loadMorePage(),
+      loadStockInfoPage(),
+      loadDetailPage(),
+      loadTechnicalWorkspacePage(),
+      loadSignalScannerPage(),
+      loadAiChartPage(),
+      loadLearnPage(),
+    ]).then(() => prewarmPrimaryMarketInformation()).catch(() => undefined);
+  }, [auth.isApproved]);
   useEffect(() => {
     if (auth.isApproved && auth.can('canAccessPaperTrading')) {
       void loadPaperTradingPage();
