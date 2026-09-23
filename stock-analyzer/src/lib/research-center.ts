@@ -192,8 +192,17 @@ export interface ResearchCenterOverview {
     liquidityIndependence?: {
       present: boolean;
       status: 'MISSING' | 'INVALID' | 'PRESENT';
+      producerSha?: string | null;
+      upstreamIngestRunId?: string | null;
+      upstreamIngestArtifactId?: string | null;
+      upstreamIngestArtifactDigest?: string | null;
+      sourceInventoryDigest?: string | null;
       effectiveIndependentN: number | null;
+      independenceAuditDigest?: string | null;
+      independentSplitSourceDigest?: string | null;
+      v3IndependentSplitIndexDigest?: string | null;
       frozenSplitCounts: { TRAIN: number | null; VALIDATION: number | null; OOS: number | null };
+      reportDigest?: string | null;
     };
   };
   dataFactory?: {
