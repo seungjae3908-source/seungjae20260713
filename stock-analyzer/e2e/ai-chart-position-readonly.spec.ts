@@ -121,6 +121,7 @@ test('AI Chart wires Scanner PricePlan into position analytics without execution
 
 test('position analytics compute cash-market average, target, stop, partial exit and evidence-backed break-even', () => {
   const position = {
+    market: 'KR',
     quantity: 20,
     averageEntryPrice: 70_000,
     currentPrice: 72_100,
