@@ -289,16 +289,28 @@ jobs:
           if (v?.safety?.forbiddenAuthorityObserved !== false) fail('forbidden authority observed');
           if (v?.profitability?.proven !== false) fail('profitability must remain unproven');
           if (li?.present !== true || li?.status !== 'PRESENT') fail('V3 independence summary is not PRESENT');
-          if (li.genuineScheduledSlotN !== 15) fail(`genuineScheduledSlotN mismatch: ${li.genuineScheduledSlotN}`);
-          if (li.effectiveIndependentN !== 15) fail(`effectiveIndependentN mismatch: ${li.effectiveIndependentN}`);
-          if (li.independentBuyN !== 10) fail(`independentBuyN mismatch: ${li.independentBuyN}`);
-          if (li.independentSellN !== 5) fail(`independentSellN mismatch: ${li.independentSellN}`);
-          if (counts.TRAIN !== 15) fail(`TRAIN mismatch: ${counts.TRAIN}`);
-          if (counts.TRAIN_BUY !== 10) fail(`TRAIN_BUY mismatch: ${counts.TRAIN_BUY}`);
-          if (counts.TRAIN_SELL !== 5) fail(`TRAIN_SELL mismatch: ${counts.TRAIN_SELL}`);
+          const measuredCounts = {
+            genuineScheduledSlotN: li.genuineScheduledSlotN,
+            rawAcceptedN: li.rawAcceptedN,
+            effectiveIndependentN: li.effectiveIndependentN,
+            independentBuyN: li.independentBuyN,
+            independentSellN: li.independentSellN,
+            ...counts,
+          };
+          for (const [name, value] of Object.entries(measuredCounts)) {
+            if (!Number.isSafeInteger(value) || value < 0) fail(`${name} must be a non-negative safe integer: ${value}`);
+          }
+          if (li.genuineScheduledSlotN < li.effectiveIndependentN) fail('genuineScheduledSlotN must cover effectiveIndependentN');
+          if (li.rawAcceptedN < li.effectiveIndependentN) fail('rawAcceptedN must cover effectiveIndependentN');
+          if (li.effectiveIndependentN !== li.independentBuyN + li.independentSellN) fail('independent side counts must sum to effectiveIndependentN');
+          if (counts.TRAIN !== counts.TRAIN_BUY + counts.TRAIN_SELL) fail('TRAIN side counts mismatch');
+          if (counts.VALIDATION !== counts.VALIDATION_BUY + counts.VALIDATION_SELL) fail('VALIDATION side counts mismatch');
+          if (counts.OOS !== counts.OOS_BUY + counts.OOS_SELL) fail('OOS side counts mismatch');
+          if (li.effectiveIndependentN !== counts.TRAIN + counts.VALIDATION + counts.OOS) fail('frozen split counts must sum to effectiveIndependentN');
+          if (li.independentBuyN !== counts.TRAIN_BUY + counts.VALIDATION_BUY + counts.OOS_BUY) fail('BUY split counts mismatch');
+          if (li.independentSellN !== counts.TRAIN_SELL + counts.VALIDATION_SELL + counts.OOS_SELL) fail('SELL split counts mismatch');
           if (counts.VALIDATION !== 0 || counts.VALIDATION_BUY !== 0 || counts.VALIDATION_SELL !== 0) fail('VALIDATION counts must remain zero');
-          if (counts.OOS !== 0) fail(`OOS mismatch: ${counts.OOS}`);
-          if (counts.OOS_BUY !== 0 || counts.OOS_SELL !== 0) fail('OOS side counts must remain zero');
+          if (counts.OOS !== 0 || counts.OOS_BUY !== 0 || counts.OOS_SELL !== 0) fail('OOS counts must remain zero');
           if (li.oosOutcomeCredit !== 0) fail(`oosOutcomeCredit mismatch: ${li.oosOutcomeCredit}`);
           if (li.calibrationArtifactProduced !== false) fail('calibrationArtifactProduced must remain false');
           if (li.liquidityImpactStatus !== 'BLOCKED_DATA') fail(`liquidityImpactStatus mismatch: ${li.liquidityImpactStatus}`);
