@@ -62,7 +62,8 @@ function assertJsonSafe(value, seen = new Set()) {
   if (seen.has(value)) throw new Error("PAPER_FORWARD_LEARNING_VALUE_NOT_JSON_SAFE");
 
   const prototype = Object.getPrototypeOf(value);
-  if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) {
+  if ((Array.isArray(value) && prototype !== Array.prototype)
+    || (!Array.isArray(value) && prototype !== Object.prototype)) {
     throw new Error("PAPER_FORWARD_LEARNING_VALUE_NOT_JSON_SAFE");
   }
   assertJsonOwnPropertyShape(value);
