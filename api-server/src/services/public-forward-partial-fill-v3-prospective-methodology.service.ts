@@ -13,6 +13,23 @@ export const PUBLIC_FORWARD_PARTIAL_FILL_V3_PROSPECTIVE_COHORT_VERSION =
 export const PUBLIC_FORWARD_PARTIAL_FILL_V3_MODELED_OBSERVATION_VERSION =
   'public-forward-partial-fill-v3-modeled-observation-v1' as const;
 
+export const PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY = Object.freeze({
+  authorityIdentity: 'PUBLIC_FORWARD_PARTIAL_FILL_SUCCESSOR_V2_FROZEN_CAPACITY',
+  authorityVersion: 'V2',
+  sourceReference: 'https://github.com/seungjae3908-source/seungjae20260713/pull/873',
+  policyDigest: '5d91ea09ac5a2982a26d00197433142455fa6634488fadc9201e4ddf1346ed6c',
+  cohortDigest: '9b2853a361e17dc429288cec4499fc972189b0bc2427a6d8bb2a999eff847454',
+  totalSlotN: 1024,
+  trainSlotN: 512,
+  validationSlotN: 256,
+  oosSlotN: 256,
+  perScopeEffectiveIndependentMinimum: 178,
+  scopeCellCount: 4,
+  mechanicalFloorEffectiveIndependent: 712,
+  predecessorCriteriaMutationAllowed: false,
+  priorEligibleBoundaryReuseAllowed: false,
+} as const);
+
 export const PUBLIC_FORWARD_PARTIAL_FILL_V3_SAFETY = Object.freeze({
   publicOnly: true,
   predecessorV2MutationAllowed: false,
@@ -48,6 +65,19 @@ export type PublicForwardPartialFillV3FrozenRef = Readonly<{
   status: 'FROZEN';
 }>;
 
+export type PublicForwardPartialFillV3PredecessorV2Authority =
+  PublicForwardPartialFillV3FrozenRef & Readonly<{
+    policyDigest: string;
+    cohortDigest: string;
+    totalSlotN: number;
+    trainSlotN: number;
+    validationSlotN: number;
+    oosSlotN: number;
+    perScopeEffectiveIndependentMinimum: number;
+    scopeCellCount: number;
+    mechanicalFloorEffectiveIndependent: number;
+  }>;
+
 export type PublicForwardPartialFillV3ModeledLanePolicy = Readonly<{
   evidenceClass: 'MODELED_PUBLIC_ONLY';
   modelIdentity: string;
@@ -64,7 +94,7 @@ export type PublicForwardPartialFillV3ProspectiveMethodologyInput = Readonly<{
   methodologyIdentity: string;
   methodologyVersion: string;
   methodologyFrozenAtMs: number;
-  predecessorV2: PublicForwardPartialFillV3FrozenRef;
+  predecessorV2: PublicForwardPartialFillV3PredecessorV2Authority;
   businessTolerance: PublicForwardPartialFillV3FrozenRef;
   statisticalMethodology: PublicForwardPartialFillV3FrozenRef;
   numericMinimumArtifact: PublicForwardPartialFillV3FrozenRef;
@@ -78,7 +108,7 @@ export type PublicForwardPartialFillV3ProspectiveMethodology = Readonly<{
   methodologyIdentity: string;
   methodologyVersion: string;
   methodologyFrozenAtMs: number;
-  predecessorV2: PublicForwardPartialFillV3FrozenRef;
+  predecessorV2: PublicForwardPartialFillV3PredecessorV2Authority;
   businessTolerance: PublicForwardPartialFillV3FrozenRef;
   statisticalMethodology: PublicForwardPartialFillV3FrozenRef;
   numericMinimumArtifact: PublicForwardPartialFillV3FrozenRef;
@@ -234,6 +264,38 @@ function validateFrozenRef(
   return blockers;
 }
 
+function validateExactPredecessorV2Authority(
+  value: PublicForwardPartialFillV3PredecessorV2Authority | undefined,
+): string[] {
+  const blockers: string[] = [];
+  const authority = PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY;
+  if (!value) return ['PREDECESSOR_V2_EXACT_AUTHORITY_REQUIRED'];
+  if (value.identity !== authority.authorityIdentity
+    || value.version !== authority.authorityVersion) {
+    blockers.push('PREDECESSOR_V2_AUTHORITY_IDENTITY_MISMATCH');
+  }
+  if (value.digest !== authority.cohortDigest
+    || value.cohortDigest !== authority.cohortDigest
+    || value.policyDigest !== authority.policyDigest) {
+    blockers.push('PREDECESSOR_V2_AUTHORITY_DIGEST_MISMATCH');
+  }
+  if (value.totalSlotN !== authority.totalSlotN
+    || value.trainSlotN !== authority.trainSlotN
+    || value.validationSlotN !== authority.validationSlotN
+    || value.oosSlotN !== authority.oosSlotN
+    || value.perScopeEffectiveIndependentMinimum !== authority.perScopeEffectiveIndependentMinimum
+    || value.scopeCellCount !== authority.scopeCellCount
+    || value.mechanicalFloorEffectiveIndependent !== authority.mechanicalFloorEffectiveIndependent) {
+    blockers.push('PREDECESSOR_V2_NUMERIC_CRITERIA_MISMATCH');
+  }
+  if (value.trainSlotN + value.validationSlotN + value.oosSlotN !== value.totalSlotN
+    || value.perScopeEffectiveIndependentMinimum * value.scopeCellCount
+      !== value.mechanicalFloorEffectiveIndependent) {
+    blockers.push('PREDECESSOR_V2_NUMERIC_CRITERIA_INTERNALLY_INCONSISTENT');
+  }
+  return blockers;
+}
+
 export function computePublicForwardPartialFillV3MethodologyDigest(
   methodology: Omit<PublicForwardPartialFillV3ProspectiveMethodology, 'methodologyDigest'>
     | PublicForwardPartialFillV3ProspectiveMethodology,
@@ -253,6 +315,7 @@ export function buildPublicForwardPartialFillV3ProspectiveMethodology(
   if (!finitePositive(input?.methodologyFrozenAtMs)) blockers.push('METHODOLOGY_FROZEN_AT_INVALID');
 
   blockers.push(...validateFrozenRef('predecessor_v2', input?.predecessorV2, input?.methodologyFrozenAtMs));
+  blockers.push(...validateExactPredecessorV2Authority(input?.predecessorV2));
   blockers.push(...validateFrozenRef('business_tolerance', input?.businessTolerance, input?.methodologyFrozenAtMs));
   blockers.push(...validateFrozenRef('statistical_methodology', input?.statisticalMethodology, input?.methodologyFrozenAtMs));
   blockers.push(...validateFrozenRef('numeric_minimum_artifact', input?.numericMinimumArtifact, input?.methodologyFrozenAtMs));
