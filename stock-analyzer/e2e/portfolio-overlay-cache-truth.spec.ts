@@ -78,6 +78,32 @@ test('portfolio overlay cache never resurrects malformed or duplicate rows after
   expect(parsePortfolioChartOverlays([VALID_OVERLAY, malformed, duplicate])).toEqual([VALID_OVERLAY]);
 });
 
+test('portfolio overlay cache drops every persisted identity for a same-ticker cross-market conflict', () => {
+  const conflictingKr = {
+    ...VALID_OVERLAY,
+    name: 'KR AAPL',
+    market: 'KR' as const,
+    currency: 'KRW' as const,
+  };
+  const unaffected = {
+    ...VALID_OVERLAY,
+    ticker: 'MSFT',
+    name: 'Microsoft',
+  };
+
+  expect(parsePortfolioChartOverlays([
+    VALID_OVERLAY,
+    conflictingKr,
+    unaffected,
+  ])).toEqual([unaffected]);
+
+  expect(parsePortfolioChartOverlays([
+    conflictingKr,
+    VALID_OVERLAY,
+    unaffected,
+  ])).toEqual([unaffected]);
+});
+
 test('portfolio overlay cache keeps nullable market facts coherent', () => {
   const noMarketPrice = {
     ...VALID_OVERLAY,
