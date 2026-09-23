@@ -5,6 +5,7 @@ import type { AnalysisMarket, AnalysisPricePlan } from '@/lib/analysis-selection
 import {
   buildPositionGuidance,
   feeInclusiveBreakEvenPrice,
+  positionDirection,
   projectPartialExit,
   projectPriceOutcome,
   projectedAverageEntry,
@@ -158,10 +159,10 @@ function formatPercent(value: number | null | undefined): string {
 function priceDistance(position: AiChartAccountPosition, chartPrice: number | null): number | null {
   const average = finite(position.averageEntryPrice);
   const current = finite(position.currentPrice) ?? finite(chartPrice);
-  if (average == null || current == null || average <= 0) return null;
+  const direction = positionDirection(position);
+  if (average == null || current == null || average <= 0 || direction == null) return null;
   const raw = ((current - average) / average) * 100;
-  const side = String(position.side ?? '').toLowerCase();
-  return side === 'short' ? -raw : raw;
+  return direction * raw;
 }
 
 function providerLabel(provider: Snapshot['provider']): string {
@@ -226,7 +227,6 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
     const sequence = ++requestSequenceRef.current;
     setState({ kind: 'loading' });
     onOverlayChange(null);
-
     try {
       const response = await authorizedFetch(`/api/accounts/read-only/${provider}`, {
         cache: 'no-store',
