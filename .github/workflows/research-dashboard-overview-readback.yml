@@ -142,7 +142,7 @@ jobs:
 
             const MAX_HUB_CHAIN_DEPTH = 32;
             const predecessorFromBody = (value) => {
-              const matches = [...String(value ?? '').matchAll(/<!--\\s*agent-hub-predecessor:(\\d+)\\s*-->/g)]
+              const matches = [...String(value ?? '').matchAll(/<!--\s*agent-hub-predecessor:(\d+)\s*-->/g)]
                 .map((row) => Number(row[1]))
                 .filter((row) => Number.isInteger(row) && row > 0);
               if (matches.length === 0) return null;
@@ -150,7 +150,7 @@ jobs:
               return matches[0];
             };
             const successorFromBody = (value) => {
-              const matches = [...String(value ?? '').matchAll(/<!--\\s*agent-hub-successor:(\\d+)\\s*-->/g)]
+              const matches = [...String(value ?? '').matchAll(/<!--\s*agent-hub-successor:(\d+)\s*-->/g)]
                 .map((row) => Number(row[1]))
                 .filter((row) => Number.isInteger(row) && row > 0);
               if (matches.length === 0) return null;
@@ -168,8 +168,8 @@ jobs:
                 const receipt = String(comment.body ?? '');
                 if (String(comment.user?.login ?? '') !== 'github-actions[bot]') continue;
                 if (!receipt.includes('[RESEARCH_DASHBOARD_INTERNAL_ACTIVATION]') || !receipt.includes('status: success')) continue;
-                const activationMatch = receipt.match(/(?:^|\\n)target_sha:\\s*([0-9a-f]{40})(?:\\n|$)/i);
-                const hubMatch = receipt.match(/(?:^|\\n)canonical_hub:\\s*#(\\d+)(?:\\n|$)/i);
+                const activationMatch = receipt.match(/(?:^|\n)target_sha:\s*([0-9a-f]{40})(?:\n|$)/i);
+                const hubMatch = receipt.match(/(?:^|\n)canonical_hub:\s*#(\d+)(?:\n|$)/i);
                 if (!activationMatch || Number(hubMatch?.[1] ?? 0) !== issueNumber) continue;
                 const candidate = activationMatch[1].toLowerCase();
                 try {
@@ -289,16 +289,41 @@ jobs:
           if (v?.safety?.forbiddenAuthorityObserved !== false) fail('forbidden authority observed');
           if (v?.profitability?.proven !== false) fail('profitability must remain unproven');
           if (li?.present !== true || li?.status !== 'PRESENT') fail('V3 independence summary is not PRESENT');
-          if (li.genuineScheduledSlotN !== 15) fail(`genuineScheduledSlotN mismatch: ${li.genuineScheduledSlotN}`);
-          if (li.effectiveIndependentN !== 15) fail(`effectiveIndependentN mismatch: ${li.effectiveIndependentN}`);
-          if (li.independentBuyN !== 10) fail(`independentBuyN mismatch: ${li.independentBuyN}`);
-          if (li.independentSellN !== 5) fail(`independentSellN mismatch: ${li.independentSellN}`);
-          if (counts.TRAIN !== 15) fail(`TRAIN mismatch: ${counts.TRAIN}`);
-          if (counts.TRAIN_BUY !== 10) fail(`TRAIN_BUY mismatch: ${counts.TRAIN_BUY}`);
-          if (counts.TRAIN_SELL !== 5) fail(`TRAIN_SELL mismatch: ${counts.TRAIN_SELL}`);
-          if (counts.VALIDATION !== 0 || counts.VALIDATION_BUY !== 0 || counts.VALIDATION_SELL !== 0) fail('VALIDATION counts must remain zero');
-          if (counts.OOS !== 0) fail(`OOS mismatch: ${counts.OOS}`);
-          if (counts.OOS_BUY !== 0 || counts.OOS_SELL !== 0) fail('OOS side counts must remain zero');
+          const measuredCounts = {
+            targetSlotIndex: li.targetSlotIndex,
+            genuineScheduledSlotN: li.genuineScheduledSlotN,
+            rawAcceptedN: li.rawAcceptedN,
+            effectiveIndependentN: li.effectiveIndependentN,
+            independentBuyN: li.independentBuyN,
+            independentSellN: li.independentSellN,
+            ...counts,
+          };
+          for (const [name, value] of Object.entries(measuredCounts)) {
+            if (!Number.isSafeInteger(value) || value < 0) fail(`${name} must be a non-negative safe integer: ${value}`);
+          }
+          // The Dashboard consumer has already validated whether the source is legacy
+          // single-lane or frozen Phase2 multi-lane before exposing status=PRESENT.
+          // The overview projection does not expose the policy identity/digests, so this
+          // read-only verifier must not re-impose the legacy one-slot/one-credit rule.
+          // Preserve only policy-independent frozen bounds here.
+          if (li.targetSlotIndex > 1023) fail('targetSlotIndex exceeds frozen V3 cohort');
+          if (li.genuineScheduledSlotN > li.targetSlotIndex + 1) fail('genuineScheduledSlotN exceeds elapsed frozen slots');
+          if (li.effectiveIndependentN > li.genuineScheduledSlotN * 2) fail('effectiveIndependentN exceeds frozen two-credit-per-slot capacity');
+          if (li.rawAcceptedN < li.effectiveIndependentN) fail('rawAcceptedN must cover effectiveIndependentN');
+          if (li.effectiveIndependentN !== li.independentBuyN + li.independentSellN) fail('independent side counts must sum to effectiveIndependentN');
+          if (counts.TRAIN !== counts.TRAIN_BUY + counts.TRAIN_SELL) fail('TRAIN side counts mismatch');
+          if (counts.VALIDATION !== counts.VALIDATION_BUY + counts.VALIDATION_SELL) fail('VALIDATION side counts mismatch');
+          if (counts.OOS !== counts.OOS_BUY + counts.OOS_SELL) fail('OOS side counts mismatch');
+          if (li.effectiveIndependentN !== counts.TRAIN + counts.VALIDATION + counts.OOS) fail('frozen split counts must sum to effectiveIndependentN');
+          if (li.independentBuyN !== counts.TRAIN_BUY + counts.VALIDATION_BUY + counts.OOS_BUY) fail('BUY split counts mismatch');
+          if (li.independentSellN !== counts.TRAIN_SELL + counts.VALIDATION_SELL + counts.OOS_SELL) fail('SELL split counts mismatch');
+          if (counts.TRAIN > 512 || counts.VALIDATION > 256 || counts.OOS > 256) fail('frozen split capacity exceeded');
+          if (li.targetSlotIndex < 512 && (counts.VALIDATION !== 0 || counts.VALIDATION_BUY !== 0 || counts.VALIDATION_SELL !== 0)) {
+            fail('future VALIDATION credit is not allowed during TRAIN');
+          }
+          if (li.targetSlotIndex < 768 && (counts.OOS !== 0 || counts.OOS_BUY !== 0 || counts.OOS_SELL !== 0)) {
+            fail('future OOS credit is not allowed before slot 768');
+          }
           if (li.oosOutcomeCredit !== 0) fail(`oosOutcomeCredit mismatch: ${li.oosOutcomeCredit}`);
           if (li.calibrationArtifactProduced !== false) fail('calibrationArtifactProduced must remain false');
           if (li.liquidityImpactStatus !== 'BLOCKED_DATA') fail(`liquidityImpactStatus mismatch: ${li.liquidityImpactStatus}`);
