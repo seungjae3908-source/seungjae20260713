@@ -28,8 +28,13 @@ function metric(value: number | null, suffix = '') {
   return value == null ? 'N/A' : `${number.format(value)}${suffix}`;
 }
 
-function money(value: number, currency: string) {
-  return `${number.format(value)} ${currency}`;
+function money(value: number | null | undefined, currency: string) {
+  return value == null ? 'N/A' : `${number.format(value)} ${currency}`;
+}
+
+function costMoney(trade: Pick<UnifiedTradeCycle, 'fees' | 'tax' | 'costEvidence' | 'currency'>) {
+  if (trade.costEvidence.status !== 'READY' || trade.fees == null || trade.tax == null) return 'N/A';
+  return money(trade.fees + trade.tax, trade.currency);
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
@@ -65,7 +70,7 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
       <Metric label="청산 평균가" value={trade.exitPrice == null ? '진행 중' : money(trade.exitPrice, trade.currency)} />
       <Metric label="순손익" value={money(trade.netPnl, trade.currency)} />
       <Metric label="순수익률" value={metric(trade.netReturnPercent, '%')} />
-      <Metric label="비용" value={money(trade.fees + trade.tax, trade.currency)} />
+      <Metric label="비용" value={costMoney(trade)} />
       <Metric label="성과 점수" value={String(trade.review.performanceScore)} />
       <Metric label="매매 품질" value={`${trade.review.qualityScore} / 100`} />
       <Metric label="보유 시간" value={trade.holdingTimeMs == null ? '진행 중' : `${number.format(trade.holdingTimeMs / 60_000)}분`} />
@@ -186,7 +191,7 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
           <Metric label={USER_METRIC_KO.PROFIT_FACTOR} value={metric(data.analytics.profitFactor)} />
           <Metric label="평균 수익률" value={metric(data.analytics.averageReturnPercent, '%')} />
           <Metric label="진행 중" value={String(data.analytics.openTrades)} />
-          <Metric label="최대 연속 손실" value={String(data.analytics.maximumConsecutiveLosses)} />
+          <Metric label="최대 연속 손실" value={metric(data.analytics.maximumConsecutiveLosses)} />
           <Metric label="순손익" value={data.analytics.netPnlByCurrency.map((item) => money(item.value, item.currency)).join(' · ') || 'N/A'} />
           <Metric label="총비용" value={data.analytics.totalCostsByCurrency.map((item) => money(item.value, item.currency)).join(' · ') || 'N/A'} />
         </div>
