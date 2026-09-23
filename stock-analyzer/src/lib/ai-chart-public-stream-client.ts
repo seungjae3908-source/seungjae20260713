@@ -102,6 +102,7 @@ export function createAiChartPublicStreamClient(
 
   let socket: WebSocketLike | null = null;
   let status: AiChartPublicStreamStatus = 'DISCONNECTED';
+  let statusReason = 'PUBLIC_STREAM';
   let stopped = true;
   let reconnectAttempts = 0;
   let connectedAtMs: number | null = null;
@@ -115,7 +116,7 @@ export function createAiChartPublicStreamClient(
 
   const snapshot = (): AiChartStreamDiagnostic => ({
     status,
-    reason: status === 'FALLBACK_POLLING' ? 'PUBLIC_STREAM_UNAVAILABLE' : 'PUBLIC_STREAM',
+    reason: statusReason,
     market: options.market,
     symbol: options.symbol,
     reconnectAttempts,
@@ -129,8 +130,9 @@ export function createAiChartPublicStreamClient(
 
   const publish = (nextStatus: AiChartPublicStreamStatus, reason: string) => {
     status = nextStatus;
+    statusReason = reason;
     options.onStatus?.(nextStatus, reason);
-    options.onDiagnostic?.({ ...snapshot(), reason });
+    options.onDiagnostic?.(snapshot());
   };
   const clearTimer = (handle: TimerHandle | null) => { if (handle != null) clearTimeoutFn(handle); };
   const clearRuntimeTimers = () => {
@@ -327,6 +329,7 @@ export function createAiChartPublicStreamClient(
       connectedAtMs = null;
       lastEventAtMs = null;
       status = 'DISCONNECTED';
+      statusReason = 'PUBLIC_STREAM';
       if (usesDefaultSocketFactory) {
         const fallbackUntilMs = providerFallbackUntilMs.get(fallbackKey) ?? 0;
         if (fallbackUntilMs > now()) {
