@@ -63,6 +63,15 @@ jobs:
           set -euo pipefail
           FILE='api-server/src/services/public-forward-partial-fill-v3-prospective-methodology.service.ts'
           grep -Fq 'predecessorV2MutationAllowed: false' "$FILE"
+          grep -Fq "policyDigest: '5d91ea09ac5a2982a26d00197433142455fa6634488fadc9201e4ddf1346ed6c'" "$FILE"
+          grep -Fq "cohortDigest: '9b2853a361e17dc429288cec4499fc972189b0bc2427a6d8bb2a999eff847454'" "$FILE"
+          grep -Fq 'totalSlotN: 1024' "$FILE"
+          grep -Fq 'trainSlotN: 512' "$FILE"
+          grep -Fq 'validationSlotN: 256' "$FILE"
+          grep -Fq 'oosSlotN: 256' "$FILE"
+          grep -Fq 'perScopeEffectiveIndependentMinimum: 178' "$FILE"
+          grep -Fq 'scopeCellCount: 4' "$FILE"
+          grep -Fq 'mechanicalFloorEffectiveIndependent: 712' "$FILE"
           grep -Fq 'predecessorEvidenceRewriteAllowed: false' "$FILE"
           grep -Fq 'retrospectiveCreditAllowed: false' "$FILE"
           grep -Fq 'actualFillInferenceAllowed: false' "$FILE"
