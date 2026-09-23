@@ -183,6 +183,38 @@ test('missing WebSocket capability fails closed to polling fallback', () => {
   expect(client.snapshot().freshness).toBe('UNAVAILABLE');
 });
 
+test('a rejected pre-open handshake falls back once without retry amplification', () => {
+  const socket = new FakeSocket();
+  const statuses: string[] = [];
+  const diagnostics: string[] = [];
+  const scheduled: Array<{ callback: () => void; delayMs: number }> = [];
+  let socketCreations = 0;
+  const client = createAiChartPublicStreamClient({
+    market: 'UPBIT',
+    symbol: 'BTC',
+    socketFactory: () => { socketCreations += 1; return socket; },
+    setTimeoutFn: (callback, delayMs) => {
+      scheduled.push({ callback, delayMs });
+      return scheduled.length as unknown as ReturnType<typeof setTimeout>;
+    },
+    clearTimeoutFn: () => undefined,
+    onStatus: (status) => statuses.push(status),
+    onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.reason),
+  });
+
+  client.start();
+  socket.onerror?.({} as Event);
+  socket.onclose?.({} as CloseEvent);
+
+  expect(socketCreations).toBe(1);
+  expect(statuses).toEqual(['CONNECTING', 'FALLBACK_POLLING']);
+  expect(diagnostics).toContain('PREOPEN_CONNECTION_CLOSED');
+  expect(client.snapshot().status).toBe('FALLBACK_POLLING');
+  expect(client.snapshot().reconnectAttempts).toBe(0);
+  expect(scheduled.filter((timer) => timer.delayMs < 45_000)).toEqual([]);
+  client.stop();
+});
+
 test('foreign symbol events cannot enter the selected instrument or refresh its clock', () => {
   for (const market of ['UPBIT', 'BITGET'] as const) {
     const socket = new FakeSocket();

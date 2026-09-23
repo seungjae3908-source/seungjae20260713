@@ -63,6 +63,44 @@ def valid_v3_summary():
     return value
 
 
+def valid_multilane_v3_summary():
+    value = valid_v3_summary()
+    value.update({
+        'targetSlotIndex': 479,
+        'genuineScheduledSlotN': 153,
+        'rawAcceptedN': 2000,
+        'effectiveIndependentN': 159,
+        'independentBuyN': 83,
+        'independentSellN': 76,
+        'frozenSplitCounts': {
+            'TRAIN': 159,
+            'TRAIN_BUY': 83,
+            'TRAIN_SELL': 76,
+            'VALIDATION': 0,
+            'VALIDATION_BUY': 0,
+            'VALIDATION_SELL': 0,
+            'OOS': 0,
+            'OOS_BUY': 0,
+            'OOS_SELL': 0,
+        },
+        'preCapIndependentN': 159,
+        'multiLanePolicyVersion': 'public-forward-liquidity-multi-lane-prospective-policy-v1',
+        'multiLanePolicyDigest': '1' * 64,
+        'laneRegistryDigest': '2' * 64,
+        'dependencyPolicyDigest': '3' * 64,
+        'balancingPolicyDigest': '4' * 64,
+        'maxCreditPerLanePerSlot': 1,
+        'maxTotalCreditPerSlot': 2,
+        'maxCreditPerDependencyComponent': 1,
+        'laneSlotCapRejectedN': 0,
+        'globalSlotCapRejectedN': 0,
+        'utc27AdditionalIndependentCredit': 0,
+        'retroactiveMultiLaneCreditAllowed': False,
+    })
+    value['reportDigest'] = canonical_digest(value)
+    return value
+
+
 def valid_candidate_performance():
     candidate_id = f"phase3-candidate:sha256:{'7' * 64}"
     parameter_digest = '8' * 64
@@ -157,6 +195,65 @@ class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
             'blockedDataCount': 0, 'failedCount': 0,
             'results': [{'id': 'shadow-forward', 'status': 'success'}],
         })
+        write_json(root / 'latest' / 'temporal-crypto-futures.json', {
+            'schemaVersion': 'crypto-futures-temporal-public-collection-v1',
+            'generatedAt': 1_800_000_000_000,
+            'researchSha': 'a' * 40,
+            'status': 'complete',
+            'failedCount': 0,
+            'results': [
+                {'symbol': 'BTCUSDT', 'status': 'success', 'observedCount': 3, 'appendedCount': 2},
+                {'symbol': 'ETHUSDT', 'status': 'success', 'observedCount': 3, 'appendedCount': 3},
+            ],
+            'observationCount': 42,
+            'ledgerDigest': 'c' * 64,
+            'safety': {
+                'publicDataOnly': True,
+                'privateApi': False,
+                'liveTrading': False,
+                'realOrders': False,
+                'historicalCurrentValueBackfill': False,
+                'executionAuthority': 'NONE',
+            },
+        })
+        write_json(root / 'latest' / 'research-factory.json', {
+            'schemaVersion': 1,
+            'contract': 'research-factory-runtime-status/v1',
+            'generatedAt': '2026-09-20T00:00:00.000Z',
+            'researchSha': 'a' * 40,
+            'status': 'BLOCKED_POLICY_MISSING',
+            'firstZero': 'HUMAN_APPROVED_ADAPTIVE_POLICY_MISSING',
+            'policy': {
+                'present': False,
+                'valid': False,
+                'policyDigest': None,
+                'approvalEvidenceId': None,
+                'approvedAt': None,
+            },
+            'dataFactory': {'readyMarketCount': 0, 'blockedMarketCount': 4},
+            'canonicalAdaptive': {
+                'readyProfileCount': None,
+                'blockedProfileCount': None,
+                'runtimeStatus': None,
+                'nextFirstZero': 'HUMAN_APPROVED_ADAPTIVE_POLICY_MISSING',
+            },
+            'controlPlaneDigest': 'd' * 64,
+            'diagnostic': None,
+            'safety': {
+                'runtimeExecutionAttempted': False,
+                'runtimeActivationAllowed': False,
+                'scheduleMutationAllowed': False,
+                'deploymentAllowed': False,
+                'databaseMutationAllowed': False,
+                'secretMutationAllowed': False,
+                'liveTrading': False,
+                'autoTrading': False,
+                'privateTradingApi': False,
+                'realOrder': False,
+                'profitabilityClaim': False,
+                'executionAuthority': 'NONE',
+            },
+        })
         write_json(root / 'forward' / 'paper' / 'status' / 'runtime-status.json', {
             'status': 'running', 'privateRequestCount': 0, 'financialMutationCount': 0,
             'orderCount': 0, 'liveTrading': False, 'orderAuthority': False,
@@ -200,6 +297,19 @@ class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
         self.assertEqual(len(overview['shadow']['canonicalHandoffs']), 1)
         self.assertEqual(overview['shadow']['canonicalHandoffs'][0]['group'], '15m')
         self.assertEqual(overview['shadow']['canonicalHandoffs'][0]['handoff']['evidenceDigest'], 'b' * 64)
+        self.assertTrue(overview['dataFactory']['temporalCryptoFutures']['present'])
+        self.assertEqual(overview['dataFactory']['temporalCryptoFutures']['status'], 'complete')
+        self.assertEqual(overview['dataFactory']['temporalCryptoFutures']['observationCount'], 42)
+        self.assertEqual(overview['dataFactory']['temporalCryptoFutures']['failedCount'], 0)
+        self.assertNotIn('error', overview['dataFactory']['temporalCryptoFutures']['results'][0])
+        self.assertTrue(overview['factory']['present'])
+        self.assertEqual(overview['factory']['status'], 'BLOCKED_POLICY_MISSING')
+        self.assertEqual(overview['factory']['firstZero'], 'HUMAN_APPROVED_ADAPTIVE_POLICY_MISSING')
+        self.assertFalse(overview['factory']['policyPresent'])
+        self.assertEqual(overview['factory']['readyMarketCount'], 0)
+        self.assertEqual(overview['factory']['blockedMarketCount'], 4)
+        self.assertIsNone(overview['factory']['readyProfileCount'])
+        self.assertEqual(overview['factory']['controlPlaneDigest'], 'd' * 64)
 
     def test_missing_runtime_values_remain_null_instead_of_becoming_zero_or_false(self):
         root = self.fixture()
@@ -217,6 +327,75 @@ class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
         self.assertIsNone(overview['paper']['ledger']['sampleCount'])
         self.assertIsNone(overview['paper']['ledger']['settlementCount'])
         self.assertIsNone(overview['shadow']['records']['totalRecords'])
+
+    def test_missing_factory_runtime_is_missing_not_zero(self):
+        root = self.fixture()
+        (root / 'latest' / 'research-factory.json').unlink()
+        factory = build_research_overview(root)['factory']
+        self.assertFalse(factory['present'])
+        self.assertEqual(factory['status'], 'MISSING')
+        self.assertIsNone(factory['policyPresent'])
+        self.assertIsNone(factory['readyMarketCount'])
+        self.assertIsNone(factory['readyProfileCount'])
+
+    def test_factory_runtime_authority_tamper_fails_closed_without_diagnostic_leak(self):
+        root = self.fixture()
+        path = root / 'latest' / 'research-factory.json'
+        value = json.loads(path.read_text(encoding='utf-8'))
+        value['safety']['runtimeExecutionAttempted'] = True
+        value['diagnostic'] = 'secret internal runtime diagnostic'
+        write_json(path, value)
+        overview = build_research_overview(root)
+        factory = overview['factory']
+        self.assertEqual(overview['research']['status'], 'attention')
+        self.assertTrue(factory['present'])
+        self.assertEqual(factory['status'], 'INVALID')
+        self.assertIsNone(factory['readyMarketCount'])
+        self.assertIsNone(factory['controlPlaneDigest'])
+        self.assertNotIn('secret internal runtime diagnostic', json.dumps(overview))
+
+    def test_missing_temporal_summary_is_missing_not_zero(self):
+        root = self.fixture()
+        (root / 'latest' / 'temporal-crypto-futures.json').unlink()
+        temporal = build_research_overview(root)['dataFactory']['temporalCryptoFutures']
+        self.assertFalse(temporal['present'])
+        self.assertEqual(temporal['status'], 'MISSING')
+        self.assertIsNone(temporal['observationCount'])
+        self.assertIsNone(temporal['failedCount'])
+
+    def test_temporal_summary_tamper_fails_closed_without_raw_error_leak(self):
+        root = self.fixture()
+        path = root / 'latest' / 'temporal-crypto-futures.json'
+        value = json.loads(path.read_text(encoding='utf-8'))
+        value['safety']['privateApi'] = True
+        value['results'][0]['error'] = 'secret provider diagnostic'
+        write_json(path, value)
+        overview = build_research_overview(root)
+        temporal = overview['dataFactory']['temporalCryptoFutures']
+        self.assertEqual(overview['research']['status'], 'attention')
+        self.assertTrue(temporal['present'])
+        self.assertEqual(temporal['status'], 'INVALID')
+        self.assertIsNone(temporal['observationCount'])
+        self.assertNotIn('secret provider diagnostic', json.dumps(overview))
+
+    def test_temporal_partial_failure_preserves_good_symbols_and_hides_errors(self):
+        root = self.fixture()
+        path = root / 'latest' / 'temporal-crypto-futures.json'
+        value = json.loads(path.read_text(encoding='utf-8'))
+        value['status'] = 'partial_failure'
+        value['failedCount'] = 1
+        value['results'][1] = {
+            'symbol': 'ETHUSDT', 'status': 'failed', 'observedCount': 0, 'appendedCount': 0,
+            'error': 'temporary upstream failure',
+        }
+        write_json(path, value)
+        overview = build_research_overview(root)
+        temporal = overview['dataFactory']['temporalCryptoFutures']
+        self.assertEqual(overview['research']['status'], 'attention')
+        self.assertEqual(temporal['status'], 'partial_failure')
+        self.assertEqual(temporal['failedCount'], 1)
+        self.assertEqual(temporal['results'][0]['symbol'], 'BTCUSDT')
+        self.assertNotIn('temporary upstream failure', json.dumps(overview))
 
     def test_python_runtime_exposes_authenticated_v3_independence_without_economic_promotion(self):
         root = self.fixture()
@@ -238,6 +417,41 @@ class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
         self.assertEqual(liquidity['evidenceComplete'], 0)
         self.assertEqual(liquidity['executionAuthority'], 'NONE')
         self.assertFalse(overview['profitability']['proven'])
+
+    def test_python_runtime_accepts_frozen_phase2_multilane_independence(self):
+        root = self.fixture()
+        write_json(root / 'forward' / 'liquidity' / 'v3-authoritative-independence-summary.json',
+                   valid_multilane_v3_summary())
+        overview = build_research_overview(root)
+        liquidity = overview['research']['liquidityIndependence']
+        self.assertTrue(liquidity['present'])
+        self.assertEqual(liquidity['status'], 'PRESENT')
+        self.assertEqual(liquidity['genuineScheduledSlotN'], 153)
+        self.assertEqual(liquidity['effectiveIndependentN'], 159)
+        self.assertEqual(liquidity['independentBuyN'], 83)
+        self.assertEqual(liquidity['independentSellN'], 76)
+        self.assertEqual(liquidity['frozenSplitCounts']['TRAIN'], 159)
+        self.assertFalse(overview['profitability']['proven'])
+
+    def test_python_runtime_rejects_multilane_capacity_or_policy_weakening(self):
+        for field, value in (
+            ('genuineScheduledSlotN', 79),
+            ('maxTotalCreditPerSlot', 3),
+            ('maxCreditPerLanePerSlot', 2),
+            ('maxCreditPerDependencyComponent', 2),
+            ('utc27AdditionalIndependentCredit', 1),
+            ('retroactiveMultiLaneCreditAllowed', True),
+        ):
+            with self.subTest(field=field):
+                root = self.fixture()
+                summary = valid_multilane_v3_summary()
+                summary[field] = value
+                summary['reportDigest'] = canonical_digest(summary)
+                write_json(root / 'forward' / 'liquidity' / 'v3-authoritative-independence-summary.json', summary)
+                liquidity = build_research_overview(root)['research']['liquidityIndependence']
+                self.assertTrue(liquidity['present'])
+                self.assertEqual(liquidity['status'], 'INVALID')
+                self.assertIsNone(liquidity['effectiveIndependentN'])
 
     def test_missing_v3_independence_is_missing_not_zero(self):
         overview = build_research_overview(self.fixture())
@@ -328,3 +542,28 @@ class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+def test_development_diagnostic_blocker_is_visible_without_raw_diagnostic(self):
+        root = self.fixture()
+        path = root / 'latest' / 'research-factory.json'
+        value = json.loads(path.read_text(encoding='utf-8'))
+        value['status'] = 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_INVALID'
+        value['firstZero'] = 'DEVELOPMENT_DIAGNOSTIC_INVALID'
+        value['controlPlaneDigest'] = None
+        value['diagnostic'] = 'HINDSIGHT_FEEDBACK_FORBIDDEN: secret internal detail'
+        value['policy']['present'] = True
+        value['policy']['valid'] = True
+        value['policy']['policyDigest'] = 'e' * 64
+        value['canonicalAdaptive']['readyProfileCount'] = 1
+        value['canonicalAdaptive']['blockedProfileCount'] = 11
+        value['canonicalAdaptive']['runtimeStatus'] = 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_INVALID'
+        value['canonicalAdaptive']['nextFirstZero'] = 'DEVELOPMENT_DIAGNOSTIC_INVALID'
+        write_json(path, value)
+        overview = build_research_overview(root)
+        factory = overview['factory']
+        self.assertEqual(factory['status'], 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_INVALID')
+        self.assertEqual(factory['firstZero'], 'DEVELOPMENT_DIAGNOSTIC_INVALID')
+        self.assertEqual(factory['readyProfileCount'], 1)
+        self.assertEqual(factory['blockedProfileCount'], 11)
+        self.assertNotIn('HINDSIGHT_FEEDBACK_FORBIDDEN', json.dumps(overview))
+        self.assertNotIn('secret internal detail', json.dumps(overview))

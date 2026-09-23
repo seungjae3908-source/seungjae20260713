@@ -50,6 +50,16 @@ jobs:
           if (!liveJob.includes('PRODUCTION_BASE_URL: https://lsj119.com')) {
             throw new Error('Live comprehensive QA must target the official Production hostname');
           }
+          if (!liveJob.includes('ref: ${{ inputs.sha }}')) {
+            throw new Error('Live comprehensive QA repository checkout must remain pinned to the deployed SHA input');
+          }
+          const harnessEnvLine = liveJob.split('\n').find((line) => line.trimStart().startsWith('QA_HARNESS_SHA:'));
+          if (!harnessEnvLine || !harnessEnvLine.includes('github.sha')) {
+            throw new Error('Live comprehensive QA harness must be pinned to the workflow-generation main SHA');
+          }
+          if (!liveJob.includes('git show "$QA_HARNESS_SHA:stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts"')) {
+            throw new Error('Live comprehensive QA may only overlay the approved QA harness spec');
+          }
           if (!config.includes("trace: 'off'")) {
             throw new Error('Authenticated Production QA must not retain Playwright traces');
           }
@@ -78,6 +88,27 @@ jobs:
       EXPECTED_DEPLOY_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || '' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 1
+
+      - name: Require pinned Production source checkout identity
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_DEPLOY_SHA"
+
+      - name: Overlay exact workflow-generation QA harness only
+        env:
+          QA_HARNESS_SHA: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          test "$QA_HARNESS_SHA" != "$EXPECTED_DEPLOY_SHA"
+          git fetch --no-tags --depth 1 origin "$QA_HARNESS_SHA"
+          git cat-file -e "$QA_HARNESS_SHA^{commit}"
+          git show "$QA_HARNESS_SHA:stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts" \
+            > /tmp/production-comprehensive-readonly-qa.spec.ts
+          install -m 0644 /tmp/production-comprehensive-readonly-qa.spec.ts \
+            stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts
 
       - uses: pnpm/action-setup@v4
         with:

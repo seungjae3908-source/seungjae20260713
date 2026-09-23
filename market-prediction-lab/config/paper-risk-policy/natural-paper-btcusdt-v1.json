@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "paper-risk-policy-human-approval-v1",
+  "recordId": "paper-risk-policy-approval:issue-23-comment-5759144475",
+  "policyId": "NATURAL_PAPER_BTCUSDT_CRYPTO_FUTURES_V1",
+  "policyVersion": "v1",
+  "source": "REPOSITORY_OWNER_EXPLICIT_APPROVAL",
+  "approvalIssue": 23,
+  "approvalCommentId": 5759144475,
+  "approvedBy": "seungjae3908-source",
+  "immutable": true,
+  "changeRule": "NEW_POLICY_VERSION_ONLY_NO_RETROSPECTIVE_MUTATION",
+  "marketScopes": [
+    "CRYPTO_FUTURES"
+  ],
+  "directionScopes": [
+    "LONG",
+    "SHORT"
+  ],
+  "strategyScopes": [
+    "CRYPTO_FUTURES_SCALP_V1_LONG",
+    "CRYPTO_FUTURES_SCALP_V1_SHORT",
+    "CRYPTO_FUTURES_SWING_V1_LONG",
+    "CRYPTO_FUTURES_SWING_V1_SHORT",
+    "CRYPTO_FUTURES_POSITION_V1_LONG",
+    "CRYPTO_FUTURES_POSITION_V1_SHORT"
+  ],
+  "symbolScopes": [
+    "BTCUSDT"
+  ],
+  "riskPercent": 0.5,
+  "requestedLeverage": 2,
+  "maximumLeverage": 5,
+  "marginMode": "isolated",
+  "economicEvidencePolicy": {
+    "futureNaturalPaperOnly": true,
+    "replayCredit": 0,
+    "backfillCredit": 0,
+    "syntheticCredit": 0,
+    "fixtureCredit": 0
+  },
+  "safety": {
+    "liveTrading": false,
+    "autoTrading": false,
+    "realOrderEnabled": false,
+    "privateTradingApiAllowed": false,
+    "executionAuthority": "NONE",
+    "productionDeployAuthority": false,
+    "stagingDeployAuthority": false
+  }
+}
