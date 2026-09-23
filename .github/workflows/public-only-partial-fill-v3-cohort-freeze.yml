@@ -1,0 +1,108 @@
+name: Public Only Partial Fill V3 Cohort Freeze
+
+on:
+  pull_request:
+    paths:
+      - 'api-server/src/services/public-forward-partial-fill-v3-cohort-freeze.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-v3-cohort-freeze.service.test.ts'
+      - '.github/workflows/public-only-partial-fill-v3-cohort-freeze.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-only-partial-fill-v3-cohort-freeze-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Verify exact pull request head
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck API server
+        run: pnpm --dir api-server run typecheck
+
+      - name: Bundle focused V3 cohort freeze regression
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/services/public-forward-partial-fill-v3-cohort-freeze.service.test.ts
+          --bundle --platform=node --format=cjs --target=node24
+          --outfile=/tmp/public-forward-partial-fill-v3-cohort-freeze.test.cjs
+
+      - name: Run focused V3 cohort freeze regression
+        run: node --test /tmp/public-forward-partial-fill-v3-cohort-freeze.test.cjs
+
+      - name: Verify immutable freeze and zero-authority invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='api-server/src/services/public-forward-partial-fill-v3-cohort-freeze.service.ts'
+          grep -Fq 'approvalCommentId: 5804802177' "$FILE"
+          grep -Fq 'timestampCommentId: 5804808369' "$FILE"
+          grep -Fq 'cohortFrozenAtMs: 1790207015000' "$FILE"
+          grep -Fq 'effectiveStartMs: 1790263020000' "$FILE"
+          grep -Fq "effectiveStartKst: '2026-09-25T00:17:00+09:00'" "$FILE"
+          grep -Fq 'endExclusiveMs: 1793949420000' "$FILE"
+          grep -Fq 'totalSlotN: 1024' "$FILE"
+          grep -Fq 'slotN: 512' "$FILE"
+          test "$(grep -Fc 'slotN: 256' "$FILE")" -eq 2
+          grep -Fq 'perScopeEffectiveIndependentMinimum:' "$FILE"
+          grep -Fq 'mechanicalFloorEffectiveIndependent:' "$FILE"
+          grep -Fq "modeledEvidenceAuthority: 'RESEARCH_ONLY_NON_ECONOMIC'" "$FILE"
+          grep -Fq "actualExecutionTruth: 'UNKNOWN_UNTIL_OBSERVED'" "$FILE"
+          grep -Fq 'modeledEvidenceMayBecomeActualEvidence: false' "$FILE"
+          grep -Fq 'economicCreditCreated: false' "$FILE"
+          grep -Fq 'profitabilityCredit: 0' "$FILE"
+          grep -Fq 'fullCostReady: false' "$FILE"
+          grep -Fq 'evidenceComplete: 0' "$FILE"
+          grep -Fq 'profitabilityProven: false' "$FILE"
+          grep -Fq "scheduleTrigger: 'NONE'" "$FILE"
+          grep -Fq 'scheduleActivationApproved: false' "$FILE"
+          grep -Fq 'captureApproved: false' "$FILE"
+          grep -Fq 'workflowDispatchApproved: false' "$FILE"
+          grep -Fq "executionAuthority: 'NONE'" "$FILE"
+          grep -Fq 'privateTradingApiAllowed: false' "$FILE"
+          grep -Fq 'liveTrading: false' "$FILE"
+          grep -Fq 'autoTrading: false' "$FILE"
+          grep -Fq 'realOrderEnabled: false' "$FILE"
+          grep -Fq 'replitAllowed: false' "$FILE"
+
+      - name: Verify PR-only validation boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='.github/workflows/public-only-partial-fill-v3-cohort-freeze.yml'
+          grep -Fq '  pull_request:' "$FILE"
+          if grep -Eq '^  (schedule:|workflow_dispatch:)' "$FILE"; then
+            echo 'freeze validation workflow contains activation trigger' >&2
+            exit 1
+          fi
+          if grep -Eq '^      environment:' "$FILE"; then
+            echo 'freeze validation workflow must not bind a protected environment' >&2
+            exit 1
+          fi
