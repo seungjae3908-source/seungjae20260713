@@ -245,3 +245,19 @@ test("Research Dashboard readback receipt parser uses real regex escapes", () =>
   assert.equal(dashboardReadback.includes("receipt.match(/(?:^|\\\\n)target_sha:\\\\s*"), false);
   assert.equal(dashboardReadback.includes("receipt.match(/(?:^|\\\\n)canonical_hub:\\\\s*"), false);
 });
+
+
+test("Research Dashboard readback validates live count relationships instead of stale snapshot literals", () => {
+  assert.ok(dashboardReadback.includes("const measuredCounts = {"));
+  assert.ok(dashboardReadback.includes("Number.isSafeInteger(value)"));
+  assert.ok(dashboardReadback.includes("li.genuineScheduledSlotN < li.effectiveIndependentN"));
+  assert.ok(dashboardReadback.includes("li.rawAcceptedN < li.effectiveIndependentN"));
+  assert.ok(dashboardReadback.includes("li.effectiveIndependentN !== li.independentBuyN + li.independentSellN"));
+  assert.ok(dashboardReadback.includes("li.effectiveIndependentN !== counts.TRAIN + counts.VALIDATION + counts.OOS"));
+  assert.ok(dashboardReadback.includes("counts.VALIDATION !== 0"));
+  assert.ok(dashboardReadback.includes("counts.OOS !== 0"));
+  assert.equal(dashboardReadback.includes("li.genuineScheduledSlotN !== 15"), false);
+  assert.equal(dashboardReadback.includes("li.effectiveIndependentN !== 15"), false);
+  assert.equal(dashboardReadback.includes("li.independentBuyN !== 10"), false);
+  assert.equal(dashboardReadback.includes("li.independentSellN !== 5"), false);
+});
