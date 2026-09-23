@@ -180,16 +180,23 @@ export async function preparePaperForwardAuthoritativeInputs(
   }
 
   const expectedPartial = input?.partialFill?.expected;
+  const riskSymbol = symbol(riskRequest?.symbol);
+  const partialSymbol = symbol(expectedPartial?.symbol);
   if (expectedPartial?.market !== 'CRYPTO_FUTURES'
-    || symbol(expectedPartial?.symbol) !== symbol(riskRequest?.symbol)) {
+    || !riskSymbol
+    || !partialSymbol
+    || partialSymbol !== riskSymbol) {
     blockers.push('PREPARATION_PARTIAL_FILL_SCOPE_MISMATCH');
   }
 
   const firewall = record(input?.liquidity?.liquidityImpactFirewallInput);
   const liquidityExpected = record(firewall?.expected);
   if (liquidityExpected) {
+    const liquiditySymbol = symbol(liquidityExpected.symbol);
     if (String(liquidityExpected.market ?? '') !== 'CRYPTO_FUTURES'
-      || symbol(liquidityExpected.symbol) !== symbol(riskRequest?.symbol)
+      || !riskSymbol
+      || !liquiditySymbol
+      || liquiditySymbol !== riskSymbol
       || String(liquidityExpected.side ?? '') !== String(expectedPartial?.side ?? '')) {
       blockers.push('PREPARATION_LIQUIDITY_SCOPE_MISMATCH');
     }
