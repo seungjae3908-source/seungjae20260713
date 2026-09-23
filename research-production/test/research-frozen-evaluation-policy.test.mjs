@@ -74,10 +74,13 @@ test('dataset split must be an exact non-overlapping partition in temporal order
   })),/NOT_EXACT_DATASET_PARTITION|OVERLAP/);
 });
 
-test('all policies must be frozen before first observed outcome and no later than split freeze',()=>{
+test('all policies must be frozen before first observed outcome and receipts cannot predate their freeze',()=>{
   assert.throws(()=>buildFrozenResearchEvaluationPoliciesV1(input({
     splitFrozenAtMs:START,
   })),/SPLIT_NOT_FROZEN_BEFORE_OUTCOME/);
+  assert.throws(()=>buildFrozenResearchEvaluationPoliciesV1(input({
+    splitObservedAtMs:START-3*STEP,
+  })),/SPLIT_RECEIPT_OBSERVED_BEFORE_SPLIT_FREEZE/);
   assert.throws(()=>buildFrozenResearchEvaluationPoliciesV1(input({
     oosFrozenAtMs:START-STEP,
   })),/OOS_POLICY_FROZEN_AFTER_SPLIT_FREEZE/);
