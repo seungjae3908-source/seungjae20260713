@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -38,6 +38,30 @@ test("file learning store survives restart and replays the same record idempoten
   }
 });
 
+test("concurrent identical learning writes publish exactly one complete canonical record", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "paper-learning-concurrent-"));
+  const directory = join(sandbox, "learning");
+  try {
+    const store = createFilePaperLearningStore({ directory });
+    const results = await Promise.all(Array.from({ length: 32 }, () => (
+      store.putIfAbsent({ key: "paper-signal:signal-1", value: safeValue() })
+    )));
+    assert.equal(results.filter((result) => result.inserted).length, 1);
+    assert.equal(results.filter((result) => !result.inserted).length, 31);
+
+    const names = await readdir(directory);
+    assert.equal(names.length, 1);
+    assert.match(names[0], /^[a-f0-9]{64}\.json$/u);
+    const persisted = JSON.parse(await readFile(join(directory, names[0]), "utf8"));
+    assert.equal(persisted.key, "paper-signal:signal-1");
+
+    const restartedStore = createFilePaperLearningStore({ directory });
+    assert.equal((await restartedStore.snapshot()).length, 1);
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
+});
+
 test("same learning key with a different payload fails closed", async () => {
   const sandbox = await mkdtemp(join(tmpdir(), "paper-learning-conflict-"));
   const directory = join(sandbox, "learning");
@@ -63,6 +87,105 @@ test("unsafe learning payload cannot be persisted", async () => {
       /PAPER_FORWARD_LEARNING_SAFETY_VIOLATION/u,
     );
     assert.equal((await store.snapshot()).length, 0);
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
+});
+
+test("lossy JSON learning payloads fail closed before persistence", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "paper-learning-json-fidelity-"));
+  const directory = join(sandbox, "learning");
+  try {
+    const store = createFilePaperLearningStore({ directory });
+    for (const lossyValue of [Number.NaN, Number.POSITIVE_INFINITY, -0, undefined]) {
+      await assert.rejects(
+        store.putIfAbsent({
+          key: "paper-signal:signal-1",
+          value: safeValue({ executionQuality: { slippageBps: lossyValue } }),
+        }),
+        /PAPER_FORWARD_LEARNING_VALUE_NOT_JSON_SAFE/u,
+      );
+    }
+    assert.equal((await store.snapshot()).length, 0);
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
+});
+
+test("JSON-ignored own properties fail closed before persistence", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "paper-learning-json-own-properties-"));
+  const directory = join(sandbox, "learning");
+  try {
+    const store = createFilePaperLearningStore({ directory });
+
+    const symbolPayload = safeValue();
+    symbolPayload[Symbol("ignored")] = "would-be-dropped";
+
+    const arrayWithExtraProperty = [1, 2];
+    arrayWithExtraProperty.extra = "would-be-dropped";
+    const arrayPayload = safeValue({ diagnostics: arrayWithExtraProperty });
+
+    const nonEnumerablePayload = safeValue();
+    Object.defineProperty(nonEnumerablePayload, "hidden", {
+      value: "would-be-dropped",
+      enumerable: false,
+    });
+
+    for (const value of [symbolPayload, arrayPayload, nonEnumerablePayload]) {
+      await assert.rejects(
+        store.putIfAbsent({ key: "paper-signal:signal-1", value }),
+        /PAPER_FORWARD_LEARNING_VALUE_NOT_JSON_SAFE/u,
+      );
+    }
+    assert.equal((await store.snapshot()).length, 0);
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
+});
+
+test("accessor-backed learning properties fail closed before persistence", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "paper-learning-json-accessor-"));
+  const directory = join(sandbox, "learning");
+  try {
+    const store = createFilePaperLearningStore({ directory });
+    const accessorPayload = safeValue();
+    let reads = 0;
+    Object.defineProperty(accessorPayload, "executionQuality", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        reads += 1;
+        return reads === 1
+          ? { slippageBps: 1 }
+          : { slippageBps: Number.NaN };
+      },
+    });
+
+    await assert.rejects(
+      store.putIfAbsent({ key: "paper-signal:signal-1", value: accessorPayload }),
+      /PAPER_FORWARD_LEARNING_VALUE_NOT_JSON_SAFE/u,
+    );
+    assert.equal(reads, 0);
+    assert.equal((await store.snapshot()).length, 0);
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
+});
+
+test("snapshot rejects a copied learning record whose filename is not bound to its key", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "paper-learning-filename-truth-"));
+  const directory = join(sandbox, "learning");
+  try {
+    const store = createFilePaperLearningStore({ directory });
+    await store.putIfAbsent({ key: "paper-signal:signal-1", value: safeValue() });
+    const [canonicalName] = await readdir(directory);
+    const canonicalRecord = await readFile(join(directory, canonicalName), "utf8");
+    await writeFile(join(directory, "copied-stale-record.json"), canonicalRecord, "utf8");
+
+    await assert.rejects(
+      store.snapshot(),
+      /PAPER_FORWARD_LEARNING_RECORD_FILENAME_MISMATCH/u,
+    );
   } finally {
     await rm(sandbox, { recursive: true, force: true });
   }

@@ -51,15 +51,16 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1].toLowerCase()}\n`);
           NODE
 
-      - name: Require exact current main SHA
+      - name: Require deployed target SHA to remain in current main history
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
         run: |
           set -Eeuo pipefail
           git fetch --no-tags origin main "$TARGET_SHA"
+          git cat-file -e "$TARGET_SHA^{commit}"
           MAIN_SHA="$(git rev-parse origin/main^{commit})"
-          [[ "$TARGET_SHA" == "$MAIN_SHA" ]] || {
-            echo "Production comprehensive QA requires exact current main: target=$TARGET_SHA main=$MAIN_SHA" >&2
+          git merge-base --is-ancestor "$TARGET_SHA" "$MAIN_SHA" || {
+            echo "Production comprehensive QA target must remain in current main history: target=$TARGET_SHA main=$MAIN_SHA" >&2
             exit 1
           }
 
@@ -110,16 +111,20 @@ jobs:
             const active = runs
               .filter((run) => run.status !== 'completed')
               .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
-            const sameTarget = active.find((run) => String(run.head_sha).toLowerCase() === target);
-            if (sameTarget) {
-              core.setOutput('run_id', String(sameTarget.id));
-              core.setOutput('run_url', sameTarget.html_url);
-              core.info(`Reusing active exact-SHA Production Comprehensive QA Run ${sameTarget.id}.`);
+            const currentMain = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            const currentMainSha = String(currentMain.data.commit.sha).toLowerCase();
+            const currentGeneration = active.find((run) =>
+              run.head_branch === 'main' && String(run.head_sha).toLowerCase() === currentMainSha);
+            if (currentGeneration) {
+              core.setFailed(`Another current-main Production Comprehensive QA run is active (run=${currentGeneration.id}, head=${currentGeneration.head_sha}); refusing duplicate dispatch.`);
               return;
             }
-            if (active.length > 0) {
-              core.setFailed(`Another Production Comprehensive QA run is active on ${active[0].head_sha}; refusing to dispatch and cancel healthy work.`);
-              return;
+            for (const stale of active) {
+              core.warning(`Superseded Production Comprehensive QA run will be replaced by workflow concurrency: run=${stale.id}, head=${stale.head_sha}, currentMain=${currentMainSha}`);
             }
 
             const response = await github.rest.actions.createWorkflowDispatch({
@@ -146,8 +151,8 @@ jobs:
             })).data;
             if (run.event !== 'workflow_dispatch'
               || run.path !== '.github/workflows/production-comprehensive-readonly-qa.yml'
-              || String(run.head_sha).toLowerCase() !== target) {
-              core.setFailed(`Returned QA run does not match the requested exact main SHA: run=${run.id} head=${run.head_sha}`);
+              || run.head_branch !== 'main') {
+              core.setFailed(`Returned QA run does not match the official main-branch workflow: run=${run.id} head=${run.head_sha}`);
               return;
             }
             core.setOutput('run_id', String(runId));
@@ -170,7 +175,8 @@ jobs:
               body: [
                 'Production Comprehensive Read-Only QA dispatched behind the protected `production` environment.',
                 '',
-                `- Exact deployed/current-main SHA: \`${process.env.TARGET_SHA}\``,
+                `- Exact deployed Production SHA: \`${process.env.TARGET_SHA}\``,
+                '- QA repository checkout is pinned to the deployed SHA input: `true`',
                 `- Latest successful Production Deploy Run ID: \`${process.env.PRODUCTION_DEPLOY_RUN_ID}\``,
                 `- Production Comprehensive QA Run ID: \`${process.env.QA_RUN_ID}\``,
                 `- Run: [Open GitHub Actions run](${process.env.QA_RUN_URL})`,
