@@ -9,6 +9,7 @@ import { buildTaskPlan } from '../src/engine.mjs';
 const source = readFileSync(new URL('../deploy/activate-server.sh', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
 const SHA = 'a'.repeat(40);
 const KEY = 'PAPER_FORWARD_RISK_POLICY_RECORD_PATH';
+const DECISION_KEY = 'PAPER_FORWARD_RISK_POLICY_DECISION_PATH';
 const COST_KEY = 'PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH';
 const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
 const shellPath = (path) => process.platform === 'win32'
@@ -58,7 +59,7 @@ switch (name) {
 }
 `;
 
-function activate(value, { mode = 'activate', legacy, supplemental } = {}) {
+function activate(value, { mode = 'activate', legacy, supplemental, decision } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'server-risk-env-'));
   const shellRoot = shellPath(root);
   try {
@@ -76,6 +77,10 @@ function activate(value, { mode = 'activate', legacy, supplemental } = {}) {
         writeFileSync(path, 'sandbox release fixture\n');
       }
     }
+    const decisionFixture = join(root, 'research', 'releases', SHA, 'market-prediction-lab',
+      'config', 'paper-risk-policy', 'natural-paper-btcusdt-v1.json');
+    mkdirSync(resolve(decisionFixture, '..'), { recursive: true });
+    writeFileSync(decisionFixture, '{}\n');
     const script = source.replaceAll('/opt/investment-research', `${shellRoot}/research`)
       .replaceAll('/var/lib/investment-research-production', `${shellRoot}/state`)
       .replaceAll('/etc/investment-research', `${shellRoot}/etc/research`)
@@ -85,9 +90,12 @@ function activate(value, { mode = 'activate', legacy, supplemental } = {}) {
       TARGET_SHA: SHA, HARNESS_ROOT: shellRoot, HARNESS_ROOT_NATIVE: root, REAL_NODE: shellPath(process.execPath),
       MSYS2_ENV_CONV_EXCL: '*' };
     delete env[KEY];
+    delete env[DECISION_KEY];
     delete env[COST_KEY];
     delete env.GENERIC_RISK_POLICY_LIVE_RECORD_PATH;
     if (value !== undefined) env[KEY] = value;
+    if (decision === 'PINNED_FIXTURE') env[DECISION_KEY] = shellPath(decisionFixture);
+    else if (decision !== undefined) env[DECISION_KEY] = decision;
     if (supplemental !== undefined) env[COST_KEY] = supplemental;
     if (legacy !== undefined) env.GENERIC_RISK_POLICY_LIVE_RECORD_PATH = legacy;
     const result = spawnSync(bash, ['-s', '--', mode], { env,
@@ -188,5 +196,28 @@ test('unsafe supplemental cost paths fail before server activation mutation', ()
       assert.equal(result.environment, null);
       assert.deepEqual(result.events, []);
     }
+  }
+});
+
+test('owner-approved decision path is persisted only when pinned inside the exact Research release', () => {
+  const result = activate(undefined, { decision: 'PINNED_FIXTURE' });
+  assert.equal(result.status, 0, result.stderr);
+  const lines = result.environment.split('\n').filter(line => line.startsWith(`${DECISION_KEY}=`));
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /market-prediction-lab\/config\/paper-risk-policy\/natural-paper-btcusdt-v1[.]json/u);
+  assert.doesNotMatch(result.environment, /PAPER_FORWARD_RISK_POLICY_RECORD_PATH=/u);
+  assert.equal(result.sentinelPresent, false);
+});
+
+test('Research server activation rejects ambiguous or unpinned risk-policy decision sources before timer activation', () => {
+  const ambiguous = activate('/owner/policy.record', { decision: 'PINNED_FIXTURE' });
+  assert.equal(ambiguous.status, 64, ambiguous.stderr);
+  assert.match(ambiguous.stderr, /CANONICAL_RISK_POLICY_SOURCE_AMBIGUOUS/u);
+  assert.equal(ambiguous.environment, null);
+
+  for (const decision of ['/owner/decision.json', 'relative/decision.json', '/owner/../decision.json']) {
+    const result = activate(undefined, { decision });
+    assert.equal(result.status, 64, `${decision}: ${result.stderr}`);
+    assert.equal(result.environment, null);
   }
 });
