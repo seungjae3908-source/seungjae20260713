@@ -20,16 +20,6 @@ if (value && (value.trim() !== value || /[\u0000-\u001f\u007f]/u.test(value)
   console.error('PAPER_FORWARD_RISK_POLICY_RECORD_PATH must be a normalized absolute path without control characters');
   process.exit(64);
 }
-const decision = process.env.PAPER_FORWARD_RISK_POLICY_DECISION_PATH;
-if (decision && (decision.trim() !== decision || /[\u0000-\u001f\u007f]/u.test(decision)
-  || !isAbsolute(decision) || resolve(decision) !== decision)) {
-  console.error('PAPER_FORWARD_RISK_POLICY_DECISION_PATH must be a normalized absolute path without control characters');
-  process.exit(64);
-}
-if (value && decision) {
-  console.error('CANONICAL_RISK_POLICY_SOURCE_AMBIGUOUS: provide either record or approved decision path');
-  process.exit(64);
-}
 const supplemental = process.env.PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH;
 if (supplemental && (supplemental.trim() !== supplemental || /[\u0000-\u001f\u007f]/u.test(supplemental)
   || !isAbsolute(supplemental) || resolve(supplemental) !== supplemental)) {
@@ -210,20 +200,6 @@ activate() {
     concurrency=2
   fi
 
-  if [[ -n "${PAPER_FORWARD_RISK_POLICY_DECISION_PATH:-}" ]]; then
-    case "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" in
-      "$RELEASE"/market-prediction-lab/config/paper-risk-policy/*) ;;
-      *)
-        echo "PAPER_FORWARD_RISK_POLICY_DECISION_PATH must be pinned inside the exact Research release policy directory" >&2
-        exit 64
-        ;;
-    esac
-    [[ -f "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" && -r "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" ]] || {
-      echo "CANONICAL_RISK_POLICY_DECISION_MISSING: approved Research policy decision missing or unreadable" >&2
-      exit 64
-    }
-  fi
-
   local env_tmp
   env_tmp="$(mktemp)"
   cat > "$env_tmp" <<ENV
@@ -252,12 +228,6 @@ ENV
     risk_policy_record_path="${risk_policy_record_path//\\/\\\\}"
     risk_policy_record_path="${risk_policy_record_path//\"/\\\"}"
     printf 'PAPER_FORWARD_RISK_POLICY_RECORD_PATH="%s"\n' "$risk_policy_record_path" >> "$env_tmp"
-  fi
-  if [[ -n "${PAPER_FORWARD_RISK_POLICY_DECISION_PATH:-}" ]]; then
-    local risk_policy_decision_path="$PAPER_FORWARD_RISK_POLICY_DECISION_PATH"
-    risk_policy_decision_path="${risk_policy_decision_path//\\/\\\\}"
-    risk_policy_decision_path="${risk_policy_decision_path//\"/\\\"}"
-    printf 'PAPER_FORWARD_RISK_POLICY_DECISION_PATH="%s"\n' "$risk_policy_decision_path" >> "$env_tmp"
   fi
   if [[ -n "${PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH:-}" ]]; then
     local supplemental_cost_evidence_path="$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH"
