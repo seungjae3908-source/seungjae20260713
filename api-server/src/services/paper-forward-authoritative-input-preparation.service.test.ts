@@ -219,6 +219,47 @@ test('stale evidence cannot be packaged as zero or READY', async () => {
   assert.ok(result.blockers.includes('LIQUIDITY:EVIDENCE_STALE_AT_PREPARATION'));
 });
 
+test('future-dated liquidity evidence cannot bypass preparation freshness', async () => {
+  const deps = readyDependencies();
+  const result = await preparePaperForwardAuthoritativeInputs(baseInput(), {
+    ...deps,
+    buildLiquidity: () => ({
+      status: 'PRESENT',
+      liquidityImpactStatus: 'PRESENT',
+      evidence: {
+        valuePercent: 0.02,
+        quality: 'ESTIMATED',
+        source: 'GENUINE_LIQUIDITY_RUNTIME',
+        observedAtMs: NOW + 1,
+      },
+      blockers: [],
+    }),
+  });
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.equal(result.supplementalCostInput, null);
+  assert.ok(result.blockers.includes('LIQUIDITY:EVIDENCE_FROM_FUTURE_AT_PREPARATION'));
+});
+
+test('future-dated partial-fill evidence cannot bypass preparation freshness', async () => {
+  const deps = readyDependencies();
+  const result = await preparePaperForwardAuthoritativeInputs(baseInput(), {
+    ...deps,
+    buildPartialFill: () => ({
+      status: 'PRESENT',
+      evidence: {
+        valuePercent: 0.01,
+        quality: 'ESTIMATED',
+        source: 'GENUINE_PARTIAL_FILL_CALIBRATION',
+        observedAtMs: NOW + 1,
+      },
+      blockers: [],
+    }),
+  });
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.equal(result.supplementalCostInput, null);
+  assert.ok(result.blockers.includes('PARTIAL_FILL:EVIDENCE_FROM_FUTURE_AT_PREPARATION'));
+});
+
 test('cross-source scope mismatch fails before validator execution', async () => {
   const input = structuredClone(baseInput()) as any;
   input.partialFill.expected.symbol = 'ETHUSDT';
