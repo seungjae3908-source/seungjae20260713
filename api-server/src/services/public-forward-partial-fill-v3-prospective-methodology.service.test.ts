@@ -23,16 +23,6 @@ const METHODOLOGY_FROZEN_AT = 10_000;
 const COHORT_FROZEN_AT = 11_000;
 const EFFECTIVE_START = 12_000;
 
-function frozenRef(identity: string, frozenAtMs = 1_000): PublicForwardPartialFillV3FrozenRef {
-  return Object.freeze({
-    identity,
-    version: 'v1',
-    digest: sha256(identity),
-    frozenAtMs,
-    status: 'FROZEN' as const,
-  });
-}
-
 function exactComponentRef(
   name: keyof typeof PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_COMPONENT_AUTHORITIES,
   frozenAtMs = 1_000,
