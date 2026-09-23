@@ -301,10 +301,17 @@ function reasonIdentityDigests(row = {}) {
   const source = row.identity && typeof row.identity === 'object' ? row.identity : row;
   const values = source.observationIdDigests ?? row.observationIdDigests ?? source.observationIds ?? row.observationIds;
   if (!Array.isArray(values)) {
-    const one = source.observationIdDigest ?? row.observationIdDigest;
-    return one ? [digest(one)].filter(Boolean) : [];
+    const oneDigest = source.observationIdDigest ?? row.observationIdDigest;
+    if (oneDigest !== undefined && oneDigest !== null) {
+      const normalizedDigest = digest(oneDigest);
+      return normalizedDigest ? [normalizedDigest] : null;
+    }
+    const oneId = source.observationId ?? row.observationId;
+    return nonEmpty(oneId) ? [sha256(oneId.trim())] : null;
   }
-  return values.map((value) => digest(value) ?? (nonEmpty(value) ? sha256(value.trim()) : null)).filter(Boolean);
+  if (values.length === 0) return null;
+  const normalized = values.map((value) => digest(value) ?? (nonEmpty(value) ? sha256(value.trim()) : null));
+  return normalized.every(Boolean) ? normalized : null;
 }
 
 function collectedReasonRows(input, identity, naturalEligible, verifiedAtMs) {
@@ -329,6 +336,7 @@ function collectedReasonRows(input, identity, naturalEligible, verifiedAtMs) {
     const category = reasonCategory(row);
     if (!category) continue;
     const observationIdDigests = reasonIdentityDigests(row);
+    if (!observationIdDigests?.length) continue;
     const sanitized = {
       category,
       sourceStage: nonEmpty(row.sourceStage) ? row.sourceStage.trim().slice(0, 100) : null,
