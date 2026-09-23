@@ -7,6 +7,7 @@ const WORKFLOWS = {
   application: ".github/workflows/futures-public-network-smoke.yml",
   applicationFast: ".github/workflows/application-fast-ci.yml",
   applicationReadyDispatch: ".github/workflows/application-full-ci-ready-dispatch.yml",
+  applicationMainFallback: ".github/workflows/application-ci-main-fallback.yml",
   research: ".github/workflows/prediction-lab-pr-head-unit.yml",
   multiMarket: ".github/workflows/prediction-lab-52d-validation.yml",
   longHistory: ".github/workflows/prediction-lab-long-history-v1.yml",
@@ -110,6 +111,23 @@ test("authoritative main push CI and required status publishers remain intact", 
   }
   assert.doesNotMatch(indentedBlock(documents.applicationFast, "on", 0), /^\s+workflow_dispatch:/mu);
   assert.doesNotMatch(indentedBlock(documents.applicationReadyDispatch, "on", 0), /^\s+workflow_dispatch:/mu);
+});
+
+test("exact-current-main CI recovery command dispatches only canonical full CI", () => {
+  const document = documents.applicationMainFallback;
+  const on = indentedBlock(document, "on", 0);
+  assert.match(on, /^\s+push:/mu);
+  assert.match(on, /^\s+issue_comment:/mu);
+  assert.match(document, /github\.event\.issue\.number == 23/u);
+  assert.match(document, /github\.event\.comment\.user\.login == github\.repository_owner/u);
+  assert.match(document, /github\.event\.comment\.author_association == 'OWNER'/u);
+  assert.match(document, /startsWith\(github\.event\.comment\.body, '\/run-application-ci-main '\)/u);
+  assert.match(document, /\^\\\/run-application-ci-main \(\[0-9a-f\]\{40\}\)\$/u);
+  assert.match(document, /officialWorkflowId = 'futures-public-network-smoke\.yml'/u);
+  assert.match(document, /createWorkflowDispatch/u);
+  assert.match(document, /inputs: \{ target_sha: sha, checkout_ref: sha \}/u);
+  assert.match(document, /Fallback CI requires the exact current main SHA/u);
+  assert.doesNotMatch(document, /merge_pull_request|REAL_ORDER_ENABLED\s*:\s*true|LIVE_TRADING\s*:\s*true/u);
 });
 
 test("fast CI remains development-only while canonical full CI remains the release authority", () => {
