@@ -2,10 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  PAPER_FORWARD_AUTHORITATIVE_INPUT_PREPARATION_SAFETY,
   PAPER_FORWARD_AUTHORITATIVE_INPUT_PREPARATION_VERSION,
   preparePaperForwardAuthoritativeInputs,
   type PaperForwardAuthoritativeInputPreparationInput,
 } from './paper-forward-authoritative-input-preparation.service';
+import {
+  PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
+} from './authoritative-paper-partial-fill-cost-evidence.service';
 
 const SHA = 'a'.repeat(40);
 const NOW = 1_800_000_000_000;
@@ -116,6 +120,52 @@ test('READY packages only existing validated evidence and creates zero credit', 
   assert.equal(result.profitabilityCredit, 0);
   assert.equal(result.executionAuthority, 'NONE');
   assert.equal(result.liveTrading, false);
+});
+
+test('preparation passes frozen calibration freshness separately from runtime freshness', async () => {
+  const deps = readyDependencies();
+  let receivedExpected: any = null;
+  const result = await preparePaperForwardAuthoritativeInputs(baseInput(), {
+    ...deps,
+    buildPartialFill: (value: any) => {
+      receivedExpected = value.expected;
+      return deps.buildPartialFill(value);
+    },
+  });
+  assert.equal(result.status, 'READY');
+  assert.equal(receivedExpected.maximumAgeMs, 30_000);
+  assert.equal(
+    receivedExpected.calibrationMaximumAgeMs,
+    PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
+  );
+  assert.equal(
+    PAPER_FORWARD_AUTHORITATIVE_INPUT_PREPARATION_SAFETY.partialFillCalibrationMaximumAgeMs,
+    PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
+  );
+  assert.equal(
+    PAPER_FORWARD_AUTHORITATIVE_INPUT_PREPARATION_SAFETY.partialFillCalibrationAndRuntimeFreshnessSeparated,
+    true,
+  );
+});
+
+test('caller cannot widen the frozen calibration freshness through preparation input', async () => {
+  const input = structuredClone(baseInput()) as any;
+  input.partialFill.expected.calibrationMaximumAgeMs =
+    PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS * 10;
+  const deps = readyDependencies();
+  let receivedExpected: any = null;
+  const result = await preparePaperForwardAuthoritativeInputs(input, {
+    ...deps,
+    buildPartialFill: (value: any) => {
+      receivedExpected = value.expected;
+      return deps.buildPartialFill(value);
+    },
+  });
+  assert.equal(result.status, 'READY');
+  assert.equal(
+    receivedExpected.calibrationMaximumAgeMs,
+    PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
+  );
 });
 
 test('missing liquidity evidence remains BLOCKED_DATA and no files become ready', async () => {
