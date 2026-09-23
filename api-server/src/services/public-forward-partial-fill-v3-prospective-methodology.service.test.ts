@@ -351,6 +351,33 @@ test('public-only V3 refuses attempted actual fill, queue or partial-fill-cost p
   }
 });
 
+test('source backfill, fixture, runtime, full-cost or execution credit cannot enter modeled V3', () => {
+  const cases: Array<Partial<PublicForwardPartialFillCalibrationObservation>> = [
+    { historicalBackfillCredit: 1 as never },
+    { testFixtureCredit: 1 as never },
+    { naturalEntryCredit: 1 as never },
+    { runtimeCostCredit: 1 as never },
+    { calibrationArtifactProduced: true as never },
+    { calibrationSampleSufficient: true as never },
+    { partialFillStatus: 'PRESENT' as never },
+    { fullCostReady: true as never },
+    { privateApiUsed: true as never },
+    { executionAuthority: 'ORDER' as never },
+    { liveTrading: true as never },
+    { orderSubmitted: true as never },
+  ];
+  for (const mutation of cases) {
+    const result = buildPublicForwardPartialFillV3ModeledObservation({
+      observation: observation(mutation),
+      methodology: methodology(),
+      cohort: cohort(),
+    });
+    assert.equal(result.status, 'BLOCKED_DATA');
+    assert.ok(result.blockers.includes('SOURCE_ECONOMIC_OR_EXECUTION_CREDIT_FORBIDDEN'));
+    assert.equal(result.record, null);
+  }
+});
+
 test('non-natural, replay-like sample class cannot enter the prospective V3 lane', () => {
   const result = buildPublicForwardPartialFillV3ModeledObservation({
     observation: observation({ sampleClass: 'CALIBRATION_RESEARCH_SAMPLE' }),
