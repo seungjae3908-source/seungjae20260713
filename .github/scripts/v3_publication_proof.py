@@ -25,7 +25,7 @@ PINNED_BLOBS = {
     'research-production/bin/publish-v3-independence.mjs':
         '84bc304ea1e838d689b4b50238943bc7ce47f208',
     'research-production/src/v3-liquidity-independence-state-publisher.mjs':
-        '260c8f60944e03f6f5cc44b9ee1e4ff5661fd5ab',
+        '8346d903463ef55895ed6029dc1ca10cfd4c0a17',
 }
 SAFE_CALLER_PR_NUMBER = 903
 SAFE_CALLER_MERGE_SHA = 'e8f922ba11b2e9cdfbfa9b7aa22eb39122f2a31b'
