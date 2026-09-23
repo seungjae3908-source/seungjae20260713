@@ -34,6 +34,9 @@ STATE_ROOT = Path('/var/lib/investment-research-production')
 SUMMARY_PATH = 'forward/liquidity/v3-authoritative-independence-summary.json'
 SUMMARY_NAME = 'v3-authoritative-independence-summary.json'
 MAX_JSON = 1024 * 1024
+MAX_SUMMARY_JSON = 8 * MAX_JSON
+MAX_OVERVIEW_JSON = 2 * MAX_SUMMARY_JSON
+MAX_SNAPSHOT_JSON = 3 * MAX_SUMMARY_JSON
 SHA = re.compile(r'[0-9a-f]{40}')
 DIGEST = re.compile(r'[0-9a-f]{64}')
 OVERVIEW_FIELDS = (
@@ -229,10 +232,10 @@ def extract_summary(archive, expected_digest, output):
         item = matches[0]
         mode = item.external_attr >> 16
         require(not item.is_dir() and not stat.S_ISLNK(mode) and
-                not (item.flag_bits & 1) and item.file_size <= MAX_JSON,
+                not (item.flag_bits & 1) and item.file_size <= MAX_SUMMARY_JSON,
                 'SUMMARY_ENTRY_UNSAFE')
         body = source.read(item)  # validates this member's CRC; never extracts other paths
-        parse_json(body)
+        parse_json(body, MAX_SUMMARY_JSON)
     fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'wb') as handle:
         handle.write(body)
@@ -247,15 +250,15 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 def snapshot(proof, expected_runtime_sha):
     before = verify_runtime(proof)
     require(before['runtimeSha'] == expected_runtime_sha, 'RUNTIME_CHANGED')
-    state = read_plain(STATE_ROOT, SUMMARY_PATH)
+    state = read_plain(STATE_ROOT, SUMMARY_PATH, MAX_SUMMARY_JSON)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     with opener.open('http://127.0.0.1:18090/api/research/overview', timeout=8) as response:
         require(response.status == 200, 'OVERVIEW_HTTP_FAILED')
-        overview = parse_json(response.read(4 * MAX_JSON + 1), 4 * MAX_JSON)
-    require(read_plain(STATE_ROOT, SUMMARY_PATH) == state, 'STATE_CHANGED_DURING_READBACK')
+        overview = parse_json(response.read(MAX_OVERVIEW_JSON + 1), MAX_OVERVIEW_JSON)
+    require(read_plain(STATE_ROOT, SUMMARY_PATH, MAX_SUMMARY_JSON) == state, 'STATE_CHANGED_DURING_READBACK')
     require(canonical(verify_runtime(proof)) == canonical(before), 'RUNTIME_CHANGED')
     return {'schemaVersion': 'v3-publication-snapshot-v1', 'runtime': before,
-            'fileDigest': digest(state), 'summary': parse_json(state), 'overview': overview}
+            'fileDigest': digest(state), 'summary': parse_json(state, MAX_SUMMARY_JSON), 'overview': overview}
 
 
 def verify_readback(expected, source, publication, observed, control_sha, runtime_sha):
@@ -355,8 +358,11 @@ def main(argv):
     elif command == 'snapshot' and len(args) == 2:
         result = snapshot(decode_proof(args[0]), args[1])
     elif command == 'verify-readback' and len(args) == 6:
-        values = [parse_json(Path(path).read_bytes(), 6 * MAX_JSON) for path in args[:4]]
-        result = verify_readback(*values, *args[4:])
+        expected = parse_json(Path(args[0]).read_bytes(), MAX_SUMMARY_JSON)
+        source = parse_json(Path(args[1]).read_bytes(), MAX_JSON)
+        publication = parse_json(Path(args[2]).read_bytes(), MAX_JSON)
+        observed = parse_json(Path(args[3]).read_bytes(), MAX_SNAPSHOT_JSON)
+        result = verify_readback(expected, source, publication, observed, *args[4:])
     else:
         raise ProofError('COMMAND_ARGUMENTS_INVALID')
     print(canonical(result).decode())
