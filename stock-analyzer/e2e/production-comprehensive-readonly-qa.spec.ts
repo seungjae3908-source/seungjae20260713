@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { expect, test, type Page, type Request, type TestInfo } from '@playwright/test';
+import { expect, test, type BrowserContext, type Page, type Request, type TestInfo } from '@playwright/test';
 import {
   installProductionReadOnlyPolicy,
   isIgnorableProductionRequestFailure,
@@ -113,6 +113,14 @@ function requestPath(rawUrl: string) {
   try { return new URL(rawUrl).pathname; } catch { return 'unknown'; }
 }
 
+function sanitizeLoginDiagnostics(items: Diagnostic[]) {
+  return items.map((item) => ({
+    ...item,
+    path: item.path.split('?')[0].slice(0, 300),
+    detail: item.detail.slice(0, 300),
+  }));
+}
+
 function attachDiagnostics(page: Page, diagnostics: Diagnostic[]) {
   page.on('console', (message) => {
     if (message.type() !== 'error') return;
@@ -147,13 +155,117 @@ async function installSafety(page: Page, blocked: Diagnostic[]) {
   });
 }
 
-async function login(page: Page) {
-  await page.goto('/login', { waitUntil: 'domcontentloaded', timeout: 15_000 });
-  await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 10_000 });
-  await page.getByLabel('아이디').fill(qaLogin, { timeout: 3_000 });
-  await page.getByLabel('비밀번호').fill(qaPassword, { timeout: 3_000 });
-  await page.getByRole('button', { name: '로그인', exact: true }).click({ timeout: 3_000 });
-  await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: 15_000 });
+const LOGIN_READY_BUDGET_MS = 15_000;
+type CachedAuthState = Awaited<ReturnType<BrowserContext['storageState']>>;
+const authStateByViewport = new Map<string, CachedAuthState>();
+
+function authCacheKey(page: Page) {
+  const viewport = page.viewportSize();
+  return viewport ? `${viewport.width}x${viewport.height}` : 'default';
+}
+
+async function restoreCachedAuthState(page: Page, state: CachedAuthState) {
+  if (state.cookies.length > 0) {
+    await page.context().addCookies(state.cookies);
+  }
+  const originState = state.origins.find((entry) => entry.origin === productionOrigin);
+  const localStorageEntries = originState?.localStorage ?? [];
+  if (localStorageEntries.length > 0) {
+    await page.addInitScript(({ origin, entries }) => {
+      if (window.location.origin !== origin) return;
+      for (const entry of entries) {
+        window.localStorage.setItem(entry.name, entry.value);
+      }
+    }, { origin: productionOrigin, entries: localStorageEntries });
+  }
+}
+
+async function login(
+  page: Page,
+  testInfo: TestInfo,
+  diagnostics: Diagnostic[],
+  blocked: Diagnostic[],
+  evidenceName: string,
+) {
+  const startedAt = Date.now();
+  const diagnosticStart = diagnostics.length;
+  const blockedStart = blocked.length;
+  const cacheKey = authCacheKey(page);
+  try {
+    const cached = authStateByViewport.get(cacheKey);
+    if (cached) {
+      // Validate the real password-login path once per viewport, then reuse the
+      // exact in-memory authenticated browser state for later read-only tests.
+      // Cached-session failure remains fail-closed; there is no login retry.
+      await restoreCachedAuthState(page, cached);
+      await page.goto('/', { waitUntil: 'commit', timeout: LOGIN_READY_BUDGET_MS });
+      await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: LOGIN_READY_BUDGET_MS });
+      return;
+    }
+
+    // Judge readiness by the actual interactive login surface while preserving
+    // one total 15s readiness budget. Do not extend the gate through serial waits.
+    const readinessStartedAt = Date.now();
+    const remainingReadinessMs = () =>
+      Math.max(1, LOGIN_READY_BUDGET_MS - (Date.now() - readinessStartedAt));
+
+    await page.goto('/login', { waitUntil: 'commit', timeout: remainingReadinessMs() });
+    const loginId = page.getByLabel('아이디');
+    const loginPassword = page.getByLabel('비밀번호');
+    const loginButton = page.getByRole('button', { name: '로그인', exact: true });
+
+    await expect.poll(async () => {
+      const [idVisible, passwordVisible, buttonVisible, fallbackVisible] = await Promise.all([
+        loginId.isVisible({ timeout: 250 }).catch(() => false),
+        loginPassword.isVisible({ timeout: 250 }).catch(() => false),
+        loginButton.isVisible({ timeout: 250 }).catch(() => false),
+        page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false),
+      ]);
+      return idVisible && passwordVisible && buttonVisible && !fallbackVisible ? 'READY' : 'PENDING';
+    }, {
+      timeout: remainingReadinessMs(),
+      intervals: [100, 200, 400, 800],
+    }).toBe('READY');
+
+    await loginId.fill(qaLogin, { timeout: 3_000 });
+    await loginPassword.fill(qaPassword, { timeout: 3_000 });
+    await loginButton.click({ timeout: 3_000 });
+    await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: 15_000 });
+
+    const state = await page.context().storageState();
+    const originState = state.origins.find((entry) => entry.origin === productionOrigin);
+    if (state.cookies.length === 0 && (originState?.localStorage.length ?? 0) === 0) {
+      throw new Error('Authenticated Production QA session produced no reusable browser state');
+    }
+    authStateByViewport.set(cacheKey, state);
+  } catch (error) {
+    const finalPath = currentPath(page);
+    const loginDiagnostics = sanitizeLoginDiagnostics(diagnostics.slice(diagnosticStart));
+    const loginBlocked = sanitizeLoginDiagnostics(blocked.slice(blockedStart));
+    const [loginSurfaceVisible, membershipVisible, fallbackVisible] = page.isClosed()
+      ? [false, false, false]
+      : await Promise.all([
+        page.getByRole('button', { name: '로그인', exact: true }).isVisible({ timeout: 250 }).catch(() => false),
+        page.getByTestId('membership-label').isVisible({ timeout: 250 }).catch(() => false),
+        page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false),
+      ]);
+    writeJson(`${slug(testInfo.project.name)}-${slug(evidenceName)}-login-failure.json`, {
+      project: testInfo.project.name,
+      evidenceName,
+      authenticated: false,
+      durationMs: Date.now() - startedAt,
+      finalPath,
+      ui: { loginSurfaceVisible, membershipVisible, fallbackVisible },
+      diagnostics: loginDiagnostics,
+      blocked: loginBlocked,
+      complete: true,
+    });
+    const summary = loginDiagnostics.slice(-8)
+      .map((item) => `${item.kind}:${item.status ?? '-'}:${item.path}:${item.detail}`)
+      .join(' | ') || 'NO_CAPTURED_DIAGNOSTIC';
+    const original = error instanceof Error ? error.message.split('\n')[0].slice(0, 160) : 'login assertion failed';
+    throw new Error(`[PRODUCTION_QA_AUTH_NOT_ESTABLISHED] finalPath=${finalPath}; diagnostics=${summary}; original=${original}`);
+  }
 }
 
 async function auditLayout(page: Page) {
@@ -299,24 +411,53 @@ async function exerciseVisibleTabs(page: Page) {
   return failures;
 }
 
+async function navigateInMountedApp(page: Page, route: string) {
+  await expect(page.getByTestId('app-shell')).toBeVisible({ timeout: 1_000 });
+  const target = new URL(route, baseUrl);
+  const targetPath = `${target.pathname}${target.search}${target.hash}`;
+  const current = new URL(page.url());
+  const resetPath = current.pathname === target.pathname
+    && `${current.search}${current.hash}` !== `${target.search}${target.hash}`
+    ? (target.pathname === '/' ? '/stocks' : '/')
+    : null;
+  await page.evaluate(async ({ nextPath, intermediatePath }) => {
+    const transition = (path: string) => {
+      window.history.pushState({}, '', path);
+      window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state }));
+    };
+    if (intermediatePath) {
+      transition(intermediatePath);
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    }
+    transition(nextPath);
+  }, { nextPath: targetPath, intermediatePath: resetPath });
+  await expect.poll(() => {
+    const current = new URL(page.url());
+    return `${current.pathname}${current.search}${current.hash}`;
+  }, { timeout: 1_000, intervals: [50, 100, 200] }).toBe(targetPath);
+}
+
 async function auditRoute(page: Page, route: string, testInfo: TestInfo): Promise<RouteAudit> {
   const started = Date.now();
   let navigationError: string | null = null;
   let fallbackTimedOut = false;
-  await page.goto(route, { waitUntil: 'domcontentloaded', timeout: 15_000 }).catch((error) => {
+  await navigateInMountedApp(page, route).catch((error) => {
     navigationError = String(error).slice(0, 240);
   });
   if (!page.isClosed()) {
     try {
-      await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 5_000 });
+      await expect.poll(async () => {
+        const shellVisible = await page.getByTestId('app-shell').isVisible({ timeout: 250 }).catch(() => false);
+        if (!shellVisible) return 'APP_SHELL_PENDING';
+        const fallbackVisible = await page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false);
+        const visibleBusy = await page.locator('[aria-busy="true"]:visible').count().catch(() => -1);
+        return !fallbackVisible && visibleBusy === 0 ? 'READY' : 'LOADING';
+      }, { timeout: 5_000, intervals: [100, 200, 400, 800] }).toBe('READY');
     } catch {
       fallbackTimedOut = true;
     }
   }
   const busy = page.locator('[aria-busy="true"]:visible');
-  if (!page.isClosed() && await busy.count()) {
-    await expect(busy).toHaveCount(0, { timeout: 5_000 }).catch(() => undefined);
-  }
   const busyAfter5s = page.isClosed() ? -1 : await busy.count().catch(() => -1);
   const layout = page.isClosed() ? {
     horizontalOverflowPx: -1,
@@ -453,6 +594,18 @@ async function chartMatrix(page: Page, onProgress: (audits: ChartAudit[]) => voi
         await page.getByTestId(`timeframe-${timeframe}`).click({ timeout: 2_500 });
         await expect(page).toHaveURL(new RegExp(`timeframe=${timeframe.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), { timeout: 3_000 }).catch(() => undefined);
         terminal = await expect.poll(async () => {
+          const chart = page.getByTestId('unified-analysis-chart');
+          const [selectedMarket, selectedTimeframe, queryFetching, dataMarket, dataTimeframe] = await Promise.all([
+            chart.getAttribute('data-chart-market'),
+            chart.getAttribute('data-chart-timeframe'),
+            chart.getAttribute('data-chart-query-fetching'),
+            chart.getAttribute('data-chart-data-market'),
+            chart.getAttribute('data-chart-data-timeframe'),
+          ]);
+          if (selectedMarket !== market || selectedTimeframe !== timeframe) return 'timeout';
+          if (statuses.length === 0 || queryFetching === 'true') return 'timeout';
+          if (statuses.some((status) => status >= 200 && status < 300)
+            && (dataMarket !== market || dataTimeframe !== timeframe)) return 'timeout';
           if (await page.getByTestId('unified-chart-canvas').isVisible({ timeout: 200 }).catch(() => false)) return 'canvas';
           if (await page.getByTestId('chart-empty-state').isVisible({ timeout: 200 }).catch(() => false)) return 'empty';
           if (await page.getByTestId('chart-error-state').isVisible({ timeout: 200 }).catch(() => false)) return 'error';
@@ -484,7 +637,7 @@ test.describe('Production comprehensive read-only QA', () => {
     const blocked: Diagnostic[] = [];
     attachDiagnostics(page, diagnostics);
     await installSafety(page, blocked);
-    await login(page);
+    await login(page, testInfo, diagnostics, blocked, 'routes');
     const routes = full ? FULL_ROUTES : CRITICAL_ROUTES;
     const audits: RouteAudit[] = [];
     const tabFailures: Array<{ route: string; failures: string[] }> = [];
@@ -516,7 +669,7 @@ test.describe('Production comprehensive read-only QA', () => {
     const blocked: Diagnostic[] = [];
     attachDiagnostics(page, diagnostics);
     await installSafety(page, blocked);
-    await login(page);
+    await login(page, testInfo, diagnostics, blocked, 'search');
     const perMarket = testInfo.project.name === 'prod-desktop-1440' ? 20 : 5;
     const filename = `${slug(testInfo.project.name)}-search.json`;
     const audits = await searchMatrix(page, ['국내','미국','코인 현물','코인 선물'], perMarket, (progress) => {
@@ -536,7 +689,7 @@ test.describe('Production comprehensive read-only QA', () => {
     const blocked: Diagnostic[] = [];
     attachDiagnostics(page, diagnostics);
     await installSafety(page, blocked);
-    await login(page);
+    await login(page, testInfo, diagnostics, blocked, 'charts');
     const filename = `${slug(testInfo.project.name)}-charts.json`;
     const audits = await chartMatrix(page, (progress) => {
       writeJson(filename, { project: testInfo.project.name, audits: progress, diagnostics, blocked, complete: false });

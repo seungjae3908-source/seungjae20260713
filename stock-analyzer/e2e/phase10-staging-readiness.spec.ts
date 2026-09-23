@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { test, expect, type Browser, type Page, type Request, type TestInfo } from '@playwright/test';
+import { test, expect, type Browser, type Page, type Request, type Response, type TestInfo } from '@playwright/test';
 import {
   provisionEphemeralStagingAccounts,
   type StagingAccountCredentials,
@@ -900,7 +900,17 @@ async function expectNavigationTransition(
   }
 }
 
-async function expectHealthyRoute(page: Page, route: string) {
+async function expectHealthyRoute(page: Page, route: string): Promise<void>;
+async function expectHealthyRoute<T>(
+  page: Page,
+  route: string,
+  observeAfterSettle: () => Promise<T>,
+): Promise<T>;
+async function expectHealthyRoute<T>(
+  page: Page,
+  route: string,
+  observeAfterSettle?: () => Promise<T>,
+): Promise<T | void> {
   await settle(page);
   const requestedRoute = routeIdentity(route, page.url());
   const expectedRoute = requestedRoute === '/stock/005930'
@@ -915,9 +925,12 @@ async function expectHealthyRoute(page: Page, route: string) {
   };
   activeRouteTransitionObservations.set(page, observation);
   let confirmed = false;
+  let observedValue: T | undefined;
   try {
+    const observedResponsePromise = observeAfterSettle?.();
     const response = await page.goto(route, { waitUntil: 'domcontentloaded' });
     if (response) expect(response.status(), `${route} returned HTTP ${response.status()}`).toBeLessThan(400);
+    if (observedResponsePromise) observedValue = await observedResponsePromise;
     if (expectedRoute !== requestedRoute) {
       await expect.poll(
         () => routeIdentity(page.url()),
@@ -933,6 +946,7 @@ async function expectHealthyRoute(page: Page, route: string) {
     await expect(page.locator('body')).not.toContainText(/페이지를 찾을 수 없습니다|page not found/i);
     await expect(page.locator('body')).not.toBeEmpty();
     confirmed = true;
+    return observedValue;
   } finally {
     await finishRouteTransition(page, observation, confirmed);
   }
@@ -1379,8 +1393,12 @@ async function auditAuthenticatedViewport(
   };
   await page.setViewportSize({ width, height });
   const scannerOrigin = new URL(page.url()).origin;
-  const scannerResponsePromise = route === '/scanner'
-    ? page.waitForResponse((response) => {
+  let scannerResponse: Response | null = null;
+  if (route === '/scanner') {
+    scannerResponse = await expectHealthyRoute(
+      page,
+      route,
+      () => page.waitForResponse((response) => {
         try {
           const url = new URL(response.url());
           return response.request().method() === 'GET'
@@ -1389,11 +1407,12 @@ async function auditAuthenticatedViewport(
         } catch {
           return false;
         }
-      }, { timeout: 15_000 })
-    : null;
-  await expectHealthyRoute(page, route);
-  if (scannerResponsePromise) {
-    const scannerResponse = await scannerResponsePromise;
+      }, { timeout: 15_000 }),
+    );
+  } else {
+    await expectHealthyRoute(page, route);
+  }
+  if (scannerResponse) {
     expect(
       scannerResponse.status(),
       `scanner viewport API returned HTTP ${scannerResponse.status()}`,

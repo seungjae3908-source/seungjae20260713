@@ -10,9 +10,13 @@ import { runPaperForwardScheduledInvocation } from '../../market-prediction-lab/
 
 const SHA = 'a'.repeat(40);
 const KEY = 'PAPER_FORWARD_RISK_POLICY_RECORD_PATH';
+const DECISION_KEY = 'PAPER_FORWARD_RISK_POLICY_DECISION_PATH';
+const COST_KEY = 'PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH';
 const SAFETY_KEYS = ['LIVE_TRADING', 'REAL_ORDER_ENABLED', 'PRIVATE_API_ENABLED',
   'PRIVATE_ACCOUNT_ACCESS', 'PRIVATE_TRADING_API_ALLOWED', 'ORDER_AUTHORITY'];
 const EXPLICIT_PATH = resolve(tmpdir(), 'owner supplied policy.record');
+const DECISION_PATH = resolve(tmpdir(), 'owner approved policy decision.json');
+const COST_PATH = resolve(tmpdir(), 'owner supplied cost.record');
 
 function plan(env = {}, profile = 'forward') {
   return buildTaskPlan({ profile, stateRoot: resolve(tmpdir(), 'research-state'),
@@ -57,6 +61,23 @@ test('T06 Paper child retains all six disabled trading/private safety flags', ()
   for (const key of SAFETY_KEYS) assert.equal(paper({ [KEY]: EXPLICIT_PATH }).env[key], 'false');
 });
 
+test('explicit supplemental cost path reaches Paper only; missing stays missing and unsafe paths fail', () => {
+  for (const env of [{}, { [COST_KEY]: '' }]) {
+    assert.equal(Object.hasOwn(paper(env).env, COST_KEY), false);
+  }
+  const env = { [COST_KEY]: COST_PATH };
+  assert.equal(paper(env).env[COST_KEY], COST_PATH);
+  assert.equal(Object.hasOwn(sanitizeChildEnv(env), COST_KEY), false);
+  for (const task of plan(env, 'all')) {
+    assert.equal(Object.hasOwn(task.env, COST_KEY), task.kind === 'paper');
+  }
+  for (const value of ['relative/cost.record', `${COST_PATH} `, `${COST_PATH}\n`,
+    `${dirname(COST_PATH)}/../cost.record`, 123]) {
+    assert.throws(() => paper({ [COST_KEY]: value }), /normalized absolute path/);
+  }
+  for (const key of SAFETY_KEYS) assert.equal(paper(env).env[key], 'false');
+});
+
 test('T07 actual child transport reads no record and preserves direct-spawn path bytes', async () => {
   const root = await mkdtemp(join(tmpdir(), 'research-risk-path-child-'));
   const repoRoot = join(root, 'repo');
@@ -67,21 +88,34 @@ test('T07 actual child transport reads no record and preserves direct-spawn path
   for (const tasks of Object.values(PROFILES)) for (const task of tasks) {
     for (const arg of task.args) required.add(arg);
   }
-  const probe = `console.log(JSON.stringify(Object.fromEntries(${JSON.stringify([KEY, ...SAFETY_KEYS])}.map(key => [key, process.env[key] ?? null]))));\n`;
+  const probe = `console.log(JSON.stringify(Object.fromEntries(${JSON.stringify([KEY, COST_KEY, ...SAFETY_KEYS])}.map(key => [key, process.env[key] ?? null]))));\n`;
   try {
     for (const relative of required) {
       const target = join(lab, relative);
       await mkdir(dirname(target), { recursive: true });
       await writeFile(target, relative === 'package.json' ? '{}\n' : probe);
     }
+    for (const relative of [
+      'packages/strategy-hypothesis/package.json',
+      'packages/strategy-hypothesis/src/index.js',
+      'packages/strategy-hypothesis/src/contract.js',
+      'packages/external-research/package.json',
+      'packages/external-research/src/index.js',
+      'packages/external-research/src/contract.js',
+    ]) {
+      const target = join(repoRoot, relative);
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, relative.endsWith('.json') ? '{}\n' : 'export const fixture = true;\n');
+    }
     await assert.rejects(access(path), { code: 'ENOENT' });
     const result = await runResearchCycle({ repoRoot, stateRoot, researchSha: SHA,
-      profile: 'forward', env: { PATH: process.env.PATH, [KEY]: path },
+      profile: 'forward', env: { PATH: process.env.PATH, [KEY]: path, [COST_KEY]: COST_PATH },
       activationAtMs: 12345, verifyGitHead: false });
     assert.equal(result.status, 'complete');
     for (const row of result.results) {
       const seen = JSON.parse(await readFile(row.stdoutPath, 'utf8'));
       assert.equal(seen[KEY], row.id === 'paper-forward' ? path : null);
+      assert.equal(seen[COST_KEY], row.id === 'paper-forward' ? COST_PATH : null);
       for (const key of SAFETY_KEYS) assert.equal(seen[key], 'false');
     }
     await assert.rejects(access(path), { code: 'ENOENT' });
@@ -180,6 +214,97 @@ test('T09/T10 real reader and producer keep missing records blocked without econ
       }
       await assert.rejects(access(explicitPath), { code: 'ENOENT' });
     }
+  } finally {
+    process.exitCode = previousExitCode;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test('approved risk-policy decision path is transported to Paper only and never competes with an explicit record', () => {
+  const task = paper({ [DECISION_KEY]: DECISION_PATH });
+  assert.equal(task.env[DECISION_KEY], DECISION_PATH);
+  assert.equal(Object.hasOwn(task.env, KEY), false);
+  assert.equal(Object.hasOwn(sanitizeChildEnv({ [DECISION_KEY]: DECISION_PATH }), DECISION_KEY), false);
+  for (const row of plan({ [DECISION_KEY]: DECISION_PATH }, 'all')) {
+    assert.equal(Object.hasOwn(row.env, DECISION_KEY), row.kind === 'paper');
+  }
+  assert.throws(
+    () => paper({ [KEY]: EXPLICIT_PATH, [DECISION_KEY]: DECISION_PATH }),
+    /canonical risk policy source is ambiguous/u,
+  );
+  for (const value of ['relative/decision.json', `${DECISION_PATH} `, `${DECISION_PATH}\n`,
+    `${dirname(DECISION_PATH)}/../decision.json`, 123]) {
+    assert.throws(
+      () => paper({ [DECISION_KEY]: value }),
+      /risk policy decision path must be a normalized absolute path/u,
+    );
+  }
+});
+
+test('Research Paper materializes the owner-approved decision freshly at canonical reader call time', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'research-risk-decision-materialization-'));
+  const previousExitCode = process.exitCode;
+  const decisionPath = join(root, 'approved-decision.json');
+  try {
+    const approvedDecision = JSON.parse(await readFile(
+      new URL('../../market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v1.json', import.meta.url),
+      'utf8',
+    ));
+    await writeFile(decisionPath, JSON.stringify(approvedDecision));
+    const task = paper({ [DECISION_KEY]: decisionPath });
+    const runtimePackage = await loadValidatedAuthoritativePaperRuntimePackage();
+    let reader = null;
+    const policyResults = [];
+    const packageWithReaderCapture = {
+      ...runtimePackage,
+      createAuthoritativePaperNaturalCycleEvidenceSourceWiring(input) {
+        reader = input.sources.riskPolicyRecordForCard;
+        return runtimePackage.createAuthoritativePaperNaturalCycleEvidenceSourceWiring(input);
+      },
+    };
+    const output = await runPaperForwardScheduleCli({
+      ...task.env,
+      PAPER_FORWARD_ROOT: join(root, 'paper'),
+    }, {
+      authoritativePaperPackageLoader: async () => packageWithReaderCapture,
+      publicEvidenceProvider: {
+        async collectPublicEvidence() {
+          assert.equal(typeof reader, 'function');
+          const producer = runtimePackage.createAuthoritativePaperGenericRiskPolicyProducer({
+            readCanonicalRecord: reader,
+          });
+          const policy = await producer({
+            market: 'CRYPTO_FUTURES',
+            symbol: 'BTCUSDT',
+            strategyScope: 'CRYPTO_FUTURES_SWING_V1_LONG',
+            researchCodeSha: SHA,
+          });
+          policyResults.push(policy);
+          return {
+            status: 'BLOCKED_DATA',
+            candidates: [],
+            exits: [],
+            blocker: 'TEST_STOP_AFTER_POLICY_READ',
+          };
+        },
+      },
+    });
+    assert.ok(policyResults.length > 0);
+    for (const policy of policyResults) {
+      assert.equal(policy.status, 'PRESENT');
+      assert.equal(policy.policyEvidence?.policyId, 'NATURAL_PAPER_BTCUSDT_CRYPTO_FUTURES_V1');
+      assert.equal(policy.policyEvidence?.researchCodeSha, SHA);
+      assert.equal(policy.policyEvidence?.riskPercent, approvedDecision.riskPercent);
+      assert.equal(policy.policyEvidence?.requestedLeverage, approvedDecision.requestedLeverage);
+      assert.equal(policy.policyEvidence?.maximumLeverage, approvedDecision.maximumLeverage);
+      assert.equal(policy.policyEvidence?.marginMode, approvedDecision.marginMode);
+      assert.ok(Date.now() - policy.policyEvidence.observedAtMs < 30_000);
+    }
+    assert.equal(output.status, 'BLOCKED_DATA');
+    assert.equal(output.privateRequestCount, 0);
+    assert.equal(output.financialMutationCount, 0);
+    assert.equal(output.orderCount, 0);
   } finally {
     process.exitCode = previousExitCode;
     await rm(root, { recursive: true, force: true });
