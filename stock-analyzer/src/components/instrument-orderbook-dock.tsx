@@ -470,7 +470,7 @@ export function InstrumentOrderbookDock({
 
   const currency = data?.currency ?? (market === 'US' ? 'USD' : market === 'BITGET' ? 'USDT' : 'KRW');
   const imbalance = useMemo(() => data?.imbalance == null ? '-' : `${(data.imbalance * 100).toFixed(1)}%`, [data?.imbalance]);
-  const diagnostic = error ?? data?.reason ?? null;
+  const diagnostic = error ?? (data?.status === 'invalid' ? data.reason : null);
 
   return (
     <>
