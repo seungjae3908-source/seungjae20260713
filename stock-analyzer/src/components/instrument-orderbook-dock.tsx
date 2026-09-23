@@ -152,12 +152,6 @@ function parsePayload(value: unknown): Payload {
   }
   const bestAsk = levelBestAsk ?? declaredBestAsk;
   const bestBid = levelBestBid ?? declaredBestBid;
-  const derivedSpread = bestAsk != null && bestBid != null ? bestAsk - bestBid : null;
-  const declaredSpread = finite(row.spread);
-  if (declaredSpread != null && (derivedSpread == null || !sameNumber(declaredSpread, derivedSpread))) {
-    throw new Error('ORDERBOOK_LEVELS_CORRUPT');
-  }
-  const spread = derivedSpread ?? declaredSpread;
   const warnings = Array.isArray(row.warnings)
     ? row.warnings.filter((item): item is string => typeof item === 'string').slice(0, 20)
     : [];
@@ -173,6 +167,13 @@ function parsePayload(value: unknown): Payload {
       reason: 'ORDERBOOK_CROSSED', orderSubmitted: false, exchangeRequestSent: false,
     };
   }
+
+  const derivedSpread = bestAsk != null && bestBid != null ? bestAsk - bestBid : null;
+  const declaredSpread = finite(row.spread);
+  if (declaredSpread != null && (derivedSpread == null || !sameNumber(declaredSpread, derivedSpread))) {
+    throw new Error('ORDERBOOK_LEVELS_CORRUPT');
+  }
+  const spread = derivedSpread ?? declaredSpread;
 
   const provider: Provider = row.provider === 'kiwoom' || row.provider === 'upbit' || row.provider === 'bitget'
     ? row.provider
