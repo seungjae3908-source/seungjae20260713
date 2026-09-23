@@ -41,9 +41,17 @@ function optionalAbsolute(value,name) {
   return text;
 }
 
-async function readOptionalJson(path) {
+async function readOptionalJson(path,{missingAsNull=false,name='Factory input'}={}) {
   if(!path) return null;
-  return JSON.parse(await readFile(path,'utf8'));
+  try{
+    const info=await lstat(path);
+    if(!info.isFile()||info.isSymbolicLink()) throw new Error(`${name} must be a regular non-symlink file`);
+    if(resolve(await realpath(path))!==path) throw new Error(`${name} must not traverse symbolic links`);
+    return JSON.parse(await readFile(path,'utf8'));
+  }catch(error){
+    if(missingAsNull&&error?.code==='ENOENT') return null;
+    throw error;
+  }
 }
 
 async function ensureSafeDirectory(path,name,{recursive=false}={}) {
@@ -79,15 +87,29 @@ try{
   const policyPath=optionalAbsolute(process.env.RESEARCH_ADAPTIVE_POLICY_RECORD_PATH,'RESEARCH_ADAPTIVE_POLICY_RECORD_PATH');
   const dataEvidencePath=optionalAbsolute(process.env.RESEARCH_DATA_FACTORY_EVIDENCE_PATH,'RESEARCH_DATA_FACTORY_EVIDENCE_PATH');
   const adaptiveEvidencePath=optionalAbsolute(process.env.RESEARCH_ADAPTIVE_EVIDENCE_CATALOG_PATH,'RESEARCH_ADAPTIVE_EVIDENCE_CATALOG_PATH');
-  const diagnosticsPath=optionalAbsolute(process.env.RESEARCH_ADAPTIVE_DEVELOPMENT_DIAGNOSTICS_PATH,'RESEARCH_ADAPTIVE_DEVELOPMENT_DIAGNOSTICS_PATH');
-  const bindingsPath=optionalAbsolute(process.env.RESEARCH_ADAPTIVE_RUNTIME_BINDINGS_PATH,'RESEARCH_ADAPTIVE_RUNTIME_BINDINGS_PATH');
+  const configuredDiagnosticsPath=optionalAbsolute(
+    process.env.RESEARCH_ADAPTIVE_DEVELOPMENT_DIAGNOSTICS_PATH,
+    'RESEARCH_ADAPTIVE_DEVELOPMENT_DIAGNOSTICS_PATH',
+  );
+  const configuredBindingsPath=optionalAbsolute(
+    process.env.RESEARCH_ADAPTIVE_RUNTIME_BINDINGS_PATH,
+    'RESEARCH_ADAPTIVE_RUNTIME_BINDINGS_PATH',
+  );
+  const diagnosticsPath=configuredDiagnosticsPath??join(latest,'adaptive-development-diagnostics.json');
+  const bindingsPath=configuredBindingsPath??join(latest,'adaptive-runtime-bindings.json');
 
   const [policyRecord,dataEvidenceByMarket,adaptiveEvidenceCatalog,developmentDiagnostics,runtimeBindings]=await Promise.all([
-    readOptionalJson(policyPath),
-    readOptionalJson(dataEvidencePath),
-    readOptionalJson(adaptiveEvidencePath),
-    readOptionalJson(diagnosticsPath),
-    readOptionalJson(bindingsPath),
+    readOptionalJson(policyPath,{name:'adaptive policy record'}),
+    readOptionalJson(dataEvidencePath,{name:'Data Factory evidence'}),
+    readOptionalJson(adaptiveEvidencePath,{name:'adaptive evidence catalog'}),
+    readOptionalJson(diagnosticsPath,{
+      missingAsNull:configuredDiagnosticsPath==null,
+      name:'adaptive development diagnostics',
+    }),
+    readOptionalJson(bindingsPath,{
+      missingAsNull:configuredBindingsPath==null,
+      name:'adaptive runtime bindings',
+    }),
   ]);
 
   const status=buildResearchFactoryRuntimeStatusV1({
