@@ -104,6 +104,7 @@ export function buildFrozenResearchEvaluationPoliciesV1(raw={}){
   const firstOutcomeObservedAtMs=positiveTime(raw.firstOutcomeObservedAtMs,'firstOutcomeObservedAtMs');
   const splitObservedAtMs=positiveTime(raw.splitObservedAtMs,'splitObservedAtMs');
   requireBefore(splitFrozenAtMs,firstOutcomeObservedAtMs,'SPLIT_NOT_FROZEN_BEFORE_OUTCOME');
+  if(splitObservedAtMs<splitFrozenAtMs) throw new Error('SPLIT_RECEIPT_OBSERVED_BEFORE_SPLIT_FREEZE');
   if(splitObservedAtMs>firstOutcomeObservedAtMs) throw new Error('SPLIT_RECEIPT_OBSERVED_AFTER_FIRST_OUTCOME');
 
   const assignments=Object.freeze({TRAIN:train,VALIDATION:validation,OOS:oos});
