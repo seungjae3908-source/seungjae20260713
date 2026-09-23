@@ -62,6 +62,11 @@ function finite(value: unknown): number | null {
   return Number.isFinite(number) ? number : null;
 }
 
+function sameNumber(left: number, right: number): boolean {
+  const scale = Math.max(1, Math.abs(left), Math.abs(right));
+  return Math.abs(left - right) <= Number.EPSILON * 16 * scale;
+}
+
 function cleanText(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
@@ -135,8 +140,24 @@ function parsePayload(value: unknown): Payload {
     throw new Error('ORDERBOOK_LEVELS_CORRUPT');
   }
 
-  const bestAsk = finite(row.bestAsk) ?? asks[0]?.price ?? null;
-  const bestBid = finite(row.bestBid) ?? bids[0]?.price ?? null;
+  const declaredBestAsk = finite(row.bestAsk);
+  const declaredBestBid = finite(row.bestBid);
+  const levelBestAsk = asks[0]?.price ?? null;
+  const levelBestBid = bids[0]?.price ?? null;
+  if (
+    (declaredBestAsk != null && (levelBestAsk == null || !sameNumber(declaredBestAsk, levelBestAsk)))
+    || (declaredBestBid != null && (levelBestBid == null || !sameNumber(declaredBestBid, levelBestBid)))
+  ) {
+    throw new Error('ORDERBOOK_LEVELS_CORRUPT');
+  }
+  const bestAsk = levelBestAsk ?? declaredBestAsk;
+  const bestBid = levelBestBid ?? declaredBestBid;
+  const derivedSpread = bestAsk != null && bestBid != null ? bestAsk - bestBid : null;
+  const declaredSpread = finite(row.spread);
+  if (declaredSpread != null && (derivedSpread == null || !sameNumber(declaredSpread, derivedSpread))) {
+    throw new Error('ORDERBOOK_LEVELS_CORRUPT');
+  }
+  const spread = derivedSpread ?? declaredSpread;
   const warnings = Array.isArray(row.warnings)
     ? row.warnings.filter((item): item is string => typeof item === 'string').slice(0, 20)
     : [];
@@ -166,7 +187,7 @@ function parsePayload(value: unknown): Payload {
     receivedAt: receivedAt && Number.isFinite(Date.parse(receivedAt)) ? receivedAt : '',
     freshness,
     asks, bids, bestAsk, bestBid,
-    spread: finite(row.spread),
+    spread,
     spreadPct: finite(row.spreadPct),
     imbalance: finite(row.imbalance),
     warnings,
