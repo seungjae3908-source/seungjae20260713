@@ -62,7 +62,7 @@ function isValidPortfolioChartOverlay(value: unknown): value is PortfolioChartOv
 
   const ticker = typeof value.ticker === "string" ? value.ticker.trim().toUpperCase() : "";
   const name = typeof value.name === "string" ? value.name.trim() : "";
-  if (!ticker || !name || value.ticker !== ticker) return false;
+  if (!ticker || !PORTFOLIO_TICKER_PATTERN.test(ticker) || !name || value.ticker !== ticker) return false;
 
   if (value.market !== "KR" && value.market !== "US") return false;
   const expectedCurrency = value.market === "US" ? "USD" : "KRW";
@@ -196,7 +196,7 @@ export function syncPortfolioChartOverlays(rows: PortfolioOverlayInput[]) {
     const averagePrice = Number(row.average_price);
 
     if (
-      !ticker ||
+      !PORTFOLIO_TICKER_PATTERN.test(ticker) ||
       !Number.isFinite(quantity) ||
       quantity <= 0 ||
       !Number.isFinite(averagePrice) ||
