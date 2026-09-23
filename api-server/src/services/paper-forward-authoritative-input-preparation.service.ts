@@ -245,6 +245,12 @@ export async function preparePaperForwardAuthoritativeInputs(
     }
   }
 
+  if (liquidityEvidence && liquidityEvidence.observedAtMs > nowMs) {
+    blockers.push('LIQUIDITY:EVIDENCE_FROM_FUTURE_AT_PREPARATION');
+  }
+  if (partialFillEvidence && partialFillEvidence.observedAtMs > nowMs) {
+    blockers.push('PARTIAL_FILL:EVIDENCE_FROM_FUTURE_AT_PREPARATION');
+  }
   if (liquidityEvidence && nowMs - liquidityEvidence.observedAtMs > maximumAgeMs) {
     blockers.push('LIQUIDITY:EVIDENCE_STALE_AT_PREPARATION');
   }
