@@ -33,8 +33,9 @@ function money(value: number | null | undefined, currency: string) {
 }
 
 function costMoney(trade: Pick<UnifiedTradeCycle, 'fees' | 'tax' | 'costEvidence' | 'currency'>) {
-  if (trade.costEvidence.status !== 'READY' || trade.fees == null || trade.tax == null) return 'N/A';
-  return money(trade.fees + trade.tax, trade.currency);
+  if (trade.costEvidence?.status !== 'READY' || trade.fees == null || trade.tax == null) return 'N/A';
+  const totalCost = trade.fees + trade.tax;
+  return money(totalCost, trade.currency);
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
