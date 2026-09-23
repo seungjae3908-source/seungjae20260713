@@ -64,8 +64,6 @@ jobs:
           grep -q 'PRIVATE_API_ENABLED=false' research-production/deploy/activate-server.sh
           grep -q 'ORDER_AUTHORITY=false' research-production/deploy/activate-server.sh
           grep -q 'research-production-forward.timer' research-production/deploy/activate-server.sh
-          grep -q 'PAPER_FORWARD_RISK_POLICY_DECISION_PATH' research-production/deploy/activate-server.sh
-          grep -q 'natural-paper-btcusdt-v1.json' .github/workflows/research-production-activation.yml
 
   authorize:
     if: >-
@@ -377,7 +375,6 @@ jobs:
       SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
       SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
       REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
-      PAPER_FORWARD_RISK_POLICY_DECISION_PATH: /opt/investment-research/releases/${{ needs.authorize.outputs.target_sha }}/market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v1.json
     steps:
       - uses: actions/checkout@v4
         with:
@@ -420,7 +417,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          remote_env="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q PAPER_FORWARD_RISK_POLICY_DECISION_PATH=%q' "$TARGET_SHA" "$REPOSITORY_URL" "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH")"
+          remote_env="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q' "$TARGET_SHA" "$REPOSITORY_URL")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- preflight" \
             < research-production/deploy/activate-server.sh
@@ -429,7 +426,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          remote_env="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q PAPER_FORWARD_RISK_POLICY_DECISION_PATH=%q' "$TARGET_SHA" "$REPOSITORY_URL" "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH")"
+          remote_env="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q' "$TARGET_SHA" "$REPOSITORY_URL")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- activate" \
             < research-production/deploy/activate-server.sh
