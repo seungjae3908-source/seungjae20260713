@@ -184,10 +184,7 @@ export function createAiChartPublicStreamClient(
         || status === 'FALLBACK_POLLING'
       ) return;
       try { socket.send(subscription.heartbeatPayload); }
-      catch {
-        try { socket.close(1011, 'heartbeat-send-failed'); }
-        catch { forceFallback('HEARTBEAT_SEND_FAILED'); return; }
-      }
+      catch { forceFallback('HEARTBEAT_SEND_FAILED'); return; }
       scheduleHeartbeat();
     }, subscription.heartbeatIntervalMs);
   };
