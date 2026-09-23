@@ -149,7 +149,9 @@ export function buildResearchFailureDecisionV1(memory, { strategyIdentityDigest 
   assertResearchFailureMemoryV1(memory);
   const identity = String(strategyIdentityDigest ?? '').toLowerCase();
   if (!HASH64.test(identity)) throw new TypeError('strategyIdentityDigest must be SHA-256 hex');
-  const matches = memory.observations.filter((entry) => entry.failureObservation.strategyIdentityDigest === identity);
+  const matches = memory.observations.filter(
+    (entry) => entry.failureObservation.strategyIdentityDigest.toLowerCase() === identity,
+  );
   if (matches.length === 0) {
     return deepFreeze({
       status: 'NO_KNOWN_FAILURE',
@@ -191,7 +193,7 @@ export function summarizeResearchFailureMemoryV1(memory) {
   let latestObservedAt = null;
   for (const entry of memory.observations) {
     const row = entry.failureObservation;
-    strategies.add(row.strategyIdentityDigest);
+    strategies.add(row.strategyIdentityDigest.toLowerCase());
     byStage[row.stage] = (byStage[row.stage] ?? 0) + 1;
     byStatus[row.status] = (byStatus[row.status] ?? 0) + 1;
     if (latestObservedAt == null || Date.parse(row.observedAt) > Date.parse(latestObservedAt)) latestObservedAt = row.observedAt;
