@@ -51,7 +51,9 @@ function assertJsonOwnPropertyShape(value) {
 function assertJsonSafe(value, seen = new Set()) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return;
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new Error("PAPER_FORWARD_LEARNING_VALUE_NOT_JSON_SAFE");
+    if (!Number.isFinite(value) || Object.is(value, -0)) {
+      throw new Error("PAPER_FORWARD_LEARNING_VALUE_NOT_JSON_SAFE");
+    }
     return;
   }
   if (!value || typeof value !== "object") {
