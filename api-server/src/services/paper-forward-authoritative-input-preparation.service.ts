@@ -85,6 +85,8 @@ const SHA40 = /^[0-9a-f]{40}$/u;
 const PAPER_INSTRUMENT_SYMBOL = /^[A-Z0-9._:-]{1,40}$/u;
 const NATURAL_RUNTIME_MAXIMUM_AGE_MS = 30_000;
 
+type PaperSide = 'LONG' | 'SHORT';
+
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -107,6 +109,10 @@ function symbol(value: unknown): string | null {
   if (!nonEmpty(value)) return null;
   const normalized = value.trim().toUpperCase();
   return PAPER_INSTRUMENT_SYMBOL.test(normalized) ? normalized : null;
+}
+
+function side(value: unknown): PaperSide | null {
+  return value === 'LONG' || value === 'SHORT' ? value : null;
 }
 
 function blockersFrom(value: unknown): string[] {
@@ -182,9 +188,11 @@ export async function preparePaperForwardAuthoritativeInputs(
   const expectedPartial = input?.partialFill?.expected;
   const riskSymbol = symbol(riskRequest?.symbol);
   const partialSymbol = symbol(expectedPartial?.symbol);
+  const partialSide = side(expectedPartial?.side);
   if (expectedPartial?.market !== 'CRYPTO_FUTURES'
     || !riskSymbol
     || !partialSymbol
+    || !partialSide
     || partialSymbol !== riskSymbol) {
     blockers.push('PREPARATION_PARTIAL_FILL_SCOPE_MISMATCH');
   }
@@ -195,11 +203,14 @@ export async function preparePaperForwardAuthoritativeInputs(
     blockers.push('PREPARATION_LIQUIDITY_SCOPE_REQUIRED');
   } else {
     const liquiditySymbol = symbol(liquidityExpected.symbol);
+    const liquiditySide = side(liquidityExpected.side);
     if (String(liquidityExpected.market ?? '') !== 'CRYPTO_FUTURES'
       || !riskSymbol
       || !liquiditySymbol
+      || !partialSide
+      || !liquiditySide
       || liquiditySymbol !== riskSymbol
-      || String(liquidityExpected.side ?? '') !== String(expectedPartial?.side ?? '')) {
+      || liquiditySide !== partialSide) {
       blockers.push('PREPARATION_LIQUIDITY_SCOPE_MISMATCH');
     }
   }
