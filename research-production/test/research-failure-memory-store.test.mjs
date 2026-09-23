@@ -92,3 +92,14 @@ test('persisted memory tamper is detected before append',async()=>{
     /RESEARCH_FAILURE_OBSERVATION_INVALID|DIGEST|MISMATCH/,
   );
 });
+
+test('persisted memory from a different research SHA is rejected fail-closed',async()=>{
+  const f=await fixture();
+  await ingestResearchFailureObservationFileV1({
+    memoryPath:f.memoryPath,summaryPath:f.summaryPath,researchSha:SHA,observationPath:f.input,
+  });
+  await assert.rejects(
+    loadResearchFailureMemoryV1({memoryPath:f.memoryPath,researchSha:'b'.repeat(40)}),
+    /RESEARCH_FAILURE_MEMORY_RESEARCH_SHA_MISMATCH/,
+  );
+});
