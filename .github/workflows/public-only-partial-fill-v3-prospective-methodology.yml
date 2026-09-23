@@ -88,11 +88,12 @@ jobs:
         run: |
           set -euo pipefail
           FILE='.github/workflows/public-only-partial-fill-v3-prospective-methodology.yml'
-          if grep -Eq '^[[:space:]]{0,2}(schedule:|workflow_dispatch:)' "$FILE"; then
+          grep -Fq '  pull_request:' "$FILE"
+          if grep -Eq '^  (schedule:|workflow_dispatch:)' "$FILE"; then
             echo 'V3 validation workflow contains a manual or scheduled activation trigger' >&2
             exit 1
           fi
-          if grep -Eq '^[[:space:]]{0,8}environment:[[:space:]]*production[[:space:]]* "$FILE"; then
-            echo 'V3 validation workflow references the protected production environment' >&2
+          if grep -Eq '^      environment:' "$FILE"; then
+            echo 'V3 validation workflow must not bind any protected environment' >&2
             exit 1
           fi
