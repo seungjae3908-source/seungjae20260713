@@ -97,7 +97,7 @@ test("lossy JSON learning payloads fail closed before persistence", async () => 
   const directory = join(sandbox, "learning");
   try {
     const store = createFilePaperLearningStore({ directory });
-    for (const lossyValue of [Number.NaN, Number.POSITIVE_INFINITY, undefined]) {
+    for (const lossyValue of [Number.NaN, Number.POSITIVE_INFINITY, -0, undefined]) {
       await assert.rejects(
         store.putIfAbsent({
           key: "paper-signal:signal-1",
