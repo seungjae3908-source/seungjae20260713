@@ -320,6 +320,28 @@ test('separator-distinct liquidity symbol identities fail closed before validato
   assert.ok(result.blockers.includes('PREPARATION_LIQUIDITY_SCOPE_MISMATCH'));
 });
 
+test('same invalid symbol identity fails closed before validator execution', async () => {
+  const input = structuredClone(baseInput()) as any;
+  input.riskPolicyRequest.symbol = 'BTC/USDT';
+  input.riskPolicyRecord.symbolScopes = ['BTC/USDT'];
+  input.partialFill.expected.symbol = 'BTC/USDT';
+  input.liquidity.liquidityImpactFirewallInput.expected.symbol = 'BTC/USDT';
+  const result = await preparePaperForwardAuthoritativeInputs(input, {
+    createRiskProducer: () => {
+      throw new Error('must not execute');
+    },
+    buildLiquidity: () => {
+      throw new Error('must not execute');
+    },
+    buildPartialFill: () => {
+      throw new Error('must not execute');
+    },
+  });
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.ok(result.blockers.includes('PREPARATION_PARTIAL_FILL_SCOPE_MISMATCH'));
+  assert.ok(result.blockers.includes('PREPARATION_LIQUIDITY_SCOPE_MISMATCH'));
+});
+
 test('invalid exact research SHA fails closed', async () => {
   const input = structuredClone(baseInput()) as any;
   input.researchCodeSha = 'not-a-sha';
