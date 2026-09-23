@@ -28,6 +28,7 @@ interface PortfolioOverlayInput {
 const STORAGE_KEY = "sa-portfolio-chart-overlays-v1";
 const PURCHASE_DATE_KEY = "sa-portfolio-purchase-dates-v1";
 const RATE_EPSILON = 1e-8;
+const PORTFOLIO_TICKER_PATTERN = /^[A-Z0-9][A-Z0-9.-]{0,31}$/;
 
 function hasStorage() {
   return typeof window !== "undefined" && Boolean(window.localStorage);
@@ -36,7 +37,11 @@ function hasStorage() {
 function normalizeDate(value: unknown) {
   const text = String(value ?? "").trim();
 
-  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    const parsed = new Date(`${text}T00:00:00.000Z`);
+    if (Number.isNaN(parsed.getTime())) return "";
+    return parsed.toISOString().slice(0, 10) === text ? text : "";
+  }
 
   const parsed = new Date(text);
   if (Number.isNaN(parsed.getTime())) return "";
@@ -107,6 +112,24 @@ export function parsePortfolioChartOverlays(value: unknown): PortfolioChartOverl
   return overlays;
 }
 
+export function parsePortfolioPurchaseDates(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+
+  const dates: Record<string, string> = {};
+  for (const [ticker, purchaseDate] of Object.entries(value)) {
+    const normalizedTicker = ticker.trim().toUpperCase();
+    if (ticker !== normalizedTicker || !PORTFOLIO_TICKER_PATTERN.test(normalizedTicker)) {
+      continue;
+    }
+    if (typeof purchaseDate !== "string" || normalizeDate(purchaseDate) !== purchaseDate) {
+      continue;
+    }
+    dates[normalizedTicker] = purchaseDate;
+  }
+
+  return dates;
+}
+
 function readPurchaseDates(): Record<string, string> {
   if (!hasStorage()) return {};
 
@@ -115,7 +138,7 @@ function readPurchaseDates(): Record<string, string> {
       window.localStorage.getItem(PURCHASE_DATE_KEY) ?? "{}",
     );
 
-    return parsed && typeof parsed === "object" ? parsed : {};
+    return parsePortfolioPurchaseDates(parsed);
   } catch {
     return {};
   }
@@ -130,7 +153,7 @@ export function rememberPurchaseDate(ticker: string, date: string) {
 
   const normalizedTicker = ticker.trim().toUpperCase();
   const normalizedDate = normalizeDate(date);
-  if (!normalizedTicker || !normalizedDate) return;
+  if (!PORTFOLIO_TICKER_PATTERN.test(normalizedTicker) || !normalizedDate) return;
 
   const dates = readPurchaseDates();
   dates[normalizedTicker] = normalizedDate;
