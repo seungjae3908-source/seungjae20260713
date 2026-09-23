@@ -1,0 +1,94 @@
+name: Public Only Partial Fill V3 Prospective Methodology
+
+on:
+  pull_request:
+    paths:
+      - 'api-server/src/services/public-forward-partial-fill-v3-prospective-methodology.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-v3-prospective-methodology.service.test.ts'
+      - '.github/workflows/public-only-partial-fill-v3-prospective-methodology.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-only-partial-fill-v3-prospective-methodology-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Verify exact pull request head
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck API server
+        run: pnpm --dir api-server run typecheck
+
+      - name: Bundle focused V3 methodology regression
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/services/public-forward-partial-fill-v3-prospective-methodology.service.test.ts
+          --bundle --platform=node --format=cjs --target=node24
+          --outfile=/tmp/public-forward-partial-fill-v3-prospective-methodology.test.cjs
+
+      - name: Run focused V3 methodology regression
+        run: node --test /tmp/public-forward-partial-fill-v3-prospective-methodology.test.cjs
+
+      - name: Verify public-only fail-closed invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='api-server/src/services/public-forward-partial-fill-v3-prospective-methodology.service.ts'
+          grep -Fq 'predecessorV2MutationAllowed: false' "$FILE"
+          grep -Fq 'predecessorEvidenceRewriteAllowed: false' "$FILE"
+          grep -Fq 'retrospectiveCreditAllowed: false' "$FILE"
+          grep -Fq 'actualFillInferenceAllowed: false' "$FILE"
+          grep -Fq 'queuePositionInferenceAllowed: false' "$FILE"
+          grep -Fq 'modeledEvidenceMayBecomeActualEvidence: false' "$FILE"
+          grep -Fq 'modeledEvidenceMaySatisfyActualExecutionGates: false' "$FILE"
+          grep -Fq 'existingNumericCriteriaRelaxed: false' "$FILE"
+          grep -Fq 'actualFillObserved: false' "$FILE"
+          grep -Fq 'actualFillFraction: null' "$FILE"
+          grep -Fq 'queuePositionKnown: false' "$FILE"
+          grep -Fq 'partialFillCostPercent: null' "$FILE"
+          grep -Fq 'economicCreditCreated: false' "$FILE"
+          grep -Fq 'profitabilityCredit: 0' "$FILE"
+          grep -Fq 'fullCostReady: false' "$FILE"
+          grep -Fq 'evidenceComplete: 0' "$FILE"
+          grep -Fq "executionAuthority: 'NONE'" "$FILE"
+          grep -Fq 'privateApiAllowed: false' "$FILE"
+          grep -Fq 'liveTrading: false' "$FILE"
+          grep -Fq 'realOrderEnabled: false' "$FILE"
+
+      - name: Verify Draft-only workflow boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='.github/workflows/public-only-partial-fill-v3-prospective-methodology.yml'
+          if grep -Eq '^[[:space:]]*schedule:|workflow_dispatch:|environment:[[:space:]]*production|ssh |scp ' "$FILE"; then
+            echo 'V3 validation workflow contains activation/deploy authority' >&2
+            exit 1
+          fi
