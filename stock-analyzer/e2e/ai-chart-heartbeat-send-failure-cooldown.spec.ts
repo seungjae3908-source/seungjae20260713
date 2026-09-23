@@ -79,7 +79,10 @@ test('heartbeat send failure keeps recreated default stream clients on bounded R
 
     runNextTimer();
 
-    expect(first.snapshot().status).toBe('FALLBACK_POLLING');
+    expect(first.snapshot()).toMatchObject({
+      status: 'FALLBACK_POLLING',
+      reason: 'HEARTBEAT_SEND_FAILED',
+    });
     expect(firstStatuses.at(-1)).toEqual({
       status: 'FALLBACK_POLLING',
       reason: 'HEARTBEAT_SEND_FAILED',
@@ -99,7 +102,10 @@ test('heartbeat send failure keeps recreated default stream clients on bounded R
 
     second.start();
     expect(HeartbeatSendFailureSocketFake.instances).toHaveLength(1);
-    expect(second.snapshot().status).toBe('FALLBACK_POLLING');
+    expect(second.snapshot()).toMatchObject({
+      status: 'FALLBACK_POLLING',
+      reason: 'PROVIDER_FALLBACK_COOLDOWN',
+    });
     expect(secondStatuses).toEqual([{
       status: 'FALLBACK_POLLING',
       reason: 'PROVIDER_FALLBACK_COOLDOWN',
