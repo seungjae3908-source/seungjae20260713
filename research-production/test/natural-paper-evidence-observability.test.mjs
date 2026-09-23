@@ -94,6 +94,7 @@ function fixture({
       count: counts.evidence,
       provenance: 'authoritative Paper source completeness',
       measuredAtMs: OBSERVED_AT,
+      identity: reasonIdentity(null),
     }],
     canonicalNaturalStageEvidence: {
       schemaVersion: 'canonical-natural-paper-stage-evidence-v1',
@@ -206,6 +207,37 @@ test('does not let unknown evidence masquerade as a measured zero', () => {
   assert.equal(artifact.firstZeroStage, 'UNKNOWN');
   assert.equal(artifact.firstUnknownStage, 'EVIDENCE');
   assert.equal(artifact.firstZeroReason, 'MISSING_EVIDENCE');
+});
+
+test('rejects measured EVIDENCE from a different natural cycle identity', () => {
+  const input = fixture();
+  input.naturalFunnelMeasurements[0].identity = {
+    ...reasonIdentity(null),
+    cycleId: 'paper-forward-public-evidence-4h-v1:41',
+  };
+  const artifact = build(input);
+  const evidence = artifact.stages.find((stageRow) => stageRow.stage === 'EVIDENCE');
+  assert.equal(artifact.naturalFunnelObservable, false);
+  assert.equal(artifact.funnel.authoritativeEvidenceReadyCount, null);
+  assert.equal(artifact.firstZeroStage, 'UNKNOWN');
+  assert.equal(artifact.firstUnknownStage, 'EVIDENCE');
+  assert.equal(artifact.firstZeroReason, 'IDENTITY_MISMATCH');
+  assert.equal(evidence.status, 'IDENTITY_MISMATCH');
+  assert.equal(evidence.identityValid, false);
+});
+
+test('rejects measured EVIDENCE whose own identity is missing', () => {
+  const input = fixture();
+  delete input.naturalFunnelMeasurements[0].identity;
+  const artifact = build(input);
+  const evidence = artifact.stages.find((stageRow) => stageRow.stage === 'EVIDENCE');
+  assert.equal(artifact.naturalFunnelObservable, false);
+  assert.equal(artifact.funnel.authoritativeEvidenceReadyCount, null);
+  assert.equal(artifact.firstZeroStage, 'UNKNOWN');
+  assert.equal(artifact.firstUnknownStage, 'EVIDENCE');
+  assert.equal(artifact.firstZeroReason, 'IDENTITY_MISMATCH');
+  assert.equal(evidence.status, 'IDENTITY_MISMATCH');
+  assert.equal(evidence.identityValid, false);
 });
 
 for (const [name, mutate] of [
