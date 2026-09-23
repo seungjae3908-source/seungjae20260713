@@ -7,6 +7,7 @@ import {
   type PublicForwardPartialFillCalibrationObservation,
 } from './public-forward-partial-fill-calibration-collector.service';
 import {
+  PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY,
   PUBLIC_FORWARD_PARTIAL_FILL_V3_SAFETY,
   buildPublicForwardPartialFillV3ModeledObservation,
   buildPublicForwardPartialFillV3ProspectiveCohort,
@@ -31,12 +32,32 @@ function frozenRef(identity: string, frozenAtMs = 1_000): PublicForwardPartialFi
   });
 }
 
+function predecessorV2(frozenAtMs = 1_000) {
+  const authority = PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY;
+  return Object.freeze({
+    identity: authority.authorityIdentity,
+    version: authority.authorityVersion,
+    digest: authority.cohortDigest,
+    frozenAtMs,
+    status: 'FROZEN' as const,
+    policyDigest: authority.policyDigest,
+    cohortDigest: authority.cohortDigest,
+    totalSlotN: authority.totalSlotN,
+    trainSlotN: authority.trainSlotN,
+    validationSlotN: authority.validationSlotN,
+    oosSlotN: authority.oosSlotN,
+    perScopeEffectiveIndependentMinimum: authority.perScopeEffectiveIndependentMinimum,
+    scopeCellCount: authority.scopeCellCount,
+    mechanicalFloorEffectiveIndependent: authority.mechanicalFloorEffectiveIndependent,
+  });
+}
+
 function methodology() {
   return buildPublicForwardPartialFillV3ProspectiveMethodology({
     methodologyIdentity: 'TEST_ONLY_PUBLIC_ONLY_PARTIAL_FILL_V3',
     methodologyVersion: 'v3-test',
     methodologyFrozenAtMs: METHODOLOGY_FROZEN_AT,
-    predecessorV2: frozenRef('TEST_ONLY_V2_PREDECESSOR'),
+    predecessorV2: predecessorV2(),
     businessTolerance: frozenRef('TEST_ONLY_EXISTING_BUSINESS_TOLERANCE'),
     statisticalMethodology: frozenRef('TEST_ONLY_EXISTING_STATISTICAL_METHODOLOGY'),
     numericMinimumArtifact: frozenRef('TEST_ONLY_EXISTING_NUMERIC_MINIMUM'),
@@ -130,12 +151,41 @@ test('builds immutable V3 methodology by reference without relaxing predecessor 
   assert.equal(Object.isFrozen(value), true);
 });
 
+test('rejects any predecessor V2 digest or numeric-criteria drift', () => {
+  const base = predecessorV2();
+  assert.throws(() => buildPublicForwardPartialFillV3ProspectiveMethodology({
+    methodologyIdentity: 'TEST_ONLY_PUBLIC_ONLY_PARTIAL_FILL_V3',
+    methodologyVersion: 'v3-test',
+    methodologyFrozenAtMs: METHODOLOGY_FROZEN_AT,
+    predecessorV2: {
+      ...base,
+      policyDigest: sha256('tampered-v2-policy'),
+      totalSlotN: 1025,
+    },
+    businessTolerance: frozenRef('TEST_ONLY_EXISTING_BUSINESS_TOLERANCE'),
+    statisticalMethodology: frozenRef('TEST_ONLY_EXISTING_STATISTICAL_METHODOLOGY'),
+    numericMinimumArtifact: frozenRef('TEST_ONLY_EXISTING_NUMERIC_MINIMUM'),
+    scopeUniverse: frozenRef('TEST_ONLY_EXISTING_SCOPE_UNIVERSE'),
+    modeledLane: {
+      evidenceClass: 'MODELED_PUBLIC_ONLY',
+      modelIdentity: 'TEST_ONLY_OPPORTUNITY_BOUND_MODEL',
+      modelVersion: 'v1',
+      modelDigest: sha256('TEST_ONLY_OPPORTUNITY_BOUND_MODEL'),
+      modelFrozenAtMs: 9_000,
+      conservativeOpportunityBoundOnly: true,
+      actualExecutionSubstitutionAllowed: false,
+      actualFillInferenceAllowed: false,
+      queuePositionInferenceAllowed: false,
+    },
+  }), /PREDECESSOR_V2_AUTHORITY_DIGEST_MISMATCH.*PREDECESSOR_V2_NUMERIC_CRITERIA_MISMATCH/);
+});
+
 test('rejects V3 methodology when a frozen authority is newer than methodology freeze', () => {
   assert.throws(() => buildPublicForwardPartialFillV3ProspectiveMethodology({
     methodologyIdentity: 'TEST_ONLY_PUBLIC_ONLY_PARTIAL_FILL_V3',
     methodologyVersion: 'v3-test',
     methodologyFrozenAtMs: METHODOLOGY_FROZEN_AT,
-    predecessorV2: frozenRef('TEST_ONLY_V2_PREDECESSOR'),
+    predecessorV2: predecessorV2(),
     businessTolerance: frozenRef('TEST_ONLY_EXISTING_BUSINESS_TOLERANCE'),
     statisticalMethodology: frozenRef('TEST_ONLY_EXISTING_STATISTICAL_METHODOLOGY'),
     numericMinimumArtifact: frozenRef('TEST_ONLY_EXISTING_NUMERIC_MINIMUM', METHODOLOGY_FROZEN_AT + 1),
@@ -159,7 +209,7 @@ test('rejects modeled lane that attempts to infer actual fill or queue position'
     methodologyIdentity: 'TEST_ONLY_PUBLIC_ONLY_PARTIAL_FILL_V3',
     methodologyVersion: 'v3-test',
     methodologyFrozenAtMs: METHODOLOGY_FROZEN_AT,
-    predecessorV2: frozenRef('TEST_ONLY_V2_PREDECESSOR'),
+    predecessorV2: predecessorV2(),
     businessTolerance: frozenRef('TEST_ONLY_EXISTING_BUSINESS_TOLERANCE'),
     statisticalMethodology: frozenRef('TEST_ONLY_EXISTING_STATISTICAL_METHODOLOGY'),
     numericMinimumArtifact: frozenRef('TEST_ONLY_EXISTING_NUMERIC_MINIMUM'),
@@ -280,6 +330,13 @@ test('non-natural, replay-like sample class cannot enter the prospective V3 lane
 });
 
 test('safety contract forbids V2 mutation, evidence promotion and economic authority', () => {
+  assert.equal(PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY.totalSlotN, 1024);
+  assert.equal(PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY.trainSlotN, 512);
+  assert.equal(PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY.validationSlotN, 256);
+  assert.equal(PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY.oosSlotN, 256);
+  assert.equal(PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY.perScopeEffectiveIndependentMinimum, 178);
+  assert.equal(PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY.scopeCellCount, 4);
+  assert.equal(PUBLIC_FORWARD_PARTIAL_FILL_V2_FROZEN_CAPACITY_AUTHORITY.mechanicalFloorEffectiveIndependent, 712);
   assert.equal(PUBLIC_FORWARD_PARTIAL_FILL_V3_SAFETY.publicOnly, true);
   assert.equal(PUBLIC_FORWARD_PARTIAL_FILL_V3_SAFETY.predecessorV2MutationAllowed, false);
   assert.equal(PUBLIC_FORWARD_PARTIAL_FILL_V3_SAFETY.predecessorEvidenceRewriteAllowed, false);
