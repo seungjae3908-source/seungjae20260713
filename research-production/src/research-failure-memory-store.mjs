@@ -16,6 +16,12 @@ function absolutePath(value, name) {
   return path;
 }
 
+function exactResearchSha(value) {
+  const sha=String(value??'').trim().toLowerCase();
+  if(!/^[0-9a-f]{40}$/.test(sha)) throw new TypeError('researchSha must be exact SHA');
+  return sha;
+}
+
 async function atomicJson(path,value) {
   await mkdir(dirname(path),{recursive:true,mode:0o700});
   const temp=`${path}.tmp-${process.pid}-${Date.now()}`;
@@ -28,12 +34,16 @@ export async function loadResearchFailureMemoryV1({
   researchSha,
 } = {}) {
   const path=absolutePath(memoryPath,'memoryPath');
+  const expectedResearchSha=exactResearchSha(researchSha);
   try {
     const memory=JSON.parse(await readFile(path,'utf8'));
     assertResearchFailureMemoryV1(memory);
+    if(memory.createdByResearchSha.toLowerCase()!==expectedResearchSha) {
+      throw new Error('RESEARCH_FAILURE_MEMORY_RESEARCH_SHA_MISMATCH');
+    }
     return memory;
   } catch(error) {
-    if(error?.code==='ENOENT') return createResearchFailureMemoryV1({researchSha});
+    if(error?.code==='ENOENT') return createResearchFailureMemoryV1({researchSha:expectedResearchSha});
     throw error;
   }
 }
