@@ -307,7 +307,7 @@ function reasonIdentityDigests(row = {}) {
   return values.map((value) => digest(value) ?? (nonEmpty(value) ? sha256(value.trim()) : null)).filter(Boolean);
 }
 
-function collectedReasonRows(input, identity, naturalEligible) {
+function collectedReasonRows(input, identity, naturalEligible, verifiedAtMs) {
   if (!naturalEligible) return [];
   const root = canonicalRoot(input);
   const canonicalRows = Array.isArray(root.reasonObservations) ? root.reasonObservations : [];
@@ -324,6 +324,8 @@ function collectedReasonRows(input, identity, naturalEligible) {
     if (row.authoritative === false || row.freshness === 'STALE') continue;
     const sourceIdentity = row.identity && typeof row.identity === 'object' ? row.identity : row;
     if (!rootIdentityMatches({ identity: sourceIdentity }, identity)) continue;
+    const observedAtMs = sourceTimestamp(row);
+    if (observedAtMs === null || observedAtMs > verifiedAtMs + MAX_FUTURE_SKEW_MS) continue;
     const category = reasonCategory(row);
     if (!category) continue;
     const observationIdDigests = reasonIdentityDigests(row);
@@ -334,7 +336,7 @@ function collectedReasonRows(input, identity, naturalEligible) {
         ? String(row.sourceCode ?? row.reasonCode).trim().slice(0, 240)
         : null,
       canonicalReason: nonEmpty(row.canonicalReason) ? row.canonicalReason.trim().slice(0, 100) : null,
-      sourceTimestampMs: sourceTimestamp(row),
+      sourceTimestampMs: observedAtMs,
       observationIdDigests,
       identityDigest: sha256({ cycleId: identity.cycleId, observationIdDigests }),
     };
@@ -427,7 +429,7 @@ export function buildNaturalPaperEvidenceObservabilityArtifact(input = {}, { ver
   const stages = NATURAL_PAPER_OBSERVABILITY_STAGES.map((descriptor) => (
     stageObservation(input, descriptor, identity, verified, rootIdentityValid, naturalEligible)
   ));
-  const reasons = collectedReasonRows(input, identity, naturalEligible);
+  const reasons = collectedReasonRows(input, identity, naturalEligible, verified);
   const first = firstZero(stages, reasons);
   const counts = Object.fromEntries(stages.map((stage) => [stage.field, stage.count]));
   const rejections = reasonCounts(reasons);
