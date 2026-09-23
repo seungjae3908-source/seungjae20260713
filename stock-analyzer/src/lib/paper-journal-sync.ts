@@ -64,21 +64,31 @@ export type UnifiedTradeReview = {
   performanceScore:number; qualityScore:number; grade:UnifiedTradeGrade; good:string[]; bad:string[]; improvements:string[];
   mistakes:string[]; deterministic:true; externalAiCalled:false;
 };
+export type UnifiedJournalCostComponentEvidence = {
+  status:'READY'|'NOT_AVAILABLE'; source:string|null; reason:string|null;
+};
+export type UnifiedJournalCostEvidence = {
+  status:'READY'|'NOT_AVAILABLE'; reasons:readonly string[];
+  fees:UnifiedJournalCostComponentEvidence; tax:UnifiedJournalCostComponentEvidence;
+};
+export type UnifiedTradeLeg = {
+  orderId:string; at:string; price:number; quantity:number; fees:number|null; tax:number|null; costEvidence:UnifiedJournalCostEvidence;
+};
 export type UnifiedTradeCycle = {
   id:string; source:UnifiedTradeSource; broker:string; accountIdMasked:string; market:UnifiedTradeMarket; symbol:string;
   positionSide:'LONG'|'SHORT'; currency:'KRW'|'USD'|'USDT'; status:'OPEN'|'CLOSED'; openedAt:string; closedAt:string|null;
   entryPrice:number; exitPrice:number|null; totalQuantity:number; closedQuantity:number; remainingQuantity:number;
-  holdingTimeMs:number|null; grossPnl:number; fees:number; tax:number; netPnl:number; netReturnPercent:number|null;
+  holdingTimeMs:number|null; grossPnl:number; fees:number|null; tax:number|null; costEvidence:UnifiedJournalCostEvidence; netPnl:number|null; netReturnPercent:number|null;
   strategy:string|null; timeframe:string|null; stopLossPrice:number|null; targetPrice:number|null; ruleViolation:boolean;
   warnings:string[]; technicalSnapshot:UnifiedTechnicalSnapshot; review:UnifiedTradeReview;
-  initialEntry:{orderId:string;at:string;price:number;quantity:number;fees:number;tax:number};
-  additions:Array<{orderId:string;at:string;price:number;quantity:number;fees:number;tax:number}>;
-  partialExits:Array<{orderId:string;at:string;price:number;quantity:number;fees:number;tax:number}>;
-  finalExit:{orderId:string;at:string;price:number;quantity:number;fees:number;tax:number}|null;
+  initialEntry:UnifiedTradeLeg;
+  additions:UnifiedTradeLeg[];
+  partialExits:UnifiedTradeLeg[];
+  finalExit:UnifiedTradeLeg|null;
 };
 export type UnifiedJournalAnalytics = {
   sampleSize:number; openTrades:number; closedTrades:number; winRate:number|null; profitFactor:number|null;
-  averageReturnPercent:number|null; maximumConsecutiveLosses:number;
+  averageReturnPercent:number|null; maximumConsecutiveLosses:number|null;
   netPnlByCurrency:Array<{currency:'KRW'|'USD'|'USDT';value:number}>;
   totalCostsByCurrency:Array<{currency:'KRW'|'USD'|'USDT';value:number}>;
   byMarket:Array<{key:string;sampleSize:number;winRate:number|null;averageReturnPercent:number|null}>;
