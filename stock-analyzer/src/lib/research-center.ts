@@ -26,6 +26,22 @@ export interface ResearchCycleSummary {
   tasks: ResearchCycleTask[];
 }
 
+export interface ResearchTemporalCryptoSummary {
+  present: boolean;
+  status: 'MISSING' | 'INVALID' | 'complete' | 'partial_failure';
+  generatedAt: number | null;
+  researchSha: string | null;
+  failedCount: number | null;
+  observationCount: number | null;
+  ledgerDigest: string | null;
+  results: Array<{
+    symbol: string;
+    status: 'success' | 'failed';
+    observedCount: number;
+    appendedCount: number;
+  }>;
+}
+
 export interface ResearchPaperRuntime {
   present: boolean;
   status: string;
@@ -135,6 +151,24 @@ export interface StrategyHealthBinding {
   executionAuthority: 'NONE';
 }
 
+export interface ResearchFactoryRuntimeSummary {
+  present: boolean;
+  status: 'MISSING' | 'INVALID' | 'BLOCKED_POLICY_MISSING' | 'BLOCKED_POLICY_INVALID' | 'BLOCKED_NO_READY_PROFILES' | 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_MISSING' | 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_INVALID' | 'BLOCKED_RUNTIME_BINDINGS' | 'READY_NON_ACTIVATING';
+  generatedAt: number | null;
+  researchSha: string | null;
+  firstZero: string | null;
+  policyPresent: boolean | null;
+  policyValid: boolean | null;
+  policyDigest: string | null;
+  readyMarketCount: number | null;
+  blockedMarketCount: number | null;
+  readyProfileCount: number | null;
+  blockedProfileCount: number | null;
+  runtimeStatus: string | null;
+  nextFirstZero: string | null;
+  controlPlaneDigest: string | null;
+}
+
 export interface ResearchCenterOverview {
   schemaVersion: 'research-dashboard-overview-v1';
   generatedAt: number;
@@ -162,6 +196,10 @@ export interface ResearchCenterOverview {
       frozenSplitCounts: { TRAIN: number | null; VALIDATION: number | null; OOS: number | null };
     };
   };
+  dataFactory?: {
+    temporalCryptoFutures: ResearchTemporalCryptoSummary;
+  };
+  factory?: ResearchFactoryRuntimeSummary;
   paper: {
     runtime: ResearchPaperRuntime;
     ledger: ResearchPaperLedger;

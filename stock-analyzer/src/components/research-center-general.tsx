@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Activity, Clock3, FlaskConical, RefreshCw, ShieldCheck, TrendingUp, WalletCards } from 'lucide-react';
+import { Activity, Clock3, Database, FlaskConical, RefreshCw, ShieldCheck, TrendingUp, WalletCards } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { PROMOTION_STAGE_KO } from '@/lib/labels';
 import { fetchResearchCenterOverview, type ResearchCenterOverview } from '@/lib/research-center';
@@ -30,6 +30,52 @@ function executionState(overview: ResearchCenterOverview) {
     return { value: '실거래 비활성', detail: '읽기 전용 · 실행 권한 없음', tone: 'normal' as const };
   }
   return { value: '확인 필요', detail: '전문가 보기에서 권한 근거를 확인하세요.', tone: 'warning' as const };
+}
+
+function dataFactoryState(overview: ResearchCenterOverview) {
+  const temporal = overview.dataFactory?.temporalCryptoFutures;
+  if (!temporal) return { value: '미수집', detail: 'Temporal evidence 수집 기록이 없습니다.', tone: 'neutral' as const };
+  if (!temporal.present) return { value: '미수집', detail: 'Temporal evidence 수집 기록이 없습니다.', tone: 'neutral' as const };
+  if (temporal.status === 'INVALID') return { value: '확인 필요', detail: 'Temporal evidence 무결성 검증에 실패했습니다.', tone: 'warning' as const };
+  if (temporal.status === 'partial_failure') {
+    return {
+      value: temporal.observationCount == null ? '부분 실패' : `${temporal.observationCount.toLocaleString('ko-KR')}건`,
+      detail: `심볼 실패 ${temporal.failedCount ?? 0}건 · 정상 증거는 보존`,
+      tone: 'warning' as const,
+    };
+  }
+  return {
+    value: temporal.observationCount == null ? '누적 중' : `${temporal.observationCount.toLocaleString('ko-KR')}건`,
+    detail: `${temporal.results.length.toLocaleString('ko-KR')}개 심볼 · public temporal evidence`,
+    tone: 'progress' as const,
+  };
+}
+
+function factoryRuntimeState(overview: ResearchCenterOverview) {
+  const factory = overview.factory;
+  if (!factory?.present) return { value: '상태 미수집', detail: '리서치 팩토리 상태 기록이 아직 없습니다.', tone: 'neutral' as const };
+  if (factory.status === 'INVALID' || factory.status === 'BLOCKED_POLICY_INVALID') {
+    return { value: '확인 필요', detail: '팩토리 상태 또는 승인 정책 무결성을 확인해야 합니다.', tone: 'warning' as const };
+  }
+  if (factory.status === 'BLOCKED_POLICY_MISSING') {
+    return { value: '정책 확정 필요', detail: '후보 수·단계별 축소 정책이 아직 승인되지 않았습니다.', tone: 'warning' as const };
+  }
+  if (factory.status === 'BLOCKED_NO_READY_PROFILES') {
+    return { value: '연구 데이터 대기', detail: 'Canonical 시장 프로필 근거가 준비되는 중입니다.', tone: 'progress' as const };
+  }
+  if (factory.status === 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_MISSING') {
+    return { value: '개발 진단 필요', detail: '준비된 프로필의 DEVELOPMENT-only 진단 근거가 아직 없습니다.', tone: 'progress' as const };
+  }
+  if (factory.status === 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_INVALID') {
+    return { value: '개발 진단 오류', detail: '진단값 형식 또는 hindsight 금지 규칙을 확인해야 합니다.', tone: 'warning' as const };
+  }
+  if (factory.status === 'BLOCKED_RUNTIME_BINDINGS') {
+    return { value: '엔진 연결 중', detail: '기존 백테스터·검증 owner 연결 근거를 기다립니다.', tone: 'progress' as const };
+  }
+  if (factory.status === 'READY_NON_ACTIVATING') {
+    return { value: '연구 준비됨', detail: '자동 실행 전 단계까지 검증됐으며 실행 권한은 없습니다.', tone: 'normal' as const };
+  }
+  return { value: '상태 확인 중', detail: factory.firstZero ?? '팩토리 상태를 확인하고 있습니다.', tone: 'neutral' as const };
 }
 
 function paperSample(overview: ResearchCenterOverview) {
@@ -126,14 +172,18 @@ export function ResearchCenterGeneral() {
 
           {overview ? (() => {
             const research = researchState(overview);
+            const dataFactory = dataFactoryState(overview);
+            const factoryRuntime = factoryRuntimeState(overview);
             const sample = paperSample(overview);
             const shadow = shadowState(overview);
             const profitability = profitabilityState(overview);
             const execution = executionState(overview);
             return (
               <>
-                <section className="grid grid-cols-2 gap-2 lg:grid-cols-3" aria-label="연구 핵심 상태">
+                <section className="grid grid-cols-2 gap-2 lg:grid-cols-4" aria-label="연구 핵심 상태">
                   <SummaryCard icon={<Activity className="h-5 w-5" />} label="연구 상태" {...research} />
+                  <SummaryCard icon={<Database className="h-5 w-5" />} label="데이터 팩토리" {...dataFactory} />
+                  <SummaryCard icon={<FlaskConical className="h-5 w-5" />} label="리서치 팩토리" {...factoryRuntime} />
                   <SummaryCard icon={<WalletCards className="h-5 w-5" />} label="모의매매 표본" {...sample} />
                   <SummaryCard icon={<TrendingUp className="h-5 w-5" />} label={`${PROMOTION_STAGE_KO.SHADOW} 기록`} {...shadow} />
                   <SummaryCard icon={<FlaskConical className="h-5 w-5" />} label="수익성 검증" {...profitability} />
