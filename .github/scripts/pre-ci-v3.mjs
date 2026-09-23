@@ -89,7 +89,7 @@ async function runVirtualMergeGate(root, base, head, requireZeroLedger) {
   try {
     runShell(`git worktree add --detach "${worktree}" "${head}"`, root);
     try {
-      runShell(`git merge --no-commit --no-ff "${base}"`, worktree);
+      runShell(`git -c user.name=pre-ci-v3 -c user.email=pre-ci-v3@invalid.local merge --no-commit --no-ff "${base}"`, worktree);
     } catch (error) {
       throw new Error(`[VIRTUAL_MERGE_CONFLICT] ${error instanceof Error ? error.message : String(error)}`);
     }
