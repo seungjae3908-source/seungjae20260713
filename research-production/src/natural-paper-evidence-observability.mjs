@@ -301,13 +301,20 @@ function reasonIdentityDigests(row = {}) {
   const source = row.identity && typeof row.identity === 'object' ? row.identity : row;
   const values = source.observationIdDigests ?? row.observationIdDigests ?? source.observationIds ?? row.observationIds;
   if (!Array.isArray(values)) {
-    const one = source.observationIdDigest ?? row.observationIdDigest;
-    return one ? [digest(one)].filter(Boolean) : [];
+    const oneDigest = source.observationIdDigest ?? row.observationIdDigest;
+    if (oneDigest !== undefined && oneDigest !== null) {
+      const normalizedDigest = digest(oneDigest);
+      return normalizedDigest ? [normalizedDigest] : null;
+    }
+    const oneId = source.observationId ?? row.observationId;
+    return nonEmpty(oneId) ? [sha256(oneId.trim())] : null;
   }
-  return values.map((value) => digest(value) ?? (nonEmpty(value) ? sha256(value.trim()) : null)).filter(Boolean);
+  if (values.length === 0) return null;
+  const normalized = values.map((value) => digest(value) ?? (nonEmpty(value) ? sha256(value.trim()) : null));
+  return normalized.every(Boolean) ? normalized : null;
 }
 
-function collectedReasonRows(input, identity, naturalEligible) {
+function collectedReasonRows(input, identity, naturalEligible, verifiedAtMs) {
   if (!naturalEligible) return [];
   const root = canonicalRoot(input);
   const canonicalRows = Array.isArray(root.reasonObservations) ? root.reasonObservations : [];
@@ -324,9 +331,12 @@ function collectedReasonRows(input, identity, naturalEligible) {
     if (row.authoritative === false || row.freshness === 'STALE') continue;
     const sourceIdentity = row.identity && typeof row.identity === 'object' ? row.identity : row;
     if (!rootIdentityMatches({ identity: sourceIdentity }, identity)) continue;
+    const observedAtMs = sourceTimestamp(row);
+    if (observedAtMs === null || observedAtMs > verifiedAtMs + MAX_FUTURE_SKEW_MS) continue;
     const category = reasonCategory(row);
     if (!category) continue;
     const observationIdDigests = reasonIdentityDigests(row);
+    if (!observationIdDigests?.length) continue;
     const sanitized = {
       category,
       sourceStage: nonEmpty(row.sourceStage) ? row.sourceStage.trim().slice(0, 100) : null,
@@ -334,7 +344,7 @@ function collectedReasonRows(input, identity, naturalEligible) {
         ? String(row.sourceCode ?? row.reasonCode).trim().slice(0, 240)
         : null,
       canonicalReason: nonEmpty(row.canonicalReason) ? row.canonicalReason.trim().slice(0, 100) : null,
-      sourceTimestampMs: sourceTimestamp(row),
+      sourceTimestampMs: observedAtMs,
       observationIdDigests,
       identityDigest: sha256({ cycleId: identity.cycleId, observationIdDigests }),
     };
@@ -427,7 +437,7 @@ export function buildNaturalPaperEvidenceObservabilityArtifact(input = {}, { ver
   const stages = NATURAL_PAPER_OBSERVABILITY_STAGES.map((descriptor) => (
     stageObservation(input, descriptor, identity, verified, rootIdentityValid, naturalEligible)
   ));
-  const reasons = collectedReasonRows(input, identity, naturalEligible);
+  const reasons = collectedReasonRows(input, identity, naturalEligible, verified);
   const first = firstZero(stages, reasons);
   const counts = Object.fromEntries(stages.map((stage) => [stage.field, stage.count]));
   const rejections = reasonCounts(reasons);
