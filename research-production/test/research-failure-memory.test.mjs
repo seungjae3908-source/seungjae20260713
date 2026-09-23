@@ -15,6 +15,7 @@ import {
 const SHA='a'.repeat(40);
 const ID1='1'.repeat(64);
 const ID2='2'.repeat(64);
+const CASE_ID='ab'.repeat(32);
 
 function failure(overrides={}){
   return createResearchFailureObservationV1({
@@ -67,6 +68,32 @@ test('known failed identity cannot be automatically retried or mutated in place'
   assert.equal(decision.tournamentRestartRequired,true);
   assert.equal(decision.priorPerformanceInheritanceAllowed,false);
   assert.equal(decision.executionAuthority,'NONE');
+});
+
+test('failure identity digest case cannot bypass retry block or inflate strategy count',()=>{
+  let memory=createResearchFailureMemoryV1({researchSha:SHA});
+  memory=appendResearchFailureObservationV1(memory,failure({
+    strategyIdentityDigest:CASE_ID.toUpperCase(),
+    observedAt:'2026-09-20T00:20:00.000Z',
+  }));
+  const firstDecision=buildResearchFailureDecisionV1(memory,{strategyIdentityDigest:CASE_ID});
+  assert.equal(firstDecision.status,'AUTOMATIC_SAME_IDENTITY_RETRY_BLOCKED');
+  assert.equal(firstDecision.failureCount,1);
+  assert.equal(firstDecision.automaticSameStrategyRetryAllowed,false);
+
+  memory=appendResearchFailureObservationV1(memory,failure({
+    strategyIdentityDigest:CASE_ID,
+    stage:'PAPER',
+    status:'MISSING_EVIDENCE',
+    failureCodes:['SETTLEMENT_EVIDENCE_MISSING'],
+    observedAt:'2026-09-20T00:30:00.000Z',
+  }));
+  const secondDecision=buildResearchFailureDecisionV1(memory,{strategyIdentityDigest:CASE_ID.toUpperCase()});
+  const summary=summarizeResearchFailureMemoryV1(memory);
+  assert.equal(secondDecision.status,'AUTOMATIC_SAME_IDENTITY_RETRY_BLOCKED');
+  assert.equal(secondDecision.failureCount,2);
+  assert.equal(summary.observationCount,2);
+  assert.equal(summary.strategyIdentityCount,1);
 });
 
 test('unseen identity is not falsely labeled failed',()=>{
