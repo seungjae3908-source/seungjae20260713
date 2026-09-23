@@ -140,7 +140,34 @@ emit_task_failure_signature() {
   local task_id="$2"
   local cycle_file="$STATE/latest/$profile.json"
   if ! file_exists "$cycle_file"; then
-    printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=CYCLE_MISSING raw_log_included=false\n' "$profile" "$task_id"
+    printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=CYCLE_MISSING task_status=unknown raw_log_included=false\n' "$profile" "$task_id"
+    return 0
+  fi
+
+  local task_status=""
+  task_status="$(read_file "$cycle_file" | node -e '
+    let raw="";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", chunk => raw += chunk);
+    process.stdin.on("end", () => {
+      const taskId = String(process.argv[1] ?? "");
+      const targetSha = String(process.argv[2] ?? "").toLowerCase();
+      const cycle = JSON.parse(raw);
+      if (cycle?.researchSha !== targetSha) return;
+      if (!/^[a-z0-9][a-z0-9-]{1,80}$/u.test(taskId)) return;
+      const row = (Array.isArray(cycle?.results) ? cycle.results : [])
+        .find(item => item?.id === taskId);
+      const status = typeof row?.status === "string" ? row.status.trim() : "";
+      if (!/^[a-z][a-z0-9_]{1,63}$/u.test(status)) return;
+      process.stdout.write(status);
+    });
+  ' "$task_id" "$TARGET_RESEARCH_SHA" 2>/dev/null || true)"
+  if [[ -z "$task_status" ]]; then
+    printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=TASK_STATUS_UNAVAILABLE task_status=unknown raw_log_included=false\n' "$profile" "$task_id"
+    return 0
+  fi
+  if [[ "$task_status" != failed ]]; then
+    printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=NONE task_status=%s raw_log_included=false\n' "$profile" "$task_id" "$task_status"
     return 0
   fi
 
@@ -169,11 +196,11 @@ emit_task_failure_signature() {
     });
   ' "$STATE" "$task_id" "$TARGET_RESEARCH_SHA" 2>/dev/null || true)"
   if [[ -z "$task_failure_path" ]]; then
-    printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=FAILED_TASK_STDERR_PATH_UNAVAILABLE raw_log_included=false\n' "$profile" "$task_id"
+    printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=FAILED_TASK_STDERR_PATH_UNAVAILABLE task_status=failed raw_log_included=false\n' "$profile" "$task_id"
     return 0
   fi
   if ! file_exists "$task_failure_path"; then
-    printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=FAILED_TASK_STDERR_MISSING raw_log_included=false\n' "$profile" "$task_id"
+    printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=FAILED_TASK_STDERR_MISSING task_status=failed raw_log_included=false\n' "$profile" "$task_id"
     return 0
   fi
 
@@ -222,11 +249,12 @@ emit_task_failure_signature() {
         "categories=" + clean(categories.size ? [...categories].sort().join(",") : "UNCLASSIFIED"),
         "stderr_tail_size_bytes=" + Buffer.byteLength(raw, "utf8"),
         "stderr_tail_sha256=" + stderrSha,
+        "task_status=failed",
         "raw_log_included=false",
       ].join(" "));
     });
   ' "$profile" "$task_id"; then
-    printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=SIGNATURE_EXTRACTION_FAILED raw_log_included=false\n' "$profile" "$task_id"
+    printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=SIGNATURE_EXTRACTION_FAILED task_status=failed raw_log_included=false\n' "$profile" "$task_id"
   fi
 }
 
