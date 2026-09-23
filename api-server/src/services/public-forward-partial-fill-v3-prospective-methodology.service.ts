@@ -532,6 +532,22 @@ export function buildPublicForwardPartialFillV3ModeledObservation(input: Readonl
     || observation?.partialFillCostPercent !== null) {
     blockers.push('PUBLIC_ONLY_ACTUAL_EXECUTION_CLAIM_FORBIDDEN');
   }
+  if (observation
+    && (observation.forwardCalibrationSampleCredit !== 1
+      || observation.historicalBackfillCredit !== 0
+      || observation.testFixtureCredit !== 0
+      || observation.naturalEntryCredit !== 0
+      || observation.runtimeCostCredit !== 0
+      || observation.calibrationArtifactProduced !== false
+      || observation.calibrationSampleSufficient !== false
+      || observation.partialFillStatus !== 'BLOCKED_DATA'
+      || observation.fullCostReady !== false
+      || observation.privateApiUsed !== false
+      || observation.executionAuthority !== 'NONE'
+      || observation.liveTrading !== false
+      || observation.orderSubmitted !== false)) {
+    blockers.push('SOURCE_ECONOMIC_OR_EXECUTION_CREDIT_FORBIDDEN');
+  }
   if (!finiteNonNegative(observation?.opportunityFillRatioUpperBound)
     || Number(observation?.opportunityFillRatioUpperBound) > 1
     || !finiteNonNegative(observation?.eligiblePublicTouchQuantityUpperBound)
