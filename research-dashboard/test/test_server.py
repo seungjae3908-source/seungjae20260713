@@ -63,6 +63,44 @@ def valid_v3_summary():
     return value
 
 
+def valid_multilane_v3_summary():
+    value = valid_v3_summary()
+    value.update({
+        'targetSlotIndex': 479,
+        'genuineScheduledSlotN': 153,
+        'rawAcceptedN': 2000,
+        'effectiveIndependentN': 159,
+        'independentBuyN': 83,
+        'independentSellN': 76,
+        'frozenSplitCounts': {
+            'TRAIN': 159,
+            'TRAIN_BUY': 83,
+            'TRAIN_SELL': 76,
+            'VALIDATION': 0,
+            'VALIDATION_BUY': 0,
+            'VALIDATION_SELL': 0,
+            'OOS': 0,
+            'OOS_BUY': 0,
+            'OOS_SELL': 0,
+        },
+        'preCapIndependentN': 159,
+        'multiLanePolicyVersion': 'public-forward-liquidity-multi-lane-prospective-policy-v1',
+        'multiLanePolicyDigest': '1' * 64,
+        'laneRegistryDigest': '2' * 64,
+        'dependencyPolicyDigest': '3' * 64,
+        'balancingPolicyDigest': '4' * 64,
+        'maxCreditPerLanePerSlot': 1,
+        'maxTotalCreditPerSlot': 2,
+        'maxCreditPerDependencyComponent': 1,
+        'laneSlotCapRejectedN': 0,
+        'globalSlotCapRejectedN': 0,
+        'utc27AdditionalIndependentCredit': 0,
+        'retroactiveMultiLaneCreditAllowed': False,
+    })
+    value['reportDigest'] = canonical_digest(value)
+    return value
+
+
 def valid_candidate_performance():
     candidate_id = f"phase3-candidate:sha256:{'7' * 64}"
     parameter_digest = '8' * 64
@@ -379,6 +417,41 @@ class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
         self.assertEqual(liquidity['evidenceComplete'], 0)
         self.assertEqual(liquidity['executionAuthority'], 'NONE')
         self.assertFalse(overview['profitability']['proven'])
+
+    def test_python_runtime_accepts_frozen_phase2_multilane_independence(self):
+        root = self.fixture()
+        write_json(root / 'forward' / 'liquidity' / 'v3-authoritative-independence-summary.json',
+                   valid_multilane_v3_summary())
+        overview = build_research_overview(root)
+        liquidity = overview['research']['liquidityIndependence']
+        self.assertTrue(liquidity['present'])
+        self.assertEqual(liquidity['status'], 'PRESENT')
+        self.assertEqual(liquidity['genuineScheduledSlotN'], 153)
+        self.assertEqual(liquidity['effectiveIndependentN'], 159)
+        self.assertEqual(liquidity['independentBuyN'], 83)
+        self.assertEqual(liquidity['independentSellN'], 76)
+        self.assertEqual(liquidity['frozenSplitCounts']['TRAIN'], 159)
+        self.assertFalse(overview['profitability']['proven'])
+
+    def test_python_runtime_rejects_multilane_capacity_or_policy_weakening(self):
+        for field, value in (
+            ('genuineScheduledSlotN', 79),
+            ('maxTotalCreditPerSlot', 3),
+            ('maxCreditPerLanePerSlot', 2),
+            ('maxCreditPerDependencyComponent', 2),
+            ('utc27AdditionalIndependentCredit', 1),
+            ('retroactiveMultiLaneCreditAllowed', True),
+        ):
+            with self.subTest(field=field):
+                root = self.fixture()
+                summary = valid_multilane_v3_summary()
+                summary[field] = value
+                summary['reportDigest'] = canonical_digest(summary)
+                write_json(root / 'forward' / 'liquidity' / 'v3-authoritative-independence-summary.json', summary)
+                liquidity = build_research_overview(root)['research']['liquidityIndependence']
+                self.assertTrue(liquidity['present'])
+                self.assertEqual(liquidity['status'], 'INVALID')
+                self.assertIsNone(liquidity['effectiveIndependentN'])
 
     def test_missing_v3_independence_is_missing_not_zero(self):
         overview = build_research_overview(self.fixture())
