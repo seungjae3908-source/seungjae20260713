@@ -542,6 +542,8 @@ export function createNaturalPaperTriggerBoundSettlementCostProducer({
     return deepFreeze({
       ...bound,
       evaluatedAtMs: bindingEvaluatedAtMs,
+      sourceObservation: structuredClone(observation),
+      authoritativeEvidence: structuredClone(authoritativeEvidence),
     });
   };
 }
