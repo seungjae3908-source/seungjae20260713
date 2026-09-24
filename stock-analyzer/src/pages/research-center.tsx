@@ -354,7 +354,21 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
             <p className="text-[10px] text-muted-foreground">카드를 눌러 상세 확인</p>
           </div>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-            {cards.map((card) => <PipelineCard key={card.key} card={card} selected={selected === card.key} onOpen={() => onSelect(card.key)} />)}
+            {cards.map((card) => (
+              <PipelineCard
+                key={card.key}
+                card={card}
+                selected={selected === card.key}
+                onOpen={() => {
+                  onSelect(card.key);
+                  if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+                    window.requestAnimationFrame(() => {
+                      document.getElementById('research-stage-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    });
+                  }
+                }}
+              />
+            ))}
           </div>
         </section>
         <StageDetail card={selectedCard} />
