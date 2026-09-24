@@ -276,6 +276,7 @@ function FullCostVisibility({ overview }: { overview: ResearchCenterOverview }) 
             <p className="mt-2 text-sm font-black tabular-nums">{formatCostValue(row.valuePercent)}</p>
             <p className="mt-2 break-all text-[10px] leading-4 text-muted-foreground">출처 · {row.provenance ?? '미제공'}</p>
             <p className="mt-1 text-[10px] leading-4 text-muted-foreground">Freshness · API 미제공</p>
+            <p className="mt-1 text-[10px] leading-4 text-muted-foreground">Quality · API 미제공</p>
             <p className="mt-1 font-mono text-[9px] text-muted-foreground">state={row.state}</p>
           </article>
         ))}
