@@ -138,6 +138,14 @@ test("stranded recovery workflow is approval-gated, one-shot, and refuses a seco
   assert.match(workflow, /--paginate --slurp/);
   assert.match(workflow, /approve-canonical-shadow-recovery/);
   assert.match(workflow, /actions\/artifacts\?per_page=100/);
+  assert.ok(
+    workflow.includes('done < <(gh api --paginate "repos/$REPOSITORY/actions/workflows/prediction-lab-canonical-shadow-publisher.yml/runs?status=success&per_page=100"'),
+    "canonical predecessor discovery must paginate successful publisher history",
+  );
+  assert.ok(
+    !workflow.includes('done < <(gh api "repos/$REPOSITORY/actions/workflows/prediction-lab-canonical-shadow-publisher.yml/runs?status=success&per_page=100"'),
+    "canonical predecessor discovery must not truncate at the first 100 successful publisher runs",
+  );
   assert.match(workflow, /publication_receipt_count/);
   assert.match(workflow, /recovery_approval_claim_count/);
   assert.match(workflow, /canonical-shadow-recovery-attempt-/);
