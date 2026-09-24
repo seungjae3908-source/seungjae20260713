@@ -12,12 +12,13 @@ async function installRuntime(page:Page){
 for(const viewport of [{width:320,height:740},{width:1440,height:900}]){
   test(`video research phase2 stays fail-closed and responsive at ${viewport.width}px`,async({page})=>{
     await page.setViewportSize(viewport);await installRuntime(page);await page.goto('/research-center');
-    await expect(page.getByRole('button',{name:'전문가 보기',exact:true})).toHaveAttribute('aria-pressed','true');
-    for(const name of ['일반 보기','전문가 보기','AI Research Copilot','영상 연구'])await expect(page.getByRole('button',{name,exact:true})).toBeVisible();
-    await page.getByRole('button',{name:'영상 연구',exact:true}).click();
+    await expect(page.getByRole('button',{name:'요약',exact:true})).toHaveAttribute('aria-pressed','true');
+    for(const name of ['요약','상세','AI 도우미','영상'])await expect(page.getByRole('button',{name,exact:true})).toBeVisible();
+    await page.getByRole('button',{name:'영상',exact:true}).click();
     const panel=page.getByTestId('research-video-panel');await expect(panel).toBeVisible();
 
-    await expect(panel).toContainText('Research Source Only');
+    await expect(panel).toContainText('연구 참고용 · 수익성 증거 아님');
+    await expect(panel).toContainText('영상 연구는 아직 입력 준비 전 단계입니다.');
     await expect(panel).toContainText('PROVIDER_NOT_CONFIGURED');
     await expect(panel).toContainText('NOT_PROVIDED');
     await expect(panel).toContainText('UNKNOWN_TIMESTAMP');
@@ -25,13 +26,14 @@ for(const viewport of [{width:320,height:740},{width:1440,height:900}]){
     await expect(panel).toContainText('COMPILER_BLOCKED until TESTABLE');
     await expect(panel).toContainText('NOT_EVALUATED');
 
+    await page.getByText('기술 상태 자세히 보기', { exact: true }).click();
     for(const id of ['video-discovery-state','video-transcript-state','video-strategy-state','video-evidence-state','video-validation-state','video-detail-empty-state','video-cluster-empty-state'])await expect(page.getByTestId(id)).toBeVisible();
     for(const label of ['FACT','CREATOR CLAIM','AI INFERENCE','UNKNOWN','CONTRADICTED'])await expect(page.getByTestId('video-truth-legend')).toContainText(label);
 
     await expect(panel).toContainText('Economic Evidence');await expect(panel).toContainText('Profitability Credit');await expect(panel).toContainText('Execution Authority');await expect(panel).toContainText('NONE');
     await expect(panel).toContainText('Independent source count는 경제적 표본 N이 아닙니다');
-    await expect(page.getByTestId('video-phase2-safety-footer')).toContainText('Automatic discovery OFF');
-    await expect(page.getByTestId('video-phase2-safety-footer')).toContainText('Schedule OFF');
+    await expect(page.getByTestId('video-phase2-safety-footer')).toContainText('자동 검색 꺼짐');
+    await expect(page.getByTestId('video-phase2-safety-footer')).toContainText('스케줄 꺼짐');
 
     const overflow=await page.evaluate(()=>Math.max(document.documentElement.scrollWidth,document.body.scrollWidth)-window.innerWidth);expect(overflow).toBeLessThanOrEqual(2);
   });

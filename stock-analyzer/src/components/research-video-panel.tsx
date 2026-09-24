@@ -1,3 +1,21 @@
+const FRIENDLY_STATUS: Record<string, string> = {
+  PROVIDER_NOT_CONFIGURED: '제공자 연결 필요',
+  NOT_PROVIDED: '전사본 없음',
+  UNKNOWN_TIMESTAMP: '시간정보 미확인',
+  UNKNOWN: '미확인',
+  UNSPECIFIED: '미지정',
+  'COMPILER_BLOCKED until TESTABLE': '규칙이 명확해질 때까지 컴파일 차단',
+  NOT_EVALUATED: '아직 평가 안 함',
+  DISABLED: '비활성',
+  INACTIVE: '비활성',
+  OFF: '꺼짐',
+  NONE: '없음',
+};
+
+function friendlyStatus(value: string) {
+  return FRIENDLY_STATUS[value] ?? value;
+}
+
 const statusRows = [
   ['Video discovery', '수동 / 비활성'],
   ['Provider', 'PROVIDER_NOT_CONFIGURED'],
@@ -80,18 +98,31 @@ export function ResearchVideoPanel() {
         <header className="rounded-2xl border border-card-border bg-card p-4 sm:p-5">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-lg font-bold sm:text-xl">영상 연구</h1>
-            <span className="rounded-full border px-2 py-1 text-[11px] font-semibold text-muted-foreground">Research Source Only</span>
+            <span className="rounded-full border px-2 py-1 text-[11px] font-semibold text-muted-foreground">연구 참고용 · 수익성 증거 아님</span>
           </div>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             공식/public metadata와 승인된 transcript만 연구 입력으로 사용합니다. 영상·강의의 주장은 아이디어 소스이며 수익성·OOS·Forward·Paper 증거로 승격되지 않습니다.
           </p>
         </header>
 
+        <section className="rounded-2xl border border-primary/25 bg-primary/5 p-4" data-testid="research-video-current-state">
+          <p className="text-[11px] font-black text-primary">현재 상태</p>
+          <h2 className="mt-1 text-base font-black">영상 연구는 아직 입력 준비 전 단계입니다.</h2>
+          <p className="mt-2 break-keep text-sm leading-6 text-muted-foreground">
+            제공자와 승인된 transcript가 없어서 전략 추출이나 검증으로 넘어가지 않습니다. 지금은 오류가 아니라 안전한 대기 상태입니다.
+          </p>
+          <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+            <div className="rounded-xl bg-card p-2"><p className="text-muted-foreground">영상 찾기</p><p className="mt-1 font-black">수동</p></div>
+            <div className="rounded-xl bg-card p-2"><p className="text-muted-foreground">제공자</p><p className="mt-1 font-black">연결 필요</p></div>
+            <div className="rounded-xl bg-card p-2"><p className="text-muted-foreground">전사본</p><p className="mt-1 font-black">없음</p></div>
+          </div>
+        </section>
+
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6" data-testid="research-video-safety-grid">
           {statusRows.map(([label, value]) => (
             <div key={label} className="min-w-0 rounded-2xl border border-card-border bg-card p-3">
               <div className="text-xs text-muted-foreground">{label}</div>
-              <div className="mt-1 break-words text-sm font-semibold">{value}</div>
+              <div className="mt-1 break-words text-sm font-semibold">{friendlyStatus(value)}</div>{friendlyStatus(value) !== value ? <div className="mt-1 break-all font-mono text-[10px] text-muted-foreground">{value}</div> : null}
             </div>
           ))}
         </div>
@@ -107,7 +138,13 @@ export function ResearchVideoPanel() {
           </div>
         </div>
 
-        <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3" data-testid="research-video-phase2-grid">
+        <details className="rounded-2xl border border-card-border bg-card">
+          <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-black">
+            <span>기술 상태 자세히 보기</span>
+            <span className="text-xs font-medium text-muted-foreground">Discovery · Transcript · Strategy · Validation</span>
+          </summary>
+          <div className="border-t border-card-border p-3">
+            <div className="grid gap-3 pt-3 lg:grid-cols-2 xl:grid-cols-3" data-testid="research-video-phase2-grid">
           {phase2Sections.map((section) => (
             <article key={section.title} className="min-w-0 rounded-2xl border border-card-border bg-card p-4" data-testid={section.testId}>
               <h2 className="font-semibold">{section.title}</h2>
@@ -115,17 +152,22 @@ export function ResearchVideoPanel() {
                 {section.rows.map(([label, value]) => (
                   <div key={label} className="grid min-w-0 gap-1 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)] sm:gap-3">
                     <dt className="text-muted-foreground">{label}</dt>
-                    <dd className="min-w-0 break-words font-medium">{value}</dd>
+                    <dd className="min-w-0 break-words font-medium">
+                      <span>{friendlyStatus(value)}</span>
+                      {friendlyStatus(value) !== value ? <span className="mt-1 block break-all font-mono text-[10px] text-muted-foreground">{value}</span> : null}
+                    </dd>
                   </div>
                 ))}
               </dl>
             </article>
           ))}
         </div>
+          </div>
+        </details>
 
         <div className="grid gap-3 lg:grid-cols-2">
           <article className="min-w-0 rounded-2xl border border-card-border bg-card p-4" data-testid="video-detail-empty-state">
-            <h2 className="font-semibold">Video detail</h2>
+            <h2 className="font-semibold">영상 상세</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
               아직 승인된 실제 영상 연구 레코드가 없습니다. 수집 후 Metadata → Transcript → Timeline → Claims → Strategy → Missing rules → Cross-validation → Compiler 상태 순서로 원본 provenance와 함께 표시됩니다.
             </p>
@@ -135,7 +177,7 @@ export function ResearchVideoPanel() {
           </article>
 
           <article className="min-w-0 rounded-2xl border border-card-border bg-card p-4" data-testid="video-cluster-empty-state">
-            <h2 className="font-semibold">Strategy cluster</h2>
+            <h2 className="font-semibold">전략 묶음</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
               아직 cluster가 없습니다. 향후 Video count, Independent source count, Supporting / Contradicting source count, Common / Conflicting / Missing rules를 분리해 표시합니다.
             </p>
@@ -146,7 +188,7 @@ export function ResearchVideoPanel() {
         </div>
 
         <footer className="rounded-2xl border border-card-border bg-card p-4 text-xs leading-5 text-muted-foreground" data-testid="video-phase2-safety-footer">
-          Paid provider OFF · Automatic discovery OFF · Schedule OFF · No downloader bypass · No new Backtester · Existing canonical compiler only · Execution Authority NONE
+          유료 제공자 꺼짐 · 자동 검색 꺼짐 · 스케줄 꺼짐 · 우회 다운로드 금지 · 기존 canonical compiler만 사용 · 실행 권한 없음
         </footer>
       </div>
     </section>
