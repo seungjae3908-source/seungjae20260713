@@ -137,7 +137,9 @@ for (const [width, height] of [[320, 740], [390, 844], [768, 900], [1199, 900], 
     await expect(general).not.toContainText('Evidence state');
     await expect(general).not.toContainText('Canonical records');
     await expect(general).not.toContainText('LIVE_TRADING=false');
-    await page.getByRole('button', { name: /모의매매 표본/ }).click();
+    const paperCard = page.getByTestId('research-summary-paper');
+    await expect(paperCard).toContainText('모의매매 표본');
+    await paperCard.click();
     await expect(page.getByTestId('research-general-selected-detail')).toContainText('다음에 뭘 보면 되나요?');
     await expect(page.getByTestId('research-workspace-selection')).toContainText('현재 · 요약');
 
