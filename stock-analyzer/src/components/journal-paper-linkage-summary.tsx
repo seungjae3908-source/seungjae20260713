@@ -23,7 +23,9 @@ export function JournalPaperLinkageSummary({ data }: { data: UnifiedTradeJournal
   const bindingSummary = data.canonicalResearchBinding;
   const verifiedBindings = paperTrades.filter((trade) => trade.canonicalResearchBinding?.status === 'VERIFIED');
   const mismatchBindings = paperTrades.filter((trade) => trade.canonicalResearchBinding?.status === 'MISMATCH');
-  const unavailableBindings = paperTrades.filter((trade) => trade.canonicalResearchBinding?.status === 'NOT_AVAILABLE');
+  const unavailableBindings = paperTrades.filter((trade) => (
+    !trade.canonicalResearchBinding || trade.canonicalResearchBinding.status === 'NOT_AVAILABLE'
+  ));
   const candidateIds = [...new Set(verifiedBindings
     .map((trade) => trade.canonicalResearchBinding?.candidateId)
     .filter((value): value is string => Boolean(value)))];
