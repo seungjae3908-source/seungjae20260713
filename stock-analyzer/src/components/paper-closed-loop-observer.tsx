@@ -73,7 +73,7 @@ export function PaperClosedLoopObserver({
   const unknownCostN = components
     ? COST_KEYS.filter((key) => ['UNKNOWN', 'BLOCKED_DATA'].includes(components[key]?.state)).length
     : 8;
-  const fullCostReady = Boolean(performance?.FULL_COST_READY && performance?.fullCostEvidence?.fullCostReady);
+  const overviewFullCostReady = Boolean(performance?.FULL_COST_READY && performance?.fullCostEvidence?.fullCostReady);
 
   const candidateReady = Boolean(
     performance?.status === 'PRESENT'
@@ -88,6 +88,12 @@ export function PaperClosedLoopObserver({
   const triggerBoundJournalBindings = exactJournalBindings.filter((trade) => (
     trade.triggerBindingVerified && Boolean(trade.exitTriggerId) && Boolean(trade.exitExecutionId)
   ));
+  const fullCostBoundJournalBindings = exactJournalBindings.filter((trade) => (
+    trade.fullCostBindingVerified
+      && trade.fullCostComponentCount === 8
+      && Boolean(trade.fullCostEvidenceDigest)
+  ));
+  const canonicalFullCostReady = fullCostBoundJournalBindings.length > 0;
 
   const triggerStage: ClosedLoopStage = journalBindingLoading && !journalBinding
     ? {
@@ -233,25 +239,57 @@ export function PaperClosedLoopObserver({
       '동일 후보의 Settlement 수가 관측됐습니다.',
       '청산·정산 근거가 아직 없습니다.',
     ),
-    {
-      key: 'cost',
-      label: '8 Cost',
-      value: fullCostReady ? '8/8 준비' : `${measuredCostN}/8 실측`,
-      detail: fullCostReady
-        ? '8개 비용과 canonical 연결 근거가 준비됐습니다.'
-        : `MODELED ${modeledCostN}개 · UNKNOWN/BLOCKED ${unknownCostN}개. MODELED 값은 실제 경제증거가 아닙니다.`,
-      tone: fullCostReady ? 'ready' : measuredCostN > 0 ? 'blocked' : 'missing',
-    },
+    journalBindingLoading && !journalBinding
+      ? {
+          key: 'cost',
+          label: '8 Cost',
+          value: '조회 중',
+          detail: '동일 candidate의 authenticated canonical Full Cost readback을 확인하고 있습니다.',
+          tone: 'progress',
+        }
+      : journalBindingError
+        ? {
+            key: 'cost',
+            label: '8 Cost',
+            value: '미관측',
+            detail: 'Full Cost readback 조회에 실패했습니다. 실패를 8/8 완료로 바꾸지 않습니다.',
+            tone: 'missing',
+          }
+        : !candidateId
+          ? {
+              key: 'cost',
+              label: '8 Cost',
+              value: '미관측',
+              detail: '현재 candidateId가 없어 비용 근거를 다른 후보에서 빌려오지 않습니다.',
+              tone: 'missing',
+            }
+          : canonicalFullCostReady
+            ? {
+                key: 'cost',
+                label: '8 Cost',
+                value: `8/8 검증 · ${fullCostBoundJournalBindings.length.toLocaleString('ko-KR')}건`,
+                detail: `AUTHENTICATED_PAPER_STATE · settlement/Trigger/Execution/digest 일치 · fullCostEvidenceDigest ${fullCostBoundJournalBindings.map((trade) => trade.fullCostEvidenceDigest).join(' · ')}`,
+                tone: 'ready',
+              }
+            : {
+                key: 'cost',
+                label: '8 Cost',
+                value: `${measuredCostN}/8 진단`,
+                detail: `candidate별 canonical 8 Cost는 아직 검증되지 않았습니다. Research overview 진단: MODELED ${modeledCostN}개 · UNKNOWN/BLOCKED ${unknownCostN}개. MODELED/UNKNOWN을 실제 비용 0으로 승격하지 않습니다.`,
+                tone: exactJournalBindings.length > 0 || overviewFullCostReady || measuredCostN > 0 ? 'blocked' : 'missing',
+              },
     {
       key: 'net-pnl',
       label: 'Net PnL',
       value: money(performance?.Net_PnL),
       detail: performance?.Net_PnL == null
         ? '후보별 Net PnL 근거가 없습니다.'
-        : fullCostReady
-          ? 'Full Cost가 준비된 동일 후보 Net PnL입니다.'
-          : '값이 있어도 Full Cost가 미충족이면 수익성 증거로 승격하지 않습니다.',
-      tone: performance?.Net_PnL == null ? 'missing' : fullCostReady ? 'ready' : 'blocked',
+        : canonicalFullCostReady
+          ? '8 Cost canonical 검증은 완료됐지만 Net PnL canonical binding은 아직 별도 검증되지 않았습니다.'
+          : overviewFullCostReady
+            ? 'Research overview Full Cost는 준비됐지만 candidate별 canonical 8 Cost와 Net PnL binding은 아직 연결되지 않았습니다.'
+            : '값이 있어도 Full Cost가 미충족이면 수익성 증거로 승격하지 않습니다.',
+      tone: performance?.Net_PnL == null ? 'missing' : 'blocked',
     },
     journalStage,
   ];
