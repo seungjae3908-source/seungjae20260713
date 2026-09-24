@@ -59,6 +59,15 @@ test('fails closed when declared spread disagrees with canonical best ask and bi
   await expect(dialog.getByTestId('bid-levels')).toBeEmpty();
 });
 
+test('fails closed when declared spread percentage disagrees with canonical top of book', async ({ page }) => {
+  const dialog = await serve(page, { ...readyFixture, spreadPct: 99 });
+
+  await expect(dialog.getByText('Invalid', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('ORDERBOOK_LEVELS_CORRUPT')).toBeVisible();
+  await expect(dialog.getByTestId('ask-levels')).toBeEmpty();
+  await expect(dialog.getByTestId('bid-levels')).toBeEmpty();
+});
+
 test('preserves crossed-book diagnosis even when a stale declared spread disagrees', async ({ page }) => {
   const dialog = await serve(page, {
     ...readyFixture,
