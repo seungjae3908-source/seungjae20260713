@@ -84,7 +84,7 @@ type PatternDescriptor = {
 };
 
 const DEFAULT_ENGINE_VERSION = 'chart-analysis-v2';
-const UNSAFE_DATA_STATUSES = new Set(['stale', 'future', 'insufficient', 'unavailable']);
+const ACTIONABLE_DATA_STATUSES = new Set(['ok', 'delayed']);
 
 function finite(value: number, fallback = 0): number {
   return Number.isFinite(value) ? value : fallback;
@@ -112,8 +112,8 @@ function stableHash(value: string): string {
 }
 
 export function isChartAnalysisDataStatusActionable(dataStatus: unknown): boolean {
-  const normalized = normalizeToken(dataStatus);
-  return normalized === '' || !UNSAFE_DATA_STATUSES.has(normalized);
+  if (dataStatus == null) return true;
+  return ACTIONABLE_DATA_STATUSES.has(normalizeToken(dataStatus));
 }
 
 function patternDescriptor(patterns: string[], trend: string): PatternDescriptor {
