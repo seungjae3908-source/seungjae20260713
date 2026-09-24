@@ -345,6 +345,7 @@ export function createAiChartPublicStreamClient(
       clearRuntimeTimers();
       clearPendingWork();
       connectedAtMs = null;
+      if (opened) lastEventAtMs = null;
       if (stopped || status === 'FALLBACK_POLLING') return;
       // A close before onopen is a rejected/blocked handshake, not an
       // established stream interruption. Repeating the same public handshake
