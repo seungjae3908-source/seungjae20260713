@@ -128,11 +128,19 @@ export function createAiChartPublicStreamClient(
     pendingRenderWork: flushFrame == null ? 0 : 1,
   });
 
+  // Status/diagnostic hooks are observer sinks. A UI/telemetry consumer must
+  // never gain transport control by throwing from a notification callback.
+  const notifyStatus = (nextStatus: AiChartPublicStreamStatus, reason: string) => {
+    try { options.onStatus?.(nextStatus, reason); } catch { /* isolate observer failure */ }
+  };
+  const notifyDiagnostic = (diagnostic: AiChartStreamDiagnostic) => {
+    try { options.onDiagnostic?.(diagnostic); } catch { /* isolate observer failure */ }
+  };
   const publish = (nextStatus: AiChartPublicStreamStatus, reason: string) => {
     status = nextStatus;
     statusReason = reason;
-    options.onStatus?.(nextStatus, reason);
-    options.onDiagnostic?.(snapshot());
+    notifyStatus(nextStatus, reason);
+    notifyDiagnostic(snapshot());
   };
   const clearTimer = (handle: TimerHandle | null) => { if (handle != null) clearTimeoutFn(handle); };
   const clearRuntimeTimers = () => {
@@ -210,7 +218,7 @@ export function createAiChartPublicStreamClient(
         return;
       }
       const freshness = aiChartStreamFreshness({ status, lastEventAtMs, nowMs: currentNow, staleAfterMs: subscription.staleAfterMs });
-      if (freshness === 'DELAYED') options.onDiagnostic?.({ ...snapshot(), reason: 'STREAM_DELAYED' });
+      if (freshness === 'DELAYED') notifyDiagnostic({ ...snapshot(), reason: 'STREAM_DELAYED' });
       scheduleWatchdog();
     }, cadence);
   };
@@ -239,14 +247,14 @@ export function createAiChartPublicStreamClient(
         return;
       }
       if (!accepted) {
-        options.onDiagnostic?.({ ...snapshot(), reason: 'STREAM_BATCH_REJECTED' });
+        notifyDiagnostic({ ...snapshot(), reason: 'STREAM_BATCH_REJECTED' });
         return;
       }
 
       lastEventAtMs = Math.max(lastEventAtMs ?? 0, ...batch.map((event) => event.eventTimeMs));
       reconnectAttempts = 0;
       if (status !== 'LIVE_STREAM') publish('LIVE_STREAM', 'FIRST_VALID_EVENT_ACCEPTED');
-      else options.onDiagnostic?.({ ...snapshot(), reason: 'PUBLIC_TRADE_BATCH' });
+      else notifyDiagnostic({ ...snapshot(), reason: 'PUBLIC_TRADE_BATCH' });
     });
   };
 
@@ -284,7 +292,7 @@ export function createAiChartPublicStreamClient(
       if (stopped || socket !== nextSocket) return;
       const raw = decodeAiChartWebSocketPayload(message.data);
       if (!raw) {
-        options.onDiagnostic?.({ ...snapshot(), reason: 'UNSUPPORTED_MESSAGE_PAYLOAD' });
+        notifyDiagnostic({ ...snapshot(), reason: 'UNSUPPORTED_MESSAGE_PAYLOAD' });
         return;
       }
       const events = parseAiChartPublicStreamMessage(options.market, raw, now())
@@ -300,7 +308,7 @@ export function createAiChartPublicStreamClient(
 
     nextSocket.onerror = () => {
       if (stopped || socket !== nextSocket) return;
-      options.onDiagnostic?.({ ...snapshot(), reason: 'SOCKET_ERROR' });
+      notifyDiagnostic({ ...snapshot(), reason: 'SOCKET_ERROR' });
     };
     nextSocket.onclose = () => {
       if (stopped || socket !== nextSocket) return;
