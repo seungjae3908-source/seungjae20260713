@@ -49,31 +49,6 @@ function ciEvidence(overrides = {}) {
   };
 }
 
-function historicalPhase2Activation() {
-  const body = Object.freeze({
-    schemaVersion: 'public-forward-liquidity-multi-lane-activation-boundary-v1',
-    policyVersion: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyVersion,
-    policyDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyDigest,
-    exactMainSha: EXACT_MAIN,
-    postMergeRequiredCiRunId: 40000000001,
-    postMergeRequiredCiHeadSha: EXACT_MAIN,
-    postMergeRequiredCiCompletedAtMs: Date.parse('2026-09-11T06:05:00.000Z'),
-    requiredSuccessfulJobNames: Object.freeze([...REQUIRED_JOBS]),
-    completeHourlyLeadSlotN:
-      PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.config.activationPolicy.completeHourlyLeadSlotN,
-    completeLeadSlotStartMs: Date.parse('2026-09-11T07:00:00.000Z'),
-    completeLeadSlotEndMs: Date.parse('2026-09-11T08:00:00.000Z'),
-    activationBoundaryMs: Date.parse('2026-09-11T08:17:00.000Z'),
-    activationSlotIndex: 199,
-    activationScheduleIdentity: '17 * * * *',
-    preBoundaryObservationCredit: 0,
-    manualWorkflowDispatchEligible: false,
-    replayEligible: false,
-    backfillEligible: false,
-  });
-  return Object.freeze({ ...body, activationBoundaryDigest: sha256(canonicalJson(body)) });
-}
-
 function validBatch(eventTimestampMs) {
   return {
     kind: 'public-forward-liquidity-calibration-batch',
@@ -143,10 +118,18 @@ test('Option B policy, digests, checkpoint, and safety boundary are frozen', () 
   assert.equal(policy.config.safety.privateTradingApiAllowed, false);
 });
 
-test('historical Phase 2 activation derivation is fail-closed after successor V3 cohort rotation', () => {
-  assert.throws(
-    () => derivePublicForwardLiquidityMultiLaneActivation(ciEvidence()),
-    /PHASE2_V3_COHORT_START_MISMATCH/,
+test('activation derives only from exact-main terminal 6/6 after one complete hourly lead slot', () => {
+  const activation = derivePublicForwardLiquidityMultiLaneActivation(ciEvidence());
+  assert.equal(activation.postMergeRequiredCiHeadSha, EXACT_MAIN);
+  assert.equal(activation.postMergeRequiredCiCompletedAtMs, Date.parse('2026-09-11T06:05:00.000Z'));
+  assert.equal(activation.completeLeadSlotStartMs, Date.parse('2026-09-11T07:00:00.000Z'));
+  assert.equal(activation.completeLeadSlotEndMs, Date.parse('2026-09-11T08:00:00.000Z'));
+  assert.equal(activation.activationBoundaryMs, Date.parse('2026-09-11T08:17:00.000Z'));
+  assert.equal(
+    activation.activationBoundaryDigest,
+    sha256(canonicalJson(Object.fromEntries(
+      Object.entries(activation).filter(([key]) => key !== 'activationBoundaryDigest'),
+    ))),
   );
 });
 
@@ -172,8 +155,8 @@ test('activation fails closed for moved HEAD, missing Browser UI, or non-termina
   );
 });
 
-test('rotated successor cohort blocks stale Phase 2 lane credit while UTC27 remains zero-credit diagnostic', () => {
-  const activation = historicalPhase2Activation();
+test('lane keys are distinct, global slot key is shared, and UTC27 is never a third lane', () => {
+  const activation = derivePublicForwardLiquidityMultiLaneActivation(ciEvidence());
   const slotIndex = activation.activationSlotIndex;
   const before = resolvePublicForwardLiquidityMultiLaneCreditIdentity({
     scheduleExpression: '17 * * * *',
@@ -182,32 +165,35 @@ test('rotated successor cohort blocks stale Phase 2 lane credit while UTC27 rema
     activation,
   });
   assert.deepEqual(before, { active: false, reason: 'PHASE2_PRE_ACTIVATION_OLD_POLICY' });
-  assert.throws(() => resolvePublicForwardLiquidityMultiLaneCreditIdentity({
+  const utc17 = resolvePublicForwardLiquidityMultiLaneCreditIdentity({
     scheduleExpression: '17 * * * *',
     actualRunStartedAtMs: activation.activationBoundaryMs,
     slotIndex,
     activation,
-  }), /PHASE2_V3_COHORT_DIGEST_MISMATCH/);
-  assert.throws(() => resolvePublicForwardLiquidityMultiLaneCreditIdentity({
+  });
+  const utc37 = resolvePublicForwardLiquidityMultiLaneCreditIdentity({
     scheduleExpression: '37 * * * *',
     actualRunStartedAtMs: activation.activationBoundaryMs + 20 * 60_000,
     slotIndex,
     activation,
-  }), /PHASE2_V3_COHORT_DIGEST_MISMATCH/);
+  });
+  assert.notEqual(utc17.laneCreditKeyDigest, utc37.laneCreditKeyDigest);
+  assert.equal(utc17.globalSlotKeyDigest, utc37.globalSlotKeyDigest);
+  assert.equal(utc17.maxCreditPerLanePerSlot, 1);
+  assert.equal(utc17.maxTotalCreditPerSlot, 2);
   const utc27 = resolvePublicForwardLiquidityMultiLaneCreditIdentity({
     scheduleExpression: '27 * * * *',
     actualRunStartedAtMs: activation.activationBoundaryMs + 10 * 60_000,
     slotIndex,
     activation,
   });
-  assert.equal(utc27.active, true);
   assert.equal(utc27.laneId, null);
   assert.equal(utc27.additionalIndependentCredit, 0);
   assert.equal(utc27.thirdLaneAllowed, false);
 });
 
 test('a pre-cutover slot delayed past activation remains on immutable old V3 policy', () => {
-  const activation = historicalPhase2Activation();
+  const activation = derivePublicForwardLiquidityMultiLaneActivation(ciEvidence());
   const identity = resolvePublicForwardLiquidityMultiLaneCreditIdentity({
     scheduleExpression: '17 * * * *',
     actualRunStartedAtMs: activation.activationBoundaryMs + 30_000,
@@ -220,8 +206,8 @@ test('a pre-cutover slot delayed past activation remains on immutable old V3 pol
   });
 });
 
-test('historical current-main ancestry binding remains immutable without granting new cohort authority', () => {
-  const activation = historicalPhase2Activation();
+test('current-main ancestry binding changes without mutating the activation boundary', () => {
+  const activation = derivePublicForwardLiquidityMultiLaneActivation(ciEvidence());
   const descendant = 'd'.repeat(40);
   const binding = buildPublicForwardLiquidityMultiLaneCurrentMainBinding({
     activation,
@@ -241,11 +227,10 @@ test('historical current-main ancestry binding remains immutable without grantin
   }), /PHASE2_CURRENT_MAIN_ANCESTRY_INVALID/);
 });
 
-test('current successor lane rejects stale Phase 2 lane authority before lookup or provider collection', SUCCESSOR_ACTIVE_TEST, async () => {
-  const activation = historicalPhase2Activation();
-  const slot = buildSuccessorScheduleReliabilityV3SlotDescriptor(0);
-  let lookupN = 0;
-  let collectorN = 0;
+test('scheduled seam binds explicit lane identity and uses a lane-aware prior-credit key', SUCCESSOR_ACTIVE_TEST, async () => {
+  const activation = derivePublicForwardLiquidityMultiLaneActivation(ciEvidence());
+  const slot = buildSuccessorScheduleReliabilityV3SlotDescriptor(activation.activationSlotIndex);
+  const lookups = [];
   const result = await executeSuccessorScheduledCaptureSeamV3({
     eventName: 'schedule',
     scheduleExpression: '17 * * * *',
@@ -257,67 +242,28 @@ test('current successor lane rejects stale Phase 2 lane authority before lookup 
     exactMainSha: EXACT_MAIN,
     contract: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
     multiLaneActivation: activation,
-    hasPriorCreditedSlot: async () => {
-      lookupN += 1;
-      return false;
-    },
-    getRemoteMainSha: async () => EXACT_MAIN,
-    clock: () => slot.nominalScheduledAtMs + 5_000,
-    collector: async () => {
-      collectorN += 1;
-      return validBatch(slot.nominalScheduledAtMs);
-    },
-  });
-  assert.equal(result.batch, null);
-  assert.equal(result.captureReceipt.captureStatus, 'PHASE2_LANE_IDENTITY_UNVERIFIED');
-  assert.equal(result.captureReceipt.prospectiveSlotCredit, 0);
-  assert.ok(result.captureReceipt.blockers.some(
-    (value) => value.includes('PHASE2_V3_COHORT_DIGEST_MISMATCH'),
-  ));
-  assert.equal(lookupN, 0);
-  assert.equal(collectorN, 0);
-});
-
-test('rotated successor V3 proceeds on its own authority after stale Phase 2 runtime is superseded', SUCCESSOR_ACTIVE_TEST, async () => {
-  const slot = buildSuccessorScheduleReliabilityV3SlotDescriptor(0);
-  let lookupN = 0;
-  let collectorN = 0;
-  const result = await executeSuccessorScheduledCaptureSeamV3({
-    eventName: 'schedule',
-    scheduleExpression: '17 * * * *',
-    scheduledRunCreatedAtMs: slot.nominalScheduledAtMs,
-    actualRunStartedAtMs: slot.nominalScheduledAtMs,
-    runAttempt: 1,
-    runId: '41000000004',
-    repository: 'seungjae3908-source/seungjae20260713',
-    exactMainSha: EXACT_MAIN,
-    contract: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
-    multiLaneActivation: null,
     hasPriorCreditedSlot: async (lookup) => {
-      lookupN += 1;
-      assert.equal(lookup.laneId, null);
-      assert.equal(lookup.multiLanePolicyDigest, null);
+      lookups.push(lookup);
       return false;
     },
     getRemoteMainSha: async () => EXACT_MAIN,
     clock: () => slot.nominalScheduledAtMs + 5_000,
-    collector: async () => {
-      collectorN += 1;
-      return validBatch(slot.nominalScheduledAtMs);
-    },
+    collector: async () => validBatch(slot.nominalScheduledAtMs),
   });
   assert.equal(result.captureReceipt.captureStatus, 'PRESENT');
   assert.equal(result.captureReceipt.prospectiveSlotCredit, 1);
-  assert.equal(result.captureReceipt.laneId ?? null, null);
-  assert.equal(result.captureReceipt.multiLanePolicyDigest ?? null, null);
-  assert.equal(result.captureReceipt.blockers.length, 0);
-  assert.equal(lookupN, 1);
-  assert.equal(collectorN, 1);
+  assert.equal(result.captureReceipt.laneId, 'P2_V3_BTCUSDT_UTC17');
+  assert.equal(result.captureReceipt.scheduleIdentity, '17 * * * *');
+  assert.equal(result.captureReceipt.multiLanePolicyDigest,
+    PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyDigest);
+  assert.equal(lookups.length, 1);
+  assert.equal(lookups[0].laneId, 'P2_V3_BTCUSDT_UTC17');
+  assert.equal(lookups[0].laneCreditKeyDigest, result.captureReceipt.laneCreditKeyDigest);
 });
 
 test('UTC27 scheduled seam preserves diagnostic evidence but grants zero additional credit', SUCCESSOR_ACTIVE_TEST, async () => {
-  const activation = historicalPhase2Activation();
-  const slot = buildSuccessorScheduleReliabilityV3SlotDescriptor(0);
+  const activation = derivePublicForwardLiquidityMultiLaneActivation(ciEvidence());
+  const slot = buildSuccessorScheduleReliabilityV3SlotDescriptor(activation.activationSlotIndex);
   const result = await executeSuccessorScheduledCaptureSeamV3({
     eventName: 'schedule',
     scheduleExpression: '27 * * * *',
@@ -342,13 +288,12 @@ test('UTC27 scheduled seam preserves diagnostic evidence but grants zero additio
   assert.ok(result.captureReceipt.blockers.includes('PHASE2_UTC27_ZERO_ADDITIONAL_CREDIT'));
 });
 
-test('stale Phase 2 lane cannot consume provider evidence after successor cohort rotation', SUCCESSOR_ACTIVE_TEST, async () => {
-  const activation = historicalPhase2Activation();
-  const slot = buildSuccessorScheduleReliabilityV3SlotDescriptor(0);
-  let collectorN = 0;
+test('a lane run cannot credit provider evidence whose observation began before cutover', SUCCESSOR_ACTIVE_TEST, async () => {
+  const activation = derivePublicForwardLiquidityMultiLaneActivation(ciEvidence());
+  const slot = buildSuccessorScheduleReliabilityV3SlotDescriptor(activation.activationSlotIndex);
   const result = await executeSuccessorScheduledCaptureSeamV3({
     eventName: 'schedule',
-    scheduleExpression: '37 * * * *',
+    scheduleExpression: '17 * * * *',
     scheduledRunCreatedAtMs: slot.nominalScheduledAtMs,
     actualRunStartedAtMs: slot.nominalScheduledAtMs,
     runAttempt: 1,
@@ -360,17 +305,13 @@ test('stale Phase 2 lane cannot consume provider evidence after successor cohort
     hasPriorCreditedSlot: async () => false,
     getRemoteMainSha: async () => EXACT_MAIN,
     clock: () => slot.nominalScheduledAtMs + 5_000,
-    collector: async () => {
-      collectorN += 1;
-      return validBatch(slot.nominalScheduledAtMs);
-    },
+    collector: async () => validBatch(activation.activationBoundaryMs - 1),
   });
   assert.equal(result.captureReceipt.prospectiveSlotCredit, 0);
-  assert.equal(result.captureReceipt.captureStatus, 'PHASE2_LANE_IDENTITY_UNVERIFIED');
+  assert.equal(result.captureReceipt.captureStatus, 'VALIDATION_FAILURE');
   assert.ok(result.captureReceipt.blockers.some(
-    (value) => value.includes('PHASE2_V3_COHORT_DIGEST_MISMATCH'),
+    (value) => value.includes('PHASE2_PRE_BOUNDARY_OBSERVATION_FORBIDDEN'),
   ));
-  assert.equal(collectorN, 0);
 });
 
 test('Phase 2 workflow wiring preserves automatic-only safety and separates lane receipts from slots', async () => {
@@ -398,8 +339,4 @@ test('Phase 2 workflow wiring preserves automatic-only safety and separates lane
   assert.ok(captureRunner.includes('status=completed'));
   assert.ok(!captureRunner.includes('status=success'));
   assert.ok(captureRunner.includes('PHASE2_FIRST_POLICY_CI_UNVERIFIED'));
-  assert.ok(captureRunner.includes('SUPERSEDED_BY_SUCCESSOR_V3_COHORT_ROTATION'));
-  assert.ok(captureRunner.includes("blocker === 'PHASE2_V3_COHORT_START_MISMATCH'"));
-  assert.ok(captureRunner.includes('phase2Credit: 0'));
-  assert.ok(captureRunner.includes('successorV3AuthorityChanged: false'));
 });
