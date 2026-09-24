@@ -67,6 +67,29 @@ function safetyEnvelope() {
   });
 }
 
+function deepFreeze(value, seen = new WeakSet()) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value) || seen.has(value)) return value;
+  seen.add(value);
+  for (const child of Object.values(value)) deepFreeze(child, seen);
+  return Object.freeze(value);
+}
+
+function settlementExecutionPolicyFromCandidate(candidate) {
+  const execution = candidate?.execution;
+  if (!execution || typeof execution !== "object") return null;
+  const template = {
+    marketAdapterIdentity: structuredClone(execution.marketAdapterIdentity ?? null),
+    executionPolicy: structuredClone(execution.executionPolicy ?? null),
+    strategyIdentity: structuredClone(execution.strategyIdentity ?? null),
+    costPolicyIdentity: {
+      version: execution.costPolicy?.version ?? null,
+    },
+    entryDataEvidence: structuredClone(execution.dataEvidence ?? null),
+    entryCostProvenance: structuredClone(execution.costProvenance ?? null),
+  };
+  return deepFreeze(template);
+}
+
 function directLoopStage(field, count, observationIds, provenance, observedAt) {
   const measured = Number.isInteger(count) && count >= 0;
   return Object.freeze({
@@ -370,6 +393,9 @@ function positionFromSample(sample, candidate) {
     entryFillPrice: sample.fill.fillPrice,
     lifecycleState: "OPEN",
     accountingEvidence,
+    entryCandidate: deepFreeze(structuredClone(candidate)),
+    entryCostProvenance: deepFreeze(structuredClone(candidate?.execution?.costProvenance ?? null)),
+    settlementExecutionPolicy: settlementExecutionPolicyFromCandidate(candidate),
     sample,
   };
   return Object.freeze({
@@ -448,7 +474,7 @@ async function produceTriggerBoundSettlementObservation({
   evaluatedAtMs,
 }) {
   if (typeof settlementCostProducer !== "function") {
-    return Object.freeze({ observation, blockers: Object.freeze([]) });
+    return Object.freeze({ observation, blockers: Object.freeze([]), evaluatedAtMs });
   }
   let result;
   try {
@@ -457,15 +483,28 @@ async function produceTriggerBoundSettlementObservation({
     return Object.freeze({
       observation,
       blockers: Object.freeze(["PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_COST_PRODUCER_FAILED"]),
+      evaluatedAtMs,
     });
   }
   if (result?.status === "PRESENT" && result?.observation && typeof result.observation === "object") {
-    return Object.freeze({ observation: result.observation, blockers: Object.freeze([]) });
+    return Object.freeze({
+      observation: result.observation,
+      blockers: Object.freeze([]),
+      evaluatedAtMs: finite(result.evaluatedAtMs) && result.evaluatedAtMs >= evaluatedAtMs
+        ? result.evaluatedAtMs
+        : evaluatedAtMs,
+    });
   }
   const blockers = Array.isArray(result?.blockers) && result.blockers.length > 0
     ? result.blockers.filter(nonEmpty)
     : ["PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_COST_EVIDENCE_MISSING"];
-  return Object.freeze({ observation, blockers: Object.freeze([...new Set(blockers)]) });
+  return Object.freeze({
+    observation,
+    blockers: Object.freeze([...new Set(blockers)]),
+    evaluatedAtMs: finite(result?.evaluatedAtMs) && result.evaluatedAtMs >= evaluatedAtMs
+      ? result.evaluatedAtMs
+      : evaluatedAtMs,
+  });
 }
 
 // Preserve the existing recurring settlement identity and record shape for
@@ -588,6 +627,7 @@ export async function runRecurringPaperCycle({
     const position = positions[positionIndex];
     const hadPendingExit = Boolean(position.lifecycle?.pendingExit);
     let effectiveObservation = observation;
+    let effectiveEvaluatedAtMs = cycle.evaluatedAtMs;
     let producerBlockers = [];
     if (hadPendingExit) {
       const produced = await produceTriggerBoundSettlementObservation({
@@ -597,12 +637,13 @@ export async function runRecurringPaperCycle({
         evaluatedAtMs: cycle.evaluatedAtMs,
       });
       effectiveObservation = produced.observation;
+      effectiveEvaluatedAtMs = produced.evaluatedAtMs;
       producerBlockers = [...produced.blockers];
     }
     let decision;
     try {
       decision = advanceNaturalPaperPositionLifecycle({
-        position, observation: effectiveObservation, evaluatedAtMs: cycle.evaluatedAtMs, state: predecessor, cycle,
+        position, observation: effectiveObservation, evaluatedAtMs: effectiveEvaluatedAtMs, state: predecessor, cycle,
       });
       if (!hadPendingExit
         && decision.status === "BLOCKED_SETTLEMENT_EVIDENCE"
@@ -617,11 +658,12 @@ export async function runRecurringPaperCycle({
         producerBlockers = [...produced.blockers];
         if (produced.blockers.length === 0) {
           effectiveObservation = produced.observation;
+          effectiveEvaluatedAtMs = produced.evaluatedAtMs;
           try {
             decision = advanceNaturalPaperPositionLifecycle({
               position: decision.position,
               observation: effectiveObservation,
-              evaluatedAtMs: cycle.evaluatedAtMs,
+              evaluatedAtMs: effectiveEvaluatedAtMs,
               state: predecessor,
               cycle,
             });
