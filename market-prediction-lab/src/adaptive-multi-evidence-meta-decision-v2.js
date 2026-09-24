@@ -52,7 +52,16 @@ function safety() {
   };
 }
 
-function baseResult({ status, decision, reasons, hardGates, probability, evidenceSummary, decisionDigest = null }) {
+function baseResult({
+  status,
+  decision,
+  reasons,
+  hardGates,
+  probability,
+  evidenceSummary,
+  contextSummary = null,
+  decisionDigest = null,
+}) {
   return deepFreeze({
     schemaVersion: ADAPTIVE_MULTI_EVIDENCE_META_DECISION_V2_VERSION,
     lineageId: ADAPTIVE_MULTI_EVIDENCE_V2_LINEAGE_ID,
@@ -63,6 +72,7 @@ function baseResult({ status, decision, reasons, hardGates, probability, evidenc
     hardVetoApplied: status === "BLOCKED" || decision === "NO_TRADE",
     probability,
     evidenceSummary,
+    contextSummary,
     decisionDigest,
     economicSampleCredit: 0,
     profitabilityProven: false,
@@ -137,6 +147,35 @@ function empiricalProbability(raw, context) {
     : { status: "UNAVAILABLE", value: null, reason: "CALIBRATION_EVIDENCE_INVALID_OR_MISMATCHED" };
 }
 
+function summarizeContext(regimeRouter) {
+  const raw = regimeRouter?.priceActionContext;
+  if (!raw || raw.status !== "AVAILABLE") {
+    return {
+      priceAction: {
+        status: "MISSING",
+        authority: "NONE",
+        contextDigest: null,
+        countedAsIndependentVote: false,
+        automaticDecisionOverride: false,
+      },
+    };
+  }
+  return {
+    priceAction: {
+      status: "AVAILABLE",
+      authority: regimeRouter.priceActionAuthority ?? raw.authority ?? "NONE",
+      contextDigest: regimeRouter.priceActionContextDigest ?? null,
+      structureTransition: raw.structureTransition ?? null,
+      candlestickPatterns: Array.isArray(raw.candlestickPatterns) ? [...raw.candlestickPatterns] : [],
+      latestSwingLegDirection: raw.latestSwingLegDirection ?? null,
+      swingRetracementRatio: raw.swingRetracementRatio ?? null,
+      retestHold: raw.retestHold ?? null,
+      countedAsIndependentVote: false,
+      automaticDecisionOverride: false,
+    },
+  };
+}
+
 function summarizeEvidence(rows, independence) {
   if (!Array.isArray(rows)) throw new Error("V2_META_SPECIALIST_EVIDENCE_ARRAY_REQUIRED");
   const canonicalIds = new Set(independence.canonicalEvidence.map((item) => item.evidenceId));
@@ -179,9 +218,15 @@ export function buildAdaptiveMultiEvidenceMetaDecisionV2(input = {}) {
       || input.independence?.lineageId !== ADAPTIVE_MULTI_EVIDENCE_V2_LINEAGE_ID
       || input.independence?.status !== "GROUPED_FOR_RESEARCH_ONLY"
       || input.independence?.executionAuthority !== "NONE") blockers.push("V2_META_INDEPENDENCE_INPUT_INVALID");
+  if (input.regimeRouter?.priceActionContext?.status === "AVAILABLE"
+      && (input.regimeRouter?.priceActionAuthority !== "CONTEXT_ONLY_NO_INDEPENDENT_VOTE"
+        || input.regimeRouter?.priceActionContext?.authority !== "CONTEXT_ONLY_NO_INDEPENDENT_VOTE")) {
+    blockers.push("V2_META_PRICE_ACTION_CONTEXT_AUTHORITY_INVALID");
+  }
   if (input.executionAuthority != null && input.executionAuthority !== "NONE") blockers.push("V2_META_EXECUTION_AUTHORITY_FORBIDDEN");
   if (blockers.length > 0) return blocked(blockers);
 
+  const contextSummary = summarizeContext(input.regimeRouter);
   let hardGates;
   let evidenceSummary;
   try {
@@ -210,6 +255,7 @@ export function buildAdaptiveMultiEvidenceMetaDecisionV2(input = {}) {
       hardGates,
       probability: { status: "UNAVAILABLE", value: null, reason: "DIRECTION_FORBIDDEN" },
       evidenceSummary,
+      contextSummary,
     });
   }
   if (ENTRY_DECISIONS.has(requestedDecision)
@@ -241,6 +287,7 @@ export function buildAdaptiveMultiEvidenceMetaDecisionV2(input = {}) {
       hardGates,
       probability,
       evidenceSummary,
+      contextSummary,
     });
   }
   if (evidenceSummary.supportGroups.length > 0 && evidenceSummary.opposeGroups.length > 0) {
@@ -251,6 +298,7 @@ export function buildAdaptiveMultiEvidenceMetaDecisionV2(input = {}) {
       hardGates,
       probability,
       evidenceSummary,
+      contextSummary,
     });
   }
   const core = {
@@ -263,6 +311,7 @@ export function buildAdaptiveMultiEvidenceMetaDecisionV2(input = {}) {
     requestedDecision,
     hardGates,
     evidenceSummary,
+    priceActionContextDigest: contextSummary.priceAction.contextDigest,
     probabilityEvidenceId: probability.evidenceId ?? null,
   };
   return baseResult({
@@ -272,6 +321,7 @@ export function buildAdaptiveMultiEvidenceMetaDecisionV2(input = {}) {
     hardGates,
     probability,
     evidenceSummary,
+    contextSummary,
     decisionDigest: sha256Canonical(core),
   });
 }
