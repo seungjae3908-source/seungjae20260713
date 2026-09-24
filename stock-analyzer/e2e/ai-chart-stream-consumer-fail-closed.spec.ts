@@ -275,6 +275,47 @@ test('accepted consumer path still transitions to live stream', () => {
   }
 });
 
+test('frame scheduler exception is contained and fails closed exactly once', () => {
+  const restore = installFakeWebSocket();
+  const clock = runtime();
+  const statuses: Array<{ status: string; reason: string }> = [];
+
+  try {
+    const client = createAiChartPublicStreamClient({
+      market: 'BITGET',
+      symbol: 'FRAMEFAILUSDT',
+      now: () => 50_000,
+      setTimeoutFn: clock.setTimeoutFn,
+      clearTimeoutFn: clock.clearTimeoutFn,
+      requestAnimationFrameFn: () => { throw new Error('fixture frame scheduler failure'); },
+      cancelAnimationFrameFn: clock.cancelAnimationFrameFn,
+      onTrades: () => true,
+      onStatus: (status, reason) => statuses.push({ status, reason }),
+    });
+
+    client.start();
+    const socket = ConsumerFailureSocketFake.instances[0];
+    socket.onopen?.({} as Event);
+
+    expect(() => socket.onmessage?.(bitgetTrade('FRAMEFAILUSDT', 'frame-1'))).not.toThrow();
+    expect(client.snapshot()).toMatchObject({
+      status: 'FALLBACK_POLLING',
+      reason: 'PROTOCOL_FAILURE',
+      reconnectAttempts: 0,
+      pendingEvents: 0,
+      pendingRenderWork: 0,
+    });
+    expect(statuses.filter((row) => row.reason === 'PROTOCOL_FAILURE')).toHaveLength(1);
+    expect(socket.closeCount).toBe(1);
+    expect(clock.timers.size).toBe(0);
+    expect(clock.frames.size).toBe(0);
+
+    client.stop();
+  } finally {
+    restore();
+  }
+});
+
 test('status observer exception cannot break connect, reconnect, or stop control flow', () => {
   const restore = installFakeWebSocket();
   const clock = runtime();
