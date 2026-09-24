@@ -260,7 +260,7 @@ test("delayed evidence for the exact original trigger settles at trigger time an
   complete.settlementCostEvidence.exitTriggerId = trigger.exitTriggerId;
   const result = await run(h, { state: restored, cycle: cycle("late-cost", T0 + 5_000), positionObservations: [complete] });
   assert.equal(result.state.settlements.length, 1);
-  assert.equal(result.state.settlements[0].settledAtMs, T0 + 1_000);
+  assert.equal(result.state.settlements[0].settledAtMs, evaluatedAtMs);
   assert.equal(result.state.settlements[0].settlementRecordedAtMs, T0 + 5_000);
   assert.equal(result.state.settlements[0].positionLifecycle.mark.observationCount, 1);
   assert.equal(result.state.settlements[0].naturalSampleCredit, 0);
