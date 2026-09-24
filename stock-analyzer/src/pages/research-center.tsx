@@ -22,6 +22,7 @@ import {
   WalletCards,
 } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
+import { PaperClosedLoopObserver } from '@/components/paper-closed-loop-observer';
 import { fetchResearchCenterOverview, type ResearchCandidatePerformance, type ResearchCenterOverview } from '@/lib/research-center';
 import {
   answerCanonicalResearchQuestion,
@@ -639,6 +640,8 @@ function PaperTab({ overview, cards }: { overview: ResearchCenterOverview; cards
         </div>
         <p className="mt-3 text-[10px] text-muted-foreground">시장 독립 표본 N과 후보별 매치·거래 수를 분리합니다. 후보 증거가 없으면 일반 Paper ledger 수를 빌려오지 않습니다.</p>
       </article>
+
+      <PaperClosedLoopObserver overview={overview} />
 
       <section className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6" aria-label="모의매매 핵심 KPI">
         <PaperKpi label="모의 평가금액" value="미측정" state="unmeasured" />
