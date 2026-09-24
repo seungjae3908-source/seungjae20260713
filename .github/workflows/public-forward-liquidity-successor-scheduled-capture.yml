@@ -77,6 +77,12 @@ jobs:
           ! grep -Eq 'deployments:[[:space:]]+write' "$workflow"
           ! grep -Eq 'packages:[[:space:]]+write' "$workflow"
           ! grep -Eq 'id-token:[[:space:]]+write' "$workflow"
+          test "$(grep -Fc "requiredRun.name !== 'Application CI'" "$workflow")" -eq 1
+          test "$(grep -Fc "requiredRun.path !== '.github/workflows/futures-public-network-smoke.yml'" "$workflow")" -eq 1
+          test "$(grep -Fc 'Number(requiredRun.workflow_id) !== 325169344' "$workflow")" -eq 1
+          test "$(grep -Fc "requiredRun.event !== 'push'" "$workflow")" -eq 1
+          test "$(grep -Fc "requiredRun.head_branch !== 'main'" "$workflow")" -eq 1
+          test "$(grep -Fc 'Number(requiredRun.run_attempt) !== 1' "$workflow")" -eq 1
           test "$(grep -Ec 'CAPTURE_ATTEMPT_ARTIFACT_NAME: [$][{][{] steps[.]capture[.]outputs[.]attempt_artifact_name [}][}]' "$workflow")" -eq 1
           test "$(grep -Fc 'artifact_name=${CAPTURE_ATTEMPT_ARTIFACT_NAME}' "$workflow")" -eq 1
           test "$(grep -Ec 'name: [$][{][{] steps[.]attempt_name[.]outputs[.]artifact_name [}][}]' "$workflow")" -eq 1
@@ -245,6 +251,22 @@ jobs:
               repo: context.repo.repo,
               run_id: requiredRunId,
             })).data;
+            if (requiredRun.name !== 'Application CI'
+              || requiredRun.path !== '.github/workflows/futures-public-network-smoke.yml'
+              || Number(requiredRun.workflow_id) !== 325169344) {
+              setBlocked(`SUCCESSOR_V3_REQUIRED_CI_WORKFLOW_IDENTITY_REJECTED:${requiredRunId}`);
+              return;
+            }
+            if (requiredRun.event !== 'push'
+              || requiredRun.head_branch !== 'main'
+              || requiredRun.head_repository?.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
+              setBlocked(`SUCCESSOR_V3_REQUIRED_CI_TRIGGER_IDENTITY_REJECTED:${requiredRunId}`);
+              return;
+            }
+            if (Number(requiredRun.run_attempt) !== 1) {
+              setBlocked(`SUCCESSOR_V3_REQUIRED_CI_REPLAY_ATTEMPT_REJECTED:${requiredRunId}`);
+              return;
+            }
             if (requiredRun.head_sha !== context.sha
               || requiredRun.status !== 'completed'
               || requiredRun.conclusion !== 'success') {
