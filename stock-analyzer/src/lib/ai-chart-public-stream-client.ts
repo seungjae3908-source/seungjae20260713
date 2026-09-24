@@ -291,8 +291,13 @@ export function createAiChartPublicStreamClient(
     let nextSocket: WebSocketLike;
     try { nextSocket = socketFactory(subscription.endpoint); }
     catch { forceFallback('WEBSOCKET_UNAVAILABLE'); return; }
-    if ('binaryType' in nextSocket) nextSocket.binaryType = 'arraybuffer';
     socket = nextSocket;
+    try {
+      if ('binaryType' in nextSocket) nextSocket.binaryType = 'arraybuffer';
+    } catch {
+      forceFallback('PROTOCOL_FAILURE');
+      return;
+    }
     if (!scheduleRuntimeTimer(() => {
       connectTimer = null;
       if (stopped || socket !== nextSocket || connectedAtMs != null) return;
