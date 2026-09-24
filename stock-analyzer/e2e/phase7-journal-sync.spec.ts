@@ -112,13 +112,15 @@ test('unified trade journal separates performance, quality, snapshots, and free-
   await expect(linkage).toContainText('Paper 기록 연결 상태');
   await expect(linkage).toContainText('APP_PAPER 연결 관측');
   await expect(linkage).toContainText('Paper 출처');
-  await expect(linkage).toContainText('1건');
-  await expect(linkage).toContainText('1 / 0');
-  await expect(linkage).toContainText('1/1');
+  await expect(linkage).toContainText('3건');
+  await expect(linkage).toContainText('3 / 0');
+  await expect(linkage).toContainText('3/3');
   await expect(linkage).toContainText('fees + tax 기준 · 8개 Full Cost와 별개');
   await expect(linkage).toContainText('100%');
-  await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('Research 후보 직접 연결 · 검증됨');
-  await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('검증 1/1');
+  await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('Research 후보 직접 연결 · 부분/미확인');
+  await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('검증 1/3');
+  await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('불일치 1');
+  await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('미확인 1');
   await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('AUTHENTICATED_PAPER_STATE');
   await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('candidate-authenticated-1');
   await expect(page.getByTestId('journal-link-paper-trading')).toHaveAttribute('href', '/paper-trading');
@@ -142,6 +144,59 @@ test('unified trade journal separates performance, quality, snapshots, and free-
   await expect(page.getByTestId('unified-journal-snapshot')).toContainText('진입 전 판단 근거');
   await expect(page.getByTestId('unified-journal-monthly')).toContainText('2026-08');
   expect(errors).toEqual([]);
+});
+
+test('binding, Trigger and search filters isolate journal verification states without rewriting analytics', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await open(page);
+
+  const list = page.getByTestId('unified-journal-list');
+  const analytics = page.getByTestId('unified-journal-analytics');
+  await expect(list).toContainText('거래 목록 3 / 3건');
+  await expect(analytics).toContainText('종료 거래');
+  await expect(analytics).toContainText('3');
+
+  await page.getByLabel('Research binding').selectOption('VERIFIED');
+  await expect(list).toContainText('거래 목록 1 / 3건');
+  await expect(list).toContainText('BTCUSDT');
+  await expect(list).not.toContainText('ETHUSDT');
+  await expect(list).not.toContainText('SOLUSDT');
+  await expect(analytics).toContainText('3');
+
+  await page.getByLabel('Research binding').selectOption('MISMATCH');
+  await expect(list).toContainText('거래 목록 1 / 3건');
+  await expect(list).toContainText('ETHUSDT');
+  await expect(list).not.toContainText('BTCUSDT');
+
+  await page.getByLabel('Research binding').selectOption('NOT_AVAILABLE');
+  await expect(list).toContainText('거래 목록 1 / 3건');
+  await expect(list).toContainText('SOLUSDT');
+
+  await page.getByLabel('Research binding').selectOption('ALL');
+  await page.getByLabel('Trigger binding filter').selectOption('VERIFIED');
+  await expect(list).toContainText('거래 목록 1 / 3건');
+  await expect(list).toContainText('BTCUSDT');
+
+  await page.getByLabel('Trigger binding filter').selectOption('UNVERIFIED');
+  await expect(list).toContainText('거래 목록 2 / 3건');
+  await expect(list).toContainText('ETHUSDT');
+  await expect(list).toContainText('SOLUSDT');
+  await expect(list).not.toContainText('BTCUSDT');
+
+  await page.getByLabel('Trigger binding filter').selectOption('ALL');
+  await page.getByLabel('거래 목록 검색').fill('candidate-authenticated-1');
+  await expect(list).toContainText('거래 목록 1 / 3건');
+  await expect(list).toContainText('BTCUSDT');
+
+  await page.getByLabel('거래 목록 검색').fill('ETHUSDT');
+  await expect(list).toContainText('거래 목록 1 / 3건');
+  await expect(list).toContainText('ETHUSDT');
+
+  await page.getByTestId('unified-journal-binding-filter-reset').click();
+  await expect(list).toContainText('거래 목록 3 / 3건');
+  await expect(page.getByLabel('Research binding')).toHaveValue('ALL');
+  await expect(page.getByLabel('Trigger binding filter')).toHaveValue('ALL');
+  await expect(page.getByLabel('거래 목록 검색')).toHaveValue('');
 });
 
 test('account switch creates isolated namespaces without exposing UUID', async ({ page }) => {
@@ -172,9 +227,13 @@ for (const viewport of [
     await page.getByRole('button', { name: '분석 불러오기' }).click();
     await expect(page.getByTestId('journal-analytics-result')).toBeVisible();
     await expect(page.getByTestId('unified-trade-journal')).toBeVisible();
+    await expect(page.getByTestId('unified-journal-binding-filters')).toBeVisible();
+    await expect(page.getByLabel('Research binding')).toBeVisible();
+    await expect(page.getByLabel('Trigger binding filter')).toBeVisible();
+    await expect(page.getByLabel('거래 목록 검색')).toBeVisible();
     await expect(page.getByTestId('journal-paper-linkage')).toBeVisible();
     await expect(page.getByTestId('journal-paper-linkage')).toContainText('APP_PAPER 연결 관측');
-    await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('Research 후보 직접 연결 · 검증됨');
+    await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('Research 후보 직접 연결 · 부분/미확인');
     await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('candidate-authenticated-1');
     await expect(page.getByTestId('unified-journal-detail')).toContainText('BTCUSDT');
     await expect(page.getByTestId('unified-journal-research-binding')).toContainText('candidate-authenticated-1');
