@@ -891,23 +891,29 @@ test("pending exit with no settlementInput remains blocked instead of throwing",
 });
 
 test("recurring caller freezes a new trigger before invoking the canonical cost producer", async () => {
-  const h = harness();
-  const opened = await open(h, "same-cycle-producer");
-  const position = opened.state.positions[0];
-  const complete = observation(position, "same-cycle-trigger", T0 + 1_000,
-    { open: 100, high: 106, low: 99, close: 105 });
+  const { h, state } = await naturalFixture();
+  const cycleId = "same-cycle-trigger";
+  const evaluatedAtMs = T0 + FOUR_HOURS;
+  const position = state.positions[0];
+  const complete = boundNaturalObservation(
+    state,
+    cycleId,
+    "same-cycle-trigger-observation",
+    evaluatedAtMs,
+    { open: 100, high: 106, low: 99, close: 105 },
+  );
   const raw = structuredClone(complete);
   raw.settlementCostEvidence = null;
   let collectedTrigger = null;
   const settlementCostProducer = createNaturalPaperTriggerBoundSettlementCostProducer({
-    async collectAuthoritativeEvidence({ position: pendingPosition, exitTrigger, evaluatedAtMs }) {
+    async collectAuthoritativeEvidence({ position: pendingPosition, exitTrigger, evaluatedAtMs: ownerAtMs }) {
       collectedTrigger = exitTrigger;
-      return authoritativeTriggerSettlementEvidence(pendingPosition, exitTrigger, complete, evaluatedAtMs);
+      return authoritativeTriggerSettlementEvidence(pendingPosition, exitTrigger, complete, ownerAtMs);
     },
   });
   const result = await run(h, {
-    state: opened.state,
-    cycle: cycle("same-cycle-trigger", T0 + 1_000),
+    state,
+    cycle: cycle(cycleId, evaluatedAtMs),
     positionObservations: [raw],
     settlementCostProducer,
   });
