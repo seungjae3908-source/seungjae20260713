@@ -93,6 +93,41 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
       </section>
     </div>
 
+    {trade.source === 'APP_PAPER' ? (
+      <section className="min-w-0 rounded-xl border border-border p-3" data-testid="unified-journal-research-binding">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h4 className="text-sm font-bold">Research lineage</h4>
+            <p className="mt-1 text-[10px] text-muted-foreground">authenticated Paper state와 검증된 candidate binding만 표시합니다.</p>
+          </div>
+          <span className={`rounded-full border px-2 py-1 text-[10px] font-extrabold ${
+            trade.canonicalResearchBinding?.status === 'VERIFIED'
+              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700'
+              : trade.canonicalResearchBinding?.status === 'MISMATCH'
+                ? 'border-destructive/40 bg-destructive/10 text-destructive'
+                : 'border-border bg-muted text-muted-foreground'
+          }`}>
+            {trade.canonicalResearchBinding?.status ?? 'NOT_AVAILABLE'}
+          </span>
+        </div>
+        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <Metric label="candidateId" value={trade.canonicalResearchBinding?.candidateId ?? 'N/A'} />
+          <Metric label="strategyId" value={trade.canonicalResearchBinding?.strategyId ?? 'N/A'} />
+          <Metric label="Research SHA" value={trade.canonicalResearchBinding?.researchCodeSha ?? 'N/A'} />
+          <Metric
+            label="Settlement binding"
+            value={trade.canonicalResearchBinding?.settlementBindingVerified ? '검증됨' : '미검증'}
+          />
+        </div>
+        <p className="mt-2 break-all font-mono text-[10px] text-muted-foreground">
+          reason · {trade.canonicalResearchBinding?.reason ?? 'AUTHENTICATED_BINDING_NOT_AVAILABLE'}
+        </p>
+        <p className="mt-1 text-[10px] text-muted-foreground">
+          이 연결은 후보 identity용입니다. Journal fees/tax나 Research 8개 Full Cost 수익성 검증을 대신하지 않습니다.
+        </p>
+      </section>
+    ) : null}
+
     <section className="min-w-0 rounded-xl border border-border p-3" data-testid="unified-journal-snapshot">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h4 className="text-sm font-bold">진입 시점 분석 스냅샷</h4>
