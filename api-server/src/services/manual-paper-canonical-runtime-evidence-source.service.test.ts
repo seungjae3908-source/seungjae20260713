@@ -176,14 +176,15 @@ test('enabled runtime bridge binds preserved eight-component entry cost evidence
     at: new Date(NOW).toISOString(),
   }, state));
   assert.ok(evidence);
-  assert.equal(evidence.position.positionId, position.positionId);
-  assert.equal(evidence.candidate.candidateId, CANDIDATE_ID);
-  assert.equal(evidence.entryCostEvidence.status, 'PRESENT');
-  assert.equal(evidence.entryCostEvidence.fullCostReady, true);
-  assert.equal(evidence.entryCostEvidence.unknownIsZero, false);
-  assert.equal(evidence.entryCostEvidence.unavailableCostConvertedToZero, false);
-  assert.equal(Object.keys(evidence.entryCostEvidence.components).length, 8);
-  for (const component of Object.values(evidence.entryCostEvidence.components) as any[]) {
+  const packet = evidence as any;
+  assert.equal(packet.position.positionId, position.positionId);
+  assert.equal(packet.candidate.candidateId, CANDIDATE_ID);
+  assert.equal(packet.entryCostEvidence.status, 'PRESENT');
+  assert.equal(packet.entryCostEvidence.fullCostReady, true);
+  assert.equal(packet.entryCostEvidence.unknownIsZero, false);
+  assert.equal(packet.entryCostEvidence.unavailableCostConvertedToZero, false);
+  assert.equal(Object.keys(packet.entryCostEvidence.components).length, 8);
+  for (const component of Object.values(packet.entryCostEvidence.components) as any[]) {
     assert.equal(component.positionId, position.positionId);
     assert.equal(component.paperSampleId, position.paperSampleId);
     assert.equal(component.policyIdentity.version, 'cost-v1');
