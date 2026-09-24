@@ -5,6 +5,7 @@ import {
   buildAdaptiveMultiEvidenceMarketFeaturesV2,
 } from "../src/adaptive-multi-evidence-market-features-v2.js";
 import { buildAdaptiveMultiEvidencePriceStructureV2 } from "../src/adaptive-multi-evidence-price-structure-v2.js";
+import { sha256Canonical } from "../src/research-cache-provenance.js";
 
 const START = Date.parse("2026-09-14T00:00:00.000Z");
 const STEP = 15 * 60 * 1000;
@@ -137,6 +138,14 @@ test("trend, momentum, volume, and volatility are measurable point-in-time evide
   assert.ok(Number.isFinite(result.features.volume.priceVolumeCorrelation));
   assert.ok(Number.isFinite(result.features.volatility.atrPct));
   assert.ok(Number.isFinite(result.features.volatility.realizedVolatility));
+  assert.match(result.priceActionSourceContentDigest, /^[a-f0-9]{64}$/u);
+  assert.equal(
+    result.priceActionSourceDigest,
+    sha256Canonical({
+      sourceContentDigest: result.priceActionSourceContentDigest,
+      priceAction: result.features.priceAction,
+    }),
+  );
 });
 
 test("missing optional benchmark and higher timeframe context stays explicit instead of becoming zero", () => {
@@ -172,6 +181,7 @@ test("future and unclosed bars cannot alter features or evidence identity", () =
   });
   assert.deepEqual(after.features, before.features);
   assert.equal(after.contentDigest, before.contentDigest);
+  assert.equal(after.priceActionSourceDigest, before.priceActionSourceDigest);
   assert.deepEqual(
     Object.values(after.evidence).map((item) => item.evidenceId),
     Object.values(before.evidence).map((item) => item.evidenceId),
