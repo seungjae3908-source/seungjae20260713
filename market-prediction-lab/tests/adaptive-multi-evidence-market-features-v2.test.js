@@ -281,9 +281,18 @@ test("wave, candlestick, and BOS/CHOCH context is exposed downstream without an 
       options: PHASE_2_OPTIONS,
     }).evidence.priceStructure.evidenceId,
   );
-  assert.match(result.features.priceAction.priceStructureEvidenceId, /^[a-f0-9]{64}$/u);
-  assert.match(result.features.priceAction.candleEvidenceId, /^[a-f0-9]{64}$/u);
-  assert.match(result.features.priceAction.patternEvidenceId, /^[a-f0-9]{64}$/u);
+  assert.match(
+    result.features.priceAction.priceStructureEvidenceId,
+    /^adaptive-v2-evidence:[a-f0-9]{64}$/u,
+  );
+  assert.match(
+    result.features.priceAction.candleEvidenceId,
+    /^adaptive-v2-evidence:[a-f0-9]{64}$/u,
+  );
+  assert.match(
+    result.features.priceAction.patternEvidenceId,
+    /^adaptive-v2-evidence:[a-f0-9]{64}$/u,
+  );
   assert.equal(result.features.priceAction.authority, "CONTEXT_ONLY_NO_INDEPENDENT_VOTE");
   assert.equal(result.correlationGroups.priceAction, result.correlationGroups.trend);
   assert.equal(result.priceActionAuthority, "CONTEXT_ONLY_NO_INDEPENDENT_VOTE");
