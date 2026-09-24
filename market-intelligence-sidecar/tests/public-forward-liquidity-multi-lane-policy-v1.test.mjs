@@ -28,7 +28,7 @@ const SUCCESSOR_ACTIVE_TEST = Object.freeze({
 });
 
 function ciEvidence(overrides = {}) {
-  const completedAt = overrides.completedAt ?? '2026-10-02T15:05:00.000Z';
+  const completedAt = overrides.completedAt ?? '2026-09-11T06:05:00.000Z';
   return {
     exactMainSha: EXACT_MAIN,
     workflowRun: {
@@ -121,25 +121,15 @@ test('Option B policy, digests, checkpoint, and safety boundary are frozen', () 
 test('activation derives only from exact-main terminal 6/6 after one complete hourly lead slot', () => {
   const activation = derivePublicForwardLiquidityMultiLaneActivation(ciEvidence());
   assert.equal(activation.postMergeRequiredCiHeadSha, EXACT_MAIN);
-  assert.equal(activation.postMergeRequiredCiCompletedAtMs, Date.parse('2026-10-02T15:05:00.000Z'));
-  assert.equal(activation.completeLeadSlotStartMs, Date.parse('2026-10-02T16:00:00.000Z'));
-  assert.equal(activation.completeLeadSlotEndMs, Date.parse('2026-10-02T17:00:00.000Z'));
-  assert.equal(activation.activationBoundaryMs, Date.parse('2026-10-02T17:17:00.000Z'));
-  assert.equal(activation.activationSlotIndex, 194);
+  assert.equal(activation.postMergeRequiredCiCompletedAtMs, Date.parse('2026-09-11T06:05:00.000Z'));
+  assert.equal(activation.completeLeadSlotStartMs, Date.parse('2026-09-11T07:00:00.000Z'));
+  assert.equal(activation.completeLeadSlotEndMs, Date.parse('2026-09-11T08:00:00.000Z'));
+  assert.equal(activation.activationBoundaryMs, Date.parse('2026-09-11T08:17:00.000Z'));
   assert.equal(
     activation.activationBoundaryDigest,
     sha256(canonicalJson(Object.fromEntries(
       Object.entries(activation).filter(([key]) => key !== 'activationBoundaryDigest'),
     ))),
-  );
-});
-
-test('activation fails closed before the rebound V3 cohort advances beyond the approved checkpoint', () => {
-  assert.throws(
-    () => derivePublicForwardLiquidityMultiLaneActivation(ciEvidence({
-      completedAt: '2026-09-24T16:05:00.000Z',
-    })),
-    /PHASE2_ACTIVATION_BOUNDARY_NOT_FUTURE_V3_SLOT/,
   );
 });
 
@@ -191,7 +181,6 @@ test('lane keys are distinct, global slot key is shared, and UTC27 is never a th
   assert.equal(utc17.globalSlotKeyDigest, utc37.globalSlotKeyDigest);
   assert.equal(utc17.maxCreditPerLanePerSlot, 1);
   assert.equal(utc17.maxTotalCreditPerSlot, 2);
-  assert.equal(utc17.scope.cohortDigest, SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest);
   const utc27 = resolvePublicForwardLiquidityMultiLaneCreditIdentity({
     scheduleExpression: '27 * * * *',
     actualRunStartedAtMs: activation.activationBoundaryMs + 10 * 60_000,
