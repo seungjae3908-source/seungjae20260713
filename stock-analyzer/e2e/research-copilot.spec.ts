@@ -150,11 +150,12 @@ for (const [width, height] of viewports) {
     await page.setViewportSize({ width, height });
     const diagnostics = await setup(page);
     await page.goto('/research-center');
-    await expect(page.getByRole('heading', { name: '연구센터', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '현재 어디까지 왔나요?', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'AI 도우미', exact: true }).click();
     await expect(page.getByTestId('research-copilot')).toBeVisible();
     await expect(page.getByText('AI는 가설과 연구 절차를 설명합니다.', { exact: false })).toBeVisible();
-    await expect(page.getByText('AI 사용 불가: FREE_TIER_NOT_CONFIRMED')).toBeVisible();
+    await expect(page.getByText('AI 제공자 무료 사용 가능 여부 미확인')).toBeVisible();
+    await expect(page.getByText('왜 버튼을 누를 수 없나요?')).toBeVisible();
     await expect(page.getByRole('button', { name: '후보 가설 제안' })).toBeDisabled();
     expect(diagnostics.calls.filter(call => call.startsWith('POST'))).toEqual([]);
     await expect(page.getByRole('region', { name: '연구 단계' }).getByRole('article')).toHaveCount(10);
