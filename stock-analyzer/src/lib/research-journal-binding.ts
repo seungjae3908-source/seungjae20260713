@@ -7,6 +7,9 @@ export type ResearchJournalCandidateBinding = Readonly<{
   strategyId: string | null;
   researchCodeSha: string | null;
   settlementBindingVerified: boolean;
+  exitTriggerId: string | null;
+  exitExecutionId: string | null;
+  triggerBindingVerified: boolean;
 }>;
 
 export type ResearchJournalBindingReadback = Readonly<{
@@ -60,6 +63,11 @@ function parseTradeBinding(value: unknown): ResearchJournalCandidateBinding | nu
     || binding.profitabilityCredit !== 0
     || typeof binding.settlementBindingVerified !== 'boolean') return null;
   const status = binding.status as ResearchJournalCandidateBinding['status'];
+  const triggerBindingVerified = status === 'VERIFIED'
+    && binding.settlementBindingVerified === true
+    && binding.triggerBindingVerified === true
+    && Boolean(text(binding.exitTriggerId, 240))
+    && Boolean(text(binding.exitExecutionId, 240));
   return Object.freeze({
     status,
     reason: text(binding.reason) ?? 'CANONICAL_JOURNAL_BINDING_REASON_UNAVAILABLE',
@@ -69,6 +77,9 @@ function parseTradeBinding(value: unknown): ResearchJournalCandidateBinding | nu
       ? String(binding.researchCodeSha)
       : null,
     settlementBindingVerified: binding.settlementBindingVerified,
+    exitTriggerId: triggerBindingVerified ? text(binding.exitTriggerId, 240) : null,
+    exitExecutionId: triggerBindingVerified ? text(binding.exitExecutionId, 240) : null,
+    triggerBindingVerified,
   });
 }
 
