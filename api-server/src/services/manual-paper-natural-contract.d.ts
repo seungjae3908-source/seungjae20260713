@@ -4,6 +4,7 @@ declare module '*natural-paper-position-settlement-lifecycle-v1.js' {
   export function advanceNaturalPaperPositionLifecycle(input: unknown): any;
 }
 declare module '*natural-paper-trigger-bound-settlement-cost-producer-v1.js' {
+  export function bindNaturalPaperTriggerBoundSettlementEvidence(input: unknown): any;
   export function validateNaturalPaperTriggerBoundSettlementEvidence(input: unknown): any;
 }
 declare module '*four-market-paper-sampler-v1.js' {
