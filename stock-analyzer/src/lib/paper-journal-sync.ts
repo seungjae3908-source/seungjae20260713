@@ -80,6 +80,7 @@ export type UnifiedCanonicalResearchBinding = {
   reason:string;
   candidateId:string|null; strategyId:string|null; parameterHash:string|null; researchCodeSha:string|null;
   naturalPositionId:string|null; paperSampleId:string|null; settlementId:string|null; settlementBindingVerified:boolean;
+  exitTriggerId:string|null; exitExecutionId:string|null; triggerBindingVerified:boolean;
   executionAuthority:'NONE'; profitabilityCredit:0;
 };
 export type UnifiedCanonicalResearchBindingSummary = {
