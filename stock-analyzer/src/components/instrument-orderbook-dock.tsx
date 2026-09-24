@@ -80,9 +80,9 @@ function parseLevel(value: unknown): Level | null {
   const cumulativeQuantity = finite(row.cumulativeQuantity);
   if (
     rank == null || price == null || quantity == null || cumulativeQuantity == null
-    || rank < 1 || price <= 0 || quantity <= 0 || cumulativeQuantity < quantity
+    || !Number.isInteger(rank) || rank < 1 || price <= 0 || quantity <= 0 || cumulativeQuantity < quantity
   ) return null;
-  return { rank: Math.trunc(rank), price, quantity, cumulativeQuantity };
+  return { rank, price, quantity, cumulativeQuantity };
 }
 
 function parsePayload(value: unknown): Payload {
@@ -119,7 +119,11 @@ function parsePayload(value: unknown): Payload {
     }
     rows.sort((left, right) => side === 'ask' ? left.price - right.price : right.price - left.price);
     let cumulative = 0;
-    for (const item of rows) {
+    for (let index = 0; index < rows.length; index += 1) {
+      const item = rows[index];
+      if (item.rank !== index + 1) {
+        throw new Error('ORDERBOOK_LEVELS_CORRUPT');
+      }
       cumulative += item.quantity;
       if (Math.abs(item.cumulativeQuantity - cumulative) > 1e-8) {
         throw new Error('ORDERBOOK_LEVELS_CORRUPT');
