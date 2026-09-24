@@ -15,6 +15,7 @@ import {
   advanceNaturalPaperPositionLifecycle,
   createNaturalPaperPositionLifecycle,
 } from "./natural-paper-position-settlement-lifecycle-v1.js";
+import { bindNaturalPaperTriggerBoundSettlementEvidence } from "./natural-paper-trigger-bound-settlement-cost-producer-v1.js";
 import { isAdaptiveMultiEvidenceV2FrozenCandidateId } from "./adaptive-multi-evidence-natural-paper-v2.js";
 
 const MARKETS = Object.freeze(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"]);
@@ -72,6 +73,76 @@ function deepFreeze(value, seen = new WeakSet()) {
   seen.add(value);
   for (const child of Object.values(value)) deepFreeze(child, seen);
   return Object.freeze(value);
+}
+
+function durableJsonClone(value) {
+  const serialized = JSON.stringify(value);
+  if (typeof serialized !== "string") {
+    throw new Error("PAPER_SETTLEMENT_OWNER_EVIDENCE_NOT_JSON_SERIALIZABLE");
+  }
+  return JSON.parse(serialized);
+}
+
+export const CANONICAL_NATURAL_SETTLEMENT_OWNER_EVIDENCE_VERSION =
+  "canonical-natural-settlement-owner-evidence-v1";
+
+export function buildCanonicalNaturalSettlementOwnerEvidence({
+  position,
+  sourceObservation,
+  authoritativeEvidence,
+  trigger = position?.lifecycle?.pendingExit,
+  evaluatedAtMs,
+  expectedBindingEvidenceDigest,
+} = {}) {
+  if (position?.lifecycle?.sampleEligibility?.provenanceClass !== "NATURAL_FORWARD") {
+    throw new Error("PAPER_SETTLEMENT_OWNER_EVIDENCE_NATURAL_FORWARD_REQUIRED");
+  }
+  if (!trigger || trigger !== position?.lifecycle?.pendingExit) {
+    throw new Error("PAPER_SETTLEMENT_OWNER_EVIDENCE_TRIGGER_REFERENCE_REQUIRED");
+  }
+  if (!finite(evaluatedAtMs) || evaluatedAtMs <= 0) {
+    throw new Error("PAPER_SETTLEMENT_OWNER_EVIDENCE_EVALUATED_AT_REQUIRED");
+  }
+  const rebound = bindNaturalPaperTriggerBoundSettlementEvidence({
+    position,
+    observation: sourceObservation,
+    authoritativeEvidence,
+    evaluatedAtMs,
+  });
+  if (rebound?.status !== "PRESENT" || rebound?.fullCostReady !== true
+    || !digest(rebound?.evidenceDigest)
+    || rebound.evidenceDigest !== expectedBindingEvidenceDigest
+    || rebound.exitTriggerId !== trigger.exitTriggerId
+    || rebound.exitExecutionId !== rebound.observation?.triggerBoundSettlementEvidence?.exitExecutionId) {
+    throw new Error("PAPER_SETTLEMENT_OWNER_EVIDENCE_REBIND_MISMATCH");
+  }
+  const payload = {
+    schemaVersion: CANONICAL_NATURAL_SETTLEMENT_OWNER_EVIDENCE_VERSION,
+    positionId: position.positionId,
+    paperSampleId: position.paperSampleId,
+    candidateId: position.candidateId,
+    researchCodeSha: position.researchCodeSha,
+    exitTriggerId: trigger.exitTriggerId,
+    exitExecutionId: rebound.exitExecutionId,
+    evaluatedAtMs,
+    bindingEvidenceDigest: rebound.evidenceDigest,
+    position: durableJsonClone(position),
+    sourceObservation: durableJsonClone(sourceObservation),
+    authoritativeEvidence: durableJsonClone(authoritativeEvidence),
+    trigger: durableJsonClone(trigger),
+  };
+  return deepFreeze({
+    ...payload,
+    evidenceDigest: hash(payload),
+    unknownIsZero: false,
+    unavailableCostConvertedToZero: false,
+    naturalSampleCredit: 0,
+    executionAuthority: "NONE",
+    liveOrderAllowed: false,
+    privateTradingApiAllowed: false,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+  });
 }
 
 function settlementExecutionPolicyFromCandidate(candidate) {
@@ -474,7 +545,7 @@ async function produceTriggerBoundSettlementObservation({
   evaluatedAtMs,
 }) {
   if (typeof settlementCostProducer !== "function") {
-    return Object.freeze({ observation, blockers: Object.freeze([]), evaluatedAtMs });
+    return Object.freeze({ observation, blockers: Object.freeze([]), evaluatedAtMs, ownerEvidenceSource: null });
   }
   let result;
   try {
@@ -484,6 +555,7 @@ async function produceTriggerBoundSettlementObservation({
       observation,
       blockers: Object.freeze(["PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_COST_PRODUCER_FAILED"]),
       evaluatedAtMs,
+      ownerEvidenceSource: null,
     });
   }
   if (result?.status === "PRESENT" && result?.observation && typeof result.observation === "object") {
@@ -493,6 +565,13 @@ async function produceTriggerBoundSettlementObservation({
       evaluatedAtMs: finite(result.evaluatedAtMs) && result.evaluatedAtMs >= evaluatedAtMs
         ? result.evaluatedAtMs
         : evaluatedAtMs,
+      ownerEvidenceSource: result.sourceObservation && result.authoritativeEvidence
+        ? Object.freeze({
+          sourceObservation: result.sourceObservation,
+          authoritativeEvidence: result.authoritativeEvidence,
+          bindingEvidenceDigest: result.evidenceDigest ?? null,
+        })
+        : null,
     });
   }
   const blockers = Array.isArray(result?.blockers) && result.blockers.length > 0
@@ -504,6 +583,7 @@ async function produceTriggerBoundSettlementObservation({
     evaluatedAtMs: finite(result?.evaluatedAtMs) && result.evaluatedAtMs >= evaluatedAtMs
       ? result.evaluatedAtMs
       : evaluatedAtMs,
+    ownerEvidenceSource: null,
   });
 }
 
@@ -511,7 +591,7 @@ async function produceTriggerBoundSettlementObservation({
 // consumers that persist canonical settlements outside this loop. This only
 // transports supplied evidence; it neither produces costs nor grants credit.
 export function buildRecurringPaperSettlementRecord({
-  settlement, position, canonicalLifecycleEvidence, exitReason, settlementRecordedAtMs,
+  settlement, position, canonicalLifecycleEvidence, canonicalOwnerEvidence = null, exitReason, settlementRecordedAtMs,
 } = {}) {
   const settlementIdentity = Object.freeze({
     candidateId: settlement.candidateId,
@@ -535,9 +615,16 @@ export function buildRecurringPaperSettlementRecord({
     netPnl: settlement.netPnl,
     netReturnPercent: settlement.netReturnPercent,
   });
+  const settlementId = hash(settlementIdentity);
+  const canonicalOwnerEvidenceBindingDigest = canonicalOwnerEvidence == null ? null : hash({
+    settlementId,
+    ownerEvidenceDigest: canonicalOwnerEvidence.evidenceDigest,
+    exitTriggerId: settlement.exitTriggerId,
+    exitExecutionId: settlement.exitExecutionId,
+  });
   return Object.freeze({
     ...settlement,
-    settlementId: hash(settlementIdentity),
+    settlementId,
     settlementIdentity,
     entryId: settlement.paperSampleId,
     positionId: position.positionId,
@@ -545,6 +632,8 @@ export function buildRecurringPaperSettlementRecord({
     settlementRecordedAtMs,
     positionLifecycle: position.lifecycle ?? null,
     lifecycleEvidence: canonicalLifecycleEvidence,
+    canonicalOwnerEvidence: canonicalOwnerEvidence == null ? null : durableJsonClone(canonicalOwnerEvidence),
+    canonicalOwnerEvidenceBindingDigest,
     naturalSampleCredit: canonicalLifecycleEvidence?.naturalSampleCredit ?? 0,
     testOnlySampleCredit: 0,
     executionAuthority: "NONE",
@@ -628,6 +717,7 @@ export async function runRecurringPaperCycle({
     const hadPendingExit = Boolean(position.lifecycle?.pendingExit);
     let effectiveObservation = observation;
     let effectiveEvaluatedAtMs = cycle.evaluatedAtMs;
+    let effectiveOwnerEvidenceSource = null;
     let producerBlockers = [];
     if (hadPendingExit) {
       const produced = await produceTriggerBoundSettlementObservation({
@@ -638,6 +728,7 @@ export async function runRecurringPaperCycle({
       });
       effectiveObservation = produced.observation;
       effectiveEvaluatedAtMs = produced.evaluatedAtMs;
+      effectiveOwnerEvidenceSource = produced.ownerEvidenceSource;
       producerBlockers = [...produced.blockers];
     }
     let decision;
@@ -659,6 +750,7 @@ export async function runRecurringPaperCycle({
         if (produced.blockers.length === 0) {
           effectiveObservation = produced.observation;
           effectiveEvaluatedAtMs = produced.evaluatedAtMs;
+          effectiveOwnerEvidenceSource = produced.ownerEvidenceSource;
           try {
             decision = advanceNaturalPaperPositionLifecycle({
               position: decision.position,
@@ -711,11 +803,48 @@ export async function runRecurringPaperCycle({
       continue;
     }
     if (decision.status === "EXIT_ELIGIBLE") {
+      let canonicalOwnerEvidence = null;
+      if (decision.position?.lifecycle?.sampleEligibility?.provenanceClass === "NATURAL_FORWARD") {
+        if (!effectiveOwnerEvidenceSource) {
+          directReasons.push(loopReasonObservation({
+            sourceStage: "SETTLEMENT",
+            sourceCode: "PAPER_SETTLEMENT_OWNER_EVIDENCE_SOURCE_MISSING",
+            provenance: "recurring-paper-loop-v1 durable settlement owner evidence gate",
+            observedAt: cycle.evaluatedAtMs,
+            identity: cycle.identity,
+            observationId: observation.observationId,
+          }));
+          continue;
+        }
+        try {
+          canonicalOwnerEvidence = buildCanonicalNaturalSettlementOwnerEvidence({
+            position: decision.position,
+            sourceObservation: effectiveOwnerEvidenceSource.sourceObservation,
+            authoritativeEvidence: effectiveOwnerEvidenceSource.authoritativeEvidence,
+            trigger: decision.position.lifecycle.pendingExit,
+            evaluatedAtMs: effectiveEvaluatedAtMs,
+            expectedBindingEvidenceDigest: effectiveOwnerEvidenceSource.bindingEvidenceDigest,
+          });
+        } catch (error) {
+          directReasons.push(loopReasonObservation({
+            sourceStage: "SETTLEMENT",
+            sourceCode: typeof error?.message === "string"
+              ? error.message
+              : "PAPER_SETTLEMENT_OWNER_EVIDENCE_INVALID",
+            provenance: "recurring-paper-loop-v1 durable settlement owner evidence validation",
+            observedAt: cycle.evaluatedAtMs,
+            identity: cycle.identity,
+            observationId: observation.observationId,
+          }));
+          continue;
+        }
+      }
       lifecycleExits.push(Object.freeze({
         positionId: position.positionId,
         settlementInput: decision.settlementInput,
         exitReason: decision.exitReason,
         lifecycleEvidence: decision.evidence,
+        canonicalOwnerEvidence,
       }));
     }
   }
@@ -792,6 +921,7 @@ export async function runRecurringPaperCycle({
       settlement,
       position,
       canonicalLifecycleEvidence,
+      canonicalOwnerEvidence: lifecycleExits.includes(exit) ? exit.canonicalOwnerEvidence : null,
       exitReason: exit.exitReason,
       settlementRecordedAtMs: cycle.evaluatedAtMs,
     });
