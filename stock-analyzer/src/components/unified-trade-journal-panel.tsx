@@ -170,6 +170,9 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
 
 export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: Props) {
   const [filters, setFilters] = useState<UnifiedJournalFilters>({ range: '30D', market: 'ALL', source: 'ALL', grade: 'ALL' });
+  const [bindingFilter, setBindingFilter] = useState<'ALL'|'VERIFIED'|'MISMATCH'|'NOT_AVAILABLE'>('ALL');
+  const [triggerFilter, setTriggerFilter] = useState<'ALL'|'VERIFIED'|'UNVERIFIED'>('ALL');
+  const [searchText, setSearchText] = useState('');
   const [data, setData] = useState<UnifiedTradeJournal | null>(null);
   const [selectedId, setSelectedId] = useState('');
   const [busy, setBusy] = useState(true);
@@ -191,7 +194,30 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
     return () => controller.abort();
   }, [loadApi, requestKey, refreshVersion]);
 
-  const selected = useMemo(() => data?.trades.find((trade) => trade.id === selectedId) ?? data?.trades[0] ?? null, [data, selectedId]);
+  const visibleTrades = useMemo(() => {
+    if (!data) return [];
+    const query = searchText.trim().toLowerCase();
+    return data.trades.filter((trade) => {
+      const bindingStatus = trade.canonicalResearchBinding?.status ?? 'NOT_AVAILABLE';
+      if (bindingFilter !== 'ALL' && bindingStatus !== bindingFilter) return false;
+      const triggerVerified = trade.canonicalResearchBinding?.triggerBindingVerified === true;
+      if (triggerFilter === 'VERIFIED' && !triggerVerified) return false;
+      if (triggerFilter === 'UNVERIFIED' && triggerVerified) return false;
+      if (!query) return true;
+      const searchable = [
+        trade.symbol,
+        trade.strategy ?? '',
+        trade.canonicalResearchBinding?.candidateId ?? '',
+        trade.canonicalResearchBinding?.strategyId ?? '',
+        trade.canonicalResearchBinding?.researchCodeSha ?? '',
+      ].join(' ').toLowerCase();
+      return searchable.includes(query);
+    });
+  }, [bindingFilter, data, searchText, triggerFilter]);
+  const selected = useMemo(
+    () => visibleTrades.find((trade) => trade.id === selectedId) ?? visibleTrades[0] ?? null,
+    [selectedId, visibleTrades],
+  );
 
   function change(name: keyof UnifiedJournalFilters, value: string) {
     setFilters((current) => ({ ...current, [name]: value }));
@@ -224,6 +250,67 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
         <label className="grid min-w-0 gap-1 text-xs">출처<select className={controlClass} value={filters.source} onChange={(event) => change('source', event.target.value)}><option value="ALL">전체</option><option value="TOSS_MANUAL">{USER_TRADE_SOURCE_KO.TOSS_MANUAL}</option><option value="TOSS_API">{USER_TRADE_SOURCE_KO.TOSS_API}</option><option value="APP_PAPER">{USER_TRADE_SOURCE_KO.APP_PAPER}</option><option value="APP_SHADOW">{USER_TRADE_SOURCE_KO.APP_SHADOW}</option><option value="APP_AUTO">{USER_TRADE_SOURCE_KO.APP_AUTO}</option></select></label>
         <label className="grid min-w-0 gap-1 text-xs">품질 등급<select className={controlClass} value={filters.grade} onChange={(event) => change('grade', event.target.value)}><option value="ALL">전체 등급</option><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option></select></label>
       </div>
+
+      <div className="mt-3 rounded-xl border border-border bg-muted/20 p-3" data-testid="unified-journal-binding-filters">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-xs font-black">검증 연결 목록 필터</p>
+            <p className="mt-0.5 text-[10px] text-muted-foreground">아래 필터는 거래 목록에만 적용됩니다. 위 성과 요약은 서버 조회 전체 기준입니다.</p>
+          </div>
+          <button
+            type="button"
+            className={buttonClass}
+            onClick={() => {
+              setBindingFilter('ALL');
+              setTriggerFilter('ALL');
+              setSearchText('');
+            }}
+            data-testid="unified-journal-binding-filter-reset"
+          >
+            목록 필터 초기화
+          </button>
+        </div>
+        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <label className="grid min-w-0 gap-1 text-xs">
+            Research binding
+            <select
+              aria-label="Research binding"
+              className={controlClass}
+              value={bindingFilter}
+              onChange={(event) => setBindingFilter(event.target.value as typeof bindingFilter)}
+            >
+              <option value="ALL">전체</option>
+              <option value="VERIFIED">검증됨</option>
+              <option value="MISMATCH">불일치</option>
+              <option value="NOT_AVAILABLE">미확인</option>
+            </select>
+          </label>
+          <label className="grid min-w-0 gap-1 text-xs">
+            Trigger binding
+            <select
+              aria-label="Trigger binding filter"
+              className={controlClass}
+              value={triggerFilter}
+              onChange={(event) => setTriggerFilter(event.target.value as typeof triggerFilter)}
+            >
+              <option value="ALL">전체</option>
+              <option value="VERIFIED">Trigger 검증됨</option>
+              <option value="UNVERIFIED">Trigger 미검증</option>
+            </select>
+          </label>
+          <label className="grid min-w-0 gap-1 text-xs">
+            목록 검색
+            <input
+              aria-label="거래 목록 검색"
+              className={controlClass}
+              value={searchText}
+              onChange={(event) => setSearchText(event.target.value)}
+              placeholder="종목 · 전략 · candidateId"
+              inputMode="search"
+            />
+          </label>
+        </div>
+      </div>
     </div>
 
     {error ? <div role="alert" className="rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">{error}</div> : null}
@@ -254,8 +341,11 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
 
       <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(240px,0.7fr)_minmax(0,1.3fr)]">
         <div className="min-w-0 space-y-2 rounded-2xl border border-border bg-card p-3" data-testid="unified-journal-list">
-          <h3 className="px-1 text-sm font-bold">거래 목록 {data.trades.length}건</h3>
-          {data.trades.length === 0 ? <p className="rounded-xl bg-muted p-3 text-xs text-muted-foreground">선택한 조건에 해당하는 거래가 없습니다.</p> : data.trades.map((trade) => <button
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+            <h3 className="text-sm font-bold">거래 목록 {visibleTrades.length} / {data.trades.length}건</h3>
+            <span className="text-[10px] text-muted-foreground">목록 필터 적용</span>
+          </div>
+          {visibleTrades.length === 0 ? <p className="rounded-xl bg-muted p-3 text-xs text-muted-foreground">선택한 검증 연결 조건에 해당하는 거래가 없습니다.</p> : visibleTrades.map((trade) => <button
             type="button"
             key={trade.id}
             className={`w-full min-w-0 rounded-xl border p-3 text-left ${selected?.id === trade.id ? 'border-primary bg-primary/5' : 'border-border'}`}
