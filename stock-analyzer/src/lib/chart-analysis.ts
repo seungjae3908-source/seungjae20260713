@@ -116,18 +116,31 @@ export function isChartAnalysisDataStatusActionable(dataStatus: unknown): boolea
   return ACTIONABLE_DATA_STATUSES.has(normalizeToken(dataStatus));
 }
 
+function hasAnalysisIdentityProvenance(input: ChartAnalysisInput): boolean {
+  return [input.symbol, input.market, input.timeframe, input.source].every(
+    (value) => typeof value === 'string' && value.trim().length > 0,
+  );
+}
+
+function hasValidSupportResistanceRange(input: ChartAnalysisInput): boolean {
+  return (
+    Number.isFinite(input.support) &&
+    input.support > 0 &&
+    Number.isFinite(input.resistance) &&
+    input.resistance > input.support
+  );
+}
+
 function isChartAnalysisCoreDataActionable(input: ChartAnalysisInput): boolean {
   return (
+    hasAnalysisIdentityProvenance(input) &&
     Number.isFinite(input.latestTime) &&
     input.latestTime > 0 &&
     Number.isFinite(input.currentPrice) &&
     input.currentPrice > 0 &&
     Number.isFinite(input.previousClose) &&
     input.previousClose > 0 &&
-    Number.isFinite(input.support) &&
-    input.support > 0 &&
-    Number.isFinite(input.resistance) &&
-    input.resistance > 0
+    hasValidSupportResistanceRange(input)
   );
 }
 
@@ -327,6 +340,7 @@ export function buildChartAnalysis(input: ChartAnalysisInput): ChartAnalysis {
     ...input.patterns.map((pattern) => `패턴 후보: ${pattern}`),
   ];
   if (input.dataStatus) reasons.push(`데이터 상태: ${input.dataStatus}`);
+  if (!hasAnalysisIdentityProvenance(input)) reasons.push('분석 식별자/출처: unavailable');
   if (!isChartAnalysisCoreDataActionable(input)) reasons.push('핵심 가격/시간 데이터: unavailable');
 
   const points = input.anchorPoints?.length
@@ -336,10 +350,12 @@ export function buildChartAnalysis(input: ChartAnalysisInput): ChartAnalysis {
     : latestTime > 0 && Number.isFinite(input.currentPrice) && input.currentPrice > 0
       ? [{ time: latestTime, price: input.currentPrice, role: 'latest' }]
       : [];
-  const priceLevels = [
-    { price: input.support, role: 'support' },
-    { price: input.resistance, role: 'resistance' },
-  ].filter((level) => Number.isFinite(level.price) && level.price > 0);
+  const priceLevels = hasValidSupportResistanceRange(input)
+    ? [
+        { price: input.support, role: 'support' },
+        { price: input.resistance, role: 'resistance' },
+      ]
+    : [];
 
   return {
     id,
