@@ -115,6 +115,11 @@ function sameNullableTimestamp(left: string | null, right: string | null): boole
     && Date.parse(left) === Date.parse(right);
 }
 
+function sameNullableNumber(left: number | null, right: number | null): boolean {
+  if (left == null || right == null) return left === right;
+  return sameNumber(left, right);
+}
+
 function ownerJournalMatchesTrade(owner: PaperJournalEntry, trade: UnifiedTradeCycle): boolean {
   const side = owner.side === 'short' ? 'SHORT' : 'LONG';
   const status = owner.status === 'closed' ? 'CLOSED' : 'OPEN';
@@ -122,10 +127,13 @@ function ownerJournalMatchesTrade(owner: PaperJournalEntry, trade: UnifiedTradeC
     && owner.symbol.toUpperCase() === trade.symbol
     && side === trade.positionSide
     && status === trade.status
+    && owner.orderId === trade.initialEntry.orderId
     && sameNumber(owner.entryPrice, trade.entryPrice)
+    && sameNullableNumber(owner.exitPrice, trade.exitPrice)
     && sameNumber(owner.initialQuantity, trade.totalQuantity)
     && sameNumber(owner.closedQuantity, trade.closedQuantity)
     && sameNumber(owner.remainingQuantity, trade.remainingQuantity)
+    && sameNumber(owner.grossPnl, trade.grossPnl)
     && Date.parse(owner.filledAt) === Date.parse(trade.openedAt)
     && sameNullableTimestamp(owner.closedAt, trade.closedAt)
     && (trade.strategy == null || owner.strategyName === trade.strategy);
@@ -193,21 +201,53 @@ function verifiedLineage(
   const settlement = lineage.settlement as Record<string, unknown> | undefined;
   if (settlement) {
     const settlementIdentity = settlement.settlementIdentity;
-    const fullCost = lineage.fullCost as Record<string, unknown> | undefined;
+    const fullCost = lineage.fullCost && typeof lineage.fullCost === 'object' && !Array.isArray(lineage.fullCost)
+      ? lineage.fullCost as Record<string, unknown>
+      : null;
+    const lifecycleEvidence = settlement.lifecycleEvidence && typeof settlement.lifecycleEvidence === 'object'
+      && !Array.isArray(settlement.lifecycleEvidence)
+      ? settlement.lifecycleEvidence as Record<string, unknown>
+      : null;
     const identity = settlementIdentity && typeof settlementIdentity === 'object' && !Array.isArray(settlementIdentity)
       ? settlementIdentity as Record<string, unknown>
       : null;
-    const candidateMatch = identity?.candidateId === lineage.identity.candidateId;
-    const positionMatch = identity?.positionId === lineage.naturalPositionId;
-    const entryMatch = identity?.entryId === lineage.paperSampleId;
     const storedId = text(settlement.settlementId) ? settlement.settlementId : null;
+    const entryDirection = String(settlement.entryDirection ?? '');
+    const canonicalSide = entryDirection === 'SHORT' ? 'SHORT' : ['BUY', 'LONG'].includes(entryDirection) ? 'LONG' : null;
+    const identityMatch = identity?.candidateId === lineage.identity.candidateId
+      && identity?.positionId === lineage.naturalPositionId
+      && identity?.entryId === lineage.paperSampleId
+      && identity?.market === lineage.identity.market
+      && identity?.symbol === lineage.identity.symbol
+      && identity?.timeframe === lineage.identity.timeframe
+      && identity?.side === lineage.identity.side
+      && identity?.parameterDigest === lineage.identity.parameterDigest
+      && identity?.accountMode === lineage.identity.accountMode;
+    const topLevelMatch = settlement.candidateId === lineage.identity.candidateId
+      && settlement.strategyId === lineage.identity.strategyId
+      && settlement.parameterHash === lineage.identity.parameterHash
+      && settlement.parameterDigest === lineage.identity.parameterDigest
+      && settlement.market === lineage.identity.market
+      && settlement.symbol === lineage.identity.symbol
+      && settlement.timeframe === lineage.identity.timeframe
+      && settlement.accountMode === lineage.identity.accountMode
+      && settlement.researchCodeSha === lineage.identity.researchCodeSha
+      && settlement.positionId === lineage.naturalPositionId
+      && settlement.entryId === lineage.paperSampleId
+      && canonicalSide === lineage.identity.side;
     const digestMatch = storedId != null && identity != null
       && storedId === manualPaperEvidenceSha256(identity);
-    const triggerMatch = text(settlement.exitTriggerId)
-      && settlement.exitTriggerId === fullCost?.exitTriggerId;
-    const executionMatch = text(settlement.exitExecutionId)
-      && settlement.exitExecutionId === fullCost?.exitExecutionId;
-    if (candidateMatch && positionMatch && entryMatch && digestMatch && triggerMatch && executionMatch) {
+    const triggerMatch = fullCost != null
+      && text(settlement.exitTriggerId)
+      && settlement.exitTriggerId === fullCost.exitTriggerId;
+    const executionMatch = fullCost != null
+      && text(settlement.exitExecutionId)
+      && settlement.exitExecutionId === fullCost.exitExecutionId;
+    const costDigestMatch = fullCost != null
+      && identity?.costEvidenceDigest === fullCost.evidenceDigest
+      && lifecycleEvidence != null
+      && manualPaperEvidenceSha256(lifecycleEvidence.costEvidence) === manualPaperEvidenceSha256(fullCost);
+    if (identityMatch && topLevelMatch && digestMatch && triggerMatch && executionMatch && costDigestMatch) {
       settlementId = storedId;
       settlementBindingVerified = true;
     }
