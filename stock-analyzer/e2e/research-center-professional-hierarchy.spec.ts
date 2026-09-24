@@ -30,6 +30,64 @@ const overview = {
       orderAuthority: false,
     },
     ledger: { present: true, cycleCount: 2, sampleCount: 7, positionCount: 1, settlementCount: 7 },
+    candidatePerformance: {
+      present: true,
+      status: 'PRESENT',
+      schemaVersion: 'frozen-candidate-performance-reader-v1',
+      FIRST_ZERO: 'CANONICAL_SUPPLEMENTAL_COST_EVIDENCE_MISSING',
+      reason: '일부 비용이 아직 실제 관측 근거로 연결되지 않았습니다.',
+      candidateId: 'candidate-full-cost-1',
+      strategyId: 'strategy-full-cost-1',
+      freezeTimestamp: '2026-09-24T08:00:00.000Z',
+      identity14Verified: true,
+      fullCostEvidence: {
+        fullCostReady: false,
+        components: {
+          commission: { state: 'MEASURED', valuePercent: 0.02, provenance: 'public:commission' },
+          tax: { state: 'MEASURED', valuePercent: 0, provenance: 'public:tax' },
+          spread: { state: 'MEASURED', valuePercent: 0.01, provenance: 'public:spread' },
+          slippage: { state: 'MODELED', valuePercent: 0.03, provenance: 'model:slippage' },
+          funding: { state: 'MEASURED', valuePercent: 0.01, provenance: 'public:funding' },
+          latency: { state: 'UNKNOWN', valuePercent: null, provenance: null },
+          liquidityImpact: { state: 'BLOCKED_DATA', valuePercent: null, provenance: 'public:orderbook' },
+          partialFillImpact: { state: 'UNKNOWN', valuePercent: null, provenance: null },
+        },
+      },
+      effectiveIndependentMarketN: 128,
+      candidateMatchedN: 12,
+      LONG_SIGNAL_N: 7,
+      SHORT_SIGNAL_N: 5,
+      NO_TRADE_N: 0,
+      Entry_N: 5,
+      Position_N: 2,
+      PositionObservation_N: 4,
+      Settlement_N: 3,
+      TRAIN_N: 12,
+      VALIDATION_N: 0,
+      OOS_N: 0,
+      WIN_N: 2,
+      LOSS_N: 1,
+      BREAKEVEN_N: 0,
+      WIN_RATE: null,
+      AVG_WIN: null,
+      AVG_LOSS: null,
+      PAYOFF_RATIO: null,
+      GROSS_EXPECTANCY: null,
+      PF: null,
+      MDD: null,
+      MFE: null,
+      MAE: null,
+      TIME_TO_EXIT: null,
+      Gross_PnL: null,
+      Net_PnL: null,
+      FULL_COST_READY: false,
+      NET_ALPHA_PROVEN: false,
+      PROFITABILITY_PROVEN: false,
+      TRAIN_DIAGNOSTIC_ONLY: true,
+      VALIDATION_COMPLETE: false,
+      OOS_COMPLETE: false,
+      executionAuthority: 'NONE',
+    },
   },
   shadow: {
     groups: [],
@@ -141,6 +199,19 @@ for (const [width, height] of [[320, 740], [390, 844], [768, 900], [1199, 900], 
     await expect(paperCard).toContainText('모의매매 표본');
     await paperCard.click();
     await expect(page.getByTestId('research-general-selected-detail')).toContainText('다음에 뭘 보면 되나요?');
+    const fullCost = page.getByTestId('research-full-cost-summary');
+    await expect(fullCost).toBeVisible();
+    await expect(fullCost).toContainText('FULL_COST_READY · 미충족');
+    await expect(fullCost).toContainText('4/8');
+    await expect(fullCost).toContainText('후보 Settlement 3건 연결');
+    await expect(fullCost).toContainText('CANONICAL_SUPPLEMENTAL_COST_EVIDENCE_MISSING');
+    await expect(page.getByTestId('research-full-cost-commission')).toContainText('관측됨');
+    await expect(page.getByTestId('research-full-cost-commission')).toContainText('public:commission');
+    await expect(page.getByTestId('research-full-cost-slippage')).toContainText('모델값 · 경제증거 아님');
+    await expect(page.getByTestId('research-full-cost-latency')).toContainText('미확인');
+    await expect(page.getByTestId('research-full-cost-liquidityImpact')).toContainText('데이터 차단');
+    await expect(page.getByTestId('research-full-cost-partialFillImpact')).toContainText('Freshness · API 미제공');
+    await expect(page.getByTestId('research-full-cost-partialFillImpact')).toContainText('Quality · API 미제공');
     await expect(page.getByTestId('research-workspace-selection')).toContainText('현재 · 요약');
 
     const overflow = await page.evaluate(() => Math.max(
