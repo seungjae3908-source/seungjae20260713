@@ -121,11 +121,11 @@ for (const [width, height] of [[320, 740], [390, 844], [768, 900], [1199, 900], 
     await page.goto('/research-center');
 
     await expect(page.getByRole('heading', { name: '연구센터', exact: true })).toBeVisible();
-    const expertButton = page.getByRole('button', { name: '전문가 보기', exact: true });
-    const generalButton = page.getByRole('button', { name: '일반 보기', exact: true });
+    const expertButton = page.getByRole('button', { name: '상세', exact: true });
+    const generalButton = page.getByRole('button', { name: '요약', exact: true });
     await expect(expertButton).toHaveAttribute('aria-pressed', 'true');
     await expect(generalButton).toBeVisible();
-    await expect(page.getByRole('button', { name: 'AI Research Copilot', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'AI 도우미', exact: true })).toBeVisible();
 
     await generalButton.click();
     await expect(generalButton).toHaveAttribute('aria-pressed', 'true');
@@ -154,7 +154,7 @@ test('expert view preserves the canonical research evidence surface', async ({ p
   await installRuntime(page);
   await page.goto('/research-center');
 
-  await expect(page.getByRole('button', { name: '전문가 보기', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: '상세', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('research-center-page')).toBeVisible();
   await expect(page.getByRole('heading', { name: '연구센터', exact: true })).toBeVisible();
   await expect(page.getByRole('tab', { name: '검증 리포트', exact: true })).toBeVisible();
@@ -170,7 +170,7 @@ test('copilot entry keeps the established button contract', async ({ page }) => 
   await installRuntime(page);
   await page.goto('/research-center');
 
-  const copilot = page.getByRole('button', { name: 'AI Research Copilot', exact: true });
+  const copilot = page.getByRole('button', { name: 'AI 도우미', exact: true });
   await expect(copilot).toBeVisible();
   await copilot.click();
   await expect(page.getByTestId('research-general-view')).toHaveCount(0);
