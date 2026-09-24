@@ -267,6 +267,20 @@ function latestLevelBefore(pivots, kind, index) {
   return [...pivots].reverse().find((pivot) => pivot.kind === kind && pivot.confirmedIndex < index) ?? null;
 }
 
+function classifyStructureTransition(direction, priorTrend) {
+  if (direction === "UP") {
+    if (priorTrend === "BULLISH") return "BOS_UP";
+    if (priorTrend === "BEARISH") return "CHOCH_UP";
+    return "BREAK_UP";
+  }
+  if (direction === "DOWN") {
+    if (priorTrend === "BEARISH") return "BOS_DOWN";
+    if (priorTrend === "BULLISH") return "CHOCH_DOWN";
+    return "BREAK_DOWN";
+  }
+  return "NONE";
+}
+
 function breakoutLifecycle(candles, pivots, ranges, options) {
   let active = null;
   for (let index = 1; index < candles.length; index += 1) {
@@ -309,10 +323,16 @@ function breakoutLifecycle(candles, pivots, ranges, options) {
     const upBreak = resistance && previous.close <= resistance.price && candle.close > resistance.price;
     const downBreak = support && previous.close >= support.price && candle.close < support.price;
     if (upBreak || downBreak) {
+      const direction = upBreak ? "UP" : "DOWN";
       const level = upBreak ? resistance.price : support.price;
+      const priorStructure = marketStructure(
+        pivots.filter((pivot) => pivot.confirmedIndex < index),
+      );
       active = {
         status: "BREAKOUT_UNRETESTED",
-        direction: upBreak ? "UP" : "DOWN",
+        direction,
+        priorStructureTrend: priorStructure.trend,
+        structureTransition: classifyStructureTransition(direction, priorStructure.trend),
         level: rounded(level),
         levelPivotTime: upBreak ? resistance.eventTime : support.eventTime,
         breakoutIndex: index,
@@ -343,6 +363,69 @@ function ratioOfWindows(values, lookback) {
   return prior > 0 ? rounded(recent / prior) : null;
 }
 
+function candlePatternLabels(candles) {
+  const latest = candles.at(-1);
+  const previous = candles.at(-2);
+  if (!latest) return [];
+  const labels = [];
+  const range = latest.high - latest.low;
+  const body = Math.abs(latest.close - latest.open);
+  const upperWick = latest.high - Math.max(latest.open, latest.close);
+  const lowerWick = Math.min(latest.open, latest.close) - latest.low;
+  const bullish = latest.close > latest.open;
+  const bearish = latest.close < latest.open;
+
+  if (previous) {
+    const previousBullish = previous.close > previous.open;
+    const previousBearish = previous.close < previous.open;
+    const bullishEngulfing = bullish && previousBearish
+      && latest.open <= previous.close && latest.close >= previous.open;
+    const bearishEngulfing = bearish && previousBullish
+      && latest.open >= previous.close && latest.close <= previous.open;
+    if (bullishEngulfing) labels.push("BULLISH_ENGULFING");
+    if (bearishEngulfing) labels.push("BEARISH_ENGULFING");
+    if (latest.high < previous.high && latest.low > previous.low) labels.push("INSIDE_BAR");
+  }
+
+  if (range > 0 && body / range <= 0.35) {
+    if (lowerWick >= Math.max(body * 2, upperWick * 1.5)) labels.push("BULLISH_PIN_BAR");
+    if (upperWick >= Math.max(body * 2, lowerWick * 1.5)) labels.push("BEARISH_PIN_BAR");
+  }
+  return labels.sort();
+}
+
+function waveFeatures(pivots, atr) {
+  const ordered = pivots
+    .filter((pivot) => pivot.classification !== "UNCLASSIFIED")
+    .slice(-4);
+  const legs = [];
+  for (let index = 1; index < ordered.length; index += 1) {
+    const left = ordered[index - 1];
+    const right = ordered[index];
+    if (left.kind === right.kind) continue;
+    legs.push({
+      from: left.classification,
+      to: right.classification,
+      direction: right.price > left.price ? "UP" : right.price < left.price ? "DOWN" : "FLAT",
+      amplitudeAtr: atr > 0 ? rounded(Math.abs(right.price - left.price) / atr) : null,
+      bars: Math.max(1, right.index - left.index),
+    });
+  }
+  const latestLeg = legs.at(-1) ?? null;
+  const priorLeg = legs.at(-2) ?? null;
+  return {
+    swingSequence: ordered.map((pivot) => pivot.classification),
+    latestSwingLegDirection: latestLeg?.direction ?? null,
+    latestSwingLegAtr: latestLeg?.amplitudeAtr ?? null,
+    priorSwingLegAtr: priorLeg?.amplitudeAtr ?? null,
+    swingRetracementRatio: latestLeg?.amplitudeAtr != null
+      && priorLeg?.amplitudeAtr != null
+      && priorLeg.amplitudeAtr > 0
+      ? rounded(latestLeg.amplitudeAtr / priorLeg.amplitudeAtr)
+      : null,
+  };
+}
+
 function candleFeatures(candles, atr, support, resistance, options) {
   const latest = candles.at(-1);
   const previous = candles.at(-2);
@@ -352,6 +435,7 @@ function candleFeatures(candles, atr, support, resistance, options) {
   const lowerWick = Math.min(latest.open, latest.close) - latest.low;
   const volumeBaseline = mean(candles.slice(-(options.volumeLookback + 1), -1).map((item) => item.volume));
   return {
+    namedPatterns: candlePatternLabels(candles),
     eventTime: latest.eventTime,
     direction: latest.close > latest.open ? "UP" : latest.close < latest.open ? "DOWN" : "FLAT",
     bodySize: rounded(body),
@@ -448,8 +532,12 @@ export function buildAdaptiveMultiEvidencePriceStructureV2(input = {}) {
   const resistance = structure.latestHigh;
   const latestCandle = candleFeatures(candles, atr, support, resistance, options);
   const lifecycle = breakoutLifecycle(candles, pivots, ranges, options);
+  const wave = waveFeatures(pivots, atr);
   const pattern = {
     namedPattern: lifecycle?.status ?? "NONE",
+    structureTransition: lifecycle?.structureTransition ?? "NONE",
+    priorStructureTrend: lifecycle?.priorStructureTrend ?? null,
+    ...wave,
     swingHighSlopeAtrPerBar: slope(pivots, "HIGH", atr),
     swingLowSlopeAtrPerBar: slope(pivots, "LOW", atr),
     compressionRatio: ratioOfWindows(ranges, options.compressionLookback),
@@ -472,6 +560,7 @@ export function buildAdaptiveMultiEvidencePriceStructureV2(input = {}) {
     distanceFromSupportAtr: latestCandle.supportDistanceAtr,
     structureEvent: lifecycle?.status ?? "NONE",
     structureEventDirection: lifecycle?.direction ?? null,
+    structureTransition: lifecycle?.structureTransition ?? "NONE",
   };
   const contentDigest = sha256Canonical({
     lineageId: ADAPTIVE_MULTI_EVIDENCE_V2_LINEAGE_ID,
@@ -491,6 +580,7 @@ export function buildAdaptiveMultiEvidencePriceStructureV2(input = {}) {
   const sharedUncertainty = [
     "All features derive from one OHLCV source and are not independent votes.",
     "Confirmed pivots lag by the configured right-side confirmation bars.",
+    "Candlestick, wave, BOS, and CHOCH labels are deterministic descriptors from the same OHLCV source, not independent votes.",
     "No price-direction probability or trade authorization is produced.",
   ];
   const priceEvidence = buildAdaptiveMultiEvidencePointInTimeV2(evidenceInput(
@@ -499,7 +589,11 @@ export function buildAdaptiveMultiEvidencePriceStructureV2(input = {}) {
     temporal,
     contentDigest,
     metricFacts("priceStructure", priceStructure),
-    [`structureContext=${structure.trend}`, `structureEvent=${lifecycle?.status ?? "NONE"}`],
+    [
+      `structureContext=${structure.trend}`,
+      `structureEvent=${lifecycle?.status ?? "NONE"}`,
+      `structureTransition=${lifecycle?.structureTransition ?? "NONE"}`,
+    ],
     sharedUncertainty,
   ));
   const candleEvidence = buildAdaptiveMultiEvidencePointInTimeV2(evidenceInput(
@@ -508,7 +602,11 @@ export function buildAdaptiveMultiEvidencePriceStructureV2(input = {}) {
     temporal,
     contentDigest,
     metricFacts("candle", latestCandle),
-    [`latestCandleDirection=${latestCandle.direction}`, `trendContext=${structure.trend}`],
+    [
+      `latestCandleDirection=${latestCandle.direction}`,
+      `candlestickPatterns=${latestCandle.namedPatterns.join("|") || "NONE"}`,
+      `trendContext=${structure.trend}`,
+    ],
     sharedUncertainty,
   ));
   const patternEvidence = buildAdaptiveMultiEvidencePointInTimeV2(evidenceInput(
@@ -517,7 +615,12 @@ export function buildAdaptiveMultiEvidencePriceStructureV2(input = {}) {
     temporal,
     contentDigest,
     metricFacts("pattern", pattern),
-    [`numericPatternState=${pattern.namedPattern}`, "Pattern name is explanation only."],
+    [
+      `numericPatternState=${pattern.namedPattern}`,
+      `structureTransition=${pattern.structureTransition}`,
+      `swingSequence=${pattern.swingSequence.join(">") || "NONE"}`,
+      "Pattern names are deterministic descriptors only.",
+    ],
     sharedUncertainty,
   ));
   const evidence = { priceStructure: priceEvidence, candle: candleEvidence, pattern: patternEvidence };
