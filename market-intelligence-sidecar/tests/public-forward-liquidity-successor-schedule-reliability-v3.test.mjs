@@ -136,8 +136,8 @@ function activeArgs(overrides = {}) {
   };
 }
 
-test('merged V3 activation binding materializes exact frozen Partial-Fill cutover and preserves V2/OOS authority boundaries', () => {
-  const verdict = verifySuccessorScheduleReliabilityV3FrozenBindings();
+test('exact V3 activation binding materializes frozen Partial-Fill cutover and preserves V2/OOS authority boundaries', () => {
+  const verdict = verifySuccessorScheduleReliabilityV3FrozenBindings(ACTIVE);
   assert.equal(verdict.valid, true, verdict.blockers.join(','));
   assert.equal(verdict.activationBound, true);
   assert.deepEqual(SUCCESSOR_V3_SCHEDULE_CRONS_UTC, [
@@ -146,23 +146,20 @@ test('merged V3 activation binding materializes exact frozen Partial-Fill cutove
     '37 * * * *',
   ]);
 
-  const contractVerdict = verifySuccessorScheduleReliabilityV3Contract();
+  const contractVerdict = verifySuccessorScheduleReliabilityV3Contract(ACTIVE);
   assert.equal(contractVerdict.valid, true, contractVerdict.blockers.join(','));
-  assert.equal(SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound, true);
+  assert.equal(ACTIVE.activationBound, true);
+  assert.equal(ACTIVE.policyCore.cohort.startInclusiveMs, CUTOVER_START_MS);
   assert.equal(
-    SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyCore.cohort.startInclusiveMs,
-    CUTOVER_START_MS,
-  );
-  assert.equal(
-    SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyCore.activationBinding.authorityCommentId,
+    ACTIVE.policyCore.activationBinding.authorityCommentId,
     ACTIVATION_AUTHORITY_COMMENT_ID,
   );
   assert.equal(
-    SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyCore.activationBinding.hubFreezeAuthorityCommentId,
+    ACTIVE.policyCore.activationBinding.hubFreezeAuthorityCommentId,
     HUB_FREEZE_AUTHORITY_COMMENT_ID,
   );
   assert.equal(
-    SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyCore.activationBinding.hubFreezeTimestampCommentId,
+    ACTIVE.policyCore.activationBinding.hubFreezeTimestampCommentId,
     HUB_FREEZE_TIMESTAMP_COMMENT_ID,
   );
   assert.equal(
