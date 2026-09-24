@@ -126,8 +126,9 @@ test('real user path stays coherent from login through session expiry', async ({
   await expect(page).toHaveURL(/\/research-center$/u);
   await expect(page.getByRole('button', { name: '요약', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('research-general-view')).toBeVisible();
-  await expect(page.getByText('수익성 검증', { exact: true })).toBeVisible();
-  await expect(page.getByText('검증 중', { exact: true })).toBeVisible();
+  const profitabilityCard = page.getByTestId('research-general-view').getByRole('button', { name: /수익성 검증/ });
+  await expect(profitabilityCard).toBeVisible();
+  await expect(profitabilityCard).toContainText('검증 중');
 
   await page.getByRole('button', { name: '상세', exact: true }).click();
   await expect(page.getByRole('button', { name: '상세', exact: true })).toHaveAttribute('aria-pressed', 'true');
