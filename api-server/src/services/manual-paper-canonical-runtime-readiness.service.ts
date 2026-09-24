@@ -2,6 +2,8 @@ import { constants as fsConstants } from 'node:fs';
 import { access, readFile } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { restoreRecurringPaperLoopState } from '../../../market-prediction-lab/src/recurring-paper-loop-v1.js';
+import { bindNaturalPaperTriggerBoundSettlementEvidence } from '../../../market-prediction-lab/src/natural-paper-trigger-bound-settlement-cost-producer-v1.js';
+import { manualPaperEvidenceSha256 } from './manual-paper-canonical-contract.service';
 import {
   validateImmutablePaperTradingStateSnapshot,
   type PaperTradingStateSnapshot,
@@ -16,6 +18,17 @@ const BINDING_RELATIVE_PATH = 'publisher-binding.json';
 const SNAPSHOT_RELATIVE_PATH = 'publisher/paper-state-v2.json';
 const RECURRING_STATE_RELATIVE_PATH = 'state/recurring-paper-loop.json';
 const ARTIFACT_FILES = Object.freeze(['state.json', 'summary.json', 'manifest.json'] as const);
+const ENTRY_COMPONENTS = Object.freeze([
+  'commission',
+  'tax',
+  'spread',
+  'slippage',
+  'funding',
+  'latency',
+  'liquidityImpact',
+  'partialFillImpact',
+] as const);
+const ENTRY_COMPONENT_QUALITIES = Object.freeze(['OBSERVED', 'DOCUMENTED', 'ESTIMATED', 'NOT_APPLICABLE'] as const);
 const TRUTHY = new Set(['1', 'true', 'yes', 'on', 'enabled']);
 
 type RuntimeEnvironment = Readonly<Record<string, string | undefined>>;
@@ -25,6 +38,7 @@ type RuntimeReadinessDependencies = Readonly<{
   accessPath(path: string, mode: number): Promise<void>;
   validateSnapshot(raw: unknown, nowMs: number): PaperTradingStateSnapshot;
   validateRecurringState(raw: unknown): unknown;
+  rebindSettlementEvidence(input: unknown): any;
 }>;
 
 export type ManualPaperCanonicalRuntimeReadinessCheck = Readonly<{
@@ -43,6 +57,9 @@ export type ManualPaperCanonicalRuntimeReadinessResult = Readonly<{
   paperStateConfigurationMode: 'RUNTIME_BINDING' | 'ENV_FALLBACK' | 'NONE';
   paperStateSnapshotReady: boolean;
   naturalPaperStateReady: boolean;
+  fullCostComponentsReady: boolean;
+  settlementDurablePacketReady: boolean;
+  closePositionCanonicalRebindReady: boolean;
   forwardObserverArtifactsReady: boolean;
   validationReceiptPathReady: boolean;
   safetyBoundaryReady: boolean;
@@ -77,6 +94,137 @@ function nonEmpty(value: unknown): value is string {
 
 function pushUnique(blockers: string[], blocker: string): void {
   if (!blockers.includes(blocker)) blockers.push(blocker);
+}
+
+function record(value: unknown): value is Record<string, any> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function positiveInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) > 0;
+}
+
+function fullCostPositionReady(position: Record<string, any>, expectedMainSha: string): boolean {
+  const candidate = position?.entryCandidate;
+  const provenance = position?.entryCostProvenance;
+  const maximumAgeMs = candidate?.execution?.dataEvidence?.maxAgeMs;
+  const entryTimestampMs = position?.entryTimestampMs;
+  if (position?.researchCodeSha !== expectedMainSha
+    || !candidate
+    || candidate?.candidateId !== position?.candidateId
+    || !record(provenance)
+    || provenance.policyId !== position?.costPolicyVersion
+    || !nonEmpty(provenance.providerProvenance)
+    || !positiveInteger(maximumAgeMs)
+    || !positiveInteger(entryTimestampMs)) {
+    return false;
+  }
+  return ENTRY_COMPONENTS.every((name) => {
+    const component = provenance?.components?.[name];
+    return record(component)
+      && typeof component.valuePercent === 'number'
+      && Number.isFinite(component.valuePercent)
+      && component.valuePercent >= 0
+      && nonEmpty(component.source)
+      && ENTRY_COMPONENT_QUALITIES.includes(component.quality)
+      && positiveInteger(component.observedAtMs)
+      && component.observedAtMs <= entryTimestampMs
+      && entryTimestampMs - component.observedAtMs <= maximumAgeMs;
+  });
+}
+
+function ownerPacketPayload(packet: Record<string, any>) {
+  return {
+    schemaVersion: packet.schemaVersion,
+    positionId: packet.positionId,
+    paperSampleId: packet.paperSampleId,
+    candidateId: packet.candidateId,
+    researchCodeSha: packet.researchCodeSha,
+    exitTriggerId: packet.exitTriggerId,
+    exitExecutionId: packet.exitExecutionId,
+    evaluatedAtMs: packet.evaluatedAtMs,
+    bindingEvidenceDigest: packet.bindingEvidenceDigest,
+    position: packet.position,
+    sourceObservation: packet.sourceObservation,
+    authoritativeEvidence: packet.authoritativeEvidence,
+    trigger: packet.trigger,
+  };
+}
+
+function durableSettlementReadiness(
+  recurringState: any,
+  expectedMainSha: string,
+  rebindSettlementEvidence: RuntimeReadinessDependencies['rebindSettlementEvidence'],
+): Readonly<{ packetReady: boolean; rebindReady: boolean }> {
+  const settlements = Array.isArray(recurringState?.settlements) ? recurringState.settlements : [];
+  let packetReady = false;
+  let rebindReady = false;
+
+  for (const settlement of settlements) {
+    const packet = settlement?.canonicalOwnerEvidence;
+    const identity = settlement?.settlementIdentity;
+    if (!record(settlement)
+      || settlement?.researchCodeSha !== expectedMainSha
+      || !record(packet)
+      || packet.schemaVersion !== 'canonical-natural-settlement-owner-evidence-v1'
+      || packet.researchCodeSha !== expectedMainSha
+      || !record(packet.position)
+      || packet.position.researchCodeSha !== expectedMainSha
+      || packet.positionId !== settlement.positionId
+      || packet.candidateId !== settlement.candidateId
+      || packet.exitTriggerId !== settlement.exitTriggerId
+      || packet.exitExecutionId !== settlement.exitExecutionId
+      || packet.executionAuthority !== 'NONE'
+      || packet.liveOrderAllowed !== false
+      || packet.privateTradingApiAllowed !== false
+      || packet.orderSubmitted !== false
+      || packet.exchangeRequestSent !== false
+      || packet.unknownIsZero !== false
+      || packet.unavailableCostConvertedToZero !== false
+      || packet.naturalSampleCredit !== 0
+      || !sha256(packet.evidenceDigest)
+      || manualPaperEvidenceSha256(ownerPacketPayload(packet)) !== packet.evidenceDigest
+      || !record(identity)
+      || !sha256(settlement.settlementId)
+      || settlement.settlementId !== manualPaperEvidenceSha256(identity)
+      || identity.candidateId !== settlement.candidateId
+      || identity.positionId !== settlement.positionId
+      || identity.entryId !== packet.paperSampleId
+      || identity.exitTriggerId !== settlement.exitTriggerId
+      || identity.exitExecutionId !== settlement.exitExecutionId
+      || !sha256(settlement.canonicalOwnerEvidenceBindingDigest)
+      || settlement.canonicalOwnerEvidenceBindingDigest !== manualPaperEvidenceSha256({
+        settlementId: settlement.settlementId,
+        ownerEvidenceDigest: packet.evidenceDigest,
+        exitTriggerId: settlement.exitTriggerId,
+        exitExecutionId: settlement.exitExecutionId,
+      })
+      || manualPaperEvidenceSha256(packet.trigger) !== manualPaperEvidenceSha256(packet.position?.lifecycle?.pendingExit)) {
+      continue;
+    }
+
+    packetReady = true;
+    try {
+      const rebound = rebindSettlementEvidence({
+        position: packet.position,
+        observation: packet.sourceObservation,
+        authoritativeEvidence: packet.authoritativeEvidence,
+        evaluatedAtMs: packet.evaluatedAtMs,
+      });
+      if (rebound?.status === 'PRESENT'
+        && rebound?.fullCostReady === true
+        && rebound?.evidenceDigest === packet.bindingEvidenceDigest
+        && rebound?.exitTriggerId === settlement.exitTriggerId
+        && rebound?.exitExecutionId === settlement.exitExecutionId) {
+        rebindReady = true;
+        break;
+      }
+    } catch {
+      // Readiness is fail-closed; a producer rebind error remains a blocker.
+    }
+  }
+
+  return Object.freeze({ packetReady, rebindReady });
 }
 
 function parseJson(text: string, blocker: string, blockers: string[]): unknown | null {
@@ -131,6 +279,7 @@ const defaultDependencies: RuntimeReadinessDependencies = Object.freeze({
     const candidate = raw as any;
     return restoreRecurringPaperLoopState(candidate, candidate?.identity);
   },
+  rebindSettlementEvidence: bindNaturalPaperTriggerBoundSettlementEvidence,
 });
 
 export async function probeManualPaperCanonicalRuntimeReadiness(
@@ -263,6 +412,7 @@ export async function probeManualPaperCanonicalRuntimeReadiness(
 
   const recurringStatePath = join(paperForwardRoot(env), RECURRING_STATE_RELATIVE_PATH);
   let recurringReady = false;
+  let recurringState: any = null;
   try {
     const raw = parseJson(
       await dependencies.readText(recurringStatePath),
@@ -270,8 +420,8 @@ export async function probeManualPaperCanonicalRuntimeReadiness(
       blockers,
     );
     if (raw) {
-      dependencies.validateRecurringState(raw);
-      recurringReady = (raw as any)?.identity?.researchCodeSha === expectedMainSha;
+      recurringState = dependencies.validateRecurringState(raw) as any;
+      recurringReady = recurringState?.identity?.researchCodeSha === expectedMainSha;
     }
   } catch {
     pushUnique(blockers, 'PAPER_CANONICAL_NATURAL_STATE_UNREADABLE_OR_INVALID');
@@ -280,6 +430,43 @@ export async function probeManualPaperCanonicalRuntimeReadiness(
     'NATURAL_PAPER_DURABLE_STATE',
     recurringReady,
     'PAPER_CANONICAL_NATURAL_STATE_NOT_READY',
+  );
+
+  const durablePositions = recurringReady
+    ? [
+        ...(Array.isArray(recurringState?.positions) ? recurringState.positions : []),
+        ...(Array.isArray(recurringState?.settlements)
+          ? recurringState.settlements
+              .map((settlement: any) => settlement?.canonicalOwnerEvidence?.position)
+              .filter((position: unknown) => record(position))
+          : []),
+      ]
+    : [];
+  const fullCostComponentsReady = durablePositions.some((position: any) => (
+    fullCostPositionReady(position, expectedMainSha)
+  ));
+  check(
+    'FULL_COST_EIGHT_COMPONENT_DURABLE_READBACK',
+    fullCostComponentsReady,
+    'PAPER_CANONICAL_FULL_COST_EIGHT_COMPONENTS_NOT_READY',
+  );
+
+  const settlementReadiness = recurringReady
+    ? durableSettlementReadiness(
+        recurringState,
+        expectedMainSha,
+        dependencies.rebindSettlementEvidence,
+      )
+    : Object.freeze({ packetReady: false, rebindReady: false });
+  check(
+    'SETTLEMENT_DURABLE_OWNER_PACKET',
+    settlementReadiness.packetReady,
+    'PAPER_CANONICAL_SETTLEMENT_DURABLE_PACKET_NOT_READY',
+  );
+  check(
+    'CLOSE_POSITION_CANONICAL_REBIND',
+    settlementReadiness.rebindReady,
+    'PAPER_CANONICAL_CLOSE_POSITION_REBIND_NOT_READY',
   );
 
   const artifactRoot = explicitAbsolutePath(
@@ -350,6 +537,9 @@ export async function probeManualPaperCanonicalRuntimeReadiness(
     paperStateConfigurationMode,
     paperStateSnapshotReady: snapshotReady,
     naturalPaperStateReady: recurringReady,
+    fullCostComponentsReady,
+    settlementDurablePacketReady: settlementReadiness.packetReady,
+    closePositionCanonicalRebindReady: settlementReadiness.rebindReady,
     forwardObserverArtifactsReady: artifactsReady,
     validationReceiptPathReady: receiptPathReady && maximumAgeReady,
     safetyBoundaryReady,
