@@ -211,6 +211,7 @@ for (const [width, height] of [[320, 740], [390, 844], [768, 900], [1199, 900], 
     await expect(page.getByTestId('research-full-cost-latency')).toContainText('미확인');
     await expect(page.getByTestId('research-full-cost-liquidityImpact')).toContainText('데이터 차단');
     await expect(page.getByTestId('research-full-cost-partialFillImpact')).toContainText('Freshness · API 미제공');
+    await expect(page.getByTestId('research-full-cost-partialFillImpact')).toContainText('Quality · API 미제공');
     await expect(page.getByTestId('research-workspace-selection')).toContainText('현재 · 요약');
 
     const overflow = await page.evaluate(() => Math.max(
