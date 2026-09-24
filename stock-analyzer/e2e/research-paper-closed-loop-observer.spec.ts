@@ -135,7 +135,55 @@ function fulfill(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: 'application/json; charset=utf-8', body: JSON.stringify(body) });
 }
 
-async function install(page: Page, body: unknown) {
+function journalBindingBody(kind: 'verified'|'missing'|'mismatch' = 'verified') {
+  if (kind === 'missing') {
+    return {
+      mode: 'analysis-only',
+      externalAiCalled: false,
+      ok: true,
+      result: { trades: [] },
+    };
+  }
+  const verified = kind === 'verified';
+  return {
+    mode: 'analysis-only',
+    externalAiCalled: false,
+    ok: true,
+    result: {
+      canonicalResearchBinding: {
+        schemaVersion: 'unified-journal-canonical-research-binding-v1',
+        status: verified ? 'VERIFIED' : 'NOT_AVAILABLE',
+        source: 'AUTHENTICATED_PAPER_STATE',
+        sourceSha: RESEARCH_SHA,
+        paperTradeCount: 1,
+        verifiedTradeCount: verified ? 1 : 0,
+        mismatchTradeCount: verified ? 0 : 1,
+        unavailableTradeCount: 0,
+        executionAuthority: 'NONE',
+        profitabilityCredit: 0,
+      },
+      trades: [{
+        canonicalResearchBinding: {
+          schemaVersion: 'unified-journal-canonical-research-binding-v1',
+          status: verified ? 'VERIFIED' : 'MISMATCH',
+          reason: verified ? 'AUTHENTICATED_PAPER_STATE_IDENTITY_MATCHED' : 'SYNCED_JOURNAL_OWNER_STATE_MISMATCH',
+          candidateId: verified ? 'paper-candidate-v1:test' : null,
+          strategyId: verified ? 'strategy-v1' : null,
+          parameterHash: verified ? 'parameter-1' : null,
+          researchCodeSha: verified ? RESEARCH_SHA : null,
+          naturalPositionId: verified ? 'natural-position-1' : null,
+          paperSampleId: verified ? 'paper-sample-1' : null,
+          settlementId: verified ? 'settlement-1' : null,
+          settlementBindingVerified: verified,
+          executionAuthority: 'NONE',
+          profitabilityCredit: 0,
+        },
+      }],
+    },
+  };
+}
+
+async function install(page: Page, body: unknown, journalBody: unknown = journalBindingBody()) {
   await page.addInitScript(({ authKey, user }) => {
     const encode = (value: Record<string, unknown>) => btoa(JSON.stringify(value)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
     const expiresAt = 4_102_444_800;
@@ -181,6 +229,7 @@ async function install(page: Page, body: unknown) {
   await page.route('**/api/**', async (route) => {
     const pathname = new URL(route.request().url()).pathname;
     if (pathname === '/api/admin/research/overview') return fulfill(route, body);
+    if (pathname === '/api/paper-journal/unified-ledger') return fulfill(route, journalBody);
     if (pathname === '/api/strategy-promotion') {
       return fulfill(route, {
         items: [],
@@ -225,7 +274,10 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 900 
     await expect(page.getByTestId('paper-closed-loop-cost')).toContainText('MODELED 1개');
     await expect(page.getByTestId('paper-closed-loop-net-pnl')).toContainText('15.5');
     await expect(page.getByTestId('paper-closed-loop-net-pnl')).toContainText('수익성 증거로 승격하지 않습니다');
-    await expect(page.getByTestId('paper-closed-loop-journal')).toContainText('Research overview 미연결');
+    await expect(page.getByTestId('paper-closed-loop-journal')).toContainText('1건 검증');
+    await expect(page.getByTestId('paper-closed-loop-journal')).toContainText('AUTHENTICATED_PAPER_STATE');
+    await expect(page.getByTestId('paper-closed-loop-journal')).toContainText('Settlement binding 1/1');
+    await expect(page.getByTestId('paper-closed-loop-journal')).toContainText(RESEARCH_SHA);
 
     await expect(page.getByTestId('paper-closed-loop-first-zero')).toContainText('Trigger');
     await expect(page.getByTestId('paper-closed-loop-first-zero')).toContainText('CANONICAL_TRIGGER_READBACK_NOT_EXPOSED');
@@ -250,4 +302,29 @@ test('missing candidate evidence stays unknown instead of borrowing aggregate Pa
   await expect(page.getByTestId('paper-closed-loop-net-pnl')).toContainText('미관측');
   await expect(page.getByTestId('paper-closed-loop-first-zero')).toContainText('Candidate');
   await expect(page.getByTestId('paper-closed-loop-observer')).not.toContainText('0.0000');
+});
+
+
+test('journal binding missing stays unknown and never borrows aggregate Paper ledger counts', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await install(page, overview(true), journalBindingBody('missing'));
+  await openPaper(page);
+
+  const journal = page.getByTestId('paper-closed-loop-journal');
+  await expect(journal).toContainText('미확인');
+  await expect(journal).toContainText('canonical journal binding이 아직 API에 공개되지 않았습니다');
+  await expect(journal).not.toContainText('12건');
+  await expect(journal).not.toContainText('1건 검증');
+});
+
+test('journal identity mismatch is blocked instead of becoming a verified candidate link', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await install(page, overview(true), journalBindingBody('mismatch'));
+  await openPaper(page);
+
+  const journal = page.getByTestId('paper-closed-loop-journal');
+  await expect(journal).toContainText('0건 검증');
+  await expect(journal).toContainText('journal identity 불일치 1건');
+  await expect(journal).toContainText('불충족');
+  await expect(journal).not.toContainText('candidateId 일치');
 });
