@@ -45,6 +45,8 @@ function dependencies(input: {
   bindingSha?: string;
   recurringSha?: string;
   snapshotSha?: string;
+  bindingMissing?: boolean;
+  fallbackSnapshotPath?: string;
   missingArtifact?: boolean;
   receiptAccessFails?: boolean;
 } = {}) {
@@ -53,8 +55,18 @@ function dependencies(input: {
   const snapshotSha = input.snapshotSha ?? SHA;
   return {
     async readText(path: string) {
-      if (path.endsWith('/publisher-binding.json')) return JSON.stringify(binding(bindingSha));
+      if (path.endsWith('/publisher-binding.json')) {
+        if (input.bindingMissing) {
+          const error = new Error('missing') as NodeJS.ErrnoException;
+          error.code = 'ENOENT';
+          throw error;
+        }
+        return JSON.stringify(binding(bindingSha));
+      }
       if (path.endsWith('/publisher/paper-state-v2.json')) return JSON.stringify({ schemaVersion: 'fixture' });
+      if (input.fallbackSnapshotPath && path === input.fallbackSnapshotPath) {
+        return JSON.stringify({ schemaVersion: 'fixture' });
+      }
       if (path.endsWith('/state/recurring-paper-loop.json')) {
         return JSON.stringify({ identity: { researchCodeSha: recurringSha } });
       }
@@ -98,6 +110,7 @@ test('complete read-only evidence is ready for activation review without enablin
   assert.equal(result.bridgeEnabled, false);
   assert.equal(result.deployShaBound, true);
   assert.equal(result.paperStateBindingReady, true);
+  assert.equal(result.paperStateConfigurationMode, 'RUNTIME_BINDING');
   assert.equal(result.paperStateSnapshotReady, true);
   assert.equal(result.naturalPaperStateReady, true);
   assert.equal(result.forwardObserverArtifactsReady, true);
@@ -113,6 +126,27 @@ test('complete read-only evidence is ready for activation review without enablin
     financialMutationPerformed: false,
     environmentMutationPerformed: false,
   });
+});
+
+test('supported env fallback is accepted only when runtime binding file is absent', async () => {
+  const fallbackPath = '/opt/stock-app-data/fallback/paper-state.json';
+  const result = await probeManualPaperCanonicalRuntimeReadiness({
+    expectedMainSha: SHA,
+    env: env({
+      PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH: fallbackPath,
+      PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256: ACCOUNT_DIGEST,
+    }),
+    dependencies: dependencies({
+      bindingMissing: true,
+      fallbackSnapshotPath: fallbackPath,
+    }),
+  });
+
+  assert.equal(result.readyForActivationReview, true);
+  assert.equal(result.paperStateBindingReady, true);
+  assert.equal(result.paperStateConfigurationMode, 'ENV_FALLBACK');
+  assert.equal(result.paperStateSnapshotReady, true);
+  assert.equal(result.activationApplied, false);
 });
 
 test('bridge already enabled or dangerous trading flags fail closed', async () => {
