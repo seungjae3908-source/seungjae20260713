@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs';
 
 import { canonicalJson, sha256 } from './public-forward-liquidity-calibration.mjs';
+import {
+  SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+} from './public-forward-liquidity-successor-schedule-reliability-v3.mjs';
 
 export const PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1_PATH = new URL(
   '../config/public-forward-liquidity-multi-lane-prospective-policy-v1.json',
@@ -14,8 +17,6 @@ const HOUR_MS = 3_600_000;
 const FROZEN_V3_COHORT_START_INCLUSIVE_MS = 1_788_398_220_000;
 const FROZEN_V3_SLOT_CADENCE_MS = HOUR_MS;
 const FROZEN_V3_TOTAL_SLOT_N = 1024;
-const FROZEN_V3_COHORT_DIGEST =
-  'f58e5b7e7e5249cb60a911eb2269d728fa9fa6604b0f3723256a8b0a0c9e9bd4';
 const SHA40 = /^[a-f0-9]{40}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const FROZEN_DIGESTS = Object.freeze({
@@ -405,7 +406,16 @@ export function resolvePublicForwardLiquidityMultiLaneCreditIdentity({
       reason: 'PHASE2_UTC27_ZERO_ADDITIONAL_CREDIT',
     });
   }
-  const cohortDigest = FROZEN_V3_COHORT_DIGEST;
+  const activeV3Cohort = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyCore.cohort;
+  if (SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound !== true
+    || activeV3Cohort.slotCadenceMs !== FROZEN_V3_SLOT_CADENCE_MS
+    || activeV3Cohort.totalSlotN !== FROZEN_V3_TOTAL_SLOT_N) {
+    fail('PHASE2_V3_COHORT_SEMANTICS_MISMATCH');
+  }
+  const cohortDigest = exactDigest(
+    SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest,
+    'PHASE2_V3_COHORT_DIGEST_INVALID',
+  );
   const scope = Object.freeze({
     policyDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyDigest,
     cohortDigest,
