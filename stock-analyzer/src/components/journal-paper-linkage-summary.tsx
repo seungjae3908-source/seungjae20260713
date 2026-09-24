@@ -20,6 +20,14 @@ export function JournalPaperLinkageSummary({ data }: { data: UnifiedTradeJournal
   const timeframeKnown = paperTrades.filter((trade) => Boolean(trade.timeframe)).length;
   const paperSourceReady = paperTrades.length > 0;
   const integrityIssueN = data.integrityIssues.length;
+  const bindingSummary = data.canonicalResearchBinding;
+  const verifiedBindings = paperTrades.filter((trade) => trade.canonicalResearchBinding?.status === 'VERIFIED');
+  const mismatchBindings = paperTrades.filter((trade) => trade.canonicalResearchBinding?.status === 'MISMATCH');
+  const unavailableBindings = paperTrades.filter((trade) => trade.canonicalResearchBinding?.status === 'NOT_AVAILABLE');
+  const candidateIds = [...new Set(verifiedBindings
+    .map((trade) => trade.canonicalResearchBinding?.candidateId)
+    .filter((value): value is string => Boolean(value)))];
+  const researchBindingReady = paperTrades.length > 0 && verifiedBindings.length === paperTrades.length;
 
   return (
     <section
@@ -32,7 +40,7 @@ export function JournalPaperLinkageSummary({ data }: { data: UnifiedTradeJournal
           <p className="text-[10px] font-black uppercase tracking-[0.16em] text-primary">Paper → Journal linkage</p>
           <h3 className="mt-1 text-base font-extrabold">Paper 기록 연결 상태</h3>
           <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">
-            통합 매매일지가 실제로 어떤 앱 기록을 포함하는지 확인합니다. Research 후보 identity는 이 API에 없으므로 같은 후보라고 추정하지 않습니다.
+            통합 매매일지가 실제로 어떤 앱 기록을 포함하는지 확인합니다. Research 후보 연결은 브라우저 self-claim이 아니라 authenticated Paper state와 일치한 경우에만 검증됩니다.
           </p>
         </div>
         <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black ${
@@ -82,10 +90,26 @@ export function JournalPaperLinkageSummary({ data }: { data: UnifiedTradeJournal
         </article>
       </div>
 
-      <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3" data-testid="journal-candidate-binding-gap">
-        <p className="text-xs font-black text-amber-700 dark:text-amber-300">Research 후보 직접 연결 · 미제공</p>
+      <div className={`mt-3 rounded-xl border p-3 ${researchBindingReady
+        ? 'border-emerald-500/30 bg-emerald-500/10'
+        : 'border-amber-500/30 bg-amber-500/10'}`} data-testid="journal-candidate-binding-gap">
+        <p className={`text-xs font-black ${researchBindingReady
+          ? 'text-emerald-700 dark:text-emerald-300'
+          : 'text-amber-700 dark:text-amber-300'}`}>
+          Research 후보 직접 연결 · {researchBindingReady ? '검증됨' : '부분/미확인'}
+        </p>
         <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">
-          Unified Journal DTO에는 candidateId·Settlement identity·8개 Full Cost lineage가 없습니다. APP_PAPER 출처라는 사실만으로 Research Center의 특정 후보와 동일하다고 판정하지 않습니다.
+          검증 {verifiedBindings.length}/{paperTrades.length || 0} · 불일치 {mismatchBindings.length} · 미확인 {unavailableBindings.length}.
+          APP_PAPER 출처만으로 후보를 연결하지 않고 authenticated Paper state의 동일 tradeId·핵심 필드·validation receipt가 모두 일치해야 합니다.
+        </p>
+        <p className="mt-2 break-all font-mono text-[10px] text-muted-foreground">
+          binding source · {bindingSummary?.source ?? 'NOT_AVAILABLE'} · sourceSha {bindingSummary?.sourceSha ?? 'NOT_AVAILABLE'}
+        </p>
+        {candidateIds.length ? (
+          <p className="mt-1 break-all font-mono text-[10px] text-muted-foreground">candidateId · {candidateIds.join(' · ')}</p>
+        ) : null}
+        <p className="mt-1 text-[10px] text-muted-foreground">
+          Settlement identity는 해당 trade의 canonicalResearchBinding.settlementBindingVerified=true일 때만 검증된 것으로 봅니다. 8개 Full Cost 수익성 증거와는 별도입니다.
         </p>
       </div>
 
