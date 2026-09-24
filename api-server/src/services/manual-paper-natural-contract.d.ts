@@ -14,6 +14,7 @@ declare module '*four-market-paper-settlement-v1.js' {
 }
 declare module '*recurring-paper-loop-v1.js' {
   export function buildRecurringPaperSettlementRecord(input: unknown): any;
+  export function restoreRecurringPaperLoopState(serialized: unknown, expectedIdentity: unknown): any;
   export function runRecurringPaperCycle(input: unknown): Promise<any>;
 }
 declare module '*canonical-paper-admission-bridge-v1.js' {
