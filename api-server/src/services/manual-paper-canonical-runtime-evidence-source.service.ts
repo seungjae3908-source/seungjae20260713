@@ -303,6 +303,50 @@ function ownerPacketPayload(packet: Record<string, any>) {
   };
 }
 
+function assertDurableSettlementIdentity(
+  settlement: Record<string, any>,
+  packet: Record<string, any>,
+  naturalPositionId: string,
+  candidateId: string,
+  researchCodeSha: string,
+): void {
+  const identity = settlement?.settlementIdentity;
+  const position = packet?.position;
+  const sampleIdentity = position?.sample?.identity;
+  if (!identity
+    || typeof identity !== 'object'
+    || Array.isArray(identity)
+    || !nonEmpty(settlement?.settlementId)
+    || settlement.settlementId !== manualPaperEvidenceSha256(identity)
+    || settlement.paperSampleId !== packet.paperSampleId
+    || settlement.entryId !== packet.paperSampleId
+    || packet.paperSampleId !== position?.paperSampleId
+    || packet.positionId !== position?.positionId
+    || packet.candidateId !== position?.candidateId
+    || packet.researchCodeSha !== position?.researchCodeSha
+    || identity.candidateId !== candidateId
+    || identity.entryId !== packet.paperSampleId
+    || identity.positionId !== naturalPositionId
+    || identity.exitTriggerId !== settlement.exitTriggerId
+    || identity.exitExecutionId !== settlement.exitExecutionId
+    || identity.market !== position?.market
+    || identity.symbol !== position?.symbol
+    || identity.timeframe !== sampleIdentity?.timeframe
+    || identity.side !== position?.direction
+    || identity.strategyFamily !== position?.strategyFamily
+    || identity.strategyVersion !== position?.strategyVersion
+    || identity.parameterDigest !== position?.parameterDigest
+    || identity.accountMode !== position?.accountMode
+    || identity.costPolicyVersion !== position?.costPolicyVersion
+    || position?.researchCodeSha !== researchCodeSha) {
+    throw new PaperTradingError(
+      'CANONICAL_PAPER_RUNTIME_SETTLEMENT_IDENTITY_MISMATCH',
+      'Natural settlement durable identity/digest가 owner packet lineage와 일치하지 않습니다.',
+      503,
+    );
+  }
+}
+
 function findAndRebindNaturalSettlement(
   state: RecurringState,
   ownerState: PaperTradingState,
@@ -360,6 +404,8 @@ function findAndRebindNaturalSettlement(
       503,
     );
   }
+
+  assertDurableSettlementIdentity(settlement, packet, naturalPositionId, candidateId, researchCodeSha);
 
   const expectedBindingDigest = manualPaperEvidenceSha256({
     settlementId: settlement.settlementId,
