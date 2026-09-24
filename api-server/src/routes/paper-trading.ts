@@ -16,10 +16,8 @@ import {
 import { manualPaperCanonicalCandidateId } from '../services/manual-paper-canonical-contract.service';
 import { ProductPaperSourceError, productPaperSourceRegistry, type ProductPaperSourceRegistry } from '../services/product-paper-source-registry.service';
 import type { PaperBacktestCandidateIdentity } from '../services/paper-trading.types';
-import {
-  unavailableManualPaperCanonicalEvidenceSource,
-  type ManualPaperCanonicalEvidenceSource,
-} from '../services/manual-paper-canonical-evidence-source.service';
+import type { ManualPaperCanonicalEvidenceSource } from '../services/manual-paper-canonical-evidence-source.service';
+import { productManualPaperCanonicalEvidenceSource } from '../services/manual-paper-canonical-runtime-evidence-source.service';
 
 const MAX_REQUEST_BYTES = 128 * 1024;
 
@@ -118,7 +116,7 @@ export function createPaperTradingRouter(
   const evaluate = dependencies.evaluate ?? applyPaperTradingAction;
   const publishState = dependencies.publishState ?? publishAuthenticatedPaperTradingState;
   const canonicalEvidenceSource = dependencies.canonicalEvidenceSource
-    ?? unavailableManualPaperCanonicalEvidenceSource;
+    ?? productManualPaperCanonicalEvidenceSource;
   const sourceRegistry = dependencies.sourceRegistry ?? productPaperSourceRegistry;
   const researchCodeSha = dependencies.researchCodeSha ?? (() => String(process.env.DEPLOY_SHA ?? '').trim().toLowerCase());
 
