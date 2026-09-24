@@ -4,6 +4,7 @@ import {
   ADAPTIVE_MULTI_EVIDENCE_REGIME_ROUTER_V2_VERSION,
   buildAdaptiveMultiEvidenceRegimeRouterV2,
 } from "../src/adaptive-multi-evidence-regime-router-v2.js";
+import { sha256Canonical } from "../src/research-cache-provenance.js";
 
 const DECISION_TIME = "2026-09-14T09:00:00.000Z";
 
@@ -64,12 +65,13 @@ function marketFeatures(overrides = {}) {
       },
     },
     priceActionAuthority: "CONTEXT_ONLY_NO_INDEPENDENT_VOTE",
+    priceActionSourceContentDigest: "9".repeat(64),
     evidence: Object.fromEntries(
       ["trend", "momentum", "volume", "volatility"].map((family) => [family, admissibleEvidence(family)]),
     ),
     executionAuthority: "NONE",
   };
-  return {
+  const merged = {
     ...base,
     ...overrides,
     features: {
@@ -78,8 +80,16 @@ function marketFeatures(overrides = {}) {
       trend: { ...base.features.trend, ...(overrides.features?.trend ?? {}) },
       volume: { ...base.features.volume, ...(overrides.features?.volume ?? {}) },
       volatility: { ...base.features.volatility, ...(overrides.features?.volatility ?? {}) },
+      priceAction: { ...base.features.priceAction, ...(overrides.features?.priceAction ?? {}) },
     },
   };
+  if (!Object.prototype.hasOwnProperty.call(overrides, "priceActionSourceDigest")) {
+    merged.priceActionSourceDigest = sha256Canonical({
+      sourceContentDigest: merged.priceActionSourceContentDigest,
+      priceAction: merged.features.priceAction,
+    });
+  }
+  return merged;
 }
 
 test("strong point-in-time trend routes only validated trend families", () => {
@@ -236,6 +246,26 @@ test("invalid price-action authority fails closed instead of silently creating a
   });
   assert.equal(result.status, "BLOCKED_DATA");
   assert.ok(result.blockers.includes("V2_REGIME_PRICE_ACTION_CONTEXT_AUTHORITY_INVALID"));
+  assert.equal(result.independentVoteCredit, 0);
+  assert.equal(result.economicSampleCredit, 0);
+  assert.equal(result.executionAuthority, "NONE");
+});
+
+test("router rejects a stale upstream price-action source digest instead of resealing tampered context", () => {
+  const original = marketFeatures();
+  const result = buildAdaptiveMultiEvidenceRegimeRouterV2({
+    marketFeatures: marketFeatures({
+      features: {
+        priceAction: {
+          ...original.features.priceAction,
+          structureTransition: "CHOCH_DOWN",
+        },
+      },
+      priceActionSourceDigest: original.priceActionSourceDigest,
+    }),
+  });
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.ok(result.blockers.includes("V2_REGIME_PRICE_ACTION_SOURCE_PROVENANCE_INVALID"));
   assert.equal(result.independentVoteCredit, 0);
   assert.equal(result.economicSampleCredit, 0);
   assert.equal(result.executionAuthority, "NONE");
