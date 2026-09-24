@@ -561,7 +561,7 @@ test('V3 completion after +10 minutes preserves raw evidence but earns zero cred
   assert.equal(result.captureReceipt.rawBatchDigest, sha256(canonicalJson(batch)));
 });
 
-test('Draft workflow carries all three frozen triggers, queue:max, and no manual activation surface', async () => {
+test('Draft workflow keeps frozen capture implementation but no runtime schedule authority', async () => {
   const workflow = await readFile(
     new URL(
       '../../.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml',
@@ -569,9 +569,8 @@ test('Draft workflow carries all three frozen triggers, queue:max, and no manual
     ),
     'utf8',
   );
-  assert.match(workflow, /cron: '17 \* \* \* \*'/u);
-  assert.match(workflow, /cron: '27 \* \* \* \*'/u);
-  assert.match(workflow, /cron: '37 \* \* \* \*'/u);
+  assert.doesNotMatch(workflow, /^\s{2}schedule:\s*$/mu);
+  assert.doesNotMatch(workflow, /^\s*-\s*cron:/mu);
   assert.match(workflow, /^\s{2}queue:\s+max\s*$/mu);
   assert.match(workflow, /^\s{2}cancel-in-progress:\s+false\s*$/mu);
   assert.doesNotMatch(workflow, /^\s{2}workflow_dispatch:\s*$/mu);
