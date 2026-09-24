@@ -152,9 +152,12 @@ export function createAiChartPublicStreamClient(
     connectTimer = null;
   };
   const clearPendingWork = () => {
-    if (flushFrame != null) cancelFrame(flushFrame);
+    const frame = flushFrame;
     flushFrame = null;
     pendingEvents = [];
+    if (frame != null) {
+      try { cancelFrame(frame); } catch { /* teardown must continue fail-closed */ }
+    }
   };
   const forceFallback = (reason: string) => {
     clearRuntimeTimers();
@@ -225,37 +228,42 @@ export function createAiChartPublicStreamClient(
 
   const scheduleFlush = (expectedSocket: WebSocketLike) => {
     if (flushFrame != null) return;
-    flushFrame = requestFrame(() => {
-      flushFrame = null;
-      if (stopped || socket !== expectedSocket || pendingEvents.length === 0) {
-        pendingEvents = [];
-        return;
-      }
-
-      const batch = pendingEvents;
-      pendingEvents = [];
-      let accepted = false;
-      try {
-        if (options.onTrades) {
-          accepted = options.onTrades(batch) !== false;
-        } else if (options.onTrade) {
-          for (const event of batch) options.onTrade(event);
-          accepted = true;
+    try {
+      flushFrame = requestFrame(() => {
+        flushFrame = null;
+        if (stopped || socket !== expectedSocket || pendingEvents.length === 0) {
+          pendingEvents = [];
+          return;
         }
-      } catch {
-        forceFallback('PROTOCOL_FAILURE');
-        return;
-      }
-      if (!accepted) {
-        notifyDiagnostic({ ...snapshot(), reason: 'STREAM_BATCH_REJECTED' });
-        return;
-      }
 
-      lastEventAtMs = Math.max(lastEventAtMs ?? 0, ...batch.map((event) => event.eventTimeMs));
-      reconnectAttempts = 0;
-      if (status !== 'LIVE_STREAM') publish('LIVE_STREAM', 'FIRST_VALID_EVENT_ACCEPTED');
-      else notifyDiagnostic({ ...snapshot(), reason: 'PUBLIC_TRADE_BATCH' });
-    });
+        const batch = pendingEvents;
+        pendingEvents = [];
+        let accepted = false;
+        try {
+          if (options.onTrades) {
+            accepted = options.onTrades(batch) !== false;
+          } else if (options.onTrade) {
+            for (const event of batch) options.onTrade(event);
+            accepted = true;
+          }
+        } catch {
+          forceFallback('PROTOCOL_FAILURE');
+          return;
+        }
+        if (!accepted) {
+          notifyDiagnostic({ ...snapshot(), reason: 'STREAM_BATCH_REJECTED' });
+          return;
+        }
+
+        lastEventAtMs = Math.max(lastEventAtMs ?? 0, ...batch.map((event) => event.eventTimeMs));
+        reconnectAttempts = 0;
+        if (status !== 'LIVE_STREAM') publish('LIVE_STREAM', 'FIRST_VALID_EVENT_ACCEPTED');
+        else notifyDiagnostic({ ...snapshot(), reason: 'PUBLIC_TRADE_BATCH' });
+      });
+    } catch {
+      flushFrame = null;
+      forceFallback('PROTOCOL_FAILURE');
+    }
   };
 
   const connect = () => {
