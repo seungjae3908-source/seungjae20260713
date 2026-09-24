@@ -152,9 +152,12 @@ export function createAiChartPublicStreamClient(
     connectTimer = null;
   };
   const clearPendingWork = () => {
-    if (flushFrame != null) cancelFrame(flushFrame);
+    const frame = flushFrame;
     flushFrame = null;
     pendingEvents = [];
+    if (frame != null) {
+      try { cancelFrame(frame); } catch { /* teardown must continue fail-closed */ }
+    }
   };
   const forceFallback = (reason: string) => {
     clearRuntimeTimers();
