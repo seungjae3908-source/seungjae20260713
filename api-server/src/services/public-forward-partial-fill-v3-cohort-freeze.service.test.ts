@@ -136,3 +136,18 @@ test('tampering split continuity fails closed', () => {
   assert.equal(verdict.valid, false);
   assert.ok(verdict.blockers.includes('V3_COHORT_SPLITS_INVALID'));
 });
+
+test('tampering split timestamp anchors fails closed even when continuity is preserved', () => {
+  const start = structuredClone(PUBLIC_FORWARD_PARTIAL_FILL_V3_COHORT_FREEZE_AUTHORITY) as any;
+  start.splits.TRAIN.startInclusiveMs += 3_600_000;
+  const startVerdict = verifyPublicForwardPartialFillV3CohortFreeze(start);
+  assert.equal(startVerdict.valid, false);
+  assert.ok(startVerdict.blockers.includes('V3_COHORT_SPLITS_INVALID'));
+
+  const boundary = structuredClone(PUBLIC_FORWARD_PARTIAL_FILL_V3_COHORT_FREEZE_AUTHORITY) as any;
+  boundary.splits.TRAIN.endExclusiveMs -= 3_600_000;
+  boundary.splits.VALIDATION.startInclusiveMs = boundary.splits.TRAIN.endExclusiveMs;
+  const boundaryVerdict = verifyPublicForwardPartialFillV3CohortFreeze(boundary);
+  assert.equal(boundaryVerdict.valid, false);
+  assert.ok(boundaryVerdict.blockers.includes('V3_COHORT_SPLITS_INVALID'));
+});

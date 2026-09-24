@@ -152,8 +152,12 @@ export function verifyPublicForwardPartialFillV3CohortFreeze(
     || splits.OOS?.startIndexInclusive !== 768
     || splits.OOS?.endIndexInclusive !== 1023
     || splits.OOS?.slotN !== 256
-    || splits.TRAIN?.endExclusiveMs !== splits.VALIDATION?.startInclusiveMs
-    || splits.VALIDATION?.endExclusiveMs !== splits.OOS?.startInclusiveMs
+    || splits.TRAIN?.startInclusiveMs !== row.effectiveStartMs
+    || splits.TRAIN?.endExclusiveMs !== row.effectiveStartMs + 512 * row.slotCadenceMs
+    || splits.VALIDATION?.startInclusiveMs !== splits.TRAIN?.endExclusiveMs
+    || splits.VALIDATION?.endExclusiveMs !== row.effectiveStartMs + 768 * row.slotCadenceMs
+    || splits.OOS?.startInclusiveMs !== splits.VALIDATION?.endExclusiveMs
+    || splits.OOS?.endExclusiveMs !== row.effectiveStartMs + 1024 * row.slotCadenceMs
     || splits.OOS?.endExclusiveMs !== row.endExclusiveMs) {
     blockers.push('V3_COHORT_SPLITS_INVALID');
   }
