@@ -113,6 +113,62 @@ function multiTimeframeAlignment(trend) {
   return "NEUTRAL";
 }
 
+function priceActionContext(marketFeatures, blockers) {
+  const raw = marketFeatures?.features?.priceAction;
+  if (!raw) {
+    return {
+      status: "MISSING",
+      authority: "NONE",
+      structureTrend: null,
+      structureTransition: null,
+      candlestickPatterns: [],
+      latestSwingLegDirection: null,
+      latestSwingLegAtr: null,
+      priorSwingLegAtr: null,
+      swingRetracementRatio: null,
+      swingSequence: [],
+      breakoutDirection: null,
+      breakoutDistanceAtr: null,
+      retestHold: null,
+      sourceEvidenceIds: [],
+      automaticRouteOverride: false,
+    };
+  }
+  if (marketFeatures?.priceActionAuthority !== "CONTEXT_ONLY_NO_INDEPENDENT_VOTE"
+      || raw.authority !== "CONTEXT_ONLY_NO_INDEPENDENT_VOTE") {
+    blockers.push("V2_REGIME_PRICE_ACTION_CONTEXT_AUTHORITY_INVALID");
+  }
+  const evidenceIds = [
+    raw.priceStructureEvidenceId,
+    raw.candleEvidenceId,
+    raw.patternEvidenceId,
+  ].filter((value) => typeof value === "string" && value.trim());
+  if (evidenceIds.length !== 3 || new Set(evidenceIds).size !== 3) {
+    blockers.push("V2_REGIME_PRICE_ACTION_CONTEXT_EVIDENCE_IDS_INVALID");
+  }
+  return {
+    status: "AVAILABLE",
+    authority: "CONTEXT_ONLY_NO_INDEPENDENT_VOTE",
+    structureTrend: raw.structureTrend ?? null,
+    structureTransition: raw.structureTransition ?? "NONE",
+    candlestickPatterns: Array.isArray(raw.candlestickPatterns)
+      ? [...new Set(raw.candlestickPatterns.filter((value) => typeof value === "string"))].sort()
+      : [],
+    latestSwingLegDirection: raw.latestSwingLegDirection ?? null,
+    latestSwingLegAtr: finite(raw.latestSwingLegAtr),
+    priorSwingLegAtr: finite(raw.priorSwingLegAtr),
+    swingRetracementRatio: finite(raw.swingRetracementRatio),
+    swingSequence: Array.isArray(raw.swingSequence)
+      ? raw.swingSequence.filter((value) => typeof value === "string")
+      : [],
+    breakoutDirection: raw.breakoutDirection ?? null,
+    breakoutDistanceAtr: finite(raw.breakoutDistanceAtr),
+    retestHold: typeof raw.retestHold === "boolean" ? raw.retestHold : null,
+    sourceEvidenceIds: evidenceIds,
+    automaticRouteOverride: false,
+  };
+}
+
 function directionalRegime(trend, options) {
   const adx = finite(trend?.adx);
   if (adx == null) return "UNKNOWN";
@@ -155,7 +211,7 @@ function volatilityRegime(volatility, volume, options) {
   return "NEUTRAL";
 }
 
-function routing(regime, alignment) {
+function routing(regime, alignment, priceActionStatus) {
   let allowedStrategyFamilies = [];
   let entryPolicy = "FAIL_CLOSED_NO_TRADE";
   if (["STRONG_TREND_UP", "TREND_UP", "TREND_DOWN", "STRONG_TREND_DOWN"].includes(regime)) {
@@ -175,7 +231,10 @@ function routing(regime, alignment) {
   const higherTimeframeAction = alignment === "CONFLICT"
     ? "DOWNSTREAM_REVIEW_NOT_AUTOMATIC_VETO"
     : alignment === "UNKNOWN" ? "INSUFFICIENT_CONTEXT" : "CONTEXT_RECORDED";
-  return { allowedStrategyFamilies, entryPolicy, higherTimeframeAction };
+  const priceActionAction = priceActionStatus === "AVAILABLE"
+    ? "CONTEXT_RECORDED_NO_AUTOMATIC_ROUTE_OVERRIDE"
+    : "CONTEXT_MISSING_NO_ROUTE_OVERRIDE";
+  return { allowedStrategyFamilies, entryPolicy, higherTimeframeAction, priceActionAction };
 }
 
 export function buildAdaptiveMultiEvidenceRegimeRouterV2({ marketFeatures, options: rawOptions } = {}) {
@@ -201,6 +260,8 @@ export function buildAdaptiveMultiEvidenceRegimeRouterV2({ marketFeatures, optio
   const trend = marketFeatures.features.trend;
   const volatility = marketFeatures.features.volatility;
   const volume = marketFeatures.features.volume;
+  const priceAction = priceActionContext(marketFeatures, blockers);
+  if (blockers.length > 0) return failure(blockers, missingEvidence);
   const directional = directionalRegime(trend, options);
   const volatilityState = volatilityRegime(volatility, volume, options);
   const regime = volatilityState === "PANIC_DISLOCATION" ? volatilityState
@@ -208,7 +269,11 @@ export function buildAdaptiveMultiEvidenceRegimeRouterV2({ marketFeatures, optio
       : volatilityState === "VOLATILITY_COMPRESSION" ? volatilityState
         : directional;
   const alignment = multiTimeframeAlignment(trend);
-  const route = routing(regime, alignment);
+  const route = routing(regime, alignment, priceAction.status);
+  const priceActionContextDigest = sha256Canonical({
+    sourceContentDigest: marketFeatures.contentDigest,
+    priceAction,
+  });
   const regimeDigest = sha256Canonical({
     sourceContentDigest: marketFeatures.contentDigest,
     decisionTime: marketFeatures.decisionTime,
@@ -216,6 +281,7 @@ export function buildAdaptiveMultiEvidenceRegimeRouterV2({ marketFeatures, optio
     directionalRegime: directional,
     volatilityRegime: volatilityState,
     multiTimeframeAlignment: alignment,
+    priceActionContextDigest,
     options,
   });
 
@@ -231,6 +297,11 @@ export function buildAdaptiveMultiEvidenceRegimeRouterV2({ marketFeatures, optio
     volatilityRegime: volatilityState,
     multiTimeframeAlignment: alignment,
     routing: route,
+    priceActionContext: priceAction,
+    priceActionContextDigest,
+    priceActionAuthority: priceAction.status === "AVAILABLE"
+      ? "CONTEXT_ONLY_NO_INDEPENDENT_VOTE"
+      : "NONE",
     facts: {
       adx: trend.adx,
       emaDirection: trend.emaDirection,
@@ -240,11 +311,17 @@ export function buildAdaptiveMultiEvidenceRegimeRouterV2({ marketFeatures, optio
       recentToPriorRangeRatio: volatility.recentToPriorRangeRatio,
       abnormalVolatility: volatility.abnormalVolatility,
       abnormalVolume: volume.abnormalVolume,
+      structureTransition: priceAction.structureTransition,
+      candlestickPatterns: priceAction.candlestickPatterns,
+      latestSwingLegDirection: priceAction.latestSwingLegDirection,
     },
     uncertainty: [
       "Regime is a point-in-time classification, not a price forecast or profitability claim.",
       alignment === "UNKNOWN" ? "Higher-timeframe context is unavailable." : null,
       alignment === "CONFLICT" ? "Higher-timeframe conflict requires downstream review but is not an automatic veto." : null,
+      priceAction.status === "AVAILABLE"
+        ? "Price-action context shares the market-tape correlation group and cannot create an extra vote or automatic route override."
+        : "Price-action context is unavailable and no substitute signal is fabricated.",
     ].filter(Boolean),
     blockers: [],
     missingEvidence: marketFeatures.missingEvidence ?? [],
