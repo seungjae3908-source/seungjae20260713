@@ -95,6 +95,8 @@ test("workflow syntax and PR event contracts are explicit", () => {
 test("authoritative main push CI and required status publishers remain intact", () => {
   const push = indentedBlock(indentedBlock(documents.application, "on", 0), "push", 2);
   assert.match(push, /^\s+branches:\s*\n\s+- main$/mu);
+  assert.match(push, /^\s+- market-intelligence-sidecar\/\*\*$/mu);
+  assert.match(push, /^\s+- \.github\/workflows\/public-forward-liquidity-\*\.yml$/mu);
   for (const context of [
     "application-ci/verified",
     "browser-ui/verified",
