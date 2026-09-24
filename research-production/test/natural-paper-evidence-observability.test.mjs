@@ -94,6 +94,7 @@ function fixture({
       count: counts.evidence,
       provenance: 'authoritative Paper source completeness',
       measuredAtMs: OBSERVED_AT,
+      identity: reasonIdentity(null),
     }],
     canonicalNaturalStageEvidence: {
       schemaVersion: 'canonical-natural-paper-stage-evidence-v1',
@@ -191,6 +192,30 @@ test('reports EVIDENCE as the first zero and counts the authoritative missing-ev
   assert.equal(artifact.funnel.entryCreatedCount, null);
 });
 
+for (const missingIdentityField of ['cycleId', 'triggerSource']) {
+  test(`does not accept first-zero reason evidence missing ${missingIdentityField}`, () => {
+    const input = fixture({
+      counts: { candidate: 5, evidence: 0, risk: 0, admission: 0, entry: 0, position: 0, exitEligible: 0, settlement: 0 },
+      downstreamMeasured: false,
+    });
+    const reason = {
+      reasonCode: 'P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING',
+      authoritative: true,
+      freshness: 'FRESH',
+      observedAtMs: OBSERVED_AT,
+      ...reasonIdentity(`missing-${missingIdentityField}`),
+    };
+    delete reason[missingIdentityField];
+    input.authoritativeFirstZeroReasonEvidenceByStage.EVIDENCE_COMPLETE = reason;
+    const artifact = build(input);
+    assert.equal(artifact.firstZeroStage, 'EVIDENCE');
+    assert.equal(artifact.firstZeroReason, 'MISSING_EVIDENCE');
+    assert.equal(artifact.firstZeroReasonEvidenceStatus, 'MISSING_OR_AMBIGUOUS');
+    assert.equal(artifact.reasonEvidence.length, 0);
+    assert.equal(artifact.reasonCounts.MISSING_EVIDENCE, 0);
+  });
+}
+
 test('does not let unknown evidence masquerade as a measured zero', () => {
   const input = fixture();
   input.naturalFunnelMeasurements = [{
@@ -206,6 +231,37 @@ test('does not let unknown evidence masquerade as a measured zero', () => {
   assert.equal(artifact.firstZeroStage, 'UNKNOWN');
   assert.equal(artifact.firstUnknownStage, 'EVIDENCE');
   assert.equal(artifact.firstZeroReason, 'MISSING_EVIDENCE');
+});
+
+test('rejects measured EVIDENCE from a different natural cycle identity', () => {
+  const input = fixture();
+  input.naturalFunnelMeasurements[0].identity = {
+    ...reasonIdentity(null),
+    cycleId: 'paper-forward-public-evidence-4h-v1:41',
+  };
+  const artifact = build(input);
+  const evidence = artifact.stages.find((stageRow) => stageRow.stage === 'EVIDENCE');
+  assert.equal(artifact.naturalFunnelObservable, false);
+  assert.equal(artifact.funnel.authoritativeEvidenceReadyCount, null);
+  assert.equal(artifact.firstZeroStage, 'UNKNOWN');
+  assert.equal(artifact.firstUnknownStage, 'EVIDENCE');
+  assert.equal(artifact.firstZeroReason, 'IDENTITY_MISMATCH');
+  assert.equal(evidence.status, 'IDENTITY_MISMATCH');
+  assert.equal(evidence.identityValid, false);
+});
+
+test('rejects measured EVIDENCE whose own identity is missing', () => {
+  const input = fixture();
+  delete input.naturalFunnelMeasurements[0].identity;
+  const artifact = build(input);
+  const evidence = artifact.stages.find((stageRow) => stageRow.stage === 'EVIDENCE');
+  assert.equal(artifact.naturalFunnelObservable, false);
+  assert.equal(artifact.funnel.authoritativeEvidenceReadyCount, null);
+  assert.equal(artifact.firstZeroStage, 'UNKNOWN');
+  assert.equal(artifact.firstUnknownStage, 'EVIDENCE');
+  assert.equal(artifact.firstZeroReason, 'IDENTITY_MISMATCH');
+  assert.equal(evidence.status, 'IDENTITY_MISMATCH');
+  assert.equal(evidence.identityValid, false);
 });
 
 for (const [name, mutate] of [
