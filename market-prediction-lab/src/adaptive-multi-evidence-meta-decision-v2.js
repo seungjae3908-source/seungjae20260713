@@ -23,6 +23,7 @@ const HARD_GATE_NAMES = Object.freeze([
 ]);
 const GATE_STATES = new Set(["PASS", "FAIL", "UNKNOWN"]);
 const ENTRY_DECISIONS = new Set(["BUY", "LONG", "SHORT"]);
+const SHA64 = /^[0-9a-f]{64}$/iu;
 
 function deepFreeze(value) {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
@@ -147,6 +148,24 @@ function empiricalProbability(raw, context) {
     : { status: "UNAVAILABLE", value: null, reason: "CALIBRATION_EVIDENCE_INVALID_OR_MISMATCHED" };
 }
 
+function validPriceActionProvenance(regimeRouter) {
+  const raw = regimeRouter?.priceActionContext;
+  if (!raw || !["AVAILABLE", "MISSING"].includes(raw.status)) return false;
+  if (!SHA64.test(regimeRouter?.sourceContentDigest ?? "")
+      || !SHA64.test(regimeRouter?.priceActionContextDigest ?? "")) return false;
+  const expectedDigest = sha256Canonical({
+    sourceContentDigest: regimeRouter.sourceContentDigest,
+    priceAction: raw,
+  });
+  if (regimeRouter.priceActionContextDigest !== expectedDigest) return false;
+  if (raw.status === "AVAILABLE") {
+    return regimeRouter.priceActionAuthority === "CONTEXT_ONLY_NO_INDEPENDENT_VOTE"
+      && raw.authority === "CONTEXT_ONLY_NO_INDEPENDENT_VOTE";
+  }
+  return regimeRouter.priceActionAuthority === "NONE"
+    && raw.authority === "NONE";
+}
+
 function summarizeContext(regimeRouter) {
   const raw = regimeRouter?.priceActionContext;
   if (!raw || raw.status !== "AVAILABLE") {
@@ -222,6 +241,9 @@ export function buildAdaptiveMultiEvidenceMetaDecisionV2(input = {}) {
       && (input.regimeRouter?.priceActionAuthority !== "CONTEXT_ONLY_NO_INDEPENDENT_VOTE"
         || input.regimeRouter?.priceActionContext?.authority !== "CONTEXT_ONLY_NO_INDEPENDENT_VOTE")) {
     blockers.push("V2_META_PRICE_ACTION_CONTEXT_AUTHORITY_INVALID");
+  }
+  if (!validPriceActionProvenance(input.regimeRouter)) {
+    blockers.push("V2_META_PRICE_ACTION_CONTEXT_PROVENANCE_INVALID");
   }
   if (input.executionAuthority != null && input.executionAuthority !== "NONE") blockers.push("V2_META_EXECUTION_AUTHORITY_FORBIDDEN");
   if (blockers.length > 0) return blocked(blockers);
