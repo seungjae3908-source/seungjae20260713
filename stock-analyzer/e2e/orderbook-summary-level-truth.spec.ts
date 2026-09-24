@@ -68,6 +68,13 @@ test('fails closed when declared spread percentage disagrees with canonical top 
   await expect(dialog.getByTestId('bid-levels')).toBeEmpty();
 });
 
+test('preserves canonical Toss provider identity in the read-only orderbook UI', async ({ page }) => {
+  const dialog = await serve(page, { ...readyFixture, provider: 'toss' });
+
+  await expect(dialog.getByText(/Toss read-only/)).toBeVisible();
+  await expect(dialog.getByText(/Provider unavailable/)).toHaveCount(0);
+});
+
 test('preserves crossed-book diagnosis even when a stale declared spread disagrees', async ({ page }) => {
   const dialog = await serve(page, {
     ...readyFixture,

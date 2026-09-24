@@ -15,7 +15,7 @@ export type OrderbookAssetClass = 'stock' | 'crypto_spot' | 'crypto_futures';
 export type OrderbookMarket = 'KR' | 'US' | 'UPBIT' | 'BITGET';
 type OrderbookStatus = 'ready' | 'partial' | 'stale' | 'unavailable' | 'invalid';
 type Currency = 'KRW' | 'USD' | 'USDT';
-type Provider = 'kiwoom' | 'upbit' | 'bitget' | null;
+type Provider = 'kiwoom' | 'toss' | 'upbit' | 'bitget' | null;
 
 type Level = {
   rank: number;
@@ -188,7 +188,7 @@ function parsePayload(value: unknown): Payload {
   }
   const spreadPct = derivedSpreadPct ?? declaredSpreadPct;
 
-  const provider: Provider = row.provider === 'kiwoom' || row.provider === 'upbit' || row.provider === 'bitget'
+  const provider: Provider = row.provider === 'kiwoom' || row.provider === 'toss' || row.provider === 'upbit' || row.provider === 'bitget'
     ? row.provider
     : null;
   const providerTimestamp = cleanText(row.providerTimestamp);
@@ -273,6 +273,7 @@ function formatTime(value: string | null | undefined): string {
 
 function providerLabel(provider: Provider): string {
   if (provider === 'kiwoom') return 'Kiwoom read-only';
+  if (provider === 'toss') return 'Toss read-only';
   if (provider === 'upbit') return 'Upbit public REST';
   if (provider === 'bitget') return 'Bitget public REST';
   return 'Provider unavailable';
