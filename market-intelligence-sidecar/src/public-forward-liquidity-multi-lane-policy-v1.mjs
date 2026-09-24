@@ -416,9 +416,19 @@ export function resolvePublicForwardLiquidityMultiLaneCreditIdentity({
       reason: 'PHASE2_UTC27_ZERO_ADDITIONAL_CREDIT',
     });
   }
+  const successorCohort = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyCore.cohort;
+  const successorCohortStartMs = integer(
+    successorCohort.startInclusiveMs,
+    'PHASE2_V3_COHORT_START_INVALID',
+  );
   const successorCohortDigest = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest;
-  if (SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound === true
-    && successorCohortDigest !== FROZEN_V3_COHORT_DIGEST) {
+  const rotatedSuccessorActive = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound === true
+    && successorCohortDigest !== FROZEN_V3_COHORT_DIGEST;
+  if (index < activation.activationSlotIndex
+    && (!rotatedSuccessorActive || actual < successorCohortStartMs)) {
+    return Object.freeze({ active: false, reason: 'PHASE2_PRE_ACTIVATION_OLD_POLICY' });
+  }
+  if (rotatedSuccessorActive) {
     fail('PHASE2_V3_COHORT_DIGEST_MISMATCH');
   }
   if (index < activation.activationSlotIndex) {
