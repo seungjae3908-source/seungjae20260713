@@ -170,12 +170,19 @@ function verifiedLineage(
     return binding('MISMATCH', 'CANONICAL_PAPER_OWNER_LINEAGE_MISMATCH');
   }
 
+  const verifiedAtMs = lineage.validationReceipt.verification?.verifiedAtMs;
+  if (!Number.isSafeInteger(verifiedAtMs) || verifiedAtMs > nowMs) {
+    return binding('MISMATCH', 'CANONICAL_PAPER_VALIDATION_RECEIPT_INVALID');
+  }
   try {
+    // Persisted owner lineage is historical evidence. Re-validate that the receipt
+    // was fresh at its server-owned verification time; do not make a valid old
+    // trade become mismatched merely because wall-clock time advanced.
     consumeManualSameCandidateValidationReceipt(
       lineage.validationReceipt.receipt,
       lineage.validationReceipt.verification,
       lineage.identity,
-      nowMs,
+      verifiedAtMs,
     );
   } catch {
     return binding('MISMATCH', 'CANONICAL_PAPER_VALIDATION_RECEIPT_INVALID');
