@@ -88,11 +88,43 @@ function syncedJournalPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function canonicalLineage(settlementMode: 'none'|'valid'|'invalid' = 'none') {
+function canonicalLineage(settlementMode: 'none'|'valid'|'invalid'|'invalid-cost' = 'none') {
+  const component = (name: string) => ({
+    status: 'PRESENT',
+    source: `public:${name}`,
+    provenance: `authenticated:${name}`,
+    quality: name === 'tax' || name === 'funding' ? 'NOT_APPLICABLE' : 'OBSERVED',
+    valuePercent: name === 'tax' || name === 'funding' ? 0 : 0.01,
+    observedAtMs: VERIFIED_AT_MS - 2_000,
+  });
+  const components = {
+    commission: component('commission'),
+    tax: component('tax'),
+    spread: component('spread'),
+    slippage: component('slippage'),
+    funding: component('funding'),
+    latency: component('latency'),
+    liquidityImpact: component('liquidityImpact'),
+    partialFillImpact: component('partialFillImpact'),
+  };
   const fullCost = {
-    evidenceDigest: 'full-cost-evidence-digest-1',
+    schemaVersion: 'natural-paper-settlement-full-cost-v1',
+    status: settlementMode === 'invalid-cost' ? 'BLOCKED_DATA' : 'PRESENT',
+    fullCostReady: settlementMode !== 'invalid-cost',
+    components,
+    costPolicyIdentity: { version: 'cost-v1' },
     exitTriggerId: 'exit-trigger-1',
     exitExecutionId: 'exit-execution-1',
+    evidenceDigest: manualPaperEvidenceSha256({
+      components,
+      exitTriggerId: 'exit-trigger-1',
+      exitExecutionId: 'exit-execution-1',
+      policy: 'cost-v1',
+    }),
+    blockers: settlementMode === 'invalid-cost' ? ['PAPER_POSITION_SETTLEMENT_COST_EVIDENCE_MISSING'] : [],
+    unknownIsZero: false,
+    naturalSampleCredit: 0,
+    executionAuthority: 'NONE',
   };
   const settlementIdentity = {
     candidateId: identity.candidateId,
@@ -142,7 +174,7 @@ function ownerState(options: {
   canonical?: boolean;
   entryPrice?: number;
   grossPnl?: number;
-  settlementMode?: 'none'|'valid'|'invalid';
+  settlementMode?: 'none'|'valid'|'invalid'|'invalid-cost';
 } = {}) {
   const canonical = options.canonical ?? true;
   const entryPrice = options.entryPrice ?? 100;
@@ -232,6 +264,9 @@ test('authenticated owner state plus genuine validation receipt verifies candida
   assert.equal(value?.strategyId, identity.strategyId);
   assert.equal(value?.researchCodeSha, SOURCE_SHA);
   assert.equal(value?.settlementBindingVerified, false);
+  assert.equal(value?.fullCostBindingVerified, false);
+  assert.equal(value?.fullCostEvidenceDigest, null);
+  assert.equal(value?.fullCostComponentCount, 0);
   assert.equal(value?.executionAuthority, 'NONE');
   assert.equal(value?.profitabilityCredit, 0);
   assert.equal(result.canonicalResearchBinding.status, 'VERIFIED');
@@ -274,6 +309,9 @@ test('only full canonical settlement identity sets settlementBindingVerified', (
   assert.equal(valid.trades[0]?.canonicalResearchBinding.triggerBindingVerified, true);
   assert.equal(valid.trades[0]?.canonicalResearchBinding.exitTriggerId, 'exit-trigger-1');
   assert.equal(valid.trades[0]?.canonicalResearchBinding.exitExecutionId, 'exit-execution-1');
+  assert.equal(valid.trades[0]?.canonicalResearchBinding.fullCostBindingVerified, true);
+  assert.match(valid.trades[0]?.canonicalResearchBinding.fullCostEvidenceDigest ?? '', /^[0-9a-f]{64}$/u);
+  assert.equal(valid.trades[0]?.canonicalResearchBinding.fullCostComponentCount, 8);
 
   const invalid = bindCanonicalResearchToUnifiedJournal(journal, {
     status: 'PRESENT',
@@ -286,6 +324,20 @@ test('only full canonical settlement identity sets settlementBindingVerified', (
   assert.equal(invalid.trades[0]?.canonicalResearchBinding.triggerBindingVerified, false);
   assert.equal(invalid.trades[0]?.canonicalResearchBinding.exitTriggerId, null);
   assert.equal(invalid.trades[0]?.canonicalResearchBinding.exitExecutionId, null);
+  assert.equal(invalid.trades[0]?.canonicalResearchBinding.fullCostBindingVerified, false);
+  assert.equal(invalid.trades[0]?.canonicalResearchBinding.fullCostEvidenceDigest, null);
+  assert.equal(invalid.trades[0]?.canonicalResearchBinding.fullCostComponentCount, 0);
+
+  const invalidCost = bindCanonicalResearchToUnifiedJournal(journal, {
+    status: 'PRESENT',
+    sourceSha: SOURCE_SHA,
+    state: ownerState({ settlementMode: 'invalid-cost' }),
+  }, NOW_MS);
+  assert.equal(invalidCost.trades[0]?.canonicalResearchBinding.settlementBindingVerified, true);
+  assert.equal(invalidCost.trades[0]?.canonicalResearchBinding.triggerBindingVerified, true);
+  assert.equal(invalidCost.trades[0]?.canonicalResearchBinding.fullCostBindingVerified, false);
+  assert.equal(invalidCost.trades[0]?.canonicalResearchBinding.fullCostEvidenceDigest, null);
+  assert.equal(invalidCost.trades[0]?.canonicalResearchBinding.fullCostComponentCount, 0);
 });
 
 test('owner lineage bound to a different deploy SHA cannot verify', () => {
