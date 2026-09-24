@@ -45,7 +45,25 @@ function marketFeatures(overrides = {}) {
         abnormalRangeZScore: 0.5,
         abnormalVolatility: false,
       },
+      priceAction: {
+        structureTrend: "BULLISH",
+        structureTransition: "BOS_UP",
+        candlestickPatterns: ["BULLISH_ENGULFING"],
+        latestSwingLegDirection: "UP",
+        latestSwingLegAtr: 1.4,
+        priorSwingLegAtr: 1.1,
+        swingRetracementRatio: 1.272727,
+        swingSequence: ["HH", "HL", "HH"],
+        breakoutDirection: "UP",
+        breakoutDistanceAtr: 0.8,
+        retestHold: true,
+        priceStructureEvidenceId: `adaptive-v2-evidence:${"a".repeat(64)}`,
+        candleEvidenceId: `adaptive-v2-evidence:${"b".repeat(64)}`,
+        patternEvidenceId: `adaptive-v2-evidence:${"c".repeat(64)}`,
+        authority: "CONTEXT_ONLY_NO_INDEPENDENT_VOTE",
+      },
     },
+    priceActionAuthority: "CONTEXT_ONLY_NO_INDEPENDENT_VOTE",
     evidence: Object.fromEntries(
       ["trend", "momentum", "volume", "volatility"].map((family) => [family, admissibleEvidence(family)]),
     ),
@@ -176,4 +194,49 @@ test("router never creates probability, profitability, vote, or execution credit
   assert.equal(result.privateTradingApiAllowed, false);
   assert.equal(result.executionAuthority, "NONE");
   assert.equal("probability" in result, false);
+});
+
+
+test("price-action context reaches the router without becoming a fifth vote or automatic route override", () => {
+  const base = buildAdaptiveMultiEvidenceRegimeRouterV2({ marketFeatures: marketFeatures() });
+  assert.equal(base.priceActionContext.status, "AVAILABLE");
+  assert.equal(base.priceActionContext.structureTransition, "BOS_UP");
+  assert.deepEqual(base.priceActionContext.candlestickPatterns, ["BULLISH_ENGULFING"]);
+  assert.equal(base.priceActionContext.latestSwingLegDirection, "UP");
+  assert.equal(base.priceActionAuthority, "CONTEXT_ONLY_NO_INDEPENDENT_VOTE");
+  assert.equal(base.routing.priceActionAction, "CONTEXT_RECORDED_NO_AUTOMATIC_ROUTE_OVERRIDE");
+  assert.equal(base.independentVoteCredit, 0);
+  assert.equal(base.economicSampleCredit, 0);
+
+  const opposing = buildAdaptiveMultiEvidenceRegimeRouterV2({
+    marketFeatures: marketFeatures({
+      features: {
+        priceAction: {
+          ...marketFeatures().features.priceAction,
+          structureTransition: "CHOCH_DOWN",
+          candlestickPatterns: ["BEARISH_ENGULFING"],
+          latestSwingLegDirection: "DOWN",
+        },
+      },
+    }),
+  });
+  assert.equal(opposing.regime, base.regime);
+  assert.deepEqual(opposing.routing.allowedStrategyFamilies, base.routing.allowedStrategyFamilies);
+  assert.equal(opposing.routing.entryPolicy, base.routing.entryPolicy);
+  assert.equal(opposing.priceActionContext.automaticRouteOverride, false);
+  assert.notEqual(opposing.priceActionContextDigest, base.priceActionContextDigest);
+  assert.notEqual(opposing.regimeDigest, base.regimeDigest);
+});
+
+test("invalid price-action authority fails closed instead of silently creating a vote", () => {
+  const result = buildAdaptiveMultiEvidenceRegimeRouterV2({
+    marketFeatures: marketFeatures({
+      priceActionAuthority: "INDEPENDENT_VOTE",
+    }),
+  });
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.ok(result.blockers.includes("V2_REGIME_PRICE_ACTION_CONTEXT_AUTHORITY_INVALID"));
+  assert.equal(result.independentVoteCredit, 0);
+  assert.equal(result.economicSampleCredit, 0);
+  assert.equal(result.executionAuthority, "NONE");
 });
