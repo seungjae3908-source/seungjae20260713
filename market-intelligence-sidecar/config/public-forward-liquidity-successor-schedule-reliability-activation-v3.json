@@ -1,7 +1,7 @@
 {
   "schemaVersion": "public-forward-liquidity-successor-schedule-reliability-activation-binding-v3",
   "authorityIssue": 23,
-  "authorityCommentId": 5805629154,
+  "authorityCommentId": 5805902930,
   "hubFreezeAuthorityCommentId": 5804802177,
   "hubFreezeTimestampCommentId": 5804808369,
   "frozenCohortFreezeBlobSha": "65ef02d9ef5611c767755e71b40b840737b0658a",
@@ -9,7 +9,7 @@
   "frozenCohortEffectiveStartMs": 1790263020000,
   "activationBoundaryMs": 1790212089000,
   "cutoverStartMs": 1790263020000,
-  "authorizedCurrentMainSha": "8bfd110befd4fc57ebf1248df6ccbd089d426855",
+  "authorizedCurrentMainSha": "24d9c8b4bbca54c1b3bce4ad28a8c1286beaff92",
   "numericFreezeSha256": "10b157de8e1902865f9b386a02439bb56d67b5c2fcd20dd48870d851bdb97ff1",
   "minActivationLeadSlots": 1,
   "priorV2CreditImported": 0,
