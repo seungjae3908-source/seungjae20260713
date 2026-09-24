@@ -88,7 +88,7 @@ function syncedJournalPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function canonicalLineage(settlementMode: 'none'|'valid'|'invalid'|'invalid-cost' = 'none') {
+function canonicalLineage(settlementMode: 'none'|'valid'|'invalid'|'invalid-cost'|'invalid-net' = 'none') {
   const component = (name: string) => ({
     status: 'PRESENT',
     source: `public:${name}`,
@@ -126,6 +126,8 @@ function canonicalLineage(settlementMode: 'none'|'valid'|'invalid'|'invalid-cost
     naturalSampleCredit: 0,
     executionAuthority: 'NONE',
   };
+  const canonicalGrossPnl = 0;
+  const canonicalNetPnl = settlementMode === 'invalid-net' ? -0.2 : -0.1;
   const settlementIdentity = {
     candidateId: identity.candidateId,
     entryId: 'paper-sample-1',
@@ -137,6 +139,8 @@ function canonicalLineage(settlementMode: 'none'|'valid'|'invalid'|'invalid-cost
     parameterDigest: identity.parameterDigest,
     accountMode: identity.accountMode,
     costEvidenceDigest: fullCost.evidenceDigest,
+    netPnl: canonicalNetPnl,
+    netReturnPercent: -0.1,
   };
   const settlement = {
     settlementId: manualPaperEvidenceSha256(settlementIdentity),
@@ -155,6 +159,9 @@ function canonicalLineage(settlementMode: 'none'|'valid'|'invalid'|'invalid-cost
     entryDirection: identity.side,
     exitTriggerId: settlementMode === 'invalid' ? 'forged-trigger' : fullCost.exitTriggerId,
     exitExecutionId: fullCost.exitExecutionId,
+    grossPnl: canonicalGrossPnl,
+    netPnl: canonicalNetPnl,
+    netReturnPercent: -0.1,
     lifecycleEvidence: { costEvidence: fullCost },
   };
   return {
@@ -174,7 +181,7 @@ function ownerState(options: {
   canonical?: boolean;
   entryPrice?: number;
   grossPnl?: number;
-  settlementMode?: 'none'|'valid'|'invalid'|'invalid-cost';
+  settlementMode?: 'none'|'valid'|'invalid'|'invalid-cost'|'invalid-net';
 } = {}) {
   const canonical = options.canonical ?? true;
   const entryPrice = options.entryPrice ?? 100;
@@ -267,6 +274,9 @@ test('authenticated owner state plus genuine validation receipt verifies candida
   assert.equal(value?.fullCostBindingVerified, false);
   assert.equal(value?.fullCostEvidenceDigest, null);
   assert.equal(value?.fullCostComponentCount, 0);
+  assert.equal(value?.netPnlBindingVerified, false);
+  assert.equal(value?.canonicalNetPnl, null);
+  assert.equal(value?.netPnlEvidenceDigest, null);
   assert.equal(value?.executionAuthority, 'NONE');
   assert.equal(value?.profitabilityCredit, 0);
   assert.equal(result.canonicalResearchBinding.status, 'VERIFIED');
@@ -312,6 +322,9 @@ test('only full canonical settlement identity sets settlementBindingVerified', (
   assert.equal(valid.trades[0]?.canonicalResearchBinding.fullCostBindingVerified, true);
   assert.match(valid.trades[0]?.canonicalResearchBinding.fullCostEvidenceDigest ?? '', /^[0-9a-f]{64}$/u);
   assert.equal(valid.trades[0]?.canonicalResearchBinding.fullCostComponentCount, 8);
+  assert.equal(valid.trades[0]?.canonicalResearchBinding.netPnlBindingVerified, true);
+  assert.equal(valid.trades[0]?.canonicalResearchBinding.canonicalNetPnl, -0.1);
+  assert.match(valid.trades[0]?.canonicalResearchBinding.netPnlEvidenceDigest ?? '', /^[0-9a-f]{64}$/u);
 
   const invalid = bindCanonicalResearchToUnifiedJournal(journal, {
     status: 'PRESENT',
@@ -327,6 +340,9 @@ test('only full canonical settlement identity sets settlementBindingVerified', (
   assert.equal(invalid.trades[0]?.canonicalResearchBinding.fullCostBindingVerified, false);
   assert.equal(invalid.trades[0]?.canonicalResearchBinding.fullCostEvidenceDigest, null);
   assert.equal(invalid.trades[0]?.canonicalResearchBinding.fullCostComponentCount, 0);
+  assert.equal(invalid.trades[0]?.canonicalResearchBinding.netPnlBindingVerified, false);
+  assert.equal(invalid.trades[0]?.canonicalResearchBinding.canonicalNetPnl, null);
+  assert.equal(invalid.trades[0]?.canonicalResearchBinding.netPnlEvidenceDigest, null);
 
   const invalidCost = bindCanonicalResearchToUnifiedJournal(journal, {
     status: 'PRESENT',
@@ -338,6 +354,18 @@ test('only full canonical settlement identity sets settlementBindingVerified', (
   assert.equal(invalidCost.trades[0]?.canonicalResearchBinding.fullCostBindingVerified, false);
   assert.equal(invalidCost.trades[0]?.canonicalResearchBinding.fullCostEvidenceDigest, null);
   assert.equal(invalidCost.trades[0]?.canonicalResearchBinding.fullCostComponentCount, 0);
+  assert.equal(invalidCost.trades[0]?.canonicalResearchBinding.netPnlBindingVerified, false);
+
+  const invalidNet = bindCanonicalResearchToUnifiedJournal(journal, {
+    status: 'PRESENT',
+    sourceSha: SOURCE_SHA,
+    state: ownerState({ settlementMode: 'invalid-net' }),
+  }, NOW_MS);
+  assert.equal(invalidNet.trades[0]?.canonicalResearchBinding.settlementBindingVerified, true);
+  assert.equal(invalidNet.trades[0]?.canonicalResearchBinding.fullCostBindingVerified, true);
+  assert.equal(invalidNet.trades[0]?.canonicalResearchBinding.netPnlBindingVerified, false);
+  assert.equal(invalidNet.trades[0]?.canonicalResearchBinding.canonicalNetPnl, null);
+  assert.equal(invalidNet.trades[0]?.canonicalResearchBinding.netPnlEvidenceDigest, null);
 });
 
 test('owner lineage bound to a different deploy SHA cannot verify', () => {

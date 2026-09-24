@@ -34,6 +34,9 @@ export type CanonicalResearchJournalBinding = Readonly<{
   fullCostBindingVerified: boolean;
   fullCostEvidenceDigest: string | null;
   fullCostComponentCount: number;
+  netPnlBindingVerified: boolean;
+  canonicalNetPnl: number | null;
+  netPnlEvidenceDigest: string | null;
   executionAuthority: 'NONE';
   profitabilityCredit: 0;
 }>;
@@ -156,6 +159,9 @@ function binding(
     fullCostBindingVerified: boolean;
     fullCostEvidenceDigest: string | null;
     fullCostComponentCount: number;
+    netPnlBindingVerified: boolean;
+    canonicalNetPnl: number | null;
+    netPnlEvidenceDigest: string | null;
   }>,
 ): CanonicalResearchJournalBinding {
   return Object.freeze({
@@ -176,6 +182,9 @@ function binding(
     fullCostBindingVerified: lineage?.fullCostBindingVerified ?? false,
     fullCostEvidenceDigest: lineage?.fullCostEvidenceDigest ?? null,
     fullCostComponentCount: lineage?.fullCostComponentCount ?? 0,
+    netPnlBindingVerified: lineage?.netPnlBindingVerified ?? false,
+    canonicalNetPnl: lineage?.canonicalNetPnl ?? null,
+    netPnlEvidenceDigest: lineage?.netPnlEvidenceDigest ?? null,
     executionAuthority: 'NONE',
     profitabilityCredit: 0,
   });
@@ -285,6 +294,9 @@ function verifiedLineage(
   let fullCostBindingVerified = false;
   let fullCostEvidenceDigest: string | null = null;
   let fullCostComponentCount = 0;
+  let netPnlBindingVerified = false;
+  let canonicalNetPnl: number | null = null;
+  let netPnlEvidenceDigest: string | null = null;
   const settlement = lineage.settlement as Record<string, unknown> | undefined;
   if (settlement) {
     const settlementIdentity = settlement.settlementIdentity;
@@ -347,6 +359,21 @@ function verifiedLineage(
         fullCostBindingVerified = true;
         fullCostEvidenceDigest = fullCostReadback.evidenceDigest;
         fullCostComponentCount = fullCostReadback.componentCount;
+        const netPnlMatches = sameNumber(settlement.grossPnl, owner.grossPnl)
+          && sameNumber(settlement.grossPnl, trade.grossPnl)
+          && sameNumber(settlement.netPnl, identity?.netPnl)
+          && sameNumber(settlement.netPnl, owner.netPnl)
+          && sameNumber(settlement.netPnl, trade.netPnl);
+        if (netPnlMatches && settlementId && fullCostEvidenceDigest) {
+          netPnlBindingVerified = true;
+          canonicalNetPnl = Number(settlement.netPnl);
+          netPnlEvidenceDigest = manualPaperEvidenceSha256({
+            settlementId,
+            fullCostEvidenceDigest,
+            grossPnl: settlement.grossPnl,
+            netPnl: settlement.netPnl,
+          });
+        }
       }
     }
   }
@@ -363,6 +390,9 @@ function verifiedLineage(
     fullCostBindingVerified,
     fullCostEvidenceDigest,
     fullCostComponentCount,
+    netPnlBindingVerified,
+    canonicalNetPnl,
+    netPnlEvidenceDigest,
   });
 }
 
