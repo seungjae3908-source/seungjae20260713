@@ -199,8 +199,12 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
     const query = searchText.trim().toLowerCase();
     return data.trades.filter((trade) => {
       const bindingStatus = trade.canonicalResearchBinding?.status ?? 'NOT_AVAILABLE';
-      if (bindingFilter !== 'ALL' && bindingStatus !== bindingFilter) return false;
+      if (bindingFilter !== 'ALL') {
+        if (trade.source !== 'APP_PAPER') return false;
+        if (bindingStatus !== bindingFilter) return false;
+      }
       const triggerVerified = trade.canonicalResearchBinding?.triggerBindingVerified === true;
+      if (triggerFilter !== 'ALL' && trade.source !== 'APP_PAPER') return false;
       if (triggerFilter === 'VERIFIED' && !triggerVerified) return false;
       if (triggerFilter === 'UNVERIFIED' && triggerVerified) return false;
       if (!query) return true;
@@ -353,6 +357,24 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
           >
             <div className="flex min-w-0 items-start justify-between gap-2"><span className="min-w-0 break-words text-sm font-bold">{trade.symbol}</span><Grade trade={trade} /></div>
             <div className="mt-2 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>{userFacingCodeLabel(trade.source, USER_TRADE_SOURCE_KO)} · {userFacingCodeLabel(trade.status, USER_STATUS_KO)}</span><span>{money(trade.netPnl, trade.currency)}</span></div>
+            <div className="mt-2 flex flex-wrap gap-1.5 text-[9px] font-extrabold">
+              {trade.source === 'APP_PAPER' ? (
+                <>
+                  <span className="rounded-full border border-border bg-background px-2 py-0.5">
+                    Research {trade.canonicalResearchBinding?.status === 'VERIFIED'
+                      ? '검증'
+                      : trade.canonicalResearchBinding?.status === 'MISMATCH'
+                        ? '불일치'
+                        : '미확인'}
+                  </span>
+                  <span className="rounded-full border border-border bg-background px-2 py-0.5">
+                    Trigger {trade.canonicalResearchBinding?.triggerBindingVerified ? '검증' : '미검증'}
+                  </span>
+                </>
+              ) : (
+                <span className="rounded-full border border-border bg-background px-2 py-0.5">Research 해당없음</span>
+              )}
+            </div>
           </button>)}
         </div>
         {selected ? <TradeDetail trade={selected} /> : <div className="grid min-h-40 place-items-center rounded-2xl border border-border bg-card text-sm text-muted-foreground">거래를 선택하세요.</div>}
