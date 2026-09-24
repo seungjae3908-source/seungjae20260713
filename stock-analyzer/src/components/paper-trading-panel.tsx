@@ -89,6 +89,7 @@ export function PaperTradingPanel({
   const [closeQuantities, setCloseQuantities] = useState<Record<string, string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
   const requestSequence = useRef(0);
+  const actionInFlightRef = useRef(false);
 
   const openPositions = state.positions.filter((position) => position.status !== 'closed');
   const statistics = useMemo(() => calculatePaperStatistics(state.journal), [state.journal]);
@@ -156,7 +157,8 @@ export function PaperTradingPanel({
   }, [form, futuresEnabled, market, rules]);
 
   async function runAction(action: PaperTradingAction) {
-    if (busy) return;
+    if (actionInFlightRef.current || busy) return;
+    actionInFlightRef.current = true;
     setBusy(true); setError(''); setNotice('');
     try {
       const result = await execute(state, action);
@@ -164,7 +166,10 @@ export function PaperTradingPanel({
       setNotice(result.duplicateEvent ? '중복 이벤트를 무시했습니다.' : result.warnings.join(' '));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '모의거래 작업을 처리하지 못했습니다.');
-    } finally { setBusy(false); }
+    } finally {
+      actionInFlightRef.current = false;
+      setBusy(false);
+    }
   }
 
   function buildPlaceAction(): PaperTradingAction {
