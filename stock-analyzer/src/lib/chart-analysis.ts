@@ -84,6 +84,7 @@ type PatternDescriptor = {
 };
 
 const DEFAULT_ENGINE_VERSION = 'chart-analysis-v2';
+const UNSAFE_DATA_STATUSES = new Set(['stale', 'future', 'insufficient', 'unavailable']);
 
 function finite(value: number, fallback = 0): number {
   return Number.isFinite(value) ? value : fallback;
@@ -108,6 +109,11 @@ function stableHash(value: string): string {
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(36);
+}
+
+export function isChartAnalysisDataStatusActionable(dataStatus: unknown): boolean {
+  const normalized = normalizeToken(dataStatus);
+  return normalized === '' || !UNSAFE_DATA_STATUSES.has(normalized);
 }
 
 function patternDescriptor(patterns: string[], trend: string): PatternDescriptor {
@@ -164,6 +170,7 @@ export function createStableAnalysisId(input: {
 }
 
 function deriveStatus(input: ChartAnalysisInput, descriptor: PatternDescriptor): ChartAnalysisStatus {
+  if (!isChartAnalysisDataStatusActionable(input.dataStatus)) return 'expired';
   if (!input.isClosedCandle) return 'forming';
 
   if (descriptor.type === 'double-top') {
