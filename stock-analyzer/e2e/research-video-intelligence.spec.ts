@@ -12,9 +12,9 @@ async function installRuntime(page:Page){
 for(const viewport of [{width:320,height:740},{width:1440,height:900}]){
   test(`video research phase2 stays fail-closed and responsive at ${viewport.width}px`,async({page})=>{
     await page.setViewportSize(viewport);await installRuntime(page);await page.goto('/research-center');
-    await expect(page.getByRole('button',{name:'전문가 보기',exact:true})).toHaveAttribute('aria-pressed','true');
-    for(const name of ['일반 보기','전문가 보기','AI Research Copilot','영상 연구'])await expect(page.getByRole('button',{name,exact:true})).toBeVisible();
-    await page.getByRole('button',{name:'영상 연구',exact:true}).click();
+    await expect(page.getByRole('button',{name:'상세',exact:true})).toHaveAttribute('aria-pressed','true');
+    for(const name of ['요약','상세','AI 도우미','영상'])await expect(page.getByRole('button',{name,exact:true})).toBeVisible();
+    await page.getByRole('button',{name:'영상',exact:true}).click();
     const panel=page.getByTestId('research-video-panel');await expect(panel).toBeVisible();
 
     await expect(panel).toContainText('Research Source Only');
