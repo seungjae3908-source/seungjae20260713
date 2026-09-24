@@ -118,6 +118,16 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
             label="Settlement binding"
             value={trade.canonicalResearchBinding?.settlementBindingVerified ? '검증됨' : '미검증'}
           />
+          <Metric
+            label="Trigger binding"
+            value={trade.canonicalResearchBinding?.triggerBindingVerified ? '검증됨' : '미검증'}
+          />
+          <Metric
+            label="exitTriggerId"
+            value={trade.canonicalResearchBinding?.triggerBindingVerified
+              ? trade.canonicalResearchBinding.exitTriggerId ?? 'N/A'
+              : 'N/A'}
+          />
         </div>
         <p className="mt-2 break-all font-mono text-[10px] text-muted-foreground">
           reason · {trade.canonicalResearchBinding?.reason ?? 'AUTHENTICATED_BINDING_NOT_AVAILABLE'}
