@@ -94,6 +94,12 @@ export function PaperClosedLoopObserver({
       && Boolean(trade.fullCostEvidenceDigest)
   ));
   const canonicalFullCostReady = fullCostBoundJournalBindings.length > 0;
+  const netPnlBoundJournalBindings = exactJournalBindings.filter((trade) => (
+    trade.netPnlBindingVerified
+      && trade.canonicalNetPnl != null
+      && Boolean(trade.netPnlEvidenceDigest)
+  ));
+  const canonicalNetPnlReady = netPnlBoundJournalBindings.length > 0;
 
   const triggerStage: ClosedLoopStage = journalBindingLoading && !journalBinding
     ? {
@@ -281,15 +287,19 @@ export function PaperClosedLoopObserver({
     {
       key: 'net-pnl',
       label: 'Net PnL',
-      value: money(performance?.Net_PnL),
-      detail: performance?.Net_PnL == null
-        ? '후보별 Net PnL 근거가 없습니다.'
-        : canonicalFullCostReady
-          ? '8 Cost canonical 검증은 완료됐지만 Net PnL canonical binding은 아직 별도 검증되지 않았습니다. 따라서 수익성 증거로 승격하지 않습니다.'
-          : overviewFullCostReady
-            ? 'Research overview Full Cost는 준비됐지만 candidate별 canonical 8 Cost와 Net PnL binding은 아직 연결되지 않았습니다.'
-            : '값이 있어도 Full Cost가 미충족이면 수익성 증거로 승격하지 않습니다.',
-      tone: performance?.Net_PnL == null ? 'missing' : 'blocked',
+      value: canonicalNetPnlReady
+        ? `${netPnlBoundJournalBindings.length.toLocaleString('ko-KR')}건 검증 · ${netPnlBoundJournalBindings.map((trade) => money(trade.canonicalNetPnl)).join(' · ')}`
+        : money(performance?.Net_PnL),
+      detail: canonicalNetPnlReady
+        ? `AUTHENTICATED_PAPER_STATE · Settlement/8 Cost/owner journal/unified journal Net PnL 일치 · netPnlEvidenceDigest ${netPnlBoundJournalBindings.map((trade) => trade.netPnlEvidenceDigest).join(' · ')} · profitabilityCredit=0. Net PnL 검증만으로 수익성 증거로 승격하지 않습니다.`
+        : performance?.Net_PnL == null
+          ? '후보별 Net PnL 근거가 없습니다.'
+          : canonicalFullCostReady
+            ? '8 Cost canonical 검증은 완료됐지만 Net PnL canonical binding은 아직 별도 검증되지 않았습니다. 따라서 수익성 증거로 승격하지 않습니다.'
+            : overviewFullCostReady
+              ? 'Research overview Full Cost는 준비됐지만 candidate별 canonical 8 Cost와 Net PnL binding은 아직 연결되지 않았습니다.'
+              : '값이 있어도 Full Cost가 미충족이면 수익성 증거로 승격하지 않습니다.',
+      tone: canonicalNetPnlReady ? 'ready' : performance?.Net_PnL == null ? 'missing' : 'blocked',
     },
     journalStage,
   ];

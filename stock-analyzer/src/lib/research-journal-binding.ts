@@ -13,6 +13,9 @@ export type ResearchJournalCandidateBinding = Readonly<{
   fullCostBindingVerified: boolean;
   fullCostEvidenceDigest: string | null;
   fullCostComponentCount: number;
+  netPnlBindingVerified: boolean;
+  canonicalNetPnl: number | null;
+  netPnlEvidenceDigest: string | null;
 }>;
 
 export type ResearchJournalBindingReadback = Readonly<{
@@ -77,6 +80,14 @@ function parseTradeBinding(value: unknown): ResearchJournalCandidateBinding | nu
     && binding.fullCostBindingVerified === true
     && fullCostComponentCount === 8
     && Boolean(fullCostEvidenceDigest && /^[0-9a-f]{64}$/u.test(fullCostEvidenceDigest));
+  const canonicalNetPnl = typeof binding.canonicalNetPnl === 'number' && Number.isFinite(binding.canonicalNetPnl)
+    ? binding.canonicalNetPnl
+    : null;
+  const netPnlEvidenceDigest = text(binding.netPnlEvidenceDigest, 64);
+  const netPnlBindingVerified = fullCostBindingVerified
+    && binding.netPnlBindingVerified === true
+    && canonicalNetPnl != null
+    && Boolean(netPnlEvidenceDigest && /^[0-9a-f]{64}$/u.test(netPnlEvidenceDigest));
   return Object.freeze({
     status,
     reason: text(binding.reason) ?? 'CANONICAL_JOURNAL_BINDING_REASON_UNAVAILABLE',
@@ -92,6 +103,9 @@ function parseTradeBinding(value: unknown): ResearchJournalCandidateBinding | nu
     fullCostBindingVerified,
     fullCostEvidenceDigest: fullCostBindingVerified ? fullCostEvidenceDigest : null,
     fullCostComponentCount: fullCostBindingVerified ? fullCostComponentCount : 0,
+    netPnlBindingVerified,
+    canonicalNetPnl: netPnlBindingVerified ? canonicalNetPnl : null,
+    netPnlEvidenceDigest: netPnlBindingVerified ? netPnlEvidenceDigest : null,
   });
 }
 

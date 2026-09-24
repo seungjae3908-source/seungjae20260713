@@ -82,6 +82,7 @@ export type UnifiedCanonicalResearchBinding = {
   naturalPositionId:string|null; paperSampleId:string|null; settlementId:string|null; settlementBindingVerified:boolean;
   exitTriggerId:string|null; exitExecutionId:string|null; triggerBindingVerified:boolean;
   fullCostBindingVerified:boolean; fullCostEvidenceDigest:string|null; fullCostComponentCount:number;
+  netPnlBindingVerified:boolean; canonicalNetPnl:number|null; netPnlEvidenceDigest:string|null;
   executionAuthority:'NONE'; profitabilityCredit:0;
 };
 export type UnifiedCanonicalResearchBindingSummary = {
