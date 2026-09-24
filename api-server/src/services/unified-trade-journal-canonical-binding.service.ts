@@ -31,6 +31,12 @@ export type CanonicalResearchJournalBinding = Readonly<{
   exitTriggerId: string | null;
   exitExecutionId: string | null;
   triggerBindingVerified: boolean;
+  fullCostBindingVerified: boolean;
+  fullCostEvidenceDigest: string | null;
+  fullCostComponentCount: number;
+  netPnlBindingVerified: boolean;
+  canonicalNetPnl: number | null;
+  netPnlEvidenceDigest: string | null;
   executionAuthority: 'NONE';
   profitabilityCredit: 0;
 }>;
@@ -58,7 +64,70 @@ export type CanonicalResearchBoundJournal = Omit<UnifiedTradeJournalResult, 'tra
 }>;
 
 const SHA40 = /^[0-9a-f]{40}$/u;
+const SHA64 = /^[0-9a-f]{64}$/u;
 const EPSILON = 1e-9;
+const FULL_COST_COMPONENTS = Object.freeze([
+  'commission',
+  'tax',
+  'spread',
+  'slippage',
+  'funding',
+  'latency',
+  'liquidityImpact',
+  'partialFillImpact',
+] as const);
+const FULL_COST_QUALITIES = new Set(['OBSERVED', 'DOCUMENTED', 'ESTIMATED', 'NOT_APPLICABLE']);
+
+function record(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function verifiedFullCostReadback(value: Record<string, unknown> | null): Readonly<{
+  verified: boolean;
+  evidenceDigest: string | null;
+  componentCount: number;
+}> {
+  if (!value
+    || value.schemaVersion !== 'natural-paper-settlement-full-cost-v1'
+    || value.status !== 'PRESENT'
+    || value.fullCostReady !== true
+    || value.unknownIsZero !== false
+    || value.naturalSampleCredit !== 0
+    || value.executionAuthority !== 'NONE'
+    || typeof value.evidenceDigest !== 'string'
+    || !SHA64.test(value.evidenceDigest)
+    || !text(value.exitTriggerId)
+    || !text(value.exitExecutionId)
+    || !record(value.components)) {
+    return Object.freeze({ verified: false, evidenceDigest: null, componentCount: 0 });
+  }
+
+  let componentCount = 0;
+  for (const name of FULL_COST_COMPONENTS) {
+    const component = value.components[name];
+    if (!record(component)
+      || component.status !== 'PRESENT'
+      || typeof component.valuePercent !== 'number'
+      || !Number.isFinite(component.valuePercent)
+      || component.valuePercent < 0
+      || typeof component.quality !== 'string'
+      || !FULL_COST_QUALITIES.has(component.quality)
+      || !text(component.source)
+      || !text(component.provenance)
+      || !Number.isSafeInteger(component.observedAtMs)
+      || Number(component.observedAtMs) <= 0
+      || (component.quality === 'NOT_APPLICABLE' && component.valuePercent !== 0)) {
+      return Object.freeze({ verified: false, evidenceDigest: null, componentCount: 0 });
+    }
+    componentCount += 1;
+  }
+
+  return Object.freeze({
+    verified: componentCount === FULL_COST_COMPONENTS.length,
+    evidenceDigest: value.evidenceDigest,
+    componentCount,
+  });
+}
 
 function text(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
@@ -87,6 +156,12 @@ function binding(
     exitTriggerId: string | null;
     exitExecutionId: string | null;
     triggerBindingVerified: boolean;
+    fullCostBindingVerified: boolean;
+    fullCostEvidenceDigest: string | null;
+    fullCostComponentCount: number;
+    netPnlBindingVerified: boolean;
+    canonicalNetPnl: number | null;
+    netPnlEvidenceDigest: string | null;
   }>,
 ): CanonicalResearchJournalBinding {
   return Object.freeze({
@@ -104,6 +179,12 @@ function binding(
     exitTriggerId: lineage?.exitTriggerId ?? null,
     exitExecutionId: lineage?.exitExecutionId ?? null,
     triggerBindingVerified: lineage?.triggerBindingVerified ?? false,
+    fullCostBindingVerified: lineage?.fullCostBindingVerified ?? false,
+    fullCostEvidenceDigest: lineage?.fullCostEvidenceDigest ?? null,
+    fullCostComponentCount: lineage?.fullCostComponentCount ?? 0,
+    netPnlBindingVerified: lineage?.netPnlBindingVerified ?? false,
+    canonicalNetPnl: lineage?.canonicalNetPnl ?? null,
+    netPnlEvidenceDigest: lineage?.netPnlEvidenceDigest ?? null,
     executionAuthority: 'NONE',
     profitabilityCredit: 0,
   });
@@ -210,6 +291,12 @@ function verifiedLineage(
   let exitTriggerId: string | null = null;
   let exitExecutionId: string | null = null;
   let triggerBindingVerified = false;
+  let fullCostBindingVerified = false;
+  let fullCostEvidenceDigest: string | null = null;
+  let fullCostComponentCount = 0;
+  let netPnlBindingVerified = false;
+  let canonicalNetPnl: number | null = null;
+  let netPnlEvidenceDigest: string | null = null;
   const settlement = lineage.settlement as Record<string, unknown> | undefined;
   if (settlement) {
     const settlementIdentity = settlement.settlementIdentity;
@@ -259,12 +346,35 @@ function verifiedLineage(
       && identity?.costEvidenceDigest === fullCost.evidenceDigest
       && lifecycleEvidence != null
       && manualPaperEvidenceSha256(lifecycleEvidence.costEvidence) === manualPaperEvidenceSha256(fullCost);
+    const fullCostReadback = verifiedFullCostReadback(fullCost);
     if (identityMatch && topLevelMatch && digestMatch && triggerMatch && executionMatch && costDigestMatch) {
       settlementId = storedId;
       settlementBindingVerified = true;
       exitTriggerId = String(settlement.exitTriggerId);
       exitExecutionId = String(settlement.exitExecutionId);
       triggerBindingVerified = true;
+      if (fullCostReadback.verified
+        && fullCostReadback.evidenceDigest === identity?.costEvidenceDigest
+        && fullCostReadback.componentCount === FULL_COST_COMPONENTS.length) {
+        fullCostBindingVerified = true;
+        fullCostEvidenceDigest = fullCostReadback.evidenceDigest;
+        fullCostComponentCount = fullCostReadback.componentCount;
+        const netPnlMatches = sameNumber(settlement.grossPnl, owner.grossPnl)
+          && sameNumber(settlement.grossPnl, trade.grossPnl)
+          && sameNumber(settlement.netPnl, identity?.netPnl)
+          && sameNumber(settlement.netPnl, owner.netPnl)
+          && sameNumber(settlement.netPnl, trade.netPnl);
+        if (netPnlMatches && settlementId && fullCostEvidenceDigest) {
+          netPnlBindingVerified = true;
+          canonicalNetPnl = Number(settlement.netPnl);
+          netPnlEvidenceDigest = manualPaperEvidenceSha256({
+            settlementId,
+            fullCostEvidenceDigest,
+            grossPnl: settlement.grossPnl,
+            netPnl: settlement.netPnl,
+          });
+        }
+      }
     }
   }
 
@@ -277,6 +387,12 @@ function verifiedLineage(
     exitTriggerId,
     exitExecutionId,
     triggerBindingVerified,
+    fullCostBindingVerified,
+    fullCostEvidenceDigest,
+    fullCostComponentCount,
+    netPnlBindingVerified,
+    canonicalNetPnl,
+    netPnlEvidenceDigest,
   });
 }
 
