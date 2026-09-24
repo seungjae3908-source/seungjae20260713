@@ -232,6 +232,74 @@ test('foreign symbol events cannot enter the selected instrument or refresh its 
   }
 });
 
+test('reconnect resets the prior socket event clock and enforces a fresh first-event deadline', () => {
+  const sockets = [new FakeSocket(), new FakeSocket()];
+  const frames = new FrameController();
+  const statuses: string[] = [];
+  const diagnostics: string[] = [];
+  const scheduled: Array<{ callback: () => void; delayMs: number }> = [];
+  let socketIndex = 0;
+  let currentNow = 10_100;
+
+  const client = createAiChartPublicStreamClient({
+    market: 'UPBIT',
+    symbol: 'BTC',
+    socketFactory: () => sockets[socketIndex++],
+    now: () => currentNow,
+    setTimeoutFn: (callback, delayMs) => {
+      scheduled.push({ callback, delayMs });
+      return scheduled.length as unknown as ReturnType<typeof setTimeout>;
+    },
+    clearTimeoutFn: () => undefined,
+    requestAnimationFrameFn: frames.request,
+    cancelAnimationFrameFn: frames.cancel,
+    onStatus: (status) => statuses.push(status),
+    onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.reason),
+  });
+
+  client.start();
+  sockets[0].onopen?.({} as Event);
+  sockets[0].onmessage?.({
+    data: JSON.stringify({
+      type: 'trade',
+      code: 'KRW-BTC',
+      trade_price: 100,
+      trade_volume: 1,
+      trade_timestamp: 10_000,
+      sequential_id: 1,
+      ask_bid: 'BID',
+    }),
+  } as MessageEvent);
+  frames.flush();
+
+  expect(client.snapshot().status).toBe('LIVE_STREAM');
+  expect(client.snapshot().lastEventAtMs).toBe(10_000);
+  expect(client.snapshot().freshness).toBe('FRESH');
+
+  sockets[0].onclose?.({} as CloseEvent);
+  expect(client.snapshot().status).toBe('RECOVERING');
+  expect(client.snapshot().lastEventAtMs).toBeNull();
+  expect(client.snapshot().freshness).toBe('UNAVAILABLE');
+
+  const reconnect = [...scheduled].reverse().find((timer) => timer.delayMs === 1_000);
+  expect(reconnect).toBeDefined();
+  reconnect?.callback();
+  sockets[1].onopen?.({} as Event);
+
+  expect(client.snapshot().status).toBe('WAITING_FIRST_EVENT');
+  expect(client.snapshot().lastEventAtMs).toBeNull();
+  expect(client.snapshot().freshness).toBe('UNAVAILABLE');
+
+  currentNow += 90_001;
+  const watchdog = [...scheduled].reverse().find((timer) => timer.delayMs === 5_000);
+  expect(watchdog).toBeDefined();
+  watchdog?.callback();
+
+  expect(statuses.at(-1)).toBe('FALLBACK_POLLING');
+  expect(diagnostics).toContain('FIRST_EVENT_TIMEOUT');
+  expect(client.snapshot().status).toBe('FALLBACK_POLLING');
+});
+
 test('a delayed old socket close cannot tear down the replacement connection', () => {
   const sockets = [new FakeSocket(), new FakeSocket()];
   let index = 0;
