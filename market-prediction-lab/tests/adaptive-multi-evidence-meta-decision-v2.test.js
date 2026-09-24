@@ -68,10 +68,11 @@ function independence() {
 }
 
 function router(overrides = {}) {
-  return {
+  const base = {
     schemaVersion: "adaptive-multi-evidence-regime-router-v2",
     lineageId: "ADAPTIVE_MULTI_EVIDENCE_V2",
     status: "READY_FOR_STRATEGY_ROUTING_RESEARCH_ONLY",
+    sourceContentDigest: "c".repeat(64),
     regime: "TREND_UP",
     regimeDigest: "d".repeat(64),
     priceActionContext: {
@@ -83,11 +84,17 @@ function router(overrides = {}) {
       swingRetracementRatio: 0.62,
       retestHold: true,
     },
-    priceActionContextDigest: "e".repeat(64),
     priceActionAuthority: "CONTEXT_ONLY_NO_INDEPENDENT_VOTE",
     executionAuthority: "NONE",
-    ...overrides,
   };
+  const merged = { ...base, ...overrides };
+  if (!Object.prototype.hasOwnProperty.call(overrides, "priceActionContextDigest")) {
+    merged.priceActionContextDigest = sha256Canonical({
+      sourceContentDigest: merged.sourceContentDigest,
+      priceAction: merged.priceActionContext,
+    });
+  }
+  return merged;
 }
 
 function hardGates(overrides = {}) {
@@ -228,7 +235,6 @@ test("price-action context is bound into Meta Decision identity without becoming
         candlestickPatterns: ["BEARISH_ENGULFING"],
         latestSwingLegDirection: "DOWN",
       },
-      priceActionContextDigest: "f".repeat(64),
     }),
   }));
   assert.equal(opposing.decision, "BUY");
@@ -247,4 +253,31 @@ test("Meta Decision rejects any attempt to promote price-action context into ind
   assert.ok(result.reasons.includes("V2_META_PRICE_ACTION_CONTEXT_AUTHORITY_INVALID"));
   assert.equal(result.economicSampleCredit, 0);
   assert.equal(result.executionAuthority, "NONE");
+});
+
+test("Meta Decision rejects a forged SHA-shaped price-action digest before resealing decision identity", () => {
+  const result = buildAdaptiveMultiEvidenceMetaDecisionV2(input({
+    regimeRouter: router({
+      priceActionContextDigest: "f".repeat(64),
+    }),
+  }));
+  assert.equal(result.status, "BLOCKED");
+  assert.equal(result.decision, "BLOCKED");
+  assert.ok(result.reasons.includes("V2_META_PRICE_ACTION_CONTEXT_PROVENANCE_INVALID"));
+  assert.equal(result.economicSampleCredit, 0);
+  assert.equal(result.executionAuthority, "NONE");
+});
+
+test("Meta Decision accepts a canonical missing price-action context only with no authority", () => {
+  const result = buildAdaptiveMultiEvidenceMetaDecisionV2(input({
+    regimeRouter: router({
+      priceActionContext: { status: "MISSING", authority: "NONE" },
+      priceActionAuthority: "NONE",
+    }),
+  }));
+  assert.equal(result.status, "RESEARCH_DECISION_READY");
+  assert.equal(result.contextSummary.priceAction.status, "MISSING");
+  assert.equal(result.contextSummary.priceAction.contextDigest, null);
+  assert.equal(result.contextSummary.priceAction.authority, "NONE");
+  assert.equal(result.economicSampleCredit, 0);
 });
