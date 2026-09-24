@@ -120,6 +120,7 @@ export default function Phase6PaperTradingE2EPage() {
   const params = new URLSearchParams(window.location.search);
   const errorMode = params.get('mode') === 'error';
   const futuresEnabled = params.get('futures') !== 'off';
+  const marketDelayMs = Math.max(0, Math.min(2_000, Number(params.get('marketDelayMs') ?? 0) || 0));
   const fixtureWindow = window as typeof window & { __phase6PaperFuturesLoaderCalls?: number };
   fixtureWindow.__phase6PaperFuturesLoaderCalls = 0;
   const fixtureExecute = errorMode
@@ -127,6 +128,7 @@ export default function Phase6PaperTradingE2EPage() {
     : execute;
   const loadMarket = async () => {
     fixtureWindow.__phase6PaperFuturesLoaderCalls = (fixtureWindow.__phase6PaperFuturesLoaderCalls ?? 0) + 1;
+    if (marketDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, marketDelayMs));
     return snapshot;
   };
   const loadRules = async () => {
