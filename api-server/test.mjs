@@ -47,6 +47,9 @@ const groups = {
   phase9: [
     path.join(root, 'src/services/research-copilot.service.test.ts'),
     path.join(root, 'src/services/research-dual-free-ai.service.test.ts'),
+    path.join(root, 'src/services/research-canonical-bundle-offline-publisher.service.test.mjs'),
+    path.join(root, 'src/services/research-canonical-bundle-assembler.service.test.mjs'),
+    path.join(root, 'src/services/research-canonical-component-registry.service.test.mjs'),
     path.join(root, 'src/services/strategy-health-research-adapter.service.test.ts'),
     path.join(root, 'src/services/trading-ai-review-phase9.test.ts'),
     path.join(root, 'src/routes/paper-journal-ai-preview-privileges.test.ts'),
@@ -124,6 +127,7 @@ const groups = {
     path.join(root, 'src/routes/trade-automation-cancel-race.smoke.test.ts'),
     path.join(root, 'src/routes/account-connections.contract.test.ts'),
     path.join(root, 'src/features/account-readonly/tests/account-readonly.runtime.test.ts'),
+    path.join(root, 'src/features/account-readonly/staging-account-readonly-evidence-diagnostics.test.ts'),
     path.join(root, 'src/features/account-readonly/tests/account-readonly.credentials.test.ts'),
     path.join(root, 'src/routes/stock-orderbook.test.ts'),
     path.join(root, 'src/services/market-information.service.test.ts'),

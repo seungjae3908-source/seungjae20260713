@@ -25,6 +25,9 @@ import {
 import {
   buildAutonomousAlphaArchitectureReadinessV1,
 } from "../src/autonomous-alpha-certification-v1.js";
+import { createNaturalPaperTriggerBoundSettlementCostProducer } from "../src/natural-paper-trigger-bound-settlement-cost-producer-v1.js";
+import { createNaturalPaperAuthoritativeSettlementCostCollector } from "../src/natural-paper-authoritative-settlement-cost-collector-v1.js";
+import { materializeApprovedPaperRiskPolicyRecord } from "./materialize-paper-risk-policy-record.mjs";
 
 const TRUTHY = new Set(["1", "true", "yes", "on", "enabled"]);
 const forbiddenActivationKeys = [
@@ -74,6 +77,40 @@ async function readConfiguredEvidenceRecord(path) {
   } catch {
     return null;
   }
+}
+
+function createRiskPolicyRecordReader({ env, researchCodeSha }) {
+  const recordPath = configuredEvidencePath(env, "PAPER_FORWARD_RISK_POLICY_RECORD_PATH");
+  const decisionPath = configuredEvidencePath(env, "PAPER_FORWARD_RISK_POLICY_DECISION_PATH");
+  if (recordPath && decisionPath) {
+    throw Object.assign(new Error("CANONICAL_RISK_POLICY_SOURCE_AMBIGUOUS"), {
+      code: "CANONICAL_RISK_POLICY_SOURCE_AMBIGUOUS",
+    });
+  }
+  if (recordPath) {
+    return Object.freeze({
+      transport: "CONFIGURED_READ_ONLY",
+      read: async () => readConfiguredEvidenceRecord(recordPath),
+    });
+  }
+  if (!decisionPath) {
+    return Object.freeze({
+      transport: "MISSING",
+      read: async () => null,
+    });
+  }
+  return Object.freeze({
+    transport: "MATERIALIZED_APPROVED_DECISION",
+    async read() {
+      const decision = await readConfiguredEvidenceRecord(decisionPath);
+      if (!decision) return null;
+      return materializeApprovedPaperRiskPolicyRecord({
+        decision,
+        researchCodeSha,
+        nowMs: Date.now(),
+      });
+    },
+  });
 }
 
 function paperStateSnapshotFailureState(error) {
@@ -838,6 +875,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
     let paperStateSnapshotForCard = async () => null;
     let compatibilityPaperStateForCard = null;
     let resolvedAuthoritativeSourceWiring = authoritativePaperSourceWiring ?? {};
+    let settlementCostProducer = null;
     let cutover = Object.freeze({ identityCutover: false, archivedResearchSha: null, archivedStrategyId: null });
 
     if (researchProduction) {
@@ -1029,20 +1067,29 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         paperStateTransportStatus = "BLOCKED_DATA_CONFIG_INCOMPLETE";
       }
 
-      const riskPolicyRecordPath = configuredEvidencePath(
+      const riskPolicySource = createRiskPolicyRecordReader({
         env,
-        "PAPER_FORWARD_RISK_POLICY_RECORD_PATH",
-      );
+        researchCodeSha,
+      });
       const supplementalCostEvidencePath = configuredEvidencePath(
         env,
         "PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH",
       );
+      const collectAuthoritativeEvidence = createNaturalPaperAuthoritativeSettlementCostCollector({
+        runtimePackage,
+        readSupplementalCostInput: async () => readConfiguredEvidenceRecord(
+          supplementalCostEvidencePath,
+        ),
+      });
+      settlementCostProducer = createNaturalPaperTriggerBoundSettlementCostProducer({
+        collectAuthoritativeEvidence,
+      });
       const canonicalNaturalWiring = runtimePackage
         .createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
           researchCodeSha,
           sources: {
             paperStateSnapshotForCard,
-            riskPolicyRecordForCard: async () => readConfiguredEvidenceRecord(riskPolicyRecordPath),
+            riskPolicyRecordForCard: riskPolicySource.read,
             supplementalCostInputForCard: async () => readConfiguredEvidenceRecord(
               supplementalCostEvidencePath,
             ),
@@ -1072,8 +1119,9 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         financialMutationAllowed: runtimePackage.financialMutationAllowed,
         paperStateOwner: paperStateOwnerAudit,
         naturalCycleSourceGraph: canonicalNaturalWiring.naturalCycleSourceGraph,
-        riskPolicyRecordTransport: riskPolicyRecordPath == null ? "MISSING" : "CONFIGURED_READ_ONLY",
+        riskPolicyRecordTransport: riskPolicySource.transport,
         supplementalCostTransport: supplementalCostEvidencePath == null ? "MISSING" : "CONFIGURED_READ_ONLY",
+        settlementCostProducerBinding: "BOUND_FAIL_CLOSED",
       });
     }
 
@@ -1086,6 +1134,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       authoritativeAccountRequired,
       authoritativeAccountSeedSnapshot,
       expectedPublisherAccountIdSha256,
+      ...(settlementCostProducer == null ? {} : { settlementCostProducer }),
     };
     if (publicEvidenceProvider != null) {
       invocation.publicEvidenceProvider = meaningfulSearchPaperRuntimeForMarket == null

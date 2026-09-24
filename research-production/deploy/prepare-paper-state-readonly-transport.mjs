@@ -127,6 +127,10 @@ export async function preparePaperStateReadonlyTransport({
     || !digest(snapshot.publisherAccountIdSha256)) {
     throw controlledError('PAPER_STATE_READONLY_SNAPSHOT_INVALID');
   }
+  if (binding.paperRuntimeSourceSha !== snapshot.sourceSha
+    || binding.publisherAccountIdSha256 !== snapshot.publisherAccountIdSha256) {
+    throw controlledError('PAPER_STATE_READONLY_IDENTITY_MISMATCH');
+  }
 
   await mkdir(destinationRoot, { recursive: true, mode: 0o750 });
   const owner = await stat(resolvedRuntimeDirectory);
