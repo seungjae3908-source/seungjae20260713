@@ -174,6 +174,19 @@ function parsePayload(value: unknown): Payload {
     throw new Error('ORDERBOOK_LEVELS_CORRUPT');
   }
   const spread = derivedSpread ?? declaredSpread;
+  const declaredSpreadPct = finite(row.spreadPct);
+  const midpoint = bestAsk != null && bestBid != null ? (bestAsk + bestBid) / 2 : null;
+  const derivedSpreadPct = spread != null && midpoint != null && midpoint > 0
+    ? (spread / midpoint) * 100
+    : null;
+  if (
+    declaredSpreadPct != null
+    && derivedSpreadPct != null
+    && Math.abs(declaredSpreadPct - derivedSpreadPct) > 1e-4
+  ) {
+    throw new Error('ORDERBOOK_LEVELS_CORRUPT');
+  }
+  const spreadPct = derivedSpreadPct ?? declaredSpreadPct;
 
   const provider: Provider = row.provider === 'kiwoom' || row.provider === 'upbit' || row.provider === 'bitget'
     ? row.provider
@@ -189,7 +202,7 @@ function parsePayload(value: unknown): Payload {
     freshness,
     asks, bids, bestAsk, bestBid,
     spread,
-    spreadPct: finite(row.spreadPct),
+    spreadPct,
     imbalance: finite(row.imbalance),
     warnings,
     reason: cleanText(row.reason),
