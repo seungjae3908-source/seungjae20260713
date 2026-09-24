@@ -116,6 +116,12 @@ export function isChartAnalysisDataStatusActionable(dataStatus: unknown): boolea
   return ACTIONABLE_DATA_STATUSES.has(normalizeToken(dataStatus));
 }
 
+function hasAnalysisIdentityProvenance(input: ChartAnalysisInput): boolean {
+  return [input.symbol, input.market, input.timeframe, input.source].every(
+    (value) => typeof value === 'string' && value.trim().length > 0,
+  );
+}
+
 function hasValidSupportResistanceRange(input: ChartAnalysisInput): boolean {
   return (
     Number.isFinite(input.support) &&
@@ -127,6 +133,7 @@ function hasValidSupportResistanceRange(input: ChartAnalysisInput): boolean {
 
 function isChartAnalysisCoreDataActionable(input: ChartAnalysisInput): boolean {
   return (
+    hasAnalysisIdentityProvenance(input) &&
     Number.isFinite(input.latestTime) &&
     input.latestTime > 0 &&
     Number.isFinite(input.currentPrice) &&
@@ -333,6 +340,7 @@ export function buildChartAnalysis(input: ChartAnalysisInput): ChartAnalysis {
     ...input.patterns.map((pattern) => `패턴 후보: ${pattern}`),
   ];
   if (input.dataStatus) reasons.push(`데이터 상태: ${input.dataStatus}`);
+  if (!hasAnalysisIdentityProvenance(input)) reasons.push('분석 식별자/출처: unavailable');
   if (!isChartAnalysisCoreDataActionable(input)) reasons.push('핵심 가격/시간 데이터: unavailable');
 
   const points = input.anchorPoints?.length
