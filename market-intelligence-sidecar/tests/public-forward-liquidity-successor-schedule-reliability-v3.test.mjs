@@ -26,17 +26,30 @@ const EXACT_MAIN = 'e'.repeat(40);
 const FREEZE_SHA =
   '10b157de8e1902865f9b386a02439bb56d67b5c2fcd20dd48870d851bdb97ff1';
 
-const ACTIVATION_BOUNDARY_MS = Date.parse('2026-09-03T00:00:00.000Z');
-const CUTOVER_START_MS = Date.parse('2026-09-03T01:17:00.000Z');
+const AUTHORIZED_BASE_MAIN =
+  '24d9c8b4bbca54c1b3bce4ad28a8c1286beaff92';
+const ACTIVATION_AUTHORITY_COMMENT_ID = 5805902930;
+const HUB_FREEZE_AUTHORITY_COMMENT_ID = 5804802177;
+const HUB_FREEZE_TIMESTAMP_COMMENT_ID = 5804808369;
+const FROZEN_COHORT_BLOB_SHA =
+  '65ef02d9ef5611c767755e71b40b840737b0658a';
+const COHORT_FREEZE_MS = 1790207015000;
+const ACTIVATION_BOUNDARY_MS = 1790212089000;
+const CUTOVER_START_MS = 1790263020000;
 
 const TEST_ACTIVATION_BINDING = Object.freeze({
   schemaVersion:
     'public-forward-liquidity-successor-schedule-reliability-activation-binding-v3',
   authorityIssue: 23,
-  authorityCommentId: 9999999999,
+  authorityCommentId: ACTIVATION_AUTHORITY_COMMENT_ID,
+  hubFreezeAuthorityCommentId: HUB_FREEZE_AUTHORITY_COMMENT_ID,
+  hubFreezeTimestampCommentId: HUB_FREEZE_TIMESTAMP_COMMENT_ID,
+  frozenCohortFreezeBlobSha: FROZEN_COHORT_BLOB_SHA,
+  frozenCohortFreezeMs: COHORT_FREEZE_MS,
+  frozenCohortEffectiveStartMs: CUTOVER_START_MS,
   activationBoundaryMs: ACTIVATION_BOUNDARY_MS,
   cutoverStartMs: CUTOVER_START_MS,
-  authorizedCurrentMainSha: EXACT_MAIN,
+  authorizedCurrentMainSha: AUTHORIZED_BASE_MAIN,
   numericFreezeSha256: FREEZE_SHA,
   minActivationLeadSlots: 1,
   priorV2CreditImported: 0,
@@ -50,6 +63,7 @@ const TEST_ACTIVATION_BINDING = Object.freeze({
 const ACTIVE = materializeSuccessorScheduleReliabilityV3Contract(
   TEST_ACTIVATION_BINDING,
 );
+const INACTIVE = materializeSuccessorScheduleReliabilityV3Contract(null);
 
 function sameMainResolver(...values) {
   let index = 0;
@@ -122,19 +136,32 @@ function activeArgs(overrides = {}) {
   };
 }
 
-test('V3 numeric freeze materializes inactive by default and preserves V2/OOS authority boundaries', () => {
-  const verdict = verifySuccessorScheduleReliabilityV3FrozenBindings();
+test('exact V3 activation binding materializes frozen Partial-Fill cutover and preserves V2/OOS authority boundaries', () => {
+  const verdict = verifySuccessorScheduleReliabilityV3FrozenBindings(ACTIVE);
   assert.equal(verdict.valid, true, verdict.blockers.join(','));
-  assert.equal(verdict.activationBound, false);
+  assert.equal(verdict.activationBound, true);
   assert.deepEqual(SUCCESSOR_V3_SCHEDULE_CRONS_UTC, [
     '17 * * * *',
     '27 * * * *',
     '37 * * * *',
   ]);
 
-  const contractVerdict = verifySuccessorScheduleReliabilityV3Contract();
+  const contractVerdict = verifySuccessorScheduleReliabilityV3Contract(ACTIVE);
   assert.equal(contractVerdict.valid, true, contractVerdict.blockers.join(','));
-  assert.equal(SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound, false);
+  assert.equal(ACTIVE.activationBound, true);
+  assert.equal(ACTIVE.policyCore.cohort.startInclusiveMs, CUTOVER_START_MS);
+  assert.equal(
+    ACTIVE.policyCore.activationBinding.authorityCommentId,
+    ACTIVATION_AUTHORITY_COMMENT_ID,
+  );
+  assert.equal(
+    ACTIVE.policyCore.activationBinding.hubFreezeAuthorityCommentId,
+    HUB_FREEZE_AUTHORITY_COMMENT_ID,
+  );
+  assert.equal(
+    ACTIVE.policyCore.activationBinding.hubFreezeTimestampCommentId,
+    HUB_FREEZE_TIMESTAMP_COMMENT_ID,
+  );
   assert.equal(
     SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.numericFreezeSha256,
     FREEZE_SHA,
@@ -172,6 +199,7 @@ test('without separate activation binding V3 is inert and cannot invoke collecto
     scheduleExpression: '17 * * * *',
     scheduledRunCreatedAtMs: CUTOVER_START_MS,
     actualRunStartedAtMs: CUTOVER_START_MS,
+    contract: INACTIVE,
   });
   assert.equal(result.eligible, false);
   assert.equal(result.captureStatus, 'V3_ACTIVATION_BINDING_MISSING');
@@ -184,6 +212,7 @@ test('without separate activation binding V3 is inert and cannot invoke collecto
     scheduledRunCreatedAtMs: CUTOVER_START_MS,
     actualRunStartedAtMs: CUTOVER_START_MS,
     exactMainSha: EXACT_MAIN,
+    contract: INACTIVE,
     hasPriorCreditedSlot: async () => false,
     getRemoteMainSha: sameMainResolver(EXACT_MAIN),
     collector: async () => {
@@ -200,6 +229,37 @@ test('without separate activation binding V3 is inert and cannot invoke collecto
   );
   assert.equal(executed.captureReceipt.prospectiveSlotCredit, 0);
   assert.equal(executed.captureReceipt.priorV2CreditImported, 0);
+});
+
+test('tampering activation authority or frozen cohort binding fails closed', () => {
+  const wrongAuthority = materializeSuccessorScheduleReliabilityV3Contract({
+    ...TEST_ACTIVATION_BINDING,
+    authorityCommentId: ACTIVATION_AUTHORITY_COMMENT_ID + 1,
+  });
+  const authorityVerdict = verifySuccessorScheduleReliabilityV3Contract(wrongAuthority);
+  assert.equal(authorityVerdict.valid, false);
+  assert.ok(
+    authorityVerdict.blockers.includes('SUCCESSOR_V3_ACTIVATION_AUTHORITY_COMMENT_MISMATCH'),
+  );
+
+  const wrongFreeze = materializeSuccessorScheduleReliabilityV3Contract({
+    ...TEST_ACTIVATION_BINDING,
+    frozenCohortEffectiveStartMs: CUTOVER_START_MS + 3_600_000,
+  });
+  const freezeVerdict = verifySuccessorScheduleReliabilityV3Contract(wrongFreeze);
+  assert.equal(freezeVerdict.valid, false);
+  assert.ok(
+    freezeVerdict.blockers.includes('SUCCESSOR_V3_FROZEN_COHORT_BOUNDARY_MISMATCH')
+      || freezeVerdict.blockers.includes('SUCCESSOR_V3_CUTOVER_FROZEN_COHORT_MISMATCH'),
+  );
+
+  const wrongMain = materializeSuccessorScheduleReliabilityV3Contract({
+    ...TEST_ACTIVATION_BINDING,
+    authorizedCurrentMainSha: 'f'.repeat(40),
+  });
+  const mainVerdict = verifySuccessorScheduleReliabilityV3Contract(wrongMain);
+  assert.equal(mainVerdict.valid, false);
+  assert.ok(mainVerdict.blockers.includes('SUCCESSOR_V3_ACTIVATION_MAIN_SHA_MISMATCH'));
 });
 
 test('activation materialization requires at least one full-slot lead and primary-minute alignment', () => {
