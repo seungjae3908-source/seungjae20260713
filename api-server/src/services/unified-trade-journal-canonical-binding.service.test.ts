@@ -1,0 +1,234 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
+import {
+  bindCanonicalResearchToUnifiedJournal,
+  readCanonicalResearchOwnerStateForJournalBinding,
+} from './unified-trade-journal-canonical-binding.service';
+import { manualPaperEvidenceSha256 } from './manual-paper-canonical-contract.service';
+import type { PaperTradingState } from './paper-trading.types';
+
+const NOW = new Date('2026-09-24T10:20:00.000Z');
+const NOW_MS = NOW.getTime();
+const SOURCE_SHA = 'a'.repeat(40);
+const DATASET_DIGEST = 'b'.repeat(64);
+const RESULT_DIGEST = 'c'.repeat(64);
+
+const identity = {
+  candidateId: 'candidate-authenticated-1',
+  strategyId: 'strategy-authenticated-1',
+  parameterHash: 'parameter-hash-1',
+  market: 'CRYPTO_FUTURES',
+  symbol: 'BTCUSDT',
+  timeframe: '15m',
+  side: 'LONG' as const,
+  leverage: 2,
+  parameterDigest: 'parameter-digest-1',
+  signalDirection: 'LONG',
+  accountMode: 'PAPER' as const,
+  researchCodeSha: SOURCE_SHA,
+};
+
+function validationReceipt() {
+  const receipt = {
+    identity,
+    receiptId: 'receipt-1',
+    receiptVersion: 'v1',
+    source: 'forward-observer',
+    provenance: 'authenticated-owner-readback',
+    status: 'VALIDATED' as const,
+    observedAtMs: NOW_MS - 1_000,
+    maximumAgeMs: 60_000,
+    synthetic: false as const,
+    replay: false as const,
+    backfill: false as const,
+    historical: false as const,
+    testOnly: false as const,
+    datasetDigest: DATASET_DIGEST,
+    resultArtifactDigest: RESULT_DIGEST,
+  };
+  return {
+    receipt,
+    verification: {
+      ownerId: 'paper-owner',
+      source: 'paper-state-publisher',
+      provenance: 'immutable-snapshot',
+      verifiedAtMs: NOW_MS,
+      readbackVerified: true as const,
+      validationPassed: true as const,
+      receiptSha256: manualPaperEvidenceSha256(receipt),
+    },
+  };
+}
+
+function syncedJournalPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'journal-1',
+    tradeId: 'trade-authenticated-1',
+    source: 'APP_PAPER',
+    status: 'open',
+    symbol: 'BTCUSDT',
+    side: 'long',
+    currency: 'USDT',
+    filledAt: '2026-09-24T10:00:00.000Z',
+    closedAt: null,
+    entryPrice: 100,
+    exitPrice: null,
+    initialQuantity: 1,
+    closedQuantity: 0,
+    remainingQuantity: 1,
+    entryFee: 0.1,
+    exitFee: 0,
+    tax: 0,
+    grossPnl: 0,
+    strategyName: 'breakout',
+    timeframe: '15m',
+    ...overrides,
+  };
+}
+
+function canonicalLineage() {
+  return {
+    identity,
+    naturalPositionId: 'natural-position-1',
+    paperSampleId: 'paper-sample-1',
+    sample: {},
+    entryCostEvidence: {},
+    validationReceipt: validationReceipt(),
+    naturalSampleCredit: 0 as const,
+    executionAuthority: 'NONE' as const,
+  };
+}
+
+function ownerState(options: { canonical?: boolean; entryPrice?: number } = {}) {
+  const canonical = options.canonical ?? true;
+  const entryPrice = options.entryPrice ?? 100;
+  return {
+    journal: [{
+      id: 'journal-1',
+      tradeId: 'trade-authenticated-1',
+      orderId: 'order-1',
+      positionId: 'manual-position-1',
+      symbol: 'BTCUSDT',
+      side: 'long',
+      orderType: 'market',
+      strategyName: 'breakout',
+      submittedAt: '2026-09-24T09:59:59.000Z',
+      filledAt: '2026-09-24T10:00:00.000Z',
+      closedAt: null,
+      entryPrice,
+      entryReferencePrice: entryPrice,
+      stopLossPrice: 95,
+      takeProfitPrice1: 110,
+      takeProfitPrice2: null,
+      exitPrice: null,
+      initialQuantity: 1,
+      closedQuantity: 0,
+      remainingQuantity: 1,
+      leverage: 2,
+      notionalValue: 100,
+      requiredMargin: 50,
+      entryFee: 0.1,
+      exitFee: 0,
+      slippageCost: 0,
+      fundingCost: 0,
+      grossPnl: 0,
+      netPnl: -0.1,
+      rMultiple: null,
+      exitReason: null,
+      dataStatusAtEntry: 'READY',
+      marketRegimeAtEntry: 'TREND',
+      riskBlocked: false,
+      warnings: [],
+      ruleViolation: false,
+      status: 'open',
+      note: '',
+      ...(canonical ? { canonicalPaper: canonicalLineage() } : {}),
+    }],
+  } as unknown as PaperTradingState;
+}
+
+test('missing authenticated owner readback keeps APP_PAPER binding unavailable', () => {
+  const journal = buildUnifiedTradeJournal([syncedJournalPayload()], { range: 'ALL' }, NOW);
+  const result = bindCanonicalResearchToUnifiedJournal(journal, {
+    status: 'NOT_AVAILABLE',
+    sourceSha: SOURCE_SHA,
+    reason: 'PAPER_STATE_OWNER_READBACK_UNAVAILABLE',
+  }, NOW_MS);
+  assert.equal(result.trades[0]?.canonicalResearchBinding.status, 'NOT_AVAILABLE');
+  assert.equal(result.canonicalResearchBinding.verifiedTradeCount, 0);
+  assert.equal(result.canonicalResearchBinding.profitabilityCredit, 0);
+});
+
+test('client-side forged canonicalPaper self-claim is never trusted without owner lineage', () => {
+  const forged = syncedJournalPayload({
+    canonicalPaper: canonicalLineage(),
+  });
+  const journal = buildUnifiedTradeJournal([forged], { range: 'ALL' }, NOW);
+  const result = bindCanonicalResearchToUnifiedJournal(journal, {
+    status: 'PRESENT',
+    sourceSha: SOURCE_SHA,
+    state: ownerState({ canonical: false }),
+  }, NOW_MS);
+  assert.equal(result.trades[0]?.canonicalResearchBinding.status, 'NOT_AVAILABLE');
+  assert.equal(result.trades[0]?.canonicalResearchBinding.reason, 'CANONICAL_PAPER_LINEAGE_NOT_PRESENT');
+  assert.equal(result.trades[0]?.canonicalResearchBinding.candidateId, null);
+});
+
+test('authenticated owner state plus genuine validation receipt verifies candidate binding', () => {
+  const journal = buildUnifiedTradeJournal([syncedJournalPayload()], { range: 'ALL' }, NOW);
+  const result = bindCanonicalResearchToUnifiedJournal(journal, {
+    status: 'PRESENT',
+    sourceSha: SOURCE_SHA,
+    state: ownerState(),
+  }, NOW_MS);
+  const value = result.trades[0]?.canonicalResearchBinding;
+  assert.equal(value?.status, 'VERIFIED');
+  assert.equal(value?.candidateId, identity.candidateId);
+  assert.equal(value?.strategyId, identity.strategyId);
+  assert.equal(value?.researchCodeSha, SOURCE_SHA);
+  assert.equal(value?.settlementBindingVerified, false);
+  assert.equal(value?.executionAuthority, 'NONE');
+  assert.equal(value?.profitabilityCredit, 0);
+  assert.equal(result.canonicalResearchBinding.status, 'VERIFIED');
+  assert.equal(result.canonicalResearchBinding.verifiedTradeCount, 1);
+});
+
+test('synced journal economic identity mismatch fails closed', () => {
+  const journal = buildUnifiedTradeJournal([syncedJournalPayload()], { range: 'ALL' }, NOW);
+  const result = bindCanonicalResearchToUnifiedJournal(journal, {
+    status: 'PRESENT',
+    sourceSha: SOURCE_SHA,
+    state: ownerState({ entryPrice: 101 }),
+  }, NOW_MS);
+  assert.equal(result.trades[0]?.canonicalResearchBinding.status, 'MISMATCH');
+  assert.equal(result.trades[0]?.canonicalResearchBinding.reason, 'SYNCED_JOURNAL_OWNER_STATE_MISMATCH');
+  assert.equal(result.canonicalResearchBinding.mismatchTradeCount, 1);
+});
+
+test('owner lineage bound to a different deploy SHA cannot verify', () => {
+  const journal = buildUnifiedTradeJournal([syncedJournalPayload()], { range: 'ALL' }, NOW);
+  const result = bindCanonicalResearchToUnifiedJournal(journal, {
+    status: 'PRESENT',
+    sourceSha: 'd'.repeat(40),
+    state: ownerState(),
+  }, NOW_MS);
+  assert.equal(result.trades[0]?.canonicalResearchBinding.status, 'MISMATCH');
+  assert.equal(result.trades[0]?.canonicalResearchBinding.reason, 'CANONICAL_PAPER_OWNER_LINEAGE_MISMATCH');
+});
+
+test('missing exact DEPLOY_SHA returns fail-closed readback without calling state reader', async () => {
+  let calls = 0;
+  const result = await readCanonicalResearchOwnerStateForJournalBinding({
+    authenticatedAccountId: 'user-1',
+    nowMs: NOW_MS,
+    env: {},
+    readState: async () => {
+      calls += 1;
+      return ownerState();
+    },
+  });
+  assert.equal(result.status, 'NOT_AVAILABLE');
+  assert.equal(result.reason, 'PAPER_STATE_EXACT_DEPLOY_SHA_UNAVAILABLE');
+  assert.equal(calls, 0);
+});
