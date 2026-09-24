@@ -274,3 +274,88 @@ test('accepted consumer path still transitions to live stream', () => {
     restore();
   }
 });
+
+test('status observer exception cannot break connect, reconnect, or stop control flow', () => {
+  const restore = installFakeWebSocket();
+  const clock = runtime();
+
+  try {
+    const client = createAiChartPublicStreamClient({
+      market: 'BITGET',
+      symbol: 'STATUSFAILUSDT',
+      now: () => 50_000,
+      setTimeoutFn: clock.setTimeoutFn,
+      clearTimeoutFn: clock.clearTimeoutFn,
+      requestAnimationFrameFn: clock.requestAnimationFrameFn,
+      cancelAnimationFrameFn: clock.cancelAnimationFrameFn,
+      onTrades: () => true,
+      onStatus: () => { throw new Error('fixture status observer failure'); },
+    });
+
+    expect(() => client.start()).not.toThrow();
+    expect(ConsumerFailureSocketFake.instances).toHaveLength(1);
+    expect(client.snapshot()).toMatchObject({ status: 'CONNECTING', reason: 'CONNECTING' });
+
+    const socket = ConsumerFailureSocketFake.instances[0];
+    expect(() => socket.onopen?.({} as Event)).not.toThrow();
+    expect(client.snapshot()).toMatchObject({
+      status: 'WAITING_FIRST_EVENT',
+      reason: 'PUBLIC_STREAM_CONNECTED_WAITING_FOR_DATA',
+      reconnectAttempts: 0,
+    });
+    expect(clock.timers.size).toBe(2);
+
+    expect(() => socket.onclose?.({} as CloseEvent)).not.toThrow();
+    expect(client.snapshot()).toMatchObject({
+      status: 'RECOVERING',
+      reason: 'SOCKET_CLOSED',
+      reconnectAttempts: 1,
+    });
+    expect(clock.timers.size).toBe(1);
+
+    expect(() => client.stop()).not.toThrow();
+    expect(client.snapshot()).toMatchObject({ status: 'DISCONNECTED', reason: 'CLIENT_STOPPED' });
+    expect(clock.timers.size).toBe(0);
+  } finally {
+    restore();
+  }
+});
+
+test('diagnostic observer exception remains isolated across socket and live-stream notifications', () => {
+  const restore = installFakeWebSocket();
+  const clock = runtime();
+
+  try {
+    const client = createAiChartPublicStreamClient({
+      market: 'BITGET',
+      symbol: 'DIAGFAILUSDT',
+      now: () => 50_000,
+      setTimeoutFn: clock.setTimeoutFn,
+      clearTimeoutFn: clock.clearTimeoutFn,
+      requestAnimationFrameFn: clock.requestAnimationFrameFn,
+      cancelAnimationFrameFn: clock.cancelAnimationFrameFn,
+      onTrades: () => true,
+      onDiagnostic: () => { throw new Error('fixture diagnostic observer failure'); },
+    });
+
+    expect(() => client.start()).not.toThrow();
+    const socket = ConsumerFailureSocketFake.instances[0];
+    expect(() => socket.onopen?.({} as Event)).not.toThrow();
+    expect(() => socket.onerror?.({} as Event)).not.toThrow();
+    expect(() => socket.onmessage?.({ data: { unsupported: true } } as unknown as MessageEvent)).not.toThrow();
+
+    expect(() => socket.onmessage?.(bitgetTrade('DIAGFAILUSDT', 'diag-1'))).not.toThrow();
+    expect(() => clock.runNextFrame()).not.toThrow();
+    expect(client.snapshot()).toMatchObject({
+      status: 'LIVE_STREAM',
+      reason: 'FIRST_VALID_EVENT_ACCEPTED',
+      lastEventAtMs: 49_000,
+      reconnectAttempts: 0,
+    });
+
+    expect(() => client.stop()).not.toThrow();
+    expect(client.snapshot()).toMatchObject({ status: 'DISCONNECTED', reason: 'CLIENT_STOPPED' });
+  } finally {
+    restore();
+  }
+});
