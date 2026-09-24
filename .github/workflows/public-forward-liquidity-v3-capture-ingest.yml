@@ -78,6 +78,17 @@ jobs:
           grep -Fq "throw new Error('V3_RUN_HISTORY_PAGINATION_INVALID')" "$WORKFLOW"
           grep -Fq 'pages.flatMap((page) => Array.isArray(page?.workflow_runs) ? page.workflow_runs : [])' "$WORKFLOW"
 
+      - name: Verify no-capture schedule runs remain zero-credit no-ops
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKFLOW='.github/workflows/public-forward-liquidity-v3-capture-ingest.yml'
+          grep -Fq 'source_artifact_ready=$source_artifact_ready' "$WORKFLOW"
+          grep -Fq 'V3_SOURCE_CAPTURE_NOT_OBSERVED' "$WORKFLOW"
+          grep -Fq 'if (raw.length === 0 && receipt.length === 0) {' "$WORKFLOW"
+          grep -Fq 'fs.writeFileSync(output, JSON.stringify({ skip: true }));' "$WORKFLOW"
+          test "$(grep -Ec "^[[:space:]]{8}if: steps[.]source[.]outputs[.]source_artifact_ready == 'true'$" "$WORKFLOW")" -eq 6
+
       - name: Verify fail-closed V3 authority boundary
         shell: bash
         run: |
@@ -181,8 +192,36 @@ jobs:
             && /^[0-9a-f]{40}$/u.test(String(run.head_sha ?? ''));
           if (!ok) throw new Error('SOURCE_RUN_NOT_GENUINE_V3_SCHEDULE_SUCCESS');
           NODE
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${source_run_id}/artifacts?per_page=100" > "$RUNNER_TEMP/source-artifacts.json"
+          source_artifact_ready="$(node - <<'NODE'
+          const fs = require('node:fs');
+          const run = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/source-run.json', 'utf8'));
+          const data = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/source-artifacts.json', 'utf8'));
+          const active = (data.artifacts ?? []).filter((artifact) => artifact.expired !== true);
+          const successor = run.name === 'Public Forward Liquidity Successor Scheduled Capture';
+          const rawPattern = successor
+            ? /^(?:public-forward-liquidity-successor-slot-[0-9]+|public-forward-liquidity-successor-lane-P2_V3_BTCUSDT_UTC(?:17|37)-slot-[0-9]+)-[a-f0-9]{64}(?:-diagnostic-[0-9]+-[0-9]+)?$/u
+            : /^public-forward-liquidity-v3-slot-[0-9]+-[a-f0-9]{64}$/u;
+          const receiptPattern = successor
+            ? /^public-forward-liquidity-successor-v3-slot-receipt-[0-9]+-[0-9]+-[0-9]+$/u
+            : /^public-forward-liquidity-v3-slot-receipt-[0-9]+-[0-9]+-[0-9]+$/u;
+          const raw = active.filter((artifact) => rawPattern.test(artifact.name));
+          const receipt = active.filter((artifact) => receiptPattern.test(artifact.name));
+          if (raw.length === 0 && receipt.length === 0) {
+            process.stdout.write('false');
+            process.exit(0);
+          }
+          if (raw.length !== 1 || receipt.length !== 1) throw new Error('V3_SOURCE_ARTIFACT_CARDINALITY_INVALID');
+          process.stdout.write('true');
+          NODE
+            )"
+          echo "source_artifact_ready=$source_artifact_ready" >> "$GITHUB_OUTPUT"
+          if [[ "$source_artifact_ready" != 'true' ]]; then
+            echo 'V3_SOURCE_CAPTURE_NOT_OBSERVED: scheduled producer completed without canonical capture artifacts; economic credit remains 0.' >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Discover successful genuine scheduled V3 runs through selected source time
+        if: steps.source.outputs.source_artifact_ready == 'true'
         id: discover
         env:
           SOURCE_RUN_ID: ${{ steps.source.outputs.source_run_id }}
@@ -218,6 +257,7 @@ jobs:
           echo "candidate_run_n=$(wc -l < "$RUNNER_TEMP/candidate-runs.txt" | tr -d ' ')" >> "$GITHUB_OUTPUT"
 
       - name: Download immutable V3 raw-slot and finalized-receipt artifacts
+        if: steps.source.outputs.source_artifact_ready == 'true'
         run: |
           set -euo pipefail
           while IFS= read -r run_id; do
@@ -239,17 +279,27 @@ jobs:
             : /^public-forward-liquidity-v3-slot-receipt-[0-9]+-[0-9]+-[0-9]+$/u;
           const raw = active.filter((artifact) => rawPattern.test(artifact.name));
           const receipt = active.filter((artifact) => receiptPattern.test(artifact.name));
+          if (raw.length === 0 && receipt.length === 0) {
+            fs.writeFileSync(output, JSON.stringify({ skip: true }));
+            process.exit(0);
+          }
           if (raw.length !== 1 || receipt.length !== 1) throw new Error('V3_SOURCE_ARTIFACT_CARDINALITY_INVALID');
           if (!/^[0-9]+$/u.test(String(raw[0].id)) || !/^sha256:[a-f0-9]{64}$/u.test(String(raw[0].digest ?? ''))) {
             throw new Error('V3_RAW_ARTIFACT_METADATA_INVALID');
           }
           fs.writeFileSync(output, JSON.stringify({
+            skip: false,
             rawArtifactId: String(raw[0].id),
             rawArtifactName: raw[0].name,
             rawArtifactDigest: String(raw[0].digest).replace(/^sha256:/u, ''),
             receiptArtifactName: receipt[0].name,
           }));
           NODE
+            skip="$(node -p "JSON.parse(require('fs').readFileSync('$run_dir/source-meta.json','utf8')).skip === true ? 'true' : 'false'")"
+            if [[ "$skip" == 'true' ]]; then
+              rm -rf "$run_dir"
+              continue
+            fi
             raw_name="$(node -p "JSON.parse(require('fs').readFileSync('$run_dir/source-meta.json','utf8')).rawArtifactName")"
             receipt_name="$(node -p "JSON.parse(require('fs').readFileSync('$run_dir/source-meta.json','utf8')).receiptArtifactName")"
             gh run download "$run_id" --repo "$GITHUB_REPOSITORY" -n "$raw_name" -D "$run_dir/raw"
@@ -260,6 +310,7 @@ jobs:
           done < "$RUNNER_TEMP/candidate-runs.txt"
 
       - name: Build ordered credited V3 source manifest
+        if: steps.source.outputs.source_artifact_ready == 'true'
         id: manifest
         env:
           SOURCE_RUN_ID: ${{ steps.source.outputs.source_run_id }}
@@ -350,6 +401,7 @@ jobs:
           NODE
 
       - name: Rebuild cumulative canonical ingest state from genuine V3 source artifacts
+        if: steps.source.outputs.source_artifact_ready == 'true'
         run: |
           set -euo pipefail
           RUNNER='market-intelligence-sidecar/scripts/run-public-forward-liquidity-v3-capture-ingest.mjs'
@@ -388,6 +440,7 @@ jobs:
           done < "$RUNNER_TEMP/v3-ingest-entries.tsv"
 
       - name: Build portable cumulative V3 ingest evidence inventory
+        if: steps.source.outputs.source_artifact_ready == 'true'
         env:
           PRODUCER_SHA: ${{ github.sha }}
           TARGET_SLOT_INDEX: ${{ steps.manifest.outputs.target_slot_index }}
@@ -536,6 +589,7 @@ jobs:
           NODE
 
       - name: Upload immutable cumulative V3 receipt-bound ingest evidence
+        if: steps.source.outputs.source_artifact_ready == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: public-forward-liquidity-v3-authoritative-ingest-slot-${{ steps.manifest.outputs.target_slot_index }}-${{ github.run_id }}-${{ github.run_attempt }}
