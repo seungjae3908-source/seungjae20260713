@@ -299,9 +299,20 @@ async function resolveMultiLaneActivation({ repository, token, exactMainSha }) {
       });
       return Object.freeze({ activation, currentMainBinding });
     } catch (error) {
-      throw new Error(
-        `PHASE2_FIRST_POLICY_CI_UNVERIFIED:${String(error?.message ?? 'UNKNOWN')}`,
-      );
+      const blocker = String(error?.message ?? 'UNKNOWN');
+      if (blocker === 'PHASE2_V3_COHORT_START_MISMATCH'
+        || blocker === 'PHASE2_V3_COHORT_DIGEST_MISMATCH') {
+        console.log(JSON.stringify({
+          schemaVersion: 'public-forward-liquidity-phase2-supersession-v1',
+          status: 'SUPERSEDED_BY_SUCCESSOR_V3_COHORT_ROTATION',
+          blocker,
+          phase2Credit: 0,
+          successorV3AuthorityChanged: false,
+          executionAuthority: 'NONE',
+        }));
+        return null;
+      }
+      throw new Error(`PHASE2_FIRST_POLICY_CI_UNVERIFIED:${blocker}`);
     }
   }
   return null;
