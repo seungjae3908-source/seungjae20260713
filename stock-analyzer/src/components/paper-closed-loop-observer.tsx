@@ -285,7 +285,7 @@ export function PaperClosedLoopObserver({
       detail: performance?.Net_PnL == null
         ? '후보별 Net PnL 근거가 없습니다.'
         : canonicalFullCostReady
-          ? '8 Cost canonical 검증은 완료됐지만 Net PnL canonical binding은 아직 별도 검증되지 않았습니다.'
+          ? '8 Cost canonical 검증은 완료됐지만 Net PnL canonical binding은 아직 별도 검증되지 않았습니다. 따라서 수익성 증거로 승격하지 않습니다.'
           : overviewFullCostReady
             ? 'Research overview Full Cost는 준비됐지만 candidate별 canonical 8 Cost와 Net PnL binding은 아직 연결되지 않았습니다.'
             : '값이 있어도 Full Cost가 미충족이면 수익성 증거로 승격하지 않습니다.',
