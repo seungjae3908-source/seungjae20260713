@@ -17,6 +17,7 @@ const HOUR_MS = 3_600_000;
 const FROZEN_V3_COHORT_START_INCLUSIVE_MS = 1_788_398_220_000;
 const FROZEN_V3_COHORT_DIGEST =
   'f58e5b7e7e5249cb60a911eb2269d728fa9fa6604b0f3723256a8b0a0c9e9bd4';
+const SUCCESSOR_V3_ROTATED_COHORT_START_INCLUSIVE_MS = 1_790_263_020_000;
 const SHA40 = /^[a-f0-9]{40}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const FROZEN_DIGESTS = Object.freeze({
@@ -416,24 +417,21 @@ export function resolvePublicForwardLiquidityMultiLaneCreditIdentity({
       reason: 'PHASE2_UTC27_ZERO_ADDITIONAL_CREDIT',
     });
   }
+  if (index < activation.activationSlotIndex) {
+    return Object.freeze({ active: false, reason: 'PHASE2_PRE_ACTIVATION_OLD_POLICY' });
+  }
+  if (SUCCESSOR_V3_ROTATED_COHORT_START_INCLUSIVE_MS !== FROZEN_V3_COHORT_START_INCLUSIVE_MS) {
+    fail('PHASE2_V3_COHORT_DIGEST_MISMATCH');
+  }
   const successorCohort = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyCore.cohort;
   const successorCohortStartMs = integer(
     successorCohort.startInclusiveMs,
     'PHASE2_V3_COHORT_START_INVALID',
   );
+  if (successorCohortStartMs !== FROZEN_V3_COHORT_START_INCLUSIVE_MS) {
+    fail('PHASE2_V3_COHORT_START_MISMATCH');
+  }
   const successorCohortDigest = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest;
-  const rotatedSuccessorActive = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound === true
-    && successorCohortDigest !== FROZEN_V3_COHORT_DIGEST;
-  if (index < activation.activationSlotIndex
-    && (!rotatedSuccessorActive || actual < successorCohortStartMs)) {
-    return Object.freeze({ active: false, reason: 'PHASE2_PRE_ACTIVATION_OLD_POLICY' });
-  }
-  if (rotatedSuccessorActive) {
-    fail('PHASE2_V3_COHORT_DIGEST_MISMATCH');
-  }
-  if (index < activation.activationSlotIndex) {
-    return Object.freeze({ active: false, reason: 'PHASE2_PRE_ACTIVATION_OLD_POLICY' });
-  }
   if (successorCohortDigest !== FROZEN_V3_COHORT_DIGEST) {
     fail('PHASE2_V3_COHORT_DIGEST_MISMATCH');
   }
