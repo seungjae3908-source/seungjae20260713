@@ -1,5 +1,6 @@
 import { ArrowRight, BookOpenCheck, CircleDot, Link2, ShieldCheck } from 'lucide-react';
 import type { ResearchCenterOverview } from '@/lib/research-center';
+import type { ResearchJournalBindingReadback } from '@/lib/research-journal-binding';
 
 type StageTone = 'ready' | 'progress' | 'blocked' | 'missing';
 
@@ -50,7 +51,17 @@ function money(value: number | null | undefined) {
   return new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 4 }).format(value);
 }
 
-export function PaperClosedLoopObserver({ overview }: { overview: ResearchCenterOverview }) {
+export function PaperClosedLoopObserver({
+  overview,
+  journalBinding = null,
+  journalBindingLoading = false,
+  journalBindingError = false,
+}: {
+  overview: ResearchCenterOverview;
+  journalBinding?: ResearchJournalBindingReadback | null;
+  journalBindingLoading?: boolean;
+  journalBindingError?: boolean;
+}) {
   const performance = overview.paper.candidatePerformance;
   const components = performance?.fullCostEvidence?.components;
   const measuredCostN = components
@@ -69,6 +80,61 @@ export function PaperClosedLoopObserver({ overview }: { overview: ResearchCenter
       && performance.candidateId
       && performance.identity14Verified,
   );
+  const candidateId = performance?.candidateId ?? null;
+  const exactJournalBindings = candidateId && journalBinding
+    ? journalBinding.trades.filter((trade) => trade.status === 'VERIFIED' && trade.candidateId === candidateId)
+    : [];
+  const settlementBoundJournalN = exactJournalBindings.filter((trade) => trade.settlementBindingVerified).length;
+
+  const journalStage: ClosedLoopStage = journalBindingLoading && !journalBinding
+    ? {
+        key: 'journal',
+        label: '매매일지',
+        value: '조회 중',
+        detail: 'authenticated Paper state 기반 journal binding을 읽고 있습니다.',
+        tone: 'progress',
+      }
+    : journalBindingError
+      ? {
+          key: 'journal',
+          label: '매매일지',
+          value: '미확인',
+          detail: 'journal binding 조회에 실패했습니다. 실패를 연결 완료로 바꾸지 않습니다.',
+          tone: 'missing',
+        }
+      : !candidateId
+        ? {
+            key: 'journal',
+            label: '매매일지',
+            value: '미확인',
+            detail: '현재 Research candidateId가 없어 journal trade와 동일 후보인지 비교하지 않습니다.',
+            tone: 'missing',
+          }
+        : exactJournalBindings.length > 0
+          ? {
+              key: 'journal',
+              label: '매매일지',
+              value: `${exactJournalBindings.length.toLocaleString('ko-KR')}건 검증`,
+              detail: `AUTHENTICATED_PAPER_STATE · candidateId 일치 · Settlement binding ${settlementBoundJournalN}/${exactJournalBindings.length} · sourceSha ${journalBinding?.sourceSha ?? '미확인'}`,
+              tone: 'ready',
+            }
+          : journalBinding?.source === 'AUTHENTICATED_PAPER_STATE'
+            ? {
+                key: 'journal',
+                label: '매매일지',
+                value: '0건 검증',
+                detail: journalBinding.mismatchTradeCount > 0
+                  ? `journal identity 불일치 ${journalBinding.mismatchTradeCount}건 · 현재 candidate와 연결 완료로 처리하지 않습니다.`
+                  : '현재 candidateId와 VERIFIED journal trade가 일치하지 않습니다.',
+                tone: journalBinding.mismatchTradeCount > 0 ? 'blocked' : 'missing',
+              }
+            : {
+                key: 'journal',
+                label: '매매일지',
+                value: '미확인',
+                detail: 'canonical journal binding이 아직 API에 공개되지 않았습니다. 일반 Paper ledger 수를 대신 사용하지 않습니다.',
+                tone: 'missing',
+              };
 
   const stages: ClosedLoopStage[] = [
     candidateReady
@@ -134,13 +200,7 @@ export function PaperClosedLoopObserver({ overview }: { overview: ResearchCenter
           : '값이 있어도 Full Cost가 미충족이면 수익성 증거로 승격하지 않습니다.',
       tone: performance?.Net_PnL == null ? 'missing' : fullCostReady ? 'ready' : 'blocked',
     },
-    {
-      key: 'journal',
-      label: '매매일지',
-      value: '별도 readback',
-      detail: 'Research overview 미연결 · journal binding 상태는 이 DTO에 없습니다. 통합 매매일지는 별도 journal API에서 확인합니다.',
-      tone: 'missing',
-    },
+    journalStage,
   ];
 
   const firstIncomplete = stages.find((stage) => stage.tone !== 'ready');
@@ -216,7 +276,7 @@ export function PaperClosedLoopObserver({ overview }: { overview: ResearchCenter
       </div>
 
       <p className="mt-3 text-[10px] leading-4 text-muted-foreground">
-        이 화면은 기존 read-only overview만 재구성합니다. 누락된 Trigger·journal binding을 임의로 완료 처리하지 않고, UNKNOWN 비용을 0으로 바꾸지 않습니다.
+        이 화면은 read-only Research overview와 선택적 authenticated journal binding만 재구성합니다. 누락된 Trigger·journal binding을 임의로 완료 처리하지 않고, UNKNOWN 비용을 0으로 바꾸지 않습니다.
       </p>
     </section>
   );
