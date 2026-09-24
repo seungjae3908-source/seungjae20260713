@@ -70,7 +70,7 @@ function privateTradingPath(url: string): boolean {
   return /\/(accounts?|balances?|positions?|orders?|cancel|amend|withdraw|transfer|auto)(?:\/|$)/i.test(path);
 }
 
-for (const width of [360, 390, 430]) {
+for (const width of [320, 360, 390, 430]) {
   test(`orderbook is a read-only bottom sheet at ${width}px`, async ({ page }) => {
     const calls = await mockOrderbook(page);
     const privateRequests: string[] = [];
