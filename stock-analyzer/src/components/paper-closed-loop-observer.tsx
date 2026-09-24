@@ -280,9 +280,12 @@ export function PaperClosedLoopObserver({
       </div>
 
       <div className="mt-4 rounded-xl border border-primary/20 bg-primary/5 p-3" data-testid="paper-closed-loop-first-zero">
-        <p className="text-[10px] font-black text-primary">현재 첫 미완료 단계</p>
+        <p className="text-[10px] font-black text-primary">화면 기준 첫 미완료 단계</p>
         <p className="mt-1 text-sm font-black">{firstIncomplete?.label ?? '관측 범위 완료'}</p>
-        <p className="mt-1 break-all font-mono text-[10px] text-muted-foreground">FIRST_ZERO · {firstZero}</p>
+        <p className="mt-1 break-all font-mono text-[10px] text-muted-foreground">Canonical FIRST_ZERO · {firstZero}</p>
+        <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+          화면 단계는 선택적 journal readback까지 반영합니다. Canonical FIRST_ZERO는 Research overview 원본이며 이 UI가 임의로 변경하지 않습니다.
+        </p>
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
