@@ -116,6 +116,27 @@ export function isChartAnalysisDataStatusActionable(dataStatus: unknown): boolea
   return ACTIONABLE_DATA_STATUSES.has(normalizeToken(dataStatus));
 }
 
+function hasValidSupportResistanceRange(input: ChartAnalysisInput): boolean {
+  return (
+    Number.isFinite(input.support) &&
+    input.support > 0 &&
+    Number.isFinite(input.resistance) &&
+    input.resistance > input.support
+  );
+}
+
+function isChartAnalysisCoreDataActionable(input: ChartAnalysisInput): boolean {
+  return (
+    Number.isFinite(input.latestTime) &&
+    input.latestTime > 0 &&
+    Number.isFinite(input.currentPrice) &&
+    input.currentPrice > 0 &&
+    Number.isFinite(input.previousClose) &&
+    input.previousClose > 0 &&
+    hasValidSupportResistanceRange(input)
+  );
+}
+
 function patternDescriptor(patterns: string[], trend: string): PatternDescriptor {
   const joined = patterns.join(' ').toLowerCase();
   if (/쌍봉|이중천장|m자|double[ -]?top/.test(joined)) {
@@ -171,6 +192,7 @@ export function createStableAnalysisId(input: {
 
 function deriveStatus(input: ChartAnalysisInput, descriptor: PatternDescriptor): ChartAnalysisStatus {
   if (!isChartAnalysisDataStatusActionable(input.dataStatus)) return 'expired';
+  if (!isChartAnalysisCoreDataActionable(input)) return 'expired';
   if (!input.isClosedCandle) return 'forming';
 
   if (descriptor.type === 'double-top') {
@@ -287,8 +309,10 @@ export function buildChartAnalysis(input: ChartAnalysisInput): ChartAnalysis {
   const bias = effectiveBias(input, descriptor);
   const engineVersion = input.engineVersion ?? DEFAULT_ENGINE_VERSION;
   const status = deriveStatus(input, descriptor);
-  const detectedAt = new Date(finite(input.latestTime) * 1000).toISOString();
-  const anchorTimes = input.anchorTimes?.length ? input.anchorTimes : [input.latestTime];
+  const latestTime = Number.isFinite(input.latestTime) && input.latestTime > 0 ? input.latestTime : 0;
+  const detectedAt = new Date(latestTime * 1000).toISOString();
+  const providedAnchorTimes = input.anchorTimes?.filter((time) => Number.isFinite(time) && time > 0) ?? [];
+  const anchorTimes = providedAnchorTimes.length ? providedAnchorTimes : latestTime > 0 ? [latestTime] : [];
   const id = createStableAnalysisId({
     engineVersion,
     market: input.market,
@@ -309,10 +333,21 @@ export function buildChartAnalysis(input: ChartAnalysisInput): ChartAnalysis {
     ...input.patterns.map((pattern) => `패턴 후보: ${pattern}`),
   ];
   if (input.dataStatus) reasons.push(`데이터 상태: ${input.dataStatus}`);
+  if (!isChartAnalysisCoreDataActionable(input)) reasons.push('핵심 가격/시간 데이터: unavailable');
 
   const points = input.anchorPoints?.length
-    ? input.anchorPoints.filter((point) => Number.isFinite(point.time) && Number.isFinite(point.price))
-    : [{ time: input.latestTime, price: input.currentPrice, role: 'latest' }];
+    ? input.anchorPoints.filter(
+        (point) => Number.isFinite(point.time) && point.time > 0 && Number.isFinite(point.price) && point.price > 0,
+      )
+    : latestTime > 0 && Number.isFinite(input.currentPrice) && input.currentPrice > 0
+      ? [{ time: latestTime, price: input.currentPrice, role: 'latest' }]
+      : [];
+  const priceLevels = hasValidSupportResistanceRange(input)
+    ? [
+        { price: input.support, role: 'support' },
+        { price: input.resistance, role: 'resistance' },
+      ]
+    : [];
 
   return {
     id,
@@ -330,13 +365,10 @@ export function buildChartAnalysis(input: ChartAnalysisInput): ChartAnalysis {
     weakenedAt: status === 'weakened' ? previous?.weakenedAt ?? detectedAt : previous?.weakenedAt,
     invalidatedAt: status === 'invalidated' ? previous?.invalidatedAt ?? detectedAt : previous?.invalidatedAt,
     expiredAt: status === 'expired' ? previous?.expiredAt ?? detectedAt : previous?.expiredAt,
-    startTime: Math.min(...anchorTimes.filter(Number.isFinite), input.latestTime),
-    endTime: status === 'invalidated' || status === 'expired' ? input.latestTime : undefined,
+    startTime: anchorTimes.length ? Math.min(...anchorTimes) : undefined,
+    endTime: (status === 'invalidated' || status === 'expired') && latestTime > 0 ? latestTime : undefined,
     points,
-    priceLevels: [
-      { price: finite(input.support), role: 'support' },
-      { price: finite(input.resistance), role: 'resistance' },
-    ],
+    priceLevels,
     title: copy.title,
     summary: copy.summary,
     reasons,
@@ -347,8 +379,8 @@ export function buildChartAnalysis(input: ChartAnalysisInput): ChartAnalysis {
       rsi: input.rsi,
       macd: input.macd,
       volumeRatio: finite(input.volumeRatio),
-      previousClose: finite(input.previousClose),
-      currentPrice: finite(input.currentPrice),
+      previousClose: Number.isFinite(input.previousClose) && input.previousClose > 0 ? input.previousClose : null,
+      currentPrice: Number.isFinite(input.currentPrice) && input.currentPrice > 0 ? input.currentPrice : null,
       closedCandle: input.isClosedCandle,
       dataStatus: input.dataStatus ?? null,
     },
