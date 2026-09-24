@@ -7,6 +7,7 @@ export const CRITICAL_BROWSER_SPECS = [
   /ai-chart-v2\.spec\.ts$/u,
   /signal-scanner\.spec\.ts$/u,
   /paper-trading-risk-copy-truth\.spec\.ts$/u,
+  /paper-action-reentrancy\.spec\.ts$/u,
   /portfolio-professional-ui\.spec\.ts$/u,
   /account-professional-ui\.spec\.ts$/u,
   /phase12-trade-automation\.spec\.ts$/u,
