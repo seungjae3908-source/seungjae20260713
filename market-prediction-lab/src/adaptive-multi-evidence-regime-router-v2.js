@@ -5,6 +5,8 @@ import { ADAPTIVE_MULTI_EVIDENCE_MARKET_FEATURES_V2_VERSION } from "./adaptive-m
 export const ADAPTIVE_MULTI_EVIDENCE_REGIME_ROUTER_V2_VERSION =
   "adaptive-multi-evidence-regime-router-v2";
 
+const SHA64 = /^[0-9a-f]{64}$/iu;
+
 export const ADAPTIVE_MULTI_EVIDENCE_REGIMES_V2 = Object.freeze([
   "STRONG_TREND_UP",
   "TREND_UP",
@@ -137,6 +139,16 @@ function priceActionContext(marketFeatures, blockers) {
   if (marketFeatures?.priceActionAuthority !== "CONTEXT_ONLY_NO_INDEPENDENT_VOTE"
       || raw.authority !== "CONTEXT_ONLY_NO_INDEPENDENT_VOTE") {
     blockers.push("V2_REGIME_PRICE_ACTION_CONTEXT_AUTHORITY_INVALID");
+  }
+  const sourceContentDigest = marketFeatures?.priceActionSourceContentDigest;
+  const sourceDigest = marketFeatures?.priceActionSourceDigest;
+  if (!SHA64.test(sourceContentDigest ?? "")
+      || !SHA64.test(sourceDigest ?? "")
+      || sourceDigest !== sha256Canonical({
+        sourceContentDigest,
+        priceAction: raw,
+      })) {
+    blockers.push("V2_REGIME_PRICE_ACTION_SOURCE_PROVENANCE_INVALID");
   }
   const evidenceIds = [
     raw.priceStructureEvidenceId,
