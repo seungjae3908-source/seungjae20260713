@@ -17,6 +17,7 @@ import { createNaturalPaperPublicPositionObservationProducer } from "../src/natu
 import { PAPER_FORWARD_PROVIDER_AUTHORITY } from "../src/paper-public-provider-authority-v1.js";
 import {
   AUTHORITATIVE_NATURAL_PAPER_TRIGGER_SETTLEMENT_EVIDENCE_VERSION,
+  bindNaturalPaperTriggerBoundSettlementEvidence,
   createNaturalPaperTriggerBoundSettlementCostProducer,
 } from "../src/natural-paper-trigger-bound-settlement-cost-producer-v1.js";
 
@@ -917,6 +918,36 @@ test("recurring caller freezes a new trigger before invoking the canonical cost 
   assert.equal(collectedTrigger.exitTriggerId, result.state.settlements[0].lifecycleEvidence.exitTriggerId);
   assert.equal(result.state.settlements[0].exitExecutionId, result.state.settlements[0].lifecycleEvidence.exitExecutionId);
   assert.equal(result.state.settlements[0].settlementId, sha256(stableJson(result.state.settlements[0].settlementIdentity)));
+  const ownerPacket = result.state.settlements[0].canonicalOwnerEvidence;
+  assert.equal(ownerPacket.schemaVersion, "canonical-natural-settlement-owner-evidence-v1");
+  assert.equal(ownerPacket.positionId, result.state.settlements[0].positionId);
+  assert.equal(ownerPacket.exitTriggerId, result.state.settlements[0].exitTriggerId);
+  assert.equal(ownerPacket.exitExecutionId, result.state.settlements[0].exitExecutionId);
+  assert.match(ownerPacket.evidenceDigest, /^[0-9a-f]{64}$/);
+  assert.match(result.state.settlements[0].canonicalOwnerEvidenceBindingDigest, /^[0-9a-f]{64}$/);
+  assert.equal(ownerPacket.executionAuthority, "NONE");
+  assert.equal(ownerPacket.privateTradingApiAllowed, false);
+  assert.equal(ownerPacket.liveOrderAllowed, false);
+  assert.equal(ownerPacket.orderSubmitted, false);
+  assert.equal(ownerPacket.exchangeRequestSent, false);
+
+  const restored = restoreRecurringPaperLoopState(
+    serializeRecurringPaperLoopState(result.state),
+    identity,
+  );
+  const restoredPacket = restored.settlements[0].canonicalOwnerEvidence;
+  const rebound = bindNaturalPaperTriggerBoundSettlementEvidence({
+    position: restoredPacket.position,
+    observation: restoredPacket.sourceObservation,
+    authoritativeEvidence: restoredPacket.authoritativeEvidence,
+    evaluatedAtMs: restoredPacket.evaluatedAtMs,
+  });
+  assert.equal(rebound.status, "PRESENT");
+  assert.equal(rebound.fullCostReady, true);
+  assert.equal(rebound.evidenceDigest, restoredPacket.bindingEvidenceDigest);
+  assert.equal(rebound.exitTriggerId, restoredPacket.exitTriggerId);
+  assert.equal(rebound.exitExecutionId, restoredPacket.exitExecutionId);
+  assert.deepEqual(restoredPacket.trigger, restoredPacket.position.lifecycle.pendingExit);
   assert.equal(h.getSettlementMutations(), 1);
 });
 
