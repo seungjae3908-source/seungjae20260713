@@ -239,6 +239,39 @@ test('binding, Trigger and search filters isolate journal verification states wi
   await expect(page.getByLabel('거래 목록 검색')).toHaveValue('');
 });
 
+test('binding issue drilldown groups canonical reasons and narrows only the trade list', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await open(page);
+
+  const issues = page.getByTestId('unified-journal-binding-issues');
+  const list = page.getByTestId('unified-journal-list');
+  const analytics = page.getByTestId('unified-journal-analytics');
+
+  await expect(issues).toContainText('Research 연결 문제 빠른 진단');
+  await expect(issues).toContainText('원인 2종');
+  await expect(issues).toContainText('SYNCED_JOURNAL_OWNER_STATE_MISMATCH');
+  await expect(issues).toContainText('CANONICAL_PAPER_LINEAGE_NOT_PRESENT');
+  await expect(analytics).toContainText('4');
+
+  await page.getByTestId('unified-journal-binding-issue-mismatch').click();
+  await expect(page.getByLabel('Research binding')).toHaveValue('MISMATCH');
+  await expect(page.getByLabel('거래 목록 검색')).toHaveValue('SYNCED_JOURNAL_OWNER_STATE_MISMATCH');
+  await expect(list).toContainText('거래 목록 1 / 4건');
+  await expect(list).toContainText('ETHUSDT');
+  await expect(list).not.toContainText('SOLUSDT');
+  await expect(analytics).toContainText('4');
+
+  await page.getByTestId('unified-journal-binding-filter-reset').click();
+  await page.getByTestId('unified-journal-binding-issue-not_available').click();
+  await expect(page.getByLabel('Research binding')).toHaveValue('NOT_AVAILABLE');
+  await expect(page.getByLabel('거래 목록 검색')).toHaveValue('CANONICAL_PAPER_LINEAGE_NOT_PRESENT');
+  await expect(list).toContainText('거래 목록 1 / 4건');
+  await expect(list).toContainText('SOLUSDT');
+  await expect(list).not.toContainText('ETHUSDT');
+  await expect(analytics).toContainText('4');
+});
+
+
 test('account switch creates isolated namespaces without exposing UUID', async ({ page }) => {
   await open(page);
   const first = await page.getByTestId('active-account').textContent();
