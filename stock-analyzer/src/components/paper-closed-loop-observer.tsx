@@ -138,7 +138,7 @@ export function PaperClosedLoopObserver({ overview }: { overview: ResearchCenter
       key: 'journal',
       label: '매매일지',
       value: '별도 readback',
-      detail: 'Research overview에는 journal binding 상태가 없습니다. 통합 매매일지는 별도 journal API에서 확인합니다.',
+      detail: 'Research overview 미연결 · journal binding 상태는 이 DTO에 없습니다. 통합 매매일지는 별도 journal API에서 확인합니다.',
       tone: 'missing',
     },
   ];
