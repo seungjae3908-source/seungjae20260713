@@ -87,7 +87,7 @@ jobs:
           grep -Fq 'V3_SOURCE_CAPTURE_NOT_OBSERVED' "$WORKFLOW"
           grep -Fq 'if (raw.length === 0 && receipt.length === 0) {' "$WORKFLOW"
           grep -Fq 'fs.writeFileSync(output, JSON.stringify({ skip: true }));' "$WORKFLOW"
-          test "$(grep -Fc "        if: steps.source.outputs.source_artifact_ready == 'true'" "$WORKFLOW")" -eq 6
+          test "$(grep -Ec "^[[:space:]]{8}if: steps[.]source[.]outputs[.]source_artifact_ready == 'true'$" "$WORKFLOW")" -eq 6
 
       - name: Verify fail-closed V3 authority boundary
         shell: bash
