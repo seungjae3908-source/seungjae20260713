@@ -142,6 +142,12 @@ export function buildAdaptiveMultiEvidenceFormulaTournamentV2({
   if (regimeRouter?.schemaVersion !== ADAPTIVE_MULTI_EVIDENCE_REGIME_ROUTER_V2_VERSION
       || regimeRouter?.lineageId !== ADAPTIVE_MULTI_EVIDENCE_V2_LINEAGE_ID
       || regimeRouter?.executionAuthority !== "NONE") blockers.push("V2_FORMULA_REGIME_ROUTER_INVALID");
+  if (regimeRouter?.priceActionContext?.status === "AVAILABLE"
+      && (regimeRouter?.priceActionAuthority !== "CONTEXT_ONLY_NO_INDEPENDENT_VOTE"
+        || regimeRouter?.priceActionContext?.authority !== "CONTEXT_ONLY_NO_INDEPENDENT_VOTE"
+        || !SHA64.test(regimeRouter?.priceActionContextDigest ?? ""))) {
+    blockers.push("V2_FORMULA_PRICE_ACTION_CONTEXT_PROVENANCE_INVALID");
+  }
   if (independence?.schemaVersion !== ADAPTIVE_MULTI_EVIDENCE_INDEPENDENCE_V2_VERSION
       || independence?.lineageId !== ADAPTIVE_MULTI_EVIDENCE_V2_LINEAGE_ID
       || independence?.status !== "GROUPED_FOR_RESEARCH_ONLY"
@@ -177,6 +183,22 @@ export function buildAdaptiveMultiEvidenceFormulaTournamentV2({
     riskVisible: true,
     finalHoldoutAccess: false,
   };
+  const researchContext = {
+    regime: regimeRouter.regime,
+    regimeDigest: SHA64.test(regimeRouter.regimeDigest ?? "") ? regimeRouter.regimeDigest : null,
+    priceActionStatus: regimeRouter.priceActionContext?.status ?? "MISSING",
+    priceActionContextDigest: SHA64.test(regimeRouter.priceActionContextDigest ?? "")
+      ? regimeRouter.priceActionContextDigest
+      : null,
+    priceActionAuthority: regimeRouter.priceActionContext?.status === "AVAILABLE"
+      ? regimeRouter.priceActionAuthority
+      : "NONE",
+    affectsTrialRanking: false,
+    affectsChampionSelection: false,
+    countedAsIndependentVote: false,
+    economicSampleCredit: 0,
+  };
+  const researchContextDigest = sha256Canonical(researchContext);
 
   return deepFreeze({
     schemaVersion: ADAPTIVE_MULTI_EVIDENCE_FORMULA_TOURNAMENT_V2_VERSION,
@@ -184,6 +206,8 @@ export function buildAdaptiveMultiEvidenceFormulaTournamentV2({
     status: "READY_FOR_VALIDATION_PIPELINE",
     regime: regimeRouter.regime,
     routedStrategyFamilies: regimeRouter.routing.allowedStrategyFamilies,
+    researchContext,
+    researchContextDigest,
     candidateIdentities,
     candidateIdentityDigest: sha256Canonical(candidateIdentities.map((identity) => identity.identityDigest).sort()),
     strategyFamilies: families,
