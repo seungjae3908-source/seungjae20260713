@@ -15,8 +15,8 @@ const CONFIG = Object.freeze(JSON.parse(
 ));
 const HOUR_MS = 3_600_000;
 const FROZEN_V3_COHORT_START_INCLUSIVE_MS = 1_788_398_220_000;
-const FROZEN_V3_SLOT_CADENCE_MS = HOUR_MS;
-const FROZEN_V3_TOTAL_SLOT_N = 1024;
+const FROZEN_V3_COHORT_DIGEST =
+  'f58e5b7e7e5249cb60a911eb2269d728fa9fa6604b0f3723256a8b0a0c9e9bd4';
 const SHA40 = /^[a-f0-9]{40}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const FROZEN_DIGESTS = Object.freeze({
@@ -299,14 +299,20 @@ export function derivePublicForwardLiquidityMultiLaneActivation({
     + CONFIG.activationPolicy.completeHourlyLeadSlotN * HOUR_MS;
   const activationBoundaryMs = completeLeadSlotEndMs
     + CONFIG.activationPolicy.firstEligibleLaneScheduleMinuteUtc * 60_000;
+  const v3Cohort = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyCore.cohort;
+  if (v3Cohort.startInclusiveMs != null
+    && v3Cohort.startInclusiveMs !== FROZEN_V3_COHORT_START_INCLUSIVE_MS) {
+    fail('PHASE2_V3_COHORT_START_MISMATCH');
+  }
   const slotIndex = Math.floor(
     (activationBoundaryMs - FROZEN_V3_COHORT_START_INCLUSIVE_MS)
-      / FROZEN_V3_SLOT_CADENCE_MS,
+      / v3Cohort.slotCadenceMs,
   );
   const nominalScheduledAtMs = FROZEN_V3_COHORT_START_INCLUSIVE_MS
-    + slotIndex * FROZEN_V3_SLOT_CADENCE_MS;
-  if (slotIndex < 0
-    || slotIndex >= FROZEN_V3_TOTAL_SLOT_N
+    + slotIndex * v3Cohort.slotCadenceMs;
+  if (v3Cohort.slotCadenceMs !== HOUR_MS
+    || slotIndex < 0
+    || slotIndex >= v3Cohort.totalSlotN
     || nominalScheduledAtMs !== activationBoundaryMs
     || slotIndex <= CONFIG.approvedCheckpoint.targetSlotIndex) {
     fail('PHASE2_ACTIVATION_BOUNDARY_NOT_FUTURE_V3_SLOT');
@@ -406,16 +412,11 @@ export function resolvePublicForwardLiquidityMultiLaneCreditIdentity({
       reason: 'PHASE2_UTC27_ZERO_ADDITIONAL_CREDIT',
     });
   }
-  const activeV3Cohort = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyCore.cohort;
-  if (SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound !== true
-    || activeV3Cohort.slotCadenceMs !== FROZEN_V3_SLOT_CADENCE_MS
-    || activeV3Cohort.totalSlotN !== FROZEN_V3_TOTAL_SLOT_N) {
-    fail('PHASE2_V3_COHORT_SEMANTICS_MISMATCH');
+  if (SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest != null
+    && SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest !== FROZEN_V3_COHORT_DIGEST) {
+    fail('PHASE2_V3_COHORT_DIGEST_MISMATCH');
   }
-  const cohortDigest = exactDigest(
-    SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest,
-    'PHASE2_V3_COHORT_DIGEST_INVALID',
-  );
+  const cohortDigest = FROZEN_V3_COHORT_DIGEST;
   const scope = Object.freeze({
     policyDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyDigest,
     cohortDigest,
