@@ -152,7 +152,10 @@ export function ResearchVideoPanel() {
                 {section.rows.map(([label, value]) => (
                   <div key={label} className="grid min-w-0 gap-1 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)] sm:gap-3">
                     <dt className="text-muted-foreground">{label}</dt>
-                    <dd className="min-w-0 break-words font-medium">{friendlyStatus(value)}</dd>
+                    <dd className="min-w-0 break-words font-medium">
+                      <span>{friendlyStatus(value)}</span>
+                      {friendlyStatus(value) !== value ? <span className="mt-1 block break-all font-mono text-[10px] text-muted-foreground">{value}</span> : null}
+                    </dd>
                   </div>
                 ))}
               </dl>
