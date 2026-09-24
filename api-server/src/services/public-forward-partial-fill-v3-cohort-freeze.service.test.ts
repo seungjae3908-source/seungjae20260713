@@ -151,3 +151,23 @@ test('tampering split timestamp anchors fails closed even when continuity is pre
   assert.equal(boundaryVerdict.valid, false);
   assert.ok(boundaryVerdict.blockers.includes('V3_COHORT_SPLITS_INVALID'));
 });
+
+test('tampering any otherwise-unchecked immutable field fails closed by canonical digest', () => {
+  const identity = structuredClone(PUBLIC_FORWARD_PARTIAL_FILL_V3_COHORT_FREEZE_AUTHORITY) as any;
+  identity.cohortIdentity = 'PUBLIC_FORWARD_PARTIAL_FILL_V3_PROSPECTIVE_COHORT_TAMPERED';
+  const identityVerdict = verifyPublicForwardPartialFillV3CohortFreeze(identity);
+  assert.equal(identityVerdict.valid, false);
+  assert.ok(identityVerdict.blockers.includes('V3_COHORT_FREEZE_DIGEST_MISMATCH'));
+
+  const displayTimestamp = structuredClone(PUBLIC_FORWARD_PARTIAL_FILL_V3_COHORT_FREEZE_AUTHORITY) as any;
+  displayTimestamp.effectiveStartKst = '2026-09-25T01:17:00+09:00';
+  const displayTimestampVerdict = verifyPublicForwardPartialFillV3CohortFreeze(displayTimestamp);
+  assert.equal(displayTimestampVerdict.valid, false);
+  assert.ok(displayTimestampVerdict.blockers.includes('V3_COHORT_FREEZE_DIGEST_MISMATCH'));
+
+  const extraField = structuredClone(PUBLIC_FORWARD_PARTIAL_FILL_V3_COHORT_FREEZE_AUTHORITY) as any;
+  extraField.unboundAuthority = 'unexpected';
+  const extraFieldVerdict = verifyPublicForwardPartialFillV3CohortFreeze(extraField);
+  assert.equal(extraFieldVerdict.valid, false);
+  assert.ok(extraFieldVerdict.blockers.includes('V3_COHORT_FREEZE_DIGEST_MISMATCH'));
+});
