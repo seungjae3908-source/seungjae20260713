@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Activity, Clock3, Database, RefreshCw, TrendingUp, WalletCards } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { PROMOTION_STAGE_KO } from '@/lib/labels';
-import { fetchResearchCenterOverview, type ResearchCenterOverview } from '@/lib/research-center';
+import { fetchResearchCenterOverview, type ResearchCandidatePerformance, type ResearchCenterOverview } from '@/lib/research-center';
 
 function formatDate(value: number | null | undefined) {
   if (value == null) return '미확인';
@@ -101,6 +101,71 @@ function profitabilityState(overview: ResearchCenterOverview) {
   return { value: '검증 중', detail: '미검증은 수익성이 없다는 뜻이 아닙니다.', tone: 'progress' as const };
 }
 
+const FULL_COST_COMPONENTS = [
+  ['commission', '수수료'],
+  ['tax', '세금'],
+  ['spread', '스프레드'],
+  ['slippage', '슬리피지'],
+  ['funding', '펀딩'],
+  ['latency', '지연 비용'],
+  ['liquidityImpact', '유동성 영향'],
+  ['partialFillImpact', '부분체결 영향'],
+] as const;
+
+type FullCostComponentKey = typeof FULL_COST_COMPONENTS[number][0];
+type FullCostComponentState = ResearchCandidatePerformance['fullCostEvidence']['components'][FullCostComponentKey]['state'];
+
+function fullCostStateLabel(state: FullCostComponentState) {
+  if (state === 'MEASURED') return '관측됨';
+  if (state === 'MODELED') return '모델값 · 경제증거 아님';
+  if (state === 'BLOCKED_DATA') return '데이터 차단';
+  return '미확인';
+}
+
+function fullCostStateClass(state: FullCostComponentState) {
+  if (state === 'MEASURED') return 'border-positive/25 bg-positive/5 text-positive';
+  if (state === 'MODELED') return 'border-warning/30 bg-warning/5 text-warning';
+  if (state === 'BLOCKED_DATA') return 'border-destructive/25 bg-destructive/5 text-destructive';
+  return 'border-card-border bg-muted/40 text-muted-foreground';
+}
+
+function formatCostValue(value: number | null) {
+  return value == null ? '값 없음' : `${value.toFixed(4)}%`;
+}
+
+function fullCostEvidenceState(overview: ResearchCenterOverview) {
+  const performance = overview.paper.candidatePerformance;
+  const rows = FULL_COST_COMPONENTS.map(([key, label]) => {
+    const component = performance?.fullCostEvidence?.components?.[key];
+    return {
+      key,
+      label,
+      state: component?.state ?? 'UNKNOWN' as FullCostComponentState,
+      valuePercent: component?.valuePercent ?? null,
+      provenance: component?.provenance ?? null,
+    };
+  });
+  const measured = rows.filter((row) => row.state === 'MEASURED').length;
+  const modeled = rows.filter((row) => row.state === 'MODELED').length;
+  const blocked = rows.filter((row) => row.state === 'BLOCKED_DATA').length;
+  const unknown = rows.filter((row) => row.state === 'UNKNOWN').length;
+  const fullCostReady = Boolean(
+    performance?.FULL_COST_READY
+      && performance?.fullCostEvidence?.fullCostReady,
+  );
+  return {
+    performance,
+    rows,
+    measured,
+    modeled,
+    blocked,
+    unknown,
+    fullCostReady,
+    settlementN: performance?.Settlement_N ?? null,
+    firstZero: performance?.FIRST_ZERO ?? 'CANDIDATE_PERFORMANCE_EVIDENCE_MISSING',
+  };
+}
+
 type Tone = 'normal' | 'progress' | 'warning' | 'neutral';
 const TONE: Record<Tone, string> = {
   normal: 'border-positive/25 bg-positive/5 text-positive',
@@ -140,6 +205,83 @@ function SummaryCard({ icon, label, value, detail, tone, selected, onClick, test
       <p className="mt-1 break-words text-lg font-bold tabular-nums">{value}</p>
       <p className="mt-1 line-clamp-2 break-keep text-xs font-medium leading-5 text-muted-foreground">{detail}</p>
     </button>
+  );
+}
+
+function FullCostVisibility({ overview }: { overview: ResearchCenterOverview }) {
+  const cost = fullCostEvidenceState(overview);
+  const incomplete = cost.rows.filter((row) => row.state !== 'MEASURED');
+  const ledgerSettlementN = overview.paper.ledger.settlementCount;
+  const settlementLabel = cost.settlementN == null
+    ? '후보 Settlement 미확인'
+    : cost.settlementN === 0
+      ? '후보 Settlement 0건 · 미연결'
+      : `후보 Settlement ${cost.settlementN.toLocaleString('ko-KR')}건 연결`;
+  const reason = cost.fullCostReady
+    ? '8개 비용과 canonical 연결 근거가 모두 FULL_COST_READY로 확인됐습니다.'
+    : incomplete.length > 0
+      ? `${incomplete.map((row) => row.label).join(' · ')} 근거가 실측 완료 상태가 아닙니다.`
+      : '8개 비용이 모두 관측돼도 canonical FULL_COST_READY가 false입니다. Settlement·identity·cost-policy 연결 근거를 더 확인해야 합니다.';
+
+  return (
+    <section className="rounded-2xl border border-card-border bg-card p-4 shadow-sm" data-testid="research-full-cost-summary" aria-label="Full Cost 경제증거">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[11px] font-black uppercase tracking-[0.14em] text-primary">Economic evidence</p>
+          <h2 className="mt-1 text-lg font-black">Full Cost 8개 비용</h2>
+          <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">
+            같은 후보의 비용·Settlement가 연결돼야 합니다. MODELED 값은 실제 경제증거로 승격하지 않습니다.
+          </p>
+        </div>
+        <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black ${cost.fullCostReady ? TONE.normal : TONE.warning}`}>
+          FULL_COST_READY · {cost.fullCostReady ? '충족' : '미충족'}
+        </span>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="rounded-xl bg-muted/40 p-3">
+          <p className="text-[10px] font-bold text-muted-foreground">실측 완료</p>
+          <p className="mt-1 text-base font-black tabular-nums">{cost.measured}/8</p>
+        </div>
+        <div className="rounded-xl bg-muted/40 p-3">
+          <p className="text-[10px] font-bold text-muted-foreground">모델값</p>
+          <p className="mt-1 text-base font-black tabular-nums">{cost.modeled}개</p>
+        </div>
+        <div className="rounded-xl bg-muted/40 p-3">
+          <p className="text-[10px] font-bold text-muted-foreground">미확인/차단</p>
+          <p className="mt-1 text-base font-black tabular-nums">{cost.unknown + cost.blocked}개</p>
+        </div>
+        <div className="rounded-xl bg-muted/40 p-3">
+          <p className="text-[10px] font-bold text-muted-foreground">Settlement 연결</p>
+          <p className="mt-1 break-keep text-sm font-black">{settlementLabel}</p>
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-xl border border-warning/25 bg-warning/5 p-3">
+        <p className="text-xs font-black">왜 아직 미충족인가요?</p>
+        <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">{reason}</p>
+        <p className="mt-2 break-all font-mono text-[10px] text-muted-foreground">FIRST_ZERO · {cost.firstZero}</p>
+        <p className="mt-1 text-[10px] text-muted-foreground">
+          전체 Paper ledger Settlement · {ledgerSettlementN == null ? '미확인' : `${ledgerSettlementN.toLocaleString('ko-KR')}건`} · 후보별 Settlement와 별도 집계
+        </p>
+      </div>
+
+      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        {cost.rows.map((row) => (
+          <article key={row.key} className="min-w-0 rounded-xl border border-card-border bg-background p-3" data-testid={`research-full-cost-${row.key}`}>
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-xs font-black">{row.label}</p>
+              <span className={`rounded-full border px-2 py-0.5 text-[9px] font-black ${fullCostStateClass(row.state)}`}>{fullCostStateLabel(row.state)}</span>
+            </div>
+            <p className="mt-2 text-sm font-black tabular-nums">{formatCostValue(row.valuePercent)}</p>
+            <p className="mt-2 break-all text-[10px] leading-4 text-muted-foreground">출처 · {row.provenance ?? '미제공'}</p>
+            <p className="mt-1 text-[10px] leading-4 text-muted-foreground">Freshness · API 미제공</p>
+            <p className="mt-1 text-[10px] leading-4 text-muted-foreground">Quality · API 미제공</p>
+            <p className="mt-1 font-mono text-[9px] text-muted-foreground">state={row.state}</p>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -203,6 +345,11 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
             const shadow = shadowState(overview);
             const profitability = profitabilityState(overview);
             const execution = executionState(overview);
+            const fullCost = fullCostEvidenceState(overview);
+            const paperSummary = {
+              ...sample,
+              detail: `${sample.detail} · Full Cost ${fullCost.fullCostReady ? '충족' : `${fullCost.measured}/8 실측`}`,
+            };
             return (
               <>
 
@@ -231,7 +378,7 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
                 <section className="grid grid-cols-2 gap-2" aria-label="연구 핵심 상태">
                   <SummaryCard testId="research-summary-research" selected={selected === 'research'} onClick={() => setSelected('research')} icon={<Activity className="h-5 w-5" />} label="연구 상태" {...research} />
                   <SummaryCard testId="research-summary-data" selected={selected === 'data'} onClick={() => setSelected('data')} icon={<Database className="h-5 w-5" />} label="데이터 수집" {...dataFactory} />
-                  <SummaryCard testId="research-summary-paper" selected={selected === 'paper'} onClick={() => setSelected('paper')} icon={<WalletCards className="h-5 w-5" />} label="모의매매 표본" {...sample} />
+                  <SummaryCard testId="research-summary-paper" selected={selected === 'paper'} onClick={() => setSelected('paper')} icon={<WalletCards className="h-5 w-5" />} label="모의매매 표본" {...paperSummary} />
                   <SummaryCard testId="research-summary-profitability" selected={selected === 'profitability'} onClick={() => setSelected('profitability')} icon={<TrendingUp className="h-5 w-5" />} label="수익성 검증" {...profitability} />
                 </section>
 
@@ -251,9 +398,9 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
                     },
                     paper: {
                       label: '모의매매 표본',
-                      state: sample,
-                      why: '모의매매 중에서도 canonical ledger가 확인한 표본만 집계합니다.',
-                      next: '표본 수뿐 아니라 정산과 비용이 같은 후보에 연결되는지 확인해야 합니다.',
+                      state: paperSummary,
+                      why: '모의매매 중에서도 canonical ledger가 확인한 표본만 집계하고, 후보별 Full Cost 근거는 별도로 확인합니다.',
+                      next: '아래 8개 비용의 실측 여부와 후보 Settlement 연결을 같이 확인하세요.',
                     },
                     profitability: {
                       label: '수익성 검증',
@@ -284,6 +431,10 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
                     </section>
                   );
                 })()}
+
+                {selected === 'paper' || selected === 'profitability'
+                  ? <FullCostVisibility overview={overview} />
+                  : null}
 
                 <details className="rounded-2xl border border-card-border bg-card shadow-sm">
                   <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-black">
