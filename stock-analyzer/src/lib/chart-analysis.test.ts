@@ -69,6 +69,22 @@ test('normal and delayed chart data remain actionable while unsafe states fail c
   assert.equal(buildChartAnalysis({ ...input, isClosedCandle: true, dataStatus: 'delayed' }).status, 'confirmed');
 });
 
+test('unknown and malformed chart data status fail closed instead of confirming analysis', () => {
+  for (const dataStatus of ['', '   ', 'unknown', 'error', 'okay']) {
+    assert.equal(isChartAnalysisDataStatusActionable(dataStatus), false, JSON.stringify(dataStatus));
+    const result = buildChartAnalysis({
+      ...input,
+      isClosedCandle: true,
+      signal: 'ENTER',
+      confidence: 95,
+      dataStatus,
+    });
+    assert.equal(result.status, 'expired', JSON.stringify(dataStatus));
+    assert.ok(result.expiredAt, JSON.stringify(dataStatus));
+    assert.equal(result.endTime, input.latestTime, JSON.stringify(dataStatus));
+  }
+});
+
 test('exit invalidates a completed generic analysis and keeps bearish bias', () => {
   const result = buildChartAnalysis({
     ...input,
