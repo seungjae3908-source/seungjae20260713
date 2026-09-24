@@ -32,6 +32,16 @@ const EXPECTED_V2_COHORT_DIGEST =
   '9b2853a361e17dc429288cec4499fc972189b0bc2427a6d8bb2a999eff847454';
 const ACTIVATION_SCHEMA =
   'public-forward-liquidity-successor-schedule-reliability-activation-binding-v3';
+const EXPECTED_V3_ACTIVATION_AUTHORITY_COMMENT_ID = 5805629154;
+const EXPECTED_V3_FREEZE_AUTHORITY_COMMENT_ID = 5804802177;
+const EXPECTED_V3_FREEZE_TIMESTAMP_COMMENT_ID = 5804808369;
+const EXPECTED_V3_FREEZE_BLOB_SHA =
+  '65ef02d9ef5611c767755e71b40b840737b0658a';
+const EXPECTED_V3_COHORT_FREEZE_MS = 1790207015000;
+const EXPECTED_V3_COHORT_EFFECTIVE_START_MS = 1790263020000;
+const EXPECTED_V3_ACTIVATION_BOUNDARY_MS = 1790212089000;
+const EXPECTED_V3_AUTHORIZED_BASE_MAIN_SHA =
+  '8bfd110befd4fc57ebf1248df6ccbd089d426855';
 
 export const SUCCESSOR_V3_GITHUB_PRIMARY_CRON_BOUNDARY_SKEW_MS = 60_000;
 export const SUCCESSOR_V3_GITHUB_PRIMARY_CRON_BOUNDARY_NORMALIZATION =
@@ -95,14 +105,39 @@ function verifyActivationBinding(binding, template = TEMPLATE) {
   if (!integer(binding.authorityCommentId) || binding.authorityCommentId <= 0) {
     add(blockers, 'SUCCESSOR_V3_ACTIVATION_COMMENT_ID_INVALID');
   }
+  if (binding.authorityCommentId !== EXPECTED_V3_ACTIVATION_AUTHORITY_COMMENT_ID) {
+    add(blockers, 'SUCCESSOR_V3_ACTIVATION_AUTHORITY_COMMENT_MISMATCH');
+  }
+  if (binding.hubFreezeAuthorityCommentId !== EXPECTED_V3_FREEZE_AUTHORITY_COMMENT_ID
+    || binding.hubFreezeTimestampCommentId !== EXPECTED_V3_FREEZE_TIMESTAMP_COMMENT_ID) {
+    add(blockers, 'SUCCESSOR_V3_FREEZE_AUTHORITY_COMMENT_MISMATCH');
+  }
+  if (binding.frozenCohortFreezeBlobSha !== EXPECTED_V3_FREEZE_BLOB_SHA) {
+    add(blockers, 'SUCCESSOR_V3_FREEZE_BLOB_MISMATCH');
+  }
+  if (binding.frozenCohortFreezeMs !== EXPECTED_V3_COHORT_FREEZE_MS
+    || binding.frozenCohortEffectiveStartMs !== EXPECTED_V3_COHORT_EFFECTIVE_START_MS) {
+    add(blockers, 'SUCCESSOR_V3_FROZEN_COHORT_BOUNDARY_MISMATCH');
+  }
   if (!integer(binding.activationBoundaryMs) || binding.activationBoundaryMs < 0) {
     add(blockers, 'SUCCESSOR_V3_ACTIVATION_BOUNDARY_INVALID');
+  }
+  if (binding.activationBoundaryMs !== EXPECTED_V3_ACTIVATION_BOUNDARY_MS
+    || binding.activationBoundaryMs <= binding.frozenCohortFreezeMs) {
+    add(blockers, 'SUCCESSOR_V3_ACTIVATION_BOUNDARY_AUTHORITY_MISMATCH');
   }
   if (!integer(binding.cutoverStartMs) || binding.cutoverStartMs < 0) {
     add(blockers, 'SUCCESSOR_V3_CUTOVER_START_INVALID');
   }
+  if (binding.cutoverStartMs !== EXPECTED_V3_COHORT_EFFECTIVE_START_MS
+    || binding.cutoverStartMs !== binding.frozenCohortEffectiveStartMs) {
+    add(blockers, 'SUCCESSOR_V3_CUTOVER_FROZEN_COHORT_MISMATCH');
+  }
   if (!exactSha(binding.authorizedCurrentMainSha)) {
     add(blockers, 'SUCCESSOR_V3_ACTIVATION_MAIN_SHA_INVALID');
+  }
+  if (binding.authorizedCurrentMainSha !== EXPECTED_V3_AUTHORIZED_BASE_MAIN_SHA) {
+    add(blockers, 'SUCCESSOR_V3_ACTIVATION_MAIN_SHA_MISMATCH');
   }
   if (binding.numericFreezeSha256 !== EXPECTED_NUMERIC_FREEZE_SHA256) {
     add(blockers, 'SUCCESSOR_V3_ACTIVATION_NUMERIC_FREEZE_MISMATCH');
