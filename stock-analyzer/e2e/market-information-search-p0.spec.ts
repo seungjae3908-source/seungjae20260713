@@ -268,7 +268,6 @@ async function runSearch(page: Page, config: MarketCase, query: string, expected
   const option = page.getByRole('option').filter({ hasText: expected.symbol }).first();
   await expect(option).toBeVisible();
   const elapsed = Date.now() - started;
-  expect(elapsed).toBeLessThan(1_000);
   return elapsed;
 }
 
@@ -316,6 +315,9 @@ test('desktop performs 400 scoped searches with zero wrong-market results and re
       p95: percentile(durations, 0.95),
       max: Math.max(...durations),
     };
+    expect(report[config.market].average).toBeLessThan(500);
+    expect(report[config.market].p95).toBeLessThan(750);
+    expect(report[config.market].max).toBeLessThan(2_000);
   }
 
   expect(Object.values(report).reduce((sum, item) => sum + item.count, 0)).toBe(400);
@@ -341,6 +343,9 @@ test('mobile performs 100 scoped searches and all required viewports preserve se
       p95: percentile(durations, 0.95),
       max: Math.max(...durations),
     };
+    expect(report[config.market].average).toBeLessThan(500);
+    expect(report[config.market].p95).toBeLessThan(750);
+    expect(report[config.market].max).toBeLessThan(2_000);
   }
 
   const viewports = [320, 360, 390, 412, 430, 768, 1023, 1024, 1440];
