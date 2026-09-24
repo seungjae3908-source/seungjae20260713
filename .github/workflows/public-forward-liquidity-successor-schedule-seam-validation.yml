@@ -226,14 +226,13 @@ jobs:
           fi
           test "$(printf '%s\n' "$changed" | sed '/^$/d' | wc -l | tr -d ' ')" -eq "$expected_count"
 
-      - name: Verify scheduled workflow is V3 frozen but Draft PR cannot activate it
+      - name: Verify scheduled runtime remains inactive until separate authority
         shell: bash
         run: |
           set -euo pipefail
           workflow='.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
-          test "$(grep -Ec "^[[:space:]]{4}- cron: '17 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
-          test "$(grep -Ec "^[[:space:]]{4}- cron: '27 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
-          test "$(grep -Ec "^[[:space:]]{4}- cron: '37 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
+          ! grep -Eq '^[[:space:]]{2}schedule:[[:space:]]*$' "$workflow"
+          ! grep -Eq '^[[:space:]]*-[[:space:]]*cron:' "$workflow"
           test "$(grep -Ec "^[[:space:]]{2}queue:[[:space:]]+max[[:space:]]*$" "$workflow")" -eq 1
           test "$(grep -Ec "^[[:space:]]{2}cancel-in-progress:[[:space:]]+false[[:space:]]*$" "$workflow")" -eq 1
           ! grep -Eq '^[[:space:]]{2}workflow_dispatch:[[:space:]]*$' "$workflow"
