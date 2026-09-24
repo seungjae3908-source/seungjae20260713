@@ -254,14 +254,10 @@ jobs:
           test "$(grep -Ec 'ARTIFACT_NAME: [$][{][{] steps[.]attempt_name[.]outputs[.]artifact_name [}][}]' "$workflow")" -eq 1
           ! grep -Fq 'steps.attempt_name.outputs.name' "$workflow"
           ! grep -Eq '^[[:space:]]+RUNNER_NAME:' "$workflow"
-          test "$(grep -Ec '^[[:space:]]{2}issues:[[:space:]]+read[[:space:]]*
- "$workflow")" -eq 1
-          test "$(grep -Ec '^[[:space:]]{2}statuses:[[:space:]]+read[[:space:]]*
- "$workflow")" -eq 1
-          ! grep -Eq '^[[:space:]]{2}issues:[[:space:]]+write[[:space:]]*
- "$workflow"
-          ! grep -Eq '^[[:space:]]{2}statuses:[[:space:]]+write[[:space:]]*
- "$workflow"
+          test "$(grep -Fc '  issues: read' "$workflow")" -eq 1
+          test "$(grep -Fc '  statuses: read' "$workflow")" -eq 1
+          ! grep -Fq '  issues: write' "$workflow"
+          ! grep -Fq '  statuses: write' "$workflow"
           test "$(grep -Fc '/authorize-public-only-partial-fill-v3-schedule-activation' "$workflow")" -ge 1
           test "$(grep -Fc '/revoke-public-only-partial-fill-v3-schedule-activation' "$workflow")" -ge 1
           test "$(grep -Fc "needs.validate-contract.outputs.activation_authorized == 'true'" "$workflow")" -eq 1
