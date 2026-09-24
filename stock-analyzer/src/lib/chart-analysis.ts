@@ -116,6 +116,21 @@ export function isChartAnalysisDataStatusActionable(dataStatus: unknown): boolea
   return ACTIONABLE_DATA_STATUSES.has(normalizeToken(dataStatus));
 }
 
+function isChartAnalysisCoreDataActionable(input: ChartAnalysisInput): boolean {
+  return (
+    Number.isFinite(input.latestTime) &&
+    input.latestTime > 0 &&
+    Number.isFinite(input.currentPrice) &&
+    input.currentPrice > 0 &&
+    Number.isFinite(input.previousClose) &&
+    input.previousClose > 0 &&
+    Number.isFinite(input.support) &&
+    input.support > 0 &&
+    Number.isFinite(input.resistance) &&
+    input.resistance > 0
+  );
+}
+
 function patternDescriptor(patterns: string[], trend: string): PatternDescriptor {
   const joined = patterns.join(' ').toLowerCase();
   if (/쌍봉|이중천장|m자|double[ -]?top/.test(joined)) {
@@ -171,6 +186,7 @@ export function createStableAnalysisId(input: {
 
 function deriveStatus(input: ChartAnalysisInput, descriptor: PatternDescriptor): ChartAnalysisStatus {
   if (!isChartAnalysisDataStatusActionable(input.dataStatus)) return 'expired';
+  if (!isChartAnalysisCoreDataActionable(input)) return 'expired';
   if (!input.isClosedCandle) return 'forming';
 
   if (descriptor.type === 'double-top') {
@@ -309,6 +325,7 @@ export function buildChartAnalysis(input: ChartAnalysisInput): ChartAnalysis {
     ...input.patterns.map((pattern) => `패턴 후보: ${pattern}`),
   ];
   if (input.dataStatus) reasons.push(`데이터 상태: ${input.dataStatus}`);
+  if (!isChartAnalysisCoreDataActionable(input)) reasons.push('핵심 가격/시간 데이터: unavailable');
 
   const points = input.anchorPoints?.length
     ? input.anchorPoints.filter((point) => Number.isFinite(point.time) && Number.isFinite(point.price))
