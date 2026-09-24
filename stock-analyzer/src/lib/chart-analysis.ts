@@ -116,6 +116,15 @@ export function isChartAnalysisDataStatusActionable(dataStatus: unknown): boolea
   return ACTIONABLE_DATA_STATUSES.has(normalizeToken(dataStatus));
 }
 
+function hasValidSupportResistanceRange(input: ChartAnalysisInput): boolean {
+  return (
+    Number.isFinite(input.support) &&
+    input.support > 0 &&
+    Number.isFinite(input.resistance) &&
+    input.resistance > input.support
+  );
+}
+
 function isChartAnalysisCoreDataActionable(input: ChartAnalysisInput): boolean {
   return (
     Number.isFinite(input.latestTime) &&
@@ -124,10 +133,7 @@ function isChartAnalysisCoreDataActionable(input: ChartAnalysisInput): boolean {
     input.currentPrice > 0 &&
     Number.isFinite(input.previousClose) &&
     input.previousClose > 0 &&
-    Number.isFinite(input.support) &&
-    input.support > 0 &&
-    Number.isFinite(input.resistance) &&
-    input.resistance > 0
+    hasValidSupportResistanceRange(input)
   );
 }
 
@@ -336,10 +342,12 @@ export function buildChartAnalysis(input: ChartAnalysisInput): ChartAnalysis {
     : latestTime > 0 && Number.isFinite(input.currentPrice) && input.currentPrice > 0
       ? [{ time: latestTime, price: input.currentPrice, role: 'latest' }]
       : [];
-  const priceLevels = [
-    { price: input.support, role: 'support' },
-    { price: input.resistance, role: 'resistance' },
-  ].filter((level) => Number.isFinite(level.price) && level.price > 0);
+  const priceLevels = hasValidSupportResistanceRange(input)
+    ? [
+        { price: input.support, role: 'support' },
+        { price: input.resistance, role: 'resistance' },
+      ]
+    : [];
 
   return {
     id,
