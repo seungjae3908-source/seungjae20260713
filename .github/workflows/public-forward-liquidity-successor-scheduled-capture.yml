@@ -2,10 +2,11 @@ name: Public Forward Liquidity Successor Scheduled Capture
 
 # IMPORTANT GOVERNANCE BOUNDARY:
 # - V2 history and already-failed V2 slots remain immutable and receive zero V3 credit.
-# - A V3 activation binding may be validated on a non-default Draft PR, but PR events can never capture.
-# - Merging an activation binding to the default branch is the activation event and therefore
-#   requires separate exact PR Merge approval plus V3 schedule-activation authority.
-# - No replay/backfill/manual/synthetic sample credit is granted by validation.
+# - A merged V3 activation binding is inert by itself and never authorizes capture.
+# - Scheduled capture requires a separate exact OWNER authority receipt on Release Control #23
+#   matching the exact current main SHA and the immutable activation-binding digest.
+# - Missing, revoked, stale, pre-cohort, or non-6/6 authority always skips capture fail-closed.
+# - No replay/backfill/manual/synthetic/hindsight sample credit is granted by validation.
 
 on:
   pull_request:
@@ -28,6 +29,8 @@ on:
 permissions:
   contents: read
   actions: read
+  issues: read
+  statuses: read
 
 concurrency:
   group: public-forward-liquidity-successor-scheduled-capture
@@ -38,6 +41,11 @@ jobs:
   validate-contract:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      activation_authorized: ${{ steps.activation_gate.outputs.authorized }}
+      activation_receipt_comment_id: ${{ steps.activation_gate.outputs.receipt_comment_id }}
+      activation_binding_digest: ${{ steps.activation_gate.outputs.binding_digest }}
+      activation_blocker: ${{ steps.activation_gate.outputs.blocker }}
     steps:
       - name: Checkout exact workflow revision without credentials
         uses: actions/checkout@v4
@@ -134,6 +142,167 @@ jobs:
           test "${SUCCESSOR_V3_ACTIVATION_STASHED:-false}" = 'true'
           test "$GITHUB_REF" = 'refs/heads/main'
 
+      - name: Resolve explicit V3 schedule activation authority receipt
+        id: activation_gate
+        if: github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        env:
+          ACTIVATION_PATH: market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json
+          FROZEN_EFFECTIVE_START_MS: '1790263020000'
+        with:
+          script: |
+            const fs = require('fs');
+            const crypto = require('crypto');
+
+            const setBlocked = (code) => {
+              core.setOutput('authorized', 'false');
+              core.setOutput('blocker', code);
+              core.notice(`V3 schedule capture fail-closed: ${code}`);
+            };
+
+            const activationPath = process.env.ACTIVATION_PATH;
+            const binding = JSON.parse(fs.readFileSync(activationPath, 'utf8'));
+            const canonical = (value) => {
+              if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+              if (value && typeof value === 'object') {
+                return `{${Object.keys(value).sort().map(
+                  (key) => `${JSON.stringify(key)}:${canonical(value[key])}`,
+                ).join(',')}}`;
+              }
+              return JSON.stringify(value);
+            };
+            const bindingDigest = crypto
+              .createHash('sha256')
+              .update(canonical(binding))
+              .digest('hex');
+            core.setOutput('binding_digest', bindingDigest);
+            core.setOutput('authorized', 'false');
+            core.setOutput('receipt_comment_id', '');
+
+            if (binding.frozenCohortEffectiveStartMs !== Number(process.env.FROZEN_EFFECTIVE_START_MS)) {
+              setBlocked('SUCCESSOR_V3_FROZEN_EFFECTIVE_START_MISMATCH');
+              return;
+            }
+            if (Date.now() < binding.frozenCohortEffectiveStartMs) {
+              setBlocked('SUCCESSOR_V3_PRE_COHORT_ACTIVATION_BLOCKED');
+              return;
+            }
+            if (context.ref !== 'refs/heads/main') {
+              setBlocked('SUCCESSOR_V3_SCHEDULE_NOT_DEFAULT_BRANCH');
+              return;
+            }
+
+            const branch = (await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            })).data;
+            if (branch.commit.sha !== context.sha) {
+              setBlocked('SUCCESSOR_V3_SCHEDULE_MAIN_MOVED');
+              return;
+            }
+
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.sha,
+              per_page: 100,
+            });
+            statuses.sort((left, right) => Number(right.id) - Number(left.id));
+            const latest = new Map();
+            for (const status of statuses) {
+              if (!latest.has(status.context)) latest.set(status.context, status);
+            }
+            const missing = required.filter((name) => latest.get(name)?.state !== 'success');
+            if (missing.length) {
+              setBlocked(`SUCCESSOR_V3_CURRENT_MAIN_REQUIRED_CI_NOT_6_OF_6:${missing.join(',')}`);
+              return;
+            }
+            const runIds = new Set();
+            for (const name of required) {
+              const match = String(latest.get(name)?.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
+              if (!match) {
+                setBlocked(`SUCCESSOR_V3_REQUIRED_STATUS_RUN_URL_MISSING:${name}`);
+                return;
+              }
+              runIds.add(Number(match[1]));
+            }
+            if (runIds.size !== 1) {
+              setBlocked(`SUCCESSOR_V3_REQUIRED_CI_NOT_COHERENT:${[...runIds].join(',')}`);
+              return;
+            }
+            const requiredRunId = [...runIds][0];
+            const requiredRun = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: requiredRunId,
+            })).data;
+            if (requiredRun.head_sha !== context.sha
+              || requiredRun.status !== 'completed'
+              || requiredRun.conclusion !== 'success') {
+              setBlocked(`SUCCESSOR_V3_REQUIRED_CI_PROVENANCE_REJECTED:${requiredRunId}`);
+              return;
+            }
+
+            const release = (await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+            })).data;
+            if (release.state !== 'open' || release.title !== 'Staging Readiness Control') {
+              setBlocked('SUCCESSOR_V3_RELEASE_CONTROL_NOT_OPEN');
+              return;
+            }
+
+            const authorize = '/authorize-public-only-partial-fill-v3-schedule-activation';
+            const revoke = '/revoke-public-only-partial-fill-v3-schedule-activation';
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              per_page: 100,
+            });
+            comments.sort((left, right) => Number(left.id) - Number(right.id));
+
+            let latestAuthority = null;
+            for (const comment of comments) {
+              if (comment.user?.login !== 'seungjae3908-source'
+                || comment.author_association !== 'OWNER') continue;
+              const parts = String(comment.body ?? '').trim().split(/\s+/u);
+              if (parts.length !== 3 || (parts[0] !== authorize && parts[0] !== revoke)) continue;
+              if (!/^[a-f0-9]{40}$/u.test(parts[1]) || !/^[a-f0-9]{64}$/u.test(parts[2])) continue;
+              if (parts[1] !== context.sha || parts[2] !== bindingDigest) continue;
+              latestAuthority = {
+                action: parts[0] === authorize ? 'AUTHORIZE' : 'REVOKE',
+                commentId: Number(comment.id),
+              };
+            }
+
+            if (!latestAuthority) {
+              setBlocked('SUCCESSOR_V3_EXPLICIT_ACTIVATION_RECEIPT_MISSING');
+              return;
+            }
+            if (latestAuthority.action !== 'AUTHORIZE') {
+              setBlocked('SUCCESSOR_V3_EXPLICIT_ACTIVATION_REVOKED');
+              core.setOutput('receipt_comment_id', String(latestAuthority.commentId));
+              return;
+            }
+
+            core.setOutput('authorized', 'true');
+            core.setOutput('blocker', '');
+            core.setOutput('receipt_comment_id', String(latestAuthority.commentId));
+            core.notice(
+              `V3 schedule activation receipt accepted: comment=${latestAuthority.commentId} main=${context.sha} binding=${bindingDigest}`,
+            );
+
       - name: Prove pull requests cannot invoke V2 or V3 capture
         if: github.event_name == 'pull_request'
         shell: bash
@@ -144,7 +313,9 @@ jobs:
           echo 'PR validation only: V2/V3 collector/capture/bind-artifact invocation = 0'
 
   capture:
-    if: github.event_name == 'schedule'
+    if: >-
+      github.event_name == 'schedule' &&
+      needs.validate-contract.outputs.activation_authorized == 'true'
     needs: validate-contract
     runs-on: ubuntu-latest
     timeout-minutes: 15
