@@ -1,0 +1,223 @@
+import { ArrowRight, BookOpenCheck, CircleDot, Link2, ShieldCheck } from 'lucide-react';
+import type { ResearchCenterOverview } from '@/lib/research-center';
+
+type StageTone = 'ready' | 'progress' | 'blocked' | 'missing';
+
+type ClosedLoopStage = Readonly<{
+  key: string;
+  label: string;
+  value: string;
+  detail: string;
+  tone: StageTone;
+}>;
+
+const TONE: Record<StageTone, string> = {
+  ready: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+  progress: 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300',
+  blocked: 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300',
+  missing: 'border-border bg-muted/50 text-muted-foreground',
+};
+
+const COST_KEYS = [
+  'commission',
+  'tax',
+  'spread',
+  'slippage',
+  'funding',
+  'latency',
+  'liquidityImpact',
+  'partialFillImpact',
+] as const;
+
+function countStage(
+  key: string,
+  label: string,
+  value: number | null | undefined,
+  observedDetail: string,
+  zeroDetail: string,
+): ClosedLoopStage {
+  if (value == null) {
+    return { key, label, value: '미관측', detail: '후보별 canonical count가 현재 overview에 없습니다.', tone: 'missing' };
+  }
+  if (value === 0) {
+    return { key, label, value: '0건', detail: zeroDetail, tone: 'progress' };
+  }
+  return { key, label, value: `${value.toLocaleString('ko-KR')}건`, detail: observedDetail, tone: 'ready' };
+}
+
+function money(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '미관측';
+  return new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 4 }).format(value);
+}
+
+export function PaperClosedLoopObserver({ overview }: { overview: ResearchCenterOverview }) {
+  const performance = overview.paper.candidatePerformance;
+  const components = performance?.fullCostEvidence?.components;
+  const measuredCostN = components
+    ? COST_KEYS.filter((key) => components[key]?.state === 'MEASURED').length
+    : 0;
+  const modeledCostN = components
+    ? COST_KEYS.filter((key) => components[key]?.state === 'MODELED').length
+    : 0;
+  const unknownCostN = components
+    ? COST_KEYS.filter((key) => ['UNKNOWN', 'BLOCKED_DATA'].includes(components[key]?.state)).length
+    : 8;
+  const fullCostReady = Boolean(performance?.FULL_COST_READY && performance?.fullCostEvidence?.fullCostReady);
+
+  const candidateReady = Boolean(
+    performance?.status === 'PRESENT'
+      && performance.candidateId
+      && performance.identity14Verified,
+  );
+
+  const stages: ClosedLoopStage[] = [
+    candidateReady
+      ? {
+          key: 'candidate',
+          label: 'Candidate',
+          value: 'identity 확인',
+          detail: `후보 ${performance?.candidateId ?? ''} · identity14 검증됨`,
+          tone: 'ready',
+        }
+      : {
+          key: 'candidate',
+          label: 'Candidate',
+          value: performance?.status ?? 'MISSING',
+          detail: '동일 후보 identity가 확정되지 않으면 뒤 단계 수치를 다른 후보와 합치지 않습니다.',
+          tone: performance?.status === 'BLOCKED' || performance?.status === 'INVALID' ? 'blocked' : 'missing',
+        },
+    countStage(
+      'entry',
+      'Entry',
+      performance?.Entry_N,
+      '동일 후보의 진입 근거가 관측됐습니다.',
+      '아직 동일 후보의 진입이 관측되지 않았습니다.',
+    ),
+    countStage(
+      'position',
+      'Position',
+      performance?.Position_N,
+      '동일 후보의 Paper 포지션 근거가 관측됐습니다.',
+      '진입 후 포지션 생성 근거를 기다립니다.',
+    ),
+    {
+      key: 'trigger',
+      label: 'Trigger',
+      value: 'readback 미제공',
+      detail: '현재 Research overview DTO는 exitTriggerId/trigger count를 제공하지 않습니다. Settlement가 있어도 Trigger 완료로 추정하지 않습니다.',
+      tone: 'missing',
+    },
+    countStage(
+      'settlement',
+      'Settlement',
+      performance?.Settlement_N,
+      '동일 후보의 Settlement 수가 관측됐습니다.',
+      '청산·정산 근거가 아직 없습니다.',
+    ),
+    {
+      key: 'cost',
+      label: '8 Cost',
+      value: fullCostReady ? '8/8 준비' : `${measuredCostN}/8 실측`,
+      detail: fullCostReady
+        ? '8개 비용과 canonical 연결 근거가 준비됐습니다.'
+        : `MODELED ${modeledCostN}개 · UNKNOWN/BLOCKED ${unknownCostN}개. MODELED 값은 실제 경제증거가 아닙니다.`,
+      tone: fullCostReady ? 'ready' : measuredCostN > 0 ? 'blocked' : 'missing',
+    },
+    {
+      key: 'net-pnl',
+      label: 'Net PnL',
+      value: money(performance?.Net_PnL),
+      detail: performance?.Net_PnL == null
+        ? '후보별 Net PnL 근거가 없습니다.'
+        : fullCostReady
+          ? 'Full Cost가 준비된 동일 후보 Net PnL입니다.'
+          : '값이 있어도 Full Cost가 미충족이면 수익성 증거로 승격하지 않습니다.',
+      tone: performance?.Net_PnL == null ? 'missing' : fullCostReady ? 'ready' : 'blocked',
+    },
+    {
+      key: 'journal',
+      label: '매매일지',
+      value: '별도 readback',
+      detail: 'Research overview에는 journal binding 상태가 없습니다. 통합 매매일지는 별도 journal API에서 확인합니다.',
+      tone: 'missing',
+    },
+  ];
+
+  const firstIncomplete = stages.find((stage) => stage.tone !== 'ready');
+  const firstZero = performance?.FIRST_ZERO ?? 'CANDIDATE_PERFORMANCE_EVIDENCE_MISSING';
+
+  return (
+    <section
+      className="rounded-2xl border border-card-border bg-card p-4 shadow-sm sm:p-5"
+      data-testid="paper-closed-loop-observer"
+      aria-label="Paper closed loop 관측"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">Read-only observer</p>
+          <h3 className="mt-1 text-base font-black">Paper closed loop</h3>
+          <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">
+            Candidate → Entry → Position → Trigger → Settlement → 8 Cost → Net PnL → 매매일지를 같은 후보 기준으로 봅니다.
+          </p>
+        </div>
+        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-black text-emerald-700 dark:text-emerald-300">
+          <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+          READ ONLY · executionAuthority=NONE
+        </span>
+      </div>
+
+      <div className="mt-4 rounded-xl border border-primary/20 bg-primary/5 p-3" data-testid="paper-closed-loop-first-zero">
+        <p className="text-[10px] font-black text-primary">현재 첫 미완료 단계</p>
+        <p className="mt-1 text-sm font-black">{firstIncomplete?.label ?? '관측 범위 완료'}</p>
+        <p className="mt-1 break-all font-mono text-[10px] text-muted-foreground">FIRST_ZERO · {firstZero}</p>
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        {stages.map((stage, index) => (
+          <div key={stage.key} className="contents">
+            <article
+              className="min-w-0 rounded-xl border border-card-border bg-background p-3"
+              data-testid={`paper-closed-loop-${stage.key}`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <CircleDot className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                  <p className="truncate text-xs font-black">{stage.label}</p>
+                </div>
+                <span className={`rounded-full border px-2 py-0.5 text-[9px] font-black ${TONE[stage.tone]}`}>
+                  {stage.tone === 'ready' ? '확인' : stage.tone === 'progress' ? '대기' : stage.tone === 'blocked' ? '불충족' : '미관측'}
+                </span>
+              </div>
+              <p className="mt-3 break-words text-sm font-black tabular-nums">{stage.value}</p>
+              <p className="mt-2 break-keep text-[10px] leading-4 text-muted-foreground">{stage.detail}</p>
+            </article>
+            {index < stages.length - 1 ? <ArrowRight className="hidden" aria-hidden="true" /> : null}
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        <a
+          href="/paper-trading"
+          className="flex min-h-11 items-center justify-between rounded-xl border border-card-border bg-background px-3 text-xs font-black"
+          data-testid="paper-closed-loop-paper-link"
+        >
+          <span className="flex items-center gap-2"><Link2 className="h-4 w-4 text-primary" />모의매매 상태 보기</span>
+          <ArrowRight className="h-4 w-4" aria-hidden="true" />
+        </a>
+        <a
+          href="/portfolio?tab=journal"
+          className="flex min-h-11 items-center justify-between rounded-xl border border-card-border bg-background px-3 text-xs font-black"
+          data-testid="paper-closed-loop-journal-link"
+        >
+          <span className="flex items-center gap-2"><BookOpenCheck className="h-4 w-4 text-primary" />통합 매매일지 보기</span>
+          <ArrowRight className="h-4 w-4" aria-hidden="true" />
+        </a>
+      </div>
+
+      <p className="mt-3 text-[10px] leading-4 text-muted-foreground">
+        이 화면은 기존 read-only overview만 재구성합니다. 누락된 Trigger·journal binding을 임의로 완료 처리하지 않고, UNKNOWN 비용을 0으로 바꾸지 않습니다.
+      </p>
+    </section>
+  );
+}
