@@ -271,6 +271,9 @@ test('only full canonical settlement identity sets settlementBindingVerified', (
   assert.equal(valid.trades[0]?.canonicalResearchBinding.status, 'VERIFIED');
   assert.equal(valid.trades[0]?.canonicalResearchBinding.settlementBindingVerified, true);
   assert.ok(valid.trades[0]?.canonicalResearchBinding.settlementId);
+  assert.equal(valid.trades[0]?.canonicalResearchBinding.triggerBindingVerified, true);
+  assert.equal(valid.trades[0]?.canonicalResearchBinding.exitTriggerId, 'exit-trigger-1');
+  assert.equal(valid.trades[0]?.canonicalResearchBinding.exitExecutionId, 'exit-execution-1');
 
   const invalid = bindCanonicalResearchToUnifiedJournal(journal, {
     status: 'PRESENT',
@@ -280,6 +283,9 @@ test('only full canonical settlement identity sets settlementBindingVerified', (
   assert.equal(invalid.trades[0]?.canonicalResearchBinding.status, 'VERIFIED');
   assert.equal(invalid.trades[0]?.canonicalResearchBinding.settlementBindingVerified, false);
   assert.equal(invalid.trades[0]?.canonicalResearchBinding.settlementId, null);
+  assert.equal(invalid.trades[0]?.canonicalResearchBinding.triggerBindingVerified, false);
+  assert.equal(invalid.trades[0]?.canonicalResearchBinding.exitTriggerId, null);
+  assert.equal(invalid.trades[0]?.canonicalResearchBinding.exitExecutionId, null);
 });
 
 test('owner lineage bound to a different deploy SHA cannot verify', () => {
