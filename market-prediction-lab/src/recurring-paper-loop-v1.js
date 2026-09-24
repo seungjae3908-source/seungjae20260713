@@ -75,6 +75,14 @@ function deepFreeze(value, seen = new WeakSet()) {
   return Object.freeze(value);
 }
 
+function durableJsonClone(value) {
+  const serialized = JSON.stringify(value);
+  if (typeof serialized !== "string") {
+    throw new Error("PAPER_SETTLEMENT_OWNER_EVIDENCE_NOT_JSON_SERIALIZABLE");
+  }
+  return JSON.parse(serialized);
+}
+
 export const CANONICAL_NATURAL_SETTLEMENT_OWNER_EVIDENCE_VERSION =
   "canonical-natural-settlement-owner-evidence-v1";
 
@@ -118,10 +126,10 @@ export function buildCanonicalNaturalSettlementOwnerEvidence({
     exitExecutionId: rebound.exitExecutionId,
     evaluatedAtMs,
     bindingEvidenceDigest: rebound.evidenceDigest,
-    position: structuredClone(position),
-    sourceObservation: structuredClone(sourceObservation),
-    authoritativeEvidence: structuredClone(authoritativeEvidence),
-    trigger: structuredClone(trigger),
+    position: durableJsonClone(position),
+    sourceObservation: durableJsonClone(sourceObservation),
+    authoritativeEvidence: durableJsonClone(authoritativeEvidence),
+    trigger: durableJsonClone(trigger),
   };
   return deepFreeze({
     ...payload,
@@ -624,7 +632,7 @@ export function buildRecurringPaperSettlementRecord({
     settlementRecordedAtMs,
     positionLifecycle: position.lifecycle ?? null,
     lifecycleEvidence: canonicalLifecycleEvidence,
-    canonicalOwnerEvidence: canonicalOwnerEvidence == null ? null : structuredClone(canonicalOwnerEvidence),
+    canonicalOwnerEvidence: canonicalOwnerEvidence == null ? null : durableJsonClone(canonicalOwnerEvidence),
     canonicalOwnerEvidenceBindingDigest,
     naturalSampleCredit: canonicalLifecycleEvidence?.naturalSampleCredit ?? 0,
     testOnlySampleCredit: 0,
