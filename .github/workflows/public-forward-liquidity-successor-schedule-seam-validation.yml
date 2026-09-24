@@ -197,13 +197,17 @@ jobs:
           EOF
             expected_count=2
             scope_name='successor prospective-cohort test-only maintenance'
-          elif [[ "$(printf '%s\n' "$changed" | grep -v -F -e "$runtime_workflow" -e "$validation_workflow" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 0 ]]; then
+          elif [[ "$(printf '%s\n' "$changed" | grep -v -F -e "$runtime_workflow" -e "$validation_workflow" -e "$reliability_test" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 0 ]] \
+            && printf '%s\n' "$changed" | grep -Fqx "$runtime_workflow" \
+            && printf '%s\n' "$changed" | grep -Fqx "$validation_workflow" \
+            && printf '%s\n' "$changed" | grep -Fqx "$reliability_test"; then
             cat > /tmp/allowed-files <<'EOF'
           .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
           .github/workflows/public-forward-liquidity-successor-scheduled-capture.yml
+          market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs
           EOF
-            expected_count=2
-            scope_name='V3 scheduled-runtime-validation-fix'
+            expected_count=3
+            scope_name='V3 scheduled-runtime-authority-fix'
           else
             cat > /tmp/allowed-files <<'EOF'
           .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
