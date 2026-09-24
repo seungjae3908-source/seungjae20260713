@@ -6,6 +6,8 @@ import { ADAPTIVE_MULTI_EVIDENCE_FORMULA_TOURNAMENT_V2_VERSION } from "./adaptiv
 export const ADAPTIVE_MULTI_EVIDENCE_VALIDATION_V2_VERSION =
   "adaptive-multi-evidence-validation-v2";
 
+const SHA64 = /^[0-9a-f]{64}$/iu;
+
 function deepFreeze(value) {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
   for (const child of Object.values(value)) deepFreeze(child);
@@ -82,6 +84,24 @@ function validateStatisticalFirewall(record, familySize) {
     && analysis?.status === "PASS";
 }
 
+function validResearchContext(formulaTournament) {
+  const context = formulaTournament?.researchContext;
+  const digest = formulaTournament?.researchContextDigest;
+  if (context == null && digest == null) return true;
+  if (!context || !SHA64.test(digest ?? "") || digest !== sha256Canonical(context)) return false;
+  if (context.affectsTrialRanking !== false
+      || context.affectsChampionSelection !== false
+      || context.countedAsIndependentVote !== false
+      || context.economicSampleCredit !== 0) return false;
+  if (context.priceActionStatus === "AVAILABLE") {
+    return context.priceActionAuthority === "CONTEXT_ONLY_NO_INDEPENDENT_VOTE"
+      && SHA64.test(context.priceActionContextDigest ?? "");
+  }
+  return context.priceActionStatus === "MISSING"
+    && context.priceActionContextDigest == null
+    && context.priceActionAuthority === "NONE";
+}
+
 function finalist(candidate, formulaTournament) {
   const reasons = [];
   if (candidate?.researchSurvivor !== true || candidate?.failure !== null) {
@@ -135,6 +155,7 @@ function finalist(candidate, formulaTournament) {
       completedStages: [...RESEARCH_TOURNAMENT_STAGES],
       statisticalFirewallOwner: "#547",
       finalHoldoutEvaluationCount: 1,
+      researchContextDigest: formulaTournament.researchContextDigest ?? null,
       status: "VALIDATED_FINALIST_NOT_FROZEN",
       profitabilityProven: false,
       promotionEligible: false,
@@ -153,6 +174,9 @@ export function buildAdaptiveMultiEvidenceValidationV2({
       || formulaTournament?.lineageId !== ADAPTIVE_MULTI_EVIDENCE_V2_LINEAGE_ID
       || formulaTournament?.status !== "READY_FOR_VALIDATION_PIPELINE"
       || formulaTournament?.executionAuthority !== "NONE") blockers.push("V2_FORMULA_TOURNAMENT_INPUT_INVALID");
+  if (!validResearchContext(formulaTournament)) {
+    blockers.push("V2_VALIDATION_RESEARCH_CONTEXT_PROVENANCE_INVALID");
+  }
   if (tournamentResult?.tournament?.tournamentId !== formulaTournament?.tournamentId
       || !Array.isArray(tournamentResult?.tournament?.candidates)
       || tournamentResult?.tournament?.profitable !== false
@@ -178,6 +202,15 @@ export function buildAdaptiveMultiEvidenceValidationV2({
   const invalidSurvivor = rejected.some((item) => declaredSurvivorIds.has(item.candidateId));
   if (invalidSurvivor) return failure(["OWNER_RESEARCH_SURVIVOR_VALIDATION_CONTRACT_INVALID"]);
 
+  const researchContext = formulaTournament.researchContext ?? null;
+  const researchContextDigest = formulaTournament.researchContextDigest ?? null;
+  const validationContextDigest = sha256Canonical({
+    tournamentId: formulaTournament.tournamentId,
+    researchContextDigest,
+    finalistIds: finalists.map((item) => item.candidateId).sort(),
+    rejectedCandidateIds: rejected.map((item) => item.candidateId).filter(Boolean).sort(),
+  });
+
   return deepFreeze({
     schemaVersion: ADAPTIVE_MULTI_EVIDENCE_VALIDATION_V2_VERSION,
     lineageId: ADAPTIVE_MULTI_EVIDENCE_V2_LINEAGE_ID,
@@ -185,6 +218,11 @@ export function buildAdaptiveMultiEvidenceValidationV2({
     tournamentId: formulaTournament.tournamentId,
     totalTrialCount: formulaTournament.totalTrialCount,
     globalCandidateFamilySize: formulaTournament.globalCandidateFamilySize,
+    researchContext,
+    researchContextDigest,
+    validationContextDigest,
+    contextAffectsValidationPassFail: false,
+    contextAffectsFinalistRanking: false,
     finalists,
     rejected,
     finalistCount: finalists.length,
