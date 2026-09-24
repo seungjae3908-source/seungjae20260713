@@ -283,8 +283,12 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 900 
     await expect(page.getByTestId('paper-closed-loop-journal')).toContainText('Settlement binding 1/1');
     await expect(page.getByTestId('paper-closed-loop-journal')).toContainText(RESEARCH_SHA);
 
-    await expect(page.getByTestId('paper-closed-loop-first-zero')).toContainText('Trigger');
-    await expect(page.getByTestId('paper-closed-loop-first-zero')).toContainText('CANONICAL_TRIGGER_READBACK_NOT_EXPOSED');
+    const firstZero = page.getByTestId('paper-closed-loop-first-zero');
+    await expect(firstZero).toContainText('화면 기준 첫 미완료 단계');
+    await expect(firstZero).toContainText('8 Cost');
+    await expect(firstZero).toContainText('Canonical FIRST_ZERO');
+    await expect(firstZero).toContainText('CANONICAL_TRIGGER_READBACK_NOT_EXPOSED');
+    await expect(firstZero).toContainText('이 UI가 임의로 변경하지 않습니다');
 
     await expect(page.getByTestId('paper-closed-loop-paper-link')).toHaveAttribute('href', '/paper-trading');
     await expect(page.getByTestId('paper-closed-loop-journal-link')).toHaveAttribute('href', '/portfolio?tab=journal');
