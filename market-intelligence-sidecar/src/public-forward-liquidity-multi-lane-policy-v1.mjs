@@ -14,9 +14,6 @@ const CONFIG = Object.freeze(JSON.parse(
   readFileSync(PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1_PATH, 'utf8'),
 ));
 const HOUR_MS = 3_600_000;
-const FROZEN_V3_COHORT_START_INCLUSIVE_MS = 1_788_398_220_000;
-const FROZEN_V3_COHORT_DIGEST =
-  'f58e5b7e7e5249cb60a911eb2269d728fa9fa6604b0f3723256a8b0a0c9e9bd4';
 const SHA40 = /^[a-f0-9]{40}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const FROZEN_DIGESTS = Object.freeze({
@@ -62,6 +59,26 @@ function exactDateMs(value, code) {
 
 function digest(value) {
   return sha256(canonicalJson(value));
+}
+
+function boundV3Cohort() {
+  const contract = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT;
+  const cohort = contract?.policyCore?.cohort;
+  if (contract?.activationBound !== true
+    || !cohort
+    || !Number.isInteger(cohort.startInclusiveMs)
+    || cohort.startInclusiveMs < 0
+    || !Number.isInteger(cohort.slotCadenceMs)
+    || cohort.slotCadenceMs <= 0
+    || !Number.isInteger(cohort.totalSlotN)
+    || cohort.totalSlotN <= 0) {
+    fail('PHASE2_V3_COHORT_BINDING_UNAVAILABLE');
+  }
+  const cohortDigest = exactDigest(
+    contract.cohortDigest,
+    'PHASE2_V3_COHORT_DIGEST_INVALID',
+  );
+  return Object.freeze({ cohort, cohortDigest });
 }
 
 function laneRegistryMap(config = CONFIG) {
@@ -299,16 +316,12 @@ export function derivePublicForwardLiquidityMultiLaneActivation({
     + CONFIG.activationPolicy.completeHourlyLeadSlotN * HOUR_MS;
   const activationBoundaryMs = completeLeadSlotEndMs
     + CONFIG.activationPolicy.firstEligibleLaneScheduleMinuteUtc * 60_000;
-  const v3Cohort = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyCore.cohort;
-  if (v3Cohort.startInclusiveMs != null
-    && v3Cohort.startInclusiveMs !== FROZEN_V3_COHORT_START_INCLUSIVE_MS) {
-    fail('PHASE2_V3_COHORT_START_MISMATCH');
-  }
+  const { cohort: v3Cohort } = boundV3Cohort();
+  const v3CohortStartInclusiveMs = v3Cohort.startInclusiveMs;
   const slotIndex = Math.floor(
-    (activationBoundaryMs - FROZEN_V3_COHORT_START_INCLUSIVE_MS)
-      / v3Cohort.slotCadenceMs,
+    (activationBoundaryMs - v3CohortStartInclusiveMs) / v3Cohort.slotCadenceMs,
   );
-  const nominalScheduledAtMs = FROZEN_V3_COHORT_START_INCLUSIVE_MS
+  const nominalScheduledAtMs = v3CohortStartInclusiveMs
     + slotIndex * v3Cohort.slotCadenceMs;
   if (v3Cohort.slotCadenceMs !== HOUR_MS
     || slotIndex < 0
@@ -412,11 +425,7 @@ export function resolvePublicForwardLiquidityMultiLaneCreditIdentity({
       reason: 'PHASE2_UTC27_ZERO_ADDITIONAL_CREDIT',
     });
   }
-  if (SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest != null
-    && SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest !== FROZEN_V3_COHORT_DIGEST) {
-    fail('PHASE2_V3_COHORT_DIGEST_MISMATCH');
-  }
-  const cohortDigest = FROZEN_V3_COHORT_DIGEST;
+  const { cohortDigest } = boundV3Cohort();
   const scope = Object.freeze({
     policyDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyDigest,
     cohortDigest,
