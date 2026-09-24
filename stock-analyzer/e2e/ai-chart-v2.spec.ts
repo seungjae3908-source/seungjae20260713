@@ -1,4 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { buildChartAnalysis, type ChartAnalysisInput } from '../src/lib/chart-analysis';
 import {
   aggregateMultiTimeframe,
   buildTechnicalTimeframeEvidence,
@@ -154,6 +155,42 @@ test('AI Chart 2.0 domain helpers preserve lifecycle, price-plan gaps, and highe
   ], '15m');
   expect(aggregate.higherTimeframeConflict).toBe(true);
   expect(aggregate.conflictTimeframes).toEqual(['4H']);
+});
+
+test('AI Chart analysis requires complete identity and provenance before confirmation', () => {
+  const baseInput: ChartAnalysisInput = {
+    symbol: 'BTCUSDT',
+    market: 'BITGET',
+    timeframe: '15m',
+    latestTime: 1_790_254_800,
+    currentPrice: 100,
+    previousClose: 99,
+    trend: '상승',
+    rsi: 58,
+    macd: 1.2,
+    volumeRatio: 1.4,
+    support: 95,
+    resistance: 105,
+    signal: 'ENTER',
+    confidence: 90,
+    title: 'BTC 구조 분석',
+    summary: '완료봉 기준 구조 분석',
+    patterns: [],
+    source: 'ai-chart-v2',
+    isClosedCandle: true,
+    dataStatus: 'ok',
+  };
+
+  expect(buildChartAnalysis(baseInput).status).toBe('confirmed');
+  for (const field of ['symbol', 'market', 'timeframe', 'source'] as const) {
+    for (const missing of ['', '   ']) {
+      const result = buildChartAnalysis({ ...baseInput, [field]: missing });
+      expect(result.status).toBe('expired');
+      expect(result.confirmedAt).toBeUndefined();
+      expect(result.expiredAt).toBe(result.detectedAt);
+      expect(result.reasons).toContain('분석 식별자/출처: unavailable');
+    }
+  }
 });
 
 test('desktop AI Chart 2.0 preserves one initial chart request, loads MTF on demand, and stays read-only', async ({ page, context }) => {
