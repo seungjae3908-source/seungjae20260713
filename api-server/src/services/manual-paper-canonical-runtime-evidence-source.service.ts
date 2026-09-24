@@ -8,9 +8,9 @@ import {
 import {
   createManualPaperCanonicalEvidenceSource,
   type ManualPaperCanonicalEvidenceSource,
-  type ManualPaperCanonicalIdentity,
   type ManualPaperCanonicalOwnerEvidencePacket,
 } from './manual-paper-canonical-evidence-source.service';
+import type { ManualPaperCanonicalIdentity } from './manual-paper-canonical-contract.service';
 import { PaperTradingError } from './paper-trading-core.service';
 import { readAuthenticatedPaperTradingState } from './paper-trading-state-publisher.service';
 import type { PaperTradingAction, PaperTradingState } from './paper-trading.types';
