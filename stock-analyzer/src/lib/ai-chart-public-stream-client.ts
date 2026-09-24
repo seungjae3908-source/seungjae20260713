@@ -184,9 +184,23 @@ export function createAiChartPublicStreamClient(
     }
     publish('FALLBACK_POLLING', reason);
   };
-  const scheduleHeartbeat = () => {
+  const scheduleRuntimeTimer = (
+    callback: () => void,
+    delayMs: number,
+    assign: (handle: TimerHandle) => void,
+  ): boolean => {
+    try {
+      assign(setTimeoutFn(callback, delayMs));
+      return true;
+    } catch {
+      forceFallback('PROTOCOL_FAILURE');
+      return false;
+    }
+  };
+  const scheduleHeartbeat = (): boolean => {
     clearTimer(heartbeatTimer);
-    heartbeatTimer = setTimeoutFn(() => {
+    heartbeatTimer = null;
+    return scheduleRuntimeTimer(() => {
       heartbeatTimer = null;
       if (
         stopped
@@ -198,12 +212,13 @@ export function createAiChartPublicStreamClient(
       try { socket.send(subscription.heartbeatPayload); }
       catch { forceFallback('HEARTBEAT_SEND_FAILED'); return; }
       scheduleHeartbeat();
-    }, subscription.heartbeatIntervalMs);
+    }, subscription.heartbeatIntervalMs, (handle) => { heartbeatTimer = handle; });
   };
-  const scheduleWatchdog = () => {
+  const scheduleWatchdog = (): boolean => {
     clearTimer(watchdogTimer);
+    watchdogTimer = null;
     const cadence = Math.max(1_000, Math.min(5_000, subscription.staleAfterMs));
-    watchdogTimer = setTimeoutFn(() => {
+    return scheduleRuntimeTimer(() => {
       watchdogTimer = null;
       if (stopped || (status !== 'WAITING_FIRST_EVENT' && status !== 'LIVE_STREAM')) return;
       const currentNow = now();
@@ -223,7 +238,7 @@ export function createAiChartPublicStreamClient(
       const freshness = aiChartStreamFreshness({ status, lastEventAtMs, nowMs: currentNow, staleAfterMs: subscription.staleAfterMs });
       if (freshness === 'DELAYED') notifyDiagnostic({ ...snapshot(), reason: 'STREAM_DELAYED' });
       scheduleWatchdog();
-    }, cadence);
+    }, cadence, (handle) => { watchdogTimer = handle; });
   };
 
   const scheduleFlush = (expectedSocket: WebSocketLike) => {
@@ -276,13 +291,18 @@ export function createAiChartPublicStreamClient(
     let nextSocket: WebSocketLike;
     try { nextSocket = socketFactory(subscription.endpoint); }
     catch { forceFallback('WEBSOCKET_UNAVAILABLE'); return; }
-    if ('binaryType' in nextSocket) nextSocket.binaryType = 'arraybuffer';
     socket = nextSocket;
-    connectTimer = setTimeoutFn(() => {
+    try {
+      if ('binaryType' in nextSocket) nextSocket.binaryType = 'arraybuffer';
+    } catch {
+      forceFallback('PROTOCOL_FAILURE');
+      return;
+    }
+    if (!scheduleRuntimeTimer(() => {
       connectTimer = null;
       if (stopped || socket !== nextSocket || connectedAtMs != null) return;
       forceFallback('CONNECT_TIMEOUT');
-    }, subscription.staleAfterMs);
+    }, subscription.staleAfterMs, (handle) => { connectTimer = handle; })) return;
 
     nextSocket.onopen = () => {
       if (stopped || socket !== nextSocket) return;
@@ -292,7 +312,7 @@ export function createAiChartPublicStreamClient(
       catch { forceFallback('SUBSCRIBE_SEND_FAILED'); return; }
       connectedAtMs = now();
       publish('WAITING_FIRST_EVENT', 'PUBLIC_STREAM_CONNECTED_WAITING_FOR_DATA');
-      scheduleHeartbeat();
+      if (!scheduleHeartbeat()) return;
       scheduleWatchdog();
     };
 
@@ -336,7 +356,12 @@ export function createAiChartPublicStreamClient(
       if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) { forceFallback('RECONNECT_LIMIT_REACHED'); return; }
       publish('RECOVERING', 'SOCKET_CLOSED');
       clearTimer(reconnectTimer);
-      reconnectTimer = setTimeoutFn(() => { reconnectTimer = null; connect(); }, nextAiChartReconnectDelayMs(reconnectAttempts - 1));
+      reconnectTimer = null;
+      scheduleRuntimeTimer(
+        () => { reconnectTimer = null; connect(); },
+        nextAiChartReconnectDelayMs(reconnectAttempts - 1),
+        (handle) => { reconnectTimer = handle; },
+      );
     };
   };
 
