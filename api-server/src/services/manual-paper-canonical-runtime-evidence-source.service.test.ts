@@ -126,7 +126,11 @@ function request(action: any, state = createPaperTradingState(10_000, new Date(N
   };
 }
 
-function closeFixture({ tamperPacket = false, omitSettlement = false } = {}) {
+function closeFixture({
+  tamperPacket = false,
+  omitSettlement = false,
+  tamperSettlementIdentity = false,
+} = {}) {
   const ownerState = createPaperTradingState(10_000, new Date(NOW)) as any;
   ownerState.positions = [{
     id: 'manual-position',
@@ -180,9 +184,35 @@ function closeFixture({ tamperPacket = false, omitSettlement = false } = {}) {
   };
   if (tamperPacket) packet.positionId = 'tampered-position';
 
-  const settlementId = '4'.repeat(64);
+  const settlementIdentity: any = {
+    candidateId: CANDIDATE_ID,
+    entryId: position.paperSampleId,
+    positionId: position.positionId,
+    exitTriggerId: trigger.exitTriggerId,
+    exitExecutionId,
+    provider: 'bitget-public-owner',
+    market: position.market,
+    symbol: position.symbol,
+    timeframe: position.sample.identity.timeframe,
+    side: position.direction,
+    strategyFamily: position.strategyFamily,
+    strategyVersion: position.strategyVersion,
+    parameterDigest: position.parameterDigest,
+    accountMode: position.accountMode,
+    costPolicyVersion: position.costPolicyVersion,
+    costEvidenceDigest: bindingEvidenceDigest,
+    exitEvidenceProvenanceDigest: '5'.repeat(64),
+    settledAtMs: NOW,
+    netPnl: 0,
+    netReturnPercent: 0,
+  };
+  if (tamperSettlementIdentity) settlementIdentity.entryId = 'paper-sample-tampered';
+  const settlementId = manualPaperEvidenceSha256(settlementIdentity);
   const settlement = {
     settlementId,
+    settlementIdentity,
+    paperSampleId: position.paperSampleId,
+    entryId: position.paperSampleId,
     positionId: position.positionId,
     candidateId: CANDIDATE_ID,
     researchCodeSha: SHA,
@@ -401,6 +431,37 @@ test('close rejects a tampered durable Natural settlement owner packet before re
     (error: unknown) => {
       assert.ok(error instanceof PaperTradingError);
       assert.equal(error.code, 'CANONICAL_PAPER_RUNTIME_SETTLEMENT_OWNER_PACKET_INVALID');
+      return true;
+    },
+  );
+  assert.equal(reboundCalls, 0);
+});
+
+test('close rejects a self-consistent durable settlement identity rebound to another sample', async () => {
+  const f = closeFixture({ tamperSettlementIdentity: true });
+  let reboundCalls = 0;
+  const source = createManualPaperCanonicalRuntimeEvidenceSource({
+    env: {
+      DEPLOY_SHA: SHA,
+      PAPER_CANONICAL_OWNER_BRIDGE_ENABLED: 'true',
+    },
+    dependencies: {
+      async readPaperState() { return structuredClone(f.ownerState); },
+      async readRecurringState() { return structuredClone(f.recurringState); },
+      rebindSettlementEvidence() { reboundCalls += 1; return null; },
+      async issueValidationReceipt(identity) { return validation(identity); },
+    },
+  });
+
+  await assert.rejects(
+    () => source(request({
+      type: 'close_position',
+      eventId: 'close-settlement-identity-drift',
+      positionId: 'manual-position',
+    }, f.ownerState)),
+    (error: unknown) => {
+      assert.ok(error instanceof PaperTradingError);
+      assert.equal(error.code, 'CANONICAL_PAPER_RUNTIME_SETTLEMENT_IDENTITY_MISMATCH');
       return true;
     },
   );
