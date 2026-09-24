@@ -5,6 +5,7 @@ import {
   buildChartAnalysis,
   chartAnalysisTimelineKey,
   createStableAnalysisId,
+  isChartAnalysisDataStatusActionable,
   shouldAppendTimeline,
   type ChartAnalysisInput,
 } from './chart-analysis';
@@ -39,6 +40,33 @@ test('an open candle never creates a confirmed analysis', () => {
 test('a completed candle can confirm only with sufficient confidence', () => {
   assert.equal(buildChartAnalysis({ ...input, isClosedCandle: true }).status, 'confirmed');
   assert.equal(buildChartAnalysis({ ...input, isClosedCandle: true, confidence: 55 }).status, 'weakened');
+});
+
+test('unsafe chart data status expires analysis before signal semantics can confirm it', () => {
+  for (const dataStatus of ['stale', 'future', 'insufficient', 'unavailable']) {
+    const result = buildChartAnalysis({
+      ...input,
+      isClosedCandle: true,
+      signal: 'ENTER',
+      confidence: 95,
+      dataStatus,
+    });
+    assert.equal(result.status, 'expired', dataStatus);
+    assert.ok(result.expiredAt, dataStatus);
+    assert.equal(result.endTime, input.latestTime, dataStatus);
+    assert.ok(result.reasons.includes(`데이터 상태: ${dataStatus}`), dataStatus);
+  }
+});
+
+test('normal and delayed chart data remain actionable while unsafe states fail closed', () => {
+  assert.equal(isChartAnalysisDataStatusActionable(undefined), true);
+  assert.equal(isChartAnalysisDataStatusActionable('ok'), true);
+  assert.equal(isChartAnalysisDataStatusActionable('delayed'), true);
+  assert.equal(isChartAnalysisDataStatusActionable(' STALE '), false);
+  assert.equal(isChartAnalysisDataStatusActionable('FUTURE'), false);
+  assert.equal(isChartAnalysisDataStatusActionable('insufficient'), false);
+  assert.equal(isChartAnalysisDataStatusActionable('unavailable'), false);
+  assert.equal(buildChartAnalysis({ ...input, isClosedCandle: true, dataStatus: 'delayed' }).status, 'confirmed');
 });
 
 test('exit invalidates a completed generic analysis and keeps bearish bias', () => {
