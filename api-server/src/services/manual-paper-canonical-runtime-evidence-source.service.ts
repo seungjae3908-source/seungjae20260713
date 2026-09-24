@@ -49,6 +49,7 @@ type RuntimeBridgeDependencies = Readonly<{
     nowMs: number;
   }>, dependencies?: Readonly<{ env?: RuntimeEnvironment }>): Promise<PaperTradingState>;
   readRecurringState(env: RuntimeEnvironment): Promise<RecurringState>;
+  rebindSettlementEvidence(input: unknown): any;
   issueValidationReceipt(
     identity: ManualPaperCanonicalIdentity,
     nowMs: number,
@@ -308,6 +309,7 @@ function findAndRebindNaturalSettlement(
   action: PaperTradingAction,
   candidateId: string,
   researchCodeSha: string,
+  rebindSettlementEvidence: RuntimeBridgeDependencies['rebindSettlementEvidence'],
 ): Readonly<{ position: Record<string, any>; observation: unknown; trigger: unknown }> {
   if (state.identity?.researchCodeSha !== researchCodeSha) {
     throw new PaperTradingError(
@@ -373,7 +375,7 @@ function findAndRebindNaturalSettlement(
     );
   }
 
-  const rebound = bindNaturalPaperTriggerBoundSettlementEvidence({
+  const rebound = rebindSettlementEvidence({
     position: packet.position,
     observation: packet.sourceObservation,
     authoritativeEvidence: packet.authoritativeEvidence,
@@ -424,6 +426,7 @@ async function issueValidationReceiptFromConfiguredOwner(
 const defaultDependencies: RuntimeBridgeDependencies = Object.freeze({
   readPaperState: readAuthenticatedPaperTradingState,
   readRecurringState: readRecurringStateFromRuntime,
+  rebindSettlementEvidence: bindNaturalPaperTriggerBoundSettlementEvidence,
   issueValidationReceipt: issueValidationReceiptFromConfiguredOwner,
 });
 
@@ -452,7 +455,14 @@ export function createManualPaperCanonicalRuntimeEvidenceSource(
       const researchCodeSha = deployedResearchSha(env);
       const state = await dependencies.readRecurringState(env);
       const settlement = action.type === 'close_position'
-        ? findAndRebindNaturalSettlement(state, ownerState, action, candidateId, researchCodeSha)
+        ? findAndRebindNaturalSettlement(
+          state,
+          ownerState,
+          action,
+          candidateId,
+          researchCodeSha,
+          dependencies.rebindSettlementEvidence,
+        )
         : null;
       const position = settlement?.position ?? findNaturalPosition(state, candidateId, researchCodeSha);
       const candidate = position.entryCandidate;
