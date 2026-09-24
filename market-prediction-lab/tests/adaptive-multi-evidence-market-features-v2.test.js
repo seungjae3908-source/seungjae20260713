@@ -5,6 +5,7 @@ import {
   buildAdaptiveMultiEvidenceMarketFeaturesV2,
 } from "../src/adaptive-multi-evidence-market-features-v2.js";
 import { buildAdaptiveMultiEvidencePriceStructureV2 } from "../src/adaptive-multi-evidence-price-structure-v2.js";
+import { sha256Canonical } from "../src/research-cache-provenance.js";
 
 const START = Date.parse("2026-09-14T00:00:00.000Z");
 const STEP = 15 * 60 * 1000;
@@ -137,6 +138,14 @@ test("trend, momentum, volume, and volatility are measurable point-in-time evide
   assert.ok(Number.isFinite(result.features.volume.priceVolumeCorrelation));
   assert.ok(Number.isFinite(result.features.volatility.atrPct));
   assert.ok(Number.isFinite(result.features.volatility.realizedVolatility));
+  assert.match(result.priceActionSourceContentDigest, /^[a-f0-9]{64}$/u);
+  assert.equal(
+    result.priceActionSourceDigest,
+    sha256Canonical({
+      sourceContentDigest: result.priceActionSourceContentDigest,
+      priceAction: result.features.priceAction,
+    }),
+  );
 });
 
 test("missing optional benchmark and higher timeframe context stays explicit instead of becoming zero", () => {
@@ -172,6 +181,7 @@ test("future and unclosed bars cannot alter features or evidence identity", () =
   });
   assert.deepEqual(after.features, before.features);
   assert.equal(after.contentDigest, before.contentDigest);
+  assert.equal(after.priceActionSourceDigest, before.priceActionSourceDigest);
   assert.deepEqual(
     Object.values(after.evidence).map((item) => item.evidenceId),
     Object.values(before.evidence).map((item) => item.evidenceId),
@@ -262,4 +272,42 @@ test("V1 lineage and invalid indicator configuration fail closed", () => {
   }));
   assert.equal(invalid.status, "BLOCKED_DATA");
   assert.ok(invalid.blockers.includes("V2_MARKET_FEATURES_EMA_PERIOD_ORDER_INVALID"));
+});
+
+
+test("wave, candlestick, and BOS/CHOCH context is exposed downstream without an extra vote", () => {
+  const result = buildAdaptiveMultiEvidenceMarketFeaturesV2(completeInput());
+  assert.equal(result.status, "READY_FOR_SPECIALIST_RESEARCH_ONLY");
+  assert.ok(result.features.priceAction);
+  assert.ok(["BULLISH", "BEARISH", "MIXED", "INSUFFICIENT"].includes(
+    result.features.priceAction.structureTrend,
+  ));
+  assert.ok(Array.isArray(result.features.priceAction.candlestickPatterns));
+  assert.ok(Array.isArray(result.features.priceAction.swingSequence));
+  assert.equal(
+    result.features.priceAction.priceStructureEvidenceId,
+    buildAdaptiveMultiEvidencePriceStructureV2({
+      ...completeInput(),
+      options: PHASE_2_OPTIONS,
+    }).evidence.priceStructure.evidenceId,
+  );
+  assert.match(
+    result.features.priceAction.priceStructureEvidenceId,
+    /^adaptive-v2-evidence:[a-f0-9]{64}$/u,
+  );
+  assert.match(
+    result.features.priceAction.candleEvidenceId,
+    /^adaptive-v2-evidence:[a-f0-9]{64}$/u,
+  );
+  assert.match(
+    result.features.priceAction.patternEvidenceId,
+    /^adaptive-v2-evidence:[a-f0-9]{64}$/u,
+  );
+  assert.equal(result.features.priceAction.authority, "CONTEXT_ONLY_NO_INDEPENDENT_VOTE");
+  assert.equal(result.correlationGroups.priceAction, result.correlationGroups.trend);
+  assert.equal(result.priceActionAuthority, "CONTEXT_ONLY_NO_INDEPENDENT_VOTE");
+  assert.equal(Object.keys(result.evidence).length, 4);
+  assert.equal(result.independentVoteCredit, 0);
+  assert.equal(result.economicSampleCredit, 0);
+  assert.equal(result.executionAuthority, "NONE");
 });

@@ -1,12 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { RESEARCH_TOURNAMENT_STAGES } from "../src/research-tournament-engine-v1.js";
+import { sha256Canonical } from "../src/research-cache-provenance.js";
 import {
   ADAPTIVE_MULTI_EVIDENCE_VALIDATION_V2_VERSION,
   buildAdaptiveMultiEvidenceValidationV2,
 } from "../src/adaptive-multi-evidence-validation-v2.js";
 
 function formulaTournament(overrides = {}) {
+  const researchContext = overrides.researchContext ?? {
+    regime: "TREND_UP",
+    regimeDigest: "d".repeat(64),
+    priceActionStatus: "AVAILABLE",
+    priceActionContextDigest: "e".repeat(64),
+    priceActionAuthority: "CONTEXT_ONLY_NO_INDEPENDENT_VOTE",
+    affectsTrialRanking: false,
+    affectsChampionSelection: false,
+    countedAsIndependentVote: false,
+    economicSampleCredit: 0,
+  };
+  const researchContextDigest = overrides.researchContextDigest ?? sha256Canonical(researchContext);
   return {
     schemaVersion: "adaptive-multi-evidence-formula-tournament-v2",
     lineageId: "ADAPTIVE_MULTI_EVIDENCE_V2",
@@ -16,6 +29,8 @@ function formulaTournament(overrides = {}) {
     globalCandidateFamilySize: 8,
     executionAuthority: "NONE",
     ...overrides,
+    researchContext,
+    researchContextDigest,
   };
 }
 
@@ -164,5 +179,69 @@ test("foreign lineage and execution authority fail closed", () => {
   assert.equal(result.autoTrading, false);
   assert.equal(result.realOrderEnabled, false);
   assert.equal(result.privateTradingApiAllowed, false);
+  assert.equal(result.executionAuthority, "NONE");
+});
+
+
+test("validation retains research context provenance without changing finalist selection", () => {
+  const base = buildAdaptiveMultiEvidenceValidationV2({
+    formulaTournament: formulaTournament(),
+    tournamentResult: ownerResult(),
+  });
+  const changedContext = {
+    ...formulaTournament().researchContext,
+    priceActionContextDigest: "1".repeat(64),
+  };
+  const changed = buildAdaptiveMultiEvidenceValidationV2({
+    formulaTournament: formulaTournament({
+      researchContext: changedContext,
+      researchContextDigest: sha256Canonical(changedContext),
+    }),
+    tournamentResult: ownerResult(),
+  });
+
+  assert.equal(base.status, "VALIDATED_FINALISTS_AVAILABLE");
+  assert.equal(changed.status, base.status);
+  assert.equal(changed.finalistCount, base.finalistCount);
+  assert.deepEqual(
+    changed.finalists.map((item) => item.candidateId),
+    base.finalists.map((item) => item.candidateId),
+  );
+  assert.equal(changed.finalists[0].validationDigest, base.finalists[0].validationDigest);
+  assert.notEqual(changed.validationContextDigest, base.validationContextDigest);
+  assert.equal(changed.contextAffectsValidationPassFail, false);
+  assert.equal(changed.contextAffectsFinalistRanking, false);
+  assert.equal(changed.researchContext.countedAsIndependentVote, false);
+  assert.equal(changed.economicSampleCredit, 0);
+  assert.equal(changed.executionAuthority, "NONE");
+});
+
+test("validation rejects research context that attempts ranking or champion authority", () => {
+  const result = buildAdaptiveMultiEvidenceValidationV2({
+    formulaTournament: formulaTournament({
+      researchContext: {
+        ...formulaTournament().researchContext,
+        affectsTrialRanking: true,
+      },
+    }),
+    tournamentResult: ownerResult(),
+  });
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.ok(result.blockers.includes("V2_VALIDATION_RESEARCH_CONTEXT_PROVENANCE_INVALID"));
+  assert.equal(result.economicSampleCredit, 0);
+  assert.equal(result.executionAuthority, "NONE");
+});
+
+
+test("validation rejects a tampered research context digest even when its shape is valid", () => {
+  const result = buildAdaptiveMultiEvidenceValidationV2({
+    formulaTournament: formulaTournament({
+      researchContextDigest: "9".repeat(64),
+    }),
+    tournamentResult: ownerResult(),
+  });
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.ok(result.blockers.includes("V2_VALIDATION_RESEARCH_CONTEXT_PROVENANCE_INVALID"));
+  assert.equal(result.economicSampleCredit, 0);
   assert.equal(result.executionAuthority, "NONE");
 });
