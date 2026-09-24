@@ -85,6 +85,65 @@ export function PaperClosedLoopObserver({
     ? journalBinding.trades.filter((trade) => trade.status === 'VERIFIED' && trade.candidateId === candidateId)
     : [];
   const settlementBoundJournalN = exactJournalBindings.filter((trade) => trade.settlementBindingVerified).length;
+  const triggerBoundJournalBindings = exactJournalBindings.filter((trade) => (
+    trade.triggerBindingVerified && Boolean(trade.exitTriggerId) && Boolean(trade.exitExecutionId)
+  ));
+
+  const triggerStage: ClosedLoopStage = journalBindingLoading && !journalBinding
+    ? {
+        key: 'trigger',
+        label: 'Trigger',
+        value: '조회 중',
+        detail: 'authenticated journal binding의 canonical Trigger evidence를 읽고 있습니다.',
+        tone: 'progress',
+      }
+    : journalBindingError
+      ? {
+          key: 'trigger',
+          label: 'Trigger',
+          value: '미관측',
+          detail: 'Trigger readback 조회에 실패했습니다. 실패를 완료로 바꾸지 않습니다.',
+          tone: 'missing',
+        }
+      : !candidateId
+        ? {
+            key: 'trigger',
+            label: 'Trigger',
+            value: '미관측',
+            detail: '현재 Research candidateId가 없어 Trigger evidence를 같은 후보에 바인딩하지 않습니다.',
+            tone: 'missing',
+          }
+        : triggerBoundJournalBindings.length > 0
+          ? {
+              key: 'trigger',
+              label: 'Trigger',
+              value: `${triggerBoundJournalBindings.length.toLocaleString('ko-KR')}건 검증`,
+              detail: `canonical settlement lineage · exitTriggerId ${triggerBoundJournalBindings.map((trade) => trade.exitTriggerId).join(' · ')}`,
+              tone: 'ready',
+            }
+          : exactJournalBindings.length > 0
+            ? {
+                key: 'trigger',
+                label: 'Trigger',
+                value: '미관측',
+                detail: 'candidate binding은 VERIFIED지만 완전 검증된 settlement lineage의 exitTriggerId가 없습니다.',
+                tone: 'missing',
+              }
+            : journalBinding?.source === 'AUTHENTICATED_PAPER_STATE'
+              ? {
+                  key: 'trigger',
+                  label: 'Trigger',
+                  value: '미관측',
+                  detail: '현재 candidateId와 VERIFIED journal binding이 없어 Trigger를 연결하지 않습니다.',
+                  tone: journalBinding.mismatchTradeCount > 0 ? 'blocked' : 'missing',
+                }
+              : {
+                  key: 'trigger',
+                  label: 'Trigger',
+                  value: '미관측',
+                  detail: 'canonical Trigger readback이 아직 공개되지 않았습니다. Settlement 존재만으로 Trigger 완료를 추정하지 않습니다.',
+                  tone: 'missing',
+                };
 
   const journalStage: ClosedLoopStage = journalBindingLoading && !journalBinding
     ? {
@@ -166,13 +225,7 @@ export function PaperClosedLoopObserver({
       '동일 후보의 Paper 포지션 근거가 관측됐습니다.',
       '진입 후 포지션 생성 근거를 기다립니다.',
     ),
-    {
-      key: 'trigger',
-      label: 'Trigger',
-      value: 'readback 미제공',
-      detail: '현재 Research overview DTO는 exitTriggerId/trigger count를 제공하지 않습니다. Settlement가 있어도 Trigger 완료로 추정하지 않습니다.',
-      tone: 'missing',
-    },
+    triggerStage,
     countStage(
       'settlement',
       'Settlement',
