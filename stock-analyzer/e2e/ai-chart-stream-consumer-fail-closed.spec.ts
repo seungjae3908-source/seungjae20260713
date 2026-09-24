@@ -316,6 +316,46 @@ test('frame scheduler exception is contained and fails closed exactly once', () 
   }
 });
 
+test('frame cancellation exception cannot block buffer-overflow fallback teardown', () => {
+  const restore = installFakeWebSocket();
+  const clock = runtime();
+
+  try {
+    const client = createAiChartPublicStreamClient({
+      market: 'BITGET',
+      symbol: 'CANCELFAILUSDT',
+      now: () => 50_000,
+      setTimeoutFn: clock.setTimeoutFn,
+      clearTimeoutFn: clock.clearTimeoutFn,
+      requestAnimationFrameFn: clock.requestAnimationFrameFn,
+      cancelAnimationFrameFn: () => { throw new Error('fixture frame cancel failure'); },
+      maxPendingEvents: 1,
+      onTrades: () => true,
+    });
+
+    client.start();
+    const socket = ConsumerFailureSocketFake.instances[0];
+    socket.onopen?.({} as Event);
+    socket.onmessage?.(bitgetTrade('CANCELFAILUSDT', 'cancel-1'));
+    expect(client.snapshot()).toMatchObject({ pendingEvents: 1, pendingRenderWork: 1 });
+
+    expect(() => socket.onmessage?.(bitgetTrade('CANCELFAILUSDT', 'cancel-2'))).not.toThrow();
+    expect(client.snapshot()).toMatchObject({
+      status: 'FALLBACK_POLLING',
+      reason: 'STREAM_BUFFER_OVERFLOW',
+      reconnectAttempts: 0,
+      pendingEvents: 0,
+      pendingRenderWork: 0,
+    });
+    expect(socket.closeCount).toBe(1);
+    expect(clock.timers.size).toBe(0);
+
+    client.stop();
+  } finally {
+    restore();
+  }
+});
+
 test('status observer exception cannot break connect, reconnect, or stop control flow', () => {
   const restore = installFakeWebSocket();
   const clock = runtime();
