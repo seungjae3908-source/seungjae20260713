@@ -224,6 +224,28 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
       return searchable.includes(query);
     });
   }, [bindingFilter, data, searchText, triggerFilter]);
+  const bindingIssues = useMemo(() => {
+    if (!data) return [];
+    const groups = new Map<string, {
+      status: 'MISMATCH'|'NOT_AVAILABLE';
+      reason: string;
+      count: number;
+    }>();
+    for (const trade of data.trades) {
+      if (trade.source !== 'APP_PAPER') continue;
+      const status = trade.canonicalResearchBinding?.status;
+      if (status !== 'MISMATCH' && status !== 'NOT_AVAILABLE') continue;
+      const reason = trade.canonicalResearchBinding?.reason ?? 'AUTHENTICATED_BINDING_NOT_AVAILABLE';
+      const key = `${status}:${reason}`;
+      const current = groups.get(key);
+      groups.set(key, { status, reason, count: (current?.count ?? 0) + 1 });
+    }
+    return [...groups.values()].sort((left, right) => (
+      left.status === right.status
+        ? right.count - left.count || left.reason.localeCompare(right.reason)
+        : left.status === 'MISMATCH' ? -1 : 1
+    ));
+  }, [data]);
   const selected = useMemo(
     () => visibleTrades.find((trade) => trade.id === selectedId) ?? visibleTrades[0] ?? null,
     [selectedId, visibleTrades],
@@ -328,6 +350,53 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
 
     {data ? <>
       <JournalPaperLinkageSummary data={data} />
+
+      {bindingIssues.length ? (
+        <section className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4" data-testid="unified-journal-binding-issues">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h3 className="flex items-center gap-2 text-sm font-extrabold">
+                <AlertTriangle className="h-4 w-4 text-amber-600" />
+                Research 연결 문제 빠른 진단
+              </h3>
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                서버가 반환한 canonical binding reason을 그대로 묶습니다. 원인을 클릭하면 거래 목록만 좁혀지고 성과 요약은 바뀌지 않습니다.
+              </p>
+            </div>
+            <span className="rounded-full border border-amber-500/30 bg-background px-2 py-1 text-[10px] font-black">
+              원인 {bindingIssues.length}종
+            </span>
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {bindingIssues.map((issue) => (
+              <button
+                key={`${issue.status}:${issue.reason}`}
+                type="button"
+                className="min-w-0 rounded-xl border border-border bg-background p-3 text-left hover:border-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                onClick={() => {
+                  setBindingFilter(issue.status);
+                  setTriggerFilter('ALL');
+                  setSearchText(issue.reason);
+                }}
+                data-testid={`unified-journal-binding-issue-${issue.status.toLowerCase()}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className={`rounded-full border px-2 py-0.5 text-[9px] font-black ${
+                    issue.status === 'MISMATCH'
+                      ? 'border-destructive/40 bg-destructive/10 text-destructive'
+                      : 'border-amber-500/40 bg-amber-500/10 text-amber-700'
+                  }`}>
+                    {issue.status === 'MISMATCH' ? '불일치' : '미확인'}
+                  </span>
+                  <span className="text-xs font-black tabular-nums">{issue.count}건</span>
+                </div>
+                <p className="mt-2 break-all font-mono text-[10px] text-muted-foreground">{issue.reason}</p>
+                <p className="mt-2 text-[10px] font-bold text-primary">눌러서 해당 거래만 보기</p>
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <div className="rounded-2xl border border-border bg-card p-4" data-testid="unified-journal-analytics">
         <h3 className="flex items-center gap-2 text-sm font-extrabold"><BarChart3 className="h-4 w-4" />성과 요약</h3>
