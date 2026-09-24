@@ -134,6 +134,9 @@ test('unified trade journal separates performance, quality, snapshots, and free-
   await expect(researchBinding).toContainText('candidate-authenticated-1');
   await expect(researchBinding).toContainText('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
   await expect(researchBinding).toContainText('Settlement binding');
+  await expect(researchBinding).toContainText('Trigger binding');
+  await expect(researchBinding).toContainText('exitTriggerId');
+  await expect(researchBinding).toContainText('exit-trigger-1');
   await expect(researchBinding).toContainText('검증됨');
   await expect(researchBinding).toContainText('AUTHENTICATED_PAPER_STATE_IDENTITY_MATCHED');
   await expect(page.getByTestId('unified-journal-snapshot')).toContainText('진입 전 판단 근거');
