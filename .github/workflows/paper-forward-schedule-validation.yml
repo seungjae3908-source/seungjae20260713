@@ -49,6 +49,7 @@ on:
       - api-server/src/services/paper-trading-state-publisher.service.ts
       - api-server/src/services/manual-paper-canonical-runtime-evidence-source.service.ts
       - api-server/src/services/manual-paper-canonical-runtime-evidence-source.service.test.ts
+      - api-server/src/services/manual-paper-natural-contract.d.ts
       - api-server/src/routes/paper-trading.ts
       - api-server/src/routes/paper-trading.smoke.test.ts
       - api-server/src/services/paper-simulated-execution-evidence.service.ts
@@ -248,6 +249,7 @@ jobs:
             api-server/src/services/paper-trading-state-publisher.service.ts
             api-server/src/services/manual-paper-canonical-runtime-evidence-source.service.ts
             api-server/src/services/manual-paper-canonical-runtime-evidence-source.service.test.ts
+            api-server/src/services/manual-paper-natural-contract.d.ts
             api-server/src/routes/paper-trading.ts
             api-server/src/routes/paper-trading.smoke.test.ts
             api-server/src/services/paper-simulated-execution-evidence.service.ts
