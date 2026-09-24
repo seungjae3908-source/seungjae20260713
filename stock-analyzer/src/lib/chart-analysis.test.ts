@@ -85,6 +85,56 @@ test('unknown and malformed chart data status fail closed instead of confirming 
   }
 });
 
+test('invalid core chart values fail closed instead of creating a confirmed analysis', () => {
+  const invalidCases: Array<Partial<ChartAnalysisInput>> = [
+    { currentPrice: Number.NaN },
+    { previousClose: Number.POSITIVE_INFINITY },
+    { support: 0 },
+    { resistance: Number.NaN },
+    { latestTime: Number.NaN },
+  ];
+
+  for (const invalid of invalidCases) {
+    const result = buildChartAnalysis({
+      ...input,
+      ...invalid,
+      dataStatus: 'ok',
+      isClosedCandle: true,
+      signal: 'ENTER',
+      confidence: 95,
+    });
+    assert.equal(result.status, 'expired', JSON.stringify(invalid));
+    assert.ok(result.expiredAt, JSON.stringify(invalid));
+    assert.ok(result.reasons.includes('핵심 가격/시간 데이터: unavailable'), JSON.stringify(invalid));
+  }
+});
+
+test('invalid core values do not leak non-finite chart geometry or fabricated price levels', () => {
+  const invalidPrice = buildChartAnalysis({
+    ...input,
+    dataStatus: 'ok',
+    isClosedCandle: true,
+    currentPrice: Number.NaN,
+    support: Number.NaN,
+  });
+  assert.equal(invalidPrice.status, 'expired');
+  assert.equal(invalidPrice.points.length, 0);
+  assert.equal(invalidPrice.priceLevels.some((level) => !Number.isFinite(level.price) || level.price <= 0), false);
+  assert.equal(invalidPrice.relatedIndicators.currentPrice, null);
+
+  const invalidTime = buildChartAnalysis({
+    ...input,
+    dataStatus: 'ok',
+    isClosedCandle: true,
+    latestTime: Number.NaN,
+    anchorTimes: [],
+  });
+  assert.equal(invalidTime.status, 'expired');
+  assert.equal(invalidTime.startTime, undefined);
+  assert.equal(invalidTime.endTime, undefined);
+  assert.equal(invalidTime.points.length, 0);
+});
+
 test('exit invalidates a completed generic analysis and keeps bearish bias', () => {
   const result = buildChartAnalysis({
     ...input,
