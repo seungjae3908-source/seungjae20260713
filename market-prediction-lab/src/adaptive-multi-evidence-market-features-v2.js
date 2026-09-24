@@ -579,9 +579,15 @@ export function buildAdaptiveMultiEvidenceMarketFeaturesV2(input = {}) {
     patternEvidenceId: structureResult.evidence.pattern.evidenceId,
     authority: "CONTEXT_ONLY_NO_INDEPENDENT_VOTE",
   };
+  const priceActionSourceContentDigest = structureResult.contentDigest;
+  const priceActionSourceDigest = sha256Canonical({
+    sourceContentDigest: priceActionSourceContentDigest,
+    priceAction,
+  });
 
   const contentDigest = sha256Canonical({
     sourceContentDigest: structureResult.contentDigest,
+    priceActionSourceDigest,
     benchmarkEvidenceId: momentum.benchmarkEvidenceId,
     higherTimeframeEvidenceIds: multiTimeframe.timeframes.map((item) => item.evidenceId),
     options,
@@ -660,6 +666,8 @@ export function buildAdaptiveMultiEvidenceMarketFeaturesV2(input = {}) {
     momentumOverrideAuthority: "NONE",
     volatilitySizingAuthority: "NONE",
     priceActionAuthority: "CONTEXT_ONLY_NO_INDEPENDENT_VOTE",
+    priceActionSourceContentDigest,
+    priceActionSourceDigest,
     economicSampleCredit: 0,
     v1EconomicIdentityMutable: false,
     frozenV1Contamination: 0,
