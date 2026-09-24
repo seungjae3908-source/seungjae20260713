@@ -130,6 +130,24 @@ function validTournamentOwner(result) {
     && result.safety?.executionAuthority === "NONE";
 }
 
+function validPriceActionProvenance(regimeRouter) {
+  const priceAction = regimeRouter?.priceActionContext;
+  if (!priceAction || !["AVAILABLE", "MISSING"].includes(priceAction.status)) return false;
+  if (!SHA64.test(regimeRouter?.sourceContentDigest ?? "")
+      || !SHA64.test(regimeRouter?.priceActionContextDigest ?? "")) return false;
+  const expectedDigest = sha256Canonical({
+    sourceContentDigest: regimeRouter.sourceContentDigest,
+    priceAction,
+  });
+  if (regimeRouter.priceActionContextDigest !== expectedDigest) return false;
+  if (priceAction.status === "AVAILABLE") {
+    return regimeRouter.priceActionAuthority === "CONTEXT_ONLY_NO_INDEPENDENT_VOTE"
+      && priceAction.authority === "CONTEXT_ONLY_NO_INDEPENDENT_VOTE";
+  }
+  return regimeRouter.priceActionAuthority === "NONE"
+    && priceAction.authority === "NONE";
+}
+
 export function buildAdaptiveMultiEvidenceFormulaTournamentV2({
   regimeRouter,
   independence,
@@ -142,10 +160,7 @@ export function buildAdaptiveMultiEvidenceFormulaTournamentV2({
   if (regimeRouter?.schemaVersion !== ADAPTIVE_MULTI_EVIDENCE_REGIME_ROUTER_V2_VERSION
       || regimeRouter?.lineageId !== ADAPTIVE_MULTI_EVIDENCE_V2_LINEAGE_ID
       || regimeRouter?.executionAuthority !== "NONE") blockers.push("V2_FORMULA_REGIME_ROUTER_INVALID");
-  if (regimeRouter?.priceActionContext?.status === "AVAILABLE"
-      && (regimeRouter?.priceActionAuthority !== "CONTEXT_ONLY_NO_INDEPENDENT_VOTE"
-        || regimeRouter?.priceActionContext?.authority !== "CONTEXT_ONLY_NO_INDEPENDENT_VOTE"
-        || !SHA64.test(regimeRouter?.priceActionContextDigest ?? ""))) {
+  if (!validPriceActionProvenance(regimeRouter)) {
     blockers.push("V2_FORMULA_PRICE_ACTION_CONTEXT_PROVENANCE_INVALID");
   }
   if (independence?.schemaVersion !== ADAPTIVE_MULTI_EVIDENCE_INDEPENDENCE_V2_VERSION
@@ -187,7 +202,8 @@ export function buildAdaptiveMultiEvidenceFormulaTournamentV2({
     regime: regimeRouter.regime,
     regimeDigest: SHA64.test(regimeRouter.regimeDigest ?? "") ? regimeRouter.regimeDigest : null,
     priceActionStatus: regimeRouter.priceActionContext?.status ?? "MISSING",
-    priceActionContextDigest: SHA64.test(regimeRouter.priceActionContextDigest ?? "")
+    priceActionContextDigest: regimeRouter.priceActionContext?.status === "AVAILABLE"
+      && SHA64.test(regimeRouter.priceActionContextDigest ?? "")
       ? regimeRouter.priceActionContextDigest
       : null,
     priceActionAuthority: regimeRouter.priceActionContext?.status === "AVAILABLE"
