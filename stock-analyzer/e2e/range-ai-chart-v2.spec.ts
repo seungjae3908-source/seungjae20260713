@@ -42,3 +42,19 @@ test('AI Chart analysis fails closed when support is not below resistance', () =
     { price: 71_000, role: 'resistance' },
   ]);
 });
+
+test('AI Chart analysis fails closed when identity or provenance is missing', () => {
+  for (const field of ['symbol', 'market', 'timeframe', 'source'] as const) {
+    for (const missing of ['', '   ']) {
+      const result = buildChartAnalysis({ ...baseInput, [field]: missing });
+      expect(result.status).toBe('expired');
+      expect(result.confirmedAt).toBeUndefined();
+      expect(result.expiredAt).toBe(result.detectedAt);
+      expect(result.reasons).toContain('분석 식별자/출처: unavailable');
+    }
+  }
+
+  const complete = buildChartAnalysis(baseInput);
+  expect(complete.status).toBe('confirmed');
+  expect(complete.reasons).not.toContain('분석 식별자/출처: unavailable');
+});
