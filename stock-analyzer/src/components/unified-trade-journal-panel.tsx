@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, BarChart3, BookOpenCheck, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
+import { JournalPaperLinkageSummary } from '@/components/journal-paper-linkage-summary';
 import {
   getUnifiedTradeJournal,
   type UnifiedJournalFilters,
@@ -184,6 +185,8 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
     {busy && !data ? <div className="grid min-h-40 place-items-center rounded-2xl border border-border bg-card"><Loader2 className="h-6 w-6 animate-spin" aria-label="매매일지 불러오는 중" /></div> : null}
 
     {data ? <>
+      <JournalPaperLinkageSummary data={data} />
+
       <div className="rounded-2xl border border-border bg-card p-4" data-testid="unified-journal-analytics">
         <h3 className="flex items-center gap-2 text-sm font-extrabold"><BarChart3 className="h-4 w-4" />성과 요약</h3>
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
