@@ -26,6 +26,7 @@ for(const viewport of [{width:320,height:740},{width:1440,height:900}]){
     await expect(panel).toContainText('COMPILER_BLOCKED until TESTABLE');
     await expect(panel).toContainText('NOT_EVALUATED');
 
+    await page.getByText('기술 상태 자세히 보기', { exact: true }).click();
     for(const id of ['video-discovery-state','video-transcript-state','video-strategy-state','video-evidence-state','video-validation-state','video-detail-empty-state','video-cluster-empty-state'])await expect(page.getByTestId(id)).toBeVisible();
     for(const label of ['FACT','CREATOR CLAIM','AI INFERENCE','UNKNOWN','CONTRADICTED'])await expect(page.getByTestId('video-truth-legend')).toContainText(label);
 
