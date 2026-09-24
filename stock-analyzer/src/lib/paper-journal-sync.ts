@@ -74,6 +74,21 @@ export type UnifiedJournalCostEvidence = {
 export type UnifiedTradeLeg = {
   orderId:string; at:string; price:number; quantity:number; fees:number|null; tax:number|null; costEvidence:UnifiedJournalCostEvidence;
 };
+export type UnifiedCanonicalResearchBinding = {
+  schemaVersion:'unified-journal-canonical-research-binding-v1';
+  status:'VERIFIED'|'NOT_AVAILABLE'|'MISMATCH'|'NOT_APPLICABLE';
+  reason:string;
+  candidateId:string|null; strategyId:string|null; parameterHash:string|null; researchCodeSha:string|null;
+  naturalPositionId:string|null; paperSampleId:string|null; settlementId:string|null; settlementBindingVerified:boolean;
+  exitTriggerId:string|null; exitExecutionId:string|null; triggerBindingVerified:boolean;
+  executionAuthority:'NONE'; profitabilityCredit:0;
+};
+export type UnifiedCanonicalResearchBindingSummary = {
+  schemaVersion:'unified-journal-canonical-research-binding-v1';
+  status:'VERIFIED'|'PARTIAL'|'NOT_AVAILABLE'; source:'AUTHENTICATED_PAPER_STATE'; sourceSha:string|null;
+  paperTradeCount:number; verifiedTradeCount:number; mismatchTradeCount:number; unavailableTradeCount:number;
+  executionAuthority:'NONE'; profitabilityCredit:0;
+};
 export type UnifiedTradeCycle = {
   id:string; source:UnifiedTradeSource; broker:string; accountIdMasked:string; market:UnifiedTradeMarket; symbol:string;
   positionSide:'LONG'|'SHORT'; currency:'KRW'|'USD'|'USDT'; status:'OPEN'|'CLOSED'; openedAt:string; closedAt:string|null;
@@ -85,6 +100,7 @@ export type UnifiedTradeCycle = {
   additions:UnifiedTradeLeg[];
   partialExits:UnifiedTradeLeg[];
   finalExit:UnifiedTradeLeg|null;
+  canonicalResearchBinding?:UnifiedCanonicalResearchBinding;
 };
 export type UnifiedJournalAnalytics = {
   sampleSize:number; openTrades:number; closedTrades:number; winRate:number|null; profitFactor:number|null;
@@ -106,6 +122,7 @@ export type UnifiedTradeJournal = {
   toss:{provider:'TOSS';officialSpecVersion:string;paidStatus:'PAID_STATUS_UNVERIFIED';liveReadIntegration:'BLOCKED_BY_FREE_STATUS_UNVERIFIED';contractNormalizerAvailable:true;executionGranularity:string;livePrivateRequests:0;actualOrders:0};
   aiReviewStatus:'AI_EXTERNAL_REVIEW_DISABLED_FREE_ONLY';
   safety:{finalCostDelta:'0_KRW';actualOrderRequests:0;cancelRequests:0;amendRequests:0;transferRequests:0;withdrawalRequests:0;privateBrokerRequests:0};
+  canonicalResearchBinding?:UnifiedCanonicalResearchBindingSummary;
 };
 export type UnifiedJournalFilters = {
   range?:UnifiedTradeRange; market?:UnifiedTradeMarket|'ALL'; source?:UnifiedTradeSource|'ALL';
@@ -250,6 +267,21 @@ export async function getUnifiedTradeJournal(filters: UnifiedJournalFilters = {}
     || result.safety.withdrawalRequests !== 0
     || result.safety.privateBrokerRequests !== 0) {
     throw new Error('통합 매매일지의 무료·무주문 안전 계약을 확인하지 못했습니다.');
+  }
+  const binding = result.canonicalResearchBinding;
+  if (binding && (
+    binding.schemaVersion !== 'unified-journal-canonical-research-binding-v1'
+    || binding.source !== 'AUTHENTICATED_PAPER_STATE'
+    || binding.executionAuthority !== 'NONE'
+    || binding.profitabilityCredit !== 0
+  )) throw new Error('통합 매매일지의 Research binding 안전 계약을 확인하지 못했습니다.');
+  for (const trade of result.trades) {
+    const value = trade.canonicalResearchBinding;
+    if (value && (
+      value.schemaVersion !== 'unified-journal-canonical-research-binding-v1'
+      || value.executionAuthority !== 'NONE'
+      || value.profitabilityCredit !== 0
+    )) throw new Error('거래별 Research binding 안전 계약을 확인하지 못했습니다.');
   }
   return result;
 }
