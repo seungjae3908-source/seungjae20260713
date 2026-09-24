@@ -200,6 +200,18 @@ test('binding, Trigger and search filters isolate journal verification states wi
   await expect(list).toContainText('거래 목록 1 / 4건');
   await expect(list).toContainText('BTCUSDT');
 
+  await page.getByLabel('거래 목록 검색').fill('exit-trigger-1');
+  await expect(list).toContainText('거래 목록 1 / 4건');
+  await expect(list).toContainText('BTCUSDT');
+
+  await page.getByLabel('거래 목록 검색').fill('exit-execution-1');
+  await expect(list).toContainText('거래 목록 1 / 4건');
+  await expect(list).toContainText('BTCUSDT');
+
+  await page.getByLabel('거래 목록 검색').fill('AUTHENTICATED_PAPER_STATE_IDENTITY_MATCHED');
+  await expect(list).toContainText('거래 목록 1 / 4건');
+  await expect(list).toContainText('BTCUSDT');
+
   await page.getByLabel('거래 목록 검색').fill('ETHUSDT');
   await expect(list).toContainText('거래 목록 1 / 4건');
   await expect(list).toContainText('ETHUSDT');
@@ -209,6 +221,17 @@ test('binding, Trigger and search filters isolate journal verification states wi
   await expect(list).toContainText('AAPL');
   await expect(list).toContainText('Research 해당없음');
 
+  await page.getByLabel('거래 목록 검색').fill('does-not-exist');
+  const empty = page.getByTestId('unified-journal-empty-filter-result');
+  await expect(empty).toContainText('해당하는 거래가 없습니다');
+  await expect(empty).toContainText('Search=does-not-exist');
+  await page.getByTestId('unified-journal-empty-filter-reset').click();
+  await expect(list).toContainText('거래 목록 4 / 4건');
+  await expect(page.getByLabel('Research binding')).toHaveValue('ALL');
+  await expect(page.getByLabel('Trigger binding filter')).toHaveValue('ALL');
+  await expect(page.getByLabel('거래 목록 검색')).toHaveValue('');
+
+  await page.getByLabel('Research binding').selectOption('VERIFIED');
   await page.getByTestId('unified-journal-binding-filter-reset').click();
   await expect(list).toContainText('거래 목록 4 / 4건');
   await expect(page.getByLabel('Research binding')).toHaveValue('ALL');
