@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, Clock3, Database, FlaskConical, RefreshCw, ShieldCheck, TrendingUp, WalletCards } from 'lucide-react';
+import { Activity, Clock3, Database, RefreshCw, TrendingUp, WalletCards } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { PROMOTION_STAGE_KO } from '@/lib/labels';
 import { fetchResearchCenterOverview, type ResearchCenterOverview } from '@/lib/research-center';
@@ -315,7 +315,7 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
                       </p>
                     </div>
                   </div>
-                </section>                </section>
+                </section>
               </>
             );
           })() : null}
