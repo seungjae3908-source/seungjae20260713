@@ -217,17 +217,23 @@ jobs:
           EOF
             expected_count=2
             scope_name='V3 scheduled-runtime-validation-fix'
-          elif [[ "$(printf '%s\n' "$changed" | grep -v -F -e "$validation_workflow" -e "$ingest_workflow" -e "$runner" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 0 ]] \
+          elif [[ "$(printf '%s\n' "$changed" | grep -v -F -e "$validation_workflow" -e "$ingest_workflow" -e "$runner" -e 'market-intelligence-sidecar/src/public-forward-liquidity-multi-lane-policy-v1.mjs' -e 'market-intelligence-sidecar/tests/public-forward-liquidity-multi-lane-policy-v1.test.mjs' -e 'market-intelligence-sidecar/tests/public-forward-liquidity-v3-capture-ingest.test.mjs' | sed '/^$/d' | wc -l | tr -d ' ')" -eq 0 ]] \
             && printf '%s\n' "$changed" | grep -Fqx "$validation_workflow" \
             && printf '%s\n' "$changed" | grep -Fqx "$ingest_workflow" \
-            && printf '%s\n' "$changed" | grep -Fqx "$runner"; then
+            && printf '%s\n' "$changed" | grep -Fqx "$runner" \
+            && printf '%s\n' "$changed" | grep -Fqx 'market-intelligence-sidecar/src/public-forward-liquidity-multi-lane-policy-v1.mjs' \
+            && printf '%s\n' "$changed" | grep -Fqx 'market-intelligence-sidecar/tests/public-forward-liquidity-multi-lane-policy-v1.test.mjs' \
+            && printf '%s\n' "$changed" | grep -Fqx 'market-intelligence-sidecar/tests/public-forward-liquidity-v3-capture-ingest.test.mjs'; then
             cat > /tmp/allowed-files <<'EOF'
           .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
           .github/workflows/public-forward-liquidity-v3-capture-ingest.yml
           market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs
+          market-intelligence-sidecar/src/public-forward-liquidity-multi-lane-policy-v1.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-multi-lane-policy-v1.test.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-v3-capture-ingest.test.mjs
           EOF
-            expected_count=3
-            scope_name='V3 successor-cohort supersession + zero-artifact ingest repair'
+            expected_count=6
+            scope_name='V3 successor-cohort stale-authority + zero-artifact ingest repair'
           else
             cat > /tmp/allowed-files <<'EOF'
           .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
