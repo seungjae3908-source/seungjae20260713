@@ -74,6 +74,17 @@ function router(overrides = {}) {
     status: "READY_FOR_STRATEGY_ROUTING_RESEARCH_ONLY",
     regime: "TREND_UP",
     regimeDigest: "d".repeat(64),
+    priceActionContext: {
+      status: "AVAILABLE",
+      authority: "CONTEXT_ONLY_NO_INDEPENDENT_VOTE",
+      structureTransition: "BOS_UP",
+      candlestickPatterns: ["BULLISH_ENGULFING"],
+      latestSwingLegDirection: "UP",
+      swingRetracementRatio: 0.62,
+      retestHold: true,
+    },
+    priceActionContextDigest: "e".repeat(64),
+    priceActionAuthority: "CONTEXT_ONLY_NO_INDEPENDENT_VOTE",
     executionAuthority: "NONE",
     ...overrides,
   };
@@ -194,5 +205,46 @@ test("Frozen V1 and execution authority fail closed", () => {
   assert.equal(result.autoTrading, false);
   assert.equal(result.realOrderEnabled, false);
   assert.equal(result.privateTradingApiAllowed, false);
+  assert.equal(result.executionAuthority, "NONE");
+});
+
+
+test("price-action context is bound into Meta Decision identity without becoming a vote or automatic override", () => {
+  const base = buildAdaptiveMultiEvidenceMetaDecisionV2(input());
+  assert.equal(base.status, "RESEARCH_DECISION_READY");
+  assert.equal(base.decision, "BUY");
+  assert.equal(base.contextSummary.priceAction.status, "AVAILABLE");
+  assert.equal(base.contextSummary.priceAction.structureTransition, "BOS_UP");
+  assert.equal(base.contextSummary.priceAction.countedAsIndependentVote, false);
+  assert.equal(base.contextSummary.priceAction.automaticDecisionOverride, false);
+  assert.equal(base.evidenceSummary.supportGroups.length, 1);
+  assert.equal(base.economicSampleCredit, 0);
+
+  const opposing = buildAdaptiveMultiEvidenceMetaDecisionV2(input({
+    regimeRouter: router({
+      priceActionContext: {
+        ...router().priceActionContext,
+        structureTransition: "CHOCH_DOWN",
+        candlestickPatterns: ["BEARISH_ENGULFING"],
+        latestSwingLegDirection: "DOWN",
+      },
+      priceActionContextDigest: "f".repeat(64),
+    }),
+  }));
+  assert.equal(opposing.decision, "BUY");
+  assert.equal(opposing.contextSummary.priceAction.automaticDecisionOverride, false);
+  assert.notEqual(opposing.decisionDigest, base.decisionDigest);
+});
+
+test("Meta Decision rejects any attempt to promote price-action context into independent authority", () => {
+  const result = buildAdaptiveMultiEvidenceMetaDecisionV2(input({
+    regimeRouter: router({
+      priceActionAuthority: "INDEPENDENT_VOTE",
+    }),
+  }));
+  assert.equal(result.status, "BLOCKED");
+  assert.equal(result.decision, "BLOCKED");
+  assert.ok(result.reasons.includes("V2_META_PRICE_ACTION_CONTEXT_AUTHORITY_INVALID"));
+  assert.equal(result.economicSampleCredit, 0);
   assert.equal(result.executionAuthority, "NONE");
 });
