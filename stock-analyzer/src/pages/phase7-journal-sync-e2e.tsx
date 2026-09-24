@@ -53,10 +53,30 @@ function unifiedJournal() {
     id: 'phase7-unified-trade', source: 'APP_PAPER', broker: 'APP', accountIdMasked: 'APP-****-LOCAL',
     market: 'CRYPTO_FUTURES', symbol: 'BTCUSDT', positionSide: 'LONG', currency: 'USDT', status: 'CLOSED',
     openedAt: '2026-08-02T05:00:00.000Z', closedAt: NOW, entryPrice: 100, exitPrice: 110,
-    initialEntry: { orderId: 'entry-1', at: '2026-08-02T05:00:00.000Z', price: 100, quantity: 1, fees: 0.1, tax: 0 },
-    additions: [], partialExits: [], finalExit: { orderId: 'exit-1', at: NOW, price: 110, quantity: 1, fees: 0.1, tax: 0 },
+    initialEntry: {
+      orderId: 'entry-1', at: '2026-08-02T05:00:00.000Z', price: 100, quantity: 1, fees: 0.1, tax: 0,
+      costEvidence: {
+        status: 'READY', reasons: [],
+        fees: { status: 'READY', source: 'paper-journal:entry-fee', reason: null },
+        tax: { status: 'READY', source: 'paper-journal:entry-tax', reason: null },
+      },
+    },
+    additions: [], partialExits: [], finalExit: {
+      orderId: 'exit-1', at: NOW, price: 110, quantity: 1, fees: 0.1, tax: 0,
+      costEvidence: {
+        status: 'READY', reasons: [],
+        fees: { status: 'READY', source: 'paper-journal:exit-fee', reason: null },
+        tax: { status: 'READY', source: 'paper-journal:exit-tax', reason: null },
+      },
+    },
     totalQuantity: 1, closedQuantity: 1, remainingQuantity: 0, holdingTimeMs: 7_200_000,
-    grossPnl: 10, fees: 0.2, tax: 0, netPnl: 9.8, netReturnPercent: 9.8,
+    grossPnl: 10, fees: 0.2, tax: 0,
+    costEvidence: {
+      status: 'READY', reasons: [],
+      fees: { status: 'READY', source: 'paper-journal:fees', reason: null },
+      tax: { status: 'READY', source: 'paper-journal:tax', reason: null },
+    },
+    netPnl: 9.8, netReturnPercent: 9.8,
     strategy: 'breakout', timeframe: '15m', stopLossPrice: 95, targetPrice: 110, ruleViolation: false, warnings: [],
     technicalSnapshot: { snapshotId: 'phase7-snapshot', contextSource: 'PRE_TRADE_SNAPSHOT', capturedAt: '2026-08-02T04:59:00.000Z', timeframe: '15m', price: 100, rsi: 56, macd: 1, macdSignal: 0.5, movingAverageFast: 99, movingAverageSlow: 97, support: 95, resistance: 110, volumeRatio: 1.4, volatilityPercent: 2, signalScore: 84, marketRegime: 'TREND', marketStructure: 'HIGHER_HIGH', signalReasons: ['trend'] },
     review: { performanceScore: 99, qualityScore: 90, grade: 'A', good: ['진입 전 기술 분석 스냅샷을 보존했습니다.'], bad: [], improvements: [], mistakes: [], deterministic: true, externalAiCalled: false },
