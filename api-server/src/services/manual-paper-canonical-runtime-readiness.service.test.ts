@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   probeManualPaperCanonicalRuntimeReadiness,
 } from './manual-paper-canonical-runtime-readiness.service';
+import { manualPaperEvidenceSha256 } from './manual-paper-canonical-contract.service';
 
 const SHA = 'a'.repeat(40);
 const ACCOUNT_DIGEST = 'b'.repeat(64);
@@ -10,6 +11,130 @@ const STATE_ROOT = '/opt/stock-app-data/paper-forward-v1';
 const SNAPSHOT_PATH = `${STATE_ROOT}/publisher/paper-state-v2.json`;
 const ARTIFACT_ROOT = '/opt/stock-app-data/forward-observer-v1';
 const RECEIPT_ROOT = '/opt/stock-app-data/manual-paper-validation-receipts-v1';
+const NOW = Date.parse('2026-09-24T08:00:00.000Z');
+const CANDIDATE_ID = `paper-candidate-v1:${'c'.repeat(64)}`;
+const BINDING_DIGEST = '3'.repeat(64);
+const EXIT_TRIGGER_ID = '1'.repeat(64);
+const EXIT_EXECUTION_ID = '2'.repeat(64);
+
+function durableComponent(name: string) {
+  return {
+    valuePercent: name === 'tax' ? 0 : 0.01,
+    source: `public:${name}`,
+    quality: name === 'tax' ? 'NOT_APPLICABLE' : 'OBSERVED',
+    observedAtMs: NOW - 1_000,
+  };
+}
+
+function durablePosition(researchSha = SHA, missingComponent?: string) {
+  const components: Record<string, any> = {
+    commission: durableComponent('commission'),
+    tax: durableComponent('tax'),
+    spread: durableComponent('spread'),
+    slippage: durableComponent('slippage'),
+    funding: durableComponent('funding'),
+    latency: durableComponent('latency'),
+    liquidityImpact: durableComponent('liquidityImpact'),
+    partialFillImpact: durableComponent('partialFillImpact'),
+  };
+  if (missingComponent) delete components[missingComponent];
+  const trigger = {
+    exitTriggerId: EXIT_TRIGGER_ID,
+    triggeredAtMs: NOW,
+    positionId: 'natural-position-1',
+    paperSampleId: 'paper-sample-1',
+  };
+  return {
+    positionId: 'natural-position-1',
+    paperSampleId: 'paper-sample-1',
+    candidateId: CANDIDATE_ID,
+    researchCodeSha: researchSha,
+    costPolicyVersion: 'cost-v1',
+    entryTimestampMs: NOW,
+    entryCandidate: {
+      candidateId: CANDIDATE_ID,
+      execution: { dataEvidence: { maxAgeMs: 60_000 } },
+    },
+    entryCostProvenance: {
+      policyId: 'cost-v1',
+      providerProvenance: 'bitget-public-owner',
+      components,
+    },
+    lifecycle: { pendingExit: trigger },
+  };
+}
+
+function packetPayload(packet: Record<string, any>) {
+  return {
+    schemaVersion: packet.schemaVersion,
+    positionId: packet.positionId,
+    paperSampleId: packet.paperSampleId,
+    candidateId: packet.candidateId,
+    researchCodeSha: packet.researchCodeSha,
+    exitTriggerId: packet.exitTriggerId,
+    exitExecutionId: packet.exitExecutionId,
+    evaluatedAtMs: packet.evaluatedAtMs,
+    bindingEvidenceDigest: packet.bindingEvidenceDigest,
+    position: packet.position,
+    sourceObservation: packet.sourceObservation,
+    authoritativeEvidence: packet.authoritativeEvidence,
+    trigger: packet.trigger,
+  };
+}
+
+function durableSettlement(position: any) {
+  const trigger = position.lifecycle.pendingExit;
+  const packet: Record<string, any> = {
+    schemaVersion: 'canonical-natural-settlement-owner-evidence-v1',
+    positionId: position.positionId,
+    paperSampleId: position.paperSampleId,
+    candidateId: position.candidateId,
+    researchCodeSha: position.researchCodeSha,
+    exitTriggerId: EXIT_TRIGGER_ID,
+    exitExecutionId: EXIT_EXECUTION_ID,
+    evaluatedAtMs: NOW,
+    bindingEvidenceDigest: BINDING_DIGEST,
+    position,
+    sourceObservation: { observationId: 'natural-exit-observation', maxAgeMs: 60_000 },
+    authoritativeEvidence: { schemaVersion: 'authoritative-natural-paper-trigger-settlement-evidence-v1' },
+    trigger,
+    unknownIsZero: false,
+    unavailableCostConvertedToZero: false,
+    naturalSampleCredit: 0,
+    executionAuthority: 'NONE',
+    liveOrderAllowed: false,
+    privateTradingApiAllowed: false,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+  };
+  packet.evidenceDigest = manualPaperEvidenceSha256(packetPayload(packet));
+  const settlementIdentity = {
+    candidateId: position.candidateId,
+    entryId: position.paperSampleId,
+    positionId: position.positionId,
+    exitTriggerId: EXIT_TRIGGER_ID,
+    exitExecutionId: EXIT_EXECUTION_ID,
+  };
+  const settlementId = manualPaperEvidenceSha256(settlementIdentity);
+  return {
+    settlementId,
+    settlementIdentity,
+    paperSampleId: position.paperSampleId,
+    entryId: position.paperSampleId,
+    positionId: position.positionId,
+    candidateId: position.candidateId,
+    researchCodeSha: position.researchCodeSha,
+    exitTriggerId: EXIT_TRIGGER_ID,
+    exitExecutionId: EXIT_EXECUTION_ID,
+    canonicalOwnerEvidence: packet,
+    canonicalOwnerEvidenceBindingDigest: manualPaperEvidenceSha256({
+      settlementId,
+      ownerEvidenceDigest: packet.evidenceDigest,
+      exitTriggerId: EXIT_TRIGGER_ID,
+      exitExecutionId: EXIT_EXECUTION_ID,
+    }),
+  };
+}
 
 function env(overrides: Record<string, string | undefined> = {}) {
   return {
@@ -49,6 +174,9 @@ function dependencies(input: {
   fallbackSnapshotPath?: string;
   missingArtifact?: boolean;
   receiptAccessFails?: boolean;
+  missingCostComponent?: string;
+  missingSettlement?: boolean;
+  rebindFails?: boolean;
 } = {}) {
   const bindingSha = input.bindingSha ?? SHA;
   const recurringSha = input.recurringSha ?? SHA;
@@ -68,7 +196,12 @@ function dependencies(input: {
         return JSON.stringify({ schemaVersion: 'fixture' });
       }
       if (path.endsWith('/state/recurring-paper-loop.json')) {
-        return JSON.stringify({ identity: { researchCodeSha: recurringSha } });
+        const position = durablePosition(recurringSha, input.missingCostComponent);
+        return JSON.stringify({
+          identity: { researchCodeSha: recurringSha },
+          positions: [position],
+          settlements: input.missingSettlement ? [] : [durableSettlement(position)],
+        });
       }
       if (path.startsWith(ARTIFACT_ROOT)) {
         if (input.missingArtifact && path.endsWith('/manifest.json')) throw new Error('missing');
@@ -93,6 +226,17 @@ function dependencies(input: {
     validateRecurringState(raw: unknown) {
       return raw;
     },
+    rebindSettlementEvidence(inputValue: any) {
+      if (input.rebindFails) return { status: 'BLOCKED', fullCostReady: false };
+      return {
+        status: 'PRESENT',
+        fullCostReady: true,
+        evidenceDigest: BINDING_DIGEST,
+        exitTriggerId: EXIT_TRIGGER_ID,
+        exitExecutionId: EXIT_EXECUTION_ID,
+        observation: inputValue?.observation,
+      };
+    },
   };
 }
 
@@ -100,7 +244,7 @@ test('complete read-only evidence is ready for activation review without enablin
   const result = await probeManualPaperCanonicalRuntimeReadiness({
     expectedMainSha: SHA,
     env: env(),
-    nowMs: Date.parse('2026-09-24T08:00:00.000Z'),
+    nowMs: NOW,
     dependencies: dependencies(),
   });
 
@@ -113,6 +257,9 @@ test('complete read-only evidence is ready for activation review without enablin
   assert.equal(result.paperStateConfigurationMode, 'RUNTIME_BINDING');
   assert.equal(result.paperStateSnapshotReady, true);
   assert.equal(result.naturalPaperStateReady, true);
+  assert.equal(result.fullCostComponentsReady, true);
+  assert.equal(result.settlementDurablePacketReady, true);
+  assert.equal(result.closePositionCanonicalRebindReady, true);
   assert.equal(result.forwardObserverArtifactsReady, true);
   assert.equal(result.validationReceiptPathReady, true);
   assert.equal(result.safetyBoundaryReady, true);
@@ -225,4 +372,34 @@ test('DEPLOY_SHA must equal the explicitly supplied current main', async () => {
   assert.equal(result.readyForActivationReview, false);
   assert.equal(result.deployShaBound, false);
   assert.ok(result.blockers.includes('PAPER_CANONICAL_DEPLOY_SHA_MISMATCH'));
+});
+
+
+test('missing Full Cost, settlement packet, or canonical rebind stays fail-closed', async () => {
+  const noCost = await probeManualPaperCanonicalRuntimeReadiness({
+    expectedMainSha: SHA,
+    env: env(),
+    dependencies: dependencies({ missingCostComponent: 'partialFillImpact' }),
+  });
+  assert.equal(noCost.fullCostComponentsReady, false);
+  assert.ok(noCost.blockers.includes('PAPER_CANONICAL_FULL_COST_EIGHT_COMPONENTS_NOT_READY'));
+
+  const noSettlement = await probeManualPaperCanonicalRuntimeReadiness({
+    expectedMainSha: SHA,
+    env: env(),
+    dependencies: dependencies({ missingSettlement: true }),
+  });
+  assert.equal(noSettlement.settlementDurablePacketReady, false);
+  assert.equal(noSettlement.closePositionCanonicalRebindReady, false);
+  assert.ok(noSettlement.blockers.includes('PAPER_CANONICAL_SETTLEMENT_DURABLE_PACKET_NOT_READY'));
+  assert.ok(noSettlement.blockers.includes('PAPER_CANONICAL_CLOSE_POSITION_REBIND_NOT_READY'));
+
+  const failedRebind = await probeManualPaperCanonicalRuntimeReadiness({
+    expectedMainSha: SHA,
+    env: env(),
+    dependencies: dependencies({ rebindFails: true }),
+  });
+  assert.equal(failedRebind.settlementDurablePacketReady, true);
+  assert.equal(failedRebind.closePositionCanonicalRebindReady, false);
+  assert.ok(failedRebind.blockers.includes('PAPER_CANONICAL_CLOSE_POSITION_REBIND_NOT_READY'));
 });
