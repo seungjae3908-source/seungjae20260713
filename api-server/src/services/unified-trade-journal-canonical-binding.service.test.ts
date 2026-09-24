@@ -88,7 +88,43 @@ function syncedJournalPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function canonicalLineage() {
+function canonicalLineage(settlementMode: 'none'|'valid'|'invalid' = 'none') {
+  const fullCost = {
+    evidenceDigest: 'full-cost-evidence-digest-1',
+    exitTriggerId: 'exit-trigger-1',
+    exitExecutionId: 'exit-execution-1',
+  };
+  const settlementIdentity = {
+    candidateId: identity.candidateId,
+    entryId: 'paper-sample-1',
+    positionId: 'natural-position-1',
+    market: identity.market,
+    symbol: identity.symbol,
+    timeframe: identity.timeframe,
+    side: identity.side,
+    parameterDigest: identity.parameterDigest,
+    accountMode: identity.accountMode,
+    costEvidenceDigest: fullCost.evidenceDigest,
+  };
+  const settlement = {
+    settlementId: manualPaperEvidenceSha256(settlementIdentity),
+    settlementIdentity,
+    candidateId: identity.candidateId,
+    strategyId: identity.strategyId,
+    parameterHash: identity.parameterHash,
+    parameterDigest: identity.parameterDigest,
+    market: identity.market,
+    symbol: identity.symbol,
+    timeframe: identity.timeframe,
+    accountMode: identity.accountMode,
+    researchCodeSha: identity.researchCodeSha,
+    positionId: 'natural-position-1',
+    entryId: 'paper-sample-1',
+    entryDirection: identity.side,
+    exitTriggerId: settlementMode === 'invalid' ? 'forged-trigger' : fullCost.exitTriggerId,
+    exitExecutionId: fullCost.exitExecutionId,
+    lifecycleEvidence: { costEvidence: fullCost },
+  };
   return {
     identity,
     naturalPositionId: 'natural-position-1',
@@ -96,14 +132,21 @@ function canonicalLineage() {
     sample: {},
     entryCostEvidence: {},
     validationReceipt: validationReceipt(),
+    ...(settlementMode === 'none' ? {} : { settlement, fullCost }),
     naturalSampleCredit: 0 as const,
     executionAuthority: 'NONE' as const,
   };
 }
 
-function ownerState(options: { canonical?: boolean; entryPrice?: number } = {}) {
+function ownerState(options: {
+  canonical?: boolean;
+  entryPrice?: number;
+  grossPnl?: number;
+  settlementMode?: 'none'|'valid'|'invalid';
+} = {}) {
   const canonical = options.canonical ?? true;
   const entryPrice = options.entryPrice ?? 100;
+  const grossPnl = options.grossPnl ?? 0;
   return {
     journal: [{
       id: 'journal-1',
@@ -133,8 +176,8 @@ function ownerState(options: { canonical?: boolean; entryPrice?: number } = {}) 
       exitFee: 0,
       slippageCost: 0,
       fundingCost: 0,
-      grossPnl: 0,
-      netPnl: -0.1,
+      grossPnl,
+      netPnl: grossPnl - 0.1,
       rMultiple: null,
       exitReason: null,
       dataStatusAtEntry: 'READY',
@@ -144,7 +187,7 @@ function ownerState(options: { canonical?: boolean; entryPrice?: number } = {}) 
       ruleViolation: false,
       status: 'open',
       note: '',
-      ...(canonical ? { canonicalPaper: canonicalLineage() } : {}),
+      ...(canonical ? { canonicalPaper: canonicalLineage(options.settlementMode ?? 'none') } : {}),
     }],
   } as unknown as PaperTradingState;
 }
@@ -205,6 +248,38 @@ test('synced journal economic identity mismatch fails closed', () => {
   assert.equal(result.trades[0]?.canonicalResearchBinding.status, 'MISMATCH');
   assert.equal(result.trades[0]?.canonicalResearchBinding.reason, 'SYNCED_JOURNAL_OWNER_STATE_MISMATCH');
   assert.equal(result.canonicalResearchBinding.mismatchTradeCount, 1);
+});
+
+test('synced journal gross PnL tampering fails closed before candidate binding', () => {
+  const journal = buildUnifiedTradeJournal([syncedJournalPayload({ grossPnl: 5 })], { range: 'ALL' }, NOW);
+  const result = bindCanonicalResearchToUnifiedJournal(journal, {
+    status: 'PRESENT',
+    sourceSha: SOURCE_SHA,
+    state: ownerState({ grossPnl: 0 }),
+  }, NOW_MS);
+  assert.equal(result.trades[0]?.canonicalResearchBinding.status, 'MISMATCH');
+  assert.equal(result.trades[0]?.canonicalResearchBinding.reason, 'SYNCED_JOURNAL_OWNER_STATE_MISMATCH');
+});
+
+test('only full canonical settlement identity sets settlementBindingVerified', () => {
+  const journal = buildUnifiedTradeJournal([syncedJournalPayload()], { range: 'ALL' }, NOW);
+  const valid = bindCanonicalResearchToUnifiedJournal(journal, {
+    status: 'PRESENT',
+    sourceSha: SOURCE_SHA,
+    state: ownerState({ settlementMode: 'valid' }),
+  }, NOW_MS);
+  assert.equal(valid.trades[0]?.canonicalResearchBinding.status, 'VERIFIED');
+  assert.equal(valid.trades[0]?.canonicalResearchBinding.settlementBindingVerified, true);
+  assert.ok(valid.trades[0]?.canonicalResearchBinding.settlementId);
+
+  const invalid = bindCanonicalResearchToUnifiedJournal(journal, {
+    status: 'PRESENT',
+    sourceSha: SOURCE_SHA,
+    state: ownerState({ settlementMode: 'invalid' }),
+  }, NOW_MS);
+  assert.equal(invalid.trades[0]?.canonicalResearchBinding.status, 'VERIFIED');
+  assert.equal(invalid.trades[0]?.canonicalResearchBinding.settlementBindingVerified, false);
+  assert.equal(invalid.trades[0]?.canonicalResearchBinding.settlementId, null);
 });
 
 test('owner lineage bound to a different deploy SHA cannot verify', () => {
