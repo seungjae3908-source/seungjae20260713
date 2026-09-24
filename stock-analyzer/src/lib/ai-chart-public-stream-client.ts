@@ -166,6 +166,7 @@ export function createAiChartPublicStreamClient(
         || reason === 'STREAM_BUFFER_OVERFLOW'
         || reason === 'SUBSCRIBE_SEND_FAILED'
         || reason === 'HEARTBEAT_SEND_FAILED'
+        || reason === 'PROTOCOL_FAILURE'
         || reason === 'RECONNECT_LIMIT_REACHED')
     ) {
       providerFallbackUntilMs.set(fallbackKey, now() + subscription.staleAfterMs * 2);
@@ -226,11 +227,16 @@ export function createAiChartPublicStreamClient(
       const batch = pendingEvents;
       pendingEvents = [];
       let accepted = false;
-      if (options.onTrades) {
-        accepted = options.onTrades(batch) !== false;
-      } else if (options.onTrade) {
-        for (const event of batch) options.onTrade(event);
-        accepted = true;
+      try {
+        if (options.onTrades) {
+          accepted = options.onTrades(batch) !== false;
+        } else if (options.onTrade) {
+          for (const event of batch) options.onTrade(event);
+          accepted = true;
+        }
+      } catch {
+        forceFallback('PROTOCOL_FAILURE');
+        return;
       }
       if (!accepted) {
         options.onDiagnostic?.({ ...snapshot(), reason: 'STREAM_BATCH_REJECTED' });
