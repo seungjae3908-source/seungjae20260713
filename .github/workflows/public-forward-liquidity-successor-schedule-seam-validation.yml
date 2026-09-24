@@ -264,6 +264,16 @@ jobs:
           test "$(grep -Fc "needs.validate-contract.outputs.activation_authorized == 'true'" "$workflow")" -eq 1
           test "$(grep -Fc 'SUCCESSOR_V3_PRE_COHORT_ACTIVATION_BLOCKED' "$workflow")" -ge 1
           test "$(grep -Fc 'SUCCESSOR_V3_EXPLICIT_ACTIVATION_RECEIPT_MISSING' "$workflow")" -ge 1
+          test "$(grep -Ec "requiredRun[.]name !== 'Application CI'" "$workflow")" -eq 1
+          test "$(grep -Ec "requiredRun[.]path !== '[.]github/workflows/futures-public-network-smoke[.]yml'" "$workflow")" -eq 1
+          test "$(grep -Ec 'Number[(]requiredRun[.]workflow_id[)] !== 325169344' "$workflow")" -eq 1
+          test "$(grep -Ec "requiredRun[.]event !== 'push'" "$workflow")" -eq 1
+          test "$(grep -Ec "requiredRun[.]head_branch !== 'main'" "$workflow")" -eq 1
+          test "$(grep -Ec 'Number[(]requiredRun[.]run_attempt[)] !== 1' "$workflow")" -eq 1
+          test "$(grep -Ec 'SUCCESSOR_V3_REQUIRED_CI_WORKFLOW_IDENTITY_REJECTED' "$workflow")" -eq 1
+          test "$(grep -Ec 'SUCCESSOR_V3_REQUIRED_CI_TRIGGER_IDENTITY_REJECTED' "$workflow")" -eq 1
+          test "$(grep -Ec 'SUCCESSOR_V3_REQUIRED_CI_REPLAY_ATTEMPT_REJECTED' "$workflow")" -eq 1
+          test "$(grep -Ec 'SUCCESSOR_V3_REQUIRED_CI_PROVENANCE_REJECTED' "$workflow")" -eq 1
           ! grep -Fq 'Merging an activation binding to the default branch is the activation event' "$workflow"
           test "$GITHUB_EVENT_NAME" = 'pull_request'
           test "$GITHUB_REF" != 'refs/heads/main'
