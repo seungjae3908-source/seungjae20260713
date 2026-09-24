@@ -39,6 +39,7 @@ import {
   type ResearchProductStatus,
 } from '@/lib/research-center-product';
 import { buildDebatePreview, extractResearchAiDebate } from '@/lib/research-center-view';
+import { fetchResearchJournalBinding, type ResearchJournalBindingReadback } from '@/lib/research-journal-binding';
 import { fetchStrategyPromotions, type StrategyPromotionResponse } from '@/lib/strategy-promotion';
 
 type ResearchTab = 'overview' | 'ai-lab' | 'evidence' | 'paper';
@@ -544,7 +545,19 @@ function CostRow({ row }: { row: CostDisplayRow }) {
   );
 }
 
-function PaperTab({ overview, cards }: { overview: ResearchCenterOverview; cards: ResearchPipelineCard[] }) {
+function PaperTab({
+  overview,
+  cards,
+  journalBinding,
+  journalBindingLoading,
+  journalBindingError,
+}: {
+  overview: ResearchCenterOverview;
+  cards: ResearchPipelineCard[];
+  journalBinding: ResearchJournalBindingReadback | null;
+  journalBindingLoading: boolean;
+  journalBindingError: boolean;
+}) {
   const paper = cards.find((card) => card.key === 'paper')!;
   const ledger = overview.paper.ledger;
   const performance = overview.paper.candidatePerformance ?? {
@@ -641,7 +654,12 @@ function PaperTab({ overview, cards }: { overview: ResearchCenterOverview; cards
         <p className="mt-3 text-[10px] text-muted-foreground">시장 독립 표본 N과 후보별 매치·거래 수를 분리합니다. 후보 증거가 없으면 일반 Paper ledger 수를 빌려오지 않습니다.</p>
       </article>
 
-      <PaperClosedLoopObserver overview={overview} />
+      <PaperClosedLoopObserver
+        overview={overview}
+        journalBinding={journalBinding}
+        journalBindingLoading={journalBindingLoading}
+        journalBindingError={journalBindingError}
+      />
 
       <section className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6" aria-label="모의매매 핵심 KPI">
         <PaperKpi label="모의 평가금액" value="미측정" state="unmeasured" />
@@ -710,14 +728,22 @@ export default function ResearchCenterPage() {
     staleTime: 60_000,
     retry: 1,
   });
+  const journalBindingQuery = useQuery({
+    queryKey: ['research-center', 'paper-journal-binding'],
+    queryFn: ({ signal }) => fetchResearchJournalBinding(signal),
+    enabled: tab === 'paper',
+    staleTime: 30_000,
+    retry: 0,
+  });
   const overview = overviewQuery.data;
   const promotion = promotionQuery.data ?? null;
   const cards = useMemo(() => overview ? buildResearchPipeline(overview, promotion) : [], [overview, promotion]);
-  const refreshing = overviewQuery.isFetching || promotionQuery.isFetching;
+  const refreshing = overviewQuery.isFetching || promotionQuery.isFetching || (tab === 'paper' && journalBindingQuery.isFetching);
 
   function refreshAll() {
     void overviewQuery.refetch();
     void promotionQuery.refetch();
+    if (tab === 'paper') void journalBindingQuery.refetch();
   }
 
   function selectCard(key: ResearchPipelineKey) {
@@ -793,7 +819,15 @@ export default function ResearchCenterPage() {
             {tab === 'overview' ? <OverviewTab overview={overview} promotion={promotion} cards={cards} selected={selected} onSelect={selectCard} /> : null}
             {tab === 'ai-lab' ? <AiLabTab overview={overview} cards={cards} /> : null}
             {tab === 'evidence' ? <EvidenceTab overview={overview} promotion={promotion} cards={cards} /> : null}
-            {tab === 'paper' ? <PaperTab overview={overview} cards={cards} /> : null}
+            {tab === 'paper' ? (
+              <PaperTab
+                overview={overview}
+                cards={cards}
+                journalBinding={journalBindingQuery.data ?? null}
+                journalBindingLoading={journalBindingQuery.isFetching}
+                journalBindingError={journalBindingQuery.isError}
+              />
+            ) : null}
           </>
         ) : null}
       </div>
