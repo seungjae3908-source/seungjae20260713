@@ -110,7 +110,7 @@ const TONE: Record<Tone, string> = {
 };
 
 
-function SummaryCard({ icon, label, value, detail, tone, selected, onClick }: {
+function SummaryCard({ icon, label, value, detail, tone, selected, onClick, testId }: {
   icon: React.ReactNode;
   label: string;
   value: string;
@@ -118,12 +118,15 @@ function SummaryCard({ icon, label, value, detail, tone, selected, onClick }: {
   tone: Tone;
   selected?: boolean;
   onClick?: () => void;
+  testId: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={selected}
+      aria-label={`${label} · ${value}`}
+      data-testid={testId}
       className={
         'min-w-0 rounded-2xl border bg-card p-3 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary '
         + (selected ? 'border-primary ring-1 ring-primary/25' : 'border-card-border')
@@ -226,10 +229,10 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
                 </section>
 
                 <section className="grid grid-cols-2 gap-2" aria-label="연구 핵심 상태">
-                  <SummaryCard selected={selected === 'research'} onClick={() => setSelected('research')} icon={<Activity className="h-5 w-5" />} label="연구 상태" {...research} />
-                  <SummaryCard selected={selected === 'data'} onClick={() => setSelected('data')} icon={<Database className="h-5 w-5" />} label="데이터 수집" {...dataFactory} />
-                  <SummaryCard selected={selected === 'paper'} onClick={() => setSelected('paper')} icon={<WalletCards className="h-5 w-5" />} label="모의매매 표본" {...sample} />
-                  <SummaryCard selected={selected === 'profitability'} onClick={() => setSelected('profitability')} icon={<TrendingUp className="h-5 w-5" />} label="수익성 검증" {...profitability} />
+                  <SummaryCard testId="research-summary-research" selected={selected === 'research'} onClick={() => setSelected('research')} icon={<Activity className="h-5 w-5" />} label="연구 상태" {...research} />
+                  <SummaryCard testId="research-summary-data" selected={selected === 'data'} onClick={() => setSelected('data')} icon={<Database className="h-5 w-5" />} label="데이터 수집" {...dataFactory} />
+                  <SummaryCard testId="research-summary-paper" selected={selected === 'paper'} onClick={() => setSelected('paper')} icon={<WalletCards className="h-5 w-5" />} label="모의매매 표본" {...sample} />
+                  <SummaryCard testId="research-summary-profitability" selected={selected === 'profitability'} onClick={() => setSelected('profitability')} icon={<TrendingUp className="h-5 w-5" />} label="수익성 검증" {...profitability} />
                 </section>
 
                 {(() => {
