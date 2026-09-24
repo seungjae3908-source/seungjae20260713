@@ -14,7 +14,18 @@ function router(overrides = {}) {
     lineageId: "ADAPTIVE_MULTI_EVIDENCE_V2",
     status: "READY_FOR_STRATEGY_ROUTING_RESEARCH_ONLY",
     regime: "TREND_UP",
-    routing: { allowedStrategyFamilies: ["TREND_FOLLOWING"] },
+    regimeDigest: "d".repeat(64),
+    routing: {
+      allowedStrategyFamilies: ["TREND_FOLLOWING"],
+      priceActionAction: "CONTEXT_RECORDED_NO_AUTOMATIC_ROUTE_OVERRIDE",
+    },
+    priceActionContext: {
+      status: "AVAILABLE",
+      authority: "CONTEXT_ONLY_NO_INDEPENDENT_VOTE",
+      structureTransition: "BOS_UP",
+    },
+    priceActionContextDigest: "e".repeat(64),
+    priceActionAuthority: "CONTEXT_ONLY_NO_INDEPENDENT_VOTE",
     executionAuthority: "NONE",
     ...overrides,
   };
@@ -152,5 +163,60 @@ test("Frozen V1 lineage and execution authority are rejected", () => {
   assert.equal(result.autoTrading, false);
   assert.equal(result.realOrderEnabled, false);
   assert.equal(result.privateTradingApiAllowed, false);
+  assert.equal(result.executionAuthority, "NONE");
+});
+
+
+test("regime and price-action context are retained only as non-ranking tournament provenance", () => {
+  const base = buildAdaptiveMultiEvidenceFormulaTournamentV2({
+    regimeRouter: router(),
+    independence: independence(),
+    tournamentResult: ownerResult(),
+    candidateIdentities: [identity()],
+    maxTrialBudget: 32,
+  });
+  assert.equal(base.status, "READY_FOR_VALIDATION_PIPELINE");
+  assert.equal(base.researchContext.regime, "TREND_UP");
+  assert.equal(base.researchContext.regimeDigest, "d".repeat(64));
+  assert.equal(base.researchContext.priceActionStatus, "AVAILABLE");
+  assert.equal(base.researchContext.priceActionContextDigest, "e".repeat(64));
+  assert.equal(base.researchContext.priceActionAuthority, "CONTEXT_ONLY_NO_INDEPENDENT_VOTE");
+  assert.equal(base.researchContext.affectsTrialRanking, false);
+  assert.equal(base.researchContext.affectsChampionSelection, false);
+  assert.equal(base.researchContext.countedAsIndependentVote, false);
+  assert.equal(base.researchContext.economicSampleCredit, 0);
+  assert.match(base.researchContextDigest, /^[a-f0-9]{64}$/u);
+
+  const changedContext = buildAdaptiveMultiEvidenceFormulaTournamentV2({
+    regimeRouter: router({
+      priceActionContextDigest: "f".repeat(64),
+      priceActionContext: {
+        ...router().priceActionContext,
+        structureTransition: "CHOCH_DOWN",
+      },
+    }),
+    independence: independence(),
+    tournamentResult: ownerResult(),
+    candidateIdentities: [identity()],
+    maxTrialBudget: 32,
+  });
+  assert.equal(changedContext.totalTrialCount, base.totalTrialCount);
+  assert.deepEqual(changedContext.candidateIdentities, base.candidateIdentities);
+  assert.equal(changedContext.researchSurvivorCount, base.researchSurvivorCount);
+  assert.equal(changedContext.ownerChampion, null);
+  assert.notEqual(changedContext.researchContextDigest, base.researchContextDigest);
+});
+
+test("Formula Tournament rejects price-action provenance that tries to become independent authority", () => {
+  const result = buildAdaptiveMultiEvidenceFormulaTournamentV2({
+    regimeRouter: router({ priceActionAuthority: "INDEPENDENT_VOTE" }),
+    independence: independence(),
+    tournamentResult: ownerResult(),
+    candidateIdentities: [identity()],
+    maxTrialBudget: 32,
+  });
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.ok(result.blockers.includes("V2_FORMULA_PRICE_ACTION_CONTEXT_PROVENANCE_INVALID"));
+  assert.equal(result.economicSampleCredit, 0);
   assert.equal(result.executionAuthority, "NONE");
 });
