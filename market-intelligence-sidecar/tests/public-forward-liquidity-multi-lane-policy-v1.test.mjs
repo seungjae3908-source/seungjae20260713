@@ -278,6 +278,43 @@ test('current successor lane rejects stale Phase 2 lane authority before lookup 
   assert.equal(collectorN, 0);
 });
 
+test('rotated successor V3 proceeds on its own authority after stale Phase 2 runtime is superseded', SUCCESSOR_ACTIVE_TEST, async () => {
+  const slot = buildSuccessorScheduleReliabilityV3SlotDescriptor(0);
+  let lookupN = 0;
+  let collectorN = 0;
+  const result = await executeSuccessorScheduledCaptureSeamV3({
+    eventName: 'schedule',
+    scheduleExpression: '17 * * * *',
+    scheduledRunCreatedAtMs: slot.nominalScheduledAtMs,
+    actualRunStartedAtMs: slot.nominalScheduledAtMs,
+    runAttempt: 1,
+    runId: '41000000004',
+    repository: 'seungjae3908-source/seungjae20260713',
+    exactMainSha: EXACT_MAIN,
+    contract: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+    multiLaneActivation: null,
+    hasPriorCreditedSlot: async (lookup) => {
+      lookupN += 1;
+      assert.equal(lookup.laneId, null);
+      assert.equal(lookup.multiLanePolicyDigest, null);
+      return false;
+    },
+    getRemoteMainSha: async () => EXACT_MAIN,
+    clock: () => slot.nominalScheduledAtMs + 5_000,
+    collector: async () => {
+      collectorN += 1;
+      return validBatch(slot.nominalScheduledAtMs);
+    },
+  });
+  assert.equal(result.captureReceipt.captureStatus, 'PRESENT');
+  assert.equal(result.captureReceipt.prospectiveSlotCredit, 1);
+  assert.equal(result.captureReceipt.laneId ?? null, null);
+  assert.equal(result.captureReceipt.multiLanePolicyDigest ?? null, null);
+  assert.equal(result.captureReceipt.blockers.length, 0);
+  assert.equal(lookupN, 1);
+  assert.equal(collectorN, 1);
+});
+
 test('UTC27 scheduled seam preserves diagnostic evidence but grants zero additional credit', SUCCESSOR_ACTIVE_TEST, async () => {
   const activation = historicalPhase2Activation();
   const slot = buildSuccessorScheduleReliabilityV3SlotDescriptor(0);
@@ -361,4 +398,8 @@ test('Phase 2 workflow wiring preserves automatic-only safety and separates lane
   assert.ok(captureRunner.includes('status=completed'));
   assert.ok(!captureRunner.includes('status=success'));
   assert.ok(captureRunner.includes('PHASE2_FIRST_POLICY_CI_UNVERIFIED'));
+  assert.ok(captureRunner.includes('SUPERSEDED_BY_SUCCESSOR_V3_COHORT_ROTATION'));
+  assert.ok(captureRunner.includes("blocker === 'PHASE2_V3_COHORT_START_MISMATCH'"));
+  assert.ok(captureRunner.includes('phase2Credit: 0'));
+  assert.ok(captureRunner.includes('successorV3AuthorityChanged: false'));
 });
