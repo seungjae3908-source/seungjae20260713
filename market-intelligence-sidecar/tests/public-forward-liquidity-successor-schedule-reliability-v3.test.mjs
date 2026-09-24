@@ -561,7 +561,7 @@ test('V3 completion after +10 minutes preserves raw evidence but earns zero cred
   assert.equal(result.captureReceipt.rawBatchDigest, sha256(canonicalJson(batch)));
 });
 
-test('Draft workflow carries all three frozen triggers, queue:max, and no manual activation surface', async () => {
+test('merged V3 binding stays inert until an explicit exact-main OWNER activation receipt exists', async () => {
   const workflow = await readFile(
     new URL(
       '../../.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml',
@@ -575,5 +575,32 @@ test('Draft workflow carries all three frozen triggers, queue:max, and no manual
   assert.match(workflow, /^\s{2}queue:\s+max\s*$/mu);
   assert.match(workflow, /^\s{2}cancel-in-progress:\s+false\s*$/mu);
   assert.doesNotMatch(workflow, /^\s{2}workflow_dispatch:\s*$/mu);
+  assert.match(workflow, /^\s{2}issues:\s+read\s*$/mu);
+  assert.match(workflow, /^\s{2}statuses:\s+read\s*$/mu);
+  assert.doesNotMatch(workflow, /^\s{2}issues:\s+write\s*$/mu);
+  assert.doesNotMatch(workflow, /^\s{2}statuses:\s+write\s*$/mu);
+  assert.match(
+    workflow,
+    /\/authorize-public-only-partial-fill-v3-schedule-activation/u,
+  );
+  assert.match(
+    workflow,
+    /\/revoke-public-only-partial-fill-v3-schedule-activation/u,
+  );
+  assert.match(
+    workflow,
+    /needs\.validate-contract\.outputs\.activation_authorized == 'true'/u,
+  );
+  assert.match(workflow, /SUCCESSOR_V3_PRE_COHORT_ACTIVATION_BLOCKED/u);
+  assert.match(workflow, /SUCCESSOR_V3_EXPLICIT_ACTIVATION_RECEIPT_MISSING/u);
+  assert.match(workflow, /SUCCESSOR_V3_EXPLICIT_ACTIVATION_REVOKED/u);
+  assert.match(workflow, /SUCCESSOR_V3_CURRENT_MAIN_REQUIRED_CI_NOT_6_OF_6/u);
+  assert.match(workflow, /comment\.author_association !== 'OWNER'/u);
+  assert.match(workflow, /comment\.user\?\.login !== 'seungjae3908-source'/u);
   assert.match(workflow, /capture-v3/u);
+  assert.match(workflow, /A merged V3 activation binding is inert by itself/u);
+  assert.doesNotMatch(
+    workflow,
+    /Merging an activation binding to the default branch is the activation event/u,
+  );
 });
