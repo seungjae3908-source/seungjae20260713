@@ -2,10 +2,10 @@ name: Public Forward Liquidity Successor Scheduled Capture
 
 # IMPORTANT GOVERNANCE BOUNDARY:
 # - V2 history and already-failed V2 slots remain immutable and receive zero V3 credit.
-# - A V3 activation binding may be validated on a non-default Draft PR, but PR events can never capture.
-# - Merging an activation binding to the default branch is the activation event and therefore
-#   requires separate exact PR Merge approval plus V3 schedule-activation authority.
-# - No replay/backfill/manual/synthetic sample credit is granted by validation.
+# - A V3 activation binding may be validated and merged without granting runtime schedule authority.
+# - The default branch must remain without schedule triggers until a separately approved activation
+#   change explicitly restores the canonical V3 cron entries.
+# - PR events can never capture, and no replay/backfill/manual/synthetic sample credit is granted.
 
 on:
   pull_request:
@@ -20,10 +20,6 @@ on:
       - 'market-intelligence-sidecar/config/public-forward-liquidity-multi-lane-prospective-policy-v1.json'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-multi-lane-policy-v1.test.mjs'
-  schedule:
-    - cron: '17 * * * *'
-    - cron: '27 * * * *'
-    - cron: '37 * * * *'
 
 permissions:
   contents: read
@@ -51,14 +47,13 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Verify V3 trigger, queue, and minimal permission contract
+      - name: Verify V3 inactive trigger, queue, and minimal permission contract
         shell: bash
         run: |
           set -euo pipefail
           workflow='.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
-          test "$(grep -Ec "^[[:space:]]{4}- cron: '17 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
-          test "$(grep -Ec "^[[:space:]]{4}- cron: '27 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
-          test "$(grep -Ec "^[[:space:]]{4}- cron: '37 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
+          ! grep -Eq '^[[:space:]]{2}schedule:[[:space:]]*$' "$workflow"
+          ! grep -Eq '^[[:space:]]*-[[:space:]]*cron:' "$workflow"
           test "$(grep -Ec "^[[:space:]]{2}queue:[[:space:]]+max[[:space:]]*$" "$workflow")" -eq 1
           test "$(grep -Ec "^[[:space:]]{2}cancel-in-progress:[[:space:]]+false[[:space:]]*$" "$workflow")" -eq 1
           ! grep -Eq '^[[:space:]]{2}workflow_dispatch:[[:space:]]*$' "$workflow"
