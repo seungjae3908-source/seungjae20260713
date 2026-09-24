@@ -345,9 +345,9 @@ export function createManualPaperCanonicalRuntimeEvidenceSource(
     if (request.candidateId === null) return undefined;
     if (!truthy(env.PAPER_CANONICAL_OWNER_BRIDGE_ENABLED)) {
       throw new PaperTradingError(
-        'CANONICAL_PAPER_RUNTIME_OWNER_BRIDGE_NOT_ACTIVATED',
-        'Canonical Paper runtime owner bridge가 아직 활성화되지 않았습니다.',
-        503,
+        'SERVER_OWNED_CANONICAL_PAPER_EVIDENCE_REQUIRED',
+        'Canonical Paper evidence가 누락되거나 동일 candidate와 일치하지 않습니다.',
+        400,
       );
     }
     return source(request);
