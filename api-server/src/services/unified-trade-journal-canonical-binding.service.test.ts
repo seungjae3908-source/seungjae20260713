@@ -13,6 +13,7 @@ const NOW_MS = NOW.getTime();
 const SOURCE_SHA = 'a'.repeat(40);
 const DATASET_DIGEST = 'b'.repeat(64);
 const RESULT_DIGEST = 'c'.repeat(64);
+const VERIFIED_AT_MS = NOW_MS - 120_000;
 
 const identity = {
   candidateId: 'candidate-authenticated-1',
@@ -37,7 +38,7 @@ function validationReceipt() {
     source: 'forward-observer',
     provenance: 'authenticated-owner-readback',
     status: 'VALIDATED' as const,
-    observedAtMs: NOW_MS - 1_000,
+    observedAtMs: VERIFIED_AT_MS - 1_000,
     maximumAgeMs: 60_000,
     synthetic: false as const,
     replay: false as const,
@@ -53,7 +54,7 @@ function validationReceipt() {
       ownerId: 'paper-owner',
       source: 'paper-state-publisher',
       provenance: 'immutable-snapshot',
-      verifiedAtMs: NOW_MS,
+      verifiedAtMs: VERIFIED_AT_MS,
       readbackVerified: true as const,
       validationPassed: true as const,
       receiptSha256: manualPaperEvidenceSha256(receipt),
