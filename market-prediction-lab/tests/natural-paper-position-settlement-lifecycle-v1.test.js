@@ -920,7 +920,7 @@ test("recurring caller freezes a new trigger before invoking the canonical cost 
   assert.equal(result.state.positions.length, 0);
   assert.equal(result.state.settlements.length, 1);
   assert.equal(result.state.settlements[0].exitReason, "TAKE_PROFIT");
-  assert.equal(result.state.settlements[0].settledAtMs, T0 + 1_000);
+  assert.equal(result.state.settlements[0].settledAtMs, evaluatedAtMs);
   assert.equal(collectedTrigger.exitTriggerId, result.state.settlements[0].lifecycleEvidence.exitTriggerId);
   assert.equal(result.state.settlements[0].exitExecutionId, result.state.settlements[0].lifecycleEvidence.exitExecutionId);
   assert.equal(result.state.settlements[0].settlementId, sha256(stableJson(result.state.settlements[0].settlementIdentity)));
