@@ -300,8 +300,7 @@ export function derivePublicForwardLiquidityMultiLaneActivation({
   const activationBoundaryMs = completeLeadSlotEndMs
     + CONFIG.activationPolicy.firstEligibleLaneScheduleMinuteUtc * 60_000;
   const v3Cohort = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyCore.cohort;
-  if (v3Cohort.startInclusiveMs != null
-    && v3Cohort.startInclusiveMs !== FROZEN_V3_COHORT_START_INCLUSIVE_MS) {
+  if (v3Cohort.startInclusiveMs !== FROZEN_V3_COHORT_START_INCLUSIVE_MS) {
     fail('PHASE2_V3_COHORT_START_MISMATCH');
   }
   const slotIndex = Math.floor(
@@ -395,13 +394,18 @@ export function resolvePublicForwardLiquidityMultiLaneCreditIdentity({
         .filter(([key]) => key !== 'activationBoundaryDigest')))) {
     fail('PHASE2_ACTIVATION_BINDING_INVALID');
   }
-  if (actual < activation.activationBoundaryMs || index < activation.activationSlotIndex) {
+  if (actual < activation.activationBoundaryMs) {
     return Object.freeze({ active: false, reason: 'PHASE2_PRE_ACTIVATION_OLD_POLICY' });
   }
-  const lane = laneRegistryMap().get(String(scheduleExpression ?? '').trim()) ?? null;
+  const schedule = String(scheduleExpression ?? '').trim();
+  const lane = laneRegistryMap().get(schedule) ?? null;
   if (!lane) {
-    if (String(scheduleExpression ?? '').trim() !== CONFIG.utc27Policy.scheduleIdentity) {
+    if (schedule !== CONFIG.utc27Policy.scheduleIdentity) {
       fail('PHASE2_SCHEDULE_IDENTITY_NOT_FROZEN');
+    }
+    if (SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound !== true
+      && index < activation.activationSlotIndex) {
+      return Object.freeze({ active: false, reason: 'PHASE2_PRE_ACTIVATION_OLD_POLICY' });
     }
     return Object.freeze({
       active: true,
@@ -412,8 +416,15 @@ export function resolvePublicForwardLiquidityMultiLaneCreditIdentity({
       reason: 'PHASE2_UTC27_ZERO_ADDITIONAL_CREDIT',
     });
   }
-  if (SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest != null
-    && SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest !== FROZEN_V3_COHORT_DIGEST) {
+  const successorCohortDigest = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest;
+  if (SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound === true
+    && successorCohortDigest !== FROZEN_V3_COHORT_DIGEST) {
+    fail('PHASE2_V3_COHORT_DIGEST_MISMATCH');
+  }
+  if (index < activation.activationSlotIndex) {
+    return Object.freeze({ active: false, reason: 'PHASE2_PRE_ACTIVATION_OLD_POLICY' });
+  }
+  if (successorCohortDigest !== FROZEN_V3_COHORT_DIGEST) {
     fail('PHASE2_V3_COHORT_DIGEST_MISMATCH');
   }
   const cohortDigest = FROZEN_V3_COHORT_DIGEST;
