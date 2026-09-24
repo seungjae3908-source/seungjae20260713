@@ -58,6 +58,8 @@ type Props = {
   futuresEnabled?: boolean;
 };
 
+type RunActionOutcome = 'applied' | 'busy' | 'failed';
+
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return <label className="grid gap-1 text-xs font-medium text-muted-foreground"><span>{label}</span>{children}</label>;
 }
@@ -77,6 +79,7 @@ export function PaperTradingPanel({
 }: Props) {
   const initial = useMemo(() => loadPaperState(storage), [storage]);
   const [state, setState] = useState(initial.state);
+  const stateRef = useRef(initial.state);
   const [form, setForm] = useState(DEFAULT_FORM);
   const [market, setMarket] = useState<FuturesMarketSnapshot | null>(null);
   const [rules, setRules] = useState<FuturesContractRules | null>(null);
@@ -90,6 +93,15 @@ export function PaperTradingPanel({
   const fileRef = useRef<HTMLInputElement>(null);
   const requestSequence = useRef(0);
   const actionInFlightRef = useRef(false);
+
+  const commitState = (next: PaperTradingState) => {
+    stateRef.current = next;
+    setState(next);
+  };
+
+  const updateState = (updater: (current: PaperTradingState) => PaperTradingState) => {
+    commitState(updater(stateRef.current));
+  };
 
   const openPositions = state.positions.filter((position) => position.status !== 'closed');
   const statistics = useMemo(() => calculatePaperStatistics(state.journal), [state.journal]);
@@ -156,16 +168,18 @@ export function PaperTradingPanel({
     return blocks;
   }, [form, futuresEnabled, market, rules]);
 
-  async function runAction(action: PaperTradingAction) {
-    if (actionInFlightRef.current || busy) return;
+  async function runAction(action: PaperTradingAction): Promise<RunActionOutcome> {
+    if (actionInFlightRef.current) return 'busy';
     actionInFlightRef.current = true;
     setBusy(true); setError(''); setNotice('');
     try {
-      const result = await execute(state, action);
-      setState(result.state);
+      const result = await execute(stateRef.current, action);
+      commitState(result.state);
       setNotice(result.duplicateEvent ? '중복 이벤트를 무시했습니다.' : result.warnings.join(' '));
+      return 'applied';
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '모의거래 작업을 처리하지 못했습니다.');
+      return 'failed';
     } finally {
       actionInFlightRef.current = false;
       setBusy(false);
@@ -186,8 +200,10 @@ export function PaperTradingPanel({
       targetClosePercent1: form.targetClosePercent1, targetClosePercent2: form.targetClosePercent2,
       strategyName: 'manual', marketRegime: 'manual',
     };
+    const currentState = stateRef.current;
+    const currentOpenPositions = currentState.positions.filter((position) => position.status !== 'closed');
     const riskInput: RiskEngineInput = {
-      market: 'crypto-futures', symbol: request.symbol, side: request.side, accountBalance: state.account.equity,
+      market: 'crypto-futures', symbol: request.symbol, side: request.side, accountBalance: currentState.account.equity,
       entryPrice: reference, stopLossPrice: request.stopLossPrice, targetPrice1: request.takeProfitPrice1,
       targetPrice2: request.takeProfitPrice2, leverage: request.leverage, riskPercent: form.riskPercent,
       entryFeeRate: 0.0006, exitFeeRate: 0.0006, slippageRate: 0.0005,
@@ -195,10 +211,10 @@ export function PaperTradingPanel({
       quantityPrecision: rules.quantityPrecision, minimumQuantity: rules.minimumQuantity,
       minimumNotional: rules.minimumNotional, maintenanceMarginRate: rules.maintenanceMarginRate,
       maximumLeverage: rules.maximumLeverage, contractRulesStatus: rules.status,
-      dailyRealizedPnl: state.riskState.dailyRealizedPnl, weeklyRealizedPnl: state.riskState.weeklyRealizedPnl,
-      consecutiveLosses: state.riskState.consecutiveLosses,
-      openExposure: openPositions.reduce((sum, item) => sum + item.notionalValue, 0),
-      sameDirectionExposure: openPositions.filter((item) => item.side === form.side).reduce((sum, item) => sum + item.notionalValue, 0),
+      dailyRealizedPnl: currentState.riskState.dailyRealizedPnl, weeklyRealizedPnl: currentState.riskState.weeklyRealizedPnl,
+      consecutiveLosses: currentState.riskState.consecutiveLosses,
+      openExposure: currentOpenPositions.reduce((sum, item) => sum + item.notionalValue, 0),
+      sameDirectionExposure: currentOpenPositions.filter((item) => item.side === form.side).reduce((sum, item) => sum + item.notionalValue, 0),
       dataStatus: market.status,
     };
     return { type: 'place_order', eventId: eventId('place'), request, market, contractRules: rules, riskInput };
@@ -214,9 +230,16 @@ export function PaperTradingPanel({
     try {
       const next = await loadMarket(form.symbol);
       if (sequence !== requestSequence.current) return;
-      setMarket(next);
       const price = next.markPrice ?? next.price;
-      if (price != null) await runAction({ type: 'mark_price', eventId: eventId('mark'), symbol: form.symbol, price, at: next.updatedAt });
+      if (price != null) {
+        const outcome = await runAction({ type: 'mark_price', eventId: eventId('mark'), symbol: form.symbol, price, at: next.updatedAt });
+        if (outcome === 'busy') {
+          setError('다른 모의거래 작업이 진행 중입니다. 시세 갱신을 다시 시도하세요.');
+          return;
+        }
+        if (outcome === 'failed') return;
+      }
+      setMarket(next);
     } catch (cause) { setError(cause instanceof Error ? cause.message : '시장 데이터를 갱신하지 못했습니다.'); }
   }
 
@@ -226,7 +249,8 @@ export function PaperTradingPanel({
     try {
       const candle = await loadCandle(form.symbol);
       if (!candle) throw new Error('완료된 캔들을 찾지 못했습니다.');
-      await runAction({ type: 'process_candle', eventId: eventId('candle'), candle });
+      const outcome = await runAction({ type: 'process_candle', eventId: eventId('candle'), candle });
+      if (outcome === 'busy') setError('다른 모의거래 작업이 진행 중입니다. 완료 봉 처리를 다시 시도하세요.');
     } catch (cause) { setError(cause instanceof Error ? cause.message : '완료 봉을 처리하지 못했습니다.'); }
   }
 
@@ -239,12 +263,12 @@ export function PaperTradingPanel({
   }
 
   async function importJson(file: File) {
-    try { setState(importPaperState(await file.text())); setNotice('모의거래 JSON을 가져왔습니다.'); setError(''); }
+    try { commitState(importPaperState(await file.text())); setNotice('모의거래 JSON을 가져왔습니다.'); setError(''); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'JSON을 가져오지 못했습니다.'); }
   }
 
   function updateNote(id: string, value: string) {
-    setState((current) => ({ ...current, journal: current.journal.map((entry) => entry.id === id ? { ...entry, note: value.slice(0, 2_000) } : entry) }));
+    updateState((current) => ({ ...current, journal: current.journal.map((entry) => entry.id === id ? { ...entry, note: value.slice(0, 2_000) } : entry) }));
   }
 
   return <main className="h-full overflow-y-auto overscroll-contain pb-28" data-testid="paper-trading-page">
@@ -300,6 +324,6 @@ export function PaperTradingPanel({
 
     {confirming ? <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 sm:items-center" role="dialog" aria-modal="true" aria-label="모의주문 확인"><div className="max-h-[85dvh] w-full max-w-md overflow-y-auto rounded-2xl bg-card p-4"><div className="flex justify-between"><h2 className="font-bold">모의주문 확인</h2><button aria-label="닫기" onClick={() => setConfirming(false)}><X /></button></div><p className="mt-3 text-sm">{form.symbol} {form.side === 'long' ? '롱' : '숏'} · {form.orderType}</p><p className="mt-2 text-sm font-bold">예상 최대손실: {money(state.account.equity * form.riskPercent / 100)}</p><div className="mt-2 rounded-xl bg-amber-500/10 p-3 text-xs">실제 주문은 전송되지 않습니다. 현재 모의 리스크 규칙으로 수량과 차단 여부를 계산하며 실거래 서버 검증이나 주문 권한은 사용하지 않습니다.</div><div className="mt-4 grid grid-cols-2 gap-2"><button className={buttonClass} onClick={() => setConfirming(false)}>취소</button><button data-testid="confirm-paper-order" className="rounded-lg bg-primary px-3 font-bold text-primary-foreground disabled:opacity-50" disabled={busy || localBlocks.length > 0} onClick={() => void confirmOrder()}>모의주문 확인</button></div></div></div> : null}
 
-    {resetStep ? <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 sm:items-center" role="dialog" aria-modal="true" aria-label="전체 초기화 확인"><div className="w-full max-w-md rounded-2xl bg-card p-4"><div className="flex items-start gap-2"><AlertTriangle className="h-5 w-5 text-destructive" /><div><h2 className="font-bold">모든 로컬 기록을 삭제할까요?</h2><p className="mt-1 text-xs text-muted-foreground">계좌·주문·포지션·거래일지가 복구 없이 삭제됩니다.</p></div></div><div className="mt-4 grid grid-cols-2 gap-2"><button className={buttonClass} onClick={() => setResetStep(false)}>돌아가기</button><button className="rounded-lg bg-destructive px-3 font-bold text-destructive-foreground" onClick={() => { setState(clearPaperState(storage)); setResetStep(false); setNotice('모의거래 기록을 초기화했습니다.'); }}>2단계 초기화</button></div></div></div> : null}
+    {resetStep ? <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 sm:items-center" role="dialog" aria-modal="true" aria-label="전체 초기화 확인"><div className="w-full max-w-md rounded-2xl bg-card p-4"><div className="flex items-start gap-2"><AlertTriangle className="h-5 w-5 text-destructive" /><div><h2 className="font-bold">모든 로컬 기록을 삭제할까요?</h2><p className="mt-1 text-xs text-muted-foreground">계좌·주문·포지션·거래일지가 복구 없이 삭제됩니다.</p></div></div><div className="mt-4 grid grid-cols-2 gap-2"><button className={buttonClass} onClick={() => setResetStep(false)}>돌아가기</button><button className="rounded-lg bg-destructive px-3 font-bold text-destructive-foreground" onClick={() => { commitState(clearPaperState(storage)); setResetStep(false); setNotice('모의거래 기록을 초기화했습니다.'); }}>2단계 초기화</button></div></div></div> : null}
   </main>;
 }
