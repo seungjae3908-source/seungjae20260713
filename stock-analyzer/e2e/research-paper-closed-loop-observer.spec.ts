@@ -135,7 +135,7 @@ function fulfill(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: 'application/json; charset=utf-8', body: JSON.stringify(body) });
 }
 
-function journalBindingBody(kind: 'verified'|'verified-no-trigger'|'missing'|'mismatch' = 'verified') {
+function journalBindingBody(kind: 'verified'|'verified-no-trigger'|'verified-no-cost'|'missing'|'mismatch' = 'verified') {
   if (kind === 'missing') {
     return {
       mode: 'analysis-only',
@@ -144,8 +144,9 @@ function journalBindingBody(kind: 'verified'|'verified-no-trigger'|'missing'|'mi
       result: { trades: [] },
     };
   }
-  const verified = kind === 'verified' || kind === 'verified-no-trigger';
-  const triggerVerified = kind === 'verified';
+  const verified = kind === 'verified' || kind === 'verified-no-trigger' || kind === 'verified-no-cost';
+  const triggerVerified = kind === 'verified' || kind === 'verified-no-cost';
+  const fullCostVerified = kind === 'verified';
   return {
     mode: 'analysis-only',
     externalAiCalled: false,
@@ -179,6 +180,9 @@ function journalBindingBody(kind: 'verified'|'verified-no-trigger'|'missing'|'mi
           exitTriggerId: triggerVerified ? 'exit-trigger-1' : null,
           exitExecutionId: triggerVerified ? 'exit-execution-1' : null,
           triggerBindingVerified: triggerVerified,
+          fullCostBindingVerified: fullCostVerified,
+          fullCostEvidenceDigest: fullCostVerified ? 'a'.repeat(64) : null,
+          fullCostComponentCount: fullCostVerified ? 8 : 0,
           executionAuthority: 'NONE',
           profitabilityCredit: 0,
         },
@@ -274,8 +278,8 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 900 
     await expect(page.getByTestId('paper-closed-loop-trigger')).toContainText('1건 검증');
     await expect(page.getByTestId('paper-closed-loop-trigger')).toContainText('exit-trigger-1');
     await expect(page.getByTestId('paper-closed-loop-settlement')).toContainText('1건');
-    await expect(page.getByTestId('paper-closed-loop-cost')).toContainText('3/8 실측');
-    await expect(page.getByTestId('paper-closed-loop-cost')).toContainText('MODELED 1개');
+    await expect(page.getByTestId('paper-closed-loop-cost')).toContainText('8/8 검증');
+    await expect(page.getByTestId('paper-closed-loop-cost')).toContainText('AUTHENTICATED_PAPER_STATE');
     await expect(page.getByTestId('paper-closed-loop-net-pnl')).toContainText('15.5');
     await expect(page.getByTestId('paper-closed-loop-net-pnl')).toContainText('수익성 증거로 승격하지 않습니다');
     await expect(page.getByTestId('paper-closed-loop-journal')).toContainText('1건 검증');
@@ -285,7 +289,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 900 
 
     const firstZero = page.getByTestId('paper-closed-loop-first-zero');
     await expect(firstZero).toContainText('화면 기준 첫 미완료 단계');
-    await expect(firstZero).toContainText('8 Cost');
+    await expect(firstZero).toContainText('Net PnL');
     await expect(firstZero).toContainText('Canonical FIRST_ZERO');
     await expect(firstZero).toContainText('CANONICAL_TRIGGER_READBACK_NOT_EXPOSED');
     await expect(firstZero).toContainText('이 UI가 임의로 변경하지 않습니다');
@@ -335,6 +339,19 @@ test('verified candidate without trigger fields keeps Trigger unobserved', async
   await expect(trigger).toContainText('candidate binding은 VERIFIED');
   await expect(trigger).not.toContainText('exit-trigger-1');
   await expect(page.getByTestId('paper-closed-loop-journal')).toContainText('1건 검증');
+});
+
+test('verified Trigger without canonical Full Cost keeps 8 Cost blocked', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await install(page, overview(true), journalBindingBody('verified-no-cost'));
+  await openPaper(page);
+
+  const cost = page.getByTestId('paper-closed-loop-cost');
+  await expect(cost).toContainText('3/8 진단');
+  await expect(cost).toContainText('canonical 8 Cost는 아직 검증되지 않았습니다');
+  await expect(cost).toContainText('불충족');
+  await expect(page.getByTestId('paper-closed-loop-trigger')).toContainText('1건 검증');
+  await expect(page.getByTestId('paper-closed-loop-first-zero')).toContainText('8 Cost');
 });
 
 test('journal identity mismatch is blocked instead of becoming a verified candidate link', async ({ page }) => {
