@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import {
   createImmutablePaperTradingStateSnapshot,
+  validateImmutablePaperTradingStateSnapshot,
   writeImmutablePaperTradingStateSnapshotFile,
   type PaperTradingStateSnapshot,
 } from './paper-trading-state-snapshot.service';
@@ -178,7 +179,7 @@ async function loadRuntimeBinding(env: PublisherEnvironment): Promise<PaperState
 }
 
 async function resolvePublisherConfiguration(
-  input: PublishInput,
+  input: Pick<PublishInput, 'sourceSha'>,
   env: PublisherEnvironment,
 ): Promise<PublisherConfiguration | PaperStateTransportPublishResult> {
   if (!immutableSha(input.sourceSha)) return blocked('PAPER_STATE_APPLICATION_SHA_UNAVAILABLE');
@@ -219,6 +220,52 @@ async function resolvePublisherConfiguration(
     paperRuntimeSourceSha: input.sourceSha,
     runtimeBinding: false,
   });
+}
+
+export async function readAuthenticatedPaperTradingState(
+  input: Readonly<{
+    authenticatedPublisherAccountId: string;
+    sourceSha: string;
+    nowMs?: number;
+  }>,
+  dependencies: Readonly<{ env?: PublisherEnvironment }> = {},
+): Promise<PaperTradingState> {
+  const env = dependencies.env ?? process.env;
+  const nowMs = input.nowMs ?? Date.now();
+  if (!input.authenticatedPublisherAccountId || !Number.isFinite(nowMs) || nowMs <= 0) {
+    throw Object.assign(new Error('PAPER_STATE_OWNER_READBACK_INPUT_INVALID'), {
+      code: 'PAPER_STATE_OWNER_READBACK_INPUT_INVALID',
+    });
+  }
+  const configuration = await resolvePublisherConfiguration({ sourceSha: input.sourceSha }, env);
+  if ('status' in configuration) {
+    throw Object.assign(new Error(configuration.reason ?? 'PAPER_STATE_OWNER_READBACK_NOT_CONFIGURED'), {
+      code: configuration.reason ?? 'PAPER_STATE_OWNER_READBACK_NOT_CONFIGURED',
+    });
+  }
+  if (accountDigest(input.authenticatedPublisherAccountId) !== configuration.publisherAccountIdSha256) {
+    throw Object.assign(new Error('PAPER_STATE_PUBLISHER_ACCOUNT_MISMATCH'), {
+      code: 'PAPER_STATE_PUBLISHER_ACCOUNT_MISMATCH',
+    });
+  }
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await readFile(configuration.snapshotPath, 'utf8')) as unknown;
+  } catch {
+    throw Object.assign(new Error('PAPER_STATE_OWNER_SNAPSHOT_UNAVAILABLE'), {
+      code: 'PAPER_STATE_OWNER_SNAPSHOT_UNAVAILABLE',
+    });
+  }
+  const snapshot = validateImmutablePaperTradingStateSnapshot(raw, nowMs);
+  if (snapshot.publisherAccountIdSha256 !== configuration.publisherAccountIdSha256
+    || snapshot.sourceSha !== configuration.paperRuntimeSourceSha
+    || snapshot.sourceSha !== input.sourceSha) {
+    throw Object.assign(new Error('PAPER_STATE_OWNER_SNAPSHOT_BINDING_MISMATCH'), {
+      code: 'PAPER_STATE_OWNER_SNAPSHOT_BINDING_MISMATCH',
+    });
+  }
+  return structuredClone(snapshot.state);
 }
 
 export async function publishAuthenticatedPaperTradingState(
