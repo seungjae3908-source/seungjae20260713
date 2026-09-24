@@ -14,7 +14,7 @@ const ROUTES = [
   { path: '/alerts', title: '가격 알림' },
   { path: '/stock-info?asset=stock&market=KR', title: '종목 정보', label: '종목 정보 · 주식' },
   { path: '/stock-info?asset=coin&coinMarket=spot', title: '종목 정보', label: '종목 정보 · 코인' },
-  { path: '/research-center', title: '연구센터', contentDiv: true },
+  { path: '/research-center', title: '연구센터', researchSummary: true },
   { path: '/portfolio', title: '포트폴리오', label: '포트폴리오 · 인텔리전스', contentDiv: true },
   { path: '/portfolio?tab=holdings', title: '포트폴리오', label: '포트폴리오 · 보유자산' },
   { path: '/account', title: '계정' },
@@ -130,12 +130,17 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(value).toBeLessThanOrEqual(1);
 }
 
-async function scrollOwnerFor(page: Page, title: string, contentDiv = false) {
+async function scrollOwnerFor(page: Page, title: string, options: { contentDiv?: boolean; researchSummary?: boolean } = {}) {
   const nav = page.getByRole('navigation', { name: '주요 메뉴' });
   await expect(nav).toBeVisible({ timeout: 10_000 });
   await expect(nav).toHaveAttribute('data-route-title', title);
   const shell = nav.locator('..');
-  if (contentDiv) return { nav, shell, scroll: shell.locator(':scope > div').first() };
+  if (options.researchSummary) {
+    const general = page.getByTestId('research-general-view');
+    await expect(general).toBeVisible();
+    return { nav, shell, scroll: general.locator(':scope > main').first() };
+  }
+  if (options.contentDiv) return { nav, shell, scroll: shell.locator(':scope > div').first() };
   return { nav, shell, scroll: shell.locator(':scope > main').first() };
 }
 
@@ -171,7 +176,10 @@ for (const route of ROUTES) {
     await installSessionAndMocks(page);
     await page.goto(route.path);
 
-    const { nav, shell, scroll } = await scrollOwnerFor(page, route.title, 'contentDiv' in route && route.contentDiv === true);
+    const { nav, shell, scroll } = await scrollOwnerFor(page, route.title, {
+      contentDiv: 'contentDiv' in route && route.contentDiv === true,
+      researchSummary: 'researchSummary' in route && route.researchSummary === true,
+    });
     await expect(scroll).toBeVisible();
 
     expect(await shell.evaluate((node) => getComputedStyle(node).overflowY)).toBe('hidden');

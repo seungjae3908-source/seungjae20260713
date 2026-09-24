@@ -13,6 +13,8 @@ export const CRITICAL_BROWSER_SPECS = [
   /account-professional-ui\.spec\.ts$/u,
   /phase12-trade-automation\.spec\.ts$/u,
   /research-copilot\.spec\.ts$/u,
+  /research-center-professional-hierarchy\.spec\.ts$/u,
+  /research-video-intelligence\.spec\.ts$/u,
 ];
 
 export default defineConfig(baseConfig, {
