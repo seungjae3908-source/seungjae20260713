@@ -36,6 +36,8 @@ on:
       - api-server/**
       - stock-analyzer/**
       - packages/**
+      - market-intelligence-sidecar/**
+      - .github/workflows/public-forward-liquidity-*.yml
 
 permissions:
   actions: read
