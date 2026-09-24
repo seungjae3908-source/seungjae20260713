@@ -40,6 +40,7 @@ export type ManualPaperCanonicalRuntimeReadinessResult = Readonly<{
   bridgeEnabled: boolean;
   deployShaBound: boolean;
   paperStateBindingReady: boolean;
+  paperStateConfigurationMode: 'RUNTIME_BINDING' | 'ENV_FALLBACK' | 'NONE';
   paperStateSnapshotReady: boolean;
   naturalPaperStateReady: boolean;
   forwardObserverArtifactsReady: boolean;
@@ -176,23 +177,28 @@ export async function probeManualPaperCanonicalRuntimeReadiness(
 
   const root = stateRoot(env);
   const bindingPath = join(root, BINDING_RELATIVE_PATH);
-  const snapshotPath = join(root, SNAPSHOT_RELATIVE_PATH);
+  const runtimeSnapshotPath = join(root, SNAPSHOT_RELATIVE_PATH);
   let binding: any = null;
+  let bindingMissing = false;
   try {
     binding = parseJson(
       await dependencies.readText(bindingPath),
       'PAPER_CANONICAL_PAPER_STATE_BINDING_INVALID_JSON',
       blockers,
     ) as any;
-  } catch {
-    pushUnique(blockers, 'PAPER_CANONICAL_PAPER_STATE_BINDING_UNREADABLE');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      bindingMissing = true;
+    } else {
+      pushUnique(blockers, 'PAPER_CANONICAL_PAPER_STATE_BINDING_UNREADABLE');
+    }
   }
 
-  const bindingReady = Boolean(
+  const runtimeBindingReady = Boolean(
     binding
       && binding.schemaVersion === 'paper-state-publisher-runtime-binding-v1'
       && binding.paperRuntimeSourceSha === expectedMainSha
-      && binding.snapshotPath === snapshotPath
+      && binding.snapshotPath === runtimeSnapshotPath
       && isAbsolute(binding.snapshotPath)
       && sha256(binding.publisherAccountIdSha256)
       && binding.immutable === true
@@ -201,30 +207,53 @@ export async function probeManualPaperCanonicalRuntimeReadiness(
       && binding.liveTrading === false
       && binding.financialMutationAllowed === false,
   );
+
+  const fallbackSnapshotPath = String(env.PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH ?? '').trim();
+  const fallbackPublisherDigest = String(
+    env.PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256 ?? '',
+  ).trim();
+  const fallbackReady = bindingMissing
+    && isAbsolute(fallbackSnapshotPath)
+    && fallbackSnapshotPath.toLowerCase().endsWith('.json')
+    && sha256(fallbackPublisherDigest);
+
+  const paperStateConfigurationMode = runtimeBindingReady
+    ? 'RUNTIME_BINDING' as const
+    : fallbackReady
+      ? 'ENV_FALLBACK' as const
+      : 'NONE' as const;
+  const bindingReady = paperStateConfigurationMode !== 'NONE';
+  const snapshotPath = runtimeBindingReady ? runtimeSnapshotPath : fallbackSnapshotPath;
+  const expectedPublisherDigest = runtimeBindingReady
+    ? binding?.publisherAccountIdSha256
+    : fallbackPublisherDigest;
+
   check(
-    'PAPER_STATE_RUNTIME_BINDING',
+    'PAPER_STATE_CONFIGURATION',
     bindingReady,
     'PAPER_CANONICAL_PAPER_STATE_BINDING_NOT_READY',
   );
 
   let snapshotReady = false;
-  try {
-    const raw = parseJson(
-      await dependencies.readText(snapshotPath),
-      'PAPER_CANONICAL_PAPER_STATE_SNAPSHOT_INVALID_JSON',
-      blockers,
-    );
-    if (raw) {
-      const snapshot = dependencies.validateSnapshot(raw, nowMs);
-      snapshotReady = snapshot.sourceSha === expectedMainSha
-        && snapshot.publisherAccountIdSha256 === binding?.publisherAccountIdSha256
-        && snapshot.executionAuthority === 'NONE'
-        && snapshot.privateApiAllowed === false
-        && snapshot.liveTrading === false
-        && snapshot.financialMutationAllowed === false;
+  if (bindingReady) {
+    try {
+      const raw = parseJson(
+        await dependencies.readText(snapshotPath),
+        'PAPER_CANONICAL_PAPER_STATE_SNAPSHOT_INVALID_JSON',
+        blockers,
+      );
+      if (raw) {
+        const snapshot = dependencies.validateSnapshot(raw, nowMs);
+        snapshotReady = snapshot.sourceSha === expectedMainSha
+          && snapshot.publisherAccountIdSha256 === expectedPublisherDigest
+          && snapshot.executionAuthority === 'NONE'
+          && snapshot.privateApiAllowed === false
+          && snapshot.liveTrading === false
+          && snapshot.financialMutationAllowed === false;
+      }
+    } catch {
+      pushUnique(blockers, 'PAPER_CANONICAL_PAPER_STATE_SNAPSHOT_UNREADABLE_OR_INVALID');
     }
-  } catch {
-    pushUnique(blockers, 'PAPER_CANONICAL_PAPER_STATE_SNAPSHOT_UNREADABLE_OR_INVALID');
   }
   check(
     'PAPER_STATE_SNAPSHOT',
@@ -318,6 +347,7 @@ export async function probeManualPaperCanonicalRuntimeReadiness(
     bridgeEnabled,
     deployShaBound,
     paperStateBindingReady: bindingReady,
+    paperStateConfigurationMode,
     paperStateSnapshotReady: snapshotReady,
     naturalPaperStateReady: recurringReady,
     forwardObserverArtifactsReady: artifactsReady,
