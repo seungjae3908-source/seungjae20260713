@@ -214,6 +214,12 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
         trade.canonicalResearchBinding?.candidateId ?? '',
         trade.canonicalResearchBinding?.strategyId ?? '',
         trade.canonicalResearchBinding?.researchCodeSha ?? '',
+        trade.canonicalResearchBinding?.naturalPositionId ?? '',
+        trade.canonicalResearchBinding?.paperSampleId ?? '',
+        trade.canonicalResearchBinding?.settlementId ?? '',
+        trade.canonicalResearchBinding?.exitTriggerId ?? '',
+        trade.canonicalResearchBinding?.exitExecutionId ?? '',
+        trade.canonicalResearchBinding?.reason ?? '',
       ].join(' ').toLowerCase();
       return searchable.includes(query);
     });
@@ -309,7 +315,7 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
               className={controlClass}
               value={searchText}
               onChange={(event) => setSearchText(event.target.value)}
-              placeholder="종목 · 전략 · candidateId"
+              placeholder="종목 · 전략 · candidateId · Trigger ID"
               inputMode="search"
             />
           </label>
@@ -349,7 +355,26 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
             <h3 className="text-sm font-bold">거래 목록 {visibleTrades.length} / {data.trades.length}건</h3>
             <span className="text-[10px] text-muted-foreground">목록 필터 적용</span>
           </div>
-          {visibleTrades.length === 0 ? <p className="rounded-xl bg-muted p-3 text-xs text-muted-foreground">선택한 검증 연결 조건에 해당하는 거래가 없습니다.</p> : visibleTrades.map((trade) => <button
+          {visibleTrades.length === 0 ? (
+            <div className="rounded-xl bg-muted p-3 text-xs text-muted-foreground" data-testid="unified-journal-empty-filter-result">
+              <p>선택한 검증 연결 조건 또는 검색어에 해당하는 거래가 없습니다.</p>
+              <p className="mt-1 break-all font-mono text-[10px]">
+                Research={bindingFilter} · Trigger={triggerFilter} · Search={searchText.trim() || 'EMPTY'}
+              </p>
+              <button
+                type="button"
+                className="mt-2 min-h-9 rounded-lg border border-border bg-background px-3 text-xs font-bold text-foreground"
+                onClick={() => {
+                  setBindingFilter('ALL');
+                  setTriggerFilter('ALL');
+                  setSearchText('');
+                }}
+                data-testid="unified-journal-empty-filter-reset"
+              >
+                필터 초기화
+              </button>
+            </div>
+          ) : visibleTrades.map((trade) => <button
             type="button"
             key={trade.id}
             className={`w-full min-w-0 rounded-xl border p-3 text-left ${selected?.id === trade.id ? 'border-primary bg-primary/5' : 'border-border'}`}
