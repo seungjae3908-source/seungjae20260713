@@ -17,6 +17,7 @@ const HOUR_MS = 3_600_000;
 const FROZEN_V3_COHORT_START_INCLUSIVE_MS = 1_788_398_220_000;
 const FROZEN_V3_COHORT_DIGEST =
   'f58e5b7e7e5249cb60a911eb2269d728fa9fa6604b0f3723256a8b0a0c9e9bd4';
+const SUCCESSOR_V3_ROTATED_COHORT_START_INCLUSIVE_MS = 1_790_263_020_000;
 const SHA40 = /^[a-f0-9]{40}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const FROZEN_DIGESTS = Object.freeze({
@@ -300,6 +301,9 @@ export function derivePublicForwardLiquidityMultiLaneActivation({
   const activationBoundaryMs = completeLeadSlotEndMs
     + CONFIG.activationPolicy.firstEligibleLaneScheduleMinuteUtc * 60_000;
   const v3Cohort = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyCore.cohort;
+  if (SUCCESSOR_V3_ROTATED_COHORT_START_INCLUSIVE_MS !== FROZEN_V3_COHORT_START_INCLUSIVE_MS) {
+    fail('PHASE2_V3_COHORT_START_MISMATCH');
+  }
   if (v3Cohort.startInclusiveMs != null
     && v3Cohort.startInclusiveMs !== FROZEN_V3_COHORT_START_INCLUSIVE_MS) {
     fail('PHASE2_V3_COHORT_START_MISMATCH');
@@ -395,12 +399,13 @@ export function resolvePublicForwardLiquidityMultiLaneCreditIdentity({
         .filter(([key]) => key !== 'activationBoundaryDigest')))) {
     fail('PHASE2_ACTIVATION_BINDING_INVALID');
   }
-  if (actual < activation.activationBoundaryMs || index < activation.activationSlotIndex) {
+  if (actual < activation.activationBoundaryMs) {
     return Object.freeze({ active: false, reason: 'PHASE2_PRE_ACTIVATION_OLD_POLICY' });
   }
-  const lane = laneRegistryMap().get(String(scheduleExpression ?? '').trim()) ?? null;
+  const schedule = String(scheduleExpression ?? '').trim();
+  const lane = laneRegistryMap().get(schedule) ?? null;
   if (!lane) {
-    if (String(scheduleExpression ?? '').trim() !== CONFIG.utc27Policy.scheduleIdentity) {
+    if (schedule !== CONFIG.utc27Policy.scheduleIdentity) {
       fail('PHASE2_SCHEDULE_IDENTITY_NOT_FROZEN');
     }
     return Object.freeze({
@@ -411,6 +416,13 @@ export function resolvePublicForwardLiquidityMultiLaneCreditIdentity({
       thirdLaneAllowed: false,
       reason: 'PHASE2_UTC27_ZERO_ADDITIONAL_CREDIT',
     });
+  }
+  if (index < activation.activationSlotIndex
+    && actual < SUCCESSOR_V3_ROTATED_COHORT_START_INCLUSIVE_MS) {
+    return Object.freeze({ active: false, reason: 'PHASE2_PRE_ACTIVATION_OLD_POLICY' });
+  }
+  if (SUCCESSOR_V3_ROTATED_COHORT_START_INCLUSIVE_MS !== FROZEN_V3_COHORT_START_INCLUSIVE_MS) {
+    fail('PHASE2_V3_COHORT_DIGEST_MISMATCH');
   }
   if (SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest != null
     && SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest !== FROZEN_V3_COHORT_DIGEST) {
