@@ -107,9 +107,25 @@ test('unified trade journal separates performance, quality, snapshots, and free-
   await expect(journal).toContainText('통합 매매일지·매매 품질 복기');
   await expect(page.getByTestId('toss-free-status')).toContainText('BLOCKED_BY_FREE_STATUS_UNVERIFIED');
   await expect(page.getByTestId('journal-zero-cost-status')).toContainText('0_KRW');
+
+  const linkage = page.getByTestId('journal-paper-linkage');
+  await expect(linkage).toContainText('Paper 기록 연결 상태');
+  await expect(linkage).toContainText('APP_PAPER 연결 관측');
+  await expect(linkage).toContainText('Paper 출처');
+  await expect(linkage).toContainText('1건');
+  await expect(linkage).toContainText('1 / 0');
+  await expect(linkage).toContainText('1/1');
+  await expect(linkage).toContainText('fees + tax 기준 · 8개 Full Cost와 별개');
+  await expect(linkage).toContainText('100%');
+  await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('Research 후보 직접 연결 · 미제공');
+  await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('candidateId');
+  await expect(page.getByTestId('journal-link-paper-trading')).toHaveAttribute('href', '/paper-trading');
+  await expect(page.getByTestId('journal-link-research-center')).toHaveAttribute('href', '/research-center');
+
   await expect(page.getByTestId('unified-journal-list')).toContainText('BTCUSDT');
   await expect(page.getByTestId('unified-journal-detail')).toContainText('성과 점수');
   await expect(page.getByTestId('unified-journal-detail')).toContainText('매매 품질');
+  await expect(page.getByTestId('unified-journal-detail')).toContainText('0.2 USDT');
   await expect(page.getByTestId('unified-journal-snapshot')).toContainText('진입 전 판단 근거');
   await expect(page.getByTestId('unified-journal-monthly')).toContainText('2026-08');
   expect(errors).toEqual([]);
@@ -143,6 +159,9 @@ for (const viewport of [
     await page.getByRole('button', { name: '분석 불러오기' }).click();
     await expect(page.getByTestId('journal-analytics-result')).toBeVisible();
     await expect(page.getByTestId('unified-trade-journal')).toBeVisible();
+    await expect(page.getByTestId('journal-paper-linkage')).toBeVisible();
+    await expect(page.getByTestId('journal-paper-linkage')).toContainText('APP_PAPER 연결 관측');
+    await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('Research 후보 직접 연결 · 미제공');
     await expect(page.getByTestId('unified-journal-detail')).toContainText('BTCUSDT');
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
     expect(overflow).toBe(false);
