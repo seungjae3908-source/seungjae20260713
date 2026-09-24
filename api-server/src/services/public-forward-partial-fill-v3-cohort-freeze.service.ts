@@ -214,7 +214,14 @@ export function verifyPublicForwardPartialFillV3CohortFreeze(
   }
 
   let computed: string | null = null;
-  try { computed = digest(row); } catch { blockers.push('V3_COHORT_DIGEST_UNVERIFIABLE'); }
+  try {
+    computed = digest(row);
+    if (computed !== PUBLIC_FORWARD_PARTIAL_FILL_V3_COHORT_FREEZE_DIGEST) {
+      blockers.push('V3_COHORT_FREEZE_DIGEST_MISMATCH');
+    }
+  } catch {
+    blockers.push('V3_COHORT_DIGEST_UNVERIFIABLE');
+  }
   return Object.freeze({
     valid: blockers.length === 0,
     blockers: Object.freeze([...new Set(blockers)]),
