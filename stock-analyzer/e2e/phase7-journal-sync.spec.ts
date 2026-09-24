@@ -117,8 +117,10 @@ test('unified trade journal separates performance, quality, snapshots, and free-
   await expect(linkage).toContainText('1/1');
   await expect(linkage).toContainText('fees + tax 기준 · 8개 Full Cost와 별개');
   await expect(linkage).toContainText('100%');
-  await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('Research 후보 직접 연결 · 미제공');
-  await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('candidateId');
+  await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('Research 후보 직접 연결 · 검증됨');
+  await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('검증 1/1');
+  await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('AUTHENTICATED_PAPER_STATE');
+  await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('candidate-authenticated-1');
   await expect(page.getByTestId('journal-link-paper-trading')).toHaveAttribute('href', '/paper-trading');
   await expect(page.getByTestId('journal-link-research-center')).toHaveAttribute('href', '/research-center');
 
@@ -161,7 +163,8 @@ for (const viewport of [
     await expect(page.getByTestId('unified-trade-journal')).toBeVisible();
     await expect(page.getByTestId('journal-paper-linkage')).toBeVisible();
     await expect(page.getByTestId('journal-paper-linkage')).toContainText('APP_PAPER 연결 관측');
-    await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('Research 후보 직접 연결 · 미제공');
+    await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('Research 후보 직접 연결 · 검증됨');
+    await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('candidate-authenticated-1');
     await expect(page.getByTestId('unified-journal-detail')).toContainText('BTCUSDT');
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
     expect(overflow).toBe(false);
