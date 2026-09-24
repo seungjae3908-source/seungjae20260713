@@ -88,7 +88,7 @@ function validResearchContext(formulaTournament) {
   const context = formulaTournament?.researchContext;
   const digest = formulaTournament?.researchContextDigest;
   if (context == null && digest == null) return true;
-  if (!context || !SHA64.test(digest ?? "")) return false;
+  if (!context || !SHA64.test(digest ?? "") || digest !== sha256Canonical(context)) return false;
   if (context.affectsTrialRanking !== false
       || context.affectsChampionSelection !== false
       || context.countedAsIndependentVote !== false
