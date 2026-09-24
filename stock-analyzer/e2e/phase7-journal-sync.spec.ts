@@ -128,6 +128,14 @@ test('unified trade journal separates performance, quality, snapshots, and free-
   await expect(page.getByTestId('unified-journal-detail')).toContainText('성과 점수');
   await expect(page.getByTestId('unified-journal-detail')).toContainText('매매 품질');
   await expect(page.getByTestId('unified-journal-detail')).toContainText('0.2 USDT');
+  const researchBinding = page.getByTestId('unified-journal-research-binding');
+  await expect(researchBinding).toContainText('Research lineage');
+  await expect(researchBinding).toContainText('VERIFIED');
+  await expect(researchBinding).toContainText('candidate-authenticated-1');
+  await expect(researchBinding).toContainText('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+  await expect(researchBinding).toContainText('Settlement binding');
+  await expect(researchBinding).toContainText('검증됨');
+  await expect(researchBinding).toContainText('AUTHENTICATED_PAPER_STATE_IDENTITY_MATCHED');
   await expect(page.getByTestId('unified-journal-snapshot')).toContainText('진입 전 판단 근거');
   await expect(page.getByTestId('unified-journal-monthly')).toContainText('2026-08');
   expect(errors).toEqual([]);
@@ -166,6 +174,8 @@ for (const viewport of [
     await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('Research 후보 직접 연결 · 검증됨');
     await expect(page.getByTestId('journal-candidate-binding-gap')).toContainText('candidate-authenticated-1');
     await expect(page.getByTestId('unified-journal-detail')).toContainText('BTCUSDT');
+    await expect(page.getByTestId('unified-journal-research-binding')).toContainText('candidate-authenticated-1');
+    await expect(page.getByTestId('unified-journal-research-binding')).toContainText('검증됨');
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
     expect(overflow).toBe(false);
     expect(errors).toEqual([]);
