@@ -207,3 +207,44 @@ test("V1 lineage cannot enter Phase 2 and all three derived families share corre
   assert.match(accepted.correlationGroup, /^SHARED_OHLCV:/u);
   assert.equal(accepted.independenceStatus, "NOT_YET_PROVEN");
 });
+
+
+test("candlestick labels quantify engulfing and pin-bar structure without adding authority", () => {
+  const source = input([10, 11, 12, 11, 10, 12, 13, 12]);
+  source.candles[6] = candle(6, 11.8, {
+    open: 13.2, high: 13.4, low: 11.5, close: 11.8, volume: 106,
+  });
+  source.candles[7] = candle(7, 13.3, {
+    open: 11.7, high: 13.5, low: 11.6, close: 13.3, volume: 180,
+  });
+  const engulfing = buildAdaptiveMultiEvidencePriceStructureV2(source);
+  assert.equal(engulfing.status, "READY_FOR_SPECIALIST_RESEARCH_ONLY");
+  assert.ok(engulfing.features.candle.namedPatterns.includes("BULLISH_ENGULFING"));
+  assert.equal(engulfing.evidence.candle.economicSampleCredit, 0);
+  assert.equal(engulfing.executionAuthority, "NONE");
+
+  const pinSource = input([10, 11, 12, 11, 10, 12, 13, 12]);
+  pinSource.candles[7] = candle(7, 12.3, {
+    open: 12.1, high: 12.45, low: 10.4, close: 12.3, volume: 180,
+  });
+  const pin = buildAdaptiveMultiEvidencePriceStructureV2(pinSource);
+  assert.ok(pin.features.candle.namedPatterns.includes("BULLISH_PIN_BAR"));
+});
+
+test("bullish structure breakout is labeled BOS and wave metrics stay numeric research features", () => {
+  const result = buildAdaptiveMultiEvidencePriceStructureV2(input([
+    10, 12, 15, 12, 9, 11, 16, 13, 10, 12, 17, 14, 11, 13, 18, 15, 12, 14, 19, 16, 13, 22,
+  ]));
+  assert.equal(result.status, "READY_FOR_SPECIALIST_RESEARCH_ONLY");
+  assert.equal(result.features.priceStructure.trend, "BULLISH");
+  assert.equal(result.features.priceStructure.structureTransition, "BOS_UP");
+  assert.equal(result.features.pattern.structureTransition, "BOS_UP");
+  assert.equal(result.features.pattern.priorStructureTrend, "BULLISH");
+  assert.ok(result.features.pattern.swingSequence.length >= 3);
+  assert.ok(Number.isFinite(result.features.pattern.latestSwingLegAtr));
+  assert.ok(Number.isFinite(result.features.pattern.priorSwingLegAtr));
+  assert.ok(Number.isFinite(result.features.pattern.swingRetracementRatio));
+  assert.equal(result.independentVoteCredit, 0);
+  assert.equal(result.economicSampleCredit, 0);
+  assert.equal(result.decisionAuthority, "EVIDENCE_ONLY");
+});
