@@ -113,6 +113,7 @@ function PipelineCard({ card, selected, onOpen }: {
       type="button"
       onClick={onOpen}
       aria-expanded={selected}
+      aria-label={`${card.label} 상세 보기`}
       aria-controls={card.key === 'paper' ? 'research-tab-paper' : 'research-stage-detail'}
       className={`group min-w-0 rounded-2xl border bg-card p-3 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${selected ? 'border-primary ring-1 ring-primary/30' : 'border-card-border hover:border-primary/40'}`}
       data-testid={`research-stage-${card.key}`}
@@ -130,6 +131,7 @@ function PipelineCard({ card, selected, onOpen }: {
           { label: '표본', value: '미측정', availability: 'MISSING' as const },
         ]).slice(0, 3).map((metric) => <MetricValue key={metric.label} metric={metric} compact />)}
       </dl>
+      <p className="mt-2 text-[10px] font-bold text-primary">{selected ? '아래에 이 단계의 설명이 열려 있습니다' : '눌러서 왜 이런 상태인지 보기'}</p>
     </button>
   );
 }
@@ -139,10 +141,22 @@ function StageDetail({ card }: { card: ResearchPipelineCard }) {
     <aside id="research-stage-detail" className="min-w-0 rounded-3xl border border-card-border bg-card p-4 shadow-sm lg:sticky lg:top-4 lg:self-start" aria-live="polite" data-testid={`research-detail-${card.key}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">Click-through detail</p>
+          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">선택한 연구 단계</p>
           <h2 className="mt-1 text-lg font-black">{card.label}</h2>
         </div>
         <StatusBadge status={card.status} />
+      </div>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        <div className="rounded-xl bg-muted/40 p-3">
+          <p className="text-xs font-black">왜 이런 상태인가요?</p>
+          <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">{blockerCopy(card)}</p>
+        </div>
+        <div className="rounded-xl bg-muted/40 p-3">
+          <p className="text-xs font-black">다음에 뭘 보면 되나요?</p>
+          <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">
+            {card.blocker ? '필요한 근거가 들어오거나 blocker가 해소되는지 확인하세요.' : '표본과 다음 검증 단계가 증가하는지 확인하면 됩니다.'}
+          </p>
+        </div>
       </div>
       <dl className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
         {card.metrics.map((metric) => <MetricValue key={metric.label} metric={metric} />)}
@@ -153,19 +167,19 @@ function StageDetail({ card }: { card: ResearchPipelineCard }) {
           <p className="mt-1 font-bold">{formatDate(card.updatedAt)}</p>
         </div>
         <div className="rounded-xl border border-card-border bg-background p-3">
-          <p className="text-muted-foreground">Evidence state</p>
+          <p className="text-muted-foreground">기술 상태 코드</p>
           <p className="mt-1 font-mono font-bold">{card.evidenceState}</p>
         </div>
       </div>
       {card.blocker ? (
         <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs">
-          <p className="font-black text-amber-700 dark:text-amber-300">현재 blocker</p>
+          <p className="font-black text-amber-700 dark:text-amber-300">현재 막힌 이유</p>
           <p className="mt-1 text-[11px] text-muted-foreground">{blockerCopy(card)}</p>
         </div>
       ) : null}
       {card.records.length ? (
         <div className="mt-4 space-y-2">
-          <h3 className="text-xs font-black">Canonical records</h3>
+          <h3 className="text-xs font-black">원본 검증 기록</h3>
           <div className="max-h-[31rem] space-y-2 overflow-y-auto pr-1">
             {card.records.map((record) => (
               <details key={record.id} className="group rounded-xl border border-card-border bg-background">
