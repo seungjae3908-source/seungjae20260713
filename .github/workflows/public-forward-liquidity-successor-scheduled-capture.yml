@@ -77,12 +77,12 @@ jobs:
           ! grep -Eq 'deployments:[[:space:]]+write' "$workflow"
           ! grep -Eq 'packages:[[:space:]]+write' "$workflow"
           ! grep -Eq 'id-token:[[:space:]]+write' "$workflow"
-          test "$(grep -Fc "requiredRun.name !== 'Application CI'" "$workflow")" -eq 1
-          test "$(grep -Fc "requiredRun.path !== '.github/workflows/futures-public-network-smoke.yml'" "$workflow")" -eq 1
-          test "$(grep -Fc 'Number(requiredRun.workflow_id) !== 325169344' "$workflow")" -eq 1
-          test "$(grep -Fc "requiredRun.event !== 'push'" "$workflow")" -eq 1
-          test "$(grep -Fc "requiredRun.head_branch !== 'main'" "$workflow")" -eq 1
-          test "$(grep -Fc 'Number(requiredRun.run_attempt) !== 1' "$workflow")" -eq 1
+          test "$(grep -Ec "requiredRun[.]name !== 'Application CI'" "$workflow")" -eq 1
+          test "$(grep -Ec "requiredRun[.]path !== '[.]github/workflows/futures-public-network-smoke[.]yml'" "$workflow")" -eq 1
+          test "$(grep -Ec 'Number[(]requiredRun[.]workflow_id[)] !== 325169344' "$workflow")" -eq 1
+          test "$(grep -Ec "requiredRun[.]event !== 'push'" "$workflow")" -eq 1
+          test "$(grep -Ec "requiredRun[.]head_branch !== 'main'" "$workflow")" -eq 1
+          test "$(grep -Ec 'Number[(]requiredRun[.]run_attempt[)] !== 1' "$workflow")" -eq 1
           test "$(grep -Ec 'CAPTURE_ATTEMPT_ARTIFACT_NAME: [$][{][{] steps[.]capture[.]outputs[.]attempt_artifact_name [}][}]' "$workflow")" -eq 1
           test "$(grep -Fc 'artifact_name=${CAPTURE_ATTEMPT_ARTIFACT_NAME}' "$workflow")" -eq 1
           test "$(grep -Ec 'name: [$][{][{] steps[.]attempt_name[.]outputs[.]artifact_name [}][}]' "$workflow")" -eq 1
