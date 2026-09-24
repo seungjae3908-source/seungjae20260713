@@ -28,6 +28,9 @@ export type CanonicalResearchJournalBinding = Readonly<{
   paperSampleId: string | null;
   settlementId: string | null;
   settlementBindingVerified: boolean;
+  exitTriggerId: string | null;
+  exitExecutionId: string | null;
+  triggerBindingVerified: boolean;
   executionAuthority: 'NONE';
   profitabilityCredit: 0;
 }>;
@@ -81,6 +84,9 @@ function binding(
     paperSampleId: string;
     settlementId: string | null;
     settlementBindingVerified: boolean;
+    exitTriggerId: string | null;
+    exitExecutionId: string | null;
+    triggerBindingVerified: boolean;
   }>,
 ): CanonicalResearchJournalBinding {
   return Object.freeze({
@@ -95,6 +101,9 @@ function binding(
     paperSampleId: lineage?.paperSampleId ?? null,
     settlementId: lineage?.settlementId ?? null,
     settlementBindingVerified: lineage?.settlementBindingVerified ?? false,
+    exitTriggerId: lineage?.exitTriggerId ?? null,
+    exitExecutionId: lineage?.exitExecutionId ?? null,
+    triggerBindingVerified: lineage?.triggerBindingVerified ?? false,
     executionAuthority: 'NONE',
     profitabilityCredit: 0,
   });
@@ -198,6 +207,9 @@ function verifiedLineage(
 
   let settlementId: string | null = null;
   let settlementBindingVerified = false;
+  let exitTriggerId: string | null = null;
+  let exitExecutionId: string | null = null;
+  let triggerBindingVerified = false;
   const settlement = lineage.settlement as Record<string, unknown> | undefined;
   if (settlement) {
     const settlementIdentity = settlement.settlementIdentity;
@@ -250,6 +262,9 @@ function verifiedLineage(
     if (identityMatch && topLevelMatch && digestMatch && triggerMatch && executionMatch && costDigestMatch) {
       settlementId = storedId;
       settlementBindingVerified = true;
+      exitTriggerId = String(settlement.exitTriggerId);
+      exitExecutionId = String(settlement.exitExecutionId);
+      triggerBindingVerified = true;
     }
   }
 
@@ -259,6 +274,9 @@ function verifiedLineage(
     paperSampleId: lineage.paperSampleId,
     settlementId,
     settlementBindingVerified,
+    exitTriggerId,
+    exitExecutionId,
+    triggerBindingVerified,
   });
 }
 
