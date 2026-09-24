@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { restoreRecurringPaperLoopState } from '../../../market-prediction-lab/src/recurring-paper-loop-v1.js';
+import { bindNaturalPaperTriggerBoundSettlementEvidence } from '../../../market-prediction-lab/src/natural-paper-trigger-bound-settlement-cost-producer-v1.js';
 import {
   createForwardObserverArtifactValidationEvidenceReader,
   createForwardObserverValidationReceiptOwner,
@@ -10,7 +11,10 @@ import {
   type ManualPaperCanonicalEvidenceSource,
   type ManualPaperCanonicalOwnerEvidencePacket,
 } from './manual-paper-canonical-evidence-source.service';
-import type { ManualPaperCanonicalIdentity } from './manual-paper-canonical-contract.service';
+import {
+  manualPaperEvidenceSha256,
+  type ManualPaperCanonicalIdentity,
+} from './manual-paper-canonical-contract.service';
 import { PaperTradingError } from './paper-trading-core.service';
 import { readAuthenticatedPaperTradingState } from './paper-trading-state-publisher.service';
 import type { PaperTradingAction, PaperTradingState } from './paper-trading.types';
@@ -35,6 +39,7 @@ type RuntimeEnvironment = Readonly<Record<string, string | undefined>>;
 type RecurringState = Readonly<{
   identity?: Readonly<{ researchCodeSha?: unknown }>;
   positions?: readonly Record<string, any>[];
+  settlements?: readonly Record<string, any>[];
 }>;
 
 type RuntimeBridgeDependencies = Readonly<{
@@ -259,6 +264,140 @@ function findNaturalPosition(state: RecurringState, candidateId: string, researc
   return matches[0]!;
 }
 
+function manualNaturalPositionId(ownerState: PaperTradingState, action: PaperTradingAction): string {
+  if (action.type !== 'close_position') {
+    throw new PaperTradingError(
+      'CANONICAL_PAPER_CLOSE_ACTION_REQUIRED',
+      'Canonical settlement readback에는 close_position 액션이 필요합니다.',
+      409,
+    );
+  }
+  const position = ownerState.positions.find((row) => row.id === action.positionId);
+  const naturalPositionId = (position as any)?.canonicalPaper?.naturalPositionId;
+  if (!nonEmpty(naturalPositionId)) {
+    throw new PaperTradingError(
+      'CANONICAL_PAPER_MANUAL_POSITION_LINEAGE_REQUIRED',
+      'Manual Paper position의 Natural lineage를 확인할 수 없습니다.',
+      503,
+    );
+  }
+  return naturalPositionId;
+}
+
+function ownerPacketPayload(packet: Record<string, any>) {
+  return {
+    schemaVersion: packet.schemaVersion,
+    positionId: packet.positionId,
+    paperSampleId: packet.paperSampleId,
+    candidateId: packet.candidateId,
+    researchCodeSha: packet.researchCodeSha,
+    exitTriggerId: packet.exitTriggerId,
+    exitExecutionId: packet.exitExecutionId,
+    evaluatedAtMs: packet.evaluatedAtMs,
+    bindingEvidenceDigest: packet.bindingEvidenceDigest,
+    position: packet.position,
+    sourceObservation: packet.sourceObservation,
+    authoritativeEvidence: packet.authoritativeEvidence,
+    trigger: packet.trigger,
+  };
+}
+
+function findAndRebindNaturalSettlement(
+  state: RecurringState,
+  ownerState: PaperTradingState,
+  action: PaperTradingAction,
+  candidateId: string,
+  researchCodeSha: string,
+): Readonly<{ position: Record<string, any>; observation: unknown; trigger: unknown }> {
+  if (state.identity?.researchCodeSha !== researchCodeSha) {
+    throw new PaperTradingError(
+      'CANONICAL_PAPER_NATURAL_STATE_RESEARCH_SHA_MISMATCH',
+      'Natural Paper durable state가 현재 research SHA와 일치하지 않습니다.',
+      503,
+    );
+  }
+  const naturalPositionId = manualNaturalPositionId(ownerState, action);
+  const matches = (state.settlements ?? []).filter((settlement) => (
+    settlement?.positionId === naturalPositionId
+      && settlement?.candidateId === candidateId
+      && settlement?.researchCodeSha === researchCodeSha
+  ));
+  if (matches.length !== 1) {
+    throw new PaperTradingError(
+      matches.length === 0
+        ? 'CANONICAL_PAPER_RUNTIME_SETTLEMENT_EVIDENCE_NOT_AVAILABLE'
+        : 'CANONICAL_PAPER_RUNTIME_SETTLEMENT_EVIDENCE_AMBIGUOUS',
+      '동일 Natural position의 durable settlement evidence를 하나로 확정할 수 없습니다.',
+      503,
+    );
+  }
+
+  const settlement = matches[0]!;
+  const packet = settlement.canonicalOwnerEvidence as Record<string, any> | null | undefined;
+  if (!packet
+    || packet.schemaVersion !== 'canonical-natural-settlement-owner-evidence-v1'
+    || packet.positionId !== naturalPositionId
+    || packet.candidateId !== candidateId
+    || packet.researchCodeSha !== researchCodeSha
+    || packet.exitTriggerId !== settlement.exitTriggerId
+    || packet.exitExecutionId !== settlement.exitExecutionId
+    || packet.executionAuthority !== 'NONE'
+    || packet.liveOrderAllowed !== false
+    || packet.privateTradingApiAllowed !== false
+    || packet.orderSubmitted !== false
+    || packet.exchangeRequestSent !== false
+    || packet.unknownIsZero !== false
+    || packet.unavailableCostConvertedToZero !== false
+    || packet.naturalSampleCredit !== 0
+    || !nonEmpty(packet.evidenceDigest)
+    || manualPaperEvidenceSha256(ownerPacketPayload(packet)) !== packet.evidenceDigest
+    || manualPaperEvidenceSha256(packet.trigger) !== manualPaperEvidenceSha256(packet.position?.lifecycle?.pendingExit)) {
+    throw new PaperTradingError(
+      'CANONICAL_PAPER_RUNTIME_SETTLEMENT_OWNER_PACKET_INVALID',
+      'Natural settlement owner packet의 identity/digest가 유효하지 않습니다.',
+      503,
+    );
+  }
+
+  const expectedBindingDigest = manualPaperEvidenceSha256({
+    settlementId: settlement.settlementId,
+    ownerEvidenceDigest: packet.evidenceDigest,
+    exitTriggerId: settlement.exitTriggerId,
+    exitExecutionId: settlement.exitExecutionId,
+  });
+  if (settlement.canonicalOwnerEvidenceBindingDigest !== expectedBindingDigest) {
+    throw new PaperTradingError(
+      'CANONICAL_PAPER_RUNTIME_SETTLEMENT_BINDING_DIGEST_MISMATCH',
+      'Natural settlement과 owner packet의 durable binding digest가 일치하지 않습니다.',
+      503,
+    );
+  }
+
+  const rebound = bindNaturalPaperTriggerBoundSettlementEvidence({
+    position: packet.position,
+    observation: packet.sourceObservation,
+    authoritativeEvidence: packet.authoritativeEvidence,
+    evaluatedAtMs: packet.evaluatedAtMs,
+  });
+  if (rebound?.status !== 'PRESENT'
+    || rebound?.fullCostReady !== true
+    || rebound?.evidenceDigest !== packet.bindingEvidenceDigest
+    || rebound?.exitTriggerId !== settlement.exitTriggerId
+    || rebound?.exitExecutionId !== settlement.exitExecutionId) {
+    throw new PaperTradingError(
+      'CANONICAL_PAPER_RUNTIME_SETTLEMENT_REBIND_FAILED',
+      'Durable Natural settlement evidence를 canonical producer 계약으로 재검증하지 못했습니다.',
+      503,
+    );
+  }
+
+  return Object.freeze({
+    position: structuredClone(packet.position),
+    observation: structuredClone(rebound.observation),
+    trigger: structuredClone(packet.trigger),
+  });
+}
+
 async function issueValidationReceiptFromConfiguredOwner(
   identity: ManualPaperCanonicalIdentity,
   nowMs: number,
@@ -309,17 +448,13 @@ export function createManualPaperCanonicalRuntimeEvidenceSource(
         nowMs,
       }, { env });
     },
-    readOwnerEvidence: async ({ candidateId, action, nowMs }): Promise<ManualPaperCanonicalOwnerEvidencePacket> => {
-      if (action.type === 'close_position') {
-        throw new PaperTradingError(
-          'CANONICAL_PAPER_RUNTIME_SETTLEMENT_EVIDENCE_NOT_CONNECTED',
-          'Canonical Paper trigger-bound settlement evidence의 제품 readback 연결이 아직 필요합니다.',
-          503,
-        );
-      }
+    readOwnerEvidence: async ({ candidateId, action, ownerState, nowMs }): Promise<ManualPaperCanonicalOwnerEvidencePacket> => {
       const researchCodeSha = deployedResearchSha(env);
       const state = await dependencies.readRecurringState(env);
-      const position = findNaturalPosition(state, candidateId, researchCodeSha);
+      const settlement = action.type === 'close_position'
+        ? findAndRebindNaturalSettlement(state, ownerState, action, candidateId, researchCodeSha)
+        : null;
+      const position = settlement?.position ?? findNaturalPosition(state, candidateId, researchCodeSha);
       const candidate = position.entryCandidate;
       if (!candidate || candidate.candidateId !== candidateId) {
         throw new PaperTradingError(
@@ -337,6 +472,12 @@ export function createManualPaperCanonicalRuntimeEvidenceSource(
         entryCostEvidence,
         validationReceipt: structuredClone(validation.receipt),
         receiptVerification: structuredClone(validation.verification),
+        ...(settlement == null
+          ? {}
+          : { settlement: Object.freeze({
+            observation: structuredClone(settlement.observation),
+            trigger: structuredClone(settlement.trigger),
+          }) }),
       });
     },
   });
@@ -363,7 +504,7 @@ export const MANUAL_PAPER_CANONICAL_RUNTIME_BRIDGE_SAFETY = Object.freeze({
   genuineNaturalPositionRequired: true,
   genuineForwardValidationReceiptRequired: true,
   allEightEntryCostComponentsRequired: true,
-  settlementReadbackConnected: false,
+  settlementReadbackConnected: true,
   unknownCostIsZero: false,
   replayBackfillSyntheticCredit: 0,
   executionAuthority: 'NONE',
