@@ -261,6 +261,7 @@ test('late response from the previous symbol is rejected after an in-place symbo
         bids: [{ rank: 1, price: 120000, quantity: 3, cumulativeQuantity: 3 }],
         bestAsk: 120100,
         bestBid: 120000,
+        spreadPct: (100 / ((120100 + 120000) / 2)) * 100,
       }),
     });
   });
@@ -314,6 +315,7 @@ test('query-only market switch aborts the old owner and applies only the new can
         bestAsk: 100100000,
         bestBid: 100000000,
         spread: 100000,
+        spreadPct: (100000 / ((100100000 + 100000000) / 2)) * 100,
       }),
     });
   });
