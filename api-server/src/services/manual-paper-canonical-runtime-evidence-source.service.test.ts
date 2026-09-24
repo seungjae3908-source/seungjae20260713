@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { manualPaperEvidenceSha256 } from './manual-paper-canonical-contract.service';
 import { createPaperTradingState } from './paper-trading-engine.service';
 import { PaperTradingError } from './paper-trading-core.service';
 import {
@@ -125,6 +126,84 @@ function request(action: any, state = createPaperTradingState(10_000, new Date(N
   };
 }
 
+function closeFixture({ tamperPacket = false, omitSettlement = false } = {}) {
+  const ownerState = createPaperTradingState(10_000, new Date(NOW)) as any;
+  ownerState.positions = [{
+    id: 'manual-position',
+    canonicalPaper: {
+      identity: { candidateId: CANDIDATE_ID },
+      naturalPositionId: 'natural-position-1',
+    },
+  }];
+
+  const position = naturalPosition() as any;
+  const trigger = {
+    exitTriggerId: '1'.repeat(64),
+    triggeredAtMs: NOW,
+    positionId: position.positionId,
+    paperSampleId: position.paperSampleId,
+  };
+  position.lifecycle = {
+    sampleEligibility: { provenanceClass: 'NATURAL_FORWARD' },
+    pendingExit: trigger,
+  };
+  const sourceObservation = { observationId: 'natural-exit-observation', maxAgeMs: 60_000 };
+  const authoritativeEvidence = { schemaVersion: 'authoritative-natural-paper-trigger-settlement-evidence-v1' };
+  const exitExecutionId = '2'.repeat(64);
+  const bindingEvidenceDigest = '3'.repeat(64);
+  const payload = {
+    schemaVersion: 'canonical-natural-settlement-owner-evidence-v1',
+    positionId: position.positionId,
+    paperSampleId: position.paperSampleId,
+    candidateId: position.candidateId,
+    researchCodeSha: position.researchCodeSha,
+    exitTriggerId: trigger.exitTriggerId,
+    exitExecutionId,
+    evaluatedAtMs: NOW,
+    bindingEvidenceDigest,
+    position,
+    sourceObservation,
+    authoritativeEvidence,
+    trigger,
+  };
+  const packet = {
+    ...payload,
+    evidenceDigest: manualPaperEvidenceSha256(payload),
+    unknownIsZero: false,
+    unavailableCostConvertedToZero: false,
+    naturalSampleCredit: 0,
+    executionAuthority: 'NONE',
+    liveOrderAllowed: false,
+    privateTradingApiAllowed: false,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+  };
+  if (tamperPacket) packet.positionId = 'tampered-position';
+
+  const settlementId = '4'.repeat(64);
+  const settlement = {
+    settlementId,
+    positionId: position.positionId,
+    candidateId: CANDIDATE_ID,
+    researchCodeSha: SHA,
+    exitTriggerId: trigger.exitTriggerId,
+    exitExecutionId,
+    canonicalOwnerEvidence: packet,
+    canonicalOwnerEvidenceBindingDigest: manualPaperEvidenceSha256({
+      settlementId,
+      ownerEvidenceDigest: packet.evidenceDigest,
+      exitTriggerId: trigger.exitTriggerId,
+      exitExecutionId,
+    }),
+  };
+  const recurringState = {
+    identity: { researchCodeSha: SHA },
+    positions: [],
+    settlements: omitSettlement ? [] : [settlement],
+  };
+  return { ownerState, recurringState, position, trigger, sourceObservation, bindingEvidenceDigest, exitExecutionId };
+}
+
 test('runtime bridge remains inert by default and preserves the legacy canonical route error', async () => {
   let reads = 0;
   const source = createManualPaperCanonicalRuntimeEvidenceSource({
@@ -221,27 +300,109 @@ test('enabled runtime bridge never converts a missing entry cost component to ze
   );
 });
 
-test('close remains fail-closed until trigger-bound settlement readback is connected', async () => {
-  const state = createPaperTradingState(10_000, new Date(NOW));
+test('close consumes only the digest-bound durable Natural settlement owner packet', async () => {
+  const f = closeFixture();
+  let reboundCalls = 0;
+  const reboundObservation = {
+    ...f.sourceObservation,
+    triggerBoundSettlementEvidence: {
+      exitExecutionId: f.exitExecutionId,
+      evidenceDigest: f.bindingEvidenceDigest,
+    },
+  };
   const source = createManualPaperCanonicalRuntimeEvidenceSource({
     env: {
       DEPLOY_SHA: SHA,
       PAPER_CANONICAL_OWNER_BRIDGE_ENABLED: 'true',
     },
     dependencies: {
-      async readPaperState() { return structuredClone(state); },
-      async readRecurringState() { return { identity: { researchCodeSha: SHA }, positions: [naturalPosition()] }; },
+      async readPaperState() { return structuredClone(f.ownerState); },
+      async readRecurringState() { return structuredClone(f.recurringState); },
+      rebindSettlementEvidence() {
+        reboundCalls += 1;
+        return {
+          status: 'PRESENT',
+          fullCostReady: true,
+          evidenceDigest: f.bindingEvidenceDigest,
+          exitTriggerId: f.trigger.exitTriggerId,
+          exitExecutionId: f.exitExecutionId,
+          observation: reboundObservation,
+        };
+      },
+      async issueValidationReceipt(identity) { return validation(identity); },
+    },
+  });
+
+  const evidence = await source(request({
+    type: 'close_position',
+    eventId: 'close-1',
+    positionId: 'manual-position',
+  }, f.ownerState)) as any;
+  assert.equal(reboundCalls, 1);
+  assert.equal(evidence.position.positionId, f.position.positionId);
+  assert.deepEqual(evidence.settlement.trigger, f.trigger);
+  assert.deepEqual(evidence.settlement.observation, reboundObservation);
+  assert.equal(evidence.entryCostEvidence.fullCostReady, true);
+  assert.equal(MANUAL_PAPER_CANONICAL_RUNTIME_BRIDGE_SAFETY.settlementReadbackConnected, true);
+});
+
+test('close remains fail-closed when durable Natural settlement packet is absent', async () => {
+  const f = closeFixture({ omitSettlement: true });
+  const source = createManualPaperCanonicalRuntimeEvidenceSource({
+    env: {
+      DEPLOY_SHA: SHA,
+      PAPER_CANONICAL_OWNER_BRIDGE_ENABLED: 'true',
+    },
+    dependencies: {
+      async readPaperState() { return structuredClone(f.ownerState); },
+      async readRecurringState() { return structuredClone(f.recurringState); },
+      rebindSettlementEvidence() { throw new Error('must not rebind'); },
       async issueValidationReceipt(identity) { return validation(identity); },
     },
   });
 
   await assert.rejects(
-    () => source(request({ type: 'close_position', eventId: 'close-1', positionId: 'manual-position' }, state)),
+    () => source(request({
+      type: 'close_position',
+      eventId: 'close-missing',
+      positionId: 'manual-position',
+    }, f.ownerState)),
     (error: unknown) => {
       assert.ok(error instanceof PaperTradingError);
-      assert.equal(error.code, 'CANONICAL_PAPER_RUNTIME_SETTLEMENT_EVIDENCE_NOT_CONNECTED');
+      assert.equal(error.code, 'CANONICAL_PAPER_RUNTIME_SETTLEMENT_EVIDENCE_NOT_AVAILABLE');
       assert.equal(error.statusCode, 503);
       return true;
     },
   );
+});
+
+test('close rejects a tampered durable Natural settlement owner packet before rebind', async () => {
+  const f = closeFixture({ tamperPacket: true });
+  let reboundCalls = 0;
+  const source = createManualPaperCanonicalRuntimeEvidenceSource({
+    env: {
+      DEPLOY_SHA: SHA,
+      PAPER_CANONICAL_OWNER_BRIDGE_ENABLED: 'true',
+    },
+    dependencies: {
+      async readPaperState() { return structuredClone(f.ownerState); },
+      async readRecurringState() { return structuredClone(f.recurringState); },
+      rebindSettlementEvidence() { reboundCalls += 1; return null; },
+      async issueValidationReceipt(identity) { return validation(identity); },
+    },
+  });
+
+  await assert.rejects(
+    () => source(request({
+      type: 'close_position',
+      eventId: 'close-tamper',
+      positionId: 'manual-position',
+    }, f.ownerState)),
+    (error: unknown) => {
+      assert.ok(error instanceof PaperTradingError);
+      assert.equal(error.code, 'CANONICAL_PAPER_RUNTIME_SETTLEMENT_OWNER_PACKET_INVALID');
+      return true;
+    },
+  );
+  assert.equal(reboundCalls, 0);
 });
