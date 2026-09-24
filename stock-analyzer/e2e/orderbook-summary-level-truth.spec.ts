@@ -36,7 +36,7 @@ async function serve(page: Page, body: Record<string, unknown>) {
   await page.route('**/api/orderbook**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
   });
-  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
   return page.getByRole('dialog', { name: /005930 호가창/ });
 }
