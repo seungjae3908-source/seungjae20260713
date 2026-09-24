@@ -263,3 +263,32 @@ test("V1 lineage and invalid indicator configuration fail closed", () => {
   assert.equal(invalid.status, "BLOCKED_DATA");
   assert.ok(invalid.blockers.includes("V2_MARKET_FEATURES_EMA_PERIOD_ORDER_INVALID"));
 });
+
+
+test("wave, candlestick, and BOS/CHOCH context is exposed downstream without an extra vote", () => {
+  const result = buildAdaptiveMultiEvidenceMarketFeaturesV2(completeInput());
+  assert.equal(result.status, "READY_FOR_SPECIALIST_RESEARCH_ONLY");
+  assert.ok(result.features.priceAction);
+  assert.ok(["BULLISH", "BEARISH", "MIXED", "INSUFFICIENT"].includes(
+    result.features.priceAction.structureTrend,
+  ));
+  assert.ok(Array.isArray(result.features.priceAction.candlestickPatterns));
+  assert.ok(Array.isArray(result.features.priceAction.swingSequence));
+  assert.equal(
+    result.features.priceAction.priceStructureEvidenceId,
+    buildAdaptiveMultiEvidencePriceStructureV2({
+      ...completeInput(),
+      options: PHASE_2_OPTIONS,
+    }).evidence.priceStructure.evidenceId,
+  );
+  assert.match(result.features.priceAction.priceStructureEvidenceId, /^[a-f0-9]{64}$/u);
+  assert.match(result.features.priceAction.candleEvidenceId, /^[a-f0-9]{64}$/u);
+  assert.match(result.features.priceAction.patternEvidenceId, /^[a-f0-9]{64}$/u);
+  assert.equal(result.features.priceAction.authority, "CONTEXT_ONLY_NO_INDEPENDENT_VOTE");
+  assert.equal(result.correlationGroups.priceAction, result.correlationGroups.trend);
+  assert.equal(result.priceActionAuthority, "CONTEXT_ONLY_NO_INDEPENDENT_VOTE");
+  assert.equal(Object.keys(result.evidence).length, 4);
+  assert.equal(result.independentVoteCredit, 0);
+  assert.equal(result.economicSampleCredit, 0);
+  assert.equal(result.executionAuthority, "NONE");
+});
