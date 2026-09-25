@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { restoreRecurringPaperLoopState } from '../../../market-prediction-lab/src/recurring-paper-loop-v1.js';
 import { bindNaturalPaperTriggerBoundSettlementEvidence } from '../../../market-prediction-lab/src/natural-paper-trigger-bound-settlement-cost-producer-v1.js';
 import { manualPaperEvidenceSha256 } from './manual-paper-canonical-contract.service';
+import { resolvePaperCanonicalValidationReceiptMaximumAgeMs } from './paper-canonical-validation-freshness-policy.service';
 import {
   validateImmutablePaperTradingStateSnapshot,
   type PaperTradingStateSnapshot,
@@ -485,14 +486,27 @@ export async function probeManualPaperCanonicalRuntimeReadiness(
   let artifactsReady = artifactRoot !== null;
   if (artifactRoot) {
     for (const filename of ARTIFACT_FILES) {
+      const label = filename === 'state.json'
+        ? 'STATE'
+        : filename === 'summary.json'
+          ? 'SUMMARY'
+          : 'MANIFEST';
       try {
         const text = await dependencies.readText(join(artifactRoot, filename));
-        if (parseJson(text, 'PAPER_CANONICAL_FORWARD_OBSERVER_ARTIFACT_INVALID_JSON', blockers) == null) {
+        if (parseJson(
+          text,
+          `PAPER_CANONICAL_FORWARD_OBSERVER_${label}_INVALID_JSON`,
+          blockers,
+        ) == null) {
           artifactsReady = false;
         }
-      } catch {
+      } catch (error) {
         artifactsReady = false;
-        pushUnique(blockers, 'PAPER_CANONICAL_FORWARD_OBSERVER_ARTIFACT_UNREADABLE');
+        const missing = (error as NodeJS.ErrnoException)?.code === 'ENOENT';
+        pushUnique(
+          blockers,
+          `PAPER_CANONICAL_FORWARD_OBSERVER_${label}_${missing ? 'MISSING' : 'UNREADABLE'}`,
+        );
       }
     }
   }
@@ -522,18 +536,30 @@ export async function probeManualPaperCanonicalRuntimeReadiness(
       }
     }
   }
-  const maximumAgeMs = Number(env.PAPER_CANONICAL_VALIDATION_RECEIPT_MAXIMUM_AGE_MS);
-  const maximumAgeReady = Number.isSafeInteger(maximumAgeMs) && maximumAgeMs > 0;
+
+  let maximumAgeReady = false;
+  try {
+    const resolution = await resolvePaperCanonicalValidationReceiptMaximumAgeMs({
+      env,
+      stateRoot: root,
+      readText: dependencies.readText,
+    });
+    maximumAgeReady = Number.isSafeInteger(resolution.maximumAgeMs) && resolution.maximumAgeMs > 0;
+  } catch (error) {
+    const code = String((error as { code?: unknown })?.code ?? '');
+    if (/^PAPER_CANONICAL_VALIDATION_RECEIPT_(?:MAXIMUM_AGE|POLICY)_[A-Z0-9_]+$/u.test(code)) {
+      pushUnique(blockers, code);
+    } else {
+      pushUnique(blockers, 'PAPER_CANONICAL_VALIDATION_RECEIPT_POLICY_UNREADABLE');
+    }
+  }
+
   check(
     'VALIDATION_RECEIPT_ROOT',
     receiptPathReady,
     'PAPER_CANONICAL_VALIDATION_RECEIPT_PATH_NOT_READY',
   );
-  check(
-    'VALIDATION_RECEIPT_FRESHNESS_POLICY',
-    maximumAgeReady,
-    'PAPER_CANONICAL_VALIDATION_RECEIPT_MAXIMUM_AGE_UNCONFIGURED',
-  );
+  check('VALIDATION_RECEIPT_FRESHNESS_POLICY', maximumAgeReady);
 
   const deployShaBound = exactSha(deploySha) && deploySha === expectedMainSha;
   const readyForActivationReview = blockers.length === 0;
