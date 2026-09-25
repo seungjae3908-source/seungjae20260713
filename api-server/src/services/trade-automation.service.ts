@@ -74,9 +74,8 @@ export function liveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
   const perExchange = {
     bitget: process.env.BITGET_LIVE_ORDER_ENABLED === 'true',
     upbit: process.env.UPBIT_LIVE_ORDER_ENABLED === 'true',
-    // Stock live execution stays disabled regardless of the user's Toss/Kiwoom Paper broker choice
-    // until each broker's private order adapter is separately verified and activated.
-    kiwoom: false,
+    kiwoom: process.env.KIWOOM_LIVE_ORDER_ENABLED === 'true',
+    toss: process.env.TOSS_LIVE_ORDER_ENABLED === 'true',
   };
   return global && perExchange[exchange];
 }
