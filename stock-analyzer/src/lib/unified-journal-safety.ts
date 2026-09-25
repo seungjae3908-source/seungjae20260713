@@ -62,7 +62,7 @@ export function assertUnifiedTradeJournalSafety(
     }
   }
 
-  if (!Array.isArray(history.realizedEvidence)
+  if (history.realizedEvidence != null && (!Array.isArray(history.realizedEvidence)
     || history.realizedEvidence.some((row) => (
       row.provider !== 'kiwoom'
       || row.market !== 'KR'
@@ -76,7 +76,7 @@ export function assertUnifiedTradeJournalSafety(
       || typeof row.sellQuantity !== 'number'
       || !Number.isFinite(row.sellQuantity)
       || row.sellQuantity <= 0
-    ))) {
+    )))) {
     throw new Error('Kiwoom 국내 실현손익 증거 계약을 확인하지 못했습니다.');
   }
 
