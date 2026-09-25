@@ -43,8 +43,8 @@ test('automatic trading and every exchange default to OFF', () => {
   assert.equal(policy.mode, 'approval');
   assert.equal(policy.automaticEnabled, false);
   assert.equal(policy.emergencyStopped, false);
-  assert.deepEqual(policy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false });
-  assert.deepEqual(policy.enabledAssets, { bitget: [], upbit: [], kiwoom: [] });
+  assert.deepEqual(policy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
+  assert.deepEqual(policy.enabledAssets, { bitget: [], upbit: [], kiwoom: [], toss: [] });
   assert.equal(policy.bitgetLeverage, 2);
 });
 
@@ -58,12 +58,12 @@ test('stock broker selection is per market, backward compatible, and enforced fo
     automaticEnabled: true,
     marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true },
     stockBrokerByMarket: { domestic_stock: 'toss', us_stock: 'kiwoom' },
-    exchangeEnabled: { bitget: true, upbit: true, kiwoom: true },
+    exchangeEnabled: { bitget: true, upbit: true, kiwoom: true, toss: true },
   });
 
   const domesticToss = evaluateTradingPlan(
     plan({
-      exchange: 'kiwoom',
+      exchange: 'toss',
       stockBroker: 'toss',
       accountMode: 'paper',
       market: 'KR',
@@ -97,6 +97,7 @@ test('stock broker selection is per market, backward compatible, and enforced fo
     plan({
       exchange: 'kiwoom',
       stockBroker: 'kiwoom',
+      stockExchange: 'NASDAQ',
       accountMode: 'paper',
       market: 'US',
       symbol: 'AAPL',
@@ -116,8 +117,8 @@ test('automatic policy fields restrict eligibility and standing activation remov
     mode: 'automatic',
     automaticEnabled: true,
     marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true },
-    exchangeEnabled: { bitget: false, upbit: true, kiwoom: false },
-    enabledAssets: { bitget: [], upbit: ['ETH'], kiwoom: [] },
+    exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
+    enabledAssets: { bitget: [], upbit: ['ETH'], kiwoom: [], toss: [] },
     enabledStrategies: ['breakout-v1'],
   });
   const blocked = evaluateTradingPlan(plan(), automatic, { emergencyStopped: false, serverLiveEnabled: true });
@@ -291,8 +292,8 @@ test('persistent global emergency stop blocks new work and standing automatic re
     mode: 'automatic',
     automaticEnabled: true,
     marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true },
-    exchangeEnabled: { bitget: false, upbit: true, kiwoom: false },
-    enabledAssets: { bitget: [], upbit: ['BTC'], kiwoom: [] },
+    exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
+    enabledAssets: { bitget: [], upbit: ['BTC'], kiwoom: [], toss: [] },
     enabledStrategies: ['breakout-v1'],
   });
   await repository.savePolicy(USER_A, automaticPolicy);
