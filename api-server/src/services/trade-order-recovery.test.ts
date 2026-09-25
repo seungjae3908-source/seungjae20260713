@@ -234,7 +234,7 @@ test('lookup failure schedules bounded retries and never replays the order POST'
   }
 });
 
-test('Kiwoom recovery without an exchange order id fails closed without external lookup or stock order', async () => {
+test('Kiwoom mock recovery without an exchange order id remains manual-review only with zero outbound requests', async () => {
   const { repository, planValue, orderValue } = await setup('kiwoom', 'mock', {
     appKey: 'kiwoom-app', secretKey: 'kiwoom-secret',
   });
@@ -248,7 +248,7 @@ test('Kiwoom recovery without an exchange order id fails closed without external
     const recovered = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
     assert.equal(recovered.state, 'RECOVERY_REQUIRED');
     assert.equal(recovered.manualReviewRequired, true);
-    assert.equal(recovered.lastErrorCode, 'KIWOOM_RECONCILIATION_STATUS_BLOCKED_BY_UNVERIFIED_OFFICIAL_CONTRACT');
+    assert.equal(recovered.lastErrorCode, 'PAPER_ORDER_RECOVERY_REQUIRES_REVIEW');
     assert.equal(outbound, 0);
   } finally {
     globalThis.fetch = nativeFetch;
@@ -359,7 +359,7 @@ test('Upbit provider-side cancel preserves the partial fill and never issues a c
   }
 });
 
-test('Kiwoom recovery with an exchange order id still blocks before any private request while the official contract is unverified', async () => {
+test('Kiwoom mock recovery with an exchange order id remains manual-review only with zero outbound requests', async () => {
   const { repository, planValue, orderValue } = await setup('kiwoom', 'mock', {
     appKey: 'kiwoom-app', secretKey: 'kiwoom-secret',
   });
