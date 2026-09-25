@@ -4,6 +4,7 @@ import test from 'node:test';
 import { AccountReadonlyError } from '../account-readonly.errors';
 import type { ReadonlyCredentialProvider } from '../account-readonly.repository';
 import { createVaultBackedAccountReaders } from '../account-readonly.runtime';
+import { AccountReadonlyService } from '../account-readonly.service';
 
 const SCOPE = { userId: 'user-runtime-test', accessToken: 'SUPABASE_ACCESS_RUNTIME_TEST_ONLY' };
 
@@ -233,4 +234,106 @@ test('invalid provider timeout configuration fails closed before private provide
       && error.code === 'ACCOUNT_READONLY_PROVIDER_TIMEOUT_INVALID',
   );
   assert.equal(providerCalls, 0);
+});
+
+
+test('Upbit private read classifies IP, permission, rate-limit and request failures without leaking provider text', async () => {
+  const cases = [
+    { status: 401, body: { error: { name: 'no_authorization_ip', message: 'SECRET_PROVIDER_MESSAGE' } }, code: 'UPBIT_IP_NOT_ALLOWED', retryable: false },
+    { status: 403, body: { error: { name: 'out_of_scope', message: 'SECRET_PROVIDER_MESSAGE' } }, code: 'UPBIT_PERMISSION_DENIED', retryable: false },
+    { status: 418, body: { error: { name: 'too_many_requests', message: 'SECRET_PROVIDER_MESSAGE' } }, code: 'RATE_LIMITED', retryable: true },
+    { status: 400, body: { error: { name: 'UNTRUSTED_PROVIDER_CODE', message: 'SECRET_PROVIDER_MESSAGE' } }, code: 'UPBIT_REQUEST_REJECTED', retryable: false },
+  ] as const;
+
+  for (const fixture of cases) {
+    const readers = createVaultBackedAccountReaders({
+      repositoryFactory: () => repositoryFor('upbit'),
+      decryptCredentials: () => ({ accessKey: 'UPBIT_ACCESS_RUNTIME_TEST_ONLY', secretKey: 'UPBIT_SECRET_RUNTIME_TEST_ONLY' }),
+      fetchImpl: async () => new Response(JSON.stringify(fixture.body), {
+        status: fixture.status,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    });
+    await assert.rejects(
+      () => readers.upbit!(SCOPE),
+      (error: unknown) => error instanceof AccountReadonlyError
+        && error.code === fixture.code
+        && error.retryable === fixture.retryable
+        && !error.message.includes('SECRET_PROVIDER_MESSAGE')
+        && !error.message.includes('UNTRUSTED_PROVIDER_CODE'),
+    );
+  }
+});
+
+test('Bitget application error codes map to bounded account-access causes without exposing provider payloads', async () => {
+  for (const [providerCode, expected] of [
+    ['40038', 'BITGET_IP_NOT_ALLOWED'],
+    ['40014', 'BITGET_PERMISSION_DENIED'],
+    ['40009', 'BITGET_AUTH_FAILED'],
+    ['40008', 'BITGET_TIMESTAMP_REJECTED'],
+    ['99999', 'BITGET_REQUEST_REJECTED'],
+  ] as const) {
+    const readers = createVaultBackedAccountReaders({
+      repositoryFactory: () => repositoryFor('bitget'),
+      decryptCredentials: () => ({ apiKey: 'BITGET_KEY_RUNTIME_TEST_ONLY', secretKey: 'BITGET_SECRET_RUNTIME_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_RUNTIME_TEST_ONLY' }),
+      fetchImpl: async () => new Response(JSON.stringify({
+        code: providerCode,
+        msg: 'SECRET_PROVIDER_MESSAGE',
+        data: [],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    });
+    await assert.rejects(
+      () => readers.bitget!(SCOPE),
+      (error: unknown) => error instanceof AccountReadonlyError
+        && error.code === expected
+        && !error.message.includes('SECRET_PROVIDER_MESSAGE')
+        && !error.message.includes('99999'),
+    );
+  }
+});
+
+test('credential, IP or permission loss evicts same-user last-good account facts instead of serving stale balances', async () => {
+  const connected = {
+    provider: 'upbit' as const,
+    readOnly: true as const,
+    connected: true,
+    status: 'CONNECTED' as const,
+    accounts: [],
+    balances: [{ currency: 'KRW', available: 100, locked: 0, total: 100, estimatedKrwValue: 100 }],
+    positions: [],
+    openOrders: [],
+    checkedAt: '2026-09-25T00:00:00.000Z',
+    lastGoodAt: '2026-09-25T00:00:00.000Z',
+    stale: false,
+    errorCode: null,
+    orderRequests: 0 as const,
+    cancelRequests: 0 as const,
+    amendRequests: 0 as const,
+    transferRequests: 0 as const,
+    withdrawalRequests: 0 as const,
+    credentialsReturned: false as const,
+    liveTradingEnabled: false as const,
+    autoTradingEnabled: false as const,
+  };
+  let mode: 'ok' | 'ip' | 'timeout' = 'ok';
+  const service = new AccountReadonlyService({
+    upbit: async () => {
+      if (mode === 'ip') throw new AccountReadonlyError('UPBIT_IP_NOT_ALLOWED');
+      if (mode === 'timeout') throw new AccountReadonlyError('PROVIDER_TIMEOUT', true);
+      return connected;
+    },
+  }, { upbit: true });
+
+  assert.equal((await service.read(SCOPE, 'upbit')).balances?.[0]?.total, 100);
+  mode = 'ip';
+  const denied = await service.read(SCOPE, 'upbit');
+  assert.equal(denied.status, 'AUTH_FAILED');
+  assert.equal(denied.errorCode, 'UPBIT_IP_NOT_ALLOWED');
+  assert.equal(denied.balances, null);
+
+  mode = 'timeout';
+  const afterEviction = await service.read(SCOPE, 'upbit');
+  assert.equal(afterEviction.status, 'UNAVAILABLE');
+  assert.equal(afterEviction.stale, false);
+  assert.equal(afterEviction.balances, null);
 });
