@@ -424,6 +424,18 @@ export function UserBrokerTelegramPanel() {
   const holdingAlertsOn = Boolean(state?.alertPolicy.signalTypes.includes('PRICE_TARGET'));
   const executionAlertsOn = Boolean(state && essentialExecutionPreferenceKeys.every((key) => state.preferences[key]));
   const telegramHealthy = Boolean(state?.telegram.connected && state.telegramRuntime.deliveryReady);
+  const telegramStatusLabel = requestState === 'failure'
+    ? '확인 실패'
+    : telegramHealthy
+      ? '정상'
+      : state?.telegram.connected
+        ? '확인 필요'
+        : '연결 필요';
+  const telegramStatusTone = requestState === 'failure'
+    ? 'bg-destructive/10 text-destructive'
+    : telegramHealthy
+      ? 'bg-positive/10 text-positive'
+      : 'bg-warning/10 text-warning';
 
   const toggleMarketGroup = async (markets: TelegramPolicyMarket[], value: boolean) => {
     if (!state) return;
@@ -456,10 +468,8 @@ export function UserBrokerTelegramPanel() {
     >
       <div className="flex items-center justify-between gap-3">
         <h2 id="user-integrations-title" className="text-base font-black">텔레그램</h2>
-        <span className={`rounded-full px-2.5 py-1 text-[11px] font-black ${
-          telegramHealthy ? 'bg-positive/10 text-positive' : 'bg-warning/10 text-warning'
-        }`}>
-          {telegramHealthy ? '정상' : state?.telegram.connected ? '확인 필요' : '연결 필요'}
+        <span className={`rounded-full px-2.5 py-1 text-[11px] font-black ${telegramStatusTone}`}>
+          {telegramStatusLabel}
         </span>
       </div>
 
