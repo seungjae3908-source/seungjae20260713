@@ -112,6 +112,36 @@ test('rich signal card uses evidence, AI explanation, news links and read-only a
       publishedAt: '2026-08-21T03:00:00.000Z',
       tone: 'positive',
     }],
+    marketEvents: [
+      {
+        kind: 'DISCLOSURE',
+        title: '신규 공급계약 공시',
+        source: 'DART',
+        url: 'https://dart.example.test/report/1',
+        publishedAt: '2026-08-21T03:30:00.000Z',
+        summary: '신규 공급계약 체결 사실을 확인했으며 계약 조건은 원문 확인이 필요합니다.',
+        sentiment: 'POSITIVE',
+        importanceScore: 91,
+        confidenceScore: 95,
+        freshness: 'FRESH',
+        riskFlags: [],
+        catalystFlags: ['CONTRACT'],
+      },
+      {
+        kind: 'NEWS',
+        title: '반도체 업황 관련 공개 뉴스',
+        source: 'Example News',
+        url: 'https://news.example.test/article/1',
+        publishedAt: '2026-08-21T03:00:00.000Z',
+        summary: '반도체 업황 개선 기대를 다룬 공개 기사입니다.',
+        sentiment: 'POSITIVE',
+        importanceScore: 72,
+        confidenceScore: 80,
+        freshness: 'FRESH',
+        riskFlags: [],
+        catalystFlags: ['SECTOR'],
+      },
+    ],
     chart,
     warnings: [],
   };
@@ -120,16 +150,34 @@ test('rich signal card uses evidence, AI explanation, news links and read-only a
     symbol: '005930',
     market: 'KR',
     destinationChatId: 'stock-room',
-  }, alert(), evidence, { timeframe: '15m' });
+  }, alert(), evidence, { timeframe: '15m', strategyMode: 'scalping' });
 
   assert.match(result.details ?? '', /거래량 증가/);
-  assert.match(result.details ?? '', /반도체/);
-  assert.match(result.details ?? '', /AI 설명/);
+  assert.match(result.details ?? '', /국내 · 단타 · 반도체/);
+  assert.match(result.details ?? '', /1차 진입 111 · 기본 60%/);
+  assert.match(result.details ?? '', /2차 진입 109 · 기본 40%/);
+  assert.match(result.details ?? '', /AI 신호설명/);
+  assert.match(result.details ?? '', /신규 공급계약 공시/);
+  assert.match(result.details ?? '', /AI 요약/);
   assert.match(result.details ?? '', /Example News/);
   assert.equal(result.linkPreview, true);
   assert.ok(result.photo?.bytes instanceof Uint8Array);
   assert.equal(result.buttons?.flat().some((button) => button.text.includes('AI차트')), true);
-  assert.equal(result.buttons?.flat().some((button) => button.text.includes('뉴스 원문')), true);
+  assert.equal(result.buttons?.flat().some((button) => button.text.includes('주문 준비')), true);
+  assert.equal(result.buttons?.flat().some((button) => button.text.includes('뉴스·공시')), true);
+  assert.equal(result.buttons?.flat().some((button) => button.text.includes('공시') && button.text.includes('원문')), true);
+  const orderButton = result.buttons?.flat().find((button) => button.text.includes('주문 준비'));
+  assert.ok(orderButton);
+  const orderUrl = new URL(orderButton!.url);
+  assert.equal(orderUrl.pathname, '/scanner');
+  assert.equal(orderUrl.searchParams.get('symbol'), '005930');
+  assert.equal(orderUrl.searchParams.get('market'), 'KR');
+  assert.equal(orderUrl.searchParams.get('strategyMode'), 'scalping');
+  assert.equal(orderUrl.searchParams.get('orderPreparation'), '1');
+  assert.equal(orderUrl.searchParams.get('source'), 'telegram');
+  for (const forbidden of ['userId', 'memberId', 'chatId', 'accountId', 'signalId']) {
+    assert.equal(orderUrl.searchParams.has(forbidden), false);
+  }
   assert.equal(JSON.stringify(result).includes('callback_data'), false);
 });
 
