@@ -472,7 +472,7 @@ export class TradeExecutionService {
       if ('skippedOrder' in result) return result.skippedOrder ?? order;
 
       const metadata = this.riskMetadata(result.risk, true);
-      await this.automation.transition(order, 'ACCEPTED', 'EXCHANGE_ACCEPTED', {
+      order = await this.automation.transition(order, 'ACCEPTED', 'EXCHANGE_ACCEPTED', {
         ...metadata,
         exchangeOrderId: result.orderId,
         submissionAttemptId: order.submissionAttemptId,
