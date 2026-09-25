@@ -47,7 +47,7 @@ export function assertUnifiedTradeJournalSafety(
   const providerIds = new Set<string>();
   let providerRequestTotal = 0;
   for (const provider of history.providers) {
-    if ((provider.provider !== 'upbit' && provider.provider !== 'bitget')
+    if ((provider.provider !== 'upbit' && provider.provider !== 'bitget' && provider.provider !== 'kiwoom')
       || providerIds.has(provider.provider)
       || !isNonNegativeInteger(provider.privateProviderRequests)
       || !isNonNegativeInteger(provider.records)) {
@@ -60,6 +60,24 @@ export function assertUnifiedTradeJournalSafety(
       && (provider.privateProviderRequests !== 0 || provider.records !== 0)) {
       throw new Error('미연결·비활성 공급자에서 private 조회 또는 거래이력이 보고되었습니다.');
     }
+  }
+
+  if (!Array.isArray(history.realizedEvidence)
+    || history.realizedEvidence.some((row) => (
+      row.provider !== 'kiwoom'
+      || row.market !== 'KR'
+      || row.evidenceType !== 'DAILY_CASH_REALIZED'
+      || row.canonicalAnalyticsPromoted !== false
+      || !/^\d{8}$/.test(row.date)
+      || !/^\d{6}$/.test(row.symbol)
+      || typeof row.sellAveragePrice !== 'number'
+      || !Number.isFinite(row.sellAveragePrice)
+      || row.sellAveragePrice <= 0
+      || typeof row.sellQuantity !== 'number'
+      || !Number.isFinite(row.sellQuantity)
+      || row.sellQuantity <= 0
+    ))) {
+    throw new Error('Kiwoom 국내 실현손익 증거 계약을 확인하지 못했습니다.');
   }
 
   if (providerRequestTotal !== history.privateProviderRequests
