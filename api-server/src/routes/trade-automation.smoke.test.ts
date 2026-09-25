@@ -376,6 +376,7 @@ test('automatic policy executes US-stock Paper without per-order approval or pri
     const body = {
       exchange: 'kiwoom',
       accountMode: 'paper',
+      stockExchange: 'NASDAQ',
       strategyId: 'trend-breakout-v1',
       signalId: 'us-paper-auto-signal',
       symbol: 'AAPL',
