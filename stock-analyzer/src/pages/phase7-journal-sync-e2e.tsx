@@ -204,6 +204,7 @@ function unifiedJournal() {
 export default function Phase7JournalSyncE2EPage() {
   const [userIndex, setUserIndex] = useState(0);
   const [mode, setMode] = useState<Mode>('success');
+  const useRealUnifiedTransport = new URLSearchParams(window.location.search).get('unifiedTransport') === 'api';
   const userId = USERS[userIndex];
   const paperStorage = useMemo(() => {
     const adapter = createUserPaperStorage(window.localStorage, userId, new Date(NOW));
@@ -245,7 +246,7 @@ export default function Phase7JournalSyncE2EPage() {
         resolveApi={fakeResolve as never}
         analyticsApi={async () => analytics(mode === 'insufficient')}
         reviewApi={async () => reviewDataset()}
-        unifiedLedgerApi={async () => unifiedJournal() as never}
+        unifiedLedgerApi={useRealUnifiedTransport ? undefined : async () => unifiedJournal() as never}
       />
     </div>
   </main>;
