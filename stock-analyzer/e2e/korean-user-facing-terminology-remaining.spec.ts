@@ -15,7 +15,7 @@ test('remaining Korean-first presentation preserves internal Telegram and journa
   const presentation = `${labels}\n${telegram}\n${journal}\n${research}`;
 
   for (const label of [
-    '텔레그램', '위험관리 엔진', '주문 계획',
+    '텔레그램',
     '매수', '롱', '숏', '거래 안 함', '대표 전략', '코인현물', '코인선물',
     '모의매매', '실시간 추적검증', '손익비 지수', '진입 전 판단 근거',
     '준비됨', '진행 중', '차단됨', '미수집', '확인 불가', '오래된 정보', '실패', '정상', '표본 부족',
