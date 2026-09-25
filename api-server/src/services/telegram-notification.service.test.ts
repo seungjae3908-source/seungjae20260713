@@ -107,7 +107,7 @@ test('escapes Telegram HTML and renders alert-only templates', () => {
   assert.match(rendered, /강한매수 신호/);
   assert.match(rendered, /&lt;005930&gt;/);
   assert.match(rendered, /KR&amp;NXT/);
-  assert.match(rendered, /실주문 실행 기능은 포함되지 않습니다/);
+  assert.doesNotMatch(rendered, /실주문 실행 기능은 포함되지 않습니다/);
   assert.equal(rendered.includes('<005930>'), false);
 });
 
