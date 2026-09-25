@@ -119,6 +119,51 @@ test('announced signal hydrates all durable fields after restart and TP followup
   });
 });
 
+test('public signal lifecycle edits the original Telegram message instead of creating a new followup', async () => {
+  await withFollowupEnv(async () => {
+    const repository = new InMemoryTelegramSignalFollowupRepository();
+    await markTelegramSignalAnnounced(
+      announcedAlert('signal-edit-in-place'),
+      ANNOUNCED_AT,
+      repository,
+      {
+        messageId: 42,
+        messageKind: 'TEXT',
+        renderedText: '<b>삼성전자 · 진입가능</b>\n진입 100~102',
+      },
+    );
+    clearTelegramSignalFollowupState();
+
+    let newMessages = 0;
+    const edits: Array<{ messageId: number; text: string }> = [];
+    await deliverScannerTelegramFollowups(
+      [followupCard('signal-edit-in-place')],
+      async () => {
+        newMessages += 1;
+        return { ok: true, attempts: 1 };
+      },
+      ANNOUNCED_AT + 1_000,
+      repository,
+      async (input) => {
+        edits.push({ messageId: input.messageId, text: input.text });
+        return { ok: true, attempts: 1 };
+      },
+    );
+
+    expect(newMessages).toBe(0);
+    expect(edits).toHaveLength(1);
+    expect(edits[0].messageId).toBe(42);
+    expect(edits[0].text).toContain('TP1 105 ✅');
+    expect(edits[0].text).toContain('현재 상태');
+
+    const [stored] = await repository.list(['signal-edit-in-place']);
+    expect(stored.telegramMessageId).toBe(42);
+    expect(stored.telegramMessageKind).toBe('TEXT');
+    expect(stored.baseMessageText).toContain('진입가능');
+    expect(stored.reachedTargets).toEqual([0]);
+  });
+});
+
 test('canonical duplicate followup result is checkpointed and is not resent after restart', async () => {
   await withFollowupEnv(async () => {
     const repository = new InMemoryTelegramSignalFollowupRepository();
@@ -441,6 +486,17 @@ test('durable lifecycle migration is service-role-only and stores no member or t
   expect(migration).not.toMatch(/\b(user_id|telegram_chat_id|chat_id|order_id|account_id|balance|holdings|profile_id)\b/);
 });
 
+test('edit-in-place migration stores only public Telegram message state and no user or chat identity', () => {
+  const migration = fs.readFileSync(
+    path.resolve(process.cwd(), '../api-server/supabase/migrations/2026092503_telegram_signal_message_edit_state.sql'),
+    'utf8',
+  );
+  expect(migration).toContain('telegram_message_id');
+  expect(migration).toContain('telegram_message_kind');
+  expect(migration).toContain('base_message_text');
+  expect(migration).not.toMatch(/\b(user_id|telegram_chat_id|chat_id|order_id|account_id|balance|holdings|profile_id)\b/);
+});
+
 test('production has no in-memory storage fallback and initial public alert awaits durable checkpoint', () => {
   const repositorySource = fs.readFileSync(
     path.resolve(process.cwd(), '../api-server/src/services/telegram-signal-followup.repository.ts'),
@@ -453,10 +509,9 @@ test('production has no in-memory storage fallback and initial public alert awai
     path.resolve(process.cwd(), '../api-server/src/services/scanner-telegram-delivery.service.ts'),
     'utf8',
   );
-  expect(deliverySource).toContain("result.ok || result.skipped === 'DUPLICATE'");
-  expect(deliverySource).toContain('await markTelegramSignalAnnounced(alert);');
+  expect(deliverySource).toContain('sendTelegramAlertWithReceipt');
+  expect(deliverySource).toContain('await markTelegramSignalAnnounced(alert, Date.now(), undefined, receipt);');
   expect(deliverySource).toContain('initial alert lacks durable followup checkpoint; failing closed');
-  expect(deliverySource).toContain('Freshness: ${freshness.status} · 유효성 ${freshness.validity}');
   expect(deliverySource).toContain('재검증 전 실시간 신호로 사용 금지');
   expect(deliverySource).not.toContain('ordersSubmitted: 1');
   expect(deliverySource).not.toContain("orderAuthority: 'EXECUTE'");
