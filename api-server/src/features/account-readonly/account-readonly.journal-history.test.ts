@@ -76,6 +76,67 @@ test('disabled provider never decrypts or sends a private request', async () => 
   assert.equal(result.providers[0]?.status, 'DISABLED');
 });
 
+test('Kiwoom reader caps exact fill history to seven days and preserves read-only request counts', async () => {
+  const reader = createAccountJournalHistoryReader({
+    repositoryFactory: () => repository({ kiwoom: 'KIWOOM_ENCRYPTED_FIXTURE' }),
+    decryptCredentials: () => ({ appKey: 'KIWOOM_APP_TEST_ONLY', appSecret: 'KIWOOM_SECRET_TEST_ONLY' }),
+    flags: { kiwoom: true, upbit: false, bitget: false },
+    kiwoomProvider: {
+      async journalFillRows(_credentials, dates, _signal, requestCounter) {
+        assert.equal(dates.length, 7);
+        if (requestCounter) requestCounter.value += 2;
+        return {
+          privateProviderRequests: 2,
+          domestic: [{
+            orderDate: dates.at(-1)!,
+            row: {
+              ord_no: 'KR-1', stk_cd: '005930', trde_tp: '2', cntr_no: 'KR-FILL-1',
+              cntr_qty: '1', cntr_uv: '70000', cntr_tm: '101530',
+            },
+          }],
+          us: [{
+            orderDate: dates.at(-1)!,
+            row: {
+              ord_no: 'US-1', crnc_code: 'USD', stk_cd: 'AAPL', frgn_trde_tp: '1',
+              cntr_qty: '1', cntr_uv: '200', ord_time: '090000', cntr_time: '091500',
+            },
+          }],
+        };
+      },
+    },
+  });
+
+  const result = await reader({ userId: USER_ID, range: '30D', providers: ['kiwoom'], now: NOW });
+  assert.equal(result.privateProviderRequests, 2);
+  assert.equal(result.payloads.length, 2);
+  assert.equal(result.providers[0]?.status, 'PARTIAL');
+  assert.equal(result.providers[0]?.effectiveDays, 7);
+  assert.equal(result.providers[0]?.rangeCapped, true);
+  assert.equal(result.providers[0]?.truncated, true);
+  assert.equal(result.providers[0]?.errorCode, 'KIWOOM_HISTORY_CAPPED_7D');
+  assert.equal(result.payloads.every((row) => row.source === 'KIWOOM_API'), true);
+});
+
+test('Kiwoom failed history read retains attempted private request count', async () => {
+  const reader = createAccountJournalHistoryReader({
+    repositoryFactory: () => repository({ kiwoom: 'KIWOOM_ENCRYPTED_FIXTURE' }),
+    decryptCredentials: () => ({ appKey: 'A', appSecret: 'S' }),
+    flags: { kiwoom: true, upbit: false, bitget: false },
+    kiwoomProvider: {
+      async journalFillRows(_credentials, _dates, _signal, requestCounter) {
+        if (requestCounter) requestCounter.value += 1;
+        throw new Error('provider failed after one read');
+      },
+    },
+  });
+
+  const result = await reader({ userId: USER_ID, range: '7D', providers: ['kiwoom'], now: NOW });
+  assert.equal(result.privateProviderRequests, 1);
+  assert.equal(result.payloads.length, 0);
+  assert.equal(result.providers[0]?.status, 'UNAVAILABLE');
+  assert.equal(result.providers[0]?.privateProviderRequests, 1);
+});
+
 test('Upbit closed-order history is re-read by UUID and normalized only from proven detail trades', async () => {
   const seen: Array<{ path: string; method: string; query: string }> = [];
   const reader = createAccountJournalHistoryReader({
