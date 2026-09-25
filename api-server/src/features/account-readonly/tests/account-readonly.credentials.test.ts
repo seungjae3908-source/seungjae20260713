@@ -31,6 +31,7 @@ function privateReadRuntime() {
     APP_ENV: 'staging',
     TRADING_CREDENTIAL_MASTER_KEY: TEST_MASTER_KEY,
     TOSS_ACCOUNT_READ_ENABLED: 'true',
+    KIWOOM_ACCOUNT_READ_ENABLED: 'true',
     UPBIT_ACCOUNT_READ_ENABLED: 'true',
     BITGET_ACCOUNT_READ_ENABLED: 'true',
     LIVE_TRADING_ENABLED: 'false',
@@ -45,6 +46,7 @@ function privateReadRuntime() {
 
 test('read-only account routes require the same provider capabilities as the UI market boundaries', () => {
   assert.equal(readonlyProviderCapability('toss'), 'canAccessBasicInfo');
+  assert.equal(readonlyProviderCapability('kiwoom'), 'canAccessBasicInfo');
   assert.equal(readonlyProviderCapability('upbit'), 'canAccessSpot');
   assert.equal(readonlyProviderCapability('bitget'), 'canAccessFutures');
   assert.equal(readonlyProviderCapability('unknown'), null);
@@ -68,7 +70,7 @@ test('read-only account routes require the same provider capabilities as the UI 
   assert.match(routeSource, /normalized === 'upbit'.*'canAccessSpot'/s);
 });
 
-test('read-only credential parser accepts only Toss, Upbit and Bitget credential shapes', () => {
+test('read-only credential parser accepts only Toss, Kiwoom, Upbit and Bitget credential shapes', () => {
   assert.deepEqual(parseReadonlyCredentialRequest('toss', {
     purpose: 'read_only', permissions: ['read'],
     credentials: { clientId: 'toss-client-test', clientSecret: 'toss-secret-test' },
@@ -77,6 +79,10 @@ test('read-only credential parser accepts only Toss, Upbit and Bitget credential
     purpose: 'read_only', permissions: ['read'],
     credentials: { clientId: 'toss-client-test', clientSecret: 'toss-secret-test', accountSeq: '12345678' },
   }), { clientId: 'toss-client-test', clientSecret: 'toss-secret-test', accountSeq: '12345678' });
+  assert.deepEqual(parseReadonlyCredentialRequest('kiwoom', {
+    purpose: 'read_only', permissions: ['read'],
+    credentials: { appKey: 'kiwoom-app-test', appSecret: 'kiwoom-secret-test' },
+  }), { appKey: 'kiwoom-app-test', appSecret: 'kiwoom-secret-test' });
   assert.deepEqual(parseReadonlyCredentialRequest('upbit', {
     purpose: 'read_only', permissions: ['read'],
     credentials: { accessKey: 'upbit-access-test', secretKey: 'upbit-secret-test' },
