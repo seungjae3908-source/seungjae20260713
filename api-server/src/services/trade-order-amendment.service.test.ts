@@ -150,3 +150,41 @@ test('interrupted amend intent is recovery-required without another provider req
   assert.equal(result.order.amendments?.[0]?.status, 'RECOVERY_REQUIRED');
   assert.equal(outbound, 0);
 });
+
+
+test('partial fill amendment is blocked before any provider request', async () => {
+  const { repository, p, o, service } = await setup();
+  o.state = 'PARTIALLY_FILLED';
+  o.filledQuantity = 0.25;
+  o.remainingQuantity = 0.75;
+  await repository.saveOrder(o);
+
+  let outbound = 0;
+  globalThis.fetch = (async () => {
+    outbound += 1;
+    throw new Error('PROVIDER_REQUEST_MUST_NOT_HAPPEN');
+  }) as typeof fetch;
+
+  await assert.rejects(
+    () => service.amend(USER, o, p, { requestId: 'amend-partial-01', price: 101_000, quantity: 0.75 }),
+    /PARTIAL_FILL_AMEND_REQUIRES_CANCEL_AND_REPLAN/,
+  );
+  assert.equal(outbound, 0);
+});
+
+test('real-order global gate blocks amendment before provider mutation', async () => {
+  const { p, o, service } = await setup();
+  process.env.REAL_ORDER_ENABLED = 'false';
+
+  let outbound = 0;
+  globalThis.fetch = (async () => {
+    outbound += 1;
+    throw new Error('PROVIDER_REQUEST_MUST_NOT_HAPPEN');
+  }) as typeof fetch;
+
+  await assert.rejects(
+    () => service.amend(USER, o, p, { requestId: 'amend-gate-01', price: 101_000, quantity: 1 }),
+    /LIVE_EXECUTION_DISABLED/,
+  );
+  assert.equal(outbound, 0);
+});
