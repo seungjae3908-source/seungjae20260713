@@ -469,7 +469,7 @@ export function buildKiwoomUsExecutionSnapshot(input: {
     availableBalance,
     openPositionCount: holdingRows.filter((row) => (positive(row.poss_qty ?? row.qty) ?? 0) > 0).length,
     estimatedFeePercent: feePercent,
-    marketStatus: 'OPEN',
+    marketStatus: input.plan.marketSnapshot.marketStatus ?? 'UNKNOWN',
     signal: input.signal,
   });
 }
