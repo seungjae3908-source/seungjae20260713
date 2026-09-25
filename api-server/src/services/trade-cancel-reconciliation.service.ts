@@ -3,6 +3,7 @@ import type { TradingRepository } from './trade-automation.repository';
 import { liveExecutionEnabled, TradeAutomationService } from './trade-automation.service';
 import { TradeOrderRecoveryService } from './trade-order-recovery.service';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
+import { tradingProviderHttpErrorCode, tradingProviderNetworkErrorCode, tradingProviderTimeoutCode } from './trade-provider-http-error.service';
 import {
   prepareBitgetCancel,
   prepareKiwoomCancel,
@@ -49,10 +50,11 @@ async function sendCancelRequest(baseUrl: string, request: PreparedExchangeReque
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => ({})) as unknown;
-    if (!response.ok) throw new Error(`EXCHANGE_HTTP_${response.status}`);
+    if (!response.ok) throw new Error(tradingProviderHttpErrorCode(baseUrl, response.status));
     return isRecord(payload) ? payload : { data: payload };
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') throw new Error('EXCHANGE_TIMEOUT');
+    if (error instanceof Error && error.name === 'AbortError') throw new Error(tradingProviderTimeoutCode(baseUrl));
+    if (error instanceof TypeError) throw new Error(tradingProviderNetworkErrorCode(baseUrl));
     throw error;
   } finally {
     clearTimeout(timeout);
