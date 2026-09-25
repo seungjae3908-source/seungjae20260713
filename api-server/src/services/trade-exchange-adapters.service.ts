@@ -162,6 +162,23 @@ export function prepareBitgetPendingOrders(credentials: BitgetCredentials, symbo
   return bitgetRequest(credentials, 'GET', '/api/v2/mix/order/orders-pending', null, query, timestamp);
 }
 
+export function prepareBitgetHistoryPositions(
+  credentials: BitgetCredentials,
+  startTimeMs: number,
+  endTimeMs: number,
+  idLessThan?: string,
+  timestamp?: string,
+) {
+  const query = [
+    'productType=USDT-FUTURES',
+    `startTime=${Math.trunc(startTimeMs)}`,
+    `endTime=${Math.trunc(endTimeMs)}`,
+    'limit=100',
+    ...(idLessThan?.trim() ? [`idLessThan=${encodeURIComponent(idLessThan.trim())}`] : []),
+  ].join('&');
+  return bitgetRequest(credentials, 'GET', '/api/v2/mix/position/history-position', null, query, timestamp);
+}
+
 export function prepareBitgetMarginMode(
   credentials: BitgetCredentials, symbol: string, marginMode: 'crossed' | 'isolated', timestamp?: string,
 ) {
@@ -268,6 +285,26 @@ export function prepareUpbitOpenOrders(
     limit: '100',
     order_by: 'desc',
   }, nonce);
+}
+
+export function prepareUpbitClosedOrders(
+  credentials: UpbitCredentials,
+  startTimeMs: number,
+  endTimeMs: number,
+  nonce?: string,
+) {
+  return upbitRequest(credentials, 'GET', '/v1/orders/closed', {
+    start_time: String(Math.trunc(startTimeMs)),
+    end_time: String(Math.trunc(endTimeMs)),
+    limit: '1000',
+    order_by: 'asc',
+  }, nonce);
+}
+
+export function prepareUpbitOrderByUuid(credentials: UpbitCredentials, uuid: string, nonce?: string) {
+  const normalized = uuid.trim();
+  if (!normalized) throw new Error('UPBIT_ORDER_UUID_REQUIRED');
+  return upbitRequest(credentials, 'GET', '/v1/order', { uuid: normalized }, nonce);
 }
 
 export function prepareUpbitOrderChance(credentials: UpbitCredentials, symbol: string, nonce?: string) {
