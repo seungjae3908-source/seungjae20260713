@@ -177,6 +177,9 @@ export function loadAutoTradeSettings(): AutoTradeSettings {
 		return {
 			...DEFAULT_SETTINGS,
 			...parsed,
+			// Legacy browser-scoped real-order authority is retired. Live execution
+			// belongs only to the canonical /api/trade-automation engine.
+			liveTrading: false,
 			// 현재 정책은 후보 전체를 비교한 뒤 확률 1위 한 종목만 주문한다.
 			maxRanks: 1,
 			investmentPerTrade: Math.max(
@@ -269,6 +272,8 @@ export function saveAutoTradeSettings(
 ): AutoTradeSettings {
 	const normalized: AutoTradeSettings = {
 		...settings,
+		liveTrading: false,
+		executionKey: "",
 		maxRanks: 1,
 		investmentPerTrade: Math.max(0, Math.round(settings.investmentPerTrade)),
 		accountValue: Math.max(1, Math.round(settings.accountValue)),
@@ -655,6 +660,14 @@ export async function executeAutoTradeCandidates(
 	candidates: AutoTradeCandidate[],
 	settings: AutoTradeSettings,
 ): Promise<AutoTradeRunResult> {
+	void candidates;
+	void settings;
+	return {
+		ok: false,
+		message: "기존 Scanner 실주문 경로는 종료되었습니다. 새 자동매매 화면의 실주문 연결을 사용해 주세요.",
+		results: [],
+	};
+	/*
 	if (settings.investmentPerTrade <= 0) {
 		throw new Error("1회 최대 주문금액을 직접 입력해 주세요.");
 	}
@@ -841,34 +854,21 @@ export async function executeAutoTradeCandidates(
 		.map((item) => item.ticker);
 	markAutoTradeExecuted(completed);
 	return payload;
+	*/
 }
 
 
 export async function monitorAutoTradePositions(
 	settings: AutoTradeSettings,
 ): Promise<AutoTradeRunResult & { activePositions?: number }> {
-	if (!settings.enabled || !settings.liveTrading || !settings.executionKey.trim()) {
-		return { ok: false, results: [] };
-	}
-
-	const response = await authorizedFetch("/api/stocks/auto-trade/monitor", {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			"X-Auto-Trade-Key": settings.executionKey.trim(),
-		},
-		body: "{}",
-	});
-	const payload = (await response.json().catch(() => ({}))) as AutoTradeRunResult & {
-		activePositions?: number;
+	void settings;
+	return {
+		ok: false,
+		message: "레거시 자동청산 경로는 비활성화되었습니다. 새 실주문 엔진의 주문 상태/청산 경로를 사용해 주세요.",
+		results: [],
+		activePositions: 0,
 	};
 
-	if (!response.ok) {
-		throw new Error(payload.message || `자동청산 확인 실패 (HTTP ${response.status})`);
-	}
-
-	return payload;
-}
 
 
 export type AutoTradeExitSignal = {
@@ -893,6 +893,14 @@ export async function closeAutoTradePosition(
 	profitPercent?: number;
 	reason?: string;
 }> {
+	void settings;
+	void signal;
+	return {
+		ok: false,
+		message: "레거시 실매도 경로는 비활성화되었습니다. 새 실주문 엔진을 사용해 주세요.",
+	};
+	/*
+
 	if (!settings.enabled || !settings.liveTrading || !settings.executionKey.trim()) {
 		return { ok: false, message: '실제 주문 승인모드와 실행키를 먼저 확인해 주세요.' };
 	}
@@ -969,4 +977,5 @@ export async function closeAutoTradePosition(
 		throw new Error(result.message || `매도 주문 실패 (HTTP ${executeResponse.status})`);
 	}
 	return result;
+	*/
 }
