@@ -9,11 +9,24 @@ export type PortfolioAccountReadResult = {
   errorCode: string | null;
 };
 
+export type PortfolioAccountSourceDependencies = {
+  credentialConfigured: (userId: string, provider: AccountProvider) => Promise<boolean>;
+  read: (
+    scope: { userId: string; accessToken: string },
+    provider: AccountProvider,
+  ) => Promise<CanonicalAccountSnapshot>;
+};
+
+const defaultDependencies: PortfolioAccountSourceDependencies = {
+  credentialConfigured: accountReadonlyCredentialConfigured,
+  read: (scope, provider) => accountReadonlyRuntimeService.read(scope, provider),
+};
+
 export async function readPortfolioAccountSources(input: {
   userId: string;
   accessToken: string;
   providers: readonly AccountProvider[];
-}): Promise<PortfolioAccountReadResult[]> {
+}, dependencies: PortfolioAccountSourceDependencies = defaultDependencies): Promise<PortfolioAccountReadResult[]> {
   const userId = input.userId.trim();
   const accessToken = input.accessToken.trim();
   if (!userId || !accessToken) {
@@ -27,9 +40,9 @@ export async function readPortfolioAccountSources(input: {
 
   return Promise.all(input.providers.map(async (provider) => {
     try {
-      const configured = await accountReadonlyCredentialConfigured(userId, provider);
+      const configured = await dependencies.credentialConfigured(userId, provider);
       if (!configured) return { provider, configured: false, snapshot: null, errorCode: null };
-      const snapshot = await accountReadonlyRuntimeService.read({ userId, accessToken }, provider);
+      const snapshot = await dependencies.read({ userId, accessToken }, provider);
       return { provider, configured: true, snapshot, errorCode: snapshot.errorCode };
     } catch {
       return {
