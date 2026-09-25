@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   fanoutMemberHoldingScannerAlert,
   memberHoldingProfileEligibleForPersonalTelegram,
+  memberHoldingsNewsIntelligenceEnabled,
   memberHoldingsTelegramProducerEnabled,
   type MemberHoldingProducerRepository,
   type MemberHoldingStockHolder,
@@ -62,6 +63,9 @@ test('member holdings producer is true-token opt-in and otherwise stays disabled
   assert.equal(memberHoldingsTelegramProducerEnabled('false'), false);
   assert.equal(memberHoldingsTelegramProducerEnabled('1'), false);
   assert.equal(memberHoldingsTelegramProducerEnabled('TRUE'), true);
+  assert.equal(memberHoldingsNewsIntelligenceEnabled(undefined), false);
+  assert.equal(memberHoldingsNewsIntelligenceEnabled('false'), false);
+  assert.equal(memberHoldingsNewsIntelligenceEnabled('TRUE'), true);
 
   let reads = 0;
   const result = await fanoutMemberHoldingScannerAlert(stockAlert(), {
@@ -118,6 +122,21 @@ test('canonical stock holder fanout uses one public quote and never fabricates A
       assert.equal(symbol, '005930');
       return { price: 82_000, changePercent: 1.25 };
     },
+    newsEnabled: true,
+    newsReader: async (symbol, market, companyName) => {
+      assert.equal(symbol, '005930');
+      assert.equal(market, 'KR');
+      assert.equal(companyName, '삼성전자');
+      return [{
+        kind: 'DISCLOSURE',
+        title: '신규 공급계약 공시',
+        source: 'DART',
+        url: 'https://dart.example.test/report/1',
+        publishedAt: '2026-08-25T05:30:00.000Z',
+        impact: 'POSITIVE',
+        impactReason: '공식 공급계약 공시이며 세부 계약 조건은 원문 확인이 필요합니다.',
+      }];
+    },
     now: () => new Date('2026-08-25T06:00:00.000Z'),
     deliver: async (evidence) => {
       captured.push(evidence);
@@ -144,7 +163,10 @@ test('canonical stock holder fanout uses one public quote and never fabricates A
     assert.equal(evidence.tradePlan?.entryPrices, undefined);
     assert.equal(evidence.ai, undefined);
     assert.equal(evidence.performance, undefined);
-    assert.equal(evidence.news, undefined);
+    assert.equal(evidence.news?.length, 1);
+    assert.equal(evidence.news?.[0].kind, 'DISCLOSURE');
+    assert.equal(evidence.news?.[0].source, 'DART');
+    assert.match(evidence.news?.[0].impactReason ?? '', /공급계약/);
     assert.equal('quantity' in evidence, false);
     assert.match(evidence.eventId, /^scanner-holding:/u);
   }
