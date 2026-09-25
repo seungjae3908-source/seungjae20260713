@@ -411,6 +411,24 @@ test('vault-backed Kiwoom reader uses only official real OAuth and fixed read-on
           oso: [{ ord_no: '0001234', stk_cd: '005930', trde_tp: '2', ord_qty: '2', ord_pric: '70000', oso_qty: '1', ord_stt: '접수' }],
         }), { status: 200, headers: { 'Content-Type': 'application/json', 'cont-yn': 'N' } });
       }
+      if (headers.get('api-id') === 'ust21110') {
+        return new Response(JSON.stringify({
+          return_code: 0,
+          result_list: [{ crnc_code: 'USD', fc_entra: '500.25', fc_pymn_alowa: '450.25', fc_ord_alowa: '400.25' }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json', 'cont-yn': 'N' } });
+      }
+      if (headers.get('api-id') === 'ust21070') {
+        return new Response(JSON.stringify({
+          return_code: 0,
+          result_list: [{ stk_cd: 'AAPL', crnc_code: 'USD', poss_qty: '2', sell_alowq: '2', frgn_stk_book_uv: '180.5', now_pric: '190.25', evlt_amt: '380.5', pl_amt: '19.5', pl_rt: '5.4' }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json', 'cont-yn': 'N' } });
+      }
+      if (headers.get('api-id') === 'ust21050') {
+        return new Response(JSON.stringify({
+          return_code: 0,
+          result_list: [{ ord_no: 'US-1', stk_cd: 'MSFT', slby_tp: '1', ord_qty: '3', ord_uv: '500.5', ord_remnq: '2', ord_stat: '접수' }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json', 'cont-yn': 'N' } });
+      }
       return new Response('{}', { status: 404 });
     },
   });
@@ -426,18 +444,26 @@ test('vault-backed Kiwoom reader uses only official real OAuth and fixed read-on
   assert.equal(result.positions?.[0]?.availableQuantity, 2);
   assert.equal(result.openOrders?.[0]?.id, '0001234');
   assert.equal(result.openOrders?.[0]?.side, 'BUY');
+  assert.equal(result.accounts?.find((row) => row.market === 'US')?.buyingPower, 400.25);
+  assert.equal(result.balances?.find((row) => row.currency === 'USD')?.total, 500.25);
+  assert.equal(result.positions?.find((row) => row.market === 'US')?.symbol, 'AAPL');
+  assert.equal(result.openOrders?.find((row) => row.market === 'US')?.symbol, 'MSFT');
   assert.equal(result.orderRequests, 0);
   assert.equal(result.cancelRequests, 0);
   assert.equal(result.amendRequests, 0);
   assert.equal(result.transferRequests, 0);
   assert.equal(result.withdrawalRequests, 0);
 
-  assert.deepEqual(seen.map((row) => [row.method, row.origin, row.path, row.apiId]), [
-    ['POST', 'https://api.kiwoom.com', '/oauth2/token', null],
-    ['POST', 'https://api.kiwoom.com', '/api/dostk/acnt', 'kt00001'],
-    ['POST', 'https://api.kiwoom.com', '/api/dostk/acnt', 'kt00018'],
-    ['POST', 'https://api.kiwoom.com', '/api/dostk/acnt', 'ka10075'],
-  ]);
+  assert.equal(seen[0]?.path, '/oauth2/token');
+  assert.equal(seen[0]?.origin, 'https://api.kiwoom.com');
+  assert.deepEqual(new Set(seen.slice(1).map((row) => `${row.path}:${row.apiId}`)), new Set([
+    '/api/dostk/acnt:kt00001',
+    '/api/dostk/acnt:kt00018',
+    '/api/dostk/acnt:ka10075',
+    '/api/us/acnt:ust21110',
+    '/api/us/acnt:ust21070',
+    '/api/us/acnt:ust21050',
+  ]));
   assert.equal(seen.some((row) => row.path.includes('/ordr')), false);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('KIWOOM_APP_RUNTIME_TEST_ONLY'), false);
@@ -520,7 +546,7 @@ test('Kiwoom return_code 20 is a proven empty account result rather than a provi
   assert.equal(result.connected, true);
   assert.deepEqual(result.positions, []);
   assert.deepEqual(result.openOrders, []);
-  assert.deepEqual(new Set(seenApiIds), new Set(['kt00001', 'kt00018', 'ka10075']));
+  assert.deepEqual(new Set(seenApiIds), new Set(['kt00001', 'kt00018', 'ka10075', 'ust21110', 'ust21070', 'ust21050']));
   assert.equal(result.orderRequests, 0);
   assert.equal(result.cancelRequests, 0);
   assert.equal(result.amendRequests, 0);
@@ -544,6 +570,11 @@ test('Kiwoom malformed open-order identity or quantity fails closed instead of f
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       const apiId = new Headers(init?.headers).get('api-id');
+      if (apiId?.startsWith('ust')) {
+        return new Response(JSON.stringify({ return_code: 20, return_msg: 'NO_DATA' }), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        });
+      }
       if (apiId === 'kt00001') {
         return new Response(JSON.stringify({ return_code: 0, entr: '0', pymn_alow_amt: '0', ord_alow_amt: '0', stk_entr_prst: [] }), {
           status: 200, headers: { 'Content-Type': 'application/json' },
