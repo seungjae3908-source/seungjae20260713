@@ -3,6 +3,7 @@ import type { IncomingHttpHeaders } from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
 import type { CanonicalAccountSnapshot } from './account-readonly.contract';
+import { AccountReadonlyError } from './account-readonly.errors';
 import type {
   AccountReadonlyCredentialRepository,
   ReadonlyCredentialProvider,
@@ -210,8 +211,11 @@ function assertReadOnlySnapshot(provider: ReadonlyCredentialProvider, snapshot: 
   if (snapshot.provider !== provider || snapshot.readOnly !== true || snapshot.connected !== true || snapshot.status !== 'CONNECTED') {
     throw new Error(`EVIDENCE_PROVIDER_NOT_CONNECTED:${provider}:${snapshot.status}`);
   }
-  if (!Array.isArray(snapshot.openOrders) || snapshot.errorCode !== null) {
-    throw new Error(`EVIDENCE_OPEN_ORDERS_NOT_PROVEN:${provider}:${snapshot.errorCode ?? 'MISSING'}`);
+  if (snapshot.errorCode !== null) {
+    throw new AccountReadonlyError(snapshot.errorCode);
+  }
+  if (!Array.isArray(snapshot.openOrders)) {
+    throw new AccountReadonlyError(`${provider.toUpperCase()}_OPEN_ORDERS_NOT_PROVEN`);
   }
   if (
     snapshot.credentialsReturned !== false
