@@ -3,15 +3,12 @@ import { CheckCircle2, ShieldCheck } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
 import { TradeAutomationSettings } from '@/components/trade-automation-settings';
-import { TradeApprovalQueue } from '@/components/trade-approval-queue';
 import { UserBrokerTelegramPanel } from '@/components/user-broker-telegram-panel';
 
 type TradeAutomationFixture = ComponentProps<typeof TradeAutomationSettings>['fixture'];
-type TradeApprovalFixture = ComponentProps<typeof TradeApprovalQueue>['fixture'];
 
 type AutoTradingPageProps = {
   fixture?: TradeAutomationFixture;
-  approvalFixture?: TradeApprovalFixture;
   embedded?: boolean;
 };
 
@@ -27,7 +24,7 @@ function StatusItem({ label, value }: { label: string; value: string }) {
   );
 }
 
-export default function AutoTradingPage({ fixture, approvalFixture, embedded = false }: AutoTradingPageProps) {
+export default function AutoTradingPage({ fixture, embedded = false }: AutoTradingPageProps) {
   const [advancedOpen, setAdvancedOpen] = useState(true);
   const [notificationOpen, setNotificationOpen] = useState(false);
 
@@ -52,8 +49,8 @@ export default function AutoTradingPage({ fixture, approvalFixture, embedded = f
     <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="auto-trading-runtime-summary">
       <h2 className="text-sm font-bold">실행 범위</h2>
       <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-        <div className="rounded-xl bg-background p-3"><p className="font-bold">국내주식</p><p className="mt-1 text-muted-foreground">모의 + 연결된 실전</p></div>
-        <div className="rounded-xl bg-background p-3"><p className="font-bold">미국주식</p><p className="mt-1 text-muted-foreground">모의 + 연결된 실전</p></div>
+        <div className="rounded-xl bg-background p-3"><p className="font-bold">국내주식</p><p className="mt-1 text-muted-foreground">모의매매 지원</p></div>
+        <div className="rounded-xl bg-background p-3"><p className="font-bold">미국주식</p><p className="mt-1 text-muted-foreground">모의매매 지원</p></div>
         <div className="rounded-xl bg-background p-3"><p className="font-bold">코인현물</p><p className="mt-1 text-muted-foreground">모의 + 연결된 실전</p></div>
         <div className="rounded-xl bg-background p-3"><p className="font-bold">코인선물</p><p className="mt-1 text-muted-foreground">모의 + LONG/SHORT</p></div>
       </div>
@@ -110,7 +107,6 @@ export default function AutoTradingPage({ fixture, approvalFixture, embedded = f
           <div className="min-w-0 space-y-4">
             {safety}
             {runtimeSummary}
-            <TradeApprovalQueue fixture={approvalFixture} />
           </div>
           <aside className="min-w-0 min-[1200px]:sticky min-[1200px]:top-4">
             {settings}
