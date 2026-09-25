@@ -24,7 +24,7 @@ function policy(): TradingPolicy {
       crypto_spot: true,
       crypto_futures: false,
     },
-    exchangeEnabled: { bitget: false, upbit: true, kiwoom: false },
+    exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
     totalCapitalKrw: 1_000_000,
     maxOrderKrw: 100_000,
     maxInstrumentKrw: 300_000,
