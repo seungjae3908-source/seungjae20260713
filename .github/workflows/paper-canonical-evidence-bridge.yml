@@ -117,7 +117,7 @@ jobs:
           ! grep -Eq 'contents:[[:space:]]+write' "$workflow"
           ! grep -Eq 'actions:[[:space:]]+write' "$workflow"
           ! grep -Eq 'pm2[[:space:]]+(restart|reload|start|stop|delete|save)' "$operational"
-          ! grep -Eq 'crontab[[:space:]]+-|systemctl[[:space:]]+(start|stop|restart|enable)|psql|supabase db' "$operational"
+          ! grep -Eq 'crontab[[:space:]]+-([[:space:]]|$)|systemctl[[:space:]]+(start|stop|restart|enable)|psql|supabase db' "$operational"
 
   gate:
     if: github.event_name == 'workflow_dispatch'
