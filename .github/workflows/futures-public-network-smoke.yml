@@ -37,6 +37,7 @@ on:
       - stock-analyzer/**
       - packages/**
       - market-intelligence-sidecar/**
+      - market-prediction-lab/**
       - .github/workflows/public-forward-liquidity-*.yml
 
 permissions:
