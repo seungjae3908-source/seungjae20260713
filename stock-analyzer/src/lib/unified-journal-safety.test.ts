@@ -100,6 +100,89 @@ test('proven read-only provider requests are accepted when every count reconcile
   })));
 });
 
+test('Kiwoom read-only provider and non-promoted realized evidence are accepted when counts reconcile', () => {
+  const history = liveHistory(8) as any;
+  history.providers.unshift({
+    provider: 'kiwoom',
+    configured: true,
+    enabled: true,
+    status: 'READY',
+    records: 2,
+    privateProviderRequests: 3,
+    truncated: false,
+    errorCode: null,
+  });
+  history.realizedEvidence = [{
+    provider: 'kiwoom',
+    market: 'KR',
+    evidenceType: 'DAILY_CASH_REALIZED',
+    date: '20260924',
+    symbol: '005930',
+    buyAveragePrice: 70000,
+    buyQuantity: 10,
+    sellAveragePrice: 71000,
+    sellQuantity: 10,
+    feesAndTax: 1500,
+    providerReportedPnl: 8500,
+    providerReportedReturnPercent: 1.2142,
+    canonicalAnalyticsPromoted: false,
+  }];
+  assert.doesNotThrow(() => assertUnifiedTradeJournalSafety(journal({
+    liveAccountHistory: history,
+    safety: { ...journal().safety, privateBrokerRequests: 8 },
+  })));
+});
+
+test('Kiwoom realized evidence cannot be promoted or appear without a ready/partial Kiwoom provider', () => {
+  const promoted = liveHistory(5) as any;
+  promoted.realizedEvidence = [{
+    provider: 'kiwoom',
+    market: 'KR',
+    evidenceType: 'DAILY_CASH_REALIZED',
+    date: '20260924',
+    symbol: '005930',
+    buyAveragePrice: 70000,
+    buyQuantity: 10,
+    sellAveragePrice: 71000,
+    sellQuantity: 10,
+    feesAndTax: 1500,
+    providerReportedPnl: 8500,
+    providerReportedReturnPercent: 1.2,
+    canonicalAnalyticsPromoted: true,
+  }];
+  assert.throws(
+    () => assertUnifiedTradeJournalSafety(journal({
+      liveAccountHistory: promoted,
+      safety: { ...journal().safety, privateBrokerRequests: 5 },
+    })),
+    /Kiwoom 국내 실현손익 증거 계약/,
+  );
+
+  const orphan = liveHistory(5) as any;
+  orphan.realizedEvidence = [{
+    provider: 'kiwoom',
+    market: 'KR',
+    evidenceType: 'DAILY_CASH_REALIZED',
+    date: '20260924',
+    symbol: '005930',
+    buyAveragePrice: 70000,
+    buyQuantity: 10,
+    sellAveragePrice: 71000,
+    sellQuantity: 10,
+    feesAndTax: 1500,
+    providerReportedPnl: 8500,
+    providerReportedReturnPercent: 1.2,
+    canonicalAnalyticsPromoted: false,
+  }];
+  assert.throws(
+    () => assertUnifiedTradeJournalSafety(journal({
+      liveAccountHistory: orphan,
+      safety: { ...journal().safety, privateBrokerRequests: 5 },
+    })),
+    /Kiwoom 공급자 상태 없이/,
+  );
+});
+
 test('browser rejects server safety count that disagrees with live-history evidence', () => {
   const history = liveHistory(5);
   assert.throws(
