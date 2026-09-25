@@ -13,6 +13,9 @@ on:
       - api-server/supabase/migrations/2026081501_personal_telegram_storage.sql
       - api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql
       - api-server/supabase/migrations/2026082701_personal_telegram_generic_outbox.sql
+      - api-server/supabase/migrations/2026082702_telegram_signal_followup_ledger.sql
+      - api-server/supabase/migrations/2026082703_personal_telegram_digest_outbox.sql
+      - api-server/supabase/migrations/2026092503_telegram_signal_message_edit_state.sql
       - ops/apply-production-personal-telegram-storage.mjs
       - ops/verify-production-personal-telegram-storage.mjs
 
@@ -432,7 +435,10 @@ jobs:
             ops/apply-production-personal-telegram-storage.mjs \
             api-server/supabase/migrations/2026081501_personal_telegram_storage.sql \
             api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql \
-            api-server/supabase/migrations/2026082701_personal_telegram_generic_outbox.sql
+            api-server/supabase/migrations/2026082701_personal_telegram_generic_outbox.sql \
+            api-server/supabase/migrations/2026082702_telegram_signal_followup_ledger.sql \
+            api-server/supabase/migrations/2026082703_personal_telegram_digest_outbox.sql \
+            api-server/supabase/migrations/2026092503_telegram_signal_message_edit_state.sql
           scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$archive" "$SSH_USER@$SSH_HOST:$remote_dir/tooling.tar.gz"
           remote_command="$(printf 'cd %q && tar -xzf tooling.tar.gz && IFS= read -r PROD_DATABASE_URL && export PROD_DATABASE_URL && EXPECTED_ACTIVE_SHA=%q APPROVED_TARGET_SHA=%q node ops/apply-production-personal-telegram-storage.mjs' \
@@ -623,7 +629,15 @@ jobs:
               if (approved && worker) return false;
               execFileSync('pm2', ['restart', 'stock-app', '--update-env'], {
                 env: { ...process.env, DEPLOY_SHA: approvedSha,
-                  LIVE_TELEGRAM_ACTIVATION_APPROVED: 'true', TELEGRAM_INTELLIGENCE_WORKER_ENABLED: 'true',
+                  LIVE_TELEGRAM_ACTIVATION_APPROVED: 'true',
+                  TELEGRAM_INTELLIGENCE_WORKER_ENABLED: 'true',
+                  TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED: 'true',
+                  TELEGRAM_SIGNAL_AI_ENABLED: 'true',
+                  TELEGRAM_DAILY_BRIEF_RICH_ENABLED: 'true',
+                  TELEGRAM_SIGNAL_FOLLOWUP_ENABLED: 'true',
+                  MEMBER_HOLDINGS_TELEGRAM_PRODUCER_ENABLED: 'true',
+                  MEMBER_HOLDINGS_NEWS_INTELLIGENCE_ENABLED: 'true',
+                  MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED: 'true',
                   LIVE_TRADING: 'false', AUTO_TRADING: 'false', REAL_ORDER_ENABLED: 'false',
                   PRIVATE_TRADING_API_ALLOWED: 'false', executionAuthority: 'NONE' },
                 stdio: ['ignore', 'ignore', 'pipe'],
@@ -694,9 +708,39 @@ jobs:
               console.error('Telegram intelligence worker is not explicitly enabled.');
               process.exit(12);
             }
+            for (const key of [
+              'TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED',
+              'TELEGRAM_SIGNAL_AI_ENABLED',
+              'TELEGRAM_DAILY_BRIEF_RICH_ENABLED',
+              'TELEGRAM_SIGNAL_FOLLOWUP_ENABLED',
+              'MEMBER_HOLDINGS_TELEGRAM_PRODUCER_ENABLED',
+              'MEMBER_HOLDINGS_NEWS_INTELLIGENCE_ENABLED',
+              'MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED',
+            ]) {
+              if (String(env[key] ?? '') !== 'true') {
+                console.error(`Telegram feature flag is not enabled: ${key}`);
+                process.exit(12);
+              }
+            }
+            for (const [key, expected] of [
+              ['LIVE_TRADING', 'false'],
+              ['AUTO_TRADING', 'false'],
+              ['REAL_ORDER_ENABLED', 'false'],
+              ['PRIVATE_TRADING_API_ALLOWED', 'false'],
+              ['executionAuthority', 'NONE'],
+            ]) {
+              if (String(env[key] ?? '') !== expected) {
+                console.error(`Trading authority changed during Telegram activation: ${key}`);
+                process.exit(12);
+              }
+            }
             const botToken = String(env.TELEGRAM_BOT_TOKEN ?? '').trim();
             const chatId = String(env.TELEGRAM_CHAT_ID ?? '').trim();
-            if (!botToken || !chatId) {
+            const stockChatId = String(env.TELEGRAM_STOCK_CHAT_ID ?? '').trim();
+            const cryptoChatId = String(env.TELEGRAM_CRYPTO_CHAT_ID ?? '').trim();
+            const botUsername = String(env.TELEGRAM_BOT_USERNAME ?? '').trim();
+            const webhookSecret = String(env.TELEGRAM_WEBHOOK_SECRET ?? '').trim();
+            if (!botToken || !chatId || !stockChatId || !cryptoChatId || !botUsername || !webhookSecret) {
               console.error('Telegram runtime configuration is incomplete.');
               process.exit(13);
             }
@@ -765,6 +809,46 @@ jobs:
               process.exit(19);
             }
 
+            const editedText = text + '\n✅ 동일 메시지 업데이트 검증 완료';
+            let editResponse;
+            try {
+              editResponse = await fetch(
+                `https://api.telegram.org/bot${encodeURIComponent(botToken)}/editMessageText`,
+                {
+                  method: 'POST',
+                  headers: {
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    chat_id: chatId,
+                    message_id: messageId,
+                    text: editedText,
+                    disable_web_page_preview: true,
+                  }),
+                  signal: AbortSignal.timeout(15000),
+                },
+              );
+            } catch {
+              console.error('Telegram Production edit-in-place verification request failed.');
+              process.exit(20);
+            }
+            if (!editResponse.ok) {
+              console.error(`Telegram Production edit verification returned HTTP ${editResponse.status}.`);
+              process.exit(21);
+            }
+            let editValue;
+            try {
+              editValue = await editResponse.json();
+            } catch {
+              console.error('Telegram Production edit verification returned invalid JSON.');
+              process.exit(22);
+            }
+            if (editValue?.ok !== true || Number(editValue?.result?.message_id) !== messageId) {
+              console.error('Telegram API did not edit the original Production verification message.');
+              process.exit(23);
+            }
+
             process.stdout.write(JSON.stringify({
               ok: true,
               exactSha: targetSha,
@@ -772,6 +856,7 @@ jobs:
               workerStarted: true,
               telegramConfigured: true,
               telegramAccepted: true,
+              telegramEditInPlaceAccepted: true,
               messageId,
               verifiedAt,
               orderSubmitted: false,
@@ -793,6 +878,7 @@ jobs:
             && value?.workerStarted === true
             && value?.telegramConfigured === true
             && value?.telegramAccepted === true
+            && value?.telegramEditInPlaceAccepted === true
             && Number.isSafeInteger(value?.messageId)
             && value?.messageId > 0
             && value?.orderSubmitted === false
@@ -835,6 +921,7 @@ jobs:
                 '- Telegram worker startup: `VERIFIED`',
                 '- Telegram runtime configuration: `VERIFIED`',
                 '- Telegram API accepted verification message: `true`',
+                '- Telegram same-message edit verification: `true`',
                 `- Telegram message ID: \`${process.env.TELEGRAM_MESSAGE_ID}\``,
                 `- Verified at: \`${process.env.VERIFIED_AT}\``,
                 '- Order submitted: `false`',
