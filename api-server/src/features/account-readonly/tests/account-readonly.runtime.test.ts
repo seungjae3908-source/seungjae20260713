@@ -29,6 +29,7 @@ function repositoryFor(expectedProvider: ReadonlyCredentialProvider, encryptedCr
       return record(expectedProvider, encryptedCredentials);
     },
     save: async () => { throw new Error('runtime reader must never mutate credential storage'); },
+    remove: async () => { throw new Error('runtime reader must never mutate credential storage'); },
   };
 }
 
@@ -201,6 +202,7 @@ test('caller abort during credential lookup blocks private provider invocation',
         return record('upbit');
       },
       save: async () => { throw new Error('runtime reader must never mutate credential storage'); },
+      remove: async () => { throw new Error('runtime reader must never mutate credential storage'); },
     }),
     decryptCredentials: () => ({ accessKey: 'UPBIT_ACCESS_RUNTIME_TEST_ONLY', secretKey: 'UPBIT_SECRET_RUNTIME_TEST_ONLY' }),
     fetchImpl: async () => {
