@@ -52,17 +52,16 @@ function tradePlanLines(alert: ScannerAlertCandidate): string[] {
     : 'N/A';
   const stop = alert.stopLoss == null ? 'N/A' : String(alert.stopLoss);
   return [
-    `진입가/진입구간 ${entry}`,
-    '분할 매수 N/A (검증된 1·2·3차 분할 진입가 미제공)',
-    `분할 매도가 ${formatTargetPlan(alert.targets)}`,
-    `손절가 ${stop}`,
-    '실제 주문/체결 아님',
+    `진입 ${entry}`,
+    `목표 ${formatTargetPlan(alert.targets)}`,
+    `Stop ${stop}`,
   ];
 }
 
 function pricePlanDetails(alert: ScannerAlertCandidate): string {
-  const evidence = alert.evidence.length ? ` · 근거 ${alert.evidence.slice(0, 5).join(' / ')}` : '';
-  return `승인 대기 신호 · ${tradePlanLines(alert).join(' · ')}${evidence}`;
+  const lines = ['🚨 진입가능', ...tradePlanLines(alert)];
+  if (alert.evidence.length) lines.push(`근거 ${alert.evidence.slice(0, 4).join(' · ')}`);
+  return lines.join('\n');
 }
 
 export function scannerInAppNotificationInput(
@@ -224,15 +223,7 @@ export function addTelegramSignalFreshness(
   const warning = freshnessWarning(freshness);
   const lines = input.details ? input.details.split('\n') : [];
 
-  lines.push(
-    `Freshness: ${freshness.status} · 유효성 ${freshness.validity}`,
-    `신호 생성 ${freshness.signalGeneratedAt ?? 'N/A'} · 신호 나이 ${formatTelegramAge(freshness.signalAgeMs)}`,
-    `데이터 기준 ${freshness.dataAsOf ?? 'N/A'} · 데이터 나이 ${formatTelegramAge(freshness.dataAgeMs)}`,
-    `신호 만료 ${freshness.expiresAt ?? 'N/A'} · 남은 유효시간 ${formatTelegramAge(freshness.remainingMs)}`,
-  );
-  if (warning) lines.push(warning);
-  if (freshness.reasonCodes.length) lines.push(`Freshness 근거: ${freshness.reasonCodes.join(', ')}`);
-
+  if (freshness.status !== 'FRESH' && warning) lines.push(warning);
   return { ...input, details: lines.join('\n') };
 }
 
