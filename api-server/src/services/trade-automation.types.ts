@@ -221,6 +221,7 @@ export type TradingPlanInput = {
   exchange: TradingExchange;
   accountMode: TradingAccountMode;
   stockBroker?: StockBroker | null;
+  stockExchange?: 'KRX' | 'NXT' | 'SOR' | 'NASDAQ' | 'NYSE' | 'AMEX' | null;
   strategyId: string;
   signalId: string;
   symbol: string;
