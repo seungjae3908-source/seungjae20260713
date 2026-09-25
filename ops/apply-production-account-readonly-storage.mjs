@@ -234,6 +234,18 @@ begin
     raise exception 'unexpected provider row exists';
   end if;
 
+  if not exists (
+    select 1
+    from pg_constraint
+    where conrelid = 'public.account_readonly_credentials'::regclass
+      and contype = 'c'
+      and pg_get_constraintdef(oid) ilike '%provider%'
+      and pg_get_constraintdef(oid) ilike '%kiwoom%'
+      and pg_get_constraintdef(oid) ilike '%bitget%'
+  ) then
+    raise exception 'account readonly provider constraint is missing Kiwoom';
+  end if;
+
   select count(*) into api_privilege_count
   from information_schema.table_privileges
   where table_schema = 'public'
@@ -272,6 +284,7 @@ select json_build_object(
   'rls_enabled', true,
   'api_roles_revoked', true,
   'service_role_access', true,
+  'provider_constraint_kiwoom', true,
   'database_changed', true,
   'credentials_recorded', false,
   'raw_credentials_exposed', false,
@@ -342,6 +355,7 @@ if (artifact?.status !== 'passed'
   || artifact?.rls_enabled !== true
   || artifact?.api_roles_revoked !== true
   || artifact?.service_role_access !== true
+  || artifact?.provider_constraint_kiwoom !== true
   || artifact?.database_changed !== true
   || artifact?.credentials_recorded !== false
   || artifact?.raw_credentials_exposed !== false
