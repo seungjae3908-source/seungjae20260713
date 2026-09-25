@@ -10,6 +10,7 @@ import {
 import { decryptTradingCredentials } from '../../../services/trade-credential-vault.service';
 import { InMemoryAccountReadonlyCredentialRepository } from '../account-readonly.repository';
 import {
+  accountReadFlags,
   parseReadonlyCredentialRequest,
   readonlyProviderCapability,
   saveReadonlyCredentialConfiguration,
