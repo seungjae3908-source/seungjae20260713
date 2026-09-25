@@ -567,26 +567,58 @@ export function createAccountJournalHistoryReader(options: AccountJournalHistory
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(new Error('PROVIDER_TIMEOUT')), timeoutMs);
         try {
-          const result = provider === 'upbit'
-            ? await readUpbit(loaded.credentials, userId, startMs, endMs, fetchImpl, controller.signal, counter, maxUpbitOrders)
-            : provider === 'bitget'
-              ? await readBitget(loaded.credentials, userId, startMs, endMs, fetchImpl, controller.signal, counter, maxBitgetPages)
-              : await readKiwoomJournalHistory({
-                  provider: kiwoomProvider,
-                  credentials: {
-                    appKey: requiredCredential(loaded.credentials, 'appKey'),
-                    appSecret: requiredCredential(loaded.credentials, 'appSecret'),
-                  } satisfies KiwoomReadonlyCredentials,
-                  userId,
-                  requestedDays: days,
-                  endMs,
-                  signal: controller.signal,
-                  maxDays: maxKiwoomDays,
-                  requestCounter: counter,
-                });
-          if (provider === 'kiwoom' && counter.value !== result.privateProviderRequests) {
-            throw new AccountReadonlyError('KIWOOM_HISTORY_REQUEST_COUNT_MISMATCH');
+          let result: {
+            payloads: Record<string, unknown>[];
+            truncated: boolean;
+            normalizationFailures: number;
+          };
+          let effectiveDays = providerEffectiveDays;
+          let rangeCapped = providerRangeCapped;
+
+          if (provider === 'upbit') {
+            result = await readUpbit(
+              loaded.credentials,
+              userId,
+              startMs,
+              endMs,
+              fetchImpl,
+              controller.signal,
+              counter,
+              maxUpbitOrders,
+            );
+          } else if (provider === 'bitget') {
+            result = await readBitget(
+              loaded.credentials,
+              userId,
+              startMs,
+              endMs,
+              fetchImpl,
+              controller.signal,
+              counter,
+              maxBitgetPages,
+            );
+          } else {
+            const kiwoomResult = await readKiwoomJournalHistory({
+              provider: kiwoomProvider,
+              credentials: {
+                appKey: requiredCredential(loaded.credentials, 'appKey'),
+                appSecret: requiredCredential(loaded.credentials, 'appSecret'),
+              } satisfies KiwoomReadonlyCredentials,
+              userId,
+              requestedDays: days,
+              endMs,
+              signal: controller.signal,
+              maxDays: maxKiwoomDays,
+              requestCounter: counter,
+            });
+            if (counter.value !== kiwoomResult.privateProviderRequests) {
+              throw new AccountReadonlyError('KIWOOM_HISTORY_REQUEST_COUNT_MISMATCH');
+            }
+            effectiveDays = kiwoomResult.effectiveDays;
+            rangeCapped = kiwoomResult.rangeCapped;
+            result = kiwoomResult;
           }
+
           payloads.push(...result.payloads);
           anyTruncated ||= result.truncated;
           providers.push({
@@ -597,11 +629,11 @@ export function createAccountJournalHistoryReader(options: AccountJournalHistory
             records: result.payloads.length,
             privateProviderRequests: counter.value,
             truncated: result.truncated,
-            effectiveDays: provider === 'kiwoom' ? result.effectiveDays : providerEffectiveDays,
-            rangeCapped: provider === 'kiwoom' ? result.rangeCapped : providerRangeCapped,
+            effectiveDays,
+            rangeCapped,
             errorCode: result.normalizationFailures > 0
               ? 'HISTORY_NORMALIZATION_PARTIAL'
-              : provider === 'kiwoom' && result.rangeCapped
+              : provider === 'kiwoom' && rangeCapped
                 ? 'KIWOOM_HISTORY_CAPPED_7D'
                 : null,
           });
