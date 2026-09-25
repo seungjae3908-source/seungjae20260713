@@ -4,7 +4,10 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { BoundedTtlCache } from "../lib/bounded-ttl-cache";
 import { MarketDataService } from "../services/market-data.service";
-import { getKiwoomShortSellingRaw } from "../providers/kiwoom";
+import {
+	getKiwoomShortSellingRaw,
+	type KiwoomUsExchange,
+} from "../providers/kiwoom";
 import { FilingService } from "../services/filing.service";
 import { SpecialFeedService } from "../services/special-feed.service";
 import { SignalService } from "../services/signal.service";
