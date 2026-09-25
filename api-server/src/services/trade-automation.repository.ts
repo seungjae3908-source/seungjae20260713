@@ -83,6 +83,7 @@ function normalizedOrder(order: TradingOrder): TradingOrder {
     nextRetryAt: order.nextRetryAt ?? null,
     lastReconciledAt: order.lastReconciledAt ?? null,
     manualReviewRequired: order.manualReviewRequired === true,
+    cancelOperationId: order.cancelOperationId ?? null,
     executionClaimId: order.executionClaimId ?? null,
     recoveryLeaseOwner: order.recoveryLeaseOwner ?? null,
     recoveryLeaseUntil: order.recoveryLeaseUntil ?? null,
