@@ -36,13 +36,14 @@ export type AccountReadonlyRuntimeOptions = {
 const READONLY_TARGETS = {
   upbit: {
     origin: 'https://api.upbit.com',
-    paths: new Set(['/v1/accounts']),
+    paths: new Set(['/v1/accounts', '/v1/orders/open']),
   },
   bitget: {
     origin: 'https://api.bitget.com',
     paths: new Set([
       '/api/v2/mix/account/accounts',
       '/api/v2/mix/position/all-position',
+      '/api/v2/mix/order/orders-pending',
     ]),
   },
 } as const;
