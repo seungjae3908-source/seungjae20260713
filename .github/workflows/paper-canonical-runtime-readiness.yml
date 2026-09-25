@@ -10,6 +10,9 @@ on:
       - 'api-server/scripts/check-paper-canonical-runtime-readiness-remote.ts'
       - 'api-server/src/services/manual-paper-canonical-runtime-readiness.service.ts'
       - 'api-server/src/services/manual-paper-canonical-runtime-readiness.service.test.ts'
+      - 'api-server/src/services/manual-paper-canonical-runtime-evidence-source.service.ts'
+      - 'api-server/src/services/paper-canonical-validation-freshness-policy.service.ts'
+      - 'api-server/src/services/paper-canonical-validation-freshness-policy.service.test.ts'
   issue_comment:
     types: [created]
 
