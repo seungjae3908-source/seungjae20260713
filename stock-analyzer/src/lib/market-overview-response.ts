@@ -42,6 +42,16 @@ export function requireSectorPopularData(
   nowMs = Date.now(),
 ): SectorPopularData {
   if (!record(payload) || payload.market !== market) throw new Error('INVALID_SECTOR_POPULAR_RESPONSE');
+  if (payload.dataState === 'provider_error') {
+    const validUnavailable = payload.available === false
+      && payload.retryable === true
+      && Array.isArray(payload.sectors)
+      && payload.sectors.length === 0
+      && text(payload.updatedAt)
+      && text(payload.errorCode);
+    if (!validUnavailable) throw new Error('INVALID_SECTOR_POPULAR_RESPONSE');
+    throw new Error('SECTOR_POPULAR_PROVIDER_UNAVAILABLE');
+  }
   if (!text(payload.sortBasis) || !Array.isArray(payload.sectors) || !text(payload.updatedAt)) {
     throw new Error('INVALID_SECTOR_POPULAR_RESPONSE');
   }

@@ -22,11 +22,13 @@ import {
   WalletCards,
 } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
-import { fetchResearchCenterOverview, type ResearchCenterOverview } from '@/lib/research-center';
+import { PaperClosedLoopObserver } from '@/components/paper-closed-loop-observer';
+import { fetchResearchCenterOverview, type ResearchCandidatePerformance, type ResearchCenterOverview } from '@/lib/research-center';
 import {
   answerCanonicalResearchQuestion,
   buildFullCostRows,
   buildResearchPipeline,
+  classifySha,
   formatCanonicalMetric,
   isFullCostReady,
   statusLabel,
@@ -37,6 +39,7 @@ import {
   type ResearchProductStatus,
 } from '@/lib/research-center-product';
 import { buildDebatePreview, extractResearchAiDebate } from '@/lib/research-center-view';
+import { fetchResearchJournalBinding, type ResearchJournalBindingReadback } from '@/lib/research-journal-binding';
 import { fetchStrategyPromotions, type StrategyPromotionResponse } from '@/lib/strategy-promotion';
 
 type ResearchTab = 'overview' | 'ai-lab' | 'evidence' | 'paper';
@@ -112,6 +115,7 @@ function PipelineCard({ card, selected, onOpen }: {
       type="button"
       onClick={onOpen}
       aria-expanded={selected}
+      aria-label={`${card.label} 상세 보기`}
       aria-controls={card.key === 'paper' ? 'research-tab-paper' : 'research-stage-detail'}
       className={`group min-w-0 rounded-2xl border bg-card p-3 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${selected ? 'border-primary ring-1 ring-primary/30' : 'border-card-border hover:border-primary/40'}`}
       data-testid={`research-stage-${card.key}`}
@@ -129,6 +133,7 @@ function PipelineCard({ card, selected, onOpen }: {
           { label: '표본', value: '미측정', availability: 'MISSING' as const },
         ]).slice(0, 3).map((metric) => <MetricValue key={metric.label} metric={metric} compact />)}
       </dl>
+      <p className="mt-2 text-[10px] font-bold text-primary">{selected ? '아래에 이 단계의 설명이 열려 있습니다' : '눌러서 왜 이런 상태인지 보기'}</p>
     </button>
   );
 }
@@ -138,10 +143,22 @@ function StageDetail({ card }: { card: ResearchPipelineCard }) {
     <aside id="research-stage-detail" className="min-w-0 rounded-3xl border border-card-border bg-card p-4 shadow-sm lg:sticky lg:top-4 lg:self-start" aria-live="polite" data-testid={`research-detail-${card.key}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">Click-through detail</p>
+          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">선택한 연구 단계</p>
           <h2 className="mt-1 text-lg font-black">{card.label}</h2>
         </div>
         <StatusBadge status={card.status} />
+      </div>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        <div className="rounded-xl bg-muted/40 p-3">
+          <p className="text-xs font-black">왜 이런 상태인가요?</p>
+          <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">{blockerCopy(card)}</p>
+        </div>
+        <div className="rounded-xl bg-muted/40 p-3">
+          <p className="text-xs font-black">다음에 뭘 보면 되나요?</p>
+          <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">
+            {card.blocker ? '필요한 근거가 들어오거나 blocker가 해소되는지 확인하세요.' : '표본과 다음 검증 단계가 증가하는지 확인하면 됩니다.'}
+          </p>
+        </div>
       </div>
       <dl className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
         {card.metrics.map((metric) => <MetricValue key={metric.label} metric={metric} />)}
@@ -152,19 +169,19 @@ function StageDetail({ card }: { card: ResearchPipelineCard }) {
           <p className="mt-1 font-bold">{formatDate(card.updatedAt)}</p>
         </div>
         <div className="rounded-xl border border-card-border bg-background p-3">
-          <p className="text-muted-foreground">Evidence state</p>
+          <p className="text-muted-foreground">기술 상태 코드</p>
           <p className="mt-1 font-mono font-bold">{card.evidenceState}</p>
         </div>
       </div>
       {card.blocker ? (
         <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs">
-          <p className="font-black text-amber-700 dark:text-amber-300">현재 blocker</p>
+          <p className="font-black text-amber-700 dark:text-amber-300">현재 막힌 이유</p>
           <p className="mt-1 text-[11px] text-muted-foreground">{blockerCopy(card)}</p>
         </div>
       ) : null}
       {card.records.length ? (
         <div className="mt-4 space-y-2">
-          <h3 className="text-xs font-black">Canonical records</h3>
+          <h3 className="text-xs font-black">원본 검증 기록</h3>
           <div className="max-h-[31rem] space-y-2 overflow-y-auto pr-1">
             {card.records.map((record) => (
               <details key={record.id} className="group rounded-xl border border-card-border bg-background">
@@ -248,10 +265,78 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
         ? 'normal'
         : 'insufficient';
   const staleCount = cards.filter((card) => card.status === 'stale').length;
+  const factory = overview.factory ?? {
+    present: false,
+    status: 'MISSING' as const,
+    generatedAt: null,
+    researchSha: null,
+    firstZero: null,
+    policyPresent: null,
+    policyValid: null,
+    policyDigest: null,
+    readyMarketCount: null,
+    blockedMarketCount: null,
+    readyProfileCount: null,
+    blockedProfileCount: null,
+    runtimeStatus: null,
+    nextFirstZero: null,
+    controlPlaneDigest: null,
+  };
+  const factoryStatus: ResearchProductStatus = !factory.present
+    ? 'unmeasured'
+    : factory.status === 'INVALID' || factory.status === 'BLOCKED_POLICY_INVALID'
+      ? 'error'
+      : factory.status === 'READY_NON_ACTIVATING'
+        ? 'normal'
+        : 'attention';
+  const factoryValue = factory.status === 'READY_NON_ACTIVATING'
+    ? '검증 준비'
+    : factory.status === 'BLOCKED_POLICY_MISSING'
+      ? '정책 미확정'
+      : factory.status === 'BLOCKED_NO_READY_PROFILES'
+        ? '데이터 대기'
+        : factory.status === 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_MISSING'
+          ? '개발 진단 필요'
+          : factory.status === 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_INVALID'
+            ? '개발 진단 오류'
+            : factory.status === 'BLOCKED_RUNTIME_BINDINGS'
+              ? '연결 대기'
+              : factory.status === 'BLOCKED_POLICY_INVALID'
+                ? '정책 오류'
+                : factory.status === 'INVALID'
+                  ? '근거 오류'
+                  : '미측정';
+  const factoryDetail = factory.present
+    ? `시장 ${factory.readyMarketCount ?? '—'}/4 · 프로필 ${factory.readyProfileCount ?? '—'}/12 · ${factory.firstZero ?? 'FIRST_ZERO 미확인'}`
+    : 'Factory runtime status 미수집';
+  const temporal = overview.dataFactory?.temporalCryptoFutures ?? {
+    present: false,
+    status: 'MISSING' as const,
+    generatedAt: null,
+    researchSha: null,
+    failedCount: null,
+    observationCount: null,
+    ledgerDigest: null,
+    results: [],
+  };
+  const temporalStatus: ResearchProductStatus = !temporal.present
+    ? 'unmeasured'
+    : temporal.status === 'INVALID'
+      ? 'error'
+      : temporal.status === 'partial_failure'
+        ? 'attention'
+        : 'accumulating';
+  const temporalDetail = !temporal.present
+    ? 'Temporal evidence 미수집'
+    : temporal.status === 'INVALID'
+      ? 'Temporal evidence 무결성 확인 필요'
+      : `${temporal.results.length}개 심볼 · 실패 ${temporal.failedCount ?? 0}개`;
   return (
     <section id="research-tab-overview" role="tabpanel" aria-labelledby="research-tab-overview-trigger" className="space-y-4" data-testid="research-overview-tab">
-      <section className="grid grid-cols-2 gap-2 lg:grid-cols-5" aria-label="연구 핵심 상태">
+      <section className="grid grid-cols-2 gap-2 lg:grid-cols-7" aria-label="연구 핵심 상태">
         <TopStatus label="연구 시스템" value={statusLabel(systemStatus)} status={systemStatus} detail={overview.state.present ? 'Canonical overview 연결됨' : 'Canonical evidence 미수집'} />
+        <TopStatus label="데이터 팩토리" value={temporal.observationCount == null ? statusLabel(temporalStatus) : `${temporal.observationCount.toLocaleString('ko-KR')}건`} status={temporalStatus} detail={temporalDetail} />
+        <TopStatus label="리서치 팩토리" value={factoryValue} status={factoryStatus} detail={factoryDetail} />
         <TopStatus label="실거래" value="비활성" status="inactive" detail="executionAuthority=NONE" />
         <TopStatus label="모의매매" value={statusLabel(paper.status)} status={paper.status} detail={blockerCopy(paper)} />
         <TopStatus label="수익성 검증" value={overview.profitability.proven ? '충족' : '미검증'} status={overview.profitability.proven ? 'verified' : 'waiting'} detail="미검증은 수익성 없음과 다릅니다" />
@@ -271,7 +356,21 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
             <p className="text-[10px] text-muted-foreground">카드를 눌러 상세 확인</p>
           </div>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-            {cards.map((card) => <PipelineCard key={card.key} card={card} selected={selected === card.key} onOpen={() => onSelect(card.key)} />)}
+            {cards.map((card) => (
+              <PipelineCard
+                key={card.key}
+                card={card}
+                selected={selected === card.key}
+                onOpen={() => {
+                  onSelect(card.key);
+                  if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+                    window.requestAnimationFrame(() => {
+                      document.getElementById('research-stage-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    });
+                  }
+                }}
+              />
+            ))}
           </div>
         </section>
         <StageDetail card={selectedCard} />
@@ -358,6 +457,14 @@ function EvidenceTab({ overview, promotion, cards }: {
   cards: ResearchPipelineCard[];
 }) {
   const sourceSha = promotion?.sourceSha && /^[0-9a-f]{40}$/i.test(promotion.sourceSha) ? promotion.sourceSha : '미수집';
+  const factory = overview.factory;
+  const liquidity = overview.research.liquidityIndependence;
+  const runtimeSha = factory?.researchSha && /^[0-9a-f]{40}$/i.test(factory.researchSha) ? factory.researchSha : '미수집';
+  const researchShaBinding = sourceSha === '미수집' || runtimeSha === '미수집' ? 'MISSING' : classifySha(sourceSha, runtimeSha);
+  const firstZero = overview.paper.candidatePerformance?.FIRST_ZERO
+    ?? factory?.firstZero
+    ?? factory?.nextFirstZero
+    ?? '미수집';
   const datasets = new Set(cards.flatMap((card) => card.records.map((record) => record.datasetId).filter(Boolean)));
   const stale = cards.filter((card) => card.status === 'stale').length;
   const wrongSha = cards.filter((card) => card.evidenceState === 'WRONG_SHA').length;
@@ -370,15 +477,15 @@ function EvidenceTab({ overview, promotion, cards }: {
       </div>
 
       <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        <EvidenceItem label="Current main SHA" value="미수집" />
+        <EvidenceItem label="Research runtime SHA" value={runtimeSha} state={runtimeSha === '미수집' ? 'unmeasured' : 'verified'} />
         <EvidenceItem label="Research source SHA" value={sourceSha} state={sourceSha === '미수집' ? 'unmeasured' : 'verified'} />
         <EvidenceItem label="Dataset identity" value={datasets.size ? `${datasets.size}개 canonical dataset` : '미수집'} state={datasets.size ? 'verified' : 'unmeasured'} />
         <EvidenceItem label="Strategy identity" value={promotion ? `${promotion.items.length}개` : '미수집'} state={promotion ? 'normal' : 'unmeasured'} />
-        <EvidenceItem label="Model digest" value="미수집" />
-        <EvidenceItem label="Workflow run ID" value="미수집" />
-        <EvidenceItem label="Artifact ID" value="미수집" />
-        <EvidenceItem label="Canonical receipt" value="미수집" />
-        <EvidenceItem label="Exact-head / exact-main CI" value="미수집" />
+        <EvidenceItem label="Control-plane digest" value={factory?.controlPlaneDigest ?? '미수집'} state={factory?.controlPlaneDigest ? 'verified' : 'unmeasured'} />
+        <EvidenceItem label="Workflow run ID" value={liquidity?.upstreamIngestRunId ?? '미수집'} state={liquidity?.upstreamIngestRunId ? 'verified' : 'unmeasured'} />
+        <EvidenceItem label="Artifact ID" value={liquidity?.upstreamIngestArtifactId ?? '미수집'} state={liquidity?.upstreamIngestArtifactId ? 'verified' : 'unmeasured'} />
+        <EvidenceItem label="Canonical receipt" value={liquidity?.reportDigest ?? '미수집'} state={liquidity?.reportDigest ? 'verified' : 'unmeasured'} />
+        <EvidenceItem label="Research SHA binding" value={researchShaBinding} state={researchShaBinding === 'PRESENT' ? 'verified' : researchShaBinding === 'WRONG_SHA' ? 'attention' : 'unmeasured'} />
         <EvidenceItem label="Publication timestamp" value={formatDate(overview.state.latestCycleAt)} state={overview.state.latestCycleAt ? 'normal' : 'unmeasured'} />
         <EvidenceItem label="Freshness" value={stale ? `STALE ${stale}개` : 'Canonical max-age 미수집'} state={stale ? 'stale' : 'unmeasured'} />
         <EvidenceItem label="SHA binding" value={wrongSha ? `WRONG_SHA ${wrongSha}개` : '명시적 mismatch 없음'} state={wrongSha ? 'attention' : 'normal'} />
@@ -391,7 +498,7 @@ function EvidenceTab({ overview, promotion, cards }: {
         <EvidenceItem label="Paper runtime proof" value={overview.paper.runtime.present ? 'PRESENT' : 'MISSING'} state={overview.paper.runtime.present ? 'normal' : 'unmeasured'} />
         <EvidenceItem label="Profitability proof" value={overview.profitability.proven ? 'PROVEN' : 'NOT_PROVEN'} state={overview.profitability.proven ? 'verified' : 'waiting'} />
         <EvidenceItem label="Champion" value={champion.metrics[0]?.value ?? '자료 없음'} state={champion.status} />
-        <EvidenceItem label="FIRST_ZERO" value="미수집" state="unmeasured" />
+        <EvidenceItem label="FIRST_ZERO" value={firstZero} state={firstZero === '미수집' ? 'unmeasured' : 'attention'} />
       </dl>
 
       <details className="rounded-2xl border border-card-border bg-card p-4">
@@ -422,12 +529,14 @@ function PaperKpi({ label, value, state }: { label: string; value: string; state
 function CostRow({ row }: { row: CostDisplayRow }) {
   const status: ResearchProductStatus = row.state === 'measured'
     ? 'verified'
+    : row.state === 'modeled'
+      ? 'attention'
     : row.state === 'not-applicable'
       ? 'inactive'
       : row.state === 'unmeasured'
         ? 'unmeasured'
         : 'insufficient';
-  const label = row.state === 'measured' ? '측정됨' : row.state === 'not-applicable' ? '적용없음' : row.state === 'unmeasured' ? '미측정' : '자료 부족';
+  const label = row.state === 'measured' ? '측정됨' : row.state === 'modeled' ? '모델값' : row.state === 'not-applicable' ? '적용없음' : row.state === 'unmeasured' ? '미측정' : '자료 부족';
   return (
     <div className="flex min-h-14 items-center justify-between gap-3 rounded-xl border border-card-border bg-background p-3">
       <div className="min-w-0"><p className="text-xs font-black">{row.label}</p><p className="mt-0.5 text-[10px] text-muted-foreground">{row.quality ?? 'Canonical quality 미수집'}</p></div>
@@ -436,11 +545,62 @@ function CostRow({ row }: { row: CostDisplayRow }) {
   );
 }
 
-function PaperTab({ overview, cards }: { overview: ResearchCenterOverview; cards: ResearchPipelineCard[] }) {
+function PaperTab({
+  overview,
+  cards,
+  journalBinding,
+  journalBindingLoading,
+  journalBindingError,
+}: {
+  overview: ResearchCenterOverview;
+  cards: ResearchPipelineCard[];
+  journalBinding: ResearchJournalBindingReadback | null;
+  journalBindingLoading: boolean;
+  journalBindingError: boolean;
+}) {
   const paper = cards.find((card) => card.key === 'paper')!;
   const ledger = overview.paper.ledger;
-  const costRows = buildFullCostRows(null);
-  const fullCostReady = isFullCostReady(null);
+  const performance = overview.paper.candidatePerformance ?? {
+    status: 'MISSING' as const,
+    FIRST_ZERO: 'CANDIDATE_PERFORMANCE_EVIDENCE_MISSING',
+    candidateId: null,
+    strategyId: null,
+    freezeTimestamp: null,
+    identity14Verified: false,
+    fullCostEvidence: {
+      fullCostReady: false as const,
+      components: Object.fromEntries(['commission', 'tax', 'spread', 'slippage', 'funding', 'latency', 'liquidityImpact', 'partialFillImpact'].map((key) => [key, { state: 'UNKNOWN', valuePercent: null, provenance: null }])) as ResearchCandidatePerformance['fullCostEvidence']['components'],
+    },
+    candidateMatchedN: null,
+    LONG_SIGNAL_N: null,
+    SHORT_SIGNAL_N: null,
+    NO_TRADE_N: null,
+    Entry_N: null,
+    Position_N: null,
+    PositionObservation_N: null,
+    Settlement_N: null,
+    TRAIN_N: null,
+    VALIDATION_N: null,
+    OOS_N: null,
+    WIN_RATE: null,
+    PF: null,
+    MDD: null,
+    Gross_PnL: null,
+    Net_PnL: null,
+    FULL_COST_READY: false as const,
+    NET_ALPHA_PROVEN: false as const,
+    PROFITABILITY_PROVEN: false as const,
+    TRAIN_DIAGNOSTIC_ONLY: true as const,
+  };
+  const independentN = overview.research.liquidityIndependence?.effectiveIndependentN ?? null;
+  const costRows = buildFullCostRows(performance.fullCostEvidence);
+  const fullCostReady = performance.FULL_COST_READY && isFullCostReady(performance.fullCostEvidence);
+  const candidateValue = (value: number | null, suffix = '') => value == null
+    ? 'UNKNOWN/BLOCKED'
+    : `${formatCanonicalMetric(value)}${suffix}`;
+  const candidateRate = (value: number | null) => value == null
+    ? 'UNKNOWN/BLOCKED'
+    : `${formatCanonicalMetric(value * 100, { digits: 2 })}%`;
   const openPositionText = !ledger.present || ledger.positionCount == null
     ? '현재 포지션 자료 없음'
     : ledger.positionCount === 0
@@ -464,18 +624,55 @@ function PaperTab({ overview, cards }: { overview: ResearchCenterOverview; cards
         </div>
       </div>
 
+      <article className="rounded-2xl border border-card-border bg-card p-4 shadow-sm" data-testid="paper-candidate-performance">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">Frozen Candidate</p><h3 className="mt-1 text-sm font-black">후보별 성과 증거</h3></div>
+          <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black ${performance.status === 'PRESENT' ? STATUS_STYLE.accumulating : STATUS_STYLE.unmeasured}`}>{performance.status === 'PRESENT' ? 'EVIDENCE PRESENT' : 'UNKNOWN/BLOCKED'}</span>
+        </div>
+        <dl className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">candidateId</dt><dd className="mt-1 truncate font-mono font-bold" title={performance.candidateId ?? 'UNKNOWN/BLOCKED'}>{performance.candidateId ?? 'UNKNOWN/BLOCKED'}</dd></div>
+          <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">strategyId</dt><dd className="mt-1 font-mono font-bold">{performance.strategyId ?? 'UNKNOWN/BLOCKED'}</dd></div>
+          <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">freezeTimestamp</dt><dd className="mt-1 font-bold">{performance.freezeTimestamp ? formatDate(performance.freezeTimestamp) : 'UNKNOWN/BLOCKED'}</dd></div>
+          <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">CURRENT_FIRST_ZERO</dt><dd className="mt-1 break-all font-mono font-bold">{performance.FIRST_ZERO}</dd></div>
+        </dl>
+        <div className="mt-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-4 xl:grid-cols-6">
+          {[
+            ['effective independent N', independentN],
+            ['candidateMatchedN', performance.candidateMatchedN],
+            ['LONG signal N', performance.LONG_SIGNAL_N],
+            ['SHORT signal N', performance.SHORT_SIGNAL_N],
+            ['NO TRADE N', performance.NO_TRADE_N],
+            ['Entry', performance.Entry_N],
+            ['Position', performance.Position_N],
+            ['Position obs.', performance.PositionObservation_N],
+            ['Settlement', performance.Settlement_N],
+            ['TRAIN N', performance.TRAIN_N],
+            ['Validation N', performance.VALIDATION_N],
+            ['OOS N', performance.OOS_N],
+          ].map(([label, value]) => <div key={String(label)} className="rounded-xl border border-card-border bg-background p-2"><p className="text-[9px] font-bold text-muted-foreground">{label}</p><p className="mt-1 text-xs font-black tabular-nums">{candidateValue(value as number | null)}</p></div>)}
+        </div>
+        <p className="mt-3 text-[10px] text-muted-foreground">시장 독립 표본 N과 후보별 매치·거래 수를 분리합니다. 후보 증거가 없으면 일반 Paper ledger 수를 빌려오지 않습니다.</p>
+      </article>
+
+      <PaperClosedLoopObserver
+        overview={overview}
+        journalBinding={journalBinding}
+        journalBindingLoading={journalBindingLoading}
+        journalBindingError={journalBindingError}
+      />
+
       <section className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6" aria-label="모의매매 핵심 KPI">
         <PaperKpi label="모의 평가금액" value="미측정" state="unmeasured" />
-        <PaperKpi label="실현손익" value="미측정" state="unmeasured" />
+        <PaperKpi label="Gross PnL" value={candidateValue(performance.Gross_PnL)} state={countState(performance.Settlement_N)} />
         <PaperKpi label="미실현손익" value="미측정" state="unmeasured" />
-        <PaperKpi label="순손익" value="미측정" state="unmeasured" />
-        <PaperKpi label="진입 수" value="미측정" state="unmeasured" />
-        <PaperKpi label="열린 포지션" value={formatCanonicalMetric(ledger.positionCount)} state={countState(ledger.positionCount)} />
-        <PaperKpi label="청산 수" value={formatCanonicalMetric(ledger.settlementCount)} state={countState(ledger.settlementCount)} />
-        <PaperKpi label="승률" value={ledger.settlementCount === 0 ? '표본 없음' : '미측정'} state={ledger.settlementCount === 0 ? 'waiting' : 'unmeasured'} />
-        <PaperKpi label="Profit Factor" value={ledger.settlementCount === 0 ? '-' : '미측정'} state={ledger.settlementCount === 0 ? 'waiting' : 'unmeasured'} />
-        <PaperKpi label="MDD" value="미측정" state="unmeasured" />
-        <PaperKpi label="표본 N" value={formatCanonicalMetric(ledger.settlementCount)} state={countState(ledger.settlementCount)} />
+        <PaperKpi label="Net PnL" value={candidateValue(performance.Net_PnL)} state="unmeasured" />
+        <PaperKpi label="진입 수" value={candidateValue(performance.Entry_N)} state={countState(performance.Entry_N)} />
+        <PaperKpi label="후보 포지션" value={candidateValue(performance.Position_N)} state={countState(performance.Position_N)} />
+        <PaperKpi label="후보 Settlement" value={candidateValue(performance.Settlement_N)} state={countState(performance.Settlement_N)} />
+        <PaperKpi label="승률" value={candidateRate(performance.WIN_RATE)} state={countState(performance.Settlement_N)} />
+        <PaperKpi label="Profit Factor" value={candidateValue(performance.PF)} state={countState(performance.Settlement_N)} />
+        <PaperKpi label="MDD" value={candidateValue(performance.MDD, '%')} state={countState(performance.Settlement_N)} />
+        <PaperKpi label="후보 매치 N" value={candidateValue(performance.candidateMatchedN)} state={countState(performance.candidateMatchedN)} />
         <PaperKpi label="마지막 업데이트" value={formatDate(overview.state.latestCycleAt)} state={overview.state.latestCycleAt ? 'normal' : 'unmeasured'} />
       </section>
 
@@ -493,7 +690,7 @@ function PaperTab({ overview, cards }: { overview: ResearchCenterOverview; cards
       <article className="rounded-2xl border border-card-border bg-card p-4 shadow-sm" data-testid="paper-full-cost">
         <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">8 components</p><h3 className="mt-1 text-sm font-black">비용 분석</h3></div><span className="text-xs font-black">FULL_COST_READY · {fullCostReady ? '충족' : '자료 부족'}</span></div>
         <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">{costRows.map((row) => <CostRow key={row.key} row={row} />)}</div>
-        <p className="mt-3 text-[10px] text-muted-foreground">Canonical component evidence가 API에 없으므로 unavailable 비용을 0으로 바꾸지 않습니다.</p>
+        <p className="mt-3 text-[10px] text-muted-foreground">각 비용은 MEASURED / MODELED / UNKNOWN / BLOCKED_DATA를 독립 유지하며 unavailable 비용을 0으로 바꾸지 않습니다.</p>
       </article>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -506,8 +703,9 @@ function PaperTab({ overview, cards }: { overview: ResearchCenterOverview; cards
         </article>
         <article className="rounded-2xl border border-card-border bg-card p-4 shadow-sm">
           <div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-primary" /><h3 className="text-sm font-black">수익성 검증</h3></div>
-          <p className="mt-3 text-lg font-black">{overview.profitability.proven ? '검증 충족' : '아직 검증되지 않음'}</p>
-          <p className="mt-2 text-xs text-muted-foreground">{ledger.settlementCount == null || ledger.settlementCount === 0 ? '추가 모의매매 표본 필요' : overview.profitability.note}</p>
+          <p className="mt-3 text-lg font-black">{performance.PROFITABILITY_PROVEN ? '검증 충족' : '아직 검증되지 않음'}</p>
+          <p className="mt-2 text-xs text-muted-foreground">TRAIN_DIAGNOSTIC_ONLY={String(performance.TRAIN_DIAGNOSTIC_ONLY)} · VALIDATION={candidateValue(performance.VALIDATION_N)} · OOS={candidateValue(performance.OOS_N)}</p>
+          <p className="mt-1 text-xs text-muted-foreground">FULL_COST_READY={String(performance.FULL_COST_READY)} · NET_ALPHA_PROVEN={String(performance.NET_ALPHA_PROVEN)} · PROFITABILITY_PROVEN={String(performance.PROFITABILITY_PROVEN)}</p>
           <p className="mt-1 text-xs text-muted-foreground">{cards.find((card) => card.key === 'champion')?.metrics[0]?.value ?? '검증된 Champion 근거 미수집'}</p>
         </article>
       </div>
@@ -530,14 +728,22 @@ export default function ResearchCenterPage() {
     staleTime: 60_000,
     retry: 1,
   });
+  const journalBindingQuery = useQuery({
+    queryKey: ['research-center', 'paper-journal-binding'],
+    queryFn: ({ signal }) => fetchResearchJournalBinding(signal),
+    enabled: tab === 'paper',
+    staleTime: 30_000,
+    retry: 0,
+  });
   const overview = overviewQuery.data;
   const promotion = promotionQuery.data ?? null;
   const cards = useMemo(() => overview ? buildResearchPipeline(overview, promotion) : [], [overview, promotion]);
-  const refreshing = overviewQuery.isFetching || promotionQuery.isFetching;
+  const refreshing = overviewQuery.isFetching || promotionQuery.isFetching || (tab === 'paper' && journalBindingQuery.isFetching);
 
   function refreshAll() {
     void overviewQuery.refetch();
     void promotionQuery.refetch();
+    if (tab === 'paper') void journalBindingQuery.refetch();
   }
 
   function selectCard(key: ResearchPipelineKey) {
@@ -613,7 +819,15 @@ export default function ResearchCenterPage() {
             {tab === 'overview' ? <OverviewTab overview={overview} promotion={promotion} cards={cards} selected={selected} onSelect={selectCard} /> : null}
             {tab === 'ai-lab' ? <AiLabTab overview={overview} cards={cards} /> : null}
             {tab === 'evidence' ? <EvidenceTab overview={overview} promotion={promotion} cards={cards} /> : null}
-            {tab === 'paper' ? <PaperTab overview={overview} cards={cards} /> : null}
+            {tab === 'paper' ? (
+              <PaperTab
+                overview={overview}
+                cards={cards}
+                journalBinding={journalBindingQuery.data ?? null}
+                journalBindingLoading={journalBindingQuery.isFetching}
+                journalBindingError={journalBindingQuery.isError}
+              />
+            ) : null}
           </>
         ) : null}
       </div>

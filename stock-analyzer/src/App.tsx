@@ -29,19 +29,27 @@ import type { MemberCapability } from '../../packages/member-access/src/index.js
 import HomePage from '@/pages/home';
 import SearchPage from '@/pages/search';
 
-const WatchlistPage = lazy(() => import('@/pages/watchlist'));
+const loadWatchlistPage = () => import('@/pages/watchlist');
+const WatchlistPage = lazy(loadWatchlistPage);
 const AlertsPage = lazy(() => import('@/pages/alerts'));
 const ScannerPage = lazy(() => import('@/pages/scanner'));
-const SignalScannerPage = lazy(() => import('@/pages/signal-scanner'));
-const StockInfoPage = lazy(() => import('@/pages/stock-info'));
-const DetailPage = lazy(() => import('@/pages/detail'));
-const MarketInformationPage = lazy(() => import('@/pages/market-information'));
+const loadSignalScannerPage = () => import('@/pages/signal-scanner');
+const SignalScannerPage = lazy(loadSignalScannerPage);
+const TelegramSignalOrderPage = lazy(() => import('@/pages/telegram-signal-order'));
+const loadStockInfoPage = () => import('@/pages/stock-info');
+const StockInfoPage = lazy(loadStockInfoPage);
+const loadDetailPage = () => import('@/pages/detail');
+const DetailPage = lazy(loadDetailPage);
+const loadMarketInformationPage = () => import('@/pages/market-information');
+const MarketInformationPage = lazy(loadMarketInformationPage);
 const MarketOverviewPage = lazy(() => import('@/pages/market-overview'));
 const StocksPage = lazy(() => import('@/pages/stocks'));
 const UnifiedAssetSearchPage = lazy(() => import('@/pages/unified-asset-search'));
 const ThemesPage = lazy(() => import('@/pages/themes'));
-const LearnPage = lazy(() => import('@/pages/learn'));
-const MorePage = lazy(() => import('@/pages/more'));
+const loadLearnPage = () => import('@/pages/learn');
+const LearnPage = lazy(loadLearnPage);
+const loadMorePage = () => import('@/pages/more');
+const MorePage = lazy(loadMorePage);
 const PortfolioPage = lazy(() => import('@/pages/portfolio'));
 const PortfolioV2Page = lazy(() => import('@/pages/portfolio-v2'));
 const StrategyPromotionPage = lazy(() => import('@/pages/strategy-promotion'));
@@ -51,7 +59,8 @@ const AdminPage = lazy(() => import('@/pages/admin'));
 const AgentHubControlPage = lazy(() => import('@/pages/agent-hub-control'));
 const InstallPage = lazy(() => import('@/pages/install'));
 const RecommendationsPage = lazy(() => import('@/pages/recommendations'));
-const BacktestsPage = lazy(() => import('@/pages/backtests'));
+const loadBacktestsPage = () => import('@/pages/backtests');
+const BacktestsPage = lazy(loadBacktestsPage);
 const loadPaperTradingPage = () => import('@/pages/paper-trading');
 const PaperTradingPage = lazy(loadPaperTradingPage);
 const AutoTradingPage = lazy(() => import('@/pages/auto-trading'));
@@ -92,7 +101,8 @@ if (directAiChartColdRoute) {
 }
 const AiChartPage = lazy(loadAiChartPage);
 const AiChatPage = lazy(() => import('@/pages/ai-chat'));
-const TechnicalWorkspacePage = lazy(() => import('@/pages/technical-workspace'));
+const loadTechnicalWorkspacePage = () => import('@/pages/technical-workspace');
+const TechnicalWorkspacePage = lazy(loadTechnicalWorkspacePage);
 const Phase12TradeAutomationE2EPage = lazy(() => import('@/pages/phase12-trade-automation-e2e'));
 
 const phase4E2EEnabled = import.meta.env.VITE_PHASE4_E2E === 'true';
@@ -116,26 +126,51 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: true, refetchOnReconnect: true, staleTime: 0, gcTime: 30 * 60 * 1000, retry: 2 } },
 });
 
-if (directAiChartPrewarmSelection) {
-  const { market, ticker, timeframe } = directAiChartPrewarmSelection;
-  const queryKey = ['unified-chart-data', market, ticker, timeframe] as const;
-  queryClient.setQueryDefaults(queryKey, {
-    staleTime: DIRECT_AI_CHART_PREWARM_STALE_MS,
-    retryOnMount: false,
-  });
-  queueMicrotask(() => {
+async function prewarmPrimaryMarketInformation(): Promise<void> {
+  const marketInformation = await loadMarketInformationPage();
+  if (typeof window === 'undefined') return;
+  const currentPath = window.location.pathname.replace(/\/+$/, '') || '/';
+  if (currentPath !== '/' && !currentPath.endsWith('/home')) return;
+  await marketInformation.prefetchMarketInformationRoom(queryClient, '/stocks/kr');
+}
+
+function DirectAiChartDataPrewarm() {
+  const auth = useAuth();
+  useEffect(() => {
+    if (
+      !directAiChartPrewarmSelection
+      || auth.loading
+      || !auth.isApproved
+      || !auth.can('canAccessRiskPreview')
+    ) return;
+
+    const { market, ticker, timeframe } = directAiChartPrewarmSelection;
+    const queryKey = ['unified-chart-data', market, ticker, timeframe] as const;
+    const resetDefaults = () => {
+      queryClient.setQueryDefaults(queryKey, {
+        staleTime: 0,
+        retryOnMount: true,
+      });
+    };
+    queryClient.setQueryDefaults(queryKey, {
+      staleTime: DIRECT_AI_CHART_PREWARM_STALE_MS,
+      retryOnMount: false,
+    });
     void queryClient.prefetchQuery({
       queryKey,
       queryFn: ({ signal }) => fetchUnifiedChartData({ market, symbol: ticker, timeframe, signal }),
       retry: retryUnifiedChartBootstrap,
     });
-  });
-  window.setTimeout(() => {
-    queryClient.setQueryDefaults(queryKey, {
-      staleTime: 0,
-      retryOnMount: true,
-    });
-  }, DIRECT_AI_CHART_PREWARM_DEFAULT_RESET_MS);
+    const resetTimer = window.setTimeout(
+      resetDefaults,
+      DIRECT_AI_CHART_PREWARM_DEFAULT_RESET_MS,
+    );
+    return () => {
+      window.clearTimeout(resetTimer);
+      resetDefaults();
+    };
+  }, [auth.loading, auth.isApproved, auth.membershipLevel]);
+  return null;
 }
 
 function installScannerAbortBridge(client: QueryClient) {
@@ -215,7 +250,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const legacyScannerE2E = phase11E2EEnabled && location.startsWith('/__phase11-ai-workspace-e2e');
   const scannerRoute = location.startsWith('/scanner') || legacyScannerE2E;
   const wide = scannerRoute || location.startsWith('/ai-chart') || location.startsWith('/__phase11-technical-workspace-e2e');
-  return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 w-full flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-screen-xl'}`}><OfflineBanner />{scannerRoute ? <ScannerReadinessStatus /> : null}<ProfessionalCommandBar /><div className="min-h-0 flex-1 overflow-hidden">{children}</div></div><OrderbookRouteDock /></div>;
+  return <div data-testid="app-shell" className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 w-full flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-screen-xl'}`}><OfflineBanner />{scannerRoute ? <ScannerReadinessStatus /> : null}<ProfessionalCommandBar /><div className="min-h-0 flex-1 overflow-hidden">{children}</div></div><OrderbookRouteDock /></div>;
 }
 
 function gated(capability: MemberCapability, child: React.ReactNode) {
@@ -229,6 +264,9 @@ function builder(pageId: UiBuilderPageId, child: React.ReactNode) {
 function HomeAccess() { return builder('HOME', <HomePage />); }
 function ScannerAccess() {
   return gated('canAccessBasicInfo', <TechnicalWorkspacePage />);
+}
+function TelegramSignalOrderAccess() {
+  return gated('canAccessBasicInfo', <TelegramSignalOrderPage />);
 }
 function AiChartAccess() { return gated('canAccessRiskPreview', builder('AI_CHART', <AiChartPage />)); }
 function AiChatAccess() { return gated('canAccessBasicInfo', builder('AI_CHAT', <AiChatPage />)); }
@@ -271,7 +309,7 @@ function PaperTradingAccess() {
     </Suspense>,
   );
 }
-function AutoTradingAccess() { return gated('canPlaceOrders', builder('AUTO_TRADING', <AutoTradingPage />)); }
+function AutoTradingAccess() { return gated('canAccessAutoTrading', builder('AUTO_TRADING', <AutoTradingPage />)); }
 function AdminAccess() { return gated('canManageMembers', <AdminPage />); }
 function AgentHubControlAccess() { return gated('canManageMembers', <AgentHubControlPage />); }
 function UiBuilderAdminAccess() { return gated('canManageMembers', <UiBuilderLayoutControlPage />); }
@@ -324,6 +362,7 @@ function ApprovedRouter() {
     <Route path="/market-rankings" component={SearchPage} />
     <Route path="/market-browser" component={StocksPage} />
     <Route path="/scanner" component={ScannerAccess} />
+    <Route path="/telegram-order" component={TelegramSignalOrderAccess} />
     <Route path="/ai-chart" component={AiChartAccess} />
     <Route path="/ai-chat" component={AiChatAccess} />
     <Route path="/research-center" component={ResearchCenterAccess} />
@@ -363,6 +402,7 @@ function RootRouter() {
     {phase11E2EEnabled ? <Route path="/__phase11-ai-workspace-e2e" component={ScannerRoute} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-ai-chat-e2e" component={AiChatPage} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-technical-workspace-e2e" component={TechnicalWorkspacePage} /> : null}
+    {phase11E2EEnabled ? <Route path="/auto-trading" component={Phase11AutoTradingRoute} /> : null}
     {phase12E2EEnabled ? <Route path="/__phase12-trade-automation-e2e" component={Phase12TradeAutomationE2EPage} /> : null}
     {phase12E2EEnabled ? <Route path="/__phase13-orderbook-e2e" component={Phase13OrderbookE2EPage} /> : null}
     {phase11E2EEnabled ? <Route path="/ai-chart" component={AiChartRoute} /> : null}
@@ -380,9 +420,28 @@ function AiChartRoute() {
   return <AiChartPage />;
 }
 
+function Phase11AutoTradingRoute() {
+  return <AutoTradingPage />;
+}
+
 function AuthenticatedApp() {
   const auth = useAuth();
   useEffect(() => { if (auth.isApproved) ensureWatchlistSync(); }, [auth.isApproved]);
+  useEffect(() => {
+    if (!auth.isApproved || directAiChartColdRoute) return;
+    void Promise.allSettled([
+      loadMarketInformationPage(),
+      loadWatchlistPage(),
+      loadBacktestsPage(),
+      loadMorePage(),
+      loadStockInfoPage(),
+      loadDetailPage(),
+      loadTechnicalWorkspacePage(),
+      loadSignalScannerPage(),
+      loadAiChartPage(),
+      loadLearnPage(),
+    ]).then(() => prewarmPrimaryMarketInformation()).catch(() => undefined);
+  }, [auth.isApproved]);
   useEffect(() => {
     if (auth.isApproved && auth.can('canAccessPaperTrading')) {
       void loadPaperTradingPage();
@@ -395,7 +454,7 @@ function AuthenticatedApp() {
 }
 
 function App() {
-  return <QueryClientProvider client={queryClient}><AuthProvider><SettingsProvider><AssetModeProvider><AnalysisSelectionProvider><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><AppShell><RootRouter /></AppShell></WouterRouter><Toaster /></TooltipProvider></AnalysisSelectionProvider></AssetModeProvider></SettingsProvider></AuthProvider></QueryClientProvider>;
+  return <QueryClientProvider client={queryClient}><AuthProvider><DirectAiChartDataPrewarm /><SettingsProvider><AssetModeProvider><AnalysisSelectionProvider><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><AppShell><RootRouter /></AppShell></WouterRouter><Toaster /></TooltipProvider></AnalysisSelectionProvider></AssetModeProvider></SettingsProvider></AuthProvider></QueryClientProvider>;
 }
 
 export default App;

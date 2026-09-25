@@ -136,7 +136,7 @@ async function setup(page: Page, options: { available?: boolean; regular?: boole
 test('failed refresh removes previous evidence instead of retaining a fresh-looking read model', async ({ page }) => {
   const diagnostics = await setup(page, { refreshFailure: true });
   await page.goto('/research-center');
-  await page.getByRole('button', { name: 'AI Research Copilot', exact: true }).click();
+  await page.getByRole('button', { name: 'AI 도우미', exact: true }).click();
   await expect(page.getByRole('region', { name: '연구 단계' })).toBeVisible();
   await page.getByRole('button', { name: '증거 새로고침' }).click();
   await expect(page.getByRole('alert')).toContainText('연구 기능을 사용할 수 없습니다.');
@@ -150,11 +150,12 @@ for (const [width, height] of viewports) {
     await page.setViewportSize({ width, height });
     const diagnostics = await setup(page);
     await page.goto('/research-center');
-    await expect(page.getByRole('heading', { name: '연구센터', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'AI Research Copilot', exact: true }).click();
+    await expect(page.getByRole('heading', { name: '현재 어디까지 왔나요?', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'AI 도우미', exact: true }).click();
     await expect(page.getByTestId('research-copilot')).toBeVisible();
     await expect(page.getByText('AI는 가설과 연구 절차를 설명합니다.', { exact: false })).toBeVisible();
-    await expect(page.getByText('AI 사용 불가: FREE_TIER_NOT_CONFIRMED')).toBeVisible();
+    await expect(page.getByText('AI 제공자 무료 사용 가능 여부 미확인')).toBeVisible();
+    await expect(page.getByText('왜 버튼을 누를 수 없나요?')).toBeVisible();
     await expect(page.getByRole('button', { name: '후보 가설 제안' })).toBeDisabled();
     expect(diagnostics.calls.filter(call => call.startsWith('POST'))).toEqual([]);
     await expect(page.getByRole('region', { name: '연구 단계' }).getByRole('article')).toHaveCount(10);
@@ -189,7 +190,7 @@ for (const [width, height] of viewports) test(`canonical TEST_ONLY candidate ${w
   const diagnostics = await setup(page, { executableBundle: true });
   const started = performance.now();
   await page.goto('/research-center');
-  await page.getByRole('button', { name: 'AI Research Copilot', exact: true }).click();
+  await page.getByRole('button', { name: 'AI 도우미', exact: true }).click();
   await expect(page.getByRole('region', { name: '연구 단계' })).toBeVisible();
   const loadMs = performance.now() - started;
   await page.getByLabel('연구 DSL JSON').fill(JSON.stringify(diagnostics.canonical.dsl));
@@ -215,14 +216,14 @@ for (const [width, height] of viewports) test(`canonical TEST_ONLY candidate ${w
 });
 test('stale overview cannot credit current receipts', async ({ page }) => {
   const diagnostics = await setup(page, { stale: true });
-  await page.goto('/research-center'); await page.getByRole('button', { name: 'AI Research Copilot', exact: true }).click();
+  await page.goto('/research-center'); await page.getByRole('button', { name: 'AI 도우미', exact: true }).click();
   await expect(page.getByRole('region', { name: '연구 근거와 AI 한도' })).toContainText('STALE');
   await expect(page.getByRole('region', { name: '연구 단계' })).toContainText('BLOCKED_DATA');
   diagnostics.clean();
 });
 test('repeated readback cannot discard the original artifact pin after a changed storage response', async ({ page }) => {
   const diagnostics = await setup(page, { executableBundle: true, tamperArtifact: true });
-  await page.goto('/research-center'); await page.getByRole('button', { name: 'AI Research Copilot', exact: true }).click();
+  await page.goto('/research-center'); await page.getByRole('button', { name: 'AI 도우미', exact: true }).click();
   await page.getByLabel('연구 DSL JSON').fill(JSON.stringify(diagnostics.canonical.dsl));
   await page.getByRole('button', { name: 'DSL 검증', exact: true }).click();
   await page.getByRole('button', { name: '검증된 Bundle로 연구 백테스트 제출' }).click();
@@ -239,7 +240,7 @@ test('repeated readback cannot discard the original artifact pin after a changed
 test('manual AI review disables duplicate submission and remains advisory', async ({ page }) => {
   const diagnostics = await setup(page, { available: true });
   await page.goto('/research-center');
-  await page.getByRole('button', { name: 'AI Research Copilot', exact: true }).click();
+  await page.getByRole('button', { name: 'AI 도우미', exact: true }).click();
   const action = page.getByRole('button', { name: '후보 가설 제안' });
   await action.click();
   await expect(action).toBeDisabled();
@@ -250,7 +251,7 @@ test('manual AI review disables duplicate submission and remains advisory', asyn
 });
 for (const key of ['modelIdentityDigest', 'featureOrderDigest', 'preprocessingVersion'] as const) test(`readback rejects a response that substitutes ${key}`, async ({ page }) => {
   const diagnostics = await setup(page, { executableBundle: true, wrongIdentity: key });
-  await page.goto('/research-center'); await page.getByRole('button', { name: 'AI Research Copilot', exact: true }).click();
+  await page.goto('/research-center'); await page.getByRole('button', { name: 'AI 도우미', exact: true }).click();
   await page.getByLabel('연구 DSL JSON').fill(JSON.stringify(diagnostics.canonical.dsl));
   await page.getByRole('button', { name: 'DSL 검증', exact: true }).click();
   await page.getByRole('button', { name: '검증된 Bundle로 연구 백테스트 제출' }).click();
@@ -265,7 +266,7 @@ for (const key of ['modelIdentityDigest', 'featureOrderDigest', 'preprocessingVe
 test('changed source after AI completion cannot display the previous explanation', async ({ page }) => {
   const diagnostics = await setup(page, { available: true, changedAfterReview: true });
   await page.goto('/research-center');
-  await page.getByRole('button', { name: 'AI Research Copilot', exact: true }).click();
+  await page.getByRole('button', { name: 'AI 도우미', exact: true }).click();
   await page.getByRole('button', { name: '후보 가설 제안' }).click();
   await expect(page.getByText('원본 기준 시각:', { exact: false })).toContainText(new Date(NOW - 1_000).toISOString());
   await expect(page.getByRole('region', { name: 'AI 연구 제안' })).toHaveCount(0);
@@ -275,7 +276,7 @@ test('changed source after AI completion cannot display the previous explanation
 test('numeric AI authority in a nominally successful response is blocked by the UI contract', async ({ page }) => {
   const diagnostics = await setup(page, { available: true, numericReview: true });
   await page.goto('/research-center');
-  await page.getByRole('button', { name: 'AI Research Copilot', exact: true }).click();
+  await page.getByRole('button', { name: 'AI 도우미', exact: true }).click();
   await page.getByRole('button', { name: '후보 가설 제안' }).click();
   await expect(page.getByRole('alert')).toContainText('연구 응답 계약을 확인할 수 없습니다.');
   await expect(page.getByRole('region', { name: 'AI 연구 제안' })).toHaveCount(0);
@@ -285,7 +286,7 @@ for (const state of ['failure', 'malformed'] as const) {
   test(`copilot ${state} response shows recoverable error instead of empty success`, async ({ page }) => {
     const diagnostics = await setup(page, { [state]: true });
     await page.goto('/research-center');
-    await page.getByRole('button', { name: 'AI Research Copilot', exact: true }).click();
+    await page.getByRole('button', { name: 'AI 도우미', exact: true }).click();
     await expect(page.getByRole('alert')).toBeVisible();
     await expect(page.getByRole('button', { name: '다시 조회' })).toBeVisible();
     expect(diagnostics.reviewRequests()).toBe(0);
@@ -295,7 +296,7 @@ for (const state of ['failure', 'malformed'] as const) {
 test('regular member cannot reach the research workspace', async ({ page }) => {
   const diagnostics = await setup(page, { regular: true });
   await page.goto('/research-center');
-  await expect(page.getByRole('button', { name: 'AI Research Copilot', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'AI 도우미', exact: true })).toHaveCount(0);
   expect(diagnostics.calls.filter(call => call.includes('/research/copilot'))).toEqual([]);
   diagnostics.clean();
 });

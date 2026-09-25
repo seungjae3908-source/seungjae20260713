@@ -25,6 +25,7 @@ LEDGER_END = "[/PERSISTENT_TASK_LEDGER]"
 REQUIRED_ANCHORS = ("[PIPELINE_SNAPSHOT]", "[LEASE]", "[WATCH_EVENT]")
 MAX_LEDGER_CHARS = 18000
 MAX_LEDGER_ANCHOR_LOOKBACK_COMMENTS = 1500
+MAX_CONTINUITY_ANCHOR_LOOKBACK_COMMENTS = MAX_LEDGER_ANCHOR_LOOKBACK_COMMENTS
 TOP_LEVEL_SECTION_RE = re.compile(r"^\[[A-Z][A-Z0-9_:-]*\](?:\[[A-Z][A-Z0-9_:-]*\])*$")
 
 
@@ -302,15 +303,105 @@ def validate_continuity_anchors(window: BoundedCommentWindow, *, ledger_id: int 
     return anchors
 
 
+def resolve_continuity_anchors(
+    github: Any,
+    issue_number: int,
+    window: BoundedCommentWindow,
+    *,
+    ledger_id: int,
+    max_lookback_comments: int = MAX_CONTINUITY_ANCHOR_LOOKBACK_COMMENTS,
+) -> tuple[dict[str, int], int]:
+    """Resolve required continuity markers without expanding executable control validation.
+
+    Required markers normally come from the processor-visible tail. If one aged out of
+    that tail, this function may read only the bounded older prefix for continuity proof.
+    Older-prefix comments are never returned to unresolved-control-work validation.
+    """
+    anchors: dict[str, int] = {}
+    missing: list[str] = []
+    for marker in REQUIRED_ANCHORS:
+        comment = _latest_comment_with_marker(window.comments, marker)
+        if comment is None:
+            missing.append(marker)
+        else:
+            anchors[marker] = _comment_id(comment)
+    if type(ledger_id) is not int or ledger_id <= 0:
+        raise ProcessorWindowRecoveryError("PERSISTENT_TASK_LEDGER anchor has no valid comment id")
+    anchors[LEDGER_START] = ledger_id
+    if not missing:
+        return anchors, 0
+
+    older_count = max(0, window.source_total_comments - window.comments_examined)
+    if older_count <= 0:
+        raise ProcessorWindowRecoveryError(
+            "bounded recovery window is missing continuity anchor " + ",".join(missing)
+        )
+    if (
+        type(max_lookback_comments) is not int
+        or not 0 < max_lookback_comments <= MAX_CONTINUITY_ANCHOR_LOOKBACK_COMMENTS
+    ):
+        raise ProcessorWindowRecoveryError("continuity anchor lookback budget must be positive and at most 1500")
+    if older_count > max_lookback_comments:
+        raise ProcessorWindowRecoveryError(
+            "continuity anchors are outside bounded lookback budget: "
+            f"older_prefix={older_count}, limit={max_lookback_comments}, missing={','.join(missing)}"
+        )
+
+    per_page = 100
+    page_count = max(1, math.ceil(older_count / per_page))
+    comments_examined = 0
+    upper_bound_id = _comment_id(window.comments[0])
+    unresolved = set(missing)
+    for page in range(page_count, 0, -1):
+        query = urlencode({"per_page": per_page, "page": page})
+        batch = _validated_comment_page(
+            github.request("GET", f"/repos/{github.repository}/issues/{issue_number}/comments?{query}"),
+            expected_count=per_page,
+            scope="continuity anchor lookup",
+        )
+        take = older_count - ((page_count - 1) * per_page) if page == page_count else per_page
+        if take < per_page:
+            overlap_ids = [_comment_id(item) for item in batch[take:]]
+            tail_ids = [_comment_id(item) for item in window.comments[:per_page - take]]
+            if overlap_ids != tail_ids:
+                raise ProcessorWindowRecoveryError(
+                    "continuity anchor lookup pagination disagrees with processor tail boundary"
+                )
+        selected = batch[:take]
+        if _comment_id(selected[-1]) >= upper_bound_id:
+            raise ProcessorWindowRecoveryError("continuity anchor lookup pagination pages overlap or are out of order")
+        upper_bound_id = _comment_id(selected[0])
+        comments_examined += len(selected)
+        for comment in reversed(selected):
+            body = str(comment.get("body") or "")
+            for marker in tuple(unresolved):
+                if marker in body:
+                    anchors[marker] = _comment_id(comment)
+                    unresolved.remove(marker)
+            if not unresolved:
+                return anchors, comments_examined
+
+    raise ProcessorWindowRecoveryError(
+        "bounded continuity anchor lookup is missing "
+        + ",".join(sorted(unresolved))
+        + f" after examining {comments_examined} older comments"
+    )
+
+
 def sanitize_ledger_block(block: str, sanitizer: Callable[[str], str]) -> str:
     return "\n".join(sanitizer(line) for line in block.splitlines()).strip()
 
 
-def _comment_range_provenance(window: BoundedCommentWindow, lookup_count: int) -> dict[str, list[int]]:
+def _comment_range_provenance(
+    window: BoundedCommentWindow,
+    ledger_lookup_count: int,
+    continuity_anchor_lookup_count: int = 0,
+) -> dict[str, list[int]]:
     older_count = window.source_total_comments - window.comments_examined
     return {
         "processor_tail_comment_range": [older_count + 1, window.source_total_comments],
-        "ledger_anchor_lookup_comment_range": [older_count - lookup_count + 1, older_count] if lookup_count else [],
+        "ledger_anchor_lookup_comment_range": [older_count - ledger_lookup_count + 1, older_count] if ledger_lookup_count else [],
+        "continuity_anchor_lookup_comment_range": [older_count - continuity_anchor_lookup_count + 1, older_count] if continuity_anchor_lookup_count else [],
     }
 
 
@@ -323,9 +414,16 @@ def augment_successor_body(
     sanitizer: Callable[[str], str],
     ledger_anchor_lookup_comments_examined: int = 0,
     ledger_anchor_lookup_limit: int = MAX_LEDGER_ANCHOR_LOOKBACK_COMMENTS,
+    continuity_anchor_lookup_comments_examined: int = 0,
+    continuity_anchor_lookup_limit: int = MAX_CONTINUITY_ANCHOR_LOOKBACK_COMMENTS,
 ) -> str:
     if ledger_anchor_lookup_comments_examined < 0 or ledger_anchor_lookup_comments_examined > ledger_anchor_lookup_limit:
         raise ProcessorWindowRecoveryError("ledger anchor lookup provenance exceeded configured bounds")
+    if (
+        continuity_anchor_lookup_comments_examined < 0
+        or continuity_anchor_lookup_comments_examined > continuity_anchor_lookup_limit
+    ):
+        raise ProcessorWindowRecoveryError("continuity anchor lookup provenance exceeded configured bounds")
     sanitized_ledger = sanitize_ledger_block(ledger_block, sanitizer)
     anchor_lines = [f"- `{marker}`: comment `{anchors[marker]}`" for marker in (*REQUIRED_ANCHORS, LEDGER_START)]
     prefix = "\n".join([
@@ -337,10 +435,20 @@ def augment_successor_body(
         f"- processor_window_limit: `{window.processor_window}`",
         f"- ledger_anchor_lookup_comments_examined: `{ledger_anchor_lookup_comments_examined}`",
         f"- ledger_anchor_lookup_limit: `{ledger_anchor_lookup_limit}`",
-        *[f"- {name}: `{json.dumps(value)}`" for name, value in _comment_range_provenance(window, ledger_anchor_lookup_comments_examined).items()],
+        f"- continuity_anchor_lookup_comments_examined: `{continuity_anchor_lookup_comments_examined}`",
+        f"- continuity_anchor_lookup_limit: `{continuity_anchor_lookup_limit}`",
+        *[
+            f"- {name}: `{json.dumps(value)}`"
+            for name, value in _comment_range_provenance(
+                window,
+                ledger_anchor_lookup_comments_examined,
+                continuity_anchor_lookup_comments_examined,
+            ).items()
+        ],
         "- comment_range_basis: one-based ordinal positions in the validated source comment count",
         f"- ledger_source_comment_id: `{anchors[LEDGER_START]}`",
         "- ledger_anchor_lookup_scope: continuity-only older-prefix lookup when the ledger is absent from the processor tail; excluded from pending control-work validation",
+        "- continuity_anchor_lookup_scope: continuity-only older-prefix lookup when a required marker aged out of the processor tail; excluded from pending control-work validation",
         "- ledger_source_termination: explicit close marker or next canonical top-level section marker; normalized with explicit close in successor",
         "- recovery_scope: executable pending-control validation remains the latest bounded processor-visible tail only; no claim of full-history validation",
         "- scheduled/default rollover semantics: unchanged and fail-closed",
@@ -366,7 +474,12 @@ def build_recovery_plan(github: Any, source_issue: int) -> dict[str, Any]:
         raise ProcessorWindowRecoveryError("source Hub is at or above the GitHub comment hard limit")
     window = read_bounded_comment_window(github, source_issue, total_count, rollover.PROCESSOR_COMMENT_WINDOW)
     ledger_id, ledger, ledger_lookup_comments_examined = resolve_complete_ledger_anchor(github, source_issue, window)
-    anchors = validate_continuity_anchors(window, ledger_id=ledger_id)
+    anchors, continuity_anchor_lookup_comments_examined = resolve_continuity_anchors(
+        github,
+        source_issue,
+        window,
+        ledger_id=ledger_id,
+    )
     actionable_comments = coordinator_actionable_control_comments(window.comments, github.repository)
     pending = rollover.unresolved_control_work(actionable_comments)
     if pending:
@@ -388,6 +501,7 @@ def build_recovery_plan(github: Any, source_issue: int) -> dict[str, Any]:
         standard_body, window=window, anchors=anchors, ledger_block=ledger,
         sanitizer=lambda line: rollover._safe_text(line, 1600),
         ledger_anchor_lookup_comments_examined=ledger_lookup_comments_examined,
+        continuity_anchor_lookup_comments_examined=continuity_anchor_lookup_comments_examined,
     )
     labels = [str(item.get("name") or "") for item in (issue.get("labels") or []) if isinstance(item, dict) and str(item.get("name") or "")]
     if "active" not in labels:
@@ -397,6 +511,7 @@ def build_recovery_plan(github: Any, source_issue: int) -> dict[str, Any]:
         "statuses": statuses, "pulls": pulls, "now_kst": now_kst,
         "successor_body": successor_body, "labels": labels,
         "ledger_anchor_lookup_comments_examined": ledger_lookup_comments_examined,
+        "continuity_anchor_lookup_comments_examined": continuity_anchor_lookup_comments_examined,
     }
 
 
@@ -410,7 +525,12 @@ def perform_recovery(github: Any, source_issue: int, *, apply: bool) -> dict[str
         "source_total_comments": window.source_total_comments,
         "comments_examined": window.comments_examined,
         "ledger_anchor_lookup_comments_examined": plan["ledger_anchor_lookup_comments_examined"],
-        **_comment_range_provenance(window, plan["ledger_anchor_lookup_comments_examined"]),
+        "continuity_anchor_lookup_comments_examined": plan["continuity_anchor_lookup_comments_examined"],
+        **_comment_range_provenance(
+            window,
+            plan["ledger_anchor_lookup_comments_examined"],
+            plan["continuity_anchor_lookup_comments_examined"],
+        ),
         "ledger_source_comment_id": plan["anchors"][LEDGER_START],
         "main_sha": plan["main_sha"], "continuity_anchors": plan["anchors"], "apply": apply,
     }
@@ -439,7 +559,15 @@ def perform_recovery(github: Any, source_issue: int, *, apply: bool) -> dict[str
             f"main_sha: {plan['main_sha']}", f"source_total_comments: {window.source_total_comments}",
             f"comments_examined: {window.comments_examined}",
             f"ledger_anchor_lookup_comments_examined: {plan['ledger_anchor_lookup_comments_examined']}",
-            *[f"{name}: {json.dumps(value)}" for name, value in _comment_range_provenance(window, plan["ledger_anchor_lookup_comments_examined"]).items()],
+            f"continuity_anchor_lookup_comments_examined: {plan['continuity_anchor_lookup_comments_examined']}",
+            *[
+                f"{name}: {json.dumps(value)}"
+                for name, value in _comment_range_provenance(
+                    window,
+                    plan["ledger_anchor_lookup_comments_examined"],
+                    plan["continuity_anchor_lookup_comments_examined"],
+                ).items()
+            ],
             f"ledger_source_comment_id: {plan['anchors'][LEDGER_START]}",
             f"history_validation_mode: {RECOVERY_MODE}", "full_history_validated: false",
             "production_deploy: 0", "db_mutation: 0", "secret_mutation: 0",

@@ -21,12 +21,13 @@ async function setup(page:Page,payload:unknown={available:true,workspace},status
   await page.route('**/api/**',async route=>{
     const request=route.request(),path=new URL(request.url()).pathname;
     requests.push({path,method:request.method(),hasAuth:Boolean(request.headers().authorization)});
+    if(path==='/api/auth/profile')return route.fulfill({contentType:'application/json',body:JSON.stringify({id:USER,login_name:'test-admin',display_name:'검증용 관리자',role:'admin',status:'approved',membership_level:'admin',is_active:true})});
     if(path==='/api/research/video/evidence/workspace')return route.fulfill({status,contentType:'application/json',body:JSON.stringify(payload)});
     if(path==='/api/research/video/evidence')return route.fulfill({contentType:'application/json',body:JSON.stringify({available:false,dataState:'UNKNOWN'})});
     return route.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,items:[],rows:[],results:[]})});
   });
   await page.goto('/research-center');
-  await page.getByRole('button',{name:'영상 연구',exact:true}).click();
+  await page.getByRole('button',{name:'영상',exact:true}).click();
   await page.getByRole('button',{name:'전략·백테스트',exact:true}).click();
   return requests;
 }

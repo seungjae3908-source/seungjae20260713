@@ -65,6 +65,8 @@ export function configureUnifiedChartFetch(fetcher: UnifiedChartFetch | null): v
 const DEFAULT_TIMEOUT_MS = 12_000;
 const US_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS = 3_500;
 const KR_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS = 3_500;
+const STOCK_ALTERNATE_HEDGE_DELAY_MS = 2_000;
+const INSUFFICIENT_CANDLE_RETRY_DELAY_MS = 150;
 
 export function marketAssetType(market: AnalysisMarket): AnalysisAssetType {
   if (market === 'UPBIT') return 'coin_spot';
@@ -198,6 +200,7 @@ async function parsePayload(response: Response): Promise<Record<string, unknown>
 function createLinkedSignal(external: AbortSignal | undefined, timeoutMs: number): {
   signal: AbortSignal;
   timedOut: () => boolean;
+  abort: () => void;
   cleanup: () => void;
 } {
   const controller = new AbortController();
@@ -213,11 +216,28 @@ function createLinkedSignal(external: AbortSignal | undefined, timeoutMs: number
   return {
     signal: controller.signal,
     timedOut: () => timeoutReached,
+    abort: () => controller.abort(),
     cleanup: () => {
       globalThis.clearTimeout(timeout);
       external?.removeEventListener('abort', abortFromExternal);
     },
   };
+}
+
+async function waitForSignalAwareDelay(ms: number, signal: AbortSignal): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      globalThis.clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+    };
+    const timer = globalThis.setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 function primaryStockEndpointTimeoutMs(market: AnalysisMarket, totalTimeoutMs: number): number {
@@ -262,6 +282,31 @@ export async function fetchUnifiedChartData(input: {
   const totalTimeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const linked = createLinkedSignal(input.signal, totalTimeoutMs);
   let lastError: UnifiedChartDataError | null = null;
+  const requestInit = (signal: AbortSignal): RequestInit => ({
+    cache: 'no-store',
+    headers: {
+      'Cache-Control': 'no-cache, no-store, max-age=0',
+      Pragma: 'no-cache',
+    },
+    signal,
+  });
+  const alternateHedge = urls.length > 1
+    ? createLinkedSignal(linked.signal, totalTimeoutMs)
+    : null;
+  const alternateGate = alternateHedge
+    ? (() => {
+        let release: () => void = () => undefined;
+        const promise = new Promise<void>((resolve) => { release = resolve; });
+        return { promise, release };
+      })()
+    : null;
+  const alternateResponse = alternateHedge && alternateGate
+    ? Promise.race([
+        waitForSignalAwareDelay(STOCK_ALTERNATE_HEDGE_DELAY_MS, alternateHedge.signal),
+        alternateGate.promise,
+      ]).then(() => fetcher(urls[1], requestInit(alternateHedge.signal)))
+    : null;
+  void alternateResponse?.catch(() => undefined);
 
   try {
     for (const [index, url] of urls.entries()) {
@@ -272,29 +317,44 @@ export async function fetchUnifiedChartData(input: {
       const attemptSignal = attempt?.signal ?? linked.signal;
 
       try {
-        const response = await fetcher(url, {
-          cache: 'no-store',
-          headers: {
-            'Cache-Control': 'no-cache, no-store, max-age=0',
-            Pragma: 'no-cache',
-          },
-          signal: attemptSignal,
-        });
-        const payload = await parsePayload(response);
+        const response = index === 1 && alternateResponse
+          ? await alternateResponse
+          : await fetcher(url, requestInit(attemptSignal));
+        let payload = await parsePayload(response);
         if (!response.ok) {
           const error = httpError(response.status, payload);
           if (alternateAvailable && canTryAlternateEndpoint(error)) {
             lastError = error;
+            alternateGate?.release();
             continue;
           }
           throw error;
         }
 
-        const rows = candleRows(payload);
-        const normalization = normalizeChartCandles(
-          rows,
+        let normalization = normalizeChartCandles(
+          candleRows(payload),
           input.timeframe as ChartCandleTimeframe,
         );
+        if (normalization.candles.length < 2) {
+          await waitForSignalAwareDelay(INSUFFICIENT_CANDLE_RETRY_DELAY_MS, attemptSignal);
+          const retryResponse = await fetcher(url, requestInit(attemptSignal));
+          payload = await parsePayload(retryResponse);
+          if (!retryResponse.ok) throw httpError(retryResponse.status, payload);
+          normalization = normalizeChartCandles(
+            candleRows(payload),
+            input.timeframe as ChartCandleTimeframe,
+          );
+        }
+        // A successful HTTP response is not usable chart evidence when fewer
+        // than two real candles survive normalization. For stock markets, use
+        // the already-defined alternate endpoint instead of presenting a
+        // misleading terminal empty state. Single-endpoint markets stay
+        // explicit and never synthesize candles.
+        if (normalization.candles.length < 2 && alternateAvailable) {
+          alternateGate?.release();
+          continue;
+        }
+        alternateHedge?.abort();
         return {
           market: input.market,
           symbol,
@@ -311,7 +371,11 @@ export async function fetchUnifiedChartData(input: {
       } catch (error) {
         if (error instanceof UnifiedChartDataError) {
           lastError = error;
-          if (alternateAvailable && canTryAlternateEndpoint(error)) continue;
+          if (alternateAvailable && canTryAlternateEndpoint(error)) {
+            alternateGate?.release();
+            continue;
+          }
+          alternateHedge?.abort();
           throw error;
         }
 
@@ -323,7 +387,10 @@ export async function fetchUnifiedChartData(input: {
             true,
           );
           lastError = timeoutError;
-          if (alternateAvailable) continue;
+          if (alternateAvailable) {
+            alternateGate?.release();
+            continue;
+          }
           throw timeoutError;
         }
 
@@ -364,6 +431,8 @@ export async function fetchUnifiedChartData(input: {
       true,
     );
   } finally {
+    alternateHedge?.abort();
+    alternateHedge?.cleanup();
     linked.cleanup();
   }
 }

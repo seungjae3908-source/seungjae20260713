@@ -15,8 +15,10 @@ const base = await read('api-server/supabase/bootstrap/staging-allowlist-base.sq
 const assertion = await read('api-server/supabase/bootstrap/staging-bootstrap-assert.sql');
 const telegramStorage = await read('api-server/supabase/migrations/2026081501_personal_telegram_storage.sql');
 const telegramPolicyCleanup = await read('api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql');
+const telegramPolicyCleanupNormalized = telegramPolicyCleanup.replaceAll('\r\n', '\n');
 const memberWatchlistStorage = await read('api-server/supabase/migrations/2026082704_member_watchlist_items.sql');
 const runner = await read('api-server/scripts/apply-staging-supabase-bootstrap.mjs');
+const watchlistVerifier = await read('api-server/scripts/verify-staging-watchlist-store.mjs');
 const verdict = await read('api-server/scripts/build-staging-verdict.mjs');
 const serverEntry = await read('api-server/src/index.ts');
 const playwright = await read('stock-analyzer/playwright.config.ts');
@@ -68,7 +70,7 @@ assert(
   telegramStorage.includes('to service_role'),
   'personal Telegram tables must remain available only to the server role',
 );
-assert(telegramPolicyCleanup.includes("select pol.polname\n      from pg_policy pol"), 'legacy Telegram policies must be enumerated for removal');
+assert(telegramPolicyCleanupNormalized.includes("select pol.polname\n      from pg_policy pol"), 'legacy Telegram policies must be enumerated for removal');
 assert(telegramPolicyCleanup.includes("for all using (false) with check (false)"), 'Telegram policy cleanup must remain fail-closed');
 assert(telegramPolicyCleanupTest.includes('telegram_connections select own'), 'cleanup integration must reproduce a legacy Telegram self-read policy');
 assert(telegramPolicyCleanupTest.includes('2026081502_personal_telegram_policy_cleanup.sql'), 'cleanup integration must apply the cleanup migration');
@@ -117,6 +119,23 @@ assert(runner.includes("'begin;'"), 'single outer transaction is missing');
 assert(runner.includes("'commit;'"), 'single outer commit is missing');
 assert(runner.includes('credentials_recorded: false'), 'artifact credential redaction contract is missing');
 assert(playwright.includes('staging-bootstrap-global-setup.ts'), 'staging browser suite must bootstrap before account creation');
+assert(
+  watchlistVerifier.includes('const preflightRows = await listDeviceRows();'),
+  'watchlist verification must establish a read-only Data API boundary before its first mutation',
+);
+assert(
+  watchlistVerifier.includes("throw new Error('watchlist run fixture collision detected before CRUD verification')"),
+  'watchlist verification must fail closed on a run fixture collision instead of deleting pre-existing rows',
+);
+assert(
+  watchlistVerifier.includes('preflight_rows: preflightRows.length'),
+  'watchlist verification artifact must record the read-only preflight result',
+);
+assert(
+  watchlistVerifier.indexOf('const preflightRows = await listDeviceRows();')
+    < watchlistVerifier.indexOf(".upsert(initialRows, { onConflict: 'device_id,ticker' })"),
+  'watchlist read-only preflight must precede the first CRUD mutation',
+);
 
 for (const requiredArtifactField of [
   'atomic_transaction', 'idempotency_passes', 'auth_users_copied',

@@ -1,54 +1,102 @@
-name: Research Workspace Integration V2
+name: Research Workspace Integration V3
 on:
   pull_request:
     branches: [main]
     paths:
-      - packages/external-research/src/research-workspace-*.js
-      - packages/external-research/test/research-workspace-*.test.js
-      - packages/external-research/scripts/research-workspace-review-v1.mjs
-      - packages/external-research/docs/research-workspace-v1.md
-      - packages/external-research/src/research-workspace-*.d.ts
-      - packages/external-research/test/fixtures/research-workspace-v2/**
-      - packages/external-research/docs/research-workspace-phase2.md
+      - packages/external-research/**
       - api-server/src/routes/research-workspace.ts
-      - api-server/src/routes/video-research-evidence.ts
-      - api-server/src/routes/video-research-source-evidence.ts
+      - api-server/src/routes/video-research*.ts
+      - api-server/src/routes/index.ts
       - stock-analyzer/src/components/research-workspace-panel.tsx
-      - stock-analyzer/src/components/research-video-panel.tsx
-      - stock-analyzer/src/components/research-video-source-panel.tsx
+      - stock-analyzer/src/components/research-video*.tsx
       - stock-analyzer/src/lib/research-workspace-response.*
       - stock-analyzer/e2e/research-workspace-v2.spec.ts
+      - stock-analyzer/e2e/research-video-intelligence.spec.ts
+      - stock-analyzer/*research-workspace.config.ts
+      - .github/scripts/verify-research-workspace-sync-v3.mjs
       - .github/workflows/research-workspace-integration-v1.yml
 permissions:
   contents: read
 concurrency:
   group: research-workspace-v1-${{ github.event.pull_request.number }}
   cancel-in-progress: true
+env:
+  EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+  LIVE_TRADING: 'false'
+  AUTO_TRADING: 'false'
+  REAL_ORDER_ENABLED: 'false'
+  PRIVATE_TRADING_API_ALLOWED: 'false'
+  ENABLE_REPLIT_EDITOR_PLUGINS: 'false'
 jobs:
-  contract-and-reader:
+  contract-and-preservation:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    env:
-      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.EXPECTED_HEAD }}
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-      - name: Exact identity and offline regressions
+          node-version: '22'
+      - name: Verify owner ancestry and protected main paths
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          node .github/scripts/verify-research-workspace-sync-v3.mjs "$RUNNER_TEMP/workspace-preservation.json"
+      - name: Offline contract, storage and anti-hang regressions
         shell: bash
         run: |
           set -Eeuo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           node --test packages/external-research/test/research-workspace*.test.js | tee "$RUNNER_TEMP/workspace-tests.log"
-      - name: Store minimal test receipt
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
-          name: research-workspace-v1-tests-${{ github.run_id }}
-          path: ${{ runner.temp }}/workspace-tests.log
+          name: research-workspace-v3-contract-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/workspace-preservation.json
+            ${{ runner.temp }}/workspace-tests.log
           if-no-files-found: error
+          retention-days: 30
+  application-integration:
+    needs: contract-and-preservation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.11.0'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install pinned workspace dependencies
+        id: install
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Frontend semantic typecheck
+        if: steps.install.outcome == 'success'
+        run: pnpm --dir stock-analyzer typecheck
+      - name: Backend semantic typecheck
+        if: always() && steps.install.outcome == 'success'
+        run: pnpm --dir api-server exec tsc -p tsconfig.json --noEmit
+      - name: Existing source-reader HTTP regressions
+        if: always() && steps.install.outcome == 'success'
+        run: pnpm --dir api-server exec tsx --test src/routes/market-summary-availability.smoke.test.ts
+      - name: Install Chromium
+        id: browser
+        if: always() && steps.install.outcome == 'success'
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+      - name: Actual React application and Tailwind browser suite (synthetic API fixtures)
+        if: always() && steps.browser.outcome == 'success'
+        run: pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: research-workspace-v3-application-${{ github.run_id }}
+          path: stock-analyzer/test-results
+          if-no-files-found: warn
           retention-days: 30

@@ -143,7 +143,10 @@ assert(
 );
 const profileMatcherBlock = spec.slice(profileMatcherStart, profileMatcherEnd);
 assert(profileMatcherBlock.includes("request.method() === 'GET'"), 'profile fault injection must match only GET requests');
-assert(profileMatcherBlock.includes("parsed.pathname === '/rest/v1/profiles'"), 'profile fault injection must match the exact Supabase profile pathname');
+assert(profileMatcherBlock.includes("parsed.pathname === '/rest/v1/profiles'"), 'profile diagnostics must retain the exact Supabase profile pathname');
+assert(profileMatcherBlock.includes("parsed.pathname === '/api/auth/profile'"), 'profile fault injection must match the exact deployed same-origin profile pathname');
+assert(profileMatcherBlock.includes('parsed.searchParams.size === 0'), 'same-origin profile fault injection must reject query-bearing requests');
+assert(spec.includes("const profileBootstrapRoute = '**/api/auth/profile';"), 'profile fault fixtures must intercept the deployed same-origin bootstrap endpoint');
 assert(!profileMatcherBlock.includes('.includes('), 'profile request identification must not use a broad substring matcher');
 assert(!profileMatcherBlock.includes('.startsWith('), 'profile request identification must not broaden to a pathname prefix');
 
@@ -312,7 +315,7 @@ assert(
 );
 const timeoutRouteDrainIndex = profileTimeoutTestBlock.lastIndexOf('await timeoutRouteSettled;');
 const timeoutUnrouteIndex = profileTimeoutTestBlock.indexOf(
-  "await page.unroute('**/rest/v1/profiles*');",
+  'await page.unroute(profileBootstrapRoute);',
   timeoutRouteDrainIndex,
 );
 assert(

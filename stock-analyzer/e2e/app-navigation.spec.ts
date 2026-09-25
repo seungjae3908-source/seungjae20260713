@@ -269,13 +269,13 @@ test('market submenu buttons reach the correct KR, US, spot, and futures screens
   await page.goto('/stocks/kr');
 
   const cases = [
-    ['국내주식', '/stocks/kr', '국내주식 정보'],
-    ['미국주식', '/stocks/us', '미국주식 정보'],
-    ['코인 현물', '/coins/spot', '코인 현물 정보'],
-    ['코인 선물', '/coins/futures', '코인 선물 정보'],
+    ['국내주식', '/stocks/kr', '국내주식 정보', '국내주식'],
+    ['미국주식', '/stocks/us', '미국주식 정보', '미국주식'],
+    ['코인현물', '/coins/spot', '코인 현물 정보', '코인현물'],
+    ['코인선물', '/coins/futures', '코인 선물 정보', '코인선물'],
   ] as const;
 
-  for (const [label, route, heading] of cases) {
+  for (const [label, route, heading, routeTitle] of cases) {
     const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
     await navigation.getByRole('button', { name: '종목', exact: true }).click();
     const menu = page.getByRole('menu', { name: '종목 메뉴' });
@@ -284,8 +284,8 @@ test('market submenu buttons reach the correct KR, US, spot, and futures screens
     await expect(page).toHaveURL(new RegExp(`${route.replaceAll('/', '\\/')}$`));
     await expect(page.getByRole('heading', { name: heading })).toBeVisible();
     await expect(page.getByRole('menu', { name: '종목 메뉴' })).toBeHidden();
-    await expect(page.getByRole('navigation', { name: '주요 메뉴' })).toHaveAttribute('data-route-title', heading);
-    await expect(page).toHaveTitle(new RegExp(heading));
+    await expect(page.getByRole('navigation', { name: '주요 메뉴' })).toHaveAttribute('data-route-title', routeTitle);
+    await expect(page).toHaveTitle(new RegExp(routeTitle));
   }
 
   await page.getByRole('tab', { name: '선물' }).click();
@@ -299,8 +299,8 @@ test('technical menu reaches scanner, AI chart, and auto-trading routes without 
   await page.goto('/stocks/kr');
 
   const cases = [
-    ['AI 신호검색기', '/scanner', /AI 신호검색기/],
-    ['AI 차트', '/ai-chart', /AI 차트 생중계/],
+    ['검색기', '/scanner', /AI 신호검색기/],
+    ['AI차트', '/ai-chart', /AI 차트 생중계/],
     ['자동매매', '/auto-trading', /자동매매/],
   ] as const;
 
@@ -332,8 +332,8 @@ test('direct URL, reload, back/forward, active state, breadcrumb metadata, and v
 
   const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
   await expect(navigation.getByRole('button', { name: '종목', exact: true })).toHaveAttribute('aria-current', 'page');
-  await expect(navigation).toHaveAttribute('data-breadcrumb', '종목 / 코인 선물 정보');
-  await expect(page.getByRole('list', { name: '현재 위치' })).toContainText('코인 선물 정보');
+  await expect(navigation).toHaveAttribute('data-breadcrumb', '종목 / 코인선물');
+  await expect(page.getByRole('list', { name: '현재 위치' })).toContainText('코인선물');
 
   await page.evaluate(() => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });

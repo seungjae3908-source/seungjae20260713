@@ -42,7 +42,7 @@ test('기술 라우트는 공통 개선 UI를 유지하면서 권한 없는 고�
   expect(app).not.toContain('scanner-workspace-basic');
   expect(workspace).toContain("const canAccessRiskPreview = phase11FullCapabilityFixture || auth.can('canAccessRiskPreview')");
   expect(workspace).toContain("const canAccessBacktests = phase11FullCapabilityFixture || auth.can('canAccessBacktests')");
-  expect(workspace).toContain("const canPlaceOrders = phase11FullCapabilityFixture || auth.can('canPlaceOrders')");
+  expect(workspace).toContain("const canAccessAutoTrading = phase11FullCapabilityFixture || auth.can('canAccessAutoTrading')");
   expect(workspace).toContain('if (!canAccessRiskPreview)');
   expect(tabs).toContain('aria-disabled={option.disabled || undefined}');
   expect(tabs).toContain('disabled={option.disabled}');

@@ -69,7 +69,8 @@ test("Rule0 shadow artifact namespace advances with the immutable chain contract
   const contractVersion = workflow.match(/CHAIN_CONTRACT: rule0-1h-artifact-chain-v(\d+)/)?.[1];
   assert.ok(artifactVersion, "artifact chain version missing");
   assert.equal(contractVersion, artifactVersion, "artifact and chain contract versions must match");
-  assert.ok(Number(artifactVersion) >= 6, "non-evaluable inference handling must not reuse the v5 chain");
+  assert.ok(Number(artifactVersion) >= 8, "post-#1156 OI execution dependency rollover must not reuse the v7 chain");
+  assert.doesNotMatch(workflow, /prediction-lab-rule0-1h-shadow-state-v7|rule0-1h-artifact-chain-v7/);
   assert.match(workflow, /execution dependency changed; start a separately versioned chain/);
   assert.match(workflow, /cron: "7 \*\/2 \* \* \*"/);
 });

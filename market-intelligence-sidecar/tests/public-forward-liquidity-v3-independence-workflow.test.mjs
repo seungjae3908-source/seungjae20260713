@@ -14,6 +14,8 @@ const required = [
   'github.event.issue.number == 838',
   'github.event.comment.user.login == github.repository_owner',
   "github.event.comment.author_association == 'OWNER'",
+  "github.event.workflow_run.event == 'workflow_run'",
+  "github.event.workflow_run.event == 'issue_comment'",
   "run.name === 'Public Forward Liquidity V3 Canonical Ingest'",
   "['workflow_run', 'issue_comment'].includes(run.event)",
   'Number(run.run_attempt) === 1',
@@ -76,6 +78,8 @@ for (const forbidden of [
 
 assert.ok(!/^\s*schedule\s*:/m.test(workflow), 'V3 independence consumer must not create its own schedule');
 assert.ok(workflow.includes("github.event.workflow_run.run_attempt == 1"), 'automatic consume must reject upstream reruns');
+assert.ok(workflow.includes("github.event.workflow_run.event == 'workflow_run'"), 'automatic consume must bind genuine workflow-run provenance before starting the consumer');
+assert.ok(workflow.includes("github.event.workflow_run.event == 'issue_comment'"), 'automatic consume must preserve explicitly approved issue-comment provenance');
 assert.ok(workflow.includes("artifact.expired !== true"), 'upstream ingest artifact must be non-expired');
 assert.ok(workflow.includes("/^sha256:[a-f0-9]{64}$/u"), 'upstream artifact digest must be exact sha256');
 assert.ok(workflow.includes("inventory.inventoryDigest !== digest(inventoryBody)"), 'inventory digest must be independently recomputed');

@@ -14,6 +14,7 @@ on:
       - market-prediction-lab/src/shadow-evidence-handoff-v1.js
       - market-prediction-lab/src/canonical-shadow-drift-policy-v1.js
       - market-prediction-lab/scripts/run-shadow-cycle.js
+      - scripts/agent_hub_rollover_v2.py
   schedule:
     - cron: '17 * * * *'
   issue_comment:
@@ -66,6 +67,13 @@ jobs:
           grep -q 'canonical-shadow-recovery-attempt-' .github/workflows/prediction-lab-canonical-shadow-cycle.yml
           grep -q 'canonicalRuntimeRequestId' .github/workflows/prediction-lab-canonical-shadow-cycle.yml
           grep -q 'workflow_run' .github/workflows/prediction-lab-canonical-shadow-publisher.yml
+          python3 scripts/agent_hub_rollover_v2.py self-test
+          grep -Fq 'python3 scripts/agent_hub_rollover_v2.py resolve' .github/workflows/prediction-lab-canonical-shadow-cycle.yml
+          grep -Fq 'HUB_ISSUE_NUMBER' .github/workflows/prediction-lab-canonical-shadow-cycle.yml
+          if grep -Eq 'issues/(6[6]0|8[3]8)/comments|issue[?]?\.number !== (6[6]0|8[3]8)' .github/workflows/prediction-lab-canonical-shadow-cycle.yml; then
+            echo 'Canonical Shadow must not route approval through archived Central Hubs.' >&2
+            exit 1
+          fi
 
   gate:
     if: github.event_name != 'pull_request'
@@ -76,10 +84,26 @@ jobs:
       target_sha: ${{ steps.gate.outputs.target_sha }}
       request_id: ${{ steps.gate.outputs.request_id }}
       mode: ${{ steps.gate.outputs.mode }}
+      hub_issue: ${{ steps.hub.outputs.active_issue }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Resolve canonical Central Hub
+        id: hub
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/agent_hub_rollover_v2.py resolve
       - name: Gate exact-main activation or active canonical schedule
         id: gate
         uses: actions/github-script@v7
+        env:
+          HUB_ISSUE_NUMBER: ${{ steps.hub.outputs.active_issue }}
         with:
           script: |
             const required = [
@@ -92,6 +116,11 @@ jobs:
             ];
             const main = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: 'main' });
             const mainSha = String(main.data.commit.sha).toLowerCase();
+            const canonicalHub = Number(process.env.HUB_ISSUE_NUMBER ?? 0);
+            if (!Number.isInteger(canonicalHub) || canonicalHub <= 0) {
+              core.setFailed('Canonical Central Hub could not be resolved.');
+              return;
+            }
             const legacy = await github.rest.actions.getWorkflow({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -109,7 +138,12 @@ jobs:
               requestId = `hourly-${context.runId}`;
               mode = 'HOURLY';
             } else if (context.eventName === 'issue_comment') {
-              if (context.payload.issue?.number !== 660 || context.payload.comment?.user?.login !== context.repo.owner) {
+              const eventIssue = Number(context.payload.issue?.number ?? 0);
+              if (
+                eventIssue !== canonicalHub
+                || context.payload.comment?.user?.login !== context.repo.owner
+                || context.payload.comment?.author_association !== 'OWNER'
+              ) {
                 core.setOutput('authorized', 'false');
                 return;
               }
@@ -195,8 +229,10 @@ jobs:
           TARGET_SHA: ${{ needs.gate.outputs.target_sha }}
           REQUEST_ID: ${{ needs.gate.outputs.request_id }}
           MODE: ${{ needs.gate.outputs.mode }}
+          HUB_ISSUE_NUMBER: ${{ needs.gate.outputs.hub_issue }}
         run: |
           set -Eeuo pipefail
+          [[ "$HUB_ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]] || { echo 'Canonical Central Hub is unavailable' >&2; exit 1; }
           producer_run_id="$CANONICAL_PRODUCER_RUN_ID"
           bootstrap_recovery='false'
           publication_receipt_count=''
@@ -259,7 +295,7 @@ jobs:
               predecessor_run_id="$candidate_source_run"
               predecessor_digest="$current_digest"
               break
-            done < <(gh api "repos/$REPOSITORY/actions/workflows/prediction-lab-canonical-shadow-publisher.yml/runs?status=success&per_page=100" --jq '.workflow_runs[].id')
+            done < <(gh api --paginate "repos/$REPOSITORY/actions/workflows/prediction-lab-canonical-shadow-publisher.yml/runs?status=success&per_page=100" --jq '.workflow_runs[].id')
 
             if [[ ! "$predecessor_run_id" =~ ^[1-9][0-9]*$ ]]; then
               artifact_index="$RUNNER_TEMP/canonical-shadow-artifact-index.tsv"
@@ -273,7 +309,7 @@ jobs:
                 exit 1
               fi
 
-              comments_json="$(gh api --paginate --slurp "repos/$REPOSITORY/issues/838/comments?per_page=100")"
+              comments_json="$(gh api --paginate --slurp "repos/$REPOSITORY/issues/$HUB_ISSUE_NUMBER/comments?per_page=100")"
               recovery_approval_id="$(printf '%s' "$comments_json" | RECOVERY_OWNER="${REPOSITORY%%/*}" RECOVERY_TARGET_SHA="$TARGET_SHA" node -e '
                 let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
                   const pages=JSON.parse(s);const rows=pages.flat();
@@ -283,14 +319,14 @@ jobs:
                   if(matches[0])process.stdout.write(String(matches[0].id));
                 });')"
               [[ "$recovery_approval_id" =~ ^[1-9][0-9]*$ ]] || {
-                echo "No successfully published canonical predecessor receipt found; exact #838 approval /approve-canonical-shadow-recovery $TARGET_SHA is required" >&2
+                echo "No successfully published canonical predecessor receipt found; exact #$HUB_ISSUE_NUMBER approval /approve-canonical-shadow-recovery $TARGET_SHA is required" >&2
                 exit 1
               }
               recovery_approval_target_sha="$TARGET_SHA"
               recovery_approval_claim_count="$(awk -F '\t' -v marker="canonical-shadow-recovery-attempt-$recovery_approval_id" '$5 == marker { count++ } END { print count + 0 }' "$artifact_index")"
               [[ "$recovery_approval_claim_count" =~ ^[0-9]+$ ]]
               if [[ "$recovery_approval_claim_count" != '0' ]]; then
-                echo "Recovery approval comment $recovery_approval_id already claimed; a new explicit #838 approval is required" >&2
+                echo "Recovery approval comment $recovery_approval_id already claimed; a new explicit #$HUB_ISSUE_NUMBER approval is required" >&2
                 exit 1
               fi
 
