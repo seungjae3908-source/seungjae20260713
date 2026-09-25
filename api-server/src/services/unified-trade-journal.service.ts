@@ -23,7 +23,7 @@ export const JOURNAL_COST_SAFETY = Object.freeze({
   privateBrokerRequests: 0,
 });
 
-export const TRADE_SOURCES = ['TOSS_MANUAL', 'TOSS_API', 'APP_PAPER', 'APP_SHADOW', 'APP_AUTO'] as const;
+export const TRADE_SOURCES = ['TOSS_MANUAL', 'TOSS_API', 'UPBIT_API', 'BITGET_API', 'APP_PAPER', 'APP_SHADOW', 'APP_AUTO'] as const;
 export const TRADE_MARKETS = ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'] as const;
 export const TRADE_RANGES = ['TODAY', '7D', '30D', '90D', '1Y', 'ALL'] as const;
 
@@ -181,6 +181,8 @@ export type UnifiedTradeCycle = {
   costEvidence: JournalCostEvidence;
   netPnl: number | null;
   netReturnPercent: number | null;
+  providerReportedNetPnl?: number | null;
+  providerReportedNetPnlBasis?: string | null;
   strategy: string | null;
   timeframe: string | null;
   stopLossPrice: number | null;
@@ -798,6 +800,14 @@ function inferMarket(payload: Record<string, unknown>): TradeMarket {
   return 'CRYPTO_FUTURES';
 }
 
+function brokerForSource(source: TradeSource): UnifiedTradeOrder['broker'] {
+  if (source === 'TOSS_MANUAL') return 'MANUAL';
+  if (source === 'TOSS_API') return 'TOSS';
+  if (source === 'UPBIT_API') return 'UPBIT';
+  if (source === 'BITGET_API') return 'BITGET';
+  return 'APP';
+}
+
 function directCycle(payload: Record<string, unknown>): UnifiedTradeCycle | null {
   if (payload.recordType === 'unified_trade_order') return null;
   const status = String(payload.status ?? '').toLowerCase();
@@ -848,7 +858,7 @@ function directCycle(payload: Record<string, unknown>): UnifiedTradeCycle | null
   const unsigned: Omit<UnifiedTradeCycle, 'review'> = {
     id,
     source,
-    broker: source === 'TOSS_MANUAL' ? 'MANUAL' : 'APP',
+    broker: brokerForSource(source),
     accountIdMasked: typeof payload.accountIdMasked === 'string' && payload.accountIdMasked.includes('****') ? payload.accountIdMasked : 'APP-****-LOCAL',
     market: inferMarket(payload),
     symbol: nullableText(payload.symbol, 40)?.toUpperCase() ?? 'UNKNOWN',
@@ -873,6 +883,8 @@ function directCycle(payload: Record<string, unknown>): UnifiedTradeCycle | null
     costEvidence,
     netPnl,
     netReturnPercent: entryPrice * totalQuantity > 0 && netPnl != null ? netPnl / (entryPrice * totalQuantity) * 100 : null,
+    providerReportedNetPnl: nullableFinite(payload.providerReportedNetPnl),
+    providerReportedNetPnlBasis: nullableText(payload.providerReportedNetPnlBasis, 80),
     strategy: nullableText(payload.strategy ?? payload.strategyName, 80),
     timeframe: nullableText(payload.timeframe, 20),
     stopLossPrice: nullableFinite(payload.stopLossPrice),
