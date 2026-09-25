@@ -192,8 +192,9 @@ function unifiedJournal() {
       privateProviderRequests: 5,
       truncated: false,
       providers: [
-        { provider: 'upbit', configured: true, enabled: true, status: 'READY', records: 2, privateProviderRequests: 4, truncated: false, errorCode: null },
-        { provider: 'bitget', configured: true, enabled: true, status: 'READY', records: 1, privateProviderRequests: 1, truncated: false, errorCode: null },
+        { provider: 'kiwoom', configured: false, enabled: true, status: 'NOT_CONFIGURED', records: 0, privateProviderRequests: 0, truncated: false, effectiveDays: 7, rangeCapped: true, errorCode: null },
+        { provider: 'upbit', configured: true, enabled: true, status: 'READY', records: 2, privateProviderRequests: 4, truncated: false, effectiveDays: 30, rangeCapped: false, errorCode: null },
+        { provider: 'bitget', configured: true, enabled: true, status: 'READY', records: 1, privateProviderRequests: 1, truncated: false, effectiveDays: 30, rangeCapped: false, errorCode: null },
       ],
       safety: { orderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0, credentialsReturned: false, liveTradingEnabled: false, autoTradingEnabled: false },
     },
