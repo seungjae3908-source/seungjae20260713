@@ -18,6 +18,17 @@ import {
   prepareKiwoomOrderable,
   prepareKiwoomToken,
   prepareKiwoomUnfilled,
+  prepareTossAccounts,
+  prepareTossBuyingPower,
+  prepareTossCommissions,
+  prepareTossMarketCalendar,
+  prepareTossOpenOrders,
+  prepareTossOrder,
+  prepareTossOrderQuery,
+  prepareTossOrderbook,
+  prepareTossPrices,
+  prepareTossSellableQuantity,
+  prepareTossToken,
   prepareUpbitAccounts,
   prepareUpbitOrder,
   prepareUpbitOrderChance,
@@ -27,6 +38,7 @@ import {
   type BitgetCredentials,
   type KiwoomCredentials,
   type PreparedExchangeRequest,
+  type TossCredentials,
   type UpbitCredentials,
 } from './trade-exchange-adapters.service';
 import { prepareUpbitOpenOrders } from './trade-open-orders-adapters.service';
@@ -41,6 +53,7 @@ import {
   prepareUpbitExecutionOrderbook,
   prepareUpbitExecutionTicker,
 } from './trade-execution-snapshot.service';
+import { buildTossExecutionSnapshot } from './toss-execution-snapshot.service';
 import {
   TradePreSubmissionRiskError,
   TradePreSubmissionRiskService,
@@ -60,6 +73,7 @@ const BASE_URLS = {
   upbit: 'https://api.upbit.com',
   kiwoom: 'https://api.kiwoom.com',
   kiwoomMock: 'https://mockapi.kiwoom.com',
+  toss: 'https://openapi.tossinvest.com',
 };
 
 const PREFLIGHT_TIMEOUT_MS = 4_000;
@@ -92,6 +106,7 @@ function invalidResponseCode(baseUrl: string) {
   if (baseUrl.includes('bitget.com')) return 'BITGET_INVALID_RESPONSE';
   if (baseUrl.includes('upbit.com')) return 'UPBIT_INVALID_RESPONSE';
   if (baseUrl.includes('kiwoom.com')) return 'KIWOOM_INVALID_RESPONSE';
+  if (baseUrl.includes('tossinvest.com')) return 'TOSS_INVALID_RESPONSE';
   return 'EXCHANGE_INVALID_RESPONSE';
 }
 
@@ -211,6 +226,57 @@ function assertKiwoomOrderAccepted(payload: ExchangePayload) {
   const orderId = text(row.ord_no ?? row.order_no);
   if (!orderId) throw new Error('KIWOOM_EXCHANGE_ORDER_ID_UNKNOWN');
   return orderId;
+}
+
+
+function tossResult(payload: ExchangePayload) {
+  if (payload.error) throw new Error('TOSS_ORDER_REJECTED');
+  const code = text(payload.code ?? payload.return_code);
+  if (code && !['0', '00000', 'SUCCESS'].includes(code.toUpperCase())) throw new Error(`TOSS_${code}`);
+  return isRecord(payload.result) ? payload.result : payload;
+}
+
+function tossToken(payload: ExchangePayload) {
+  const result = isRecord(payload.result) ? payload.result : isRecord(payload.data) ? payload.data : payload;
+  const token = text(result.access_token ?? result.accessToken ?? payload.access_token);
+  if (!token) throw new Error('TOSS_TOKEN_MISSING');
+  return token;
+}
+
+function assertTossOrderAccepted(payload: ExchangePayload, expectedClientOrderId: string) {
+  const row = tossResult(payload);
+  const orderId = text(row.orderId ?? row.order_id);
+  const clientOrderId = text(row.clientOrderId ?? row.client_order_id);
+  if (!orderId) throw new Error('TOSS_EXCHANGE_ORDER_ID_UNKNOWN');
+  if (clientOrderId && clientOrderId !== expectedClientOrderId) throw new Error('TOSS_CLIENT_ORDER_ID_MISMATCH');
+  return orderId;
+}
+
+const TOSS_RECOGNIZED_STATES = new Set([
+  'open', 'pending', 'accepted', 'partially_filled', 'partial_fill',
+  'filled', 'completed', 'cancelled', 'canceled', 'rejected', 'expired',
+]);
+
+function assertTossOrderLookup(payload: ExchangePayload, expectedOrderId: string) {
+  const row = tossResult(payload);
+  if (text(row.orderId ?? row.order_id) !== expectedOrderId) throw new Error('TOSS_ORDER_ID_MISMATCH');
+  const status = String(row.status ?? row.orderStatus ?? row.state ?? '').toLowerCase();
+  if (!status || !TOSS_RECOGNIZED_STATES.has(status)) throw new Error('TOSS_ORDER_STATUS_UNKNOWN');
+  return row;
+}
+
+function tossPendingRefs(payload: ExchangePayload): PendingExchangeOrderRef[] {
+  const result = payload.result;
+  const values = Array.isArray(result)
+    ? result
+    : isRecord(result) && Array.isArray(result.orders)
+      ? result.orders
+      : [];
+  if (!values.every(isRecord)) throw new Error('TOSS_OPEN_ORDERS_INVALID_RESPONSE');
+  return values.map((row) => ({
+    clientOrderId: text(row.clientOrderId ?? row.client_order_id),
+    exchangeOrderId: text(row.orderId ?? row.order_id),
+  }));
 }
 
 function kiwoomLookupContainsOrder(payload: ExchangePayload, orderId: string) {
@@ -385,7 +451,9 @@ export class TradeExecutionService {
         ? await this.executeBitget(userId, plan, order, credentials as BitgetCredentials)
         : plan.exchange === 'upbit'
           ? await this.executeUpbit(userId, plan, order, credentials as UpbitCredentials)
-          : await this.executeKiwoom(userId, plan, order, credentials as KiwoomCredentials, mockKiwoom);
+          : plan.exchange === 'toss'
+            ? await this.executeToss(userId, plan, order, credentials as TossCredentials)
+            : await this.executeKiwoom(userId, plan, order, credentials as KiwoomCredentials, mockKiwoom);
       if ('skippedOrder' in result) return result.skippedOrder ?? order;
 
       const metadata = this.riskMetadata(result.risk, true);
@@ -641,4 +709,66 @@ export class TradeExecutionService {
     } catch { reconciliationRequired = true; }
     return { orderId, reconciliationRequired, risk };
   }
+
+  private async executeToss(
+    userId: string,
+    plan: TradingPlan,
+    order: TradingOrder,
+    credentials: TossCredentials,
+  ) {
+    const tokenPayload = await sendExchangeRequest(BASE_URLS.toss, prepareTossToken(credentials), PREFLIGHT_TIMEOUT_MS);
+    const authenticated = { ...credentials, accessToken: tossToken(tokenPayload) };
+    const market = plan.market.toUpperCase() as 'KR' | 'US';
+    if (market !== 'KR' && market !== 'US') throw new Error('TOSS_MARKET_INVALID');
+    const currency = market === 'KR' ? 'KRW' as const : 'USD' as const;
+
+    const [accounts, orderbook, prices, buyingPower, sellableQuantity, commissions, marketCalendar, openOrders] =
+      await Promise.all([
+        sendExchangeRequest(BASE_URLS.toss, prepareTossAccounts(authenticated), PREFLIGHT_TIMEOUT_MS),
+        sendExchangeRequest(BASE_URLS.toss, prepareTossOrderbook(authenticated, plan.symbol), PREFLIGHT_TIMEOUT_MS),
+        sendExchangeRequest(BASE_URLS.toss, prepareTossPrices(authenticated, plan.symbol), PREFLIGHT_TIMEOUT_MS),
+        sendExchangeRequest(BASE_URLS.toss, prepareTossBuyingPower(authenticated, currency), PREFLIGHT_TIMEOUT_MS),
+        plan.side === 'sell'
+          ? sendExchangeRequest(BASE_URLS.toss, prepareTossSellableQuantity(authenticated, plan.symbol), PREFLIGHT_TIMEOUT_MS)
+          : Promise.resolve({ result: { sellableQuantity: '0' } } as ExchangePayload),
+        sendExchangeRequest(BASE_URLS.toss, prepareTossCommissions(authenticated), PREFLIGHT_TIMEOUT_MS),
+        sendExchangeRequest(BASE_URLS.toss, prepareTossMarketCalendar(authenticated, market), PREFLIGHT_TIMEOUT_MS),
+        sendExchangeRequest(BASE_URLS.toss, prepareTossOpenOrders(authenticated, plan.symbol), PREFLIGHT_TIMEOUT_MS),
+      ]);
+
+    assertNoOrphanExchangeOrders('toss', tossPendingRefs(openOrders), await this.repository.listOrders(userId));
+
+    const risk = await this.riskService.evaluate({
+      userId,
+      expectedPlan: plan,
+      order,
+      snapshot: buildTossExecutionSnapshot({
+        plan,
+        accountSeq: authenticated.accountSeq,
+        payloads: { accounts, orderbook, prices, buyingPower, sellableQuantity, commissions, marketCalendar },
+        signal: this.signalSnapshot(userId, plan),
+      }),
+      serverLiveEnabled: liveExecutionEnabled('toss'),
+    });
+
+    if (!await this.beginSubmissionIntent(order, risk)) {
+      return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };
+    }
+
+    const orderId = assertTossOrderAccepted(
+      await sendExchangeRequest(BASE_URLS.toss, prepareTossOrder(authenticated, risk.plan, order.clientOrderId), ORDER_TIMEOUT_MS),
+      order.clientOrderId,
+    );
+    let reconciliationRequired = false;
+    try {
+      assertTossOrderLookup(
+        await sendExchangeRequest(BASE_URLS.toss, prepareTossOrderQuery(authenticated, orderId), PREFLIGHT_TIMEOUT_MS),
+        orderId,
+      );
+    } catch {
+      reconciliationRequired = true;
+    }
+    return { orderId, reconciliationRequired, risk };
+  }
+
 }
