@@ -49,24 +49,25 @@ test('approval policy always disables automatic execution and every exchange swi
     ...DEFAULT_TRADING_POLICY,
     mode: 'automatic',
     automaticEnabled: true,
-    exchangeEnabled: { bitget: true, upbit: true, kiwoom: true },
-    enabledAssets: { bitget: ['BTCUSDT'], upbit: ['BTC'], kiwoom: ['005930'] },
+    exchangeEnabled: { bitget: true, upbit: true, kiwoom: true, toss: true },
+    enabledAssets: { bitget: ['BTCUSDT'], upbit: ['BTC'], kiwoom: ['005930'], toss: ['005930'] },
     enabledStrategies: ['unsafe-auto'],
   });
   assert.equal(policy.mode, 'approval');
   assert.equal(policy.automaticEnabled, false);
-  assert.deepEqual(policy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false });
-  assert.deepEqual(policy.enabledAssets, { bitget: [], upbit: [], kiwoom: [] });
+  assert.deepEqual(policy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
+  assert.deepEqual(policy.enabledAssets, { bitget: [], upbit: [], kiwoom: [], toss: [] });
   assert.deepEqual(policy.enabledStrategies, []);
 });
 
-test('legacy Kiwoom live execution stays fail-closed even when every live flag is enabled', () => {
+test('every live provider requires the global gates plus its own explicit provider gate', () => {
   const previous = {
     ORDER_EXECUTION_ENABLED: process.env.ORDER_EXECUTION_ENABLED,
     LIVE_TRADING_ACTIVATION_APPROVED: process.env.LIVE_TRADING_ACTIVATION_APPROVED,
     BITGET_LIVE_ORDER_ENABLED: process.env.BITGET_LIVE_ORDER_ENABLED,
     UPBIT_LIVE_ORDER_ENABLED: process.env.UPBIT_LIVE_ORDER_ENABLED,
     KIWOOM_LIVE_ORDER_ENABLED: process.env.KIWOOM_LIVE_ORDER_ENABLED,
+    TOSS_LIVE_ORDER_ENABLED: process.env.TOSS_LIVE_ORDER_ENABLED,
   };
   try {
     process.env.ORDER_EXECUTION_ENABLED = 'true';
@@ -74,10 +75,18 @@ test('legacy Kiwoom live execution stays fail-closed even when every live flag i
     process.env.BITGET_LIVE_ORDER_ENABLED = 'true';
     process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
     process.env.KIWOOM_LIVE_ORDER_ENABLED = 'true';
+    process.env.TOSS_LIVE_ORDER_ENABLED = 'true';
 
     assert.equal(liveExecutionEnabled('bitget'), true);
     assert.equal(liveExecutionEnabled('upbit'), true);
+    assert.equal(liveExecutionEnabled('kiwoom'), true);
+    assert.equal(liveExecutionEnabled('toss'), true);
+
+    process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'false';
+    assert.equal(liveExecutionEnabled('bitget'), false);
+    assert.equal(liveExecutionEnabled('upbit'), false);
     assert.equal(liveExecutionEnabled('kiwoom'), false);
+    assert.equal(liveExecutionEnabled('toss'), false);
   } finally {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];
