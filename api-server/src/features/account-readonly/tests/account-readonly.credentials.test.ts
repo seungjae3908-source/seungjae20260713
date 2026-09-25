@@ -189,3 +189,42 @@ test('Kiwoom vault migration expands provider check without applying credentials
   assert.match(rollback, /MUST_BE_REMOVED_EXPLICITLY_BEFORE_ROLLBACK/);
   assert.equal(/delete\s+from\s+public\.account_readonly_credentials/i.test(rollback), false);
 });
+
+
+test('read-only credential disconnect deletes only the selected user/provider ciphertext', async () => {
+  await withMasterKey(async () => {
+    const repository = new InMemoryAccountReadonlyCredentialRepository();
+    await saveReadonlyCredentialConfiguration(repository, 'user-a', 'upbit', {
+      accessKey: 'UPBIT_ACCESS_DELETE_TEST',
+      secretKey: 'UPBIT_SECRET_DELETE_TEST',
+    });
+    await saveReadonlyCredentialConfiguration(repository, 'user-a', 'bitget', {
+      apiKey: 'BITGET_KEY_DELETE_TEST',
+      secretKey: 'BITGET_SECRET_DELETE_TEST',
+      passphrase: 'BITGET_PASS_DELETE_TEST',
+    });
+    await saveReadonlyCredentialConfiguration(repository, 'user-b', 'upbit', {
+      accessKey: 'UPBIT_ACCESS_OTHER_USER_TEST',
+      secretKey: 'UPBIT_SECRET_OTHER_USER_TEST',
+    });
+
+    await repository.remove('user-a', 'upbit');
+
+    assert.equal(await repository.get('user-a', 'upbit'), null);
+    assert.notEqual(await repository.get('user-a', 'bitget'), null);
+    assert.notEqual(await repository.get('user-b', 'upbit'), null);
+  });
+});
+
+test('account read-only router exposes provider-capability-gated credential DELETE without any trading route', () => {
+  const apiServerRoot = path.basename(process.cwd()) === 'api-server'
+    ? process.cwd()
+    : path.join(process.cwd(), 'api-server');
+  const routeSource = readFileSync(
+    path.join(apiServerRoot, 'src/features/account-readonly/account-readonly.route.ts'),
+    'utf8',
+  );
+  assert.match(routeSource, /router\.delete\('\/credentials\/:provider',\s*requireReadonlyProviderCapability/);
+  assert.match(routeSource, /\.remove\(userId, provider\)/);
+  assert.equal(/router\.(?:post|put|patch|delete)\('\/(?:order|orders|trade|withdraw|transfer)/i.test(routeSource), false);
+});
