@@ -668,9 +668,6 @@ export function prepareKiwoomOrder(credentials: KiwoomCredentials, plan: Trading
       }),
     };
   }
-  if (!Number.isSafeInteger(input.quantity) || Number(input.quantity) <= 0) {
-    throw new Error('KIWOOM_AMEND_QUANTITY_REQUIRED');
-  }
   return {
     method: 'POST',
     path: '/api/dostk/ordr',
