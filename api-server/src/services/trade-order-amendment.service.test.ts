@@ -89,9 +89,66 @@ async function setup() {
   return { repository, p, o, service: new TradeOrderAmendmentService(repository) };
 }
 
+
+async function setupToss() {
+  process.env.TRADING_CREDENTIAL_MASTER_KEY = KEY;
+  process.env.ORDER_EXECUTION_ENABLED = 'true';
+  process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+  process.env.REAL_ORDER_ENABLED = 'true';
+  process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
+  process.env.TOSS_LIVE_ORDER_ENABLED = 'true';
+
+  const repository = new InMemoryTradingRepository();
+  const base = plan();
+  const p: TradingPlan = {
+    ...base,
+    exchange: 'toss',
+    stockBroker: 'toss',
+    symbol: '005930',
+    market: 'KR',
+    quantity: 1,
+    quoteAmount: null,
+    limitPrice: 70_000,
+    estimatedKrw: 70_000,
+    stopPrice: 66_000,
+    targetPrices: [77_000],
+    marketSnapshot: {
+      ...base.marketSnapshot,
+      currentPrice: 70_000,
+      plannedPrice: 70_000,
+      availableBalance: 1_000_000,
+    },
+  };
+  const baseOrder = order(p);
+  const o: TradingOrder = {
+    ...baseOrder,
+    exchange: 'toss',
+    clientOrderId: 'sj-toss-original',
+    exchangeOrderId: 'toss-order-original',
+    currentLimitPrice: 70_000,
+  };
+  await repository.savePlan(p);
+  await repository.saveOrder(o);
+  await repository.saveConnection({
+    userId: USER,
+    exchange: 'toss',
+    accountMode: 'live',
+    configured: true,
+    encryptedCredentials: encryptTradingCredentials({
+      clientId: 'client',
+      clientSecret: 'secret',
+      accountSeq: 'account-1',
+    }, KEY),
+    lastVerifiedAt: new Date().toISOString(),
+    lastErrorCode: null,
+    updatedAt: new Date().toISOString(),
+  });
+  return { repository, p, o, service: new TradeOrderAmendmentService(repository) };
+}
+
 test.afterEach(() => {
   globalThis.fetch = nativeFetch;
-  for (const key of ['TRADING_CREDENTIAL_MASTER_KEY','ORDER_EXECUTION_ENABLED','LIVE_TRADING_ACTIVATION_APPROVED','REAL_ORDER_ENABLED','PRIVATE_TRADING_API_ALLOWED','UPBIT_LIVE_ORDER_ENABLED']) {
+  for (const key of ['TRADING_CREDENTIAL_MASTER_KEY','ORDER_EXECUTION_ENABLED','LIVE_TRADING_ACTIVATION_APPROVED','REAL_ORDER_ENABLED','PRIVATE_TRADING_API_ALLOWED','UPBIT_LIVE_ORDER_ENABLED','TOSS_LIVE_ORDER_ENABLED']) {
     delete process.env[key];
   }
 });
@@ -187,4 +244,48 @@ test('real-order global gate blocks amendment before provider mutation', async (
     /LIVE_EXECUTION_DISABLED/,
   );
   assert.equal(outbound, 0);
+});
+
+
+test('Toss amendment follows the newly issued orderId before acknowledging', async () => {
+  const { p, o, service } = await setupToss();
+  const seen: string[] = [];
+
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(String(input));
+    seen.push(`${init?.method ?? 'GET'} ${url.pathname}`);
+
+    if (url.pathname === '/oauth2/token') {
+      return new Response(JSON.stringify({ access_token: 'token', expires_in: 3600 }), { status: 200 });
+    }
+    if (url.pathname === '/api/v1/orders/toss-order-original/modify') {
+      return new Response(JSON.stringify({ result: { orderId: 'toss-order-new' } }), { status: 200 });
+    }
+    if (url.pathname === '/api/v1/orders/toss-order-new') {
+      return new Response(JSON.stringify({
+        result: { orderId: 'toss-order-new', status: 'OPEN' },
+      }), { status: 200 });
+    }
+    if (url.pathname === '/api/v1/orders/toss-order-original') {
+      throw new Error('OLD_TOSS_ORDER_ID_MUST_NOT_BE_QUERIED_AFTER_AMEND');
+    }
+    throw new Error(`UNEXPECTED_NETWORK_PATH:${url.pathname}`);
+  }) as typeof fetch;
+
+  const result = await service.amend(USER, o, p, {
+    requestId: 'toss-amend-new-id-01',
+    price: 70_500,
+    quantity: 1,
+  });
+
+  assert.equal(result.recoveryRequired, false);
+  assert.equal(result.order.state, 'ACCEPTED');
+  assert.equal(result.order.exchangeOrderId, 'toss-order-new');
+  assert.equal(result.order.amendments?.[0]?.previousExchangeOrderId, 'toss-order-original');
+  assert.equal(result.order.amendments?.[0]?.nextExchangeOrderId, 'toss-order-new');
+  assert.deepEqual(seen, [
+    'POST /oauth2/token',
+    'POST /api/v1/orders/toss-order-original/modify',
+    'GET /api/v1/orders/toss-order-new',
+  ]);
 });
