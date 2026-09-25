@@ -72,6 +72,7 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
       <Metric label="청산 평균가" value={trade.exitPrice == null ? '진행 중' : money(trade.exitPrice, trade.currency)} />
       <Metric label="순손익" value={money(trade.netPnl, trade.currency)} />
       <Metric label="순수익률" value={metric(trade.netReturnPercent, '%')} />
+      {trade.providerReportedNetPnl != null ? <Metric label="공급자 보고 순손익" value={money(trade.providerReportedNetPnl, trade.currency)} /> : null}
       <Metric label="비용" value={costMoney(trade)} />
       <Metric label="성과 점수" value={String(trade.review.performanceScore)} />
       <Metric label="매매 품질" value={`${trade.review.qualityScore} / 100`} />
@@ -272,14 +273,28 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
           <AlertTriangle className="mr-2 inline h-4 w-4" />Toss 실조회: {data?.toss.liveReadIntegration ?? '확인 중'} · 비용 상태 미확인으로 실 API 호출 0건
         </p>
         <p className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3 font-semibold" data-testid="journal-zero-cost-status">
-          <ShieldCheck className="mr-2 inline h-4 w-4" />외부 AI 비활성 · 신규 비용 {data?.safety.finalCostDelta ?? '0_KRW'} · 주문/취소/정정 0건
+          <ShieldCheck className="mr-2 inline h-4 w-4" />외부 AI 비활성 · 신규 비용 {data?.safety.finalCostDelta ?? '0_KRW'} · 주문/취소/정정 0건 · 실계좌 조회 {data?.safety.privateBrokerRequests ?? 0}회
         </p>
       </div>
+
+      {data?.liveAccountHistory ? <section className="mt-3 rounded-xl border border-border bg-muted/20 p-3 text-xs" data-testid="live-account-history-status">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="font-extrabold">실계좌 거래이력 · READ-ONLY</p>
+          <p className="font-semibold text-muted-foreground">최근 {data.liveAccountHistory.effectiveDays}일 · 저장 안 함</p>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {data.liveAccountHistory.providers.map((provider) => <span key={provider.provider} className="rounded-full border border-border bg-background px-2 py-1 font-semibold">
+            {provider.provider.toUpperCase()} {provider.status} · {provider.records}건 · 요청 {provider.privateProviderRequests}회
+          </span>)}
+        </div>
+        {data.liveAccountHistory.rangeCapped ? <p className="mt-2 font-semibold text-warning">90일/1년/전체 선택 시 실계좌 API 이력은 최근 30일까지만 합칩니다. 기존 저장 일지는 선택 기간 전체를 유지합니다.</p> : null}
+        {data.liveAccountHistory.truncated ? <p className="mt-1 font-semibold text-warning">Provider 요청 상한 또는 일부 정규화 실패로 실계좌 이력이 부분 수집 상태입니다.</p> : null}
+      </section> : null}
 
       <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
         <label className="grid min-w-0 gap-1 text-xs">기간<select className={controlClass} value={filters.range} onChange={(event) => change('range', event.target.value)}><option value="TODAY">오늘</option><option value="7D">7일</option><option value="30D">30일</option><option value="90D">90일</option><option value="1Y">1년</option><option value="ALL">전체</option></select></label>
         <label className="grid min-w-0 gap-1 text-xs">시장<select className={controlClass} value={filters.market} onChange={(event) => change('market', event.target.value)}><option value="ALL">전체 시장</option><option value="KR_STOCK">{USER_MARKET_KO.KR_STOCK}</option><option value="US_STOCK">{USER_MARKET_KO.US_STOCK}</option><option value="CRYPTO_SPOT">{USER_MARKET_KO.CRYPTO_SPOT}</option><option value="CRYPTO_FUTURES">{USER_MARKET_KO.CRYPTO_FUTURES}</option></select></label>
-        <label className="grid min-w-0 gap-1 text-xs">출처<select className={controlClass} value={filters.source} onChange={(event) => change('source', event.target.value)}><option value="ALL">전체</option><option value="TOSS_MANUAL">{USER_TRADE_SOURCE_KO.TOSS_MANUAL}</option><option value="TOSS_API">{USER_TRADE_SOURCE_KO.TOSS_API}</option><option value="APP_PAPER">{USER_TRADE_SOURCE_KO.APP_PAPER}</option><option value="APP_SHADOW">{USER_TRADE_SOURCE_KO.APP_SHADOW}</option><option value="APP_AUTO">{USER_TRADE_SOURCE_KO.APP_AUTO}</option></select></label>
+        <label className="grid min-w-0 gap-1 text-xs">출처<select className={controlClass} value={filters.source} onChange={(event) => change('source', event.target.value)}><option value="ALL">전체</option><option value="TOSS_MANUAL">{USER_TRADE_SOURCE_KO.TOSS_MANUAL}</option><option value="TOSS_API">{USER_TRADE_SOURCE_KO.TOSS_API}</option><option value="UPBIT_API">{USER_TRADE_SOURCE_KO.UPBIT_API}</option><option value="BITGET_API">{USER_TRADE_SOURCE_KO.BITGET_API}</option><option value="APP_PAPER">{USER_TRADE_SOURCE_KO.APP_PAPER}</option><option value="APP_SHADOW">{USER_TRADE_SOURCE_KO.APP_SHADOW}</option><option value="APP_AUTO">{USER_TRADE_SOURCE_KO.APP_AUTO}</option></select></label>
         <label className="grid min-w-0 gap-1 text-xs">품질 등급<select className={controlClass} value={filters.grade} onChange={(event) => change('grade', event.target.value)}><option value="ALL">전체 등급</option><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option></select></label>
       </div>
 
@@ -450,7 +465,7 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
             onClick={() => setSelectedId(trade.id)}
           >
             <div className="flex min-w-0 items-start justify-between gap-2"><span className="min-w-0 break-words text-sm font-bold">{trade.symbol}</span><Grade trade={trade} /></div>
-            <div className="mt-2 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>{userFacingCodeLabel(trade.source, USER_TRADE_SOURCE_KO)} · {userFacingCodeLabel(trade.status, USER_STATUS_KO)}</span><span>{money(trade.netPnl, trade.currency)}</span></div>
+            <div className="mt-2 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>{userFacingCodeLabel(trade.source, USER_TRADE_SOURCE_KO)} · {userFacingCodeLabel(trade.status, USER_STATUS_KO)}</span><span>{trade.netPnl == null && trade.providerReportedNetPnl != null ? `공급자 ${money(trade.providerReportedNetPnl, trade.currency)}` : money(trade.netPnl, trade.currency)}</span></div>
             <div className="mt-2 flex flex-wrap gap-1.5 text-[9px] font-extrabold">
               {trade.source === 'APP_PAPER' ? (
                 <>
