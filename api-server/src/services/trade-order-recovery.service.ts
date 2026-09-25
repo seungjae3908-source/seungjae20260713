@@ -552,7 +552,8 @@ function validateSnapshot(order: TradingOrder, snapshot: TradingExchangeOrderSna
 }
 
 function transientRecoveryError(code: string) {
-  return isTransientTradingProviderError(code);
+  return isTransientTradingProviderError(code)
+    || /^(BITGET|UPBIT|KIWOOM|TOSS)_HTTP_404$/.test(code);
 }
 
 export class TradeOrderRecoveryService {
