@@ -53,6 +53,8 @@ on:
       - api-server/src/services/manual-paper-canonical-runtime-readiness.service.test.ts
       - api-server/src/services/paper-canonical-validation-freshness-policy.service.ts
       - api-server/src/services/paper-canonical-validation-freshness-policy.service.test.ts
+      - ops/check-paper-canonical-pm2-safety.mjs
+      - market-prediction-lab/tests/paper-canonical-pm2-safety-probe-v1.test.js
       - ops/materialize-paper-canonical-forward-observer.mjs
       - ops/publish-paper-canonical-validation-freshness-policy.mjs
       - market-prediction-lab/tests/paper-canonical-forward-observer-materialization-v1.test.js
@@ -263,6 +265,8 @@ jobs:
             api-server/src/services/manual-paper-canonical-runtime-readiness.service.test.ts
             api-server/src/services/paper-canonical-validation-freshness-policy.service.ts
             api-server/src/services/paper-canonical-validation-freshness-policy.service.test.ts
+            ops/check-paper-canonical-pm2-safety.mjs
+            market-prediction-lab/tests/paper-canonical-pm2-safety-probe-v1.test.js
             ops/materialize-paper-canonical-forward-observer.mjs
             ops/publish-paper-canonical-validation-freshness-policy.mjs
             market-prediction-lab/tests/paper-canonical-forward-observer-materialization-v1.test.js
