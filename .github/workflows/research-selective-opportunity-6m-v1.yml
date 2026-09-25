@@ -1,107 +1,79 @@
-name: Research Selective Opportunity 6M V1
-
+name: Research Selective Opportunity 6M V2 Audit
 on:
   pull_request:
     branches: [main]
     paths:
       - market-prediction-lab/scripts/run-selective-opportunity-6m-v1.js
+      - market-prediction-lab/scripts/run-selective-opportunity-audit-v2.mjs
+      - market-prediction-lab/src/selective-opportunity-audit-v2.mjs
+      - market-prediction-lab/tests/selective-opportunity-audit-v2.test.mjs
       - .github/workflows/research-selective-opportunity-6m-v1.yml
   workflow_dispatch:
-
 permissions:
   contents: read
   actions: read
-
 concurrency:
   group: research-selective-opportunity-6m-v1-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
-
 jobs:
   backtest:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
     env:
       RESEARCH_CODE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      LIVE_TRADING: 'false'
+      AUTO_TRADING: 'false'
+      REAL_ORDER_ENABLED: 'false'
+      PRIVATE_TRADING_API_ALLOWED: 'false'
     steps:
       - name: Checkout exact research head
         uses: actions/checkout@v4
         with:
           ref: ${{ env.RESEARCH_CODE_SHA }}
           persist-credentials: false
-
-      - name: Assert exact research identity
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          test "$(git rev-parse HEAD)" = "$RESEARCH_CODE_SHA"
-          printf '%s' "$RESEARCH_CODE_SHA" | grep -Eq '^[0-9a-f]{40}$'
-
+      - name: Assert immutable identity
+        run: test "$(git rev-parse HEAD)" = "$RESEARCH_CODE_SHA"
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
-
-      - name: Self-test frozen accounting
+          node-version: '20'
+      - name: Accounting and causality regression tests
         working-directory: market-prediction-lab
-        run: node scripts/run-selective-opportunity-6m-v1.js --self-test
-
-      - name: Run six-month public-data proxy backtest
+        run: node --test tests/selective-opportunity-audit-v2.test.mjs
+      - name: Freeze rules then collect one snapshot and compare all arms
+        working-directory: market-prediction-lab
+        run: node scripts/run-selective-opportunity-audit-v2.mjs docs/selective-opportunity-audit-v2
+      - name: Offline replay of identical archived candles
+        working-directory: market-prediction-lab
+        run: node scripts/run-selective-opportunity-audit-v2.mjs docs/selective-opportunity-audit-v2-replay --snapshot=docs/selective-opportunity-audit-v2/source-snapshot.json
+      - name: Assert replay equality and research boundary
         working-directory: market-prediction-lab
         run: |
-          node scripts/run-selective-opportunity-6m-v1.js             docs/selective-opportunity-6m-v1-result.json             docs/selective-opportunity-6m-v1-result.md
-
-      - name: Assert evidence boundary
-        working-directory: market-prediction-lab
-        run: |
-          node <<'NODE'
-          const fs = require('fs');
-          const r = JSON.parse(fs.readFileSync('docs/selective-opportunity-6m-v1-result.json','utf8'));
-          if (r.frozenRules?.evaluationWindow?.start !== '2026-03-25') throw new Error('START_MISMATCH');
-          if (r.frozenRules?.evaluationWindow?.endInclusive !== '2026-09-24') throw new Error('END_MISMATCH');
-          if (r.conclusionAuthority?.canonicalEvidenceEligible !== false) throw new Error('CANONICAL_EVIDENCE_MUST_BE_FALSE');
-          if (r.conclusionAuthority?.profitabilityPromotionAllowed !== false) throw new Error('PROMOTION_MUST_BE_FALSE');
-          if (r.conclusionAuthority?.executionAuthority !== 'NONE') throw new Error('EXECUTION_AUTHORITY_MUST_BE_NONE');
-          if (r.conclusionAuthority?.actualOrders !== 0) throw new Error('ACTUAL_ORDERS_MUST_BE_ZERO');
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const read = p => JSON.parse(readFileSync(p,'utf8'));
+          const a = read('docs/selective-opportunity-audit-v2/result.json');
+          const b = read('docs/selective-opportunity-audit-v2-replay/result.json');
+          assert.equal(a.sourceSnapshotSha256,b.sourceSnapshotSha256);
+          assert.deepEqual(a.summary,b.summary);
+          assert.equal(a.profitabilityProven,false);
+          assert.equal(a.actualOrders,0);
+          assert.equal(a.executionAuthority,'NONE');
+          assert.equal(a.combinedReturn,null);
+          assert.equal(a.canonicalSampleDelta,0);
+          assert.equal(a.summary.length,12);
+          console.log('SAME_SNAPSHOT_REPLAY_AND_SAFETY_PASS');
           NODE
-
-      - name: Build immutable provenance
-        working-directory: market-prediction-lab
-        run: |
-          node <<'NODE'
-          const fs = require('fs');
-          const crypto = require('crypto');
-          const file = 'docs/selective-opportunity-6m-v1-result.json';
-          const provenance = {
-            schemaVersion: 1,
-            researchCodeSha: process.env.RESEARCH_CODE_SHA,
-            resultSha256: crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
-            window: '2026-03-25..2026-09-24',
-            branchWrite: false,
-            canonicalEvidenceEligible: false,
-            profitabilityPromotionAllowed: false,
-            executionAuthority: 'NONE',
-            liveOrderAllowed: false,
-            privateApiAllowed: false,
-            actualOrders: 0,
-            replitUsed: false,
-            createdAt: new Date().toISOString()
-          };
-          fs.writeFileSync('docs/selective-opportunity-6m-v1-provenance.json', JSON.stringify(provenance,null,2)+'\n');
-          NODE
-
-      - name: Print summary
+      - name: Print citable summary
         if: always()
         working-directory: market-prediction-lab
-        run: cat docs/selective-opportunity-6m-v1-result.md || true
-
-      - name: Upload immutable backtest evidence
+        run: cat docs/selective-opportunity-audit-v2/result.md || true
+      - name: Upload source snapshot and immutable audit evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: selective-opportunity-6m-v1-${{ github.run_id }}
-          path: |
-            market-prediction-lab/docs/selective-opportunity-6m-v1-result.json
-            market-prediction-lab/docs/selective-opportunity-6m-v1-result.md
-            market-prediction-lab/docs/selective-opportunity-6m-v1-provenance.json
+          name: selective-opportunity-audit-v2-${{ github.run_id }}
+          path: market-prediction-lab/docs/selective-opportunity-audit-v2
           if-no-files-found: warn
           retention-days: 90
