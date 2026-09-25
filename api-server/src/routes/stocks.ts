@@ -1123,16 +1123,14 @@ function cleanupAutoTradeApprovalPlans() {
 	}
 }
 
-function validateRealOrderAccess(req: AuthenticatedRequest): { ok: true } | { ok: false; status: number; message: string } {
-	const enabled = process.env.KIWOOM_AUTO_TRADE_ENABLED === "true";
-	const realMode = String(process.env.KIWOOM_MODE ?? "").trim().toLowerCase() === "real";
-	const configuredKey = String(process.env.KIWOOM_AUTO_TRADE_KEY ?? "").trim();
-	const suppliedKey = String(req.header("X-Auto-Trade-Key") ?? "").trim();
-	if (!enabled) return { ok: false, status: 403, message: "서버의 실제 자동매매 기능이 꺼져 있습니다." };
-	if (!realMode) return { ok: false, status: 409, message: "실제 주문은 KIWOOM_MODE=real 설정이 필요합니다." };
-	if (!configuredKey || suppliedKey !== configuredKey) return { ok: false, status: 401, message: "자동매매 실행키가 올바르지 않습니다." };
-	if (!req.member?.id) return { ok: false, status: 401, message: "로그인이 필요합니다." };
-	return { ok: true };
+function validateRealOrderAccess(_req: AuthenticatedRequest): { ok: false; status: number; message: string; error: string; canonicalPath: string } {
+	return {
+		ok: false,
+		status: 409,
+		error: "LEGACY_REAL_ORDER_PATH_DISABLED_USE_TRADE_AUTOMATION",
+		message: "기존 주식 실주문 경로는 비활성화되었습니다. 새 실주문 엔진에서 계좌·위험·주문 상태를 다시 검증해 주세요.",
+		canonicalPath: "/api/trade-automation",
+	};
 }
 
 // POST /api/stocks/auto-trade/plan — 실제 주문은 하지 않고 10분짜리 일회성 승인계획만 만듭니다.
@@ -1141,6 +1139,17 @@ function validateRealOrderAccess(req: AuthenticatedRequest): { ok: true } | { ok
 router.use("/auto-trade", requireCapability("canAccessAutoTrading"));
 
 router.post("/auto-trade/plan", async (req: AuthenticatedRequest, res) => {
+	const access = validateRealOrderAccess(req);
+	return res.status(access.status).json({
+		ok: false,
+		error: access.error,
+		message: access.message,
+		canonicalPath: access.canonicalPath,
+		orderSubmitted: false,
+		providerMutationRequests: 0,
+	});
+	/*
+
 	const enabled = process.env.KIWOOM_AUTO_TRADE_ENABLED === "true";
 	const realMode = String(process.env.KIWOOM_MODE ?? "").trim().toLowerCase() === "real";
 	const configuredKey = String(process.env.KIWOOM_AUTO_TRADE_KEY ?? "").trim();
@@ -1180,8 +1189,23 @@ router.post("/auto-trade/plan", async (req: AuthenticatedRequest, res) => {
 	return res.json({ ok: true, approvalToken: token, expiresAt: new Date(expiresAt).toISOString(), order: plan.order, message: "주문 내용을 확인한 뒤 10분 안에 한 번만 승인할 수 있습니다." });
 });
 
+	*/
+});
+
 // POST /api/stocks/auto-trade/close-plan — 보유 전량 매도 계획만 생성하고 주문하지 않습니다.
 router.post("/auto-trade/close-plan", async (req: AuthenticatedRequest, res) => {
+	const access = validateRealOrderAccess(req);
+	return res.status(access.status).json({
+		ok: false,
+		error: access.error,
+		message: access.message,
+		canonicalPath: access.canonicalPath,
+		orderSubmitted: false,
+		orderCanceled: false,
+		providerMutationRequests: 0,
+	});
+	/*
+
 	const access = validateRealOrderAccess(req);
 	if (!access.ok) return res.status(access.status).json({ ok: false, message: access.message });
 	await ensureAutoTradePositionsLoaded();
@@ -1231,8 +1255,23 @@ router.post("/auto-trade/close-plan", async (req: AuthenticatedRequest, res) => 
 	});
 });
 
+	*/
+});
+
 // POST /api/stocks/auto-trade/close-execute — 일회성 승인 토큰이 있을 때만 전량 매도합니다.
 router.post("/auto-trade/close-execute", async (req: AuthenticatedRequest, res) => {
+	const access = validateRealOrderAccess(req);
+	return res.status(access.status).json({
+		ok: false,
+		error: access.error,
+		message: access.message,
+		canonicalPath: access.canonicalPath,
+		orderSubmitted: false,
+		orderCanceled: false,
+		providerMutationRequests: 0,
+	});
+	/*
+
 	cleanupAutoTradeApprovalPlans();
 	const approvalToken = String(req.body?.approvalToken ?? "").trim();
 	const approval = autoTradeCloseApprovalPlans.get(approvalToken);
@@ -1298,8 +1337,23 @@ router.post("/auto-trade/close-execute", async (req: AuthenticatedRequest, res) 
 	}
 });
 
+	*/
+});
+
 // POST /api/stocks/auto-trade/execute
 router.post("/auto-trade/execute", async (req: AuthenticatedRequest, res) => {
+	const access = validateRealOrderAccess(req);
+	return res.status(access.status).json({
+		ok: false,
+		error: access.error,
+		message: access.message,
+		canonicalPath: access.canonicalPath,
+		orderSubmitted: false,
+		orderCanceled: false,
+		providerMutationRequests: 0,
+	});
+	/*
+
 	cleanupAutoTradeApprovalPlans();
 	const approvalToken = String(req.body?.approvalToken ?? "").trim();
 	const approval = autoTradeApprovalPlans.get(approvalToken);
@@ -1570,6 +1624,9 @@ router.post("/auto-trade/execute", async (req: AuthenticatedRequest, res) => {
 	});
 });
 
+	*/
+});
+
 async function inspectAutoTradePositions(memberId: string) {
 	await ensureAutoTradePositionsLoaded();
 	const results: any[] = [];
@@ -1634,7 +1691,9 @@ router.get("/auto-trade/status", (_req, res) => {
 	return res.json({
 		ok: true,
 		mode: mode === "real" ? "real" : "mock",
-		enabled: process.env.KIWOOM_AUTO_TRADE_ENABLED === "true",
+		enabled: false,
+		legacyRealOrderPathDisabled: true,
+		canonicalPath: "/api/trade-automation",
 		domesticSupported: true,
 		usSupported: true,
 		realKeyConfigured: Boolean(
