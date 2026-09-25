@@ -190,6 +190,7 @@ const database = resolveProductionPostgresConnection(runtime, projectRef);
 const migrationPaths = [
   'api-server/supabase/migrations/2026081701_account_readonly_credentials.sql',
   'api-server/supabase/migrations/2026081801_account_readonly_service_role.sql',
+  'api-server/supabase/migrations/2026092501_account_readonly_kiwoom_provider.sql',
 ];
 let migrationBodies;
 try {
@@ -228,7 +229,7 @@ begin
   if exists (
     select 1
     from public.account_readonly_credentials
-    where provider not in ('toss', 'upbit', 'bitget')
+    where provider not in ('toss', 'kiwoom', 'upbit', 'bitget')
   ) then
     raise exception 'unexpected provider row exists';
   end if;
@@ -266,7 +267,7 @@ select json_build_object(
   'approved_target_sha', current_setting('app.approved_target_sha'),
   'production_project_match', true,
   'atomic_transaction', true,
-  'migrations_applied', 2,
+  'migrations_applied', 3,
   'tables_verified', 1,
   'rls_enabled', true,
   'api_roles_revoked', true,
@@ -336,6 +337,7 @@ if (artifact?.status !== 'passed'
   || artifact?.approved_target_sha !== approvedTargetSha
   || artifact?.production_project_match !== true
   || artifact?.atomic_transaction !== true
+  || artifact?.migrations_applied !== 3
   || artifact?.tables_verified !== 1
   || artifact?.rls_enabled !== true
   || artifact?.api_roles_revoked !== true
