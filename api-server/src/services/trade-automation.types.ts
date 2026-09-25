@@ -37,6 +37,22 @@ export type TradingFill = {
   filledAt: string;
 };
 
+
+export type TradingOrderAmendment = {
+  requestId: string;
+  revision: number;
+  status: 'INTENT_RECORDED' | 'ACKNOWLEDGED' | 'RECOVERY_REQUIRED';
+  previousClientOrderId: string;
+  nextClientOrderId: string;
+  previousExchangeOrderId: string | null;
+  nextExchangeOrderId: string | null;
+  requestedQuantity: number | null;
+  requestedPrice: number;
+  requestedAt: string;
+  acknowledgedAt: string | null;
+  errorCode: string | null;
+};
+
 export type TradingOrderLeg = {
   id: string;
   planId: string;
@@ -336,6 +352,8 @@ export type TradingOrder = {
   recoveryLeaseUntil?: string | null;
   protectionStatus?: TradingProtectionStatus;
   protectionErrorCode?: string | null;
+  amendments?: TradingOrderAmendment[];
+  lastAmendRequestId?: string | null;
   createdAt: string;
   updatedAt: string;
 };
