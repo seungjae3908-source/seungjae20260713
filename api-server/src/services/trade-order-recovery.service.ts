@@ -3,9 +3,19 @@ import { TradeAutomationService } from './trade-automation.service';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
 import {
   prepareBitgetOrderQuery,
+  prepareKiwoomDomesticOrderHistory,
+  prepareKiwoomToken,
+  prepareKiwoomUnfilled,
+  prepareKiwoomUsOrderHistory,
+  prepareKiwoomUsUnfilled,
+  prepareTossOpenOrders,
+  prepareTossOrderQuery,
+  prepareTossToken,
   prepareUpbitOrderQuery,
   type BitgetCredentials,
+  type KiwoomCredentials,
   type PreparedExchangeRequest,
+  type TossCredentials,
   type UpbitCredentials,
 } from './trade-exchange-adapters.service';
 import type {
@@ -20,6 +30,8 @@ type ExchangePayload = Record<string, unknown>;
 const BASE_URLS = {
   bitget: 'https://api.bitget.com',
   upbit: 'https://api.upbit.com',
+  kiwoom: 'https://api.kiwoom.com',
+  toss: 'https://openapi.tossinvest.com',
 };
 
 const QUANTITY_EPSILON = 1e-12;
@@ -52,6 +64,7 @@ function invalidResponseCode(baseUrl: string) {
   if (baseUrl.includes('bitget.com')) return 'BITGET_INVALID_RESPONSE';
   if (baseUrl.includes('upbit.com')) return 'UPBIT_INVALID_RESPONSE';
   if (baseUrl.includes('kiwoom.com')) return 'KIWOOM_INVALID_RESPONSE';
+  if (baseUrl.includes('tossinvest.com')) return 'TOSS_INVALID_RESPONSE';
   return 'EXCHANGE_INVALID_RESPONSE';
 }
 
