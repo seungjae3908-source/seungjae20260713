@@ -248,3 +248,21 @@ test('Production account-readonly storage tooling includes the Kiwoom provider m
   assert.equal(apply.includes('artifact?.migrations_applied !== 3'), true);
   assert.equal(workflow.includes('value?.migrations_applied === 3'), true);
 });
+
+
+test('Kiwoom provider stays hidden until its private read capability is explicitly enabled', () => {
+  const off = accountReadFlags({});
+  const on = accountReadFlags({ KIWOOM_ACCOUNT_READ_ENABLED: 'true' });
+  assert.equal(off.kiwoom, false);
+  assert.equal(on.kiwoom, true);
+
+  const apiServerRoot = path.basename(process.cwd()) === 'api-server'
+    ? process.cwd()
+    : path.join(process.cwd(), 'api-server');
+  const routeSource = readFileSync(
+    path.join(apiServerRoot, 'src/features/account-readonly/account-readonly.route.ts'),
+    'utf8',
+  );
+  assert.match(routeSource, /supportedProviders: \['toss', \.\.\.\(flags\.kiwoom \? \['kiwoom'\] : \[\]\), 'upbit', 'bitget'\]/);
+  assert.match(routeSource, /hiddenProviders: flags\.kiwoom \? \[\] : \['kiwoom'\]/);
+});
