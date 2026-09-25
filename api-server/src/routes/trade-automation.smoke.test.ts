@@ -327,6 +327,62 @@ test('connection registration rejects withdrawal permission and does not echo se
   } finally { await close(server); }
 });
 
+
+test('live trading connection requires explicit purpose plus read+orders and never activates by credential save', async () => {
+  const { server, baseUrl } = await startServer();
+  try {
+    const credentials = { accessKey: 'live-access-secret', secretKey: 'live-signing-secret' };
+
+    for (const [name, payload, expected] of [
+      ['missing purpose', {
+        credentials, accountMode: 'live', permissions: ['read', 'orders'],
+      }, 'LIVE_EXECUTION_PURPOSE_CONFIRMATION_REQUIRED'],
+      ['missing read', {
+        credentials, accountMode: 'live', purpose: 'live_execution', permissions: ['orders'],
+      }, 'LIVE_EXECUTION_READ_AND_ORDER_PERMISSIONS_REQUIRED'],
+      ['extra transfer', {
+        credentials, accountMode: 'live', purpose: 'live_execution', permissions: ['read', 'orders', 'transfer'],
+      }, 'WITHDRAWAL_OR_TRANSFER_PERMISSION_NOT_ALLOWED'],
+    ] as const) {
+      const response = await fetch(`${baseUrl}/api/trade-automation/connections/upbit`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      assert.equal(response.status, 400, name);
+      const text = await response.text();
+      assert.match(text, new RegExp(expected), name);
+      assert.doesNotMatch(text, /live-access-secret|live-signing-secret/, name);
+    }
+
+    const accepted = await fetch(`${baseUrl}/api/trade-automation/connections/upbit`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        credentials,
+        accountMode: 'live',
+        purpose: 'live_execution',
+        permissions: ['read', 'orders'],
+      }),
+    });
+    assert.equal(accepted.status, 200);
+    const text = await accepted.text();
+    assert.doesNotMatch(text, /live-access-secret|live-signing-secret/);
+    const body = JSON.parse(text) as {
+      configured: boolean;
+      accountMode: string;
+      credentialsReturned: boolean;
+      liveExecutionActivated: boolean;
+      providerMutationRequests: number;
+    };
+    assert.equal(body.configured, true);
+    assert.equal(body.accountMode, 'live');
+    assert.equal(body.credentialsReturned, false);
+    assert.equal(body.liveExecutionActivated, false);
+    assert.equal(body.providerMutationRequests, 0);
+  } finally { await close(server); }
+});
+
 test('automatic policy executes US-stock Paper without per-order approval or private credentials', async () => {
   const { server, baseUrl } = await startServer();
   const nativeFetch = globalThis.fetch;
