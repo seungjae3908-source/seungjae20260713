@@ -289,12 +289,22 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
         </div>
         {data.liveAccountHistory.rangeCapped ? <p className="mt-2 font-semibold text-warning">90일/1년/전체 선택 시 실계좌 API 이력은 최근 30일까지만 합칩니다. 기존 저장 일지는 선택 기간 전체를 유지합니다.</p> : null}
         {data.liveAccountHistory.truncated ? <p className="mt-1 font-semibold text-warning">Provider 요청 상한 또는 일부 정규화 실패로 실계좌 이력이 부분 수집 상태입니다.</p> : null}
+        {Array.isArray(data.liveAccountHistory.realizedEvidence) && data.liveAccountHistory.realizedEvidence.length ? <div className="mt-3 rounded-lg border border-border bg-background p-3" data-testid="kiwoom-realized-evidence">
+          <p className="font-extrabold">Kiwoom 국내 현금 실현손익 증거 · {data.liveAccountHistory.realizedEvidence.length}건</p>
+          <p className="mt-1 text-[10px] font-semibold text-muted-foreground">일별·종목별 공급자 aggregate입니다. 개별 체결시간을 만들지 않으며 canonical 승률·Profit Factor·평균수익률 통계에는 넣지 않습니다.</p>
+          <div className="mt-2 grid gap-1">
+            {data.liveAccountHistory.realizedEvidence.slice(0, 5).map((row) => <div key={`${row.date}:${row.symbol}`} className="flex flex-wrap justify-between gap-2 rounded-md bg-muted/40 px-2 py-1.5">
+              <span className="font-semibold">{row.date.slice(0,4)}-{row.date.slice(4,6)}-{row.date.slice(6,8)} · {row.symbol}</span>
+              <span className="tabular-nums">공급자 손익 {row.providerReportedPnl == null ? '미확인' : `${number.format(row.providerReportedPnl)} KRW`}</span>
+            </div>)}
+          </div>
+        </div> : null}
       </section> : null}
 
       <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
         <label className="grid min-w-0 gap-1 text-xs">기간<select className={controlClass} value={filters.range} onChange={(event) => change('range', event.target.value)}><option value="TODAY">오늘</option><option value="7D">7일</option><option value="30D">30일</option><option value="90D">90일</option><option value="1Y">1년</option><option value="ALL">전체</option></select></label>
         <label className="grid min-w-0 gap-1 text-xs">시장<select className={controlClass} value={filters.market} onChange={(event) => change('market', event.target.value)}><option value="ALL">전체 시장</option><option value="KR_STOCK">{USER_MARKET_KO.KR_STOCK}</option><option value="US_STOCK">{USER_MARKET_KO.US_STOCK}</option><option value="CRYPTO_SPOT">{USER_MARKET_KO.CRYPTO_SPOT}</option><option value="CRYPTO_FUTURES">{USER_MARKET_KO.CRYPTO_FUTURES}</option></select></label>
-        <label className="grid min-w-0 gap-1 text-xs">출처<select className={controlClass} value={filters.source} onChange={(event) => change('source', event.target.value)}><option value="ALL">전체</option><option value="TOSS_MANUAL">{USER_TRADE_SOURCE_KO.TOSS_MANUAL}</option><option value="TOSS_API">{USER_TRADE_SOURCE_KO.TOSS_API}</option><option value="UPBIT_API">{USER_TRADE_SOURCE_KO.UPBIT_API}</option><option value="BITGET_API">{USER_TRADE_SOURCE_KO.BITGET_API}</option><option value="APP_PAPER">{USER_TRADE_SOURCE_KO.APP_PAPER}</option><option value="APP_SHADOW">{USER_TRADE_SOURCE_KO.APP_SHADOW}</option><option value="APP_AUTO">{USER_TRADE_SOURCE_KO.APP_AUTO}</option></select></label>
+        <label className="grid min-w-0 gap-1 text-xs">출처<select className={controlClass} value={filters.source} onChange={(event) => change('source', event.target.value)}><option value="ALL">전체</option><option value="TOSS_MANUAL">{USER_TRADE_SOURCE_KO.TOSS_MANUAL}</option><option value="TOSS_API">{USER_TRADE_SOURCE_KO.TOSS_API}</option><option value="UPBIT_API">{USER_TRADE_SOURCE_KO.UPBIT_API}</option><option value="BITGET_API">{USER_TRADE_SOURCE_KO.BITGET_API}</option><option value="KIWOOM_API">{USER_TRADE_SOURCE_KO.KIWOOM_API}</option><option value="APP_PAPER">{USER_TRADE_SOURCE_KO.APP_PAPER}</option><option value="APP_SHADOW">{USER_TRADE_SOURCE_KO.APP_SHADOW}</option><option value="APP_AUTO">{USER_TRADE_SOURCE_KO.APP_AUTO}</option></select></label>
         <label className="grid min-w-0 gap-1 text-xs">품질 등급<select className={controlClass} value={filters.grade} onChange={(event) => change('grade', event.target.value)}><option value="ALL">전체 등급</option><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option></select></label>
       </div>
 
