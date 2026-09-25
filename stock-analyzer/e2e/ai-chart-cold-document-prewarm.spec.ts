@@ -2,43 +2,32 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
-test('direct AI Chart prewarm prioritizes the route and starts the renderer when its largest shared dependency is ready', () => {
+test('direct AI Chart uses one app-first entry and leaves renderer work behind the route shell', () => {
   const html = fs
     .readFileSync(path.resolve(process.cwd(), 'index.html'), 'utf8')
     .replace(/\r\n?/g, '\n');
-  const appEntryImport = "void import('/src/main.tsx');";
-  const routePrewarmImport = "import('/src/pages/ai-chart.tsx')";
-  const sharedDataPrewarmImport = "import('/src/lib/unified-chart-data.ts')";
-  const rendererPrewarmImport = "import('/src/components/unified-analysis-chart.tsx')";
-  const prewarmGuard = "const directAiChartRoute = window.location.pathname.endsWith('/ai-chart');";
-  const routePromise = 'const aiChartRoutePrewarm = directAiChartRoute';
-  const sharedDataPromise = 'const aiChartSharedDataPrewarm = directAiChartRoute';
-  const rendererSequence = "void aiChartSharedDataPrewarm.then(() => import('/src/components/unified-analysis-chart.tsx'));";
+  const main = fs
+    .readFileSync(path.resolve(process.cwd(), 'src/main.tsx'), 'utf8')
+    .replace(/\r\n?/g, '\n');
+  const appEntry = '<script type="module" src="/src/main.tsx"></script>';
+  const appImport = "import('./App')";
+  const routeImport = "import('@/pages/ai-chart')";
   const root = '<div id="root"></div>';
   const moduleScripts = html.match(/<script\s+type="module"[^>]*>/g) ?? [];
 
-  expect(html).toContain(prewarmGuard);
-  expect(html).toContain(routePromise);
-  expect(html).toContain(sharedDataPromise);
-  expect(html).toContain(appEntryImport);
-  expect(html).toContain(routePrewarmImport);
-  expect(html).toContain(sharedDataPrewarmImport);
-  expect(html).toContain(rendererSequence);
-  expect(html.match(/import\('\/src\/main\.tsx'\)/g)).toHaveLength(1);
-  expect(html.match(/import\('\/src\/pages\/ai-chart\.tsx'\)/g)).toHaveLength(1);
-  expect(html.match(/import\('\/src\/lib\/unified-chart-data\.tsx?'\)/g)).toHaveLength(1);
-  expect(html.match(/import\('\/src\/components\/unified-analysis-chart\.tsx'\)/g)).toHaveLength(1);
+  expect(html).toContain(appEntry);
+  expect(html).not.toMatch(/import\('\/src\/pages\/ai-chart\.tsx'\)/);
+  expect(html).not.toMatch(/import\('\/src\/components\/unified-analysis-chart\.tsx'\)/);
   expect(html).not.toMatch(/rel="modulepreload"[^>]+href="[^"]+\.tsx(?:\?|\")/);
   expect(moduleScripts).toHaveLength(1);
   for (const script of moduleScripts) {
     expect(script, 'the canonical app entry must retain native module defer ordering').not.toMatch(/\sasync(?:\s|>)/);
   }
-  expect(html.indexOf(root)).toBeLessThan(html.indexOf(prewarmGuard));
-  expect(html.indexOf(prewarmGuard)).toBeLessThan(html.indexOf(routePrewarmImport));
-  expect(html.indexOf(routePrewarmImport)).toBeLessThan(html.indexOf(sharedDataPrewarmImport));
-  expect(html.indexOf(sharedDataPrewarmImport)).toBeLessThan(html.indexOf(appEntryImport));
-  expect(html.indexOf(appEntryImport)).toBeLessThan(html.indexOf(rendererSequence));
-  expect(rendererPrewarmImport).toBeTruthy();
+  expect(html.indexOf(root)).toBeLessThan(html.indexOf(appEntry));
+  expect(main).toContain("window.location.pathname.endsWith('/ai-chart')");
+  expect(main.indexOf(appImport)).toBeGreaterThanOrEqual(0);
+  expect(main.indexOf(routeImport)).toBeGreaterThan(main.indexOf(appImport));
+  expect(main).not.toMatch(/import\(['"]@\/components\/unified-analysis-chart['"]\)/);
 });
 
 test('direct AI Chart shell does not statically wait for the chart renderer graph', () => {
@@ -54,6 +43,44 @@ test('direct AI Chart shell does not statically wait for the chart renderer grap
   expect(source).toContain('data-testid="ai-chart-renderer-loading"');
   expect(source).toContain('<LazyUnifiedAnalysisChart');
   expect(source).not.toMatch(/data-testid=["']unified-chart-canvas["'][\s\S]{0,500}차트 데이터와 렌더러를 준비/);
+});
+
+test('direct AI Chart route priority cannot block the app and auth bootstrap indefinitely', async ({ page }) => {
+  let releaseRoute = () => {};
+  let markRouteRequested = () => {};
+  let markRouteResponded = () => {};
+  let markMainRequested = () => {};
+  const routeRelease = new Promise<void>((resolve) => { releaseRoute = resolve; });
+  const routeRequested = new Promise<void>((resolve) => { markRouteRequested = resolve; });
+  const routeResponded = new Promise<void>((resolve) => { markRouteResponded = resolve; });
+  const mainRequested = new Promise<void>((resolve) => { markMainRequested = resolve; });
+
+  await page.route('**/src/pages/ai-chart.tsx*', async (route) => {
+    markRouteRequested();
+    await routeRelease;
+    await route.continue();
+  });
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.endsWith('/src/main.tsx')) markMainRequested();
+  });
+  page.on('response', (response) => {
+    if (new URL(response.url()).pathname.endsWith('/src/pages/ai-chart.tsx')) markRouteResponded();
+  });
+
+  try {
+    await page.goto('/ai-chart', { waitUntil: 'domcontentloaded' });
+    await routeRequested;
+    const bootstrapStartedAt = Date.now();
+    const bootstrapState = await Promise.race([
+      mainRequested.then(() => 'started'),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 2_000)),
+    ]);
+    expect(bootstrapState).toBe('started');
+    expect(Date.now() - bootstrapStartedAt).toBeLessThan(2_000);
+  } finally {
+    releaseRoute();
+    await routeResponded;
+  }
 });
 
 test('direct AI Chart paints its H1 before a delayed prewarmed chart renderer becomes usable', async ({ page }, testInfo) => {

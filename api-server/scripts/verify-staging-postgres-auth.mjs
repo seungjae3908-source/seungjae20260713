@@ -104,6 +104,21 @@ async function writeArtifact(artifactDir, value) {
   );
 }
 
+function authOnlyBoundary(env) {
+  return env.STAGING_AUTH_MODE === 'auth-only'
+    ? {
+        mode: 'auth-only',
+        stagingDeploymentDispatched: false,
+        fullStagingValidationDispatched: false,
+        productionDeploymentExecuted: false,
+        databaseChanged: false,
+        secretChanged: false,
+        environmentChanged: false,
+        paperActivationExecuted: false,
+      }
+    : {};
+}
+
 export async function runAuthProbe(env = process.env) {
   const artifactDir = path.resolve(env.STAGING_ARTIFACT_DIR ?? path.join(process.cwd(), 'staging-auth-artifacts'));
   let endpointType = 'unresolved';
@@ -160,8 +175,10 @@ export async function runAuthProbe(env = process.env) {
         endpoint_type: endpointType,
         port,
         read_only_probe: true,
+        transaction_rolled_back: false,
         database_changed: false,
         credentials_recorded: false,
+        ...authOnlyBoundary(env),
       });
       console.error(`[staging-postgres-auth] ${classification}: ${safeMessage(classification)}`);
       return 1;
@@ -175,8 +192,10 @@ export async function runAuthProbe(env = process.env) {
       endpoint_type: endpointType,
       port,
       read_only_probe: true,
+      transaction_rolled_back: true,
       database_changed: false,
       credentials_recorded: false,
+      ...authOnlyBoundary(env),
     });
     console.log('[staging-postgres-auth] authentication succeeded; read-only transaction rolled back');
     return 0;
@@ -200,8 +219,10 @@ export async function runAuthProbe(env = process.env) {
       endpoint_type: endpointType,
       port,
       read_only_probe: true,
+      transaction_rolled_back: false,
       database_changed: false,
       credentials_recorded: false,
+      ...authOnlyBoundary(env),
     });
     console.error(`[staging-postgres-auth] ${classification}: ${safeMessage(classification)}`);
     return 1;

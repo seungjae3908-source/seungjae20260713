@@ -158,6 +158,35 @@ function invariantStateView(state) {
   };
 }
 
+export function createMetadataOnlyFlatRefreshState(beforeState, action, nowIso) {
+  const now = new Date(nowIso);
+  if (!Number.isFinite(now.getTime()) || now.toISOString() !== nowIso) fail('REPUBLISH_TIMESTAMP_INVALID');
+  const eventValid = /^[A-Za-z0-9._:-]{1,120}$/u.test(String(action?.eventId ?? ''));
+  const markPriceRefresh = action?.type === 'mark_price'
+    && /^[A-Z0-9]{2,20}$/u.test(String(action?.symbol ?? ''))
+    && finite(action?.price)
+    && action.price > 0;
+  const isolatedSnapshotBridge = action?.type === 'snapshot_bridge'
+    && String(action?.eventId ?? '').startsWith('paper-no-deploy-snapshot-bridge:');
+  if (!eventValid || (!markPriceRefresh && !isolatedSnapshotBridge)) fail('REPUBLISH_ACTION_INVALID');
+  if (markPriceRefresh) requireStableRiskWindow(beforeState, now);
+  const beforeEvents = Array.isArray(beforeState?.processedEventIds) ? beforeState.processedEventIds : [];
+  if (beforeEvents.includes(action.eventId)) fail('REPUBLISH_EVENT_ALREADY_PROCESSED');
+
+  const afterState = clone(beforeState);
+  afterState.account.updatedAt = nowIso;
+  afterState.updatedAt = nowIso;
+  afterState.processedEventIds = [...beforeEvents, action.eventId].slice(-500);
+  if (canonicalJson(invariantStateView(afterState)) !== canonicalJson(invariantStateView(beforeState))) {
+    fail('REPUBLISH_ECONOMIC_STATE_CHANGED');
+  }
+  if (openPositions(afterState).length !== 0
+    || pendingOrders(afterState).length !== 0
+    || !zero(afterState.account?.usedMargin)
+    || !zero(afterState.account?.unrealizedPnl)) fail('REPUBLISH_RESULT_NOT_FLAT');
+  return afterState;
+}
+
 export function validateRepublishResponse(body, { beforeState, targetSha, publisherDigest, action, nowIso }) {
   if (!body || body.ok !== true || body.mode !== 'paper-only' || body.orderSubmitted !== false || body.exchangeRequestSent !== false) {
     fail('REPUBLISH_SAFETY_ENVELOPE_INVALID');
@@ -170,15 +199,11 @@ export function validateRepublishResponse(body, { beforeState, targetSha, publis
     fail('REPUBLISH_MUST_BE_METADATA_ONLY');
   }
   const afterState = result.state;
-  if (canonicalJson(invariantStateView(afterState)) !== canonicalJson(invariantStateView(beforeState))) fail('REPUBLISH_ECONOMIC_STATE_CHANGED');
-  const beforeEvents = Array.isArray(beforeState.processedEventIds) ? beforeState.processedEventIds : [];
-  const afterEvents = Array.isArray(afterState.processedEventIds) ? afterState.processedEventIds : [];
-  const expectedEvents = [...beforeEvents, action.eventId].slice(-500);
-  if (canonicalJson(afterEvents) !== canonicalJson(expectedEvents)) fail('REPUBLISH_EVENT_LEDGER_INVALID');
-  if (afterState.updatedAt !== nowIso || afterState.account?.updatedAt !== nowIso) fail('REPUBLISH_FRESHNESS_TIMESTAMP_INVALID');
-  if (openPositions(afterState).length !== 0 || pendingOrders(afterState).length !== 0 || !zero(afterState.account?.usedMargin) || !zero(afterState.account?.unrealizedPnl)) {
-    fail('REPUBLISH_RESULT_NOT_FLAT');
+  if (canonicalJson(invariantStateView(afterState)) !== canonicalJson(invariantStateView(beforeState))) {
+    fail('REPUBLISH_ECONOMIC_STATE_CHANGED');
   }
+  const expectedState = createMetadataOnlyFlatRefreshState(beforeState, action, nowIso);
+  if (canonicalJson(afterState) !== canonicalJson(expectedState)) fail('REPUBLISH_METADATA_REFRESH_MISMATCH');
   const transport = body.paperStateTransport;
   if (!transport || transport.status !== 'PUBLISHED' || transport.publisherAccountBound !== true
     || transport.executionAuthority !== 'NONE' || transport.privateApiAllowed !== false

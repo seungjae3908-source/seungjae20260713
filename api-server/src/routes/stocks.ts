@@ -17,7 +17,7 @@ import { computeIndicators } from "../sample/indicators";
 import { computeScores } from "../sample/scores";
 import { scoreToRating } from "../sample/rating";
 import { deliverMemberNotification } from "../services/notification.service";
-import { requireAdmin, type AuthenticatedRequest } from "../middleware/auth";
+import { requireAdmin, requireCapability, type AuthenticatedRequest } from "../middleware/auth";
 import {
 	getCorpCode as getDartProviderCorpCode,
 	getFinancials as getDartProviderFinancials,
@@ -1136,6 +1136,10 @@ function validateRealOrderAccess(req: AuthenticatedRequest): { ok: true } | { ok
 }
 
 // POST /api/stocks/auto-trade/plan — 실제 주문은 하지 않고 10분짜리 일회성 승인계획만 만듭니다.
+// Legacy stock auto-trade endpoints remain compatibility-only.
+ // Apply the same membership boundary as the canonical /trade-automation surface.
+router.use("/auto-trade", requireCapability("canAccessAutoTrading"));
+
 router.post("/auto-trade/plan", async (req: AuthenticatedRequest, res) => {
 	const enabled = process.env.KIWOOM_AUTO_TRADE_ENABLED === "true";
 	const realMode = String(process.env.KIWOOM_MODE ?? "").trim().toLowerCase() === "real";

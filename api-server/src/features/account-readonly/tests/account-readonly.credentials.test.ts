@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
-import { isStagingReadonlyCredentialRuntime, resolveApiBindHost } from '../../../lib/api-bind-host';
+import {
+  areBackgroundWorkersEnabled,
+  isStagingReadonlyCredentialRuntime,
+  resolveApiBindHost,
+} from '../../../lib/api-bind-host';
 import { decryptTradingCredentials } from '../../../services/trade-credential-vault.service';
 import { InMemoryAccountReadonlyCredentialRepository } from '../account-readonly.repository';
 import {
@@ -146,4 +150,11 @@ test('normal-runtime bind host override remains restricted to known listener add
   assert.equal(resolveApiBindHost({ API_BIND_HOST: '0.0.0.0' }), '0.0.0.0');
   assert.equal(resolveApiBindHost({ API_BIND_HOST: '::1' }), '::1');
   assert.throws(() => resolveApiBindHost({ API_BIND_HOST: 'example.com' }), /API_BIND_HOST_INVALID/);
+});
+
+test('background workers can be disabled explicitly without changing trading authority', () => {
+  assert.equal(areBackgroundWorkersEnabled({}), true);
+  assert.equal(areBackgroundWorkersEnabled({ BACKGROUND_WORKERS_ENABLED: 'false' }), false);
+  assert.equal(areBackgroundWorkersEnabled({ BACKGROUND_WORKERS_ENABLED: 'true' }), true);
+  assert.equal(areBackgroundWorkersEnabled(privateReadRuntime()), false);
 });

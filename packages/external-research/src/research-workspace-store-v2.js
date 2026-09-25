@@ -19,7 +19,7 @@ export function createResearchWorkspaceStore(root) {
     if (!dir.isDirectory() || dir.isSymbolicLink() || (dir.mode & 0o022)) fail('UNSAFE_STORE_DIRECTORY');
     const resolved = await realpath(root);
     const path = join(resolved, name);
-    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const before = await handle.stat();
       if (!before.isFile() || before.size > limit || (before.mode & 0o022)) fail('UNSAFE_STORE_FILE');

@@ -1,4 +1,5 @@
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { parseBacktestPaperHandoff, type BacktestPaperHandoff } from '../../../packages/strategy-hypothesis/src/backtest-paper-handoff.js';
 
 export type BacktestStrategy = 'trend_pullback' | 'breakout' | 'vwap_reclaim';
 export type BacktestSide = 'long' | 'short' | 'both';
@@ -54,6 +55,8 @@ export type BacktestTrade = {
   marketRegime: string;
 };
 export type BacktestResult = {
+  paperHandoffRunId?: string;
+  paperHandoffs?: readonly BacktestPaperHandoff[];
   ok: true;
   mode: 'backtest-only';
   orderSubmitted: false;
@@ -148,6 +151,14 @@ export async function runBacktest(values: BacktestFormValues): Promise<BacktestR
   }
   if (body.result.mode !== 'backtest-only' || body.result.orderSubmitted !== false) {
     throw new Error('백테스트 안전 계약을 확인하지 못했습니다.');
+  }
+  if (body.result.paperHandoffs !== undefined && (!Array.isArray(body.result.paperHandoffs)
+    || body.result.paperHandoffs.length > 2 || body.result.paperHandoffs.some((value) => !parseBacktestPaperHandoff(value)
+      || value.symbol !== body.result!.symbol || value.timeframe !== body.result!.timeframe))) {
+    throw new Error('백테스트 후보 전달 계약을 확인하지 못했습니다.');
+  }
+  if (body.result.paperHandoffRunId !== undefined && !/^[0-9a-f-]{36}$/u.test(body.result.paperHandoffRunId)) {
+    throw new Error('백테스트 서버 참조를 확인하지 못했습니다.');
   }
   return body.result;
 }

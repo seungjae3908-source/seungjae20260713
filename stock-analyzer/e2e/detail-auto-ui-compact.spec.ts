@@ -25,11 +25,11 @@ test('auto trading uses Korean-first compact copy and desktop two-column layout'
 
   expect(auto).toContain('<CenteredPageHeader title="자동매매" />');
   expect(auto).not.toContain('eyebrow="승인형 주문"');
-  expect(auto).toContain('label="위험검사" value="최종 확인"');
-  expect(auto).toContain('<h2 className="text-base font-bold">주문 안전 상태</h2>');
-  expect(auto).toContain('min-[1200px]:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]');
+  expect(auto).toContain('label="위험검사" value="매 주문 재검증"');
+  expect(auto).toContain('<h2 className="text-base font-bold">자동매매 실행 방식</h2>');
+  expect(auto).toContain('min-[1200px]:grid-cols-[minmax(0,1.05fr)_minmax(380px,0.95fr)]');
   expect(auto).toContain('data-testid="auto-trading-settings-column"');
-  expect(auto).toContain('<span>안전설정 · 거래소</span>');
+  expect(auto).toContain('<span>자동매매 · 시장별 설정</span>');
   expect(auto).toContain('<span>알림 · 텔레그램</span>');
   expect(auto).not.toContain('Risk Engine');
   expect(auto).not.toContain('infoItems={[');
@@ -43,9 +43,9 @@ for (const width of [360, 390, 412, 430]) {
 
     const safety = page.getByTestId('auto-trading-safety-summary');
     await expect(safety).toBeVisible();
-    await expect(safety).toContainText('주문 안전 상태');
-    await expect(safety).toContainText('실전 주문');
-    await expect(safety).toContainText('사용자 승인');
+    await expect(safety).toContainText('자동매매 실행 방식');
+    await expect(safety).toContainText('주문별 승인');
+    await expect(safety).toContainText('불필요');
     await expect(safety).toContainText('위험검사');
     await expect(safety).not.toContainText('Risk Engine');
 
@@ -59,7 +59,7 @@ for (const width of [360, 390, 412, 430]) {
   });
 }
 
-test('auto trading desktop places settings beside the safety and approval column', async ({ page }) => {
+test('auto trading desktop places settings beside the safety and runtime column', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto('/__phase12-trade-automation-e2e');
 

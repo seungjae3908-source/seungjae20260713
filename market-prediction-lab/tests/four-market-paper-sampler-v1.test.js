@@ -154,6 +154,20 @@ function execution(market, overrides = {}) {
 
 const bar = { nextOpen: 100, high: 101, low: 99 };
 
+test('explicit original signal direction is preserved independently of Futures execution direction', () => {
+  const sample = buildFourMarketPaperSample({
+    signal: signal('CRYPTO_FUTURES', 'LONG', { signalDirection: 'BUY' }),
+    profitGate: gate(), profitEvidence: evidence('CRYPTO_FUTURES'), execution: execution('CRYPTO_FUTURES'),
+    order: { type: 'MARKET', quantity: 1, direction: 'LONG' }, bar, evaluatedAtMs: NOW,
+  });
+  assert.equal(sample.status, 'OPEN');
+  assert.equal(sample.identity.signalDirection, 'BUY');
+  assert.equal(sample.identity.executionDirection, 'LONG');
+  assert.equal(sample.fill.direction, 'LONG');
+  assert.equal(sample.orderSubmitted, false);
+  assert.equal(sample.privateTradingApiAllowed, false);
+});
+
 for (const [market, direction] of [
   ["KR_STOCK", "BUY"],
   ["US_STOCK", "BUY"],

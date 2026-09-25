@@ -1,10 +1,11 @@
 import { expect, test } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
-const mainSourceUrl = new URL('../src/main.tsx', import.meta.url);
+const entrySourceUrl = new URL('../src/main.tsx', import.meta.url);
+const runtimeSourceUrl = new URL('../src/app-runtime.tsx', import.meta.url);
 
 test('application bootstrap does not suppress global console errors', async () => {
-  const source = await readFile(mainSourceUrl, 'utf8');
+  const source = `${await readFile(entrySourceUrl, 'utf8')}\n${await readFile(runtimeSourceUrl, 'utf8')}`;
 
   expect(source).not.toContain('console.error =');
   expect(source).not.toContain('configureRecoverableSearchDiagnostics');

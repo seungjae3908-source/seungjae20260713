@@ -679,6 +679,129 @@ function genuineObservationFromProvider(input, overrides = {}) {
   };
 }
 
+function memberAutomationCandidate() {
+  const market = "CRYPTO_SPOT";
+  const signal = {
+    signalId: "member-auto-spot-1",
+    market,
+    symbol: "BTC",
+    timestampMs: NOW - 1_000,
+    expiresAtMs: NOW + 60_000,
+    style: "SWING",
+    timeframe: "4h",
+    horizon: 6,
+    direction: "BUY",
+    signalDirection: "BUY",
+    regime: "TREND",
+    strategyIdentity: {
+      candidateId: `paper-candidate-v1:${"f".repeat(64)}`,
+      strategyId: "trend-breakout-v1",
+      strategyVersion: "1.0.0",
+      parameterHash: "params-v1",
+      researchCodeSha: "a".repeat(40),
+    },
+    learningSnapshot: { stopLoss: 95, target1: 110, target2: 120 },
+  };
+  return {
+    signal,
+    paperIdentity: {
+      signalId: signal.signalId,
+      candidateId: signal.strategyIdentity.candidateId,
+      strategyId: signal.strategyIdentity.strategyId,
+      strategyVersion: signal.strategyIdentity.strategyVersion,
+      parameterHash: signal.strategyIdentity.parameterHash,
+      market,
+      symbol: signal.symbol,
+      timeframe: signal.timeframe,
+      horizon: signal.horizon,
+      direction: signal.signalDirection,
+      regime: signal.regime,
+      costPolicyVersion: "cost-v1",
+      researchCodeSha: signal.strategyIdentity.researchCodeSha,
+      executionAuthority: "NONE",
+    },
+    profitEvidence: {
+      status: "READY",
+      expectedNetEdge: 0.02,
+      expectedNetReturn: 0.01,
+      riskRewardRatio: 2,
+      sampleSize: 80,
+      costPolicyId: "cost-v1",
+      executionAuthority: "NONE",
+    },
+    riskEvidence: { status: "APPROVED", evaluatedAtMs: NOW - 500, simulatedOnly: true },
+    execution: {
+      marketAdapterIdentity: { id: "upbit-paper-v1", version: "1" },
+      costPolicy: {
+        version: "cost-v1", commissionRate: 0.001, taxRate: 0, spreadRate: 0.001,
+        slippageRate: 0.001, latencyRate: 0.0002, liquidityImpactRate: 0.0003,
+        partialFillImpactRate: 0.0001, fundingRate: 0,
+      },
+      executionPolicy: {
+        version: "execution-v1", fillModel: "DEPTH_PARTICIPATION", sameBarPolicy: "STOP_FIRST",
+        allowPartialFill: true, maxParticipationRate: 0.1,
+      },
+      dataEvidence: {
+        provider: "upbit", publicOnly: true, dataQuality: "READY",
+        provenance: "canonical-public-market-v1", asOfMs: NOW - 500, maxAgeMs: 60_000,
+        quoteEvidence: { bid: 100, ask: 101, asOfMs: NOW - 500, maxAgeMs: 60_000 },
+        depthEvidence: { available: true, bidSize: 100, askSize: 100 },
+      },
+    },
+    order: { type: "MARKET", quantity: 1, direction: "BUY" },
+    quote: { bid: 100, ask: 101, last: 100.5, asOfMs: NOW - 500, maxAgeMs: 60_000 },
+    executionAuthority: "NONE",
+    simulatedOnly: true,
+    liveOrderAllowed: false,
+    privateTradingApiAllowed: false,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+  };
+}
+
+test("scheduler exposes a safe member automation handoff without changing canonical Paper mutation", async (t) => {
+  const candidate = memberAutomationCandidate();
+  const { calls, options } = await harness(t, {
+    publicEvidenceProvider: {
+      async collectPublicEvidence({ market }) {
+        return market === "CRYPTO_SPOT"
+          ? readyLane({ candidates: [candidate] })
+          : readyLane();
+      },
+    },
+  });
+  const result = await runScheduledPaperCycle(options);
+  assert.equal(result.status, "COMPLETED");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].candidates.length, 1);
+  assert.equal(result.memberAutoTradingHandoff.status, "READY");
+  assert.equal(result.memberAutoTradingHandoff.entryCount, 1);
+  assert.equal(result.memberAutoTradingHandoff.entries[0].identity.signalId, candidate.signal.signalId);
+  assert.equal(result.memberAutoTradingHandoff.safety.executionAuthority, "NONE");
+  assert.equal(result.memberAutoTradingHandoff.safety.liveTrading, false);
+});
+
+test("unsafe member handoff blocks only the consumer and does not block canonical Paper cycle", async (t) => {
+  const candidate = memberAutomationCandidate();
+  candidate.liveOrderAllowed = true;
+  const { calls, options } = await harness(t, {
+    publicEvidenceProvider: {
+      async collectPublicEvidence({ market }) {
+        return market === "CRYPTO_SPOT"
+          ? readyLane({ candidates: [candidate] })
+          : readyLane();
+      },
+    },
+  });
+  const result = await runScheduledPaperCycle(options);
+  assert.equal(result.status, "COMPLETED");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].candidates.length, 1);
+  assert.equal(result.memberAutoTradingHandoff.status, "BLOCKED_DATA");
+  assert.equal(result.memberAutoTradingHandoff.entryCount, 0);
+  assert.ok(result.memberAutoTradingHandoff.blockers.some((code) => code.includes("HANDOFF_EXECUTION_AUTHORITY_FORBIDDEN")));
+});
+
 test("scheduler passes immutable open Positions and account binding while missing observations stay missing", async (t) => {
   const canonicalState = stateWithPosition();
   const { calls, providerCalls, options } = await harness(t, { state: canonicalState });

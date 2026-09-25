@@ -5,14 +5,17 @@ import { closePosition, processCandle } from './paper-trading-candle.service';
 export type * from './paper-trading.types';
 export { PaperTradingError, createPaperTradingState } from './paper-trading-core.service';
 export { transitionPaperOrder } from './paper-trading-position.service';
+import { prepareManualPaperCanonicalEvidence, type ManualPaperCanonicalEvidence } from './manual-paper-canonical-contract.service';
 
 export function applyPaperTradingAction(
   inputState: PaperTradingState,
   action: PaperTradingAction,
   now = new Date(),
+  canonicalEvidence?: ManualPaperCanonicalEvidence,
 ): PaperTradingActionResult {
   validateState(inputState);
   validateEventId(action.eventId);
+  const canonical = prepareManualPaperCanonicalEvidence(inputState, action, canonicalEvidence, now.getTime());
   const state = cloneState(inputState);
   state.riskState = normalizedRiskState(state.riskState, now);
   if (state.processedEventIds.includes(action.eventId)) {
@@ -31,11 +34,11 @@ export function applyPaperTradingAction(
   }
 
   let result: PaperTradingActionResult;
-  if (action.type === 'place_order') result = evaluatePlacePaperOrder(state, action, now);
+  if (action.type === 'place_order') result = evaluatePlacePaperOrder(state, action, now, canonical ?? undefined);
   else if (action.type === 'cancel_order') result = cancelOrder(state, action, now);
   else if (action.type === 'process_candle') result = processCandle(state, action, now);
   else if (action.type === 'mark_price') result = markPrice(state, action, now);
-  else result = closePosition(state, action, now);
+  else result = closePosition(state, action, now, canonical ?? undefined);
 
   markEvent(result.state, action.eventId);
   result.state.updatedAt = now.toISOString();

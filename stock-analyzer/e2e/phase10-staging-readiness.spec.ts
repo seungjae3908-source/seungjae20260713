@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { test, expect, type Browser, type Page, type Request, type TestInfo } from '@playwright/test';
+import { test, expect, type Browser, type Page, type Request, type Response, type TestInfo } from '@playwright/test';
 import {
   provisionEphemeralStagingAccounts,
   type StagingAccountCredentials,
@@ -33,6 +33,7 @@ const required = (name: string): string => {
 const targetSha = stagingMode ? required('STAGING_TARGET_SHA').toLowerCase() : '';
 const artifactDir = path.resolve(process.env.STAGING_ARTIFACT_DIR ?? '../staging-artifacts');
 const diagnosticsPath = path.join(artifactDir, 'staging-browser-results.json');
+const profileBootstrapRoute = '**/api/auth/profile';
 const emptyAccounts: StagingAccountCredentials = {
   pending: { loginName: '', password: '' },
   associate: { loginName: '', password: '' },
@@ -61,6 +62,13 @@ type RouteTransitionObservation = {
   origin: string;
   candidates: Diagnostic[];
   pendingGetRequests: Set<Request>;
+};
+type CapabilityDenialObservation = {
+  route: string;
+  origin: string;
+  requests: Set<Request>;
+  httpCandidates: Diagnostic[];
+  consoleCandidates: Diagnostic[];
 };
 type ResearchReloadObservation = {
   origin: string;
@@ -127,6 +135,7 @@ type AuthenticatedViewportEvidence = {
 const activeLogoutObservations = new WeakMap<Page, LogoutObservation>();
 const confirmedLogoutAbortRequests = new WeakMap<Request, string>();
 const activeRouteTransitionObservations = new WeakMap<Page, RouteTransitionObservation>();
+const activeCapabilityDenialObservations = new WeakMap<Page, CapabilityDenialObservation>();
 const activeResearchReloadObservations = new WeakMap<Page, ResearchReloadObservation>();
 const activeAuthFaultObservations = new WeakMap<Page, AuthFaultObservation>();
 const pendingMutatingRequests = new WeakMap<Page, Set<Request>>();
@@ -140,6 +149,8 @@ const diagnostics: {
   expected_auth_faults: Diagnostic[];
   expected_scanner_aborts: Diagnostic[];
   expected_route_transition_aborts: Diagnostic[];
+  expected_capability_denials: Diagnostic[];
+  expected_capability_console_errors: Diagnostic[];
   expected_research_reload_aborts: Diagnostic[];
   api_diagnostics: SafeApiDiagnostic[];
   authenticated_search: {
@@ -160,6 +171,8 @@ const diagnostics: {
   expected_auth_faults: [],
   expected_scanner_aborts: [],
   expected_route_transition_aborts: [],
+  expected_capability_denials: [],
+  expected_capability_console_errors: [],
   expected_research_reload_aborts: [],
   api_diagnostics: [],
   authenticated_search: { samples: [], summary: null },
@@ -250,7 +263,11 @@ function isConfirmedLogoutAbort(request: Request) {
 function isProfileRequest(request: Request) {
   try {
     const parsed = new URL(request.url());
-    return request.method() === 'GET' && parsed.pathname === '/rest/v1/profiles';
+    return request.method() === 'GET'
+      && (
+        parsed.pathname === '/rest/v1/profiles'
+        || (parsed.pathname === '/api/auth/profile' && parsed.searchParams.size === 0)
+      );
   } catch {
     return false;
   }
@@ -335,6 +352,37 @@ function isSameOriginApiGet(request: Request) {
   }
 }
 
+function isCapabilityDenialApiGet(request: Request, observation: CapabilityDenialObservation) {
+  try {
+    const parsed = new URL(request.url());
+    return request.method() === 'GET'
+      && parsed.origin === observation.origin
+      && parsed.pathname.startsWith('/api/');
+  } catch {
+    return false;
+  }
+}
+
+function isExpectedCapabilityDenialResponse(
+  response: { status: () => number; url: () => string; request: () => Request },
+  observation: CapabilityDenialObservation,
+) {
+  try {
+    const parsed = new URL(response.url());
+    return (response.status() === 401 || response.status() === 403)
+      && observation.requests.has(response.request())
+      && response.request().method() === 'GET'
+      && parsed.origin === observation.origin
+      && parsed.pathname.startsWith('/api/');
+  } catch {
+    return false;
+  }
+}
+
+function isExpectedCapabilityDenialConsole(detail: string) {
+  return /Failed to load resource:.*status of (?:401|403)/i.test(detail);
+}
+
 function isMutatingBrowserRequest(request: Request) {
   try {
     const parsed = new URL(request.url());
@@ -372,6 +420,10 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
       logoutObservation.logoutScopedReads.add(request);
     }
     if (isMutatingBrowserRequest(request)) mutations.add(request);
+    const capabilityDenial = activeCapabilityDenialObservations.get(page);
+    if (capabilityDenial && isCapabilityDenialApiGet(request, capabilityDenial)) {
+      capabilityDenial.requests.add(request);
+    }
     const researchReloadObservation = activeResearchReloadObservations.get(page);
     if (
       researchReloadObservation?.reloadStarted
@@ -407,6 +459,11 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
     if (message.type() !== 'error') return;
     const detail = diagnosticText(message.text());
     const url = diagnosticUrl(page.url());
+    const capabilityDenial = activeCapabilityDenialObservations.get(page);
+    if (capabilityDenial && isExpectedCapabilityDenialConsole(detail)) {
+      capabilityDenial.consoleCandidates.push({ test: testName, url, detail });
+      return;
+    }
     diagnostics.console_errors.push({ test: testName, url, detail });
     recordUnhandled(testName, url, detail);
   });
@@ -422,6 +479,16 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
       researchReloadObservation.replacementResponseStatuses.push(response.status());
     }
     if (response.status() < 400) return;
+    const capabilityDenial = activeCapabilityDenialObservations.get(page);
+    if (capabilityDenial && isExpectedCapabilityDenialResponse(response, capabilityDenial)) {
+      capabilityDenial.httpCandidates.push({
+        test: testName,
+        url: diagnosticUrl(response.url()),
+        status: response.status(),
+        detail: diagnosticText(`${response.request().method()} ${response.status()} ${response.statusText()}`),
+      });
+      return;
+    }
     const authFault = activeAuthFaultObservations.get(page);
     if (authFault && authFault.kind !== 'timeout' && isExpectedAuthFault(response.request(), authFault)) {
       authFault.candidates.push({
@@ -692,7 +759,7 @@ async function reloadResearchCenterWithAdminSessionProof(page: Page, nav: Return
         intervals: [100, 200, 300, 500],
       },
     ).toBe(true);
-    await expect(page.getByTestId('research-overview-tab')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('research-general-view')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('research-error-state')).toHaveCount(0);
     await expect(page.getByTestId('capability-denied')).toHaveCount(0);
     await expect(loginSubmitButton(page)).toHaveCount(0);
@@ -733,7 +800,7 @@ async function reloadResearchCenterWithAdminSessionProof(page: Page, nav: Return
         origin: observation.origin,
         startedBeforeReload: observation.obsoleteResearchRequests.has(request),
       })),
-      currentPageDataPresent: await page.getByTestId('research-overview-tab').isVisible(),
+      currentPageDataPresent: await page.getByTestId('research-general-view').isVisible(),
       sessionRetained: protectedResponse.status() === 200,
       capabilityRetained: adminResponse.status() === 200,
       noUserVisibleError: await page.getByTestId('research-error-state').count() === 0
@@ -833,7 +900,17 @@ async function expectNavigationTransition(
   }
 }
 
-async function expectHealthyRoute(page: Page, route: string) {
+async function expectHealthyRoute(page: Page, route: string): Promise<void>;
+async function expectHealthyRoute<T>(
+  page: Page,
+  route: string,
+  observeAfterSettle: () => Promise<T>,
+): Promise<T>;
+async function expectHealthyRoute<T>(
+  page: Page,
+  route: string,
+  observeAfterSettle?: () => Promise<T>,
+): Promise<T | void> {
   await settle(page);
   const requestedRoute = routeIdentity(route, page.url());
   const expectedRoute = requestedRoute === '/stock/005930'
@@ -848,9 +925,12 @@ async function expectHealthyRoute(page: Page, route: string) {
   };
   activeRouteTransitionObservations.set(page, observation);
   let confirmed = false;
+  let observedValue: T | undefined;
   try {
+    const observedResponsePromise = observeAfterSettle?.();
     const response = await page.goto(route, { waitUntil: 'domcontentloaded' });
     if (response) expect(response.status(), `${route} returned HTTP ${response.status()}`).toBeLessThan(400);
+    if (observedResponsePromise) observedValue = await observedResponsePromise;
     if (expectedRoute !== requestedRoute) {
       await expect.poll(
         () => routeIdentity(page.url()),
@@ -866,6 +946,7 @@ async function expectHealthyRoute(page: Page, route: string) {
     await expect(page.locator('body')).not.toContainText(/페이지를 찾을 수 없습니다|page not found/i);
     await expect(page.locator('body')).not.toBeEmpty();
     confirmed = true;
+    return observedValue;
   } finally {
     await finishRouteTransition(page, observation, confirmed);
   }
@@ -873,14 +954,23 @@ async function expectHealthyRoute(page: Page, route: string) {
 
 async function expectDeniedRoute(page: Page, route: string) {
   await settle(page);
+  const origin = new URL(page.url()).origin;
   const observation: RouteTransitionObservation = {
     fromRoute: routeIdentity(page.url()),
     toRoute: routeIdentity(route, page.url()),
-    origin: new URL(page.url()).origin,
+    origin,
     candidates: [],
     pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
   };
+  const denialObservation: CapabilityDenialObservation = {
+    route: observation.toRoute,
+    origin,
+    requests: new Set<Request>(),
+    httpCandidates: [],
+    consoleCandidates: [],
+  };
   activeRouteTransitionObservations.set(page, observation);
+  activeCapabilityDenialObservations.set(page, denialObservation);
   let confirmed = false;
   try {
     await page.goto(route, { waitUntil: 'domcontentloaded' });
@@ -889,7 +979,27 @@ async function expectDeniedRoute(page: Page, route: string) {
     expect(routeIdentity(page.url())).toBe(observation.toRoute);
     confirmed = true;
   } finally {
+    // Keep the denial observer alive until every GET started by the denied route
+    // has settled. In the real staging browser, the 401/403 response and its
+    // resource console message can arrive after the capability-denied UI itself.
     await finishRouteTransition(page, observation, confirmed);
+    if (confirmed) {
+      await waitForPresentationFrame(page);
+    }
+    activeCapabilityDenialObservations.delete(page);
+    if (confirmed) {
+      diagnostics.expected_capability_denials.push(...denialObservation.httpCandidates);
+      diagnostics.expected_capability_console_errors.push(...denialObservation.consoleCandidates);
+    } else {
+      diagnostics.unexpected_http_errors.push(...denialObservation.httpCandidates.map((item) => ({
+        ...item,
+        detail: `unconfirmed capability denial: ${item.detail}`,
+      })));
+      diagnostics.console_errors.push(...denialObservation.consoleCandidates.map((item) => ({
+        ...item,
+        detail: `unconfirmed capability denial console error: ${item.detail}`,
+      })));
+    }
   }
 }
 
@@ -1220,7 +1330,7 @@ async function runAuthenticatedAiChartCertification(
       await expectHealthyRoute(page, '/');
       const nav = page.locator('nav');
       await nav.getByRole('button', { name: '기술', exact: true }).click();
-      const aiChartItem = page.getByRole('menuitem', { name: 'AI 차트', exact: true });
+      const aiChartItem = page.getByRole('menuitem', { name: 'AI차트', exact: true });
       await expect(aiChartItem).toBeVisible();
       let warmRouteMs = 0;
       let warmUsableChartMs = 0;
@@ -1283,8 +1393,12 @@ async function auditAuthenticatedViewport(
   };
   await page.setViewportSize({ width, height });
   const scannerOrigin = new URL(page.url()).origin;
-  const scannerResponsePromise = route === '/scanner'
-    ? page.waitForResponse((response) => {
+  let scannerResponse: Response | null = null;
+  if (route === '/scanner') {
+    scannerResponse = await expectHealthyRoute(
+      page,
+      route,
+      () => page.waitForResponse((response) => {
         try {
           const url = new URL(response.url());
           return response.request().method() === 'GET'
@@ -1293,11 +1407,12 @@ async function auditAuthenticatedViewport(
         } catch {
           return false;
         }
-      }, { timeout: 15_000 })
-    : null;
-  await expectHealthyRoute(page, route);
-  if (scannerResponsePromise) {
-    const scannerResponse = await scannerResponsePromise;
+      }, { timeout: 15_000 }),
+    );
+  } else {
+    await expectHealthyRoute(page, route);
+  }
+  if (scannerResponse) {
     expect(
       scannerResponse.status(),
       `scanner viewport API returned HTTP ${scannerResponse.status()}`,
@@ -1423,6 +1538,46 @@ test('logout selector remains deterministic with concurrent command-bar and rout
   });
   const routeLogout = await expectVisibleLogoutButton(page);
   await expect(routeLogout).toHaveAttribute('data-owner', 'route');
+});
+
+test('capability denial diagnostics admit only same-origin API GET 401/403 and matching resource console errors', () => {
+  const observation: CapabilityDenialObservation = {
+    route: '/coins/futures',
+    origin: 'https://staging.example.test',
+    requests: new Set<Request>(),
+    httpCandidates: [],
+    consoleCandidates: [],
+  };
+  const request = (url: string, method = 'GET') => ({
+    url: () => url,
+    method: () => method,
+  }) as unknown as Request;
+  const response = (status: number, req: Request) => ({
+    status: () => status,
+    url: () => req.url(),
+    request: () => req,
+  });
+  const snapshot = request('https://staging.example.test/api/crypto/futures/BTCUSDT/snapshot');
+  const privateRead = request('https://staging.example.test/api/private');
+  observation.requests.add(snapshot);
+  observation.requests.add(privateRead);
+  expect(isExpectedCapabilityDenialResponse(response(403, snapshot), observation)).toBe(true);
+  expect(isExpectedCapabilityDenialResponse(response(401, privateRead), observation)).toBe(true);
+  expect(isExpectedCapabilityDenialResponse(response(404, privateRead), observation)).toBe(false);
+  const notApi = request('https://staging.example.test/not-api');
+  observation.requests.add(notApi);
+  expect(isExpectedCapabilityDenialResponse(response(403, notApi), observation)).toBe(false);
+  const crossOrigin = request('https://other.example.test/api/private');
+  observation.requests.add(crossOrigin);
+  expect(isExpectedCapabilityDenialResponse(response(403, crossOrigin), observation)).toBe(false);
+  const post = request('https://staging.example.test/api/private', 'POST');
+  observation.requests.add(post);
+  expect(isExpectedCapabilityDenialResponse(response(403, post), observation)).toBe(false);
+  const unobserved = request('https://staging.example.test/api/unobserved');
+  expect(isExpectedCapabilityDenialResponse(response(403, unobserved), observation)).toBe(false);
+  expect(isExpectedCapabilityDenialConsole('Failed to load resource: the server responded with a status of 403 ()')).toBe(true);
+  expect(isExpectedCapabilityDenialConsole('Failed to load resource: the server responded with a status of 401 ()')).toBe(true);
+  expect(isExpectedCapabilityDenialConsole('TypeError: failed to fetch')).toBe(false);
 });
 
 test('logout abort proof keeps session-scoped account reads exact and query-free', () => {
@@ -1560,7 +1715,7 @@ test.describe('real staging release readiness', () => {
     activeAuthFaultObservations.set(page, observation);
     let requestCount = 0;
     let confirmed = false;
-    await page.route('**/rest/v1/profiles*', async (route) => {
+    await page.route(profileBootstrapRoute, async (route) => {
       const request = route.request();
       if (!isProfileRequest(request)) {
         await route.continue();
@@ -1584,7 +1739,7 @@ test.describe('real staging release readiness', () => {
       expect(observation.candidates, 'semantic bootstrap rejection must not create a network-error exemption').toHaveLength(0);
       confirmed = true;
     } finally {
-      await page.unroute('**/rest/v1/profiles*');
+      await page.unroute(profileBootstrapRoute);
       await finishAuthFault(page, observation, confirmed);
     }
   });
@@ -1602,7 +1757,7 @@ test.describe('real staging release readiness', () => {
     let requestCount = 0;
     let confirmed = false;
     let timeoutRouteSettled = Promise.resolve();
-    await page.route('**/rest/v1/profiles*', async (route) => {
+    await page.route(profileBootstrapRoute, async (route) => {
       const request = route.request();
       if (!isProfileRequest(request)) {
         await route.continue();
@@ -1635,7 +1790,7 @@ test.describe('real staging release readiness', () => {
       confirmed = true;
     } finally {
       await timeoutRouteSettled;
-      await page.unroute('**/rest/v1/profiles*');
+      await page.unroute(profileBootstrapRoute);
       await finishAuthFault(page, observation, confirmed);
     }
   });
@@ -1652,7 +1807,7 @@ test.describe('real staging release readiness', () => {
     activeAuthFaultObservations.set(page, observation);
     let requestCount = 0;
     let confirmed = false;
-    await page.route('**/rest/v1/profiles*', async (route) => {
+    await page.route(profileBootstrapRoute, async (route) => {
       const request = route.request();
       if (!isProfileRequest(request)) {
         await route.continue();
@@ -1685,7 +1840,7 @@ test.describe('real staging release readiness', () => {
       await expectVisibleLogoutButton(page);
       confirmed = true;
     } finally {
-      await page.unroute('**/rest/v1/profiles*');
+      await page.unroute(profileBootstrapRoute);
       await finishAuthFault(page, observation, confirmed);
     }
   });
@@ -1752,16 +1907,18 @@ test.describe('real staging release readiness', () => {
     expect(response.status()).toBe(403);
   });
 
-  test('associate: basic stock, spot, and scanner access allowed; futures, AI-risk, portfolio, and APIs denied', async ({ page }) => {
+  test('associate: basic stock, spot, scanner, paper/auto trading, and portfolio allowed; futures, AI-risk, and privileged APIs denied', async ({ page }) => {
     await login(page, accounts.associate.loginName, accounts.associate.password);
     await expectMembership(page, /준회원/);
     await expectHealthyRoute(page, '/');
     await expectHealthyRoute(page, '/stock-info?asset=stock&market=KR&ticker=005930');
     await expectHealthyRoute(page, '/stock-info?asset=coin&coinMarket=spot&symbol=BTC');
+    await expectHealthyRoute(page, '/paper-trading');
+    await expectHealthyRoute(page, '/auto-trading');
+    await expectHealthyRoute(page, '/portfolio');
 
     await expectDeniedRoute(page, '/stock-info?asset=coin&coinMarket=futures&symbol=BTCUSDT');
     await expectScannerAfterFutures(page);
-    await expectDeniedRoute(page, '/portfolio');
 
     const response = await requestWithBrowserSession(
       page,
@@ -1891,7 +2048,7 @@ test.describe('real staging release readiness', () => {
     }).toBe(true);
     await selectVisibleUsAaplForAnalysis(page);
 
-    await openMenuRoute('technical', 'AI 차트', '/ai-chart');
+    await openMenuRoute('technical', 'AI차트', '/ai-chart');
     await waitForUsableAiChart(page, Date.now());
 
     await openMenuRoute('settings', '계정', '/account');
@@ -1999,12 +2156,12 @@ test.describe('real staging release readiness', () => {
     await settle(page);
     await nav.getByRole('button', { name: '기술', exact: true }).click();
     await expect(page.getByRole('menuitem', { name: '승인형 주문', exact: true })).toHaveCount(0);
-    for (const label of ['AI 신호검색기', 'AI 차트', '백테스트', '모의매매']) {
+    for (const label of ['검색기', 'AI차트', '과거검증', '모의매매']) {
       const target = technicalMenu.find((menuItem) => menuItem.label === label);
       if (!target) throw new Error(`missing technical navigation item: ${label}`);
       const item = page.getByRole('menuitem', { name: label, exact: true });
       await expectNavigationTransition(page, target.href, async () => {
-        if (label === 'AI 신호검색기') {
+        if (label === '검색기') {
           await expectHealthyScannerRoute(page, {
             open: async () => {
               await item.click();

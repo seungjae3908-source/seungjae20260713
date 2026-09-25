@@ -1,0 +1,469 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { manualPaperEvidenceSha256 } from './manual-paper-canonical-contract.service';
+import { createPaperTradingState } from './paper-trading-engine.service';
+import { PaperTradingError } from './paper-trading-core.service';
+import {
+  createManualPaperCanonicalRuntimeEvidenceSource,
+  MANUAL_PAPER_CANONICAL_RUNTIME_BRIDGE_SAFETY,
+} from './manual-paper-canonical-runtime-evidence-source.service';
+
+const NOW = Date.parse('2026-09-24T07:00:00.000Z');
+const SHA = 'a'.repeat(40);
+const CANDIDATE_ID = `paper-candidate-v1:${'b'.repeat(64)}`;
+const ACCOUNT = 'member-account-id';
+
+function component(valuePercent: number, name: string, quality = 'OBSERVED') {
+  return {
+    valuePercent,
+    source: `public:${name}`,
+    quality,
+    observedAtMs: NOW - 1_000,
+  };
+}
+
+function naturalPosition() {
+  const components = {
+    commission: component(0.10, 'commission'),
+    tax: component(0, 'tax', 'NOT_APPLICABLE'),
+    spread: component(0.02, 'spread'),
+    slippage: component(0.03, 'slippage', 'ESTIMATED'),
+    funding: component(0.01, 'funding'),
+    latency: component(0.01, 'latency', 'ESTIMATED'),
+    liquidityImpact: component(0.02, 'liquidity-impact', 'ESTIMATED'),
+    partialFillImpact: component(0.03, 'partial-fill-impact', 'ESTIMATED'),
+  };
+  const costPolicy = {
+    version: 'cost-v1',
+    commissionRate: 0.001,
+    taxRate: 0,
+    spreadRate: 0.0002,
+    slippageRate: 0.0003,
+    fundingRate: 0.0001,
+    latencyRate: 0.0001,
+    liquidityImpactRate: 0.0002,
+    partialFillImpactRate: 0.0003,
+  };
+  const candidate = {
+    candidateId: CANDIDATE_ID,
+    execution: {
+      dataEvidence: { maxAgeMs: 30_000 },
+      costPolicy,
+    },
+  };
+  return {
+    positionId: 'natural-position-1',
+    paperSampleId: 'paper-sample-1',
+    candidateId: CANDIDATE_ID,
+    strategyId: 'strategy-v1',
+    strategyVersion: 'v1',
+    strategyFamily: 'TREND',
+    parameterHash: 'parameter-hash',
+    parameterDigest: 'parameter-hash',
+    researchCodeSha: SHA,
+    accountMode: 'PAPER',
+    market: 'CRYPTO_FUTURES',
+    symbol: 'BTCUSDT',
+    direction: 'LONG',
+    costPolicyVersion: 'cost-v1',
+    entryTimestampMs: NOW,
+    accountingEvidence: { leverage: 2 },
+    sample: {
+      identity: {
+        executionDirection: 'LONG',
+        signalDirection: 'LONG',
+        timeframe: '15m',
+      },
+    },
+    entryCandidate: candidate,
+    entryCostProvenance: {
+      policyId: 'cost-v1',
+      providerProvenance: 'bitget-public-owner',
+      components,
+    },
+  };
+}
+
+function validation(identity: any) {
+  const receipt = {
+    identity,
+    receiptId: 'forward-validation-v1:test',
+    receiptVersion: 'manual-paper-forward-validation-receipt-v1',
+    source: 'FORWARD_RECOMMENDATION_OBSERVER',
+    provenance: 'PROSPECTIVE_PUBLIC_FORWARD',
+    status: 'VALIDATED',
+    observedAtMs: NOW - 500,
+    maximumAgeMs: 60_000,
+    synthetic: false,
+    replay: false,
+    backfill: false,
+    historical: false,
+    testOnly: false,
+    datasetDigest: 'c'.repeat(64),
+    resultArtifactDigest: 'd'.repeat(64),
+  };
+  return {
+    receipt,
+    verification: {
+      ownerId: 'forward-observer-validation-receipt-owner-v1',
+      source: receipt.source,
+      provenance: receipt.provenance,
+      verifiedAtMs: NOW,
+      readbackVerified: true as const,
+      validationPassed: true as const,
+      receiptSha256: 'e'.repeat(64),
+    },
+  };
+}
+
+function request(action: any, state = createPaperTradingState(10_000, new Date(NOW))) {
+  return {
+    authenticatedAccountId: ACCOUNT,
+    candidateId: CANDIDATE_ID,
+    action,
+    state,
+    nowMs: NOW,
+  };
+}
+
+function closeFixture({
+  tamperPacket = false,
+  omitSettlement = false,
+  tamperSettlementIdentity = false,
+} = {}) {
+  const ownerState = createPaperTradingState(10_000, new Date(NOW)) as any;
+  ownerState.positions = [{
+    id: 'manual-position',
+    canonicalPaper: {
+      identity: { candidateId: CANDIDATE_ID },
+      naturalPositionId: 'natural-position-1',
+    },
+  }];
+
+  const position = naturalPosition() as any;
+  const trigger = {
+    exitTriggerId: '1'.repeat(64),
+    triggeredAtMs: NOW,
+    positionId: position.positionId,
+    paperSampleId: position.paperSampleId,
+  };
+  position.lifecycle = {
+    sampleEligibility: { provenanceClass: 'NATURAL_FORWARD' },
+    pendingExit: trigger,
+  };
+  const sourceObservation = { observationId: 'natural-exit-observation', maxAgeMs: 60_000 };
+  const authoritativeEvidence = { schemaVersion: 'authoritative-natural-paper-trigger-settlement-evidence-v1' };
+  const exitExecutionId = '2'.repeat(64);
+  const bindingEvidenceDigest = '3'.repeat(64);
+  const payload = {
+    schemaVersion: 'canonical-natural-settlement-owner-evidence-v1',
+    positionId: position.positionId,
+    paperSampleId: position.paperSampleId,
+    candidateId: position.candidateId,
+    researchCodeSha: position.researchCodeSha,
+    exitTriggerId: trigger.exitTriggerId,
+    exitExecutionId,
+    evaluatedAtMs: NOW,
+    bindingEvidenceDigest,
+    position,
+    sourceObservation,
+    authoritativeEvidence,
+    trigger,
+  };
+  const packet = {
+    ...payload,
+    evidenceDigest: manualPaperEvidenceSha256(payload),
+    unknownIsZero: false,
+    unavailableCostConvertedToZero: false,
+    naturalSampleCredit: 0,
+    executionAuthority: 'NONE',
+    liveOrderAllowed: false,
+    privateTradingApiAllowed: false,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+  };
+  if (tamperPacket) packet.positionId = 'tampered-position';
+
+  const settlementIdentity: any = {
+    candidateId: CANDIDATE_ID,
+    entryId: position.paperSampleId,
+    positionId: position.positionId,
+    exitTriggerId: trigger.exitTriggerId,
+    exitExecutionId,
+    provider: 'bitget-public-owner',
+    market: position.market,
+    symbol: position.symbol,
+    timeframe: position.sample.identity.timeframe,
+    side: position.direction,
+    strategyFamily: position.strategyFamily,
+    strategyVersion: position.strategyVersion,
+    parameterDigest: position.parameterDigest,
+    accountMode: position.accountMode,
+    costPolicyVersion: position.costPolicyVersion,
+    costEvidenceDigest: bindingEvidenceDigest,
+    exitEvidenceProvenanceDigest: '5'.repeat(64),
+    settledAtMs: NOW,
+    netPnl: 0,
+    netReturnPercent: 0,
+  };
+  if (tamperSettlementIdentity) settlementIdentity.entryId = 'paper-sample-tampered';
+  const settlementId = manualPaperEvidenceSha256(settlementIdentity);
+  const settlement = {
+    settlementId,
+    settlementIdentity,
+    paperSampleId: position.paperSampleId,
+    entryId: position.paperSampleId,
+    positionId: position.positionId,
+    candidateId: CANDIDATE_ID,
+    researchCodeSha: SHA,
+    exitTriggerId: trigger.exitTriggerId,
+    exitExecutionId,
+    canonicalOwnerEvidence: packet,
+    canonicalOwnerEvidenceBindingDigest: manualPaperEvidenceSha256({
+      settlementId,
+      ownerEvidenceDigest: packet.evidenceDigest,
+      exitTriggerId: trigger.exitTriggerId,
+      exitExecutionId,
+    }),
+  };
+  const recurringState = {
+    identity: { researchCodeSha: SHA },
+    positions: [],
+    settlements: omitSettlement ? [] : [settlement],
+  };
+  return { ownerState, recurringState, position, trigger, sourceObservation, bindingEvidenceDigest, exitExecutionId };
+}
+
+test('runtime bridge remains inert by default and preserves the legacy canonical route error', async () => {
+  let reads = 0;
+  const source = createManualPaperCanonicalRuntimeEvidenceSource({
+    env: { DEPLOY_SHA: SHA },
+    dependencies: {
+      async readPaperState() { reads += 1; return createPaperTradingState(10_000, new Date(NOW)); },
+      async readRecurringState() { reads += 1; return { identity: { researchCodeSha: SHA }, positions: [naturalPosition()] }; },
+      async issueValidationReceipt(identity) { reads += 1; return validation(identity); },
+    },
+  });
+
+  await assert.rejects(
+    () => source(request({ type: 'mark_price', eventId: 'noop', symbol: 'BTCUSDT', price: 100, at: new Date(NOW).toISOString() })),
+    (error: unknown) => {
+      assert.ok(error instanceof PaperTradingError);
+      assert.equal(error.code, 'SERVER_OWNED_CANONICAL_PAPER_EVIDENCE_REQUIRED');
+      assert.equal(error.statusCode, 400);
+      return true;
+    },
+  );
+  assert.equal(reads, 0);
+  assert.equal(MANUAL_PAPER_CANONICAL_RUNTIME_BRIDGE_SAFETY.enabledByDefault, false);
+});
+
+test('enabled runtime bridge binds preserved eight-component entry cost evidence to the exact natural position', async () => {
+  const state = createPaperTradingState(10_000, new Date(NOW));
+  const position = naturalPosition();
+  let issuedIdentity: any = null;
+  const source = createManualPaperCanonicalRuntimeEvidenceSource({
+    env: {
+      DEPLOY_SHA: SHA,
+      PAPER_CANONICAL_OWNER_BRIDGE_ENABLED: 'true',
+    },
+    dependencies: {
+      async readPaperState() { return structuredClone(state); },
+      async readRecurringState() { return { identity: { researchCodeSha: SHA }, positions: [position] }; },
+      async issueValidationReceipt(identity) {
+        issuedIdentity = structuredClone(identity);
+        return validation(identity);
+      },
+    },
+  });
+
+  const evidence = await source(request({
+    type: 'mark_price',
+    eventId: 'mark-1',
+    symbol: 'BTCUSDT',
+    price: 100,
+    at: new Date(NOW).toISOString(),
+  }, state));
+  assert.ok(evidence);
+  const packet = evidence as any;
+  assert.equal(packet.position.positionId, position.positionId);
+  assert.equal(packet.candidate.candidateId, CANDIDATE_ID);
+  assert.equal(packet.entryCostEvidence.status, 'PRESENT');
+  assert.equal(packet.entryCostEvidence.fullCostReady, true);
+  assert.equal(packet.entryCostEvidence.unknownIsZero, false);
+  assert.equal(packet.entryCostEvidence.unavailableCostConvertedToZero, false);
+  assert.equal(Object.keys(packet.entryCostEvidence.components).length, 8);
+  for (const component of Object.values(packet.entryCostEvidence.components) as any[]) {
+    assert.equal(component.positionId, position.positionId);
+    assert.equal(component.paperSampleId, position.paperSampleId);
+    assert.equal(component.policyIdentity.version, 'cost-v1');
+    assert.deepEqual(component.identity, issuedIdentity);
+  }
+  assert.equal(issuedIdentity.researchCodeSha, SHA);
+  assert.equal(issuedIdentity.side, 'LONG');
+  assert.equal(issuedIdentity.leverage, 2);
+});
+
+test('enabled runtime bridge never converts a missing entry cost component to zero', async () => {
+  const state = createPaperTradingState(10_000, new Date(NOW));
+  const position = naturalPosition() as any;
+  delete position.entryCostProvenance.components.partialFillImpact;
+  const source = createManualPaperCanonicalRuntimeEvidenceSource({
+    env: {
+      DEPLOY_SHA: SHA,
+      PAPER_CANONICAL_OWNER_BRIDGE_ENABLED: 'true',
+    },
+    dependencies: {
+      async readPaperState() { return structuredClone(state); },
+      async readRecurringState() { return { identity: { researchCodeSha: SHA }, positions: [position] }; },
+      async issueValidationReceipt(identity) { return validation(identity); },
+    },
+  });
+
+  await assert.rejects(
+    () => source(request({ type: 'mark_price', eventId: 'mark-2', symbol: 'BTCUSDT', price: 100 }, state)),
+    (error: unknown) => {
+      assert.ok(error instanceof PaperTradingError);
+      assert.equal(error.code, 'CANONICAL_PAPER_ENTRY_PARTIALFILLIMPACT_PROVENANCE_INCOMPLETE');
+      return true;
+    },
+  );
+});
+
+test('close consumes only the digest-bound durable Natural settlement owner packet', async () => {
+  const f = closeFixture();
+  let reboundCalls = 0;
+  const reboundObservation = {
+    ...f.sourceObservation,
+    triggerBoundSettlementEvidence: {
+      exitExecutionId: f.exitExecutionId,
+      evidenceDigest: f.bindingEvidenceDigest,
+    },
+  };
+  const source = createManualPaperCanonicalRuntimeEvidenceSource({
+    env: {
+      DEPLOY_SHA: SHA,
+      PAPER_CANONICAL_OWNER_BRIDGE_ENABLED: 'true',
+    },
+    dependencies: {
+      async readPaperState() { return structuredClone(f.ownerState); },
+      async readRecurringState() { return structuredClone(f.recurringState); },
+      rebindSettlementEvidence() {
+        reboundCalls += 1;
+        return {
+          status: 'PRESENT',
+          fullCostReady: true,
+          evidenceDigest: f.bindingEvidenceDigest,
+          exitTriggerId: f.trigger.exitTriggerId,
+          exitExecutionId: f.exitExecutionId,
+          observation: reboundObservation,
+        };
+      },
+      async issueValidationReceipt(identity) { return validation(identity); },
+    },
+  });
+
+  const evidence = await source(request({
+    type: 'close_position',
+    eventId: 'close-1',
+    positionId: 'manual-position',
+  }, f.ownerState)) as any;
+  assert.equal(reboundCalls, 1);
+  assert.equal(evidence.position.positionId, f.position.positionId);
+  assert.deepEqual(evidence.settlement.trigger, f.trigger);
+  assert.deepEqual(evidence.settlement.observation, reboundObservation);
+  assert.equal(evidence.entryCostEvidence.fullCostReady, true);
+  assert.equal(MANUAL_PAPER_CANONICAL_RUNTIME_BRIDGE_SAFETY.settlementReadbackConnected, true);
+});
+
+test('close remains fail-closed when durable Natural settlement packet is absent', async () => {
+  const f = closeFixture({ omitSettlement: true });
+  const source = createManualPaperCanonicalRuntimeEvidenceSource({
+    env: {
+      DEPLOY_SHA: SHA,
+      PAPER_CANONICAL_OWNER_BRIDGE_ENABLED: 'true',
+    },
+    dependencies: {
+      async readPaperState() { return structuredClone(f.ownerState); },
+      async readRecurringState() { return structuredClone(f.recurringState); },
+      rebindSettlementEvidence() { throw new Error('must not rebind'); },
+      async issueValidationReceipt(identity) { return validation(identity); },
+    },
+  });
+
+  await assert.rejects(
+    () => source(request({
+      type: 'close_position',
+      eventId: 'close-missing',
+      positionId: 'manual-position',
+    }, f.ownerState)),
+    (error: unknown) => {
+      assert.ok(error instanceof PaperTradingError);
+      assert.equal(error.code, 'CANONICAL_PAPER_RUNTIME_SETTLEMENT_EVIDENCE_NOT_AVAILABLE');
+      assert.equal(error.statusCode, 503);
+      return true;
+    },
+  );
+});
+
+test('close rejects a tampered durable Natural settlement owner packet before rebind', async () => {
+  const f = closeFixture({ tamperPacket: true });
+  let reboundCalls = 0;
+  const source = createManualPaperCanonicalRuntimeEvidenceSource({
+    env: {
+      DEPLOY_SHA: SHA,
+      PAPER_CANONICAL_OWNER_BRIDGE_ENABLED: 'true',
+    },
+    dependencies: {
+      async readPaperState() { return structuredClone(f.ownerState); },
+      async readRecurringState() { return structuredClone(f.recurringState); },
+      rebindSettlementEvidence() { reboundCalls += 1; return null; },
+      async issueValidationReceipt(identity) { return validation(identity); },
+    },
+  });
+
+  await assert.rejects(
+    () => source(request({
+      type: 'close_position',
+      eventId: 'close-tamper',
+      positionId: 'manual-position',
+    }, f.ownerState)),
+    (error: unknown) => {
+      assert.ok(error instanceof PaperTradingError);
+      assert.equal(error.code, 'CANONICAL_PAPER_RUNTIME_SETTLEMENT_OWNER_PACKET_INVALID');
+      return true;
+    },
+  );
+  assert.equal(reboundCalls, 0);
+});
+
+test('close rejects a self-consistent durable settlement identity rebound to another sample', async () => {
+  const f = closeFixture({ tamperSettlementIdentity: true });
+  let reboundCalls = 0;
+  const source = createManualPaperCanonicalRuntimeEvidenceSource({
+    env: {
+      DEPLOY_SHA: SHA,
+      PAPER_CANONICAL_OWNER_BRIDGE_ENABLED: 'true',
+    },
+    dependencies: {
+      async readPaperState() { return structuredClone(f.ownerState); },
+      async readRecurringState() { return structuredClone(f.recurringState); },
+      rebindSettlementEvidence() { reboundCalls += 1; return null; },
+      async issueValidationReceipt(identity) { return validation(identity); },
+    },
+  });
+
+  await assert.rejects(
+    () => source(request({
+      type: 'close_position',
+      eventId: 'close-settlement-identity-drift',
+      positionId: 'manual-position',
+    }, f.ownerState)),
+    (error: unknown) => {
+      assert.ok(error instanceof PaperTradingError);
+      assert.equal(error.code, 'CANONICAL_PAPER_RUNTIME_SETTLEMENT_IDENTITY_MISMATCH');
+      return true;
+    },
+  );
+  assert.equal(reboundCalls, 0);
+});
