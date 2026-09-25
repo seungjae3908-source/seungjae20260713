@@ -129,7 +129,7 @@ export type UnifiedTradeJournal = {
   liveAccountHistory?:{
     requestedRange:UnifiedTradeRange; effectiveDays:number; rangeCapped:boolean; persisted:false; privateProviderRequests:number; truncated:boolean;
     providers:Array<{provider:'kiwoom'|'upbit'|'bitget';configured:boolean|null;enabled:boolean;status:'READY'|'PARTIAL'|'NOT_CONFIGURED'|'DISABLED'|'UNAVAILABLE';records:number;privateProviderRequests:number;truncated:boolean;errorCode:string|null}>;
-    realizedEvidence:Array<{provider:'kiwoom';market:'KR';evidenceType:'DAILY_CASH_REALIZED';date:string;symbol:string;buyAveragePrice:number|null;buyQuantity:number|null;sellAveragePrice:number;sellQuantity:number;feesAndTax:number|null;providerReportedPnl:number|null;providerReportedReturnPercent:number|null;canonicalAnalyticsPromoted:false}>;
+    realizedEvidence?:Array<{provider:'kiwoom';market:'KR';evidenceType:'DAILY_CASH_REALIZED';date:string;symbol:string;buyAveragePrice:number|null;buyQuantity:number|null;sellAveragePrice:number;sellQuantity:number;feesAndTax:number|null;providerReportedPnl:number|null;providerReportedReturnPercent:number|null;canonicalAnalyticsPromoted:false}>;
     safety:{orderRequests:0;cancelRequests:0;amendRequests:0;transferRequests:0;withdrawalRequests:0;credentialsReturned:false;liveTradingEnabled:false;autoTradingEnabled:false};
   };
   canonicalResearchBinding?:UnifiedCanonicalResearchBindingSummary;
