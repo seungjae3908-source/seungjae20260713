@@ -64,6 +64,8 @@ test('every live provider requires the global gates plus its own explicit provid
   const previous = {
     ORDER_EXECUTION_ENABLED: process.env.ORDER_EXECUTION_ENABLED,
     LIVE_TRADING_ACTIVATION_APPROVED: process.env.LIVE_TRADING_ACTIVATION_APPROVED,
+    REAL_ORDER_ENABLED: process.env.REAL_ORDER_ENABLED,
+    PRIVATE_TRADING_API_ALLOWED: process.env.PRIVATE_TRADING_API_ALLOWED,
     BITGET_LIVE_ORDER_ENABLED: process.env.BITGET_LIVE_ORDER_ENABLED,
     UPBIT_LIVE_ORDER_ENABLED: process.env.UPBIT_LIVE_ORDER_ENABLED,
     KIWOOM_LIVE_ORDER_ENABLED: process.env.KIWOOM_LIVE_ORDER_ENABLED,
@@ -72,6 +74,8 @@ test('every live provider requires the global gates plus its own explicit provid
   try {
     process.env.ORDER_EXECUTION_ENABLED = 'true';
     process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+    process.env.REAL_ORDER_ENABLED = 'true';
+    process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
     process.env.BITGET_LIVE_ORDER_ENABLED = 'true';
     process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
     process.env.KIWOOM_LIVE_ORDER_ENABLED = 'true';
@@ -82,6 +86,20 @@ test('every live provider requires the global gates plus its own explicit provid
     assert.equal(liveExecutionEnabled('kiwoom'), true);
     assert.equal(liveExecutionEnabled('toss'), true);
 
+    process.env.REAL_ORDER_ENABLED = 'false';
+    assert.equal(liveExecutionEnabled('bitget'), false);
+    assert.equal(liveExecutionEnabled('upbit'), false);
+    assert.equal(liveExecutionEnabled('kiwoom'), false);
+    assert.equal(liveExecutionEnabled('toss'), false);
+
+    process.env.REAL_ORDER_ENABLED = 'true';
+    process.env.PRIVATE_TRADING_API_ALLOWED = 'false';
+    assert.equal(liveExecutionEnabled('bitget'), false);
+    assert.equal(liveExecutionEnabled('upbit'), false);
+    assert.equal(liveExecutionEnabled('kiwoom'), false);
+    assert.equal(liveExecutionEnabled('toss'), false);
+
+    process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
     process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'false';
     assert.equal(liveExecutionEnabled('bitget'), false);
     assert.equal(liveExecutionEnabled('upbit'), false);
