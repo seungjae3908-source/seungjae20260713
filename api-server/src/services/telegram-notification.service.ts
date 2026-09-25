@@ -37,6 +37,7 @@ export type TelegramPhotoAttachment = {
 
 export interface TelegramAlertInput {
   type: TelegramAlertType;
+  title?: string;
   symbol?: string;
   market?: string;
   provider?: string;
@@ -146,19 +147,21 @@ function titleForType(type: TelegramAlertType): string {
 }
 
 export function renderTelegramAlert(input: TelegramAlertInput): string {
-  const lines = [`<b>${escapeTelegramHtml(titleForType(input.type))}</b>`];
-  if (input.symbol) lines.push(`종목: <code>${escapeTelegramHtml(input.symbol)}</code>`);
-  if (input.market) lines.push(`시장: ${escapeTelegramHtml(input.market)}`);
-  if (input.provider) lines.push(`Provider: ${escapeTelegramHtml(input.provider)}`);
+  const customTitle = typeof input.title === 'string' && input.title.trim()
+    ? input.title.trim().slice(0, 180)
+    : null;
+  const lines = [`<b>${escapeTelegramHtml(customTitle || titleForType(input.type))}</b>`];
+
+  if (!customTitle && input.symbol) lines.push(`<code>${escapeTelegramHtml(input.symbol)}</code>${input.market ? ` · ${escapeTelegramHtml(input.market)}` : ''}`);
+  if (input.provider) lines.push(`${escapeTelegramHtml(input.provider)}`);
 
   const currentPrice = formatNumber(input.currentPrice);
-  if (currentPrice) lines.push(`현재가: ${escapeTelegramHtml(currentPrice)}`);
+  if (currentPrice) lines.push(`현재가 ${escapeTelegramHtml(currentPrice)}`);
   const targetPrice = formatNumber(input.targetPrice);
-  if (targetPrice) lines.push(`기준가: ${escapeTelegramHtml(targetPrice)}`);
+  if (targetPrice) lines.push(`기준가 ${escapeTelegramHtml(targetPrice)}`);
 
-  if (input.details) lines.push(`내용: ${escapeTelegramHtml(input.details)}`);
-  if (input.timestamp) lines.push(`시각: ${escapeTelegramHtml(input.timestamp)}`);
-  lines.push('실주문 실행 기능은 포함되지 않습니다.');
+  if (input.details) lines.push(escapeTelegramHtml(input.details));
+  if (input.timestamp && !customTitle) lines.push(escapeTelegramHtml(input.timestamp));
   return lines.join('\n').slice(0, TELEGRAM_TEXT_LIMIT);
 }
 
