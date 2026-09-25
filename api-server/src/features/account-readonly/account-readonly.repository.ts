@@ -15,6 +15,7 @@ export type ReadonlyCredentialRecord = {
 export type AccountReadonlyCredentialRepository = {
   get(userId: string, provider: ReadonlyCredentialProvider): Promise<ReadonlyCredentialRecord | null>;
   save(record: ReadonlyCredentialRecord): Promise<void>;
+  remove(userId: string, provider: ReadonlyCredentialProvider): Promise<void>;
 };
 
 function storageUnavailable() {
@@ -65,6 +66,10 @@ export class InMemoryAccountReadonlyCredentialRepository implements AccountReado
   async save(record: ReadonlyCredentialRecord) {
     this.rows.set(this.key(record.userId, record.provider), { ...record });
   }
+
+  async remove(userId: string, provider: ReadonlyCredentialProvider) {
+    this.rows.delete(this.key(userId, provider));
+  }
 }
 
 export function createAccountReadonlyCredentialRepository(
@@ -100,6 +105,14 @@ export function createAccountReadonlyCredentialRepository(
         last_error_code: record.lastErrorCode,
         updated_at: record.updatedAt,
       }, { onConflict: 'user_id,provider' });
+      if (error) throw storageUnavailable();
+    },
+    async remove(userId, provider) {
+      assertOwner(userId);
+      const { error } = await client.from('account_readonly_credentials')
+        .delete()
+        .eq('user_id', userId)
+        .eq('provider', provider);
       if (error) throw storageUnavailable();
     },
   };
