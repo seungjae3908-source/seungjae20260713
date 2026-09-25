@@ -228,3 +228,23 @@ test('account read-only router exposes provider-capability-gated credential DELE
   assert.match(routeSource, /\.remove\(userId, provider\)/);
   assert.equal(/router\.(?:post|put|patch|delete)\('\/(?:order|orders|trade|withdraw|transfer)/i.test(routeSource), false);
 });
+
+test('Production account-readonly storage tooling includes the Kiwoom provider migration without applying it in tests', () => {
+  const root = path.basename(process.cwd()) === 'api-server'
+    ? path.resolve(process.cwd(), '..')
+    : process.cwd();
+  const workflow = readFileSync(path.join(root, '.github/workflows/production-account-readonly-storage-apply.yml'), 'utf8');
+  const apply = readFileSync(path.join(root, 'ops/apply-production-account-readonly-storage.mjs'), 'utf8');
+  for (const migration of [
+    'api-server/supabase/migrations/2026081701_account_readonly_credentials.sql',
+    'api-server/supabase/migrations/2026081801_account_readonly_service_role.sql',
+    'api-server/supabase/migrations/2026092501_account_readonly_kiwoom_provider.sql',
+  ]) {
+    assert.equal(apply.includes(migration), true);
+    assert.equal(workflow.includes(migration), true);
+  }
+  assert.equal(apply.includes("provider not in ('toss', 'kiwoom', 'upbit', 'bitget')"), true);
+  assert.equal(apply.includes("'migrations_applied', 3"), true);
+  assert.equal(apply.includes('artifact?.migrations_applied !== 3'), true);
+  assert.equal(workflow.includes('value?.migrations_applied === 3'), true);
+});
