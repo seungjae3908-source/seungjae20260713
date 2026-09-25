@@ -251,10 +251,6 @@ function minutes(ms: number): number {
   return Math.max(0, Math.round(ms / 60_000));
 }
 
-function statusLabel(value: boolean): string {
-  return value ? '정상' : '준비 필요';
-}
-
 async function api<T>(
   path: string,
   init?: RequestInit,
