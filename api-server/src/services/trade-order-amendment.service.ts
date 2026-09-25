@@ -428,19 +428,23 @@ export class TradeOrderAmendmentService {
       const credentials = rawCredentials as unknown as TossCredentials;
       const tokenPayload = await sendJson(BASE_URLS.toss, prepareTossToken(credentials));
       const authenticated = { ...credentials, accessToken: tossToken(tokenPayload) };
-      assertToss(await sendJson(BASE_URLS.toss, prepareTossAmend(authenticated, {
+      const operation = assertToss(await sendJson(BASE_URLS.toss, prepareTossAmend(authenticated, {
         orderId: order.exchangeOrderId,
         market: plan.market.toUpperCase() as 'KR' | 'US',
         quantity: plan.market.toUpperCase() === 'US' ? null : input.quantity,
         price: input.price,
       })));
+      const nextOrderId = text(operation.orderId ?? operation.order_id);
+      if (!nextOrderId || nextOrderId === order.exchangeOrderId) {
+        throw new Error('TOSS_AMEND_NEW_ORDER_ID_REQUIRED');
+      }
       const row = tossActiveOrder(
-        await sendJson(BASE_URLS.toss, prepareTossOrderQuery(authenticated, order.exchangeOrderId)),
-        order.exchangeOrderId,
+        await sendJson(BASE_URLS.toss, prepareTossOrderQuery(authenticated, nextOrderId)),
+        nextOrderId,
       );
       return {
         nextClientOrderId: order.clientOrderId,
-        nextExchangeOrderId: text(row.orderId ?? row.order_id) ?? order.exchangeOrderId,
+        nextExchangeOrderId: text(row.orderId ?? row.order_id) ?? nextOrderId,
         activeConfirmed: true,
       };
     }
