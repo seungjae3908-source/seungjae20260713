@@ -42,3 +42,11 @@ test('nonregular FIFO registry cannot hang a pinned read', {timeout:2000}, async
   const session=await createResearchWorkspaceStore(dir).openSnapshot();
   await assert.rejects(()=>session.loadRegistry(),/UNSAFE_STORE_FILE/);
 });
+
+test('HTTP CI uses the installed pinned compiler rather than unavailable tsx',async()=>{
+  const source=await read('.github/workflows/research-workspace-integration-v1.yml');
+  assert.ok(source.includes("import { build } from 'esbuild'"));
+  assert.ok(source.includes("entryPoints: ['src/routes/market-summary-availability.smoke.test.ts']"));
+  assert.ok(source.includes("process.exitCode = result.status ?? 1"));
+  assert.ok(!source.includes('exec tsx'));
+});
