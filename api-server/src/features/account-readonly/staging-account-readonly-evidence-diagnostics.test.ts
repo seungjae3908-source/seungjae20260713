@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { AccountReadonlyError } from './account-readonly.errors';
 import { collectProviderEvidence, observeProviderRequest, type ProviderRequestObservation } from './staging-account-readonly-evidence-diagnostics';
 
 test('provider failure is retained while every independent reader executes once', async () => {
@@ -35,4 +36,26 @@ test('transport errors remain failures and never retain error messages or arbitr
     assert.equal(observations[0]?.transport, expected);
     assert.equal(JSON.stringify(observations).includes('secret'), false);
   }
+});
+
+
+test('sanitized evidence preserves only fixed actionable account failure codes', async () => {
+  const results = await collectProviderEvidence(async (provider) => {
+    if (provider === 'toss') throw new AccountReadonlyError('TOSS_HTTP_404');
+    if (provider === 'upbit') throw new AccountReadonlyError('UPBIT_IP_NOT_ALLOWED');
+    throw new AccountReadonlyError('BITGET_PERMISSION_DENIED');
+  });
+  assert.deepEqual(results.map((row) => row.verdict === 'FAIL' ? row.errorCode : null), [
+    'TOSS_HTTP_404',
+    'UPBIT_IP_NOT_ALLOWED',
+    'BITGET_PERMISSION_DENIED',
+  ]);
+});
+
+test('untrusted provider error text and arbitrary provider codes collapse to a fixed generic evidence code', async () => {
+  const results = await collectProviderEvidence(async () => {
+    throw new AccountReadonlyError('SECRET_ACCOUNT_PROVIDER_CODE_12345');
+  });
+  assert.ok(results.every((row) => row.verdict === 'FAIL' && row.errorCode === 'PROVIDER_READ_OR_INVARIANT_FAILED'));
+  assert.equal(JSON.stringify(results).includes('SECRET_ACCOUNT_PROVIDER_CODE_12345'), false);
 });
