@@ -86,6 +86,8 @@ function normalizedOrder(order: TradingOrder): TradingOrder {
     recoveryLeaseUntil: order.recoveryLeaseUntil ?? null,
     protectionStatus: order.protectionStatus ?? 'NOT_REQUIRED',
     protectionErrorCode: order.protectionErrorCode ?? null,
+    amendments: copy(order.amendments ?? []),
+    lastAmendRequestId: order.lastAmendRequestId ?? null,
   };
 }
 
