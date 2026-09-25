@@ -335,15 +335,14 @@ export function prepareBitgetAmend(
     clientOid: input.clientOrderId,
     newClientOid: input.newClientOrderId,
   };
-  if (input.quantity != null) {
-    if (!Number.isFinite(input.quantity) || input.quantity <= 0) throw new Error('BITGET_AMEND_QUANTITY_INVALID');
-    body.newSize = String(input.quantity);
+  if (input.quantity == null || !Number.isFinite(input.quantity) || input.quantity <= 0) {
+    throw new Error('BITGET_AMEND_QUANTITY_REQUIRED');
   }
-  if (input.price != null) {
-    if (!Number.isFinite(input.price) || input.price <= 0) throw new Error('BITGET_AMEND_PRICE_INVALID');
-    body.newPrice = String(input.price);
+  if (input.price == null || !Number.isFinite(input.price) || input.price <= 0) {
+    throw new Error('BITGET_AMEND_PRICE_REQUIRED');
   }
-  if (body.newSize == null && body.newPrice == null) throw new Error('BITGET_AMEND_CHANGE_REQUIRED');
+  body.newSize = String(input.quantity);
+  body.newPrice = String(input.price);
   return bitgetRequest(credentials, 'POST', '/api/v2/mix/order/modify-order', body, '', timestamp);
 }
 
@@ -467,7 +466,7 @@ export function prepareUpbitAmend(
   input: {
     previousIdentifier: string;
     newIdentifier: string;
-    quantity: number;
+    quantity: number | 'remain_only';
     price: number;
   },
   nonce?: string,
@@ -476,7 +475,9 @@ export function prepareUpbitAmend(
     || input.previousIdentifier === input.newIdentifier) {
     throw new Error('UPBIT_AMEND_IDENTIFIER_INVALID');
   }
-  if (!Number.isFinite(input.quantity) || input.quantity <= 0) throw new Error('UPBIT_AMEND_QUANTITY_INVALID');
+  if (input.quantity !== 'remain_only' && (!Number.isFinite(input.quantity) || input.quantity <= 0)) {
+    throw new Error('UPBIT_AMEND_QUANTITY_INVALID');
+  }
   if (!Number.isFinite(input.price) || input.price <= 0) throw new Error('UPBIT_AMEND_PRICE_INVALID');
   return upbitRequest(credentials, 'POST', '/v1/orders/cancel_and_new', {
     prev_order_identifier: input.previousIdentifier,
@@ -667,6 +668,9 @@ export function prepareKiwoomOrder(credentials: KiwoomCredentials, plan: Trading
       }),
     };
   }
+  if (!Number.isSafeInteger(input.quantity) || Number(input.quantity) <= 0) {
+    throw new Error('KIWOOM_AMEND_QUANTITY_REQUIRED');
+  }
   return {
     method: 'POST',
     path: '/api/dostk/ordr',
@@ -686,12 +690,12 @@ export function prepareKiwoomOrder(credentials: KiwoomCredentials, plan: Trading
 export function prepareKiwoomAmend(
   credentials: KiwoomCredentials,
   plan: TradingPlanInput,
-  input: { orderNo: string; quantity: number; price: number },
+  input: { orderNo: string; quantity?: number | null; price: number },
 ): PreparedExchangeRequest {
   if (!input.orderNo.trim()) throw new Error('KIWOOM_ORDER_ID_REQUIRED');
-  if (!Number.isSafeInteger(input.quantity) || input.quantity <= 0) throw new Error('KIWOOM_AMEND_QUANTITY_INVALID');
   if (!Number.isFinite(input.price) || input.price <= 0) throw new Error('KIWOOM_AMEND_PRICE_INVALID');
   if (plan.market.toUpperCase() === 'US') {
+    if (input.quantity != null) throw new Error('KIWOOM_US_AMEND_QUANTITY_NOT_SUPPORTED');
     return {
       method: 'POST',
       path: '/api/us/ordr',
