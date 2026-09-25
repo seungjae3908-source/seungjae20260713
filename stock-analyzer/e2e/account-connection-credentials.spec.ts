@@ -89,6 +89,10 @@ test('regular user saves Upbit credentials only through canonical account-readon
       savedBody = route.request().postDataJSON() as Record<string, unknown>; configured = true;
       return fulfill(route, { ok: true, provider: 'upbit', configured: true, purpose: 'read_only', credentialsReturned: false, privateProviderRequests: 0, orderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0, liveTradingEnabled: false, autoTradingEnabled: false });
     }
+    if (path === '/api/accounts/read-only/credentials/upbit' && route.request().method() === 'DELETE') {
+      configured = false;
+      return fulfill(route, { ok: true, provider: 'upbit', configured: false, purpose: 'read_only', credentialsReturned: false, privateProviderRequests: 0, orderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0, liveTradingEnabled: false, autoTradingEnabled: false });
+    }
     if (path === '/api/user-integrations') return fulfill(route, { brokerConnections: [], telegram: { connected: false, status: 'DISCONNECTED', connectedAt: null }, preferences: {} });
     return fulfill(route, { ok: true, items: [], rows: [], results: [] });
   });
@@ -103,7 +107,11 @@ test('regular user saves Upbit credentials only through canonical account-readon
   await expect(upbit).not.toContainText('보유 자산 0개');
   await expect(upbit).not.toContainText('미연결');
   expect(savedBody).toEqual({ purpose: 'read_only', permissions: ['read'], credentials: { accessKey, secretKey } });
-  expect(await page.locator('body').innerText()).not.toContain(accessKey); expect(await page.locator('body').innerText()).not.toContain(secretKey); assertClean();
+  expect(await page.locator('body').innerText()).not.toContain(accessKey); expect(await page.locator('body').innerText()).not.toContain(secretKey);
+  await upbit.getByRole('button', { name: '조회 연결 해제' }).click();
+  await expect(page.getByRole('status')).toContainText('연결 해제 완료 · Upbit 조회 키를 삭제했습니다.');
+  await expect(upbit).toContainText('미연결');
+  assertClean();
 });
 
 test('Toss credential form is read-only, Account Seq is optional, and mobile dialogs stay in viewport', async ({ page }) => {
