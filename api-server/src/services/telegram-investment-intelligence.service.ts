@@ -348,7 +348,7 @@ function appButtons(alert: ScannerAlertCandidate, context: TelegramSignalDeliver
   chart.searchParams.set('ticker', alert.symbol);
   chart.searchParams.set('timeframe', context.timeframe || '1D');
 
-  const order = new URL('/scanner', url);
+  const order = new URL('/telegram-order', url);
   order.searchParams.set('market', market);
   order.searchParams.set('symbol', alert.symbol);
   order.searchParams.set('timeframe', context.timeframe || '1D');
