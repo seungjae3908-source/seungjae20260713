@@ -110,6 +110,16 @@ function nonNegative(value: unknown, code: string) {
   return number;
 }
 
+function nonNegativeOrNull(value: unknown, code: string) {
+  if (value == null || value === '') return null;
+  return nonNegative(value, code);
+}
+
+function requiredText(value: unknown, code: string) {
+  if (typeof value !== 'string' || !value.trim()) throw new AccountReadonlyError(code);
+  return value.trim();
+}
+
 function absoluteNumberOrNull(value: unknown) {
   const number = nullableNumber(value);
   return number === null ? null : Math.abs(number);
@@ -119,7 +129,7 @@ function side(value: unknown) {
   const normalized = String(value ?? '').trim();
   if (normalized === '1') return 'SELL';
   if (normalized === '2') return 'BUY';
-  return null;
+  throw new AccountReadonlyError('KIWOOM_OPEN_ORDER_SIDE_INVALID');
 }
 
 export class KiwoomReadonlyProvider {
@@ -181,7 +191,7 @@ export class KiwoomReadonlyProvider {
 
   private async page(
     token: string,
-    apiId: 'kt00018' | 'ka10075',
+    apiId: 'kt00001' | 'kt00018' | 'ka10075',
     body: Readonly<Record<string, string>>,
     continuation: { contYn: string; nextKey: string } | null,
     signal?: AbortSignal,
@@ -249,7 +259,8 @@ export class KiwoomReadonlyProvider {
 
     // Official read-only domestic account endpoints. No /api/dostk/ordr request
     // can be produced by this provider.
-    const [holdings, open] = await Promise.all([
+    const [deposit, holdings, open] = await Promise.all([
+      this.page(token, 'kt00001', { qry_tp: '3' }, null, signal),
       this.collect(token, 'kt00018', { qry_tp: '1', dmst_stex_tp: 'KRX' }, 'acnt_evlt_remn_indv_tot', signal),
       this.collect(token, 'ka10075', { all_stk_tp: '0', trde_tp: '0', stex_tp: '0' }, 'oso', signal),
     ]);
@@ -277,23 +288,47 @@ export class KiwoomReadonlyProvider {
       throw new AccountReadonlyError('KIWOOM_POSITION_IDENTITY_DUPLICATE');
     }
 
-    const openOrders: CanonicalReadonlyOrder[] = open.rows.map((row) => ({
-      id: typeof row.ord_no === 'string' && row.ord_no.trim() ? row.ord_no.trim() : null,
-      market: 'KR',
-      symbol: normalizeSymbol(row.stk_cd),
-      side: side(row.trde_tp),
-      price: absoluteNumberOrNull(row.ord_pric),
-      quantity: nullableNumber(row.ord_qty),
-      remainingQuantity: nullableNumber(row.oso_qty),
-      status: typeof row.ord_stt === 'string' && row.ord_stt.trim() ? row.ord_stt.trim() : null,
-    }));
+    const openOrders: CanonicalReadonlyOrder[] = open.rows.map((row) => {
+      const quantity = nonNegative(row.ord_qty, 'KIWOOM_OPEN_ORDER_QUANTITY_INVALID');
+      const remainingQuantity = nonNegative(row.oso_qty, 'KIWOOM_OPEN_ORDER_REMAINING_INVALID');
+      if (remainingQuantity > quantity) throw new AccountReadonlyError('KIWOOM_OPEN_ORDER_REMAINING_EXCEEDS_QUANTITY');
+      return {
+        id: requiredText(row.ord_no, 'KIWOOM_OPEN_ORDER_IDENTITY_INVALID'),
+        market: 'KR',
+        symbol: normalizeSymbol(row.stk_cd),
+        side: side(row.trde_tp),
+        price: absoluteNumberOrNull(row.ord_pric),
+        quantity,
+        remainingQuantity,
+        status: requiredText(row.ord_stt, 'KIWOOM_OPEN_ORDER_STATUS_INVALID'),
+      };
+    });
+    if (new Set(openOrders.map((row) => row.id)).size !== openOrders.length) {
+      throw new AccountReadonlyError('KIWOOM_OPEN_ORDER_IDENTITY_DUPLICATE');
+    }
+
+    const depositCode = normalizeReturnCode(deposit.body.return_code);
+    const hasDeposit = depositCode !== KIWOOM_NO_DATA_CODE;
+    const cashTotal = hasDeposit ? nullableNumber(deposit.body.entr) : null;
+    const withdrawalAvailable = hasDeposit
+      ? nonNegativeOrNull(deposit.body.pymn_alow_amt, 'KIWOOM_WITHDRAWAL_AVAILABLE_INVALID')
+      : null;
+    const buyingPower = hasDeposit
+      ? nonNegativeOrNull(deposit.body.ord_alow_amt, 'KIWOOM_BUYING_POWER_INVALID')
+      : null;
 
     const checkedAt = now.toISOString();
     return {
       ...emptySnapshot('kiwoom', 'CONNECTED', checkedAt),
       connected: true,
-      accounts: [{ market: 'KR', accountRef: null, currency: 'KRW', buyingPower: null }],
-      balances: null,
+      accounts: [{ market: 'KR', accountRef: null, currency: 'KRW', buyingPower }],
+      balances: hasDeposit ? [{
+        currency: 'KRW',
+        available: withdrawalAvailable,
+        locked: null,
+        total: cashTotal,
+        estimatedKrwValue: cashTotal,
+      }] : [],
       positions,
       openOrders,
       lastGoodAt: checkedAt,
