@@ -217,32 +217,14 @@ export function validateRolloverResponse(body, { beforeState, targetSha, publish
     || transport.liveTrading !== false || transport.financialMutationAllowed !== false
     || transport.reason !== null || !digest(transport.stateDigestSha256)) fail('ROLLOVER_TRANSPORT_INVALID');
   if (sha256(canonicalJson(afterState)) !== transport.stateDigestSha256) fail('ROLLOVER_TRANSPORT_DIGEST_MISMATCH');
-  return { afterState, transportDigest: transport.stateDigestSha256, targetSha, publisherDigest,
-    dailyWindowRolled: expected.dailyWindowRolled, weeklyWindowRolled: expected.weeklyWindowRolled };
-}) {
-  if (!body || body.ok !== true || body.mode !== 'paper-only' || body.orderSubmitted !== false || body.exchangeRequestSent !== false) {
-    fail('REPUBLISH_SAFETY_ENVELOPE_INVALID');
-  }
-  const result = body.result;
-  if (!result || result.ok !== true || result.mode !== 'paper-only' || result.orderSubmitted !== false || result.exchangeRequestSent !== false) {
-    fail('REPUBLISH_RESULT_INVALID');
-  }
-  if (result.duplicateEvent !== false || result.order !== null || result.position !== null || !Array.isArray(result.fills) || result.fills.length !== 0) {
-    fail('REPUBLISH_MUST_BE_METADATA_ONLY');
-  }
-  const afterState = result.state;
-  if (canonicalJson(invariantStateView(afterState)) !== canonicalJson(invariantStateView(beforeState))) {
-    fail('REPUBLISH_ECONOMIC_STATE_CHANGED');
-  }
-  const expectedState = createAccountingOnlyRolloverState(beforeState, action, nowIso);
-  if (canonicalJson(afterState) !== canonicalJson(expectedState)) fail('REPUBLISH_METADATA_REFRESH_MISMATCH');
-  const transport = body.paperStateTransport;
-  if (!transport || transport.status !== 'PUBLISHED' || transport.publisherAccountBound !== true
-    || transport.executionAuthority !== 'NONE' || transport.privateApiAllowed !== false
-    || transport.liveTrading !== false || transport.financialMutationAllowed !== false
-    || transport.reason !== null || !digest(transport.stateDigestSha256)) fail('REPUBLISH_TRANSPORT_INVALID');
-  if (sha256(canonicalJson(afterState)) !== transport.stateDigestSha256) fail('REPUBLISH_TRANSPORT_DIGEST_MISMATCH');
-  return { afterState, transportDigest: transport.stateDigestSha256, targetSha, publisherDigest };
+  return {
+    afterState,
+    transportDigest: transport.stateDigestSha256,
+    targetSha,
+    publisherDigest,
+    dailyWindowRolled: expected.dailyWindowRolled,
+    weeklyWindowRolled: expected.weeklyWindowRolled,
+  };
 }
 
 function managedCronCount() {
