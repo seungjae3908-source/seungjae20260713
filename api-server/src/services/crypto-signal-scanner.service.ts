@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { runBoundedWorkPool } from '../lib/bounded-work-pool';
 import { applyScannerSignalLifecycle } from './scanner-signal-lifecycle.service';
+import { applyThemeSwingOverlay, inferCryptoThemeTags } from './scanner-theme-swing.service';
 import { applyScannerQuantHardening } from './scanner-quant-hardening.service';
 import {
   scannerContextTimeframe,
@@ -939,11 +940,13 @@ export function createCryptoSignalScannerService(
               ? outcome.reason.message.slice(0, 180)
               : '유효한 캔들·시세를 만들지 못했습니다.',
         }));
-      const cards = work.outcomes
+      const evaluatedCards = work.outcomes
         .filter((outcome): outcome is typeof outcome & { value: ScannerSignalCard } => (
           outcome.status === 'fulfilled' && outcome.value != null
         ))
-        .map((outcome) => outcome.value)
+        .map((outcome) => outcome.value);
+      const themeSwingEvaluated = applyThemeSwingOverlay(evaluatedCards, inferCryptoThemeTags);
+      const cards = themeSwingEvaluated
         .filter((card) => request.minimumScore == null || card.score >= request.minimumScore)
         .filter((card) => request.maximumRiskScore == null
           || (card.riskScore != null && card.riskScore <= request.maximumRiskScore))
