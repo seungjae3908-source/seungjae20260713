@@ -69,6 +69,7 @@ test('read-only account routes require the same provider capabilities as the UI 
   );
   assert.match(routeSource, /normalized === 'bitget'.*'canAccessFutures'/s);
   assert.match(routeSource, /normalized === 'upbit'.*'canAccessSpot'/s);
+  assert.match(routeSource, /normalized === 'toss' \|\| normalized === 'kiwoom'.*'canAccessBasicInfo'/s);
 });
 
 test('read-only credential parser accepts only Toss, Kiwoom, Upbit and Bitget credential shapes', () => {
@@ -166,4 +167,25 @@ test('background workers can be disabled explicitly without changing trading aut
   assert.equal(areBackgroundWorkersEnabled({ BACKGROUND_WORKERS_ENABLED: 'false' }), false);
   assert.equal(areBackgroundWorkersEnabled({ BACKGROUND_WORKERS_ENABLED: 'true' }), true);
   assert.equal(areBackgroundWorkersEnabled(privateReadRuntime()), false);
+});
+
+
+test('Kiwoom vault migration expands provider check without applying credentials or weakening browser revokes', () => {
+  const apiServerRoot = path.basename(process.cwd()) === 'api-server'
+    ? process.cwd()
+    : path.join(process.cwd(), 'api-server');
+  const migration = readFileSync(
+    path.join(apiServerRoot, 'supabase/migrations/2026092501_account_readonly_kiwoom_provider.sql'),
+    'utf8',
+  );
+  const rollback = readFileSync(
+    path.join(apiServerRoot, 'supabase/migrations/2026092501_account_readonly_kiwoom_provider.down.sql'),
+    'utf8',
+  );
+  assert.match(migration, /provider in \('toss', 'kiwoom', 'upbit', 'bitget'\)/);
+  assert.equal(/insert\s+into\s+public\.account_readonly_credentials/i.test(migration), false);
+  assert.equal(/grant\s+/i.test(migration), false);
+  assert.match(rollback, /where provider = 'kiwoom'/);
+  assert.match(rollback, /MUST_BE_REMOVED_EXPLICITLY_BEFORE_ROLLBACK/);
+  assert.equal(/delete\s+from\s+public\.account_readonly_credentials/i.test(rollback), false);
 });
