@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import { buildUpbitJwt } from '../../../services/trade-exchange-adapters.service';
 import { maskAccountRef, nullableNumber } from '../account-readonly.contract';
+import { AccountReadonlyError } from '../account-readonly.errors';
 import { bindAccountReadonlyDisconnectAbort } from '../account-readonly.route';
 import { AccountReadonlyService } from '../account-readonly.service';
 import { TossReadonlyProvider, TossTokenManager, type ReadonlyTransport } from '../providers/toss-readonly.provider';
@@ -18,11 +19,17 @@ test('read-only account numbers reject coercion and preserve actual zero', () =>
   assert.equal(nullableNumber('1,000.50'), 1000.5);
 });
 
-test('Bitget read-only provider error and malformed data never become a connected empty account', async () => {
+test('Bitget read-only provider errors and malformed data fail closed without becoming a connected empty account', async () => {
   const credentials = { apiKey: 'fixture', secretKey: 'fixture', passphrase: 'fixture' };
-  for (const response of [{}, { code: '40009', data: [] }, { code: '00000' }, { code: '00000', data: [null] }]) {
+  for (const response of [{}, { code: '00000' }, { code: '00000', data: [null] }]) {
     await assert.rejects(readBitgetSnapshot(credentials, async () => response), /RESPONSE_INVALID/);
   }
+  await assert.rejects(
+    readBitgetSnapshot(credentials, async () => ({ code: '40009', msg: 'provider-secret-text', data: [] })),
+    (error: unknown) => error instanceof AccountReadonlyError
+      && error.code === 'BITGET_AUTH_FAILED'
+      && !error.message.includes('provider-secret-text'),
+  );
   await assert.rejects(readBitgetSnapshot(credentials, async (request) => ({ code: '00000', data: request.path.includes('position') ? [] : [{ accountEquity: '1' }] })), /IDENTITY_INVALID/);
 });
 
