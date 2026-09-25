@@ -161,13 +161,22 @@ test('Toss provider rejects every mutation path and masks accountSeq', async () 
 });
 
 test('Upbit wrapper reuses JWT signer and preserves locked and missing values', async () => {
-  const seen: any[] = []; const result = await readUpbitSnapshot({ accessKey: 'UPBIT_ACCESS_TEST_ONLY', secretKey: 'UPBIT_SECRET_TEST_ONLY' }, async (request) => { seen.push(request); return [{ currency: 'BTC', balance: '1', locked: '0.25', avg_buy_price: '' }]; });
+  const seen: any[] = []; const result = await readUpbitSnapshot({ accessKey: 'UPBIT_ACCESS_TEST_ONLY', secretKey: 'UPBIT_SECRET_TEST_ONLY' }, async (request) => {
+    seen.push(request);
+    if (request.path === '/v1/orders/open') return [];
+    return [{ currency: 'BTC', balance: '1', locked: '0.25', avg_buy_price: '' }];
+  });
   assert.match(seen[0].headers.Authorization, /^Bearer /); assert.equal(result.balances?.[0]?.total, 1.25); assert.equal(result.positions?.[0]?.averageEntryPrice, null); assert.equal(result.orderRequests, 0);
   assert.notEqual(buildUpbitJwt({ accessKey: 'a', secretKey: 'b' }, ''), buildUpbitJwt({ accessKey: 'a', secretKey: 'b' }, ''));
 });
 
-test('Bitget wrapper uses only signed GET account and position requests and redacts passphrase', async () => {
-  const seen: any[] = []; const result = await readBitgetSnapshot({ apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' }, async (request) => { seen.push(request); return request.path.includes('position') ? { code: '00000', data: [{ symbol: 'BTCUSDT', total: '1', openPriceAvg: '60000', markPrice: '61000', leverage: '3', liquidationPrice: '' }] } : { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '80' }] }; });
+test('Bitget wrapper uses only signed GET account, position, and pending-order requests and redacts passphrase', async () => {
+  const seen: any[] = []; const result = await readBitgetSnapshot({ apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' }, async (request) => {
+    seen.push(request);
+    if (request.path.includes('position')) return { code: '00000', data: [{ symbol: 'BTCUSDT', total: '1', openPriceAvg: '60000', markPrice: '61000', leverage: '3', liquidationPrice: '' }] };
+    if (request.path.includes('orders-pending')) return { code: '00000', data: { entrustedList: [] } };
+    return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '80' }] };
+  });
   assert.ok(seen.every((r) => r.method === 'GET')); assert.equal(result.positions?.[0]?.liquidationPrice, null); assert.equal(JSON.stringify(result).includes('BITGET_PASSPHRASE_TEST_ONLY'), false); assert.equal(result.withdrawalRequests, 0);
 });
 
