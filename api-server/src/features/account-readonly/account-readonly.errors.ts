@@ -2,6 +2,20 @@ export class AccountReadonlyError extends Error {
   constructor(public readonly code: string, public readonly retryable = false, public readonly retryAfterMs: number | null = null) { super(code); }
 }
 
+const CREDENTIAL_ACCESS_FAILURES = new Set([
+  'AUTH_FAILED',
+  'UPBIT_AUTH_FAILED',
+  'UPBIT_IP_NOT_ALLOWED',
+  'UPBIT_PERMISSION_DENIED',
+  'BITGET_AUTH_FAILED',
+  'BITGET_IP_NOT_ALLOWED',
+  'BITGET_PERMISSION_DENIED',
+]);
+
+export function isAccountReadonlyCredentialAccessError(code: string) {
+  return CREDENTIAL_ACCESS_FAILURES.has(code);
+}
+
 export function classifyProviderError(value: unknown): AccountReadonlyError {
   if (value instanceof AccountReadonlyError) return value;
   const message = value instanceof Error ? value.message : String(value ?? '');
