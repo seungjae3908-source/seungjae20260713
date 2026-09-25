@@ -18,6 +18,10 @@ import {
   prepareKiwoomOrderable,
   prepareKiwoomToken,
   prepareKiwoomUnfilled,
+  prepareKiwoomUsHoldings,
+  prepareKiwoomUsOrderable,
+  prepareKiwoomUsOrderbook,
+  prepareKiwoomUsUnfilled,
   prepareTossAccounts,
   prepareTossBuyingPower,
   prepareTossCommissions,
@@ -46,6 +50,7 @@ import { assertNoOrphanExchangeOrders, type PendingExchangeOrderRef } from './tr
 import {
   buildBitgetExecutionSnapshot,
   buildKiwoomExecutionSnapshot,
+  buildKiwoomUsExecutionSnapshot,
   buildPaperExecutionSnapshot,
   buildUpbitExecutionSnapshot,
   prepareBitgetExecutionDepth,
@@ -281,7 +286,7 @@ function tossPendingRefs(payload: ExchangePayload): PendingExchangeOrderRef[] {
 
 function kiwoomLookupContainsOrder(payload: ExchangePayload, orderId: string) {
   const row = assertKiwoomSuccess(payload);
-  const candidates = [row.data, row.output, row.orders, row.ord_list, row.unfilled];
+  const candidates = [row.data, row.output, row.orders, row.ord_list, row.unfilled, row.oso, row.result_list];
   for (const candidate of candidates) {
     const rows = Array.isArray(candidate)
       ? candidate.filter(isRecord)
@@ -311,6 +316,16 @@ function upbitPendingRefs(rows: ExchangePayload[]): PendingExchangeOrderRef[] {
   return rows.map((row) => ({
     clientOrderId: text(row.identifier),
     exchangeOrderId: text(row.uuid),
+  }));
+}
+
+
+function kiwoomPendingRefs(payload: ExchangePayload): PendingExchangeOrderRef[] {
+  const candidates = [payload.oso, payload.result_list, payload.unfilled, payload.orders, payload.ord_list];
+  const rows = candidates.flatMap((candidate) => Array.isArray(candidate) ? candidate.filter(isRecord) : []);
+  return rows.map((row) => ({
+    clientOrderId: null,
+    exchangeOrderId: text(row.ord_no ?? row.order_no ?? row.orig_ord_no),
   }));
 }
 
@@ -675,38 +690,83 @@ export class TradeExecutionService {
     credentials: KiwoomCredentials,
     mock: boolean,
   ) {
-    if (!marketOpenInSeoul() && process.env.KIWOOM_ALLOW_OFF_HOURS !== 'true') throw new Error('KIWOOM_MARKET_CLOSED');
+    const isUs = plan.market.toUpperCase() === 'US';
+    if (!isUs && !marketOpenInSeoul() && process.env.KIWOOM_ALLOW_OFF_HOURS !== 'true') {
+      throw new Error('KIWOOM_MARKET_CLOSED');
+    }
+    if (isUs && mock) throw new Error('KIWOOM_US_MOCK_NOT_VERIFIED');
+
     const baseUrl = mock ? BASE_URLS.kiwoomMock : BASE_URLS.kiwoom;
     const tokenPayload = assertKiwoomSuccess(await sendExchangeRequest(
       baseUrl, prepareKiwoomToken(credentials), PREFLIGHT_TIMEOUT_MS));
     const token = String(tokenPayload.token ?? (isRecord(tokenPayload.data) ? tokenPayload.data.token : '') ?? '');
     if (!token) throw new Error('KIWOOM_TOKEN_MISSING');
     const authenticated = { ...credentials, accessToken: token };
-    const [orderable, unfilled, orderbook] = await Promise.all([
-      sendExchangeRequest(baseUrl, prepareKiwoomOrderable(authenticated), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
-      sendExchangeRequest(baseUrl, prepareKiwoomUnfilled(authenticated), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
-      sendExchangeRequest(baseUrl, prepareKiwoomExecutionOrderbook(token, plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
-    ]);
+    const receivedAt = new Date();
+
+    let snapshot;
+    let unfilled: ExchangePayload;
+    if (isUs) {
+      const [orderable, holdings, usUnfilled, orderbook] = await Promise.all([
+        sendExchangeRequest(baseUrl, prepareKiwoomUsOrderable(authenticated, plan), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
+        sendExchangeRequest(baseUrl, prepareKiwoomUsHoldings(authenticated, plan), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
+        sendExchangeRequest(baseUrl, prepareKiwoomUsUnfilled(authenticated, plan), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
+        sendExchangeRequest(baseUrl, prepareKiwoomUsOrderbook(authenticated, plan), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
+      ]);
+      unfilled = usUnfilled;
+      assertNoOrphanExchangeOrders('kiwoom', kiwoomPendingRefs(usUnfilled), await this.repository.listOrders(userId));
+      snapshot = buildKiwoomUsExecutionSnapshot({
+        plan,
+        orderable,
+        holdings,
+        unfilled: usUnfilled,
+        orderbook,
+        signal: this.signalSnapshot(userId, plan),
+        observedAt: receivedAt,
+      });
+    } else {
+      const [orderable, krUnfilled, orderbook] = await Promise.all([
+        sendExchangeRequest(baseUrl, prepareKiwoomOrderable(authenticated), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
+        sendExchangeRequest(baseUrl, prepareKiwoomUnfilled(authenticated), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
+        sendExchangeRequest(baseUrl, prepareKiwoomExecutionOrderbook(token, plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
+      ]);
+      unfilled = krUnfilled;
+      assertNoOrphanExchangeOrders('kiwoom', kiwoomPendingRefs(krUnfilled), await this.repository.listOrders(userId));
+      snapshot = buildKiwoomExecutionSnapshot({
+        plan,
+        orderable,
+        unfilled: krUnfilled,
+        orderbook,
+        signal: this.signalSnapshot(userId, plan),
+        observedAt: receivedAt,
+      });
+    }
+
     const risk = await this.riskService.evaluate({
       userId,
       expectedPlan: plan,
       order,
-      snapshot: buildKiwoomExecutionSnapshot({
-        plan, orderable, unfilled, orderbook,
-        signal: this.signalSnapshot(userId, plan),
-      }),
+      snapshot,
       serverLiveEnabled: mock || liveExecutionEnabled('kiwoom'),
     });
+
     if (!await this.beginSubmissionIntent(order, risk)) {
       return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };
     }
+
     const orderId = assertKiwoomOrderAccepted(await sendExchangeRequest(
       baseUrl, prepareKiwoomOrder(authenticated, risk.plan), ORDER_TIMEOUT_MS));
+
     let reconciliationRequired = false;
     try {
-      const lookup = await sendExchangeRequest(baseUrl, prepareKiwoomUnfilled(authenticated), PREFLIGHT_TIMEOUT_MS);
+      const lookup = isUs
+        ? await sendExchangeRequest(baseUrl, prepareKiwoomUsUnfilled(authenticated, plan), PREFLIGHT_TIMEOUT_MS)
+        : await sendExchangeRequest(baseUrl, prepareKiwoomUnfilled(authenticated), PREFLIGHT_TIMEOUT_MS);
       reconciliationRequired = !kiwoomLookupContainsOrder(lookup, orderId);
-    } catch { reconciliationRequired = true; }
+    } catch {
+      reconciliationRequired = true;
+    }
+
     return { orderId, reconciliationRequired, risk };
   }
 
