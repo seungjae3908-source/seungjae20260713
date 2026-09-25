@@ -1,4 +1,4 @@
-name: Research Workspace Integration V1
+name: Research Workspace Integration V2
 on:
   pull_request:
     branches: [main]
@@ -7,6 +7,17 @@ on:
       - packages/external-research/test/research-workspace-*.test.js
       - packages/external-research/scripts/research-workspace-review-v1.mjs
       - packages/external-research/docs/research-workspace-v1.md
+      - packages/external-research/src/research-workspace-*.d.ts
+      - packages/external-research/test/fixtures/research-workspace-v2/**
+      - packages/external-research/docs/research-workspace-phase2.md
+      - api-server/src/routes/research-workspace.ts
+      - api-server/src/routes/video-research-evidence.ts
+      - api-server/src/routes/video-research-source-evidence.ts
+      - stock-analyzer/src/components/research-workspace-panel.tsx
+      - stock-analyzer/src/components/research-video-panel.tsx
+      - stock-analyzer/src/components/research-video-source-panel.tsx
+      - stock-analyzer/src/lib/research-workspace-response.*
+      - stock-analyzer/e2e/research-workspace-v2.spec.ts
       - .github/workflows/research-workspace-integration-v1.yml
 permissions:
   contents: read
