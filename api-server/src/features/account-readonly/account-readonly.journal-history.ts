@@ -244,17 +244,19 @@ function buildKiwoomUsPayload(
   const symbol = usSymbol(row.stk_cd);
   const side = kiwoomUsSide(row.slby_tp_nm);
   const currency = requiredText(row.crnc_code)?.toUpperCase();
-  const quantity = positive(row.ord_qty);
+  const originalQuantity = positive(row.ord_qty);
   const filledQuantity = positive(row.cntr_qty);
   const remainingQuantity = nonNegative(row.ord_remnq);
+  const canceledQuantity = nonNegative(row.cncl_qty);
   const averageFillPrice = positive(row.cntr_uv);
   const orderedAt = kiwoomTimestamp(date, row.ord_time);
   const filledAt = kiwoomTimestamp(date, row.cntr_time);
   if (!brokerOrderId || !symbol || !side || currency !== 'USD'
-    || quantity == null || filledQuantity == null || remainingQuantity == null
-    || averageFillPrice == null || !orderedAt || !filledAt) return null;
-  const tolerance = Math.max(1e-10, quantity * 1e-8);
-  if (filledQuantity > quantity + tolerance || remainingQuantity > quantity + tolerance) return null;
+    || originalQuantity == null || filledQuantity == null || remainingQuantity == null
+    || canceledQuantity == null || averageFillPrice == null || !orderedAt || !filledAt) return null;
+  const tolerance = Math.max(1e-10, originalQuantity * 1e-8);
+  if (filledQuantity > originalQuantity + tolerance || remainingQuantity > tolerance) return null;
+  const quantity = filledQuantity;
 
   return {
     schemaVersion: 1,
@@ -275,12 +277,12 @@ function buildKiwoomUsPayload(
     observedAt: filledAt,
     quantity,
     filledQuantity,
-    remainingQuantity,
+    remainingQuantity: 0,
     averageFillPrice,
     fees: null,
     tax: null,
     currency: 'USD',
-    status: remainingQuantity <= tolerance ? 'FILLED' : 'PARTIALLY_FILLED',
+    status: 'FILLED',
     strategy: null,
     timeframe: null,
     stopLossPrice: null,
@@ -288,6 +290,8 @@ function buildKiwoomUsPayload(
     ruleViolation: false,
     warnings: [
       'KIWOOM_US_EXECUTION_FROM_OFFICIAL_DAILY_FILL_HISTORY',
+      'KIWOOM_US_EFFECTIVE_FILL_QUANTITY_USED_INSTEAD_OF_ORIGINAL_ORDER_QUANTITY',
+      ...(canceledQuantity > 0 ? ['KIWOOM_US_ORDER_HAD_CANCELED_REMAINDER'] : []),
       'KIWOOM_US_TRANSACTION_COST_EVIDENCE_NOT_AVAILABLE',
       'REAL_ACCOUNT_HISTORY_NOT_PERSISTED',
     ],
@@ -720,6 +724,7 @@ export function createAccountJournalHistoryReader(options: AccountJournalHistory
   const flags = {
     upbit: options.flags?.upbit ?? defaultFlags.upbit,
     bitget: options.flags?.bitget ?? defaultFlags.bitget,
+    kiwoom: options.flags?.kiwoom ?? defaultFlags.kiwoom,
   };
   const timeoutMs = normalizedTimeout(options.providerTimeoutMs);
   const maxUpbitOrders = Math.max(1, Math.min(200, Math.trunc(options.maxUpbitOrders ?? DEFAULT_MAX_UPBIT_ORDERS)));
