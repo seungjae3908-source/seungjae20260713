@@ -99,6 +99,93 @@ test('review dataset shows anonymization and excluded fields', async ({ page }) 
   await expect(page.getByRole('status')).toContainText('외부 전송은 없습니다');
 });
 
+test('default unified-ledger transport accepts reconciled non-zero read-only provider request counts', async ({ page }) => {
+  const errors = captureErrors(page);
+  const result = {
+    integrationBaseSha: 'transport-e2e',
+    generatedAt: '2026-09-25T00:00:00.000Z',
+    trades: [],
+    integrityIssues: [],
+    toss: {
+      provider: 'TOSS',
+      officialSpecVersion: '1.2.13',
+      paidStatus: 'PAID_STATUS_UNVERIFIED',
+      liveReadIntegration: 'BLOCKED_BY_FREE_STATUS_UNVERIFIED',
+      contractNormalizerAvailable: true,
+      executionGranularity: 'ORDER_CUMULATIVE_AGGREGATE_NO_FILL_ID',
+      livePrivateRequests: 0,
+      actualOrders: 0,
+    },
+    aiReviewStatus: 'AI_EXTERNAL_REVIEW_DISABLED_FREE_ONLY',
+    safety: {
+      finalCostDelta: '0_KRW',
+      actualOrderRequests: 0,
+      cancelRequests: 0,
+      amendRequests: 0,
+      transferRequests: 0,
+      withdrawalRequests: 0,
+      privateBrokerRequests: 5,
+    },
+    liveAccountHistory: {
+      requestedRange: '30D',
+      effectiveDays: 30,
+      rangeCapped: false,
+      persisted: false,
+      privateProviderRequests: 5,
+      truncated: false,
+      providers: [
+        { provider: 'upbit', configured: true, enabled: true, status: 'READY', records: 2, privateProviderRequests: 4, truncated: false, errorCode: null },
+        { provider: 'bitget', configured: true, enabled: true, status: 'READY', records: 1, privateProviderRequests: 1, truncated: false, errorCode: null },
+      ],
+      safety: {
+        orderRequests: 0,
+        cancelRequests: 0,
+        amendRequests: 0,
+        transferRequests: 0,
+        withdrawalRequests: 0,
+        credentialsReturned: false,
+        liveTradingEnabled: false,
+        autoTradingEnabled: false,
+      },
+    },
+    analytics: {
+      sampleSize: 0,
+      openTrades: 0,
+      closedTrades: 0,
+      winRate: null,
+      profitFactor: null,
+      averageReturnPercent: null,
+      maximumConsecutiveLosses: null,
+      netPnlByCurrency: [],
+      totalCostsByCurrency: [],
+      byMarket: [],
+      bySource: [],
+      byStrategy: [],
+      byTimeframe: [],
+      byGrade: [],
+      mistakes: [],
+      monthlyReport: [],
+      warnings: [],
+    },
+  };
+
+  await page.route('**/api/paper-journal/unified-ledger**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ mode: 'analysis-only', externalAiCalled: false, ok: true, result }),
+    });
+  });
+
+  await page.goto(`${PATH}?unifiedTransport=api`);
+  await expect(page.getByTestId('phase7-e2e-page')).toBeVisible();
+  await expect(page.getByTestId('journal-zero-cost-status')).toContainText('실계좌 조회 5회');
+  await expect(page.getByTestId('live-account-history-status')).toContainText('UPBIT READY · 2건 · 요청 4회');
+  await expect(page.getByTestId('live-account-history-status')).toContainText('BITGET READY · 1건 · 요청 1회');
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 test('unified trade journal separates performance, quality, snapshots, and free-only status', async ({ page }) => {
   const errors = captureErrors(page);
   await page.setViewportSize({ width: 1440, height: 1000 });

@@ -1,4 +1,5 @@
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { assertUnifiedTradeJournalSafety } from './unified-journal-safety';
 import { createBatchIdempotencyKey, JOURNAL_SYNC_BATCH_SIZE } from './paper-journal-batching';
 export { createBatchIdempotencyKey, JOURNAL_SYNC_BATCH_SIZE, MAX_IDEMPOTENCY_KEY_LENGTH } from './paper-journal-batching';
 
@@ -264,18 +265,7 @@ export async function getUnifiedTradeJournal(filters: UnifiedJournalFilters = {}
   assertAnalysisEnvelope(body);
   if (!response.ok || body?.ok !== true) throw new Error(safeError(body, '통합 매매일지를 불러오지 못했습니다.'));
   const result = body.result as UnifiedTradeJournal | undefined;
-  if (!result
-    || result.aiReviewStatus !== 'AI_EXTERNAL_REVIEW_DISABLED_FREE_ONLY'
-    || result.toss.liveReadIntegration !== 'BLOCKED_BY_FREE_STATUS_UNVERIFIED'
-    || result.safety.finalCostDelta !== '0_KRW'
-    || result.safety.actualOrderRequests !== 0
-    || result.safety.cancelRequests !== 0
-    || result.safety.amendRequests !== 0
-    || result.safety.transferRequests !== 0
-    || result.safety.withdrawalRequests !== 0
-    || result.safety.privateBrokerRequests !== 0) {
-    throw new Error('통합 매매일지의 무료·무주문 안전 계약을 확인하지 못했습니다.');
-  }
+  assertUnifiedTradeJournalSafety(result);
   const binding = result.canonicalResearchBinding;
   if (binding && (
     binding.schemaVersion !== 'unified-journal-canonical-research-binding-v1'
