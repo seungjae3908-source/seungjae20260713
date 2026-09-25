@@ -5,6 +5,7 @@ import { authorizedFetch } from '@/lib/auth-fetch';
 import { useAuth } from '@/lib/auth';
 import type { AnalysisSelection } from '@/lib/analysis-selection';
 import { safeTradeErrorMessage } from '@/lib/trade-approval-ui';
+import { buildScannerOrderDraftPreview } from '@/lib/scanner-order-draft-preview';
 import { cn } from '@/lib/utils';
 
 type CreatedPlan = {
@@ -96,6 +97,7 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
   const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState('');
   const [result, setResult] = useState<CreateResponse | null>(null);
+  const [budgetInput, setBudgetInput] = useState('');
   const requestSequenceRef = useRef(0);
   const requestAbortRef = useRef<AbortController | null>(null);
   const conditions = useMemo(
@@ -104,6 +106,11 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
   );
   const supported = supportedMarkets.includes(selection.market as typeof supportedMarkets[number])
     && marketDirectionSupported(selection);
+  const normalizedBudget = Number(budgetInput.replace(/,/g, '').trim());
+  const orderDraftPreview = useMemo(
+    () => buildScannerOrderDraftPreview(selection, normalizedBudget),
+    [normalizedBudget, selection],
+  );
 
   useEffect(() => {
     requestSequenceRef.current += 1;
@@ -112,6 +119,7 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
     setCreating(false);
     setResult(null);
     setMessage('');
+    setBudgetInput('');
   }, [selection.market, selection.ticker, selection.timeframe, selection.action, selection.searchRunId, selection.signalId, conditions.join('|')]);
 
   useEffect(() => () => {
@@ -232,6 +240,55 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
       <div className="mt-3 rounded-2xl border border-card-border bg-background p-3 text-[10px] font-bold leading-5 text-muted-foreground">
         KR·US·현물은 BUY, 선물은 LONG/SHORT만 허용합니다. 수량·레버리지·진입가격은 client가 지정하지 않고 서버 canonical risk/simulation owner가 결정합니다.
       </div>
+
+      <section data-testid="scanner-staged-order-draft" className="mt-3 rounded-2xl border border-primary/25 bg-primary/5 p-3">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h3 className="text-xs font-black">분할 주문 초안 · 최신 Scanner 기준</h3>
+            <p className="mt-1 break-keep text-[10px] leading-4 text-muted-foreground">
+              총 투자금만 입력하면 현재 재검증된 진입구간을 1차 60% / 2차 40%로 나눠 미리 계산합니다. 이 초안은 주문을 생성하거나 전송하지 않습니다.
+            </p>
+          </div>
+          <span className="rounded-full border border-primary/25 px-2 py-1 text-[9px] font-black">executionAuthority=NONE</span>
+        </div>
+
+        <label className="mt-3 block text-[10px] font-black text-muted-foreground">
+          총 투자금 / 주문 예산
+          <input
+            data-testid="scanner-order-budget"
+            inputMode="decimal"
+            type="number"
+            min="0"
+            step="any"
+            value={budgetInput}
+            onChange={(event) => setBudgetInput(event.target.value)}
+            placeholder="예: 1000000"
+            className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-3 text-sm font-black text-foreground outline-none focus:border-primary"
+          />
+        </label>
+
+        {orderDraftPreview ? (
+          <div className="mt-3 space-y-2" data-testid="scanner-order-draft-preview">
+            <div className="grid grid-cols-2 gap-2">
+              <Metric label="1차 진입 · 60%" value={`${formatNumber(orderDraftPreview.firstEntry.price)} · ${formatNumber(orderDraftPreview.firstEntry.amount)}`} />
+              <Metric label="2차 진입 · 40%" value={`${formatNumber(orderDraftPreview.secondEntry.price)} · ${formatNumber(orderDraftPreview.secondEntry.amount)}`} />
+              <Metric label="예상 평단" value={formatNumber(orderDraftPreview.estimatedAverageEntry)} />
+              <Metric label="예상 최대손실" value={orderDraftPreview.estimatedMaxLossAmount == null ? '미확인' : formatNumber(orderDraftPreview.estimatedMaxLossAmount)} />
+              <Metric label="1차 목표" value={formatNumber(orderDraftPreview.target1)} />
+              <Metric label="2차 목표" value={formatNumber(orderDraftPreview.target2)} />
+              <Metric label="손절 / 무효" value={formatNumber(orderDraftPreview.stopLoss)} />
+              <Metric label="주문 상태" value="미제출" />
+            </div>
+            <p className="break-keep text-[10px] font-bold leading-4 text-muted-foreground">
+              Telegram에서 들어온 과거 가격이 아니라 앱에서 다시 조회한 현재 Scanner 계획을 사용합니다. 향후 실계좌 주문 연결 시에도 최종 제출 직전 서버 재검증과 실제 체결량 기준 TP/Stop 수량 조정이 필요합니다.
+            </p>
+          </div>
+        ) : (
+          <p className="mt-2 text-[10px] font-bold text-muted-foreground">
+            유효한 최신 진입구간과 투자금이 있어야 초안을 계산합니다. 신호가 무효화되면 과거 가격으로 대체하지 않습니다.
+          </p>
+        )}
+      </section>
 
       <button
         type="button"
