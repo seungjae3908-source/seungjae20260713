@@ -6,11 +6,11 @@ import { createAccountJournalHistoryReader } from './account-readonly.journal-hi
 const USER_ID = 'journal-history-user';
 const NOW = new Date('2026-09-25T02:30:00.000Z');
 
-function repository(rows: Partial<Record<'upbit' | 'bitget', string>>): AccountReadonlyCredentialRepository {
+function repository(rows: Partial<Record<'kiwoom' | 'upbit' | 'bitget', string>>): AccountReadonlyCredentialRepository {
   return {
     async get(userId, provider) {
       if (userId !== USER_ID) throw new Error('USER_SCOPE_MISMATCH');
-      const encrypted = rows[provider as 'upbit' | 'bitget'];
+      const encrypted = rows[provider as 'kiwoom' | 'upbit' | 'bitget'];
       return encrypted ? {
         userId,
         provider,
@@ -35,13 +35,13 @@ test('unconfigured journal-history providers stop at credential metadata and sen
       fetchCalls += 1;
       return new Response('{}', { status: 500 });
     },
-    flags: { upbit: true, bitget: true },
+    flags: { kiwoom: true, upbit: true, bitget: true },
   });
 
   const result = await reader({
     userId: USER_ID,
     range: '30D',
-    providers: ['upbit', 'bitget'],
+    providers: ['kiwoom', 'upbit', 'bitget'],
     now: NOW,
   });
 
@@ -49,6 +49,7 @@ test('unconfigured journal-history providers stop at credential metadata and sen
   assert.equal(result.privateProviderRequests, 0);
   assert.equal(result.payloads.length, 0);
   assert.deepEqual(result.providers.map((row) => [row.provider, row.status, row.privateProviderRequests]), [
+    ['kiwoom', 'NOT_CONFIGURED', 0],
     ['upbit', 'NOT_CONFIGURED', 0],
     ['bitget', 'NOT_CONFIGURED', 0],
   ]);
