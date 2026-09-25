@@ -12,6 +12,7 @@ import {
   readUpbitSnapshot,
   type SignedReadonlyTransport,
 } from './providers/exchange-readonly.providers';
+import { KiwoomReadonlyProvider, type KiwoomReadonlyCredentials } from './providers/kiwoom-readonly.provider';
 import {
   createTossReadonlyTransport,
   TossReadonlyProvider,
@@ -201,7 +202,7 @@ function requireCredential(credentials: Record<string, string>, key: string) {
 
 export function createVaultBackedAccountReaders(
   options: AccountReadonlyRuntimeOptions = {},
-): Partial<Record<'toss' | 'upbit' | 'bitget', AccountReader>> {
+): Partial<Record<'toss' | 'kiwoom' | 'upbit' | 'bitget', AccountReader>> {
   const repositoryFactory = options.repositoryFactory ?? createAccountReadonlyCredentialRepository;
   const decryptCredentials = options.decryptCredentials ?? decryptTradingCredentials;
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -222,6 +223,7 @@ export function createVaultBackedAccountReaders(
   const tossTransport = createTossReadonlyTransport(fetchImpl);
   const tossTokens = new TossTokenManager(tossTransport);
   const tossProvider = new TossReadonlyProvider(tossTransport, tossTokens);
+  const kiwoomProvider = new KiwoomReadonlyProvider(fetchImpl);
 
   return {
     toss: async (scope, signal) => {
@@ -232,6 +234,14 @@ export function createVaultBackedAccountReaders(
         accountSeq: String(raw.accountSeq ?? '').trim() || undefined,
       };
       return withProviderDeadline(signal, providerTimeoutMs, (boundedSignal) => tossProvider.snapshot(credentials, boundedSignal));
+    },
+    kiwoom: async (scope, signal) => {
+      const raw = await loadCredentials(scope, 'kiwoom', repositoryFactory, decryptCredentials);
+      const credentials: KiwoomReadonlyCredentials = {
+        appKey: requireCredential(raw, 'appKey'),
+        appSecret: requireCredential(raw, 'appSecret'),
+      };
+      return withProviderDeadline(signal, providerTimeoutMs, (boundedSignal) => kiwoomProvider.snapshot(credentials, boundedSignal));
     },
     upbit: async (scope, signal) => {
       const raw = await loadCredentials(scope, 'upbit', repositoryFactory, decryptCredentials);
