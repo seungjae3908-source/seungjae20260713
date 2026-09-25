@@ -27,7 +27,8 @@ const PROVIDER_TUNNEL_PORTS = new Map<string, number>([
   [BITGET_API_ORIGIN, 18445],
 ]);
 
-type CredentialMap = Record<ReadonlyCredentialProvider, Record<string, string>>;
+type EvidenceCredentialProvider = Exclude<ReadonlyCredentialProvider, 'kiwoom'>;
+type CredentialMap = Record<EvidenceCredentialProvider, Record<string, string>>;
 
 type RequestAudit = {
   oauthTokenPosts: number;
@@ -82,6 +83,7 @@ function createReadOnlyMemoryRepository(
   return {
     async get(userId, provider) {
       if (userId !== EVIDENCE_USER_ID) throw new Error('EVIDENCE_USER_SCOPE_MISMATCH');
+      if (provider === 'kiwoom') throw new Error('EVIDENCE_PROVIDER_NOT_IN_LEGACY_THREE_PROVIDER_RUN');
       audit.reads += 1;
       return {
         userId,
