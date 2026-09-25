@@ -153,7 +153,7 @@ test.after(() => {
   delete process.env.TOSS_LIVE_ORDER_ENABLED;
 });
 
-test('two concurrent cancel requests submit one exchange cancel and a concurrent fill wins', async () => {
+test('two concurrent cancel requests submit one exchange cancel and a concurrent fill wins', { timeout: 10_000 }, async () => {
   const { repository, plan, order } = await setup('duplicate-fill');
   const firstCandidate = await repository.getOrder(USER_ID, order.id);
   const secondCandidate = await repository.getOrder(USER_ID, order.id);
@@ -287,7 +287,7 @@ test('uncertain cancel never resends DELETE and later recovery performs lookup o
   }
 });
 
-test('newer full fill corrects a stale canceled winner from a concurrent recovery worker', async () => {
+test('newer full fill corrects a stale canceled winner from a concurrent recovery worker', { timeout: 10_000 }, async () => {
   const { repository, plan, order } = await setup('terminal-correction', 'RECOVERY_REQUIRED');
   order.cancelRequestClaimId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   order.cancelRequestedAt = '2026-08-05T04:03:00.000Z';
