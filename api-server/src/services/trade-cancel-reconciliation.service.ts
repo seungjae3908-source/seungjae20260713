@@ -7,10 +7,13 @@ import {
   prepareBitgetCancel,
   prepareKiwoomCancel,
   prepareKiwoomToken,
+  prepareTossCancel,
+  prepareTossToken,
   prepareUpbitCancel,
   type BitgetCredentials,
   type KiwoomCredentials,
   type PreparedExchangeRequest,
+  type TossCredentials,
   type UpbitCredentials,
 } from './trade-exchange-adapters.service';
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
@@ -22,6 +25,7 @@ const BASE_URLS = {
   upbit: 'https://api.upbit.com',
   kiwoom: 'https://api.kiwoom.com',
   kiwoomMock: 'https://mockapi.kiwoom.com',
+  toss: 'https://openapi.tossinvest.com',
 };
 
 const TERMINAL_STATES = new Set(['FILLED', 'CANCELED', 'REJECTED', 'EXPIRED']);
@@ -78,6 +82,20 @@ function tokenFrom(payload: ExchangePayload) {
   const token = String(payload.token ?? nested?.token ?? '').trim();
   if (!token) throw new Error('KIWOOM_TOKEN_MISSING');
   return token;
+}
+
+function tossTokenFrom(payload: ExchangePayload) {
+  const nested = isRecord(payload.result) ? payload.result : isRecord(payload.data) ? payload.data : null;
+  const token = String(payload.access_token ?? nested?.access_token ?? '').trim();
+  if (!token) throw new Error('TOSS_TOKEN_MISSING');
+  return token;
+}
+
+function assertTossSuccess(payload: ExchangePayload) {
+  if (payload.error) throw new Error('TOSS_CANCEL_REJECTED');
+  const code = String(payload.code ?? payload.return_code ?? '').trim();
+  if (code && !['0', '00000', 'SUCCESS'].includes(code.toUpperCase())) throw new Error(`TOSS_${code}`);
+  return payload;
 }
 
 export class TradeCancelReconciliationService {
@@ -166,6 +184,14 @@ export class TradeCancelReconciliationService {
           BASE_URLS.upbit,
           prepareUpbitCancel(credentials as UpbitCredentials, order.clientOrderId),
         ));
+      } else if (plan.exchange === 'toss') {
+        const tossCredentials = credentials as TossCredentials;
+        const tokenPayload = await sendCancelRequest(BASE_URLS.toss, prepareTossToken(tossCredentials));
+        if (!order.exchangeOrderId) throw new Error('TOSS_CANCEL_CONTEXT_MISSING');
+        assertTossSuccess(await sendCancelRequest(
+          BASE_URLS.toss,
+          prepareTossCancel({ ...tossCredentials, accessToken: tossTokenFrom(tokenPayload) }, order.exchangeOrderId),
+        ));
       } else {
         const baseUrl = mockKiwoom ? BASE_URLS.kiwoomMock : BASE_URLS.kiwoom;
         const kiwoomCredentials = credentials as KiwoomCredentials;
@@ -183,7 +209,8 @@ export class TradeCancelReconciliationService {
           baseUrl,
           prepareKiwoomCancel(
             { ...kiwoomCredentials, accessToken: tokenFrom(tokenPayload) },
-            { symbol: plan.symbol, orderNo: order.exchangeOrderId, quantity: remainingQuantity },
+            plan,
+            { orderNo: order.exchangeOrderId, quantity: remainingQuantity },
           ),
         ));
       }
