@@ -11,6 +11,12 @@ type Row = Record<string, unknown>;
 type KiwoomPage = { body: Row; contYn: string | null; nextKey: string | null };
 type TokenRecord = { token: string; expiresAtMs: number };
 
+export type KiwoomJournalFillBatch = {
+  domestic: Array<{ orderDate: string; row: Record<string, unknown> }>;
+  us: Array<{ orderDate: string; row: Record<string, unknown> }>;
+  privateProviderRequests: number;
+};
+
 const KIWOOM_REAL_ORIGIN = 'https://api.kiwoom.com';
 const KIWOOM_TOKEN_PATH = '/oauth2/token';
 const KIWOOM_DOMESTIC_ACCOUNT_PATH = '/api/dostk/acnt';
@@ -201,7 +207,7 @@ export class KiwoomReadonlyProvider {
 
   private async page(
     token: string,
-    apiId: 'kt00001' | 'kt00018' | 'ka10075' | 'ust21050' | 'ust21070' | 'ust21110',
+    apiId: 'kt00001' | 'kt00018' | 'kt00009' | 'ka10075' | 'ust21050' | 'ust21070' | 'ust21110' | 'ust21150',
     body: Readonly<Record<string, string>>,
     continuation: { contYn: string; nextKey: string } | null,
     signal?: AbortSignal,
@@ -238,27 +244,86 @@ export class KiwoomReadonlyProvider {
 
   private async collect(
     token: string,
-    apiId: 'kt00018' | 'ka10075' | 'ust21050' | 'ust21070' | 'ust21110',
+    apiId: 'kt00018' | 'kt00009' | 'ka10075' | 'ust21050' | 'ust21070' | 'ust21110' | 'ust21150',
     body: Readonly<Record<string, string>>,
-    listKey: 'acnt_evlt_remn_indv_tot' | 'oso' | 'result_list',
+    listKey: 'acnt_evlt_remn_indv_tot' | 'acnt_ord_cntr_prst_array' | 'oso' | 'result_list',
     signal?: AbortSignal,
   ) {
     const result: Row[] = [];
     let continuation: { contYn: string; nextKey: string } | null = null;
     let firstBody: Row | null = null;
+    let pagesRead = 0;
 
     for (let pageIndex = 0; pageIndex < MAX_READONLY_PAGES; pageIndex += 1) {
       const page = await this.page(token, apiId, body, continuation, signal);
+      pagesRead += 1;
       firstBody ??= page.body;
       if (normalizeReturnCode(page.body.return_code) === KIWOOM_NO_DATA_CODE) {
-        return { rows: result, firstBody };
+        return { rows: result, firstBody, pagesRead };
       }
       result.push(...rows(page.body[listKey], 'KIWOOM_ACCOUNT_RESPONSE_INVALID'));
-      if (page.contYn !== 'Y') return { rows: result, firstBody };
+      if (page.contYn !== 'Y') return { rows: result, firstBody, pagesRead };
       if (!page.nextKey) throw new AccountReadonlyError('KIWOOM_CONTINUATION_INVALID');
       continuation = { contYn: 'Y', nextKey: page.nextKey };
     }
     throw new AccountReadonlyError('KIWOOM_CONTINUATION_LIMIT_REACHED');
+  }
+
+  async journalFillRows(
+    credentials: KiwoomReadonlyCredentials,
+    orderDates: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<KiwoomJournalFillBatch> {
+    const dates = [...new Set(orderDates.map((value) => value.trim()))];
+    if (dates.length === 0 || dates.length > 7 || dates.some((value) => !/^\d{8}$/.test(value))) {
+      throw new AccountReadonlyError('KIWOOM_JOURNAL_DATE_RANGE_INVALID');
+    }
+
+    const token = await this.token(credentials, signal);
+    const domestic: KiwoomJournalFillBatch['domestic'] = [];
+    const us: KiwoomJournalFillBatch['us'] = [];
+    let privateProviderRequests = 0;
+
+    for (const orderDate of dates) {
+      const [kr, overseas] = await Promise.all([
+        this.collect(
+          token,
+          'kt00009',
+          {
+            stk_bond_tp: '1',
+            mrkt_tp: '0',
+            sell_tp: '0',
+            qry_tp: '1',
+            dmst_stex_tp: '%',
+            ord_dt: orderDate,
+            stk_cd: '',
+            fr_ord_no: '',
+          },
+          'acnt_ord_cntr_prst_array',
+          signal,
+        ),
+        this.collect(
+          token,
+          'ust21150',
+          {
+            query_tp: '5',
+            slby_tp: '0',
+            ord_dt: orderDate,
+            stex_tp: '',
+            stk_cd: '',
+            oppo_trde_tp: '%',
+            fr_ord_no: '',
+          },
+          'result_list',
+          signal,
+        ),
+      ]);
+      privateProviderRequests += kr.pagesRead + overseas.pagesRead;
+      domestic.push(...kr.rows.map((row) => ({ orderDate, row })));
+      us.push(...overseas.rows.map((row) => ({ orderDate, row })));
+    }
+
+    return { domestic, us, privateProviderRequests };
   }
 
   async snapshot(
