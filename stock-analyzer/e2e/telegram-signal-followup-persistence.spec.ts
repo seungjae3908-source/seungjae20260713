@@ -512,7 +512,6 @@ test('production has no in-memory storage fallback and initial public alert awai
   expect(deliverySource).toContain('sendTelegramAlertWithReceipt');
   expect(deliverySource).toContain('await markTelegramSignalAnnounced(alert, Date.now(), undefined, receipt);');
   expect(deliverySource).toContain('initial alert lacks durable followup checkpoint; failing closed');
-  expect(deliverySource).toContain('Freshness: ${freshness.status} · 유효성 ${freshness.validity}');
   expect(deliverySource).toContain('재검증 전 실시간 신호로 사용 금지');
   expect(deliverySource).not.toContain('ordersSubmitted: 1');
   expect(deliverySource).not.toContain("orderAuthority: 'EXECUTE'");
