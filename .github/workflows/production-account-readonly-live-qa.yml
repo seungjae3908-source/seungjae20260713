@@ -178,7 +178,8 @@ jobs:
           const fs = require('node:fs');
           const [file, expectedSha] = process.argv.slice(2);
           const value = JSON.parse(fs.readFileSync(file, 'utf8'));
-          const required = ['toss', 'upbit', 'bitget'];
+          const requiredCrypto = ['upbit', 'bitget'];
+          const stockProviders = ['toss', 'kiwoom'];
           const providers = Array.isArray(value?.providers) ? value.providers : [];
           if (value?.schemaVersion !== 'production-account-readonly-live-qa-v1'
             || value?.targetSha !== expectedSha
@@ -198,13 +199,24 @@ jobs:
             || value?.autoTradingAuthorityGranted !== false) {
             throw new Error('PRODUCTION_ACCOUNT_QA_EVIDENCE_CONTRACT_FAILED');
           }
-          for (const provider of required) {
+          for (const provider of requiredCrypto) {
             const row = providers.find((item) => item?.provider === provider);
             if (!row || row.connected !== true || row.status !== 'CONNECTED'
               || row.stale !== false || row.errorCode !== null
               || row.checkedAtPresent !== true || row.lastGoodAtPresent !== true) {
               throw new Error('PRODUCTION_ACCOUNT_QA_PROVIDER_FAILED_' + provider.toUpperCase());
             }
+          }
+          const connectedStock = providers.filter((item) =>
+            stockProviders.includes(item?.provider)
+            && item?.connected === true
+            && item?.status === 'CONNECTED'
+            && item?.stale === false
+            && item?.errorCode === null
+            && item?.checkedAtPresent === true
+            && item?.lastGoodAtPresent === true);
+          if (connectedStock.length < 1) {
+            throw new Error('PRODUCTION_ACCOUNT_QA_STOCK_PROVIDER_NOT_CONNECTED');
           }
           const serialized = JSON.stringify(value);
           if (/(clientSecret|secretKey|accessKey|apiKey|passphrase|accountRef|balances|positions|openOrders)/i.test(serialized)) {
@@ -229,8 +241,8 @@ jobs:
             echo "- Exact deployed Production SHA: $EXPECTED_DEPLOY_SHA"
             echo '- Session: authenticated Production QA member'
             echo '- Credential source: member-scoped encrypted Production Vault'
-            echo '- Providers required: Toss / Upbit / Bitget'
-            echo '- Kiwoom: required when enabled by Production supportedProviders'
+            echo '- Stock provider: Toss or Kiwoom, at least one real connected account required'
+            echo '- Crypto providers: Upbit and Bitget real connected accounts required'
             echo '- Account/holding/order values retained in evidence: false'
             echo '- Provider Secret values retained in evidence: false'
             echo '- Actual orders/cancels/amends/transfers/withdrawals: 0'
