@@ -1,5 +1,6 @@
 import { prepareBitgetAccount, prepareBitgetPositions, prepareUpbitAccounts, type BitgetCredentials, type PreparedExchangeRequest, type UpbitCredentials } from '../../../services/trade-exchange-adapters.service';
 import { emptySnapshot, nullableNumber, type CanonicalAccountSnapshot } from '../account-readonly.contract';
+import { AccountReadonlyError } from '../account-readonly.errors';
 
 export type SignedReadonlyTransport = (request: PreparedExchangeRequest, signal?: AbortSignal) => Promise<unknown>;
 type Row = Record<string, unknown>;
@@ -24,6 +25,15 @@ function total(balance: number | null, locked: number | null) {
   return Number.isFinite(result) ? result : null;
 }
 
+function bitgetApplicationFailure(code: string) {
+  if (code === '40018' || code === '40038') return new AccountReadonlyError('BITGET_IP_NOT_ALLOWED');
+  if (code === '40014') return new AccountReadonlyError('BITGET_PERMISSION_DENIED');
+  if (code === '40006' || code === '40009' || code === '40036') return new AccountReadonlyError('BITGET_AUTH_FAILED');
+  if (code === '40008') return new AccountReadonlyError('BITGET_TIMESTAMP_REJECTED', true);
+  if (code === '429') return new AccountReadonlyError('RATE_LIMITED', true);
+  return new AccountReadonlyError('BITGET_REQUEST_REJECTED');
+}
+
 export async function readUpbitSnapshot(credentials: UpbitCredentials, transport: SignedReadonlyTransport, signal?: AbortSignal, now = new Date()): Promise<CanonicalAccountSnapshot> {
   const raw = rows(await transport(prepareUpbitAccounts(credentials), signal), 'UPBIT_ACCOUNT_RESPONSE_INVALID');
   const balances = raw.map((row) => {
@@ -45,7 +55,12 @@ export async function readUpbitSnapshot(credentials: UpbitCredentials, transport
 export async function readBitgetSnapshot(credentials: BitgetCredentials, transport: SignedReadonlyTransport, signal?: AbortSignal, now = new Date()): Promise<CanonicalAccountSnapshot> {
   const [accountRaw, positionRaw] = await Promise.all([transport(prepareBitgetAccount(credentials), signal), transport(prepareBitgetPositions(credentials), signal)]);
   const data = (value: unknown) => {
-    if (!record(value) || value.code !== '00000') throw new Error('BITGET_ACCOUNT_RESPONSE_INVALID');
+    if (!record(value)) throw new Error('BITGET_ACCOUNT_RESPONSE_INVALID');
+    const code = typeof value.code === 'string' || typeof value.code === 'number'
+      ? String(value.code)
+      : '';
+    if (!code) throw new Error('BITGET_ACCOUNT_RESPONSE_INVALID');
+    if (code !== '00000') throw bitgetApplicationFailure(code);
     return rows(value.data, 'BITGET_ACCOUNT_RESPONSE_INVALID');
   };
   const balances = data(accountRaw).map((row) => ({
