@@ -248,6 +248,7 @@ export class KiwoomReadonlyProvider {
     body: Readonly<Record<string, string>>,
     listKey: 'acnt_evlt_remn_indv_tot' | 'acnt_ord_cntr_prst_array' | 'oso' | 'result_list',
     signal?: AbortSignal,
+    onRequest?: () => void,
   ) {
     const result: Row[] = [];
     let continuation: { contYn: string; nextKey: string } | null = null;
@@ -255,6 +256,7 @@ export class KiwoomReadonlyProvider {
     let pagesRead = 0;
 
     for (let pageIndex = 0; pageIndex < MAX_READONLY_PAGES; pageIndex += 1) {
+      onRequest?.();
       const page = await this.page(token, apiId, body, continuation, signal);
       pagesRead += 1;
       firstBody ??= page.body;
@@ -273,6 +275,7 @@ export class KiwoomReadonlyProvider {
     credentials: KiwoomReadonlyCredentials,
     orderDates: readonly string[],
     signal?: AbortSignal,
+    requestCounter?: { value: number },
   ): Promise<KiwoomJournalFillBatch> {
     const dates = [...new Set(orderDates.map((value) => value.trim()))];
     if (dates.length === 0 || dates.length > 7 || dates.some((value) => !/^\d{8}$/.test(value))) {
@@ -283,6 +286,10 @@ export class KiwoomReadonlyProvider {
     const domestic: KiwoomJournalFillBatch['domestic'] = [];
     const us: KiwoomJournalFillBatch['us'] = [];
     let privateProviderRequests = 0;
+    const markRequest = () => {
+      privateProviderRequests += 1;
+      if (requestCounter) requestCounter.value += 1;
+    };
 
     for (const orderDate of dates) {
       const [kr, overseas] = await Promise.all([
@@ -301,6 +308,7 @@ export class KiwoomReadonlyProvider {
           },
           'acnt_ord_cntr_prst_array',
           signal,
+          markRequest,
         ),
         this.collect(
           token,
@@ -316,6 +324,7 @@ export class KiwoomReadonlyProvider {
           },
           'result_list',
           signal,
+          markRequest,
         ),
       ]);
       privateProviderRequests += kr.pagesRead + overseas.pagesRead;
