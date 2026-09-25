@@ -47,10 +47,12 @@ export function assertUnifiedTradeJournalSafety(
   const providerIds = new Set<string>();
   let providerRequestTotal = 0;
   for (const provider of history.providers) {
-    if ((provider.provider !== 'upbit' && provider.provider !== 'bitget')
+    if ((provider.provider !== 'kiwoom' && provider.provider !== 'upbit' && provider.provider !== 'bitget')
       || providerIds.has(provider.provider)
       || !isNonNegativeInteger(provider.privateProviderRequests)
-      || !isNonNegativeInteger(provider.records)) {
+      || !isNonNegativeInteger(provider.records)
+      || (provider.effectiveDays != null && (!Number.isInteger(provider.effectiveDays) || provider.effectiveDays < 1 || provider.effectiveDays > history.effectiveDays))
+      || (provider.rangeCapped != null && typeof provider.rangeCapped !== 'boolean')) {
       throw new Error('실계좌 거래이력 공급자 근거를 확인하지 못했습니다.');
     }
     providerIds.add(provider.provider);
