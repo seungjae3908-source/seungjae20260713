@@ -1,6 +1,6 @@
 import { getSupabase, hasSupabaseServerKey } from '../../lib/supabase';
 
-export type ReadonlyCredentialProvider = 'toss' | 'upbit' | 'bitget';
+export type ReadonlyCredentialProvider = 'toss' | 'kiwoom' | 'upbit' | 'bitget';
 
 export type ReadonlyCredentialRecord = {
   userId: string;
