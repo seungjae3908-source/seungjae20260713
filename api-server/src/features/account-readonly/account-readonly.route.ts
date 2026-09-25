@@ -216,6 +216,31 @@ export function createAccountReadonlyRouter(service: AccountReadonlyService): IR
     }
   });
 
+  router.delete('/credentials/:provider', requireReadonlyProviderCapability, async (req: AuthenticatedRequest, res) => {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    const { userId, accessToken } = authScope(req);
+    if (!userId || !accessToken) return res.status(401).json(deniedResponse('LOGIN_REQUIRED'));
+
+    const provider = String(req.params.provider ?? '').toLowerCase() as ReadonlyCredentialProvider;
+    if (!CREDENTIAL_PROVIDERS.has(provider)) {
+      return res.status(404).json(deniedResponse('READONLY_CREDENTIAL_PROVIDER_NOT_SUPPORTED'));
+    }
+
+    try {
+      await credentialRepository(userId).remove(userId, provider);
+      return res.json({
+        ok: true,
+        provider,
+        configured: false,
+        purpose: 'read_only',
+        ...safetyCounters(),
+      });
+    } catch (error) {
+      const errorCode = error instanceof Error ? error.message.split(':')[0] : 'READONLY_CREDENTIAL_DELETE_FAILED';
+      return res.status(credentialErrorStatus(errorCode)).json(deniedResponse(errorCode));
+    }
+  });
+
   router.get('/:provider', requireReadonlyProviderCapability, async (req: AuthenticatedRequest, res) => {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     const provider = String(req.params.provider ?? '').toLowerCase() as AccountProvider;
