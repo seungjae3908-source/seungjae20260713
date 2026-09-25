@@ -68,6 +68,7 @@ test('Kiwoom KR and US fills normalize from official fill fields without inventi
   assert.equal(kr.fees, null);
   assert.equal(kr.tax, null);
   assert.match(String(kr.filledAt), /\+09:00$/);
+  assert.ok((kr.warnings as string[]).includes('KIWOOM_PROVIDER_TIMEZONE_ASSUMED_KST_NOT_OFFICIALLY_DOCUMENTED'));
 
   const us = result.payloads.find((row) => row.market === 'US_STOCK')!;
   assert.equal(us.symbol, 'AAPL');
@@ -77,6 +78,7 @@ test('Kiwoom KR and US fills normalize from official fill fields without inventi
   assert.equal(us.averageFillPrice, 200.5);
   assert.equal(us.fillId, null);
   assert.match(String(us.brokerOrderId), /^US-ORDER-1:[0-9a-f]{16}$/);
+  assert.ok((us.warnings as string[]).includes('KIWOOM_PROVIDER_TIMEZONE_ASSUMED_KST_NOT_OFFICIALLY_DOCUMENTED'));
   assert.equal(String(us.accountIdMasked).includes(USER_ID), false);
   assert.equal(JSON.stringify(result).includes('KIWOOM_SECRET_TEST_ONLY'), false);
 });
