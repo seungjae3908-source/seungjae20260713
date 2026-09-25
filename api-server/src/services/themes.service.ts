@@ -66,6 +66,12 @@ function largeCapMin(currency: Currency): number {
 }
 const DYNAMIC_LIMIT = 40;
 
+export interface CatalogThemeTag {
+  key: string;
+  label: string;
+  source: 'CATALOG';
+}
+
 interface ThemeDef {
   key: string;
   label: string;
@@ -716,6 +722,31 @@ function matchEtpKeywordThemes(entry: CatalogEntry): EtpKeywordTheme[] {
 
 function assetTypeOf(entry: CatalogEntry): AssetType {
   return classifyAssetType(entry.name, entry.market);
+}
+
+export function classifyCatalogEntryThemeTags(entry: CatalogEntry): CatalogThemeTag[] {
+  const assetType = assetTypeOf(entry);
+  const tags: CatalogThemeTag[] = [];
+
+  if (isEtp(assetType)) {
+    const family = isLeveraged(assetType)
+      ? { key: ETP_KEYS.leverage, label: '레버리지' }
+      : isInverse(assetType)
+        ? { key: ETP_KEYS.inverse, label: '인버스' }
+        : isEtn(assetType)
+          ? { key: ETP_KEYS.etn, label: 'ETN' }
+          : { key: ETP_KEYS.etf, label: 'ETF' };
+    tags.push({ ...family, source: 'CATALOG' });
+    for (const theme of matchEtpKeywordThemes(entry)) {
+      tags.push({ key: theme.key, label: theme.label, source: 'CATALOG' });
+    }
+  } else {
+    for (const theme of matchThemes(entry)) {
+      tags.push({ key: theme.key, label: theme.label, source: 'CATALOG' });
+    }
+  }
+
+  return [...new Map(tags.map((tag) => [tag.key, tag])).values()];
 }
 
 function toThemeStock(
