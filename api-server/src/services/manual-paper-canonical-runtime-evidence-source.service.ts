@@ -16,6 +16,7 @@ import {
   type ManualPaperCanonicalIdentity,
 } from './manual-paper-canonical-contract.service';
 import { PaperTradingError } from './paper-trading-core.service';
+import { resolvePaperCanonicalValidationReceiptMaximumAgeMs } from './paper-canonical-validation-freshness-policy.service';
 import { readAuthenticatedPaperTradingState } from './paper-trading-state-publisher.service';
 import type { PaperTradingAction, PaperTradingState } from './paper-trading.types';
 
@@ -117,16 +118,29 @@ function canonicalOwnerPath(
   return join(stateRoot(env), relativePath);
 }
 
-function receiptMaximumAgeMs(env: RuntimeEnvironment): number {
-  const value = Number(env.PAPER_CANONICAL_VALIDATION_RECEIPT_MAXIMUM_AGE_MS);
-  if (!Number.isSafeInteger(value) || value <= 0) {
+async function receiptMaximumAgeMs(env: RuntimeEnvironment): Promise<number> {
+  try {
+    const resolution = await resolvePaperCanonicalValidationReceiptMaximumAgeMs({
+      env,
+      stateRoot: stateRoot(env),
+      readText: (path) => readFile(path, 'utf8'),
+    });
+    return resolution.maximumAgeMs;
+  } catch (error) {
+    const code = String((error as { code?: unknown })?.code ?? '');
+    if (code === 'PAPER_CANONICAL_VALIDATION_RECEIPT_MAXIMUM_AGE_UNCONFIGURED') {
+      throw new PaperTradingError(
+        'CANONICAL_PAPER_VALIDATION_RECEIPT_MAXIMUM_AGE_UNCONFIGURED',
+        'Validation receipt freshness policy가 명시적으로 설정되지 않았습니다.',
+        503,
+      );
+    }
     throw new PaperTradingError(
-      'CANONICAL_PAPER_VALIDATION_RECEIPT_MAXIMUM_AGE_UNCONFIGURED',
-      'Validation receipt freshness policy가 명시적으로 설정되지 않았습니다.',
+      'CANONICAL_PAPER_VALIDATION_RECEIPT_FRESHNESS_POLICY_INVALID',
+      'Validation receipt freshness policy를 안전하게 확인할 수 없습니다.',
       503,
     );
   }
-  return value;
 }
 
 async function readRecurringStateFromRuntime(env: RuntimeEnvironment): Promise<RecurringState> {
@@ -481,7 +495,7 @@ async function issueValidationReceiptFromConfiguredOwner(
   );
   const owner = createForwardObserverValidationReceiptOwner({
     receiptRoot,
-    maximumAgeMs: receiptMaximumAgeMs(env),
+    maximumAgeMs: await receiptMaximumAgeMs(env),
     readValidationEvidence: createForwardObserverArtifactValidationEvidenceReader({ artifactRoot }),
   });
   return owner(identity, nowMs);
