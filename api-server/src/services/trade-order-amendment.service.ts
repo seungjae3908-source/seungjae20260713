@@ -53,6 +53,17 @@ function text(value: unknown) {
   return normalized || null;
 }
 
+function errorCode(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message.split(':')[0] : fallback;
+}
+
+type ProviderAmendOutcome = {
+  nextClientOrderId: string;
+  nextExchangeOrderId: string | null;
+  activeConfirmed: boolean;
+  postQueryErrorCode: string | null;
+};
+
 function requestId(value: string) {
   const normalized = value.trim();
   if (normalized.length < 8 || normalized.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(normalized)) {
@@ -331,12 +342,47 @@ export class TradeOrderAmendmentService {
       });
 
       if (!provider.activeConfirmed) {
-        throw new Error('AMEND_POST_QUERY_NOT_CONFIRMED');
+        const recoveryCode = provider.postQueryErrorCode ?? 'AMEND_POST_QUERY_NOT_CONFIRMED';
+        const recovery = {
+          ...amendment,
+          status: 'RECOVERY_REQUIRED' as const,
+          nextClientOrderId: provider.nextClientOrderId,
+          nextExchangeOrderId: provider.nextExchangeOrderId,
+          errorCode: recoveryCode,
+        };
+        replaceAmendment(order, recovery);
+        order.clientOrderId = provider.nextClientOrderId;
+        if (provider.nextExchangeOrderId) order.exchangeOrderId = provider.nextExchangeOrderId;
+        order.requestedQuantity = quantity;
+        order.remainingQuantity = quantity;
+        order.currentLimitPrice = price;
+        order.lastErrorCode = recoveryCode;
+        order.manualReviewRequired = false;
+        order.updatedAt = new Date().toISOString();
+        order = await this.automation.transition(
+          order,
+          'RECOVERY_REQUIRED',
+          'ORDER_AMEND_ACKNOWLEDGED_RECONCILIATION_REQUIRED',
+          {
+            amendmentRevision: revision,
+            amendmentRequestId: normalizedRequestId,
+            amendmentNextClientOrderId: provider.nextClientOrderId,
+            amendmentNextExchangeOrderId: provider.nextExchangeOrderId,
+            providerMutationAttempted: true,
+            providerMutationAcknowledged: true,
+            amendmentAcknowledged: false,
+            errorCode: recoveryCode,
+            manualReviewRequired: false,
+            orderResubmitted: false,
+          },
+        );
+        return { order, replayed: false, recoveryRequired: true };
       }
 
       const acknowledged = {
         ...amendment,
         status: 'ACKNOWLEDGED' as const,
+        nextClientOrderId: provider.nextClientOrderId,
         nextExchangeOrderId: provider.nextExchangeOrderId,
         acknowledgedAt: new Date().toISOString(),
       };
@@ -356,7 +402,7 @@ export class TradeOrderAmendmentService {
       });
       return { order, replayed: false, recoveryRequired: false };
     } catch (error) {
-      const code = error instanceof Error ? error.message.split(':')[0] : 'ORDER_AMEND_FAILED';
+      const code = errorCode(error, 'ORDER_AMEND_FAILED');
       const recovery = {
         ...amendment,
         status: 'RECOVERY_REQUIRED' as const,
@@ -383,44 +429,71 @@ export class TradeOrderAmendmentService {
     order: TradingOrder,
     rawCredentials: Record<string, string>,
     input: { quantity: number; price: number; nextClientId: string },
-  ) {
+  ): Promise<ProviderAmendOutcome> {
     if (plan.exchange === 'bitget') {
       const credentials = rawCredentials as unknown as BitgetCredentials;
-      assertBitget(await sendJson(BASE_URLS.bitget, prepareBitgetAmend(credentials, {
+      const mutationData = assertBitget(await sendJson(BASE_URLS.bitget, prepareBitgetAmend(credentials, {
         symbol: plan.symbol,
         clientOrderId: order.clientOrderId,
         newClientOrderId: input.nextClientId,
         quantity: input.quantity,
         price: input.price,
       })));
-      const row = bitgetOrderRow(
-        await sendJson(BASE_URLS.bitget, prepareBitgetOrderQuery(credentials, plan.symbol, input.nextClientId)),
-        input.nextClientId,
-      );
-      return {
-        nextClientOrderId: input.nextClientId,
-        nextExchangeOrderId: text(row.orderId ?? row.order_id) ?? order.exchangeOrderId,
-        activeConfirmed: true,
-      };
+      const mutationRow = Array.isArray(mutationData)
+        ? mutationData.find(isRecord) ?? null
+        : isRecord(mutationData) ? mutationData : null;
+      const nextExchangeOrderId = text(mutationRow?.orderId ?? mutationRow?.order_id) ?? order.exchangeOrderId;
+      try {
+        const row = bitgetOrderRow(
+          await sendJson(BASE_URLS.bitget, prepareBitgetOrderQuery(credentials, plan.symbol, input.nextClientId)),
+          input.nextClientId,
+        );
+        return {
+          nextClientOrderId: input.nextClientId,
+          nextExchangeOrderId: text(row.orderId ?? row.order_id) ?? nextExchangeOrderId,
+          activeConfirmed: true,
+          postQueryErrorCode: null,
+        };
+      } catch (error) {
+        return {
+          nextClientOrderId: input.nextClientId,
+          nextExchangeOrderId,
+          activeConfirmed: false,
+          postQueryErrorCode: errorCode(error, 'BITGET_AMEND_POST_QUERY_FAILED'),
+        };
+      }
     }
 
     if (plan.exchange === 'upbit') {
       const credentials = rawCredentials as unknown as UpbitCredentials;
-      assertUpbit(await sendJson(BASE_URLS.upbit, prepareUpbitAmend(credentials, {
+      const mutation = assertUpbit(await sendJson(BASE_URLS.upbit, prepareUpbitAmend(credentials, {
         previousIdentifier: order.clientOrderId,
         newIdentifier: input.nextClientId,
         quantity: input.quantity,
         price: input.price,
       })));
-      const row = upbitActiveOrder(
-        await sendJson(BASE_URLS.upbit, prepareUpbitOrderQuery(credentials, input.nextClientId)),
-        input.nextClientId,
-      );
-      return {
-        nextClientOrderId: input.nextClientId,
-        nextExchangeOrderId: text(row.uuid) ?? order.exchangeOrderId,
-        activeConfirmed: true,
-      };
+      const responseIdentifier = text(mutation.new_order_identifier ?? mutation.identifier);
+      const nextExchangeOrderId = text(mutation.new_order_uuid)
+        ?? (responseIdentifier === input.nextClientId ? text(mutation.uuid) : null);
+      try {
+        const row = upbitActiveOrder(
+          await sendJson(BASE_URLS.upbit, prepareUpbitOrderQuery(credentials, input.nextClientId)),
+          input.nextClientId,
+        );
+        return {
+          nextClientOrderId: input.nextClientId,
+          nextExchangeOrderId: text(row.uuid) ?? nextExchangeOrderId,
+          activeConfirmed: true,
+          postQueryErrorCode: null,
+        };
+      } catch (error) {
+        return {
+          nextClientOrderId: input.nextClientId,
+          nextExchangeOrderId,
+          activeConfirmed: false,
+          postQueryErrorCode: errorCode(error, 'UPBIT_AMEND_POST_QUERY_FAILED'),
+        };
+      }
     }
 
     if (plan.exchange === 'toss') {
@@ -438,15 +511,25 @@ export class TradeOrderAmendmentService {
       if (!nextOrderId || nextOrderId === order.exchangeOrderId) {
         throw new Error('TOSS_AMEND_NEW_ORDER_ID_REQUIRED');
       }
-      const row = tossActiveOrder(
-        await sendJson(BASE_URLS.toss, prepareTossOrderQuery(authenticated, nextOrderId)),
-        nextOrderId,
-      );
-      return {
-        nextClientOrderId: order.clientOrderId,
-        nextExchangeOrderId: text(row.orderId ?? row.order_id) ?? nextOrderId,
-        activeConfirmed: true,
-      };
+      try {
+        const row = tossActiveOrder(
+          await sendJson(BASE_URLS.toss, prepareTossOrderQuery(authenticated, nextOrderId)),
+          nextOrderId,
+        );
+        return {
+          nextClientOrderId: order.clientOrderId,
+          nextExchangeOrderId: text(row.orderId ?? row.order_id) ?? nextOrderId,
+          activeConfirmed: true,
+          postQueryErrorCode: null,
+        };
+      } catch (error) {
+        return {
+          nextClientOrderId: order.clientOrderId,
+          nextExchangeOrderId: nextOrderId,
+          activeConfirmed: false,
+          postQueryErrorCode: errorCode(error, 'TOSS_AMEND_POST_QUERY_FAILED'),
+        };
+      }
     }
 
     if (!order.exchangeOrderId) throw new Error('KIWOOM_AMEND_ORDER_ID_REQUIRED');
@@ -459,13 +542,22 @@ export class TradeOrderAmendmentService {
       price: input.price,
     })));
     const nextOrderId = kiwoomOrderId(response, order.exchangeOrderId);
-    const open = plan.market.toUpperCase() === 'US'
-      ? await sendJson(BASE_URLS.kiwoom, prepareKiwoomUsUnfilled(authenticated, plan))
-      : await sendJson(BASE_URLS.kiwoom, prepareKiwoomUnfilled(authenticated));
-    return {
-      nextClientOrderId: order.clientOrderId,
-      nextExchangeOrderId: nextOrderId,
-      activeConfirmed: kiwoomOpenOrderExists(open, nextOrderId),
-    };
-  }
-}
+    try {
+      const open = plan.market.toUpperCase() === 'US'
+        ? await sendJson(BASE_URLS.kiwoom, prepareKiwoomUsUnfilled(authenticated, plan))
+        : await sendJson(BASE_URLS.kiwoom, prepareKiwoomUnfilled(authenticated));
+      return {
+        nextClientOrderId: order.clientOrderId,
+        nextExchangeOrderId: nextOrderId,
+        activeConfirmed: kiwoomOpenOrderExists(open, nextOrderId),
+        postQueryErrorCode: null,
+      };
+    } catch (error) {
+      return {
+        nextClientOrderId: order.clientOrderId,
+        nextExchangeOrderId: nextOrderId,
+        activeConfirmed: false,
+        postQueryErrorCode: errorCode(error, 'KIWOOM_AMEND_POST_QUERY_FAILED'),
+      };
+    }
+  }}
