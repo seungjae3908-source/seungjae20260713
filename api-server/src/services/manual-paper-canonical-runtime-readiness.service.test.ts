@@ -11,6 +11,9 @@ const STATE_ROOT = '/opt/stock-app-data/paper-forward-v1';
 const SNAPSHOT_PATH = `${STATE_ROOT}/publisher/paper-state-v2.json`;
 const ARTIFACT_ROOT = '/opt/stock-app-data/forward-observer-v1';
 const RECEIPT_ROOT = '/opt/stock-app-data/manual-paper-validation-receipts-v1';
+const DEFAULT_ARTIFACT_ROOT = `${STATE_ROOT}/forward-observer`;
+const DEFAULT_RECEIPT_ROOT = `${STATE_ROOT}/validation-receipts`;
+const RECEIPT_PARENT = '/opt/stock-app-data';
 const NOW = Date.parse('2026-09-24T08:00:00.000Z');
 const CANDIDATE_ID = `paper-candidate-v1:${'c'.repeat(64)}`;
 const BINDING_DIGEST = '3'.repeat(64);
@@ -174,6 +177,7 @@ function dependencies(input: {
   fallbackSnapshotPath?: string;
   missingArtifact?: boolean;
   receiptAccessFails?: boolean;
+  receiptRootMissing?: boolean;
   missingCostComponent?: string;
   missingSettlement?: boolean;
   rebindFails?: boolean;
@@ -203,15 +207,25 @@ function dependencies(input: {
           settlements: input.missingSettlement ? [] : [durableSettlement(position)],
         });
       }
-      if (path.startsWith(ARTIFACT_ROOT)) {
+      if ([ARTIFACT_ROOT, DEFAULT_ARTIFACT_ROOT].some((root) => path.startsWith(root))) {
         if (input.missingArtifact && path.endsWith('/manifest.json')) throw new Error('missing');
         return JSON.stringify({ schemaVersion: 'fixture' });
       }
       throw new Error(`unexpected path: ${path}`);
     },
     async accessPath(path: string) {
-      assert.equal(path, RECEIPT_ROOT);
+      assert.ok([
+        RECEIPT_ROOT,
+        RECEIPT_PARENT,
+        DEFAULT_RECEIPT_ROOT,
+        STATE_ROOT,
+      ].includes(path));
       if (input.receiptAccessFails) throw new Error('denied');
+      if (input.receiptRootMissing && path === DEFAULT_RECEIPT_ROOT) {
+        const error = new Error('missing') as NodeJS.ErrnoException;
+        error.code = 'ENOENT';
+        throw error;
+      }
     },
     validateSnapshot() {
       return {
@@ -273,6 +287,24 @@ test('complete read-only evidence is ready for activation review without enablin
     financialMutationPerformed: false,
     environmentMutationPerformed: false,
   });
+});
+
+test('canonical owner paths default under the Paper state root without weakening evidence gates', async () => {
+  const result = await probeManualPaperCanonicalRuntimeReadiness({
+    expectedMainSha: SHA,
+    env: env({
+      PAPER_CANONICAL_FORWARD_OBSERVER_ARTIFACT_ROOT: undefined,
+      PAPER_CANONICAL_VALIDATION_RECEIPT_ROOT: undefined,
+    }),
+    nowMs: NOW,
+    dependencies: dependencies({ receiptRootMissing: true }),
+  });
+
+  assert.equal(result.forwardObserverArtifactsReady, true);
+  assert.equal(result.validationReceiptPathReady, true);
+  assert.ok(!result.blockers.includes('PAPER_CANONICAL_FORWARD_OBSERVER_ARTIFACT_ROOT_UNCONFIGURED'));
+  assert.ok(!result.blockers.includes('PAPER_CANONICAL_VALIDATION_RECEIPT_ROOT_UNCONFIGURED'));
+  assert.equal(result.readyForActivationReview, true);
 });
 
 test('supported env fallback is accepted only when runtime binding file is absent', async () => {
