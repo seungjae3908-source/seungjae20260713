@@ -5,6 +5,7 @@ import { AccountReadonlyError } from '../account-readonly.errors';
 import type { ReadonlyCredentialProvider } from '../account-readonly.repository';
 import { createVaultBackedAccountReaders } from '../account-readonly.runtime';
 import { AccountReadonlyService } from '../account-readonly.service';
+import { KiwoomReadonlyProvider } from '../providers/kiwoom-readonly.provider';
 
 const SCOPE = { userId: 'user-runtime-test', accessToken: 'SUPABASE_ACCESS_RUNTIME_TEST_ONLY' };
 
@@ -428,4 +429,84 @@ test('vault-backed Kiwoom reader uses only official real OAuth and fixed read-on
   assert.equal(serialized.includes('KIWOOM_SECRET_RUNTIME_TEST_ONLY'), false);
   assert.equal(serialized.includes('KIWOOM_TOKEN_RUNTIME_TEST_ONLY'), false);
   assert.equal(serialized.includes('SECRET_PROVIDER_MESSAGE'), false);
+});
+
+
+test('Kiwoom HTTP 200 auth failure is classified from embedded official code without leaking return_msg', async () => {
+  const provider = new KiwoomReadonlyProvider(async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/oauth2/token') {
+      return new Response(JSON.stringify({
+        token: 'KIWOOM_TOKEN_RUNTIME_TEST_ONLY',
+        token_type: 'bearer',
+        expires_dt: '20991231235959',
+        return_code: 0,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    assert.equal(init?.method, 'POST');
+    return new Response(JSON.stringify({
+      return_code: 3,
+      return_msg: '인증에 실패했습니다[8005:SECRET_TOKEN_PROVIDER_TEXT]',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  });
+
+  await assert.rejects(
+    () => provider.snapshot({ appKey: 'KIWOOM_APP_RUNTIME_TEST_ONLY', appSecret: 'KIWOOM_SECRET_RUNTIME_TEST_ONLY' }),
+    (error: unknown) => error instanceof AccountReadonlyError
+      && error.code === 'KIWOOM_AUTH_OR_IP_REJECTED'
+      && !error.message.includes('SECRET_TOKEN_PROVIDER_TEXT'),
+  );
+});
+
+test('Kiwoom payload rate-limit codes stay retryable without exposing provider messages', async () => {
+  const provider = new KiwoomReadonlyProvider(async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/oauth2/token') {
+      return new Response(JSON.stringify({
+        return_code: 1700,
+        return_msg: 'SECRET_RATE_LIMIT_PROVIDER_TEXT',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response('{}', { status: 500 });
+  });
+  await assert.rejects(
+    () => provider.snapshot({ appKey: 'KIWOOM_APP_RUNTIME_TEST_ONLY', appSecret: 'KIWOOM_SECRET_RUNTIME_TEST_ONLY' }),
+    (error: unknown) => error instanceof AccountReadonlyError
+      && error.code === 'RATE_LIMITED'
+      && error.retryable === true
+      && !error.message.includes('SECRET_RATE_LIMIT_PROVIDER_TEXT'),
+  );
+});
+
+test('Kiwoom return_code 20 is a proven empty account result rather than a provider failure', async () => {
+  const seenApiIds: string[] = [];
+  const provider = new KiwoomReadonlyProvider(async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/oauth2/token') {
+      return new Response(JSON.stringify({
+        token: 'KIWOOM_TOKEN_RUNTIME_TEST_ONLY',
+        token_type: 'bearer',
+        expires_dt: '20991231235959',
+        return_code: 0,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    const apiId = new Headers(init?.headers).get('api-id');
+    if (apiId) seenApiIds.push(apiId);
+    return new Response(JSON.stringify({
+      return_code: 20,
+      return_msg: 'NO_DATA',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  });
+
+  const result = await provider.snapshot({
+    appKey: 'KIWOOM_APP_RUNTIME_TEST_ONLY',
+    appSecret: 'KIWOOM_SECRET_RUNTIME_TEST_ONLY',
+  });
+  assert.equal(result.connected, true);
+  assert.deepEqual(result.positions, []);
+  assert.deepEqual(result.openOrders, []);
+  assert.deepEqual(new Set(seenApiIds), new Set(['kt00018', 'ka10075']));
+  assert.equal(result.orderRequests, 0);
+  assert.equal(result.cancelRequests, 0);
+  assert.equal(result.amendRequests, 0);
 });
