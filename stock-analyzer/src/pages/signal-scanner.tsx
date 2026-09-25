@@ -243,6 +243,7 @@ function SignalDetailPanel({
   const signalQuality = card.dataQuality;
   const quant = card.quantScore;
   const ranking = card.candidateRanking;
+  const themeSwing = card.themeSwing;
   const qualityIssues = signalQuality?.issues ?? [];
   const strongSignalLabel = signalQuality?.strongSignalAllowed === true
     ? 'YES'
@@ -351,6 +352,35 @@ function SignalDetailPanel({
       </section>
 
       {qualityPanel}
+
+      {themeSwing ? (
+        <section data-testid="scanner-theme-swing-detail" className="rounded-2xl border border-primary/25 bg-primary/5 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-xs font-black">테마 스윙 · {themeSwing.themeLabel ?? '미분류'}</h3>
+              <p className="mt-1 text-[10px] text-muted-foreground">테마 확산·대장 강도·추세·거래량·촉매·유동성·위험을 별도 100점으로 평가합니다.</p>
+            </div>
+            <span className="rounded-full border border-primary/30 px-2 py-1 text-[10px] font-black">{themeSwing.score}점 · {themeSwing.state}</span>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
+            <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">테마 확산</p><p className="text-xs font-black">{themeSwing.positiveBreadthPercent == null ? '미확인' : `${themeSwing.positiveBreadthPercent}%`}</p></div>
+            <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">대장 순위</p><p className="text-xs font-black">{themeSwing.leaderRank == null ? '미확인' : `${themeSwing.leaderRank}/${themeSwing.memberCount}`}</p></div>
+            <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">진입 트리거</p><p className="text-xs font-black">{themeSwing.trigger}</p></div>
+            <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">실행 권한</p><p className="text-xs font-black">{themeSwing.executionAuthority}</p></div>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-1 text-[10px] sm:grid-cols-4">
+            <span className="rounded-lg bg-background px-2 py-1">모멘텀 {themeSwing.breakdown.themeMomentum}/22</span>
+            <span className="rounded-lg bg-background px-2 py-1">대장 {themeSwing.breakdown.leaderStrength}/18</span>
+            <span className="rounded-lg bg-background px-2 py-1">추세 {themeSwing.breakdown.trendStructure}/16</span>
+            <span className="rounded-lg bg-background px-2 py-1">거래량 {themeSwing.breakdown.volumeParticipation}/14</span>
+            <span className="rounded-lg bg-background px-2 py-1">촉매 {themeSwing.breakdown.catalystEvidence}/12</span>
+            <span className="rounded-lg bg-background px-2 py-1">유동성 {themeSwing.breakdown.liquidityQuality}/10</span>
+            <span className="rounded-lg bg-background px-2 py-1">위험 {themeSwing.breakdown.riskQuality}/8</span>
+          </div>
+          {themeSwing.blockers.length ? <p className="mt-2 break-words text-[10px] leading-4 text-warning">차단: {themeSwing.blockers.join(' · ')}</p> : <p className="mt-2 text-[10px] font-black text-positive">테마 스윙 선별 조건 충족 · Research/Paper 검증 대상</p>}
+          <p className="mt-2 text-[10px] leading-4 text-muted-foreground">수익 보장이 아닌 연구용 선별 점수이며 기존 OOS·비용·Paper 검증을 대체하지 않습니다.</p>
+        </section>
+      ) : null}
 
       <section className="rounded-2xl border border-card-border p-3" data-testid="scanner-price-plan">
         <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">서버 계획</span></div>
@@ -550,6 +580,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const [strategy, setStrategy] = useState<UnifiedScannerStrategyMode>(initialStrategy);
   const [embeddedTimeframe, setEmbeddedTimeframe] = useState<SignalScannerRequest['timeframe']>(() => defaultEmbeddedTimeframe(initialStrategy));
   const [futuresDirectionFilter, setFuturesDirectionFilter] = useState<FuturesDirectionFilter>('ALL');
+  const [themeSwingOnly, setThemeSwingOnly] = useState(false);
   const [cursor, setCursor] = useState(0);
   const [refreshToken, setRefreshToken] = useState(0);
   const [status, setStatus] = useState<RequestStatus>('loading');
@@ -601,12 +632,17 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
     LONG: normalizedCards.filter((card) => card.action === 'LONG').length,
     SHORT: normalizedCards.filter((card) => card.action === 'SHORT').length,
   }), [normalizedCards]);
-  const visibleCards = useMemo(
-    () => view !== 'FUTURES' || futuresDirectionFilter === 'ALL'
+  const visibleCards = useMemo(() => {
+    const directionCards = view !== 'FUTURES' || futuresDirectionFilter === 'ALL'
       ? normalizedCards
-      : normalizedCards.filter((card) => card.action === futuresDirectionFilter),
-    [futuresDirectionFilter, normalizedCards, view],
-  );
+      : normalizedCards.filter((card) => card.action === futuresDirectionFilter);
+    if (strategy !== 'swing' || !themeSwingOnly) return directionCards;
+    return directionCards
+      .filter((card) => card.themeSwing && (card.themeSwing.state === 'ELIGIBLE' || card.themeSwing.state === 'WATCH'))
+      .sort((left, right) => (right.themeSwing?.score ?? -1) - (left.themeSwing?.score ?? -1)
+        || (left.themeSwing?.leaderRank ?? Number.MAX_SAFE_INTEGER) - (right.themeSwing?.leaderRank ?? Number.MAX_SAFE_INTEGER)
+        || compareScannerCards(left, right));
+  }, [futuresDirectionFilter, normalizedCards, strategy, themeSwingOnly, view]);
   const selectedCard = useMemo(
     () => visibleCards.find((card) => card.signalId === selectedSignalId) ?? null,
     [visibleCards, selectedSignalId],
@@ -693,6 +729,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const selectStrategy = (next: UnifiedScannerStrategyMode) => {
     setCursor(0);
     setStrategy(next);
+    if (next !== 'swing') setThemeSwingOnly(false);
     if (embedded) setEmbeddedTimeframe(defaultEmbeddedTimeframe(next));
   };
 
@@ -792,6 +829,18 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
           <p data-testid="scanner-market-signal-guide" className="mt-2 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-black text-primary">
             {view === 'FUTURES' ? '코인 선물 · ↑ 롱 신호 / ↓ 숏 신호' : `${view === 'KR' ? '국내주식' : view === 'US' ? '미국주식' : '코인 현물'} · ↗ 매수 신호`}
           </p>
+          {strategy === 'swing' ? (
+            <button
+              type="button"
+              data-testid="scanner-theme-swing-mode"
+              aria-pressed={themeSwingOnly}
+              onClick={() => setThemeSwingOnly((value) => !value)}
+              className={`mt-2 min-h-12 w-full rounded-2xl border px-3 py-2 text-left ${themeSwingOnly ? 'border-primary bg-primary/10' : 'border-card-border bg-background'}`}
+            >
+              <span className="block text-xs font-black">테마 스윙 {themeSwingOnly ? 'ON' : 'OFF'}</span>
+              <span className="mt-1 block text-[10px] leading-4 text-muted-foreground">ON이면 테마가 확인된 ELIGIBLE/WATCH 후보만 테마점수 순으로 표시합니다. 기존 신호점수와 OOS 검증은 변경하지 않습니다.</span>
+            </button>
+          ) : null}
           {view === 'FUTURES' ? (
             <div data-testid="scanner-futures-direction-filter" role="tablist" aria-label="코인 선물 방향" className="mt-2 grid grid-cols-3 gap-2 rounded-2xl bg-background p-1">
               {FUTURES_DIRECTION_FILTERS.map((item) => (
@@ -881,8 +930,8 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
               </section>
             ) : visibleCards.length === 0 ? (
               <section data-testid="scanner-direction-empty" className="rounded-3xl border border-card-border bg-card p-6 text-center">
-                <p className="text-sm font-black">선택한 방향의 후보가 없습니다.</p>
-                <p className="mt-2 text-xs text-muted-foreground">전체 탭에서 현재 검증된 롱·숏 후보를 함께 확인할 수 있습니다.</p>
+                <p className="text-sm font-black">{themeSwingOnly ? '현재 테마 스윙 ELIGIBLE/WATCH 후보가 없습니다.' : '선택한 방향의 후보가 없습니다.'}</p>
+                <p className="mt-2 text-xs text-muted-foreground">{themeSwingOnly ? '일반 스윙 결과는 유지되며 테마 확산·대장·진입 트리거 기준을 통과한 후보만 이 모드에 표시합니다.' : '전체 탭에서 현재 검증된 롱·숏 후보를 함께 확인할 수 있습니다.'}</p>
               </section>
             ) : (
               <section className={embedded ? 'space-y-3' : 'grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(420px,1.1fr)]'}>
@@ -897,6 +946,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                             <span data-testid="scanner-card-direction" className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${actionBadgeClass(card)}`}>{actionLabel(card)}</span>
                             <span className="rounded-full border border-card-border px-2 py-0.5 text-[10px] font-black">등급 {evidenceGradeLabel(card)}</span>
                             <span className="rounded-full border border-card-border px-2 py-0.5 text-[10px] font-black">{remainingValidityLabel(card.expiresAt)}</span>
+                            {card.themeSwing && card.themeSwing.state !== 'UNCLASSIFIED' ? <span data-testid="scanner-theme-swing-badge" className="rounded-full border border-primary/25 bg-primary/5 px-2 py-0.5 text-[10px] font-black">테마 {card.themeSwing.themeLabel} · {card.themeSwing.score}점{card.themeSwing.leader ? ' · 대장' : ''}</span> : null}
                           </div>
                         </button>
                         <div className="shrink-0 text-right"><p className="text-sm font-black">{formatNumber(card.price, card.currency === 'KRW' ? 0 : 6)}</p><p className="text-xs text-muted-foreground">신호점수 {formatNumber(card.score, 1)} · 위험 {formatNumber(card.riskScore, 1)}</p></div>
