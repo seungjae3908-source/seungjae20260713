@@ -1,0 +1,99 @@
+name: Research Selective Opportunity Frozen Transfer V4
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/selective_opportunity_transfer_v4.py
+      - market-prediction-lab/tests/test_selective_opportunity_transfer_v4.py
+      - market-prediction-lab/docs/selective-opportunity-transfer-v4.md
+      - .github/workflows/research-selective-opportunity-transfer-v4.yml
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: selective-transfer-v4-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  historical-transfer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RESEARCH_CODE_SHA: ${{ github.event.pull_request.head.sha }}
+      LIVE_TRADING: 'false'
+      AUTO_TRADING: 'false'
+      REAL_ORDER_ENABLED: 'false'
+      PRIVATE_TRADING_API_ALLOWED: 'false'
+    steps:
+      - name: Checkout exact Draft head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RESEARCH_CODE_SHA }}
+          persist-credentials: false
+      - name: Assert identity and unchanged V3
+        run: |
+          test "$(git rev-parse HEAD)" = "$RESEARCH_CODE_SHA"
+          test "$(git hash-object market-prediction-lab/scripts/selective_opportunity_discovery_v3.py)" = 8245eb79ab18c955eb7c9a80d314e94b286e3c05
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13.5'
+      - name: Freeze and causality regression tests
+        run: python -m unittest discover -s market-prediction-lab/tests -p 'test_selective_opportunity_*.py' -v
+      - name: Read pinned original stock snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p /tmp/selective-v4/input
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/10842828161/zip" > /tmp/selective-v4/input/original.zip
+          python - <<'PY'
+          import hashlib, zipfile
+          from pathlib import Path
+          root=Path('/tmp/selective-v4/input')
+          assert hashlib.sha256((root/'original.zip').read_bytes()).hexdigest() == '3099e78aba40584612702b49ce868c9a6295ea8ca322272f545c1a52bdeeb64e'
+          with zipfile.ZipFile(root/'original.zip') as z: raw=z.read('source-snapshot.json')
+          assert hashlib.sha256(raw).hexdigest() == 'fabcae6eabe257f0e02bfd1af1f9dabb0b5e1e79494768dd08cb589166a13702'
+          (root/'original.json').write_bytes(raw)
+          PY
+      - name: Decompose stock stops without changing limits
+        run: python market-prediction-lab/scripts/selective_opportunity_transfer_v4.py --stock-snapshot /tmp/selective-v4/input/original.json --output /tmp/selective-v4/result
+      - name: Record rules then collect bounded public history
+        run: python market-prediction-lab/scripts/selective_opportunity_transfer_v4.py --collect --output /tmp/selective-v4/source
+      - name: Evaluate all frozen arms and periods offline
+        run: python market-prediction-lab/scripts/selective_opportunity_transfer_v4.py --source /tmp/selective-v4/source/source.json --output /tmp/selective-v4/result
+      - name: Replay identical source offline
+        run: python market-prediction-lab/scripts/selective_opportunity_transfer_v4.py --source /tmp/selective-v4/source/source.json --output /tmp/selective-v4/replay
+      - name: Verify exact results, raw pages and evidence boundary
+        run: |
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root=Path('/tmp/selective-v4');a=root/'result';b=root/'replay'
+          for p in b.glob('*.json'): assert p.read_bytes() == (a/p.name).read_bytes(), p.name
+          source=json.loads((root/'source/source.json').read_text())
+          for r in source['requests']:
+              assert hashlib.sha256((root/'source'/r['file']).read_bytes()).hexdigest() == r['rawSha256']
+          result=json.loads((a/'result.json').read_text())
+          assert len(result['summary'])==18
+          assert result['independentOos'] is False and result['profitabilityProven'] is False
+          assert result['actualOrders']==0 and result['canonicalSampleDelta']==0
+          assert result['executionAuthority']=='NONE' and result['combinedReturn'] is None
+          proof={'researchCodeSha':os.environ['RESEARCH_CODE_SHA'],'exactOfflineReplay':True,
+                 'sourceSha256':hashlib.sha256((root/'source/source.json').read_bytes()).hexdigest(),
+                 'resultSha256':hashlib.sha256((a/'result.json').read_bytes()).hexdigest(),
+                 'contractSha256':result['contractSha256'],'all18ArmsRetained':True,'independentOos':False,
+                 'actualOrders':0,'telegramSent':0,'privateTradingApiCalled':False}
+          (root/'verification.json').write_text(json.dumps(proof,indent=2)+'\n')
+          print('V4_EXACT_REPLAY_PUBLIC_SOURCE_AND_NO_OOS_RELABEL_PASS')
+          PY
+      - name: Upload immutable source and research evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selective-opportunity-transfer-v4-${{ github.run_id }}
+          path: |
+            /tmp/selective-v4/source
+            /tmp/selective-v4/result
+            /tmp/selective-v4/verification.json
+          if-no-files-found: warn
+          retention-days: 90
