@@ -29,6 +29,9 @@ function sanitizedFailureCode(error: unknown) {
   if (!(error instanceof AccountReadonlyError)) return 'PROVIDER_READ_OR_INVARIANT_FAILED';
   if (SAFE_FAILURE_CODES.has(error.code)) return error.code;
   if (/^TOSS_HTTP_[45]\d\d$/.test(error.code)) return error.code;
+  if (/^(?:TOSS|UPBIT|BITGET)_OPEN_ORDERS_(?:TOSS_HTTP_[45]\d\d|UPBIT_(?:AUTH_FAILED|IP_NOT_ALLOWED|PERMISSION_DENIED|REQUEST_REJECTED)|BITGET_(?:AUTH_FAILED|IP_NOT_ALLOWED|PERMISSION_DENIED|TIMESTAMP_REJECTED|REQUEST_REJECTED)|AUTH_FAILED|RATE_LIMITED|PROVIDER_TIMEOUT|PROVIDER_UNAVAILABLE)$/.test(error.code)) {
+    return error.code;
+  }
   return 'PROVIDER_READ_OR_INVARIANT_FAILED';
 }
 
