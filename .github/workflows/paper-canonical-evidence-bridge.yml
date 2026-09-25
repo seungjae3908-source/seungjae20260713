@@ -77,6 +77,39 @@ jobs:
           node --check ops/check-paper-canonical-pm2-safety.mjs
           node --test             market-prediction-lab/tests/paper-canonical-forward-observer-materialization-v1.test.js             market-prediction-lab/tests/paper-canonical-validation-freshness-configuration-v1.test.js             market-prediction-lab/tests/paper-canonical-pm2-safety-probe-v1.test.js
           ! grep -Eq 'pm2[[:space:]]+(restart|reload|start|stop|delete|save)|crontab[[:space:]]+-|systemctl[[:space:]]+(start|stop|restart|enable)|psql|supabase db'             ops/materialize-paper-canonical-forward-observer.mjs             ops/publish-paper-canonical-validation-freshness-policy.mjs             ops/check-paper-canonical-pm2-safety.mjs
+      - name: Validate embedded protected shell syntax
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/paper-canonical-evidence-bridge.yml').read_text()
+          for name in (
+              'Materialize exact observer artifact',
+              'Publish explicit freshness policy',
+          ):
+              anchor = f'      - name: {name}\n'
+              start = workflow.find(anchor)
+              if start < 0:
+                  raise SystemExit(f'missing workflow step: {name}')
+              run_marker = '        run: |\n'
+              body_start = workflow.find(run_marker, start)
+              if body_start < 0:
+                  raise SystemExit(f'missing run block: {name}')
+              body_start += len(run_marker)
+              body_end = workflow.find('\n      - name:', body_start)
+              if body_end < 0:
+                  body_end = len(workflow)
+              block = workflow[body_start:body_end]
+              script = '\n'.join(
+                  line[10:] if line.startswith('          ') else line
+                  for line in block.splitlines()
+              ) + '\n'
+              subprocess.run(['bash', '-n'], input=script, text=True, check=True)
+          PY
+
       - name: Typecheck backend
         run: pnpm --dir api-server run typecheck
       - name: Run canonical Paper bridge unit regressions
@@ -339,12 +372,15 @@ jobs:
         run: |
           set -Eeuo pipefail
           remote_tmp="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "mktemp -d /tmp/paper-observer-materialize.XXXXXX")"
-          trap 'ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "rm -rf -- '"'"$remote_tmp"'"'"'" >/dev/null 2>&1 || true' EXIT
+          cleanup_remote_tmp() {
+            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "rm -rf -- '$remote_tmp'" >/dev/null 2>&1 || true
+          }
+          trap cleanup_remote_tmp EXIT
           scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT"             ops/materialize-paper-canonical-forward-observer.mjs             observer-artifact/state.json observer-artifact/summary.json observer-artifact/manifest.json             "$SSH_USER@$SSH_HOST:$remote_tmp/"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST"             "node '$remote_tmp/materialize-paper-canonical-forward-observer.mjs' --source-root='$remote_tmp' --expected-sha='$TARGET_SHA' --state-root='/opt/stock-app-data/paper-forward-v1'"             > bridge-evidence/result.json
           test -s bridge-evidence/result.json
           trap - EXIT
-          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "rm -rf -- '$remote_tmp'"
+          cleanup_remote_tmp
 
       - name: Publish explicit freshness policy
         if: env.OPERATION == 'freshness_policy_publish'
@@ -352,12 +388,15 @@ jobs:
         run: |
           set -Eeuo pipefail
           remote_tmp="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "mktemp -d /tmp/paper-freshness-policy.XXXXXX")"
-          trap 'ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "rm -rf -- '"'"$remote_tmp"'"'"'" >/dev/null 2>&1 || true' EXIT
+          cleanup_remote_tmp() {
+            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "rm -rf -- '$remote_tmp'" >/dev/null 2>&1 || true
+          }
+          trap cleanup_remote_tmp EXIT
           scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT"             ops/publish-paper-canonical-validation-freshness-policy.mjs             "$SSH_USER@$SSH_HOST:$remote_tmp/"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST"             "node '$remote_tmp/publish-paper-canonical-validation-freshness-policy.mjs' --state-root='/opt/stock-app-data/paper-forward-v1' --maximum-age-ms='$MAXIMUM_AGE_MS'"             > bridge-evidence/result.json
           test -s bridge-evidence/result.json
           trap - EXIT
-          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "rm -rf -- '$remote_tmp'"
+          cleanup_remote_tmp
 
       - name: Verify bounded result and zero unrelated mutation
         shell: bash
