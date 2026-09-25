@@ -375,7 +375,7 @@ test('Kiwoom mock recovery with an exchange order id remains manual-review only 
     const recovered = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
     assert.equal(recovered.state, 'RECOVERY_REQUIRED');
     assert.equal(recovered.manualReviewRequired, true);
-    assert.equal(recovered.lastErrorCode, 'KIWOOM_RECONCILIATION_STATUS_BLOCKED_BY_UNVERIFIED_OFFICIAL_CONTRACT');
+    assert.equal(recovered.lastErrorCode, 'PAPER_ORDER_RECOVERY_REQUIRES_REVIEW');
     assert.equal(outbound, 0);
   } finally {
     globalThis.fetch = nativeFetch;
