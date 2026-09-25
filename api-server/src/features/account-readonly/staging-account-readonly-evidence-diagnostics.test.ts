@@ -59,3 +59,17 @@ test('untrusted provider error text and arbitrary provider codes collapse to a f
   assert.ok(results.every((row) => row.verdict === 'FAIL' && row.errorCode === 'PROVIDER_READ_OR_INVARIANT_FAILED'));
   assert.equal(JSON.stringify(results).includes('SECRET_ACCOUNT_PROVIDER_CODE_12345'), false);
 });
+
+
+test('sanitized evidence preserves bounded open-order failure attribution without provider text', async () => {
+  const results = await collectProviderEvidence(async (provider) => {
+    if (provider === 'toss') throw new AccountReadonlyError('TOSS_OPEN_ORDERS_TOSS_HTTP_403');
+    if (provider === 'upbit') throw new AccountReadonlyError('UPBIT_OPEN_ORDERS_UPBIT_PERMISSION_DENIED');
+    throw new AccountReadonlyError('BITGET_OPEN_ORDERS_BITGET_TIMESTAMP_REJECTED');
+  });
+  assert.deepEqual(results.map((row) => row.verdict === 'FAIL' ? row.errorCode : null), [
+    'TOSS_OPEN_ORDERS_TOSS_HTTP_403',
+    'UPBIT_OPEN_ORDERS_UPBIT_PERMISSION_DENIED',
+    'BITGET_OPEN_ORDERS_BITGET_TIMESTAMP_REJECTED',
+  ]);
+});
