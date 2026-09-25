@@ -13,7 +13,8 @@ type TokenRecord = { token: string; expiresAtMs: number };
 
 const KIWOOM_REAL_ORIGIN = 'https://api.kiwoom.com';
 const KIWOOM_TOKEN_PATH = '/oauth2/token';
-const KIWOOM_ACCOUNT_PATH = '/api/dostk/acnt';
+const KIWOOM_DOMESTIC_ACCOUNT_PATH = '/api/dostk/acnt';
+const KIWOOM_US_ACCOUNT_PATH = '/api/us/acnt';
 const TOKEN_REFRESH_SKEW_MS = 60_000;
 const MAX_READONLY_PAGES = 10;
 const KIWOOM_NO_DATA_CODE = 20;
@@ -96,11 +97,20 @@ function credentialFingerprint(credentials: KiwoomReadonlyCredentials) {
     .digest('hex');
 }
 
-function normalizeSymbol(value: unknown) {
+function normalizeDomesticSymbol(value: unknown) {
   if (typeof value !== 'string') throw new AccountReadonlyError('KIWOOM_POSITION_IDENTITY_INVALID');
   const raw = value.trim().toUpperCase();
   const symbol = /^A\d{6}$/.test(raw) ? raw.slice(1) : raw;
   if (!/^\d{6}$/.test(symbol)) throw new AccountReadonlyError('KIWOOM_POSITION_IDENTITY_INVALID');
+  return symbol;
+}
+
+function normalizeUsSymbol(value: unknown) {
+  if (typeof value !== 'string') throw new AccountReadonlyError('KIWOOM_US_POSITION_IDENTITY_INVALID');
+  const symbol = value.trim().toUpperCase();
+  if (!/^[A-Z0-9][A-Z0-9.-]{0,19}$/.test(symbol)) {
+    throw new AccountReadonlyError('KIWOOM_US_POSITION_IDENTITY_INVALID');
+  }
   return symbol;
 }
 
@@ -191,7 +201,7 @@ export class KiwoomReadonlyProvider {
 
   private async page(
     token: string,
-    apiId: 'kt00001' | 'kt00018' | 'ka10075',
+    apiId: 'kt00001' | 'kt00018' | 'ka10075' | 'ust21050' | 'ust21070' | 'ust21110',
     body: Readonly<Record<string, string>>,
     continuation: { contYn: string; nextKey: string } | null,
     signal?: AbortSignal,
@@ -206,7 +216,8 @@ export class KiwoomReadonlyProvider {
       headers['next-key'] = continuation.nextKey;
     }
 
-    const response = await this.fetchImpl(new URL(KIWOOM_ACCOUNT_PATH, KIWOOM_REAL_ORIGIN), {
+    const accountPath = apiId.startsWith('ust') ? KIWOOM_US_ACCOUNT_PATH : KIWOOM_DOMESTIC_ACCOUNT_PATH;
+    const response = await this.fetchImpl(new URL(accountPath, KIWOOM_REAL_ORIGIN), {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
@@ -227,9 +238,9 @@ export class KiwoomReadonlyProvider {
 
   private async collect(
     token: string,
-    apiId: 'kt00018' | 'ka10075',
+    apiId: 'kt00018' | 'ka10075' | 'ust21050' | 'ust21070' | 'ust21110',
     body: Readonly<Record<string, string>>,
-    listKey: 'acnt_evlt_remn_indv_tot' | 'oso',
+    listKey: 'acnt_evlt_remn_indv_tot' | 'oso' | 'result_list',
     signal?: AbortSignal,
   ) {
     const result: Row[] = [];
@@ -259,10 +270,13 @@ export class KiwoomReadonlyProvider {
 
     // Official read-only domestic account endpoints. No /api/dostk/ordr request
     // can be produced by this provider.
-    const [deposit, holdings, open] = await Promise.all([
+    const [deposit, holdings, open, usDeposit, usHoldings, usOpen] = await Promise.all([
       this.page(token, 'kt00001', { qry_tp: '3' }, null, signal),
       this.collect(token, 'kt00018', { qry_tp: '1', dmst_stex_tp: 'KRX' }, 'acnt_evlt_remn_indv_tot', signal),
       this.collect(token, 'ka10075', { all_stk_tp: '0', trde_tp: '0', stex_tp: '0' }, 'oso', signal),
+      this.collect(token, 'ust21110', {}, 'result_list', signal),
+      this.collect(token, 'ust21070', { stex_tp: '', stk_cd: '' }, 'result_list', signal),
+      this.collect(token, 'ust21050', { ord_dt: '', slby_tp: '0', stex_tp: '', stk_cd: '' }, 'result_list', signal),
     ]);
 
     const positions = holdings.rows.map((row) => {
@@ -270,7 +284,7 @@ export class KiwoomReadonlyProvider {
       const availableQuantity = nonNegative(row.trde_able_qty, 'KIWOOM_POSITION_AVAILABLE_QUANTITY_INVALID');
       return {
         market: 'KR',
-        symbol: normalizeSymbol(row.stk_cd),
+        symbol: normalizeDomesticSymbol(row.stk_cd),
         quantity,
         availableQuantity,
         averageEntryPrice: absoluteNumberOrNull(row.pur_pric),
@@ -295,7 +309,7 @@ export class KiwoomReadonlyProvider {
       return {
         id: requiredText(row.ord_no, 'KIWOOM_OPEN_ORDER_IDENTITY_INVALID'),
         market: 'KR',
-        symbol: normalizeSymbol(row.stk_cd),
+        symbol: normalizeDomesticSymbol(row.stk_cd),
         side: side(row.trde_tp),
         price: absoluteNumberOrNull(row.ord_pric),
         quantity,
@@ -305,6 +319,44 @@ export class KiwoomReadonlyProvider {
     });
     if (new Set(openOrders.map((row) => row.id)).size !== openOrders.length) {
       throw new AccountReadonlyError('KIWOOM_OPEN_ORDER_IDENTITY_DUPLICATE');
+    }
+
+    const usPositions = usHoldings.rows.map((row) => ({
+      market: 'US',
+      symbol: normalizeUsSymbol(row.stk_cd),
+      quantity: nonNegative(row.poss_qty, 'KIWOOM_US_POSITION_QUANTITY_INVALID'),
+      availableQuantity: nonNegativeOrNull(row.sell_alowq, 'KIWOOM_US_POSITION_AVAILABLE_QUANTITY_INVALID'),
+      averageEntryPrice: absoluteNumberOrNull(row.frgn_stk_book_uv),
+      currentPrice: absoluteNumberOrNull(row.now_pric),
+      marketValue: absoluteNumberOrNull(row.evlt_amt),
+      unrealizedPnl: nullableNumber(row.pl_amt),
+      unrealizedPnlPercent: nullableNumber(row.pl_rt),
+      leverage: null,
+      liquidationPrice: null,
+      marginMode: null,
+      side: null,
+    }));
+    if (new Set(usPositions.map((row) => row.symbol)).size !== usPositions.length) {
+      throw new AccountReadonlyError('KIWOOM_US_POSITION_IDENTITY_DUPLICATE');
+    }
+
+    const usOpenOrders: CanonicalReadonlyOrder[] = usOpen.rows.map((row) => {
+      const quantity = nonNegative(row.ord_qty, 'KIWOOM_US_OPEN_ORDER_QUANTITY_INVALID');
+      const remainingQuantity = nonNegative(row.ord_remnq, 'KIWOOM_US_OPEN_ORDER_REMAINING_INVALID');
+      if (remainingQuantity > quantity) throw new AccountReadonlyError('KIWOOM_US_OPEN_ORDER_REMAINING_EXCEEDS_QUANTITY');
+      return {
+        id: requiredText(row.ord_no, 'KIWOOM_US_OPEN_ORDER_IDENTITY_INVALID'),
+        market: 'US',
+        symbol: normalizeUsSymbol(row.stk_cd),
+        side: side(row.slby_tp),
+        price: absoluteNumberOrNull(row.ord_uv),
+        quantity,
+        remainingQuantity,
+        status: requiredText(row.ord_stat, 'KIWOOM_US_OPEN_ORDER_STATUS_INVALID'),
+      };
+    });
+    if (new Set(usOpenOrders.map((row) => row.id)).size !== usOpenOrders.length) {
+      throw new AccountReadonlyError('KIWOOM_US_OPEN_ORDER_IDENTITY_DUPLICATE');
     }
 
     const depositCode = normalizeReturnCode(deposit.body.return_code);
@@ -317,20 +369,59 @@ export class KiwoomReadonlyProvider {
       ? nonNegativeOrNull(deposit.body.ord_alow_amt, 'KIWOOM_BUYING_POWER_INVALID')
       : null;
 
-    const checkedAt = now.toISOString();
-    return {
-      ...emptySnapshot('kiwoom', 'CONNECTED', checkedAt),
-      connected: true,
-      accounts: [{ market: 'KR', accountRef: null, currency: 'KRW', buyingPower }],
-      balances: hasDeposit ? [{
+    const foreignBalances = usDeposit.rows.map((row) => {
+      const currency = requiredText(row.crnc_code, 'KIWOOM_US_BALANCE_CURRENCY_INVALID').toUpperCase();
+      if (!/^[A-Z]{3}$/.test(currency)) throw new AccountReadonlyError('KIWOOM_US_BALANCE_CURRENCY_INVALID');
+      return {
+        currency,
+        available: nonNegativeOrNull(row.fc_pymn_alowa, 'KIWOOM_US_BALANCE_AVAILABLE_INVALID'),
+        locked: null,
+        total: nullableNumber(row.fc_entra),
+        estimatedKrwValue: null,
+      };
+    });
+    if (new Set(foreignBalances.map((row) => row.currency)).size !== foreignBalances.length) {
+      throw new AccountReadonlyError('KIWOOM_US_BALANCE_CURRENCY_DUPLICATE');
+    }
+    const usd = foreignBalances.find((row) => row.currency === 'USD');
+    const usdBuyingPowerRow = usDeposit.rows.find((row) => String(row.crnc_code ?? '').trim().toUpperCase() === 'USD');
+    const usdBuyingPower = usdBuyingPowerRow
+      ? nonNegativeOrNull(usdBuyingPowerRow.fc_ord_alowa, 'KIWOOM_US_BUYING_POWER_INVALID')
+      : null;
+
+    const accounts = [
+      { market: 'KR' as const, accountRef: null, currency: 'KRW', buyingPower },
+      ...(usd || usPositions.length || usOpenOrders.length
+        ? [{ market: 'US' as const, accountRef: null, currency: 'USD', buyingPower: usdBuyingPower }]
+        : []),
+    ];
+    const balances = [
+      ...(hasDeposit ? [{
         currency: 'KRW',
         available: withdrawalAvailable,
         locked: null,
         total: cashTotal,
         estimatedKrwValue: cashTotal,
-      }] : [],
-      positions,
-      openOrders,
+      }] : []),
+      ...foreignBalances,
+    ];
+    const allPositions = [...positions, ...usPositions];
+    if (new Set(allPositions.map((row) => `${row.market}:${row.symbol}`)).size !== allPositions.length) {
+      throw new AccountReadonlyError('KIWOOM_POSITION_IDENTITY_DUPLICATE');
+    }
+    const allOpenOrders = [...openOrders, ...usOpenOrders];
+    if (new Set(allOpenOrders.map((row) => `${row.market}:${row.id}`)).size !== allOpenOrders.length) {
+      throw new AccountReadonlyError('KIWOOM_OPEN_ORDER_IDENTITY_DUPLICATE');
+    }
+
+    const checkedAt = now.toISOString();
+    return {
+      ...emptySnapshot('kiwoom', 'CONNECTED', checkedAt),
+      connected: true,
+      accounts,
+      balances,
+      positions: allPositions,
+      openOrders: allOpenOrders,
       lastGoodAt: checkedAt,
     };
   }
