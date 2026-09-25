@@ -1,9 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 const WORKFLOWS = {
   application: ".github/workflows/futures-public-network-smoke.yml",
+  applicationFast: ".github/workflows/application-fast-ci.yml",
+  applicationReadyDispatch: ".github/workflows/application-full-ci-ready-dispatch.yml",
+  applicationMainFallback: ".github/workflows/application-ci-main-fallback.yml",
   research: ".github/workflows/prediction-lab-pr-head-unit.yml",
   multiMarket: ".github/workflows/prediction-lab-52d-validation.yml",
   longHistory: ".github/workflows/prediction-lab-long-history-v1.yml",
@@ -47,12 +51,41 @@ const documents = Object.fromEntries(await Promise.all(Object.entries(WORKFLOWS)
   await readFile(path, "utf8"),
 ])));
 
-test("workflow syntax and PR event contract are explicit", () => {
+const rule0Sidecar = await readFile(".github/workflows/prediction-lab-rule0-1h-shadow-sidecar.yml", "utf8");
+const derivativesHistory = await readFile("market-prediction-lab/src/derivatives-history.js");
+const dashboardReadback = await readFile(".github/workflows/research-dashboard-overview-readback.yml", "utf8");
+
+test("workflow syntax and PR event contracts are explicit", () => {
   for (const document of Object.values(documents)) {
     assertBasicWorkflowSyntax(document);
-    const pullRequest = indentedBlock(indentedBlock(document, "on", 0), "pull_request", 2);
-    assert.doesNotMatch(pullRequest, /^\s+branches:/mu, "stacked PR bases must not be excluded");
     assert.doesNotMatch(document, /pull_request_target/u);
+  }
+
+  const fastPullRequest = indentedBlock(indentedBlock(documents.applicationFast, "on", 0), "pull_request", 2);
+  for (const activity of ["opened", "synchronize", "reopened", "converted_to_draft"]) {
+    assert.match(fastPullRequest, new RegExp(`- ${activity}`, "u"));
+  }
+  assert.doesNotMatch(fastPullRequest, /- ready_for_review/u);
+  assert.doesNotMatch(fastPullRequest, /^\s+branches:/mu, "stacked PR bases must not be excluded");
+  assert.doesNotMatch(documents.applicationFast, /if: github\.event\.pull_request\.draft == true/u);
+
+  const applicationOn = indentedBlock(documents.application, "on", 0);
+  const applicationPullRequest = indentedBlock(applicationOn, "pull_request", 2);
+  assert.match(applicationPullRequest, /- ready_for_review/u);
+  assert.doesNotMatch(applicationPullRequest, /^\s+branches:/mu, "stacked PR bases must not be excluded");
+  assert.match(applicationOn, /^\s+workflow_dispatch:/mu);
+
+  const dispatcherOn = indentedBlock(documents.applicationReadyDispatch, "on", 0);
+  const workflowRun = indentedBlock(dispatcherOn, "workflow_run", 2);
+  assert.match(workflowRun, /- Application Fast CI/u);
+  assert.match(workflowRun, /- completed/u);
+  assert.doesNotMatch(dispatcherOn, /^\s+pull_request:/mu);
+  assert.match(documents.applicationReadyDispatch, /github\.event\.workflow_run\.conclusion == 'success'/u);
+  assert.match(documents.applicationReadyDispatch, /if \(pr\.draft\)/u);
+
+  for (const name of ["research", "multiMarket", "longHistory"]) {
+    const pullRequest = indentedBlock(indentedBlock(documents[name], "on", 0), "pull_request", 2);
+    assert.doesNotMatch(pullRequest, /^\s+branches:/mu, "stacked PR bases must not be excluded");
     for (const activity of ["opened", "synchronize", "reopened"]) {
       assert.match(pullRequest, new RegExp(`- ${activity}`, "u"));
     }
@@ -62,6 +95,9 @@ test("workflow syntax and PR event contract are explicit", () => {
 test("authoritative main push CI and required status publishers remain intact", () => {
   const push = indentedBlock(indentedBlock(documents.application, "on", 0), "push", 2);
   assert.match(push, /^\s+branches:\s*\n\s+- main$/mu);
+  assert.match(push, /^\s+- market-intelligence-sidecar\/\*\*$/mu);
+  assert.match(push, /^\s+- market-prediction-lab\/\*\*$/mu);
+  assert.match(push, /^\s+- \.github\/workflows\/public-forward-liquidity-\*\.yml$/mu);
   for (const context of [
     "application-ci/verified",
     "browser-ui/verified",
@@ -71,21 +107,78 @@ test("authoritative main push CI and required status publishers remain intact", 
     "futures-public-network-smoke/verified",
   ]) {
     assert.match(documents.application, new RegExp(context.replaceAll("/", "\\/"), "u"));
+    assert.doesNotMatch(documents.applicationFast, new RegExp(context.replaceAll("/", "\\/"), "u"));
+    assert.doesNotMatch(documents.applicationReadyDispatch, new RegExp(context.replaceAll("/", "\\/"), "u"));
   }
   for (const name of ["application", "multiMarket", "longHistory"]) {
     assert.match(indentedBlock(documents[name], "on", 0), /^\s+workflow_dispatch:/mu);
   }
+  assert.doesNotMatch(indentedBlock(documents.applicationFast, "on", 0), /^\s+workflow_dispatch:/mu);
+  assert.doesNotMatch(indentedBlock(documents.applicationReadyDispatch, "on", 0), /^\s+workflow_dispatch:/mu);
 });
 
-test("each lane exposes a clear PR exact check name", () => {
+test("exact-current-main CI recovery command dispatches only canonical full CI", () => {
+  const document = documents.applicationMainFallback;
+  const on = indentedBlock(document, "on", 0);
+  assert.match(on, /^\s+push:/mu);
+  assert.match(on, /^\s+issue_comment:/mu);
+  assert.match(document, /github\.event\.issue\.number == 23/u);
+  assert.match(document, /github\.event\.comment\.user\.login == github\.repository_owner/u);
+  assert.match(document, /github\.event\.comment\.author_association == 'OWNER'/u);
+  assert.match(document, /startsWith\(github\.event\.comment\.body, '\/run-application-ci-main '\)/u);
+  assert.match(document, /\^\\\/run-application-ci-main \(\[0-9a-f\]\{40\}\)\$/u);
+  assert.match(document, /officialWorkflowId = 'futures-public-network-smoke\.yml'/u);
+  assert.match(document, /createWorkflowDispatch/u);
+  assert.match(document, /inputs: \{ target_sha: sha, checkout_ref: sha \}/u);
+  assert.match(document, /Fallback CI requires the exact current main SHA/u);
+  assert.doesNotMatch(document, /merge_pull_request|REAL_ORDER_ENABLED\s*:\s*true|LIVE_TRADING\s*:\s*true/u);
+});
+
+test("fast CI remains development-only while canonical full CI remains the release authority", () => {
+  assert.match(documents.applicationFast, /Application Fast CI is a development accelerator only/u);
+  assert.match(documents.applicationFast, /MUST NOT publish or replace any of the six Required CI contexts/u);
+  assert.match(documents.applicationFast, /Final Ready\/Merge\/Staging gates still require canonical Application CI 6\/6/u);
+  assert.match(documents.application, /Publish verified Application CI result/u);
+  assert.match(documents.application, /Playwright desktop and mobile application UI/u);
+  assert.match(documents.application, /Disposable PostgreSQL migration and RLS integration/u);
+  assert.match(documents.application, /Security input, bundle, and outbound safety verification/u);
+  assert.match(documents.application, /AI privacy, prompt, output, and outbound verification/u);
+  assert.match(documents.application, /Bitget public API smoke/u);
+});
+
+test("successful exact-head Fast CI is required for both commit-change and Ready-transition full CI", () => {
+  const document = documents.applicationReadyDispatch;
+  assert.match(document, /actions: write/u);
+  assert.match(document, /workflowId = 'futures-public-network-smoke\.yml'/u);
+  assert.match(document, /createWorkflowDispatch/u);
+  assert.match(document, /target_sha: targetSha/u);
+  assert.match(document, /checkout_ref: targetSha/u);
+  assert.match(document, /run\.head_sha/u);
+  assert.match(document, /String\(pr\.head\.sha\)\.toLowerCase\(\) !== targetSha/u);
+  assert.match(document, /if \(pr\.draft\)/u);
+  assert.match(document, /Failed, skipped, cancelled, missing, stale, or Draft Fast CI cannot dispatch/u);
+  assert.match(document, /grants no merge, staging, production, database, secret, environment, live-trading, or real-order authority/u);
+
+  const fastPullRequest = indentedBlock(indentedBlock(documents.applicationFast, "on", 0), "pull_request", 2);
+  assert.doesNotMatch(fastPullRequest, /- ready_for_review/u);
+  const applicationPullRequest = indentedBlock(indentedBlock(documents.application, "on", 0), "pull_request", 2);
+  assert.match(applicationPullRequest, /- ready_for_review/u);
+  assert.match(documents.application, /READY_FAST_CI_NOT_GREEN/u);
+  assert.match(documents.application, /latestFast\.conclusion !== 'success'/u);
+});
+
+test("each lane exposes a clear exact-head or fast check name", () => {
   assert.match(documents.application, /PR Exact Application CI/u);
+  assert.match(documents.applicationFast, /Changed-scope typecheck, tests, and build/u);
+  assert.match(documents.applicationReadyDispatch, /Dispatch canonical full CI after exact-head Fast CI success/u);
   assert.match(documents.multiMarket, /PR Exact Multi-Market/u);
   assert.match(documents.longHistory, /PR Exact Long-History/u);
   assert.match(documents.research, /PR Exact Research Tests/u);
 });
 
-test("each checkout verifies expected SHA, actual HEAD, and detached mode", () => {
-  for (const [name, document] of Object.entries(documents)) {
+test("checkout-based lanes verify expected SHA, actual HEAD, and detached mode", () => {
+  for (const name of ["application", "applicationFast", "research", "multiMarket", "longHistory"]) {
+    const document = documents[name];
     assert.match(document, /git rev-parse HEAD/u, `${name} does not read actual HEAD`);
     assert.match(document, /git symbolic-ref --quiet --short HEAD/u, `${name} does not reject branch checkout`);
     assert.match(document, /HEAD_SHA_MISMATCH/u, `${name} does not report SHA mismatch`);
@@ -111,11 +204,69 @@ test("multi-market PR data blocks stay truthful without weakening full dispatch 
   assert.match(documents.multiMarket, /github\.event_name == 'workflow_dispatch'[\s\S]*needs\.validate-and-train\.outputs\.research_ready == 'true'/u);
 });
 
-test("PR lane has no secret, deployment, timer, or trading authority", () => {
+test("Rule0 OI parity lock tracks the exact derivatives-history Git blob before merge", () => {
+  const match = rule0Sidecar.match(/^\s*CANONICAL_OI_PARITY_BLOB:\s*([0-9a-f]{40})\s*$/mu);
+  assert.ok(match, "Rule0 sidecar must pin a canonical OI parity blob");
+
+  const gitHeader = Buffer.from(`blob ${derivativesHistory.length}\0`);
+  const actualBlob = createHash("sha1").update(gitHeader).update(derivativesHistory).digest("hex");
+  assert.equal(match[1], actualBlob, "Rule0 sidecar OI parity blob drifted from derivatives-history.js");
+
+  const fastPullRequest = indentedBlock(indentedBlock(documents.applicationFast, "on", 0), "pull_request", 2);
+  assert.match(fastPullRequest, /- market-prediction-lab\/src\/derivatives-history\.js/u);
+});
+
+test("PR lanes have no secret, deployment, timer, or trading authority", () => {
   for (const document of Object.values(documents)) {
     assert.doesNotMatch(document, /secrets\./u);
     assert.doesNotMatch(document, /^\s+(deploy|environment):/mu);
     assert.doesNotMatch(document, /^\s+schedule:/mu);
     assert.doesNotMatch(document, /REAL_ORDER_ENABLED\s*:\s*true/u);
   }
+});
+
+
+test("Research Dashboard readback receipt parser uses real regex escapes", () => {
+  assert.ok(
+    dashboardReadback.includes("matchAll(/<!--\\s*agent-hub-predecessor:(\\d+)\\s*-->/g)"),
+    "predecessor marker parser must use regex whitespace/digit tokens",
+  );
+  assert.ok(
+    dashboardReadback.includes("matchAll(/<!--\\s*agent-hub-successor:(\\d+)\\s*-->/g)"),
+    "successor marker parser must use regex whitespace/digit tokens",
+  );
+  assert.ok(
+    dashboardReadback.includes("receipt.match(/(?:^|\\n)target_sha:\\s*([0-9a-f]{40})(?:\\n|$)/i)"),
+    "activation target parser must use newline/whitespace regex tokens",
+  );
+  assert.ok(
+    dashboardReadback.includes("receipt.match(/(?:^|\\n)canonical_hub:\\s*#(\\d+)(?:\\n|$)/i)"),
+    "activation hub parser must use newline/whitespace/digit regex tokens",
+  );
+  assert.equal(dashboardReadback.includes("matchAll(/<!--\\\\s*agent-hub-predecessor:"), false);
+  assert.equal(dashboardReadback.includes("matchAll(/<!--\\\\s*agent-hub-successor:"), false);
+  assert.equal(dashboardReadback.includes("receipt.match(/(?:^|\\\\n)target_sha:\\\\s*"), false);
+  assert.equal(dashboardReadback.includes("receipt.match(/(?:^|\\\\n)canonical_hub:\\\\s*"), false);
+});
+
+
+test("Research Dashboard readback validates frozen multi-lane live count relationships instead of stale snapshot literals", () => {
+  assert.ok(dashboardReadback.includes("const measuredCounts = {"));
+  assert.ok(dashboardReadback.includes("targetSlotIndex: li.targetSlotIndex"));
+  assert.ok(dashboardReadback.includes("Number.isSafeInteger(value)"));
+  assert.equal(dashboardReadback.includes("li.genuineScheduledSlotN < li.effectiveIndependentN"), false);
+  assert.ok(dashboardReadback.includes("li.genuineScheduledSlotN > li.targetSlotIndex + 1"));
+  assert.ok(dashboardReadback.includes("li.effectiveIndependentN > li.genuineScheduledSlotN * 2"));
+  assert.ok(dashboardReadback.includes("li.rawAcceptedN < li.effectiveIndependentN"));
+  assert.ok(dashboardReadback.includes("li.effectiveIndependentN !== li.independentBuyN + li.independentSellN"));
+  assert.ok(dashboardReadback.includes("li.effectiveIndependentN !== counts.TRAIN + counts.VALIDATION + counts.OOS"));
+  assert.ok(dashboardReadback.includes("counts.TRAIN > 512 || counts.VALIDATION > 256 || counts.OOS > 256"));
+  assert.ok(dashboardReadback.includes("li.targetSlotIndex < 512"));
+  assert.ok(dashboardReadback.includes("li.targetSlotIndex < 768"));
+  assert.ok(dashboardReadback.includes("counts.VALIDATION !== 0"));
+  assert.ok(dashboardReadback.includes("counts.OOS !== 0"));
+  assert.equal(dashboardReadback.includes("li.genuineScheduledSlotN !== 15"), false);
+  assert.equal(dashboardReadback.includes("li.effectiveIndependentN !== 15"), false);
+  assert.equal(dashboardReadback.includes("li.independentBuyN !== 10"), false);
+  assert.equal(dashboardReadback.includes("li.independentSellN !== 5"), false);
 });

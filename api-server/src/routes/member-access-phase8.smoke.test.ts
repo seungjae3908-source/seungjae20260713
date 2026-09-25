@@ -3,7 +3,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import { requireAuthenticated, requireCapability } from '../middleware/auth';
+import {
+  requireAuthenticated,
+  requireAuthenticatedProfileBootstrap,
+  requireCapability,
+} from '../middleware/auth';
 import { MEMBER_CAPABILITIES, MEMBER_PERMISSION_MATRIX } from '../../../packages/member-access/src/index.js';
 import { classifyAdminReadFailure, RESEARCH_OVERVIEW_TIMEOUT_MS } from './admin';
 
@@ -96,9 +100,14 @@ function authRuntime({ authUser = { id: 'member-1' }, authError = null, profile 
   };
 }
 
-function authRequest() {
+function jwtForSubject(subject) {
+  const payload = Buffer.from(JSON.stringify({ sub: subject }), 'utf8').toString('base64url');
+  return `eyJhbGciOiJub25lIn0.${payload}.signature`;
+}
+
+function authRequest(token = 'valid-token') {
   return {
-    header: (name) => name.toLowerCase() === 'authorization' ? 'Bearer valid-token' : undefined,
+    header: (name) => name.toLowerCase() === 'authorization' ? `Bearer ${token}` : undefined,
   };
 }
 
@@ -127,6 +136,78 @@ async function runRequireAuthenticated(runtimeOptions = {}) {
   }, dependencies);
   return { req, state, calls, nextCalls };
 }
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((next) => { resolve = next; });
+  return { promise, resolve };
+}
+
+test('browser profile bootstrap overlaps remote identity and RLS profile reads without weakening either gate', async () => {
+  const auth = deferred();
+  const profile = deferred();
+  const started = [];
+  const req = authRequest(jwtForSubject('member-1'));
+  const { response, state } = responseRecorder();
+  let nextCalls = 0;
+  const work = requireAuthenticatedProfileBootstrap(req, response, () => {
+    nextCalls += 1;
+  }, {
+    isSupabaseConfigured: () => true,
+    getSupabase: () => ({ auth: { getUser: () => {
+      started.push('auth');
+      return auth.promise;
+    } } }),
+    getUserSupabase: () => ({ from: () => ({ select: () => ({ eq: (column, value) => {
+      assert.equal(column, 'id');
+      assert.equal(value, 'member-1');
+      return { maybeSingle: () => {
+        started.push('profile');
+        return profile.promise;
+      } };
+    } }) }) }),
+  });
+
+  await Promise.resolve();
+  assert.deepEqual(started.sort(), ['auth', 'profile']);
+  profile.resolve({ data: memberProfile(), error: null });
+  await Promise.resolve();
+  assert.equal(nextCalls, 0, 'profile success alone must not grant access');
+  auth.resolve({ data: { user: { id: 'member-1' } }, error: null });
+  await work;
+  assert.equal(state.statusCode, 200);
+  assert.equal(nextCalls, 1);
+  assert.equal(req.member.id, 'member-1');
+});
+
+test('browser profile bootstrap rejects a profile identity that differs from the verified user', async () => {
+  const req = authRequest(jwtForSubject('member-2'));
+  const { response, state } = responseRecorder();
+  let nextCalls = 0;
+  await requireAuthenticatedProfileBootstrap(req, response, () => {
+    nextCalls += 1;
+  }, {
+    isSupabaseConfigured: () => true,
+    getSupabase: () => ({ auth: { getUser: async () => ({
+      data: { user: { id: 'member-1' } },
+      error: null,
+    }) } }),
+    getUserSupabase: () => ({ from: () => ({ select: () => ({ eq: (column, value) => {
+      assert.equal(column, 'id');
+      assert.equal(value, 'member-2');
+      return { maybeSingle: async () => ({
+        data: memberProfile({ id: 'member-2' }),
+        error: null,
+      }) };
+    } }) }) }),
+  });
+
+  assert.equal(nextCalls, 0);
+  assert.equal(state.statusCode, 403);
+  assert.deepEqual(state.body, { error: 'PROFILE_NOT_FOUND' });
+  assert.equal(req.member, undefined);
+  assert.equal(req.accessToken, undefined);
+});
 
 test('requireAuthenticated accepts an approved active member after valid Supabase identity and fresh profile reload', async () => {
   const result = await runRequireAuthenticated();
@@ -223,6 +304,14 @@ for (const tier of ['pending', 'associate', 'regular', 'admin']) {
     });
   }
 }
+
+test('associate receives paper and auto trading access without broad order-placement capability', () => {
+  assert.equal(MEMBER_PERMISSION_MATRIX.associate.canAccessPaperTrading, true);
+  assert.equal(MEMBER_PERMISSION_MATRIX.associate.canAccessAutoTrading, true);
+  assert.equal(MEMBER_PERMISSION_MATRIX.associate.canPlaceOrders, false);
+  assert.equal(MEMBER_PERMISSION_MATRIX.pending.canAccessPaperTrading, false);
+  assert.equal(MEMBER_PERMISSION_MATRIX.pending.canAccessAutoTrading, false);
+});
 
 test('capability route blocks unauthenticated request', async () => {
   const { server, baseUrl } = await startServer();

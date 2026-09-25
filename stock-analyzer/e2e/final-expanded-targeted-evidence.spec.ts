@@ -209,7 +209,15 @@ type GeminiRequestBody = { contents?: Array<{ parts?: Array<{ text?: string }> }
 type PublicContextPrompt = {
   task?: string;
   publicContext?: {
-    selection?: { market?: string; symbol?: string; displayName?: string };
+    selection?: {
+      market?: string;
+      symbol?: string;
+      displayName?: string;
+      ticker?: string;
+      timeframe?: string | null;
+      action?: string | null;
+      selectedAt?: string | null;
+    };
     quote?: Record<string, unknown>;
     company?: Record<string, unknown> | null;
     news?: { items?: Array<Record<string, unknown>> } | null;
@@ -306,7 +314,14 @@ for (const fixture of [
         const prompt = providerPrompt(init);
         const context = prompt.publicContext;
         expect(prompt.task).toBe('answer_or_summarize_public_financial_information');
-        expect(context?.selection).toEqual({ market: fixture.market, symbol: fixture.symbol, displayName: fixture.displayName });
+        expect(context?.selection).toEqual({
+          market: fixture.market,
+          symbol: fixture.symbol,
+          displayName: fixture.displayName,
+          timeframe: null,
+          action: null,
+          selectedAt: null,
+        });
         expect(context?.quote?.price).toBe(fixture.price);
         expect(context?.company?.market).toBe(fixture.market);
         expect(context?.news?.items?.[0]?.source).toBe('fixture-news');
@@ -506,7 +521,7 @@ async function expectPrimaryStockInfoUsable(page: Page) {
   await page.keyboard.press('Escape');
   await navigation.getByRole('button', { name: '기술', exact: true }).click();
   await expect(page.getByRole('menu', { name: '기술 메뉴' })).toBeVisible();
-  await expect(page.getByRole('menuitem', { name: 'AI 차트', exact: true })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: 'AI차트', exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
 }
 

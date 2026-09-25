@@ -18,6 +18,23 @@ async function openAt(page: Page, width: number, height: number, path = '/__phas
   return errors;
 }
 
+test('paper route remains usable without futures capability and performs zero futures loader calls', async ({ page }) => {
+  const errors = await openAt(page, 390, 844, '/__phase6-paper-trading-e2e?futures=off');
+  await expect(page.getByTestId('paper-account')).toBeVisible();
+  await expect(page.getByTestId('paper-journal')).toBeVisible();
+  await expect(page.getByTestId('paper-futures-access-disabled')).toBeVisible();
+  await expect(page.getByTestId('paper-order-form')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '현재가 갱신' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '완료 봉 처리' })).toBeDisabled();
+  await page.waitForTimeout(500);
+  const loaderCalls = await page.evaluate(
+    () => (window as typeof window & { __phase6PaperFuturesLoaderCalls?: number }).__phase6PaperFuturesLoaderCalls ?? -1,
+  );
+  expect(loaderCalls).toBe(0);
+  await expect.poll(() => errors).toEqual([]);
+  await assertNoHorizontalOverflow(page);
+});
+
 test('desktop creates, partially closes, fully closes and journals a paper position', async ({ page }) => {
   const errors = await openAt(page, 1440, 900);
   await page.getByTestId('paper-submit').click();

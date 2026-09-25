@@ -8,6 +8,14 @@ const AUTH_STORAGE_KEY = 'sb-127-auth-token';
 const RESEARCH_SHA = '1111111111111111111111111111111111111111';
 const SCREENSHOT_DIR = path.resolve(process.cwd(), '../docs/screenshots/research-center-v2');
 
+async function openExpertResearch(page: Page) {
+  await page.goto('/research-center');
+  const detail = page.getByRole('button', { name: '상세', exact: true });
+  await expect(detail).toBeVisible();
+  await detail.click();
+  await expect(page.getByTestId('research-center-page')).toBeVisible();
+}
+
 async function captureScreenshot(page: Page, name: string) {
   if (process.env.CAPTURE_RESEARCH_SCREENSHOTS !== 'true') return;
   fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
@@ -270,7 +278,7 @@ async function expectNoHorizontalOverflow(page: Page) {
 test('Research Center V2 exposes exactly four tabs and every required click-through on desktop', async ({ page }) => {
   const { assertClean } = await installAdmin(page, overview());
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/research-center');
+  await openExpertResearch(page);
 
   await expect(page.getByRole('heading', { name: '연구센터', exact: true })).toBeVisible();
   await expect(page.getByRole('tab')).toHaveCount(4);
@@ -313,7 +321,7 @@ test('Research Center V2 exposes exactly four tabs and every required click-thro
 
   await page.getByRole('tab', { name: '검증 리포트' }).click();
   await expect(page.getByTestId('research-evidence-tab')).toContainText(RESEARCH_SHA);
-  await expect(page.getByTestId('research-evidence-tab')).toContainText('Current main SHA');
+  await expect(page.getByTestId('research-evidence-tab')).toContainText('Research runtime SHA');
   await expect(page.getByTestId('research-evidence-tab')).toContainText('미수집');
   await captureScreenshot(page, 'after-desktop-validation-report.png');
   await expectNoHorizontalOverflow(page);
@@ -324,7 +332,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 430, height: 932 }
   test(`Research Center V2 mobile ${viewport.width} has no clipping or bottom-nav overlap`, async ({ page }) => {
     const { assertClean } = await installAdmin(page, overview());
     await page.setViewportSize(viewport);
-    await page.goto('/research-center');
+    await openExpertResearch(page);
     await expect(page.getByRole('tab')).toHaveCount(4);
     await page.getByTestId('research-stage-backtest').click();
     await expect(page.getByTestId('research-detail-backtest')).toBeVisible();
@@ -345,7 +353,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 430, height: 932 }
 
 test('CASE A all missing stays empty rather than fabricated zero', async ({ page }) => {
   const { assertClean } = await installAdmin(page, emptyOverview(), { error: 'PROMOTION_UNAVAILABLE' }, 503);
-  await page.goto('/research-center');
+  await openExpertResearch(page);
   await expect(page.getByTestId('research-partial-state')).toBeVisible();
   await page.getByRole('tab', { name: '모의매매' }).click();
   await expect(page.getByTestId('research-paper-tab')).toContainText('미측정');
@@ -370,7 +378,7 @@ test('CASE B Shadow-only preserves observed counts and leaves other evidence mis
   value.state.present = true;
   value.shadow = overview().shadow;
   const { assertClean } = await installAdmin(page, value);
-  await page.goto('/research-center');
+  await openExpertResearch(page);
   await page.getByTestId('research-stage-shadow').click();
   await expect(page.getByTestId('research-detail-shadow')).toContainText('488');
   await page.getByTestId('research-stage-settlement').click();
@@ -380,7 +388,7 @@ test('CASE B Shadow-only preserves observed counts and leaves other evidence mis
 
 test('CASE C Paper inactive remains inactive with no performance claim', async ({ page }) => {
   const { assertClean } = await installAdmin(page, overview());
-  await page.goto('/research-center');
+  await openExpertResearch(page);
   await page.getByRole('tab', { name: '모의매매' }).click();
   await expect(page.getByTestId('research-paper-tab')).toContainText('미활성');
   await expect(page.getByTestId('research-paper-tab')).toContainText('표본 없음');
@@ -394,7 +402,7 @@ test('CASE D active Paper with Settlement N=0 shows running and empty sample', a
   value.paper.runtime.status = 'running';
   value.paper.runtime.scheduleActive = true;
   const { assertClean } = await installAdmin(page, value);
-  await page.goto('/research-center');
+  await openExpertResearch(page);
   await page.getByRole('tab', { name: '모의매매' }).click();
   const paper = page.getByTestId('research-paper-tab');
   await expect(paper).toContainText('실행 중');
@@ -410,7 +418,7 @@ test('CASE E existing Settlement with missing cost stays partial and unavailable
   value.paper.runtime.scheduleActive = true;
   value.paper.ledger = { present: true, cycleCount: 12, sampleCount: 7, positionCount: 2, settlementCount: 5 };
   const { assertClean } = await installAdmin(page, value);
-  await page.goto('/research-center');
+  await openExpertResearch(page);
   await page.getByRole('tab', { name: '모의매매' }).click();
   await expect(page.getByTestId('paper-recent-settlements')).toContainText('Settlement 5건');
   await expect(page.getByTestId('paper-full-cost')).toContainText('Commission');
@@ -427,7 +435,7 @@ test('actual canonical AI evidence is rendered without granting AI trading autho
     reviewConflictReason: '미래 관찰은 있으나 모의정산 증거가 부족합니다.',
   };
   const { assertClean } = await installAdmin(page, overview(aiDebate));
-  await page.goto('/research-center');
+  await openExpertResearch(page);
   await page.getByRole('tab', { name: 'AI 분석실' }).click();
   const lab = page.getByTestId('research-ai-lab-tab');
   await expect(lab).toContainText('AI 의견이 충돌했습니다');

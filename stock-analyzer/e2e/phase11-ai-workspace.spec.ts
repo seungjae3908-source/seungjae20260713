@@ -180,32 +180,27 @@ test('desktop technical workspace keeps AI signal scanner, chart broadcast, and 
   await expect(page.getByText('000660 · 국내주식 · 1D', { exact: true })).toBeVisible();
 });
 
-test('legacy stock auto-trade controls remain fail closed with zero order mutations', async ({ page }) => {
+test('technical workspace routes auto trading to the canonical surface with zero legacy order mutations', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  let orderMutations = 0;
+  let legacyOrderMutations = 0;
   await mockWorkspace(page);
   await page.route(/\/api\/stocks\/auto-trade\/(?:plan|execute|monitor|close-plan|close-execute)(?:\?.*)?$/, async (route) => {
-    orderMutations += 1;
+    legacyOrderMutations += 1;
     await route.fulfill({
       status: 500,
       contentType: 'application/json',
-      body: JSON.stringify({ ok: false, message: 'unexpected order mutation' }),
+      body: JSON.stringify({ ok: false, message: 'unexpected legacy order mutation' }),
     });
   });
-  page.on('dialog', (dialog) => dialog.accept());
 
   await page.goto('/__phase11-ai-workspace-e2e');
   await page.getByRole('button', { name: '자동매매', exact: true }).click();
-  const liveToggle = page.getByRole('button', { name: '실제 주문 꺼짐', exact: true });
-  await expect(liveToggle).toBeVisible();
-  await liveToggle.click();
-  await expect(page.getByRole('button', { name: '주문 승인모드 켜짐', exact: true })).toBeVisible();
 
-  await page.getByRole('button', { name: '조건 주문 실행', exact: true }).click();
-  await expect(page.getByText('최소 모델점수를 직접 입력해 주세요.', { exact: true })).toBeVisible();
-  expect(orderMutations).toBe(0);
+  await expect(page).toHaveURL(/\/auto-trading$/);
+  await expect(page.getByRole('heading', { name: '자동매매 후보 종목', level: 2 })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '조건 주문 실행', exact: true })).toHaveCount(0);
+  expect(legacyOrderMutations).toBe(0);
 });
-
 test('AI chat handles send, refusal response, and cancellation-safe UI', async ({ page }) => {
   let calls = 0;
   await page.route('**/api/ai/chat', async (route) => {
@@ -221,6 +216,7 @@ test('AI chat handles send, refusal response, and cancellation-safe UI', async (
         answer: request.message.includes('주문')
           ? '주문 작업은 실행할 수 없습니다.'
           : 'RSI는 가격 변화의 상대적 강도를 보는 기술지표입니다.',
+        selection: request.context ?? {},
       }),
     }).catch(() => undefined);
   });

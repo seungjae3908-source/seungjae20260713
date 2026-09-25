@@ -3,7 +3,9 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'wouter';
 import { BottomNav } from './bottom-nav';
 import { useAuth } from '@/lib/auth';
-import { fetchCopilotSnapshot, reviewCopilot, validateResearchDsl, submitResearchBacktest, readResearchBacktest, type CopilotReview, type CopilotTask, type DslValidation } from '@/lib/research-copilot';
+import { fetchCopilotSnapshot, reviewCopilot, validateResearchDsl, submitResearchBacktest, readResearchBacktest, readResearchSameCandidate, type CopilotReview, type CopilotTask, type DslValidation } from '@/lib/research-copilot';
+import type { ResearchSameCandidatePrewireResult } from '../../../api-server/src/services/research-same-candidate-prewire.service';
+import { ResearchSameCandidatePreview } from './research-same-candidate-preview';
 
 const ACTIONS: Array<[CopilotTask, string]> = [
   ['propose_candidates', '후보 가설 제안'], ['interpret_evidence', '검증 증거 해석'],
@@ -13,12 +15,27 @@ const button = 'min-h-11 rounded-xl border border-border px-4 py-2 text-sm font-
 const bundleLabels: Record<string, string> = { strategy: 'Strategy Identity', model: 'Model Identity', feature: 'Feature Identity', dataset: 'Dataset', split: 'Frozen Split',
   risk: 'Risk Policy', fullCost: 'Full Cost (8 components)', oos: 'OOS Horizon', wf: 'Walk-forward Policy', holdout: 'Final Holdout' };
 
+function copilotStatusLabel(status: string) {
+  if (status === 'needs_context') return '추가 근거 필요';
+  if (status === 'ready') return '사용 가능';
+  if (status === 'blocked') return '차단됨';
+  return status;
+}
+
+function aiReasonLabel(reason: string | null | undefined) {
+  if (!reason) return '사용 가능';
+  if (reason === 'FREE_TIER_NOT_CONFIRMED') return 'AI 제공자 무료 사용 가능 여부 미확인';
+  if (reason === 'PROVIDER_NOT_CONFIGURED') return 'AI 제공자 연결 필요';
+  return 'AI 사용 조건 확인 필요';
+}
+
 export function ResearchCopilotPanel() {
   const { profile, isAdmin } = useAuth();
   const snapshot = useQuery({ queryKey: ['admin', profile?.id, 'research-copilot'], queryFn: ({ signal }) => fetchCopilotSnapshot(signal), enabled: isAdmin && Boolean(profile?.id), staleTime: 30_000, retry: false });
   const [review, setReview] = useState<CopilotReview | null>(null);
   const [dsl, setDsl] = useState('');
   const [validation, setValidation] = useState<DslValidation | null>(null);
+  const [sameCandidate, setSameCandidate] = useState<ResearchSameCandidatePrewireResult | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const pending = useRef<AbortController | null>(null);
@@ -27,7 +44,7 @@ export function ResearchCopilotPanel() {
   // React Query retains cached data on refetch failure. It must not look like current evidence.
   const data = snapshot.isError ? undefined : snapshot.data;
   useEffect(() => () => { sequence.current += 1; pending.current?.abort(); }, []);
-  useEffect(() => { sequence.current += 1; pending.current?.abort(); artifactPin.current = null; setReview(null); setValidation(null); setBusy(false); }, [profile?.id]);
+  useEffect(() => { sequence.current += 1; pending.current?.abort(); artifactPin.current = null; setReview(null); setValidation(null); setSameCandidate(null); setBusy(false); }, [profile?.id]);
   const visibleReview = !snapshot.isError && review?.evidenceDigest === data?.evidenceDigest && data?.freshness === 'FRESH' ? review : null;
 
   async function run(operation: (signal: AbortSignal) => Promise<void>) {
@@ -52,6 +69,7 @@ export function ResearchCopilotPanel() {
     });
   }
   function validate() {
+    setSameCandidate(null);
     artifactPin.current = null;
     setValidation(null);
     void run(async signal => {
@@ -65,6 +83,7 @@ export function ResearchCopilotPanel() {
   function submitBacktest() {
     const bundle = validation?.bundle;
     if (!bundle?.backtestExecutable || busy) return;
+    setSameCandidate(null);
     void run(async signal => {
       const result = await submitResearchBacktest(JSON.parse(dsl), bundle, signal);
       if (!signal.aborted) { artifactPin.current = result.resultArtifactDigest; setValidation(previous => previous ? { ...previous, bundle: result } : null); }
@@ -73,6 +92,7 @@ export function ResearchCopilotPanel() {
   function readBacktest() {
     const bundle = validation?.bundle;
     if (!bundle?.researchBundleReady || busy) return;
+    setSameCandidate(null);
     void run(async signal => {
       const result = await readResearchBacktest(JSON.parse(dsl), { ...bundle, resultArtifactDigest: artifactPin.current ?? bundle.resultArtifactDigest }, signal);
       if (!signal.aborted) {
@@ -81,22 +101,32 @@ export function ResearchCopilotPanel() {
       }
     });
   }
+  function readSameCandidate() {
+    const bundle = validation?.bundle;
+    if (!isAdmin || busy || bundle?.publicationStatus !== 'READBACK_VERIFIED' || !bundle.backtestCompleted) return;
+    setSameCandidate(null);
+    void run(async signal => {
+      const result = await readResearchSameCandidate(JSON.parse(dsl), bundle, signal);
+      if (!signal.aborted) setSameCandidate(result);
+    });
+  }
   return <main className="h-full overflow-y-auto bg-background pb-28" data-testid="research-copilot">
     <div className="mx-auto max-w-7xl space-y-5 p-4 sm:p-6">
       <header className="rounded-2xl border border-border bg-card p-5">
         <p className="text-xs font-bold text-primary">RESEARCH ONLY · 실행 권한 없음</p>
-        <h1 className="mt-2 text-2xl font-black">AI Research Copilot</h1>
+        <h1 className="mt-2 text-2xl font-black">AI 연구 도우미</h1>
+        <p className="mt-1 text-xs font-bold text-muted-foreground">AI Research Copilot</p>
         <p className="mt-3 text-sm leading-6 text-foreground/80">AI는 가설과 연구 절차를 설명합니다. 수익률·EV·PF·MDD·비용·확률·레버리지·Promotion·Champion은 AI가 계산하거나 결정하지 않습니다.</p>
       </header>
       {snapshot.isPending ? <p role="status">canonical 연구 증거를 불러오는 중…</p> : null}
       {snapshot.isError ? <div role="alert" className="rounded-xl border border-destructive p-4"><p>{snapshot.error.message}</p><button className={button} onClick={() => void snapshot.refetch()}>다시 조회</button></div> : null}
       {data ? <>
         <section aria-label="연구 근거와 AI 한도" className="rounded-2xl border border-border bg-card p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="font-bold">현재 증거 · {data.status}</h2><button className={button} disabled={busy || snapshot.isFetching} onClick={() => void snapshot.refetch()}>증거 새로고침</button></div>
+          <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold text-muted-foreground">현재 증거</p><h2 className="mt-1 font-bold">{copilotStatusLabel(data.status)}</h2></div><button className={button} disabled={busy || snapshot.isFetching} onClick={() => void snapshot.refetch()}>증거 새로고침</button></div>
           <p className="mt-2 text-sm">원본 기준 시각: {data.timestamp === null ? '미수집' : new Date(data.timestamp).toISOString()} · {data.freshness}</p>
           <p className="mt-2 break-all text-xs text-muted-foreground">출처: {data.data_sources.join(' / ')} · SHA-256: {data.evidenceDigest}</p>
           <p className="mt-2 text-sm">AI 요청 {data.ai.calls}회 · 캐시 적중 {data.ai.cacheHits}회 · 토큰 사용량/무료 잔여 한도: 미확인</p>
-          <p className="mt-2 text-sm">{data.ai.available ? '명시 요청에만 AI를 호출합니다.' : `AI 사용 불가: ${data.ai.reason}`}</p>
+          <p className="mt-2 text-sm">{data.ai.available ? '명시 요청에만 AI를 호출합니다.' : aiReasonLabel(data.ai.reason)}</p>{!data.ai.available ? <div className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/5 p-3 text-sm"><p className="font-black">왜 버튼을 누를 수 없나요?</p><p className="mt-1 break-keep text-muted-foreground">현재 AI 제공자 사용 조건이 확인되지 않아 요청 버튼을 안전하게 비활성화했습니다. 연구 근거는 그대로 볼 수 있습니다.</p><details className="mt-2 text-xs"><summary className="cursor-pointer font-bold">기술 상태 코드 보기</summary><p className="mt-2 break-all font-mono text-muted-foreground">{data.ai.reason}</p></details></div> : null}
           <div className="mt-4 flex flex-wrap gap-2">{ACTIONS.map(([task, label]) => <button key={task} className={button} disabled={busy || snapshot.isError || snapshot.isFetching || !data.ai.available} onClick={() => ask(task)}>{label}</button>)}</div>
         </section>
         {busy ? <p role="status">연구 요청을 검증하는 중…</p> : null}
@@ -114,7 +144,7 @@ export function ResearchCopilotPanel() {
         <section aria-label="연구 단계" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <p className="text-sm sm:col-span-2 lg:col-span-3">전체 등록 전략의 단계별 조회 현황입니다. 서로 다른 전략의 receipt 수를 합쳐 한 후보의 검증 완료로 판단하지 않습니다.</p>
           {data.stages.map(stage => <article key={stage.key} className="min-w-0 rounded-2xl border border-border bg-card p-4">
-            <h2 className="font-bold">{stage.label}</h2><p className="mt-2 text-xs font-bold text-amber-600">{stage.status}</p>
+            <h2 className="font-bold">{stage.label}</h2><p className="mt-2 text-sm font-black text-amber-600">{copilotStatusLabel(stage.status)}</p><p className="mt-1 font-mono text-[10px] text-muted-foreground">{stage.status}</p>
             <p className="mt-2 text-xs">검증 receipt를 조회할 수 있는 전략: {stage.verifiedReceiptCount}개</p>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">{stage.reason}</p>
             {stage.observedTasks.map((task, i) => <p key={i} className="mt-2 break-all text-xs">관측 작업 {task.id}: {task.status} (검증 PASS 아님)</p>)}
@@ -124,7 +154,7 @@ export function ResearchCopilotPanel() {
           <h2 className="font-bold">canonical DSL / Formula 검증</h2>
           <p className="mt-2 text-sm text-muted-foreground">기존 createSafeStrategyDslV1 검증기를 사용합니다. DSL 통과는 백테스트·수익성 통과가 아닙니다. AI가 만든 가설을 실행 코드로 변환하지 않습니다.</p>
           <label htmlFor="research-dsl" className="mt-4 block text-sm font-bold">연구 DSL JSON</label>
-          <textarea id="research-dsl" value={dsl} disabled={busy} maxLength={32_001} onChange={event => { artifactPin.current = null; setDsl(event.target.value); setValidation(null); }} rows={6} className="mt-2 w-full rounded-xl border border-border bg-background p-3 font-mono text-xs" spellCheck={false} />
+          <textarea id="research-dsl" value={dsl} disabled={busy} maxLength={32_001} onChange={event => { artifactPin.current = null; setDsl(event.target.value); setValidation(null); setSameCandidate(null); }} rows={6} className="mt-2 w-full rounded-xl border border-border bg-background p-3 font-mono text-xs" spellCheck={false} />
           <button className={button + ' mt-3'} disabled={busy || !dsl.trim()} onClick={validate}>DSL 검증</button>
           {validation ? <div role="status" className="mt-3 break-all text-sm"><p>{validation.status === 'ready' ? 'DSL 유효 · 전략 미평가' : 'DSL 차단: 지원 범위·필드·연산자·깊이를 확인하세요.'}</p>
             {validation.candidateId ? <p className="mt-2">{validation.candidateId}</p> : null}
@@ -147,7 +177,8 @@ export function ResearchCopilotPanel() {
             <section aria-label="선택 후보의 증거 연결" className="rounded-xl border border-border p-3">
               <h3 className="font-bold">이 후보의 다음 단절 지점</h3>
               <p className="mt-2">{!validation.bundle.researchBundleReady ? 'BLOCKED_DATA · 실행 가능한 canonical Bundle 부족' : !validation.bundle.backtestCompleted ? `Backtest · ${validation.bundle.backtestStatus}` : validation.bundle.publicationStatus !== 'READBACK_VERIFIED' ? 'MISSING_EVIDENCE · 영구 결과 재조회 미확인' : 'NOT_EVALUABLE · 동일 후보의 OOS/WF/Holdout 평가 증거 부족'}</p>
-              <p className="mt-2">Shadow · MISSING_EVIDENCE / Forward · MISSING_EVIDENCE</p>
+              <button className={button + ' mt-3'} disabled={busy || validation.bundle.publicationStatus !== 'READBACK_VERIFIED' || !validation.bundle.backtestCompleted} onClick={readSameCandidate}>동일 후보 Forward·Shadow·Paper·Settlement 증거 조회</button>
+              {sameCandidate ? <ResearchSameCandidatePreview result={sameCandidate} /> : <p className="mt-2">Forward / Shadow / Paper / Settlement · NOT_PROVEN — 이 후보의 서버 증거를 조회해야 합니다.</p>}
               <p className="mt-2">Feature·Model identity는 아래 계약 검증과 별개로 Shadow/Forward의 실제 소비가 필요합니다. Trial·Observation 연결과 genuine 독립 표본 수: 확인 불가. 전체 운영 집계를 이 후보의 표본으로 사용하지 않습니다.</p>
               <p className="mt-2">Full Cost / Health / Promotion 판정: NOT_EVALUABLE. 수익성 입증 없음 · 검증 Champion 없음.</p>
               <details className="mt-3">

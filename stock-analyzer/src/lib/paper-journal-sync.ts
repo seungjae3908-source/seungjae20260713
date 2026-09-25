@@ -64,21 +64,49 @@ export type UnifiedTradeReview = {
   performanceScore:number; qualityScore:number; grade:UnifiedTradeGrade; good:string[]; bad:string[]; improvements:string[];
   mistakes:string[]; deterministic:true; externalAiCalled:false;
 };
+export type UnifiedJournalCostComponentEvidence = {
+  status:'READY'|'NOT_AVAILABLE'; source:string|null; reason:string|null;
+};
+export type UnifiedJournalCostEvidence = {
+  status:'READY'|'NOT_AVAILABLE'; reasons:readonly string[];
+  fees:UnifiedJournalCostComponentEvidence; tax:UnifiedJournalCostComponentEvidence;
+};
+export type UnifiedTradeLeg = {
+  orderId:string; at:string; price:number; quantity:number; fees:number|null; tax:number|null; costEvidence:UnifiedJournalCostEvidence;
+};
+export type UnifiedCanonicalResearchBinding = {
+  schemaVersion:'unified-journal-canonical-research-binding-v1';
+  status:'VERIFIED'|'NOT_AVAILABLE'|'MISMATCH'|'NOT_APPLICABLE';
+  reason:string;
+  candidateId:string|null; strategyId:string|null; parameterHash:string|null; researchCodeSha:string|null;
+  naturalPositionId:string|null; paperSampleId:string|null; settlementId:string|null; settlementBindingVerified:boolean;
+  exitTriggerId:string|null; exitExecutionId:string|null; triggerBindingVerified:boolean;
+  fullCostBindingVerified:boolean; fullCostEvidenceDigest:string|null; fullCostComponentCount:number;
+  netPnlBindingVerified:boolean; canonicalNetPnl:number|null; netPnlEvidenceDigest:string|null;
+  executionAuthority:'NONE'; profitabilityCredit:0;
+};
+export type UnifiedCanonicalResearchBindingSummary = {
+  schemaVersion:'unified-journal-canonical-research-binding-v1';
+  status:'VERIFIED'|'PARTIAL'|'NOT_AVAILABLE'; source:'AUTHENTICATED_PAPER_STATE'; sourceSha:string|null;
+  paperTradeCount:number; verifiedTradeCount:number; mismatchTradeCount:number; unavailableTradeCount:number;
+  executionAuthority:'NONE'; profitabilityCredit:0;
+};
 export type UnifiedTradeCycle = {
   id:string; source:UnifiedTradeSource; broker:string; accountIdMasked:string; market:UnifiedTradeMarket; symbol:string;
   positionSide:'LONG'|'SHORT'; currency:'KRW'|'USD'|'USDT'; status:'OPEN'|'CLOSED'; openedAt:string; closedAt:string|null;
   entryPrice:number; exitPrice:number|null; totalQuantity:number; closedQuantity:number; remainingQuantity:number;
-  holdingTimeMs:number|null; grossPnl:number; fees:number; tax:number; netPnl:number; netReturnPercent:number|null;
+  holdingTimeMs:number|null; grossPnl:number; fees:number|null; tax:number|null; costEvidence:UnifiedJournalCostEvidence; netPnl:number|null; netReturnPercent:number|null;
   strategy:string|null; timeframe:string|null; stopLossPrice:number|null; targetPrice:number|null; ruleViolation:boolean;
   warnings:string[]; technicalSnapshot:UnifiedTechnicalSnapshot; review:UnifiedTradeReview;
-  initialEntry:{orderId:string;at:string;price:number;quantity:number;fees:number;tax:number};
-  additions:Array<{orderId:string;at:string;price:number;quantity:number;fees:number;tax:number}>;
-  partialExits:Array<{orderId:string;at:string;price:number;quantity:number;fees:number;tax:number}>;
-  finalExit:{orderId:string;at:string;price:number;quantity:number;fees:number;tax:number}|null;
+  initialEntry:UnifiedTradeLeg;
+  additions:UnifiedTradeLeg[];
+  partialExits:UnifiedTradeLeg[];
+  finalExit:UnifiedTradeLeg|null;
+  canonicalResearchBinding?:UnifiedCanonicalResearchBinding;
 };
 export type UnifiedJournalAnalytics = {
   sampleSize:number; openTrades:number; closedTrades:number; winRate:number|null; profitFactor:number|null;
-  averageReturnPercent:number|null; maximumConsecutiveLosses:number;
+  averageReturnPercent:number|null; maximumConsecutiveLosses:number|null;
   netPnlByCurrency:Array<{currency:'KRW'|'USD'|'USDT';value:number}>;
   totalCostsByCurrency:Array<{currency:'KRW'|'USD'|'USDT';value:number}>;
   byMarket:Array<{key:string;sampleSize:number;winRate:number|null;averageReturnPercent:number|null}>;
@@ -96,6 +124,7 @@ export type UnifiedTradeJournal = {
   toss:{provider:'TOSS';officialSpecVersion:string;paidStatus:'PAID_STATUS_UNVERIFIED';liveReadIntegration:'BLOCKED_BY_FREE_STATUS_UNVERIFIED';contractNormalizerAvailable:true;executionGranularity:string;livePrivateRequests:0;actualOrders:0};
   aiReviewStatus:'AI_EXTERNAL_REVIEW_DISABLED_FREE_ONLY';
   safety:{finalCostDelta:'0_KRW';actualOrderRequests:0;cancelRequests:0;amendRequests:0;transferRequests:0;withdrawalRequests:0;privateBrokerRequests:0};
+  canonicalResearchBinding?:UnifiedCanonicalResearchBindingSummary;
 };
 export type UnifiedJournalFilters = {
   range?:UnifiedTradeRange; market?:UnifiedTradeMarket|'ALL'; source?:UnifiedTradeSource|'ALL';
@@ -240,6 +269,21 @@ export async function getUnifiedTradeJournal(filters: UnifiedJournalFilters = {}
     || result.safety.withdrawalRequests !== 0
     || result.safety.privateBrokerRequests !== 0) {
     throw new Error('통합 매매일지의 무료·무주문 안전 계약을 확인하지 못했습니다.');
+  }
+  const binding = result.canonicalResearchBinding;
+  if (binding && (
+    binding.schemaVersion !== 'unified-journal-canonical-research-binding-v1'
+    || binding.source !== 'AUTHENTICATED_PAPER_STATE'
+    || binding.executionAuthority !== 'NONE'
+    || binding.profitabilityCredit !== 0
+  )) throw new Error('통합 매매일지의 Research binding 안전 계약을 확인하지 못했습니다.');
+  for (const trade of result.trades) {
+    const value = trade.canonicalResearchBinding;
+    if (value && (
+      value.schemaVersion !== 'unified-journal-canonical-research-binding-v1'
+      || value.executionAuthority !== 'NONE'
+      || value.profitabilityCredit !== 0
+    )) throw new Error('거래별 Research binding 안전 계약을 확인하지 못했습니다.');
   }
   return result;
 }

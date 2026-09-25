@@ -1,4 +1,5 @@
 import { Router, type IRouter, type NextFunction, type Response } from 'express';
+import { productPaperSourceRegistry } from '../services/product-paper-source-registry.service';
 import {
   requireAuthenticated,
   requireCapability,
@@ -277,11 +278,12 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
       };
       const canonicalResult = withScannerCanonicalActions(rankedResult);
       const visibleResult = withScannerOutcome(filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined));
+      productPaperSourceRegistry.captureScanner(req.member!.id, visibleResult, String(process.env.DEPLOY_SHA ?? '').trim().toLowerCase());
       void deliverScannerTelegramAlerts(
         visibleResult.alerts,
         undefined,
         undefined,
-        { timeframe: selectedTimeframe, generatedAt: visibleResult.generatedAt },
+        { timeframe: selectedTimeframe, generatedAt: visibleResult.generatedAt, memberId: req.member!.id },
       );
       void deliverScannerTelegramFollowups(visibleResult.cards);
       res.setHeader('Cache-Control', 'no-store, max-age=0');
