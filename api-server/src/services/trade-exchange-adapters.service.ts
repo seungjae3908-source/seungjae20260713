@@ -763,6 +763,58 @@ export function prepareKiwoomCancel(
   };
 }
 
+
+export function prepareKiwoomDomesticOrderHistory(
+  credentials: KiwoomCredentials,
+  plan: TradingPlanInput,
+  orderNo: string,
+  orderDate: string,
+): PreparedExchangeRequest {
+  if (!/^\d{8}$/.test(orderDate)) throw new Error('KIWOOM_ORDER_DATE_INVALID');
+  if (!orderNo.trim()) throw new Error('KIWOOM_ORDER_ID_REQUIRED');
+  return {
+    method: 'POST',
+    path: '/api/dostk/acnt',
+    query: '',
+    headers: kiwoomOrderHeaders(credentials, 'kt00009'),
+    body: jsonBody({
+      stk_bond_tp: '1',
+      mrkt_tp: '0',
+      sell_tp: '0',
+      qry_tp: '1',
+      dmst_stex_tp: '%',
+      ord_dt: orderDate,
+      stk_cd: plan.symbol.trim().toUpperCase(),
+      fr_ord_no: orderNo.trim(),
+    }),
+  };
+}
+
+export function prepareKiwoomUsOrderHistory(
+  credentials: KiwoomCredentials,
+  plan: TradingPlanInput,
+  orderNo: string,
+  orderDate: string,
+): PreparedExchangeRequest {
+  if (!/^\d{8}$/.test(orderDate)) throw new Error('KIWOOM_ORDER_DATE_INVALID');
+  if (!orderNo.trim()) throw new Error('KIWOOM_ORDER_ID_REQUIRED');
+  return {
+    method: 'POST',
+    path: '/api/us/acnt',
+    query: '',
+    headers: kiwoomOrderHeaders(credentials, 'ust21150'),
+    body: jsonBody({
+      query_tp: '1',
+      slby_tp: '0',
+      ord_dt: orderDate,
+      stex_tp: kiwoomUsExchange(plan),
+      stk_cd: plan.symbol.trim().toUpperCase(),
+      oppo_trde_tp: '%',
+      fr_ord_no: orderNo.trim(),
+    }),
+  };
+}
+
 export function prepareKiwoomOrderable(credentials: KiwoomCredentials): PreparedExchangeRequest {
   if (!credentials.accessToken) throw new Error('KIWOOM_ACCESS_TOKEN_REQUIRED');
   return {
