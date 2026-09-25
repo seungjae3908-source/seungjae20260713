@@ -113,6 +113,8 @@ jobs:
           test -s "$operational"
           grep -Fq 'environment: production' "$operational"
           grep -Fq 'workflow_dispatch:' "$workflow"
+          grep -Fq "pm2 jlist | node -e" "$operational"
+          ! grep -Fq '"${remote[@]}" "pm2 jlist" | node' "$operational"
           ! grep -Eq '^[[:space:]]{2}schedule:[[:space:]]*$' "$workflow"
           ! grep -Eq 'contents:[[:space:]]+write' "$workflow"
           ! grep -Eq 'actions:[[:space:]]+write' "$workflow"
@@ -325,16 +327,8 @@ jobs:
           [[ "$pid" =~ ^[1-9][0-9]*$ ]]
           cron_count="$("${remote[@]}" "crontab -l 2>/dev/null | grep -Fc '# stock-app-paper-forward-v1' || true")"
           [[ "$cron_count" =~ ^[0-9]+$ ]]
-          "${remote[@]}" "pm2 jlist" | node -e '
-          const fs = require("node:fs");
-          const rows = JSON.parse(fs.readFileSync(0, "utf8"));
-          const matches = rows.filter((row) => row?.name === "stock-app");
-          if (matches.length !== 1 || matches[0]?.pm2_env?.status !== "online") process.exit(1);
-          const env = matches[0].pm2_env;
-          const off = (value) => value === undefined || value === false || value === "false" || value === "0";
-          if (!off(env.LIVE_TRADING) || !off(env.AUTO_TRADING) || !off(env.REAL_ORDER_ENABLED) || !off(env.PRIVATE_TRADING_API_ALLOWED)) process.exit(1);
-          if (String(env.executionAuthority ?? env.EXECUTION_AUTHORITY ?? "NONE").toUpperCase() !== "NONE") process.exit(1);
-          '
+          pm2_probe='const fs=require("node:fs");const rows=JSON.parse(fs.readFileSync(0,"utf8"));const matches=rows.filter((row)=>row?.name==="stock-app");if(matches.length!==1||matches[0]?.pm2_env?.status!=="online")process.exit(1);const env=matches[0].pm2_env;const off=(value)=>value===undefined||value===false||value==="false"||value==="0";if(!off(env.LIVE_TRADING)||!off(env.AUTO_TRADING)||!off(env.REAL_ORDER_ENABLED)||!off(env.PRIVATE_TRADING_API_ALLOWED))process.exit(1);if(String(env.executionAuthority??env.EXECUTION_AUTHORITY??"NONE").toUpperCase()!=="NONE")process.exit(1);'
+          "${remote[@]}" "pm2 jlist | node -e '$(printf %q "$pm2_probe")'"
           printf 'app_sha=%s\npid=%s\ncron_count=%s\n' "$app_sha" "$pid" "$cron_count" >> "$GITHUB_OUTPUT"
 
       - name: Materialize exact observer artifact
