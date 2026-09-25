@@ -83,13 +83,40 @@ test('Upbit proves KRW cash while unknown crypto valuation stays partial instead
   assert.equal(result.linkedPositions[0]?.symbol, 'BTC');
 });
 
+test('Upbit proven KRW valuation contributes crypto asset value and labels linked position currency', () => {
+  const snapshot = connected('upbit', {
+    balances: [
+      { currency: 'KRW', available: 10_000, locked: 0, total: 10_000, estimatedKrwValue: 10_000 },
+      { currency: 'BTC', available: 0.01, locked: 0, total: 0.01, estimatedKrwValue: 1_000_000 },
+    ],
+    positions: [{
+      market: 'UPBIT', symbol: 'BTC', quantity: 0.01, availableQuantity: 0.01,
+      averageEntryPrice: 90_000_000, currentPrice: 100_000_000, marketValue: 1_000_000,
+      unrealizedPnl: 100_000, unrealizedPnlPercent: 11.1111, leverage: null,
+      liquidationPrice: null, marginMode: null, side: null,
+    }],
+  });
+  const result = accountSourcesToPortfolioEvidence([
+    { provider: 'upbit', configured: true, snapshot, errorCode: null },
+  ]);
+  assert.equal(result.coverage.cash, true);
+  assert.equal(result.coverage.cryptoSpot, true);
+  assert.equal(result.providerSnapshots[0]?.status, 'READY');
+  assert.deepEqual(result.providerSnapshots[0]?.assets.map((row) => [row.bucket, row.amount, row.currency]), [
+    ['CASH', 10_000, 'KRW'],
+    ['CRYPTO_SPOT', 1_000_000, 'KRW'],
+  ]);
+  assert.equal(result.linkedPositions[0]?.marketValue, 1_000_000);
+  assert.equal(result.linkedPositions[0]?.currency, 'KRW');
+});
+
 test('Bitget account equity becomes futures-equity evidence without using position notional', () => {
   const snapshot = connected('bitget', {
     balances: [{ currency: 'USDT', available: 80, locked: 20, total: 100, estimatedKrwValue: null }],
     positions: [{
       market: 'BITGET', symbol: 'BTCUSDT', quantity: 0.01, availableQuantity: 0.01,
-      averageEntryPrice: 60_000, currentPrice: 61_000, marketValue: null,
-      unrealizedPnl: 10, unrealizedPnlPercent: null, leverage: 2,
+      averageEntryPrice: 60_000, currentPrice: 61_000, marketValue: 610,
+      unrealizedPnl: 10, unrealizedPnlPercent: 1.6667, leverage: 2,
       liquidationPrice: 30_000, marginMode: 'isolated', side: 'long',
     }],
   });
@@ -100,8 +127,10 @@ test('Bitget account equity becomes futures-equity evidence without using positi
   assert.deepEqual(result.providerSnapshots[0]?.assets.map((row) => [row.bucket, row.amount, row.currency]), [
     ['CRYPTO_FUTURES_EQUITY', 100, 'USDT'],
   ]);
-  assert.equal(result.linkedPositions[0]?.marketValue, null);
+  assert.equal(result.linkedPositions[0]?.marketValue, 610);
   assert.equal(result.linkedPositions[0]?.unrealizedPnl, 10);
+  assert.equal(result.linkedPositions[0]?.currency, 'USDT');
+  assert.equal(result.providerSnapshots[0]?.assets.some((row) => row.amount === 610), false);
 });
 
 test('configured provider failure remains unavailable evidence and never becomes a zero balance', () => {
