@@ -92,6 +92,28 @@ function kiwoomLevels(value: JsonObject): { bids: Level[]; asks: Level[] } {
   };
 }
 
+
+function kiwoomUsLevels(value: JsonObject): { bids: Level[]; asks: Level[] } {
+  const asks: Level[] = [];
+  const bids: Level[] = [];
+  for (let index = 1; index <= 10; index += 1) {
+    const askPrice = positive(value[`sel_${index}bid`]);
+    const askSize = positive(value[`sel_${index}bid_req`]);
+    const bidPrice = positive(value[`buy_${index}bid`]);
+    const bidSize = positive(value[`buy_${index}bid_req`]);
+    if (askPrice != null && askSize != null) asks.push({ price: askPrice, size: askSize });
+    if (bidPrice != null && bidSize != null) bids.push({ price: bidPrice, size: bidSize });
+  }
+  return {
+    asks: asks.sort((left, right) => left.price - right.price),
+    bids: bids.sort((left, right) => right.price - left.price),
+  };
+}
+
+function resultRows(value: JsonObject) {
+  return Array.isArray(value.result_list) ? value.result_list.filter(isRecord) : [];
+}
+
 function timestampMs(values: unknown[]) {
   const timestamps = values
     .map(finite)
@@ -372,11 +394,12 @@ export function buildKiwoomExecutionSnapshot(input: {
   unfilled: JsonObject;
   orderbook: JsonObject;
   signal: SignalSnapshot;
+  observedAt?: Date;
 }): TradingMarketSnapshot {
   const book = kiwoomLevels(input.orderbook);
   const currentPrice = input.plan.side === 'buy' ? book.asks[0]?.price ?? null : book.bids[0]?.price ?? null;
   const providerTimestamp = finite(input.orderbook.timestamp ?? input.orderbook.ts);
-  const observedAtMs = timestampMs([providerTimestamp]);
+  const observedAtMs = timestampMs([providerTimestamp]) ?? input.observedAt?.getTime() ?? null;
   const availableBalance = positive(
     input.orderable.ord_alow_amt
       ?? input.orderable.ord_psbl_cash
@@ -393,6 +416,58 @@ export function buildKiwoomExecutionSnapshot(input: {
     asks: book.asks,
     availableBalance,
     openPositionCount: rows(input.unfilled).length,
+    estimatedFeePercent: feePercent,
+    marketStatus: 'OPEN',
+    signal: input.signal,
+  });
+}
+
+
+export function buildKiwoomUsExecutionSnapshot(input: {
+  plan: TradingPlan;
+  orderable: JsonObject;
+  holdings: JsonObject;
+  unfilled: JsonObject;
+  orderbook: JsonObject;
+  signal: SignalSnapshot;
+  observedAt: Date;
+}): TradingMarketSnapshot {
+  const book = kiwoomUsLevels(input.orderbook);
+  if (!book.asks.length || !book.bids.length) throw new Error('KIWOOM_US_ORDERBOOK_UNAVAILABLE');
+  const currentPrice = positive(input.orderbook.cur_prc)
+    ?? (input.plan.side === 'buy' ? book.asks[0]?.price ?? null : book.bids[0]?.price ?? null);
+  if (currentPrice == null) throw new Error('KIWOOM_US_CURRENT_PRICE_UNAVAILABLE');
+
+  const orderableCash = positive(
+    input.orderable.ord_alowa
+      ?? input.orderable.min_ord_alowa
+      ?? input.orderable.ord_alowa_100
+      ?? input.orderable.krw_ord_alowa_100,
+  ) ?? 0;
+  const requestedQuantity = Number(input.plan.quantity ?? 0);
+  const providerNotional = requestedQuantity > 0 ? requestedQuantity * currentPrice : 0;
+  const cashCoverage = providerNotional > 0 ? orderableCash / providerNotional : 0;
+  const availableBalance = input.plan.side === 'buy'
+    ? input.plan.estimatedKrw * Math.max(0, cashCoverage)
+    : input.plan.estimatedKrw;
+
+  const holdingRows = resultRows(input.holdings);
+  const matching = holdingRows.find((row) => String(row.stk_cd ?? '').toUpperCase() === input.plan.symbol.toUpperCase());
+  const possibleQuantity = positive(matching?.poss_qty ?? matching?.qty) ?? 0;
+  if (input.plan.side === 'sell' && possibleQuantity < requestedQuantity) {
+    throw new Error('KIWOOM_US_INSUFFICIENT_HOLDINGS');
+  }
+
+  const feePercent = absolute(input.plan.marketSnapshot.estimatedFeePercent);
+  return baseSnapshot({
+    plan: input.plan,
+    source: 'kiwoom-us-private-account+orderbook',
+    observedAtMs: input.observedAt.getTime(),
+    currentPrice,
+    bids: book.bids,
+    asks: book.asks,
+    availableBalance,
+    openPositionCount: holdingRows.filter((row) => (positive(row.poss_qty ?? row.qty) ?? 0) > 0).length,
     estimatedFeePercent: feePercent,
     marketStatus: 'OPEN',
     signal: input.signal,
