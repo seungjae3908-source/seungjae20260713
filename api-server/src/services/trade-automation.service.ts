@@ -70,7 +70,10 @@ export function tradingIdempotencyKey(userId: string, input: TradingPlanInput) {
 }
 
 export function liveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
-  const global = process.env.ORDER_EXECUTION_ENABLED === 'true' && process.env.LIVE_TRADING_ACTIVATION_APPROVED === 'true';
+  const global = process.env.ORDER_EXECUTION_ENABLED === 'true'
+    && process.env.LIVE_TRADING_ACTIVATION_APPROVED === 'true'
+    && process.env.REAL_ORDER_ENABLED === 'true'
+    && process.env.PRIVATE_TRADING_API_ALLOWED === 'true';
   const perExchange = {
     bitget: process.env.BITGET_LIVE_ORDER_ENABLED === 'true',
     upbit: process.env.UPBIT_LIVE_ORDER_ENABLED === 'true',
