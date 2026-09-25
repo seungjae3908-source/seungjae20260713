@@ -20,6 +20,27 @@ export function maskBrokerAccount(value: string | null | undefined): string | nu
   return normalized ? `****${normalized.slice(-4)}` : null;
 }
 function safeNumber(value: number | null | undefined): number | null { return value != null && Number.isFinite(value) ? value : null; }
+function metadataNumber(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function metadataText(value: unknown, maxLength = 160): string | null {
+  return typeof value === 'string' && value.trim() ? value.normalize('NFKC').trim().slice(0, maxLength) : null;
+}
+function metadataTextList(value: unknown, maxItems = 6): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => metadataText(item)).filter((item): item is string => Boolean(item)).slice(0, maxItems)
+    : [];
+}
+function actualSlippagePercent(plan: TradingPlan, order: TradingOrder): number | null {
+  const reference = safeNumber(plan.entryPrice ?? plan.limitPrice);
+  const fill = safeNumber(order.averageFillPrice);
+  if (reference == null || reference <= 0 || fill == null || fill <= 0) return null;
+  const adverseMove = plan.side === 'sell' || plan.side === 'short'
+    ? reference - fill
+    : fill - reference;
+  return Number(((adverseMove / reference) * 100).toFixed(4));
+}
 
 function executionType(transition: TradingOrderEvent): UserExecutionEventType | null {
   const reason = transition.reason.toUpperCase();
@@ -55,12 +76,29 @@ export function executionEventFromTradingOrder(
     remainingQuantity: safeNumber(order.remainingQuantity), realizedPnl: null, averageEntryPrice: null, averageExitPrice: null,
     occurredAt: transition.createdAt,
     metadata: {
-      orderState: transition.toState, reason: transition.reason, providerStatusCode: order.providerStatusCode ?? null,
+      orderState: transition.toState,
+      reason: transition.reason,
+      providerStatusCode: order.providerStatusCode ?? null,
       orderPlanVersion: order.approvedPlanVersion ?? plan.version ?? null,
-      approvedBy: order.userId, approvedAt: plan.approvedAt,
+      approvedBy: order.userId,
+      approvedAt: plan.approvedAt,
       approvalSource: executionMethod === 'AUTO_POLICY' ? 'AUTO_POLICY' : 'USER_UI',
-      accountMode: plan.accountMode, reduceOnly: plan.reduceOnly === true,
-      stopPrice: plan.stopPrice, targetPrice: plan.targetPrices?.[0] ?? null,
+      accountMode: plan.accountMode,
+      orderType: plan.orderType,
+      reduceOnly: plan.reduceOnly === true,
+      signalId: plan.signalId,
+      signalReasons: plan.signalReasons.slice(0, 8),
+      entryPrice: plan.entryPrice ?? plan.limitPrice ?? null,
+      entryZoneLow: plan.entryZoneLow ?? null,
+      entryZoneHigh: plan.entryZoneHigh ?? null,
+      stopPrice: plan.stopPrice,
+      targetPrices: plan.targetPrices.slice(0, 3),
+      leverage: plan.leverage ?? null,
+      marginMode: plan.marginMode ?? null,
+      estimatedSlippagePercent: plan.estimatedSlippagePercent ?? null,
+      actualSlippagePercent: actualSlippagePercent(plan, order),
+      feeAmount: order.feeAmount ?? null,
+      feeCurrency: order.feeCurrency ?? null,
     },
   };
 }
@@ -103,6 +141,44 @@ export function renderUserExecutionTelegramMessage(event: UserExecutionEvent): s
   if (event.maskedAccount) lines.push('', `계좌 ${event.maskedAccount}`);
   if (event.strategy) lines.push(`전략 ${event.strategy}`);
   if (event.remainingQuantity != null) lines.push(`잔여수량 ${formatNumber(event.remainingQuantity)}`);
+
+  const transitionReason = metadataText(event.metadata.reason);
+  const signalReasons = metadataTextList(event.metadata.signalReasons, 8);
+  const entryPrice = metadataNumber(event.metadata.entryPrice);
+  const entryZoneLow = metadataNumber(event.metadata.entryZoneLow);
+  const entryZoneHigh = metadataNumber(event.metadata.entryZoneHigh);
+  const stopPrice = metadataNumber(event.metadata.stopPrice);
+  const targets = Array.isArray(event.metadata.targetPrices)
+    ? event.metadata.targetPrices.map(metadataNumber).filter((value): value is number => value != null).slice(0, 3)
+    : [];
+  const feeAmount = metadataNumber(event.metadata.feeAmount);
+  const feeCurrency = metadataText(event.metadata.feeCurrency, 24);
+  const estimatedSlippage = metadataNumber(event.metadata.estimatedSlippagePercent);
+  const actualSlippage = metadataNumber(event.metadata.actualSlippagePercent);
+  const leverage = metadataNumber(event.metadata.leverage);
+  const marginMode = metadataText(event.metadata.marginMode, 24);
+
+  if (event.executionMethod === 'AUTO_POLICY') {
+    lines.push('', '[자동매매 체결 근거]');
+    if (signalReasons.length) signalReasons.forEach((reason) => lines.push(`• ${reason}`));
+    else lines.push('• 검증된 진입 근거 N/A');
+    if (transitionReason) lines.push(`상태 전환 이유: ${transitionReason}`);
+    if (entryPrice != null) lines.push(`기준 진입가: ${formatNumber(entryPrice)}`);
+    if (entryZoneLow != null && entryZoneHigh != null) lines.push(`진입구간: ${formatNumber(entryZoneLow)}~${formatNumber(entryZoneHigh)}`);
+    if (targets.length) lines.push(`목표가: ${targets.map((value, index) => `TP${index + 1} ${formatNumber(value)}`).join(' · ')}`);
+    if (stopPrice != null) lines.push(`손절/무효: ${formatNumber(stopPrice)}`);
+    if (leverage != null) lines.push(`레버리지: ${formatNumber(leverage)}x${marginMode ? ` · ${marginMode}` : ''}`);
+  } else if (transitionReason) {
+    lines.push('', `체결/상태 이유: ${transitionReason}`);
+  }
+
+  if (feeAmount != null || estimatedSlippage != null || actualSlippage != null) {
+    lines.push('', '[체결 비용/품질]');
+    if (feeAmount != null) lines.push(`수수료: ${formatNumber(feeAmount)}${feeCurrency ? ` ${feeCurrency}` : ''}`);
+    if (estimatedSlippage != null) lines.push(`예상 슬리피지: ${estimatedSlippage.toFixed(4)}%`);
+    if (actualSlippage != null) lines.push(`실제 슬리피지: ${actualSlippage.toFixed(4)}%`);
+  }
+
   if (event.type === 'POSITION_CLOSED') {
     if (event.averageEntryPrice != null) lines.push(`평균매수가 ${formatNumber(event.averageEntryPrice)}`);
     if (event.averageExitPrice != null) lines.push(`평균매도가 ${formatNumber(event.averageExitPrice)}`);
