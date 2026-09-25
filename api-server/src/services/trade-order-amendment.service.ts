@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { TradingRepository } from './trade-automation.repository';
 import { liveExecutionEnabled, TradeAutomationService } from './trade-automation.service';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
+import { tradingProviderHttpErrorCode, tradingProviderNetworkErrorCode, tradingProviderTimeoutCode } from './trade-provider-http-error.service';
 import {
   prepareBitgetAmend,
   prepareBitgetOrderQuery,
@@ -144,12 +145,12 @@ async function sendJson(baseUrl: string, request: PreparedExchangeRequest) {
     if (raw.trim()) {
       try { payload = JSON.parse(raw); } catch { throw new Error('EXCHANGE_INVALID_RESPONSE'); }
     }
-    if (!response.ok) throw new Error(`EXCHANGE_HTTP_${response.status}`);
+    if (!response.ok) throw new Error(tradingProviderHttpErrorCode(baseUrl, response.status));
     if (!isRecord(payload)) throw new Error('EXCHANGE_INVALID_RESPONSE');
     return payload;
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') throw new Error('EXCHANGE_TIMEOUT');
-    if (error instanceof TypeError) throw new Error('EXCHANGE_NETWORK_ERROR');
+    if (error instanceof Error && error.name === 'AbortError') throw new Error(tradingProviderTimeoutCode(baseUrl));
+    if (error instanceof TypeError) throw new Error(tradingProviderNetworkErrorCode(baseUrl));
     throw error;
   } finally {
     clearTimeout(timeout);
