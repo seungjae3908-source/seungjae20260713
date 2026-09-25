@@ -108,13 +108,310 @@ jobs:
         run: |
           set -Eeuo pipefail
           workflow='.github/workflows/paper-canonical-evidence-bridge.yml'
-          grep -Fq 'environment: production' "$workflow"
+          operational="$RUNNER_TEMP/paper-canonical-evidence-bridge-operational.yml"
+          awk '/^  gate:/{emit=1} emit{print}' "$workflow" > "$operational"
+          test -s "$operational"
+          grep -Fq 'environment: production' "$operational"
           grep -Fq 'workflow_dispatch:' "$workflow"
-          ! grep -Eq '^[[:space:]]{2}schedule:[[:space:]]*$' "$workflow"
+          ! grep -Eq '^[[:space:]]{2}schedule:[[:space:]]*
+  gate:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      operation: ${{ steps.parse.outputs.operation }}
+      target_sha: ${{ steps.parse.outputs.target_sha }}
+      observer_run_id: ${{ steps.provenance.outputs.observer_run_id }}
+      artifact_name: ${{ steps.provenance.outputs.artifact_name }}
+      maximum_age_ms: ${{ steps.parse.outputs.maximum_age_ms }}
+    steps:
+      - name: Parse explicit operation inputs
+        id: parse
+        shell: bash
+        env:
+          OPERATION: ${{ inputs.operation }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          OBSERVER_RUN_ID: ${{ inputs.observer_run_id }}
+          MAXIMUM_AGE_MS: ${{ inputs.maximum_age_ms }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$OPERATION" == 'observer_materialize' ]]; then
+            [[ "$OBSERVER_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+            [[ -z "$MAXIMUM_AGE_MS" ]]
+          elif [[ "$OPERATION" == 'freshness_policy_publish' ]]; then
+            [[ -z "$OBSERVER_RUN_ID" ]]
+            [[ "$MAXIMUM_AGE_MS" =~ ^[1-9][0-9]*$ ]]
+            node -e "const n=Number(process.argv[1]); if(!Number.isSafeInteger(n)||n<=0) process.exit(1)" "$MAXIMUM_AGE_MS"
+          else
+            exit 1
+          fi
+          printf 'operation=%s\ntarget_sha=%s\nmaximum_age_ms=%s\n' "$OPERATION" "$TARGET_SHA" "$MAXIMUM_AGE_MS" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.parse.outputs.target_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require exact current main, coherent Required CI, deployed Production, and exact observer artifact
+        id: provenance
+        uses: actions/github-script@v7
+        env:
+          OPERATION: ${{ steps.parse.outputs.operation }}
+          TARGET_SHA: ${{ steps.parse.outputs.target_sha }}
+          OBSERVER_RUN_ID: ${{ inputs.observer_run_id }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const main = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: 'main' });
+            if (main.data.commit.sha !== target) {
+              core.setFailed(`Target is stale: ${target} != ${main.data.commit.sha}`);
+              return;
+            }
+
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner, repo: context.repo.repo, ref: target, per_page: 100,
+            });
+            const latest = new Map();
+            for (const status of statuses) {
+              const previous = latest.get(status.context);
+              if (!previous || Number(status.id) > Number(previous.id)) latest.set(status.context, status);
+            }
+            const selected = required.map((name) => latest.get(name));
+            if (selected.some((status) => status?.state !== 'success')) {
+              core.setFailed('Exact current main Required CI is not 6/6 SUCCESS.');
+              return;
+            }
+            const runIds = new Set(selected.map((status) => /\/actions\/runs\/(\d+)/.exec(String(status?.target_url ?? ''))?.[1] ?? null));
+            if (runIds.size !== 1 || runIds.has(null)) {
+              core.setFailed('Required statuses do not share one coherent Application CI provenance run.');
+              return;
+            }
+            const requiredRunId = Number([...runIds][0]);
+            const requiredRun = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner, repo: context.repo.repo, run_id: requiredRunId,
+            })).data;
+            if (requiredRun.head_sha !== target || requiredRun.status !== 'completed' || requiredRun.conclusion !== 'success') {
+              core.setFailed('Required CI provenance is not exact-target terminal SUCCESS.');
+              return;
+            }
+
+            const productionRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: target,
+              event: 'workflow_dispatch',
+              status: 'completed',
+              per_page: 100,
+            });
+            const production = productionRuns.find((run) =>
+              run.name === 'Production Deploy'
+              && run.path === '.github/workflows/production-deploy.yml'
+              && run.conclusion === 'success'
+            );
+            if (!production) {
+              core.setFailed(`No successful official Production Deploy exists for ${target}.`);
+              return;
+            }
+
+            if (process.env.OPERATION === 'observer_materialize') {
+              const observerRunId = Number(process.env.OBSERVER_RUN_ID);
+              const run = (await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner, repo: context.repo.repo, run_id: observerRunId,
+              })).data;
+              if (run.name !== 'Forward Recommendation Observer Cycle'
+                || run.path !== '.github/workflows/forward-recommendation-observer-cycle.yml'
+                || run.event !== 'workflow_dispatch'
+                || run.head_sha !== target
+                || run.status !== 'completed'
+                || run.conclusion !== 'success') {
+                core.setFailed('Observer run is not an exact-target successful official workflow_dispatch run.');
+                return;
+              }
+              const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+                owner: context.repo.owner, repo: context.repo.repo, run_id: observerRunId, per_page: 100,
+              });
+              const artifactName = `forward-recommendation-observer-state-${target}`;
+              const artifact = artifacts.find((item) => item.name === artifactName && item.expired !== true);
+              if (!artifact) {
+                core.setFailed(`Exact observer artifact is missing: ${artifactName}`);
+                return;
+              }
+              core.setOutput('observer_run_id', String(observerRunId));
+              core.setOutput('artifact_name', artifactName);
+            } else {
+              core.setOutput('observer_run_id', '');
+              core.setOutput('artifact_name', '');
+            }
+
+  execute:
+    if: github.event_name == 'workflow_dispatch'
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: production
+    env:
+      OPERATION: ${{ needs.gate.outputs.operation }}
+      TARGET_SHA: ${{ needs.gate.outputs.target_sha }}
+      OBSERVER_RUN_ID: ${{ needs.gate.outputs.observer_run_id }}
+      OBSERVER_ARTIFACT: ${{ needs.gate.outputs.artifact_name }}
+      MAXIMUM_AGE_MS: ${{ needs.gate.outputs.maximum_age_ms }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download exact observer artifact
+        if: env.OPERATION == 'observer_materialize'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.OBSERVER_ARTIFACT }}
+          path: observer-artifact
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.OBSERVER_RUN_ID }}
+
+      - name: Validate observer artifact before protected server access
+        if: env.OPERATION == 'observer_materialize'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node ops/materialize-paper-canonical-forward-observer.mjs             --source-root="$GITHUB_WORKSPACE/observer-artifact"             --expected-sha="$TARGET_SHA"             --dry-run >/dev/null
+
+      - name: Configure protected Production SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"; test -n "$SSH_USER"; test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh bridge-evidence
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Capture immutable Production and safety state
+        id: before
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote=(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST")
+          app_sha="$("${remote[@]}" "tr -d '[:space:]' < /opt/stock-app/.deploy/current-sha")"
+          [[ "$app_sha" == "$TARGET_SHA" ]]
+          pid="$("${remote[@]}" "pm2 pid stock-app | tr -d '[:space:]'")"
+          [[ "$pid" =~ ^[1-9][0-9]*$ ]]
+          cron_count="$("${remote[@]}" "crontab -l 2>/dev/null | grep -Fc '# stock-app-paper-forward-v1' || true")"
+          [[ "$cron_count" =~ ^[0-9]+$ ]]
+          "${remote[@]}" "pm2 jlist" | node -e '
+          const fs = require("node:fs");
+          const rows = JSON.parse(fs.readFileSync(0, "utf8"));
+          const matches = rows.filter((row) => row?.name === "stock-app");
+          if (matches.length !== 1 || matches[0]?.pm2_env?.status !== "online") process.exit(1);
+          const env = matches[0].pm2_env;
+          const off = (value) => value === undefined || value === false || value === "false" || value === "0";
+          if (!off(env.LIVE_TRADING) || !off(env.AUTO_TRADING) || !off(env.REAL_ORDER_ENABLED) || !off(env.PRIVATE_TRADING_API_ALLOWED)) process.exit(1);
+          if (String(env.executionAuthority ?? env.EXECUTION_AUTHORITY ?? "NONE").toUpperCase() !== "NONE") process.exit(1);
+          '
+          printf 'app_sha=%s\npid=%s\ncron_count=%s\n' "$app_sha" "$pid" "$cron_count" >> "$GITHUB_OUTPUT"
+
+      - name: Materialize exact observer artifact
+        if: env.OPERATION == 'observer_materialize'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_tmp="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "mktemp -d /tmp/paper-observer-materialize.XXXXXX")"
+          trap 'ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "rm -rf -- '"'"$remote_tmp"'"'"'" >/dev/null 2>&1 || true' EXIT
+          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT"             ops/materialize-paper-canonical-forward-observer.mjs             observer-artifact/state.json observer-artifact/summary.json observer-artifact/manifest.json             "$SSH_USER@$SSH_HOST:$remote_tmp/"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST"             "node '$remote_tmp/materialize-paper-canonical-forward-observer.mjs' --source-root='$remote_tmp' --expected-sha='$TARGET_SHA' --state-root='/opt/stock-app-data/paper-forward-v1'"             > bridge-evidence/result.json
+          test -s bridge-evidence/result.json
+          trap - EXIT
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "rm -rf -- '$remote_tmp'"
+
+      - name: Publish explicit freshness policy
+        if: env.OPERATION == 'freshness_policy_publish'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_tmp="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "mktemp -d /tmp/paper-freshness-policy.XXXXXX")"
+          trap 'ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "rm -rf -- '"'"$remote_tmp"'"'"'" >/dev/null 2>&1 || true' EXIT
+          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT"             ops/publish-paper-canonical-validation-freshness-policy.mjs             "$SSH_USER@$SSH_HOST:$remote_tmp/"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST"             "node '$remote_tmp/publish-paper-canonical-validation-freshness-policy.mjs' --state-root='/opt/stock-app-data/paper-forward-v1' --maximum-age-ms='$MAXIMUM_AGE_MS'"             > bridge-evidence/result.json
+          test -s bridge-evidence/result.json
+          trap - EXIT
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "rm -rf -- '$remote_tmp'"
+
+      - name: Verify bounded result and zero unrelated mutation
+        shell: bash
+        env:
+          APP_SHA_BEFORE: ${{ steps.before.outputs.app_sha }}
+          PID_BEFORE: ${{ steps.before.outputs.pid }}
+          CRON_COUNT_BEFORE: ${{ steps.before.outputs.cron_count }}
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const value = JSON.parse(fs.readFileSync('bridge-evidence/result.json', 'utf8'));
+          const common = value?.productionAppMutationPerformed === false
+            && value?.processRestartPerformed === false
+            && value?.environmentMutationPerformed === false
+            && value?.scheduleMutationPerformed === false
+            && value?.databaseMutationPerformed === false
+            && value?.privateApiUsed === false
+            && value?.orderSubmitted === false
+            && value?.liveTrading === false
+            && value?.executionAuthority === 'NONE';
+          if (!common) process.exit(1);
+          if (process.env.OPERATION === 'observer_materialize') {
+            if (value?.schemaVersion !== 'paper-canonical-forward-observer-materializer-v1'
+              || value?.status !== 'MATERIALIZED'
+              || value?.targetSha !== process.env.TARGET_SHA
+              || value?.filesWritten !== 3) process.exit(1);
+          } else {
+            const expected = Number(process.env.MAXIMUM_AGE_MS);
+            if (value?.schemaVersion !== 'paper-canonical-validation-freshness-publisher-v1'
+              || !['PUBLISHED', 'ALREADY_PRESENT'].includes(value?.status)
+              || value?.maximumAgeMs !== expected
+              || ![0, 1].includes(value?.filesWritten)) process.exit(1);
+          }
+          NODE
+          remote=(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST")
+          app_sha_after="$("${remote[@]}" "tr -d '[:space:]' < /opt/stock-app/.deploy/current-sha")"
+          pid_after="$("${remote[@]}" "pm2 pid stock-app | tr -d '[:space:]'")"
+          cron_count_after="$("${remote[@]}" "crontab -l 2>/dev/null | grep -Fc '# stock-app-paper-forward-v1' || true")"
+          [[ "$app_sha_after" == "$APP_SHA_BEFORE" && "$app_sha_after" == "$TARGET_SHA" ]]
+          [[ "$pid_after" == "$PID_BEFORE" ]]
+          [[ "$cron_count_after" == "$CRON_COUNT_BEFORE" ]]
+
+      - name: Upload sanitized bridge evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-canonical-evidence-bridge-${{ env.OPERATION }}-${{ env.TARGET_SHA }}-${{ github.run_id }}
+          path: bridge-evidence/result.json
+          if-no-files-found: error
+          retention-days: 90
+ "$workflow"
           ! grep -Eq 'contents:[[:space:]]+write' "$workflow"
           ! grep -Eq 'actions:[[:space:]]+write' "$workflow"
-          ! grep -Eq 'pm2[[:space:]]+(restart|reload|start|stop|delete|save)' "$workflow"
-          ! grep -Eq 'crontab[[:space:]]+-|systemctl[[:space:]]+(start|stop|restart|enable)|psql|supabase db' "$workflow"
+          ! grep -Eq 'pm2[[:space:]]+(restart|reload|start|stop|delete|save)' "$operational"
+          ! grep -Eq 'crontab[[:space:]]+-|systemctl[[:space:]]+(start|stop|restart|enable)|psql|supabase db' "$operational"
 
   gate:
     if: github.event_name == 'workflow_dispatch'
