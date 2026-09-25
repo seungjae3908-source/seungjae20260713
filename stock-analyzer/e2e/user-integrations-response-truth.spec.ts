@@ -107,7 +107,8 @@ test('user integrations validates canonical HTTP 200 truth before the UI can nor
   ]);
 
   expect(panel).toContain("setState(normalizeIntegrationState(result.value));");
-  expect(panel).toContain("{state.telegram.connected ? '연결됨' : '연결 안 됨'}");
+  expect(panel).toContain("telegramHealthy ? '정상'");
+  expect(panel).toContain("state?.telegram.connected ? '확인 필요' : '연결 필요'");
 
   expect(lifecycle).toContain("import { requireUserIntegrationsResponse } from '@/lib/user-integrations-response';");
   const validationIndex = lifecycle.indexOf('.then((value) => this.validate ? this.validate(value, identity) : value);');
