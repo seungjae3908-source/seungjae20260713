@@ -196,22 +196,31 @@ test('Upbit enforces KRW spot, no short, 5,000 KRW minimum, and market buy/sell 
   assert.match(sell.body ?? '', /"volume":"0.01"/);
 });
 
-test('US stock is Paper-only while Kiwoom mock/live execution remains domestic-only', () => {
+test('Kiwoom US stock requires an explicit supported exchange venue while KR order contracts stay intact', () => {
   const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
 
-  const paperUs = evaluateTradingPlan(
+  const missingVenue = evaluateTradingPlan(
     plan({ exchange: 'kiwoom', accountMode: 'paper', market: 'US', symbol: 'AAPL', side: 'buy', quantity: 1 }),
     policy,
     { emergencyStopped: false, serverLiveEnabled: true },
   );
-  assert.equal(paperUs.blockCodes.includes('STOCK_MARKET_NOT_SUPPORTED'), false);
+  assert.ok(missingVenue.blockCodes.includes('KIWOOM_US_EXCHANGE_REQUIRED'));
 
-  const mockUs = evaluateTradingPlan(
-    plan({ exchange: 'kiwoom', accountMode: 'mock', market: 'US', symbol: 'AAPL', side: 'buy', quantity: 1 }),
+  const paperUs = evaluateTradingPlan(
+    plan({
+      exchange: 'kiwoom',
+      accountMode: 'paper',
+      market: 'US',
+      stockExchange: 'NASDAQ',
+      symbol: 'AAPL',
+      side: 'buy',
+      quantity: 1,
+    }),
     policy,
     { emergencyStopped: false, serverLiveEnabled: true },
   );
-  assert.ok(mockUs.blockCodes.includes('STOCK_MARKET_NOT_SUPPORTED'));
+  assert.equal(paperUs.blockCodes.includes('STOCK_MARKET_NOT_SUPPORTED'), false);
+  assert.equal(paperUs.blockCodes.includes('KIWOOM_US_EXCHANGE_REQUIRED'), false);
 
   const request = prepareKiwoomOrder({ appKey: 'app', secretKey: 'secret', accessToken: 'token' },
     plan({ exchange: 'kiwoom', accountMode: 'mock', market: 'KR', symbol: '005930', side: 'buy', quantity: 2, quoteAmount: null }));
