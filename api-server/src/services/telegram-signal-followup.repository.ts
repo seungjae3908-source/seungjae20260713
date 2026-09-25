@@ -1,5 +1,6 @@
 import { getSupabase, hasSupabaseServerKey } from '../lib/supabase';
 import type { ScannerSignalState } from './scanner-signal.types';
+import type { TelegramMessageKind } from './telegram-notification.service';
 
 export type StoredTelegramSignalFollowupState = {
   signalId: string;
@@ -10,6 +11,9 @@ export type StoredTelegramSignalFollowupState = {
   stopReached: boolean;
   announcedAt: number;
   lastSeenAt: number;
+  telegramMessageId?: number;
+  telegramMessageKind?: TelegramMessageKind;
+  baseMessageText?: string;
 };
 
 export interface TelegramSignalFollowupRepository {
@@ -80,6 +84,30 @@ function optionalPrice(value: unknown): number | null {
   return value;
 }
 
+function optionalMessageBundle(input: {
+  telegramMessageId?: unknown;
+  telegramMessageKind?: unknown;
+  baseMessageText?: unknown;
+}): Pick<StoredTelegramSignalFollowupState, 'telegramMessageId' | 'telegramMessageKind' | 'baseMessageText'> {
+  const values = [input.telegramMessageId, input.telegramMessageKind, input.baseMessageText];
+  const empty = values.every((value) => value == null);
+  if (empty) return {};
+  if (values.some((value) => value == null)) throw storageError();
+
+  const messageId = input.telegramMessageId;
+  const messageKind = input.telegramMessageKind;
+  const baseMessageText = input.baseMessageText;
+  if (typeof messageId !== 'number' || !Number.isInteger(messageId) || messageId <= 0) throw storageError();
+  if (messageKind !== 'TEXT' && messageKind !== 'PHOTO') throw storageError();
+  if (typeof baseMessageText !== 'string' || !baseMessageText.trim() || baseMessageText.length > 4096) throw storageError();
+
+  return {
+    telegramMessageId: messageId,
+    telegramMessageKind: messageKind,
+    baseMessageText,
+  };
+}
+
 export function validateStoredTelegramSignalFollowupState(
   state: StoredTelegramSignalFollowupState,
 ): StoredTelegramSignalFollowupState {
@@ -92,6 +120,11 @@ export function validateStoredTelegramSignalFollowupState(
   if (typeof state.stopReached !== 'boolean') throw storageError();
   if (!Number.isFinite(state.announcedAt) || state.announcedAt < 0) throw storageError();
   if (!Number.isFinite(state.lastSeenAt) || state.lastSeenAt < state.announcedAt) throw storageError();
+  const messageBundle = optionalMessageBundle({
+    telegramMessageId: state.telegramMessageId,
+    telegramMessageKind: state.telegramMessageKind,
+    baseMessageText: state.baseMessageText,
+  });
   return {
     signalId,
     expiresAt,
@@ -101,6 +134,7 @@ export function validateStoredTelegramSignalFollowupState(
     stopReached: state.stopReached,
     announcedAt: state.announcedAt,
     lastSeenAt: state.lastSeenAt,
+    ...messageBundle,
   };
 }
 
@@ -149,6 +183,11 @@ function safeIso(ms: number): string {
 
 function fromRow(row: Record<string, unknown>): StoredTelegramSignalFollowupState {
   if (typeof row.stop_reached !== 'boolean') throw storageError();
+  const messageBundle = optionalMessageBundle({
+    telegramMessageId: row.telegram_message_id == null ? undefined : Number(row.telegram_message_id),
+    telegramMessageKind: row.telegram_message_kind,
+    baseMessageText: row.base_message_text,
+  });
   const state: StoredTelegramSignalFollowupState = {
     signalId: requiredString(row.signal_id),
     expiresAt: requiredString(row.expires_at),
@@ -158,6 +197,7 @@ function fromRow(row: Record<string, unknown>): StoredTelegramSignalFollowupStat
     stopReached: row.stop_reached,
     announcedAt: requiredTimestamp(row.announced_at),
     lastSeenAt: requiredTimestamp(row.last_seen_at),
+    ...messageBundle,
   };
   return validateStoredTelegramSignalFollowupState(state);
 }
@@ -173,6 +213,9 @@ function toRow(state: StoredTelegramSignalFollowupState) {
     stop_reached: valid.stopReached,
     announced_at: safeIso(valid.announcedAt),
     last_seen_at: safeIso(valid.lastSeenAt),
+    telegram_message_id: valid.telegramMessageId ?? null,
+    telegram_message_kind: valid.telegramMessageKind ?? null,
+    base_message_text: valid.baseMessageText ?? null,
     updated_at: new Date().toISOString(),
   };
 }
@@ -187,7 +230,7 @@ export class SupabaseTelegramSignalFollowupRepository implements TelegramSignalF
     const ids = [...new Set(signalIds.map((value) => value.trim()).filter(Boolean))].slice(0, 500);
     if (!ids.length) return [];
     const { data, error } = await this.table()
-      .select('signal_id,expires_at,last_state,last_price,reached_targets,stop_reached,announced_at,last_seen_at')
+      .select('signal_id,expires_at,last_state,last_price,reached_targets,stop_reached,announced_at,last_seen_at,telegram_message_id,telegram_message_kind,base_message_text')
       .in('signal_id', ids);
     if (error) throw storageError();
     return (data ?? []).map((row) => fromRow(row as Record<string, unknown>));
