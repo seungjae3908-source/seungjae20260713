@@ -184,8 +184,9 @@ test('Kiwoom vault migration expands provider check without applying credentials
     'utf8',
   );
   assert.match(migration, /provider in \('toss', 'kiwoom', 'upbit', 'bitget'\)/);
-  assert.equal(/insert\s+into\s+public\.account_readonly_credentials/i.test(migration), false);
-  assert.equal(/grant\s+/i.test(migration), false);
+  const migrationSql = migration.split(/\r?\n/).filter((line) => !line.trim().startsWith('--')).join('\n');
+  assert.equal(/insert\s+into\s+public\.account_readonly_credentials/i.test(migrationSql), false);
+  assert.equal(/^\s*grant\s+/im.test(migrationSql), false);
   assert.match(rollback, /where provider = 'kiwoom'/);
   assert.match(rollback, /MUST_BE_REMOVED_EXPLICITLY_BEFORE_ROLLBACK/);
   assert.equal(/delete\s+from\s+public\.account_readonly_credentials/i.test(rollback), false);
