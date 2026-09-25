@@ -65,7 +65,8 @@ function credentialKnownConfigured(snapshot?: CanonicalAccountSnapshot) {
     || snapshot.status === 'CONFIGURED_UNVERIFIED'
     || snapshot.status === 'STALE'
     || snapshot.status === 'AUTH_FAILED'
-    || snapshot.status === 'RATE_LIMITED';
+    || snapshot.status === 'RATE_LIMITED'
+    || snapshot.status === 'UNAVAILABLE';
 }
 
 function statusLabel(snapshot?: CanonicalAccountSnapshot) {
@@ -97,6 +98,7 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
   const [editing, setEditing] = useState<CredentialProvider | null>(null);
   const [credentials, setCredentials] = useState<CredentialDraft>(EMPTY_CREDENTIALS);
   const [saving, setSaving] = useState(false);
+  const [disconnecting, setDisconnecting] = useState<CredentialProvider | null>(null);
   const [saveMessage, setSaveMessage] = useState('');
   const requestSequence = useRef(0);
   const controllerRef = useRef<AbortController | null>(null);
@@ -178,6 +180,30 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
     finally { setSaving(false); }
   }
 
+  async function disconnect(provider: CredentialProvider) {
+    setDisconnecting(provider); setSaveMessage('');
+    try {
+      const result = await jsonRequest<{ configured: boolean; credentialsReturned: false }>(
+        `/api/accounts/read-only/credentials/${provider}`,
+        { method: 'DELETE' },
+      );
+      if (result.configured !== false || result.credentialsReturned !== false) {
+        throw new Error('READONLY_CREDENTIAL_DELETE_FAILED');
+      }
+      setSnapshots((current) => {
+        const next = { ...current };
+        delete next[provider];
+        return next;
+      });
+      setSaveMessage(`연결 해제 완료 · ${providerLabel(provider)} 조회 키를 삭제했습니다.`);
+      await refresh();
+    } catch (cause) {
+      setSaveMessage(cause instanceof Error ? cause.message : '조회 연결을 해제하지 못했습니다.');
+    } finally {
+      setDisconnecting(null);
+    }
+  }
+
   const toss = snapshots.toss; const kiwoom = snapshots.kiwoom; const upbit = snapshots.upbit; const bitget = snapshots.bitget;
   const tossPositions = Array.isArray(toss?.positions) ? toss.positions : [];
   const kiwoomPositions = Array.isArray(kiwoom?.positions) ? kiwoom.positions : [];
@@ -214,18 +240,18 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
       <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-toss"><div className="flex min-w-0 items-center justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-semibold">Toss · 국내/미국주식</p><p className="mt-0.5 text-xs text-muted-foreground">국내·미국 보유자산 조회</p></div><Status snapshot={toss} /></div>
         <div className="mt-3 grid grid-cols-2 gap-2 text-xs"><Metric label="연결 계좌" value={countMetric(toss, Array.isArray(toss?.accounts) ? toss.accounts.length : null, '개 시장')} /><Metric label="보유 종목" value={countMetric(toss, Array.isArray(toss?.positions) ? knownNonZeroCount(tossPositions, (row) => row.quantity) : null, '종목')} /></div>
         <div className="mt-2 max-h-44 space-y-1 overflow-y-auto overscroll-contain">{visibleTossPositions.slice(0, 8).map((row, index) => <div key={`${row.symbol}-${index}`} className="rounded-xl bg-secondary/60 px-3 py-2 text-xs"><div className="flex min-w-0 items-center justify-between gap-3"><span className="min-w-0 truncate font-semibold">{row.symbol} · {row.market}</span><span className="shrink-0">{amount(toss, row.quantity)}</span></div><p className="mt-1 text-xs text-muted-foreground">평가 {amount(toss, row.marketValue)} · 손익 {amount(toss, row.unrealizedPnl)}</p></div>)}</div>
-        <SetupButton label="Toss 조회 연결 설정" onClick={() => openSetup('toss')} /><ErrorLine value={toss?.errorCode} />
+        <ConnectionActions provider="toss" configured={credentialKnownConfigured(toss)} disconnecting={disconnecting === 'toss'} onSetup={() => openSetup('toss')} onDisconnect={() => void disconnect('toss')} /><ErrorLine value={toss?.errorCode} />
       </article>
 
       {kiwoomSupported ? <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-kiwoom"><div className="flex min-w-0 items-center justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-semibold">Kiwoom · 국내주식</p><p className="mt-0.5 text-xs text-muted-foreground">공식 REST 잔고·미체결 조회</p></div><Status snapshot={kiwoom} /></div>
         <div className="mt-3 grid grid-cols-2 gap-2 text-xs"><Metric label="보유 종목" value={countMetric(kiwoom, Array.isArray(kiwoom?.positions) ? knownNonZeroCount(kiwoomPositions, (row) => row.quantity) : null, '종목')} /><Metric label="미체결" value={countMetric(kiwoom, Array.isArray(kiwoom?.openOrders) ? kiwoom.openOrders.length : null, '건')} /></div>
         <div className="mt-2 max-h-44 space-y-1 overflow-y-auto overscroll-contain">{visibleKiwoomPositions.slice(0, 8).map((row, index) => <div key={`${row.symbol}-${index}`} className="rounded-xl bg-secondary/60 px-3 py-2 text-xs"><div className="flex min-w-0 items-center justify-between gap-3"><span className="min-w-0 truncate font-semibold">{row.symbol} · {row.market}</span><span className="shrink-0">{amount(kiwoom, row.quantity)}</span></div><p className="mt-1 text-xs text-muted-foreground">평가 {amount(kiwoom, row.marketValue, 'KRW')} · 손익 {amount(kiwoom, row.unrealizedPnl, 'KRW')}</p></div>)}</div>
-        <SetupButton label="Kiwoom 조회 연결 설정" onClick={() => openSetup('kiwoom')} /><ErrorLine value={kiwoom?.errorCode} />
+        <ConnectionActions provider="kiwoom" configured={credentialKnownConfigured(kiwoom)} disconnecting={disconnecting === 'kiwoom'} onSetup={() => openSetup('kiwoom')} onDisconnect={() => void disconnect('kiwoom')} /><ErrorLine value={kiwoom?.errorCode} />
       </article> : null}
 
-      {canAccessSpot ? <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-upbit"><div className="flex min-w-0 items-center justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-semibold">Upbit · 코인 현물</p><p className="mt-0.5 text-xs text-muted-foreground">현물 보유자산 조회</p></div><Status snapshot={upbit} /></div><p className="mt-3 text-xs font-semibold">보유 자산 {countMetric(upbit, Array.isArray(upbit?.balances) ? knownNonZeroCount(upbitBalances, (row) => row.total) : null, '개')}</p><div className="mt-2 max-h-40 space-y-1 overflow-y-auto overscroll-contain">{visibleUpbitBalances.slice(0, 10).map((row) => <div key={row.currency} className="flex min-w-0 items-center justify-between gap-3 rounded-xl bg-secondary/60 px-3 py-2 text-xs"><span className="min-w-0 truncate font-semibold">{row.currency}</span><span className="shrink-0 tabular-nums">{amount(upbit, row.total, row.currency)}</span></div>)}</div><SetupButton label="Upbit 조회 연결 설정" onClick={() => openSetup('upbit')} /><ErrorLine value={upbit?.errorCode} /></article> : null}
+      {canAccessSpot ? <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-upbit"><div className="flex min-w-0 items-center justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-semibold">Upbit · 코인 현물</p><p className="mt-0.5 text-xs text-muted-foreground">현물 보유자산 조회</p></div><Status snapshot={upbit} /></div><p className="mt-3 text-xs font-semibold">보유 자산 {countMetric(upbit, Array.isArray(upbit?.balances) ? knownNonZeroCount(upbitBalances, (row) => row.total) : null, '개')}</p><div className="mt-2 max-h-40 space-y-1 overflow-y-auto overscroll-contain">{visibleUpbitBalances.slice(0, 10).map((row) => <div key={row.currency} className="flex min-w-0 items-center justify-between gap-3 rounded-xl bg-secondary/60 px-3 py-2 text-xs"><span className="min-w-0 truncate font-semibold">{row.currency}</span><span className="shrink-0 tabular-nums">{amount(upbit, row.total, row.currency)}</span></div>)}</div><ConnectionActions provider="upbit" configured={credentialKnownConfigured(upbit)} disconnecting={disconnecting === 'upbit'} onSetup={() => openSetup('upbit')} onDisconnect={() => void disconnect('upbit')} /><ErrorLine value={upbit?.errorCode} /></article> : null}
 
-      {canAccessFutures ? <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-bitget"><div className="flex min-w-0 items-center justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-semibold">Bitget · 코인 선물</p><p className="mt-0.5 text-xs text-muted-foreground">선물 포지션 조회</p></div><Status snapshot={bitget} /></div><div className="mt-3 grid grid-cols-2 gap-2 text-xs"><Metric label="선물 계정" value={countMetric(bitget, Array.isArray(bitget?.accounts) ? bitget.accounts.length : null, '개')} /><Metric label="열린 포지션" value={countMetric(bitget, Array.isArray(bitget?.positions) ? knownNonZeroCount(bitgetPositions, (row) => row.quantity) : null, '개')} /></div><div className="mt-2 max-h-44 space-y-1 overflow-y-auto overscroll-contain">{visibleBitgetPositions.slice(0, 8).map((row, index) => <div key={`${row.symbol}-${row.side}-${index}`} className="rounded-xl bg-secondary/60 px-3 py-2 text-xs"><div className="flex min-w-0 items-center justify-between gap-3"><span className="min-w-0 truncate font-semibold">{row.symbol} · {accountEvidence(bitget, row.side)}</span><span className="shrink-0">{amount(bitget, row.quantity)}</span></div><p className="mt-1 break-words text-xs text-muted-foreground">레버리지 {amount(bitget, row.leverage, null, 'x')} · 미실현 {amount(bitget, row.unrealizedPnl)}</p></div>)}</div><SetupButton label="Bitget 조회 연결 설정" onClick={() => openSetup('bitget')} /><ErrorLine value={bitget?.errorCode} /></article> : null}
+      {canAccessFutures ? <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-bitget"><div className="flex min-w-0 items-center justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-semibold">Bitget · 코인 선물</p><p className="mt-0.5 text-xs text-muted-foreground">선물 포지션 조회</p></div><Status snapshot={bitget} /></div><div className="mt-3 grid grid-cols-2 gap-2 text-xs"><Metric label="선물 계정" value={countMetric(bitget, Array.isArray(bitget?.accounts) ? bitget.accounts.length : null, '개')} /><Metric label="열린 포지션" value={countMetric(bitget, Array.isArray(bitget?.positions) ? knownNonZeroCount(bitgetPositions, (row) => row.quantity) : null, '개')} /></div><div className="mt-2 max-h-44 space-y-1 overflow-y-auto overscroll-contain">{visibleBitgetPositions.slice(0, 8).map((row, index) => <div key={`${row.symbol}-${row.side}-${index}`} className="rounded-xl bg-secondary/60 px-3 py-2 text-xs"><div className="flex min-w-0 items-center justify-between gap-3"><span className="min-w-0 truncate font-semibold">{row.symbol} · {accountEvidence(bitget, row.side)}</span><span className="shrink-0">{amount(bitget, row.quantity)}</span></div><p className="mt-1 break-words text-xs text-muted-foreground">레버리지 {amount(bitget, row.leverage, null, 'x')} · 미실현 {amount(bitget, row.unrealizedPnl)}</p></div>)}</div><ConnectionActions provider="bitget" configured={credentialKnownConfigured(bitget)} disconnecting={disconnecting === 'bitget'} onSetup={() => openSetup('bitget')} onDisconnect={() => void disconnect('bitget')} /><ErrorLine value={bitget?.errorCode} /></article> : null}
     </div>
 
     <p className="mt-3 text-center text-xs text-muted-foreground">최근 확인 {latestCheckedAt(enabledProviders().map((provider) => snapshots[provider]))}</p>
@@ -242,7 +268,12 @@ function providerLabel(provider: CredentialProvider) { return provider === 'toss
 function latestCheckedAt(values: Array<CanonicalAccountSnapshot | undefined>) { const timestamps = values.map((value) => value?.checkedAt).filter((value): value is string => Boolean(value)); if (!timestamps.length) return resolveEvidenceDisplay({ value: null }).display; return new Date(timestamps.sort().at(-1)!).toLocaleString('ko-KR'); }
 function ErrorLine({ value }: { value?: string | null }) { if (!value || value === 'ACCOUNT_READ_DISABLED' || value === 'ACCOUNT_NOT_CONFIGURED') return null; return <p className="mt-2 break-words text-center text-xs font-semibold text-warning">{value}</p>; }
 function Metric({ label, value }: { label: string; value: string }) { return <div className="min-w-0 rounded-xl bg-secondary/60 p-2 text-center"><p className="truncate text-xs text-muted-foreground">{label}</p><p className="mt-1 truncate font-semibold">{value}</p></div>; }
-function SetupButton({ label, onClick }: { label: string; onClick: () => void }) { return <button type="button" onClick={onClick} className="mt-3 min-h-11 w-full rounded-xl border border-card-border px-3 text-xs font-semibold">{label}</button>; }
+function ConnectionActions({ provider, configured, disconnecting, onSetup, onDisconnect }: { provider: CredentialProvider; configured: boolean; disconnecting: boolean; onSetup: () => void; onDisconnect: () => void }) {
+  return <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+    <button type="button" onClick={onSetup} className="min-h-11 rounded-xl border border-card-border px-3 text-xs font-semibold">{providerLabel(provider)} 조회 연결 설정</button>
+    {configured ? <button type="button" disabled={disconnecting} onClick={onDisconnect} className="min-h-11 rounded-xl border border-destructive/40 px-3 text-xs font-semibold text-destructive disabled:opacity-50">{disconnecting ? '해제 중…' : '조회 연결 해제'}</button> : <span aria-hidden className="hidden sm:block" />}
+  </div>;
+}
 function CredentialField({ testId, label, value, onChange, optional = false, configured = false }: { testId: string; label: string; value: string; onChange: (value: string) => void; optional?: boolean; configured?: boolean }) {
   const [revealed, setRevealed] = useState(false);
   const placeholder = configured ? '•••••••• 저장됨 · 변경 시 새 값 입력' : `${label} 입력`;
