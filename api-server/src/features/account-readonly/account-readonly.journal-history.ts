@@ -582,8 +582,11 @@ export function createAccountJournalHistoryReader(options: AccountJournalHistory
                   endMs,
                   signal: controller.signal,
                   maxDays: maxKiwoomDays,
+                  requestCounter: counter,
                 });
-          if (provider === 'kiwoom') counter.value = result.privateProviderRequests;
+          if (provider === 'kiwoom' && counter.value !== result.privateProviderRequests) {
+            throw new AccountReadonlyError('KIWOOM_HISTORY_REQUEST_COUNT_MISMATCH');
+          }
           payloads.push(...result.payloads);
           anyTruncated ||= result.truncated;
           providers.push({
