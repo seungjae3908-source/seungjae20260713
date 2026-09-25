@@ -124,6 +124,7 @@ const groups = {
     path.join(root, 'src/services/trade-split-order-materializer.test.ts'),
     path.join(root, 'src/services/trade-split-order-execution.test.ts'),
     path.join(root, 'src/routes/trade-automation.smoke.test.ts'),
+    path.join(root, 'src/routes/stocks-legacy-auto-trade-guard.test.ts'),
     path.join(root, 'src/routes/trade-automation-split.smoke.test.ts'),
     path.join(root, 'src/routes/trade-automation-recovery.smoke.test.ts'),
     path.join(root, 'src/routes/trade-automation-cancel-race.smoke.test.ts'),
