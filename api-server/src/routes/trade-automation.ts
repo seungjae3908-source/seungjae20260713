@@ -361,12 +361,52 @@ router.put('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
     const safeCredentials = Object.fromEntries(allowedKeys[exchange].map((key) => [key, String(credentials[key] ?? '').trim()]));
     if (Object.values(safeCredentials).some((value) => !value)) throw new Error('CREDENTIALS_INCOMPLETE');
     const accountMode = req.body?.accountMode === 'live' ? 'live' : req.body?.accountMode === 'mock' ? 'mock' : 'paper';
+    if (accountMode === 'live') {
+      const purpose = String(req.body?.purpose ?? '').trim().toLowerCase();
+      const permissionSet = new Set(permissions);
+      if (purpose !== 'live_execution') throw new Error('LIVE_EXECUTION_PURPOSE_CONFIRMATION_REQUIRED');
+      if (!permissionSet.has('read') || !permissionSet.has('orders')) {
+        throw new Error('LIVE_EXECUTION_READ_AND_ORDER_PERMISSIONS_REQUIRED');
+      }
+      if ([...permissionSet].some((item) => !['read', 'orders'].includes(item))) {
+        throw new Error('LIVE_EXECUTION_PERMISSION_SCOPE_INVALID');
+      }
+    }
     await repository.saveConnection({
       userId, exchange, accountMode, configured: true,
       encryptedCredentials: encryptTradingCredentials(safeCredentials),
-      lastVerifiedAt: null, lastErrorCode: null, updatedAt: new Date().toISOString(),
+      lastVerifiedAt: null,
+      lastErrorCode: accountMode === 'live' ? 'LIVE_EXECUTION_NOT_VERIFIED' : null,
+      updatedAt: new Date().toISOString(),
     });
-    return res.json({ ok: true, exchange, accountMode, configured: true, credentialsReturned: false });
+    return res.json({
+      ok: true,
+      exchange,
+      accountMode,
+      configured: true,
+      credentialsReturned: false,
+      liveExecutionActivated: false,
+      providerMutationRequests: 0,
+    });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.delete('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository } = context(req);
+    const exchange = exchangeValue(req.params.exchange);
+    if (req.body?.confirmed !== true) {
+      return res.status(409).json({ ok: false, error: 'TRADING_CONNECTION_DISCONNECT_CONFIRMATION_REQUIRED' });
+    }
+    await repository.deleteConnection(userId, exchange);
+    return res.json({
+      ok: true,
+      exchange,
+      configured: false,
+      credentialsReturned: false,
+      providerMutationRequests: 0,
+      existingProviderOrdersCanceled: false,
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 
