@@ -3,7 +3,61 @@ import { emptySnapshot, nullableNumber, type CanonicalAccountSnapshot, type Cano
 import { AccountReadonlyError } from '../account-readonly.errors';
 
 export type SignedReadonlyTransport = (request: PreparedExchangeRequest, signal?: AbortSignal) => Promise<unknown>;
+export type UpbitPublicQuoteReader = (markets: readonly string[], signal?: AbortSignal) => Promise<ReadonlyMap<string, number>>;
 type Row = Record<string, unknown>;
+
+const UPBIT_PUBLIC_ORIGIN = 'https://api.upbit.com';
+
+export function createUpbitPublicQuoteReader(
+  fetchImpl: typeof fetch = fetch,
+  apiOrigin = UPBIT_PUBLIC_ORIGIN,
+): UpbitPublicQuoteReader {
+  const expectedOrigin = new URL(apiOrigin).origin;
+  return async (markets, signal) => {
+    const normalized = [...new Set(markets.map((market) => market.trim().toUpperCase()).filter(Boolean))];
+    if (normalized.some((market) => !/^KRW-[A-Z0-9._-]+$/.test(market))) {
+      throw new AccountReadonlyError('UPBIT_PUBLIC_QUOTE_MARKET_INVALID');
+    }
+    const prices = new Map<string, number>();
+    for (let index = 0; index < normalized.length; index += 100) {
+      const chunk = normalized.slice(index, index + 100);
+      if (chunk.length === 0) continue;
+      const url = new URL('/v1/ticker', expectedOrigin);
+      url.searchParams.set('markets', chunk.join(','));
+      let response: Response;
+      try {
+        response = await fetchImpl(url, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+          redirect: 'error',
+          cache: 'no-store',
+          signal,
+        });
+      } catch (error) {
+        if (signal?.aborted) throw new AccountReadonlyError('PROVIDER_TIMEOUT', true);
+        throw new AccountReadonlyError('UPBIT_PUBLIC_QUOTE_UNAVAILABLE', true);
+      }
+      if (!response.ok) {
+        if (response.status === 418 || response.status === 429) throw new AccountReadonlyError('RATE_LIMITED', true);
+        throw new AccountReadonlyError('UPBIT_PUBLIC_QUOTE_UNAVAILABLE', response.status >= 500);
+      }
+      let body: unknown;
+      try {
+        body = await response.json();
+      } catch {
+        throw new AccountReadonlyError('UPBIT_PUBLIC_QUOTE_RESPONSE_INVALID');
+      }
+      for (const row of rows(body, 'UPBIT_PUBLIC_QUOTE_RESPONSE_INVALID')) {
+        const market = identity(row.market, 'UPBIT_PUBLIC_QUOTE_IDENTITY_INVALID');
+        const price = optionalNonNegative(row.trade_price, 'UPBIT_PUBLIC_QUOTE_PRICE_INVALID');
+        if (price == null || price <= 0) throw new AccountReadonlyError('UPBIT_PUBLIC_QUOTE_PRICE_INVALID');
+        if (!chunk.includes(market) || prices.has(market)) throw new AccountReadonlyError('UPBIT_PUBLIC_QUOTE_IDENTITY_INVALID');
+        prices.set(market, price);
+      }
+    }
+    return prices;
+  };
+}
 
 function record(value: unknown): value is Row {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -88,24 +142,106 @@ function bitgetApplicationFailure(code: string) {
   return new AccountReadonlyError('BITGET_REQUEST_REJECTED');
 }
 
-export async function readUpbitSnapshot(credentials: UpbitCredentials, transport: SignedReadonlyTransport, signal?: AbortSignal, now = new Date()): Promise<CanonicalAccountSnapshot> {
+export async function readUpbitSnapshot(
+  credentials: UpbitCredentials,
+  transport: SignedReadonlyTransport,
+  signal?: AbortSignal,
+  now = new Date(),
+  publicQuotes?: UpbitPublicQuoteReader,
+): Promise<CanonicalAccountSnapshot> {
   const raw = rows(await transport(prepareUpbitAccounts(credentials), signal), 'UPBIT_ACCOUNT_RESPONSE_INVALID');
-  const balances = raw.map((row) => {
-    const available = nullableNumber(row.balance);
-    const locked = nullableNumber(row.locked);
-    return { currency: identity(row.currency, 'UPBIT_ACCOUNT_IDENTITY_INVALID'), available, locked, total: total(available, locked), estimatedKrwValue: null };
+  const base = raw.map((row) => {
+    const available = optionalNonNegative(row.balance, 'UPBIT_ACCOUNT_BALANCE_INVALID');
+    const locked = optionalNonNegative(row.locked, 'UPBIT_ACCOUNT_LOCKED_INVALID');
+    const currency = identity(row.currency, 'UPBIT_ACCOUNT_IDENTITY_INVALID');
+    const unitCurrency = typeof row.unit_currency === 'string' && row.unit_currency.trim()
+      ? row.unit_currency.trim().toUpperCase()
+      : null;
+    return {
+      row,
+      currency,
+      unitCurrency,
+      available,
+      locked,
+      total: total(available, locked),
+      averageEntryPrice: optionalNonNegative(row.avg_buy_price, 'UPBIT_ACCOUNT_AVG_PRICE_INVALID'),
+    };
   });
-  if (new Set(balances.map((row) => row.currency)).size !== balances.length) throw new Error('UPBIT_ACCOUNT_IDENTITY_DUPLICATE');
-  const positions = raw.map((row, index) => ({
-    market: 'UPBIT', symbol: balances[index].currency, quantity: balances[index].total,
-    availableQuantity: balances[index].available, averageEntryPrice: nullableNumber(row.avg_buy_price),
-    currentPrice: null, marketValue: null, unrealizedPnl: null, unrealizedPnlPercent: null,
-    leverage: null, liquidationPrice: null, marginMode: null, side: null,
-  }));
+  if (new Set(base.map((row) => row.currency)).size !== base.length) throw new Error('UPBIT_ACCOUNT_IDENTITY_DUPLICATE');
+
+  const valuationMarkets = base
+    .filter((row) => row.currency !== 'KRW' && row.unitCurrency === 'KRW' && (row.total ?? 0) > 0)
+    .map((row) => `KRW-${row.currency}`);
+  let quotePrices: ReadonlyMap<string, number> = new Map();
+  let valuationUnavailable = false;
+  if (publicQuotes && valuationMarkets.length > 0) {
+    try {
+      quotePrices = await publicQuotes(valuationMarkets, signal);
+    } catch {
+      valuationUnavailable = true;
+    }
+  }
+
+  const balances = base.map((row) => {
+    const currentPrice = row.currency === 'KRW'
+      ? 1
+      : row.unitCurrency === 'KRW'
+        ? quotePrices.get(`KRW-${row.currency}`) ?? null
+        : null;
+    const estimatedKrwValue = row.total === 0
+      ? 0
+      : row.total != null && currentPrice != null
+        ? row.total * currentPrice
+        : null;
+    return {
+      currency: row.currency,
+      available: row.available,
+      locked: row.locked,
+      total: row.total,
+      estimatedKrwValue: Number.isFinite(estimatedKrwValue ?? Number.NaN) ? estimatedKrwValue : null,
+    };
+  });
+
+  const positions = base.map((row, index) => {
+    const currentPrice = row.currency === 'KRW'
+      ? 1
+      : row.unitCurrency === 'KRW'
+        ? quotePrices.get(`KRW-${row.currency}`) ?? null
+        : null;
+    const marketValue = balances[index].estimatedKrwValue;
+    const averageEntryPrice = row.averageEntryPrice;
+    const unrealizedPnl = row.currency !== 'KRW'
+      && row.total != null
+      && currentPrice != null
+      && averageEntryPrice != null
+      && averageEntryPrice > 0
+      ? (currentPrice - averageEntryPrice) * row.total
+      : null;
+    const unrealizedPnlPercent = row.currency !== 'KRW'
+      && currentPrice != null
+      && averageEntryPrice != null
+      && averageEntryPrice > 0
+      ? ((currentPrice - averageEntryPrice) / averageEntryPrice) * 100
+      : null;
+    return {
+      market: 'UPBIT', symbol: row.currency, quantity: row.total,
+      availableQuantity: row.available, averageEntryPrice,
+      currentPrice, marketValue,
+      unrealizedPnl: Number.isFinite(unrealizedPnl ?? Number.NaN) ? unrealizedPnl : null,
+      unrealizedPnlPercent: Number.isFinite(unrealizedPnlPercent ?? Number.NaN) ? unrealizedPnlPercent : null,
+      leverage: null, liquidationPrice: null, marginMode: null, side: null,
+    };
+  });
+
   const open = await readUpbitOpenOrderSnapshot(credentials, transport, signal);
   const checkedAt = now.toISOString();
   return {
-    ...emptySnapshot('upbit', 'CONNECTED', checkedAt, open.errorCode),
+    ...emptySnapshot(
+      'upbit',
+      'CONNECTED',
+      checkedAt,
+      open.errorCode ?? (valuationUnavailable ? 'UPBIT_PUBLIC_VALUATION_UNAVAILABLE' : null),
+    ),
     connected: true,
     balances,
     positions,
@@ -141,15 +277,36 @@ export async function readBitgetSnapshot(credentials: BitgetCredentials, transpo
     total: nullableNumber(row.accountEquity), estimatedKrwValue: null,
   }));
   if (new Set(balances.map((row) => row.currency)).size !== balances.length) throw new Error('BITGET_ACCOUNT_IDENTITY_DUPLICATE');
-  const positions = data(positionRaw).map((row) => ({
-    market: 'BITGET', symbol: identity(row.symbol, 'BITGET_POSITION_IDENTITY_INVALID'),
-    quantity: nullableNumber(row.total), availableQuantity: nullableNumber(row.available),
-    averageEntryPrice: nullableNumber(row.openPriceAvg), currentPrice: nullableNumber(row.markPrice),
-    marketValue: null, unrealizedPnl: nullableNumber(row.unrealizedPL), unrealizedPnlPercent: null,
-    leverage: nullableNumber(row.leverage), liquidationPrice: nullableNumber(row.liquidationPrice),
-    marginMode: typeof row.marginMode === 'string' ? row.marginMode : null,
-    side: typeof row.holdSide === 'string' ? row.holdSide : null,
-  }));
+  const positions = data(positionRaw).map((row) => {
+    const quantity = optionalNonNegative(row.total, 'BITGET_POSITION_QUANTITY_INVALID');
+    const availableQuantity = optionalNonNegative(row.available, 'BITGET_POSITION_AVAILABLE_INVALID');
+    const averageEntryPrice = optionalNonNegative(row.openPriceAvg, 'BITGET_POSITION_AVG_PRICE_INVALID');
+    const currentPrice = optionalNonNegative(row.markPrice, 'BITGET_POSITION_MARK_PRICE_INVALID');
+    const unrealizedPnl = nullableNumber(row.unrealizedPL);
+    const marketValue = quantity === 0
+      ? 0
+      : quantity != null && currentPrice != null
+        ? Math.abs(quantity) * currentPrice
+        : null;
+    const entryNotional = quantity != null && averageEntryPrice != null
+      ? Math.abs(quantity) * averageEntryPrice
+      : null;
+    const unrealizedPnlPercent = unrealizedPnl != null && entryNotional != null && entryNotional > 0
+      ? (unrealizedPnl / entryNotional) * 100
+      : null;
+    return {
+      market: 'BITGET', symbol: identity(row.symbol, 'BITGET_POSITION_IDENTITY_INVALID'),
+      quantity, availableQuantity,
+      averageEntryPrice, currentPrice,
+      marketValue: Number.isFinite(marketValue ?? Number.NaN) ? marketValue : null,
+      unrealizedPnl,
+      unrealizedPnlPercent: Number.isFinite(unrealizedPnlPercent ?? Number.NaN) ? unrealizedPnlPercent : null,
+      leverage: optionalNonNegative(row.leverage, 'BITGET_POSITION_LEVERAGE_INVALID'),
+      liquidationPrice: optionalNonNegative(row.liquidationPrice, 'BITGET_POSITION_LIQUIDATION_INVALID'),
+      marginMode: typeof row.marginMode === 'string' ? row.marginMode : null,
+      side: typeof row.holdSide === 'string' ? row.holdSide : null,
+    };
+  });
   let openOrders: CanonicalReadonlyOrder[] | null = null;
   let openOrderError: string | null = null;
   if (pendingResult.error) {
