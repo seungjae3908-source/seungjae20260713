@@ -178,6 +178,8 @@ function dependencies(input: {
   missingArtifact?: boolean;
   receiptAccessFails?: boolean;
   receiptRootMissing?: boolean;
+  policyMaximumAgeMs?: number;
+  policyInvalid?: boolean;
   missingCostComponent?: string;
   missingSettlement?: boolean;
   rebindFails?: boolean;
@@ -208,8 +210,29 @@ function dependencies(input: {
         });
       }
       if ([ARTIFACT_ROOT, DEFAULT_ARTIFACT_ROOT].some((root) => path.startsWith(root))) {
-        if (input.missingArtifact && path.endsWith('/manifest.json')) throw new Error('missing');
+        if (input.missingArtifact && path.endsWith('/manifest.json')) {
+          const error = new Error('missing') as NodeJS.ErrnoException;
+          error.code = 'ENOENT';
+          throw error;
+        }
         return JSON.stringify({ schemaVersion: 'fixture' });
+      }
+      if (path.endsWith('/validation-receipt-policy.json')) {
+        if (input.policyInvalid) return JSON.stringify({ schemaVersion: 'invalid-policy' });
+        if (input.policyMaximumAgeMs != null) {
+          return JSON.stringify({
+            schemaVersion: 'paper-canonical-validation-receipt-freshness-policy-v1',
+            maximumAgeMs: input.policyMaximumAgeMs,
+            evidenceSource: 'FORWARD_RECOMMENDATION_OBSERVER',
+            immutable: true,
+            executionAuthority: 'NONE',
+            financialMutationAllowed: false,
+            replayBackfillSyntheticManualCredit: 0,
+          });
+        }
+        const error = new Error('missing') as NodeJS.ErrnoException;
+        error.code = 'ENOENT';
+        throw error;
       }
       throw new Error(`unexpected path: ${path}`);
     },
@@ -388,10 +411,33 @@ test('missing observer artifact, receipt access, or freshness policy never becom
   assert.equal(result.readyForActivationReview, false);
   assert.equal(result.forwardObserverArtifactsReady, false);
   assert.equal(result.validationReceiptPathReady, false);
-  assert.ok(result.blockers.includes('PAPER_CANONICAL_FORWARD_OBSERVER_ARTIFACT_UNREADABLE'));
+  assert.ok(result.blockers.includes('PAPER_CANONICAL_FORWARD_OBSERVER_MANIFEST_MISSING'));
   assert.ok(result.blockers.includes('PAPER_CANONICAL_FORWARD_OBSERVER_ARTIFACTS_NOT_READY'));
   assert.ok(result.blockers.includes('PAPER_CANONICAL_VALIDATION_RECEIPT_ROOT_NOT_ACCESSIBLE'));
   assert.ok(result.blockers.includes('PAPER_CANONICAL_VALIDATION_RECEIPT_MAXIMUM_AGE_UNCONFIGURED'));
+});
+
+test('freshness policy file is accepted when PM2 env value is intentionally absent', async () => {
+  const result = await probeManualPaperCanonicalRuntimeReadiness({
+    expectedMainSha: SHA,
+    env: env({ PAPER_CANONICAL_VALIDATION_RECEIPT_MAXIMUM_AGE_MS: undefined }),
+    dependencies: dependencies({ policyMaximumAgeMs: 14_400_000 }),
+  });
+
+  assert.equal(result.validationReceiptPathReady, true);
+  assert.ok(!result.blockers.includes('PAPER_CANONICAL_VALIDATION_RECEIPT_MAXIMUM_AGE_UNCONFIGURED'));
+  assert.equal(result.readyForActivationReview, true);
+});
+
+test('an explicitly invalid PM2 freshness value fails closed instead of falling back to policy file', async () => {
+  const result = await probeManualPaperCanonicalRuntimeReadiness({
+    expectedMainSha: SHA,
+    env: env({ PAPER_CANONICAL_VALIDATION_RECEIPT_MAXIMUM_AGE_MS: 'not-a-number' }),
+    dependencies: dependencies({ policyMaximumAgeMs: 14_400_000 }),
+  });
+
+  assert.equal(result.validationReceiptPathReady, false);
+  assert.ok(result.blockers.includes('PAPER_CANONICAL_VALIDATION_RECEIPT_MAXIMUM_AGE_INVALID'));
 });
 
 test('DEPLOY_SHA must equal the explicitly supplied current main', async () => {
