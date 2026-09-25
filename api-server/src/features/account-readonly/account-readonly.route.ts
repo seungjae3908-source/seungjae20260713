@@ -12,10 +12,11 @@ import {
 } from './account-readonly.repository';
 import { AccountReadonlyService } from './account-readonly.service';
 
-const PROVIDERS = new Set<AccountProvider>(['toss', 'upbit', 'bitget']);
-const CREDENTIAL_PROVIDERS = new Set<ReadonlyCredentialProvider>(['toss', 'upbit', 'bitget']);
+const PROVIDERS = new Set<AccountProvider>(['toss', 'kiwoom', 'upbit', 'bitget']);
+const CREDENTIAL_PROVIDERS = new Set<ReadonlyCredentialProvider>(['toss', 'kiwoom', 'upbit', 'bitget']);
 const CREDENTIAL_FIELDS: Record<ReadonlyCredentialProvider, { required: readonly string[]; optional: readonly string[] }> = {
   toss: { required: ['clientId', 'clientSecret'], optional: ['accountSeq'] },
+  kiwoom: { required: ['appKey', 'appSecret'], optional: [] },
   upbit: { required: ['accessKey', 'secretKey'], optional: [] },
   bitget: { required: ['apiKey', 'secretKey', 'passphrase'], optional: [] },
 };
@@ -40,6 +41,7 @@ export function setAccountReadonlyCredentialRepositoryFactoryForTests(factory: C
 export function accountReadFlags(environment: NodeJS.ProcessEnv = process.env) {
   return {
     toss: environment.TOSS_ACCOUNT_READ_ENABLED === 'true',
+    kiwoom: environment.KIWOOM_ACCOUNT_READ_ENABLED === 'true',
     upbit: environment.UPBIT_ACCOUNT_READ_ENABLED === 'true',
     bitget: environment.BITGET_ACCOUNT_READ_ENABLED === 'true',
   } as const;
@@ -76,7 +78,7 @@ export function readonlyProviderCapability(provider: unknown) {
   const normalized = String(provider ?? '').trim().toLowerCase();
   if (normalized === 'bitget') return 'canAccessFutures' as const;
   if (normalized === 'upbit') return 'canAccessSpot' as const;
-  if (normalized === 'toss') return 'canAccessBasicInfo' as const;
+  if (normalized === 'toss' || normalized === 'kiwoom') return 'canAccessBasicInfo' as const;
   return null;
 }
 
@@ -173,8 +175,8 @@ export function createAccountReadonlyRouter(service: AccountReadonlyService): IR
     return res.json({
       ok: true,
       encryptionConfigured: vault.encryptionConfigured,
-      supportedProviders: ['toss', 'upbit', 'bitget'],
-      hiddenProviders: ['kiwoom'],
+      supportedProviders: ['toss', 'kiwoom', 'upbit', 'bitget'],
+      hiddenProviders: [],
       storage: 'user_scoped_account_readonly_encrypted_vault',
       ...safetyCounters(),
     });
