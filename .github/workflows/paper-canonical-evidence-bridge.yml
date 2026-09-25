@@ -7,6 +7,8 @@ on:
       - '.github/workflows/paper-canonical-evidence-bridge.yml'
       - 'ops/materialize-paper-canonical-forward-observer.mjs'
       - 'ops/publish-paper-canonical-validation-freshness-policy.mjs'
+      - 'ops/check-paper-canonical-pm2-safety.mjs'
+      - 'market-prediction-lab/tests/paper-canonical-pm2-safety-probe-v1.test.js'
       - 'market-prediction-lab/tests/paper-canonical-forward-observer-materialization-v1.test.js'
       - 'market-prediction-lab/tests/paper-canonical-validation-freshness-configuration-v1.test.js'
       - 'api-server/src/services/paper-canonical-validation-freshness-policy.service.ts'
@@ -72,8 +74,9 @@ jobs:
           set -Eeuo pipefail
           node --check ops/materialize-paper-canonical-forward-observer.mjs
           node --check ops/publish-paper-canonical-validation-freshness-policy.mjs
-          node --test             market-prediction-lab/tests/paper-canonical-forward-observer-materialization-v1.test.js             market-prediction-lab/tests/paper-canonical-validation-freshness-configuration-v1.test.js
-          ! grep -Eq 'pm2[[:space:]]+(restart|reload|start|stop|delete|save)|crontab[[:space:]]+-|systemctl[[:space:]]+(start|stop|restart|enable)|psql|supabase db'             ops/materialize-paper-canonical-forward-observer.mjs             ops/publish-paper-canonical-validation-freshness-policy.mjs
+          node --check ops/check-paper-canonical-pm2-safety.mjs
+          node --test             market-prediction-lab/tests/paper-canonical-forward-observer-materialization-v1.test.js             market-prediction-lab/tests/paper-canonical-validation-freshness-configuration-v1.test.js             market-prediction-lab/tests/paper-canonical-pm2-safety-probe-v1.test.js
+          ! grep -Eq 'pm2[[:space:]]+(restart|reload|start|stop|delete|save)|crontab[[:space:]]+-|systemctl[[:space:]]+(start|stop|restart|enable)|psql|supabase db'             ops/materialize-paper-canonical-forward-observer.mjs             ops/publish-paper-canonical-validation-freshness-policy.mjs             ops/check-paper-canonical-pm2-safety.mjs
       - name: Typecheck backend
         run: pnpm --dir api-server run typecheck
       - name: Run canonical Paper bridge unit regressions
@@ -113,7 +116,7 @@ jobs:
           test -s "$operational"
           grep -Fq 'environment: production' "$operational"
           grep -Fq 'workflow_dispatch:' "$workflow"
-          grep -Fq "pm2 jlist | node -e" "$operational"
+          grep -Fq 'pm2 jlist | node /opt/stock-app/ops/check-paper-canonical-pm2-safety.mjs' "$operational"
           ! grep -Fq '"${remote[@]}" "pm2 jlist" | node' "$operational"
           ! grep -Eq '^[[:space:]]{2}schedule:[[:space:]]*$' "$workflow"
           ! grep -Eq 'contents:[[:space:]]+write' "$workflow"
@@ -327,9 +330,7 @@ jobs:
           [[ "$pid" =~ ^[1-9][0-9]*$ ]]
           cron_count="$("${remote[@]}" "crontab -l 2>/dev/null | grep -Fc '# stock-app-paper-forward-v1' || true")"
           [[ "$cron_count" =~ ^[0-9]+$ ]]
-          pm2_probe='const fs=require("node:fs");const rows=JSON.parse(fs.readFileSync(0,"utf8"));const matches=rows.filter((row)=>row?.name==="stock-app");if(matches.length!==1||matches[0]?.pm2_env?.status!=="online")process.exit(1);const env=matches[0].pm2_env;const off=(value)=>value===undefined||value===false||value==="false"||value==="0";if(!off(env.LIVE_TRADING)||!off(env.AUTO_TRADING)||!off(env.REAL_ORDER_ENABLED)||!off(env.PRIVATE_TRADING_API_ALLOWED))process.exit(1);if(String(env.executionAuthority??env.EXECUTION_AUTHORITY??"NONE").toUpperCase()!=="NONE")process.exit(1);'
-          pm2_probe_b64="$(printf '%s' "$pm2_probe" | base64 -w0)"
-          "${remote[@]}" "pm2 jlist | node -e \"eval(Buffer.from('$pm2_probe_b64','base64').toString('utf8'))\""
+          "${remote[@]}" "test -r /opt/stock-app/ops/check-paper-canonical-pm2-safety.mjs && pm2 jlist | node /opt/stock-app/ops/check-paper-canonical-pm2-safety.mjs"
           printf 'app_sha=%s\npid=%s\ncron_count=%s\n' "$app_sha" "$pid" "$cron_count" >> "$GITHUB_OUTPUT"
 
       - name: Materialize exact observer artifact
