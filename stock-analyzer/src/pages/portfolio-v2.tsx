@@ -315,8 +315,8 @@ function IntelligenceDashboard() {
     retry: 1,
   });
   const intelligence = query.data?.portfolio;
-  const linkedAccountPositions = Array.isArray(intelligence?.linkedAccountPositions)
-    ? linkedAccountPositions
+  const linkedAccountPositions: Intelligence['linkedAccountPositions'] = Array.isArray(intelligence?.linkedAccountPositions)
+    ? intelligence.linkedAccountPositions
     : [];
 
   useEffect(() => {
