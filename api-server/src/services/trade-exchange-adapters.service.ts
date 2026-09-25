@@ -595,7 +595,8 @@ export function prepareKiwoomOrder(credentials: KiwoomCredentials, plan: Trading
         stk_cd: plan.symbol.trim().toUpperCase(),
         ord_qty: String(quantity),
         ord_uv: plan.orderType === 'limit' ? String(limitPrice) : '',
-        trde_tp: plan.orderType === 'limit' ? '0' : '3',
+        trde_tp: plan.orderType === 'limit' ? '00' : '03',
+        ...(plan.side === 'sell' ? { stop_pric: '' } : {}),
       }),
     };
   }
@@ -633,8 +634,8 @@ export function prepareKiwoomAmend(
         orig_ord_no: input.orderNo,
         stex_tp: kiwoomUsExchange(plan),
         stk_cd: plan.symbol.trim().toUpperCase(),
-        mdfy_qty: String(input.quantity),
         mdfy_uv: String(input.price),
+        stop_pric: '',
       }),
     };
   }
