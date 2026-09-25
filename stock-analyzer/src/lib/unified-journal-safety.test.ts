@@ -100,6 +100,49 @@ test('proven read-only provider requests are accepted when every count reconcile
   })));
 });
 
+test('Kiwoom provider evidence may use a bounded 7-day window inside a 30-day journal request', () => {
+  const history = liveHistory(7) as any;
+  history.providers.unshift({
+    provider: 'kiwoom',
+    configured: true,
+    enabled: true,
+    status: 'PARTIAL',
+    records: 3,
+    privateProviderRequests: 2,
+    truncated: true,
+    effectiveDays: 7,
+    rangeCapped: true,
+    errorCode: 'KIWOOM_HISTORY_CAPPED_7D',
+  });
+  assert.doesNotThrow(() => assertUnifiedTradeJournalSafety(journal({
+    liveAccountHistory: history,
+    safety: { ...journal().safety, privateBrokerRequests: 7 },
+  })));
+});
+
+test('Kiwoom provider evidence cannot claim a window larger than the global live-history window', () => {
+  const history = liveHistory(5) as any;
+  history.providers.unshift({
+    provider: 'kiwoom',
+    configured: true,
+    enabled: true,
+    status: 'READY',
+    records: 1,
+    privateProviderRequests: 0,
+    truncated: false,
+    effectiveDays: 31,
+    rangeCapped: false,
+    errorCode: null,
+  });
+  assert.throws(
+    () => assertUnifiedTradeJournalSafety(journal({
+      liveAccountHistory: history,
+      safety: { ...journal().safety, privateBrokerRequests: 5 },
+    })),
+    /공급자 근거/,
+  );
+});
+
 test('browser rejects server safety count that disagrees with live-history evidence', () => {
   const history = liveHistory(5);
   assert.throws(
