@@ -7,7 +7,7 @@ import { AccountReadonlyError } from '../account-readonly.errors';
 import { bindAccountReadonlyDisconnectAbort } from '../account-readonly.route';
 import { AccountReadonlyService } from '../account-readonly.service';
 import { TossReadonlyProvider, TossTokenManager, type ReadonlyTransport } from '../providers/toss-readonly.provider';
-import { readBitgetSnapshot, readUpbitSnapshot } from '../providers/exchange-readonly.providers';
+import { createUpbitPublicQuoteReader, readBitgetSnapshot, readUpbitSnapshot } from '../providers/exchange-readonly.providers';
 
 const USER_A = { userId: 'user-a', accessToken: 'SUPABASE_ACCESS_A_TEST_ONLY' };
 const USER_B = { userId: 'user-b', accessToken: 'SUPABASE_ACCESS_B_TEST_ONLY' };
@@ -173,11 +173,92 @@ test('Upbit wrapper reuses JWT signer and preserves locked and missing values', 
 test('Bitget wrapper uses only signed GET account, position, and pending-order requests and redacts passphrase', async () => {
   const seen: any[] = []; const result = await readBitgetSnapshot({ apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' }, async (request) => {
     seen.push(request);
-    if (request.path.includes('position')) return { code: '00000', data: [{ symbol: 'BTCUSDT', total: '1', openPriceAvg: '60000', markPrice: '61000', leverage: '3', liquidationPrice: '' }] };
+    if (request.path.includes('position')) return { code: '00000', data: [{ symbol: 'BTCUSDT', total: '1', available: '1', openPriceAvg: '60000', markPrice: '61000', unrealizedPL: '1000', leverage: '3', liquidationPrice: '' }] };
     if (request.path.includes('orders-pending')) return { code: '00000', data: { entrustedList: [] } };
     return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '80' }] };
   });
-  assert.ok(seen.every((r) => r.method === 'GET')); assert.equal(result.positions?.[0]?.liquidationPrice, null); assert.equal(JSON.stringify(result).includes('BITGET_PASSPHRASE_TEST_ONLY'), false); assert.equal(result.withdrawalRequests, 0);
+  assert.ok(seen.every((r) => r.method === 'GET'));
+  assert.equal(result.positions?.[0]?.marketValue, 61000);
+  assert.ok(Math.abs((result.positions?.[0]?.unrealizedPnlPercent ?? 0) - (1000 / 60000 * 100)) < 1e-10);
+  assert.equal(result.positions?.[0]?.leverage, 3);
+  assert.equal(result.positions?.[0]?.liquidationPrice, null);
+  assert.equal(JSON.stringify(result).includes('BITGET_PASSPHRASE_TEST_ONLY'), false);
+  assert.equal(result.withdrawalRequests, 0);
+});
+
+test('Upbit public valuation uses only KRW unit-currency quotes and never fabricates missing quote values', async () => {
+  const quotes = async (markets: readonly string[]) => {
+    assert.deepEqual(markets, ['KRW-BTC']);
+    return new Map([['KRW-BTC', 120]]);
+  };
+  const result = await readUpbitSnapshot(
+    { accessKey: 'UPBIT_ACCESS_TEST_ONLY', secretKey: 'UPBIT_SECRET_TEST_ONLY' },
+    async (request) => {
+      if (request.path === '/v1/orders/open') return [];
+      return [
+        { currency: 'KRW', balance: '1000', locked: '0', avg_buy_price: '0', unit_currency: 'KRW' },
+        { currency: 'BTC', balance: '1', locked: '0.25', avg_buy_price: '100', unit_currency: 'KRW' },
+        { currency: 'ETH', balance: '2', locked: '0', avg_buy_price: '0.05', unit_currency: 'BTC' },
+      ];
+    },
+    undefined,
+    new Date('2026-09-25T00:00:00.000Z'),
+    quotes,
+  );
+  const btcBalance = result.balances?.find((row) => row.currency === 'BTC');
+  const btc = result.positions?.find((row) => row.symbol === 'BTC');
+  const eth = result.positions?.find((row) => row.symbol === 'ETH');
+  assert.equal(result.balances?.find((row) => row.currency === 'KRW')?.estimatedKrwValue, 1000);
+  assert.equal(btcBalance?.estimatedKrwValue, 150);
+  assert.equal(btc?.currentPrice, 120);
+  assert.equal(btc?.marketValue, 150);
+  assert.equal(btc?.unrealizedPnl, 25);
+  assert.ok(Math.abs((btc?.unrealizedPnlPercent ?? 0) - 20) < 1e-12);
+  assert.equal(eth?.currentPrice, null);
+  assert.equal(eth?.marketValue, null);
+  assert.equal(eth?.unrealizedPnlPercent, null);
+});
+
+test('Upbit public valuation failure preserves private balances and fails valuation closed', async () => {
+  const result = await readUpbitSnapshot(
+    { accessKey: 'UPBIT_ACCESS_TEST_ONLY', secretKey: 'UPBIT_SECRET_TEST_ONLY' },
+    async (request) => {
+      if (request.path === '/v1/orders/open') return [];
+      return [{ currency: 'BTC', balance: '1', locked: '0', avg_buy_price: '100', unit_currency: 'KRW' }];
+    },
+    undefined,
+    new Date('2026-09-25T00:00:00.000Z'),
+    async () => { throw new Error('PUBLIC_QUOTE_DOWN'); },
+  );
+  assert.equal(result.connected, true);
+  assert.equal(result.balances?.[0]?.total, 1);
+  assert.equal(result.balances?.[0]?.estimatedKrwValue, null);
+  assert.equal(result.positions?.[0]?.currentPrice, null);
+  assert.equal(result.positions?.[0]?.marketValue, null);
+  assert.equal(result.positions?.[0]?.unrealizedPnl, null);
+  assert.equal(result.errorCode, 'UPBIT_PUBLIC_VALUATION_UNAVAILABLE');
+});
+
+test('Upbit public quote transport is GET-only and never carries private Authorization', async () => {
+  const seen: Array<{ url: string; method: string | undefined; authorization: string | null }> = [];
+  const reader = createUpbitPublicQuoteReader(async (input, init) => {
+    const headers = new Headers(init?.headers);
+    seen.push({
+      url: String(input),
+      method: init?.method,
+      authorization: headers.get('authorization'),
+    });
+    return new Response(JSON.stringify([{ market: 'KRW-BTC', trade_price: 123 }]), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  });
+  const values = await reader(['KRW-BTC']);
+  assert.equal(values.get('KRW-BTC'), 123);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0]?.method, 'GET');
+  assert.equal(seen[0]?.authorization, null);
+  assert.match(seen[0]?.url ?? '', /^https:\/\/api\.upbit\.com\/v1\/ticker\?markets=KRW-BTC$/);
 });
 
 test('last-good fallback is same-user only and auth failure evicts it fail-closed', async () => {
