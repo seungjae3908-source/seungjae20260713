@@ -317,6 +317,7 @@ jobs:
             && value?.rls_enabled === true
             && value?.api_roles_revoked === true
             && value?.service_role_access === true
+            && value?.provider_constraint_kiwoom === true
             && value?.database_changed === true
             && value?.credentials_recorded === false
             && value?.raw_credentials_exposed === false
