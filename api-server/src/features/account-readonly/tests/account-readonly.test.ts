@@ -219,6 +219,26 @@ test('Upbit public valuation uses only KRW unit-currency quotes and never fabric
   assert.equal(eth?.unrealizedPnlPercent, null);
 });
 
+test('Upbit public valuation failure preserves private balances and fails valuation closed', async () => {
+  const result = await readUpbitSnapshot(
+    { accessKey: 'UPBIT_ACCESS_TEST_ONLY', secretKey: 'UPBIT_SECRET_TEST_ONLY' },
+    async (request) => {
+      if (request.path === '/v1/orders/open') return [];
+      return [{ currency: 'BTC', balance: '1', locked: '0', avg_buy_price: '100', unit_currency: 'KRW' }];
+    },
+    undefined,
+    new Date('2026-09-25T00:00:00.000Z'),
+    async () => { throw new Error('PUBLIC_QUOTE_DOWN'); },
+  );
+  assert.equal(result.connected, true);
+  assert.equal(result.balances?.[0]?.total, 1);
+  assert.equal(result.balances?.[0]?.estimatedKrwValue, null);
+  assert.equal(result.positions?.[0]?.currentPrice, null);
+  assert.equal(result.positions?.[0]?.marketValue, null);
+  assert.equal(result.positions?.[0]?.unrealizedPnl, null);
+  assert.equal(result.errorCode, 'UPBIT_PUBLIC_VALUATION_UNAVAILABLE');
+});
+
 test('Upbit public quote transport is GET-only and never carries private Authorization', async () => {
   const seen: Array<{ url: string; method: string | undefined; authorization: string | null }> = [];
   const reader = createUpbitPublicQuoteReader(async (input, init) => {
