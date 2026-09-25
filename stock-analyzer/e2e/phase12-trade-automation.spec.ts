@@ -76,7 +76,7 @@ for (const width of [360, 390, 430]) {
     await expect(page.getByTestId('stock-broker-routing')).toContainText('Upbit 고정');
     await expect(page.getByTestId('stock-broker-routing')).toContainText('Bitget 고정');
     await expect(page.getByTestId('auto-trading-runtime-summary')).toContainText('미국주식');
-    await expect(page.getByTestId('auto-trading-runtime-summary')).toContainText('미국주식 실전 자동주문은 검증된 주문 어댑터가 연결되기 전까지 차단됩니다.');
+    await expect(page.getByTestId('auto-trading-runtime-summary')).toContainText('실주문 4중 서버게이트');
 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     expectNoBrowserFailures(failures);
@@ -118,7 +118,7 @@ test('automatic trading is standing authorization with independent market switch
   await expect(dialog).toContainText('Kiwoom');
   await expect(dialog).toContainText('Upbit 고정');
   await expect(dialog).toContainText('Bitget 고정');
-  await expect(dialog).toContainText('private-order 어댑터 검증 전까지 차단');
+  await expect(dialog).toContainText('거래키 + provider 서버게이트 + 주문 직전 Risk Gate 모두 필요');
   await dialog.getByRole('button', { name: '설정 적용' }).click();
   await expect(page.getByRole('status')).toContainText('테스트 설정이 저장되었습니다.');
 
