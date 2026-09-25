@@ -33,8 +33,8 @@ function repositoryFor(expectedProvider: ReadonlyCredentialProvider, encryptedCr
   };
 }
 
-test('vault-backed Upbit reader is user-scoped, GET-only, and never returns credentials', async () => {
-  const seen: Array<{ url: string; method: string | undefined; body: BodyInit | null | undefined }> = [];
+test('vault-backed Upbit reader is user-scoped, GET-only, enriches with public valuation, and never returns credentials', async () => {
+  const seen: Array<{ url: string; method: string | undefined; body: BodyInit | null | undefined; authorization: string | null }> = [];
   const readers = createVaultBackedAccountReaders({
     repositoryFactory: (userId) => { assert.equal(userId, SCOPE.userId); return repositoryFor('upbit'); },
     decryptCredentials: (payload) => {
@@ -42,10 +42,23 @@ test('vault-backed Upbit reader is user-scoped, GET-only, and never returns cred
       return { accessKey: 'UPBIT_ACCESS_RUNTIME_TEST_ONLY', secretKey: 'UPBIT_SECRET_RUNTIME_TEST_ONLY' };
     },
     fetchImpl: async (input, init) => {
-      const url = new URL(String(input)); seen.push({ url: url.toString(), method: init?.method, body: init?.body });
+      const url = new URL(String(input));
+      seen.push({
+        url: url.toString(),
+        method: init?.method,
+        body: init?.body,
+        authorization: new Headers(init?.headers).get('authorization'),
+      });
       assert.equal(url.origin, 'https://api.upbit.com');
       if (url.pathname === '/v1/accounts') {
-        return new Response(JSON.stringify([{ currency: 'KRW', balance: '1000000', locked: '0', avg_buy_price: '0' }]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        return new Response(JSON.stringify([
+          { currency: 'KRW', balance: '1000000', locked: '0', avg_buy_price: '0', unit_currency: 'KRW' },
+          { currency: 'BTC', balance: '0.01', locked: '0.001', avg_buy_price: '100000000', unit_currency: 'KRW' },
+        ]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/v1/ticker') {
+        assert.equal(url.searchParams.get('markets'), 'KRW-BTC');
+        return new Response(JSON.stringify([{ market: 'KRW-BTC', trade_price: 101000000 }]), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.pathname === '/v1/orders/open') {
         const state = url.searchParams.get('state');
@@ -58,8 +71,21 @@ test('vault-backed Upbit reader is user-scoped, GET-only, and never returns cred
     },
   });
   const result = await readers.upbit!(SCOPE);
-  assert.equal(seen.length, 3); assert.ok(seen.every((row) => row.method === 'GET' && row.body === undefined));
-  assert.equal(result.connected, true); assert.equal(result.openOrders?.length, 1); assert.equal(result.openOrders?.[0]?.id, 'UPBIT-OPEN-1'); assert.equal(result.openOrders?.[0]?.remainingQuantity, 0.004);
+  assert.equal(seen.length, 4);
+  assert.ok(seen.every((row) => row.method === 'GET' && row.body === undefined));
+  const publicTicker = seen.find((row) => new URL(row.url).pathname === '/v1/ticker');
+  assert.equal(publicTicker?.authorization, null);
+  assert.ok(seen.filter((row) => new URL(row.url).pathname !== '/v1/ticker').every((row) => row.authorization?.startsWith('Bearer ')));
+  assert.equal(result.connected, true);
+  assert.equal(result.openOrders?.length, 1);
+  assert.equal(result.openOrders?.[0]?.id, 'UPBIT-OPEN-1');
+  assert.equal(result.openOrders?.[0]?.remainingQuantity, 0.004);
+  assert.equal(result.balances?.find((row) => row.currency === 'BTC')?.estimatedKrwValue, 1_111_000);
+  const btc = result.positions?.find((row) => row.symbol === 'BTC');
+  assert.equal(btc?.currentPrice, 101_000_000);
+  assert.equal(btc?.marketValue, 1_111_000);
+  assert.equal(btc?.unrealizedPnl, 11_000);
+  assert.ok(Math.abs((btc?.unrealizedPnlPercent ?? 0) - 1) < 1e-12);
   assert.equal(result.orderRequests, 0); assert.equal(result.cancelRequests, 0); assert.equal(result.transferRequests, 0); assert.equal(result.withdrawalRequests, 0);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('UPBIT_ACCESS_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('UPBIT_SECRET_RUNTIME_TEST_ONLY'), false);
@@ -73,7 +99,7 @@ test('vault-backed Bitget reader emits only the three allowlisted signed GET rea
     fetchImpl: async (input, init) => {
       const url = new URL(String(input)); assert.equal(url.origin, 'https://api.bitget.com'); paths.push(url.pathname); methods.push(String(init?.method));
       const body = url.pathname.includes('/position/')
-        ? { code: '00000', data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', leverage: '2' }] }
+        ? { code: '00000', data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', openPriceAvg: '100000', markPrice: '101000', unrealizedPL: '100', leverage: '2' }] }
         : url.pathname.includes('/orders-pending')
           ? { code: '00000', data: { entrustedList: [{ orderId: 'BG-OPEN-1', symbol: 'BTCUSDT', side: 'buy', price: '60000', size: '0.1', baseVolume: '0.04', status: 'partially_filled' }], endId: 'BG-OPEN-1' } }
           : { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '90' }] };
@@ -82,7 +108,11 @@ test('vault-backed Bitget reader emits only the three allowlisted signed GET rea
   });
   const result = await readers.bitget!(SCOPE);
   assert.deepEqual(new Set(paths), new Set(['/api/v2/mix/account/accounts', '/api/v2/mix/position/all-position', '/api/v2/mix/order/orders-pending']));
-  assert.ok(methods.every((method) => method === 'GET')); assert.equal(result.connected, true); assert.equal(result.openOrders?.[0]?.id, 'BG-OPEN-1'); assert.ok(Math.abs((result.openOrders?.[0]?.remainingQuantity ?? 0) - 0.06) < 1e-12); assert.equal(result.orderRequests, 0); assert.equal(result.withdrawalRequests, 0);
+  assert.ok(methods.every((method) => method === 'GET')); assert.equal(result.connected, true); assert.equal(result.openOrders?.[0]?.id, 'BG-OPEN-1'); assert.ok(Math.abs((result.openOrders?.[0]?.remainingQuantity ?? 0) - 0.06) < 1e-12);
+  assert.equal(result.positions?.[0]?.marketValue, 10100);
+  assert.ok(Math.abs((result.positions?.[0]?.unrealizedPnlPercent ?? 0) - 1) < 1e-12);
+  assert.equal(result.positions?.[0]?.leverage, 2);
+  assert.equal(result.orderRequests, 0); assert.equal(result.withdrawalRequests, 0);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('BITGET_KEY_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('BITGET_PASSPHRASE_RUNTIME_TEST_ONLY'), false);
 });
