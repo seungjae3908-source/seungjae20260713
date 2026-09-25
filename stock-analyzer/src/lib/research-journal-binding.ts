@@ -10,6 +10,12 @@ export type ResearchJournalCandidateBinding = Readonly<{
   exitTriggerId: string | null;
   exitExecutionId: string | null;
   triggerBindingVerified: boolean;
+  fullCostBindingVerified: boolean;
+  fullCostEvidenceDigest: string | null;
+  fullCostComponentCount: number;
+  netPnlBindingVerified: boolean;
+  canonicalNetPnl: number | null;
+  netPnlEvidenceDigest: string | null;
 }>;
 
 export type ResearchJournalBindingReadback = Readonly<{
@@ -68,6 +74,20 @@ function parseTradeBinding(value: unknown): ResearchJournalCandidateBinding | nu
     && binding.triggerBindingVerified === true
     && Boolean(text(binding.exitTriggerId, 240))
     && Boolean(text(binding.exitExecutionId, 240));
+  const fullCostComponentCount = count(binding.fullCostComponentCount);
+  const fullCostEvidenceDigest = text(binding.fullCostEvidenceDigest, 64);
+  const fullCostBindingVerified = triggerBindingVerified
+    && binding.fullCostBindingVerified === true
+    && fullCostComponentCount === 8
+    && Boolean(fullCostEvidenceDigest && /^[0-9a-f]{64}$/u.test(fullCostEvidenceDigest));
+  const canonicalNetPnl = typeof binding.canonicalNetPnl === 'number' && Number.isFinite(binding.canonicalNetPnl)
+    ? binding.canonicalNetPnl
+    : null;
+  const netPnlEvidenceDigest = text(binding.netPnlEvidenceDigest, 64);
+  const netPnlBindingVerified = fullCostBindingVerified
+    && binding.netPnlBindingVerified === true
+    && canonicalNetPnl != null
+    && Boolean(netPnlEvidenceDigest && /^[0-9a-f]{64}$/u.test(netPnlEvidenceDigest));
   return Object.freeze({
     status,
     reason: text(binding.reason) ?? 'CANONICAL_JOURNAL_BINDING_REASON_UNAVAILABLE',
@@ -80,6 +100,12 @@ function parseTradeBinding(value: unknown): ResearchJournalCandidateBinding | nu
     exitTriggerId: triggerBindingVerified ? text(binding.exitTriggerId, 240) : null,
     exitExecutionId: triggerBindingVerified ? text(binding.exitExecutionId, 240) : null,
     triggerBindingVerified,
+    fullCostBindingVerified,
+    fullCostEvidenceDigest: fullCostBindingVerified ? fullCostEvidenceDigest : null,
+    fullCostComponentCount: fullCostBindingVerified ? fullCostComponentCount : 0,
+    netPnlBindingVerified,
+    canonicalNetPnl: netPnlBindingVerified ? canonicalNetPnl : null,
+    netPnlEvidenceDigest: netPnlBindingVerified ? netPnlEvidenceDigest : null,
   });
 }
 
