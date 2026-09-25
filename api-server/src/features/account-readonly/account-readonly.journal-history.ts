@@ -15,8 +15,10 @@ import {
   type AccountReadonlyCredentialRepository,
 } from './account-readonly.repository';
 import { accountReadFlags } from './account-readonly.route';
+import { KiwoomReadonlyProvider, type KiwoomReadonlyCredentials } from './providers/kiwoom-readonly.provider';
 
-type HistoryProvider = 'upbit' | 'bitget';
+type HistoryProvider = 'upbit' | 'bitget' | 'kiwoom';
+type SignedHistoryProvider = Exclude<HistoryProvider, 'kiwoom'>;
 type RepositoryFactory = (userId: string) => AccountReadonlyCredentialRepository;
 type CredentialDecryptor = (payload: string) => Record<string, string>;
 
@@ -31,8 +33,25 @@ export type AccountJournalHistoryProviderStatus = {
   errorCode: string | null;
 };
 
+export type AccountJournalRealizedEvidence = {
+  provider: 'kiwoom';
+  market: 'KR';
+  evidenceType: 'DAILY_CASH_REALIZED';
+  date: string;
+  symbol: string;
+  buyAveragePrice: number | null;
+  buyQuantity: number | null;
+  sellAveragePrice: number;
+  sellQuantity: number;
+  feesAndTax: number | null;
+  providerReportedPnl: number | null;
+  providerReportedReturnPercent: number | null;
+  canonicalAnalyticsPromoted: false;
+};
+
 export type AccountJournalHistoryResult = {
   payloads: Record<string, unknown>[];
+  realizedEvidence: AccountJournalRealizedEvidence[];
   requestedRange: TradeRange;
   effectiveDays: number;
   rangeCapped: boolean;
@@ -60,6 +79,7 @@ export type AccountJournalHistoryOptions = {
   providerTimeoutMs?: number;
   maxUpbitOrders?: number;
   maxBitgetPages?: number;
+  maxKiwoomDomesticDates?: number;
 };
 
 const DAY_MS = 86_400_000;
@@ -67,8 +87,9 @@ const UPBIT_WINDOW_MS = 7 * DAY_MS;
 const DEFAULT_TIMEOUT_MS = 25_000;
 const DEFAULT_MAX_UPBIT_ORDERS = 60;
 const DEFAULT_MAX_BITGET_PAGES = 5;
+const DEFAULT_MAX_KIWOOM_DOMESTIC_DATES = 23;
 
-const TARGETS: Record<HistoryProvider, { origin: string; paths: ReadonlySet<string> }> = {
+const TARGETS: Record<SignedHistoryProvider, { origin: string; paths: ReadonlySet<string> }> = {
   upbit: {
     origin: 'https://api.upbit.com',
     paths: new Set(['/v1/orders/closed', '/v1/order']),
@@ -130,6 +151,149 @@ function historyDays(range: TradeRange) {
   return { days: 30, capped: true };
 }
 
+function kstDateKey(timestampMs: number) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(timestampMs));
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const key = `${value.year ?? ''}${value.month ?? ''}${value.day ?? ''}`;
+  if (!/^\d{8}$/.test(key)) throw new AccountReadonlyError('KIWOOM_HISTORY_DATE_INVALID');
+  return key;
+}
+
+function recentKstDateKeys(endMs: number, days: number) {
+  const result: string[] = [];
+  for (let offset = days - 1; offset >= 0; offset -= 1) {
+    const key = kstDateKey(endMs - offset * DAY_MS);
+    if (!result.includes(key)) result.push(key);
+  }
+  return result;
+}
+
+function kstWeekday(date: string) {
+  if (!/^\d{8}$/.test(date)) return false;
+  const iso = `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}T12:00:00+09:00`;
+  const day = new Date(iso).getUTCDay();
+  return day !== 0 && day !== 6;
+}
+
+function kiwoomTimestamp(date: string, time: unknown) {
+  if (!/^\d{8}$/.test(date)) return null;
+  const digits = String(time ?? '').replace(/\D/g, '');
+  if (digits.length !== 6) return null;
+  const hour = Number(digits.slice(0, 2));
+  const minute = Number(digits.slice(2, 4));
+  const second = Number(digits.slice(4, 6));
+  if (hour > 23 || minute > 59 || second > 59) return null;
+  const value = `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}T${digits.slice(0, 2)}:${digits.slice(2, 4)}:${digits.slice(4, 6)}+09:00`;
+  return Number.isFinite(Date.parse(value)) ? value : null;
+}
+
+function domesticSymbol(value: unknown) {
+  const raw = requiredText(value)?.toUpperCase() ?? '';
+  const normalized = /^A\d{6}$/.test(raw) ? raw.slice(1) : raw;
+  return /^\d{6}$/.test(normalized) ? normalized : null;
+}
+
+function usSymbol(value: unknown) {
+  const symbol = requiredText(value)?.toUpperCase() ?? '';
+  return /^[A-Z0-9][A-Z0-9.-]{0,19}$/.test(symbol) ? symbol : null;
+}
+
+function kiwoomUsSide(value: unknown): 'BUY' | 'SELL' | null {
+  const normalized = String(value ?? '').trim();
+  if (normalized.includes('매수')) return 'BUY';
+  if (normalized.includes('매도')) return 'SELL';
+  return null;
+}
+
+function buildKiwoomDomesticEvidence(
+  row: Record<string, unknown>,
+  date: string,
+): AccountJournalRealizedEvidence | null {
+  const symbol = domesticSymbol(row.stk_cd);
+  const sellAveragePrice = positive(row.sel_avg_pric);
+  const sellQuantity = positive(row.sell_qty);
+  if (!symbol || sellAveragePrice == null || sellQuantity == null) return null;
+  return {
+    provider: 'kiwoom',
+    market: 'KR',
+    evidenceType: 'DAILY_CASH_REALIZED',
+    date,
+    symbol,
+    buyAveragePrice: positive(row.buy_avg_pric),
+    buyQuantity: positive(row.buy_qty),
+    sellAveragePrice,
+    sellQuantity,
+    feesAndTax: nonNegative(row.cmsn_alm_tax),
+    providerReportedPnl: numeric(row.pl_amt),
+    providerReportedReturnPercent: numeric(row.prft_rt),
+    canonicalAnalyticsPromoted: false,
+  };
+}
+
+function buildKiwoomUsPayload(
+  row: Record<string, unknown>,
+  date: string,
+  userId: string,
+): Record<string, unknown> | null {
+  const brokerOrderId = requiredText(row.ord_no);
+  const symbol = usSymbol(row.stk_cd);
+  const side = kiwoomUsSide(row.slby_tp_nm);
+  const currency = requiredText(row.crnc_code)?.toUpperCase();
+  const quantity = positive(row.ord_qty);
+  const filledQuantity = positive(row.cntr_qty);
+  const remainingQuantity = nonNegative(row.ord_remnq);
+  const averageFillPrice = positive(row.cntr_uv);
+  const orderedAt = kiwoomTimestamp(date, row.ord_time);
+  const filledAt = kiwoomTimestamp(date, row.cntr_time);
+  if (!brokerOrderId || !symbol || !side || currency !== 'USD'
+    || quantity == null || filledQuantity == null || remainingQuantity == null
+    || averageFillPrice == null || !orderedAt || !filledAt) return null;
+  const tolerance = Math.max(1e-10, quantity * 1e-8);
+  if (filledQuantity > quantity + tolerance || remainingQuantity > quantity + tolerance) return null;
+
+  return {
+    schemaVersion: 1,
+    recordType: 'unified_trade_order',
+    source: 'KIWOOM_API',
+    broker: 'KIWOOM',
+    accountIdMasked: maskedVaultReference('kiwoom', userId),
+    market: 'US_STOCK',
+    symbol,
+    side,
+    positionSide: 'LONG',
+    positionEffect: side === 'BUY' ? 'OPEN' : 'CLOSE',
+    clientOrderId: null,
+    brokerOrderId,
+    fillId: null,
+    orderedAt,
+    filledAt,
+    observedAt: filledAt,
+    quantity,
+    filledQuantity,
+    remainingQuantity,
+    averageFillPrice,
+    fees: null,
+    tax: null,
+    currency: 'USD',
+    status: remainingQuantity <= tolerance ? 'FILLED' : 'PARTIALLY_FILLED',
+    strategy: null,
+    timeframe: null,
+    stopLossPrice: null,
+    targetPrice: null,
+    ruleViolation: false,
+    warnings: [
+      'KIWOOM_US_EXECUTION_FROM_OFFICIAL_DAILY_FILL_HISTORY',
+      'KIWOOM_US_TRANSACTION_COST_EVIDENCE_NOT_AVAILABLE',
+      'REAL_ACCOUNT_HISTORY_NOT_PERSISTED',
+    ],
+  };
+}
+
 function normalizedTimeout(value: number | undefined) {
   if (value == null) return DEFAULT_TIMEOUT_MS;
   if (!Number.isFinite(value) || value <= 0) throw new Error('ACCOUNT_JOURNAL_HISTORY_TIMEOUT_INVALID');
@@ -147,7 +311,7 @@ async function upbitFailureName(response: Response) {
   }
 }
 
-async function classifyHttpFailure(provider: HistoryProvider, response: Response) {
+async function classifyHttpFailure(provider: SignedHistoryProvider, response: Response) {
   if (response.status === 429 || (provider === 'upbit' && response.status === 418)) {
     return new AccountReadonlyError('RATE_LIMITED', true);
   }
@@ -167,7 +331,7 @@ async function classifyHttpFailure(provider: HistoryProvider, response: Response
 }
 
 async function executeGet(
-  provider: HistoryProvider,
+  provider: SignedHistoryProvider,
   request: PreparedExchangeRequest,
   fetchImpl: typeof fetch,
   signal: AbortSignal,
@@ -500,6 +664,54 @@ async function readBitget(
   return { payloads, truncated, normalizationFailures };
 }
 
+async function readKiwoom(
+  raw: Record<string, string>,
+  userId: string,
+  endMs: number,
+  days: number,
+  fetchImpl: typeof fetch,
+  signal: AbortSignal,
+  counter: { value: number },
+  maxDomesticDates: number,
+) {
+  const credentials: KiwoomReadonlyCredentials = {
+    appKey: requiredCredential(raw, 'appKey'),
+    appSecret: requiredCredential(raw, 'appSecret'),
+  };
+  const allDates = recentKstDateKeys(endMs, days);
+  const weekdays = allDates.filter(kstWeekday);
+  const domesticDates = weekdays.slice(-maxDomesticDates);
+  let truncated = weekdays.length > domesticDates.length;
+  const provider = new KiwoomReadonlyProvider(fetchImpl, () => endMs, () => { counter.value += 1; });
+  const history = await provider.journalHistory(credentials, {
+    domesticDates,
+    usStartDate: allDates[0] ?? kstDateKey(endMs),
+    usEndDate: allDates.at(-1) ?? kstDateKey(endMs),
+  }, signal);
+
+  const payloads: Record<string, unknown>[] = [];
+  const realizedEvidence: AccountJournalRealizedEvidence[] = [];
+  let normalizationFailures = 0;
+
+  for (const day of history.domesticDaily) {
+    for (const row of day.rows) {
+      const evidence = buildKiwoomDomesticEvidence(row, day.date);
+      if (evidence) realizedEvidence.push(evidence);
+      else normalizationFailures += 1;
+    }
+  }
+  for (const day of history.usDaily) {
+    for (const row of day.rows) {
+      const payload = buildKiwoomUsPayload(row, day.date, userId);
+      if (payload) payloads.push(payload);
+      else normalizationFailures += 1;
+    }
+  }
+
+  if (normalizationFailures > 0) truncated = true;
+  return { payloads, realizedEvidence, truncated, normalizationFailures };
+}
+
 export function createAccountJournalHistoryReader(options: AccountJournalHistoryOptions = {}) {
   const repositoryFactory = options.repositoryFactory ?? createAccountReadonlyCredentialRepository;
   const decryptCredentials = options.decryptCredentials ?? decryptTradingCredentials;
@@ -512,6 +724,7 @@ export function createAccountJournalHistoryReader(options: AccountJournalHistory
   const timeoutMs = normalizedTimeout(options.providerTimeoutMs);
   const maxUpbitOrders = Math.max(1, Math.min(200, Math.trunc(options.maxUpbitOrders ?? DEFAULT_MAX_UPBIT_ORDERS)));
   const maxBitgetPages = Math.max(1, Math.min(10, Math.trunc(options.maxBitgetPages ?? DEFAULT_MAX_BITGET_PAGES)));
+  const maxKiwoomDomesticDates = Math.max(1, Math.min(31, Math.trunc(options.maxKiwoomDomesticDates ?? DEFAULT_MAX_KIWOOM_DOMESTIC_DATES)));
 
   return async function readAccountJournalHistory(input: {
     userId: string;
@@ -525,6 +738,7 @@ export function createAccountJournalHistoryReader(options: AccountJournalHistory
     const endMs = now.getTime();
     const startMs = endMs - days * DAY_MS;
     const payloads: Record<string, unknown>[] = [];
+    const realizedEvidence: AccountJournalRealizedEvidence[] = [];
     const providers: AccountJournalHistoryProviderStatus[] = [];
     let privateProviderRequests = 0;
     let anyTruncated = capped;
@@ -554,15 +768,18 @@ export function createAccountJournalHistoryReader(options: AccountJournalHistory
         try {
           const result = provider === 'upbit'
             ? await readUpbit(loaded.credentials, userId, startMs, endMs, fetchImpl, controller.signal, counter, maxUpbitOrders)
-            : await readBitget(loaded.credentials, userId, startMs, endMs, fetchImpl, controller.signal, counter, maxBitgetPages);
+            : provider === 'bitget'
+              ? await readBitget(loaded.credentials, userId, startMs, endMs, fetchImpl, controller.signal, counter, maxBitgetPages)
+              : await readKiwoom(loaded.credentials, userId, endMs, days, fetchImpl, controller.signal, counter, maxKiwoomDomesticDates);
           payloads.push(...result.payloads);
+          if ('realizedEvidence' in result) realizedEvidence.push(...result.realizedEvidence);
           anyTruncated ||= result.truncated;
           providers.push({
             provider,
             configured: true,
             enabled: true,
             status: result.truncated ? 'PARTIAL' : 'READY',
-            records: result.payloads.length,
+            records: result.payloads.length + ('realizedEvidence' in result ? result.realizedEvidence.length : 0),
             privateProviderRequests: counter.value,
             truncated: result.truncated,
             errorCode: result.normalizationFailures > 0 ? 'HISTORY_NORMALIZATION_PARTIAL' : null,
@@ -581,6 +798,7 @@ export function createAccountJournalHistoryReader(options: AccountJournalHistory
 
     return {
       payloads,
+      realizedEvidence,
       requestedRange: input.range,
       effectiveDays: days,
       rangeCapped: capped,
