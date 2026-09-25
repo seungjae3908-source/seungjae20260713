@@ -325,6 +325,7 @@ export async function deliverScannerTelegramFollowups(
   sender: (input: TelegramAlertInput) => Promise<TelegramAlertResult> = sendTelegramAlert,
   now = Date.now(),
   repository: TelegramSignalFollowupRepository = createTelegramSignalFollowupRepository(),
+  editor: typeof editTelegramMessage = editTelegramMessage,
 ): Promise<void> {
   if (process.env.TELEGRAM_SIGNAL_FOLLOWUP_ENABLED !== 'true') return;
 
@@ -386,7 +387,7 @@ export async function deliverScannerTelegramFollowups(
       && state.baseMessageText
     ) {
       try {
-        const result = await editTelegramMessage({
+        const result = await editor({
           destinationChatId,
           messageId: state.telegramMessageId,
           messageKind: state.telegramMessageKind,
