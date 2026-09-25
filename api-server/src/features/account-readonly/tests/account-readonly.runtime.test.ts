@@ -337,3 +337,69 @@ test('credential, IP or permission loss evicts same-user last-good account facts
   assert.equal(afterEviction.stale, false);
   assert.equal(afterEviction.balances, null);
 });
+
+
+test('vault-backed Kiwoom reader uses only official real OAuth and fixed read-only account TRs', async () => {
+  const seen: Array<{ origin: string; path: string; method: string; apiId: string | null; body: string }> = [];
+  const readers = createVaultBackedAccountReaders({
+    repositoryFactory: () => repositoryFor('kiwoom'),
+    decryptCredentials: () => ({ appKey: 'KIWOOM_APP_RUNTIME_TEST_ONLY', appSecret: 'KIWOOM_SECRET_RUNTIME_TEST_ONLY' }),
+    fetchImpl: async (input, init) => {
+      const url = new URL(String(input));
+      const headers = new Headers(init?.headers);
+      const body = String(init?.body ?? '');
+      seen.push({ origin: url.origin, path: url.pathname, method: String(init?.method), apiId: headers.get('api-id'), body });
+      if (url.pathname === '/oauth2/token') {
+        return new Response(JSON.stringify({
+          token: 'KIWOOM_TOKEN_RUNTIME_TEST_ONLY',
+          token_type: 'bearer',
+          expires_dt: '20991231235959',
+          return_code: 0,
+          return_msg: 'SECRET_PROVIDER_MESSAGE',
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (headers.get('api-id') === 'kt00018') {
+        return new Response(JSON.stringify({
+          return_code: 0,
+          acnt_evlt_remn_indv_tot: [{
+            stk_cd: 'A005930', rmnd_qty: '3', trde_able_qty: '2', pur_pric: '70000',
+            cur_prc: '-71000', evlt_amt: '213000', evltv_prft: '3000', prft_rt: '1.4285',
+          }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json', 'cont-yn': 'N' } });
+      }
+      if (headers.get('api-id') === 'ka10075') {
+        return new Response(JSON.stringify({
+          return_code: 0,
+          oso: [{ ord_no: '0001234', stk_cd: '005930', trde_tp: '2', ord_qty: '2', ord_pric: '70000', oso_qty: '1', ord_stt: '접수' }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json', 'cont-yn': 'N' } });
+      }
+      return new Response('{}', { status: 404 });
+    },
+  });
+
+  const result = await readers.kiwoom!(SCOPE);
+  assert.equal(result.connected, true);
+  assert.equal(result.provider, 'kiwoom');
+  assert.equal(result.positions?.[0]?.symbol, '005930');
+  assert.equal(result.positions?.[0]?.currentPrice, 71000);
+  assert.equal(result.positions?.[0]?.availableQuantity, 2);
+  assert.equal(result.openOrders?.[0]?.id, '0001234');
+  assert.equal(result.openOrders?.[0]?.side, 'BUY');
+  assert.equal(result.orderRequests, 0);
+  assert.equal(result.cancelRequests, 0);
+  assert.equal(result.amendRequests, 0);
+  assert.equal(result.transferRequests, 0);
+  assert.equal(result.withdrawalRequests, 0);
+
+  assert.deepEqual(seen.map((row) => [row.method, row.origin, row.path, row.apiId]), [
+    ['POST', 'https://api.kiwoom.com', '/oauth2/token', null],
+    ['POST', 'https://api.kiwoom.com', '/api/dostk/acnt', 'kt00018'],
+    ['POST', 'https://api.kiwoom.com', '/api/dostk/acnt', 'ka10075'],
+  ]);
+  assert.equal(seen.some((row) => row.path.includes('/ordr')), false);
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes('KIWOOM_APP_RUNTIME_TEST_ONLY'), false);
+  assert.equal(serialized.includes('KIWOOM_SECRET_RUNTIME_TEST_ONLY'), false);
+  assert.equal(serialized.includes('KIWOOM_TOKEN_RUNTIME_TEST_ONLY'), false);
+  assert.equal(serialized.includes('SECRET_PROVIDER_MESSAGE'), false);
+});
