@@ -568,13 +568,6 @@ export class TradeOrderRecoveryService {
     if (order.state !== 'RECOVERY_REQUIRED') return order;
     if (order.manualReviewRequired) return order;
     if (order.nextRetryAt && Date.parse(order.nextRetryAt) > Date.now()) return order;
-    if (plan.exchange === 'kiwoom') {
-      return this.pending(
-        order,
-        'KIWOOM_RECONCILIATION_STATUS_BLOCKED_BY_UNVERIFIED_OFFICIAL_CONTRACT',
-        true,
-      );
-    }
 
     const connection = await this.repository.getConnection(userId, plan.exchange);
     if (!connection?.configured || !connection.encryptedCredentials) {
@@ -586,16 +579,62 @@ export class TradeOrderRecoveryService {
     if (plan.accountMode === 'paper' || plan.accountMode === 'mock') {
       return this.pending(order, 'PAPER_ORDER_RECOVERY_REQUIRES_REVIEW', true);
     }
+
     try {
       const credentials = decryptTradingCredentials(connection.encryptedCredentials);
       let snapshot: TradingExchangeOrderSnapshot;
+
       if (plan.exchange === 'bitget') {
-        snapshot = bitgetSnapshot(await sendRecoveryRequest(BASE_URLS.bitget,
-          prepareBitgetOrderQuery(credentials as BitgetCredentials, plan.symbol, order.clientOrderId)), plan, order);
+        snapshot = bitgetSnapshot(await sendRecoveryRequest(
+          BASE_URLS.bitget,
+          prepareBitgetOrderQuery(credentials as BitgetCredentials, plan.symbol, order.clientOrderId),
+        ), plan, order);
+      } else if (plan.exchange === 'upbit') {
+        snapshot = upbitSnapshot(await sendRecoveryRequest(
+          BASE_URLS.upbit,
+          prepareUpbitOrderQuery(credentials as UpbitCredentials, order.clientOrderId),
+        ), plan, order);
+      } else if (plan.exchange === 'toss') {
+        const tossCredentials = credentials as TossCredentials;
+        const tokenPayload = await sendRecoveryRequest(BASE_URLS.toss, prepareTossToken(tossCredentials));
+        const authenticated = { ...tossCredentials, accessToken: tossToken(tokenPayload) };
+        if (!order.exchangeOrderId) {
+          const open = await sendRecoveryRequest(BASE_URLS.toss, prepareTossOpenOrders(authenticated, plan.symbol));
+          const discovered = tossOpenOrderId(open, order.clientOrderId);
+          if (!discovered) {
+            return this.pending(order, 'TOSS_AMBIGUOUS_SUBMISSION_ORDER_ID_UNRESOLVED', true);
+          }
+          order.exchangeOrderId = discovered;
+        }
+        snapshot = tossSnapshot(await sendRecoveryRequest(
+          BASE_URLS.toss,
+          prepareTossOrderQuery(authenticated, order.exchangeOrderId),
+        ), plan, order);
       } else {
-        snapshot = upbitSnapshot(await sendRecoveryRequest(BASE_URLS.upbit,
-          prepareUpbitOrderQuery(credentials as UpbitCredentials, order.clientOrderId)), plan, order);
+        if (!order.exchangeOrderId) {
+          return this.pending(order, 'KIWOOM_AMBIGUOUS_SUBMISSION_ORDER_ID_UNRESOLVED', true);
+        }
+        const kiwoomCredentials = credentials as KiwoomCredentials;
+        const tokenPayload = assertKiwoom(await sendRecoveryRequest(BASE_URLS.kiwoom, prepareKiwoomToken(kiwoomCredentials)));
+        const authenticated = { ...kiwoomCredentials, accessToken: kiwoomToken(tokenPayload) };
+        const date = kiwoomOrderDate(order.createdAt);
+        if (plan.market.toUpperCase() === 'US') {
+          const open = await sendRecoveryRequest(BASE_URLS.kiwoom, prepareKiwoomUsUnfilled(authenticated, plan));
+          snapshot = kiwoomUsOpenSnapshot(open, plan, order)
+            ?? kiwoomUsHistorySnapshot(await sendRecoveryRequest(
+              BASE_URLS.kiwoom,
+              prepareKiwoomUsOrderHistory(authenticated, plan, order.exchangeOrderId, date),
+            ), plan, order);
+        } else {
+          const open = await sendRecoveryRequest(BASE_URLS.kiwoom, prepareKiwoomUnfilled(authenticated));
+          snapshot = kiwoomDomesticOpenSnapshot(open, plan, order)
+            ?? kiwoomDomesticHistorySnapshot(await sendRecoveryRequest(
+              BASE_URLS.kiwoom,
+              prepareKiwoomDomesticOrderHistory(authenticated, plan, order.exchangeOrderId, date),
+            ), plan, order);
+        }
       }
+
       return await this.applySnapshot(order, snapshot);
     } catch (error) {
       const code = error instanceof Error ? error.message.split(':')[0] : 'EXCHANGE_RECONCILIATION_FAILED';
