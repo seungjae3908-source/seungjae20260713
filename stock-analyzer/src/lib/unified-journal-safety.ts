@@ -47,7 +47,7 @@ export function assertUnifiedTradeJournalSafety(
   const providerIds = new Set<string>();
   let providerRequestTotal = 0;
   for (const provider of history.providers) {
-    if ((provider.provider !== 'upbit' && provider.provider !== 'bitget')
+    if ((provider.provider !== 'upbit' && provider.provider !== 'bitget' && provider.provider !== 'kiwoom')
       || providerIds.has(provider.provider)
       || !isNonNegativeInteger(provider.privateProviderRequests)
       || !isNonNegativeInteger(provider.records)) {
@@ -59,6 +59,36 @@ export function assertUnifiedTradeJournalSafety(
     if ((provider.status === 'NOT_CONFIGURED' || provider.status === 'DISABLED')
       && (provider.privateProviderRequests !== 0 || provider.records !== 0)) {
       throw new Error('미연결·비활성 공급자에서 private 조회 또는 거래이력이 보고되었습니다.');
+    }
+  }
+
+  const realizedEvidence = history.realizedEvidence ?? [];
+  if (!Array.isArray(realizedEvidence)
+    || realizedEvidence.some((row) => (
+      row.provider !== 'kiwoom'
+      || row.market !== 'KR'
+      || row.evidenceType !== 'DAILY_CASH_REALIZED'
+      || row.canonicalAnalyticsPromoted !== false
+      || !/^\d{8}$/.test(row.date)
+      || !/^\d{6}$/.test(row.symbol)
+      || (row.buyAveragePrice != null && (!Number.isFinite(row.buyAveragePrice) || row.buyAveragePrice <= 0))
+      || (row.buyQuantity != null && (!Number.isFinite(row.buyQuantity) || row.buyQuantity <= 0))
+      || typeof row.sellAveragePrice !== 'number'
+      || !Number.isFinite(row.sellAveragePrice)
+      || row.sellAveragePrice <= 0
+      || typeof row.sellQuantity !== 'number'
+      || !Number.isFinite(row.sellQuantity)
+      || row.sellQuantity <= 0
+      || (row.feesAndTax != null && (!Number.isFinite(row.feesAndTax) || row.feesAndTax < 0))
+      || (row.providerReportedPnl != null && !Number.isFinite(row.providerReportedPnl))
+      || (row.providerReportedReturnPercent != null && !Number.isFinite(row.providerReportedReturnPercent))
+    ))) {
+    throw new Error('Kiwoom 국내 실현손익 증거 계약을 확인하지 못했습니다.');
+  }
+  if (realizedEvidence.length > 0) {
+    const kiwoom = history.providers.find((provider) => provider.provider === 'kiwoom');
+    if (!kiwoom || (kiwoom.status !== 'READY' && kiwoom.status !== 'PARTIAL')) {
+      throw new Error('Kiwoom 공급자 상태 없이 국내 실현손익 증거가 보고되었습니다.');
     }
   }
 

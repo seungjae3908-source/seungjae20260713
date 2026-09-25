@@ -6,11 +6,11 @@ import { createAccountJournalHistoryReader } from './account-readonly.journal-hi
 const USER_ID = 'journal-history-user';
 const NOW = new Date('2026-09-25T02:30:00.000Z');
 
-function repository(rows: Partial<Record<'upbit' | 'bitget', string>>): AccountReadonlyCredentialRepository {
+function repository(rows: Partial<Record<'upbit' | 'bitget' | 'kiwoom', string>>): AccountReadonlyCredentialRepository {
   return {
     async get(userId, provider) {
       if (userId !== USER_ID) throw new Error('USER_SCOPE_MISMATCH');
-      const encrypted = rows[provider as 'upbit' | 'bitget'];
+      const encrypted = rows[provider as 'upbit' | 'bitget' | 'kiwoom'];
       return encrypted ? {
         userId,
         provider,
@@ -35,13 +35,13 @@ test('unconfigured journal-history providers stop at credential metadata and sen
       fetchCalls += 1;
       return new Response('{}', { status: 500 });
     },
-    flags: { upbit: true, bitget: true },
+    flags: { upbit: true, bitget: true, kiwoom: true },
   });
 
   const result = await reader({
     userId: USER_ID,
     range: '30D',
-    providers: ['upbit', 'bitget'],
+    providers: ['kiwoom', 'upbit', 'bitget'],
     now: NOW,
   });
 
@@ -49,9 +49,11 @@ test('unconfigured journal-history providers stop at credential metadata and sen
   assert.equal(result.privateProviderRequests, 0);
   assert.equal(result.payloads.length, 0);
   assert.deepEqual(result.providers.map((row) => [row.provider, row.status, row.privateProviderRequests]), [
+    ['kiwoom', 'NOT_CONFIGURED', 0],
     ['upbit', 'NOT_CONFIGURED', 0],
     ['bitget', 'NOT_CONFIGURED', 0],
   ]);
+  assert.deepEqual(result.realizedEvidence, []);
 });
 
 test('disabled provider never decrypts or sends a private request', async () => {
@@ -198,12 +200,137 @@ test('Bitget historical closed positions normalize as provider cycles without pr
   assert.match(String(payload.accountIdMasked), /^BITGET-\*\*\*\*-/);
 });
 
+test('Kiwoom history keeps domestic cash realized evidence separate and promotes only time-proven US fills', async () => {
+  const seen: Array<{ path: string; method: string; apiId: string | null; body: Record<string, unknown> | null }> = [];
+  const reader = createAccountJournalHistoryReader({
+    repositoryFactory: () => repository({ kiwoom: 'KIWOOM_ENCRYPTED_FIXTURE' }),
+    decryptCredentials: () => ({ appKey: 'KIWOOM_APP_KEY_TEST_ONLY', appSecret: 'KIWOOM_APP_SECRET_TEST_ONLY' }),
+    flags: { upbit: false, bitget: false, kiwoom: true },
+    maxKiwoomDomesticDates: 23,
+    fetchImpl: async (input, init) => {
+      const url = new URL(String(input));
+      const headers = new Headers(init?.headers);
+      const apiId = headers.get('api-id');
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : null;
+      seen.push({ path: url.pathname, method: String(init?.method), apiId, body });
+
+      if (url.pathname === '/oauth2/token') {
+        return new Response(JSON.stringify({
+          return_code: 0,
+          token: 'KIWOOM_TOKEN_TEST_ONLY',
+          expires_dt: '20260926120000',
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+
+      if (apiId === 'ka10170') {
+        if (body?.base_dt === '20260924') {
+          return new Response(JSON.stringify({
+            return_code: 0,
+            tdy_trde_diary: [{
+              stk_nm: '삼성전자',
+              buy_avg_pric: '70000',
+              buy_qty: '10',
+              sel_avg_pric: '71000',
+              sell_qty: '10',
+              cmsn_alm_tax: '1500',
+              pl_amt: '8500',
+              sell_amt: '710000',
+              buy_amt: '700000',
+              prft_rt: '1.2142',
+              stk_cd: '005930',
+            }],
+          }), { status: 200, headers: { 'Content-Type': 'application/json', 'cont-yn': 'N' } });
+        }
+        return new Response(JSON.stringify({ return_code: 20 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json', 'cont-yn': 'N' },
+        });
+      }
+
+      if (apiId === 'ust21180') {
+        assert.equal(body?.strt_dt, '20260919');
+        assert.equal(body?.end_dt, '20260925');
+        return new Response(JSON.stringify({
+          return_code: 0,
+          result_list: [{ ord_dt: '20260924', ord_no: 'US-1', stk_cd: 'AAPL', cntr_qty: '2' }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json', 'cont-yn': 'N' } });
+      }
+
+      if (apiId === 'ust21150') {
+        assert.equal(body?.query_tp, '5');
+        assert.equal(body?.ord_dt, '20260924');
+        return new Response(JSON.stringify({
+          return_code: 0,
+          result_list: [{
+            ord_no: 'US-1',
+            crnc_code: 'USD',
+            stk_cd: 'AAPL',
+            frgn_trde_tp: '0',
+            ord_qty: '2',
+            cntr_qty: '2',
+            mdfy_qty: '0',
+            cncl_qty: '0',
+            ord_time: '093000',
+            slby_tp_nm: '매수',
+            ord_uv: '249',
+            cntr_uv: '250',
+            ord_remnq: '0',
+            cntr_time: '093001',
+          }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json', 'cont-yn': 'N' } });
+      }
+
+      return new Response('{}', { status: 404 });
+    },
+  });
+
+  const result = await reader({ userId: USER_ID, range: '7D', providers: ['kiwoom'], now: NOW });
+  assert.equal(result.providers[0]?.status, 'READY');
+  assert.equal(result.providers[0]?.records, 2);
+  assert.equal(result.payloads.length, 1);
+  assert.equal(result.realizedEvidence.length, 1);
+
+  const payload = result.payloads[0]!;
+  assert.equal(payload.source, 'KIWOOM_API');
+  assert.equal(payload.broker, 'KIWOOM');
+  assert.equal(payload.market, 'US_STOCK');
+  assert.equal(payload.symbol, 'AAPL');
+  assert.equal(payload.side, 'BUY');
+  assert.equal(payload.quantity, 2);
+  assert.equal(payload.filledQuantity, 2);
+  assert.equal(payload.remainingQuantity, 0);
+  assert.equal(payload.averageFillPrice, 250);
+  assert.equal(payload.orderedAt, '2026-09-24T09:30:00+09:00');
+  assert.equal(payload.filledAt, '2026-09-24T09:30:01+09:00');
+  assert.equal(payload.fees, null);
+  assert.equal(payload.tax, null);
+  assert.match(String(payload.accountIdMasked), /^KIWOOM-\*\*\*\*-/);
+
+  const evidence = result.realizedEvidence[0]!;
+  assert.equal(evidence.date, '20260924');
+  assert.equal(evidence.symbol, '005930');
+  assert.equal(evidence.providerReportedPnl, 8500);
+  assert.equal(evidence.feesAndTax, 1500);
+  assert.equal(evidence.canonicalAnalyticsPromoted, false);
+
+  assert.equal(result.safety.orderRequests, 0);
+  assert.equal(result.safety.cancelRequests, 0);
+  assert.equal(result.safety.transferRequests, 0);
+  assert.equal(result.persisted, false);
+  assert.ok(result.privateProviderRequests > 0);
+  assert.ok(seen.every((row) => row.method === 'POST'));
+  assert.equal(JSON.stringify(result).includes('KIWOOM_APP_SECRET_TEST_ONLY'), false);
+  assert.ok(seen.filter((row) => row.apiId === 'ka10170').length >= 5);
+  assert.equal(seen.filter((row) => row.apiId === 'ust21180').length, 1);
+  assert.equal(seen.filter((row) => row.apiId === 'ust21150').length, 1);
+});
+
 test('90D/1Y/ALL requests are explicitly capped to 30 days for private account history', async () => {
   const reader = createAccountJournalHistoryReader({
     repositoryFactory: () => repository({}),
     decryptCredentials: () => ({}),
     fetchImpl: async () => new Response('{}', { status: 500 }),
-    flags: { upbit: true, bitget: true },
+    flags: { upbit: true, bitget: true, kiwoom: true },
   });
   for (const range of ['90D', '1Y', 'ALL'] as const) {
     const result = await reader({ userId: USER_ID, range, providers: [], now: NOW });

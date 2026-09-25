@@ -10,6 +10,18 @@ export type KiwoomReadonlyCredentials = {
 type Row = Record<string, unknown>;
 type KiwoomPage = { body: Row; contYn: string | null; nextKey: string | null };
 type TokenRecord = { token: string; expiresAtMs: number };
+type KiwoomApiId =
+  | 'kt00001' | 'kt00018' | 'ka10075'
+  | 'ka10170'
+  | 'ust21050' | 'ust21070' | 'ust21110'
+  | 'ust21150' | 'ust21180';
+type KiwoomListKey = 'acnt_evlt_remn_indv_tot' | 'oso' | 'tdy_trde_diary' | 'result_list';
+
+export type KiwoomJournalHistory = {
+  domesticDaily: Array<{ date: string; rows: Row[] }>;
+  usDaily: Array<{ date: string; rows: Row[] }>;
+  usPeriodRows: number;
+};
 
 const KIWOOM_REAL_ORIGIN = 'https://api.kiwoom.com';
 const KIWOOM_TOKEN_PATH = '/oauth2/token';
@@ -149,9 +161,11 @@ export class KiwoomReadonlyProvider {
   constructor(
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly now = () => Date.now(),
+    private readonly onRequest: (() => void) | null = null,
   ) {}
 
   private async requestToken(credentials: KiwoomReadonlyCredentials, signal?: AbortSignal): Promise<TokenRecord> {
+    this.onRequest?.();
     const response = await this.fetchImpl(new URL(KIWOOM_TOKEN_PATH, KIWOOM_REAL_ORIGIN), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json;charset=UTF-8' },
@@ -201,7 +215,7 @@ export class KiwoomReadonlyProvider {
 
   private async page(
     token: string,
-    apiId: 'kt00001' | 'kt00018' | 'ka10075' | 'ust21050' | 'ust21070' | 'ust21110',
+    apiId: KiwoomApiId,
     body: Readonly<Record<string, string>>,
     continuation: { contYn: string; nextKey: string } | null,
     signal?: AbortSignal,
@@ -217,6 +231,7 @@ export class KiwoomReadonlyProvider {
     }
 
     const accountPath = apiId.startsWith('ust') ? KIWOOM_US_ACCOUNT_PATH : KIWOOM_DOMESTIC_ACCOUNT_PATH;
+    this.onRequest?.();
     const response = await this.fetchImpl(new URL(accountPath, KIWOOM_REAL_ORIGIN), {
       method: 'POST',
       headers,
@@ -238,9 +253,9 @@ export class KiwoomReadonlyProvider {
 
   private async collect(
     token: string,
-    apiId: 'kt00018' | 'ka10075' | 'ust21050' | 'ust21070' | 'ust21110',
+    apiId: Exclude<KiwoomApiId, 'kt00001'>,
     body: Readonly<Record<string, string>>,
-    listKey: 'acnt_evlt_remn_indv_tot' | 'oso' | 'result_list',
+    listKey: KiwoomListKey,
     signal?: AbortSignal,
   ) {
     const result: Row[] = [];
@@ -259,6 +274,76 @@ export class KiwoomReadonlyProvider {
       continuation = { contYn: 'Y', nextKey: page.nextKey };
     }
     throw new AccountReadonlyError('KIWOOM_CONTINUATION_LIMIT_REACHED');
+  }
+
+  async journalHistory(
+    credentials: KiwoomReadonlyCredentials,
+    input: {
+      domesticDates: readonly string[];
+      usStartDate: string;
+      usEndDate: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<KiwoomJournalHistory> {
+    const token = await this.token(credentials, signal);
+    const domesticDaily: KiwoomJournalHistory['domesticDaily'] = [];
+
+    for (const date of input.domesticDates) {
+      const result = await this.collect(
+        token,
+        'ka10170',
+        { ottks_tp: '2', ch_crd_tp: '1', base_dt: date },
+        'tdy_trde_diary',
+        signal,
+      );
+      domesticDaily.push({ date, rows: result.rows });
+    }
+
+    const period = await this.collect(
+      token,
+      'ust21180',
+      {
+        strt_dt: input.usStartDate,
+        end_dt: input.usEndDate,
+        slby_tp: '0',
+        stex_tp: '',
+        stk_cd: '',
+        oppo_trde_tp: '%',
+      },
+      'result_list',
+      signal,
+    );
+
+    const fillDates = [...new Set(period.rows
+      .filter((row) => {
+        const quantity = nonNegativeOrNull(row.cntr_qty, 'KIWOOM_US_HISTORY_FILL_QTY_INVALID');
+        return quantity != null && quantity > 0;
+      })
+      .map((row) => requiredText(row.ord_dt, 'KIWOOM_US_HISTORY_DATE_INVALID'))
+      .filter((date) => /^\d{8}$/.test(date)))]
+      .sort();
+
+    const usDaily: KiwoomJournalHistory['usDaily'] = [];
+    for (const date of fillDates) {
+      const result = await this.collect(
+        token,
+        'ust21150',
+        {
+          query_tp: '5',
+          slby_tp: '0',
+          ord_dt: date,
+          stex_tp: '',
+          stk_cd: '',
+          oppo_trde_tp: '%',
+          fr_ord_no: '',
+        },
+        'result_list',
+        signal,
+      );
+      usDaily.push({ date, rows: result.rows });
+    }
+
+    return { domesticDaily, usDaily, usPeriodRows: period.rows.length };
   }
 
   async snapshot(
