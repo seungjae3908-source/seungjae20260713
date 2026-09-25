@@ -49,7 +49,7 @@ export type TradingAiReviewResult = { summary: string; strengths: Array<{ title:
 export type AiReviewPreview = { dataset: TradingReviewDataset; includedFields:string[]; excludedFields:string[]; warnings:string[] };
 export type GeneratedAiReview = { providerRequestId:string|null; model:string; generatedAt:string; result:TradingAiReviewResult; usage:{inputUnits:number|null;outputUnits:number|null} };
 export type AiProviderCallState = { attempted:boolean; completed:boolean; reused:boolean };
-export type UnifiedTradeSource = 'TOSS_MANUAL'|'TOSS_API'|'APP_PAPER'|'APP_SHADOW'|'APP_AUTO';
+export type UnifiedTradeSource = 'TOSS_MANUAL'|'TOSS_API'|'UPBIT_API'|'BITGET_API'|'APP_PAPER'|'APP_SHADOW'|'APP_AUTO';
 export type UnifiedTradeMarket = 'KR_STOCK'|'US_STOCK'|'CRYPTO_SPOT'|'CRYPTO_FUTURES';
 export type UnifiedTradeRange = 'TODAY'|'7D'|'30D'|'90D'|'1Y'|'ALL';
 export type UnifiedTradeGrade = 'A'|'B'|'C'|'D';
@@ -96,6 +96,7 @@ export type UnifiedTradeCycle = {
   positionSide:'LONG'|'SHORT'; currency:'KRW'|'USD'|'USDT'; status:'OPEN'|'CLOSED'; openedAt:string; closedAt:string|null;
   entryPrice:number; exitPrice:number|null; totalQuantity:number; closedQuantity:number; remainingQuantity:number;
   holdingTimeMs:number|null; grossPnl:number; fees:number|null; tax:number|null; costEvidence:UnifiedJournalCostEvidence; netPnl:number|null; netReturnPercent:number|null;
+  providerReportedNetPnl?:number|null; providerReportedNetPnlBasis?:string|null;
   strategy:string|null; timeframe:string|null; stopLossPrice:number|null; targetPrice:number|null; ruleViolation:boolean;
   warnings:string[]; technicalSnapshot:UnifiedTechnicalSnapshot; review:UnifiedTradeReview;
   initialEntry:UnifiedTradeLeg;
@@ -123,7 +124,12 @@ export type UnifiedTradeJournal = {
   integrityIssues:Array<{code:string;orderId:string|null;message:string}>;
   toss:{provider:'TOSS';officialSpecVersion:string;paidStatus:'PAID_STATUS_UNVERIFIED';liveReadIntegration:'BLOCKED_BY_FREE_STATUS_UNVERIFIED';contractNormalizerAvailable:true;executionGranularity:string;livePrivateRequests:0;actualOrders:0};
   aiReviewStatus:'AI_EXTERNAL_REVIEW_DISABLED_FREE_ONLY';
-  safety:{finalCostDelta:'0_KRW';actualOrderRequests:0;cancelRequests:0;amendRequests:0;transferRequests:0;withdrawalRequests:0;privateBrokerRequests:0};
+  safety:{finalCostDelta:'0_KRW';actualOrderRequests:0;cancelRequests:0;amendRequests:0;transferRequests:0;withdrawalRequests:0;privateBrokerRequests:number};
+  liveAccountHistory?:{
+    requestedRange:UnifiedTradeRange; effectiveDays:number; rangeCapped:boolean; persisted:false; privateProviderRequests:number; truncated:boolean;
+    providers:Array<{provider:'upbit'|'bitget';configured:boolean|null;enabled:boolean;status:'READY'|'PARTIAL'|'NOT_CONFIGURED'|'DISABLED'|'UNAVAILABLE';records:number;privateProviderRequests:number;truncated:boolean;errorCode:string|null}>;
+    safety:{orderRequests:0;cancelRequests:0;amendRequests:0;transferRequests:0;withdrawalRequests:0;credentialsReturned:false;liveTradingEnabled:false;autoTradingEnabled:false};
+  };
   canonicalResearchBinding?:UnifiedCanonicalResearchBindingSummary;
 };
 export type UnifiedJournalFilters = {
