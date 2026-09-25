@@ -15,8 +15,11 @@ import {
   type AccountReadonlyCredentialRepository,
 } from './account-readonly.repository';
 import { accountReadFlags } from './account-readonly.route';
+import { readKiwoomJournalHistory } from './account-readonly.kiwoom-journal-history';
+import { KiwoomReadonlyProvider, type KiwoomReadonlyCredentials } from './providers/kiwoom-readonly.provider';
 
-type HistoryProvider = 'upbit' | 'bitget';
+export type HistoryProvider = 'kiwoom' | 'upbit' | 'bitget';
+type HttpHistoryProvider = 'upbit' | 'bitget';
 type RepositoryFactory = (userId: string) => AccountReadonlyCredentialRepository;
 type CredentialDecryptor = (payload: string) => Record<string, string>;
 
@@ -28,6 +31,8 @@ export type AccountJournalHistoryProviderStatus = {
   records: number;
   privateProviderRequests: number;
   truncated: boolean;
+  effectiveDays?: number;
+  rangeCapped?: boolean;
   errorCode: string | null;
 };
 
@@ -60,6 +65,8 @@ export type AccountJournalHistoryOptions = {
   providerTimeoutMs?: number;
   maxUpbitOrders?: number;
   maxBitgetPages?: number;
+  maxKiwoomDays?: number;
+  kiwoomProvider?: Pick<KiwoomReadonlyProvider, 'journalFillRows'>;
 };
 
 const DAY_MS = 86_400_000;
@@ -67,8 +74,9 @@ const UPBIT_WINDOW_MS = 7 * DAY_MS;
 const DEFAULT_TIMEOUT_MS = 25_000;
 const DEFAULT_MAX_UPBIT_ORDERS = 60;
 const DEFAULT_MAX_BITGET_PAGES = 5;
+const DEFAULT_MAX_KIWOOM_DAYS = 7;
 
-const TARGETS: Record<HistoryProvider, { origin: string; paths: ReadonlySet<string> }> = {
+const TARGETS: Record<HttpHistoryProvider, { origin: string; paths: ReadonlySet<string> }> = {
   upbit: {
     origin: 'https://api.upbit.com',
     paths: new Set(['/v1/orders/closed', '/v1/order']),
@@ -147,7 +155,7 @@ async function upbitFailureName(response: Response) {
   }
 }
 
-async function classifyHttpFailure(provider: HistoryProvider, response: Response) {
+async function classifyHttpFailure(provider: HttpHistoryProvider, response: Response) {
   if (response.status === 429 || (provider === 'upbit' && response.status === 418)) {
     return new AccountReadonlyError('RATE_LIMITED', true);
   }
@@ -167,7 +175,7 @@ async function classifyHttpFailure(provider: HistoryProvider, response: Response
 }
 
 async function executeGet(
-  provider: HistoryProvider,
+  provider: HttpHistoryProvider,
   request: PreparedExchangeRequest,
   fetchImpl: typeof fetch,
   signal: AbortSignal,
@@ -506,12 +514,15 @@ export function createAccountJournalHistoryReader(options: AccountJournalHistory
   const fetchImpl = options.fetchImpl ?? fetch;
   const defaultFlags = accountReadFlags();
   const flags = {
+    kiwoom: options.flags?.kiwoom ?? defaultFlags.kiwoom,
     upbit: options.flags?.upbit ?? defaultFlags.upbit,
     bitget: options.flags?.bitget ?? defaultFlags.bitget,
   };
   const timeoutMs = normalizedTimeout(options.providerTimeoutMs);
   const maxUpbitOrders = Math.max(1, Math.min(200, Math.trunc(options.maxUpbitOrders ?? DEFAULT_MAX_UPBIT_ORDERS)));
   const maxBitgetPages = Math.max(1, Math.min(10, Math.trunc(options.maxBitgetPages ?? DEFAULT_MAX_BITGET_PAGES)));
+  const maxKiwoomDays = Math.max(1, Math.min(7, Math.trunc(options.maxKiwoomDays ?? DEFAULT_MAX_KIWOOM_DAYS)));
+  const kiwoomProvider = options.kiwoomProvider ?? new KiwoomReadonlyProvider(fetchImpl);
 
   return async function readAccountJournalHistory(input: {
     userId: string;
@@ -531,10 +542,13 @@ export function createAccountJournalHistoryReader(options: AccountJournalHistory
 
     for (const provider of [...new Set(input.providers)]) {
       const counter = { value: 0 };
+      const providerEffectiveDays = provider === 'kiwoom' ? Math.min(days, maxKiwoomDays) : days;
+      const providerRangeCapped = provider === 'kiwoom' ? days > providerEffectiveDays : capped;
       if (!flags[provider]) {
         providers.push({
           provider, configured: null, enabled: false, status: 'DISABLED', records: 0,
-          privateProviderRequests: 0, truncated: false, errorCode: 'ACCOUNT_READ_DISABLED',
+          privateProviderRequests: 0, truncated: false, effectiveDays: providerEffectiveDays,
+          rangeCapped: providerRangeCapped, errorCode: 'ACCOUNT_READ_DISABLED',
         });
         continue;
       }
@@ -544,7 +558,8 @@ export function createAccountJournalHistoryReader(options: AccountJournalHistory
         if (!loaded.configured || !loaded.credentials) {
           providers.push({
             provider, configured: false, enabled: true, status: 'NOT_CONFIGURED', records: 0,
-            privateProviderRequests: 0, truncated: false, errorCode: null,
+            privateProviderRequests: 0, truncated: false, effectiveDays: providerEffectiveDays,
+            rangeCapped: providerRangeCapped, errorCode: null,
           });
           continue;
         }
@@ -552,9 +567,58 @@ export function createAccountJournalHistoryReader(options: AccountJournalHistory
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(new Error('PROVIDER_TIMEOUT')), timeoutMs);
         try {
-          const result = provider === 'upbit'
-            ? await readUpbit(loaded.credentials, userId, startMs, endMs, fetchImpl, controller.signal, counter, maxUpbitOrders)
-            : await readBitget(loaded.credentials, userId, startMs, endMs, fetchImpl, controller.signal, counter, maxBitgetPages);
+          let result: {
+            payloads: Record<string, unknown>[];
+            truncated: boolean;
+            normalizationFailures: number;
+          };
+          let effectiveDays = providerEffectiveDays;
+          let rangeCapped = providerRangeCapped;
+
+          if (provider === 'upbit') {
+            result = await readUpbit(
+              loaded.credentials,
+              userId,
+              startMs,
+              endMs,
+              fetchImpl,
+              controller.signal,
+              counter,
+              maxUpbitOrders,
+            );
+          } else if (provider === 'bitget') {
+            result = await readBitget(
+              loaded.credentials,
+              userId,
+              startMs,
+              endMs,
+              fetchImpl,
+              controller.signal,
+              counter,
+              maxBitgetPages,
+            );
+          } else {
+            const kiwoomResult = await readKiwoomJournalHistory({
+              provider: kiwoomProvider,
+              credentials: {
+                appKey: requiredCredential(loaded.credentials, 'appKey'),
+                appSecret: requiredCredential(loaded.credentials, 'appSecret'),
+              } satisfies KiwoomReadonlyCredentials,
+              userId,
+              requestedDays: days,
+              endMs,
+              signal: controller.signal,
+              maxDays: maxKiwoomDays,
+              requestCounter: counter,
+            });
+            if (counter.value !== kiwoomResult.privateProviderRequests) {
+              throw new AccountReadonlyError('KIWOOM_HISTORY_REQUEST_COUNT_MISMATCH');
+            }
+            effectiveDays = kiwoomResult.effectiveDays;
+            rangeCapped = kiwoomResult.rangeCapped;
+            result = kiwoomResult;
+          }
+
           payloads.push(...result.payloads);
           anyTruncated ||= result.truncated;
           providers.push({
@@ -565,7 +629,13 @@ export function createAccountJournalHistoryReader(options: AccountJournalHistory
             records: result.payloads.length,
             privateProviderRequests: counter.value,
             truncated: result.truncated,
-            errorCode: result.normalizationFailures > 0 ? 'HISTORY_NORMALIZATION_PARTIAL' : null,
+            effectiveDays,
+            rangeCapped,
+            errorCode: result.normalizationFailures > 0
+              ? 'HISTORY_NORMALIZATION_PARTIAL'
+              : provider === 'kiwoom' && rangeCapped
+                ? 'KIWOOM_HISTORY_CAPPED_7D'
+                : null,
           });
         } finally {
           clearTimeout(timer);
@@ -573,7 +643,8 @@ export function createAccountJournalHistoryReader(options: AccountJournalHistory
       } catch (cause) {
         providers.push({
           provider, configured: true, enabled: true, status: 'UNAVAILABLE', records: 0,
-          privateProviderRequests: counter.value, truncated: false, errorCode: providerFailureCode(cause),
+          privateProviderRequests: counter.value, truncated: false, effectiveDays: providerEffectiveDays,
+          rangeCapped: providerRangeCapped, errorCode: providerFailureCode(cause),
         });
       }
       privateProviderRequests += counter.value;

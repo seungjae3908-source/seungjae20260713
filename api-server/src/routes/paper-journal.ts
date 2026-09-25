@@ -148,8 +148,8 @@ export function createPaperJournalRouter(
   const accountHistoryReader = dependencies.accountHistoryReader ?? readAccountJournalHistory;
 
   const accountHistoryProviders = (request: AuthenticatedRequest) => {
-    if (!request.member) return [] as Array<'upbit' | 'bitget'>;
-    const providers: Array<'upbit' | 'bitget'> = [];
+    if (!request.member) return [] as Array<'kiwoom' | 'upbit' | 'bitget'>;
+    const providers: Array<'kiwoom' | 'upbit' | 'bitget'> = ['kiwoom'];
     if (hasCapability(request.member, 'canAccessSpot')) providers.push('upbit');
     if (hasCapability(request.member, 'canAccessFutures')) providers.push('bitget');
     return providers;
