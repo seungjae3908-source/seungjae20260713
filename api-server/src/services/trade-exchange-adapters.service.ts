@@ -315,6 +315,38 @@ export function prepareBitgetCancel(credentials: BitgetCredentials, symbol: stri
   }, '', timestamp);
 }
 
+export function prepareBitgetAmend(
+  credentials: BitgetCredentials,
+  input: {
+    symbol: string;
+    clientOrderId: string;
+    newClientOrderId: string;
+    quantity?: number | null;
+    price?: number | null;
+  },
+  timestamp?: string,
+) {
+  if (!input.newClientOrderId.trim() || input.newClientOrderId === input.clientOrderId) {
+    throw new Error('BITGET_AMEND_NEW_CLIENT_ORDER_ID_REQUIRED');
+  }
+  const body: Record<string, unknown> = {
+    symbol: input.symbol.trim().toUpperCase(),
+    productType: 'USDT-FUTURES',
+    clientOid: input.clientOrderId,
+    newClientOid: input.newClientOrderId,
+  };
+  if (input.quantity != null) {
+    if (!Number.isFinite(input.quantity) || input.quantity <= 0) throw new Error('BITGET_AMEND_QUANTITY_INVALID');
+    body.newSize = String(input.quantity);
+  }
+  if (input.price != null) {
+    if (!Number.isFinite(input.price) || input.price <= 0) throw new Error('BITGET_AMEND_PRICE_INVALID');
+    body.newPrice = String(input.price);
+  }
+  if (body.newSize == null && body.newPrice == null) throw new Error('BITGET_AMEND_CHANGE_REQUIRED');
+  return bitgetRequest(credentials, 'POST', '/api/v2/mix/order/modify-order', body, '', timestamp);
+}
+
 export function prepareBitgetOrderQuery(
   credentials: BitgetCredentials,
   symbol: string,
@@ -430,6 +462,31 @@ export function prepareUpbitCancel(credentials: UpbitCredentials, identifier: st
   return upbitRequest(credentials, 'DELETE', '/v1/order', { identifier }, nonce);
 }
 
+export function prepareUpbitAmend(
+  credentials: UpbitCredentials,
+  input: {
+    previousIdentifier: string;
+    newIdentifier: string;
+    quantity: number;
+    price: number;
+  },
+  nonce?: string,
+) {
+  if (!input.previousIdentifier.trim() || !input.newIdentifier.trim()
+    || input.previousIdentifier === input.newIdentifier) {
+    throw new Error('UPBIT_AMEND_IDENTIFIER_INVALID');
+  }
+  if (!Number.isFinite(input.quantity) || input.quantity <= 0) throw new Error('UPBIT_AMEND_QUANTITY_INVALID');
+  if (!Number.isFinite(input.price) || input.price <= 0) throw new Error('UPBIT_AMEND_PRICE_INVALID');
+  return upbitRequest(credentials, 'POST', '/v1/orders/cancel_and_new', {
+    prev_order_identifier: input.previousIdentifier,
+    new_ord_type: 'limit',
+    new_volume: String(input.quantity),
+    new_price: String(input.price),
+    new_identifier: input.newIdentifier,
+  }, nonce);
+}
+
 export function prepareUpbitOrderQuery(credentials: UpbitCredentials, identifier: string, nonce?: string) {
   return upbitRequest(credentials, 'GET', '/v1/order', { identifier }, nonce);
 }
@@ -494,44 +551,138 @@ export function prepareKiwoomUsAccount(credentials: KiwoomCredentials): Prepared
   return kiwoomReadRequest(credentials, 'ust21070', '/api/us/acnt', {});
 }
 
-function kiwoomOrderBody(plan: TradingPlanInput) {
+
+function kiwoomDomesticExchange(plan: TradingPlanInput) {
+  const requested = String(plan.stockExchange ?? 'KRX').toUpperCase();
+  if (!['KRX', 'NXT', 'SOR'].includes(requested)) throw new Error('KIWOOM_DOMESTIC_EXCHANGE_INVALID');
+  return requested;
+}
+
+function kiwoomUsExchange(plan: TradingPlanInput) {
+  const requested = String(plan.stockExchange ?? '').toUpperCase();
+  const codes: Record<string, string> = { NASDAQ: 'ND', NYSE: 'NY', AMEX: 'NA' };
+  const code = codes[requested];
+  if (!code) throw new Error('KIWOOM_US_EXCHANGE_REQUIRED');
+  return code;
+}
+
+function kiwoomOrderHeaders(credentials: KiwoomCredentials, apiId: string) {
+  if (!credentials.accessToken) throw new Error('KIWOOM_ACCESS_TOKEN_REQUIRED');
   return {
-    dmst_stex_tp: 'KRX',
-    stk_cd: plan.symbol,
-    ord_qty: String(plan.quantity ?? ''),
-    ord_uv: plan.orderType === 'limit' ? String(plan.limitPrice ?? '') : '',
-    trde_tp: plan.orderType === 'limit' ? '0' : '3',
-    cond_uv: '',
+    Authorization: `Bearer ${credentials.accessToken}`,
+    'Content-Type': 'application/json;charset=UTF-8',
+    'api-id': apiId,
   };
 }
 
 export function prepareKiwoomOrder(credentials: KiwoomCredentials, plan: TradingPlanInput): PreparedExchangeRequest {
-  if (!credentials.accessToken) throw new Error('KIWOOM_ACCESS_TOKEN_REQUIRED');
+  const quantity = Number(plan.quantity);
+  if (!Number.isSafeInteger(quantity) || quantity <= 0) throw new Error('KIWOOM_QUANTITY_INVALID');
+  if (plan.side !== 'buy' && plan.side !== 'sell') throw new Error('KIWOOM_SIDE_INVALID');
+  const limitPrice = plan.limitPrice == null ? null : Number(plan.limitPrice);
+  if (plan.orderType === 'limit' && (!Number.isFinite(limitPrice) || Number(limitPrice) <= 0)) {
+    throw new Error('KIWOOM_LIMIT_PRICE_REQUIRED');
+  }
+  if (plan.market.toUpperCase() === 'US') {
+    const stexTp = kiwoomUsExchange(plan);
+    return {
+      method: 'POST',
+      path: '/api/us/ordr',
+      query: '',
+      headers: kiwoomOrderHeaders(credentials, plan.side === 'buy' ? 'ust20000' : 'ust20001'),
+      body: jsonBody({
+        stex_tp: stexTp,
+        stk_cd: plan.symbol.trim().toUpperCase(),
+        ord_qty: String(quantity),
+        ord_uv: plan.orderType === 'limit' ? String(limitPrice) : '',
+        trde_tp: plan.orderType === 'limit' ? '0' : '3',
+      }),
+    };
+  }
   return {
-    method: 'POST', path: '/api/dostk/ordr', query: '',
-    headers: {
-      Authorization: `Bearer ${credentials.accessToken}`,
-      'Content-Type': 'application/json;charset=UTF-8',
-      'api-id': plan.side === 'buy' ? 'kt10000' : 'kt10001',
-    },
-    body: jsonBody(kiwoomOrderBody(plan)),
+    method: 'POST',
+    path: '/api/dostk/ordr',
+    query: '',
+    headers: kiwoomOrderHeaders(credentials, plan.side === 'buy' ? 'kt10000' : 'kt10001'),
+    body: jsonBody({
+      dmst_stex_tp: kiwoomDomesticExchange(plan),
+      stk_cd: plan.symbol.trim().toUpperCase(),
+      ord_qty: String(quantity),
+      ord_uv: plan.orderType === 'limit' ? String(limitPrice) : '',
+      trde_tp: plan.orderType === 'limit' ? '0' : '3',
+      cond_uv: '',
+    }),
+  };
+}
+
+export function prepareKiwoomAmend(
+  credentials: KiwoomCredentials,
+  plan: TradingPlanInput,
+  input: { orderNo: string; quantity: number; price: number },
+): PreparedExchangeRequest {
+  if (!input.orderNo.trim()) throw new Error('KIWOOM_ORDER_ID_REQUIRED');
+  if (!Number.isSafeInteger(input.quantity) || input.quantity <= 0) throw new Error('KIWOOM_AMEND_QUANTITY_INVALID');
+  if (!Number.isFinite(input.price) || input.price <= 0) throw new Error('KIWOOM_AMEND_PRICE_INVALID');
+  if (plan.market.toUpperCase() === 'US') {
+    return {
+      method: 'POST',
+      path: '/api/us/ordr',
+      query: '',
+      headers: kiwoomOrderHeaders(credentials, 'ust20002'),
+      body: jsonBody({
+        orig_ord_no: input.orderNo,
+        stex_tp: kiwoomUsExchange(plan),
+        stk_cd: plan.symbol.trim().toUpperCase(),
+        mdfy_qty: String(input.quantity),
+        mdfy_uv: String(input.price),
+      }),
+    };
+  }
+  return {
+    method: 'POST',
+    path: '/api/dostk/ordr',
+    query: '',
+    headers: kiwoomOrderHeaders(credentials, 'kt10002'),
+    body: jsonBody({
+      dmst_stex_tp: kiwoomDomesticExchange(plan),
+      orig_ord_no: input.orderNo,
+      stk_cd: plan.symbol.trim().toUpperCase(),
+      mdfy_qty: String(input.quantity),
+      mdfy_uv: String(input.price),
+      mdfy_cond_uv: '',
+    }),
   };
 }
 
 export function prepareKiwoomCancel(
   credentials: KiwoomCredentials,
-  input: { symbol: string; orderNo: string; quantity: number },
+  plan: TradingPlanInput,
+  input: { orderNo: string; quantity: number },
 ): PreparedExchangeRequest {
-  if (!credentials.accessToken) throw new Error('KIWOOM_ACCESS_TOKEN_REQUIRED');
+  if (!input.orderNo.trim()) throw new Error('KIWOOM_ORDER_ID_REQUIRED');
+  if (!Number.isSafeInteger(input.quantity) || input.quantity < 0) throw new Error('KIWOOM_CANCEL_QUANTITY_INVALID');
+  if (plan.market.toUpperCase() === 'US') {
+    return {
+      method: 'POST',
+      path: '/api/us/ordr',
+      query: '',
+      headers: kiwoomOrderHeaders(credentials, 'ust20003'),
+      body: jsonBody({
+        orig_ord_no: input.orderNo,
+        stex_tp: kiwoomUsExchange(plan),
+        stk_cd: plan.symbol.trim().toUpperCase(),
+      }),
+    };
+  }
   return {
-    method: 'POST', path: '/api/dostk/ordr', query: '',
-    headers: {
-      Authorization: `Bearer ${credentials.accessToken}`,
-      'Content-Type': 'application/json;charset=UTF-8',
-      'api-id': 'kt10003',
-    },
+    method: 'POST',
+    path: '/api/dostk/ordr',
+    query: '',
+    headers: kiwoomOrderHeaders(credentials, 'kt10003'),
     body: jsonBody({
-      dmst_stex_tp: 'KRX', stk_cd: input.symbol, orig_ord_no: input.orderNo,
+      dmst_stex_tp: kiwoomDomesticExchange(plan),
+      orig_ord_no: input.orderNo,
+      stk_cd: plan.symbol.trim().toUpperCase(),
       cncl_qty: String(input.quantity),
     }),
   };
