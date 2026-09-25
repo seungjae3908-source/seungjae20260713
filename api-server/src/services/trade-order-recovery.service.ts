@@ -211,6 +211,273 @@ function upbitSnapshot(payload: ExchangePayload, plan: TradingPlan, order: Tradi
   };
 }
 
+
+function tossData(payload: ExchangePayload) {
+  if (payload.error) throw new Error('TOSS_ORDER_LOOKUP_FAILED');
+  const code = text(payload.code ?? payload.return_code);
+  if (code && !['0', '00000', 'SUCCESS'].includes(code.toUpperCase())) throw new Error(`TOSS_${code}`);
+  return isRecord(payload.result) ? payload.result : payload;
+}
+
+function tossToken(payload: ExchangePayload) {
+  const row = isRecord(payload.result) ? payload.result : isRecord(payload.data) ? payload.data : payload;
+  const token = text(row.access_token ?? row.accessToken ?? payload.access_token);
+  if (!token) throw new Error('TOSS_TOKEN_MISSING');
+  return token;
+}
+
+function stateFromToss(status: string, filledQuantity: number): TradingExchangeOrderSnapshot['state'] | null {
+  if (['open', 'pending', 'accepted', 'waiting'].includes(status)) {
+    return filledQuantity > 0 ? 'PARTIALLY_FILLED' : 'ACCEPTED';
+  }
+  if (['partially_filled', 'partial_fill', 'partial-filled'].includes(status)) return 'PARTIALLY_FILLED';
+  if (['filled', 'completed', 'done'].includes(status)) return 'FILLED';
+  if (['cancelled', 'canceled', 'cancel'].includes(status)) return 'CANCELED';
+  if (['rejected', 'failed', 'expired'].includes(status)) return 'REJECTED';
+  return null;
+}
+
+function tossSnapshot(payload: ExchangePayload, plan: TradingPlan, order: TradingOrder): TradingExchangeOrderSnapshot {
+  const row = tossData(payload);
+  const orderId = text(row.orderId ?? row.order_id);
+  if (!orderId || (order.exchangeOrderId && order.exchangeOrderId !== orderId)) {
+    throw new Error('TOSS_ORDER_IDENTITY_MISMATCH');
+  }
+  if (text(row.symbol)?.toUpperCase() !== plan.symbol.toUpperCase()) throw new Error('TOSS_ORDER_IDENTITY_MISMATCH');
+  const execution = isRecord(row.execution) ? row.execution : {};
+  const requestedQuantity = finiteNumber(row.quantity) ?? order.requestedQuantity;
+  const filledQuantity = finiteNumber(execution.filledQuantity ?? row.filledQuantity ?? row.executedQuantity) ?? 0;
+  const remainingQuantity = finiteNumber(row.remainingQuantity)
+    ?? (requestedQuantity === null ? null : Math.max(0, requestedQuantity - filledQuantity));
+  const providerStatusCode = String(row.status ?? row.orderStatus ?? row.state ?? '').toLowerCase();
+  const state = stateFromToss(providerStatusCode, filledQuantity);
+  if (!state) throw new Error('TOSS_ORDER_STATUS_UNKNOWN');
+  return {
+    exchangeOrderId: orderId,
+    state,
+    requestedQuantity,
+    filledQuantity,
+    remainingQuantity,
+    averageFillPrice: finiteNumber(execution.averageFillPrice ?? execution.averagePrice ?? row.averageFillPrice),
+    fills: [],
+    feeAmount: finiteNumber(execution.feeAmount ?? row.feeAmount),
+    feeCurrency: text(execution.feeCurrency ?? row.feeCurrency),
+    exchangeCreatedAt: timestamp(row.createdAt ?? row.created_at),
+    exchangeUpdatedAt: timestamp(row.updatedAt ?? row.updated_at ?? execution.updatedAt),
+    cancelable: state === 'ACCEPTED' || state === 'PARTIALLY_FILLED',
+    providerStatusCode,
+  };
+}
+
+function tossOpenOrderId(payload: ExchangePayload, expectedClientOrderId: string) {
+  const result = payload.result;
+  const values = Array.isArray(result)
+    ? result
+    : isRecord(result) && Array.isArray(result.orders) ? result.orders : [];
+  for (const row of values.filter(isRecord)) {
+    if (text(row.clientOrderId ?? row.client_order_id) === expectedClientOrderId) {
+      return text(row.orderId ?? row.order_id);
+    }
+  }
+  return null;
+}
+
+function assertKiwoom(payload: ExchangePayload) {
+  const raw = payload.return_code ?? payload.returnCode ?? payload.code;
+  if (raw == null || !['0', '00000', '20'].includes(String(raw))) {
+    throw new Error(`KIWOOM_${String(raw ?? 'INVALID_RESPONSE')}`);
+  }
+  return payload;
+}
+
+function kiwoomToken(payload: ExchangePayload) {
+  const nested = isRecord(payload.data) ? payload.data : null;
+  const token = text(payload.token ?? nested?.token);
+  if (!token) throw new Error('KIWOOM_TOKEN_MISSING');
+  return token;
+}
+
+function kiwoomRows(payload: ExchangePayload, key: string) {
+  const value = payload[key];
+  if (value == null) return [];
+  if (!Array.isArray(value) || !value.every(isRecord)) throw new Error('KIWOOM_INVALID_RESPONSE');
+  return value;
+}
+
+function kiwoomOrderDate(value: string) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) throw new Error('KIWOOM_ORDER_DATE_INVALID');
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date);
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${map.year}${map.month}${map.day}`;
+}
+
+function kiwoomDomesticOpenSnapshot(
+  payload: ExchangePayload,
+  plan: TradingPlan,
+  order: TradingOrder,
+): TradingExchangeOrderSnapshot | null {
+  assertKiwoom(payload);
+  const row = kiwoomRows(payload, 'oso')
+    .find((item) => text(item.ord_no ?? item.order_no) === order.exchangeOrderId);
+  if (!row) return null;
+  if (text(row.stk_cd)?.replace(/^A/, '').toUpperCase() !== plan.symbol.replace(/^A/, '').toUpperCase()) {
+    throw new Error('KIWOOM_ORDER_IDENTITY_MISMATCH');
+  }
+  const requestedQuantity = finiteNumber(row.ord_qty) ?? order.requestedQuantity;
+  const remainingQuantity = finiteNumber(row.oso_qty);
+  if (requestedQuantity == null || remainingQuantity == null || remainingQuantity < 0
+    || remainingQuantity > requestedQuantity + QUANTITY_EPSILON) {
+    throw new Error('KIWOOM_ORDER_QUANTITY_INVALID');
+  }
+  const filledQuantity = Math.max(0, requestedQuantity - remainingQuantity);
+  return {
+    exchangeOrderId: order.exchangeOrderId,
+    state: filledQuantity > 0 ? 'PARTIALLY_FILLED' : 'ACCEPTED',
+    requestedQuantity,
+    filledQuantity,
+    remainingQuantity,
+    averageFillPrice: filledQuantity > 0
+      ? finiteNumber(row.cntr_tot_amt) != null ? Number(row.cntr_tot_amt) / filledQuantity : finiteNumber(row.cntr_pric)
+      : null,
+    fills: [],
+    feeAmount: null,
+    feeCurrency: null,
+    exchangeCreatedAt: null,
+    exchangeUpdatedAt: null,
+    cancelable: true,
+    providerStatusCode: text(row.ord_stt),
+  };
+}
+
+function kiwoomDomesticHistorySnapshot(
+  payload: ExchangePayload,
+  plan: TradingPlan,
+  order: TradingOrder,
+): TradingExchangeOrderSnapshot {
+  assertKiwoom(payload);
+  const matches = kiwoomRows(payload, 'acnt_ord_cntr_prst_array')
+    .filter((item) => text(item.ord_no ?? item.order_no) === order.exchangeOrderId);
+  if (!matches.length) throw new Error('KIWOOM_ORDER_LOOKUP_EMPTY');
+  if (matches.some((row) => text(row.stk_cd)?.replace(/^A/, '').toUpperCase()
+      !== plan.symbol.replace(/^A/, '').toUpperCase())) {
+    throw new Error('KIWOOM_ORDER_IDENTITY_MISMATCH');
+  }
+  const requestedQuantity = Math.max(...matches.map((row) => finiteNumber(row.ord_qty) ?? 0))
+    || order.requestedQuantity;
+  const uniqueFills = new Map<string, { quantity: number; price: number }>();
+  for (const row of matches) {
+    const quantity = finiteNumber(row.cntr_qty);
+    const price = finiteNumber(row.cntr_uv);
+    if (quantity != null && quantity > 0 && price != null && price > 0) {
+      uniqueFills.set(text(row.cntr_no) ?? `${quantity}:${price}:${text(row.cntr_tm) ?? ''}`, { quantity, price });
+    }
+  }
+  const filledQuantity = [...uniqueFills.values()].reduce((sum, fill) => sum + fill.quantity, 0);
+  const weighted = [...uniqueFills.values()].reduce((sum, fill) => sum + fill.quantity * fill.price, 0);
+  const state = requestedQuantity != null && filledQuantity + QUANTITY_EPSILON >= requestedQuantity
+    ? 'FILLED' : 'CANCELED';
+  return {
+    exchangeOrderId: order.exchangeOrderId,
+    state,
+    requestedQuantity,
+    filledQuantity,
+    remainingQuantity: state === 'FILLED' ? 0 : Math.max(0, Number(requestedQuantity ?? 0) - filledQuantity),
+    averageFillPrice: filledQuantity > 0 ? weighted / filledQuantity : null,
+    fills: [],
+    feeAmount: null,
+    feeCurrency: null,
+    exchangeCreatedAt: null,
+    exchangeUpdatedAt: null,
+    cancelable: false,
+    providerStatusCode: state.toLowerCase(),
+  };
+}
+
+function kiwoomUsOpenSnapshot(
+  payload: ExchangePayload,
+  plan: TradingPlan,
+  order: TradingOrder,
+): TradingExchangeOrderSnapshot | null {
+  assertKiwoom(payload);
+  const row = kiwoomRows(payload, 'result_list')
+    .find((item) => text(item.ord_no ?? item.order_no) === order.exchangeOrderId);
+  if (!row) return null;
+  if (text(row.stk_cd)?.toUpperCase() !== plan.symbol.toUpperCase()) throw new Error('KIWOOM_ORDER_IDENTITY_MISMATCH');
+  const requestedQuantity = finiteNumber(row.ord_qty) ?? order.requestedQuantity;
+  const filledQuantity = finiteNumber(row.cntr_qty) ?? 0;
+  const remainingQuantity = finiteNumber(row.ord_remnq)
+    ?? (requestedQuantity == null ? null : Math.max(0, requestedQuantity - filledQuantity));
+  return {
+    exchangeOrderId: order.exchangeOrderId,
+    state: filledQuantity > 0 ? 'PARTIALLY_FILLED' : 'ACCEPTED',
+    requestedQuantity,
+    filledQuantity,
+    remainingQuantity,
+    averageFillPrice: finiteNumber(row.cntr_uv),
+    fills: [],
+    feeAmount: null,
+    feeCurrency: null,
+    exchangeCreatedAt: null,
+    exchangeUpdatedAt: null,
+    cancelable: true,
+    providerStatusCode: text(row.ord_stat ?? row.ord_stat_nm),
+  };
+}
+
+function kiwoomUsHistorySnapshot(
+  payload: ExchangePayload,
+  plan: TradingPlan,
+  order: TradingOrder,
+): TradingExchangeOrderSnapshot {
+  assertKiwoom(payload);
+  const matches = kiwoomRows(payload, 'result_list')
+    .filter((item) => text(item.ord_no ?? item.order_no) === order.exchangeOrderId);
+  if (!matches.length) throw new Error('KIWOOM_ORDER_LOOKUP_EMPTY');
+  if (matches.some((row) => text(row.stk_cd)?.toUpperCase() !== plan.symbol.toUpperCase())) {
+    throw new Error('KIWOOM_ORDER_IDENTITY_MISMATCH');
+  }
+  const requestedQuantity = Math.max(...matches.map((row) => finiteNumber(row.ord_qty) ?? 0))
+    || order.requestedQuantity;
+  const uniqueFills = new Map<string, { quantity: number; price: number }>();
+  for (const row of matches) {
+    const quantity = finiteNumber(row.cntr_qty);
+    const price = finiteNumber(row.cntr_uv);
+    if (quantity != null && quantity > 0 && price != null && price > 0) {
+      uniqueFills.set(`${text(row.cntr_time) ?? ''}:${quantity}:${price}`, { quantity, price });
+    }
+  }
+  const filledQuantity = [...uniqueFills.values()].reduce((sum, fill) => sum + fill.quantity, 0);
+  const weighted = [...uniqueFills.values()].reduce((sum, fill) => sum + fill.quantity * fill.price, 0);
+  const remainingValues = matches.map((row) => finiteNumber(row.ord_remnq)).filter((value): value is number => value != null);
+  const remainingQuantity = remainingValues.length ? Math.min(...remainingValues)
+    : requestedQuantity == null ? null : Math.max(0, requestedQuantity - filledQuantity);
+  const statusText = matches.map((row) => String(row.ord_stat_nm ?? row.ord_stat ?? '')).join(' ');
+  let state: TradingExchangeOrderSnapshot['state'] | null = null;
+  if (/거부|실패/i.test(statusText)) state = 'REJECTED';
+  else if (/취소/i.test(statusText)) state = 'CANCELED';
+  else if (requestedQuantity != null && filledQuantity + QUANTITY_EPSILON >= requestedQuantity) state = 'FILLED';
+  else if (remainingQuantity === 0) state = 'CANCELED';
+  if (!state) throw new Error('KIWOOM_ORDER_STATUS_UNKNOWN');
+  return {
+    exchangeOrderId: order.exchangeOrderId,
+    state,
+    requestedQuantity,
+    filledQuantity,
+    remainingQuantity,
+    averageFillPrice: filledQuantity > 0 ? weighted / filledQuantity : null,
+    fills: [],
+    feeAmount: null,
+    feeCurrency: null,
+    exchangeCreatedAt: null,
+    exchangeUpdatedAt: null,
+    cancelable: false,
+    providerStatusCode: statusText || state.toLowerCase(),
+  };
+}
+
 function quantitiesMatch(left: number, right: number) {
   return Math.abs(left - right) <= QUANTITY_EPSILON * Math.max(1, Math.abs(left), Math.abs(right));
 }
