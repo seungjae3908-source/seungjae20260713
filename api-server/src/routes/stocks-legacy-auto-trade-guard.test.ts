@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 
 test('legacy stock auto-trade cannot own any real provider mutation path', async () => {
-  const source = await readFile(new URL('./stocks.ts', import.meta.url), 'utf8');
+  const source = await readFile(path.join(process.cwd(), 'api-server/src/routes/stocks.ts'), 'utf8');
 
   assert.equal(source.includes('placeKiwoomDomesticOrder'), false);
   assert.equal(source.includes('placeKiwoomUsOrder'), false);
