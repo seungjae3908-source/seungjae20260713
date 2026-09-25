@@ -73,6 +73,8 @@ async function setup() {
   process.env.TRADING_CREDENTIAL_MASTER_KEY = KEY;
   process.env.ORDER_EXECUTION_ENABLED = 'true';
   process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+  process.env.REAL_ORDER_ENABLED = 'true';
+  process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
   process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
   const repository = new InMemoryTradingRepository();
   const p = plan();
@@ -89,7 +91,7 @@ async function setup() {
 
 test.afterEach(() => {
   globalThis.fetch = nativeFetch;
-  for (const key of ['TRADING_CREDENTIAL_MASTER_KEY','ORDER_EXECUTION_ENABLED','LIVE_TRADING_ACTIVATION_APPROVED','UPBIT_LIVE_ORDER_ENABLED']) {
+  for (const key of ['TRADING_CREDENTIAL_MASTER_KEY','ORDER_EXECUTION_ENABLED','LIVE_TRADING_ACTIVATION_APPROVED','REAL_ORDER_ENABLED','PRIVATE_TRADING_API_ALLOWED','UPBIT_LIVE_ORDER_ENABLED']) {
     delete process.env[key];
   }
 });
