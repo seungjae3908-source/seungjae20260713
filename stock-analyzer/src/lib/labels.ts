@@ -71,6 +71,7 @@ export const USER_TRADE_SOURCE_KO: Readonly<Record<string, string>> = {
   TOSS_API: 'Toss API',
   UPBIT_API: 'Upbit 실계좌',
   BITGET_API: 'Bitget 실계좌',
+  KIWOOM_API: 'Kiwoom 실계좌',
   APP_PAPER: '모의매매',
   APP_SHADOW: '실시간 추적검증',
   APP_AUTO: '자동매매',
