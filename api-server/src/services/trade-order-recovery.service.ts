@@ -1,6 +1,7 @@
 import type { TradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
+import { isTransientTradingProviderError, tradingProviderHttpErrorCode, tradingProviderNetworkErrorCode, tradingProviderTimeoutCode } from './trade-provider-http-error.service';
 import {
   prepareBitgetOrderQuery,
   prepareKiwoomDomesticOrderHistory,
@@ -79,7 +80,7 @@ async function sendRecoveryRequest(baseUrl: string, request: PreparedExchangeReq
       body: request.body,
       signal: controller.signal,
     });
-    if (!response.ok) throw new Error(`EXCHANGE_HTTP_${response.status}`);
+    if (!response.ok) throw new Error(tradingProviderHttpErrorCode(baseUrl, response.status));
     const raw = await response.text();
     if (!raw.trim()) throw new Error(invalidResponseCode(baseUrl));
     let payload: unknown;
@@ -91,8 +92,8 @@ async function sendRecoveryRequest(baseUrl: string, request: PreparedExchangeReq
     if (!isRecord(payload)) throw new Error(invalidResponseCode(baseUrl));
     return payload;
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') throw new Error('EXCHANGE_TIMEOUT');
-    if (error instanceof TypeError) throw new Error('EXCHANGE_NETWORK_ERROR');
+    if (error instanceof Error && error.name === 'AbortError') throw new Error(tradingProviderTimeoutCode(baseUrl));
+    if (error instanceof TypeError) throw new Error(tradingProviderNetworkErrorCode(baseUrl));
     throw error;
   } finally {
     clearTimeout(timeout);
@@ -551,9 +552,7 @@ function validateSnapshot(order: TradingOrder, snapshot: TradingExchangeOrderSna
 }
 
 function transientRecoveryError(code: string) {
-  return code === 'EXCHANGE_TIMEOUT' || code === 'EXCHANGE_NETWORK_ERROR' || code.startsWith('EXCHANGE_HTTP_')
-    || code.endsWith('_ORDER_LOOKUP_EMPTY') || code.endsWith('_ORDER_LOOKUP_FAILED')
-    || code.endsWith('_INVALID_RESPONSE');
+  return isTransientTradingProviderError(code);
 }
 
 export class TradeOrderRecoveryService {
