@@ -153,14 +153,14 @@ test('rich signal card uses evidence, AI explanation, news links and read-only a
   }, alert(), evidence, { timeframe: '15m', strategyMode: 'scalping' });
 
   assert.match(result.details ?? '', /거래량 증가/);
-  assert.match(result.details ?? '', /국내 · 단타 · 반도체/);
+  assert.match(result.title ?? '', /005930 \| 국내 · 단타 · 반도체/);
   assert.match(result.details ?? '', /1차 진입 111 · 기본 60%/);
   assert.match(result.details ?? '', /2차 진입 109 · 기본 40%/);
-  assert.match(result.details ?? '', /AI 신호설명/);
+  assert.match(result.details ?? '', /AI:/);
   assert.match(result.details ?? '', /신규 공급계약 공시/);
   assert.match(result.details ?? '', /AI 요약/);
   assert.match(result.details ?? '', /Example News/);
-  assert.equal(result.linkPreview, true);
+  assert.equal(result.linkPreview, false);
   assert.ok(result.photo?.bytes instanceof Uint8Array);
   assert.equal(result.buttons?.flat().some((button) => button.text.includes('AI차트')), true);
   assert.equal(result.buttons?.flat().some((button) => button.text.includes('주문 준비')), true);
