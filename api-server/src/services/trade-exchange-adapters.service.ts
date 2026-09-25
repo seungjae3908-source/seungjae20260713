@@ -592,6 +592,22 @@ export function prepareKiwoomUsOrderable(
   };
 }
 
+export function prepareKiwoomUsHoldings(
+  credentials: KiwoomCredentials,
+  plan: TradingPlanInput,
+): PreparedExchangeRequest {
+  return {
+    method: 'POST',
+    path: '/api/us/acnt',
+    query: '',
+    headers: kiwoomOrderHeaders(credentials, 'ust21070'),
+    body: jsonBody({
+      stex_tp: kiwoomUsExchange(plan),
+      stk_cd: plan.symbol.trim().toUpperCase(),
+    }),
+  };
+}
+
 export function prepareKiwoomUsUnfilled(
   credentials: KiwoomCredentials,
   plan: TradingPlanInput,
