@@ -8,6 +8,7 @@ import {
 } from './account-readonly.repository';
 import type { AccountReader, AccountReadScope } from './account-readonly.service';
 import {
+  createUpbitPublicQuoteReader,
   readBitgetSnapshot,
   readUpbitSnapshot,
   type SignedReadonlyTransport,
@@ -221,6 +222,7 @@ export function createVaultBackedAccountReaders(
     READONLY_TARGETS.bitget.paths,
     fetchImpl,
   );
+  const upbitPublicQuotes = createUpbitPublicQuoteReader(fetchImpl);
   const tossTransport = createTossReadonlyTransport(fetchImpl);
   const tossTokens = new TossTokenManager(tossTransport);
   const tossProvider = new TossReadonlyProvider(tossTransport, tossTokens);
@@ -250,7 +252,11 @@ export function createVaultBackedAccountReaders(
         accessKey: requireCredential(raw, 'accessKey'),
         secretKey: requireCredential(raw, 'secretKey'),
       };
-      return withProviderDeadline(signal, providerTimeoutMs, (boundedSignal) => readUpbitSnapshot(credentials, upbitTransport, boundedSignal));
+      return withProviderDeadline(
+        signal,
+        providerTimeoutMs,
+        (boundedSignal) => readUpbitSnapshot(credentials, upbitTransport, boundedSignal, new Date(), upbitPublicQuotes),
+      );
     },
     bitget: async (scope, signal) => {
       const raw = await loadCredentials(scope, 'bitget', repositoryFactory, decryptCredentials);
