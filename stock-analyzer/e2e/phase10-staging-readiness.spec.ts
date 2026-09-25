@@ -759,7 +759,7 @@ async function reloadResearchCenterWithAdminSessionProof(page: Page, nav: Return
         intervals: [100, 200, 300, 500],
       },
     ).toBe(true);
-    await expect(page.getByTestId('research-overview-tab')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('research-general-view')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('research-error-state')).toHaveCount(0);
     await expect(page.getByTestId('capability-denied')).toHaveCount(0);
     await expect(loginSubmitButton(page)).toHaveCount(0);
@@ -800,7 +800,7 @@ async function reloadResearchCenterWithAdminSessionProof(page: Page, nav: Return
         origin: observation.origin,
         startedBeforeReload: observation.obsoleteResearchRequests.has(request),
       })),
-      currentPageDataPresent: await page.getByTestId('research-overview-tab').isVisible(),
+      currentPageDataPresent: await page.getByTestId('research-general-view').isVisible(),
       sessionRetained: protectedResponse.status() === 200,
       capabilityRetained: adminResponse.status() === 200,
       noUserVisibleError: await page.getByTestId('research-error-state').count() === 0
