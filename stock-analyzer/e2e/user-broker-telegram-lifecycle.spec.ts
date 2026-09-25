@@ -224,7 +224,7 @@ test('normal and empty connection load reaches one explicit HTTP 200 terminal an
   await page.goto('/account');
   const panel = page.getByTestId('user-broker-telegram-panel');
   await expect(panel).toHaveAttribute('data-user-integrations-request-state', 'success');
-  await expect(panel).toContainText('등록된 계좌 제공사 연결이 없습니다.');
+  await expect(panel).toContainText('연결된 계좌 없음');
   await expect(panel).toContainText('연결 안 됨');
   expect(runtime.diagnostics.integrationRequests).toBe(1);
   expect(runtime.diagnostics.integrationResponses).toBe(1);
