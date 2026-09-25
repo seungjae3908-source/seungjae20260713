@@ -69,6 +69,7 @@ export const USER_SIGNAL_KO: Readonly<Record<string, string>> = {
 export const USER_TRADE_SOURCE_KO: Readonly<Record<string, string>> = {
   TOSS_MANUAL: 'Toss 수동',
   TOSS_API: 'Toss API',
+  KIWOOM_API: 'Kiwoom 실계좌',
   UPBIT_API: 'Upbit 실계좌',
   BITGET_API: 'Bitget 실계좌',
   APP_PAPER: '모의매매',
