@@ -164,8 +164,8 @@ export async function readBitgetSnapshot(credentials: BitgetCredentials, transpo
     if (code !== '00000') {
       openOrderError = partialOpenOrdersError('BITGET', bitgetApplicationFailure(code));
     } else {
-      const payload = record(envelope.data);
-      if (!payload) throw new Error('BITGET_OPEN_ORDERS_RESPONSE_INVALID');
+      const payload = envelope.data;
+      if (!record(payload)) throw new Error('BITGET_OPEN_ORDERS_RESPONSE_INVALID');
       openOrders = rows(payload.entrustedList, 'BITGET_OPEN_ORDERS_RESPONSE_INVALID').map((row) => {
         const quantity = optionalNonNegative(row.size, 'BITGET_OPEN_ORDER_QUANTITY_INVALID');
         const filled = optionalNonNegative(row.baseVolume, 'BITGET_OPEN_ORDER_FILLED_INVALID');
