@@ -246,6 +246,29 @@ export class TradeOrderAmendmentService {
     const normalizedRequestId = requestId(input.requestId);
     const replay = latestAmendment(order, normalizedRequestId);
     if (replay) {
+      if (replay.status !== 'ACKNOWLEDGED' && order.state === 'ACCEPTED') {
+        const recoveredReplay: TradingOrderAmendment = {
+          ...replay,
+          status: 'RECOVERY_REQUIRED',
+          errorCode: replay.errorCode ?? 'AMEND_INTENT_WITHOUT_TERMINAL_PROVIDER_EVIDENCE',
+        };
+        replaceAmendment(order, recoveredReplay);
+        order.lastErrorCode = recoveredReplay.errorCode;
+        order.manualReviewRequired = true;
+        order = await this.automation.transition(
+          order,
+          'RECOVERY_REQUIRED',
+          'ORDER_AMEND_REPLAY_REQUIRES_RECONCILIATION',
+          {
+            amendmentRevision: replay.revision,
+            amendmentRequestId: normalizedRequestId,
+            providerMutationAttempted: false,
+            duplicateProviderMutation: false,
+            orderResubmitted: false,
+            errorCode: recoveredReplay.errorCode,
+          },
+        );
+      }
       return {
         order,
         replayed: true,
