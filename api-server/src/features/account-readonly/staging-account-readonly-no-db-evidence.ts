@@ -241,7 +241,7 @@ function sanitizedProviderSummary(snapshot: CanonicalAccountSnapshot) {
     accountCount: snapshot.accounts?.length ?? 0,
     balanceCount: snapshot.balances?.length ?? 0,
     positionCount: snapshot.positions?.length ?? 0,
-    openOrderCount: openOrders.length,
+    openOrderCount: Array.isArray(snapshot.openOrders) ? snapshot.openOrders.length : null,
     errorCode: snapshot.errorCode,
     credentialsReturned: snapshot.credentialsReturned,
     orderRequests: snapshot.orderRequests,
