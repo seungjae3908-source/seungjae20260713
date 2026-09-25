@@ -285,7 +285,7 @@ function ErrorLine({ value }: { value?: string | null }) {
   if (!value || value === 'ACCOUNT_READ_DISABLED' || value === 'ACCOUNT_NOT_CONFIGURED') return null;
   return <p className="mt-2 break-words text-center text-xs font-semibold text-warning">{errorGuide(value)} <span className="font-mono text-[10px] opacity-70">({value})</span></p>;
 }
-function Metric({ label, value }: { label: string; value: string }) { return <div className="min-w-0 rounded-xl bg-secondary/60 p-2 text-center"><p className="truncate text-xs text-muted-foreground">{label}</p><p className="mt-1 truncate font-semibold">{value}</p></div>; }
+function Metric({ label, value }: { label: string; value: string }) { return <div className="min-w-0 rounded-xl bg-secondary/60 p-2 text-center"><p className="truncate text-xs text-muted-foreground">{label}{' '}</p><p className="mt-1 truncate font-semibold">{value}</p></div>; }
 function ConnectionActions({ provider, configured, disconnecting, onSetup, onDisconnect }: { provider: CredentialProvider; configured: boolean; disconnecting: boolean; onSetup: () => void; onDisconnect: () => void }) {
   return <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
     <button type="button" onClick={onSetup} className="min-h-11 rounded-xl border border-card-border px-3 text-xs font-semibold">{providerLabel(provider)} 조회 연결 설정</button>
