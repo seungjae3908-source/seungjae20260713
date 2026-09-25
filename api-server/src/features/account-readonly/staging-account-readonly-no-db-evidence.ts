@@ -206,6 +206,9 @@ function assertReadOnlySnapshot(provider: ReadonlyCredentialProvider, snapshot: 
   if (snapshot.provider !== provider || snapshot.readOnly !== true || snapshot.connected !== true || snapshot.status !== 'CONNECTED') {
     throw new Error(`EVIDENCE_PROVIDER_NOT_CONNECTED:${provider}:${snapshot.status}`);
   }
+  if (!Array.isArray(snapshot.openOrders) || snapshot.errorCode !== null) {
+    throw new Error(`EVIDENCE_OPEN_ORDERS_NOT_PROVEN:${provider}:${snapshot.errorCode ?? 'MISSING'}`);
+  }
   if (
     snapshot.credentialsReturned !== false
     || snapshot.liveTradingEnabled !== false
@@ -229,7 +232,8 @@ function sanitizedProviderSummary(snapshot: CanonicalAccountSnapshot) {
     accountCount: snapshot.accounts?.length ?? 0,
     balanceCount: snapshot.balances?.length ?? 0,
     positionCount: snapshot.positions?.length ?? 0,
-    openOrderCount: snapshot.openOrders?.length ?? 0,
+    openOrderCount: snapshot.openOrders.length,
+    errorCode: snapshot.errorCode,
     credentialsReturned: snapshot.credentialsReturned,
     orderRequests: snapshot.orderRequests,
     cancelRequests: snapshot.cancelRequests,
@@ -265,7 +269,7 @@ async function main() {
     return sanitizedProviderSummary(snapshot);
   });
   const storagePassed = storageAudit.reads === 3 && storageAudit.writeAttempts === 0;
-  const requestsPassed = requestAudit.oauthTokenPosts === 1 && requestAudit.readonlyGets === 5 && requestAudit.rejectedRequests === 0;
+  const requestsPassed = requestAudit.oauthTokenPosts === 1 && requestAudit.readonlyGets === 9 && requestAudit.rejectedRequests === 0;
   const passed = providerResults.every((result) => result.verdict === 'PASS') && storagePassed && requestsPassed;
 
   const evidence = {
