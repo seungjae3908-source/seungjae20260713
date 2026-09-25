@@ -1,0 +1,43 @@
+name: Research Workspace Integration V1
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - packages/external-research/src/research-workspace-*.js
+      - packages/external-research/test/research-workspace-*.test.js
+      - packages/external-research/scripts/research-workspace-review-v1.mjs
+      - packages/external-research/docs/research-workspace-v1.md
+      - .github/workflows/research-workspace-integration-v1.yml
+permissions:
+  contents: read
+concurrency:
+  group: research-workspace-v1-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  contract-and-reader:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Exact identity and offline regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          node --test packages/external-research/test/research-workspace*.test.js | tee "$RUNNER_TEMP/workspace-tests.log"
+      - name: Store minimal test receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-workspace-v1-tests-${{ github.run_id }}
+          path: ${{ runner.temp }}/workspace-tests.log
+          if-no-files-found: error
+          retention-days: 30
