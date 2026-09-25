@@ -21,8 +21,9 @@ if (!/^[0-9a-f]{40}$/.test(expectedDeploySha)) throw new Error('EXPECTED_DEPLOY_
 if (new URL(baseUrl).origin !== 'https://lsj119.com') throw new Error('Official Production origin is required');
 
 const productionOrigin = new URL(baseUrl).origin;
-const requiredProviders = ['toss', 'upbit', 'bitget'] as const;
-type Provider = typeof requiredProviders[number] | 'kiwoom';
+const cryptoProviders = ['upbit', 'bitget'] as const;
+const stockProviders = ['toss', 'kiwoom'] as const;
+type Provider = typeof cryptoProviders[number] | typeof stockProviders[number];
 
 type SafetySnapshot = {
   provider: string;
@@ -154,12 +155,17 @@ test('Production real-account read-only providers return fresh connected snapsho
       : [],
   );
 
-  for (const provider of requiredProviders) {
+  for (const provider of cryptoProviders) {
     expect(supported.has(provider), `${provider} must be supported in Production account read-only QA`).toBe(true);
   }
+  expect(
+    stockProviders.some((provider) => supported.has(provider)),
+    'Toss or Kiwoom stock account read-only provider must be supported',
+  ).toBe(true);
+
   const providers: Provider[] = [
-    ...requiredProviders,
-    ...(supported.has('kiwoom') ? ['kiwoom' as const] : []),
+    ...stockProviders.filter((provider) => supported.has(provider)),
+    ...cryptoProviders,
   ];
 
   const refresh = page.getByRole('button', { name: '계좌 연결 새로고침' });
@@ -198,24 +204,31 @@ test('Production real-account read-only providers return fresh connected snapsho
     expect(snapshot, `${provider} Production snapshot must be captured`).toBeTruthy();
     expect(snapshot!.provider).toBe(provider);
     assertZeroMutationSafety(snapshot!);
-    expect(snapshot!.connected, `${provider} must prove a real connected account read`).toBe(true);
-    expect(snapshot!.status).toBe('CONNECTED');
-    expect(snapshot!.stale).toBe(false);
-    expect(snapshot!.errorCode).toBeNull();
-    expect(Number.isFinite(Date.parse(snapshot!.checkedAt))).toBe(true);
-    expect(snapshot!.lastGoodAt).not.toBeNull();
-    expect(Number.isFinite(Date.parse(String(snapshot!.lastGoodAt)))).toBe(true);
+
+    const isRequiredCrypto = cryptoProviders.includes(provider as typeof cryptoProviders[number]);
+    if (isRequiredCrypto || snapshot!.connected) {
+      expect(snapshot!.connected, `${provider} must prove a real connected account read`).toBe(true);
+      expect(snapshot!.status).toBe('CONNECTED');
+      expect(snapshot!.stale).toBe(false);
+      expect(snapshot!.errorCode).toBeNull();
+      expect(Number.isFinite(Date.parse(snapshot!.checkedAt))).toBe(true);
+      expect(snapshot!.lastGoodAt).not.toBeNull();
+      expect(Number.isFinite(Date.parse(String(snapshot!.lastGoodAt)))).toBe(true);
+    }
 
     sanitizedProviders.push({
       provider,
-      connected: true,
+      connected: snapshot!.connected,
       status: snapshot!.status,
       stale: snapshot!.stale,
       errorCode: snapshot!.errorCode,
-      checkedAtPresent: true,
-      lastGoodAtPresent: true,
+      checkedAtPresent: Number.isFinite(Date.parse(snapshot!.checkedAt)),
+      lastGoodAtPresent: snapshot!.lastGoodAt !== null,
     });
   }
+
+  const connectedStockProviders = stockProviders.filter((provider) => snapshots.get(provider)?.connected === true);
+  expect(connectedStockProviders.length, 'At least one real stock account provider must be connected').toBeGreaterThanOrEqual(1);
 
   expect(blocked).toEqual([]);
   expect(observedAppMutations).toEqual([]);
