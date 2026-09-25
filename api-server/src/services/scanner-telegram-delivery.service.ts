@@ -21,7 +21,6 @@ import {
 } from './telegram-notification.service';
 import {
   evaluateTelegramSignalFreshness,
-  formatTelegramAge,
   type TelegramSignalFreshness,
 } from './telegram-signal-freshness.service';
 
