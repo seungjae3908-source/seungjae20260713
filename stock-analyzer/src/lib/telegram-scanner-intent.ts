@@ -58,6 +58,10 @@ export function parseTelegramScannerIntent(search: string): TelegramScannerInten
     .toUpperCase();
   if (!/^[A-Z0-9._:-]{1,40}$/u.test(symbol)) return null;
 
+  const requestedAction = params.get('action');
+  const parsedAction = action(requestedAction, resolved.market);
+  if (requestedAction && !parsedAction) return null;
+
   return {
     source: 'telegram',
     market: resolved.market,
@@ -65,7 +69,7 @@ export function parseTelegramScannerIntent(search: string): TelegramScannerInten
     symbol,
     strategyMode: strategy(params.get('strategyMode')),
     timeframe: params.get('timeframe')?.trim().slice(0, 12) || null,
-    action: action(params.get('action'), resolved.market),
+    action: parsedAction,
     orderPreparation: true,
   };
 }
