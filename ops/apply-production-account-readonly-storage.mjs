@@ -191,6 +191,7 @@ const migrationPaths = [
   'api-server/supabase/migrations/2026081701_account_readonly_credentials.sql',
   'api-server/supabase/migrations/2026081801_account_readonly_service_role.sql',
   'api-server/supabase/migrations/2026092501_account_readonly_kiwoom_provider.sql',
+  'api-server/supabase/migrations/2026092502_trade_live_execution_toss_provider.sql',
 ];
 let migrationBodies;
 try {
@@ -246,6 +247,43 @@ begin
     raise exception 'account readonly provider constraint is missing Kiwoom';
   end if;
 
+  if to_regclass('public.trade_exchange_connections') is null then
+    raise exception 'trade_exchange_connections table missing';
+  end if;
+  if to_regclass('public.trade_orders') is null then
+    raise exception 'trade_orders table missing';
+  end if;
+  if not exists (
+    select 1
+    from pg_constraint
+    where conrelid = 'public.trade_exchange_connections'::regclass
+      and contype = 'c'
+      and pg_get_constraintdef(oid) ilike '%exchange%'
+      and pg_get_constraintdef(oid) ilike '%toss%'
+      and pg_get_constraintdef(oid) ilike '%bitget%'
+      and pg_get_constraintdef(oid) ilike '%kiwoom%'
+  ) then
+    raise exception 'trade exchange provider constraint is missing Toss';
+  end if;
+  if not exists (
+    select 1
+    from pg_constraint
+    where conrelid = 'public.trade_orders'::regclass
+      and contype = 'c'
+      and pg_get_constraintdef(oid) ilike '%exchange%'
+      and pg_get_constraintdef(oid) ilike '%toss%'
+      and pg_get_constraintdef(oid) ilike '%bitget%'
+      and pg_get_constraintdef(oid) ilike '%kiwoom%'
+  ) then
+    raise exception 'trade order provider constraint is missing Toss';
+  end if;
+  if has_column_privilege('authenticated', 'public.trade_exchange_connections', 'encrypted_credentials', 'SELECT') then
+    raise exception 'authenticated role can read encrypted trading credentials';
+  end if;
+  if has_table_privilege('anon', 'public.trade_exchange_connections', 'SELECT') then
+    raise exception 'anon role can read trading connections';
+  end if;
+
   select count(*) into api_privilege_count
   from information_schema.table_privileges
   where table_schema = 'public'
@@ -279,12 +317,14 @@ select json_build_object(
   'approved_target_sha', current_setting('app.approved_target_sha'),
   'production_project_match', true,
   'atomic_transaction', true,
-  'migrations_applied', 3,
-  'tables_verified', 1,
+  'migrations_applied', 4,
+  'tables_verified', 3,
   'rls_enabled', true,
   'api_roles_revoked', true,
   'service_role_access', true,
   'provider_constraint_kiwoom', true,
+  'provider_constraint_toss', true,
+  'trade_secret_column_exposed', false,
   'database_changed', true,
   'credentials_recorded', false,
   'raw_credentials_exposed', false,
@@ -350,12 +390,14 @@ if (artifact?.status !== 'passed'
   || artifact?.approved_target_sha !== approvedTargetSha
   || artifact?.production_project_match !== true
   || artifact?.atomic_transaction !== true
-  || artifact?.migrations_applied !== 3
-  || artifact?.tables_verified !== 1
+  || artifact?.migrations_applied !== 4
+  || artifact?.tables_verified !== 3
   || artifact?.rls_enabled !== true
   || artifact?.api_roles_revoked !== true
   || artifact?.service_role_access !== true
   || artifact?.provider_constraint_kiwoom !== true
+  || artifact?.provider_constraint_toss !== true
+  || artifact?.trade_secret_column_exposed !== false
   || artifact?.database_changed !== true
   || artifact?.credentials_recorded !== false
   || artifact?.raw_credentials_exposed !== false
