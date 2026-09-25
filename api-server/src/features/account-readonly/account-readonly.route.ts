@@ -172,11 +172,12 @@ export function createAccountReadonlyRouter(service: AccountReadonlyService): IR
     const { userId, accessToken } = authScope(req);
     if (!userId || !accessToken) return res.status(401).json(deniedResponse('LOGIN_REQUIRED'));
     const vault = credentialConfigurationStatus();
+    const flags = accountReadFlags();
     return res.json({
       ok: true,
       encryptionConfigured: vault.encryptionConfigured,
-      supportedProviders: ['toss', 'kiwoom', 'upbit', 'bitget'],
-      hiddenProviders: [],
+      supportedProviders: ['toss', ...(flags.kiwoom ? ['kiwoom'] : []), 'upbit', 'bitget'],
+      hiddenProviders: flags.kiwoom ? [] : ['kiwoom'],
       storage: 'user_scoped_account_readonly_encrypted_vault',
       ...safetyCounters(),
     });
