@@ -91,6 +91,7 @@ async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFutures = true }: Props) {
   const [snapshots, setSnapshots] = useState<Partial<Record<Provider, CanonicalAccountSnapshot>>>({});
+  const [kiwoomSupported, setKiwoomSupported] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<CredentialProvider | null>(null);
@@ -102,10 +103,10 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
 
   const enabledProviders = useCallback((): Provider[] => [
     'toss',
-    'kiwoom',
+    ...(kiwoomSupported ? ['kiwoom' as const] : []),
     ...(canAccessSpot ? ['upbit' as const] : []),
     ...(canAccessFutures ? ['bitget' as const] : []),
-  ], [canAccessFutures, canAccessSpot]);
+  ], [canAccessFutures, canAccessSpot, kiwoomSupported]);
 
   const refresh = useCallback(async () => {
     controllerRef.current?.abort();
@@ -127,6 +128,18 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
     setError(results.filter((result) => result.error).map((result) => `${result.provider.toUpperCase()}: ${result.error}`).join(' · '));
     setLoading(false);
   }, [enabledProviders]);
+
+  useLayoutEffect(() => {
+    let active = true;
+    void jsonRequest<{ supportedProviders?: string[] }>('/api/accounts/read-only/credentials/status')
+      .then((value) => {
+        if (active) setKiwoomSupported(Array.isArray(value.supportedProviders) && value.supportedProviders.includes('kiwoom'));
+      })
+      .catch(() => {
+        if (active) setKiwoomSupported(false);
+      });
+    return () => { active = false; };
+  }, []);
 
   useLayoutEffect(() => {
     void refresh();
@@ -190,7 +203,7 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
     <details className="mt-2 rounded-xl border border-card-border bg-background px-3 py-2 text-xs text-muted-foreground" data-testid="account-readonly-safety-details">
       <summary className="min-h-8 cursor-pointer text-center font-semibold text-foreground">보안·권한 상세</summary>
       <div className="border-t border-card-border pt-2 text-left leading-5">
-        <p>READ-ONLY · Toss · Kiwoom · Upbit · Bitget의 조회 전용 키만 사용하며 잔고·보유·포지션·미체결을 읽습니다.</p>
+        <p>READ-ONLY · {kiwoomSupported ? 'Toss · Kiwoom · Upbit · Bitget' : 'Toss · Upbit · Bitget'}의 조회 전용 키만 사용하며 잔고·보유·포지션{kiwoomSupported ? '·미체결' : ''}을 읽습니다.</p>
         <p className="mt-1">실주문/취소/이체/출금 0건 · Secret 원문 응답 0건을 유지합니다.</p>
       </div>
     </details>
@@ -204,11 +217,11 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
         <SetupButton label="Toss 조회 연결 설정" onClick={() => openSetup('toss')} /><ErrorLine value={toss?.errorCode} />
       </article>
 
-      <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-kiwoom"><div className="flex min-w-0 items-center justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-semibold">Kiwoom · 국내주식</p><p className="mt-0.5 text-xs text-muted-foreground">공식 REST 잔고·미체결 조회</p></div><Status snapshot={kiwoom} /></div>
+      {kiwoomSupported ? <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-kiwoom"><div className="flex min-w-0 items-center justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-semibold">Kiwoom · 국내주식</p><p className="mt-0.5 text-xs text-muted-foreground">공식 REST 잔고·미체결 조회</p></div><Status snapshot={kiwoom} /></div>
         <div className="mt-3 grid grid-cols-2 gap-2 text-xs"><Metric label="보유 종목" value={countMetric(kiwoom, Array.isArray(kiwoom?.positions) ? knownNonZeroCount(kiwoomPositions, (row) => row.quantity) : null, '종목')} /><Metric label="미체결" value={countMetric(kiwoom, Array.isArray(kiwoom?.openOrders) ? kiwoom.openOrders.length : null, '건')} /></div>
         <div className="mt-2 max-h-44 space-y-1 overflow-y-auto overscroll-contain">{visibleKiwoomPositions.slice(0, 8).map((row, index) => <div key={`${row.symbol}-${index}`} className="rounded-xl bg-secondary/60 px-3 py-2 text-xs"><div className="flex min-w-0 items-center justify-between gap-3"><span className="min-w-0 truncate font-semibold">{row.symbol} · {row.market}</span><span className="shrink-0">{amount(kiwoom, row.quantity)}</span></div><p className="mt-1 text-xs text-muted-foreground">평가 {amount(kiwoom, row.marketValue, 'KRW')} · 손익 {amount(kiwoom, row.unrealizedPnl, 'KRW')}</p></div>)}</div>
         <SetupButton label="Kiwoom 조회 연결 설정" onClick={() => openSetup('kiwoom')} /><ErrorLine value={kiwoom?.errorCode} />
-      </article>
+      </article> : null}
 
       {canAccessSpot ? <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-upbit"><div className="flex min-w-0 items-center justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-semibold">Upbit · 코인 현물</p><p className="mt-0.5 text-xs text-muted-foreground">현물 보유자산 조회</p></div><Status snapshot={upbit} /></div><p className="mt-3 text-xs font-semibold">보유 자산 {countMetric(upbit, Array.isArray(upbit?.balances) ? knownNonZeroCount(upbitBalances, (row) => row.total) : null, '개')}</p><div className="mt-2 max-h-40 space-y-1 overflow-y-auto overscroll-contain">{visibleUpbitBalances.slice(0, 10).map((row) => <div key={row.currency} className="flex min-w-0 items-center justify-between gap-3 rounded-xl bg-secondary/60 px-3 py-2 text-xs"><span className="min-w-0 truncate font-semibold">{row.currency}</span><span className="shrink-0 tabular-nums">{amount(upbit, row.total, row.currency)}</span></div>)}</div><SetupButton label="Upbit 조회 연결 설정" onClick={() => openSetup('upbit')} /><ErrorLine value={upbit?.errorCode} /></article> : null}
 
