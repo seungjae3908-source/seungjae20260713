@@ -323,6 +323,7 @@ export type TradingOrder = {
   version?: number;
   requestedQuantity: number | null;
   remainingQuantity?: number | null;
+  currentLimitPrice?: number | null;
   filledQuantity: number;
   averageFillPrice: number | null;
   fills?: TradingFill[];
