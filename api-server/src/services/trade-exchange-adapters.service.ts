@@ -153,9 +153,13 @@ export function prepareBitgetPositions(credentials: BitgetCredentials, timestamp
   return bitgetRequest(credentials, 'GET', '/api/v2/mix/position/all-position', null, 'productType=USDT-FUTURES&marginCoin=USDT', timestamp);
 }
 
-export function prepareBitgetPendingOrders(credentials: BitgetCredentials, symbol: string, timestamp?: string) {
-  return bitgetRequest(credentials, 'GET', '/api/v2/mix/order/orders-pending', null,
-    `symbol=${encodeURIComponent(symbol.toUpperCase())}&productType=USDT-FUTURES`, timestamp);
+export function prepareBitgetPendingOrders(credentials: BitgetCredentials, symbol?: string, timestamp?: string) {
+  const normalizedSymbol = symbol?.trim().toUpperCase();
+  const query = [
+    'productType=USDT-FUTURES',
+    ...(normalizedSymbol ? [`symbol=${encodeURIComponent(normalizedSymbol)}`] : []),
+  ].join('&');
+  return bitgetRequest(credentials, 'GET', '/api/v2/mix/order/orders-pending', null, query, timestamp);
 }
 
 export function prepareBitgetMarginMode(
@@ -252,6 +256,18 @@ export function prepareUpbitOrderQuery(credentials: UpbitCredentials, identifier
 
 export function prepareUpbitAccounts(credentials: UpbitCredentials, nonce?: string) {
   return upbitRequest(credentials, 'GET', '/v1/accounts', {}, nonce);
+}
+
+export function prepareUpbitOpenOrders(
+  credentials: UpbitCredentials,
+  state: 'wait' | 'watch',
+  nonce?: string,
+) {
+  return upbitRequest(credentials, 'GET', '/v1/orders/open', {
+    state,
+    limit: '100',
+    order_by: 'desc',
+  }, nonce);
 }
 
 export function prepareUpbitOrderChance(credentials: UpbitCredentials, symbol: string, nonce?: string) {
