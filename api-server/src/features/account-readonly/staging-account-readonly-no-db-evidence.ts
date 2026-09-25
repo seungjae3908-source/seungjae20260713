@@ -99,6 +99,10 @@ function createReadOnlyMemoryRepository(
       audit.writeAttempts += 1;
       throw new Error('EVIDENCE_STORAGE_WRITE_REJECTED');
     },
+    async remove() {
+      audit.writeAttempts += 1;
+      throw new Error('EVIDENCE_STORAGE_WRITE_REJECTED');
+    },
   };
 }
 
