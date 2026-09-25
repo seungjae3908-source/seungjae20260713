@@ -159,7 +159,7 @@ test('rich signal card uses evidence, AI explanation, news links and read-only a
   assert.match(result.details ?? '', /AI:/);
   assert.match(result.details ?? '', /신규 공급계약 공시/);
   assert.match(result.details ?? '', /AI 요약/);
-  assert.match(result.details ?? '', /Example News/);
+  assert.match(result.details ?? '', /반도체 업황 관련 공개 뉴스/);
   assert.equal(result.linkPreview, false);
   assert.ok(result.photo?.bytes instanceof Uint8Array);
   assert.equal(result.buttons?.flat().some((button) => button.text.includes('AI차트')), true);
