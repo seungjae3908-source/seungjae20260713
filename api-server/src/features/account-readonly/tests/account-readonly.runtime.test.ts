@@ -40,46 +40,60 @@ test('vault-backed Upbit reader is user-scoped, GET-only, and never returns cred
       return { accessKey: 'UPBIT_ACCESS_RUNTIME_TEST_ONLY', secretKey: 'UPBIT_SECRET_RUNTIME_TEST_ONLY' };
     },
     fetchImpl: async (input, init) => {
-      const url = String(input); seen.push({ url, method: init?.method, body: init?.body });
-      assert.equal(new URL(url).origin, 'https://api.upbit.com');
-      assert.equal(new URL(url).pathname, '/v1/accounts');
-      return new Response(JSON.stringify([{ currency: 'KRW', balance: '1000000', locked: '0', avg_buy_price: '0' }]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      const url = new URL(String(input)); seen.push({ url: url.toString(), method: init?.method, body: init?.body });
+      assert.equal(url.origin, 'https://api.upbit.com');
+      if (url.pathname === '/v1/accounts') {
+        return new Response(JSON.stringify([{ currency: 'KRW', balance: '1000000', locked: '0', avg_buy_price: '0' }]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/v1/orders/open') {
+        const state = url.searchParams.get('state');
+        return new Response(JSON.stringify(state === 'wait' ? [{
+          uuid: 'UPBIT-OPEN-1', side: 'bid', market: 'KRW-BTC', price: '100000000',
+          volume: '0.01', remaining_volume: '0.004', state: 'wait',
+        }] : []), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response('{}', { status: 404 });
     },
   });
   const result = await readers.upbit!(SCOPE);
-  assert.equal(seen.length, 1); assert.equal(seen[0]?.method, 'GET'); assert.equal(seen[0]?.body, undefined);
-  assert.equal(result.connected, true); assert.equal(result.orderRequests, 0); assert.equal(result.cancelRequests, 0); assert.equal(result.transferRequests, 0); assert.equal(result.withdrawalRequests, 0);
+  assert.equal(seen.length, 3); assert.ok(seen.every((row) => row.method === 'GET' && row.body === undefined));
+  assert.equal(result.connected, true); assert.equal(result.openOrders?.length, 1); assert.equal(result.openOrders?.[0]?.id, 'UPBIT-OPEN-1'); assert.equal(result.openOrders?.[0]?.remainingQuantity, 0.004);
+  assert.equal(result.orderRequests, 0); assert.equal(result.cancelRequests, 0); assert.equal(result.transferRequests, 0); assert.equal(result.withdrawalRequests, 0);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('UPBIT_ACCESS_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('UPBIT_SECRET_RUNTIME_TEST_ONLY'), false);
 });
 
-test('vault-backed Bitget reader emits only the two allowlisted signed GET reads', async () => {
+test('vault-backed Bitget reader emits only the three allowlisted signed GET reads', async () => {
   const paths: string[] = []; const methods: string[] = [];
   const readers = createVaultBackedAccountReaders({
     repositoryFactory: () => repositoryFor('bitget'),
     decryptCredentials: () => ({ apiKey: 'BITGET_KEY_RUNTIME_TEST_ONLY', secretKey: 'BITGET_SECRET_RUNTIME_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_RUNTIME_TEST_ONLY' }),
     fetchImpl: async (input, init) => {
       const url = new URL(String(input)); assert.equal(url.origin, 'https://api.bitget.com'); paths.push(url.pathname); methods.push(String(init?.method));
-      const body = url.pathname.includes('/position/') ? { code: '00000', data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', leverage: '2' }] } : { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '90' }] };
+      const body = url.pathname.includes('/position/')
+        ? { code: '00000', data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', leverage: '2' }] }
+        : url.pathname.includes('/orders-pending')
+          ? { code: '00000', data: { entrustedList: [{ orderId: 'BG-OPEN-1', symbol: 'BTCUSDT', side: 'buy', price: '60000', size: '0.1', baseVolume: '0.04', status: 'partially_filled' }], endId: 'BG-OPEN-1' } }
+          : { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '90' }] };
       return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
     },
   });
   const result = await readers.bitget!(SCOPE);
-  assert.deepEqual(new Set(paths), new Set(['/api/v2/mix/account/accounts', '/api/v2/mix/position/all-position']));
-  assert.ok(methods.every((method) => method === 'GET')); assert.equal(result.connected, true); assert.equal(result.orderRequests, 0); assert.equal(result.withdrawalRequests, 0);
+  assert.deepEqual(new Set(paths), new Set(['/api/v2/mix/account/accounts', '/api/v2/mix/position/all-position', '/api/v2/mix/order/orders-pending']));
+  assert.ok(methods.every((method) => method === 'GET')); assert.equal(result.connected, true); assert.equal(result.openOrders?.[0]?.id, 'BG-OPEN-1'); assert.equal(result.openOrders?.[0]?.remainingQuantity, 0.06); assert.equal(result.orderRequests, 0); assert.equal(result.withdrawalRequests, 0);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('BITGET_KEY_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('BITGET_PASSPHRASE_RUNTIME_TEST_ONLY'), false);
 });
 
 test('vault-backed Toss reader parses the canonical OpenAPI accounts and holdings envelopes', async () => {
-  const seen: Array<{ origin: string; path: string; method: string; accountHeader: string | null }> = [];
+  const seen: Array<{ origin: string; path: string; search: string; method: string; accountHeader: string | null }> = [];
   const readers = createVaultBackedAccountReaders({
     repositoryFactory: () => repositoryFor('toss'),
     decryptCredentials: () => ({ clientId: 'TOSS_CLIENT_RUNTIME_TEST_ONLY', clientSecret: 'TOSS_SECRET_RUNTIME_TEST_ONLY' }),
     fetchImpl: async (input, init) => {
       const url = new URL(String(input));
       const headers = new Headers(init?.headers);
-      seen.push({ origin: url.origin, path: url.pathname, method: String(init?.method), accountHeader: headers.get('X-Tossinvest-Account') });
+      seen.push({ origin: url.origin, path: url.pathname, search: url.search, method: String(init?.method), accountHeader: headers.get('X-Tossinvest-Account') });
       if (url.pathname === '/oauth2/token') return new Response(JSON.stringify({ access_token: 'TOSS_TOKEN_RUNTIME_TEST_ONLY', expires_in: 3600 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       if (url.pathname === '/api/v1/accounts') return new Response(JSON.stringify({ result: [{ accountNo: '12345678901', accountSeq: 1, accountType: 'BROKERAGE' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       if (url.pathname === '/api/v1/holdings') return new Response(JSON.stringify({
@@ -97,6 +111,16 @@ test('vault-backed Toss reader parses the canonical OpenAPI accounts and holding
           }],
         },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname === '/api/v1/orders') return new Response(JSON.stringify({
+        result: {
+          orders: [{
+            orderId: 'TOSS-OPEN-1', symbol: '005930', side: 'BUY', status: 'PARTIAL_FILLED',
+            price: '70000', quantity: '10', currency: 'KRW',
+            execution: { filledQuantity: '4', averageFilledPrice: '69950' },
+          }],
+          nextCursor: null, hasNext: false,
+        },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       return new Response('{}', { status: 404 });
     },
   });
@@ -104,9 +128,10 @@ test('vault-backed Toss reader parses the canonical OpenAPI accounts and holding
   assert.deepEqual(seen.map((row) => `${row.method} ${row.origin}${row.path}`), [
     'POST https://openapi.tossinvest.com/oauth2/token',
     'GET https://openapi.tossinvest.com/api/v1/accounts',
+    'GET https://openapi.tossinvest.com/api/v1/orders',
     'GET https://openapi.tossinvest.com/api/v1/holdings',
   ]);
-  assert.equal(seen[1]?.accountHeader, null); assert.equal(seen[2]?.accountHeader, '1');
+  assert.equal(seen[1]?.accountHeader, null); assert.equal(seen[2]?.accountHeader, '1'); assert.equal(seen[2]?.search, '?status=OPEN'); assert.equal(seen[3]?.accountHeader, '1');
   assert.equal(result.connected, true);
   assert.equal(result.positions?.[0]?.symbol, '005930');
   assert.equal(result.positions?.[0]?.market, 'KR');
@@ -117,6 +142,7 @@ test('vault-backed Toss reader parses the canonical OpenAPI accounts and holding
   assert.equal(result.positions?.[0]?.marketValue, 213000);
   assert.equal(result.positions?.[0]?.unrealizedPnl, 3000);
   assert.ok(Math.abs((result.positions?.[0]?.unrealizedPnlPercent ?? 0) - 1.42857143) < 1e-8);
+  assert.equal(result.openOrders?.[0]?.id, 'TOSS-OPEN-1'); assert.equal(result.openOrders?.[0]?.remainingQuantity, 6);
   assert.equal(result.orderRequests, 0); assert.equal(result.cancelRequests, 0); assert.equal(result.transferRequests, 0); assert.equal(result.withdrawalRequests, 0);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('TOSS_CLIENT_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('TOSS_SECRET_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('TOSS_TOKEN_RUNTIME_TEST_ONLY'), false);
