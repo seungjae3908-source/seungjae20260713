@@ -16,6 +16,12 @@ const KIWOOM_TOKEN_PATH = '/oauth2/token';
 const KIWOOM_ACCOUNT_PATH = '/api/dostk/acnt';
 const TOKEN_REFRESH_SKEW_MS = 60_000;
 const MAX_READONLY_PAGES = 10;
+const KIWOOM_NO_DATA_CODE = 20;
+const KIWOOM_RATE_LIMIT_CODES = new Set([1700, 1701, 1702]);
+const KIWOOM_AUTH_CODES = new Set([
+  8001, 8002, 8003, 8005, 8006, 8009, 8010, 8011, 8012, 8015, 8016,
+  8030, 8031, 8040, 8050, 8103,
+]);
 
 function record(value: unknown): value is Row {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -26,8 +32,30 @@ function rows(value: unknown, code: string): Row[] {
   return value;
 }
 
-function successCode(value: unknown) {
-  return value === 0 || value === '0';
+function normalizeReturnCode(value: unknown) {
+  if (typeof value === 'number' && Number.isInteger(value)) return value;
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  if (!/^-?\d+$/.test(text)) return null;
+  return Number(text);
+}
+
+function embeddedReturnCode(value: unknown) {
+  const match = /\[(\d{3,5}):|CODE=(\d{3,5})/.exec(String(value ?? ''));
+  if (!match) return null;
+  return Number(match[1] ?? match[2]);
+}
+
+function classifyPayloadFailure(payload: Row) {
+  const topLevel = normalizeReturnCode(payload.return_code);
+  if (topLevel === null) return new AccountReadonlyError('KIWOOM_ACCOUNT_RESPONSE_INVALID');
+  const embedded = embeddedReturnCode(payload.return_msg);
+  const effective = KIWOOM_RATE_LIMIT_CODES.has(topLevel) || KIWOOM_AUTH_CODES.has(topLevel)
+    ? topLevel
+    : embedded ?? topLevel;
+  if (KIWOOM_RATE_LIMIT_CODES.has(effective)) return new AccountReadonlyError('RATE_LIMITED', true);
+  if (KIWOOM_AUTH_CODES.has(effective)) return new AccountReadonlyError('KIWOOM_AUTH_OR_IP_REJECTED');
+  return new AccountReadonlyError('KIWOOM_REQUEST_REJECTED');
 }
 
 function safeJson(response: Response, code: string) {
@@ -118,10 +146,12 @@ export class KiwoomReadonlyProvider {
     });
     if (!response.ok) throw classifyHttpFailure(response);
     const body = await safeJson(response, 'KIWOOM_TOKEN_RESPONSE_INVALID');
-    if (!record(body) || !successCode(body.return_code) || typeof body.token !== 'string' || !body.token.trim()) {
-      throw new AccountReadonlyError(
-        record(body) && body.return_code !== undefined ? 'KIWOOM_AUTH_OR_IP_REJECTED' : 'KIWOOM_TOKEN_RESPONSE_INVALID',
-      );
+    if (!record(body)) throw new AccountReadonlyError('KIWOOM_TOKEN_RESPONSE_INVALID');
+    const returnCode = normalizeReturnCode(body.return_code);
+    if (returnCode === null) throw new AccountReadonlyError('KIWOOM_TOKEN_RESPONSE_INVALID');
+    if (returnCode !== 0) throw classifyPayloadFailure(body);
+    if (typeof body.token !== 'string' || !body.token.trim()) {
+      throw new AccountReadonlyError('KIWOOM_TOKEN_RESPONSE_INVALID');
     }
     const recordValue = { token: body.token.trim(), expiresAtMs: parseExpiresAt(body.expires_dt) };
     if (recordValue.expiresAtMs <= this.now() + TOKEN_REFRESH_SKEW_MS) {
@@ -177,9 +207,11 @@ export class KiwoomReadonlyProvider {
     if (!response.ok) throw classifyHttpFailure(response);
     const payload = await safeJson(response, 'KIWOOM_ACCOUNT_RESPONSE_INVALID');
     if (!record(payload)) throw new AccountReadonlyError('KIWOOM_ACCOUNT_RESPONSE_INVALID');
-    if (!successCode(payload.return_code)) throw new AccountReadonlyError('KIWOOM_REQUEST_REJECTED');
-    const contYn = response.headers.get('cont-yn');
-    const nextKey = response.headers.get('next-key');
+    const returnCode = normalizeReturnCode(payload.return_code);
+    if (returnCode === null) throw new AccountReadonlyError('KIWOOM_ACCOUNT_RESPONSE_INVALID');
+    if (returnCode !== 0 && returnCode !== KIWOOM_NO_DATA_CODE) throw classifyPayloadFailure(payload);
+    const contYn = returnCode === KIWOOM_NO_DATA_CODE ? 'N' : response.headers.get('cont-yn');
+    const nextKey = returnCode === KIWOOM_NO_DATA_CODE ? null : response.headers.get('next-key');
     return { body: payload, contYn, nextKey };
   }
 
@@ -197,6 +229,9 @@ export class KiwoomReadonlyProvider {
     for (let pageIndex = 0; pageIndex < MAX_READONLY_PAGES; pageIndex += 1) {
       const page = await this.page(token, apiId, body, continuation, signal);
       firstBody ??= page.body;
+      if (normalizeReturnCode(page.body.return_code) === KIWOOM_NO_DATA_CODE) {
+        return { rows: result, firstBody };
+      }
       result.push(...rows(page.body[listKey], 'KIWOOM_ACCOUNT_RESPONSE_INVALID'));
       if (page.contYn !== 'Y') return { rows: result, firstBody };
       if (!page.nextKey) throw new AccountReadonlyError('KIWOOM_CONTINUATION_INVALID');
