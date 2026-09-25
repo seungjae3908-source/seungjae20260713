@@ -1,14 +1,17 @@
 import { hasCapability } from '../../../packages/member-access/src/index.js';
 import { getSupabase, hasSupabaseServerKey } from '../lib/supabase';
 import { MarketDataService } from './market-data.service';
+import { collectStockNewsDisclosureIntelligence } from './news-disclosure-market-intelligence.service';
 import {
   deliverMemberHoldingTelegramAlert,
+  type MemberHoldingNewsEvidence,
   type MemberHoldingTelegramEvidence,
 } from './member-holdings-telegram-alert.service';
 import type { PersonalTelegramAlertDispatchResult } from './personal-telegram-alert.service';
 import type { ScannerAlertCandidate } from './scanner-signal.types';
 
 export const MEMBER_HOLDINGS_TELEGRAM_PRODUCER_ENV = 'MEMBER_HOLDINGS_TELEGRAM_PRODUCER_ENABLED';
+export const MEMBER_HOLDINGS_NEWS_INTELLIGENCE_ENV = 'MEMBER_HOLDINGS_NEWS_INTELLIGENCE_ENABLED';
 
 const MAX_PROFILE_LOOKUP_BATCH = 200;
 const MAX_MEMBER_DELIVERY_CONCURRENCY = 8;
@@ -33,6 +36,11 @@ export type MemberHoldingQuote = {
 };
 
 export type MemberHoldingQuoteReader = (symbol: string) => Promise<MemberHoldingQuote>;
+export type MemberHoldingNewsReader = (
+  symbol: string,
+  market: CanonicalStockMarket,
+  companyName: string,
+) => Promise<MemberHoldingNewsEvidence[]>;
 export type MemberHoldingAlertDeliverer = (
   evidence: MemberHoldingTelegramEvidence,
 ) => Promise<PersonalTelegramAlertDispatchResult>;
@@ -60,6 +68,8 @@ export type MemberHoldingProducerDependencies = {
   enabled?: boolean;
   repository?: MemberHoldingProducerRepository;
   quoteReader?: MemberHoldingQuoteReader;
+  newsReader?: MemberHoldingNewsReader;
+  newsEnabled?: boolean;
   deliver?: MemberHoldingAlertDeliverer;
   now?: () => Date;
 };
@@ -115,6 +125,12 @@ export function memberHoldingProfileEligibleForPersonalTelegram(profile: Profile
 
 export function memberHoldingsTelegramProducerEnabled(
   value: unknown = process.env[MEMBER_HOLDINGS_TELEGRAM_PRODUCER_ENV],
+): boolean {
+  return typeof value === 'string' && value.trim().toLowerCase() === 'true';
+}
+
+export function memberHoldingsNewsIntelligenceEnabled(
+  value: unknown = process.env[MEMBER_HOLDINGS_NEWS_INTELLIGENCE_ENV],
 ): boolean {
   return typeof value === 'string' && value.trim().toLowerCase() === 'true';
 }
@@ -175,11 +191,51 @@ async function runtimeQuoteReader(symbol: string): Promise<MemberHoldingQuote> {
   };
 }
 
+function newsImpact(value: unknown): MemberHoldingNewsEvidence['impact'] {
+  const normalized = String(value ?? '').toUpperCase();
+  if (normalized === 'POSITIVE' || normalized === 'NEGATIVE' || normalized === 'NEUTRAL') return normalized;
+  if (normalized === 'MIXED') return 'MIXED';
+  return null;
+}
+
+async function runtimeHoldingNewsReader(
+  symbol: string,
+  market: CanonicalStockMarket,
+  companyName: string,
+): Promise<MemberHoldingNewsEvidence[]> {
+  const result = await collectStockNewsDisclosureIntelligence({
+    ticker: symbol,
+    market,
+    companyName,
+    analysisScope: 'PORTFOLIO',
+    context: { portfolioHolding: true },
+    maxEvents: 3,
+    maxAiEvents: 2,
+  }, { timeoutMs: 1_500 });
+
+  return result.events.flatMap((event): MemberHoldingNewsEvidence[] => {
+    const title = cleanText(event.headline, 180);
+    if (!title) return [];
+    const analysis = event.ai?.analysis ?? null;
+    return [{
+      kind: event.kind === 'NEWS' ? 'NEWS' : 'DISCLOSURE',
+      title,
+      source: cleanText(event.sourceName, 80) || null,
+      url: event.sourceUrl,
+      publishedAt: event.publishedAt,
+      impact: newsImpact(analysis?.sentiment),
+      impactReason: cleanText(analysis?.summaryShort, 180) || null,
+    }];
+  });
+}
+
 function scannerEvidenceForHolder(
   alert: ScannerAlertCandidate,
   holder: MemberHoldingStockHolder,
   quote: MemberHoldingQuote,
   occurredAt: string,
+  news: readonly MemberHoldingNewsEvidence[],
+  newsWarning: string | null,
 ): MemberHoldingTelegramEvidence {
   return {
     userId: holder.userId,
@@ -193,6 +249,7 @@ function scannerEvidenceForHolder(
     averageEntryPrice: holder.averageEntryPrice,
     changePercent: quote.changePercent,
     triggerReasons: alert.evidence,
+    news: news.length ? news : undefined,
     tradePlan: {
       targetPrices: alert.targets,
       stopLoss: alert.stopLoss,
@@ -200,6 +257,7 @@ function scannerEvidenceForHolder(
     warnings: [
       `Scanner ${alert.state} 신호와 실제 앱 보유종목이 일치했습니다.`,
       '실제 주문/체결이 아니며 AI 판단·신뢰도·성과 근거가 없으면 N/A로 유지됩니다.',
+      ...(newsWarning ? [newsWarning] : []),
     ],
   };
 }
@@ -248,12 +306,24 @@ export async function fanoutMemberHoldingScannerAlert(
     return { ...emptySummary('QUOTE_UNAVAILABLE'), matchedCount: holders.length };
   }
 
+  const newsEnabled = dependencies.newsEnabled ?? memberHoldingsNewsIntelligenceEnabled();
+  let news: MemberHoldingNewsEvidence[] = [];
+  let newsWarning: string | null = null;
+  if (newsEnabled) {
+    const newsReader = dependencies.newsReader ?? runtimeHoldingNewsReader;
+    try {
+      news = await newsReader(symbol, market, holders[0]?.name ?? symbol);
+    } catch {
+      newsWarning = '보유종목 뉴스·공시 분석을 불러오지 못해 해당 영역은 N/A로 유지됩니다.';
+    }
+  }
+
   const occurredAt = (dependencies.now ?? (() => new Date()))().toISOString();
   const deliver = dependencies.deliver ?? deliverMemberHoldingTelegramAlert;
   const settled = await deliverInBoundedBatches(
     holders,
     deliver,
-    (holder) => scannerEvidenceForHolder(alert, holder, quote, occurredAt),
+    (holder) => scannerEvidenceForHolder(alert, holder, quote, occurredAt, news, newsWarning),
   );
 
   let policyCount = 0;

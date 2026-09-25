@@ -35,6 +35,7 @@ const AlertsPage = lazy(() => import('@/pages/alerts'));
 const ScannerPage = lazy(() => import('@/pages/scanner'));
 const loadSignalScannerPage = () => import('@/pages/signal-scanner');
 const SignalScannerPage = lazy(loadSignalScannerPage);
+const TelegramSignalOrderPage = lazy(() => import('@/pages/telegram-signal-order'));
 const loadStockInfoPage = () => import('@/pages/stock-info');
 const StockInfoPage = lazy(loadStockInfoPage);
 const loadDetailPage = () => import('@/pages/detail');
@@ -264,6 +265,9 @@ function HomeAccess() { return builder('HOME', <HomePage />); }
 function ScannerAccess() {
   return gated('canAccessBasicInfo', <TechnicalWorkspacePage />);
 }
+function TelegramSignalOrderAccess() {
+  return gated('canAccessBasicInfo', <TelegramSignalOrderPage />);
+}
 function AiChartAccess() { return gated('canAccessRiskPreview', builder('AI_CHART', <AiChartPage />)); }
 function AiChatAccess() { return gated('canAccessBasicInfo', builder('AI_CHAT', <AiChatPage />)); }
 function RecommendationsAccess() { return gated('canAccessRiskPreview', <RecommendationsPage />); }
@@ -358,6 +362,7 @@ function ApprovedRouter() {
     <Route path="/market-rankings" component={SearchPage} />
     <Route path="/market-browser" component={StocksPage} />
     <Route path="/scanner" component={ScannerAccess} />
+    <Route path="/telegram-order" component={TelegramSignalOrderAccess} />
     <Route path="/ai-chart" component={AiChartAccess} />
     <Route path="/ai-chat" component={AiChatAccess} />
     <Route path="/research-center" component={ResearchCenterAccess} />

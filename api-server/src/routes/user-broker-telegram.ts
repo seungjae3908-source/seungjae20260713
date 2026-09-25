@@ -87,6 +87,9 @@ function telegramRuntimeState() {
     aiExplanationEnabled: process.env.TELEGRAM_SIGNAL_AI_ENABLED === 'true',
     signalFollowupEnabled: process.env.TELEGRAM_SIGNAL_FOLLOWUP_ENABLED === 'true',
     memberHoldingsEnabled: process.env.MEMBER_HOLDINGS_TELEGRAM_PRODUCER_ENABLED === 'true',
+    marketBriefEnabled: process.env.LIVE_TELEGRAM_ACTIVATION_APPROVED === 'true'
+      && process.env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED !== 'false'
+      && process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED === 'true',
     orderAuthority: 'NONE' as const,
     privateTradingApiAllowed: false as const,
     realOrderAllowed: false as const,
