@@ -87,7 +87,52 @@ async function withProviderDeadline<T>(
   }
 }
 
+type ReadonlyHttpProvider = 'upbit' | 'bitget';
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+async function upbitFailureName(response: Response) {
+  try {
+    const body: unknown = await response.clone().json();
+    const root = objectRecord(body);
+    const error = objectRecord(root?.error);
+    return typeof error?.name === 'string' ? error.name : '';
+  } catch {
+    return '';
+  }
+}
+
+async function classifyReadonlyHttpFailure(provider: ReadonlyHttpProvider, response: Response) {
+  if (response.status === 429 || (provider === 'upbit' && response.status === 418)) {
+    return new AccountReadonlyError('RATE_LIMITED', true);
+  }
+  if (response.status >= 500) {
+    return new AccountReadonlyError('PROVIDER_UNAVAILABLE', true);
+  }
+
+  if (provider === 'upbit') {
+    const failureName = await upbitFailureName(response);
+    if (response.status === 401) {
+      if (failureName === 'no_authorization_ip') return new AccountReadonlyError('UPBIT_IP_NOT_ALLOWED');
+      return new AccountReadonlyError('UPBIT_AUTH_FAILED');
+    }
+    if (response.status === 403) {
+      return new AccountReadonlyError('UPBIT_PERMISSION_DENIED');
+    }
+    return new AccountReadonlyError('UPBIT_REQUEST_REJECTED');
+  }
+
+  if (response.status === 401) return new AccountReadonlyError('BITGET_AUTH_FAILED');
+  if (response.status === 403) return new AccountReadonlyError('BITGET_PERMISSION_DENIED');
+  return new AccountReadonlyError('BITGET_REQUEST_REJECTED');
+}
+
 function createReadonlyTransport(
+  provider: ReadonlyHttpProvider,
   origin: string,
   allowedPaths: ReadonlySet<string>,
   fetchImpl: typeof fetch,
@@ -119,9 +164,7 @@ function createReadonlyTransport(
       throw error;
     }
 
-    if (response.status === 401 || response.status === 403) throw new AccountReadonlyError('AUTH_FAILED');
-    if (response.status === 429) throw new AccountReadonlyError('RATE_LIMITED', true);
-    if (!response.ok) throw new AccountReadonlyError('PROVIDER_UNAVAILABLE', response.status >= 500);
+    if (!response.ok) throw await classifyReadonlyHttpFailure(provider, response);
 
     try {
       return await response.json();
@@ -165,11 +208,13 @@ export function createVaultBackedAccountReaders(
   const providerTimeoutMs = normalizedProviderTimeoutMs(options.providerTimeoutMs);
 
   const upbitTransport = createReadonlyTransport(
+    'upbit',
     READONLY_TARGETS.upbit.origin,
     READONLY_TARGETS.upbit.paths,
     fetchImpl,
   );
   const bitgetTransport = createReadonlyTransport(
+    'bitget',
     READONLY_TARGETS.bitget.origin,
     READONLY_TARGETS.bitget.paths,
     fetchImpl,
