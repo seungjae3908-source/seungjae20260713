@@ -1,6 +1,6 @@
 import { constants as fsConstants } from 'node:fs';
 import { access, readFile } from 'node:fs/promises';
-import { isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { restoreRecurringPaperLoopState } from '../../../market-prediction-lab/src/recurring-paper-loop-v1.js';
 import { bindNaturalPaperTriggerBoundSettlementEvidence } from '../../../market-prediction-lab/src/natural-paper-trigger-bound-settlement-cost-producer-v1.js';
 import { manualPaperEvidenceSha256 } from './manual-paper-canonical-contract.service';
@@ -14,6 +14,8 @@ export const MANUAL_PAPER_CANONICAL_RUNTIME_READINESS_VERSION =
 
 const DEFAULT_STATE_ROOT = '/opt/stock-app-data/paper-forward-v1';
 const DEFAULT_PAPER_FORWARD_ROOT = '/opt/stock-app-data/paper-forward-v1/runtime-state';
+const DEFAULT_FORWARD_OBSERVER_ARTIFACT_RELATIVE_PATH = 'forward-observer';
+const DEFAULT_VALIDATION_RECEIPT_RELATIVE_PATH = 'validation-receipts';
 const BINDING_RELATIVE_PATH = 'publisher-binding.json';
 const SNAPSHOT_RELATIVE_PATH = 'publisher/paper-state-v2.json';
 const RECURRING_STATE_RELATIVE_PATH = 'state/recurring-paper-loop.json';
@@ -236,18 +238,22 @@ function parseJson(text: string, blocker: string, blockers: string[]): unknown |
   }
 }
 
-function explicitAbsolutePath(
+function canonicalOwnerPath(
   env: RuntimeEnvironment,
   key: string,
+  relativePath: string,
   blocker: string,
   blockers: string[],
 ): string | null {
   const raw = String(env[key] ?? '').trim();
-  if (!raw || !isAbsolute(raw)) {
-    pushUnique(blockers, blocker);
-    return null;
+  if (raw) {
+    if (!isAbsolute(raw)) {
+      pushUnique(blockers, blocker);
+      return null;
+    }
+    return resolve(raw);
   }
-  return resolve(raw);
+  return join(stateRoot(env), relativePath);
 }
 
 function stateRoot(env: RuntimeEnvironment): string {
@@ -469,9 +475,10 @@ export async function probeManualPaperCanonicalRuntimeReadiness(
     'PAPER_CANONICAL_CLOSE_POSITION_REBIND_NOT_READY',
   );
 
-  const artifactRoot = explicitAbsolutePath(
+  const artifactRoot = canonicalOwnerPath(
     env,
     'PAPER_CANONICAL_FORWARD_OBSERVER_ARTIFACT_ROOT',
+    DEFAULT_FORWARD_OBSERVER_ARTIFACT_RELATIVE_PATH,
     'PAPER_CANONICAL_FORWARD_OBSERVER_ARTIFACT_ROOT_UNCONFIGURED',
     blockers,
   );
@@ -495,9 +502,10 @@ export async function probeManualPaperCanonicalRuntimeReadiness(
     'PAPER_CANONICAL_FORWARD_OBSERVER_ARTIFACTS_NOT_READY',
   );
 
-  const receiptRoot = explicitAbsolutePath(
+  const receiptRoot = canonicalOwnerPath(
     env,
     'PAPER_CANONICAL_VALIDATION_RECEIPT_ROOT',
+    DEFAULT_VALIDATION_RECEIPT_RELATIVE_PATH,
     'PAPER_CANONICAL_VALIDATION_RECEIPT_ROOT_UNCONFIGURED',
     blockers,
   );
@@ -506,8 +514,12 @@ export async function probeManualPaperCanonicalRuntimeReadiness(
     try {
       await dependencies.accessPath(receiptRoot, fsConstants.R_OK | fsConstants.W_OK);
     } catch {
-      receiptPathReady = false;
-      pushUnique(blockers, 'PAPER_CANONICAL_VALIDATION_RECEIPT_ROOT_NOT_ACCESSIBLE');
+      try {
+        await dependencies.accessPath(dirname(receiptRoot), fsConstants.R_OK | fsConstants.W_OK);
+      } catch {
+        receiptPathReady = false;
+        pushUnique(blockers, 'PAPER_CANONICAL_VALIDATION_RECEIPT_ROOT_NOT_ACCESSIBLE');
+      }
     }
   }
   const maximumAgeMs = Number(env.PAPER_CANONICAL_VALIDATION_RECEIPT_MAXIMUM_AGE_MS);
