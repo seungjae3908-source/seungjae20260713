@@ -224,6 +224,7 @@ test('unified ledger merges read-only Upbit history in memory without persisting
     historyCalls += 1;
     return {
       payloads: historyPayloads,
+      realizedEvidence: [],
       requestedRange: '30D',
       effectiveDays: 30,
       rangeCapped: false,
