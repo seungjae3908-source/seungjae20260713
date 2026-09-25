@@ -1,0 +1,374 @@
+name: Paper Canonical Runtime Read-only Readiness
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/paper-canonical-runtime-readiness.yml'
+      - 'api-server/build.mjs'
+      - 'api-server/package.json'
+      - 'api-server/scripts/check-paper-canonical-runtime-readiness.ts'
+      - 'api-server/scripts/check-paper-canonical-runtime-readiness-remote.ts'
+      - 'api-server/src/services/manual-paper-canonical-runtime-readiness.service.ts'
+      - 'api-server/src/services/manual-paper-canonical-runtime-readiness.service.test.ts'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paper-canonical-runtime-readiness-${{ github.event_name }}-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact PR head without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify read-only workflow boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          workflow='.github/workflows/paper-canonical-runtime-readiness.yml'
+          remote='api-server/scripts/check-paper-canonical-runtime-readiness-remote.ts'
+          service='api-server/src/services/manual-paper-canonical-runtime-readiness.service.ts'
+
+          grep -Fq "startsWith(github.event.comment.body, '/diagnose-paper-canonical-runtime-readiness ')" "$workflow"
+          grep -Fq "environment: production" "$workflow"
+          grep -Fq "execFileSync('pm2', ['jlist']" "$remote"
+          grep -Fq "activationApplied: false" "$remote"
+          grep -Fq "readFile" "$service"
+          grep -Fq "access" "$service"
+
+          ! grep -Eq '^[[:space:]]{2}schedule:[[:space:]]*$' "$workflow"
+          ! grep -Eq '^[[:space:]]{2}workflow_dispatch:[[:space:]]*$' "$workflow"
+          ! grep -Eq 'contents:[[:space:]]+write' "$workflow"
+          ! grep -Eq 'actions:[[:space:]]+write' "$workflow"
+          ! grep -Eq 'deployments:[[:space:]]+write' "$workflow"
+          ! grep -Eq 'packages:[[:space:]]+write' "$workflow"
+          ! grep -Eq 'id-token:[[:space:]]+write' "$workflow"
+
+          if grep -Eiq 'pm2[[:space:]]+(start|restart|reload|stop|delete|save)|systemctl[[:space:]]+(enable|start|restart|stop)|service[[:space:]].*[[:space:]](start|restart|stop)' "$workflow" "$remote"; then
+            echo 'Runtime readiness diagnostics must never mutate process state.' >&2
+            exit 1
+          fi
+
+          if grep -Eq 'writeFile|appendFile|mkdir|rename|unlink|rmSync|rmdir|chmod|chown' "$remote" "$service"; then
+            echo 'Remote readiness code must not write server files.' >&2
+            exit 1
+          fi
+
+  diagnose:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      startsWith(github.event.comment.body, '/diagnose-paper-canonical-runtime-readiness ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    permissions:
+      contents: read
+      issues: write
+      statuses: read
+      actions: read
+    env:
+      PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      PROD_SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+
+    steps:
+      - name: Parse exact OWNER readiness command
+        id: command
+        shell: bash
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$COMMENT_AUTHOR" == 'seungjae3908-source' ]] || {
+            echo 'PAPER_CANONICAL_READINESS_OWNER_REQUIRED' >&2
+            exit 1
+          }
+          [[ "$AUTHOR_ASSOCIATION" == 'OWNER' ]] || {
+            echo 'PAPER_CANONICAL_READINESS_OWNER_REQUIRED' >&2
+            exit 1
+          }
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/diagnose-paper-canonical-runtime-readiness ([0-9a-f]{40})$/u.exec(body);
+          if (!match) throw new Error('PAPER_CANONICAL_READINESS_EXACT_COMMAND_REQUIRED');
+          appendFileSync(process.env.GITHUB_OUTPUT, `target_sha=${match[1]}\n`);
+          NODE
+
+      - name: Require exact current main and coherent Required CI 6/6
+        id: gate
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const targetSha = process.env.TARGET_SHA;
+            const branch = (await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            })).data;
+            if (branch.commit.sha !== targetSha) {
+              core.setFailed(`PAPER_CANONICAL_READINESS_MAIN_SHA_MISMATCH:current=${branch.commit.sha}`);
+              return;
+            }
+
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: targetSha,
+              per_page: 100,
+            });
+            statuses.sort((left, right) => Number(right.id) - Number(left.id));
+            const latest = new Map();
+            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+
+            const missing = required.filter((name) => latest.get(name)?.state !== 'success');
+            if (missing.length) {
+              core.setFailed(`PAPER_CANONICAL_READINESS_REQUIRED_CI_NOT_6_OF_6:${missing.join(',')}`);
+              return;
+            }
+
+            const runIds = new Set();
+            for (const name of required) {
+              const match = String(latest.get(name)?.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
+              if (!match) {
+                core.setFailed(`PAPER_CANONICAL_READINESS_STATUS_RUN_URL_MISSING:${name}`);
+                return;
+              }
+              runIds.add(Number(match[1]));
+            }
+            if (runIds.size !== 1) {
+              core.setFailed(`PAPER_CANONICAL_READINESS_CI_NOT_COHERENT:${[...runIds].join(',')}`);
+              return;
+            }
+
+            const runId = [...runIds][0];
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            })).data;
+            if (run.name !== 'Application CI'
+              || run.path !== '.github/workflows/futures-public-network-smoke.yml'
+              || Number(run.workflow_id) !== 325169344
+              || run.event !== 'push'
+              || run.head_branch !== 'main'
+              || run.head_sha !== targetSha
+              || Number(run.run_attempt) !== 1
+              || run.status !== 'completed'
+              || run.conclusion !== 'success') {
+              core.setFailed(`PAPER_CANONICAL_READINESS_CI_PROVENANCE_REJECTED:${runId}`);
+              return;
+            }
+            core.setOutput('required_ci_run_id', String(runId));
+
+      - name: Checkout exact current main without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.command.outputs.target_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Build sanitized remote readiness bundle
+        run: pnpm --filter @workspace/api-server run build:server
+
+      - name: Configure Production SSH for read-only probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$PROD_SSH_HOST"
+          test -n "$PROD_SSH_USER"
+          test -n "$PROD_SSH_PRIVATE_KEY"
+          mkdir -p ~/.ssh paper-canonical-readiness-artifacts
+          printf '%s\n' "$PROD_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          if [[ -n "$PROD_SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$PROD_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$PROD_SSH_PORT" -H "$PROD_SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Execute zero-mutation Production readiness probe
+        id: probe
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          bundle='api-server/dist/tools/check-paper-canonical-runtime-readiness-remote.mjs'
+          raw='paper-canonical-readiness-artifacts/raw.json'
+          test -f "$bundle"
+          remote_command="node --input-type=module - --expected-main-sha=$TARGET_SHA --pm2-name=stock-app"
+          ssh -i ~/.ssh/id_ed25519 -p "$PROD_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$PROD_SSH_USER@$PROD_SSH_HOST" "$remote_command" < "$bundle" > "$raw"
+
+      - name: Reduce to strict sanitized readiness evidence
+        id: sanitize
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+
+          const raw = JSON.parse(readFileSync('paper-canonical-readiness-artifacts/raw.json', 'utf8'));
+          const allowedStatus = new Set(['READY_FOR_ACTIVATION_REVIEW', 'BLOCKED']);
+          if (!allowedStatus.has(raw.status)) throw new Error('PAPER_CANONICAL_READINESS_STATUS_INVALID');
+          if (raw.activationApplied !== false) throw new Error('PAPER_CANONICAL_READINESS_ACTIVATION_MUTATION_FORBIDDEN');
+          if (raw.safety?.financialMutationPerformed !== false
+            || raw.safety?.environmentMutationPerformed !== false) {
+            throw new Error('PAPER_CANONICAL_READINESS_MUTATION_FLAG_INVALID');
+          }
+
+          const checks = Array.isArray(raw.checks)
+            ? raw.checks.map((row) => ({
+                name: String(row?.name ?? ''),
+                passed: row?.passed === true,
+              }))
+            : [];
+          const blockers = Array.isArray(raw.blockers)
+            ? [...new Set(raw.blockers.map((value) => String(value)))]
+            : [];
+
+          for (const value of [...checks.map((row) => row.name), ...blockers]) {
+            if (!/^[A-Z0-9_\-]+$/u.test(value)) {
+              throw new Error('PAPER_CANONICAL_READINESS_UNSAFE_DIAGNOSTIC_STRING');
+            }
+          }
+
+          const safe = {
+            schemaVersion: 'paper-canonical-runtime-readiness-evidence-v1',
+            targetSha: process.env.TARGET_SHA,
+            status: raw.status,
+            readyForActivationReview: raw.readyForActivationReview === true,
+            activationApplied: false,
+            runtimeProcessReady: raw.runtimeProcessReady === true,
+            bridgeEnabled: raw.bridgeEnabled === true,
+            deployShaBound: raw.deployShaBound === true,
+            paperStateBindingReady: raw.paperStateBindingReady === true,
+            paperStateConfigurationMode: ['RUNTIME_BINDING', 'ENV_FALLBACK', 'NONE'].includes(raw.paperStateConfigurationMode)
+              ? raw.paperStateConfigurationMode
+              : 'NONE',
+            paperStateSnapshotReady: raw.paperStateSnapshotReady === true,
+            naturalPaperStateReady: raw.naturalPaperStateReady === true,
+            fullCostComponentsReady: raw.fullCostComponentsReady === true,
+            settlementDurablePacketReady: raw.settlementDurablePacketReady === true,
+            closePositionCanonicalRebindReady: raw.closePositionCanonicalRebindReady === true,
+            forwardObserverArtifactsReady: raw.forwardObserverArtifactsReady === true,
+            validationReceiptPathReady: raw.validationReceiptPathReady === true,
+            safetyBoundaryReady: raw.safetyBoundaryReady === true,
+            checks,
+            blockers,
+            serverFilesWritten: 0,
+            serverFilesDeleted: 0,
+            serverProcessesRestarted: 0,
+            deploymentExecuted: 0,
+            databaseChanges: 0,
+            secretValuesRecorded: 0,
+            liveTrading: false,
+            autoTrading: false,
+            realOrderEnabled: false,
+            privateTradingApiAllowed: false,
+            executionAuthority: 'NONE',
+          };
+
+          writeFileSync(
+            'paper-canonical-readiness-artifacts/evidence.json',
+            `${JSON.stringify(safe, null, 2)}\n`,
+          );
+          appendFileSync(process.env.GITHUB_OUTPUT, `status=${safe.status}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `ready=${safe.readyForActivationReview}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `blockers=${safe.blockers.join(',') || 'NONE'}\n`);
+          NODE
+          rm -f paper-canonical-readiness-artifacts/raw.json
+
+      - name: Upload sanitized read-only readiness evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-canonical-runtime-readiness-${{ steps.command.outputs.target_sha }}-${{ github.run_id }}
+          path: paper-canonical-readiness-artifacts/evidence.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Record Release-Control readiness result
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+          REQUIRED_CI_RUN: ${{ steps.gate.outputs.required_ci_run_id }}
+          READINESS_STATUS: ${{ steps.sanitize.outputs.status }}
+          READINESS_READY: ${{ steps.sanitize.outputs.ready }}
+          READINESS_BLOCKERS: ${{ steps.sanitize.outputs.blockers }}
+        with:
+          script: |
+            const lines = [
+              '[PAPER_CANONICAL_RUNTIME_READINESS]',
+              `targetMainSha=${process.env.TARGET_SHA}`,
+              `requiredCiRun=${process.env.REQUIRED_CI_RUN}`,
+              `status=${process.env.READINESS_STATUS}`,
+              `readyForActivationReview=${process.env.READINESS_READY}`,
+              `blockers=${process.env.READINESS_BLOCKERS}`,
+              `workflowRunId=${context.runId}`,
+              'checks=DEPLOY_SHA,PAPER_STATE,NATURAL_STATE,FULL_COST_8,SETTLEMENT_PACKET,CLOSE_POSITION_REBIND,FORWARD_ARTIFACTS,VALIDATION_RECEIPT,SAFETY',
+              'activationApplied=false',
+              'serverFilesWritten=0',
+              'serverFilesDeleted=0',
+              'serverProcessesRestarted=0',
+              'deploymentExecuted=0',
+              'databaseChanges=0',
+              'secretValuesRecorded=0',
+              'LIVE_TRADING=false',
+              'AUTO_TRADING=false',
+              'REAL_ORDER_ENABLED=false',
+              'PRIVATE_TRADING_API_ALLOWED=false',
+              'executionAuthority=NONE',
+              '',
+              'This is read-only activation-readiness evidence only. It does not authorize or apply bridge activation.',
+            ];
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: lines.join('\n'),
+            });
