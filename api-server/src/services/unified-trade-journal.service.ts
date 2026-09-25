@@ -23,7 +23,7 @@ export const JOURNAL_COST_SAFETY = Object.freeze({
   privateBrokerRequests: 0,
 });
 
-export const TRADE_SOURCES = ['TOSS_MANUAL', 'TOSS_API', 'UPBIT_API', 'BITGET_API', 'APP_PAPER', 'APP_SHADOW', 'APP_AUTO'] as const;
+export const TRADE_SOURCES = ['TOSS_MANUAL', 'TOSS_API', 'UPBIT_API', 'BITGET_API', 'KIWOOM_API', 'APP_PAPER', 'APP_SHADOW', 'APP_AUTO'] as const;
 export const TRADE_MARKETS = ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'] as const;
 export const TRADE_RANGES = ['TODAY', '7D', '30D', '90D', '1Y', 'ALL'] as const;
 
@@ -805,6 +805,7 @@ function brokerForSource(source: TradeSource): UnifiedTradeOrder['broker'] {
   if (source === 'TOSS_API') return 'TOSS';
   if (source === 'UPBIT_API') return 'UPBIT';
   if (source === 'BITGET_API') return 'BITGET';
+  if (source === 'KIWOOM_API') return 'KIWOOM';
   return 'APP';
 }
 
