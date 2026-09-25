@@ -37,6 +37,7 @@ function privateReadRuntime() {
     LIVE_TRADING_ENABLED: 'false',
     AUTO_TRADING_ENABLED: 'false',
     TOSS_ORDER_ENABLED: 'false',
+    KIWOOM_ORDER_ENABLED: 'false',
     UPBIT_ORDER_ENABLED: 'false',
     BITGET_ORDER_ENABLED: 'false',
     TRANSFER_ENABLED: 'false',
@@ -109,11 +110,12 @@ test('read-only credential parser rejects mutation permissions, missing Toss sec
   }), /READONLY_PURPOSE_CONFIRMATION_REQUIRED/);
 });
 
-test('three-provider credentials are encrypted in the account-readonly vault and never stored in trading policy state', async () => {
+test('four-provider credentials are encrypted in the account-readonly vault and never stored in trading policy state', async () => {
   await withMasterKey(async () => {
     const repository = new InMemoryAccountReadonlyCredentialRepository();
     const fixtures = {
       toss: { clientId: 'TOSS_CLIENT_SAVE_TEST', clientSecret: 'TOSS_SECRET_SAVE_TEST' },
+      kiwoom: { appKey: 'KIWOOM_APP_SAVE_TEST', appSecret: 'KIWOOM_SECRET_SAVE_TEST' },
       upbit: { accessKey: 'UPBIT_ACCESS_SAVE_TEST', secretKey: 'UPBIT_SECRET_SAVE_TEST' },
       bitget: { apiKey: 'BITGET_API_SAVE_TEST', secretKey: 'BITGET_SECRET_SAVE_TEST', passphrase: 'BITGET_PASS_SAVE_TEST' },
     } as const;
@@ -130,12 +132,13 @@ test('three-provider credentials are encrypted in the account-readonly vault and
     }
 
     assert.equal(await repository.get('user-a', 'toss') !== null, true);
+    assert.equal(await repository.get('user-a', 'kiwoom') !== null, true);
     assert.equal(await repository.get('user-a', 'upbit') !== null, true);
     assert.equal(await repository.get('user-a', 'bitget') !== null, true);
   });
 });
 
-test('secret-bearing staging private-read runtime defaults to loopback for Toss, Upbit or Bitget', () => {
+test('secret-bearing staging private-read runtime defaults to loopback for Toss, Kiwoom, Upbit or Bitget', () => {
   const runtime = privateReadRuntime();
   assert.equal(isStagingReadonlyCredentialRuntime({}), false);
   assert.equal(isStagingReadonlyCredentialRuntime({ APP_ENV: 'staging' }), false);
