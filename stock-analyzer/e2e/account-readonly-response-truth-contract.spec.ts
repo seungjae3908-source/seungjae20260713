@@ -208,6 +208,7 @@ async function installMalformedAccountSnapshot(page: Page) {
 
 test('recognizes only canonical provider snapshot GET routes', () => {
   expect(isAccountReadonlySnapshotPath('/api/accounts/read-only/toss', 'GET')).toBe(true);
+  expect(isAccountReadonlySnapshotPath('/api/accounts/read-only/kiwoom', 'GET')).toBe(true);
   expect(isAccountReadonlySnapshotPath('/api/accounts/read-only/upbit', 'GET')).toBe(true);
   expect(isAccountReadonlySnapshotPath('/api/accounts/read-only/bitget', 'GET')).toBe(true);
   expect(isAccountReadonlySnapshotPath('/api/accounts/read-only/credentials/toss', 'GET')).toBe(false);
