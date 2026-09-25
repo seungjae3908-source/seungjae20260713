@@ -41,6 +41,7 @@ function positionCurrency(position: CanonicalPosition): PortfolioCurrency | null
   if (position.market === 'KR') return 'KRW';
   if (position.market === 'US') return 'USD';
   if (position.market === 'BITGET') return 'USDT';
+  if (position.market === 'UPBIT' && (position.currentPrice != null || position.marketValue != null)) return 'KRW';
   return null;
 }
 
