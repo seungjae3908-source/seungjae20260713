@@ -14,8 +14,10 @@ import type { ScannerAlertCandidate, ScannerAssetClass } from './scanner-signal.
 import { markTelegramSignalAnnounced } from './telegram-signal-followup.service';
 import {
   sendTelegramAlert,
+  sendTelegramAlertWithReceipt,
   type TelegramAlertInput,
   type TelegramAlertResult,
+  type TelegramDeliveryReceipt,
 } from './telegram-notification.service';
 import {
   evaluateTelegramSignalFreshness,
@@ -317,8 +319,15 @@ export async function deliverScannerTelegramAlerts(
       : addTelegramSignalFreshness(base, alert, context);
 
     let result: TelegramAlertResult;
+    let receipt: TelegramDeliveryReceipt | null = null;
     try {
-      result = await sender(input);
+      if (sender === sendTelegramAlert) {
+        const tracked = await sendTelegramAlertWithReceipt(input);
+        result = tracked.ok ? { ok: true, attempts: tracked.attempts } : tracked;
+        receipt = tracked.ok ? tracked.receipt : null;
+      } else {
+        result = await sender(input);
+      }
     } catch (error) {
       logger.warn(
         {
@@ -331,9 +340,9 @@ export async function deliverScannerTelegramAlerts(
       return;
     }
 
-    if (result.ok || result.skipped === 'DUPLICATE') {
+    if (result.ok) {
       try {
-        await markTelegramSignalAnnounced(alert);
+        await markTelegramSignalAnnounced(alert, Date.now(), undefined, receipt);
       } catch (error) {
         logger.warn(
           {
