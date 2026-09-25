@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, KeyRound, LockKeyhole, RefreshCw, ShieldAlert, Trash2, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, KeyRound, LockKeyhole, RefreshCw, ShieldAlert, X } from 'lucide-react';
 import { authorizedFetch } from '@/lib/auth-fetch';
 
 type Provider = 'toss' | 'kiwoom' | 'upbit' | 'bitget';
