@@ -26,6 +26,7 @@ import {
   type UnifiedScannerStrategyMode,
 } from '@/lib/signal-scanner-profile';
 import type { FrontendScannerMarket } from '@/lib/signal-scanner-url';
+import { parseTelegramScannerIntent } from '@/lib/telegram-scanner-intent';
 
 export type ScannerView = 'KR' | 'US' | 'SPOT' | 'FUTURES';
 type RequestStatus = 'loading' | 'success' | 'empty' | 'partial' | 'cancelled' | 'error';
@@ -542,10 +543,16 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const [, navigate] = useLocation();
   const assetMode = useAssetMode();
   const analysisSelection = useAnalysisSelection();
-  const initialView: ScannerView = assetMode.asset === 'coin'
+  const telegramIntent = useMemo(
+    () => !embedded && typeof window !== 'undefined' ? parseTelegramScannerIntent(window.location.search) : null,
+    [embedded],
+  );
+  const fallbackInitialView: ScannerView = assetMode.asset === 'coin'
     ? assetMode.coinMarket === 'futures' ? 'FUTURES' : 'SPOT'
     : assetMode.stockMarket;
-  const initialStrategy: UnifiedScannerStrategyMode = initialView === 'KR' || initialView === 'US' ? 'swing' : 'scalping';
+  const initialView: ScannerView = telegramIntent?.view ?? fallbackInitialView;
+  const initialStrategy: UnifiedScannerStrategyMode = telegramIntent?.strategyMode
+    ?? (initialView === 'KR' || initialView === 'US' ? 'swing' : 'scalping');
   const [view, setView] = useState<ScannerView>(initialView);
   const [strategy, setStrategy] = useState<UnifiedScannerStrategyMode>(initialStrategy);
   const [embeddedTimeframe, setEmbeddedTimeframe] = useState<SignalScannerRequest['timeframe']>(() => defaultEmbeddedTimeframe(initialStrategy));
@@ -557,6 +564,11 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [showOrderPreparation, setShowOrderPreparation] = useState(false);
+  const [telegramOrderIntentState, setTelegramOrderIntentState] = useState<{
+    status: 'verified' | 'blocked';
+    message: string;
+  } | null>(null);
+  const telegramIntentHandledRef = useRef(false);
   const dataRef = useRef<ScannerResponse | null>(null);
   dataRef.current = data;
   const [errorMessage, setErrorMessage] = useState('');
@@ -743,6 +755,56 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
     setDetailOpen(true);
   };
 
+  useEffect(() => {
+    if (!telegramIntent || telegramIntentHandledRef.current) return;
+    if (status === 'loading' || status === 'cancelled') return;
+
+    if (status === 'error') {
+      telegramIntentHandledRef.current = true;
+      setTelegramOrderIntentState({
+        status: 'blocked',
+        message: '텔레그램 신호를 최신 시장데이터로 다시 검증하지 못해 주문 준비를 열지 않았습니다.',
+      });
+      return;
+    }
+
+    const candidate = normalizedCards.find((card) => {
+      if (card.symbol.trim().toUpperCase() !== telegramIntent.symbol) return false;
+      return telegramIntent.action == null || card.action === telegramIntent.action;
+    });
+
+    if (candidate) {
+      const selection = selectionFor(candidate);
+      analysisSelection.select(selection);
+      setSelectedSignalId(candidate.signalId);
+      setShowOrderPreparation(true);
+      setDetailOpen(true);
+      telegramIntentHandledRef.current = true;
+      setTelegramOrderIntentState({
+        status: 'verified',
+        message: '텔레그램 신호를 현재 시장데이터로 다시 검증했습니다. 진입·목표·손절은 과거 메시지가 아니라 최신 검색 결과를 사용합니다.',
+      });
+      return;
+    }
+
+    if (status === 'success' || status === 'empty' || status === 'partial') {
+      telegramIntentHandledRef.current = true;
+      setShowOrderPreparation(false);
+      setDetailOpen(false);
+      setTelegramOrderIntentState({
+        status: 'blocked',
+        message: '최신 검색 결과에서 같은 종목·방향의 유효 후보를 확인하지 못했습니다. 과거 진입가를 재사용하지 않고 주문 준비를 차단했습니다.',
+      });
+    }
+  }, [
+    analysisSelection,
+    data?.requestId,
+    effectiveTimeframe,
+    normalizedCards,
+    status,
+    telegramIntent,
+  ]);
+
   return (
     <main className={`h-full min-h-0 overflow-y-auto overscroll-contain bg-background ${embedded ? '' : 'pb-24'}`}>
       <div className="mx-auto w-full max-w-6xl space-y-4 p-3 sm:p-5">
@@ -760,6 +822,20 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
             </button>
           </div>
         </header>
+
+        {telegramOrderIntentState ? (
+          <section
+            role={telegramOrderIntentState.status === 'blocked' ? 'alert' : 'status'}
+            data-testid="telegram-order-intent-status"
+            className={`rounded-2xl border p-3 text-xs font-bold leading-5 ${
+              telegramOrderIntentState.status === 'verified'
+                ? 'border-positive/30 bg-positive/10 text-positive'
+                : 'border-warning/30 bg-warning/10 text-warning'
+            }`}
+          >
+            {telegramOrderIntentState.message}
+          </section>
+        ) : null}
 
         <section aria-label="검색 시장" className="grid grid-cols-2 gap-2 lg:grid-cols-4">
           {VIEWS.map((item) => (
