@@ -11,9 +11,12 @@ import {
   type TelegramSignalFollowupRepository,
 } from './telegram-signal-followup.repository';
 import {
+  editTelegramMessage,
+  escapeTelegramHtml,
   sendTelegramAlert,
   type TelegramAlertInput,
   type TelegramAlertResult,
+  type TelegramMessageKind,
 } from './telegram-notification.service';
 
 export type TelegramSignalFollowupKind =
@@ -42,6 +45,9 @@ type AnnouncedSignal = {
   stopReached: boolean;
   announcedAt: number;
   lastSeenAt: number;
+  telegramMessageId?: number;
+  telegramMessageKind?: TelegramMessageKind;
+  baseMessageText?: string;
 };
 
 const announced = new Map<string, AnnouncedSignal>();
@@ -125,6 +131,11 @@ export async function markTelegramSignalAnnounced(
   alert: ScannerAlertCandidate,
   now = Date.now(),
   repository: TelegramSignalFollowupRepository = createTelegramSignalFollowupRepository(),
+  receipt?: {
+    messageId: number | null;
+    messageKind: TelegramMessageKind;
+    renderedText: string;
+  } | null,
 ): Promise<void> {
   prune(now);
   const state: AnnouncedSignal = {
@@ -136,6 +147,13 @@ export async function markTelegramSignalAnnounced(
     stopReached: false,
     announcedAt: now,
     lastSeenAt: now,
+    ...(receipt?.messageId != null && receipt.renderedText.trim()
+      ? {
+          telegramMessageId: receipt.messageId,
+          telegramMessageKind: receipt.messageKind,
+          baseMessageText: receipt.renderedText,
+        }
+      : {}),
   };
   await repository.save([toStored(state)]);
   announced.set(alert.signalId, state);
@@ -244,6 +262,58 @@ export function buildTelegramSignalFollowups(
   return updates;
 }
 
+function publicStatusLabel(
+  card: ScannerSignalCard,
+  state: AnnouncedSignal,
+  updates: readonly TelegramSignalFollowup[],
+): string {
+  if (state.stopReached || updates.some((update) => update.kind === 'STOP_THRESHOLD_REACHED')) return '🛑 손절 기준 도달';
+  if (card.signalState === 'INVALIDATED' || updates.some((update) => update.kind === 'INVALIDATED')) return '⛔ 신호 무효';
+  if (card.signalState === 'EXPIRED' || updates.some((update) => update.kind === 'EXPIRED')) return '⌛ 신호 종료';
+  const reached = [...state.reachedTargets].sort((left, right) => left - right);
+  if (reached.length) return `🎯 TP${reached.at(-1)! + 1} 도달`;
+  if (card.signalState === 'FILLED' || card.signalState === 'MANAGING') return '✅ 보유중';
+  if (card.signalState === 'ENTRY_ZONE' || card.signalState === 'APPROVAL_PENDING' || card.signalState === 'READY_FOR_APPROVAL') {
+    return '🚨 진입가능';
+  }
+  return '👀 관찰중';
+}
+
+function editedSignalMessage(
+  card: ScannerSignalCard,
+  state: AnnouncedSignal,
+  updates: readonly TelegramSignalFollowup[],
+): string {
+  const reachedTargets = new Set(state.reachedTargets);
+  const targetLine = card.pricePlan.targets.slice(0, 3).map((target, index) => (
+    `TP${index + 1} ${escapeTelegramHtml(target)} ${reachedTargets.has(index) ? '✅' : '·'}`
+  )).join(' · ') || 'TP N/A';
+  const entry = card.pricePlan.entryZone
+    ? `${escapeTelegramHtml(card.pricePlan.entryZone.from)}~${escapeTelegramHtml(card.pricePlan.entryZone.to)}`
+    : 'N/A';
+  const stop = card.pricePlan.stopLoss == null ? 'N/A' : escapeTelegramHtml(card.pricePlan.stopLoss);
+  const price = finite(card.price) ? escapeTelegramHtml(card.price) : 'N/A';
+  const dynamic = [
+    '',
+    '<b>현재 상태</b>',
+    publicStatusLabel(card, state, updates),
+    `현재가 ${price}`,
+    `진입 ${entry}`,
+    targetLine,
+    `Stop ${stop} ${state.stopReached ? '🛑' : ''}`,
+  ].join('\n');
+
+  const limit = state.telegramMessageKind === 'PHOTO' ? 1_024 : 4_096;
+  const base = state.baseMessageText ?? '';
+  if (base.length + dynamic.length + 1 <= limit) return `${base}\n${dynamic}`;
+
+  return [
+    `<b>${escapeTelegramHtml(card.symbol)} · 신호 업데이트</b>`,
+    `시장 ${escapeTelegramHtml(card.market)}`,
+    dynamic.trimStart(),
+  ].join('\n').slice(0, limit);
+}
+
 function destinationFor(card: ScannerSignalCard): string | null {
   return card.assetClass === 'stock'
     ? process.env.TELEGRAM_STOCK_CHAT_ID?.trim() || null
@@ -293,33 +363,74 @@ export async function deliverScannerTelegramFollowups(
   }
 
   const failedSignals = new Set<string>();
-
+  const updatesBySignal = new Map<string, TelegramSignalFollowup[]>();
   for (const update of updates) {
-    const card = cardBySignalId.get(update.signalId);
-    if (!card) continue;
+    const list = updatesBySignal.get(update.signalId) ?? [];
+    list.push(update);
+    updatesBySignal.set(update.signalId, list);
+  }
+
+  for (const [signalId, signalUpdates] of updatesBySignal) {
+    const card = cardBySignalId.get(signalId);
+    const state = announced.get(signalId);
+    if (!card || !state) continue;
     const destinationChatId = destinationFor(card);
     if (!destinationChatId) {
-      failedSignals.add(update.signalId);
+      failedSignals.add(signalId);
       continue;
     }
-    try {
-      const result = await sender({
-        type: 'intelligence_report',
-        symbol: update.symbol,
-        market: update.market,
-        details: update.details,
-        destinationChatId,
-        dedupeKey: update.dedupeKey,
-        duplicateWindowMs: 24 * 60 * 60_000,
-        cooldownMs: 0,
-      });
-      if (!result.ok && result.skipped !== 'DUPLICATE') failedSignals.add(update.signalId);
-    } catch (error) {
-      failedSignals.add(update.signalId);
+
+    if (
+      state.telegramMessageId != null
+      && state.telegramMessageKind != null
+      && state.baseMessageText
+    ) {
+      try {
+        const result = await editTelegramMessage({
+          destinationChatId,
+          messageId: state.telegramMessageId,
+          messageKind: state.telegramMessageKind,
+          text: editedSignalMessage(card, state, signalUpdates),
+        });
+        if (!result.ok) failedSignals.add(signalId);
+      } catch (error) {
+        failedSignals.add(signalId);
+        logger.warn(
+          { signalId, errorName: error instanceof Error ? error.name : 'UnknownError' },
+          'Telegram signal edit-in-place failed; restoring prior checkpoint for retry',
+        );
+      }
+      continue;
+    }
+
+    if (process.env.NODE_ENV === 'production') {
       logger.warn(
-        { signalId: update.signalId, errorName: error instanceof Error ? error.name : 'UnknownError' },
-        'Telegram signal followup transport failed; restoring prior checkpoint when durable storage is available',
+        { signalId },
+        'Telegram signal followup has no message receipt; legacy public alert is not duplicated',
       );
+      continue;
+    }
+
+    for (const update of signalUpdates) {
+      try {
+        const result = await sender({
+          type: 'intelligence_report',
+          symbol: update.symbol,
+          market: update.market,
+          details: update.details,
+          destinationChatId,
+          dedupeKey: update.dedupeKey,
+          duplicateWindowMs: 24 * 60 * 60_000,
+          cooldownMs: 0,
+        });
+        if (!result.ok && result.skipped !== 'DUPLICATE') failedSignals.add(signalId);
+      } catch (error) {
+        failedSignals.add(signalId);
+        logger.warn(
+          { signalId, errorName: error instanceof Error ? error.name : 'UnknownError' },
+          'Telegram signal followup transport failed; restoring prior checkpoint when durable storage is available',
+        );
+      }
     }
   }
 
