@@ -385,6 +385,15 @@ test('vault-backed Kiwoom reader uses only official real OAuth and fixed read-on
           return_msg: 'SECRET_PROVIDER_MESSAGE',
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
+      if (headers.get('api-id') === 'kt00001') {
+        return new Response(JSON.stringify({
+          return_code: 0,
+          entr: '1500000',
+          pymn_alow_amt: '1200000',
+          ord_alow_amt: '1100000',
+          stk_entr_prst: [],
+        }), { status: 200, headers: { 'Content-Type': 'application/json', 'cont-yn': 'N' } });
+      }
       if (headers.get('api-id') === 'kt00018') {
         return new Response(JSON.stringify({
           return_code: 0,
@@ -407,6 +416,9 @@ test('vault-backed Kiwoom reader uses only official real OAuth and fixed read-on
   const result = await readers.kiwoom!(SCOPE);
   assert.equal(result.connected, true);
   assert.equal(result.provider, 'kiwoom');
+  assert.equal(result.accounts?.[0]?.buyingPower, 1100000);
+  assert.equal(result.balances?.[0]?.total, 1500000);
+  assert.equal(result.balances?.[0]?.available, 1200000);
   assert.equal(result.positions?.[0]?.symbol, '005930');
   assert.equal(result.positions?.[0]?.currentPrice, 71000);
   assert.equal(result.positions?.[0]?.availableQuantity, 2);
@@ -420,6 +432,7 @@ test('vault-backed Kiwoom reader uses only official real OAuth and fixed read-on
 
   assert.deepEqual(seen.map((row) => [row.method, row.origin, row.path, row.apiId]), [
     ['POST', 'https://api.kiwoom.com', '/oauth2/token', null],
+    ['POST', 'https://api.kiwoom.com', '/api/dostk/acnt', 'kt00001'],
     ['POST', 'https://api.kiwoom.com', '/api/dostk/acnt', 'kt00018'],
     ['POST', 'https://api.kiwoom.com', '/api/dostk/acnt', 'ka10075'],
   ]);
@@ -505,8 +518,47 @@ test('Kiwoom return_code 20 is a proven empty account result rather than a provi
   assert.equal(result.connected, true);
   assert.deepEqual(result.positions, []);
   assert.deepEqual(result.openOrders, []);
-  assert.deepEqual(new Set(seenApiIds), new Set(['kt00018', 'ka10075']));
+  assert.deepEqual(new Set(seenApiIds), new Set(['kt00001', 'kt00018', 'ka10075']));
   assert.equal(result.orderRequests, 0);
   assert.equal(result.cancelRequests, 0);
   assert.equal(result.amendRequests, 0);
+});
+
+
+test('Kiwoom malformed open-order identity or quantity fails closed instead of fabricating order facts', async () => {
+  for (const openOrder of [
+    { ord_no: '', stk_cd: '005930', trde_tp: '2', ord_qty: '2', ord_pric: '70000', oso_qty: '1', ord_stt: '접수' },
+    { ord_no: '1', stk_cd: '005930', trde_tp: '2', ord_qty: '2', ord_pric: '70000', oso_qty: '3', ord_stt: '접수' },
+    { ord_no: '1', stk_cd: '005930', trde_tp: '9', ord_qty: '2', ord_pric: '70000', oso_qty: '1', ord_stt: '접수' },
+  ]) {
+    const provider = new KiwoomReadonlyProvider(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/oauth2/token') {
+        return new Response(JSON.stringify({
+          token: 'KIWOOM_TOKEN_RUNTIME_TEST_ONLY',
+          token_type: 'bearer',
+          expires_dt: '20991231235959',
+          return_code: 0,
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      const apiId = new Headers(init?.headers).get('api-id');
+      if (apiId === 'kt00001') {
+        return new Response(JSON.stringify({ return_code: 0, entr: '0', pymn_alow_amt: '0', ord_alow_amt: '0', stk_entr_prst: [] }), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (apiId === 'kt00018') {
+        return new Response(JSON.stringify({ return_code: 0, acnt_evlt_remn_indv_tot: [] }), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ return_code: 0, oso: [openOrder] }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    await assert.rejects(() => provider.snapshot({
+      appKey: 'KIWOOM_APP_RUNTIME_TEST_ONLY',
+      appSecret: 'KIWOOM_SECRET_RUNTIME_TEST_ONLY',
+    }));
+  }
 });
