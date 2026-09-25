@@ -3,6 +3,7 @@ import { createSupabaseTradingRepository, safeConnections, type TradingRepositor
 import { liveExecutionEnabled, TradeAutomationService } from '../services/trade-automation.service';
 import { TradeCancelReconciliationService } from '../services/trade-cancel-reconciliation.service';
 import { TradeExecutionService } from '../services/trade-execution.service';
+import { TradeOrderAmendmentService } from '../services/trade-order-amendment.service';
 import {
   buildSplitLegRevalidationEvidence,
   TradeSplitOrderExecutionService,
@@ -85,6 +86,7 @@ function context(req: AuthenticatedRequest) {
     repository,
     automation,
     execution: new TradeExecutionService(repository),
+    amendment: new TradeOrderAmendmentService(repository),
     splitExecution,
     cancellation: new TradeCancelReconciliationService(repository),
   };
@@ -463,6 +465,32 @@ router.get('/orders', async (req: AuthenticatedRequest, res) => {
     const { userId, repository } = context(req);
     const [orders, events] = await Promise.all([repository.listOrders(userId), repository.listEvents(userId)]);
     return res.json({ ok: true, orders, events });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.post('/orders/:id/amend', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository, amendment } = context(req);
+    if (req.body?.confirmed !== true) {
+      return res.status(409).json({ ok: false, error: 'EXPLICIT_AMEND_CONFIRMATION_REQUIRED', orderAmended: false });
+    }
+    const order = await repository.getOrder(userId, String(req.params.id));
+    if (!order) throw new Error('TRADE_ORDER_NOT_FOUND');
+    const plan = await repository.getPlan(userId, order.planId);
+    if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
+    const result = await amendment.amend(userId, order, plan, {
+      requestId: String(req.body?.requestId ?? ''),
+      price: Number(req.body?.price),
+      quantity: req.body?.quantity == null ? null : Number(req.body.quantity),
+    });
+    return res.json({
+      ok: true,
+      ...result,
+      orderAmended: !result.replayed && !result.recoveryRequired,
+      duplicateProviderMutation: false,
+      transferRequested: false,
+      withdrawalRequested: false,
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 
