@@ -193,6 +193,69 @@ test('multiple entries and partial exits form one cycle, while a flat re-entry s
   assert.equal(second.grossPnl, 100);
 });
 
+test('Kiwoom US read-only fills enter the journal while missing costs keep net metrics unknown', () => {
+  const base = {
+    schemaVersion: 1,
+    recordType: 'unified_trade_order',
+    source: 'KIWOOM_API',
+    broker: 'KIWOOM',
+    accountIdMasked: 'KIWOOM-****-fixture',
+    market: 'US_STOCK',
+    symbol: 'AAPL',
+    positionSide: 'LONG',
+    clientOrderId: null,
+    fillId: null,
+    quantity: 2,
+    filledQuantity: 2,
+    remainingQuantity: 0,
+    fees: null,
+    tax: null,
+    currency: 'USD',
+    status: 'FILLED',
+    strategy: null,
+    timeframe: null,
+    stopLossPrice: null,
+    targetPrice: null,
+    ruleViolation: false,
+    warnings: ['KIWOOM_US_TRANSACTION_COST_EVIDENCE_NOT_AVAILABLE'],
+  };
+  const result = buildUnifiedTradeJournal([
+    {
+      ...base,
+      side: 'BUY',
+      positionEffect: 'OPEN',
+      brokerOrderId: 'KIWOOM-US-BUY',
+      orderedAt: '2026-08-10T09:29:59+09:00',
+      filledAt: '2026-08-10T09:30:00+09:00',
+      observedAt: '2026-08-10T09:30:00+09:00',
+      averageFillPrice: 100,
+    },
+    {
+      ...base,
+      side: 'SELL',
+      positionEffect: 'CLOSE',
+      brokerOrderId: 'KIWOOM-US-SELL',
+      orderedAt: '2026-08-11T09:29:59+09:00',
+      filledAt: '2026-08-11T09:30:00+09:00',
+      observedAt: '2026-08-11T09:30:00+09:00',
+      averageFillPrice: 110,
+    },
+  ], { range: 'ALL', source: 'KIWOOM_API' }, NOW);
+
+  assert.equal(result.trades.length, 1);
+  const trade = result.trades[0]!;
+  assert.equal(trade.source, 'KIWOOM_API');
+  assert.equal(trade.broker, 'KIWOOM');
+  assert.equal(trade.market, 'US_STOCK');
+  assert.equal(trade.symbol, 'AAPL');
+  assert.equal(trade.grossPnl, 20);
+  assert.equal(trade.costEvidence.status, 'NOT_AVAILABLE');
+  assert.equal(trade.netPnl, null);
+  assert.equal(trade.netReturnPercent, null);
+  assert.equal(result.analytics.winRate, null);
+  assert.deepEqual(result.analytics.netPnlByCurrency, []);
+});
+
 test('missing canonical order costs fail closed for cycle net metrics while explicit zero stays known', () => {
   const missing = buildUnifiedTradeJournal([
     order({ brokerOrderId: 'missing-buy', fees: null, tax: null }),
