@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { encryptTradingCredentials } from './trade-credential-vault.service';
 import { TradeOrderAmendmentService } from './trade-order-amendment.service';
+import { TradeExecutionService } from './trade-execution.service';
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
 
 const USER = '11111111-1111-1111-1111-111111111111';
@@ -162,7 +163,13 @@ test('same amend request mutates provider once and replay is local-only', async 
     if (url.pathname === '/v1/orders/cancel_and_new') {
       mutations += 1;
       const body = JSON.parse(String(init?.body ?? '{}')) as Record<string,string>;
-      return new Response(JSON.stringify({ uuid: 'exchange-new', identifier: body.new_identifier, state: 'wait' }), { status: 200 });
+      return new Response(JSON.stringify({
+        uuid: 'exchange-original',
+        identifier: 'sj-upbit-original',
+        state: 'cancel',
+        new_order_uuid: 'exchange-new',
+        new_order_identifier: body.new_identifier,
+      }), { status: 200 });
     }
     if (url.pathname === '/v1/order') {
       reads += 1;
@@ -183,6 +190,84 @@ test('same amend request mutates provider once and replay is local-only', async 
   assert.equal(replay.recoveryRequired, false);
   assert.equal(mutations, 1);
   assert.equal(reads, 1);
+});
+
+
+test('acknowledged Upbit amend preserves new identity when post-query fails and recovery never resubmits', async () => {
+  const { repository, p, o, service } = await setup();
+  let mutations = 0;
+  let reads = 0;
+  let nextIdentifier = '';
+
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/v1/orders/cancel_and_new') {
+      mutations += 1;
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, string>;
+      nextIdentifier = String(body.new_identifier ?? '');
+      return new Response(JSON.stringify({
+        uuid: 'exchange-original',
+        identifier: 'sj-upbit-original',
+        state: 'cancel',
+        new_order_uuid: 'exchange-new',
+        new_order_identifier: nextIdentifier,
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    if (url.pathname === '/v1/order') {
+      reads += 1;
+      assert.equal(url.searchParams.get('identifier'), nextIdentifier);
+      if (reads === 1) {
+        return new Response('{}', {
+          status: 503,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({
+        uuid: 'exchange-new',
+        identifier: nextIdentifier,
+        market: 'KRW-BTC',
+        state: 'wait',
+        volume: '1',
+        remaining_volume: '1',
+        executed_volume: '0',
+        paid_fee: '0',
+        created_at: new Date().toISOString(),
+        trades: [],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`UNEXPECTED_NETWORK_PATH:${url.pathname}`);
+  }) as typeof fetch;
+
+  const amended = await service.amend(USER, o, p, {
+    requestId: 'amend-post-query-01',
+    price: 101_000,
+    quantity: 1,
+  });
+
+  assert.equal(amended.recoveryRequired, true);
+  assert.equal(amended.order.state, 'RECOVERY_REQUIRED');
+  assert.equal(amended.order.manualReviewRequired, false);
+  assert.equal(amended.order.clientOrderId, nextIdentifier);
+  assert.equal(amended.order.exchangeOrderId, 'exchange-new');
+  assert.equal(amended.order.currentLimitPrice, 101_000);
+  assert.equal(amended.order.amendments?.[0]?.status, 'RECOVERY_REQUIRED');
+  assert.equal(amended.order.amendments?.[0]?.nextClientOrderId, nextIdentifier);
+  assert.equal(amended.order.amendments?.[0]?.nextExchangeOrderId, 'exchange-new');
+  assert.equal(mutations, 1);
+  assert.equal(reads, 1);
+
+  const recovered = await new TradeExecutionService(repository).execute(
+    USER,
+    p,
+    amended.order,
+  );
+
+  assert.equal(recovered.state, 'ACCEPTED');
+  assert.equal(recovered.clientOrderId, nextIdentifier);
+  assert.equal(recovered.exchangeOrderId, 'exchange-new');
+  assert.equal(recovered.manualReviewRequired, false);
+  assert.equal(mutations, 1, 'provider amend mutation must never be replayed during recovery');
+  assert.equal(reads, 2);
 });
 
 test('interrupted amend intent is recovery-required without another provider request', async () => {
