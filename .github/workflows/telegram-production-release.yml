@@ -921,6 +921,7 @@ jobs:
                 '- Telegram worker startup: `VERIFIED`',
                 '- Telegram runtime configuration: `VERIFIED`',
                 '- Telegram API accepted verification message: `true`',
+                '- Telegram same-message edit verification: `true`',
                 `- Telegram message ID: \`${process.env.TELEGRAM_MESSAGE_ID}\``,
                 `- Verified at: \`${process.env.VERIFIED_AT}\``,
                 '- Order submitted: `false`',
