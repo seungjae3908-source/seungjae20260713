@@ -12,7 +12,7 @@ const enabled = process.env.STAGING_ACCOUNT_READONLY_E2E === 'true';
 test.skip(!enabled, 'isolated Staging account runtime evidence is opt-in only');
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 
-type Provider = 'toss' | 'upbit' | 'bitget';
+type Provider = 'toss' | 'kiwoom' | 'upbit' | 'bitget';
 
 function required(name: string) {
   const value = process.env[name]?.trim();
@@ -132,12 +132,19 @@ test('ephemeral user proves real Toss Upbit Bitget GET-only account runtime with
   const bitgetApiKey = required('STAGING_BITGET_API_KEY');
   const bitgetSecretKey = required('STAGING_BITGET_SECRET_KEY');
   const bitgetPassphrase = required('STAGING_BITGET_PASSPHRASE');
+  const kiwoomAppKey = optional('STAGING_KIWOOM_APP_KEY');
+  const kiwoomAppSecret = optional('STAGING_KIWOOM_APP_SECRET');
+  if (Boolean(kiwoomAppKey) !== Boolean(kiwoomAppSecret)) {
+    throw new Error('STAGING_KIWOOM_APP_KEY and STAGING_KIWOOM_APP_SECRET must be configured together');
+  }
+  const kiwoomEvidenceEnabled = Boolean(kiwoomAppKey && kiwoomAppSecret);
 
   let lifecycle: StagingAccountLifecycle | null = null;
   let regularUserId = '';
   let loopbackBindVerified = false;
   let backgroundWorkersDisabled = false;
   let tossEvidence: Record<string, unknown> | null = null;
+  let kiwoomEvidence: Record<string, unknown> | null = null;
   let upbitEvidence: Record<string, unknown> | null = null;
   let bitgetEvidence: Record<string, unknown> | null = null;
   let cleanupRowsRemaining: number | null = null;
@@ -157,8 +164,8 @@ test('ephemeral user proves real Toss Upbit Bitget GET-only account runtime with
 
     const vaultStatus = await requestJson(baseUrl, token, 'GET', '/api/accounts/read-only/credentials/status');
     expect(vaultStatus.status).toBe(200); expect(vaultStatus.payload.encryptionConfigured).toBe(true); expect(vaultStatus.payload.credentialsReturned).toBe(false);
-    expect(vaultStatus.payload.supportedProviders).toEqual(['toss', 'upbit', 'bitget']);
-    expect(vaultStatus.payload.hiddenProviders).toEqual(['kiwoom']);
+    expect(vaultStatus.payload.supportedProviders).toEqual(['toss', 'kiwoom', 'upbit', 'bitget']);
+    expect(vaultStatus.payload.hiddenProviders).toEqual([]);
 
     const tossSave = await requestJson(baseUrl, token, 'PUT', '/api/accounts/read-only/credentials/toss', {
       purpose: 'read_only', permissions: ['read'], credentials: { clientId: tossClientId, clientSecret: tossClientSecret, ...(tossAccountSeq ? { accountSeq: tossAccountSeq } : {}) },
@@ -170,6 +177,13 @@ test('ephemeral user proves real Toss Upbit Bitget GET-only account runtime with
     });
     expect(upbitSave.status).toBe(200); expect(upbitSave.payload.credentialsReturned).toBe(false); expect(upbitSave.payload.privateProviderRequests).toBe(0); expect(upbitSave.payload.orderRequests).toBe(0);
 
+    if (kiwoomEvidenceEnabled) {
+      const kiwoomSave = await requestJson(baseUrl, token, 'PUT', '/api/accounts/read-only/credentials/kiwoom', {
+        purpose: 'read_only', permissions: ['read'], credentials: { appKey: kiwoomAppKey!, appSecret: kiwoomAppSecret! },
+      });
+      expect(kiwoomSave.status).toBe(200); expect(kiwoomSave.payload.credentialsReturned).toBe(false); expect(kiwoomSave.payload.privateProviderRequests).toBe(0); expect(kiwoomSave.payload.orderRequests).toBe(0);
+    }
+
     const bitgetSave = await requestJson(baseUrl, token, 'PUT', '/api/accounts/read-only/credentials/bitget', {
       purpose: 'read_only', permissions: ['read'], credentials: { apiKey: bitgetApiKey, secretKey: bitgetSecretKey, passphrase: bitgetPassphrase },
     });
@@ -177,6 +191,10 @@ test('ephemeral user proves real Toss Upbit Bitget GET-only account runtime with
 
     const tossRead = await requestJson(baseUrl, token, 'GET', '/api/accounts/read-only/toss');
     tossEvidence = safeProviderEvidence('toss', tossRead.status, tossRead.payload); assertReadOnlyResult(tossRead);
+    if (kiwoomEvidenceEnabled) {
+      const kiwoomRead = await requestJson(baseUrl, token, 'GET', '/api/accounts/read-only/kiwoom');
+      kiwoomEvidence = safeProviderEvidence('kiwoom', kiwoomRead.status, kiwoomRead.payload); assertReadOnlyResult(kiwoomRead);
+    }
     const upbitRead = await requestJson(baseUrl, token, 'GET', '/api/accounts/read-only/upbit');
     upbitEvidence = safeProviderEvidence('upbit', upbitRead.status, upbitRead.payload); assertReadOnlyResult(upbitRead);
     const bitgetRead = await requestJson(baseUrl, token, 'GET', '/api/accounts/read-only/bitget');
@@ -188,10 +206,18 @@ test('ephemeral user proves real Toss Upbit Bitget GET-only account runtime with
       expect(cleanupRowsRemaining).toBe(0);
     }
     await writeEvidence(artifactDir, {
-      status: loopbackBindVerified && backgroundWorkersDisabled && tossEvidence?.connected === true && upbitEvidence?.connected === true && bitgetEvidence?.connected === true && cleanupRowsRemaining === 0 ? 'passed' : 'failed',
+      status: loopbackBindVerified
+        && backgroundWorkersDisabled
+        && tossEvidence?.connected === true
+        && (!kiwoomEvidenceEnabled || kiwoomEvidence?.connected === true)
+        && upbitEvidence?.connected === true
+        && bitgetEvidence?.connected === true
+        && cleanupRowsRemaining === 0 ? 'passed' : 'failed',
       loopback_bind_verified: loopbackBindVerified,
       background_workers_disabled: backgroundWorkersDisabled,
       toss: tossEvidence,
+      kiwoom: kiwoomEvidence,
+      kiwoom_evidence_enabled: kiwoomEvidenceEnabled,
       upbit: upbitEvidence,
       bitget: bitgetEvidence,
       credential_rows_remaining_after_ephemeral_user_cleanup: cleanupRowsRemaining,
