@@ -123,7 +123,7 @@ jobs:
           ! grep -Eq 'actions:[[:space:]]+write' "$workflow"
           ! grep -Eq 'pm2[[:space:]]+(restart|reload|start|stop|delete|save)' "$operational"
           ! grep -Eq 'crontab[[:space:]]+-([[:space:]]|$)|systemctl[[:space:]]+(start|stop|restart|enable)|psql|supabase db' "$operational"
-          test "$(grep -Ec '^[[:space:]]+trap cleanup_remote_tmp EXIT
+          test "$(grep -Ec '^[[:space:]]+trap cleanup_remote_tmp EXIT' "$workflow")" -eq 2
           ! grep -Fq "trap 'ssh -i ~/.ssh/id_ed25519" "$workflow"
 
   gate:
