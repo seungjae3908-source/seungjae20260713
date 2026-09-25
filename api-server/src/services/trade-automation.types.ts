@@ -1,4 +1,4 @@
-export type TradingExchange = 'bitget' | 'upbit' | 'kiwoom';
+export type TradingExchange = 'bitget' | 'upbit' | 'kiwoom' | 'toss';
 export type StockBroker = 'kiwoom' | 'toss';
 export type StockTradingAssetClass = 'domestic_stock' | 'us_stock';
 export type TradingMode = 'approval' | 'automatic';
@@ -73,8 +73,8 @@ export const DEFAULT_TRADING_POLICY = Object.freeze({
   newEntriesStopped: false,
   marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true } as Record<TradingAssetClass, boolean>,
   stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'kiwoom' } as Record<StockTradingAssetClass, StockBroker>,
-  exchangeEnabled: { bitget: false, upbit: false, kiwoom: false },
-  enabledAssets: { bitget: [] as string[], upbit: [] as string[], kiwoom: [] as string[] },
+  exchangeEnabled: { bitget: false, upbit: false, kiwoom: false, toss: false },
+  enabledAssets: { bitget: [] as string[], upbit: [] as string[], kiwoom: [] as string[], toss: [] as string[] },
   enabledStrategies: [] as string[],
   totalCapitalKrw: 1_000_000,
   maxOrderKrw: 1_000_000,
@@ -94,7 +94,7 @@ export const DEFAULT_TRADING_POLICY = Object.freeze({
   bitgetLeverage: 2 as 2 | 3,
   riskOptimizationEnabled: true,
   pilotStage: 'approval-20' as TradingPilotStage,
-  riskPerTradePercent: { bitget: 0.1, upbit: 0.2, kiwoom: 0.25 },
+  riskPerTradePercent: { bitget: 0.1, upbit: 0.2, kiwoom: 0.25, toss: 0.25 },
   totalDailyLossLimitPercent: 1,
   minExpectedValueR: 0.15,
   minStrategySampleSize: 50,
