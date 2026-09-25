@@ -6,6 +6,8 @@ import {
   type ScannerThemeTag,
 } from './scanner-theme-swing.service';
 import type { ScannerSignalCard } from './scanner-signal.types';
+import { CATALOG } from '../data/catalog';
+import { classifyCatalogEntryThemeTags } from './themes.service';
 
 function card(overrides: Partial<ScannerSignalCard> = {}): ScannerSignalCard {
   return {
@@ -92,6 +94,19 @@ describe('scanner theme swing overlay', () => {
   it('classifies curated crypto themes without granting execution authority', () => {
     const tags = inferCryptoThemeTags(card({ assetClass: 'coin_futures', symbol: 'FETUSDT' }));
     assert.ok(tags.some((tag) => tag.key === 'crypto-ai-data'));
+  });
+
+  it('preserves BTC and ETH as base symbols while stripping quote suffixes', () => {
+    assert.ok(inferCryptoThemeTags(card({ assetClass: 'coin_spot', symbol: 'BTC' })).some((tag) => tag.key === 'crypto-l1'));
+    assert.ok(inferCryptoThemeTags(card({ assetClass: 'coin_futures', symbol: 'ETHUSDT' })).some((tag) => tag.key === 'crypto-l1'));
+  });
+
+  it('reuses the canonical stock theme taxonomy instead of a duplicate scanner map', () => {
+    const nvidia = CATALOG.find((entry) => entry.ticker === 'NVDA');
+    assert.ok(nvidia);
+    const tags = classifyCatalogEntryThemeTags(nvidia!);
+    assert.ok(tags.some((tag) => tag.key === 'semiconductor'));
+    assert.ok(tags.some((tag) => tag.key === 'ai'));
   });
 
   it('keeps weak breadth as watch/reject instead of eligible', () => {
