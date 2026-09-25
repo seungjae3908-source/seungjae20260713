@@ -183,7 +183,20 @@ function unifiedJournal() {
     },
     toss: { provider: 'TOSS', officialSpecVersion: '1.2.13', paidStatus: 'PAID_STATUS_UNVERIFIED', liveReadIntegration: 'BLOCKED_BY_FREE_STATUS_UNVERIFIED', contractNormalizerAvailable: true, executionGranularity: 'ORDER_CUMULATIVE_AGGREGATE_NO_FILL_ID', livePrivateRequests: 0, actualOrders: 0 },
     aiReviewStatus: 'AI_EXTERNAL_REVIEW_DISABLED_FREE_ONLY',
-    safety: { finalCostDelta: '0_KRW', actualOrderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0, privateBrokerRequests: 0 },
+    safety: { finalCostDelta: '0_KRW', actualOrderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0, privateBrokerRequests: 5 },
+    liveAccountHistory: {
+      requestedRange: '30D',
+      effectiveDays: 30,
+      rangeCapped: false,
+      persisted: false,
+      privateProviderRequests: 5,
+      truncated: false,
+      providers: [
+        { provider: 'upbit', configured: true, enabled: true, status: 'READY', records: 2, privateProviderRequests: 4, truncated: false, errorCode: null },
+        { provider: 'bitget', configured: true, enabled: true, status: 'READY', records: 1, privateProviderRequests: 1, truncated: false, errorCode: null },
+      ],
+      safety: { orderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0, credentialsReturned: false, liveTradingEnabled: false, autoTradingEnabled: false },
+    },
     analytics: { sampleSize: 4, openTrades: 0, closedTrades: 4, winRate: null, profitFactor: null, averageReturnPercent: null, maximumConsecutiveLosses: 0, netPnlByCurrency: [{ currency: 'USDT', value: 9.8 }, { currency: 'USD', value: 9.8 }], totalCostsByCurrency: [{ currency: 'USDT', value: 0.2 }, { currency: 'USD', value: 0.2 }], byMarket: [], bySource: [], byStrategy: [], byTimeframe: [], byGrade: [], mistakes: [], monthlyReport: [{ month: '2026-08', sampleSize: 4, winRate: null, averageReturnPercent: null, netPnlByCurrency: [{ currency: 'USDT', value: 9.8 }, { currency: 'USD', value: 9.8 }] }], warnings: ['확정 통계에는 종료 거래가 최소 5건 필요하며 부족한 지표는 N/A로 표시됩니다.'] },
   };
 }

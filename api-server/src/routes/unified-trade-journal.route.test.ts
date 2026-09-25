@@ -36,6 +36,7 @@ async function start(options = {}) {
     now: () => NOW,
     reviewProvider: null,
     allowTossContractPreview: options.allowTossContractPreview === true,
+    accountHistoryReader: options.accountHistoryReader,
   }));
   const server = app.listen(0, '127.0.0.1');
   await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
@@ -194,4 +195,69 @@ test('unified journal endpoints perform zero external AI, broker, and exchange r
     await globalThis.fetch(`${baseUrl}/api/paper-journal/unified-ledger?range=ALL`);
     assert.equal(outbound, 0);
   } finally { globalThis.fetch = nativeFetch; await close(server); }
+});
+
+
+test('unified ledger merges read-only Upbit history in memory without persisting provider records', async () => {
+  let historyCalls = 0;
+  const historyPayloads = [
+    {
+      schemaVersion: 1, recordType: 'unified_trade_order', source: 'UPBIT_API', broker: 'UPBIT',
+      accountIdMasked: 'UPBIT-****-fixture', market: 'CRYPTO_SPOT', symbol: 'BTC', side: 'BUY',
+      positionSide: 'LONG', positionEffect: 'OPEN', clientOrderId: null, brokerOrderId: 'UPBIT-BUY-1', fillId: null,
+      orderedAt: '2026-08-10T01:00:00.000Z', filledAt: '2026-08-10T01:00:01.000Z', observedAt: '2026-08-12T03:00:00.000Z',
+      quantity: 1, filledQuantity: 1, remainingQuantity: 0, averageFillPrice: 100, fees: null, tax: null,
+      currency: 'KRW', status: 'FILLED', strategy: null, timeframe: null, stopLossPrice: null, targetPrice: null,
+      ruleViolation: false, warnings: ['REAL_ACCOUNT_HISTORY_NOT_PERSISTED'],
+    },
+    {
+      schemaVersion: 1, recordType: 'unified_trade_order', source: 'UPBIT_API', broker: 'UPBIT',
+      accountIdMasked: 'UPBIT-****-fixture', market: 'CRYPTO_SPOT', symbol: 'BTC', side: 'SELL',
+      positionSide: 'LONG', positionEffect: 'CLOSE', clientOrderId: null, brokerOrderId: 'UPBIT-SELL-1', fillId: null,
+      orderedAt: '2026-08-11T01:00:00.000Z', filledAt: '2026-08-11T01:00:01.000Z', observedAt: '2026-08-12T03:00:00.000Z',
+      quantity: 1, filledQuantity: 1, remainingQuantity: 0, averageFillPrice: 110, fees: null, tax: null,
+      currency: 'KRW', status: 'FILLED', strategy: null, timeframe: null, stopLossPrice: null, targetPrice: null,
+      ruleViolation: false, warnings: ['REAL_ACCOUNT_HISTORY_NOT_PERSISTED'],
+    },
+  ];
+  const accountHistoryReader = async () => {
+    historyCalls += 1;
+    return {
+      payloads: historyPayloads,
+      requestedRange: '30D',
+      effectiveDays: 30,
+      rangeCapped: false,
+      persisted: false,
+      privateProviderRequests: 2,
+      providers: [{
+        provider: 'upbit', configured: true, enabled: true, status: 'READY',
+        records: 2, privateProviderRequests: 2, truncated: false, errorCode: null,
+      }],
+      truncated: false,
+      safety: {
+        orderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0,
+        credentialsReturned: false, liveTradingEnabled: false, autoTradingEnabled: false,
+      },
+    };
+  };
+  const { server, baseUrl } = await start({
+    repository: repository([]),
+    accountHistoryReader,
+  });
+  try {
+    const response = await fetch(`${baseUrl}/api/paper-journal/unified-ledger?range=30D&source=UPBIT_API`);
+    const body = await json(response);
+    assert.equal(response.status, 200);
+    assert.equal(historyCalls, 1);
+    assert.equal(body.result.trades.length, 1);
+    assert.equal(body.result.trades[0].source, 'UPBIT_API');
+    assert.equal(body.result.trades[0].broker, 'UPBIT');
+    assert.equal(body.result.trades[0].symbol, 'BTC');
+    assert.equal(body.result.liveAccountHistory.persisted, false);
+    assert.equal(body.result.liveAccountHistory.privateProviderRequests, 2);
+    assert.equal(body.result.safety.privateBrokerRequests, 2);
+    assert.equal(body.result.safety.actualOrderRequests, 0);
+  } finally {
+    await close(server);
+  }
 });
