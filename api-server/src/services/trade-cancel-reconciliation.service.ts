@@ -190,10 +190,16 @@ export class TradeCancelReconciliationService {
         const tossCredentials = credentials as TossCredentials;
         const tokenPayload = await sendCancelRequest(BASE_URLS.toss, prepareTossToken(tossCredentials));
         if (!order.exchangeOrderId) throw new Error('TOSS_CANCEL_CONTEXT_MISSING');
-        assertTossSuccess(await sendCancelRequest(
+        const cancelPayload = assertTossSuccess(await sendCancelRequest(
           BASE_URLS.toss,
           prepareTossCancel({ ...tossCredentials, accessToken: tossTokenFrom(tokenPayload) }, order.exchangeOrderId),
         ));
+        const result = isRecord(cancelPayload.result) ? cancelPayload.result : cancelPayload;
+        const cancelOperationId = String(result.orderId ?? result.order_id ?? '').trim();
+        if (!cancelOperationId || cancelOperationId === order.exchangeOrderId) {
+          throw new Error('TOSS_CANCEL_OPERATION_ID_INVALID');
+        }
+        order.cancelOperationId = cancelOperationId;
       } else {
         const baseUrl = mockKiwoom ? BASE_URLS.kiwoomMock : BASE_URLS.kiwoom;
         const kiwoomCredentials = credentials as KiwoomCredentials;
@@ -236,6 +242,7 @@ export class TradeCancelReconciliationService {
       cancelRequestClaimId: order.cancelRequestClaimId,
       cancelSubmittedAt: order.cancelSubmittedAt,
       cancelAcknowledgedAt: order.cancelAcknowledgedAt,
+      cancelOperationId: order.cancelOperationId,
       cancelAcknowledged,
       orderSubmissionAttempted: false,
     });
