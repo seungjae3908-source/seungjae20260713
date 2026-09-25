@@ -143,6 +143,37 @@ export interface ScannerCandidateRankingSummary {
   hardFilterReasons: string[];
 }
 
+export interface ScannerThemeSwingBreakdown {
+  themeMomentum: number;
+  leaderStrength: number;
+  trendStructure: number;
+  volumeParticipation: number;
+  catalystEvidence: number;
+  liquidityQuality: number;
+  riskQuality: number;
+}
+
+export interface ScannerThemeSwingSummary {
+  contract: 'ScannerThemeSwingV1';
+  version: 'theme-swing-v1';
+  state: 'ELIGIBLE' | 'WATCH' | 'REJECT' | 'UNCLASSIFIED';
+  score: number;
+  themeKey: string | null;
+  themeLabel: string | null;
+  classificationSource: 'CATALOG' | 'CURATED_CRYPTO' | 'UNCLASSIFIED';
+  memberCount: number;
+  positiveBreadthPercent: number | null;
+  leaderRank: number | null;
+  leader: boolean;
+  trigger: 'BREAKOUT' | 'PULLBACK' | 'TREND_CONTINUATION' | 'UNCONFIRMED';
+  breakdown: ScannerThemeSwingBreakdown;
+  reasons: string[];
+  blockers: string[];
+  executionAuthority: 'NONE';
+  orderSubmitted: false;
+  exchangeRequestSent: false;
+}
+
 export interface ScannerSignalCard {
   signalId: string;
   assetClass: ScannerAssetClass;
@@ -186,6 +217,7 @@ export interface ScannerSignalCard {
   aiValidation?: ScannerAiValidationSummary;
   backtestQuality?: ScannerBacktestQualitySummary;
   candidateRanking?: ScannerCandidateRankingSummary;
+  themeSwing?: ScannerThemeSwingSummary;
 }
 
 export interface ScannerDiscoveryCard {
