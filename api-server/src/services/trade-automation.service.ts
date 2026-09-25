@@ -242,6 +242,7 @@ export class TradeAutomationService {
       clientOrderId: `sj-${plan.exchange}-${plan.idempotencyKey.slice(0, 20)}`,
       exchangeOrderId: null, state: 'SUBMITTED', version: 0,
       requestedQuantity: plan.quantity ?? null,
+      currentLimitPrice: plan.limitPrice ?? null,
       filledQuantity: 0, averageFillPrice: null, retryCount: 0, lastErrorCode: null,
       approvedPlanVersion: planVersion(plan),
       preSubmissionCheckedAt: null,
