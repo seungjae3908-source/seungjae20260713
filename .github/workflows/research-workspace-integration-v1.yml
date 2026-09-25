@@ -85,7 +85,33 @@ jobs:
         run: pnpm --dir api-server exec tsc -p tsconfig.json --noEmit
       - name: Existing source-reader HTTP regressions
         if: always() && steps.install.outcome == 'success'
-        run: pnpm --dir api-server exec tsx --test src/routes/market-summary-availability.smoke.test.ts
+        working-directory: api-server
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module <<'NODE' | tee "$RUNNER_TEMP/workspace-http-tests.log"
+          import { build } from 'esbuild';
+          import { mkdtemp, rm } from 'node:fs/promises';
+          import { tmpdir } from 'node:os';
+          import path from 'node:path';
+          import { spawnSync } from 'node:child_process';
+          const directory = await mkdtemp(path.join(tmpdir(), 'workspace-http-'));
+          try {
+            const output = path.join(directory, 'source-reader.test.cjs');
+            // Match api-server/test.mjs; use the existing lockfile-pinned compiler.
+            await build({
+              entryPoints: ['src/routes/market-summary-availability.smoke.test.ts'],
+              outfile: output, bundle: true, platform: 'node', format: 'cjs',
+              target: 'node20', sourcemap: 'inline', logLevel: 'warning',
+              define: { 'import.meta.env': '{}' },
+            });
+            const result = spawnSync(process.execPath, ['--test', output], {
+              cwd: path.resolve('..'), stdio: 'inherit',
+            });
+            if (result.error) throw result.error;
+            process.exitCode = result.status ?? 1;
+          } finally { await rm(directory, { recursive: true, force: true }); }
+          NODE
       - name: Install Chromium
         id: browser
         if: always() && steps.install.outcome == 'success'
@@ -97,6 +123,8 @@ jobs:
         if: always()
         with:
           name: research-workspace-v3-application-${{ github.run_id }}
-          path: stock-analyzer/test-results
+          path: |
+            stock-analyzer/test-results
+            ${{ runner.temp }}/workspace-http-tests.log
           if-no-files-found: warn
           retention-days: 30
