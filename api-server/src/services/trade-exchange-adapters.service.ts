@@ -575,6 +575,57 @@ function kiwoomOrderHeaders(credentials: KiwoomCredentials, apiId: string) {
   };
 }
 
+
+export function prepareKiwoomUsOrderable(
+  credentials: KiwoomCredentials,
+  plan: TradingPlanInput,
+): PreparedExchangeRequest {
+  return {
+    method: 'POST',
+    path: '/api/us/ordr',
+    query: '',
+    headers: kiwoomOrderHeaders(credentials, 'ust31490'),
+    body: jsonBody({
+      stk_cd: plan.symbol.trim().toUpperCase(),
+      stex_tp: kiwoomUsExchange(plan),
+    }),
+  };
+}
+
+export function prepareKiwoomUsUnfilled(
+  credentials: KiwoomCredentials,
+  plan: TradingPlanInput,
+): PreparedExchangeRequest {
+  return {
+    method: 'POST',
+    path: '/api/us/acnt',
+    query: '',
+    headers: kiwoomOrderHeaders(credentials, 'ust21050'),
+    body: jsonBody({
+      ord_dt: '',
+      slby_tp: '0',
+      stex_tp: kiwoomUsExchange(plan),
+      stk_cd: plan.symbol.trim().toUpperCase(),
+    }),
+  };
+}
+
+export function prepareKiwoomUsOrderbook(
+  credentials: KiwoomCredentials,
+  plan: TradingPlanInput,
+): PreparedExchangeRequest {
+  return {
+    method: 'POST',
+    path: '/api/us/mrkcond',
+    query: '',
+    headers: kiwoomOrderHeaders(credentials, 'usa20101'),
+    body: jsonBody({
+      stex_tp: kiwoomUsExchange(plan),
+      stk_cd: plan.symbol.trim().toUpperCase(),
+    }),
+  };
+}
+
 export function prepareKiwoomOrder(credentials: KiwoomCredentials, plan: TradingPlanInput): PreparedExchangeRequest {
   const quantity = Number(plan.quantity);
   if (!Number.isSafeInteger(quantity) || quantity <= 0) throw new Error('KIWOOM_QUANTITY_INVALID');
