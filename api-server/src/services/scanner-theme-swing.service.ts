@@ -55,7 +55,13 @@ function percentile(value: number | null | undefined, values: readonly number[])
 }
 
 function cryptoBaseSymbol(symbol: string): string {
-  return symbol.toUpperCase().replace(/(?:USDT|USDC|USD|KRW|BTC|ETH)$/u, '');
+  const normalized = symbol.toUpperCase();
+  for (const suffix of ['USDT', 'USDC', 'KRW', 'USD'] as const) {
+    if (normalized.endsWith(suffix) && normalized.length > suffix.length) {
+      return normalized.slice(0, -suffix.length);
+    }
+  }
+  return normalized;
 }
 
 export function inferCryptoThemeTags(card: Pick<ScannerSignalCard, 'symbol' | 'assetClass'>): ScannerThemeTag[] {
