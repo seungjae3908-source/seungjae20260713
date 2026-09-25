@@ -111,12 +111,12 @@ function quote(input: {
   if (text(book.currency).toUpperCase() !== input.currency) throw new Error('TOSS_ORDERBOOK_CURRENCY_MISMATCH');
   const asks = rows(book.asks).flatMap((row) => {
     const priceValue = positive(row.price);
-    const size = positive(row.quantity ?? row.size);
+    const size = positive(row.volume ?? row.quantity ?? row.size);
     return priceValue != null && size != null ? [{ price: priceValue, size }] : [];
   }).sort((a, b) => a.price - b.price);
   const bids = rows(book.bids).flatMap((row) => {
     const priceValue = positive(row.price);
-    const size = positive(row.quantity ?? row.size);
+    const size = positive(row.volume ?? row.quantity ?? row.size);
     return priceValue != null && size != null ? [{ price: priceValue, size }] : [];
   }).sort((a, b) => b.price - a.price);
   if (!asks.length || !bids.length || asks[0].price < bids[0].price) throw new Error('TOSS_ORDERBOOK_INVALID');
