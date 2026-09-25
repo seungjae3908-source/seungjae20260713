@@ -169,7 +169,7 @@ test('rich signal card uses evidence, AI explanation, news links and read-only a
   const orderButton = result.buttons?.flat().find((button) => button.text.includes('주문 준비'));
   assert.ok(orderButton);
   const orderUrl = new URL(orderButton!.url);
-  assert.equal(orderUrl.pathname, '/scanner');
+  assert.equal(orderUrl.pathname, '/telegram-order');
   assert.equal(orderUrl.searchParams.get('symbol'), '005930');
   assert.equal(orderUrl.searchParams.get('market'), 'KR');
   assert.equal(orderUrl.searchParams.get('strategyMode'), 'scalping');
