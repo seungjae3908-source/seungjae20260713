@@ -51,6 +51,16 @@ on:
       - api-server/src/services/manual-paper-canonical-runtime-evidence-source.service.test.ts
       - api-server/src/services/manual-paper-canonical-runtime-readiness.service.ts
       - api-server/src/services/manual-paper-canonical-runtime-readiness.service.test.ts
+      - api-server/src/services/paper-canonical-validation-freshness-policy.service.ts
+      - api-server/src/services/paper-canonical-validation-freshness-policy.service.test.ts
+      - ops/check-paper-canonical-pm2-safety.mjs
+      - market-prediction-lab/tests/paper-canonical-pm2-safety-probe-v1.test.js
+      - ops/materialize-paper-canonical-forward-observer.mjs
+      - ops/publish-paper-canonical-validation-freshness-policy.mjs
+      - market-prediction-lab/tests/paper-canonical-forward-observer-materialization-v1.test.js
+      - market-prediction-lab/tests/paper-canonical-validation-freshness-configuration-v1.test.js
+      - .github/workflows/paper-canonical-evidence-bridge.yml
+      - .github/workflows/paper-canonical-runtime-readiness.yml
       - api-server/src/services/manual-paper-natural-contract.d.ts
       - api-server/src/routes/paper-trading.ts
       - api-server/src/routes/paper-trading.smoke.test.ts
@@ -253,6 +263,16 @@ jobs:
             api-server/src/services/manual-paper-canonical-runtime-evidence-source.service.test.ts
             api-server/src/services/manual-paper-canonical-runtime-readiness.service.ts
             api-server/src/services/manual-paper-canonical-runtime-readiness.service.test.ts
+            api-server/src/services/paper-canonical-validation-freshness-policy.service.ts
+            api-server/src/services/paper-canonical-validation-freshness-policy.service.test.ts
+            ops/check-paper-canonical-pm2-safety.mjs
+            market-prediction-lab/tests/paper-canonical-pm2-safety-probe-v1.test.js
+            ops/materialize-paper-canonical-forward-observer.mjs
+            ops/publish-paper-canonical-validation-freshness-policy.mjs
+            market-prediction-lab/tests/paper-canonical-forward-observer-materialization-v1.test.js
+            market-prediction-lab/tests/paper-canonical-validation-freshness-configuration-v1.test.js
+            .github/workflows/paper-canonical-evidence-bridge.yml
+            .github/workflows/paper-canonical-runtime-readiness.yml
             api-server/src/services/manual-paper-natural-contract.d.ts
             api-server/src/routes/paper-trading.ts
             api-server/src/routes/paper-trading.smoke.test.ts
