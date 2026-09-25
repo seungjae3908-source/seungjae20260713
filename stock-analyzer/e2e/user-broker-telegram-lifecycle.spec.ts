@@ -225,7 +225,7 @@ test('normal and empty connection load reaches one explicit HTTP 200 terminal an
   const panel = page.getByTestId('user-broker-telegram-panel');
   await expect(panel).toHaveAttribute('data-user-integrations-request-state', 'success');
   await expect(panel).toContainText('연결된 계좌 없음');
-  await expect(panel).toContainText('연결 안 됨');
+  await expect(panel).toContainText('연결 필요');
   expect(runtime.diagnostics.integrationRequests).toBe(1);
   expect(runtime.diagnostics.integrationResponses).toBe(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(391);
@@ -234,7 +234,7 @@ test('normal and empty connection load reaches one explicit HTTP 200 terminal an
   await expect(panel).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1441);
 
-  await page.getByRole('button', { name: '연결 상태 새로고침' }).evaluate((button) => {
+  await page.getByRole('button', { name: '새로고침', exact: true }).evaluate((button) => {
     button.click();
     button.click();
   });
@@ -255,8 +255,8 @@ test('actual API failure remains visible and is not converted to an empty or dis
   const panel = page.getByTestId('user-broker-telegram-panel');
   await expect(panel).toHaveAttribute('data-user-integrations-request-state', 'failure');
   await expect(panel.getByRole('alert')).toContainText('USER_INTEGRATIONS_UPSTREAM_UNAVAILABLE');
-  await expect(panel).not.toContainText('등록된 계좌 제공사 연결이 없습니다.');
-  await expect(panel).not.toContainText('연결 안 됨');
+  await expect(panel).not.toContainText('연결된 계좌 없음');
+  await expect(panel).not.toContainText('연결 필요');
   expect(runtime.diagnostics.integrationRequests).toBe(1);
   expect(runtime.diagnostics.integrationResponses).toBe(1);
   runtime.assertClean(['Failed to load resource: the server responded with a status of 503 (Service Unavailable)']);
@@ -271,9 +271,9 @@ test('malformed HTTP 200 fails closed before Account UI can show connected or em
   const panel = page.getByTestId('user-broker-telegram-panel');
   await expect(panel).toHaveAttribute('data-user-integrations-request-state', 'failure');
   await expect(panel.getByRole('alert')).toContainText('INVALID_USER_INTEGRATIONS_RESPONSE');
-  await expect(panel).not.toContainText('등록된 계좌 제공사 연결이 없습니다.');
+  await expect(panel).not.toContainText('연결된 계좌 없음');
   await expect(panel).not.toContainText('연결됨');
-  await expect(panel).not.toContainText('연결 안 됨');
+  await expect(panel).not.toContainText('연결 필요');
   expect(runtime.diagnostics.integrationRequests).toBe(1);
   expect(runtime.diagnostics.integrationResponses).toBe(1);
   runtime.assertClean();
@@ -329,7 +329,7 @@ test('route unmount cannot apply stale state and remount reuses the same termina
   });
   const panel = page.getByTestId('user-broker-telegram-panel');
   await expect(panel).toHaveAttribute('data-user-integrations-request-state', 'success');
-  await expect(panel).toContainText('등록된 계좌 제공사 연결이 없습니다.');
+  await expect(panel).toContainText('연결된 계좌 없음');
   expect(runtime.diagnostics.integrationRequests).toBe(1);
   expect(runtime.diagnostics.integrationAborts).toBe(0);
   runtime.assertClean();
