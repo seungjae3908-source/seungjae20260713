@@ -134,8 +134,9 @@ test('default unified-ledger transport accepts reconciled non-zero read-only pro
       privateProviderRequests: 5,
       truncated: false,
       providers: [
-        { provider: 'upbit', configured: true, enabled: true, status: 'READY', records: 2, privateProviderRequests: 4, truncated: false, errorCode: null },
-        { provider: 'bitget', configured: true, enabled: true, status: 'READY', records: 1, privateProviderRequests: 1, truncated: false, errorCode: null },
+        { provider: 'kiwoom', configured: false, enabled: true, status: 'NOT_CONFIGURED', records: 0, privateProviderRequests: 0, truncated: false, effectiveDays: 7, rangeCapped: true, errorCode: null },
+        { provider: 'upbit', configured: true, enabled: true, status: 'READY', records: 2, privateProviderRequests: 4, truncated: false, effectiveDays: 30, rangeCapped: false, errorCode: null },
+        { provider: 'bitget', configured: true, enabled: true, status: 'READY', records: 1, privateProviderRequests: 1, truncated: false, effectiveDays: 30, rangeCapped: false, errorCode: null },
       ],
       safety: {
         orderRequests: 0,
@@ -180,6 +181,7 @@ test('default unified-ledger transport accepts reconciled non-zero read-only pro
   await page.goto(`${PATH}?unifiedTransport=api`);
   await expect(page.getByTestId('phase7-e2e-page')).toBeVisible();
   await expect(page.getByTestId('journal-zero-cost-status')).toContainText('실계좌 조회 5회');
+  await expect(page.getByTestId('live-account-history-status')).toContainText('KIWOOM NOT_CONFIGURED · 0건 · 요청 0회 · 최근 7일');
   await expect(page.getByTestId('live-account-history-status')).toContainText('UPBIT READY · 2건 · 요청 4회');
   await expect(page.getByTestId('live-account-history-status')).toContainText('BITGET READY · 1건 · 요청 1회');
   await expect(page.getByRole('alert')).toHaveCount(0);
@@ -198,8 +200,10 @@ test('unified trade journal separates performance, quality, snapshots, and free-
   const liveHistory = page.getByTestId('live-account-history-status');
   await expect(liveHistory).toContainText('실계좌 거래이력 · READ-ONLY');
   await expect(liveHistory).toContainText('최근 30일');
+  await expect(liveHistory).toContainText('KIWOOM NOT_CONFIGURED · 0건 · 요청 0회 · 최근 7일');
   await expect(liveHistory).toContainText('UPBIT READY · 2건 · 요청 4회');
   await expect(liveHistory).toContainText('BITGET READY · 1건 · 요청 1회');
+  await expect(page.getByLabel('출처')).toContainText('Kiwoom 실계좌');
   await expect(page.getByLabel('출처')).toContainText('Upbit 실계좌');
   await expect(page.getByLabel('출처')).toContainText('Bitget 실계좌');
 
