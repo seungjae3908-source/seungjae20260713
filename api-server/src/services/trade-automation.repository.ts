@@ -71,6 +71,7 @@ function normalizedOrder(order: TradingOrder): TradingOrder {
     remainingQuantity: order.remainingQuantity ?? (order.requestedQuantity == null
       ? null
       : Math.max(0, order.requestedQuantity - order.filledQuantity)),
+    currentLimitPrice: order.currentLimitPrice ?? null,
     fills: copy(order.fills ?? []),
     feeAmount: order.feeAmount ?? null,
     feeCurrency: order.feeCurrency ?? null,
