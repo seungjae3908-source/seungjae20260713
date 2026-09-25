@@ -6,6 +6,7 @@ type JournalFillReader = {
     credentials: KiwoomReadonlyCredentials,
     orderDates: readonly string[],
     signal?: AbortSignal,
+    requestCounter?: { value: number },
   ): Promise<KiwoomJournalFillBatch>;
 };
 
@@ -206,6 +207,7 @@ export async function readKiwoomJournalHistory(input: {
   endMs: number;
   signal?: AbortSignal;
   maxDays?: number;
+  requestCounter?: { value: number };
 }): Promise<KiwoomJournalHistoryRead> {
   const maxDays = Math.max(1, Math.min(7, Math.trunc(input.maxDays ?? 7)));
   const effectiveDays = Math.max(1, Math.min(input.requestedDays, maxDays));
@@ -214,6 +216,7 @@ export async function readKiwoomJournalHistory(input: {
     input.credentials,
     recentOrderDates(input.endMs, effectiveDays),
     input.signal,
+    input.requestCounter,
   );
 
   const payloads: Record<string, unknown>[] = [];
