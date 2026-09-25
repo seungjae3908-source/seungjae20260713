@@ -315,7 +315,10 @@ export class KiwoomReadonlyProvider {
     );
 
     const fillDates = [...new Set(period.rows
-      .filter((row) => nonNegativeOrNull(row.cntr_qty, 'KIWOOM_US_HISTORY_FILL_QTY_INVALID') !== 0)
+      .filter((row) => {
+        const quantity = nonNegativeOrNull(row.cntr_qty, 'KIWOOM_US_HISTORY_FILL_QTY_INVALID');
+        return quantity != null && quantity > 0;
+      })
       .map((row) => requiredText(row.ord_dt, 'KIWOOM_US_HISTORY_DATE_INVALID'))
       .filter((date) => /^\d{8}$/.test(date)))]
       .sort();
