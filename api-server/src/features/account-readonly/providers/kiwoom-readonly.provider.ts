@@ -327,7 +327,6 @@ export class KiwoomReadonlyProvider {
           markRequest,
         ),
       ]);
-      privateProviderRequests += kr.pagesRead + overseas.pagesRead;
       domestic.push(...kr.rows.map((row) => ({ orderDate, row })));
       us.push(...overseas.rows.map((row) => ({ orderDate, row })));
     }
