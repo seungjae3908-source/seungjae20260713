@@ -12,9 +12,189 @@ export type PreparedExchangeRequest = {
 export type BitgetCredentials = { apiKey: string; secretKey: string; passphrase: string };
 export type UpbitCredentials = { accessKey: string; secretKey: string };
 export type KiwoomCredentials = { appKey: string; secretKey: string; accessToken?: string };
+export type TossCredentials = { clientId: string; clientSecret: string; accountSeq: string; accessToken?: string };
 
 function jsonBody(value: Record<string, unknown>) {
   return JSON.stringify(value);
+}
+
+
+function tossAuthorizedRequest(
+  credentials: TossCredentials,
+  method: 'GET' | 'POST',
+  path: string,
+  accountSeq?: string,
+  query = '',
+  body: Record<string, unknown> | null = null,
+): PreparedExchangeRequest {
+  const token = credentials.accessToken?.trim();
+  if (!token) throw new Error('TOSS_ACCESS_TOKEN_REQUIRED');
+  const selectedAccount = String(accountSeq ?? credentials.accountSeq ?? '').trim();
+  return {
+    method,
+    path,
+    query,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+      ...(selectedAccount ? { 'X-Tossinvest-Account': selectedAccount } : {}),
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body ? jsonBody(body) : null,
+  };
+}
+
+export function prepareTossToken(credentials: TossCredentials): PreparedExchangeRequest {
+  const body = new URLSearchParams({
+    grant_type: 'client_credentials',
+    client_id: credentials.clientId,
+    client_secret: credentials.clientSecret,
+  }).toString();
+  return {
+    method: 'POST',
+    path: '/oauth2/token',
+    query: '',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  };
+}
+
+export function prepareTossAccounts(credentials: TossCredentials) {
+  return tossAuthorizedRequest(credentials, 'GET', '/api/v1/accounts', '');
+}
+
+export function prepareTossOrderbook(credentials: TossCredentials, symbol: string) {
+  return tossAuthorizedRequest(
+    credentials,
+    'GET',
+    '/api/v1/orderbook',
+    '',
+    `symbol=${encodeURIComponent(symbol.trim().toUpperCase())}`,
+  );
+}
+
+export function prepareTossPrices(credentials: TossCredentials, symbol: string) {
+  return tossAuthorizedRequest(
+    credentials,
+    'GET',
+    '/api/v1/prices',
+    '',
+    `symbols=${encodeURIComponent(symbol.trim().toUpperCase())}`,
+  );
+}
+
+export function prepareTossBuyingPower(credentials: TossCredentials, currency: 'KRW' | 'USD') {
+  return tossAuthorizedRequest(
+    credentials,
+    'GET',
+    '/api/v1/buying-power',
+    credentials.accountSeq,
+    `currency=${currency}`,
+  );
+}
+
+export function prepareTossSellableQuantity(credentials: TossCredentials, symbol: string) {
+  return tossAuthorizedRequest(
+    credentials,
+    'GET',
+    '/api/v1/sellable-quantity',
+    credentials.accountSeq,
+    `symbol=${encodeURIComponent(symbol.trim().toUpperCase())}`,
+  );
+}
+
+export function prepareTossCommissions(credentials: TossCredentials) {
+  return tossAuthorizedRequest(credentials, 'GET', '/api/v1/commissions', credentials.accountSeq);
+}
+
+export function prepareTossMarketCalendar(credentials: TossCredentials, market: 'KR' | 'US') {
+  return tossAuthorizedRequest(credentials, 'GET', `/api/v1/market-calendar/${market}`);
+}
+
+export function prepareTossOpenOrders(credentials: TossCredentials, symbol?: string) {
+  const query = new URLSearchParams({
+    status: 'OPEN',
+    ...(symbol?.trim() ? { symbol: symbol.trim().toUpperCase() } : {}),
+  }).toString();
+  return tossAuthorizedRequest(credentials, 'GET', '/api/v1/orders', credentials.accountSeq, query);
+}
+
+export function prepareTossOrderQuery(credentials: TossCredentials, orderId: string) {
+  if (!orderId.trim()) throw new Error('TOSS_ORDER_ID_REQUIRED');
+  return tossAuthorizedRequest(
+    credentials,
+    'GET',
+    `/api/v1/orders/${encodeURIComponent(orderId.trim())}`,
+    credentials.accountSeq,
+  );
+}
+
+export function prepareTossOrder(
+  credentials: TossCredentials,
+  plan: TradingPlanInput,
+  clientOrderId: string,
+) {
+  const market = plan.market.toUpperCase();
+  if (market !== 'KR' && market !== 'US') throw new Error('TOSS_MARKET_INVALID');
+  const side = plan.side === 'buy' ? 'BUY' : plan.side === 'sell' ? 'SELL' : null;
+  if (!side) throw new Error('TOSS_SIDE_INVALID');
+  const orderType = plan.orderType === 'limit' ? 'LIMIT' : 'MARKET';
+  const quantity = plan.quantity == null ? null : Number(plan.quantity);
+  const orderAmount = plan.quoteAmount == null ? null : Number(plan.quoteAmount);
+  if ((quantity == null) === (orderAmount == null)) throw new Error('TOSS_QUANTITY_OR_AMOUNT_REQUIRED');
+  if (quantity != null && (!Number.isFinite(quantity) || quantity <= 0)) throw new Error('TOSS_QUANTITY_INVALID');
+  if (market === 'KR' && quantity != null && !Number.isSafeInteger(quantity)) throw new Error('TOSS_KR_QUANTITY_INVALID');
+  if (orderAmount != null && (market !== 'US' || orderType !== 'MARKET' || side !== 'BUY')) {
+    throw new Error('TOSS_AMOUNT_ORDER_US_MARKET_BUY_ONLY');
+  }
+  const limitPrice = plan.limitPrice == null ? null : Number(plan.limitPrice);
+  if (orderType === 'LIMIT' && (!Number.isFinite(limitPrice) || Number(limitPrice) <= 0)) {
+    throw new Error('TOSS_LIMIT_PRICE_REQUIRED');
+  }
+  return tossAuthorizedRequest(credentials, 'POST', '/api/v1/orders', credentials.accountSeq, '', {
+    clientOrderId,
+    symbol: plan.symbol.trim().toUpperCase(),
+    side,
+    orderType,
+    ...(quantity != null ? { quantity: String(quantity) } : { orderAmount: String(orderAmount) }),
+    ...(orderType === 'LIMIT' ? { price: String(limitPrice) } : {}),
+  });
+}
+
+export function prepareTossCancel(credentials: TossCredentials, orderId: string) {
+  if (!orderId.trim()) throw new Error('TOSS_ORDER_ID_REQUIRED');
+  return tossAuthorizedRequest(
+    credentials,
+    'POST',
+    `/api/v1/orders/${encodeURIComponent(orderId.trim())}/cancel`,
+    credentials.accountSeq,
+    '',
+    {},
+  );
+}
+
+export function prepareTossAmend(
+  credentials: TossCredentials,
+  input: { orderId: string; market: 'KR' | 'US'; quantity?: number | null; price: number },
+) {
+  if (!input.orderId.trim()) throw new Error('TOSS_ORDER_ID_REQUIRED');
+  if (!Number.isFinite(input.price) || input.price <= 0) throw new Error('TOSS_LIMIT_PRICE_REQUIRED');
+  if (input.market === 'KR' && (!Number.isSafeInteger(input.quantity) || Number(input.quantity) <= 0)) {
+    throw new Error('TOSS_KR_AMEND_QUANTITY_REQUIRED');
+  }
+  if (input.market === 'US' && input.quantity != null) throw new Error('TOSS_US_AMEND_QUANTITY_NOT_SUPPORTED');
+  return tossAuthorizedRequest(
+    credentials,
+    'POST',
+    `/api/v1/orders/${encodeURIComponent(input.orderId.trim())}/modify`,
+    credentials.accountSeq,
+    '',
+    {
+      orderType: 'LIMIT',
+      ...(input.market === 'KR' ? { quantity: String(input.quantity) } : {}),
+      price: String(input.price),
+    },
+  );
 }
 
 export function buildBitgetSignature(
