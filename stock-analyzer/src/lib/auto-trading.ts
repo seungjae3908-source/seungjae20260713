@@ -270,7 +270,6 @@ export function saveAutoTradeSettings(
 	const normalized: AutoTradeSettings = {
 		...settings,
 		liveTrading: false,
-		executionKey: "",
 		maxRanks: 1,
 		investmentPerTrade: Math.max(0, Math.round(settings.investmentPerTrade)),
 		accountValue: Math.max(1, Math.round(settings.accountValue)),
