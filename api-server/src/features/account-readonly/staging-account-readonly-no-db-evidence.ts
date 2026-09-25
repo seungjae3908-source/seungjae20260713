@@ -214,7 +214,8 @@ function assertReadOnlySnapshot(provider: ReadonlyCredentialProvider, snapshot: 
   if (snapshot.errorCode !== null) {
     throw new AccountReadonlyError(snapshot.errorCode);
   }
-  if (!Array.isArray(snapshot.openOrders)) {
+  const openOrders = snapshot.openOrders;
+  if (!Array.isArray(openOrders)) {
     throw new AccountReadonlyError(`${provider.toUpperCase()}_OPEN_ORDERS_NOT_PROVEN`);
   }
   if (
@@ -240,7 +241,7 @@ function sanitizedProviderSummary(snapshot: CanonicalAccountSnapshot) {
     accountCount: snapshot.accounts?.length ?? 0,
     balanceCount: snapshot.balances?.length ?? 0,
     positionCount: snapshot.positions?.length ?? 0,
-    openOrderCount: snapshot.openOrders.length,
+    openOrderCount: openOrders.length,
     errorCode: snapshot.errorCode,
     credentialsReturned: snapshot.credentialsReturned,
     orderRequests: snapshot.orderRequests,
