@@ -164,8 +164,10 @@ test('ephemeral user proves real Toss Upbit Bitget GET-only account runtime with
 
     const vaultStatus = await requestJson(baseUrl, token, 'GET', '/api/accounts/read-only/credentials/status');
     expect(vaultStatus.status).toBe(200); expect(vaultStatus.payload.encryptionConfigured).toBe(true); expect(vaultStatus.payload.credentialsReturned).toBe(false);
-    expect(vaultStatus.payload.supportedProviders).toEqual(['toss', 'kiwoom', 'upbit', 'bitget']);
-    expect(vaultStatus.payload.hiddenProviders).toEqual([]);
+    expect(vaultStatus.payload.supportedProviders).toEqual(kiwoomEvidenceEnabled
+      ? ['toss', 'kiwoom', 'upbit', 'bitget']
+      : ['toss', 'upbit', 'bitget']);
+    expect(vaultStatus.payload.hiddenProviders).toEqual(kiwoomEvidenceEnabled ? [] : ['kiwoom']);
 
     const tossSave = await requestJson(baseUrl, token, 'PUT', '/api/accounts/read-only/credentials/toss', {
       purpose: 'read_only', permissions: ['read'], credentials: { clientId: tossClientId, clientSecret: tossClientSecret, ...(tossAccountSeq ? { accountSeq: tossAccountSeq } : {}) },
