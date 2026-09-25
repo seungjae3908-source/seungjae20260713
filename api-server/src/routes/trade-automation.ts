@@ -347,7 +347,9 @@ router.put('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
     const exchange = exchangeValue(req.params.exchange);
     const credentials = req.body?.credentials;
     if (!credentials || typeof credentials !== 'object' || Array.isArray(credentials)) throw new Error('CREDENTIALS_REQUIRED');
-    const permissions = Array.isArray(req.body?.permissions) ? req.body.permissions.map(String).map((item: string) => item.toLowerCase()) : [];
+    const permissions: string[] = Array.isArray(req.body?.permissions)
+      ? req.body.permissions.map((item: unknown) => String(item).toLowerCase())
+      : [];
     if (permissions.some((item: string) => item.includes('withdraw') || item.includes('출금')
       || item.includes('transfer') || item.includes('이체'))) {
       throw new Error('WITHDRAWAL_OR_TRANSFER_PERMISSION_NOT_ALLOWED');
