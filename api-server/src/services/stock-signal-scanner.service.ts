@@ -21,6 +21,8 @@ import {
 } from './scanner-quant-strategy.service';
 import type { ScannerResponse, ScannerSignalCard } from './scanner-signal.types';
 import { ScannerUniverseService } from './scanner-universe.service';
+import { applyThemeSwingOverlay } from './scanner-theme-swing.service';
+import { classifyCatalogEntryThemeTags } from './themes.service';
 
 export interface StockSignalScanRequest {
   memberId: string;
@@ -257,8 +259,13 @@ export const StockSignalScannerService = {
     }).filter((card): card is ScannerSignalCard => card != null)
       .filter((card) => request.filters.maximumRiskScore == null || (card.riskScore != null && card.riskScore <= request.filters.maximumRiskScore));
 
+    const themeSwingCandidates = applyThemeSwingOverlay(broadCandidates, (card) => {
+      const entry = entryByTicker.get(card.symbol);
+      return entry ? classifyCatalogEntryThemeTags(entry) : [];
+    });
+
     const ranking = rankScannerCandidates({
-      cards: broadCandidates,
+      cards: themeSwingCandidates,
       market: request.market,
       strategy: strategyMode,
       softMinimumScore: request.filters.minimumScore,
@@ -278,13 +285,13 @@ export const StockSignalScannerService = {
       signal: request.signal,
     });
     const visibleTradeReviewCount = intelligenceCards.filter((card) => card.direction === 'LONG').length;
-    const discovery = buildScannerDiscoveryView(broadCandidates, {
+    const discovery = buildScannerDiscoveryView(themeSwingCandidates, {
       tradeReviewCount: visibleTradeReviewCount,
       limit: 100,
     });
     const partial = raw.partial || universe.partial;
     const timedOut = raw.timedOut;
-    const hasUntrusted = broadCandidates.some((card) => card.dataQuality?.state === 'DATA_UNTRUSTED');
+    const hasUntrusted = themeSwingCandidates.some((card) => card.dataQuality?.state === 'DATA_UNTRUSTED');
     const dataState = universe.stale ? 'stale' as const : hasUntrusted ? 'untrusted' as const : partial ? 'partial' as const : 'complete' as const;
     const completedCount = raw.completedCount;
     const actionableCount = ranking.diagnostics.sGradeCount + ranking.diagnostics.aGradeCount;
