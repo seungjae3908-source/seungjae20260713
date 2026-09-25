@@ -351,7 +351,7 @@ test('live Upbit trading key is saved separately with read+orders only and does 
   await expect(panel).toBeVisible();
   await expect(page.getByTestId('live-connection-upbit')).toContainText('거래키 미연결');
 
-  await page.getByRole('button', { name: '거래키 연결' }).nth(2).click();
+  await page.getByTestId('live-connection-upbit').getByRole('button', { name: '거래키 연결' }).click();
   const dialog = page.getByRole('dialog', { name: '실주문 거래키 연결' });
   await expect(dialog).toBeVisible();
 
