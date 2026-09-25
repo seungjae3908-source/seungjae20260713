@@ -315,6 +315,9 @@ function IntelligenceDashboard() {
     retry: 1,
   });
   const intelligence = query.data?.portfolio;
+  const linkedAccountPositions = Array.isArray(intelligence?.linkedAccountPositions)
+    ? linkedAccountPositions
+    : [];
 
   useEffect(() => {
     const locationQuery = location.includes('?') ? location.slice(location.indexOf('?') + 1) : '';
@@ -372,7 +375,7 @@ function IntelligenceDashboard() {
           <div className="flex flex-wrap items-center justify-center gap-2"><WalletCards className="h-4 w-4" /><h2 className="font-bold">연결 실계좌 보유</h2><span className="rounded-full bg-positive/10 px-2 py-1 text-xs font-semibold text-positive">조회 전용</span></div>
           <p className="mt-1 text-center text-xs font-medium leading-5 text-muted-foreground">수동 보유자산과 중복합산하지 않고 실제 연결 계좌 원본을 별도로 표시합니다.</p>
           <div className="mt-3 divide-y divide-border">
-            {intelligence.linkedAccountPositions.length ? intelligence.linkedAccountPositions.map((position, index) => <div key={`${position.provider}:${position.market}:${position.symbol}:${index}`} className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 py-2 text-sm">
+            {linkedAccountPositions.length ? linkedAccountPositions.map((position, index) => <div key={`${position.provider}:${position.market}:${position.symbol}:${index}`} className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 py-2 text-sm">
               <div className="min-w-0"><p className="truncate font-semibold">{position.symbol} · {position.market}</p><p className="text-xs font-medium text-muted-foreground">{position.provider.toUpperCase()} · 수량 {position.quantity.toLocaleString()} · 평단 {position.averageEntryPrice == null ? '미확인' : position.averageEntryPrice.toLocaleString()} {position.currency ?? ''}</p></div>
               <div className="text-right text-xs font-semibold tabular-nums"><p>평가 {position.marketValue == null ? '미확인' : position.marketValue.toLocaleString()} {position.currency ?? ''}</p><p className={position.unrealizedPnl == null ? 'text-muted-foreground' : position.unrealizedPnl >= 0 ? 'text-positive' : 'text-destructive'}>손익 {position.unrealizedPnl == null ? '미확인' : position.unrealizedPnl.toLocaleString()} {position.currency ?? ''}</p>{position.stale ? <p className="text-warning">이전 정상값</p> : null}</div>
             </div>) : <p className="py-3 text-center text-sm font-medium text-muted-foreground">연결된 실계좌 보유 근거가 없습니다.</p>}
