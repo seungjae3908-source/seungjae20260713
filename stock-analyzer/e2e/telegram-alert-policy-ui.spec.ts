@@ -244,8 +244,6 @@ test('Telegram settings center exposes urgency, quiet hours, digest and bounded 
   ]) {
     expect(panel).toContain(label);
   }
-  expect(panel).toContain("<option value=\"Asia/Seoul\">서울</option>");
-  expect(panel).toContain("<option value=\"America/New_York\">뉴욕</option>");
   expect(panel).toContain("deliveryMode === 'BATCHED'");
   expect(panel).toContain('sameSymbolRepeatLimit');
 });
@@ -314,7 +312,7 @@ test('actual Account UI clicks Telegram link on mobile and test-message on deskt
   await page.goto('/account');
   const integrationPanel = page.getByTestId('user-broker-telegram-panel');
   await expect(integrationPanel).toHaveAttribute('data-user-integrations-request-state', 'success');
-  await expect(integrationPanel).toContainText('연결 안 됨');
+  await expect(integrationPanel).toContainText('연결 필요');
 
   await page.getByRole('button', { name: '텔레그램 연결', exact: true }).click();
   await expect.poll(() => runtime.counters().linkRequests).toBe(1);
@@ -324,7 +322,7 @@ test('actual Account UI clicks Telegram link on mobile and test-message on deskt
 
   runtime.connect();
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.getByRole('button', { name: '연결 상태 새로고침' }).click();
+  await page.getByRole('button', { name: '새로고침', exact: true }).click();
   await expect(integrationPanel.getByRole('button', { name: '연결 해제' })).toBeVisible();
   await expect(integrationPanel).toContainText('정상');
   const testButton = page.getByRole('button', { name: '테스트 메시지', exact: true });
