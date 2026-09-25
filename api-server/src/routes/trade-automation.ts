@@ -24,7 +24,7 @@ import type {
 
 const router: IRouter = Router();
 router.use(createScannerPaperPlansRouter());
-const EXCHANGES = new Set<TradingExchange>(['bitget', 'upbit', 'kiwoom']);
+const EXCHANGES = new Set<TradingExchange>(['bitget', 'upbit', 'kiwoom', 'toss']);
 const CANCEL_RECONCILIATION_STATES = new Set([
   'SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED', 'RECOVERY_REQUIRED',
 ]);
@@ -173,14 +173,15 @@ function approvalExpired(plan: TradingPlan, now = Date.now()) {
 function approvalReadStatus(plan: TradingPlan, now = Date.now()) {
   const signalState = approvalSignalState(plan.marketSnapshot?.signalState);
   const expired = approvalExpired(plan, now);
+  const liveApprovalReady = plan.accountMode !== 'live' || liveExecutionEnabled(plan.exchange);
   const approvalEnabled = plan.state === 'APPROVAL_PENDING'
-    && plan.accountMode !== 'live'
+    && liveApprovalReady
     && signalState === 'READY_FOR_APPROVAL'
     && !expired
     && plan.riskAssessment?.allowed !== false;
 
   let reasonCode: string | null = null;
-  if (plan.accountMode === 'live') reasonCode = 'LIVE_APPROVAL_LOCKED';
+  if (plan.accountMode === 'live' && !liveExecutionEnabled(plan.exchange)) reasonCode = 'LIVE_EXECUTION_DISABLED';
   else if (expired) reasonCode = 'APPROVAL_EXPIRED';
   else if (plan.state !== 'APPROVAL_PENDING') reasonCode = 'PLAN_NOT_APPROVAL_PENDING';
   else if (signalState !== 'READY_FOR_APPROVAL') reasonCode = 'SIGNAL_REVALIDATION_REQUIRED';
@@ -264,6 +265,7 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
         bitget: liveExecutionEnabled('bitget'),
         upbit: liveExecutionEnabled('upbit'),
         kiwoom: liveExecutionEnabled('kiwoom'),
+        toss: liveExecutionEnabled('toss'),
       },
       credentialVault: credentialConfigurationStatus(),
       lastOrder: orders[0] ?? null,
@@ -329,8 +331,8 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
     if (policy.mode !== 'automatic') {
       policy.automaticEnabled = false;
       policy.marketEnabled = { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false };
-      policy.exchangeEnabled = { bitget: false, upbit: false, kiwoom: false };
-      policy.enabledAssets = { bitget: [], upbit: [], kiwoom: [] };
+      policy.exchangeEnabled = { bitget: false, upbit: false, kiwoom: false, toss: false };
+      policy.enabledAssets = { bitget: [], upbit: [], kiwoom: [], toss: [] };
     }
     await repository.savePolicy(userId, policy);
     return res.json({ ok: true, policy, defaultOff: !policy.automaticEnabled });
@@ -344,13 +346,15 @@ router.put('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
     const credentials = req.body?.credentials;
     if (!credentials || typeof credentials !== 'object' || Array.isArray(credentials)) throw new Error('CREDENTIALS_REQUIRED');
     const permissions = Array.isArray(req.body?.permissions) ? req.body.permissions.map(String).map((item: string) => item.toLowerCase()) : [];
-    if (permissions.some((item: string) => item.includes('withdraw') || item.includes('출금'))) {
-      throw new Error('WITHDRAWAL_PERMISSION_NOT_ALLOWED');
+    if (permissions.some((item: string) => item.includes('withdraw') || item.includes('출금')
+      || item.includes('transfer') || item.includes('이체'))) {
+      throw new Error('WITHDRAWAL_OR_TRANSFER_PERMISSION_NOT_ALLOWED');
     }
     const allowedKeys: Record<TradingExchange, string[]> = {
       bitget: ['apiKey', 'secretKey', 'passphrase'],
       upbit: ['accessKey', 'secretKey'],
       kiwoom: ['appKey', 'secretKey'],
+      toss: ['clientId', 'clientSecret', 'accountSeq'],
     };
     const safeCredentials = Object.fromEntries(allowedKeys[exchange].map((key) => [key, String(credentials[key] ?? '').trim()]));
     if (Object.values(safeCredentials).some((value) => !value)) throw new Error('CREDENTIALS_INCOMPLETE');
@@ -427,7 +431,7 @@ router.post('/emergency-stop', async (req: AuthenticatedRequest, res) => {
     const policy = normalizeTradingPolicy({
       ...current, automaticEnabled: false, emergencyStopped: true, mode: 'approval',
       marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false },
-      exchangeEnabled: { bitget: false, upbit: false, kiwoom: false },
+      exchangeEnabled: { bitget: false, upbit: false, kiwoom: false, toss: false },
     });
     await repository.savePolicy(userId, policy);
     return res.json({ ok: true, emergencyStopped: true, newOrdersBlocked: true, existingOrdersCanceled: false });
