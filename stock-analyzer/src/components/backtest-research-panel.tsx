@@ -10,6 +10,8 @@ import {
   YAxis,
 } from 'recharts';
 import { CenteredPageHeader } from '@/components/centered-page-header';
+import { Link } from 'wouter';
+import { backtestPaperHandoffPath } from '../../../packages/strategy-hypothesis/src/backtest-paper-handoff.js';
 import { resolveEvidenceDisplay } from '@/lib/evidence-display';
 import {
   runBacktest,
@@ -388,6 +390,15 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
 
         {result ? (
           <div className="space-y-4" data-testid="backtest-results">
+            <section className="rounded-2xl border border-border bg-card p-4" data-testid="backtest-paper-handoff">
+              <h3 className="text-sm font-black">같은 후보 Paper 전달</h3>
+              <p className="mt-2 text-xs text-muted-foreground">서버 결과의 식별자와 정책 참조를 전달합니다. 현재는 참조 확인만 가능하며 자동 전략 실행·Natural Paper 증거가 아닙니다.</p>
+              {result.paperHandoffs?.length ? <div className="mt-3 flex flex-wrap gap-2">
+                {result.paperHandoffs.map((handoff) => <Link key={handoff.side} href={backtestPaperHandoffPath(handoff, result.paperHandoffRunId)} className="inline-flex min-h-11 max-w-full items-center break-words rounded-xl border border-border px-3 text-xs font-bold">
+                  {handoff.symbol} · {handoff.side} · {handoff.candidateId ? '후보 참조 확인' : 'MISSING identity 확인'}
+                </Link>)}
+              </div> : <p className="mt-2 text-xs font-bold">UNAVAILABLE — 서버 결과에 candidateId·strategyId·parameterHash 전달 계약이 없습니다.</p>}
+            </section>
             <section className="rounded-2xl border border-border bg-card p-4">
               <div className="mb-3 flex items-center justify-center gap-2">
                 <ShieldCheck className="h-4 w-4 text-emerald-500" />

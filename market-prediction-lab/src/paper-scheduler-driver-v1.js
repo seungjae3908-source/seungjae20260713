@@ -6,6 +6,8 @@ import {
   RECURRING_PAPER_MARKETS,
   runRecurringPaperCycle,
 } from "./recurring-paper-loop-v1.js";
+import { isAdaptiveMultiEvidenceV2FrozenCandidateId } from "./adaptive-multi-evidence-natural-paper-v2.js";
+import { buildMemberAutoTradingPaperHandoff } from "./member-auto-trading-paper-handoff-v1.js";
 
 export const PAPER_SCHEDULER_OWNER_LIVENESS = Object.freeze({
   ALIVE: "ALIVE",
@@ -418,7 +420,9 @@ function positionIdentityFor(position) {
     value.candidateId, value.strategyFamily, value.strategyId, value.strategyVersion, value.parameterHash,
     value.parameterDigest, value.costPolicyVersion, value.accountMode,
   ].some((item) => !nonEmpty(item)) || value.parameterDigest !== value.parameterHash
-    || value.accountMode !== "PAPER" || !/^paper-candidate-v1:[0-9a-f]{64}$/u.test(value.candidateId)
+    || value.accountMode !== "PAPER"
+    || (!/^paper-candidate-v1:[0-9a-f]{64}$/u.test(value.candidateId)
+      && !isAdaptiveMultiEvidenceV2FrozenCandidateId(value.candidateId))
     || !immutableSha(value.researchCodeSha)
     || !nonEmpty(value.signalTimeframe) || !positiveInteger(value.horizon)) return null;
   return Object.freeze({ ...value, researchCodeSha: value.researchCodeSha.toLowerCase() });
@@ -933,6 +937,12 @@ export async function runScheduledPaperCycle({
       });
     }
 
+    const memberAutoTradingHandoff = buildMemberAutoTradingPaperHandoff({
+      cycleId: cycle.cycleId,
+      evaluatedAtMs: evidenceEvaluatedAtMs,
+      lanes,
+    });
+
     await leaseStore.assertOwned({
       leaseKey: cycle.leaseKey,
       ownerId,
@@ -973,6 +983,7 @@ export async function runScheduledPaperCycle({
       completedAtMs,
       ...result,
       positionObservationHandoff,
+      memberAutoTradingHandoff,
       safety: PAPER_SCHEDULER_CONTRACT,
     });
   } finally {

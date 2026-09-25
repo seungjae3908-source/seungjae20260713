@@ -7,6 +7,7 @@ function source(relativePath: string) {
 }
 
 const panel = source('src/components/user-broker-telegram-panel.tsx');
+const labels = source('src/lib/labels.ts');
 const route = source('../api-server/src/routes/user-broker-telegram.ts');
 const testMessageService = source('../api-server/src/services/telegram-test-message.service.ts');
 
@@ -201,49 +202,48 @@ async function installTelegramButtonRuntime(page: Page) {
 test('Telegram settings center exposes the existing user-bound alert policy instead of inventing a second policy engine', () => {
   expect(panel).toContain("'/api/user-integrations/telegram-policy'");
   expect(panel).toContain("method: 'PATCH'");
-  expect(panel).toContain('Telegram 투자 알림센터');
-  expect(panel).toContain('투자 알림 전체');
+  expect(panel).toContain('telegram-simple-settings');
+  expect(panel).toContain('개인 투자 알림');
   expect(panel).toContain('alertPolicyStorageAvailable');
-  expect(panel).toContain('Telegram 개인 알림 저장소를 사용할 수 없어 설정 변경을 차단했습니다.');
+  expect(panel).toContain('알림 설정을 저장할 수 없습니다.');
 });
 
 test('Telegram settings center covers all canonical markets and scanner-facing signal classes', () => {
-  for (const label of ['국내주식', '미국주식', '코인 현물', '코인 선물']) {
-    expect(panel).toContain(label);
+  expect(panel).toContain('USER_MARKET_KO');
+  expect(panel).toContain('USER_SIGNAL_KO');
+  for (const label of ['국내주식', '미국주식', '코인현물', '코인선물']) {
+    expect(labels).toContain(`'${label}'`);
   }
   for (const signal of [
-    "BUY: 'BUY'",
-    "LONG: '선물 LONG'",
-    "SHORT: '선물 SHORT'",
-    "NO_TRADE: 'NO TRADE'",
+    "BUY: '매수'",
+    "LONG: '롱'",
+    "SHORT: '숏'",
+    "NO_TRADE: '거래 안 함'",
     "PRICE_TARGET: '목표가'",
     "STRATEGY_HEALTH: '전략 상태'",
-    "CHAMPION: 'Champion'",
-    "RESEARCH: 'Research'",
+    "CHAMPION: '대표 전략'",
+    "RESEARCH: '연구'",
     "SETTLEMENT: '정산 결과'",
     "PROVIDER_SERVER_ERROR: '데이터·서버 오류'",
   ]) {
-    expect(panel).toContain(signal);
+    expect(labels).toContain(signal);
   }
 });
 
 test('Telegram settings center exposes urgency, quiet hours, digest and bounded duplicate controls', () => {
   for (const label of [
     '긴급', '중요', '일반',
-    '지정 시간에는 일반 알림 끄기',
-    '긴급은 허용',
-    '즉시 받기',
+    '야간 일반 알림 끄기',
+        '즉시 받기',
     '모아서 받기',
     '모아보기 간격(분)',
-    '같은 대상 쿨다운(분)',
-    '같은 이벤트 차단(분)',
+    '쿨다운(분)',
+    '중복 차단(분)',
     '같은 종목 창(분)',
-    '같은 종목 최대 횟수',
+    '최대 반복',
   ]) {
     expect(panel).toContain(label);
   }
-  expect(panel).toContain("<option value=\"Asia/Seoul\">서울</option>");
-  expect(panel).toContain("<option value=\"America/New_York\">뉴욕</option>");
   expect(panel).toContain("deliveryMode === 'BATCHED'");
   expect(panel).toContain('sameSymbolRepeatLimit');
 });
@@ -260,15 +260,16 @@ test('personal Telegram runtime health is sanitized and visible without trading 
   expect(route).not.toContain('TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN');
   expect(route).not.toContain('TELEGRAM_WEBHOOK_SECRET: process.env.TELEGRAM_WEBHOOK_SECRET');
 
-  expect(panel).toContain('Telegram 서비스 상태');
-  expect(panel).toContain('개인 전송');
-  expect(panel).toContain('주식방');
-  expect(panel).toContain('코인방');
-  expect(panel).toContain('Rich 차트');
-  expect(panel).toContain('AI 설명');
-  expect(panel).toContain('신호 후속');
-  expect(panel).toContain('보유종목 개인알림');
-  expect(panel).toContain('상태에는 Secret·chat ID를 표시하지 않습니다.');
+  expect(panel).toContain('텔레그램');
+  expect(panel).toContain('주식 알림');
+  expect(panel).toContain('코인 알림');
+  expect(panel).toContain('내 보유종목');
+  expect(panel).toContain('자동매매 핵심 체결');
+  expect(panel).toContain('장전 리포트');
+  expect(panel).not.toContain('개인 전송 ·');
+  expect(panel).not.toContain('상세 차트 ·');
+  expect(panel).not.toContain('AI 설명 ·');
+  expect(panel).not.toContain('신호 후속 ·');
 });
 
 test('personal Telegram link webhook accepts only the users private chat', () => {
@@ -298,10 +299,9 @@ test('personal Telegram test endpoint preserves the route transport boundary and
   expect(testMessageService).not.toContain('ordersSubmitted: 1');
 
   expect(panel).toContain("'/api/user-integrations/telegram/test'");
-  expect(panel).toContain('테스트 메시지 보내기');
-  expect(panel).toContain('테스트 전송 중…');
-  expect(panel).toContain('테스트 메시지는 투자 신호나 주문이 아닙니다.');
-  expect(panel).toContain('disabled={!state.telegram.connected || !state.telegramRuntime.deliveryReady || testSending}');
+  expect(panel).toContain("'테스트 메시지'");
+  expect(panel).toContain("'전송 중…'");
+    expect(panel).toContain('disabled={!state.telegram.connected || !state.telegramRuntime.deliveryReady || testSending}');
   expect(panel).toContain('if (!state?.telegram.connected || !state.telegramRuntime.deliveryReady || testSending) return;');
 });
 
@@ -312,23 +312,24 @@ test('actual Account UI clicks Telegram link on mobile and test-message on deskt
   await page.goto('/account');
   const integrationPanel = page.getByTestId('user-broker-telegram-panel');
   await expect(integrationPanel).toHaveAttribute('data-user-integrations-request-state', 'success');
-  await expect(integrationPanel).toContainText('연결 안 됨');
+  await expect(integrationPanel).toContainText('연결 필요');
 
-  await page.getByRole('button', { name: 'Telegram 연결', exact: true }).click();
+  await page.getByRole('button', { name: '텔레그램 연결', exact: true }).click();
   await expect.poll(() => runtime.counters().linkRequests).toBe(1);
-  await expect(page.getByRole('link', { name: 'Telegram에서 연결 완료' }))
+  await expect(page.getByRole('link', { name: '텔레그램에서 연결 완료' }))
     .toHaveAttribute('href', 'https://t.me/InvestmentTestBot?start=safe-e2e-token');
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(391);
 
   runtime.connect();
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.getByRole('button', { name: '연결 상태 새로고침' }).click();
-  await expect(integrationPanel).toContainText('연결됨 · ACTIVE');
-  const testButton = page.getByRole('button', { name: '테스트 메시지 보내기' });
+  await page.getByRole('button', { name: '새로고침', exact: true }).click();
+  await expect(integrationPanel.getByRole('button', { name: '연결 해제' })).toBeVisible();
+  await expect(integrationPanel).toContainText('정상');
+  const testButton = page.getByRole('button', { name: '테스트 메시지', exact: true });
   await expect(testButton).toBeEnabled();
   await testButton.click();
   await expect.poll(() => runtime.counters().testRequests).toBe(1);
-  await expect(integrationPanel.getByRole('status')).toContainText('Telegram 테스트 메시지 전송 완료 · 1회 시도');
+  await expect(integrationPanel.getByRole('status')).toContainText('텔레그램 테스트 메시지 전송 완료 · 1회 시도');
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1441);
 
   expect(runtime.counters().integrationReads).toBeGreaterThanOrEqual(2);
@@ -336,9 +337,9 @@ test('actual Account UI clicks Telegram link on mobile and test-message on deskt
 });
 
 test('Telegram settings remain responsive and do not add Telegram-side trade execution controls', () => {
-  expect(panel).toContain('grid grid-cols-2 gap-2 sm:grid-cols-4');
+  expect(panel).toContain('telegram-simple-settings');
   expect(panel).toContain('min-h-11');
-  expect(panel).toContain('이 설정은 거래 판단이나 주문 권한을 바꾸지 않습니다.');
+  expect(panel).toContain('세부 설정');
   expect(panel).not.toContain('callback_data');
   expect(panel).not.toContain('Telegram에서 매수');
   expect(panel).not.toContain('Telegram에서 매도');

@@ -24,10 +24,12 @@ on:
       - .github/workflows/futures-public-network-smoke.yml
       - .github/workflows/staging-readiness.yml
       - ops/deploy-production.sh
+      - ops/production-verification-diagnostics.sh
       - ops/deploy-staging.sh
       - api-server/scripts/production-ci-provenance.cjs
       - api-server/scripts/verify-production-ci-provenance-contract.mjs
       - api-server/scripts/verify-production-data-plane-probe-contract.mjs
+      - api-server/scripts/verify-production-verification-contract.mjs
       - api-server/scripts/verify-phase10-deployment-safety.mjs
       - api-server/scripts/build-staging-verdict.mjs
       - api-server/scripts/verify-staging-verdict.mjs
@@ -56,6 +58,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash -n ops/deploy-production.sh
+          bash -n ops/production-verification-diagnostics.sh
           bash -n ops/deploy-staging.sh
       - name: Verify Phase 10 deployment safety contract
         run: node api-server/scripts/verify-phase10-deployment-safety.mjs
@@ -63,6 +66,8 @@ jobs:
         run: node api-server/scripts/verify-production-ci-provenance-contract.mjs
       - name: Verify Production data-plane probe contract
         run: node api-server/scripts/verify-production-data-plane-probe-contract.mjs
+      - name: Verify Production post-switch verification contract
+        run: node api-server/scripts/verify-production-verification-contract.mjs
 
   approval-gate:
     name: Validate immutable main revision, CI provenance, and exact staging verdict
@@ -239,7 +244,7 @@ jobs:
       TARGET_SHA: ${{ needs.approval-gate.outputs.target_sha }}
       DATA_PROBE_PATH: ${{ inputs.data_probe_path }}
       FORCE_REBUILD: ${{ inputs.force_rebuild }}
-      PUBLIC_BASE_URL: https://lsj119.duckdns.org
+      PUBLIC_BASE_URL: https://lsj119.com
       REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
     steps:
       - name: Validate production secrets
@@ -300,8 +305,10 @@ jobs:
           fi
           DEPLOY_SCRIPT="$SOURCE_DIR/ops/deploy-production.sh"
           [[ -f "$DEPLOY_SCRIPT" ]] || { echo 'Deployment script missing' >&2; exit 1; }
+          [[ -f "$SOURCE_DIR/ops/production-verification-diagnostics.sh" ]] || { echo 'Production verification diagnostics missing' >&2; exit 1; }
           chmod 700 "$DEPLOY_SCRIPT"
-          SOURCE_DIR="$SOURCE_DIR" LIVE_DIR="$LIVE_DIR" PM2_NAME="$PM2_NAME" LIVE_PORT="$LIVE_PORT" \
+          BASH_ENV="$SOURCE_DIR/ops/production-verification-diagnostics.sh" \
+            SOURCE_DIR="$SOURCE_DIR" LIVE_DIR="$LIVE_DIR" PM2_NAME="$PM2_NAME" LIVE_PORT="$LIVE_PORT" \
             CANARY_PORT="$CANARY_PORT" DATA_PROBE_PATH="$DATA_PROBE_PATH" PUBLIC_BASE_URL="$PUBLIC_BASE_URL" \
             "$DEPLOY_SCRIPT" "$TARGET_SHA"
           REMOTE

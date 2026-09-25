@@ -7,7 +7,7 @@ const indexHtmlPath = fileURLToPath(new URL('../index.html', import.meta.url));
 test('production React entry cannot outrun the parsed root container', () => {
   const html = readFileSync(indexHtmlPath, 'utf8');
   const rootOffset = html.indexOf('id="root"');
-  const entryOffset = html.indexOf("import('/src/main.tsx')");
+  const entryOffset = html.indexOf('src="/src/main.tsx"');
   const moduleScript = html.match(/<script\b[^>]*\btype=["']module["'][^>]*>/i)?.[0] ?? null;
 
   expect(rootOffset, 'index.html must own the canonical React root').toBeGreaterThanOrEqual(0);

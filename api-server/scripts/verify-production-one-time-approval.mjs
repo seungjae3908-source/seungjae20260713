@@ -195,7 +195,7 @@ requireText(production, 'actions/download-artifact@v4', 'Production independentl
 requireText(production, 'verify-staging-verdict.mjs', 'Production independently verifies staging verdict');
 requireText(production, 'LIVE_DIR=/opt/stock-app', 'official Production path');
 requireText(production, 'PM2_NAME=stock-app', 'official Production PM2');
-requireText(production, 'PUBLIC_BASE_URL: https://lsj119.duckdns.org', 'official Production URL');
+requireText(production, 'PUBLIC_BASE_URL: https://lsj119.com', 'official Production URL');
 forbidText(production, '/api/quotes?tickers=005930', 'official Production workflow must not use protected quote API as readiness probe');
 
 requireText(staging, 'STAGING_RUN_FULL_VALIDATION=true is mandatory', 'full validation required for deploy candidate');

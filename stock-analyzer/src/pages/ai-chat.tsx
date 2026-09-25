@@ -3,7 +3,8 @@ import { useLocation } from 'wouter';
 import { ArrowRight, Bot, Loader2, Send, Square, UserRound, WalletCards } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { authorizedFetch } from '@/lib/auth-fetch';
-import { useAnalysisSelection } from '@/lib/analysis-selection';
+import { useAnalysisSelection, type AnalysisSelection } from '@/lib/analysis-selection';
+import { acceptAiChatSelectionReply, aiChatSelectionContext, aiChatSelectionKey } from '@/lib/ai-chat-selection';
 import { cn } from '@/lib/utils';
 
 type AiChatDataDisclosure = {
@@ -29,6 +30,7 @@ type AiChatPayload = {
   message?: string;
   error?: string;
   data?: AiChatDataDisclosure;
+  selection?: unknown;
 };
 
 type HubTab = 'AI' | 'Portfolio';
@@ -104,6 +106,10 @@ function errorMessage(payload: AiChatPayload | null): string {
 
 export default function AiChatPage() {
   const { selection } = useAnalysisSelection();
+  return <AiChatConversation key={aiChatSelectionKey(selection)} selection={selection} />;
+}
+
+function AiChatConversation({ selection }: { selection: AnalysisSelection | null }) {
   const [messages, setMessages] = useState<ChatMessage[]>([{
     id: 'welcome',
     role: 'assistant',
@@ -131,16 +137,21 @@ export default function AiChatPage() {
     setBusy(true);
     const controller = new AbortController();
     controllerRef.current = controller;
+    const context = aiChatSelectionContext(selection);
     try {
       const response = await authorizedFetch('/api/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
-        body: JSON.stringify({ message, context: selection ? { market: selection.market, symbol: selection.symbol, displayName: selection.displayName } : undefined }),
+        body: JSON.stringify({ message, context }),
       });
       const payload = await response.json().catch(() => null) as AiChatPayload | null;
       const answer = payload?.answer;
       if (!response.ok || !answer) throw new Error(errorMessage(payload));
+      if (controller.signal.aborted) return;
+      if (!acceptAiChatSelectionReply(payload.selection, context, controller.signal)) {
+        throw new Error('응답의 종목·시장·시간봉·방향이 현재 선택과 일치하지 않아 차단했습니다.');
+      }
       setMessages((current) => [...current, {
         id: `assistant:${Date.now()}`,
         role: 'assistant',
@@ -172,7 +183,7 @@ export default function AiChatPage() {
         <p className="mx-auto mt-1 max-w-2xl break-keep text-sm font-normal text-muted-foreground">공개 금융정보와 내 포트폴리오를 읽기 전용으로 확인합니다.</p>
         {selection && (
           <p className="mt-2 truncate text-xs font-medium text-muted-foreground">
-            선택 종목: {selection.displayName || selection.symbol} · {selection.market} · {selection.symbol}
+            선택 종목: {selection.displayName || selection.symbol} · {selection.market} · {selection.symbol} · {selection.timeframe} · {selection.action ?? 'MISSING'}
           </p>
         )}
       </header>

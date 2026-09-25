@@ -95,7 +95,10 @@ async function listDeviceRows() {
 
 let cleanupPassed = false;
 try {
-  await deleteDeviceRows();
+  const preflightRows = await listDeviceRows();
+  if (preflightRows.length !== 0) {
+    throw new Error('watchlist run fixture collision detected before CRUD verification');
+  }
 
   const initialRows = [
     {
@@ -171,6 +174,7 @@ try {
     status: 'passed',
     project_ref: projectRef,
     device_id_hash: createHash('sha256').update(deviceId).digest('hex').slice(0, 16),
+    preflight_rows: preflightRows.length,
     create_read_rows: created.length,
     replace_rows: replaced.length,
     cleanup_rows_remaining: remaining.length,

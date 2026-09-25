@@ -125,7 +125,7 @@ test('market information router serves all four rooms with public-only request p
   }
 });
 
-test('slow stock room returns bounded partial first paint while allowing canonical source warmup to finish', async () => {
+test('slow stock room returns bounded partial first paint while allowing bounded canonical source warmup to finish', async () => {
   let providerAborted = false;
   let warmed = false;
   let calls = 0;
@@ -159,7 +159,7 @@ test('slow stock room returns bounded partial first paint while allowing canonic
       });
       return fixture(room);
     },
-  }, { stockFirstPaintTimeoutMs: 30 });
+  }, { stockFirstPaintTimeoutMs: 30, stockWarmupDeadlineMs: 200 });
 
   try {
     const startedAt = Date.now();
@@ -207,6 +207,52 @@ test('slow stock room returns bounded partial first paint while allowing canonic
     assert.equal(secondBody.partial, false);
     assert.equal(secondBody.sections.rankings.status, 'ready');
     assert.equal(calls, 2);
+  } finally {
+    await server.close();
+  }
+});
+
+test('detached stock warmup aborts at its total request deadline instead of consuming server capacity indefinitely', async () => {
+  let finishWarmup!: (outcome: 'completed' | 'aborted') => void;
+  const warmupFinished = new Promise<'completed' | 'aborted'>((resolve) => {
+    finishWarmup = resolve;
+  });
+  const server = await start({
+    async getRoom(room, signal): Promise<MarketInformationResponse> {
+      assert.equal(room, 'stocks-us');
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          finishWarmup('completed');
+          resolve();
+        }, 500);
+        const abort = () => {
+          clearTimeout(timer);
+          finishWarmup('aborted');
+          const reason = signal?.reason;
+          reject(reason instanceof Error ? reason : new Error('aborted'));
+        };
+        if (signal?.aborted) {
+          abort();
+          return;
+        }
+        signal?.addEventListener('abort', abort, { once: true });
+      });
+      return fixture(room);
+    },
+  }, { stockFirstPaintTimeoutMs: 30, stockWarmupDeadlineMs: 90 });
+
+  try {
+    const response = await fetch(`${server.baseUrl}/api/market-information/stocks-us`);
+    assert.equal(response.status, 200);
+    const body = await response.json() as MarketInformationResponse;
+    assert.equal(body.partial, true);
+    assert.equal(body.sections.rankings.meta.errorCode, 'MARKET_INFORMATION_FIRST_PAINT_TIMEOUT');
+
+    const warmupOutcome = await Promise.race([
+      warmupFinished,
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 1_000)),
+    ]);
+    assert.equal(warmupOutcome, 'aborted');
   } finally {
     await server.close();
   }
