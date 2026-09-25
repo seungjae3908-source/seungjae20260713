@@ -349,6 +349,7 @@ export type TradingOrder = {
   cancelRequestClaimId?: string | null;
   cancelSubmittedAt?: string | null;
   cancelAcknowledgedAt?: string | null;
+  cancelOperationId?: string | null;
   recoveryLeaseOwner?: string | null;
   recoveryLeaseUntil?: string | null;
   protectionStatus?: TradingProtectionStatus;
