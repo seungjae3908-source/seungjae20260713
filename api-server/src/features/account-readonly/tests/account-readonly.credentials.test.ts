@@ -131,8 +131,8 @@ test('account FX route is registered before provider wildcard and remains public
   assert.ok(fxIndex >= 0);
   assert.ok(providerIndex > fxIndex);
   assert.match(routeSource, /loadFreePublicFxQuotes/);
-  assert.match(routeSource, /publicMarketDataOnly:s*true/);
-  assert.equal(/router.(?:post|put|patch|delete)('/fx'/i.test(routeSource), false);
+  assert.match(routeSource, /publicMarketDataOnly:\s*true/);
+  assert.equal(/router\.(?:post|put|patch|delete)\('\/fx'/i.test(routeSource), false);
 });
 
 test('read-only credential parser accepts only Toss, Kiwoom, Upbit and Bitget credential shapes', () => {
