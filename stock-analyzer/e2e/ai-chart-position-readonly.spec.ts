@@ -490,7 +490,8 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await expect(cockpit.getByTestId('ai-chart-exit-preview-verified')).toContainText('서버 확인 수량 5');
   await expect(cockpit.getByTestId('ai-chart-exit-preview-verified')).toContainText('executionAuthority=NONE');
   await expect(cockpit.getByTestId('ai-chart-exit-readiness')).toContainText('실전 종료 준비 · 차단');
-  await expect(cockpit.getByTestId('ai-chart-exit-readiness')).toContainText('LIVE_CONNECTION_NOT_CONFIGURED');
+  await expect(cockpit.getByTestId('ai-chart-exit-readiness')).toContainText('실전 거래키가 연결되지 않음');
+  await expect(cockpit.getByTestId('ai-chart-exit-readiness')).toContainText('실주문 서버게이트가 꺼져 있음');
 
   await cockpit.getByTestId('ai-chart-load-orders').click();
   await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('거래소 접수');
