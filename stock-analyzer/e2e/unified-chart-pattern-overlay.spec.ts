@@ -65,7 +65,7 @@ async function installMocks(page: Page) {
     contentType: 'application/json',
     body: '{}',
   }));
-  await page.route('**/api/stocks/*/chart**', (route) => {
+  await page.route('**/api/stocks/*/candles**', (route) => {
     chartCalls += 1;
     return route.fulfill({
       status: 200,
@@ -83,7 +83,10 @@ async function installMocks(page: Page) {
 
 async function openChart(page: Page) {
   await page.goto('/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m');
-  await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /AI 차트 생중계/, level: 1 })).toBeVisible();
+  if (await page.getByTestId('ai-chart-mobile-tabs').isVisible().catch(() => false)) {
+    await page.getByRole('tab', { name: '차트', exact: true }).click();
+  }
   await expect(page.getByTestId('unified-chart-canvas')).toBeVisible();
   await page.getByRole('button', { name: '자동 갱신 중', exact: true }).click();
   await expect(page.getByRole('button', { name: '갱신 일시정지', exact: true })).toBeVisible();

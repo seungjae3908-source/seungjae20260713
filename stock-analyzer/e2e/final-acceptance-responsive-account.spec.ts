@@ -1,4 +1,4 @@
-import { test, expect, type Page, type Route } from '@playwright/test';
+import { test, expect, type Page, type Request, type Route } from '@playwright/test';
 
 const NOW = '2026-08-09T00:00:00.000Z';
 const USER_ID = '77777777-7777-4777-8777-777777777777';
@@ -19,8 +19,8 @@ function roomResponse(room: string) {
 
 function stockFixture(market: 'KR' | 'US') {
   return market === 'US'
-    ? { ticker: 'AAPL', name: 'Apple', market: 'US', price: 220, changePercent: 1.1, volume: 12_000_000, tradingValue: 2_640_000_000, marketCap: 3_300_000_000_000, rank: 1, provider: 'acceptance', rating: { score: 91, rating: 'BUY', confidence: 88 }, reason: '최종 수용검증 fixture' }
-    : { ticker: '005930', name: '삼성전자', market: 'KR', price: 75_000, changePercent: 1.2, volume: 10_000_000, tradingValue: 750_000_000_000, marketCap: 450_000_000_000_000, rank: 1, provider: 'acceptance', rating: { score: 92, rating: 'BUY', confidence: 89 }, reason: '최종 수용검증 fixture' };
+    ? { ticker: 'AAPL', name: 'Apple', market: 'US', currency: 'USD', price: 220, changePercent: 1.1, volume: 12_000_000, tradingValue: 2_640_000_000, marketCap: 3_300_000_000_000, rank: 1, provider: 'acceptance', rating: { score: 91, rating: 'BUY', confidence: 88 }, reason: '최종 수용검증 fixture' }
+    : { ticker: '005930', name: '삼성전자', market: 'KR', currency: 'KRW', price: 75_000, changePercent: 1.2, volume: 10_000_000, tradingValue: 750_000_000_000, marketCap: 450_000_000_000_000, rank: 1, provider: 'acceptance', rating: { score: 92, rating: 'BUY', confidence: 89 }, reason: '최종 수용검증 fixture' };
 }
 
 function moversFixture(market: 'KR' | 'US') {
@@ -28,6 +28,8 @@ function moversFixture(market: 'KR' | 'US') {
   return {
     ok: true,
     market,
+    provider: 'live-market-providers',
+    dataStatus: 'complete',
     recommended: [row],
     picks: [row],
     aiRecommended: [row],
@@ -36,8 +38,8 @@ function moversFixture(market: 'KR' | 'US') {
     tradingValue: [row],
     gainers: [row],
     losers: [row],
-    risky: [],
-    updatedAt: NOW,
+    risky: [row],
+    updatedAt: new Date().toISOString(),
   };
 }
 
@@ -50,14 +52,31 @@ async function installAdminRuntime(page: Page) {
   }, { storageKey: AUTH_STORAGE_KEY, userId: USER_ID, now: NOW });
 
   const diagnostics = { consoleErrors: [] as string[], pageErrors: [] as string[], forbiddenMutations: [] as string[] };
+  const pendingApiRequests = new Map<Request, string>();
+  let lastApiActivityAt = Date.now();
+  const apiPath = (request: Request) => {
+    const path = new URL(request.url()).pathname;
+    return path.startsWith('/api/') || path.startsWith('/__e2e-supabase/') ? path : null;
+  };
   page.on('console', (message) => { if (message.type() === 'error') diagnostics.consoleErrors.push(message.text()); });
   page.on('pageerror', (error) => diagnostics.pageErrors.push(error.message));
   page.on('request', (request) => {
     const path = new URL(request.url()).pathname;
+    const trackedPath = apiPath(request);
+    if (trackedPath) {
+      pendingApiRequests.set(request, trackedPath);
+      lastApiActivityAt = Date.now();
+    }
     if (/\/api\/(?:crypto|stocks|account-connections).*\/(?:order|orders|cancel|transfer|withdraw|deposit)/i.test(path) && request.method() !== 'GET') {
       diagnostics.forbiddenMutations.push(`${request.method()} ${path}`);
     }
   });
+  const finishApiRequest = (request: Request) => {
+    if (!pendingApiRequests.delete(request)) return;
+    lastApiActivityAt = Date.now();
+  };
+  page.on('requestfinished', finishApiRequest);
+  page.on('requestfailed', finishApiRequest);
 
   await page.route('**/__e2e-supabase/**', async (route) => {
     const pathname = new URL(route.request().url()).pathname;
@@ -85,9 +104,19 @@ async function installAdminRuntime(page: Page) {
       return fulfill(route, moversFixture(market));
     }
     if (path === '/api/quotes') {
-      const tickers = (url.searchParams.get('tickers') ?? '').split(',').filter(Boolean);
+      const tickers = Array.from(new Set(
+        (url.searchParams.get('tickers') ?? '')
+          .split(',')
+          .map((ticker) => ticker.trim().toUpperCase().replace(/^(KR|US)[:.]/, ''))
+          .filter(Boolean),
+      ));
       const quotes = tickers.map((ticker) => ticker === 'AAPL' ? stockFixture('US') : { ...stockFixture('KR'), ticker });
-      return fulfill(route, { ok: true, quotes, rows: quotes, items: quotes, results: quotes });
+      return fulfill(route, {
+        quotes,
+        requested: tickers.length,
+        available: quotes.length,
+        updatedAt: new Date().toISOString(),
+      });
     }
 
     if (path === '/api/account-connections/snapshot') return fulfill(route, {
@@ -114,10 +143,24 @@ async function installAdminRuntime(page: Page) {
     return fulfill(route, { ok: true, items: [], rows: [], results: [], quotes: [], cards: [], alerts: [], markets: [], tickers: [], popular: [], gainers: [], risky: [], recommended: [], themes: [], sectors: [], positive: [], negative: [] });
   });
 
-  return () => {
-    expect(diagnostics.consoleErrors, diagnostics.consoleErrors.join('\n')).toEqual([]);
-    expect(diagnostics.pageErrors, diagnostics.pageErrors.join('\n')).toEqual([]);
-    expect(diagnostics.forbiddenMutations, diagnostics.forbiddenMutations.join('\n')).toEqual([]);
+  return {
+    beginRoute() {
+      lastApiActivityAt = Date.now();
+    },
+    async waitForApiIdle(label: string) {
+      const deadline = Date.now() + 5_000;
+      while (Date.now() <= deadline) {
+        if (pendingApiRequests.size === 0 && Date.now() - lastApiActivityAt >= 500) return;
+        await page.waitForTimeout(25);
+      }
+      expect([...pendingApiRequests.values()], `${label}: mocked API requests did not settle`).toEqual([]);
+      expect(Date.now() - lastApiActivityAt, `${label}: mocked API activity did not become idle`).toBeGreaterThanOrEqual(500);
+    },
+    assertClean() {
+      expect(diagnostics.consoleErrors, diagnostics.consoleErrors.join('\n')).toEqual([]);
+      expect(diagnostics.pageErrors, diagnostics.pageErrors.join('\n')).toEqual([]);
+      expect(diagnostics.forbiddenMutations, diagnostics.forbiddenMutations.join('\n')).toEqual([]);
+    },
   };
 }
 
@@ -131,6 +174,57 @@ async function assertNoHorizontalOverflow(page: Page, label: string) {
   expect(result.bodyWidth, `${label}: body horizontal overflow`).toBeLessThanOrEqual(result.viewportWidth + 1);
 }
 
+async function assertFiniteLoadingAndNoNavOcclusion(page: Page, label: string) {
+  await expect(page.getByTestId('page-fallback'), `${label}: route fallback exceeded 5s`)
+    .toHaveCount(0, { timeout: 5_000 });
+  await expect(page.locator('[aria-busy="true"]:visible'), `${label}: visible aria-busy exceeded 5s`)
+    .toHaveCount(0, { timeout: 5_000 });
+
+  const result = await page.evaluate(() => {
+    const scrollOwners = Array.from(document.querySelectorAll<HTMLElement>('main, [class*="overflow-y-auto"]'))
+      .filter((element) => {
+        const style = getComputedStyle(element);
+        return /(auto|scroll)/.test(style.overflowY) && element.scrollHeight > element.clientHeight + 2;
+      });
+    for (const owner of scrollOwners) owner.scrollTop = owner.scrollHeight;
+
+    const nav = document.querySelector<HTMLElement>('nav[aria-label="주요 메뉴"]');
+    if (!nav) return { overlaps: [] as string[] };
+    const navRect = nav.getBoundingClientRect();
+    const interactive = Array.from(document.querySelectorAll<HTMLElement>(
+      'button, a[href], input, select, textarea, [role="button"], [tabindex]:not([tabindex="-1"])',
+    ));
+    const overlaps = interactive.flatMap((element) => {
+      if (nav.contains(element) || element.closest('[aria-hidden="true"]')) return [];
+      const closedDetails = element.closest('details:not([open])');
+      if (closedDetails && element.closest('summary') !== closedDetails.querySelector('summary')) return [];
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0
+        || rect.width <= 0 || rect.height <= 0) return [];
+      const width = Math.max(0, Math.min(rect.right, navRect.right) - Math.max(rect.left, navRect.left));
+      const height = Math.max(0, Math.min(rect.bottom, navRect.bottom) - Math.max(rect.top, navRect.top));
+      const ratio = (width * height) / (rect.width * rect.height);
+      if (ratio < 0.35) return [];
+      const name = element.getAttribute('aria-label')
+        || element.getAttribute('placeholder')
+        || element.textContent?.trim()
+        || `${element.tagName}[type=${element.getAttribute('type') ?? 'n/a'}]`;
+      const scrollOwner = element.closest<HTMLElement>('main, [class*="overflow-y-auto"]');
+      const geometry = `control=${Math.round(rect.top)}-${Math.round(rect.bottom)}, nav=${Math.round(navRect.top)}-${Math.round(navRect.bottom)}`;
+      const scroll = scrollOwner
+        ? `scroll=${Math.round(scrollOwner.scrollTop)}/${Math.round(scrollOwner.scrollHeight - scrollOwner.clientHeight)}, paddingBottom=${getComputedStyle(scrollOwner).paddingBottom}`
+        : 'scroll=none';
+      const ownerRect = scrollOwner?.getBoundingClientRect();
+      const owner = ownerRect ? `owner=${Math.round(ownerRect.top)}-${Math.round(ownerRect.bottom)}` : 'owner=none';
+      return [`${name.slice(0, 80)} (${ratio.toFixed(2)}; ${geometry}; ${owner}; ${scroll})`];
+    });
+    return { overlaps };
+  });
+
+  expect(result.overlaps, `${label}: fixed navigation occludes interactive content`).toEqual([]);
+}
+
 const ROUTES = [
   '/home', '/stocks/kr', '/stocks/us', '/coins/spot', '/coins/futures', '/stocks',
   '/stock-info?asset=stock&market=KR&symbol=005930', '/market-overview', '/assets', '/settings',
@@ -139,22 +233,24 @@ const ROUTES = [
   '/recommendations', '/backtests', '/paper-trading', '/auto-trading',
 ] as const;
 
-for (const width of [360, 390, 430, 1023, 1024, 1440]) {
+for (const width of [320, 360, 390, 412, 430, 1023, 1024, 1440]) {
   test(`all primary routes stay inside viewport at ${width}px`, async ({ page }) => {
-    const assertClean = await installAdminRuntime(page);
+    const runtime = await installAdminRuntime(page);
     await page.setViewportSize({ width, height: width >= 1024 ? 900 : 844 });
     for (const route of ROUTES) {
+      runtime.beginRoute();
       await page.goto(route);
       await page.waitForLoadState('domcontentloaded');
-      await page.waitForTimeout(40);
       await assertNoHorizontalOverflow(page, `${width}px ${route}`);
+      await assertFiniteLoadingAndNoNavOcclusion(page, `${width}px ${route}`);
+      await runtime.waitForApiIdle(`${width}px ${route}`);
     }
-    assertClean();
+    runtime.assertClean();
   });
 }
 
 test('admin account panel shows Toss Upbit Bitget only and remains read-only', async ({ page }) => {
-  const assertClean = await installAdminRuntime(page);
+  const runtime = await installAdminRuntime(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/account');
   const panel = page.getByTestId('brokerage-account-connections');
@@ -168,5 +264,5 @@ test('admin account panel shows Toss Upbit Bitget only and remains read-only', a
   await assertNoHorizontalOverflow(page, 'account panel mobile');
   await page.setViewportSize({ width: 1440, height: 900 });
   await assertNoHorizontalOverflow(page, 'account panel desktop');
-  assertClean();
+  runtime.assertClean();
 });

@@ -1,4 +1,6 @@
 import type { TradingExchange, TradingSide } from '../../services/trade-automation.types';
+import type { TelegramPolicyEvent } from '../../services/telegram-alert-policy.service';
+import type { TelegramAlertInput } from '../../services/telegram-notification.service';
 
 export const USER_EXECUTION_EVENT_TYPES = [
   'ORDER_SUBMITTED',
@@ -66,10 +68,31 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = Object.
   TAKE_PROFIT_FILLED: true, STOP_FILLED: true, MANUAL_PORTFOLIO_ENTRY: true,
 });
 
+export type StoredPersonalTelegramAlert = Omit<TelegramAlertInput, 'destinationChatId' | 'photo'> & {
+  photo?: { url?: string };
+};
+export type PersonalTelegramOutboxPayload = {
+  event: TelegramPolicyEvent;
+  alert: StoredPersonalTelegramAlert;
+};
+
+export type NotificationDeliveryKind = 'EXECUTION_EVENT' | 'PERSONAL_ALERT';
 export type NotificationDeliveryState = 'PENDING' | 'SENDING' | 'SENT' | 'FAILED' | 'RETRY_SCHEDULED' | 'DEAD_LETTER';
 export type NotificationDelivery = {
-  id: string; userId: string; eventId: string; dedupeKey: string; state: NotificationDeliveryState;
-  attempts: number; nextRetryAt: string | null; lastErrorCode: string | null; createdAt: string; updatedAt: string;
+  id: string;
+  userId: string;
+  eventId: string | null;
+  dedupeKey: string;
+  state: NotificationDeliveryState;
+  attempts: number;
+  nextRetryAt: string | null;
+  lastErrorCode: string | null;
+  createdAt: string;
+  updatedAt: string;
+  /** Existing callers that predate generic alerts may omit this; repositories normalize to EXECUTION_EVENT. */
+  kind?: NotificationDeliveryKind;
+  /** PERSONAL_ALERT payloads only. Never persist destination chat IDs or Telegram secrets here. */
+  payload?: PersonalTelegramOutboxPayload | null;
 };
 export interface PortfolioSyncSink { accept(event: UserExecutionEvent): Promise<void>; }
 export type TelegramTransportResult = { ok: boolean; errorCode?: string | null };

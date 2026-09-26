@@ -72,20 +72,42 @@ function addSource(card: ScannerSignalCard, source: string): ScannerSignalCard {
   return { ...card, dataSources: [...new Set([...card.dataSources, source])] };
 }
 
+const FORWARD_OBSERVER_PUBLIC_STOCK_MEMBER_ID =
+  'signal-intelligence-forward-observer-public-only';
+
 async function withYahooPublicOnlyStockData<T>(operation: () => Promise<T>): Promise<T> {
   const mutable = MarketDataService as unknown as {
     getCandles(ticker: string, timeframe?: Timeframe): Promise<Candle[]>;
+    getCandlesMeta(ticker: string, timeframe?: Timeframe): Promise<{
+      candles: Candle[];
+      provider: string;
+      fetchedAt: string;
+    }>;
     getQuote(ticker: string): Promise<Quote>;
   };
   const originalCandles = mutable.getCandles;
+  const originalCandlesMeta = mutable.getCandlesMeta;
   const originalQuote = mutable.getQuote;
+  const originalPublicOnlyUniverse = process.env.SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE;
+  process.env.SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE = 'true';
   mutable.getCandles = async (ticker, timeframe = '1D') => yahoo.getCandles(ticker, timeframe);
+  mutable.getCandlesMeta = async (ticker, timeframe = '1D') => ({
+    candles: await yahoo.getCandles(ticker, timeframe),
+    provider: 'yahoo',
+    fetchedAt: new Date().toISOString(),
+  });
   mutable.getQuote = async (ticker) => await yahoo.getQuote(ticker) as Quote;
   try {
     return await operation();
   } finally {
     mutable.getCandles = originalCandles;
+    mutable.getCandlesMeta = originalCandlesMeta;
     mutable.getQuote = originalQuote;
+    if (originalPublicOnlyUniverse === undefined) {
+      delete process.env.SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE;
+    } else {
+      process.env.SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE = originalPublicOnlyUniverse;
+    }
   }
 }
 
@@ -94,7 +116,7 @@ async function scanStockLane(lane: ForwardObserverLane, cursor: number): Promise
   if (market !== 'KR' && market !== 'US') throw new Error('STOCK_LANE_MARKET_INVALID');
   return await withYahooPublicOnlyStockData(async () => {
     const scanned = await StockSignalScannerService.scan({
-      memberId: 'forward-observer-public-only',
+      memberId: FORWARD_OBSERVER_PUBLIC_STOCK_MEMBER_ID,
       market,
       indicators: [],
       filters: { timeframe: lane.timeframe } as never,

@@ -3,9 +3,11 @@ import test from 'node:test';
 
 import {
   clearTelegramAlertState,
+  editTelegramMessage,
   escapeTelegramHtml,
   renderTelegramAlert,
   sendTelegramAlert,
+  sendTelegramAlertWithReceipt,
   type TelegramAlertInput,
   type TelegramAlertResult,
 } from './telegram-notification.service';
@@ -21,6 +23,7 @@ import {
 } from './telegram-intelligence-worker.service';
 import {
   deliverScannerTelegramAlerts,
+  scannerInAppNotificationInput,
   scannerTelegramInput,
   scannerTelegramRoomChatId,
   scannerTelegramRoomFor,
@@ -104,7 +107,7 @@ test('escapes Telegram HTML and renders alert-only templates', () => {
   assert.match(rendered, /강한매수 신호/);
   assert.match(rendered, /&lt;005930&gt;/);
   assert.match(rendered, /KR&amp;NXT/);
-  assert.match(rendered, /실주문 실행 기능은 포함되지 않습니다/);
+  assert.doesNotMatch(rendered, /실주문 실행 기능은 포함되지 않습니다/);
   assert.equal(rendered.includes('<005930>'), false);
 });
 
@@ -133,6 +136,55 @@ test('sends a Telegram message with no execution buttons', async () => {
   });
   assert.deepEqual(result, { ok: true, attempts: 1 });
   assert.equal(calls, 1);
+});
+
+test('tracked Telegram delivery captures message id and lifecycle updates edit the same message', async () => {
+  setFakeConfig();
+  const endpoints: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    endpoints.push(url);
+    if (url.endsWith('/sendMessage')) {
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 77 } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    assert.match(url, /\/editMessageText$/);
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    assert.equal(body.chat_id, 'ci-chat-id-sentinel');
+    assert.equal(body.message_id, 77);
+    assert.match(String(body.text), /TP1 도달/);
+    return new Response(JSON.stringify({ ok: true, result: { message_id: 77 } }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  const tracked = await sendTelegramAlertWithReceipt({
+    type: 'strong_buy',
+    symbol: '005930',
+    market: 'KR',
+    details: '진입가능',
+    cooldownMs: 0,
+    duplicateWindowMs: 0,
+  });
+  assert.equal(tracked.ok, true);
+  if (!tracked.ok) return;
+  assert.deepEqual(tracked.receipt, {
+    messageId: 77,
+    messageKind: 'TEXT',
+    renderedText: tracked.receipt.renderedText,
+  });
+  assert.match(tracked.receipt.renderedText, /강한매수 신호/);
+
+  assert.deepEqual(await editTelegramMessage({
+    destinationChatId: 'ci-chat-id-sentinel',
+    messageId: tracked.receipt.messageId!,
+    messageKind: tracked.receipt.messageKind,
+    text: tracked.receipt.renderedText + '\nTP1 도달',
+  }), { ok: true, attempts: 1 });
+  assert.equal(endpoints.length, 2);
 });
 
 test('suppresses exact duplicates and applies per-subject cooldown', async () => {
@@ -258,6 +310,56 @@ test('maps stock/spot BUY only and futures LONG/SHORT to their dedicated Telegra
 
   assert.equal(scannerTelegramInput(scannerAlert({ direction: 'SHORT' }), testRoom), null);
   assert.equal(scannerTelegramInput(scannerAlert({ assetClass: 'coin_spot', direction: 'SHORT' }), testRoom), null);
+});
+
+
+test('scanner in-app history is member-scoped, push-off, and keeps missing member identity fail-closed', () => {
+  const alert = scannerAlert({
+    assetClass: 'coin_futures',
+    market: 'futures',
+    symbol: 'BTCUSDT',
+    direction: 'SHORT',
+  });
+  assert.equal(scannerInAppNotificationInput(alert), null);
+
+  const input = scannerInAppNotificationInput(alert, {
+    memberId: 'member-1',
+    timeframe: '15m',
+    generatedAt: '2026-09-18T00:00:00.000Z',
+  });
+  assert.ok(input);
+  assert.equal(input.memberId, 'member-1');
+  assert.equal(input.type, 'ai_sell_signal');
+  assert.equal(input.app, true);
+  assert.equal(input.push, false);
+  assert.equal(input.url, '/scanner');
+  assert.equal(input.metadata?.signalId, 'signal:test');
+  assert.equal(input.metadata?.direction, 'SHORT');
+});
+
+test('scanner central in-app history does not depend on a configured Telegram room', async () => {
+  const stored: Array<Parameters<typeof scannerInAppNotificationInput>[0] | unknown> = [];
+  let telegramCalls = 0;
+  await deliverScannerTelegramAlerts(
+    [scannerAlert({ assetClass: 'coin_futures', market: 'futures', symbol: 'BTCUSDT', direction: 'SHORT' })],
+    async () => {
+      telegramCalls += 1;
+      return { ok: true, attempts: 1 };
+    },
+    () => null,
+    { memberId: 'member-1', timeframe: '15m', generatedAt: '2026-09-18T00:00:00.000Z' },
+    async () => ({ status: 'DISABLED', matchedCount: 0, policyCount: 0, skippedCount: 0, errorCount: 0 }),
+    async (input) => {
+      stored.push(input);
+      return { appStored: true, pushSent: 0 };
+    },
+  );
+  assert.equal(telegramCalls, 0);
+  assert.equal(stored.length, 1);
+  const storedInput = stored[0] as { memberId: string; push: boolean; metadata?: Record<string, unknown> };
+  assert.equal(storedInput.memberId, 'member-1');
+  assert.equal(storedInput.push, false);
+  assert.equal(storedInput.metadata?.symbol, 'BTCUSDT');
 });
 
 test('scanner Telegram delivery is fail-open and uses the lifecycle idempotency key', async () => {

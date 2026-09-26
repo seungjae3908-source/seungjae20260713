@@ -6,15 +6,28 @@ import {
   getQuote as getTossQuote,
   isTossConfigured,
 } from '../providers/toss';
+import { getCandles as getYahooCandles } from '../providers/yahoo';
 import { getKiwoomChartCandlesMeta } from '../kiwoom-chart';
 import type { Candle, CompanyProfile, Quote, Timeframe } from '../sample/types';
 
 export type { SearchResult, QuoteRow };
 
 const FALLBACK_PROFILE_DESCRIPTION = '기업 정보를 확인 중입니다.';
-const APP_KR_INTRADAY_CANDLE_LIMIT = 300;
-const APP_KR_INTRADAY_DEADLINE_MS = 8_000;
-const KR_INTRADAY_TIMEFRAMES = new Set(['1m', '3m', '5m', '15m', '30m', '60m', '1H', '4H']);
+const APP_KR_INTERACTIVE_CANDLE_LIMIT = 300;
+export const APP_KR_INTRADAY_DEADLINE_MS = 2_000;
+const APP_KR_INTERACTIVE_YAHOO_HEDGE_DELAY_MS = 100;
+const MAX_PROVIDER_CLOCK_SKEW_MS = 5 * 60 * 1000;
+const KR_INTERACTIVE_TIMEFRAMES = new Set([
+  '1m',
+  '3m',
+  '5m',
+  '15m',
+  '30m',
+  '60m',
+  '1H',
+  '4H',
+  '1D',
+]);
 
 export interface CandleEvidenceMeta {
   completeness: 'complete' | 'partial';
@@ -36,13 +49,43 @@ export interface MarketDataCandlesMeta {
   fallbackFrom?: CandleProviderFallbackMeta;
 }
 
+export function normalizeQuoteEvidenceTimestamp(
+  value: unknown,
+  nowMs = Date.now(),
+): string | null {
+  if (typeof value !== 'string' || value.trim().length === 0) return null;
+
+  const timestampMs = Date.parse(value.trim());
+  if (!Number.isFinite(timestampMs)) return null;
+  if (timestampMs > nowMs + MAX_PROVIDER_CLOCK_SKEW_MS) return null;
+
+  return new Date(timestampMs).toISOString();
+}
+
+function requireQuoteEvidenceTimestamp(quote: Quote): Quote {
+  const updatedAt = normalizeQuoteEvidenceTimestamp((quote as { updatedAt?: unknown }).updatedAt);
+  if (!updatedAt) {
+    throw new Error('QUOTE_PROVIDER_TIMESTAMP_INVALID');
+  }
+
+  return {
+    ...quote,
+    updatedAt,
+  } as Quote;
+}
+
 function minimumUsefulCandles(timeframe: Timeframe): number {
   return timeframe === '1D' ? 30 : 2;
 }
 
-function isBoundedKrIntradayRequest(ticker: string, timeframe: Timeframe): boolean {
+function isBoundedKrInteractiveRequest(ticker: string, timeframe: Timeframe): boolean {
   return /^\d{6}$/.test(String(ticker ?? '').trim())
-    && KR_INTRADAY_TIMEFRAMES.has(String(timeframe));
+    && KR_INTERACTIVE_TIMEFRAMES.has(String(timeframe));
+}
+
+function isBoundedKrIntradayRequest(ticker: string, timeframe: Timeframe): boolean {
+  return isBoundedKrInteractiveRequest(ticker, timeframe)
+    && String(timeframe) !== '1D';
 }
 
 export function resolveKrInteractiveMaxPages(timeframe: Timeframe): number {
@@ -52,6 +95,7 @@ export function resolveKrInteractiveMaxPages(timeframe: Timeframe): number {
   if (tf === '5m' || tf === '15m' || tf === '30m') return 8;
   if (tf === '60m' || tf === '1H') return 10;
   if (tf === '4H') return 12;
+  if (tf === '1D') return 4;
 
   return 8;
 }
@@ -61,6 +105,7 @@ function normalizeKiwoomInteractiveFailure(error: unknown, deadlineReached: bool
 
   if (error instanceof Error) {
     if (error.name === 'AbortError') return 'ABORTED';
+    if (/INSUFFICIENT_CANDLES|차트 데이터가 부족/.test(error.message)) return 'INSUFFICIENT_CANDLES';
     if (/시간이 초과되었습니다/.test(error.message)) return 'UPSTREAM_TIMEOUT';
     return `UPSTREAM_ERROR:${error.message}`;
   }
@@ -68,15 +113,167 @@ function normalizeKiwoomInteractiveFailure(error: unknown, deadlineReached: bool
   return 'UPSTREAM_ERROR:UNKNOWN';
 }
 
+function interactiveAbortError(): Error {
+  const error = new Error('KR_INTERACTIVE_PROVIDER_ABORTED');
+  error.name = 'AbortError';
+  return error;
+}
+
+async function getBoundedKrInteractiveCandlesMeta(
+  ticker: string,
+  timeframe: Timeframe,
+): Promise<MarketDataCandlesMeta> {
+  const controller = new AbortController();
+  const deadlineAt = Date.now() + APP_KR_INTRADAY_DEADLINE_MS;
+  const deadlineError = new Error('KR_INTERACTIVE_PROVIDER_DEADLINE');
+  deadlineError.name = 'TimeoutError';
+  const timeout = setTimeout(
+    () => controller.abort(deadlineError),
+    APP_KR_INTRADAY_DEADLINE_MS,
+  );
+  const terminalDeadline = new Promise<never>((_resolve, reject) => {
+    const rejectFromSignal = () => {
+      reject(controller.signal.reason instanceof Error ? controller.signal.reason : deadlineError);
+    };
+    if (controller.signal.aborted) rejectFromSignal();
+    else controller.signal.addEventListener('abort', rejectFromSignal, { once: true });
+  });
+  let kiwoomFailure: string | null = null;
+
+  const kiwoomAttempt = (async (): Promise<MarketDataCandlesMeta> => {
+    try {
+      const result = await getKiwoomChartCandlesMeta(
+        String(ticker).trim(),
+        String(timeframe),
+        APP_KR_INTERACTIVE_CANDLE_LIMIT,
+        {
+          signal: controller.signal,
+          deadlineAt,
+          maxPages: resolveKrInteractiveMaxPages(timeframe),
+        },
+      );
+
+      if (result.candles.length < minimumUsefulCandles(timeframe)) {
+        kiwoomFailure = `INSUFFICIENT_CANDLES:${result.stopReason}`;
+        throw new Error(kiwoomFailure);
+      }
+
+      return {
+        candles: result.candles as Candle[],
+        provider: 'kiwoom',
+        fetchedAt: new Date().toISOString(),
+        evidence: {
+          completeness: result.completeness,
+          reason: result.stopReason,
+          pagesFetched: result.pagesFetched,
+          targetCandles: result.targetCandles,
+        },
+      };
+    } catch (error) {
+      if (!kiwoomFailure) {
+        kiwoomFailure = normalizeKiwoomInteractiveFailure(
+          error,
+          Date.now() >= deadlineAt,
+        );
+      }
+      throw error;
+    }
+  })();
+
+  const yahooAttempt = (async (): Promise<MarketDataCandlesMeta> => {
+    await new Promise((resolve) => setTimeout(resolve, APP_KR_INTERACTIVE_YAHOO_HEDGE_DELAY_MS));
+    if (controller.signal.aborted) throw interactiveAbortError();
+
+    const candles = await getYahooCandles(String(ticker).trim(), String(timeframe));
+    if (candles.length < minimumUsefulCandles(timeframe)) {
+      throw new Error('YAHOO_INSUFFICIENT_CANDLES');
+    }
+
+    return {
+      candles,
+      provider: 'yahoo',
+      fetchedAt: new Date().toISOString(),
+      fallbackFrom: {
+        provider: 'kiwoom',
+        reason: kiwoomFailure ?? 'HEDGE_WON_BEFORE_KIWOOM_TERMINAL',
+      },
+    };
+  })();
+
+  // Toss is already an approved read-only stock-data provider and supports
+  // native 1m/1D candles. Include it in the same bounded interactive race so a
+  // slow Kiwoom/Yahoo pair does not turn real available KR 1m evidence into a
+  // misleading 200 + empty response. No synthetic candles are created.
+  const tossTimeframeSupported = String(timeframe) === '1m' || String(timeframe) === '1D';
+  const tossAttempt: Promise<MarketDataCandlesMeta> | null =
+    isTossConfigured() && tossTimeframeSupported
+      ? (async () => {
+          const entry = await BaseMarketDataService.getCatalogEntry(String(ticker).trim());
+          if (controller.signal.aborted) throw interactiveAbortError();
+          const candles = await getTossCandles(entry, timeframe, 200);
+          if (candles.length < minimumUsefulCandles(timeframe)) {
+            throw new Error('TOSS_INSUFFICIENT_CANDLES');
+          }
+          return {
+            candles,
+            provider: 'toss',
+            fetchedAt: new Date().toISOString(),
+            fallbackFrom: {
+              provider: 'kiwoom',
+              reason: kiwoomFailure ?? 'TOSS_HEDGE_WON_BEFORE_KIWOOM_TERMINAL',
+            },
+          };
+        })()
+      : null;
+
+  const providerAttempts: Promise<MarketDataCandlesMeta>[] = [
+    kiwoomAttempt,
+    yahooAttempt,
+    ...(tossAttempt ? [tossAttempt] : []),
+  ];
+
+  try {
+    return await Promise.race([
+      Promise.any(providerAttempts),
+      terminalDeadline,
+    ]);
+  } catch (error) {
+    if (error === deadlineError || (error instanceof Error && error.message === deadlineError.message)) {
+      kiwoomFailure = 'DEADLINE_REACHED';
+    }
+    return {
+      candles: [],
+      provider: 'none',
+      fetchedAt: new Date().toISOString(),
+      fallbackFrom: {
+        provider: 'kiwoom',
+        reason: kiwoomFailure ?? 'INTERACTIVE_PROVIDERS_UNAVAILABLE',
+      },
+    };
+  } finally {
+    clearTimeout(timeout);
+    controller.abort();
+  }
+}
+
+async function getBoundedKrIntradayCandlesMeta(
+  ticker: string,
+  timeframe: Timeframe,
+): Promise<MarketDataCandlesMeta> {
+  return getBoundedKrInteractiveCandlesMeta(ticker, timeframe);
+}
+
 export class MarketDataService extends BaseMarketDataService {
   static async getQuote(ticker: string): Promise<Quote> {
     try {
-      return await super.getQuote(ticker);
+      const quote = await super.getQuote(ticker);
+      return requireQuoteEvidenceTimestamp(quote);
     } catch (primaryError) {
       if (!isTossConfigured()) throw primaryError;
       try {
         const entry = await super.getCatalogEntry(ticker);
-        return await getTossQuote(entry) as unknown as Quote;
+        const quote = await getTossQuote(entry) as unknown as Quote;
+        return requireQuoteEvidenceTimestamp(quote);
       } catch {
         throw primaryError;
       }
@@ -93,52 +290,20 @@ export class MarketDataService extends BaseMarketDataService {
     timeframe: Timeframe = '1D',
   ): Promise<MarketDataCandlesMeta> {
     /*
-     * App-facing KR intraday charts use a bounded visible-window contract.
-     * Research/long-history callers do not pass this contract and keep the lower-level
-     * Kiwoom reader's deep pagination semantics.
+     * App-facing KR interactive charts must terminate inside the browser's
+     * primary endpoint budget. Kiwoom and the public Yahoo fallback therefore
+     * race under one bounded deadline for both intraday and daily visible
+     * windows. If both fail, return truthful empty evidence instead of falling
+     * back into BaseMarketDataService's deep/unbounded Kiwoom history path.
+     * Research/long-history callers continue to use the lower-level APIs
+     * directly and keep their deep pagination semantics.
      */
-    let boundedKiwoomFailure: string | null = null;
-
     if (isBoundedKrIntradayRequest(ticker, timeframe)) {
-      const controller = new AbortController();
-      const deadlineAt = Date.now() + APP_KR_INTRADAY_DEADLINE_MS;
-      const timeout = setTimeout(() => controller.abort(), APP_KR_INTRADAY_DEADLINE_MS);
+      return getBoundedKrIntradayCandlesMeta(ticker, timeframe);
+    }
 
-      try {
-        const result = await getKiwoomChartCandlesMeta(
-          String(ticker).trim(),
-          String(timeframe),
-          APP_KR_INTRADAY_CANDLE_LIMIT,
-          {
-            signal: controller.signal,
-            deadlineAt,
-            maxPages: resolveKrInteractiveMaxPages(timeframe),
-          },
-        );
-
-        if (result.candles.length >= minimumUsefulCandles(timeframe)) {
-          return {
-            candles: result.candles as Candle[],
-            provider: 'kiwoom',
-            fetchedAt: new Date().toISOString(),
-            evidence: {
-              completeness: result.completeness,
-              reason: result.stopReason,
-              pagesFetched: result.pagesFetched,
-              targetCandles: result.targetCandles,
-            },
-          };
-        }
-
-        boundedKiwoomFailure = `INSUFFICIENT_CANDLES:${result.stopReason}`;
-      } catch (error) {
-        boundedKiwoomFailure = normalizeKiwoomInteractiveFailure(
-          error,
-          Date.now() >= deadlineAt,
-        );
-      } finally {
-        clearTimeout(timeout);
-      }
+    if (isBoundedKrInteractiveRequest(ticker, timeframe)) {
+      return getBoundedKrInteractiveCandlesMeta(ticker, timeframe);
     }
 
     let primaryResult: MarketDataCandlesMeta | null = null;
@@ -146,15 +311,7 @@ export class MarketDataService extends BaseMarketDataService {
     try {
       primaryResult = await super.getCandlesMeta(ticker, timeframe);
       if (primaryResult.candles.length > 0) {
-        return boundedKiwoomFailure
-          ? {
-              ...primaryResult,
-              fallbackFrom: {
-                provider: 'kiwoom',
-                reason: boundedKiwoomFailure,
-              },
-            }
-          : primaryResult;
+        return primaryResult;
       }
     } catch (error) {
       primaryError = error;
@@ -169,14 +326,6 @@ export class MarketDataService extends BaseMarketDataService {
             candles,
             provider: 'toss',
             fetchedAt: new Date().toISOString(),
-            ...(boundedKiwoomFailure
-              ? {
-                  fallbackFrom: {
-                    provider: 'kiwoom' as const,
-                    reason: boundedKiwoomFailure,
-                  },
-                }
-              : {}),
           };
         }
       } catch {
@@ -189,14 +338,6 @@ export class MarketDataService extends BaseMarketDataService {
       candles: [],
       provider: 'none',
       fetchedAt: new Date().toISOString(),
-      ...(boundedKiwoomFailure
-        ? {
-            fallbackFrom: {
-              provider: 'kiwoom' as const,
-              reason: boundedKiwoomFailure,
-            },
-          }
-        : {}),
     };
   }
 

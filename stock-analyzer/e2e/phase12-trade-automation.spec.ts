@@ -20,60 +20,6 @@ function captureBrowserFailures(page: Page) {
   return { consoleErrors, pageErrors, httpErrors, requestFailures };
 }
 
-type ApprovalApiOptions = {
-  invalidateAfterFirstStatus?: boolean;
-  approveDelayMs?: number;
-};
-
-async function mockApprovalApi(page: Page, options: ApprovalApiOptions = {}) {
-  const counts = { status: 0, approve: 0, invalidate: 0 };
-  await page.route(/\/api\/trade-automation\/plans\/[^/]+\/approval-status(?:\?.*)?$/, async (route) => {
-    counts.status += 1;
-    const invalid = options.invalidateAfterFirstStatus === true && counts.status > 1;
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        ok: true,
-        plan: {
-          state: invalid ? 'EXPIRED' : 'APPROVAL_PENDING',
-          signalState: invalid ? 'INVALIDATED' : 'READY_FOR_APPROVAL',
-          signalInvalidationReason: invalid ? 'SIGNAL_CORE_CONDITION_BROKEN' : null,
-          approvalExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-          updatedAt: new Date().toISOString(),
-        },
-        approval: {
-          approvalEnabled: !invalid,
-          signalState: invalid ? 'INVALIDATED' : 'READY_FOR_APPROVAL',
-          planState: invalid ? 'EXPIRED' : 'APPROVAL_PENDING',
-          reasonCode: invalid ? 'SIGNAL_INVALIDATED' : null,
-          expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-          lastValidatedAt: new Date().toISOString(),
-        },
-        orderSubmitted: false,
-      }),
-    });
-  });
-  await page.route(/\/api\/trade-automation\/plans\/[^/]+\/approve(?:\?.*)?$/, async (route) => {
-    counts.approve += 1;
-    if (options.approveDelayMs) await new Promise((resolve) => setTimeout(resolve, options.approveDelayMs));
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ ok: true, order: { state: 'SUBMITTED', lastErrorCode: null } }),
-    });
-  });
-  await page.route(/\/api\/trade-automation\/plans\/[^/]+\/invalidate(?:\?.*)?$/, async (route) => {
-    counts.invalidate += 1;
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ ok: true }),
-    });
-  });
-  return counts;
-}
-
 async function mockUserIntegrationsApi(page: Page) {
   await page.route(/\/api\/user-integrations(?:\?.*)?$/, async (route) => {
     if (route.request().method() !== 'GET') {
@@ -104,141 +50,100 @@ function expectNoBrowserFailures(failures: ReturnType<typeof captureBrowserFailu
 }
 
 for (const width of [360, 390, 430]) {
-  test(`trade approval queue fits ${width}px mobile and fails closed`, async ({ page }) => {
+  test(`four-market automatic controls fit ${width}px mobile without approval queue`, async ({ page }) => {
     const failures = captureBrowserFailures(page);
     await page.setViewportSize({ width, height: 900 });
     await page.goto('/__phase12-trade-automation-e2e');
+
     await expect(page.getByRole('heading', { name: '자동매매', level: 1 })).toBeVisible();
     const safetySummary = page.getByTestId('auto-trading-safety-summary');
-    await expect(safetySummary).toContainText('실전 주문');
-    await expect(safetySummary).toContainText('비활성');
-    await expect(page.getByTestId('trade-approval-queue')).toBeVisible();
-    await expect(page.getByTestId('approval-plan-ready-plan')).toContainText('승인 가능');
-    await expect(page.getByTestId('approval-plan-invalid-plan')).toContainText('신호 무효');
-    await expect(page.getByTestId('approval-plan-live-plan')).toContainText('실전 주문 차단');
-    await expect(page.getByTestId('approve-plan-ready-plan')).toBeEnabled();
-    await expect(page.getByTestId('approve-plan-invalid-plan')).toBeDisabled();
-    await expect(page.getByTestId('approve-plan-live-plan')).toBeDisabled();
+    await expect(safetySummary).toContainText('주문별 승인');
+    await expect(safetySummary).toContainText('불필요');
+    await expect(safetySummary).toContainText('4시장 개별 ON/OFF');
+    await expect(page.getByTestId('trade-approval-queue')).toHaveCount(0);
 
-    const advanced = page.getByTestId('auto-trading-advanced-settings');
-    await expect(advanced).not.toHaveAttribute('open', '');
-    await advanced.locator('summary').click();
-    await expect(page.getByText('기본값은 모두 OFF이며 AI 채팅은 주문 권한이 없습니다.')).toBeVisible();
-    await expect(page.getByTestId('connection-bitget')).toContainText('Paper 연결됨');
+    await expect(page.getByTestId('automatic-trading-master-toggle')).toHaveAttribute('aria-pressed', 'false');
+    for (const market of ['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures']) {
+      await expect(page.getByTestId(`auto-market-${market}`)).toHaveAttribute('aria-pressed', 'true');
+    }
+
+    await expect(page.getByTestId('auto-market-domestic_stock')).toContainText('국내주식');
+    await expect(page.getByTestId('auto-market-us_stock')).toContainText('미국주식');
+    await expect(page.getByTestId('auto-market-crypto_spot')).toContainText('코인현물');
+    await expect(page.getByTestId('auto-market-crypto_futures')).toContainText('코인선물');
+    await expect(page.getByTestId('stock-broker-routing')).toContainText('Toss');
+    await expect(page.getByTestId('stock-broker-routing')).toContainText('Kiwoom');
+    await expect(page.getByTestId('stock-broker-routing')).toContainText('Upbit 고정');
+    await expect(page.getByTestId('stock-broker-routing')).toContainText('Bitget 고정');
+    await expect(page.getByTestId('auto-trading-runtime-summary')).toContainText('미국주식');
+    await expect(page.getByTestId('auto-trading-runtime-summary')).toContainText('실주문 4중 서버게이트');
 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     expectNoBrowserFailures(failures);
   });
 }
 
-test('approval dialog is accessible, cancellable, and restores focus without mutation', async ({ page }) => {
-  const failures = captureBrowserFailures(page);
-  const counts = await mockApprovalApi(page);
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/__phase12-trade-automation-e2e');
-  const opener = page.getByTestId('approve-plan-ready-plan');
-  await opener.focus();
-  await opener.press('Enter');
-
-  const dialog = page.getByRole('dialog', { name: '주문 승인 최종 확인' });
-  await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText('BTC');
-  await expect(dialog).toContainText('매수');
-  await expect(dialog).toContainText('Upbit 현물');
-  await expect(dialog).toContainText('Paper 모의');
-  await expect(dialog).toContainText('100,000원');
-  await expect(dialog).toContainText('50% / 30% / 20%');
-  await expect(dialog).toContainText('90,000');
-  await expect(dialog).toContainText('108,000 / 112,000');
-  await expect(dialog).toContainText('82점 · 78%');
-  await expect(dialog.getByTestId('confirm-trade-approval')).toBeEnabled();
-  await expect(dialog).toContainText(/남은 시간 \d{2}:\d{2}/);
-
-  await page.keyboard.press('Tab');
-  expect(await page.evaluate(() => {
-    const active = document.activeElement;
-    const dialogElement = document.querySelector('[role="dialog"]');
-    return Boolean(active && dialogElement?.contains(active));
-  })).toBe(true);
-
-  await page.keyboard.press('Escape');
-  await expect(dialog).toBeHidden();
-  await expect(opener).toBeFocused();
-  expect(counts.approve).toBe(0);
-
-  await opener.press('Space');
-  await expect(dialog).toBeVisible();
-  await dialog.getByRole('button', { name: '취소', exact: true }).click();
-  await expect(dialog).toBeHidden();
-  await expect(opener).toBeFocused();
-  expect(counts.approve).toBe(0);
-  expectNoBrowserFailures(failures);
-});
-
-test('rapid duplicate approval clicks create one mutation only', async ({ page }) => {
-  const failures = captureBrowserFailures(page);
-  const counts = await mockApprovalApi(page, { approveDelayMs: 150 });
-  await page.goto('/__phase12-trade-automation-e2e');
-  await page.getByTestId('approve-plan-ready-plan').click();
-  const confirm = page.getByTestId('confirm-trade-approval');
-  await expect(confirm).toBeEnabled();
-  await confirm.evaluate((element) => {
-    (element as HTMLButtonElement).click();
-    (element as HTMLButtonElement).click();
-  });
-  await expect(page.getByRole('status')).toContainText('승인 처리 완료');
-  expect(counts.approve).toBe(1);
-  expectNoBrowserFailures(failures);
-});
-
-test('dialog locks immediately when server reports signal invalidation', async ({ page }) => {
-  const failures = captureBrowserFailures(page);
-  const counts = await mockApprovalApi(page, { invalidateAfterFirstStatus: true });
-  await page.goto('/__phase12-trade-automation-e2e');
-  await page.getByTestId('approve-plan-ready-plan').click();
-  const dialog = page.getByRole('dialog', { name: '주문 승인 최종 확인' });
-  const confirm = dialog.getByTestId('confirm-trade-approval');
-  await expect(confirm).toBeEnabled();
-  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect(confirm).toBeDisabled();
-  await expect(dialog).toContainText('핵심 진입 조건이 깨져 승인이 차단됐습니다.');
-  expect(counts.approve).toBe(0);
-  expectNoBrowserFailures(failures);
-});
-
-test('approval expiry warns, disables the button, and sends zero API requests', async ({ page }) => {
-  const failures = captureBrowserFailures(page);
-  const counts = await mockApprovalApi(page);
-  await page.goto('/__phase12-trade-automation-e2e');
-  const card = page.getByTestId('approval-plan-soon-plan');
-  await expect(card).toContainText(/남은 시간 00:0[1-4]/);
-  await expect(page.getByTestId('approve-plan-soon-plan')).toBeEnabled();
-  await expect(page.getByTestId('approve-plan-soon-plan')).toBeDisabled({ timeout: 6_000 });
-  await expect(card).toContainText('승인 가능 시간이 지났습니다.');
-  expect(counts.status).toBe(0);
-  expect(counts.approve).toBe(0);
-  expectNoBrowserFailures(failures);
-});
-
-test('automatic mode requires a detailed confirmation and emergency stop returns to off', async ({ page }) => {
+test('automatic trading is standing authorization with independent market switches and one emergency stop', async ({ page }) => {
   const failures = captureBrowserFailures(page);
   await page.goto('/__phase12-trade-automation-e2e');
-  const advanced = page.getByTestId('auto-trading-advanced-settings');
-  await advanced.locator('summary').click();
-  await page.getByRole('button', { name: /자동매매/ }).click();
-  await page.getByRole('button', { name: 'Bitget 선물 활성화' }).click();
-  await page.getByLabel('Bitget 선물 허용 자산').fill('BTC');
-  await page.getByLabel('Bitget 레버리지').selectOption('3');
+
+  const master = page.getByTestId('automatic-trading-master-toggle');
+  await master.click();
+  await expect(master).toHaveAttribute('aria-pressed', 'true');
+
+  const domesticBroker = page.getByTestId('stock-broker-domestic_stock');
+  const usBroker = page.getByTestId('stock-broker-us_stock');
+  await expect(domesticBroker).toHaveValue('kiwoom');
+  await expect(usBroker).toHaveValue('kiwoom');
+  await domesticBroker.selectOption('toss');
+  await expect(domesticBroker).toHaveValue('toss');
+  await expect(usBroker).toHaveValue('kiwoom');
+
+  const us = page.getByTestId('auto-market-us_stock');
+  await us.click();
+  await expect(us).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByTestId('auto-market-domestic_stock')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('auto-market-crypto_spot')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('auto-market-crypto_futures')).toHaveAttribute('aria-pressed', 'true');
+
   await page.getByRole('button', { name: '설정 저장' }).click();
-  const dialog = page.getByRole('dialog', { name: '자동매매 최종 확인' });
-  await expect(dialog).toContainText('실제 자금');
-  await expect(dialog).toContainText('Bitget 선물');
-  await expect(dialog).toContainText('1,000,000원');
-  await expect(dialog).toContainText('3배');
-  await expect(dialog).toContainText('긴급정지');
-  await dialog.getByRole('button', { name: '위험 확인 및 저장' }).click();
-  await expect(page.getByRole('status')).toContainText('저장');
+  const dialog = page.getByRole('dialog', { name: '자동매매 설정 확인' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('주문마다 묻는 승인이 아닙니다.');
+  await expect(dialog).toContainText('국내주식, 코인현물, 코인선물');
+  await expect(dialog).not.toContainText('국내주식, 미국주식, 코인현물, 코인선물');
+  await expect(dialog).toContainText('국내주식 증권사');
+  await expect(dialog).toContainText('Toss');
+  await expect(dialog).toContainText('미국주식 증권사');
+  await expect(dialog).toContainText('Kiwoom');
+  await expect(dialog).toContainText('Upbit 고정');
+  await expect(dialog).toContainText('Bitget 고정');
+  await expect(dialog).toContainText('거래키 + provider 서버게이트 + 주문 직전 Risk Gate 모두 필요');
+  await dialog.getByRole('button', { name: '설정 적용' }).click();
+  await expect(page.getByRole('status')).toContainText('테스트 설정이 저장되었습니다.');
+
   await page.getByRole('button', { name: '긴급정지' }).click();
-  await expect(page.getByRole('status')).toContainText('신규 주문이 차단');
+  await expect(page.getByRole('status')).toContainText('4시장 신규 주문이 모두 차단');
+  await expect(master).toHaveAttribute('aria-pressed', 'false');
+  for (const market of ['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures']) {
+    await expect(page.getByTestId(`auto-market-${market}`)).toHaveAttribute('aria-pressed', 'false');
+  }
   expectNoBrowserFailures(failures);
+});
+
+test('automatic trading surface never exposes per-order approval actions', async ({ page }) => {
+  const approvalRequests: string[] = [];
+  page.on('request', (request) => {
+    if (/\/api\/trade-automation\/plans\/[^/]+\/(approve|approval-status)/u.test(new URL(request.url()).pathname)) {
+      approvalRequests.push(`${request.method()} ${request.url()}`);
+    }
+  });
+
+  await page.goto('/__phase12-trade-automation-e2e');
+  await expect(page.getByText('승인형 주문', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /승인/ })).toHaveCount(0);
+  await page.getByTestId('automatic-trading-master-toggle').click();
+  await page.getByRole('button', { name: '설정 저장' }).click();
+  await page.getByRole('dialog', { name: '자동매매 설정 확인' }).getByRole('button', { name: '설정 적용' }).click();
+  expect(approvalRequests).toEqual([]);
 });

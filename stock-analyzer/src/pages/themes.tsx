@@ -3,6 +3,7 @@ import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, Layers, Search, X } from "lucide-react";
 import { api, type ThemeGroup, type ThemeStock } from "@/lib/api";
+import { requireThemesData } from "@/lib/theme-response";
 import {
 	classifyStock,
 	stockClassBadgeClass,
@@ -40,7 +41,7 @@ export default function ThemesPage() {
 
 	const themesQuery = useQuery({
 		queryKey: ["themes", market],
-		queryFn: () => api.themes(market),
+		queryFn: async () => requireThemesData(await api.themes(market), market),
 		staleTime: 5 * 60 * 1000,
 	});
 
@@ -315,7 +316,7 @@ function ThemeStockCard({ stock }: { stock: ThemeStock }) {
 		market: stock.market,
 	});
 
-	const positive = (stock.changePercent ?? 0) >= 0;
+	const positive = stock.changePercent >= 0;
 
 	return (
 		<Link href={`/stock/${stock.ticker}?back=${encodeURIComponent("/themes")}`}>

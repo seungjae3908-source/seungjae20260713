@@ -1,9 +1,9 @@
-import './forward-recommendation-observer.service.test';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ScannerResponse, ScannerSignalCard } from './scanner-signal.types';
 import {
   FORWARD_OBSERVER_LANES,
+  buildForwardObserverRuntimeGrossEdgeEvidence,
   canonicalForwardStrategyIdentityFromCard,
   createForwardObserverRuntimeState,
   latestCardEvidenceTimestamp,
@@ -294,6 +294,7 @@ test('cycle creates one idempotent public observation, ignores pre-signal bars a
   });
   assert.equal(first.summary.counts.createdThisCycle, 1);
   assert.equal(first.summary.counts.pending, 1);
+  assert.deepEqual(first.summary.grossEdgeEvidence, []);
   assert.equal(first.state.observations[0]?.identity.strategyId, 'kr-stock-swing-v1');
   assert.equal(first.state.observations[0]?.identity.parameterHash, 'kr-swing-params-v1');
   assert.equal(first.state.observations[0]?.snapshot.strategyProfileVersion, 'signal-profile-v1');
@@ -322,8 +323,58 @@ test('cycle creates one idempotent public observation, ignores pre-signal bars a
   assert.equal(second.summary.counts.settledThisCycle, 1);
   assert.equal(second.summary.counts.replayedThisCycle, 1);
   assert.equal(second.state.observations[0]?.outcome?.outcome, 'WIN');
+  assert.equal(second.summary.calibrations.length, 1);
+  assert.equal(second.summary.grossEdgeEvidence.length, 1);
+  assert.equal(second.summary.grossEdgeEvidence[0]?.status, 'NOT_AVAILABLE');
+  assert.equal(second.summary.grossEdgeEvidence[0]?.sampleSize, 1);
+  assert.equal(second.summary.grossEdgeEvidence[0]?.expectedGrossEdgeBps, null);
+  assert.equal(second.summary.grossEdgeEvidence[0]?.netAlphaReady, false);
+  assert.equal(second.summary.grossEdgeEvidence[0]?.profitabilityClaimAllowed, false);
+  assert.equal(second.summary.grossEdgeEvidence[0]?.executionAuthority, 'NONE');
   assert.equal(second.summary.safety.executionAuthority, 'NONE');
   assert.equal(second.summary.safety.profitabilityClaimAllowed, false);
+});
+
+test('runtime gross-edge seam accepts only actual settled rows and never promotes aggregate-only or pending evidence', async () => {
+  const initial = createForwardObserverRuntimeState(SHA, new Date(T0));
+  const scanLane = async (lane: ForwardObserverLane) => response(lane, lane.id === 'KR_SWING_60M' ? [card()] : []);
+  const pending = await runForwardRecommendationObserverCycle({
+    state: initial,
+    researchCodeSha: SHA,
+    dependencies: {
+      scanLane,
+      loadFutureBars: async () => [],
+      now: () => new Date(T0 + 60_000),
+    },
+  });
+
+  assert.equal(pending.summary.calibrations.length, 0);
+  assert.deepEqual(buildForwardObserverRuntimeGrossEdgeEvidence(pending.state.observations, iso(60_000)), []);
+
+  const settled = await runForwardRecommendationObserverCycle({
+    state: pending.state,
+    researchCodeSha: SHA,
+    dependencies: {
+      scanLane,
+      loadFutureBars: async () => [
+        { timestamp: iso(60 * 60 * 1000), high: 106, low: 99, close: 105 },
+      ],
+      now: () => new Date(T0 + 60 * 60 * 1000),
+    },
+  });
+
+  const evidence = settled.summary.grossEdgeEvidence[0];
+  assert.ok(evidence);
+  assert.deepEqual(evidence.identity, settled.summary.calibrations[0]?.identity);
+  assert.equal(evidence.sampleSize, settled.summary.calibrations[0]?.calibration.sampleSize);
+  assert.equal(evidence.status, 'NOT_AVAILABLE');
+  assert.ok(evidence.reasons.includes('FORWARD_CALIBRATION_SAMPLE_SIZE_INSUFFICIENT'));
+  assert.equal(evidence.netAlphaInput.evidenceReady, false);
+  assert.equal(evidence.costAdjusted, false);
+  assert.equal(evidence.netAlphaReady, false);
+  assert.equal(evidence.profitabilityClaimAllowed, false);
+  assert.equal(evidence.executionAuthority, 'NONE');
+  assert.equal('orderSubmitted' in evidence, false);
 });
 
 test('missing canonical paper identity is blocked without consuming the scanner cursor or fabricating a lane hash', async () => {

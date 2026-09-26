@@ -1,10 +1,28 @@
 import { logger } from '../lib/logger';
+import { deliverMemberNotification } from './notification.service';
+import {
+  buildTelegramSignalIntelligenceInput,
+  collectTelegramSignalIntelligence,
+  type TelegramSignalDeliveryContext,
+  type TelegramSignalIntelligenceEvidence,
+} from './telegram-investment-intelligence.service';
+import {
+  fanoutMemberHoldingScannerAlert,
+  type MemberHoldingProducerSummary,
+} from './member-holdings-telegram-producer.service';
 import type { ScannerAlertCandidate, ScannerAssetClass } from './scanner-signal.types';
+import { markTelegramSignalAnnounced } from './telegram-signal-followup.service';
 import {
   sendTelegramAlert,
+  sendTelegramAlertWithReceipt,
   type TelegramAlertInput,
   type TelegramAlertResult,
+  type TelegramDeliveryReceipt,
 } from './telegram-notification.service';
+import {
+  evaluateTelegramSignalFreshness,
+  type TelegramSignalFreshness,
+} from './telegram-signal-freshness.service';
 
 export type ScannerTelegramSender = (
   input: TelegramAlertInput,
@@ -12,14 +30,136 @@ export type ScannerTelegramSender = (
 
 export type ScannerTelegramRoom = 'STOCK_ROOM' | 'CRYPTO_ROOM';
 export type ScannerTelegramRoomResolver = (room: ScannerTelegramRoom) => string | null;
+export type ScannerMemberHoldingProducer = (
+  alert: ScannerAlertCandidate,
+) => Promise<MemberHoldingProducerSummary>;
+export type ScannerTelegramDeliveryContext = TelegramSignalDeliveryContext & {
+  memberId?: string;
+};
+export type ScannerMemberNotificationDeliverer = typeof deliverMemberNotification;
 
-function pricePlanDetails(alert: ScannerAlertCandidate): string {
+const MAX_RICH_ALERTS_PER_BATCH = 3;
+
+function entryReference(alert: ScannerAlertCandidate): number | null {
+  if (!alert.entryZone) return null;
+  const { from, to } = alert.entryZone;
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to <= 0) return null;
+  return (from + to) / 2;
+}
+
+function planPercent(alert: ScannerAlertCandidate, price: number | null): number | null {
+  const entry = entryReference(alert);
+  if (entry == null || price == null || !Number.isFinite(price) || price <= 0) return null;
+  const raw = alert.direction === 'SHORT'
+    ? ((entry - price) / entry) * 100
+    : ((price - entry) / entry) * 100;
+  return Number(raw.toFixed(2));
+}
+
+function formatPlanPercent(value: number | null): string {
+  if (value == null) return 'N/A';
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+}
+
+function inferredAction(alert: ScannerAlertCandidate): string {
+  if (alert.action && alert.action !== 'NONE') return alert.action;
+  if (alert.assetClass === 'coin_futures') return alert.direction;
+  if (alert.direction === 'LONG') return 'BUY';
+  if (alert.direction === 'SHORT') return 'SELL';
+  return 'NONE';
+}
+
+function formatTargetPlan(alert: ScannerAlertCandidate): string {
+  if (!alert.targets.length) return 'N/A';
+  return alert.targets.slice(0, 3).map((target, index) =>
+    `TP${index + 1} ${target} (${formatPlanPercent(planPercent(alert, target))})`).join(' · ');
+}
+
+function tradePlanLines(alert: ScannerAlertCandidate): string[] {
   const entry = alert.entryZone
     ? `${alert.entryZone.from}~${alert.entryZone.to}`
-    : '미확정';
-  const stop = alert.stopLoss == null ? '미확정' : String(alert.stopLoss);
-  const targets = alert.targets.length > 0 ? alert.targets.join(', ') : '미확정';
-  return `승인 대기 신호 · 진입구간 ${entry} · 손절 ${stop} · 목표 ${targets}`;
+    : 'N/A';
+  const stop = alert.stopLoss == null ? 'N/A' : String(alert.stopLoss);
+  const action = inferredAction(alert);
+  const actionState = alert.orderSubmitted || alert.exchangeRequestSent
+    ? '실행 상태 확인 필요'
+    : '주문 미제출 · 거래소 요청 없음';
+  return [
+    `신호 ${alert.direction} · 행동 ${action}`,
+    `진입 ${entry}`,
+    `익절 ${formatTargetPlan(alert)}`,
+    `손절 ${stop} (${formatPlanPercent(planPercent(alert, alert.stopLoss))})`,
+    `실제 행동: ${actionState}`,
+  ];
+}
+
+function pricePlanDetails(alert: ScannerAlertCandidate): string {
+  const lines = ['🚨 진입가능', ...tradePlanLines(alert)];
+  if (alert.evidence.length) lines.push(`판단 이유: ${alert.evidence.slice(0, 4).join(' · ')}`);
+  else lines.push('판단 이유: N/A');
+  return lines.join('\n');
+}
+
+export function scannerInAppNotificationInput(
+  alert: ScannerAlertCandidate,
+  context: ScannerTelegramDeliveryContext = {},
+): Parameters<typeof deliverMemberNotification>[0] | null {
+  const memberId = context.memberId?.trim();
+  if (!memberId) return null;
+  if (alert.assetClass === 'stock' && alert.direction !== 'LONG') return null;
+  if (alert.assetClass === 'coin_spot' && alert.direction !== 'LONG') return null;
+  if (alert.assetClass === 'coin_futures' && alert.direction !== 'LONG' && alert.direction !== 'SHORT') return null;
+
+  const lane = alert.assetClass === 'coin_futures'
+    ? '코인선물'
+    : alert.assetClass === 'coin_spot'
+      ? '코인현물'
+      : alert.market.trim().toUpperCase() === 'US'
+        ? '미국주식'
+        : '국내주식';
+  const reasons = alert.evidence.map((item) => item.trim()).filter(Boolean).slice(0, 3);
+  return {
+    memberId,
+    type: alert.direction === 'SHORT' ? 'ai_sell_signal' : 'ai_strong_buy',
+    title: `검색기 ${alert.direction} · ${alert.symbol}`,
+    body: `${lane} · ${alert.market}${reasons.length ? ` · 근거 ${reasons.join(' / ')}` : ''} · 실제 주문/체결 아님`,
+    url: '/scanner',
+    app: true,
+    push: false,
+    metadata: {
+      source: 'SCANNER',
+      signalId: alert.signalId,
+      idempotencyKey: alert.idempotencyKey,
+      assetClass: alert.assetClass,
+      market: alert.market,
+      symbol: alert.symbol,
+      direction: alert.direction,
+      state: alert.state,
+      timeframe: context.timeframe ?? null,
+      generatedAt: context.generatedAt ?? null,
+    },
+  };
+}
+
+async function runScannerInAppNotification(
+  alert: ScannerAlertCandidate,
+  context: ScannerTelegramDeliveryContext,
+  deliver: ScannerMemberNotificationDeliverer,
+): Promise<void> {
+  const input = scannerInAppNotificationInput(alert, context);
+  if (!input) return;
+  try {
+    await deliver(input);
+  } catch (error) {
+    logger.warn(
+      {
+        signalId: alert.signalId,
+        memberId: input.memberId,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      },
+      'scanner in-app notification_history delivery failed open',
+    );
+  }
 }
 
 export function scannerTelegramRoomFor(assetClass: ScannerAssetClass): ScannerTelegramRoom {
@@ -83,16 +223,138 @@ export function scannerTelegramInput(
   return null;
 }
 
+function normalizeRichTradePlan(
+  input: TelegramAlertInput,
+  alert: ScannerAlertCandidate,
+): TelegramAlertInput {
+  if (!input.details) return input;
+  const lines = input.details.split('\n');
+  // buildTelegramSignalIntelligenceInput puts its legacy compact price-plan on
+  // line 2. Replace only that canonical line so evidence/news/AI stay intact.
+  if (lines.length >= 2) lines.splice(1, 1, ...tradePlanLines(alert));
+  else lines.push(...tradePlanLines(alert));
+  return { ...input, details: lines.join('\n') };
+}
+
+function freshnessWarning(freshness: TelegramSignalFreshness): string | null {
+  if (freshness.status === 'FRESH') return null;
+  if (freshness.status === 'PARTIAL') return '⚠️ 일부 Evidence 미확인 · 표시된 근거만 사용';
+  return '⛔ 재검증 전 실시간 신호로 사용 금지';
+}
+
+export function addTelegramSignalFreshness(
+  input: TelegramAlertInput,
+  alert: ScannerAlertCandidate,
+  context: TelegramSignalDeliveryContext,
+  evidence: TelegramSignalIntelligenceEvidence | null = null,
+  nowMs?: number,
+): TelegramAlertInput {
+  const freshness = evaluateTelegramSignalFreshness({
+    generatedAt: context.generatedAt,
+    expiresAt: alert.expiresAt,
+    chart: evidence?.chart ?? null,
+    warnings: evidence?.warnings ?? [],
+    nowMs,
+  });
+  const warning = freshnessWarning(freshness);
+  const lines = input.details ? input.details.split('\n') : [];
+
+  if (freshness.status !== 'FRESH' && warning) lines.push(warning);
+  return { ...input, details: lines.join('\n') };
+}
+
+async function richInput(
+  base: TelegramAlertInput,
+  alert: ScannerAlertCandidate,
+  context: TelegramSignalDeliveryContext,
+): Promise<TelegramAlertInput> {
+  if (process.env.TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED !== 'true') {
+    return addTelegramSignalFreshness(base, alert, context);
+  }
+  try {
+    const evidence = await collectTelegramSignalIntelligence(alert, context);
+    return addTelegramSignalFreshness(
+      normalizeRichTradePlan(
+        buildTelegramSignalIntelligenceInput(base, alert, evidence, context),
+        alert,
+      ),
+      alert,
+      context,
+      evidence,
+    );
+  } catch (error) {
+    logger.warn(
+      { signalId: alert.signalId, errorName: error instanceof Error ? error.name : 'UnknownError' },
+      'scanner Telegram rich evidence unavailable; falling back to base alert',
+    );
+    return addTelegramSignalFreshness(base, alert, context);
+  }
+}
+
+async function runMemberHoldingProducer(
+  alert: ScannerAlertCandidate,
+  producer: ScannerMemberHoldingProducer,
+): Promise<void> {
+  try {
+    const result = await producer(alert);
+    if (result.status === 'DISABLED' || result.status === 'UNSUPPORTED_ASSET') return;
+    logger.info(
+      {
+        symbol: alert.symbol,
+        memberHoldingsStatus: result.status,
+        matchedCount: result.matchedCount,
+        policyCount: result.policyCount,
+        skippedCount: result.skippedCount,
+        errorCount: result.errorCount,
+      },
+      'member holdings Telegram producer evaluated scanner alert',
+    );
+  } catch (error) {
+    logger.warn(
+      {
+        symbol: alert.symbol,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      },
+      'member holdings Telegram producer failed closed',
+    );
+  }
+}
+
 export async function deliverScannerTelegramAlerts(
   alerts: ScannerAlertCandidate[],
   sender: ScannerTelegramSender = sendTelegramAlert,
   resolveRoomChatId: ScannerTelegramRoomResolver = scannerTelegramRoomChatId,
+  context: ScannerTelegramDeliveryContext = {},
+  memberHoldingProducer: ScannerMemberHoldingProducer = fanoutMemberHoldingScannerAlert,
+  memberNotificationDeliverer: ScannerMemberNotificationDeliverer = deliverMemberNotification,
 ): Promise<void> {
-  await Promise.all(alerts.map(async (alert) => {
-    const input = scannerTelegramInput(alert, resolveRoomChatId);
-    if (!input) return;
+  await Promise.all(alerts.map(async (alert, index) => {
+    // Central app history is member-scoped to the authenticated scanner caller
+    // and uses the existing notification_history writer. Push remains disabled.
+    const inAppEvaluation = runScannerInAppNotification(alert, context, memberNotificationDeliverer);
+    // Start the independently default-off member path without serializing the
+    // existing public-room path behind member DB/quote/Telegram latency.
+    const memberEvaluation = runMemberHoldingProducer(alert, memberHoldingProducer);
+
+    const base = scannerTelegramInput(alert, resolveRoomChatId);
+    if (!base) {
+      await Promise.all([inAppEvaluation, memberEvaluation]);
+      return;
+    }
+    const input = index < MAX_RICH_ALERTS_PER_BATCH
+      ? await richInput(base, alert, context)
+      : addTelegramSignalFreshness(base, alert, context);
+
+    let result: TelegramAlertResult;
+    let receipt: TelegramDeliveryReceipt | null = null;
     try {
-      await sender(input);
+      if (sender === sendTelegramAlert) {
+        const tracked = await sendTelegramAlertWithReceipt(input);
+        result = tracked.ok ? { ok: true, attempts: tracked.attempts } : tracked;
+        receipt = tracked.ok ? tracked.receipt : null;
+      } else {
+        result = await sender(input);
+      }
     } catch (error) {
       logger.warn(
         {
@@ -101,6 +363,26 @@ export async function deliverScannerTelegramAlerts(
         },
         'scanner Telegram delivery failed open',
       );
+      await Promise.all([inAppEvaluation, memberEvaluation]);
+      return;
     }
+
+    if (result.ok) {
+      try {
+        await markTelegramSignalAnnounced(alert, Date.now(), undefined, receipt);
+      } catch (error) {
+        logger.warn(
+          {
+            signalId: alert.signalId,
+            alertType: input.type,
+            errorName: error instanceof Error ? error.name : 'UnknownError',
+          },
+          'scanner Telegram initial alert lacks durable followup checkpoint; failing closed until persistence recovers',
+        );
+        await Promise.all([inAppEvaluation, memberEvaluation]);
+        throw error;
+      }
+    }
+    await Promise.all([inAppEvaluation, memberEvaluation]);
   }));
 }

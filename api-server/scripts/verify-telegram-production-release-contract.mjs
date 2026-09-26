@@ -4,8 +4,11 @@ import path from 'node:path';
 const root = process.cwd();
 const workflowPath = path.join(root, '.github/workflows/telegram-production-release.yml');
 const deployPath = path.join(root, 'ops/deploy-production.sh');
+const storageApplyPath = path.join(root, 'ops/apply-production-personal-telegram-storage.mjs');
 const source = fs.readFileSync(workflowPath, 'utf8');
 const deploySource = fs.readFileSync(deployPath, 'utf8');
+const storageApplySource = fs.readFileSync(storageApplyPath, 'utf8');
+const appReleaseSource = fs.readFileSync(path.join(root, '.github/workflows/production-app-release-control.yml'), 'utf8');
 
 const requiredFragments = [
   'name: Telegram Production Release',
@@ -32,19 +35,32 @@ const requiredFragments = [
   'staging-verdict-${targetSha}',
   'verify-staging-verdict.mjs',
   'Apply and verify Production personal Telegram storage atomically',
+  'PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}',
+  'IFS= read -r PROD_DATABASE_URL && export PROD_DATABASE_URL',
+  `printf '%s\\n' "$PROD_DATABASE_URL" | ssh`,
   'production-personal-telegram-storage-${{ steps.command.outputs.sha }}',
   'ops/verify-production-personal-telegram-storage.mjs --artifact',
-  "workflow_id: 'production-deploy.yml'",
-  'return_run_details: true',
-  'run.head_sha !== targetSha',
-  "run.path !== '.github/workflows/production-deploy.yml'",
+  'Require already-successful exact-SHA Production Deploy evidence',
+  'PRE_ACTIVE_SHA: ${{ steps.before.outputs.active_sha }}',
+  "run.name === 'Production Deploy'",
+  'run.head_sha === targetSha',
+  "run.path === '.github/workflows/production-deploy.yml'",
   'LIVE_TELEGRAM_ACTIVATION_APPROVED',
   'TELEGRAM_INTELLIGENCE_WORKER_ENABLED',
+  'TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED',
+  'TELEGRAM_SIGNAL_AI_ENABLED',
+  'TELEGRAM_DAILY_BRIEF_RICH_ENABLED',
+  'TELEGRAM_SIGNAL_FOLLOWUP_ENABLED',
+  'MEMBER_HOLDINGS_TELEGRAM_PRODUCER_ENABLED',
+  'MEMBER_HOLDINGS_NEWS_INTELLIGENCE_ENABLED',
+  'MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED',
   'TELEGRAM_BOT_TOKEN',
   'TELEGRAM_CHAT_ID',
   '[telegram-intelligence-worker] started',
   'api.telegram.org/bot${encodeURIComponent(botToken)}/sendMessage',
+  'api.telegram.org/bot${encodeURIComponent(botToken)}/editMessageText',
   'telegramValue?.ok !== true',
+  'telegramEditInPlaceAccepted: true',
   'orderSubmitted: false',
   'privateTradingApiCount: 0',
   'liveTradingAuthority: false',
@@ -58,27 +74,64 @@ if (missing.length > 0) {
 }
 
 const storageMigrationIndex = source.indexOf('Apply and verify Production personal Telegram storage atomically');
-const productionDispatchIndex = source.indexOf('Dispatch existing Production Deploy and require exact-run success');
-if (storageMigrationIndex < 0 || productionDispatchIndex <= storageMigrationIndex) {
-  console.error('[telegram-production-release-contract] atomic personal Telegram storage migration must precede Production deployment');
+const productionEvidenceIndex = source.indexOf('Require already-successful exact-SHA Production Deploy evidence');
+if (storageMigrationIndex < 0 || productionEvidenceIndex <= storageMigrationIndex) {
+  console.error('[telegram-production-release-contract] atomic personal Telegram storage migration must precede Production deployment evidence validation');
   process.exit(1);
 }
-if (/\b(?:PROD_DATABASE_URL|DATABASE_URL|POSTGRES_URL)\b/.test(source)) {
-  console.error('[telegram-production-release-contract] Production workflow must reuse the server connection without adding a database secret');
+const storageUploadIndex = source.indexOf('Upload sanitized Production personal Telegram storage evidence', storageMigrationIndex);
+if (storageUploadIndex <= storageMigrationIndex) {
+  console.error('[telegram-production-release-contract] personal Telegram storage packaging block was not found');
+  process.exit(1);
+}
+const storageMigrationFiles = [...new Set(
+  storageApplySource.match(/api-server\/supabase\/migrations\/[0-9A-Za-z._-]+\.sql/g) ?? [],
+)];
+if (storageMigrationFiles.length === 0) {
+  console.error('[telegram-production-release-contract] storage apply script declares no migration sources');
+  process.exit(1);
+}
+const storageBlock = source.slice(storageMigrationIndex, storageUploadIndex);
+const pullRequestPathsStart = source.indexOf('  pull_request:');
+const pullRequestPathsEnd = source.indexOf('\npermissions:', pullRequestPathsStart);
+if (pullRequestPathsStart < 0 || pullRequestPathsEnd <= pullRequestPathsStart) {
+  console.error('[telegram-production-release-contract] pull request path gate was not found');
+  process.exit(1);
+}
+const pullRequestPathsBlock = source.slice(pullRequestPathsStart, pullRequestPathsEnd);
+const unpackagedMigrations = storageMigrationFiles.filter((migration) => !storageBlock.includes(migration));
+if (unpackagedMigrations.length > 0) {
+  console.error(`[telegram-production-release-contract] Production storage package is missing migrations: ${unpackagedMigrations.join(', ')}`);
+  process.exit(1);
+}
+const untriggeredMigrations = storageMigrationFiles.filter((migration) => !pullRequestPathsBlock.includes(migration));
+if (untriggeredMigrations.length > 0) {
+  console.error(`[telegram-production-release-contract] Production storage migration changes would bypass release-contract CI: ${untriggeredMigrations.join(', ')}`);
+  process.exit(1);
+}
+const productionDbSecretReferences = source.match(/secrets\.PROD_DATABASE_URL/g) ?? [];
+if (productionDbSecretReferences.length !== 1) {
+  console.error('[telegram-production-release-contract] PROD_DATABASE_URL must be referenced exactly once from the protected Production environment');
+  process.exit(1);
+}
+if (/PROD_DATABASE_URL=%q/.test(source)
+  || /printf\s+'?%q'?\s+"?\$PROD_DATABASE_URL"?/.test(source)
+  || /echo\s+"?\$PROD_DATABASE_URL"?/.test(source)) {
+  console.error('[telegram-production-release-contract] Production DB secret must travel only through encrypted SSH stdin, never argv or logs');
   process.exit(1);
 }
 
 const deployRequiredFragments = [
-  'telegram_runtime_activation_ready()',
-  'runtime identity or Telegram activation is stale',
+  'read_telegram_activation_state()',
+  'restart_application_preserving_telegram()',
+  'application_runtime_ready()',
+  'readonly TELEGRAM_PREDEPLOY_STATE',
+  'PRODUCTION_APP_APPROVAL_DOES_NOT_AUTHORIZE_TELEGRAM_ACTIVATION',
   'LIVE_TELEGRAM_ACTIVATION_APPROVED=false TELEGRAM_INTELLIGENCE_WORKER_ENABLED=false',
-  'LIVE_TELEGRAM_ACTIVATION_APPROVED=true',
-  'TELEGRAM_INTELLIGENCE_WORKER_ENABLED=true',
-  'telegram_runtime_activation_ready',
 ];
 const missingDeploy = deployRequiredFragments.filter((fragment) => !deploySource.includes(fragment));
 if (missingDeploy.length > 0) {
-  console.error(`[telegram-production-release-contract] missing deployment activation safeguards: ${missingDeploy.join(', ')}`);
+  console.error(`[telegram-production-release-contract] missing deployment non-elevation safeguards: ${missingDeploy.join(', ')}`);
   process.exit(1);
 }
 
@@ -103,10 +156,10 @@ if (sameTargetStart < 0 || sameTargetEnd <= sameTargetStart) {
   process.exit(1);
 }
 const sameTargetBlock = deploySource.slice(sameTargetStart, sameTargetEnd);
-if (!sameTargetBlock.includes('telegram_runtime_activation_ready')
-  || !sameTargetBlock.includes('LIVE_TELEGRAM_ACTIVATION_APPROVED=true')
-  || !sameTargetBlock.includes('TELEGRAM_INTELLIGENCE_WORKER_ENABLED=true')) {
-  console.error('[telegram-production-release-contract] same-target deployment must repair Telegram activation');
+if (!sameTargetBlock.includes('application_runtime_ready')
+  || !sameTargetBlock.includes('restart_application_preserving_telegram "$TARGET_SHA"')
+  || sameTargetBlock.includes('telegram_runtime_activation_ready')) {
+  console.error('[telegram-production-release-contract] same-target app health must be independent of Telegram activation');
   process.exit(1);
 }
 
@@ -117,12 +170,31 @@ if (promotionStart < 0 || promotionEnd <= promotionStart) {
   process.exit(1);
 }
 const promotionBlock = deploySource.slice(promotionStart, promotionEnd);
-if (!promotionBlock.includes('LIVE_TELEGRAM_ACTIVATION_APPROVED=true')
-  || !promotionBlock.includes('TELEGRAM_INTELLIGENCE_WORKER_ENABLED=true')
-  || !promotionBlock.includes('pm2 restart "$PM2_NAME" --update-env')
-  || !promotionBlock.includes('telegram_runtime_activation_ready')) {
-  console.error('[telegram-production-release-contract] exact production promotion must activate and verify Telegram runtime');
+if (!promotionBlock.includes('restart_application_preserving_telegram "$TARGET_SHA"')
+  || !promotionBlock.includes('application_runtime_ready')
+  || promotionBlock.includes('telegram_runtime_activation_ready')) {
+  console.error('[telegram-production-release-contract] exact production promotion must preserve, never activate Telegram');
   process.exit(1);
+}
+
+if (!appReleaseSource.includes('PRODUCTION_APP_APPROVAL_DOES_NOT_AUTHORIZE_TELEGRAM_ACTIVATION')
+  || !appReleaseSource.includes("'- Telegram activation authority granted: `false`'")) {
+  throw new Error('Generic Production app approval must explicitly exclude Telegram activation authority');
+}
+const activationIndex = source.indexOf('const activationChanged = activateApprovedTelegram(');
+if (activationIndex <= productionEvidenceIndex
+  || activationIndex <= source.indexOf('if (markerSha !== targetSha)')
+  || !source.includes("runtime?.DEPLOY_SHA !== approvedSha")
+  || !source.includes("environment: production")
+  || !source.includes('api-server/scripts/verify-production-telegram-preservation.mjs')) {
+  throw new Error('Telegram activation must remain behind the existing owner/protected/exact-runtime gates');
+}
+
+if (!source.includes("const telegramFeatureFlags = [")
+  || !source.includes("const allTelegramFeaturesEnabled = telegramFeatureFlags.every((key) => flag(runtime[key]));")
+  || !source.includes("if (approved && worker && allTelegramFeaturesEnabled) return false;")
+  || source.includes("if (approved && worker) return false;")) {
+  throw new Error('Telegram activation must not treat a partial feature-flag state as already complete');
 }
 
 const forbiddenPatterns = [
@@ -150,7 +222,7 @@ if (exactCommandMatches.length !== 1) {
   process.exit(1);
 }
 
-const secretNames = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'];
+const secretNames = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'PROD_DATABASE_URL'];
 for (const name of secretNames) {
   const outputPattern = new RegExp(`(?:GITHUB_OUTPUT|GITHUB_STEP_SUMMARY)[^\\n]*${name}`, 'i');
   if (outputPattern.test(source) || outputPattern.test(deploySource)) {
@@ -159,4 +231,5 @@ for (const name of secretNames) {
   }
 }
 
-console.log('[telegram-production-release-contract] owner gate, exact-main CI, staging evidence, canary fail-closed behavior, production Telegram activation, runtime identity, worker startup, sanitized Telegram proof, and zero-trading-authority contracts verified');
+await import('./verify-production-telegram-preservation.mjs');
+console.log('[telegram-production-release-contract] owner gate, exact-main CI, staging evidence, complete storage migration packaging, stdin-only Production DB handoff, generic deployment non-elevation, canary OFF, Telegram-only activation, runtime identity, worker startup, sanitized Telegram proof, and zero-trading-authority contracts verified');

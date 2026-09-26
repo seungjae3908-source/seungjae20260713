@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { deriveMemberTier, hasCapability } from '../../../packages/member-access/src/index.js';
 import {
   MemberAdministrationError,
+  classifyAtomicMemberChangeFailure,
   isActiveAdmin,
   parseMemberChangeRequest,
   planMemberChange,
@@ -25,6 +27,8 @@ const rejectionCases: Array<[string, unknown, string]> = [
   ['rejects missing reason', { membershipLevel: 'associate' }, 'CHANGE_REASON_REQUIRED'],
   ['rejects short reason', { membershipLevel: 'associate', reason: 'no' }, 'CHANGE_REASON_REQUIRED'],
   ['rejects long reason', { membershipLevel: 'associate', reason: 'x'.repeat(501) }, 'CHANGE_REASON_REQUIRED'],
+  ['rejects invalid membership level even with active change', { membershipLevel: 'owner', isActive: true, reason: 'valid reason' }, 'INVALID_MEMBER_CHANGE'],
+  ['rejects non-boolean active state even with valid membership level', { membershipLevel: 'associate', isActive: 'true', reason: 'valid reason' }, 'INVALID_MEMBER_CHANGE'],
   ['rejects client role', { role: 'admin', membershipLevel: 'admin', reason: 'attempted role injection' }, 'CLIENT_AUTHORITY_FORBIDDEN'],
   ['rejects client user_id', { user_id: 'other', membershipLevel: 'regular', reason: 'attempted identity injection' }, 'CLIENT_AUTHORITY_FORBIDDEN'],
   ['rejects actor_id', { actor_id: 'other', isActive: false, reason: 'attempted actor injection' }, 'CLIENT_AUTHORITY_FORBIDDEN'],
@@ -39,18 +43,42 @@ for (const [name, input, code] of rejectionCases) {
   });
 }
 
+test('maps atomic member state conflict to HTTP 409', () => {
+  const error = classifyAtomicMemberChangeFailure({ message: 'P0001: MEMBER_STATE_CONFLICT' });
+  assert.equal(error.code, 'MEMBER_STATE_CONFLICT');
+  assert.equal(error.statusCode, 409);
+});
+
+test('maps atomic last active admin protection to HTTP 409', () => {
+  const error = classifyAtomicMemberChangeFailure(new Error('LAST_ACTIVE_ADMIN_PROTECTED'));
+  assert.equal(error.code, 'LAST_ACTIVE_ADMIN_PROTECTED');
+  assert.equal(error.statusCode, 409);
+});
+
+test('maps atomic database authority denial to HTTP 403', () => {
+  const error = classifyAtomicMemberChangeFailure({ message: 'MEMBER_ADMIN_REQUIRED' });
+  assert.equal(error.code, 'MEMBER_ADMIN_REQUIRED');
+  assert.equal(error.statusCode, 403);
+});
+
+test('unknown atomic mutation failure remains fail closed', () => {
+  const error = classifyAtomicMemberChangeFailure({ message: 'unexpected postgres failure' });
+  assert.equal(error.code, 'MEMBER_UPDATE_FAILED');
+  assert.equal(error.statusCode, 500);
+});
+
 test('parses valid associate approval', () => {
   assert.deepEqual(parseMemberChangeRequest({ membershipLevel: 'associate', isActive: true, reason: '신규 회원 승인' }), {
     membershipLevel: 'associate', isActive: true, reason: '신규 회원 승인',
   });
 });
 
-test('pending to associate is recorded as approval', () => {
+test('pending to associate is recorded as approval with legacy-compatible associate role', () => {
   const plan = planMemberChange(profile(), { membershipLevel: 'associate', isActive: true, reason: '회원 승인 처리' }, ADMIN, 1, NOW);
   assert.equal(plan.action, 'member.approve');
   assert.equal(plan.changes.membership_level, 'associate');
   assert.equal(plan.changes.status, 'approved');
-  assert.equal(plan.changes.role, 'user');
+  assert.equal(plan.changes.role, 'associate');
   assert.equal(plan.changes.approved_by, ADMIN);
 });
 
@@ -58,6 +86,13 @@ test('regular to admin changes legacy compatibility role', () => {
   const plan = planMemberChange(profile({ membership_level: 'regular', status: 'approved' }), { membershipLevel: 'admin', reason: '관리자 승격' }, ADMIN, 2, NOW);
   assert.equal(plan.action, 'member.membership.change');
   assert.equal(plan.changes.role, 'admin');
+  assert.equal(plan.changes.status, 'approved');
+});
+
+test('regular tier uses legacy full role instead of unsupported user role', () => {
+  const plan = planMemberChange(profile({ membership_level: 'associate', role: 'associate', status: 'approved' }), { membershipLevel: 'regular', reason: '정회원 승급' }, ADMIN, 1, NOW);
+  assert.equal(plan.changes.membership_level, 'regular');
+  assert.equal(plan.changes.role, 'full');
   assert.equal(plan.changes.status, 'approved');
 });
 
@@ -72,13 +107,66 @@ test('deactivation records suspended compatibility status', () => {
 test('reactivation restores stored associate tier and approved state', () => {
   const plan = planMemberChange(profile({ membership_level: 'associate', is_active: false, status: 'suspended' }), { isActive: true, reason: '계정 재활성화' }, ADMIN, 1, NOW);
   assert.equal(plan.changes.membership_level, 'associate');
+  assert.equal(plan.changes.role, 'associate');
   assert.equal(plan.changes.status, 'approved');
   assert.equal(plan.changes.is_active, true);
+});
+
+test('reactivation restores legacy suspended full tier without canonical membership', () => {
+  const plan = planMemberChange(profile({ membership_level: null, role: 'full', is_active: false, status: 'suspended' }), { isActive: true, reason: '정지 계정 재활성화' }, ADMIN, 1, NOW);
+  assert.equal(plan.changes.membership_level, 'regular');
+  assert.equal(plan.changes.role, 'full');
+  assert.equal(plan.changes.status, 'approved');
+});
+
+test('rejected stale admin cannot regain admin by active-state-only change', () => {
+  const plan = planMemberChange(
+    profile({ membership_level: 'admin', role: 'admin', status: 'rejected', is_active: true }),
+    { isActive: true, reason: '거절 상태 재검토' },
+    ADMIN,
+    0,
+    NOW,
+  );
+  assert.equal(plan.changes.membership_level, 'pending');
+  assert.equal(plan.changes.role, 'pending');
+  assert.equal(plan.changes.status, 'pending');
+  assert.equal(plan.changes.approved_at, null);
+  assert.equal(plan.changes.approved_by, null);
+});
+
+test('revoked stale admin cannot regain admin by reactivation alone', () => {
+  const plan = planMemberChange(
+    profile({ membership_level: 'admin', role: 'admin', status: 'revoked', is_active: false }),
+    { isActive: true, reason: '회수 계정 재검토' },
+    ADMIN,
+    0,
+    NOW,
+  );
+  assert.equal(plan.changes.membership_level, 'pending');
+  assert.equal(plan.changes.role, 'pending');
+  assert.equal(plan.changes.status, 'pending');
+  assert.equal(plan.changes.is_active, true);
+});
+
+test('rejected member requires explicit tier assignment before approval', () => {
+  const plan = planMemberChange(
+    profile({ membership_level: 'admin', role: 'admin', status: 'rejected', is_active: true }),
+    { membershipLevel: 'associate', reason: '재심사 후 준회원 승인' },
+    ADMIN,
+    0,
+    NOW,
+  );
+  assert.equal(plan.action, 'member.approve');
+  assert.equal(plan.changes.membership_level, 'associate');
+  assert.equal(plan.changes.role, 'associate');
+  assert.equal(plan.changes.status, 'approved');
+  assert.equal(plan.changes.approved_by, ADMIN);
 });
 
 test('pending state does not create approved timestamp', () => {
   const plan = planMemberChange(profile({ membership_level: 'associate', status: 'approved' }), { membershipLevel: 'pending', reason: '승인 대기로 전환' }, ADMIN, 1, NOW);
   assert.equal(plan.changes.status, 'pending');
+  assert.equal(plan.changes.role, 'pending');
   assert.equal(plan.changes.approved_at, null);
 });
 
@@ -96,15 +184,56 @@ test('last active admin cannot be deactivated', () => {
   );
 });
 
+test('rejected admin-shaped row is not protected as an active admin', () => {
+  const rejectedAdmin = profile({ membership_level: 'admin', role: 'admin', status: 'rejected', is_active: true });
+  assert.equal(isActiveAdmin(rejectedAdmin), false);
+  const plan = planMemberChange(rejectedAdmin, { membershipLevel: 'regular', reason: '거절 상태 권한 정리' }, ADMIN, 0, NOW);
+  assert.equal(plan.changes.membership_level, 'regular');
+  assert.equal(plan.changes.role, 'full');
+});
+
+test('pending status overrides an explicit admin tier in shared capabilities', () => {
+  const pendingAdmin = profile({ membership_level: 'admin', role: 'admin', status: 'pending', is_active: true });
+  assert.equal(deriveMemberTier(pendingAdmin), 'pending');
+  assert.equal(hasCapability(pendingAdmin, 'canManageMembers'), false);
+  assert.equal(hasCapability(pendingAdmin, 'canPlaceOrders'), false);
+  assert.equal(hasCapability(pendingAdmin, 'canAccessFutures'), false);
+  assert.equal(hasCapability(pendingAdmin, 'canConnectPersonalTelegram'), false);
+});
+
+test('revoked status overrides an explicit admin tier in shared capabilities', () => {
+  const revokedAdmin = profile({ membership_level: 'admin', role: 'admin', status: 'revoked', is_active: true });
+  assert.equal(deriveMemberTier(revokedAdmin), 'pending');
+  assert.equal(hasCapability(revokedAdmin, 'canManageMembers'), false);
+  assert.equal(hasCapability(revokedAdmin, 'canPlaceOrders'), false);
+  assert.equal(hasCapability(revokedAdmin, 'canAccessFutures'), false);
+  assert.equal(hasCapability(revokedAdmin, 'canConnectPersonalTelegram'), false);
+});
+
+test('missing status fails closed even with explicit admin tier', () => {
+  const missingStatusAdmin = profile({ membership_level: 'admin', role: 'admin', status: null, is_active: true });
+  assert.equal(deriveMemberTier(missingStatusAdmin), 'pending');
+  assert.equal(hasCapability(missingStatusAdmin, 'canManageMembers'), false);
+  assert.equal(hasCapability(missingStatusAdmin, 'canPlaceOrders'), false);
+  const plan = planMemberChange(missingStatusAdmin, { isActive: true, reason: '상태 누락 행 검증' }, ADMIN, 0, NOW);
+  assert.equal(plan.changes.membership_level, 'pending');
+  assert.equal(plan.changes.status, 'pending');
+});
+
+test('approved legacy full role derives regular tier', () => {
+  assert.equal(deriveMemberTier(profile({ membership_level: null, role: 'full', status: 'approved' })), 'regular');
+});
+
 test('admin may be demoted when another active admin exists', () => {
   const plan = planMemberChange(profile({ membership_level: 'admin', role: 'admin', status: 'approved' }), { membershipLevel: 'regular', reason: '관리자 역할 조정' }, ADMIN, 2, NOW);
   assert.equal(plan.changes.membership_level, 'regular');
+  assert.equal(plan.changes.role, 'full');
 });
 
 test('audit values include actor-independent before and after data', () => {
   const plan = planMemberChange(profile(), { membershipLevel: 'associate', reason: '회원 승인 처리' }, ADMIN, 1, NOW);
   assert.deepEqual(plan.beforeValue, { membershipLevel: 'pending', isActive: true, role: 'user', status: 'pending' });
-  assert.deepEqual(plan.afterValue, { membershipLevel: 'associate', isActive: true, role: 'user', status: 'approved' });
+  assert.deepEqual(plan.afterValue, { membershipLevel: 'associate', isActive: true, role: 'associate', status: 'approved' });
   assert.equal(plan.reason, '회원 승인 처리');
 });
 
@@ -114,9 +243,12 @@ test('permission timestamp uses server time', () => {
   assert.equal(plan.changes.updated_at, NOW.toISOString());
 });
 
-test('active admin detection uses stored tier and active flag', () => {
+test('active admin detection requires approved status and active flag', () => {
   assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'approved' })), true);
+  assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'pending' })), false);
+  assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'rejected' })), false);
   assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'approved', is_active: false })), false);
+  assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'approved', is_active: null })), false);
   assert.equal(isActiveAdmin(profile({ role: 'admin', status: 'approved', membership_level: null })), true);
 });
 

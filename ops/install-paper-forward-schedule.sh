@@ -9,23 +9,47 @@ STATE_ROOT="${PAPER_FORWARD_STATE_ROOT:-/opt/stock-app-data/paper-forward-v1}"
 RUNTIME_STATE_ROOT="$STATE_ROOT/runtime-state"
 DEPLOY_MARKER="$LIVE_DIR/.deploy/current-sha"
 SOURCE_LAB="$LIVE_DIR/market-prediction-lab"
+SOURCE_STRATEGY_HYPOTHESIS="$LIVE_DIR/packages/strategy-hypothesis"
+SOURCE_EXTERNAL_RESEARCH="$LIVE_DIR/packages/external-research"
 RELEASE_ROOT="$STATE_ROOT/releases"
-RUNTIME_RELEASE="$RELEASE_ROOT/$TARGET_SHA/market-prediction-lab"
+PINNED_RELEASE="$RELEASE_ROOT/$TARGET_SHA"
+RUNTIME_RELEASE="$PINNED_RELEASE/market-prediction-lab"
 CURRENT_LINK="$STATE_ROOT/current"
 BIN_DIR="$STATE_ROOT/bin"
 LOG_DIR="$STATE_ROOT/logs"
 BACKUP_DIR="$STATE_ROOT/crontab-backups"
 IDENTITY_ARCHIVE_ROOT="$STATE_ROOT/identity-archives"
 IDENTITY_CUTOVER_ROOT="$STATE_ROOT/identity-cutovers"
+PUBLISHER_DIR="$STATE_ROOT/publisher"
+PUBLISHER_SNAPSHOT_ARCHIVE_ROOT="$PUBLISHER_DIR/snapshot-archives"
+PUBLISHER_BINDING_PATH="$STATE_ROOT/publisher-binding.json"
+PAPER_STATE_SNAPSHOT_PATH="$PUBLISHER_DIR/paper-state-v2.json"
+SNAPSHOT_BRIDGE_SCRIPT="$LIVE_DIR/ops/bridge-paper-forward-no-deploy-snapshot.mjs"
+AUTHORITATIVE_RUNTIME_ROOT="$SOURCE_LAB/runtime/authoritative-paper-runtime-v1"
+PUBLISHER_ACCOUNT_ID_SHA256="${PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256:-}"
 WRAPPER="$BIN_DIR/run-paper-forward-schedule"
 CRON_LOCK="$STATE_ROOT/cron.lock"
 TAG="# stock-app-paper-forward-v1"
 CRON_EXPRESSION="*/15 * * * *"
 CANONICAL_CYCLE_MS="14400000"
 OUTCOME_ACCUMULATION_ENABLED="${PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED:-false}"
+# The scheduled runner owns this explicit read-only adapter. #772 owns record
+# validation, not a filename or investment-policy defaults.
+PAPER_FORWARD_RISK_POLICY_RECORD_PATH="${PAPER_FORWARD_RISK_POLICY_RECORD_PATH:-}"
+PAPER_FORWARD_RISK_POLICY_DECISION_PATH="${PAPER_FORWARD_RISK_POLICY_DECISION_PATH:-}"
+PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH="${PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH:-}"
+RISK_POLICY_MATERIALIZER="$SOURCE_LAB/scripts/materialize-paper-risk-policy-record.mjs"
+RISK_POLICY_RECORD_DIR="$STATE_ROOT/policy"
+RISK_POLICY_SOURCE_MODE=""
+RISK_POLICY_DECISION_RELATIVE_PATH=""
 PREVIOUS_CRONTAB=""
 CRONTAB_MUTATED=0
 BACKUP_PATH=""
+SNAPSHOT_BRIDGE_APPLIED="false"
+SNAPSHOT_BRIDGE_STAGED_PATH=""
+SNAPSHOT_BRIDGE_ARCHIVE_PATH=""
+SNAPSHOT_BRIDGE_COMMITTED=0
+SNAPSHOT_SOURCE_SHA_BEFORE=""
 
 fail() {
   echo "[paper-forward-activate] $1" >&2
@@ -42,6 +66,14 @@ mark_disabled() {
 restore_on_error() {
   local status=$?
   trap - EXIT
+  if (( status != 0 )) && [[ "$SNAPSHOT_BRIDGE_COMMITTED" == 1 ]]; then
+    rm -f -- "$PAPER_STATE_SNAPSHOT_PATH"
+    mv -f -- "$SNAPSHOT_BRIDGE_ARCHIVE_PATH" "$PAPER_STATE_SNAPSHOT_PATH" || true
+    mark_disabled
+  fi
+  if (( status != 0 )) && [[ -n "$SNAPSHOT_BRIDGE_STAGED_PATH" ]]; then
+    rm -f -- "$SNAPSHOT_BRIDGE_STAGED_PATH"
+  fi
   if (( status != 0 )) && [[ "$CRONTAB_MUTATED" == 1 ]]; then
     printf '%s' "$PREVIOUS_CRONTAB" | crontab - || true
     mark_disabled
@@ -57,8 +89,44 @@ DEPLOYED_SHA="$(tr -d '[:space:]' < "$DEPLOY_MARKER")"
 [[ "$DEPLOYED_SHA" == "$TARGET_SHA" ]] || fail "production SHA mismatch: $DEPLOYED_SHA" 4
 [[ -r "$SOURCE_LAB/scripts/run-paper-forward-schedule.js" ]] || fail "Paper Forward schedule runner missing" 5
 [[ -r "$SOURCE_LAB/src/paper-forward-schedule-runtime-v1.js" ]] || fail "Paper Forward schedule runtime missing" 6
+[[ -r "$SOURCE_LAB/src/authoritative-natural-paper-accounting-v1.js" ]] || fail "authoritative Natural Paper accounting runtime missing" 6
+[[ -r "$SOURCE_STRATEGY_HYPOTHESIS/package.json" && -r "$SOURCE_STRATEGY_HYPOTHESIS/src/index.js" ]] || fail "strategy-hypothesis pinned dependency missing" 6
+[[ -r "$SOURCE_EXTERNAL_RESEARCH/package.json" && -r "$SOURCE_EXTERNAL_RESEARCH/src/index.js" ]] || fail "external-research pinned dependency missing" 6
 [[ "$STATE_ROOT" == /opt/stock-app-data/paper-forward-v1 ]] || fail "unexpected persistent state root" 7
 [[ "$STATE_ROOT" != "$LIVE_DIR" && "$STATE_ROOT" != "$LIVE_DIR/"* ]] || fail "state root must remain outside deploy tree" 8
+[[ "$PUBLISHER_BINDING_PATH" == "$STATE_ROOT/publisher-binding.json" ]] || fail "publisher binding path escaped persistent state root" 8
+[[ "$PAPER_STATE_SNAPSHOT_PATH" == "$STATE_ROOT/publisher/paper-state-v2.json" ]] || fail "Paper snapshot path escaped persistent state root" 8
+if [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" || -n "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" || -n "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" ]]; then
+  if [[ -n "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" && -n "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" ]]; then
+    fail "CANONICAL_RISK_POLICY_SOURCE_AMBIGUOUS: provide either an explicit record or approved decision, not both" 15
+  fi
+  if [[ -n "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" ]]; then
+    [[ "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" == /* ]] || fail "Paper risk policy record path must be absolute" 15
+    [[ "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" != *"'"* && "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" != *$'\n'* && "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" != *$'\r'* ]] || fail "Paper risk policy record path is unsafe for the pinned wrapper" 15
+    [[ -f "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" && -r "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" ]] || fail "CANONICAL_RISK_POLICY_RECORD_MISSING: Paper risk policy source missing or unreadable" 15
+    RISK_POLICY_SOURCE_MODE="EXPLICIT_RECORD"
+  else
+    [[ -n "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" ]] || fail "CANONICAL_RISK_POLICY_RECORD_MISSING: explicit Paper risk policy source required" 15
+    [[ "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" == /* ]] || fail "Paper risk policy decision path must be absolute" 15
+    [[ "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" != *"'"* && "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" != *$'\n'* && "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" != *$'\r'* ]] || fail "Paper risk policy decision path is unsafe for the pinned wrapper" 15
+    [[ -f "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" && -r "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" ]] || fail "CANONICAL_RISK_POLICY_DECISION_MISSING: approved policy decision missing or unreadable" 15
+    [[ -f "$RISK_POLICY_MATERIALIZER" && -r "$RISK_POLICY_MATERIALIZER" ]] || fail "CANONICAL_RISK_POLICY_MATERIALIZER_MISSING" 15
+    case "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" in
+      "$SOURCE_LAB"/*) ;;
+      *) fail "Paper risk policy decision must be pinned inside the exact source tree" 15 ;;
+    esac
+    RISK_POLICY_DECISION_RELATIVE_PATH="${PAPER_FORWARD_RISK_POLICY_DECISION_PATH#"$SOURCE_LAB/"}"
+    [[ -n "$RISK_POLICY_DECISION_RELATIVE_PATH" && "$RISK_POLICY_DECISION_RELATIVE_PATH" != ../* && "$RISK_POLICY_DECISION_RELATIVE_PATH" != */../* ]] || fail "Paper risk policy decision relative path invalid" 15
+    RISK_POLICY_SOURCE_MODE="APPROVED_DECISION"
+  fi
+fi
+
+if [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" || -n "$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" ]]; then
+  [[ -n "$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" ]] || fail "CANONICAL_SUPPLEMENTAL_COST_EVIDENCE_MISSING: explicit Paper cost source required" 15
+  [[ "$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" == /* ]] || fail "Paper supplemental cost path must be absolute" 15
+  [[ "$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" != *"'"* && "$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" != *$'\n'* && "$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" != *$'\r'* ]] || fail "Paper supplemental cost path is unsafe for the pinned wrapper" 15
+  [[ -f "$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" && -r "$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" ]] || fail "CANONICAL_SUPPLEMENTAL_COST_EVIDENCE_MISSING: Paper cost source missing or unreadable" 15
+fi
 
 for command_name in node flock crontab mkdir rm mv ln date sha256sum awk grep sed wc pgrep find sort xargs chmod tr rsync; do
   command -v "$command_name" >/dev/null 2>&1 || fail "missing command: $command_name" 9
@@ -72,12 +140,72 @@ fi
 
 NODE_BIN="$(command -v node)"
 FLOCK_BIN="$(command -v flock)"
-mkdir -p "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$IDENTITY_ARCHIVE_ROOT" "$IDENTITY_CUTOVER_ROOT" "$RUNTIME_STATE_ROOT"
-chmod 700 "$STATE_ROOT" "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$IDENTITY_ARCHIVE_ROOT" "$IDENTITY_CUTOVER_ROOT" "$RUNTIME_STATE_ROOT"
+mkdir -p "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$IDENTITY_ARCHIVE_ROOT" "$IDENTITY_CUTOVER_ROOT" "$RUNTIME_STATE_ROOT" "$PUBLISHER_DIR" "$PUBLISHER_SNAPSHOT_ARCHIVE_ROOT"
+chmod 700 "$STATE_ROOT" "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$IDENTITY_ARCHIVE_ROOT" "$IDENTITY_CUTOVER_ROOT" "$RUNTIME_STATE_ROOT" "$PUBLISHER_DIR" "$PUBLISHER_SNAPSHOT_ARCHIVE_ROOT"
 
-IDENTITY_CUTOVER="false"
-ARCHIVED_RESEARCH_SHA=""
+if [[ "$RISK_POLICY_SOURCE_MODE" == "APPROVED_DECISION" ]]; then
+  mkdir -p "$RISK_POLICY_RECORD_DIR"
+  chmod 700 "$RISK_POLICY_RECORD_DIR"
+  PAPER_FORWARD_RISK_POLICY_RECORD_PATH="$RISK_POLICY_RECORD_DIR/risk-policy-record.json"
+  "$NODE_BIN" "$RISK_POLICY_MATERIALIZER" \
+    --decision "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" \
+    --research-sha "$TARGET_SHA" \
+    --output "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" >/dev/null \
+    || fail "CANONICAL_RISK_POLICY_DECISION_MATERIALIZATION_FAILED" 15
+  [[ -f "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" && -r "$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" ]] \
+    || fail "CANONICAL_RISK_POLICY_RECORD_MISSING: materialized policy record unavailable" 15
+fi
+
+if [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" ]]; then
+  if [[ -n "$PUBLISHER_ACCOUNT_ID_SHA256" ]]; then
+    [[ "$PUBLISHER_ACCOUNT_ID_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "authenticated Paper publisher SHA-256 binding invalid" 14
+    "$NODE_BIN" - "$PUBLISHER_BINDING_PATH" "$TARGET_SHA" "$PAPER_STATE_SNAPSHOT_PATH" "$PUBLISHER_ACCOUNT_ID_SHA256" <<'NODE'
+const fs = require('node:fs');
+const [path, paperRuntimeSourceSha, snapshotPath, publisherAccountIdSha256] = process.argv.slice(2);
+if (!/^[0-9a-f]{40}$/.test(paperRuntimeSourceSha)) process.exit(1);
+if (!/^[0-9a-f]{64}$/.test(publisherAccountIdSha256)) process.exit(1);
+const value = {
+  schemaVersion: 'paper-state-publisher-runtime-binding-v1',
+  paperRuntimeSourceSha,
+  snapshotPath,
+  publisherAccountIdSha256,
+  immutable: true,
+  executionAuthority: 'NONE',
+  privateApiAllowed: false,
+  liveTrading: false,
+  financialMutationAllowed: false,
+};
+const temporary = `${path}.tmp-${process.pid}`;
+fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+fs.renameSync(temporary, path);
+NODE
+    chmod 600 "$PUBLISHER_BINDING_PATH"
+  elif [[ -r "$PUBLISHER_BINDING_PATH" ]]; then
+    PUBLISHER_ACCOUNT_ID_SHA256="$("$NODE_BIN" - "$PUBLISHER_BINDING_PATH" "$TARGET_SHA" "$PAPER_STATE_SNAPSHOT_PATH" <<'NODE'
+const fs = require('node:fs');
+const [path, expectedSourceSha, expectedSnapshotPath] = process.argv.slice(2);
+const value = JSON.parse(fs.readFileSync(path, 'utf8'));
+const valid = value?.schemaVersion === 'paper-state-publisher-runtime-binding-v1'
+  && value?.paperRuntimeSourceSha === expectedSourceSha
+  && value?.snapshotPath === expectedSnapshotPath
+  && /^[0-9a-f]{64}$/.test(String(value?.publisherAccountIdSha256 ?? ''))
+  && value?.immutable === true
+  && value?.executionAuthority === 'NONE'
+  && value?.privateApiAllowed === false
+  && value?.liveTrading === false
+  && value?.financialMutationAllowed === false;
+if (!valid) process.exit(1);
+process.stdout.write(value.publisherAccountIdSha256);
+NODE
+)" || fail "protected Paper publisher binding is invalid or stale for target SHA" 14
+  else
+    fail "authenticated Paper publisher SHA-256 binding required" 14
+  fi
+  [[ "$PUBLISHER_ACCOUNT_ID_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "authenticated Paper publisher SHA-256 binding required" 14
+fi
+
 STATE_FILE="$RUNTIME_STATE_ROOT/state/recurring-paper-loop.json"
+EXISTING_RESEARCH_SHA=""
 if [[ -r "$STATE_FILE" ]]; then
   EXISTING_RESEARCH_SHA="$("$NODE_BIN" - "$STATE_FILE" <<'NODE'
 const fs = require('node:fs');
@@ -87,16 +215,95 @@ if (!/^[0-9a-f]{40}$/.test(sha)) process.exit(1);
 process.stdout.write(sha);
 NODE
 )" || fail "existing Paper Forward state identity is invalid; refusing cutover" 11
-  if [[ "$EXISTING_RESEARCH_SHA" != "$TARGET_SHA" ]]; then
-    EXISTING_MANAGED_CRON_COUNT="$(crontab -l 2>/dev/null | grep -Fc "$TAG" || true)"
-    [[ "$EXISTING_MANAGED_CRON_COUNT" == 0 ]] || fail "identity cutover requires the prior schedule to be disabled" 12
-    CUTOVER_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-    ARCHIVE_PATH="$IDENTITY_ARCHIVE_ROOT/${EXISTING_RESEARCH_SHA}-to-${TARGET_SHA}-$CUTOVER_STAMP"
-    [[ ! -e "$ARCHIVE_PATH" ]] || fail "identity archive path already exists" 13
-    mv "$RUNTIME_STATE_ROOT" "$ARCHIVE_PATH"
-    mkdir -p "$RUNTIME_STATE_ROOT"
-    chmod 700 "$RUNTIME_STATE_ROOT"
-    "$NODE_BIN" - "$IDENTITY_CUTOVER_ROOT/$TARGET_SHA.json" "$EXISTING_RESEARCH_SHA" "$TARGET_SHA" "$ARCHIVE_PATH" <<'NODE'
+fi
+if [[ -n "$EXISTING_RESEARCH_SHA" && "$EXISTING_RESEARCH_SHA" != "$TARGET_SHA" ]]; then
+  EXISTING_MANAGED_CRON_COUNT="$(crontab -l 2>/dev/null | grep -Fc "$TAG" || true)"
+  [[ "$EXISTING_MANAGED_CRON_COUNT" == 0 ]] || fail "identity cutover requires the prior schedule to be disabled" 12
+fi
+
+ACCOUNT_SEED_SNAPSHOT_PATH="$PAPER_STATE_SNAPSHOT_PATH"
+if [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" && -r "$PAPER_STATE_SNAPSHOT_PATH" ]]; then
+  SNAPSHOT_SOURCE_SHA_BEFORE="$("$NODE_BIN" - "$PAPER_STATE_SNAPSHOT_PATH" <<'NODE'
+const fs = require('node:fs');
+const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const sourceSha = String(value?.sourceSha ?? '').trim().toLowerCase();
+if (!/^[0-9a-f]{40}$/.test(sourceSha)) process.exit(1);
+process.stdout.write(sourceSha);
+NODE
+)" || fail "existing Paper snapshot source SHA is invalid" 14
+  if [[ "$SNAPSHOT_SOURCE_SHA_BEFORE" != "$TARGET_SHA" ]]; then
+    [[ -r "$SNAPSHOT_BRIDGE_SCRIPT" ]] || fail "target snapshot bridge missing" 14
+    [[ -r "$AUTHORITATIVE_RUNTIME_ROOT/authoritative-paper-runtime-v1.mjs" ]] || fail "target authoritative Paper runtime missing" 14
+    [[ -r "$AUTHORITATIVE_RUNTIME_ROOT/authoritative-paper-runtime-v1.manifest.json" ]] || fail "target authoritative Paper runtime manifest missing" 14
+    SNAPSHOT_BRIDGE_STAGED_PATH="$PUBLISHER_DIR/.paper-state-v2.bridge-$TARGET_SHA-$$"
+    TARGET_SHA="$TARGET_SHA" \
+    PUBLISHER_ACCOUNT_ID_SHA256="$PUBLISHER_ACCOUNT_ID_SHA256" \
+    PUBLISHER_BINDING_PATH="$PUBLISHER_BINDING_PATH" \
+    PAPER_STATE_SNAPSHOT_PATH="$PAPER_STATE_SNAPSHOT_PATH" \
+    OUTPUT_PAPER_STATE_SNAPSHOT_PATH="$SNAPSHOT_BRIDGE_STAGED_PATH" \
+    AUTHORITATIVE_RUNTIME_BUNDLE_PATH="$AUTHORITATIVE_RUNTIME_ROOT/authoritative-paper-runtime-v1.mjs" \
+    AUTHORITATIVE_RUNTIME_MANIFEST_PATH="$AUTHORITATIVE_RUNTIME_ROOT/authoritative-paper-runtime-v1.manifest.json" \
+      "$NODE_BIN" "$SNAPSHOT_BRIDGE_SCRIPT" >/dev/null \
+      || fail "target Paper snapshot bridge failed" 14
+    ACCOUNT_SEED_SNAPSHOT_PATH="$SNAPSHOT_BRIDGE_STAGED_PATH"
+    SNAPSHOT_BRIDGE_APPLIED="true"
+  fi
+fi
+
+if [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" ]]; then
+  PAPER_FORWARD_ROOT="$RUNTIME_STATE_ROOT" \
+  PAPER_FORWARD_RESEARCH_SHA="$TARGET_SHA" \
+  PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH="$ACCOUNT_SEED_SNAPSHOT_PATH" \
+  PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$PUBLISHER_ACCOUNT_ID_SHA256" \
+  "$NODE_BIN" --input-type=module - "$SOURCE_LAB" "$RUNTIME_STATE_ROOT" "$ACCOUNT_SEED_SNAPSHOT_PATH" "$PUBLISHER_ACCOUNT_ID_SHA256" "$TARGET_SHA" <<'NODE'
+import fs from 'node:fs';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+const [sourceLab, runtimeRoot, snapshotPath, expectedPublisherAccountIdSha256, expectedSourceSha] = process.argv.slice(2);
+try {
+  const accounting = await import(pathToFileURL(join(sourceLab, 'src', 'authoritative-natural-paper-accounting-v1.js')).href);
+  const statePath = join(runtimeRoot, 'state', 'recurring-paper-loop.json');
+  if (fs.existsSync(statePath)) {
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    const persistedResearchSha = String(state?.identity?.researchCodeSha ?? '').trim().toLowerCase();
+    if (persistedResearchSha === expectedSourceSha && state?.ledger?.schemaVersion === 'authoritative-natural-paper-account-ledger-v1') {
+      accounting.validateAuthoritativeNaturalPaperLedger(state.ledger, {
+        expectedPublisherAccountIdSha256,
+        expectedSourceSha,
+      });
+      process.stdout.write(`${JSON.stringify({ status: 'READY_PERSISTED_AUTHORITATIVE_ACCOUNT', accountBindingVerified: true, sourceShaExact: true })}\n`);
+      process.exit(0);
+    }
+  }
+  if (!fs.existsSync(snapshotPath)) {
+    throw Object.assign(new Error('PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_SEED_REQUIRED'), { code: 'PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_SEED_REQUIRED' });
+  }
+  const snapshot = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+  accounting.createAuthoritativeNaturalPaperLedgerFromSnapshot({
+    snapshot,
+    expectedPublisherAccountIdSha256,
+    expectedSourceSha,
+    nowMs: Date.now(),
+  });
+  process.stdout.write(`${JSON.stringify({ status: 'READY_AUTHENTICATED_SEED_SNAPSHOT', accountBindingVerified: true, sourceShaExact: true })}\n`);
+} catch (error) {
+  const code = String(error?.code ?? error?.message ?? 'PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_SEED_INVALID');
+  process.stderr.write(`[paper-forward-activate] ${code}\n`);
+  process.exit(14);
+}
+NODE
+fi
+
+IDENTITY_CUTOVER="false"
+ARCHIVED_RESEARCH_SHA=""
+if [[ -n "$EXISTING_RESEARCH_SHA" && "$EXISTING_RESEARCH_SHA" != "$TARGET_SHA" ]]; then
+  CUTOVER_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+  ARCHIVE_PATH="$IDENTITY_ARCHIVE_ROOT/${EXISTING_RESEARCH_SHA}-to-${TARGET_SHA}-$CUTOVER_STAMP"
+  [[ ! -e "$ARCHIVE_PATH" ]] || fail "identity archive path already exists" 13
+  mv "$RUNTIME_STATE_ROOT" "$ARCHIVE_PATH"
+  mkdir -p "$RUNTIME_STATE_ROOT"
+  chmod 700 "$RUNTIME_STATE_ROOT"
+  "$NODE_BIN" - "$IDENTITY_CUTOVER_ROOT/$TARGET_SHA.json" "$EXISTING_RESEARCH_SHA" "$TARGET_SHA" "$ARCHIVE_PATH" <<'NODE'
 const fs = require('node:fs');
 const [path, archivedResearchSha, targetResearchSha, archivePath] = process.argv.slice(2);
 const value = {
@@ -115,28 +322,38 @@ const temporary = `${path}.tmp-${process.pid}`;
 fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
 fs.renameSync(temporary, path);
 NODE
-    IDENTITY_CUTOVER="true"
-    ARCHIVED_RESEARCH_SHA="$EXISTING_RESEARCH_SHA"
-  fi
+  IDENTITY_CUTOVER="true"
+  ARCHIVED_RESEARCH_SHA="$EXISTING_RESEARCH_SHA"
 fi
 
 TEMP_RELEASE="$RELEASE_ROOT/.tmp-$TARGET_SHA-$$"
 rm -rf -- "$TEMP_RELEASE"
-mkdir -p "$TEMP_RELEASE/market-prediction-lab"
+mkdir -p \
+  "$TEMP_RELEASE/market-prediction-lab" \
+  "$TEMP_RELEASE/packages/strategy-hypothesis" \
+  "$TEMP_RELEASE/packages/external-research"
 rsync -a --delete \
   --exclude='node_modules/' \
   --exclude='*/node_modules/' \
   "$SOURCE_LAB/" "$TEMP_RELEASE/market-prediction-lab/"
-find "$TEMP_RELEASE/market-prediction-lab" -type f -exec chmod go-rwx {} +
-find "$TEMP_RELEASE/market-prediction-lab" -type d -exec chmod 700 {} +
+rsync -a --delete \
+  --exclude='node_modules/' \
+  --exclude='*/node_modules/' \
+  "$SOURCE_STRATEGY_HYPOTHESIS/" "$TEMP_RELEASE/packages/strategy-hypothesis/"
+rsync -a --delete \
+  --exclude='node_modules/' \
+  --exclude='*/node_modules/' \
+  "$SOURCE_EXTERNAL_RESEARCH/" "$TEMP_RELEASE/packages/external-research/"
+find "$TEMP_RELEASE" -type f -exec chmod go-rwx {} +
+find "$TEMP_RELEASE" -type d -exec chmod 700 {} +
 
-if [[ -e "$RUNTIME_RELEASE" ]]; then
-  EXISTING_DIGEST="$(find "$RUNTIME_RELEASE" -type f -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}')"
-  NEW_DIGEST="$(find "$TEMP_RELEASE/market-prediction-lab" -type f -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}')"
+if [[ -e "$PINNED_RELEASE" ]]; then
+  EXISTING_DIGEST="$(find "$PINNED_RELEASE" -type f -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}')"
+  NEW_DIGEST="$(find "$TEMP_RELEASE" -type f -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}')"
   [[ "$EXISTING_DIGEST" == "$NEW_DIGEST" ]] || fail "existing pinned runtime differs for target SHA" 11
   rm -rf -- "$TEMP_RELEASE"
 else
-  mv "$TEMP_RELEASE" "$RELEASE_ROOT/$TARGET_SHA"
+  mv "$TEMP_RELEASE" "$PINNED_RELEASE"
 fi
 
 ln -sfn "$RUNTIME_RELEASE" "$CURRENT_LINK.tmp"
@@ -163,6 +380,12 @@ if [[ -f "\$LOG_FILE" ]] && [[ "\$(wc -c < "\$LOG_FILE")" -gt 5242880 ]]; then
 fi
 exec >>"\$LOG_FILE" 2>&1
 printf '[paper-forward-cron] invoked_at=%s\n' "\$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+if [[ '$RISK_POLICY_SOURCE_MODE' == 'APPROVED_DECISION' ]]; then
+  '$NODE_BIN' '$RUNTIME_RELEASE/scripts/materialize-paper-risk-policy-record.mjs' \
+    --decision '$RUNTIME_RELEASE/$RISK_POLICY_DECISION_RELATIVE_PATH' \
+    --research-sha '$TARGET_SHA' \
+    --output '$PAPER_FORWARD_RISK_POLICY_RECORD_PATH' >/dev/null
+fi
 exec /usr/bin/env -i \
   HOME="\${HOME:-/tmp}" \
   PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
@@ -173,6 +396,12 @@ exec /usr/bin/env -i \
   PAPER_FORWARD_RESEARCH_SHA='$TARGET_SHA' \
   PAPER_FORWARD_ACTIVATION_AT_MS='$ACTIVATION_AT_MS' \
   PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='$OUTCOME_ACCUMULATION_ENABLED' \
+  RESEARCH_PRODUCTION='$OUTCOME_ACCUMULATION_ENABLED' \
+  PAPER_FORWARD_PUBLISHER_BINDING_PATH='$PUBLISHER_BINDING_PATH' \
+  PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH='$PAPER_STATE_SNAPSHOT_PATH' \
+  PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256='$PUBLISHER_ACCOUNT_ID_SHA256' \
+  PAPER_FORWARD_RISK_POLICY_RECORD_PATH='$PAPER_FORWARD_RISK_POLICY_RECORD_PATH' \
+  PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH='$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH' \
   LIVE_TRADING='false' \
   LIVE_TRADING_ENABLED='false' \
   REAL_ORDER_ENABLED='false' \
@@ -183,6 +412,17 @@ exec /usr/bin/env -i \
 WRAPPER
 chmod 700 "$TEMP_WRAPPER"
 mv -f "$TEMP_WRAPPER" "$WRAPPER"
+
+if [[ "$SNAPSHOT_BRIDGE_APPLIED" == "true" ]]; then
+  SNAPSHOT_ARCHIVE_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+  SNAPSHOT_BRIDGE_ARCHIVE_PATH="$PUBLISHER_SNAPSHOT_ARCHIVE_ROOT/${SNAPSHOT_SOURCE_SHA_BEFORE}-to-${TARGET_SHA}-$SNAPSHOT_ARCHIVE_STAMP.json"
+  [[ ! -e "$SNAPSHOT_BRIDGE_ARCHIVE_PATH" ]] || fail "snapshot bridge archive path already exists" 14
+  mv -- "$PAPER_STATE_SNAPSHOT_PATH" "$SNAPSHOT_BRIDGE_ARCHIVE_PATH"
+  SNAPSHOT_BRIDGE_COMMITTED=1
+  mv -- "$SNAPSHOT_BRIDGE_STAGED_PATH" "$PAPER_STATE_SNAPSHOT_PATH"
+  chmod 600 "$PAPER_STATE_SNAPSHOT_PATH" "$SNAPSHOT_BRIDGE_ARCHIVE_PATH"
+  SNAPSHOT_BRIDGE_STAGED_PATH=""
+fi
 
 PREVIOUS_CRONTAB="$(crontab -l 2>/dev/null || true)"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -202,12 +442,13 @@ rm -f "$STATE_ROOT/DISABLED" "$RUNTIME_STATE_ROOT/DISABLED"
 MATCH_COUNT="$(crontab -l | grep -Fxc "$CRON_LINE" || true)"
 [[ "$MATCH_COUNT" == 1 ]] || fail "exactly one Paper Forward cron entry is required" 12
 
-RUNTIME_DIGEST="$(find "$RUNTIME_RELEASE" -type f -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}')"
+RUNTIME_DIGEST="$(find "$PINNED_RELEASE" -type f -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}')"
 CRON_HASH="$(printf '%s' "$CRON_LINE" | sha256sum | awk '{print $1}')"
-"$NODE_BIN" - "$STATE_ROOT/activation.json" "$TARGET_SHA" "$DEPLOYED_SHA" "$ACTIVATION_AT_MS" "$RUNTIME_DIGEST" "$CRON_HASH" "$BACKUP_PATH" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" "$OUTCOME_ACCUMULATION_ENABLED" <<'NODE'
+"$NODE_BIN" - "$STATE_ROOT/activation.json" "$TARGET_SHA" "$DEPLOYED_SHA" "$ACTIVATION_AT_MS" "$RUNTIME_DIGEST" "$CRON_HASH" "$BACKUP_PATH" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" "$OUTCOME_ACCUMULATION_ENABLED" "$SNAPSHOT_BRIDGE_APPLIED" "$SNAPSHOT_SOURCE_SHA_BEFORE" "$SNAPSHOT_BRIDGE_ARCHIVE_PATH" <<'NODE'
 const fs = require('node:fs');
-const [path, targetSha, deployedSha, activationAtMs, runtimeDigest, cronHash, backupPath, identityCutoverRaw, archivedResearchShaRaw, outcomeAccumulationRaw] = process.argv.slice(2);
+const [path, targetSha, deployedSha, activationAtMs, runtimeDigest, cronHash, backupPath, identityCutoverRaw, archivedResearchShaRaw, outcomeAccumulationRaw, snapshotBridgeRaw, snapshotSourceShaBeforeRaw, snapshotArchivePathRaw] = process.argv.slice(2);
 const outcomeAccumulationEnabled = outcomeAccumulationRaw === 'true';
+const snapshotBridgeApplied = snapshotBridgeRaw === 'true';
 const value = {
   schemaVersion: 'paper-forward-schedule-activation-v2',
   status: 'ACTIVE_WAITING_FOR_NATURAL_CYCLE',
@@ -229,6 +470,18 @@ const value = {
   paperTradeOutcomeAccumulationEnabled: outcomeAccumulationEnabled,
   simulatedFinancialAdaptersEnabled: outcomeAccumulationEnabled,
   externalFinancialMutationAllowed: false,
+  paperStatePublisherBindingConfigured: outcomeAccumulationEnabled,
+  paperStateSnapshotPathConfigured: outcomeAccumulationEnabled,
+  paperStatePublisherAccountBindingConfigured: outcomeAccumulationEnabled,
+  targetSnapshotBridgeApplied: snapshotBridgeApplied,
+  snapshotSourceShaBefore: snapshotSourceShaBeforeRaw || targetSha,
+  snapshotSourceShaAfter: targetSha,
+  snapshotArchivePath: snapshotBridgeApplied ? snapshotArchivePathRaw : null,
+  snapshotEconomicStatePreserved: true,
+  snapshotMetadataMutationCount: snapshotBridgeApplied ? 1 : 0,
+  naturalCycleCredit: 0,
+  naturalSampleCredit: 0,
+  naturalSettlementCredit: 0,
   liveTrading: false,
   privateAccountAccess: false,
   orderAuthority: false,
@@ -239,6 +492,7 @@ fs.renameSync(temp, path);
 NODE
 
 CRONTAB_MUTATED=0
+SNAPSHOT_BRIDGE_COMMITTED=0
 trap - EXIT
-printf '{"status":"ACTIVE_WAITING_FOR_NATURAL_CYCLE","targetSha":"%s","activationAtMs":%s,"scheduleActive":true,"paperTradeOutcomeAccumulationEnabled":%s,"simulatedFinancialAdaptersEnabled":%s,"externalFinancialMutationAllowed":false,"identityCutover":%s,"archivedResearchSha":"%s","predecessorStatePreserved":true,"predecessorPerformanceMixed":false,"pollCadence":"EVERY_15_MINUTES","canonicalCycleIntervalMs":%s,"privateRequestCount":0,"financialMutationCount":0,"liveTrading":false}\n' \
-  "$TARGET_SHA" "$ACTIVATION_AT_MS" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" "$CANONICAL_CYCLE_MS"
+printf '{"status":"ACTIVE_WAITING_FOR_NATURAL_CYCLE","targetSha":"%s","activationAtMs":%s,"scheduleActive":true,"paperTradeOutcomeAccumulationEnabled":%s,"simulatedFinancialAdaptersEnabled":%s,"externalFinancialMutationAllowed":false,"paperStatePublisherBindingConfigured":%s,"paperStateSnapshotPathConfigured":%s,"paperStatePublisherAccountBindingConfigured":%s,"targetSnapshotBridgeApplied":%s,"snapshotEconomicStatePreserved":true,"snapshotMetadataMutationCount":%s,"naturalCycleCredit":0,"naturalSampleCredit":0,"naturalSettlementCredit":0,"identityCutover":%s,"archivedResearchSha":"%s","predecessorStatePreserved":true,"predecessorPerformanceMixed":false,"pollCadence":"EVERY_15_MINUTES","canonicalCycleIntervalMs":%s,"privateRequestCount":0,"financialMutationCount":0,"liveTrading":false}\n' \
+  "$TARGET_SHA" "$ACTIVATION_AT_MS" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$SNAPSHOT_BRIDGE_APPLIED" "$([[ "$SNAPSHOT_BRIDGE_APPLIED" == "true" ]] && printf 1 || printf 0)" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" "$CANONICAL_CYCLE_MS"

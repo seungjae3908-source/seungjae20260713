@@ -93,13 +93,13 @@ test('keeps the original server order when preferences are equal', () => {
   assert.deepEqual(result.map((item) => item.id), ['first', 'second']);
 });
 
-test('uses the stock-info detail contract for Korean and US stocks', () => {
+test('uses the stock analysis detail contract for Korean and US stocks', () => {
   for (const item of [
     suggestion({ id: 'kr', market: 'KR', productCode: '005930', ticker: '005930', displayName: '삼성전자', matchType: 'code_exact' }),
     suggestion({ id: 'us', market: 'US', productCode: 'BRK.B', ticker: 'BRK.B', displayName: 'Berkshire Hathaway', matchType: 'code_exact' }),
   ]) {
     const { pathname, params } = detailParams(item, '/stocks');
-    assert.equal(pathname, '/stock-info');
+    assert.equal(pathname, '/stock-info/analysis');
     assert.equal(params.get('asset'), 'stock');
     assert.equal(params.get('market'), item.market);
     assert.equal(params.get('ticker'), item.ticker);
