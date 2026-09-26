@@ -762,3 +762,169 @@ for (const viewport of [
     expect(overflow.root).toBeLessThanOrEqual(overflow.viewport + 1);
   });
 }
+
+
+test('AI Chart cockpit cancel and amend require explicit user confirmation and reuse canonical routes', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1024, height: 900 });
+  let cancelPosts = 0;
+  let amendPosts = 0;
+  let dashboardReads = 0;
+
+  await context.route('**/*', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+
+    if (/\/api\/stocks\/[^/]+\/(?:chart|candles)$/.test(url.pathname)) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ticker: '005930',
+          timeframe: url.searchParams.get('tf') ?? '5m',
+          provider: 'cockpit-action-fixture',
+          fetchedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          candles: candleRows(),
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/quotes') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ quotes: [] }) });
+      return;
+    }
+    if (url.pathname === '/api/accounts/read-only/toss') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          provider: 'toss',
+          readOnly: true,
+          connected: true,
+          status: 'CONNECTED',
+          accounts: [{ market: 'KR', accountRef: '12****34', currency: 'KRW', buyingPower: 500_000 }],
+          balances: [],
+          positions: [],
+          openOrders: [],
+          checkedAt: new Date().toISOString(),
+          lastGoodAt: new Date().toISOString(),
+          stale: false,
+          errorCode: null,
+          orderRequests: 0,
+          cancelRequests: 0,
+          amendRequests: 0,
+          transferRequests: 0,
+          withdrawalRequests: 0,
+          credentialsReturned: false,
+          liveTradingEnabled: false,
+          autoTradingEnabled: false,
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/approval-queue') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, items: [], count: 0, updatedAt: new Date().toISOString() }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/orders' && request.method() === 'GET') {
+      dashboardReads += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          orders: [],
+          events: [],
+          dashboardScoped: true,
+          dashboardItems: [{
+            id: 'order-005930',
+            planId: 'plan-005930',
+            exchange: 'toss',
+            symbol: '005930',
+            market: 'KR',
+            side: 'buy',
+            accountMode: 'live',
+            orderType: 'limit',
+            reduceOnly: false,
+            state: 'ACCEPTED',
+            requestedQuantity: 10,
+            remainingQuantity: 10,
+            filledQuantity: 0,
+            currentLimitPrice: 70_500,
+            averageFillPrice: null,
+            cancelable: true,
+            lastErrorCode: null,
+            updatedAt: new Date().toISOString(),
+          }],
+          orderSubmitted: false,
+          orderCanceled: false,
+          orderAmended: false,
+          privateTradingRequestSent: false,
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/orders/order-005930/cancel') {
+      cancelPosts += 1;
+      expect(request.method()).toBe('POST');
+      expect(request.postDataJSON()).toEqual({ confirmed: true });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, order: { state: 'CANCEL_REQUESTED' } }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/orders/order-005930/amend') {
+      amendPosts += 1;
+      expect(request.method()).toBe('POST');
+      const body = request.postDataJSON() as { confirmed?: boolean; requestId?: string; price?: number; quantity?: number };
+      expect(body.confirmed).toBe(true);
+      expect(body.requestId).toBeTruthy();
+      expect(body.price).toBe(70_400);
+      expect(body.quantity).toBe(8);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, orderAmended: true }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto(chartUrl);
+  const panel = page.getByTestId('ai-chart-position-panel');
+  await panel.getByTestId('ai-chart-load-position').click();
+  await expect(panel).toContainText('현재 선택 종목의 보유/포지션 없음');
+  const cockpit = panel.getByTestId('ai-chart-trading-cockpit');
+  await cockpit.locator('summary').click();
+  await cockpit.getByTestId('ai-chart-load-orders').click();
+  await expect.poll(() => dashboardReads).toBeGreaterThanOrEqual(1);
+
+  page.once('dialog', async (dialog) => dialog.dismiss());
+  await cockpit.getByRole('button', { name: '미체결 취소' }).click();
+  await page.waitForTimeout(100);
+  expect(cancelPosts).toBe(0);
+
+  page.once('dialog', async (dialog) => dialog.accept());
+  await cockpit.getByRole('button', { name: '미체결 취소' }).click();
+  await expect.poll(() => cancelPosts).toBe(1);
+
+  await cockpit.getByLabel('정정 가격').fill('70400');
+  await cockpit.getByLabel('정정 수량').fill('8');
+
+  page.once('dialog', async (dialog) => dialog.dismiss());
+  await cockpit.getByRole('button', { name: '정정', exact: true }).click();
+  await page.waitForTimeout(100);
+  expect(amendPosts).toBe(0);
+
+  page.once('dialog', async (dialog) => dialog.accept());
+  await cockpit.getByRole('button', { name: '정정', exact: true }).click();
+  await expect.poll(() => amendPosts).toBe(1);
+  await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('정정 요청이 canonical 주문엔진에 반영되었습니다.');
+});
