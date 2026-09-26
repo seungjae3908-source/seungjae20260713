@@ -73,48 +73,14 @@ export class StockFlowEvidenceError extends Error {
   }
 }
 
-export type FinraApiCredentials = {
-  clientId: string;
-  clientSecret: string;
-};
-
-type FinraRegShoRow = {
-  tradeReportDate?: unknown;
-  securitiesInformationProcessorSymbolIdentifier?: unknown;
-  shortParQuantity?: unknown;
-  shortExemptParQuantity?: unknown;
-  totalParQuantity?: unknown;
-  marketCode?: unknown;
-  reportingFacilityCode?: unknown;
-};
-
-type FinraShortInterestRow = {
-  settlementDate?: unknown;
-  symbolCode?: unknown;
-  currentShortPositionQuantity?: unknown;
-  previousShortPositionQuantity?: unknown;
-  averageDailyVolumeQuantity?: unknown;
-  daysToCoverQuantity?: unknown;
-  changePercent?: unknown;
-};
-
-const FINRA_FIP_TOKEN_URL = 'https://ews.fip.finra.org/fip/rest/ews/oauth2/access_token?grant_type=client_credentials';
-const FINRA_REG_SHO_URL = 'https://api.finra.org/data/group/otcMarket/name/regShoDaily';
-const FINRA_SHORT_INTEREST_URL = 'https://api.finra.org/data/group/otcMarket/name/consolidatedShortInterest';
-const FINRA_DOCS_URL = 'https://developer.finra.org/docs';
+const FINRA_DAILY_FILE_ROOT = 'https://cdn.finra.org/equity/regsho/daily';
+const FINRA_DAILY_FILES_PAGE = 'https://www.finra.org/finra-data/browse-catalog/short-sale-volume-data/daily-short-sale-volume-files';
 const KRX_DATA_URL = 'https://openapi.krx.co.kr/contents/OPP/DATA/OPPDATA002.jsp';
-
-let finraTokenCache: { clientId: string; accessToken: string; expiresAt: number } | null = null;
+const MAX_FINRA_BUSINESS_DATES = 7;
 
 function finite(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
-}
-
-function isoDate(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null;
 }
 
 function normalizeUsSymbol(symbol: string): string {
@@ -149,11 +115,108 @@ function safety() {
   };
 }
 
-function finraSources(shortDate: string | null = null, interestDate: string | null = null): StockFlowSourceRef[] {
-  return [
-    { provider: 'FINRA', dataset: 'Reg SHO Daily Short Sale Volume', asOf: shortDate, url: FINRA_DOCS_URL },
-    { provider: 'FINRA', dataset: 'Consolidated Short Interest', asOf: interestDate, url: FINRA_DOCS_URL },
-  ];
+function newYorkDateParts(now: Date): { year: number; month: number; day: number; hour: number } {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(now);
+  const values = new Map(parts.map((part) => [part.type, part.value]));
+  return {
+    year: Number(values.get('year')),
+    month: Number(values.get('month')),
+    day: Number(values.get('day')),
+    hour: Number(values.get('hour')),
+  };
+}
+
+function candidateFinraTradeDates(now: Date): string[] {
+  const ny = newYorkDateParts(now);
+  const cursor = new Date(Date.UTC(ny.year, ny.month - 1, ny.day));
+  const result: string[] = [];
+  for (let offset = 0; offset < 14 && result.length < MAX_FINRA_BUSINESS_DATES; offset += 1) {
+    const dayOfWeek = cursor.getUTCDay();
+    const sameNyDate = offset === 0;
+    const publishedToday = ny.hour >= 18;
+    if (dayOfWeek !== 0 && dayOfWeek !== 6 && (!sameNyDate || publishedToday)) {
+      const year = String(cursor.getUTCFullYear());
+      const month = String(cursor.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(cursor.getUTCDate()).padStart(2, '0');
+      result.push(`${year}${month}${day}`);
+    }
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
+  }
+  return result;
+}
+
+function compactDateToIso(value: string): string | null {
+  return /^\d{8}$/.test(value)
+    ? `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`
+    : null;
+}
+
+function parseFinraDailyRow(
+  text: string,
+  symbol: string,
+): {
+  tradeDate: string;
+  shortVolume: number;
+  shortExemptVolume: number;
+  totalVolume: number;
+  shortVolumeRatioPercent: number | null;
+} | null {
+  const lines = text.split(/\r?\n/);
+  for (const line of lines.slice(1)) {
+    if (!line || line.startsWith('Total Rows:')) continue;
+    const [date, rowSymbol, shortRaw, shortExemptRaw, totalRaw] = line.split('|');
+    if (String(rowSymbol ?? '').trim().toUpperCase() !== symbol) continue;
+    const tradeDate = compactDateToIso(String(date ?? '').trim());
+    const shortVolume = finite(shortRaw);
+    const shortExemptVolume = finite(shortExemptRaw);
+    const totalVolume = finite(totalRaw);
+    if (tradeDate == null || shortVolume == null || shortExemptVolume == null || totalVolume == null) return null;
+    if (shortVolume < 0 || shortExemptVolume < 0 || totalVolume <= 0) return null;
+    return {
+      tradeDate,
+      shortVolume,
+      shortExemptVolume,
+      totalVolume,
+      shortVolumeRatioPercent: round(shortVolume / totalVolume * 100, 2),
+    };
+  }
+  return null;
+}
+
+async function loadLatestFinraDailyShortVolume(
+  symbol: string,
+  now: Date,
+  fetchImpl: typeof fetch,
+  signal?: AbortSignal,
+): Promise<{ row: NonNullable<ReturnType<typeof parseFinraDailyRow>>; sourceUrl: string } | null> {
+  for (const date of candidateFinraTradeDates(now)) {
+    const sourceUrl = `${FINRA_DAILY_FILE_ROOT}/CNMSshvol${date}.txt`;
+    let response: Response;
+    try {
+      response = await fetchImpl(sourceUrl, {
+        method: 'GET',
+        signal,
+        headers: {
+          accept: 'text/plain',
+          'user-agent': 'seungjae-stock-flow-evidence/1.0',
+        },
+      });
+    } catch (cause) {
+      if (signal?.aborted) throw cause;
+      continue;
+    }
+    if (!response.ok) continue;
+    const row = parseFinraDailyRow(await response.text(), symbol);
+    if (row) return { row, sourceUrl };
+  }
+  return null;
 }
 
 function krNotConnected(symbol: string, now: Date): StockFlowEvidence {
@@ -200,15 +263,23 @@ function krNotConnected(symbol: string, now: Date): StockFlowEvidence {
   };
 }
 
-function usNotConnected(symbol: string, now: Date): StockFlowEvidence {
+function usEvidence(
+  symbol: string,
+  now: Date,
+  daily: Awaited<ReturnType<typeof loadLatestFinraDailyShortVolume>>,
+): StockFlowEvidence {
+  const shortReady = daily !== null;
   return {
     schemaVersion: 'scanner-stock-flow-evidence-v1',
     market: 'US',
     symbol,
-    status: 'NOT_CONNECTED',
+    status: shortReady ? 'PARTIAL' : 'UNAVAILABLE',
     observedAt: now.toISOString(),
-    shortSale: {
-      status: 'NOT_CONNECTED',
+    shortSale: shortReady ? {
+      status: 'READY',
+      ...daily.row,
+    } : {
+      status: 'UNAVAILABLE',
       tradeDate: null,
       shortVolume: null,
       shortExemptVolume: null,
@@ -236,179 +307,21 @@ function usNotConnected(symbol: string, now: Date): StockFlowEvidence {
     },
     shortCover: {
       status: 'NOT_INFERRED',
-      note: 'Short sale volume과 short interest만으로 숏커버를 단정하지 않습니다.',
+      note: 'FINRA 일별 Short Sale Volume은 Short Interest 포지션이 아니며, 이 데이터만으로 숏커버를 단정하지 않습니다.',
     },
-    sources: finraSources(),
-    warnings: ['FINRA Production Query API OAuth 자격증명이 현재 런타임에 연결되지 않았습니다.'],
+    sources: [{
+      provider: 'FINRA',
+      dataset: 'Consolidated NMS Daily Short Sale Volume',
+      asOf: daily?.row.tradeDate ?? null,
+      url: daily?.sourceUrl ?? FINRA_DAILY_FILES_PAGE,
+    }],
+    warnings: [
+      ...(shortReady ? [] : ['최근 FINRA Consolidated NMS Daily Short Sale Volume 파일에서 종목 근거를 확인하지 못했습니다.']),
+      'FINRA Daily Short Sale Volume은 off-exchange 공개거래 기반이며 거래소 체결 전체를 포함하지 않습니다.',
+      '상장주식 Short Interest는 상장 거래소별 공식 데이터 provider가 연결되기 전까지 미연결로 유지합니다.',
+    ],
     safety: safety(),
   };
-}
-
-function usUnavailable(symbol: string, now: Date, warning: string): StockFlowEvidence {
-  return {
-    ...usNotConnected(symbol, now),
-    status: 'UNAVAILABLE',
-    shortSale: {
-      status: 'UNAVAILABLE',
-      tradeDate: null,
-      shortVolume: null,
-      shortExemptVolume: null,
-      totalVolume: null,
-      shortVolumeRatioPercent: null,
-    },
-    shortInterest: {
-      status: 'UNAVAILABLE',
-      settlementDate: null,
-      currentShortPosition: null,
-      previousShortPosition: null,
-      changePercent: null,
-      averageDailyVolume: null,
-      daysToCover: null,
-    },
-    warnings: [warning],
-  };
-}
-
-function resolveFinraCredentials(explicit: FinraApiCredentials | null | undefined): FinraApiCredentials | null {
-  if (explicit === null) return null;
-  if (explicit !== undefined) {
-    const clientId = explicit.clientId.trim();
-    const clientSecret = explicit.clientSecret.trim();
-    return clientId && clientSecret ? { clientId, clientSecret } : null;
-  }
-  const clientId = process.env.FINRA_API_CLIENT_ID?.trim() ?? '';
-  const clientSecret = process.env.FINRA_API_CLIENT_SECRET?.trim() ?? '';
-  return clientId && clientSecret ? { clientId, clientSecret } : null;
-}
-
-async function getFinraAccessToken(
-  credentials: FinraApiCredentials,
-  fetchImpl: typeof fetch,
-  nowMs: number,
-): Promise<string> {
-  if (
-    finraTokenCache
-    && finraTokenCache.clientId === credentials.clientId
-    && finraTokenCache.expiresAt - 60_000 > nowMs
-  ) {
-    return finraTokenCache.accessToken;
-  }
-
-  let response: Response;
-  try {
-    const basic = Buffer.from(`${credentials.clientId}:${credentials.clientSecret}`, 'utf8').toString('base64');
-    response = await fetchImpl(FINRA_FIP_TOKEN_URL, {
-      method: 'POST',
-      headers: {
-        accept: 'application/json',
-        authorization: `Basic ${basic}`,
-      },
-    });
-  } catch {
-    throw new StockFlowEvidenceError('STOCK_FLOW_PROVIDER_ERROR', 'FINRA OAuth 토큰을 발급받지 못했습니다.');
-  }
-
-  if (!response.ok) {
-    throw new StockFlowEvidenceError('STOCK_FLOW_PROVIDER_ERROR', `FINRA OAuth 응답 오류 HTTP_${response.status}`);
-  }
-
-  const body: unknown = await response.json().catch(() => null);
-  if (!body || typeof body !== 'object' || Array.isArray(body)) {
-    throw new StockFlowEvidenceError('STOCK_FLOW_PROVIDER_ERROR', 'FINRA OAuth 응답 형식이 올바르지 않습니다.');
-  }
-  const row = body as Record<string, unknown>;
-  const accessToken = typeof row.access_token === 'string' ? row.access_token.trim() : '';
-  const expiresInSeconds = Number(row.expires_in);
-  if (!accessToken || !Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
-    throw new StockFlowEvidenceError('STOCK_FLOW_PROVIDER_ERROR', 'FINRA OAuth 토큰 정보가 누락됐습니다.');
-  }
-
-  finraTokenCache = {
-    clientId: credentials.clientId,
-    accessToken,
-    expiresAt: nowMs + Math.min(expiresInSeconds, 43_200) * 1_000,
-  };
-  return accessToken;
-}
-
-async function finraPost<T>(
-  url: string,
-  payload: Record<string, unknown>,
-  accessToken: string,
-  fetchImpl: typeof fetch,
-  signal?: AbortSignal,
-): Promise<T[]> {
-  let response: Response;
-  try {
-    response = await fetchImpl(url, {
-      method: 'POST',
-      signal,
-      headers: {
-        accept: 'application/json',
-        authorization: `Bearer ${accessToken}`,
-        'content-type': 'application/json',
-        'user-agent': 'seungjae-stock-flow-evidence/1.0',
-      },
-      body: JSON.stringify(payload),
-    });
-  } catch (cause) {
-    if (signal?.aborted) throw cause;
-    throw new StockFlowEvidenceError('STOCK_FLOW_PROVIDER_ERROR', 'FINRA 공식 데이터를 불러오지 못했습니다.');
-  }
-  if (response.status === 204) return [];
-  if (!response.ok) {
-    throw new StockFlowEvidenceError(
-      'STOCK_FLOW_PROVIDER_ERROR',
-      `FINRA 공식 데이터 응답 오류 HTTP_${response.status}`,
-    );
-  }
-  const body: unknown = await response.json().catch(() => null);
-  if (!Array.isArray(body)) {
-    throw new StockFlowEvidenceError('STOCK_FLOW_PROVIDER_ERROR', 'FINRA 공식 데이터 형식이 올바르지 않습니다.');
-  }
-  return body as T[];
-}
-
-function aggregateLatestRegSho(rows: FinraRegShoRow[], symbol: string) {
-  const normalizedRows = rows
-    .filter((row) => String(row.securitiesInformationProcessorSymbolIdentifier ?? '').trim().toUpperCase() === symbol)
-    .map((row) => ({
-      tradeDate: isoDate(row.tradeReportDate),
-      shortVolume: finite(row.shortParQuantity),
-      shortExemptVolume: finite(row.shortExemptParQuantity),
-      totalVolume: finite(row.totalParQuantity),
-    }))
-    .filter((row) => row.tradeDate !== null);
-  const latestDate = normalizedRows.map((row) => row.tradeDate!).sort().at(-1) ?? null;
-  if (!latestDate) return null;
-  const latest = normalizedRows.filter((row) => row.tradeDate === latestDate);
-  const shortVolume = latest.reduce((sum, row) => sum + Math.max(0, row.shortVolume ?? 0), 0);
-  const shortExemptVolume = latest.reduce((sum, row) => sum + Math.max(0, row.shortExemptVolume ?? 0), 0);
-  const totalVolume = latest.reduce((sum, row) => sum + Math.max(0, row.totalVolume ?? 0), 0);
-  return {
-    tradeDate: latestDate,
-    shortVolume,
-    shortExemptVolume,
-    totalVolume,
-    shortVolumeRatioPercent: totalVolume > 0 ? round(shortVolume / totalVolume * 100, 2) : null,
-  };
-}
-
-function latestShortInterest(rows: FinraShortInterestRow[], symbol: string) {
-  const latest = rows
-    .filter((row) => String(row.symbolCode ?? '').trim().toUpperCase() === symbol)
-    .map((row) => ({
-      settlementDate: isoDate(row.settlementDate),
-      currentShortPosition: finite(row.currentShortPositionQuantity),
-      previousShortPosition: finite(row.previousShortPositionQuantity),
-      averageDailyVolume: finite(row.averageDailyVolumeQuantity),
-      daysToCover: finite(row.daysToCoverQuantity),
-      changePercent: finite(row.changePercent),
-    }))
-    .filter((row) => row.settlementDate !== null)
-    .sort((left, right) => left.settlementDate!.localeCompare(right.settlementDate!))
-    .at(-1);
-  return latest ?? null;
 }
 
 export async function loadStockFlowEvidence(
@@ -416,117 +329,22 @@ export async function loadStockFlowEvidence(
   dependencies: {
     fetchImpl?: typeof fetch;
     now?: () => Date;
-    finraCredentials?: FinraApiCredentials | null;
+    signal?: AbortSignal;
   } = {},
 ): Promise<StockFlowEvidence> {
   const now = dependencies.now?.() ?? new Date();
   if (input.market === 'KR') return krNotConnected(normalizeKrSymbol(input.symbol), now);
 
   const symbol = normalizeUsSymbol(input.symbol);
-  const credentials = resolveFinraCredentials(dependencies.finraCredentials);
-  if (!credentials) return usNotConnected(symbol, now);
-
-  const fetchImpl = dependencies.fetchImpl ?? fetch;
-  let accessToken: string;
-  try {
-    accessToken = await getFinraAccessToken(credentials, fetchImpl, now.getTime());
-  } catch {
-    return usUnavailable(symbol, now, 'FINRA OAuth 인증 또는 토큰 발급에 실패했습니다.');
-  }
-
-  const requestFields = [
-    'tradeReportDate',
-    'securitiesInformationProcessorSymbolIdentifier',
-    'shortParQuantity',
-    'shortExemptParQuantity',
-    'totalParQuantity',
-  ];
-  const [regSho, shortInterest] = await Promise.allSettled([
-    finraPost<FinraRegShoRow>(FINRA_REG_SHO_URL, {
-      limit: 5000,
-      fields: requestFields,
-      compareFilters: [{
-        compareType: 'equal',
-        fieldName: 'securitiesInformationProcessorSymbolIdentifier',
-        fieldValue: symbol,
-      }],
-    }, accessToken, fetchImpl),
-    finraPost<FinraShortInterestRow>(FINRA_SHORT_INTEREST_URL, {
-      limit: 5000,
-      fields: [
-        'settlementDate',
-        'symbolCode',
-        'currentShortPositionQuantity',
-        'previousShortPositionQuantity',
-        'averageDailyVolumeQuantity',
-        'daysToCoverQuantity',
-        'changePercent',
-      ],
-      compareFilters: [{
-        compareType: 'equal',
-        fieldName: 'symbolCode',
-        fieldValue: symbol,
-      }],
-    }, accessToken, fetchImpl),
-  ]);
-
-  const regShoValue = regSho.status === 'fulfilled' ? aggregateLatestRegSho(regSho.value, symbol) : null;
-  const shortInterestValue = shortInterest.status === 'fulfilled' ? latestShortInterest(shortInterest.value, symbol) : null;
-  const readyCount = Number(Boolean(regShoValue)) + Number(Boolean(shortInterestValue));
-  const status = readyCount === 2 ? 'READY' : readyCount === 1 ? 'PARTIAL' : 'UNAVAILABLE';
-  const warnings: string[] = [];
-  if (!regShoValue) warnings.push('FINRA Reg SHO 일별 공매도 거래량을 확인하지 못했습니다.');
-  if (!shortInterestValue) warnings.push('FINRA Consolidated Short Interest를 확인하지 못했습니다.');
-
-  return {
-    schemaVersion: 'scanner-stock-flow-evidence-v1',
-    market: 'US',
+  const daily = await loadLatestFinraDailyShortVolume(
     symbol,
-    status,
-    observedAt: now.toISOString(),
-    shortSale: regShoValue ? {
-      status: 'READY',
-      ...regShoValue,
-    } : {
-      status: 'UNAVAILABLE',
-      tradeDate: null,
-      shortVolume: null,
-      shortExemptVolume: null,
-      totalVolume: null,
-      shortVolumeRatioPercent: null,
-    },
-    shortInterest: shortInterestValue ? {
-      status: 'READY',
-      ...shortInterestValue,
-    } : {
-      status: 'UNAVAILABLE',
-      settlementDate: null,
-      currentShortPosition: null,
-      previousShortPosition: null,
-      changePercent: null,
-      averageDailyVolume: null,
-      daysToCover: null,
-    },
-    institutional: {
-      status: 'NOT_CONNECTED',
-      asOf: null,
-      note: 'SEC Form 13F는 분기 데이터로 별도 point-in-time ingest가 필요하며 현재 Scanner 런타임에 연결하지 않았습니다.',
-    },
-    foreignFlow: {
-      status: 'NOT_APPLICABLE',
-      asOf: null,
-      note: '미국 시장에서 국내식 외국인 순매수 지표를 임의 변환하지 않습니다.',
-    },
-    shortCover: {
-      status: 'NOT_INFERRED',
-      note: 'Short sale volume과 short interest만으로 숏커버를 단정하지 않습니다. 검증된 모델이 생기기 전까지 evidence-only로 유지합니다.',
-    },
-    sources: finraSources(regShoValue?.tradeDate ?? null, shortInterestValue?.settlementDate ?? null),
-    warnings,
-    safety: safety(),
-  };
+    now,
+    dependencies.fetchImpl ?? fetch,
+    dependencies.signal,
+  );
+  return usEvidence(symbol, now, daily);
 }
 
-export function resetStockFlowProviderStateForTests(): void {
-  finraTokenCache = null;
+export function stockFlowCandidateTradeDatesForTests(now: Date): string[] {
+  return candidateFinraTradeDates(now);
 }
