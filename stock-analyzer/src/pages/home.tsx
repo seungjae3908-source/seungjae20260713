@@ -200,7 +200,7 @@ export default function HomePage() {
       aria-labelledby="home-professional-overview-title"
     >
       <div className="flex flex-col gap-1 text-center min-[1200px]:text-left">
-        <p className="text-xs font-semibold tracking-[0.12em] text-primary">MARKET DESK</p>
+        <p className="text-xs font-semibold tracking-[0.12em] text-primary">투자 대시보드</p>
         <h2 id="home-professional-overview-title" className="text-lg font-bold tracking-[-0.015em] sm:text-xl">오늘의 투자 상태</h2>
         <p className="text-xs font-medium text-muted-foreground">시장 · 신호 · 관심종목 · 자산을 한 화면에서 확인합니다.</p>
       </div>
@@ -416,18 +416,18 @@ function DashboardStatusCard({ icon, label, value, detail, onClick }: {
     <button
       type="button"
       onClick={onClick}
-      className="flex min-h-24 min-w-0 flex-col items-center justify-center rounded-2xl border border-card-border bg-background p-3 text-center transition hover:border-primary/40 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      className="flex min-h-20 min-w-0 flex-col items-center justify-center rounded-xl border border-card-border bg-background p-3 text-center transition hover:border-primary/40 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
     >
       <span className="text-primary" aria-hidden="true">{icon}</span>
       <span className="mt-2 text-xs font-semibold text-muted-foreground">{label}</span>
-      <strong className="mt-1 max-w-full truncate text-sm font-bold">{value}</strong>
+      <strong data-ui-role="metric" className="mt-1 max-w-full truncate text-sm font-bold">{value}</strong>
       <span className="mt-1 max-w-full truncate text-xs font-medium text-muted-foreground">{detail}</span>
     </button>
   );
 }
 
 function MetricCard({ label, value, sub }: { label: string; value: string; sub: string }) {
-  return <div className="min-w-0 rounded-2xl bg-background p-3 text-center"><p className="truncate text-xs font-medium text-muted-foreground">{label}</p><p className="mt-1 truncate text-sm font-bold">{value}</p><p className="mt-1 truncate text-xs font-medium text-muted-foreground">{sub}</p></div>;
+  return <div className="min-w-0 rounded-2xl bg-background p-3 text-center"><p className="truncate text-xs font-medium text-muted-foreground">{label}</p><p data-ui-role="metric" className="mt-1 truncate text-sm font-bold">{value}</p><p className="mt-1 truncate text-xs font-medium text-muted-foreground">{sub}</p></div>;
 }
 
 function DashboardPlaceholder({ label }: { label: string }) {
