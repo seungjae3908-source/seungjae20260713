@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Router, type IRouter, type Response } from 'express';
 import { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';
 import type { AccountProvider, CanonicalPosition } from '../features/account-readonly/account-readonly.contract';
@@ -163,6 +164,34 @@ function exitPreviewSide(provider: AccountProvider, position: CanonicalPosition)
   if (side === 'long') return 'sell' as const;
   if (side === 'short') return 'buy' as const;
   throw new Error('BITGET_POSITION_SIDE_UNAVAILABLE');
+}
+
+const EXIT_DRAFT_TTL_MS = 30_000;
+
+function exitDraftIdentity(input: {
+  userId: string;
+  provider: AccountProvider;
+  market: string;
+  symbol: string;
+  percent: number;
+  positionQuantity: number | null;
+  availableQuantity: number;
+  exitQuantity: number;
+  checkedAt: string;
+  issuedAt: string;
+}) {
+  return createHash('sha256').update([
+    input.userId,
+    input.provider,
+    input.market,
+    normalizedExitSymbol(input.symbol),
+    String(input.percent),
+    String(input.positionQuantity ?? 'missing'),
+    String(input.availableQuantity),
+    String(input.exitQuantity),
+    input.checkedAt,
+    input.issuedAt,
+  ].join(':')).digest('hex');
 }
 
 function exchangeValue(value: unknown): TradingExchange {
@@ -724,9 +753,28 @@ router.post('/positions/exit-preview', async (req: AuthenticatedRequest, res) =>
     const position = matches[0]!;
     const quantities = exitPreviewQuantity(position, percent, market, provider);
     const side = exitPreviewSide(provider, position);
+    const issuedAt = new Date().toISOString();
+    const expiresAt = new Date(Date.parse(issuedAt) + EXIT_DRAFT_TTL_MS).toISOString();
+    const draftId = exitDraftIdentity({
+      userId,
+      provider,
+      market,
+      symbol,
+      percent,
+      positionQuantity: position.quantity,
+      availableQuantity: quantities.availableQuantity,
+      exitQuantity: quantities.exitQuantity,
+      checkedAt: snapshot.checkedAt,
+      issuedAt,
+    });
     return res.json({
       ok: true,
       preview: {
+        schemaVersion: 'manual-exit-draft-v1',
+        state: 'SERVER_VERIFIED_DRAFT',
+        draftId,
+        issuedAt,
+        expiresAt,
         provider,
         market,
         symbol,
@@ -740,6 +788,9 @@ router.post('/positions/exit-preview', async (req: AuthenticatedRequest, res) =>
         reduceOnly: true,
         checkedAt: snapshot.checkedAt,
         stale: false,
+        requiresFinalRiskRecheck: true,
+        requiresExplicitApproval: true,
+        executionAuthority: 'NONE',
       },
       privateAccountReadPerformed: true,
       orderSubmitted: false,
