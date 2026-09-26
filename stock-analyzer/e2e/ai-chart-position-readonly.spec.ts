@@ -215,6 +215,7 @@ test('Bitget target PnL uses provider-implied current PnL sensitivity instead of
 test('desktop AI Chart reads the Toss position only after an explicit click and renders money scenarios without financial mutation', async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   let accountReads = 0;
+  let exitPreviewReads = 0;
   const financialMutations: string[] = [];
 
   await context.route('**/*', async (route) => {
@@ -255,6 +256,52 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
           orderSubmitted: false,
           orderCanceled: false,
           privateTradingRequestSent: false,
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/positions/exit-preview') {
+      exitPreviewReads += 1;
+      expect(request.method()).toBe('POST');
+      const body = request.postDataJSON() as {
+        confirmed?: boolean;
+        provider?: string;
+        market?: string;
+        symbol?: string;
+        percent?: number;
+      };
+      expect(body).toEqual({
+        confirmed: true,
+        provider: 'toss',
+        market: 'KR',
+        symbol: '005930',
+        percent: 25,
+      });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          preview: {
+            provider: 'toss',
+            market: 'KR',
+            symbol: '005930',
+            percent: 25,
+            positionSide: null,
+            positionQuantity: 20,
+            availableQuantity: 20,
+            exitQuantity: 5,
+            side: 'sell',
+            reduceOnly: true,
+            checkedAt: new Date().toISOString(),
+            stale: false,
+          },
+          privateAccountReadPerformed: true,
+          orderSubmitted: false,
+          orderCanceled: false,
+          orderAmended: false,
+          privateTradingMutationSent: false,
+          executionAuthority: 'NONE',
         }),
       });
       return;
@@ -372,6 +419,10 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await expect(cockpit.getByTestId('ai-chart-exit-dashboard')).toContainText('20');
   await cockpit.getByRole('button', { name: '25%' }).click();
   await expect(cockpit.getByTestId('ai-chart-exit-dashboard')).toContainText('5');
+  await cockpit.getByTestId('ai-chart-verify-exit-preview').click();
+  await expect.poll(() => exitPreviewReads).toBe(1);
+  await expect(cockpit.getByTestId('ai-chart-exit-preview-verified')).toContainText('서버 확인 수량 5');
+  await expect(cockpit.getByTestId('ai-chart-exit-preview-verified')).toContainText('executionAuthority=NONE');
 
   await cockpit.getByTestId('ai-chart-load-orders').click();
   await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('거래소 접수');
