@@ -641,13 +641,13 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
         : exitPreviewState.kind === 'unavailable' ? '재검증 실패'
           : '재검증 필요';
 
-  const loadOrderDashboard = useCallback(async () => {
+  const loadOrderDashboard = useCallback(async (preserveMessage = false) => {
     const controller = new AbortController();
     orderAbortRef.current?.abort();
     orderAbortRef.current = controller;
     const sequence = ++orderSequenceRef.current;
     setOrderDashboard({ kind: 'loading' });
-    setOrderMessage('');
+    if (!preserveMessage) setOrderMessage('');
     try {
       const query = new URLSearchParams({
         dashboard: '1',
@@ -711,7 +711,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
       const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
       if (!response.ok || payload.ok !== true) throw new Error(payload.error ?? 'ORDER_CANCEL_FAILED');
       setOrderMessage('취소 요청이 canonical 주문엔진에 반영되었습니다.');
-      await loadOrderDashboard();
+      await loadOrderDashboard(true);
     } catch (error) {
       setOrderMessage(safeTradeErrorMessage(
         error instanceof Error ? error.message : null,
@@ -750,7 +750,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
       const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
       if (!response.ok || payload.ok !== true) throw new Error(payload.error ?? 'ORDER_AMEND_FAILED');
       setOrderMessage('정정 요청이 canonical 주문엔진에 반영되었습니다.');
-      await loadOrderDashboard();
+      await loadOrderDashboard(true);
     } catch (error) {
       setOrderMessage(safeTradeErrorMessage(
         error instanceof Error ? error.message : null,
