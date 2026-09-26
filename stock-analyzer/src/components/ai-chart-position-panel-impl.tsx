@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Calculator, Eye, EyeOff, RefreshCw, ShieldAlert, WalletCards } from 'lucide-react';
+import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import { TradeApprovalQueue } from '@/components/trade-approval-queue';
 import { authorizedFetch } from '@/lib/auth-fetch';
-import type { AnalysisMarket, AnalysisPricePlan } from '@/lib/analysis-selection';
+import type { AnalysisMarket, AnalysisPricePlan, AnalysisSelection } from '@/lib/analysis-selection';
 import {
   buildPositionGuidance,
   feeInclusiveBreakEvenPrice,
@@ -62,6 +63,7 @@ type PanelState =
   | { kind: 'unavailable'; code: string };
 
 type Props = {
+  selection: AnalysisSelection;
   market: AnalysisMarket;
   symbol: string;
   chartPrice: number | null;
@@ -287,7 +289,7 @@ function pnlSourceLabel(source: 'POSITION_QUANTITY' | 'PROVIDER_IMPLIED' | null)
   return '금액 근거 없음';
 }
 
-export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, onOverlayChange }: Props) {
+export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pricePlan, onOverlayChange }: Props) {
   const [state, setState] = useState<PanelState>({ kind: 'idle' });
   const [stockProvider, setStockProvider] = useState<StockReadOnlyProvider>('toss');
   const [linesVisible, setLinesVisible] = useState(true);
@@ -623,6 +625,22 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
             </summary>
             {cockpitOpen ? (
               <div className="mt-3 space-y-3">
+                <section className="rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-entry-planning">
+                  <p className="text-[10px] font-black">새 진입 계획</p>
+                  <p className="mt-0.5 text-[8px] font-bold leading-4 text-muted-foreground">
+                    Scanner 근거가 있는 경우에만 기존 canonical Paper owner를 재사용합니다. 실전 진입은 아래 승인 큐와 서버 live gate를 우회하지 않습니다.
+                  </p>
+                  {selection.searchRunId && selection.signalId && selection.action && (selection.matchedSignals?.length ?? 0) > 0 ? (
+                    <div className="mt-2 [&_[data-testid=scanner-approval-composer]]:rounded-2xl [&_[data-testid=scanner-approval-composer]]:shadow-none">
+                      <ScannerApprovalComposer selection={selection} />
+                    </div>
+                  ) : (
+                    <p className="mt-2 rounded-xl bg-secondary/50 px-3 py-2 text-[9px] font-bold text-muted-foreground">
+                      신호검색기에서 현재 종목을 선택하면 검증된 신호 identity를 사용해 Paper 진입계획을 만들 수 있습니다.
+                    </p>
+                  )}
+                </section>
+
                 <TradeApprovalQueue
                   symbolFilter={symbol}
                   exchangeFilter={provider}
