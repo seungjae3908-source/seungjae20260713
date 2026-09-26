@@ -192,6 +192,9 @@ type CanonicalExitPlan = {
   side: 'buy' | 'sell';
   quantity: number;
   percent: number;
+  positionQuantity: number | null;
+  availableQuantity: number;
+  quantityRule: 'INTEGER_ONLY' | 'FRACTIONAL_ALLOWED';
   reduceOnly: true;
   sourceCheckedAt: string;
   issuedAt: string;
@@ -211,6 +214,43 @@ type ExitPlanState =
   | { kind: 'idle' }
   | { kind: 'loading' }
   | { kind: 'ready'; plan: CanonicalExitPlan }
+  | { kind: 'unavailable'; code: string };
+
+type CanonicalExitApproval = {
+  schemaVersion: 'ai-chart-exit-approval-intent-v1';
+  state: 'EXPLICITLY_CONFIRMED_NON_EXECUTING_INTENT';
+  approvalIntentId: string;
+  planId: string;
+  exitDraftId: string;
+  provider: ExitPreview['provider'];
+  market: string;
+  symbol: string;
+  accountMode: 'live';
+  orderType: 'market';
+  side: 'buy' | 'sell';
+  quantity: number;
+  percent: number;
+  positionQuantity: number | null;
+  availableQuantity: number;
+  quantityRule: 'INTEGER_ONLY' | 'FRACTIONAL_ALLOWED';
+  reduceOnly: true;
+  sourcePlanCheckedAt: string;
+  approvalCheckedAt: string;
+  approvedAt: string;
+  expiresAt: string;
+  explicitApprovalConfirmed: true;
+  orderTimeRiskRecheckRequired: true;
+  nextOwner: 'CANONICAL_EXIT_ORDER_TIME_RISK_OWNER';
+  executionAuthority: 'NONE';
+  executable: false;
+  orderSubmissionPerformed: false;
+  financialMutationPerformed: false;
+};
+
+type ExitApprovalState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'ready'; approval: CanonicalExitApproval }
   | { kind: 'unavailable'; code: string };
 
 type ExecutionReadiness = {
@@ -494,6 +534,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
   const [exitPercent, setExitPercent] = useState(100);
   const [exitPreviewState, setExitPreviewState] = useState<ExitPreviewState>({ kind: 'idle' });
   const [exitPlanState, setExitPlanState] = useState<ExitPlanState>({ kind: 'idle' });
+  const [exitApprovalState, setExitApprovalState] = useState<ExitApprovalState>({ kind: 'idle' });
   const [entryReadiness, setEntryReadiness] = useState<EntryReadinessState>({ kind: 'idle' });
   const [liveEntryDraft, setLiveEntryDraft] = useState<LiveEntryDraftState>({ kind: 'idle' });
   const abortRef = useRef<AbortController | null>(null);
@@ -504,6 +545,8 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
   const exitSequenceRef = useRef(0);
   const exitPlanAbortRef = useRef<AbortController | null>(null);
   const exitPlanSequenceRef = useRef(0);
+  const exitApprovalAbortRef = useRef<AbortController | null>(null);
+  const exitApprovalSequenceRef = useRef(0);
   const entryReadinessAbortRef = useRef<AbortController | null>(null);
   const entryReadinessSequenceRef = useRef(0);
   const liveDraftAbortRef = useRef<AbortController | null>(null);
@@ -522,6 +565,9 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     exitPlanSequenceRef.current += 1;
     exitPlanAbortRef.current?.abort();
     exitPlanAbortRef.current = null;
+    exitApprovalSequenceRef.current += 1;
+    exitApprovalAbortRef.current?.abort();
+    exitApprovalAbortRef.current = null;
     entryReadinessSequenceRef.current += 1;
     entryReadinessAbortRef.current?.abort();
     entryReadinessAbortRef.current = null;
@@ -544,6 +590,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setExitPercent(100);
     setExitPreviewState({ kind: 'idle' });
     setExitPlanState({ kind: 'idle' });
+    setExitApprovalState({ kind: 'idle' });
     setEntryReadiness({ kind: 'idle' });
     setLiveEntryDraft({ kind: 'idle' });
     onOverlayChange(null);
@@ -555,6 +602,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
       orderAbortRef.current?.abort();
       exitAbortRef.current?.abort();
       exitPlanAbortRef.current?.abort();
+      exitApprovalAbortRef.current?.abort();
       entryReadinessAbortRef.current?.abort();
       liveDraftAbortRef.current?.abort();
     };
@@ -573,6 +621,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setAmendDrafts({});
     setExitPreviewState({ kind: 'idle' });
     setExitPlanState({ kind: 'idle' });
+    setExitApprovalState({ kind: 'idle' });
     onOverlayChange(null);
     try {
       const response = await authorizedFetch(`/api/accounts/read-only/${provider}`, {
@@ -658,6 +707,9 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     exitPlanSequenceRef.current += 1;
     exitPlanAbortRef.current?.abort();
     exitPlanAbortRef.current = null;
+    exitApprovalSequenceRef.current += 1;
+    exitApprovalAbortRef.current?.abort();
+    exitApprovalAbortRef.current = null;
     entryReadinessSequenceRef.current += 1;
     entryReadinessAbortRef.current?.abort();
     entryReadinessAbortRef.current = null;
@@ -670,6 +722,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setAmendDrafts({});
     setExitPreviewState({ kind: 'idle' });
     setExitPlanState({ kind: 'idle' });
+    setExitApprovalState({ kind: 'idle' });
     setEntryReadiness({ kind: 'idle' });
     onOverlayChange(null);
   }, [onOverlayChange, stockProvider]);
@@ -929,6 +982,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     exitPlanAbortRef.current?.abort();
     exitPlanAbortRef.current = controller;
     const sequence = ++exitPlanSequenceRef.current;
+    setExitApprovalState({ kind: 'idle' });
     setExitPlanState({ kind: 'loading' });
     try {
       const response = await authorizedFetch('/api/trade-automation/positions/exit-plan', {
@@ -998,6 +1052,88 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
       if (exitPlanAbortRef.current === controller) exitPlanAbortRef.current = null;
     }
   }, [exitPlanState.kind, exitPreviewState]);
+
+  const confirmCanonicalExitApproval = useCallback(async () => {
+    if (exitPlanState.kind !== 'ready' || exitApprovalState.kind === 'loading') return;
+    const plan = exitPlanState.plan;
+    const controller = new AbortController();
+    exitApprovalAbortRef.current?.abort();
+    exitApprovalAbortRef.current = controller;
+    const sequence = ++exitApprovalSequenceRef.current;
+    setExitApprovalState({ kind: 'loading' });
+    try {
+      const response = await authorizedFetch('/api/trade-automation/positions/exit-approval', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          confirmed: true,
+          planId: plan.planId,
+          exitDraftId: plan.exitDraftId,
+          provider: plan.provider,
+          market: plan.market,
+          symbol: plan.symbol,
+          percent: plan.percent,
+          positionQuantity: plan.positionQuantity,
+          availableQuantity: plan.availableQuantity,
+          quantity: plan.quantity,
+          side: plan.side,
+          sourceCheckedAt: plan.sourceCheckedAt,
+          planIssuedAt: plan.issuedAt,
+          planExpiresAt: plan.expiresAt,
+        }),
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => null) as {
+        ok?: boolean;
+        error?: string;
+        canonicalExitApproval?: CanonicalExitApproval;
+        explicitApprovalConfirmed?: boolean;
+        privateAccountReadPerformed?: boolean;
+        financialMutationPerformed?: boolean;
+        orderSubmitted?: boolean;
+        orderCanceled?: boolean;
+        orderAmended?: boolean;
+        privateTradingMutationSent?: boolean;
+        executionAuthority?: string;
+      } | null;
+      if (controller.signal.aborted || sequence !== exitApprovalSequenceRef.current) return;
+      const approval = payload?.canonicalExitApproval;
+      if (!response.ok || payload?.ok !== true || !approval) {
+        setExitApprovalState({ kind: 'unavailable', code: payload?.error ?? `HTTP_${response.status}` });
+        return;
+      }
+      if (payload.explicitApprovalConfirmed !== true
+        || payload.privateAccountReadPerformed !== true
+        || payload.financialMutationPerformed !== false
+        || payload.orderSubmitted !== false
+        || payload.orderCanceled !== false
+        || payload.orderAmended !== false
+        || payload.privateTradingMutationSent !== false
+        || payload.executionAuthority !== 'NONE'
+        || approval.schemaVersion !== 'ai-chart-exit-approval-intent-v1'
+        || approval.state !== 'EXPLICITLY_CONFIRMED_NON_EXECUTING_INTENT'
+        || !/^[0-9a-f]{64}$/u.test(approval.approvalIntentId)
+        || approval.planId !== plan.planId
+        || approval.exitDraftId !== plan.exitDraftId
+        || approval.reduceOnly !== true
+        || approval.explicitApprovalConfirmed !== true
+        || approval.orderTimeRiskRecheckRequired !== true
+        || approval.nextOwner !== 'CANONICAL_EXIT_ORDER_TIME_RISK_OWNER'
+        || approval.executionAuthority !== 'NONE'
+        || approval.executable !== false
+        || approval.orderSubmissionPerformed !== false
+        || approval.financialMutationPerformed !== false) {
+        setExitApprovalState({ kind: 'unavailable', code: 'EXIT_APPROVAL_SAFETY_CONTRACT_MISMATCH' });
+        return;
+      }
+      setExitApprovalState({ kind: 'ready', approval });
+    } catch (error) {
+      if (controller.signal.aborted || sequence !== exitApprovalSequenceRef.current) return;
+      setExitApprovalState({ kind: 'unavailable', code: error instanceof Error ? error.name : 'EXIT_APPROVAL_FAILED' });
+    } finally {
+      if (exitApprovalAbortRef.current === controller) exitApprovalAbortRef.current = null;
+    }
+  }, [exitApprovalState.kind, exitPlanState]);
 
   const loadEntryReadiness = useCallback(async () => {
     const controller = new AbortController();
@@ -1452,6 +1588,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                           setExitPercent(percent);
                           setExitPreviewState({ kind: 'idle' });
                           setExitPlanState({ kind: 'idle' });
+    setExitApprovalState({ kind: 'idle' });
                         }}
                         className={`min-h-10 rounded-lg border text-[9px] font-black ${exitPercent === percent ? 'border-primary bg-primary/10 text-primary' : 'border-card-border'}`}
                       >
@@ -1537,6 +1674,38 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                             </p>
                           ) : null}
                           <p className="mt-1">최종 승인 시 실계좌 재확인 + 주문시점 Risk 재검증이 다시 필요합니다. 이 단계에서는 주문을 제출하지 않습니다.</p>
+                          <button
+                            type="button"
+                            data-testid="ai-chart-confirm-exit-approval"
+                            onClick={() => void confirmCanonicalExitApproval()}
+                            disabled={exitApprovalState.kind === 'loading'}
+                            className="mt-2 min-h-10 w-full rounded-lg border border-warning/30 bg-background px-3 text-[9px] font-black text-warning disabled:opacity-50"
+                          >
+                            {exitApprovalState.kind === 'loading' ? '종료 승인·실계좌 재확인 중...' : '종료 승인 확인 · 아직 주문 전송 안 함'}
+                          </button>
+                          {exitApprovalState.kind === 'ready' ? (
+                            <div
+                              className="mt-2 rounded-lg border border-positive/30 bg-positive/5 p-2 text-[8px] font-bold text-muted-foreground"
+                              data-testid="ai-chart-exit-approval-intent"
+                              data-exit-approval-intent-id={exitApprovalState.approval.approvalIntentId}
+                            >
+                              <p className="font-black text-positive">명시적 종료 승인 확인됨 · 주문 미전송</p>
+                              <p className="mt-1">
+                                {exitApprovalState.approval.percent}% · {formatQuantity(exitApprovalState.approval.quantity)}
+                                {' · '}reduce-only · 만료 {checkedAtLabel(exitApprovalState.approval.expiresAt)}
+                              </p>
+                              <p className="mt-1 break-all">
+                                Approval {exitApprovalState.approval.approvalIntentId.slice(0, 12)}…
+                                {' · '}Plan {exitApprovalState.approval.planId.slice(0, 12)}…
+                              </p>
+                              <p className="mt-1">다음 단계는 주문시점 Risk 재검증입니다. executionAuthority=NONE · executable=false.</p>
+                            </div>
+                          ) : null}
+                          {exitApprovalState.kind === 'unavailable' ? (
+                            <p role="alert" className="mt-2 rounded-lg bg-warning/10 p-2 text-[8px] font-black text-warning">
+                              종료 승인 확인 실패 · {safeTradeErrorMessage(exitApprovalState.code, exitApprovalState.code)}
+                            </p>
+                          ) : null}
                         </div>
                       ) : null}
                       {exitPlanState.kind === 'unavailable' ? (
