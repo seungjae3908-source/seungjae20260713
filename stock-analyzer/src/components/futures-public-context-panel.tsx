@@ -142,6 +142,15 @@ function formatPercent(value: number | null): string {
   }).display;
 }
 
+function formatSharePercent(value: number | null): string {
+  return resolveEvidenceDisplay({
+    value,
+    formatter: (observed) => typeof observed === 'number'
+      ? `${observed.toFixed(2)}%`
+      : String(observed),
+  }).display;
+}
+
 function formatDate(value: string | null): string {
   if (!value) return resolveEvidenceDisplay({ value: null, collected: false }).display;
   const timestamp = Date.parse(value);
@@ -283,8 +292,8 @@ export function FuturesPublicContextPanel({ selection }: Props) {
           </p>
         ) : (
           <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-            <Metric label="롱 비중" value={flow?.longRatio == null ? missingEvidence : formatPercent(flow.longRatio * 100)} />
-            <Metric label="숏 비중" value={flow?.shortRatio == null ? missingEvidence : formatPercent(flow.shortRatio * 100)} />
+            <Metric label="롱 비중" value={flow?.longRatio == null ? missingEvidence : formatSharePercent(flow.longRatio * 100)} />
+            <Metric label="숏 비중" value={flow?.shortRatio == null ? missingEvidence : formatSharePercent(flow.shortRatio * 100)} />
             <Metric label="롱/숏 비율" value={flow?.longShortRatio == null ? missingEvidence : formatNumber(flow.longShortRatio, 4)} />
             <Metric label="롱 청산 수량" value={flow?.longLiquidationAmount == null ? missingEvidence : formatNumber(flow.longLiquidationAmount, 8)} />
             <Metric label="숏 청산 수량" value={flow?.shortLiquidationAmount == null ? missingEvidence : formatNumber(flow.shortLiquidationAmount, 8)} />

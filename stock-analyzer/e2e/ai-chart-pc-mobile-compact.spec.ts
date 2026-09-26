@@ -55,6 +55,8 @@ test('AI Chart source keeps desktop dense and mobile summary-first', () => {
   expect(pageSource).toContain('읽기 전용 · 주문 실행 없음');
   expect(pageSource).toContain("if (mode === 'SCALPING') return '단타';");
   expect(pageSource).toContain("if (mode === 'SWING') return '스윙';");
+  expect(pageSource).toContain("return '판단 보류';");
+  expect(pageSource).toContain('contextualActionLabel(selection, analysis)');
   expect(pageSource).not.toContain('<p>{strategyMode} · 공개 시세 읽기 전용</p>');
 });
 
