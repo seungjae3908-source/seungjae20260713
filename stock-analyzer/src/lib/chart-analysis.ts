@@ -243,6 +243,13 @@ function transitionTargetLabel(status: ChartAnalysisStatus): string {
   return labels[status];
 }
 
+function formatAnalysisLevel(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '미확인';
+  const magnitude = Math.abs(value);
+  const maximumFractionDigits = magnitude >= 1000 ? 2 : magnitude >= 100 ? 3 : magnitude >= 1 ? 4 : 8;
+  return value.toLocaleString('ko-KR', { maximumFractionDigits });
+}
+
 function specializedCopy(
   input: ChartAnalysisInput,
   descriptor: PatternDescriptor,
@@ -258,16 +265,16 @@ function specializedCopy(
       title: `${descriptor.subtype} ${statusLabel(status)}`,
       summary:
         status === 'confirmed'
-          ? `넥라인 ${input.support} 아래에서 ${input.timeframe} 확정봉이 마감해 하락 패턴이 확인됐습니다.`
+          ? `넥라인 ${formatAnalysisLevel(input.support)} 아래에서 ${input.timeframe} 확정봉이 마감해 하락 패턴이 확인됐습니다.`
           : status === 'invalidated'
-            ? `기준 고점·저항 ${input.resistance} 위를 확정봉으로 회복해 이중천장 판단이 무효화됐습니다.`
+            ? `기준 고점·저항 ${formatAnalysisLevel(input.resistance)} 위를 확정봉으로 회복해 이중천장 판단이 무효화됐습니다.`
             : `두 고점이 비슷한 가격대에서 형성됐지만 넥라인 이탈 전이므로 하락 후보로만 표시합니다.`,
       confirmationConditions: [
-        `완료된 ${input.timeframe} 캔들이 넥라인 ${input.support} 아래에서 마감`,
+        `완료된 ${input.timeframe} 캔들이 넥라인 ${formatAnalysisLevel(input.support)} 아래에서 마감`,
         '두 번째 고점 이후 거래량과 모멘텀이 둔화',
       ],
       invalidationConditions: [
-        `완료된 ${input.timeframe} 캔들이 기준 고점·저항 ${input.resistance} 위를 회복`,
+        `완료된 ${input.timeframe} 캔들이 기준 고점·저항 ${formatAnalysisLevel(input.resistance)} 위를 회복`,
       ],
     };
   }
@@ -277,16 +284,16 @@ function specializedCopy(
       title: `${descriptor.subtype} ${statusLabel(status)}`,
       summary:
         status === 'confirmed'
-          ? `넥라인 ${input.resistance} 위에서 ${input.timeframe} 확정봉이 마감해 상승 패턴이 확인됐습니다.`
+          ? `넥라인 ${formatAnalysisLevel(input.resistance)} 위에서 ${input.timeframe} 확정봉이 마감해 상승 패턴이 확인됐습니다.`
           : status === 'invalidated'
-            ? `기준 저점·지지 ${input.support} 아래에서 확정봉이 마감해 이중바닥 판단이 무효화됐습니다.`
+            ? `기준 저점·지지 ${formatAnalysisLevel(input.support)} 아래에서 확정봉이 마감해 이중바닥 판단이 무효화됐습니다.`
             : `두 저점이 비슷한 가격대에서 형성됐지만 넥라인 돌파 전이므로 상승 후보로만 표시합니다.`,
       confirmationConditions: [
-        `완료된 ${input.timeframe} 캔들이 넥라인 ${input.resistance} 위에서 마감`,
+        `완료된 ${input.timeframe} 캔들이 넥라인 ${formatAnalysisLevel(input.resistance)} 위에서 마감`,
         '두 번째 저점 이후 거래량과 모멘텀이 개선',
       ],
       invalidationConditions: [
-        `완료된 ${input.timeframe} 캔들이 기준 저점·지지 ${input.support} 아래에서 마감`,
+        `완료된 ${input.timeframe} 캔들이 기준 저점·지지 ${formatAnalysisLevel(input.support)} 아래에서 마감`,
       ],
     };
   }
@@ -295,11 +302,11 @@ function specializedCopy(
     title: input.title,
     summary: input.summary,
     confirmationConditions: [
-      `완료된 ${input.timeframe} 캔들이 저항 ${input.resistance} 위에서 마감`,
+      `완료된 ${input.timeframe} 캔들이 저항 ${formatAnalysisLevel(input.resistance)} 위에서 마감`,
       '거래량과 추세 지표가 같은 방향을 유지',
     ],
     invalidationConditions: [
-      `완료된 ${input.timeframe} 캔들이 지지 ${input.support} 아래에서 마감`,
+      `완료된 ${input.timeframe} 캔들이 지지 ${formatAnalysisLevel(input.support)} 아래에서 마감`,
       '반대 방향 구조 전환 신호 발생',
     ],
   };
