@@ -49,6 +49,11 @@ jobs:
           grep -Fq "environment: production" "$workflow"
           grep -Fq "HUMAN_RULE_DIGEST_REVIEW" packages/external-research/src/research-workspace-one-shot-v12.js
           grep -Fq "ONE_SHOT_RUN_ALREADY_EXISTS" api-server/src/tools/research-workspace-one-shot-v12.ts
+          grep -Fq "BUNDLE_SHA256" "$workflow"
+          grep -Fq "spawnSync(process.execPath" "$workflow"
+          grep -Fq "GEMINI_API_KEY:geminiKey" "$workflow"
+          grep -Fq "GROQ_API_KEY:groqKey" "$workflow"
+          grep -Fq "GROQ_MODEL:groqModel" "$workflow"
           ! grep -Eq '^\s*schedule:|^\s*workflow_dispatch:' "$workflow"
           ! grep -Eq 'GEMINI_API_KEY:.*secrets\.|GROQ_API_KEY:.*secrets\.|GOOGLE_API_KEY:.*secrets\.' "$workflow"
           ! grep -Eq 'pm2 (restart|reload|save)|systemctl (start|restart|enable)|AUTO_TRADING=true|LIVE_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true' "$workflow"
@@ -173,6 +178,35 @@ jobs:
             core.setOutput('source_comment_id', String(context.payload.comment.id));
             core.setOutput('preflight_comment_id', String(preflight.id));
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.11.0'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies for exact-main bundle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Build exact-main reviewed one-shot bundle
+        id: bundle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bundle="$RUNNER_TEMP/research-workspace-one-shot-v14.mjs"
+          pnpm --dir api-server exec esbuild scripts/run-research-workspace-one-shot-v12.ts             --bundle --platform=node --format=esm --target=node22             --outfile="$bundle"
+          node "$bundle" --help > "$RUNNER_TEMP/research-workspace-one-shot-v14-help.txt"
+          grep -Fq 'at most one Gemini call and one Groq call' "$RUNNER_TEMP/research-workspace-one-shot-v14-help.txt"
+          digest="$(sha256sum "$bundle" | awk '{print $1}')"
+          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+          echo "bundle_path=$bundle" >> "$GITHUB_OUTPUT"
+          echo "bundle_sha256=$digest" >> "$GITHUB_OUTPUT"
+
       - name: Configure canonical Production SSH
         shell: bash
         run: |
@@ -190,71 +224,118 @@ jobs:
         id: execute
         env:
           TARGET_SHA: ${{ steps.authorize.outputs.target_sha }}
+          BUNDLE_PATH: ${{ steps.bundle.outputs.bundle_path }}
+          BUNDLE_SHA256: ${{ steps.bundle.outputs.bundle_sha256 }}
         shell: bash
         run: |
           set -Eeuo pipefail
           artifact="$RUNNER_TEMP/research-one-shot-v14-result.json"
+          remote_bundle="/tmp/research-one-shot-v14-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.mjs"
+          test -s "$BUNDLE_PATH"
+          [[ "$BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+
+          scp -i ~/.ssh/id_ed25519 -P "$SSH_PORT" \
+            -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
+            "$BUNDLE_PATH" "$SSH_USER@$SSH_HOST:$remote_bundle"
+
           quoted_sha="$(printf '%q' "$TARGET_SHA")"
+          quoted_bundle="$(printf '%q' "$remote_bundle")"
+          quoted_digest="$(printf '%q' "$BUNDLE_SHA256")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
             -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
-            "$SSH_USER@$SSH_HOST" "TARGET_SHA=$quoted_sha bash -s" > "$artifact" <<'REMOTE'
+            "$SSH_USER@$SSH_HOST" \
+            "TARGET_SHA=$quoted_sha REMOTE_BUNDLE=$quoted_bundle BUNDLE_SHA256=$quoted_digest bash -s" \
+            > "$artifact" <<'REMOTE'
           set -Eeuo pipefail
           LIVE_DIR=/opt/stock-app
           marker="$LIVE_DIR/.deploy/current-sha"
           test -f "$marker"
           test "$(tr -d '[:space:]' < "$marker")" = "$TARGET_SHA"
+          test -f "$REMOTE_BUNDLE"
+          chmod 600 "$REMOTE_BUNDLE"
+          test "$(sha256sum "$REMOTE_BUNDLE" | awk '{print $1}')" = "$BUNDLE_SHA256"
 
           pm2_json="$(mktemp /tmp/research-one-shot-pm2.XXXXXX.json)"
-          bundle="$(mktemp /tmp/research-one-shot-v14.XXXXXX.mjs)"
           raw="$(mktemp /tmp/research-one-shot-v14.XXXXXX.out)"
-          cleanup(){ rm -f "$pm2_json" "$bundle" "$raw"; }
+          cleanup(){ rm -f "$pm2_json" "$raw" "$REMOTE_BUNDLE"; }
           trap cleanup EXIT
-
           pm2 jlist > "$pm2_json"
-          eval "$(node - "$pm2_json" "$TARGET_SHA" <<'NODE'
+
+          set +e
+          node - "$pm2_json" "$TARGET_SHA" "$REMOTE_BUNDLE" "$raw" <<'NODE'
           const fs=require('node:fs');
-          const [file,target]=process.argv.slice(2);
-          const rows=JSON.parse(fs.readFileSync(file,'utf8'));
+          const {spawnSync}=require('node:child_process');
+          const [pm2File,target,bundle,rawFile]=process.argv.slice(2);
+          const rows=JSON.parse(fs.readFileSync(pm2File,'utf8'));
           const matches=rows.filter(row=>row?.name==='stock-app'&&row?.pm2_env);
-          const fail=code=>{console.error(code);process.exit(1);};
+          const fail=code=>{process.stderr.write(code+'\n');process.exit(1);};
           if(matches.length!==1)fail('ONE_SHOT_PM2_AMBIGUOUS');
           const row=matches[0],env=row.pm2_env;
           if(env.status!=='online')fail('ONE_SHOT_PM2_NOT_ONLINE');
           if(String(env.DEPLOY_SHA??'').toLowerCase()!==target)fail('ONE_SHOT_PM2_SHA_MISMATCH');
-          const authority=String(env.executionAuthority??env.EXECUTION_AUTHORITY??'NONE').toUpperCase();
-          const flags=['LIVE_TRADING','AUTO_TRADING','REAL_ORDER_ENABLED','PRIVATE_TRADING_API_ALLOWED','ORDER_EXECUTION_ENABLED'];
-          for(const name of flags){
+
+          const authority=String(env.executionAuthority??env.EXECUTION_AUTHORITY??'NONE').trim().toUpperCase();
+          for(const name of ['LIVE_TRADING','AUTO_TRADING','REAL_ORDER_ENABLED','PRIVATE_TRADING_API_ALLOWED','ORDER_EXECUTION_ENABLED']){
             const value=String(env[name]??'false').trim().toLowerCase();
-            if(!['true','false'].includes(value))fail('ONE_SHOT_FLAG_MALFORMED');
-            if(value==='true')fail('ONE_SHOT_TRADING_AUTHORITY_ENABLED');
+            if(!['true','false'].includes(value))fail('ONE_SHOT_FLAG_MALFORMED_'+name);
+            if(value==='true')fail('ONE_SHOT_TRADING_AUTHORITY_ENABLED_'+name);
           }
           if(authority!=='NONE')fail('ONE_SHOT_EXECUTION_AUTHORITY_ENABLED');
+
+          const explicit=String(env.AI_CHAT_PROVIDER??'').trim().toLowerCase();
+          const geminiIdentity=new Set(['gemini','google','google-gemini']);
+          const resolveUnique=(values,pattern,code)=>{
+            const rows=values.filter(v=>typeof v==='string'&&v.trim()).map(v=>v.trim());
+            if(!rows.length||rows.some(v=>!pattern.test(v))||new Set(rows).size!==1)fail(code);
+            return rows[0];
+          };
+          const geminiValues=[env.GEMINI_API_KEY,env.GOOGLE_API_KEY];
+          if(geminiIdentity.has(explicit))geminiValues.push(env.AI_CHAT_API_KEY);
+          const groqValues=[env.GROQ_API_KEY];
+          if(explicit==='groq')groqValues.push(env.AI_CHAT_API_KEY);
+          const groqModels=[env.GROQ_MODEL];
+          if(explicit==='groq')groqModels.push(env.AI_CHAT_MODEL);
+
+          const geminiKey=resolveUnique(geminiValues,/^[A-Za-z0-9_.-]{8,512}$/,'ONE_SHOT_GEMINI_CONFIGURATION_UNRESOLVED');
+          const groqKey=resolveUnique(groqValues,/^[A-Za-z0-9_.-]{8,512}$/,'ONE_SHOT_GROQ_CONFIGURATION_UNRESOLVED');
+          const groqModel=resolveUnique(groqModels,/^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/,'ONE_SHOT_GROQ_MODEL_UNRESOLVED');
+
           const root=String(env.RESEARCH_WORKSPACE_ONE_SHOT_ROOT??'').trim();
           if(!root.startsWith('/')||root.includes('\n')||root.includes('\r'))fail('ONE_SHOT_ROOT_INVALID');
-          const pid=Number(row.pid);
-          if(!Number.isSafeInteger(pid)||pid<=0)fail('ONE_SHOT_PID_INVALID');
-          console.log('ROOT_B64='+Buffer.from(root).toString('base64'));
-          console.log('APP_PID='+pid);
+          const stat=fs.lstatSync(root);
+          const processUid=fs.statSync('/proc/'+Number(row.pid)).uid;
+          if(!stat.isDirectory()||stat.isSymbolicLink()||stat.uid!==processUid||(stat.mode&0o077)||fs.realpathSync(root)!==root)
+            fail('ONE_SHOT_ROOT_UNSAFE');
+
+          const childEnv={
+            PATH:process.env.PATH??'/usr/local/bin:/usr/bin:/bin',
+            HOME:process.env.HOME??'/tmp',
+            NODE_ENV:'production',
+            GEMINI_API_KEY:geminiKey,
+            GROQ_API_KEY:groqKey,
+            GROQ_MODEL:groqModel,
+            LIVE_TRADING:'false',
+            AUTO_TRADING:'false',
+            REAL_ORDER_ENABLED:'false',
+            PRIVATE_TRADING_API_ALLOWED:'false',
+            ORDER_EXECUTION_ENABLED:'false',
+            executionAuthority:'NONE',
+          };
+          const args=[
+            bundle,'--execute',
+            '--source',root+'/source.json',
+            '--spec',root+'/spec.json',
+            '--manifest',root+'/manifest.json',
+            '--video-approval',root+'/video-approval.json',
+            '--groq-approval',root+'/groq-approval.json',
+            '--output-root',root,
+          ];
+          const child=spawnSync(process.execPath,args,{
+            env:childEnv,encoding:'utf8',maxBuffer:4*1024*1024,stdio:['ignore','pipe','pipe'],
+          });
+          fs.writeFileSync(rawFile,String(child.stdout??'')+String(child.stderr??''),{mode:0o600});
+          process.exitCode=Number.isInteger(child.status)?child.status:1;
           NODE
-          )"
-          root="$(printf '%s' "$ROOT_B64" | base64 -d)"
-          test "$(id -u)" = "$(stat -c '%u' "/proc/$APP_PID")"
-          test "$(id -u)" = "$(stat -c '%u' "$root")"
-          test "$(stat -c '%a' "$root")" = 700
-
-          cd "$LIVE_DIR/api-server"
-          pnpm exec esbuild scripts/run-research-workspace-one-shot-v12.ts \
-            --bundle --platform=node --format=esm --target=node22 \
-            --outfile="$bundle" >/dev/null
-
-          set +e
-          node "$bundle" --execute \
-            --source "$root/source.json" \
-            --spec "$root/spec.json" \
-            --manifest "$root/manifest.json" \
-            --video-approval "$root/video-approval.json" \
-            --groq-approval "$root/groq-approval.json" \
-            --output-root "$root" > "$raw" 2>&1
           rc=$?
           set -e
 
@@ -279,7 +360,7 @@ jobs:
             gemini:Number.isInteger(value.providerCalls?.gemini)?value.providerCalls.gemini:0,
             groq:Number.isInteger(value.providerCalls?.groq)?value.providerCalls.groq:0,
           };
-          if(providerCalls.gemini<0||providerCalls.gemini>1||providerCalls.groq<0||providerCalls.groq>1) {
+          if(providerCalls.gemini<0||providerCalls.gemini>1||providerCalls.groq<0||providerCalls.groq>1){
             value={status:'BLOCKED',reason:'ONE_SHOT_PROVIDER_CALL_COUNT_INVALID',manifestDigest:null,packageDigest:null,
               providerCalls:{gemini:0,groq:0},executionAuthority:'NONE'};
           }
