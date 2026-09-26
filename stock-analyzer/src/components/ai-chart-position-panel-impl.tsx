@@ -141,6 +141,11 @@ type OrderDashboardState =
   | { kind: 'unavailable'; code: string };
 
 type ExitPreview = {
+  schemaVersion: 'manual-exit-draft-v1';
+  state: 'SERVER_VERIFIED_DRAFT';
+  draftId: string;
+  issuedAt: string;
+  expiresAt: string;
   provider: 'toss' | 'kiwoom' | 'upbit' | 'bitget';
   market: string;
   symbol: string;
@@ -154,6 +159,9 @@ type ExitPreview = {
   reduceOnly: true;
   checkedAt: string;
   stale: false;
+  requiresFinalRiskRecheck: true;
+  requiresExplicitApproval: true;
+  executionAuthority: 'NONE';
   executionReadiness?: {
     connectionConfigured: boolean;
     providerVerified: boolean;
@@ -845,7 +853,12 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
         || payload.privateTradingMutationSent !== false
         || payload.executionAuthority !== 'NONE'
         || payload.preview.reduceOnly !== true
-        || payload.preview.stale !== false) {
+        || payload.preview.stale !== false
+        || payload.preview.executionAuthority !== 'NONE'
+        || payload.preview.state !== 'SERVER_VERIFIED_DRAFT'
+        || payload.preview.requiresFinalRiskRecheck !== true
+        || payload.preview.requiresExplicitApproval !== true
+        || !/^[0-9a-f]{64}$/u.test(payload.preview.draftId)) {
         setExitPreviewState({ kind: 'unavailable', code: 'EXIT_PREVIEW_SAFETY_CONTRACT_MISMATCH' });
         return;
       }
@@ -1339,6 +1352,12 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                         {' · '}방향 {exitPreviewState.preview.side.toUpperCase()}
                         {' · '}수량규칙 {exitPreviewState.preview.quantityRule === 'INTEGER_ONLY' ? '정수' : '소수 허용'}
                         {' · '}조회 {checkedAtLabel(exitPreviewState.preview.checkedAt)}
+                      </p>
+                      <p className="mt-1 break-all text-[8px] font-bold text-muted-foreground">
+                        종료 Draft {exitPreviewState.preview.draftId.slice(0, 12)}…
+                        {' · '}만료 {checkedAtLabel(exitPreviewState.preview.expiresAt)}
+                        {' · '}최종 Risk 재검증 필요
+                        {' · '}명시적 승인 필요
                       </p>
                       <p className="mt-1 text-[8px] font-bold text-muted-foreground">executionAuthority=NONE · 주문 제출 0 · 취소/정정 0</p>
                       {exitPreviewState.preview.executionReadiness ? (
