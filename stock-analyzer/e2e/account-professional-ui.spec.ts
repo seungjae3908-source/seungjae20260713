@@ -162,6 +162,8 @@ for (const [width, height] of [[390, 844], [768, 1024], [1024, 820], [1440, 900]
     await page.setViewportSize({ width, height });
     await installRuntime(page);
     await page.goto('/account');
+    await expect(page.getByTestId('account-shell')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('account-scroll-content')).toBeVisible();
     const geometry = await page.evaluate(() => {
       const shell = document.querySelector<HTMLElement>('[data-testid="account-shell"]');
       const content = document.querySelector<HTMLElement>('[data-testid="account-scroll-content"]');
@@ -191,6 +193,7 @@ test('account exposes finite bootstrap recovery instead of silently degrading me
   await page.setViewportSize({ width: 390, height: 844 });
   await installRuntime(page, { profileFailure: true });
   await page.goto('/account');
+  await expect(page.getByTestId('account-shell')).toBeVisible({ timeout: 15_000 });
   const alert = page.getByTestId('account-bootstrap-error');
   await expect(alert).toBeVisible({ timeout: 15_000 });
   await expect(alert).toContainText('계정 상태를 불러오지 못했습니다.');
