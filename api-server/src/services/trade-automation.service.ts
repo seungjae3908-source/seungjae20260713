@@ -69,8 +69,18 @@ export function tradingIdempotencyKey(userId: string, input: TradingPlanInput) {
   ].join(':')).digest('hex');
 }
 
+export type LiveExecutionAuthority = 'NONE' | 'MANUAL' | 'AUTOMATIC';
+
+export function liveExecutionAuthority(): LiveExecutionAuthority {
+  const authority = String(process.env.executionAuthority ?? 'NONE').trim().toUpperCase();
+  if (authority === 'MANUAL' || authority === 'AUTOMATIC') return authority;
+  return 'NONE';
+}
+
 export function liveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
-  const global = process.env.ORDER_EXECUTION_ENABLED === 'true'
+  const authority = liveExecutionAuthority();
+  const global = authority !== 'NONE'
+    && process.env.ORDER_EXECUTION_ENABLED === 'true'
     && process.env.LIVE_TRADING_ACTIVATION_APPROVED === 'true'
     && process.env.REAL_ORDER_ENABLED === 'true'
     && process.env.PRIVATE_TRADING_API_ALLOWED === 'true';
@@ -84,7 +94,8 @@ export function liveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
 }
 
 export function automaticLiveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
-  return process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'
+  return liveExecutionAuthority() === 'AUTOMATIC'
+    && process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'
     && liveExecutionEnabled(exchange);
 }
 
