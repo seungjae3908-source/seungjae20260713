@@ -74,6 +74,12 @@ const APPROVAL_MESSAGES: Record<string, string> = {
   EXIT_PREFLIGHT_PROVIDER_OPEN_ORDER_PRESENT: '같은 종목의 미체결 주문이 있어 실행 직전 검사를 차단했습니다.',
   EXIT_PREFLIGHT_EMERGENCY_STOP_ACTIVE: '긴급정지가 활성화되어 실행 직전 검사가 차단됐습니다.',
   EXIT_PREFLIGHT_ACCOUNT_EVIDENCE_STALE: '실행 직전 실계좌 근거가 오래되어 다시 조회해야 합니다.',
+  EXPLICIT_EXIT_SUBMISSION_GATE_CONFIRMATION_REQUIRED: '최종 제출 게이트 확인은 사용자가 직접 눌러야 합니다.',
+  EXIT_SUBMISSION_GATE_PACKAGE_EXPIRED: '최종 실행 패키지가 만료되어 Preflight부터 다시 확인해야 합니다.',
+  EXIT_SUBMISSION_GATE_PACKAGE_NOT_READY: '최종 실행 패키지가 준비되지 않아 제출 게이트를 열지 않았습니다.',
+  EXIT_SUBMISSION_GATE_PACKAGE_ID_MISMATCH: '최종 실행 패키지 식별자가 일치하지 않아 제출을 잠갔습니다.',
+  EXIT_SUBMISSION_GATE_EMERGENCY_STOP_ACTIVE: '긴급정지가 활성화되어 제출 게이트가 잠겼습니다.',
+  DRAFT_PROVIDER_SUBMISSION_NOT_AUTHORIZED: '현재는 Draft 검증 범위라 실제 Provider 주문 제출이 허용되지 않습니다.',
 };
 
 const ORDER_STATE_LABELS: Record<string, string> = {
