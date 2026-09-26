@@ -1,9 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type { TradingRepository } from './trade-automation.repository';
-import { TradeAutomationService, liveExecutionEnabled } from './trade-automation.service';
+import {
+  TradeAutomationService,
+  automaticLiveExecutionEnabled,
+  liveExecutionEnabled,
+} from './trade-automation.service';
 import { TradeCancelReconciliationService } from './trade-cancel-reconciliation.service';
 import { TradeOrderRecoveryService } from './trade-order-recovery.service';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
+import { tradingProviderHttpErrorCode, tradingProviderNetworkErrorCode, tradingProviderTimeoutCode } from './trade-provider-http-error.service';
 import {
   prepareBitgetAccount,
   prepareBitgetContractConfig,
@@ -18,6 +23,21 @@ import {
   prepareKiwoomOrderable,
   prepareKiwoomToken,
   prepareKiwoomUnfilled,
+  prepareKiwoomUsHoldings,
+  prepareKiwoomUsOrderable,
+  prepareKiwoomUsOrderbook,
+  prepareKiwoomUsUnfilled,
+  prepareTossAccounts,
+  prepareTossBuyingPower,
+  prepareTossCommissions,
+  prepareTossMarketCalendar,
+  prepareTossOpenOrders,
+  prepareTossOrder,
+  prepareTossOrderQuery,
+  prepareTossOrderbook,
+  prepareTossPrices,
+  prepareTossSellableQuantity,
+  prepareTossToken,
   prepareUpbitAccounts,
   prepareUpbitOrder,
   prepareUpbitOrderChance,
@@ -27,6 +47,7 @@ import {
   type BitgetCredentials,
   type KiwoomCredentials,
   type PreparedExchangeRequest,
+  type TossCredentials,
   type UpbitCredentials,
 } from './trade-exchange-adapters.service';
 import { prepareUpbitOpenOrders } from './trade-open-orders-adapters.service';
@@ -34,6 +55,7 @@ import { assertNoOrphanExchangeOrders, type PendingExchangeOrderRef } from './tr
 import {
   buildBitgetExecutionSnapshot,
   buildKiwoomExecutionSnapshot,
+  buildKiwoomUsExecutionSnapshot,
   buildPaperExecutionSnapshot,
   buildUpbitExecutionSnapshot,
   prepareBitgetExecutionDepth,
@@ -41,6 +63,7 @@ import {
   prepareUpbitExecutionOrderbook,
   prepareUpbitExecutionTicker,
 } from './trade-execution-snapshot.service';
+import { buildTossExecutionSnapshot } from './toss-execution-snapshot.service';
 import {
   TradePreSubmissionRiskError,
   TradePreSubmissionRiskService,
@@ -48,6 +71,7 @@ import {
 } from './trade-pre-submission-risk.service';
 import { getScannerSignalLifecycleSnapshot } from './scanner-signal-lifecycle.service';
 import type {
+  TradingExchange,
   TradingOrder,
   TradingPlan,
   TradingRiskDecision,
@@ -60,6 +84,7 @@ const BASE_URLS = {
   upbit: 'https://api.upbit.com',
   kiwoom: 'https://api.kiwoom.com',
   kiwoomMock: 'https://mockapi.kiwoom.com',
+  toss: 'https://openapi.tossinvest.com',
 };
 
 const PREFLIGHT_TIMEOUT_MS = 4_000;
@@ -92,6 +117,7 @@ function invalidResponseCode(baseUrl: string) {
   if (baseUrl.includes('bitget.com')) return 'BITGET_INVALID_RESPONSE';
   if (baseUrl.includes('upbit.com')) return 'UPBIT_INVALID_RESPONSE';
   if (baseUrl.includes('kiwoom.com')) return 'KIWOOM_INVALID_RESPONSE';
+  if (baseUrl.includes('tossinvest.com')) return 'TOSS_INVALID_RESPONSE';
   return 'EXCHANGE_INVALID_RESPONSE';
 }
 
@@ -110,7 +136,7 @@ async function fetchExchangeJson(
       body: request.body,
       signal: controller.signal,
     });
-    if (!response.ok) throw new Error(`EXCHANGE_HTTP_${response.status}`);
+    if (!response.ok) throw new Error(tradingProviderHttpErrorCode(baseUrl, response.status));
     const raw = await response.text();
     if (!raw.trim()) throw new Error(invalidResponseCode(baseUrl));
     try {
@@ -119,8 +145,8 @@ async function fetchExchangeJson(
       throw new Error(invalidResponseCode(baseUrl));
     }
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') throw new Error('EXCHANGE_TIMEOUT');
-    if (error instanceof TypeError) throw new Error('EXCHANGE_NETWORK_ERROR');
+    if (error instanceof Error && error.name === 'AbortError') throw new Error(tradingProviderTimeoutCode(baseUrl));
+    if (error instanceof TypeError) throw new Error(tradingProviderNetworkErrorCode(baseUrl));
     throw error;
   } finally {
     clearTimeout(timeout);
@@ -213,9 +239,60 @@ function assertKiwoomOrderAccepted(payload: ExchangePayload) {
   return orderId;
 }
 
+
+function tossResult(payload: ExchangePayload) {
+  if (payload.error) throw new Error('TOSS_ORDER_REJECTED');
+  const code = text(payload.code ?? payload.return_code);
+  if (code && !['0', '00000', 'SUCCESS'].includes(code.toUpperCase())) throw new Error(`TOSS_${code}`);
+  return isRecord(payload.result) ? payload.result : payload;
+}
+
+function tossToken(payload: ExchangePayload) {
+  const result = isRecord(payload.result) ? payload.result : isRecord(payload.data) ? payload.data : payload;
+  const token = text(result.access_token ?? result.accessToken ?? payload.access_token);
+  if (!token) throw new Error('TOSS_TOKEN_MISSING');
+  return token;
+}
+
+function assertTossOrderAccepted(payload: ExchangePayload, expectedClientOrderId: string) {
+  const row = tossResult(payload);
+  const orderId = text(row.orderId ?? row.order_id);
+  const clientOrderId = text(row.clientOrderId ?? row.client_order_id);
+  if (!orderId) throw new Error('TOSS_EXCHANGE_ORDER_ID_UNKNOWN');
+  if (clientOrderId && clientOrderId !== expectedClientOrderId) throw new Error('TOSS_CLIENT_ORDER_ID_MISMATCH');
+  return orderId;
+}
+
+const TOSS_RECOGNIZED_STATES = new Set([
+  'open', 'pending', 'accepted', 'partially_filled', 'partial_fill',
+  'filled', 'completed', 'cancelled', 'canceled', 'rejected', 'expired',
+]);
+
+function assertTossOrderLookup(payload: ExchangePayload, expectedOrderId: string) {
+  const row = tossResult(payload);
+  if (text(row.orderId ?? row.order_id) !== expectedOrderId) throw new Error('TOSS_ORDER_ID_MISMATCH');
+  const status = String(row.status ?? row.orderStatus ?? row.state ?? '').toLowerCase();
+  if (!status || !TOSS_RECOGNIZED_STATES.has(status)) throw new Error('TOSS_ORDER_STATUS_UNKNOWN');
+  return row;
+}
+
+function tossPendingRefs(payload: ExchangePayload): PendingExchangeOrderRef[] {
+  const result = payload.result;
+  const values = Array.isArray(result)
+    ? result
+    : isRecord(result) && Array.isArray(result.orders)
+      ? result.orders
+      : [];
+  if (!values.every(isRecord)) throw new Error('TOSS_OPEN_ORDERS_INVALID_RESPONSE');
+  return values.map((row) => ({
+    clientOrderId: text(row.clientOrderId ?? row.client_order_id),
+    exchangeOrderId: text(row.orderId ?? row.order_id),
+  }));
+}
+
 function kiwoomLookupContainsOrder(payload: ExchangePayload, orderId: string) {
   const row = assertKiwoomSuccess(payload);
-  const candidates = [row.data, row.output, row.orders, row.ord_list, row.unfilled];
+  const candidates = [row.data, row.output, row.orders, row.ord_list, row.unfilled, row.oso, row.result_list];
   for (const candidate of candidates) {
     const rows = Array.isArray(candidate)
       ? candidate.filter(isRecord)
@@ -245,6 +322,16 @@ function upbitPendingRefs(rows: ExchangePayload[]): PendingExchangeOrderRef[] {
   return rows.map((row) => ({
     clientOrderId: text(row.identifier),
     exchangeOrderId: text(row.uuid),
+  }));
+}
+
+
+function kiwoomPendingRefs(payload: ExchangePayload): PendingExchangeOrderRef[] {
+  const candidates = [payload.oso, payload.result_list, payload.unfilled, payload.orders, payload.ord_list];
+  const rows = candidates.flatMap((candidate) => Array.isArray(candidate) ? candidate.filter(isRecord) : []);
+  return rows.map((row) => ({
+    clientOrderId: null,
+    exchangeOrderId: text(row.ord_no ?? row.order_no ?? row.orig_ord_no),
   }));
 }
 
@@ -311,6 +398,101 @@ export class TradeExecutionService {
     this.riskService = new TradePreSubmissionRiskService(repository);
   }
 
+  async verifyLiveConnection(userId: string, exchange: TradingExchange) {
+    const connection = await this.repository.getConnection(userId, exchange);
+    if (!connection?.configured || connection.accountMode !== 'live' || !connection.encryptedCredentials) {
+      throw new Error('LIVE_EXECUTION_CONNECTION_NOT_CONFIGURED');
+    }
+    const credentials = decryptTradingCredentials(connection.encryptedCredentials);
+    let providerRequests = 0;
+    const request = async <T>(operation: () => Promise<T>) => {
+      providerRequests += 1;
+      return operation();
+    };
+
+    try {
+      if (exchange === 'upbit') {
+        await request(() => sendExchangeListRequest(
+          BASE_URLS.upbit,
+          prepareUpbitAccounts(credentials as UpbitCredentials),
+          PREFLIGHT_TIMEOUT_MS,
+        ));
+      } else if (exchange === 'bitget') {
+        assertBitgetSuccess(await request(() => sendExchangeRequest(
+          BASE_URLS.bitget,
+          prepareBitgetAccount(credentials as BitgetCredentials),
+          PREFLIGHT_TIMEOUT_MS,
+        )));
+        assertBitgetSuccess(await request(() => sendExchangeRequest(
+          BASE_URLS.bitget,
+          prepareBitgetPositions(credentials as BitgetCredentials),
+          PREFLIGHT_TIMEOUT_MS,
+        )));
+      } else if (exchange === 'kiwoom') {
+        const kiwoom = credentials as KiwoomCredentials;
+        const tokenPayload = assertKiwoomSuccess(await request(() => sendExchangeRequest(
+          BASE_URLS.kiwoom,
+          prepareKiwoomToken(kiwoom),
+          PREFLIGHT_TIMEOUT_MS,
+        )));
+        const token = String(tokenPayload.token ?? (isRecord(tokenPayload.data) ? tokenPayload.data.token : '') ?? '');
+        if (!token) throw new Error('KIWOOM_TOKEN_MISSING');
+        assertKiwoomSuccess(await request(() => sendExchangeRequest(
+          BASE_URLS.kiwoom,
+          prepareKiwoomOrderable({ ...kiwoom, accessToken: token }),
+          PREFLIGHT_TIMEOUT_MS,
+        )));
+      } else {
+        const toss = credentials as TossCredentials;
+        const tokenPayload = await request(() => sendExchangeRequest(
+          BASE_URLS.toss,
+          prepareTossToken(toss),
+          PREFLIGHT_TIMEOUT_MS,
+        ));
+        const authenticated = { ...toss, accessToken: tossToken(tokenPayload) };
+        tossResult(await request(() => sendExchangeRequest(
+          BASE_URLS.toss,
+          prepareTossAccounts(authenticated),
+          PREFLIGHT_TIMEOUT_MS,
+        )));
+        tossResult(await request(() => sendExchangeRequest(
+          BASE_URLS.toss,
+          prepareTossBuyingPower(authenticated, 'KRW'),
+          PREFLIGHT_TIMEOUT_MS,
+        )));
+      }
+
+      const verifiedAt = new Date().toISOString();
+      await this.repository.saveConnection({
+        ...connection,
+        lastVerifiedAt: verifiedAt,
+        lastErrorCode: null,
+        updatedAt: verifiedAt,
+      });
+      return {
+        exchange,
+        verified: true,
+        lastVerifiedAt: verifiedAt,
+        providerRequests,
+        orderRequests: 0,
+        cancelRequests: 0,
+        amendRequests: 0,
+        transferRequests: 0,
+        withdrawalRequests: 0,
+        realOrderSubmitted: false,
+      } as const;
+    } catch (error) {
+      const errorCode = error instanceof Error ? error.message.split(':')[0] : 'LIVE_EXECUTION_VERIFICATION_FAILED';
+      await this.repository.saveConnection({
+        ...connection,
+        lastVerifiedAt: null,
+        lastErrorCode: errorCode,
+        updatedAt: new Date().toISOString(),
+      });
+      throw error;
+    }
+  }
+
   async execute(userId: string, plan: TradingPlan, candidate: TradingOrder) {
     let order = await this.repository.getOrder(userId, candidate.id);
     if (!order) throw new Error('TRADE_ORDER_NOT_FOUND');
@@ -344,10 +526,25 @@ export class TradeExecutionService {
     }
 
     const mockKiwoom = plan.exchange === 'kiwoom' && plan.accountMode === 'mock';
-    if (plan.accountMode === 'live' && !liveExecutionEnabled(plan.exchange)) {
-      return this.automation.transition(order, 'REJECTED', 'LIVE_EXECUTION_DISABLED', {
-        errorCode: 'LIVE_EXECUTION_DISABLED', orderSubmissionAttempted: false,
-      });
+    if (plan.accountMode === 'live') {
+      if (!connection?.lastVerifiedAt || connection.lastErrorCode) {
+        return this.automation.transition(order, 'REJECTED', 'LIVE_EXECUTION_CONNECTION_NOT_VERIFIED', {
+          errorCode: 'LIVE_EXECUTION_CONNECTION_NOT_VERIFIED',
+          orderSubmissionAttempted: false,
+        });
+      }
+      const currentPolicy = await this.repository.getPolicy(userId);
+      const automaticLive = currentPolicy.mode === 'automatic' && currentPolicy.automaticEnabled;
+      const currentLiveAuthority = automaticLive
+        ? automaticLiveExecutionEnabled(plan.exchange)
+        : liveExecutionEnabled(plan.exchange);
+      if (!currentLiveAuthority) {
+        return this.automation.transition(order, 'REJECTED', 'LIVE_EXECUTION_DISABLED', {
+          errorCode: 'LIVE_EXECUTION_DISABLED',
+          orderSubmissionAttempted: false,
+          automaticLiveAuthorityRequired: automaticLive,
+        });
+      }
     }
     if (mockKiwoom && process.env.KIWOOM_MOCK_ORDER_ENABLED !== 'true') {
       return this.automation.transition(order, 'REJECTED', 'KIWOOM_MOCK_EXECUTION_DISABLED', {
@@ -385,11 +582,13 @@ export class TradeExecutionService {
         ? await this.executeBitget(userId, plan, order, credentials as BitgetCredentials)
         : plan.exchange === 'upbit'
           ? await this.executeUpbit(userId, plan, order, credentials as UpbitCredentials)
-          : await this.executeKiwoom(userId, plan, order, credentials as KiwoomCredentials, mockKiwoom);
+          : plan.exchange === 'toss'
+            ? await this.executeToss(userId, plan, order, credentials as TossCredentials)
+            : await this.executeKiwoom(userId, plan, order, credentials as KiwoomCredentials, mockKiwoom);
       if ('skippedOrder' in result) return result.skippedOrder ?? order;
 
       const metadata = this.riskMetadata(result.risk, true);
-      await this.automation.transition(order, 'ACCEPTED', 'EXCHANGE_ACCEPTED', {
+      order = await this.automation.transition(order, 'ACCEPTED', 'EXCHANGE_ACCEPTED', {
         ...metadata,
         exchangeOrderId: result.orderId,
         submissionAttemptId: order.submissionAttemptId,
@@ -607,38 +806,145 @@ export class TradeExecutionService {
     credentials: KiwoomCredentials,
     mock: boolean,
   ) {
-    if (!marketOpenInSeoul() && process.env.KIWOOM_ALLOW_OFF_HOURS !== 'true') throw new Error('KIWOOM_MARKET_CLOSED');
+    const isUs = plan.market.toUpperCase() === 'US';
+    if (!isUs && !marketOpenInSeoul() && process.env.KIWOOM_ALLOW_OFF_HOURS !== 'true') {
+      throw new Error('KIWOOM_MARKET_CLOSED');
+    }
+    if (isUs && mock) throw new Error('KIWOOM_US_MOCK_NOT_VERIFIED');
+
     const baseUrl = mock ? BASE_URLS.kiwoomMock : BASE_URLS.kiwoom;
     const tokenPayload = assertKiwoomSuccess(await sendExchangeRequest(
       baseUrl, prepareKiwoomToken(credentials), PREFLIGHT_TIMEOUT_MS));
     const token = String(tokenPayload.token ?? (isRecord(tokenPayload.data) ? tokenPayload.data.token : '') ?? '');
     if (!token) throw new Error('KIWOOM_TOKEN_MISSING');
     const authenticated = { ...credentials, accessToken: token };
-    const [orderable, unfilled, orderbook] = await Promise.all([
-      sendExchangeRequest(baseUrl, prepareKiwoomOrderable(authenticated), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
-      sendExchangeRequest(baseUrl, prepareKiwoomUnfilled(authenticated), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
-      sendExchangeRequest(baseUrl, prepareKiwoomExecutionOrderbook(token, plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
-    ]);
+    const receivedAt = new Date();
+
+    let snapshot;
+    let unfilled: ExchangePayload;
+    if (isUs) {
+      const [orderable, holdings, usUnfilled, orderbook] = await Promise.all([
+        sendExchangeRequest(baseUrl, prepareKiwoomUsOrderable(authenticated, plan), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
+        sendExchangeRequest(baseUrl, prepareKiwoomUsHoldings(authenticated, plan), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
+        sendExchangeRequest(baseUrl, prepareKiwoomUsUnfilled(authenticated, plan), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
+        sendExchangeRequest(baseUrl, prepareKiwoomUsOrderbook(authenticated, plan), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
+      ]);
+      unfilled = usUnfilled;
+      assertNoOrphanExchangeOrders('kiwoom', kiwoomPendingRefs(usUnfilled), await this.repository.listOrders(userId));
+      snapshot = buildKiwoomUsExecutionSnapshot({
+        plan,
+        orderable,
+        holdings,
+        unfilled: usUnfilled,
+        orderbook,
+        signal: this.signalSnapshot(userId, plan),
+        observedAt: receivedAt,
+      });
+    } else {
+      const [orderable, krUnfilled, orderbook] = await Promise.all([
+        sendExchangeRequest(baseUrl, prepareKiwoomOrderable(authenticated), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
+        sendExchangeRequest(baseUrl, prepareKiwoomUnfilled(authenticated), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
+        sendExchangeRequest(baseUrl, prepareKiwoomExecutionOrderbook(token, plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
+      ]);
+      unfilled = krUnfilled;
+      assertNoOrphanExchangeOrders('kiwoom', kiwoomPendingRefs(krUnfilled), await this.repository.listOrders(userId));
+      snapshot = buildKiwoomExecutionSnapshot({
+        plan,
+        orderable,
+        unfilled: krUnfilled,
+        orderbook,
+        signal: this.signalSnapshot(userId, plan),
+        observedAt: receivedAt,
+      });
+    }
+
     const risk = await this.riskService.evaluate({
       userId,
       expectedPlan: plan,
       order,
-      snapshot: buildKiwoomExecutionSnapshot({
-        plan, orderable, unfilled, orderbook,
-        signal: this.signalSnapshot(userId, plan),
-      }),
+      snapshot,
       serverLiveEnabled: mock || liveExecutionEnabled('kiwoom'),
     });
+
     if (!await this.beginSubmissionIntent(order, risk)) {
       return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };
     }
+
     const orderId = assertKiwoomOrderAccepted(await sendExchangeRequest(
       baseUrl, prepareKiwoomOrder(authenticated, risk.plan), ORDER_TIMEOUT_MS));
+
     let reconciliationRequired = false;
     try {
-      const lookup = await sendExchangeRequest(baseUrl, prepareKiwoomUnfilled(authenticated), PREFLIGHT_TIMEOUT_MS);
+      const lookup = isUs
+        ? await sendExchangeRequest(baseUrl, prepareKiwoomUsUnfilled(authenticated, plan), PREFLIGHT_TIMEOUT_MS)
+        : await sendExchangeRequest(baseUrl, prepareKiwoomUnfilled(authenticated), PREFLIGHT_TIMEOUT_MS);
       reconciliationRequired = !kiwoomLookupContainsOrder(lookup, orderId);
-    } catch { reconciliationRequired = true; }
+    } catch {
+      reconciliationRequired = true;
+    }
+
     return { orderId, reconciliationRequired, risk };
   }
+
+  private async executeToss(
+    userId: string,
+    plan: TradingPlan,
+    order: TradingOrder,
+    credentials: TossCredentials,
+  ) {
+    const tokenPayload = await sendExchangeRequest(BASE_URLS.toss, prepareTossToken(credentials), PREFLIGHT_TIMEOUT_MS);
+    const authenticated = { ...credentials, accessToken: tossToken(tokenPayload) };
+    const market = plan.market.toUpperCase() as 'KR' | 'US';
+    if (market !== 'KR' && market !== 'US') throw new Error('TOSS_MARKET_INVALID');
+    const currency = market === 'KR' ? 'KRW' as const : 'USD' as const;
+
+    const [accounts, orderbook, prices, buyingPower, sellableQuantity, commissions, marketCalendar, openOrders] =
+      await Promise.all([
+        sendExchangeRequest(BASE_URLS.toss, prepareTossAccounts(authenticated), PREFLIGHT_TIMEOUT_MS),
+        sendExchangeRequest(BASE_URLS.toss, prepareTossOrderbook(authenticated, plan.symbol), PREFLIGHT_TIMEOUT_MS),
+        sendExchangeRequest(BASE_URLS.toss, prepareTossPrices(authenticated, plan.symbol), PREFLIGHT_TIMEOUT_MS),
+        sendExchangeRequest(BASE_URLS.toss, prepareTossBuyingPower(authenticated, currency), PREFLIGHT_TIMEOUT_MS),
+        plan.side === 'sell'
+          ? sendExchangeRequest(BASE_URLS.toss, prepareTossSellableQuantity(authenticated, plan.symbol), PREFLIGHT_TIMEOUT_MS)
+          : Promise.resolve({ result: { sellableQuantity: '0' } } as ExchangePayload),
+        sendExchangeRequest(BASE_URLS.toss, prepareTossCommissions(authenticated), PREFLIGHT_TIMEOUT_MS),
+        sendExchangeRequest(BASE_URLS.toss, prepareTossMarketCalendar(authenticated, market), PREFLIGHT_TIMEOUT_MS),
+        sendExchangeRequest(BASE_URLS.toss, prepareTossOpenOrders(authenticated, plan.symbol), PREFLIGHT_TIMEOUT_MS),
+      ]);
+
+    assertNoOrphanExchangeOrders('toss', tossPendingRefs(openOrders), await this.repository.listOrders(userId));
+
+    const risk = await this.riskService.evaluate({
+      userId,
+      expectedPlan: plan,
+      order,
+      snapshot: buildTossExecutionSnapshot({
+        plan,
+        accountSeq: authenticated.accountSeq,
+        payloads: { accounts, orderbook, prices, buyingPower, sellableQuantity, commissions, marketCalendar },
+        signal: this.signalSnapshot(userId, plan),
+      }),
+      serverLiveEnabled: liveExecutionEnabled('toss'),
+    });
+
+    if (!await this.beginSubmissionIntent(order, risk)) {
+      return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };
+    }
+
+    const orderId = assertTossOrderAccepted(
+      await sendExchangeRequest(BASE_URLS.toss, prepareTossOrder(authenticated, risk.plan, order.clientOrderId), ORDER_TIMEOUT_MS),
+      order.clientOrderId,
+    );
+    let reconciliationRequired = false;
+    try {
+      assertTossOrderLookup(
+        await sendExchangeRequest(BASE_URLS.toss, prepareTossOrderQuery(authenticated, orderId), PREFLIGHT_TIMEOUT_MS),
+        orderId,
+      );
+    } catch {
+      reconciliationRequired = true;
+    }
+    return { orderId, reconciliationRequired, risk };
+  }
+
 }

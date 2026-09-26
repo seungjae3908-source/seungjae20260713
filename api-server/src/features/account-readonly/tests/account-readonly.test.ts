@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import { buildUpbitJwt } from '../../../services/trade-exchange-adapters.service';
 import { maskAccountRef, nullableNumber } from '../account-readonly.contract';
+import { AccountReadonlyError } from '../account-readonly.errors';
 import { bindAccountReadonlyDisconnectAbort } from '../account-readonly.route';
 import { AccountReadonlyService } from '../account-readonly.service';
 import { TossReadonlyProvider, TossTokenManager, type ReadonlyTransport } from '../providers/toss-readonly.provider';
@@ -18,11 +19,17 @@ test('read-only account numbers reject coercion and preserve actual zero', () =>
   assert.equal(nullableNumber('1,000.50'), 1000.5);
 });
 
-test('Bitget read-only provider error and malformed data never become a connected empty account', async () => {
+test('Bitget read-only provider errors and malformed data fail closed without becoming a connected empty account', async () => {
   const credentials = { apiKey: 'fixture', secretKey: 'fixture', passphrase: 'fixture' };
-  for (const response of [{}, { code: '40009', data: [] }, { code: '00000' }, { code: '00000', data: [null] }]) {
+  for (const response of [{}, { code: '00000' }, { code: '00000', data: [null] }]) {
     await assert.rejects(readBitgetSnapshot(credentials, async () => response), /RESPONSE_INVALID/);
   }
+  await assert.rejects(
+    readBitgetSnapshot(credentials, async () => ({ code: '40009', msg: 'provider-secret-text', data: [] })),
+    (error: unknown) => error instanceof AccountReadonlyError
+      && error.code === 'BITGET_AUTH_FAILED'
+      && !error.message.includes('provider-secret-text'),
+  );
   await assert.rejects(readBitgetSnapshot(credentials, async (request) => ({ code: '00000', data: request.path.includes('position') ? [] : [{ accountEquity: '1' }] })), /IDENTITY_INVALID/);
 });
 
@@ -154,13 +161,22 @@ test('Toss provider rejects every mutation path and masks accountSeq', async () 
 });
 
 test('Upbit wrapper reuses JWT signer and preserves locked and missing values', async () => {
-  const seen: any[] = []; const result = await readUpbitSnapshot({ accessKey: 'UPBIT_ACCESS_TEST_ONLY', secretKey: 'UPBIT_SECRET_TEST_ONLY' }, async (request) => { seen.push(request); return [{ currency: 'BTC', balance: '1', locked: '0.25', avg_buy_price: '' }]; });
+  const seen: any[] = []; const result = await readUpbitSnapshot({ accessKey: 'UPBIT_ACCESS_TEST_ONLY', secretKey: 'UPBIT_SECRET_TEST_ONLY' }, async (request) => {
+    seen.push(request);
+    if (request.path === '/v1/orders/open') return [];
+    return [{ currency: 'BTC', balance: '1', locked: '0.25', avg_buy_price: '' }];
+  });
   assert.match(seen[0].headers.Authorization, /^Bearer /); assert.equal(result.balances?.[0]?.total, 1.25); assert.equal(result.positions?.[0]?.averageEntryPrice, null); assert.equal(result.orderRequests, 0);
   assert.notEqual(buildUpbitJwt({ accessKey: 'a', secretKey: 'b' }, ''), buildUpbitJwt({ accessKey: 'a', secretKey: 'b' }, ''));
 });
 
-test('Bitget wrapper uses only signed GET account and position requests and redacts passphrase', async () => {
-  const seen: any[] = []; const result = await readBitgetSnapshot({ apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' }, async (request) => { seen.push(request); return request.path.includes('position') ? { code: '00000', data: [{ symbol: 'BTCUSDT', total: '1', openPriceAvg: '60000', markPrice: '61000', leverage: '3', liquidationPrice: '' }] } : { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '80' }] }; });
+test('Bitget wrapper uses only signed GET account, position, and pending-order requests and redacts passphrase', async () => {
+  const seen: any[] = []; const result = await readBitgetSnapshot({ apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' }, async (request) => {
+    seen.push(request);
+    if (request.path.includes('position')) return { code: '00000', data: [{ symbol: 'BTCUSDT', total: '1', openPriceAvg: '60000', markPrice: '61000', leverage: '3', liquidationPrice: '' }] };
+    if (request.path.includes('orders-pending')) return { code: '00000', data: { entrustedList: [] } };
+    return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '80' }] };
+  });
   assert.ok(seen.every((r) => r.method === 'GET')); assert.equal(result.positions?.[0]?.liquidationPrice, null); assert.equal(JSON.stringify(result).includes('BITGET_PASSPHRASE_TEST_ONLY'), false); assert.equal(result.withdrawalRequests, 0);
 });
 

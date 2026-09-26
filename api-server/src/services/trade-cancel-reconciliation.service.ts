@@ -3,14 +3,18 @@ import type { TradingRepository } from './trade-automation.repository';
 import { liveExecutionEnabled, TradeAutomationService } from './trade-automation.service';
 import { TradeOrderRecoveryService } from './trade-order-recovery.service';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
+import { tradingProviderHttpErrorCode, tradingProviderNetworkErrorCode, tradingProviderTimeoutCode } from './trade-provider-http-error.service';
 import {
   prepareBitgetCancel,
   prepareKiwoomCancel,
   prepareKiwoomToken,
+  prepareTossCancel,
+  prepareTossToken,
   prepareUpbitCancel,
   type BitgetCredentials,
   type KiwoomCredentials,
   type PreparedExchangeRequest,
+  type TossCredentials,
   type UpbitCredentials,
 } from './trade-exchange-adapters.service';
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
@@ -22,6 +26,7 @@ const BASE_URLS = {
   upbit: 'https://api.upbit.com',
   kiwoom: 'https://api.kiwoom.com',
   kiwoomMock: 'https://mockapi.kiwoom.com',
+  toss: 'https://openapi.tossinvest.com',
 };
 
 const TERMINAL_STATES = new Set(['FILLED', 'CANCELED', 'REJECTED', 'EXPIRED']);
@@ -45,10 +50,11 @@ async function sendCancelRequest(baseUrl: string, request: PreparedExchangeReque
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => ({})) as unknown;
-    if (!response.ok) throw new Error(`EXCHANGE_HTTP_${response.status}`);
+    if (!response.ok) throw new Error(tradingProviderHttpErrorCode(baseUrl, response.status));
     return isRecord(payload) ? payload : { data: payload };
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') throw new Error('EXCHANGE_TIMEOUT');
+    if (error instanceof Error && error.name === 'AbortError') throw new Error(tradingProviderTimeoutCode(baseUrl));
+    if (error instanceof TypeError) throw new Error(tradingProviderNetworkErrorCode(baseUrl));
     throw error;
   } finally {
     clearTimeout(timeout);
@@ -78,6 +84,20 @@ function tokenFrom(payload: ExchangePayload) {
   const token = String(payload.token ?? nested?.token ?? '').trim();
   if (!token) throw new Error('KIWOOM_TOKEN_MISSING');
   return token;
+}
+
+function tossTokenFrom(payload: ExchangePayload) {
+  const nested = isRecord(payload.result) ? payload.result : isRecord(payload.data) ? payload.data : null;
+  const token = String(payload.access_token ?? nested?.access_token ?? '').trim();
+  if (!token) throw new Error('TOSS_TOKEN_MISSING');
+  return token;
+}
+
+function assertTossSuccess(payload: ExchangePayload) {
+  if (payload.error) throw new Error('TOSS_CANCEL_REJECTED');
+  const code = String(payload.code ?? payload.return_code ?? '').trim();
+  if (code && !['0', '00000', 'SUCCESS'].includes(code.toUpperCase())) throw new Error(`TOSS_${code}`);
+  return payload;
 }
 
 export class TradeCancelReconciliationService {
@@ -166,6 +186,20 @@ export class TradeCancelReconciliationService {
           BASE_URLS.upbit,
           prepareUpbitCancel(credentials as UpbitCredentials, order.clientOrderId),
         ));
+      } else if (plan.exchange === 'toss') {
+        const tossCredentials = credentials as TossCredentials;
+        const tokenPayload = await sendCancelRequest(BASE_URLS.toss, prepareTossToken(tossCredentials));
+        if (!order.exchangeOrderId) throw new Error('TOSS_CANCEL_CONTEXT_MISSING');
+        const cancelPayload = assertTossSuccess(await sendCancelRequest(
+          BASE_URLS.toss,
+          prepareTossCancel({ ...tossCredentials, accessToken: tossTokenFrom(tokenPayload) }, order.exchangeOrderId),
+        ));
+        const result = isRecord(cancelPayload.result) ? cancelPayload.result : cancelPayload;
+        const cancelOperationId = String(result.orderId ?? result.order_id ?? '').trim();
+        if (!cancelOperationId || cancelOperationId === order.exchangeOrderId) {
+          throw new Error('TOSS_CANCEL_OPERATION_ID_INVALID');
+        }
+        order.cancelOperationId = cancelOperationId;
       } else {
         const baseUrl = mockKiwoom ? BASE_URLS.kiwoomMock : BASE_URLS.kiwoom;
         const kiwoomCredentials = credentials as KiwoomCredentials;
@@ -183,7 +217,8 @@ export class TradeCancelReconciliationService {
           baseUrl,
           prepareKiwoomCancel(
             { ...kiwoomCredentials, accessToken: tokenFrom(tokenPayload) },
-            { symbol: plan.symbol, orderNo: order.exchangeOrderId, quantity: remainingQuantity },
+            plan,
+            { orderNo: order.exchangeOrderId, quantity: remainingQuantity },
           ),
         ));
       }
@@ -207,6 +242,7 @@ export class TradeCancelReconciliationService {
       cancelRequestClaimId: order.cancelRequestClaimId,
       cancelSubmittedAt: order.cancelSubmittedAt,
       cancelAcknowledgedAt: order.cancelAcknowledgedAt,
+      cancelOperationId: order.cancelOperationId,
       cancelAcknowledged,
       orderSubmissionAttempted: false,
     });

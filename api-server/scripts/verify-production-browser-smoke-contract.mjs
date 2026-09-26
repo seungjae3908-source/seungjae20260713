@@ -14,6 +14,7 @@ const policyTest = await read('stock-analyzer/e2e/support/production-readonly-po
 const config = await read('stock-analyzer/playwright.production.config.ts');
 const app = await read('stock-analyzer/src/App.tsx');
 const entrypoint = await read('stock-analyzer/src/main.tsx');
+const appRuntime = await read('stock-analyzer/src/app-runtime.tsx');
 const stylesheet = await read('stock-analyzer/src/index.css');
 const indexHtml = await read('stock-analyzer/index.html');
 const deployScript = await read('ops/deploy-production.sh');
@@ -86,7 +87,11 @@ assert(policyTest.includes('Cloudflare same-origin RUM POST navigation abort is 
 assert(app.includes('loadPaperTradingPage'), 'approved sessions must preload the paper trading route');
 assert(app.includes('PaperTradingRouteFallback'), 'paper trading must use a route-specific progressive fallback');
 assert(app.includes('paper-trading-route-skeleton'), 'paper trading fallback must have a deterministic readiness marker');
-assert(entrypoint.includes('if (!import.meta.env.PROD) return;'), 'service worker registration must stay production-only');
+assert(
+  appRuntime.includes('if (!import.meta.env.PROD) return;')
+    && appRuntime.includes("navigator.serviceWorker.register('/sw.js'"),
+  'service worker registration must stay production-only in the runtime bootstrap',
+);
 for (const source of [stylesheet, indexHtml]) {
   assert(!/fonts\.(?:googleapis|gstatic)\.com/i.test(source), 'Production source must not depend on remote Google fonts');
 }
