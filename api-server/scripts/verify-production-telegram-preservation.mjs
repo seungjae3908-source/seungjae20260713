@@ -28,7 +28,12 @@ const previous = 'b'.repeat(40);
 const state = (approved, worker, extra = {}) => [{ name: 'stock-app', pid: 4242, pm2_env: {
   status: 'online', DEPLOY_SHA: previous, watch: false,
   LIVE_TRADING: 'false', AUTO_TRADING: 'false', REAL_ORDER_ENABLED: 'false',
-  PRIVATE_TRADING_API_ALLOWED: 'false', executionAuthority: 'NONE',
+  PRIVATE_TRADING_API_ALLOWED: 'false',
+  ORDER_EXECUTION_ENABLED: 'false', LIVE_TRADING_ACTIVATION_APPROVED: 'false',
+  LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
+  BITGET_LIVE_ORDER_ENABLED: 'false', UPBIT_LIVE_ORDER_ENABLED: 'false',
+  KIWOOM_LIVE_ORDER_ENABLED: 'false', TOSS_LIVE_ORDER_ENABLED: 'false',
+  executionAuthority: 'NONE',
   ...(approved === undefined ? {} : { LIVE_TELEGRAM_ACTIVATION_APPROVED: approved }),
   ...(worker === undefined ? {} : { TELEGRAM_INTELLIGENCE_WORKER_ENABLED: worker }), ...extra,
 } }];
@@ -43,7 +48,10 @@ pm2() {
       command node - <<'MOCK_NODE'
 const fs = require('node:fs');
 const keys = ['LIVE_TELEGRAM_ACTIVATION_APPROVED', 'TELEGRAM_INTELLIGENCE_WORKER_ENABLED',
-  'LIVE_TRADING', 'AUTO_TRADING', 'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED', 'executionAuthority', 'DEPLOY_SHA'];
+  'LIVE_TRADING', 'AUTO_TRADING', 'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED',
+  'ORDER_EXECUTION_ENABLED', 'LIVE_TRADING_ACTIVATION_APPROVED', 'LIVE_AUTOMATIC_TRADING_ENABLED',
+  'BITGET_LIVE_ORDER_ENABLED', 'UPBIT_LIVE_ORDER_ENABLED', 'KIWOOM_LIVE_ORDER_ENABLED', 'TOSS_LIVE_ORDER_ENABLED',
+  'executionAuthority', 'DEPLOY_SHA'];
 const values = Object.fromEntries(keys.map(key => [key, process.env[key] ?? null]));
 fs.appendFileSync(process.env.PM2_EVENTS, JSON.stringify({ kind: 'restart', ...values }) + '\n');
 const rows = JSON.parse(fs.readFileSync(process.env.PM2_FIXTURE, 'utf8'));
@@ -113,6 +121,13 @@ function run(fragment, { rows = state('false', 'false'), same = false, stale = f
       runtimeRows[0].pm2_env.AUTO_TRADING ??= 'false';
       runtimeRows[0].pm2_env.REAL_ORDER_ENABLED ??= 'false';
       runtimeRows[0].pm2_env.PRIVATE_TRADING_API_ALLOWED ??= 'false';
+      runtimeRows[0].pm2_env.ORDER_EXECUTION_ENABLED ??= 'false';
+      runtimeRows[0].pm2_env.LIVE_TRADING_ACTIVATION_APPROVED ??= 'false';
+      runtimeRows[0].pm2_env.LIVE_AUTOMATIC_TRADING_ENABLED ??= 'false';
+      runtimeRows[0].pm2_env.BITGET_LIVE_ORDER_ENABLED ??= 'false';
+      runtimeRows[0].pm2_env.UPBIT_LIVE_ORDER_ENABLED ??= 'false';
+      runtimeRows[0].pm2_env.KIWOOM_LIVE_ORDER_ENABLED ??= 'false';
+      runtimeRows[0].pm2_env.TOSS_LIVE_ORDER_ENABLED ??= 'false';
       runtimeRows[0].pm2_env.executionAuthority ??= 'NONE';
     }
     fs.writeFileSync(path.join(temp, 'pm2.json'), JSON.stringify(runtimeRows));
@@ -216,7 +231,11 @@ check('every application restart retains zero trading authority', () => {
   const result = run(promotion, { failTarget: true });
   assert.equal(result.events.length, 2);
   for (const event of result.events) {
-    for (const key of ['LIVE_TRADING', 'AUTO_TRADING', 'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED']) assert.equal(event[key], 'false');
+    for (const key of [
+      'LIVE_TRADING', 'AUTO_TRADING', 'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED',
+      'ORDER_EXECUTION_ENABLED', 'LIVE_TRADING_ACTIVATION_APPROVED', 'LIVE_AUTOMATIC_TRADING_ENABLED',
+      'BITGET_LIVE_ORDER_ENABLED', 'UPBIT_LIVE_ORDER_ENABLED', 'KIWOOM_LIVE_ORDER_ENABLED', 'TOSS_LIVE_ORDER_ENABLED',
+    ]) assert.equal(event[key], 'false');
     assert.equal(event.executionAuthority, 'NONE');
   }
 });
