@@ -173,6 +173,9 @@ async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
 export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFutures = true }: Props) {
   const [snapshots, setSnapshots] = useState<Partial<Record<Provider, CanonicalAccountSnapshot>>>({});
   const [kiwoomSupported, setKiwoomSupported] = useState(false);
+  const [displayCurrency, setDisplayCurrency] = useState<DisplayCurrency>(initialDisplayCurrency);
+  const [fx, setFx] = useState<AccountDisplayFx | null>(null);
+  const [fxWarning, setFxWarning] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<CredentialProvider | null>(null);
@@ -195,18 +198,34 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
     const controller = new AbortController();
     controllerRef.current = controller;
     const sequence = ++requestSequence.current;
-    setLoading(true); setError('');
-    const results = await Promise.all(enabledProviders().map(async (provider) => {
-      try {
-        const value = await jsonRequest<CanonicalAccountSnapshot>(`/api/accounts/read-only/${provider}`, { signal: controller.signal });
-        return { provider, value, error: null as string | null };
-      } catch (cause) {
-        if (controller.signal.aborted) return { provider, value: null, error: null };
-        return { provider, value: null, error: cause instanceof Error ? cause.message : 'ACCOUNT_READ_FAILED' };
-      }
-    }));
+    setLoading(true); setError(''); setFxWarning('');
+
+    const [results, fxResult] = await Promise.all([
+      Promise.all(enabledProviders().map(async (provider) => {
+        try {
+          const value = await jsonRequest<CanonicalAccountSnapshot>(`/api/accounts/read-only/${provider}`, { signal: controller.signal });
+          return { provider, value, error: null as string | null };
+        } catch (cause) {
+          if (controller.signal.aborted) return { provider, value: null, error: null };
+          return { provider, value: null, error: cause instanceof Error ? cause.message : 'ACCOUNT_READ_FAILED' };
+        }
+      })),
+      jsonRequest<AccountDisplayFx>('/api/accounts/read-only/fx', { signal: controller.signal })
+        .then((value) => ({ value, error: null as string | null }))
+        .catch((cause) => ({
+          value: null,
+          error: controller.signal.aborted ? null : cause instanceof Error ? cause.message : 'FX_UNAVAILABLE',
+        })),
+    ]);
+
     if (controller.signal.aborted || sequence !== requestSequence.current) return;
-    setSnapshots((current) => { const next = { ...current }; for (const result of results) if (result.value) next[result.provider] = result.value; return next; });
+    setSnapshots((current) => {
+      const next = { ...current };
+      for (const result of results) if (result.value) next[result.provider] = result.value;
+      return next;
+    });
+    if (fxResult.value) setFx(fxResult.value);
+    setFxWarning(fxResult.error ? '환율 조회 불가' : fxResult.value?.missing.length ? '일부 환율 조회 불가' : '');
     setError(results.filter((result) => result.error).map((result) => `${result.provider.toUpperCase()}: ${result.error}`).join(' · '));
     setLoading(false);
   }, [enabledProviders]);
@@ -236,6 +255,11 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
       window.removeEventListener('online', onOnline);
     };
   }, [refresh]);
+
+  function chooseDisplayCurrency(currency: DisplayCurrency) {
+    setDisplayCurrency(currency);
+    if (typeof window !== 'undefined') window.localStorage.setItem(DISPLAY_CURRENCY_KEY, currency);
+  }
 
   function openSetup(provider: CredentialProvider) { setEditing(provider); setCredentials(EMPTY_CREDENTIALS); setSaveMessage(''); }
 
