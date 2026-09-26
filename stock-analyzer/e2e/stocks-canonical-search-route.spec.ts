@@ -171,6 +171,22 @@ async function installAuthenticatedUser(page: Page) {
 }
 
 async function installNonSearchApiMocks(page: Page) {
+  await page.route('**/api/backup/latest**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, exists: false, itemCount: 0, updatedAt: null }) });
+  });
+  await page.route('**/api/member-watchlist**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, items: [] }) });
+  });
+  await page.route('**/api/stocks/*/quote**', async (route) => {
+    const parts = new URL(route.request().url()).pathname.split('/');
+    const ticker = parts[3] ?? '';
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ticker, price: null, changePercent: null, dataAsOf: now }) });
+  });
+  await page.route('**/api/stocks/*/profile**', async (route) => {
+    const parts = new URL(route.request().url()).pathname.split('/');
+    const ticker = parts[3] ?? '';
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ticker, name: ticker, market: ticker.length === 6 ? 'KR' : 'US' }) });
+  });
   await page.route('**/api/market/recommendations**', async (route) => {
     const market = new URL(route.request().url()).searchParams.get('market') === 'US' ? 'US' : 'KR';
     await route.fulfill({
