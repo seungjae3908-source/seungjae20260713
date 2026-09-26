@@ -302,7 +302,15 @@ restart_application_preserving_telegram() {
 application_runtime_ready() {
   local snapshot="" pid="" status="" cwd="" exec_path="" watched="" live="" auto="" real="" private_api="" order_execution="" live_approved="" live_auto="" bitget_live="" upbit_live="" kiwoom_live="" toss_live="" authority=""
   snapshot="$(pm2_runtime_snapshot)" || return 1
-  IFS=
+  IFS=$'\t' read -r pid status cwd exec_path watched live auto real private_api order_execution live_approved live_auto bitget_live upbit_live kiwoom_live toss_live authority <<< "$snapshot"
+  [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && "$status" == online ]] || return 1
+  [[ "$cwd" == "$LIVE_DIR" ]] || return 1
+  [[ "$(readlink -m "$exec_path")" == "$LIVE_DIR/api-server/dist/index.mjs" ]] || return 1
+  [[ "$watched" == false ]] || return 1
+  [[ "$live" == false && "$auto" == false && "$real" == false && "$private_api" == false ]] || return 1
+  [[ "$order_execution" == false && "$live_approved" == false && "$live_auto" == false ]] || return 1
+  [[ "$bitget_live" == false && "$upbit_live" == false && "$kiwoom_live" == false && "$toss_live" == false ]] || return 1
+  [[ "$authority" == NONE ]] || return 1
   mapfile -t current_listeners < <(listener_pids)
   [[ "${#current_listeners[@]}" -eq 1 && "${current_listeners[0]}" == "$pid" ]] || return 1
 }
