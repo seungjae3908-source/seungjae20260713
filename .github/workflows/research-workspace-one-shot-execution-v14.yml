@@ -54,6 +54,8 @@ jobs:
           grep -Fq "GEMINI_API_KEY:geminiKey" "$workflow"
           grep -Fq "GROQ_API_KEY:groqKey" "$workflow"
           grep -Fq "GROQ_MODEL:groqModel" "$workflow"
+          grep -Fq "SOURCE_EVIDENCE_REVIEW_NO_RETRY" "$workflow"
+          grep -Fq "reviewed_rule_digest_candidate:" "$workflow"
           ! grep -Eq '^\s*schedule:|^\s*workflow_dispatch:' "$workflow"
           ! grep -Eq 'GEMINI_API_KEY:.*secrets\.|GROQ_API_KEY:.*secrets\.|GOOGLE_API_KEY:.*secrets\.' "$workflow"
           ! grep -Eq 'pm2 (restart|reload|save)|systemctl (start|restart|enable)|AUTO_TRADING=true|LIVE_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true' "$workflow"
@@ -364,15 +366,32 @@ jobs:
             value={status:'BLOCKED',reason:'ONE_SHOT_PROVIDER_CALL_COUNT_INVALID',manifestDigest:null,packageDigest:null,
               providerCalls:{gemini:0,groq:0},executionAuthority:'NONE'};
           }
+          const reason=typeof value.reason==='string'&&/^[A-Z0-9_]{3,96}$/.test(value.reason)?value.reason:null;
+          const packageDigest=typeof value.packageDigest==='string'&&/^[a-f0-9]{64}$/.test(value.packageDigest)?value.packageDigest:null;
+          const reviewedRuleDigestCandidate=typeof value.reviewedRuleDigestCandidate==='string'&&/^[a-f0-9]{64}$/.test(value.reviewedRuleDigestCandidate)
+            ? value.reviewedRuleDigestCandidate:null;
+          const digestReviewReady=value.status==='REVIEW_REQUIRED'
+            && reason==='HUMAN_RULE_DIGEST_REVIEW_REQUIRED'
+            && packageDigest!==null
+            && reviewedRuleDigestCandidate!==null
+            && providerCalls.gemini===1
+            && providerCalls.groq===1;
+          const insufficient=value.status==='REVIEW_REQUIRED'
+            && reason==='GEMINI_INSUFFICIENT_EVIDENCE'
+            && packageDigest===null
+            && providerCalls.gemini===1
+            && providerCalls.groq===0;
           const out={
             schemaVersion:'research-workspace-one-shot-execution-v14',
             status:value.status,
-            reason:typeof value.reason==='string'&&/^[A-Z0-9_]{3,96}$/.test(value.reason)?value.reason:null,
+            reason,
             manifestDigest:typeof value.manifestDigest==='string'&&/^[a-f0-9]{64}$/.test(value.manifestDigest)?value.manifestDigest:null,
-            packageDigest:typeof value.packageDigest==='string'&&/^[a-f0-9]{64}$/.test(value.packageDigest)?value.packageDigest:null,
+            packageDigest,
+            reviewedRuleDigestCandidate,
             providerCalls,
             runnerExitCode:Number.isSafeInteger(rc)?rc:null,
-            requiredNextStep:value.status==='REVIEW_REQUIRED'?'HUMAN_RULE_DIGEST_REVIEW':'OPERATOR_REVIEW_NO_RETRY',
+            requiredNextStep:digestReviewReady?'HUMAN_RULE_DIGEST_REVIEW':
+              insufficient?'SOURCE_EVIDENCE_REVIEW_NO_RETRY':'OPERATOR_REVIEW_NO_RETRY',
             automaticCompilerRun:false,automaticBacktestRun:false,automaticAdoption:false,
             executionAuthority:'NONE',
           };
@@ -386,10 +405,19 @@ jobs:
           const value=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
           if(value?.schemaVersion!=='research-workspace-one-shot-execution-v14'
             || !['REVIEW_REQUIRED','BLOCKED','BLOCKED_UNCERTAIN'].includes(value?.status)
+            || !['HUMAN_RULE_DIGEST_REVIEW','SOURCE_EVIDENCE_REVIEW_NO_RETRY','OPERATOR_REVIEW_NO_RETRY'].includes(value?.requiredNextStep)
             || !Number.isInteger(value?.providerCalls?.gemini) || value.providerCalls.gemini<0 || value.providerCalls.gemini>1
             || !Number.isInteger(value?.providerCalls?.groq) || value.providerCalls.groq<0 || value.providerCalls.groq>1
             || value?.automaticCompilerRun!==false || value?.automaticBacktestRun!==false || value?.automaticAdoption!==false
             || value?.executionAuthority!=='NONE') process.exit(1);
+          if(value.requiredNextStep==='HUMAN_RULE_DIGEST_REVIEW'
+            && (value.status!=='REVIEW_REQUIRED'||value.reason!=='HUMAN_RULE_DIGEST_REVIEW_REQUIRED'
+              || !/^[a-f0-9]{64}$/.test(String(value.packageDigest??''))
+              || !/^[a-f0-9]{64}$/.test(String(value.reviewedRuleDigestCandidate??''))
+              || value.providerCalls.gemini!==1||value.providerCalls.groq!==1)) process.exit(1);
+          if(value.requiredNextStep==='SOURCE_EVIDENCE_REVIEW_NO_RETRY'
+            && (value.status!=='REVIEW_REQUIRED'||value.reason!=='GEMINI_INSUFFICIENT_EVIDENCE'
+              || value.packageDigest!==null||value.providerCalls.gemini!==1||value.providerCalls.groq!==0)) process.exit(1);
           if(/Bearer\s+\S+|BEGIN .*PRIVATE KEY|api[_ -]?key\s*[:=]/i.test(JSON.stringify(value))) process.exit(1);
           NODE
           echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
@@ -422,6 +450,8 @@ jobs:
               'target_sha: '+process.env.TARGET_SHA,
               'manifest_digest: '+(value.manifestDigest??'UNKNOWN'),
               'package_digest: '+(value.packageDigest??'UNKNOWN'),
+              'reviewed_rule_digest_candidate: '+(value.reviewedRuleDigestCandidate??'UNKNOWN'),
+              'reason: '+(value.reason??'NONE'),
               'gemini_calls: '+String(value.providerCalls?.gemini??0),
               'groq_calls: '+String(value.providerCalls?.groq??0),
               'required_next_step: '+value.requiredNextStep,
@@ -445,11 +475,18 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          status="$(node -e "const v=require(process.argv[1]);process.stdout.write(String(v.status))" "$ARTIFACT")"
-          if [[ "$status" == REVIEW_REQUIRED ]]; then
+          readarray -t verdict < <(node - "$ARTIFACT" <<'NODE'
+          const v=require(process.argv[2]);
+          process.stdout.write(String(v.status)+'\n'+String(v.requiredNextStep)+'\n'+String(v.packageDigest??''));
+          NODE
+          )
+          status="${verdict[0]:-UNKNOWN}"
+          next="${verdict[1]:-UNKNOWN}"
+          package="${verdict[2]:-}"
+          if [[ "$status" == REVIEW_REQUIRED && "$next" == HUMAN_RULE_DIGEST_REVIEW && "$package" =~ ^[0-9a-f]{64}$ ]]; then
             exit 0
           fi
-          echo "One-shot ended $status. Do not retry blindly; inspect server-private evidence and prepare a new reviewed manifest if needed." >&2
+          echo "One-shot ended status=$status next=$next. Do not retry blindly; inspect server-private evidence and prepare a new reviewed manifest if needed." >&2
           exit 1
 
       - name: Clean runner SSH material
