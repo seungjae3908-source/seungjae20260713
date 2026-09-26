@@ -53,4 +53,8 @@ jobs:
           grep -Fq "executionAuthority: 'NONE'" "$file"
           grep -Fq "orderAllowed: false" "$file"
           grep -Fq "NOT_INFERRED" "$file"
+          grep -Fq "FINRA_API_CLIENT_ID" "$file"
+          grep -Fq "oauth2/access_token?grant_type=client_credentials" "$file"
+          grep -Fq "authorization: \`Bearer \${accessToken}\`" "$file"
+          grep -Fq "usNotConnected" "$file"
           ! grep -E "submitOrder|placeOrder|cancelOrder|withdraw|transfer" "$file"
