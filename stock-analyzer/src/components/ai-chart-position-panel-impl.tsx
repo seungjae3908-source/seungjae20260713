@@ -149,6 +149,7 @@ type ExitPreview = {
   positionQuantity: number | null;
   availableQuantity: number;
   exitQuantity: number;
+  quantityRule: 'INTEGER_ONLY' | 'FRACTIONAL_ALLOWED';
   side: 'buy' | 'sell';
   reduceOnly: true;
   checkedAt: string;
@@ -356,12 +357,20 @@ function canAmendOrder(item: OrderDashboardItem): boolean {
     && finite(item.currentLimitPrice) != null;
 }
 
-function exitPreviewQuantity(position: AiChartAccountPosition, percent: number, market: AnalysisMarket): number | null {
+function exitPreviewQuantity(
+  position: AiChartAccountPosition,
+  percent: number,
+  market: AnalysisMarket,
+  provider: Snapshot['provider'],
+): number | null {
   const available = finite(position.availableQuantity) ?? finite(position.quantity);
   if (available == null || available <= 0 || !Number.isFinite(percent) || percent <= 0 || percent > 100) return null;
   const raw = available * percent / 100;
-  if (market === 'KR') return Math.max(0, Math.floor(raw));
-  return Math.round(raw * 100_000_000) / 100_000_000;
+  const integerOnly = market === 'KR' || (market === 'US' && provider === 'kiwoom');
+  const quantity = integerOnly
+    ? Math.floor(raw)
+    : Math.round(raw * 100_000_000) / 100_000_000;
+  return quantity > 0 ? quantity : null;
 }
 
 function providerLabel(provider: Snapshot['provider']): string {
@@ -615,7 +624,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
   }), [chartPrice, market, position, pricePlan, targetPercents]);
   const allocationTotal = allocationRows.reduce((sum, row) => Number.isFinite(row.percent) ? sum + row.percent : sum, 0);
   const allocationValid = allocationTotal <= 100;
-  const exitQuantity = position ? exitPreviewQuantity(position, exitPercent, market) : null;
+  const exitQuantity = position ? exitPreviewQuantity(position, exitPercent, market, provider) : null;
   const entryContextReady = Boolean(
     selection.searchRunId
     && selection.signalId
@@ -1170,6 +1179,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                       <p className="mt-1 text-[9px] font-bold text-muted-foreground">
                         서버 확인 수량 {formatQuantity(exitPreviewState.preview.exitQuantity)}
                         {' · '}방향 {exitPreviewState.preview.side.toUpperCase()}
+                        {' · '}수량규칙 {exitPreviewState.preview.quantityRule === 'INTEGER_ONLY' ? '정수' : '소수 허용'}
                         {' · '}조회 {checkedAtLabel(exitPreviewState.preview.checkedAt)}
                       </p>
                       <p className="mt-1 text-[8px] font-bold text-muted-foreground">executionAuthority=NONE · 주문 제출 0 · 취소/정정 0</p>
