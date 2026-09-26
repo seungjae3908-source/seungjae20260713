@@ -1,4 +1,5 @@
 import { Router, type IRouter } from 'express';
+import { requireAdmin } from '../middleware/auth';
 import {
   createDefaultStrategyPromotionService,
   type StrategyPromotionService,
@@ -18,7 +19,7 @@ export function createStrategyPromotionRouter(service: StrategyPromotionService 
     return res.json({ ok: true, ...result });
   });
 
-  router.get('/strategy-promotion/research-bridge', async (_req, res) => {
+  router.get('/strategy-promotion/research-bridge', requireAdmin, async (_req, res) => {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     const bridge = await loadResearchPromotionBridge();
     return res.json({ ok: true, bridge });
