@@ -289,6 +289,7 @@ test('exit preview re-reads the real position in read-only mode and never submit
       preview: {
         provider: string;
         exitQuantity: number;
+        quantityRule: string;
         side: string;
         reduceOnly: boolean;
         stale: boolean;
@@ -312,6 +313,7 @@ test('exit preview re-reads the real position in read-only mode and never submit
     assert.equal(reads, 1);
     assert.equal(body.preview.provider, 'toss');
     assert.equal(body.preview.exitQuantity, 5);
+    assert.equal(body.preview.quantityRule, 'INTEGER_ONLY');
     assert.equal(body.preview.side, 'sell');
     assert.equal(body.preview.reduceOnly, true);
     assert.equal(body.preview.stale, false);
@@ -478,6 +480,86 @@ test('order dashboard maps crypto execution markets back to AI Chart market iden
     } finally {
       await close(server);
     }
+  }
+});
+
+test('exit preview follows Toss fractional and Kiwoom integer US-stock quantity rules', async () => {
+  const stockSnapshot = (provider: 'toss' | 'kiwoom') => {
+    const checkedAt = new Date().toISOString();
+    return {
+      provider,
+      readOnly: true as const,
+      connected: true,
+      status: 'CONNECTED' as const,
+      accounts: null,
+      balances: null,
+      positions: [{
+        market: 'US',
+        symbol: 'AAPL',
+        quantity: 3,
+        availableQuantity: 3,
+        averageEntryPrice: 200,
+        currentPrice: 205,
+        marketValue: 615,
+        unrealizedPnl: 15,
+        unrealizedPnlPercent: 2.5,
+        leverage: null,
+        liquidationPrice: null,
+        marginMode: null,
+        side: null,
+      }],
+      openOrders: null,
+      checkedAt,
+      lastGoodAt: checkedAt,
+      stale: false,
+      errorCode: null,
+      orderRequests: 0 as const,
+      cancelRequests: 0 as const,
+      amendRequests: 0 as const,
+      transferRequests: 0 as const,
+      withdrawalRequests: 0 as const,
+      credentialsReturned: false as const,
+      liveTradingEnabled: false as const,
+      autoTradingEnabled: false as const,
+    };
+  };
+  setTradeExitPreviewReadersFactoryForTests(() => ({
+    toss: async () => stockSnapshot('toss'),
+    kiwoom: async () => stockSnapshot('kiwoom'),
+  }));
+
+  const { server, baseUrl } = await startServer();
+  try {
+    const toss = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, provider: 'toss', market: 'US', symbol: 'AAPL', percent: 25 }),
+    });
+    assert.equal(toss.status, 200);
+    const tossBody = await toss.json() as { preview: { exitQuantity: number; quantityRule: string } };
+    assert.equal(tossBody.preview.exitQuantity, 0.75);
+    assert.equal(tossBody.preview.quantityRule, 'FRACTIONAL_ALLOWED');
+
+    const tooSmallKiwoom = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, provider: 'kiwoom', market: 'US', symbol: 'AAPL', percent: 25 }),
+    });
+    assert.equal(tooSmallKiwoom.status, 400);
+    assert.equal((await tooSmallKiwoom.json() as { error: string }).error, 'EXIT_PREVIEW_QUANTITY_TOO_SMALL');
+
+    const kiwoom = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, provider: 'kiwoom', market: 'US', symbol: 'AAPL', percent: 50 }),
+    });
+    assert.equal(kiwoom.status, 200);
+    const kiwoomBody = await kiwoom.json() as { preview: { exitQuantity: number; quantityRule: string } };
+    assert.equal(kiwoomBody.preview.exitQuantity, 1);
+    assert.equal(kiwoomBody.preview.quantityRule, 'INTEGER_ONLY');
+  } finally {
+    setTradeExitPreviewReadersFactoryForTests(null);
+    await close(server);
   }
 });
 
