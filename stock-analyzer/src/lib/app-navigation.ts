@@ -277,7 +277,6 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
     menu: [
       { id: 'learn', href: APP_ROUTES.learn, label: '투자 공부', icon: 'learn' },
       { id: 'ai-chat', href: APP_ROUTES.aiChat, label: 'AI 정보', icon: 'chat', capability: 'canAccessBasicInfo' },
-      { id: 'research-center', href: APP_ROUTES.researchCenter, label: '연구센터', icon: 'chart', capability: 'canManageMembers' },
       {
         id: 'portfolio',
         href: APP_ROUTES.portfolio,
