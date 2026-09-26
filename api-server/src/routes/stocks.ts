@@ -25,6 +25,32 @@ const router: IRouter = Router();
 
 const liveDataCache = new BoundedTtlCache(300);
 
+const STOCK_CHART_OPTIONAL_SIGNALS_BUDGET_MS = 900;
+const STOCK_CHART_SIGNAL_TIMEOUT = Symbol('STOCK_CHART_SIGNAL_TIMEOUT');
+
+async function getOptionalChartSignals(ticker: string): Promise<unknown[]> {
+	let timer: ReturnType<typeof setTimeout> | null = null;
+	const timeout = new Promise<typeof STOCK_CHART_SIGNAL_TIMEOUT>((resolve) => {
+		timer = setTimeout(() => resolve(STOCK_CHART_SIGNAL_TIMEOUT), STOCK_CHART_OPTIONAL_SIGNALS_BUDGET_MS);
+	});
+	try {
+		const result = await Promise.race([
+			SignalService.getReport(ticker),
+			timeout,
+		]);
+		if (result === STOCK_CHART_SIGNAL_TIMEOUT) {
+			console.warn(`chart signals budget exceeded: ticker=${ticker}`);
+			return [];
+		}
+		return result?.signals ?? [];
+	} catch (signalError) {
+		console.warn('chart signals unavailable:', signalError);
+		return [];
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
 async function withLiveCache<T>(
 	key: string,
 	ttlMs: number,
@@ -1352,15 +1378,13 @@ router.get("/:ticker/chart", async (req, res) => {
 	}
 
 	try {
+		// Signals enrich the chart but are not required to render truthful candle data.
+		// Start them concurrently and cap their contribution so slow news/risk/context
+		// providers cannot hold the entire interactive chart response open.
+		const signalsPromise = getOptionalChartSignals(ticker);
 		const meta = await MarketDataService.getCandlesMeta(ticker, timeframe as any);
 		const indicators = computeIndicators(meta.candles);
-		let signals: unknown[] = [];
-		try {
-			const report = await SignalService.getReport(ticker);
-			signals = report?.signals ?? [];
-		} catch (signalError) {
-			console.error("chart signals failed:", signalError);
-		}
+		const signals = await signalsPromise;
 		const { overall } = computeScores(ticker);
 
 		res.json({
