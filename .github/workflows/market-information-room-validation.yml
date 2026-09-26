@@ -43,4 +43,4 @@ jobs:
         run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
 
       - name: Run exact market information room browser regression
-        run: pnpm --dir stock-analyzer exec playwright test e2e/market-information-room.spec.ts --config=playwright.config.ts --project=chromium --retries=0 --reporter=list
+        run: pnpm --dir stock-analyzer exec playwright test e2e/market-information-room.spec.ts --config=playwright.config.ts --retries=0 --reporter=list
