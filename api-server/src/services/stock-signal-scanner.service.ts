@@ -10,6 +10,7 @@ import { rankScannerCandidates } from './scanner-candidate-ranking.service';
 import { buildScannerDiscoveryView } from './scanner-discovery-view.service';
 import { applyStockSignalPolicy } from './scanner-signal-policy.service';
 import { applyScannerSignalLifecycle } from './scanner-signal-lifecycle.service';
+import { observeScannerDecisionHistory } from './scanner-decision-history.service';
 import { applyScannerQuantHardening } from './scanner-quant-hardening.service';
 import { applyScannerMarketProfile } from './scanner-market-profile-overlay.service';
 import { enrichStockScannerCardsWithNewsDisclosureIntelligence } from './scanner-news-disclosure-intelligence.service';
@@ -289,7 +290,10 @@ export const StockSignalScannerService = {
     // Theme Swing is research-only and must not alter the canonical Scanner rank/score.
     // Recompute its catalyst component after News/Disclosure enrichment while retaining
     // the full pre-ranking theme universe for breadth/leader context.
-    const finalCards = applyThemeSwingOverlay(intelligenceCards, themeTagsForCard, broadCandidates);
+    const finalCards = observeScannerDecisionHistory(
+      request.memberId,
+      applyThemeSwingOverlay(intelligenceCards, themeTagsForCard, broadCandidates),
+    );
     const visibleTradeReviewCount = finalCards.filter((card) => card.direction === 'LONG').length;
     const discovery = buildScannerDiscoveryView(preliminaryThemeSwingCandidates, {
       tradeReviewCount: visibleTradeReviewCount,
