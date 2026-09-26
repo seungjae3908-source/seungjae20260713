@@ -111,7 +111,10 @@ test('real user path stays coherent from login through session expiry', async ({
   await expect(page.getByTestId('connection-toss')).toContainText('연결됨');
   await expect(page.getByTestId('connection-upbit')).toContainText('연결됨');
   await expect(page.getByTestId('connection-bitget')).toContainText('연결됨');
-  await expect(page.getByTestId('brokerage-account-connections')).toContainText('실주문/취소/이체/출금 0건');
+  await expect(page.getByTestId('brokerage-account-connections')).toContainText('조회 전용');
+  await expect(page.getByTestId('brokerage-account-connections')).toContainText('실계좌 총금액');
+  await expect(page.getByTestId('brokerage-account-connections')).toContainText('주문가능');
+  await expect(page.getByTestId('brokerage-account-connections')).not.toContainText('실주문/취소/이체/출금 0건');
 
   await openMenuItem(page, '정보', '포트폴리오');
   await expect(page).toHaveURL(/\/portfolio$/u);

@@ -211,6 +211,7 @@ test('recognizes only canonical provider snapshot GET routes', () => {
   expect(isAccountReadonlySnapshotPath('/api/accounts/read-only/kiwoom', 'GET')).toBe(true);
   expect(isAccountReadonlySnapshotPath('/api/accounts/read-only/upbit', 'GET')).toBe(true);
   expect(isAccountReadonlySnapshotPath('/api/accounts/read-only/bitget', 'GET')).toBe(true);
+  expect(isAccountReadonlySnapshotPath('/api/accounts/read-only/fx', 'GET')).toBe(false);
   expect(isAccountReadonlySnapshotPath('/api/accounts/read-only/credentials/toss', 'GET')).toBe(false);
   expect(isAccountReadonlySnapshotPath('/api/accounts/read-only/toss', 'PUT')).toBe(false);
 });
@@ -320,6 +321,9 @@ test('central authenticated transport guards every read-only provider snapshot',
 
   expect(component).toContain("if (snapshot.connected) return snapshot.stale ? '이전 정상값' : '연결됨';");
   expect(component).toContain('jsonRequest<CanonicalAccountSnapshot>(`/api/accounts/read-only/${provider}`');
+  expect(component).toContain("jsonRequest<AccountDisplayFx>('/api/accounts/read-only/fx'");
+  expect(component).toContain('validAccountDisplayFx');
+  expect(component).toContain("return '—';");
 
   expect(backendContract).toContain('provider: AccountProvider; readOnly: true; connected: boolean; status: AccountReadStatus;');
   expect(backendContract).toContain('orderRequests: 0; cancelRequests: 0; amendRequests: 0; transferRequests: 0; withdrawalRequests: 0;');

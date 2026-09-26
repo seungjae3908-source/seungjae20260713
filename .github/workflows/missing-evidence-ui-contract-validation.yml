@@ -11,6 +11,7 @@ on:
       - 'stock-analyzer/src/components/backtest-research-panel.tsx'
       - 'stock-analyzer/src/components/brokerage-account-connections.tsx'
       - 'stock-analyzer/e2e/account-connection-credentials.spec.ts'
+      - 'stock-analyzer/e2e/account-professional-ui.spec.ts'
       - '.github/workflows/missing-evidence-ui-contract-validation.yml'
   workflow_dispatch:
 
@@ -53,6 +54,7 @@ jobs:
           const backtestSurface = readFileSync('stock-analyzer/src/components/backtest-research-panel.tsx', 'utf8');
           const accountSurface = readFileSync('stock-analyzer/src/components/brokerage-account-connections.tsx', 'utf8');
           const accountBrowser = readFileSync('stock-analyzer/e2e/account-connection-credentials.spec.ts', 'utf8');
+          const accountProfessional = readFileSync('stock-analyzer/e2e/account-professional-ui.spec.ts', 'utf8');
           for (const required of ['NOT_COLLECTED', 'STALE', 'UNAVAILABLE', 'PERMISSION_REQUIRED', 'N_A']) {
             if (!contract.includes(required)) throw new Error(`missing evidence state ${required}`);
           }
@@ -81,7 +83,18 @@ jobs:
           if (accountSurface.includes('(toss?.accounts ?? []).length') || accountSurface.includes('(row.quantity ?? 0) !== 0')) {
             throw new Error('Account read-only metrics still coerce missing provider evidence to zero');
           }
-          for (const required of ['평가 미수집 · 손익 0', '보유 자산 오래된 데이터', '사용 불가']) {
+          for (const required of ['이전 정상값', '조회 불가', "not.toContainText('₩0')"]) {
             if (!accountBrowser.includes(required)) throw new Error(`missing Account browser evidence assertion: ${required}`);
+          }
+          for (const required of [
+            'FX outage never fabricates KRW or USD converted account values',
+            "not.toContainText('₩0')",
+            "not.toContainText('$0.00')",
+            '일부 환율 조회 불가',
+          ]) {
+            if (!accountProfessional.includes(required)) throw new Error(`missing Account FX fail-closed assertion: ${required}`);
+          }
+          for (const required of ["return '—';", 'validAccountDisplayFx', 'summarizeFacts']) {
+            if (!accountSurface.includes(required)) throw new Error(`missing Account compact evidence contract: ${required}`);
           }
           NODE
