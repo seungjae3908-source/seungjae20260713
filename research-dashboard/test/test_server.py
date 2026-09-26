@@ -473,6 +473,21 @@ class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
         self.assertEqual(present['VALIDATION_N'], 0)
         self.assertIsNone(present['Net_PnL'])
         self.assertFalse(present['PROFITABILITY_PROVEN'])
+        self.assertEqual(present['promotionIdentity'], {
+            'candidateId': f"phase3-candidate:sha256:{'7' * 64}",
+            'strategyId': 'strategy-alpha',
+            'strategyVersion': 'v1',
+            'parameterHash': '8' * 64,
+            'researchCodeSha': '9' * 40,
+            'market': 'CRYPTO_FUTURES',
+            'timeframe': '15m',
+            'sidePolicy': 'LONG',
+            'accountMode': 'PAPER',
+            'costPolicyVersion': 'cost-v1',
+            'executionPolicyVersion': 'paper-v1',
+        })
+        self.assertNotIn('provider', present['promotionIdentity'])
+        self.assertNotIn('symbol', present['promotionIdentity'])
 
         (root / 'forward' / 'paper' / 'status' / 'candidate-performance.json').unlink()
         missing = build_research_overview(root)['paper']['candidatePerformance']
