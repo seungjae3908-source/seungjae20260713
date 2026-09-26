@@ -48,6 +48,8 @@ jobs:
           grep -Fq "PRIVATE_TRADING_API_ALLOWED: 'false'" "$file"
           grep -Fq "executionAuthority: 'NONE'" "$file"
           grep -Fq "pnpm exec playwright test --config=playwright.production-account-readonly.config.ts" "$file"
+          grep -Fq "UPBIT_OPEN_ORDERS_UPBIT_PERMISSION_DENIED" "$file"
+          grep -Fq "Rollback provider read flags after downstream failure" "$file"
           grep -Fq "key_value_exposed: false" "$file"
           grep -Fq "order_requests: 0" "$file"
           grep -Fq "withdrawal_requests: 0" "$file"
@@ -354,6 +356,7 @@ jobs:
               upbit: true,
               bitget: true
             },
+            previous_provider_read_flags: previousRead,
             master_key_valid: true,
             key_value_exposed: false,
             pm2_online: true,
@@ -381,6 +384,10 @@ jobs:
             || value?.provider_read_flags?.kiwoom !== true
             || value?.provider_read_flags?.upbit !== true
             || value?.provider_read_flags?.bitget !== true
+            || typeof value?.previous_provider_read_flags?.TOSS_ACCOUNT_READ_ENABLED !== 'boolean'
+            || typeof value?.previous_provider_read_flags?.KIWOOM_ACCOUNT_READ_ENABLED !== 'boolean'
+            || typeof value?.previous_provider_read_flags?.UPBIT_ACCOUNT_READ_ENABLED !== 'boolean'
+            || typeof value?.previous_provider_read_flags?.BITGET_ACCOUNT_READ_ENABLED !== 'boolean'
             || value?.master_key_valid !== true
             || value?.key_value_exposed !== false
             || value?.pm2_online !== true
@@ -414,6 +421,17 @@ jobs:
           ref: ${{ steps.command.outputs.active_sha }}
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Overlay exact current-main Production QA assertions
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          source_path='stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts'
+          git fetch --no-tags --depth=1 origin "$TARGET_SHA"
+          git show "$TARGET_SHA:$source_path" > "$RUNNER_TEMP/production-account-readonly-live-qa.spec.ts"
+          grep -Fq "UPBIT_OPEN_ORDERS_UPBIT_PERMISSION_DENIED" "$RUNNER_TEMP/production-account-readonly-live-qa.spec.ts"
+          install -m 0644 "$RUNNER_TEMP/production-account-readonly-live-qa.spec.ts" "$source_path"
 
       - name: Require exact runtime identity after activation
         env:
@@ -480,6 +498,8 @@ jobs:
           const providers = Array.isArray(value?.providers) ? value.providers : [];
           const requiredCrypto = ['upbit', 'bitget'];
           const stockProviders = ['toss', 'kiwoom'];
+          const providerErrorAccepted = (provider, errorCode) => errorCode === null
+            || (provider === 'upbit' && errorCode === 'UPBIT_OPEN_ORDERS_UPBIT_PERMISSION_DENIED');
           if (value?.schemaVersion !== 'production-account-readonly-live-qa-v1'
             || value?.targetSha !== expectedSha
             || value?.officialProductionOrigin !== true
@@ -501,7 +521,7 @@ jobs:
           for (const provider of requiredCrypto) {
             const row = providers.find((item) => item?.provider === provider);
             if (!row || row.connected !== true || row.status !== 'CONNECTED'
-              || row.stale !== false || row.errorCode !== null
+              || row.stale !== false || !providerErrorAccepted(provider, row.errorCode)
               || row.checkedAtPresent !== true || row.lastGoodAtPresent !== true) {
               throw new Error('ACCOUNT_READ_ACTIVATION_QA_PROVIDER_FAILED_' + provider.toUpperCase());
             }
@@ -559,6 +579,176 @@ jobs:
               ].join('\n'),
             });
 
+      - name: Rollback provider read flags after downstream failure
+        id: rollback
+        if: ${{ always() && steps.activation.outcome == 'success' && (failure() || cancelled()) }}
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          ACTIVATION_ARTIFACT: ${{ steps.activation.outputs.artifact }}
+        run: |
+          set -Eeuo pipefail
+          test -s "$ACTIVATION_ARTIFACT"
+          previous_read_json="$(node - "$ACTIVATION_ARTIFACT" <<'NODE'
+          const fs = require('node:fs');
+          const file = process.argv[2];
+          const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+          const previous = value?.previous_provider_read_flags;
+          const names = [
+            'TOSS_ACCOUNT_READ_ENABLED',
+            'KIWOOM_ACCOUNT_READ_ENABLED',
+            'UPBIT_ACCOUNT_READ_ENABLED',
+            'BITGET_ACCOUNT_READ_ENABLED',
+          ];
+          if (!previous || names.some((name) => typeof previous[name] !== 'boolean')) process.exit(1);
+          process.stdout.write(JSON.stringify(Object.fromEntries(names.map((name) => [name, previous[name]]))));
+          NODE
+          )"
+          quoted_sha="$(printf '%q' "$ACTIVE_SHA")"
+          quoted_previous="$(printf '%q' "$previous_read_json")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "ACTIVE_SHA=$quoted_sha PREVIOUS_READ_JSON=$quoted_previous node -" <<'NODE'
+          const { execFileSync } = require('node:child_process');
+
+          const activeSha = String(process.env.ACTIVE_SHA ?? '').trim().toLowerCase();
+          const fail = (code) => { process.stderr.write(code + '\n'); process.exit(1); };
+          if (!/^[0-9a-f]{40}$/.test(activeSha)) fail('ACCOUNT_READ_ROLLBACK_ACTIVE_SHA_INVALID');
+
+          let previousRead;
+          try {
+            previousRead = JSON.parse(String(process.env.PREVIOUS_READ_JSON ?? ''));
+          } catch {
+            fail('ACCOUNT_READ_ROLLBACK_PREVIOUS_FLAGS_INVALID');
+          }
+          const readNames = [
+            'TOSS_ACCOUNT_READ_ENABLED',
+            'KIWOOM_ACCOUNT_READ_ENABLED',
+            'UPBIT_ACCOUNT_READ_ENABLED',
+            'BITGET_ACCOUNT_READ_ENABLED',
+          ];
+          if (!previousRead || readNames.some((name) => typeof previousRead[name] !== 'boolean')) {
+            fail('ACCOUNT_READ_ROLLBACK_PREVIOUS_FLAGS_INVALID');
+          }
+
+          const readProcesses = () => JSON.parse(execFileSync('pm2', ['jlist'], {
+            encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
+          }));
+          const selectApp = (rows) => {
+            const matches = rows.filter((item) => item?.name === 'stock-app');
+            if (matches.length !== 1 || !matches[0]?.pm2_env) fail('ACCOUNT_READ_ROLLBACK_PM2_AMBIGUOUS');
+            return matches[0];
+          };
+          const bool = (env, name, fallback = false) => {
+            const raw = env[name];
+            if (raw === undefined || raw === null || String(raw).trim() === '') return fallback;
+            const value = String(raw).trim().toLowerCase();
+            if (value === 'true') return true;
+            if (value === 'false') return false;
+            fail('ACCOUNT_READ_ROLLBACK_FLAG_MALFORMED_' + name);
+          };
+          const safetyNames = [
+            'LIVE_TRADING','AUTO_TRADING','REAL_ORDER_ENABLED','PRIVATE_TRADING_API_ALLOWED',
+            'ORDER_EXECUTION_ENABLED','LIVE_TRADING_ACTIVATION_APPROVED','LIVE_AUTOMATIC_TRADING_ENABLED',
+            'BITGET_LIVE_ORDER_ENABLED','UPBIT_LIVE_ORDER_ENABLED','KIWOOM_LIVE_ORDER_ENABLED','TOSS_LIVE_ORDER_ENABLED',
+          ];
+
+          const before = selectApp(readProcesses());
+          if (before.pm2_env.status !== 'online') fail('ACCOUNT_READ_ROLLBACK_PM2_NOT_ONLINE');
+          if (String(before.pm2_env.DEPLOY_SHA ?? '').toLowerCase() !== activeSha) fail('ACCOUNT_READ_ROLLBACK_SHA_MISMATCH');
+          for (const name of safetyNames) {
+            if (bool(before.pm2_env, name, false)) fail('ACCOUNT_READ_ROLLBACK_PREEXISTING_AUTHORITY_' + name);
+          }
+          if (String(before.pm2_env.executionAuthority ?? 'NONE').toUpperCase() !== 'NONE') {
+            fail('ACCOUNT_READ_ROLLBACK_PREEXISTING_EXECUTION_AUTHORITY');
+          }
+
+          const preserved = {};
+          for (const [name, raw] of Object.entries(before.pm2_env)) {
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) continue;
+            if (name.startsWith('pm_') || name.startsWith('axm_')) continue;
+            if (raw === null || raw === undefined || typeof raw === 'object') continue;
+            preserved[name] = String(raw);
+          }
+          const safeTrading = {
+            LIVE_TRADING: 'false',
+            AUTO_TRADING: 'false',
+            REAL_ORDER_ENABLED: 'false',
+            PRIVATE_TRADING_API_ALLOWED: 'false',
+            ORDER_EXECUTION_ENABLED: 'false',
+            LIVE_TRADING_ACTIVATION_APPROVED: 'false',
+            LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
+            BITGET_LIVE_ORDER_ENABLED: 'false',
+            UPBIT_LIVE_ORDER_ENABLED: 'false',
+            KIWOOM_LIVE_ORDER_ENABLED: 'false',
+            TOSS_LIVE_ORDER_ENABLED: 'false',
+            executionAuthority: 'NONE',
+            DEPLOY_SHA: activeSha,
+          };
+          const rollbackRead = Object.fromEntries(
+            readNames.map((name) => [name, previousRead[name] ? 'true' : 'false']),
+          );
+
+          execFileSync('pm2', ['restart', 'stock-app', '--update-env'], {
+            env: { ...process.env, ...preserved, ...safeTrading, ...rollbackRead },
+            stdio: ['ignore', 'pipe', 'pipe'],
+            maxBuffer: 4 * 1024 * 1024,
+          });
+          execFileSync('pm2', ['save'], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+          let after = null;
+          for (let attempt = 0; attempt < 12; attempt += 1) {
+            after = selectApp(readProcesses());
+            if (after.pm2_env.status === 'online'
+              && String(after.pm2_env.DEPLOY_SHA ?? '').toLowerCase() === activeSha) break;
+            execFileSync('sleep', ['1']);
+          }
+          if (!after || after.pm2_env.status !== 'online') fail('ACCOUNT_READ_ROLLBACK_POST_PM2_OFFLINE');
+          if (String(after.pm2_env.DEPLOY_SHA ?? '').toLowerCase() !== activeSha) fail('ACCOUNT_READ_ROLLBACK_POST_SHA_MISMATCH');
+          for (const name of safetyNames) {
+            if (bool(after.pm2_env, name, false)) fail('ACCOUNT_READ_ROLLBACK_AUTHORITY_ON_' + name);
+          }
+          if (String(after.pm2_env.executionAuthority ?? 'NONE').toUpperCase() !== 'NONE') {
+            fail('ACCOUNT_READ_ROLLBACK_AUTHORITY_NOT_NONE');
+          }
+          for (const name of readNames) {
+            if (bool(after.pm2_env, name, false) !== previousRead[name]) {
+              fail('ACCOUNT_READ_ROLLBACK_READ_FLAG_MISMATCH_' + name);
+            }
+          }
+
+          let health = null;
+          for (let attempt = 0; attempt < 12; attempt += 1) {
+            try {
+              health = JSON.parse(execFileSync('curl', [
+                '--fail','--silent','--show-error','--max-time','10','http://127.0.0.1:8080/api/health',
+              ], { encoding: 'utf8' }));
+              if (health?.ok === true
+                && String(health.deploySha ?? '').toLowerCase() === activeSha
+                && String(health.processDeploySha ?? '').toLowerCase() === activeSha
+                && String(health.deployMarkerSha ?? '').toLowerCase() === activeSha
+                && health.identityMatch === true
+                && health.identityStatus === 'match') break;
+            } catch {}
+            execFileSync('sleep', ['1']);
+          }
+          if (!health || health?.ok !== true || health?.identityMatch !== true || health?.identityStatus !== 'match') {
+            fail('ACCOUNT_READ_ROLLBACK_HEALTH_INVALID');
+          }
+          process.stdout.write(JSON.stringify({
+            status: 'rolled_back',
+            active_production_sha: activeSha,
+            live_trading: false,
+            auto_trading: false,
+            real_order_enabled: false,
+            private_trading_api_allowed: false,
+            execution_authority: 'NONE',
+            order_requests: 0,
+            cancel_requests: 0,
+            amend_requests: 0,
+            transfer_requests: 0,
+            withdrawal_requests: 0,
+          }) + '\n');
+          NODE
+
       - name: Write safety summary
         if: always()
         env:
@@ -573,4 +763,5 @@ jobs:
             echo '- executionAuthority: NONE'
             echo '- Orders/cancels/amends/transfers/withdrawals authorized: 0'
             echo '- Provider secrets printed: false'
+            echo "- Downstream-failure rollback step: ${{ steps.rollback.outcome }}"
           } >> "$GITHUB_STEP_SUMMARY"
