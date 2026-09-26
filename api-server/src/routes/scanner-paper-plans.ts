@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Router, type IRouter } from 'express';
 import { requireCapability, type AuthenticatedRequest } from '../middleware/auth';
 import {
@@ -259,12 +260,22 @@ export function createScannerPaperPlansRouter(dependencies: {
       const resolved = registry.resolveScannerLiveDraft(req.member!.id, req.body, sourceSha());
       const card = resolved.card;
       const identity = resolved.strategyIdentity;
+      const draftId = createHash('sha256').update([
+        req.member!.id,
+        resolved.source.sourceSha,
+        resolved.source.sourceId,
+        card.signalId,
+        card.symbol,
+        String(card.action ?? ''),
+        card.expiresAt,
+      ].join(':')).digest('hex');
       return res.status(200).json({
         ok: true,
         serverVerified: true,
         draft: {
           schemaVersion: 'scanner-live-entry-draft-v1',
           state: 'SERVER_VERIFIED_DRAFT',
+          draftId,
           market: resolved.canonicalMarket,
           symbol: card.symbol,
           timeframe: resolved.source.timeframe,
