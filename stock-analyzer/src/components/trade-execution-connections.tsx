@@ -177,6 +177,50 @@ export function TradeExecutionConnections({
     }
   }
 
+  async function verifyConnection(provider: Provider) {
+    setBusy(provider);
+    try {
+      const response = await authorizedFetch(`/api/trade-automation/connections/${provider}/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmed: true }),
+      });
+      const payload = await response.json() as {
+        error?: string;
+        verified?: boolean;
+        credentialsReturned?: boolean;
+        liveExecutionActivated?: boolean;
+        automaticLiveExecutionActivated?: boolean;
+        orderRequests?: number;
+        cancelRequests?: number;
+        amendRequests?: number;
+        transferRequests?: number;
+        withdrawalRequests?: number;
+        realOrderSubmitted?: boolean;
+      };
+      if (!response.ok || payload.verified !== true) {
+        throw new Error(payload.error ?? '실주문 provider 검증에 실패했습니다.');
+      }
+      if (payload.credentialsReturned !== false
+        || payload.liveExecutionActivated !== false
+        || payload.automaticLiveExecutionActivated !== false
+        || payload.orderRequests !== 0
+        || payload.cancelRequests !== 0
+        || payload.amendRequests !== 0
+        || payload.transferRequests !== 0
+        || payload.withdrawalRequests !== 0
+        || payload.realOrderSubmitted !== false) {
+        throw new Error('LIVE_CONNECTION_VERIFICATION_SAFETY_CONTRACT_FAILED');
+      }
+      await load();
+      setMessage('실제 provider 인증·계좌/주문가능 조회를 확인했습니다. 검증 중 실제 주문·취소·정정은 0건입니다.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '실주문 provider 검증에 실패했습니다.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function disconnect(provider: Provider) {
     setBusy(provider);
     try {
@@ -260,28 +304,36 @@ export function TradeExecutionConnections({
             {connection?.lastVerifiedAt ? `마지막 확인 ${new Date(connection.lastVerifiedAt).toLocaleString('ko-KR')}` : '실주문 provider 검증 증거 없음'}
             {connection?.lastErrorCode ? ` · ${connection.lastErrorCode}` : ''}
           </p>
-          <div className="mt-3 grid grid-cols-2 gap-2">
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            {connected && <button
+              type="button"
+              disabled={busy === provider}
+              onClick={() => void verifyConnection(provider)}
+              className="min-h-10 rounded-xl border border-positive/30 px-2 text-[11px] font-extrabold text-positive disabled:opacity-50"
+            >
+              {busy === provider ? '검증 중' : '실계좌 검증'}
+            </button>}
             <button
               type="button"
               onClick={() => openSetup(provider)}
-              className="min-h-10 rounded-xl bg-primary px-3 text-xs font-extrabold text-primary-foreground"
+              className={`min-h-10 rounded-xl bg-primary px-2 text-[11px] font-extrabold text-primary-foreground ${connected ? '' : 'col-span-3'}`}
             >
               {connected ? '거래키 교체' : '거래키 연결'}
             </button>
             {connected && disconnectConfirm !== provider ? <button
               type="button"
               onClick={() => setDisconnectConfirm(provider)}
-              className="min-h-10 rounded-xl border border-destructive/30 px-3 text-xs font-extrabold text-destructive"
+              className="min-h-10 rounded-xl border border-destructive/30 px-2 text-[11px] font-extrabold text-destructive"
             >
               연결 해제
             </button> : connected ? <button
               type="button"
               disabled={busy === provider}
               onClick={() => void disconnect(provider)}
-              className="min-h-10 rounded-xl bg-destructive px-3 text-xs font-extrabold text-white disabled:opacity-50"
+              className="min-h-10 rounded-xl bg-destructive px-2 text-[11px] font-extrabold text-white disabled:opacity-50"
             >
               {busy === provider ? '해제 중' : '해제 확인'}
-            </button> : <div />}
+            </button> : null}
           </div>
           {disconnectConfirm === provider && <button
             type="button"
