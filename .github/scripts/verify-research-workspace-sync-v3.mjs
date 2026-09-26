@@ -13,6 +13,8 @@ const added=[
  'packages/external-research/docs/research-workspace-phase12.md',
  'packages/external-research/scripts/run-existing-research-providers-v8.d.mts',
  'api-server/src/services/ai-chat.service.ts',
+ 'api-server/src/services/ai-chat.service.test.ts',
+ 'stock-analyzer/src/pages/ai-chat.tsx',
  'api-server/src/services/research-groq-one-shot-transport.service.test.ts',
  'api-server/src/services/research-groq-json-transport.service.ts',
  'api-server/src/tools/research-workspace-one-shot-v12.ts',
