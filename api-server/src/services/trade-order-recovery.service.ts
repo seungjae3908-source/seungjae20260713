@@ -568,13 +568,6 @@ export class TradeOrderRecoveryService {
     if (order.state !== 'RECOVERY_REQUIRED') return order;
     if (order.manualReviewRequired) return order;
     if (order.nextRetryAt && Date.parse(order.nextRetryAt) > Date.now()) return order;
-    if (plan.exchange === 'kiwoom') {
-      return this.pending(
-        order,
-        'KIWOOM_RECONCILIATION_STATUS_BLOCKED_BY_UNVERIFIED_OFFICIAL_CONTRACT',
-        true,
-      );
-    }
 
     const connection = await this.repository.getConnection(userId, plan.exchange);
     if (!connection?.configured || !connection.encryptedCredentials) {
@@ -585,6 +578,13 @@ export class TradeOrderRecoveryService {
     }
     if (plan.accountMode === 'paper' || plan.accountMode === 'mock') {
       return this.pending(order, 'PAPER_ORDER_RECOVERY_REQUIRES_REVIEW', true);
+    }
+    if (plan.exchange === 'kiwoom') {
+      return this.pending(
+        order,
+        'KIWOOM_RECONCILIATION_STATUS_BLOCKED_BY_UNVERIFIED_OFFICIAL_CONTRACT',
+        true,
+      );
     }
 
     try {
