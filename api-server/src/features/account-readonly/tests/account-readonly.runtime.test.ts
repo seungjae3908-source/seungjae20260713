@@ -230,17 +230,37 @@ test('vault-backed Toss reader parses the canonical OpenAPI accounts and holding
           nextCursor: null, hasNext: false,
         },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname === '/api/v1/buying-power') {
+        const currency = url.searchParams.get('currency');
+        return new Response(JSON.stringify({
+          result: {
+            currency,
+            cashBuyingPower: currency === 'KRW' ? '5000000' : '3500.5',
+          },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
       return new Response('{}', { status: 404 });
     },
   });
   const result = await readers.toss!(SCOPE);
-  assert.deepEqual(seen.map((row) => `${row.method} ${row.origin}${row.path}`), [
+  assert.deepEqual(new Set(seen.map((row) => `${row.method} ${row.origin}${row.path}`)), new Set([
     'POST https://openapi.tossinvest.com/oauth2/token',
     'GET https://openapi.tossinvest.com/api/v1/accounts',
     'GET https://openapi.tossinvest.com/api/v1/orders',
     'GET https://openapi.tossinvest.com/api/v1/holdings',
-  ]);
-  assert.equal(seen[1]?.accountHeader, null); assert.equal(seen[2]?.accountHeader, '1'); assert.equal(seen[2]?.search, '?status=OPEN'); assert.equal(seen[3]?.accountHeader, '1');
+    'GET https://openapi.tossinvest.com/api/v1/buying-power',
+  ]));
+  const accountsCall = seen.find((row) => row.path === '/api/v1/accounts');
+  const ordersCall = seen.find((row) => row.path === '/api/v1/orders');
+  const holdingsCall = seen.find((row) => row.path === '/api/v1/holdings');
+  const buyingPowerCalls = seen.filter((row) => row.path === '/api/v1/buying-power');
+  assert.equal(accountsCall?.accountHeader, null);
+  assert.equal(ordersCall?.accountHeader, '1');
+  assert.equal(ordersCall?.search, '?status=OPEN');
+  assert.equal(holdingsCall?.accountHeader, '1');
+  assert.equal(buyingPowerCalls.length, 2);
+  assert.deepEqual(new Set(buyingPowerCalls.map((row) => row.search)), new Set(['?currency=KRW', '?currency=USD']));
+  assert.ok(buyingPowerCalls.every((row) => row.accountHeader === '1' && row.method === 'GET'));
   assert.equal(result.connected, true);
   assert.equal(result.positions?.[0]?.symbol, '005930');
   assert.equal(result.positions?.[0]?.market, 'KR');
@@ -251,6 +271,12 @@ test('vault-backed Toss reader parses the canonical OpenAPI accounts and holding
   assert.equal(result.positions?.[0]?.marketValue, 213000);
   assert.equal(result.positions?.[0]?.unrealizedPnl, 3000);
   assert.ok(Math.abs((result.positions?.[0]?.unrealizedPnlPercent ?? 0) - 1.42857143) < 1e-8);
+  assert.equal(result.accounts?.find((row) => row.market === 'KR')?.buyingPower, 5000000);
+  assert.equal(result.accounts?.find((row) => row.market === 'US')?.buyingPower, 3500.5);
+  assert.equal(result.balances?.find((row) => row.currency === 'KRW')?.available, 5000000);
+  assert.equal(result.balances?.find((row) => row.currency === 'KRW')?.total, null);
+  assert.equal(result.balances?.find((row) => row.currency === 'USD')?.available, 3500.5);
+  assert.equal(result.balances?.find((row) => row.currency === 'USD')?.total, null);
   assert.equal(result.openOrders?.[0]?.id, 'TOSS-OPEN-1'); assert.equal(result.openOrders?.[0]?.remainingQuantity, 6);
   assert.equal(result.orderRequests, 0); assert.equal(result.cancelRequests, 0); assert.equal(result.transferRequests, 0); assert.equal(result.withdrawalRequests, 0);
   const serialized = JSON.stringify(result);
@@ -266,6 +292,11 @@ test('vault-backed Toss reader rejects legacy or malformed holdings instead of r
       if (url.pathname === '/oauth2/token') return new Response(JSON.stringify({ access_token: 'TOSS_TOKEN_RUNTIME_TEST_ONLY', expires_in: 3600 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       if (url.pathname === '/api/v1/accounts') return new Response(JSON.stringify({ result: [{ accountNo: '12345678901', accountSeq: 1, accountType: 'BROKERAGE' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       if (url.pathname === '/api/v1/holdings') return new Response(JSON.stringify({ products: [{ productCode: '005930', quantity: '3' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname === '/api/v1/orders') return new Response(JSON.stringify({ result: { orders: [], nextCursor: null, hasNext: false } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname === '/api/v1/buying-power') {
+        const currency = url.searchParams.get('currency');
+        return new Response(JSON.stringify({ result: { currency, cashBuyingPower: '0' } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
       return new Response('{}', { status: 404 });
     },
   });
