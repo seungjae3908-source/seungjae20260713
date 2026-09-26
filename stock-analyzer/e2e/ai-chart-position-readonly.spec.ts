@@ -633,3 +633,127 @@ test('AI Chart keeps entry approval and order management available when the sele
   await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('canonical 주문 기록이 없습니다.');
   expect(financialMutations).toEqual([]);
 });
+
+
+for (const viewport of [
+  { width: 768, height: 1024, mobileTabs: true },
+  { width: 1024, height: 900, mobileTabs: false },
+] as const) {
+  test(`AI Chart cockpit fits ${viewport.width}px without horizontal overflow`, async ({ page, context }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+
+    await context.route('**/*', async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      if (/\/api\/stocks\/[^/]+\/(?:chart|candles)$/.test(url.pathname)) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ticker: '005930',
+            timeframe: url.searchParams.get('tf') ?? '5m',
+            provider: 'tablet-cockpit-fixture',
+            fetchedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            candles: candleRows(),
+          }),
+        });
+        return;
+      }
+      if (url.pathname === '/api/quotes') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ quotes: [] }) });
+        return;
+      }
+      if (url.pathname === '/api/accounts/read-only/toss') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            provider: 'toss',
+            readOnly: true,
+            connected: true,
+            status: 'CONNECTED',
+            accounts: [{ market: 'KR', accountRef: '12****34', currency: 'KRW', buyingPower: 500_000 }],
+            balances: [],
+            positions: [{
+              market: 'KR', symbol: '005930', quantity: 20, availableQuantity: 20,
+              averageEntryPrice: 70_000, currentPrice: 72_100, marketValue: 1_442_000,
+              unrealizedPnl: 42_000, unrealizedPnlPercent: 3, leverage: null,
+              liquidationPrice: null, marginMode: null, side: null,
+            }],
+            openOrders: [],
+            checkedAt: new Date().toISOString(),
+            lastGoodAt: new Date().toISOString(),
+            stale: false,
+            errorCode: null,
+            orderRequests: 0,
+            cancelRequests: 0,
+            amendRequests: 0,
+            transferRequests: 0,
+            withdrawalRequests: 0,
+            credentialsReturned: false,
+            liveTradingEnabled: false,
+            autoTradingEnabled: false,
+          }),
+        });
+        return;
+      }
+      if (url.pathname === '/api/trade-automation/approval-queue') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, items: [], count: 0, updatedAt: new Date().toISOString() }),
+        });
+        return;
+      }
+      if (url.pathname === '/api/trade-automation/orders') {
+        expect(url.searchParams.get('dashboard')).toBe('1');
+        expect(url.searchParams.get('exchange')).toBe('toss');
+        expect(url.searchParams.get('symbol')).toBe('005930');
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            orders: [],
+            events: [],
+            dashboardItems: [],
+            dashboardScoped: true,
+            orderSubmitted: false,
+            orderCanceled: false,
+            orderAmended: false,
+            privateTradingRequestSent: false,
+          }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    await page.goto(chartUrl);
+    if (viewport.mobileTabs) {
+      await page.getByRole('tab', { name: '차트', exact: true }).click();
+    } else {
+      await expect(page.getByTestId('ai-chart-mobile-tabs')).toHaveCount(0);
+    }
+
+    const panel = page.getByTestId('ai-chart-position-panel');
+    await expect(panel).toBeVisible();
+    await panel.getByTestId('ai-chart-load-position').click();
+    await expect(panel).toContainText('70,000원');
+    const cockpit = panel.getByTestId('ai-chart-trading-cockpit');
+    await cockpit.locator('summary').click();
+    await expect(cockpit.getByTestId('ai-chart-entry-planning')).toBeVisible();
+    await expect(cockpit.getByTestId('ai-chart-order-management')).toBeVisible();
+    await expect(cockpit.getByTestId('ai-chart-exit-dashboard')).toBeVisible();
+    await cockpit.getByTestId('ai-chart-load-orders').click();
+
+    const overflow = await page.evaluate(() => ({
+      viewport: window.innerWidth,
+      body: document.body.scrollWidth,
+      root: document.documentElement.scrollWidth,
+    }));
+    expect(overflow.body).toBeLessThanOrEqual(overflow.viewport + 1);
+    expect(overflow.root).toBeLessThanOrEqual(overflow.viewport + 1);
+  });
+}
