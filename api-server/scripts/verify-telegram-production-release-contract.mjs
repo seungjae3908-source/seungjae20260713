@@ -190,6 +190,13 @@ if (activationIndex <= productionEvidenceIndex
   throw new Error('Telegram activation must remain behind the existing owner/protected/exact-runtime gates');
 }
 
+if (!source.includes("const telegramFeatureFlags = [")
+  || !source.includes("const allTelegramFeaturesEnabled = telegramFeatureFlags.every((key) => flag(runtime[key]));")
+  || !source.includes("if (approved && worker && allTelegramFeaturesEnabled) return false;")
+  || source.includes("if (approved && worker) return false;")) {
+  throw new Error('Telegram activation must not treat a partial feature-flag state as already complete');
+}
+
 const forbiddenPatterns = [
   [/pull_request_target\s*:/, 'pull_request_target is forbidden'],
   [/repository_dispatch\s*:/, 'repository_dispatch is forbidden'],
