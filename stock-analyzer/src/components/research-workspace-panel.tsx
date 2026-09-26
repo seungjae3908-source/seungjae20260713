@@ -1,3 +1,4 @@
+import { ResearchWorkspaceProviders } from './research-workspace-providers';
 import { useEffect, useMemo, useState } from 'react';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { filterResearchStrategies, parseResearchWorkspaceResponse, WORKSPACE_MARKETS,
@@ -42,6 +43,7 @@ export function ResearchWorkspacePanel() {
         <div className="min-w-0"><h2 className="text-xl font-black">전략·백테스트</h2><p className="mt-1 text-sm text-muted-foreground">저장된 연구 기록과 근거를 확인합니다. 실거래 성과나 검증 완료 표시는 아닙니다.</p></div>
         <button type="button" className={btn} disabled={load.status === 'loading'} onClick={() => setRevision(n=>n+1)}>다시 확인</button>
       </header>
+      <ResearchWorkspaceProviders revision={revision}/>
       <div className="rounded-xl border border-card-border bg-muted/30 p-3 text-xs text-muted-foreground">서버 상시 실행: 미검증 · 일 목표: 미검증 · 전략 적용: 비활성</div>
       <div className="flex flex-wrap items-center gap-2" aria-label="연구 시장 필터">
         {(['ALL','STOCK','CRYPTO'] as const).map(g=><button key={g} type="button" aria-pressed={group===g} className={`${btn} ${group===g?'bg-primary text-primary-foreground':'bg-card'}`} onClick={()=>{setGroup(g);setMarket('ALL');}}>{g==='ALL'?'전체':g==='STOCK'?'주식':'코인'}</button>)}
