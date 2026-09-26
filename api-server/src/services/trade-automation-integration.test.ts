@@ -292,6 +292,7 @@ test('automatic live plans require separate global automatic-live authority', as
     PRIVATE_TRADING_API_ALLOWED: process.env.PRIVATE_TRADING_API_ALLOWED,
     UPBIT_LIVE_ORDER_ENABLED: process.env.UPBIT_LIVE_ORDER_ENABLED,
     LIVE_AUTOMATIC_TRADING_ENABLED: process.env.LIVE_AUTOMATIC_TRADING_ENABLED,
+    executionAuthority: process.env.executionAuthority,
   };
   try {
     setTradingPlanMarketIntelligenceRunnerForTests(async () => ({
@@ -311,6 +312,7 @@ test('automatic live plans require separate global automatic-live authority', as
     process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
     process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
     process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'false';
+    process.env.executionAuthority = 'AUTOMATIC';
 
     const repository = new InMemoryTradingRepository();
     const service = new TradeAutomationService(repository);
@@ -405,6 +407,7 @@ test('live provider execution is blocked until the saved credential is explicitl
     PRIVATE_TRADING_API_ALLOWED: process.env.PRIVATE_TRADING_API_ALLOWED,
     UPBIT_LIVE_ORDER_ENABLED: process.env.UPBIT_LIVE_ORDER_ENABLED,
     TRADING_CREDENTIAL_MASTER_KEY: process.env.TRADING_CREDENTIAL_MASTER_KEY,
+    executionAuthority: process.env.executionAuthority,
   };
   const nativeFetch = globalThis.fetch;
   try {
@@ -414,6 +417,7 @@ test('live provider execution is blocked until the saved credential is explicitl
     process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
     process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
     process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
+    process.env.executionAuthority = 'MANUAL';
 
     const repository = new InMemoryTradingRepository();
     const automation = new TradeAutomationService(repository);
@@ -466,6 +470,7 @@ test('provider submission rechecks automatic live authority and blocks before ou
     UPBIT_LIVE_ORDER_ENABLED: process.env.UPBIT_LIVE_ORDER_ENABLED,
     LIVE_AUTOMATIC_TRADING_ENABLED: process.env.LIVE_AUTOMATIC_TRADING_ENABLED,
     TRADING_CREDENTIAL_MASTER_KEY: process.env.TRADING_CREDENTIAL_MASTER_KEY,
+    executionAuthority: process.env.executionAuthority,
   };
   const nativeFetch = globalThis.fetch;
   try {
@@ -476,6 +481,7 @@ test('provider submission rechecks automatic live authority and blocks before ou
     process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
     process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'false';
     process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
+    process.env.executionAuthority = 'AUTOMATIC';
 
     const repository = new InMemoryTradingRepository();
     const automation = new TradeAutomationService(repository);
