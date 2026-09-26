@@ -527,6 +527,12 @@ export class TradeExecutionService {
 
     const mockKiwoom = plan.exchange === 'kiwoom' && plan.accountMode === 'mock';
     if (plan.accountMode === 'live') {
+      if (!connection?.lastVerifiedAt || connection.lastErrorCode) {
+        return this.automation.transition(order, 'REJECTED', 'LIVE_EXECUTION_CONNECTION_NOT_VERIFIED', {
+          errorCode: 'LIVE_EXECUTION_CONNECTION_NOT_VERIFIED',
+          orderSubmissionAttempted: false,
+        });
+      }
       const currentPolicy = await this.repository.getPolicy(userId);
       const automaticLive = currentPolicy.mode === 'automatic' && currentPolicy.automaticEnabled;
       const currentLiveAuthority = automaticLive
