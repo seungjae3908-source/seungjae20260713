@@ -6,6 +6,13 @@ import {
   PublicCryptoAiContextError,
   type PublicCryptoAiContext,
 } from './ai-chat-public-crypto-context.service';
+import {
+  getAiProviderRuntimeHealth,
+  recordAiProviderAttempt,
+  recordAiProviderFallback,
+  type AiProviderRuntimeConfiguration,
+  type AiProviderAttemptOutcome,
+} from './ai-provider-runtime-health.service';
 
 export type AiChatContext = {
   market?: 'KR' | 'US' | 'UPBIT' | 'BITGET';
@@ -537,9 +544,45 @@ async function requestOpenAiCompatibleAnswer(
 }
 
 async function requestConfiguredProvider(config: AiChatProviderConfig, prompt: string, fetchImpl: typeof fetch, signal: AbortSignal): Promise<string> {
-  if (config.provider === 'google-gemini') return requestGeminiAnswer(config, prompt, fetchImpl, signal);
-  if (config.provider === 'groq') return requestGroqAnswer(config, prompt, fetchImpl, signal);
-  return requestOpenAiCompatibleAnswer(config, prompt, fetchImpl, signal);
+  const startedAt = Date.now();
+  try {
+    const answer = config.provider === 'google-gemini'
+      ? await requestGeminiAnswer(config, prompt, fetchImpl, signal)
+      : config.provider === 'groq'
+        ? await requestGroqAnswer(config, prompt, fetchImpl, signal)
+        : await requestOpenAiCompatibleAnswer(config, prompt, fetchImpl, signal);
+    recordAiProviderAttempt({
+      provider: config.provider,
+      model: config.model,
+      outcome: 'SUCCESS',
+      startedAt,
+    });
+    return answer;
+  } catch (cause) {
+    const errorCode = cause instanceof AiChatProviderFailure
+      ? cause.error.code
+      : cause instanceof AiChatError
+        ? cause.code
+        : signal.aborted
+          ? 'AI_CHAT_CANCELLED'
+          : 'AI_CHAT_PROVIDER_ERROR';
+    const retryableCodes = new Set(['AI_CHAT_RATE_LIMITED', 'AI_CHAT_PROVIDER_ERROR', 'AI_CHAT_INVALID_RESPONSE']);
+    const outcome: AiProviderAttemptOutcome = signal.aborted
+      ? 'CANCELLED'
+      : cause instanceof AiChatProviderFailure
+        ? cause.retryable ? 'RETRYABLE_FAILURE' : 'TERMINAL_FAILURE'
+        : retryableCodes.has(errorCode)
+          ? 'RETRYABLE_FAILURE'
+          : 'TERMINAL_FAILURE';
+    recordAiProviderAttempt({
+      provider: config.provider,
+      model: config.model,
+      outcome,
+      errorCode,
+      startedAt,
+    });
+    throw cause;
+  }
 }
 
 const aiChatInFlight = new Map<string, Promise<{ answer: string; model: string }>>();
@@ -557,6 +600,7 @@ function sharedProviderAnswer(configs: { primary: AiChatProviderConfig; secondar
       } catch (cause) {
         if (controller.signal.aborted) throw cause;
         if (!(cause instanceof AiChatProviderFailure) || !cause.retryable || !configs.secondary) throw cause;
+        recordAiProviderFallback();
         try {
           return { answer: await requestConfiguredProvider(configs.secondary, prompt, fetchImpl, controller.signal), model: configs.secondary.model };
         } catch {
@@ -583,6 +627,30 @@ async function withAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T
     signal.addEventListener('abort', onAbort, { once: true });
     promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
   });
+}
+
+export function getAiChatProviderRuntimeHealth() {
+  try {
+    const configs = resolveProviderConfigs();
+    const configuration: AiProviderRuntimeConfiguration[] = [
+      {
+        provider: configs.primary.provider,
+        model: configs.primary.model,
+        role: 'PRIMARY',
+      },
+      ...(configs.secondary ? [{
+        provider: configs.secondary.provider,
+        model: configs.secondary.model,
+        role: 'SECONDARY' as const,
+      }] : []),
+    ];
+    return getAiProviderRuntimeHealth(configuration);
+  } catch (cause) {
+    if (cause instanceof AiChatError && cause.code === 'AI_CHAT_NOT_CONFIGURED') {
+      return getAiProviderRuntimeHealth([]);
+    }
+    throw cause;
+  }
 }
 
 export async function answerAiChat(
