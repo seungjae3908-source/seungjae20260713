@@ -103,11 +103,13 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
       bitget: input.exchangeEnabled?.bitget ?? DEFAULT_TRADING_POLICY.exchangeEnabled.bitget,
       upbit: input.exchangeEnabled?.upbit ?? DEFAULT_TRADING_POLICY.exchangeEnabled.upbit,
       kiwoom: input.exchangeEnabled?.kiwoom ?? DEFAULT_TRADING_POLICY.exchangeEnabled.kiwoom,
+      toss: input.exchangeEnabled?.toss ?? DEFAULT_TRADING_POLICY.exchangeEnabled.toss,
     },
     enabledAssets: {
       bitget: normalizedList(input.enabledAssets?.bitget, 100).map((item) => item.toUpperCase()),
       upbit: normalizedList(input.enabledAssets?.upbit, 100).map((item) => item.toUpperCase().replace(/^KRW-/, '')),
       kiwoom: normalizedList(input.enabledAssets?.kiwoom, 100).map((item) => item.toUpperCase()),
+      toss: normalizedList(input.enabledAssets?.toss, 100).map((item) => item.toUpperCase()),
     },
     enabledStrategies: normalizedList(input.enabledStrategies, 30),
     totalCapitalKrw,
@@ -127,6 +129,7 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
       bitget: clampNumber(input.riskPerTradePercent?.bitget, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.bitget),
       upbit: clampNumber(input.riskPerTradePercent?.upbit, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.upbit),
       kiwoom: clampNumber(input.riskPerTradePercent?.kiwoom, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.kiwoom),
+      toss: clampNumber(input.riskPerTradePercent?.toss, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.toss),
     },
     totalDailyLossLimitPercent: clampNumber(input.totalDailyLossLimitPercent, 0.1, 2, DEFAULT_TRADING_POLICY.totalDailyLossLimitPercent),
     minExpectedValueR: clampNumber(input.minExpectedValueR, 0, 2, DEFAULT_TRADING_POLICY.minExpectedValueR),
@@ -243,8 +246,9 @@ export function evaluateTradingPlan(
     if (!policy.marketEnabled[assetClass]) add(blockCodes, 'MARKET_NOT_ENABLED');
     if (assetClass === 'domestic_stock' || assetClass === 'us_stock') {
       const selectedBroker = policy.stockBrokerByMarket?.[assetClass] ?? 'kiwoom';
-      const planBroker = plan.stockBroker ?? 'kiwoom';
+      const planBroker = plan.stockBroker ?? (plan.exchange === 'toss' ? 'toss' : 'kiwoom');
       if (planBroker !== selectedBroker) add(blockCodes, 'STOCK_BROKER_MISMATCH');
+      if (plan.exchange !== planBroker) add(blockCodes, 'STOCK_EXECUTION_PROVIDER_MISMATCH');
     } else if (plan.stockBroker != null) {
       add(blockCodes, 'STOCK_BROKER_NOT_APPLICABLE');
     }
@@ -274,11 +278,25 @@ export function evaluateTradingPlan(
     if (plan.orderType === 'limit' && finitePositive(plan.limitPrice) && !isAlignedToStep(plan.limitPrice, upbitKrwPriceStep(plan.limitPrice))) add(blockCodes, 'UPBIT_PRICE_TICK');
   }
   if (plan.exchange === 'kiwoom') {
-    const stockMarketAllowed = plan.accountMode === 'paper'
-      ? plan.market === 'KR' || plan.market === 'US'
-      : plan.market === 'KR';
+    const stockMarketAllowed = plan.market === 'KR' || plan.market === 'US';
     if (!stockMarketAllowed || (plan.side !== 'buy' && plan.side !== 'sell')) add(blockCodes, 'STOCK_MARKET_NOT_SUPPORTED');
     if (!Number.isSafeInteger(plan.quantity) || Number(plan.quantity) <= 0) add(blockCodes, 'KIWOOM_QUANTITY_INVALID');
+    if (plan.market === 'US' && !['NASDAQ', 'NYSE', 'AMEX'].includes(String(plan.stockExchange ?? ''))) {
+      add(blockCodes, 'KIWOOM_US_EXCHANGE_REQUIRED');
+    }
+  }
+  if (plan.exchange === 'toss') {
+    const stockMarketAllowed = plan.market === 'KR' || plan.market === 'US';
+    if (!stockMarketAllowed || (plan.side !== 'buy' && plan.side !== 'sell')) add(blockCodes, 'STOCK_MARKET_NOT_SUPPORTED');
+    if (plan.market === 'KR' && (!Number.isSafeInteger(plan.quantity) || Number(plan.quantity) <= 0)) {
+      add(blockCodes, 'TOSS_KR_QUANTITY_INVALID');
+    }
+    if (plan.market === 'US' && plan.quantity != null && !finitePositive(plan.quantity)) add(blockCodes, 'TOSS_US_QUANTITY_INVALID');
+    if (plan.quoteAmount != null && (plan.market !== 'US' || plan.side !== 'buy' || plan.orderType !== 'market')) {
+      add(blockCodes, 'TOSS_AMOUNT_ORDER_US_MARKET_BUY_ONLY');
+    }
+    if (plan.quantity == null && plan.quoteAmount == null) add(blockCodes, 'TOSS_QUANTITY_OR_AMOUNT_REQUIRED');
+    if (plan.quantity != null && plan.quoteAmount != null) add(blockCodes, 'TOSS_QUANTITY_OR_AMOUNT_EXCLUSIVE');
   }
   if (snapshot.availableBalance < plan.estimatedKrw && plan.exchange !== 'bitget') add(blockCodes, 'INSUFFICIENT_BALANCE');
   try {

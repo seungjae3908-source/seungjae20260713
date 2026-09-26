@@ -50,6 +50,10 @@ assert(production.includes('staging-verdict-${{ steps.target.outputs.sha }}'), '
 assert(production.includes("run.path === '.github/workflows/staging-readiness.yml'"), 'production gate must require the official staging workflow');
 assert(production.includes("run.conclusion === 'success'"), 'production gate must require successful staging workflow conclusion');
 assert(/environment:\s*production/.test(production), 'production deploy job must use the protected production environment');
+assert(production.includes("github.event_name == 'workflow_dispatch'"), 'production concurrency must distinguish real workflow_dispatch from PR validation');
+assert(production.includes("'stock-app-production-live'"), 'real Production Deploy must retain the canonical live concurrency group');
+assert(production.includes("production-deploy-pr-validation-{0}"), 'PR validation must use a concurrency group isolated from live Production deploys');
+assert(production.includes("cancel-in-progress: ${{ github.event_name == 'pull_request' }}"), 'only stale PR validation runs may be cancelled by concurrency');
 assert(!/STAGING_(?:SSH|SUPABASE|DATABASE|PENDING|ASSOCIATE|REGULAR|ADMIN)/.test(production), 'production workflow must not consume staging secrets');
 
 assert(/workflow_dispatch:/.test(approval), 'one-time approval must be explicitly workflow-dispatched');
