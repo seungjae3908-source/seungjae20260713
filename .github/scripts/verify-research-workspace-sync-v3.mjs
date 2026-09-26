@@ -5,6 +5,9 @@ const OWNER='adfcb23baf956bcaa025f0846313faf8db7a4e4a';
 const BASE='9057c4a3767db0f81e595fc481f5066bda6c9e43';
 const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trimEnd();
 const added=[
+ 'packages/external-research/src/research-workspace-runtime-binding-v11.js',
+ 'packages/external-research/test/research-workspace-runtime-binding-v11.test.js',
+ 'packages/external-research/docs/research-workspace-phase11.md',
  'packages/external-research/src/research-workspace-orchestrator-v10.js',
  'packages/external-research/src/research-workspace-orchestrator-v10.d.ts',
  'packages/external-research/test/research-workspace-orchestrator-v10.test.js',
