@@ -190,7 +190,7 @@ async function installRuntime(page: Page, options: { connectedBalances?: boolean
   });
 }
 
-for (const width of [320, 390, 768, 1200]) {
+for (const width of [320, 390, 768, 1200, 1440]) {
   test(`account professional surface stays bounded at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: width >= 1200 ? 900 : 844 });
     await installRuntime(page);
@@ -217,6 +217,25 @@ for (const width of [320, 390, 768, 1200]) {
     }
   });
 }
+
+test('account provider cards use one column on mobile, two on tablet, and four on desktop', async ({ page }) => {
+  await installRuntime(page, { connectedBalances: true, kiwoomSupported: true });
+  await page.goto('/account');
+
+  const columnsAt = async (width: number) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.waitForTimeout(50);
+    return page.getByTestId('brokerage-account-connections').locator('[data-testid^="connection-"]').evaluateAll((nodes) => {
+      const xs = nodes.map((node) => Math.round((node as HTMLElement).getBoundingClientRect().x));
+      return new Set(xs).size;
+    });
+  };
+
+  expect(await columnsAt(390)).toBe(1);
+  expect(await columnsAt(768)).toBe(2);
+  expect(await columnsAt(1440)).toBe(4);
+  await expect(page.getByTestId('account-summary').locator('> div')).toHaveCount(4);
+});
 
 test('account shows normalized balances and switches overseas stock plus USDT values between KRW and USD', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 });
