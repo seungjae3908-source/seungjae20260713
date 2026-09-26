@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import router, { setTradeAutomationRepositoryFactoryForTests } from './trade-automation';
+import router, {
+  setTradeAutomationRepositoryFactoryForTests,
+  setTradeExitPreviewReadersFactoryForTests,
+} from './trade-automation';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import { InMemoryTradingRepository } from '../services/trade-automation.repository';
 import { marketIntelligenceNotAvailable, tradingMarket } from '../services/market-intelligence-client.service';
@@ -36,20 +39,150 @@ function scannerCardFixture({ now, market, symbol, action }: { now: number; mark
   } as ScannerSignalCard;
 }
 
-async function startScannerPlanServer(dependencies: Parameters<typeof createScannerPaperPlansRouter>[0]) {
+async function startScannerPlanServer(
+  dependencies: Parameters<typeof createScannerPaperPlansRouter>[0],
+  options: { admin?: boolean } = {},
+) {
   const app = express();
   app.use(express.json({ limit: '32kb' }));
   app.use((req, _res, next) => {
     const row = req as AuthenticatedRequest;
-    row.member = { id: USER, login_name: 'test', display_name: 'test', role: 'user', membership_level: 'associate', status: 'approved', is_active: true };
-    row.membershipLevel = 'associate';
+    row.member = options.admin
+      ? { id: USER, login_name: 'test', display_name: 'test', role: 'admin', membership_level: 'admin', status: 'approved', is_active: true }
+      : { id: USER, login_name: 'test', display_name: 'test', role: 'user', membership_level: 'associate', status: 'approved', is_active: true };
+    row.membershipLevel = options.admin ? 'admin' : 'associate';
     next();
   });
   app.use('/api/trade-automation', createScannerPaperPlansRouter(dependencies));
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>(resolve => server.once('listening', resolve));
-  return { server, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/trade-automation/scanner/plans` };
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/trade-automation/scanner`;
+  return {
+    server,
+    url: `${baseUrl}/plans`,
+    liveDraftUrl: `${baseUrl}/live-draft`,
+  };
 }
+
+test('Scanner live entry draft is server-verified, non-executing, and rejects client authority fields', async () => {
+  const now = Date.UTC(2026, 8, 26, 6, 0, 0);
+  const sha = 'c'.repeat(40);
+  const registry = new ProductPaperSourceRegistry(() => now);
+  const timeframe = getScannerStrategyProfile('KR_STOCK', 'SWING').primaryTimeframe;
+  const card = scannerCardFixture({ now, market: 'KR', symbol: '005930', action: 'BUY' });
+  registry.captureScanner(USER, {
+    requestId: 'live-draft-run',
+    timeframe,
+    cards: [card],
+    execution: { cancelled: false },
+  } as ScannerResponse, sha);
+  const { server, liveDraftUrl } = await startScannerPlanServer({
+    registry,
+    sourceSha: () => sha,
+    now: () => now,
+  }, { admin: true });
+  const valid = {
+    mode: 'approval',
+    accountMode: 'live',
+    adapter: 'canonical-live',
+    market: 'KR',
+    symbol: '005930',
+    timeframe,
+    side: 'BUY',
+    searchRunId: 'live-draft-run',
+    signalId: card.signalId,
+    selectedConditions: ['trend_alignment'],
+  };
+  try {
+    const response = await fetch(liveDraftUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(valid),
+    });
+    const body = await response.json() as Record<string, any>;
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(body.ok, true);
+    assert.equal(body.serverVerified, true);
+    assert.equal(body.draft.schemaVersion, 'scanner-live-entry-draft-v1');
+    assert.equal(body.draft.state, 'SERVER_VERIFIED_DRAFT');
+    assert.match(body.draft.draftId, /^[0-9a-f]{64}$/u);
+    assert.equal(body.draft.symbol, '005930');
+    assert.equal(body.draft.side, 'BUY');
+    assert.deepEqual(body.draft.entryZone, card.pricePlan.entryZone);
+    assert.equal(body.draft.stopLoss, card.pricePlan.stopLoss);
+    assert.deepEqual(body.draft.targets, card.pricePlan.targets);
+    assert.equal(body.draft.requiresFinalRiskRecheck, true);
+    assert.equal(body.draft.requiresExplicitApproval, true);
+    assert.equal(body.executionAuthority, 'NONE');
+    assert.equal(body.livePlanCreated, false);
+    assert.equal(body.orderSubmitted, false);
+    assert.equal(body.exchangeRequestSent, false);
+    assert.equal(body.providerMutationRequests, 0);
+    assert.equal(body.privateTradingApiAllowed, false);
+
+    for (const injected of [
+      { quantity: 10 },
+      { leverage: 3 },
+      { marketSnapshot: { availableBalance: 999999 } },
+      { stopPrice: 1 },
+      { targetPrices: [999999] },
+      { executionAuthority: 'MANUAL' },
+    ]) {
+      const rejected = await fetch(liveDraftUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...valid, ...injected }),
+      });
+      const rejectedBody = await rejected.json() as Record<string, any>;
+      assert.equal(rejected.status, 400);
+      assert.equal(rejectedBody.ok, false);
+      assert.equal(rejectedBody.error, 'CLIENT_LIVE_DRAFT_AUTHORITY_FORBIDDEN');
+      assert.equal(rejectedBody.orderSubmitted, false);
+      assert.equal(rejectedBody.providerMutationRequests, 0);
+      assert.equal(rejectedBody.executionAuthority, 'NONE');
+    }
+  } finally { await close(server); }
+});
+
+test('Scanner live entry draft requires order capability', async () => {
+  const now = Date.UTC(2026, 8, 26, 6, 0, 0);
+  const sha = 'd'.repeat(40);
+  const registry = new ProductPaperSourceRegistry(() => now);
+  const timeframe = getScannerStrategyProfile('KR_STOCK', 'SWING').primaryTimeframe;
+  const card = scannerCardFixture({ now, market: 'KR', symbol: '005930', action: 'BUY' });
+  registry.captureScanner(USER, {
+    requestId: 'live-draft-capability-run',
+    timeframe,
+    cards: [card],
+    execution: { cancelled: false },
+  } as ScannerResponse, sha);
+  const { server, liveDraftUrl } = await startScannerPlanServer({
+    registry,
+    sourceSha: () => sha,
+    now: () => now,
+  });
+  try {
+    const response = await fetch(liveDraftUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'approval',
+        accountMode: 'live',
+        adapter: 'canonical-live',
+        market: 'KR',
+        symbol: '005930',
+        timeframe,
+        side: 'BUY',
+        searchRunId: 'live-draft-capability-run',
+        signalId: card.signalId,
+      }),
+    });
+    const body = await response.json() as Record<string, any>;
+    assert.equal(response.status, 403);
+    assert.equal(body.error, 'CAPABILITY_REQUIRED');
+    assert.equal(body.capability, 'canPlaceOrders');
+  } finally { await close(server); }
+});
 
 test('actual Scanner HTTP route remains fail-closed when the server-owned Paper evidence owner is absent', async () => {
   const now = Date.UTC(2026, 8, 17);
@@ -210,8 +343,369 @@ test.beforeEach(async () => {
 });
 test.after(() => {
   setTradeAutomationRepositoryFactoryForTests(null);
+  setTradeExitPreviewReadersFactoryForTests(null);
   setTradingPlanMarketIntelligenceRunnerForTests(null);
   delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
+});
+
+test('exit preview re-reads the real position in read-only mode and never submits a trade', async () => {
+  let reads = 0;
+  setTradeExitPreviewReadersFactoryForTests(() => ({
+    toss: async () => {
+      reads += 1;
+      const checkedAt = new Date().toISOString();
+      return {
+        provider: 'toss' as const,
+        readOnly: true as const,
+        connected: true,
+        status: 'CONNECTED' as const,
+        accounts: null,
+        balances: null,
+        positions: [{
+          market: 'KR',
+          symbol: '005930',
+          quantity: 20,
+          availableQuantity: 20,
+          averageEntryPrice: 70_000,
+          currentPrice: 72_000,
+          marketValue: 1_440_000,
+          unrealizedPnl: 40_000,
+          unrealizedPnlPercent: 2.86,
+          leverage: null,
+          liquidationPrice: null,
+          marginMode: null,
+          side: null,
+        }],
+        openOrders: null,
+        checkedAt,
+        lastGoodAt: checkedAt,
+        stale: false,
+        errorCode: null,
+        orderRequests: 0 as const,
+        cancelRequests: 0 as const,
+        amendRequests: 0 as const,
+        transferRequests: 0 as const,
+        withdrawalRequests: 0 as const,
+        credentialsReturned: false as const,
+        liveTradingEnabled: false as const,
+        autoTradingEnabled: false as const,
+      };
+    },
+  }));
+
+  const { server, baseUrl } = await startServer();
+  try {
+    const missingConfirmation = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'toss', market: 'KR', symbol: '005930', percent: 25 }),
+    });
+    assert.equal(missingConfirmation.status, 409);
+    assert.equal(reads, 0);
+
+    const response = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        confirmed: true,
+        provider: 'toss',
+        market: 'KR',
+        symbol: '005930',
+        percent: 25,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json() as {
+      preview: {
+        schemaVersion: string;
+        state: string;
+        draftId: string;
+        issuedAt: string;
+        expiresAt: string;
+        provider: string;
+        exitQuantity: number;
+        quantityRule: string;
+        side: string;
+        reduceOnly: boolean;
+        stale: boolean;
+        requiresFinalRiskRecheck: boolean;
+        requiresExplicitApproval: boolean;
+        executionAuthority: string;
+      };
+      privateAccountReadPerformed: boolean;
+      orderSubmitted: boolean;
+      orderCanceled: boolean;
+      orderAmended: boolean;
+      privateTradingMutationSent: boolean;
+      executionAuthority: string;
+      executionReadiness: {
+        connectionConfigured: boolean;
+        providerVerified: boolean;
+        manualServerGateEnabled: boolean;
+        readyForManualExitEvaluation: boolean;
+        blockers: string[];
+        orderSubmissionPerformedByPreview: boolean;
+        executionAuthorityGrantedByPreview: boolean;
+      };
+    };
+    assert.equal(reads, 1);
+    assert.equal(body.preview.schemaVersion, 'manual-exit-draft-v1');
+    assert.equal(body.preview.state, 'SERVER_VERIFIED_DRAFT');
+    assert.match(body.preview.draftId, /^[0-9a-f]{64}$/u);
+    assert.ok(Date.parse(body.preview.expiresAt) > Date.parse(body.preview.issuedAt));
+    assert.equal(body.preview.requiresFinalRiskRecheck, true);
+    assert.equal(body.preview.requiresExplicitApproval, true);
+    assert.equal(body.preview.executionAuthority, 'NONE');
+    assert.equal(body.preview.provider, 'toss');
+    assert.equal(body.preview.exitQuantity, 5);
+    assert.equal(body.preview.quantityRule, 'INTEGER_ONLY');
+    assert.equal(body.preview.side, 'sell');
+    assert.equal(body.preview.reduceOnly, true);
+    assert.equal(body.preview.stale, false);
+    assert.equal(body.privateAccountReadPerformed, true);
+    assert.equal(body.orderSubmitted, false);
+    assert.equal(body.orderCanceled, false);
+    assert.equal(body.orderAmended, false);
+    assert.equal(body.privateTradingMutationSent, false);
+    assert.equal(body.executionAuthority, 'NONE');
+    assert.equal(body.executionReadiness.readyForManualExitEvaluation, false);
+    assert.equal(body.executionReadiness.connectionConfigured, false);
+    assert.equal(body.executionReadiness.orderSubmissionPerformedByPreview, false);
+    assert.equal(body.executionReadiness.executionAuthorityGrantedByPreview, false);
+    assert.ok(body.executionReadiness.blockers.includes('LIVE_CONNECTION_NOT_CONFIGURED'));
+  } finally {
+    setTradeExitPreviewReadersFactoryForTests(null);
+    await close(server);
+  }
+});
+
+test('order dashboard maps crypto execution markets back to AI Chart market identities', async () => {
+  const now = new Date().toISOString();
+  const cases = [
+    { key: 'upbit', exchange: 'upbit', planMarket: 'KRW', uiMarket: 'UPBIT', symbol: 'BTC', querySymbol: 'KRW-BTC', side: 'buy' },
+    { key: 'bitget', exchange: 'bitget', planMarket: 'USDT-FUTURES', uiMarket: 'BITGET', symbol: 'BTCUSDT', querySymbol: 'BTCUSDT', side: 'long' },
+  ] as const;
+
+  for (const item of cases) {
+    const planId = `dashboard-${item.key}-plan`;
+    const orderId = `dashboard-${item.key}-order`;
+    await repository.savePlan({
+      id: planId,
+      userId: USER,
+      idempotencyKey: `dashboard-${item.key}-key`,
+      state: 'SUBMITTED',
+      version: 0,
+      exchange: item.exchange,
+      accountMode: 'live',
+      stockBroker: null,
+      stockExchange: null,
+      strategyId: 'dashboard-test',
+      signalId: `dashboard-${item.key}-signal`,
+      symbol: item.symbol,
+      market: item.planMarket,
+      side: item.side,
+      orderType: 'limit',
+      quantity: 1,
+      quoteAmount: null,
+      limitPrice: 100,
+      estimatedKrw: 100,
+      stopPrice: 90,
+      targetPrices: [110],
+      splitRatios: [100],
+      leverage: item.exchange === 'bitget' ? 2 : null,
+      marginMode: item.exchange === 'bitget' ? 'isolated' : null,
+      reduceOnly: false,
+      invalidateAction: 'hold',
+      signalReasons: ['dashboard-market-identity'],
+      marketSnapshot: {
+        observedAt: now,
+        riskObservedAt: now,
+        dataDelayMs: 0,
+        oneMinuteMovePercent: 0,
+        spreadPercent: 0.1,
+        orderbookGapPercent: 0.1,
+        halted: false,
+        availableBalance: 1_000_000,
+        accountValueKrw: 1_000_000,
+        dailyPnlPercent: 0,
+        assetExposurePercent: 0,
+        openPositionCount: 0,
+        dailyOrderCount: 0,
+        consecutiveLosses: 0,
+        currentPrice: 100,
+        plannedPrice: 100,
+        marketStatus: 'OPEN',
+        availableLiquidityKrw: 1_000_000,
+        estimatedSlippagePercent: 0.1,
+        estimatedFeePercent: 0.05,
+        signalState: 'entry_ready',
+        signalObservedAt: now,
+      },
+      approvalExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      approvedAt: now,
+      createdAt: now,
+      updatedAt: now,
+      riskAssessment: null,
+      riskEnvelope: null,
+    } as any);
+    await repository.saveOrder({
+      id: orderId,
+      userId: USER,
+      planId,
+      exchange: item.exchange,
+      stockBroker: null,
+      clientOrderId: `dashboard-${item.key}-client`,
+      exchangeOrderId: `dashboard-${item.key}-exchange`,
+      state: 'ACCEPTED',
+      version: 0,
+      requestedQuantity: 1,
+      remainingQuantity: 1,
+      currentLimitPrice: 100,
+      filledQuantity: 0,
+      averageFillPrice: null,
+      fills: [],
+      feeAmount: null,
+      feeCurrency: null,
+      exchangeCreatedAt: now,
+      exchangeUpdatedAt: now,
+      cancelable: true,
+      providerStatusCode: 'open',
+      retryCount: 0,
+      nextRetryAt: null,
+      lastReconciledAt: now,
+      lastErrorCode: null,
+      manualReviewRequired: false,
+      executionClaimId: null,
+      submissionStartedAt: null,
+      submissionAttemptId: null,
+      approvedPlanVersion: 0,
+      preSubmissionCheckedAt: null,
+      preSubmissionDecision: null,
+      preSubmissionSnapshot: null,
+      cancelRequestedAt: null,
+      cancelRequestClaimId: null,
+      cancelSubmittedAt: null,
+      cancelAcknowledgedAt: null,
+      cancelOperationId: null,
+      recoveryLeaseOwner: null,
+      recoveryLeaseUntil: null,
+      protectionStatus: 'NOT_REQUIRED',
+      protectionErrorCode: null,
+      amendments: [],
+      lastAmendRequestId: null,
+      createdAt: now,
+      updatedAt: now,
+    } as any);
+
+    const { server, baseUrl } = await startServer();
+    try {
+      const query = new URLSearchParams({
+        dashboard: '1',
+        market: item.uiMarket,
+        symbol: item.querySymbol,
+        exchange: item.exchange,
+      });
+      const response = await fetch(`${baseUrl}/api/trade-automation/orders?${query.toString()}`);
+      assert.equal(response.status, 200);
+      const body = await response.json() as {
+        dashboardItems: Array<{ id: string; market: string; symbol: string }>;
+        orderSubmitted: boolean;
+        orderCanceled: boolean;
+        orderAmended: boolean;
+        privateTradingRequestSent: boolean;
+      };
+      assert.equal(body.dashboardItems.length, 1);
+      assert.equal(body.dashboardItems[0]?.id, orderId);
+      assert.equal(body.dashboardItems[0]?.market, item.uiMarket);
+      assert.equal(body.dashboardItems[0]?.symbol, item.symbol);
+      assert.equal(body.orderSubmitted, false);
+      assert.equal(body.orderCanceled, false);
+      assert.equal(body.orderAmended, false);
+      assert.equal(body.privateTradingRequestSent, false);
+    } finally {
+      await close(server);
+    }
+  }
+});
+
+test('exit preview follows Toss fractional and Kiwoom integer US-stock quantity rules', async () => {
+  const stockSnapshot = (provider: 'toss' | 'kiwoom') => {
+    const checkedAt = new Date().toISOString();
+    return {
+      provider,
+      readOnly: true as const,
+      connected: true,
+      status: 'CONNECTED' as const,
+      accounts: null,
+      balances: null,
+      positions: [{
+        market: 'US',
+        symbol: 'AAPL',
+        quantity: 3,
+        availableQuantity: 3,
+        averageEntryPrice: 200,
+        currentPrice: 205,
+        marketValue: 615,
+        unrealizedPnl: 15,
+        unrealizedPnlPercent: 2.5,
+        leverage: null,
+        liquidationPrice: null,
+        marginMode: null,
+        side: null,
+      }],
+      openOrders: null,
+      checkedAt,
+      lastGoodAt: checkedAt,
+      stale: false,
+      errorCode: null,
+      orderRequests: 0 as const,
+      cancelRequests: 0 as const,
+      amendRequests: 0 as const,
+      transferRequests: 0 as const,
+      withdrawalRequests: 0 as const,
+      credentialsReturned: false as const,
+      liveTradingEnabled: false as const,
+      autoTradingEnabled: false as const,
+    };
+  };
+  setTradeExitPreviewReadersFactoryForTests(() => ({
+    toss: async () => stockSnapshot('toss'),
+    kiwoom: async () => stockSnapshot('kiwoom'),
+  }));
+
+  const { server, baseUrl } = await startServer();
+  try {
+    const toss = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, provider: 'toss', market: 'US', symbol: 'AAPL', percent: 25 }),
+    });
+    assert.equal(toss.status, 200);
+    const tossBody = await toss.json() as { preview: { exitQuantity: number; quantityRule: string } };
+    assert.equal(tossBody.preview.exitQuantity, 0.75);
+    assert.equal(tossBody.preview.quantityRule, 'FRACTIONAL_ALLOWED');
+
+    const tooSmallKiwoom = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, provider: 'kiwoom', market: 'US', symbol: 'AAPL', percent: 25 }),
+    });
+    assert.equal(tooSmallKiwoom.status, 400);
+    assert.equal((await tooSmallKiwoom.json() as { error: string }).error, 'EXIT_PREVIEW_QUANTITY_TOO_SMALL');
+
+    const kiwoom = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, provider: 'kiwoom', market: 'US', symbol: 'AAPL', percent: 50 }),
+    });
+    assert.equal(kiwoom.status, 200);
+    const kiwoomBody = await kiwoom.json() as { preview: { exitQuantity: number; quantityRule: string } };
+    assert.equal(kiwoomBody.preview.exitQuantity, 1);
+    assert.equal(kiwoomBody.preview.quantityRule, 'INTEGER_ONLY');
+  } finally {
+    setTradeExitPreviewReadersFactoryForTests(null);
+    await close(server);
+  }
 });
 
 test('status is authenticated, automatic execution defaults off, and never returns credential values', async () => {
