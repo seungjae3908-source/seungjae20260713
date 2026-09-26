@@ -9,7 +9,7 @@ on:
       - 'research-dashboard/test/dashboard.test.mjs'
       - 'research-dashboard/test/test_server.py'
       - 'api-server/src/services/strategy-promotion-research-bridge.service.ts'
-      - 'api-server/src/services/strategy-promotion.service.test.ts'
+      - 'api-server/src/services/strategy-promotion-research-bridge.service.test.ts'
       - 'api-server/src/services/research-center-readonly-contract.service.test.ts'
       - 'api-server/src/routes/strategy-promotion.ts'
       - '.github/workflows/research-promotion-bridge-validation.yml'
