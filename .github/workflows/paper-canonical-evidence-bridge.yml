@@ -123,6 +123,8 @@ jobs:
           ! grep -Eq 'actions:[[:space:]]+write' "$workflow"
           ! grep -Eq 'pm2[[:space:]]+(restart|reload|start|stop|delete|save)' "$operational"
           ! grep -Eq 'crontab[[:space:]]+-([[:space:]]|$)|systemctl[[:space:]]+(start|stop|restart|enable)|psql|supabase db' "$operational"
+          awk '$0 == "          trap cleanup_remote_tmp EXIT" { count += 1 } END { exit(count == 2 ? 0 : 1) }' "$workflow"
+          node -e "const fs=require('fs'); const s=fs.readFileSync(process.argv[1],'utf8'); const q=String.fromCharCode(39); if(s.includes('trap '+q+'ssh -i ~/.ssh/id_ed25519')) process.exit(1)" "$workflow"
 
   gate:
     if: github.event_name == 'workflow_dispatch'
@@ -339,12 +341,17 @@ jobs:
         run: |
           set -Eeuo pipefail
           remote_tmp="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "mktemp -d /tmp/paper-observer-materialize.XXXXXX")"
-          trap 'ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "rm -rf -- '"'"$remote_tmp"'"'"'" >/dev/null 2>&1 || true' EXIT
+          cleanup_remote_tmp() {
+            if [[ -n "${remote_tmp:-}" ]]; then
+              ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "rm -rf -- '$remote_tmp'" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup_remote_tmp EXIT
           scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT"             ops/materialize-paper-canonical-forward-observer.mjs             observer-artifact/state.json observer-artifact/summary.json observer-artifact/manifest.json             "$SSH_USER@$SSH_HOST:$remote_tmp/"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST"             "node '$remote_tmp/materialize-paper-canonical-forward-observer.mjs' --source-root='$remote_tmp' --expected-sha='$TARGET_SHA' --state-root='/opt/stock-app-data/paper-forward-v1'"             > bridge-evidence/result.json
           test -s bridge-evidence/result.json
+          cleanup_remote_tmp
           trap - EXIT
-          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "rm -rf -- '$remote_tmp'"
 
       - name: Publish explicit freshness policy
         if: env.OPERATION == 'freshness_policy_publish'
@@ -352,12 +359,17 @@ jobs:
         run: |
           set -Eeuo pipefail
           remote_tmp="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "mktemp -d /tmp/paper-freshness-policy.XXXXXX")"
-          trap 'ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "rm -rf -- '"'"$remote_tmp"'"'"'" >/dev/null 2>&1 || true' EXIT
+          cleanup_remote_tmp() {
+            if [[ -n "${remote_tmp:-}" ]]; then
+              ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "rm -rf -- '$remote_tmp'" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup_remote_tmp EXIT
           scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT"             ops/publish-paper-canonical-validation-freshness-policy.mjs             "$SSH_USER@$SSH_HOST:$remote_tmp/"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST"             "node '$remote_tmp/publish-paper-canonical-validation-freshness-policy.mjs' --state-root='/opt/stock-app-data/paper-forward-v1' --maximum-age-ms='$MAXIMUM_AGE_MS'"             > bridge-evidence/result.json
           test -s bridge-evidence/result.json
+          cleanup_remote_tmp
           trap - EXIT
-          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "rm -rf -- '$remote_tmp'"
 
       - name: Verify bounded result and zero unrelated mutation
         shell: bash
