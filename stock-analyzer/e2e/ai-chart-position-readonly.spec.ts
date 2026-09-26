@@ -385,6 +385,7 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
             positionQuantity: 20,
             availableQuantity: 20,
             exitQuantity: 5,
+            quantityRule: 'INTEGER_ONLY',
             side: 'sell',
             reduceOnly: true,
             checkedAt: new Date().toISOString(),
@@ -589,6 +590,7 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await cockpit.getByTestId('ai-chart-verify-exit-preview').click();
   await expect.poll(() => exitPreviewReads).toBe(1);
   await expect(cockpit.getByTestId('ai-chart-exit-preview-verified')).toContainText('서버 확인 수량 5');
+  await expect(cockpit.getByTestId('ai-chart-exit-preview-verified')).toContainText('수량규칙 정수');
   await expect(cockpit.getByTestId('ai-chart-exit-preview-verified')).toContainText('executionAuthority=NONE');
   await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('재검증됨');
   await expect(cockpit.getByTestId('ai-chart-exit-readiness')).toContainText('실전 종료 준비 · 차단');
