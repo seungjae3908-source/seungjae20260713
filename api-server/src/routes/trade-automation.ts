@@ -33,6 +33,8 @@ const CANCEL_RECONCILIATION_STATES = new Set([
 ]);
 let repositoryFactoryForTests: ((userId: string) => TradingRepository) | null = null;
 let splitRepositoryFactoryForTests: ((userId: string) => SplitOrderRepository) | null = null;
+type ExitPreviewReaders = ReturnType<typeof createVaultBackedAccountReaders>;
+let exitPreviewReadersFactoryForTests: (() => ExitPreviewReaders) | null = null;
 
 export function setTradeAutomationRepositoryFactoryForTests(
   factory: ((userId: string) => TradingRepository) | null,
@@ -44,6 +46,10 @@ export function setTradeSplitOrderRepositoryFactoryForTests(
   factory: ((userId: string) => SplitOrderRepository) | null,
 ) {
   splitRepositoryFactoryForTests = factory;
+}
+
+export function setTradeExitPreviewReadersFactoryForTests(factory: (() => ExitPreviewReaders) | null) {
+  exitPreviewReadersFactoryForTests = factory;
 }
 
 function planVersion(plan: TradingPlan) {
@@ -628,7 +634,7 @@ router.post('/positions/exit-preview', async (req: AuthenticatedRequest, res) =>
     return errorResponse(res, error);
   }
 
-  const readers = createVaultBackedAccountReaders();
+  const readers = exitPreviewReadersFactoryForTests?.() ?? createVaultBackedAccountReaders();
   const reader = readers[provider];
   if (!reader) return res.status(503).json({ ok: false, error: 'EXIT_PREVIEW_READER_UNAVAILABLE' });
 
