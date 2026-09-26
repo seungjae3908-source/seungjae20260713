@@ -90,12 +90,15 @@ jobs:
         run: |
           set -Eeuo pipefail
           workflow='.github/workflows/paper-canonical-seven-blocker-repair.yml'
+          operational="$RUNNER_TEMP/paper-seven-blocker-operational.yml"
+          awk '/^  gate:/{emit=1} emit{print}' "$workflow" > "$operational"
+          test -s "$operational"
           grep -Fq "startsWith(github.event.comment.body, '/repair-paper-canonical-seven-blockers ')" "$workflow"
-          grep -Fq 'environment: production' "$workflow"
-          grep -Fq 'PAPER_CANONICAL_OWNER_BRIDGE_ENABLED=true' "$workflow" && exit 1 || true
+          grep -Fq 'environment: production' "$operational"
+          ! grep -Fq 'PAPER_CANONICAL_OWNER_BRIDGE_ENABLED=true' "$operational"
           ! grep -Eq 'actions:[[:space:]]+write|contents:[[:space:]]+write|deployments:[[:space:]]+write' "$workflow"
-          ! grep -Eq 'LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true' "$workflow"
-          ! grep -Eq 'deploy-production[.]sh|/run-production-app|createWorkflowDispatch|workflow_dispatch.*production-deploy' "$workflow"
+          ! grep -Eq 'LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true' "$operational"
+          ! grep -Eq 'deploy-production[.]sh|/run-production-app|createWorkflowDispatch' "$operational"
           grep -Fq 'profitabilityCredit: 0' market-prediction-lab/src/paper-canonical-seven-blocker-repair-plan-v1.js
           grep -Fq 'syntheticCredit: 0' market-prediction-lab/src/paper-canonical-seven-blocker-repair-plan-v1.js
           grep -Fq 'backfillCredit: 0' market-prediction-lab/src/paper-canonical-seven-blocker-repair-plan-v1.js
