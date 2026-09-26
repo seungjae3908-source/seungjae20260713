@@ -1,0 +1,51 @@
+name: Research Workspace Canonical Evaluation Contract V18
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/research-workspace-canonical-evaluation-contract-v18.yml'
+      - 'packages/external-research/src/research-workspace-canonical-evaluation-one-shot-v18.*'
+      - 'packages/external-research/test/research-workspace-canonical-evaluation-one-shot-v18.test.js'
+      - 'packages/external-research/docs/research-workspace-phase18.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-workspace-canonical-evaluation-contract-v18
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate Phase18 bounded one-shot contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          node --test packages/external-research/test/research-workspace-canonical-evaluation-one-shot-v18.test.js
+          source=packages/external-research/src/research-workspace-canonical-evaluation-one-shot-v18.js
+          grep -Fq "maxCompilerRuns:1" "$source"
+          grep -Fq "maxBacktestRuns:1" "$source"
+          grep -Fq "finalHoldoutPreAccess:false" "$source"
+          grep -Fq "selectionFeedbackToGenerator:false" "$source"
+          grep -Fq "replayAllowed:false" "$source"
+          grep -Fq "RESEARCH_EVIDENCE_ONLY" "$source"
+          grep -Fq "automaticAdoption:false" "$source"
+          grep -Fq "paperActivation:false" "$source"
+          grep -Fq "liveActivation:false" "$source"
+          grep -Fq "profitabilityProven:false" "$source"
+          grep -Fq "executionAuthority:'NONE'" "$source"
+          workflow=.github/workflows/research-workspace-canonical-evaluation-contract-v18.yml
+          ! grep -Eq '^\s*(issue_comment:|workflow_dispatch:|schedule:)' "$workflow"
+          ! grep -Eq 'api\.groq\.com|generativelanguage\.googleapis|runIndependentSignalBacktest|pm2 |systemctl |ssh |scp ' "$workflow"
