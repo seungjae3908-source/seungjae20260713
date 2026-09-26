@@ -237,34 +237,34 @@ function MobileSummary({ selection, analysis }: { selection: AnalysisSelection; 
     <section data-testid="ai-chart-mobile-summary" className="space-y-3 rounded-3xl border border-card-border bg-card p-4 shadow-sm">
       <div className="flex min-w-0 items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="truncate text-lg font-black">{selection.displayName}</p>
-          <p className="mt-0.5 truncate text-[11px] font-bold text-muted-foreground">
+          <p className="truncate text-lg font-bold">{selection.displayName}</p>
+          <p className="mt-0.5 truncate text-xs font-bold text-muted-foreground">
             {unifiedMarketLabel(selection.market)} · {selection.timeframe}
           </p>
         </div>
-        <span className="shrink-0 rounded-full border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-black text-primary">
+        <span className="shrink-0 rounded-full border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-bold text-primary">
           {contextualActionLabel(selection, analysis)}
         </span>
       </div>
 
       <div className="grid grid-cols-3 gap-2 text-center">
         <div className="rounded-2xl bg-background p-2.5">
-          <p className="text-[10px] text-muted-foreground">신호점수</p>
+          <p className="text-xs text-muted-foreground">신호점수</p>
           <strong className="mt-0.5 block text-sm tabular-nums">{formatAiChartScore(selection.signalScore)}</strong>
         </div>
         <div className="rounded-2xl bg-background p-2.5">
-          <p className="text-[10px] text-muted-foreground">근거 강도</p>
+          <p className="text-xs text-muted-foreground">근거 강도</p>
           <strong className="mt-0.5 block text-sm tabular-nums">{formatAiChartScore(confidence)}</strong>
         </div>
         <div className="rounded-2xl bg-background p-2.5">
-          <p className="text-[10px] text-muted-foreground">위험</p>
+          <p className="text-xs text-muted-foreground">위험</p>
           <strong className="mt-0.5 block truncate text-sm">{selection.riskLevel || '미확인'}</strong>
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-2 text-xs">
         <div className="rounded-2xl border border-card-border p-3">
-          <p className="text-[10px] font-bold text-muted-foreground">진입</p>
+          <p className="text-xs font-bold text-muted-foreground">진입</p>
           <strong className="mt-1 block tabular-nums">
             {plan?.entryZone
               ? `${formatPlanPrice(plan.entryZone.from, selection.market)} ~ ${formatPlanPrice(plan.entryZone.to, selection.market)}`
@@ -272,25 +272,25 @@ function MobileSummary({ selection, analysis }: { selection: AnalysisSelection; 
           </strong>
         </div>
         <div className="rounded-2xl border border-card-border p-3">
-          <p className="text-[10px] font-bold text-muted-foreground">손절</p>
+          <p className="text-xs font-bold text-muted-foreground">손절</p>
           <strong className="mt-1 block tabular-nums">{formatPlanPrice(plan?.stopLoss ?? plan?.invalidation, selection.market)}</strong>
         </div>
         <div className="rounded-2xl border border-card-border p-3">
-          <p className="text-[10px] font-bold text-muted-foreground">목표 1</p>
+          <p className="text-xs font-bold text-muted-foreground">목표 1</p>
           <strong className="mt-1 block tabular-nums">{formatPlanPrice(plan?.targets?.[0], selection.market)}</strong>
         </div>
         <div className="rounded-2xl border border-card-border p-3">
-          <p className="text-[10px] font-bold text-muted-foreground">손익비</p>
+          <p className="text-xs font-bold text-muted-foreground">손익비</p>
           <strong className="mt-1 block tabular-nums">{plan?.riskReward == null ? '미확인' : plan.riskReward.toFixed(2)}</strong>
         </div>
       </div>
 
       <div className="rounded-2xl bg-secondary/60 px-3 py-3">
-        <p className="text-[10px] font-black text-muted-foreground">핵심 판단</p>
+        <p className="text-xs font-bold text-muted-foreground">핵심 판단</p>
         <p className="mt-1 line-clamp-2 break-keep text-xs font-bold leading-5">{reason}</p>
       </div>
 
-      <p className="text-center text-[10px] font-bold text-muted-foreground">읽기 전용 · 주문 실행 없음</p>
+      <p className="text-center text-xs font-bold text-muted-foreground">읽기 전용 · 주문 실행 없음</p>
     </section>
   );
 }
@@ -300,23 +300,23 @@ function ContextCard({ selection, analysis }: { selection: AnalysisSelection; an
     <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
       <div className="flex items-center gap-2">
         <Activity className="h-4 w-4 text-primary" />
-        <h2 className="text-sm font-black">현재 상태</h2>
+        <h2 className="text-sm font-bold">현재 상태</h2>
       </div>
-      <h3 className="mt-3 truncate text-lg font-black">{selection.displayName}</h3>
+      <h3 className="mt-3 truncate text-lg font-bold">{selection.displayName}</h3>
       <p className="mt-1 truncate text-xs font-bold text-muted-foreground">
         {selection.ticker} · {unifiedMarketLabel(selection.market)} · {selection.timeframe}
       </p>
       <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
         <div className="rounded-2xl bg-background p-2">
-          <p className="text-[10px] text-muted-foreground">분석</p>
+          <p className="text-xs text-muted-foreground">분석</p>
           <strong>{analysis ? statusLabel(analysis.status) : '대기'}</strong>
         </div>
         <div className="rounded-2xl bg-background p-2">
-          <p className="text-[10px] text-muted-foreground">방향</p>
+          <p className="text-xs text-muted-foreground">방향</p>
           <strong>{analysis ? biasLabel(analysis.bias) : '-'}</strong>
         </div>
         <div data-testid="analysis-signal-score" className="rounded-2xl bg-background p-2">
-          <p className="text-[10px] text-muted-foreground">근거 강도</p>
+          <p className="text-xs text-muted-foreground">근거 강도</p>
           <strong>{formatAiChartScore(analysis?.confidence ?? selection.confidence)}</strong>
         </div>
       </div>
@@ -329,7 +329,7 @@ function DecisionCard({ analysis }: { analysis: ChartAnalysis | null }) {
     <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
       <div className="flex items-center gap-2">
         <Database className="h-4 w-4 text-primary" />
-        <h2 className="text-sm font-black">현재 판단</h2>
+        <h2 className="text-sm font-bold">현재 판단</h2>
       </div>
       {analysis ? (
         <div className="mt-3 space-y-3 text-xs">
@@ -342,7 +342,7 @@ function DecisionCard({ analysis }: { analysis: ChartAnalysis | null }) {
             </div>
             <span
               className={cn(
-                'shrink-0 rounded-full border px-2 py-1 text-[10px] font-black',
+                'shrink-0 rounded-full border px-2 py-1 text-xs font-bold',
                 analysis.status === 'confirmed'
                   ? 'border-primary/30 bg-primary/10 text-primary'
                   : analysis.status === 'invalidated' || analysis.status === 'expired'
@@ -362,13 +362,13 @@ function DecisionCard({ analysis }: { analysis: ChartAnalysis | null }) {
             <div className="rounded-2xl border border-card-border bg-background p-3">
               <div className="flex items-center gap-1.5 text-muted-foreground">
                 <Clock3 className="h-3.5 w-3.5" />
-                <span className="text-[10px] font-bold">감지</span>
+                <span className="text-xs font-bold">감지</span>
               </div>
-              <strong className="mt-1 block text-[11px]">{formatAnalysisTime(analysis.detectedAt)}</strong>
+              <strong className="mt-1 block text-xs">{formatAnalysisTime(analysis.detectedAt)}</strong>
             </div>
             <div className="rounded-2xl border border-card-border bg-background p-3">
-              <p className="text-[10px] font-bold text-muted-foreground">최근 변화</p>
-              <strong className="mt-1 block line-clamp-2 break-keep text-[11px]">
+              <p className="text-xs font-bold text-muted-foreground">최근 변화</p>
+              <strong className="mt-1 block line-clamp-2 break-keep text-xs">
                 {analysis.transitionReason ?? '최초 분석'}
               </strong>
             </div>
@@ -391,19 +391,19 @@ function CompactList({ title, items, danger = false }: { title: string; items: s
   const visible = items.filter(Boolean).slice(0, 3);
   return (
     <div className="rounded-2xl border border-card-border bg-background p-3">
-      <p className={cn('text-[10px] font-black', danger && 'text-destructive')}>{title}</p>
+      <p className={cn('text-xs font-bold', danger && 'text-destructive')}>{title}</p>
       {visible.length ? (
-        <ul className="mt-1 space-y-1 text-[10px] leading-4 text-muted-foreground">
+        <ul className="mt-1 space-y-1 text-xs leading-4 text-muted-foreground">
           {visible.map((item) => <li key={item} className="line-clamp-2">• {item}</li>)}
         </ul>
-      ) : <p className="mt-1 text-[10px] text-muted-foreground">미확인</p>}
+      ) : <p className="mt-1 text-xs text-muted-foreground">미확인</p>}
     </div>
   );
 }
 
 function SafetyNote() {
   return (
-    <p className="flex items-center gap-2 rounded-2xl border border-warning/30 bg-warning/5 px-3 py-2.5 text-[10px] font-bold text-muted-foreground">
+    <p className="flex items-center gap-2 rounded-2xl border border-warning/30 bg-warning/5 px-3 py-2.5 text-xs font-bold text-muted-foreground">
       <ShieldAlert className="h-4 w-4 shrink-0 text-warning" />
       읽기 전용 · 확정된 근거만 표시 · 주문 실행 없음
     </p>
@@ -720,10 +720,10 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
 
   const emptyState = (
     <section data-testid="ai-chart-empty-selection" className="rounded-3xl border border-card-border bg-card p-6 text-center shadow-sm">
-      <p className="text-sm font-black">분석할 종목이 선택되지 않았습니다.</p>
+      <p className="text-sm font-bold">분석할 종목이 선택되지 않았습니다.</p>
       <p className="mt-2 text-xs leading-5 text-muted-foreground">임의 종목을 자동으로 넣지 않습니다. 스캐너나 종목 화면에서 분석할 종목을 선택해 주세요.</p>
       {!embedded && !externalMode ? (
-        <button type="button" onClick={() => navigate('/scanner')} className="mt-4 min-h-11 rounded-xl bg-primary px-4 text-sm font-black text-primary-foreground">
+        <button type="button" onClick={() => navigate('/scanner')} className="mt-4 min-h-11 rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground">
           스캐너에서 종목 선택
         </button>
       ) : null}
@@ -791,15 +791,15 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
             </button>
           )}
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[10px] font-extrabold text-primary">{externalMode ? '외부 AI 차트' : selection.displayName}</p>
-            <h1 aria-label="AI 차트 생중계 · AI 차트 2.0" className="truncate text-base font-black sm:text-lg">AI 차트</h1>
+            <p className="truncate text-xs font-extrabold text-primary">{externalMode ? '외부 AI 차트' : selection.displayName}</p>
+            <h1 aria-label="AI 차트 생중계 · AI 차트 2.0" className="truncate text-base font-bold sm:text-lg">AI 차트</h1>
           </div>
           {!embedded && !externalMode && externalControlAvailable && (
             <button
               type="button"
               data-testid="open-external-ai-chart"
               onClick={openExternalWindow}
-              className="flex h-10 items-center gap-2 rounded-xl border border-card-border bg-card px-3 text-xs font-black"
+              className="flex h-10 items-center gap-2 rounded-xl border border-card-border bg-card px-3 text-xs font-bold"
             >
               <MonitorUp className="h-4 w-4" />
               외부창
@@ -816,13 +816,13 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
               <X className="h-4 w-4" />
             </button>
           )}
-          <div className="shrink-0 text-right text-[10px] font-bold text-muted-foreground">
+          <div className="shrink-0 text-right text-xs font-bold text-muted-foreground">
             <p>{hasSelection ? `${unifiedMarketLabel(selection.market)} · ${selection.timeframe}` : '종목 미선택'}</p>
             <p>{strategyModeLabel(strategyMode)} · 읽기 전용</p>
           </div>
         </div>
         {externalWindowStatus && (
-          <p data-testid="external-chart-status" className="mx-auto mt-2 max-w-7xl truncate text-[10px] font-bold text-muted-foreground">
+          <p data-testid="external-chart-status" className="mx-auto mt-2 max-w-7xl truncate text-xs font-bold text-muted-foreground">
             {externalWindowStatus}
           </p>
         )}
