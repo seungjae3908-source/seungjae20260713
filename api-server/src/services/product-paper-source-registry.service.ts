@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { resolveCanonicalStrategyIdentity } from '../../../market-prediction-lab/src/canonical-strategy-identity-v1.js';
 import type { BacktestRequest } from './backtest-engine.service';
 import type { BacktestPaperHandoff } from '../../../packages/strategy-hypothesis/src/backtest-paper-handoff.js';
@@ -30,6 +30,26 @@ type BacktestSource = Readonly<{
   strategyIdentityInput: Readonly<Record<string, unknown>>;
 }>;
 type Source = ScannerSource | BacktestSource;
+
+export function scannerLiveEntryDraftId(input: {
+  accountId: string;
+  sourceSha: string;
+  sourceId: string;
+  signalId: string;
+  symbol: string;
+  action: string;
+  expiresAt: string;
+}) {
+  return createHash('sha256').update([
+    input.accountId,
+    input.sourceSha,
+    input.sourceId,
+    input.signalId,
+    input.symbol,
+    input.action,
+    input.expiresAt,
+  ].join(':')).digest('hex');
+}
 
 export class ProductPaperSourceError extends Error {
   constructor(readonly code: string, readonly status = 409) { super(code); }
