@@ -1,0 +1,61 @@
+name: Scanner Stock Flow Evidence Validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'api-server/src/services/scanner-stock-flow-evidence.service.ts'
+      - 'api-server/src/services/scanner-stock-flow-evidence.service.test.ts'
+      - 'api-server/src/routes/stock-flow-evidence.ts'
+      - 'api-server/src/routes/index.ts'
+      - '.github/workflows/scanner-stock-flow-evidence-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact PR HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Backend typecheck
+        run: pnpm --dir api-server run typecheck
+      - name: Bundle focused test
+        run: |
+          pnpm --dir api-server exec esbuild \
+            src/services/scanner-stock-flow-evidence.service.test.ts \
+            --bundle --platform=node --format=esm --packages=external \
+            --outfile="$RUNNER_TEMP/scanner-stock-flow-evidence.test.mjs"
+      - name: Run focused test
+        run: node --test "$RUNNER_TEMP/scanner-stock-flow-evidence.test.mjs"
+      - name: Verify evidence-only safety
+        run: |
+          set -euo pipefail
+          file='api-server/src/services/scanner-stock-flow-evidence.service.ts'
+          grep -Fq "scoreImpact: 0" "$file"
+          grep -Fq "rankImpact: 0" "$file"
+          grep -Fq "directionImpact: 0" "$file"
+          grep -Fq "executionAuthority: 'NONE'" "$file"
+          grep -Fq "orderAllowed: false" "$file"
+          grep -Fq "NOT_INFERRED" "$file"
+          grep -Fq "cdn.finra.org/equity/regsho/daily" "$file"
+          grep -Fq "CNMSshvol" "$file"
+          grep -Fq "Consolidated NMS Daily Short Sale Volume" "$file"
+          grep -Fq "Short Interest" "$file"
+          ! grep -Fq "FINRA_API_CLIENT_SECRET" "$file"
+          ! grep -E "submitOrder|placeOrder|cancelOrder|withdraw|transfer" "$file"
