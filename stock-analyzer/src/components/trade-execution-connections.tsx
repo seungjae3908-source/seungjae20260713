@@ -13,10 +13,23 @@ type TradeConnection = {
   credentialsExposed: false;
 };
 
+type LiveExecutionReadiness = {
+  connectionConfigured: boolean;
+  providerVerified: boolean;
+  manualServerGateEnabled: boolean;
+  automaticServerGateEnabled: boolean;
+  readyForManualOrderEvaluation: boolean;
+  readyForAutomaticOrderEvaluation: boolean;
+  blockers: string[];
+  orderTimeRiskRecheckRequired: true;
+  orderSubmissionPerformedByStatusRequest: false;
+};
+
 type TradeConnectionStatus = {
   connections?: TradeConnection[];
   liveExecutionServerEnabled?: Partial<Record<Provider, boolean>>;
   liveAutomaticExecutionServerEnabled?: Partial<Record<Provider, boolean>>;
+  liveExecutionReadiness?: Partial<Record<Provider, LiveExecutionReadiness>>;
   credentialVault?: { encryptionConfigured: boolean; keyValueExposed: false };
 };
 
@@ -283,8 +296,10 @@ export function TradeExecutionConnections({
       {visibleProviders.map((provider) => {
         const connection = connections[provider];
         const connected = connection?.configured === true && connection.accountMode === 'live';
+        const providerVerified = connected && Boolean(connection?.lastVerifiedAt) && !connection?.lastErrorCode;
         const serverEnabled = status.liveExecutionServerEnabled?.[provider] === true;
         const automaticServerEnabled = status.liveAutomaticExecutionServerEnabled?.[provider] === true;
+        const readiness = status.liveExecutionReadiness?.[provider];
         return <article key={provider} className="min-w-0 rounded-2xl border border-card-border bg-background p-3" data-testid={`live-connection-${provider}`}>
           <div className="flex min-w-0 items-start justify-between gap-2">
             <div className="min-w-0">
@@ -295,15 +310,19 @@ export function TradeExecutionConnections({
               ? <CheckCircle2 className="h-5 w-5 shrink-0 text-positive" />
               : <AlertTriangle className="h-5 w-5 shrink-0 text-warning" />}
           </div>
-          <div className="mt-3 grid grid-cols-3 gap-2 text-[11px]">
+          <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4">
             <StateChip label="거래키" value={connected ? '저장됨' : '미연결'} good={connected} />
-            <StateChip label="실주문" value={serverEnabled ? 'ON' : 'OFF'} good={serverEnabled} />
-            <StateChip label="자동실주문" value={automaticServerEnabled ? 'ON' : 'OFF'} good={automaticServerEnabled} />
+            <StateChip label="provider 검증" value={providerVerified ? '검증됨' : '미검증'} good={providerVerified} />
+            <StateChip label="수동 실주문" value={serverEnabled ? 'ON' : 'OFF'} good={serverEnabled} />
+            <StateChip label="자동 실주문" value={automaticServerEnabled ? 'ON' : 'OFF'} good={automaticServerEnabled} />
           </div>
           <p className="mt-2 break-words text-[10px] leading-4 text-muted-foreground">
             {connection?.lastVerifiedAt ? `마지막 확인 ${new Date(connection.lastVerifiedAt).toLocaleString('ko-KR')}` : '실주문 provider 검증 증거 없음'}
             {connection?.lastErrorCode ? ` · ${connection.lastErrorCode}` : ''}
           </p>
+          {readiness && readiness.blockers.length > 0 && <p className="mt-1 break-words text-[10px] leading-4 text-warning">
+            준비 blocker: {readiness.blockers.join(' · ')}
+          </p>}
           <div className="mt-3 grid grid-cols-3 gap-2">
             {connected && <button
               type="button"
