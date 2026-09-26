@@ -64,7 +64,16 @@ for (const width of [360, 390, 412, 430]) {
     await primeSelection(page);
     await page.goto(chartUrl);
 
-    await expect(page.getByTestId('ai-chart-mobile-tabs')).toBeVisible();
+    const tabs = page.getByTestId('ai-chart-mobile-tabs');
+    await expect(tabs).toBeVisible();
+    await expect(tabs.getByRole('tab')).toHaveCount(4);
+    const tabBoxes = await tabs.getByRole('tab').evaluateAll((nodes) => nodes.map((node) => {
+      const rect = node.getBoundingClientRect();
+      return { left: rect.left, right: rect.right, width: rect.width, text: node.textContent ?? '' };
+    }));
+    expect(tabBoxes.every((box) => box.width >= 60)).toBe(true);
+    expect(tabBoxes.at(-1)?.text).toContain('상세');
+    expect(tabBoxes.at(-1)?.right ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(width + 1);
     await expect(page.getByTestId('ai-chart-mobile-summary')).toBeVisible();
     await expect(page.getByTestId('ai-chart-mobile-summary')).toContainText('매수');
     await expect(page.getByTestId('ai-chart-mobile-summary')).toContainText('진입');
