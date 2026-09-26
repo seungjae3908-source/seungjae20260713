@@ -7,6 +7,7 @@ on:
       - '.github/workflows/fast-profitability-v1-collector.yml'
       - 'api-server/src/services/fast-profitability-activation.service.ts'
       - 'api-server/src/scripts/run-fast-profitability-collector.ts'
+      - 'api-server/scripts/verify-fast-profitability-bounded-artifact-discovery-contract.mjs'
   schedule:
     - cron: '*/15 * * * *'
 
@@ -62,6 +63,7 @@ jobs:
           grep -Fq "manualCredit: 0" api-server/src/scripts/run-fast-profitability-collector.ts
           grep -Fq 'api-server/.fast-profitability-runtime/forward-observer.mjs' .github/workflows/fast-profitability-v1-collector.yml
           grep -Fq 'api-server/.fast-profitability-runtime/fast-collector.mjs' .github/workflows/fast-profitability-v1-collector.yml
+          node api-server/scripts/verify-fast-profitability-bounded-artifact-discovery-contract.mjs
           git diff --exit-code
           test -z "$(git status --porcelain=v1)"
 
@@ -75,33 +77,61 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
-              owner: context.repo.owner, repo: context.repo.repo, per_page: 100,
-            });
-            const active = artifacts
-              .filter((a) => !a.expired && /^fast-profitability-v1-activation-[0-9a-f]{40}$/.test(a.name))
-              .sort((a,b) => String(b.created_at).localeCompare(String(a.created_at)));
+            const active = [];
+            let discoveryExhausted = false;
+            const maxPages = 5;
+            for (let page = 1; page <= maxPages; page += 1) {
+              const response = await github.rest.actions.listWorkflowRuns({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'fast-profitability-v1-activation.yml',
+                event: 'issue_comment',
+                status: 'completed',
+                per_page: 100,
+                page,
+              });
+              const runs = response.data.workflow_runs ?? [];
+              for (const run of runs) {
+                if (run.conclusion !== 'success') continue;
+                const artifactsResponse = await github.rest.actions.listWorkflowRunArtifacts({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: run.id,
+                  per_page: 100,
+                });
+                for (const artifact of artifactsResponse.data.artifacts ?? []) {
+                  if (!artifact.expired && /^fast-profitability-v1-activation-[0-9a-f]{40}$/.test(artifact.name)) {
+                    active.push({ artifact, run });
+                  }
+                }
+              }
+              if (runs.length < 100) break;
+              if (page === maxPages) discoveryExhausted = true;
+            }
+            if (active.length === 0 && discoveryExhausted) {
+              core.setFailed('FAST_ACTIVATION_DISCOVERY_WINDOW_EXHAUSTED');
+              return;
+            }
             if (active.length === 0) {
               core.notice('No active Fast binding; clean no-op.');
               core.setOutput('found', 'false');
               return;
             }
-            if (active.length !== 1) {
-              core.setFailed('Ambiguous Fast activation artifacts.');
+            if (active.length !== 1 || discoveryExhausted) {
+              core.setFailed(discoveryExhausted
+                ? 'FAST_ACTIVATION_DISCOVERY_WINDOW_EXHAUSTED'
+                : 'Ambiguous Fast activation artifacts.');
               return;
             }
-            const a = active[0];
-            const run = await github.rest.actions.getWorkflowRun({
-              owner: context.repo.owner, repo: context.repo.repo, run_id: a.workflow_run.id,
-            });
-            if (run.data.conclusion !== 'success'
-              || !String(run.data.path).endsWith('fast-profitability-v1-activation.yml')) {
+            const { artifact: a, run } = active[0];
+            if (run.conclusion !== 'success'
+              || !String(run.path).endsWith('fast-profitability-v1-activation.yml')) {
               core.setFailed('Activation artifact provenance invalid.');
               return;
             }
             core.setOutput('found', 'true');
             core.setOutput('name', a.name);
-            core.setOutput('run_id', String(a.workflow_run.id));
+            core.setOutput('run_id', String(run.id));
 
       - name: Clean no-op without activation
         if: steps.activation.outputs.found != 'true'
@@ -154,21 +184,21 @@ jobs:
           ACTIVATION_RUN_ID: ${{ steps.activation.outputs.run_id }}
         with:
           script: |
-            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
-              owner: context.repo.owner, repo: context.repo.repo, per_page: 100,
+            const response = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: Number(process.env.ACTIVATION_RUN_ID),
+              per_page: 100,
             });
-            const matches = artifacts.filter((a) => !a.expired && a.name === process.env.KEY_NAME);
+            const matches = (response.data.artifacts ?? [])
+              .filter((a) => !a.expired && a.name === process.env.KEY_NAME);
             if (matches.length !== 1) {
-              core.setFailed('Exactly one OOS key artifact required.');
+              core.setFailed('Exactly one OOS key artifact required on the bound activation run.');
               return;
             }
             const a = matches[0];
-            if (String(a.workflow_run.id) !== process.env.ACTIVATION_RUN_ID) {
-              core.setFailed('OOS key run mismatch.');
-              return;
-            }
             core.setOutput('name', a.name);
-            core.setOutput('run_id', String(a.workflow_run.id));
+            core.setOutput('run_id', String(process.env.ACTIVATION_RUN_ID));
 
       - name: Download OOS key
         if: steps.activation.outputs.found == 'true'
@@ -188,24 +218,40 @@ jobs:
           STATE_NAME: fast-profitability-v1-state-${{ steps.binding.outputs.activation_digest }}
         with:
           script: |
-            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
-              owner: context.repo.owner, repo: context.repo.repo, per_page: 100,
-            });
-            const rows = artifacts
-              .filter((a) => !a.expired && a.name === process.env.STATE_NAME)
-              .sort((a,b) => String(b.created_at).localeCompare(String(a.created_at)));
-            for (const a of rows) {
-              const run = await github.rest.actions.getWorkflowRun({
-                owner: context.repo.owner, repo: context.repo.repo, run_id: a.workflow_run.id,
+            const maxPages = 5;
+            for (let page = 1; page <= maxPages; page += 1) {
+              const response = await github.rest.actions.listWorkflowRuns({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'fast-profitability-v1-collector.yml',
+                event: 'schedule',
+                status: 'completed',
+                per_page: 100,
+                page,
               });
-              if (run.data.conclusion !== 'success'
-                || !String(run.data.path).endsWith('fast-profitability-v1-collector.yml')) continue;
-              core.setOutput('found', 'true');
-              core.setOutput('name', a.name);
-              core.setOutput('run_id', String(a.workflow_run.id));
-              return;
+              const runs = response.data.workflow_runs ?? [];
+              for (const run of runs) {
+                if (run.conclusion !== 'success') continue;
+                const artifactsResponse = await github.rest.actions.listWorkflowRunArtifacts({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: run.id,
+                  per_page: 100,
+                });
+                const a = (artifactsResponse.data.artifacts ?? [])
+                  .find((item) => !item.expired && item.name === process.env.STATE_NAME);
+                if (!a) continue;
+                core.setOutput('found', 'true');
+                core.setOutput('name', a.name);
+                core.setOutput('run_id', String(run.id));
+                return;
+              }
+              if (runs.length < 100) {
+                core.setOutput('found', 'false');
+                return;
+              }
             }
-            core.setOutput('found', 'false');
+            core.setFailed('FAST_STATE_DISCOVERY_WINDOW_EXHAUSTED');
 
       - name: Download prior cumulative state
         if: steps.activation.outputs.found == 'true' && steps.previous.outputs.found == 'true'
@@ -223,23 +269,40 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
-              owner: context.repo.owner, repo: context.repo.repo, per_page: 100,
-            });
-            const rows = artifacts
-              .filter((a) => !a.expired && /^prediction-lab-shadow-cycle-[0-9]+$/.test(a.name))
-              .sort((a,b) => String(b.created_at).localeCompare(String(a.created_at)));
-            for (const a of rows) {
-              const run = await github.rest.actions.getWorkflowRun({
-                owner: context.repo.owner, repo: context.repo.repo, run_id: a.workflow_run.id,
+            const maxPages = 5;
+            for (let page = 1; page <= maxPages; page += 1) {
+              const response = await github.rest.actions.listWorkflowRuns({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'prediction-lab-canonical-shadow-cycle.yml',
+                status: 'completed',
+                per_page: 100,
+                page,
               });
-              if (run.data.conclusion !== 'success') continue;
-              core.setOutput('found', 'true');
-              core.setOutput('name', a.name);
-              core.setOutput('run_id', String(a.workflow_run.id));
-              return;
+              const runs = response.data.workflow_runs ?? [];
+              for (const run of runs) {
+                if (run.conclusion !== 'success') continue;
+                const artifactsResponse = await github.rest.actions.listWorkflowRunArtifacts({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: run.id,
+                  per_page: 100,
+                });
+                const expectedName = `prediction-lab-shadow-cycle-${run.id}`;
+                const a = (artifactsResponse.data.artifacts ?? [])
+                  .find((item) => !item.expired && item.name === expectedName);
+                if (!a) continue;
+                core.setOutput('found', 'true');
+                core.setOutput('name', a.name);
+                core.setOutput('run_id', String(run.id));
+                return;
+              }
+              if (runs.length < 100) {
+                core.setOutput('found', 'false');
+                return;
+              }
             }
-            core.setOutput('found', 'false');
+            core.setFailed('SHADOW_ARTIFACT_DISCOVERY_WINDOW_EXHAUSTED');
 
       - name: Download Shadow artifact
         if: steps.activation.outputs.found == 'true' && steps.shadow.outputs.found == 'true'
