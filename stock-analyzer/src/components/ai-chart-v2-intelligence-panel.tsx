@@ -107,12 +107,12 @@ function currentEvidenceFromExistingChart(
   const scannerSide = normalizeContextSide(selection.action, selection.market);
   const scannerScore = finiteScore(selection.signalScore ?? selection.confidence);
   const reasons = (selection.reasons ?? []).filter(Boolean).slice(0, 8);
-  const failClosed = quality === 'STALE' || quality === '미확인' || quality === 'PARTIAL';
+  const failClosed = quality === 'STALE' || quality === 'UNAVAILABLE' || quality === 'PARTIAL';
 
   if (failClosed) {
     const risk = quality === 'STALE'
       ? '현재 시간봉 데이터가 오래되어 방향 판단을 보류'
-      : quality === '미확인'
+      : quality === 'UNAVAILABLE'
         ? '현재 시간봉 데이터를 사용할 수 없어 방향 판단을 보류'
         : '현재 시간봉 데이터가 충분하지 않아 방향 판단을 보류';
     return {
@@ -244,7 +244,7 @@ function v3EvidenceFromContexts(
       && context.score != null
       && context.quality !== 'STALE'
       && context.quality !== 'PARTIAL'
-      && context.quality !== '미확인',
+      && context.quality !== 'UNAVAILABLE',
     reasons: [
       ...context.positiveFactors,
       ...context.negativeFactors,
