@@ -73,7 +73,7 @@ function formatDisplayMoney(value: number | null, currency: DisplayCurrency) {
     minimumFractionDigits: currency === 'USD' ? 2 : 0,
     maximumFractionDigits: digits,
   }).format(value);
-  return currency === 'KRW' ? `₩${formatted}` : `${formatted}`;
+  return currency === 'KRW' ? `₩${formatted}` : `$${formatted}`;
 }
 
 function summarizeFacts(facts: MoneyFact[], currency: DisplayCurrency, fx: AccountDisplayFx | null) {
