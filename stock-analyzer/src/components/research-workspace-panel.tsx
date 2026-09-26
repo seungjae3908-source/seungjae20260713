@@ -1,6 +1,7 @@
 import { ResearchWorkspaceProviders } from './research-workspace-providers';
 import { ResearchWorkspaceWorker } from './research-workspace-worker';
 import { ResearchWorkspaceOrchestrator } from './research-workspace-orchestrator';
+import { ResearchWorkspaceOneShotReview } from './research-workspace-one-shot-review';
 import { useEffect, useMemo, useState } from 'react';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { filterResearchStrategies, parseResearchWorkspaceResponse, WORKSPACE_MARKETS,
@@ -48,6 +49,7 @@ export function ResearchWorkspacePanel() {
       <ResearchWorkspaceProviders revision={revision}/>
       <ResearchWorkspaceWorker revision={revision}/>
       <ResearchWorkspaceOrchestrator revision={revision}/>
+      <ResearchWorkspaceOneShotReview revision={revision}/>
       <div className="rounded-xl border border-card-border bg-muted/30 p-3 text-xs text-muted-foreground">24시간 작업자·자동 연구 체인: 별도 활성화 · 일 목표: 미검증 · 전략 적용: 비활성</div>
       <div className="flex flex-wrap items-center gap-2" aria-label="연구 시장 필터">
         {(['ALL','STOCK','CRYPTO'] as const).map(g=><button key={g} type="button" aria-pressed={group===g} className={`${btn} ${group===g?'bg-primary text-primary-foreground':'bg-card'}`} onClick={()=>{setGroup(g);setMarket('ALL');}}>{g==='ALL'?'전체':g==='STOCK'?'주식':'코인'}</button>)}
