@@ -788,7 +788,6 @@ test('AI Chart creates a server-verified live entry draft without submitting an 
   });
 
   await page.goto(chartUrl);
-  await page.getByRole('tab', { name: '차트', exact: true }).click();
   const panel = page.getByTestId('ai-chart-position-panel');
   await expect(panel).toBeVisible();
   const cockpit = panel.getByTestId('ai-chart-trading-cockpit');
