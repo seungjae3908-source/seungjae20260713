@@ -373,6 +373,36 @@ export function prepareBitgetPendingOrders(credentials: BitgetCredentials, symbo
   return bitgetRequest(credentials, 'GET', '/api/v2/mix/order/orders-pending', null, query, timestamp);
 }
 
+export function prepareBitgetUtaAccountInfo(credentials: BitgetCredentials, timestamp?: string) {
+  return bitgetRequest(credentials, 'GET', '/api/v3/account/info', null, '', timestamp);
+}
+
+export function prepareBitgetUtaAssets(credentials: BitgetCredentials, timestamp?: string) {
+  return bitgetRequest(credentials, 'GET', '/api/v3/account/assets', null, '', timestamp);
+}
+
+export function prepareBitgetUtaPositions(credentials: BitgetCredentials, timestamp?: string) {
+  return bitgetRequest(
+    credentials,
+    'GET',
+    '/api/v3/position/current-position',
+    null,
+    'category=USDT-FUTURES',
+    timestamp,
+  );
+}
+
+export function prepareBitgetUtaPendingOrders(credentials: BitgetCredentials, timestamp?: string) {
+  return bitgetRequest(
+    credentials,
+    'GET',
+    '/api/v3/trade/unfilled-orders',
+    null,
+    'category=USDT-FUTURES',
+    timestamp,
+  );
+}
+
 export function prepareBitgetMarginMode(
   credentials: BitgetCredentials, symbol: string, marginMode: 'crossed' | 'isolated', timestamp?: string,
 ) {

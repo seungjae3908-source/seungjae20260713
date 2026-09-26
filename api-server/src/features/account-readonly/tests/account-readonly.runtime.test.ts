@@ -65,13 +65,16 @@ test('vault-backed Upbit reader is user-scoped, GET-only, and never returns cred
   assert.equal(serialized.includes('UPBIT_ACCESS_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('UPBIT_SECRET_RUNTIME_TEST_ONLY'), false);
 });
 
-test('vault-backed Bitget reader emits only the three allowlisted signed GET reads', async () => {
+test('vault-backed Bitget Classic reader probes v3 safely then emits only allowlisted signed GET reads', async () => {
   const paths: string[] = []; const methods: string[] = [];
   const readers = createVaultBackedAccountReaders({
     repositoryFactory: () => repositoryFor('bitget'),
     decryptCredentials: () => ({ apiKey: 'BITGET_KEY_RUNTIME_TEST_ONLY', secretKey: 'BITGET_SECRET_RUNTIME_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_RUNTIME_TEST_ONLY' }),
     fetchImpl: async (input, init) => {
       const url = new URL(String(input)); assert.equal(url.origin, 'https://api.bitget.com'); paths.push(url.pathname); methods.push(String(init?.method));
+      if (url.pathname === '/api/v3/account/info') {
+        return new Response(JSON.stringify({ code: '00000', data: { permissions: [] } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
       const body = url.pathname.includes('/position/')
         ? { code: '00000', data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', leverage: '2' }] }
         : url.pathname.includes('/orders-pending')
@@ -81,10 +84,92 @@ test('vault-backed Bitget reader emits only the three allowlisted signed GET rea
     },
   });
   const result = await readers.bitget!(SCOPE);
-  assert.deepEqual(new Set(paths), new Set(['/api/v2/mix/account/accounts', '/api/v2/mix/position/all-position', '/api/v2/mix/order/orders-pending']));
+  assert.deepEqual(new Set(paths), new Set([
+    '/api/v3/account/info',
+    '/api/v2/mix/account/accounts',
+    '/api/v2/mix/position/all-position',
+    '/api/v2/mix/order/orders-pending',
+  ]));
   assert.ok(methods.every((method) => method === 'GET')); assert.equal(result.connected, true); assert.equal(result.openOrders?.[0]?.id, 'BG-OPEN-1'); assert.ok(Math.abs((result.openOrders?.[0]?.remainingQuantity ?? 0) - 0.06) < 1e-12); assert.equal(result.orderRequests, 0); assert.equal(result.withdrawalRequests, 0);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('BITGET_KEY_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('BITGET_PASSPHRASE_RUNTIME_TEST_ONLY'), false);
+});
+
+test('vault-backed Bitget UTA reader uses only v3 signed GET reads and maps assets positions and open orders', async () => {
+  const seen: Array<{ path: string; search: string; method: string; body: BodyInit | null | undefined }> = [];
+  const readers = createVaultBackedAccountReaders({
+    repositoryFactory: () => repositoryFor('bitget'),
+    decryptCredentials: () => ({ apiKey: 'BITGET_KEY_RUNTIME_TEST_ONLY', secretKey: 'BITGET_SECRET_RUNTIME_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_RUNTIME_TEST_ONLY' }),
+    fetchImpl: async (input, init) => {
+      const url = new URL(String(input));
+      assert.equal(url.origin, 'https://api.bitget.com');
+      seen.push({ path: url.pathname, search: url.search, method: String(init?.method), body: init?.body });
+
+      if (url.pathname === '/api/v3/account/info') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: { permType: 'read-only', permissions: ['uta_mgt', 'uta_trade'] },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v3/account/assets') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: {
+            accountEquity: '100',
+            assets: [{ coin: 'USDT', equity: '100', balance: '100', available: '90', locked: '10' }],
+          },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v3/position/current-position') {
+        assert.equal(url.search, '?category=USDT-FUTURES');
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: { list: [{
+            category: 'USDT-FUTURES', symbol: 'BTCUSDT', total: '0.1', available: '0.08',
+            avgPrice: '60000', markPrice: '61000', unrealisedPnl: '100', leverage: '2',
+            liquidationPrice: '30000', marginMode: 'crossed', posSide: 'long',
+          }] },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v3/trade/unfilled-orders') {
+        assert.equal(url.search, '?category=USDT-FUTURES');
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: { list: [{
+            orderId: 'UTA-OPEN-1', category: 'USDT-FUTURES', symbol: 'BTCUSDT', side: 'buy',
+            price: '60000', qty: '0.1', cumExecQty: '0.04', orderStatus: 'partially_filled',
+          }], cursor: '' },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+
+  const result = await readers.bitget!(SCOPE);
+  assert.deepEqual(new Set(seen.map((row) => row.path)), new Set([
+    '/api/v3/account/info',
+    '/api/v3/account/assets',
+    '/api/v3/position/current-position',
+    '/api/v3/trade/unfilled-orders',
+  ]));
+  assert.ok(seen.every((row) => row.method === 'GET' && row.body === undefined));
+  assert.equal(result.connected, true);
+  assert.equal(result.balances?.[0]?.currency, 'USDT');
+  assert.equal(result.balances?.[0]?.total, 100);
+  assert.equal(result.positions?.[0]?.symbol, 'BTCUSDT');
+  assert.equal(result.positions?.[0]?.quantity, 0.1);
+  assert.equal(result.positions?.[0]?.side, 'long');
+  assert.equal(result.openOrders?.[0]?.id, 'UTA-OPEN-1');
+  assert.ok(Math.abs((result.openOrders?.[0]?.remainingQuantity ?? 0) - 0.06) < 1e-12);
+  assert.equal(result.orderRequests, 0);
+  assert.equal(result.cancelRequests, 0);
+  assert.equal(result.amendRequests, 0);
+  assert.equal(result.transferRequests, 0);
+  assert.equal(result.withdrawalRequests, 0);
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes('BITGET_KEY_RUNTIME_TEST_ONLY'), false);
+  assert.equal(serialized.includes('BITGET_SECRET_RUNTIME_TEST_ONLY'), false);
+  assert.equal(serialized.includes('BITGET_PASSPHRASE_RUNTIME_TEST_ONLY'), false);
 });
 
 test('vault-backed Toss reader parses the canonical OpenAPI accounts and holdings envelopes', async () => {
