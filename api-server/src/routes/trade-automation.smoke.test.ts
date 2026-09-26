@@ -299,6 +299,15 @@ test('exit preview re-reads the real position in read-only mode and never submit
       orderAmended: boolean;
       privateTradingMutationSent: boolean;
       executionAuthority: string;
+      executionReadiness: {
+        connectionConfigured: boolean;
+        providerVerified: boolean;
+        manualServerGateEnabled: boolean;
+        readyForManualExitEvaluation: boolean;
+        blockers: string[];
+        orderSubmissionPerformedByPreview: boolean;
+        executionAuthorityGrantedByPreview: boolean;
+      };
     };
     assert.equal(reads, 1);
     assert.equal(body.preview.provider, 'toss');
@@ -312,6 +321,11 @@ test('exit preview re-reads the real position in read-only mode and never submit
     assert.equal(body.orderAmended, false);
     assert.equal(body.privateTradingMutationSent, false);
     assert.equal(body.executionAuthority, 'NONE');
+    assert.equal(body.executionReadiness.readyForManualExitEvaluation, false);
+    assert.equal(body.executionReadiness.connectionConfigured, false);
+    assert.equal(body.executionReadiness.orderSubmissionPerformedByPreview, false);
+    assert.equal(body.executionReadiness.executionAuthorityGrantedByPreview, false);
+    assert.ok(body.executionReadiness.blockers.includes('LIVE_CONNECTION_NOT_CONFIGURED'));
   } finally {
     setTradeExitPreviewReadersFactoryForTests(null);
     await close(server);

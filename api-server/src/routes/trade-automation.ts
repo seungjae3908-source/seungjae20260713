@@ -18,6 +18,7 @@ import { normalizeTradingPolicy } from '../services/trade-automation-risk.servic
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
 import type {
+  ExchangeConnection,
   TradingExchange,
   TradingOrder,
   TradingPlan,
@@ -97,6 +98,30 @@ function context(req: AuthenticatedRequest) {
     amendment: new TradeOrderAmendmentService(repository),
     splitExecution,
     cancellation: new TradeCancelReconciliationService(repository),
+  };
+}
+
+function liveExecutionReadinessForConnection(
+  exchange: TradingExchange,
+  connection: ExchangeConnection | null,
+  vaultEncryptionConfigured: boolean,
+) {
+  const blockers: string[] = [];
+  if (!vaultEncryptionConfigured) blockers.push('CREDENTIAL_VAULT_NOT_READY');
+  if (!connection?.configured || connection.accountMode !== 'live') blockers.push('LIVE_CONNECTION_NOT_CONFIGURED');
+  if (connection?.configured && connection.accountMode === 'live'
+    && (!connection.lastVerifiedAt || connection.lastErrorCode)) {
+    blockers.push('LIVE_CONNECTION_NOT_VERIFIED');
+  }
+  if (!liveExecutionEnabled(exchange)) blockers.push('MANUAL_LIVE_SERVER_GATE_OFF');
+  return {
+    connectionConfigured: connection?.configured === true && connection.accountMode === 'live',
+    providerVerified: Boolean(connection?.lastVerifiedAt) && !connection?.lastErrorCode,
+    manualServerGateEnabled: liveExecutionEnabled(exchange),
+    readyForManualExitEvaluation: blockers.length === 0,
+    blockers,
+    orderSubmissionPerformedByPreview: false,
+    executionAuthorityGrantedByPreview: false,
   };
 }
 
@@ -299,24 +324,15 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
     const liveExecutionReadiness = Object.fromEntries(
       [...EXCHANGES].map((exchange) => {
         const connection = connections.find((row) => row.exchange === exchange) ?? null;
-        const blockers: string[] = [];
-        if (!vaultStatus.encryptionConfigured) blockers.push('CREDENTIAL_VAULT_NOT_READY');
-        if (!connection?.configured || connection.accountMode !== 'live') blockers.push('LIVE_CONNECTION_NOT_CONFIGURED');
-        if (connection?.configured && connection.accountMode === 'live'
-          && (!connection.lastVerifiedAt || connection.lastErrorCode)) {
-          blockers.push('LIVE_CONNECTION_NOT_VERIFIED');
-        }
-        if (!liveExecutionEnabled(exchange)) blockers.push('MANUAL_LIVE_SERVER_GATE_OFF');
+        const manual = liveExecutionReadinessForConnection(exchange, connection, vaultStatus.encryptionConfigured);
+        const blockers = [...manual.blockers];
         if (!automaticLiveExecutionEnabled(exchange)) blockers.push('AUTOMATIC_LIVE_SERVER_GATE_OFF');
         return [exchange, {
-          connectionConfigured: connection?.configured === true && connection.accountMode === 'live',
-          providerVerified: Boolean(connection?.lastVerifiedAt) && !connection?.lastErrorCode,
-          manualServerGateEnabled: liveExecutionEnabled(exchange),
+          connectionConfigured: manual.connectionConfigured,
+          providerVerified: manual.providerVerified,
+          manualServerGateEnabled: manual.manualServerGateEnabled,
           automaticServerGateEnabled: automaticLiveExecutionEnabled(exchange),
-          readyForManualOrderEvaluation: blockers.every((code) => code !== 'CREDENTIAL_VAULT_NOT_READY'
-            && code !== 'LIVE_CONNECTION_NOT_CONFIGURED'
-            && code !== 'LIVE_CONNECTION_NOT_VERIFIED'
-            && code !== 'MANUAL_LIVE_SERVER_GATE_OFF'),
+          readyForManualOrderEvaluation: manual.readyForManualExitEvaluation,
           readyForAutomaticOrderEvaluation: blockers.length === 0,
           blockers,
           orderTimeRiskRecheckRequired: true,
@@ -637,13 +653,17 @@ router.post('/positions/exit-preview', async (req: AuthenticatedRequest, res) =>
   const readers = exitPreviewReadersFactoryForTests?.() ?? createVaultBackedAccountReaders();
   const reader = readers[provider];
   if (!reader) return res.status(503).json({ ok: false, error: 'EXIT_PREVIEW_READER_UNAVAILABLE' });
+  const { repository } = context(req);
 
   const controller = new AbortController();
   const abort = () => controller.abort(new Error('EXIT_PREVIEW_ABORTED'));
   req.once('aborted', abort);
   res.once('close', abort);
   try {
-    const snapshot = await reader({ userId, accessToken }, controller.signal);
+    const [snapshot, connection] = await Promise.all([
+      reader({ userId, accessToken }, controller.signal),
+      repository.getConnection(userId, provider as TradingExchange),
+    ]);
     if (controller.signal.aborted || res.writableEnded) return undefined;
     if (snapshot.readOnly !== true
       || snapshot.connected !== true
@@ -700,6 +720,11 @@ router.post('/positions/exit-preview', async (req: AuthenticatedRequest, res) =>
       orderAmended: false,
       privateTradingMutationSent: false,
       executionAuthority: 'NONE',
+      executionReadiness: liveExecutionReadinessForConnection(
+        provider as TradingExchange,
+        connection,
+        credentialConfigurationStatus().encryptionConfigured,
+      ),
     });
   } catch (error) {
     if (controller.signal.aborted || res.writableEnded) return undefined;
