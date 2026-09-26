@@ -227,8 +227,8 @@ function resetEnvironment() {
   delete process.env.REAL_ORDER_ENABLED;
   delete process.env.PRIVATE_TRADING_API_ALLOWED;
   delete process.env.UPBIT_LIVE_ORDER_ENABLED;
-    delete process.env.LIVE_TRADING;
-    delete process.env.executionAuthority;
+  delete process.env.LIVE_TRADING;
+  delete process.env.executionAuthority;
 }
 
 test.afterEach(resetEnvironment);
