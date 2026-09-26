@@ -110,6 +110,9 @@ test('AI chat refuses order and server actions without calling a provider', asyn
   let calls = 0;
   const result = await answerAiChat({ message: '실제 주문 실행하고 서버 배포도 시작해줘' }, async () => { calls += 1; throw new Error('must not call'); });
   assert.equal(result.kind, 'refusal');
+  assert.equal(result.provider, null);
+  assert.equal(result.fallbackUsed, false);
+  assert.equal(result.providerLatencyMs, null);
   assert.equal(calls, 0);
   assert.match(result.answer, /실행할 수 없습니다/);
 });
@@ -155,6 +158,9 @@ test('GEMINI_API_KEY enables the free Gemini provider without a duplicate AI cha
     });
     assert.equal(result.kind, 'answer');
     assert.equal(result.model, 'gemini-3.1-flash-lite');
+    assert.equal(result.provider, 'google-gemini');
+    assert.equal(result.fallbackUsed, false);
+    assert.ok(result.providerLatencyMs != null && result.providerLatencyMs >= 0);
     assert.match(requestUrl, /generativelanguage\.googleapis\.com\/v1beta\/models\/gemini-3\.1-flash-lite:generateContent$/);
     assert.equal(apiKeyHeader, 'test-gemini-key');
     assert.equal(requestBody.contents[0].role, 'user');
@@ -188,6 +194,9 @@ test('explicit openai-compatible configuration remains supported', async () => {
     });
     assert.equal(result.kind, 'answer');
     assert.equal(result.model, 'test-model');
+    assert.equal(result.provider, 'openai-compatible');
+    assert.equal(result.fallbackUsed, false);
+    assert.ok(result.providerLatencyMs != null && result.providerLatencyMs >= 0);
     assert.equal(requestUrl, 'https://api.openai.com/v1/chat/completions');
     assert.equal(requestBody.model, 'test-model');
     assert.match(requestBody.messages[1].content, /RSI 를 설명해줘/);
@@ -220,7 +229,11 @@ test('Gemini success makes zero Groq calls', async () => {
       const url = String(input); if (url.includes('api.groq.com')) groqCalls += 1;
       return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'PER 설명' }] } }] }), { status: 200 });
     });
-    assert.equal(result.answer, 'PER 설명'); assert.equal(groqCalls, 0);
+    assert.equal(result.answer, 'PER 설명');
+    assert.equal(result.provider, 'google-gemini');
+    assert.equal(result.fallbackUsed, false);
+    assert.ok(result.providerLatencyMs != null && result.providerLatencyMs >= 0);
+    assert.equal(groqCalls, 0);
   } finally { restoreAiEnvironment(previous); }
 });
 
@@ -289,7 +302,12 @@ test('Gemini 429 and retryable 5xx fall back to Groq exactly once', async () => 
         assert.doesNotMatch(String(init?.body), /fake-groq|fake-gemini/);
         return new Response(JSON.stringify({ choices: [{ message: { content: 'Groq fallback answer' } }] }), { status: 200 });
       });
-      assert.equal(result.answer, 'Groq fallback answer'); assert.equal(result.model, 'openai/gpt-oss-20b'); assert.equal(groqCalls, 1);
+      assert.equal(result.answer, 'Groq fallback answer');
+      assert.equal(result.model, 'openai/gpt-oss-20b');
+      assert.equal(result.provider, 'groq');
+      assert.equal(result.fallbackUsed, true);
+      assert.ok(result.providerLatencyMs != null && result.providerLatencyMs >= 0);
+      assert.equal(groqCalls, 1);
     } finally { restoreAiEnvironment(previous); }
   }
 });
@@ -387,6 +405,9 @@ test('POST /api/ai/chat uses only a mock Gemini provider and never leaks the tes
     assert.equal(success.body.ok, true);
     assert.equal(success.body.kind, 'answer');
     assert.equal(success.body.model, 'gemini-3.1-flash-lite');
+    assert.equal(success.body.provider, 'google-gemini');
+    assert.equal(success.body.fallbackUsed, false);
+    assert.equal(typeof success.body.providerLatencyMs, 'number');
     assert.match(String(success.body.answer), /공개 주식 정보/);
     assert.doesNotMatch(success.text, new RegExp(testKey));
     assert.equal(providerCalls, 1);
