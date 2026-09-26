@@ -382,6 +382,41 @@ type ExitExecutionPackageState =
   | { kind: 'ready'; executionPackage: CanonicalExitExecutionPackage }
   | { kind: 'unavailable'; code: string };
 
+type CanonicalExitSubmissionGate = {
+  schemaVersion: 'ai-chart-exit-provider-submission-gate-v1';
+  state: 'LOCKED_DRAFT_ONLY';
+  gateId: string;
+  executionPackageId: string;
+  provider: ExitPreview['provider'];
+  market: string;
+  symbol: string;
+  accountMode: 'live';
+  orderType: 'market';
+  side: 'buy' | 'sell';
+  quantity: number;
+  percent: number;
+  reduceOnly: true;
+  evaluatedAt: string;
+  expiresAt: string;
+  blockers: string[];
+  packageValidated: true;
+  connectionReadinessChecked: true;
+  finalProviderOrderbookRiskRequired: true;
+  separateLiveExecutionAuthorizationRequired: true;
+  providerMutationAllowed: false;
+  providerRequestPrepared: false;
+  orderSubmissionPerformed: false;
+  financialMutationPerformed: false;
+  executionAuthority: 'NONE';
+  nextOwner: 'CANONICAL_EXIT_PROVIDER_SUBMISSION_OWNER';
+};
+
+type ExitSubmissionGateState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'ready'; gate: CanonicalExitSubmissionGate }
+  | { kind: 'unavailable'; code: string };
+
 type ExecutionReadiness = {
   connectionConfigured: boolean;
   providerVerified: boolean;
@@ -689,6 +724,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
   const [exitRiskState, setExitRiskState] = useState<ExitRiskState>({ kind: 'idle' });
   const [exitPreflightState, setExitPreflightState] = useState<ExitPreflightState>({ kind: 'idle' });
   const [exitExecutionPackageState, setExitExecutionPackageState] = useState<ExitExecutionPackageState>({ kind: 'idle' });
+  const [exitSubmissionGateState, setExitSubmissionGateState] = useState<ExitSubmissionGateState>({ kind: 'idle' });
   const [entryReadiness, setEntryReadiness] = useState<EntryReadinessState>({ kind: 'idle' });
   const [liveEntryDraft, setLiveEntryDraft] = useState<LiveEntryDraftState>({ kind: 'idle' });
   const abortRef = useRef<AbortController | null>(null);
@@ -707,6 +743,8 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
   const exitPreflightSequenceRef = useRef(0);
   const exitExecutionPackageAbortRef = useRef<AbortController | null>(null);
   const exitExecutionPackageSequenceRef = useRef(0);
+  const exitSubmissionGateAbortRef = useRef<AbortController | null>(null);
+  const exitSubmissionGateSequenceRef = useRef(0);
   const entryReadinessAbortRef = useRef<AbortController | null>(null);
   const entryReadinessSequenceRef = useRef(0);
   const liveDraftAbortRef = useRef<AbortController | null>(null);
@@ -737,6 +775,9 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     exitExecutionPackageSequenceRef.current += 1;
     exitExecutionPackageAbortRef.current?.abort();
     exitExecutionPackageAbortRef.current = null;
+    exitSubmissionGateSequenceRef.current += 1;
+    exitSubmissionGateAbortRef.current?.abort();
+    exitSubmissionGateAbortRef.current = null;
     entryReadinessSequenceRef.current += 1;
     entryReadinessAbortRef.current?.abort();
     entryReadinessAbortRef.current = null;
@@ -763,6 +804,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setExitRiskState({ kind: 'idle' });
     setExitPreflightState({ kind: 'idle' });
     setExitExecutionPackageState({ kind: 'idle' });
+    setExitSubmissionGateState({ kind: 'idle' });
     setEntryReadiness({ kind: 'idle' });
     setLiveEntryDraft({ kind: 'idle' });
     onOverlayChange(null);
@@ -778,6 +820,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
       exitRiskAbortRef.current?.abort();
       exitPreflightAbortRef.current?.abort();
       exitExecutionPackageAbortRef.current?.abort();
+      exitSubmissionGateAbortRef.current?.abort();
       entryReadinessAbortRef.current?.abort();
       liveDraftAbortRef.current?.abort();
     };
@@ -800,6 +843,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setExitRiskState({ kind: 'idle' });
     setExitPreflightState({ kind: 'idle' });
     setExitExecutionPackageState({ kind: 'idle' });
+    setExitSubmissionGateState({ kind: 'idle' });
     onOverlayChange(null);
     try {
       const response = await authorizedFetch(`/api/accounts/read-only/${provider}`, {
@@ -913,6 +957,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setExitRiskState({ kind: 'idle' });
     setExitPreflightState({ kind: 'idle' });
     setExitExecutionPackageState({ kind: 'idle' });
+    setExitSubmissionGateState({ kind: 'idle' });
     setEntryReadiness({ kind: 'idle' });
     onOverlayChange(null);
   }, [onOverlayChange, stockProvider]);
@@ -1515,6 +1560,10 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     exitExecutionPackageAbortRef.current = controller;
     const sequence = ++exitExecutionPackageSequenceRef.current;
     setExitExecutionPackageState({ kind: 'loading' });
+    exitSubmissionGateSequenceRef.current += 1;
+    exitSubmissionGateAbortRef.current?.abort();
+    exitSubmissionGateAbortRef.current = null;
+    setExitSubmissionGateState({ kind: 'idle' });
     try {
       const response = await authorizedFetch('/api/trade-automation/positions/exit-execution-package', {
         method: 'POST',
@@ -1598,6 +1647,104 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
       if (exitExecutionPackageAbortRef.current === controller) exitExecutionPackageAbortRef.current = null;
     }
   }, [exitExecutionPackageState.kind, exitPreflightState]);
+
+  const evaluateCanonicalExitSubmissionGate = useCallback(async () => {
+    if (exitExecutionPackageState.kind !== 'ready'
+      || exitExecutionPackageState.executionPackage.packageReady !== true
+      || exitSubmissionGateState.kind === 'loading') return;
+    const executionPackage = exitExecutionPackageState.executionPackage;
+    const controller = new AbortController();
+    exitSubmissionGateAbortRef.current?.abort();
+    exitSubmissionGateAbortRef.current = controller;
+    const sequence = ++exitSubmissionGateSequenceRef.current;
+    setExitSubmissionGateState({ kind: 'loading' });
+    try {
+      const response = await authorizedFetch('/api/trade-automation/positions/exit-submission-gate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          confirmed: true,
+          executionPackageId: executionPackage.executionPackageId,
+          preflightIntentId: executionPackage.preflightIntentId,
+          riskIntentId: executionPackage.riskIntentId,
+          approvalIntentId: executionPackage.approvalIntentId,
+          planId: executionPackage.planId,
+          exitDraftId: executionPackage.exitDraftId,
+          provider: executionPackage.provider,
+          market: executionPackage.market,
+          symbol: executionPackage.symbol,
+          percent: executionPackage.percent,
+          positionQuantity: executionPackage.positionQuantity,
+          availableQuantity: executionPackage.availableQuantity,
+          quantity: executionPackage.quantity,
+          side: executionPackage.side,
+          preflightCheckedAt: executionPackage.preflightCheckedAt,
+          packageCheckedAt: executionPackage.packageCheckedAt,
+          preflightReferencePrice: executionPackage.preflightReferencePrice,
+          packageReferencePrice: executionPackage.packageReferencePrice,
+          issuedAt: executionPackage.issuedAt,
+          expiresAt: executionPackage.expiresAt,
+          blockers: executionPackage.blockers,
+          packageReady: executionPackage.packageReady,
+        }),
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => null) as {
+        ok?: boolean;
+        error?: string;
+        canonicalExitSubmissionGate?: CanonicalExitSubmissionGate;
+        gateEvaluated?: boolean;
+        providerMutationAllowed?: boolean;
+        providerRequestPrepared?: boolean;
+        financialMutationPerformed?: boolean;
+        orderSubmitted?: boolean;
+        orderCanceled?: boolean;
+        orderAmended?: boolean;
+        privateTradingMutationSent?: boolean;
+        executionAuthority?: string;
+      } | null;
+      if (controller.signal.aborted || sequence !== exitSubmissionGateSequenceRef.current) return;
+      const gate = payload?.canonicalExitSubmissionGate;
+      if (!response.ok || payload?.ok !== true || !gate) {
+        setExitSubmissionGateState({ kind: 'unavailable', code: payload?.error ?? `HTTP_${response.status}` });
+        return;
+      }
+      if (payload.gateEvaluated !== true
+        || payload.providerMutationAllowed !== false
+        || payload.providerRequestPrepared !== false
+        || payload.financialMutationPerformed !== false
+        || payload.orderSubmitted !== false
+        || payload.orderCanceled !== false
+        || payload.orderAmended !== false
+        || payload.privateTradingMutationSent !== false
+        || payload.executionAuthority !== 'NONE'
+        || gate.schemaVersion !== 'ai-chart-exit-provider-submission-gate-v1'
+        || gate.state !== 'LOCKED_DRAFT_ONLY'
+        || !/^[0-9a-f]{64}$/u.test(gate.gateId)
+        || gate.executionPackageId !== executionPackage.executionPackageId
+        || gate.reduceOnly !== true
+        || gate.packageValidated !== true
+        || gate.connectionReadinessChecked !== true
+        || gate.finalProviderOrderbookRiskRequired !== true
+        || gate.separateLiveExecutionAuthorizationRequired !== true
+        || gate.providerMutationAllowed !== false
+        || gate.providerRequestPrepared !== false
+        || gate.orderSubmissionPerformed !== false
+        || gate.financialMutationPerformed !== false
+        || gate.executionAuthority !== 'NONE'
+        || gate.nextOwner !== 'CANONICAL_EXIT_PROVIDER_SUBMISSION_OWNER'
+        || !gate.blockers.includes('DRAFT_PROVIDER_SUBMISSION_NOT_AUTHORIZED')) {
+        setExitSubmissionGateState({ kind: 'unavailable', code: 'EXIT_SUBMISSION_GATE_SAFETY_CONTRACT_MISMATCH' });
+        return;
+      }
+      setExitSubmissionGateState({ kind: 'ready', gate });
+    } catch (error) {
+      if (controller.signal.aborted || sequence !== exitSubmissionGateSequenceRef.current) return;
+      setExitSubmissionGateState({ kind: 'unavailable', code: error instanceof Error ? error.name : 'EXIT_SUBMISSION_GATE_FAILED' });
+    } finally {
+      if (exitSubmissionGateAbortRef.current === controller) exitSubmissionGateAbortRef.current = null;
+    }
+  }, [exitExecutionPackageState, exitSubmissionGateState.kind]);
 
   const loadEntryReadiness = useCallback(async () => {
     const controller = new AbortController();
@@ -2275,6 +2422,43 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                                           <p className="mt-1">
                                             다음 단계는 provider orderbook/slippage 최종검사 + 별도 제출 owner입니다. providerRequestPrepared=false · executionAuthority=NONE · executable=false.
                                           </p>
+                                          {exitExecutionPackageState.executionPackage.packageReady ? (
+                                            <button
+                                              type="button"
+                                              data-testid="ai-chart-check-exit-submission-gate"
+                                              onClick={() => void evaluateCanonicalExitSubmissionGate()}
+                                              disabled={exitSubmissionGateState.kind === 'loading'}
+                                              className="mt-2 min-h-10 w-full rounded-lg border border-warning/30 bg-background px-3 text-[9px] font-black text-warning disabled:opacity-50"
+                                            >
+                                              {exitSubmissionGateState.kind === 'loading' ? '최종 제출 게이트 확인 중...' : '최종 제출 게이트 확인 · 실주문 잠금'}
+                                            </button>
+                                          ) : null}
+                                          {exitSubmissionGateState.kind === 'ready' ? (
+                                            <div
+                                              className="mt-2 rounded-lg border border-warning/30 bg-warning/5 p-2"
+                                              data-testid="ai-chart-exit-submission-gate"
+                                              data-exit-submission-gate-id={exitSubmissionGateState.gate.gateId}
+                                            >
+                                              <p className="font-black text-warning">Draft 범위 · 실주문 제출 잠김</p>
+                                              <p className="mt-1">
+                                                패키지 검증 완료 · 연결 게이트 확인 완료 · reduce-only {exitSubmissionGateState.gate.percent}% / {formatQuantity(exitSubmissionGateState.gate.quantity)}
+                                              </p>
+                                              <p className="mt-1 break-words">
+                                                차단 사유 · {exitSubmissionGateState.gate.blockers.map(exitReadinessBlockerLabel).join(' · ')}
+                                              </p>
+                                              <p className="mt-1">
+                                                providerMutationAllowed=false · providerRequestPrepared=false · executionAuthority=NONE · 주문전송 0
+                                              </p>
+                                              <p className="mt-1">
+                                                실제 제출 owner는 별도 실주문 활성화 승인이 있어야 개발·활성화할 수 있습니다.
+                                              </p>
+                                            </div>
+                                          ) : null}
+                                          {exitSubmissionGateState.kind === 'unavailable' ? (
+                                            <p role="alert" className="mt-2 rounded-lg bg-warning/10 p-2 text-[8px] font-black text-warning">
+                                              최종 제출 게이트 확인 실패 · {safeTradeErrorMessage(exitSubmissionGateState.code, exitSubmissionGateState.code)}
+                                            </p>
+                                          ) : null}
                                         </div>
                                       ) : null}
                                       {exitExecutionPackageState.kind === 'unavailable' ? (
