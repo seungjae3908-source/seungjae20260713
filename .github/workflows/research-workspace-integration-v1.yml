@@ -105,7 +105,7 @@ jobs:
           pnpm exec esbuild src/services/research-groq-one-shot-transport.service.test.ts             --bundle --platform=node --format=cjs --target=node22             --define:import.meta.env='{}' --outfile="$RUNNER_TEMP/research-groq-v12.test.cjs"
           pnpm exec esbuild src/tools/research-workspace-one-shot-v12.test.ts             --bundle --platform=node --format=cjs --target=node22             --define:import.meta.env='{}' --outfile="$RUNNER_TEMP/research-one-shot-v12.test.cjs"
           node --test "$RUNNER_TEMP/research-groq-v12.test.cjs" "$RUNNER_TEMP/research-one-shot-v12.test.cjs"             | tee "$RUNNER_TEMP/research-one-shot-v12-tests.log"
-          pnpm exec esbuild scripts/run-research-workspace-one-shot-v12.ts             --bundle --platform=node --format=esm --target=node22 --packages=external             --outfile="$RUNNER_TEMP/run-research-one-shot-v12.mjs"
+          pnpm exec esbuild scripts/run-research-workspace-one-shot-v12.ts             --bundle --platform=node --format=esm --target=node22             --outfile="$RUNNER_TEMP/run-research-one-shot-v12.mjs"
           node "$RUNNER_TEMP/run-research-one-shot-v12.mjs" --help             | tee "$RUNNER_TEMP/research-one-shot-v12-help.log"
           grep -Fq 'at most one Gemini call and one Groq call' "$RUNNER_TEMP/research-one-shot-v12-help.log"
           grep -Fq 'No compiler/backtest, schedule, deployment, trading or paid fallback' "$RUNNER_TEMP/research-one-shot-v12-help.log"
