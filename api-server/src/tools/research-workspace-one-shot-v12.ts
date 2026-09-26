@@ -9,7 +9,7 @@ import {
   parseGroqReviewResponseV12, researchOneShotDigestV12, verifyGroqCallApprovalV12,
   type ResearchOneShotManifestV12,
 } from '../../../packages/external-research/src/research-workspace-one-shot-v12.js';
-import { answerGroqResearchJsonWithConfig } from '../services/ai-chat.service';
+import { answerGroqResearchJsonWithConfig } from '../services/research-groq-json-transport.service';
 
 type Market = ResearchOneShotManifestV12['market'];
 type OneShotInput =
