@@ -5,6 +5,7 @@ export const CRITICAL_BROWSER_SPECS = [
   /full-product-browser-flow\.spec\.ts$/u,
   /app-navigation\.spec\.ts$/u,
   /ai-chart-v2\.spec\.ts$/u,
+  /ai-chart-position-readonly\.spec\.ts$/u,
   /ai-chart-stream-consumer-fail-closed\.spec\.ts$/u,
   /ai-chart-stream-timer-scheduler-fail-closed\.spec\.ts$/u,
   /ai-chart-stream-binary-type-fail-closed\.spec\.ts$/u,
