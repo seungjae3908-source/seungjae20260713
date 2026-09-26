@@ -276,6 +276,12 @@ function approvalQueueOrder(order: TradingOrder | null) {
   };
 }
 
+function cockpitMarketForPlan(plan: Pick<TradingPlan, 'exchange' | 'market'>) {
+  if (plan.exchange === 'upbit') return 'UPBIT';
+  if (plan.exchange === 'bitget') return 'BITGET';
+  return String(plan.market ?? '').trim().toUpperCase();
+}
+
 function approvalQueueItem(plan: TradingPlan, order: TradingOrder | null, now = Date.now()) {
   const approval = approvalReadStatus(plan, now);
   return {
@@ -285,7 +291,7 @@ function approvalQueueItem(plan: TradingPlan, order: TradingOrder | null, now = 
     strategyId: plan.strategyId,
     signalId: plan.signalId,
     symbol: plan.symbol,
-    market: plan.market,
+    market: cockpitMarketForPlan(plan),
     side: plan.side,
     orderType: plan.orderType,
     estimatedKrw: plan.estimatedKrw,
@@ -774,7 +780,7 @@ router.get('/orders', async (req: AuthenticatedRequest, res) => {
       if (dashboardOnly) {
         if (!plan) return [];
         if (requestedExchange && order.exchange !== requestedExchange) return [];
-        if (requestedMarket && plan.market.trim().toUpperCase() !== requestedMarket) return [];
+        if (requestedMarket && cockpitMarketForPlan(plan) !== requestedMarket) return [];
         if (normalizedExitSymbol(plan.symbol) !== requestedSymbol) return [];
       }
       return [{
@@ -782,7 +788,7 @@ router.get('/orders', async (req: AuthenticatedRequest, res) => {
         planId: order.planId,
         exchange: order.exchange,
         symbol: plan?.symbol ?? null,
-        market: plan?.market ?? null,
+        market: plan ? cockpitMarketForPlan(plan) : null,
         side: plan?.side ?? null,
         accountMode: plan?.accountMode ?? null,
         orderType: plan?.orderType ?? null,
