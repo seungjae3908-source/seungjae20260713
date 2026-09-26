@@ -40,7 +40,8 @@ export default function AccountPage() {
     } finally { setBusy(false); }
   }
 
-  const stateMessage = auth.profile?.status === 'rejected' ? '가입 신청이 반려되었습니다.'
+  const stateMessage = auth.bootstrapError ? ''
+    : auth.profile?.status === 'rejected' ? '가입 신청이 반려되었습니다.'
     : auth.profile?.status === 'suspended' || auth.profile?.is_active === false ? '이용이 정지된 계정입니다.'
     : auth.profile?.status === 'withdrawn' ? '탈퇴 처리된 계정입니다.'
     : auth.membershipLevel === 'pending' ? '관리자 승인 대기 중입니다.' : '';
