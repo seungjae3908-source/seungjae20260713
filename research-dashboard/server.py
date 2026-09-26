@@ -327,7 +327,7 @@ def safe_candidate_promotion_identity(value):
         or not SAFE_ID_PATTERN.fullmatch(value['strategyId'])
         or not SAFE_ID_PATTERN.fullmatch(value['strategyVersion'])
         or not DIGEST64_PATTERN.fullmatch(value['parameterHash'])
-        or not SHA_PATTERN.fullmatch(value['researchCodeSha'])
+        or not SHA40_PATTERN.fullmatch(value['researchCodeSha'])
         or not SAFE_ID_PATTERN.fullmatch(value['market'])
         or not SAFE_ID_PATTERN.fullmatch(value['timeframe'])
         or not SAFE_ID_PATTERN.fullmatch(value['sidePolicy'])
