@@ -411,15 +411,15 @@ test('all four information rooms support direct routes, reload, history, source 
 
   for (const [path, title, exchange] of ROUTES) {
     await page.goto(path);
-    await expect(page.getByRole('heading', { name: title })).toBeVisible();
+    await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
     await expect(page.getByText(exchange, { exact: true })).toBeVisible();
     await expect(page.getByText('공개 데이터', { exact: true })).toBeVisible();
     await expect(page.getByText('private 요청 0', { exact: true })).toHaveCount(0);
     await expect(page.getByLabel('데이터 상태').first()).toContainText('출처');
     await page.reload();
-    await expect(page.getByRole('heading', { name: title })).toBeVisible();
+    await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
     await page.getByRole('button', { name: '시장정보 새로고침' }).click();
-    await expect(page.getByRole('heading', { name: title })).toBeVisible();
+    await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
   }
 
   await page.goto('/stocks/kr');
@@ -515,9 +515,9 @@ test('news disclosure timeline deduplicates sources and prioritizes held or watc
   await expect(second).toHaveAttribute('data-event-symbol', '000660');
   await expect(second).toContainText('SK하이닉스 신규 투자 발표');
 
-  const analysis = first.getByRole('button', { name: '종목 분석', exact: true });
-  await analysis.click();
-  await expect(page).toHaveURL(/\/stock-info\/analysis\?.*ticker=005930/u);
+  const detail = first.getByRole('button', { name: '종목 상세', exact: true });
+  await detail.click();
+  await expect(page).toHaveURL(/\/stock-info\?asset=stock&market=KR&ticker=005930$/u);
   diagnostics.assertClean();
 });
 
