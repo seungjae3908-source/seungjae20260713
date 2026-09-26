@@ -143,7 +143,23 @@ function mergeApprovalStatus(item: TradeApprovalQueueItem, payload: ApprovalStat
   };
 }
 
-export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueItem[] }) {
+type TradeApprovalQueueProps = {
+  fixture?: TradeApprovalQueueItem[];
+  symbolFilter?: string;
+  exchangeFilter?: TradeApprovalQueueItem['exchange'];
+  compact?: boolean;
+};
+
+function normalizedQueueSymbol(value: string): string {
+  return value.trim().toUpperCase().replace(/^KRW[-/]/, '').replace(/[^A-Z0-9]/g, '');
+}
+
+export function TradeApprovalQueue({
+  fixture,
+  symbolFilter,
+  exchangeFilter,
+  compact = false,
+}: TradeApprovalQueueProps) {
   const [items, setItems] = useState<TradeApprovalQueueItem[]>(fixture ?? []);
   const [loading, setLoading] = useState(!fixture);
   const [dataState, setDataState] = useState<QueueDataState>(fixture ? 'ready' : 'loading');
@@ -243,16 +259,22 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
     return () => window.clearInterval(interval);
   }, []);
 
-  const sorted = useMemo(() => [...items].sort((a, b) => {
+  const visibleItems = useMemo(() => items.filter((item) => {
+    if (exchangeFilter && item.exchange !== exchangeFilter) return false;
+    if (!symbolFilter) return true;
+    return normalizedQueueSymbol(item.symbol) === normalizedQueueSymbol(symbolFilter);
+  }), [exchangeFilter, items, symbolFilter]);
+
+  const sorted = useMemo(() => [...visibleItems].sort((a, b) => {
     const approvalRank = Number(b.approval.approvalEnabled) - Number(a.approval.approvalEnabled);
     return approvalRank || Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
-  }), [items]);
+  }), [visibleItems]);
 
   const summary = useMemo(() => {
     let available = 0;
     let expiringSoon = 0;
     let invalid = 0;
-    for (const item of items) {
+    for (const item of visibleItems) {
       const countdown = approvalCountdown(item.approval.expiresAt, now);
       const enabled = item.approval.approvalEnabled
         && item.state === 'APPROVAL_PENDING'
@@ -262,7 +284,7 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
       if (item.signalState === 'INVALIDATED' || item.signalState === 'EXPIRED' || item.state === 'EXPIRED') invalid += 1;
     }
     return { available, expiringSoon, invalid };
-  }, [items, now]);
+  }, [now, visibleItems]);
 
   const fetchApprovalStatus = useCallback(async (planId: string) => {
     const controller = new AbortController();
@@ -427,12 +449,15 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
 
   return (
     <>
-      <section className="rounded-3xl border border-card-border bg-card p-4 text-left shadow-sm" data-testid="trade-approval-queue">
+      <section className={cn(
+        'border border-card-border bg-card text-left shadow-sm',
+        compact ? 'rounded-2xl p-3' : 'rounded-3xl p-4',
+      )} data-testid="trade-approval-queue">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2">
               <ShieldCheck className="h-5 w-5 text-primary" />
-              <h2 className="text-sm font-extrabold">승인 대기 신호</h2>
+              <h2 className="text-sm font-extrabold">{symbolFilter ? '현재 종목 진입 승인' : '승인 대기 신호'}</h2>
             </div>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
               검색 조건이 서버에서 유지되는 동안만 주문 승인 버튼이 활성화됩니다.
@@ -482,10 +507,14 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
             <div className="rounded-2xl border border-dashed border-card-border bg-background p-5 text-center" data-testid="approval-queue-empty">
               <Clock3 className="mx-auto h-6 w-6 text-muted-foreground" />
               <p className="mt-2 text-sm font-extrabold">
-                {stale ? '마지막 정상 조회에서 승인 대기 신호가 없었습니다.' : '현재 승인 대기 신호가 없습니다.'}
+                {stale
+                  ? '마지막 정상 조회에서 승인 대기 신호가 없었습니다.'
+                  : symbolFilter ? '현재 종목의 승인 대기 진입이 없습니다.' : '현재 승인 대기 신호가 없습니다.'}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                {stale ? '현재 갱신에 실패해 상태가 오래됐습니다. 새로고침 후 다시 확인해 주세요.' : '검색기 신호가 진입 조건을 유지하면 이곳에 표시됩니다.'}
+                {stale
+                  ? '현재 갱신에 실패해 상태가 오래됐습니다. 새로고침 후 다시 확인해 주세요.'
+                  : symbolFilter ? '신호검색기에서 현재 종목의 canonical 진입계획이 생성되고 서버 조건이 유지될 때만 표시됩니다.' : '검색기 신호가 진입 조건을 유지하면 이곳에 표시됩니다.'}
               </p>
             </div>
           ) : null}
