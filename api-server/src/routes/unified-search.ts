@@ -182,11 +182,11 @@ async function searchWithMetadataSoftDeadline(input: {
   ).length ?? 0;
   const exactProductCodeFallback = exactProductCodeFallbackCount === 1;
 
-  // An explicit market + exact product code identity is already available from a factual static
-  // metadata catalog. Starting full provider discovery first can leave a cold shared
-  // index refresh running after the fallback response and monopolize the Node event loop
-  // for the immediately following request. Ambiguous base symbols such as BTC still need
-  // provider discovery for cross-market matches, as do broad/name/prefix/fuzzy searches.
+  // A unique exact product-code identity is already available from factual static metadata.
+  // Starting full provider discovery first can leave a cold shared index refresh running after
+  // the fallback response and monopolize the Node event loop for the immediately following request.
+  // Ambiguous base symbols such as BTC still need provider discovery for cross-market matches,
+  // as do broad/name/prefix/fuzzy searches.
   if (exactProductCodeFallback && metadataFallback) {
     return metadataFallback;
   }
