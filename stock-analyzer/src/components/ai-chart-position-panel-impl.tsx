@@ -37,12 +37,41 @@ export type AiChartPositionOverlay = {
   checkedAt: string | null;
 };
 
+type AiChartAccount = {
+  market: 'KR' | 'US' | 'UPBIT' | 'BITGET';
+  accountRef: string | null;
+  currency: string | null;
+  buyingPower: number | null;
+};
+
+type AiChartBalance = {
+  currency: string;
+  available: number | null;
+  locked: number | null;
+  total: number | null;
+  estimatedKrwValue: number | null;
+};
+
+type AiChartReadonlyOrder = {
+  id: string | null;
+  market: string | null;
+  symbol: string | null;
+  side: string | null;
+  price: number | null;
+  quantity: number | null;
+  remainingQuantity: number | null;
+  status: string | null;
+};
+
 type Snapshot = {
   provider: 'toss' | 'kiwoom' | 'upbit' | 'bitget';
   readOnly: true;
   connected: boolean;
   status: string;
+  accounts: AiChartAccount[] | null;
+  balances: AiChartBalance[] | null;
   positions: AiChartAccountPosition[];
+  openOrders: AiChartReadonlyOrder[] | null;
   checkedAt: string;
   lastGoodAt: string | null;
   stale: boolean;
@@ -165,6 +194,12 @@ function symbolMatches(market: AnalysisMarket, chartSymbol: string, positionSymb
 
 function positionMarketMatches(market: AnalysisMarket, positionMarket: string): boolean {
   return positionMarket.trim().toUpperCase() === market;
+}
+
+function providerOrderMatches(market: AnalysisMarket, chartSymbol: string, order: AiChartReadonlyOrder): boolean {
+  if (!order.market || !order.symbol) return false;
+  if (order.market.trim().toUpperCase() !== market) return false;
+  return symbolMatches(market, chartSymbol, order.symbol);
 }
 
 function activePosition(position: AiChartAccountPosition): boolean {
@@ -463,6 +498,17 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
 
   const provider = providerForMarket(market, stockProvider);
   const position = state.kind === 'ready' ? state.position : null;
+  const matchingAccount = state.kind === 'ready'
+    ? (state.snapshot.accounts ?? []).find((account) => account.market === market) ?? null
+    : null;
+  const cashCurrency = market === 'US' ? 'USD' : market === 'BITGET' ? 'USDT' : 'KRW';
+  const cashBalance = state.kind === 'ready'
+    ? (state.snapshot.balances ?? []).find((balance) => balance.currency.trim().toUpperCase() === cashCurrency) ?? null
+    : null;
+  const availableFunds = finite(matchingAccount?.buyingPower) ?? finite(cashBalance?.available);
+  const providerOpenOrders = state.kind === 'ready' && Array.isArray(state.snapshot.openOrders)
+    ? state.snapshot.openOrders.filter((order) => providerOrderMatches(market, symbol, order))
+    : null;
   const distance = position ? priceDistance(position, chartPrice) : null;
   const additionalValue = positiveText(additionalValueText);
   const additionalPrice = positiveText(additionalPriceText);
@@ -700,6 +746,51 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                   exchangeFilter={provider}
                   compact
                 />
+
+                <section className="rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-provider-open-orders">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-[10px] font-black">Provider 실제 미체결 · READ-ONLY</p>
+                      <p className="mt-0.5 text-[8px] font-bold text-muted-foreground">
+                        {providerLabel(provider)} 계좌 스냅샷 · 앱 밖에서 낸 주문도 식별
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-secondary px-2 py-1 text-[8px] font-black">
+                      {providerOpenOrders == null ? '조회 근거 없음' : `${providerOpenOrders.length}건`}
+                    </span>
+                  </div>
+                  {providerOpenOrders == null ? (
+                    <p className="mt-2 rounded-xl bg-warning/5 px-3 py-2 text-[9px] font-bold text-muted-foreground">
+                      Provider 미체결 주문 응답이 없어 0건으로 단정하지 않습니다.
+                      {state.kind === 'ready' && state.snapshot.errorCode ? ` · ${state.snapshot.errorCode}` : ''}
+                    </p>
+                  ) : providerOpenOrders.length === 0 ? (
+                    <p className="mt-2 rounded-xl bg-secondary/50 px-3 py-2 text-[9px] font-bold text-muted-foreground">
+                      현재 선택 종목의 Provider 미체결 주문이 없습니다.
+                    </p>
+                  ) : (
+                    <div className="mt-2 space-y-1.5">
+                      {providerOpenOrders.map((order, index) => (
+                        <div key={order.id ?? `provider-order-${index}`} className="rounded-xl border border-card-border p-2.5">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-[10px] font-black">
+                              {order.side ?? '방향 미확인'} · {order.status ?? '상태 미확인'}
+                            </p>
+                            <span className="text-[8px] font-bold text-muted-foreground">Provider 원장</span>
+                          </div>
+                          <p className="mt-1 text-[8px] font-bold text-muted-foreground">
+                            가격 {formatPrice(order.price, market)}
+                            {' · '}주문 {formatQuantity(order.quantity)}
+                            {' · '}잔량 {formatQuantity(order.remainingQuantity)}
+                          </p>
+                          <p className="mt-1 text-[8px] font-bold text-muted-foreground">
+                            앱 canonical ID와 확인되지 않은 Provider 주문에는 여기서 취소·정정 권한을 만들지 않습니다.
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
 
                 <section className="rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-order-management">
                   <div className="flex items-center justify-between gap-2">
@@ -943,6 +1034,10 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
             <p className="text-[10px] font-black">현재 선택 종목의 보유/포지션 없음</p>
             <p className="mt-1 text-[9px] font-bold text-muted-foreground">조회 시각 {checkedAtLabel(state.snapshot.checkedAt)}{state.snapshot.stale ? ' · 이전 정상값' : ''}</p>
           </div>
+          <div className="grid grid-cols-2 gap-1.5" data-testid="ai-chart-account-capacity">
+            <Metric label="주문가능/가용" value={formatPrice(availableFunds, market)} />
+            <Metric label="Provider 미체결" value={providerOpenOrders == null ? '미확인' : `${providerOpenOrders.length}건`} />
+          </div>
           {tradingCockpit}
         </div>
       )}
@@ -955,6 +1050,10 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
             <Metric label="계좌 수익률" value={formatPercent(position.unrealizedPnlPercent)} />
             <Metric label="평단 대비 가격" value={formatPercent(distance)} />
             {market === 'BITGET' ? <Metric label="청산가" value={formatPrice(position.liquidationPrice, market)} /> : <Metric label="계좌 현재가" value={formatPrice(position.currentPrice, market)} />}
+          </div>
+          <div className="grid grid-cols-2 gap-1.5" data-testid="ai-chart-account-capacity">
+            <Metric label="주문가능/가용" value={formatPrice(availableFunds, market)} />
+            <Metric label="Provider 미체결" value={providerOpenOrders == null ? '미확인' : `${providerOpenOrders.length}건`} />
           </div>
 
           {market === 'BITGET' && (
