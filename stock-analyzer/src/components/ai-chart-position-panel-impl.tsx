@@ -589,9 +589,10 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
         return;
       }
       const items = payload.dashboardItems.filter((item) => (
-        item.exchange === provider
-        && typeof item.symbol === 'string'
+        typeof item.symbol === 'string'
+        && item.market?.trim().toUpperCase() === market
         && symbolMatches(market, symbol, item.symbol)
+        && ((market === 'KR' || market === 'US') || item.exchange === provider)
       ));
       setOrderDashboard({ kind: 'ready', items });
       setAmendDrafts(Object.fromEntries(items.map((item) => [
@@ -753,7 +754,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
 
                 <TradeApprovalQueue
                   symbolFilter={symbol}
-                  exchangeFilter={provider}
+                  exchangeFilter={market === 'KR' || market === 'US' ? undefined : provider}
                   compact
                 />
 
@@ -836,7 +837,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                               <div>
                                 <p className="text-[10px] font-black">{item.side?.toUpperCase() ?? '-'} · {orderStateLabel(item.state)}</p>
                                 <p className="mt-0.5 text-[8px] font-bold text-muted-foreground">
-                                  요청 {formatQuantity(item.requestedQuantity)} · 체결 {formatQuantity(item.filledQuantity)} · 잔량 {formatQuantity(item.remainingQuantity)}
+                                  {providerLabel(item.exchange)} · 요청 {formatQuantity(item.requestedQuantity)} · 체결 {formatQuantity(item.filledQuantity)} · 잔량 {formatQuantity(item.remainingQuantity)}
                                 </p>
                               </div>
                               <span className="rounded-full bg-secondary px-2 py-1 text-[8px] font-black">{item.accountMode ?? '미확인'}</span>
