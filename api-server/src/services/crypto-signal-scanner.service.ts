@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { runBoundedWorkPool } from '../lib/bounded-work-pool';
 import { applyScannerSignalLifecycle } from './scanner-signal-lifecycle.service';
-import { applyThemeSwingOverlay, inferCryptoThemeTags } from './scanner-theme-swing.service';
 import { applyScannerQuantHardening } from './scanner-quant-hardening.service';
 import {
   scannerContextTimeframe,
@@ -945,8 +944,7 @@ export function createCryptoSignalScannerService(
           outcome.status === 'fulfilled' && outcome.value != null
         ))
         .map((outcome) => outcome.value);
-      const themeSwingEvaluated = applyThemeSwingOverlay(evaluatedCards, inferCryptoThemeTags);
-      const cards = themeSwingEvaluated
+      const cards = evaluatedCards
         .filter((card) => request.minimumScore == null || card.score >= request.minimumScore)
         .filter((card) => request.maximumRiskScore == null
           || (card.riskScore != null && card.riskScore <= request.maximumRiskScore))
