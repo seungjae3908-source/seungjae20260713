@@ -559,8 +559,45 @@ router.post('/admin/emergency-stop', requireAdmin, async (req: AuthenticatedRequ
 router.get('/orders', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
-    const [orders, events] = await Promise.all([repository.listOrders(userId), repository.listEvents(userId)]);
-    return res.json({ ok: true, orders, events });
+    const [orders, events, plans] = await Promise.all([
+      repository.listOrders(userId),
+      repository.listEvents(userId),
+      repository.listPlans(userId),
+    ]);
+    const planById = new Map(plans.map((plan) => [plan.id, plan]));
+    const dashboardItems = orders.map((order) => {
+      const plan = planById.get(order.planId) ?? null;
+      return {
+        id: order.id,
+        planId: order.planId,
+        exchange: order.exchange,
+        symbol: plan?.symbol ?? null,
+        market: plan?.market ?? null,
+        side: plan?.side ?? null,
+        accountMode: plan?.accountMode ?? null,
+        orderType: plan?.orderType ?? null,
+        reduceOnly: plan?.reduceOnly === true,
+        state: order.state,
+        requestedQuantity: order.requestedQuantity,
+        remainingQuantity: order.remainingQuantity ?? null,
+        filledQuantity: order.filledQuantity,
+        currentLimitPrice: order.currentLimitPrice ?? plan?.limitPrice ?? null,
+        averageFillPrice: order.averageFillPrice,
+        cancelable: order.cancelable ?? null,
+        lastErrorCode: order.lastErrorCode,
+        updatedAt: order.updatedAt,
+      };
+    });
+    return res.json({
+      ok: true,
+      orders,
+      events,
+      dashboardItems,
+      orderSubmitted: false,
+      orderCanceled: false,
+      orderAmended: false,
+      privateTradingRequestSent: false,
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 
