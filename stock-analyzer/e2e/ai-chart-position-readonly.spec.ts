@@ -372,6 +372,25 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
             cancelable: true,
             lastErrorCode: null,
             updatedAt: new Date().toISOString(),
+          }, {
+            id: 'order-005930-kiwoom',
+            planId: 'plan-005930-kiwoom',
+            exchange: 'kiwoom',
+            symbol: '005930',
+            market: 'KR',
+            side: 'sell',
+            accountMode: 'paper',
+            orderType: 'limit',
+            reduceOnly: true,
+            state: 'PARTIALLY_FILLED',
+            requestedQuantity: 5,
+            remainingQuantity: 2,
+            filledQuantity: 3,
+            currentLimitPrice: 72_500,
+            averageFillPrice: 72_300,
+            cancelable: true,
+            lastErrorCode: null,
+            updatedAt: new Date().toISOString(),
           }],
           orderSubmitted: false,
           orderCanceled: false,
@@ -496,6 +515,9 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await cockpit.getByTestId('ai-chart-load-orders').click();
   await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('거래소 접수');
   await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('잔량 4');
+  await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('Kiwoom');
+  await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('부분체결');
+  await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('잔량 2');
 
   await page.getByTestId('ai-chart-toggle-position-lines').click();
   await expect(page.getByTestId('unified-chart-wrapper')).toHaveAttribute('data-position-average', '');
