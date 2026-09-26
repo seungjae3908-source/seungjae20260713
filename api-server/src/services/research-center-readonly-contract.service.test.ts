@@ -58,6 +58,19 @@ function candidatePerformance() {
     strategyId: 'strategy-alpha',
     freezeTimestamp: '2026-09-13T00:00:00.000Z',
     identity14Verified: true,
+    promotionIdentity: {
+      candidateId: `phase3-candidate:sha256:${'8'.repeat(64)}`,
+      strategyId: 'strategy-alpha',
+      strategyVersion: 'v1',
+      parameterHash: '9'.repeat(64),
+      researchCodeSha: SHA,
+      market: 'CRYPTO_FUTURES',
+      timeframe: '15m',
+      sidePolicy: 'LONG',
+      accountMode: 'PAPER',
+      costPolicyVersion: 'internal-cost-v1',
+      executionPolicyVersion: 'internal-execution-v1',
+    },
     fullCostEvidence: {
       fullCostReady: false,
       components: Object.fromEntries(['commission', 'tax', 'spread', 'slippage', 'funding', 'latency', 'liquidityImpact', 'partialFillImpact']
@@ -219,6 +232,9 @@ test('Research Center contract publishes a GET-only, authority-free allowlisted 
   assert.equal(serialized.includes('credential'), false);
   assert.equal(serialized.includes('artifactDownloadUrl'), false);
   assert.equal(serialized.includes('secret internal diagnostic'), false);
+  assert.equal(serialized.includes('promotionIdentity'), false);
+  assert.equal(serialized.includes('internal-cost-v1'), false);
+  assert.equal(serialized.includes('internal-execution-v1'), false);
   const research = result.research as { liquidityIndependence: { effectiveIndependentN: number; independentBuyN: number; independentSellN: number } };
   assert.equal(research.liquidityIndependence.effectiveIndependentN, 15);
   assert.equal(research.liquidityIndependence.independentBuyN, 10);
