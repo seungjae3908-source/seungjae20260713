@@ -216,6 +216,117 @@ function remainingValidityLabel(value: string | null | undefined): string {
   return `TTL ${Math.ceil(remainingHours / 24)}일`;
 }
 
+function userSignalState(value: ScannerSignalCard['signalState']): string {
+  const labels: Partial<Record<ScannerSignalCard['signalState'], string>> = {
+    CANDIDATE: '관찰 후보',
+    CONFIRMED: '확인됨',
+    ARMED: '진입 감시',
+    ENTRY_ZONE: '진입구간',
+    APPROVAL_PENDING: '검토 대기',
+    READY_FOR_APPROVAL: '검토 가능',
+    WEAKENED: '약화됨',
+    INVALIDATED: '무효화',
+    EXPIRED: '만료',
+    REJECTED: '제외',
+    CANCELLED: '취소',
+    CLOSED: '종료',
+    DETECTED: '감지됨',
+    WATCHING: '관찰 중',
+  };
+  return labels[value] ?? '상태 확인';
+}
+
+function userDataState(value: ScannerSignalCard['dataState']): string {
+  if (value === 'complete') return '정상';
+  if (value === 'partial') return '일부 지연';
+  if (value === 'stale') return '데이터 지연';
+  if (value === 'insufficient') return '근거 부족';
+  if (value === 'unavailable') return '확인 불가';
+  return '신뢰 불가';
+}
+
+function scannerFreshness(card: ScannerSignalCard): { label: string; tone: string } {
+  const expiresAt = Date.parse(card.expiresAt);
+  if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) return { label: '만료', tone: 'text-destructive' };
+  if (card.dataState === 'stale') return { label: '지연', tone: 'text-warning' };
+  if (card.dataState === 'partial' || card.dataState === 'insufficient' || card.dataState === 'untrusted') {
+    return { label: '주의', tone: 'text-warning' };
+  }
+  if (card.dataState === 'unavailable') return { label: '확인불가', tone: 'text-destructive' };
+  return { label: '정상', tone: 'text-positive' };
+}
+
+function scannerDecisionLabel(card: ScannerSignalCard): string {
+  if (!card.strongSignalEligible || ['WEAKENED', 'INVALIDATED', 'EXPIRED', 'REJECTED', 'CANCELLED'].includes(card.signalState)) {
+    return card.signalGrade === 'B' ? '관찰' : '신규진입 차단';
+  }
+  if (card.action === 'LONG') return '롱 검토';
+  if (card.action === 'SHORT') return '숏 검토';
+  if (card.action === 'BUY') return '매수 검토';
+  if (card.action === 'SELL') return '매도 참고';
+  return '거래 안 함';
+}
+
+function intelligenceStatus(card: ScannerSignalCard): string {
+  if (card.newsDisclosureIntelligence) {
+    if (card.newsDisclosureIntelligence.status === 'READY') return '뉴스·공시 정상';
+    if (card.newsDisclosureIntelligence.status === 'PARTIAL') return '뉴스·공시 일부';
+    if (card.newsDisclosureIntelligence.status === 'TIMEOUT') return '뉴스·공시 지연';
+    if (card.newsDisclosureIntelligence.status === 'NOT_AVAILABLE') return '뉴스·공시 확인불가';
+    return '뉴스·공시 미실행';
+  }
+  if (card.marketIntelligence) return card.marketIntelligence.status === 'READY' ? '시장지능 정상' : '시장지능 확인불가';
+  if (card.cryptoPublicEventContext) {
+    if (card.cryptoPublicEventContext.status === 'READY') return '공개 이벤트 정상';
+    if (card.cryptoPublicEventContext.status === 'PARTIAL') return '공개 이벤트 일부';
+    return '공개 이벤트 확인불가';
+  }
+  return '이벤트 근거 미확인';
+}
+
+function intelligenceConflictReasons(card: ScannerSignalCard): string[] {
+  const reasons: string[] = [];
+  const blockingQuality = card.dataQuality?.issues.filter((item) => item.severity === 'blocking') ?? [];
+  reasons.push(...blockingQuality.map((item) => item.message));
+  if (card.aiValidation?.status === 'VETO') reasons.push(...card.aiValidation.risks, ...card.aiValidation.counterEvidence);
+  if ((card.newsDisclosureIntelligence?.officialRiskEvents.length ?? 0) > 0) {
+    reasons.push(...(card.newsDisclosureIntelligence?.officialRiskEvents ?? []).map((event) => `공식 위험 이벤트: ${event}`));
+  }
+  if (card.marketIntelligence?.autoTrading.mode === 'BLOCKED_RISK') {
+    reasons.push(card.marketIntelligence.autoTrading.hardBlockReason ?? 'Market Intelligence 위험 차단');
+  }
+  if (card.cryptoPublicEventContext?.marketWarning === true) reasons.push('거래소 공개 경고');
+  reasons.push(...(card.themeSwing?.blockers ?? []).map((item) => `Theme Swing: ${item}`));
+  return [...new Set(reasons.filter(Boolean))].slice(0, 8);
+}
+
+function themeStateLabel(value: string): string {
+  if (value === 'ELIGIBLE') return '선별 통과';
+  if (value === 'WATCH') return '관찰';
+  if (value === 'REJECT') return '제외';
+  return '미분류';
+}
+
+function triggerLabel(value: string): string {
+  if (value === 'BREAKOUT') return '돌파';
+  if (value === 'PULLBACK') return '눌림·리테스트';
+  if (value === 'TREND_CONTINUATION') return '추세 지속';
+  return '미확인';
+}
+
+function decisionOutcomeLabel(value: string): string {
+  if (value === 'LONG_REVIEW') return 'LONG 검토';
+  if (value === 'SHORT_REVIEW') return 'SHORT 검토';
+  if (value === 'WATCH') return '관찰';
+  if (value === 'BLOCKED') return '신규진입 차단';
+  return '거래 안 함';
+}
+
+function validationBadgeLabel(verified: boolean | undefined, sampleCount?: number | null): string {
+  if (verified !== true) return '미검증';
+  return sampleCount != null && Number.isFinite(sampleCount) ? `검증 · N=${sampleCount}` : '검증';
+}
+
 function SignalDetailPanel({
   card,
   selection,
@@ -243,13 +354,25 @@ function SignalDetailPanel({
   const signalQuality = card.dataQuality;
   const quant = card.quantScore;
   const ranking = card.candidateRanking;
+  const themeSwing = card.themeSwing;
   const qualityIssues = signalQuality?.issues ?? [];
   const strongSignalLabel = signalQuality?.strongSignalAllowed === true
-    ? 'YES'
-    : signalQuality?.strongSignalAllowed === false ? 'NO' : '미확인';
+    ? '허용'
+    : signalQuality?.strongSignalAllowed === false ? '차단' : '미확인';
   const hardFilterLabel = ranking?.hardFilterPassed === true
-    ? 'PASS'
-    : ranking?.hardFilterPassed === false ? 'REJECT' : '미확인';
+    ? '통과'
+    : ranking?.hardFilterPassed === false ? '제외' : '미확인';
+  const freshness = scannerFreshness(card);
+  const decisionLabel = scannerDecisionLabel(card);
+  const conflictReasons = intelligenceConflictReasons(card);
+  const newsIntel = card.newsDisclosureIntelligence;
+  const marketIntel = card.marketIntelligence;
+  const cryptoEvents = card.cryptoPublicEventContext;
+
+  const decisionHistory = card.decisionHistory ?? [];
+  const fullCostVerified = quality?.fullCostVerified === true
+    || (quality?.costsIncluded === true && quality?.slippageIncluded === true);
+  const costAdjustedExpectancy = fullCostVerified ? quality?.expectancyPercent : null;
 
   useEffect(() => {
     setMobileTab('summary');
@@ -259,79 +382,105 @@ function SignalDetailPanel({
     if (showOrderPreparation) setMobileTab('risk');
   }, [showOrderPreparation]);
 
+  const decisionTimelinePanel = (
+    <section data-testid="scanner-decision-timeline" aria-label="신호 변경 이력" className="rounded-2xl border border-card-border p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-xs font-bold">신호 변경 이력</h3>
+          <p className="mt-1 text-xs leading-4 text-muted-foreground">현재 Scanner 런타임이 실제로 관측한 판단 변경만 최대 12건 표시합니다.</p>
+        </div>
+        <span className="rounded-full border border-card-border px-2 py-1 text-xs font-semibold">{decisionHistory.length}건</span>
+      </div>
+      {decisionHistory.length ? (
+        <ol className="mt-3 space-y-2">
+          {[...decisionHistory].reverse().map((entry) => (
+            <li key={`${entry.sequence}:${entry.observedAt}:${entry.decision}`} className="rounded-xl bg-background p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-semibold">{decisionOutcomeLabel(entry.decision)}</p>
+                <time className="text-xs text-muted-foreground">{formatObservedAt(entry.observedAt)}</time>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">상태 {userSignalState(entry.state)} · 방향 {entry.direction} · {entry.eligible ? '진입 검토 가능' : '진입 검토 차단'}</p>
+              {entry.reasons.length ? <ul className="mt-2 space-y-1 text-xs leading-5">{entry.reasons.map((reason, index) => <li key={`${entry.sequence}:${index}:${reason}`}>• {reason}</li>)}</ul> : <p className="mt-2 text-xs text-muted-foreground">추가 변경 근거 없음</p>}
+            </li>
+          ))}
+        </ol>
+      ) : <p className="mt-3 text-xs text-muted-foreground">아직 서버에 기록된 판단 변경이 없습니다. 새 숫자나 과거 상태를 추정해서 만들지 않습니다.</p>}
+    </section>
+  );
+
   const qualityPanel = (
     <section data-testid="scanner-signal-quality-panel" aria-label="신호 품질" className="rounded-2xl border border-primary/25 bg-primary/5 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h3 className="text-xs font-black">신호 품질 · 서버 근거</h3>
-          <p className="mt-1 text-[10px] leading-4 text-muted-foreground">서버가 계산한 값만 표시하며 누락값은 미확인으로 유지합니다.</p>
+          <h3 className="text-xs font-bold">신호 품질 · 서버 근거</h3>
+          <p className="mt-1 text-xs leading-4 text-muted-foreground">서버가 계산한 값만 표시하며 누락값은 미확인으로 유지합니다.</p>
         </div>
-        <span data-testid="scanner-quality-signal-state" className="rounded-full border border-primary/25 px-2 py-1 text-[10px] font-black">{card.signalState || '미확인'}</span>
+        <span data-testid="scanner-quality-signal-state" className="rounded-full border border-primary/25 px-2 py-1 text-xs font-semibold">{userSignalState(card.signalState)}</span>
       </div>
 
       <div className="mt-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">데이터 품질</p><p data-testid="scanner-quality-data-state" className="text-xs font-black">{signalQuality?.state ?? '미확인'}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">품질 점수</p><p data-testid="scanner-quality-data-score" className="text-xs font-black">{formatMetric(signalQuality?.score)}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">강신호 허용</p><p data-testid="scanner-quality-strong-allowed" className="text-xs font-black">{strongSignalLabel}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Hard Filter</p><p data-testid="scanner-quality-hard-filter" className="text-xs font-black">{hardFilterLabel}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">데이터 품질</p><p data-testid="scanner-quality-data-state" className="text-xs font-bold">{signalQuality?.state ?? '미확인'}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">품질 점수</p><p data-testid="scanner-quality-data-score" className="text-xs font-bold">{formatMetric(signalQuality?.score)}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">강신호 허용</p><p data-testid="scanner-quality-strong-allowed" className="text-xs font-bold">{strongSignalLabel}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">Hard Filter</p><p data-testid="scanner-quality-hard-filter" className="text-xs font-bold">{hardFilterLabel}</p></div>
       </div>
 
       <div className="mt-3">
-        <p className="text-[10px] font-black text-muted-foreground">Quant Score</p>
+        <p className="text-xs font-bold text-muted-foreground">Quant Score</p>
         <div className="mt-1 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">기술</p><p className="text-xs font-black">{formatMetric(quant?.technical)}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">추세</p><p className="text-xs font-black">{formatMetric(quant?.trend)}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">모멘텀</p><p className="text-xs font-black">{formatMetric(quant?.momentum)}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">거래량</p><p className="text-xs font-black">{formatMetric(quant?.volume)}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">유동성</p><p className="text-xs font-black">{formatMetric(quant?.liquidity)}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">변동성</p><p className="text-xs font-black">{formatMetric(quant?.volatility)}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">시장국면</p><p className="text-xs font-black">{formatMetric(quant?.marketRegime)}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Risk</p><p className="text-xs font-black">{formatMetric(quant?.risk)}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">기술</p><p className="text-xs font-bold">{formatMetric(quant?.technical)}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">추세</p><p className="text-xs font-bold">{formatMetric(quant?.trend)}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">모멘텀</p><p className="text-xs font-bold">{formatMetric(quant?.momentum)}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">거래량</p><p className="text-xs font-bold">{formatMetric(quant?.volume)}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">유동성</p><p className="text-xs font-bold">{formatMetric(quant?.liquidity)}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">변동성</p><p className="text-xs font-bold">{formatMetric(quant?.volatility)}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">시장국면</p><p className="text-xs font-bold">{formatMetric(quant?.marketRegime)}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">Risk</p><p className="text-xs font-bold">{formatMetric(quant?.risk)}</p></div>
         </div>
       </div>
 
       <div className="mt-3">
-        <p className="text-[10px] font-black text-muted-foreground">후보 랭킹</p>
-        <p className="mt-1 text-[10px] leading-4 text-muted-foreground">순위는 신호점수 단독 정렬이 아닌 서버 랭킹 기준입니다.</p>
+        <p className="text-xs font-bold text-muted-foreground">후보 랭킹</p>
+        <p className="mt-1 text-xs leading-4 text-muted-foreground">순위는 신호점수 단독 정렬이 아닌 서버 랭킹 기준입니다.</p>
         <div className="mt-1 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">순위</p><p data-testid="scanner-quality-rank" className="text-xs font-black">{ranking?.rank == null ? '미확인' : `${ranking.rank}위`}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">상대점수</p><p className="text-xs font-black">{formatMetric(ranking?.relativeScore)}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Watch 완성도</p><p className="text-xs font-black">{formatMetric(ranking?.watchCompletionPercent, '%')}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">랭킹점수</p><p className="text-xs font-black">{formatMetric(ranking?.score)}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">순위</p><p data-testid="scanner-quality-rank" className="text-xs font-bold">{ranking?.rank == null ? '미확인' : `${ranking.rank}위`}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">상대점수</p><p className="text-xs font-bold">{formatMetric(ranking?.relativeScore)}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">Watch 완성도</p><p className="text-xs font-bold">{formatMetric(ranking?.watchCompletionPercent, '%')}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">랭킹점수</p><p className="text-xs font-bold">{formatMetric(ranking?.score)}</p></div>
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2 text-center sm:grid-cols-5">
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">거래대금 %ile</p><p className="text-xs font-black">{formatMetric(ranking?.relative.tradingValuePercentile, '%')}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">모멘텀 %ile</p><p className="text-xs font-black">{formatMetric(ranking?.relative.momentumPercentile, '%')}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">추세 %ile</p><p className="text-xs font-black">{formatMetric(ranking?.relative.trendPercentile, '%')}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">거래량 %ile</p><p className="text-xs font-black">{formatMetric(ranking?.relative.volumePercentile, '%')}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">변동성 %ile</p><p className="text-xs font-black">{formatMetric(ranking?.relative.volatilityPercentile, '%')}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">거래대금 %ile</p><p className="text-xs font-bold">{formatMetric(ranking?.relative.tradingValuePercentile, '%')}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">모멘텀 %ile</p><p className="text-xs font-bold">{formatMetric(ranking?.relative.momentumPercentile, '%')}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">추세 %ile</p><p className="text-xs font-bold">{formatMetric(ranking?.relative.trendPercentile, '%')}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">거래량 %ile</p><p className="text-xs font-bold">{formatMetric(ranking?.relative.volumePercentile, '%')}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">변동성 %ile</p><p className="text-xs font-bold">{formatMetric(ranking?.relative.volatilityPercentile, '%')}</p></div>
         </div>
       </div>
 
       <div className="mt-3 grid gap-2 sm:grid-cols-3">
         <div className="rounded-xl border border-card-border bg-background p-2">
-          <p className="text-[10px] font-black">Watch 이유</p>
+          <p className="text-xs font-bold">Watch 이유</p>
           {ranking == null
-            ? <p className="mt-1 text-[10px] text-muted-foreground">미확인</p>
+            ? <p className="mt-1 text-xs text-muted-foreground">미확인</p>
             : ranking.watchReasons.length
-              ? <ul className="mt-1 space-y-1 text-[10px] leading-4">{ranking.watchReasons.map((reason) => <li key={reason}>• {reason}</li>)}</ul>
-              : <p className="mt-1 text-[10px] text-muted-foreground">없음</p>}
+              ? <ul className="mt-1 space-y-1 text-xs leading-4">{ranking.watchReasons.map((reason) => <li key={reason}>• {reason}</li>)}</ul>
+              : <p className="mt-1 text-xs text-muted-foreground">없음</p>}
         </div>
         <div className="rounded-xl border border-card-border bg-background p-2">
-          <p className="text-[10px] font-black">Hard Filter 근거</p>
+          <p className="text-xs font-bold">Hard Filter 근거</p>
           {ranking == null
-            ? <p className="mt-1 text-[10px] text-muted-foreground">미확인</p>
+            ? <p className="mt-1 text-xs text-muted-foreground">미확인</p>
             : ranking.hardFilterReasons.length
-              ? <ul className="mt-1 space-y-1 text-[10px] leading-4">{ranking.hardFilterReasons.map((reason) => <li key={reason}>• {reason}</li>)}</ul>
-              : <p className="mt-1 text-[10px] text-muted-foreground">없음</p>}
+              ? <ul className="mt-1 space-y-1 text-xs leading-4">{ranking.hardFilterReasons.map((reason) => <li key={reason}>• {reason}</li>)}</ul>
+              : <p className="mt-1 text-xs text-muted-foreground">없음</p>}
         </div>
         <div className="rounded-xl border border-card-border bg-background p-2">
-          <p className="text-[10px] font-black">데이터 품질 이슈</p>
+          <p className="text-xs font-bold">데이터 품질 이슈</p>
           {signalQuality == null
-            ? <p className="mt-1 text-[10px] text-muted-foreground">미확인</p>
+            ? <p className="mt-1 text-xs text-muted-foreground">미확인</p>
             : qualityIssues.length
-              ? <ul className="mt-1 space-y-1 text-[10px] leading-4">{qualityIssues.map((issue) => <li key={`${issue.code}:${issue.message}`} className={issue.severity === 'blocking' ? 'text-destructive' : 'text-warning'}>• {issue.severity === 'blocking' ? '차단' : '경고'} · {issue.code} · {issue.message}</li>)}</ul>
-              : <p className="mt-1 text-[10px] text-muted-foreground">차단·경고 이슈 없음</p>}
+              ? <ul className="mt-1 space-y-1 text-xs leading-4">{qualityIssues.map((issue) => <li key={`${issue.code}:${issue.message}`} className={issue.severity === 'blocking' ? 'text-destructive' : 'text-warning'}>• {issue.severity === 'blocking' ? '차단' : '경고'} · {issue.code} · {issue.message}</li>)}</ul>
+              : <p className="mt-1 text-xs text-muted-foreground">차단·경고 이슈 없음</p>}
         </div>
       </div>
     </section>
@@ -339,32 +488,83 @@ function SignalDetailPanel({
 
   const summaryContent = (
     <div data-testid="scanner-mobile-summary" className="space-y-3">
+      <section data-testid="scanner-integrated-decision" aria-label="통합 판단" className="rounded-2xl border border-card-border bg-card p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-xs font-semibold text-primary">통합 판단</p>
+            <h3 className="mt-1 text-base font-bold">{decisionLabel}</h3>
+          </div>
+          <span className={`rounded-full border border-card-border px-2.5 py-1 text-xs font-semibold ${freshness.tone}`}>데이터 {freshness.label}</span>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-2 min-[520px]:grid-cols-4">
+          <div className="rounded-xl bg-background p-2.5"><p className="text-xs text-muted-foreground">근거 강도</p><p className="mt-1 font-semibold tabular-nums">{formatNumber(card.confidence, 1)}</p><p className="mt-1 text-xs text-muted-foreground">승률 아님</p></div>
+          <div className="rounded-xl bg-background p-2.5"><p className="text-xs text-muted-foreground">신호 상태</p><p className="mt-1 font-semibold">{userSignalState(card.signalState)}</p></div>
+          <div className="rounded-xl bg-background p-2.5"><p className="text-xs text-muted-foreground">데이터</p><p className="mt-1 font-semibold">{userDataState(card.dataState)}</p></div>
+          <div className="rounded-xl bg-background p-2.5"><p className="text-xs text-muted-foreground">이벤트 근거</p><p className="mt-1 font-semibold">{intelligenceStatus(card)}</p></div>
+        </div>
+        {conflictReasons.length ? (
+          <div className="mt-3 rounded-xl border border-warning/30 bg-warning/10 p-3">
+            <p className="text-xs font-semibold text-warning">충돌·차단 근거</p>
+            <ul className="mt-1 space-y-1 text-xs leading-5 text-muted-foreground">{conflictReasons.slice(0, 4).map((reason) => <li key={reason}>• {reason}</li>)}</ul>
+          </div>
+        ) : <p className="mt-3 text-xs font-medium text-muted-foreground">현재 확인된 blocking 충돌 없음</p>}
+      </section>
+      {decisionTimelinePanel}
       <section aria-label="이 신호인 이유" className="rounded-2xl border border-primary/25 bg-primary/5 p-3">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-xs font-black">왜 이 신호인가 · 핵심 판단</h3>
-          <span className={`rounded-full border px-2 py-1 text-[10px] font-black ${actionBadgeClass(card)}`}>{actionLabel(card)}</span>
+          <h3 className="text-xs font-bold">왜 이 신호인가 · 핵심 판단</h3>
+          <span className={`rounded-full border px-2 py-1 text-xs font-bold ${actionBadgeClass(card)}`}>{actionLabel(card)}</span>
         </div>
         {why.length > 0
           ? <ul className="mt-2 space-y-1 text-xs leading-5">{why.slice(0, 3).map((reason, index) => <li key={`${reason}:${index}`}>• {reason}</li>)}</ul>
           : <p className="mt-2 text-xs text-muted-foreground">검증된 이유 설명이 없습니다. 근거가 없는 설명은 만들지 않습니다.</p>}
-        <p className="mt-2 break-words text-[10px] leading-4 text-muted-foreground">근거 소스 {matchedEvidence.length ? [...new Set(matchedEvidence.map((item) => item.source).filter(Boolean))].join(' · ') : '미확인'}</p>
+        <p className="mt-2 break-words text-xs leading-4 text-muted-foreground">근거 소스 {matchedEvidence.length ? [...new Set(matchedEvidence.map((item) => item.source).filter(Boolean))].join(' · ') : '미확인'}</p>
       </section>
 
       {qualityPanel}
 
+      {themeSwing ? (
+        <section data-testid="scanner-theme-swing-detail" className="rounded-2xl border border-primary/25 bg-primary/5 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-xs font-bold">테마 스윙 · {themeSwing.themeLabel ?? '미분류'}</h3>
+              <p className="mt-1 text-xs text-muted-foreground">테마 확산·대장 강도·추세·거래량·촉매·유동성·위험을 별도 100점으로 평가합니다.</p>
+            </div>
+            <span className="rounded-full border border-primary/30 px-2 py-1 text-xs font-bold">{themeSwing.score}점 · {themeStateLabel(themeSwing.state)}</span>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
+            <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">테마 확산</p><p className="text-xs font-bold">{themeSwing.positiveBreadthPercent == null ? '미확인' : `${themeSwing.positiveBreadthPercent}%`}</p></div>
+            <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">대장 순위</p><p className="text-xs font-bold">{themeSwing.leaderRank == null ? '미확인' : `${themeSwing.leaderRank}/${themeSwing.memberCount}`}</p></div>
+            <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">진입 트리거</p><p className="text-xs font-bold">{triggerLabel(themeSwing.trigger)}</p></div>
+            <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">실행 권한</p><p className="text-xs font-bold">{themeSwing.executionAuthority}</p></div>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-1 text-xs sm:grid-cols-4">
+            <span className="rounded-lg bg-background px-2 py-1">모멘텀 {themeSwing.breakdown.themeMomentum}/22</span>
+            <span className="rounded-lg bg-background px-2 py-1">대장 {themeSwing.breakdown.leaderStrength}/18</span>
+            <span className="rounded-lg bg-background px-2 py-1">추세 {themeSwing.breakdown.trendStructure}/16</span>
+            <span className="rounded-lg bg-background px-2 py-1">거래량 {themeSwing.breakdown.volumeParticipation}/14</span>
+            <span className="rounded-lg bg-background px-2 py-1">촉매 {themeSwing.breakdown.catalystEvidence}/12</span>
+            <span className="rounded-lg bg-background px-2 py-1">유동성 {themeSwing.breakdown.liquidityQuality}/10</span>
+            <span className="rounded-lg bg-background px-2 py-1">위험 {themeSwing.breakdown.riskQuality}/8</span>
+          </div>
+          {themeSwing.blockers.length ? <p className="mt-2 break-words text-xs leading-4 text-warning">차단: {themeSwing.blockers.join(' · ')}</p> : <p className="mt-2 text-xs font-bold text-positive">테마 스윙 선별 조건 충족 · Research/Paper 검증 대상</p>}
+          <p className="mt-2 text-xs leading-4 text-muted-foreground">수익 보장이 아닌 연구용 선별 점수이며 기존 OOS·비용·Paper 검증을 대체하지 않습니다.</p>
+        </section>
+      ) : null}
+
       <section className="rounded-2xl border border-card-border p-3" data-testid="scanner-price-plan">
-        <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">서버 계획</span></div>
+        <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-bold">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-xs font-bold">서버 계획</span></div>
         <div className="mt-2 grid grid-cols-2 gap-2 text-center">
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">진입</p><p className="text-xs font-black">{card.pricePlan.entryZone ? `${formatNumber(card.pricePlan.entryZone.from)}~${formatNumber(card.pricePlan.entryZone.to)}` : '미확인'}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">손절</p><p className="text-xs font-black">{formatNumber(card.pricePlan.stopLoss)}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">목표1</p><p className="text-xs font-black">{formatNumber(card.pricePlan.targets[0])}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">R:R</p><p className="text-xs font-black">{card.pricePlan.riskReward == null ? '미확인' : card.pricePlan.riskReward.toFixed(2)}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">진입</p><p className="text-xs font-bold">{card.pricePlan.entryZone ? `${formatNumber(card.pricePlan.entryZone.from)}~${formatNumber(card.pricePlan.entryZone.to)}` : '미확인'}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">손절</p><p className="text-xs font-bold">{formatNumber(card.pricePlan.stopLoss)}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">목표1</p><p className="text-xs font-bold">{formatNumber(card.pricePlan.targets[0])}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">R:R</p><p className="text-xs font-bold">{card.pricePlan.riskReward == null ? '미확인' : card.pricePlan.riskReward.toFixed(2)}</p></div>
         </div>
       </section>
 
       <div className="grid grid-cols-2 gap-2">
-        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary px-3 text-xs font-black text-primary-foreground">AI 차트</button>
-        <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-xs font-black">주문 준비</button>
+        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary px-3 text-xs font-bold text-primary-foreground">AI 차트</button>
+        <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-xs font-bold">주문 준비</button>
       </div>
     </div>
   );
@@ -372,43 +572,105 @@ function SignalDetailPanel({
   const evidenceContent = (
     <div data-testid={mobile ? 'scanner-mobile-evidence' : 'scanner-desktop-evidence'} className={`${mobile ? '' : 'mt-3 '}space-y-3`}>
       <section aria-label="이 신호인 이유" className="rounded-2xl border border-primary/25 bg-primary/5 p-3">
-        <h3 className="text-xs font-black">왜 이 신호인가</h3>
+        <h3 className="text-xs font-bold">왜 이 신호인가</h3>
         {why.length > 0
           ? <ul className="mt-2 space-y-1 text-xs leading-5">{why.map((reason, index) => <li key={`${reason}:${index}`}>• {reason}</li>)}</ul>
           : <p className="mt-2 text-xs text-muted-foreground">검증된 이유 설명이 없습니다. 근거가 없는 설명은 만들지 않습니다.</p>}
       </section>
+      {(newsIntel || marketIntel || cryptoEvents) ? (
+        <section data-testid="scanner-intelligence-evidence" className="rounded-2xl border border-card-border p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-xs font-bold">뉴스·공시 · Market Intelligence</h3>
+            <span className="rounded-full border border-card-border px-2 py-1 text-xs font-semibold">{intelligenceStatus(card)}</span>
+          </div>
+          {newsIntel ? (
+            <div className="mt-3 space-y-2">
+              <p className="text-xs text-muted-foreground">이벤트 {newsIntel.eventCount}건 · AI 분석 {newsIntel.analyzedCount}건 · 공식 위험 {newsIntel.officialRiskEvents.length}건</p>
+              {newsIntel.events.length ? newsIntel.events.map((event, index) => (
+                <article key={`${event.kind}:${event.publishedAt ?? index}:${index}`} className="rounded-xl bg-background p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-semibold">{event.kind === 'NEWS' ? '뉴스' : '공시'} · {event.eventType}</p>
+                    <span className="text-xs text-muted-foreground">{event.freshness}</span>
+                  </div>
+                  <p className="mt-1 break-words text-sm font-medium">{event.headline ?? event.summary ?? '제목 미확인'}</p>
+                  {event.summary ? <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">{event.summary}</p> : null}
+                  <p className="mt-1 text-xs text-muted-foreground">{event.sourceName ?? '출처 미확인'} · AI {event.aiStatus}</p>
+                  {event.sourceUrl ? <a href={event.sourceUrl} target="_blank" rel="noreferrer" className="mt-2 inline-flex min-h-11 items-center text-xs font-semibold text-primary">원문 보기</a> : null}
+                </article>
+              )) : <p className="mt-2 text-xs text-muted-foreground">표시할 최신 뉴스·공시 이벤트가 없습니다.</p>}
+            </div>
+          ) : null}
+          {marketIntel ? (
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <div className="rounded-xl bg-background p-2.5"><p className="text-xs text-muted-foreground">시장지능</p><p className="mt-1 font-semibold">{marketIntel.status === 'READY' ? formatMetric(marketIntel.scanner.intelligenceScore) : '확인불가'}</p></div>
+              <div className="rounded-xl bg-background p-2.5"><p className="text-xs text-muted-foreground">방향 근거</p><p className="mt-1 font-semibold">{card.direction === 'SHORT' ? formatMetric(marketIntel.scanner.bearishScore) : formatMetric(marketIntel.scanner.bullishScore)}</p></div>
+              <div className="rounded-xl bg-background p-2.5"><p className="text-xs text-muted-foreground">자동화 경계</p><p className="mt-1 font-semibold">{marketIntel.autoTrading.mode === 'BLOCKED_RISK' ? '위험 차단' : marketIntel.autoTrading.mode === 'PAPER_ONLY' ? 'Paper 전용' : marketIntel.autoTrading.mode === 'ELIGIBLE_FOR_PARENT_GATE' ? '상위 Gate 대상' : '확인불가'}</p></div>
+              <div className="rounded-xl bg-background p-2.5"><p className="text-xs text-muted-foreground">점수 조정</p><p className="mt-1 font-semibold tabular-nums">{formatMetric(marketIntel.directionalAdjustment)}</p></div>
+            </div>
+          ) : null}
+          {cryptoEvents ? (
+            <div className="mt-3 space-y-2">
+              <p className="text-xs text-muted-foreground">거래소 경고 {cryptoEvents.marketWarning === true ? '있음' : cryptoEvents.marketWarning === false ? '없음' : '미확인'} · 검증 뉴스 {cryptoEvents.verifiedCoinNews.connected ? '연결' : '미연결'}</p>
+              {cryptoEvents.events.length ? cryptoEvents.events.map((event, index) => (
+                <article key={`${event.kind}:${event.observedAt ?? index}:${index}`} className="rounded-xl bg-background p-3">
+                  <p className="text-xs font-semibold">{event.kind === 'PUBLIC_LIQUIDATION' ? '공개 청산 이벤트' : event.kind === 'EXCHANGE_WARNING' ? '거래소 경고' : '거래 상태'}</p>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">{event.reasons.join(' · ') || event.source}</p>
+                </article>
+              )) : null}
+            </div>
+          ) : null}
+          <p className="mt-3 text-xs leading-5 text-muted-foreground">AI/뉴스 감성은 단독 매매 방향이 아니며, 표시된 근거는 기존 Scanner·Risk Gate를 대체하지 않습니다.</p>
+        </section>
+      ) : null}
       <div className="grid gap-2 sm:grid-cols-3">
-        <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-black">일치 근거</h3><div className="mt-2 flex flex-wrap gap-1">{card.matched.length ? card.matched.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-positive/10 px-2 py-1 text-[10px] text-positive">{item}</span>) : <span className="text-[10px] text-muted-foreground">없음</span>}</div></section>
-        <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-black">불일치 조건</h3><div className="mt-2 flex flex-wrap gap-1">{card.notMatched.length ? card.notMatched.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-destructive/10 px-2 py-1 text-[10px] text-destructive">{item}</span>) : <span className="text-[10px] text-muted-foreground">없음</span>}</div></section>
-        <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-black">누락·미검증</h3><div className="mt-2 flex flex-wrap gap-1">{missing.length ? missing.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-warning/10 px-2 py-1 text-[10px] text-warning">{item}</span>) : <span className="text-[10px] text-muted-foreground">없음</span>}</div></section>
+        <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-bold">일치 근거</h3><div className="mt-2 flex flex-wrap gap-1">{card.matched.length ? card.matched.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-positive/10 px-2 py-1 text-xs text-positive">{item}</span>) : <span className="text-xs text-muted-foreground">없음</span>}</div></section>
+        <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-bold">불일치 조건</h3><div className="mt-2 flex flex-wrap gap-1">{card.notMatched.length ? card.notMatched.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-destructive/10 px-2 py-1 text-xs text-destructive">{item}</span>) : <span className="text-xs text-muted-foreground">없음</span>}</div></section>
+        <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-bold">누락·미검증</h3><div className="mt-2 flex flex-wrap gap-1">{missing.length ? missing.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-warning/10 px-2 py-1 text-xs text-warning">{item}</span>) : <span className="text-xs text-muted-foreground">없음</span>}</div></section>
       </div>
     </div>
   );
 
   const performanceContent = (
-    <section data-testid="scanner-mobile-performance" className="rounded-2xl border border-card-border p-3">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-xs font-black">검증 성과</h3>
-        <span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">{quality?.status ?? 'missing'}</span>
+    <section data-testid="scanner-performance" className="rounded-2xl border border-card-border p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-xs font-bold">검증 단계 · 비용 후 성과</h3>
+          <p className="mt-1 text-xs leading-4 text-muted-foreground">실제 증거가 있는 단계만 검증으로 표시하며 없는 Forward/Paper 표본은 미검증으로 남깁니다.</p>
+        </div>
+        <span className="rounded-full border border-card-border px-2 py-1 text-xs font-bold">{quality?.status ?? 'missing'}</span>
       </div>
-      <p className="mt-2 text-[10px] leading-4 text-muted-foreground">검증 이력이 없거나 표본이 부족하면 0%로 만들지 않고 미확인으로 표시합니다.</p>
-      <div className="mt-3 grid grid-cols-2 gap-2 text-center">
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">OOS 승률</p><p className="text-xs font-black">{formatMetric(quality?.oosWinRate, '%')}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">WF 승률</p><p className="text-xs font-black">{formatMetric(quality?.walkForwardWinRate, '%')}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Expectancy</p><p className="text-xs font-black">{formatMetric(quality?.expectancyPercent, '%')}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Profit Factor</p><p className="text-xs font-black">{formatMetric(quality?.profitFactor)}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">MDD</p><p className="text-xs font-black">{formatMetric(quality?.maxDrawdownPercent, '%')}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">표본 거래</p><p className="text-xs font-black">{formatMetric(quality?.tradeCount)}</p></div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2 text-center min-[520px]:grid-cols-3">
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">Backtest</p><p className="text-xs font-bold">{validationBadgeLabel(quality?.status === 'verified')}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">OOS</p><p className="text-xs font-bold">{validationBadgeLabel(quality?.oos)}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">Walk-Forward</p><p className="text-xs font-bold">{validationBadgeLabel(quality?.walkForward)}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">Full Cost</p><p className="text-xs font-bold">{validationBadgeLabel(fullCostVerified)}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">Forward</p><p className="text-xs font-bold">{validationBadgeLabel(quality?.forwardVerified, quality?.forwardSampleCount)}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">Paper</p><p className="text-xs font-bold">{validationBadgeLabel(quality?.paperVerified, quality?.paperSampleCount)}</p></div>
       </div>
-      <p className="mt-3 text-[10px] leading-4 text-muted-foreground">비용 반영 {quality?.costsIncluded === true ? '확인' : '미확인'} · 슬리피지 {quality?.slippageIncluded === true ? '확인' : '미확인'} · Regime {quality?.regime ?? '미확인'}</p>
+
+      <div className="mt-3 grid grid-cols-2 gap-2 text-center min-[520px]:grid-cols-3">
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">OOS 승률</p><p className="text-xs font-bold">{formatMetric(quality?.oosWinRate, '%')}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">WF 승률</p><p className="text-xs font-bold">{formatMetric(quality?.walkForwardWinRate, '%')}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">Net EV · Expectancy</p><p data-testid="scanner-net-ev" className="text-xs font-bold">{formatMetric(costAdjustedExpectancy, '%')}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">Profit Factor</p><p className="text-xs font-bold">{formatMetric(quality?.profitFactor)}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">MDD</p><p className="text-xs font-bold">{formatMetric(quality?.maxDrawdownPercent, '%')}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">백테스트 거래</p><p className="text-xs font-bold">{formatMetric(quality?.tradeCount)}</p></div>
+      </div>
+
+      <p className="mt-3 text-xs leading-5 text-muted-foreground">
+        Net EV는 기존 Expectancy 값에 비용·슬리피지 반영 증거가 모두 있을 때만 표시합니다.
+        그 조건이 없으면 미확인으로 유지합니다.
+      </p>
+      <p className="mt-1 text-xs leading-5 text-muted-foreground">Regime {quality?.regime ?? '미확인'} · Source {quality?.source ?? '미확인'}</p>
     </section>
   );
 
   const chartContent = (
     <section data-testid="scanner-mobile-chart" className="rounded-2xl border border-card-border p-3">
-      <h3 className="text-xs font-black">AI 차트</h3>
+      <h3 className="text-xs font-bold">AI 차트</h3>
       <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">모바일 상세 안에 차트를 길게 끼워 넣지 않고 전체 차트 화면으로 전환해 세로 스크롤을 줄입니다.</p>
-      <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="mt-3 min-h-11 w-full rounded-xl bg-primary px-3 text-sm font-black text-primary-foreground">AI 차트 전체화면 열기</button>
+      <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="mt-3 min-h-11 w-full rounded-xl bg-primary px-3 text-sm font-bold text-primary-foreground">AI 차트 전체화면 열기</button>
     </section>
   );
 
@@ -416,25 +678,25 @@ function SignalDetailPanel({
     <div data-testid="scanner-mobile-risk" className="space-y-3">
       {qualityPanel}
       <section className="rounded-2xl border border-card-border p-3">
-        <h3 className="text-xs font-black">위험 · 데이터 상태</h3>
+        <h3 className="text-xs font-bold">위험 · 데이터 상태</h3>
         <div className="mt-2 grid grid-cols-2 gap-2 text-center">
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">위험</p><p className="text-xs font-black">{formatNumber(card.riskScore, 1)} · {card.riskLevel}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Data</p><p className="text-xs font-black">{card.dataState}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">위험</p><p className="text-xs font-bold">{formatNumber(card.riskScore, 1)} · {card.riskLevel}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">데이터</p><p className="text-xs font-semibold">{userDataState(card.dataState)}</p></div>
         </div>
-        <p className="mt-2 break-words text-[11px] leading-5 text-muted-foreground">출처 {card.dataSources.length ? card.dataSources.join(' · ') : '미확인'}</p>
-        <p className="mt-1 text-[11px] text-muted-foreground">관측 {formatObservedAt(card.observedAt)} · 만료 {formatObservedAt(card.expiresAt)}</p>
-        {risks.length ? <ul className="mt-2 space-y-1 text-[11px] leading-5 text-warning">{risks.map((risk) => <li key={risk}>• {risk}</li>)}</ul> : <p className="mt-2 text-[11px] text-muted-foreground">추가 Risk 경고 없음</p>}
+        <p className="mt-2 break-words text-xs leading-5 text-muted-foreground">출처 {card.dataSources.length ? card.dataSources.join(' · ') : '미확인'}</p>
+        <p className="mt-1 text-xs text-muted-foreground">관측 {formatObservedAt(card.observedAt)} · 만료 {formatObservedAt(card.expiresAt)}</p>
+        {risks.length ? <ul className="mt-2 space-y-1 text-xs leading-5 text-warning">{risks.map((risk) => <li key={risk}>• {risk}</li>)}</ul> : <p className="mt-2 text-xs text-muted-foreground">추가 Risk 경고 없음</p>}
       </section>
       <div className="grid grid-cols-2 gap-2">
-        <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-black">주문 준비</button>
+        <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-bold">주문 준비</button>
         <button type="button" onClick={onOpenAsset} className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold">자산 상세</button>
       </div>
-      <p className="text-center text-[10px] font-bold text-muted-foreground">두 액션 모두 클릭만으로 주문을 제출하지 않습니다 · real order 0</p>
+      <p className="text-center text-xs font-bold text-muted-foreground">두 액션 모두 클릭만으로 주문을 제출하지 않습니다 · real order 0</p>
       {showOrderPreparation ? (
         <div data-testid="order-preparation" className="border-t border-card-border pt-3">
           <div className="mb-3 rounded-2xl border border-warning/30 bg-warning/10 p-3">
-            <h3 className="text-xs font-black">주문 준비 · 실행 아님</h3>
-            <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">기존 Risk Engine·승인형 Paper 계획만 재사용합니다. 이 화면은 실주문을 전송하지 않습니다.</p>
+            <h3 className="text-xs font-bold">주문 준비 · 실행 아님</h3>
+            <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">기존 Risk Engine·승인형 Paper 계획만 재사용합니다. 이 화면은 실주문을 전송하지 않습니다.</p>
           </div>
           <ScannerApprovalComposer selection={selection} />
         </div>
@@ -456,29 +718,29 @@ function SignalDetailPanel({
     <section data-testid="signal-detail" aria-label="Signal Detail" className="min-w-0 rounded-3xl border border-card-border bg-card p-4 shadow-xl">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[11px] font-black text-primary">신호 상세</p>
-          <h2 className="mt-1 break-words text-lg font-black">{displaySignalTitle(card)}</h2>
+          <p className="text-xs font-bold text-primary">신호 상세</p>
+          <h2 className="mt-1 break-words text-lg font-bold">{displaySignalTitle(card)}</h2>
           <p className="mt-1 text-xs font-bold text-muted-foreground">{marketDisplayLabel(card)}</p>
           <div className="mt-2 flex flex-wrap gap-1">
-            <span data-testid="scanner-direction-badge" className={`rounded-full border px-2 py-1 text-[10px] font-black ${actionBadgeClass(card)}`}>{actionLabel(card)}</span>
-            <span data-testid="scanner-signal-state" className="rounded-full border border-primary/30 px-2 py-1 text-[10px] font-black">상태 {card.signalState || '미확인'}</span>
-            <span data-testid="scanner-evidence-grade" className="rounded-full border border-card-border px-2 py-1 text-[10px] font-black">등급 {evidenceGradeLabel(card)}</span>
-            <span data-testid="scanner-ttl-badge" className="rounded-full border border-card-border px-2 py-1 text-[10px] font-black">{remainingValidityLabel(card.expiresAt)}</span>
+            <span data-testid="scanner-direction-badge" className={`rounded-full border px-2 py-1 text-xs font-bold ${actionBadgeClass(card)}`}>{actionLabel(card)}</span>
+            <span data-testid="scanner-signal-state" className="rounded-full border border-primary/30 px-2 py-1 text-xs font-semibold">상태 {userSignalState(card.signalState)}</span>
+            <span data-testid="scanner-evidence-grade" className="rounded-full border border-card-border px-2 py-1 text-xs font-bold">등급 {evidenceGradeLabel(card)}</span>
+            <span data-testid="scanner-ttl-badge" className="rounded-full border border-card-border px-2 py-1 text-xs font-bold">{remainingValidityLabel(card.expiresAt)}</span>
           </div>
         </div>
-        {onClose ? <button type="button" onClick={onClose} aria-label="Signal Detail 닫기" className="min-h-11 shrink-0 rounded-xl border border-card-border bg-background px-3 text-xs font-black">닫기</button> : null}
+        {onClose ? <button type="button" onClick={onClose} aria-label="Signal Detail 닫기" className="min-h-11 shrink-0 rounded-xl border border-card-border bg-background px-3 text-xs font-bold">닫기</button> : null}
       </div>
 
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">현재가</p><p className="mt-1 break-words text-sm font-black">{formatNumber(card.price, card.currency === 'KRW' ? 0 : 6)} {card.currency}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">신호점수</p><p className="mt-1 text-sm font-black">{formatNumber(card.score, 1)}점</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">신뢰도</p><p className="mt-1 text-sm font-black">{formatNumber(card.confidence, 1)}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">위험</p><p className="mt-1 text-sm font-black">{formatNumber(card.riskScore, 1)} · {card.riskLevel}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">현재가</p><p className="mt-1 break-words text-sm font-bold">{formatNumber(card.price, card.currency === 'KRW' ? 0 : 6)} {card.currency}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">신호점수</p><p className="mt-1 text-sm font-bold">{formatNumber(card.score, 1)}점</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">근거 강도</p><p className="mt-1 text-sm font-bold">{formatNumber(card.confidence, 1)}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">위험</p><p className="mt-1 text-sm font-bold">{formatNumber(card.riskScore, 1)} · {card.riskLevel}</p></div>
       </div>
 
       {mobile ? (
         <>
-          <div role="tablist" aria-label="Signal Detail 모바일 탭" data-testid="scanner-mobile-detail-tabs" className="mt-3 flex gap-1 overflow-x-auto overscroll-x-contain pb-1">
+          <div role="tablist" aria-label="Signal Detail 모바일 탭" data-testid="scanner-mobile-detail-tabs" className="mt-3 grid grid-cols-3 gap-1 min-[520px]:grid-cols-5">
             {MOBILE_DETAIL_TABS.map((tab) => (
               <button
                 key={tab.value}
@@ -486,7 +748,7 @@ function SignalDetailPanel({
                 role="tab"
                 aria-selected={mobileTab === tab.value}
                 onClick={() => setMobileTab(tab.value)}
-                className={`min-h-11 shrink-0 rounded-xl border px-3 text-xs font-black ${mobileTab === tab.value ? 'border-primary bg-primary/10 text-primary' : 'border-card-border bg-background'}`}
+                className={`min-h-11 min-w-0 rounded-xl border px-2 text-xs font-semibold ${mobileTab === tab.value ? 'border-primary bg-primary/10 text-primary' : 'border-card-border bg-background'}`}
               >
                 {tab.label}
               </button>
@@ -499,35 +761,37 @@ function SignalDetailPanel({
       ) : (
         <>
           {qualityPanel}
+          <div className="mt-3">{decisionTimelinePanel}</div>
           {evidenceContent}
+          <div className="mt-3">{performanceContent}</div>
           <section className="mt-3 rounded-2xl border border-card-border p-3" data-testid="scanner-price-plan">
-            <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">서버 계획</span></div>
+            <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-bold">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-xs font-bold">서버 계획</span></div>
             <div className="mt-2 grid grid-cols-2 gap-2 text-center sm:grid-cols-5">
-              <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">진입</p><p className="text-xs font-black">{card.pricePlan.entryZone ? `${formatNumber(card.pricePlan.entryZone.from)}~${formatNumber(card.pricePlan.entryZone.to)}` : '미확인'}</p></div>
-              <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">손절</p><p className="text-xs font-black">{formatNumber(card.pricePlan.stopLoss)}</p></div>
-              <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">목표1</p><p className="text-xs font-black">{formatNumber(card.pricePlan.targets[0])}</p></div>
-              <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">목표2</p><p className="text-xs font-black">{formatNumber(card.pricePlan.targets[1])}</p></div>
-              <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">R:R</p><p className="text-xs font-black">{card.pricePlan.riskReward == null ? '미확인' : card.pricePlan.riskReward.toFixed(2)}</p></div>
+              <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">진입</p><p className="text-xs font-bold">{card.pricePlan.entryZone ? `${formatNumber(card.pricePlan.entryZone.from)}~${formatNumber(card.pricePlan.entryZone.to)}` : '미확인'}</p></div>
+              <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">손절</p><p className="text-xs font-bold">{formatNumber(card.pricePlan.stopLoss)}</p></div>
+              <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">목표1</p><p className="text-xs font-bold">{formatNumber(card.pricePlan.targets[0])}</p></div>
+              <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">목표2</p><p className="text-xs font-bold">{formatNumber(card.pricePlan.targets[1])}</p></div>
+              <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">R:R</p><p className="text-xs font-bold">{card.pricePlan.riskReward == null ? '미확인' : card.pricePlan.riskReward.toFixed(2)}</p></div>
             </div>
           </section>
           <section className="mt-3 rounded-2xl border border-card-border p-3">
-            <h3 className="text-xs font-black">데이터 근거·Freshness</h3>
-            <p className="mt-2 break-words text-[11px] leading-5 text-muted-foreground">출처 {card.dataSources.length ? card.dataSources.join(' · ') : '미확인'}</p>
-            <p className="mt-1 break-words text-[11px] leading-5 text-muted-foreground">근거 소스 {matchedEvidence.length ? [...new Set(matchedEvidence.map((item) => item.source).filter(Boolean))].join(' · ') : '미확인'}</p>
-            <p className="mt-1 text-[11px] text-muted-foreground">관측 {formatObservedAt(card.observedAt)} · 만료 {formatObservedAt(card.expiresAt)} · {card.dataState}</p>
-            {risks.length ? <ul className="mt-2 space-y-1 text-[11px] leading-5 text-warning">{risks.map((risk) => <li key={risk}>• {risk}</li>)}</ul> : <p className="mt-2 text-[11px] text-muted-foreground">추가 Risk 경고 없음</p>}
+            <h3 className="text-xs font-bold">데이터 근거·Freshness</h3>
+            <p className="mt-2 break-words text-xs leading-5 text-muted-foreground">출처 {card.dataSources.length ? card.dataSources.join(' · ') : '미확인'}</p>
+            <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">근거 소스 {matchedEvidence.length ? [...new Set(matchedEvidence.map((item) => item.source).filter(Boolean))].join(' · ') : '미확인'}</p>
+            <p className="mt-1 text-xs text-muted-foreground">관측 {formatObservedAt(card.observedAt)} · 만료 {formatObservedAt(card.expiresAt)} · {card.dataState}</p>
+            {risks.length ? <ul className="mt-2 space-y-1 text-xs leading-5 text-warning">{risks.map((risk) => <li key={risk}>• {risk}</li>)}</ul> : <p className="mt-2 text-xs text-muted-foreground">추가 Risk 경고 없음</p>}
           </section>
           <div className="mt-3 grid grid-cols-2 gap-2">
-            <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-black text-primary-foreground">AI 차트</button>
-            <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-black">주문 준비</button>
+            <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-bold text-primary-foreground">AI 차트</button>
+            <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-bold">주문 준비</button>
             <button type="button" onClick={onOpenAsset} className="col-span-2 min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold">기존 자산 상세 열기</button>
           </div>
-          <p className="mt-2 text-center text-[10px] font-bold text-muted-foreground">두 액션 모두 클릭만으로 주문을 제출하지 않습니다 · real order 0</p>
+          <p className="mt-2 text-center text-xs font-bold text-muted-foreground">두 액션 모두 클릭만으로 주문을 제출하지 않습니다 · real order 0</p>
           {showOrderPreparation ? (
             <div data-testid="order-preparation" className="mt-4 border-t border-card-border pt-4">
               <div className="mb-3 rounded-2xl border border-warning/30 bg-warning/10 p-3">
-                <h3 className="text-xs font-black">주문 준비 · 실행 아님</h3>
-                <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">기존 Risk Engine·승인형 Paper 계획만 재사용합니다. 이 화면은 실주문을 전송하지 않습니다.</p>
+                <h3 className="text-xs font-bold">주문 준비 · 실행 아님</h3>
+                <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">기존 Risk Engine·승인형 Paper 계획만 재사용합니다. 이 화면은 실주문을 전송하지 않습니다.</p>
               </div>
               <ScannerApprovalComposer selection={selection} />
             </div>
@@ -550,6 +814,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const [strategy, setStrategy] = useState<UnifiedScannerStrategyMode>(initialStrategy);
   const [embeddedTimeframe, setEmbeddedTimeframe] = useState<SignalScannerRequest['timeframe']>(() => defaultEmbeddedTimeframe(initialStrategy));
   const [futuresDirectionFilter, setFuturesDirectionFilter] = useState<FuturesDirectionFilter>('ALL');
+  const [themeSwingOnly, setThemeSwingOnly] = useState(false);
   const [cursor, setCursor] = useState(0);
   const [refreshToken, setRefreshToken] = useState(0);
   const [status, setStatus] = useState<RequestStatus>('loading');
@@ -601,12 +866,17 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
     LONG: normalizedCards.filter((card) => card.action === 'LONG').length,
     SHORT: normalizedCards.filter((card) => card.action === 'SHORT').length,
   }), [normalizedCards]);
-  const visibleCards = useMemo(
-    () => view !== 'FUTURES' || futuresDirectionFilter === 'ALL'
+  const visibleCards = useMemo(() => {
+    const directionCards = view !== 'FUTURES' || futuresDirectionFilter === 'ALL'
       ? normalizedCards
-      : normalizedCards.filter((card) => card.action === futuresDirectionFilter),
-    [futuresDirectionFilter, normalizedCards, view],
-  );
+      : normalizedCards.filter((card) => card.action === futuresDirectionFilter);
+    if (strategy !== 'swing' || !themeSwingOnly) return directionCards;
+    return directionCards
+      .filter((card) => card.themeSwing && (card.themeSwing.state === 'ELIGIBLE' || card.themeSwing.state === 'WATCH'))
+      .sort((left, right) => (right.themeSwing?.score ?? -1) - (left.themeSwing?.score ?? -1)
+        || (left.themeSwing?.leaderRank ?? Number.MAX_SAFE_INTEGER) - (right.themeSwing?.leaderRank ?? Number.MAX_SAFE_INTEGER)
+        || compareScannerCards(left, right));
+  }, [futuresDirectionFilter, normalizedCards, strategy, themeSwingOnly, view]);
   const selectedCard = useMemo(
     () => visibleCards.find((card) => card.signalId === selectedSignalId) ?? null,
     [visibleCards, selectedSignalId],
@@ -693,6 +963,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const selectStrategy = (next: UnifiedScannerStrategyMode) => {
     setCursor(0);
     setStrategy(next);
+    if (next !== 'swing') setThemeSwingOnly(false);
     if (embedded) setEmbeddedTimeframe(defaultEmbeddedTimeframe(next));
   };
 
@@ -750,7 +1021,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <p className="text-xs font-semibold text-primary">공개 시장데이터 전용 · 자동 전략 Profile</p>
-              <h1 className="mt-1 text-xl font-black">AI 신호검색기</h1>
+              <h1 className="mt-1 text-xl font-bold">AI 신호검색기</h1>
               <p className="mt-1 hidden max-w-3xl break-keep text-xs leading-relaxed text-muted-foreground sm:block">
                 시장과 투자 스타일만 선택하면 시간봉·기술지표·패턴·변동성·거래량·추세·시장국면·리스크 조건을 내부 엔진이 자동 조합합니다. 계좌·주문·취소 API는 호출하지 않습니다.
               </p>
@@ -765,8 +1036,8 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
           {VIEWS.map((item) => (
             <button key={item.value} type="button" aria-pressed={view === item.value} onClick={() => { setCursor(0); setFuturesDirectionFilter('ALL'); setView(item.value); }}
               className={`min-h-14 rounded-2xl border px-3 py-2 text-left ${view === item.value ? 'border-primary bg-primary/10' : 'border-card-border bg-card'}`}>
-              <span className="block break-keep text-sm font-black">{item.label}</span>
-              <span className="hidden break-keep text-[11px] text-muted-foreground sm:block">{item.description}</span>
+              <span className="block break-keep text-sm font-bold">{item.label}</span>
+              <span className="hidden break-keep text-xs text-muted-foreground sm:block">{item.description}</span>
             </button>
           ))}
         </section>
@@ -775,8 +1046,8 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
           {SCANNER_STRATEGY_OPTIONS.map((item) => (
             <button key={item.value} type="button" aria-label={embedded ? `${item.label} Engine` : undefined} aria-pressed={strategy === item.value} onClick={() => selectStrategy(item.value)}
               className={`min-h-16 rounded-2xl border px-3 py-3 text-left ${strategy === item.value ? 'border-primary bg-primary/10' : 'border-card-border bg-card'}`}>
-              <span className="block break-keep text-sm font-black">{item.label}</span>
-              <span className="mt-1 hidden break-keep text-[10px] text-muted-foreground sm:block">{item.description}</span>
+              <span className="block break-keep text-sm font-bold">{item.label}</span>
+              <span className="mt-1 hidden break-keep text-xs text-muted-foreground sm:block">{item.description}</span>
             </button>
           ))}
         </section>
@@ -784,14 +1055,26 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
         <section aria-label="자동 전략 안내" className="rounded-3xl border border-card-border bg-card p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <p className="text-sm font-black">{strategyLabel(strategy)} · 자동 Profile</p>
+              <p className="text-sm font-bold">{strategyLabel(strategy)} · 자동 Profile</p>
               <p className="mt-1 break-keep text-xs text-muted-foreground">분석 시간봉 {effectiveTimeframe} · 확인 시간봉과 지표 가중치는 시장별 Profile에서 자동 관리</p>
             </div>
-            <span className="rounded-full border border-card-border px-3 py-1 text-[11px] font-bold">{profile.profileVersion}</span>
+            <span className="rounded-full border border-card-border px-3 py-1 text-xs font-bold">{profile.profileVersion}</span>
           </div>
-          <p data-testid="scanner-market-signal-guide" className="mt-2 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-black text-primary">
+          <p data-testid="scanner-market-signal-guide" className="mt-2 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-bold text-primary">
             {view === 'FUTURES' ? '코인 선물 · ↑ 롱 신호 / ↓ 숏 신호' : `${view === 'KR' ? '국내주식' : view === 'US' ? '미국주식' : '코인 현물'} · ↗ 매수 신호`}
           </p>
+          {strategy === 'swing' ? (
+            <button
+              type="button"
+              data-testid="scanner-theme-swing-mode"
+              aria-pressed={themeSwingOnly}
+              onClick={() => setThemeSwingOnly((value) => !value)}
+              className={`mt-2 min-h-12 w-full rounded-2xl border px-3 py-2 text-left ${themeSwingOnly ? 'border-primary bg-primary/10' : 'border-card-border bg-background'}`}
+            >
+              <span className="block text-xs font-bold">테마 스윙 {themeSwingOnly ? 'ON' : 'OFF'}</span>
+              <span className="mt-1 block text-xs leading-4 text-muted-foreground">ON이면 테마가 확인된 ELIGIBLE/WATCH 후보만 테마점수 순으로 표시합니다. 기존 신호점수와 OOS 검증은 변경하지 않습니다.</span>
+            </button>
+          ) : null}
           {view === 'FUTURES' ? (
             <div data-testid="scanner-futures-direction-filter" role="tablist" aria-label="코인 선물 방향" className="mt-2 grid grid-cols-3 gap-2 rounded-2xl bg-background p-1">
               {FUTURES_DIRECTION_FILTERS.map((item) => (
@@ -801,14 +1084,14 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                   role="tab"
                   aria-selected={futuresDirectionFilter === item.value}
                   onClick={() => setFuturesDirectionFilter(item.value)}
-                  className={`min-h-11 rounded-xl px-3 text-xs font-black ${futuresDirectionFilter === item.value ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground'}`}
+                  className={`min-h-11 rounded-xl px-3 text-xs font-bold ${futuresDirectionFilter === item.value ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground'}`}
                 >
                   {item.label} {futuresDirectionCounts[item.value]}
                 </button>
               ))}
             </div>
           ) : null}
-          <p className="mt-2 hidden break-keep text-[11px] text-muted-foreground sm:block">기술지표 직접 선택은 기본 화면에 노출하지 않습니다. 상세 근거는 결과 카드에서 확인할 수 있습니다.</p>
+          <p className="mt-2 hidden break-keep text-xs text-muted-foreground sm:block">기술지표 직접 선택은 기본 화면에 노출하지 않습니다. 상세 근거는 결과 카드에서 확인할 수 있습니다.</p>
           {embedded && (
             <label className="mt-3 block space-y-1 text-xs font-bold">
               시간봉
@@ -820,34 +1103,34 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
               >
                 {EMBEDDED_TIMEFRAMES[strategy].map((item) => <option key={item} value={item}>{item}</option>)}
               </select>
-              <span className="block text-[10px] font-normal text-muted-foreground">기술 워크스페이스의 회귀·연구 검증에서만 시간봉을 직접 전환합니다. 기본 Scanner 화면은 자동 Profile을 유지합니다.</span>
+              <span className="block text-xs font-normal text-muted-foreground">기술 워크스페이스의 회귀·연구 검증에서만 시간봉을 직접 전환합니다. 기본 Scanner 화면은 자동 Profile을 유지합니다.</span>
             </label>
           )}
         </section>
 
         {status === 'loading' && <section aria-live="polite" className="rounded-3xl border border-card-border bg-card p-8 text-center"><p className="font-bold">시장데이터를 분석하고 있습니다.</p></section>}
         {status === 'cancelled' && <section aria-live="polite" className="rounded-3xl border border-card-border bg-card p-5 text-sm">이전 요청을 취소하고 최신 선택으로 다시 분석합니다.</section>}
-        {errorMessage && status === 'partial' && <section role="alert" className="rounded-3xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm"><p className="font-black">최신 결과 갱신 대기</p><p className="mt-1 text-xs text-muted-foreground">{errorMessage}</p></section>}
-        {status === 'error' && <section role="alert" className="rounded-3xl border border-destructive/40 bg-destructive/10 p-5"><p className="font-black text-destructive">검색 실패</p><p className="mt-2 text-sm">{errorMessage}</p><button type="button" onClick={() => setRefreshToken((value) => value + 1)} className="mt-4 min-h-11 rounded-xl border border-destructive/30 px-4 text-sm font-bold">다시 시도</button></section>}
+        {errorMessage && status === 'partial' && <section role="alert" className="rounded-3xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm"><p className="font-bold">최신 결과 갱신 대기</p><p className="mt-1 text-xs text-muted-foreground">{errorMessage}</p></section>}
+        {status === 'error' && <section role="alert" className="rounded-3xl border border-destructive/40 bg-destructive/10 p-5"><p className="font-bold text-destructive">검색 실패</p><p className="mt-2 text-sm">{errorMessage}</p><button type="button" onClick={() => setRefreshToken((value) => value + 1)} className="mt-4 min-h-11 rounded-xl border border-destructive/30 px-4 text-sm font-bold">다시 시도</button></section>}
 
         {data && status !== 'loading' && status !== 'error' && (
           <>
             <section data-testid={status === 'partial' ? 'scanner-partial' : undefined} className={`rounded-3xl border p-4 ${status === 'partial' ? 'border-amber-500/40 bg-amber-500/10' : 'border-card-border bg-card'}`}>
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div><p className="text-sm font-black">{data.message}</p><p className="mt-1 text-xs text-muted-foreground">{strategyLabel(strategy)} · {data.timeframe} · {new Date(data.generatedAt).toLocaleString('ko-KR')}</p></div>
-                <div className="flex flex-wrap justify-end gap-1"><span className="rounded-full border border-card-border px-3 py-1 text-xs font-bold">{data.dataState}</span>{outcome ? <span data-testid="scanner-outcome" className="rounded-full border border-card-border px-3 py-1 text-[10px] font-black">{outcome}</span> : null}</div>
+                <div><p className="text-sm font-bold">{data.message}</p><p className="mt-1 text-xs text-muted-foreground">{strategyLabel(strategy)} · {data.timeframe} · {new Date(data.generatedAt).toLocaleString('ko-KR')}</p></div>
+                <div className="flex flex-wrap justify-end gap-1"><span className="rounded-full border border-card-border px-3 py-1 text-xs font-bold">{data.dataState}</span>{outcome ? <span data-testid="scanner-outcome" className="rounded-full border border-card-border px-3 py-1 text-xs font-bold">{outcome}</span> : null}</div>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
-                <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">스캔</p><p className="text-sm font-black">{data.execution.requestedCount}</p></div>
-                <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">분석 완료</p><p className="text-sm font-black">{data.execution.dataSuccessCount ?? data.execution.completedCount}</p></div>
-                <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">표시</p><p className="text-sm font-black">{data.execution.finalDisplayedCount ?? normalizedCards.length}</p></div>
-                <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Provider 오류</p><p className="text-sm font-black">{data.execution.providerErrorCount}</p></div>
+                <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">스캔</p><p className="text-sm font-bold">{data.execution.requestedCount}</p></div>
+                <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">분석 완료</p><p className="text-sm font-bold">{data.execution.dataSuccessCount ?? data.execution.completedCount}</p></div>
+                <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">표시</p><p className="text-sm font-bold">{data.execution.finalDisplayedCount ?? normalizedCards.length}</p></div>
+                <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">Provider 오류</p><p className="text-sm font-bold">{data.execution.providerErrorCount}</p></div>
               </div>
             </section>
 
             {data.failures.length > 0 && (
               <section className="rounded-3xl border border-amber-500/30 bg-card p-4">
-                <h2 className="text-sm font-black">분석하지 못한 종목 {data.failures.length}개</h2>
+                <h2 className="text-sm font-bold">분석하지 못한 종목 {data.failures.length}개</h2>
                 <div className="mt-2 space-y-1">
                   {data.failures.map((failure) => (
                     <p key={`${failure.symbol}:${failure.reason}`} className="text-xs text-muted-foreground">{failure.symbol} · {failure.reason}</p>
@@ -858,11 +1141,11 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
 
             {data.alerts.length > 0 && (
               <section aria-label="승인 대기 알림" className="rounded-3xl border border-primary/40 bg-primary/10 p-4">
-                <h2 className="font-black">승인 대기 알림</h2>
+                <h2 className="font-bold">승인 대기 알림</h2>
                 <p className="mt-1 text-xs text-muted-foreground">상세 정보만 열며 주문을 실행하지 않습니다.</p>
                 <div className="mt-3 space-y-2">{data.alerts.map((alert) => (
                   <button key={alert.idempotencyKey} type="button" onClick={() => { const card = normalizedCards.find((item) => item.signalId === alert.signalId); if (card) selectSignal(card); }} className="min-h-11 w-full rounded-xl border border-primary/30 bg-card px-3 py-2 text-left text-sm">
-                    <span className="font-black">{alertTitle(alert)}</span>
+                    <span className="font-bold">{alertTitle(alert)}</span>
                   </button>
                 ))}</div>
               </section>
@@ -870,9 +1153,9 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
 
             {normalizedCards.length === 0 ? (
               <section data-testid="scanner-zero-outcome" className="rounded-3xl border border-card-border bg-card p-6 text-center">
-                <p className="text-sm font-black">{outcome ? OUTCOME_COPY[outcome].title : 'VALID_ZERO_SIGNAL'}</p>
+                <p className="text-sm font-bold">{outcome ? OUTCOME_COPY[outcome].title : 'VALID_ZERO_SIGNAL'}</p>
                 <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">{outcome ? OUTCOME_COPY[outcome].description : '현재 조건에서 표시할 검증 후보가 없습니다.'}</p>
-                <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] sm:grid-cols-4">
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
                   <span className="rounded-xl bg-background p-2">유니버스 {data.universe.totalCount}</span>
                   <span className="rounded-xl bg-background p-2">완료 {data.execution.completedCount}</span>
                   <span className="rounded-xl bg-background p-2">품질제외 {data.execution.insufficientDataCount ?? 0}</span>
@@ -881,8 +1164,8 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
               </section>
             ) : visibleCards.length === 0 ? (
               <section data-testid="scanner-direction-empty" className="rounded-3xl border border-card-border bg-card p-6 text-center">
-                <p className="text-sm font-black">선택한 방향의 후보가 없습니다.</p>
-                <p className="mt-2 text-xs text-muted-foreground">전체 탭에서 현재 검증된 롱·숏 후보를 함께 확인할 수 있습니다.</p>
+                <p className="text-sm font-bold">{themeSwingOnly ? '현재 테마 스윙 ELIGIBLE/WATCH 후보가 없습니다.' : '선택한 방향의 후보가 없습니다.'}</p>
+                <p className="mt-2 text-xs text-muted-foreground">{themeSwingOnly ? '일반 스윙 결과는 유지되며 테마 확산·대장·진입 트리거 기준을 통과한 후보만 이 모드에 표시합니다.' : '전체 탭에서 현재 검증된 롱·숏 후보를 함께 확인할 수 있습니다.'}</p>
               </section>
             ) : (
               <section className={embedded ? 'space-y-3' : 'grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(420px,1.1fr)]'}>
@@ -891,20 +1174,21 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                     <article key={card.signalId} data-testid="scanner-signal-card" data-rank={canonicalRank(card) ?? undefined} className={`min-w-0 rounded-2xl border bg-card p-3 ${selectedSignalId === card.signalId ? 'border-primary ring-1 ring-primary/20' : 'border-card-border'}`}>
                       <div className="flex items-start justify-between gap-3">
                         <button type="button" aria-label={card.assetClass === 'coin_futures' ? `${displaySignalTitle(card)} · ${marketDisplayLabel(card)}` : `${card.name} ${card.symbol} · ${card.market} · ${card.assetType}`} onClick={() => selectSignal(card)} className="min-h-11 min-w-0 flex-1 text-left">
-                          <p className="truncate font-black">{card.candidateRanking?.rank ? `${card.candidateRanking.rank}위 · ` : ''}{sameNameAndSymbol(card) ? card.symbol : card.name}</p>
+                          <p className="truncate font-bold">{card.candidateRanking?.rank ? `${card.candidateRanking.rank}위 · ` : ''}{sameNameAndSymbol(card) ? card.symbol : card.name}</p>
                           <p className="truncate text-xs text-muted-foreground">{cardMetaLabel(card)}</p>
                           <div className="mt-1 flex min-w-0 flex-wrap gap-1">
-                            <span data-testid="scanner-card-direction" className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${actionBadgeClass(card)}`}>{actionLabel(card)}</span>
-                            <span className="rounded-full border border-card-border px-2 py-0.5 text-[10px] font-black">등급 {evidenceGradeLabel(card)}</span>
-                            <span className="rounded-full border border-card-border px-2 py-0.5 text-[10px] font-black">{remainingValidityLabel(card.expiresAt)}</span>
+                            <span data-testid="scanner-card-direction" className={`rounded-full border px-2 py-0.5 text-xs font-bold ${actionBadgeClass(card)}`}>{actionLabel(card)}</span>
+                            <span className="rounded-full border border-card-border px-2 py-0.5 text-xs font-bold">등급 {evidenceGradeLabel(card)}</span>
+                            <span className="rounded-full border border-card-border px-2 py-0.5 text-xs font-bold">{remainingValidityLabel(card.expiresAt)}</span>
+                            {card.themeSwing && card.themeSwing.state !== 'UNCLASSIFIED' ? <span data-testid="scanner-theme-swing-badge" className="rounded-full border border-primary/25 bg-primary/5 px-2 py-0.5 text-xs font-bold">테마 {card.themeSwing.themeLabel} · {card.themeSwing.score}점{card.themeSwing.leader ? ' · 대장' : ''}</span> : null}
                           </div>
                         </button>
-                        <div className="shrink-0 text-right"><p className="text-sm font-black">{formatNumber(card.price, card.currency === 'KRW' ? 0 : 6)}</p><p className="text-xs text-muted-foreground">신호점수 {formatNumber(card.score, 1)} · 위험 {formatNumber(card.riskScore, 1)}</p></div>
+                        <div className="shrink-0 text-right"><p className="text-sm font-bold">{formatNumber(card.price, card.currency === 'KRW' ? 0 : 6)}</p><p className="text-xs text-muted-foreground">신호점수 {formatNumber(card.score, 1)} · 위험 {formatNumber(card.riskScore, 1)}</p></div>
                       </div>
-                      <div className="mt-2 flex min-w-0 flex-wrap gap-1">{card.matched.slice(0, 3).map((item) => <span key={item} className="max-w-full truncate rounded-lg bg-background px-2 py-1 text-[10px]">{item}</span>)}{card.unverified.length ? <span className="rounded-lg bg-warning/10 px-2 py-1 text-[10px] text-warning">미검증 {card.unverified.length}</span> : null}</div>
+                      <div className="mt-2 flex min-w-0 flex-wrap gap-1">{card.matched.slice(0, 3).map((item) => <span key={item} className="max-w-full truncate rounded-lg bg-background px-2 py-1 text-xs">{item}</span>)}{card.unverified.length ? <span className="rounded-lg bg-warning/10 px-2 py-1 text-xs text-warning">미검증 {card.unverified.length}</span> : null}</div>
                       <div className="mt-2 grid grid-cols-2 gap-2">
-                        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={() => openInAiChart(card)} className="min-h-11 rounded-xl bg-primary px-2 text-xs font-black text-primary-foreground">AI 차트</button>
-                        <button type="button" aria-label={`${card.name} 주문 준비`} onClick={() => openOrderPreparation(card)} className="min-h-11 rounded-xl border border-primary/40 px-2 text-xs font-black">주문 준비</button>
+                        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={() => openInAiChart(card)} className="min-h-11 rounded-xl bg-primary px-2 text-xs font-bold text-primary-foreground">AI 차트</button>
+                        <button type="button" aria-label={`${card.name} 주문 준비`} onClick={() => openOrderPreparation(card)} className="min-h-11 rounded-xl border border-primary/40 px-2 text-xs font-bold">주문 준비</button>
                       </div>
                     </article>
                   ))}
@@ -917,7 +1201,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                 {!embedded ? (
                   <aside data-testid="scanner-desktop-detail" className="hidden min-w-0 lg:block">
                     <div className="sticky top-3">
-                      {selectedCard ? <SignalDetailPanel card={selectedCard} selection={selectionFor(selectedCard)} showOrderPreparation={showOrderPreparation} onOpenAsset={() => navigate(signalScannerDetailPath(selectedCard))} onAiChart={() => openInAiChart(selectedCard)} onOrderPreparation={() => openOrderPreparation(selectedCard)} /> : <section className="rounded-3xl border border-dashed border-card-border bg-card p-8 text-center"><p className="font-black">신호 상세</p><p className="mt-2 text-xs text-muted-foreground">왼쪽 후보를 선택하면 근거·누락·진입·손절·목표와 안전 액션을 표시합니다.</p></section>}
+                      {selectedCard ? <SignalDetailPanel card={selectedCard} selection={selectionFor(selectedCard)} showOrderPreparation={showOrderPreparation} onOpenAsset={() => navigate(signalScannerDetailPath(selectedCard))} onAiChart={() => openInAiChart(selectedCard)} onOrderPreparation={() => openOrderPreparation(selectedCard)} /> : <section className="rounded-3xl border border-dashed border-card-border bg-card p-8 text-center"><p className="font-bold">신호 상세</p><p className="mt-2 text-xs text-muted-foreground">왼쪽 후보를 선택하면 근거·누락·진입·손절·목표와 안전 액션을 표시합니다.</p></section>}
                     </div>
                   </aside>
                 ) : null}
