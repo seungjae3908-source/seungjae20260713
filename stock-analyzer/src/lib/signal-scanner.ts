@@ -10,6 +10,24 @@ export type ScannerSignalState =
   | 'CANDIDATE' | 'CONFIRMED' | 'ARMED' | 'ENTRY_ZONE' | 'APPROVAL_PENDING' | 'APPROVED'
   | 'EXECUTING' | 'PARTIALLY_FILLED' | 'FILLED' | 'MANAGING' | 'CLOSED' | 'INVALIDATED'
   | 'EXPIRED' | 'REJECTED' | 'CANCELLED' | 'DETECTED' | 'WATCHING' | 'READY_FOR_APPROVAL' | 'WEAKENED';
+
+export type ScannerDecisionOutcome =
+  | 'LONG_REVIEW'
+  | 'SHORT_REVIEW'
+  | 'WATCH'
+  | 'BLOCKED'
+  | 'NO_TRADE';
+
+export interface ScannerDecisionHistoryEntry {
+  sequence: number;
+  state: ScannerSignalState;
+  direction: ScannerDirection;
+  action: ScannerTradeAction | null;
+  decision: ScannerDecisionOutcome;
+  eligible: boolean;
+  observedAt: string;
+  reasons: string[];
+}
 export type ScannerDataState = 'complete' | 'partial' | 'stale' | 'insufficient' | 'unavailable' | 'untrusted';
 export type ScannerOutcomeCode =
   | 'CANDIDATES_AVAILABLE'
@@ -225,6 +243,7 @@ export interface ScannerSignalCard {
   direction: ScannerDirection;
   action?: ScannerTradeAction;
   signalState: ScannerSignalState;
+  decisionHistory?: ScannerDecisionHistoryEntry[];
   score: number;
   confidence: number;
   dataCompleteness: number;
