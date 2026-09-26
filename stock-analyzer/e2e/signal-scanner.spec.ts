@@ -373,6 +373,85 @@ test('scanner detail renders integrated decision, intelligence evidence, and non
   await expect(intelligence.getByRole('link', { name: '원문 보기', exact: true })).toHaveAttribute('href', 'https://example.com/disclosure');
 });
 
+test('scanner shows server decision changes and only exposes cost-adjusted EV with verified stages', async ({ page }) => {
+  await installBaseMocks(page, []);
+  const payload = scannerResponse();
+  payload.cards[0].decisionHistory = [
+    {
+      sequence: 1,
+      state: 'CANDIDATE',
+      direction: 'LONG',
+      action: 'BUY',
+      decision: 'WATCH',
+      eligible: false,
+      observedAt: '2026-09-26T04:00:00.000Z',
+      reasons: ['OOS/Walk-forward 검증 데이터 필요'],
+    },
+    {
+      sequence: 2,
+      state: 'CONFIRMED',
+      direction: 'LONG',
+      action: 'BUY',
+      decision: 'LONG_REVIEW',
+      eligible: true,
+      observedAt: '2026-09-26T04:05:00.000Z',
+      reasons: ['현재 LONG 방향 검토 조건 유지'],
+    },
+    {
+      sequence: 3,
+      state: 'INVALIDATED',
+      direction: 'LONG',
+      action: 'BUY',
+      decision: 'BLOCKED',
+      eligible: false,
+      observedAt: '2026-09-26T04:10:00.000Z',
+      reasons: ['공식 위험 이벤트로 신규진입 차단'],
+    },
+  ];
+  payload.cards[0].backtestQuality = {
+    status: 'verified',
+    researchFrom: '2025-01-01',
+    researchTo: '2026-08-31',
+    oosWinRate: 54.2,
+    walkForwardWinRate: 52.8,
+    expectancyPercent: 0.84,
+    profitFactor: 1.18,
+    maxDrawdownPercent: -9.4,
+    tradeCount: 128,
+    minimumTradeCount: 40,
+    costsIncluded: true,
+    slippageIncluded: true,
+    oos: true,
+    walkForward: true,
+    forwardVerified: false,
+    forwardSampleCount: 0,
+    paperVerified: false,
+    paperSampleCount: 0,
+    source: 'fixture-verified-backtest',
+  };
+  await page.route('**/api/market/scan**', (route) => fulfill(route, payload));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/__phase11-technical-workspace-e2e');
+  await page.getByRole('button', { name: /^삼성전자 005930 · KR · STOCK$/ }).click();
+
+  const detail = page.getByTestId('scanner-mobile-sheet').getByTestId('signal-detail');
+  const timeline = detail.getByTestId('scanner-decision-timeline');
+  await expect(timeline).toContainText('신호 변경 이력');
+  await expect(timeline).toContainText('LONG 검토');
+  await expect(timeline).toContainText('신규진입 차단');
+  await expect(timeline).toContainText('공식 위험 이벤트로 신규진입 차단');
+
+  await detail.getByRole('tab', { name: '성과', exact: true }).click();
+  const performance = detail.getByTestId('scanner-performance');
+  await expect(performance).toContainText('Backtest');
+  await expect(performance).toContainText('OOS');
+  await expect(performance).toContainText('Full Cost');
+  await expect(performance).toContainText('Forward');
+  await expect(performance).toContainText('Paper');
+  await expect(performance).toContainText('미검증');
+  await expect(performance.getByTestId('scanner-net-ev')).toHaveText('0.84%');
+});
+
 test('scanner source has no sub-12px labels or horizontal mobile detail tabs', async () => {
   const fs = await import('node:fs/promises');
   const source = await fs.readFile(new URL('../src/pages/signal-scanner.tsx', import.meta.url), 'utf8');
