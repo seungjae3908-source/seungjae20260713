@@ -146,7 +146,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     : market === 'crypto_futures'
       ? 'bitget'
       : policy?.stockBrokerByMarket?.[market] ?? 'kiwoom';
-  const providerConnection = runtimeStatus?.connections.find((item) => item.exchange === selectedProvider);
+  const providerConnection = (runtimeStatus?.connections ?? []).find((item) => item.exchange === selectedProvider);
   const lastOrder = runtimeStatus?.lastOrder;
   const emergencyStopped = runtimeStatus?.emergencyStopped === true;
 
