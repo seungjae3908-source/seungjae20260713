@@ -231,7 +231,7 @@ test('account read-only router exposes provider-capability-gated credential DELE
   assert.equal(/router\.(?:post|put|patch|delete)\('\/(?:order|orders|trade|withdraw|transfer)/i.test(routeSource), false);
 });
 
-test('Production account-readonly storage tooling includes the Kiwoom provider migration without applying it in tests', () => {
+test('Production account storage tooling includes read-only Kiwoom and live-schema Toss migrations without applying them in tests', () => {
   const root = path.basename(process.cwd()) === 'api-server'
     ? path.resolve(process.cwd(), '..')
     : process.cwd();
@@ -241,14 +241,17 @@ test('Production account-readonly storage tooling includes the Kiwoom provider m
     'api-server/supabase/migrations/2026081701_account_readonly_credentials.sql',
     'api-server/supabase/migrations/2026081801_account_readonly_service_role.sql',
     'api-server/supabase/migrations/2026092501_account_readonly_kiwoom_provider.sql',
+    'api-server/supabase/migrations/2026092502_trade_live_execution_toss_provider.sql',
   ]) {
     assert.equal(apply.includes(migration), true);
     assert.equal(workflow.includes(migration), true);
   }
   assert.equal(apply.includes("provider not in ('toss', 'kiwoom', 'upbit', 'bitget')"), true);
-  assert.equal(apply.includes("'migrations_applied', 3"), true);
-  assert.equal(apply.includes('artifact?.migrations_applied !== 3'), true);
-  assert.equal(workflow.includes('value?.migrations_applied === 3'), true);
+  assert.equal(apply.includes("'provider_constraint_toss', true"), true);
+  assert.equal(apply.includes("'trade_secret_column_exposed', false"), true);
+  assert.equal(apply.includes("'migrations_applied', 4"), true);
+  assert.equal(apply.includes('artifact?.migrations_applied !== 4'), true);
+  assert.equal(workflow.includes('value?.migrations_applied === 4'), true);
 });
 
 
