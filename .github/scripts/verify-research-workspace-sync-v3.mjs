@@ -1,10 +1,17 @@
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
-const MAIN='7b16470111e813dbb4dca3aef8bba8e91c1a5231';
+const MAIN='952f58455ccbf974c46aec18910cf32235d8895b';
 const OWNER='adfcb23baf956bcaa025f0846313faf8db7a4e4a';
 const BASE='9057c4a3767db0f81e595fc481f5066bda6c9e43';
 const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trimEnd();
 const added=[
+ 'packages/external-research/src/research-workspace-orchestrator-v10.js',
+ 'packages/external-research/src/research-workspace-orchestrator-v10.d.ts',
+ 'packages/external-research/test/research-workspace-orchestrator-v10.test.js',
+ 'packages/external-research/docs/research-workspace-phase10.md',
+ 'stock-analyzer/src/lib/research-orchestrator-status.js',
+ 'stock-analyzer/src/lib/research-orchestrator-status.d.ts',
+ 'stock-analyzer/src/components/research-workspace-orchestrator.tsx',
  'packages/external-research/src/research-workspace-worker-v9.js',
  'packages/external-research/src/research-workspace-worker-v9.d.ts',
  'packages/external-research/scripts/run-research-worker-v9.mjs',
