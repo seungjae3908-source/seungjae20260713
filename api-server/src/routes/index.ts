@@ -12,6 +12,7 @@ import kiwoomRouter from './kiwoom.routes';
 import kiwoomRankingsSafeRouter from './kiwoom-rankings-safe';
 import adminRouter from './admin';
 import researchCopilotRouter from './research-copilot';
+import videoResearchEvidenceRouter from './video-research-evidence';
 import secRouter from './sec.routes';
 import cryptoRouter from './crypto';
 import futuresMarketDataRouter from './futures-market-data';
@@ -103,6 +104,9 @@ router.get('/auth/profile', requireAuthenticatedProfileBootstrap, (req: Authenti
 });
 
 router.use(requireAuthenticated);
+
+// Read pre-existing sanitized research only; the nested workspace requires admin access.
+router.use('/research/video/evidence', requireCapability('canAccessBasicInfo'), videoResearchEvidenceRouter);
 
 // Broker connectivity is metadata-only in Release V4.2. It reads only the
 // authenticated user's vault connection metadata and never falls back to a
