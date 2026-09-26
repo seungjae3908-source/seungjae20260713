@@ -30,19 +30,19 @@ const WORKSPACE_TABS = [
   { value: 'signal', label: 'AI 검색기' },
   { value: 'chart', label: 'AI 차트' },
   { value: 'backtest', label: '백테스트' },
-  { value: 'trade', label: '자동매매' },
+  { value: 'trade', label: '매매' },
 ] as const;
 
 const WORKSPACE_TITLES: Record<Workspace, string> = {
   signal: 'AI 검색기',
   chart: 'AI 차트',
   backtest: '백테스트',
-  trade: '자동매매',
+  trade: '매매',
 };
 
 const TECHNICAL_INFO_ITEMS = [
   '검색·차트·백테스트는 읽기·분석 중심 화면이며 권한이 없는 기능은 잠금 상태로 유지됩니다.',
-  '자동매매 화면은 준회원 이상 자동매매 권한과 저장된 위험 설정을 기준으로 열리며 주문별 승인을 요구하지 않습니다. 실거래는 활성화하지 않습니다.',
+  '매매 화면에서 자동매매와 모의매매를 전환하고 국내주식·미국주식·코인현물·코인선물을 같은 구조로 확인합니다. UI 전환은 실거래 권한을 활성화하지 않습니다.',
 ] as const;
 
 function useDesktopWorkspace() {
