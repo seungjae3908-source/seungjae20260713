@@ -3,6 +3,7 @@ import { BookOpenCheck, CheckCircle2, ClipboardList, Settings2, ShieldCheck, Wal
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
+import { PaperJournalSyncAnalyticsPanel } from '@/components/paper-journal-sync-analytics-panel';
 import { PaperTradingPanel } from '@/components/paper-trading-panel';
 import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import { TradeAutomationSettings } from '@/components/trade-automation-settings';
@@ -101,6 +102,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const [section, setSection] = useState<TradingSection>('dashboard');
   const [runtimeStatus, setRuntimeStatus] = useState<TradeAutomationFixture | null>(fixture ?? null);
   const [runtimeLoading, setRuntimeLoading] = useState(!fixture);
+  const [paperRevision, setPaperRevision] = useState(0);
   const paperStorage = useMemo(
     () => userId ? createUserPaperStorage(window.localStorage, userId) : window.localStorage,
     [userId],
@@ -268,7 +270,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             <span className="text-muted-foreground">선택 기능 ⌄</span>
           </summary>
           <div className="border-t border-card-border p-2 [&>main]:!h-auto [&>main]:!overflow-visible [&>main]:!pb-0">
-            <PaperTradingPanel storage={paperStorage} futuresEnabled={canFutures} compact />
+            <PaperTradingPanel key={userId + ':' + paperRevision} storage={paperStorage} futuresEnabled={canFutures} compact />
           </div>
         </details>
       ) : null}
@@ -311,13 +313,29 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   );
 
   const journal = (
-    <div data-testid="trading-workspace-journal">
+    <div className="space-y-3" data-testid="trading-workspace-journal">
       <UnifiedTradeJournalPanel
         forcedMarket={marketMeta.journalMarket}
         forcedSource={mode === 'auto' ? 'APP_AUTO' : 'APP_PAPER'}
         title={mode === 'auto' ? '자동매매 매매일지' : '모의매매 매매일지'}
         description={marketMeta.label + ' 거래만 표시합니다. 비용 근거가 없으면 순손익을 임의로 0으로 만들지 않습니다.'}
       />
+      {mode === 'paper' && userId ? (
+        <details className="rounded-2xl border border-card-border bg-card" data-testid="paper-journal-sync-tools">
+          <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold [&::-webkit-details-marker]:hidden">
+            <span>로컬 모의기록 동기화·분석</span>
+            <span aria-hidden className="text-muted-foreground">선택 기능 ⌄</span>
+          </summary>
+          <div className="border-t border-card-border p-3">
+            <PaperJournalSyncAnalyticsPanel
+              userId={userId}
+              rootStorage={window.localStorage}
+              paperStorage={paperStorage}
+              onLocalStateChanged={() => setPaperRevision((value) => value + 1)}
+            />
+          </div>
+        </details>
+      ) : null}
     </div>
   );
 
