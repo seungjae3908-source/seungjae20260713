@@ -283,6 +283,61 @@ test('approval rechecks signal freshness and expires stale plans before order cr
   assert.equal(await repository.findOrderByPlan(USER_A, created.plan!.id), null);
 });
 
+test('automatic live plans require separate global automatic-live authority', async () => {
+  const previous = {
+    ORDER_EXECUTION_ENABLED: process.env.ORDER_EXECUTION_ENABLED,
+    LIVE_TRADING_ACTIVATION_APPROVED: process.env.LIVE_TRADING_ACTIVATION_APPROVED,
+    REAL_ORDER_ENABLED: process.env.REAL_ORDER_ENABLED,
+    PRIVATE_TRADING_API_ALLOWED: process.env.PRIVATE_TRADING_API_ALLOWED,
+    UPBIT_LIVE_ORDER_ENABLED: process.env.UPBIT_LIVE_ORDER_ENABLED,
+    LIVE_AUTOMATIC_TRADING_ENABLED: process.env.LIVE_AUTOMATIC_TRADING_ENABLED,
+  };
+  try {
+    process.env.ORDER_EXECUTION_ENABLED = 'true';
+    process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+    process.env.REAL_ORDER_ENABLED = 'true';
+    process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
+    process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+    process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'false';
+
+    const repository = new InMemoryTradingRepository();
+    const service = new TradeAutomationService(repository);
+    const policy = normalizeTradingPolicy({
+      ...DEFAULT_TRADING_POLICY,
+      mode: 'automatic',
+      automaticEnabled: true,
+      marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: false },
+      exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
+      enabledAssets: { bitget: [], upbit: ['BTC'], kiwoom: [], toss: [] },
+      enabledStrategies: ['breakout-v1'],
+    });
+
+    const blocked = await service.createPlan(
+      USER_A,
+      plan({ accountMode: 'live', signalId: 'auto-live-global-gate-off' }),
+      policy,
+      false,
+    );
+    assert.equal(blocked.plan, null);
+    assert.ok(blocked.decision.blockCodes.includes('LIVE_EXECUTION_DISABLED'));
+
+    process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'true';
+    const authorizedGate = await service.createPlan(
+      USER_A,
+      plan({ accountMode: 'live', signalId: 'auto-live-global-gate-on' }),
+      policy,
+      false,
+    );
+    assert.equal(authorizedGate.decision.blockCodes.includes('LIVE_EXECUTION_DISABLED'), false);
+    assert.ok(authorizedGate.decision.blockCodes.includes('AUTOMATIC_ECONOMICS_REQUIRED'));
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test('persistent global emergency stop blocks new work and standing automatic resumes only after stop clears', async () => {
   const repository = new InMemoryTradingRepository();
   const service = new TradeAutomationService(repository);
