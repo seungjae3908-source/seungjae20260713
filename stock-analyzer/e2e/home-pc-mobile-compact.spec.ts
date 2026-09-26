@@ -121,11 +121,14 @@ test('Home source separates desktop and mobile and keeps primary labels Korean-f
   expect(home).toContain('title="홈"');
   expect(home).toContain('data-testid="home-professional-overview"');
   expect(home).toContain('data-testid="home-desktop-workspace"');
+  expect(home).toContain('data-testid="home-tablet-workspace"');
+  expect(home).toContain('data-testid="home-page-scroll"');
   expect(home).toContain('function HomeSectionHeader');
   expect(home).toContain('actionLabel="검색기"');
   expect(home).toContain('title="포트폴리오"');
   expect(home).toContain('점수 {selection.signalScore}');
-  expect(home).toContain('<span>자산·손익·위험</span>');
+  expect(home).toContain('자산·손익·위험');
+  expect(home).toContain('계좌 연결');
   expect(home).toContain('value="자산 보기"');
   expect(home).not.toContain('/api/accounts');
   expect(home).not.toContain('Scanner 열기');
@@ -178,6 +181,53 @@ test('Home mobile tabs replace the visible detail section instead of stacking al
   await expect(page.getByTestId('home-watchlist-summary')).toHaveCount(0);
 });
 
+for (const width of [600, 768, 900, 1024, 1180]) {
+  test(`Home tablet ${width}px uses a bounded two-column workspace without mobile tabs or horizontal overflow`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await installHomeRuntime(page);
+    await page.goto('/home');
+
+    await expect(page.getByTestId('home-mobile-tabs')).toHaveCount(0);
+    await expect(page.getByTestId('home-tablet-workspace')).toBeVisible();
+    await expect(page.getByTestId('home-desktop-workspace')).toHaveCount(0);
+    await expect(page.getByTestId('home-market-summary')).toBeVisible();
+    await expect(page.getByTestId('home-signal-summary')).toBeVisible();
+    await expect(page.getByTestId('home-watchlist-summary')).toBeVisible();
+    await expect(page.getByTestId('home-portfolio-summary')).toBeVisible();
+
+    const geometry = await page.evaluate(() => {
+      const main = document.querySelector<HTMLElement>('[data-testid="home-page-scroll"]');
+      const nav = document.querySelector<HTMLElement>('nav[aria-label="주요 메뉴"]');
+      const shell = document.querySelector<HTMLElement>('[data-testid="app-shell"]');
+      if (!main || !nav || !shell) throw new Error('home geometry owner missing');
+      const scrollOwners = [main, ...Array.from(main.querySelectorAll<HTMLElement>('*'))]
+        .filter((node) => {
+          const style = getComputedStyle(node);
+          return /(auto|scroll)/u.test(style.overflowY) && node.scrollHeight > node.clientHeight + 1;
+        });
+      const mainRect = main.getBoundingClientRect();
+      const navRect = nav.getBoundingClientRect();
+      return {
+        viewport: window.innerWidth,
+        bodyWidth: document.body.scrollWidth,
+        rootWidth: document.documentElement.scrollWidth,
+        shellOverflowY: getComputedStyle(shell).overflowY,
+        mainOverflowY: getComputedStyle(main).overflowY,
+        activeVerticalScrollOwners: scrollOwners.length,
+        mainBottom: mainRect.bottom,
+        navTop: navRect.top,
+      };
+    });
+
+    expect(geometry.bodyWidth).toBeLessThanOrEqual(geometry.viewport);
+    expect(geometry.rootWidth).toBeLessThanOrEqual(geometry.viewport);
+    expect(geometry.shellOverflowY).toBe('hidden');
+    expect(['auto', 'scroll']).toContain(geometry.mainOverflowY);
+    expect(geometry.activeVerticalScrollOwners).toBeLessThanOrEqual(1);
+    expect(geometry.mainBottom).toBeLessThanOrEqual(geometry.navTop + 1);
+  });
+}
+
 test('Home desktop uses the professional dashboard workspace and does not show mobile tabs', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await installHomeRuntime(page);
@@ -186,6 +236,7 @@ test('Home desktop uses the professional dashboard workspace and does not show m
   await expect(page.getByTestId('home-mobile-tabs')).toHaveCount(0);
   await expect(page.getByTestId('home-professional-overview')).toBeVisible();
   await expect(page.getByTestId('home-desktop-workspace')).toBeVisible();
+  await expect(page.getByTestId('home-tablet-workspace')).toHaveCount(0);
   await expect(page.getByTestId('home-market-summary')).toBeVisible();
   await expect(page.getByTestId('home-signal-summary')).toBeVisible();
   await expect(page.getByTestId('home-watchlist-summary')).toBeVisible();
