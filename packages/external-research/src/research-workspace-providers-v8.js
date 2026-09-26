@@ -35,7 +35,7 @@ function resolveOne(env, provider) {
   const modelState = provider === 'youtube' ? 'NOT_APPLICABLE' : !models.length ? 'DEFAULT_NOT_RESOLVED' : models.some(m=>!modelPattern.test(m)) ? 'INVALID' : new Set(models).size>1 ? 'CONFLICT' : 'EXPLICIT';
   // A generic key with no explicit Gemini/Groq identity cannot be assigned by guess.
   const unmapped = Boolean(env.AI_CHAT_API_KEY && !gemini.has(explicit) && explicit !== 'groq');
-  return {key:state==='PRESENT'?values[0]:null,state,modelState,unmapped};
+  return {key:state==='PRESENT'?values[0]:null,state,model:modelState==='EXPLICIT'?models[0]:null,modelState,unmapped};
 }
 export function inspectExistingResearchProviders(env, {now = new Date().toISOString(), source = 'API_PROCESS'} = {}) {
   if (!iso(now) || !['API_PROCESS','INHERITED_PROCESS','EXPLICIT_ENV_FILE'].includes(source)) fail('PROVIDER_CONTEXT_INVALID');
@@ -62,6 +62,20 @@ export async function runExistingEnvironmentVideo(argv, {env=process.env,invokeV
   if (resolved.unmapped) fail('PROVIDER_GENERIC_CREDENTIAL_UNMAPPED');
   // The model and free-tier review come from the V7 exact-plan approval, not chat defaults.
   return invokeVideo(argv,{env:{GEMINI_API_KEY:resolved.key}});
+}
+
+/** Isolated Groq review bridge for the Phase10 adversarial reviewer.
+ * It reads only already-selected Groq fields and delegates the request to an
+ * injected canonical caller. It never falls back to Gemini or guesses a model.
+ */
+export async function runExistingEnvironmentGroqReview(request,{env=process.env,invokeGroq}={}){
+  if(!request||typeof request!=='object'||Array.isArray(request)||request.schemaVersion!=='research-groq-adversarial-request-v10')fail('PROVIDER_GROQ_REVIEW_INVALID');
+  if(typeof invokeGroq!=='function')fail('PROVIDER_GROQ_CALLER_REQUIRED');
+  const local=selected(env),resolved=resolveOne(local,'groq');
+  if(resolved.state!=='PRESENT')fail('PROVIDER_GROQ_CONFIGURATION_UNRESOLVED');
+  if(resolved.unmapped)fail('PROVIDER_GENERIC_CREDENTIAL_UNMAPPED');
+  if(resolved.modelState!=='EXPLICIT'||!resolved.model)fail('PROVIDER_GROQ_MODEL_UNRESOLVED');
+  return invokeGroq(request,{apiKey:resolved.key,model:resolved.model});
 }
 
 /** Auth and method checks occur before environment access; no paths or env keys from HTTP. */
