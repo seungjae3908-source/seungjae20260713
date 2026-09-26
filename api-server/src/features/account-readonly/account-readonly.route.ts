@@ -11,6 +11,8 @@ import {
   type ReadonlyCredentialProvider,
 } from './account-readonly.repository';
 import { AccountReadonlyService } from './account-readonly.service';
+import { loadFreePublicFxQuotes } from '../../services/public-fx.service';
+import type { FxQuote } from '../../modules/portfolio/intelligence-v2';
 
 const PROVIDERS = new Set<AccountProvider>(['toss', 'kiwoom', 'upbit', 'bitget']);
 const CREDENTIAL_PROVIDERS = new Set<ReadonlyCredentialProvider>(['toss', 'kiwoom', 'upbit', 'bitget']);
@@ -59,6 +61,33 @@ function safetyCounters() {
     liveTradingEnabled: false,
     autoTradingEnabled: false,
   } as const;
+}
+
+export function buildAccountDisplayFxResponse(
+  quotes: readonly FxQuote[],
+  missing: readonly string[],
+  checkedAt = new Date(),
+) {
+  const quote = (currency: 'USD' | 'USDT') => {
+    const match = quotes.find((row) => row.currency === currency);
+    if (!match || !Number.isFinite(match.krwRate) || match.krwRate <= 0) return null;
+    return {
+      krwRate: match.krwRate,
+      source: match.source,
+      asOf: match.asOf,
+      quality: match.quality,
+    };
+  };
+  return {
+    ok: true,
+    displayCurrencies: ['KRW', 'USD'] as const,
+    usdKrw: quote('USD'),
+    usdtKrw: quote('USDT'),
+    missing: [...missing],
+    checkedAt: checkedAt.toISOString(),
+    publicMarketDataOnly: true,
+    ...safetyCounters(),
+  };
 }
 
 function deniedResponse(errorCode: string) {
@@ -166,6 +195,14 @@ export function bindAccountReadonlyDisconnectAbort(
 
 export function createAccountReadonlyRouter(service: AccountReadonlyService): IRouter {
   const router: IRouter = Router();
+
+  router.get('/fx', async (req: AuthenticatedRequest, res) => {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    const { userId, accessToken } = authScope(req);
+    if (!userId || !accessToken) return res.status(401).json(deniedResponse('LOGIN_REQUIRED'));
+    const result = await loadFreePublicFxQuotes();
+    return res.json(buildAccountDisplayFxResponse(result.quotes, result.missing));
+  });
 
   router.get('/credentials/status', (req: AuthenticatedRequest, res) => {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
