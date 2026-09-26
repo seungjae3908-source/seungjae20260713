@@ -138,7 +138,8 @@ export async function runResearchWorkspaceOneShotV12(input:OneShotInput,deps:Dep
       executionAuthority:'NONE',automaticAdoption:false,profitabilityProven:false,
     });
     await syncDir(runDir);
-    return {status:'REVIEW_REQUIRED',manifestDigest:manifest.manifestDigest,reviewPackage,providerCalls:{gemini:1,groq:1}};
+    return {status:'REVIEW_REQUIRED',reason:'HUMAN_RULE_DIGEST_REVIEW_REQUIRED',manifestDigest:manifest.manifestDigest,
+      reviewPackage,reviewedRuleDigestCandidate:reviewPackage.reviewedRuleDigestCandidate,providerCalls:{gemini:1,groq:1}};
   }catch(cause:any){
     const reason=safeCode(cause?.code);
     const state={schemaVersion:'research-one-shot-state-v12',status:groqReserved?'BLOCKED_UNCERTAIN':'BLOCKED',reason,
