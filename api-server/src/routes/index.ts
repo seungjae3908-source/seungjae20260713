@@ -24,6 +24,7 @@ import backupRouter from './backup';
 import aiChatRouter from './ai-chat';
 import tradeAutomationRouter from './trade-automation';
 import boundedMarketScanRouter from './bounded-market-scan';
+import stockFlowEvidenceRouter from './stock-flow-evidence';
 import cryptoSignalScanRouter from './crypto-signal-scan';
 import strategyPromotionRouter from './strategy-promotion';
 import portfolioIntelligenceRouter from './portfolio-intelligence';
@@ -128,6 +129,7 @@ router.use(
 // router. This makes /api/market/scan authenticated, capability protected,
 // bounded and cancellation aware. The legacy handler is no longer reachable.
 router.use('/market/scan', boundedMarketScanRouter);
+router.use('/market/flow', requireCapability('canAccessBasicInfo'), stockFlowEvidenceRouter);
 router.use('/scanner/crypto', cryptoSignalScanRouter);
 router.use('/strategy-promotion', requireCapability('canAccessBacktests'));
 router.use('/', strategyPromotionRouter);
