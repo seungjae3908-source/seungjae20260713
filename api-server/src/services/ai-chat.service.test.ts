@@ -4,7 +4,14 @@ import { once } from 'node:events';
 import { request } from 'node:http';
 import express from 'express';
 import aiChatRouter from '../routes/ai-chat';
-import { AiChatError, actionRefusal, answerAiChat, validateChatMessage } from './ai-chat.service';
+import {
+  AiChatError,
+  actionRefusal,
+  answerAiChat,
+  getAiChatProviderRuntimeHealth,
+  validateChatMessage,
+} from './ai-chat.service';
+import { resetAiProviderRuntimeHealthForTests } from './ai-provider-runtime-health.service';
 
 const aiEnvironmentKeys = [
   'AI_CHAT_PROVIDER',
@@ -222,6 +229,56 @@ test('Gemini success makes zero Groq calls', async () => {
     });
     assert.equal(result.answer, 'PER 설명'); assert.equal(groqCalls, 0);
   } finally { restoreAiEnvironment(previous); }
+});
+
+test('AI provider runtime health records real attempts and fallback without exposing secrets', async () => {
+  const previous = snapshotAiEnvironment();
+  clearAiEnvironment();
+  resetAiProviderRuntimeHealthForTests();
+  process.env.GEMINI_API_KEY = 'runtime-health-gemini-secret';
+  process.env.GROQ_API_KEY = 'runtime-health-groq-secret';
+  let geminiCalls = 0;
+  let groqCalls = 0;
+  try {
+    const before = getAiChatProviderRuntimeHealth();
+    assert.equal(before.overall, 'NO_EVIDENCE');
+    assert.equal(before.fallbackCount, 0);
+    assert.equal(before.secretsExposed, false);
+    assert.equal(before.executionAuthority, 'NONE');
+
+    const result = await answerAiChat({ message: 'runtime health fallback test' }, async (input) => {
+      const url = String(input);
+      if (url.includes('googleapis.com')) {
+        geminiCalls += 1;
+        return new Response('{}', { status: 503 });
+      }
+      if (url.includes('api.groq.com')) {
+        groqCalls += 1;
+        return new Response(JSON.stringify({ choices: [{ message: { content: 'fallback health answer' } }] }), { status: 200 });
+      }
+      throw new Error('UNEXPECTED_PROVIDER');
+    });
+
+    assert.equal(result.answer, 'fallback health answer');
+    assert.equal(geminiCalls, 1);
+    assert.equal(groqCalls, 1);
+
+    const health = getAiChatProviderRuntimeHealth();
+    assert.equal(health.overall, 'DEGRADED');
+    assert.equal(health.fallbackCount, 1);
+    const gemini = health.providers.find((row) => row.provider === 'google-gemini');
+    const groq = health.providers.find((row) => row.provider === 'groq');
+    assert.equal(gemini?.role, 'PRIMARY');
+    assert.equal(gemini?.retryableFailureCount, 1);
+    assert.equal(gemini?.lastErrorCode, 'AI_CHAT_PROVIDER_ERROR');
+    assert.equal(groq?.role, 'SECONDARY');
+    assert.equal(groq?.successCount, 1);
+    assert.equal(groq?.state, 'READY');
+    assert.doesNotMatch(JSON.stringify(health), /runtime-health-gemini-secret|runtime-health-groq-secret/);
+  } finally {
+    resetAiProviderRuntimeHealthForTests();
+    restoreAiEnvironment(previous);
+  }
 });
 
 test('portfolio assistant context is explained without recalculating or fabricating missing cash', async () => {
