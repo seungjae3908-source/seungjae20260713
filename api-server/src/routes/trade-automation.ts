@@ -1,8 +1,9 @@
 import { Router, type IRouter, type Response } from 'express';
 import { createSupabaseTradingRepository, safeConnections, type TradingRepository } from '../services/trade-automation.repository';
-import { liveExecutionEnabled, TradeAutomationService } from '../services/trade-automation.service';
+import { automaticLiveExecutionEnabled, liveExecutionEnabled, TradeAutomationService } from '../services/trade-automation.service';
 import { TradeCancelReconciliationService } from '../services/trade-cancel-reconciliation.service';
 import { TradeExecutionService } from '../services/trade-execution.service';
+import { TradeOrderAmendmentService } from '../services/trade-order-amendment.service';
 import {
   buildSplitLegRevalidationEvidence,
   TradeSplitOrderExecutionService,
@@ -24,7 +25,7 @@ import type {
 
 const router: IRouter = Router();
 router.use(createScannerPaperPlansRouter());
-const EXCHANGES = new Set<TradingExchange>(['bitget', 'upbit', 'kiwoom']);
+const EXCHANGES = new Set<TradingExchange>(['bitget', 'upbit', 'kiwoom', 'toss']);
 const CANCEL_RECONCILIATION_STATES = new Set([
   'SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED', 'RECOVERY_REQUIRED',
 ]);
@@ -85,6 +86,7 @@ function context(req: AuthenticatedRequest) {
     repository,
     automation,
     execution: new TradeExecutionService(repository),
+    amendment: new TradeOrderAmendmentService(repository),
     splitExecution,
     cancellation: new TradeCancelReconciliationService(repository),
   };
@@ -173,14 +175,15 @@ function approvalExpired(plan: TradingPlan, now = Date.now()) {
 function approvalReadStatus(plan: TradingPlan, now = Date.now()) {
   const signalState = approvalSignalState(plan.marketSnapshot?.signalState);
   const expired = approvalExpired(plan, now);
+  const liveApprovalReady = plan.accountMode !== 'live' || liveExecutionEnabled(plan.exchange);
   const approvalEnabled = plan.state === 'APPROVAL_PENDING'
-    && plan.accountMode !== 'live'
+    && liveApprovalReady
     && signalState === 'READY_FOR_APPROVAL'
     && !expired
     && plan.riskAssessment?.allowed !== false;
 
   let reasonCode: string | null = null;
-  if (plan.accountMode === 'live') reasonCode = 'LIVE_APPROVAL_LOCKED';
+  if (plan.accountMode === 'live' && !liveExecutionEnabled(plan.exchange)) reasonCode = 'LIVE_EXECUTION_DISABLED';
   else if (expired) reasonCode = 'APPROVAL_EXPIRED';
   else if (plan.state !== 'APPROVAL_PENDING') reasonCode = 'PLAN_NOT_APPROVAL_PENDING';
   else if (signalState !== 'READY_FOR_APPROVAL') reasonCode = 'SIGNAL_REVALIDATION_REQUIRED';
@@ -250,6 +253,35 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       repository.getGlobalEmergencyStop(),
     ]);
     const environmentGlobalStop = process.env.TRADING_EMERGENCY_STOP === 'true';
+    const vaultStatus = credentialConfigurationStatus();
+    const liveExecutionReadiness = Object.fromEntries(
+      [...EXCHANGES].map((exchange) => {
+        const connection = connections.find((row) => row.exchange === exchange) ?? null;
+        const blockers: string[] = [];
+        if (!vaultStatus.encryptionConfigured) blockers.push('CREDENTIAL_VAULT_NOT_READY');
+        if (!connection?.configured || connection.accountMode !== 'live') blockers.push('LIVE_CONNECTION_NOT_CONFIGURED');
+        if (connection?.configured && connection.accountMode === 'live'
+          && (!connection.lastVerifiedAt || connection.lastErrorCode)) {
+          blockers.push('LIVE_CONNECTION_NOT_VERIFIED');
+        }
+        if (!liveExecutionEnabled(exchange)) blockers.push('MANUAL_LIVE_SERVER_GATE_OFF');
+        if (!automaticLiveExecutionEnabled(exchange)) blockers.push('AUTOMATIC_LIVE_SERVER_GATE_OFF');
+        return [exchange, {
+          connectionConfigured: connection?.configured === true && connection.accountMode === 'live',
+          providerVerified: Boolean(connection?.lastVerifiedAt) && !connection?.lastErrorCode,
+          manualServerGateEnabled: liveExecutionEnabled(exchange),
+          automaticServerGateEnabled: automaticLiveExecutionEnabled(exchange),
+          readyForManualOrderEvaluation: blockers.every((code) => code !== 'CREDENTIAL_VAULT_NOT_READY'
+            && code !== 'LIVE_CONNECTION_NOT_CONFIGURED'
+            && code !== 'LIVE_CONNECTION_NOT_VERIFIED'
+            && code !== 'MANUAL_LIVE_SERVER_GATE_OFF'),
+          readyForAutomaticOrderEvaluation: blockers.length === 0,
+          blockers,
+          orderTimeRiskRecheckRequired: true,
+          orderSubmissionPerformedByStatusRequest: false,
+        }];
+      }),
+    );
     return res.json({
       ok: true,
       policy,
@@ -264,8 +296,16 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
         bitget: liveExecutionEnabled('bitget'),
         upbit: liveExecutionEnabled('upbit'),
         kiwoom: liveExecutionEnabled('kiwoom'),
+        toss: liveExecutionEnabled('toss'),
       },
-      credentialVault: credentialConfigurationStatus(),
+      liveAutomaticExecutionServerEnabled: {
+        bitget: automaticLiveExecutionEnabled('bitget'),
+        upbit: automaticLiveExecutionEnabled('upbit'),
+        kiwoom: automaticLiveExecutionEnabled('kiwoom'),
+        toss: automaticLiveExecutionEnabled('toss'),
+      },
+      credentialVault: vaultStatus,
+      liveExecutionReadiness,
       lastOrder: orders[0] ?? null,
       actualOrderSubmittedByStatusRequest: false,
     });
@@ -329,8 +369,8 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
     if (policy.mode !== 'automatic') {
       policy.automaticEnabled = false;
       policy.marketEnabled = { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false };
-      policy.exchangeEnabled = { bitget: false, upbit: false, kiwoom: false };
-      policy.enabledAssets = { bitget: [], upbit: [], kiwoom: [] };
+      policy.exchangeEnabled = { bitget: false, upbit: false, kiwoom: false, toss: false };
+      policy.enabledAssets = { bitget: [], upbit: [], kiwoom: [], toss: [] };
     }
     await repository.savePolicy(userId, policy);
     return res.json({ ok: true, policy, defaultOff: !policy.automaticEnabled });
@@ -343,24 +383,86 @@ router.put('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
     const exchange = exchangeValue(req.params.exchange);
     const credentials = req.body?.credentials;
     if (!credentials || typeof credentials !== 'object' || Array.isArray(credentials)) throw new Error('CREDENTIALS_REQUIRED');
-    const permissions = Array.isArray(req.body?.permissions) ? req.body.permissions.map(String).map((item: string) => item.toLowerCase()) : [];
-    if (permissions.some((item: string) => item.includes('withdraw') || item.includes('출금'))) {
-      throw new Error('WITHDRAWAL_PERMISSION_NOT_ALLOWED');
+    const permissions: string[] = Array.isArray(req.body?.permissions)
+      ? req.body.permissions.map((item: unknown) => String(item).toLowerCase())
+      : [];
+    if (permissions.some((item: string) => item.includes('withdraw') || item.includes('출금')
+      || item.includes('transfer') || item.includes('이체'))) {
+      throw new Error('WITHDRAWAL_OR_TRANSFER_PERMISSION_NOT_ALLOWED');
     }
     const allowedKeys: Record<TradingExchange, string[]> = {
       bitget: ['apiKey', 'secretKey', 'passphrase'],
       upbit: ['accessKey', 'secretKey'],
       kiwoom: ['appKey', 'secretKey'],
+      toss: ['clientId', 'clientSecret', 'accountSeq'],
     };
     const safeCredentials = Object.fromEntries(allowedKeys[exchange].map((key) => [key, String(credentials[key] ?? '').trim()]));
     if (Object.values(safeCredentials).some((value) => !value)) throw new Error('CREDENTIALS_INCOMPLETE');
     const accountMode = req.body?.accountMode === 'live' ? 'live' : req.body?.accountMode === 'mock' ? 'mock' : 'paper';
+    if (accountMode === 'live') {
+      const purpose = String(req.body?.purpose ?? '').trim().toLowerCase();
+      const permissionSet = new Set(permissions);
+      if (purpose !== 'live_execution') throw new Error('LIVE_EXECUTION_PURPOSE_CONFIRMATION_REQUIRED');
+      if (!permissionSet.has('read') || !permissionSet.has('orders')) {
+        throw new Error('LIVE_EXECUTION_READ_AND_ORDER_PERMISSIONS_REQUIRED');
+      }
+      if ([...permissionSet].some((item) => !['read', 'orders'].includes(item))) {
+        throw new Error('LIVE_EXECUTION_PERMISSION_SCOPE_INVALID');
+      }
+    }
     await repository.saveConnection({
       userId, exchange, accountMode, configured: true,
       encryptedCredentials: encryptTradingCredentials(safeCredentials),
-      lastVerifiedAt: null, lastErrorCode: null, updatedAt: new Date().toISOString(),
+      lastVerifiedAt: null,
+      lastErrorCode: accountMode === 'live' ? 'LIVE_EXECUTION_NOT_VERIFIED' : null,
+      updatedAt: new Date().toISOString(),
     });
-    return res.json({ ok: true, exchange, accountMode, configured: true, credentialsReturned: false });
+    return res.json({
+      ok: true,
+      exchange,
+      accountMode,
+      configured: true,
+      credentialsReturned: false,
+      liveExecutionActivated: false,
+      providerMutationRequests: 0,
+    });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.post('/connections/:exchange/verify', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, execution } = context(req);
+    const exchange = exchangeValue(req.params.exchange);
+    if (req.body?.confirmed !== true) {
+      return res.status(409).json({ ok: false, error: 'LIVE_EXECUTION_VERIFICATION_CONFIRMATION_REQUIRED' });
+    }
+    const verification = await execution.verifyLiveConnection(userId, exchange);
+    return res.json({
+      ok: true,
+      ...verification,
+      credentialsReturned: false,
+      liveExecutionActivated: false,
+      automaticLiveExecutionActivated: false,
+    });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.delete('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository } = context(req);
+    const exchange = exchangeValue(req.params.exchange);
+    if (req.body?.confirmed !== true) {
+      return res.status(409).json({ ok: false, error: 'TRADING_CONNECTION_DISCONNECT_CONFIRMATION_REQUIRED' });
+    }
+    await repository.deleteConnection(userId, exchange);
+    return res.json({
+      ok: true,
+      exchange,
+      configured: false,
+      credentialsReturned: false,
+      providerMutationRequests: 0,
+      existingProviderOrdersCanceled: false,
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 
@@ -427,7 +529,7 @@ router.post('/emergency-stop', async (req: AuthenticatedRequest, res) => {
     const policy = normalizeTradingPolicy({
       ...current, automaticEnabled: false, emergencyStopped: true, mode: 'approval',
       marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false },
-      exchangeEnabled: { bitget: false, upbit: false, kiwoom: false },
+      exchangeEnabled: { bitget: false, upbit: false, kiwoom: false, toss: false },
     });
     await repository.savePolicy(userId, policy);
     return res.json({ ok: true, emergencyStopped: true, newOrdersBlocked: true, existingOrdersCanceled: false });
@@ -459,6 +561,32 @@ router.get('/orders', async (req: AuthenticatedRequest, res) => {
     const { userId, repository } = context(req);
     const [orders, events] = await Promise.all([repository.listOrders(userId), repository.listEvents(userId)]);
     return res.json({ ok: true, orders, events });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.post('/orders/:id/amend', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository, amendment } = context(req);
+    if (req.body?.confirmed !== true) {
+      return res.status(409).json({ ok: false, error: 'EXPLICIT_AMEND_CONFIRMATION_REQUIRED', orderAmended: false });
+    }
+    const order = await repository.getOrder(userId, String(req.params.id));
+    if (!order) throw new Error('TRADE_ORDER_NOT_FOUND');
+    const plan = await repository.getPlan(userId, order.planId);
+    if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
+    const result = await amendment.amend(userId, order, plan, {
+      requestId: String(req.body?.requestId ?? ''),
+      price: Number(req.body?.price),
+      quantity: req.body?.quantity == null ? null : Number(req.body.quantity),
+    });
+    return res.json({
+      ok: true,
+      ...result,
+      orderAmended: !result.replayed && !result.recoveryRequired,
+      duplicateProviderMutation: false,
+      transferRequested: false,
+      withdrawalRequested: false,
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 

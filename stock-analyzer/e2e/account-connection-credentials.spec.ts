@@ -46,11 +46,11 @@ async function installRegular(page: Page) {
 
   return {
     diagnostics,
-    assertClean() {
+    assertClean(expectedTradeConnectionCalls = 0) {
       expect(diagnostics.consoleErrors, diagnostics.consoleErrors.join('\n')).toEqual([]);
       expect(diagnostics.pageErrors, diagnostics.pageErrors.join('\n')).toEqual([]);
       expect(diagnostics.forbiddenTradeMutations, diagnostics.forbiddenTradeMutations.join('\n')).toEqual([]);
-      expect(diagnostics.legacyConnectionCalls, diagnostics.legacyConnectionCalls.join('\n')).toEqual([]);
+      expect(diagnostics.legacyConnectionCalls.length, diagnostics.legacyConnectionCalls.join('\n')).toBe(expectedTradeConnectionCalls);
     },
   };
 }
@@ -71,8 +71,10 @@ test('regular user sees only Toss Upbit Bitget account linking and Kiwoom is hid
   await expect(page.getByTestId('connection-toss')).toBeVisible();
   await expect(page.getByTestId('connection-upbit')).toBeVisible();
   await expect(page.getByTestId('connection-bitget')).toBeVisible();
-  await expect(page.locator('body')).not.toContainText('Kiwoom');
-  await expect(page.locator('body')).not.toContainText('키움');
+  const readonlyPanel = page.getByTestId('brokerage-account-connections');
+  await expect(readonlyPanel).not.toContainText('Kiwoom');
+  await expect(readonlyPanel).not.toContainText('키움');
+  await expect(page.getByTestId('trade-execution-connections')).toContainText('Kiwoom · 주식 실주문');
   assertClean();
 });
 
@@ -133,7 +135,10 @@ test('Toss credential form is read-only, Account Seq is optional, and mobile dia
   await page.getByTestId('toss-credential-primary').fill('TOSS_CLIENT_TEST_ONLY'); await page.getByTestId('toss-credential-secret').fill('TOSS_SECRET_TEST_ONLY'); await page.getByTestId('toss-save-connection').click();
   expect(tossBody).toEqual({ purpose: 'read_only', permissions: ['read'], credentials: { clientId: 'TOSS_CLIENT_TEST_ONLY', clientSecret: 'TOSS_SECRET_TEST_ONLY' } });
   await page.getByRole('button', { name: 'Bitget 조회 연결 설정' }).click(); const bitgetBox = await page.getByRole('dialog').boundingBox(); expect(bitgetBox).not.toBeNull(); expect(bitgetBox!.x + bitgetBox!.width).toBeLessThanOrEqual(361);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(361); await expect(page.locator('body')).not.toContainText('Kiwoom'); assertClean();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(361);
+  await expect(page.getByTestId('brokerage-account-connections')).not.toContainText('Kiwoom');
+  await expect(page.getByTestId('trade-execution-connections')).toContainText('Kiwoom · 주식 실주문');
+  assertClean();
 });
 
 test('account metrics distinguish real zero from missing, stale, and unavailable evidence', async ({ page }) => {
@@ -180,7 +185,8 @@ test('account metrics distinguish real zero from missing, stale, and unavailable
   await expect(bitget).toContainText('조회 불가');
   await expect(bitget).toContainText('사용 불가');
 
-  await expect(page.locator('body')).not.toContainText('Kiwoom');
+  await expect(page.getByTestId('brokerage-account-connections')).not.toContainText('Kiwoom');
+  await expect(page.getByTestId('trade-execution-connections')).toContainText('Kiwoom · 주식 실주문');
   assertClean();
 });
 
@@ -261,4 +267,114 @@ test('server-declared Kiwoom capability exposes a read-only setup card and saves
   expect(body).not.toContain(appKey);
   expect(body).not.toContain(appSecret);
   assertClean();
+});
+
+
+test('live Upbit trading key is saved separately with read+orders only and does not activate live execution', async ({ page }) => {
+  const { assertClean } = await installRegular(page);
+  let savedBody: Record<string, unknown> | null = null;
+  let configured = false;
+
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const method = route.request().method();
+    if (path === '/api/accounts/read-only/credentials/status') {
+      return fulfill(route, {
+        ok: true,
+        encryptionConfigured: true,
+        supportedProviders: ['toss', 'upbit', 'bitget'],
+        hiddenProviders: ['kiwoom'],
+        credentialsReturned: false,
+      });
+    }
+    if (path === '/api/accounts/read-only/toss') return fulfill(route, emptySnapshot('toss'));
+    if (path === '/api/accounts/read-only/upbit') return fulfill(route, emptySnapshot('upbit'));
+    if (path === '/api/accounts/read-only/bitget') return fulfill(route, emptySnapshot('bitget'));
+    if (path === '/api/trade-automation/status') {
+      return fulfill(route, {
+        ok: true,
+        policy: {
+          mode: 'approval',
+          automaticEnabled: false,
+          emergencyStopped: false,
+          marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true },
+          stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'kiwoom' },
+          exchangeEnabled: { toss: false, kiwoom: false, upbit: false, bitget: false },
+          enabledAssets: { toss: [], kiwoom: [], upbit: [], bitget: [] },
+          enabledStrategies: [],
+          totalCapitalKrw: 1_000_000,
+          maxOrderKrw: 100_000,
+          dailyLossLimitPercent: 5,
+          maxAssetPercent: 30,
+          maxOpenPositions: 5,
+          maxDailyOrders: 10,
+          maxConsecutiveLosses: 3,
+          bitgetLeverage: 2,
+        },
+        connections: configured ? [{
+          exchange: 'upbit',
+          accountMode: 'live',
+          configured: true,
+          lastVerifiedAt: null,
+          lastErrorCode: 'LIVE_EXECUTION_NOT_VERIFIED',
+          credentialsExposed: false,
+        }] : [],
+        emergencyStopped: false,
+        credentialVault: { encryptionConfigured: true, keyValueExposed: false },
+        liveExecutionServerEnabled: { toss: false, kiwoom: false, upbit: false, bitget: false },
+        lastOrder: null,
+      });
+    }
+    if (path === '/api/trade-automation/connections/upbit' && method === 'PUT') {
+      savedBody = route.request().postDataJSON() as Record<string, unknown>;
+      configured = true;
+      return fulfill(route, {
+        ok: true,
+        exchange: 'upbit',
+        accountMode: 'live',
+        configured: true,
+        credentialsReturned: false,
+        liveExecutionActivated: false,
+        providerMutationRequests: 0,
+      });
+    }
+    if (path === '/api/user-integrations') {
+      return fulfill(route, { brokerConnections: [], telegram: { connected: false, status: 'DISCONNECTED', connectedAt: null }, preferences: {} });
+    }
+    return fulfill(route, { ok: true, items: [], rows: [], results: [] });
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/account');
+
+  const panel = page.getByTestId('trade-execution-connections');
+  await expect(panel).toBeVisible();
+  await expect(page.getByTestId('live-connection-upbit')).toContainText(/거래키\s*미연결/);
+
+  await page.getByTestId('live-connection-upbit').getByRole('button', { name: '거래키 연결' }).click();
+  const dialog = page.getByRole('dialog', { name: '실주문 거래키 연결' });
+  await expect(dialog).toBeVisible();
+
+  const accessKey = 'UPBIT_LIVE_ACCESS_TEST_ONLY';
+  const secretKey = 'UPBIT_LIVE_SECRET_TEST_ONLY';
+  await dialog.getByLabel('Access Key').fill(accessKey);
+  await dialog.getByLabel('Secret Key').fill(secretKey);
+  await dialog.getByRole('checkbox').check();
+  await dialog.getByRole('button', { name: '실주문 거래키 저장' }).click();
+
+  expect(savedBody).toEqual({
+    accountMode: 'live',
+    purpose: 'live_execution',
+    permissions: ['read', 'orders'],
+    credentials: { accessKey, secretKey },
+  });
+  await expect(page.getByTestId('live-connection-upbit')).toContainText(/거래키\s*저장됨/);
+  await expect(page.getByTestId('live-connection-upbit')).toContainText(/수동 실주문\s*OFF/);
+  await expect(page.getByTestId('live-connection-upbit')).toContainText(/자동 실주문\s*OFF/);
+  await expect(page.getByRole('status')).toContainText('저장만으로 주문은 실행되지 않습니다.');
+
+  const body = await page.locator('body').innerText();
+  expect(body).not.toContain(accessKey);
+  expect(body).not.toContain(secretKey);
+  assertClean(1);
 });
