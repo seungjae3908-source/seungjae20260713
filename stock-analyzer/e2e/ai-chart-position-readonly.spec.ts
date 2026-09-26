@@ -635,6 +635,161 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
 });
 
 
+test('AI Chart creates a server-verified live entry draft without submitting an order', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  let liveDraftCalls = 0;
+  const financialMutations: string[] = [];
+  await page.addInitScript(() => {
+    window.localStorage.setItem('sa-analysis-selection-v1', JSON.stringify({
+      assetType: 'stock',
+      market: 'KR',
+      symbol: '005930',
+      ticker: '005930',
+      displayName: '삼성전자',
+      timeframe: '5m',
+      searchRunId: 'scanner-live-run',
+      signalId: 'scanner-live-signal',
+      signalScore: 82,
+      confidence: 82,
+      action: 'BUY',
+      matchedSignals: ['trend_alignment'],
+      reasons: ['trend_alignment'],
+      pricePlan: {
+        entryZone: { from: 70000, to: 70500 },
+        invalidation: 68000,
+        stopLoss: 68500,
+        targets: [72000, 73500, 75000],
+        riskReward: 2.1,
+      },
+      selectedAt: new Date().toISOString(),
+    }));
+  });
+
+  await context.route('**/*', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (/\/(orders?|cancel|amend|transfer|withdraw)(?:\/|\?|$)/i.test(url.pathname) && request.method() !== 'GET') {
+      financialMutations.push(`${request.method()} ${url.pathname}`);
+    }
+    if (/\/api\/stocks\/[^/]+\/(?:chart|candles)$/.test(url.pathname)) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ticker: '005930',
+          timeframe: url.searchParams.get('tf') ?? '5m',
+          provider: 'live-draft-fixture',
+          fetchedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          candles: candleRows(),
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/quotes') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ quotes: [] }) });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/approval-queue') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          items: [],
+          count: 0,
+          updatedAt: new Date().toISOString(),
+          orderSubmitted: false,
+          orderCanceled: false,
+          privateTradingRequestSent: false,
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/scanner/live-draft') {
+      liveDraftCalls += 1;
+      expect(request.method()).toBe('POST');
+      const body = request.postDataJSON() as Record<string, unknown>;
+      expect(body).toEqual({
+        mode: 'approval',
+        accountMode: 'live',
+        adapter: 'canonical-live',
+        market: 'KR',
+        symbol: '005930',
+        timeframe: '5m',
+        side: 'BUY',
+        searchRunId: 'scanner-live-run',
+        signalId: 'scanner-live-signal',
+        selectedConditions: ['trend_alignment'],
+      });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          serverVerified: true,
+          draft: {
+            schemaVersion: 'scanner-live-entry-draft-v1',
+            state: 'SERVER_VERIFIED_DRAFT',
+            market: 'KR_STOCK',
+            symbol: '005930',
+            timeframe: '5m',
+            side: 'BUY',
+            signalId: 'scanner-live-signal',
+            observedAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 30_000).toISOString(),
+            entryZone: { from: 70000, to: 70500 },
+            invalidation: 68000,
+            stopLoss: 68500,
+            targets: [72000, 73500, 75000],
+            riskReward: 2.1,
+            evidenceStrength: 82,
+            strategy: {
+              candidateId: 'candidate-live',
+              strategyId: 'strategy-live',
+              parameterHash: 'a'.repeat(64),
+              researchCodeSha: 'b'.repeat(40),
+              costPolicyVersion: 'cost-v1',
+            },
+            requiresFinalRiskRecheck: true,
+            requiresExplicitApproval: true,
+            executionAuthority: 'NONE',
+          },
+          executionAuthority: 'NONE',
+          liveOrderAllowed: false,
+          privateTradingApiAllowed: false,
+          orderSubmitted: false,
+          exchangeRequestSent: false,
+          providerMutationRequests: 0,
+          productionMutationAllowed: false,
+          livePlanCreated: false,
+        }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto(chartUrl);
+  await page.getByRole('tab', { name: '차트', exact: true }).click();
+  const panel = page.getByTestId('ai-chart-position-panel');
+  await expect(panel).toBeVisible();
+  const cockpit = panel.getByTestId('ai-chart-trading-cockpit');
+  await cockpit.locator('summary').click();
+  await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('Scanner 근거 있음');
+  await cockpit.getByTestId('ai-chart-prepare-live-entry-draft').click();
+  await expect.poll(() => liveDraftCalls).toBe(1);
+  const draft = cockpit.getByTestId('ai-chart-live-entry-draft-ready');
+  await expect(draft).toContainText('BUY');
+  await expect(draft).toContainText('70,000원 ~ 70,500원');
+  await expect(draft).toContainText('68,500원');
+  await expect(draft).toContainText('TP1 72,000원');
+  await expect(draft).toContainText('최종 Risk 재검증 필요');
+  await expect(draft).toContainText('수량·레버리지·잔고·실제 주문은 생성하거나 전송하지 않습니다.');
+  expect(financialMutations).toEqual([]);
+});
+
+
 test('AI Chart keeps entry approval and order management available when the selected symbol has no position', async ({ page, context }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const financialMutations: string[] = [];
