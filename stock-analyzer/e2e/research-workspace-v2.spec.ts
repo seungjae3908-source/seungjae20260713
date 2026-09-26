@@ -8,7 +8,8 @@ const workspace=buildResearchWorkspace({videoEvidence:fixture('snapshot'),regist
 const USER='99999999-9999-4999-8999-999999999999';
 const workerFixture={schemaVersion:'research-worker-status-v9',available:true,checkedAt:'2026-09-26T04:00:00.000Z',workerState:'ACTIVE',lastHeartbeatAt:'2026-09-26T03:59:55.000Z',currentTaskKind:'VIDEO_PREPARE',counts:{queued:2,running:1,succeeded:7,failed:1,blocked:1},authority:{executionAuthority:'NONE',automaticActivation:false,providerCallsFromStatus:0}};
 const providerFixture={schemaVersion:'research-provider-readiness-v8',checkedAt:'2026-09-26T03:30:00.000Z',source:'API_PROCESS',scope:'SELECTED_RUNTIME_ONLY',providers:['youtube','gemini','groq'].map(provider=>({provider,credentialState:'PRESENT',modelState:provider==='youtube'?'NOT_APPLICABLE':'EXPLICIT',callVerified:false,quotaState:'NOT_CHECKED',billingState:'NOT_CHECKED'})),unmappedGenericCredential:false,authority:{executionAuthority:'NONE',providerCalls:0,environmentMutated:false,automaticActivation:false}};
-async function setup(page:Page,payload:unknown={available:true,workspace},status=200,providerPayload:unknown=providerFixture,providerStatus=200,workerPayload:unknown=workerFixture,workerStatus=200) {
+const orchestratorFixture={schemaVersion:'research-orchestrator-status-v10',available:true,checkedAt:'2026-09-26T05:30:00.000Z',totals:{pending:2,processing:1,reviewRequired:1,completed:4},stageCounts:{YOUTUBE_SOURCE:1,GEMINI_VIDEO:1,GROQ_ADVERSARIAL_REVIEW:1,RULE_COMPLETENESS:1,CANONICAL_COMPILER:1,BACKTEST:1,RESULT_PERSIST:1,ADOPTION_REVIEW:1},markets:{stockCompleted:3,cryptoCompleted:1},authority:{executionAuthority:'NONE',automaticActivation:false,automaticAdoption:false,providerCallsFromStatus:0,profitabilityAuthority:'BACKTESTER_ONLY'}};
+async function setup(page:Page,payload:unknown={available:true,workspace},status=200,providerPayload:unknown=providerFixture,providerStatus=200,workerPayload:unknown=workerFixture,workerStatus=200,orchestratorPayload:unknown=orchestratorFixture,orchestratorStatus=200) {
   await page.addInitScript(user=>{
     const encode=(x:Record<string,unknown>)=>btoa(JSON.stringify(x)).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
     const token=`${encode({alg:'none',typ:'JWT'})}.${encode({sub:user,role:'authenticated',exp:4102444800})}.e2e`;
@@ -26,6 +27,7 @@ async function setup(page:Page,payload:unknown={available:true,workspace},status
     if(path==='/api/auth/profile')return route.fulfill({contentType:'application/json',body:JSON.stringify({id:USER,login_name:'test-admin',display_name:'검증용 관리자',role:'admin',status:'approved',membership_level:'admin',is_active:true})});
     if(path==='/api/research/video/evidence/workspace/providers')return route.fulfill({status:providerStatus,contentType:'application/json',body:JSON.stringify(providerPayload)});
     if(path==='/api/research/video/evidence/workspace/worker')return route.fulfill({status:workerStatus,contentType:'application/json',body:JSON.stringify(workerPayload)});
+    if(path==='/api/research/video/evidence/workspace/orchestrator')return route.fulfill({status:orchestratorStatus,contentType:'application/json',body:JSON.stringify(orchestratorPayload)});
     if(path==='/api/research/video/evidence/workspace')return route.fulfill({status,contentType:'application/json',body:JSON.stringify(payload)});
     if(path==='/api/research/video/evidence')return route.fulfill({contentType:'application/json',body:JSON.stringify({available:false,dataState:'UNKNOWN'})});
     return route.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,items:[],rows:[],results:[]})});
@@ -43,6 +45,7 @@ for (const width of [390,768,1024,1440]) test(`mounted workspace filters and dis
   await expect(providerPanel.locator('[data-provider]')).toHaveCount(3);
   await expect(providerPanel).toContainText('실제 호출·영상 분석·무료 한도는 별도 검증');
   const workerPanel=panel.getByTestId('research-worker-status');await expect(workerPanel).toContainText('작업자 신호 확인');await expect(workerPanel).toContainText('확인 필요');
+  const orchestratorPanel=panel.getByTestId('research-orchestrator-status');await expect(orchestratorPanel).toContainText('Groq 반대검토');await expect(orchestratorPanel).toContainText('주식 완료');await expect(orchestratorPanel).toContainText('코인 완료');await expect(orchestratorPanel).toContainText('백테스터 결과만 사용');
   await page.screenshot({path:testInfo.outputPath(`providers-${width}.png`),fullPage:true});
   await panel.getByRole('button',{name:'주식',exact:true}).click();await expect(panel.getByTestId('workspace-strategy')).toHaveCount(1);
   await expect(panel.getByTestId('workspace-strategy')).toHaveAttribute('data-market','US_STOCK');
@@ -53,6 +56,7 @@ for (const width of [390,768,1024,1440]) test(`mounted workspace filters and dis
   const calls=requests.filter(x=>x.path.endsWith('/workspace'));expect(calls.length).toBeGreaterThan(0);expect(calls.every(x=>x.method==='GET'&&x.hasAuth)).toBe(true);
   const providerCalls=requests.filter(x=>x.path.endsWith('/workspace/providers'));expect(providerCalls.length).toBeGreaterThan(0);expect(providerCalls.every(x=>x.method==='GET'&&x.hasAuth)).toBe(true);
   const workerCalls=requests.filter(x=>x.path.endsWith('/workspace/worker'));expect(workerCalls.length).toBeGreaterThan(0);expect(workerCalls.every(x=>x.method==='GET'&&x.hasAuth)).toBe(true);
+  const orchestratorCalls=requests.filter(x=>x.path.endsWith('/workspace/orchestrator'));expect(orchestratorCalls.length).toBeGreaterThan(0);expect(orchestratorCalls.every(x=>x.method==='GET'&&x.hasAuth)).toBe(true);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth-window.innerWidth)).toBeLessThanOrEqual(2);
 });
 test('unavailable registry is not rendered as a zero-return result',async({page})=>{
@@ -90,4 +94,14 @@ test('stale worker heartbeat is explicit, not active',async({page})=>{
 test('forged worker automatic activation is rejected by UI parser',async({page})=>{
  const forged=structuredClone(workerFixture);forged.authority.automaticActivation=true;await setup(page,{available:true,workspace},200,providerFixture,200,forged);
  await expect(page.getByTestId('research-worker-status')).toContainText('0건으로 간주하지 않습니다.');
+});
+
+test('missing orchestrator status is not rendered as zero completed research',async({page})=>{
+ await setup(page,{available:true,workspace},200,providerFixture,200,workerFixture,200,{schemaVersion:'research-orchestrator-status-v10',available:false,reason:'ORCHESTRATOR_NOT_ACTIVATED'});
+ const status=page.getByTestId('research-orchestrator-status');await expect(status).toContainText('완료 0건으로 간주하지 않습니다.');await expect(status).not.toContainText('주식 완료');
+});
+test('forged orchestrator adoption authority is rejected by UI parser',async({page})=>{
+ const forged=structuredClone(orchestratorFixture);forged.authority.automaticAdoption=true;
+ await setup(page,{available:true,workspace},200,providerFixture,200,workerFixture,200,forged);
+ await expect(page.getByTestId('research-orchestrator-status')).toContainText('완료 0건으로 간주하지 않습니다.');
 });
