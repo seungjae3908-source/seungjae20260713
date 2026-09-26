@@ -267,8 +267,23 @@ const activationStart = telegramWorkflow.indexOf('function activateApprovedTeleg
 const activationEnd = telegramWorkflow.indexOf('const activationChanged =', activationStart);
 assert(activationStart >= 0 && activationEnd > activationStart, 'canonical Telegram-only activation seam missing');
 const activationFunction = telegramWorkflow.slice(activationStart, activationEnd);
+const telegramFeatureFlags = [
+  'TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED',
+  'TELEGRAM_SIGNAL_AI_ENABLED',
+  'TELEGRAM_DAILY_BRIEF_RICH_ENABLED',
+  'TELEGRAM_SIGNAL_FOLLOWUP_ENABLED',
+  'MEMBER_HOLDINGS_TELEGRAM_PRODUCER_ENABLED',
+  'MEMBER_HOLDINGS_NEWS_INTELLIGENCE_ENABLED',
+  'MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED',
+];
 const readyRuntime = { ...state('false', 'false')[0].pm2_env, DEPLOY_SHA: target,
   TELEGRAM_BOT_TOKEN: 'test-only-not-a-token', TELEGRAM_CHAT_ID: 'test-only-not-a-destination' };
+const completeTelegramRuntime = {
+  ...readyRuntime,
+  LIVE_TELEGRAM_ACTIVATION_APPROVED: 'true',
+  TELEGRAM_INTELLIGENCE_WORKER_ENABLED: 'true',
+  ...Object.fromEntries(telegramFeatureFlags.map((key) => [key, 'true'])),
+};
 function activation(runtime, { sha = target, marker = target, commentId = '123' } = {}) {
   const calls = [];
   const activate = vm.runInNewContext(`(${activationFunction.trim()})`, {
@@ -300,9 +315,24 @@ check('Telegram seam rejects missing approval, wrong identity, mixed state and m
     assert(result.error); assert.equal(result.calls.length, 0);
   }
 });
-check('Telegram-specific repeat approval does not restart already-active state', () => {
-  const result = activation({ ...readyRuntime, LIVE_TELEGRAM_ACTIVATION_APPROVED: 'true', TELEGRAM_INTELLIGENCE_WORKER_ENABLED: 'true' });
+check('Telegram-specific repeat approval does not restart fully active state', () => {
+  const result = activation(completeTelegramRuntime);
   assert.ifError(result.error); assert.equal(result.result, false); assert.equal(result.calls.length, 0);
+});
+check('Telegram-specific repeat approval repairs partial feature activation exactly once', () => {
+  const result = activation({
+    ...completeTelegramRuntime,
+    TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED: 'false',
+  });
+  assert.ifError(result.error); assert.equal(result.result, true); assert.equal(result.calls.length, 2);
+  assert.equal(result.calls[0][0], 'pm2');
+  assert.deepEqual(Array.from(result.calls[0][1]), ['restart', 'stock-app', '--update-env']);
+  const env = result.calls[0][2].env;
+  for (const key of telegramFeatureFlags) assert.equal(env[key], 'true');
+  for (const key of ['LIVE_TRADING', 'AUTO_TRADING', 'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED']) {
+    assert.equal(env[key], 'false');
+  }
+  assert.equal(env.executionAuthority, 'NONE');
 });
 
 if (failures.length) throw new Error(`${failures.length} preservation regression group(s) failed: ${failures.join('; ')}`);
