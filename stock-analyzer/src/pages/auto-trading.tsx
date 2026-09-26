@@ -178,6 +178,9 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           <StatusItem label="시장 제어" value="4시장" />
           <StatusItem label="위험검사" value="매 주문 재검증" />
         </div>
+        <p className="mt-3 break-keep text-xs leading-5 text-muted-foreground">
+          4시장 개별 ON/OFF로 시장별 자동 실행을 제어하며, 주문마다 승인을 요청하지 않습니다. 실제 주문 권한은 서버 Gate를 통과해야 합니다.
+        </p>
       </section>
 
       <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="auto-trading-runtime-summary">
@@ -279,7 +282,11 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
 
   const settings = mode === 'auto' ? (
     <div className="space-y-3" data-testid="auto-trading-settings-column">
-      <details className="rounded-2xl border border-card-border bg-card" open>
+      <details
+        className="rounded-2xl border border-card-border bg-card"
+        data-testid="auto-trading-advanced-settings"
+        open
+      >
         <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold [&::-webkit-details-marker]:hidden">
           <span>{marketMeta.label} · 자동매매 설정</span>
           <span aria-hidden className="text-muted-foreground">⌄</span>
