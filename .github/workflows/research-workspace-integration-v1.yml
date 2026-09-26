@@ -23,8 +23,10 @@ on:
       - stock-analyzer/src/components/research-workspace-providers.tsx
       - stock-analyzer/src/components/research-workspace-worker.tsx
       - stock-analyzer/src/components/research-workspace-orchestrator.tsx
+      - stock-analyzer/src/components/research-workspace-one-shot-review.tsx
       - stock-analyzer/src/lib/research-worker-status.*
       - stock-analyzer/src/lib/research-orchestrator-status.*
+      - stock-analyzer/src/lib/research-one-shot-review.*
       - stock-analyzer/src/lib/research-provider-status.*
       - stock-analyzer/src/components/research-video*.tsx
       - stock-analyzer/src/lib/research-workspace-response.*
