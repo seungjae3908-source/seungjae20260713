@@ -8,7 +8,7 @@ function fulfill(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: 'application/json; charset=utf-8', body: JSON.stringify(body) });
 }
 
-async function installRuntime(page: Page, options: { connectedBalances?: boolean; kiwoomSupported?: boolean } = {}) {
+async function installRuntime(page: Page, options: { connectedBalances?: boolean; kiwoomSupported?: boolean; fxUnavailable?: boolean } = {}) {
   await page.addInitScript(({ authKey, user, now }) => {
     const encode = (value: Record<string, unknown>) => btoa(JSON.stringify(value))
       .replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
@@ -72,7 +72,15 @@ async function installRuntime(page: Page, options: { connectedBalances?: boolean
       });
     }
     if (pathname === '/api/accounts/read-only/fx') {
-      return fulfill(route, {
+      return fulfill(route, options.fxUnavailable ? {
+        ok: true,
+        displayCurrencies: ['KRW', 'USD'],
+        usdKrw: null,
+        usdtKrw: null,
+        missing: ['FX:USD_KRW:UNAVAILABLE', 'FX:USDT_KRW:UNAVAILABLE'],
+        checkedAt: NOW,
+        publicMarketDataOnly: true,
+      } : {
         ok: true,
         displayCurrencies: ['KRW', 'USD'],
         usdKrw: { krwRate: 1300, source: 'TEST:USD_KRW', asOf: NOW, quality: 'DELAYED' },
@@ -241,6 +249,19 @@ test('account shows normalized balances and switches overseas stock plus USDT va
   await expect(toss).toContainText('$7,346.65');
   await expect(kiwoom).toContainText('$600.00');
   await expect(bitget).toContainText('$2,519.23');
+});
+
+test('FX outage never fabricates KRW or USD converted account values', async ({ page }) => {
+  await page.setViewportSize({ width: 768, height: 900 });
+  await installRuntime(page, { connectedBalances: true, kiwoomSupported: true, fxUnavailable: true });
+  await page.goto('/account');
+
+  const bitget = page.getByTestId('connection-bitget');
+  await expect(bitget.getByText('총금액', { exact: true })).toBeVisible();
+  await expect(bitget).toContainText('—');
+  await expect(bitget).not.toContainText('₩0');
+  await expect(bitget).not.toContainText('$0.00');
+  await expect(page.getByText('일부 환율 조회 불가', { exact: true })).toBeVisible();
 });
 
 test('account keeps the main surface compact and removes supplementary read-only copy', async ({ page }) => {
