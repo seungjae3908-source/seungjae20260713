@@ -40,15 +40,53 @@ const usApple = {
   dataAsOf: now,
 } as const;
 
+const spotBitcoin = {
+  id: 'coin:spot:UPBIT:KRW-BTC',
+  assetType: 'coin',
+  market: 'spot',
+  instrumentType: 'spot',
+  exchange: 'UPBIT',
+  symbol: 'BTC',
+  productCode: 'KRW-BTC',
+  koreanName: '비트코인',
+  englishName: 'Bitcoin',
+  displayName: '비트코인',
+  baseSymbol: 'BTC',
+  quoteCurrency: 'KRW',
+  matchType: 'code_exact',
+  active: true,
+  provider: 'UPBIT',
+  dataAsOf: now,
+} as const;
+
+const futuresBitcoin = {
+  id: 'coin:futures:BITGET:BTCUSDT',
+  assetType: 'coin',
+  market: 'futures',
+  instrumentType: 'futures',
+  exchange: 'BITGET',
+  symbol: 'BTCUSDT',
+  productCode: 'BTCUSDT',
+  koreanName: '비트코인',
+  englishName: 'Bitcoin',
+  displayName: '비트코인',
+  baseSymbol: 'BTC',
+  quoteCurrency: 'USDT',
+  matchType: 'code_exact',
+  active: true,
+  provider: 'BITGET',
+  dataAsOf: now,
+} as const;
+
 type SearchRequest = { q: string; asset: string | null; market: string | null };
 
-function successfulResponse(q: string, market: string | null, results: readonly unknown[]) {
+function successfulResponse(q: string, asset: string, market: string | null, results: readonly unknown[]) {
   const dataAsOf = new Date().toISOString();
   return {
     ok: true,
     state: results.length ? 'FULL' : 'EMPTY',
     q,
-    asset: 'stock',
+    asset,
     market,
     results: results.map((result) => ({ ...(result as object), dataAsOf })),
     count: results.length,
@@ -187,7 +225,7 @@ test('StocksPage uses canonical KR/US search and never calls legacy search/quote
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(successfulResponse(request.q, request.market, results)),
+      body: JSON.stringify(successfulResponse(request.q, request.asset ?? 'stock', request.market, results)),
     }).catch(() => undefined);
   });
 
@@ -215,6 +253,53 @@ test('StocksPage uses canonical KR/US search and never calls legacy search/quote
   await expect(page).toHaveURL(/\/stock-info\/analysis\?back=%2Fmarket-browser&asset=stock&market=US&ticker=AAPL$/);
 
   expect(legacyCalls).toBe(0);
+});
+
+test('coin search uses canonical unified search even when ticker-list APIs are unavailable', async ({ page }) => {
+  const requests: SearchRequest[] = [];
+
+  await page.route('**/api/crypto/spot/markets**', async (route) => {
+    await route.fulfill({ status: 502, contentType: 'application/json', body: '{"error":"SPOT_MARKETS_UNAVAILABLE"}' });
+  });
+  await page.route('**/api/crypto/spot/tickers**', async (route) => {
+    await route.fulfill({ status: 502, contentType: 'application/json', body: '{"error":"SPOT_TICKERS_UNAVAILABLE"}' });
+  });
+  await page.route('**/api/crypto/futures/tickers**', async (route) => {
+    await route.fulfill({ status: 502, contentType: 'application/json', body: '{"error":"FUTURES_TICKERS_UNAVAILABLE"}' });
+  });
+  await page.route('**/api/search/suggest**', async (route) => {
+    const url = new URL(route.request().url());
+    const request = {
+      q: url.searchParams.get('q') ?? '',
+      asset: url.searchParams.get('asset'),
+      market: url.searchParams.get('market'),
+    };
+    requests.push(request);
+    const results = request.market === 'spot' && request.q === 'BTC'
+      ? [spotBitcoin]
+      : request.market === 'futures' && request.q === 'BTCUSDT'
+        ? [futuresBitcoin]
+        : [];
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(successfulResponse(request.q, request.asset ?? 'coin', request.market, results)),
+    }).catch(() => undefined);
+  });
+
+  await openStocksPage(page);
+  await page.getByRole('button', { name: '코인', exact: true }).click();
+
+  const spotInput = page.getByRole('combobox', { name: '통합 자산 검색' });
+  await spotInput.fill('BTC');
+  await expectLatestRequest(requests, { q: 'BTC', asset: 'coin', market: 'spot' });
+  await expect(page.getByRole('option', { name: /비트코인.*BTC\/KRW/ })).toBeVisible();
+
+  await page.getByRole('button', { name: '선물', exact: true }).click();
+  const futuresInput = page.getByRole('combobox', { name: '통합 자산 검색' });
+  await futuresInput.fill('BTCUSDT');
+  await expectLatestRequest(requests, { q: 'BTCUSDT', asset: 'coin', market: 'futures' });
+  await expect(page.getByRole('option', { name: /비트코인.*BTCUSDT/ })).toBeVisible();
 });
 
 test('rapid input and market switch never allow an older stock result to overwrite the latest identity', async ({ page }) => {
@@ -257,7 +342,7 @@ test('rapid input and market switch never allow an older stock result to overwri
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(successfulResponse(request.q, request.market, results)),
+      body: JSON.stringify(successfulResponse(request.q, request.asset ?? 'stock', request.market, results)),
     }).catch(() => undefined);
   });
 
@@ -300,7 +385,7 @@ test('zero results, provider failure, and identity-only results remain truthfull
     const market = url.searchParams.get('market');
 
     if (q === 'provider-down') {
-      const unavailable = successfulResponse(q, market, []);
+      const unavailable = successfulResponse(q, 'stock', market, []);
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -324,7 +409,7 @@ test('zero results, provider failure, and identity-only results remain truthfull
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(successfulResponse(q, market, results)),
+      body: JSON.stringify(successfulResponse(q, 'stock', market, results)),
     });
   });
 
