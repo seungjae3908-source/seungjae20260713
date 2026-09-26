@@ -34,6 +34,7 @@ export const APP_ROUTES = {
   stockInfo: '/stock-info',
   stockAnalysis: '/stock-info/analysis',
   scanner: '/scanner',
+  telegramOrder: '/telegram-order',
   aiChart: '/ai-chart',
   autoTrading: '/auto-trading',
   backtests: '/backtests',
@@ -214,6 +215,7 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
     icon: 'technical',
     exactPaths: [
       APP_ROUTES.scanner,
+      APP_ROUTES.telegramOrder,
       APP_ROUTES.aiChart,
       APP_ROUTES.autoTrading,
       APP_ROUTES.backtests,
@@ -324,6 +326,7 @@ export const APP_ROUTE_PRESENTATIONS: readonly AppRoutePresentation[] = [
   { id: 'stock-info', title: '종목 정보', breadcrumb: ['종목', '종목 정보'], groupId: 'assets', exactPaths: [APP_ROUTES.stockInfo] },
   { id: 'stock-analysis', title: '종목 상세 분석', breadcrumb: ['종목', '종목 상세 분석'], groupId: 'assets', exactPaths: [APP_ROUTES.stockAnalysis] },
   { id: 'scanner', title: '검색기', breadcrumb: ['기술', '검색기'], groupId: 'technical', exactPaths: [APP_ROUTES.scanner] },
+  { id: 'telegram-order', title: '주문 준비', breadcrumb: ['기술', '주문 준비'], groupId: 'technical', exactPaths: [APP_ROUTES.telegramOrder], transient: true },
   { id: 'ai-chart', title: 'AI차트', breadcrumb: ['기술', 'AI차트'], groupId: 'technical', exactPaths: [APP_ROUTES.aiChart] },
   { id: 'auto-trading', title: '자동매매', breadcrumb: ['기술', '자동매매'], groupId: 'technical', exactPaths: [APP_ROUTES.autoTrading] },
   { id: 'backtests', title: '과거검증', breadcrumb: ['기술', '과거검증'], groupId: 'technical', exactPaths: [APP_ROUTES.backtests] },
