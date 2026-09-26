@@ -6,6 +6,8 @@ const BASE='9057c4a3767db0f81e595fc481f5066bda6c9e43';
 const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trimEnd();
 const added=[
  'packages/external-research/src/research-workspace-one-shot-v12.js',
+ 'packages/external-research/src/video-intelligence.d.ts',
+ 'packages/external-research/src/research-workspace-video-v7.d.ts',
  'packages/external-research/src/research-workspace-one-shot-v12.d.ts',
  'packages/external-research/test/research-workspace-one-shot-v12.test.js',
  'packages/external-research/docs/research-workspace-phase12.md',
