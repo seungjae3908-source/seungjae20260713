@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
-import { Search, Star } from 'lucide-react';
+import { Star } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { AssetSwitch } from '@/components/asset-switch';
 import { ErrorState, LoadingState } from '@/components/data-state';
@@ -62,10 +62,7 @@ function finitePercent(value: unknown): number | null {
 export default function StocksPage() {
   const [, navigate] = useLocation();
   const mode = useAssetMode();
-  const [query, setQuery] = useState('');
   const [category, setCategory] = useState<CategoryKey>('ai');
-  const trimmed = query.trim();
-  const searching = mode.asset === 'coin' && trimmed.length > 0;
 
   // ── 코인 검색용 데이터 (주식 검색은 canonical UnifiedAssetSearch 재사용) ──
   const spotMarkets = useQuery({
@@ -99,13 +96,13 @@ export default function StocksPage() {
         await apiGet<unknown>(`/market/recommendations?market=${mode.stockMarket}`),
         mode.stockMarket,
       ),
-    enabled: isStock && category === 'ai' && !searching,
+    enabled: isStock && category === 'ai',
     staleTime: 60_000,
   });
   const themes = useQuery({
     queryKey: ['stocks-cat-themes', mode.stockMarket],
     queryFn: async () => requireThemesData(await api.themes(mode.stockMarket), mode.stockMarket),
-    enabled: isStock && category === 'theme' && !searching,
+    enabled: isStock && category === 'theme',
     staleTime: 60_000,
   });
   const movers = useQuery({
@@ -114,7 +111,7 @@ export default function StocksPage() {
       await apiGet<unknown>(`/market/movers?market=${mode.stockMarket}`),
       mode.stockMarket,
     ),
-    enabled: useMovers && !searching,
+    enabled: useMovers,
     staleTime: 30_000,
     refetchInterval: 30_000,
   });
@@ -142,17 +139,6 @@ export default function StocksPage() {
     return rows.slice(0, 100);
   }, [category, coinCategorySupported, coinSource, mode.asset]);
 
-  // ── 코인 검색 결과 ──────────────────────────────────────────────
-  const searchCoins = useMemo(() => {
-    if (mode.asset !== 'coin' || !searching) return [] as AnyObj[];
-    const needle = trimmed.toLowerCase();
-    return coinSource
-      .filter((row) => [row.symbol, row.koreanName, row.englishName, displayCoinName(String(row.symbol), row.koreanName, row.englishName)]
-        .some((value) => String(value ?? '').toLowerCase().includes(needle)))
-      .sort((a, b) => Number(b.tradingValue24h ?? 0) - Number(a.tradingValue24h ?? 0))
-      .slice(0, 100);
-  }, [coinSource, mode.asset, searching, trimmed]);
-
   // ── 코인 검색 로딩·오류 상태 ────────────────────────────────────
   const coinTickerQuery = mode.coinMarket === 'spot' ? spotTickers : futuresTickers;
 
@@ -169,29 +155,17 @@ export default function StocksPage() {
         {/* 1) [주식][코인]  2) [국내][해외] / [현물][선물] — 검색 popup 위에 두어 항상 클릭 가능하게 유지 */}
         <AssetSwitch className="mt-3" />
 
-        {/* 3) 주식은 canonical search, 코인은 기존 실제 티커 검색 */}
-        {mode.asset === 'stock' ? (
-          <div className="mt-3">
-            <UnifiedAssetSearch
-              key={`stock:${mode.stockMarket}`}
-              asset="stock"
-              market={mode.stockMarket}
-              allowedMarkets={[mode.stockMarket]}
-              placeholder="종목명·코드·영문명 검색"
-              onSelect={(item) => navigate(unifiedAssetDetailPath(item, '/market-browser'))}
-            />
-          </div>
-        ) : (
-          <label className="mt-3 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-card px-3">
-            <Search className="h-4 w-4 text-muted-foreground" />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="코인명·심볼 검색"
-              className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none"
-            />
-          </label>
-        )}
+        {/* 3) 주식·코인 모두 canonical Unified Search 사용 — ticker 목록 장애와 검색을 분리 */}
+        <div className="mt-3">
+          <UnifiedAssetSearch
+            key={mode.asset === 'stock' ? `stock:${mode.stockMarket}` : `coin:${mode.coinMarket}`}
+            asset={mode.asset}
+            market={mode.asset === 'stock' ? mode.stockMarket : mode.coinMarket}
+            allowedMarkets={[mode.asset === 'stock' ? mode.stockMarket : mode.coinMarket]}
+            placeholder={mode.asset === 'stock' ? '종목명·코드·영문명 검색' : '코인명·심볼 검색'}
+            onSelect={(item) => navigate(unifiedAssetDetailPath(item, '/market-browser'))}
+          />
+        </div>
 
         {/* 4) 분류 버튼 6개 */}
         <div className="mt-3 grid grid-cols-3 gap-2">
@@ -212,26 +186,6 @@ export default function StocksPage() {
       </header>
 
       <main className="space-y-4 px-4 pb-6 pt-4">
-        {/* 코인 검색 중이면 검색 결과가 분류 목록 위. 주식 결과는 UnifiedAssetSearch가 소유한다. */}
-        {mode.asset === 'coin' && searching && (
-          <section>
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-black">검색 결과</h2>
-              <span className="text-[11px] font-bold text-muted-foreground">{searchCoins.length}개</span>
-            </div>
-            {coinTickerQuery.isLoading && <LoadingState label="실제 코인 시세를 불러오는 중입니다." />}
-            {coinTickerQuery.isError && <ErrorState onRetry={() => { void coinTickerQuery.refetch(); }} />}
-            {!coinTickerQuery.isLoading && !coinTickerQuery.isError && searchCoins.length === 0 && (
-              <EmptyBox>검색어와 일치하는 실제 코인 데이터가 없습니다.</EmptyBox>
-            )}
-            <div className="space-y-2">
-              {searchCoins.map((row) => (
-                <CoinRow key={String(row.symbol)} row={row} coinMarket={mode.coinMarket} onClick={() => openCoin(String(row.symbol))} />
-              ))}
-            </div>
-          </section>
-        )}
-
         {/* 5) 선택한 분류의 실제 결과 목록 */}
         <section>
           <div className="mb-3 flex items-center justify-between">
