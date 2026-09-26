@@ -216,6 +216,104 @@ function remainingValidityLabel(value: string | null | undefined): string {
   return `TTL ${Math.ceil(remainingHours / 24)}일`;
 }
 
+function userSignalState(value: ScannerSignalCard['signalState']): string {
+  const labels: Partial<Record<ScannerSignalCard['signalState'], string>> = {
+    CANDIDATE: '관찰 후보',
+    CONFIRMED: '확인됨',
+    ARMED: '진입 감시',
+    ENTRY_ZONE: '진입구간',
+    APPROVAL_PENDING: '검토 대기',
+    READY_FOR_APPROVAL: '검토 가능',
+    WEAKENED: '약화됨',
+    INVALIDATED: '무효화',
+    EXPIRED: '만료',
+    REJECTED: '제외',
+    CANCELLED: '취소',
+    CLOSED: '종료',
+    DETECTED: '감지됨',
+    WATCHING: '관찰 중',
+  };
+  return labels[value] ?? '상태 확인';
+}
+
+function userDataState(value: ScannerSignalCard['dataState']): string {
+  if (value === 'complete') return '정상';
+  if (value === 'partial') return '일부 지연';
+  if (value === 'stale') return '데이터 지연';
+  if (value === 'insufficient') return '근거 부족';
+  if (value === 'unavailable') return '확인 불가';
+  return '신뢰 불가';
+}
+
+function scannerFreshness(card: ScannerSignalCard): { label: string; tone: string } {
+  const expiresAt = Date.parse(card.expiresAt);
+  if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) return { label: '만료', tone: 'text-destructive' };
+  if (card.dataState === 'stale') return { label: '지연', tone: 'text-warning' };
+  if (card.dataState === 'partial' || card.dataState === 'insufficient' || card.dataState === 'untrusted') {
+    return { label: '주의', tone: 'text-warning' };
+  }
+  if (card.dataState === 'unavailable') return { label: '확인불가', tone: 'text-destructive' };
+  return { label: '정상', tone: 'text-positive' };
+}
+
+function scannerDecisionLabel(card: ScannerSignalCard): string {
+  if (!card.strongSignalEligible || ['WEAKENED', 'INVALIDATED', 'EXPIRED', 'REJECTED', 'CANCELLED'].includes(card.signalState)) {
+    return card.signalGrade === 'B' ? '관찰' : '신규진입 차단';
+  }
+  if (card.action === 'LONG') return '롱 검토';
+  if (card.action === 'SHORT') return '숏 검토';
+  if (card.action === 'BUY') return '매수 검토';
+  if (card.action === 'SELL') return '매도 참고';
+  return '거래 안 함';
+}
+
+function intelligenceStatus(card: ScannerSignalCard): string {
+  if (card.newsDisclosureIntelligence) {
+    if (card.newsDisclosureIntelligence.status === 'READY') return '뉴스·공시 정상';
+    if (card.newsDisclosureIntelligence.status === 'PARTIAL') return '뉴스·공시 일부';
+    if (card.newsDisclosureIntelligence.status === 'TIMEOUT') return '뉴스·공시 지연';
+    if (card.newsDisclosureIntelligence.status === 'NOT_AVAILABLE') return '뉴스·공시 확인불가';
+    return '뉴스·공시 미실행';
+  }
+  if (card.marketIntelligence) return card.marketIntelligence.status === 'READY' ? '시장지능 정상' : '시장지능 확인불가';
+  if (card.cryptoPublicEventContext) {
+    if (card.cryptoPublicEventContext.status === 'READY') return '공개 이벤트 정상';
+    if (card.cryptoPublicEventContext.status === 'PARTIAL') return '공개 이벤트 일부';
+    return '공개 이벤트 확인불가';
+  }
+  return '이벤트 근거 미확인';
+}
+
+function intelligenceConflictReasons(card: ScannerSignalCard): string[] {
+  const reasons: string[] = [];
+  const blockingQuality = card.dataQuality?.issues.filter((item) => item.severity === 'blocking') ?? [];
+  reasons.push(...blockingQuality.map((item) => item.message));
+  if (card.aiValidation?.status === 'VETO') reasons.push(...card.aiValidation.risks, ...card.aiValidation.counterEvidence);
+  if ((card.newsDisclosureIntelligence?.officialRiskEvents.length ?? 0) > 0) {
+    reasons.push(...(card.newsDisclosureIntelligence?.officialRiskEvents ?? []).map((event) => `공식 위험 이벤트: ${event}`));
+  }
+  if (card.marketIntelligence?.autoTrading.mode === 'BLOCKED_RISK') {
+    reasons.push(card.marketIntelligence.autoTrading.hardBlockReason ?? 'Market Intelligence 위험 차단');
+  }
+  if (card.cryptoPublicEventContext?.marketWarning === true) reasons.push('거래소 공개 경고');
+  reasons.push(...(card.themeSwing?.blockers ?? []).map((item) => `Theme Swing: ${item}`));
+  return [...new Set(reasons.filter(Boolean))].slice(0, 8);
+}
+
+function themeStateLabel(value: string): string {
+  if (value === 'ELIGIBLE') return '선별 통과';
+  if (value === 'WATCH') return '관찰';
+  if (value === 'REJECT') return '제외';
+  return '미분류';
+}
+
+function triggerLabel(value: string): string {
+  if (value === 'BREAKOUT') return '돌파';
+  if (value === 'PULLBACK') return '눌림·리테스트';
+  if (value === 'TREND_CONTINUATION') return '추세 지속';
+  return '미확인';
+}
+
 function SignalDetailPanel({
   card,
   selection,
@@ -246,11 +344,17 @@ function SignalDetailPanel({
   const themeSwing = card.themeSwing;
   const qualityIssues = signalQuality?.issues ?? [];
   const strongSignalLabel = signalQuality?.strongSignalAllowed === true
-    ? 'YES'
-    : signalQuality?.strongSignalAllowed === false ? 'NO' : '미확인';
+    ? '허용'
+    : signalQuality?.strongSignalAllowed === false ? '차단' : '미확인';
   const hardFilterLabel = ranking?.hardFilterPassed === true
-    ? 'PASS'
-    : ranking?.hardFilterPassed === false ? 'REJECT' : '미확인';
+    ? '통과'
+    : ranking?.hardFilterPassed === false ? '제외' : '미확인';
+  const freshness = scannerFreshness(card);
+  const decisionLabel = scannerDecisionLabel(card);
+  const conflictReasons = intelligenceConflictReasons(card);
+  const newsIntel = card.newsDisclosureIntelligence;
+  const marketIntel = card.marketIntelligence;
+  const cryptoEvents = card.cryptoPublicEventContext;
 
   useEffect(() => {
     setMobileTab('summary');
