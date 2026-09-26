@@ -193,21 +193,18 @@ export function UnifiedTradeJournalPanel({
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState('');
   const [refreshVersion, setRefreshVersion] = useState(0);
-  const requestKey = JSON.stringify(filters);
-
-  useEffect(() => {
-    setFilters((current) => ({
-      ...current,
-      market: forcedMarket ?? current.market,
-      source: forcedSource ?? current.source,
-    }));
-  }, [forcedMarket, forcedSource]);
+  const effectiveFilters = useMemo<UnifiedJournalFilters>(() => ({
+    ...filters,
+    market: forcedMarket ?? filters.market,
+    source: forcedSource ?? filters.source,
+  }), [filters, forcedMarket, forcedSource]);
+  const requestKey = JSON.stringify(effectiveFilters);
 
   useEffect(() => {
     const controller = new AbortController();
     setBusy(true);
     setError('');
-    void loadApi(filters, controller.signal).then((result) => {
+    void loadApi(effectiveFilters, controller.signal).then((result) => {
       setData(result);
       setSelectedId((current) => result.trades.some((trade) => trade.id === current) ? current : result.trades[0]?.id ?? '');
     }).catch((cause) => {
