@@ -189,6 +189,31 @@ function exitPreviewFingerprint(input: {
   ].join('|')).digest('hex');
 }
 
+function exitPlanFingerprint(input: {
+  previewFingerprint: string;
+  provider: AccountProvider;
+  market: string;
+  symbol: string;
+  percent: number;
+  exitQuantity: number;
+  side: 'buy' | 'sell';
+  issuedAt: string;
+  expiresAt: string;
+}) {
+  return createHash('sha256').update([
+    'ai-chart-canonical-exit-plan-v1',
+    input.previewFingerprint,
+    input.provider,
+    input.market,
+    normalizedExitSymbol(input.symbol),
+    String(input.percent),
+    String(input.exitQuantity),
+    input.side,
+    input.issuedAt,
+    input.expiresAt,
+  ].join('|')).digest('hex');
+}
+
 function exchangeValue(value: unknown): TradingExchange {
   const exchange = String(value ?? '').toLowerCase() as TradingExchange;
   if (!EXCHANGES.has(exchange)) throw new Error('UNSUPPORTED_EXCHANGE');
@@ -808,6 +833,181 @@ router.post('/positions/exit-preview', async (req: AuthenticatedRequest, res) =>
       privateTradingMutationSent: false,
       executionAuthority: 'NONE',
       executionReadiness,
+    });
+  } catch (error) {
+    if (controller.signal.aborted || res.writableEnded) return undefined;
+    return errorResponse(res, error);
+  } finally {
+    req.removeListener('aborted', abort);
+    res.removeListener('close', abort);
+  }
+});
+
+router.post('/positions/exit-plan', async (req: AuthenticatedRequest, res) => {
+  const userId = req.member?.id ?? '';
+  const accessToken = req.accessToken ?? '';
+  if (!userId || !accessToken) return res.status(401).json({ ok: false, error: 'LOGIN_REQUIRED' });
+  if (req.body?.confirmed !== true) {
+    return res.status(409).json({
+      ok: false,
+      error: 'EXPLICIT_EXIT_PLAN_CONFIRMATION_REQUIRED',
+      planPrepared: false,
+      financialMutationPerformed: false,
+      orderSubmitted: false,
+      privateTradingMutationSent: false,
+    });
+  }
+
+  let provider: AccountProvider;
+  let market: string;
+  let symbol: string;
+  let percent: number;
+  let previewFingerprint: string;
+  try {
+    provider = exitPreviewProvider(req.body?.provider);
+    market = String(req.body?.market ?? '').trim().toUpperCase();
+    symbol = String(req.body?.symbol ?? '').trim().toUpperCase();
+    percent = Number(req.body?.percent);
+    previewFingerprint = String(req.body?.previewFingerprint ?? '').trim().toLowerCase();
+    if (!['KR', 'US', 'UPBIT', 'BITGET'].includes(market)) throw new Error('EXIT_PLAN_MARKET_UNSUPPORTED');
+    if (!normalizedExitSymbol(symbol)) throw new Error('EXIT_PLAN_SYMBOL_REQUIRED');
+    if (![25, 50, 75, 100].includes(percent)) throw new Error('EXIT_PLAN_PERCENT_UNSUPPORTED');
+    if (!/^[a-f0-9]{64}$/.test(previewFingerprint)) throw new Error('EXIT_PLAN_PREVIEW_FINGERPRINT_INVALID');
+    if ((market === 'UPBIT' && provider !== 'upbit')
+      || (market === 'BITGET' && provider !== 'bitget')
+      || ((market === 'KR' || market === 'US') && provider !== 'toss' && provider !== 'kiwoom')) {
+      throw new Error('EXIT_PLAN_PROVIDER_MARKET_MISMATCH');
+    }
+  } catch (error) {
+    return errorResponse(res, error);
+  }
+
+  const readers = exitPreviewReadersFactoryForTests?.() ?? createVaultBackedAccountReaders();
+  const reader = readers[provider];
+  if (!reader) return res.status(503).json({ ok: false, error: 'EXIT_PLAN_READER_UNAVAILABLE' });
+  const { repository } = context(req);
+  const controller = new AbortController();
+  const abort = () => controller.abort(new Error('EXIT_PLAN_ABORTED'));
+  req.once('aborted', abort);
+  res.once('close', abort);
+
+  try {
+    const [snapshot, connection] = await Promise.all([
+      reader({ userId, accessToken }, controller.signal),
+      repository.getConnection(userId, provider as TradingExchange),
+    ]);
+    if (controller.signal.aborted || res.writableEnded) return undefined;
+    if (snapshot.readOnly !== true
+      || snapshot.connected !== true
+      || snapshot.stale === true
+      || snapshot.orderRequests !== 0
+      || snapshot.cancelRequests !== 0
+      || snapshot.amendRequests !== 0
+      || snapshot.transferRequests !== 0
+      || snapshot.withdrawalRequests !== 0
+      || snapshot.liveTradingEnabled !== false
+      || snapshot.autoTradingEnabled !== false) {
+      return res.status(409).json({
+        ok: false,
+        error: snapshot.errorCode ?? 'EXIT_PLAN_ACCOUNT_SNAPSHOT_NOT_FRESH',
+        planPrepared: false,
+        financialMutationPerformed: false,
+        orderSubmitted: false,
+        privateTradingMutationSent: false,
+      });
+    }
+
+    const matches = (snapshot.positions ?? []).filter((position) => exitPositionMatches(position, market, symbol));
+    if (matches.length !== 1) {
+      return res.status(409).json({
+        ok: false,
+        error: matches.length > 1 ? 'EXIT_PLAN_POSITION_AMBIGUOUS' : 'EXIT_PLAN_POSITION_NOT_FOUND',
+        planPrepared: false,
+        financialMutationPerformed: false,
+        orderSubmitted: false,
+        privateTradingMutationSent: false,
+      });
+    }
+
+    const position = matches[0]!;
+    const quantities = exitPreviewQuantity(position, percent, market, provider);
+    const side = exitPreviewSide(provider, position);
+    const refreshedPreviewFingerprint = exitPreviewFingerprint({
+      provider,
+      market,
+      symbol,
+      percent,
+      availableQuantity: quantities.availableQuantity,
+      exitQuantity: quantities.exitQuantity,
+      side,
+      checkedAt: snapshot.checkedAt,
+    });
+    if (refreshedPreviewFingerprint !== previewFingerprint) {
+      return res.status(409).json({
+        ok: false,
+        error: 'EXIT_PLAN_PREVIEW_STALE_OR_POSITION_CHANGED',
+        planPrepared: false,
+        financialMutationPerformed: false,
+        orderSubmitted: false,
+        privateTradingMutationSent: false,
+      });
+    }
+
+    const executionReadiness = liveExecutionReadinessForConnection(
+      provider as TradingExchange,
+      connection,
+      credentialConfigurationStatus().encryptionConfigured,
+    );
+    const issuedAt = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    const planFingerprint = exitPlanFingerprint({
+      previewFingerprint,
+      provider,
+      market,
+      symbol,
+      percent,
+      exitQuantity: quantities.exitQuantity,
+      side,
+      issuedAt,
+      expiresAt,
+    });
+
+    return res.json({
+      ok: true,
+      canonicalExitPlan: {
+        schemaVersion: 'ai-chart-canonical-exit-plan-v1',
+        planFingerprint,
+        previewFingerprint,
+        provider,
+        market,
+        symbol: normalizedExitSymbol(symbol),
+        accountMode: 'live',
+        orderType: 'market',
+        side,
+        quantity: quantities.exitQuantity,
+        percent,
+        reduceOnly: true,
+        sourceCheckedAt: snapshot.checkedAt,
+        issuedAt,
+        expiresAt,
+        approvalEligible: executionReadiness.readyForManualExitEvaluation,
+        blockers: executionReadiness.blockers,
+        requiresFreshAccountRecheckAtApproval: true,
+        requiresOrderTimeRiskRecheck: true,
+        requiresExplicitApproval: true,
+        nextOwner: 'CANONICAL_EXIT_APPROVAL_OWNER',
+        orderSubmissionPerformed: false,
+        financialMutationPerformed: false,
+      },
+      executionReadiness,
+      planPrepared: true,
+      privateAccountReadPerformed: true,
+      financialMutationPerformed: false,
+      orderSubmitted: false,
+      orderCanceled: false,
+      orderAmended: false,
+      privateTradingMutationSent: false,
+      executionAuthority: 'NONE',
     });
   } catch (error) {
     if (controller.signal.aborted || res.writableEnded) return undefined;
