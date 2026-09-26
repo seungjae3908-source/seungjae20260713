@@ -76,6 +76,9 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain("setExitPreviewState({ kind: 'idle' });");
   expect(panel).toContain("confirmed: true");
   expect(panel).toContain("자동 조회·자동 취소·자동 정정 없음");
+  expect(panel).toContain("data-testid=\"ai-chart-exit-dashboard-unavailable\"");
+  expect(panel).toContain("현재 종목 보유 포지션이 없어 종료계획을 만들지 않습니다.");
+  expect(panel).toContain("{tradingCockpit}");
 });
 
 test('AI Chart matches four-market positions without inventing missing values', () => {
@@ -432,5 +435,115 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
 
   await page.getByTestId('ai-chart-toggle-position-lines').click();
   await expect(page.getByTestId('unified-chart-wrapper')).toHaveAttribute('data-position-average', '');
+  expect(financialMutations).toEqual([]);
+});
+
+
+test('AI Chart keeps entry approval and order management available when the selected symbol has no position', async ({ page, context }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const financialMutations: string[] = [];
+
+  await context.route('**/*', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (/\/(orders?|cancel|amend|transfer|withdraw)(?:\/|\?|$)/i.test(url.pathname) && request.method() !== 'GET') {
+      financialMutations.push(`${request.method()} ${url.pathname}`);
+    }
+    if (/\/api\/stocks\/[^/]+\/(?:chart|candles)$/.test(url.pathname)) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ticker: '005930',
+          timeframe: url.searchParams.get('tf') ?? '5m',
+          provider: 'no-position-fixture',
+          fetchedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          candles: candleRows(),
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/quotes') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ quotes: [] }) });
+      return;
+    }
+    if (url.pathname === '/api/accounts/read-only/toss') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          provider: 'toss',
+          readOnly: true,
+          connected: true,
+          status: 'CONNECTED',
+          accounts: null,
+          balances: null,
+          positions: [],
+          openOrders: null,
+          checkedAt: new Date().toISOString(),
+          lastGoodAt: new Date().toISOString(),
+          stale: false,
+          errorCode: null,
+          orderRequests: 0,
+          cancelRequests: 0,
+          amendRequests: 0,
+          transferRequests: 0,
+          withdrawalRequests: 0,
+          credentialsReturned: false,
+          liveTradingEnabled: false,
+          autoTradingEnabled: false,
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/approval-queue') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          items: [],
+          count: 0,
+          updatedAt: new Date().toISOString(),
+          orderSubmitted: false,
+          orderCanceled: false,
+          privateTradingRequestSent: false,
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/orders') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          orders: [],
+          events: [],
+          dashboardItems: [],
+          orderSubmitted: false,
+          orderCanceled: false,
+          orderAmended: false,
+          privateTradingRequestSent: false,
+        }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto(chartUrl);
+  await page.getByRole('tab', { name: '차트', exact: true }).click();
+  const panel = page.getByTestId('ai-chart-position-panel');
+  await panel.getByTestId('ai-chart-load-position').click();
+  await expect(panel).toContainText('현재 선택 종목의 보유/포지션 없음');
+
+  const cockpit = panel.getByTestId('ai-chart-trading-cockpit');
+  await cockpit.locator('summary').click();
+  await expect(cockpit).toContainText('현재 종목의 승인 대기 진입이 없습니다.');
+  await expect(cockpit.getByTestId('ai-chart-exit-dashboard-unavailable')).toContainText('종료계획을 만들지 않습니다.');
+  await cockpit.getByTestId('ai-chart-load-orders').click();
+  await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('canonical 주문 기록이 없습니다.');
   expect(financialMutations).toEqual([]);
 });
