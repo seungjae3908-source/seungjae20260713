@@ -82,8 +82,13 @@ test('every live provider requires the global gates plus its own explicit provid
     process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
     process.env.KIWOOM_LIVE_ORDER_ENABLED = 'true';
     process.env.TOSS_LIVE_ORDER_ENABLED = 'true';
-    process.env.executionAuthority = 'MANUAL';
+    process.env.executionAuthority = 'NONE';
+    assert.equal(liveExecutionEnabled('bitget'), false);
+    assert.equal(liveExecutionEnabled('upbit'), false);
+    assert.equal(liveExecutionEnabled('kiwoom'), false);
+    assert.equal(liveExecutionEnabled('toss'), false);
 
+    process.env.executionAuthority = 'MANUAL';
     assert.equal(liveExecutionEnabled('bitget'), true);
     assert.equal(liveExecutionEnabled('upbit'), true);
     assert.equal(liveExecutionEnabled('kiwoom'), true);
