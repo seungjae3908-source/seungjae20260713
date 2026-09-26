@@ -6,6 +6,7 @@ on:
       - packages/external-research/**
       - api-server/src/routes/research-workspace.ts
       - api-server/src/services/research-workspace-authorization-v5*.ts
+      - api-server/src/services/research-workspace-transcript-v6*.ts
       - api-server/src/routes/video-research*.ts
       - api-server/src/routes/index.ts
       - stock-analyzer/src/components/research-workspace-panel.tsx
@@ -136,6 +137,29 @@ jobs:
             process.exitCode=result.status??1;
           } finally {await rm(directory,{recursive:true,force:true});}
           NODE
+      - name: Canonical transcript extraction adapter (synthetic transports)
+        if: always() && steps.install.outcome == 'success'
+        working-directory: api-server
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module <<'NODE' | tee "$RUNNER_TEMP/workspace-transcript-tests.log"
+          import { build } from 'esbuild';
+          import { mkdtemp, rm } from 'node:fs/promises';
+          import { tmpdir } from 'node:os';
+          import path from 'node:path';
+          import { spawnSync } from 'node:child_process';
+          const directory=await mkdtemp(path.join(tmpdir(),'workspace-transcript-'));
+          try {
+            const output=path.join(directory,'transcript.test.cjs');
+            await build({entryPoints:['src/services/research-workspace-transcript-v6.test.ts'],
+              outfile:output,bundle:true,platform:'node',format:'cjs',target:'node22',logLevel:'warning',
+              define:{'import.meta.env':'{}'}});
+            const result=spawnSync(process.execPath,['--test',output],{cwd:path.resolve('..'),stdio:'inherit'});
+            if(result.error)throw result.error;
+            process.exitCode=result.status??1;
+          } finally {await rm(directory,{recursive:true,force:true});}
+          NODE
       - name: Install Chromium
         id: browser
         if: always() && steps.install.outcome == 'success'
@@ -151,5 +175,6 @@ jobs:
             stock-analyzer/test-results
             ${{ runner.temp }}/workspace-http-tests.log
             ${{ runner.temp }}/workspace-admin-tests.log
+            ${{ runner.temp }}/workspace-transcript-tests.log
           if-no-files-found: warn
           retention-days: 30
