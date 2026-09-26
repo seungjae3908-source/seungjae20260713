@@ -5,6 +5,10 @@ const OWNER='adfcb23baf956bcaa025f0846313faf8db7a4e4a';
 const BASE='9057c4a3767db0f81e595fc481f5066bda6c9e43';
 const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trimEnd();
 const added=[
+ 'api-server/scripts/research-workspace-one-shot-preflight-v13.cjs',
+ 'api-server/scripts/research-workspace-one-shot-preflight-v13.test.cjs',
+ '.github/workflows/research-workspace-one-shot-preflight-v13.yml',
+ 'packages/external-research/docs/research-workspace-phase13.md',
  'packages/external-research/src/research-workspace-one-shot-v12.js',
  'packages/external-research/src/video-intelligence.d.ts',
  'packages/external-research/src/research-workspace-video-v7.d.ts',
