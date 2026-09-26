@@ -630,6 +630,76 @@ async function chartMatrix(page: Page, onProgress: (audits: ChartAudit[]) => voi
 test.describe('Production comprehensive read-only QA', () => {
   test.skip(!productionQaEnabled, 'Dedicated Production QA credentials and read-only flag are required');
 
+  test('Production Telegram runtime readiness is complete and zero-authority', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== 'prod-desktop-1440');
+    const diagnostics: Diagnostic[] = [];
+    const blocked: Diagnostic[] = [];
+    attachDiagnostics(page, diagnostics);
+    await installSafety(page, blocked);
+    await login(page, testInfo, diagnostics, blocked, 'telegram-runtime');
+
+    const result = await page.evaluate(async () => {
+      const response = await fetch('/api/user-integrations', {
+        method: 'GET',
+        credentials: 'include',
+        headers: { Accept: 'application/json' },
+      });
+      const payload = await response.json().catch(() => null);
+      return { status: response.status, payload };
+    });
+    const root = result.payload && typeof result.payload === 'object'
+      ? result.payload as Record<string, unknown>
+      : {};
+    const runtime = root.telegramRuntime && typeof root.telegramRuntime === 'object'
+      ? root.telegramRuntime as Record<string, unknown>
+      : {};
+    const sanitized = {
+      status: result.status,
+      deliveryReady: runtime.deliveryReady === true,
+      linkingReady: runtime.linkingReady === true,
+      webhookConfigured: runtime.webhookConfigured === true,
+      botUsernameConfigured: runtime.botUsernameConfigured === true,
+      stockRoomReady: runtime.stockRoomReady === true,
+      cryptoRoomReady: runtime.cryptoRoomReady === true,
+      backgroundWorkersEnabled: runtime.backgroundWorkersEnabled === true,
+      personalWorkerEnabled: runtime.personalWorkerEnabled === true,
+      intelligenceWorkerEnabled: runtime.intelligenceWorkerEnabled === true,
+      richSignalEnabled: runtime.richSignalEnabled === true,
+      aiExplanationEnabled: runtime.aiExplanationEnabled === true,
+      signalFollowupEnabled: runtime.signalFollowupEnabled === true,
+      memberHoldingsEnabled: runtime.memberHoldingsEnabled === true,
+      marketBriefEnabled: runtime.marketBriefEnabled === true,
+      orderAuthority: runtime.orderAuthority ?? null,
+      privateTradingApiAllowed: runtime.privateTradingApiAllowed ?? null,
+      realOrderAllowed: runtime.realOrderAllowed ?? null,
+    };
+    writeJson('prod-desktop-1440-telegram-runtime.json', sanitized);
+
+    expect(blocked, 'Telegram runtime QA attempted a blocked mutation').toEqual([]);
+    expect(result.status, 'user integrations runtime endpoint').toBe(200);
+    expect(sanitized).toMatchObject({
+      deliveryReady: true,
+      linkingReady: true,
+      webhookConfigured: true,
+      botUsernameConfigured: true,
+      stockRoomReady: true,
+      cryptoRoomReady: true,
+      backgroundWorkersEnabled: true,
+      personalWorkerEnabled: true,
+      intelligenceWorkerEnabled: true,
+      richSignalEnabled: true,
+      aiExplanationEnabled: true,
+      signalFollowupEnabled: true,
+      memberHoldingsEnabled: true,
+      marketBriefEnabled: true,
+      orderAuthority: 'NONE',
+      privateTradingApiAllowed: false,
+      realOrderAllowed: false,
+    });
+    expect(diagnostics.filter((item) => item.kind === 'pageerror' || item.kind === 'requestfailed'),
+      'Telegram runtime browser failures detected').toEqual([]);
+  });
+
   test('Production route, layout, overlap, scroll, and safe-tab audit', async ({ page }, testInfo) => {
     const full = testInfo.project.name === 'prod-desktop-1440' || testInfo.project.name === 'prod-mobile-390';
     test.setTimeout(full ? 7 * 60_000 : 4 * 60_000);
