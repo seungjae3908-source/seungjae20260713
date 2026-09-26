@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { requireAuthenticated, requireCapability, type AuthenticatedRequest } from '../middleware/auth';
 import { hasCapability } from '../../../packages/member-access/src/index.js';
 import { createProviderReadinessHandler } from '../../../packages/external-research/src/research-workspace-providers-v8.js';
+import { createResearchWorkerQueue } from '../../../packages/external-research/src/research-workspace-worker-v9.js';
 import { createStoredWorkspaceHandler } from '../../../packages/external-research/src/research-workspace-store-v2.js';
 import { loadVideoResearchRuntimeEvidenceSnapshot, sanitizeVideoResearchRuntimeEvidence } from './video-research-source-evidence';
 
@@ -26,6 +27,13 @@ export function createResearchWorkspaceRouter(): IRouter {
     authorize: async (req: AuthenticatedRequest) => Boolean(req.member && req.accessToken && hasCapability(req.member, 'canManageMembers')),
   });
   router.all('/providers', (req, res) => { void providers(req, res); });
+  const workerQueue = createResearchWorkerQueue(resolve(process.cwd(), 'data', 'research-workspace-worker-v9'));
+  router.all('/worker', async (req, res) => {
+    res.setHeader('Cache-Control','no-store, max-age=0');res.setHeader('Vary','Authorization, Cookie');res.setHeader('X-Content-Type-Options','nosniff');
+    if (req.method !== 'GET') { res.setHeader('Allow','GET'); return res.status(405).json({error:'READ_ONLY'}); }
+    try { return res.status(200).json(await workerQueue.status()); }
+    catch { return res.status(503).json({schemaVersion:'research-worker-status-v9',available:false,reason:'WORKER_STATUS_UNAVAILABLE'}); }
+  });
   // .all intentionally rejects HEAD and all write verbs before touching research files.
   router.all('/', (req, res) => { void read(req, res); });
   return router;
