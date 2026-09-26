@@ -206,6 +206,14 @@ test('navigation metadata has five owners, actual final-main routes, and no dupl
   expect(UNIFIED_SEARCH_ROUTE_CONTRACT.marketRankings).toBe('/market-rankings');
   expect(navigationGroupMatches(group('assets'), '/coins/spot')).toBe(true);
   expect(navigationGroupMatches(group('technical'), '/auto-trading')).toBe(true);
+
+  const informationLabels = (group('information').menu ?? []).map((item) => item.label);
+  const settingsItems = group('settings').menu ?? [];
+  expect(informationLabels).not.toContain('연구센터');
+  expect(settingsItems).toEqual(expect.arrayContaining([
+    expect.objectContaining({ label: '연구센터', capability: 'canManageMembers' }),
+    expect.objectContaining({ label: '관리자 도구', capability: 'canManageMembers' }),
+  ]));
 });
 
 for (const width of [360, 390, 430, 1023, 1024, 1440]) {
@@ -234,6 +242,25 @@ for (const width of [360, 390, 430, 1023, 1024, 1440]) {
     assertClean();
   });
 }
+
+test('admin account keeps the ordinary user information menu and exposes research only under settings', async ({ page }) => {
+  const assertClean = await installApprovedRuntime(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/stocks/kr');
+
+  const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
+  await navigation.getByRole('button', { name: '정보', exact: true }).click();
+  const informationMenu = page.getByRole('menu', { name: '정보 메뉴' });
+  await expect(informationMenu).toBeVisible();
+  await expect(informationMenu.getByRole('menuitem', { name: '연구센터', exact: true })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+
+  await navigation.getByRole('button', { name: '설정', exact: true }).click();
+  const settingsMenu = page.getByRole('menu', { name: '설정 메뉴' });
+  await expect(settingsMenu.getByRole('menuitem', { name: '연구센터', exact: true })).toBeVisible();
+  await expect(settingsMenu.getByRole('menuitem', { name: '관리자 도구', exact: true })).toBeVisible();
+  assertClean();
+});
 
 test('keyboard, focus, Escape, Enter and Space operate anchored popovers', async ({ page }) => {
   const assertClean = await installApprovedRuntime(page);
