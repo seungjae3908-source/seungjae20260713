@@ -180,6 +180,41 @@ async function restoreCachedAuthState(page: Page, state: CachedAuthState) {
   }
 }
 
+function accessTokenFromUnknown(value: unknown, depth = 0): string | null {
+  if (depth > 6 || value == null) return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const token = accessTokenFromUnknown(item, depth + 1);
+      if (token) return token;
+    }
+    return null;
+  }
+  if (typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.access_token === 'string' && record.access_token.length > 20) {
+    return record.access_token;
+  }
+  for (const item of Object.values(record)) {
+    const token = accessTokenFromUnknown(item, depth + 1);
+    if (token) return token;
+  }
+  return null;
+}
+
+async function productionAccessToken(page: Page) {
+  const state = await page.context().storageState();
+  const originState = state.origins.find((entry) => entry.origin === productionOrigin);
+  for (const entry of originState?.localStorage ?? []) {
+    try {
+      const token = accessTokenFromUnknown(JSON.parse(entry.value));
+      if (token) return token;
+    } catch {
+      // Non-JSON localStorage entries are unrelated to Supabase auth.
+    }
+  }
+  throw new Error('PRODUCTION_QA_ACCESS_TOKEN_UNAVAILABLE');
+}
+
 async function login(
   page: Page,
   testInfo: TestInfo,
@@ -200,6 +235,10 @@ async function login(
       await restoreCachedAuthState(page, cached);
       await page.goto('/', { waitUntil: 'commit', timeout: LOGIN_READY_BUDGET_MS });
       await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: LOGIN_READY_BUDGET_MS });
+      // Supabase may rotate/refresh session material while the restored page boots.
+      // Refresh the in-memory cache after every successful reuse so later tests do
+      // not replay stale browser auth state.
+      authStateByViewport.set(cacheKey, await page.context().storageState());
       return;
     }
 
@@ -638,15 +677,19 @@ test.describe('Production comprehensive read-only QA', () => {
     await installSafety(page, blocked);
     await login(page, testInfo, diagnostics, blocked, 'telegram-runtime');
 
-    const result = await page.evaluate(async () => {
+    const accessToken = await productionAccessToken(page);
+    const result = await page.evaluate(async (token) => {
       const response = await fetch('/api/user-integrations', {
         method: 'GET',
         credentials: 'include',
-        headers: { Accept: 'application/json' },
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
       });
       const payload = await response.json().catch(() => null);
       return { status: response.status, payload };
-    });
+    }, accessToken);
     const root = result.payload && typeof result.payload === 'object'
       ? result.payload as Record<string, unknown>
       : {};
