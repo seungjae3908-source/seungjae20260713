@@ -112,6 +112,8 @@ type OrderDashboardItem = {
   orderType: 'market' | 'limit' | null;
   reduceOnly: boolean;
   state: string;
+  clientOrderId: string;
+  exchangeOrderId: string | null;
   requestedQuantity: number | null;
   remainingQuantity: number | null;
   filledQuantity: number;
@@ -314,6 +316,25 @@ function orderStateLabel(state: string): string {
     RECOVERY_REQUIRED: '재조정 필요',
   };
   return labels[state] ?? state;
+}
+
+function canonicalProviderOrderStatus(
+  item: OrderDashboardItem,
+  providerOrders: AiChartReadonlyOrder[] | null,
+): 'MATCHED' | 'PROVIDER_NOT_READ' | 'EXCHANGE_ID_MISSING' | 'NOT_IN_OPEN_ORDERS' {
+  if (providerOrders == null) return 'PROVIDER_NOT_READ';
+  const exchangeId = String(item.exchangeOrderId ?? '').trim();
+  if (!exchangeId) return 'EXCHANGE_ID_MISSING';
+  return providerOrders.some((order) => String(order.id ?? '').trim() === exchangeId)
+    ? 'MATCHED'
+    : 'NOT_IN_OPEN_ORDERS';
+}
+
+function providerOrderStatusLabel(status: ReturnType<typeof canonicalProviderOrderStatus>): string {
+  if (status === 'MATCHED') return 'Provider 원장 일치';
+  if (status === 'PROVIDER_NOT_READ') return 'Provider 원장 미조회';
+  if (status === 'EXCHANGE_ID_MISSING') return '거래소 주문 ID 미확인';
+  return '현재 미체결 원장에서 미확인';
 }
 
 function canCancelOrder(item: OrderDashboardItem): boolean {
@@ -1002,7 +1023,15 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                                   {providerLabel(item.exchange)} · 요청 {formatQuantity(item.requestedQuantity)} · 체결 {formatQuantity(item.filledQuantity)} · 잔량 {formatQuantity(item.remainingQuantity)}
                                 </p>
                               </div>
-                              <span className="rounded-full bg-secondary px-2 py-1 text-[8px] font-black">{item.accountMode ?? '미확인'}</span>
+                              <div className="flex flex-wrap justify-end gap-1">
+                                <span className="rounded-full bg-secondary px-2 py-1 text-[8px] font-black">{item.accountMode ?? '미확인'}</span>
+                                <span
+                                  data-testid={`ai-chart-order-provider-match-${item.id}`}
+                                  className="rounded-full border border-card-border px-2 py-1 text-[8px] font-black text-muted-foreground"
+                                >
+                                  {providerOrderStatusLabel(canonicalProviderOrderStatus(item, providerOpenOrders))}
+                                </span>
+                              </div>
                             </div>
                             {canAmendOrder(item) ? (
                               <div className={`mt-2 grid gap-2 ${isUsStockPriceOnlyAmend(item) ? 'grid-cols-1' : 'grid-cols-2'}`}>
