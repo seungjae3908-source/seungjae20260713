@@ -362,6 +362,58 @@ function exitExecutionPreflightIdentity(input: {
   ].join(':')).digest('hex');
 }
 
+const EXIT_EXECUTION_PACKAGE_TTL_MS = 3_000;
+const EXIT_EXECUTION_PACKAGE_MAX_ACCOUNT_AGE_MS = 5_000;
+
+function exitExecutionPackageIdentity(input: {
+  userId: string;
+  preflightIntentId: string;
+  riskIntentId: string;
+  approvalIntentId: string;
+  planId: string;
+  exitDraftId: string;
+  provider: AccountProvider;
+  market: string;
+  symbol: string;
+  percent: number;
+  positionQuantity: number | null;
+  availableQuantity: number;
+  exitQuantity: number;
+  side: 'buy' | 'sell';
+  preflightCheckedAt: string;
+  packageCheckedAt: string;
+  preflightReferencePrice: number;
+  packageReferencePrice: number;
+  issuedAt: string;
+  expiresAt: string;
+  blockers: string[];
+}) {
+  return createHash('sha256').update([
+    'ai-chart-exit-execution-package-v1',
+    input.userId,
+    input.preflightIntentId,
+    input.riskIntentId,
+    input.approvalIntentId,
+    input.planId,
+    input.exitDraftId,
+    input.provider,
+    input.market,
+    normalizedExitSymbol(input.symbol),
+    String(input.percent),
+    String(input.positionQuantity ?? 'missing'),
+    String(input.availableQuantity),
+    String(input.exitQuantity),
+    input.side,
+    input.preflightCheckedAt,
+    input.packageCheckedAt,
+    String(input.preflightReferencePrice),
+    String(input.packageReferencePrice),
+    input.issuedAt,
+    input.expiresAt,
+    [...input.blockers].sort().join(','),
+  ].join(':')).digest('hex');
+}
+
 function exitOpenOrderConflicts(
   openOrders: Array<{ market: string | null; symbol: string | null; side: string | null }> | null,
   market: string,
@@ -2051,6 +2103,319 @@ router.post('/positions/exit-preflight', async (req: AuthenticatedRequest, res) 
   }
 });
 
+
+router.post('/positions/exit-execution-package', async (req: AuthenticatedRequest, res) => {
+  const userId = req.member?.id ?? '';
+  const accessToken = req.accessToken ?? '';
+  if (!userId || !accessToken) return res.status(401).json({ ok: false, error: 'LOGIN_REQUIRED' });
+  if (req.body?.confirmed !== true) {
+    return res.status(409).json({
+      ok: false,
+      error: 'EXPLICIT_EXIT_EXECUTION_PACKAGE_CONFIRMATION_REQUIRED',
+      packagePrepared: false,
+      financialMutationPerformed: false,
+      orderSubmitted: false,
+      privateTradingMutationSent: false,
+      executionAuthority: 'NONE',
+    });
+  }
+
+  let provider: AccountProvider;
+  let market: string;
+  let symbol: string;
+  let percent: number;
+  let preflightIntentId: string;
+  let riskIntentId: string;
+  let approvalIntentId: string;
+  let planId: string;
+  let exitDraftId: string;
+  let expectedPositionQuantity: number | null;
+  let expectedAvailableQuantity: number;
+  let expectedExitQuantity: number;
+  let expectedSide: 'buy' | 'sell';
+  let riskCheckedAt: string;
+  let preflightCheckedAt: string;
+  let preflightReferencePrice: number;
+  let preflightEvaluatedAt: string;
+  let preflightExpiresAt: string;
+  let preflightBlockers: string[];
+
+  try {
+    provider = exitPreviewProvider(req.body?.provider);
+    market = String(req.body?.market ?? '').trim().toUpperCase();
+    symbol = String(req.body?.symbol ?? '').trim().toUpperCase();
+    percent = Number(req.body?.percent);
+    preflightIntentId = String(req.body?.preflightIntentId ?? '').trim().toLowerCase();
+    riskIntentId = String(req.body?.riskIntentId ?? '').trim().toLowerCase();
+    approvalIntentId = String(req.body?.approvalIntentId ?? '').trim().toLowerCase();
+    planId = String(req.body?.planId ?? '').trim().toLowerCase();
+    exitDraftId = String(req.body?.exitDraftId ?? '').trim().toLowerCase();
+    expectedPositionQuantity = req.body?.positionQuantity == null ? null : Number(req.body.positionQuantity);
+    expectedAvailableQuantity = Number(req.body?.availableQuantity);
+    expectedExitQuantity = Number(req.body?.quantity);
+    expectedSide = String(req.body?.side ?? '').trim().toLowerCase() as 'buy' | 'sell';
+    riskCheckedAt = String(req.body?.riskCheckedAt ?? '').trim();
+    preflightCheckedAt = String(req.body?.preflightCheckedAt ?? '').trim();
+    preflightReferencePrice = Number(req.body?.preflightReferencePrice);
+    preflightEvaluatedAt = String(req.body?.preflightEvaluatedAt ?? '').trim();
+    preflightExpiresAt = String(req.body?.preflightExpiresAt ?? '').trim();
+    preflightBlockers = Array.isArray(req.body?.preflightBlockers)
+      ? req.body.preflightBlockers.map((value: unknown) => String(value).trim()).filter(Boolean)
+      : [];
+
+    if (!['KR', 'US', 'UPBIT', 'BITGET'].includes(market)) throw new Error('EXIT_EXECUTION_PACKAGE_MARKET_UNSUPPORTED');
+    if (!normalizedExitSymbol(symbol)) throw new Error('EXIT_EXECUTION_PACKAGE_SYMBOL_REQUIRED');
+    if (![25, 50, 75, 100].includes(percent)) throw new Error('EXIT_EXECUTION_PACKAGE_PERCENT_UNSUPPORTED');
+    for (const [value, code] of [
+      [preflightIntentId, 'EXIT_EXECUTION_PACKAGE_PREFLIGHT_ID_INVALID'],
+      [riskIntentId, 'EXIT_EXECUTION_PACKAGE_RISK_ID_INVALID'],
+      [approvalIntentId, 'EXIT_EXECUTION_PACKAGE_APPROVAL_ID_INVALID'],
+      [planId, 'EXIT_EXECUTION_PACKAGE_PLAN_ID_INVALID'],
+      [exitDraftId, 'EXIT_EXECUTION_PACKAGE_DRAFT_ID_INVALID'],
+    ] as const) {
+      if (!/^[a-f0-9]{64}$/.test(value)) throw new Error(code);
+    }
+    if (expectedPositionQuantity != null
+      && (!Number.isFinite(expectedPositionQuantity) || expectedPositionQuantity <= 0)) {
+      throw new Error('EXIT_EXECUTION_PACKAGE_POSITION_QUANTITY_INVALID');
+    }
+    if (!Number.isFinite(expectedAvailableQuantity) || expectedAvailableQuantity <= 0) {
+      throw new Error('EXIT_EXECUTION_PACKAGE_AVAILABLE_QUANTITY_INVALID');
+    }
+    if (!Number.isFinite(expectedExitQuantity) || expectedExitQuantity <= 0) {
+      throw new Error('EXIT_EXECUTION_PACKAGE_EXIT_QUANTITY_INVALID');
+    }
+    if (expectedSide !== 'buy' && expectedSide !== 'sell') throw new Error('EXIT_EXECUTION_PACKAGE_SIDE_INVALID');
+    if (!Number.isFinite(preflightReferencePrice) || preflightReferencePrice <= 0) {
+      throw new Error('EXIT_EXECUTION_PACKAGE_REFERENCE_PRICE_INVALID');
+    }
+    for (const value of [riskCheckedAt, preflightCheckedAt, preflightEvaluatedAt, preflightExpiresAt]) {
+      if (!Number.isFinite(Date.parse(value))) throw new Error('EXIT_EXECUTION_PACKAGE_TIMESTAMP_INVALID');
+    }
+    const now = Date.now();
+    if (Date.parse(preflightEvaluatedAt) > now + 5_000
+      || Date.parse(preflightExpiresAt) <= Date.parse(preflightEvaluatedAt)
+      || Date.parse(preflightExpiresAt) <= now) {
+      throw new Error('EXIT_EXECUTION_PACKAGE_PREFLIGHT_EXPIRED');
+    }
+    if (preflightBlockers.length !== 0 || req.body?.preflightPassed !== true) {
+      throw new Error('EXIT_EXECUTION_PACKAGE_PRIOR_PREFLIGHT_NOT_PASSED');
+    }
+    if ((market === 'UPBIT' && provider !== 'upbit')
+      || (market === 'BITGET' && provider !== 'bitget')
+      || ((market === 'KR' || market === 'US') && provider !== 'toss' && provider !== 'kiwoom')) {
+      throw new Error('EXIT_EXECUTION_PACKAGE_PROVIDER_MARKET_MISMATCH');
+    }
+
+    const claimedPreflightIntentId = exitExecutionPreflightIdentity({
+      userId,
+      riskIntentId,
+      approvalIntentId,
+      planId,
+      exitDraftId,
+      provider,
+      market,
+      symbol,
+      percent,
+      positionQuantity: expectedPositionQuantity,
+      availableQuantity: expectedAvailableQuantity,
+      exitQuantity: expectedExitQuantity,
+      side: expectedSide,
+      riskCheckedAt,
+      preflightCheckedAt,
+      referencePrice: preflightReferencePrice,
+      evaluatedAt: preflightEvaluatedAt,
+      expiresAt: preflightExpiresAt,
+      blockers: preflightBlockers,
+    });
+    if (claimedPreflightIntentId !== preflightIntentId) {
+      throw new Error('EXIT_EXECUTION_PACKAGE_PREFLIGHT_ID_MISMATCH');
+    }
+  } catch (error) {
+    return errorResponse(res, error);
+  }
+
+  const readers = exitPreviewReadersFactoryForTests?.() ?? createVaultBackedAccountReaders();
+  const reader = readers[provider];
+  if (!reader) return res.status(503).json({ ok: false, error: 'EXIT_EXECUTION_PACKAGE_READER_UNAVAILABLE' });
+  const { repository } = context(req);
+  const controller = new AbortController();
+  const abort = () => controller.abort(new Error('EXIT_EXECUTION_PACKAGE_ABORTED'));
+  req.once('aborted', abort);
+  res.once('close', abort);
+
+  try {
+    const [snapshot, connection, policy, persistentGlobalStop] = await Promise.all([
+      reader({ userId, accessToken }, controller.signal),
+      repository.getConnection(userId, provider as TradingExchange),
+      repository.getPolicy(userId),
+      repository.getGlobalEmergencyStop(),
+    ]);
+    if (controller.signal.aborted || res.writableEnded) return undefined;
+
+    const blockers: string[] = [];
+    if (snapshot.readOnly !== true
+      || snapshot.connected !== true
+      || snapshot.stale === true
+      || snapshot.orderRequests !== 0
+      || snapshot.cancelRequests !== 0
+      || snapshot.amendRequests !== 0
+      || snapshot.transferRequests !== 0
+      || snapshot.withdrawalRequests !== 0
+      || snapshot.liveTradingEnabled !== false
+      || snapshot.autoTradingEnabled !== false) {
+      blockers.push(snapshot.errorCode ?? 'EXIT_EXECUTION_PACKAGE_ACCOUNT_SNAPSHOT_NOT_FRESH');
+    }
+
+    const matches = (snapshot.positions ?? []).filter((position) => exitPositionMatches(position, market, symbol));
+    const position = matches.length === 1 ? matches[0]! : null;
+    if (matches.length > 1) blockers.push('EXIT_EXECUTION_PACKAGE_POSITION_AMBIGUOUS');
+    else if (!position) blockers.push('EXIT_EXECUTION_PACKAGE_POSITION_NOT_FOUND');
+
+    let currentPositionQuantity: number | null = null;
+    let quantities: ReturnType<typeof exitPreviewQuantity> | null = null;
+    let side: 'buy' | 'sell' = expectedSide;
+    let packageReferencePrice: number | null = null;
+    if (position) {
+      try {
+        quantities = exitPreviewQuantity(position, percent, market, provider);
+        side = exitPreviewSide(provider, position);
+        currentPositionQuantity = position.quantity == null ? null : Number(position.quantity);
+        packageReferencePrice = Number(position.currentPrice);
+        if (currentPositionQuantity !== expectedPositionQuantity
+          || quantities.availableQuantity !== expectedAvailableQuantity
+          || quantities.exitQuantity !== expectedExitQuantity
+          || side !== expectedSide) {
+          blockers.push('EXIT_EXECUTION_PACKAGE_POSITION_CHANGED');
+        }
+        if (!Number.isFinite(packageReferencePrice) || Number(packageReferencePrice) <= 0) {
+          blockers.push('EXIT_EXECUTION_PACKAGE_CURRENT_PRICE_UNAVAILABLE');
+          packageReferencePrice = null;
+        }
+      } catch (error) {
+        blockers.push(error instanceof Error ? error.message : 'EXIT_EXECUTION_PACKAGE_POSITION_INVALID');
+      }
+    }
+
+    const executionReadiness = liveExecutionReadinessForConnection(
+      provider as TradingExchange,
+      connection,
+      credentialConfigurationStatus().encryptionConfigured,
+    );
+    blockers.push(...executionReadiness.blockers);
+    if (policy.emergencyStopped
+      || persistentGlobalStop
+      || process.env.TRADING_EMERGENCY_STOP === 'true') {
+      blockers.push('EXIT_EXECUTION_PACKAGE_EMERGENCY_STOP_ACTIVE');
+    }
+
+    const checkedAtMs = Date.parse(snapshot.checkedAt);
+    const now = Date.now();
+    if (!Number.isFinite(checkedAtMs)
+      || checkedAtMs > now + 5_000
+      || now - checkedAtMs > EXIT_EXECUTION_PACKAGE_MAX_ACCOUNT_AGE_MS) {
+      blockers.push('EXIT_EXECUTION_PACKAGE_ACCOUNT_EVIDENCE_STALE');
+    }
+
+    const conflictingOpenOrders = exitOpenOrderConflicts(snapshot.openOrders, market, symbol);
+    if (conflictingOpenOrders == null) blockers.push('EXIT_EXECUTION_PACKAGE_PROVIDER_OPEN_ORDERS_UNAVAILABLE');
+    else if (conflictingOpenOrders > 0) blockers.push('EXIT_EXECUTION_PACKAGE_PROVIDER_OPEN_ORDER_PRESENT');
+
+    const uniqueBlockers = [...new Set(blockers)];
+    const packageReady = uniqueBlockers.length === 0
+      && packageReferencePrice != null
+      && quantities != null
+      && position != null;
+    const issuedAt = new Date().toISOString();
+    const expiresAt = new Date(Date.parse(issuedAt) + EXIT_EXECUTION_PACKAGE_TTL_MS).toISOString();
+    const effectiveReferencePrice = packageReferencePrice ?? 0;
+    const referencePriceDriftPercent = packageReferencePrice != null && preflightReferencePrice > 0
+      ? Math.abs(packageReferencePrice - preflightReferencePrice) / preflightReferencePrice * 100
+      : null;
+    const executionPackageId = exitExecutionPackageIdentity({
+      userId,
+      preflightIntentId,
+      riskIntentId,
+      approvalIntentId,
+      planId,
+      exitDraftId,
+      provider,
+      market,
+      symbol,
+      percent,
+      positionQuantity: currentPositionQuantity,
+      availableQuantity: quantities?.availableQuantity ?? expectedAvailableQuantity,
+      exitQuantity: quantities?.exitQuantity ?? expectedExitQuantity,
+      side,
+      preflightCheckedAt,
+      packageCheckedAt: snapshot.checkedAt,
+      preflightReferencePrice,
+      packageReferencePrice: effectiveReferencePrice,
+      issuedAt,
+      expiresAt,
+      blockers: uniqueBlockers,
+    });
+
+    return res.json({
+      ok: true,
+      canonicalExitExecutionPackage: {
+        schemaVersion: 'ai-chart-exit-execution-package-v1',
+        state: packageReady ? 'BOUND_NON_EXECUTING_PACKAGE' : 'BLOCKED_NON_EXECUTING',
+        executionPackageId,
+        preflightIntentId,
+        riskIntentId,
+        approvalIntentId,
+        planId,
+        exitDraftId,
+        provider,
+        market,
+        symbol: normalizedExitSymbol(symbol),
+        accountMode: 'live',
+        orderType: 'market',
+        side,
+        quantity: quantities?.exitQuantity ?? expectedExitQuantity,
+        percent,
+        positionQuantity: currentPositionQuantity,
+        availableQuantity: quantities?.availableQuantity ?? expectedAvailableQuantity,
+        reduceOnly: true,
+        preflightReferencePrice,
+        packageReferencePrice,
+        referencePriceDriftPercent,
+        preflightCheckedAt,
+        packageCheckedAt: snapshot.checkedAt,
+        issuedAt,
+        expiresAt,
+        providerOpenOrdersChecked: conflictingOpenOrders != null,
+        conflictingOpenOrderCount: conflictingOpenOrders,
+        blockers: uniqueBlockers,
+        packageReady,
+        finalProviderOrderbookRiskRequired: true,
+        providerSubmissionRequired: true,
+        nextOwner: 'CANONICAL_EXIT_PROVIDER_SUBMISSION_OWNER',
+        executionAuthority: 'NONE',
+        executable: false,
+        providerRequestPrepared: false,
+        orderSubmissionPerformed: false,
+        financialMutationPerformed: false,
+      },
+      executionReadiness,
+      packagePrepared: true,
+      privateAccountReadPerformed: true,
+      financialMutationPerformed: false,
+      orderSubmitted: false,
+      orderCanceled: false,
+      orderAmended: false,
+      privateTradingMutationSent: false,
+      executionAuthority: 'NONE',
+    });
+  } catch (error) {
+    if (controller.signal.aborted || res.writableEnded) return undefined;
+    return errorResponse(res, error);
+  } finally {
+    req.removeListener('aborted', abort);
+    res.removeListener('close', abort);
+  }
+});
 
 router.get('/orders', async (req: AuthenticatedRequest, res) => {
   try {

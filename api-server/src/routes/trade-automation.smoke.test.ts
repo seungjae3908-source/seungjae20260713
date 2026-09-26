@@ -873,9 +873,17 @@ test('exit preview re-reads the real position in read-only mode and never submit
         quantity: number;
         percent: number;
         reduceOnly: boolean;
+        provider: 'toss' | 'kiwoom' | 'upbit' | 'bitget';
+        market: string;
+        symbol: string;
+        side: 'buy' | 'sell';
+        positionQuantity: number | null;
+        availableQuantity: number;
         referencePrice: number | null;
         riskCheckedAt: string;
         preflightCheckedAt: string;
+        evaluatedAt: string;
+        expiresAt: string;
         blockers: string[];
         preflightPassed: boolean;
         finalProviderOrderbookRiskRequired: boolean;
@@ -922,6 +930,115 @@ test('exit preview re-reads the real position in read-only mode and never submit
     assert.equal(preflightBody.orderAmended, false);
     assert.equal(preflightBody.privateTradingMutationSent, false);
     assert.equal(preflightBody.executionAuthority, 'NONE');
+
+    const executionPackageRequest = {
+      preflightIntentId: preflightBody.canonicalExitPreflight.preflightIntentId,
+      riskIntentId: preflightBody.canonicalExitPreflight.riskIntentId,
+      approvalIntentId: preflightBody.canonicalExitPreflight.approvalIntentId,
+      planId: preflightBody.canonicalExitPreflight.planId,
+      exitDraftId: preflightBody.canonicalExitPreflight.exitDraftId,
+      provider: preflightBody.canonicalExitPreflight.provider,
+      market: preflightBody.canonicalExitPreflight.market,
+      symbol: preflightBody.canonicalExitPreflight.symbol,
+      percent: preflightBody.canonicalExitPreflight.percent,
+      positionQuantity: preflightBody.canonicalExitPreflight.positionQuantity,
+      availableQuantity: preflightBody.canonicalExitPreflight.availableQuantity,
+      quantity: preflightBody.canonicalExitPreflight.quantity,
+      side: preflightBody.canonicalExitPreflight.side,
+      riskCheckedAt: preflightBody.canonicalExitPreflight.riskCheckedAt,
+      preflightCheckedAt: preflightBody.canonicalExitPreflight.preflightCheckedAt,
+      preflightReferencePrice: preflightBody.canonicalExitPreflight.referencePrice,
+      preflightEvaluatedAt: preflightBody.canonicalExitPreflight.evaluatedAt,
+      preflightExpiresAt: preflightBody.canonicalExitPreflight.expiresAt,
+      preflightBlockers: preflightBody.canonicalExitPreflight.blockers,
+      preflightPassed: preflightBody.canonicalExitPreflight.preflightPassed,
+    };
+
+    const missingExecutionPackageConfirmation = await fetch(`${baseUrl}/api/trade-automation/positions/exit-execution-package`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(executionPackageRequest),
+    });
+    assert.equal(missingExecutionPackageConfirmation.status, 409);
+    assert.equal(reads, 6);
+
+    const executionPackageResponse = await fetch(`${baseUrl}/api/trade-automation/positions/exit-execution-package`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, ...executionPackageRequest }),
+    });
+    assert.equal(executionPackageResponse.status, 200);
+    const executionPackageBody = await executionPackageResponse.json() as {
+      canonicalExitExecutionPackage: {
+        schemaVersion: string;
+        state: string;
+        executionPackageId: string;
+        preflightIntentId: string;
+        riskIntentId: string;
+        approvalIntentId: string;
+        planId: string;
+        exitDraftId: string;
+        provider: string;
+        market: string;
+        symbol: string;
+        side: string;
+        quantity: number;
+        percent: number;
+        positionQuantity: number | null;
+        availableQuantity: number;
+        reduceOnly: boolean;
+        preflightReferencePrice: number;
+        packageReferencePrice: number | null;
+        referencePriceDriftPercent: number | null;
+        blockers: string[];
+        packageReady: boolean;
+        finalProviderOrderbookRiskRequired: boolean;
+        providerSubmissionRequired: boolean;
+        nextOwner: string;
+        executionAuthority: string;
+        executable: boolean;
+        providerRequestPrepared: boolean;
+        orderSubmissionPerformed: boolean;
+        financialMutationPerformed: boolean;
+      };
+      packagePrepared: boolean;
+      privateAccountReadPerformed: boolean;
+      financialMutationPerformed: boolean;
+      orderSubmitted: boolean;
+      orderCanceled: boolean;
+      orderAmended: boolean;
+      privateTradingMutationSent: boolean;
+      executionAuthority: string;
+    };
+    assert.equal(reads, 7);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.schemaVersion, 'ai-chart-exit-execution-package-v1');
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.state, 'BOUND_NON_EXECUTING_PACKAGE');
+    assert.match(executionPackageBody.canonicalExitExecutionPackage.executionPackageId, /^[0-9a-f]{64}$/u);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.preflightIntentId, preflightBody.canonicalExitPreflight.preflightIntentId);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.quantity, 5);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.percent, 25);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.reduceOnly, true);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.preflightReferencePrice, 72_000);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.packageReferencePrice, 72_000);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.referencePriceDriftPercent, 0);
+    assert.deepEqual(executionPackageBody.canonicalExitExecutionPackage.blockers, []);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.packageReady, true);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.finalProviderOrderbookRiskRequired, true);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.providerSubmissionRequired, true);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.nextOwner, 'CANONICAL_EXIT_PROVIDER_SUBMISSION_OWNER');
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.executionAuthority, 'NONE');
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.executable, false);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.providerRequestPrepared, false);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.orderSubmissionPerformed, false);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.financialMutationPerformed, false);
+    assert.equal(executionPackageBody.packagePrepared, true);
+    assert.equal(executionPackageBody.privateAccountReadPerformed, true);
+    assert.equal(executionPackageBody.financialMutationPerformed, false);
+    assert.equal(executionPackageBody.orderSubmitted, false);
+    assert.equal(executionPackageBody.orderCanceled, false);
+    assert.equal(executionPackageBody.orderAmended, false);
+    assert.equal(executionPackageBody.privateTradingMutationSent, false);
+    assert.equal(executionPackageBody.executionAuthority, 'NONE');
   } finally {
     await repository.deleteConnection(USER, 'toss');
     for (const key of liveGateKeys) {
