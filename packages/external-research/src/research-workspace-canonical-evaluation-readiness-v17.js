@@ -69,7 +69,7 @@ export function validateCanonicalEvaluationConfigV17(config,{currentSha,review,d
     if(Object.keys(config.runtimeBindings).sort().join(',')!==Object.keys(BINDINGS).sort().join(',')
       ||Object.keys(BINDINGS).some(k=>!bindingValid(config.runtimeBindings[k],k,currentSha)))reasons.push('CANONICAL_RUNTIME_BINDINGS_INCOMPLETE');
     if(!exact(config.authority,['providerCalls','compilerRuns','backtestRuns','automaticAdoption','profitabilityProven','liveTrading','autoTrading','realOrderEnabled','privateTradingApiAllowed','executionAuthority'])
-      ||JSON.stringify(config.authority)!==JSON.stringify(AUTH))reasons.push('EVALUATION_CONFIG_AUTHORITY_INVALID');
+      ||Object.keys(AUTH).some(k=>config.authority[k]!==AUTH[k]))reasons.push('EVALUATION_CONFIG_AUTHORITY_INVALID');
     const core=Object.fromEntries(Object.entries(config).filter(([k])=>k!=='configDigest'));
     if(config.configDigest!==sha(core))reasons.push('EVALUATION_CONFIG_DIGEST_MISMATCH');
   }
