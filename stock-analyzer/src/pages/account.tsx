@@ -28,9 +28,12 @@ export default function AccountPage() {
       if (register) {
         await auth.signUp(name, password);
         setNotice('가입 신청이 완료되었습니다. 관리자 승인 후 이용할 수 있습니다.');
+        setPassword('');
+        setConfirm('');
       } else {
         await auth.signIn(name, password);
         setNotice('로그인되었습니다.');
+        setPassword('');
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '계정 처리에 실패했습니다.');
@@ -48,7 +51,7 @@ export default function AccountPage() {
     </button>
   ) : undefined;
 
-  return <div className="flex h-full min-h-0 flex-col overflow-y-auto bg-background">
+  return <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background" data-testid="account-shell">
     <CenteredPageHeader
       title="계정"
       leading={backButton}
@@ -59,7 +62,12 @@ export default function AccountPage() {
         '거래키 저장만으로 실주문이 활성화되지는 않습니다.',
       ]}
     />
-    <main className="mx-auto w-full max-w-3xl min-w-0 flex-1 px-3 pb-28 pt-4 sm:px-5 sm:pt-5">
+    <main data-testid="account-scroll-content" className="mx-auto min-h-0 w-full max-w-4xl min-w-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-5 pt-4 sm:px-5 sm:pt-5">
+      {auth.bootstrapError && <section role="alert" data-testid="account-bootstrap-error" className="mb-4 rounded-2xl border border-warning/30 bg-warning/10 p-4">
+        <p className="text-sm font-bold text-warning">계정 상태를 불러오지 못했습니다.</p>
+        <p className="mt-1 text-sm leading-6 text-muted-foreground">{auth.bootstrapError}</p>
+        <button type="button" onClick={() => auth.retryBootstrap()} className="mt-3 min-h-11 rounded-xl border border-warning/40 px-4 text-sm font-semibold text-warning">다시 확인</button>
+      </section>}
       {!auth.configured && <Card><p className="text-center font-bold text-destructive">계정 저장소 설정이 필요합니다.</p><p className="mt-2 text-center text-sm text-muted-foreground">계정 저장소 연결 정보를 관리자 설정에 등록해 주세요.</p></Card>}
       {auth.loading && <Card><p className="text-center text-sm font-medium">계정 상태를 확인하고 있습니다.</p></Card>}
       {!auth.loading && auth.user ? <Card>
@@ -70,16 +78,16 @@ export default function AccountPage() {
           <span data-testid="membership-label" className="mt-2 inline-flex rounded-full bg-secondary px-3 py-1 text-xs font-semibold">{MEMBER_TIER_LABELS[auth.membershipLevel]}</span>
         </div>
         {stateMessage && <div className="mt-4 flex items-center justify-center gap-2 rounded-2xl bg-warning/10 p-4 text-center text-sm font-semibold text-warning"><Clock3 className="h-5 w-5 shrink-0" /><span className="min-w-0 break-words">{stateMessage}</span></div>}
-        {auth.isApproved && <p className="mt-4 rounded-2xl bg-positive/10 p-4 text-center text-sm font-semibold text-positive">현재 등급에 허용된 기능을 사용할 수 있습니다.</p>}
-        {auth.isAdmin && <button type="button" onClick={() => navigate('/admin')} className="mt-4 min-h-11 w-full rounded-2xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground">회원 관리</button>}
-        <button type="button" onClick={() => void auth.signOut()} className="mt-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl border border-card-border px-4 py-3 text-sm font-semibold"><LogOut className="h-4 w-4" />로그아웃</button>
+        {auth.isApproved && <p className="mt-4 rounded-xl bg-positive/10 p-3 text-center text-sm font-semibold text-positive">계정이 정상적으로 승인되어 있습니다.</p>}
+        {auth.isAdmin && <button type="button" onClick={() => navigate('/admin')} className="mt-4 min-h-11 w-full rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground">회원 관리</button>}
+        <button type="button" onClick={() => void auth.signOut()} className="mt-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-card-border px-4 py-3 text-sm font-semibold"><LogOut className="h-4 w-4" />로그아웃</button>
       </Card> : !auth.loading && auth.configured && <Card>
         <div className="flex rounded-2xl bg-secondary p-1"><button type="button" aria-label="로그인 탭" aria-pressed={!register} onClick={() => setRegister(false)} className={`min-h-11 flex-1 rounded-xl px-3 text-sm font-semibold ${!register ? 'bg-card shadow' : ''}`}>로그인</button><button type="button" aria-label="회원가입 탭" aria-pressed={register} onClick={() => setRegister(true)} className={`min-h-11 flex-1 rounded-xl px-3 text-sm font-semibold ${register ? 'bg-card shadow' : ''}`}>회원가입</button></div>
         <form onSubmit={submit} className="mt-5 space-y-4">
           <Field label="아이디"><input value={name} onChange={(e) => setName(e.target.value)} minLength={2} maxLength={20} required autoComplete="username" className="input" placeholder="한글·영문·숫자 2~20자" /></Field>
           <Field label="비밀번호"><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} maxLength={72} required autoComplete={register ? 'new-password' : 'current-password'} className="input" placeholder="8자 이상" /></Field>
           {register && <Field label="비밀번호 확인"><input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} minLength={8} required className="input" placeholder="비밀번호 다시 입력" /></Field>}
-          <button type="submit" disabled={busy} className="flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3.5 text-sm font-semibold text-primary-foreground disabled:opacity-50">{register ? <UserPlus className="h-4 w-4" /> : <LogIn className="h-4 w-4" />}{busy ? '처리 중...' : register ? '가입 신청' : '로그인'}</button>
+          <button type="submit" disabled={busy} className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3.5 text-sm font-semibold text-primary-foreground disabled:opacity-50">{register ? <UserPlus className="h-4 w-4" /> : <LogIn className="h-4 w-4" />}{busy ? '처리 중...' : register ? '가입 신청' : '로그인'}</button>
         </form>
       </Card>}
       {!auth.loading && auth.user && auth.can('canAccessBasicInfo') ? <>
@@ -92,5 +100,5 @@ export default function AccountPage() {
   </div>;
 }
 
-function Card({ children }: { children: React.ReactNode }) { return <section className="min-w-0 rounded-2xl border border-card-border bg-card p-4 shadow-sm sm:p-5">{children}</section>; }
+function Card({ children }: { children: React.ReactNode }) { return <section className="min-w-0 rounded-xl border border-card-border bg-card p-4 shadow-sm sm:p-5">{children}</section>; }
 function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="block min-w-0"><span className="text-xs font-semibold text-muted-foreground">{label}</span><div className="mt-2 min-w-0 [&_.input]:h-12 [&_.input]:w-full [&_.input]:min-w-0 [&_.input]:rounded-2xl [&_.input]:border [&_.input]:border-card-border [&_.input]:bg-background [&_.input]:px-4 [&_.input]:text-sm [&_.input]:font-medium [&_.input]:outline-none [&_.input]:focus:border-primary">{children}</div></label>; }
