@@ -299,9 +299,10 @@ test('canonical trading order event maps to user execution event with owner chec
   assert.equal(event?.metadata.actualSlippagePercent, 0.6993);
   const message = renderUserExecutionTelegramMessage(event!);
   assert.match(message, /자동매매 체결 근거/);
+  assert.match(message, /신호\/행동: BUY · ORDER_FILLED/);
   assert.match(message, /거래량 증가/);
-  assert.match(message, /TP1 75,000/);
-  assert.match(message, /손절\/무효: 70,000/);
+  assert.match(message, /익절 계획: TP1 75,000 \(\+4\.90%\) · TP2 78,000 \(\+9\.09%\)/);
+  assert.match(message, /손절\/무효: 70,000 \(-2\.10%\)/);
   assert.match(message, /수수료: 1,200 KRW/);
   assert.match(message, /실제 슬리피지: 0\.6993%/);
   assert.equal(maskBrokerAccount('12'), '****12');
