@@ -855,6 +855,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
               <section data-testid="ai-chart-mobile-position" className="min-w-0">
                 {hasSelection ? (
                   <AiChartPositionPanel
+                    selection={selection}
                     market={selection.market}
                     symbol={selection.symbol || selection.ticker}
                     chartPrice={null}
