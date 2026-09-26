@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import type { PaperJournalRepository, StoredPaperJournalRecord } from '../../services/paper-journal.types';
 import type { TradingExchange } from '../../services/trade-automation.types';
-import type { UnifiedTradeOrder } from '../../services/unified-trade-journal.service';
+import { costEvidenceFromValues, type UnifiedTradeOrder } from '../../services/unified-trade-journal.service';
 import type { MemberTier } from '../../../../packages/member-access/src/index.js';
 import { manualPortfolioEvent, UserBrokerTelegramService } from './user-broker-telegram.service';
 import type { PortfolioSyncSink, UserExecutionEvent } from './user-broker-telegram.types';
@@ -46,6 +46,8 @@ function tradePayload(event: UserExecutionEvent): UnifiedTradeOrder | null {
   const broker = brokerName(event.brokerConnectionRef);
   const isExit = event.side === 'sell' || event.side === 'short' || event.type === 'TAKE_PROFIT_FILLED' || event.type === 'STOP_FILLED';
   const status: UnifiedTradeOrder['status'] = event.type === 'ORDER_PARTIALLY_FILLED' ? 'PARTIALLY_FILLED' : 'FILLED';
+  const fees = finite(event.metadata.feeAmount);
+  const tax = finite(event.metadata.taxAmount);
   return {
     schemaVersion: 1,
     recordType: 'unified_trade_order',
@@ -69,8 +71,9 @@ function tradePayload(event: UserExecutionEvent): UnifiedTradeOrder | null {
     filledQuantity,
     remainingQuantity,
     averageFillPrice,
-    fees: finite(event.metadata.feeAmount) ?? 0,
-    tax: finite(event.metadata.taxAmount) ?? 0,
+    fees,
+    tax,
+    costEvidence: costEvidenceFromValues(fees, tax, 'CANONICAL_ORDER_RECORD'),
     currency,
     status,
     strategy: event.strategy,
@@ -143,7 +146,7 @@ export async function queueManualPortfolioNotifications(
   userId: string,
   uploaded: StoredPaperJournalRecord[],
   service: UserBrokerTelegramService,
-  membership: MemberTier = 'admin',
+  membership: MemberTier = 'pending',
 ) {
   let queued = 0;
   for (const record of uploaded) {

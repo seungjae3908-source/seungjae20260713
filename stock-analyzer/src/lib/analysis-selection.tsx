@@ -27,6 +27,7 @@ export type AnalysisSelection = {
   displayName: string;
   timeframe: string;
   searchRunId?: string;
+  signalId?: string;
   signalScore?: number;
   signalRank?: number;
   confidence?: number;
@@ -41,18 +42,29 @@ export type AnalysisSelection = {
 const STORAGE_KEY = 'sa-analysis-selection-v1';
 
 function finite(value: unknown): number | undefined {
-  const parsed = Number(value);
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  if (!normalized) return undefined;
+  const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function finiteOrNull(value: unknown): number | null {
-  if (value == null) return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  const parsed = finite(value);
+  return parsed == null ? null : parsed;
 }
 
 function cleanString(value: unknown, max = 120): string {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
+}
+
+function normalizeSelectedAt(value: unknown): string | null {
+  const raw = cleanString(value, 40);
+  if (!raw) return null;
+  const timestamp = Date.parse(raw);
+  if (!Number.isFinite(timestamp) || timestamp > Date.now()) return null;
+  return new Date(timestamp).toISOString();
 }
 
 function normalizePricePlan(value: unknown): AnalysisPricePlan | undefined {
@@ -89,7 +101,8 @@ export function normalizeAnalysisSelection(value: unknown): AnalysisSelection | 
     ? row.market as AnalysisMarket
     : null;
   const ticker = cleanString(row.ticker || row.symbol, 32).toUpperCase();
-  if (!market || !ticker) return null;
+  const selectedAt = normalizeSelectedAt(row.selectedAt);
+  if (!market || !ticker || !selectedAt) return null;
   const textList = (item: unknown) => Array.isArray(item)
     ? item.map((part) => cleanString(part, 160)).filter(Boolean).slice(0, 20)
     : undefined;
@@ -104,6 +117,7 @@ export function normalizeAnalysisSelection(value: unknown): AnalysisSelection | 
     displayName: cleanString(row.displayName || ticker, 120),
     timeframe: cleanString(row.timeframe || '1D', 12),
     searchRunId: cleanString(row.searchRunId, 80) || undefined,
+    signalId: cleanString(row.signalId, 120) || undefined,
     signalScore: finite(row.signalScore),
     signalRank: finite(row.signalRank),
     confidence: finite(row.confidence),
@@ -112,7 +126,7 @@ export function normalizeAnalysisSelection(value: unknown): AnalysisSelection | 
     pricePlan: normalizePricePlan(row.pricePlan),
     matchedSignals: textList(row.matchedSignals),
     reasons: textList(row.reasons),
-    selectedAt: cleanString(row.selectedAt, 40) || new Date().toISOString(),
+    selectedAt,
   };
 }
 
@@ -135,7 +149,9 @@ export function selectionFromSearch(search: string): AnalysisSelection | null {
     ticker: params.get('ticker'),
     displayName: params.get('name'),
     timeframe: params.get('timeframe'),
+    action: params.get('action'),
     searchRunId: params.get('searchRunId'),
+    signalId: params.get('signalId'),
     selectedAt: new Date().toISOString(),
   });
 }
@@ -150,6 +166,8 @@ export function selectionQuery(selection: AnalysisSelection): string {
     timeframe: selection.timeframe,
   });
   if (selection.searchRunId) params.set('searchRunId', selection.searchRunId);
+  if (selection.signalId) params.set('signalId', selection.signalId);
+  if (selection.action) params.set('action', selection.action);
   return params.toString();
 }
 

@@ -1,5 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import './paper-flat-recovery-backend.test';
+import { applyPaperTradingAction, createPaperTradingState } from '../../../api-server/src/services/paper-trading-engine.service';
+import { manualCanonicalFixture } from '../../../api-server/src/services/manual-paper-canonical-contract.fixture';
+import { manualPaperEvidenceSha256 } from '../../../api-server/src/services/manual-paper-canonical-contract.service';
 import {
   PAPER_STORAGE_KEY,
   clearPaperState,
@@ -29,6 +33,35 @@ test('saves and restores state', () => {
   state.account.cashBalance = 9_900;
   savePaperState(storage, state);
   assert.equal(loadPaperState(storage).state.account.cashBalance, 9_900);
+});
+test('existing browser storage round-trips enriched manual settlement without granting genuine evidence (test-only owner stub)', async () => {
+  const state = createPaperTradingState(10_000, NOW);
+  const f = await manualCanonicalFixture(state);
+  const opened = applyPaperTradingAction(state, {
+    type: 'place_order', eventId: 'storage-canonical-entry',
+    request: { symbol: f.canonicalIdentity.symbol, side: 'long', leverage: f.canonicalIdentity.leverage,
+      stopLossPrice: f.evidence.candidate.signal.learningSnapshot.stopLoss, orderType: 'market', canonicalIdentity: f.canonicalIdentity },
+    market: { warnings: [] }, contractRules: { warnings: [] }, riskInput: {},
+  } as any, f.now, f.evidence);
+  const settled = applyPaperTradingAction(opened.state, {
+    type: 'close_position', eventId: 'storage-canonical-exit', positionId: opened.position.id,
+    market: { symbol: f.canonicalIdentity.symbol, status: 'live', bidPrice: 105,
+      updatedAt: f.exitNow.toISOString(), warnings: [] },
+  } as any, f.exitNow, { ...f.exitEvidence, paperStateSha256: manualPaperEvidenceSha256(opened.state) });
+  const canonical = settled.state.journal[0].canonicalPaper;
+  const storage = new MemoryStorage();
+  savePaperState(storage, settled.state as any);
+  const loaded = loadPaperState(storage);
+  assert.equal(loaded.recovered, false);
+  for (const record of [loaded.state.positions[0], loaded.state.fills.at(-1), loaded.state.journal[0]] as any[]) {
+    assert.deepEqual(record.canonicalPaper.settlement, canonical.settlement);
+    assert.deepEqual(record.canonicalPaper.identity, f.canonicalIdentity);
+    assert.deepEqual(record.canonicalPaper.fullCost, canonical.fullCost);
+    assert.equal(record.canonicalPaper.naturalSampleCredit, 0);
+    assert.equal(record.canonicalPaper.executionAuthority, 'NONE');
+  }
+  assert.match(canonical.settlement.settlementId, /^[0-9a-f]{64}$/);
+  assert.equal(loaded.state.journal[0].netPnl, canonical.settlement.netPnl);
 });
 test('uses named storage key', () => {
   const storage = new MemoryStorage();

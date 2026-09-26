@@ -5,7 +5,7 @@ import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Search, TrendingDown, TrendingUp, X, Star } from "lucide-react";
 import { BottomNav } from "@/components/bottom-nav";
-import { CoinInfo } from "@/pages/stock-info";
+import { CoinInfo } from "@/components/lazy-coin-info";
 import {
   displayStockName,
   formatAppPercent,

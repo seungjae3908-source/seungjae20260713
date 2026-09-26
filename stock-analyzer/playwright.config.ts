@@ -20,7 +20,7 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   fullyParallel: false,
   workers: process.env.CI ? 1 : undefined,
-  retries: stagingMode ? 0 : process.env.CI ? 1 : 0,
+  retries: 0,
   reporter: stagingMode ? [
     ['list'],
     ['json', { outputFile: path.join(artifactDir, 'playwright-report.json') }],

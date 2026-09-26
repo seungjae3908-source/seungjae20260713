@@ -46,7 +46,7 @@ function fixture(route: MarketInformationRoute): MarketInformationResponse {
     fetchedAt: NOW,
     partial: false,
     sections: {
-      indices: { status: 'ready', data: [{ key: 'INDEX', label: '지수', value: 0, changePercent: null }], meta, message: null },
+      indices: { status: 'ready', data: [{ key: 'INDEX', label: '지수', value: 100, changePercent: null }], meta, message: null },
       rankings: {
         status: 'ready',
         data: [{
@@ -54,7 +54,7 @@ function fixture(route: MarketInformationRoute): MarketInformationResponse {
           name: '테스트',
           exchange: route.exchange,
           currency: route.currency,
-          price: 0,
+          price: 100,
           changePercent: 0,
           high24h: null,
           low24h: null,
@@ -78,7 +78,7 @@ function fixture(route: MarketInformationRoute): MarketInformationResponse {
       derivatives: {
         status: 'unsupported',
         data: { referenceSymbol: 'BTCUSDT', longRatio: null, shortRatio: null, longShortRatio: null, ratioObservedAt: null, liquidations: [] },
-        meta,
+        meta: { ...meta, errorCode: 'PROVIDER_UNSUPPORTED' },
         message: '미지원',
       },
     },
@@ -95,13 +95,14 @@ function fixture(route: MarketInformationRoute): MarketInformationResponse {
   };
 }
 
-test('market information parser accepts null and real zero without coercion', () => {
+test('market information parser accepts null and real zero metrics without coercion', () => {
   const route = MARKET_INFORMATION_ROUTES[0];
   const parsed = parseMarketInformationResponse(fixture(route), route);
   const row = parsed.sections.rankings.data[0];
-  assert.equal(row.price, 0);
+  assert.equal(row.price, 100);
   assert.equal(row.changePercent, 0);
   assert.equal(row.volume24h, 0);
+  assert.equal(row.tradingValue24h, 0);
   assert.equal(row.marketCap, null);
   assert.equal(parsed.sections.indices.data[0].changePercent, null);
 });

@@ -1,0 +1,332 @@
+name: Read-only Shared Server Research 18090 Diagnostics
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/server-readonly-research-18090-diagnostics.yml'
+      - 'stock-analyzer/e2e/server-readonly-research-18090-diagnostics-contract.spec.ts'
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: shared-server-research-18090-readonly-diagnostics
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    name: Validate Research 18090 read-only diagnostic contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate workflow safety surface
+        run: |
+          set -Eeuo pipefail
+          workflow='.github/workflows/server-readonly-research-18090-diagnostics.yml'
+          grep -F "startsWith(github.event.comment.body, '/run-server-diagnostics ')" "$workflow" >/dev/null
+          grep -F "http://127.0.0.1:18090/api/research/overview" "$workflow" >/dev/null
+          grep -F "for sample in 1 2 3 4 5" "$workflow" >/dev/null
+          grep -F -- "--max-time 12" "$workflow" >/dev/null
+          grep -F "research_state_unavailable" "$workflow" >/dev/null
+          grep -F "proxy_10s_risk" "$workflow" >/dev/null
+
+  diagnose:
+    name: Capture Staging Research 18090 read-only evidence
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      startsWith(github.event.comment.body, '/run-server-diagnostics ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment: staging
+    env:
+      EVIDENCE_PATH: ${{ github.workspace }}/research-18090-readonly-evidence.txt
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+    steps:
+      - name: Authorize existing shared-server diagnostics command and exact main
+        id: authorize
+        uses: actions/github-script@v7
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+        with:
+          script: |
+            const body = String(process.env.COMMENT_BODY ?? '').trim();
+            const author = String(process.env.COMMENT_AUTHOR ?? '');
+            const association = String(process.env.AUTHOR_ASSOCIATION ?? '');
+            if (author !== 'seungjae3908-source' || association !== 'OWNER') {
+              core.setFailed('Only the repository owner may run Research 18090 diagnostics.');
+              return;
+            }
+            const match = /^\/run-server-diagnostics ([0-9a-fA-F]{40}) ([0-9]{8,20}) (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z) ([0-9a-fA-F]{40}) ([0-9a-fA-F]{40}) ((?:[0-9]{1,3}\.){3}[0-9]{1,3}) (pre-production-upgrade|post-production-deploy)$/.exec(body);
+            if (!match) {
+              core.setFailed('Existing /run-server-diagnostics command shape is required.');
+              return;
+            }
+            const targetSha = match[1].toLowerCase();
+            const main = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            const currentMain = String(main.data.commit.sha ?? '').toLowerCase();
+            if (targetSha !== currentMain) {
+              core.setFailed(`Research 18090 diagnostics require exact current main. expected=${currentMain} actual=${targetSha}`);
+              return;
+            }
+            const combined = await github.rest.repos.getCombinedStatusForRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: currentMain,
+            });
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const latest = new Map();
+            for (const row of combined.data.statuses ?? []) {
+              if (!latest.has(row.context)) latest.set(row.context, row.state);
+            }
+            const missing = required.filter((name) => latest.get(name) !== 'success');
+            if (missing.length) {
+              core.setFailed(`Exact-main Required CI is not 6/6 SUCCESS: ${missing.join(', ')}`);
+              return;
+            }
+            core.setOutput('sha', currentMain);
+            core.setOutput('incident_run_id', match[2]);
+            core.setOutput('source_comment_id', String(context.payload.comment.id));
+
+      - name: Configure pinned SSH trust on runner only
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_HOST"
+          test -n "$STAGING_SSH_USER"
+          test -n "$STAGING_SSH_PRIVATE_KEY"
+          test -n "$STAGING_SSH_KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Probe Research Dashboard 18090 five times without server mutation
+        id: probe
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" 'bash -s' > "$EVIDENCE_PATH" <<'REMOTE'
+          set -uo pipefail
+          export LC_ALL=C
+
+          listener=0
+          if command -v ss >/dev/null 2>&1 && ss -H -ltn 2>/dev/null | awk '{print $4}' | grep -Eq '(^|:)18090$'; then
+            listener=1
+          fi
+          service_state="$(systemctl is-active research-dashboard 2>/dev/null || true)"
+          [[ -n "$service_state" ]] || service_state=unavailable
+          printf 'RESEARCH18090_SERVICE\tlistener=%s\tservice_state=%s\n' "$listener" "$service_state"
+
+          for sample in 1 2 3 4 5; do
+            response="$(curl --silent --show-error \
+              --connect-timeout 2 --max-time 12 --max-filesize 12582912 \
+              --header 'Accept: application/json' \
+              --write-out $'\n__RESEARCH18090_META__\t%{http_code}\t%{time_total}\t%{content_type}' \
+              'http://127.0.0.1:18090/api/research/overview' 2>/dev/null)"
+            curl_rc=$?
+            meta="$(printf '%s\n' "$response" | tail -n 1)"
+            body="$(printf '%s\n' "$response" | sed '$d')"
+
+            status=000
+            total=0
+            content_type=unavailable
+            if [[ "$meta" == __RESEARCH18090_META__* ]]; then
+              status="$(printf '%s\n' "$meta" | awk -F'\t' '{print $2}')"
+              total="$(printf '%s\n' "$meta" | awk -F'\t' '{print $3}')"
+              content_type="$(printf '%s\n' "$meta" | awk -F'\t' '{print $4}')"
+            fi
+
+            timeout=0
+            [[ "$curl_rc" -eq 28 ]] && timeout=1
+            server_error=0
+            [[ "$status" =~ ^5[0-9][0-9]$ ]] && server_error=1
+            proxy_10s_risk="$(awk -v value="$total" 'BEGIN { if ((value + 0) >= 10) print 1; else print 0 }')"
+            content_type_json=0
+            [[ "$content_type" == application/json* ]] && content_type_json=1
+
+            safe_fields="$(printf '%s' "$body" | python3 -c '
+          import json, sys
+          try:
+              value = json.load(sys.stdin)
+          except Exception:
+              print("json_valid=0\tschema_ok=0\terror_class=unparseable\tv3_present=unknown\tv3_status=unknown")
+              raise SystemExit(0)
+          if not isinstance(value, dict):
+              print("json_valid=1\tschema_ok=0\terror_class=other\tv3_present=unknown\tv3_status=unknown")
+              raise SystemExit(0)
+          schema_ok = 1 if value.get("schemaVersion") == "research-dashboard-overview-v1" else 0
+          error = value.get("error")
+          if error == "research_state_unavailable":
+              error_class = "research_state_unavailable"
+          elif error is None:
+              error_class = "none"
+          else:
+              error_class = "other"
+          research = value.get("research")
+          li = research.get("liquidityIndependence") if isinstance(research, dict) else None
+          if isinstance(li, dict):
+              present = li.get("present")
+              v3_present = "true" if present is True else "false" if present is False else "unknown"
+              status = li.get("status")
+              v3_status = status if status in {"MISSING", "INVALID", "PRESENT"} else "unknown"
+          else:
+              v3_present = "unknown"
+              v3_status = "unknown"
+          print(f"json_valid=1\tschema_ok={schema_ok}\terror_class={error_class}\tv3_present={v3_present}\tv3_status={v3_status}")
+          ')"
+
+            printf 'RESEARCH18090_SAMPLE\tsample=%s\tstatus=%s\ttotal_seconds=%s\tcurl_rc=%s\ttimeout=%s\tserver_error=%s\tcontent_type_json=%s\tproxy_10s_risk=%s\t%s\n' \
+              "$sample" "$status" "$total" "$curl_rc" "$timeout" "$server_error" "$content_type_json" "$proxy_10s_risk" "$safe_fields"
+          done
+
+          printf 'READ_ONLY_CONTRACT\tserver_files_written=0\tserver_files_deleted=0\tserver_processes_restarted=0\tserver_processes_stopped=0\tdeployment_executed=0\tdatabase_changes=0\tsecret_values_collected=0\n'
+          REMOTE
+
+          test -s "$EVIDENCE_PATH"
+          grep -Eq '^RESEARCH18090_SERVICE[[:space:]]' "$EVIDENCE_PATH"
+          test "$(grep -c '^RESEARCH18090_SAMPLE' "$EVIDENCE_PATH")" -eq 5
+          grep -F 'READ_ONLY_CONTRACT' "$EVIDENCE_PATH" >/dev/null
+
+      - name: Classify captured Research 18090 evidence
+        id: classify
+        run: |
+          set -Eeuo pipefail
+          listener="$(awk -F'\t' '$1=="RESEARCH18090_SERVICE"{for(i=2;i<=NF;i++) if($i ~ /^listener=/){sub(/^listener=/,"",$i); print $i; exit}}' "$EVIDENCE_PATH")"
+          service_state="$(awk -F'\t' '$1=="RESEARCH18090_SERVICE"{for(i=2;i<=NF;i++) if($i ~ /^service_state=/){sub(/^service_state=/,"",$i); print $i; exit}}' "$EVIDENCE_PATH")"
+          http_200_count="$(grep '^RESEARCH18090_SAMPLE' "$EVIDENCE_PATH" | grep -c $'\tstatus=200\t' || true)"
+          http_5xx_count="$(grep '^RESEARCH18090_SAMPLE' "$EVIDENCE_PATH" | grep -Ec $'\tstatus=5[0-9][0-9]\t' || true)"
+          timeout_count="$(grep '^RESEARCH18090_SAMPLE' "$EVIDENCE_PATH" | grep -c $'\ttimeout=1\t' || true)"
+          proxy_risk_count="$(grep '^RESEARCH18090_SAMPLE' "$EVIDENCE_PATH" | grep -c $'\tproxy_10s_risk=1\t' || true)"
+          state_read_failure_count="$(grep '^RESEARCH18090_SAMPLE' "$EVIDENCE_PATH" | grep -c $'\terror_class=research_state_unavailable\t' || true)"
+          non_json_count="$(grep '^RESEARCH18090_SAMPLE' "$EVIDENCE_PATH" | grep -c $'\tjson_valid=0\t' || true)"
+          v3_present_count="$(grep '^RESEARCH18090_SAMPLE' "$EVIDENCE_PATH" | grep -c $'\tv3_status=PRESENT' || true)"
+          v3_missing_count="$(grep '^RESEARCH18090_SAMPLE' "$EVIDENCE_PATH" | grep -c $'\tv3_status=MISSING' || true)"
+          max_total_seconds="$(awk -F'\t' '
+            $1=="RESEARCH18090_SAMPLE" {
+              for(i=2;i<=NF;i++) if($i ~ /^total_seconds=/) {
+                sub(/^total_seconds=/,"",$i); if(($i+0)>max) max=$i+0
+              }
+            }
+            END { printf "%.6f", max+0 }
+          ' "$EVIDENCE_PATH")"
+
+          classification='CURRENT_SAMPLE_HEALTHY_NOT_REPRODUCED'
+          if [[ "$listener" != 1 || "$service_state" != active ]]; then
+            classification='RESEARCH_18090_NOT_LISTENING'
+          elif [[ "$state_read_failure_count" -gt 0 ]]; then
+            classification='RESEARCH_STATE_READ_FAILURE_OBSERVED'
+          elif [[ "$timeout_count" -gt 0 || "$proxy_risk_count" -gt 0 ]]; then
+            classification='RESEARCH_18090_SLOWER_THAN_PROXY_BUDGET'
+          elif [[ "$http_5xx_count" -gt 0 || "$non_json_count" -gt 0 ]]; then
+            classification='RESEARCH_18090_OTHER_HTTP_FAILURE'
+          elif [[ "$http_200_count" -eq 5 && "$v3_missing_count" -eq 5 ]]; then
+            classification='V3_MISSING_NOT_TRANSPORT_FAILURE'
+          fi
+
+          {
+            printf 'classification=%s\n' "$classification"
+            printf 'listener=%s\n' "$listener"
+            printf 'service_state=%s\n' "$service_state"
+            printf 'http_200_count=%s\n' "$http_200_count"
+            printf 'http_5xx_count=%s\n' "$http_5xx_count"
+            printf 'timeout_count=%s\n' "$timeout_count"
+            printf 'proxy_risk_count=%s\n' "$proxy_risk_count"
+            printf 'state_read_failure_count=%s\n' "$state_read_failure_count"
+            printf 'non_json_count=%s\n' "$non_json_count"
+            printf 'v3_present_count=%s\n' "$v3_present_count"
+            printf 'v3_missing_count=%s\n' "$v3_missing_count"
+            printf 'max_total_seconds=%s\n' "$max_total_seconds"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload sanitized Research 18090 evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-research-18090-readonly-${{ steps.authorize.outputs.incident_run_id }}
+          path: ${{ env.EVIDENCE_PATH }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report Research 18090 classification to Release Control
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.authorize.outputs.sha }}
+          SOURCE_COMMENT_ID: ${{ steps.authorize.outputs.source_comment_id }}
+          CLASSIFICATION: ${{ steps.classify.outputs.classification }}
+          LISTENER: ${{ steps.classify.outputs.listener }}
+          SERVICE_STATE: ${{ steps.classify.outputs.service_state }}
+          HTTP_200_COUNT: ${{ steps.classify.outputs.http_200_count }}
+          HTTP_5XX_COUNT: ${{ steps.classify.outputs.http_5xx_count }}
+          TIMEOUT_COUNT: ${{ steps.classify.outputs.timeout_count }}
+          PROXY_RISK_COUNT: ${{ steps.classify.outputs.proxy_risk_count }}
+          STATE_READ_FAILURE_COUNT: ${{ steps.classify.outputs.state_read_failure_count }}
+          NON_JSON_COUNT: ${{ steps.classify.outputs.non_json_count }}
+          V3_PRESENT_COUNT: ${{ steps.classify.outputs.v3_present_count }}
+          V3_MISSING_COUNT: ${{ steps.classify.outputs.v3_missing_count }}
+          MAX_TOTAL_SECONDS: ${{ steps.classify.outputs.max_total_seconds }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                '[STAGING_RESEARCH_18090_DIAG]',
+                'status: captured',
+                `target_main_sha: ${process.env.TARGET_SHA}`,
+                `classification: ${process.env.CLASSIFICATION}`,
+                `listener: ${process.env.LISTENER}`,
+                `service_state: ${process.env.SERVICE_STATE}`,
+                `sample_count: 5`,
+                `http_200_count: ${process.env.HTTP_200_COUNT}`,
+                `http_5xx_count: ${process.env.HTTP_5XX_COUNT}`,
+                `timeout_count: ${process.env.TIMEOUT_COUNT}`,
+                `proxy_10s_risk_count: ${process.env.PROXY_RISK_COUNT}`,
+                `research_state_unavailable_count: ${process.env.STATE_READ_FAILURE_COUNT}`,
+                `non_json_count: ${process.env.NON_JSON_COUNT}`,
+                `v3_present_count: ${process.env.V3_PRESENT_COUNT}`,
+                `v3_missing_count: ${process.env.V3_MISSING_COUNT}`,
+                `max_total_seconds: ${process.env.MAX_TOTAL_SECONDS}`,
+                `workflow_run: ${context.runId}`,
+                `source_comment_id: ${process.env.SOURCE_COMMENT_ID}`,
+                'server_files_written: 0',
+                'server_files_deleted: 0',
+                'server_processes_restarted: 0',
+                'server_processes_stopped: 0',
+                'deployment_executed: 0',
+                'database_changes: 0',
+                'secret_values_collected: 0',
+                'private_trading_api: false',
+                'live_trading: false',
+                'real_orders: 0',
+              ].join('\n'),
+            });
+
+      - name: Clean runner SSH material
+        if: always()
+        run: |
+          rm -f ~/.ssh/id_ed25519 ~/.ssh/known_hosts

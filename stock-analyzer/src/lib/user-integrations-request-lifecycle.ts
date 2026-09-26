@@ -1,4 +1,5 @@
 import { APP_API_REQUEST_TIMEOUT_MS } from '@/lib/auth-bootstrap';
+import { requireUserIntegrationsResponse } from '@/lib/user-integrations-response';
 
 export type UserIntegrationsTerminal<T> =
   | {
@@ -68,6 +69,7 @@ export class UserIntegrationsRequestLifecycle<T> {
   constructor(
     private readonly timeoutMs = APP_API_REQUEST_TIMEOUT_MS,
     private readonly logoutDrainTimeoutMs = APP_API_REQUEST_TIMEOUT_MS,
+    private readonly validate?: (value: T, identity: string) => T,
   ) {
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       throw new Error(`invalid user integrations request timeout: ${timeoutMs}`);
@@ -121,7 +123,9 @@ export class UserIntegrationsRequestLifecycle<T> {
     // The owning transport may still reject naturally (HTTP/network terminal),
     // which is safe to drain before auth invalidation.
     const controller = new AbortController();
-    const transportOperation = Promise.resolve().then(() => load(controller.signal));
+    const transportOperation = Promise.resolve()
+      .then(() => load(controller.signal))
+      .then((value) => this.validate ? this.validate(value, identity) : value);
     let transportFlight: Promise<UserIntegrationsTerminal<T>>;
     transportFlight = transportOperation.then(
       (value): UserIntegrationsTerminal<T> => ({ status: 'success', identity, requestKey, generation, value }),
@@ -243,4 +247,8 @@ export class UserIntegrationsRequestLifecycle<T> {
   }
 }
 
-export const userIntegrationsRequestLifecycle = new UserIntegrationsRequestLifecycle<unknown>();
+export const userIntegrationsRequestLifecycle = new UserIntegrationsRequestLifecycle<unknown>(
+  APP_API_REQUEST_TIMEOUT_MS,
+  APP_API_REQUEST_TIMEOUT_MS,
+  (value, identity) => requireUserIntegrationsResponse(value, identity),
+);

@@ -24,11 +24,13 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      RESEARCH_VALIDATION_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
-      - name: Checkout exact HEAD
+      - name: Checkout exact validation HEAD
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.RESEARCH_VALIDATION_SHA }}
           persist-credentials: false
           fetch-depth: 1
 
@@ -41,56 +43,71 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          [[ "$RESEARCH_VALIDATION_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$RESEARCH_VALIDATION_SHA"
           ! grep -R -n -E 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)' research-production
           grep -q 'NoNewPrivileges=true' research-production/deploy/research-production@.service
           grep -q 'ProtectSystem=strict' research-production/deploy/research-production@.service
           grep -q '^CapabilityBoundingSet=$' research-production/deploy/research-production@.service
           ! grep -q 'MemoryDenyWriteExecute=true' research-production/deploy/research-production@.service
+          for service in             research-production/deploy/research-production-temporal-evidence.service             research-production/deploy/research-production-factory-status.service
+          do
+            grep -q 'NoNewPrivileges=true' "$service"
+            grep -q 'ProtectSystem=strict' "$service"
+            grep -q '^CapabilityBoundingSet=$' "$service"
+            ! grep -Eq 'PRIVATE|ORDER|LIVE_TRADING=true' "$service"
+          done
 
       - name: Validate systemd service and schedules
         shell: bash
         run: |
           set -euo pipefail
-          systemd-analyze verify \
-            research-production/deploy/research-production@.service \
-            research-production/deploy/research-production-fast-historical.timer \
-            research-production/deploy/research-production-long-history.timer \
-            research-production/deploy/research-production-forward.timer
+          systemd-analyze verify             research-production/deploy/research-production@.service             research-production/deploy/research-production-fast-historical.timer             research-production/deploy/research-production-long-history.timer             research-production/deploy/research-production-forward.timer             research-production/deploy/research-production-temporal-evidence.service             research-production/deploy/research-production-temporal-evidence.timer             research-production/deploy/research-production-factory-status.service             research-production/deploy/research-production-factory-status.timer
           systemd-analyze calendar '*-*-* 02:17:00 UTC' >/dev/null
           systemd-analyze calendar 'Sun *-*-* 03:43:00 UTC' >/dev/null
           systemd-analyze calendar '*-*-* *:11:00 UTC' >/dev/null
+          systemd-analyze calendar '*-*-* *:05:00 UTC' >/dev/null
+          systemd-analyze calendar '*-*-* *:07:00 UTC' >/dev/null
+          node --check research-production/bin/collect-temporal-evidence.mjs
+          node --check research-production/bin/research-factory-plan.mjs
+          node --check research-production/bin/research-factory-status.mjs
 
       - name: Unit tests
         working-directory: research-production
         run: npm test
 
+      - name: Validate missing-policy runtime status
+        shell: bash
+        run: |
+          set -euo pipefail
+          factory_root="$RUNNER_TEMP/research-factory-status"
+          RESEARCH_STATE_ROOT="$factory_root"           RESEARCH_CODE_SHA="$RESEARCH_VALIDATION_SHA"             node research-production/bin/research-factory-status.mjs > "$RUNNER_TEMP/factory-status.out"
+          test -s "$factory_root/latest/research-factory.json"
+          node -e "
+            const s=require(process.argv[1]);
+            if (
+              s.contract !== 'research-factory-runtime-status/v1'
+              || s.status !== 'BLOCKED_POLICY_MISSING'
+              || s.firstZero !== 'HUMAN_APPROVED_ADAPTIVE_POLICY_MISSING'
+              || s.policy?.present !== false
+              || s.safety?.runtimeExecutionAttempted !== false
+              || s.safety?.executionAuthority !== 'NONE'
+            ) process.exit(1);
+          " "$factory_root/latest/research-factory.json"
+
       - name: Exact-SHA preflight
         shell: bash
         run: |
           set -euo pipefail
-          node research-production/bin/research-cycle.mjs preflight \
-            --repo-root "$GITHUB_WORKSPACE" \
-            --state-root "$RUNNER_TEMP/investment-research-production" \
-            --research-sha "$GITHUB_SHA"
+          node research-production/bin/research-cycle.mjs preflight             --repo-root "$GITHUB_WORKSPACE"             --state-root "$RUNNER_TEMP/investment-research-production"             --research-sha "$RESEARCH_VALIDATION_SHA"
 
       - name: Build deterministic full plan
         shell: bash
         run: |
           set -euo pipefail
-          node research-production/bin/research-cycle.mjs plan \
-            --profile all \
-            --repo-root "$GITHUB_WORKSPACE" \
-            --state-root "$RUNNER_TEMP/investment-research-production" \
-            --research-sha "$GITHUB_SHA" > "$RUNNER_TEMP/research-plan.json"
+          node research-production/bin/research-cycle.mjs plan             --profile all             --repo-root "$GITHUB_WORKSPACE"             --state-root "$RUNNER_TEMP/investment-research-production"             --research-sha "$RESEARCH_VALIDATION_SHA" > "$RUNNER_TEMP/research-plan.json"
           node -e "const p=require(process.argv[1]); if(p.taskCount !== 10 || p.stepCount !== 21 || p.liveTrading || p.privateApi || p.orderAuthority) process.exit(1)" "$RUNNER_TEMP/research-plan.json"
 
       - name: Safety summary
         run: |
-          printf '%s\n' \
-            'researchProductionValidation=PASS' \
-            'productionDeploy=false' \
-            'liveTrading=false' \
-            'privateApi=false' \
-            'orderAuthority=false' \
-            'existingPaperShadowStateMutation=false'
+          printf '%s\n'             'researchProductionValidation=PASS'             'productionDeploy=false'             'liveTrading=false'             'privateApi=false'             'orderAuthority=false'             'existingPaperShadowStateMutation=false'             'temporalEvidenceTimerActivated=false'             'factoryStatusTimerActivated=false'             'temporalHistoricalCurrentValueBackfill=false'             'candidateBudgetInvented=false'

@@ -8,11 +8,20 @@ import { rejectPaperJournalQueryIdentity } from './middleware/paper-journal-quer
 import { startUserTelegramDeliveryWorker } from './features/user-broker-telegram/user-broker-telegram.worker';
 import { startPriceAlertMonitor } from './services/notification.service';
 import { startTradeRecoveryWorker } from './services/trade-recovery-worker.service';
+import { startMemberAutoTradingBackgroundWorker } from './services/member-auto-trading-background-worker.service';
 import { startTelegramIntelligenceWorker } from './services/telegram-intelligence-worker.service';
 import { startSignalIntelligenceTelegramSubscriber } from './services/signal-intelligence-telegram-subscriber.service';
 import { startSignalIntelligenceAiWatch } from './services/signal-intelligence-ai-watch.service';
-import { isStagingReadonlyCredentialRuntime, resolveApiBindHost } from './lib/api-bind-host';
+import {
+  areBackgroundWorkersEnabled,
+  resolveApiBindHost,
+} from './lib/api-bind-host';
 import { readRuntimeDeploymentIdentity } from './lib/deployment-identity';
+import {
+  FRONTEND_REVALIDATE_CACHE_CONTROL,
+  setFrontendStaticCacheHeaders,
+} from './lib/frontend-static-cache';
+import { runPublicForwardPartialFillCalibrationProductionReadback } from './services/public-forward-partial-fill-calibration-production-caller.service';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,7 +33,7 @@ const port = Number(
     process.env.API_PORT ??
     8080,
 );
-const readonlyCredentialRuntime = isStagingReadonlyCredentialRuntime();
+const backgroundWorkersEnabled = areBackgroundWorkersEnabled();
 const bindHost = resolveApiBindHost();
 
 const deployMarkerPath = process.env.DEPLOY_MARKER_PATH?.trim()
@@ -42,7 +51,7 @@ function healthPayload(route: '/health' | '/api/health') {
     identityMatch: identity.identityMatch,
     identityStatus: identity.identityStatus,
     bindHost,
-    backgroundWorkersEnabled: !readonlyCredentialRuntime,
+    backgroundWorkersEnabled,
     time: new Date().toISOString(),
   };
 }
@@ -148,6 +157,11 @@ if (frontendDist) {
   app.use(
     express.static(
       frontendDist,
+      {
+        setHeaders(response, filePath) {
+          setFrontendStaticCacheHeaders(response, frontendDist, filePath);
+        },
+      },
     ),
   );
 }
@@ -189,6 +203,7 @@ app.use((req, res) => {
   }
 
   if (frontendDist) {
+    res.setHeader('Cache-Control', FRONTEND_REVALIDATE_CACHE_CONTROL);
     res.sendFile(
       path.join(
         frontendDist,
@@ -224,11 +239,28 @@ app.listen(
       '[api-server] Kiwoom routes enabled at /api/kiwoom',
     );
 
-    if (readonlyCredentialRuntime) {
-      console.log('[api-server] staging read-only credential runtime: background workers disabled');
+    void runPublicForwardPartialFillCalibrationProductionReadback().then((result) => {
+      const report = {
+        status: result.status,
+        productionCallerConnected: result.productionCallerConnected,
+        productionPolicyAuthorityConnected: result.productionPolicyAuthorityConnected,
+        calibrationSampleSufficient: result.calibrationSampleSufficient,
+        blocker: result.status === 'BLOCKED' ? result.blocker : null,
+        readerError: result.status === 'BLOCKED' ? result.readerError : null,
+      };
+      if (result.status === 'BLOCKED') {
+        console.warn('[api-server] partial-fill production readback blocked', report);
+      } else {
+        console.log('[api-server] partial-fill production readback complete', report);
+      }
+    });
+
+    if (!backgroundWorkersEnabled) {
+      console.log('[api-server] background workers disabled by runtime safety policy');
     } else {
       startPriceAlertMonitor();
       startTradeRecoveryWorker();
+      startMemberAutoTradingBackgroundWorker();
       startUserTelegramDeliveryWorker();
       startTelegramIntelligenceWorker();
       startSignalIntelligenceTelegramSubscriber();
