@@ -15,6 +15,7 @@ on:
       - api-server/test.mjs
       - api-server/scripts/run-research-workspace-canonical-evaluation-preflight-v17.ts
       - .github/workflows/research-workspace-canonical-evaluation-preflight-v17.yml
+      - .github/workflows/research-workspace-canonical-evaluation-contract-v18.yml
       - api-server/scripts/research-workspace-one-shot-preflight-v13.cjs
       - api-server/scripts/research-workspace-one-shot-preflight-v13.test.cjs
       - .github/workflows/research-workspace-one-shot-preflight-v13.yml
