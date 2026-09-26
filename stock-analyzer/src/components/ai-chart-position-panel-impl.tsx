@@ -154,6 +154,7 @@ type ExitPreview = {
   reduceOnly: true;
   checkedAt: string;
   stale: false;
+  fingerprint: string;
   executionReadiness?: {
     connectionConfigured: boolean;
     providerVerified: boolean;
@@ -165,10 +166,31 @@ type ExitPreview = {
   };
 };
 
+type CanonicalExitDraft = {
+  schemaVersion: 'ai-chart-canonical-exit-draft-v1';
+  fingerprint: string;
+  provider: ExitPreview['provider'];
+  market: string;
+  symbol: string;
+  accountMode: 'live';
+  orderType: 'market';
+  side: 'buy' | 'sell';
+  quantity: number;
+  percent: number;
+  reduceOnly: true;
+  sourceCheckedAt: string;
+  planCreationPerformed: false;
+  orderSubmissionPerformed: false;
+  requiresFreshAccountRecheck: true;
+  requiresOrderTimeRiskRecheck: true;
+  requiresExplicitApproval: true;
+  nextOwner: 'CANONICAL_EXIT_PLAN_OWNER';
+};
+
 type ExitPreviewState =
   | { kind: 'idle' }
   | { kind: 'loading' }
-  | { kind: 'ready'; preview: ExitPreview }
+  | { kind: 'ready'; preview: ExitPreview; draft: CanonicalExitDraft }
   | { kind: 'unavailable'; code: string };
 
 type ExecutionReadiness = {
@@ -785,6 +807,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
         ok?: boolean;
         error?: string;
         preview?: ExitPreview;
+        canonicalExitDraft?: CanonicalExitDraft;
         orderSubmitted?: boolean;
         orderCanceled?: boolean;
         orderAmended?: boolean;
@@ -793,23 +816,35 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
         executionReadiness?: ExitPreview['executionReadiness'];
       } | null;
       if (controller.signal.aborted || sequence !== exitSequenceRef.current) return;
-      if (!response.ok || payload?.ok !== true || !payload.preview) {
+      if (!response.ok || payload?.ok !== true || !payload.preview || !payload.canonicalExitDraft) {
         setExitPreviewState({ kind: 'unavailable', code: payload?.error ?? `HTTP_${response.status}` });
         return;
       }
+      const draft = payload.canonicalExitDraft;
       if (payload.orderSubmitted !== false
         || payload.orderCanceled !== false
         || payload.orderAmended !== false
         || payload.privateTradingMutationSent !== false
         || payload.executionAuthority !== 'NONE'
         || payload.preview.reduceOnly !== true
-        || payload.preview.stale !== false) {
+        || payload.preview.stale !== false
+        || !/^[a-f0-9]{64}$/.test(payload.preview.fingerprint)
+        || draft.schemaVersion !== 'ai-chart-canonical-exit-draft-v1'
+        || draft.fingerprint !== payload.preview.fingerprint
+        || draft.reduceOnly !== true
+        || draft.planCreationPerformed !== false
+        || draft.orderSubmissionPerformed !== false
+        || draft.requiresFreshAccountRecheck !== true
+        || draft.requiresOrderTimeRiskRecheck !== true
+        || draft.requiresExplicitApproval !== true
+        || draft.nextOwner !== 'CANONICAL_EXIT_PLAN_OWNER') {
         setExitPreviewState({ kind: 'unavailable', code: 'EXIT_PREVIEW_SAFETY_CONTRACT_MISMATCH' });
         return;
       }
       setExitPreviewState({
         kind: 'ready',
         preview: { ...payload.preview, executionReadiness: payload.executionReadiness },
+        draft,
       });
     } catch (error) {
       if (controller.signal.aborted || sequence !== exitSequenceRef.current) return;
@@ -1183,6 +1218,17 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                         {' · '}조회 {checkedAtLabel(exitPreviewState.preview.checkedAt)}
                       </p>
                       <p className="mt-1 text-[8px] font-bold text-muted-foreground">executionAuthority=NONE · 주문 제출 0 · 취소/정정 0</p>
+                      <div
+                        className="mt-2 rounded-lg border border-card-border bg-background/80 p-2 text-[8px] font-bold text-muted-foreground"
+                        data-testid="ai-chart-canonical-exit-draft"
+                        data-exit-fingerprint={exitPreviewState.draft.fingerprint}
+                      >
+                        <p className="font-black text-foreground">Canonical 종료계획 고정됨 · 아직 미제출</p>
+                        <p className="mt-1">
+                          {exitPreviewState.draft.percent}% · {formatQuantity(exitPreviewState.draft.quantity)}
+                          {' · '}reduce-only · 실행 직전 실계좌/시장/Risk 재검증 필수
+                        </p>
+                      </div>
                       {exitPreviewState.preview.executionReadiness ? (
                         <div className="mt-2 rounded-lg bg-background/80 p-2 text-[8px] font-bold text-muted-foreground" data-testid="ai-chart-exit-readiness">
                           <p className="font-black text-foreground">
