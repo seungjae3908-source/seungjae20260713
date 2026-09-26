@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Router, type IRouter, type Response } from 'express';
 import { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';
 import type { AccountProvider, CanonicalPosition } from '../features/account-readonly/account-readonly.contract';
@@ -163,6 +164,29 @@ function exitPreviewSide(provider: AccountProvider, position: CanonicalPosition)
   if (side === 'long') return 'sell' as const;
   if (side === 'short') return 'buy' as const;
   throw new Error('BITGET_POSITION_SIDE_UNAVAILABLE');
+}
+
+function exitPreviewFingerprint(input: {
+  provider: AccountProvider;
+  market: string;
+  symbol: string;
+  percent: number;
+  availableQuantity: number;
+  exitQuantity: number;
+  side: 'buy' | 'sell';
+  checkedAt: string;
+}) {
+  return createHash('sha256').update([
+    'ai-chart-exit-preview-v1',
+    input.provider,
+    input.market,
+    normalizedExitSymbol(input.symbol),
+    String(input.percent),
+    String(input.availableQuantity),
+    String(input.exitQuantity),
+    input.side,
+    input.checkedAt,
+  ].join('|')).digest('hex');
 }
 
 function exchangeValue(value: unknown): TradingExchange {
@@ -724,6 +748,21 @@ router.post('/positions/exit-preview', async (req: AuthenticatedRequest, res) =>
     const position = matches[0]!;
     const quantities = exitPreviewQuantity(position, percent, market, provider);
     const side = exitPreviewSide(provider, position);
+    const fingerprint = exitPreviewFingerprint({
+      provider,
+      market,
+      symbol,
+      percent,
+      availableQuantity: quantities.availableQuantity,
+      exitQuantity: quantities.exitQuantity,
+      side,
+      checkedAt: snapshot.checkedAt,
+    });
+    const executionReadiness = liveExecutionReadinessForConnection(
+      provider as TradingExchange,
+      connection,
+      credentialConfigurationStatus().encryptionConfigured,
+    );
     return res.json({
       ok: true,
       preview: {
@@ -740,6 +779,27 @@ router.post('/positions/exit-preview', async (req: AuthenticatedRequest, res) =>
         reduceOnly: true,
         checkedAt: snapshot.checkedAt,
         stale: false,
+        fingerprint,
+      },
+      canonicalExitDraft: {
+        schemaVersion: 'ai-chart-canonical-exit-draft-v1',
+        fingerprint,
+        provider,
+        market,
+        symbol: normalizedExitSymbol(symbol),
+        accountMode: 'live',
+        orderType: 'market',
+        side,
+        quantity: quantities.exitQuantity,
+        percent,
+        reduceOnly: true,
+        sourceCheckedAt: snapshot.checkedAt,
+        planCreationPerformed: false,
+        orderSubmissionPerformed: false,
+        requiresFreshAccountRecheck: true,
+        requiresOrderTimeRiskRecheck: true,
+        requiresExplicitApproval: true,
+        nextOwner: 'CANONICAL_EXIT_PLAN_OWNER',
       },
       privateAccountReadPerformed: true,
       orderSubmitted: false,
@@ -747,11 +807,7 @@ router.post('/positions/exit-preview', async (req: AuthenticatedRequest, res) =>
       orderAmended: false,
       privateTradingMutationSent: false,
       executionAuthority: 'NONE',
-      executionReadiness: liveExecutionReadinessForConnection(
-        provider as TradingExchange,
-        connection,
-        credentialConfigurationStatus().encryptionConfigured,
-      ),
+      executionReadiness,
     });
   } catch (error) {
     if (controller.signal.aborted || res.writableEnded) return undefined;
