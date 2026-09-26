@@ -778,6 +778,9 @@ test('exit preview re-reads the real position in read-only mode and never submit
         conflictingOpenOrderCount: number | null;
         blockers: string[];
         riskPassed: boolean;
+        riskCheckedAt: string;
+        evaluatedAt: string;
+        expiresAt: string;
         marketExecutionPreflightRequired: boolean;
         nextOwner: string;
         executionAuthority: string;
@@ -822,6 +825,103 @@ test('exit preview re-reads the real position in read-only mode and never submit
     assert.equal(riskBody.orderAmended, false);
     assert.equal(riskBody.privateTradingMutationSent, false);
     assert.equal(riskBody.executionAuthority, 'NONE');
+
+    const preflightRequest = {
+      riskIntentId: riskBody.canonicalExitRisk.riskIntentId,
+      approvalIntentId: riskBody.canonicalExitRisk.approvalIntentId,
+      planId: riskBody.canonicalExitRisk.planId,
+      exitDraftId: riskBody.canonicalExitRisk.exitDraftId,
+      provider: approvalBody.canonicalExitApproval.provider,
+      market: approvalBody.canonicalExitApproval.market,
+      symbol: approvalBody.canonicalExitApproval.symbol,
+      percent: riskBody.canonicalExitRisk.percent,
+      positionQuantity: approvalBody.canonicalExitApproval.positionQuantity,
+      availableQuantity: approvalBody.canonicalExitApproval.availableQuantity,
+      quantity: riskBody.canonicalExitRisk.quantity,
+      side: approvalBody.canonicalExitApproval.side,
+      approvalCheckedAt: approvalBody.canonicalExitApproval.approvalCheckedAt,
+      riskCheckedAt: riskBody.canonicalExitRisk.riskCheckedAt,
+      riskEvaluatedAt: riskBody.canonicalExitRisk.evaluatedAt,
+      riskExpiresAt: riskBody.canonicalExitRisk.expiresAt,
+      riskBlockers: riskBody.canonicalExitRisk.blockers,
+      riskPassed: riskBody.canonicalExitRisk.riskPassed,
+    };
+
+    const missingPreflightConfirmation = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preflight`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(preflightRequest),
+    });
+    assert.equal(missingPreflightConfirmation.status, 409);
+    assert.equal(reads, 5);
+
+    const preflightResponse = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preflight`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, ...preflightRequest }),
+    });
+    assert.equal(preflightResponse.status, 200);
+    const preflightBody = await preflightResponse.json() as {
+      canonicalExitPreflight: {
+        schemaVersion: string;
+        state: string;
+        preflightIntentId: string;
+        riskIntentId: string;
+        approvalIntentId: string;
+        planId: string;
+        exitDraftId: string;
+        quantity: number;
+        percent: number;
+        reduceOnly: boolean;
+        referencePrice: number | null;
+        riskCheckedAt: string;
+        preflightCheckedAt: string;
+        blockers: string[];
+        preflightPassed: boolean;
+        finalProviderOrderbookRiskRequired: boolean;
+        nextOwner: string;
+        executionAuthority: string;
+        executable: boolean;
+        orderSubmissionPerformed: boolean;
+        financialMutationPerformed: boolean;
+      };
+      preflightChecked: boolean;
+      privateAccountReadPerformed: boolean;
+      financialMutationPerformed: boolean;
+      orderSubmitted: boolean;
+      orderCanceled: boolean;
+      orderAmended: boolean;
+      privateTradingMutationSent: boolean;
+      executionAuthority: string;
+    };
+    assert.equal(reads, 6);
+    assert.equal(preflightBody.canonicalExitPreflight.schemaVersion, 'ai-chart-exit-execution-preflight-v1');
+    assert.equal(preflightBody.canonicalExitPreflight.state, 'PASSED_NON_EXECUTING');
+    assert.match(preflightBody.canonicalExitPreflight.preflightIntentId, /^[0-9a-f]{64}$/u);
+    assert.equal(preflightBody.canonicalExitPreflight.riskIntentId, riskBody.canonicalExitRisk.riskIntentId);
+    assert.equal(preflightBody.canonicalExitPreflight.approvalIntentId, approvalBody.canonicalExitApproval.approvalIntentId);
+    assert.equal(preflightBody.canonicalExitPreflight.planId, planBody.canonicalExitPlan.planId);
+    assert.equal(preflightBody.canonicalExitPreflight.exitDraftId, planBody.canonicalExitPlan.exitDraftId);
+    assert.equal(preflightBody.canonicalExitPreflight.quantity, 5);
+    assert.equal(preflightBody.canonicalExitPreflight.percent, 25);
+    assert.equal(preflightBody.canonicalExitPreflight.reduceOnly, true);
+    assert.equal(preflightBody.canonicalExitPreflight.referencePrice, 72_000);
+    assert.deepEqual(preflightBody.canonicalExitPreflight.blockers, []);
+    assert.equal(preflightBody.canonicalExitPreflight.preflightPassed, true);
+    assert.equal(preflightBody.canonicalExitPreflight.finalProviderOrderbookRiskRequired, true);
+    assert.equal(preflightBody.canonicalExitPreflight.nextOwner, 'CANONICAL_EXIT_EXECUTION_OWNER');
+    assert.equal(preflightBody.canonicalExitPreflight.executionAuthority, 'NONE');
+    assert.equal(preflightBody.canonicalExitPreflight.executable, false);
+    assert.equal(preflightBody.canonicalExitPreflight.orderSubmissionPerformed, false);
+    assert.equal(preflightBody.canonicalExitPreflight.financialMutationPerformed, false);
+    assert.equal(preflightBody.preflightChecked, true);
+    assert.equal(preflightBody.privateAccountReadPerformed, true);
+    assert.equal(preflightBody.financialMutationPerformed, false);
+    assert.equal(preflightBody.orderSubmitted, false);
+    assert.equal(preflightBody.orderCanceled, false);
+    assert.equal(preflightBody.orderAmended, false);
+    assert.equal(preflightBody.privateTradingMutationSent, false);
+    assert.equal(preflightBody.executionAuthority, 'NONE');
   } finally {
     await repository.deleteConnection(USER, 'toss');
     for (const key of liveGateKeys) {
