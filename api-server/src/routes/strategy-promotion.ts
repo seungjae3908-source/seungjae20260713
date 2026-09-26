@@ -5,6 +5,7 @@ import {
   type StrategyPromotionService,
 } from '../services/strategy-promotion.service';
 import { loadResearchPromotionBridge } from '../services/strategy-promotion-research-bridge.service';
+import { buildResearchAdoptionReview } from '../services/research-adoption-review-gate.service';
 
 export function createStrategyPromotionRouter(service: StrategyPromotionService = createDefaultStrategyPromotionService()): IRouter {
   const router: IRouter = Router();
@@ -23,6 +24,13 @@ export function createStrategyPromotionRouter(service: StrategyPromotionService 
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     const bridge = await loadResearchPromotionBridge();
     return res.json({ ok: true, bridge });
+  });
+
+  router.get('/strategy-promotion/research-adoption-review', requireAdmin, async (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    const bridge = await loadResearchPromotionBridge();
+    const adoptionReview = buildResearchAdoptionReview(bridge);
+    return res.json({ ok: true, adoptionReview });
   });
 
   router.get('/strategy-promotion/:strategyId/history', (req, res) => {
