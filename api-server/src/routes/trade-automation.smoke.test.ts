@@ -39,20 +39,149 @@ function scannerCardFixture({ now, market, symbol, action }: { now: number; mark
   } as ScannerSignalCard;
 }
 
-async function startScannerPlanServer(dependencies: Parameters<typeof createScannerPaperPlansRouter>[0]) {
+async function startScannerPlanServer(
+  dependencies: Parameters<typeof createScannerPaperPlansRouter>[0],
+  options: { admin?: boolean } = {},
+) {
   const app = express();
   app.use(express.json({ limit: '32kb' }));
   app.use((req, _res, next) => {
     const row = req as AuthenticatedRequest;
-    row.member = { id: USER, login_name: 'test', display_name: 'test', role: 'user', membership_level: 'associate', status: 'approved', is_active: true };
-    row.membershipLevel = 'associate';
+    row.member = options.admin
+      ? { id: USER, login_name: 'test', display_name: 'test', role: 'admin', membership_level: 'admin', status: 'approved', is_active: true }
+      : { id: USER, login_name: 'test', display_name: 'test', role: 'user', membership_level: 'associate', status: 'approved', is_active: true };
+    row.membershipLevel = options.admin ? 'admin' : 'associate';
     next();
   });
   app.use('/api/trade-automation', createScannerPaperPlansRouter(dependencies));
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>(resolve => server.once('listening', resolve));
-  return { server, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/trade-automation/scanner/plans` };
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/trade-automation/scanner`;
+  return {
+    server,
+    url: `${baseUrl}/plans`,
+    liveDraftUrl: `${baseUrl}/live-draft`,
+  };
 }
+
+test('Scanner live entry draft is server-verified, non-executing, and rejects client authority fields', async () => {
+  const now = Date.UTC(2026, 8, 26, 6, 0, 0);
+  const sha = 'c'.repeat(40);
+  const registry = new ProductPaperSourceRegistry(() => now);
+  const timeframe = getScannerStrategyProfile('KR_STOCK', 'SWING').primaryTimeframe;
+  const card = scannerCardFixture({ now, market: 'KR', symbol: '005930', action: 'BUY' });
+  registry.captureScanner(USER, {
+    requestId: 'live-draft-run',
+    timeframe,
+    cards: [card],
+    execution: { cancelled: false },
+  } as ScannerResponse, sha);
+  const { server, liveDraftUrl } = await startScannerPlanServer({
+    registry,
+    sourceSha: () => sha,
+    now: () => now,
+  }, { admin: true });
+  const valid = {
+    mode: 'approval',
+    accountMode: 'live',
+    adapter: 'canonical-live',
+    market: 'KR',
+    symbol: '005930',
+    timeframe,
+    side: 'BUY',
+    searchRunId: 'live-draft-run',
+    signalId: card.signalId,
+    selectedConditions: ['trend_alignment'],
+  };
+  try {
+    const response = await fetch(liveDraftUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(valid),
+    });
+    const body = await response.json() as Record<string, any>;
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(body.ok, true);
+    assert.equal(body.serverVerified, true);
+    assert.equal(body.draft.schemaVersion, 'scanner-live-entry-draft-v1');
+    assert.equal(body.draft.state, 'SERVER_VERIFIED_DRAFT');
+    assert.equal(body.draft.symbol, '005930');
+    assert.equal(body.draft.side, 'BUY');
+    assert.deepEqual(body.draft.entryZone, card.pricePlan.entryZone);
+    assert.equal(body.draft.stopLoss, card.pricePlan.stopLoss);
+    assert.deepEqual(body.draft.targets, card.pricePlan.targets);
+    assert.equal(body.draft.requiresFinalRiskRecheck, true);
+    assert.equal(body.draft.requiresExplicitApproval, true);
+    assert.equal(body.executionAuthority, 'NONE');
+    assert.equal(body.livePlanCreated, false);
+    assert.equal(body.orderSubmitted, false);
+    assert.equal(body.exchangeRequestSent, false);
+    assert.equal(body.providerMutationRequests, 0);
+    assert.equal(body.privateTradingApiAllowed, false);
+
+    for (const injected of [
+      { quantity: 10 },
+      { leverage: 3 },
+      { marketSnapshot: { availableBalance: 999999 } },
+      { stopPrice: 1 },
+      { targetPrices: [999999] },
+      { executionAuthority: 'MANUAL' },
+    ]) {
+      const rejected = await fetch(liveDraftUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...valid, ...injected }),
+      });
+      const rejectedBody = await rejected.json() as Record<string, any>;
+      assert.equal(rejected.status, 400);
+      assert.equal(rejectedBody.ok, false);
+      assert.equal(rejectedBody.error, 'CLIENT_LIVE_DRAFT_AUTHORITY_FORBIDDEN');
+      assert.equal(rejectedBody.orderSubmitted, false);
+      assert.equal(rejectedBody.providerMutationRequests, 0);
+      assert.equal(rejectedBody.executionAuthority, 'NONE');
+    }
+  } finally { await close(server); }
+});
+
+test('Scanner live entry draft requires order capability', async () => {
+  const now = Date.UTC(2026, 8, 26, 6, 0, 0);
+  const sha = 'd'.repeat(40);
+  const registry = new ProductPaperSourceRegistry(() => now);
+  const timeframe = getScannerStrategyProfile('KR_STOCK', 'SWING').primaryTimeframe;
+  const card = scannerCardFixture({ now, market: 'KR', symbol: '005930', action: 'BUY' });
+  registry.captureScanner(USER, {
+    requestId: 'live-draft-capability-run',
+    timeframe,
+    cards: [card],
+    execution: { cancelled: false },
+  } as ScannerResponse, sha);
+  const { server, liveDraftUrl } = await startScannerPlanServer({
+    registry,
+    sourceSha: () => sha,
+    now: () => now,
+  });
+  try {
+    const response = await fetch(liveDraftUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'approval',
+        accountMode: 'live',
+        adapter: 'canonical-live',
+        market: 'KR',
+        symbol: '005930',
+        timeframe,
+        side: 'BUY',
+        searchRunId: 'live-draft-capability-run',
+        signalId: card.signalId,
+      }),
+    });
+    const body = await response.json() as Record<string, any>;
+    assert.equal(response.status, 403);
+    assert.equal(body.error, 'CAPABILITY_REQUIRED');
+    assert.equal(body.capability, 'canPlaceOrders');
+  } finally { await close(server); }
+});
 
 test('actual Scanner HTTP route remains fail-closed when the server-owned Paper evidence owner is absent', async () => {
   const now = Date.UTC(2026, 8, 17);
