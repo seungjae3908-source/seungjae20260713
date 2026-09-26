@@ -302,6 +302,18 @@ jobs:
             forwardObserverArtifactsReady: raw.forwardObserverArtifactsReady === true,
             validationReceiptPathReady: raw.validationReceiptPathReady === true,
             safetyBoundaryReady: raw.safetyBoundaryReady === true,
+            evidenceCounts: {
+              naturalPositions: Number.isSafeInteger(raw.evidenceCounts?.naturalPositions) && raw.evidenceCounts.naturalPositions >= 0
+                ? raw.evidenceCounts.naturalPositions : 0,
+              naturalSettlements: Number.isSafeInteger(raw.evidenceCounts?.naturalSettlements) && raw.evidenceCounts.naturalSettlements >= 0
+                ? raw.evidenceCounts.naturalSettlements : 0,
+              fullCostReadyPositions: Number.isSafeInteger(raw.evidenceCounts?.fullCostReadyPositions) && raw.evidenceCounts.fullCostReadyPositions >= 0
+                ? raw.evidenceCounts.fullCostReadyPositions : 0,
+              durableSettlementPackets: Number.isSafeInteger(raw.evidenceCounts?.durableSettlementPackets) && raw.evidenceCounts.durableSettlementPackets >= 0
+                ? raw.evidenceCounts.durableSettlementPackets : 0,
+              canonicalRebinds: Number.isSafeInteger(raw.evidenceCounts?.canonicalRebinds) && raw.evidenceCounts.canonicalRebinds >= 0
+                ? raw.evidenceCounts.canonicalRebinds : 0,
+            },
             checks,
             blockers,
             serverFilesWritten: 0,
