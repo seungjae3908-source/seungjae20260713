@@ -187,11 +187,9 @@ function buildEventTimeline(
 }
 
 function MarketEventTimeline({
-  route,
   rows,
   onSelectSymbol,
 }: {
-  route: MarketInformationRoute;
   rows: MarketEventTimelineItem[];
   onSelectSymbol: (symbol: string) => void;
 }) {
@@ -423,27 +421,6 @@ function AssetList({ route, rows, onSelect }: { route: MarketInformationRoute; r
   );
 }
 
-function FeedList({ rows }: { rows: MarketInformationNewsRow[] }) {
-  if (!rows.length) return <p className="mt-3 rounded-xl border border-dashed p-3 text-xs font-bold text-muted-foreground">새 소식 없음</p>;
-  return (
-    <div className="mt-3 space-y-2">
-      {rows.slice(0, 20).map((item) => (
-        <a
-          key={item.id}
-          href={item.url}
-          target="_blank"
-          rel="noreferrer"
-          className="block min-h-14 rounded-xl border bg-background px-3 py-3 hover:bg-muted/60"
-          aria-label={`${item.title} 원문 열기`}
-        >
-          <span className="line-clamp-2 text-sm font-bold leading-5">{item.title}</span>
-          <span className="mt-1 block truncate text-xs font-bold text-muted-foreground">{item.symbol} · {item.source} · {formatDate(item.publishedAt)}</span>
-        </a>
-      ))}
-    </div>
-  );
-}
-
 function MarketDataLoading({ route }: { route: MarketInformationRoute }) {
   return (
     <section className="mt-4 flex min-h-16 items-center justify-center rounded-2xl border bg-card px-4 text-xs font-bold text-muted-foreground" aria-busy="true" aria-label={`${route.label} 시장정보 로딩`}>
@@ -471,7 +448,7 @@ export default function MarketInformationPage() {
   const desktop = useDesktopRoom();
   const [ranking, setRanking] = useState<RankingKey>('tradingValue');
   const [mobileTab, setMobileTab] = useState<MobileRoomTab>('market');
-  const [, setPersonalContextVersion] = useState(0);
+  const [personalContextVersion, setPersonalContextVersion] = useState(0);
 
   useEffect(() => {
     const refresh = () => setPersonalContextVersion((value) => value + 1);
@@ -507,8 +484,8 @@ export default function MarketInformationPage() {
   });
 
   const visibleRows = useMemo(() => sortRows(query.data?.sections.rankings.data ?? [], ranking), [query.data, ranking]);
-  const watchedSymbols = useMemo(() => new Set(readWatchlistItems().map((item) => item.ticker.trim().toUpperCase())), [query.data, route?.id]);
-  const heldSymbols = useMemo(() => new Set(loadPortfolioChartOverlays().map((item) => item.ticker)), [query.data, route?.id]);
+  const watchedSymbols = useMemo(() => new Set(readWatchlistItems().map((item) => item.ticker.trim().toUpperCase())), [query.data, route?.id, personalContextVersion]);
+  const heldSymbols = useMemo(() => new Set(loadPortfolioChartOverlays().map((item) => item.ticker)), [query.data, route?.id, personalContextVersion]);
   const eventTimeline = useMemo(() => buildEventTimeline(
     query.data?.sections.news.data ?? [],
     query.data?.sections.disclosures.data ?? [],
@@ -594,7 +571,6 @@ export default function MarketInformationPage() {
         message: data.sections.news.message ?? data.sections.disclosures.message,
       }}>
         <MarketEventTimeline
-          route={route}
           rows={eventTimeline}
           onSelectSymbol={(symbol) => navigate(marketInformationDetailPath(route, symbol))}
         />
