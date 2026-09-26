@@ -9,6 +9,18 @@ const USER='99999999-9999-4999-8999-999999999999';
 const workerFixture={schemaVersion:'research-worker-status-v9',available:true,checkedAt:'2026-09-26T04:00:00.000Z',workerState:'ACTIVE',lastHeartbeatAt:'2026-09-26T03:59:55.000Z',currentTaskKind:'VIDEO_PREPARE',counts:{queued:2,running:1,succeeded:7,failed:1,blocked:1},authority:{executionAuthority:'NONE',automaticActivation:false,providerCallsFromStatus:0}};
 const providerFixture={schemaVersion:'research-provider-readiness-v8',checkedAt:'2026-09-26T03:30:00.000Z',source:'API_PROCESS',scope:'SELECTED_RUNTIME_ONLY',providers:['youtube','gemini','groq'].map(provider=>({provider,credentialState:'PRESENT',modelState:provider==='youtube'?'NOT_APPLICABLE':'EXPLICIT',callVerified:false,quotaState:'NOT_CHECKED',billingState:'NOT_CHECKED'})),unmappedGenericCredential:false,authority:{executionAuthority:'NONE',providerCalls:0,environmentMutated:false,automaticActivation:false}};
 const orchestratorFixture={schemaVersion:'research-orchestrator-status-v10',available:true,checkedAt:'2026-09-26T05:30:00.000Z',totals:{pending:2,processing:1,reviewRequired:1,completed:4},stageCounts:{YOUTUBE_SOURCE:1,GEMINI_VIDEO:1,GROQ_ADVERSARIAL_REVIEW:1,RULE_COMPLETENESS:1,CANONICAL_COMPILER:1,BACKTEST:1,RESULT_PERSIST:1,ADOPTION_REVIEW:1},markets:{stockCompleted:3,cryptoCompleted:1},authority:{executionAuthority:'NONE',automaticActivation:false,automaticAdoption:false,providerCallsFromStatus:0,profitabilityAuthority:'BACKTESTER_ONLY'}};
+test('AI chat user surface exposes factual provider and fallback metadata without secrets', () => {
+  const aiChat = readFileSync(new URL('../src/pages/ai-chat.tsx', import.meta.url), 'utf8');
+  expect(aiChat).toContain('data-testid="ai-chat-provider-meta"');
+  expect(aiChat).toContain("provider === 'google-gemini'");
+  expect(aiChat).toContain("provider === 'groq'");
+  expect(aiChat).toContain('Fallback 사용');
+  expect(aiChat).toContain('Primary 응답');
+  expect(aiChat).toContain('providerLatencyMs');
+  expect(aiChat).not.toContain('GEMINI_API_KEY');
+  expect(aiChat).not.toContain('GROQ_API_KEY');
+});
+
 async function setup(page:Page,payload:unknown={available:true,workspace},status=200,providerPayload:unknown=providerFixture,providerStatus=200,workerPayload:unknown=workerFixture,workerStatus=200,orchestratorPayload:unknown=orchestratorFixture,orchestratorStatus=200) {
   await page.addInitScript(user=>{
     const encode=(x:Record<string,unknown>)=>btoa(JSON.stringify(x)).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
