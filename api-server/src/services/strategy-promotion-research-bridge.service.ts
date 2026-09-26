@@ -249,10 +249,10 @@ export function buildResearchPromotionBridge(
     validationN: count(candidatePerformance.VALIDATION_N),
     oosN: count(candidatePerformance.OOS_N),
     settlementN: count(candidatePerformance.Settlement_N),
-    fullCostReady: candidatePerformance.FULL_COST_READY === true,
-    validationComplete: candidatePerformance.VALIDATION_COMPLETE === true,
-    oosComplete: candidatePerformance.OOS_COMPLETE === true,
-    profitabilityProven: candidatePerformance.PROFITABILITY_PROVEN === true,
+    fullCostReady: false,
+    validationComplete: false,
+    oosComplete: false,
+    profitabilityProven: false,
   };
 
   const blockers: string[] = [];
