@@ -86,7 +86,13 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain("data-testid=\"ai-chart-entry-planning\"");
   expect(panel).toContain("이 화면에서 새로 만드는 진입은 현재 Paper 전용입니다.");
   expect(panel).toContain("실전 신규진입은 브라우저에서 임의 생성하지 않으며");
-  expect(panel).toContain("Live 신규계획 생성 · 미연결");
+  expect(panel).toContain("Live 진입초안 · 서버검증 연결");
+  expect(panel).toContain("authorizedFetch('/api/trade-automation/scanner/live-draft'");
+  expect(panel).toContain("data-testid=\"ai-chart-prepare-live-entry-draft\"");
+  expect(panel).toContain("payload.livePlanCreated !== false");
+  expect(panel).toContain("payload.providerMutationRequests !== 0");
+  expect(panel).toContain("payload.draft.requiresFinalRiskRecheck !== true");
+  expect(panel).toContain("payload.draft.requiresExplicitApproval !== true");
   expect(panel).toContain("data-testid=\"ai-chart-exit-dashboard-unavailable\"");
   expect(panel).toContain("현재 종목 보유 포지션이 없어 종료계획을 만들지 않습니다.");
   expect(panel).toContain("{tradingCockpit}");
@@ -114,6 +120,22 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain("payload.policy?.stockBrokerByMarket?.domestic_stock");
   expect(panel).toContain("payload.policy?.stockBrokerByMarket?.us_stock");
   expect(panel).toContain("orderTimeRiskRecheckRequired !== true");
+});
+
+test('Scanner live entry draft route remains server-owned and non-executing', () => {
+  const scannerRoute = source('../api-server/src/routes/scanner-paper-plans.ts');
+  const registry = source('../api-server/src/services/product-paper-source-registry.service.ts');
+  expect(scannerRoute).toContain("router.post('/scanner/live-draft', requireCapability('canPlaceOrders')");
+  expect(scannerRoute).toContain("executionAuthority: 'NONE'");
+  expect(scannerRoute).toContain("livePlanCreated: false");
+  expect(scannerRoute).toContain("providerMutationRequests: 0");
+  expect(scannerRoute).toContain("requiresFinalRiskRecheck: true");
+  expect(scannerRoute).toContain("requiresExplicitApproval: true");
+  expect(registry).toContain("resolveScannerLiveDraft(accountId: string, value: unknown, currentSha: string)");
+  expect(registry).toContain("CLIENT_LIVE_DRAFT_AUTHORITY_FORBIDDEN");
+  expect(registry).toContain("'marketSnapshot'");
+  expect(registry).toContain("'quantity'");
+  expect(registry).toContain("'leverage'");
 });
 
 test('AI Chart order dashboard server read model is instrument-scoped and mutation-free', () => {
