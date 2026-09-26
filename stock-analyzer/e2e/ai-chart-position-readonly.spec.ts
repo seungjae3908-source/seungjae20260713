@@ -107,6 +107,8 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain("data-testid=\"ai-chart-load-entry-readiness\"");
   expect(panel).toContain("authorizedFetch('/api/trade-automation/status'");
   expect(panel).toContain("actualOrderSubmittedByStatusRequest !== false");
+  expect(panel).toContain("payload.policy?.stockBrokerByMarket?.domestic_stock");
+  expect(panel).toContain("payload.policy?.stockBrokerByMarket?.us_stock");
   expect(panel).toContain("orderTimeRiskRecheckRequired !== true");
 });
 
@@ -309,8 +311,11 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
         body: JSON.stringify({
           ok: true,
           actualOrderSubmittedByStatusRequest: false,
+          policy: {
+            stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'toss' },
+          },
           liveExecutionReadiness: {
-            toss: {
+            kiwoom: {
               connectionConfigured: false,
               providerVerified: false,
               manualServerGateEnabled: false,
@@ -561,6 +566,7 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await cockpit.getByTestId('ai-chart-load-entry-readiness').click();
   await expect.poll(() => entryReadinessReads).toBe(1);
   await expect(cockpit.getByTestId('ai-chart-entry-readiness')).toContainText('수동 실전 진입 · 차단');
+  await expect(cockpit.getByTestId('ai-chart-entry-readiness')).toContainText('실행 경로 Kiwoom');
   await expect(cockpit.getByTestId('ai-chart-entry-readiness')).toContainText('LIVE_CONNECTION_NOT_CONFIGURED');
   await expect(cockpit.getByTestId('ai-chart-entry-readiness')).toContainText('주문 제출 없음');
   await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('Provider 실제 미체결');
