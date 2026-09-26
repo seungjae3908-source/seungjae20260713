@@ -1,0 +1,11 @@
+export type ResearchOrchestratorMarket='KR_STOCK'|'US_STOCK'|'CRYPTO_SPOT'|'CRYPTO_FUTURES';
+export type ResearchOrchestratorStage='YOUTUBE_SOURCE'|'GEMINI_VIDEO'|'GROQ_ADVERSARIAL_REVIEW'|'RULE_COMPLETENESS'|'CANONICAL_COMPILER'|'BACKTEST'|'RESULT_PERSIST'|'ADOPTION_REVIEW';
+export type ResearchOrchestratorPlanV10={schemaVersion:'research-orchestrator-plan-v10';pipelineId:string;createdAt:string;market:ResearchOrchestratorMarket;marketBucket:'STOCK'|'CRYPTO';sourceId:string;sourceDigest:string;videoPlanDigest:string;providerSequence:['youtube','gemini','groq'];requiredRuleKinds:string[];authority:Record<string,unknown>;planDigest:string};
+export const RESEARCH_ORCHESTRATOR_STAGES_V10:readonly ResearchOrchestratorStage[];
+export function createResearchOrchestratorPlanV10(raw:unknown):ResearchOrchestratorPlanV10;
+export function createGroqAdversarialReviewRequestV10(plan:ResearchOrchestratorPlanV10,geminiReceipt:unknown):unknown;
+export function assessRuleCompletenessV10(plan:ResearchOrchestratorPlanV10,geminiReceipt:unknown,request:unknown,groqReview:unknown):unknown;
+export function runResearchOrchestratorV10(input:{plan:ResearchOrchestratorPlanV10;runGeminiVideo:(input:unknown)=>Promise<unknown>;runGroqReview:(input:unknown)=>Promise<unknown>;compileCanonical:(input:unknown)=>Promise<unknown>;runBacktest:(input:unknown)=>Promise<unknown>;persistResult:(input:unknown)=>Promise<unknown>}):Promise<unknown>;
+export function summarizeResearchOrchestratorStatusV10(states:unknown[],options?:{checkedAt?:string}):unknown;
+export function readResearchOrchestratorStatusV10(root:string):Promise<unknown>;
+export function researchOrchestratorDigestV10(value:unknown):string;
