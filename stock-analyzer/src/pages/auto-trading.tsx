@@ -48,7 +48,7 @@ const SECTIONS: Array<{ value: TradingSection; label: string }> = [
 function StatusItem({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 rounded-xl border border-card-border bg-background p-2.5 text-center">
-      <p className="truncate text-[11px] font-medium text-muted-foreground">{label}</p>
+      <p className="truncate text-xs font-medium text-muted-foreground">{label}</p>
       <div className="mt-1 flex min-w-0 items-center justify-center gap-1.5 text-xs font-semibold">
         <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
         <span className="truncate">{value}</span>
@@ -166,7 +166,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             <ShieldCheck className="h-4 w-4 text-primary" aria-hidden="true" />
             <h2 className="text-sm font-bold">자동매매 실행 방식</h2>
           </div>
-          <span className="rounded-full border border-primary/20 bg-background px-2.5 py-1 text-[11px] font-bold">
+          <span className="rounded-full border border-primary/20 bg-background px-2.5 py-1 text-xs font-bold">
             {runtimeLoading ? '확인 중' : policy?.automaticEnabled ? '자동 실행 ON' : '자동 실행 OFF'}
           </span>
         </div>
@@ -184,7 +184,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             <p className="mt-1 text-xs text-muted-foreground">{marketMeta.provider}</p>
           </div>
           <span className={[
-            'rounded-full px-2.5 py-1 text-[11px] font-bold',
+            'rounded-full px-2.5 py-1 text-xs font-bold',
             marketEnabled && !emergencyStopped ? 'bg-emerald-500/10 text-emerald-700' : 'bg-muted text-muted-foreground',
           ].join(' ')}>
             {marketEnabled && !emergencyStopped ? '시장 ON' : '시장 OFF'}
@@ -207,7 +207,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             국내주식·미국주식·코인현물·코인선물 모두 동일한 서버 검증형 Paper 경로를 사용합니다.
           </p>
         </div>
-        <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-bold text-emerald-700">
+        <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-bold text-emerald-700">
           실제 주문 0
         </span>
       </div>
@@ -329,7 +329,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         : settings;
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background text-foreground" data-testid="auto-trading-page">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background text-foreground" data-testid={initialMode === 'paper' ? 'paper-trading-shell' : 'auto-trading-page'}>
       {!embedded ? <CenteredPageHeader title="매매" /> : null}
 
       <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain p-3 pb-24 sm:p-4">
