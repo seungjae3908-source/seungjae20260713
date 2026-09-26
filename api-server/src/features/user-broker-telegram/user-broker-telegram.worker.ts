@@ -125,5 +125,6 @@ export function startUserTelegramDeliveryWorker(
   const timer = setInterval(tick, boundedInterval(process.env.PERSONAL_TELEGRAM_WORKER_INTERVAL_MS));
   timer.unref?.();
   tick();
+  console.log('[user-telegram-worker] started');
   return { worker, stop: () => clearInterval(timer) };
 }
