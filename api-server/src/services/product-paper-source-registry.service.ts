@@ -173,6 +173,81 @@ export class ProductPaperSourceRegistry {
     if (body.leverage !== undefined && body.leverage !== null) fail('SERVER_LEVERAGE_PROVENANCE_REQUIRED');
     return freeze({ source, paperCandidate: candidate, originalSignalDirection: card.direction });
   }
+  resolveScannerLiveDraft(accountId: string, value: unknown, currentSha: string) {
+    const body = object(value);
+    if (body.mode !== 'approval' || body.accountMode !== 'live' || body.adapter !== 'canonical-live') {
+      fail('LIVE_DRAFT_APPROVAL_ENVELOPE_REQUIRED', 400);
+    }
+    for (const key of [
+      'marketSnapshot',
+      'economics',
+      'riskAssessment',
+      'riskEnvelope',
+      'executionAuthority',
+      'privateTradingApiAllowed',
+      'realOrderEnabled',
+      'liveOrderEnabled',
+      'order',
+      'quantity',
+      'quoteAmount',
+      'limitPrice',
+      'stopPrice',
+      'targetPrices',
+      'splitRatios',
+      'leverage',
+      'marginMode',
+      'reduceOnly',
+    ]) {
+      if (key in body) fail('CLIENT_LIVE_DRAFT_AUTHORITY_FORBIDDEN', 400);
+    }
+
+    const market = MARKET[token(body.market, 32)];
+    if (!market) fail('SCANNER_MARKET_INVALID', 400);
+    const side = token(body.side, 20);
+    if (!(market === 'CRYPTO_FUTURES' ? ['LONG', 'SHORT'] : ['BUY']).includes(side)) {
+      fail('SCANNER_EXPLICIT_ENTRY_SIDE_REQUIRED', 400);
+    }
+    const source = this.read('SCANNER', accountId, token(body.searchRunId), token(body.signalId), currentSha) as ScannerSource;
+    const card = source.card;
+    if (card.symbol !== token(body.symbol, 32)) fail('SCANNER_SYMBOL_MISMATCH');
+    if (source.timeframe !== token(body.timeframe, 12)) fail('SCANNER_TIMEFRAME_MISMATCH');
+    if (card.action !== side) fail('SCANNER_DIRECTION_MISMATCH');
+    if ((side === 'BUY' || side === 'LONG') && card.direction !== 'LONG') fail('SCANNER_SIGNAL_DIRECTION_CONFLICT');
+    if (side === 'SHORT' && card.direction !== 'SHORT') fail('SCANNER_SIGNAL_DIRECTION_CONFLICT');
+    if (body.selectedConditions !== undefined) {
+      if (!Array.isArray(body.selectedConditions) || !body.selectedConditions.length || body.selectedConditions.length > 20
+        || body.selectedConditions.some(item => typeof item !== 'string' || !item.trim() || item.length > 160 || !card.matched.includes(item))) {
+        fail('SCANNER_AND_CONDITIONS_NOT_MAINTAINED');
+      }
+    }
+    if (!card.strongSignalEligible || card.signalState === 'INVALIDATED' || card.dataState !== 'complete'
+      || !card.dataSources.length || card.dataSources.some(item => !item.trim())) {
+      fail('SCANNER_SOURCE_NOT_EXECUTION_ELIGIBLE');
+    }
+    if (!card.pricePlan.entryZone
+      || !(Number.isFinite(card.pricePlan.entryZone.from) && card.pricePlan.entryZone.from > 0)
+      || !(Number.isFinite(card.pricePlan.entryZone.to) && card.pricePlan.entryZone.to > 0)
+      || !(Number.isFinite(card.pricePlan.stopLoss) && Number(card.pricePlan.stopLoss) > 0)
+      || !Array.isArray(card.pricePlan.targets)
+      || !card.pricePlan.targets.some((value) => Number.isFinite(value) && value > 0)) {
+      fail('SCANNER_LIVE_PRICE_PLAN_REQUIRED');
+    }
+
+    const resolution = resolveScannerCanonicalPaperIdentity({ card, market, researchCodeSha: source.sourceSha });
+    if (!resolution.paperCandidate) fail(resolution.blockers[0] ?? 'SCANNER_CANONICAL_IDENTITY_REQUIRED');
+    const identity = resolution.paperCandidate.signal.strategyIdentity;
+    return freeze({
+      source,
+      card,
+      canonicalMarket: market,
+      strategyIdentity: identity,
+      originalSignalDirection: card.direction,
+      executionAuthority: 'NONE' as const,
+      orderSubmitted: false as const,
+      exchangeRequestSent: false as const,
+    });
+  }
+
   resolveBacktest(accountId: string, value: unknown, currentSha: string) {
     const body = object(value);
     envelope(body);
