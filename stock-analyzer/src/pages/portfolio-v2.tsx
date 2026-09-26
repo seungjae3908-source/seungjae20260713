@@ -36,6 +36,20 @@ type Intelligence = {
   assets: { krStocks: number | null; usStocks: number | null; cryptoSpot: number | null; cryptoFuturesEquity: number | null; cash: number | null };
   allocation: { status: string; knownTotalKRW: number; buckets: Record<string, number | null> };
   holdings: IntelligenceHolding[];
+  linkedAccountPositions: Array<{
+    provider: 'toss' | 'kiwoom' | 'upbit' | 'bitget';
+    market: string;
+    symbol: string;
+    quantity: number;
+    averageEntryPrice: number | null;
+    currentPrice: number | null;
+    marketValue: number | null;
+    unrealizedPnl: number | null;
+    unrealizedPnlPercent: number | null;
+    currency: 'KRW' | 'USD' | 'USDT' | null;
+    stale: boolean;
+    asOf: string;
+  }>;
   topHoldings: IntelligenceHolding[];
   top5Concentration: { status: string; percent: number | null };
   correlation: { status: string; sampleSize: number; correlation: number | null; pair: string[] };
@@ -301,6 +315,9 @@ function IntelligenceDashboard() {
     retry: 1,
   });
   const intelligence = query.data?.portfolio;
+  const linkedAccountPositions: Intelligence['linkedAccountPositions'] = Array.isArray(intelligence?.linkedAccountPositions)
+    ? intelligence.linkedAccountPositions
+    : [];
 
   useEffect(() => {
     const locationQuery = location.includes('?') ? location.slice(location.indexOf('?') + 1) : '';
@@ -353,6 +370,17 @@ function IntelligenceDashboard() {
         </section>
 
         <section className="rounded-2xl border border-border bg-card p-4"><h2 className="text-center text-base font-bold">상위 보유자산</h2><div className="mt-3 divide-y divide-border">{intelligence.topHoldings.length ? intelligence.topHoldings.map((holding) => <div key={holding.id} className="flex items-center justify-between gap-3 py-2 text-sm"><div className="min-w-0"><p className="truncate font-semibold">{holding.name}</p><p className="text-xs font-medium text-muted-foreground">{holding.ticker} · {holding.market} · {holding.currentPrice.toLocaleString()} {holding.currency}</p></div><span className="shrink-0 font-semibold tabular-nums">{money(holding.normalizedKRW)}</span></div>) : <p className="text-center text-sm font-medium text-muted-foreground">보유자산 없음</p>}</div></section>
+
+        <section data-testid="portfolio-linked-account-positions" className="rounded-2xl border border-border bg-card p-4">
+          <div className="flex flex-wrap items-center justify-center gap-2"><WalletCards className="h-4 w-4" /><h2 className="font-bold">연결 실계좌 보유</h2><span className="rounded-full bg-positive/10 px-2 py-1 text-xs font-semibold text-positive">조회 전용</span></div>
+          <p className="mt-1 text-center text-xs font-medium leading-5 text-muted-foreground">수동 보유자산과 중복합산하지 않고 실제 연결 계좌 원본을 별도로 표시합니다.</p>
+          <div className="mt-3 divide-y divide-border">
+            {linkedAccountPositions.length ? linkedAccountPositions.map((position, index) => <div key={`${position.provider}:${position.market}:${position.symbol}:${index}`} className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 py-2 text-sm">
+              <div className="min-w-0"><p className="truncate font-semibold">{position.symbol} · {position.market}</p><p className="text-xs font-medium text-muted-foreground">{position.provider.toUpperCase()} · 수량 {position.quantity.toLocaleString()} · 평단 {position.averageEntryPrice == null ? '미확인' : position.averageEntryPrice.toLocaleString()} {position.currency ?? ''}</p></div>
+              <div className="text-right text-xs font-semibold tabular-nums"><p>평가 {position.marketValue == null ? '미확인' : position.marketValue.toLocaleString()} {position.currency ?? ''}</p><p className={position.unrealizedPnl == null ? 'text-muted-foreground' : position.unrealizedPnl >= 0 ? 'text-positive' : 'text-destructive'}>손익 {position.unrealizedPnl == null ? '미확인' : position.unrealizedPnl.toLocaleString()} {position.currency ?? ''}</p>{position.stale ? <p className="text-warning">이전 정상값</p> : null}</div>
+            </div>) : <p className="py-3 text-center text-sm font-medium text-muted-foreground">연결된 실계좌 보유 근거가 없습니다.</p>}
+          </div>
+        </section>
 
         <section className="rounded-2xl border border-border bg-card p-4"><div className="flex flex-wrap items-center justify-center gap-2"><BrainCircuit className="h-4 w-4" /><h2 className="font-bold">자산배분 정책</h2><select aria-label="투자 성향" className="rounded-xl border border-border bg-background px-2 py-2 text-xs font-semibold" value={profile} onChange={(event) => setProfile(event.target.value)}><option value="STABLE">안정형</option><option value="BALANCED">균형형</option><option value="GROWTH">성장형</option></select></div><div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">{intelligence.allocationPolicy.comparison.map((row) => <div key={row.assetClass} className="rounded-xl bg-muted/40 p-3 text-center"><p className="text-xs font-semibold">{row.assetClass}</p><p className="mt-1 text-xs font-medium text-muted-foreground">현재 {percent(row.currentPercent)} · 허용 {row.minPercent}–{row.maxPercent}%</p><p className="mt-2 text-sm font-bold" title={row.state}>{stateLabel(row.state)}</p></div>)}</div><p className="mt-3 text-center text-xs font-medium text-muted-foreground">현재 비중을 허용범위와 비교하며 단일 목표비중을 의미하지 않습니다.</p></section>
 
