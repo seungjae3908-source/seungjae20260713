@@ -228,7 +228,15 @@ export function buildResearchPromotionBridge(
     return base('NO_CANDIDATE', ['RESEARCH_CANDIDATE_NOT_PRESENT'], generatedAt);
   }
   if (candidatePerformance.status !== 'PRESENT'
+    || candidatePerformance.schemaVersion !== 'frozen-candidate-performance-reader-v1'
     || candidatePerformance.identity14Verified !== true
+    || candidatePerformance.FULL_COST_READY !== false
+    || candidatePerformance.NET_ALPHA_PROVEN !== false
+    || candidatePerformance.PROFITABILITY_PROVEN !== false
+    || candidatePerformance.TRAIN_DIAGNOSTIC_ONLY !== true
+    || candidatePerformance.VALIDATION_COMPLETE !== false
+    || candidatePerformance.OOS_COMPLETE !== false
+    || candidatePerformance.Net_PnL !== null
     || candidatePerformance.executionAuthority !== 'NONE') {
     return base('INVALID', ['RESEARCH_CANDIDATE_EVIDENCE_INVALID'], generatedAt);
   }
