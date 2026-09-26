@@ -1,12 +1,11 @@
-// Keep the HTML entry intentionally dependency-free. The production entry used
-// to include the full React/auth/runtime graph, so a direct AI Chart document
-// could not even request its route chunk until that large entry had downloaded
-// and executed. Start the app graph first, then the route in the same task. Both
-// requests now begin as soon as this tiny bootstrap executes.
-const appModulePromise = import('./App');
+// Keep the HTML entry intentionally dependency-free. On a direct AI Chart
+// document, give the route chunk first request priority before starting the much
+// larger application graph. The app/runtime imports still begin in the same task,
+// but the user-critical chart request enters the browser queue first.
 if (window.location.pathname.endsWith('/ai-chart')) {
 	void import('@/pages/ai-chart').catch(() => undefined);
 }
+const appModulePromise = import('./App');
 const runtimeModulePromise = import('./app-runtime');
 
 void Promise.all([appModulePromise, runtimeModulePromise]).then(([{ default: App }, { mountApp }]) => {
