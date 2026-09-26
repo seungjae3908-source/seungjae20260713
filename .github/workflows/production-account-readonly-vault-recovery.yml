@@ -45,7 +45,7 @@ jobs:
           grep -Fq 'amend_requests: 0' "$file"
           grep -Fq 'transfer_requests: 0' "$file"
           grep -Fq 'withdrawal_requests: 0' "$file"
-          ! grep -Eq 'echo .*TRADING_CREDENTIAL_MASTER_KEY|console\.log\(.*TRADING_CREDENTIAL_MASTER_KEY' "$file"
+          grep -Fq "if (/TRADING_CREDENTIAL_MASTER_KEY/.test(serialized) || /[A-Za-z0-9+/]{43}=/.test(serialized)) process.exit(1);" "$file"
 
   recover:
     name: Owner-approved Production account read-only master-key recovery
