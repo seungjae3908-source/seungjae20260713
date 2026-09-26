@@ -738,15 +738,27 @@ router.post('/positions/exit-preview', async (req: AuthenticatedRequest, res) =>
 router.get('/orders', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
+    const dashboardOnly = String(req.query.dashboard ?? '') === '1';
+    const requestedSymbol = normalizedExitSymbol(req.query.symbol);
+    const requestedExchange = req.query.exchange == null || String(req.query.exchange).trim() === ''
+      ? null
+      : exchangeValue(req.query.exchange);
+    if (dashboardOnly && !requestedSymbol) throw new Error('ORDER_DASHBOARD_SYMBOL_REQUIRED');
+
     const [orders, events, plans] = await Promise.all([
       repository.listOrders(userId),
-      repository.listEvents(userId),
+      dashboardOnly ? Promise.resolve([]) : repository.listEvents(userId),
       repository.listPlans(userId),
     ]);
     const planById = new Map(plans.map((plan) => [plan.id, plan]));
-    const dashboardItems = orders.map((order) => {
+    const dashboardItems = orders.flatMap((order) => {
       const plan = planById.get(order.planId) ?? null;
-      return {
+      if (dashboardOnly) {
+        if (!plan) return [];
+        if (requestedExchange && order.exchange !== requestedExchange) return [];
+        if (normalizedExitSymbol(plan.symbol) !== requestedSymbol) return [];
+      }
+      return [{
         id: order.id,
         planId: order.planId,
         exchange: order.exchange,
@@ -765,13 +777,14 @@ router.get('/orders', async (req: AuthenticatedRequest, res) => {
         cancelable: order.cancelable ?? null,
         lastErrorCode: order.lastErrorCode,
         updatedAt: order.updatedAt,
-      };
+      }];
     });
     return res.json({
       ok: true,
-      orders,
+      orders: dashboardOnly ? [] : orders,
       events,
       dashboardItems,
+      dashboardScoped: dashboardOnly,
       orderSubmitted: false,
       orderCanceled: false,
       orderAmended: false,
