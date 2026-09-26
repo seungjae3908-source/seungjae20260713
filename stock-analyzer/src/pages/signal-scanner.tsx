@@ -10,12 +10,14 @@ import {
 } from '@/lib/analysis-selection';
 import {
   fetchSignalScanner,
+  fetchStockFlowEvidence,
   deriveScannerDisplayOutcome,
   signalScannerDetailPath,
   SignalScannerRequestError,
   type ScannerAlertCandidate,
   type ScannerResponse,
   type ScannerSignalCard,
+  type ScannerStockFlowEvidence,
   type ScannerOutcomeCode,
   type SignalScannerRequest,
 } from '@/lib/signal-scanner';
@@ -350,6 +352,8 @@ function SignalDetailPanel({
   const risks = [...new Set([...card.warnings, ...(card.aiValidation?.risks ?? [])])];
   const mobile = Boolean(onClose);
   const [mobileTab, setMobileTab] = useState<MobileDetailTab>(() => showOrderPreparation ? 'risk' : 'summary');
+  const [stockFlow, setStockFlow] = useState<ScannerStockFlowEvidence | null>(null);
+  const [stockFlowState, setStockFlowState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const quality = card.backtestQuality;
   const signalQuality = card.dataQuality;
   const quant = card.quantScore;
@@ -377,6 +381,26 @@ function SignalDetailPanel({
   useEffect(() => {
     setMobileTab('summary');
   }, [card.signalId]);
+
+  useEffect(() => {
+    setStockFlow(null);
+    if (card.assetClass !== 'stock') {
+      setStockFlowState('idle');
+      return;
+    }
+    const controller = new AbortController();
+    setStockFlowState('loading');
+    void fetchStockFlowEvidence(card.market === 'US' ? 'US' : 'KR', card.symbol, controller.signal)
+      .then((value) => {
+        setStockFlow(value);
+        setStockFlowState('ready');
+      })
+      .catch((error: unknown) => {
+        if (error instanceof Error && error.name === 'AbortError') return;
+        setStockFlowState('error');
+      });
+    return () => controller.abort();
+  }, [card.assetClass, card.market, card.symbol]);
 
   useEffect(() => {
     if (showOrderPreparation) setMobileTab('risk');
@@ -622,6 +646,98 @@ function SignalDetailPanel({
           <p className="mt-3 text-xs leading-5 text-muted-foreground">AI/뉴스 감성은 단독 매매 방향이 아니며, 표시된 근거는 기존 Scanner·Risk Gate를 대체하지 않습니다.</p>
         </section>
       ) : null}
+      {card.assetClass === 'stock' ? (
+        <section data-testid="scanner-stock-flow-evidence" className="rounded-2xl border border-card-border p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-xs font-bold">기관 · 외국인 · 공매도 근거</h3>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">공식 원자료가 있는 항목만 표시하며 Scanner 점수·랭킹·방향에는 반영하지 않습니다.</p>
+            </div>
+            <span className="rounded-full border border-card-border px-2 py-1 text-xs font-semibold">
+              {stockFlowState === 'loading'
+                ? '불러오는 중'
+                : stockFlowState === 'error'
+                  ? '확인 불가'
+                  : stockFlow?.status === 'READY'
+                    ? '공식 데이터 정상'
+                    : stockFlow?.status === 'PARTIAL'
+                      ? '공식 데이터 일부'
+                      : stockFlow?.status === 'NOT_CONNECTED'
+                        ? '공식 Provider 미연결'
+                        : stockFlow?.status === 'UNAVAILABLE'
+                          ? '공식 데이터 확인 불가'
+                          : '미확인'}
+            </span>
+          </div>
+
+          {stockFlow ? (
+            <>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-center min-[520px]:grid-cols-4">
+                <div className="rounded-xl bg-background p-2.5">
+                  <p className="text-xs text-muted-foreground">공매도 거래량 비율</p>
+                  <p className="mt-1 font-semibold tabular-nums">{formatMetric(stockFlow.shortSale.shortVolumeRatioPercent, '%')}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{stockFlow.shortSale.tradeDate ?? '일자 미확인'}</p>
+                </div>
+                <div className="rounded-xl bg-background p-2.5">
+                  <p className="text-xs text-muted-foreground">Short Interest</p>
+                  <p className="mt-1 font-semibold tabular-nums">{formatNumber(stockFlow.shortInterest.currentShortPosition, 0)}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{stockFlow.shortInterest.settlementDate ?? '결제일 미확인'}</p>
+                </div>
+                <div className="rounded-xl bg-background p-2.5">
+                  <p className="text-xs text-muted-foreground">Short Interest 변화</p>
+                  <p className="mt-1 font-semibold tabular-nums">{formatMetric(stockFlow.shortInterest.changePercent, '%')}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">공식 보고값</p>
+                </div>
+                <div className="rounded-xl bg-background p-2.5">
+                  <p className="text-xs text-muted-foreground">Days to Cover</p>
+                  <p className="mt-1 font-semibold tabular-nums">{formatMetric(stockFlow.shortInterest.daysToCover)}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">숏커버 신호 아님</p>
+                </div>
+              </div>
+
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <div className="rounded-xl bg-background p-3">
+                  <p className="text-xs font-semibold">기관 근거 · {stockFlow.institutional.status === 'READY' ? '연결' : '미연결'}</p>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">{stockFlow.institutional.note}</p>
+                </div>
+                <div className="rounded-xl bg-background p-3">
+                  <p className="text-xs font-semibold">외국인 근거 · {stockFlow.foreignFlow.status === 'READY' ? '연결' : stockFlow.foreignFlow.status === 'NOT_APPLICABLE' ? '해당 없음' : '미연결'}</p>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">{stockFlow.foreignFlow.note}</p>
+                </div>
+              </div>
+
+              <div className="mt-3 rounded-xl border border-warning/25 bg-warning/5 p-3">
+                <p className="text-xs font-semibold">숏커버 · 추정하지 않음</p>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">{stockFlow.shortCover.note}</p>
+              </div>
+
+              {stockFlow.sources.length ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {stockFlow.sources.map((source) => (
+                    <a
+                      key={`${source.provider}:${source.dataset}`}
+                      href={source.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex min-h-11 items-center rounded-xl border border-card-border px-3 text-xs font-semibold"
+                    >
+                      {source.provider} · {source.dataset}
+                    </a>
+                  ))}
+                </div>
+              ) : null}
+
+              {stockFlow.warnings.length ? <p className="mt-2 text-xs leading-5 text-warning">{stockFlow.warnings.join(' · ')}</p> : null}
+              <p className="mt-3 text-xs font-semibold text-muted-foreground">Evidence only · Score 0 · Rank 0 · Direction 0 · 실행 권한 NONE</p>
+            </>
+          ) : stockFlowState === 'error' ? (
+            <p className="mt-3 text-xs leading-5 text-muted-foreground">공식 수급 근거를 현재 확인하지 못했습니다. 누락값을 0이나 중립으로 만들지 않습니다.</p>
+          ) : (
+            <p className="mt-3 text-xs leading-5 text-muted-foreground">공식 수급 근거를 확인하고 있습니다.</p>
+          )}
+        </section>
+      ) : null}
+
       <div className="grid gap-2 sm:grid-cols-3">
         <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-bold">일치 근거</h3><div className="mt-2 flex flex-wrap gap-1">{card.matched.length ? card.matched.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-positive/10 px-2 py-1 text-xs text-positive">{item}</span>) : <span className="text-xs text-muted-foreground">없음</span>}</div></section>
         <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-bold">불일치 조건</h3><div className="mt-2 flex flex-wrap gap-1">{card.notMatched.length ? card.notMatched.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-destructive/10 px-2 py-1 text-xs text-destructive">{item}</span>) : <span className="text-xs text-muted-foreground">없음</span>}</div></section>
