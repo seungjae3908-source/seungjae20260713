@@ -16,6 +16,7 @@ on:
       - api-server/scripts/research-workspace-one-shot-preflight-v13.cjs
       - api-server/scripts/research-workspace-one-shot-preflight-v13.test.cjs
       - .github/workflows/research-workspace-one-shot-preflight-v13.yml
+      - .github/workflows/research-workspace-one-shot-execution-v14.yml
       - api-server/src/routes/video-research*.ts
       - api-server/src/routes/index.ts
       - stock-analyzer/src/components/research-workspace-panel.tsx
