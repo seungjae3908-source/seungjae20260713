@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { readResearchOneShotReviewV15 } from '../../../packages/external-research/src/research-workspace-one-shot-review-v15.js';
+import { readResearchOneShotReviewV15 } from '../../packages/external-research/src/research-workspace-one-shot-review-v15.js';
 import {
   createHumanRuleDigestDecisionV16, writeHumanRuleDigestDecisionV16,
-} from '../../../packages/external-research/src/research-workspace-one-shot-bind-v16.js';
+} from '../../packages/external-research/src/research-workspace-one-shot-bind-v16.js';
 
 const fail=(code:string):never=>{throw Object.assign(new Error(code),{code});};
 const digest=(x:string)=>/^[a-f0-9]{64}$/.test(x);
