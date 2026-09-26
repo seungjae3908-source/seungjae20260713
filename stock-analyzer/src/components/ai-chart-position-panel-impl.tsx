@@ -106,6 +106,27 @@ type OrderDashboardState =
   | { kind: 'ready'; items: OrderDashboardItem[] }
   | { kind: 'unavailable'; code: string };
 
+type ExitPreview = {
+  provider: 'toss' | 'kiwoom' | 'upbit' | 'bitget';
+  market: string;
+  symbol: string;
+  percent: number;
+  positionSide: string | null;
+  positionQuantity: number | null;
+  availableQuantity: number;
+  exitQuantity: number;
+  side: 'buy' | 'sell';
+  reduceOnly: true;
+  checkedAt: string;
+  stale: false;
+};
+
+type ExitPreviewState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'ready'; preview: ExitPreview }
+  | { kind: 'unavailable'; code: string };
+
 type StockReadOnlyProvider = 'toss' | 'kiwoom';
 
 function providerForMarket(market: AnalysisMarket, stockProvider: StockReadOnlyProvider): Snapshot['provider'] {
@@ -281,6 +302,7 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
   const [orderActionId, setOrderActionId] = useState<string | null>(null);
   const [amendDrafts, setAmendDrafts] = useState<Record<string, { price: string; quantity: string }>>({});
   const [exitPercent, setExitPercent] = useState(100);
+  const [exitPreviewState, setExitPreviewState] = useState<ExitPreviewState>({ kind: 'idle' });
   const abortRef = useRef<AbortController | null>(null);
   const requestSequenceRef = useRef(0);
 
@@ -301,6 +323,7 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
     setOrderActionId(null);
     setAmendDrafts({});
     setExitPercent(100);
+    setExitPreviewState({ kind: 'idle' });
     onOverlayChange(null);
   }, [market, onOverlayChange, symbol]);
 
@@ -532,6 +555,51 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
       setOrderActionId(null);
     }
   }, [amendDrafts, loadOrderDashboard, orderActionId, symbol]);
+
+  const verifyExitPreview = useCallback(async () => {
+    if (!position || exitPreviewState.kind === 'loading') return;
+    setExitPreviewState({ kind: 'loading' });
+    try {
+      const response = await authorizedFetch('/api/trade-automation/positions/exit-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          confirmed: true,
+          provider,
+          market,
+          symbol,
+          percent: exitPercent,
+        }),
+      });
+      const payload = await response.json().catch(() => null) as {
+        ok?: boolean;
+        error?: string;
+        preview?: ExitPreview;
+        orderSubmitted?: boolean;
+        orderCanceled?: boolean;
+        orderAmended?: boolean;
+        privateTradingMutationSent?: boolean;
+        executionAuthority?: string;
+      } | null;
+      if (!response.ok || payload?.ok !== true || !payload.preview) {
+        setExitPreviewState({ kind: 'unavailable', code: payload?.error ?? `HTTP_${response.status}` });
+        return;
+      }
+      if (payload.orderSubmitted !== false
+        || payload.orderCanceled !== false
+        || payload.orderAmended !== false
+        || payload.privateTradingMutationSent !== false
+        || payload.executionAuthority !== 'NONE'
+        || payload.preview.reduceOnly !== true
+        || payload.preview.stale !== false) {
+        setExitPreviewState({ kind: 'unavailable', code: 'EXIT_PREVIEW_SAFETY_CONTRACT_MISMATCH' });
+        return;
+      }
+      setExitPreviewState({ kind: 'ready', preview: payload.preview });
+    } catch (error) {
+      setExitPreviewState({ kind: 'unavailable', code: error instanceof Error ? error.name : 'EXIT_PREVIEW_FAILED' });
+    }
+  }, [exitPercent, exitPreviewState.kind, market, position, provider, symbol]);
 
   return (
     <section data-testid="ai-chart-position-panel" className="rounded-2xl border border-card-border bg-background/85 p-3 text-left shadow-sm">
@@ -887,7 +955,10 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
                         key={percent}
                         type="button"
                         aria-pressed={exitPercent === percent}
-                        onClick={() => setExitPercent(percent)}
+                        onClick={() => {
+                          setExitPercent(percent);
+                          setExitPreviewState({ kind: 'idle' });
+                        }}
                         className={`min-h-10 rounded-lg border text-[9px] font-black ${exitPercent === percent ? 'border-primary bg-primary/10 text-primary' : 'border-card-border'}`}
                       >
                         {percent}%
@@ -898,8 +969,31 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
                     <Metric label="종료 예정 비중" value={`${exitPercent}%`} />
                     <Metric label="종료 예정 수량" value={formatQuantity(exitQuantity)} />
                   </div>
+                  <button
+                    type="button"
+                    data-testid="ai-chart-verify-exit-preview"
+                    onClick={() => void verifyExitPreview()}
+                    disabled={exitPreviewState.kind === 'loading'}
+                    className="mt-2 min-h-11 w-full rounded-xl border border-primary/30 bg-primary/5 px-3 text-[10px] font-black text-primary disabled:opacity-50"
+                  >
+                    {exitPreviewState.kind === 'loading' ? '실계좌 수량 재확인 중...' : '서버에서 종료계획 재검증'}
+                  </button>
+                  {exitPreviewState.kind === 'ready' ? (
+                    <div className="mt-2 rounded-xl border border-positive/30 bg-positive/5 p-2.5" data-testid="ai-chart-exit-preview-verified">
+                      <p className="text-[9px] font-black text-positive">실계좌 read-only 재검증 완료 · reduce-only</p>
+                      <p className="mt-1 text-[9px] font-bold text-muted-foreground">
+                        서버 확인 수량 {formatQuantity(exitPreviewState.preview.exitQuantity)}
+                        {' · '}방향 {exitPreviewState.preview.side.toUpperCase()}
+                        {' · '}조회 {checkedAtLabel(exitPreviewState.preview.checkedAt)}
+                      </p>
+                      <p className="mt-1 text-[8px] font-bold text-muted-foreground">executionAuthority=NONE · 주문 제출 0 · 취소/정정 0</p>
+                    </div>
+                  ) : null}
+                  {exitPreviewState.kind === 'unavailable' ? (
+                    <p role="alert" className="mt-2 rounded-xl bg-warning/10 px-3 py-2 text-[9px] font-bold text-warning">종료계획 재검증 실패 · {exitPreviewState.code}</p>
+                  ) : null}
                   <p className="mt-2 text-[8px] font-bold leading-4 text-muted-foreground">
-                    현재 canonical 엔진에는 실계좌 보유수량을 서버에서 재확인해 reduce-only 종료계획으로 만드는 전용 owner가 아직 없습니다. 그래서 이 화면은 수량을 계산하되 종료 주문으로 위장하지 않습니다. 다음 Draft 단계에서 서버 재조회 + reduce-only + 최종 Risk 재검증 owner를 연결합니다.
+                    이 단계는 실계좌를 read-only로 다시 확인해 종료 비중·수량·reduce-only 방향만 확정합니다. 실제 청산 주문은 아직 제출하지 않습니다. 다음 단계에서 이 검증 결과를 canonical 승인계획과 최종 Risk 재검증에 연결합니다.
                   </p>
                 </section>
               </div>
