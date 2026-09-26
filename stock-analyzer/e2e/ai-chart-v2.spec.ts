@@ -224,8 +224,9 @@ test('desktop AI Chart 2.0 preserves one initial chart request, loads MTF on dem
   await expect.poll(() => mock.calls.size).toBeGreaterThanOrEqual(4);
 
   await expect(page.getByTestId('ai-evidence-panel')).toBeVisible();
-  await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('진입 3');
-  await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('미확인');
+  await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('확인된 진입·손절·목표 가격이 없습니다.');
+  await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('빈 계획을 0이나 임의 가격으로 채우지 않습니다.');
+  await expect(page.getByTestId('ai-chart-order-plan-preview')).not.toContainText('진입 3');
   await expect(page.getByTestId('ai-chart-data-provenance')).toContainText('과거 성과 검증');
   await expect(page.getByTestId('ai-chart-data-provenance')).toContainText('미검증');
 
