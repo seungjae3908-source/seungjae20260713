@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 import { automaticLiveExecutionEnabled, liveExecutionEnabled } from './trade-automation.service';
 import {
@@ -58,6 +60,29 @@ test('approval policy always disables automatic execution and every exchange swi
   assert.deepEqual(policy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
   assert.deepEqual(policy.enabledAssets, { bitget: [], upbit: [], kiwoom: [], toss: [] });
   assert.deepEqual(policy.enabledStrategies, []);
+});
+
+test('production deploy resets every live-order authority gate to fail closed', () => {
+  const deploy = readFileSync(path.resolve(process.cwd(), '..', 'ops/deploy-production.sh'), 'utf8');
+  for (const flag of [
+    'LIVE_TRADING=false',
+    'AUTO_TRADING=false',
+    'REAL_ORDER_ENABLED=false',
+    'PRIVATE_TRADING_API_ALLOWED=false',
+    'ORDER_EXECUTION_ENABLED=false',
+    'LIVE_TRADING_ACTIVATION_APPROVED=false',
+    'LIVE_AUTOMATIC_TRADING_ENABLED=false',
+    'BITGET_LIVE_ORDER_ENABLED=false',
+    'UPBIT_LIVE_ORDER_ENABLED=false',
+    'KIWOOM_LIVE_ORDER_ENABLED=false',
+    'TOSS_LIVE_ORDER_ENABLED=false',
+    'executionAuthority=NONE',
+  ]) {
+    assert.ok(deploy.includes(flag), `missing deploy reset: ${flag}`);
+  }
+  assert.ok(deploy.includes('bool("ORDER_EXECUTION_ENABLED")'));
+  assert.ok(deploy.includes('bool("LIVE_AUTOMATIC_TRADING_ENABLED")'));
+  assert.ok(deploy.includes('application_runtime_ready()'));
 });
 
 test('every live provider requires the global gates plus its own explicit provider gate', () => {
