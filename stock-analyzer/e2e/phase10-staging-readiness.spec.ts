@@ -1172,6 +1172,15 @@ function normalizedAssetSymbol(value: unknown) {
 async function selectVisibleUsAaplForAnalysis(page: Page) {
   const option = page.getByRole('option').filter({ hasText: /AAPL/i }).first();
   await expect(option).toBeVisible({ timeout: 5_000 });
+  const chartRequestPromise = page.waitForRequest((request) => {
+    try {
+      const url = new URL(request.url());
+      return request.method() === 'GET'
+        && url.pathname === '/api/stocks/AAPL/chart';
+    } catch {
+      return false;
+    }
+  }, { timeout: 2_000 }).catch(() => null);
   await option.click();
   await expect.poll(() => {
     const url = new URL(page.url());
@@ -1196,6 +1205,21 @@ async function selectVisibleUsAaplForAnalysis(page: Page) {
     timeout: 5_000,
     intervals: [100, 200, 400, 800],
   }).toBe('US:AAPL');
+
+  const chartRequest = await chartRequestPromise;
+  if (chartRequest) {
+    await expect.poll(
+      () => pendingApiGetRequests.get(page)?.has(chartRequest) ?? false,
+      {
+        message: 'AAPL chart read must settle before the certification leaves stock analysis',
+        timeout: 5_000,
+        intervals: [100, 200, 400, 800],
+      },
+    ).toBe(false);
+    const chartResponse = await chartRequest.response();
+    expect(chartResponse, 'AAPL chart read must complete instead of aborting').not.toBeNull();
+    expect(chartResponse!.status(), 'AAPL chart read must complete below HTTP 400').toBeLessThan(400);
+  }
 }
 
 async function runAuthenticatedSearchCertification(page: Page) {
