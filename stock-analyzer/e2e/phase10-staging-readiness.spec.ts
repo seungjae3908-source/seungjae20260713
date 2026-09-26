@@ -63,6 +63,12 @@ type RouteTransitionObservation = {
   candidates: Diagnostic[];
   pendingGetRequests: Set<Request>;
 };
+type RecentRouteTransitionObservation = Pick<
+  RouteTransitionObservation,
+  'fromRoute' | 'toRoute' | 'origin'
+> & {
+  confirmedAt: number;
+};
 type CapabilityDenialObservation = {
   route: string;
   origin: string;
@@ -135,6 +141,7 @@ type AuthenticatedViewportEvidence = {
 const activeLogoutObservations = new WeakMap<Page, LogoutObservation>();
 const confirmedLogoutAbortRequests = new WeakMap<Request, string>();
 const activeRouteTransitionObservations = new WeakMap<Page, RouteTransitionObservation>();
+const recentConfirmedRouteTransitions = new WeakMap<Page, RecentRouteTransitionObservation>();
 const activeCapabilityDenialObservations = new WeakMap<Page, CapabilityDenialObservation>();
 const activeResearchReloadObservations = new WeakMap<Page, ResearchReloadObservation>();
 const activeAuthFaultObservations = new WeakMap<Page, AuthFaultObservation>();
@@ -306,6 +313,22 @@ function isExpectedLateAiChartCandleAbortIdentity(input: {
 }) {
   return isAiChartTransitionCandleReadIdentity(input)
     && input.errorText === 'net::ERR_ABORTED';
+}
+
+const recentAiChartCandleAbortWindowMs = 2_000;
+
+function isExpectedRecentAiChartCandleAbortIdentity(input: {
+  method: string;
+  rawUrl: string;
+  errorText: string | undefined;
+  frameRoute: string;
+  observation: RecentRouteTransitionObservation;
+  now: number;
+}) {
+  const ageMs = input.now - input.observation.confirmedAt;
+  return ageMs >= 0
+    && ageMs <= recentAiChartCandleAbortWindowMs
+    && isExpectedLateAiChartCandleAbortIdentity(input);
 }
 
 function isExpectedRouteTransitionAbort(
@@ -546,6 +569,27 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
     if (routeObservation && isExpectedRouteTransitionAbort(request, routeObservation)) {
       routeObservation.candidates.push(diagnostic);
       return;
+    }
+    const recentRouteObservation = recentConfirmedRouteTransitions.get(page);
+    if (
+      recentRouteObservation
+      && isExpectedRecentAiChartCandleAbortIdentity({
+        method: request.method(),
+        rawUrl: request.url(),
+        errorText: request.failure()?.errorText,
+        frameRoute: page.url(),
+        observation: recentRouteObservation,
+        now: Date.now(),
+      })
+    ) {
+      diagnostics.expected_route_transition_aborts.push(diagnostic);
+      return;
+    }
+    if (
+      recentRouteObservation
+      && Date.now() - recentRouteObservation.confirmedAt > recentAiChartCandleAbortWindowMs
+    ) {
+      recentConfirmedRouteTransitions.delete(page);
     }
     diagnostics.unexpected_http_errors.push(diagnostic);
   });
@@ -864,9 +908,20 @@ async function finishRouteTransition(
 
   activeRouteTransitionObservations.delete(page);
   if (confirmed) {
+    if (fromPath === '/ai-chart') {
+      recentConfirmedRouteTransitions.set(page, {
+        fromRoute: observation.fromRoute,
+        toRoute: observation.toRoute,
+        origin: observation.origin,
+        confirmedAt: Date.now(),
+      });
+    } else {
+      recentConfirmedRouteTransitions.delete(page);
+    }
     diagnostics.expected_route_transition_aborts.push(...observation.candidates);
     return;
   }
+  recentConfirmedRouteTransitions.delete(page);
   diagnostics.unexpected_http_errors.push(...observation.candidates.map((item) => ({
     ...item,
     detail: `unconfirmed route-transition abort: ${item.detail}`,
@@ -1117,6 +1172,15 @@ function normalizedAssetSymbol(value: unknown) {
 async function selectVisibleUsAaplForAnalysis(page: Page) {
   const option = page.getByRole('option').filter({ hasText: /AAPL/i }).first();
   await expect(option).toBeVisible({ timeout: 5_000 });
+  const chartRequestPromise = page.waitForRequest((request) => {
+    try {
+      const url = new URL(request.url());
+      return request.method() === 'GET'
+        && url.pathname === '/api/stocks/AAPL/chart';
+    } catch {
+      return false;
+    }
+  }, { timeout: 2_000 }).catch(() => null);
   await option.click();
   await expect.poll(() => {
     const url = new URL(page.url());
@@ -1141,6 +1205,21 @@ async function selectVisibleUsAaplForAnalysis(page: Page) {
     timeout: 5_000,
     intervals: [100, 200, 400, 800],
   }).toBe('US:AAPL');
+
+  const chartRequest = await chartRequestPromise;
+  if (chartRequest) {
+    await expect.poll(
+      () => pendingApiGetRequests.get(page)?.has(chartRequest) ?? false,
+      {
+        message: 'AAPL chart read must settle before the certification leaves stock analysis',
+        timeout: 5_000,
+        intervals: [100, 200, 400, 800],
+      },
+    ).toBe(false);
+    const chartResponse = await chartRequest.response();
+    expect(chartResponse, 'AAPL chart read must complete instead of aborting').not.toBeNull();
+    expect(chartResponse!.status(), 'AAPL chart read must complete below HTTP 400').toBeLessThan(400);
+  }
 }
 
 async function runAuthenticatedSearchCertification(page: Page) {
@@ -1627,6 +1706,34 @@ test('logout abort proof keeps session-scoped account reads exact and query-free
   expect(isExpectedLateAiChartCandleAbortIdentity({
     ...lateCandleAbort,
     observation: { ...observation, fromRoute: '/scanner' },
+  })).toBe(false);
+
+  const recentLateCandleAbort = {
+    ...lateCandleAbort,
+    observation: {
+      ...observation,
+      confirmedAt: 10_000,
+    },
+    now: 11_999,
+  };
+  expect(isExpectedRecentAiChartCandleAbortIdentity(recentLateCandleAbort)).toBe(true);
+  expect(isExpectedRecentAiChartCandleAbortIdentity({ ...recentLateCandleAbort, now: 12_001 })).toBe(false);
+  expect(isExpectedRecentAiChartCandleAbortIdentity({ ...recentLateCandleAbort, now: 9_999 })).toBe(false);
+  expect(isExpectedRecentAiChartCandleAbortIdentity({
+    ...recentLateCandleAbort,
+    errorText: 'net::ERR_FAILED',
+  })).toBe(false);
+  expect(isExpectedRecentAiChartCandleAbortIdentity({
+    ...recentLateCandleAbort,
+    rawUrl: `${origin}/api/market/scan`,
+  })).toBe(false);
+  expect(isExpectedRecentAiChartCandleAbortIdentity({
+    ...recentLateCandleAbort,
+    frameRoute: `${origin}/ai-chart`,
+  })).toBe(false);
+  expect(isExpectedRecentAiChartCandleAbortIdentity({
+    ...recentLateCandleAbort,
+    observation: { ...recentLateCandleAbort.observation, fromRoute: '/scanner' },
   })).toBe(false);
 });
 

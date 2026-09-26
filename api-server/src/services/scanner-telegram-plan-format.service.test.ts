@@ -23,21 +23,22 @@ function alert(overrides: Partial<ScannerAlertCandidate> = {}): ScannerAlertCand
   };
 }
 
-test('Telegram signal shows entry, split sell targets, and stop without implying execution', () => {
+test('Telegram signal shows compact entry, targets, and stop without execution clutter', () => {
   const input = scannerTelegramInput(alert(), () => 'stock-room');
   assert.ok(input);
   const details = input?.details ?? '';
-  assert.match(details, /진입가\/진입구간 100~101/);
-  assert.match(details, /분할 매도가 TP1 105 · TP2 110 · TP3 115/);
-  assert.match(details, /손절가 95/);
-  assert.match(details, /실제 주문\/체결 아님/);
+  assert.match(details, /🚨 진입가능/);
+  assert.match(details, /진입 100~101/);
+  assert.match(details, /목표 TP1 105 · TP2 110 · TP3 115/);
+  assert.match(details, /Stop 95/);
+  assert.doesNotMatch(details, /실제 주문\/체결 아님/);
 });
 
-test('Telegram signal never invents missing sell targets or stop prices', () => {
+test('Telegram signal never invents missing targets or stop prices', () => {
   const input = scannerTelegramInput(alert({ targets: [], stopLoss: null, entryZone: null }), () => 'stock-room');
   assert.ok(input);
   const details = input?.details ?? '';
-  assert.match(details, /진입가\/진입구간 N\/A/);
-  assert.match(details, /분할 매도가 N\/A/);
-  assert.match(details, /손절가 N\/A/);
+  assert.match(details, /진입 N\/A/);
+  assert.match(details, /목표 N\/A/);
+  assert.match(details, /Stop N\/A/);
 });

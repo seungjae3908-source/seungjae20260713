@@ -1,4 +1,4 @@
-export type AccountProvider = 'toss' | 'upbit' | 'bitget';
+export type AccountProvider = 'toss' | 'kiwoom' | 'upbit' | 'bitget';
 export type AccountReadStatus = 'CONNECTED' | 'CONFIGURED_UNVERIFIED' | 'NOT_CONFIGURED' | 'STALE' | 'AUTH_FAILED' | 'RATE_LIMITED' | 'UNAVAILABLE';
 
 export type CanonicalBalance = { currency: string; available: number | null; locked: number | null; total: number | null; estimatedKrwValue: number | null };

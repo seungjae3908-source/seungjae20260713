@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
-test('direct AI Chart uses one app-first entry and leaves renderer work behind the route shell', () => {
+test('direct AI Chart prioritizes the route request while keeping one canonical app entry', () => {
   const html = fs
     .readFileSync(path.resolve(process.cwd(), 'index.html'), 'utf8')
     .replace(/\r\n?/g, '\n');
@@ -26,7 +26,7 @@ test('direct AI Chart uses one app-first entry and leaves renderer work behind t
   expect(html.indexOf(root)).toBeLessThan(html.indexOf(appEntry));
   expect(main).toContain("window.location.pathname.endsWith('/ai-chart')");
   expect(main.indexOf(appImport)).toBeGreaterThanOrEqual(0);
-  expect(main.indexOf(routeImport)).toBeGreaterThan(main.indexOf(appImport));
+  expect(main.indexOf(routeImport)).toBeLessThan(main.indexOf(appImport));
   expect(main).not.toMatch(/import\(['"]@\/components\/unified-analysis-chart['"]\)/);
 });
 

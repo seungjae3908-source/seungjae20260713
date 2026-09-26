@@ -336,7 +336,11 @@ export function createBoundedMarketScanRouter(
         elapsedMs: result.execution.elapsedMs,
       });
     } catch (error) {
-      if (routeDeadlineExceeded && error instanceof ScanRouteDeadlineError && !res.writableEnded) {
+      // The route deadline owns the response once its timer fires. Aborting the
+      // scanner work can reject scanPromise before the deadline promise wins the
+      // Promise.race, so key the fallback on the timer state rather than the
+      // specific rejection type. Client disconnects never set this flag.
+      if (routeDeadlineExceeded && !res.writableEnded) {
         const fallback = withScannerOutcome(routeDeadlineResponse({ market, timeframe, cursor, deadlineMs: routeDeadlineMs }));
         res.setHeader('X-Scanner-Request-Id', fallback.requestId);
         return res.json({ ...fallback, strategy: strategyMode, partial: true, elapsedMs: routeDeadlineMs });
