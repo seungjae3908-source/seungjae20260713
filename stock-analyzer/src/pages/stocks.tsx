@@ -522,7 +522,7 @@ function StockCategoryResults({
   themes: ReturnType<typeof useQuery<Awaited<ReturnType<typeof api.themes>>>>;
   movers: UseQueryResult<MarketMoversResponse, Error>;
   stockMarket: 'KR' | 'US';
-  onOpenStock: (ticker: string) => void;
+  onOpenStock: (ticker: string, stock?: AnyObj) => void;
 }) {
   if (category === 'ai') {
     if (recommendations.isLoading) return <LoadingState label="규칙 기반 분석으로 추천을 계산하는 중입니다." />;
@@ -555,7 +555,7 @@ function StockCategoryResults({
             </div>
             <div className="space-y-2">
               {group.stocks.map((stock) => (
-                <StockRow key={`${group.key}:${stock.ticker}`} stock={stock as unknown as AnyObj} onClick={() => onOpenStock(stock.ticker)} />
+                <StockRow key={`${group.key}:${stock.ticker}`} stock={stock as unknown as AnyObj} onClick={() => onOpenStock(stock.ticker, stock as unknown as AnyObj)} />
               ))}
             </div>
           </div>
@@ -581,7 +581,7 @@ function StockCategoryResults({
       {rows
         .filter((row) => row.market === stockMarket)
         .map((stock, index) => (
-          <StockRankRow key={`${stock.market}:${stock.ticker}`} rank={index + 1} stock={stock} onClick={() => onOpenStock(String(stock.ticker))} />
+          <StockRankRow key={`${stock.market}:${stock.ticker}`} rank={index + 1} stock={stock} onClick={() => onOpenStock(String(stock.ticker), stock)} />
         ))}
     </div>
   );
@@ -598,7 +598,7 @@ function StockRankRow({ rank, stock, onClick }: { rank: number; stock: AnyObj; o
   );
 }
 
-function RecoGroup({ title, rows, onOpenStock }: { title: string; rows: RecoRow[]; onOpenStock: (ticker: string) => void }) {
+function RecoGroup({ title, rows, onOpenStock }: { title: string; rows: RecoRow[]; onOpenStock: (ticker: string, stock?: AnyObj) => void }) {
   if (rows.length === 0) return null;
   return (
     <div className="space-y-2">
@@ -607,7 +607,7 @@ function RecoGroup({ title, rows, onOpenStock }: { title: string; rows: RecoRow[
         {rows.map((row) => {
           const change = finitePercent(row.changePercent);
           return (
-          <button key={`${row.market}:${row.ticker}`} type="button" onClick={() => onOpenStock(row.ticker)} className="w-full rounded-xl border border-card-border bg-card p-3 text-left transition hover:border-primary/30 min-[1200px]:rounded-none min-[1200px]:border-x-0 min-[1200px]:border-t-0 min-[1200px]:shadow-none">
+          <button key={`${row.market}:${row.ticker}`} type="button" onClick={() => onOpenStock(row.ticker, row as unknown as AnyObj)} className="w-full rounded-xl border border-card-border bg-card p-3 text-left transition hover:border-primary/30 min-[1200px]:rounded-none min-[1200px]:border-x-0 min-[1200px]:border-t-0 min-[1200px]:shadow-none">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2"><p className="truncate text-sm font-bold">{displayStockName(row.ticker, row.name, row.market)}</p><span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-semibold text-muted-foreground">{row.market}</span></div>
@@ -642,7 +642,7 @@ function CoinCategoryResults({
   coinTickerQuery: ReturnType<typeof useQuery<AnyObj>>;
   sortedCoins: AnyObj[];
   coinMarket: 'spot' | 'futures';
-  onOpenCoin: (symbol: string) => void;
+  onOpenCoin: (symbol: string, row?: AnyObj) => void;
 }) {
   if (!coinCategorySupported) {
     // AI추천·테마종목은 코인 공급자가 없음
@@ -654,7 +654,7 @@ function CoinCategoryResults({
   return (
     <div className="space-y-2">
       {sortedCoins.map((row, index) => (
-        <CoinRankRow key={String(row.symbol)} rank={index + 1} row={row} coinMarket={coinMarket} onClick={() => onOpenCoin(String(row.symbol))} />
+        <CoinRankRow key={String(row.symbol)} rank={index + 1} row={row} coinMarket={coinMarket} onClick={() => onOpenCoin(String(row.symbol), row)} />
       ))}
     </div>
   );
