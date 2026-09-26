@@ -407,7 +407,7 @@ function buildCurrentAnalysis(input: {
         : pattern.status === 'invalidated'
           ? `${pattern.label} 후보가 기준 가격을 벗어나 무효화됐습니다.`
           : `${pattern.label} 후보가 감지됐지만 넥라인 확인 전이므로 확정으로 판단하지 않습니다.`
-      : `${input.selection.timeframe} 기준 ${trend} 구조입니다. 현재가 ${latest.close}, 지지 ${input.levels.support}, 저항 ${input.levels.resistance}를 기준으로 다음 완료봉을 확인합니다.`;
+      : `${input.selection.timeframe} 기준 ${trend} 구조입니다. 현재가 ${formatPrice(latest.close, input.selection.market)}, 지지 ${formatPrice(input.levels.support, input.selection.market)}, 저항 ${formatPrice(input.levels.resistance, input.selection.market)}를 기준으로 다음 완료봉을 확인합니다.`;
   const anchors = pattern?.anchorPivots ?? [];
 
   return buildChartAnalysis({
@@ -768,9 +768,16 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
   const warnings = chartQuery.data?.normalization.warnings ?? [];
   const errorMessage = chartQuery.error instanceof Error ? chartQuery.error.message : '차트 데이터를 불러오지 못했습니다.';
   const pricePlan = selection.pricePlan;
-  const entryText = pricePlan?.entryZone
-    ? `${formatPlanPrice(pricePlan.entryZone.from, market)} ~ ${formatPlanPrice(pricePlan.entryZone.to, market)}`
+  const entry1Text = formatPlanPrice(pricePlan?.entryZone?.from, market);
+  const entry2Text = pricePlan?.entryZone?.to != null
+    && pricePlan.entryZone.to !== pricePlan.entryZone.from
+    ? formatPlanPrice(pricePlan.entryZone.to, market)
     : '미확인';
+  const structureReferenceLabel = analysis?.bias === 'bearish'
+    ? '상단 무효화 참고'
+    : analysis?.bias === 'bullish'
+      ? '상승 목표 참고'
+      : '상단 구조 참고';
 
   const realtimeStatusLabel = live ? realtimeHealth.connectionState : 'POLLING_PAUSED';
   const realtimeDescription = !live
@@ -903,11 +910,13 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
         </div>
         {pricePlan ? (
           <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-            <Metric label="진입" value={entryText} />
+            <Metric label="진입 1" value={entry1Text} />
+            <Metric label="진입 2" value={entry2Text} />
             <Metric label="손절" value={formatPlanPrice(pricePlan.stopLoss, market)} />
+            <Metric label="목표 1" value={formatPlanPrice(pricePlan.targets[0], market)} />
+            <Metric label="목표 2" value={formatPlanPrice(pricePlan.targets[1], market)} />
+            <Metric label="목표 3" value={formatPlanPrice(pricePlan.targets[2], market)} />
             <Metric label="무효화" value={formatPlanPrice(pricePlan.invalidation, market)} />
-            <Metric label="목표1" value={formatPlanPrice(pricePlan.targets[0], market)} />
-            <Metric label="목표2" value={formatPlanPrice(pricePlan.targets[1], market)} />
             <Metric label="R:R" value={pricePlan.riskReward != null && Number.isFinite(pricePlan.riskReward) && pricePlan.riskReward > 0 ? pricePlan.riskReward.toFixed(2) : '미확인'} />
           </div>
         ) : (
@@ -926,7 +935,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
 
       {warnings.length > 0 && <section className="rounded-3xl border border-warning/30 bg-warning/5 p-4" data-testid="chart-data-warnings"><div className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-warning" /><h2 className="text-sm font-black">데이터 품질 알림</h2></div><ul className="mt-2 space-y-1 text-xs font-bold text-muted-foreground">{warnings.map((warning) => <li key={warning}>• {warning}</li>)}</ul></section>}
 
-      {latest && levels && <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-[11px] font-extrabold text-primary">기술지표·분석 참고선</p><h2 className="mt-1 text-lg font-black">{analysis?.title ?? '분석 준비 중'}</h2></div><div className="rounded-full border border-card-border bg-secondary px-3 py-1.5 text-xs font-black">{analysis?.bias === 'bullish' ? '상승 우세' : analysis?.bias === 'bearish' ? '하락 우세' : '중립'}</div></div><p className="mt-3 rounded-2xl bg-secondary/70 p-3 text-xs font-bold leading-5">{analysis?.summary ?? '유효한 완료봉과 지표가 준비되면 분석을 표시합니다.'}</p><div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4"><Metric label="현재가" value={formatPrice(latest.close, market)} icon={<BarChart3 className="h-4 w-4" />} /><Metric label="1차 지지" value={formatPrice(levels.support, market)} icon={<TrendingDown className="h-4 w-4" />} /><Metric label="1차 저항" value={formatPrice(levels.resistance, market)} icon={<TrendingUp className="h-4 w-4" />} /><Metric label="목표 참고" value={formatPrice(levels.targetReference, market)} icon={<TrendingUp className="h-4 w-4" />} />{overlays.rsi && <Metric label="RSI14" value={currentIndicator?.rsi14 == null ? '-' : currentIndicator.rsi14.toFixed(1)} />}{overlays.macd && <Metric label="MACD" value={currentIndicator?.macd == null ? '-' : currentIndicator.macd.toFixed(4)} />}{overlays.atr && <Metric label="ATR14" value={formatPrice(currentIndicator?.atr14, market)} />}<Metric label="거래량 비율" value={currentIndicator?.volumeRatio20 == null ? '-' : `${currentIndicator.volumeRatio20.toFixed(2)}배`} /></div></section>}
+      {latest && levels && <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-[11px] font-extrabold text-primary">기술지표·분석 참고선</p><h2 className="mt-1 text-lg font-black">{analysis?.title ?? '분석 준비 중'}</h2></div><div className="rounded-full border border-card-border bg-secondary px-3 py-1.5 text-xs font-black">{analysis?.bias === 'bullish' ? '상승 우세' : analysis?.bias === 'bearish' ? '하락 우세' : '중립'}</div></div><p className="mt-3 rounded-2xl bg-secondary/70 p-3 text-xs font-bold leading-5">{analysis?.summary ?? '유효한 완료봉과 지표가 준비되면 분석을 표시합니다.'}</p><div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4"><Metric label="현재가" value={formatPrice(latest.close, market)} icon={<BarChart3 className="h-4 w-4" />} /><Metric label="1차 지지" value={formatPrice(levels.support, market)} icon={<TrendingDown className="h-4 w-4" />} /><Metric label="1차 저항" value={formatPrice(levels.resistance, market)} icon={<TrendingUp className="h-4 w-4" />} /><Metric label={structureReferenceLabel} value={formatPrice(levels.targetReference, market)} icon={<TrendingUp className="h-4 w-4" />} />{overlays.rsi && <Metric label="RSI14" value={currentIndicator?.rsi14 == null ? '-' : currentIndicator.rsi14.toFixed(1)} />}{overlays.macd && <Metric label="MACD" value={currentIndicator?.macd == null ? '-' : currentIndicator.macd.toFixed(4)} />}{overlays.atr && <Metric label="ATR14" value={formatPrice(currentIndicator?.atr14, market)} />}<Metric label="거래량 비율" value={currentIndicator?.volumeRatio20 == null ? '-' : `${currentIndicator.volumeRatio20.toFixed(2)}배`} /></div></section>}
 
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm"><div className="flex items-center justify-between gap-2"><div><p className="text-[11px] font-extrabold text-primary">분석 상태 타임라인</p><h2 className="mt-1 text-sm font-black">형성 → 후보 → 확정·무효화</h2></div><span className="text-[10px] font-bold text-muted-foreground">최근 {timeline.length}건</span></div><div className="mt-3 max-h-72 space-y-2 overflow-y-auto">{timeline.length ? timeline.map((item) => <div key={item.key} className="rounded-2xl bg-background p-3 text-xs"><div className="flex items-center justify-between gap-2"><strong>{item.analysis.title}</strong><span className="text-[10px] font-black text-primary">{item.analysis.status}</span></div><p className="mt-1 break-keep font-bold leading-5 text-muted-foreground">{item.analysis.transitionReason}</p><p className="mt-1 text-[10px] font-semibold text-muted-foreground">{new Date(item.analysis.detectedAt).toLocaleString('ko-KR')}</p></div>) : <p className="rounded-2xl bg-background p-5 text-center text-xs font-bold text-muted-foreground">새 분석 상태를 기다리는 중입니다.</p>}</div></section>
       <p className="px-1 text-[10px] font-semibold leading-4 text-muted-foreground">국내주식·미국주식·업비트 현물·비트겟 선물의 공개 시세를 읽기 전용으로 분석합니다. 업비트·비트겟은 검증된 공개 WebSocket을 우선 사용하고 이상 시 REST polling으로 fail-closed 전환합니다. 주문 API와 연결하지 않으며 실제 주문을 실행하지 않습니다.</p>
