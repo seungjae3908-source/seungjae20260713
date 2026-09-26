@@ -80,6 +80,7 @@ export function liveExecutionAuthority(): LiveExecutionAuthority {
 export function liveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
   const authority = liveExecutionAuthority();
   const global = authority !== 'NONE'
+    && process.env.LIVE_TRADING === 'true'
     && process.env.ORDER_EXECUTION_ENABLED === 'true'
     && process.env.LIVE_TRADING_ACTIVATION_APPROVED === 'true'
     && process.env.REAL_ORDER_ENABLED === 'true'
@@ -95,6 +96,7 @@ export function liveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
 
 export function automaticLiveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
   return liveExecutionAuthority() === 'AUTOMATIC'
+    && process.env.AUTO_TRADING === 'true'
     && process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'
     && liveExecutionEnabled(exchange);
 }
