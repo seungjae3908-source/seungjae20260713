@@ -68,10 +68,12 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain('snapshot.autoTradingEnabled !== false');
   expect(panel).toContain("code: 'ACCOUNT_SNAPSHOT_SAFETY_MISMATCH'");
 
-  expect(panel).not.toContain("method: 'POST'");
-  expect(panel).not.toContain("method: 'PUT'");
-  expect(panel).not.toContain("method: 'PATCH'");
-  expect(panel).not.toContain("method: 'DELETE'");
+  expect(panel).toContain("window.confirm");
+  expect(panel).toContain("/api/trade-automation/orders/");
+  expect(panel).toContain("/cancel");
+  expect(panel).toContain("/amend");
+  expect(panel).toContain("confirmed: true");
+  expect(panel).toContain("자동 조회·자동 취소·자동 정정 없음");
 });
 
 test('AI Chart matches four-market positions without inventing missing values', () => {
@@ -240,6 +242,60 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ quotes: [] }) });
       return;
     }
+    if (url.pathname === '/api/trade-automation/approval-queue') {
+      expect(request.method()).toBe('GET');
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          items: [],
+          count: 0,
+          updatedAt: new Date().toISOString(),
+          orderSubmitted: false,
+          orderCanceled: false,
+          privateTradingRequestSent: false,
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/orders') {
+      expect(request.method()).toBe('GET');
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          orders: [],
+          events: [],
+          dashboardItems: [{
+            id: 'order-005930',
+            planId: 'plan-005930',
+            exchange: 'toss',
+            symbol: '005930',
+            market: 'KR',
+            side: 'buy',
+            accountMode: 'paper',
+            orderType: 'limit',
+            reduceOnly: false,
+            state: 'ACCEPTED',
+            requestedQuantity: 10,
+            remainingQuantity: 4,
+            filledQuantity: 6,
+            currentLimitPrice: 70_500,
+            averageFillPrice: 70_200,
+            cancelable: true,
+            lastErrorCode: null,
+            updatedAt: new Date().toISOString(),
+          }],
+          orderSubmitted: false,
+          orderCanceled: false,
+          orderAmended: false,
+          privateTradingRequestSent: false,
+        }),
+      });
+      return;
+    }
     if (url.pathname === '/api/accounts/read-only/toss') {
       accountReads += 1;
       expect(request.method()).toBe('GET');
@@ -308,6 +364,18 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await expect(panel.getByTestId('ai-chart-additional-entry')).toContainText('68,000원');
 
   await expect(panel.getByTestId('ai-chart-fee-break-even')).toContainText('Provider 수수료 근거가 계좌 스냅샷에 없으므로 자동으로 추정하지 않습니다.');
+
+  const cockpit = panel.getByTestId('ai-chart-trading-cockpit');
+  await cockpit.locator('summary').click();
+  await expect(cockpit).toContainText('현재 종목의 승인 대기 진입이 없습니다.');
+  await expect(cockpit.getByTestId('ai-chart-exit-dashboard')).toContainText('종료 예정 비중');
+  await expect(cockpit.getByTestId('ai-chart-exit-dashboard')).toContainText('20');
+  await cockpit.getByRole('button', { name: '25%' }).click();
+  await expect(cockpit.getByTestId('ai-chart-exit-dashboard')).toContainText('5');
+
+  await cockpit.getByTestId('ai-chart-load-orders').click();
+  await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('거래소 접수');
+  await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('잔량 4');
 
   await page.getByTestId('ai-chart-toggle-position-lines').click();
   await expect(page.getByTestId('unified-chart-wrapper')).toHaveAttribute('data-position-average', '');
