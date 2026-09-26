@@ -1,4 +1,17 @@
-import { prepareBitgetAccount, prepareBitgetPendingOrders, prepareBitgetPositions, prepareUpbitAccounts, prepareUpbitOpenOrders, type BitgetCredentials, type PreparedExchangeRequest, type UpbitCredentials } from '../../../services/trade-exchange-adapters.service';
+import {
+  prepareBitgetAccount,
+  prepareBitgetPendingOrders,
+  prepareBitgetPositions,
+  prepareBitgetUtaAccountInfo,
+  prepareBitgetUtaAssets,
+  prepareBitgetUtaPendingOrders,
+  prepareBitgetUtaPositions,
+  prepareUpbitAccounts,
+  prepareUpbitOpenOrders,
+  type BitgetCredentials,
+  type PreparedExchangeRequest,
+  type UpbitCredentials,
+} from '../../../services/trade-exchange-adapters.service';
 import { emptySnapshot, nullableNumber, type CanonicalAccountSnapshot, type CanonicalReadonlyOrder } from '../account-readonly.contract';
 import { AccountReadonlyError } from '../account-readonly.errors';
 
@@ -114,7 +127,7 @@ export async function readUpbitSnapshot(credentials: UpbitCredentials, transport
   };
 }
 
-export async function readBitgetSnapshot(credentials: BitgetCredentials, transport: SignedReadonlyTransport, signal?: AbortSignal, now = new Date()): Promise<CanonicalAccountSnapshot> {
+async function readBitgetClassicSnapshot(credentials: BitgetCredentials, transport: SignedReadonlyTransport, signal?: AbortSignal, now = new Date()): Promise<CanonicalAccountSnapshot> {
   const pendingPromise = transport(prepareBitgetPendingOrders(credentials), signal)
     .then((value) => ({ value, error: null as AccountReadonlyError | null }))
     .catch((error: unknown) => {
@@ -195,3 +208,151 @@ export async function readBitgetSnapshot(credentials: BitgetCredentials, transpo
     lastGoodAt: checkedAt,
   };
 }
+
+function bitgetAccountMode(value: unknown): 'classic' | 'uta' {
+  if (!record(value)) throw new Error('BITGET_ACCOUNT_INFO_RESPONSE_INVALID');
+  const code = typeof value.code === 'string' || typeof value.code === 'number'
+    ? String(value.code)
+    : '';
+  if (!code) throw new Error('BITGET_ACCOUNT_INFO_RESPONSE_INVALID');
+  if (code === '25245') return 'classic';
+  if (code !== '00000') throw bitgetApplicationFailure(code);
+
+  const payload = value.data;
+  if (!record(payload)) throw new Error('BITGET_ACCOUNT_INFO_RESPONSE_INVALID');
+  const permissions = Array.isArray(payload.permissions)
+    ? payload.permissions.filter((item): item is string => typeof item === 'string')
+    : [];
+  return permissions.includes('uta_trade') || permissions.includes('uta_mgt')
+    ? 'uta'
+    : 'classic';
+}
+
+function bitgetUtaData(value: unknown, code: string): Row {
+  if (!record(value)) throw new Error(code);
+  const providerCode = typeof value.code === 'string' || typeof value.code === 'number'
+    ? String(value.code)
+    : '';
+  if (!providerCode) throw new Error(code);
+  if (providerCode !== '00000') throw bitgetApplicationFailure(providerCode);
+  if (!record(value.data)) throw new Error(code);
+  return value.data;
+}
+
+async function readBitgetUtaSnapshot(
+  credentials: BitgetCredentials,
+  transport: SignedReadonlyTransport,
+  signal?: AbortSignal,
+  now = new Date(),
+): Promise<CanonicalAccountSnapshot> {
+  const pendingPromise = transport(prepareBitgetUtaPendingOrders(credentials), signal)
+    .then((value) => ({ value, error: null as AccountReadonlyError | null }))
+    .catch((error: unknown) => {
+      if (error instanceof AccountReadonlyError) return { value: null, error };
+      throw error;
+    });
+
+  const [accountRaw, positionRaw, pendingResult] = await Promise.all([
+    transport(prepareBitgetUtaAssets(credentials), signal),
+    transport(prepareBitgetUtaPositions(credentials), signal),
+    pendingPromise,
+  ]);
+
+  const accountData = bitgetUtaData(accountRaw, 'BITGET_UTA_ACCOUNT_RESPONSE_INVALID');
+  const balances = rows(accountData.assets, 'BITGET_UTA_ACCOUNT_RESPONSE_INVALID').map((row) => ({
+    currency: identity(row.coin, 'BITGET_UTA_ACCOUNT_IDENTITY_INVALID'),
+    available: nullableNumber(row.available),
+    locked: nullableNumber(row.locked),
+    total: nullableNumber(row.equity ?? row.balance),
+    estimatedKrwValue: null,
+  }));
+  if (new Set(balances.map((row) => row.currency)).size !== balances.length) {
+    throw new Error('BITGET_UTA_ACCOUNT_IDENTITY_DUPLICATE');
+  }
+
+  const positionData = bitgetUtaData(positionRaw, 'BITGET_UTA_POSITION_RESPONSE_INVALID');
+  const positions = rows(positionData.list, 'BITGET_UTA_POSITION_RESPONSE_INVALID').map((row) => ({
+    market: 'BITGET',
+    symbol: identity(row.symbol, 'BITGET_UTA_POSITION_IDENTITY_INVALID'),
+    quantity: nullableNumber(row.total),
+    availableQuantity: nullableNumber(row.available),
+    averageEntryPrice: nullableNumber(row.avgPrice),
+    currentPrice: nullableNumber(row.markPrice),
+    marketValue: null,
+    unrealizedPnl: nullableNumber(row.unrealisedPnl),
+    unrealizedPnlPercent: null,
+    leverage: nullableNumber(row.leverage),
+    liquidationPrice: nullableNumber(row.liquidationPrice),
+    marginMode: typeof row.marginMode === 'string' ? row.marginMode : null,
+    side: typeof row.posSide === 'string' ? row.posSide : null,
+  }));
+
+  let openOrders: CanonicalReadonlyOrder[] | null = null;
+  let openOrderError: string | null = null;
+  if (pendingResult.error) {
+    openOrderError = partialOpenOrdersError('BITGET', pendingResult.error);
+  } else {
+    const envelope = pendingResult.value;
+    if (!record(envelope)) throw new Error('BITGET_UTA_OPEN_ORDERS_RESPONSE_INVALID');
+    const providerCode = typeof envelope.code === 'string' || typeof envelope.code === 'number'
+      ? String(envelope.code)
+      : '';
+    if (!providerCode) throw new Error('BITGET_UTA_OPEN_ORDERS_RESPONSE_INVALID');
+    if (providerCode !== '00000') {
+      openOrderError = partialOpenOrdersError('BITGET', bitgetApplicationFailure(providerCode));
+    } else {
+      if (!record(envelope.data)) throw new Error('BITGET_UTA_OPEN_ORDERS_RESPONSE_INVALID');
+      openOrders = rows(envelope.data.list, 'BITGET_UTA_OPEN_ORDERS_RESPONSE_INVALID').map((row) => {
+        const quantity = optionalNonNegative(row.qty, 'BITGET_UTA_OPEN_ORDER_QUANTITY_INVALID');
+        const filled = optionalNonNegative(row.cumExecQty, 'BITGET_UTA_OPEN_ORDER_FILLED_INVALID');
+        return {
+          id: typeof row.orderId === 'string' && row.orderId.trim() ? row.orderId.trim() : null,
+          market: 'BITGET',
+          symbol: identity(row.symbol, 'BITGET_UTA_OPEN_ORDER_SYMBOL_INVALID'),
+          side: row.side === 'buy' ? 'BUY' : row.side === 'sell' ? 'SELL' : null,
+          price: optionalNonNegative(row.price, 'BITGET_UTA_OPEN_ORDER_PRICE_INVALID'),
+          quantity,
+          remainingQuantity: remainingQuantity(quantity, filled, 'BITGET_UTA_OPEN_ORDER_FILLED_EXCEEDS_QUANTITY'),
+          status: typeof row.orderStatus === 'string' && row.orderStatus.trim() ? row.orderStatus.trim() : null,
+        } satisfies CanonicalReadonlyOrder;
+      });
+      const ids = openOrders.map((row) => row.id).filter((value): value is string => Boolean(value));
+      if (new Set(ids).size !== ids.length) throw new Error('BITGET_UTA_OPEN_ORDER_IDENTITY_DUPLICATE');
+    }
+  }
+
+  const checkedAt = now.toISOString();
+  return {
+    ...emptySnapshot('bitget', 'CONNECTED', checkedAt, openOrderError),
+    connected: true,
+    balances,
+    positions,
+    openOrders,
+    lastGoodAt: checkedAt,
+  };
+}
+
+export async function readBitgetSnapshot(
+  credentials: BitgetCredentials,
+  transport: SignedReadonlyTransport,
+  signal?: AbortSignal,
+  now = new Date(),
+): Promise<CanonicalAccountSnapshot> {
+  let mode: 'classic' | 'uta';
+  try {
+    mode = bitgetAccountMode(
+      await transport(prepareBitgetUtaAccountInfo(credentials), signal),
+    );
+  } catch (error) {
+    if (error instanceof AccountReadonlyError && error.code === 'BITGET_REQUEST_REJECTED') {
+      mode = 'classic';
+    } else {
+      throw error;
+    }
+  }
+
+  return mode === 'uta'
+    ? readBitgetUtaSnapshot(credentials, transport, signal, now)
+    : readBitgetClassicSnapshot(credentials, transport, signal, now);
+}
+
