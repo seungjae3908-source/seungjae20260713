@@ -82,6 +82,14 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain("authorizedFetch('/api/trade-automation/positions/exit-risk'");
   expect(panel).toContain("authorizedFetch('/api/trade-automation/positions/exit-preflight'");
   expect(panel).toContain("authorizedFetch('/api/trade-automation/positions/exit-execution-package'");
+  expect(panel).toContain("authorizedFetch('/api/trade-automation/positions/exit-submission-gate'");
+  expect(panel).toContain("data-testid=\"ai-chart-check-exit-submission-gate\"");
+  expect(panel).toContain("data-testid=\"ai-chart-exit-submission-gate\"");
+  expect(panel).toContain("gate.state !== 'LOCKED_DRAFT_ONLY'");
+  expect(panel).toContain("gate.providerMutationAllowed !== false");
+  expect(panel).toContain("gate.providerRequestPrepared !== false");
+  expect(panel).toContain("gate.executionAuthority !== 'NONE'");
+  expect(panel).toContain("gate.blockers.includes('DRAFT_PROVIDER_SUBMISSION_NOT_AUTHORIZED')");
   expect(panel).toContain("approval.schemaVersion !== 'ai-chart-exit-approval-intent-v1'");
   expect(panel).toContain("preflight.schemaVersion !== 'ai-chart-exit-execution-preflight-v1'");
   expect(panel).toContain("preflight.nextOwner !== 'CANONICAL_EXIT_EXECUTION_OWNER'");
@@ -149,6 +157,21 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain("payload.policy?.stockBrokerByMarket?.domestic_stock");
   expect(panel).toContain("payload.policy?.stockBrokerByMarket?.us_stock");
   expect(panel).toContain("orderTimeRiskRecheckRequired !== true");
+});
+
+test('exit provider submission gate is cryptographically bound and permanently non-executing in Draft', () => {
+  const route = source('../api-server/src/routes/trade-automation.ts');
+  expect(route).toContain("router.post('/positions/exit-submission-gate'");
+  expect(route).toContain("exitProviderSubmissionGateIdentity");
+  expect(route).toContain("claimedPackageId !== executionPackageId");
+  expect(route).toContain("blockers.push('DRAFT_PROVIDER_SUBMISSION_NOT_AUTHORIZED')");
+  expect(route).toContain("state: 'LOCKED_DRAFT_ONLY'");
+  expect(route).toContain("providerMutationAllowed: false");
+  expect(route).toContain("providerRequestPrepared: false");
+  expect(route).toContain("orderSubmissionPerformed: false");
+  expect(route).toContain("financialMutationPerformed: false");
+  expect(route).toContain("executionAuthority: 'NONE'");
+  expect(route).toContain("nextOwner: 'CANONICAL_EXIT_PROVIDER_SUBMISSION_OWNER'");
 });
 
 test('Scanner live entry draft route remains server-owned and non-executing', () => {
