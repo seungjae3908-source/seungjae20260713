@@ -444,6 +444,27 @@ function SignalDetailPanel({
 
   const summaryContent = (
     <div data-testid="scanner-mobile-summary" className="space-y-3">
+      <section data-testid="scanner-integrated-decision" aria-label="통합 판단" className="rounded-2xl border border-card-border bg-card p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-xs font-semibold text-primary">통합 판단</p>
+            <h3 className="mt-1 text-base font-bold">{decisionLabel}</h3>
+          </div>
+          <span className={`rounded-full border border-card-border px-2.5 py-1 text-xs font-semibold ${freshness.tone}`}>데이터 {freshness.label}</span>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-2 min-[520px]:grid-cols-4">
+          <div className="rounded-xl bg-background p-2.5"><p className="text-xs text-muted-foreground">근거 강도</p><p className="mt-1 font-semibold tabular-nums">{formatNumber(card.confidence, 1)}</p><p className="mt-1 text-xs text-muted-foreground">승률 아님</p></div>
+          <div className="rounded-xl bg-background p-2.5"><p className="text-xs text-muted-foreground">신호 상태</p><p className="mt-1 font-semibold">{userSignalState(card.signalState)}</p></div>
+          <div className="rounded-xl bg-background p-2.5"><p className="text-xs text-muted-foreground">데이터</p><p className="mt-1 font-semibold">{userDataState(card.dataState)}</p></div>
+          <div className="rounded-xl bg-background p-2.5"><p className="text-xs text-muted-foreground">이벤트 근거</p><p className="mt-1 font-semibold">{intelligenceStatus(card)}</p></div>
+        </div>
+        {conflictReasons.length ? (
+          <div className="mt-3 rounded-xl border border-warning/30 bg-warning/10 p-3">
+            <p className="text-xs font-semibold text-warning">충돌·차단 근거</p>
+            <ul className="mt-1 space-y-1 text-xs leading-5 text-muted-foreground">{conflictReasons.slice(0, 4).map((reason) => <li key={reason}>• {reason}</li>)}</ul>
+          </div>
+        ) : <p className="mt-3 text-xs font-medium text-muted-foreground">현재 확인된 blocking 충돌 없음</p>}
+      </section>
       <section aria-label="이 신호인 이유" className="rounded-2xl border border-primary/25 bg-primary/5 p-3">
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-xs font-black">왜 이 신호인가 · 핵심 판단</h3>
