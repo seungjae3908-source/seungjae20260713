@@ -10,6 +10,8 @@ const added=[
  'packages/external-research/test/research-workspace-canonical-evaluation-one-shot-v18.test.js',
  'packages/external-research/docs/research-workspace-phase18.md',
  '.github/workflows/research-workspace-canonical-evaluation-contract-v18.yml',
+ '.github/workflows/research-workspace-current-main-runtime-proof-v18.yml',
+ 'packages/external-research/scripts/verify-current-main-runtime-proof-v18.mjs',
  'packages/external-research/src/research-workspace-canonical-evaluation-readiness-v17.js',
  'packages/external-research/src/research-workspace-canonical-evaluation-readiness-v17.d.ts',
  'packages/external-research/test/research-workspace-canonical-evaluation-readiness-v17.test.js',
