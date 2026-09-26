@@ -51,6 +51,9 @@ function aiResult(answer: string, model = 'gemini-test'): AiChatResult {
     answer,
     kind: 'answer',
     model,
+    provider: 'google-gemini',
+    fallbackUsed: false,
+    providerLatencyMs: 12,
     generatedAt: '2026-08-27T01:00:00.000Z',
     data: { status: 'not_requested', asOf: null, basis: 'server_collection_time', sources: [], missing: [] },
   };
