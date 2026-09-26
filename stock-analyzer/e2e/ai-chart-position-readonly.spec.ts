@@ -105,6 +105,8 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(tradeRoute).toContain("if (requestedSymbol && normalizedExitSymbol(plan.symbol) !== requestedSymbol) return false;");
   expect(tradeRoute).toContain("exchangeOrderId: order.exchangeOrderId");
   expect(panel).toContain("providerOrderStatusLabel(canonicalProviderOrderStatus(item, providerOpenOrders))");
+  expect(panel).toContain("data-testid=\"ai-chart-cockpit-tabs\"");
+  expect(panel).toContain("type CockpitTab = 'entry' | 'orders' | 'exit';");
   expect(panel).toContain("data-testid=\"ai-chart-entry-readiness\"");
   expect(panel).toContain("data-testid=\"ai-chart-load-entry-readiness\"");
   expect(panel).toContain("authorizedFetch('/api/trade-automation/status'");
@@ -573,11 +575,13 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await expect(cockpit.getByTestId('ai-chart-entry-readiness')).toContainText('실행 경로 Kiwoom');
   await expect(cockpit.getByTestId('ai-chart-entry-readiness')).toContainText('LIVE_CONNECTION_NOT_CONFIGURED');
   await expect(cockpit.getByTestId('ai-chart-entry-readiness')).toContainText('주문 제출 없음');
+  await cockpit.getByRole('tab', { name: '주문', exact: true }).click();
   await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('Provider 실제 미체결');
   await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('BUY · OPEN');
   await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('70,300원');
   await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('잔량 2');
   await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('여기서 취소·정정 권한을 만들지 않습니다.');
+  await cockpit.getByRole('tab', { name: '종료', exact: true }).click();
   await expect(cockpit.getByTestId('ai-chart-exit-dashboard')).toContainText('종료 예정 비중');
   await expect(cockpit.getByTestId('ai-chart-exit-dashboard')).toContainText('20');
   await cockpit.getByRole('button', { name: '25%' }).click();
@@ -714,7 +718,9 @@ test('AI Chart keeps entry approval and order management available when the sele
   await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('없음');
   await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('해당 없음');
   await expect(cockpit).toContainText('현재 종목의 승인 대기 진입이 없습니다.');
+  await cockpit.getByRole('tab', { name: '종료', exact: true }).click();
   await expect(cockpit.getByTestId('ai-chart-exit-dashboard-unavailable')).toContainText('종료계획을 만들지 않습니다.');
+  await cockpit.getByRole('tab', { name: '주문', exact: true }).click();
   await cockpit.getByTestId('ai-chart-load-orders').click();
   await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('canonical 주문 기록이 없습니다.');
   expect(financialMutations).toEqual([]);
@@ -830,9 +836,11 @@ for (const viewport of [
     const cockpit = panel.getByTestId('ai-chart-trading-cockpit');
     await cockpit.locator('summary').click();
     await expect(cockpit.getByTestId('ai-chart-entry-planning')).toBeVisible();
+    await cockpit.getByRole('tab', { name: '주문', exact: true }).click();
     await expect(cockpit.getByTestId('ai-chart-order-management')).toBeVisible();
-    await expect(cockpit.getByTestId('ai-chart-exit-dashboard')).toBeVisible();
     await cockpit.getByTestId('ai-chart-load-orders').click();
+    await cockpit.getByRole('tab', { name: '종료', exact: true }).click();
+    await expect(cockpit.getByTestId('ai-chart-exit-dashboard')).toBeVisible();
 
     const overflow = await page.evaluate(() => ({
       viewport: window.innerWidth,
@@ -987,6 +995,7 @@ test('AI Chart cockpit cancel and amend require explicit user confirmation and r
   await expect(panel).toContainText('현재 선택 종목의 보유/포지션 없음');
   const cockpit = panel.getByTestId('ai-chart-trading-cockpit');
   await cockpit.locator('summary').click();
+  await cockpit.getByRole('tab', { name: '주문', exact: true }).click();
   await cockpit.getByTestId('ai-chart-load-orders').click();
   await expect.poll(() => dashboardReads).toBeGreaterThanOrEqual(1);
 
