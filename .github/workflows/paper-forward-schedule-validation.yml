@@ -61,6 +61,12 @@ on:
       - market-prediction-lab/tests/paper-canonical-validation-freshness-configuration-v1.test.js
       - .github/workflows/paper-canonical-evidence-bridge.yml
       - .github/workflows/paper-canonical-runtime-readiness.yml
+      - .github/workflows/paper-canonical-seven-blocker-repair.yml
+      - api-server/scripts/check-paper-canonical-runtime-readiness-remote.ts
+      - market-prediction-lab/src/paper-canonical-seven-blocker-repair-plan-v1.js
+      - market-prediction-lab/tests/paper-canonical-seven-blocker-repair-plan-v1.test.js
+      - market-prediction-lab/tests/paper-canonical-seven-blocker-repair-cli-v1.test.js
+      - ops/plan-paper-canonical-seven-blocker-repair.mjs
       - api-server/src/services/manual-paper-natural-contract.d.ts
       - api-server/src/routes/paper-trading.ts
       - api-server/src/routes/paper-trading.smoke.test.ts
@@ -273,6 +279,12 @@ jobs:
             market-prediction-lab/tests/paper-canonical-validation-freshness-configuration-v1.test.js
             .github/workflows/paper-canonical-evidence-bridge.yml
             .github/workflows/paper-canonical-runtime-readiness.yml
+            .github/workflows/paper-canonical-seven-blocker-repair.yml
+            api-server/scripts/check-paper-canonical-runtime-readiness-remote.ts
+            market-prediction-lab/src/paper-canonical-seven-blocker-repair-plan-v1.js
+            market-prediction-lab/tests/paper-canonical-seven-blocker-repair-plan-v1.test.js
+            market-prediction-lab/tests/paper-canonical-seven-blocker-repair-cli-v1.test.js
+            ops/plan-paper-canonical-seven-blocker-repair.mjs
             api-server/src/services/manual-paper-natural-contract.d.ts
             api-server/src/routes/paper-trading.ts
             api-server/src/routes/paper-trading.smoke.test.ts

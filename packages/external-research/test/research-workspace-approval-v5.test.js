@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import {test} from 'node:test';
+import {mkdtemp,writeFile,rm,symlink,chmod} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {createWorkspaceApprovalVerifier,createWorkspaceApprovalFileReader} from '../src/research-workspace-approval-v5.js';
+const NOW='2026-09-26T01:30:00.000Z';
+function fixture(opts={}){
+ const grant={schemaVersion:'research-workspace-publication-approval-v5',approvalId:'TEST_GRANT',actorId:'TEST_ADMIN',state:'APPROVED',scope:'ADMIN_RESEARCH_SHARED',action:'PUBLISH_RESEARCH_REGISTRY',root:'/private/research',mode:'REVIEWED_RUNTIME',planDigest:'a'.repeat(64),policySha256:'b'.repeat(64),expectedPreviousPolicySha256:null,validFrom:'2026-09-26T01:29:00.000Z',expiresAt:'2026-09-26T01:40:00.000Z',executionAuthority:'NONE',actualOrders:0};
+ const request={scope:grant.scope,action:grant.action,root:grant.root,mode:grant.mode,planDigest:grant.planDigest,policySha256:grant.policySha256,expectedPreviousPolicySha256:null,now:NOW,executionAuthority:'NONE',actualOrders:0};
+ const principal={actorId:'TEST_ADMIN',admin:true,checkedAt:NOW};let reads=0,resolutions=0;
+ const authorize=createWorkspaceApprovalVerifier({root:grant.root,clock:()=>NOW,loadApproval:async()=>{reads++;return grant;},resolvePrincipal:async()=>{resolutions++;return principal;},...opts});
+ return {grant,request,principal,authorize,counts:()=>({reads,resolutions})};
+}
+test('exact grant and fresh principal permit research publication only',async()=>{const f=fixture();assert.equal(await f.authorize(f.request,'TEST_GRANT'),true);assert.deepEqual(f.counts(),{reads:2,resolutions:1});});
+for(const [key,value] of [['actorId','OTHER'],['admin',false],['admin','true'],['checkedAt','2026-09-26T01:29:59.999Z'],['checkedAt','2027-01-01T00:00:00.000Z']])test(`principal ${key} mismatch denied`,async()=>{const f=fixture();f.principal[key]=value;assert.equal(await f.authorize(f.request,'TEST_GRANT'),false);});
+for(const [key,value] of [['approvalId','OTHER'],['state','REVOKED'],['action','LIVE_ORDER'],['scope','PUBLIC'],['mode','OFFLINE_TEST'],['root','/other'],['planDigest','c'.repeat(64)],['policySha256','c'.repeat(64)],['expectedPreviousPolicySha256','d'.repeat(64)],['validFrom','2026-09-26T01:31:00.000Z'],['expiresAt',NOW],['expiresAt','2026-09-27T01:30:00.000Z'],['executionAuthority','LIVE'],['actualOrders',1]])test(`grant ${key} mismatch denied`,async()=>{const f=fixture();f.grant[key]=value;assert.equal(await f.authorize(f.request,'TEST_GRANT'),false);});
+test('extra grant fields denied rather than interpreted as privilege',async()=>{const f=fixture();f.grant.autoTrading=true;assert.equal(await f.authorize(f.request,'TEST_GRANT'),false);});
+test('a client approval object cannot mint authority',async()=>{const f=fixture();assert.equal(await f.authorize(f.request,f.grant),false);assert.equal(f.counts().reads,0);});
+test('request timestamp cannot extend an expired approval',async()=>{const f=fixture();f.request.now='2026-09-26T01:00:00.000Z';assert.equal(await f.authorize(f.request,'TEST_GRANT'),false);});
+test('future request time denied',async()=>{const f=fixture();f.request.now='2027-01-01T00:00:00.000Z';assert.equal(await f.authorize(f.request,'TEST_GRANT'),false);});
+test('every authorization re-resolves role and rereads grant',async()=>{const f=fixture();assert.equal(await f.authorize(f.request,'TEST_GRANT'),true);f.principal.admin=false;assert.equal(await f.authorize(f.request,'TEST_GRANT'),false);assert.equal(f.counts().resolutions,2);});
+test('revocation during principal lookup denied',async()=>{let calls=0;const f=fixture({loadApproval:async()=>({...f.grant,state:++calls===1?'APPROVED':'REVOKED'})});assert.equal(await f.authorize(f.request,'TEST_GRANT'),false);});
+test('mutating original grant during auth cannot mutate first snapshot',async()=>{const f=fixture({resolvePrincipal:async()=>{f.grant.expiresAt='2026-09-26T01:45:00.000Z';return f.principal;}});assert.equal(await f.authorize(f.request,'TEST_GRANT'),false);});
+test('expiry while authenticating denied',async()=>{let now=NOW;const f=fixture({clock:()=>now,resolvePrincipal:async()=>{now='2026-09-26T01:41:00.000Z';return {...f.principal,checkedAt:now};}});assert.equal(await f.authorize(f.request,'TEST_GRANT'),false);});
+test('clock rollback denied',async()=>{let n=0;const f=fixture({clock:()=>++n===1?NOW:'2026-09-26T01:29:59.000Z'});assert.equal(await f.authorize(f.request,'TEST_GRANT'),false);});
+test('authorization exceptions redacted',async()=>{const f=fixture({resolvePrincipal:async()=>{throw Error('Bearer PRIVATE');}});assert.equal(await f.authorize(f.request,'TEST_GRANT'),false);});
+test('never-resolving identity has deadline and no late grant',async()=>{let signal;const f=fixture({timeoutMs:20,resolvePrincipal:s=>{signal=s;return new Promise(()=>{});}});assert.equal(await f.authorize(f.request,'TEST_GRANT'),false);assert.equal(signal.aborted,true);});
+test('invalid timeout rejected at construction',()=>assert.throws(()=>fixture({timeoutMs:5000}),/DEPENDENCIES/));
+test('approval ID traversal denied before I/O',async()=>{const f=fixture();assert.equal(await f.authorize(f.request,'../grant'),false);assert.equal(f.counts().reads,0);});
+test('file grant reads current content, not a cached approval',async t=>{const root=await mkdtemp(join(tmpdir(),'approval-v5-'));t.after(()=>rm(root,{recursive:true,force:true}));const f=fixture(),read=createWorkspaceApprovalFileReader(root),p=join(root,'approval-TEST_GRANT.json');await writeFile(p,JSON.stringify(f.grant),{mode:0o600});assert.equal((await read('TEST_GRANT')).state,'APPROVED');f.grant.state='REVOKED';await writeFile(p,JSON.stringify(f.grant));assert.equal((await read('TEST_GRANT')).state,'REVOKED');});
+test('file grant has bounded private input and rejects symlink',async t=>{const root=await mkdtemp(join(tmpdir(),'approval-v5-'));t.after(()=>rm(root,{recursive:true,force:true}));await symlink('/etc/hostname',join(root,'approval-TEST_GRANT.json'));await assert.rejects(()=>createWorkspaceApprovalFileReader(root)('TEST_GRANT'),/REVIEWED_/);});
