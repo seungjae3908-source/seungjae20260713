@@ -7,6 +7,11 @@ on:
       - api-server/src/routes/research-workspace.ts
       - api-server/src/services/research-workspace-authorization-v5*.ts
       - api-server/src/services/research-workspace-transcript-v6*.ts
+      - api-server/src/services/ai-chat.service.ts
+      - api-server/src/services/research-groq-one-shot-transport.service.test.ts
+      - api-server/src/tools/research-workspace-one-shot-v12*.ts
+      - api-server/scripts/run-research-workspace-one-shot-v12.ts
+      - api-server/test.mjs
       - api-server/src/routes/video-research*.ts
       - api-server/src/routes/index.ts
       - stock-analyzer/src/components/research-workspace-panel.tsx
@@ -91,6 +96,19 @@ jobs:
       - name: Backend semantic typecheck
         if: always() && steps.install.outcome == 'success'
         run: pnpm --dir api-server exec tsc -p tsconfig.json --noEmit
+      - name: Phase12 provider one-shot synthetic contract
+        if: always() && steps.install.outcome == 'success'
+        working-directory: api-server
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm exec esbuild src/services/research-groq-one-shot-transport.service.test.ts             --bundle --platform=node --format=cjs --target=node22             --define:import.meta.env='{}' --outfile="$RUNNER_TEMP/research-groq-v12.test.cjs"
+          pnpm exec esbuild src/tools/research-workspace-one-shot-v12.test.ts             --bundle --platform=node --format=cjs --target=node22             --define:import.meta.env='{}' --outfile="$RUNNER_TEMP/research-one-shot-v12.test.cjs"
+          node --test "$RUNNER_TEMP/research-groq-v12.test.cjs" "$RUNNER_TEMP/research-one-shot-v12.test.cjs"             | tee "$RUNNER_TEMP/research-one-shot-v12-tests.log"
+          pnpm exec esbuild scripts/run-research-workspace-one-shot-v12.ts             --bundle --platform=node --format=esm --target=node22 --packages=external             --outfile="$RUNNER_TEMP/run-research-one-shot-v12.mjs"
+          node "$RUNNER_TEMP/run-research-one-shot-v12.mjs" --help             | tee "$RUNNER_TEMP/research-one-shot-v12-help.log"
+          grep -Fq 'at most one Gemini call and one Groq call' "$RUNNER_TEMP/research-one-shot-v12-help.log"
+          grep -Fq 'No compiler/backtest, schedule, deployment, trading or paid fallback' "$RUNNER_TEMP/research-one-shot-v12-help.log"
       - name: Existing source-reader HTTP regressions
         if: always() && steps.install.outcome == 'success'
         working-directory: api-server
@@ -182,5 +200,7 @@ jobs:
             ${{ runner.temp }}/workspace-http-tests.log
             ${{ runner.temp }}/workspace-admin-tests.log
             ${{ runner.temp }}/workspace-transcript-tests.log
+            ${{ runner.temp }}/research-one-shot-v12-tests.log
+            ${{ runner.temp }}/research-one-shot-v12-help.log
           if-no-files-found: warn
           retention-days: 30
