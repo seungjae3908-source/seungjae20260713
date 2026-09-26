@@ -140,6 +140,77 @@ export interface ResearchPromotionBridge {
   executionAuthority: 'NONE';
 }
 
+export type ResearchAdoptionReviewStatus =
+  | 'INVALID_EVIDENCE'
+  | 'RESEARCH_BRIDGE_BLOCKED'
+  | 'CANDIDATE_MISMATCH'
+  | 'STATISTICAL_REVIEW_BLOCKED'
+  | 'ECONOMIC_EVIDENCE_BLOCKED'
+  | 'FINAL_HOLDOUT_BLOCKED'
+  | 'PAPER_EVIDENCE_BLOCKED'
+  | 'HUMAN_REVIEW_READY';
+
+export interface ResearchAdoptionReview {
+  contract: 'research-adoption-review-gate-v1';
+  status: ResearchAdoptionReviewStatus;
+  generatedAt: string;
+  canonicalOwner: '#547';
+  bridgeStatus: ResearchPromotionBridgeStatus;
+  candidateAligned: boolean;
+  evidence: {
+    researchCodeSha: string | null;
+    strategyId: string | null;
+    parameterHash: string | null;
+    statisticalEvidenceStatus: string | null;
+    statisticalDecisionStatus: string | null;
+    preHoldoutGateStatus: string | null;
+    oosN: number | null;
+    walkForwardN: number | null;
+    finalHoldoutN: number | null;
+    shadowN: number | null;
+    paperN: number | null;
+    settledN: number | null;
+    allInCostComplete: boolean;
+    admissionGrade: boolean;
+    frozenResearchCandidate: boolean;
+    finalHoldoutNotOpened: boolean;
+    oneShotFinalHoldoutReady: boolean;
+    unresolvedCostDimensions: readonly string[];
+  };
+  blockers: readonly string[];
+  automaticAdoptionAllowed: false;
+  humanReviewRequired: true;
+  paperHandoffAllowed: false;
+  scannerMutationAllowed: false;
+  liveTradingAllowed: false;
+  privateTradingApiAllowed: false;
+  orderAllowed: false;
+  executionAuthority: 'NONE';
+}
+
+export async function fetchResearchAdoptionReview(signal?: AbortSignal): Promise<ResearchAdoptionReview | null> {
+  const response = await authorizedFetch('/api/strategy-promotion/research-adoption-review', { method: 'GET', signal });
+  if (response.status === 403) return null;
+  const body = await response.json().catch(() => null) as { ok?: boolean; adoptionReview?: ResearchAdoptionReview; error?: string } | null;
+  if (!response.ok || body?.ok !== true || !body.adoptionReview) {
+    throw new Error(body?.error ?? `RESEARCH_ADOPTION_REVIEW_HTTP_${response.status}`);
+  }
+  const review = body.adoptionReview;
+  if (
+    review.executionAuthority !== 'NONE'
+    || review.automaticAdoptionAllowed !== false
+    || review.humanReviewRequired !== true
+    || review.paperHandoffAllowed !== false
+    || review.scannerMutationAllowed !== false
+    || review.liveTradingAllowed !== false
+    || review.privateTradingApiAllowed !== false
+    || review.orderAllowed !== false
+  ) {
+    throw new Error('RESEARCH_ADOPTION_REVIEW_AUTHORITY_INVALID');
+  }
+  return review;
+}
+
 export async function fetchResearchPromotionBridge(signal?: AbortSignal): Promise<ResearchPromotionBridge | null> {
   const response = await authorizedFetch('/api/strategy-promotion/research-bridge', { method: 'GET', signal });
   if (response.status === 403) return null;
