@@ -156,6 +156,19 @@ function actionLabel(action: AnalysisSelection['action']): string {
   return '판단 대기';
 }
 
+function actionDirection(action: AnalysisSelection['action']): -1 | 0 | 1 {
+  if (action === 'BUY' || action === 'LONG') return 1;
+  if (action === 'SELL' || action === 'SHORT') return -1;
+  return 0;
+}
+
+function contextualActionLabel(selection: AnalysisSelection, analysis: ChartAnalysis | null): string {
+  const scannerDirection = actionDirection(selection.action);
+  const chartDirection = analysis?.bias === 'bullish' ? 1 : analysis?.bias === 'bearish' ? -1 : 0;
+  if (scannerDirection !== 0 && chartDirection !== 0 && scannerDirection !== chartDirection) return '판단 보류';
+  return actionLabel(selection.action);
+}
+
 function strategyModeLabel(mode: AiChartStrategyMode): string {
   if (mode === 'SCALPING') return '단타';
   if (mode === 'SWING') return '스윙';
@@ -230,7 +243,7 @@ function MobileSummary({ selection, analysis }: { selection: AnalysisSelection; 
           </p>
         </div>
         <span className="shrink-0 rounded-full border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-black text-primary">
-          {actionLabel(selection.action)}
+          {contextualActionLabel(selection, analysis)}
         </span>
       </div>
 

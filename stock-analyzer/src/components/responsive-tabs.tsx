@@ -34,7 +34,9 @@ export function ResponsiveTabs<T extends string>({
       data-testid={testId}
       data-ui-role="tabs"
       className={cn(
-        'no-scrollbar flex min-w-0 gap-1 overflow-x-auto overscroll-x-contain border border-card-border min-[1200px]:grid min-[1200px]:overflow-visible',
+        fluid
+          ? 'no-scrollbar grid min-w-0 gap-1 overflow-visible border border-card-border'
+          : 'no-scrollbar flex min-w-0 gap-1 overflow-x-auto overscroll-x-contain border border-card-border min-[1200px]:grid min-[1200px]:overflow-visible',
         compact ? 'rounded-xl bg-background p-0.5' : 'rounded-2xl bg-card p-1',
         options.length === 2 && 'min-[1200px]:grid-cols-2',
         options.length === 3 && 'min-[1200px]:grid-cols-3',
