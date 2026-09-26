@@ -326,15 +326,15 @@ function AiChartSignalOverlayPortal({
       )}
       aria-label={`AI 신호 ${side}, 상태 ${lifecycle}`}
     >
-      <div className={cn('flex items-center gap-1.5 text-xs font-black', sideClass(side))}>
+      <div className={cn('flex items-center gap-1.5 text-xs font-bold', sideClass(side))}>
         <SignalDirectionIcon side={side} />
         <span>{side}</span>
         {score != null && <span>· {score}</span>}
       </div>
-      <p className="mt-0.5 text-[9px] font-black text-foreground">
+      <p className="mt-0.5 text-xs font-bold text-foreground">
         {lifecycle} · {mode} · {selection.timeframe}
       </p>
-      <p className="mt-0.5 truncate text-[8px] font-semibold text-muted-foreground">
+      <p className="mt-0.5 truncate text-xs font-semibold text-muted-foreground">
         Signal {signalId ?? '미확인'}
       </p>
     </div>,
@@ -510,10 +510,10 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-[11px] font-extrabold text-primary">AI CHART 2.0</p>
-            <h2 className="mt-1 text-sm font-black">분석 모드</h2>
+            <p className="text-xs font-semibold text-primary">AI 차트 분석</p>
+            <h2 className="mt-1 text-sm font-bold">분석 모드</h2>
           </div>
-          <span className="rounded-full border border-card-border bg-background px-2 py-1 text-[10px] font-black">
+          <span className="rounded-full border border-card-border bg-background px-2 py-1 text-xs font-bold">
             {lifecycle}
           </span>
         </div>
@@ -532,8 +532,8 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
                   : 'border-card-border bg-background text-muted-foreground',
               )}
             >
-              <span className="block truncate text-[10px] font-black sm:text-xs">{item.label}</span>
-              <span className="mt-0.5 hidden text-[9px] font-bold opacity-80 sm:block">{item.description}</span>
+              <span className="block truncate text-xs font-bold sm:text-xs">{item.label}</span>
+              <span className="mt-0.5 hidden text-xs font-bold opacity-80 sm:block">{item.description}</span>
             </button>
           ))}
         </div>
@@ -542,7 +542,7 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
           data-testid="toggle-ai-signal-overlay"
           aria-pressed={signalOverlayVisible}
           onClick={toggleSignalOverlay}
-          className="mt-2 flex w-full items-center justify-between rounded-2xl border border-card-border bg-background px-3 py-2 text-left text-[10px] font-black"
+          className="mt-2 flex w-full items-center justify-between rounded-2xl border border-card-border bg-background px-3 py-2 text-left text-xs font-bold"
         >
           <span>AI Signals · BUY / LONG / SHORT / WAIT</span>
           <span>{signalOverlayVisible ? 'ON' : 'OFF'}</span>
@@ -554,8 +554,8 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
           <div className="flex items-center gap-2">
             <Clock3 className="h-4 w-4 text-primary" />
             <div>
-              <h2 className="text-sm font-black">Multi-Timeframe</h2>
-              <p className="text-[10px] font-bold text-muted-foreground">기존 차트 단일 요청 계약을 보존하고 필요할 때만 보조 시간봉 조회</p>
+              <h2 className="text-sm font-bold">Multi-Timeframe</h2>
+              <p className="text-xs font-bold text-muted-foreground">기존 차트 단일 요청 계약을 보존하고 필요할 때만 보조 시간봉 조회</p>
             </div>
           </div>
           <button
@@ -563,14 +563,14 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
             data-testid="load-multi-timeframe"
             onClick={() => setMultiTimeframeRequested(true)}
             disabled={multiTimeframeRequested}
-            className="shrink-0 rounded-xl border border-card-border bg-background px-2.5 py-1.5 text-[9px] font-black disabled:opacity-60"
+            className="shrink-0 rounded-xl border border-card-border bg-background px-2.5 py-1.5 text-xs font-bold disabled:opacity-60"
           >
             {supplementalLoading ? '분석 중…' : multiTimeframeRequested ? '분석 요청됨' : '다중 시간봉 분석'}
           </button>
         </div>
         {!multiTimeframeRequested ? (
           <div data-testid="mtf-not-loaded" className="mt-3 rounded-2xl border border-dashed border-card-border bg-background p-3">
-            <p className="text-[10px] font-bold leading-4 text-muted-foreground">
+            <p className="text-xs font-bold leading-4 text-muted-foreground">
               현재 차트는 추가 네트워크 요청 없이 기존 분석 컨텍스트를 사용합니다. 버튼을 누르면 {modeTimeframes.join(' · ')} 중 현재 시간봉을 제외한 보조 시간봉을 병렬 조회하며 자동 polling은 만들지 않습니다.
             </p>
           </div>
@@ -584,17 +584,17 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
               >
                 <div className="flex items-center justify-between gap-2">
                   <strong className="text-xs">{context.timeframe}</strong>
-                  <span className={cn('rounded-full border px-1.5 py-0.5 text-[8px] font-black', qualityClass(context.quality))}>
+                  <span className={cn('rounded-full border px-1.5 py-0.5 text-xs font-bold', qualityClass(context.quality))}>
                     {context.quality}
                   </span>
                 </div>
                 <div className="mt-2 flex items-end justify-between gap-2">
-                  <span className={cn('text-sm font-black', sideClass(context.side))}>{context.side}</span>
-                  <span className="text-[10px] font-black text-muted-foreground">
+                  <span className={cn('text-sm font-bold', sideClass(context.side))}>{context.side}</span>
+                  <span className="text-xs font-bold text-muted-foreground">
                     {context.score == null ? 'INSUFFICIENT' : `${context.score}`}
                   </span>
                 </div>
-                <p className="mt-1 truncate text-[9px] font-bold text-muted-foreground">{context.source}</p>
+                <p className="mt-1 truncate text-xs font-bold text-muted-foreground">{context.source}</p>
               </div>
             ))}
           </div>
@@ -602,7 +602,7 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
         {multiTimeframeRequested && aggregate.higherTimeframeConflict && (
           <div role="alert" data-testid="higher-timeframe-conflict" className="mt-3 flex gap-2 rounded-2xl border border-warning/30 bg-warning/5 p-3">
             <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
-            <p className="text-[10px] font-bold leading-4 text-muted-foreground">
+            <p className="text-xs font-bold leading-4 text-muted-foreground">
               현재 방향과 상위 시간봉이 충돌합니다: {aggregate.conflictTimeframes.join(', ')}. 추격 진입보다 상위 구조 확인을 우선합니다.
             </p>
           </div>
@@ -618,18 +618,18 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
                 ? <TrendingDown className="h-4 w-4 shrink-0 text-blue-500" />
                 : <BarChart3 className="h-4 w-4 shrink-0 text-muted-foreground" />}
             <div className="min-w-0">
-              <p className="text-[10px] font-bold text-muted-foreground">현재 결정 · V3 Gate</p>
-              <h2 className={cn('truncate text-base font-black', sideClass(decisionSide))}>
+              <p className="text-xs font-bold text-muted-foreground">현재 결정 · V3 Gate</p>
+              <h2 className={cn('truncate text-base font-bold', sideClass(decisionSide))}>
                 {v3Decision.decision}
               </h2>
             </div>
           </div>
-          <span className={cn('rounded-full border px-2 py-1 text-[9px] font-black', qualityClass(current.quality))}>
+          <span className={cn('rounded-full border px-2 py-1 text-xs font-bold', qualityClass(current.quality))}>
             {current.quality}
           </span>
         </div>
 
-        <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] font-bold" data-testid="ai-chart-v3-decision-gate">
+        <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-bold" data-testid="ai-chart-v3-decision-gate">
           <div className="rounded-2xl bg-background p-3">
             <span className="text-muted-foreground">기술 근거 강도</span>
             <strong className="mt-1 block">{current.side} {current.score == null ? '· INSUFFICIENT' : `· ${current.score}`}</strong>
@@ -657,15 +657,15 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
         </div>
 
         <div className="mt-3 rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-v3-decision-reasons">
-          <p className="text-[10px] font-black">판단 보류 이유</p>
-          <ul className="mt-2 space-y-1 text-[10px] font-bold leading-4 text-muted-foreground">
+          <p className="text-xs font-bold">판단 보류 이유</p>
+          <ul className="mt-2 space-y-1 text-xs font-bold leading-4 text-muted-foreground">
             {v3Decision.reasons.length
               ? v3Decision.reasons.map((reason) => <li key={reason}>• {reason}</li>)
               : <li>• NO_ENTRY_VETO</li>}
           </ul>
         </div>
 
-        <p className="mt-3 text-[10px] font-semibold leading-4 text-muted-foreground">
+        <p className="mt-3 text-xs font-semibold leading-4 text-muted-foreground">
           기술 근거 강도 점수는 방향 근거 강도이지 수익확률이 아닙니다. canonical regime/strategy/event/calibration provenance가 연결되기 전에는 결정게이트가 WAIT/NO_TRADE로 fail-closed하며 probability/EV를 만들지 않습니다.
         </p>
 
@@ -709,10 +709,10 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="ai-chart-order-plan-preview">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-[11px] font-extrabold text-primary">진입·청산 계획</p>
-            <h2 className="mt-1 text-sm font-black">분할진입 · 손절 · 분할청산</h2>
+            <p className="text-xs font-semibold text-primary">진입·청산 계획</p>
+            <h2 className="mt-1 text-sm font-bold">분할진입 · 손절 · 분할청산</h2>
           </div>
-          <span className="rounded-full border border-warning/30 bg-warning/5 px-2 py-1 text-[9px] font-black text-warning">미리보기 전용</span>
+          <span className="rounded-full border border-warning/30 bg-warning/5 px-2 py-1 text-xs font-bold text-warning">미리보기 전용</span>
         </div>
         {hasPlanEvidence ? (
           <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4">
@@ -726,11 +726,11 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
             <PlanMetric label="R:R" value={plan.riskReward == null ? '미확인' : plan.riskReward.toFixed(2)} />
           </div>
         ) : (
-          <p className="mt-3 rounded-2xl bg-background p-3 text-[10px] font-bold leading-4 text-muted-foreground">
+          <p className="mt-3 rounded-2xl bg-background p-3 text-xs font-bold leading-4 text-muted-foreground">
             Scanner/Risk에서 확인된 진입·손절·목표 가격이 없습니다. 빈 계획을 0이나 임의 가격으로 채우지 않습니다.
           </p>
         )}
-        <p className="mt-3 text-[10px] font-bold leading-4 text-muted-foreground">
+        <p className="mt-3 text-xs font-bold leading-4 text-muted-foreground">
           Scanner/Risk output만 표시합니다. 없는 진입·TP 가격을 차트가 임의 생성하지 않습니다.
         </p>
       </section>
@@ -738,9 +738,9 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="ai-chart-data-provenance">
         <div className="flex items-center gap-2">
           <Database className="h-4 w-4 text-primary" />
-          <h2 className="text-sm font-black">데이터 상태 · 근거 출처</h2>
+          <h2 className="text-sm font-bold">데이터 상태 · 근거 출처</h2>
         </div>
-        <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] font-bold">
+        <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-bold">
           <div className="rounded-2xl bg-background p-3">
             <span className="text-muted-foreground">Scanner 연결</span>
             <strong className="mt-1 block">{scannerLinked ? 'LINKED' : '미연결'}</strong>
@@ -766,10 +766,10 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
             <strong className="mt-1 block">미검증</strong>
           </div>
         </div>
-        <p className="mt-3 text-[10px] font-semibold leading-4 text-muted-foreground">
+        <p className="mt-3 text-xs font-semibold leading-4 text-muted-foreground">
           현재 차트 데이터는 기존 단일 owner를 재사용합니다. 보조 시간봉은 명시적 MTF 분석 요청에서만 기존 provider/cache 계약으로 읽고 별도 polling을 만들지 않습니다.
         </p>
-        <p className="mt-2 text-[10px] font-semibold leading-4 text-muted-foreground">
+        <p className="mt-2 text-xs font-semibold leading-4 text-muted-foreground">
           근거 강도는 현재 관측 근거의 합성 강도이며 검증된 승률이 아닙니다. canonical calibration/full-cost provenance가 없으므로 win rate, PF, expectancy, probability, cost-adjusted EV를 생성하지 않습니다.
         </p>
       </section>
@@ -787,9 +787,9 @@ function EvidenceList({ title, icon, items, empty }: {
     <div className="rounded-2xl border border-card-border bg-background p-3">
       <div className="flex items-center gap-1.5">
         {icon}
-        <h3 className="text-[10px] font-black">{title}</h3>
+        <h3 className="text-xs font-bold">{title}</h3>
       </div>
-      <ul className="mt-2 space-y-1 text-[10px] font-bold leading-4 text-muted-foreground">
+      <ul className="mt-2 space-y-1 text-xs font-bold leading-4 text-muted-foreground">
         {items.length ? items.slice(0, 5).map((item) => <li key={item}>• {item}</li>) : <li>• {empty}</li>}
       </ul>
     </div>
@@ -799,8 +799,8 @@ function EvidenceList({ title, icon, items, empty }: {
 function PlanMetric({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-2xl border border-card-border bg-background p-3">
-      <p className="text-[9px] font-black text-muted-foreground">{label}</p>
-      <strong className="mt-1 block break-words text-[11px]">{value}</strong>
+      <p className="text-xs font-bold text-muted-foreground">{label}</p>
+      <strong className="mt-1 block break-words text-xs">{value}</strong>
     </div>
   );
 }
