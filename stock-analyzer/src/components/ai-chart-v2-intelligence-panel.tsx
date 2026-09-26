@@ -130,7 +130,37 @@ function currentEvidenceFromExistingChart(
   }
 
   const qualityRisks = quality === 'DELAYED' ? ['현재 시간봉 시세가 지연 상태'] : [];
+  const chartSide: AiChartSignalSide | null = analysis
+    ? analysis.bias === 'bullish'
+      ? selection.market === 'BITGET' ? 'LONG' : 'BUY'
+      : analysis.bias === 'bearish'
+        ? selection.market === 'BITGET' ? 'SHORT' : 'SELL'
+        : 'WAIT'
+    : null;
+  const directional = (side: AiChartSignalSide | null) => (
+    side === 'BUY' || side === 'LONG' ? 1
+      : side === 'SELL' || side === 'SHORT' ? -1
+        : 0
+  );
+
   if (scannerSide && scannerScore != null) {
+    if (directional(scannerSide) !== 0 && directional(chartSide) !== 0 && directional(scannerSide) !== directional(chartSide)) {
+      return {
+        timeframe: selection.timeframe as UnifiedChartTimeframe,
+        state: 'INSUFFICIENT_DATA',
+        side: 'WAIT',
+        score: null,
+        quality,
+        positiveFactors: [],
+        negativeFactors: [],
+        riskFactors: [
+          ...qualityRisks,
+          `신호검색기 ${scannerSide}와 현재 차트 패턴 ${chartSide} 방향이 충돌하여 신규 방향 점수를 보류`,
+        ],
+        reasonCodes: ['SCANNER_CHART_DIRECTION_CONFLICT', 'FAIL_CLOSED_DIRECTION_CONFLICT'],
+        source: 'NONE',
+      };
+    }
     const positive = scannerSide === 'BUY' || scannerSide === 'LONG';
     return {
       timeframe: selection.timeframe as UnifiedChartTimeframe,

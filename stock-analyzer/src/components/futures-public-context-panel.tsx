@@ -25,6 +25,8 @@ type Props = {
 };
 
 function finite(value: unknown): number | null {
+  if (value == null) return null;
+  if (typeof value === 'string' && !value.trim()) return null;
   const parsed = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -151,7 +153,7 @@ export function FuturesPublicContextPanel({ selection }: Props) {
           <div className="flex min-w-0 items-center gap-2">
             <Database className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
             <div className="min-w-0">
-              <p className="text-[11px] font-extrabold text-primary">CRYPTO FUTURES PUBLIC CONTEXT</p>
+              <p className="text-[11px] font-extrabold text-primary">선물 수급·파생 근거</p>
               <h2 className="truncate text-sm font-black">{symbol || selection.ticker} · Bitget 공개 데이터</h2>
             </div>
           </div>
@@ -172,8 +174,8 @@ export function FuturesPublicContextPanel({ selection }: Props) {
             <Metric label="Mark Price" value={data ? `${formatNumber(data.markPrice, 8)}${data.markPrice == null ? '' : ' USDT'}` : missingEvidence} />
             <Metric label="Funding" value={data ? formatFunding(data.fundingRate) : missingEvidence} />
             <Metric label="Next Funding" value={data ? formatDate(data.nextFundingAt) : missingEvidence} />
-            <Metric label="Open Interest" value={data ? formatNumber(data.openInterest, 4) : missingEvidence} />
-            <Metric label="OI Change" value={data ? formatPercent(data.openInterestChangePercent) : missingEvidence} />
+            <Metric label="미결제약정(OI)" value={data ? formatNumber(data.openInterest, 4) : missingEvidence} />
+            <Metric label="OI 변화" value={data ? formatPercent(data.openInterestChangePercent) : missingEvidence} />
           </div>
         )}
 

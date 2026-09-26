@@ -16,6 +16,7 @@ export function ResponsiveTabs<T extends string>({
   testId,
   className,
   compact = false,
+  fluid = false,
 }: {
   value: T;
   options: readonly ResponsiveTabOption<T>[];
@@ -24,6 +25,7 @@ export function ResponsiveTabs<T extends string>({
   testId?: string;
   className?: string;
   compact?: boolean;
+  fluid?: boolean;
 }) {
   return (
     <div
@@ -39,6 +41,11 @@ export function ResponsiveTabs<T extends string>({
         options.length === 4 && 'min-[1200px]:grid-cols-4',
         options.length === 5 && 'min-[1200px]:grid-cols-5',
         options.length === 6 && 'min-[1200px]:grid-cols-6',
+        fluid && options.length === 2 && 'grid grid-cols-2 overflow-visible',
+        fluid && options.length === 3 && 'grid grid-cols-3 overflow-visible',
+        fluid && options.length === 4 && 'grid grid-cols-4 overflow-visible',
+        fluid && options.length === 5 && 'grid grid-cols-5 overflow-visible',
+        fluid && options.length === 6 && 'grid grid-cols-6 overflow-visible',
         className,
       )}
     >
@@ -60,7 +67,9 @@ export function ResponsiveTabs<T extends string>({
             }}
             className={cn(
               'inline-flex min-h-11 shrink-0 items-center justify-center rounded-xl text-center text-xs font-semibold leading-4 transition-colors min-[1200px]:min-w-0',
-              compact ? 'min-w-[88px] px-3' : 'min-w-[76px] px-3',
+              fluid
+                ? 'min-w-0 w-full px-1.5'
+                : compact ? 'min-w-[88px] px-3' : 'min-w-[76px] px-3',
               option.disabled && 'cursor-not-allowed opacity-45',
               selected
                 ? 'bg-primary text-primary-foreground shadow-sm'
