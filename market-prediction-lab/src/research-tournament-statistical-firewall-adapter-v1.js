@@ -90,9 +90,11 @@ export function adaptGlobalStatisticalFirewallToTournamentV1({
       "all generated selection trials must be represented exactly once", { candidateFamilySize: tournamentRequest.candidateFamilySize });
   }
   if (!object(decisionPolicy) || decisionPolicy.status !== "empirically_calibrated"
-    || !finite(decisionPolicy.maxPbo) || !finite(decisionPolicy.minDsrProbability) || !finite(decisionPolicy.alpha)) {
+    || !finite(decisionPolicy.maxPbo) || decisionPolicy.maxPbo < 0 || decisionPolicy.maxPbo > 1
+    || !finite(decisionPolicy.minDsrProbability) || decisionPolicy.minDsrProbability < 0 || decisionPolicy.minDsrProbability > 1
+    || !finite(decisionPolicy.alpha) || decisionPolicy.alpha <= 0 || decisionPolicy.alpha >= 0.5) {
     return blocked("MISSING_EVIDENCE", "STATISTICAL_EVIDENCE_MISSING",
-      "empirically calibrated statistical decision policy is required", { candidateFamilySize: tournamentRequest.candidateFamilySize });
+      "bounded empirically calibrated statistical decision policy is required", { candidateFamilySize: tournamentRequest.candidateFamilySize });
   }
 
   const stability = normalizeStability(stabilityEvidence);
