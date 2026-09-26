@@ -397,6 +397,78 @@ test('persistent global emergency stop blocks new work and standing automatic re
   assert.ok(submitted.riskEnvelope);
   assert.equal(await repository.findOrderByPlan(USER_A, automaticPlan.plan!.id), null);
 });
+test('provider submission rechecks automatic live authority and blocks before outbound request', async () => {
+  const previous = {
+    ORDER_EXECUTION_ENABLED: process.env.ORDER_EXECUTION_ENABLED,
+    LIVE_TRADING_ACTIVATION_APPROVED: process.env.LIVE_TRADING_ACTIVATION_APPROVED,
+    REAL_ORDER_ENABLED: process.env.REAL_ORDER_ENABLED,
+    PRIVATE_TRADING_API_ALLOWED: process.env.PRIVATE_TRADING_API_ALLOWED,
+    UPBIT_LIVE_ORDER_ENABLED: process.env.UPBIT_LIVE_ORDER_ENABLED,
+    LIVE_AUTOMATIC_TRADING_ENABLED: process.env.LIVE_AUTOMATIC_TRADING_ENABLED,
+    TRADING_CREDENTIAL_MASTER_KEY: process.env.TRADING_CREDENTIAL_MASTER_KEY,
+  };
+  const nativeFetch = globalThis.fetch;
+  try {
+    process.env.ORDER_EXECUTION_ENABLED = 'true';
+    process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+    process.env.REAL_ORDER_ENABLED = 'true';
+    process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
+    process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+    process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'false';
+    process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
+
+    const repository = new InMemoryTradingRepository();
+    const automation = new TradeAutomationService(repository);
+    const approvalPolicy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+    const created = await automation.createPlan(
+      USER_A,
+      plan({ signalId: 'final-auto-live-recheck-fixture' }),
+      approvalPolicy,
+      false,
+    );
+    const approved = await automation.approvePlan(USER_A, created.plan!.id);
+    const order = (await automation.createOrder(USER_A, approved)).order;
+    const livePlan = { ...approved, accountMode: 'live' as const };
+    await repository.savePlan(livePlan);
+    await repository.saveConnection({
+      userId: USER_A,
+      exchange: 'upbit',
+      accountMode: 'live',
+      configured: true,
+      encryptedCredentials: encryptTradingCredentials({ accessKey: 'live-access', secretKey: 'live-secret' }, MASTER_KEY),
+      lastVerifiedAt: new Date().toISOString(),
+      lastErrorCode: null,
+      updatedAt: new Date().toISOString(),
+    });
+    await repository.savePolicy(USER_A, normalizeTradingPolicy({
+      ...DEFAULT_TRADING_POLICY,
+      mode: 'automatic',
+      automaticEnabled: true,
+      marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: false },
+      exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
+      enabledAssets: { bitget: [], upbit: ['BTC'], kiwoom: [], toss: [] },
+      enabledStrategies: ['breakout-v1'],
+    }));
+
+    let outbound = 0;
+    globalThis.fetch = (async () => {
+      outbound += 1;
+      throw new Error('PROVIDER_REQUEST_MUST_NOT_HAPPEN');
+    }) as typeof fetch;
+
+    const executed = await new TradeExecutionService(repository).execute(USER_A, livePlan, order);
+    assert.equal(executed.state, 'REJECTED');
+    assert.equal(executed.lastErrorCode, 'LIVE_EXECUTION_DISABLED');
+    assert.equal(outbound, 0);
+  } finally {
+    globalThis.fetch = nativeFetch;
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test('live connection verification authenticates all four providers with zero order mutation', async () => {
   const previousKey = process.env.TRADING_CREDENTIAL_MASTER_KEY;
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
