@@ -225,6 +225,67 @@ export interface ScannerCryptoPublicEventContext {
   warnings: string[];
 }
 
+export type ScannerStockFlowSectionStatus =
+  | 'READY'
+  | 'NOT_CONNECTED'
+  | 'UNAVAILABLE'
+  | 'NOT_APPLICABLE'
+  | 'NOT_INFERRED';
+
+export interface ScannerStockFlowEvidence {
+  schemaVersion: 'scanner-stock-flow-evidence-v1';
+  market: 'KR' | 'US';
+  symbol: string;
+  status: 'READY' | 'PARTIAL' | 'NOT_CONNECTED' | 'UNAVAILABLE';
+  observedAt: string;
+  shortSale: {
+    status: ScannerStockFlowSectionStatus;
+    tradeDate: string | null;
+    shortVolume: number | null;
+    shortExemptVolume: number | null;
+    totalVolume: number | null;
+    shortVolumeRatioPercent: number | null;
+  };
+  shortInterest: {
+    status: ScannerStockFlowSectionStatus;
+    settlementDate: string | null;
+    currentShortPosition: number | null;
+    previousShortPosition: number | null;
+    changePercent: number | null;
+    averageDailyVolume: number | null;
+    daysToCover: number | null;
+  };
+  institutional: {
+    status: ScannerStockFlowSectionStatus;
+    asOf: string | null;
+    note: string;
+  };
+  foreignFlow: {
+    status: ScannerStockFlowSectionStatus;
+    asOf: string | null;
+    note: string;
+  };
+  shortCover: {
+    status: 'NOT_INFERRED';
+    note: string;
+  };
+  sources: Array<{
+    provider: 'FINRA' | 'KRX';
+    dataset: string;
+    asOf: string | null;
+    url: string;
+  }>;
+  warnings: string[];
+  safety: {
+    evidenceOnly: true;
+    scoreImpact: 0;
+    rankImpact: 0;
+    directionImpact: 0;
+    executionAuthority: 'NONE';
+    orderAllowed: false;
+  };
+}
+
 export interface ScannerPricePlan {
   entryZone: { from: number; to: number } | null;
   invalidation: number | null;
@@ -622,6 +683,98 @@ export async function fetchSignalScanner(request: SignalScannerRequest, signal: 
 
   scannerInFlight.set(key, entry);
   return consumeInFlight(key, entry, signal);
+}
+
+const stockFlowCache = new Map<string, { at: number; value: ScannerStockFlowEvidence }>();
+const stockFlowInFlight = new Map<string, Promise<ScannerStockFlowEvidence>>();
+const STOCK_FLOW_CACHE_MS = 60_000;
+
+function stockFlowAbortError(): DOMException {
+  return new DOMException('Stock flow request aborted', 'AbortError');
+}
+
+function withStockFlowAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(stockFlowAbortError());
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => signal.removeEventListener('abort', onAbort);
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(stockFlowAbortError());
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
+async function requestStockFlowEvidence(market: 'KR' | 'US', symbol: string): Promise<ScannerStockFlowEvidence> {
+  const url = `/api/market/flow?market=${encodeURIComponent(market)}&symbol=${encodeURIComponent(symbol)}`;
+  const response = await authorizedFetch(url, {
+    cache: 'no-store',
+    headers: { 'Cache-Control': 'no-cache, no-store, max-age=0', Pragma: 'no-cache' },
+  });
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok || !isRecord(payload) || payload.ok !== true || !isRecord(payload.evidence)) {
+    throw new Error(isRecord(payload) && typeof payload.error === 'string'
+      ? payload.error
+      : `STOCK_FLOW_HTTP_${response.status}`);
+  }
+  if (payload.orderSubmitted !== false || payload.exchangeRequestSent !== false) {
+    throw new Error('STOCK_FLOW_ORDER_SAFETY_VIOLATION');
+  }
+  const evidence = payload.evidence as unknown as ScannerStockFlowEvidence;
+  if (
+    evidence.safety?.evidenceOnly !== true
+    || evidence.safety?.scoreImpact !== 0
+    || evidence.safety?.rankImpact !== 0
+    || evidence.safety?.directionImpact !== 0
+    || evidence.safety?.executionAuthority !== 'NONE'
+    || evidence.safety?.orderAllowed !== false
+  ) {
+    throw new Error('STOCK_FLOW_EVIDENCE_SAFETY_INVALID');
+  }
+  return evidence;
+}
+
+export function fetchStockFlowEvidence(
+  market: 'KR' | 'US',
+  symbol: string,
+  signal?: AbortSignal,
+): Promise<ScannerStockFlowEvidence> {
+  const key = `${market}:${symbol.trim().toUpperCase()}`;
+  const cached = stockFlowCache.get(key);
+  if (cached && Date.now() - cached.at <= STOCK_FLOW_CACHE_MS) {
+    return withStockFlowAbort(Promise.resolve(cached.value), signal);
+  }
+  let request = stockFlowInFlight.get(key);
+  if (!request) {
+    request = requestStockFlowEvidence(market, symbol)
+      .then((value) => {
+        stockFlowCache.set(key, { at: Date.now(), value });
+        return value;
+      })
+      .finally(() => {
+        if (stockFlowInFlight.get(key) === request) stockFlowInFlight.delete(key);
+      });
+    stockFlowInFlight.set(key, request);
+  }
+  return withStockFlowAbort(request, signal);
 }
 
 export function signalScannerDetailPath(card: ScannerSignalCard): string {
