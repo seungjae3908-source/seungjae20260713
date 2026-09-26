@@ -585,11 +585,13 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await expect(panel.getByTestId('ai-chart-fee-break-even')).toContainText('Provider 수수료 근거가 계좌 스냅샷에 없으므로 자동으로 추정하지 않습니다.');
 
   const cockpit = panel.getByTestId('ai-chart-trading-cockpit');
-  await cockpit.locator('summary').click();
+  await expect(cockpit).toHaveAttribute('open', '');
+  await expect(cockpit.getByRole('tab', { name: '주문', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('신호 필요');
   await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('포지션 있음');
   await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('미조회');
   await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('재검증 필요');
+  await cockpit.getByRole('tab', { name: '진입', exact: true }).click();
   await expect(cockpit).toContainText('현재 종목의 승인 대기 진입이 없습니다.');
   await cockpit.getByTestId('ai-chart-load-entry-readiness').click();
   await expect.poll(() => entryReadinessReads).toBe(1);
