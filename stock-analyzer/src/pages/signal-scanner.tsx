@@ -532,6 +532,51 @@ function SignalDetailPanel({
           ? <ul className="mt-2 space-y-1 text-xs leading-5">{why.map((reason, index) => <li key={`${reason}:${index}`}>• {reason}</li>)}</ul>
           : <p className="mt-2 text-xs text-muted-foreground">검증된 이유 설명이 없습니다. 근거가 없는 설명은 만들지 않습니다.</p>}
       </section>
+      {(newsIntel || marketIntel || cryptoEvents) ? (
+        <section data-testid="scanner-intelligence-evidence" className="rounded-2xl border border-card-border p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-xs font-bold">뉴스·공시 · Market Intelligence</h3>
+            <span className="rounded-full border border-card-border px-2 py-1 text-xs font-semibold">{intelligenceStatus(card)}</span>
+          </div>
+          {newsIntel ? (
+            <div className="mt-3 space-y-2">
+              <p className="text-xs text-muted-foreground">이벤트 {newsIntel.eventCount}건 · AI 분석 {newsIntel.analyzedCount}건 · 공식 위험 {newsIntel.officialRiskEvents.length}건</p>
+              {newsIntel.events.length ? newsIntel.events.map((event, index) => (
+                <article key={`${event.kind}:${event.publishedAt ?? index}:${index}`} className="rounded-xl bg-background p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-semibold">{event.kind === 'NEWS' ? '뉴스' : '공시'} · {event.eventType}</p>
+                    <span className="text-xs text-muted-foreground">{event.freshness}</span>
+                  </div>
+                  <p className="mt-1 break-words text-sm font-medium">{event.headline ?? event.summary ?? '제목 미확인'}</p>
+                  {event.summary ? <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">{event.summary}</p> : null}
+                  <p className="mt-1 text-xs text-muted-foreground">{event.sourceName ?? '출처 미확인'} · AI {event.aiStatus}</p>
+                  {event.sourceUrl ? <a href={event.sourceUrl} target="_blank" rel="noreferrer" className="mt-2 inline-flex min-h-11 items-center text-xs font-semibold text-primary">원문 보기</a> : null}
+                </article>
+              )) : <p className="mt-2 text-xs text-muted-foreground">표시할 최신 뉴스·공시 이벤트가 없습니다.</p>}
+            </div>
+          ) : null}
+          {marketIntel ? (
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <div className="rounded-xl bg-background p-2.5"><p className="text-xs text-muted-foreground">시장지능</p><p className="mt-1 font-semibold">{marketIntel.status === 'READY' ? formatMetric(marketIntel.scanner.intelligenceScore) : '확인불가'}</p></div>
+              <div className="rounded-xl bg-background p-2.5"><p className="text-xs text-muted-foreground">방향 근거</p><p className="mt-1 font-semibold">{card.direction === 'SHORT' ? formatMetric(marketIntel.scanner.bearishScore) : formatMetric(marketIntel.scanner.bullishScore)}</p></div>
+              <div className="rounded-xl bg-background p-2.5"><p className="text-xs text-muted-foreground">자동화 경계</p><p className="mt-1 font-semibold">{marketIntel.autoTrading.mode === 'BLOCKED_RISK' ? '위험 차단' : marketIntel.autoTrading.mode === 'PAPER_ONLY' ? 'Paper 전용' : marketIntel.autoTrading.mode === 'ELIGIBLE_FOR_PARENT_GATE' ? '상위 Gate 대상' : '확인불가'}</p></div>
+              <div className="rounded-xl bg-background p-2.5"><p className="text-xs text-muted-foreground">점수 조정</p><p className="mt-1 font-semibold tabular-nums">{formatMetric(marketIntel.directionalAdjustment)}</p></div>
+            </div>
+          ) : null}
+          {cryptoEvents ? (
+            <div className="mt-3 space-y-2">
+              <p className="text-xs text-muted-foreground">거래소 경고 {cryptoEvents.marketWarning === true ? '있음' : cryptoEvents.marketWarning === false ? '없음' : '미확인'} · 검증 뉴스 {cryptoEvents.verifiedCoinNews.connected ? '연결' : '미연결'}</p>
+              {cryptoEvents.events.length ? cryptoEvents.events.map((event, index) => (
+                <article key={`${event.kind}:${event.observedAt ?? index}:${index}`} className="rounded-xl bg-background p-3">
+                  <p className="text-xs font-semibold">{event.kind === 'PUBLIC_LIQUIDATION' ? '공개 청산 이벤트' : event.kind === 'EXCHANGE_WARNING' ? '거래소 경고' : '거래 상태'}</p>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">{event.reasons.join(' · ') || event.source}</p>
+                </article>
+              )) : null}
+            </div>
+          ) : null}
+          <p className="mt-3 text-xs leading-5 text-muted-foreground">AI/뉴스 감성은 단독 매매 방향이 아니며, 표시된 근거는 기존 Scanner·Risk Gate를 대체하지 않습니다.</p>
+        </section>
+      ) : null}
       <div className="grid gap-2 sm:grid-cols-3">
         <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-black">일치 근거</h3><div className="mt-2 flex flex-wrap gap-1">{card.matched.length ? card.matched.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-positive/10 px-2 py-1 text-[10px] text-positive">{item}</span>) : <span className="text-[10px] text-muted-foreground">없음</span>}</div></section>
         <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-black">불일치 조건</h3><div className="mt-2 flex flex-wrap gap-1">{card.notMatched.length ? card.notMatched.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-destructive/10 px-2 py-1 text-[10px] text-destructive">{item}</span>) : <span className="text-[10px] text-muted-foreground">없음</span>}</div></section>
