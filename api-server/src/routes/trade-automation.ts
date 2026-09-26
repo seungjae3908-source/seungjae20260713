@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Response } from 'express';
 import { createSupabaseTradingRepository, safeConnections, type TradingRepository } from '../services/trade-automation.repository';
-import { liveExecutionEnabled, TradeAutomationService } from '../services/trade-automation.service';
+import { automaticLiveExecutionEnabled, liveExecutionEnabled, TradeAutomationService } from '../services/trade-automation.service';
 import { TradeCancelReconciliationService } from '../services/trade-cancel-reconciliation.service';
 import { TradeExecutionService } from '../services/trade-execution.service';
 import { TradeOrderAmendmentService } from '../services/trade-order-amendment.service';
@@ -268,6 +268,12 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
         upbit: liveExecutionEnabled('upbit'),
         kiwoom: liveExecutionEnabled('kiwoom'),
         toss: liveExecutionEnabled('toss'),
+      },
+      liveAutomaticExecutionServerEnabled: {
+        bitget: automaticLiveExecutionEnabled('bitget'),
+        upbit: automaticLiveExecutionEnabled('upbit'),
+        kiwoom: automaticLiveExecutionEnabled('kiwoom'),
+        toss: automaticLiveExecutionEnabled('toss'),
       },
       credentialVault: credentialConfigurationStatus(),
       lastOrder: orders[0] ?? null,
