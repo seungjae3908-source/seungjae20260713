@@ -218,7 +218,7 @@ function MarketEventTimeline({
               </p>
               <div className="mt-2 flex flex-wrap gap-2">
                 <button type="button" onClick={() => onSelectSymbol(item.symbol)} className="min-h-10 rounded-lg border px-3 text-xs font-semibold">
-                  종목 분석
+                  종목 상세
                 </button>
                 {item.sources.slice(0, 3).map((source, index) => (
                   <a key={source.url} href={source.url} target="_blank" rel="noreferrer" className="inline-flex min-h-10 items-center gap-1 rounded-lg border px-3 text-xs font-semibold text-primary">
