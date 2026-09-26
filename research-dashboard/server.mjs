@@ -321,6 +321,51 @@ function emptyCandidatePerformance(status, present, reason = null) {
   });
 }
 
+function safeCandidatePromotionIdentity(value) {
+  const identity = value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+  if (!identity) return null;
+  const required = [
+    'candidateId',
+    'strategyId',
+    'strategyVersion',
+    'parameterHash',
+    'researchCodeSha',
+    'market',
+    'timeframe',
+    'sidePolicy',
+    'accountMode',
+    'costPolicyVersion',
+    'executionPolicyVersion',
+  ];
+  if (!required.every((key) => typeof identity[key] === 'string' && identity[key].length > 0)) return null;
+  if (!CANDIDATE_ID_PATTERN.test(identity.candidateId)
+    || !SAFE_ID_PATTERN.test(identity.strategyId)
+    || !SAFE_ID_PATTERN.test(identity.strategyVersion)
+    || !DIGEST_PATTERN.test(identity.parameterHash)
+    || !SHA_PATTERN.test(identity.researchCodeSha)
+    || !SAFE_ID_PATTERN.test(identity.market)
+    || !SAFE_ID_PATTERN.test(identity.timeframe)
+    || !SAFE_ID_PATTERN.test(identity.sidePolicy)
+    || identity.accountMode !== 'PAPER'
+    || !SAFE_ID_PATTERN.test(identity.costPolicyVersion)
+    || !SAFE_ID_PATTERN.test(identity.executionPolicyVersion)) {
+    return null;
+  }
+  return Object.freeze({
+    candidateId: identity.candidateId,
+    strategyId: identity.strategyId,
+    strategyVersion: identity.strategyVersion,
+    parameterHash: String(identity.parameterHash).toLowerCase(),
+    researchCodeSha: String(identity.researchCodeSha).toLowerCase(),
+    market: identity.market,
+    timeframe: identity.timeframe,
+    sidePolicy: identity.sidePolicy,
+    accountMode: 'PAPER',
+    costPolicyVersion: identity.costPolicyVersion,
+    executionPolicyVersion: identity.executionPolicyVersion,
+  });
+}
+
 function summarizeCandidatePerformance(value, readFailed = false) {
   if (readFailed) return emptyCandidatePerformance('INVALID', true, 'CANDIDATE_PERFORMANCE_READ_FAILED');
   if (!value) return emptyCandidatePerformance('MISSING', false, 'CANDIDATE_PERFORMANCE_EVIDENCE_MISSING');
@@ -398,6 +443,7 @@ function summarizeCandidatePerformance(value, readFailed = false) {
     && value.identity14Verified === true
     && identityValidFields
     && provenanceValid;
+  const promotionIdentity = safeCandidatePromotionIdentity(identity);
   const matchedCounts = [counts.LONG_SIGNAL_N, counts.SHORT_SIGNAL_N, counts.NO_TRADE_N];
   const splitCounts = [counts.TRAIN_N, counts.VALIDATION_N, counts.OOS_N];
   const matchValid = counts.candidateMatchedN == null
@@ -427,6 +473,7 @@ function summarizeCandidatePerformance(value, readFailed = false) {
     strategyId: value.strategyId,
     freezeTimestamp: value.freezeTimestamp,
     identity14Verified: true,
+    promotionIdentity,
     fullCostEvidence,
     ...counts,
     ...metrics,
