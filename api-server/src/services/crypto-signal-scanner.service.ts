@@ -939,12 +939,11 @@ export function createCryptoSignalScannerService(
               ? outcome.reason.message.slice(0, 180)
               : '유효한 캔들·시세를 만들지 못했습니다.',
         }));
-      const evaluatedCards = work.outcomes
+      const cards = work.outcomes
         .filter((outcome): outcome is typeof outcome & { value: ScannerSignalCard } => (
           outcome.status === 'fulfilled' && outcome.value != null
         ))
-        .map((outcome) => outcome.value);
-      const cards = evaluatedCards
+        .map((outcome) => outcome.value)
         .filter((card) => request.minimumScore == null || card.score >= request.minimumScore)
         .filter((card) => request.maximumRiskScore == null
           || (card.riskScore != null && card.riskScore <= request.maximumRiskScore))
