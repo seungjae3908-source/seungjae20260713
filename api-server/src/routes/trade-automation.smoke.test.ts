@@ -384,6 +384,67 @@ test('live trading connection requires explicit purpose plus read+orders and nev
     assert.equal(body.credentialsReturned, false);
     assert.equal(body.liveExecutionActivated, false);
     assert.equal(body.providerMutationRequests, 0);
+
+    const missingVerifyConfirmation = await fetch(`${baseUrl}/api/trade-automation/connections/upbit/verify`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    assert.equal(missingVerifyConfirmation.status, 409);
+    assert.equal(
+      (await missingVerifyConfirmation.json() as { error: string }).error,
+      'LIVE_EXECUTION_VERIFICATION_CONFIRMATION_REQUIRED',
+    );
+
+    const nativeFetch = globalThis.fetch;
+    let financialMutationRequests = 0;
+    try {
+      globalThis.fetch = async (input, init) => {
+        const url = String(input);
+        if (url.startsWith(baseUrl)) return nativeFetch(input, init);
+        const method = String(init?.method ?? 'GET').toUpperCase();
+        if (url.includes('api.upbit.com/v1/orders') && method !== 'GET') {
+          financialMutationRequests += 1;
+          throw new Error('TEST_FINANCIAL_MUTATION_FORBIDDEN');
+        }
+        if (url.includes('api.upbit.com/v1/accounts')) {
+          return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        throw new Error(`UNEXPECTED_LIVE_VERIFY_REQUEST:${method}:${url}`);
+      };
+
+      const verified = await globalThis.fetch(`${baseUrl}/api/trade-automation/connections/upbit/verify`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ confirmed: true }),
+      });
+      assert.equal(verified.status, 200);
+      const verifiedBody = await verified.json() as {
+        verified: boolean;
+        credentialsReturned: boolean;
+        liveExecutionActivated: boolean;
+        automaticLiveExecutionActivated: boolean;
+        orderRequests: number;
+        cancelRequests: number;
+        amendRequests: number;
+        transferRequests: number;
+        withdrawalRequests: number;
+        realOrderSubmitted: boolean;
+      };
+      assert.equal(verifiedBody.verified, true);
+      assert.equal(verifiedBody.credentialsReturned, false);
+      assert.equal(verifiedBody.liveExecutionActivated, false);
+      assert.equal(verifiedBody.automaticLiveExecutionActivated, false);
+      assert.equal(verifiedBody.orderRequests, 0);
+      assert.equal(verifiedBody.cancelRequests, 0);
+      assert.equal(verifiedBody.amendRequests, 0);
+      assert.equal(verifiedBody.transferRequests, 0);
+      assert.equal(verifiedBody.withdrawalRequests, 0);
+      assert.equal(verifiedBody.realOrderSubmitted, false);
+      assert.equal(financialMutationRequests, 0);
+    } finally {
+      globalThis.fetch = nativeFetch;
+    }
   } finally { await close(server); }
 });
 
