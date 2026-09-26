@@ -235,6 +235,13 @@ process.stdout.write([
   bool("AUTO_TRADING"),
   bool("REAL_ORDER_ENABLED"),
   bool("PRIVATE_TRADING_API_ALLOWED"),
+  bool("ORDER_EXECUTION_ENABLED"),
+  bool("LIVE_TRADING_ACTIVATION_APPROVED"),
+  bool("LIVE_AUTOMATIC_TRADING_ENABLED"),
+  bool("BITGET_LIVE_ORDER_ENABLED"),
+  bool("UPBIT_LIVE_ORDER_ENABLED"),
+  bool("KIWOOM_LIVE_ORDER_ENABLED"),
+  bool("TOSS_LIVE_ORDER_ENABLED"),
   String(env.executionAuthority ?? "NONE"),
 ].join("\t") + "\n");
   ' "$PM2_NAME"
@@ -287,18 +294,235 @@ restart_application_preserving_telegram() {
   normalize_pm2_watch_before_restart || return 1
   LIVE_TELEGRAM_ACTIVATION_APPROVED="$approved" TELEGRAM_INTELLIGENCE_WORKER_ENABLED="$worker" \
     LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false \
+    ORDER_EXECUTION_ENABLED=false LIVE_TRADING_ACTIVATION_APPROVED=false LIVE_AUTOMATIC_TRADING_ENABLED=false \
+    BITGET_LIVE_ORDER_ENABLED=false UPBIT_LIVE_ORDER_ENABLED=false KIWOOM_LIVE_ORDER_ENABLED=false TOSS_LIVE_ORDER_ENABLED=false \
     executionAuthority=NONE DEPLOY_SHA="$TARGET_SHA" pm2 restart "$PM2_NAME" --update-env
 }
 
 application_runtime_ready() {
-  local snapshot pid status cwd exec_path watched live auto real private_api authority
+  local snapshot pid status cwd exec_path watched live auto real private_api order_execution live_approved live_auto bitget_live upbit_live kiwoom_live toss_live authority
   snapshot="$(pm2_runtime_snapshot)" || return 1
-  IFS=$'\t' read -r pid status cwd exec_path watched live auto real private_api authority <<< "$snapshot"
+  IFS=
+  mapfile -t current_listeners < <(listener_pids)
+  [[ "${#current_listeners[@]}" -eq 1 && "${current_listeners[0]}" == "$pid" ]] || return 1
+}
+
+restore_backup() {
+  echo "[rollback] restoring previous production snapshot"
+
+  sync_source_tree "$BACKUP_DIR/source" "$LIVE_DIR"
+
+  rm -rf "$LIVE_DIR/api-server/dist" "$LIVE_DIR/stock-analyzer/dist"
+  [[ -d "$BACKUP_DIR/api-server-dist" ]] && cp -a "$BACKUP_DIR/api-server-dist" "$LIVE_DIR/api-server/dist"
+  [[ -d "$BACKUP_DIR/stock-analyzer-dist" ]] && cp -a "$BACKUP_DIR/stock-analyzer-dist" "$LIVE_DIR/stock-analyzer/dist"
+
+  if [[ "$CURRENT_SHA" == "legacy" ]]; then
+    rm -f "$DEPLOY_STATE_DIR/current-sha"
+  else
+    printf '%s\n' "$CURRENT_SHA" > "$DEPLOY_STATE_DIR/current-sha"
+  fi
+
+  if [[ "$CURRENT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+    restart_application_preserving_telegram "$CURRENT_SHA"
+  else
+    restart_application_preserving_telegram ""
+  fi
+  pm2 save
+
+  if ! probe_health "http://127.0.0.1:$LIVE_PORT" "$([[ "$CURRENT_SHA" =~ ^[0-9a-f]{40}$ ]] && printf '%s' "$CURRENT_SHA")"; then
+    echo "[rollback] CRITICAL: rollback completed but health check still fails" >&2
+    return 1
+  fi
+
+  echo "[rollback] previous production restored successfully"
+}
+
+FREE_KB="$(df -Pk "$LIVE_DIR" | awk 'NR==2 {print $4}')"
+if [[ -z "$FREE_KB" ]] || (( FREE_KB < MIN_FREE_KB )); then
+  echo "[deploy] insufficient disk space: ${FREE_KB:-unknown}KB free, ${MIN_FREE_KB}KB required" >&2
+  exit 7
+fi
+
+if ! pm2 describe "$PM2_NAME" >/dev/null 2>&1; then
+  echo "[deploy] PM2 process not found: $PM2_NAME" >&2
+  exit 8
+fi
+
+# PRODUCTION_APP_APPROVAL_DOES_NOT_AUTHORIZE_TELEGRAM_ACTIVATION.
+# Missing flags are OFF; malformed/mixed state blocks before any application restart.
+TELEGRAM_PREDEPLOY_STATE="$(read_telegram_activation_state)"
+readonly TELEGRAM_PREDEPLOY_STATE
+
+if [[ "$CURRENT_SHA" == "$TARGET_SHA" ]]; then
+  echo "[deploy] target marker is already active: $TARGET_SHA"
+  if probe_health "http://127.0.0.1:$LIVE_PORT" "$TARGET_SHA" \
+    && probe_data "http://127.0.0.1:$LIVE_PORT" \
+    && application_runtime_ready; then
+    exit 0
+  fi
+  echo "[deploy] application runtime identity or health is stale; refreshing the already-active target without Telegram activation"
+  restart_application_preserving_telegram "$TARGET_SHA"
+  pm2 save
+  probe_health "http://127.0.0.1:$LIVE_PORT" "$TARGET_SHA"
+  probe_data "http://127.0.0.1:$LIVE_PORT"
+  application_runtime_ready
+  exit 0
+fi
+
+mkdir -p "$RELEASE_DIR"
+RELEASE_CREATED=1
+
+echo "[deploy] current=$CURRENT_SHA target=$TARGET_SHA"
+echo "[deploy] exporting isolated release: $RELEASE_DIR"
+git -C "$SOURCE_DIR" archive "$TARGET_SHA" | tar -x -C "$RELEASE_DIR"
+mkdir -p "$RELEASE_DIR/.deploy"
+printf '%s\n' "$TARGET_SHA" > "$RELEASE_DIR/.deploy/current-sha"
+
+for relative_env in \
+  .env \
+  .env.production \
+  api-server/.env \
+  api-server/.env.production \
+  stock-analyzer/.env \
+  stock-analyzer/.env.production; do
+  source_env="$LIVE_DIR/$relative_env"
+  target_env="$RELEASE_DIR/$relative_env"
+  if [[ -f "$source_env" ]] && [[ ! -e "$target_env" ]]; then
+    mkdir -p "$(dirname "$target_env")"
+    ln -s "$source_env" "$target_env"
+  fi
+done
+
+(
+  cd "$RELEASE_DIR"
+  pnpm install --frozen-lockfile
+  NODE_ENV=production pnpm --filter @workspace/api-server run build
+)
+
+[[ -f "$RELEASE_DIR/api-server/dist/index.mjs" ]] || {
+  echo "[deploy] API build output missing" >&2
+  exit 9
+}
+
+[[ -f "$RELEASE_DIR/stock-analyzer/dist/public/index.html" ]] || {
+  echo "[deploy] frontend build output missing" >&2
+  exit 10
+}
+
+PM2_JSON="$(mktemp /tmp/stock-app-pm2.XXXXXX)"
+pm2 jlist >"$PM2_JSON"
+node - "$PM2_JSON" "$PM2_NAME" "$CANARY_ENV" <<'NODE'
+const fs = require('fs');
+const [jsonPath, processName, outputPath] = process.argv.slice(2);
+const processes = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+const selected = processes.find((item) => item.name === processName);
+if (!selected?.pm2_env) {
+  throw new Error(`PM2 process environment not found: ${processName}`);
+}
+
+const excluded = new Set([
+  'name', 'namespace', 'cwd', 'args', 'exec_interpreter', 'exec_mode',
+  'pm_exec_path', 'pm_cwd', 'pm_out_log_path', 'pm_err_log_path',
+  'pm_pid_path', 'status', 'NODE_APP_INSTANCE', 'PORT', 'API_PORT', 'DEPLOY_SHA',
+]);
+const lines = [];
+for (const [key, rawValue] of Object.entries(selected.pm2_env)) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+  if (excluded.has(key) || key.startsWith('pm_') || key.startsWith('axm_')) continue;
+  if (rawValue === null || rawValue === undefined || typeof rawValue === 'object') continue;
+  lines.push(`${key}=${JSON.stringify(String(rawValue))}`);
+}
+fs.writeFileSync(outputPath, `${lines.join('\n')}\n`, { mode: 0o600 });
+NODE
+rm -f "$PM2_JSON"
+
+(
+  cd "$RELEASE_DIR/api-server"
+  nohup env PORT="$CANARY_PORT" API_PORT="$CANARY_PORT" NODE_ENV=production DEPLOY_SHA="$TARGET_SHA" \
+    LIVE_TELEGRAM_ACTIVATION_APPROVED=false TELEGRAM_INTELLIGENCE_WORKER_ENABLED=false \
+    LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false \
+    ORDER_EXECUTION_ENABLED=false LIVE_TRADING_ACTIVATION_APPROVED=false LIVE_AUTOMATIC_TRADING_ENABLED=false \
+    BITGET_LIVE_ORDER_ENABLED=false UPBIT_LIVE_ORDER_ENABLED=false KIWOOM_LIVE_ORDER_ENABLED=false TOSS_LIVE_ORDER_ENABLED=false \
+    executionAuthority=NONE node --env-file="$CANARY_ENV" --enable-source-maps ./dist/index.mjs \
+    >"$CANARY_LOG" 2>&1 &
+  echo $! >"$RELEASE_DIR/.canary.pid"
+)
+CANARY_PID="$(cat "$RELEASE_DIR/.canary.pid")"
+
+echo "[deploy] validating canary on port $CANARY_PORT"
+if ! probe_health "http://127.0.0.1:$CANARY_PORT" "$TARGET_SHA"; then
+  echo "[deploy] canary health check failed" >&2
+  tail -n 120 "$CANARY_LOG" >&2 || true
+  exit 11
+fi
+
+if ! probe_data "http://127.0.0.1:$CANARY_PORT"; then
+  echo "[deploy] canary data probe failed: $DATA_PROBE_PATH" >&2
+  tail -n 120 "$CANARY_LOG" >&2 || true
+  exit 12
+fi
+
+kill "$CANARY_PID" 2>/dev/null || true
+wait "$CANARY_PID" 2>/dev/null || true
+CANARY_PID=""
+
+echo "[deploy] canary passed; creating rollback backup"
+mkdir -p "$BACKUP_DIR/source"
+sync_source_tree "$LIVE_DIR" "$BACKUP_DIR/source"
+printf '%s\n' "$CURRENT_SHA" > "$BACKUP_DIR/previous-sha.txt"
+[[ -d "$LIVE_DIR/api-server/dist" ]] && cp -a "$LIVE_DIR/api-server/dist" "$BACKUP_DIR/api-server-dist"
+[[ -d "$LIVE_DIR/stock-analyzer/dist" ]] && cp -a "$LIVE_DIR/stock-analyzer/dist" "$BACKUP_DIR/stock-analyzer-dist"
+
+set +e
+(
+  set -Eeuo pipefail
+
+  sync_source_tree "$RELEASE_DIR" "$LIVE_DIR"
+  (
+    cd "$LIVE_DIR"
+    pnpm install --frozen-lockfile
+  )
+
+  rm -rf "$LIVE_DIR/api-server/dist" "$LIVE_DIR/stock-analyzer/dist"
+  cp -a "$RELEASE_DIR/api-server/dist" "$LIVE_DIR/api-server/dist"
+  mkdir -p "$LIVE_DIR/stock-analyzer"
+  cp -a "$RELEASE_DIR/stock-analyzer/dist" "$LIVE_DIR/stock-analyzer/dist"
+  printf '%s\n' "$TARGET_SHA" > "$DEPLOY_STATE_DIR/current-sha"
+
+  restart_application_preserving_telegram "$TARGET_SHA"
+  pm2 save
+
+  probe_health "http://127.0.0.1:$LIVE_PORT" "$TARGET_SHA"
+  probe_data "http://127.0.0.1:$LIVE_PORT"
+  application_runtime_ready
+
+  if [[ -n "$PUBLIC_BASE_URL" ]]; then
+    probe_health "${PUBLIC_BASE_URL%/}" "$TARGET_SHA"
+  fi
+)
+DEPLOY_RESULT=$?
+set -e
+
+if (( DEPLOY_RESULT != 0 )); then
+  echo "[deploy] production verification failed; starting automatic rollback" >&2
+  restore_backup
+  exit 13
+fi
+
+echo "[deploy] production deployment succeeded: $TARGET_SHA"
+
+mapfile -t OLD_BACKUPS < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | awk 'NR>3 {print $2}')
+for old_backup in "${OLD_BACKUPS[@]:-}"; do
+  [[ -n "$old_backup" ]] && rm -rf -- "$old_backup"
+done
+\t' read -r pid status cwd exec_path watched live auto real private_api order_execution live_approved live_auto bitget_live upbit_live kiwoom_live toss_live authority <<< "$snapshot"
   [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && "$status" == online ]] || return 1
   [[ "$cwd" == "$LIVE_DIR" ]] || return 1
   [[ "$(readlink -m "$exec_path")" == "$LIVE_DIR/api-server/dist/index.mjs" ]] || return 1
   [[ "$watched" == false ]] || return 1
   [[ "$live" == false && "$auto" == false && "$real" == false && "$private_api" == false ]] || return 1
+  [[ "$order_execution" == false && "$live_approved" == false && "$live_auto" == false ]] || return 1
+  [[ "$bitget_live" == false && "$upbit_live" == false && "$kiwoom_live" == false && "$toss_live" == false ]] || return 1
   [[ "$authority" == NONE ]] || return 1
   mapfile -t current_listeners < <(listener_pids)
   [[ "${#current_listeners[@]}" -eq 1 && "${current_listeners[0]}" == "$pid" ]] || return 1
