@@ -103,6 +103,8 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(approvalQueue).toContain("if (exchangeFilter) query.set('exchange', exchangeFilter);");
   expect(tradeRoute).toContain("if (requestedExchange && plan.exchange !== requestedExchange) return false;");
   expect(tradeRoute).toContain("if (requestedSymbol && normalizedExitSymbol(plan.symbol) !== requestedSymbol) return false;");
+  expect(tradeRoute).toContain("exchangeOrderId: order.exchangeOrderId");
+  expect(panel).toContain("providerOrderStatusLabel(canonicalProviderOrderStatus(item, providerOpenOrders))");
   expect(panel).toContain("data-testid=\"ai-chart-entry-readiness\"");
   expect(panel).toContain("data-testid=\"ai-chart-load-entry-readiness\"");
   expect(panel).toContain("authorizedFetch('/api/trade-automation/status'");
@@ -428,6 +430,8 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
             orderType: 'limit',
             reduceOnly: false,
             state: 'ACCEPTED',
+            clientOrderId: 'client-order-005930',
+            exchangeOrderId: 'provider-open-005930',
             requestedQuantity: 10,
             remainingQuantity: 4,
             filledQuantity: 6,
@@ -590,6 +594,7 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await cockpit.getByTestId('ai-chart-load-orders').click();
   await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('거래소 접수');
   await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('잔량 4');
+  await expect(cockpit.getByTestId('ai-chart-order-provider-match-order-005930')).toContainText('Provider 원장 일치');
   await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('Kiwoom');
   await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('부분체결');
   await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('잔량 2');
