@@ -236,6 +236,71 @@ export function createScannerPaperPlansRouter(dependencies: {
   const resolveCanonicalPaperSimulationAuthority = dependencies.resolveSimulation ?? canonicalSimulationAuthorityOwner;
   const runRecurringPaperCycle = dependencies.runCycle ?? recurringPaperCycleOwner;
 
+  router.post('/scanner/live-draft', requireCapability('canPlaceOrders'), async (req: AuthenticatedRequest, res) => {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    let length: number;
+    try { length = Buffer.byteLength(JSON.stringify(req.body ?? null), 'utf8'); }
+    catch { length = MAX_REQUEST_BYTES + 1; }
+    const base = {
+      executionAuthority: 'NONE' as const,
+      liveOrderAllowed: false as const,
+      privateTradingApiAllowed: false as const,
+      orderSubmitted: false as const,
+      exchangeRequestSent: false as const,
+      providerMutationRequests: 0 as const,
+      productionMutationAllowed: false as const,
+      livePlanCreated: false as const,
+    };
+    if (length > MAX_REQUEST_BYTES) {
+      return res.status(413).json({ ok: false, error: 'REQUEST_TOO_LARGE', ...base });
+    }
+
+    try {
+      const resolved = registry.resolveScannerLiveDraft(req.member!.id, req.body, sourceSha());
+      const card = resolved.card;
+      const identity = resolved.strategyIdentity;
+      return res.status(200).json({
+        ok: true,
+        serverVerified: true,
+        draft: {
+          schemaVersion: 'scanner-live-entry-draft-v1',
+          state: 'SERVER_VERIFIED_DRAFT',
+          market: resolved.canonicalMarket,
+          symbol: card.symbol,
+          timeframe: resolved.source.timeframe,
+          side: card.action,
+          signalId: card.signalId,
+          observedAt: card.observedAt,
+          expiresAt: card.expiresAt,
+          entryZone: card.pricePlan.entryZone,
+          invalidation: card.pricePlan.invalidation,
+          stopLoss: card.pricePlan.stopLoss,
+          targets: card.pricePlan.targets,
+          riskReward: card.pricePlan.riskReward,
+          evidenceStrength: card.score,
+          strategy: {
+            candidateId: identity.candidateId,
+            strategyId: identity.strategyId,
+            parameterHash: identity.parameterHash,
+            researchCodeSha: identity.researchCodeSha,
+            costPolicyVersion: identity.costPolicyVersion,
+          },
+          requiresFinalRiskRecheck: true,
+          requiresExplicitApproval: true,
+          executionAuthority: 'NONE',
+        },
+        ...base,
+      });
+    } catch (error) {
+      const sourceError = error instanceof ProductPaperSourceError ? error : null;
+      const safeCode = sourceError?.code
+        ?? (error instanceof Error && /^[A-Z0-9_:-]{3,160}$/u.test(error.message)
+          ? error.message
+          : 'SCANNER_LIVE_DRAFT_FAILED');
+      return res.status(sourceError?.status ?? 500).json({ ok: false, error: safeCode, ...base });
+    }
+  });
+
   router.post('/scanner/plans', requireCapability('canAccessPaperTrading'), async (req: AuthenticatedRequest, res) => {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     const envelope = safety();
