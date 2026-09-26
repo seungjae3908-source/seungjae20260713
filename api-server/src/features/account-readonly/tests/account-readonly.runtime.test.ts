@@ -283,6 +283,65 @@ test('vault-backed Toss reader parses the canonical OpenAPI accounts and holding
   assert.equal(serialized.includes('TOSS_CLIENT_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('TOSS_SECRET_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('TOSS_TOKEN_RUNTIME_TEST_ONLY'), false);
 });
 
+test('vault-backed Toss keeps holdings connected when one cash buying-power currency is unavailable', async () => {
+  const readers = createVaultBackedAccountReaders({
+    repositoryFactory: () => repositoryFor('toss'),
+    decryptCredentials: () => ({ clientId: 'TOSS_CLIENT_RUNTIME_TEST_ONLY', clientSecret: 'TOSS_SECRET_RUNTIME_TEST_ONLY' }),
+    fetchImpl: async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/oauth2/token') {
+        return new Response(JSON.stringify({ access_token: 'TOSS_TOKEN_RUNTIME_TEST_ONLY', expires_in: 3600 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v1/accounts') {
+        return new Response(JSON.stringify({ result: [{ accountNo: '12345678901', accountSeq: 1, accountType: 'BROKERAGE' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v1/holdings') {
+        return new Response(JSON.stringify({
+          result: {
+            items: [{
+              symbol: '005930', marketCountry: 'KR', currency: 'KRW', quantity: '3',
+              lastPrice: '71000', averagePurchasePrice: '70000',
+              marketValue: { amount: '213000' },
+              profitLoss: { amount: '3000', rate: '0.0142857143' },
+            }],
+          },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v1/orders') {
+        return new Response(JSON.stringify({ result: { orders: [], nextCursor: null, hasNext: false } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v1/buying-power') {
+        const currency = url.searchParams.get('currency');
+        if (currency === 'USD') {
+          return new Response(JSON.stringify({ error: 'forbidden-test-only' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({ result: { currency: 'KRW', cashBuyingPower: '5000000' } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response('{}', { status: 404 });
+    },
+  });
+
+  const result = await readers.toss!(SCOPE);
+  assert.equal(result.connected, true);
+  assert.equal(result.status, 'CONNECTED');
+  assert.equal(result.stale, false);
+  assert.equal(result.errorCode, 'TOSS_BUYING_POWER_AUTH_FAILED');
+  assert.equal(result.positions?.[0]?.symbol, '005930');
+  assert.equal(result.positions?.[0]?.quantity, 3);
+  assert.equal(result.balances?.find((row) => row.currency === 'KRW')?.available, 5000000);
+  assert.equal(result.balances?.some((row) => row.currency === 'USD'), false);
+  assert.equal(result.accounts?.find((row) => row.market === 'KR')?.buyingPower, 5000000);
+  assert.equal(result.accounts?.some((row) => row.market === 'US'), false);
+  assert.equal(result.orderRequests, 0);
+  assert.equal(result.cancelRequests, 0);
+  assert.equal(result.amendRequests, 0);
+  assert.equal(result.transferRequests, 0);
+  assert.equal(result.withdrawalRequests, 0);
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes('forbidden-test-only'), false);
+  assert.equal(serialized.includes('TOSS_TOKEN_RUNTIME_TEST_ONLY'), false);
+});
+
 test('vault-backed Toss reader rejects legacy or malformed holdings instead of reporting connected empty', async () => {
   const readers = createVaultBackedAccountReaders({
     repositoryFactory: () => repositoryFor('toss'),
