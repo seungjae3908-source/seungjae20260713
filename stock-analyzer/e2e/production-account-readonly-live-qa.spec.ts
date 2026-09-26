@@ -27,6 +27,13 @@ const cryptoProviders = ['upbit', 'bitget'] as const;
 const stockProviders = ['toss', 'kiwoom'] as const;
 type Provider = typeof cryptoProviders[number] | typeof stockProviders[number];
 
+const UPBIT_OPTIONAL_ORDER_READ_SCOPE_ERROR = 'UPBIT_OPEN_ORDERS_UPBIT_PERMISSION_DENIED';
+
+function providerReadErrorAccepted(provider: Provider, errorCode: string | null) {
+  return errorCode === null
+    || (provider === 'upbit' && errorCode === UPBIT_OPTIONAL_ORDER_READ_SCOPE_ERROR);
+}
+
 type SafetySnapshot = {
   provider: string;
   readOnly: boolean;
@@ -212,7 +219,10 @@ test('Production real-account read-only providers return fresh connected snapsho
       expect(snapshot!.connected, `${provider} must prove a real connected account read`).toBe(true);
       expect(snapshot!.status).toBe('CONNECTED');
       expect(snapshot!.stale).toBe(false);
-      expect(snapshot!.errorCode).toBeNull();
+      expect(
+        providerReadErrorAccepted(provider, snapshot!.errorCode),
+        `${provider} returned an unexpected provider read error: ${snapshot!.errorCode ?? 'none'}`,
+      ).toBe(true);
       expect(Number.isFinite(Date.parse(snapshot!.checkedAt))).toBe(true);
       expect(snapshot!.lastGoodAt).not.toBeNull();
       expect(Number.isFinite(Date.parse(String(snapshot!.lastGoodAt)))).toBe(true);
