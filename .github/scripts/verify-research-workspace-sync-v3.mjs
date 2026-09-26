@@ -14,6 +14,7 @@ const added=[
  'packages/external-research/scripts/run-existing-research-providers-v8.d.mts',
  'api-server/src/services/ai-chat.service.ts',
  'api-server/src/services/research-groq-one-shot-transport.service.test.ts',
+ 'api-server/src/services/research-groq-json-transport.service.ts',
  'api-server/src/tools/research-workspace-one-shot-v12.ts',
  'api-server/src/tools/research-workspace-one-shot-v12.test.ts',
  'api-server/scripts/run-research-workspace-one-shot-v12.ts',
