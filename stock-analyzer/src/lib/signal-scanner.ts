@@ -10,6 +10,24 @@ export type ScannerSignalState =
   | 'CANDIDATE' | 'CONFIRMED' | 'ARMED' | 'ENTRY_ZONE' | 'APPROVAL_PENDING' | 'APPROVED'
   | 'EXECUTING' | 'PARTIALLY_FILLED' | 'FILLED' | 'MANAGING' | 'CLOSED' | 'INVALIDATED'
   | 'EXPIRED' | 'REJECTED' | 'CANCELLED' | 'DETECTED' | 'WATCHING' | 'READY_FOR_APPROVAL' | 'WEAKENED';
+
+export type ScannerDecisionOutcome =
+  | 'LONG_REVIEW'
+  | 'SHORT_REVIEW'
+  | 'WATCH'
+  | 'BLOCKED'
+  | 'NO_TRADE';
+
+export interface ScannerDecisionHistoryEntry {
+  sequence: number;
+  state: ScannerSignalState;
+  direction: ScannerDirection;
+  action: ScannerTradeAction | null;
+  decision: ScannerDecisionOutcome;
+  eligible: boolean;
+  observedAt: string;
+  reasons: string[];
+}
 export type ScannerDataState = 'complete' | 'partial' | 'stale' | 'insufficient' | 'unavailable' | 'untrusted';
 export type ScannerOutcomeCode =
   | 'CANDIDATES_AVAILABLE'
@@ -53,6 +71,11 @@ export interface ScannerBacktestQualitySummary {
   survivorshipGuarded?: boolean;
   oos?: boolean;
   walkForward?: boolean;
+  fullCostVerified?: boolean;
+  forwardVerified?: boolean;
+  forwardSampleCount?: number | null;
+  paperVerified?: boolean;
+  paperSampleCount?: number | null;
   source?: string | null;
 }
 
@@ -71,6 +94,135 @@ export interface ScannerCandidateRankingSummary {
   watchReasons: string[];
   hardFilterPassed: boolean;
   hardFilterReasons: string[];
+}
+
+export interface ScannerThemeSwingSummary {
+  contract: 'ScannerThemeSwingV1';
+  version: 'theme-swing-v1';
+  state: 'ELIGIBLE' | 'WATCH' | 'REJECT' | 'UNCLASSIFIED';
+  score: number;
+  themeKey: string | null;
+  themeLabel: string | null;
+  classificationSource: 'CATALOG' | 'CURATED_CRYPTO' | 'UNCLASSIFIED';
+  memberCount: number;
+  positiveBreadthPercent: number | null;
+  leaderRank: number | null;
+  leader: boolean;
+  trigger: 'BREAKOUT' | 'PULLBACK' | 'TREND_CONTINUATION' | 'UNCONFIRMED';
+  breakdown: {
+    themeMomentum: number;
+    leaderStrength: number;
+    trendStructure: number;
+    volumeParticipation: number;
+    catalystEvidence: number;
+    liquidityQuality: number;
+    riskQuality: number;
+  };
+  reasons: string[];
+  blockers: string[];
+  executionAuthority: 'NONE';
+  orderSubmitted: false;
+  exchangeRequestSent: false;
+}
+
+export interface ScannerNewsDisclosureEvent {
+  kind: 'DISCLOSURE' | 'FILING' | 'NEWS';
+  headline: string | null;
+  sourceName: string | null;
+  sourceUrl: string | null;
+  publishedAt: string | null;
+  eventType: string;
+  sourceTier: string;
+  freshness: 'FRESH' | 'AGING' | 'STALE' | 'EXPIRED' | 'UNKNOWN';
+  routeStatus: string;
+  aiStatus: 'ANALYZED' | 'SKIPPED' | 'AI_ANALYSIS_UNAVAILABLE' | 'DEFERRED' | 'NOT_RUN';
+  summary: string | null;
+  sentiment: string;
+  importanceScore: number | null;
+  confidenceScore: number | null;
+  riskFlags: string[];
+  catalystFlags: string[];
+}
+
+export interface ScannerNewsDisclosureIntelligence {
+  status: 'READY' | 'PARTIAL' | 'NOT_AVAILABLE' | 'TIMEOUT' | 'NOT_RUN';
+  reason: string | null;
+  eventCount: number;
+  analyzedCount: number;
+  aiDeferredCount: number;
+  sourceStatus: {
+    news: 'READY' | 'EMPTY' | 'FAILED' | 'NOT_RUN';
+    filings: 'READY' | 'EMPTY' | 'FAILED' | 'NOT_RUN';
+  };
+  officialRiskEvents: string[];
+  events: ScannerNewsDisclosureEvent[];
+  warnings: string[];
+  safety: {
+    evidenceOnly: true;
+    scoreImpact: 0;
+    rankImpact: 0;
+    sentimentIsPriceDirection: false;
+    executionAuthority: 'NONE';
+    orderAllowed: false;
+  };
+}
+
+export interface ScannerMarketIntelligenceSummary {
+  status: 'READY' | 'NOT_AVAILABLE';
+  reason: string | null;
+  scanner: {
+    adjustment: number | null;
+    intelligenceScore: number | null;
+    bullishScore: number | null;
+    bearishScore: number | null;
+    hardBlockReason: string | null;
+  };
+  autoTrading: {
+    mode: 'PAPER_ONLY' | 'BLOCKED_RISK' | 'ELIGIBLE_FOR_PARENT_GATE' | 'NOT_AVAILABLE';
+    evidenceReady: boolean;
+    parentEligibilityReady: boolean;
+    hardBlockReason: string | null;
+    orderAllowed: false;
+  };
+  warnings: string[];
+  directionalAdjustment?: number;
+  baseScore?: number;
+  adjustedScore?: number;
+}
+
+export interface ScannerCryptoPublicEventContext {
+  status: 'READY' | 'PARTIAL' | 'NOT_AVAILABLE' | 'TIMEOUT' | 'NOT_RUN';
+  reason: string | null;
+  marketWarning: boolean | null;
+  tradingStatus: string | null;
+  derivatives: {
+    fundingRatePercent: number | null;
+    openInterest: number | null;
+    longRatio: number | null;
+    shortRatio: number | null;
+    longShortRatio: number | null;
+    ratioObservedAt: string | null;
+  } | null;
+  events: Array<{
+    kind: 'EXCHANGE_WARNING' | 'TRADING_STATUS' | 'PUBLIC_LIQUIDATION';
+    provider: string;
+    source: string;
+    observedAt: string | null;
+    side: 'long' | 'short' | 'unknown' | null;
+    price: number | null;
+    amount: number | null;
+    statusValue: string | null;
+    reasons: string[];
+  }>;
+  verifiedCoinNews: {
+    connected: boolean;
+    sectionStatus: string;
+    provider: string | null;
+    source: string | null;
+    errorCode: string | null;
+  };
+  sources: string[];
+  warnings: string[];
 }
 
 export interface ScannerPricePlan {
@@ -96,6 +248,7 @@ export interface ScannerSignalCard {
   direction: ScannerDirection;
   action?: ScannerTradeAction;
   signalState: ScannerSignalState;
+  decisionHistory?: ScannerDecisionHistoryEntry[];
   score: number;
   confidence: number;
   dataCompleteness: number;
@@ -145,6 +298,10 @@ export interface ScannerSignalCard {
   };
   backtestQuality?: ScannerBacktestQualitySummary;
   candidateRanking?: ScannerCandidateRankingSummary;
+  themeSwing?: ScannerThemeSwingSummary;
+  newsDisclosureIntelligence?: ScannerNewsDisclosureIntelligence;
+  marketIntelligence?: ScannerMarketIntelligenceSummary;
+  cryptoPublicEventContext?: ScannerCryptoPublicEventContext;
 }
 
 export interface ScannerAlertCandidate {
