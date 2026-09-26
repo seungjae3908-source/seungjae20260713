@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import router, { setTradeAutomationRepositoryFactoryForTests } from './trade-automation';
+import router, {
+  setTradeAutomationRepositoryFactoryForTests,
+  setTradeExitPreviewReadersFactoryForTests,
+} from './trade-automation';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import { InMemoryTradingRepository } from '../services/trade-automation.repository';
 import { marketIntelligenceNotAvailable, tradingMarket } from '../services/market-intelligence-client.service';
@@ -36,20 +39,150 @@ function scannerCardFixture({ now, market, symbol, action }: { now: number; mark
   } as ScannerSignalCard;
 }
 
-async function startScannerPlanServer(dependencies: Parameters<typeof createScannerPaperPlansRouter>[0]) {
+async function startScannerPlanServer(
+  dependencies: Parameters<typeof createScannerPaperPlansRouter>[0],
+  options: { admin?: boolean } = {},
+) {
   const app = express();
   app.use(express.json({ limit: '32kb' }));
   app.use((req, _res, next) => {
     const row = req as AuthenticatedRequest;
-    row.member = { id: USER, login_name: 'test', display_name: 'test', role: 'user', membership_level: 'associate', status: 'approved', is_active: true };
-    row.membershipLevel = 'associate';
+    row.member = options.admin
+      ? { id: USER, login_name: 'test', display_name: 'test', role: 'admin', membership_level: 'admin', status: 'approved', is_active: true }
+      : { id: USER, login_name: 'test', display_name: 'test', role: 'user', membership_level: 'associate', status: 'approved', is_active: true };
+    row.membershipLevel = options.admin ? 'admin' : 'associate';
     next();
   });
   app.use('/api/trade-automation', createScannerPaperPlansRouter(dependencies));
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>(resolve => server.once('listening', resolve));
-  return { server, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/trade-automation/scanner/plans` };
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/trade-automation/scanner`;
+  return {
+    server,
+    url: `${baseUrl}/plans`,
+    liveDraftUrl: `${baseUrl}/live-draft`,
+  };
 }
+
+test('Scanner live entry draft is server-verified, non-executing, and rejects client authority fields', async () => {
+  const now = Date.UTC(2026, 8, 26, 6, 0, 0);
+  const sha = 'c'.repeat(40);
+  const registry = new ProductPaperSourceRegistry(() => now);
+  const timeframe = getScannerStrategyProfile('KR_STOCK', 'SWING').primaryTimeframe;
+  const card = scannerCardFixture({ now, market: 'KR', symbol: '005930', action: 'BUY' });
+  registry.captureScanner(USER, {
+    requestId: 'live-draft-run',
+    timeframe,
+    cards: [card],
+    execution: { cancelled: false },
+  } as ScannerResponse, sha);
+  const { server, liveDraftUrl } = await startScannerPlanServer({
+    registry,
+    sourceSha: () => sha,
+    now: () => now,
+  }, { admin: true });
+  const valid = {
+    mode: 'approval',
+    accountMode: 'live',
+    adapter: 'canonical-live',
+    market: 'KR',
+    symbol: '005930',
+    timeframe,
+    side: 'BUY',
+    searchRunId: 'live-draft-run',
+    signalId: card.signalId,
+    selectedConditions: ['trend_alignment'],
+  };
+  try {
+    const response = await fetch(liveDraftUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(valid),
+    });
+    const body = await response.json() as Record<string, any>;
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(body.ok, true);
+    assert.equal(body.serverVerified, true);
+    assert.equal(body.draft.schemaVersion, 'scanner-live-entry-draft-v1');
+    assert.equal(body.draft.state, 'SERVER_VERIFIED_DRAFT');
+    assert.match(body.draft.draftId, /^[0-9a-f]{64}$/u);
+    assert.equal(body.draft.symbol, '005930');
+    assert.equal(body.draft.side, 'BUY');
+    assert.deepEqual(body.draft.entryZone, card.pricePlan.entryZone);
+    assert.equal(body.draft.stopLoss, card.pricePlan.stopLoss);
+    assert.deepEqual(body.draft.targets, card.pricePlan.targets);
+    assert.equal(body.draft.requiresFinalRiskRecheck, true);
+    assert.equal(body.draft.requiresExplicitApproval, true);
+    assert.equal(body.executionAuthority, 'NONE');
+    assert.equal(body.livePlanCreated, false);
+    assert.equal(body.orderSubmitted, false);
+    assert.equal(body.exchangeRequestSent, false);
+    assert.equal(body.providerMutationRequests, 0);
+    assert.equal(body.privateTradingApiAllowed, false);
+
+    for (const injected of [
+      { quantity: 10 },
+      { leverage: 3 },
+      { marketSnapshot: { availableBalance: 999999 } },
+      { stopPrice: 1 },
+      { targetPrices: [999999] },
+      { executionAuthority: 'MANUAL' },
+    ]) {
+      const rejected = await fetch(liveDraftUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...valid, ...injected }),
+      });
+      const rejectedBody = await rejected.json() as Record<string, any>;
+      assert.equal(rejected.status, 400);
+      assert.equal(rejectedBody.ok, false);
+      assert.equal(rejectedBody.error, 'CLIENT_LIVE_DRAFT_AUTHORITY_FORBIDDEN');
+      assert.equal(rejectedBody.orderSubmitted, false);
+      assert.equal(rejectedBody.providerMutationRequests, 0);
+      assert.equal(rejectedBody.executionAuthority, 'NONE');
+    }
+  } finally { await close(server); }
+});
+
+test('Scanner live entry draft requires order capability', async () => {
+  const now = Date.UTC(2026, 8, 26, 6, 0, 0);
+  const sha = 'd'.repeat(40);
+  const registry = new ProductPaperSourceRegistry(() => now);
+  const timeframe = getScannerStrategyProfile('KR_STOCK', 'SWING').primaryTimeframe;
+  const card = scannerCardFixture({ now, market: 'KR', symbol: '005930', action: 'BUY' });
+  registry.captureScanner(USER, {
+    requestId: 'live-draft-capability-run',
+    timeframe,
+    cards: [card],
+    execution: { cancelled: false },
+  } as ScannerResponse, sha);
+  const { server, liveDraftUrl } = await startScannerPlanServer({
+    registry,
+    sourceSha: () => sha,
+    now: () => now,
+  });
+  try {
+    const response = await fetch(liveDraftUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'approval',
+        accountMode: 'live',
+        adapter: 'canonical-live',
+        market: 'KR',
+        symbol: '005930',
+        timeframe,
+        side: 'BUY',
+        searchRunId: 'live-draft-capability-run',
+        signalId: card.signalId,
+      }),
+    });
+    const body = await response.json() as Record<string, any>;
+    assert.equal(response.status, 403);
+    assert.equal(body.error, 'CAPABILITY_REQUIRED');
+    assert.equal(body.capability, 'canPlaceOrders');
+  } finally { await close(server); }
+});
 
 test('actual Scanner HTTP route remains fail-closed when the server-owned Paper evidence owner is absent', async () => {
   const now = Date.UTC(2026, 8, 17);
@@ -210,8 +343,1056 @@ test.beforeEach(async () => {
 });
 test.after(() => {
   setTradeAutomationRepositoryFactoryForTests(null);
+  setTradeExitPreviewReadersFactoryForTests(null);
   setTradingPlanMarketIntelligenceRunnerForTests(null);
   delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
+});
+
+test('exit preview re-reads the real position in read-only mode and never submits a trade', async () => {
+  let reads = 0;
+  await repository.deleteConnection(USER, 'toss');
+  const liveGateKeys = [
+    'executionAuthority',
+    'LIVE_TRADING',
+    'ORDER_EXECUTION_ENABLED',
+    'LIVE_TRADING_ACTIVATION_APPROVED',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+    'TOSS_LIVE_ORDER_ENABLED',
+  ] as const;
+  const previousLiveGateEnv = Object.fromEntries(liveGateKeys.map((key) => [key, process.env[key]]));
+  setTradeExitPreviewReadersFactoryForTests(() => ({
+    toss: async () => {
+      reads += 1;
+      const checkedAt = new Date().toISOString();
+      return {
+        provider: 'toss' as const,
+        readOnly: true as const,
+        connected: true,
+        status: 'CONNECTED' as const,
+        accounts: null,
+        balances: null,
+        positions: [{
+          market: 'KR',
+          symbol: '005930',
+          quantity: 20,
+          availableQuantity: 20,
+          averageEntryPrice: 70_000,
+          currentPrice: 72_000,
+          marketValue: 1_440_000,
+          unrealizedPnl: 40_000,
+          unrealizedPnlPercent: 2.86,
+          leverage: null,
+          liquidationPrice: null,
+          marginMode: null,
+          side: null,
+        }],
+        openOrders: [],
+        checkedAt,
+        lastGoodAt: checkedAt,
+        stale: false,
+        errorCode: null,
+        orderRequests: 0 as const,
+        cancelRequests: 0 as const,
+        amendRequests: 0 as const,
+        transferRequests: 0 as const,
+        withdrawalRequests: 0 as const,
+        credentialsReturned: false as const,
+        liveTradingEnabled: false as const,
+        autoTradingEnabled: false as const,
+      };
+    },
+  }));
+
+  const { server, baseUrl } = await startServer();
+  try {
+    const missingConfirmation = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'toss', market: 'KR', symbol: '005930', percent: 25 }),
+    });
+    assert.equal(missingConfirmation.status, 409);
+    assert.equal(reads, 0);
+
+    const response = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        confirmed: true,
+        provider: 'toss',
+        market: 'KR',
+        symbol: '005930',
+        percent: 25,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json() as {
+      preview: {
+        schemaVersion: string;
+        state: string;
+        draftId: string;
+        issuedAt: string;
+        expiresAt: string;
+        provider: string;
+        market: string;
+        symbol: string;
+        percent: number;
+        positionQuantity: number | null;
+        availableQuantity: number;
+        exitQuantity: number;
+        quantityRule: string;
+        side: string;
+        checkedAt: string;
+        reduceOnly: boolean;
+        stale: boolean;
+        requiresFinalRiskRecheck: boolean;
+        requiresExplicitApproval: boolean;
+        executionAuthority: string;
+      };
+      privateAccountReadPerformed: boolean;
+      orderSubmitted: boolean;
+      orderCanceled: boolean;
+      orderAmended: boolean;
+      privateTradingMutationSent: boolean;
+      executionAuthority: string;
+      executionReadiness: {
+        connectionConfigured: boolean;
+        providerVerified: boolean;
+        manualServerGateEnabled: boolean;
+        readyForManualExitEvaluation: boolean;
+        blockers: string[];
+        orderSubmissionPerformedByPreview: boolean;
+        executionAuthorityGrantedByPreview: boolean;
+      };
+    };
+    assert.equal(reads, 1);
+    assert.equal(body.preview.schemaVersion, 'manual-exit-draft-v1');
+    assert.equal(body.preview.state, 'SERVER_VERIFIED_DRAFT');
+    assert.match(body.preview.draftId, /^[0-9a-f]{64}$/u);
+    assert.ok(Date.parse(body.preview.expiresAt) > Date.parse(body.preview.issuedAt));
+    assert.equal(body.preview.requiresFinalRiskRecheck, true);
+    assert.equal(body.preview.requiresExplicitApproval, true);
+    assert.equal(body.preview.executionAuthority, 'NONE');
+    assert.equal(body.preview.provider, 'toss');
+    assert.equal(body.preview.exitQuantity, 5);
+    assert.equal(body.preview.quantityRule, 'INTEGER_ONLY');
+    assert.equal(body.preview.side, 'sell');
+    assert.equal(body.preview.reduceOnly, true);
+    assert.equal(body.preview.stale, false);
+    assert.equal(body.privateAccountReadPerformed, true);
+    assert.equal(body.orderSubmitted, false);
+    assert.equal(body.orderCanceled, false);
+    assert.equal(body.orderAmended, false);
+    assert.equal(body.privateTradingMutationSent, false);
+    assert.equal(body.executionAuthority, 'NONE');
+    assert.equal(body.executionReadiness.readyForManualExitEvaluation, false);
+    assert.equal(body.executionReadiness.connectionConfigured, false);
+    assert.equal(body.executionReadiness.orderSubmissionPerformedByPreview, false);
+    assert.equal(body.executionReadiness.executionAuthorityGrantedByPreview, false);
+    assert.ok(body.executionReadiness.blockers.includes('LIVE_CONNECTION_NOT_CONFIGURED'));
+
+    const missingPlanConfirmation = await fetch(`${baseUrl}/api/trade-automation/positions/exit-plan`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        provider: body.preview.provider,
+        market: body.preview.market,
+        symbol: body.preview.symbol,
+        percent: body.preview.percent,
+        draftId: body.preview.draftId,
+        draftIssuedAt: body.preview.issuedAt,
+        draftExpiresAt: body.preview.expiresAt,
+        positionQuantity: body.preview.positionQuantity,
+        availableQuantity: body.preview.availableQuantity,
+        exitQuantity: body.preview.exitQuantity,
+        side: body.preview.side,
+        sourceCheckedAt: body.preview.checkedAt,
+      }),
+    });
+    assert.equal(missingPlanConfirmation.status, 409);
+    assert.equal(reads, 1);
+
+    const planResponse = await fetch(`${baseUrl}/api/trade-automation/positions/exit-plan`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        confirmed: true,
+        provider: body.preview.provider,
+        market: body.preview.market,
+        symbol: body.preview.symbol,
+        percent: body.preview.percent,
+        draftId: body.preview.draftId,
+        draftIssuedAt: body.preview.issuedAt,
+        draftExpiresAt: body.preview.expiresAt,
+        positionQuantity: body.preview.positionQuantity,
+        availableQuantity: body.preview.availableQuantity,
+        exitQuantity: body.preview.exitQuantity,
+        side: body.preview.side,
+        sourceCheckedAt: body.preview.checkedAt,
+      }),
+    });
+    assert.equal(planResponse.status, 200);
+    const planBody = await planResponse.json() as {
+      canonicalExitPlan: {
+        schemaVersion: string;
+        state: string;
+        planId: string;
+        exitDraftId: string;
+        provider: 'toss' | 'kiwoom' | 'upbit' | 'bitget';
+        market: string;
+        symbol: string;
+        side: 'buy' | 'sell';
+        quantity: number;
+        percent: number;
+        positionQuantity: number | null;
+        availableQuantity: number;
+        quantityRule: 'INTEGER_ONLY' | 'FRACTIONAL_ALLOWED';
+        sourceCheckedAt: string;
+        issuedAt: string;
+        expiresAt: string;
+        reduceOnly: boolean;
+        approvalEligible: boolean;
+        blockers: string[];
+        requiresFreshAccountRecheckAtApproval: boolean;
+        requiresOrderTimeRiskRecheck: boolean;
+        requiresExplicitApproval: boolean;
+        executionAuthority: string;
+        orderSubmissionPerformed: boolean;
+        financialMutationPerformed: boolean;
+      };
+      planPrepared: boolean;
+      privateAccountReadPerformed: boolean;
+      financialMutationPerformed: boolean;
+      orderSubmitted: boolean;
+      orderCanceled: boolean;
+      orderAmended: boolean;
+      privateTradingMutationSent: boolean;
+      executionAuthority: string;
+    };
+    assert.equal(reads, 2);
+    assert.equal(planBody.canonicalExitPlan.schemaVersion, 'ai-chart-canonical-exit-plan-v2');
+    assert.equal(planBody.canonicalExitPlan.state, 'SERVER_VERIFIED_PLAN');
+    assert.match(planBody.canonicalExitPlan.planId, /^[0-9a-f]{64}$/u);
+    assert.equal(planBody.canonicalExitPlan.exitDraftId, body.preview.draftId);
+    assert.equal(planBody.canonicalExitPlan.quantity, 5);
+    assert.equal(planBody.canonicalExitPlan.percent, 25);
+    assert.equal(planBody.canonicalExitPlan.positionQuantity, 20);
+    assert.equal(planBody.canonicalExitPlan.availableQuantity, 20);
+    assert.equal(planBody.canonicalExitPlan.quantityRule, 'INTEGER_ONLY');
+    assert.equal(planBody.canonicalExitPlan.reduceOnly, true);
+    assert.equal(planBody.canonicalExitPlan.approvalEligible, false);
+    assert.ok(planBody.canonicalExitPlan.blockers.includes('LIVE_CONNECTION_NOT_CONFIGURED'));
+    assert.equal(planBody.canonicalExitPlan.requiresFreshAccountRecheckAtApproval, true);
+    assert.equal(planBody.canonicalExitPlan.requiresOrderTimeRiskRecheck, true);
+    assert.equal(planBody.canonicalExitPlan.requiresExplicitApproval, true);
+    assert.equal(planBody.canonicalExitPlan.executionAuthority, 'NONE');
+    assert.equal(planBody.canonicalExitPlan.orderSubmissionPerformed, false);
+    assert.equal(planBody.canonicalExitPlan.financialMutationPerformed, false);
+    assert.equal(planBody.planPrepared, true);
+    assert.equal(planBody.privateAccountReadPerformed, true);
+    assert.equal(planBody.financialMutationPerformed, false);
+    assert.equal(planBody.orderSubmitted, false);
+    assert.equal(planBody.orderCanceled, false);
+    assert.equal(planBody.orderAmended, false);
+    assert.equal(planBody.privateTradingMutationSent, false);
+    assert.equal(planBody.executionAuthority, 'NONE');
+
+    const approvalRequest = {
+      provider: planBody.canonicalExitPlan.provider,
+      market: planBody.canonicalExitPlan.market,
+      symbol: planBody.canonicalExitPlan.symbol,
+      percent: planBody.canonicalExitPlan.percent,
+      planId: planBody.canonicalExitPlan.planId,
+      exitDraftId: planBody.canonicalExitPlan.exitDraftId,
+      positionQuantity: planBody.canonicalExitPlan.positionQuantity,
+      availableQuantity: planBody.canonicalExitPlan.availableQuantity,
+      quantity: planBody.canonicalExitPlan.quantity,
+      side: planBody.canonicalExitPlan.side,
+      sourceCheckedAt: planBody.canonicalExitPlan.sourceCheckedAt,
+      planIssuedAt: planBody.canonicalExitPlan.issuedAt,
+      planExpiresAt: planBody.canonicalExitPlan.expiresAt,
+    };
+
+    const missingApprovalConfirmation = await fetch(`${baseUrl}/api/trade-automation/positions/exit-approval`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(approvalRequest),
+    });
+    assert.equal(missingApprovalConfirmation.status, 409);
+    assert.equal(reads, 2);
+
+    const blockedApproval = await fetch(`${baseUrl}/api/trade-automation/positions/exit-approval`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, ...approvalRequest }),
+    });
+    assert.equal(blockedApproval.status, 409);
+    const blockedApprovalBody = await blockedApproval.json() as {
+      error: string;
+      blockers: string[];
+      explicitApprovalConfirmed: boolean;
+      orderSubmitted: boolean;
+      financialMutationPerformed: boolean;
+      executionAuthority: string;
+    };
+    assert.equal(reads, 3);
+    assert.equal(blockedApprovalBody.error, 'EXIT_APPROVAL_BLOCKED');
+    assert.ok(blockedApprovalBody.blockers.includes('LIVE_CONNECTION_NOT_CONFIGURED'));
+    assert.equal(blockedApprovalBody.explicitApprovalConfirmed, false);
+    assert.equal(blockedApprovalBody.orderSubmitted, false);
+    assert.equal(blockedApprovalBody.financialMutationPerformed, false);
+    assert.equal(blockedApprovalBody.executionAuthority, 'NONE');
+
+    const verifiedAt = new Date().toISOString();
+    await repository.saveConnection({
+      userId: USER,
+      exchange: 'toss',
+      accountMode: 'live',
+      configured: true,
+      encryptedCredentials: 'test-only-not-used-by-approval-intent',
+      lastVerifiedAt: verifiedAt,
+      lastErrorCode: null,
+      updatedAt: verifiedAt,
+    });
+    process.env.executionAuthority = 'MANUAL';
+    process.env.LIVE_TRADING = 'true';
+    process.env.ORDER_EXECUTION_ENABLED = 'true';
+    process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+    process.env.REAL_ORDER_ENABLED = 'true';
+    process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
+    process.env.TOSS_LIVE_ORDER_ENABLED = 'true';
+
+    const approvalResponse = await fetch(`${baseUrl}/api/trade-automation/positions/exit-approval`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, ...approvalRequest }),
+    });
+    assert.equal(approvalResponse.status, 200);
+    const approvalBody = await approvalResponse.json() as {
+      canonicalExitApproval: {
+        schemaVersion: string;
+        state: string;
+        approvalIntentId: string;
+        planId: string;
+        exitDraftId: string;
+        provider: 'toss' | 'kiwoom' | 'upbit' | 'bitget';
+        market: string;
+        symbol: string;
+        side: 'buy' | 'sell';
+        quantity: number;
+        percent: number;
+        positionQuantity: number | null;
+        availableQuantity: number;
+        sourcePlanCheckedAt: string;
+        approvalCheckedAt: string;
+        reduceOnly: boolean;
+        explicitApprovalConfirmed: boolean;
+        orderTimeRiskRecheckRequired: boolean;
+        nextOwner: string;
+        executionAuthority: string;
+        executable: boolean;
+        orderSubmissionPerformed: boolean;
+        financialMutationPerformed: boolean;
+        approvedAt: string;
+        expiresAt: string;
+      };
+      explicitApprovalConfirmed: boolean;
+      privateAccountReadPerformed: boolean;
+      financialMutationPerformed: boolean;
+      orderSubmitted: boolean;
+      orderCanceled: boolean;
+      orderAmended: boolean;
+      privateTradingMutationSent: boolean;
+      executionAuthority: string;
+    };
+    assert.equal(reads, 4);
+    assert.equal(approvalBody.canonicalExitApproval.schemaVersion, 'ai-chart-exit-approval-intent-v1');
+    assert.equal(approvalBody.canonicalExitApproval.state, 'EXPLICITLY_CONFIRMED_NON_EXECUTING_INTENT');
+    assert.match(approvalBody.canonicalExitApproval.approvalIntentId, /^[0-9a-f]{64}$/u);
+    assert.equal(approvalBody.canonicalExitApproval.planId, planBody.canonicalExitPlan.planId);
+    assert.equal(approvalBody.canonicalExitApproval.exitDraftId, planBody.canonicalExitPlan.exitDraftId);
+    assert.equal(approvalBody.canonicalExitApproval.quantity, 5);
+    assert.equal(approvalBody.canonicalExitApproval.percent, 25);
+    assert.equal(approvalBody.canonicalExitApproval.reduceOnly, true);
+    assert.equal(approvalBody.canonicalExitApproval.explicitApprovalConfirmed, true);
+    assert.equal(approvalBody.canonicalExitApproval.orderTimeRiskRecheckRequired, true);
+    assert.equal(approvalBody.canonicalExitApproval.nextOwner, 'CANONICAL_EXIT_ORDER_TIME_RISK_OWNER');
+    assert.equal(approvalBody.canonicalExitApproval.executionAuthority, 'NONE');
+    assert.equal(approvalBody.canonicalExitApproval.executable, false);
+    assert.equal(approvalBody.canonicalExitApproval.orderSubmissionPerformed, false);
+    assert.equal(approvalBody.canonicalExitApproval.financialMutationPerformed, false);
+    assert.ok(Date.parse(approvalBody.canonicalExitApproval.expiresAt) > Date.parse(approvalBody.canonicalExitApproval.approvedAt));
+    assert.equal(approvalBody.explicitApprovalConfirmed, true);
+    assert.equal(approvalBody.privateAccountReadPerformed, true);
+    assert.equal(approvalBody.financialMutationPerformed, false);
+    assert.equal(approvalBody.orderSubmitted, false);
+    assert.equal(approvalBody.orderCanceled, false);
+    assert.equal(approvalBody.orderAmended, false);
+    assert.equal(approvalBody.privateTradingMutationSent, false);
+    assert.equal(approvalBody.executionAuthority, 'NONE');
+
+    const riskRequest = {
+      approvalIntentId: approvalBody.canonicalExitApproval.approvalIntentId,
+      planId: approvalBody.canonicalExitApproval.planId,
+      exitDraftId: approvalBody.canonicalExitApproval.exitDraftId,
+      provider: approvalBody.canonicalExitApproval.provider,
+      market: approvalBody.canonicalExitApproval.market,
+      symbol: approvalBody.canonicalExitApproval.symbol,
+      percent: approvalBody.canonicalExitApproval.percent,
+      positionQuantity: approvalBody.canonicalExitApproval.positionQuantity,
+      availableQuantity: approvalBody.canonicalExitApproval.availableQuantity,
+      quantity: approvalBody.canonicalExitApproval.quantity,
+      side: approvalBody.canonicalExitApproval.side,
+      planSourceCheckedAt: approvalBody.canonicalExitApproval.sourcePlanCheckedAt,
+      approvalCheckedAt: approvalBody.canonicalExitApproval.approvalCheckedAt,
+      approvedAt: approvalBody.canonicalExitApproval.approvedAt,
+      approvalExpiresAt: approvalBody.canonicalExitApproval.expiresAt,
+    };
+
+    const missingRiskConfirmation = await fetch(`${baseUrl}/api/trade-automation/positions/exit-risk`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(riskRequest),
+    });
+    assert.equal(missingRiskConfirmation.status, 409);
+    assert.equal(reads, 4);
+
+    const riskResponse = await fetch(`${baseUrl}/api/trade-automation/positions/exit-risk`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, ...riskRequest }),
+    });
+    assert.equal(riskResponse.status, 200);
+    const riskBody = await riskResponse.json() as {
+      canonicalExitRisk: {
+        schemaVersion: string;
+        state: string;
+        riskIntentId: string;
+        approvalIntentId: string;
+        planId: string;
+        exitDraftId: string;
+        quantity: number;
+        percent: number;
+        reduceOnly: boolean;
+        providerOpenOrdersChecked: boolean;
+        conflictingOpenOrderCount: number | null;
+        blockers: string[];
+        riskPassed: boolean;
+        riskCheckedAt: string;
+        evaluatedAt: string;
+        expiresAt: string;
+        marketExecutionPreflightRequired: boolean;
+        nextOwner: string;
+        executionAuthority: string;
+        executable: boolean;
+        orderSubmissionPerformed: boolean;
+        financialMutationPerformed: boolean;
+      };
+      riskChecked: boolean;
+      privateAccountReadPerformed: boolean;
+      financialMutationPerformed: boolean;
+      orderSubmitted: boolean;
+      orderCanceled: boolean;
+      orderAmended: boolean;
+      privateTradingMutationSent: boolean;
+      executionAuthority: string;
+    };
+    assert.equal(reads, 5);
+    assert.equal(riskBody.canonicalExitRisk.schemaVersion, 'ai-chart-exit-order-time-risk-v1');
+    assert.equal(riskBody.canonicalExitRisk.state, 'PASSED_NON_EXECUTING');
+    assert.match(riskBody.canonicalExitRisk.riskIntentId, /^[0-9a-f]{64}$/u);
+    assert.equal(riskBody.canonicalExitRisk.approvalIntentId, approvalBody.canonicalExitApproval.approvalIntentId);
+    assert.equal(riskBody.canonicalExitRisk.planId, planBody.canonicalExitPlan.planId);
+    assert.equal(riskBody.canonicalExitRisk.exitDraftId, planBody.canonicalExitPlan.exitDraftId);
+    assert.equal(riskBody.canonicalExitRisk.quantity, 5);
+    assert.equal(riskBody.canonicalExitRisk.percent, 25);
+    assert.equal(riskBody.canonicalExitRisk.reduceOnly, true);
+    assert.equal(riskBody.canonicalExitRisk.providerOpenOrdersChecked, true);
+    assert.equal(riskBody.canonicalExitRisk.conflictingOpenOrderCount, 0);
+    assert.deepEqual(riskBody.canonicalExitRisk.blockers, []);
+    assert.equal(riskBody.canonicalExitRisk.riskPassed, true);
+    assert.equal(riskBody.canonicalExitRisk.marketExecutionPreflightRequired, true);
+    assert.equal(riskBody.canonicalExitRisk.nextOwner, 'CANONICAL_EXIT_EXECUTION_PREFLIGHT_OWNER');
+    assert.equal(riskBody.canonicalExitRisk.executionAuthority, 'NONE');
+    assert.equal(riskBody.canonicalExitRisk.executable, false);
+    assert.equal(riskBody.canonicalExitRisk.orderSubmissionPerformed, false);
+    assert.equal(riskBody.canonicalExitRisk.financialMutationPerformed, false);
+    assert.equal(riskBody.riskChecked, true);
+    assert.equal(riskBody.privateAccountReadPerformed, true);
+    assert.equal(riskBody.financialMutationPerformed, false);
+    assert.equal(riskBody.orderSubmitted, false);
+    assert.equal(riskBody.orderCanceled, false);
+    assert.equal(riskBody.orderAmended, false);
+    assert.equal(riskBody.privateTradingMutationSent, false);
+    assert.equal(riskBody.executionAuthority, 'NONE');
+
+    const preflightRequest = {
+      riskIntentId: riskBody.canonicalExitRisk.riskIntentId,
+      approvalIntentId: riskBody.canonicalExitRisk.approvalIntentId,
+      planId: riskBody.canonicalExitRisk.planId,
+      exitDraftId: riskBody.canonicalExitRisk.exitDraftId,
+      provider: approvalBody.canonicalExitApproval.provider,
+      market: approvalBody.canonicalExitApproval.market,
+      symbol: approvalBody.canonicalExitApproval.symbol,
+      percent: riskBody.canonicalExitRisk.percent,
+      positionQuantity: approvalBody.canonicalExitApproval.positionQuantity,
+      availableQuantity: approvalBody.canonicalExitApproval.availableQuantity,
+      quantity: riskBody.canonicalExitRisk.quantity,
+      side: approvalBody.canonicalExitApproval.side,
+      approvalCheckedAt: approvalBody.canonicalExitApproval.approvalCheckedAt,
+      riskCheckedAt: riskBody.canonicalExitRisk.riskCheckedAt,
+      riskEvaluatedAt: riskBody.canonicalExitRisk.evaluatedAt,
+      riskExpiresAt: riskBody.canonicalExitRisk.expiresAt,
+      riskBlockers: riskBody.canonicalExitRisk.blockers,
+      riskPassed: riskBody.canonicalExitRisk.riskPassed,
+    };
+
+    const missingPreflightConfirmation = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preflight`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(preflightRequest),
+    });
+    assert.equal(missingPreflightConfirmation.status, 409);
+    assert.equal(reads, 5);
+
+    const preflightResponse = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preflight`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, ...preflightRequest }),
+    });
+    assert.equal(preflightResponse.status, 200);
+    const preflightBody = await preflightResponse.json() as {
+      canonicalExitPreflight: {
+        schemaVersion: string;
+        state: string;
+        preflightIntentId: string;
+        riskIntentId: string;
+        approvalIntentId: string;
+        planId: string;
+        exitDraftId: string;
+        quantity: number;
+        percent: number;
+        reduceOnly: boolean;
+        provider: 'toss' | 'kiwoom' | 'upbit' | 'bitget';
+        market: string;
+        symbol: string;
+        side: 'buy' | 'sell';
+        positionQuantity: number | null;
+        availableQuantity: number;
+        referencePrice: number | null;
+        riskCheckedAt: string;
+        preflightCheckedAt: string;
+        evaluatedAt: string;
+        expiresAt: string;
+        blockers: string[];
+        preflightPassed: boolean;
+        finalProviderOrderbookRiskRequired: boolean;
+        nextOwner: string;
+        executionAuthority: string;
+        executable: boolean;
+        orderSubmissionPerformed: boolean;
+        financialMutationPerformed: boolean;
+      };
+      preflightChecked: boolean;
+      privateAccountReadPerformed: boolean;
+      financialMutationPerformed: boolean;
+      orderSubmitted: boolean;
+      orderCanceled: boolean;
+      orderAmended: boolean;
+      privateTradingMutationSent: boolean;
+      executionAuthority: string;
+    };
+    assert.equal(reads, 6);
+    assert.equal(preflightBody.canonicalExitPreflight.schemaVersion, 'ai-chart-exit-execution-preflight-v1');
+    assert.equal(preflightBody.canonicalExitPreflight.state, 'PASSED_NON_EXECUTING');
+    assert.match(preflightBody.canonicalExitPreflight.preflightIntentId, /^[0-9a-f]{64}$/u);
+    assert.equal(preflightBody.canonicalExitPreflight.riskIntentId, riskBody.canonicalExitRisk.riskIntentId);
+    assert.equal(preflightBody.canonicalExitPreflight.approvalIntentId, approvalBody.canonicalExitApproval.approvalIntentId);
+    assert.equal(preflightBody.canonicalExitPreflight.planId, planBody.canonicalExitPlan.planId);
+    assert.equal(preflightBody.canonicalExitPreflight.exitDraftId, planBody.canonicalExitPlan.exitDraftId);
+    assert.equal(preflightBody.canonicalExitPreflight.quantity, 5);
+    assert.equal(preflightBody.canonicalExitPreflight.percent, 25);
+    assert.equal(preflightBody.canonicalExitPreflight.reduceOnly, true);
+    assert.equal(preflightBody.canonicalExitPreflight.referencePrice, 72_000);
+    assert.deepEqual(preflightBody.canonicalExitPreflight.blockers, []);
+    assert.equal(preflightBody.canonicalExitPreflight.preflightPassed, true);
+    assert.equal(preflightBody.canonicalExitPreflight.finalProviderOrderbookRiskRequired, true);
+    assert.equal(preflightBody.canonicalExitPreflight.nextOwner, 'CANONICAL_EXIT_EXECUTION_OWNER');
+    assert.equal(preflightBody.canonicalExitPreflight.executionAuthority, 'NONE');
+    assert.equal(preflightBody.canonicalExitPreflight.executable, false);
+    assert.equal(preflightBody.canonicalExitPreflight.orderSubmissionPerformed, false);
+    assert.equal(preflightBody.canonicalExitPreflight.financialMutationPerformed, false);
+    assert.equal(preflightBody.preflightChecked, true);
+    assert.equal(preflightBody.privateAccountReadPerformed, true);
+    assert.equal(preflightBody.financialMutationPerformed, false);
+    assert.equal(preflightBody.orderSubmitted, false);
+    assert.equal(preflightBody.orderCanceled, false);
+    assert.equal(preflightBody.orderAmended, false);
+    assert.equal(preflightBody.privateTradingMutationSent, false);
+    assert.equal(preflightBody.executionAuthority, 'NONE');
+
+    const executionPackageRequest = {
+      preflightIntentId: preflightBody.canonicalExitPreflight.preflightIntentId,
+      riskIntentId: preflightBody.canonicalExitPreflight.riskIntentId,
+      approvalIntentId: preflightBody.canonicalExitPreflight.approvalIntentId,
+      planId: preflightBody.canonicalExitPreflight.planId,
+      exitDraftId: preflightBody.canonicalExitPreflight.exitDraftId,
+      provider: preflightBody.canonicalExitPreflight.provider,
+      market: preflightBody.canonicalExitPreflight.market,
+      symbol: preflightBody.canonicalExitPreflight.symbol,
+      percent: preflightBody.canonicalExitPreflight.percent,
+      positionQuantity: preflightBody.canonicalExitPreflight.positionQuantity,
+      availableQuantity: preflightBody.canonicalExitPreflight.availableQuantity,
+      quantity: preflightBody.canonicalExitPreflight.quantity,
+      side: preflightBody.canonicalExitPreflight.side,
+      riskCheckedAt: preflightBody.canonicalExitPreflight.riskCheckedAt,
+      preflightCheckedAt: preflightBody.canonicalExitPreflight.preflightCheckedAt,
+      preflightReferencePrice: preflightBody.canonicalExitPreflight.referencePrice,
+      preflightEvaluatedAt: preflightBody.canonicalExitPreflight.evaluatedAt,
+      preflightExpiresAt: preflightBody.canonicalExitPreflight.expiresAt,
+      preflightBlockers: preflightBody.canonicalExitPreflight.blockers,
+      preflightPassed: preflightBody.canonicalExitPreflight.preflightPassed,
+    };
+
+    const missingExecutionPackageConfirmation = await fetch(`${baseUrl}/api/trade-automation/positions/exit-execution-package`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(executionPackageRequest),
+    });
+    assert.equal(missingExecutionPackageConfirmation.status, 409);
+    assert.equal(reads, 6);
+
+    const executionPackageResponse = await fetch(`${baseUrl}/api/trade-automation/positions/exit-execution-package`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, ...executionPackageRequest }),
+    });
+    assert.equal(executionPackageResponse.status, 200);
+    const executionPackageBody = await executionPackageResponse.json() as {
+      canonicalExitExecutionPackage: {
+        schemaVersion: string;
+        state: string;
+        executionPackageId: string;
+        preflightIntentId: string;
+        riskIntentId: string;
+        approvalIntentId: string;
+        planId: string;
+        exitDraftId: string;
+        provider: string;
+        market: string;
+        symbol: string;
+        side: string;
+        quantity: number;
+        percent: number;
+        positionQuantity: number | null;
+        availableQuantity: number;
+        reduceOnly: boolean;
+        preflightReferencePrice: number;
+        packageReferencePrice: number | null;
+        referencePriceDriftPercent: number | null;
+        blockers: string[];
+        packageReady: boolean;
+        finalProviderOrderbookRiskRequired: boolean;
+        providerSubmissionRequired: boolean;
+        nextOwner: string;
+        executionAuthority: string;
+        executable: boolean;
+        providerRequestPrepared: boolean;
+        orderSubmissionPerformed: boolean;
+        financialMutationPerformed: boolean;
+      };
+      packagePrepared: boolean;
+      privateAccountReadPerformed: boolean;
+      financialMutationPerformed: boolean;
+      orderSubmitted: boolean;
+      orderCanceled: boolean;
+      orderAmended: boolean;
+      privateTradingMutationSent: boolean;
+      executionAuthority: string;
+    };
+    assert.equal(reads, 7);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.schemaVersion, 'ai-chart-exit-execution-package-v1');
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.state, 'BOUND_NON_EXECUTING_PACKAGE');
+    assert.match(executionPackageBody.canonicalExitExecutionPackage.executionPackageId, /^[0-9a-f]{64}$/u);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.preflightIntentId, preflightBody.canonicalExitPreflight.preflightIntentId);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.quantity, 5);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.percent, 25);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.reduceOnly, true);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.preflightReferencePrice, 72_000);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.packageReferencePrice, 72_000);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.referencePriceDriftPercent, 0);
+    assert.deepEqual(executionPackageBody.canonicalExitExecutionPackage.blockers, []);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.packageReady, true);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.finalProviderOrderbookRiskRequired, true);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.providerSubmissionRequired, true);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.nextOwner, 'CANONICAL_EXIT_PROVIDER_SUBMISSION_OWNER');
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.executionAuthority, 'NONE');
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.executable, false);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.providerRequestPrepared, false);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.orderSubmissionPerformed, false);
+    assert.equal(executionPackageBody.canonicalExitExecutionPackage.financialMutationPerformed, false);
+    assert.equal(executionPackageBody.packagePrepared, true);
+    assert.equal(executionPackageBody.privateAccountReadPerformed, true);
+    assert.equal(executionPackageBody.financialMutationPerformed, false);
+    assert.equal(executionPackageBody.orderSubmitted, false);
+    assert.equal(executionPackageBody.orderCanceled, false);
+    assert.equal(executionPackageBody.orderAmended, false);
+    assert.equal(executionPackageBody.privateTradingMutationSent, false);
+    assert.equal(executionPackageBody.executionAuthority, 'NONE');
+  } finally {
+    await repository.deleteConnection(USER, 'toss');
+    for (const key of liveGateKeys) {
+      const previous = previousLiveGateEnv[key];
+      if (previous == null) delete process.env[key];
+      else process.env[key] = previous;
+    }
+    setTradeExitPreviewReadersFactoryForTests(null);
+    await close(server);
+  }
+});
+
+test('canonical exit plan fails closed when the draft position changes before plan preparation', async () => {
+  let reads = 0;
+  setTradeExitPreviewReadersFactoryForTests(() => ({
+    toss: async () => {
+      reads += 1;
+      const quantity = reads === 1 ? 20 : 19;
+      const checkedAt = new Date().toISOString();
+      return {
+        provider: 'toss' as const,
+        readOnly: true as const,
+        connected: true,
+        status: 'CONNECTED' as const,
+        accounts: null,
+        balances: null,
+        positions: [{
+          market: 'KR',
+          symbol: '005930',
+          quantity,
+          availableQuantity: quantity,
+          averageEntryPrice: 70_000,
+          currentPrice: 72_000,
+          marketValue: quantity * 72_000,
+          unrealizedPnl: null,
+          unrealizedPnlPercent: null,
+          leverage: null,
+          liquidationPrice: null,
+          marginMode: null,
+          side: null,
+        }],
+        openOrders: null,
+        checkedAt,
+        lastGoodAt: checkedAt,
+        stale: false,
+        errorCode: null,
+        orderRequests: 0 as const,
+        cancelRequests: 0 as const,
+        amendRequests: 0 as const,
+        transferRequests: 0 as const,
+        withdrawalRequests: 0 as const,
+        credentialsReturned: false as const,
+        liveTradingEnabled: false as const,
+        autoTradingEnabled: false as const,
+      };
+    },
+  }));
+
+  const { server, baseUrl } = await startServer();
+  try {
+    const previewResponse = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        confirmed: true,
+        provider: 'toss',
+        market: 'KR',
+        symbol: '005930',
+        percent: 25,
+      }),
+    });
+    assert.equal(previewResponse.status, 200);
+    const previewBody = await previewResponse.json() as {
+      preview: {
+        draftId: string;
+        issuedAt: string;
+        expiresAt: string;
+        positionQuantity: number | null;
+        availableQuantity: number;
+        exitQuantity: number;
+        side: string;
+        checkedAt: string;
+      };
+    };
+    assert.equal(previewBody.preview.positionQuantity, 20);
+    assert.equal(previewBody.preview.availableQuantity, 20);
+    assert.equal(previewBody.preview.exitQuantity, 5);
+
+    const planResponse = await fetch(`${baseUrl}/api/trade-automation/positions/exit-plan`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        confirmed: true,
+        provider: 'toss',
+        market: 'KR',
+        symbol: '005930',
+        percent: 25,
+        draftId: previewBody.preview.draftId,
+        draftIssuedAt: previewBody.preview.issuedAt,
+        draftExpiresAt: previewBody.preview.expiresAt,
+        positionQuantity: previewBody.preview.positionQuantity,
+        availableQuantity: previewBody.preview.availableQuantity,
+        exitQuantity: previewBody.preview.exitQuantity,
+        side: previewBody.preview.side,
+        sourceCheckedAt: previewBody.preview.checkedAt,
+      }),
+    });
+    assert.equal(planResponse.status, 409);
+    const planBody = await planResponse.json() as {
+      error?: string;
+      planPrepared?: boolean;
+      financialMutationPerformed?: boolean;
+      orderSubmitted?: boolean;
+      privateTradingMutationSent?: boolean;
+    };
+    assert.equal(reads, 2);
+    assert.equal(planBody.error, 'EXIT_PLAN_DRAFT_STALE_OR_POSITION_CHANGED');
+    assert.equal(planBody.planPrepared, false);
+    assert.equal(planBody.financialMutationPerformed, false);
+    assert.equal(planBody.orderSubmitted, false);
+    assert.equal(planBody.privateTradingMutationSent, false);
+  } finally {
+    setTradeExitPreviewReadersFactoryForTests(null);
+    await close(server);
+  }
+});
+
+test('order dashboard maps crypto execution markets back to AI Chart market identities', async () => {
+  const now = new Date().toISOString();
+  const cases = [
+    { key: 'upbit', exchange: 'upbit', planMarket: 'KRW', uiMarket: 'UPBIT', symbol: 'BTC', querySymbol: 'KRW-BTC', side: 'buy' },
+    { key: 'bitget', exchange: 'bitget', planMarket: 'USDT-FUTURES', uiMarket: 'BITGET', symbol: 'BTCUSDT', querySymbol: 'BTCUSDT', side: 'long' },
+  ] as const;
+
+  for (const item of cases) {
+    const planId = `dashboard-${item.key}-plan`;
+    const orderId = `dashboard-${item.key}-order`;
+    await repository.savePlan({
+      id: planId,
+      userId: USER,
+      idempotencyKey: `dashboard-${item.key}-key`,
+      state: 'SUBMITTED',
+      version: 0,
+      exchange: item.exchange,
+      accountMode: 'live',
+      stockBroker: null,
+      stockExchange: null,
+      strategyId: 'dashboard-test',
+      signalId: `dashboard-${item.key}-signal`,
+      symbol: item.symbol,
+      market: item.planMarket,
+      side: item.side,
+      orderType: 'limit',
+      quantity: 1,
+      quoteAmount: null,
+      limitPrice: 100,
+      estimatedKrw: 100,
+      stopPrice: 90,
+      targetPrices: [110],
+      splitRatios: [100],
+      leverage: item.exchange === 'bitget' ? 2 : null,
+      marginMode: item.exchange === 'bitget' ? 'isolated' : null,
+      reduceOnly: false,
+      invalidateAction: 'hold',
+      signalReasons: ['dashboard-market-identity'],
+      marketSnapshot: {
+        observedAt: now,
+        riskObservedAt: now,
+        dataDelayMs: 0,
+        oneMinuteMovePercent: 0,
+        spreadPercent: 0.1,
+        orderbookGapPercent: 0.1,
+        halted: false,
+        availableBalance: 1_000_000,
+        accountValueKrw: 1_000_000,
+        dailyPnlPercent: 0,
+        assetExposurePercent: 0,
+        openPositionCount: 0,
+        dailyOrderCount: 0,
+        consecutiveLosses: 0,
+        currentPrice: 100,
+        plannedPrice: 100,
+        marketStatus: 'OPEN',
+        availableLiquidityKrw: 1_000_000,
+        estimatedSlippagePercent: 0.1,
+        estimatedFeePercent: 0.05,
+        signalState: 'entry_ready',
+        signalObservedAt: now,
+      },
+      approvalExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      approvedAt: now,
+      createdAt: now,
+      updatedAt: now,
+      riskAssessment: null,
+      riskEnvelope: null,
+    } as any);
+    await repository.saveOrder({
+      id: orderId,
+      userId: USER,
+      planId,
+      exchange: item.exchange,
+      stockBroker: null,
+      clientOrderId: `dashboard-${item.key}-client`,
+      exchangeOrderId: `dashboard-${item.key}-exchange`,
+      state: 'ACCEPTED',
+      version: 0,
+      requestedQuantity: 1,
+      remainingQuantity: 1,
+      currentLimitPrice: 100,
+      filledQuantity: 0,
+      averageFillPrice: null,
+      fills: [],
+      feeAmount: null,
+      feeCurrency: null,
+      exchangeCreatedAt: now,
+      exchangeUpdatedAt: now,
+      cancelable: true,
+      providerStatusCode: 'open',
+      retryCount: 0,
+      nextRetryAt: null,
+      lastReconciledAt: now,
+      lastErrorCode: null,
+      manualReviewRequired: false,
+      executionClaimId: null,
+      submissionStartedAt: null,
+      submissionAttemptId: null,
+      approvedPlanVersion: 0,
+      preSubmissionCheckedAt: null,
+      preSubmissionDecision: null,
+      preSubmissionSnapshot: null,
+      cancelRequestedAt: null,
+      cancelRequestClaimId: null,
+      cancelSubmittedAt: null,
+      cancelAcknowledgedAt: null,
+      cancelOperationId: null,
+      recoveryLeaseOwner: null,
+      recoveryLeaseUntil: null,
+      protectionStatus: 'NOT_REQUIRED',
+      protectionErrorCode: null,
+      amendments: [],
+      lastAmendRequestId: null,
+      createdAt: now,
+      updatedAt: now,
+    } as any);
+
+    const { server, baseUrl } = await startServer();
+    try {
+      const query = new URLSearchParams({
+        dashboard: '1',
+        market: item.uiMarket,
+        symbol: item.querySymbol,
+        exchange: item.exchange,
+      });
+      const response = await fetch(`${baseUrl}/api/trade-automation/orders?${query.toString()}`);
+      assert.equal(response.status, 200);
+      const body = await response.json() as {
+        dashboardItems: Array<{ id: string; market: string; symbol: string }>;
+        orderSubmitted: boolean;
+        orderCanceled: boolean;
+        orderAmended: boolean;
+        privateTradingRequestSent: boolean;
+      };
+      assert.equal(body.dashboardItems.length, 1);
+      assert.equal(body.dashboardItems[0]?.id, orderId);
+      assert.equal(body.dashboardItems[0]?.market, item.uiMarket);
+      assert.equal(body.dashboardItems[0]?.symbol, item.symbol);
+      assert.equal(body.orderSubmitted, false);
+      assert.equal(body.orderCanceled, false);
+      assert.equal(body.orderAmended, false);
+      assert.equal(body.privateTradingRequestSent, false);
+    } finally {
+      await close(server);
+    }
+  }
+});
+
+test('exit preview follows Toss fractional and Kiwoom integer US-stock quantity rules', async () => {
+  const stockSnapshot = (provider: 'toss' | 'kiwoom') => {
+    const checkedAt = new Date().toISOString();
+    return {
+      provider,
+      readOnly: true as const,
+      connected: true,
+      status: 'CONNECTED' as const,
+      accounts: null,
+      balances: null,
+      positions: [{
+        market: 'US',
+        symbol: 'AAPL',
+        quantity: 3,
+        availableQuantity: 3,
+        averageEntryPrice: 200,
+        currentPrice: 205,
+        marketValue: 615,
+        unrealizedPnl: 15,
+        unrealizedPnlPercent: 2.5,
+        leverage: null,
+        liquidationPrice: null,
+        marginMode: null,
+        side: null,
+      }],
+      openOrders: null,
+      checkedAt,
+      lastGoodAt: checkedAt,
+      stale: false,
+      errorCode: null,
+      orderRequests: 0 as const,
+      cancelRequests: 0 as const,
+      amendRequests: 0 as const,
+      transferRequests: 0 as const,
+      withdrawalRequests: 0 as const,
+      credentialsReturned: false as const,
+      liveTradingEnabled: false as const,
+      autoTradingEnabled: false as const,
+    };
+  };
+  setTradeExitPreviewReadersFactoryForTests(() => ({
+    toss: async () => stockSnapshot('toss'),
+    kiwoom: async () => stockSnapshot('kiwoom'),
+  }));
+
+  const { server, baseUrl } = await startServer();
+  try {
+    const toss = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, provider: 'toss', market: 'US', symbol: 'AAPL', percent: 25 }),
+    });
+    assert.equal(toss.status, 200);
+    const tossBody = await toss.json() as { preview: { exitQuantity: number; quantityRule: string } };
+    assert.equal(tossBody.preview.exitQuantity, 0.75);
+    assert.equal(tossBody.preview.quantityRule, 'FRACTIONAL_ALLOWED');
+
+    const tooSmallKiwoom = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, provider: 'kiwoom', market: 'US', symbol: 'AAPL', percent: 25 }),
+    });
+    assert.equal(tooSmallKiwoom.status, 400);
+    assert.equal((await tooSmallKiwoom.json() as { error: string }).error, 'EXIT_PREVIEW_QUANTITY_TOO_SMALL');
+
+    const kiwoom = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, provider: 'kiwoom', market: 'US', symbol: 'AAPL', percent: 50 }),
+    });
+    assert.equal(kiwoom.status, 200);
+    const kiwoomBody = await kiwoom.json() as { preview: { exitQuantity: number; quantityRule: string } };
+    assert.equal(kiwoomBody.preview.exitQuantity, 1);
+    assert.equal(kiwoomBody.preview.quantityRule, 'INTEGER_ONLY');
+  } finally {
+    setTradeExitPreviewReadersFactoryForTests(null);
+    await close(server);
+  }
 });
 
 test('status is authenticated, automatic execution defaults off, and never returns credential values', async () => {

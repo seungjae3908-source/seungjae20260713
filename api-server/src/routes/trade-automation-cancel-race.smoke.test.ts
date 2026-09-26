@@ -125,9 +125,23 @@ test('concurrent HTTP cancel requests submit one provider cancel and reconcile t
 
   try {
     const endpoint = `${baseUrl}/api/trade-automation/orders/${order.id}/cancel`;
-    const firstRequest = globalThis.fetch(endpoint, { method: 'POST' });
+    const denied = await globalThis.fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: false }),
+    });
+    assert.equal(denied.status, 409);
+    assert.equal((await denied.json() as { error: string }).error, 'EXPLICIT_CANCEL_CONFIRMATION_REQUIRED');
+    assert.equal(cancelCalls, 0);
+
+    const confirmedRequest = () => globalThis.fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true }),
+    });
+    const firstRequest = confirmedRequest();
     await cancelStarted;
-    const secondResponse = await globalThis.fetch(endpoint, { method: 'POST' });
+    const secondResponse = await confirmedRequest();
     assert.equal(secondResponse.status, 200);
     const secondBody = await secondResponse.json() as {
       order: TradingOrder;
