@@ -442,6 +442,31 @@ test('live trading connection requires explicit purpose plus read+orders and nev
       assert.equal(verifiedBody.withdrawalRequests, 0);
       assert.equal(verifiedBody.realOrderSubmitted, false);
       assert.equal(financialMutationRequests, 0);
+
+      const readinessResponse = await nativeFetch(`${baseUrl}/api/trade-automation/status`);
+      assert.equal(readinessResponse.status, 200);
+      const readinessBody = await readinessResponse.json() as {
+        liveExecutionReadiness: Record<string, {
+          connectionConfigured: boolean;
+          providerVerified: boolean;
+          manualServerGateEnabled: boolean;
+          automaticServerGateEnabled: boolean;
+          readyForManualOrderEvaluation: boolean;
+          readyForAutomaticOrderEvaluation: boolean;
+          blockers: string[];
+          orderSubmissionPerformedByStatusRequest: boolean;
+        }>;
+      };
+      const upbitReadiness = readinessBody.liveExecutionReadiness.upbit;
+      assert.equal(upbitReadiness.connectionConfigured, true);
+      assert.equal(upbitReadiness.providerVerified, true);
+      assert.equal(upbitReadiness.manualServerGateEnabled, false);
+      assert.equal(upbitReadiness.automaticServerGateEnabled, false);
+      assert.equal(upbitReadiness.readyForManualOrderEvaluation, false);
+      assert.equal(upbitReadiness.readyForAutomaticOrderEvaluation, false);
+      assert.ok(upbitReadiness.blockers.includes('MANUAL_LIVE_SERVER_GATE_OFF'));
+      assert.ok(upbitReadiness.blockers.includes('AUTOMATIC_LIVE_SERVER_GATE_OFF'));
+      assert.equal(upbitReadiness.orderSubmissionPerformedByStatusRequest, false);
     } finally {
       globalThis.fetch = nativeFetch;
     }
