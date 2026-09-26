@@ -1,0 +1,1 @@
+// @workspace/db — stub placeholder

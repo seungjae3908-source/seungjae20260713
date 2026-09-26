@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "status": "fail",
+  "stage": "standalone_validation_suite",
+  "source": "github-actions-isolated-52d-validation",
+  "market": "CRYPTO_FUTURES",
+  "symbol": "BTCUSDT",
+  "timeframe": "15m",
+  "requestedDays": 52,
+  "error": {
+    "name": "ValidationSuiteError",
+    "message": "npm run validate failed before live data collection"
+  }
+}

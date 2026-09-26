@@ -1,0 +1,125 @@
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { BitgetPublicClient } from "../src/bitget-public-client.js";
+import { collectBitgetCandles } from "../src/bitget-candle-collector.js";
+import { collectFundingRateHistory } from "../src/derivatives-history.js";
+import {
+  ETH_V6_FORWARD_CANDIDATE,
+  ETH_V6_FORWARD_START,
+  advanceEthV6ForwardState,
+  createEthV6ForwardState,
+  summarizeEthV6ForwardState,
+} from "../src/eth-v6-forward-validation.js";
+import { FROZEN_CANDIDATE_MANIFEST_SHA256 } from "../src/final-holdout-evaluator.js";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const LOOKBACK_DAYS = 180;
+const replayPath = resolve(process.argv[2] ?? "docs/eth-v6-replay-proof.json");
+const statePath = resolve(process.argv[3] ?? "docs/eth-v6-forward-state.json");
+const summaryPath = resolve(process.argv[4] ?? "docs/eth-v6-forward-summary.json");
+const markdownPath = resolve(process.argv[5] ?? "docs/eth-v6-forward-summary.md");
+const cycleTime = Date.now();
+
+async function readJsonOptional(path, fallback = null) {
+  try { return JSON.parse(await readFile(path, "utf8")); }
+  catch (error) {
+    if (error?.code === "ENOENT") return fallback;
+    throw error;
+  }
+}
+
+async function writeAtomic(path, content) {
+  await mkdir(dirname(path), { recursive: true });
+  const temporary = `${path}.tmp-${process.pid}-${Date.now()}`;
+  await writeFile(temporary, content, "utf8");
+  await rename(temporary, path);
+}
+
+function iso(timestamp) {
+  return timestamp ? new Date(timestamp).toISOString() : "-";
+}
+
+function format(value, digits = 2) {
+  if (value === null || value === undefined) return "-";
+  if (value === Number.POSITIVE_INFINITY) return "∞";
+  if (!Number.isFinite(value)) return "-";
+  return Number(value).toLocaleString("ko-KR", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+const replay = await readJsonOptional(replayPath);
+if (!replay || replay.status !== "passed") throw new Error("ETH V6 deterministic replay proof must pass before Paper/Shadow starts");
+if (replay.strategyId !== ETH_V6_FORWARD_CANDIDATE.id || replay.candidateManifestSha256 !== FROZEN_CANDIDATE_MANIFEST_SHA256) {
+  throw new Error("ETH V6 replay proof does not match the frozen candidate manifest");
+}
+
+const previous = await readJsonOptional(statePath, null);
+const client = new BitgetPublicClient({ minIntervalMs: 180, maxRetries: 4, timeoutMs: 15_000 });
+const startTime = Math.max(ETH_V6_FORWARD_START - LOOKBACK_DAYS * DAY_MS, cycleTime - LOOKBACK_DAYS * DAY_MS);
+const candlesResult = await collectBitgetCandles({
+  client,
+  market: "CRYPTO_FUTURES",
+  symbol: "ETHUSDT",
+  timeframe: "1d",
+  startTime,
+  endTime: cycleTime,
+  maxCandles: 500,
+});
+if (!Array.isArray(candlesResult.candles) || candlesResult.candles.length < 40) throw new Error("ETH V6 forward cycle has insufficient daily candle history");
+
+const funding = await collectFundingRateHistory({
+  client,
+  symbol: "ETHUSDT",
+  productType: "usdt-futures",
+  startTime: Math.max(ETH_V6_FORWARD_START - 7 * DAY_MS, cycleTime - 120 * DAY_MS),
+  endTime: cycleTime,
+  pageSize: 100,
+  maxPages: 20,
+});
+
+const state = advanceEthV6ForwardState({
+  state: previous ?? createEthV6ForwardState(cycleTime),
+  candles: candlesResult.candles,
+  fundingRates: funding.records,
+  cycleTime,
+});
+const summary = summarizeEthV6ForwardState(state);
+
+const report = Object.freeze({
+  ...summary,
+  replay: Object.freeze({ status: replay.status, generatedAt: replay.generatedAt, usedForSelection: false }),
+  data: Object.freeze({
+    provider: "bitget-public-v2",
+    candleCount: candlesResult.candles.length,
+    firstCandle: candlesResult.candles[0]?.timestamp ?? null,
+    lastCandle: candlesResult.candles.at(-1)?.timestamp ?? null,
+    fundingRecords: funding.records.length,
+    fundingFirst: funding.records[0]?.timestamp ?? null,
+    fundingLast: funding.records.at(-1)?.timestamp ?? null,
+    collectedAt: cycleTime,
+  }),
+  stages: Object.freeze({
+    replay: Object.freeze({ passed: true, evidence: "docs/eth-v6-replay-proof.json" }),
+    paper: Object.freeze({ passed: false, status: summary.status, forwardOnly: true, simulatedCapital: true }),
+    shadow: Object.freeze({ passed: false, status: summary.status, forwardOnly: true, orderSubmitted: false }),
+  }),
+  liveOrderAllowed: false,
+  privateAccountRequestAllowed: false,
+});
+
+const markdown = `# ETHUSDT V6 Forward Paper / Shadow\n\n`
+  + `- candidate: **${report.candidateId}**\n`
+  + `- frozen manifest: \`${report.candidateManifestSha256}\`\n`
+  + `- replay: **passed** / selection 사용: false\n`
+  + `- forward validation start: ${iso(ETH_V6_FORWARD_START)}\n`
+  + `- last signal evaluated: ${iso(report.lastSignalEvaluated)}\n`
+  + `- signals: ${report.signalsRecorded} / settled: ${report.settledTrades} / tracking: ${report.trackingTrades} / missed: ${report.missedSignals}\n`
+  + `- paper equity: ${format(report.paperEquity, 0)}원 / return: ${format(report.totalReturnPercent)}% / win rate: ${format(report.successRatePercent)}%\n`
+  + `- PF: ${format(report.profitFactor)} / MDD: ${format(report.maximumDrawdownPercent)}% / expectancy: ${format(report.expectancy, 0)}원\n`
+  + `- status: **${report.status}** / next: ${report.nextStage}\n`
+  + `- actual order: 0 / private account API: 0 / live promotion: false\n`
+  + `- late workflow cycles never backfill a signal after its entry window has passed.\n`;
+
+await writeAtomic(statePath, `${JSON.stringify(state, null, 2)}\n`);
+await writeAtomic(summaryPath, `${JSON.stringify(report, null, 2)}\n`);
+await writeAtomic(markdownPath, markdown);
+console.log(markdown);

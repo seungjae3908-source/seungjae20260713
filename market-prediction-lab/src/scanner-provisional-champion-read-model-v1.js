@@ -1,0 +1,242 @@
+import { PROVISIONAL_CHAMPION_SAFETY } from "./provisional-champion-selector-v1.js";
+import { resolveCanonicalStrategyIdentity } from "./canonical-strategy-identity-v1.js";
+import { BACKTESTER_STRATEGY_EVIDENCE_AUTHORITY } from "./backtester-strategy-evidence-adapter-v1.js";
+
+export const SCANNER_PROVISIONAL_CHAMPION_READ_MODEL_VERSION = "scanner-provisional-champion-read-model-v1";
+
+const HASH_64 = /^[0-9a-f]{64}$/u;
+
+function deepFreeze(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) deepFreeze(child);
+  return Object.freeze(value);
+}
+
+function finite(value) { return typeof value === "number" && Number.isFinite(value); }
+function nonEmpty(value) { return typeof value === "string" && value.trim().length > 0; }
+function unique(values) { return [...new Set(values)].sort(); }
+
+function safety() {
+  return Object.freeze({
+    ...PROVISIONAL_CHAMPION_SAFETY,
+    executionAuthority: "NONE",
+    liveTrading: false,
+    realOrderEnabled: false,
+    privateTradingApiAllowed: false,
+    orderSubmitted: false,
+  });
+}
+
+function deriveRiskReward(card, direction, blockers) {
+  if (![card?.entry, card?.stop, card?.target].every(finite)) {
+    blockers.push("ENTRY_RISK_PLAN_INCOMPLETE");
+    return null;
+  }
+  if ([card.entry, card.stop, card.target].some((value) => value <= 0)) {
+    blockers.push("INVALID_ENTRY_STOP_TARGET_GEOMETRY");
+    return null;
+  }
+  const normalizedDirection = typeof direction === "string" ? direction.trim().toUpperCase() : "";
+  let risk;
+  let reward;
+  if (["BUY", "LONG"].includes(normalizedDirection)) {
+    risk = card.entry - card.stop;
+    reward = card.target - card.entry;
+  } else if (["SELL", "SHORT"].includes(normalizedDirection)) {
+    risk = card.stop - card.entry;
+    reward = card.entry - card.target;
+  } else {
+    blockers.push("RISK_DIRECTION_UNSUPPORTED");
+    return null;
+  }
+  if (!(risk > 0) || !(reward > 0)) {
+    blockers.push("INVALID_ENTRY_STOP_TARGET_GEOMETRY");
+    return null;
+  }
+  return reward / risk;
+}
+
+function requireBoundEvidence(evidence, champion, prefix, blockers) {
+  if (evidence?.status !== "PASS") blockers.push(`${prefix}_EVIDENCE_INVALID`);
+  if (evidence?.strategyIdentityDigest !== champion.strategyIdentityDigest) blockers.push(`${prefix}_EVIDENCE_IDENTITY_MISMATCH`);
+  if (evidence?.executionAuthority !== "NONE") blockers.push(`${prefix}_EVIDENCE_EXECUTION_AUTHORITY_INVALID`);
+}
+
+function decision(card, champion, context) {
+  const blockers = [];
+  const identity = champion.strategyIdentity;
+  if (card?.strategyIdentityDigest !== champion.strategyIdentityDigest) blockers.push("STRATEGY_IDENTITY_MISMATCH");
+  if (card?.market !== identity.market) blockers.push("MARKET_MISMATCH");
+  if (card?.direction !== identity.direction) blockers.push("DIRECTION_MISMATCH");
+  if (card?.timeframe !== identity.timeframe) blockers.push("TIMEFRAME_MISMATCH");
+  if (!nonEmpty(card?.symbol) || !nonEmpty(card?.observedAt) || !nonEmpty(card?.expiresAt)) blockers.push("MANDATORY_DATA_MISSING");
+  if (card?.dataCompleteness !== "COMPLETE") blockers.push("MANDATORY_DATA_INCOMPLETE");
+
+  const now = Date.parse(context.now ?? "");
+  const observedAt = Date.parse(card?.observedAt ?? "");
+  const expiresAt = Date.parse(card?.expiresAt ?? "");
+  if (!Number.isFinite(now) || !Number.isFinite(observedAt) || !Number.isFinite(expiresAt)
+    || observedAt > now || expiresAt <= now) blockers.push("STALE_MANDATORY_DATA");
+  if (context.providerAvailable !== true || card?.providerAvailable !== true) blockers.push("PROVIDER_UNAVAILABLE");
+
+  if (!finite(context.minimumLiquidity) || context.minimumLiquidity < 0) blockers.push("LIQUIDITY_POLICY_MISSING");
+  else if (!finite(card?.liquidity) || card.liquidity < context.minimumLiquidity) blockers.push("INVALID_LIQUIDITY");
+
+  requireBoundEvidence(card?.riskEvidence, champion, "RISK", blockers);
+  requireBoundEvidence(card?.costEvidence, champion, "COST", blockers);
+  if (card?.costEvidence?.costPolicyVersion !== identity.costPolicyVersion) blockers.push("COST_POLICY_IDENTITY_MISMATCH");
+  requireBoundEvidence(card?.strategyHealthEvidence, champion, "STRATEGY_HEALTH", blockers);
+  requireBoundEvidence(card?.regimeCompatibility, champion, "REGIME_COMPATIBILITY", blockers);
+  requireBoundEvidence(card?.executionCapability, champion, "EXECUTION_CAPABILITY", blockers);
+  if (card?.executionCapability?.mode !== "PAPER_ONLY"
+    || card?.executionCapability?.market !== identity.market
+    || card?.executionCapability?.direction !== identity.direction
+    || card?.executionCapability?.timeframe !== identity.timeframe
+    || card?.executionCapability?.LIVE_TRADING !== false
+    || card?.executionCapability?.AUTO_TRADING !== false
+    || card?.executionCapability?.REAL_ORDER_ENABLED !== false
+    || card?.executionCapability?.PRIVATE_TRADING_API_ALLOWED !== false
+    || card?.executionCapability?.orderSubmitted !== false) {
+    blockers.push("EXECUTION_CAPABILITY_INVALID");
+  }
+  const derivedRiskReward = deriveRiskReward(card, identity.direction, blockers);
+
+  if (!finite(context.minimumRiskReward) || context.minimumRiskReward <= 0) {
+    blockers.push("RISK_REWARD_POLICY_MISSING");
+  } else if (derivedRiskReward != null) {
+    if (!finite(card?.riskReward)) blockers.push("RISK_REWARD_MISSING");
+    else {
+      const tolerance = Math.max(1, Math.abs(derivedRiskReward)) * 1e-9;
+      if (Math.abs(card.riskReward - derivedRiskReward) > tolerance) blockers.push("RISK_REWARD_MISMATCH");
+    }
+    if (derivedRiskReward < context.minimumRiskReward) blockers.push("UNACCEPTABLE_RISK_REWARD");
+  }
+
+  const resolvedBlockers = unique(blockers);
+  if (resolvedBlockers.length > 0) {
+    return deepFreeze({
+      symbol: card?.symbol ?? null,
+      advisoryState: "NO_TRADE",
+      blockers: resolvedBlockers,
+      championState: "PROVISIONAL",
+      strategyIdentityDigest: champion.strategyIdentityDigest,
+      evidenceDigest: champion.evidenceDigest,
+      safety: safety(),
+    });
+  }
+  return deepFreeze({
+    symbol: card.symbol,
+    advisoryState: "ADVISORY",
+    blockers: [],
+    championState: "PROVISIONAL",
+    strategyId: identity.strategyId,
+    strategyVersion: identity.strategyVersion,
+    strategyIdentityDigest: champion.strategyIdentityDigest,
+    evidenceDigest: champion.evidenceDigest,
+    validationState: "PROVISIONAL_ONLY",
+    evidenceState: "HARD_GATES_PASSED",
+    market: identity.market,
+    direction: identity.direction,
+    timeframe: identity.timeframe,
+    costEvidenceStatus: card.costEvidence.status,
+    strategyHealthStatus: card.strategyHealthEvidence.status,
+    regimeCompatibilityStatus: card.regimeCompatibility.status,
+    executionCapabilityStatus: card.executionCapability.status,
+    dataCompleteness: card.dataCompleteness,
+    freshness: "CURRENT",
+    liquidity: card.liquidity,
+    entry: card.entry,
+    stop: card.stop,
+    target: card.target,
+    riskReward: derivedRiskReward,
+    sourceCard: structuredClone(card),
+    safety: safety(),
+  });
+}
+
+function noTradeRegistry(blocker, championState = "INVALID") {
+  return deepFreeze({
+    schemaVersion: SCANNER_PROVISIONAL_CHAMPION_READ_MODEL_VERSION,
+    status: "NO_TRADE",
+    mode: "PROVISIONAL_CHAMPION",
+    championState,
+    cards: [],
+    decisions: [],
+    blockers: [blocker],
+    safety: safety(),
+  });
+}
+
+function baseRegistrySafe(registry) {
+  return registry.schemaVersion === "provisional-champion-verdict-v1"
+    && registry.policyVersion === "PROVISIONAL_CHAMPION_POLICY_V1"
+    && registry.canonicalEvidenceAuthority === BACKTESTER_STRATEGY_EVIDENCE_AUTHORITY
+    && registry.currentValidatedChampion === "NONE"
+    && registry.validatedChampion === false
+    && registry.profitabilityProven === false
+    && registry.forwardEvidenceSufficient === false
+    && registry.liveTradingEligible === false
+    && registry.executionAuthority === "NONE"
+    && HASH_64.test(registry.evidenceDigest ?? "")
+    && registry.safety?.LIVE_TRADING === false
+    && registry.safety?.AUTO_TRADING === false
+    && registry.safety?.REAL_ORDER_ENABLED === false
+    && registry.safety?.PRIVATE_TRADING_API_ALLOWED === false
+    && registry.safety?.executionAuthority === "NONE"
+    && registry.safety?.orderSubmitted === false
+    && registry.safety?.orderSubmitApiCalls === 0;
+}
+
+export function consumeProvisionalChampionForScanner({ registry, cards = [], context = {} } = {}) {
+  const rows = Array.isArray(cards) ? cards : [];
+  if (registry == null) return noTradeRegistry("CHAMPION_REGISTRY_UNAVAILABLE", "UNAVAILABLE");
+  if (!baseRegistrySafe(registry)) return noTradeRegistry("CHAMPION_REGISTRY_SAFETY_INVALID");
+
+  if (registry.status === "NONE" && registry.currentProvisionalChampion === "NONE") {
+    return noTradeRegistry("NO_PROVISIONAL_CHAMPION", "NONE");
+  }
+
+  const champion = registry.currentProvisionalChampion;
+  const resolvedChampionIdentity = resolveCanonicalStrategyIdentity(champion?.strategyIdentity);
+  const championSafe = registry.status === "PROVISIONAL_CHAMPION"
+    && champion?.championState === "PROVISIONAL"
+    && ["TEST_ONLY", "CANONICAL"].includes(champion?.evidenceClass)
+    && resolvedChampionIdentity.status === "IDENTITY_COMPLETE"
+    && champion.strategyIdentityDigest === resolvedChampionIdentity.strategyIdentityDigest
+    && champion.strategyId === resolvedChampionIdentity.identity.strategyId
+    && HASH_64.test(champion?.evidenceDigest ?? "")
+    && champion.evidenceDigest === registry.evidenceDigest
+    && ((champion.evidenceClass === "TEST_ONLY" && champion.adapterAuthorityDigest === null)
+      || (champion.evidenceClass === "CANONICAL" && HASH_64.test(champion.adapterAuthorityDigest ?? "")));
+  if (!championSafe) return noTradeRegistry("CHAMPION_REGISTRY_SAFETY_INVALID");
+
+  const environment = context.environment === "TEST_ONLY" ? "TEST_ONLY" : "PRODUCTION";
+  if (champion.evidenceClass === "TEST_ONLY" && environment !== "TEST_ONLY") {
+    return noTradeRegistry("TEST_ONLY_CHAMPION_FORBIDDEN");
+  }
+  const resolvedContext = Object.freeze({
+    environment,
+    now: context.now ?? null,
+    providerAvailable: context.providerAvailable === true,
+    minimumLiquidity: finite(context.minimumLiquidity) && context.minimumLiquidity >= 0 ? context.minimumLiquidity : null,
+    minimumRiskReward: finite(context.minimumRiskReward) && context.minimumRiskReward > 0 ? context.minimumRiskReward : null,
+  });
+  const decisions = rows.map((card) => decision(card, champion, resolvedContext));
+  const advisoryCards = decisions.filter((row) => row.advisoryState === "ADVISORY");
+  const providerBlocked = resolvedContext.providerAvailable !== true
+    || decisions.some((row) => row.blockers.includes("PROVIDER_UNAVAILABLE"));
+  const allCandidatesBlocked = decisions.length > 0 && advisoryCards.length === 0
+    && decisions.some((row) => row.blockers.length > 0);
+  const hardGateBlockers = unique(decisions.flatMap((row) => row.blockers));
+  const status = providerBlocked || allCandidatesBlocked ? "NO_TRADE" : advisoryCards.length > 0 ? "ADVISORY_CANDIDATES" : "VALID_EMPTY";
+  return deepFreeze({
+    schemaVersion: SCANNER_PROVISIONAL_CHAMPION_READ_MODEL_VERSION,
+    status,
+    mode: "PROVISIONAL_CHAMPION",
+    championState: "PROVISIONAL",
+    cards: status === "ADVISORY_CANDIDATES" ? advisoryCards : [],
+    decisions,
+    blockers: status === "NO_TRADE" ? unique([...(providerBlocked ? ["PROVIDER_UNAVAILABLE"] : []), ...hardGateBlockers]) : [],
+    safety: safety(),
+  });
+}

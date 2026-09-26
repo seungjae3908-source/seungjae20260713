@@ -1,0 +1,377 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import test from "node:test";
+import {
+  AUTHORITATIVE_NATURAL_PAPER_TRIGGER_SETTLEMENT_EVIDENCE_VERSION,
+  bindNaturalPaperTriggerBoundSettlementEvidence,
+  createNaturalPaperTriggerBoundSettlementCostProducer,
+  validateNaturalPaperTriggerBoundSettlementEvidence,
+} from "../src/natural-paper-trigger-bound-settlement-cost-producer-v1.js";
+
+const T0 = 1_800_000_000_000;
+const COMPONENTS = [
+  "commission", "tax", "spread", "slippage", "funding", "latency", "liquidityImpact", "partialFillImpact",
+];
+
+function stable(value) {
+  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stable(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function sha(value) {
+  return createHash("sha256").update(typeof value === "string" ? value : stable(value)).digest("hex");
+}
+
+function refreshExitExecutionId(identity) {
+  const payload = { ...identity };
+  delete payload.exitExecutionId;
+  identity.exitExecutionId = sha(payload);
+}
+
+function fixture(candidateId = `paper-candidate-v1:${"c".repeat(64)}`) {
+  const position = {
+    positionId: "position-1",
+    paperSampleId: "sample-1",
+    signalId: "signal-1",
+    market: "CRYPTO_SPOT",
+    symbol: "KRW-BTC",
+    direction: "BUY",
+    candidateId,
+    strategyFamily: "strategy-family-1",
+    strategyId: "strategy-1",
+    strategyVersion: "v1",
+    parameterHash: "parameters-1",
+    parameterDigest: "parameters-1",
+    researchCodeSha: "a".repeat(40),
+    costPolicyVersion: "cost-v1",
+    accountMode: "PAPER",
+    sample: { identity: { timeframe: "4h", horizon: 6 } },
+    lifecycle: {
+      immutableContractDigest: "immutable-lifecycle-1",
+      sampleEligibility: { provenanceClass: "NATURAL_FORWARD" },
+    },
+  };
+  const triggerPayload = {
+    positionId: position.positionId,
+    paperSampleId: position.paperSampleId,
+    candidateId: position.candidateId,
+    strategyId: position.strategyId,
+    strategyIdentity: {
+      candidateId: position.candidateId,
+      strategyFamily: position.strategyFamily,
+      strategyId: position.strategyId,
+      strategyVersion: position.strategyVersion,
+      parameterHash: position.parameterHash,
+      parameterDigest: position.parameterDigest,
+      researchCodeSha: position.researchCodeSha,
+      accountMode: position.accountMode,
+    },
+    researchCodeSha: position.researchCodeSha,
+    costPolicyVersion: position.costPolicyVersion,
+    positionLifecycleDigest: position.lifecycle.immutableContractDigest,
+    triggerObservationId: "trigger-observation-1",
+    triggeredAtMs: T0,
+    bar: { open: 100, high: 106, low: 99, close: 105 },
+    source: "upbit-public-candles",
+  };
+  const trigger = { ...triggerPayload, exitTriggerId: sha(triggerPayload) };
+  position.lifecycle.pendingExit = trigger;
+  const sourceIdentity = "CANONICAL_PUBLIC_SETTLEMENT_AGGREGATOR_V1";
+  const provenanceId = sha("canonical-settlement-provenance-1");
+  const positionIdentity = {
+    positionId: position.positionId,
+    paperSampleId: position.paperSampleId,
+    signalId: position.signalId,
+    market: position.market,
+    symbol: position.symbol,
+    signalTimeframe: position.sample.identity.timeframe,
+    horizon: position.sample.identity.horizon,
+    direction: position.direction,
+    candidateId: position.candidateId,
+    strategyFamily: position.strategyFamily,
+    strategyId: position.strategyId,
+    strategyVersion: position.strategyVersion,
+    parameterHash: position.parameterHash,
+    parameterDigest: position.parameterDigest,
+    researchCodeSha: position.researchCodeSha,
+    costPolicyVersion: position.costPolicyVersion,
+    accountMode: position.accountMode,
+  };
+  const exitExecutionIdentity = {
+    exitTriggerId: trigger.exitTriggerId,
+    triggerObservationId: trigger.triggerObservationId,
+    triggeredAtMs: trigger.triggeredAtMs,
+    positionId: position.positionId,
+    paperSampleId: position.paperSampleId,
+    entryId: position.paperSampleId,
+    provider: null,
+    market: position.market,
+    symbol: position.symbol,
+    timeframe: position.sample.identity.timeframe,
+    horizon: position.sample.identity.horizon,
+    direction: position.direction,
+    candidateId: position.candidateId,
+    strategyFamily: position.strategyFamily,
+    strategyId: position.strategyId,
+    strategyVersion: position.strategyVersion,
+    parameterHash: position.parameterHash,
+    parameterDigest: position.parameterDigest,
+    researchCodeSha: position.researchCodeSha,
+    accountMode: position.accountMode,
+    costPolicyVersion: position.costPolicyVersion,
+    sourceIdentity,
+    provenanceId,
+    exitExecutionDigest: null,
+  };
+  const observedAtMs = T0 + 100;
+  const maximumAgeMs = 60_000;
+  const components = Object.fromEntries(COMPONENTS.map((name) => [name, {
+    status: "PRESENT",
+    valuePercent: name === "commission" ? 0.1 : 0,
+    quality: name === "tax" || name === "funding" ? "NOT_APPLICABLE" : name === "commission" ? "DOCUMENTED" : "OBSERVED",
+    source: `CANONICAL_${name.toUpperCase()}_SOURCE_V1`,
+    provenance: `canonical ${name} evidence`,
+    sourceIdentity: `CANONICAL_${name.toUpperCase()}_SOURCE_V1`,
+    provenanceId: sha(`canonical-${name}-provenance`),
+    positionIdentity,
+    exitExecutionIdentity,
+    freshness: { observedAtMs, maximumAgeMs },
+    policyIdentity: { version: position.costPolicyVersion },
+    observedAtMs,
+    countsAsExecutionCost: true,
+    unavailableIsZero: false,
+    ...(name === "funding" ? { realized: false, projectedIsRealized: false } : {}),
+  }]));
+  const settlementInput = {
+    exitTriggerId: trigger.exitTriggerId,
+    exitExecution: {
+      dataEvidence: { provider: trigger.source },
+      costPolicy: {
+        version: position.costPolicyVersion,
+        commissionRate: 0.001,
+        taxRate: 0,
+        spreadRate: 0,
+        slippageRate: 0,
+        fundingRate: 0,
+        latencyRate: 0,
+        liquidityImpactRate: 0,
+        partialFillImpactRate: 0,
+      },
+    },
+    exitBar: { ...trigger.bar, timestampMs: trigger.triggeredAtMs },
+    exitQuote: { bid: 104, ask: 105, asOfMs: trigger.triggeredAtMs, maxAgeMs: maximumAgeMs },
+    pathBars: [],
+    fundingEvidence: { complete: true, payments: [] },
+  };
+  exitExecutionIdentity.provider = settlementInput.exitExecution.dataEvidence.provider;
+  exitExecutionIdentity.exitExecutionDigest = sha(settlementInput.exitExecution);
+  refreshExitExecutionId(exitExecutionIdentity);
+  settlementInput.exitExecutionId = exitExecutionIdentity.exitExecutionId;
+  const settlementCostEvidence = {
+    schemaVersion: "authoritative-paper-execution-cost-sources-v1",
+    status: "PRESENT",
+    fullCostReady: true,
+    maximumAgeMs,
+    sourceIdentity,
+    provenanceId,
+    positionIdentity,
+    exitExecutionIdentity,
+    exitExecutionId: exitExecutionIdentity.exitExecutionId,
+    exitTriggerId: trigger.exitTriggerId,
+    components,
+    costPolicyIdentity: { version: position.costPolicyVersion },
+    projectedFundingRealized: false,
+    unknownIsZero: false,
+    unavailableCostConvertedToZero: false,
+  };
+  const authoritativeEvidence = {
+    schemaVersion: AUTHORITATIVE_NATURAL_PAPER_TRIGGER_SETTLEMENT_EVIDENCE_VERSION,
+    status: "PRESENT",
+    fullCostReady: true,
+    sourceIdentity,
+    provenanceId,
+    positionIdentity,
+    exitExecutionIdentity,
+    exitExecutionId: exitExecutionIdentity.exitExecutionId,
+    freshness: { observedAtMs, maximumAgeMs },
+    settlementInput,
+    settlementCostEvidence,
+    unknownIsZero: false,
+    unavailableCostConvertedToZero: false,
+    synthetic: false,
+    replay: false,
+    backfill: false,
+    duplicate: false,
+    historical: false,
+    testOnly: false,
+    executionAuthority: "NONE",
+    liveOrderAllowed: false,
+    privateTradingApiAllowed: false,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+  };
+  const observation = {
+    observationId: "later-public-observation",
+    observedAtMs: T0 + 200,
+    maxAgeMs: maximumAgeMs,
+    naturalEvidence: {
+      provenanceClass: "NATURAL_FORWARD", synthetic: false, replay: false, backfill: false,
+      duplicate: false, historical: false, testOnly: false,
+    },
+  };
+  return { position, trigger, observation, authoritativeEvidence, evaluatedAtMs: T0 + 200 };
+}
+
+test("producer binds one authoritative Full Cost payload to the exact frozen exit trigger", async () => {
+  const row = fixture();
+  let collected = null;
+  const producer = createNaturalPaperTriggerBoundSettlementCostProducer({
+    async collectAuthoritativeEvidence(input) {
+      collected = input;
+      return row.authoritativeEvidence;
+    },
+  });
+  const result = await producer(row);
+  assert.equal(result.status, "PRESENT");
+  assert.equal(result.exitTriggerId, row.trigger.exitTriggerId);
+  assert.equal(result.exitExecutionId, row.authoritativeEvidence.exitExecutionIdentity.exitExecutionId);
+  assert.equal(result.observation.settlementInput.exitTriggerId, row.trigger.exitTriggerId);
+  assert.equal(result.observation.settlementInput.exitExecutionId, result.exitExecutionId);
+  assert.equal(result.observation.settlementCostEvidence.exitExecutionId, result.exitExecutionId);
+  assert.equal(result.observation.triggerBoundSettlementEvidence.exitExecutionId, result.exitExecutionId);
+  assert.equal(result.observation.triggerBoundSettlementEvidence.executionAuthority, "NONE");
+  assert.equal(result.observation.triggerBoundSettlementEvidence.naturalSampleCredit, 0);
+  assert.equal(Object.isFrozen(result.observation), true);
+  assert.deepEqual(collected.exitTrigger, row.trigger);
+  assert.equal(collected.executionAuthority, "NONE");
+  assert.equal(validateNaturalPaperTriggerBoundSettlementEvidence({
+    position: row.position,
+    observation: result.observation,
+    evaluatedAtMs: row.evaluatedAtMs,
+  }).status, "PRESENT");
+});
+
+test("Futures accepts observed realized funding but never a projected component", () => {
+  const row = fixture();
+  row.position.market = "CRYPTO_FUTURES";
+  row.authoritativeEvidence.positionIdentity.market = "CRYPTO_FUTURES";
+  row.authoritativeEvidence.exitExecutionIdentity.market = "CRYPTO_FUTURES";
+  refreshExitExecutionId(row.authoritativeEvidence.exitExecutionIdentity);
+  row.authoritativeEvidence.exitExecutionId = row.authoritativeEvidence.exitExecutionIdentity.exitExecutionId;
+  row.authoritativeEvidence.settlementInput.exitExecutionId = row.authoritativeEvidence.exitExecutionIdentity.exitExecutionId;
+  row.authoritativeEvidence.settlementCostEvidence.exitExecutionId = row.authoritativeEvidence.exitExecutionIdentity.exitExecutionId;
+  const funding = row.authoritativeEvidence.settlementCostEvidence.components.funding;
+  funding.quality = "OBSERVED";
+  funding.realized = true;
+  funding.projectedIsRealized = false;
+  assert.equal(bindNaturalPaperTriggerBoundSettlementEvidence(row).status, "PRESENT");
+  funding.evidenceClass = "PROJECTED_COMPONENT";
+  assert.equal(bindNaturalPaperTriggerBoundSettlementEvidence(row).status, "BLOCKED_DATA");
+});
+
+for (const [name, mutate] of [
+  ["rewritten trigger", (e) => { e.exitExecutionIdentity.exitTriggerId = "f".repeat(64); }],
+  ["rewritten explicit execution id", (e) => { e.exitExecutionId = "f".repeat(64); }],
+  ["rewritten execution identity id", (e) => { e.exitExecutionIdentity.exitExecutionId = "f".repeat(64); }],
+  ["missing exit execution provider", (e) => { delete e.settlementInput.exitExecution.dataEvidence.provider; }],
+  ["wrong Position", (e) => { e.positionIdentity.positionId = "other"; }],
+  ["missing component source identity", (e) => { e.settlementCostEvidence.components.spread.sourceIdentity = ""; }],
+  ["missing component provenance identity", (e) => { e.settlementCostEvidence.components.slippage.provenanceId = "missing"; }],
+  ["wrong component Position identity", (e) => { e.settlementCostEvidence.components.latency.positionIdentity.positionId = "other"; }],
+  ["wrong component execution identity", (e) => { e.settlementCostEvidence.components.commission.exitExecutionIdentity.triggeredAtMs += 1; }],
+  ["stale component freshness", (e) => { e.settlementCostEvidence.components.liquidityImpact.freshness.maximumAgeMs = 1; }],
+  ["unknown converted to zero", (e) => { e.unknownIsZero = true; }],
+  ["backfill evidence", (e) => { e.backfill = true; }],
+  ["missing partial-fill cost", (e) => { delete e.settlementCostEvidence.components.partialFillImpact; }],
+  ["cyclic non-canonical payload", (e) => { e.settlementInput.self = e.settlementInput; }],
+  ["projected funding promoted to realized", (e) => {
+    e.settlementCostEvidence.components.funding.evidenceClass = "PROJECTED_COMPONENT";
+    e.settlementCostEvidence.components.funding.realized = true;
+  }],
+]) {
+  test(`${name} fails closed without a bound observation`, () => {
+    const row = fixture();
+    mutate(row.authoritativeEvidence);
+    const result = bindNaturalPaperTriggerBoundSettlementEvidence(row);
+    assert.equal(result.status, "BLOCKED_DATA");
+    assert.equal(result.fullCostReady, false);
+    assert.equal(result.observation, undefined);
+    assert.equal(result.unknownIsZero, false);
+    assert.equal(result.executionAuthority, "NONE");
+  });
+}
+
+test("collector failure is a stable BLOCKED_DATA result and cannot mutate the trigger", async () => {
+  const row = fixture();
+  const original = structuredClone(row.trigger);
+  const producer = createNaturalPaperTriggerBoundSettlementCostProducer({
+    async collectAuthoritativeEvidence() { throw new Error("source unavailable"); },
+  });
+  const result = await producer(row);
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.deepEqual(row.position.lifecycle.pendingExit, original);
+  assert.deepEqual(result.blockers, ["PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_COST_PRODUCER_FAILED"]);
+});
+
+test("rehashed trigger cannot rewrite the frozen candidate lineage", async () => {
+  const row = fixture();
+  const { exitTriggerId: _ignored, ...payload } = row.trigger;
+  payload.candidateId = `paper-candidate-v1:${"d".repeat(64)}`;
+  payload.strategyIdentity.candidateId = payload.candidateId;
+  row.position.lifecycle.pendingExit = { ...payload, exitTriggerId: sha(payload) };
+  let collectorCalls = 0;
+  const producer = createNaturalPaperTriggerBoundSettlementCostProducer({
+    async collectAuthoritativeEvidence() {
+      collectorCalls += 1;
+      return row.authoritativeEvidence;
+    },
+  });
+  const result = await producer(row);
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.deepEqual(result.blockers, ["PAPER_POSITION_EXIT_TRIGGER_IDENTITY_MISMATCH"]);
+  assert.equal(collectorCalls, 0);
+});
+
+test("post-binding payload tampering invalidates the canonical digest", () => {
+  const row = fixture();
+  const bound = bindNaturalPaperTriggerBoundSettlementEvidence(row);
+  assert.equal(bound.status, "PRESENT");
+  const tampered = structuredClone(bound.observation);
+  tampered.settlementInput.exitQuote.bid -= 1;
+  const validation = validateNaturalPaperTriggerBoundSettlementEvidence({
+    position: row.position,
+    observation: tampered,
+    evaluatedAtMs: row.evaluatedAtMs,
+  });
+  assert.equal(validation.status, "BLOCKED_DATA");
+  assert.equal(validation.blockers.includes("PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_PAYLOAD_DIGEST_MISMATCH"), true);
+});
+
+test("copying a valid-looking binding cannot bypass the canonical producer capability", () => {
+  const row = fixture();
+  const bound = bindNaturalPaperTriggerBoundSettlementEvidence(row);
+  const copied = structuredClone(bound.observation);
+  const validation = validateNaturalPaperTriggerBoundSettlementEvidence({
+    position: row.position,
+    observation: copied,
+    evaluatedAtMs: row.evaluatedAtMs,
+  });
+  assert.equal(validation.status, "BLOCKED_DATA");
+  assert.equal(validation.blockers.includes(
+    "PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_CANONICAL_PRODUCER_REQUIRED",
+  ), true);
+});
+
+test("phase3 frozen namespace retains the exact candidate through real trigger-bound producer validation", () => {
+  const candidateId = `phase3-candidate:sha256:${"c".repeat(64)}`;
+  const row = fixture(candidateId);
+  const bound = bindNaturalPaperTriggerBoundSettlementEvidence(row);
+  assert.equal(bound.status, "PRESENT");
+  assert.equal(bound.observation.triggerBoundSettlementEvidence.positionIdentity.candidateId, candidateId);
+  assert.equal(validateNaturalPaperTriggerBoundSettlementEvidence({ position: row.position,
+    observation: bound.observation, evaluatedAtMs: row.evaluatedAtMs }).status, "PRESENT");
+  assert.equal(bound.naturalSampleCredit, 0);
+});

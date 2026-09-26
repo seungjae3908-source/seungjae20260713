@@ -1,0 +1,63 @@
+name: Paper Persistent Ledger Validation
+
+on:
+  push:
+    branches:
+      - research/paper-persistent-ledger-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paper-persistent-ledger-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Assert exact HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: API Typecheck
+        run: pnpm --dir stock-analyzer exec tsc -p ../api-server/tsconfig.json --noEmit
+
+      - name: Phase12 including persistent Paper ledger verification
+        run: pnpm --dir api-server run test:phase12
+
+      - name: API smoke
+        run: pnpm --dir api-server run test:smoke
+
+      - name: Final exact HEAD assertion
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test -z "$(git status --porcelain)"

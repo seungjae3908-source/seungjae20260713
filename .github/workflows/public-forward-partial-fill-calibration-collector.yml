@@ -1,0 +1,69 @@
+name: Public Forward Partial Fill Calibration Collector
+
+on:
+  pull_request:
+    paths:
+      - 'api-server/src/services/public-forward-partial-fill-calibration-collector.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-calibration-collector.service.test.ts'
+      - '.github/workflows/public-forward-partial-fill-calibration-collector.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck API server
+        run: pnpm --dir api-server run typecheck
+
+      - name: Bundle focused collector test
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/services/public-forward-partial-fill-calibration-collector.service.test.ts
+          --bundle --platform=node --format=cjs --target=node20
+          --outfile=/tmp/public-forward-partial-fill-calibration-collector.test.cjs
+
+      - name: Run focused collector test
+        run: node --test /tmp/public-forward-partial-fill-calibration-collector.test.cjs
+
+      - name: Verify fail-closed safety invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='api-server/src/services/public-forward-partial-fill-calibration-collector.service.ts'
+          grep -q "sourceType: 'PUBLIC_FORWARD_SIMULATION'" "$FILE"
+          grep -q "actualFillClaimAllowed: false" "$FILE"
+          grep -q "partialFillCostProduced: false" "$FILE"
+          grep -q "calibrationArtifactProduced: false" "$FILE"
+          grep -q "executionAuthority: 'NONE'" "$FILE"
+          grep -q "privateApiAllowed: false" "$FILE"
+          grep -q "liveTrading: false" "$FILE"
+          grep -q "orderSubmissionAllowed: false" "$FILE"
+          grep -q "naturalEntryCredit: 0" "$FILE"
+          grep -q "runtimeCostCredit: 0" "$FILE"
+          grep -q "fullCostReady: false" "$FILE"
+          grep -Fq '/api/v3/market/orderbook' "$FILE"
+          grep -Fq '/api/v3/market/fills' "$FILE"
+          for forbidden in 'place-order' 'cancel-order' 'withdrawal' 'withdraw' 'transfer-fund' 'private-account'; do
+            if grep -Fq "$forbidden" "$FILE"; then
+              echo "Forbidden private trading action literal found: $forbidden" >&2
+              exit 1
+            fi
+          done

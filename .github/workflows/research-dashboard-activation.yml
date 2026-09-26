@@ -1,0 +1,271 @@
+name: Research Dashboard Internal Activation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/research-dashboard-activation.yml
+      - research-dashboard/deploy/**
+      - scripts/agent_hub_rollover_v2.py
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+  statuses: read
+
+concurrency:
+  group: research-dashboard-internal-activation
+  cancel-in-progress: false
+
+jobs:
+  validate-workflow:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Validate internal-only activation contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          bash -n research-dashboard/deploy/activate-server.sh
+          systemd-analyze verify research-dashboard/deploy/research-dashboard.service
+          python3 scripts/agent_hub_rollover_v2.py self-test
+          grep -Fq '/opt/investment-research-dashboard/current/research-dashboard' research-dashboard/deploy/research-dashboard.service
+          grep -Fq 'Environment=RESEARCH_DASHBOARD_HOST=127.0.0.1' research-dashboard/deploy/research-dashboard.service
+          grep -Fq "'CADDY_MUTATION=0'" research-dashboard/deploy/activate-server.sh
+          grep -Fq "'DATABASE_MUTATION=0'" research-dashboard/deploy/activate-server.sh
+          grep -Fq "'PRODUCTION_PM2_MUTATION=0'" research-dashboard/deploy/activate-server.sh
+          grep -Fq "'LIVE_TRADING=false'" research-dashboard/deploy/activate-server.sh
+          grep -Fq "'PRIVATE_API=false'" research-dashboard/deploy/activate-server.sh
+          grep -Fq "'ORDER_AUTHORITY=false'" research-dashboard/deploy/activate-server.sh
+          grep -Fq 'python3 scripts/agent_hub_rollover_v2.py resolve' .github/workflows/research-dashboard-activation.yml
+          grep -Fq 'HUB_ISSUE_NUMBER' .github/workflows/research-dashboard-activation.yml
+          npm --prefix research-dashboard test
+
+  authorize:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      !github.event.issue.pull_request &&
+      github.event.comment.user.login == github.repository_owner &&
+      startsWith(github.event.comment.body, '/activate-research-dashboard ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    outputs:
+      target_sha: ${{ steps.gate.outputs.target_sha }}
+      hub_issue: ${{ steps.hub.outputs.active_issue }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Resolve canonical Central Hub
+        id: hub
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/agent_hub_rollover_v2.py resolve
+      - name: Authorize exact current main and Required 6/6
+        id: gate
+        uses: actions/github-script@v7
+        env:
+          HUB_ISSUE_NUMBER: ${{ steps.hub.outputs.active_issue }}
+        with:
+          script: |
+            const body = String(context.payload.comment?.body ?? '').trim();
+            const match = body.match(/^\/activate-research-dashboard ([0-9a-f]{40})$/i);
+            if (!match) {
+              core.setFailed('Expected /activate-research-dashboard <40-char-main-sha>');
+              return;
+            }
+            const canonicalHub = Number(process.env.HUB_ISSUE_NUMBER ?? 0);
+            const eventIssue = Number(context.payload.issue?.number ?? 0);
+            if (!Number.isInteger(canonicalHub) || canonicalHub <= 0 || eventIssue !== canonicalHub) {
+              core.setFailed(`Activation command must be posted on canonical Hub #${canonicalHub || 'UNKNOWN'}; got #${eventIssue || 'UNKNOWN'}.`);
+              return;
+            }
+            const targetSha = match[1].toLowerCase();
+            const main = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: 'main' });
+            if (String(main.data.commit.sha).toLowerCase() !== targetSha) {
+              core.setFailed(`Target is not exact current main: ${targetSha}`);
+              return;
+            }
+
+            const sourcePr = (await github.rest.pulls.get({ owner: context.repo.owner, repo: context.repo.repo, pull_number: 442 })).data;
+            if (!sourcePr.merged || !sourcePr.merge_commit_sha) {
+              core.setFailed('Research Dashboard source PR #442 is not merged.');
+              return;
+            }
+            const ancestry = await github.rest.repos.compareCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              base: String(sourcePr.merge_commit_sha),
+              head: targetSha,
+            });
+            if (!['ahead', 'identical'].includes(ancestry.data.status)) {
+              core.setFailed('Current main does not contain Research Dashboard source PR #442.');
+              return;
+            }
+
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner, repo: context.repo.repo, ref: targetSha, per_page: 100,
+            });
+            const latest = new Map();
+            for (const status of statuses.sort((a, b) => Number(b.id) - Number(a.id))) {
+              if (!latest.has(status.context)) latest.set(status.context, status);
+            }
+            const missing = required.filter((name) => latest.get(name)?.state !== 'success');
+            if (missing.length) {
+              core.setFailed(`Exact-main Required statuses are not 6/6 SUCCESS: ${missing.join(', ')}`);
+              return;
+            }
+            core.setOutput('target_sha', targetSha);
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.gate.outputs.target_sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Revalidate exact activation payload
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ steps.gate.outputs.target_sha }}"
+          bash -n research-dashboard/deploy/activate-server.sh
+          systemd-analyze verify research-dashboard/deploy/research-dashboard.service
+          npm --prefix research-dashboard test
+
+  activate:
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
+      HUB_ISSUE_NUMBER: ${{ needs.authorize.outputs.hub_issue }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+      - name: Read-only server preflight
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q' "$TARGET_SHA" "$REPOSITORY_URL")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- preflight" \
+            < research-dashboard/deploy/activate-server.sh
+      - name: Activate internal Research Dashboard only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q' "$TARGET_SHA" "$REPOSITORY_URL")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- activate" \
+            < research-dashboard/deploy/activate-server.sh
+      - name: Verify internal endpoint after activation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" \
+            "curl --fail --silent --show-error --max-time 5 http://127.0.0.1:18090/api/health | node -e 'let s=\"\";process.stdin.on(\"data\",c=>s+=c);process.stdin.on(\"end\",()=>{const v=JSON.parse(s);if(v.ok!==true||v.readOnly!==true||v.liveTrading!==false||v.privateApi!==false||v.orderAuthority!==false)process.exit(1)})'"
+      - name: Report success to canonical Central Hub
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueNumber = Number(process.env.HUB_ISSUE_NUMBER ?? 0);
+            if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+              core.setFailed('Canonical Hub issue number is unavailable.');
+              return;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: [
+                '[RESEARCH_DASHBOARD_INTERNAL_ACTIVATION]',
+                'status: success',
+                `target_sha: ${process.env.TARGET_SHA}`,
+                `canonical_hub: #${issueNumber}`,
+                'bind: 127.0.0.1:18090',
+                'external_route_enabled: false',
+                'caddy_mutation: 0',
+                'production_pm2_mutation: 0',
+                'database_mutation: 0',
+                'research_production_current_mutation: 0',
+                'live_trading: false',
+                'private_api: false',
+                'order_authority: false',
+                'next: authenticated TLS reverse-proxy exposure',
+              ].join('\n'),
+            });
+      - name: Report fail-closed to canonical Central Hub
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueNumber = Number(process.env.HUB_ISSUE_NUMBER ?? 0);
+            if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+              core.setFailed('Canonical Hub issue number is unavailable.');
+              return;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: [
+                '[RESEARCH_DASHBOARD_INTERNAL_ACTIVATION]',
+                'status: failed_closed',
+                `target_sha: ${process.env.TARGET_SHA}`,
+                `canonical_hub: #${issueNumber}`,
+                `workflow_run: ${context.runId}`,
+                'external_route_enabled: false',
+                'live_trading: false',
+                'private_api: false',
+                'order_authority: false',
+              ].join('\n'),
+            });

@@ -1,0 +1,127 @@
+name: Public Forward Liquidity Calibration Artifact
+
+on:
+  pull_request:
+    paths:
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-calibration-artifact.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-calibration-artifact.test.mjs'
+      - '.github/workflows/public-forward-liquidity-calibration-artifact.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-forward-liquidity-calibration-artifact-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Syntax check
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-calibration-artifact.mjs
+          node --check market-intelligence-sidecar/tests/public-forward-liquidity-calibration-artifact.test.mjs
+
+      - name: Parse workflow YAML
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e "require 'yaml'; abort('YAML_PARSE_FAILED') unless YAML.parse_file(ARGV.fetch(0))" \
+            .github/workflows/public-forward-liquidity-calibration-artifact.yml
+
+      - name: Run actionlint 1.7.12
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/actionlint_1.7.12_linux_amd64.tar.gz"
+          curl -fsSL \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            -o "$archive"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -version
+          "$RUNNER_TEMP/actionlint" .github/workflows/public-forward-liquidity-calibration-artifact.yml
+
+      - name: Run focused active Native Successor V3 OOS calibration tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test \
+            market-intelligence-sidecar/tests/public-forward-liquidity-calibration-artifact.test.mjs \
+            market-intelligence-sidecar/tests/public-forward-liquidity-oos-outcome-producer.test.mjs \
+            market-intelligence-sidecar/tests/public-forward-liquidity-calibration-oos-outcome-validator.test.mjs \
+            market-intelligence-sidecar/tests/public-forward-liquidity-v3-independence-binding.test.mjs \
+            market-intelligence-sidecar/tests/public-forward-liquidity-successor-oos-outcome-horizon.test.mjs
+
+      - name: Run preserved inactive schedule contract regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+          backup="$RUNNER_TEMP/successor-v3-activation-dedicated.json"
+          restore_activation() {
+            if [[ -f "$backup" ]]; then
+              mv "$backup" "$activation"
+            fi
+          }
+          trap restore_activation EXIT
+          if [[ -f "$activation" ]]; then
+            mv "$activation" "$backup"
+          fi
+          node --test market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs
+
+      - name: Verify fail-closed Native OOS safety boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import {
+            PUBLIC_FORWARD_LIQUIDITY_CALIBRATION_ARTIFACT_SAFETY,
+          } from './market-intelligence-sidecar/src/public-forward-liquidity-calibration-artifact.mjs';
+
+          const safety = PUBLIC_FORWARD_LIQUIDITY_CALIBRATION_ARTIFACT_SAFETY;
+          if (safety.sourceContractFamily !== 'SUCCESSOR_SCHEDULE_RELIABILITY_V3'
+            || safety.oosFitAllowed !== false
+            || safety.historicalOosAllowed !== false
+            || safety.replayAllowed !== false
+            || safety.backfillAllowed !== false
+            || safety.syntheticEconomicCreditAllowed !== false
+            || safety.rawNAsIndependentNAllowed !== false
+            || safety.ciAsEconomicCreditAllowed !== false
+            || safety.missingAsZeroAllowed !== false
+            || safety.fullCostReady !== false
+            || safety.netAlphaReady !== false
+            || safety.profitabilityProven !== false
+            || safety.currentValidatedChampion !== 'NONE'
+            || safety.executionAuthority !== 'NONE'
+            || safety.privateApiAllowed !== false
+            || safety.liveTrading !== false
+            || safety.orderSubmissionAllowed !== false) {
+            console.error('CALIBRATION_ARTIFACT_SAFETY_CONTRACT_INVALID');
+            process.exit(1);
+          }
+          NODE

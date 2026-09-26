@@ -1,0 +1,110 @@
+name: Trade Execution Gateway Validation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - trade-execution-gateway/**
+      - .github/tests/pr-exact-head-trade-execution-gateway.test.mjs
+      - .github/workflows/trade-execution-gateway-validation.yml
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact commit SHA to validate
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  statuses: write
+
+env:
+  TEG_STATUS_SHA: ${{ github.event.inputs.target_sha || github.event.pull_request.head.sha || github.sha }}
+  TEG_CHECKOUT_REF: ${{ github.event.inputs.target_sha || github.event.pull_request.head.sha || github.sha }}
+
+concurrency:
+  group: trade-execution-gateway-${{ github.event.pull_request.number || github.event.inputs.target_sha || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Exact-head standalone Paper execution validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Publish pending gateway validation status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = process.env.TEG_STATUS_SHA;
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha,
+              state: 'pending',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              description: `Trade execution gateway run ${context.runId}: running`,
+              context: 'trade-execution-gateway/verified',
+            });
+      - name: Checkout exact tested commit without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TEG_CHECKOUT_REF }}
+          persist-credentials: false
+      - name: Verify immutable exact-head identity
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ env.TEG_STATUS_SHA }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          actual_branch="$(git symbolic-ref --quiet --short HEAD || true)"
+          if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error title=Invalid exact SHA::$EXPECTED_SHA"
+            exit 1
+          fi
+          if [ -n "$actual_branch" ]; then
+            echo "::error title=Unexpected branch::checkout must remain detached"
+            exit 1
+          fi
+          test "${actual_sha,,}" = "${EXPECTED_SHA,,}"
+          echo "tested_sha=${actual_sha,,}"
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run deterministic standalone gateway suite
+        env:
+          TEG_PUBLIC_MARKET_DATA_ENABLED: "false"
+        run: npm --prefix trade-execution-gateway test
+      - name: Publish gateway validation result
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = process.env.TEG_STATUS_SHA;
+            const contextName = 'trade-execution-gateway/verified';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: sha,
+              per_page: 100,
+            });
+            const latest = statuses
+              .filter((status) => status.context === contextName)
+              .sort((a, b) => b.id - a.id)[0];
+            if (latest?.target_url !== runUrl) {
+              core.notice(`A newer run owns ${contextName} for ${sha}; skipping stale status update.`);
+              return;
+            }
+            const state = '${{ job.status }}' === 'success' ? 'success' : 'failure';
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha,
+              state,
+              target_url: runUrl,
+              description: state === 'success' ? 'Standalone Paper execution suite passed' : 'Standalone Paper execution suite failed',
+              context: contextName,
+            });

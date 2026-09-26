@@ -1,0 +1,55 @@
+name: Public Forward Liquidity Drop Diagnostics
+
+on:
+  pull_request:
+    paths:
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-drop-diagnostics.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-drop-diagnostics.test.mjs'
+      - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-drop-diagnostics.mjs'
+      - '.github/workflows/public-forward-liquidity-drop-diagnostics.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Syntax check
+        run: |
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-drop-diagnostics.mjs
+          node --check market-intelligence-sidecar/tests/public-forward-liquidity-drop-diagnostics.test.mjs
+          node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-drop-diagnostics.mjs
+
+      - name: Run drop diagnostics tests
+        run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-drop-diagnostics.test.mjs
+
+      - name: Verify diagnostic-only safety contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='market-intelligence-sidecar/src/public-forward-liquidity-drop-diagnostics.mjs'
+          grep -Fq 'diagnosticOnly: true' "$FILE"
+          grep -Fq 'tuningAuthorized: false' "$FILE"
+          grep -Fq 'thresholdChangeAuthorized: false' "$FILE"
+          grep -Fq 'eventWindowChangeAuthorized: false' "$FILE"
+          grep -Fq 'sampleCreditDelta: 0' "$FILE"
+          grep -Fq 'fullCostCredit: false' "$FILE"
+          grep -Fq 'FULL_COST_READY: false' "$FILE"
+          grep -Fq 'naturalEntryCredit: 0' "$FILE"
+          grep -Fq 'settlementCredit: 0' "$FILE"
+          grep -Fq "executionAuthority: 'NONE'" "$FILE"
+          grep -Fq 'privateTradingApiAllowed: false' "$FILE"
+          grep -Fq 'liveTradingAllowed: false' "$FILE"
+          grep -Fq 'realOrderAllowed: false' "$FILE"
+          grep -Fq 'thresholdOrWindowRelaxationAuthorized: false' "$FILE"
+          grep -Fq "nextActionType: 'INVESTIGATE_SOURCE_EVIDENCE_ONLY'" "$FILE"

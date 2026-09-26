@@ -1,0 +1,453 @@
+name: Paper Forward One-Shot Flat Close
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/paper-forward-one-shot-close.yml
+      - ops/run-paper-forward-one-shot-close.mjs
+      - market-prediction-lab/tests/paper-forward-one-shot-close-contract-v1.test.js
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  statuses: read
+
+concurrency:
+  group: paper-forward-one-shot-flat-close-v1
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Verify one-shot close source and workflow contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check ops/run-paper-forward-one-shot-close.mjs
+          node --check market-prediction-lab/tests/paper-forward-one-shot-close-contract-v1.test.js
+          node --test market-prediction-lab/tests/paper-forward-one-shot-close-contract-v1.test.js
+
+  gate:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-paper-forward-one-shot-close ')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      target_sha: ${{ steps.command.outputs.target_sha }}
+      control_sha: ${{ steps.identity.outputs.control_sha }}
+      production_run_id: ${{ steps.production.outputs.run_id }}
+      binding_run_id: ${{ steps.binding.outputs.run_id }}
+    steps:
+      - name: Parse exact owner one-shot command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/run-paper-forward-one-shot-close ([0-9a-f]{40})$/.exec(body);
+          if (!match) {
+            console.error('Exact command required: /run-paper-forward-one-shot-close <40-character-deployed-paper-runtime-sha>');
+            process.exit(1);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `target_sha=${match[1]}\n`);
+          NODE
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Pin exact current control main and require target runtime ancestry
+        id: identity
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main "$TARGET_SHA"
+          CONTROL_SHA="$(git rev-parse origin/main^{commit})"
+          CHECKOUT_SHA="$(git rev-parse HEAD^{commit})"
+          [[ "$CONTROL_SHA" == "$CHECKOUT_SHA" ]] || {
+            echo "One-shot controller checkout is stale: checkout=$CHECKOUT_SHA current-main=$CONTROL_SHA" >&2
+            exit 1
+          }
+          git cat-file -e "$TARGET_SHA^{commit}"
+          git merge-base --is-ancestor "$TARGET_SHA" "$CONTROL_SHA" || {
+            echo "Target Paper runtime is not contained in current main: target=$TARGET_SHA current-main=$CONTROL_SHA" >&2
+            exit 1
+          }
+          printf 'control_sha=%s\n' "$CONTROL_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Require six successful statuses with exact Application CI provenance for control and target
+        uses: actions/github-script@v7
+        env:
+          CONTROL_SHA: ${{ steps.identity.outputs.control_sha }}
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            async function verify(sha, label) {
+              const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: sha,
+                per_page: 100,
+              });
+              const latest = new Map();
+              for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+              const selected = required.map((name) => latest.get(name));
+              if (selected.some((status) => status?.state !== 'success')) {
+                core.setFailed(`${label} does not have Required CI 6/6 SUCCESS.`);
+                return false;
+              }
+              const runIds = new Set(selected.map((status) => /\/actions\/runs\/(\d+)/.exec(String(status?.target_url ?? ''))?.[1] ?? null));
+              if (runIds.size !== 1 || runIds.has(null)) {
+                core.setFailed(`${label} Required statuses do not share one Application CI provenance run.`);
+                return false;
+              }
+              const runId = Number([...runIds][0]);
+              const response = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: runId,
+              });
+              const run = response.data;
+              if (run.head_sha !== sha || run.status !== 'completed' || run.conclusion !== 'success') {
+                core.setFailed(`${label} Application CI provenance is not exact and successful.`);
+                return false;
+              }
+              core.info(`${label}: Required CI 6/6 from Application CI Run ${runId}.`);
+              return true;
+            }
+            if (!(await verify(process.env.CONTROL_SHA, 'control-main'))) return;
+            await verify(process.env.TARGET_SHA, 'deployed-paper-runtime');
+
+      - name: Require successful official Production Deploy for target runtime
+        id: production
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: target,
+              branch: 'main',
+              event: 'workflow_dispatch',
+              status: 'completed',
+              per_page: 100,
+            });
+            const accepted = runs
+              .filter((run) => run.name === 'Production Deploy'
+                && run.path === '.github/workflows/production-deploy.yml'
+                && run.head_sha === target
+                && run.status === 'completed'
+                && run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))[0];
+            if (!accepted) {
+              core.setFailed(`No successful official Production Deploy exists for ${target}.`);
+              return;
+            }
+            core.setOutput('run_id', String(accepted.id));
+            core.info(`Production runtime authority accepted from Run ${accepted.id}.`);
+
+      - name: Require successful publisher-binding preparation artifact for target runtime
+        id: binding
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const name = `paper-forward-publisher-binding-${target}`;
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name,
+              per_page: 100,
+            });
+            const candidates = artifacts
+              .filter((artifact) => !artifact.expired && artifact.workflow_run?.head_sha === target)
+              .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
+            for (const artifact of candidates) {
+              const response = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: artifact.workflow_run.id,
+              });
+              const run = response.data;
+              if (run.name === 'Paper Forward Publisher Binding Preparation'
+                && run.path === '.github/workflows/paper-forward-publisher-binding-preparation.yml'
+                && run.event === 'issue_comment'
+                && run.head_sha === target
+                && run.status === 'completed'
+                && run.conclusion === 'success') {
+                core.setOutput('run_id', String(run.id));
+                core.info(`Publisher binding authority accepted from Run ${run.id}.`);
+                return;
+              }
+            }
+            core.setFailed(`No successful unexpired publisher-binding artifact exists for ${target}.`);
+
+      - name: Record non-mutating one-shot gate result
+        shell: bash
+        run: |
+          {
+            echo '## Paper Forward one-shot close gate passed'
+            echo
+            echo "- Control main SHA: \`${{ steps.identity.outputs.control_sha }}\`"
+            echo "- Deployed Paper runtime SHA: \`${{ steps.command.outputs.target_sha }}\`"
+            echo "- Production Deploy Run: \`${{ steps.production.outputs.run_id }}\`"
+            echo "- Publisher Binding Run: \`${{ steps.binding.outputs.run_id }}\`"
+            echo '- Paper state mutation at this gate: `0`'
+            echo '- Protected Production environment bypass: `0`'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  execute:
+    if: github.event_name == 'issue_comment'
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: production
+    env:
+      TARGET_SHA: ${{ needs.gate.outputs.target_sha }}
+      CONTROL_SHA: ${{ needs.gate.outputs.control_sha }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      PUBLISHER_ACCOUNT_ID_SHA256: ${{ secrets.PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256 }}
+      PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+      PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+      EVIDENCE_DIR: ${{ github.workspace }}/paper-forward-one-shot-close-evidence
+    steps:
+      - name: Revalidate controller main after protected Production approval
+        uses: actions/github-script@v7
+        env:
+          CONTROL_SHA: ${{ env.CONTROL_SHA }}
+        with:
+          script: |
+            const response = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            if (response.data.commit.sha !== process.env.CONTROL_SHA) {
+              core.setFailed(`One-shot controller became stale during Production approval: control=${process.env.CONTROL_SHA} current-main=${response.data.commit.sha}`);
+            }
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CONTROL_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate protected execution secrets without emitting values
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          [[ "$PUBLISHER_ACCOUNT_ID_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test -n "$PRODUCTION_QA_LOGIN"
+          test -n "$PRODUCTION_QA_PASSWORD"
+
+      - name: Configure protected Production SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p ~/.ssh "$EVIDENCE_DIR"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Run exactly one authenticated Paper-only flat recovery close
+        id: close
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          local_env="$(mktemp)"
+          remote_env="/tmp/paper-one-shot-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.env"
+          evidence="$EVIDENCE_DIR/one-shot-close.json"
+          remote=(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST")
+          cleanup() {
+            rm -f "$local_env"
+            "${remote[@]}" "rm -f -- $(printf '%q' "$remote_env")" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          {
+            printf 'export TARGET_SHA=%q\n' "$TARGET_SHA"
+            printf 'export PUBLISHER_ACCOUNT_ID_SHA256=%q\n' "$PUBLISHER_ACCOUNT_ID_SHA256"
+            printf 'export PRODUCTION_QA_LOGIN=%q\n' "$PRODUCTION_QA_LOGIN"
+            printf 'export PRODUCTION_QA_PASSWORD=%q\n' "$PRODUCTION_QA_PASSWORD"
+            printf 'export PAPER_FORWARD_STATE_ROOT=%q\n' '/opt/stock-app-data/paper-forward-v1'
+            printf 'export LIVE_DIR=%q\n' '/opt/stock-app'
+            printf 'export PM2_NAME=%q\n' 'stock-app'
+            printf 'export LIVE_PORT=%q\n' '8080'
+          } > "$local_env"
+          chmod 600 "$local_env"
+          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$local_env" "$SSH_USER@$SSH_HOST:$remote_env"
+          "${remote[@]}" "chmod 600 -- $(printf '%q' "$remote_env")"
+          remote_command="$(printf 'set -Eeuo pipefail; source %q; PAPER_ONE_SHOT_EXECUTE=1 node --input-type=module -' "$remote_env")"
+          "${remote[@]}" "$remote_command" < ops/run-paper-forward-one-shot-close.mjs > "$evidence"
+          test -s "$evidence"
+
+      - name: Verify sanitized closed-and-published evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          evidence="$EVIDENCE_DIR/one-shot-close.json"
+          node --input-type=module - "$evidence" "$TARGET_SHA" <<'NODE'
+          import fs from 'node:fs';
+          const [path, targetSha] = process.argv.slice(2);
+          const value = JSON.parse(fs.readFileSync(path, 'utf8'));
+          const valid = value?.schemaVersion === 'paper-forward-one-shot-close-v1'
+            && value?.status === 'CLOSED_AND_PUBLISHED'
+            && value?.targetSha === targetSha
+            && value?.productionAppShaUnchanged === true
+            && value?.publisherAccountBound === true
+            && value?.openPositionCountBefore === 1
+            && value?.openPositionCountAfter === 0
+            && value?.pendingOrderCountBefore === 0
+            && value?.pendingOrderCountAfter === 0
+            && value?.paperStateTransport === 'PUBLISHED'
+            && value?.manualClose === true
+            && value?.finalFlat === true
+            && value?.usedMarginZero === true
+            && value?.unrealizedPnlZero === true
+            && value?.scheduleActiveBefore === false
+            && value?.scheduleActiveAfter === false
+            && value?.scheduleMutation === 0
+            && value?.productionAppMutation === 0
+            && value?.productionDbMutation === 0
+            && value?.paperAccountingMutation === 1
+            && value?.realFinancialMutation === 0
+            && value?.privateBrokerExchangeApi === 0
+            && value?.realOrder === 0
+            && value?.realCancel === 0
+            && value?.realAmend === 0
+            && value?.realTransfer === 0
+            && value?.realWithdrawal === 0
+            && value?.liveTrading === false
+            && value?.executionAuthority === 'NONE'
+            && value?.naturalSampleCredit === 0
+            && value?.naturalSettlementCredit === 0
+            && value?.sensitiveValuesEmitted === false;
+          if (!valid) process.exit(1);
+          NODE
+          if grep -Eiq '(authorization|bearer|password|secret|token|publisherAccountIdSha256|accountId|positionId|orderId|stateDigestSha256|[0-9a-f]{64})' "$evidence"; then
+            echo 'Sensitive or identity-bearing material detected in one-shot evidence.' >&2
+            exit 1
+          fi
+
+      - name: Upload sanitized one-shot evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-forward-one-shot-close-${{ env.TARGET_SHA }}
+          path: paper-forward-one-shot-close-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report one-shot close result to Release Control
+        uses: actions/github-script@v7
+        env:
+          PRODUCTION_RUN_ID: ${{ needs.gate.outputs.production_run_id }}
+          BINDING_RUN_ID: ${{ needs.gate.outputs.binding_run_id }}
+        with:
+          script: |
+            const lines = [
+              '[PAPER_FORWARD_ONE_SHOT_CLOSE_COMPLETED]',
+              `target_runtime_sha: ${process.env.TARGET_SHA}`,
+              `control_main_sha: ${process.env.CONTROL_SHA}`,
+              `production_deploy_run_id: ${process.env.PRODUCTION_RUN_ID}`,
+              `publisher_binding_run_id: ${process.env.BINDING_RUN_ID}`,
+              `one_shot_run_id: ${context.runId}`,
+              'status: CLOSED_AND_PUBLISHED',
+              'open_position_count_before: 1',
+              'open_position_count_after: 0',
+              'pending_order_count_before: 0',
+              'pending_order_count_after: 0',
+              'paper_state_transport: PUBLISHED',
+              'final_flat: true',
+              'schedule_mutation: 0',
+              'production_app_mutation: 0',
+              'production_db_mutation: 0',
+              'paper_accounting_mutation: 1',
+              'real_financial_mutation: 0',
+              'private_broker_exchange_api: 0',
+              'real_order_cancel_amend_transfer_withdrawal: 0',
+              'live_trading: false',
+              'execution_authority: NONE',
+              'natural_sample_credit: 0',
+              'natural_settlement_credit: 0',
+            ];
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: lines.join('\n'),
+            });
+
+      - name: Summarize safety boundary
+        if: success()
+        shell: bash
+        run: |
+          {
+            echo '## Paper one-shot flat recovery succeeded'
+            echo
+            echo "- Target runtime SHA: \`$TARGET_SHA\`"
+            echo '- authenticated publisher account: `digest-match verified; identity not emitted`'
+            echo '- Paper close: `100% manual_close`'
+            echo '- persisted transport: `PUBLISHED`'
+            echo '- final Paper state: `flat`'
+            echo '- real order/private exchange API: `0`'
+            echo '- schedule/cron mutation: `0`'
+            echo '- natural sample credit: `0`'
+            echo '- natural settlement credit: `0`'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,507 @@
+name: Public Forward Partial Fill Capture Dataset Ingest Validation
+
+on:
+  pull_request:
+    paths:
+      - 'api-server/src/services/public-forward-partial-fill-calibration-capture-ingest.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-calibration-capture-ingest.service.test.ts'
+      - 'api-server/src/scripts/ingest-public-forward-partial-fill-calibration-capture.ts'
+      - '.github/workflows/public-forward-partial-fill-calibration-capture-ingest.yml'
+  workflow_dispatch:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: public-forward-partial-fill-capture-ingest-${{ github.event_name }}
+  cancel-in-progress: false
+
+env:
+  FROZEN_REPOSITORY: seungjae3908-source/seungjae20260713
+  FROZEN_CAPTURE_RUN_ID: '33356043075'
+  FROZEN_CAPTURE_RUN_ATTEMPT: '1'
+  FROZEN_CAPTURE_SHA: '17fdbc8c868a21d7386752d136f7c698f0727694'
+  FROZEN_RAW_ARTIFACT_ID: '9745163020'
+  FROZEN_RAW_ARTIFACT_NAME: public-forward-partial-fill-capture-33356043075-1
+  FROZEN_RAW_ARTIFACT_DIGEST: '91c38558b7948b2de896837cbaab922c0523d26ff737cf62163811a239474975'
+  FROZEN_RECEIPT_ARTIFACT_ID: '9745163246'
+  FROZEN_RECEIPT_ARTIFACT_NAME: public-forward-partial-fill-capture-receipt-33356043075-1
+  FROZEN_RECEIPT_ARTIFACT_DIGEST: '483d5d235e1bfc0bc3e5866c783e28203d4f4829d0d2a8aacc344dfa358d2503'
+  FROZEN_RESEARCH_RELEASE_SHA: '1ec73e5f954d8cdace09e696bbed484b5c418c48'
+  CANONICAL_RESEARCH_ROOT: /opt/investment-research/current
+  CANONICAL_STATE_ROOT: /var/lib/investment-research-production
+
+jobs:
+  verify:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck API server
+        run: pnpm --dir api-server run typecheck
+
+      - name: Bundle focused ingest tests
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/services/public-forward-partial-fill-calibration-capture-ingest.service.test.ts
+          --bundle --platform=node --format=cjs --target=node20
+          --outfile=/tmp/public-forward-partial-fill-calibration-capture-ingest.test.cjs
+
+      - name: Run focused ingest tests
+        run: node --test /tmp/public-forward-partial-fill-calibration-capture-ingest.test.cjs
+
+      - name: Bundle CLI contract
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/scripts/ingest-public-forward-partial-fill-calibration-capture.ts
+          --bundle --platform=node --format=cjs --target=node20
+          --outfile=/tmp/ingest-public-forward-partial-fill-calibration-capture.cjs
+
+      - name: Verify CLI is inert without explicit runtime inputs
+        run: node /tmp/ingest-public-forward-partial-fill-calibration-capture.cjs --help
+
+      - name: Verify fail-closed ingest invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVICE='api-server/src/services/public-forward-partial-fill-calibration-capture-ingest.service.ts'
+          CLI='api-server/src/scripts/ingest-public-forward-partial-fill-calibration-capture.ts'
+          WORKFLOW='.github/workflows/public-forward-partial-fill-calibration-capture-ingest.yml'
+          grep -Fq "capture.captureStatus !== 'PRESENT'" "$SERVICE"
+          grep -Fq "observation.sampleClass !== 'FORWARD_NATURAL_SAMPLE'" "$SERVICE"
+          grep -Fq 'persistPublicForwardPartialFillCalibrationDataset' "$SERVICE"
+          grep -Fq 'ARTIFACT_ID_EXPECTATION_MISMATCH' "$SERVICE"
+          grep -Fq 'ARTIFACT_DIGEST_EXPECTATION_MISMATCH' "$SERVICE"
+          grep -Fq 'STATE_ROOT_OVERLAPS_PROTECTED_APPLICATION_STORAGE' "$SERVICE"
+          grep -Fq 'STATE_ROOT_OVERLAPS_PROTECTED_RESEARCH_CHECKOUT' "$SERVICE"
+          grep -Fq "'/opt/stock-app-data'" "$SERVICE"
+          grep -Fq "'/srv/stock-app'" "$SERVICE"
+          grep -Fq "'/var/lib/stock-app'" "$SERVICE"
+          grep -Fq 'canonicalDatasetCreditApplied: persisted.insertedObservationCount === 1' "$SERVICE"
+          grep -Fq 'duplicateCreditEvaluated: true' "$SERVICE"
+          grep -Fq 'calibrationArtifactProduced: false' "$SERVICE"
+          grep -Fq 'partialFillCostPresent: false' "$SERVICE"
+          grep -Fq 'fullCostReady: false' "$SERVICE"
+          grep -Fq "executionAuthority: 'NONE'" "$SERVICE"
+          grep -Fq -- '--research-repo-root' "$CLI"
+          grep -Fq -- '--expected-artifact-id' "$CLI"
+          grep -Fq -- '--expected-artifact-digest' "$CLI"
+          grep -Fq 'if (!isAbsolute(stateRoot))' "$CLI"
+          grep -Fq 'if (!isAbsolute(researchRepoRoot))' "$CLI"
+          if grep -Eq 'fetch\(|axios|PRIVATE_API|ORDER_SUBMIT|orderSubmitted: true|LIVE_TRADING=true' "$CLI"; then
+            echo 'Ingest CLI contains forbidden network/private/live execution behavior.' >&2
+            exit 1
+          fi
+          grep -Fq "github.event.issue.number == 838" "$WORKFLOW"
+          grep -Fq "github.event.comment.body == '/ingest-public-forward-partial-fill-capture 1ec73e5f954d8cdace09e696bbed484b5c418c48'" "$WORKFLOW"
+          grep -Fq "FROZEN_CAPTURE_RUN_ID: '33356043075'" "$WORKFLOW"
+          grep -Fq "FROZEN_CAPTURE_SHA: '17fdbc8c868a21d7386752d136f7c698f0727694'" "$WORKFLOW"
+          grep -Fq "FROZEN_RAW_ARTIFACT_ID: '9745163020'" "$WORKFLOW"
+          grep -Fq "FROZEN_RAW_ARTIFACT_DIGEST: '91c38558b7948b2de896837cbaab922c0523d26ff737cf62163811a239474975'" "$WORKFLOW"
+          grep -Fq "FROZEN_RECEIPT_ARTIFACT_ID: '9745163246'" "$WORKFLOW"
+          grep -Fq "FROZEN_RECEIPT_ARTIFACT_DIGEST: '483d5d235e1bfc0bc3e5866c783e28203d4f4829d0d2a8aacc344dfa358d2503'" "$WORKFLOW"
+          grep -Fq "FROZEN_RESEARCH_RELEASE_SHA: '1ec73e5f954d8cdace09e696bbed484b5c418c48'" "$WORKFLOW"
+          grep -Fq 'result.insertedObservationCount !== 1' "$WORKFLOW"
+          grep -Fq 'result.duplicateObservationCount !== 0' "$WORKFLOW"
+          grep -Fq 'dataset_write: UNKNOWN_FAIL_CLOSED' "$WORKFLOW"
+
+  authorize:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 838 &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.body == '/ingest-public-forward-partial-fill-capture 1ec73e5f954d8cdace09e696bbed484b5c418c48'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      command_comment_id: ${{ steps.gate.outputs.command_comment_id }}
+    steps:
+      - name: Authorize exact frozen capture and reject replay
+        id: gate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const exactCommand = `/ingest-public-forward-partial-fill-capture ${process.env.FROZEN_RESEARCH_RELEASE_SHA}`;
+            const body = String(context.payload.comment?.body ?? '').trim();
+            if (body !== exactCommand) {
+              core.setFailed('Exact canonical ingest command mismatch.');
+              return;
+            }
+            const main = (await github.rest.repos.getBranch({ owner, repo, branch: 'main' })).data;
+            if (String(main.commit.sha).toLowerCase() !== String(context.sha).toLowerCase()) {
+              core.setFailed(`Issue-comment workflow is not executing from exact current main: context=${context.sha} main=${main.commit.sha}`);
+              return;
+            }
+            const captureRun = (await github.rest.actions.getWorkflowRun({
+              owner, repo, run_id: Number(process.env.FROZEN_CAPTURE_RUN_ID),
+            })).data;
+            if (
+              captureRun.status !== 'completed' ||
+              captureRun.conclusion !== 'success' ||
+              captureRun.event !== 'workflow_dispatch' ||
+              String(captureRun.head_sha).toLowerCase() !== process.env.FROZEN_CAPTURE_SHA
+            ) {
+              core.setFailed('Frozen genuine capture run identity is no longer valid.');
+              return;
+            }
+            const assertArtifact = async ({ id, name, digest }) => {
+              const artifact = (await github.rest.actions.getArtifact({
+                owner, repo, artifact_id: Number(id),
+              })).data;
+              const normalizedDigest = String(artifact.digest ?? '').replace(/^sha256:/i, '').toLowerCase();
+              if (
+                String(artifact.id) !== String(id) ||
+                artifact.name !== name ||
+                artifact.expired ||
+                normalizedDigest !== digest
+              ) {
+                core.setFailed(`Frozen artifact validation failed for ${id}.`);
+                return false;
+              }
+              return true;
+            };
+            if (!await assertArtifact({
+              id: process.env.FROZEN_RAW_ARTIFACT_ID,
+              name: process.env.FROZEN_RAW_ARTIFACT_NAME,
+              digest: process.env.FROZEN_RAW_ARTIFACT_DIGEST,
+            })) return;
+            if (!await assertArtifact({
+              id: process.env.FROZEN_RECEIPT_ARTIFACT_ID,
+              name: process.env.FROZEN_RECEIPT_ARTIFACT_NAME,
+              digest: process.env.FROZEN_RECEIPT_ARTIFACT_DIGEST,
+            })) return;
+            const priorRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner,
+              repo,
+              workflow_id: 'public-forward-partial-fill-calibration-capture-ingest.yml',
+              event: 'issue_comment',
+              per_page: 100,
+            });
+            const priorSuccess = priorRuns.find((run) =>
+              Number(run.id) !== Number(context.runId) && run.conclusion === 'success'
+            );
+            if (priorSuccess) {
+              core.setFailed(`Canonical ingest replay blocked; prior successful issue-comment run exists: ${priorSuccess.id}`);
+              return;
+            }
+            core.setOutput('command_comment_id', String(context.payload.comment.id));
+
+  ingest:
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      COMMAND_COMMENT_ID: ${{ needs.authorize.outputs.command_comment_id }}
+    steps:
+      - name: Checkout exact activated Research release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.FROZEN_RESEARCH_RELEASE_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify exact release checkout and #808 CLI source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$FROZEN_RESEARCH_RELEASE_SHA"
+          test -f api-server/src/scripts/ingest-public-forward-partial-fill-calibration-capture.ts
+          test -f api-server/src/services/public-forward-partial-fill-calibration-capture-ingest.service.ts
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Bundle exact frozen #808 ingest CLI
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server exec esbuild \
+            src/scripts/ingest-public-forward-partial-fill-calibration-capture.ts \
+            --bundle --platform=node --format=cjs --target=node20 \
+            --outfile="$RUNNER_TEMP/canonical-partial-fill-ingest.cjs"
+          node "$RUNNER_TEMP/canonical-partial-fill-ingest.cjs" --help >/dev/null
+
+      - name: Download immutable raw capture artifact
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ env.FROZEN_RAW_ARTIFACT_ID }}
+          path: ${{ runner.temp }}/capture-raw
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FROZEN_CAPTURE_RUN_ID }}
+
+      - name: Download immutable finalized artifact receipt
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ env.FROZEN_RECEIPT_ARTIFACT_ID }}
+          path: ${{ runner.temp }}/capture-artifact-receipt
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FROZEN_CAPTURE_RUN_ID }}
+
+      - name: Validate downloaded frozen receipt payloads before SSH
+        id: receipts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(find "$RUNNER_TEMP/capture-raw" -type l | wc -l)" -eq 0
+          test "$(find "$RUNNER_TEMP/capture-artifact-receipt" -type l | wc -l)" -eq 0
+          test "$(find "$RUNNER_TEMP/capture-raw" -type f | wc -l)" -eq 1
+          test "$(find "$RUNNER_TEMP/capture-artifact-receipt" -type f | wc -l)" -eq 1
+          RAW_FILE="$(find "$RUNNER_TEMP/capture-raw" -type f -name 'capture-receipt.json' -print -quit)"
+          RECEIPT_FILE="$(find "$RUNNER_TEMP/capture-artifact-receipt" -type f -name 'artifact-receipt.json' -print -quit)"
+          test -n "$RAW_FILE"
+          test -n "$RECEIPT_FILE"
+          node - "$RAW_FILE" "$RECEIPT_FILE" <<'NODE'
+          const fs = require('node:fs');
+          const [rawPath, receiptPath] = process.argv.slice(2);
+          const raw = JSON.parse(fs.readFileSync(rawPath, 'utf8'));
+          const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+          const normalizeDigest = (value) => String(value ?? '').replace(/^sha256:/i, '').toLowerCase();
+          if (raw.captureStatus !== 'PRESENT') throw new Error('CAPTURE_NOT_PRESENT');
+          if (!Array.isArray(raw.blockers) || raw.blockers.length !== 0) throw new Error('CAPTURE_BLOCKERS_PRESENT');
+          if (String(raw.runId) !== process.env.FROZEN_CAPTURE_RUN_ID) throw new Error('CAPTURE_RUN_ID_MISMATCH');
+          if (String(raw.runAttempt) !== process.env.FROZEN_CAPTURE_RUN_ATTEMPT) throw new Error('CAPTURE_RUN_ATTEMPT_MISMATCH');
+          if (String(raw.exactMainSha).toLowerCase() !== process.env.FROZEN_CAPTURE_SHA) throw new Error('CAPTURE_SHA_MISMATCH');
+          if (String(raw.collectorCodeSha).toLowerCase() !== process.env.FROZEN_CAPTURE_SHA) throw new Error('COLLECTOR_SHA_MISMATCH');
+          if (raw.repository !== process.env.FROZEN_REPOSITORY) throw new Error('CAPTURE_REPOSITORY_MISMATCH');
+          if (raw.realOrders !== 0 || raw.privateApiUsed !== false || raw.liveTrading !== false || raw.orderSubmitted !== false) throw new Error('CAPTURE_SAFETY_BOUNDARY_INVALID');
+          if (raw.observation?.sampleClass !== 'FORWARD_NATURAL_SAMPLE') throw new Error('CAPTURE_SAMPLE_CLASS_INVALID');
+          if (receipt.captureStatus !== 'PRESENT') throw new Error('ARTIFACT_CAPTURE_NOT_PRESENT');
+          if (String(receipt.exactMainSha).toLowerCase() !== process.env.FROZEN_CAPTURE_SHA) throw new Error('ARTIFACT_SHA_MISMATCH');
+          if (String(receipt.artifactId) !== process.env.FROZEN_RAW_ARTIFACT_ID) throw new Error('ARTIFACT_ID_MISMATCH');
+          if (normalizeDigest(receipt.artifactDigest) !== process.env.FROZEN_RAW_ARTIFACT_DIGEST) throw new Error('ARTIFACT_DIGEST_MISMATCH');
+          if (receipt.artifactName !== process.env.FROZEN_RAW_ARTIFACT_NAME) throw new Error('ARTIFACT_NAME_MISMATCH');
+          NODE
+          printf 'raw_file=%s\n' "$RAW_FILE" >> "$GITHUB_OUTPUT"
+          printf 'receipt_file=%s\n' "$RECEIPT_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Configure SSH for canonical Research host
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Read-only canonical host ingest preflight
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" \
+            "FROZEN_RESEARCH_RELEASE_SHA='$FROZEN_RESEARCH_RELEASE_SHA' CANONICAL_RESEARCH_ROOT='$CANONICAL_RESEARCH_ROOT' CANONICAL_STATE_ROOT='$CANONICAL_STATE_ROOT' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          if [[ "$(id -u)" -eq 0 ]]; then SUDO=(); else SUDO=(sudo -n); fi
+          "${SUDO[@]}" test -d "$CANONICAL_STATE_ROOT"
+          test -d "$CANONICAL_RESEARCH_ROOT"
+          test -f "$CANONICAL_RESEARCH_ROOT/api-server/src/scripts/ingest-public-forward-partial-fill-calibration-capture.ts"
+          CURRENT_SHA="$(git -C "$CANONICAL_RESEARCH_ROOT" rev-parse HEAD)"
+          test "$CURRENT_SHA" = "$FROZEN_RESEARCH_RELEASE_SHA"
+          test "$(readlink -f "$CANONICAL_RESEARCH_ROOT")" = "/opt/investment-research/releases/$FROZEN_RESEARCH_RELEASE_SHA"
+          "${SUDO[@]}" grep -Fxq 'LIVE_TRADING=false' /etc/investment-research/research-production.env
+          "${SUDO[@]}" grep -Fxq 'PRIVATE_API_ENABLED=false' /etc/investment-research/research-production.env
+          "${SUDO[@]}" grep -Fxq 'ORDER_AUTHORITY=false' /etc/investment-research/research-production.env
+          if [[ "$(id -u)" -eq 0 ]]; then runuser -u investment-research -- test -w "$CANONICAL_STATE_ROOT"; else sudo -n -u investment-research test -w "$CANONICAL_STATE_ROOT"; fi
+          APP_SHA="$("${SUDO[@]}" cat /opt/stock-app/.deploy/current-sha | tr -d '[:space:]')"
+          printf '%s\n' "CANONICAL_INGEST_PREFLIGHT=PASS" "CURRENT_RESEARCH_SHA=$CURRENT_SHA" "CANONICAL_STATE_ROOT=$CANONICAL_STATE_ROOT" "APP_SHA=$APP_SHA" "LIVE_TRADING=false" "PRIVATE_API=false" "ORDER_AUTHORITY=false"
+          REMOTE
+
+      - name: Stage exact bundle and frozen receipts on canonical host
+        id: stage
+        shell: bash
+        env:
+          RAW_FILE: ${{ steps.receipts.outputs.raw_file }}
+          RECEIPT_FILE: ${{ steps.receipts.outputs.receipt_file }}
+        run: |
+          set -Eeuo pipefail
+          REMOTE_TMP="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" 'mktemp -d /tmp/public-forward-partial-fill-ingest.XXXXXX')"
+          test -n "$REMOTE_TMP"
+          printf 'remote_tmp=%s\n' "$REMOTE_TMP" >> "$GITHUB_OUTPUT"
+          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes \
+            "$RUNNER_TEMP/canonical-partial-fill-ingest.cjs" "$RAW_FILE" "$RECEIPT_FILE" "$SSH_USER@$SSH_HOST:$REMOTE_TMP/"
+          BUNDLE_SHA="$(sha256sum "$RUNNER_TEMP/canonical-partial-fill-ingest.cjs" | awk '{print $1}')"
+          RAW_SHA="$(sha256sum "$RAW_FILE" | awk '{print $1}')"
+          RECEIPT_SHA="$(sha256sum "$RECEIPT_FILE" | awk '{print $1}')"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" \
+            "REMOTE_TMP='$REMOTE_TMP' BUNDLE_SHA='$BUNDLE_SHA' RAW_SHA='$RAW_SHA' RECEIPT_SHA='$RECEIPT_SHA' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          test "$(find "$REMOTE_TMP" -type f | wc -l)" -eq 3
+          test "$(sha256sum "$REMOTE_TMP/canonical-partial-fill-ingest.cjs" | awk '{print $1}')" = "$BUNDLE_SHA"
+          test "$(sha256sum "$REMOTE_TMP/capture-receipt.json" | awk '{print $1}')" = "$RAW_SHA"
+          test "$(sha256sum "$REMOTE_TMP/artifact-receipt.json" | awk '{print $1}')" = "$RECEIPT_SHA"
+          REMOTE
+
+      - name: Execute one canonical dataset ingest
+        id: execute
+        shell: bash
+        env:
+          REMOTE_TMP: ${{ steps.stage.outputs.remote_tmp }}
+        run: |
+          set -Eeuo pipefail
+          echo 'runtime_started=true' >> "$GITHUB_OUTPUT"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" \
+            "REMOTE_TMP='$REMOTE_TMP' FROZEN_CAPTURE_SHA='$FROZEN_CAPTURE_SHA' FROZEN_REPOSITORY='$FROZEN_REPOSITORY' FROZEN_RAW_ARTIFACT_ID='$FROZEN_RAW_ARTIFACT_ID' FROZEN_RAW_ARTIFACT_DIGEST='$FROZEN_RAW_ARTIFACT_DIGEST' FROZEN_RESEARCH_RELEASE_SHA='$FROZEN_RESEARCH_RELEASE_SHA' CANONICAL_RESEARCH_ROOT='$CANONICAL_RESEARCH_ROOT' CANONICAL_STATE_ROOT='$CANONICAL_STATE_ROOT' bash -s" <<'REMOTE' \
+            | tee "$RUNNER_TEMP/canonical-partial-fill-ingest-result.json"
+          set -Eeuo pipefail
+          test "$(git -C "$CANONICAL_RESEARCH_ROOT" rev-parse HEAD)" = "$FROZEN_RESEARCH_RELEASE_SHA"
+          test "$(readlink -f "$CANONICAL_RESEARCH_ROOT")" = "/opt/investment-research/releases/$FROZEN_RESEARCH_RELEASE_SHA"
+          test -d "$CANONICAL_STATE_ROOT"
+          if [[ "$(id -u)" -eq 0 ]]; then
+            chown -R investment-research:investment-research "$REMOTE_TMP"
+            runuser -u investment-research -- env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/nonexistent LANG=C.UTF-8 TZ=UTC \
+              node "$REMOTE_TMP/canonical-partial-fill-ingest.cjs" \
+                --capture-receipt "$REMOTE_TMP/capture-receipt.json" --artifact-receipt "$REMOTE_TMP/artifact-receipt.json" \
+                --state-root "$CANONICAL_STATE_ROOT" --research-repo-root "$CANONICAL_RESEARCH_ROOT" \
+                --expected-sha "$FROZEN_CAPTURE_SHA" --expected-repository "$FROZEN_REPOSITORY" \
+                --expected-artifact-id "$FROZEN_RAW_ARTIFACT_ID" --expected-artifact-digest "$FROZEN_RAW_ARTIFACT_DIGEST"
+          else
+            sudo -n chown -R investment-research:investment-research "$REMOTE_TMP"
+            sudo -n -u investment-research env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/nonexistent LANG=C.UTF-8 TZ=UTC \
+              node "$REMOTE_TMP/canonical-partial-fill-ingest.cjs" \
+                --capture-receipt "$REMOTE_TMP/capture-receipt.json" --artifact-receipt "$REMOTE_TMP/artifact-receipt.json" \
+                --state-root "$CANONICAL_STATE_ROOT" --research-repo-root "$CANONICAL_RESEARCH_ROOT" \
+                --expected-sha "$FROZEN_CAPTURE_SHA" --expected-repository "$FROZEN_REPOSITORY" \
+                --expected-artifact-id "$FROZEN_RAW_ARTIFACT_ID" --expected-artifact-digest "$FROZEN_RAW_ARTIFACT_DIGEST"
+          fi
+          REMOTE
+
+      - name: Validate canonical ingest result and zero-authority boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          RESULT="$RUNNER_TEMP/canonical-partial-fill-ingest-result.json"
+          test -s "$RESULT"
+          node - "$RESULT" <<'NODE'
+          const fs = require('node:fs');
+          const result = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const normalizeDigest = (value) => String(value ?? '').replace(/^sha256:/i, '').toLowerCase();
+          if (result.schemaVersion !== 'public-forward-partial-fill-capture-ingest-receipt-v1') throw new Error('INGEST_SCHEMA_INVALID');
+          if (String(result.exactMainSha).toLowerCase() !== process.env.FROZEN_CAPTURE_SHA) throw new Error('INGEST_CAPTURE_SHA_MISMATCH');
+          if (result.repository !== process.env.FROZEN_REPOSITORY) throw new Error('INGEST_REPOSITORY_MISMATCH');
+          if (String(result.captureRunId) !== process.env.FROZEN_CAPTURE_RUN_ID) throw new Error('INGEST_RUN_ID_MISMATCH');
+          if (String(result.captureRunAttempt) !== process.env.FROZEN_CAPTURE_RUN_ATTEMPT) throw new Error('INGEST_RUN_ATTEMPT_MISMATCH');
+          if (String(result.artifactId) !== process.env.FROZEN_RAW_ARTIFACT_ID) throw new Error('INGEST_ARTIFACT_ID_MISMATCH');
+          if (normalizeDigest(result.artifactDigest) !== process.env.FROZEN_RAW_ARTIFACT_DIGEST) throw new Error('INGEST_ARTIFACT_DIGEST_MISMATCH');
+          if (result.insertedObservationCount !== 1) throw new Error('INGEST_INSERT_COUNT_NOT_ONE');
+          if (result.duplicateObservationCount !== 0) throw new Error('INGEST_DUPLICATE_COUNT_NOT_ZERO');
+          if (result.durableDatasetPersistencePerformed !== true) throw new Error('INGEST_DURABLE_PERSISTENCE_NOT_PROVEN');
+          if (result.canonicalDatasetCreditApplied !== true) throw new Error('INGEST_CANONICAL_CREDIT_NOT_APPLIED');
+          if (result.duplicateCreditEvaluated !== true) throw new Error('INGEST_DUPLICATE_CREDIT_NOT_EVALUATED');
+          if (result.calibrationArtifactProduced !== false || result.partialFillCostPresent !== false || result.fullCostReady !== false || result.evidenceCompleteCredit !== 0 || result.naturalEntryCredit !== 0 || result.runtimeCostCredit !== 0 || result.executionAuthority !== 'NONE' || result.privateApiUsed !== false || result.liveTrading !== false || result.orderSubmitted !== false) throw new Error('INGEST_TRUTH_BOUNDARY_INVALID');
+          for (const key of ['datasetIdentity', 'datasetDigest', 'datasetRelativePath', 'receiptDigest', 'observationId']) {
+            if (typeof result[key] !== 'string' || result[key].length === 0) throw new Error(`INGEST_${key}_MISSING`);
+          }
+          NODE
+
+      - name: Upload immutable canonical ingest receipt
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-forward-partial-fill-canonical-ingest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/canonical-partial-fill-ingest-result.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Report canonical ingest success to #838
+        if: success()
+        uses: actions/github-script@v7
+        env:
+          RESULT_PATH: ${{ runner.temp }}/canonical-partial-fill-ingest-result.json
+        with:
+          script: |
+            const fs = require('node:fs');
+            const result = JSON.parse(fs.readFileSync(process.env.RESULT_PATH, 'utf8'));
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: 838,
+              body: [
+                '[PARTIAL_FILL_CANONICAL_INGEST]', 'status: success', `workflow_run: ${context.runId}`,
+                `command_comment_id: ${process.env.COMMAND_COMMENT_ID}`, `research_release_sha: ${process.env.FROZEN_RESEARCH_RELEASE_SHA}`,
+                `capture_run_id: ${process.env.FROZEN_CAPTURE_RUN_ID}`, `capture_sha: ${process.env.FROZEN_CAPTURE_SHA}`,
+                `raw_artifact_id: ${process.env.FROZEN_RAW_ARTIFACT_ID}`, `raw_artifact_digest: ${process.env.FROZEN_RAW_ARTIFACT_DIGEST}`,
+                `observation_id: ${result.observationId}`, `dataset_identity: ${result.datasetIdentity}`,
+                `dataset_digest: ${result.datasetDigest}`, `dataset_relative_path: ${result.datasetRelativePath}`,
+                'inserted_observation_count: 1', 'duplicate_observation_count: 0', 'canonical_dataset_credit_applied: true',
+                'duplicate_credit_evaluated: true', 'second_capture: 0', 'calibration_artifact_produced: false',
+                'partial_fill_cost_present: false', 'full_cost_ready: false', 'evidence_complete: 0',
+                'natural_entry_credit: 0', 'runtime_cost_credit: 0', 'execution_authority: NONE',
+                'private_api: false', 'live_trading: false', 'real_order_count: 0',
+                'next: re-evaluate partial-fill calibration sufficiency from the canonical dataset',
+              ].join('\n'),
+            });
+
+      - name: Report fail-closed canonical ingest failure to #838
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: 838,
+              body: [
+                '[PARTIAL_FILL_CANONICAL_INGEST]', 'status: failed_closed', `workflow_run: ${context.runId}`,
+                `command_comment_id: ${process.env.COMMAND_COMMENT_ID}`, `research_release_sha: ${process.env.FROZEN_RESEARCH_RELEASE_SHA}`,
+                `capture_run_id: ${process.env.FROZEN_CAPTURE_RUN_ID}`, `raw_artifact_id: ${process.env.FROZEN_RAW_ARTIFACT_ID}`,
+                'dataset_write: UNKNOWN_FAIL_CLOSED', 'canonical_dataset_credit: NOT_CLAIMED', 'duplicate_credit: NOT_CLAIMED',
+                'second_capture: 0', 'partial_fill_cost_present: false', 'full_cost_ready: false', 'evidence_complete: 0',
+                'execution_authority: NONE', 'private_api: false', 'live_trading: false', 'real_order_count: 0',
+                'next: inspect this exact run before any retry; do not replay automatically',
+              ].join('\n'),
+            });
+
+      - name: Remove transient canonical-host ingest files
+        if: always() && steps.stage.outputs.remote_tmp != ''
+        shell: bash
+        env:
+          REMOTE_TMP: ${{ steps.stage.outputs.remote_tmp }}
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" \
+            "REMOTE_TMP='$REMOTE_TMP' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          if [[ "$(id -u)" -eq 0 ]]; then rm -rf -- "$REMOTE_TMP"; else sudo -n rm -rf -- "$REMOTE_TMP"; fi
+          REMOTE

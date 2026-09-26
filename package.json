@@ -1,0 +1,13 @@
+{
+  "name": "workspace",
+  "version": "0.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "pre-ci": "node .github/scripts/pre-ci-v3.mjs --base origin/main",
+    "pre-ci:virtual": "node .github/scripts/pre-ci-v3.mjs --base origin/main --virtual-merge"
+  }
+}
