@@ -1,4 +1,6 @@
 import { Router, type IRouter, type Response } from 'express';
+import { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';
+import type { AccountProvider, CanonicalPosition } from '../features/account-readonly/account-readonly.contract';
 import { createSupabaseTradingRepository, safeConnections, type TradingRepository } from '../services/trade-automation.repository';
 import { automaticLiveExecutionEnabled, liveExecutionEnabled, TradeAutomationService } from '../services/trade-automation.service';
 import { TradeCancelReconciliationService } from '../services/trade-cancel-reconciliation.service';
@@ -90,6 +92,40 @@ function context(req: AuthenticatedRequest) {
     splitExecution,
     cancellation: new TradeCancelReconciliationService(repository),
   };
+}
+
+function exitPreviewProvider(value: unknown): AccountProvider {
+  const provider = String(value ?? '').trim().toLowerCase() as AccountProvider;
+  if (!EXCHANGES.has(provider as TradingExchange)) throw new Error('UNSUPPORTED_EXIT_PREVIEW_PROVIDER');
+  return provider;
+}
+
+function normalizedExitSymbol(value: unknown) {
+  return String(value ?? '').trim().toUpperCase().replace(/^KRW[-/]/, '').replace(/[^A-Z0-9]/g, '');
+}
+
+function exitPositionMatches(position: CanonicalPosition, market: string, symbol: string) {
+  if (String(position.market ?? '').trim().toUpperCase() !== market) return false;
+  return normalizedExitSymbol(position.symbol) === normalizedExitSymbol(symbol);
+}
+
+function exitPreviewQuantity(position: CanonicalPosition, percent: number, market: string) {
+  const available = Number(position.availableQuantity ?? position.quantity);
+  if (!Number.isFinite(available) || available <= 0) throw new Error('EXIT_POSITION_QUANTITY_UNAVAILABLE');
+  const raw = available * percent / 100;
+  const quantity = market === 'KR'
+    ? Math.floor(raw)
+    : Math.round(raw * 100_000_000) / 100_000_000;
+  if (!Number.isFinite(quantity) || quantity <= 0) throw new Error('EXIT_PREVIEW_QUANTITY_TOO_SMALL');
+  return { availableQuantity: available, exitQuantity: quantity };
+}
+
+function exitPreviewSide(provider: AccountProvider, position: CanonicalPosition) {
+  if (provider !== 'bitget') return 'sell' as const;
+  const side = String(position.side ?? '').trim().toLowerCase();
+  if (side === 'long') return 'sell' as const;
+  if (side === 'short') return 'buy' as const;
+  throw new Error('BITGET_POSITION_SIDE_UNAVAILABLE');
 }
 
 function exchangeValue(value: unknown): TradingExchange {
@@ -554,6 +590,118 @@ router.post('/admin/emergency-stop', requireAdmin, async (req: AuthenticatedRequ
       existingOrdersCanceled: false,
     });
   } catch (error) { return errorResponse(res, error); }
+});
+
+router.post('/positions/exit-preview', async (req: AuthenticatedRequest, res) => {
+  const userId = req.member?.id ?? '';
+  const accessToken = req.accessToken ?? '';
+  if (!userId || !accessToken) return res.status(401).json({ ok: false, error: 'LOGIN_REQUIRED' });
+  if (req.body?.confirmed !== true) {
+    return res.status(409).json({
+      ok: false,
+      error: 'EXPLICIT_EXIT_PREVIEW_CONFIRMATION_REQUIRED',
+      orderSubmitted: false,
+      orderCanceled: false,
+      orderAmended: false,
+      privateTradingMutationSent: false,
+    });
+  }
+
+  let provider: AccountProvider;
+  let market: string;
+  let symbol: string;
+  let percent: number;
+  try {
+    provider = exitPreviewProvider(req.body?.provider);
+    market = String(req.body?.market ?? '').trim().toUpperCase();
+    symbol = String(req.body?.symbol ?? '').trim().toUpperCase();
+    percent = Number(req.body?.percent);
+    if (!['KR', 'US', 'UPBIT', 'BITGET'].includes(market)) throw new Error('EXIT_PREVIEW_MARKET_UNSUPPORTED');
+    if (!normalizedExitSymbol(symbol)) throw new Error('EXIT_PREVIEW_SYMBOL_REQUIRED');
+    if (![25, 50, 75, 100].includes(percent)) throw new Error('EXIT_PREVIEW_PERCENT_UNSUPPORTED');
+    if ((market === 'UPBIT' && provider !== 'upbit')
+      || (market === 'BITGET' && provider !== 'bitget')
+      || ((market === 'KR' || market === 'US') && provider !== 'toss' && provider !== 'kiwoom')) {
+      throw new Error('EXIT_PREVIEW_PROVIDER_MARKET_MISMATCH');
+    }
+  } catch (error) {
+    return errorResponse(res, error);
+  }
+
+  const readers = createVaultBackedAccountReaders();
+  const reader = readers[provider];
+  if (!reader) return res.status(503).json({ ok: false, error: 'EXIT_PREVIEW_READER_UNAVAILABLE' });
+
+  const controller = new AbortController();
+  const abort = () => controller.abort(new Error('EXIT_PREVIEW_ABORTED'));
+  req.once('aborted', abort);
+  res.once('close', abort);
+  try {
+    const snapshot = await reader({ userId, accessToken }, controller.signal);
+    if (controller.signal.aborted || res.writableEnded) return undefined;
+    if (snapshot.readOnly !== true
+      || snapshot.connected !== true
+      || snapshot.stale === true
+      || snapshot.orderRequests !== 0
+      || snapshot.cancelRequests !== 0
+      || snapshot.amendRequests !== 0
+      || snapshot.transferRequests !== 0
+      || snapshot.withdrawalRequests !== 0
+      || snapshot.liveTradingEnabled !== false
+      || snapshot.autoTradingEnabled !== false) {
+      return res.status(409).json({
+        ok: false,
+        error: snapshot.errorCode ?? 'EXIT_PREVIEW_ACCOUNT_SNAPSHOT_NOT_FRESH',
+        orderSubmitted: false,
+        orderCanceled: false,
+        orderAmended: false,
+        privateTradingMutationSent: false,
+      });
+    }
+    const matches = (snapshot.positions ?? []).filter((position) => exitPositionMatches(position, market, symbol));
+    if (matches.length !== 1) {
+      return res.status(409).json({
+        ok: false,
+        error: matches.length > 1 ? 'EXIT_PREVIEW_POSITION_AMBIGUOUS' : 'EXIT_PREVIEW_POSITION_NOT_FOUND',
+        orderSubmitted: false,
+        orderCanceled: false,
+        orderAmended: false,
+        privateTradingMutationSent: false,
+      });
+    }
+    const position = matches[0]!;
+    const quantities = exitPreviewQuantity(position, percent, market);
+    const side = exitPreviewSide(provider, position);
+    return res.json({
+      ok: true,
+      preview: {
+        provider,
+        market,
+        symbol,
+        percent,
+        positionSide: position.side ?? null,
+        positionQuantity: position.quantity,
+        availableQuantity: quantities.availableQuantity,
+        exitQuantity: quantities.exitQuantity,
+        side,
+        reduceOnly: true,
+        checkedAt: snapshot.checkedAt,
+        stale: false,
+      },
+      privateAccountReadPerformed: true,
+      orderSubmitted: false,
+      orderCanceled: false,
+      orderAmended: false,
+      privateTradingMutationSent: false,
+      executionAuthority: 'NONE',
+    });
+  } catch (error) {
+    if (controller.signal.aborted || res.writableEnded) return undefined;
+    return errorResponse(res, error);
+  } finally {
+    req.removeListener('aborted', abort);
+    res.removeListener('close', abort);
+  }
 });
 
 router.get('/orders', async (req: AuthenticatedRequest, res) => {
