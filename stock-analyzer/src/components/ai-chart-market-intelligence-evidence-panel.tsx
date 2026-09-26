@@ -104,8 +104,12 @@ function freshnessLabel(value: string | undefined): string {
 
 function statusLabel(status: EvidenceResult['status'] | 'LOADING' | 'ERROR' | 'NOT_CONNECTED'): string {
   return ({
-    READY: 'READY', PARTIAL: 'PARTIAL', NOT_AVAILABLE: 'NOT AVAILABLE',
-    LOADING: 'LOADING', ERROR: 'UNAVAILABLE', NOT_CONNECTED: 'NOT CONNECTED',
+    READY: '정상',
+    PARTIAL: '일부 근거',
+    NOT_AVAILABLE: '확인 불가',
+    LOADING: '확인 중',
+    ERROR: '연결 오류',
+    NOT_CONNECTED: '미연결',
   } as const)[status];
 }
 
@@ -178,11 +182,11 @@ export function AiChartMarketIntelligenceEvidencePanel({ selection }: { selectio
     <section data-testid="ai-chart-market-intelligence-evidence" className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[11px] font-extrabold text-primary">News · Disclosure Intelligence</p>
-          <h2 className="mt-1 text-sm font-black">뉴스·공시 Evidence</h2>
-          <p className="mt-1 text-[10px] font-bold leading-4 text-muted-foreground">공식 공시를 우선하고, AI는 확인된 공개 근거의 요약·리스크·촉매만 보조합니다.</p>
+          <p className="text-xs font-semibold text-primary">뉴스 · 공시 Intelligence</p>
+          <h2 className="mt-1 text-sm font-bold">뉴스·공시 Evidence</h2>
+          <p className="mt-1 text-xs font-bold leading-4 text-muted-foreground">공식 공시를 우선하고, AI는 확인된 공개 근거의 요약·리스크·촉매만 보조합니다.</p>
         </div>
-        <span data-testid="ai-chart-market-intelligence-state" className={cn('shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-black', statusClass(state))}>
+        <span data-testid="ai-chart-market-intelligence-state" className={cn('shrink-0 rounded-full border px-2.5 py-1 text-xs font-bold', statusClass(state))}>
           {statusLabel(state)}
         </span>
       </div>
@@ -201,7 +205,7 @@ export function AiChartMarketIntelligenceEvidencePanel({ selection }: { selectio
       ) : events.length === 0 ? (
         <div className="mt-3 rounded-2xl bg-background p-3 text-xs font-bold text-muted-foreground">현재 확인된 공개 뉴스·공시 Evidence가 없습니다.</div>
       ) : (
-        <div className="mt-3 max-h-[420px] space-y-2 overflow-y-auto">
+        <div className="mt-3 space-y-2">
           {events.map((event, index) => {
             const analysis = event.ai?.analysis ?? null;
             const riskFlags = analysis?.riskFlags?.slice(0, 3) ?? [];
@@ -211,7 +215,7 @@ export function AiChartMarketIntelligenceEvidencePanel({ selection }: { selectio
                 <div className="flex items-start gap-2">
                   <div className="mt-0.5 text-primary">{eventIcon(event.kind)}</div>
                   <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-1.5 text-[9px] font-black text-muted-foreground">
+                    <div className="flex flex-wrap items-center gap-1.5 text-xs font-bold text-muted-foreground">
                       <span>{event.kind}</span>
                       <span>·</span>
                       <span>{event.sourceName || '출처 미확인'}</span>
@@ -220,22 +224,22 @@ export function AiChartMarketIntelligenceEvidencePanel({ selection }: { selectio
                       <span>·</span>
                       <span>{freshnessLabel(event.route?.freshness.state)}</span>
                     </div>
-                    <p className="mt-1 break-keep text-xs font-black leading-5">{event.headline || '제목 미확인'}</p>
-                    <div className="mt-1 flex flex-wrap gap-1 text-[9px] font-bold text-muted-foreground">
+                    <p className="mt-1 break-keep text-xs font-bold leading-5">{event.headline || '제목 미확인'}</p>
+                    <div className="mt-1 flex flex-wrap gap-1 text-xs font-bold text-muted-foreground">
                       <span className="rounded-full bg-secondary px-2 py-0.5">{event.route?.event.eventType || 'UNKNOWN'}</span>
                       <span className="rounded-full bg-secondary px-2 py-0.5">{event.state}</span>
                       {analysis && <span className="rounded-full bg-secondary px-2 py-0.5">중요도 {analysis.importanceScore}/100</span>}
-                      {analysis && <span className="rounded-full bg-secondary px-2 py-0.5">AI 신뢰 {analysis.confidenceScore}/100</span>}
+                      {analysis && <span className="rounded-full bg-secondary px-2 py-0.5">AI 근거 강도 {analysis.confidenceScore}/100</span>}
                     </div>
-                    {analysis?.summaryShort && <p className="mt-2 break-keep text-[11px] font-bold leading-5 text-foreground">{analysis.summaryShort}</p>}
+                    {analysis?.summaryShort && <p className="mt-2 break-keep text-xs font-bold leading-5 text-foreground">{analysis.summaryShort}</p>}
                     {(riskFlags.length > 0 || catalystFlags.length > 0) && (
-                      <div className="mt-2 grid gap-1 text-[10px] sm:grid-cols-2">
+                      <div className="mt-2 grid gap-1 text-xs sm:grid-cols-2">
                         <p className="rounded-xl bg-warning/5 px-2 py-1.5 font-bold text-muted-foreground">리스크: {riskFlags.length ? riskFlags.join(', ') : '확인 없음'}</p>
                         <p className="rounded-xl bg-primary/5 px-2 py-1.5 font-bold text-muted-foreground">촉매: {catalystFlags.length ? catalystFlags.join(', ') : '확인 없음'}</p>
                       </div>
                     )}
                     {event.sourceUrl && (
-                      <a href={event.sourceUrl} target="_blank" rel="noreferrer noopener" className="mt-2 inline-flex items-center gap-1 text-[10px] font-black text-primary">
+                      <a href={event.sourceUrl} target="_blank" rel="noreferrer noopener" className="mt-2 inline-flex items-center gap-1 text-xs font-bold text-primary">
                         원문 근거 <ExternalLink className="h-3 w-3" />
                       </a>
                     )}
@@ -248,12 +252,12 @@ export function AiChartMarketIntelligenceEvidencePanel({ selection }: { selectio
       )}
 
       {result?.warnings?.length ? (
-        <p className="mt-2 text-[10px] font-bold text-warning">부분 근거: {result.warnings.slice(0, 3).join(' · ')}</p>
+        <p className="mt-2 text-xs font-bold text-warning">부분 근거: {result.warnings.slice(0, 3).join(' · ')}</p>
       ) : null}
 
-      <div className="mt-3 flex items-start gap-2 rounded-2xl border border-card-border bg-background p-3 text-[10px] font-bold leading-4 text-muted-foreground">
+      <div className="mt-3 flex items-start gap-2 rounded-2xl border border-card-border bg-background p-3 text-xs font-bold leading-4 text-muted-foreground">
         <ShieldCheck className="h-4 w-4 shrink-0 text-primary" />
-        <span>Evidence-only · 차트/Scanner 점수 영향 0 · 확률 영향 0 · 감성은 가격방향이 아님 · 실행권한 NONE · 주문 허용 false · AI 최대 1 이벤트 · 서버 캐시 60초</span>
+        <span>근거 전용 · 차트/Scanner 점수 영향 0 · 확률 영향 0 · 감성은 가격방향이 아님 · 실행권한 없음 · 주문 허용 안 함 · AI 최대 1 이벤트 · 서버 캐시 60초</span>
       </div>
     </section>
   );
