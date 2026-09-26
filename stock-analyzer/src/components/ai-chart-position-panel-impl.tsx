@@ -167,6 +167,24 @@ type ExitPreviewState =
   | { kind: 'ready'; preview: ExitPreview }
   | { kind: 'unavailable'; code: string };
 
+type ExecutionReadiness = {
+  connectionConfigured: boolean;
+  providerVerified: boolean;
+  manualServerGateEnabled: boolean;
+  automaticServerGateEnabled: boolean;
+  readyForManualOrderEvaluation: boolean;
+  readyForAutomaticOrderEvaluation: boolean;
+  blockers: string[];
+  orderTimeRiskRecheckRequired: boolean;
+  orderSubmissionPerformedByStatusRequest: false;
+};
+
+type EntryReadinessState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'ready'; value: ExecutionReadiness }
+  | { kind: 'unavailable'; code: string };
+
 type StockReadOnlyProvider = 'toss' | 'kiwoom';
 
 function providerForMarket(market: AnalysisMarket, stockProvider: StockReadOnlyProvider): Snapshot['provider'] {
@@ -365,12 +383,15 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
   const [amendDrafts, setAmendDrafts] = useState<Record<string, { price: string; quantity: string }>>({});
   const [exitPercent, setExitPercent] = useState(100);
   const [exitPreviewState, setExitPreviewState] = useState<ExitPreviewState>({ kind: 'idle' });
+  const [entryReadiness, setEntryReadiness] = useState<EntryReadinessState>({ kind: 'idle' });
   const abortRef = useRef<AbortController | null>(null);
   const requestSequenceRef = useRef(0);
   const orderAbortRef = useRef<AbortController | null>(null);
   const orderSequenceRef = useRef(0);
   const exitAbortRef = useRef<AbortController | null>(null);
   const exitSequenceRef = useRef(0);
+  const entryReadinessAbortRef = useRef<AbortController | null>(null);
+  const entryReadinessSequenceRef = useRef(0);
 
   useEffect(() => {
     requestSequenceRef.current += 1;
@@ -382,6 +403,9 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     exitSequenceRef.current += 1;
     exitAbortRef.current?.abort();
     exitAbortRef.current = null;
+    entryReadinessSequenceRef.current += 1;
+    entryReadinessAbortRef.current?.abort();
+    entryReadinessAbortRef.current = null;
     setState({ kind: 'idle' });
     setLinesVisible(true);
     setAdditionalValueText('');
@@ -396,6 +420,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setAmendDrafts({});
     setExitPercent(100);
     setExitPreviewState({ kind: 'idle' });
+    setEntryReadiness({ kind: 'idle' });
     onOverlayChange(null);
   }, [market, onOverlayChange, symbol]);
 
@@ -404,6 +429,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
       abortRef.current?.abort();
       orderAbortRef.current?.abort();
       exitAbortRef.current?.abort();
+      entryReadinessAbortRef.current?.abort();
     };
   }, []);
 
@@ -501,6 +527,9 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     exitSequenceRef.current += 1;
     exitAbortRef.current?.abort();
     exitAbortRef.current = null;
+    entryReadinessSequenceRef.current += 1;
+    entryReadinessAbortRef.current?.abort();
+    entryReadinessAbortRef.current = null;
     setStockProvider(next);
     setState({ kind: 'idle' });
     setLinesVisible(true);
@@ -509,6 +538,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setOrderActionId(null);
     setAmendDrafts({});
     setExitPreviewState({ kind: 'idle' });
+    setEntryReadiness({ kind: 'idle' });
     onOverlayChange(null);
   }, [onOverlayChange, stockProvider]);
 
@@ -748,6 +778,44 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     }
   }, [exitPercent, exitPreviewState.kind, market, position, provider, symbol]);
 
+  const loadEntryReadiness = useCallback(async () => {
+    const controller = new AbortController();
+    entryReadinessAbortRef.current?.abort();
+    entryReadinessAbortRef.current = controller;
+    const sequence = ++entryReadinessSequenceRef.current;
+    setEntryReadiness({ kind: 'loading' });
+    try {
+      const response = await authorizedFetch('/api/trade-automation/status', {
+        method: 'GET',
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' },
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => null) as {
+        ok?: boolean;
+        error?: string;
+        liveExecutionReadiness?: Partial<Record<Snapshot['provider'], ExecutionReadiness>>;
+        actualOrderSubmittedByStatusRequest?: boolean;
+      } | null;
+      if (controller.signal.aborted || sequence !== entryReadinessSequenceRef.current) return;
+      if (!response.ok || payload?.ok !== true || payload.actualOrderSubmittedByStatusRequest !== false) {
+        setEntryReadiness({ kind: 'unavailable', code: payload?.error ?? 'ENTRY_READINESS_STATUS_INVALID' });
+        return;
+      }
+      const value = payload.liveExecutionReadiness?.[provider];
+      if (!value || value.orderSubmissionPerformedByStatusRequest !== false || value.orderTimeRiskRecheckRequired !== true) {
+        setEntryReadiness({ kind: 'unavailable', code: 'ENTRY_READINESS_CONTRACT_MISMATCH' });
+        return;
+      }
+      setEntryReadiness({ kind: 'ready', value });
+    } catch (error) {
+      if (controller.signal.aborted || sequence !== entryReadinessSequenceRef.current) return;
+      setEntryReadiness({ kind: 'unavailable', code: error instanceof Error ? error.name : 'ENTRY_READINESS_FAILED' });
+    } finally {
+      if (entryReadinessAbortRef.current === controller) entryReadinessAbortRef.current = null;
+    }
+  }, [provider]);
+
   const tradingCockpit = (
     <details
             open={cockpitOpen}
@@ -780,6 +848,45 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                       신호검색기에서 현재 종목을 선택하면 검증된 신호 identity를 사용해 Paper 진입계획을 만들 수 있습니다.
                     </p>
                   )}
+                  <div className="mt-2 rounded-xl border border-card-border p-2.5" data-testid="ai-chart-entry-readiness">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-[9px] font-black">실전 진입 준비상태</p>
+                        <p className="mt-0.5 text-[8px] font-bold text-muted-foreground">조회만 수행 · 주문 제출 없음</p>
+                      </div>
+                      <button
+                        type="button"
+                        data-testid="ai-chart-load-entry-readiness"
+                        disabled={entryReadiness.kind === 'loading'}
+                        onClick={() => void loadEntryReadiness()}
+                        className="min-h-10 rounded-lg border border-card-border px-2.5 text-[9px] font-black disabled:opacity-50"
+                      >
+                        {entryReadiness.kind === 'loading' ? '확인 중' : '준비상태 확인'}
+                      </button>
+                    </div>
+                    {entryReadiness.kind === 'ready' ? (
+                      <div className="mt-2 rounded-lg bg-secondary/50 p-2 text-[8px] font-bold text-muted-foreground">
+                        <p className="font-black text-foreground">
+                          수동 실전 진입 · {entryReadiness.value.readyForManualOrderEvaluation ? '게이트 준비' : '차단'}
+                        </p>
+                        <p className="mt-1">
+                          거래키 {entryReadiness.value.connectionConfigured ? '연결' : '미연결'}
+                          {' · '}provider {entryReadiness.value.providerVerified ? '검증됨' : '미검증'}
+                          {' · '}서버게이트 {entryReadiness.value.manualServerGateEnabled ? 'ON' : 'OFF'}
+                        </p>
+                        {entryReadiness.value.blockers.length ? (
+                          <p className="mt-1 break-words">차단 사유 · {entryReadiness.value.blockers.join(' · ')}</p>
+                        ) : (
+                          <p className="mt-1">실제 제출 시에도 주문 직전 Risk 재검증이 별도로 필요합니다.</p>
+                        )}
+                      </div>
+                    ) : null}
+                    {entryReadiness.kind === 'unavailable' ? (
+                      <p role="alert" className="mt-2 rounded-lg bg-warning/10 p-2 text-[8px] font-bold text-warning">
+                        진입 준비상태 확인 실패 · {entryReadiness.code}
+                      </p>
+                    ) : null}
+                  </div>
                 </section>
 
                 <TradeApprovalQueue
