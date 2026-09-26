@@ -79,7 +79,12 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain("payload.preview.requiresExplicitApproval !== true");
   expect(panel).toContain("authorizedFetch('/api/trade-automation/positions/exit-plan'");
   expect(panel).toContain("authorizedFetch('/api/trade-automation/positions/exit-approval'");
+  expect(panel).toContain("authorizedFetch('/api/trade-automation/positions/exit-risk'");
   expect(panel).toContain("approval.schemaVersion !== 'ai-chart-exit-approval-intent-v1'");
+  expect(panel).toContain("risk.schemaVersion !== 'ai-chart-exit-order-time-risk-v1'");
+  expect(panel).toContain("risk.nextOwner !== 'CANONICAL_EXIT_EXECUTION_PREFLIGHT_OWNER'");
+  expect(panel).toContain("data-testid=\"ai-chart-recheck-exit-risk\"");
+  expect(panel).toContain("data-testid=\"ai-chart-exit-risk-intent\"");
   expect(panel).toContain("approval.nextOwner !== 'CANONICAL_EXIT_ORDER_TIME_RISK_OWNER'");
   expect(panel).toContain("plan.schemaVersion !== 'ai-chart-canonical-exit-plan-v2'");
   expect(panel).toContain("plan.requiresFreshAccountRecheckAtApproval !== true");
@@ -317,6 +322,7 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   let exitPreviewReads = 0;
   let exitPlanReads = 0;
   let exitApprovalReads = 0;
+  let exitRiskReads = 0;
   let entryReadinessReads = 0;
   const financialMutations: string[] = [];
 
@@ -615,6 +621,92 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
       });
       return;
     }
+    if (url.pathname === '/api/trade-automation/positions/exit-risk') {
+      exitRiskReads += 1;
+      expect(request.method()).toBe('POST');
+      const body = request.postDataJSON() as {
+        confirmed?: boolean;
+        approvalIntentId?: string;
+        planId?: string;
+        exitDraftId?: string;
+        provider?: string;
+        market?: string;
+        symbol?: string;
+        percent?: number;
+        positionQuantity?: number | null;
+        availableQuantity?: number;
+        quantity?: number;
+        side?: string;
+        planSourceCheckedAt?: string;
+        approvalCheckedAt?: string;
+        approvedAt?: string;
+        approvalExpiresAt?: string;
+      };
+      expect(body.confirmed).toBe(true);
+      expect(body.approvalIntentId).toBe('b'.repeat(64));
+      expect(body.planId).toBe('a'.repeat(64));
+      expect(body.exitDraftId).toBe('e'.repeat(64));
+      expect(body.provider).toBe('toss');
+      expect(body.market).toBe('KR');
+      expect(body.symbol).toBe('005930');
+      expect(body.percent).toBe(25);
+      expect(body.positionQuantity).toBe(20);
+      expect(body.availableQuantity).toBe(20);
+      expect(body.quantity).toBe(5);
+      expect(body.side).toBe('sell');
+      for (const value of [body.planSourceCheckedAt, body.approvalCheckedAt, body.approvedAt, body.approvalExpiresAt]) {
+        expect(Number.isFinite(Date.parse(value ?? ''))).toBe(true);
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          canonicalExitRisk: {
+            schemaVersion: 'ai-chart-exit-order-time-risk-v1',
+            state: 'BLOCKED_NON_EXECUTING',
+            riskIntentId: 'c'.repeat(64),
+            approvalIntentId: 'b'.repeat(64),
+            planId: 'a'.repeat(64),
+            exitDraftId: 'e'.repeat(64),
+            provider: 'toss',
+            market: 'KR',
+            symbol: '005930',
+            accountMode: 'live',
+            orderType: 'market',
+            side: 'sell',
+            quantity: 5,
+            percent: 25,
+            positionQuantity: 20,
+            availableQuantity: 20,
+            reduceOnly: true,
+            approvalCheckedAt: new Date().toISOString(),
+            riskCheckedAt: new Date().toISOString(),
+            evaluatedAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 15_000).toISOString(),
+            providerOpenOrdersChecked: true,
+            conflictingOpenOrderCount: 1,
+            blockers: ['LIVE_CONNECTION_NOT_CONFIGURED', 'MANUAL_LIVE_SERVER_GATE_OFF', 'EXIT_RISK_PROVIDER_OPEN_ORDER_PRESENT'],
+            riskPassed: false,
+            marketExecutionPreflightRequired: true,
+            nextOwner: 'CANONICAL_EXIT_EXECUTION_PREFLIGHT_OWNER',
+            executionAuthority: 'NONE',
+            executable: false,
+            orderSubmissionPerformed: false,
+            financialMutationPerformed: false,
+          },
+          riskChecked: true,
+          privateAccountReadPerformed: true,
+          financialMutationPerformed: false,
+          orderSubmitted: false,
+          orderCanceled: false,
+          orderAmended: false,
+          privateTradingMutationSent: false,
+          executionAuthority: 'NONE',
+        }),
+      });
+      return;
+    }
     if (url.pathname === '/api/trade-automation/orders') {
       expect(request.method()).toBe('GET');
       expect(url.searchParams.get('dashboard')).toBe('1');
@@ -825,6 +917,17 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await expect(approvalIntent).toContainText('주문시점 Risk 재검증');
   await expect(approvalIntent).toContainText('executionAuthority=NONE');
   await expect(approvalIntent).toContainText('executable=false');
+  await cockpit.getByTestId('ai-chart-recheck-exit-risk').click();
+  await expect.poll(() => exitRiskReads).toBe(1);
+  const riskIntent = cockpit.getByTestId('ai-chart-exit-risk-intent');
+  await expect(riskIntent).toContainText('주문시점 Risk 차단 · 주문 미전송');
+  await expect(riskIntent).toContainText('Provider 미체결 확인 완료');
+  await expect(riskIntent).toContainText('충돌 주문 1');
+  await expect(riskIntent).toContainText('Risk cccccccccccc…');
+  await expect(riskIntent).toContainText('Approval bbbbbbbbbbbb…');
+  await expect(riskIntent).toContainText('실행 직전 market preflight');
+  await expect(riskIntent).toContainText('executionAuthority=NONE');
+  await expect(riskIntent).toContainText('executable=false');
 
   await cockpit.getByRole('tab', { name: '주문', exact: true }).click();
   await cockpit.getByTestId('ai-chart-load-orders').click();
