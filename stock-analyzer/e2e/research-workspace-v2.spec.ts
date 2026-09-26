@@ -9,6 +9,21 @@ const USER='99999999-9999-4999-8999-999999999999';
 const workerFixture={schemaVersion:'research-worker-status-v9',available:true,checkedAt:'2026-09-26T04:00:00.000Z',workerState:'ACTIVE',lastHeartbeatAt:'2026-09-26T03:59:55.000Z',currentTaskKind:'VIDEO_PREPARE',counts:{queued:2,running:1,succeeded:7,failed:1,blocked:1},authority:{executionAuthority:'NONE',automaticActivation:false,providerCallsFromStatus:0}};
 const providerFixture={schemaVersion:'research-provider-readiness-v8',checkedAt:'2026-09-26T03:30:00.000Z',source:'API_PROCESS',scope:'SELECTED_RUNTIME_ONLY',providers:['youtube','gemini','groq'].map(provider=>({provider,credentialState:'PRESENT',modelState:provider==='youtube'?'NOT_APPLICABLE':'EXPLICIT',callVerified:false,quotaState:'NOT_CHECKED',billingState:'NOT_CHECKED'})),unmappedGenericCredential:false,authority:{executionAuthority:'NONE',providerCalls:0,environmentMutated:false,automaticActivation:false}};
 const orchestratorFixture={schemaVersion:'research-orchestrator-status-v10',available:true,checkedAt:'2026-09-26T05:30:00.000Z',totals:{pending:2,processing:1,reviewRequired:1,completed:4},stageCounts:{YOUTUBE_SOURCE:1,GEMINI_VIDEO:1,GROQ_ADVERSARIAL_REVIEW:1,RULE_COMPLETENESS:1,CANONICAL_COMPILER:1,BACKTEST:1,RESULT_PERSIST:1,ADOPTION_REVIEW:1},markets:{stockCompleted:3,cryptoCompleted:1},authority:{executionAuthority:'NONE',automaticActivation:false,automaticAdoption:false,providerCallsFromStatus:0,profitabilityAuthority:'BACKTESTER_ONLY'}};
+const oneShotFixture={schemaVersion:'research-one-shot-review-v15',available:true,checkedAt:'2026-09-26T08:10:00.000Z',
+ status:'HUMAN_RULE_DIGEST_REVIEW',reason:'HUMAN_RULE_DIGEST_REVIEW_REQUIRED',manifestDigest:'a'.repeat(64),packageDigest:'b'.repeat(64),
+ reviewedRuleDigestCandidate:'c'.repeat(64),providerCalls:{gemini:1,groq:1},sourceTruthVerified:false,entireVideoVerified:false,
+ observations:[
+  {observationIndex:0,atSec:12,kind:'ENTRY',description:'Synthetic entry claim',verdict:'CHALLENGE',reason:'Entry condition remains ambiguous.'},
+  {observationIndex:1,atSec:18,kind:'EXIT',description:'Synthetic exit claim',verdict:'ACCEPT_AS_CLAIM',reason:'Exit claim is structurally reviewable.'},
+ ],limitations:['Synthetic review fixture only.'],groq:{summary:'Adversarial review requires human confirmation.',disposition:'REVIEW_REQUIRED'},
+ missingRuleKinds:['STOP_LOSS'],authority:{readOnly:true,providerCallsFromRead:0,automaticBinding:false,automaticCompiler:false,automaticBacktest:false,
+  automaticAdoption:false,profitabilityProven:false,executionAuthority:'NONE'}};
+const oneShotInsufficient={schemaVersion:'research-one-shot-review-v15',available:true,checkedAt:'2026-09-26T08:10:00.000Z',
+ status:'SOURCE_EVIDENCE_REVIEW_NO_RETRY',reason:'GEMINI_INSUFFICIENT_EVIDENCE',manifestDigest:'a'.repeat(64),packageDigest:null,
+ reviewedRuleDigestCandidate:null,providerCalls:{gemini:1,groq:0},sourceTruthVerified:false,entireVideoVerified:false,observations:[],
+ limitations:['Video content was insufficient for reviewed rules.'],groq:null,missingRuleKinds:[],
+ authority:{readOnly:true,providerCallsFromRead:0,automaticBinding:false,automaticCompiler:false,automaticBacktest:false,
+  automaticAdoption:false,profitabilityProven:false,executionAuthority:'NONE'}};
 test('AI chat user surface exposes factual provider and fallback metadata without secrets', () => {
   const aiChat = readFileSync(new URL('../src/pages/ai-chat.tsx', import.meta.url), 'utf8');
   expect(aiChat).toContain('data-testid="ai-chat-provider-meta"');
@@ -21,7 +36,7 @@ test('AI chat user surface exposes factual provider and fallback metadata withou
   expect(aiChat).not.toContain('GROQ_API_KEY');
 });
 
-async function setup(page:Page,payload:unknown={available:true,workspace},status=200,providerPayload:unknown=providerFixture,providerStatus=200,workerPayload:unknown=workerFixture,workerStatus=200,orchestratorPayload:unknown=orchestratorFixture,orchestratorStatus=200) {
+async function setup(page:Page,payload:unknown={available:true,workspace},status=200,providerPayload:unknown=providerFixture,providerStatus=200,workerPayload:unknown=workerFixture,workerStatus=200,orchestratorPayload:unknown=orchestratorFixture,orchestratorStatus=200,oneShotPayload:unknown=oneShotFixture,oneShotStatus=200) {
   await page.addInitScript(user=>{
     const encode=(x:Record<string,unknown>)=>btoa(JSON.stringify(x)).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
     const token=`${encode({alg:'none',typ:'JWT'})}.${encode({sub:user,role:'authenticated',exp:4102444800})}.e2e`;
@@ -40,6 +55,7 @@ async function setup(page:Page,payload:unknown={available:true,workspace},status
     if(path==='/api/research/video/evidence/workspace/providers')return route.fulfill({status:providerStatus,contentType:'application/json',body:JSON.stringify(providerPayload)});
     if(path==='/api/research/video/evidence/workspace/worker')return route.fulfill({status:workerStatus,contentType:'application/json',body:JSON.stringify(workerPayload)});
     if(path==='/api/research/video/evidence/workspace/orchestrator')return route.fulfill({status:orchestratorStatus,contentType:'application/json',body:JSON.stringify(orchestratorPayload)});
+    if(path==='/api/research/video/evidence/workspace/one-shot-review')return route.fulfill({status:oneShotStatus,contentType:'application/json',body:JSON.stringify(oneShotPayload)});
     if(path==='/api/research/video/evidence/workspace')return route.fulfill({status,contentType:'application/json',body:JSON.stringify(payload)});
     if(path==='/api/research/video/evidence')return route.fulfill({contentType:'application/json',body:JSON.stringify({available:false,dataState:'UNKNOWN'})});
     return route.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,items:[],rows:[],results:[]})});
@@ -61,6 +77,8 @@ for (const width of [390,768,1024,1440]) test(`mounted workspace filters and dis
   await expect(providerPanel.locator('[data-provider="groq"]')).toContainText('실제 호출 미검증');
   const workerPanel=panel.getByTestId('research-worker-status');await expect(workerPanel).toContainText('작업자 신호 확인');await expect(workerPanel).toContainText('확인 필요');
   const orchestratorPanel=panel.getByTestId('research-orchestrator-status');await expect(orchestratorPanel).toContainText('Groq 반대검토');await expect(orchestratorPanel).toContainText('주식 완료');await expect(orchestratorPanel).toContainText('코인 완료');await expect(orchestratorPanel).toContainText('백테스터 결과만 사용');
+  const oneShotPanel=panel.getByTestId('research-one-shot-review');await expect(oneShotPanel).toContainText('사람 검토 대기');await expect(oneShotPanel).toContainText('반론·충돌 있음');await expect(oneShotPanel).toContainText('구조상 검토 가능 · 사실 인증 아님');await expect(oneShotPanel).toContainText('AI 동의는 수익성 증거가 아니며');
+  await expect(oneShotPanel.getByTestId('one-shot-observations').locator('article')).toHaveCount(2);
   await page.screenshot({path:testInfo.outputPath(`providers-${width}.png`),fullPage:true});
   await panel.getByRole('button',{name:'주식',exact:true}).click();await expect(panel.getByTestId('workspace-strategy')).toHaveCount(1);
   await expect(panel.getByTestId('workspace-strategy')).toHaveAttribute('data-market','US_STOCK');
@@ -72,6 +90,7 @@ for (const width of [390,768,1024,1440]) test(`mounted workspace filters and dis
   const providerCalls=requests.filter(x=>x.path.endsWith('/workspace/providers'));expect(providerCalls.length).toBeGreaterThan(0);expect(providerCalls.every(x=>x.method==='GET'&&x.hasAuth)).toBe(true);
   const workerCalls=requests.filter(x=>x.path.endsWith('/workspace/worker'));expect(workerCalls.length).toBeGreaterThan(0);expect(workerCalls.every(x=>x.method==='GET'&&x.hasAuth)).toBe(true);
   const orchestratorCalls=requests.filter(x=>x.path.endsWith('/workspace/orchestrator'));expect(orchestratorCalls.length).toBeGreaterThan(0);expect(orchestratorCalls.every(x=>x.method==='GET'&&x.hasAuth)).toBe(true);
+  const oneShotCalls=requests.filter(x=>x.path.endsWith('/workspace/one-shot-review'));expect(oneShotCalls.length).toBeGreaterThan(0);expect(oneShotCalls.every(x=>x.method==='GET'&&x.hasAuth)).toBe(true);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth-window.innerWidth)).toBeLessThanOrEqual(2);
 });
 test('unavailable registry is not rendered as a zero-return result',async({page})=>{
@@ -119,4 +138,28 @@ test('forged orchestrator adoption authority is rejected by UI parser',async({pa
  const forged=structuredClone(orchestratorFixture);forged.authority.automaticAdoption=true;
  await setup(page,{available:true,workspace},200,providerFixture,200,workerFixture,200,forged);
  await expect(page.getByTestId('research-orchestrator-status')).toContainText('완료 0건으로 간주하지 않습니다.');
+});
+
+
+test('missing one-shot review is not rendered as success or zero',async({page})=>{
+ await setup(page,{available:true,workspace},200,providerFixture,200,workerFixture,200,orchestratorFixture,200,
+  {schemaVersion:'research-one-shot-review-v15',available:false,reason:'ONE_SHOT_NOT_EXECUTED'});
+ const status=page.getByTestId('research-one-shot-review');
+ await expect(status).toContainText('성공·0건으로 간주하지 않습니다.');
+ await expect(status).not.toContainText('사람 검토 대기');
+});
+
+test('Gemini insufficient evidence is distinct and does not pretend Groq or digest review happened',async({page})=>{
+ await setup(page,{available:true,workspace},200,providerFixture,200,workerFixture,200,orchestratorFixture,200,oneShotInsufficient);
+ const status=page.getByTestId('research-one-shot-review');
+ await expect(status).toContainText('Gemini 증거 부족 · 자동 재실행 금지');
+ await expect(status).toContainText('Gemini 1회 · Groq 0회');
+ await expect(status).toContainText('digest 승인·컴파일·백테스트로 진행하지 않습니다.');
+ await expect(status).not.toContainText('사람 검토 대기');
+});
+
+test('forged one-shot automatic binding authority is rejected by UI parser',async({page})=>{
+ const forged=structuredClone(oneShotFixture);forged.authority.automaticBinding=true;
+ await setup(page,{available:true,workspace},200,providerFixture,200,workerFixture,200,orchestratorFixture,200,forged);
+ await expect(page.getByTestId('research-one-shot-review')).toContainText('성공·0건으로 간주하지 않습니다.');
 });
