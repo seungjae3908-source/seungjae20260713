@@ -272,6 +272,16 @@ function priceDistance(position: AiChartAccountPosition, chartPrice: number | nu
   return direction * raw;
 }
 
+function exitReadinessBlockerLabel(code: string): string {
+  const labels: Record<string, string> = {
+    CREDENTIAL_VAULT_NOT_READY: '거래키 암호화 저장소가 준비되지 않음',
+    LIVE_CONNECTION_NOT_CONFIGURED: '실전 거래키가 연결되지 않음',
+    LIVE_CONNECTION_NOT_VERIFIED: '실계좌 Provider 검증이 필요함',
+    MANUAL_LIVE_SERVER_GATE_OFF: '실주문 서버게이트가 꺼져 있음',
+  };
+  return labels[code] ?? code;
+}
+
 function orderStateLabel(state: string): string {
   const labels: Record<string, string> = {
     SUBMITTED: '제출 대기',
@@ -750,7 +760,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                 <section className="rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-provider-open-orders">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <p className="text-[10px] font-black">Provider 실제 미체결 · READ-ONLY</p>
+                      <p className="text-[10px] font-black">Provider 실제 미체결 · 조회 전용</p>
                       <p className="mt-0.5 text-[8px] font-bold text-muted-foreground">
                         {providerLabel(provider)} 계좌 스냅샷 · 앱 밖에서 낸 주문도 식별
                       </p>
@@ -889,7 +899,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                       <p className="text-[10px] font-black">부분청산 · 전량종료 준비</p>
                       <p className="mt-0.5 text-[8px] font-bold text-muted-foreground">실제 보유수량 기준 · 주문 미제출</p>
                     </div>
-                    <span className="rounded-full border border-warning/30 bg-warning/5 px-2 py-1 text-[8px] font-black text-warning">EXIT PLAN PREVIEW</span>
+                    <span className="rounded-full border border-warning/30 bg-warning/5 px-2 py-1 text-[8px] font-black text-warning">종료 계획 미리보기</span>
                   </div>
                   <div className="mt-2 grid grid-cols-4 gap-1.5">
                     {[25, 50, 75, 100].map((percent) => (
@@ -940,7 +950,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                             {' · '}서버게이트 {exitPreviewState.preview.executionReadiness.manualServerGateEnabled ? 'ON' : 'OFF'}
                           </p>
                           {!exitPreviewState.preview.executionReadiness.readyForManualExitEvaluation ? (
-                            <p className="mt-1 break-words">차단 사유 · {exitPreviewState.preview.executionReadiness.blockers.join(' · ') || 'UNKNOWN'}</p>
+                            <p className="mt-1 break-words">차단 사유 · {exitPreviewState.preview.executionReadiness.blockers.map(exitReadinessBlockerLabel).join(' · ') || '확인 필요'}</p>
                           ) : (
                             <p className="mt-1">이 표시는 실행 준비조건만 뜻하며, 종료 주문 승인이나 실행 권한을 부여하지 않습니다.</p>
                           )}
@@ -974,7 +984,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
         <div className="flex min-w-0 items-center gap-2">
           <WalletCards className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
           <div className="min-w-0">
-            <p className="text-[11px] font-black text-primary">내 포지션 · READ-ONLY</p>
+            <p className="text-[11px] font-black text-primary">내 포지션 · 조회 전용</p>
             <p className="truncate text-[10px] font-bold text-muted-foreground">{providerLabel(provider)} · {symbol}</p>
           </div>
         </div>
