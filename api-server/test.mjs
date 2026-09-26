@@ -47,6 +47,7 @@ const groups = {
   phase9: [
     path.join(root, 'src/services/research-copilot.service.test.ts'),
     path.join(root, 'src/services/research-dual-free-ai.service.test.ts'),
+    path.join(root, 'src/services/research-groq-one-shot-transport.service.test.ts'),
     path.join(root, 'src/services/research-canonical-bundle-offline-publisher.service.test.mjs'),
     path.join(root, 'src/services/research-canonical-bundle-assembler.service.test.mjs'),
     path.join(root, 'src/services/research-canonical-component-registry.service.test.mjs'),
