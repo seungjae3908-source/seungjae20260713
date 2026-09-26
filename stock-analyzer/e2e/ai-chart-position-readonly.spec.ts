@@ -76,6 +76,9 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain("setExitPreviewState({ kind: 'idle' });");
   expect(panel).toContain("confirmed: true");
   expect(panel).toContain("자동 조회·자동 취소·자동 정정 없음");
+  expect(panel).toContain("ScannerApprovalComposer selection={selection}");
+  expect(panel).toContain("data-testid=\"ai-chart-entry-planning\"");
+  expect(panel).toContain("실전 진입은 아래 승인 큐와 서버 live gate를 우회하지 않습니다.");
   expect(panel).toContain("data-testid=\"ai-chart-exit-dashboard-unavailable\"");
   expect(panel).toContain("현재 종목 보유 포지션이 없어 종료계획을 만들지 않습니다.");
   expect(panel).toContain("{tradingCockpit}");
