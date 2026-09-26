@@ -95,7 +95,7 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain("orderAbortRef.current?.abort();");
   expect(panel).toContain("exitAbortRef.current?.abort();");
   expect(panel).toContain("dashboard: '1'");
-  expect(panel).toContain("exchange: provider");
+  expect(panel).toContain("if (market !== 'KR' && market !== 'US') query.set('exchange', provider);");
   expect(panel).toContain("signal: controller.signal");
   const approvalQueue = source('src/components/trade-approval-queue.tsx');
   const tradeRoute = source('../api-server/src/routes/trade-automation.ts');
@@ -597,6 +597,7 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await expect(cockpit.getByTestId('ai-chart-exit-readiness')).toContainText('실전 거래키가 연결되지 않음');
   await expect(cockpit.getByTestId('ai-chart-exit-readiness')).toContainText('실주문 서버게이트가 꺼져 있음');
 
+  await cockpit.getByRole('tab', { name: '주문', exact: true }).click();
   await cockpit.getByTestId('ai-chart-load-orders').click();
   await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('거래소 접수');
   await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('잔량 4');
