@@ -314,6 +314,19 @@ function triggerLabel(value: string): string {
   return '미확인';
 }
 
+function decisionOutcomeLabel(value: string): string {
+  if (value === 'LONG_REVIEW') return 'LONG 검토';
+  if (value === 'SHORT_REVIEW') return 'SHORT 검토';
+  if (value === 'WATCH') return '관찰';
+  if (value === 'BLOCKED') return '신규진입 차단';
+  return '거래 안 함';
+}
+
+function validationBadgeLabel(verified: boolean | undefined, sampleCount?: number | null): string {
+  if (verified !== true) return '미검증';
+  return sampleCount != null && Number.isFinite(sampleCount) ? `검증 · N=${sampleCount}` : '검증';
+}
+
 function SignalDetailPanel({
   card,
   selection,
@@ -356,6 +369,11 @@ function SignalDetailPanel({
   const marketIntel = card.marketIntelligence;
   const cryptoEvents = card.cryptoPublicEventContext;
 
+  const decisionHistory = card.decisionHistory ?? [];
+  const fullCostVerified = quality?.fullCostVerified === true
+    || (quality?.costsIncluded === true && quality?.slippageIncluded === true);
+  const costAdjustedExpectancy = fullCostVerified ? quality?.expectancyPercent : null;
+
   useEffect(() => {
     setMobileTab('summary');
   }, [card.signalId]);
@@ -363,6 +381,32 @@ function SignalDetailPanel({
   useEffect(() => {
     if (showOrderPreparation) setMobileTab('risk');
   }, [showOrderPreparation]);
+
+  const decisionTimelinePanel = (
+    <section data-testid="scanner-decision-timeline" aria-label="신호 변경 이력" className="rounded-2xl border border-card-border p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-xs font-bold">신호 변경 이력</h3>
+          <p className="mt-1 text-xs leading-4 text-muted-foreground">현재 Scanner 런타임이 실제로 관측한 판단 변경만 최대 12건 표시합니다.</p>
+        </div>
+        <span className="rounded-full border border-card-border px-2 py-1 text-xs font-semibold">{decisionHistory.length}건</span>
+      </div>
+      {decisionHistory.length ? (
+        <ol className="mt-3 space-y-2">
+          {[...decisionHistory].reverse().map((entry) => (
+            <li key={`${entry.sequence}:${entry.observedAt}:${entry.decision}`} className="rounded-xl bg-background p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-semibold">{decisionOutcomeLabel(entry.decision)}</p>
+                <time className="text-xs text-muted-foreground">{formatObservedAt(entry.observedAt)}</time>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">상태 {userSignalState(entry.state)} · 방향 {entry.direction} · {entry.eligible ? '진입 검토 가능' : '진입 검토 차단'}</p>
+              {entry.reasons.length ? <ul className="mt-2 space-y-1 text-xs leading-5">{entry.reasons.map((reason, index) => <li key={`${entry.sequence}:${index}:${reason}`}>• {reason}</li>)}</ul> : <p className="mt-2 text-xs text-muted-foreground">추가 변경 근거 없음</p>}
+            </li>
+          ))}
+        </ol>
+      ) : <p className="mt-3 text-xs text-muted-foreground">아직 서버에 기록된 판단 변경이 없습니다. 새 숫자나 과거 상태를 추정해서 만들지 않습니다.</p>}
+    </section>
+  );
 
   const qualityPanel = (
     <section data-testid="scanner-signal-quality-panel" aria-label="신호 품질" className="rounded-2xl border border-primary/25 bg-primary/5 p-3">
@@ -465,6 +509,7 @@ function SignalDetailPanel({
           </div>
         ) : <p className="mt-3 text-xs font-medium text-muted-foreground">현재 확인된 blocking 충돌 없음</p>}
       </section>
+      {decisionTimelinePanel}
       <section aria-label="이 신호인 이유" className="rounded-2xl border border-primary/25 bg-primary/5 p-3">
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-xs font-bold">왜 이 신호인가 · 핵심 판단</h3>
@@ -586,21 +631,38 @@ function SignalDetailPanel({
   );
 
   const performanceContent = (
-    <section data-testid="scanner-mobile-performance" className="rounded-2xl border border-card-border p-3">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-xs font-bold">검증 성과</h3>
+    <section data-testid="scanner-performance" className="rounded-2xl border border-card-border p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-xs font-bold">검증 단계 · 비용 후 성과</h3>
+          <p className="mt-1 text-xs leading-4 text-muted-foreground">실제 증거가 있는 단계만 검증으로 표시하며 없는 Forward/Paper 표본은 미검증으로 남깁니다.</p>
+        </div>
         <span className="rounded-full border border-card-border px-2 py-1 text-xs font-bold">{quality?.status ?? 'missing'}</span>
       </div>
-      <p className="mt-2 text-xs leading-4 text-muted-foreground">검증 이력이 없거나 표본이 부족하면 0%로 만들지 않고 미확인으로 표시합니다.</p>
-      <div className="mt-3 grid grid-cols-2 gap-2 text-center">
+
+      <div className="mt-3 grid grid-cols-2 gap-2 text-center min-[520px]:grid-cols-3">
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">Backtest</p><p className="text-xs font-bold">{validationBadgeLabel(quality?.status === 'verified')}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">OOS</p><p className="text-xs font-bold">{validationBadgeLabel(quality?.oos)}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">Walk-Forward</p><p className="text-xs font-bold">{validationBadgeLabel(quality?.walkForward)}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">Full Cost</p><p className="text-xs font-bold">{validationBadgeLabel(fullCostVerified)}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">Forward</p><p className="text-xs font-bold">{validationBadgeLabel(quality?.forwardVerified, quality?.forwardSampleCount)}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">Paper</p><p className="text-xs font-bold">{validationBadgeLabel(quality?.paperVerified, quality?.paperSampleCount)}</p></div>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2 text-center min-[520px]:grid-cols-3">
         <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">OOS 승률</p><p className="text-xs font-bold">{formatMetric(quality?.oosWinRate, '%')}</p></div>
         <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">WF 승률</p><p className="text-xs font-bold">{formatMetric(quality?.walkForwardWinRate, '%')}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">Expectancy</p><p className="text-xs font-bold">{formatMetric(quality?.expectancyPercent, '%')}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">Net EV · Expectancy</p><p data-testid="scanner-net-ev" className="text-xs font-bold">{formatMetric(costAdjustedExpectancy, '%')}</p></div>
         <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">Profit Factor</p><p className="text-xs font-bold">{formatMetric(quality?.profitFactor)}</p></div>
         <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">MDD</p><p className="text-xs font-bold">{formatMetric(quality?.maxDrawdownPercent, '%')}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">표본 거래</p><p className="text-xs font-bold">{formatMetric(quality?.tradeCount)}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-xs text-muted-foreground">백테스트 거래</p><p className="text-xs font-bold">{formatMetric(quality?.tradeCount)}</p></div>
       </div>
-      <p className="mt-3 text-xs leading-4 text-muted-foreground">비용 반영 {quality?.costsIncluded === true ? '확인' : '미확인'} · 슬리피지 {quality?.slippageIncluded === true ? '확인' : '미확인'} · Regime {quality?.regime ?? '미확인'}</p>
+
+      <p className="mt-3 text-xs leading-5 text-muted-foreground">
+        Net EV는 기존 Expectancy 값에 비용·슬리피지 반영 증거가 모두 있을 때만 표시합니다.
+        그 조건이 없으면 미확인으로 유지합니다.
+      </p>
+      <p className="mt-1 text-xs leading-5 text-muted-foreground">Regime {quality?.regime ?? '미확인'} · Source {quality?.source ?? '미확인'}</p>
     </section>
   );
 
@@ -699,7 +761,9 @@ function SignalDetailPanel({
       ) : (
         <>
           {qualityPanel}
+          <div className="mt-3">{decisionTimelinePanel}</div>
           {evidenceContent}
+          <div className="mt-3">{performanceContent}</div>
           <section className="mt-3 rounded-2xl border border-card-border p-3" data-testid="scanner-price-plan">
             <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-bold">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-xs font-bold">서버 계획</span></div>
             <div className="mt-2 grid grid-cols-2 gap-2 text-center sm:grid-cols-5">
