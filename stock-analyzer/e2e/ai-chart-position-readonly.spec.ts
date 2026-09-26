@@ -383,6 +383,9 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
     }
     if (url.pathname === '/api/trade-automation/orders') {
       expect(request.method()).toBe('GET');
+      expect(url.searchParams.get('dashboard')).toBe('1');
+      expect(url.searchParams.get('symbol')).toBe('005930');
+      expect(url.searchParams.get('exchange')).toBeNull();
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -648,6 +651,9 @@ test('AI Chart keeps entry approval and order management available when the sele
       return;
     }
     if (url.pathname === '/api/trade-automation/orders') {
+      expect(url.searchParams.get('dashboard')).toBe('1');
+      expect(url.searchParams.get('symbol')).toBe('005930');
+      expect(url.searchParams.get('exchange')).toBeNull();
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -758,7 +764,7 @@ for (const viewport of [
       }
       if (url.pathname === '/api/trade-automation/orders') {
         expect(url.searchParams.get('dashboard')).toBe('1');
-        expect(url.searchParams.get('exchange')).toBe('toss');
+        expect(url.searchParams.get('exchange')).toBeNull();
         expect(url.searchParams.get('symbol')).toBe('005930');
         await route.fulfill({
           status: 200,
@@ -876,6 +882,9 @@ test('AI Chart cockpit cancel and amend require explicit user confirmation and r
       return;
     }
     if (url.pathname === '/api/trade-automation/orders' && request.method() === 'GET') {
+      expect(url.searchParams.get('dashboard')).toBe('1');
+      expect(url.searchParams.get('symbol')).toBe('005930');
+      expect(url.searchParams.get('exchange')).toBeNull();
       dashboardReads += 1;
       await route.fulfill({
         status: 200,
