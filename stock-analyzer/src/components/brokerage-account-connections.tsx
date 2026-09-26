@@ -311,56 +311,264 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
   const toss = snapshots.toss; const kiwoom = snapshots.kiwoom; const upbit = snapshots.upbit; const bitget = snapshots.bitget;
   const tossBalances = Array.isArray(toss?.balances) ? toss.balances : [];
   const tossPositions = Array.isArray(toss?.positions) ? toss.positions : [];
+  const kiwoomBalances = Array.isArray(kiwoom?.balances) ? kiwoom.balances : [];
   const kiwoomPositions = Array.isArray(kiwoom?.positions) ? kiwoom.positions : [];
   const upbitBalances = Array.isArray(upbit?.balances) ? upbit.balances : [];
   const bitgetBalances = Array.isArray(bitget?.balances) ? bitget.balances : [];
   const bitgetPositions = Array.isArray(bitget?.positions) ? bitget.positions : [];
   const visibleTossPositions = tossPositions.filter((row) => isKnownNonZero(row.quantity));
   const visibleKiwoomPositions = kiwoomPositions.filter((row) => isKnownNonZero(row.quantity));
-  const visibleUpbitBalances = upbitBalances.filter((row) => isKnownNonZero(row.total));
+  const visibleUpbitBalances = upbitBalances.filter((row) => row.currency !== 'KRW' && isKnownNonZero(row.total));
   const visibleBitgetPositions = bitgetPositions.filter((row) => isKnownNonZero(row.quantity));
   const editingCredentialConfigured = editing ? credentialKnownConfigured(snapshots[editing]) : false;
 
-  return <section data-testid="brokerage-account-connections" className="mt-4 min-w-0 rounded-2xl border border-card-border bg-card p-4 shadow-sm sm:p-5">
-    <div className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-2">
-      <span aria-hidden className="h-11 w-11" />
-      <div className="min-w-0 text-center">
-        <div className="flex items-center justify-center gap-2"><WalletCards className="h-5 w-5 shrink-0 text-primary" /><h2 className="text-base font-bold">실계좌 조회 연결</h2></div>
-        <p className="mt-1 text-xs font-medium text-muted-foreground">잔고·보유·포지션·미체결만 조회합니다.</p>
+  const positionFacts = (rows: CanonicalPosition[]) => rows.flatMap((row): MoneyFact[] => {
+    const currency = marketCurrency(row.market);
+    return currency && validMoney(row.marketValue) ? [{ amount: row.marketValue, currency }] : [];
+  });
+  const stockBalanceFacts = (rows: CanonicalBalance[]) => rows.flatMap((row): MoneyFact[] => {
+    const currency = row.currency as MoneyCurrency;
+    return (currency === 'KRW' || currency === 'USD') && validMoney(row.total)
+      ? [{ amount: row.total, currency }]
+      : [];
+  });
+  const accountBuyingPowerFacts = (accounts: CanonicalAccount[] | null | undefined) => (Array.isArray(accounts) ? accounts : []).flatMap((row): MoneyFact[] => {
+    const currency = row.currency as MoneyCurrency | null;
+    return currency && (currency === 'KRW' || currency === 'USD') && validMoney(row.buyingPower)
+      ? [{ amount: row.buyingPower, currency }]
+      : [];
+  });
+
+  const tossHoldingFacts = positionFacts(tossPositions);
+  const tossTotalFacts = [...tossHoldingFacts, ...stockBalanceFacts(tossBalances)];
+  const tossOrderFacts = accountBuyingPowerFacts(toss?.accounts);
+
+  const kiwoomHoldingFacts = positionFacts(kiwoomPositions);
+  const kiwoomTotalFacts = [...kiwoomHoldingFacts, ...stockBalanceFacts(kiwoomBalances)];
+  const kiwoomOrderFacts = accountBuyingPowerFacts(kiwoom?.accounts);
+
+  const upbitHoldingFacts = upbitBalances.flatMap((row): MoneyFact[] => (
+    row.currency !== 'KRW' && validMoney(row.estimatedKrwValue)
+      ? [{ amount: row.estimatedKrwValue, currency: 'KRW' }]
+      : []
+  ));
+  const upbitCashFacts = upbitBalances.flatMap((row): MoneyFact[] => (
+    row.currency === 'KRW' && validMoney(row.total) ? [{ amount: row.total, currency: 'KRW' }] : []
+  ));
+  const upbitTotalFacts = [...upbitCashFacts, ...upbitHoldingFacts];
+  const upbitOrderFacts = upbitBalances.flatMap((row): MoneyFact[] => (
+    row.currency === 'KRW' && validMoney(row.available) ? [{ amount: row.available, currency: 'KRW' }] : []
+  ));
+
+  const bitgetEquityFacts = bitgetBalances.flatMap((row): MoneyFact[] => {
+    const currency = row.currency as MoneyCurrency;
+    return (currency === 'USDT' || currency === 'USD' || currency === 'KRW') && validMoney(row.total)
+      ? [{ amount: row.total, currency }]
+      : [];
+  });
+  const bitgetHoldingFacts = positionFacts(bitgetPositions);
+  const bitgetTotalFacts = bitgetEquityFacts;
+  const bitgetOrderFacts = bitgetBalances.flatMap((row): MoneyFact[] => {
+    const currency = row.currency as MoneyCurrency;
+    return (currency === 'USDT' || currency === 'USD' || currency === 'KRW') && validMoney(row.available)
+      ? [{ amount: row.available, currency }]
+      : [];
+  });
+
+  const tossTotalPartial = toss?.connected === true && (
+    tossBalances.length === 0
+    || !tossBalances.some((row) => validMoney(row.total))
+    || tossPositions.some((row) => !validMoney(row.marketValue))
+  );
+  const kiwoomTotalPartial = kiwoom?.connected === true && kiwoomPositions.some((row) => !validMoney(row.marketValue));
+  const upbitTotalPartial = upbit?.connected === true && upbitBalances.some((row) => (
+    row.currency !== 'KRW' && isKnownNonZero(row.total) && !validMoney(row.estimatedKrwValue)
+  ));
+  const bitgetTotalPartial = bitget?.connected === true && (
+    bitgetEquityFacts.length === 0
+    || bitgetBalances.some((row) => !['USDT', 'USD', 'KRW'].includes(row.currency) && isKnownNonZero(row.total))
+  );
+
+  const totalSummary = summarizeFacts(
+    [...tossTotalFacts, ...kiwoomTotalFacts, ...upbitTotalFacts, ...bitgetTotalFacts],
+    displayCurrency,
+    fx,
+  );
+  const holdingsSummary = summarizeFacts(
+    [...tossHoldingFacts, ...kiwoomHoldingFacts, ...upbitHoldingFacts, ...bitgetHoldingFacts],
+    displayCurrency,
+    fx,
+  );
+  const orderSummary = summarizeFacts(
+    [...tossOrderFacts, ...kiwoomOrderFacts, ...upbitOrderFacts, ...bitgetOrderFacts],
+    displayCurrency,
+    fx,
+  );
+  const totalPartial = totalSummary.partial || tossTotalPartial || kiwoomTotalPartial || upbitTotalPartial || bitgetTotalPartial;
+  const holdingsPartial = holdingsSummary.partial
+    || tossPositions.some((row) => !validMoney(row.marketValue))
+    || kiwoomPositions.some((row) => !validMoney(row.marketValue))
+    || upbitTotalPartial
+    || bitgetPositions.some((row) => isKnownNonZero(row.quantity) && !validMoney(row.marketValue));
+  const connectedSnapshots = enabledProviders()
+    .map((provider) => snapshots[provider])
+    .filter((snapshot): snapshot is CanonicalAccountSnapshot => snapshot?.connected === true);
+  const openOrdersKnown = connectedSnapshots.length > 0 && connectedSnapshots.every((snapshot) => Array.isArray(snapshot.openOrders));
+  const openOrderCount = openOrdersKnown
+    ? connectedSnapshots.reduce((sum, snapshot) => sum + (snapshot.openOrders?.length ?? 0), 0)
+    : null;
+
+  const providerMoney = (
+    snapshot: CanonicalAccountSnapshot | undefined,
+    facts: MoneyFact[],
+    partial = false,
+  ) => {
+    if (!snapshot?.connected) return { value: '—', partial: false };
+    const summary = summarizeFacts(facts, displayCurrency, fx);
+    return {
+      value: formatDisplayMoney(summary.value, displayCurrency),
+      partial: partial || summary.partial,
+    };
+  };
+
+  const tossTotal = providerMoney(toss, tossTotalFacts, tossTotalPartial);
+  const tossHolding = providerMoney(toss, tossHoldingFacts, tossPositions.some((row) => !validMoney(row.marketValue)));
+  const tossOrder = providerMoney(toss, tossOrderFacts);
+  const kiwoomTotal = providerMoney(kiwoom, kiwoomTotalFacts, kiwoomTotalPartial);
+  const kiwoomHolding = providerMoney(kiwoom, kiwoomHoldingFacts, kiwoomPositions.some((row) => !validMoney(row.marketValue)));
+  const kiwoomOrder = providerMoney(kiwoom, kiwoomOrderFacts);
+  const upbitTotal = providerMoney(upbit, upbitTotalFacts, upbitTotalPartial);
+  const upbitHolding = providerMoney(upbit, upbitHoldingFacts, upbitTotalPartial);
+  const upbitOrder = providerMoney(upbit, upbitOrderFacts);
+  const bitgetTotal = providerMoney(bitget, bitgetTotalFacts, bitgetTotalPartial);
+  const bitgetHolding = providerMoney(bitget, bitgetHoldingFacts, bitgetPositions.some((row) => isKnownNonZero(row.quantity) && !validMoney(row.marketValue)));
+  const bitgetOrder = providerMoney(bitget, bitgetOrderFacts);
+
+  return <section data-testid="brokerage-account-connections" className="mt-3 min-w-0 rounded-2xl border border-card-border bg-card p-3 shadow-sm sm:p-4">
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex min-w-0 items-center gap-2">
+        <WalletCards className="h-5 w-5 shrink-0 text-primary" />
+        <h2 className="truncate text-base font-bold">실계좌</h2>
+        <span className="rounded-full bg-positive/10 px-2 py-0.5 text-[10px] font-bold text-positive">조회 전용</span>
       </div>
-      <button type="button" aria-label="계좌 연결 새로고침" disabled={loading} onClick={() => void refresh()} className="flex h-11 w-11 items-center justify-center rounded-xl border border-card-border text-muted-foreground disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></button>
+      <div className="flex items-center justify-between gap-2 sm:justify-end">
+        <div className="inline-flex rounded-xl bg-secondary p-1" data-testid="account-display-currency">
+          {(['KRW', 'USD'] as const).map((currency) => <button
+            key={currency}
+            type="button"
+            aria-pressed={displayCurrency === currency}
+            onClick={() => chooseDisplayCurrency(currency)}
+            className={`min-h-9 rounded-lg px-3 text-xs font-bold ${displayCurrency === currency ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground'}`}
+          >{currency}</button>)}
+        </div>
+        <button type="button" aria-label="계좌 새로고침" disabled={loading} onClick={() => void refresh()} className="flex h-10 w-10 items-center justify-center rounded-xl border border-card-border text-muted-foreground disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></button>
+      </div>
     </div>
 
-    <div className="mt-3 flex items-center justify-center gap-2 rounded-2xl bg-positive/10 p-3 text-center text-xs font-semibold text-positive"><ShieldCheck className="h-4 w-4 shrink-0" /><span>조회 전용 · 주문·취소·이체·출금 없음</span></div>
-    <details className="mt-2 rounded-xl border border-card-border bg-background px-3 py-2 text-xs text-muted-foreground" data-testid="account-readonly-safety-details">
-      <summary className="min-h-8 cursor-pointer text-center font-semibold text-foreground">보안·권한 상세</summary>
-      <div className="border-t border-card-border pt-2 text-left leading-5">
-        <p>READ-ONLY · {kiwoomSupported ? 'Toss · Kiwoom · Upbit · Bitget' : 'Toss · Upbit · Bitget'}의 조회 전용 키만 사용하며 잔고·보유·포지션{kiwoomSupported ? '·미체결' : ''}을 읽습니다.</p>
-        <p className="mt-1">실주문/취소/이체/출금 0건 · Secret 원문 응답 0건을 유지합니다.</p>
-      </div>
-    </details>
-    {error ? <p role="alert" className="mt-3 break-words rounded-2xl bg-destructive/10 p-3 text-center text-xs font-semibold text-destructive">{error}</p> : null}
-    {saveMessage ? <p role="status" className="mt-3 break-words rounded-2xl bg-secondary p-3 text-center text-xs font-semibold">{saveMessage}</p> : null}
-
-    <div className="mt-4 grid min-w-0 grid-cols-1 gap-3 lg:grid-cols-2 2xl:grid-cols-4">
-      <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-toss"><div className="flex min-w-0 items-center justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-semibold">Toss · 국내/미국주식</p><p className="mt-0.5 text-xs text-muted-foreground">현금 매수가능·보유자산 조회</p></div><Status snapshot={toss} /></div>
-        <div className="mt-3 grid grid-cols-2 gap-2 text-xs"><Metric label="KRW 현금가능" value={amount(toss, tossBalances.find((row) => row.currency === 'KRW')?.available ?? null, 'KRW')} /><Metric label="USD 현금가능" value={amount(toss, tossBalances.find((row) => row.currency === 'USD')?.available ?? null, 'USD')} /><Metric label="보유 종목" value={countMetric(toss, Array.isArray(toss?.positions) ? knownNonZeroCount(tossPositions, (row) => row.quantity) : null, '종목')} /><Metric label="미체결" value={countMetric(toss, Array.isArray(toss?.openOrders) ? toss.openOrders.length : null, '건')} /></div>
-        <div className="mt-2 max-h-44 space-y-1 overflow-y-auto overscroll-contain">{visibleTossPositions.slice(0, 8).map((row, index) => <div key={`${row.symbol}-${index}`} className="rounded-xl bg-secondary/60 px-3 py-2 text-xs"><div className="flex min-w-0 items-center justify-between gap-3"><span className="min-w-0 truncate font-semibold">{row.symbol} · {row.market}</span><span className="shrink-0">{amount(toss, row.quantity)}</span></div><p className="mt-1 text-xs text-muted-foreground">평가 {amount(toss, row.marketValue)} · 손익 {amount(toss, row.unrealizedPnl)}</p></div>)}</div>
-        <ConnectionActions provider="toss" configured={credentialKnownConfigured(toss)} disconnecting={disconnecting === 'toss'} onSetup={() => openSetup('toss')} onDisconnect={() => void disconnect('toss')} /><ErrorLine value={toss?.errorCode} />
-      </article>
-
-      {kiwoomSupported ? <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-kiwoom"><div className="flex min-w-0 items-center justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-semibold">Kiwoom · 국내/미국주식</p><p className="mt-0.5 text-xs text-muted-foreground">공식 REST KR/US 잔고·미체결 조회</p></div><Status snapshot={kiwoom} /></div>
-        <div className="mt-3 grid grid-cols-2 gap-2 text-xs"><Metric label="예수금" value={amount(kiwoom, Array.isArray(kiwoom?.balances) ? kiwoom.balances.find((row) => row.currency === 'KRW')?.total ?? null : null, 'KRW')} /><Metric label="주문가능" value={amount(kiwoom, Array.isArray(kiwoom?.accounts) ? kiwoom.accounts.find((row) => row.market === 'KR')?.buyingPower ?? null : null, 'KRW')} /><Metric label="보유 종목" value={countMetric(kiwoom, Array.isArray(kiwoom?.positions) ? knownNonZeroCount(kiwoomPositions, (row) => row.quantity) : null, '종목')} /><Metric label="미체결" value={countMetric(kiwoom, Array.isArray(kiwoom?.openOrders) ? kiwoom.openOrders.length : null, '건')} /></div>
-        <div className="mt-2 max-h-44 space-y-1 overflow-y-auto overscroll-contain">{visibleKiwoomPositions.slice(0, 8).map((row, index) => <div key={`${row.symbol}-${index}`} className="rounded-xl bg-secondary/60 px-3 py-2 text-xs"><div className="flex min-w-0 items-center justify-between gap-3"><span className="min-w-0 truncate font-semibold">{row.symbol} · {row.market}</span><span className="shrink-0">{amount(kiwoom, row.quantity)}</span></div><p className="mt-1 text-xs text-muted-foreground">평가 {amount(kiwoom, row.marketValue, 'KRW')} · 손익 {amount(kiwoom, row.unrealizedPnl, 'KRW')}</p></div>)}</div>
-        <ConnectionActions provider="kiwoom" configured={credentialKnownConfigured(kiwoom)} disconnecting={disconnecting === 'kiwoom'} onSetup={() => openSetup('kiwoom')} onDisconnect={() => void disconnect('kiwoom')} /><ErrorLine value={kiwoom?.errorCode} />
-      </article> : null}
-
-      {canAccessSpot ? <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-upbit"><div className="flex min-w-0 items-center justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-semibold">Upbit · 코인 현물</p><p className="mt-0.5 text-xs text-muted-foreground">현물 잔액·보유자산·미체결 조회</p></div><Status snapshot={upbit} /></div><div className="mt-3 grid grid-cols-3 gap-2 text-xs"><Metric label="KRW 잔액" value={amount(upbit, upbitBalances.find((row) => row.currency === 'KRW')?.total ?? null, 'KRW')} /><Metric label="보유 자산" value={countMetric(upbit, Array.isArray(upbit?.balances) ? knownNonZeroCount(upbitBalances, (row) => row.total) : null, '개')} /><Metric label="미체결" value={countMetric(upbit, Array.isArray(upbit?.openOrders) ? upbit.openOrders.length : null, '건')} /></div><div className="mt-2 max-h-40 space-y-1 overflow-y-auto overscroll-contain">{visibleUpbitBalances.slice(0, 10).map((row) => <div key={row.currency} className="flex min-w-0 items-center justify-between gap-3 rounded-xl bg-secondary/60 px-3 py-2 text-xs"><span className="min-w-0 truncate font-semibold">{row.currency}</span><span className="shrink-0 tabular-nums">{amount(upbit, row.total, row.currency)}</span></div>)}</div><ConnectionActions provider="upbit" configured={credentialKnownConfigured(upbit)} disconnecting={disconnecting === 'upbit'} onSetup={() => openSetup('upbit')} onDisconnect={() => void disconnect('upbit')} /><ErrorLine value={upbit?.errorCode} /></article> : null}
-
-      {canAccessFutures ? <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-bitget"><div className="flex min-w-0 items-center justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-semibold">Bitget · 코인 선물</p><p className="mt-0.5 text-xs text-muted-foreground">선물 계정잔액·포지션·미체결 조회</p></div><Status snapshot={bitget} /></div><div className="mt-3 grid grid-cols-2 gap-2 text-xs"><Metric label="USDT 계정잔액" value={amount(bitget, bitgetBalances.find((row) => row.currency === 'USDT')?.total ?? null, 'USDT')} /><Metric label="잔액 자산" value={countMetric(bitget, Array.isArray(bitget?.balances) ? knownNonZeroCount(bitgetBalances, (row) => row.total) : null, '개')} /><Metric label="열린 포지션" value={countMetric(bitget, Array.isArray(bitget?.positions) ? knownNonZeroCount(bitgetPositions, (row) => row.quantity) : null, '개')} /><Metric label="미체결" value={countMetric(bitget, Array.isArray(bitget?.openOrders) ? bitget.openOrders.length : null, '건')} /></div><div className="mt-2 max-h-44 space-y-1 overflow-y-auto overscroll-contain">{visibleBitgetPositions.slice(0, 8).map((row, index) => <div key={`${row.symbol}-${row.side}-${index}`} className="rounded-xl bg-secondary/60 px-3 py-2 text-xs"><div className="flex min-w-0 items-center justify-between gap-3"><span className="min-w-0 truncate font-semibold">{row.symbol} · {accountEvidence(bitget, row.side)}</span><span className="shrink-0">{amount(bitget, row.quantity)}</span></div><p className="mt-1 break-words text-xs text-muted-foreground">레버리지 {amount(bitget, row.leverage, null, 'x')} · 미실현 {amount(bitget, row.unrealizedPnl)}</p></div>)}</div><ConnectionActions provider="bitget" configured={credentialKnownConfigured(bitget)} disconnecting={disconnecting === 'bitget'} onSetup={() => openSetup('bitget')} onDisconnect={() => void disconnect('bitget')} /><ErrorLine value={bitget?.errorCode} /></article> : null}
+    <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4" data-testid="account-summary">
+      <SummaryMetric label="실계좌 총금액" value={formatDisplayMoney(totalSummary.value, displayCurrency)} partial={totalPartial} />
+      <SummaryMetric label="보유자산" value={formatDisplayMoney(holdingsSummary.value, displayCurrency)} partial={holdingsPartial} />
+      <SummaryMetric label="주문가능" value={formatDisplayMoney(orderSummary.value, displayCurrency)} partial={orderSummary.partial} />
+      <SummaryMetric label="미체결" value={openOrderCount == null ? '—' : `${openOrderCount}건`} partial={!openOrdersKnown && connectedSnapshots.length > 0} />
     </div>
 
-    <p className="mt-3 text-center text-xs text-muted-foreground">최근 확인 {latestCheckedAt(enabledProviders().map((provider) => snapshots[provider]))}</p>
+    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[10px] text-muted-foreground">
+      <span>최근 동기화 {latestCheckedAt(enabledProviders().map((provider) => snapshots[provider]))}</span>
+      {fxWarning ? <span className="font-semibold text-warning">{fxWarning}</span> : null}
+    </div>
+
+    {error ? <p role="alert" className="mt-2 break-words rounded-xl bg-destructive/10 px-3 py-2 text-xs font-semibold text-destructive">{error}</p> : null}
+    {saveMessage ? <p role="status" className="mt-2 break-words rounded-xl bg-secondary px-3 py-2 text-xs font-semibold">{saveMessage}</p> : null}
+
+    <div className="mt-3 grid min-w-0 grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
+      <ProviderCard
+        provider="toss"
+        title="Toss · 주식"
+        snapshot={toss}
+        total={tossTotal}
+        holding={tossHolding}
+        order={tossOrder}
+        holdingCount={Array.isArray(toss?.positions) ? knownNonZeroCount(tossPositions, (row) => row.quantity) : null}
+        openOrders={Array.isArray(toss?.openOrders) ? toss.openOrders.length : null}
+        configured={credentialKnownConfigured(toss)}
+        disconnecting={disconnecting === 'toss'}
+        onSetup={() => openSetup('toss')}
+        onDisconnect={() => void disconnect('toss')}
+      >
+        {visibleTossPositions.slice(0, 5).map((row, index) => {
+          const currency = marketCurrency(row.market);
+          const converted = currency ? convertMoney(row.marketValue, currency, displayCurrency, fx) : null;
+          return <HoldingRow key={`${row.symbol}-${index}`} symbol={row.symbol} value={formatDisplayMoney(converted, displayCurrency)} meta={row.market} />;
+        })}
+      </ProviderCard>
+
+      {kiwoomSupported ? <ProviderCard
+        provider="kiwoom"
+        title="Kiwoom · 주식"
+        snapshot={kiwoom}
+        total={kiwoomTotal}
+        holding={kiwoomHolding}
+        order={kiwoomOrder}
+        holdingCount={Array.isArray(kiwoom?.positions) ? knownNonZeroCount(kiwoomPositions, (row) => row.quantity) : null}
+        openOrders={Array.isArray(kiwoom?.openOrders) ? kiwoom.openOrders.length : null}
+        configured={credentialKnownConfigured(kiwoom)}
+        disconnecting={disconnecting === 'kiwoom'}
+        onSetup={() => openSetup('kiwoom')}
+        onDisconnect={() => void disconnect('kiwoom')}
+      >
+        {visibleKiwoomPositions.slice(0, 5).map((row, index) => {
+          const currency = marketCurrency(row.market);
+          const converted = currency ? convertMoney(row.marketValue, currency, displayCurrency, fx) : null;
+          return <HoldingRow key={`${row.symbol}-${index}`} symbol={row.symbol} value={formatDisplayMoney(converted, displayCurrency)} meta={row.market} />;
+        })}
+      </ProviderCard> : null}
+
+      {canAccessSpot ? <ProviderCard
+        provider="upbit"
+        title="Upbit · 현물"
+        snapshot={upbit}
+        total={upbitTotal}
+        holding={upbitHolding}
+        order={upbitOrder}
+        holdingCount={Array.isArray(upbit?.balances) ? knownNonZeroCount(visibleUpbitBalances, (row) => row.total) : null}
+        openOrders={Array.isArray(upbit?.openOrders) ? upbit.openOrders.length : null}
+        configured={credentialKnownConfigured(upbit)}
+        disconnecting={disconnecting === 'upbit'}
+        onSetup={() => openSetup('upbit')}
+        onDisconnect={() => void disconnect('upbit')}
+      >
+        {visibleUpbitBalances.slice(0, 5).map((row) => {
+          const converted = validMoney(row.estimatedKrwValue)
+            ? convertMoney(row.estimatedKrwValue, 'KRW', displayCurrency, fx)
+            : null;
+          const value = converted == null
+            ? `${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 8 }).format(row.total ?? 0)} ${row.currency}`
+            : formatDisplayMoney(converted, displayCurrency);
+          return <HoldingRow key={row.currency} symbol={row.currency} value={value} />;
+        })}
+      </ProviderCard> : null}
+
+      {canAccessFutures ? <ProviderCard
+        provider="bitget"
+        title="Bitget · 선물"
+        snapshot={bitget}
+        total={bitgetTotal}
+        holding={bitgetHolding}
+        order={bitgetOrder}
+        holdingCount={Array.isArray(bitget?.positions) ? knownNonZeroCount(bitgetPositions, (row) => row.quantity) : null}
+        openOrders={Array.isArray(bitget?.openOrders) ? bitget.openOrders.length : null}
+        configured={credentialKnownConfigured(bitget)}
+        disconnecting={disconnecting === 'bitget'}
+        onSetup={() => openSetup('bitget')}
+        onDisconnect={() => void disconnect('bitget')}
+      >
+        {visibleBitgetPositions.slice(0, 5).map((row, index) => {
+          const pnl = convertMoney(row.unrealizedPnl, 'USDT', displayCurrency, fx);
+          return <HoldingRow key={`${row.symbol}-${row.side}-${index}`} symbol={row.symbol} value={formatDisplayMoney(pnl, displayCurrency)} meta={row.side ?? undefined} />;
+        })}
+      </ProviderCard> : null}
+    </div>
+
     {editing ? <div className="fixed inset-0 z-50 flex items-end bg-black/55 p-3 sm:items-center sm:justify-center" role="presentation"><div role="dialog" aria-modal="true" aria-label={`${providerLabel(editing)} 조회 연결 설정`} className="max-h-[calc(100dvh-1.5rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-card-border bg-card p-4 shadow-2xl"><div className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-2"><span aria-hidden className="h-11 w-11" /><div className="min-w-0 text-center"><h3 className="truncate text-base font-bold">{providerLabel(editing)} 조회 전용 연결</h3><p className="mt-1 text-xs text-muted-foreground">거래·출금 권한 없이 조회 키만 저장합니다.</p></div><button type="button" aria-label="연결 설정 닫기" onClick={() => setEditing(null)} className="flex h-11 w-11 items-center justify-center rounded-xl border border-card-border"><X className="h-4 w-4" /></button></div><div className="mt-4 space-y-3">
       <CredentialField testId={`${editing}-credential-primary`} label={editing === 'toss' ? 'Client ID' : editing === 'kiwoom' ? 'App Key' : editing === 'upbit' ? 'Access Key' : 'API Key'} value={credentials.first} onChange={(value) => setCredentials((current) => ({ ...current, first: value }))} configured={editingCredentialConfigured} />
       <CredentialField testId={`${editing}-credential-secret`} label={editing === 'toss' ? 'Client Secret' : editing === 'kiwoom' ? 'App Secret' : 'Secret Key'} value={credentials.second} onChange={(value) => setCredentials((current) => ({ ...current, second: value }))} configured={editingCredentialConfigured} />
