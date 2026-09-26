@@ -76,6 +76,11 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain("setExitPreviewState({ kind: 'idle' });");
   expect(panel).toContain("confirmed: true");
   expect(panel).toContain("자동 조회·자동 취소·자동 정정 없음");
+  expect(panel).toContain("item.state === 'ACCEPTED'");
+  expect(panel).toContain("item.filledQuantity === 0");
+  expect(panel).toContain("isUsStockPriceOnlyAmend(item)");
+  expect(panel).toContain("const quantity = priceOnly ? null");
+  expect(panel).toContain("부분체결된 주문은 정정하지 않고 미체결 잔량 취소 후 새 계획으로 다시 검증합니다.");
   expect(panel).toContain("ScannerApprovalComposer selection={selection}");
   expect(panel).toContain("data-testid=\"ai-chart-entry-planning\"");
   expect(panel).toContain("실전 진입은 아래 승인 큐와 서버 live gate를 우회하지 않습니다.");
