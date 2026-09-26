@@ -222,3 +222,86 @@ nav[aria-label='주요 메뉴'] [role='menuitem'] {
     min-height: var(--pro-ui-control-desktop) !important;
   }
 }
+
+
+/*
+ * V2 user-surface polish.
+ * One typography rhythm, bounded content width, no accidental horizontal
+ * scrollers, and tabular financial numbers across ordinary user screens.
+ */
+[data-testid='app-shell'] {
+  --pro-ui-content-max: 90rem;
+  --pro-ui-page-gutter: clamp(0.75rem, 2vw, 1.5rem);
+}
+
+[data-ui-role='page-header'] {
+  min-width: 0;
+}
+
+[data-ui-role='page-title'],
+[data-ui-role='eyebrow'],
+[data-ui-role='tabs'] button,
+nav[aria-label='주요 메뉴'] button {
+  text-wrap: balance;
+}
+
+:is(
+  [data-testid^='home-'],
+  [data-testid='stocks-shell'],
+  [data-testid='technical-workspace'],
+  [data-testid='portfolio-v2-page'],
+  [data-testid='account-page']
+) :is(
+  [class~='tabular-nums'],
+  [class*='text-right'],
+  [data-ui-role='metric']
+) {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+[data-ui-role='tabs'] {
+  max-width: 100%;
+}
+
+[data-ui-role='tabs'] > button {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 600px) and (max-width: 1199px) {
+  [data-testid='home-tablet-workspace'] {
+    align-items: start;
+  }
+}
+
+@media (min-width: 1200px) {
+  [data-ui-role='page-header'] > div {
+    min-height: 3rem;
+  }
+
+  [data-ui-role='page-title'] {
+    text-align: left;
+  }
+
+  nav[aria-label='주요 메뉴'] {
+    margin-top: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+}
+
+/*
+ * The shared BottomNav is a normal-flow flex sibling. Do not add a second
+ * fixed-nav reserve on the Home decision dashboard.
+ */
+[data-testid='home-page-scroll'] {
+  scrollbar-gutter: stable;
+}
+
+@media (max-width: 599px) {
+  [data-testid='home-page-scroll'] {
+    scrollbar-gutter: auto;
+  }
+}
