@@ -6,6 +6,7 @@ on:
       - .github/workflows/production-comprehensive-readonly-qa.yml
       - stock-analyzer/playwright.production-comprehensive.config.ts
       - stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts
+      - stock-analyzer/e2e/production-research-center-readonly-qa.spec.ts
       - stock-analyzer/e2e/production-mobile-scroll-readonly-qa.spec.ts
       - stock-analyzer/e2e/production-critical-http-readonly-qa.spec.ts
       - stock-analyzer/e2e/production-performance-readonly-qa.spec.ts
@@ -38,6 +39,8 @@ jobs:
           const fs = require('node:fs');
           const workflow = fs.readFileSync('.github/workflows/production-comprehensive-readonly-qa.yml', 'utf8');
           const config = fs.readFileSync('stock-analyzer/playwright.production-comprehensive.config.ts', 'utf8');
+          const comprehensiveSpec = fs.readFileSync('stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts', 'utf8');
+          const researchSpec = fs.readFileSync('stock-analyzer/e2e/production-research-center-readonly-qa.spec.ts', 'utf8');
           const liveJob = workflow.split('\n  production-comprehensive-readonly:\n')[1] ?? '';
           const uploadStep = liveJob.split('\n      - name: Upload comprehensive QA evidence\n')[1] ?? '';
 
@@ -61,7 +64,21 @@ jobs:
             throw new Error('Live comprehensive QA must accept the normal exact-main == deployed-SHA case without a false failure');
           }
           if (!liveJob.includes('git show "$QA_HARNESS_SHA:stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts"')) {
-            throw new Error('Live comprehensive QA may only overlay the approved QA harness spec when workflow-generation SHA differs');
+            throw new Error('Live comprehensive QA may only overlay the approved comprehensive QA harness when workflow-generation SHA differs');
+          }
+          if (!liveJob.includes('git show "$QA_HARNESS_SHA:stock-analyzer/e2e/production-research-center-readonly-qa.spec.ts"')) {
+            throw new Error('Live comprehensive QA must overlay the approved Research Center QA harness when workflow-generation SHA differs');
+          }
+          if (!comprehensiveSpec.includes('authStateByViewport.set(cacheKey, await page.context().storageState())')) {
+            throw new Error('Production QA must refresh cached browser auth state after successful reuse');
+          }
+          if (!comprehensiveSpec.includes('PRODUCTION_QA_ACCESS_TOKEN_UNAVAILABLE')
+            || !comprehensiveSpec.includes('Authorization: \`Bearer \${token}\`')) {
+            throw new Error('Authenticated runtime probes must use the in-browser Supabase bearer token');
+          }
+          if (!researchSpec.includes("getByTestId('capability-denied')")
+            || !researchSpec.includes('ADMIN_RESEARCH_CENTER_NOT_EVALUATED')) {
+            throw new Error('Research Center QA must distinguish policy denial from an app outage');
           }
           if (!config.includes("trace: 'off'")) {
             throw new Error('Authenticated Production QA must not retain Playwright traces');
@@ -109,15 +126,21 @@ jobs:
           [[ "$EXPECTED_DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
           if [[ "$QA_HARNESS_SHA" == "$EXPECTED_DEPLOY_SHA" ]]; then
             test -s stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts
+            test -s stock-analyzer/e2e/production-research-center-readonly-qa.spec.ts
             echo "QA harness already belongs to the exact deployed SHA; overlay not required."
           else
             git fetch --no-tags --depth 1 origin "$QA_HARNESS_SHA"
             git cat-file -e "$QA_HARNESS_SHA^{commit}"
             git show "$QA_HARNESS_SHA:stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts" \
               > /tmp/production-comprehensive-readonly-qa.spec.ts
+            git show "$QA_HARNESS_SHA:stock-analyzer/e2e/production-research-center-readonly-qa.spec.ts" \
+              > /tmp/production-research-center-readonly-qa.spec.ts
             test -s /tmp/production-comprehensive-readonly-qa.spec.ts
+            test -s /tmp/production-research-center-readonly-qa.spec.ts
             install -m 0644 /tmp/production-comprehensive-readonly-qa.spec.ts \
               stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts
+            install -m 0644 /tmp/production-research-center-readonly-qa.spec.ts \
+              stock-analyzer/e2e/production-research-center-readonly-qa.spec.ts
           fi
 
       - uses: pnpm/action-setup@v4
