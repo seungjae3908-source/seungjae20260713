@@ -73,6 +73,11 @@ export class StockFlowEvidenceError extends Error {
   }
 }
 
+export type FinraApiCredentials = {
+  clientId: string;
+  clientSecret: string;
+};
+
 type FinraRegShoRow = {
   tradeReportDate?: unknown;
   securitiesInformationProcessorSymbolIdentifier?: unknown;
@@ -93,10 +98,13 @@ type FinraShortInterestRow = {
   changePercent?: unknown;
 };
 
+const FINRA_FIP_TOKEN_URL = 'https://ews.fip.finra.org/fip/rest/ews/oauth2/access_token?grant_type=client_credentials';
 const FINRA_REG_SHO_URL = 'https://api.finra.org/data/group/otcMarket/name/regShoDaily';
 const FINRA_SHORT_INTEREST_URL = 'https://api.finra.org/data/group/otcMarket/name/consolidatedShortInterest';
 const FINRA_DOCS_URL = 'https://developer.finra.org/docs';
 const KRX_DATA_URL = 'https://openapi.krx.co.kr/contents/OPP/DATA/OPPDATA002.jsp';
+
+let finraTokenCache: { clientId: string; accessToken: string; expiresAt: number } | null = null;
 
 function finite(value: unknown): number | null {
   const parsed = Number(value);
@@ -130,9 +138,203 @@ function round(value: number, digits = 2): number {
   return Math.round(value * factor) / factor;
 }
 
+function safety() {
+  return {
+    evidenceOnly: true as const,
+    scoreImpact: 0 as const,
+    rankImpact: 0 as const,
+    directionImpact: 0 as const,
+    executionAuthority: 'NONE' as const,
+    orderAllowed: false as const,
+  };
+}
+
+function finraSources(shortDate: string | null = null, interestDate: string | null = null): StockFlowSourceRef[] {
+  return [
+    { provider: 'FINRA', dataset: 'Reg SHO Daily Short Sale Volume', asOf: shortDate, url: FINRA_DOCS_URL },
+    { provider: 'FINRA', dataset: 'Consolidated Short Interest', asOf: interestDate, url: FINRA_DOCS_URL },
+  ];
+}
+
+function krNotConnected(symbol: string, now: Date): StockFlowEvidence {
+  return {
+    schemaVersion: 'scanner-stock-flow-evidence-v1',
+    market: 'KR',
+    symbol,
+    status: 'NOT_CONNECTED',
+    observedAt: now.toISOString(),
+    shortSale: {
+      status: 'NOT_CONNECTED',
+      tradeDate: null,
+      shortVolume: null,
+      shortExemptVolume: null,
+      totalVolume: null,
+      shortVolumeRatioPercent: null,
+    },
+    shortInterest: {
+      status: 'NOT_CONNECTED',
+      settlementDate: null,
+      currentShortPosition: null,
+      previousShortPosition: null,
+      changePercent: null,
+      averageDailyVolume: null,
+      daysToCover: null,
+    },
+    institutional: {
+      status: 'NOT_CONNECTED',
+      asOf: null,
+      note: 'KRX 공식 투자자/회원사 수급 데이터는 승인된 API 인증키 또는 데이터 공급 계약 연결이 필요합니다.',
+    },
+    foreignFlow: {
+      status: 'NOT_CONNECTED',
+      asOf: null,
+      note: 'KRX 공식 외국인 거래 데이터는 승인된 API 인증키 또는 데이터 공급 계약 연결이 필요합니다.',
+    },
+    shortCover: {
+      status: 'NOT_INFERRED',
+      note: '공매도/수급 원자료 없이 숏커버를 추정하지 않습니다.',
+    },
+    sources: [{ provider: 'KRX', dataset: 'KRX official stock market data feed', asOf: null, url: KRX_DATA_URL }],
+    warnings: ['KRX 공식 수급 데이터 provider가 현재 앱에 연결되지 않았습니다.'],
+    safety: safety(),
+  };
+}
+
+function usNotConnected(symbol: string, now: Date): StockFlowEvidence {
+  return {
+    schemaVersion: 'scanner-stock-flow-evidence-v1',
+    market: 'US',
+    symbol,
+    status: 'NOT_CONNECTED',
+    observedAt: now.toISOString(),
+    shortSale: {
+      status: 'NOT_CONNECTED',
+      tradeDate: null,
+      shortVolume: null,
+      shortExemptVolume: null,
+      totalVolume: null,
+      shortVolumeRatioPercent: null,
+    },
+    shortInterest: {
+      status: 'NOT_CONNECTED',
+      settlementDate: null,
+      currentShortPosition: null,
+      previousShortPosition: null,
+      changePercent: null,
+      averageDailyVolume: null,
+      daysToCover: null,
+    },
+    institutional: {
+      status: 'NOT_CONNECTED',
+      asOf: null,
+      note: 'SEC Form 13F는 분기 point-in-time ingest가 별도로 필요하며 현재 Scanner 런타임에 연결하지 않았습니다.',
+    },
+    foreignFlow: {
+      status: 'NOT_APPLICABLE',
+      asOf: null,
+      note: '미국 시장에서 국내식 외국인 순매수 지표를 임의 변환하지 않습니다.',
+    },
+    shortCover: {
+      status: 'NOT_INFERRED',
+      note: 'Short sale volume과 short interest만으로 숏커버를 단정하지 않습니다.',
+    },
+    sources: finraSources(),
+    warnings: ['FINRA Production Query API OAuth 자격증명이 현재 런타임에 연결되지 않았습니다.'],
+    safety: safety(),
+  };
+}
+
+function usUnavailable(symbol: string, now: Date, warning: string): StockFlowEvidence {
+  return {
+    ...usNotConnected(symbol, now),
+    status: 'UNAVAILABLE',
+    shortSale: {
+      status: 'UNAVAILABLE',
+      tradeDate: null,
+      shortVolume: null,
+      shortExemptVolume: null,
+      totalVolume: null,
+      shortVolumeRatioPercent: null,
+    },
+    shortInterest: {
+      status: 'UNAVAILABLE',
+      settlementDate: null,
+      currentShortPosition: null,
+      previousShortPosition: null,
+      changePercent: null,
+      averageDailyVolume: null,
+      daysToCover: null,
+    },
+    warnings: [warning],
+  };
+}
+
+function resolveFinraCredentials(explicit: FinraApiCredentials | null | undefined): FinraApiCredentials | null {
+  if (explicit === null) return null;
+  if (explicit !== undefined) {
+    const clientId = explicit.clientId.trim();
+    const clientSecret = explicit.clientSecret.trim();
+    return clientId && clientSecret ? { clientId, clientSecret } : null;
+  }
+  const clientId = process.env.FINRA_API_CLIENT_ID?.trim() ?? '';
+  const clientSecret = process.env.FINRA_API_CLIENT_SECRET?.trim() ?? '';
+  return clientId && clientSecret ? { clientId, clientSecret } : null;
+}
+
+async function getFinraAccessToken(
+  credentials: FinraApiCredentials,
+  fetchImpl: typeof fetch,
+  nowMs: number,
+): Promise<string> {
+  if (
+    finraTokenCache
+    && finraTokenCache.clientId === credentials.clientId
+    && finraTokenCache.expiresAt - 60_000 > nowMs
+  ) {
+    return finraTokenCache.accessToken;
+  }
+
+  let response: Response;
+  try {
+    const basic = Buffer.from(`${credentials.clientId}:${credentials.clientSecret}`, 'utf8').toString('base64');
+    response = await fetchImpl(FINRA_FIP_TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        authorization: `Basic ${basic}`,
+      },
+    });
+  } catch {
+    throw new StockFlowEvidenceError('STOCK_FLOW_PROVIDER_ERROR', 'FINRA OAuth 토큰을 발급받지 못했습니다.');
+  }
+
+  if (!response.ok) {
+    throw new StockFlowEvidenceError('STOCK_FLOW_PROVIDER_ERROR', `FINRA OAuth 응답 오류 HTTP_${response.status}`);
+  }
+
+  const body: unknown = await response.json().catch(() => null);
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw new StockFlowEvidenceError('STOCK_FLOW_PROVIDER_ERROR', 'FINRA OAuth 응답 형식이 올바르지 않습니다.');
+  }
+  const row = body as Record<string, unknown>;
+  const accessToken = typeof row.access_token === 'string' ? row.access_token.trim() : '';
+  const expiresInSeconds = Number(row.expires_in);
+  if (!accessToken || !Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
+    throw new StockFlowEvidenceError('STOCK_FLOW_PROVIDER_ERROR', 'FINRA OAuth 토큰 정보가 누락됐습니다.');
+  }
+
+  finraTokenCache = {
+    clientId: credentials.clientId,
+    accessToken,
+    expiresAt: nowMs + Math.min(expiresInSeconds, 43_200) * 1_000,
+  };
+  return accessToken;
+}
+
 async function finraPost<T>(
   url: string,
   payload: Record<string, unknown>,
+  accessToken: string,
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
 ): Promise<T[]> {
@@ -143,6 +345,7 @@ async function finraPost<T>(
       signal,
       headers: {
         accept: 'application/json',
+        authorization: `Bearer ${accessToken}`,
         'content-type': 'application/json',
         'user-agent': 'seungjae-stock-flow-evidence/1.0',
       },
@@ -150,18 +353,18 @@ async function finraPost<T>(
     });
   } catch (cause) {
     if (signal?.aborted) throw cause;
-    throw new StockFlowEvidenceError('STOCK_FLOW_PROVIDER_ERROR', 'FINRA 공개 데이터를 불러오지 못했습니다.');
+    throw new StockFlowEvidenceError('STOCK_FLOW_PROVIDER_ERROR', 'FINRA 공식 데이터를 불러오지 못했습니다.');
   }
   if (response.status === 204) return [];
   if (!response.ok) {
     throw new StockFlowEvidenceError(
       'STOCK_FLOW_PROVIDER_ERROR',
-      `FINRA 공개 데이터 응답 오류 HTTP_${response.status}`,
+      `FINRA 공식 데이터 응답 오류 HTTP_${response.status}`,
     );
   }
   const body: unknown = await response.json().catch(() => null);
   if (!Array.isArray(body)) {
-    throw new StockFlowEvidenceError('STOCK_FLOW_PROVIDER_ERROR', 'FINRA 공개 데이터 형식이 올바르지 않습니다.');
+    throw new StockFlowEvidenceError('STOCK_FLOW_PROVIDER_ERROR', 'FINRA 공식 데이터 형식이 올바르지 않습니다.');
   }
   return body as T[];
 }
@@ -208,70 +411,29 @@ function latestShortInterest(rows: FinraShortInterestRow[], symbol: string) {
   return latest ?? null;
 }
 
-function safety() {
-  return {
-    evidenceOnly: true as const,
-    scoreImpact: 0 as const,
-    rankImpact: 0 as const,
-    directionImpact: 0 as const,
-    executionAuthority: 'NONE' as const,
-    orderAllowed: false as const,
-  };
-}
-
-function krNotConnected(symbol: string, now: Date): StockFlowEvidence {
-  return {
-    schemaVersion: 'scanner-stock-flow-evidence-v1',
-    market: 'KR',
-    symbol,
-    status: 'NOT_CONNECTED',
-    observedAt: now.toISOString(),
-    shortSale: {
-      status: 'NOT_CONNECTED',
-      tradeDate: null,
-      shortVolume: null,
-      shortExemptVolume: null,
-      totalVolume: null,
-      shortVolumeRatioPercent: null,
-    },
-    shortInterest: {
-      status: 'NOT_CONNECTED',
-      settlementDate: null,
-      currentShortPosition: null,
-      previousShortPosition: null,
-      changePercent: null,
-      averageDailyVolume: null,
-      daysToCover: null,
-    },
-    institutional: {
-      status: 'NOT_CONNECTED',
-      asOf: null,
-      note: 'KRX 공식 투자자/회원사 수급 데이터 공급 계약 또는 승인된 API 연결이 필요합니다.',
-    },
-    foreignFlow: {
-      status: 'NOT_CONNECTED',
-      asOf: null,
-      note: 'KRX 공식 외국인 거래 데이터 공급 계약 또는 승인된 API 연결이 필요합니다.',
-    },
-    shortCover: {
-      status: 'NOT_INFERRED',
-      note: '공매도/수급 원자료 없이 숏커버를 추정하지 않습니다.',
-    },
-    sources: [{ provider: 'KRX', dataset: 'KRX official stock market data feed', asOf: null, url: KRX_DATA_URL }],
-    warnings: ['KRX 공식 수급 데이터 provider가 현재 앱에 연결되지 않았습니다.'],
-    safety: safety(),
-  };
-}
-
 export async function loadStockFlowEvidence(
   input: { market: StockFlowMarket; symbol: string },
-  dependencies: { fetchImpl?: typeof fetch; now?: () => Date } = {},
+  dependencies: {
+    fetchImpl?: typeof fetch;
+    now?: () => Date;
+    finraCredentials?: FinraApiCredentials | null;
+  } = {},
 ): Promise<StockFlowEvidence> {
   const now = dependencies.now?.() ?? new Date();
   if (input.market === 'KR') return krNotConnected(normalizeKrSymbol(input.symbol), now);
 
   const symbol = normalizeUsSymbol(input.symbol);
+  const credentials = resolveFinraCredentials(dependencies.finraCredentials);
+  if (!credentials) return usNotConnected(symbol, now);
+
   const fetchImpl = dependencies.fetchImpl ?? fetch;
+  let accessToken: string;
+  try {
+    accessToken = await getFinraAccessToken(credentials, fetchImpl, now.getTime());
+  } catch {
+    return usUnavailable(symbol, now, 'FINRA OAuth 인증 또는 토큰 발급에 실패했습니다.');
+  }
+
   const requestFields = [
     'tradeReportDate',
     'securitiesInformationProcessorSymbolIdentifier',
@@ -288,7 +450,7 @@ export async function loadStockFlowEvidence(
         fieldName: 'securitiesInformationProcessorSymbolIdentifier',
         fieldValue: symbol,
       }],
-    }, fetchImpl),
+    }, accessToken, fetchImpl),
     finraPost<FinraShortInterestRow>(FINRA_SHORT_INTEREST_URL, {
       limit: 5000,
       fields: [
@@ -305,7 +467,7 @@ export async function loadStockFlowEvidence(
         fieldName: 'symbolCode',
         fieldValue: symbol,
       }],
-    }, fetchImpl),
+    }, accessToken, fetchImpl),
   ]);
 
   const regShoValue = regSho.status === 'fulfilled' ? aggregateLatestRegSho(regSho.value, symbol) : null;
@@ -326,7 +488,7 @@ export async function loadStockFlowEvidence(
       status: 'READY',
       ...regShoValue,
     } : {
-      status: regSho.status === 'rejected' ? 'UNAVAILABLE' : 'UNAVAILABLE',
+      status: 'UNAVAILABLE',
       tradeDate: null,
       shortVolume: null,
       shortExemptVolume: null,
@@ -359,11 +521,12 @@ export async function loadStockFlowEvidence(
       status: 'NOT_INFERRED',
       note: 'Short sale volume과 short interest만으로 숏커버를 단정하지 않습니다. 검증된 모델이 생기기 전까지 evidence-only로 유지합니다.',
     },
-    sources: [
-      { provider: 'FINRA', dataset: 'Reg SHO Daily Short Sale Volume', asOf: regShoValue?.tradeDate ?? null, url: FINRA_DOCS_URL },
-      { provider: 'FINRA', dataset: 'Consolidated Short Interest', asOf: shortInterestValue?.settlementDate ?? null, url: FINRA_DOCS_URL },
-    ],
+    sources: finraSources(regShoValue?.tradeDate ?? null, shortInterestValue?.settlementDate ?? null),
     warnings,
     safety: safety(),
   };
+}
+
+export function resetStockFlowProviderStateForTests(): void {
+  finraTokenCache = null;
 }
