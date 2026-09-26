@@ -8,7 +8,7 @@ function fulfill(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: 'application/json; charset=utf-8', body: JSON.stringify(body) });
 }
 
-async function installRuntime(page: Page) {
+async function installRuntime(page: Page, options: { connectedBalances?: boolean; kiwoomSupported?: boolean } = {}) {
   await page.addInitScript(({ authKey, user, now }) => {
     const encode = (value: Record<string, unknown>) => btoa(JSON.stringify(value))
       .replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
@@ -64,9 +64,72 @@ async function installRuntime(page: Page) {
 
   await page.route('**/api/**', async (route) => {
     const pathname = new URL(route.request().url()).pathname;
+    if (pathname === '/api/accounts/read-only/credentials/status') {
+      return fulfill(route, {
+        supportedProviders: options.kiwoomSupported
+          ? ['toss', 'kiwoom', 'upbit', 'bitget']
+          : ['toss', 'upbit', 'bitget'],
+      });
+    }
     if (pathname.startsWith('/api/accounts/read-only/')) {
       const provider = pathname.split('/').at(-1);
       if (route.request().method() === 'GET') {
+        if (options.connectedBalances) {
+          const fixtures: Record<string, unknown> = {
+            toss: {
+              accounts: [
+                { market: 'KR', accountRef: '12****78', currency: 'KRW', buyingPower: 5000000 },
+                { market: 'US', accountRef: '12****78', currency: 'USD', buyingPower: 3500.5 },
+              ],
+              balances: [
+                { currency: 'KRW', available: 5000000, locked: null, total: null, estimatedKrwValue: 5000000 },
+                { currency: 'USD', available: 3500.5, locked: null, total: null, estimatedKrwValue: null },
+              ],
+              positions: [],
+              openOrders: [],
+            },
+            kiwoom: {
+              accounts: [{ market: 'KR', accountRef: null, currency: 'KRW', buyingPower: 700000 }],
+              balances: [{ currency: 'KRW', available: 800000, locked: null, total: 1000000, estimatedKrwValue: 1000000 }],
+              positions: [],
+              openOrders: [],
+            },
+            upbit: {
+              accounts: [],
+              balances: [
+                { currency: 'KRW', available: 1200000, locked: 0, total: 1200000, estimatedKrwValue: null },
+                { currency: 'BTC', available: 0.01, locked: 0, total: 0.01, estimatedKrwValue: null },
+              ],
+              positions: [],
+              openOrders: [],
+            },
+            bitget: {
+              accounts: [],
+              balances: [{ currency: 'USDT', available: 2400, locked: 100, total: 2500, estimatedKrwValue: null }],
+              positions: [],
+              openOrders: [],
+            },
+          };
+          return fulfill(route, {
+            provider,
+            readOnly: true,
+            connected: true,
+            status: 'CONNECTED',
+            ...(fixtures[String(provider)] as Record<string, unknown>),
+            checkedAt: NOW,
+            lastGoodAt: NOW,
+            stale: false,
+            errorCode: null,
+            orderRequests: 0,
+            cancelRequests: 0,
+            amendRequests: 0,
+            transferRequests: 0,
+            withdrawalRequests: 0,
+            credentialsReturned: false,
+            liveTradingEnabled: false,
+            autoTradingEnabled: false,
+          });
+        }
         return fulfill(route, {
           provider,
           readOnly: true,
@@ -125,6 +188,34 @@ for (const width of [320, 390, 768, 1200]) {
     }
   });
 }
+
+test('account shows real read-only cash and balance values for every supported provider', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await installRuntime(page, { connectedBalances: true, kiwoomSupported: true });
+  await page.goto('/account');
+
+  const toss = page.getByTestId('connection-toss');
+  await expect(toss).toContainText('KRW 현금가능');
+  await expect(toss).toContainText('5,000,000');
+  await expect(toss).toContainText('USD 현금가능');
+  await expect(toss).toContainText('3,500.5');
+
+  const kiwoom = page.getByTestId('connection-kiwoom');
+  await expect(kiwoom).toContainText('예수금');
+  await expect(kiwoom).toContainText('1,000,000');
+  await expect(kiwoom).toContainText('주문가능');
+  await expect(kiwoom).toContainText('700,000');
+
+  const upbit = page.getByTestId('connection-upbit');
+  await expect(upbit).toContainText('KRW 잔액');
+  await expect(upbit).toContainText('1,200,000');
+
+  const bitget = page.getByTestId('connection-bitget');
+  await expect(bitget).toContainText('USDT 계정잔액');
+  await expect(bitget).toContainText('2,500');
+
+  await expect(page.getByText('조회 전용 · 주문·취소·이체·출금 없음', { exact: true })).toBeVisible();
+});
 
 test('account keeps detailed read-only evidence behind an explicit disclosure', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
