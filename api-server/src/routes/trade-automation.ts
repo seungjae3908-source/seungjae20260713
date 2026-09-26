@@ -788,6 +788,8 @@ router.get('/orders', async (req: AuthenticatedRequest, res) => {
         orderType: plan?.orderType ?? null,
         reduceOnly: plan?.reduceOnly === true,
         state: order.state,
+        clientOrderId: order.clientOrderId,
+        exchangeOrderId: order.exchangeOrderId,
         requestedQuantity: order.requestedQuantity,
         remainingQuantity: order.remainingQuantity ?? null,
         filledQuantity: order.filledQuantity,
