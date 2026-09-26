@@ -8,7 +8,7 @@ function fulfill(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: 'application/json; charset=utf-8', body: JSON.stringify(body) });
 }
 
-function emptySnapshot(provider: 'toss' | 'upbit' | 'bitget', overrides: Record<string, unknown> = {}) {
+function emptySnapshot(provider: 'toss' | 'kiwoom' | 'upbit' | 'bitget', overrides: Record<string, unknown> = {}) {
   return {
     provider, readOnly: true, connected: false, status: 'NOT_CONFIGURED', accounts: null, balances: null, positions: null, openOrders: null,
     checkedAt: NOW, lastGoodAt: null, stale: false, errorCode: 'ACCOUNT_NOT_CONFIGURED',
@@ -89,6 +89,10 @@ test('regular user saves Upbit credentials only through canonical account-readon
       savedBody = route.request().postDataJSON() as Record<string, unknown>; configured = true;
       return fulfill(route, { ok: true, provider: 'upbit', configured: true, purpose: 'read_only', credentialsReturned: false, privateProviderRequests: 0, orderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0, liveTradingEnabled: false, autoTradingEnabled: false });
     }
+    if (path === '/api/accounts/read-only/credentials/upbit' && route.request().method() === 'DELETE') {
+      configured = false;
+      return fulfill(route, { ok: true, provider: 'upbit', configured: false, purpose: 'read_only', credentialsReturned: false, privateProviderRequests: 0, orderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0, liveTradingEnabled: false, autoTradingEnabled: false });
+    }
     if (path === '/api/user-integrations') return fulfill(route, { brokerConnections: [], telegram: { connected: false, status: 'DISCONNECTED', connectedAt: null }, preferences: {} });
     return fulfill(route, { ok: true, items: [], rows: [], results: [] });
   });
@@ -103,7 +107,11 @@ test('regular user saves Upbit credentials only through canonical account-readon
   await expect(upbit).not.toContainText('보유 자산 0개');
   await expect(upbit).not.toContainText('미연결');
   expect(savedBody).toEqual({ purpose: 'read_only', permissions: ['read'], credentials: { accessKey, secretKey } });
-  expect(await page.locator('body').innerText()).not.toContain(accessKey); expect(await page.locator('body').innerText()).not.toContain(secretKey); assertClean();
+  expect(await page.locator('body').innerText()).not.toContain(accessKey); expect(await page.locator('body').innerText()).not.toContain(secretKey);
+  await upbit.getByRole('button', { name: '조회 연결 해제' }).click();
+  await expect(page.getByRole('status')).toContainText('연결 해제 완료 · Upbit 조회 키를 삭제했습니다.');
+  await expect(upbit).toContainText('미연결');
+  assertClean();
 });
 
 test('Toss credential form is read-only, Account Seq is optional, and mobile dialogs stay in viewport', async ({ page }) => {
@@ -173,5 +181,84 @@ test('account metrics distinguish real zero from missing, stale, and unavailable
   await expect(bitget).toContainText('사용 불가');
 
   await expect(page.locator('body')).not.toContainText('Kiwoom');
+  assertClean();
+});
+
+
+test('server-declared Kiwoom capability exposes a read-only setup card and saves only App Key/App Secret', async ({ page }) => {
+  const { assertClean } = await installRegular(page);
+  let savedBody: Record<string, unknown> | null = null;
+  let configured = false;
+
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const method = route.request().method();
+    if (path === '/api/accounts/read-only/credentials/status') {
+      return fulfill(route, {
+        ok: true,
+        encryptionConfigured: true,
+        supportedProviders: ['toss', 'kiwoom', 'upbit', 'bitget'],
+        hiddenProviders: [],
+        credentialsReturned: false,
+        privateProviderRequests: 0,
+        orderRequests: 0,
+        cancelRequests: 0,
+        amendRequests: 0,
+        transferRequests: 0,
+        withdrawalRequests: 0,
+        liveTradingEnabled: false,
+        autoTradingEnabled: false,
+      });
+    }
+    if (path === '/api/accounts/read-only/toss') return fulfill(route, emptySnapshot('toss'));
+    if (path === '/api/accounts/read-only/kiwoom') return fulfill(route, emptySnapshot('kiwoom', configured ? { status: 'CONFIGURED_UNVERIFIED', errorCode: 'ACCOUNT_READ_DISABLED' } : {}));
+    if (path === '/api/accounts/read-only/upbit') return fulfill(route, emptySnapshot('upbit'));
+    if (path === '/api/accounts/read-only/bitget') return fulfill(route, emptySnapshot('bitget'));
+    if (path === '/api/accounts/read-only/credentials/kiwoom' && method === 'PUT') {
+      savedBody = route.request().postDataJSON() as Record<string, unknown>;
+      configured = true;
+      return fulfill(route, {
+        ok: true,
+        provider: 'kiwoom',
+        configured: true,
+        purpose: 'read_only',
+        credentialsReturned: false,
+        privateProviderRequests: 0,
+        orderRequests: 0,
+        cancelRequests: 0,
+        amendRequests: 0,
+        transferRequests: 0,
+        withdrawalRequests: 0,
+        liveTradingEnabled: false,
+        autoTradingEnabled: false,
+      });
+    }
+    if (path === '/api/user-integrations') return fulfill(route, { brokerConnections: [], telegram: { connected: false, status: 'DISCONNECTED', connectedAt: null }, preferences: {} });
+    return fulfill(route, { ok: true, items: [], rows: [], results: [] });
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/account');
+
+  const kiwoom = page.getByTestId('connection-kiwoom');
+  await expect(kiwoom).toBeVisible();
+  await expect(kiwoom).toContainText('공식 REST KR/US 잔고·미체결 조회');
+  await page.getByRole('button', { name: 'Kiwoom 조회 연결 설정' }).click();
+
+  const appKey = 'KIWOOM_APP_E2E_TEST_ONLY';
+  const appSecret = 'KIWOOM_SECRET_E2E_TEST_ONLY';
+  await page.getByTestId('kiwoom-credential-primary').fill(appKey);
+  await page.getByTestId('kiwoom-credential-secret').fill(appSecret);
+  await page.getByTestId('kiwoom-save-connection').click();
+
+  expect(savedBody).toEqual({
+    purpose: 'read_only',
+    permissions: ['read'],
+    credentials: { appKey, appSecret },
+  });
+  await expect(page.getByRole('status')).toContainText('저장 완료 · Kiwoom 조회 전용 키를 암호화 Vault에 저장했습니다.');
+  const body = await page.locator('body').innerText();
+  expect(body).not.toContain(appKey);
+  expect(body).not.toContain(appSecret);
   assertClean();
 });
