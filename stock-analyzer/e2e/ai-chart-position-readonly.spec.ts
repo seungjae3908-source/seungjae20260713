@@ -94,6 +94,11 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain("dashboard: '1'");
   expect(panel).toContain("exchange: provider");
   expect(panel).toContain("signal: controller.signal");
+  expect(panel).toContain("data-testid=\"ai-chart-entry-readiness\"");
+  expect(panel).toContain("data-testid=\"ai-chart-load-entry-readiness\"");
+  expect(panel).toContain("authorizedFetch('/api/trade-automation/status'");
+  expect(panel).toContain("actualOrderSubmittedByStatusRequest !== false");
+  expect(panel).toContain("orderTimeRiskRecheckRequired !== true");
 });
 
 test('AI Chart order dashboard server read model is instrument-scoped and mutation-free', () => {
@@ -250,6 +255,7 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await page.setViewportSize({ width: 1440, height: 960 });
   let accountReads = 0;
   let exitPreviewReads = 0;
+  let entryReadinessReads = 0;
   const financialMutations: string[] = [];
 
   await context.route('**/*', async (route) => {
@@ -275,6 +281,32 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
     }
     if (url.pathname === '/api/quotes') {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ quotes: [] }) });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/status') {
+      entryReadinessReads += 1;
+      expect(request.method()).toBe('GET');
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          actualOrderSubmittedByStatusRequest: false,
+          liveExecutionReadiness: {
+            toss: {
+              connectionConfigured: false,
+              providerVerified: false,
+              manualServerGateEnabled: false,
+              automaticServerGateEnabled: false,
+              readyForManualOrderEvaluation: false,
+              readyForAutomaticOrderEvaluation: false,
+              blockers: ['LIVE_CONNECTION_NOT_CONFIGURED', 'MANUAL_LIVE_SERVER_GATE_OFF'],
+              orderTimeRiskRecheckRequired: true,
+              orderSubmissionPerformedByStatusRequest: false,
+            },
+          },
+        }),
+      });
       return;
     }
     if (url.pathname === '/api/trade-automation/approval-queue') {
@@ -504,6 +536,11 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('미조회');
   await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('재검증 필요');
   await expect(cockpit).toContainText('현재 종목의 승인 대기 진입이 없습니다.');
+  await cockpit.getByTestId('ai-chart-load-entry-readiness').click();
+  await expect.poll(() => entryReadinessReads).toBe(1);
+  await expect(cockpit.getByTestId('ai-chart-entry-readiness')).toContainText('수동 실전 진입 · 차단');
+  await expect(cockpit.getByTestId('ai-chart-entry-readiness')).toContainText('LIVE_CONNECTION_NOT_CONFIGURED');
+  await expect(cockpit.getByTestId('ai-chart-entry-readiness')).toContainText('주문 제출 없음');
   await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('Provider 실제 미체결');
   await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('BUY · OPEN');
   await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('70,300원');
