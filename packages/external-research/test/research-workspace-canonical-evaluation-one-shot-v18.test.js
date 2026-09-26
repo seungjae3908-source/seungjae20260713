@@ -40,57 +40,79 @@ function config(){
     authority:{providerCalls:0,compilerRuns:0,backtestRuns:0,automaticAdoption:false,profitabilityProven:false,liveTrading:false,autoTrading:false,realOrderEnabled:false,privateTradingApiAllowed:false,executionAuthority:'NONE'}};
   return {...core,configDigest:sha(core)};
 }
-function preflight(r,d,c){return assessCanonicalEvaluationReadinessV17({config:c,currentSha:sourceSha,review:r,decision:d,checkedAt:now});}
-function request(d,c,overrides={}){
-  const evaluationId='eval-once-v18';
-  const reservation=sha({schemaVersion:'research-canonical-evaluation-one-shot-reservation-v18',evaluationId,sourceSha,decisionDigest:d.decisionDigest,configDigest:c.configDigest});
-  const core={schemaVersion:'research-canonical-evaluation-one-shot-request-v18',evaluationId,requestedAt:'2026-09-26T08:39:00.000Z',expiresAt:'2026-09-26T08:55:00.000Z',
-    sourceSha,decisionDigest:d.decisionDigest,configDigest:c.configDigest,oneShotReservationId:reservation,
+function preflight(r,d,c,checkedAt=now){return assessCanonicalEvaluationReadinessV17({config:c,currentSha:sourceSha,review:r,decision:d,checkedAt});}
+function runtimeProof(overrides={}){
+  const dependencies={
+    formulaCompiler:{status:'PRESENT',ownerRef:'#550',capability:'BOUNDED_FORMULA_COMPILER_V1',implementationPath:'market-prediction-lab/src/autonomous-strategy-formula-generator-v1.js',implementationBlobSha:'1'.repeat(40)},
+    canonicalBacktester:{status:'PRESENT',ownerRef:'#690',capability:'ONE_PASS_EXECUTION_EQUIVALENT_BACKTESTER_V1',implementationPath:'market-prediction-lab/src/independent-strategy-backtest.js',implementationBlobSha:'2'.repeat(40)},
+    statisticalFirewall:{status:'PRESENT',ownerRef:'#547',capability:'CANONICAL_STATISTICAL_FIREWALL_V1',implementationPath:'market-prediction-lab/src/global-strategy-statistical-firewall-v1.js',implementationBlobSha:'3'.repeat(40)},
+    ...(overrides.dependencies??{}),
+  };
+  const core={schemaVersion:'research-canonical-evaluation-runtime-proof-v18',sourceSha,verifiedAt:'2026-09-26T08:39:30.000Z',dependencies};
+  return {...core,proofDigest:sha(core)};
+}
+function request(d,c,p,proof,overrides={}){
+  const evaluationId='eval-once-v18',phase17ReceiptDigest=sha(p),runtimeProofDigest=proof.proofDigest;
+  const oneShotReservationId=sha({schemaVersion:'research-canonical-evaluation-one-shot-reservation-v18',evaluationId,sourceSha,
+    decisionDigest:d.decisionDigest,configDigest:c.configDigest,phase17ReceiptDigest,runtimeProofDigest});
+  const base={schemaVersion:'research-canonical-evaluation-one-shot-request-v18',evaluationId,requestedAt:'2026-09-26T08:39:00.000Z',expiresAt:'2026-09-26T08:55:00.000Z',
+    sourceSha,decisionDigest:d.decisionDigest,configDigest:c.configDigest,phase17ReceiptDigest,runtimeProofDigest,oneShotReservationId,
     compiler:{ownerRef:'#550',capability:'BOUNDED_FORMULA_COMPILER_V1',maxRuns:1,finalHoldoutAccessAllowed:false,arbitraryExecutableCodeAllowed:false},
     backtester:{ownerRef:'#690',capability:'ONE_PASS_EXECUTION_EQUIVALENT_BACKTESTER_V1',maxRuns:1,executionEquivalentRequired:true,finalHoldoutAccessPolicy:'FINAL_ONLY_AFTER_SELECTION_FREEZE',selectionFeedbackAllowed:false},
     statisticalFirewall:{ownerRef:'#547',capability:'CANONICAL_STATISTICAL_FIREWALL_V1',required:true,bypassAllowed:false},
     resultPolicy:{disposition:'RESEARCH_EVIDENCE_ONLY',automaticAdoption:false,paperActivation:false,liveActivation:false,profitabilityClaimAllowed:false},
     authority:{providerCalls:0,compilerRuns:0,backtestRuns:0,maxCompilerRuns:1,maxBacktestRuns:1,finalHoldoutPreAccess:false,selectionFeedbackToGenerator:false,replayAllowed:false,
-      automaticAdoption:false,paperActivation:false,liveActivation:false,profitabilityProven:false,liveTrading:false,autoTrading:false,realOrderEnabled:false,privateTradingApiAllowed:false,executionAuthority:'NONE'},
-    ...overrides};
-  return {...core,requestDigest:sha(core)};
+      automaticAdoption:false,paperActivation:false,liveActivation:false,profitabilityProven:false,liveTrading:false,autoTrading:false,realOrderEnabled:false,privateTradingApiAllowed:false,executionAuthority:'NONE'}};
+  const core={...base,...overrides};return {...core,requestDigest:sha(core)};
 }
 
-test('v18 admits only one bounded compiler/backtest run after a fresh Phase17 READY receipt',()=>{
-  const r=review(),d=decision(r),c=config(),p=preflight(r,d,c),q=request(d,c);
-  const out=assessCanonicalEvaluationExecutionContractV18({request:q,currentSha:sourceSha,review:r,decision:d,config:c,preflight:p,checkedAt:now});
+test('v18 admits only one bounded compiler/backtest run after fresh Phase17 and current-main runtime proof',()=>{
+  const r=review(),d=decision(r),c=config(),p=preflight(r,d,c),proof=runtimeProof(),q=request(d,c,p,proof);
+  const out=assessCanonicalEvaluationExecutionContractV18({request:q,currentSha:sourceSha,review:r,decision:d,config:c,preflight:p,runtimeProof:proof,checkedAt:now});
   assert.equal(out.status,'READY_FOR_BOUNDED_COMPILER_BACKTEST_ONE_SHOT');
   assert.equal(out.compilerRuns,0);assert.equal(out.backtestRuns,0);assert.equal(out.maxCompilerRuns,1);assert.equal(out.maxBacktestRuns,1);
   assert.equal(out.finalHoldoutPreAccess,false);assert.equal(out.selectionFeedbackToGenerator,false);assert.equal(out.resultDisposition,'RESEARCH_EVIDENCE_ONLY');
   assert.equal(out.executionAuthority,'NONE');
 });
 test('missing or blocked Phase17 readiness never admits compiler/backtester',()=>{
-  const r=review(),d=decision(r),c=config(),q=request(d,c);
-  const p={...preflight(r,d,c),status:'BLOCKED',reasonCodes:['SYNTHETIC_BLOCK']};
-  const out=assessCanonicalEvaluationExecutionContractV18({request:q,currentSha:sourceSha,review:r,decision:d,config:c,preflight:p,checkedAt:now});
+  const r=review(),d=decision(r),c=config(),proof=runtimeProof();const p={...preflight(r,d,c),status:'BLOCKED',reasonCodes:['SYNTHETIC_BLOCK']};const q=request(d,c,p,proof);
+  const out=assessCanonicalEvaluationExecutionContractV18({request:q,currentSha:sourceSha,review:r,decision:d,config:c,preflight:p,runtimeProof:proof,checkedAt:now});
   assert.equal(out.status,'BLOCKED');assert.ok(out.reasonCodes.includes('FRESH_PHASE17_READY_RECEIPT_REQUIRED'));assert.equal(out.compilerRuns,0);assert.equal(out.backtestRuns,0);
 });
-test('request cannot widen compiler or backtester to more than one run',()=>{
+test('stale Phase17 READY receipt is rejected even while the human decision is still valid',()=>{
+  const r=review(),d=decision(r),c=config(),p=preflight(r,d,c,'2026-09-26T08:20:00.000Z'),proof=runtimeProof(),q=request(d,c,p,proof);
+  const out=assessCanonicalEvaluationExecutionContractV18({request:q,currentSha:sourceSha,review:r,decision:d,config:c,preflight:p,runtimeProof:proof,checkedAt:now});
+  assert.equal(out.status,'BLOCKED');assert.ok(out.reasonCodes.includes('FRESH_PHASE17_READY_RECEIPT_REQUIRED'));
+});
+test('missing canonical #547 firewall on current SHA blocks actual evaluation admission',()=>{
   const r=review(),d=decision(r),c=config(),p=preflight(r,d,c);
-  const q=request(d,c,{compiler:{ownerRef:'#550',capability:'BOUNDED_FORMULA_COMPILER_V1',maxRuns:2,finalHoldoutAccessAllowed:false,arbitraryExecutableCodeAllowed:false}});
-  const out=assessCanonicalEvaluationExecutionContractV18({request:q,currentSha:sourceSha,review:r,decision:d,config:c,preflight:p,checkedAt:now});
+  const proof=runtimeProof({dependencies:{statisticalFirewall:{status:'MISSING',ownerRef:'#547',capability:'CANONICAL_STATISTICAL_FIREWALL_V1',implementationPath:'market-prediction-lab/src/global-strategy-statistical-firewall-v1.js',implementationBlobSha:null}}});
+  const q=request(d,c,p,proof);
+  const out=assessCanonicalEvaluationExecutionContractV18({request:q,currentSha:sourceSha,review:r,decision:d,config:c,preflight:p,runtimeProof:proof,checkedAt:now});
+  assert.equal(out.status,'BLOCKED');assert.ok(out.reasonCodes.includes('CANONICAL_STATISTICAL_FIREWALL_NOT_PRESENT_ON_CURRENT_SHA'));
+  assert.equal(out.compilerRuns,0);assert.equal(out.backtestRuns,0);
+});
+test('request cannot widen compiler or backtester to more than one run',()=>{
+  const r=review(),d=decision(r),c=config(),p=preflight(r,d,c),proof=runtimeProof();
+  const q=request(d,c,p,proof,{compiler:{ownerRef:'#550',capability:'BOUNDED_FORMULA_COMPILER_V1',maxRuns:2,finalHoldoutAccessAllowed:false,arbitraryExecutableCodeAllowed:false}});
+  const out=assessCanonicalEvaluationExecutionContractV18({request:q,currentSha:sourceSha,review:r,decision:d,config:c,preflight:p,runtimeProof:proof,checkedAt:now});
   assert.equal(out.status,'BLOCKED');assert.ok(out.reasonCodes.includes('CANONICAL_EVALUATION_V18_REQUEST_SHAPE_INVALID'));
 });
 test('final holdout cannot feed selection or the generator',()=>{
-  const r=review(),d=decision(r),c=config(),p=preflight(r,d,c);
-  const q=request(d,c,{backtester:{ownerRef:'#690',capability:'ONE_PASS_EXECUTION_EQUIVALENT_BACKTESTER_V1',maxRuns:1,executionEquivalentRequired:true,finalHoldoutAccessPolicy:'FINAL_ONLY_AFTER_SELECTION_FREEZE',selectionFeedbackAllowed:true}});
-  const out=assessCanonicalEvaluationExecutionContractV18({request:q,currentSha:sourceSha,review:r,decision:d,config:c,preflight:p,checkedAt:now});
+  const r=review(),d=decision(r),c=config(),p=preflight(r,d,c),proof=runtimeProof();
+  const q=request(d,c,p,proof,{backtester:{ownerRef:'#690',capability:'ONE_PASS_EXECUTION_EQUIVALENT_BACKTESTER_V1',maxRuns:1,executionEquivalentRequired:true,finalHoldoutAccessPolicy:'FINAL_ONLY_AFTER_SELECTION_FREEZE',selectionFeedbackAllowed:true}});
+  const out=assessCanonicalEvaluationExecutionContractV18({request:q,currentSha:sourceSha,review:r,decision:d,config:c,preflight:p,runtimeProof:proof,checkedAt:now});
   assert.equal(out.status,'BLOCKED');assert.equal(out.selectionFeedbackToGenerator,false);
 });
 test('research result cannot auto-adopt or activate Paper/live trading',()=>{
-  const r=review(),d=decision(r),c=config(),p=preflight(r,d,c);
-  const q=request(d,c,{resultPolicy:{disposition:'RESEARCH_EVIDENCE_ONLY',automaticAdoption:true,paperActivation:false,liveActivation:false,profitabilityClaimAllowed:false}});
-  const out=assessCanonicalEvaluationExecutionContractV18({request:q,currentSha:sourceSha,review:r,decision:d,config:c,preflight:p,checkedAt:now});
+  const r=review(),d=decision(r),c=config(),p=preflight(r,d,c),proof=runtimeProof();
+  const q=request(d,c,p,proof,{resultPolicy:{disposition:'RESEARCH_EVIDENCE_ONLY',automaticAdoption:true,paperActivation:false,liveActivation:false,profitabilityClaimAllowed:false}});
+  const out=assessCanonicalEvaluationExecutionContractV18({request:q,currentSha:sourceSha,review:r,decision:d,config:c,preflight:p,runtimeProof:proof,checkedAt:now});
   assert.equal(out.status,'BLOCKED');assert.equal(out.automaticAdoption,false);assert.equal(out.paperActivation,false);assert.equal(out.liveActivation,false);
 });
 test('expired one-shot request blocks without consuming the reservation',()=>{
-  const r=review(),d=decision(r),c=config(),p=preflight(r,d,c);
-  const q=request(d,c,{expiresAt:'2026-09-26T08:39:30.000Z'});
-  const out=assessCanonicalEvaluationExecutionContractV18({request:q,currentSha:sourceSha,review:r,decision:d,config:c,preflight:p,checkedAt:now});
+  const r=review(),d=decision(r),c=config(),p=preflight(r,d,c),proof=runtimeProof();
+  const q=request(d,c,p,proof,{expiresAt:'2026-09-26T08:39:30.000Z'});
+  const out=assessCanonicalEvaluationExecutionContractV18({request:q,currentSha:sourceSha,review:r,decision:d,config:c,preflight:p,runtimeProof:proof,checkedAt:now});
   assert.equal(out.status,'BLOCKED');assert.equal(out.replayAllowed,false);assert.equal(out.compilerRuns,0);assert.equal(out.backtestRuns,0);
 });
