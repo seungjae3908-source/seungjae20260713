@@ -48,6 +48,13 @@ pm2() {
       command node - <<'MOCK_NODE'
 const fs = require('node:fs');
 const keys = ['LIVE_TELEGRAM_ACTIVATION_APPROVED', 'TELEGRAM_INTELLIGENCE_WORKER_ENABLED',
+  'PERSONAL_TELEGRAM_WORKER_ENABLED',
+  'TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED', 'TELEGRAM_SIGNAL_AI_ENABLED',
+  'TELEGRAM_DAILY_BRIEF_RICH_ENABLED', 'TELEGRAM_SIGNAL_FOLLOWUP_ENABLED',
+  'MEMBER_HOLDINGS_TELEGRAM_PRODUCER_ENABLED', 'MEMBER_HOLDINGS_NEWS_INTELLIGENCE_ENABLED',
+  'MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED',
+  'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_STOCK_CHAT_ID', 'TELEGRAM_CRYPTO_CHAT_ID',
+  'TELEGRAM_BOT_USERNAME', 'TELEGRAM_WEBHOOK_SECRET', 'BACKGROUND_WORKERS_ENABLED',
   'LIVE_TRADING', 'AUTO_TRADING', 'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED',
   'ORDER_EXECUTION_ENABLED', 'LIVE_TRADING_ACTIVATION_APPROVED', 'LIVE_AUTOMATIC_TRADING_ENABLED',
   'BITGET_LIVE_ORDER_ENABLED', 'UPBIT_LIVE_ORDER_ENABLED', 'KIWOOM_LIVE_ORDER_ENABLED', 'TOSS_LIVE_ORDER_ENABLED',
@@ -268,6 +275,7 @@ const activationEnd = telegramWorkflow.indexOf('const activationChanged =', acti
 assert(activationStart >= 0 && activationEnd > activationStart, 'canonical Telegram-only activation seam missing');
 const activationFunction = telegramWorkflow.slice(activationStart, activationEnd);
 const telegramFeatureFlags = [
+  'PERSONAL_TELEGRAM_WORKER_ENABLED',
   'TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED',
   'TELEGRAM_SIGNAL_AI_ENABLED',
   'TELEGRAM_DAILY_BRIEF_RICH_ENABLED',
@@ -277,7 +285,13 @@ const telegramFeatureFlags = [
   'MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED',
 ];
 const readyRuntime = { ...state('false', 'false')[0].pm2_env, DEPLOY_SHA: target,
-  TELEGRAM_BOT_TOKEN: 'test-only-not-a-token', TELEGRAM_CHAT_ID: 'test-only-not-a-destination' };
+  BACKGROUND_WORKERS_ENABLED: 'true',
+  TELEGRAM_BOT_TOKEN: 'test-only-not-a-token',
+  TELEGRAM_CHAT_ID: 'test-only-not-a-destination',
+  TELEGRAM_STOCK_CHAT_ID: 'test-only-stock-room',
+  TELEGRAM_CRYPTO_CHAT_ID: 'test-only-crypto-room',
+  TELEGRAM_BOT_USERNAME: 'test_only_bot',
+  TELEGRAM_WEBHOOK_SECRET: 'test-only-webhook-secret' };
 const completeTelegramRuntime = {
   ...readyRuntime,
   LIVE_TELEGRAM_ACTIVATION_APPROVED: 'true',
@@ -300,17 +314,28 @@ check('only canonical Telegram seam creates activation after exact approval iden
   assert.deepEqual(Array.from(result.calls[0][1]), ['restart', 'stock-app', '--update-env']);
   const env = result.calls[0][2].env;
   assertFlags(env, 'true');
+  assert.equal(env.PERSONAL_TELEGRAM_WORKER_ENABLED, 'true');
+  for (const key of telegramFeatureFlags) assert.equal(env[key], 'true');
+  for (const key of [
+    'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_STOCK_CHAT_ID',
+    'TELEGRAM_CRYPTO_CHAT_ID', 'TELEGRAM_BOT_USERNAME', 'TELEGRAM_WEBHOOK_SECRET',
+  ]) assert.equal(env[key], readyRuntime[key]);
   for (const key of ['LIVE_TRADING', 'AUTO_TRADING', 'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED']) assert.equal(env[key], 'false');
   assert.equal(env.executionAuthority, 'NONE');
 });
-check('Telegram seam rejects missing approval, wrong identity, mixed state and missing configuration before mutation', () => {
-  for (const [runtime, options] of [
+check('Telegram seam rejects missing approval, wrong identity, mixed state and any missing runtime configuration before mutation', () => {
+  const invalid = [
     [readyRuntime, { commentId: '' }], [readyRuntime, { sha: 'main' }], [readyRuntime, { marker: previous }],
     [{ ...readyRuntime, DEPLOY_SHA: previous }, {}], [{ ...readyRuntime, status: 'stopped' }, {}],
     [{ ...readyRuntime, TELEGRAM_INTELLIGENCE_WORKER_ENABLED: 'true' }, {}],
     [{ ...readyRuntime, LIVE_TELEGRAM_ACTIVATION_APPROVED: 'TRUE' }, {}],
-    [{ ...readyRuntime, TELEGRAM_BOT_TOKEN: '' }, {}], [{ ...readyRuntime, TELEGRAM_CHAT_ID: '' }, {}],
-  ]) {
+    [{ ...readyRuntime, BACKGROUND_WORKERS_ENABLED: 'false' }, {}],
+  ];
+  for (const key of [
+    'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_STOCK_CHAT_ID',
+    'TELEGRAM_CRYPTO_CHAT_ID', 'TELEGRAM_BOT_USERNAME', 'TELEGRAM_WEBHOOK_SECRET',
+  ]) invalid.push([{ ...readyRuntime, [key]: '' }, {}]);
+  for (const [runtime, options] of invalid) {
     const result = activation(runtime, options);
     assert(result.error); assert.equal(result.calls.length, 0);
   }
@@ -319,6 +344,28 @@ check('Telegram-specific repeat approval does not restart fully active state', (
   const result = activation(completeTelegramRuntime);
   assert.ifError(result.error); assert.equal(result.result, false); assert.equal(result.calls.length, 0);
 });
+check('Telegram activation preserves PM2-owned configuration over conflicting ambient process env', () => {
+  const calls = [];
+  const activate = vm.runInNewContext(`(${activationFunction.trim()})`, {
+    process: { env: {
+      TELEGRAM_BOT_TOKEN: '',
+      TELEGRAM_CHAT_ID: '',
+      TELEGRAM_STOCK_CHAT_ID: '',
+      TELEGRAM_CRYPTO_CHAT_ID: '',
+      TELEGRAM_BOT_USERNAME: '',
+      TELEGRAM_WEBHOOK_SECRET: '',
+    } },
+    execFileSync: (...args) => { calls.push(args); return ''; },
+  });
+  const result = activate(readyRuntime, target, target, '123');
+  assert.equal(result, true);
+  const env = calls[0][2].env;
+  for (const key of [
+    'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_STOCK_CHAT_ID',
+    'TELEGRAM_CRYPTO_CHAT_ID', 'TELEGRAM_BOT_USERNAME', 'TELEGRAM_WEBHOOK_SECRET',
+  ]) assert.equal(env[key], readyRuntime[key]);
+});
+
 check('Telegram-specific repeat approval repairs partial feature activation exactly once', () => {
   const result = activation({
     ...completeTelegramRuntime,
@@ -336,4 +383,4 @@ check('Telegram-specific repeat approval repairs partial feature activation exac
 });
 
 if (failures.length) throw new Error(`${failures.length} preservation regression group(s) failed: ${failures.join('; ')}`);
-console.log(`[telegram-preservation] ${checks} behavioral/static regression groups passed; Production/SSH/DB/send execution=0`);
+console.log(`[telegram-preservation] ${checks} behavioral/static regression groups passed; complete Telegram config preservation + personal worker gate verified; Production/SSH/DB/send execution=0`);
