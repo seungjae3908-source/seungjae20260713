@@ -1,6 +1,0 @@
-data/raw/
-data/normalized/
-data/manifests/
-data/training/
-models/
-*.tmp-*

@@ -1,7 +1,0 @@
-{
-  "schemaVersion": 1,
-  "requestedAt": 1786229244929,
-  "reason": "hourly-shadow-validation",
-  "branchOnly": true,
-  "deploy": false
-}
