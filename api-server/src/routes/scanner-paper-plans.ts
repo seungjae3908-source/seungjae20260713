@@ -1,9 +1,9 @@
-import { createHash } from 'node:crypto';
 import { Router, type IRouter } from 'express';
 import { requireCapability, type AuthenticatedRequest } from '../middleware/auth';
 import {
   ProductPaperSourceError,
   productPaperSourceRegistry,
+  scannerLiveEntryDraftId,
   type ProductPaperSourceRegistry,
 } from '../services/product-paper-source-registry.service';
 import type { ScannerCanonicalPaperCandidate } from '../services/scanner-canonical-paper-identity.service';
@@ -260,15 +260,15 @@ export function createScannerPaperPlansRouter(dependencies: {
       const resolved = registry.resolveScannerLiveDraft(req.member!.id, req.body, sourceSha());
       const card = resolved.card;
       const identity = resolved.strategyIdentity;
-      const draftId = createHash('sha256').update([
-        req.member!.id,
-        resolved.source.sourceSha,
-        resolved.source.sourceId,
-        card.signalId,
-        card.symbol,
-        String(card.action ?? ''),
-        card.expiresAt,
-      ].join(':')).digest('hex');
+      const draftId = scannerLiveEntryDraftId({
+        accountId: req.member!.id,
+        sourceSha: resolved.source.sourceSha,
+        sourceId: resolved.source.sourceId,
+        signalId: card.signalId,
+        symbol: card.symbol,
+        action: String(card.action ?? ''),
+        expiresAt: card.expiresAt,
+      });
       return res.status(200).json({
         ok: true,
         serverVerified: true,
