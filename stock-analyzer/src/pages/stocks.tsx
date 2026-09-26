@@ -1,9 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import { Star } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
-import { ErrorState, LoadingState } from '@/components/data-state';
+import { EmptyState, ErrorState, LoadingState } from '@/components/data-state';
 import { UnifiedAssetSearch } from '@/components/unified-asset-search';
 import { api, apiGet } from '@/lib/api';
 import { useAssetMode } from '@/lib/asset-mode';
@@ -11,13 +11,33 @@ import { useAuth } from '@/lib/auth';
 import { requireMarketMoversResponse, type MarketMoversResponse } from '@/lib/market-movers-response';
 import { requireRecommendationResponse } from '@/lib/recommendation-response';
 import { requireThemesData } from '@/lib/theme-response';
-import { displayCoinName, displayStockName, formatAppPercent, formatAppPrice } from '@/lib/stock-display';
-import { unifiedAssetDetailPath } from '@/lib/unified-asset-search';
+import {
+  displayCoinName,
+  displayStockName,
+  formatAppPercent,
+  formatAppPrice,
+  readWatchlistItems,
+  WATCHLIST_CHANGE_EVENT,
+} from '@/lib/stock-display';
+import { unifiedAssetDetailPath, type UnifiedAssetSuggestion } from '@/lib/unified-asset-search';
+import { useAnalysisSelection, selectionQuery } from '@/lib/analysis-selection';
+import { getPortfolioChartOverlay } from '@/lib/portfolio-overlay';
 import { cn } from '@/lib/utils';
 
 type AnyObj = Record<string, any>;
 
 type CategoryKey = 'ai' | 'theme' | 'tradingValue' | 'volume' | 'gainers' | 'losers';
+
+type MarketPreview = {
+  assetType: 'stock' | 'coin';
+  market: 'KR' | 'US' | 'spot' | 'futures';
+  ticker: string;
+  displayName: string;
+  currency: string;
+  price: number | null;
+  changePercent: number | null;
+  detailPath: string;
+};
 
 const CATEGORIES: { key: CategoryKey; label: string }[] = [
   { key: 'ai', label: 'AI추천' },
@@ -72,6 +92,19 @@ function MarketButton({ label, active, disabled = false, onClick }: {
   );
 }
 
+function useDesktopMarketBrowser() {
+  const query = '(min-width: 1200px)';
+  const [desktop, setDesktop] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches);
+  useEffect(() => {
+    const media = window.matchMedia(query);
+    const update = () => setDesktop(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+  return desktop;
+}
+
 function finitePercent(value: unknown): number | null {
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
   if (typeof value !== 'string') return null;
@@ -85,7 +118,11 @@ export default function StocksPage() {
   const [, navigate] = useLocation();
   const mode = useAssetMode();
   const auth = useAuth();
+  const analysisSelection = useAnalysisSelection();
+  const desktop = useDesktopMarketBrowser();
   const [category, setCategory] = useState<CategoryKey>('ai');
+  const [preview, setPreview] = useState<MarketPreview | null>(null);
+  const [, setContextVersion] = useState(0);
 
   const chooseMarket = (target: 'KR' | 'US' | 'spot' | 'futures') => {
     if (target === 'KR' || target === 'US') {
@@ -101,6 +138,22 @@ export default function StocksPage() {
   };
 
   const activeMarket = mode.asset === 'stock' ? mode.stockMarket : mode.coinMarket;
+
+  useEffect(() => {
+    const refresh = () => setContextVersion((value) => value + 1);
+    window.addEventListener(WATCHLIST_CHANGE_EVENT, refresh);
+    window.addEventListener('sa-portfolio-overlay-updated', refresh);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener(WATCHLIST_CHANGE_EVENT, refresh);
+      window.removeEventListener('sa-portfolio-overlay-updated', refresh);
+      window.removeEventListener('storage', refresh);
+    };
+  }, []);
+
+  useEffect(() => {
+    setPreview(null);
+  }, [activeMarket, category]);
 
   // ── 코인 검색용 데이터 (주식 검색은 canonical UnifiedAssetSearch 재사용) ──
   const spotMarkets = useQuery({
@@ -180,8 +233,82 @@ export default function StocksPage() {
   // ── 코인 검색 로딩·오류 상태 ────────────────────────────────────
   const coinTickerQuery = mode.coinMarket === 'spot' ? spotTickers : futuresTickers;
 
-  const openStock = (ticker: string) => navigate(`/stock/${encodeURIComponent(ticker)}`);
-  const openCoin = (symbol: string) => navigate(`/stock-info?asset=coin&coinMarket=${mode.coinMarket}&symbol=${encodeURIComponent(symbol)}`);
+  const openStock = (ticker: string, stock?: AnyObj) => {
+    const normalized = ticker.trim().toUpperCase();
+    const detailPath = `/stock/${encodeURIComponent(normalized)}`;
+    if (!desktop) {
+      navigate(detailPath);
+      return;
+    }
+    setPreview({
+      assetType: 'stock',
+      market: mode.stockMarket,
+      ticker: normalized,
+      displayName: displayStockName(normalized, String(stock?.name ?? stock?.displayName ?? normalized), mode.stockMarket),
+      currency: String(stock?.currency ?? (mode.stockMarket === 'US' ? 'USD' : 'KRW')),
+      price: Number.isFinite(Number(stock?.price)) ? Number(stock?.price) : null,
+      changePercent: finitePercent(stock?.changePercent),
+      detailPath,
+    });
+  };
+
+  const openCoin = (symbol: string, row?: AnyObj) => {
+    const normalized = symbol.trim().toUpperCase();
+    const detailPath = `/stock-info?asset=coin&coinMarket=${mode.coinMarket}&symbol=${encodeURIComponent(normalized)}`;
+    if (!desktop) {
+      navigate(detailPath);
+      return;
+    }
+    setPreview({
+      assetType: 'coin',
+      market: mode.coinMarket,
+      ticker: normalized,
+      displayName: displayCoinName(normalized, row?.koreanName, row?.englishName),
+      currency: mode.coinMarket === 'spot' ? 'KRW' : 'USDT',
+      price: Number.isFinite(Number(row?.price)) ? Number(row?.price) : null,
+      changePercent: finitePercent(row?.changePercent ?? row?.changePercent24h),
+      detailPath,
+    });
+  };
+
+  const selectSearchItem = (item: UnifiedAssetSuggestion) => {
+    const detailPath = unifiedAssetDetailPath(item, '/market-browser');
+    if (!desktop) {
+      navigate(detailPath);
+      return;
+    }
+    const ticker = String(item.ticker ?? item.productCode).trim().toUpperCase();
+    setPreview({
+      assetType: item.assetType,
+      market: item.market,
+      ticker,
+      displayName: item.displayName,
+      currency: item.quoteCurrency,
+      price: null,
+      changePercent: null,
+      detailPath,
+    });
+  };
+
+  const selectionForPreview = (item: MarketPreview) => ({
+    assetType: item.assetType === 'stock' ? 'stock' as const : item.market === 'futures' ? 'coin_futures' as const : 'coin_spot' as const,
+    market: item.market === 'KR' || item.market === 'US' ? item.market : item.market === 'futures' ? 'BITGET' as const : 'UPBIT' as const,
+    symbol: item.ticker,
+    ticker: item.ticker,
+    displayName: item.displayName,
+    timeframe: '1D',
+    selectedAt: new Date().toISOString(),
+  });
+
+  const navigateWithPreviewSelection = (item: MarketPreview, target: 'chart' | 'scanner' | 'news') => {
+    const selection = selectionForPreview(item);
+    analysisSelection.select(selection);
+    if (target === 'chart') {
+      navigate(`/ai-chart?${selectionQuery(selection)}`);
+      return;
+    }
+    navigate(target === 'scanner' ? '/scanner' : '/news-information');
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background" data-testid="stocks-shell">
@@ -211,7 +338,7 @@ export default function StocksPage() {
               market={mode.asset === 'stock' ? mode.stockMarket : mode.coinMarket}
               allowedMarkets={[mode.asset === 'stock' ? mode.stockMarket : mode.coinMarket]}
               placeholder={mode.asset === 'stock' ? '종목명·코드·영문명 검색' : '코인명·심볼 검색'}
-              onSelect={(item) => navigate(unifiedAssetDetailPath(item, '/market-browser'))}
+              onSelect={selectSearchItem}
             />
           </div>
 
@@ -240,33 +367,48 @@ export default function StocksPage() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-[90rem] space-y-4 px-3 pb-6 pt-4 sm:px-5 min-[1200px]:px-6">
-        {/* 5) 선택한 분류의 실제 결과 목록 */}
-        <section>
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-base font-bold tracking-[-0.01em]">{CATEGORIES.find((c) => c.key === category)?.label}</h2>
-          </div>
+      <main className="mx-auto w-full max-w-[90rem] px-3 pb-6 pt-4 sm:px-5 min-[1200px]:px-6">
+        <div className="min-w-0 min-[1200px]:grid min-[1200px]:grid-cols-[minmax(0,1.8fr)_minmax(320px,0.72fr)] min-[1200px]:gap-5" data-testid="stocks-master-detail">
+          <section className="min-w-0">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-base font-bold tracking-[-0.01em]">{CATEGORIES.find((c) => c.key === category)?.label}</h2>
+            </div>
+            <div className="hidden grid-cols-[minmax(0,1fr)_150px_100px] border-y border-card-border px-3 py-2 text-xs font-semibold text-muted-foreground min-[1200px]:grid" aria-hidden="true">
+              <span>종목</span><span className="text-right">현재가</span><span className="text-right">등락</span>
+            </div>
+            {isStock ? (
+              <StockCategoryResults
+                category={category}
+                recommendations={recommendations}
+                themes={themes}
+                movers={movers}
+                stockMarket={mode.stockMarket}
+                onOpenStock={openStock}
+              />
+            ) : (
+              <CoinCategoryResults
+                category={category}
+                coinCategorySupported={coinCategorySupported}
+                coinTickerQuery={coinTickerQuery}
+                sortedCoins={sortedCoins}
+                coinMarket={mode.coinMarket}
+                onOpenCoin={openCoin}
+              />
+            )}
+          </section>
 
-          {isStock ? (
-            <StockCategoryResults
-              category={category}
-              recommendations={recommendations}
-              themes={themes}
-              movers={movers}
-              stockMarket={mode.stockMarket}
-              onOpenStock={openStock}
-            />
-          ) : (
-            <CoinCategoryResults
-              category={category}
-              coinCategorySupported={coinCategorySupported}
-              coinTickerQuery={coinTickerQuery}
-              sortedCoins={sortedCoins}
-              coinMarket={mode.coinMarket}
-              onOpenCoin={openCoin}
-            />
-          )}
-        </section>
+          <aside className="hidden min-w-0 min-[1200px]:block" data-testid="stocks-preview-pane">
+            <div className="sticky top-4">
+              <MarketPreviewPanel
+                preview={preview}
+                onDetail={() => preview && navigate(preview.detailPath)}
+                onChart={() => preview && navigateWithPreviewSelection(preview, 'chart')}
+                onScanner={() => preview && navigateWithPreviewSelection(preview, 'scanner')}
+                onNews={() => preview && navigateWithPreviewSelection(preview, 'news')}
+              />
+            </div>
+          </aside>
+        </div>
       </main>
       </div>
       <BottomNav />
@@ -274,8 +416,72 @@ export default function StocksPage() {
   );
 }
 
-function EmptyBox({ children }: { children: React.ReactNode }) {
-  return <div className="rounded-2xl border border-card-border bg-card p-6 text-center text-sm font-semibold text-muted-foreground">{children}</div>;
+function MarketPreviewPanel({
+  preview,
+  onDetail,
+  onChart,
+  onScanner,
+  onNews,
+}: {
+  preview: MarketPreview | null;
+  onDetail: () => void;
+  onChart: () => void;
+  onScanner: () => void;
+  onNews: () => void;
+}) {
+  if (!preview) {
+    return <EmptyState title="종목 미리보기" description="왼쪽 종목을 선택하면 가격·보유정보와 주요 이동 메뉴를 표시합니다." />;
+  }
+
+  const holding = preview.assetType === 'stock' ? getPortfolioChartOverlay(preview.ticker) : null;
+  const watched = readWatchlistItems().some((item) => (
+    item.ticker.trim().toUpperCase() === preview.ticker
+    && (!item.market || item.market === preview.market)
+  ));
+
+  return (
+    <section className="rounded-2xl border border-card-border bg-card p-4 shadow-sm" aria-label="선택 종목 미리보기">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <h2 className="truncate text-lg font-bold tracking-[-0.015em]">{preview.displayName}</h2>
+            {watched ? <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">관심</span> : null}
+            {holding ? <span className="rounded-full bg-positive/10 px-2 py-0.5 text-xs font-semibold text-positive">보유</span> : null}
+          </div>
+          <p className="mt-1 text-xs font-medium text-muted-foreground">{preview.ticker} · {preview.market}</p>
+        </div>
+        <div className="shrink-0 text-right tabular-nums">
+          <p className="text-base font-bold">{formatAppPrice(preview.price, preview.currency)}</p>
+          <p className={cn('mt-1 text-xs font-semibold', preview.changePercent != null && preview.changePercent > 0 ? 'text-positive' : preview.changePercent != null && preview.changePercent < 0 ? 'text-destructive' : 'text-muted-foreground')}>
+            {preview.changePercent == null ? '등락 데이터 없음' : formatAppPercent(preview.changePercent)}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+        <PreviewMetric label="평단" value={holding ? formatAppPrice(holding.averagePrice, holding.currency) : '보유 기록 없음'} />
+        <PreviewMetric label="수량" value={holding ? holding.quantity.toLocaleString('ko-KR', { maximumFractionDigits: 6 }) : '-'} />
+        <PreviewMetric label="보유 수익률" value={holding?.rate == null ? '-' : formatAppPercent(holding.rate)} />
+        <PreviewMetric label="관심종목" value={watched ? '등록됨' : '미등록'} />
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <PreviewAction label="상세 보기" primary onClick={onDetail} />
+        <PreviewAction label="AI 차트" onClick={onChart} />
+        <PreviewAction label="신호 보기" onClick={onScanner} />
+        <PreviewAction label="뉴스·공시" onClick={onNews} />
+      </div>
+      <p className="mt-3 text-xs font-medium leading-5 text-muted-foreground">신호·뉴스 개수는 별도 근거가 확인될 때만 표시하며, 이 화면에서 임의로 추정하지 않습니다.</p>
+    </section>
+  );
+}
+
+function PreviewMetric({ label, value }: { label: string; value: string }) {
+  return <div className="min-w-0 rounded-xl bg-background p-3"><p className="text-xs font-medium text-muted-foreground">{label}</p><p className="mt-1 truncate font-semibold tabular-nums">{value}</p></div>;
+}
+
+function PreviewAction({ label, primary = false, onClick }: { label: string; primary?: boolean; onClick: () => void }) {
+  return <button type="button" onClick={onClick} className={cn('min-h-11 rounded-xl px-3 text-sm font-semibold', primary ? 'bg-primary text-primary-foreground' : 'border border-card-border bg-background')}>{label}</button>;
 }
 
 // ── 공통 행 디자인 (기존 행 클래스 재사용) ──────────────────────────
@@ -324,7 +530,7 @@ function StockCategoryResults({
     const rows = recommendations.data?.rows ?? [];
     const undervalued = rows.filter((row) => row.category === 'undervalued');
     const breakout = rows.filter((row) => row.category === 'breakout');
-    if (rows.length === 0) return <EmptyBox>현재 조건을 충족하는 실제 추천 종목이 없습니다. (조건 미달 종목으로 채우지 않습니다)</EmptyBox>;
+    if (rows.length === 0) return <EmptyState compact title="현재 조건을 충족하는 추천 종목이 없습니다" description="조건 미달 종목으로 결과를 채우지 않습니다." />;
     return (
       <div className="space-y-4">
         <p className="text-center text-xs font-medium text-muted-foreground">규칙 기반 분석 · AI(LLM) 미연결</p>
@@ -338,7 +544,7 @@ function StockCategoryResults({
     if (themes.isLoading) return <LoadingState label="실제 테마 데이터를 불러오는 중입니다." />;
     if (themes.isError) return <ErrorState onRetry={() => { void themes.refetch(); }} />;
     const groups = themes.data?.themes ?? [];
-    if (groups.length === 0) return <EmptyBox>현재 표시할 실제 테마 데이터가 없습니다.</EmptyBox>;
+    if (groups.length === 0) return <EmptyState compact title="표시할 테마 데이터가 없습니다" />;
     return (
       <div className="space-y-4">
         {groups.map((group) => (
@@ -369,7 +575,7 @@ function StockCategoryResults({
       : category === 'gainers'
         ? data?.gainers ?? []
         : data?.losers ?? [];
-  if (rows.length === 0) return <EmptyBox>현재 표시할 실제 종목 데이터가 없습니다.</EmptyBox>;
+  if (rows.length === 0) return <EmptyState compact title="표시할 종목 데이터가 없습니다" />;
   return (
     <div className="space-y-2">
       {rows
@@ -440,11 +646,11 @@ function CoinCategoryResults({
 }) {
   if (!coinCategorySupported) {
     // AI추천·테마종목은 코인 공급자가 없음
-    return <EmptyBox>코인에는 해당 분류를 제공하지 않습니다 — 추천 엔진·테마 데이터가 주식 전용입니다.</EmptyBox>;
+    return <EmptyState compact title="이 시장에서는 지원하지 않는 분류입니다" description="추천·테마 데이터는 현재 주식 시장에서만 제공합니다." />;
   }
   if (coinTickerQuery.isLoading) return <LoadingState label="실제 코인 시세를 불러오는 중입니다." />;
   if (coinTickerQuery.isError) return <ErrorState onRetry={() => { void coinTickerQuery.refetch(); }} />;
-  if (sortedCoins.length === 0) return <EmptyBox>현재 표시할 실제 코인 데이터가 없습니다.</EmptyBox>;
+  if (sortedCoins.length === 0) return <EmptyState compact title="표시할 코인 데이터가 없습니다" />;
   return (
     <div className="space-y-2">
       {sortedCoins.map((row, index) => (
