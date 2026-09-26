@@ -561,6 +561,21 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
   const allocationTotal = allocationRows.reduce((sum, row) => Number.isFinite(row.percent) ? sum + row.percent : sum, 0);
   const allocationValid = allocationTotal <= 100;
   const exitQuantity = position ? exitPreviewQuantity(position, exitPercent, market) : null;
+  const entryContextReady = Boolean(
+    selection.searchRunId
+    && selection.signalId
+    && selection.action
+    && (selection.matchedSignals?.length ?? 0) > 0,
+  );
+  const canonicalOrderStatus = orderDashboard.kind === 'ready'
+    ? `${orderDashboard.items.length}건`
+    : orderDashboard.kind === 'loading' ? '조회 중' : orderDashboard.kind === 'unavailable' ? '조회 실패' : '미조회';
+  const exitStatus = !position
+    ? '해당 없음'
+    : exitPreviewState.kind === 'ready' ? '재검증됨'
+      : exitPreviewState.kind === 'loading' ? '재검증 중'
+        : exitPreviewState.kind === 'unavailable' ? '재검증 실패'
+          : '재검증 필요';
 
   const loadOrderDashboard = useCallback(async () => {
     const controller = new AbortController();
@@ -745,12 +760,18 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
             </summary>
             {cockpitOpen ? (
               <div className="mt-3 space-y-3">
+                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4" data-testid="ai-chart-cockpit-lifecycle">
+                  <Metric label="진입" value={entryContextReady ? 'Scanner 근거 있음' : '신호 필요'} />
+                  <Metric label="보유" value={position ? '포지션 있음' : '없음'} />
+                  <Metric label="앱 주문" value={canonicalOrderStatus} />
+                  <Metric label="종료" value={exitStatus} />
+                </div>
                 <section className="rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-entry-planning">
                   <p className="text-[10px] font-black">새 진입 계획</p>
                   <p className="mt-0.5 text-[8px] font-bold leading-4 text-muted-foreground">
                     Scanner 근거가 있는 경우에만 기존 canonical Paper owner를 재사용합니다. 실전 진입은 아래 승인 큐와 서버 live gate를 우회하지 않습니다.
                   </p>
-                  {selection.searchRunId && selection.signalId && selection.action && (selection.matchedSignals?.length ?? 0) > 0 ? (
+                  {entryContextReady ? (
                     <div className="mt-2 [&_[data-testid=scanner-approval-composer]]:rounded-2xl [&_[data-testid=scanner-approval-composer]]:shadow-none">
                       <ScannerApprovalComposer selection={selection} />
                     </div>
