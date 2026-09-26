@@ -278,6 +278,7 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await page.setViewportSize({ width: 1440, height: 960 });
   let accountReads = 0;
   let exitPreviewReads = 0;
+  let exitPlanReads = 0;
   let entryReadinessReads = 0;
   const financialMutations: string[] = [];
 
@@ -427,6 +428,75 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
             orderSubmissionPerformedByPreview: false,
             executionAuthorityGrantedByPreview: false,
           },
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/positions/exit-plan') {
+      exitPlanReads += 1;
+      expect(request.method()).toBe('POST');
+      const body = request.postDataJSON() as {
+        confirmed?: boolean;
+        provider?: string;
+        market?: string;
+        symbol?: string;
+        percent?: number;
+        previewFingerprint?: string;
+        availableQuantity?: number;
+        exitQuantity?: number;
+        side?: string;
+        sourceCheckedAt?: string;
+      };
+      expect(body.confirmed).toBe(true);
+      expect(body.provider).toBe('toss');
+      expect(body.market).toBe('KR');
+      expect(body.symbol).toBe('005930');
+      expect(body.percent).toBe(25);
+      expect(body.previewFingerprint).toBe('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+      expect(body.availableQuantity).toBe(20);
+      expect(body.exitQuantity).toBe(5);
+      expect(body.side).toBe('sell');
+      expect(Number.isFinite(Date.parse(body.sourceCheckedAt ?? ''))).toBe(true);
+      const now = new Date();
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          canonicalExitPlan: {
+            schemaVersion: 'ai-chart-canonical-exit-plan-v1',
+            planFingerprint: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+            previewFingerprint: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            freshAccountFingerprint: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            provider: 'toss',
+            market: 'KR',
+            symbol: '005930',
+            accountMode: 'live',
+            orderType: 'market',
+            side: 'sell',
+            quantity: 5,
+            percent: 25,
+            reduceOnly: true,
+            sourceCheckedAt: now.toISOString(),
+            issuedAt: now.toISOString(),
+            expiresAt: new Date(now.getTime() + 60_000).toISOString(),
+            approvalEligible: false,
+            blockers: ['LIVE_CONNECTION_NOT_CONFIGURED', 'MANUAL_LIVE_SERVER_GATE_OFF'],
+            requiresFreshAccountRecheckAtApproval: true,
+            requiresOrderTimeRiskRecheck: true,
+            requiresExplicitApproval: true,
+            nextOwner: 'CANONICAL_EXIT_APPROVAL_OWNER',
+            orderSubmissionPerformed: false,
+            financialMutationPerformed: false,
+          },
+          planPrepared: true,
+          privateAccountReadPerformed: true,
+          financialMutationPerformed: false,
+          orderSubmitted: false,
+          orderCanceled: false,
+          orderAmended: false,
+          privateTradingMutationSent: false,
+          executionAuthority: 'NONE',
         }),
       });
       return;
@@ -617,6 +687,13 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await expect(cockpit.getByTestId('ai-chart-exit-preview-verified')).toContainText('executionAuthority=NONE');
   await expect(cockpit.getByTestId('ai-chart-canonical-exit-draft')).toContainText('Canonical 종료계획 고정됨');
   await expect(cockpit.getByTestId('ai-chart-canonical-exit-draft')).toHaveAttribute('data-exit-fingerprint', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+  await cockpit.getByTestId('ai-chart-prepare-exit-plan').click();
+  await expect.poll(() => exitPlanReads).toBe(1);
+  await expect(cockpit.getByTestId('ai-chart-canonical-exit-plan')).toContainText('종료 승인계획 준비됨');
+  await expect(cockpit.getByTestId('ai-chart-canonical-exit-plan')).toContainText('현재 승인 차단');
+  await expect(cockpit.getByTestId('ai-chart-canonical-exit-plan')).toContainText('실제 주문 0');
+  await expect(cockpit.getByTestId('ai-chart-canonical-exit-plan')).toContainText('financial mutation 0');
+  await expect(cockpit.getByTestId('ai-chart-canonical-exit-plan')).toHaveAttribute('data-exit-plan-fingerprint', 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc');
   await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('재검증됨');
   await expect(cockpit.getByTestId('ai-chart-exit-readiness')).toContainText('실전 종료 준비 · 차단');
   await expect(cockpit.getByTestId('ai-chart-exit-readiness')).toContainText('실전 거래키가 연결되지 않음');
