@@ -335,6 +335,53 @@ type ExitPreflightState =
   | { kind: 'ready'; preflight: CanonicalExitPreflight }
   | { kind: 'unavailable'; code: string };
 
+type CanonicalExitExecutionPackage = {
+  schemaVersion: 'ai-chart-exit-execution-package-v1';
+  state: 'BOUND_NON_EXECUTING_PACKAGE' | 'BLOCKED_NON_EXECUTING';
+  executionPackageId: string;
+  preflightIntentId: string;
+  riskIntentId: string;
+  approvalIntentId: string;
+  planId: string;
+  exitDraftId: string;
+  provider: ExitPreview['provider'];
+  market: string;
+  symbol: string;
+  accountMode: 'live';
+  orderType: 'market';
+  side: 'buy' | 'sell';
+  quantity: number;
+  percent: number;
+  positionQuantity: number | null;
+  availableQuantity: number;
+  reduceOnly: true;
+  preflightReferencePrice: number;
+  packageReferencePrice: number | null;
+  referencePriceDriftPercent: number | null;
+  preflightCheckedAt: string;
+  packageCheckedAt: string;
+  issuedAt: string;
+  expiresAt: string;
+  providerOpenOrdersChecked: boolean;
+  conflictingOpenOrderCount: number | null;
+  blockers: string[];
+  packageReady: boolean;
+  finalProviderOrderbookRiskRequired: true;
+  providerSubmissionRequired: true;
+  nextOwner: 'CANONICAL_EXIT_PROVIDER_SUBMISSION_OWNER';
+  executionAuthority: 'NONE';
+  executable: false;
+  providerRequestPrepared: false;
+  orderSubmissionPerformed: false;
+  financialMutationPerformed: false;
+};
+
+type ExitExecutionPackageState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'ready'; executionPackage: CanonicalExitExecutionPackage }
+  | { kind: 'unavailable'; code: string };
+
 type ExecutionReadiness = {
   connectionConfigured: boolean;
   providerVerified: boolean;
@@ -513,6 +560,15 @@ function exitReadinessBlockerLabel(code: string): string {
     EXIT_PREFLIGHT_ACCOUNT_EVIDENCE_STALE: '실행 직전 실계좌 근거가 오래됨',
     EXIT_PREFLIGHT_PROVIDER_OPEN_ORDERS_UNAVAILABLE: 'Provider 미체결 주문 조회 불가',
     EXIT_PREFLIGHT_PROVIDER_OPEN_ORDER_PRESENT: '같은 종목 미체결 주문 존재',
+    EXIT_EXECUTION_PACKAGE_ACCOUNT_SNAPSHOT_NOT_FRESH: '최종 실행 패키지 계좌 상태 확인 실패',
+    EXIT_EXECUTION_PACKAGE_POSITION_AMBIGUOUS: '동일 종목 포지션이 여러 개라 최종 식별 불가',
+    EXIT_EXECUTION_PACKAGE_POSITION_NOT_FOUND: '최종 실행 패키지 시점 보유 포지션 없음',
+    EXIT_EXECUTION_PACKAGE_POSITION_CHANGED: '최종 패키지 시점 보유수량 또는 방향 변경',
+    EXIT_EXECUTION_PACKAGE_CURRENT_PRICE_UNAVAILABLE: '최종 패키지 현재가격 확인 불가',
+    EXIT_EXECUTION_PACKAGE_EMERGENCY_STOP_ACTIVE: '최종 패키지 시점 긴급정지 활성화',
+    EXIT_EXECUTION_PACKAGE_ACCOUNT_EVIDENCE_STALE: '최종 패키지 실계좌 근거가 오래됨',
+    EXIT_EXECUTION_PACKAGE_PROVIDER_OPEN_ORDERS_UNAVAILABLE: '최종 패키지 Provider 미체결 조회 불가',
+    EXIT_EXECUTION_PACKAGE_PROVIDER_OPEN_ORDER_PRESENT: '최종 패키지에 같은 종목 미체결 주문 존재',
   };
   return labels[code] ?? code;
 }
@@ -632,6 +688,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
   const [exitApprovalState, setExitApprovalState] = useState<ExitApprovalState>({ kind: 'idle' });
   const [exitRiskState, setExitRiskState] = useState<ExitRiskState>({ kind: 'idle' });
   const [exitPreflightState, setExitPreflightState] = useState<ExitPreflightState>({ kind: 'idle' });
+  const [exitExecutionPackageState, setExitExecutionPackageState] = useState<ExitExecutionPackageState>({ kind: 'idle' });
   const [entryReadiness, setEntryReadiness] = useState<EntryReadinessState>({ kind: 'idle' });
   const [liveEntryDraft, setLiveEntryDraft] = useState<LiveEntryDraftState>({ kind: 'idle' });
   const abortRef = useRef<AbortController | null>(null);
@@ -648,6 +705,8 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
   const exitRiskSequenceRef = useRef(0);
   const exitPreflightAbortRef = useRef<AbortController | null>(null);
   const exitPreflightSequenceRef = useRef(0);
+  const exitExecutionPackageAbortRef = useRef<AbortController | null>(null);
+  const exitExecutionPackageSequenceRef = useRef(0);
   const entryReadinessAbortRef = useRef<AbortController | null>(null);
   const entryReadinessSequenceRef = useRef(0);
   const liveDraftAbortRef = useRef<AbortController | null>(null);
@@ -675,6 +734,9 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     exitPreflightSequenceRef.current += 1;
     exitPreflightAbortRef.current?.abort();
     exitPreflightAbortRef.current = null;
+    exitExecutionPackageSequenceRef.current += 1;
+    exitExecutionPackageAbortRef.current?.abort();
+    exitExecutionPackageAbortRef.current = null;
     entryReadinessSequenceRef.current += 1;
     entryReadinessAbortRef.current?.abort();
     entryReadinessAbortRef.current = null;
@@ -700,6 +762,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setExitApprovalState({ kind: 'idle' });
     setExitRiskState({ kind: 'idle' });
     setExitPreflightState({ kind: 'idle' });
+    setExitExecutionPackageState({ kind: 'idle' });
     setEntryReadiness({ kind: 'idle' });
     setLiveEntryDraft({ kind: 'idle' });
     onOverlayChange(null);
@@ -714,6 +777,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
       exitApprovalAbortRef.current?.abort();
       exitRiskAbortRef.current?.abort();
       exitPreflightAbortRef.current?.abort();
+      exitExecutionPackageAbortRef.current?.abort();
       entryReadinessAbortRef.current?.abort();
       liveDraftAbortRef.current?.abort();
     };
@@ -735,6 +799,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setExitApprovalState({ kind: 'idle' });
     setExitRiskState({ kind: 'idle' });
     setExitPreflightState({ kind: 'idle' });
+    setExitExecutionPackageState({ kind: 'idle' });
     onOverlayChange(null);
     try {
       const response = await authorizedFetch(`/api/accounts/read-only/${provider}`, {
@@ -823,6 +888,15 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     exitApprovalSequenceRef.current += 1;
     exitApprovalAbortRef.current?.abort();
     exitApprovalAbortRef.current = null;
+    exitRiskSequenceRef.current += 1;
+    exitRiskAbortRef.current?.abort();
+    exitRiskAbortRef.current = null;
+    exitPreflightSequenceRef.current += 1;
+    exitPreflightAbortRef.current?.abort();
+    exitPreflightAbortRef.current = null;
+    exitExecutionPackageSequenceRef.current += 1;
+    exitExecutionPackageAbortRef.current?.abort();
+    exitExecutionPackageAbortRef.current = null;
     entryReadinessSequenceRef.current += 1;
     entryReadinessAbortRef.current?.abort();
     entryReadinessAbortRef.current = null;
@@ -836,6 +910,9 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setExitPreviewState({ kind: 'idle' });
     setExitPlanState({ kind: 'idle' });
     setExitApprovalState({ kind: 'idle' });
+    setExitRiskState({ kind: 'idle' });
+    setExitPreflightState({ kind: 'idle' });
+    setExitExecutionPackageState({ kind: 'idle' });
     setEntryReadiness({ kind: 'idle' });
     onOverlayChange(null);
   }, [onOverlayChange, stockProvider]);
@@ -1098,6 +1175,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setExitApprovalState({ kind: 'idle' });
     setExitRiskState({ kind: 'idle' });
     setExitPreflightState({ kind: 'idle' });
+    setExitExecutionPackageState({ kind: 'idle' });
     setExitPlanState({ kind: 'loading' });
     try {
       const response = await authorizedFetch('/api/trade-automation/positions/exit-plan', {
@@ -1177,6 +1255,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     const sequence = ++exitApprovalSequenceRef.current;
     setExitRiskState({ kind: 'idle' });
     setExitPreflightState({ kind: 'idle' });
+    setExitExecutionPackageState({ kind: 'idle' });
     setExitApprovalState({ kind: 'loading' });
     try {
       const response = await authorizedFetch('/api/trade-automation/positions/exit-approval', {
@@ -1260,6 +1339,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     exitRiskAbortRef.current = controller;
     const sequence = ++exitRiskSequenceRef.current;
     setExitPreflightState({ kind: 'idle' });
+    setExitExecutionPackageState({ kind: 'idle' });
     setExitRiskState({ kind: 'loading' });
     try {
       const response = await authorizedFetch('/api/trade-automation/positions/exit-risk', {
@@ -1424,6 +1504,100 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
       if (exitPreflightAbortRef.current === controller) exitPreflightAbortRef.current = null;
     }
   }, [exitPreflightState.kind, exitRiskState]);
+
+  const prepareCanonicalExitExecutionPackage = useCallback(async () => {
+    if (exitPreflightState.kind !== 'ready'
+      || exitPreflightState.preflight.preflightPassed !== true
+      || exitExecutionPackageState.kind === 'loading') return;
+    const preflight = exitPreflightState.preflight;
+    const controller = new AbortController();
+    exitExecutionPackageAbortRef.current?.abort();
+    exitExecutionPackageAbortRef.current = controller;
+    const sequence = ++exitExecutionPackageSequenceRef.current;
+    setExitExecutionPackageState({ kind: 'loading' });
+    try {
+      const response = await authorizedFetch('/api/trade-automation/positions/exit-execution-package', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          confirmed: true,
+          preflightIntentId: preflight.preflightIntentId,
+          riskIntentId: preflight.riskIntentId,
+          approvalIntentId: preflight.approvalIntentId,
+          planId: preflight.planId,
+          exitDraftId: preflight.exitDraftId,
+          provider: preflight.provider,
+          market: preflight.market,
+          symbol: preflight.symbol,
+          percent: preflight.percent,
+          positionQuantity: preflight.positionQuantity,
+          availableQuantity: preflight.availableQuantity,
+          quantity: preflight.quantity,
+          side: preflight.side,
+          riskCheckedAt: preflight.riskCheckedAt,
+          preflightCheckedAt: preflight.preflightCheckedAt,
+          preflightReferencePrice: preflight.referencePrice,
+          preflightEvaluatedAt: preflight.evaluatedAt,
+          preflightExpiresAt: preflight.expiresAt,
+          preflightBlockers: preflight.blockers,
+          preflightPassed: preflight.preflightPassed,
+        }),
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => null) as {
+        ok?: boolean;
+        error?: string;
+        canonicalExitExecutionPackage?: CanonicalExitExecutionPackage;
+        packagePrepared?: boolean;
+        privateAccountReadPerformed?: boolean;
+        financialMutationPerformed?: boolean;
+        orderSubmitted?: boolean;
+        orderCanceled?: boolean;
+        orderAmended?: boolean;
+        privateTradingMutationSent?: boolean;
+        executionAuthority?: string;
+      } | null;
+      if (controller.signal.aborted || sequence !== exitExecutionPackageSequenceRef.current) return;
+      const executionPackage = payload?.canonicalExitExecutionPackage;
+      if (!response.ok || payload?.ok !== true || !executionPackage) {
+        setExitExecutionPackageState({ kind: 'unavailable', code: payload?.error ?? `HTTP_${response.status}` });
+        return;
+      }
+      if (payload.packagePrepared !== true
+        || payload.privateAccountReadPerformed !== true
+        || payload.financialMutationPerformed !== false
+        || payload.orderSubmitted !== false
+        || payload.orderCanceled !== false
+        || payload.orderAmended !== false
+        || payload.privateTradingMutationSent !== false
+        || payload.executionAuthority !== 'NONE'
+        || executionPackage.schemaVersion !== 'ai-chart-exit-execution-package-v1'
+        || !/^[0-9a-f]{64}$/u.test(executionPackage.executionPackageId)
+        || executionPackage.preflightIntentId !== preflight.preflightIntentId
+        || executionPackage.riskIntentId !== preflight.riskIntentId
+        || executionPackage.approvalIntentId !== preflight.approvalIntentId
+        || executionPackage.planId !== preflight.planId
+        || executionPackage.exitDraftId !== preflight.exitDraftId
+        || executionPackage.reduceOnly !== true
+        || executionPackage.finalProviderOrderbookRiskRequired !== true
+        || executionPackage.providerSubmissionRequired !== true
+        || executionPackage.nextOwner !== 'CANONICAL_EXIT_PROVIDER_SUBMISSION_OWNER'
+        || executionPackage.executionAuthority !== 'NONE'
+        || executionPackage.executable !== false
+        || executionPackage.providerRequestPrepared !== false
+        || executionPackage.orderSubmissionPerformed !== false
+        || executionPackage.financialMutationPerformed !== false) {
+        setExitExecutionPackageState({ kind: 'unavailable', code: 'EXIT_EXECUTION_PACKAGE_SAFETY_CONTRACT_MISMATCH' });
+        return;
+      }
+      setExitExecutionPackageState({ kind: 'ready', executionPackage });
+    } catch (error) {
+      if (controller.signal.aborted || sequence !== exitExecutionPackageSequenceRef.current) return;
+      setExitExecutionPackageState({ kind: 'unavailable', code: error instanceof Error ? error.name : 'EXIT_EXECUTION_PACKAGE_FAILED' });
+    } finally {
+      if (exitExecutionPackageAbortRef.current === controller) exitExecutionPackageAbortRef.current = null;
+    }
+  }, [exitExecutionPackageState.kind, exitPreflightState]);
 
   const loadEntryReadiness = useCallback(async () => {
     const controller = new AbortController();
@@ -1881,6 +2055,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                           setExitApprovalState({ kind: 'idle' });
                           setExitRiskState({ kind: 'idle' });
                           setExitPreflightState({ kind: 'idle' });
+    setExitExecutionPackageState({ kind: 'idle' });
                         }}
                         className={`min-h-10 rounded-lg border text-[9px] font-black ${exitPercent === percent ? 'border-primary bg-primary/10 text-primary' : 'border-card-border'}`}
                       >
@@ -2063,6 +2238,50 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                                       <p className="mt-1">
                                         실제 전송 전 provider orderbook·slippage 최종검사가 추가로 필요합니다. executionAuthority=NONE · executable=false.
                                       </p>
+                                      {exitPreflightState.preflight.preflightPassed ? (
+                                        <button
+                                          type="button"
+                                          data-testid="ai-chart-prepare-exit-execution-package"
+                                          onClick={() => void prepareCanonicalExitExecutionPackage()}
+                                          disabled={exitExecutionPackageState.kind === 'loading'}
+                                          className="mt-2 min-h-10 w-full rounded-lg border border-primary/30 bg-background px-3 text-[9px] font-black text-primary disabled:opacity-50"
+                                        >
+                                          {exitExecutionPackageState.kind === 'loading' ? '최종 실행 패키지 확인 중...' : '최종 실행 패키지 묶기 · 주문 안 함'}
+                                        </button>
+                                      ) : null}
+                                      {exitExecutionPackageState.kind === 'ready' ? (
+                                        <div
+                                          className={`mt-2 rounded-lg border p-2 ${exitExecutionPackageState.executionPackage.packageReady ? 'border-positive/30 bg-positive/5' : 'border-warning/30 bg-warning/5'}`}
+                                          data-testid="ai-chart-exit-execution-package"
+                                          data-exit-execution-package-id={exitExecutionPackageState.executionPackage.executionPackageId}
+                                        >
+                                          <p className={`font-black ${exitExecutionPackageState.executionPackage.packageReady ? 'text-positive' : 'text-warning'}`}>
+                                            {exitExecutionPackageState.executionPackage.packageReady ? '최종 실행 패키지 준비 · 아직 주문 미전송' : '최종 실행 패키지 차단 · 주문 미전송'}
+                                          </p>
+                                          <p className="mt-1">
+                                            현재 기준가 {formatPrice(exitExecutionPackageState.executionPackage.packageReferencePrice, market)}
+                                            {' · '}Preflight 기준가 {formatPrice(exitExecutionPackageState.executionPackage.preflightReferencePrice, market)}
+                                            {' · '}괴리 {exitExecutionPackageState.executionPackage.referencePriceDriftPercent == null ? '미확인' : `${exitExecutionPackageState.executionPackage.referencePriceDriftPercent.toFixed(3)}%`}
+                                          </p>
+                                          <p className="mt-1 break-all">
+                                            Package {exitExecutionPackageState.executionPackage.executionPackageId.slice(0, 12)}…
+                                            {' · '}Preflight {exitExecutionPackageState.executionPackage.preflightIntentId.slice(0, 12)}…
+                                          </p>
+                                          {exitExecutionPackageState.executionPackage.blockers.length ? (
+                                            <p className="mt-1 break-words">
+                                              차단 사유 · {exitExecutionPackageState.executionPackage.blockers.map(exitReadinessBlockerLabel).join(' · ')}
+                                            </p>
+                                          ) : null}
+                                          <p className="mt-1">
+                                            다음 단계는 provider orderbook/slippage 최종검사 + 별도 제출 owner입니다. providerRequestPrepared=false · executionAuthority=NONE · executable=false.
+                                          </p>
+                                        </div>
+                                      ) : null}
+                                      {exitExecutionPackageState.kind === 'unavailable' ? (
+                                        <p role="alert" className="mt-2 rounded-lg bg-warning/10 p-2 text-[8px] font-black text-warning">
+                                          최종 실행 패키지 실패 · {safeTradeErrorMessage(exitExecutionPackageState.code, exitExecutionPackageState.code)}
+                                        </p>
+                                      ) : null}
                                     </div>
                                   ) : null}
                                   {exitPreflightState.kind === 'unavailable' ? (
