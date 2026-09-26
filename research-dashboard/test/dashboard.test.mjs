@@ -284,6 +284,22 @@ test('overview exposes only summarized read-only research evidence', async () =>
   assert.equal(overview.paper.candidatePerformance.Settlement_N, 1);
   assert.equal(overview.paper.candidatePerformance.Net_PnL, null);
   assert.equal(overview.paper.candidatePerformance.PROFITABILITY_PROVEN, false);
+  assert.deepEqual(overview.paper.candidatePerformance.promotionIdentity, {
+    candidateId: `phase3-candidate:sha256:${'7'.repeat(64)}`,
+    strategyId: 'strategy-alpha',
+    strategyVersion: 'v1',
+    parameterHash: '8'.repeat(64),
+    researchCodeSha: '9'.repeat(40),
+    market: 'CRYPTO_FUTURES',
+    timeframe: '15m',
+    sidePolicy: 'LONG',
+    accountMode: 'PAPER',
+    costPolicyVersion: 'cost-v1',
+    executionPolicyVersion: 'paper-v1',
+  });
+  assert.equal(Object.hasOwn(overview.paper.candidatePerformance.promotionIdentity, 'provider'), false);
+  assert.equal(Object.hasOwn(overview.paper.candidatePerformance.promotionIdentity, 'symbol'), false);
+  assert.equal(JSON.stringify(overview.paper.candidatePerformance.promotionIdentity).includes('/var/'), false);
   assert.equal(overview.dataFactory.temporalCryptoFutures.present, true);
   assert.equal(overview.dataFactory.temporalCryptoFutures.status, 'complete');
   assert.equal(overview.dataFactory.temporalCryptoFutures.observationCount, 42);
