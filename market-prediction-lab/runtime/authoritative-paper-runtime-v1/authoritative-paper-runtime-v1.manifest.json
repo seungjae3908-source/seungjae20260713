@@ -8,7 +8,7 @@
     "sourceGitBlobSha": "7dc275b70f9379e32f3fd6c718a612b06ceb1c46",
     "sourceSha256": "8c7563936de865e9103d73d15c0442a44f1cf33426315e758abad83d96880e0c"
   },
-  "sourceGraphSha256": "ac0be66e7443d9c89355f6b15dc6c712ae72baa6a71347587e258a0cc3bd1bfb",
+  "sourceGraphSha256": "2b853dea1f8ba71fe8f003c60a9a4573f8ce1dcbf2d70c410ce2624c8595f5b2",
   "sourceFiles": [
     "api-server/src/data/asset-type.ts",
     "api-server/src/lib/bounded-work-pool.ts",
@@ -86,7 +86,7 @@
     "api-server/src/services/scanner-profit-cost-evidence-adapter.service.ts": "df190fd98173c7f272cb309933d877a8f73a099d900c19159e083b36097d29e0",
     "api-server/src/services/scanner-quant-hardening.service.ts": "2dc7fc7bc34b58639adcfb8c4bd3a3ed861c4a9939d79350aa066bae2a1447de",
     "api-server/src/services/scanner-quant-strategy.service.ts": "25a2998a0f31776e2cdc0fddc3c151430c8673fc52fe9af35cb203ccc17d4ca8",
-    "api-server/src/services/scanner-signal-lifecycle.service.ts": "6c8a85753f2484045371e16afa6232cd42f9ec24fb0852ffbc05818860be0c48",
+    "api-server/src/services/scanner-signal-lifecycle.service.ts": "285ee1be5d976729ca75dbdf1a7d3b833e3a0622d7aa24932f34b8ec584ee5df",
     "api-server/src/services/scanner-strategy-profile.service.ts": "90a4406ca4b536ed863082840d39c932816418063f3941f6ec6a3465c10ae792",
     "api-server/src/services/signal-performance-learning.service.ts": "f4180691041a9f7f57cbfd7513ff6666260275efa6c49652c313ae6bc9195392",
     "api-server/src/services/strategy-promotion.service.ts": "d9a8590862f69b5b2da72e27a874b92665161f9eb4c8f9674a94c651bfb5ccd1",
@@ -95,7 +95,7 @@
     "market-intelligence-sidecar/src/execution-quality.mjs": "f91139e1a06c26c3ac42920b3f95271aa96ee4bfacc228236ad4b313444c1cb8",
     "market-prediction-lab/src/bitget-position-tier-v1.js": "ddfa77300339b0968e719bd547a84389c890cc1d03982ec3d2d7d30859f6ed01"
   },
-  "bundleSha256": "659e2f3b41184cbc2bd34c10d2b98d7090ac21399abd865a0d3f567278ad9d37",
+  "bundleSha256": "0d4cd2ff656d0cc38318f020ec8679adf4e1e5c156ec2d947d67ed2aa0142ab9",
   "admissionBundleSchemaVersion": "scanner-paper-admission-evidence-bundle-v1",
   "paperStateSnapshotSchemaVersion": "paper-trading-state-snapshot-v2",
   "callbackOwnerContractSchemaVersion": "authoritative-paper-callback-owner-contract-v1",
