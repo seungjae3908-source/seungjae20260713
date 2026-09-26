@@ -1,0 +1,55 @@
+name: Research Statistical Firewall Adapter V1
+
+on:
+  pull_request:
+    paths:
+      - 'market-prediction-lab/src/global-strategy-statistical-firewall-v1.js'
+      - 'market-prediction-lab/src/research-tournament-statistical-firewall-adapter-v1.js'
+      - 'market-prediction-lab/tests/global-strategy-statistical-firewall-v1.test.js'
+      - 'market-prediction-lab/tests/research-tournament-statistical-firewall-adapter-v1.test.js'
+      - '.github/workflows/research-statistical-firewall-adapter-v1.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-statistical-firewall-adapter-v1-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify #547 canonical firewall and #551 adapter
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          node --test             market-prediction-lab/tests/global-strategy-statistical-firewall-v1.test.js             market-prediction-lab/tests/research-tournament-statistical-firewall-adapter-v1.test.js
+          node <<'NODE'
+          const fs=require('node:fs');
+          const source=fs.readFileSync('market-prediction-lab/src/research-tournament-statistical-firewall-adapter-v1.js','utf8');
+          for(const token of [
+            'canonicalOwner: "#547"',
+            'candidateFamilySize',
+            'multipleTesting',
+            'dsr',
+            'pbo',
+            'minimumN',
+            'parameterStability',
+            'walkForwardStability',
+            'regimeStability',
+            'finalHoldoutAccess: false',
+            'executionAuthority: "NONE"',
+            'STATISTICAL_REVIEW_READY',
+          ]) if(!source.includes(token)) throw new Error('ADAPTER_CONTRACT_TOKEN_MISSING:'+token);
+          if(/finalHoldoutAccess\s*:\s*true/.test(source)) throw new Error('FINAL_HOLDOUT_ACCESS_WIDENED');
+          NODE
