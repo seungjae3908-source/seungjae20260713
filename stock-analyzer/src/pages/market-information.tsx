@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery, type QueryClient } from '@tanstack/react-query';
-import { AlertTriangle, BarChart3, ChevronRight, RefreshCw, WifiOff } from 'lucide-react';
+import { AlertTriangle, BarChart3, ChevronRight, ExternalLink, FileText, Newspaper, RefreshCw, WifiOff } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
@@ -19,9 +19,23 @@ import {
 } from '@/lib/market-information';
 import { unifiedAssetDetailPath } from '@/lib/unified-asset-search';
 import { cn } from '@/lib/utils';
+import { readWatchlistItems, WATCHLIST_CHANGE_EVENT } from '@/lib/stock-display';
+import { loadPortfolioChartOverlays } from '@/lib/portfolio-overlay';
 
 type RankingKey = 'tradingValue' | 'volume' | 'gainers' | 'losers' | 'marketCap';
 type MobileRoomTab = 'market' | 'ranking' | 'news' | 'futures';
+
+type MarketEventTimelineItem = {
+  key: string;
+  symbol: string;
+  title: string;
+  summary: string | null;
+  kind: 'news' | 'disclosure';
+  publishedAt: string;
+  sources: Array<{ source: string; provider: string; url: string }>;
+  held: boolean;
+  watched: boolean;
+};
 
 const MOBILE_ROOM_TABS = [
   { value: 'market', label: '시장' },
@@ -119,6 +133,112 @@ function formatPercent(value: number | null): string {
   return `${sign}${value.toFixed(2)}%`;
 }
 
+function normalizedEventTitle(value: string): string {
+  return value
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/\[[^\]]+\]/gu, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+function buildEventTimeline(
+  newsRows: MarketInformationNewsRow[],
+  disclosureRows: MarketInformationNewsRow[],
+  watched: Set<string>,
+  held: Set<string>,
+): MarketEventTimelineItem[] {
+  const grouped = new Map<string, MarketEventTimelineItem>();
+  for (const row of [...disclosureRows, ...newsRows]) {
+    const symbol = row.symbol.trim().toUpperCase();
+    const titleKey = normalizedEventTitle(row.title);
+    const key = `${symbol}:${titleKey || row.id}`;
+    const existing = grouped.get(key);
+    if (existing) {
+      if (!existing.sources.some((source) => source.url === row.url)) {
+        existing.sources.push({ source: row.source, provider: row.provider, url: row.url });
+      }
+      if (row.kind === 'disclosure') existing.kind = 'disclosure';
+      if (Date.parse(row.publishedAt) > Date.parse(existing.publishedAt)) existing.publishedAt = row.publishedAt;
+      if (!existing.summary && row.summary) existing.summary = row.summary;
+      continue;
+    }
+    grouped.set(key, {
+      key,
+      symbol,
+      title: row.title,
+      summary: row.summary,
+      kind: row.kind,
+      publishedAt: row.publishedAt,
+      sources: [{ source: row.source, provider: row.provider, url: row.url }],
+      held: held.has(symbol),
+      watched: watched.has(symbol),
+    });
+  }
+
+  return [...grouped.values()].sort((left, right) => {
+    const leftUser = left.held ? 2 : left.watched ? 1 : 0;
+    const rightUser = right.held ? 2 : right.watched ? 1 : 0;
+    if (leftUser !== rightUser) return rightUser - leftUser;
+    if (left.kind !== right.kind) return left.kind === 'disclosure' ? -1 : 1;
+    return Date.parse(right.publishedAt) - Date.parse(left.publishedAt);
+  });
+}
+
+function MarketEventTimeline({
+  route,
+  rows,
+  onSelectSymbol,
+}: {
+  route: MarketInformationRoute;
+  rows: MarketEventTimelineItem[];
+  onSelectSymbol: (symbol: string) => void;
+}) {
+  if (!rows.length) {
+    return <p className="mt-3 rounded-xl border border-dashed p-3 text-xs font-semibold text-muted-foreground">표시할 최신 뉴스·공시 이벤트가 없습니다.</p>;
+  }
+  return (
+    <div className="mt-3 space-y-2" data-testid="market-event-timeline">
+      {rows.slice(0, 30).map((item) => (
+        <article key={item.key} className="rounded-xl border bg-background p-3" data-event-symbol={item.symbol}>
+          <div className="flex min-w-0 items-start gap-2">
+            <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              {item.kind === 'disclosure' ? <FileText className="h-4 w-4" aria-hidden="true" /> : <Newspaper className="h-4 w-4" aria-hidden="true" />}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-1.5 text-xs font-semibold">
+                <span>{item.kind === 'disclosure' ? '공식공시' : '뉴스'}</span>
+                <span className="text-muted-foreground">{item.symbol}</span>
+                {item.held ? <span className="rounded-full bg-positive/10 px-2 py-0.5 text-positive">보유</span> : null}
+                {!item.held && item.watched ? <span className="rounded-full bg-primary/10 px-2 py-0.5 text-primary">관심</span> : null}
+              </div>
+              <h3 className="mt-1 break-words text-sm font-bold leading-5">{item.title}</h3>
+              {item.summary ? <p className="mt-1 line-clamp-2 break-words text-xs leading-5 text-muted-foreground">{item.summary}</p> : null}
+              <p className="mt-1 text-xs font-medium text-muted-foreground">
+                {formatDate(item.publishedAt)} · 출처 {item.sources.length}개
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button type="button" onClick={() => onSelectSymbol(item.symbol)} className="min-h-10 rounded-lg border px-3 text-xs font-semibold">
+                  종목 분석
+                </button>
+                {item.sources.slice(0, 3).map((source, index) => (
+                  <a key={source.url} href={source.url} target="_blank" rel="noreferrer" className="inline-flex min-h-10 items-center gap-1 rounded-lg border px-3 text-xs font-semibold text-primary">
+                    {item.sources.length > 1 ? `원문 ${index + 1}` : '원문'} <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                  </a>
+                ))}
+              </div>
+            </div>
+          </div>
+        </article>
+      ))}
+      <p className="px-1 text-xs font-medium leading-5 text-muted-foreground">
+        보유·관심종목과 공식공시를 우선 정렬합니다. AI 중요도·감성은 이 화면에서 임의 생성하지 않으며, 종목 분석 화면에서 검증된 근거가 있을 때만 사용합니다.
+      </p>
+    </div>
+  );
+}
+
 function sectionStatusLabel(status: MarketInformationSection<unknown>['status']): string {
   if (status === 'ready') return '정상';
   if (status === 'partial') return '일부';
@@ -161,7 +281,7 @@ function useDesktopRoom(): boolean {
 
 function SourceMeta({ meta }: { meta: MarketInformationMeta }) {
   return (
-    <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-bold text-muted-foreground" aria-label="데이터 상태">
+    <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-bold text-muted-foreground" aria-label="데이터 상태">
       <span>출처 {meta.source ?? meta.provider ?? '미연결'}</span>
       <span>기준 {formatDate(meta.providerUpdatedAt ?? meta.observedAt)}</span>
       <span>
@@ -183,9 +303,9 @@ function SectionFrame<T>({ title, section, children }: { title: string; section:
   return (
     <section className="min-w-0 rounded-2xl border bg-card p-3 shadow-sm sm:p-4">
       <div className="flex min-w-0 items-center justify-between gap-3">
-        <h2 className="truncate text-sm font-black">{title}</h2>
+        <h2 className="truncate text-sm font-bold">{title}</h2>
         <span className={cn(
-          'shrink-0 rounded-full px-2 py-1 text-[10px] font-black',
+          'shrink-0 rounded-full px-2 py-1 text-xs font-bold',
           section.status === 'ready' && 'bg-emerald-500/10 text-emerald-700',
           (section.status === 'partial' || section.status === 'stale') && 'bg-amber-500/10 text-amber-700',
           unavailable && 'bg-muted text-muted-foreground',
@@ -227,7 +347,7 @@ function RankingTabs({ value, onChange }: { value: RankingKey; onChange: (value:
           aria-selected={value === item.key}
           onClick={() => onChange(item.key)}
           className={cn(
-            'min-h-11 min-w-0 rounded-xl border px-2 text-xs font-black',
+            'min-h-11 min-w-0 rounded-xl border px-2 text-xs font-bold',
             value === item.key ? 'border-primary bg-primary text-primary-foreground' : 'bg-background hover:bg-muted',
           )}
         >
@@ -273,14 +393,14 @@ function AssetList({ route, rows, onSelect }: { route: MarketInformationRoute; r
           aria-label={`${row.name} 상세 화면 이동`}
           className="flex min-h-16 w-full min-w-0 items-center gap-2 rounded-xl border bg-background px-3 py-2.5 text-left hover:bg-muted/60"
         >
-          <span className="w-5 shrink-0 text-center text-[10px] font-black text-muted-foreground">{index + 1}</span>
+          <span className="w-5 shrink-0 text-center text-xs font-bold text-muted-foreground">{index + 1}</span>
           <span className="min-w-0 flex-1">
             <span className="flex min-w-0 items-center gap-2">
-              <span className="truncate text-sm font-black">{row.name}</span>
-              <span className="shrink-0 text-[9px] font-bold text-muted-foreground">{row.symbol}</span>
-              {row.warning ? <span className="shrink-0 rounded bg-red-500/10 px-1.5 py-0.5 text-[9px] font-black text-red-600">주의</span> : null}
+              <span className="truncate text-sm font-bold">{row.name}</span>
+              <span className="shrink-0 text-xs font-bold text-muted-foreground">{row.symbol}</span>
+              {row.warning ? <span className="shrink-0 rounded bg-red-500/10 px-1.5 py-0.5 text-xs font-bold text-red-600">주의</span> : null}
             </span>
-            <span className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[9px] font-bold text-muted-foreground">
+            <span className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs font-bold text-muted-foreground">
               <span>거래량 {formatCompact(row.volume24h)}</span>
               <span>거래대금 {formatCompact(row.tradingValue24h)}</span>
               {route.id === 'coins-futures' ? <span>펀딩 {formatPercent(row.fundingRatePercent)}</span> : null}
@@ -288,9 +408,9 @@ function AssetList({ route, rows, onSelect }: { route: MarketInformationRoute; r
             </span>
           </span>
           <span className="shrink-0 text-right">
-            <span className="block text-xs font-black sm:text-sm">{formatNumber(row.price, row.currency)} {row.currency}</span>
+            <span className="block text-xs font-bold sm:text-sm">{formatNumber(row.price, row.currency)} {row.currency}</span>
             <span className={cn(
-              'text-[10px] font-black sm:text-xs',
+              'text-xs font-bold sm:text-xs',
               (row.changePercent ?? 0) > 0 ? 'text-red-600' : (row.changePercent ?? 0) < 0 ? 'text-blue-600' : 'text-muted-foreground',
             )}>
               {formatPercent(row.changePercent)}
@@ -317,7 +437,7 @@ function FeedList({ rows }: { rows: MarketInformationNewsRow[] }) {
           aria-label={`${item.title} 원문 열기`}
         >
           <span className="line-clamp-2 text-sm font-bold leading-5">{item.title}</span>
-          <span className="mt-1 block truncate text-[10px] font-bold text-muted-foreground">{item.symbol} · {item.source} · {formatDate(item.publishedAt)}</span>
+          <span className="mt-1 block truncate text-xs font-bold text-muted-foreground">{item.symbol} · {item.source} · {formatDate(item.publishedAt)}</span>
         </a>
       ))}
     </div>
@@ -326,7 +446,7 @@ function FeedList({ rows }: { rows: MarketInformationNewsRow[] }) {
 
 function MarketDataLoading({ route }: { route: MarketInformationRoute }) {
   return (
-    <section className="mt-4 flex min-h-16 items-center justify-center rounded-2xl border bg-card px-4 text-xs font-black text-muted-foreground" aria-busy="true" aria-label={`${route.label} 시장정보 로딩`}>
+    <section className="mt-4 flex min-h-16 items-center justify-center rounded-2xl border bg-card px-4 text-xs font-bold text-muted-foreground" aria-busy="true" aria-label={`${route.label} 시장정보 로딩`}>
       시장정보 확인 중
     </section>
   );
@@ -337,9 +457,9 @@ function MarketDataError({ error, onRetry }: { error: unknown; onRetry: () => vo
   return (
     <section className="mt-4 rounded-2xl border bg-card p-4 text-center shadow-sm" aria-label="시장정보 오류">
       <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-muted">{state.icon}</div>
-      <h2 className="mt-3 text-base font-black">{state.title}</h2>
+      <h2 className="mt-3 text-base font-bold">{state.title}</h2>
       <p className="mt-1 line-clamp-2 text-xs font-bold text-muted-foreground">{state.description}</p>
-      <button type="button" onClick={onRetry} className="mt-3 min-h-11 rounded-xl bg-primary px-5 text-sm font-black text-primary-foreground">재시도</button>
+      <button type="button" onClick={onRetry} className="mt-3 min-h-11 rounded-xl bg-primary px-5 text-sm font-bold text-primary-foreground">재시도</button>
     </section>
   );
 }
@@ -351,6 +471,19 @@ export default function MarketInformationPage() {
   const desktop = useDesktopRoom();
   const [ranking, setRanking] = useState<RankingKey>('tradingValue');
   const [mobileTab, setMobileTab] = useState<MobileRoomTab>('market');
+  const [, setPersonalContextVersion] = useState(0);
+
+  useEffect(() => {
+    const refresh = () => setPersonalContextVersion((value) => value + 1);
+    window.addEventListener(WATCHLIST_CHANGE_EVENT, refresh);
+    window.addEventListener('sa-portfolio-overlay-updated', refresh);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener(WATCHLIST_CHANGE_EVENT, refresh);
+      window.removeEventListener('sa-portfolio-overlay-updated', refresh);
+      window.removeEventListener('storage', refresh);
+    };
+  }, []);
 
   useEffect(() => {
     if (!route) return;
@@ -374,6 +507,14 @@ export default function MarketInformationPage() {
   });
 
   const visibleRows = useMemo(() => sortRows(query.data?.sections.rankings.data ?? [], ranking), [query.data, ranking]);
+  const watchedSymbols = useMemo(() => new Set(readWatchlistItems().map((item) => item.ticker.trim().toUpperCase())), [query.data, route?.id]);
+  const heldSymbols = useMemo(() => new Set(loadPortfolioChartOverlays().map((item) => item.ticker)), [query.data, route?.id]);
+  const eventTimeline = useMemo(() => buildEventTimeline(
+    query.data?.sections.news.data ?? [],
+    query.data?.sections.disclosures.data ?? [],
+    watchedSymbols,
+    heldSymbols,
+  ), [query.data, watchedSymbols, heldSymbols]);
 
   if (!route) return <main className="p-6">지원하지 않는 정보방</main>;
 
@@ -389,8 +530,8 @@ export default function MarketInformationPage() {
           {data.sections.indices.data.map((row) => (
             <div key={row.key} className="rounded-xl border bg-background p-3">
               <p className="truncate text-xs font-bold text-muted-foreground">{row.label}</p>
-              <p className="mt-1 text-base font-black">{formatNumber(row.value)}</p>
-              <p className={cn('mt-1 text-xs font-black', (row.changePercent ?? 0) > 0 ? 'text-red-600' : (row.changePercent ?? 0) < 0 ? 'text-blue-600' : 'text-muted-foreground')}>{formatPercent(row.changePercent)}</p>
+              <p className="mt-1 text-base font-bold">{formatNumber(row.value)}</p>
+              <p className={cn('mt-1 text-xs font-bold', (row.changePercent ?? 0) > 0 ? 'text-red-600' : (row.changePercent ?? 0) < 0 ? 'text-blue-600' : 'text-muted-foreground')}>{formatPercent(row.changePercent)}</p>
             </div>
           ))}
         </div>
@@ -399,8 +540,8 @@ export default function MarketInformationPage() {
         <div className="mt-3 grid grid-cols-2 gap-2">
           {data.sections.sectors.data.slice(0, 12).map((row) => (
             <div key={row.key} className="rounded-xl border bg-background p-3">
-              <p className="truncate text-sm font-black">{row.label}</p>
-              <p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">구성 {row.constituentCount} · 거래대금 {formatCompact(row.tradingValue)}</p>
+              <p className="truncate text-sm font-bold">{row.label}</p>
+              <p className="mt-1 truncate text-xs font-bold text-muted-foreground">구성 {row.constituentCount} · 거래대금 {formatCompact(row.tradingValue)}</p>
             </div>
           ))}
         </div>
@@ -412,8 +553,8 @@ export default function MarketInformationPage() {
     <div data-testid="market-room-rankings">
       <SectionFrame title="종목 순위" section={data.sections.rankings}>
         <div className="mt-3 flex items-center justify-between gap-2">
-          <p className="text-[10px] font-bold text-muted-foreground">미제공 값은 비워둡니다.</p>
-          <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-[10px] font-black">{visibleRows.length}개</span>
+          <p className="text-xs font-bold text-muted-foreground">미제공 값은 비워둡니다.</p>
+          <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-xs font-bold">{visibleRows.length}개</span>
         </div>
         <RankingTabs value={ranking} onChange={setRanking} />
         {ranking === 'marketCap' && data.sections.rankings.data.every((row) => row.marketCap == null) ? (
@@ -429,15 +570,15 @@ export default function MarketInformationPage() {
     <div data-testid="market-room-futures">
       <SectionFrame title="선물 지표" section={data.sections.derivatives}>
         <div className="mt-3 grid grid-cols-3 gap-2">
-          <div className="rounded-xl border bg-background p-3"><p className="text-[10px] font-bold text-muted-foreground">롱</p><p className="mt-1 text-base font-black">{formatPercent(data.sections.derivatives.data.longRatio == null ? null : data.sections.derivatives.data.longRatio * 100)}</p></div>
-          <div className="rounded-xl border bg-background p-3"><p className="text-[10px] font-bold text-muted-foreground">숏</p><p className="mt-1 text-base font-black">{formatPercent(data.sections.derivatives.data.shortRatio == null ? null : data.sections.derivatives.data.shortRatio * 100)}</p></div>
-          <div className="rounded-xl border bg-background p-3"><p className="text-[10px] font-bold text-muted-foreground">비율</p><p className="mt-1 text-base font-black">{formatNumber(data.sections.derivatives.data.longShortRatio)}</p></div>
+          <div className="rounded-xl border bg-background p-3"><p className="text-xs font-bold text-muted-foreground">롱</p><p className="mt-1 text-base font-bold">{formatPercent(data.sections.derivatives.data.longRatio == null ? null : data.sections.derivatives.data.longRatio * 100)}</p></div>
+          <div className="rounded-xl border bg-background p-3"><p className="text-xs font-bold text-muted-foreground">숏</p><p className="mt-1 text-base font-bold">{formatPercent(data.sections.derivatives.data.shortRatio == null ? null : data.sections.derivatives.data.shortRatio * 100)}</p></div>
+          <div className="rounded-xl border bg-background p-3"><p className="text-xs font-bold text-muted-foreground">비율</p><p className="mt-1 text-base font-bold">{formatNumber(data.sections.derivatives.data.longShortRatio)}</p></div>
         </div>
         <div className="mt-3 space-y-2">
           {data.sections.derivatives.data.liquidations.slice(0, 8).map((item, index) => (
             <div key={`${item.symbol}:${item.occurredAt}:${index}`} className="flex min-w-0 items-center justify-between gap-2 rounded-xl border bg-background p-3 text-xs">
-              <span className="truncate font-black">{item.symbol} · {item.side === 'long' ? '롱 청산' : item.side === 'short' ? '숏 청산' : '방향 미상'}</span>
-              <span className="shrink-0 text-right text-[10px] font-bold text-muted-foreground">{formatNumber(item.price, 'USDT')} · {formatCompact(item.amount)}</span>
+              <span className="truncate font-bold">{item.symbol} · {item.side === 'long' ? '롱 청산' : item.side === 'short' ? '숏 청산' : '방향 미상'}</span>
+              <span className="shrink-0 text-right text-xs font-bold text-muted-foreground">{formatNumber(item.price, 'USDT')} · {formatCompact(item.amount)}</span>
             </div>
           ))}
         </div>
@@ -446,9 +587,18 @@ export default function MarketInformationPage() {
   ) : null;
 
   const news = data ? (
-    <div className="grid min-w-0 gap-3 lg:grid-cols-2" data-testid="market-room-news">
-      <SectionFrame title="뉴스" section={data.sections.news}><FeedList rows={data.sections.news.data} /></SectionFrame>
-      <SectionFrame title="공시" section={data.sections.disclosures}><FeedList rows={data.sections.disclosures.data} /></SectionFrame>
+    <div className="min-w-0" data-testid="market-room-news">
+      <SectionFrame title="뉴스·공시 이벤트" section={data.sections.news.status === 'unavailable' && data.sections.disclosures.status === 'unsupported' ? data.sections.news : {
+        ...data.sections.news,
+        status: data.sections.news.status === 'error' && data.sections.disclosures.status === 'error' ? 'error' : data.sections.news.status === 'stale' || data.sections.disclosures.status === 'stale' ? 'stale' : data.sections.news.status === 'partial' || data.sections.disclosures.status === 'partial' ? 'partial' : 'ready',
+        message: data.sections.news.message ?? data.sections.disclosures.message,
+      }}>
+        <MarketEventTimeline
+          route={route}
+          rows={eventTimeline}
+          onSelectSymbol={(symbol) => navigate(marketInformationDetailPath(route, symbol))}
+        />
+      </SectionFrame>
     </div>
   ) : null;
 
@@ -458,14 +608,14 @@ export default function MarketInformationPage() {
         <header className="rounded-2xl border bg-card p-3 shadow-sm sm:p-4">
           <div className="flex min-w-0 items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="flex items-center gap-2 text-[10px] font-black text-muted-foreground"><BarChart3 className="h-4 w-4" /><span className="truncate">{route.exchange} · {route.currency}</span></div>
-              <h1 className="mt-1 truncate text-xl font-black tracking-tight sm:text-2xl">{route.label}</h1>
+              <div className="flex items-center gap-2 text-xs font-bold text-muted-foreground"><BarChart3 className="h-4 w-4" /><span className="truncate">{route.exchange} · {route.currency}</span></div>
+              <h1 className="mt-1 truncate text-xl font-bold tracking-tight sm:text-2xl">{route.label}</h1>
             </div>
-            <button type="button" onClick={() => void query.refetch()} disabled={query.isFetching} className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl border bg-background px-3 text-xs font-black disabled:opacity-50" aria-label="시장정보 새로고침">
+            <button type="button" onClick={() => void query.refetch()} disabled={query.isFetching} className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl border bg-background px-3 text-xs font-bold disabled:opacity-50" aria-label="시장정보 새로고침">
               <RefreshCw className={cn('h-4 w-4', query.isFetching && 'animate-spin')} />새로고침
             </button>
           </div>
-          <div className="mt-2 flex flex-wrap gap-2 text-[10px] font-bold text-muted-foreground">
+          <div className="mt-2 flex flex-wrap gap-2 text-xs font-bold text-muted-foreground">
             <span className="rounded-full bg-emerald-500/10 px-2 py-1 text-emerald-700">공개 데이터</span>
             {data?.partial ? <span className="rounded-full bg-amber-500/10 px-2 py-1 text-amber-700">일부 데이터</span> : null}
             {data ? <span className="rounded-full bg-muted px-2 py-1">수집 {formatDate(data.fetchedAt)}</span> : null}
