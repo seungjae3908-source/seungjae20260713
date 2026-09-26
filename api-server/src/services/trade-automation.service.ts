@@ -83,6 +83,19 @@ export function liveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
   return global && perExchange[exchange];
 }
 
+export function automaticLiveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
+  return process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'
+    && liveExecutionEnabled(exchange);
+}
+
+function serverLiveEnabledForPlan(input: TradingPlanInput, policy: TradingPolicy) {
+  if (input.accountMode !== 'live') return true;
+  if (policy.mode === 'automatic' && policy.automaticEnabled) {
+    return automaticLiveExecutionEnabled(input.exchange);
+  }
+  return liveExecutionEnabled(input.exchange);
+}
+
 export class TradeAutomationService {
   constructor(private repository: TradingRepository) {}
 
@@ -116,7 +129,7 @@ export class TradeAutomationService {
 
     const riskDecision = evaluateTradingPlan(input, policy, {
       emergencyStopped: emergencyStopped || await this.emergencyStopActive(userId, policy),
-      serverLiveEnabled: input.accountMode !== 'live' || liveExecutionEnabled(input.exchange),
+      serverLiveEnabled: serverLiveEnabledForPlan(input, policy),
     });
     const decision = withMarketIntelligenceWarnings(riskDecision, intelligence.warnings);
     if (!decision.allowed) {
@@ -158,7 +171,7 @@ export class TradeAutomationService {
     const policy = await this.repository.getPolicy(userId);
     const decision = evaluateTradingPlan(plan, policy, {
       emergencyStopped: await this.emergencyStopActive(userId, policy),
-      serverLiveEnabled: plan.accountMode !== 'live' || liveExecutionEnabled(plan.exchange),
+      serverLiveEnabled: serverLiveEnabledForPlan(plan, policy),
     });
     if (!decision.allowed) {
       await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
@@ -204,7 +217,7 @@ export class TradeAutomationService {
     }
     const decision = evaluateTradingPlan(plan, policy, {
       emergencyStopped: await this.emergencyStopActive(userId, policy),
-      serverLiveEnabled: plan.accountMode !== 'live' || liveExecutionEnabled(plan.exchange),
+      serverLiveEnabled: serverLiveEnabledForPlan(plan, policy),
     });
     if (!decision.allowed) {
       await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
