@@ -11,6 +11,7 @@ import { decryptTradingCredentials } from '../../../services/trade-credential-va
 import { InMemoryAccountReadonlyCredentialRepository } from '../account-readonly.repository';
 import {
   accountReadFlags,
+  buildAccountDisplayFxResponse,
   parseReadonlyCredentialRequest,
   readonlyProviderCapability,
   saveReadonlyCredentialConfiguration,
@@ -71,6 +72,50 @@ test('read-only account routes require the same provider capabilities as the UI 
   assert.match(routeSource, /normalized === 'bitget'.*'canAccessFutures'/s);
   assert.match(routeSource, /normalized === 'upbit'.*'canAccessSpot'/s);
   assert.match(routeSource, /normalized === 'toss' \|\| normalized === 'kiwoom'.*'canAccessBasicInfo'/s);
+});
+
+test('account display FX carries only public USD/USDT rates and zero trading authority', () => {
+  const response = buildAccountDisplayFxResponse([
+    {
+      currency: 'USD',
+      krwRate: 1340.5,
+      source: 'YAHOO:USDKRW',
+      asOf: '2026-09-26T08:00:00.000Z',
+      quality: 'DELAYED',
+    },
+    {
+      currency: 'USDT',
+      krwRate: 1348.25,
+      source: 'UPBIT:KRW-USDT',
+      asOf: '2026-09-26T08:00:10.000Z',
+      quality: 'DELAYED',
+    },
+  ], [], new Date('2026-09-26T08:00:20.000Z'));
+
+  assert.deepEqual(response.displayCurrencies, ['KRW', 'USD']);
+  assert.equal(response.usdKrw?.krwRate, 1340.5);
+  assert.equal(response.usdtKrw?.krwRate, 1348.25);
+  assert.equal(response.publicMarketDataOnly, true);
+  assert.equal(response.privateProviderRequests, 0);
+  assert.equal(response.orderRequests, 0);
+  assert.equal(response.cancelRequests, 0);
+  assert.equal(response.amendRequests, 0);
+  assert.equal(response.transferRequests, 0);
+  assert.equal(response.withdrawalRequests, 0);
+  assert.equal(response.liveTradingEnabled, false);
+  assert.equal(response.autoTradingEnabled, false);
+
+  const partial = buildAccountDisplayFxResponse([
+    {
+      currency: 'USD',
+      krwRate: 1340.5,
+      source: 'YAHOO:USDKRW',
+      asOf: '2026-09-26T08:00:00.000Z',
+      quality: 'DELAYED',
+    },
+  ], ['FX:USDT_KRW:UNAVAILABLE'], new Date('2026-09-26T08:00:20.000Z'));
+  assert.equal(partial.usdtKrw, null);
+  assert.deepEqual(partial.missing, ['FX:USDT_KRW:UNAVAILABLE']);
 });
 
 test('read-only credential parser accepts only Toss, Kiwoom, Upbit and Bitget credential shapes', () => {
