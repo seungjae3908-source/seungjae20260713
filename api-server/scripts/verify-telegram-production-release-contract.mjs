@@ -40,10 +40,11 @@ const requiredFragments = [
   `printf '%s\\n' "$PROD_DATABASE_URL" | ssh`,
   'production-personal-telegram-storage-${{ steps.command.outputs.sha }}',
   'ops/verify-production-personal-telegram-storage.mjs --artifact',
-  "workflow_id: 'production-deploy.yml'",
-  'return_run_details: true',
-  'run.head_sha !== targetSha',
-  "run.path !== '.github/workflows/production-deploy.yml'",
+  'Require already-successful exact-SHA Production Deploy evidence',
+  'PRE_ACTIVE_SHA: ${{ steps.before.outputs.active_sha }}',
+  "run.name === 'Production Deploy'",
+  'run.head_sha === targetSha',
+  "run.path === '.github/workflows/production-deploy.yml'",
   'LIVE_TELEGRAM_ACTIVATION_APPROVED',
   'TELEGRAM_INTELLIGENCE_WORKER_ENABLED',
   'TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED',
@@ -73,9 +74,9 @@ if (missing.length > 0) {
 }
 
 const storageMigrationIndex = source.indexOf('Apply and verify Production personal Telegram storage atomically');
-const productionDispatchIndex = source.indexOf('Dispatch existing Production Deploy and require exact-run success');
-if (storageMigrationIndex < 0 || productionDispatchIndex <= storageMigrationIndex) {
-  console.error('[telegram-production-release-contract] atomic personal Telegram storage migration must precede Production deployment');
+const productionEvidenceIndex = source.indexOf('Require already-successful exact-SHA Production Deploy evidence');
+if (storageMigrationIndex < 0 || productionEvidenceIndex <= storageMigrationIndex) {
+  console.error('[telegram-production-release-contract] atomic personal Telegram storage migration must precede Production deployment evidence validation');
   process.exit(1);
 }
 const storageUploadIndex = source.indexOf('Upload sanitized Production personal Telegram storage evidence', storageMigrationIndex);
@@ -181,7 +182,7 @@ if (!appReleaseSource.includes('PRODUCTION_APP_APPROVAL_DOES_NOT_AUTHORIZE_TELEG
   throw new Error('Generic Production app approval must explicitly exclude Telegram activation authority');
 }
 const activationIndex = source.indexOf('const activationChanged = activateApprovedTelegram(');
-if (activationIndex <= productionDispatchIndex
+if (activationIndex <= productionEvidenceIndex
   || activationIndex <= source.indexOf('if (markerSha !== targetSha)')
   || !source.includes("runtime?.DEPLOY_SHA !== approvedSha")
   || !source.includes("environment: production")

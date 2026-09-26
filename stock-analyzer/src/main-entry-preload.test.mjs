@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-test('starts the application entry before the direct AI Chart route chunk', () => {
+test('prioritizes the direct AI Chart route chunk before the application graph', () => {
   const indexSource = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   const mainSource = readFileSync(new URL('./main.tsx', import.meta.url), 'utf8');
   const aiChartPreloadIndex = mainSource.indexOf("import('@/pages/ai-chart')");
@@ -13,7 +13,7 @@ test('starts the application entry before the direct AI Chart route chunk', () =
   assert.match(mainSource, /window\.location\.pathname\.endsWith\('\/ai-chart'\)/);
   assert.notEqual(aiChartPreloadIndex, -1);
   assert.notEqual(appLoadIndex, -1);
-  assert.equal(appLoadIndex < aiChartPreloadIndex, true);
+  assert.equal(aiChartPreloadIndex < appLoadIndex, true);
   assert.match(mainSource, /const runtimeModulePromise = import\('\.\/app-runtime'\);/);
   assert.match(mainSource, /Promise\.all\(\[appModulePromise, runtimeModulePromise\]\)/);
   assert.doesNotMatch(mainSource, /^import\s/m);

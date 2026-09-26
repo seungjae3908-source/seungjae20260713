@@ -229,10 +229,14 @@ test('status is authenticated, automatic execution defaults off, and never retur
     assert.doesNotMatch(text, /encryptedCredentials|accessKey|secretKey|passphrase/);
     const body = JSON.parse(text) as {
       policy: { mode: string; automaticEnabled: boolean };
+      liveExecutionServerEnabled: Record<string, boolean>;
+      liveAutomaticExecutionServerEnabled: Record<string, boolean>;
       actualOrderSubmittedByStatusRequest: boolean;
     };
     assert.equal(body.policy.mode, 'approval');
     assert.equal(body.policy.automaticEnabled, false);
+    assert.deepEqual(body.liveExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
+    assert.deepEqual(body.liveAutomaticExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
     assert.equal(body.actualOrderSubmittedByStatusRequest, false);
   } finally { await close(authenticated.server); }
 });
@@ -327,6 +331,148 @@ test('connection registration rejects withdrawal permission and does not echo se
   } finally { await close(server); }
 });
 
+
+test('live trading connection requires explicit purpose plus read+orders and never activates by credential save', async () => {
+  const { server, baseUrl } = await startServer();
+  try {
+    const credentials = { accessKey: 'live-access-secret', secretKey: 'live-signing-secret' };
+
+    for (const [name, payload, expected] of [
+      ['missing purpose', {
+        credentials, accountMode: 'live', permissions: ['read', 'orders'],
+      }, 'LIVE_EXECUTION_PURPOSE_CONFIRMATION_REQUIRED'],
+      ['missing read', {
+        credentials, accountMode: 'live', purpose: 'live_execution', permissions: ['orders'],
+      }, 'LIVE_EXECUTION_READ_AND_ORDER_PERMISSIONS_REQUIRED'],
+      ['extra transfer', {
+        credentials, accountMode: 'live', purpose: 'live_execution', permissions: ['read', 'orders', 'transfer'],
+      }, 'WITHDRAWAL_OR_TRANSFER_PERMISSION_NOT_ALLOWED'],
+    ] as const) {
+      const response = await fetch(`${baseUrl}/api/trade-automation/connections/upbit`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      assert.equal(response.status, 400, name);
+      const text = await response.text();
+      assert.match(text, new RegExp(expected), name);
+      assert.doesNotMatch(text, /live-access-secret|live-signing-secret/, name);
+    }
+
+    const accepted = await fetch(`${baseUrl}/api/trade-automation/connections/upbit`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        credentials,
+        accountMode: 'live',
+        purpose: 'live_execution',
+        permissions: ['read', 'orders'],
+      }),
+    });
+    assert.equal(accepted.status, 200);
+    const text = await accepted.text();
+    assert.doesNotMatch(text, /live-access-secret|live-signing-secret/);
+    const body = JSON.parse(text) as {
+      configured: boolean;
+      accountMode: string;
+      credentialsReturned: boolean;
+      liveExecutionActivated: boolean;
+      providerMutationRequests: number;
+    };
+    assert.equal(body.configured, true);
+    assert.equal(body.accountMode, 'live');
+    assert.equal(body.credentialsReturned, false);
+    assert.equal(body.liveExecutionActivated, false);
+    assert.equal(body.providerMutationRequests, 0);
+
+    const missingVerifyConfirmation = await fetch(`${baseUrl}/api/trade-automation/connections/upbit/verify`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    assert.equal(missingVerifyConfirmation.status, 409);
+    assert.equal(
+      (await missingVerifyConfirmation.json() as { error: string }).error,
+      'LIVE_EXECUTION_VERIFICATION_CONFIRMATION_REQUIRED',
+    );
+
+    const nativeFetch = globalThis.fetch;
+    let financialMutationRequests = 0;
+    try {
+      globalThis.fetch = async (input, init) => {
+        const url = String(input);
+        if (url.startsWith(baseUrl)) return nativeFetch(input, init);
+        const method = String(init?.method ?? 'GET').toUpperCase();
+        if (url.includes('api.upbit.com/v1/orders') && method !== 'GET') {
+          financialMutationRequests += 1;
+          throw new Error('TEST_FINANCIAL_MUTATION_FORBIDDEN');
+        }
+        if (url.includes('api.upbit.com/v1/accounts')) {
+          return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        throw new Error(`UNEXPECTED_LIVE_VERIFY_REQUEST:${method}:${url}`);
+      };
+
+      const verified = await globalThis.fetch(`${baseUrl}/api/trade-automation/connections/upbit/verify`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ confirmed: true }),
+      });
+      assert.equal(verified.status, 200);
+      const verifiedBody = await verified.json() as {
+        verified: boolean;
+        credentialsReturned: boolean;
+        liveExecutionActivated: boolean;
+        automaticLiveExecutionActivated: boolean;
+        orderRequests: number;
+        cancelRequests: number;
+        amendRequests: number;
+        transferRequests: number;
+        withdrawalRequests: number;
+        realOrderSubmitted: boolean;
+      };
+      assert.equal(verifiedBody.verified, true);
+      assert.equal(verifiedBody.credentialsReturned, false);
+      assert.equal(verifiedBody.liveExecutionActivated, false);
+      assert.equal(verifiedBody.automaticLiveExecutionActivated, false);
+      assert.equal(verifiedBody.orderRequests, 0);
+      assert.equal(verifiedBody.cancelRequests, 0);
+      assert.equal(verifiedBody.amendRequests, 0);
+      assert.equal(verifiedBody.transferRequests, 0);
+      assert.equal(verifiedBody.withdrawalRequests, 0);
+      assert.equal(verifiedBody.realOrderSubmitted, false);
+      assert.equal(financialMutationRequests, 0);
+
+      const readinessResponse = await nativeFetch(`${baseUrl}/api/trade-automation/status`);
+      assert.equal(readinessResponse.status, 200);
+      const readinessBody = await readinessResponse.json() as {
+        liveExecutionReadiness: Record<string, {
+          connectionConfigured: boolean;
+          providerVerified: boolean;
+          manualServerGateEnabled: boolean;
+          automaticServerGateEnabled: boolean;
+          readyForManualOrderEvaluation: boolean;
+          readyForAutomaticOrderEvaluation: boolean;
+          blockers: string[];
+          orderSubmissionPerformedByStatusRequest: boolean;
+        }>;
+      };
+      const upbitReadiness = readinessBody.liveExecutionReadiness.upbit;
+      assert.equal(upbitReadiness.connectionConfigured, true);
+      assert.equal(upbitReadiness.providerVerified, true);
+      assert.equal(upbitReadiness.manualServerGateEnabled, false);
+      assert.equal(upbitReadiness.automaticServerGateEnabled, false);
+      assert.equal(upbitReadiness.readyForManualOrderEvaluation, false);
+      assert.equal(upbitReadiness.readyForAutomaticOrderEvaluation, false);
+      assert.ok(upbitReadiness.blockers.includes('MANUAL_LIVE_SERVER_GATE_OFF'));
+      assert.ok(upbitReadiness.blockers.includes('AUTOMATIC_LIVE_SERVER_GATE_OFF'));
+      assert.equal(upbitReadiness.orderSubmissionPerformedByStatusRequest, false);
+    } finally {
+      globalThis.fetch = nativeFetch;
+    }
+  } finally { await close(server); }
+});
+
 test('automatic policy executes US-stock Paper without per-order approval or private credentials', async () => {
   const { server, baseUrl } = await startServer();
   const nativeFetch = globalThis.fetch;
@@ -376,6 +522,7 @@ test('automatic policy executes US-stock Paper without per-order approval or pri
     const body = {
       exchange: 'kiwoom',
       accountMode: 'paper',
+      stockExchange: 'NASDAQ',
       strategyId: 'trend-breakout-v1',
       signalId: 'us-paper-auto-signal',
       symbol: 'AAPL',

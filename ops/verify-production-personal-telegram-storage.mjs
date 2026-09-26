@@ -33,8 +33,8 @@ function verifyStatic() {
   ]) assert(workflow.includes(marker), `workflow is missing ${marker}`);
 
   const migrationIndex = workflow.indexOf('Apply and verify Production personal Telegram storage atomically');
-  const deployIndex = workflow.indexOf('Dispatch existing Production Deploy and require exact-run success');
-  assert(migrationIndex >= 0 && deployIndex > migrationIndex, 'storage migration must finish before Production deployment dispatch');
+  const deployEvidenceIndex = workflow.indexOf('Require already-successful exact-SHA Production Deploy evidence');
+  assert(migrationIndex >= 0 && deployEvidenceIndex > migrationIndex, 'storage migration must finish before Production deployment evidence validation');
   assert(!/PROD_DATABASE_URL=%q/.test(workflow), 'database secret must not be embedded in the remote command line');
   assert(!/printf\s+'?%q'?\s+"?\$PROD_DATABASE_URL"?/.test(workflow), 'database secret must not be shell-escaped into argv');
   assert(!/echo\s+"?\$PROD_DATABASE_URL"?/.test(workflow), 'database secret must never be echoed');

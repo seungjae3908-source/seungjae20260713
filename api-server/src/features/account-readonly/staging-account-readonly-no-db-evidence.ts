@@ -3,6 +3,7 @@ import type { IncomingHttpHeaders } from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
 import type { CanonicalAccountSnapshot } from './account-readonly.contract';
+import { AccountReadonlyError } from './account-readonly.errors';
 import type {
   AccountReadonlyCredentialRepository,
   ReadonlyCredentialProvider,
@@ -27,7 +28,8 @@ const PROVIDER_TUNNEL_PORTS = new Map<string, number>([
   [BITGET_API_ORIGIN, 18445],
 ]);
 
-type CredentialMap = Record<ReadonlyCredentialProvider, Record<string, string>>;
+type EvidenceCredentialProvider = Exclude<ReadonlyCredentialProvider, 'kiwoom'>;
+type CredentialMap = Record<EvidenceCredentialProvider, Record<string, string>>;
 
 type RequestAudit = {
   oauthTokenPosts: number;
@@ -82,6 +84,7 @@ function createReadOnlyMemoryRepository(
   return {
     async get(userId, provider) {
       if (userId !== EVIDENCE_USER_ID) throw new Error('EVIDENCE_USER_SCOPE_MISMATCH');
+      if (provider === 'kiwoom') throw new Error('EVIDENCE_PROVIDER_NOT_IN_LEGACY_THREE_PROVIDER_RUN');
       audit.reads += 1;
       return {
         userId,
@@ -94,6 +97,10 @@ function createReadOnlyMemoryRepository(
       };
     },
     async save() {
+      audit.writeAttempts += 1;
+      throw new Error('EVIDENCE_STORAGE_WRITE_REJECTED');
+    },
+    async remove() {
       audit.writeAttempts += 1;
       throw new Error('EVIDENCE_STORAGE_WRITE_REJECTED');
     },
@@ -204,6 +211,13 @@ function assertReadOnlySnapshot(provider: ReadonlyCredentialProvider, snapshot: 
   if (snapshot.provider !== provider || snapshot.readOnly !== true || snapshot.connected !== true || snapshot.status !== 'CONNECTED') {
     throw new Error(`EVIDENCE_PROVIDER_NOT_CONNECTED:${provider}:${snapshot.status}`);
   }
+  if (snapshot.errorCode !== null) {
+    throw new AccountReadonlyError(snapshot.errorCode);
+  }
+  const openOrders = snapshot.openOrders;
+  if (!Array.isArray(openOrders)) {
+    throw new AccountReadonlyError(`${provider.toUpperCase()}_OPEN_ORDERS_NOT_PROVEN`);
+  }
   if (
     snapshot.credentialsReturned !== false
     || snapshot.liveTradingEnabled !== false
@@ -227,7 +241,8 @@ function sanitizedProviderSummary(snapshot: CanonicalAccountSnapshot) {
     accountCount: snapshot.accounts?.length ?? 0,
     balanceCount: snapshot.balances?.length ?? 0,
     positionCount: snapshot.positions?.length ?? 0,
-    openOrderCount: snapshot.openOrders?.length ?? 0,
+    openOrderCount: Array.isArray(snapshot.openOrders) ? snapshot.openOrders.length : null,
+    errorCode: snapshot.errorCode,
     credentialsReturned: snapshot.credentialsReturned,
     orderRequests: snapshot.orderRequests,
     cancelRequests: snapshot.cancelRequests,
@@ -263,7 +278,7 @@ async function main() {
     return sanitizedProviderSummary(snapshot);
   });
   const storagePassed = storageAudit.reads === 3 && storageAudit.writeAttempts === 0;
-  const requestsPassed = requestAudit.oauthTokenPosts === 1 && requestAudit.readonlyGets === 5 && requestAudit.rejectedRequests === 0;
+  const requestsPassed = requestAudit.oauthTokenPosts === 1 && requestAudit.readonlyGets === 9 && requestAudit.rejectedRequests === 0;
   const passed = providerResults.every((result) => result.verdict === 'PASS') && storagePassed && requestsPassed;
 
   const evidence = {

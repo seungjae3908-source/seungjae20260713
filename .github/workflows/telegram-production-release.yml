@@ -491,64 +491,64 @@ jobs:
               ].join('\n'),
             });
 
-      - name: Dispatch existing Production Deploy and require exact-run success
+      - name: Require already-successful exact-SHA Production Deploy evidence
         id: production
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
+          PRE_ACTIVE_SHA: ${{ steps.before.outputs.active_sha }}
         with:
           script: |
-            const targetSha = process.env.TARGET_SHA;
-            const response = await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'production-deploy.yml',
-              ref: 'main',
-              inputs: {
-                sha: targetSha,
-                data_probe_path: '/api/healthz/data-plane',
-                force_rebuild: 'false',
-              },
-              return_run_details: true,
-              headers: {
-                accept: 'application/vnd.github+json',
-                'X-GitHub-Api-Version': '2026-03-10',
-              },
-            });
-            const runId = Number(response.data?.workflow_run_id);
-            if (response.status !== 200 || !Number.isSafeInteger(runId) || runId <= 0) {
-              core.setFailed(`Production dispatch returned invalid Run ID with HTTP ${response.status}.`);
+            const targetSha = String(process.env.TARGET_SHA ?? '').trim().toLowerCase();
+            const preActiveSha = String(process.env.PRE_ACTIVE_SHA ?? '').trim().toLowerCase();
+            if (preActiveSha !== targetSha) {
+              core.setFailed(`Production active SHA does not match the approved Telegram target: active=${preActiveSha || 'unknown'} target=${targetSha}. Run and approve the normal Production Deploy first.`);
               return;
             }
-            core.setOutput('run_id', String(runId));
-            core.info(`Production Deploy dispatched as Run ID ${runId}.`);
 
-            const deadline = Date.now() + 42 * 60 * 1000;
-            while (Date.now() < deadline) {
-              const runResponse = await github.rest.actions.getWorkflowRun({
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: targetSha,
+              branch: 'main',
+              event: 'workflow_dispatch',
+              status: 'completed',
+              per_page: 100,
+            });
+            const candidates = runs
+              .filter((run) =>
+                run.name === 'Production Deploy'
+                && run.path === '.github/workflows/production-deploy.yml'
+                && run.head_sha === targetSha
+                && run.head_branch === 'main'
+                && run.event === 'workflow_dispatch'
+                && run.status === 'completed'
+                && run.conclusion === 'success')
+              .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at));
+
+            let accepted = null;
+            for (const run of candidates) {
+              const jobsResponse = await github.rest.actions.listJobsForWorkflowRun({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                run_id: runId,
+                run_id: run.id,
+                per_page: 100,
               });
-              const run = runResponse.data;
-              if (run.head_sha !== targetSha
-                || run.head_branch !== 'main'
-                || run.event !== 'workflow_dispatch'
-                || run.path !== '.github/workflows/production-deploy.yml') {
-                core.setFailed('Dispatched Production run identity does not match the approved exact SHA.');
-                return;
+              const deployJob = (jobsResponse.data.jobs ?? []).find((job) =>
+                job.name === 'Approved canary, production deploy, verify, and rollback');
+              if (deployJob?.status === 'completed' && deployJob?.conclusion === 'success') {
+                accepted = run;
+                break;
               }
-              if (run.status === 'completed') {
-                if (run.conclusion !== 'success') {
-                  core.setFailed(`Production Deploy Run ID ${runId} completed with ${run.conclusion}.`);
-                  return;
-                }
-                core.info(`Production Deploy Run ID ${runId} completed successfully.`);
-                return;
-              }
-              await new Promise((resolve) => setTimeout(resolve, 15000));
             }
-            core.setFailed(`Production Deploy Run ID ${runId} did not complete inside the bounded wait.`);
+
+            if (!accepted) {
+              core.setFailed(`No already-successful exact-SHA Production Deploy evidence exists for ${targetSha}. Run and approve the normal Production Deploy first.`);
+              return;
+            }
+
+            core.setOutput('run_id', String(accepted.id));
+            core.info(`Reusing already-successful exact-SHA Production Deploy Run ID ${accepted.id}; Telegram release will not dispatch a duplicate Production deploy.`);
 
       - name: Activate approved Telegram runtime, verify exact identity, and send one sanitized proof
         id: smoke

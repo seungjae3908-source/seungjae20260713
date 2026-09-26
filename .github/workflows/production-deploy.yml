@@ -40,8 +40,11 @@ permissions:
   statuses: read
 
 concurrency:
-  group: stock-app-production-live
-  cancel-in-progress: false
+  group: >-
+    ${{ github.event_name == 'workflow_dispatch'
+        && 'stock-app-production-live'
+        || format('production-deploy-pr-validation-{0}', github.event.pull_request.number || github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   validate:
