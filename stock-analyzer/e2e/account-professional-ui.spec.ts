@@ -71,6 +71,17 @@ async function installRuntime(page: Page, options: { connectedBalances?: boolean
           : ['toss', 'upbit', 'bitget'],
       });
     }
+    if (pathname === '/api/accounts/read-only/fx') {
+      return fulfill(route, {
+        ok: true,
+        displayCurrencies: ['KRW', 'USD'],
+        usdKrw: { krwRate: 1300, source: 'TEST:USD_KRW', asOf: NOW, quality: 'DELAYED' },
+        usdtKrw: { krwRate: 1310, source: 'TEST:USDT_KRW', asOf: NOW, quality: 'DELAYED' },
+        missing: [],
+        checkedAt: NOW,
+        publicMarketDataOnly: true,
+      });
+    }
     if (pathname.startsWith('/api/accounts/read-only/')) {
       const provider = pathname.split('/').at(-1);
       if (route.request().method() === 'GET') {
@@ -85,13 +96,23 @@ async function installRuntime(page: Page, options: { connectedBalances?: boolean
                 { currency: 'KRW', available: 5000000, locked: null, total: null, estimatedKrwValue: 5000000 },
                 { currency: 'USD', available: 3500.5, locked: null, total: null, estimatedKrwValue: null },
               ],
-              positions: [],
+              positions: [{
+                market: 'US', symbol: 'AAPL', quantity: 2, availableQuantity: 2,
+                averageEntryPrice: 180, currentPrice: 200, marketValue: 400,
+                unrealizedPnl: 40, unrealizedPnlPercent: 11.11,
+                leverage: null, liquidationPrice: null, marginMode: null, side: null,
+              }],
               openOrders: [],
             },
             kiwoom: {
               accounts: [{ market: 'KR', accountRef: null, currency: 'KRW', buyingPower: 700000 }],
               balances: [{ currency: 'KRW', available: 800000, locked: null, total: 1000000, estimatedKrwValue: 1000000 }],
-              positions: [],
+              positions: [{
+                market: 'US', symbol: 'MSFT', quantity: 1, availableQuantity: 1,
+                averageEntryPrice: 550, currentPrice: 600, marketValue: 600,
+                unrealizedPnl: 50, unrealizedPnlPercent: 9.09,
+                leverage: null, liquidationPrice: null, marginMode: null, side: null,
+              }],
               openOrders: [],
             },
             upbit: {
@@ -168,9 +189,9 @@ for (const width of [320, 390, 768, 1200]) {
     await page.goto('/account');
 
     await expect(page.getByRole('heading', { name: '계정', exact: true })).toBeVisible();
-    await expect(page.getByRole('heading', { name: '실계좌 조회 연결', exact: true })).toBeVisible();
-    await expect(page.getByText('조회 전용 · 주문·취소·이체·출금 없음', { exact: true })).toBeVisible();
-    await expect(page.getByText('READ-ONLY', { exact: false })).toBeHidden();
+    await expect(page.getByRole('heading', { name: '실계좌', exact: true })).toBeVisible();
+    await expect(page.getByText('조회 전용', { exact: true })).toBeVisible();
+    await expect(page.getByText('실주문/취소/이체/출금 0건', { exact: false })).toHaveCount(0);
 
     const overflow = await page.evaluate(() => Math.max(
       document.documentElement.scrollWidth,
@@ -189,45 +210,48 @@ for (const width of [320, 390, 768, 1200]) {
   });
 }
 
-test('account shows real read-only cash and balance values for every supported provider', async ({ page }) => {
+test('account shows normalized balances and switches overseas stock plus USDT values between KRW and USD', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 });
   await installRuntime(page, { connectedBalances: true, kiwoomSupported: true });
   await page.goto('/account');
 
+  const currency = page.getByTestId('account-display-currency');
+  await expect(currency.getByRole('button', { name: 'KRW', exact: true })).toHaveAttribute('aria-pressed', 'true');
+
   const toss = page.getByTestId('connection-toss');
-  await expect(toss).toContainText('KRW 현금가능');
-  await expect(toss).toContainText('5,000,000');
-  await expect(toss).toContainText('USD 현금가능');
-  await expect(toss).toContainText('3,500.5');
+  await expect(toss).toContainText('AAPL');
+  await expect(toss).toContainText('₩520,000');
+  await expect(toss).toContainText('₩9,550,650');
 
   const kiwoom = page.getByTestId('connection-kiwoom');
-  await expect(kiwoom).toContainText('예수금');
-  await expect(kiwoom).toContainText('1,000,000');
-  await expect(kiwoom).toContainText('주문가능');
-  await expect(kiwoom).toContainText('700,000');
+  await expect(kiwoom).toContainText('MSFT');
+  await expect(kiwoom).toContainText('₩780,000');
+  await expect(kiwoom).toContainText('₩700,000');
 
   const upbit = page.getByTestId('connection-upbit');
-  await expect(upbit).toContainText('KRW 잔액');
-  await expect(upbit).toContainText('1,200,000');
+  await expect(upbit).toContainText('₩1,200,000');
 
   const bitget = page.getByTestId('connection-bitget');
-  await expect(bitget).toContainText('USDT 계정잔액');
-  await expect(bitget).toContainText('2,500');
+  await expect(bitget).toContainText('₩3,275,000');
+  await expect(bitget).toContainText('₩3,144,000');
 
-  await expect(page.getByText('조회 전용 · 주문·취소·이체·출금 없음', { exact: true })).toBeVisible();
+  await currency.getByRole('button', { name: 'USD', exact: true }).click();
+  await expect(currency.getByRole('button', { name: 'USD', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(toss).toContainText('$400.00');
+  await expect(toss).toContainText('$7,346.65');
+  await expect(kiwoom).toContainText('$600.00');
+  await expect(bitget).toContainText('$2,519.23');
 });
 
-test('account keeps detailed read-only evidence behind an explicit disclosure', async ({ page }) => {
+test('account keeps the main surface compact and removes supplementary read-only copy', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await installRuntime(page);
   await page.goto('/account');
 
-  const details = page.getByTestId('account-readonly-safety-details');
-  await expect(details).toBeVisible();
-  await expect(page.getByText('실주문/취소/이체/출금 0건', { exact: false })).toBeHidden();
-  await details.getByText('보안·권한 상세', { exact: true }).click();
-  await expect(page.getByText('실주문/취소/이체/출금 0건', { exact: false })).toBeVisible();
-  await expect(page.getByText('Secret 원문 응답 0건', { exact: false })).toBeVisible();
+  await expect(page.getByText('조회 전용', { exact: true })).toBeVisible();
+  await expect(page.getByText('보안·권한 상세', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Secret 원문 응답 0건', { exact: false })).toHaveCount(0);
+  await expect(page.getByText('잔고·보유·포지션·미체결만 조회합니다.', { exact: true })).toHaveCount(0);
 });
 
 test('account connection dialog remains inside a compact mobile viewport', async ({ page }) => {
