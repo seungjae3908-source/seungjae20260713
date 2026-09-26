@@ -1,0 +1,2 @@
+export type ResearchWorkerUiStatus={available:false;reason:string}|{available:true;checkedAt:string;workerState:'ACTIVE'|'STALE'|'NOT_RUNNING'|'UNKNOWN';lastHeartbeatAt:string|null;currentTaskKind:'VIDEO_PREPARE'|'VIDEO_EXECUTE_APPROVED'|null;counts:{queued:number;running:number;succeeded:number;failed:number;blocked:number}};
+export function parseResearchWorkerStatus(raw:unknown):ResearchWorkerUiStatus;
