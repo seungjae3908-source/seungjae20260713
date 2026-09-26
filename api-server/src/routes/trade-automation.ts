@@ -191,6 +191,7 @@ function exitPreviewFingerprint(input: {
 
 function exitPlanFingerprint(input: {
   previewFingerprint: string;
+  freshAccountFingerprint: string;
   provider: AccountProvider;
   market: string;
   symbol: string;
@@ -203,6 +204,7 @@ function exitPlanFingerprint(input: {
   return createHash('sha256').update([
     'ai-chart-canonical-exit-plan-v1',
     input.previewFingerprint,
+    input.freshAccountFingerprint,
     input.provider,
     input.market,
     normalizedExitSymbol(input.symbol),
@@ -863,16 +865,39 @@ router.post('/positions/exit-plan', async (req: AuthenticatedRequest, res) => {
   let symbol: string;
   let percent: number;
   let previewFingerprint: string;
+  let expectedAvailableQuantity: number;
+  let expectedExitQuantity: number;
+  let expectedSide: 'buy' | 'sell';
+  let sourceCheckedAt: string;
   try {
     provider = exitPreviewProvider(req.body?.provider);
     market = String(req.body?.market ?? '').trim().toUpperCase();
     symbol = String(req.body?.symbol ?? '').trim().toUpperCase();
     percent = Number(req.body?.percent);
     previewFingerprint = String(req.body?.previewFingerprint ?? '').trim().toLowerCase();
+    expectedAvailableQuantity = Number(req.body?.availableQuantity);
+    expectedExitQuantity = Number(req.body?.exitQuantity);
+    expectedSide = String(req.body?.side ?? '').trim().toLowerCase() as 'buy' | 'sell';
+    sourceCheckedAt = String(req.body?.sourceCheckedAt ?? '').trim();
     if (!['KR', 'US', 'UPBIT', 'BITGET'].includes(market)) throw new Error('EXIT_PLAN_MARKET_UNSUPPORTED');
     if (!normalizedExitSymbol(symbol)) throw new Error('EXIT_PLAN_SYMBOL_REQUIRED');
     if (![25, 50, 75, 100].includes(percent)) throw new Error('EXIT_PLAN_PERCENT_UNSUPPORTED');
     if (!/^[a-f0-9]{64}$/.test(previewFingerprint)) throw new Error('EXIT_PLAN_PREVIEW_FINGERPRINT_INVALID');
+    if (!Number.isFinite(expectedAvailableQuantity) || expectedAvailableQuantity <= 0) throw new Error('EXIT_PLAN_AVAILABLE_QUANTITY_INVALID');
+    if (!Number.isFinite(expectedExitQuantity) || expectedExitQuantity <= 0) throw new Error('EXIT_PLAN_EXIT_QUANTITY_INVALID');
+    if (expectedSide !== 'buy' && expectedSide !== 'sell') throw new Error('EXIT_PLAN_SIDE_INVALID');
+    if (!Number.isFinite(Date.parse(sourceCheckedAt))) throw new Error('EXIT_PLAN_SOURCE_TIMESTAMP_INVALID');
+    const claimedPreviewFingerprint = exitPreviewFingerprint({
+      provider,
+      market,
+      symbol,
+      percent,
+      availableQuantity: expectedAvailableQuantity,
+      exitQuantity: expectedExitQuantity,
+      side: expectedSide,
+      checkedAt: sourceCheckedAt,
+    });
+    if (claimedPreviewFingerprint !== previewFingerprint) throw new Error('EXIT_PLAN_PREVIEW_FINGERPRINT_MISMATCH');
     if ((market === 'UPBIT' && provider !== 'upbit')
       || (market === 'BITGET' && provider !== 'bitget')
       || ((market === 'KR' || market === 'US') && provider !== 'toss' && provider !== 'kiwoom')) {
@@ -932,17 +957,9 @@ router.post('/positions/exit-plan', async (req: AuthenticatedRequest, res) => {
     const position = matches[0]!;
     const quantities = exitPreviewQuantity(position, percent, market, provider);
     const side = exitPreviewSide(provider, position);
-    const refreshedPreviewFingerprint = exitPreviewFingerprint({
-      provider,
-      market,
-      symbol,
-      percent,
-      availableQuantity: quantities.availableQuantity,
-      exitQuantity: quantities.exitQuantity,
-      side,
-      checkedAt: snapshot.checkedAt,
-    });
-    if (refreshedPreviewFingerprint !== previewFingerprint) {
+    if (quantities.availableQuantity !== expectedAvailableQuantity
+      || quantities.exitQuantity !== expectedExitQuantity
+      || side !== expectedSide) {
       return res.status(409).json({
         ok: false,
         error: 'EXIT_PLAN_PREVIEW_STALE_OR_POSITION_CHANGED',
@@ -952,6 +969,16 @@ router.post('/positions/exit-plan', async (req: AuthenticatedRequest, res) => {
         privateTradingMutationSent: false,
       });
     }
+    const freshAccountFingerprint = exitPreviewFingerprint({
+      provider,
+      market,
+      symbol,
+      percent,
+      availableQuantity: quantities.availableQuantity,
+      exitQuantity: quantities.exitQuantity,
+      side,
+      checkedAt: snapshot.checkedAt,
+    });
 
     const executionReadiness = liveExecutionReadinessForConnection(
       provider as TradingExchange,
@@ -962,6 +989,7 @@ router.post('/positions/exit-plan', async (req: AuthenticatedRequest, res) => {
     const expiresAt = new Date(Date.now() + 60_000).toISOString();
     const planFingerprint = exitPlanFingerprint({
       previewFingerprint,
+      freshAccountFingerprint,
       provider,
       market,
       symbol,
@@ -978,6 +1006,7 @@ router.post('/positions/exit-plan', async (req: AuthenticatedRequest, res) => {
         schemaVersion: 'ai-chart-canonical-exit-plan-v1',
         planFingerprint,
         previewFingerprint,
+        freshAccountFingerprint,
         provider,
         market,
         symbol: normalizedExitSymbol(symbol),
