@@ -46,6 +46,7 @@ function runtimeProof(overrides={}){
     formulaCompiler:{status:'PRESENT',ownerRef:'#550',capability:'BOUNDED_FORMULA_COMPILER_V1',implementationPath:'market-prediction-lab/src/autonomous-strategy-formula-generator-v1.js',implementationBlobSha:'1'.repeat(40)},
     canonicalBacktester:{status:'PRESENT',ownerRef:'#690',capability:'ONE_PASS_EXECUTION_EQUIVALENT_BACKTESTER_V1',implementationPath:'market-prediction-lab/src/independent-strategy-backtest.js',implementationBlobSha:'2'.repeat(40)},
     statisticalFirewall:{status:'PRESENT',ownerRef:'#547',capability:'CANONICAL_STATISTICAL_FIREWALL_V1',implementationPath:'market-prediction-lab/src/global-strategy-statistical-firewall-v1.js',implementationBlobSha:'3'.repeat(40)},
+    statisticalFirewallAdapter:{status:'PRESENT',ownerRef:'#547',capability:'TOURNAMENT_STATISTICAL_FIREWALL_ADAPTER_V1',implementationPath:'market-prediction-lab/src/research-tournament-statistical-firewall-adapter-v1.js',implementationBlobSha:'4'.repeat(40)},
     ...(overrides.dependencies??{}),
   };
   const core={schemaVersion:'research-canonical-evaluation-runtime-proof-v18',sourceSha,verifiedAt:'2026-09-26T08:39:30.000Z',dependencies};
@@ -90,6 +91,14 @@ test('missing canonical #547 firewall on current SHA blocks actual evaluation ad
   const q=request(d,c,p,proof);
   const out=assessCanonicalEvaluationExecutionContractV18({request:q,currentSha:sourceSha,review:r,decision:d,config:c,preflight:p,runtimeProof:proof,checkedAt:now});
   assert.equal(out.status,'BLOCKED');assert.ok(out.reasonCodes.includes('CANONICAL_STATISTICAL_FIREWALL_NOT_PRESENT_ON_CURRENT_SHA'));
+  assert.equal(out.compilerRuns,0);assert.equal(out.backtestRuns,0);
+});
+test('missing #547 to #551 tournament adapter also blocks actual evaluation admission',()=>{
+  const r=review(),d=decision(r),c=config(),p=preflight(r,d,c);
+  const proof=runtimeProof({dependencies:{statisticalFirewallAdapter:{status:'MISSING',ownerRef:'#547',capability:'TOURNAMENT_STATISTICAL_FIREWALL_ADAPTER_V1',implementationPath:'market-prediction-lab/src/research-tournament-statistical-firewall-adapter-v1.js',implementationBlobSha:null}}});
+  const q=request(d,c,p,proof);
+  const out=assessCanonicalEvaluationExecutionContractV18({request:q,currentSha:sourceSha,review:r,decision:d,config:c,preflight:p,runtimeProof:proof,checkedAt:now});
+  assert.equal(out.status,'BLOCKED');assert.ok(out.reasonCodes.includes('TOURNAMENT_STATISTICAL_FIREWALL_ADAPTER_NOT_PRESENT_ON_CURRENT_SHA'));
   assert.equal(out.compilerRuns,0);assert.equal(out.backtestRuns,0);
 });
 test('request cannot widen compiler or backtester to more than one run',()=>{
