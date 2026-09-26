@@ -16,13 +16,17 @@ import {
   type ManualPaperCanonicalIdentity,
 } from './manual-paper-canonical-contract.service';
 import { PaperTradingError } from './paper-trading-core.service';
+import { resolvePaperCanonicalValidationReceiptMaximumAgeMs } from './paper-canonical-validation-freshness-policy.service';
 import { readAuthenticatedPaperTradingState } from './paper-trading-state-publisher.service';
 import type { PaperTradingAction, PaperTradingState } from './paper-trading.types';
 
 export const MANUAL_PAPER_CANONICAL_RUNTIME_BRIDGE_VERSION =
   'manual-paper-canonical-runtime-evidence-bridge-v1' as const;
 
+const DEFAULT_STATE_ROOT = '/opt/stock-app-data/paper-forward-v1';
 const DEFAULT_PAPER_FORWARD_ROOT = '/opt/stock-app-data/paper-forward-v1/runtime-state';
+const DEFAULT_FORWARD_OBSERVER_ARTIFACT_RELATIVE_PATH = 'forward-observer';
+const DEFAULT_VALIDATION_RECEIPT_RELATIVE_PATH = 'validation-receipts';
 const ENTRY_COMPONENTS = Object.freeze([
   'commission',
   'tax',
@@ -76,6 +80,11 @@ function truthy(value: unknown): boolean {
   return TRUTHY.has(String(value ?? '').trim().toLowerCase());
 }
 
+function stateRoot(env: RuntimeEnvironment): string {
+  const configured = String(env.PAPER_FORWARD_STATE_ROOT ?? '').trim();
+  return resolve(configured || DEFAULT_STATE_ROOT);
+}
+
 function paperForwardRoot(env: RuntimeEnvironment): string {
   const configured = String(env.PAPER_FORWARD_ROOT ?? '').trim();
   return resolve(configured || DEFAULT_PAPER_FORWARD_ROOT);
@@ -93,24 +102,45 @@ function deployedResearchSha(env: RuntimeEnvironment): string {
   return value;
 }
 
-function requireExplicitAbsolutePath(env: RuntimeEnvironment, key: string, code: string): string {
+function canonicalOwnerPath(
+  env: RuntimeEnvironment,
+  key: string,
+  relativePath: string,
+  code: string,
+): string {
   const value = String(env[key] ?? '').trim();
-  if (!value || !isAbsolute(value)) {
-    throw new PaperTradingError(code, `${key} absolute path가 필요합니다.`, 503);
+  if (value) {
+    if (!isAbsolute(value)) {
+      throw new PaperTradingError(code, `${key} absolute path가 필요합니다.`, 503);
+    }
+    return resolve(value);
   }
-  return resolve(value);
+  return join(stateRoot(env), relativePath);
 }
 
-function receiptMaximumAgeMs(env: RuntimeEnvironment): number {
-  const value = Number(env.PAPER_CANONICAL_VALIDATION_RECEIPT_MAXIMUM_AGE_MS);
-  if (!Number.isSafeInteger(value) || value <= 0) {
+async function receiptMaximumAgeMs(env: RuntimeEnvironment): Promise<number> {
+  try {
+    const resolution = await resolvePaperCanonicalValidationReceiptMaximumAgeMs({
+      env,
+      stateRoot: stateRoot(env),
+      readText: (path) => readFile(path, 'utf8'),
+    });
+    return resolution.maximumAgeMs;
+  } catch (error) {
+    const code = String((error as { code?: unknown })?.code ?? '');
+    if (code === 'PAPER_CANONICAL_VALIDATION_RECEIPT_MAXIMUM_AGE_UNCONFIGURED') {
+      throw new PaperTradingError(
+        'CANONICAL_PAPER_VALIDATION_RECEIPT_MAXIMUM_AGE_UNCONFIGURED',
+        'Validation receipt freshness policy가 명시적으로 설정되지 않았습니다.',
+        503,
+      );
+    }
     throw new PaperTradingError(
-      'CANONICAL_PAPER_VALIDATION_RECEIPT_MAXIMUM_AGE_UNCONFIGURED',
-      'Validation receipt freshness policy가 명시적으로 설정되지 않았습니다.',
+      'CANONICAL_PAPER_VALIDATION_RECEIPT_FRESHNESS_POLICY_INVALID',
+      'Validation receipt freshness policy를 안전하게 확인할 수 없습니다.',
       503,
     );
   }
-  return value;
 }
 
 async function readRecurringStateFromRuntime(env: RuntimeEnvironment): Promise<RecurringState> {
@@ -451,19 +481,21 @@ async function issueValidationReceiptFromConfiguredOwner(
   nowMs: number,
   env: RuntimeEnvironment,
 ) {
-  const artifactRoot = requireExplicitAbsolutePath(
+  const artifactRoot = canonicalOwnerPath(
     env,
     'PAPER_CANONICAL_FORWARD_OBSERVER_ARTIFACT_ROOT',
+    DEFAULT_FORWARD_OBSERVER_ARTIFACT_RELATIVE_PATH,
     'CANONICAL_PAPER_FORWARD_OBSERVER_ARTIFACT_ROOT_UNCONFIGURED',
   );
-  const receiptRoot = requireExplicitAbsolutePath(
+  const receiptRoot = canonicalOwnerPath(
     env,
     'PAPER_CANONICAL_VALIDATION_RECEIPT_ROOT',
+    DEFAULT_VALIDATION_RECEIPT_RELATIVE_PATH,
     'CANONICAL_PAPER_VALIDATION_RECEIPT_ROOT_UNCONFIGURED',
   );
   const owner = createForwardObserverValidationReceiptOwner({
     receiptRoot,
-    maximumAgeMs: receiptMaximumAgeMs(env),
+    maximumAgeMs: await receiptMaximumAgeMs(env),
     readValidationEvidence: createForwardObserverArtifactValidationEvidenceReader({ artifactRoot }),
   });
   return owner(identity, nowMs);
