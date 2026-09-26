@@ -102,6 +102,32 @@ function marketCurrency(market: string): MoneyCurrency | null {
   return null;
 }
 
+function validFxPoint(value: unknown): value is FxPoint {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const point = value as Record<string, unknown>;
+  return typeof point.krwRate === 'number'
+    && Number.isFinite(point.krwRate)
+    && point.krwRate > 0
+    && typeof point.asOf === 'string'
+    && Number.isFinite(Date.parse(point.asOf))
+    && typeof point.source === 'string'
+    && typeof point.quality === 'string';
+}
+
+function validAccountDisplayFx(value: unknown): value is AccountDisplayFx {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const fx = value as Record<string, unknown>;
+  const pointOrNull = (point: unknown) => point === null || validFxPoint(point);
+  return fx.ok === true
+    && pointOrNull(fx.usdKrw)
+    && pointOrNull(fx.usdtKrw)
+    && Array.isArray(fx.missing)
+    && fx.missing.every((item) => typeof item === 'string')
+    && typeof fx.checkedAt === 'string'
+    && Number.isFinite(Date.parse(fx.checkedAt))
+    && fx.publicMarketDataOnly === true;
+}
+
 function evidenceAvailable(snapshot?: CanonicalAccountSnapshot) {
   if (!snapshot) return true;
   return snapshot.status !== 'AUTH_FAILED' && snapshot.status !== 'RATE_LIMITED' && snapshot.status !== 'UNAVAILABLE';
@@ -224,8 +250,15 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
       for (const result of results) if (result.value) next[result.provider] = result.value;
       return next;
     });
-    if (fxResult.value) setFx(fxResult.value);
-    setFxWarning(fxResult.error ? '환율 조회 불가' : fxResult.value?.missing.length ? '일부 환율 조회 불가' : '');
+    const validFx = validAccountDisplayFx(fxResult.value) ? fxResult.value : null;
+    if (validFx) setFx(validFx);
+    setFxWarning(
+      fxResult.error || (fxResult.value !== null && !validFx)
+        ? '환율 조회 불가'
+        : validFx?.missing.length
+          ? '일부 환율 조회 불가'
+          : '',
+    );
     setError(results.filter((result) => result.error).map((result) => `${result.provider.toUpperCase()}: ${result.error}`).join(' · '));
     setLoading(false);
   }, [enabledProviders]);
