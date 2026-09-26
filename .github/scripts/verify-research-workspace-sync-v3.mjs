@@ -5,6 +5,11 @@ const OWNER='adfcb23baf956bcaa025f0846313faf8db7a4e4a';
 const BASE='9057c4a3767db0f81e595fc481f5066bda6c9e43';
 const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trimEnd();
 const added=[
+ 'packages/external-research/src/research-workspace-transcript-v6.js',
+ 'packages/external-research/test/research-workspace-transcript-v6.test.js',
+ 'packages/external-research/docs/research-workspace-phase6.md',
+ 'api-server/src/services/research-workspace-transcript-v6.ts',
+ 'api-server/src/services/research-workspace-transcript-v6.test.ts',
  'packages/external-research/src/research-workspace-archive-v5.js',
  'packages/external-research/src/research-workspace-approval-v5.js',
  'packages/external-research/src/research-workspace-approval-v5.d.ts',
