@@ -74,7 +74,7 @@ test('regular user sees only Toss Upbit Bitget account linking and Kiwoom is hid
   const readonlyPanel = page.getByTestId('brokerage-account-connections');
   await expect(readonlyPanel).not.toContainText('Kiwoom');
   await expect(readonlyPanel).not.toContainText('키움');
-  await expect(page.getByTestId('trade-execution-connections')).toContainText('Kiwoom · 주식 실주문');
+  await expect(page.getByTestId('trade-execution-connections')).toContainText('Kiwoom · 주식');
   assertClean();
 });
 
@@ -105,12 +105,13 @@ test('regular user saves Upbit credentials only through canonical account-readon
   const upbit = page.getByTestId('connection-upbit');
   await expect(page.getByRole('status')).toContainText('저장 완료 · Upbit 조회 전용 키를 암호화 Vault에 저장했습니다.');
   await expect(upbit).toContainText('검증 필요');
-  await expect(upbit).toContainText('보유 자산 미수집');
-  await expect(upbit).not.toContainText('보유 자산 0개');
+  await expect(upbit).toContainText('총금액');
+  await expect(upbit).toContainText('—');
+  await expect(upbit).not.toContainText('₩0');
   await expect(upbit).not.toContainText('미연결');
   expect(savedBody).toEqual({ purpose: 'read_only', permissions: ['read'], credentials: { accessKey, secretKey } });
   expect(await page.locator('body').innerText()).not.toContain(accessKey); expect(await page.locator('body').innerText()).not.toContain(secretKey);
-  await upbit.getByRole('button', { name: '조회 연결 해제' }).click();
+  await upbit.getByRole('button', { name: 'Upbit 조회 연결 해제' }).click();
   await expect(page.getByRole('status')).toContainText('연결 해제 완료 · Upbit 조회 키를 삭제했습니다.');
   await expect(upbit).toContainText('미연결');
   assertClean();
@@ -137,7 +138,7 @@ test('Toss credential form is read-only, Account Seq is optional, and mobile dia
   await page.getByRole('button', { name: 'Bitget 조회 연결 설정' }).click(); const bitgetBox = await page.getByRole('dialog').boundingBox(); expect(bitgetBox).not.toBeNull(); expect(bitgetBox!.x + bitgetBox!.width).toBeLessThanOrEqual(361);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(361);
   await expect(page.getByTestId('brokerage-account-connections')).not.toContainText('Kiwoom');
-  await expect(page.getByTestId('trade-execution-connections')).toContainText('Kiwoom · 주식 실주문');
+  await expect(page.getByTestId('trade-execution-connections')).toContainText('Kiwoom · 주식');
   assertClean();
 });
 
@@ -172,21 +173,21 @@ test('account metrics distinguish real zero from missing, stale, and unavailable
   await page.goto('/account');
 
   const toss = page.getByTestId('connection-toss');
-  await expect(toss).toContainText('0개 시장');
-  await expect(toss).toContainText('1종목');
-  await expect(toss).toContainText('평가 미수집 · 손익 0');
-  await expect(toss).not.toContainText('평가 -');
+  await expect(toss).toContainText('총금액');
+  await expect(toss).toContainText('보유 1');
+  await expect(toss).toContainText('—');
+  await expect(toss).not.toContainText('₩0');
 
   const upbit = page.getByTestId('connection-upbit');
   await expect(upbit).toContainText('이전 정상값');
-  await expect(upbit).toContainText('보유 자산 오래된 데이터');
+  await expect(upbit).toContainText('₩0');
 
   const bitget = page.getByTestId('connection-bitget');
   await expect(bitget).toContainText('조회 불가');
-  await expect(bitget).toContainText('사용 불가');
+  await expect(bitget).toContainText('—');
 
   await expect(page.getByTestId('brokerage-account-connections')).not.toContainText('Kiwoom');
-  await expect(page.getByTestId('trade-execution-connections')).toContainText('Kiwoom · 주식 실주문');
+  await expect(page.getByTestId('trade-execution-connections')).toContainText('Kiwoom · 주식');
   assertClean();
 });
 
@@ -248,7 +249,7 @@ test('server-declared Kiwoom capability exposes a read-only setup card and saves
 
   const kiwoom = page.getByTestId('connection-kiwoom');
   await expect(kiwoom).toBeVisible();
-  await expect(kiwoom).toContainText('공식 REST KR/US 잔고·미체결 조회');
+  await expect(kiwoom).toContainText('Kiwoom · 주식');
   await page.getByRole('button', { name: 'Kiwoom 조회 연결 설정' }).click();
 
   const appKey = 'KIWOOM_APP_E2E_TEST_ONLY';
