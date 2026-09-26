@@ -266,7 +266,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          pnpm --filter @workspace/api-server run build:server
+          pnpm --dir api-server run build:server
           (
             cd api-server
             node --input-type=module <<'NODE'
