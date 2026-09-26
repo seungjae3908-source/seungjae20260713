@@ -78,7 +78,7 @@ jobs:
       SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
       SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
       SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
-      PUBLIC_BASE_URL: https://lsj119.duckdns.org
+      PUBLIC_BASE_URL: https://lsj119.com
     steps:
       - uses: actions/checkout@v4
         with:
@@ -404,7 +404,7 @@ jobs:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
         run: |
           set -Eeuo pipefail
-          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          remote_env="$(printf 'TARGET_SHA=%q PUBLIC_BASE_URL=%q' "$TARGET_SHA" "$PUBLIC_BASE_URL")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env node -" <<'NODE'
           const { execFileSync } = require('node:child_process');
@@ -476,11 +476,11 @@ jobs:
             try {
               const webhook = await api('getWebhookInfo');
               const webhookUrl = String(webhook.value?.result?.url ?? '').trim();
-              let webhookPath = '';
-              try { webhookPath = webhookUrl ? new URL(webhookUrl).pathname : ''; } catch {}
+              const expectedWebhookUrl = `${String(process.env.PUBLIC_BASE_URL ?? '').replace(/\/+$/, '')}/api/telegram/webhook`;
               if (!webhook.ok) errors.push('WEBHOOK_INFO_UNREACHABLE');
-              else if (!webhookUrl) errors.push('WEBHOOK_NOT_REGISTERED');
-              else if (webhookPath !== '/api/telegram/webhook') errors.push('WEBHOOK_PATH_MISMATCH');
+              else if (webhookUrl !== expectedWebhookUrl) {
+                console.log('TELEGRAM_PREFLIGHT_WEBHOOK_REPAIR_REQUIRED');
+              }
             } catch {
               errors.push('WEBHOOK_CHECK_FAILED');
             }
@@ -828,11 +828,9 @@ jobs:
             try {
               const webhook = await telegramApiRead('getWebhookInfo');
               const webhookUrl = String(webhook.value?.result?.url ?? '').trim();
-              let webhookPath = '';
-              try { webhookPath = webhookUrl ? new URL(webhookUrl).pathname : ''; } catch {}
+              const expectedWebhookUrl = `${publicBaseUrl}/api/telegram/webhook`;
               if (!webhook.ok) telegramPreflightErrors.push('WEBHOOK_INFO_UNREACHABLE');
-              else if (!webhookUrl) telegramPreflightErrors.push('WEBHOOK_NOT_REGISTERED');
-              else if (webhookPath !== '/api/telegram/webhook') telegramPreflightErrors.push('WEBHOOK_PATH_MISMATCH');
+              else if (webhookUrl !== expectedWebhookUrl) console.log('Telegram webhook will be reconciled to the canonical Production URL.');
             } catch {
               telegramPreflightErrors.push('WEBHOOK_CHECK_FAILED');
             }
@@ -941,6 +939,43 @@ jobs:
               .filter((key) => !String(env[key] ?? '').trim());
             if (missingAfterRestart.length) {
               console.error(`Telegram runtime configuration lost after restart: ${missingAfterRestart.join(', ')}`);
+              process.exit(13);
+            }
+
+            const expectedWebhookUrl = `${publicBaseUrl}/api/telegram/webhook`;
+            let webhookSetResponse;
+            try {
+              webhookSetResponse = await fetch(
+                `https://api.telegram.org/bot${encodeURIComponent(botToken)}/setWebhook`,
+                {
+                  method: 'POST',
+                  headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    url: expectedWebhookUrl,
+                    secret_token: webhookSecret,
+                    drop_pending_updates: false,
+                  }),
+                  signal: AbortSignal.timeout(15000),
+                },
+              );
+            } catch {
+              console.error('Telegram webhook reconciliation request failed.');
+              process.exit(13);
+            }
+            const webhookSetValue = await webhookSetResponse.json().catch(() => null);
+            if (!webhookSetResponse.ok || webhookSetValue?.ok !== true) {
+              console.error(`Telegram webhook reconciliation failed with HTTP ${webhookSetResponse.status}.`);
+              process.exit(13);
+            }
+            try {
+              const webhook = await telegramApiRead('getWebhookInfo');
+              const webhookUrl = String(webhook.value?.result?.url ?? '').trim();
+              if (!webhook.ok || webhookUrl !== expectedWebhookUrl) {
+                console.error('Telegram webhook reconciliation did not converge to the canonical Production URL.');
+                process.exit(13);
+              }
+            } catch {
+              console.error('Telegram webhook post-reconciliation verification failed.');
               process.exit(13);
             }
 
@@ -1054,6 +1089,38 @@ jobs:
               process.exit(23);
             }
 
+            const uniqueRoomTargets = new Map();
+            uniqueRoomTargets.set(chatId, 'DEFAULT_CHAT');
+            uniqueRoomTargets.set(stockChatId, 'STOCK_CHAT');
+            uniqueRoomTargets.set(cryptoChatId, 'CRYPTO_CHAT');
+            for (const [roomId, label] of uniqueRoomTargets) {
+              if (roomId === chatId) continue;
+              let roomResponse;
+              try {
+                roomResponse = await fetch(
+                  `https://api.telegram.org/bot${encodeURIComponent(botToken)}/sendMessage`,
+                  {
+                    method: 'POST',
+                    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      chat_id: roomId,
+                      text: `✅ ${label} 운영 전송 경로 검증 · SHA ${targetSha.slice(0, 12)} · 실주문 권한 없음`,
+                      disable_web_page_preview: true,
+                    }),
+                    signal: AbortSignal.timeout(15000),
+                  },
+                );
+              } catch {
+                console.error(`Telegram ${label} delivery verification request failed.`);
+                process.exit(24);
+              }
+              const roomValue = await roomResponse.json().catch(() => null);
+              if (!roomResponse.ok || roomValue?.ok !== true || !Number.isSafeInteger(Number(roomValue?.result?.message_id))) {
+                console.error(`Telegram ${label} delivery verification failed with HTTP ${roomResponse.status}.`);
+                process.exit(25);
+              }
+            }
+
             process.stdout.write(JSON.stringify({
               ok: true,
               exactSha: targetSha,
@@ -1065,6 +1132,7 @@ jobs:
               telegramBotIdentityVerified: true,
               telegramRoomsVerified: true,
               telegramWebhookVerified: true,
+              telegramRoomDeliveryVerified: true,
               telegramAccepted: true,
               telegramEditInPlaceAccepted: true,
               messageId,
@@ -1092,6 +1160,7 @@ jobs:
             && value?.telegramBotIdentityVerified === true
             && value?.telegramRoomsVerified === true
             && value?.telegramWebhookVerified === true
+            && value?.telegramRoomDeliveryVerified === true
             && value?.telegramAccepted === true
             && value?.telegramEditInPlaceAccepted === true
             && Number.isSafeInteger(value?.messageId)
