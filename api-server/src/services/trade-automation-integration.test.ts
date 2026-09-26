@@ -4,6 +4,7 @@ import { createHmac } from 'node:crypto';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
 import { TradeExecutionService } from './trade-execution.service';
+import { setTradingPlanMarketIntelligenceRunnerForTests } from './trade-market-intelligence.service';
 import { encryptTradingCredentials, decryptTradingCredentials } from './trade-credential-vault.service';
 import {
   buildBitgetSignature, buildUpbitJwt, prepareBitgetOrder, prepareBitgetTicker, prepareKiwoomOrder,
@@ -293,6 +294,17 @@ test('automatic live plans require separate global automatic-live authority', as
     LIVE_AUTOMATIC_TRADING_ENABLED: process.env.LIVE_AUTOMATIC_TRADING_ENABLED,
   };
   try {
+    setTradingPlanMarketIntelligenceRunnerForTests(async () => ({
+      status: 'READY',
+      warnings: [],
+      autoTrading: {
+        mode: 'ELIGIBLE_FOR_PARENT_GATE',
+        orderAllowed: false,
+        evidenceReady: true,
+        parentEligibilityReady: true,
+        hardBlockReason: null,
+      },
+    } as any));
     process.env.ORDER_EXECUTION_ENABLED = 'true';
     process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
     process.env.REAL_ORDER_ENABLED = 'true';
@@ -331,6 +343,7 @@ test('automatic live plans require separate global automatic-live authority', as
     assert.equal(authorizedGate.decision.blockCodes.includes('LIVE_EXECUTION_DISABLED'), false);
     assert.ok(authorizedGate.decision.blockCodes.includes('AUTOMATIC_ECONOMICS_REQUIRED'));
   } finally {
+    setTradingPlanMarketIntelligenceRunnerForTests(null);
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
