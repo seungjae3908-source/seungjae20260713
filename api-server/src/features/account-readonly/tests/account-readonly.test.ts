@@ -170,6 +170,40 @@ test('Upbit wrapper reuses JWT signer and preserves locked and missing values', 
   assert.notEqual(buildUpbitJwt({ accessKey: 'a', secretKey: 'b' }, ''), buildUpbitJwt({ accessKey: 'a', secretKey: 'b' }, ''));
 });
 
+test('Upbit balance read stays connected when only optional open-order scope is denied', async () => {
+  let accountCalls = 0;
+  let openOrderCalls = 0;
+  const result = await readUpbitSnapshot(
+    { accessKey: 'UPBIT_ACCESS_TEST_ONLY', secretKey: 'UPBIT_SECRET_TEST_ONLY' },
+    async (request) => {
+      if (request.path === '/v1/accounts') {
+        accountCalls += 1;
+        return [{ currency: 'KRW', balance: '100000', locked: '0', avg_buy_price: '0' }];
+      }
+      if (request.path === '/v1/orders/open') {
+        openOrderCalls += 1;
+        throw new AccountReadonlyError('UPBIT_PERMISSION_DENIED');
+      }
+      throw new Error('UNEXPECTED_UPBIT_READ_PATH');
+    },
+  );
+
+  assert.equal(accountCalls, 1);
+  assert.equal(openOrderCalls, 2);
+  assert.equal(result.connected, true);
+  assert.equal(result.status, 'CONNECTED');
+  assert.equal(result.stale, false);
+  assert.equal(result.errorCode, 'UPBIT_OPEN_ORDERS_UPBIT_PERMISSION_DENIED');
+  assert.equal(result.balances?.[0]?.total, 100000);
+  assert.equal(result.openOrders, null);
+  assert.notEqual(result.lastGoodAt, null);
+  assert.equal(result.orderRequests, 0);
+  assert.equal(result.cancelRequests, 0);
+  assert.equal(result.amendRequests, 0);
+  assert.equal(result.transferRequests, 0);
+  assert.equal(result.withdrawalRequests, 0);
+});
+
 test('Bitget wrapper uses only signed GET account, position, and pending-order requests and redacts passphrase', async () => {
   const seen: any[] = []; const result = await readBitgetSnapshot({ apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' }, async (request) => {
     seen.push(request);
