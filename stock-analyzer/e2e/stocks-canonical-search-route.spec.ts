@@ -217,6 +217,112 @@ async function openStocksPage(page: Page) {
   await expect(page.getByRole('combobox', { name: '통합 자산 검색' })).toHaveCount(1);
 }
 
+test('desktop search selection opens factual preview without forcing navigation', async ({ page }) => {
+  const requests: SearchRequest[] = [];
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.route('**/api/search/suggest**', async (route) => {
+    const url = new URL(route.request().url());
+    const request = {
+      q: url.searchParams.get('q') ?? '',
+      asset: url.searchParams.get('asset'),
+      market: url.searchParams.get('market'),
+    };
+    requests.push(request);
+    const results = request.market === 'KR' && request.q === '삼성전자' ? [krSamsung] : [];
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(successfulResponse(request.q, request.asset ?? 'stock', request.market, results)),
+    });
+  });
+
+  await openStocksPage(page);
+  const input = page.getByRole('combobox', { name: '통합 자산 검색' });
+  await input.fill('삼성전자');
+  await expectLatestRequest(requests, { q: '삼성전자', asset: 'stock', market: 'KR' });
+  await page.getByRole('option', { name: /삼성전자.*005930/ }).click();
+
+  await expect(page).toHaveURL(/\/market-browser$/u);
+  const preview = page.getByTestId('stocks-preview-pane');
+  await expect(preview).toBeVisible();
+  await expect(preview).toContainText('삼성전자');
+  await expect(preview).toContainText('005930');
+  await expect(preview.getByRole('button', { name: '상세 보기', exact: true })).toBeVisible();
+  await expect(preview.getByRole('button', { name: 'AI 차트', exact: true })).toBeVisible();
+  await expect(preview.getByRole('button', { name: '신호 보기', exact: true })).toBeVisible();
+  await expect(preview.getByRole('button', { name: '뉴스·공시', exact: true })).toBeVisible();
+});
+
+test('mobile search selection keeps direct-detail behavior', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route('**/api/search/suggest**', async (route) => {
+    const url = new URL(route.request().url());
+    const q = url.searchParams.get('q') ?? '';
+    const market = url.searchParams.get('market');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(successfulResponse(q, 'stock', market, q === '005930' ? [krSamsung] : [])),
+    });
+  });
+  await openStocksPage(page);
+  await page.getByRole('combobox', { name: '통합 자산 검색' }).fill('005930');
+  await page.getByRole('option', { name: /삼성전자.*005930/ }).click();
+  await expect(page).toHaveURL(/\/stock-info\/analysis\?back=%2Fmarket-browser&asset=stock&market=KR&ticker=005930$/u);
+});
+
+test('search badges expose only factual local watchlist and holding state', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('seungjae_watchlist_v1', JSON.stringify([
+      { ticker: '005930', name: '삼성전자', market: 'KR', currency: 'KRW' },
+    ]));
+    localStorage.setItem('sa-portfolio-chart-overlays-v1', JSON.stringify([
+      {
+        ticker: '005930',
+        name: '삼성전자',
+        market: 'KR',
+        currency: 'KRW',
+        averagePrice: 70000,
+        quantity: 3,
+        purchaseDate: '2026-09-01',
+        currentPrice: 71000,
+        rate: (1000 / 70000) * 100,
+        updatedAt: '2026-09-26T00:00:00.000Z',
+      },
+    ]));
+  });
+  await page.route('**/api/search/suggest**', async (route) => {
+    const url = new URL(route.request().url());
+    const q = url.searchParams.get('q') ?? '';
+    const market = url.searchParams.get('market');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(successfulResponse(q, 'stock', market, q === '삼성전자' ? [krSamsung] : [])),
+    });
+  });
+
+  await openStocksPage(page);
+  await page.getByRole('combobox', { name: '통합 자산 검색' }).fill('삼성전자');
+  const option = page.getByRole('option', { name: /삼성전자.*005930/ });
+  await expect(option).toContainText('관심');
+  await expect(option).toContainText('보유');
+  await expect(option).not.toContainText('신호 0');
+  await expect(option).not.toContainText('뉴스 0');
+});
+
+test('stocks user surface reuses shared EmptyState instead of a private empty-card implementation', async () => {
+  const fs = await import('node:fs/promises');
+  const [stocks, states] = await Promise.all([
+    fs.readFile(new URL('../src/pages/stocks.tsx', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../src/components/data-state.tsx', import.meta.url), 'utf8'),
+  ]);
+  expect(stocks).toContain('EmptyState');
+  expect(stocks).not.toContain('function EmptyBox');
+  expect(states).toContain('export function EmptyState');
+  expect(states).toContain('data-testid="empty-state"');
+});
+
 test('StocksPage source removes sub-12px labels and two-step market switching', async () => {
   const fs = await import('node:fs/promises');
   const source = await fs.readFile(new URL('../src/pages/stocks.tsx', import.meta.url), 'utf8');
@@ -226,6 +332,8 @@ test('StocksPage source removes sub-12px labels and two-step market switching', 
   expect(source).not.toContain('<AssetSwitch');
   expect(source).toContain('data-testid="stocks-market-bar"');
   expect(source).toContain('data-testid="stocks-category-bar"');
+  expect(source).toContain('data-testid="stocks-master-detail"');
+  expect(source).toContain('data-testid="stocks-preview-pane"');
   expect(source).toContain("if (category === 'ai' || category === 'theme') setCategory('tradingValue');");
 });
 
