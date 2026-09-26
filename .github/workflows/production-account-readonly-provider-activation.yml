@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/production-account-readonly-provider-activation.yml'
       - 'api-server/src/features/account-readonly/**'
+      - 'api-server/src/services/trade-exchange-adapters.service.ts'
       - 'stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts'
       - 'stock-analyzer/playwright.production-account-readonly.config.ts'
   issue_comment:
@@ -51,6 +52,20 @@ jobs:
           grep -Fq "UPBIT_OPEN_ORDERS_UPBIT_PERMISSION_DENIED" "$file"
           grep -Fq "Rollback provider read flags after downstream failure" "$file"
           grep -Fq "key_value_exposed: false" "$file"
+          adapter='api-server/src/services/trade-exchange-adapters.service.ts'
+          runtime='api-server/src/features/account-readonly/account-readonly.runtime.ts'
+          provider='api-server/src/features/account-readonly/providers/exchange-readonly.providers.ts'
+          spec='stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts'
+          for endpoint in '/api/v3/account/info' '/api/v3/account/assets' '/api/v3/position/current-position' '/api/v3/trade/unfilled-orders'; do
+            grep -Fq "$endpoint" "$adapter"
+            grep -Fq "$endpoint" "$runtime"
+          done
+          grep -Fq "readBitgetUtaSnapshot" "$provider"
+          grep -Fq "Persist bounded, sanitized provider state before any connectivity assertion" "$spec"
+          if grep -Eq "bitgetRequest\([^,]+,[[:space:]]*'(POST|DELETE)'[[:space:]]*,[[:space:]]*'/api/v3/(account/info|account/assets|position/current-position|trade/unfilled-orders)'" "$adapter"; then
+            echo 'Bitget UTA read-only endpoints must remain GET-only.' >&2
+            exit 1
+          fi
           grep -Fq "order_requests: 0" "$file"
           grep -Fq "withdrawal_requests: 0" "$file"
 
@@ -431,6 +446,7 @@ jobs:
           git fetch --no-tags --depth=1 origin "$TARGET_SHA"
           git show "$TARGET_SHA:$source_path" > "$RUNNER_TEMP/production-account-readonly-live-qa.spec.ts"
           grep -Fq "UPBIT_OPEN_ORDERS_UPBIT_PERMISSION_DENIED" "$RUNNER_TEMP/production-account-readonly-live-qa.spec.ts"
+          grep -Fq "Persist bounded, sanitized provider state before any connectivity assertion" "$RUNNER_TEMP/production-account-readonly-live-qa.spec.ts"
           install -m 0644 "$RUNNER_TEMP/production-account-readonly-live-qa.spec.ts" "$source_path"
 
       - name: Require exact runtime identity after activation
@@ -542,11 +558,12 @@ jobs:
           NODE
 
       - name: Upload sanitized QA evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: production-account-readonly-live-${{ steps.command.outputs.active_sha }}
           path: stock-analyzer/production-account-readonly-artifacts/production-account-readonly-live-qa.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
 
       - name: Record activation and QA result
