@@ -64,7 +64,7 @@ function researchFixture(): ResearchBundleResolution {
       costPolicyIdentity: 'cost-v1',
       researchCodeSha: SHA,
     },
-  } as ResearchBundleResolution;
+  } as unknown as ResearchBundleResolution;
 }
 
 function canonicalOutput(datasetIdentity = DATASET) {
