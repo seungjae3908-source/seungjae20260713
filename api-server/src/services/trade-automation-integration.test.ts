@@ -292,6 +292,8 @@ test('automatic live plans require separate global automatic-live authority', as
     PRIVATE_TRADING_API_ALLOWED: process.env.PRIVATE_TRADING_API_ALLOWED,
     UPBIT_LIVE_ORDER_ENABLED: process.env.UPBIT_LIVE_ORDER_ENABLED,
     LIVE_AUTOMATIC_TRADING_ENABLED: process.env.LIVE_AUTOMATIC_TRADING_ENABLED,
+    LIVE_TRADING: process.env.LIVE_TRADING,
+    AUTO_TRADING: process.env.AUTO_TRADING,
     executionAuthority: process.env.executionAuthority,
   };
   try {
@@ -311,6 +313,8 @@ test('automatic live plans require separate global automatic-live authority', as
     process.env.REAL_ORDER_ENABLED = 'true';
     process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
     process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+    process.env.LIVE_TRADING = 'true';
+    process.env.AUTO_TRADING = 'true';
     process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'false';
     process.env.executionAuthority = 'AUTOMATIC';
 
@@ -416,6 +420,7 @@ test('live provider execution is blocked until the saved credential is explicitl
     process.env.REAL_ORDER_ENABLED = 'true';
     process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
     process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+    process.env.LIVE_TRADING = 'true';
     process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
     process.env.executionAuthority = 'MANUAL';
 
@@ -479,6 +484,8 @@ test('provider submission rechecks automatic live authority and blocks before ou
     process.env.REAL_ORDER_ENABLED = 'true';
     process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
     process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+    process.env.LIVE_TRADING = 'true';
+    process.env.AUTO_TRADING = 'true';
     process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'false';
     process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
     process.env.executionAuthority = 'AUTOMATIC';
