@@ -199,10 +199,14 @@ function validateArtifact(value: unknown): {
     blockers.push('PRE_HOLDOUT_SAFETY_INVALID');
   }
 
-  if (holdout.numericHoldoutValuesParsed !== 0
-    || holdout.holdoutUsedForSelection !== false
+  const parsedHoldoutN = count(holdout.numericHoldoutValuesParsed);
+  if (holdout.holdoutUsedForSelection !== false
     || holdout.holdoutUsedForTuning !== false
-    || holdout.holdoutUsedForCalibration !== false) {
+    || holdout.holdoutUsedForCalibration !== false
+    || parsedHoldoutN === null
+    || (evidence.finalHoldoutNotOpened && (parsedHoldoutN !== 0 || evidence.finalHoldoutN !== 0))
+    || (!evidence.finalHoldoutNotOpened
+      && (evidence.finalHoldoutN == null || evidence.finalHoldoutN <= 0 || parsedHoldoutN !== evidence.finalHoldoutN))) {
     blockers.push('FINAL_HOLDOUT_FIREWALL_INVALID');
   }
 
