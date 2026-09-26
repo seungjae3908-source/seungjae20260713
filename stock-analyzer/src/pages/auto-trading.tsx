@@ -333,7 +333,9 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background text-foreground" data-testid={initialMode === 'paper' ? 'paper-trading-shell' : 'auto-trading-page'}>
       {!embedded ? <CenteredPageHeader title="매매" /> : null}
 
-      <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain p-3 pb-24 sm:p-4">
+      <main className={embedded
+        ? 'min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain p-3 sm:p-4'
+        : 'min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-3 pt-3 pb-[calc(6rem+env(safe-area-inset-bottom))] sm:px-4 sm:pt-4'}>
         <div className="mx-auto w-full max-w-6xl space-y-3" data-testid="auto-trading-responsive-layout">
           <div className="grid grid-cols-2 gap-2" data-testid="trading-mode-tabs">
             <SegmentedButton active={mode === 'auto'} disabled={!canAuto} onClick={() => changeMode('auto')} testId="trading-mode-auto">자동매매</SegmentedButton>
