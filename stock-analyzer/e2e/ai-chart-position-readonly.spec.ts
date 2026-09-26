@@ -390,6 +390,27 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
             reduceOnly: true,
             checkedAt: new Date().toISOString(),
             stale: false,
+            fingerprint: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          },
+          canonicalExitDraft: {
+            schemaVersion: 'ai-chart-canonical-exit-draft-v1',
+            fingerprint: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            provider: 'toss',
+            market: 'KR',
+            symbol: '005930',
+            accountMode: 'live',
+            orderType: 'market',
+            side: 'sell',
+            quantity: 5,
+            percent: 25,
+            reduceOnly: true,
+            sourceCheckedAt: new Date().toISOString(),
+            planCreationPerformed: false,
+            orderSubmissionPerformed: false,
+            requiresFreshAccountRecheck: true,
+            requiresOrderTimeRiskRecheck: true,
+            requiresExplicitApproval: true,
+            nextOwner: 'CANONICAL_EXIT_PLAN_OWNER',
           },
           privateAccountReadPerformed: true,
           orderSubmitted: false,
@@ -592,6 +613,8 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await expect(cockpit.getByTestId('ai-chart-exit-preview-verified')).toContainText('서버 확인 수량 5');
   await expect(cockpit.getByTestId('ai-chart-exit-preview-verified')).toContainText('수량규칙 정수');
   await expect(cockpit.getByTestId('ai-chart-exit-preview-verified')).toContainText('executionAuthority=NONE');
+  await expect(cockpit.getByTestId('ai-chart-canonical-exit-draft')).toContainText('Canonical 종료계획 고정됨');
+  await expect(cockpit.getByTestId('ai-chart-canonical-exit-draft')).toHaveAttribute('data-exit-fingerprint', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
   await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('재검증됨');
   await expect(cockpit.getByTestId('ai-chart-exit-readiness')).toContainText('실전 종료 준비 · 차단');
   await expect(cockpit.getByTestId('ai-chart-exit-readiness')).toContainText('실전 거래키가 연결되지 않음');
