@@ -198,15 +198,41 @@ test('Production real-account read-only providers return fresh connected snapsho
   expect(credentialStatus?.liveTradingEnabled).toBe(false);
   expect(credentialStatus?.autoTradingEnabled).toBe(false);
 
-  const sanitizedProviders: Array<{
-    provider: Provider;
-    connected: boolean;
-    status: string;
-    stale: boolean;
-    errorCode: string | null;
-    checkedAtPresent: boolean;
-    lastGoodAtPresent: boolean;
-  }> = [];
+  const sanitizedProviders = providers.map((provider) => {
+    const snapshot = snapshots.get(provider);
+    return {
+      provider,
+      connected: snapshot?.connected === true,
+      status: typeof snapshot?.status === 'string' ? snapshot.status : 'MISSING',
+      stale: snapshot?.stale === true,
+      errorCode: typeof snapshot?.errorCode === 'string' ? snapshot.errorCode : null,
+      checkedAtPresent: typeof snapshot?.checkedAt === 'string' && Number.isFinite(Date.parse(snapshot.checkedAt)),
+      lastGoodAtPresent: typeof snapshot?.lastGoodAt === 'string' && Number.isFinite(Date.parse(snapshot.lastGoodAt)),
+    };
+  });
+
+  // Persist bounded, sanitized provider state before any connectivity assertion so a
+  // Production failure identifies the exact provider status/error without retaining
+  // account values, credentials, traces, screenshots, or mutation payloads.
+  writeEvidence({
+    schemaVersion: 'production-account-readonly-live-qa-v1',
+    targetSha: expectedDeploySha,
+    officialProductionOrigin: true,
+    authenticatedProductionSession: true,
+    credentialVaultEncryptionConfigured: credentialStatus?.encryptionConfigured === true,
+    providers: sanitizedProviders,
+    secretValuesRecorded: false,
+    accountValuesRecorded: false,
+    orderRequests: Number(credentialStatus?.orderRequests ?? -1),
+    cancelRequests: Number(credentialStatus?.cancelRequests ?? -1),
+    amendRequests: Number(credentialStatus?.amendRequests ?? -1),
+    transferRequests: Number(credentialStatus?.transferRequests ?? -1),
+    withdrawalRequests: Number(credentialStatus?.withdrawalRequests ?? -1),
+    blockedMutationRequests: blocked.length,
+    observedAppMutationRequests: observedAppMutations.length,
+    liveTradingAuthorityGranted: credentialStatus?.liveTradingEnabled === true,
+    autoTradingAuthorityGranted: credentialStatus?.autoTradingEnabled === true,
+  });
 
   for (const provider of providers) {
     const snapshot = snapshots.get(provider);
@@ -216,7 +242,10 @@ test('Production real-account read-only providers return fresh connected snapsho
 
     const isRequiredCrypto = cryptoProviders.includes(provider as typeof cryptoProviders[number]);
     if (isRequiredCrypto || snapshot!.connected) {
-      expect(snapshot!.connected, `${provider} must prove a real connected account read`).toBe(true);
+      expect(
+        snapshot!.connected,
+        `${provider} must prove a real connected account read; status=${snapshot!.status}; errorCode=${snapshot!.errorCode ?? 'none'}`,
+      ).toBe(true);
       expect(snapshot!.status).toBe('CONNECTED');
       expect(snapshot!.stale).toBe(false);
       expect(
@@ -227,16 +256,6 @@ test('Production real-account read-only providers return fresh connected snapsho
       expect(snapshot!.lastGoodAt).not.toBeNull();
       expect(Number.isFinite(Date.parse(String(snapshot!.lastGoodAt)))).toBe(true);
     }
-
-    sanitizedProviders.push({
-      provider,
-      connected: snapshot!.connected,
-      status: snapshot!.status,
-      stale: snapshot!.stale,
-      errorCode: snapshot!.errorCode,
-      checkedAtPresent: Number.isFinite(Date.parse(snapshot!.checkedAt)),
-      lastGoodAtPresent: snapshot!.lastGoodAt !== null,
-    });
   }
 
   const connectedStockProviders = stockProviders.filter((provider) => snapshots.get(provider)?.connected === true);
@@ -245,23 +264,4 @@ test('Production real-account read-only providers return fresh connected snapsho
   expect(blocked).toEqual([]);
   expect(observedAppMutations).toEqual([]);
 
-  writeEvidence({
-    schemaVersion: 'production-account-readonly-live-qa-v1',
-    targetSha: expectedDeploySha,
-    officialProductionOrigin: true,
-    authenticatedProductionSession: true,
-    credentialVaultEncryptionConfigured: true,
-    providers: sanitizedProviders,
-    secretValuesRecorded: false,
-    accountValuesRecorded: false,
-    orderRequests: 0,
-    cancelRequests: 0,
-    amendRequests: 0,
-    transferRequests: 0,
-    withdrawalRequests: 0,
-    blockedMutationRequests: 0,
-    observedAppMutationRequests: 0,
-    liveTradingAuthorityGranted: false,
-    autoTradingAuthorityGranted: false,
-  });
 });
