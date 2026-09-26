@@ -82,6 +82,27 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain("data-testid=\"ai-chart-exit-dashboard-unavailable\"");
   expect(panel).toContain("현재 종목 보유 포지션이 없어 종료계획을 만들지 않습니다.");
   expect(panel).toContain("{tradingCockpit}");
+  expect(panel).toContain("const orderAbortRef = useRef<AbortController | null>(null);");
+  expect(panel).toContain("const exitAbortRef = useRef<AbortController | null>(null);");
+  expect(panel).toContain("orderAbortRef.current?.abort();");
+  expect(panel).toContain("exitAbortRef.current?.abort();");
+  expect(panel).toContain("dashboard: '1'");
+  expect(panel).toContain("exchange: provider");
+  expect(panel).toContain("signal: controller.signal");
+});
+
+test('AI Chart order dashboard server read model is instrument-scoped and mutation-free', () => {
+  const route = source('../api-server/src/routes/trade-automation.ts');
+  expect(route).toContain("const dashboardOnly = String(req.query.dashboard ?? '') === '1';");
+  expect(route).toContain("if (dashboardOnly && !requestedSymbol) throw new Error('ORDER_DASHBOARD_SYMBOL_REQUIRED');");
+  expect(route).toContain("if (requestedExchange && order.exchange !== requestedExchange) return [];");
+  expect(route).toContain("if (normalizedExitSymbol(plan.symbol) !== requestedSymbol) return [];");
+  expect(route).toContain("events,");
+  expect(route).toContain("dashboardScoped: dashboardOnly");
+  expect(route).toContain("orderSubmitted: false");
+  expect(route).toContain("orderCanceled: false");
+  expect(route).toContain("orderAmended: false");
+  expect(route).toContain("privateTradingRequestSent: false");
 });
 
 test('AI Chart matches four-market positions without inventing missing values', () => {
