@@ -10,6 +10,7 @@ import { rankScannerCandidates } from './scanner-candidate-ranking.service';
 import { buildScannerDiscoveryView } from './scanner-discovery-view.service';
 import { applyStockSignalPolicy } from './scanner-signal-policy.service';
 import { applyScannerSignalLifecycle } from './scanner-signal-lifecycle.service';
+import { observeScannerDecisionHistory } from './scanner-decision-history.service';
 import { applyScannerQuantHardening } from './scanner-quant-hardening.service';
 import { applyScannerMarketProfile } from './scanner-market-profile-overlay.service';
 import { enrichStockScannerCardsWithNewsDisclosureIntelligence } from './scanner-news-disclosure-intelligence.service';
@@ -21,6 +22,8 @@ import {
 } from './scanner-quant-strategy.service';
 import type { ScannerResponse, ScannerSignalCard } from './scanner-signal.types';
 import { ScannerUniverseService } from './scanner-universe.service';
+import { applyThemeSwingOverlay } from './scanner-theme-swing.service';
+import { classifyCatalogEntryThemeTags } from './themes.service';
 
 export interface StockSignalScanRequest {
   memberId: string;
@@ -257,8 +260,15 @@ export const StockSignalScannerService = {
     }).filter((card): card is ScannerSignalCard => card != null)
       .filter((card) => request.filters.maximumRiskScore == null || (card.riskScore != null && card.riskScore <= request.filters.maximumRiskScore));
 
+    const themeTagsForCard = (card: ScannerSignalCard) => {
+      const entry = entryByTicker.get(card.symbol);
+      return entry ? classifyCatalogEntryThemeTags(entry) : [];
+    };
+
+    const preliminaryThemeSwingCandidates = applyThemeSwingOverlay(broadCandidates, themeTagsForCard);
+
     const ranking = rankScannerCandidates({
-      cards: broadCandidates,
+      cards: preliminaryThemeSwingCandidates,
       market: request.market,
       strategy: strategyMode,
       softMinimumScore: request.filters.minimumScore,
@@ -277,8 +287,15 @@ export const StockSignalScannerService = {
       budgetMs: intelligenceBudgetMs,
       signal: request.signal,
     });
-    const visibleTradeReviewCount = intelligenceCards.filter((card) => card.direction === 'LONG').length;
-    const discovery = buildScannerDiscoveryView(broadCandidates, {
+    // Theme Swing is research-only and must not alter the canonical Scanner rank/score.
+    // Recompute its catalyst component after News/Disclosure enrichment while retaining
+    // the full pre-ranking theme universe for breadth/leader context.
+    const finalCards = observeScannerDecisionHistory(
+      request.memberId,
+      applyThemeSwingOverlay(intelligenceCards, themeTagsForCard, broadCandidates),
+    );
+    const visibleTradeReviewCount = finalCards.filter((card) => card.direction === 'LONG').length;
+    const discovery = buildScannerDiscoveryView(preliminaryThemeSwingCandidates, {
       tradeReviewCount: visibleTradeReviewCount,
       limit: 100,
     });
@@ -294,7 +311,7 @@ export const StockSignalScannerService = {
         ? `일부 공급자 지연으로 ${completedCount}/${universe.entries.length}종목 중 확인 가능한 후보만 표시합니다.`
         : raw.dataSuccessCount === 0 && raw.insufficientDataCount > 0
           ? `현재 묶음에서 공급자 응답은 받았지만 ${raw.insufficientDataCount}종목의 분석 데이터가 부족합니다.`
-          : intelligenceCards.length === 0
+          : finalCards.length === 0
             ? `현재 묶음 ${completedCount}종목에서 Hard Risk Filter를 통과한 후보가 없습니다.`
             : actionableCount === 0
               ? `현재 진입 가능한 강한 신호 없음 · 관찰 후보 ${ranking.diagnostics.bGradeCount}개`
@@ -307,7 +324,7 @@ export const StockSignalScannerService = {
       assetClass: 'stock',
       market: request.market,
       timeframe: primaryTimeframe,
-      cards: intelligenceCards,
+      cards: finalCards,
       discovery,
       alerts: lifecycle.alerts,
       failures: [],
