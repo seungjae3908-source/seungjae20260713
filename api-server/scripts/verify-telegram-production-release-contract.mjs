@@ -9,6 +9,7 @@ const source = fs.readFileSync(workflowPath, 'utf8');
 const deploySource = fs.readFileSync(deployPath, 'utf8');
 const storageApplySource = fs.readFileSync(storageApplyPath, 'utf8');
 const appReleaseSource = fs.readFileSync(path.join(root, '.github/workflows/production-app-release-control.yml'), 'utf8');
+const personalWorkerSource = fs.readFileSync(path.join(root, 'api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts'), 'utf8');
 
 const requiredFragments = [
   'name: Telegram Production Release',
@@ -34,6 +35,9 @@ const requiredFragments = [
   'staging-postgres-auth-${targetSha}',
   'staging-verdict-${targetSha}',
   'verify-staging-verdict.mjs',
+  'Validate complete Telegram runtime and external reachability before any mutation',
+  'TELEGRAM_PREFLIGHT_MISSING_CONFIG',
+  'TELEGRAM_PREFLIGHT_EXTERNAL_FAILED',
   'Apply and verify Production personal Telegram storage atomically',
   'PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}',
   'IFS= read -r PROD_DATABASE_URL && export PROD_DATABASE_URL',
@@ -47,6 +51,8 @@ const requiredFragments = [
   "run.path === '.github/workflows/production-deploy.yml'",
   'LIVE_TELEGRAM_ACTIVATION_APPROVED',
   'TELEGRAM_INTELLIGENCE_WORKER_ENABLED',
+  'PERSONAL_TELEGRAM_WORKER_ENABLED',
+  'PUBLIC_BASE_URL: https://lsj119.com',
   'TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED',
   'TELEGRAM_SIGNAL_AI_ENABLED',
   'TELEGRAM_DAILY_BRIEF_RICH_ENABLED',
@@ -56,10 +62,31 @@ const requiredFragments = [
   'MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED',
   'TELEGRAM_BOT_TOKEN',
   'TELEGRAM_CHAT_ID',
+  'TELEGRAM_STOCK_CHAT_ID',
+  'TELEGRAM_CRYPTO_CHAT_ID',
+  'TELEGRAM_BOT_USERNAME',
+  'TELEGRAM_WEBHOOK_SECRET',
+  'BACKGROUND_WORKERS_ENABLED=false',
+  'const preservedRuntimeEnv = Object.fromEntries',
+  '...process.env, ...preservedRuntimeEnv',
   '[telegram-intelligence-worker] started',
+  '[user-telegram-worker] started',
+  '[signal-intelligence-telegram] subscriber started',
+  "telegramApiRead('getMe')",
+  "telegramApiRead('getChat'",
+  "telegramApiRead('getWebhookInfo')",
+  'api.telegram.org/bot${encodeURIComponent(botToken)}/setWebhook',
+  'secret_token: webhookSecret',
+  'drop_pending_updates: false',
+  'telegramRoomDeliveryVerified: true',
   'api.telegram.org/bot${encodeURIComponent(botToken)}/sendMessage',
   'api.telegram.org/bot${encodeURIComponent(botToken)}/editMessageText',
   'telegramValue?.ok !== true',
+  'telegramBotIdentityVerified: true',
+  'telegramRoomsVerified: true',
+  'telegramWebhookVerified: true',
+  'personalWorkerStarted: true',
+  'signalSubscriberStarted: true',
   'telegramEditInPlaceAccepted: true',
   'orderSubmitted: false',
   'privateTradingApiCount: 0',
@@ -73,7 +100,15 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
+if (!personalWorkerSource.includes("console.log('[user-telegram-worker] started')")) {
+  throw new Error('Personal Telegram delivery worker must emit a sanitized startup marker for Production proof');
+}
+
+const runtimePreflightIndex = source.indexOf('Validate complete Telegram runtime and external reachability before any mutation');
 const storageMigrationIndex = source.indexOf('Apply and verify Production personal Telegram storage atomically');
+if (runtimePreflightIndex < 0 || storageMigrationIndex <= runtimePreflightIndex) {
+  throw new Error('Complete Telegram runtime/external read-only preflight must run before any Production storage mutation');
+}
 const productionEvidenceIndex = source.indexOf('Require already-successful exact-SHA Production Deploy evidence');
 if (storageMigrationIndex < 0 || productionEvidenceIndex <= storageMigrationIndex) {
   console.error('[telegram-production-release-contract] atomic personal Telegram storage migration must precede Production deployment evidence validation');
@@ -202,8 +237,8 @@ const forbiddenPatterns = [
   [/repository_dispatch\s*:/, 'repository_dispatch is forbidden'],
   [/cancel-in-progress:\s*true/, 'release cancellation is forbidden'],
   [/echo[^\n]*(TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID)/i, 'Telegram secrets must never be echoed'],
-  [/console\.(log|error)\([^\n]*(botToken|chatId)/, 'Telegram secrets must never be logged'],
-  [/core\.(info|notice|warning|error)\([^\n]*(botToken|chatId)/, 'Telegram secrets must never enter GitHub logs'],
+  [/console\.(log|error)\([^\n]*(botToken|chatId|webhookSecret)/, 'Telegram secrets must never be logged'],
+  [/core\.(info|notice|warning|error)\([^\n]*(botToken|chatId|webhookSecret)/, 'Telegram secrets must never enter GitHub logs'],
   [/pm2\s+(delete|stop)\s+stock-app/, 'Production process destructive control is forbidden'],
   [/\b(order|cancel|amend|withdraw|transfer)\s*\(/i, 'Trading mutations are forbidden'],
 ];
@@ -222,7 +257,14 @@ if (exactCommandMatches.length !== 1) {
   process.exit(1);
 }
 
-const secretNames = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'PROD_DATABASE_URL'];
+const secretNames = [
+  'TELEGRAM_BOT_TOKEN',
+  'TELEGRAM_CHAT_ID',
+  'TELEGRAM_STOCK_CHAT_ID',
+  'TELEGRAM_CRYPTO_CHAT_ID',
+  'TELEGRAM_WEBHOOK_SECRET',
+  'PROD_DATABASE_URL',
+];
 for (const name of secretNames) {
   const outputPattern = new RegExp(`(?:GITHUB_OUTPUT|GITHUB_STEP_SUMMARY)[^\\n]*${name}`, 'i');
   if (outputPattern.test(source) || outputPattern.test(deploySource)) {
@@ -232,4 +274,4 @@ for (const name of secretNames) {
 }
 
 await import('./verify-production-telegram-preservation.mjs');
-console.log('[telegram-production-release-contract] owner gate, exact-main CI, staging evidence, complete storage migration packaging, stdin-only Production DB handoff, generic deployment non-elevation, canary OFF, Telegram-only activation, runtime identity, worker startup, sanitized Telegram proof, and zero-trading-authority contracts verified');
+console.log('[telegram-production-release-contract] owner gate, exact-main CI, staging evidence, full Telegram config preflight, PM2-owned env preservation, personal/intelligence/signal worker startup, bot identity, room reachability, webhook registration, sanitized Telegram proof, and zero-trading-authority contracts verified');
