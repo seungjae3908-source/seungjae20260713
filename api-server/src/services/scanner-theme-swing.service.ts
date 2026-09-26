@@ -328,11 +328,11 @@ function summaryFor(card: ScannerSignalCard, tags: readonly ScannerThemeTag[], g
   };
 }
 
-export function applyThemeSwingOverlay(
-  cards: readonly ScannerSignalCard[],
+export function applyThemeSwingOverlay<T extends ScannerSignalCard>(
+  cards: readonly T[],
   themeTagsForCard: (card: ScannerSignalCard) => readonly ScannerThemeTag[],
   groupUniverse: readonly ScannerSignalCard[] = cards,
-): ScannerSignalCard[] {
+): Array<T & { themeSwing?: ScannerThemeSwingSummary }> {
   const tagged: TaggedCard[] = groupUniverse
     .filter((card) => card.strategyMode === 'swing')
     .map((card) => ({ card, tags: themeTagsForCard(card) }));
