@@ -189,6 +189,40 @@ type EntryReadinessState =
   | { kind: 'ready'; provider: Snapshot['provider']; value: ExecutionReadiness }
   | { kind: 'unavailable'; code: string };
 
+type LiveEntryDraft = {
+  schemaVersion: 'scanner-live-entry-draft-v1';
+  state: 'SERVER_VERIFIED_DRAFT';
+  market: string;
+  symbol: string;
+  timeframe: string;
+  side: string;
+  signalId: string;
+  observedAt: string;
+  expiresAt: string;
+  entryZone: { from: number; to: number };
+  invalidation: number | null;
+  stopLoss: number;
+  targets: number[];
+  riskReward: number | null;
+  evidenceStrength: number;
+  strategy: {
+    candidateId: string;
+    strategyId: string;
+    parameterHash: string;
+    researchCodeSha: string;
+    costPolicyVersion: string;
+  };
+  requiresFinalRiskRecheck: true;
+  requiresExplicitApproval: true;
+  executionAuthority: 'NONE';
+};
+
+type LiveEntryDraftState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'ready'; draft: LiveEntryDraft }
+  | { kind: 'unavailable'; code: string };
+
 type StockReadOnlyProvider = 'toss' | 'kiwoom';
 type CockpitTab = 'entry' | 'orders' | 'exit';
 
@@ -417,6 +451,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
   const [exitPercent, setExitPercent] = useState(100);
   const [exitPreviewState, setExitPreviewState] = useState<ExitPreviewState>({ kind: 'idle' });
   const [entryReadiness, setEntryReadiness] = useState<EntryReadinessState>({ kind: 'idle' });
+  const [liveEntryDraft, setLiveEntryDraft] = useState<LiveEntryDraftState>({ kind: 'idle' });
   const abortRef = useRef<AbortController | null>(null);
   const requestSequenceRef = useRef(0);
   const orderAbortRef = useRef<AbortController | null>(null);
@@ -425,6 +460,8 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
   const exitSequenceRef = useRef(0);
   const entryReadinessAbortRef = useRef<AbortController | null>(null);
   const entryReadinessSequenceRef = useRef(0);
+  const liveDraftAbortRef = useRef<AbortController | null>(null);
+  const liveDraftSequenceRef = useRef(0);
 
   useEffect(() => {
     requestSequenceRef.current += 1;
@@ -439,6 +476,9 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     entryReadinessSequenceRef.current += 1;
     entryReadinessAbortRef.current?.abort();
     entryReadinessAbortRef.current = null;
+    liveDraftSequenceRef.current += 1;
+    liveDraftAbortRef.current?.abort();
+    liveDraftAbortRef.current = null;
     setState({ kind: 'idle' });
     setLinesVisible(true);
     setAdditionalValueText('');
@@ -455,6 +495,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setExitPercent(100);
     setExitPreviewState({ kind: 'idle' });
     setEntryReadiness({ kind: 'idle' });
+    setLiveEntryDraft({ kind: 'idle' });
     onOverlayChange(null);
   }, [market, onOverlayChange, symbol]);
 
@@ -464,6 +505,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
       orderAbortRef.current?.abort();
       exitAbortRef.current?.abort();
       entryReadinessAbortRef.current?.abort();
+      liveDraftAbortRef.current?.abort();
     };
   }, []);
 
@@ -868,6 +910,70 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     }
   }, [market, provider]);
 
+  const prepareLiveEntryDraft = useCallback(async () => {
+    if (!entryContextReady || liveEntryDraft.kind === 'loading') return;
+    const controller = new AbortController();
+    liveDraftAbortRef.current?.abort();
+    liveDraftAbortRef.current = controller;
+    const sequence = ++liveDraftSequenceRef.current;
+    setLiveEntryDraft({ kind: 'loading' });
+    try {
+      const response = await authorizedFetch('/api/trade-automation/scanner/live-draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'approval',
+          accountMode: 'live',
+          adapter: 'canonical-live',
+          market: selection.market,
+          symbol: selection.ticker,
+          timeframe: selection.timeframe,
+          side: selection.action,
+          searchRunId: selection.searchRunId,
+          signalId: selection.signalId,
+          selectedConditions: [...new Set((selection.matchedSignals ?? []).map(String).map((item) => item.trim()).filter(Boolean))].slice(0, 20),
+        }),
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => null) as {
+        ok?: boolean;
+        error?: string;
+        draft?: LiveEntryDraft;
+        executionAuthority?: string;
+        liveOrderAllowed?: boolean;
+        privateTradingApiAllowed?: boolean;
+        orderSubmitted?: boolean;
+        exchangeRequestSent?: boolean;
+        providerMutationRequests?: number;
+        livePlanCreated?: boolean;
+      } | null;
+      if (controller.signal.aborted || sequence !== liveDraftSequenceRef.current) return;
+      if (!response.ok || payload?.ok !== true || !payload.draft) {
+        setLiveEntryDraft({ kind: 'unavailable', code: payload?.error ?? `HTTP_${response.status}` });
+        return;
+      }
+      if (payload.executionAuthority !== 'NONE'
+        || payload.liveOrderAllowed !== false
+        || payload.privateTradingApiAllowed !== false
+        || payload.orderSubmitted !== false
+        || payload.exchangeRequestSent !== false
+        || payload.providerMutationRequests !== 0
+        || payload.livePlanCreated !== false
+        || payload.draft.executionAuthority !== 'NONE'
+        || payload.draft.requiresFinalRiskRecheck !== true
+        || payload.draft.requiresExplicitApproval !== true) {
+        setLiveEntryDraft({ kind: 'unavailable', code: 'LIVE_ENTRY_DRAFT_SAFETY_CONTRACT_MISMATCH' });
+        return;
+      }
+      setLiveEntryDraft({ kind: 'ready', draft: payload.draft });
+    } catch (error) {
+      if (controller.signal.aborted || sequence !== liveDraftSequenceRef.current) return;
+      setLiveEntryDraft({ kind: 'unavailable', code: error instanceof Error ? error.name : 'LIVE_ENTRY_DRAFT_FAILED' });
+    } finally {
+      if (liveDraftAbortRef.current === controller) liveDraftAbortRef.current = null;
+    }
+  }, [entryContextReady, liveEntryDraft.kind, selection]);
+
   const tradingCockpit = (
     <details
             open={cockpitOpen}
@@ -915,7 +1021,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                   </p>
                   <div className="mt-2 grid grid-cols-2 gap-1.5 text-[8px] font-black">
                     <span className="rounded-lg bg-positive/10 px-2 py-1.5 text-positive">Paper 신규진입 · 연결됨</span>
-                    <span className="rounded-lg bg-warning/10 px-2 py-1.5 text-warning">Live 신규계획 생성 · 미연결</span>
+                    <span className="rounded-lg bg-primary/10 px-2 py-1.5 text-primary">Live 진입초안 · 서버검증 연결</span>
                   </div>
                   {entryContextReady ? (
                     <div className="mt-2 [&_[data-testid=scanner-approval-composer]]:rounded-2xl [&_[data-testid=scanner-approval-composer]]:shadow-none">
@@ -963,6 +1069,58 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                     {entryReadiness.kind === 'unavailable' ? (
                       <p role="alert" className="mt-2 rounded-lg bg-warning/10 p-2 text-[8px] font-bold text-warning">
                         진입 준비상태 확인 실패 · {entryReadiness.code}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-2 rounded-xl border border-card-border p-2.5" data-testid="ai-chart-live-entry-draft">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-[9px] font-black">서버 검증 실전 진입초안</p>
+                        <p className="mt-0.5 text-[8px] font-bold text-muted-foreground">Scanner 원본 identity·가격계획만 사용 · 주문 0건</p>
+                      </div>
+                      <button
+                        type="button"
+                        data-testid="ai-chart-prepare-live-entry-draft"
+                        disabled={!entryContextReady || liveEntryDraft.kind === 'loading'}
+                        onClick={() => void prepareLiveEntryDraft()}
+                        className="min-h-10 rounded-lg border border-card-border px-2.5 text-[9px] font-black disabled:opacity-50"
+                      >
+                        {liveEntryDraft.kind === 'loading' ? '서버 검증 중...' : 'Live 초안 만들기'}
+                      </button>
+                    </div>
+                    {liveEntryDraft.kind === 'ready' ? (
+                      <div className="mt-2 rounded-lg border border-primary/20 bg-primary/5 p-2.5" data-testid="ai-chart-live-entry-draft-ready">
+                        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+                          <Metric label="방향" value={liveEntryDraft.draft.side} />
+                          <Metric
+                            label="진입구간"
+                            value={`${formatPrice(liveEntryDraft.draft.entryZone.from, market)} ~ ${formatPrice(liveEntryDraft.draft.entryZone.to, market)}`}
+                          />
+                          <Metric label="Stop" value={formatPrice(liveEntryDraft.draft.stopLoss, market)} />
+                          <Metric label="근거 강도" value={String(liveEntryDraft.draft.evidenceStrength)} />
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {liveEntryDraft.draft.targets.slice(0, 3).map((target, index) => (
+                            <span key={`live-draft-target-${index}`} className="rounded-full bg-background px-2 py-1 text-[8px] font-black">
+                              TP{index + 1} {formatPrice(target, market)}
+                            </span>
+                          ))}
+                        </div>
+                        <p className="mt-2 break-words text-[8px] font-bold text-muted-foreground">
+                          전략 {liveEntryDraft.draft.strategy.strategyId}
+                          {' · '}만료 {checkedAtLabel(liveEntryDraft.draft.expiresAt)}
+                          {' · '}최종 Risk 재검증 필요
+                          {' · '}명시적 승인 필요
+                        </p>
+                        <p className="mt-1 text-[8px] font-black text-warning">
+                          이 단계는 실전 주문계획 초안만 검증합니다. 수량·레버리지·잔고·실제 주문은 생성하거나 전송하지 않습니다.
+                        </p>
+                      </div>
+                    ) : null}
+                    {liveEntryDraft.kind === 'unavailable' ? (
+                      <p role="alert" className="mt-2 rounded-lg bg-warning/10 p-2 text-[8px] font-bold text-warning">
+                        Live 진입초안 생성 실패 · {safeTradeErrorMessage(liveEntryDraft.code, liveEntryDraft.code)}
                       </p>
                     ) : null}
                   </div>
