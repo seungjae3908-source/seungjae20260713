@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Eye, EyeOff, KeyRound, RefreshCw, WalletCards, X } from 'lucide-react';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { resolveEvidenceDisplay } from '@/lib/evidence-display';
@@ -600,13 +600,79 @@ function errorGuide(value: string) {
 }
 function ErrorLine({ value }: { value?: string | null }) {
   if (!value || value === 'ACCOUNT_READ_DISABLED' || value === 'ACCOUNT_NOT_CONFIGURED') return null;
-  return <p className="mt-2 break-words text-center text-xs font-semibold text-warning">{errorGuide(value)} <span className="font-mono text-[10px] opacity-70">({value})</span></p>;
+  return <p className="mt-2 break-words text-xs font-semibold text-warning">{errorGuide(value)}</p>;
 }
-function Metric({ label, value }: { label: string; value: string }) { return <div className="min-w-0 rounded-xl bg-secondary/60 p-2 text-center"><p className="truncate text-xs text-muted-foreground">{label}{' '}</p><p className="mt-1 truncate font-semibold">{value}</p></div>; }
+
+function SummaryMetric({ label, value, partial = false }: { label: string; value: string; partial?: boolean }) {
+  return <div className="min-w-0 rounded-xl bg-secondary/60 px-3 py-2.5">
+    <div className="flex min-w-0 items-center justify-between gap-2">
+      <p className="truncate text-[10px] font-medium text-muted-foreground">{label}</p>
+      {partial ? <span className="shrink-0 text-[9px] font-bold text-warning">일부</span> : null}
+    </div>
+    <p className="mt-1 truncate text-sm font-extrabold tabular-nums sm:text-base">{value}</p>
+  </div>;
+}
+
+function HoldingRow({ symbol, value, meta }: { symbol: string; value: string; meta?: string }) {
+  return <div className="flex min-w-0 items-center justify-between gap-3 rounded-lg bg-secondary/50 px-2.5 py-2 text-xs">
+    <span className="min-w-0 truncate font-semibold">{symbol}{meta ? <span className="ml-1 text-[10px] font-medium text-muted-foreground">{meta}</span> : null}</span>
+    <span className="shrink-0 font-semibold tabular-nums">{value}</span>
+  </div>;
+}
+
+function ProviderCard({
+  provider,
+  title,
+  snapshot,
+  total,
+  holding,
+  order,
+  holdingCount,
+  openOrders,
+  configured,
+  disconnecting,
+  onSetup,
+  onDisconnect,
+  children,
+}: {
+  provider: CredentialProvider;
+  title: string;
+  snapshot?: CanonicalAccountSnapshot;
+  total: { value: string; partial: boolean };
+  holding: { value: string; partial: boolean };
+  order: { value: string; partial: boolean };
+  holdingCount: number | null;
+  openOrders: number | null;
+  configured: boolean;
+  disconnecting: boolean;
+  onSetup: () => void;
+  onDisconnect: () => void;
+  children: ReactNode;
+}) {
+  return <article className="min-w-0 rounded-xl border border-card-border bg-background p-3" data-testid={`connection-${provider}`}>
+    <div className="flex min-w-0 items-center justify-between gap-2">
+      <p className="truncate text-sm font-bold">{title}</p>
+      <Status snapshot={snapshot} />
+    </div>
+    <div className="mt-2 grid grid-cols-3 gap-1.5">
+      <SummaryMetric label="총금액" value={total.value} partial={total.partial} />
+      <SummaryMetric label="보유금액" value={holding.value} partial={holding.partial} />
+      <SummaryMetric label="주문가능" value={order.value} partial={order.partial} />
+    </div>
+    <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+      <span>보유 {holdingCount == null ? '—' : holdingCount}</span>
+      <span>미체결 {openOrders == null ? '—' : openOrders}</span>
+    </div>
+    <div className="mt-2 max-h-36 space-y-1 overflow-y-auto overscroll-contain">{children}</div>
+    <ConnectionActions provider={provider} configured={configured} disconnecting={disconnecting} onSetup={onSetup} onDisconnect={onDisconnect} />
+    <ErrorLine value={snapshot?.errorCode} />
+  </article>;
+}
+
 function ConnectionActions({ provider, configured, disconnecting, onSetup, onDisconnect }: { provider: CredentialProvider; configured: boolean; disconnecting: boolean; onSetup: () => void; onDisconnect: () => void }) {
-  return <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-    <button type="button" onClick={onSetup} className="min-h-11 rounded-xl border border-card-border px-3 text-xs font-semibold">{providerLabel(provider)} 조회 연결 설정</button>
-    {configured ? <button type="button" disabled={disconnecting} onClick={onDisconnect} className="min-h-11 rounded-xl border border-destructive/40 px-3 text-xs font-semibold text-destructive disabled:opacity-50">{disconnecting ? '해제 중…' : '조회 연결 해제'}</button> : <span aria-hidden className="hidden sm:block" />}
+  return <div className="mt-2 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+    <button type="button" aria-label={`${providerLabel(provider)} 조회 연결 설정`} onClick={onSetup} className="min-h-10 rounded-lg border border-card-border px-2 text-[11px] font-semibold">연결 설정</button>
+    {configured ? <button type="button" aria-label={`${providerLabel(provider)} 조회 연결 해제`} disabled={disconnecting} onClick={onDisconnect} className="min-h-10 rounded-lg border border-destructive/40 px-2 text-[11px] font-semibold text-destructive disabled:opacity-50">{disconnecting ? '해제 중…' : '해제'}</button> : <span aria-hidden className="hidden sm:block" />}
   </div>;
 }
 function CredentialField({ testId, label, value, onChange, optional = false, configured = false }: { testId: string; label: string; value: string; onChange: (value: string) => void; optional?: boolean; configured?: boolean }) {
