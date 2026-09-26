@@ -34,6 +34,10 @@ const paperTradingSource = fs.readFileSync(
   path.resolve(process.cwd(), 'src/pages/paper-trading.tsx'),
   'utf8',
 );
+const autoTradingSource = fs.readFileSync(
+  path.resolve(process.cwd(), 'src/pages/auto-trading.tsx'),
+  'utf8',
+);
 
 test('shared BottomNav remains a normal-flow sibling and AppShell no longer double-reserves its height', () => {
   expect(bottomNavSource).toContain('relative z-40 w-full shrink-0');
@@ -140,14 +144,16 @@ test('modern home search theme learn auto-trading and settings routes lose obsol
   expect(touchCss).toContain('padding-bottom: 0 !important;');
 });
 
-test('paper trading gives its runtime panel the remaining flex height instead of stacking a fixed-nav spacer', () => {
-  expect(paperTradingSource).toContain('data-testid="paper-trading-shell"');
-  expect(paperTradingSource).toContain('<PaperTradingPanel');
-  expect(paperTradingSource).toContain('pb-[calc(5rem+env(safe-area-inset-bottom))]');
+test('paper trading gives its unified runtime main the remaining flex height instead of stacking a fixed-nav spacer', () => {
+  expect(paperTradingSource).toContain('<AutoTradingPage initialMode="paper" />');
+  expect(autoTradingSource).toContain("data-testid={initialMode === 'paper' ? 'paper-trading-shell' : 'auto-trading-page'}");
+  expect(autoTradingSource).toContain('<PaperTradingPanel');
+  expect(autoTradingSource).toContain('min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain');
   expect(touchCss).toContain('[data-testid="paper-trading-shell"] {');
-  expect(touchCss).toContain('[data-testid="paper-trading-shell"] > [data-testid="paper-trading-page"]');
+  expect(touchCss).toContain('[data-testid="paper-trading-shell"] > main {');
   expect(touchCss).toContain('height: auto !important;');
   expect(touchCss).toContain('flex: 1 1 0% !important;');
+  expect(touchCss).toContain('padding-bottom: 1rem !important;');
 });
 
 test('canonical stock detail reuses the header action slot for the read-only orderbook opener', () => {
