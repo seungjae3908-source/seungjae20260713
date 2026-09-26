@@ -26,7 +26,7 @@ test('trading workspace unifies auto, paper, four markets, journal and selected-
   const settings = source('src/components/trade-automation-settings.tsx');
   const journal = source('src/components/unified-trade-journal-panel.tsx');
 
-  expect(auto).toContain('<CenteredPageHeader title="매매" />');
+  expect(auto).toContain("title={initialMode === 'paper' ? '모의매매' : '자동매매'}");
   expect(auto).toContain('data-testid="trading-mode-tabs"');
   expect(auto).toContain('자동매매</SegmentedButton>');
   expect(auto).toContain('모의매매</SegmentedButton>');
