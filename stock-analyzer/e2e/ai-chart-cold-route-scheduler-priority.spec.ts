@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
-test('direct AI Chart starts one app-first bootstrap without document-level route competition', () => {
+test('direct AI Chart prioritizes the route request without adding document-level route competition', () => {
   const html = fs
     .readFileSync(path.resolve(process.cwd(), 'index.html'), 'utf8')
     .replace(/\r\n?/g, '\n');
@@ -20,6 +20,6 @@ test('direct AI Chart starts one app-first bootstrap without document-level rout
   expect(html).not.toMatch(/rel="modulepreload"[^>]+href="[^"]+\.tsx(?:\?|\")/);
   expect(main.match(/import\('\.\/App'\)/g)).toHaveLength(1);
   expect(main.match(/import\('@\/pages\/ai-chart'\)/g)).toHaveLength(1);
-  expect(main.indexOf(appImport)).toBeLessThan(main.indexOf(routeImport));
+  expect(main.indexOf(routeImport)).toBeLessThan(main.indexOf(appImport));
   expect(main).not.toMatch(/setTimeout\([^)]*(?:App|ai-chart)/s);
 });
