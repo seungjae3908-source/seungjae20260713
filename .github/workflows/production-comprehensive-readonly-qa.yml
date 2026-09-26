@@ -57,8 +57,11 @@ jobs:
           if (!harnessEnvLine || !harnessEnvLine.includes('github.sha')) {
             throw new Error('Live comprehensive QA harness must be pinned to the workflow-generation main SHA');
           }
+          if (!liveJob.includes('if [[ "$QA_HARNESS_SHA" == "$EXPECTED_DEPLOY_SHA" ]]')) {
+            throw new Error('Live comprehensive QA must accept the normal exact-main == deployed-SHA case without a false failure');
+          }
           if (!liveJob.includes('git show "$QA_HARNESS_SHA:stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts"')) {
-            throw new Error('Live comprehensive QA may only overlay the approved QA harness spec');
+            throw new Error('Live comprehensive QA may only overlay the approved QA harness spec when workflow-generation SHA differs');
           }
           if (!config.includes("trace: 'off'")) {
             throw new Error('Authenticated Production QA must not retain Playwright traces');
@@ -97,18 +100,25 @@ jobs:
           set -Eeuo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_DEPLOY_SHA"
 
-      - name: Overlay exact workflow-generation QA harness only
+      - name: Resolve exact workflow-generation QA harness safely
         env:
           QA_HARNESS_SHA: ${{ github.sha }}
         run: |
           set -Eeuo pipefail
-          test "$QA_HARNESS_SHA" != "$EXPECTED_DEPLOY_SHA"
-          git fetch --no-tags --depth 1 origin "$QA_HARNESS_SHA"
-          git cat-file -e "$QA_HARNESS_SHA^{commit}"
-          git show "$QA_HARNESS_SHA:stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts" \
-            > /tmp/production-comprehensive-readonly-qa.spec.ts
-          install -m 0644 /tmp/production-comprehensive-readonly-qa.spec.ts \
-            stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts
+          [[ "$QA_HARNESS_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$QA_HARNESS_SHA" == "$EXPECTED_DEPLOY_SHA" ]]; then
+            test -s stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts
+            echo "QA harness already belongs to the exact deployed SHA; overlay not required."
+          else
+            git fetch --no-tags --depth 1 origin "$QA_HARNESS_SHA"
+            git cat-file -e "$QA_HARNESS_SHA^{commit}"
+            git show "$QA_HARNESS_SHA:stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts" \
+              > /tmp/production-comprehensive-readonly-qa.spec.ts
+            test -s /tmp/production-comprehensive-readonly-qa.spec.ts
+            install -m 0644 /tmp/production-comprehensive-readonly-qa.spec.ts \
+              stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts
+          fi
 
       - uses: pnpm/action-setup@v4
         with:

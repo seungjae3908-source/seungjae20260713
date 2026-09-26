@@ -300,6 +300,13 @@ test('complete read-only evidence is ready for activation review without enablin
   assert.equal(result.forwardObserverArtifactsReady, true);
   assert.equal(result.validationReceiptPathReady, true);
   assert.equal(result.safetyBoundaryReady, true);
+  assert.deepEqual(result.evidenceCounts, {
+    naturalPositions: 1,
+    naturalSettlements: 1,
+    fullCostReadyPositions: 2,
+    durableSettlementPackets: 1,
+    canonicalRebinds: 1,
+  });
   assert.deepEqual(result.blockers, []);
   assert.deepEqual(result.safety, {
     liveTrading: false,
@@ -469,6 +476,13 @@ test('missing Full Cost, settlement packet, or canonical rebind stays fail-close
   });
   assert.equal(noSettlement.settlementDurablePacketReady, false);
   assert.equal(noSettlement.closePositionCanonicalRebindReady, false);
+  assert.deepEqual(noSettlement.evidenceCounts, {
+    naturalPositions: 1,
+    naturalSettlements: 0,
+    fullCostReadyPositions: 1,
+    durableSettlementPackets: 0,
+    canonicalRebinds: 0,
+  });
   assert.ok(noSettlement.blockers.includes('PAPER_CANONICAL_SETTLEMENT_DURABLE_PACKET_NOT_READY'));
   assert.ok(noSettlement.blockers.includes('PAPER_CANONICAL_CLOSE_POSITION_REBIND_NOT_READY'));
 
@@ -479,5 +493,7 @@ test('missing Full Cost, settlement packet, or canonical rebind stays fail-close
   });
   assert.equal(failedRebind.settlementDurablePacketReady, true);
   assert.equal(failedRebind.closePositionCanonicalRebindReady, false);
+  assert.equal(failedRebind.evidenceCounts.durableSettlementPackets, 1);
+  assert.equal(failedRebind.evidenceCounts.canonicalRebinds, 0);
   assert.ok(failedRebind.blockers.includes('PAPER_CANONICAL_CLOSE_POSITION_REBIND_NOT_READY'));
 });
