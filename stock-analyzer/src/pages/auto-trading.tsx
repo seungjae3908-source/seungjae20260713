@@ -349,7 +349,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
 
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="매매 화면 선택" data-testid="trading-section-tabs">
             {SECTIONS.map((item) => (
-              <SegmentedButton key={item.value} active={section === item.value} onClick={() => setSection(item.value)}>
+              <SegmentedButton key={item.value} active={section === item.value} onClick={() => setSection(item.value)} testId={'trading-section-' + item.value}>
                 {item.label}
               </SegmentedButton>
             ))}
