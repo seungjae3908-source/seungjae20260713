@@ -275,6 +275,118 @@ test('signal click explains why, preserves PricePlan, and exposes only safe cont
   expect(forbidden).toEqual([]);
 });
 
+test('scanner detail renders integrated decision, intelligence evidence, and non-scrolling mobile tabs', async ({ page }) => {
+  await installBaseMocks(page, []);
+  const payload = scannerResponse();
+  Object.assign(payload.cards[0], {
+    strongSignalEligible: true,
+    signalState: 'CONFIRMED',
+    signalGrade: 'A',
+    expiresAt: '2026-12-31T23:59:59.000Z',
+    themeSwing: {
+      contract: 'ScannerThemeSwingV1',
+      version: 'theme-swing-v1',
+      state: 'ELIGIBLE',
+      score: 86,
+      themeKey: 'semiconductor',
+      themeLabel: '반도체',
+      classificationSource: 'CATALOG',
+      memberCount: 4,
+      positiveBreadthPercent: 75,
+      leaderRank: 1,
+      leader: true,
+      trigger: 'BREAKOUT',
+      breakdown: {
+        themeMomentum: 19,
+        leaderStrength: 17,
+        trendStructure: 14,
+        volumeParticipation: 12,
+        catalystEvidence: 12,
+        liquidityQuality: 7,
+        riskQuality: 5,
+      },
+      reasons: ['테마 확산 75%', '공식 뉴스 촉매 확인'],
+      blockers: [],
+      executionAuthority: 'NONE',
+      orderSubmitted: false,
+      exchangeRequestSent: false,
+    },
+    newsDisclosureIntelligence: {
+      status: 'READY',
+      reason: null,
+      eventCount: 1,
+      analyzedCount: 1,
+      aiDeferredCount: 0,
+      sourceStatus: { news: 'READY', filings: 'READY' },
+      officialRiskEvents: [],
+      events: [{
+        kind: 'DISCLOSURE',
+        headline: '공급계약 체결 공시',
+        sourceName: 'DART',
+        sourceUrl: 'https://example.com/disclosure',
+        publishedAt: '2026-09-26T04:00:00.000Z',
+        eventType: 'CONTRACT',
+        sourceTier: 'TIER_1_OFFICIAL',
+        freshness: 'FRESH',
+        routeStatus: 'READY',
+        aiStatus: 'ANALYZED',
+        summary: '공식 공급계약 이벤트를 확인했습니다.',
+        sentiment: 'POSITIVE',
+        importanceScore: 82,
+        confidenceScore: 77,
+        riskFlags: [],
+        catalystFlags: ['POSITIVE_CATALYST'],
+      }],
+      warnings: [],
+      safety: {
+        evidenceOnly: true,
+        scoreImpact: 0,
+        rankImpact: 0,
+        sentimentIsPriceDirection: false,
+        executionAuthority: 'NONE',
+        orderAllowed: false,
+      },
+    },
+  });
+  await page.route('**/api/market/scan**', (route) => fulfill(route, payload));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/__phase11-technical-workspace-e2e');
+  await page.getByRole('button', { name: /^삼성전자 005930 · KR · STOCK$/ }).click();
+
+  const detail = page.getByTestId('scanner-mobile-sheet').getByTestId('signal-detail');
+  await expect(detail.getByTestId('scanner-integrated-decision')).toContainText('통합 판단');
+  await expect(detail.getByTestId('scanner-integrated-decision')).toContainText('근거 강도');
+  await expect(detail.getByTestId('scanner-integrated-decision')).toContainText('뉴스·공시 정상');
+  await expect(detail.getByText('테마 스윙 · 반도체')).toBeVisible();
+  await expect(detail.getByText('86점 · 선별 통과')).toBeVisible();
+
+  const tabs = detail.getByTestId('scanner-mobile-detail-tabs');
+  expect(await tabs.evaluate((node) => ({
+    overflowX: getComputedStyle(node).overflowX,
+    bounded: node.scrollWidth <= node.clientWidth + 1,
+  }))).toEqual({ overflowX: 'visible', bounded: true });
+
+  await detail.getByRole('tab', { name: '근거', exact: true }).click();
+  const intelligence = detail.getByTestId('scanner-intelligence-evidence');
+  await expect(intelligence).toContainText('공급계약 체결 공시');
+  await expect(intelligence).toContainText('공식 공급계약 이벤트를 확인했습니다.');
+  await expect(intelligence.getByRole('link', { name: '원문 보기', exact: true })).toHaveAttribute('href', 'https://example.com/disclosure');
+});
+
+test('scanner source has no sub-12px labels or horizontal mobile detail tabs', async () => {
+  const fs = await import('node:fs/promises');
+  const source = await fs.readFile(new URL('../src/pages/signal-scanner.tsx', import.meta.url), 'utf8');
+  expect(source).not.toContain('text-[9px]');
+  expect(source).not.toContain('text-[10px]');
+  expect(source).not.toContain('text-[11px]');
+  expect(source).not.toContain('font-black');
+  expect(source).not.toContain('신뢰도');
+  expect(source).toContain('근거 강도');
+  const tabOwner = source.slice(source.indexOf('data-testid="scanner-mobile-detail-tabs"'), source.indexOf('data-testid="scanner-mobile-detail-panel-'));
+  expect(tabOwner).not.toContain('overflow-x-auto');
+  expect(tabOwner).toContain('grid-cols-3');
+});
+
 test('all four markets continue from canonical signal identity to AI Chart with zero order mutations', async ({ page }) => {
   const mutations: string[] = [];
   page.on('request', (request) => {
