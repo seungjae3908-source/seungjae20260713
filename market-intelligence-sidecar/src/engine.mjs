@@ -1,6 +1,9 @@
 import { evaluateAdvancedGates } from './advanced-gates.mjs';
 import { evaluateExecutionQuality } from './execution-quality.mjs';
 import { evaluatePortfolioSafety } from './portfolio-safety.mjs';
+import { evaluateRegimeBrain } from './regime-brain.mjs';
+import { evaluateNetAlpha } from './net-alpha-engine.mjs';
+import { evaluateDynamicBetSizing } from './dynamic-bet-sizing.mjs';
 
 const DEFAULT_POLICY = Object.freeze({
   version: 'MIS_V1',
@@ -277,7 +280,8 @@ export function evaluateMarketIntelligence(input = {}) {
   const market = String(input.market ?? '').toUpperCase();
   if (!MARKET_SET.has(market)) throw new Error(`UNSUPPORTED_MARKET:${market}`);
   const policy = resolvePolicy(input.policy);
-  const now = finite(input.now, Date.now());
+  const authoritativeNow = typeof input.now === 'number' && Number.isFinite(input.now) ? input.now : null;
+  const now = authoritativeNow ?? Date.now();
   const asOf = finite(input.asOf ?? input.orderBook?.ts ?? input.orderBook?.timestamp, now);
   const ageMs = Math.max(0, now - asOf);
   const stale = ageMs > policy.maxDataAgeMs;
@@ -290,6 +294,7 @@ export function evaluateMarketIntelligence(input = {}) {
     previousOpenInterest: input.derivatives?.previousOpenInterest ?? input.previous?.derivatives?.openInterest,
   }) : null;
   const microcap = market === 'US_STOCK' ? microcapFeatures(input.microcap) : null;
+  const validation = input.validation ?? {};
   const advancedGates = evaluateAdvancedGates({
     now,
     market,
@@ -297,8 +302,36 @@ export function evaluateMarketIntelligence(input = {}) {
     metaLabel: input.advancedGates?.metaLabel,
     events: input.advancedGates?.events,
   }, input.advancedGatePolicy);
-  const executionQuality = evaluateExecutionQuality({ now, ...(input.executionQuality ?? {}) }, input.executionQualityPolicy);
-  const portfolioSafety = evaluatePortfolioSafety({ now, ...(input.portfolioSafety ?? {}) }, input.portfolioSafetyPolicy);
+  const executionQuality = evaluateExecutionQuality({ ...(input.executionQuality ?? {}), now }, input.executionQualityPolicy);
+  const portfolioSafety = evaluatePortfolioSafety({ ...(input.portfolioSafety ?? {}), now }, input.portfolioSafetyPolicy);
+  const currentTopDepthNotional = book.mid == null ? null : (book.bidQty + book.askQty) * book.mid;
+  const regimeBrain = evaluateRegimeBrain({
+    ...(input.regimeBrain ?? {}),
+    now: authoritativeNow,
+    market,
+    asOf: input.regimeBrain?.asOf,
+    spreadBps: input.regimeBrain?.spreadBps ?? book.spreadBps,
+    topDepthNotional: input.regimeBrain?.topDepthNotional ?? currentTopDepthNotional,
+  }, input.regimeBrainPolicy);
+  const netAlpha = evaluateNetAlpha({
+    ...(input.netAlpha ?? {}),
+    now: authoritativeNow,
+    market,
+    currentIdentity: input.strategyIdentity,
+    attestedNetEdgeBps: input.netAlpha?.attestedNetEdgeBps,
+    conformalLowerEdgeBps: input.netAlpha?.conformalLowerEdgeBps,
+  }, input.netAlphaPolicy);
+  const dynamicSizing = evaluateDynamicBetSizing({
+    ...(input.dynamicSizing ?? {}),
+    now: authoritativeNow,
+    market,
+    direction: input.direction,
+    regimeBrain,
+    netAlpha,
+    advancedGates,
+    executionQuality,
+    portfolioSafety,
+  }, input.dynamicSizingPolicy);
 
   let directional = 0;
   directional += book.bookImbalance * 24;
@@ -334,7 +367,6 @@ export function evaluateMarketIntelligence(input = {}) {
         ? 'SPREAD_LIMIT_EXCEEDED'
         : null;
 
-  const validation = input.validation ?? {};
   const forwardSamples = Math.max(0, finite(validation.forwardSamples, 0));
   const profitFactor = finite(validation.profitFactor);
   const expectedNetEdgeBps = finite(validation.expectedNetEdgeBps);
@@ -349,7 +381,10 @@ export function evaluateMarketIntelligence(input = {}) {
   const advanced = requiredGateState(advancedGates);
   const execution = requiredGateState(executionQuality);
   const portfolio = requiredGateState(portfolioSafety);
-  const requiredGates = [advanced, execution, portfolio];
+  const regime = requiredGateState(regimeBrain);
+  const alpha = requiredGateState(netAlpha);
+  const sizing = requiredGateState(dynamicSizing);
+  const requiredGates = [advanced, execution, portfolio, regime, alpha, sizing];
   const requiredVeto = requiredGates.find((gate) => gate.required && gate.state === 'VETO');
   const requiredIncomplete = requiredGates.some((gate) => gate.required && gate.state !== 'PASS');
   const requiredVetoReason = requiredVeto?.reasons?.[0] ?? (requiredVeto ? 'REQUIRED_SAFETY_GATE_VETO' : null);
@@ -371,8 +406,12 @@ export function evaluateMarketIntelligence(input = {}) {
   if (market === 'US_STOCK' && input.microcap == null) warnings.push('MICROCAP_STRUCTURAL_DATA_NOT_AVAILABLE');
   if (!evidenceReady) warnings.push('AUTO_TRADING_FORWARD_EVIDENCE_INSUFFICIENT');
   warnings.push(...advancedGates.scanner.warnings);
+  warnings.push(...(regimeBrain.scanner?.warnings ?? []));
   if (input.executionQuality != null && executionQuality.autoTrading.state !== 'PASS') warnings.push(`EXECUTION_QUALITY_${executionQuality.autoTrading.state}`);
   if (input.portfolioSafety != null && portfolioSafety.autoTrading.state !== 'PASS') warnings.push(`PORTFOLIO_SAFETY_${portfolioSafety.autoTrading.state}`);
+  if (input.regimeBrain != null && regimeBrain.autoTrading.state !== 'PASS') warnings.push(`REGIME_BRAIN_${regimeBrain.autoTrading.state}`);
+  if (input.netAlpha != null && netAlpha.autoTrading.state !== 'PASS') warnings.push(`NET_ALPHA_${netAlpha.autoTrading.state}`);
+  if (input.dynamicSizing != null && dynamicSizing.autoTrading.state !== 'PASS') warnings.push(`DYNAMIC_SIZING_${dynamicSizing.autoTrading.state}`);
 
   return {
     contract: 'market-intelligence-sidecar/v1',
@@ -403,6 +442,9 @@ export function evaluateMarketIntelligence(input = {}) {
     advancedGates,
     executionQuality,
     portfolioSafety,
+    regimeBrain,
+    netAlpha,
+    dynamicSizing,
     scanner: {
       mode: 'SOFT_INTELLIGENCE_LAYER',
       adjustment: scannerAdjustment,
@@ -414,6 +456,9 @@ export function evaluateMarketIntelligence(input = {}) {
       advancedGateState: advancedGates.autoTrading.state,
       executionQualityState: executionQuality.autoTrading.state,
       portfolioSafetyState: portfolioSafety.autoTrading.state,
+      regimeBrainState: regimeBrain.autoTrading.state,
+      netAlphaState: netAlpha.autoTrading.state,
+      dynamicSizingState: dynamicSizing.autoTrading.state,
       candidateDeletionAllowed: false,
     },
     autoTrading: {
@@ -425,9 +470,20 @@ export function evaluateMarketIntelligence(input = {}) {
       advancedGateReady: advanced.state === 'PASS',
       executionQualityReady: execution.state === 'PASS',
       portfolioSafetyReady: portfolio.state === 'PASS',
+      regimeBrainReady: regime.state === 'PASS',
+      netAlphaReady: alpha.state === 'PASS',
+      dynamicSizingReady: sizing.state === 'PASS',
       advancedEnforcement: advancedGates.policy.enforcement,
       executionQualityEnforcement: executionQuality.policy.enforcement,
       portfolioSafetyEnforcement: portfolioSafety.policy.enforcement,
+      regimeBrainEnforcement: regimeBrain.policy.enforcement,
+      netAlphaEnforcement: netAlpha.policy.enforcement,
+      dynamicSizingEnforcement: dynamicSizing.policy.enforcement,
+      advisorySizingMultiplier: dynamicSizing.advisoryMultiplier,
+      requiredSizingMultiplier: dynamicSizing.policy.enforcement === 'REQUIRED_FOR_PARENT_GATE'
+        ? dynamicSizing.recommendedMultiplier
+        : null,
+      sizingCanIncreaseParentExposure: false,
       hardBlockReason: autoHardBlockReason,
       evidence: { forwardSamples, profitFactor, expectedNetEdgeBps, maxDrawdownPct, regimeCount },
     },

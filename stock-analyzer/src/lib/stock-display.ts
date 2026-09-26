@@ -38,8 +38,6 @@ export const ACCENT_COLORS: {
   },
 ];
 
-const USD_KRW = 1300;
-
 const KO_NAME_MAP: Record<string, string> = {
   AAPL: '애플',
   NVDA: '엔비디아',
@@ -358,47 +356,57 @@ export function normalizePlanText(value: string, currency: string) {
 }
 
 export function formatAppPercent(value: unknown) {
-  const n =
-    typeof value === 'number'
-      ? value
-      : typeof value === 'string'
-        ? Number(value.replace('%', '').replace(',', ''))
-        : 0;
+  const normalized = typeof value === 'string'
+    ? value.replace('%', '').replace(/,/g, '').trim()
+    : null;
+  const n = typeof value === 'number'
+    ? value
+    : normalized
+      ? Number(normalized)
+      : null;
 
-  if (!Number.isFinite(n)) return '0.00%';
+  if (n == null || !Number.isFinite(n)) return '데이터 없음';
 
   return `${n > 0 ? '+' : ''}${n.toFixed(2)}%`;
 }
 
 export function formatAppPrice(value: unknown, currency: string) {
-  const n =
-    typeof value === 'number'
-      ? value
-      : typeof value === 'string'
-        ? Number(value.replace(/,/g, '').replace(/[^\d.-]/g, ''))
-        : null;
+  const normalized = typeof value === 'string'
+    ? value.replace(/,/g, '').replace(/[^\d.-]/g, '').trim()
+    : null;
+  const n = typeof value === 'number'
+    ? value
+    : normalized
+      ? Number(normalized)
+      : null;
 
-  if (n == null || !Number.isFinite(n)) return '확인중';
+  if (n == null || !Number.isFinite(n)) return '데이터 없음';
 
   const mode = getCurrencyMode();
+  const currencyCode = String(currency ?? '').trim().toUpperCase();
+  const conversionUnavailable =
+    (mode === 'krw' && currencyCode === 'USD') ||
+    (mode === 'usd' && currencyCode === 'KRW');
+  const conversionNote = conversionUnavailable ? ' · 환율 미연동' : '';
 
-  if (mode === 'krw' && currency === 'USD') {
-    return `${Math.round(n * USD_KRW).toLocaleString()}원`;
-  }
-
-  if (mode === 'usd' && currency === 'KRW') {
-    return `$${(n / USD_KRW).toLocaleString(undefined, {
-      maximumFractionDigits: 2,
-    })}`;
-  }
-
-  if (currency === 'USD') {
+  if (currencyCode === 'USD') {
     return `$${n.toLocaleString(undefined, {
       maximumFractionDigits: n >= 100 ? 2 : 4,
-    })}`;
+    })}${conversionNote}`;
   }
 
-  return `${Math.round(n).toLocaleString()}원`;
+  if (currencyCode === 'USDT') {
+    return `${n.toLocaleString(undefined, {
+      maximumFractionDigits: n >= 100 ? 2 : 6,
+    })} USDT`;
+  }
+
+  if (currencyCode === 'KRW') {
+    return `${Math.round(n).toLocaleString()}원${conversionNote}`;
+  }
+
+  const label = currencyCode || '통화 미확인';
+  return `${n.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${label}`;
 }
 
 export function eventLabelKo(value: unknown) {
@@ -449,6 +457,13 @@ export interface WatchlistItem {
   targetPrice?: number | null;
 }
 
+function stripTransientWatchlistQuote(item: WatchlistItem): WatchlistItem {
+  const persistent = { ...item };
+  delete persistent.price;
+  delete persistent.changePercent;
+  return persistent;
+}
+
 export function readWatchlistItems(): WatchlistItem[] {
   if (typeof window === 'undefined') return [];
   try {
@@ -462,7 +477,7 @@ export function readWatchlistItems(): WatchlistItem[] {
           return { ticker: item, name: item } satisfies WatchlistItem;
         }
         if (item && typeof item === 'object' && typeof item.ticker === 'string') {
-          return item as WatchlistItem;
+          return stripTransientWatchlistQuote(item as WatchlistItem);
         }
         return null;
       })
@@ -476,8 +491,9 @@ export function writeWatchlistItems(items: WatchlistItem[]): void {
   if (typeof window === 'undefined') return;
   const unique = new Map<string, WatchlistItem>();
   items.forEach((item) => {
+    const persistent = stripTransientWatchlistQuote(item);
     unique.set(item.ticker.toUpperCase(), {
-      ...item,
+      ...persistent,
       ticker: item.ticker.toUpperCase(),
     });
   });

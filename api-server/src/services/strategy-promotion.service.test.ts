@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   COST_STRESS_MULTIPLIERS,
   StrategyPromotionService,
+  strategyCandidateId,
   strategyParameterHash,
   type PromotionStageKey,
 } from './strategy-promotion.service';
@@ -47,6 +48,16 @@ test('canonical profile hash is deterministic and direction identity is immutabl
   assert.equal(result.items[0]?.identity.strategyHorizon, 'SCALP');
   assert.equal(result.items[0]?.executionAuthority, 'NONE');
   assert.equal(result.privateTradingApiCount, 0);
+});
+
+test('Paper candidate id is deterministic and changes with immutable parameters', () => {
+  const source = new StrategyPromotionService({ sourceSha: SHA, now: () => NOW })
+    .list({ market: 'CRYPTO_FUTURES', strategyHorizon: 'SCALP', direction: 'LONG' }).items[0];
+  assert.ok(source);
+  const candidateId = strategyCandidateId(source.identity);
+  assert.equal(candidateId, strategyCandidateId({ ...source.identity }));
+  assert.match(candidateId, /^paper-candidate-v1:[0-9a-f]{64}$/u);
+  assert.notEqual(candidateId, strategyCandidateId({ ...source.identity, parameterHash: 'f'.repeat(64) }));
 });
 
 test('PASS evidence without exact provenance is blocked instead of promoted', () => {

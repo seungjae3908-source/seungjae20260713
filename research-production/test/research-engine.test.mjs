@@ -2,11 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   assertResearchSafety,
   buildTaskPlan,
   preflightResearchProduction,
+  prepareResearchTaskWorkspace,
+  validateResearchTaskSharedPackages,
   PROFILES,
   runResearchCycle,
   sanitizeChildEnv,
@@ -25,6 +27,19 @@ async function fakeRepo() {
     const target = join(lab, relative);
     await mkdir(join(target, '..'), { recursive: true });
     await writeFile(target, relative.endsWith('.json') ? '{}\n' : 'console.log("ok")\n');
+  }
+  const sharedFiles = [
+    'packages/strategy-hypothesis/package.json',
+    'packages/strategy-hypothesis/src/index.js',
+    'packages/strategy-hypothesis/src/contract.js',
+    'packages/external-research/package.json',
+    'packages/external-research/src/index.js',
+    'packages/external-research/src/contract.js',
+  ];
+  for (const relative of sharedFiles) {
+    const target = join(root, relative);
+    await mkdir(join(target, '..'), { recursive: true });
+    await writeFile(target, relative.endsWith('.json') ? '{}\n' : `export const marker = "${relative}";\n`);
   }
   return root;
 }
@@ -53,16 +68,74 @@ test('child environment strips secrets and private credentials', () => {
 
 test('forward plan isolates state and orders natural Shadow before Paper', () => {
   const stateRoot = '/var/lib/investment-research-production';
-  const plan = buildTaskPlan({ profile: 'forward', stateRoot, researchSha: SHA, activationAtMs: 12345 });
+  const runtimeDirectory = resolve('/run/investment-research-forward');
+  const plan = buildTaskPlan({
+    profile: 'forward',
+    stateRoot,
+    researchSha: SHA,
+    activationAtMs: 12345,
+    env: { RUNTIME_DIRECTORY: runtimeDirectory },
+  });
   const paper = plan.find((task) => task.id === 'paper-forward');
   const shadow = plan.find((task) => task.id === 'shadow-forward');
   assert.deepEqual(plan.map((task) => task.id), ['shadow-forward', 'paper-forward']);
-  assert.equal(paper.env.PAPER_FORWARD_ROOT, `${stateRoot}/forward/paper`);
+  assert.equal(paper.env.PAPER_FORWARD_ROOT, join(stateRoot, 'forward', 'paper'));
   assert.equal(paper.env.PAPER_FORWARD_RESEARCH_SHA, SHA);
   assert.equal(paper.env.PAPER_FORWARD_ACTIVATION_AT_MS, '12345');
+  assert.equal(
+    paper.env.PAPER_FORWARD_PUBLISHER_BINDING_PATH,
+    join(runtimeDirectory, 'paper-state', 'publisher-binding.json'),
+  );
+  assert.equal(
+    paper.env.PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH,
+    join(runtimeDirectory, 'paper-state', 'paper-state-v2.json'),
+  );
   assert.equal(paper.env.LIVE_TRADING, 'false');
-  assert.equal(shadow.args.at(-2), `${stateRoot}/forward/shadow-state.json`);
-  assert.equal(shadow.args.at(-1), `${stateRoot}/forward/shadow-summary.json`);
+  assert.deepEqual(paper.sharedPackages, ['strategy-hypothesis', 'external-research']);
+  assert.equal(shadow.sharedPackages, undefined);
+  assert.deepEqual(shadow.acceptedExitCodes, [0, 2]);
+  assert.equal(shadow.args.at(-2), join(stateRoot, 'forward', 'shadow-state.json'));
+  assert.equal(shadow.args.at(-1), join(stateRoot, 'forward', 'shadow-summary.json'));
+});
+
+test('Shadow NOT_EVALUABLE is fail-closed BLOCKED_DATA with explicit missing evidence and no fallback values', async () => {
+  const source = await readFile(
+    new URL('../../market-prediction-lab/scripts/run-shadow-cycle.js', import.meta.url),
+    'utf8',
+  );
+
+  for (const token of [
+    'SHADOW_INFERENCE_NOT_EVALUABLE',
+    'MISSING_REQUIRED_INFERENCE_EVIDENCE',
+    'missingRequiredFeatures',
+    'candidateMissingRequiredFeatures',
+    'referenceMissingRequiredFeatures',
+    'EXISTING_TEMPORAL_EVIDENCE_ONLY',
+    'defaultFeatureFallbackAllowed: false',
+    'syntheticFeatureFallbackAllowed: false',
+    'if (inferenceBlocker) throw inferenceBlocker',
+    'if (nextSummary.status === "blocked_data") process.exitCode = 2',
+  ]) {
+    assert.ok(source.includes(token), `missing Shadow BLOCKED_DATA contract: ${token}`);
+  }
+
+  assert.equal(source.includes('candidate.probabilities ??'), false);
+  assert.equal(source.includes('reference.probabilities ??'), false);
+  assert.equal(source.includes('candidate.probabilities ||'), false);
+  assert.equal(source.includes('reference.probabilities ||'), false);
+});
+
+test('forward plan preserves missing Paper state as missing when no runtime transport exists', () => {
+  const plan = buildTaskPlan({
+    profile: 'forward',
+    stateRoot: '/var/lib/investment-research-production',
+    researchSha: SHA,
+    activationAtMs: 12345,
+    env: {},
+  });
+  const paper = plan.find((task) => task.id === 'paper-forward');
+  assert.equal(paper.env.PAPER_FORWARD_PUBLISHER_BINDING_PATH, undefined);
+  assert.equal(paper.env.PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH, undefined);
 });
 
 test('historical plan is parallelizable and contains no live authority', () => {
@@ -84,6 +157,52 @@ test('preflight requires exact SHA and validates lab layout', async () => {
   assert.equal(result.checkoutSha, null);
   assert.equal(result.safety.liveTrading, false);
   await assert.rejects(() => preflightResearchProduction({ repoRoot, stateRoot, researchSha: 'main', env: {}, verifyGitHead: false }), /exact 40-character/);
+});
+
+test('Paper Forward shared-package validation fails closed when a required package is missing', async () => {
+  const repoRoot = await fakeRepo();
+  await import('node:fs/promises').then(({ rm }) =>
+    rm(join(repoRoot, 'packages', 'strategy-hypothesis'), { recursive: true, force: true }));
+
+  const plan = buildTaskPlan({
+    profile: 'forward',
+    stateRoot: join(repoRoot, 'research-state-missing-shared'),
+    researchSha: SHA,
+    activationAtMs: 12345,
+    env: {},
+  });
+  await assert.rejects(
+    () => validateResearchTaskSharedPackages({ repoRoot, plan }),
+    /research task shared-package prerequisites missing: packages\/strategy-hypothesis/,
+  );
+
+  const historicalPlan = buildTaskPlan({
+    profile: 'fast-historical',
+    stateRoot: join(repoRoot, 'research-state-historical'),
+    researchSha: SHA,
+    env: {},
+  });
+  const historical = await validateResearchTaskSharedPackages({
+    repoRoot,
+    plan: historicalPlan,
+  });
+  assert.deepEqual(historical.requestedPackages, []);
+});
+
+test('task workspace copies only the bounded shared package set beside market-prediction-lab', async () => {
+  const repoRoot = await fakeRepo();
+  const taskDir = join(repoRoot, 'research-state', 'runs', 'cycle-1', 'paper-forward');
+  const result = await prepareResearchTaskWorkspace({
+    labRoot: join(repoRoot, 'market-prediction-lab'),
+    taskDir,
+    sharedPackages: ['strategy-hypothesis', 'external-research'],
+  });
+
+  assert.equal(result.workspaceRoot, join(taskDir, 'workspace', 'market-prediction-lab'));
+  assert.deepEqual(result.copiedSharedPackages, ['strategy-hypothesis', 'external-research']);
+  await access(join(taskDir, 'workspace', 'market-prediction-lab', 'package.json'));
+  await access(join(taskDir, 'workspace', 'packages', 'strategy-hypothesis', 'src', 'contract.js'));
+  await access(join(taskDir, 'workspace', 'packages', 'external-research', 'src', 'index.js'));
 });
 
 test('parallel cycle uses isolated per-task workspaces', async () => {

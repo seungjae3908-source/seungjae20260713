@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { collectUpbitSpotHistory } from "../src/upbit-spot-history.js";
 import { normalizeCandleRows } from "../src/normalizers.js";
 import { buildTrainingRecords } from "../src/training-dataset.js";
+import { requiredInferenceEvidenceFeatures } from "../src/engine.js";
 import { walkForwardSplit } from "../src/walk-forward.js";
 import { BASELINE_MODEL } from "../src/tiny-model.js";
 import {
@@ -36,8 +37,34 @@ function metrics(value) {
 const endTime = Date.now();
 const startTime = endTime - 240 * DAY;
 const output = resolve(process.argv[2] ?? "docs/upbit-spot-suite-result.json");
-const datasets = [];
-const datasetReport = {};
+const missingRequiredFeatures = requiredInferenceEvidenceFeatures("CRYPTO_SPOT");
+
+if (missingRequiredFeatures.length > 0) {
+  const report = {
+    schemaVersion: 1,
+    status: "data_blocked",
+    stage: "required_inference_evidence_preflight",
+    market: "CRYPTO_SPOT",
+    exchange: "UPBIT",
+    group: "upbit-spot-4h-btc-eth",
+    symbols: SYMBOLS,
+    blockers: missingRequiredFeatures.map((featureName) => `MISSING_TEMPORAL_REQUIRED_FEATURE_EVIDENCE:${featureName}`),
+    missingRequiredFeatures,
+    researchOnly: true,
+    liveExecutionAllowed: false,
+    privateAccountRequestAllowed: false,
+    modelObservationEligible: false,
+    policyCreditEligible: false,
+    economicCreditGranted: false,
+    syntheticImputationUsed: false,
+    zeroImputationUsed: false,
+    model: null,
+  };
+  await save(output, report);
+  console.log(JSON.stringify(report, null, 2));
+} else {
+  const datasets = [];
+  const datasetReport = {};
 
 for (const symbol of SYMBOLS) {
   const history = await collectUpbitSpotHistory({ symbol, startTime, endTime });
@@ -116,3 +143,4 @@ const report = {
 };
 await save(output, report);
 console.log(JSON.stringify(report, null, 2));
+}

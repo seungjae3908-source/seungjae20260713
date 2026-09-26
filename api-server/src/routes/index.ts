@@ -11,6 +11,7 @@ import watchlistRouter from './watchlist';
 import kiwoomRouter from './kiwoom.routes';
 import kiwoomRankingsSafeRouter from './kiwoom-rankings-safe';
 import adminRouter from './admin';
+import researchCopilotRouter from './research-copilot';
 import secRouter from './sec.routes';
 import cryptoRouter from './crypto';
 import futuresMarketDataRouter from './futures-market-data';
@@ -31,6 +32,7 @@ import accountConnectionsRouter from './account-connections';
 import { createAccountReadonlyRouter, accountReadFlags } from '../features/account-readonly/account-readonly.route';
 import { AccountReadonlyService } from '../features/account-readonly/account-readonly.service';
 import { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';
+import { accountReadonlyCredentialConfigured } from '../features/account-readonly/account-readonly.repository';
 import {
   manualPortfolioNotificationBridge,
   telegramWebhookRouter,
@@ -39,7 +41,9 @@ import {
 import {
   requireAdmin,
   requireAuthenticated,
+  requireAuthenticatedProfileBootstrap,
   requireCapability,
+  type AuthenticatedRequest,
 } from '../middleware/auth';
 
 const router: IRouter = Router();
@@ -59,6 +63,44 @@ router.use('/telegram/webhook', telegramWebhookRouter);
 
 // Admin routes perform their own authenticated + admin capability checks.
 router.use('/admin', adminRouter);
+router.use('/admin/research/copilot', researchCopilotRouter);
+
+// The deployed server mounts this router from src/index.ts. Keep the browser
+// bootstrap endpoint on that runtime graph so authenticated Supabase profile
+// reads cannot fall through to API_ROUTE_NOT_FOUND.
+router.get('/auth/profile', requireAuthenticatedProfileBootstrap, (req: AuthenticatedRequest, res) => {
+  const profile = req.member;
+  const allowedStatuses = new Set(['pending', 'approved', 'rejected']);
+  if (
+    !profile
+    || typeof profile.id !== 'string'
+    || profile.id.length === 0
+    || typeof profile.login_name !== 'string'
+    || typeof profile.display_name !== 'string'
+    || typeof profile.role !== 'string'
+    || !allowedStatuses.has(profile.status)
+  ) {
+    return res.status(403).json({
+      code: 'PROFILE_INVALID',
+      message: 'Authenticated member profile is missing or invalid.',
+      details: null,
+      hint: null,
+    });
+  }
+
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  return res.status(200).json({
+    id: profile.id,
+    login_name: profile.login_name,
+    display_name: profile.display_name,
+    role: profile.role,
+    status: profile.status,
+    membership_level: profile.membership_level ?? null,
+    is_active: profile.is_active ?? null,
+    permissions_updated_at: profile.permissions_updated_at ?? null,
+    updated_at: profile.updated_at ?? null,
+  });
+});
 
 router.use(requireAuthenticated);
 
@@ -74,7 +116,12 @@ router.use('/account-connections', accountConnectionsRouter);
 router.use(
   '/accounts/read-only',
   requireCapability('canAccessBasicInfo'),
-  createAccountReadonlyRouter(new AccountReadonlyService(createVaultBackedAccountReaders(), accountReadFlags())),
+  createAccountReadonlyRouter(new AccountReadonlyService(
+    createVaultBackedAccountReaders(),
+    accountReadFlags(),
+    () => new Date(),
+    accountReadonlyCredentialConfigured,
+  )),
 );
 
 // Canonical AI Scanner routes must be registered before the legacy market
@@ -143,7 +190,7 @@ router.use('/', paperTradingRouter);
 router.use('/paper-journal', requireCapability('canAccessJournalSync'));
 router.use('/paper-journal/sync', manualPortfolioNotificationBridge);
 router.use('/', paperJournalRouter);
-router.use('/trade-automation', requireCapability('canPlaceOrders'));
+router.use('/trade-automation', requireCapability('canAccessAutoTrading'));
 router.use('/trade-automation', tradeAutomationRouter);
 router.use('/user-integrations', requireCapability('canConnectPersonalTelegram'));
 router.use('/user-integrations', userBrokerTelegramRouter);

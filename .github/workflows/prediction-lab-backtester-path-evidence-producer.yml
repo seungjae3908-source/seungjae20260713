@@ -1,0 +1,183 @@
+name: Prediction Lab Backtester Path Evidence Producer
+
+on:
+  pull_request:
+    branches: [main]
+    types:
+      - opened
+      - synchronize
+      - reopened
+    paths:
+      - market-prediction-lab/src/backtester-path-evidence-producer-v1.js
+      - market-prediction-lab/tests/backtester-path-evidence-producer-v1.test.js
+      - market-prediction-lab/scripts/run-backtester-path-evidence-producer-v1.js
+      - .github/workflows/prediction-lab-backtester-path-evidence-producer.yml
+  workflow_dispatch:
+    inputs:
+      research_ref:
+        description: Exact immutable 40-character commit SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prediction-lab-backtester-path-evidence-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  fixed-public-v1-path-evidence:
+    name: Fixed Public V1 Trade Path Evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Resolve exact immutable source SHA
+        id: source
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          INPUT_SHA: ${{ inputs.research_ref }}
+        run: |
+          set -euo pipefail
+          sha="$PR_HEAD_SHA"
+          if [ -z "$sha" ]; then sha="$INPUT_SHA"; fi
+          if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "research_ref must be an exact lowercase 40-character commit SHA" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact source SHA without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact detached checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          actual_branch="$(git symbolic-ref --quiet --short HEAD || true)"
+          test -z "$actual_branch"
+          test "$actual_sha" = "$EXPECTED_SHA"
+          echo "tested_sha=$actual_sha"
+          echo "checkout_mode=DETACHED"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Check producer JavaScript syntax
+        run: |
+          node --check market-prediction-lab/src/backtester-path-evidence-producer-v1.js
+          node --check market-prediction-lab/tests/backtester-path-evidence-producer-v1.test.js
+          node --check market-prediction-lab/scripts/run-backtester-path-evidence-producer-v1.js
+
+      - name: Run focused producer tests
+        run: node --test market-prediction-lab/tests/backtester-path-evidence-producer-v1.test.js
+
+      - name: Run V1 and adapter regression tests
+        run: >-
+          node --test
+          market-prediction-lab/tests/backtester-strategy-evidence-adapter-v1.test.js
+          market-prediction-lab/tests/v1-independent-engine-equivalence.test.js
+          market-prediction-lab/tests/backtest-accounting-regression.test.js
+          market-prediction-lab/tests/multi-market-backtest-engine.test.js
+
+      - name: Download exact public Binance Vision archives
+        shell: bash
+        env:
+          PUBLIC_ROOT: ${{ runner.temp }}/backtester-path-public-data
+        run: |
+          set -euo pipefail
+          mkdir -p "$PUBLIC_ROOT"
+          cd "$PUBLIC_ROOT"
+          curl --fail --silent --show-error --location \
+            https://data.binance.vision/data/futures/um/monthly/klines/BTCUSDT/15m/BTCUSDT-15m-2024-01.zip \
+            --output BTCUSDT-15m-2024-01.zip
+          curl --fail --silent --show-error --location \
+            https://data.binance.vision/data/futures/um/monthly/fundingRate/BTCUSDT/BTCUSDT-fundingRate-2024-01.zip \
+            --output BTCUSDT-fundingRate-2024-01.zip
+          echo "76953983fcd4cc35ac181c4a1c69d28cbb4ef8b983021aac84a111ea4e82ef69  BTCUSDT-15m-2024-01.zip" | sha256sum --check --strict
+          echo "3e0d30870672aa8f0f937881056e3cfd55913ae5c780cd50b33f2763aa0ba58e  BTCUSDT-fundingRate-2024-01.zip" | sha256sum --check --strict
+          unzip -q BTCUSDT-15m-2024-01.zip
+          unzip -q BTCUSDT-fundingRate-2024-01.zip
+
+      - name: Produce fixed public V1 trade path evidence
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          PUBLIC_ROOT: ${{ runner.temp }}/backtester-path-public-data
+          ARTIFACT_ROOT: ${{ runner.temp }}/backtester-path-evidence
+        run: |
+          set -euo pipefail
+          mkdir -p "$ARTIFACT_ROOT"
+          node market-prediction-lab/scripts/run-backtester-path-evidence-producer-v1.js \
+            --source-sha "$SOURCE_SHA" \
+            --candle-archive "$PUBLIC_ROOT/BTCUSDT-15m-2024-01.zip" \
+            --candle-csv "$PUBLIC_ROOT/BTCUSDT-15m-2024-01.csv" \
+            --funding-archive "$PUBLIC_ROOT/BTCUSDT-fundingRate-2024-01.zip" \
+            --funding-csv "$PUBLIC_ROOT/BTCUSDT-fundingRate-2024-01.csv" \
+            --output "$ARTIFACT_ROOT/backtester-path-evidence-v1.json"
+
+      - name: Assert evidence truth and safety boundaries
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          ARTIFACT_PATH: ${{ runner.temp }}/backtester-path-evidence/backtester-path-evidence-v1.json
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const artifact = JSON.parse(await readFile(process.env.ARTIFACT_PATH, "utf8"));
+          const evidence = artifact.evidence;
+          const truth = evidence.truthFlags;
+          const fail = (condition, message) => { if (!condition) throw new Error(message); };
+          fail(artifact.exactSourceSha === process.env.SOURCE_SHA, "exact source SHA mismatch");
+          fail(artifact.verification?.verified === true, "immutable evidence verification failed");
+          fail(truth.LIVE_TRADING === false, "LIVE_TRADING must remain false");
+          fail(truth.PRIVATE_TRADING_API_ALLOWED === false, "PRIVATE_TRADING_API_ALLOWED must remain false");
+          fail(truth.executionAuthority === "NONE", "executionAuthority must remain NONE");
+          fail(truth.REAL_ORDER_COUNT === 0, "REAL_ORDER_COUNT must remain zero");
+          fail(truth.PROFITABILITY_PROVEN === false, "PROFITABILITY_PROVEN must remain false");
+          fail(truth.CURRENT_VALIDATED_CHAMPION === "NONE", "CURRENT_VALIDATED_CHAMPION must remain NONE");
+          fail(evidence.scalarMetrics.mae === null && evidence.scalarMetrics.maeStatus === "POLICY_MISSING", "scalar MAE must remain policy-missing");
+          fail(evidence.scalarMetrics.mfe === null && evidence.scalarMetrics.mfeStatus === "POLICY_MISSING", "scalar MFE must remain policy-missing");
+          fail(evidence.evidenceSet.rows.every((row) => Number.isFinite(row.maximumAdverseExcursion) && Number.isFinite(row.maximumFavorableExcursion)), "trade path evidence must be finite");
+          fail(evidence.evidenceSet.rows.every((row) => row.entryContribution.status === "MISSING_EVIDENCE" && row.exitContribution.status === "MISSING_EVIDENCE"), "contribution evidence must remain missing");
+          NODE
+          if grep -E 'runV[2-6]|optimizer|FINAL_HOLDOUT_EVALUATION|place-order|private-account' \
+            market-prediction-lab/src/backtester-path-evidence-producer-v1.js \
+            market-prediction-lab/scripts/run-backtester-path-evidence-producer-v1.js; then
+            echo "forbidden optimization, holdout, or private execution path found" >&2
+            exit 1
+          fi
+
+      - name: Upload immutable path evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtester-path-evidence-v1-${{ steps.source.outputs.sha }}
+          path: ${{ runner.temp }}/backtester-path-evidence/backtester-path-evidence-v1.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Assert no repository or branch mutation
+        if: always()
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+          git diff --exit-code
+          test -z "$(git status --porcelain=v1)"
+
+# Intentionally no schedule, push, branch write, deployment, private API, or order path.

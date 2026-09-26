@@ -23,7 +23,7 @@ function candleRows(revision: number) {
 async function installChartMock(context: BrowserContext) {
   let revision = 0;
   let calls = 0;
-  await context.route('**/api/stocks/*/chart**', async (route) => {
+  await context.route('**/api/stocks/*/candles**', async (route) => {
     calls += 1;
     const current = revision;
     await route.fulfill({
@@ -67,6 +67,10 @@ function expectSameRange(actual: [number, number], expected: [number, number]) {
 async function panAndZoomHistorical(page: Page) {
   const canvas = page.getByTestId('unified-chart-canvas');
   await expect(canvas).toBeVisible();
+  // Desktop AI Chart now owns chart-side scrolling independently from analysis.
+  // Bring the interactive canvas into that local pane before exercising the
+  // existing chart pan/zoom contract; this does not change the viewport checks.
+  await canvas.scrollIntoViewIfNeeded();
   const initial = await range(page);
   const box = await canvas.boundingBox();
   if (!box) throw new Error('chart canvas has no bounding box');

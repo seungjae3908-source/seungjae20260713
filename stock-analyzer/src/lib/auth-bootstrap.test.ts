@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   FiniteDeadlineError,
+  reconcileInitialSessionProfile,
   runFiniteAuthBootstrap,
+  shouldReconcileInitialSession,
+  shouldRecoverDeferredInitialSession,
   withFiniteDeadline,
 } from './auth-bootstrap';
 
@@ -69,4 +72,127 @@ test('successful bootstrap applies session before profile and completes', async 
     profileTimeoutMs: 50,
   });
   assert.deepEqual(order, ['session-read', 'session-apply:session-2', 'profile:session-2']);
+});
+
+test('INITIAL_SESSION only reconciles a restored authenticated identity that is not fully hydrated', () => {
+  assert.equal(shouldReconcileInitialSession({
+    event: 'INITIAL_SESSION',
+    incomingUserId: 'user-1',
+    currentUserId: null,
+    hasProfile: false,
+  }), true);
+  assert.equal(shouldReconcileInitialSession({
+    event: 'INITIAL_SESSION',
+    incomingUserId: 'user-1',
+    currentUserId: 'user-1',
+    hasProfile: false,
+  }), true);
+  assert.equal(shouldReconcileInitialSession({
+    event: 'INITIAL_SESSION',
+    incomingUserId: 'user-1',
+    currentUserId: 'user-1',
+    hasProfile: true,
+  }), false);
+  assert.equal(shouldReconcileInitialSession({
+    event: 'INITIAL_SESSION',
+    incomingUserId: null,
+    currentUserId: null,
+    hasProfile: false,
+  }), false);
+  assert.equal(shouldReconcileInitialSession({
+    event: 'TOKEN_REFRESHED',
+    incomingUserId: 'user-1',
+    currentUserId: null,
+    hasProfile: false,
+  }), false);
+});
+
+test('deferred INITIAL_SESSION does not duplicate a same-identity profile bootstrap', () => {
+  assert.equal(shouldRecoverDeferredInitialSession({
+    incomingUserId: 'user-1',
+    initialBootstrapUserId: 'user-1',
+  }), false);
+});
+
+test('deferred INITIAL_SESSION recovers null, failed, or changed bootstrap identity', () => {
+  assert.equal(shouldRecoverDeferredInitialSession({
+    incomingUserId: 'user-1',
+    initialBootstrapUserId: null,
+  }), true);
+  assert.equal(shouldRecoverDeferredInitialSession({
+    incomingUserId: 'user-1',
+    initialBootstrapUserId: undefined,
+  }), true);
+  assert.equal(shouldRecoverDeferredInitialSession({
+    incomingUserId: 'user-2',
+    initialBootstrapUserId: 'user-1',
+  }), true);
+  assert.equal(shouldRecoverDeferredInitialSession({
+    incomingUserId: null,
+    initialBootstrapUserId: null,
+  }), false);
+});
+
+test('transient null bootstrap is recoverable by one persisted INITIAL_SESSION hydration', async () => {
+  const bootstrapOrder: string[] = [];
+  await runFiniteAuthBootstrap<null>({
+    getSession: async () => null,
+    applySession: () => bootstrapOrder.push('bootstrap:null'),
+    loadProfile: async () => { bootstrapOrder.push('profile:null'); },
+    sessionTimeoutMs: 50,
+    profileTimeoutMs: 50,
+  });
+
+  assert.deepEqual(bootstrapOrder, ['bootstrap:null', 'profile:null']);
+  assert.equal(shouldReconcileInitialSession({
+    event: 'INITIAL_SESSION',
+    incomingUserId: 'restored-user',
+    currentUserId: null,
+    hasProfile: false,
+  }), true);
+
+  let profileReads = 0;
+  let hydrated = false;
+  await reconcileInitialSessionProfile({
+    loadProfile: async () => {
+      profileReads += 1;
+      hydrated = true;
+    },
+    hasProfile: () => hydrated,
+    isSessionCurrent: () => true,
+  });
+
+  assert.equal(profileReads, 1);
+  assert.equal(hydrated, true);
+  assert.equal(shouldReconcileInitialSession({
+    event: 'INITIAL_SESSION',
+    incomingUserId: 'restored-user',
+    currentUserId: 'restored-user',
+    hasProfile: true,
+  }), false);
+});
+
+test('initial session profile recovery retries once when the first hydration read is still empty', async () => {
+  let attempts = 0;
+  let hydrated = false;
+  await reconcileInitialSessionProfile({
+    loadProfile: async () => {
+      attempts += 1;
+      if (attempts === 2) hydrated = true;
+    },
+    hasProfile: () => hydrated,
+    isSessionCurrent: () => true,
+  });
+  assert.equal(attempts, 2);
+  assert.equal(hydrated, true);
+});
+
+test('initial session profile recovery does not retry after identity changes', async () => {
+  let attempts = 0;
+  await reconcileInitialSessionProfile({
+    loadProfile: async () => { attempts += 1; },
+    hasProfile: () => false,
+    isSessionCurrent: () => false,
+  });
+  assert.equal(attempts, 1);
 });

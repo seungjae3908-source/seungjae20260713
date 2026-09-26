@@ -22,6 +22,7 @@ on:
       - scripts/agent_hub_executor_report_hardening_v2.py
       - scripts/agent_hub_control_plane_v2.py
       - scripts/agent_hub_legacy_migration_v2.py
+      - scripts/agent_hub_rollover_v2.py
       - scripts/test_agent_hub_v2.py
       - scripts/test_agent_hub_executor_v2.py
       - scripts/test_agent_hub_hardening_v2.py
@@ -48,6 +49,7 @@ on:
       - scripts/agent_hub_executor_report_hardening_v2.py
       - scripts/agent_hub_control_plane_v2.py
       - scripts/agent_hub_legacy_migration_v2.py
+      - scripts/agent_hub_rollover_v2.py
       - scripts/test_agent_hub_v2.py
       - scripts/test_agent_hub_executor_v2.py
       - scripts/test_agent_hub_hardening_v2.py
@@ -92,6 +94,7 @@ jobs:
             scripts/agent_hub_executor_report_hardening_v2.py \
             scripts/agent_hub_control_plane_v2.py \
             scripts/agent_hub_legacy_migration_v2.py \
+            scripts/agent_hub_rollover_v2.py \
             scripts/test_agent_hub_v2.py \
             scripts/test_agent_hub_executor_v2.py \
             scripts/test_agent_hub_hardening_v2.py \
@@ -103,6 +106,7 @@ jobs:
           python3 scripts/agent_hub_executor_report_hardening_v2.py --self-test
           python3 scripts/agent_hub_control_plane_v2.py --self-test
           python3 scripts/agent_hub_legacy_migration_v2.py
+          python3 scripts/agent_hub_rollover_v2.py self-test
           python3 scripts/test_agent_hub_executor_v2.py
           python3 scripts/test_agent_hub_v2.py
           python3 scripts/test_agent_hub_hardening_v2.py
@@ -169,6 +173,11 @@ jobs:
           fetch-depth: 0
       - name: Reject tracked Gemini configuration
         run: test -z "$(git ls-files '.gemini/**')"
+      - name: Resolve canonical Central Hub
+        id: routing
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/agent_hub_rollover_v2.py resolve
       - name: Seal immutable Agent Hub control plane
         env:
           CONTROL_PLANE_DIR: ${{ runner.temp }}/agent-hub-control-plane
@@ -187,7 +196,7 @@ jobs:
           CONTROL_PLANE_SHA: ${{ github.sha }}
           PYTHONPATH: ${{ runner.temp }}/agent-hub-control-plane
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HUB_ISSUE_NUMBER: '62'
+          HUB_ISSUE_NUMBER: ${{ steps.routing.outputs.active_issue }}
         run: |
           python3 "$CONTROL_PLANE_DIR/agent_hub_control_plane_v2.py" verify --destination "$CONTROL_PLANE_DIR" --source-sha "$CONTROL_PLANE_SHA"
           python3 "$CONTROL_PLANE_DIR/agent_hub_executor_gate_hardening_v2.py"
@@ -434,7 +443,7 @@ jobs:
           CONTROL_PLANE_SHA: ${{ github.sha }}
           PYTHONPATH: ${{ runner.temp }}/agent-hub-control-plane
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HUB_ISSUE_NUMBER: '62'
+          HUB_ISSUE_NUMBER: ${{ steps.routing.outputs.active_issue }}
           COMMAND_ID: ${{ steps.prepare.outputs.command_id }}
           SOURCE_TASK_ID: ${{ steps.prepare.outputs.source_task_id }}
           TARGET_WORKER: ${{ steps.prepare.outputs.target_worker }}

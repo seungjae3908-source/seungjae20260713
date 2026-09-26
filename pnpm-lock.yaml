@@ -140,6 +140,9 @@ importers:
       thread-stream:
         specifier: 3.1.0
         version: 3.1.0
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
 
   mockup-sandbox:
     devDependencies:
@@ -334,7 +337,17 @@ importers:
 
   packages/db: {}
 
+  packages/external-research: {}
+
+  packages/member-access: {}
+
   packages/stock-grade: {}
+
+  packages/strategy-hypothesis:
+    dependencies:
+      '@workspace/external-research':
+        specifier: workspace:*
+        version: link:../external-research
 
   stock-analyzer:
     dependencies:

@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { hasCapability, type MemberTier } from '../../../../packages/member-access/src/index.js';
+import type { TelegramAlertInput, TelegramAlertResult } from '../../services/telegram-notification.service';
 import type { TradingOrder, TradingOrderEvent, TradingPlan } from '../../services/trade-automation.types';
 import type { UserBrokerTelegramRepository } from './user-broker-telegram.repository';
 import {
@@ -11,6 +12,7 @@ import {
 const LINK_TOKEN_TTL_MS = 10 * 60 * 1000;
 const MAX_DELIVERY_ATTEMPTS = 3;
 const MAX_RETRY_DELAY_MS = 15 * 60 * 1000;
+type PersonalAlertSender = (input: TelegramAlertInput) => Promise<TelegramAlertResult>;
 
 export function hashTelegramLinkToken(token: string): string { return createHash('sha256').update(token).digest('hex'); }
 export function maskBrokerAccount(value: string | null | undefined): string | null {
@@ -18,6 +20,27 @@ export function maskBrokerAccount(value: string | null | undefined): string | nu
   return normalized ? `****${normalized.slice(-4)}` : null;
 }
 function safeNumber(value: number | null | undefined): number | null { return value != null && Number.isFinite(value) ? value : null; }
+function metadataNumber(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function metadataText(value: unknown, maxLength = 160): string | null {
+  return typeof value === 'string' && value.trim() ? value.normalize('NFKC').trim().slice(0, maxLength) : null;
+}
+function metadataTextList(value: unknown, maxItems = 6): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => metadataText(item)).filter((item): item is string => Boolean(item)).slice(0, maxItems)
+    : [];
+}
+function actualSlippagePercent(plan: TradingPlan, order: TradingOrder): number | null {
+  const reference = safeNumber(plan.entryPrice ?? plan.limitPrice);
+  const fill = safeNumber(order.averageFillPrice);
+  if (reference == null || reference <= 0 || fill == null || fill <= 0) return null;
+  const adverseMove = plan.side === 'sell' || plan.side === 'short'
+    ? reference - fill
+    : fill - reference;
+  return Number(((adverseMove / reference) * 100).toFixed(4));
+}
 
 function executionType(transition: TradingOrderEvent): UserExecutionEventType | null {
   const reason = transition.reason.toUpperCase();
@@ -53,12 +76,29 @@ export function executionEventFromTradingOrder(
     remainingQuantity: safeNumber(order.remainingQuantity), realizedPnl: null, averageEntryPrice: null, averageExitPrice: null,
     occurredAt: transition.createdAt,
     metadata: {
-      orderState: transition.toState, reason: transition.reason, providerStatusCode: order.providerStatusCode ?? null,
+      orderState: transition.toState,
+      reason: transition.reason,
+      providerStatusCode: order.providerStatusCode ?? null,
       orderPlanVersion: order.approvedPlanVersion ?? plan.version ?? null,
-      approvedBy: order.userId, approvedAt: plan.approvedAt,
+      approvedBy: order.userId,
+      approvedAt: plan.approvedAt,
       approvalSource: executionMethod === 'AUTO_POLICY' ? 'AUTO_POLICY' : 'USER_UI',
-      accountMode: plan.accountMode, reduceOnly: plan.reduceOnly === true,
-      stopPrice: plan.stopPrice, targetPrice: plan.targetPrices?.[0] ?? null,
+      accountMode: plan.accountMode,
+      orderType: plan.orderType,
+      reduceOnly: plan.reduceOnly === true,
+      signalId: plan.signalId,
+      signalReasons: plan.signalReasons.slice(0, 8),
+      entryPrice: plan.entryPrice ?? plan.limitPrice ?? null,
+      entryZoneLow: plan.entryZoneLow ?? null,
+      entryZoneHigh: plan.entryZoneHigh ?? null,
+      stopPrice: plan.stopPrice,
+      targetPrices: plan.targetPrices.slice(0, 3),
+      leverage: plan.leverage ?? null,
+      marginMode: plan.marginMode ?? null,
+      estimatedSlippagePercent: plan.estimatedSlippagePercent ?? null,
+      actualSlippagePercent: actualSlippagePercent(plan, order),
+      feeAmount: order.feeAmount ?? null,
+      feeCurrency: order.feeCurrency ?? null,
     },
   };
 }
@@ -79,6 +119,20 @@ export function manualPortfolioEvent(input: {
 }
 
 function formatNumber(value: number | null): string { return value == null ? '-' : value.toLocaleString('ko-KR', { maximumFractionDigits: 8 }); }
+function signedPlanPercent(
+  entry: number | null,
+  price: number | null,
+  side: UserExecutionEvent['side'],
+): number | null {
+  if (entry == null || entry <= 0 || price == null || price <= 0) return null;
+  const descendingProfit = side === 'sell' || side === 'short';
+  const raw = descendingProfit ? ((entry - price) / entry) * 100 : ((price - entry) / entry) * 100;
+  return Number(raw.toFixed(2));
+}
+function formatSignedPercent(value: number | null): string {
+  if (value == null) return 'N/A';
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+}
 function title(event: UserExecutionEvent): string {
   switch (event.type) {
     case 'ORDER_SUBMITTED': return '🟦 주문 제출';
@@ -101,6 +155,51 @@ export function renderUserExecutionTelegramMessage(event: UserExecutionEvent): s
   if (event.maskedAccount) lines.push('', `계좌 ${event.maskedAccount}`);
   if (event.strategy) lines.push(`전략 ${event.strategy}`);
   if (event.remainingQuantity != null) lines.push(`잔여수량 ${formatNumber(event.remainingQuantity)}`);
+
+  const transitionReason = metadataText(event.metadata.reason);
+  const signalReasons = metadataTextList(event.metadata.signalReasons, 8);
+  const entryPrice = metadataNumber(event.metadata.entryPrice);
+  const entryZoneLow = metadataNumber(event.metadata.entryZoneLow);
+  const entryZoneHigh = metadataNumber(event.metadata.entryZoneHigh);
+  const stopPrice = metadataNumber(event.metadata.stopPrice);
+  const targets = Array.isArray(event.metadata.targetPrices)
+    ? event.metadata.targetPrices.map(metadataNumber).filter((value): value is number => value != null).slice(0, 3)
+    : [];
+  const feeAmount = metadataNumber(event.metadata.feeAmount);
+  const feeCurrency = metadataText(event.metadata.feeCurrency, 24);
+  const estimatedSlippage = metadataNumber(event.metadata.estimatedSlippagePercent);
+  const actualSlippage = metadataNumber(event.metadata.actualSlippagePercent);
+  const leverage = metadataNumber(event.metadata.leverage);
+  const marginMode = metadataText(event.metadata.marginMode, 24);
+
+  if (event.executionMethod === 'AUTO_POLICY') {
+    const planEntry = entryPrice ?? (
+      entryZoneLow != null && entryZoneHigh != null
+        ? (entryZoneLow + entryZoneHigh) / 2
+        : null
+    );
+    lines.push('', '[자동매매 체결 근거]');
+    lines.push(`신호/행동: ${event.side ? event.side.toUpperCase() : 'N/A'} · ${event.type}`);
+    if (signalReasons.length) signalReasons.forEach((reason) => lines.push(`• ${reason}`));
+    else lines.push('• 검증된 진입 근거 N/A');
+    if (transitionReason) lines.push(`상태 전환 이유: ${transitionReason}`);
+    if (entryPrice != null) lines.push(`기준 진입가: ${formatNumber(entryPrice)}`);
+    if (entryZoneLow != null && entryZoneHigh != null) lines.push(`진입구간: ${formatNumber(entryZoneLow)}~${formatNumber(entryZoneHigh)}`);
+    if (targets.length) lines.push(`익절 계획: ${targets.map((value, index) =>
+      `TP${index + 1} ${formatNumber(value)} (${formatSignedPercent(signedPlanPercent(planEntry, value, event.side))})`).join(' · ')}`);
+    if (stopPrice != null) lines.push(`손절/무효: ${formatNumber(stopPrice)} (${formatSignedPercent(signedPlanPercent(planEntry, stopPrice, event.side))})`);
+    if (leverage != null) lines.push(`레버리지: ${formatNumber(leverage)}x${marginMode ? ` · ${marginMode}` : ''}`);
+  } else if (transitionReason) {
+    lines.push('', `체결/상태 이유: ${transitionReason}`);
+  }
+
+  if (feeAmount != null || estimatedSlippage != null || actualSlippage != null) {
+    lines.push('', '[체결 비용/품질]');
+    if (feeAmount != null) lines.push(`수수료: ${formatNumber(feeAmount)}${feeCurrency ? ` ${feeCurrency}` : ''}`);
+    if (estimatedSlippage != null) lines.push(`예상 슬리피지: ${estimatedSlippage.toFixed(4)}%`);
+    if (actualSlippage != null) lines.push(`실제 슬리피지: ${actualSlippage.toFixed(4)}%`);
+  }
+
   if (event.type === 'POSITION_CLOSED') {
     if (event.averageEntryPrice != null) lines.push(`평균매수가 ${formatNumber(event.averageEntryPrice)}`);
     if (event.averageExitPrice != null) lines.push(`평균매도가 ${formatNumber(event.averageExitPrice)}`);
@@ -121,7 +220,13 @@ export class UserBrokerTelegramService {
     private readonly transport: TelegramTransport,
     private readonly portfolioSink: PortfolioSyncSink,
     private readonly botUsername: string | null = process.env.TELEGRAM_BOT_USERNAME?.trim() || null,
+    private readonly personalAlertSender?: PersonalAlertSender,
   ) {}
+
+  private async personalTelegramEligible(userId: string) {
+    const profile = await this.repository.getPersonalTelegramMemberProfile(userId);
+    return hasCapability(profile, 'canConnectPersonalTelegram');
+  }
 
   async createTelegramLink(userId: string, now = new Date()) {
     if (!userId) throw new Error('LOGIN_REQUIRED');
@@ -139,6 +244,7 @@ export class UserBrokerTelegramService {
     const now = input.now ?? new Date(); const timestamp = now.toISOString();
     const userId = await this.repository.consumeLinkToken(hashTelegramLinkToken(token), timestamp);
     if (!userId) throw new Error('TELEGRAM_LINK_EXPIRED_OR_USED');
+    if (!await this.personalTelegramEligible(userId)) throw new Error('TELEGRAM_MEMBER_INELIGIBLE');
     await this.repository.bindTelegramConnection({ userId, telegramChatId: chatId, telegramUserId, status: 'ACTIVE', connectedAt: timestamp, revokedAt: null, updatedAt: timestamp });
     return { userId, connected: true };
   }
@@ -148,7 +254,7 @@ export class UserBrokerTelegramService {
     const preferences = await this.repository.getPreferences(userId);
     const deliveries = await this.repository.listDeliveries(userId);
     return { telegram: { connected: connection?.status === 'ACTIVE', status: connection?.status ?? 'DISCONNECTED', connectedAt: connection?.connectedAt ?? null }, preferences,
-      deliveries: deliveries.map(({ userId: _userId, dedupeKey: _dedupeKey, ...delivery }) => delivery) };
+      deliveries: deliveries.map(({ userId: _userId, dedupeKey: _dedupeKey, payload: _payload, ...delivery }) => delivery) };
   }
   async savePreferences(userId: string, patch: Partial<NotificationPreferences>, now = new Date()) {
     const current = await this.repository.getPreferences(userId); const allowed = new Set<string>(NOTIFICATION_PREFERENCE_KEYS); const next = { ...current };
@@ -158,7 +264,7 @@ export class UserBrokerTelegramService {
     }
     await this.repository.savePreferences(userId, next, now.toISOString()); return next;
   }
-  async recordEvent(event: UserExecutionEvent, now = new Date(), membership: MemberTier = 'admin') {
+  async recordEvent(event: UserExecutionEvent, now = new Date(), membership: MemberTier = 'pending') {
     const inserted = await this.repository.insertExecutionEvent(event);
     if (!inserted) return { inserted: false, deliveryQueued: false };
     if (event.type !== 'MANUAL_PORTFOLIO_ENTRY') await this.portfolioSink.accept(event);
@@ -170,19 +276,95 @@ export class UserBrokerTelegramService {
     const connection = await this.repository.getTelegramConnection(event.userId);
     if (!connection || connection.status !== 'ACTIVE') return { inserted: true, deliveryQueued: false };
     const timestamp = now.toISOString();
-    const delivery: NotificationDelivery = { id: randomUUID(), userId: event.userId, eventId: event.id, dedupeKey: `${event.id}:${event.type}`,
-      state: 'PENDING', attempts: 0, nextRetryAt: null, lastErrorCode: null, createdAt: timestamp, updatedAt: timestamp };
+    const delivery: NotificationDelivery = {
+      id: randomUUID(), userId: event.userId, eventId: event.id, dedupeKey: `${event.id}:${event.type}`,
+      state: 'PENDING', attempts: 0, nextRetryAt: null, lastErrorCode: null, createdAt: timestamp, updatedAt: timestamp,
+      kind: 'EXECUTION_EVENT', payload: null,
+    };
     const deliveryQueued = await this.repository.enqueueDelivery(delivery);
     return { inserted: true, deliveryQueued, deliveryId: deliveryQueued ? delivery.id : null };
   }
   async processDelivery(userId: string, deliveryId: string, now = new Date()) {
     const timestamp = now.toISOString(); const claimed = await this.repository.claimDelivery(userId, deliveryId, timestamp);
     if (!claimed) return { processed: false, state: null as null };
-    const event = await this.repository.getExecutionEvent(userId, claimed.eventId);
     const connection = await this.repository.getTelegramConnection(userId);
-    if (!event || !connection || connection.status !== 'ACTIVE') {
+    if (!connection || connection.status !== 'ACTIVE') {
       const result = await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER', claimed.attempts, null,
-        !event ? 'EVENT_NOT_FOUND' : 'TELEGRAM_DISCONNECTED', timestamp);
+        'TELEGRAM_DISCONNECTED', timestamp);
+      return { processed: true, state: result?.state ?? 'DEAD_LETTER' };
+    }
+
+    let eligible: boolean;
+    try {
+      eligible = await this.personalTelegramEligible(userId);
+    } catch {
+      const attempt = claimed.attempts + 1;
+      const dead = attempt >= MAX_DELIVERY_ATTEMPTS;
+      const state = dead ? 'DEAD_LETTER' as const : 'RETRY_SCHEDULED' as const;
+      const result = await this.repository.finishDelivery(
+        userId,
+        deliveryId,
+        state,
+        attempt,
+        dead ? null : nextRetryAt(now, attempt),
+        'TELEGRAM_MEMBER_ELIGIBILITY_UNAVAILABLE',
+        timestamp,
+      );
+      return { processed: true, state: result?.state ?? state };
+    }
+    if (!eligible) {
+      const result = await this.repository.finishDelivery(
+        userId,
+        deliveryId,
+        'DEAD_LETTER',
+        claimed.attempts,
+        null,
+        'TELEGRAM_MEMBER_INELIGIBLE',
+        timestamp,
+      );
+      return { processed: true, state: result?.state ?? 'DEAD_LETTER' };
+    }
+
+    const kind = claimed.kind ?? 'EXECUTION_EVENT';
+    if (kind === 'PERSONAL_ALERT') {
+      const payload = claimed.payload;
+      if (!payload || payload.event.userId !== userId || !this.personalAlertSender) {
+        const result = await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER', claimed.attempts, null,
+          !payload || payload.event.userId !== userId ? 'PERSONAL_ALERT_PAYLOAD_INVALID' : 'PERSONAL_ALERT_SENDER_UNAVAILABLE', timestamp);
+        return { processed: true, state: result?.state ?? 'DEAD_LETTER' };
+      }
+      const attempt = claimed.attempts + 1;
+      let alertResult: TelegramAlertResult;
+      try {
+        alertResult = await this.personalAlertSender({
+          ...payload.alert,
+          destinationChatId: connection.telegramChatId,
+          duplicateWindowMs: 0,
+          cooldownMs: 0,
+        });
+      } catch {
+        alertResult = { ok: false, attempts: 0, skipped: 'DELIVERY_FAILED' };
+      }
+      if (alertResult.ok) {
+        await this.repository.finishDelivery(userId, deliveryId, 'SENT', attempt, null, null, timestamp);
+        return { processed: true, state: 'SENT' as const };
+      }
+      const dead = attempt >= MAX_DELIVERY_ATTEMPTS;
+      const state = dead ? 'DEAD_LETTER' as const : 'RETRY_SCHEDULED' as const;
+      await this.repository.finishDelivery(userId, deliveryId, state, attempt, dead ? null : nextRetryAt(now, attempt),
+        `TELEGRAM_${alertResult.skipped}`.slice(0, 120), timestamp);
+      return { processed: true, state };
+    }
+
+    if (!claimed.eventId) {
+      const result = await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER', claimed.attempts, null,
+        'EVENT_NOT_FOUND', timestamp);
+      return { processed: true, state: result?.state ?? 'DEAD_LETTER' };
+    }
+    const event = await this.repository.getExecutionEvent(userId, claimed.eventId);
+    if (!event) {
+      const result = await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER', claimed.attempts, null,
+        'EVENT_NOT_FOUND', timestamp);
       return { processed: true, state: result?.state ?? 'DEAD_LETTER' };
     }
     const attempt = claimed.attempts + 1;

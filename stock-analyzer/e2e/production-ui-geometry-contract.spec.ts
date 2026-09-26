@@ -16,6 +16,19 @@ test('Production UI loads the fixed-navigation geometry guard', () => {
   expect(css).toContain('height: calc(100dvh - var(--app-bottom-nav-reserve));');
 });
 
+test('desktop BottomNav stays in normal flow without upward relative displacement', () => {
+  const css = source('src/index.css');
+  const nav = source('src/components/bottom-nav.tsx');
+  const desktopNavRule = css.match(
+    /nav\[aria-label='주요 메뉴'\]\s*\{([\s\S]*?)\n\s*\}/,
+  )?.[1] ?? '';
+
+  expect(nav).toContain('className="relative z-40 w-full shrink-0');
+  expect(desktopNavRule).toContain('left: 50%;');
+  expect(desktopNavRule).toContain('transform: translateX(-50%);');
+  expect(desktopNavRule).not.toMatch(/\bbottom\s*:/);
+});
+
 test('AI Chart production controls keep at least 32px touch targets', () => {
   const css = source('public/production-ui-geometry.css');
   const chart = source('src/components/unified-analysis-chart.tsx');
@@ -27,4 +40,17 @@ test('AI Chart production controls keep at least 32px touch targets', () => {
   expect(css).toContain('min-width: 2rem;');
   expect(css.match(/min-height: 2rem;/g) ?? []).toHaveLength(2);
   expect(css).toContain('button[data-testid="load-multi-timeframe"]');
+});
+
+test('mobile technical workspace and orderbook controls reserve navigation geometry', () => {
+  const css = source('public/production-ui-geometry.css');
+  const workspace = source('src/pages/technical-workspace.tsx');
+  const orderbook = source('src/components/instrument-orderbook-dock.tsx');
+
+  expect(workspace).toContain('data-testid="technical-workspace"');
+  expect(css).toContain('[data-testid="technical-workspace"] > div:has(> [role="tabpanel"])');
+  expect(css).toContain('flex-direction: column;');
+  expect(orderbook).toContain('aria-label="읽기 전용 호가창 열기"');
+  expect(css).toContain('button[aria-label="읽기 전용 호가창 열기"]');
+  expect(css).toContain('+ 4.5rem');
 });

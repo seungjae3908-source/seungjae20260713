@@ -24,7 +24,7 @@ export type MemberChangePlan = {
   changes: {
     membership_level: MemberTier;
     is_active: boolean;
-    role: 'user' | 'admin';
+    role: 'pending' | 'associate' | 'full' | 'admin';
     status: 'pending' | 'approved' | 'suspended';
     approved_at: string | null;
     approved_by: string | null;
@@ -52,10 +52,65 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function errorText(cause: unknown) {
+  if (cause instanceof Error) return cause.message;
+  if (isObject(cause) && typeof cause.message === 'string') return cause.message;
+  return '';
+}
+
+export function classifyAtomicMemberChangeFailure(cause: unknown): MemberAdministrationError {
+  const message = errorText(cause);
+  if (message.includes('LAST_ACTIVE_ADMIN_PROTECTED')) {
+    return new MemberAdministrationError(
+      'LAST_ACTIVE_ADMIN_PROTECTED',
+      '마지막 활성 관리자의 등급을 내리거나 비활성화할 수 없습니다.',
+      409,
+    );
+  }
+  if (message.includes('MEMBER_STATE_CONFLICT')) {
+    return new MemberAdministrationError(
+      'MEMBER_STATE_CONFLICT',
+      '회원 상태가 다른 요청에 의해 변경되었습니다. 새 상태를 확인한 뒤 다시 시도하세요.',
+      409,
+    );
+  }
+  if (message.includes('MEMBER_NOT_FOUND')) {
+    return new MemberAdministrationError('MEMBER_NOT_FOUND', '회원을 찾을 수 없습니다.', 404);
+  }
+  if (message.includes('MEMBER_ADMIN_REQUIRED')) {
+    return new MemberAdministrationError('MEMBER_ADMIN_REQUIRED', '관리자 권한이 필요합니다.', 403);
+  }
+  if (message.includes('CHANGE_REASON_REQUIRED')) {
+    return new MemberAdministrationError('CHANGE_REASON_REQUIRED', '변경 사유를 3~500자로 입력하세요.', 400);
+  }
+  if (message.includes('INVALID_MEMBER_CHANGE')) {
+    return new MemberAdministrationError('INVALID_MEMBER_CHANGE', '회원 변경 요청을 확인하세요.', 400);
+  }
+  return new MemberAdministrationError(
+    'MEMBER_UPDATE_FAILED',
+    '회원 권한 변경을 원자적으로 저장하지 못했습니다.',
+    500,
+  );
+}
+
+function legacyStoredTier(profile: MemberAdministrationProfile): MemberTier {
+  if (profile.role === 'admin' || profile.role === 'master') return 'admin';
+  if (profile.role === 'associate') return 'associate';
+  if (profile.role === 'full' || profile.role === 'regular') return 'regular';
+  return 'pending';
+}
+
 function storedMemberTier(profile: MemberAdministrationProfile): MemberTier {
+  const status = typeof profile.status === 'string' ? profile.status : null;
+  // Only an already-approved member, or a deliberately suspended member being
+  // reactivated, may preserve a stored tier. Missing/rejected/revoked/pending/
+  // disabled rows must not regain a stale privileged tier through an active-state-only change.
+  if (status !== 'approved' && status !== 'suspended') return 'pending';
+
   if (typeof profile.membership_level === 'string' && MEMBER_TIERS.includes(profile.membership_level as MemberTier)) {
     return profile.membership_level as MemberTier;
   }
+  if (status === 'suspended') return legacyStoredTier(profile);
   return deriveMemberTier(profile);
 }
 
@@ -76,9 +131,17 @@ export function parseMemberChangeRequest(value: unknown): MemberChangeRequest {
   if ('role' in value || 'user_id' in value || 'userId' in value || 'actor_id' in value) {
     throw new MemberAdministrationError('CLIENT_AUTHORITY_FORBIDDEN', '권한 식별자는 서버가 결정합니다.');
   }
+  if (
+    'membershipLevel' in value
+    && (typeof value.membershipLevel !== 'string' || !MEMBER_TIERS.includes(value.membershipLevel as MemberTier))
+  ) {
+    throw new MemberAdministrationError('INVALID_MEMBER_CHANGE', '회원 등급 값을 확인하세요.');
+  }
+  if ('isActive' in value && typeof value.isActive !== 'boolean') {
+    throw new MemberAdministrationError('INVALID_MEMBER_CHANGE', '회원 활성 상태 값을 확인하세요.');
+  }
 
   const membershipLevel = typeof value.membershipLevel === 'string'
-    && MEMBER_TIERS.includes(value.membershipLevel as MemberTier)
     ? value.membershipLevel as MemberTier
     : undefined;
   const isActive = typeof value.isActive === 'boolean' ? value.isActive : undefined;
@@ -95,7 +158,22 @@ export function parseMemberChangeRequest(value: unknown): MemberChangeRequest {
 }
 
 export function isActiveAdmin(profile: MemberAdministrationProfile) {
-  return profile.is_active !== false && storedMemberTier(profile) === 'admin';
+  return profile.status === 'approved'
+    && profile.is_active === true
+    && storedMemberTier(profile) === 'admin';
+}
+
+function legacyRoleForTier(tier: MemberTier): 'pending' | 'associate' | 'full' | 'admin' {
+  switch (tier) {
+    case 'admin':
+      return 'admin';
+    case 'associate':
+      return 'associate';
+    case 'regular':
+      return 'full';
+    default:
+      return 'pending';
+  }
 }
 
 export function planMemberChange(
@@ -105,14 +183,14 @@ export function planMemberChange(
   activeAdminCount: number,
   now = new Date(),
 ): MemberChangePlan {
-  // Authorization treats inactive members as pending, but administration must
-  // preserve their stored tier so a reactivation does not silently demote them.
+  // Preserve stored tier only for approved/suspended members. Other non-approved
+  // states require an explicit membershipLevel change before they can be approved.
   const currentTier = storedMemberTier(current);
-  const currentActive = current.is_active !== false;
+  const currentActive = current.is_active === true;
   const nextTier = request.membershipLevel ?? currentTier;
   const nextActive = request.isActive ?? currentActive;
 
-  if (currentTier === 'admin' && currentActive && (nextTier !== 'admin' || !nextActive) && activeAdminCount <= 1) {
+  if (isActiveAdmin(current) && (nextTier !== 'admin' || !nextActive) && activeAdminCount <= 1) {
     throw new MemberAdministrationError(
       'LAST_ACTIVE_ADMIN_PROTECTED',
       '마지막 활성 관리자의 등급을 내리거나 비활성화할 수 없습니다.',
@@ -122,7 +200,7 @@ export function planMemberChange(
 
   const timestamp = now.toISOString();
   const status = !nextActive ? 'suspended' : nextTier === 'pending' ? 'pending' : 'approved';
-  const role = nextTier === 'admin' ? 'admin' : 'user';
+  const role = legacyRoleForTier(nextTier);
   const action = currentTier === 'pending' && nextTier === 'associate' && nextActive
     ? 'member.approve'
     : currentTier !== nextTier

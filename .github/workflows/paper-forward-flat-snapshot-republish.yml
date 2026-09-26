@@ -1,0 +1,287 @@
+name: Paper Forward Flat Snapshot Republish
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/paper-forward-flat-snapshot-republish.yml
+      - ops/run-paper-forward-flat-snapshot-republish.mjs
+      - market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  statuses: read
+
+concurrency:
+  group: paper-forward-flat-snapshot-republish-v1
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Verify flat snapshot republish contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check ops/run-paper-forward-flat-snapshot-republish.mjs
+          node --check market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js
+          node --test market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js
+          grep -F 'environment: production' .github/workflows/paper-forward-flat-snapshot-republish.yml >/dev/null
+          grep -F "startsWith(github.event.comment.body, '/run-paper-forward-flat-snapshot-republish ')" .github/workflows/paper-forward-flat-snapshot-republish.yml >/dev/null
+
+  gate:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-paper-forward-flat-snapshot-republish ')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      target_sha: ${{ steps.command.outputs.target_sha }}
+      staging_run_id: ${{ steps.staging.outputs.run_id }}
+      postgres_run_id: ${{ steps.postgres.outputs.run_id }}
+      production_run_id: ${{ steps.production.outputs.run_id }}
+      binding_run_id: ${{ steps.binding.outputs.run_id }}
+    steps:
+      - name: Parse exact owner republish command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const match = /^\/run-paper-forward-flat-snapshot-republish ([0-9a-f]{40})$/.exec(String(process.env.COMMENT_BODY ?? '').trim());
+          if (!match) process.exit(1);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `target_sha=${match[1]}\n`);
+          NODE
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require exact current main and Required CI 6/6
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const main = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: 'main' });
+            if (main.data.commit.sha !== target) { core.setFailed(`Republish target is stale: ${target} != ${main.data.commit.sha}`); return; }
+            const required = ['application-ci/verified','browser-ui/verified','database-rls/verified','security-integration/verified','ai-privacy/verified','futures-public-network-smoke/verified'];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, { owner: context.repo.owner, repo: context.repo.repo, ref: target, per_page: 100 });
+            const latest = new Map(); for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+            const selected = required.map((name) => latest.get(name));
+            if (selected.some((status) => status?.state !== 'success')) { core.setFailed('Required CI is not 6/6 SUCCESS.'); return; }
+            const runIds = new Set(selected.map((status) => /\/actions\/runs\/(\d+)/.exec(String(status?.target_url ?? ''))?.[1] ?? null));
+            if (runIds.size !== 1 || runIds.has(null)) { core.setFailed('Required statuses do not share exact Application CI provenance.'); return; }
+            const run = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: Number([...runIds][0]) });
+            if (run.data.head_sha !== target || run.data.status !== 'completed' || run.data.conclusion !== 'success') core.setFailed('Application CI provenance is not exact-success.');
+
+      - name: Require successful exact-SHA PostgreSQL Auth evidence
+        id: postgres
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, { owner: context.repo.owner, repo: context.repo.repo, head_sha: target, branch: 'main', event: 'issue_comment', status: 'completed', per_page: 100 });
+            for (const run of runs) {
+              if (run.name !== 'Staging PostgreSQL Auth Gate' || run.path !== '.github/workflows/staging-postgres-auth-gate.yml' || run.conclusion !== 'success') continue;
+              const artifacts = await github.rest.actions.listWorkflowRunArtifacts({ owner: context.repo.owner, repo: context.repo.repo, run_id: run.id, per_page: 100 });
+              if ((artifacts.data.artifacts ?? []).some((item) => item.name === `staging-postgres-auth-${target}` && item.expired !== true && item.workflow_run?.head_sha === target)) { core.setOutput('run_id', String(run.id)); return; }
+            }
+            core.setFailed(`No exact-SHA PostgreSQL Auth evidence exists for ${target}.`);
+
+      - name: Require successful release-ready exact-SHA Staging verdict
+        id: staging
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA; const name = `staging-verdict-${target}`;
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, { owner: context.repo.owner, repo: context.repo.repo, name, per_page: 100 });
+            for (const artifact of artifacts) {
+              if (artifact.expired || artifact.workflow_run?.head_sha !== target) continue;
+              const response = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: artifact.workflow_run.id });
+              const run = response.data;
+              if (run.event === 'workflow_dispatch' && run.head_branch === 'main' && run.head_sha === target && run.path === '.github/workflows/staging-readiness.yml' && run.status === 'completed' && run.conclusion === 'success') { core.setOutput('run_id', String(run.id)); return; }
+            }
+            core.setFailed(`No successful Staging verdict exists for ${target}.`);
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: staging-verdict-${{ steps.command.outputs.target_sha }}
+          path: staging-verdict
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.staging.outputs.run_id }}
+      - run: node api-server/scripts/verify-staging-verdict.mjs staging-verdict/staging-verdict.json
+
+      - name: Require successful official Production Deploy for target
+        id: production
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, { owner: context.repo.owner, repo: context.repo.repo, head_sha: target, branch: 'main', event: 'workflow_dispatch', status: 'completed', per_page: 100 });
+            const accepted = runs.filter((run) => run.name === 'Production Deploy' && run.path === '.github/workflows/production-deploy.yml' && run.conclusion === 'success').sort((a,b) => Date.parse(b.updated_at)-Date.parse(a.updated_at))[0];
+            if (!accepted) { core.setFailed(`No successful official Production Deploy exists for ${target}.`); return; }
+            core.setOutput('run_id', String(accepted.id));
+
+      - name: Require successful exact-target publisher binding
+        id: binding
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA; const name = `paper-forward-publisher-binding-${target}`;
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, { owner: context.repo.owner, repo: context.repo.repo, name, per_page: 100 });
+            for (const artifact of artifacts) {
+              if (artifact.expired || artifact.workflow_run?.head_sha !== target) continue;
+              const response = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: artifact.workflow_run.id });
+              const run = response.data;
+              if (run.name === 'Paper Forward Publisher Binding Preparation' && run.path === '.github/workflows/paper-forward-publisher-binding-preparation.yml' && run.event === 'issue_comment' && run.conclusion === 'success') { core.setOutput('run_id', String(run.id)); return; }
+            }
+            core.setFailed(`No exact-target publisher binding exists for ${target}.`);
+
+  execute:
+    if: github.event_name == 'issue_comment'
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: production
+    env:
+      TARGET_SHA: ${{ needs.gate.outputs.target_sha }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      PUBLISHER_ACCOUNT_ID_SHA256: ${{ secrets.PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256 }}
+      PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+      PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+      EVIDENCE_DIR: ${{ github.workspace }}/paper-forward-flat-republish-evidence
+    steps:
+      - name: Revalidate current main after protected Production approval
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const main = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: 'main' });
+            if (main.data.commit.sha !== process.env.TARGET_SHA) core.setFailed(`Republish target became stale: ${process.env.TARGET_SHA} != ${main.data.commit.sha}`);
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Configure protected Production SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"; test -n "$SSH_USER"; test -n "$SSH_PRIVATE_KEY"
+          [[ "$PUBLISHER_ACCOUNT_ID_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test -n "$PRODUCTION_QA_LOGIN"; test -n "$PRODUCTION_QA_PASSWORD"
+          umask 077; mkdir -p ~/.ssh "$EVIDENCE_DIR"; printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts; else ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts; fi
+      - name: Republish exact flat Paper state with metadata-only freshness refresh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          local_env="$(mktemp)"; remote_env="/tmp/paper-flat-republish-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.env"; evidence="$EVIDENCE_DIR/flat-republish.json"
+          remote=(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST")
+          cleanup(){ rm -f "$local_env"; "${remote[@]}" "rm -f -- $(printf '%q' "$remote_env")" >/dev/null 2>&1 || true; }; trap cleanup EXIT
+          {
+            printf 'export TARGET_SHA=%q\n' "$TARGET_SHA"
+            printf 'export PUBLISHER_ACCOUNT_ID_SHA256=%q\n' "$PUBLISHER_ACCOUNT_ID_SHA256"
+            printf 'export PRODUCTION_QA_LOGIN=%q\n' "$PRODUCTION_QA_LOGIN"
+            printf 'export PRODUCTION_QA_PASSWORD=%q\n' "$PRODUCTION_QA_PASSWORD"
+            printf 'export PAPER_FORWARD_STATE_ROOT=%q\n' '/opt/stock-app-data/paper-forward-v1'
+            printf 'export LIVE_DIR=%q\n' '/opt/stock-app'
+            printf 'export PM2_NAME=%q\n' 'stock-app'
+            printf 'export LIVE_PORT=%q\n' '8080'
+          } > "$local_env"
+          chmod 600 "$local_env"
+          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$local_env" "$SSH_USER@$SSH_HOST:$remote_env"
+          "${remote[@]}" "chmod 600 -- $(printf '%q' "$remote_env")"
+          remote_command="$(printf 'set -Eeuo pipefail; source %q; PAPER_FLAT_REPUBLISH_EXECUTE=1 node --input-type=module -' "$remote_env")"
+          "${remote[@]}" "$remote_command" < ops/run-paper-forward-flat-snapshot-republish.mjs > "$evidence"
+          test -s "$evidence"
+      - name: Verify sanitized metadata-only republish evidence
+        shell: bash
+        run: |
+          node --input-type=module - "$EVIDENCE_DIR/flat-republish.json" "$TARGET_SHA" <<'NODE'
+          import fs from 'node:fs';
+          const [path,target] = process.argv.slice(2); const v = JSON.parse(fs.readFileSync(path,'utf8'));
+          const ok = v?.schemaVersion === 'paper-forward-flat-snapshot-republish-v1' && v?.status === 'FLAT_REPUBLISHED'
+            && v?.targetSha === target && v?.sourceShaAfter === target && v?.economicStatePreserved === true
+            && v?.freshnessMetadataMutation === 1 && v?.paperAccountingMutation === 0
+            && v?.openPositionCountBefore === 0 && v?.openPositionCountAfter === 0
+            && v?.pendingOrderCountBefore === 0 && v?.pendingOrderCountAfter === 0
+            && v?.usedMarginZero === true && v?.unrealizedPnlZero === true && v?.paperStateTransport === 'PUBLISHED'
+            && v?.scheduleMutation === 0 && v?.productionAppMutation === 0 && v?.productionDbMutation === 0
+            && v?.realFinancialMutation === 0 && v?.privateBrokerExchangeApi === 0 && v?.realOrder === 0
+            && v?.realCancel === 0 && v?.realAmend === 0 && v?.realTransfer === 0 && v?.realWithdrawal === 0
+            && v?.liveTrading === false && v?.executionAuthority === 'NONE'
+            && v?.naturalCycleCredit === 0 && v?.naturalSampleCredit === 0 && v?.naturalSettlementCredit === 0
+            && v?.sensitiveValuesEmitted === false;
+          if (!ok) process.exit(1);
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paper-forward-flat-republish-${{ env.TARGET_SHA }}
+          path: ${{ env.EVIDENCE_DIR }}
+          if-no-files-found: error
+          retention-days: 30
+      - name: Post sanitized terminal evidence to Release Control
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, body: [
+              '[PAPER_FORWARD_FLAT_SNAPSHOT_REPUBLISHED]',
+              `target_sha: ${process.env.TARGET_SHA}`,
+              'status: FLAT_REPUBLISHED',
+              'economic_state_preserved: true',
+              'freshness_metadata_mutation: 1',
+              'paper_accounting_mutation: 0',
+              'open_positions: 0',
+              'pending_orders: 0',
+              'schedule_mutation: 0',
+              'production_app_mutation: 0',
+              'production_db_mutation: 0',
+              'real_financial_mutation: 0',
+              'private_api: 0',
+              'real_order: 0',
+              'natural_cycle_credit: 0',
+              'natural_sample_credit: 0',
+              'natural_settlement_credit: 0',
+            ].join('\n') });

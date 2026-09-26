@@ -12,6 +12,7 @@ import {
 } from './scanner-strategy-profile.service';
 import {
   strategyParameterHash,
+  strategyCandidateId,
   StrategyPromotionService,
   type StrategyDirection,
   type StrategyPromotionRecord,
@@ -20,6 +21,7 @@ import {
 export type ScannerCanonicalPaperStyle = 'SCALPING' | 'SWING' | 'MID_LONG';
 
 export type ScannerCanonicalPaperCandidate = Readonly<{
+  candidateId: string;
   signal: Readonly<{
     signalId: string;
     market: ScannerProfileMarket;
@@ -33,11 +35,15 @@ export type ScannerCanonicalPaperCandidate = Readonly<{
     direction: StrategyDirection;
     signalDirection: StrategyDirection;
     strategyIdentity: Readonly<{
+      candidateId: string;
+      strategyFamily: string;
       strategyId: string;
       strategyVersion: string;
       parameterHash: string;
+      parameterDigest: string;
       researchCodeSha: string;
       costPolicyVersion: string;
+      accountMode: 'PAPER';
     }>;
   }>;
   executionAuthority: 'NONE';
@@ -210,7 +216,9 @@ export function resolveScannerCanonicalPaperIdentity(input: {
   }
 
   const identity = promotion.record.identity;
+  const candidateId = strategyCandidateId(identity);
   const paperCandidate: ScannerCanonicalPaperCandidate = Object.freeze({
+    candidateId,
     signal: Object.freeze({
       signalId: input.card.signalId,
       market: input.market,
@@ -224,11 +232,15 @@ export function resolveScannerCanonicalPaperIdentity(input: {
       direction,
       signalDirection: direction,
       strategyIdentity: Object.freeze({
+        candidateId,
+        strategyFamily: identity.strategyFamily,
         strategyId: identity.strategyId,
         strategyVersion: identity.strategyVersion,
         parameterHash: identity.parameterHash,
+        parameterDigest: identity.parameterHash,
         researchCodeSha: identity.researchCodeSha,
         costPolicyVersion: identity.costPolicyVersion,
+        accountMode: 'PAPER',
       }),
     }),
     executionAuthority: 'NONE',

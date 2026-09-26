@@ -13,7 +13,8 @@ export type AiChartStrategyMode = 'SCALPING' | 'SWING' | 'MID_LONG';
 export type AiChartMarket = 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES';
 export type AiChartSignalSide = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'NO_TRADE' | 'UNKNOWN' | 'WAIT';
 export type AiChartSignalLifecycle = 'ACTIVE' | 'WEAKENED' | 'INVALIDATED' | 'EXPIRED';
-export type AiChartDataQuality = 'LIVE' | 'DELAYED' | 'STALE' | 'PARTIAL' | 'UNAVAILABLE';
+export type AiChartDataQuality = 'FRESH' | 'DELAYED' | 'STALE' | 'PARTIAL' | 'UNAVAILABLE';
+export type AiChartTransportMode = 'LIVE_STREAM' | 'FALLBACK_POLLING' | 'POLLING_PAUSED' | 'DISCONNECTED' | 'RECOVERING';
 export type AiChartEvidenceState = 'READY' | 'INSUFFICIENT_DATA';
 export type AiChartTrend = 'bullish' | 'bearish' | 'mixed' | 'insufficient';
 
@@ -196,7 +197,7 @@ export function defaultStrategyMode(timeframe: UnifiedChartTimeframe): AiChartSt
 }
 
 export function dataQualityFromStatus(status: UnifiedChartDataStatus): AiChartDataQuality {
-  if (status === 'ok') return 'LIVE';
+  if (status === 'ok') return 'FRESH';
   if (status === 'delayed') return 'DELAYED';
   if (status === 'stale') return 'STALE';
   if (status === 'insufficient') return 'PARTIAL';
@@ -252,17 +253,18 @@ export function buildTechnicalTimeframeEvidence(
   const scannerSide = actionSide(input.scannerAction, input.market);
   const scannerScore = normalizeScore(input.scannerConfidence);
   const scannerReasons = (input.scannerReasons ?? []).filter(Boolean).slice(0, 8);
+  const scannerQualityBlocked = quality === 'UNAVAILABLE' || quality === 'STALE' || quality === 'PARTIAL';
 
-  if (scannerSide && scannerSide !== 'WAIT' && scannerScore != null && quality !== 'UNAVAILABLE') {
+  if (scannerSide && scannerSide !== 'WAIT' && scannerScore != null && !scannerQualityBlocked) {
     return {
       timeframe: input.timeframe,
       state: 'READY',
-      side: quality === 'STALE' ? 'WAIT' : scannerSide,
-      score: quality === 'STALE' ? null : scannerScore,
+      side: scannerSide,
+      score: scannerScore,
       quality,
       positiveFactors: scannerSide === 'BUY' || scannerSide === 'LONG' ? scannerReasons : [],
       negativeFactors: scannerSide === 'SELL' || scannerSide === 'SHORT' ? scannerReasons : [],
-      riskFactors: quality === 'STALE' ? ['오래된 데이터이므로 Scanner 방향을 활성 판단으로 사용하지 않음'] : [],
+      riskFactors: quality === 'DELAYED' ? ['시세 지연 상태'] : [],
       reasonCodes: ['SCANNER_CONTEXT'],
       source: 'SCANNER',
     };
@@ -272,6 +274,7 @@ export function buildTechnicalTimeframeEvidence(
   if (
     quality === 'UNAVAILABLE'
     || quality === 'STALE'
+    || quality === 'PARTIAL'
     || input.candleCount < profile.minCandles
     || input.trend === 'insufficient'
     || finite(input.close) == null
@@ -289,7 +292,9 @@ export function buildTechnicalTimeframeEvidence(
           ? '데이터가 오래되어 신규 방향 판단을 보류'
           : quality === 'UNAVAILABLE'
             ? '시장 데이터 사용 불가'
-            : `근거 계산에 필요한 캔들 부족 (${input.candleCount}/${profile.minCandles})`,
+            : quality === 'PARTIAL'
+              ? '일부 데이터만 사용 가능하여 방향 판단을 보류'
+              : `근거 계산에 필요한 캔들 부족 (${input.candleCount}/${profile.minCandles})`,
       ],
       reasonCodes: ['INSUFFICIENT_DATA'],
       source: 'NONE',
@@ -347,7 +352,6 @@ export function buildTechnicalTimeframeEvidence(
     }
   }
   if (quality === 'DELAYED') riskFactors.push('시세 지연 상태');
-  if (quality === 'PARTIAL') riskFactors.push('일부 데이터만 사용 가능');
 
   const availableWeight = scoreParts.reduce((sum, part) => sum + part.weight, 0);
   if (scoreParts.length < 3 || availableWeight <= 0) {

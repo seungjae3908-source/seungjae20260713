@@ -770,7 +770,7 @@ function analyze(
       ? ['upbit-public-market', 'upbit-public-ticker', 'upbit-public-candles', 'upbit-public-orderbook']
       : ['bitget-public-ticker', 'bitget-public-candles'],
     observedAt,
-    expiresAt: expiry(request.timeframe, now),
+    expiresAt: expiry(request.timeframe, observedTimestamp),
     strongSignalEligible,
     warnings,
   };
@@ -867,7 +867,15 @@ export function createCryptoSignalScannerService(
           : new CryptoScannerProviderError(error instanceof Error ? error.message : 'CRYPTO_UNIVERSE_UNAVAILABLE');
       }
 
-      const batchSize = Math.max(5, Math.min(MAX_BATCH_SIZE, Math.floor(request.batchSize) || 24));
+      const requestedBatchSize = Math.floor(request.batchSize) || 24;
+      const forwardPublicSpot = request.market === 'spot'
+        && request.memberId === 'forward-observer-public-only';
+      // The Forward 60m Spot lane loads a primary candle series plus a context
+      // candle series per symbol. Keep that public-only cycle at five symbols so
+      // it performs at most ten Upbit candle-group requests before advancing the
+      // cursor, without relaxing provider timeouts or Forward admission gates.
+      const effectiveMaxBatchSize = forwardPublicSpot ? 5 : MAX_BATCH_SIZE;
+      const batchSize = Math.max(5, Math.min(effectiveMaxBatchSize, requestedBatchSize));
       const cursor = Math.max(0, Math.min(universe.rows.length, Math.floor(request.cursor) || 0));
       const batch = universe.rows.slice(cursor, cursor + batchSize);
       const nextCursor = cursor + batch.length < universe.rows.length ? cursor + batch.length : null;
@@ -905,6 +913,13 @@ export function createCryptoSignalScannerService(
           itemTimeoutMs: ITEM_TIMEOUT_MS,
           signal: request.signal,
           now: providers.now,
+          admission: {
+            identity: {
+              provider: 'crypto-scanner',
+              domain: request.market,
+              operationClass: 'asset-scan',
+            },
+          },
         },
       );
       if (request.signal?.aborted || work.aborted) throw request.signal?.reason ?? new Error('CRYPTO_SCAN_ABORTED');

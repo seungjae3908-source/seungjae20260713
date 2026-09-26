@@ -34,6 +34,7 @@ export type ChartCandleNormalizationResult = {
   candles: NormalizedChartCandle[];
   droppedRows: number;
   duplicateRows: number;
+  futureRows: number;
   discontinuities: ChartCandleDiscontinuity[];
   warnings: string[];
 };
@@ -130,16 +131,30 @@ function explicitClosed(row: RawCandle): boolean | null {
   return null;
 }
 
+function providerClock(value: unknown, defaultOffset: 'Z' | '+09:00'): string | null {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  if (/(?:Z|[+-]\d{2}:?\d{2})$/i.test(text)) return text;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?$/.test(text)) {
+    return `${text}${defaultOffset}`;
+  }
+  return text;
+}
+
 function rawTimestamp(row: RawCandle): unknown {
+  const upbitUtc = providerClock(row.candle_date_time_utc, 'Z');
+  if (upbitUtc) return upbitUtc;
+  const upbitKst = providerClock(row.candle_date_time_kst, '+09:00');
+  if (upbitKst) return upbitKst;
   return row.time ?? row.date ?? row.datetime ?? row.timestamp ?? row.dt;
 }
 
 function normalizeRow(row: RawCandle): Omit<NormalizedChartCandle, 'isClosed' | 'closeStateSource'> | null {
-  const close = finite(row.close ?? row.closePrice ?? row.cur_prc ?? row.currentPrice ?? row.price);
-  const open = finite(row.open ?? row.openPrice ?? row.open_prc);
-  const high = finite(row.high ?? row.highPrice ?? row.high_prc);
-  const low = finite(row.low ?? row.lowPrice ?? row.low_prc);
-  const volume = finite(row.volume ?? row.acc_trde_qty ?? row.tradeVolume ?? row.tradingVolume ?? 0);
+  const close = finite(row.close ?? row.closePrice ?? row.cur_prc ?? row.currentPrice ?? row.price ?? row.trade_price);
+  const open = finite(row.open ?? row.openPrice ?? row.open_prc ?? row.opening_price);
+  const high = finite(row.high ?? row.highPrice ?? row.high_prc ?? row.high_price);
+  const low = finite(row.low ?? row.lowPrice ?? row.low_prc ?? row.low_price);
+  const volume = finite(row.volume ?? row.acc_trde_qty ?? row.tradeVolume ?? row.tradingVolume ?? row.candle_acc_trade_volume);
   const sourceTime = String(rawTimestamp(row) ?? '').trim();
   const time = parseChartCandleTime(sourceTime);
 
@@ -186,11 +201,17 @@ export function normalizeChartCandles(
 ): ChartCandleNormalizationResult {
   const accepted: Array<{ normalized: Omit<NormalizedChartCandle, 'isClosed' | 'closeStateSource'>; raw: RawCandle }> = [];
   let droppedRows = 0;
+  let futureRows = 0;
 
   for (const row of rows) {
     const normalized = normalizeRow(row);
     if (!normalized) {
       droppedRows += 1;
+      continue;
+    }
+    if (!Number.isFinite(nowSeconds) || normalized.time > nowSeconds) {
+      droppedRows += 1;
+      futureRows += 1;
       continue;
     }
     accepted.push({ normalized, raw: row });
@@ -232,8 +253,9 @@ export function normalizeChartCandles(
   const warnings: string[] = [];
   if (droppedRows) warnings.push(`유효하지 않은 캔들 ${droppedRows}개 제외`);
   if (duplicateRows) warnings.push(`중복 시각 캔들 ${duplicateRows}개 병합`);
+  if (futureRows) warnings.push(`미래 시각 캔들 ${futureRows}개 제외`);
   if (discontinuities.length) warnings.push(`시간 불연속 구간 ${discontinuities.length}개 감지`);
   if (!candles.length) warnings.push('사용 가능한 실제 캔들이 없음');
 
-  return { candles, droppedRows, duplicateRows, discontinuities, warnings };
+  return { candles, droppedRows, duplicateRows, futureRows, discontinuities, warnings };
 }

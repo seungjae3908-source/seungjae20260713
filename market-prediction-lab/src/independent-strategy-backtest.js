@@ -126,7 +126,7 @@ function positionSize({ equity, entryPrice, stopPrice, riskModel }) {
   return roundQuantity(Math.min(quantityByRisk, quantityByCapital), riskModel.quantityStep);
 }
 
-function exitForCandle(position, candle) {
+function exitForCandle(position, candle, currentIndex) {
   if (position.side === "long") {
     if (candle.open <= position.stopPrice) return { price: candle.open, reason: "stop_loss_gap" };
     if (candle.open >= position.targetPrice) return { price: position.targetPrice, reason: "take_profit" };
@@ -135,15 +135,18 @@ function exitForCandle(position, candle) {
     if (stopHit && targetHit) return { price: position.stopPrice, reason: "stop_loss_same_bar" };
     if (stopHit) return { price: position.stopPrice, reason: "stop_loss" };
     if (targetHit) return { price: position.targetPrice, reason: "take_profit" };
-    return null;
+  } else {
+    if (candle.open >= position.stopPrice) return { price: candle.open, reason: "stop_loss_gap" };
+    if (candle.open <= position.targetPrice) return { price: position.targetPrice, reason: "take_profit" };
+    const stopHit = candle.high >= position.stopPrice;
+    const targetHit = candle.low <= position.targetPrice;
+    if (stopHit && targetHit) return { price: position.stopPrice, reason: "stop_loss_same_bar" };
+    if (stopHit) return { price: position.stopPrice, reason: "stop_loss" };
+    if (targetHit) return { price: position.targetPrice, reason: "take_profit" };
   }
-  if (candle.open >= position.stopPrice) return { price: candle.open, reason: "stop_loss_gap" };
-  if (candle.open <= position.targetPrice) return { price: position.targetPrice, reason: "take_profit" };
-  const stopHit = candle.high >= position.stopPrice;
-  const targetHit = candle.low <= position.targetPrice;
-  if (stopHit && targetHit) return { price: position.stopPrice, reason: "stop_loss_same_bar" };
-  if (stopHit) return { price: position.stopPrice, reason: "stop_loss" };
-  if (targetHit) return { price: position.targetPrice, reason: "take_profit" };
+  if (position.timeBars !== null && currentIndex - position.entryIndex + 1 >= position.timeBars) {
+    return { price: candle.close, reason: "time_exit" };
+  }
   return null;
 }
 
@@ -266,9 +269,21 @@ function runIndependentSignalBacktestCore({
   const atrPeriod = parameters?.atrPeriod ?? 14;
   const stopAtrMultiple = parameters?.stopAtrMultiple ?? 1.5;
   const targetRiskMultiple = parameters?.targetRiskMultiple ?? 2;
+  const targetDistance = parameters?.targetDistance ?? null;
+  const timeBars = parameters?.timeBars ?? null;
+  const explicitTargetRiskMultiple = parameters?.targetRiskMultiple !== undefined;
   if (!Number.isInteger(atrPeriod) || atrPeriod < 2) throw new ResearchContractError("INVALID_ATR_PERIOD", "atrPeriod must be integer >= 2");
   positive(stopAtrMultiple, "parameters.stopAtrMultiple");
   positive(targetRiskMultiple, "parameters.targetRiskMultiple");
+  if (targetDistance !== null) {
+    positive(targetDistance, "parameters.targetDistance");
+    if (targetDistance > 1) throw new ResearchContractError("INVALID_TARGET_DISTANCE", "targetDistance must be <= 1", { targetDistance });
+    if (explicitTargetRiskMultiple) throw new ResearchContractError("AMBIGUOUS_TARGET_MODEL", "targetDistance and targetRiskMultiple cannot both be explicit");
+  }
+  if (timeBars !== null && (!Number.isSafeInteger(timeBars) || timeBars < 1)) {
+    throw new ResearchContractError("INVALID_TIME_BARS", "timeBars must be an integer >= 1", { timeBars });
+  }
+  const formulaExitMode = targetDistance !== null || timeBars !== null;
   const riskModel = normalizeRiskModel(market, backtestInput.riskModel ?? {});
   const costModel = normalizeCostModel(backtestInput.costModel ?? {});
   const fundingRates = normalizeFunding(backtestInput.fundingRates ?? []);
@@ -285,7 +300,7 @@ function runIndependentSignalBacktestCore({
   for (let index = 1; index < candles.length; index += 1) {
     const candle = candles[index];
     if (position) {
-      const exit = exitForCandle(position, candle);
+      const exit = exitForCandle(position, candle, index);
       if (exit) {
         const trade = settle({ position, exit, exitCandle: candle, exitIndex: index, candles, costModel, fundingRates, equity });
         trades.push(trade);
@@ -306,7 +321,9 @@ function runIndependentSignalBacktestCore({
     const entryPrice = entryCandle.open;
     const stopDistance = atrNow * stopAtrMultiple;
     const stopPrice = side === "long" ? entryPrice - stopDistance : entryPrice + stopDistance;
-    const targetPrice = side === "long" ? entryPrice + stopDistance * targetRiskMultiple : entryPrice - stopDistance * targetRiskMultiple;
+    const targetPrice = targetDistance === null
+      ? (side === "long" ? entryPrice + stopDistance * targetRiskMultiple : entryPrice - stopDistance * targetRiskMultiple)
+      : (side === "long" ? entryPrice * (1 + targetDistance) : entryPrice * (1 - targetDistance));
     if (!(stopPrice > 0 && targetPrice > 0)) continue;
     const quantity = positionSize({ equity, entryPrice, stopPrice, riskModel });
     if (!(quantity > 0)) continue;
@@ -324,6 +341,7 @@ function runIndependentSignalBacktestCore({
       entryPrice,
       stopPrice,
       targetPrice,
+      timeBars,
       quantity,
       leverage: riskModel.leverage,
       riskBudget: equity * riskModel.riskPerTrade,
@@ -354,6 +372,34 @@ function runIndependentSignalBacktestCore({
   const orderedTrades = Object.freeze([...trades].sort((a, b) => a.exitTime - b.exitTime || a.id.localeCompare(b.id)));
   const performance = summarizeResearchPerformance(orderedTrades, { initialCapital });
   const overall = performance.overall;
+  const resolvedParameters = formulaExitMode
+    ? Object.freeze({
+      atrPeriod,
+      stopAtrMultiple,
+      ...(targetDistance === null ? { targetRiskMultiple } : { targetDistance }),
+      ...(timeBars === null ? {} : { timeBars }),
+    })
+    : Object.freeze({ atrPeriod, stopAtrMultiple, targetRiskMultiple });
+  const legacySafeguards = {
+    signalUsesClosedCandle: true,
+    entryUsesNextCandleOpen: true,
+    stopFirstOnAmbiguousBar: true,
+    executionUsesSharedCalculateExecutionAwareTrade: true,
+    fundingIncludedForFutures: market === "CRYPTO_FUTURES",
+    finalHoldoutUsedForSelection: false,
+    finalHoldoutEvaluation: normalizedPeriod.finalHoldoutEvaluation,
+    selectionAllowed: normalizedPeriod.selectionAllowed,
+    orderSubmitted: false,
+    privateAccountRequestAllowed: false,
+  };
+  const safeguards = formulaExitMode
+    ? Object.freeze({
+      ...legacySafeguards,
+      priceFractionTargetUsed: targetDistance !== null,
+      timeExitUsed: timeBars !== null,
+      stopTargetBeforeTimeExit: true,
+    })
+    : Object.freeze(legacySafeguards);
   return Object.freeze({
     ok: true,
     mode: "backtest-only",
@@ -371,24 +417,13 @@ function runIndependentSignalBacktestCore({
     maximumDrawdownPercent: overall.maximumDrawdownPercent * 100,
     expectancy: overall.expectancy,
     totalTrades: overall.sampleCount,
-    parameters: Object.freeze({ atrPeriod, stopAtrMultiple, targetRiskMultiple }),
+    parameters: resolvedParameters,
     riskModel,
     costModel,
     period: normalizedPeriod,
     performance,
     trades: orderedTrades,
-    safeguards: Object.freeze({
-      signalUsesClosedCandle: true,
-      entryUsesNextCandleOpen: true,
-      stopFirstOnAmbiguousBar: true,
-      executionUsesSharedCalculateExecutionAwareTrade: true,
-      fundingIncludedForFutures: market === "CRYPTO_FUTURES",
-      finalHoldoutUsedForSelection: false,
-      finalHoldoutEvaluation: normalizedPeriod.finalHoldoutEvaluation,
-      selectionAllowed: normalizedPeriod.selectionAllowed,
-      orderSubmitted: false,
-      privateAccountRequestAllowed: false,
-    }),
+    safeguards,
   });
 }
 

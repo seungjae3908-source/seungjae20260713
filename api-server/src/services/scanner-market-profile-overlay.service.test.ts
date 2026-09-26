@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { Candle } from '../sample/types';
 import { applyScannerMarketProfile } from './scanner-market-profile-overlay.service';
 import type { ScannerResponse, ScannerSignalCard } from './scanner-signal.types';
-import { StrategyPromotionService } from './strategy-promotion.service';
+import { StrategyPromotionService, strategyCandidateId } from './strategy-promotion.service';
 import {
   attachScannerCanonicalPaperIdentity,
   resolveScannerCanonicalPaperIdentity,
@@ -254,16 +254,21 @@ test('canonical Paper identity forwards exact KR SWING Promotion identity and co
   });
   assert.deepEqual(result.blockers, []);
   assert.ok(result.paperCandidate);
+  assert.equal(result.paperCandidate.candidateId, strategyCandidateId(source.identity));
   assert.equal(result.paperCandidate.signal.style, 'SWING');
   assert.equal(result.paperCandidate.signal.timeframe, '60m');
   assert.equal(result.paperCandidate.signal.horizon, 4);
   assert.equal(result.paperCandidate.signal.direction, 'BUY');
   assert.deepEqual(result.paperCandidate.signal.strategyIdentity, {
+    candidateId: strategyCandidateId(source.identity),
+    strategyFamily: source.identity.strategyFamily,
     strategyId: source.identity.strategyId,
     strategyVersion: source.identity.strategyVersion,
     parameterHash: source.identity.parameterHash,
+    parameterDigest: source.identity.parameterHash,
     researchCodeSha: source.identity.researchCodeSha,
     costPolicyVersion: source.identity.costPolicyVersion,
+    accountMode: 'PAPER',
   });
   assert.equal(result.paperCandidate.executionAuthority, 'NONE');
   assert.equal(result.paperCandidate.liveOrderAllowed, false);

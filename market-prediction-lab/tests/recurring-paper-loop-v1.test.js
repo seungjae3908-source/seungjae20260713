@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildRecurringPaperSettlementRecord,
   createRecurringPaperLoopState,
   restoreRecurringPaperLoopState,
   runRecurringPaperCycle,
@@ -10,6 +11,8 @@ import { FOUR_MARKET_EXECUTION_PROFILES } from "../src/four-market-execution-v2.
 
 const T0 = 1_800_000_000_000;
 const SHA = "a".repeat(40);
+const PHASE3_CANDIDATE_ID = `phase3-candidate:sha256:${"1".repeat(64)}`;
+const LEGACY_PAPER_CANDIDATE_ID = `paper-candidate-v1:${"2".repeat(64)}`;
 const identity = Object.freeze({
   strategyId: "profit-first-v1",
   strategyVersion: "v1",
@@ -84,6 +87,43 @@ function candidate(market, id, decision = "ELIGIBLE", direction = market === "CR
   };
 }
 
+function genuineNaturalCandidate(market, id, {
+  strategyCandidateId = PHASE3_CANDIDATE_ID,
+  frozenCandidateId = strategyCandidateId,
+  now = T0,
+} = {}) {
+  const row = candidate(market, id, "ELIGIBLE", market === "CRYPTO_FUTURES" ? "LONG" : "BUY", now);
+  const strategyIdentity = Object.freeze({
+    ...identity,
+    candidateId: strategyCandidateId,
+    strategyFamily: "MOMENTUM_CROSS",
+    parameterDigest: identity.parameterHash,
+    accountMode: "PAPER",
+  });
+  row.candidateId = frozenCandidateId;
+  row.signal.strategyIdentity = strategyIdentity;
+  row.execution = execution(market, now, { strategyIdentity });
+  row.naturalEvidence = Object.freeze({
+    provenanceClass: "NATURAL_FORWARD",
+    synthetic: false,
+    replay: false,
+    testOnly: false,
+    backfill: false,
+    historical: false,
+    duplicate: false,
+    observationId: `natural-forward:${id}`,
+    source: "recurring-paper-loop-v1.test",
+    observedAtMs: now - 1,
+  });
+  row.riskPolicyIdentity = Object.freeze({
+    policyId: "paper-risk-policy-v1",
+    policyVersion: "v1",
+    source: "recurring-paper-loop-v1.test",
+    researchCodeSha: SHA,
+  });
+  return row;
+}
+
 function harness(initial = ledger()) {
   let entryMutations = 0;
   let settlementMutations = 0;
@@ -124,8 +164,15 @@ test("NO_TRADE creates no entry and same cycle replay is idempotent", async () =
   const first = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [candidate("KR_STOCK", "s1", "NO_TRADE")] });
   assert.equal(first.summary.entries, 0);
   assert.equal(first.summary.noTrade, 1);
+  assert.equal(first.summary.canonicalNaturalStageEvidence.stageCounts.entryEligible.count, 0);
+  assert.equal(first.summary.canonicalNaturalStageEvidence.stageCounts.entry.count, 0);
+  assert.equal(first.summary.canonicalNaturalStageEvidence.stageCounts.position.count, 0);
   const replay = await run(h, { state: first.state, cycle: cycle("c1"), candidates: [candidate("KR_STOCK", "s1")] });
   assert.equal(replay.summary.replayed, true);
+  assert.equal(replay.summary.canonicalNaturalStageEvidence.stageCounts.entryEligible.status, "UNKNOWN");
+  assert.equal(replay.summary.canonicalNaturalStageEvidence.naturalCredit, 0);
+  assert.equal(replay.summary.canonicalNaturalStageEvidence.replayCredit, 0);
+  assert.equal(replay.summary.canonicalNaturalStageEvidence.reasonObservations[0].canonicalReason, "REPLAY_ONLY");
   assert.deepEqual(h.counts(), { entryMutations: 0, settlementMutations: 0, saves: 1, learnedSignals: 0, learnedOutcomes: 0 });
 });
 
@@ -134,10 +181,140 @@ test("four markets and futures SHORT enter once with canonical public evidence",
   const rows = [candidate("KR_STOCK", "kr"), candidate("US_STOCK", "us"), candidate("CRYPTO_SPOT", "spot"), candidate("CRYPTO_FUTURES", "long"), candidate("CRYPTO_FUTURES", "short", "ELIGIBLE", "SHORT")];
   const first = await run(h, { state: h.state, cycle: cycle("c1"), candidates: rows });
   assert.equal(first.summary.entries, 5);
+  assert.equal(first.summary.canonicalNaturalStageEvidence.stageCounts.entryEligible.count, 5);
+  assert.equal(first.summary.canonicalNaturalStageEvidence.stageCounts.entry.count, 5);
+  assert.equal(first.summary.canonicalNaturalStageEvidence.stageCounts.position.count, 5);
+  assert.notEqual(
+    first.summary.canonicalNaturalStageEvidence.stageCounts.entry.provenance,
+    first.summary.canonicalNaturalStageEvidence.stageCounts.position.provenance,
+  );
   const second = await run(h, { state: first.state, cycle: cycle("c2", T0 + 1), candidates: rows });
   assert.equal(second.summary.entries, 0);
   assert.equal(h.counts().entryMutations, 5);
   assert.equal(h.counts().learnedSignals, 5);
+});
+
+
+test("new positions preserve an immutable settlement execution policy without backfilling old state", async () => {
+  const h = harness();
+  const row = genuineNaturalCandidate("CRYPTO_FUTURES", "settlement-policy");
+  const result = await run(h, { state: h.state, cycle: cycle("policy-cycle"), candidates: [row] });
+  assert.equal(result.summary.entries, 1);
+  assert.equal(result.state.positions.length, 1);
+  const position = result.state.positions[0];
+  assert.notEqual(position.settlementExecutionPolicy, row.execution);
+  assert.deepEqual(position.settlementExecutionPolicy.marketAdapterIdentity, row.execution.marketAdapterIdentity);
+  assert.deepEqual(position.settlementExecutionPolicy.executionPolicy, row.execution.executionPolicy);
+  assert.deepEqual(position.settlementExecutionPolicy.entryDataEvidence, row.execution.dataEvidence);
+  assert.equal(position.settlementExecutionPolicy.costPolicyIdentity.version, row.execution.costPolicy.version);
+  assert.equal(Object.isFrozen(position.settlementExecutionPolicy), true);
+  assert.equal(Object.isFrozen(position.settlementExecutionPolicy.executionPolicy), true);
+  assert.equal(Object.isFrozen(position.settlementExecutionPolicy.entryDataEvidence), true);
+});
+
+test("entry candidate and authoritative cost provenance survive durable recurring state unchanged", async () => {
+  const h = harness();
+  const row = genuineNaturalCandidate("CRYPTO_FUTURES", "entry-provenance");
+  const component = (valuePercent, source, quality = "OBSERVED") => ({
+    valuePercent,
+    source,
+    quality,
+    observedAtMs: T0 - 1,
+  });
+  const provenance = {
+    market: "CRYPTO_FUTURES",
+    policyId: "cost-v1",
+    paperCostPolicyVersion: "cost-v1",
+    providerProvenance: "public-fixture",
+    components: {
+      commission: component(0.10, "public:commission"),
+      tax: component(0, "public:tax", "NOT_APPLICABLE"),
+      spread: component(0.02, "public:spread"),
+      slippage: component(0.03, "public:slippage", "ESTIMATED"),
+      funding: component(0.01, "public:funding"),
+      latency: component(0.01, "public:latency", "ESTIMATED"),
+      liquidityImpact: component(0.02, "public:liquidity", "ESTIMATED"),
+      partialFillImpact: component(0.03, "public:partial-fill", "ESTIMATED"),
+    },
+  };
+  row.execution = { ...row.execution, costProvenance: provenance };
+
+  const result = await run(h, {
+    state: h.state,
+    cycle: cycle("entry-provenance-cycle"),
+    candidates: [row],
+  });
+  assert.equal(result.summary.entries, 1);
+  const position = result.state.positions[0];
+  assert.notEqual(position.entryCandidate, row);
+  assert.deepEqual(position.entryCandidate.execution.costProvenance, provenance);
+  assert.deepEqual(position.entryCostProvenance, provenance);
+  assert.deepEqual(position.settlementExecutionPolicy.entryCostProvenance, provenance);
+  assert.equal(Object.isFrozen(position.entryCandidate), true);
+  assert.equal(Object.isFrozen(position.entryCostProvenance), true);
+  assert.equal(Object.isFrozen(position.settlementExecutionPolicy.entryCostProvenance), true);
+
+  const restored = restoreRecurringPaperLoopState(
+    serializeRecurringPaperLoopState(result.state),
+    identity,
+  );
+  assert.deepEqual(restored.positions[0].entryCandidate, position.entryCandidate);
+  assert.deepEqual(restored.positions[0].entryCostProvenance, position.entryCostProvenance);
+  assert.deepEqual(
+    restored.positions[0].settlementExecutionPolicy.entryCostProvenance,
+    position.settlementExecutionPolicy.entryCostProvenance,
+  );
+});
+
+test("canonical Phase3 candidate ID is preserved unchanged through genuine recurring Paper entry", async () => {
+  const h = harness();
+  const row = genuineNaturalCandidate("CRYPTO_SPOT", "phase3");
+  const result = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [row] });
+  assert.equal(result.summary.entries, 1);
+  assert.equal(result.summary.blocked, 0);
+  assert.equal(result.state.samples[0].identity.candidateId, PHASE3_CANDIDATE_ID);
+  assert.equal(result.state.positions[0].candidateId, PHASE3_CANDIDATE_ID);
+  assert.equal(result.state.positions[0].lifecycle.strategyIdentity.candidateId, PHASE3_CANDIDATE_ID);
+  assert.equal(h.counts().entryMutations, 1);
+});
+
+test("legacy Paper candidate namespace remains compatible for genuine recurring entry", async () => {
+  const h = harness();
+  const row = genuineNaturalCandidate("CRYPTO_SPOT", "legacy", {
+    strategyCandidateId: LEGACY_PAPER_CANDIDATE_ID,
+  });
+  const result = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [row] });
+  assert.equal(result.summary.entries, 1);
+  assert.equal(result.summary.blocked, 0);
+  assert.equal(result.state.positions[0].candidateId, LEGACY_PAPER_CANDIDATE_ID);
+  assert.equal(h.counts().entryMutations, 1);
+});
+
+test("unknown frozen candidate namespace remains fail-closed", async () => {
+  const h = harness();
+  const row = genuineNaturalCandidate("CRYPTO_SPOT", "unknown", {
+    strategyCandidateId: `unknown-candidate-v1:${"3".repeat(64)}`,
+  });
+  const result = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [row] });
+  assert.equal(result.summary.entries, 0);
+  assert.equal(result.summary.blocked, 1);
+  assert.equal(result.state.samples[0].status, "BLOCKED");
+  assert.equal(result.state.samples[0].blockers.includes("PAPER_CANDIDATE_ID_REQUIRED"), true);
+  assert.equal(h.counts().entryMutations, 0);
+  assert.equal(h.counts().learnedSignals, 0);
+});
+
+test("canonical candidate namespace never weakens exact frozen candidate equality", async () => {
+  const h = harness();
+  const row = genuineNaturalCandidate("CRYPTO_SPOT", "mismatch", {
+    strategyCandidateId: PHASE3_CANDIDATE_ID,
+    frozenCandidateId: `phase3-candidate:sha256:${"4".repeat(64)}`,
+  });
+  const result = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [row] });
+  assert.equal(result.summary.entries, 0);
+  assert.equal(result.summary.blocked, 1);
+  assert.equal(result.state.samples[0].blockers.includes("PAPER_CANDIDATE_IDENTITY_MISMATCH"), true);
+  assert.equal(h.counts().entryMutations, 0);
 });
 
 test("future and stale market evidence fail closed", async () => {
@@ -149,6 +326,11 @@ test("future and stale market evidence fail closed", async () => {
   const result = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [future, stale] });
   assert.equal(result.summary.blocked, 2);
   assert.equal(result.summary.entries, 0);
+  assert.equal(result.summary.canonicalNaturalStageEvidence.stageCounts.entryEligible.count, 0);
+  assert.equal(
+    result.summary.canonicalNaturalStageEvidence.reasonObservations.some((row) => row.canonicalReason === "DATA_STALE"),
+    true,
+  );
   assert.equal(h.counts().learnedSignals, 0);
   assert.equal(h.counts().learnedOutcomes, 0);
 });
@@ -161,7 +343,30 @@ test("valid future exit settles exactly once and replay cannot mutate ledger", a
   const exit = { positionId, settlementInput: { exitExecution, exitQuote: { bid: 105, ask: 106, bidSize: 10, askSize: 10, asOfMs: T0 + 9, maxAgeMs: 60_000 }, pathBars: [{ timestampMs: T0 + 5, high: 107, low: 98 }], fundingEvidence: { complete: true, payments: [] } } };
   const settled = await run(h, { state: opened.state, cycle: cycle("c2", T0 + 10), exits: [exit] });
   assert.equal(settled.summary.tradesSettled, 1);
+  assert.equal(settled.summary.canonicalNaturalStageEvidence.stageCounts.settlement.count, 1);
+  assert.equal(settled.summary.canonicalNaturalStageEvidence.stageCounts.settlement.observationIds.length, 1);
   assert.equal(settled.state.positions.length, 0);
+  const record = settled.state.settlements[0];
+  assert.match(record.settlementId, /^[0-9a-f]{64}$/);
+  assert.equal(record.positionId, positionId);
+  assert.equal(record.entryId, opened.state.positions[0].paperSampleId);
+  assert.equal(record.settlementIdentity.netPnl, record.netPnl);
+  assert.equal(record.netPnl, record.grossPnl - record.entryCost - record.exitCost - record.fundingCost);
+  // Legacy monetary PnL is not complete canonical evidence. Enrichment must
+  // keep an absent cost reference absent, not create an all8 completion claim.
+  assert.equal(record.settlementIdentity.costEvidenceDigest, null);
+  assert.equal(record.lifecycleEvidence, null);
+  assert.equal(record.fullCostReady, undefined);
+  assert.equal(record.naturalSampleCredit, 0);
+  assert.equal(record.orderSubmitted, false);
+  const partial = { costEvidence: { status: 'BLOCKED_DATA', fullCostReady: false, components: {} } };
+  const transported = buildRecurringPaperSettlementRecord({ settlement: record, position: opened.state.positions[0],
+    canonicalLifecycleEvidence: partial, settlementRecordedAtMs: T0 + 10 });
+  assert.equal(transported.settlementIdentity.costEvidenceDigest, null);
+  assert.deepEqual(transported.lifecycleEvidence, partial);
+  assert.equal(transported.lifecycleEvidence.costEvidence.fullCostReady, false);
+  assert.equal(transported.fullCostReady, undefined);
+  assert.equal(transported.netPnl, record.netPnl);
   const replay = await run(h, { state: settled.state, cycle: cycle("c3", T0 + 11), exits: [exit] });
   assert.equal(replay.summary.tradesSettled, 0);
   assert.equal(h.counts().settlementMutations, 1);

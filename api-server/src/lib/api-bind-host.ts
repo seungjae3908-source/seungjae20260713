@@ -7,11 +7,13 @@ function enabled(environment: NodeJS.ProcessEnv, name: string) {
 export function isStagingReadonlyCredentialRuntime(environment: NodeJS.ProcessEnv = process.env) {
   const hasMasterKey = Boolean(environment.TRADING_CREDENTIAL_MASTER_KEY?.trim());
   const privateReadEnabled = enabled(environment, 'TOSS_ACCOUNT_READ_ENABLED')
+    || enabled(environment, 'KIWOOM_ACCOUNT_READ_ENABLED')
     || enabled(environment, 'UPBIT_ACCOUNT_READ_ENABLED')
     || enabled(environment, 'BITGET_ACCOUNT_READ_ENABLED');
   const mutationAuthorityDisabled = !enabled(environment, 'LIVE_TRADING_ENABLED')
     && !enabled(environment, 'AUTO_TRADING_ENABLED')
     && !enabled(environment, 'TOSS_ORDER_ENABLED')
+    && !enabled(environment, 'KIWOOM_ORDER_ENABLED')
     && !enabled(environment, 'UPBIT_ORDER_ENABLED')
     && !enabled(environment, 'BITGET_ORDER_ENABLED')
     && !enabled(environment, 'TRANSFER_ENABLED')
@@ -21,6 +23,11 @@ export function isStagingReadonlyCredentialRuntime(environment: NodeJS.ProcessEn
     && hasMasterKey
     && privateReadEnabled
     && mutationAuthorityDisabled;
+}
+
+export function areBackgroundWorkersEnabled(environment: NodeJS.ProcessEnv = process.env) {
+  return environment.BACKGROUND_WORKERS_ENABLED !== 'false'
+    && !isStagingReadonlyCredentialRuntime(environment);
 }
 
 export function resolveApiBindHost(environment: NodeJS.ProcessEnv = process.env) {

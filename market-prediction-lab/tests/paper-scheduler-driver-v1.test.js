@@ -10,6 +10,7 @@ import {
   createFilePaperSchedulerLeaseStore,
   runScheduledPaperCycle,
 } from "../src/paper-scheduler-driver-v1.js";
+import { wrapPaperForwardProviderWithMeaningfulSearch } from "../src/meaningful-search-scheduled-paper-provider-v1.js";
 
 const NOW = Date.parse("2026-08-15T03:00:00.000Z");
 const CADENCE = Object.freeze({ version: "paper-hourly-v1", intervalMs: 60 * 60 * 1_000 });
@@ -363,6 +364,134 @@ for (const [name, lane] of [
   });
 }
 
+test("scheduled Natural runtime preserves the exact pre-Entry blocker and canonical provenance", async (t) => {
+  const naturalRuntimeSha = "a".repeat(40);
+  const naturalEvidenceIdentity = "b".repeat(64);
+  const exactSourceBlocker = "P0_PAPER_SUPPLEMENTAL_FULL_COST_BLOCKED_DATA:liquidityImpactCostEvidence";
+  const naturalFunnelMeasurements = Object.freeze([
+    Object.freeze({
+      stage: "CANDIDATE",
+      status: "MEASURED",
+      count: 5,
+      blocker: null,
+      provenance: "ScannerResponse.cards.length",
+      measuredAtMs: NOW,
+    }),
+    Object.freeze({
+      stage: "EVIDENCE_COMPLETE",
+      status: "MEASURED",
+      count: 0,
+      blocker: null,
+      provenance: "authoritative source-completeness classification",
+      measuredAtMs: NOW,
+    }),
+    Object.freeze({
+      stage: "ADMISSION_PASS",
+      status: "UNKNOWN",
+      count: null,
+      blocker: "ADMISSION_STAGE_DEPENDS_ON_UNRESOLVED_EVIDENCE_OR_PRODUCER_BLOCK",
+      provenance: null,
+      measuredAtMs: NOW,
+    }),
+  ]);
+  const publicEvidenceProvider = wrapPaperForwardProviderWithMeaningfulSearch({
+    provider: Object.freeze({ async collectPublicEvidence() { return readyLane(); } }),
+    async paperRuntimeForMarket({ market }) {
+      const safety = {
+        market,
+        executionAuthority: "NONE",
+        simulatedOnly: true,
+        liveOrderAllowed: false,
+        privateTradingApiAllowed: false,
+        orderSubmitted: false,
+        exchangeRequestSent: false,
+      };
+      if (market !== "CRYPTO_FUTURES") {
+        return Object.freeze({
+          ...safety,
+          status: "VALID_NO_TRADE",
+          paperBridge: Object.freeze({ candidates: Object.freeze([]), exitSignals: Object.freeze([]) }),
+        });
+      }
+      return Object.freeze({
+        ...safety,
+        status: "BLOCKED_DATA",
+        search: Object.freeze({ outcome: "CANDIDATES_FOUND" }),
+        admissionBlockers: Object.freeze(["P0_PAPER_SUPPLEMENTAL_FULL_COST_BLOCKED_DATA"]),
+        firstZeroStage: "EVIDENCE_COMPLETE",
+        firstZeroReason: "P0_PAPER_SUPPLEMENTAL_FULL_COST_BLOCKED_DATA",
+        naturalFirstZeroStage: "EVIDENCE_COMPLETE",
+        naturalFirstZeroReason: "INDEPENDENT_LIQUIDITY_IMPACT_CALIBRATION_NOT_PROVEN",
+        naturalEvidenceIdentity,
+        naturalRuntimeSha,
+        naturalFunnelMeasurements,
+        authoritativeFirstZeroReasonEvidenceByStage: Object.freeze({
+          EVIDENCE_COMPLETE: Object.freeze({
+            authoritative: true,
+            freshness: "FRESH",
+            reasonCode: "P0_PAPER_SUPPLEMENTAL_FULL_COST_BLOCKED_DATA_LIQUIDITY_IMPACT_COST_EVIDENCE",
+            sourceCodes: Object.freeze([exactSourceBlocker]),
+            strategySha: naturalRuntimeSha,
+            runtimeSha: naturalRuntimeSha,
+            datasetIdentity: naturalEvidenceIdentity,
+            synthetic: false,
+            testFixture: false,
+            historical: false,
+            replay: false,
+            duplicateReplay: false,
+          }),
+        }),
+      });
+    },
+  });
+  const { calls, options } = await harness(t, { publicEvidenceProvider });
+
+  const result = await runScheduledPaperCycle(options);
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.mutationCount, 0);
+  assert.equal(calls.length, 0);
+  assert.deepEqual(result.blockers, [{
+    market: "CRYPTO_FUTURES",
+    reason: "BLOCKED_DATA",
+    entryAdmissionEvidence: {
+      classification: "BLOCKED_DATA",
+      sourceBlocker: "P0_PAPER_SUPPLEMENTAL_FULL_COST_BLOCKED_DATA",
+      producerStatus: "BLOCKED_DATA",
+      searchOutcome: "CANDIDATES_FOUND",
+      firstZeroStage: "EVIDENCE_COMPLETE",
+      firstZeroReason: "P0_PAPER_SUPPLEMENTAL_FULL_COST_BLOCKED_DATA",
+      naturalFirstZeroStage: "EVIDENCE_COMPLETE",
+      naturalFirstZeroReason: "INDEPENDENT_LIQUIDITY_IMPACT_CALIBRATION_NOT_PROVEN",
+      stageMeasurements: [],
+      naturalFunnelMeasurements,
+      authoritativeFirstZeroReasonEvidence: {
+        authoritative: true,
+        freshness: "FRESH",
+        reasonCode: "P0_PAPER_SUPPLEMENTAL_FULL_COST_BLOCKED_DATA_LIQUIDITY_IMPACT_COST_EVIDENCE",
+        sourceCodes: [exactSourceBlocker],
+        strategySha: naturalRuntimeSha,
+        runtimeSha: naturalRuntimeSha,
+        datasetIdentity: naturalEvidenceIdentity,
+        synthetic: false,
+        testFixture: false,
+        historical: false,
+        replay: false,
+        duplicateReplay: false,
+      },
+      provenance: {
+        schemaVersion: "meaningful-search-scheduled-paper-provider-v1",
+        naturalEvidenceIdentity,
+        naturalRuntimeSha,
+      },
+    },
+  }]);
+  assert.equal(result.safety.privateAccountAccess, false);
+  assert.equal(result.safety.executionAuthority, "NONE");
+  assert.equal(result.safety.orderAuthority, false);
+  assert.equal(result.safety.orderSubmitted, false);
+  assert.equal(result.safety.liveTrading, false);
+});
+
 test("429 exhaustion blocks all lanes and does not fabricate another lane success", async (t) => {
   const attempts = new Map();
   const backoffs = [];
@@ -420,4 +549,367 @@ test("NO_TRADE empty public lanes reach canonical path without fake entries or o
   assert.deepEqual(calls[0].exits, []);
   assert.equal(result.summary.entries, 0);
   assert.equal(result.summary.settled, 0);
+});
+
+function positionFixture({ withRiskPolicy = false } = {}) {
+  const position = {
+    positionId: "position-1",
+    paperSampleId: "sample-1",
+    signalId: "signal-1",
+    market: "CRYPTO_FUTURES",
+    symbol: "BTCUSDT",
+    direction: "LONG",
+    candidateId: `paper-candidate-v1:${"a".repeat(64)}`,
+    strategyFamily: "strategy-family-1",
+    strategyId: "strategy-1",
+    strategyVersion: "v1",
+    parameterHash: "parameter-1",
+    parameterDigest: "parameter-1",
+    researchCodeSha: "a".repeat(40),
+    costPolicyVersion: "cost-v1",
+    accountMode: "PAPER",
+    entryTimestampMs: NOW - 10_000,
+    lifecycleState: "OPEN",
+    sample: {
+      identity: {
+        signalId: "signal-1",
+        market: "CRYPTO_FUTURES",
+        symbol: "BTCUSDT",
+        executionDirection: "LONG",
+        timeframe: "4h",
+        horizon: 12,
+        candidateId: `paper-candidate-v1:${"a".repeat(64)}`,
+        strategyFamily: "strategy-family-1",
+        strategyId: "strategy-1",
+        strategyVersion: "v1",
+        parameterHash: "parameter-1",
+        parameterDigest: "parameter-1",
+        researchCodeSha: "a".repeat(40),
+        accountMode: "PAPER",
+      },
+      profitEvidence: { costPolicyId: "cost-v1" },
+      entryEvidenceProvenance: {
+        schemaVersion: "paper-evidence-provenance-v1",
+        provenanceDigest: "b".repeat(64),
+        evidenceSnapshotDigest: "c".repeat(64),
+      },
+    },
+  };
+  if (withRiskPolicy) {
+    position.riskPolicyIdentity = {
+      policyId: "risk-v1",
+      policyVersion: "1.0.0",
+      source: "canonical-risk-record",
+      researchCodeSha: "a".repeat(40),
+    };
+  }
+  return position;
+}
+
+function stateWithPosition({ withRiskPolicy = false } = {}) {
+  const position = positionFixture({ withRiskPolicy });
+  return {
+    identityFingerprint: "paper-identity-v1",
+    positions: [position],
+    ledger: {
+      accountBinding: {
+        publisherAccountIdSha256: "d".repeat(64),
+        sourceSha: "a".repeat(40),
+        accountId: "canonical-paper-account-1",
+      },
+      reservations: [{
+        status: "OPEN",
+        positionId: position.positionId,
+        paperSampleId: position.paperSampleId,
+      }],
+    },
+  };
+}
+
+function genuineObservationFromProvider(input, overrides = {}) {
+  const binding = input.positionBindings[0];
+  const identity = binding.positionIdentity;
+  const base = {
+    observationId: "observation-1",
+    positionId: identity.positionId,
+    paperSampleId: identity.paperSampleId,
+    signalId: identity.signalId,
+    market: identity.market,
+    symbol: identity.symbol,
+    direction: identity.direction,
+    signalTimeframe: identity.signalTimeframe,
+    horizon: identity.horizon,
+    candidateId: identity.candidateId,
+    strategyFamily: identity.strategyFamily,
+    strategyId: identity.strategyId,
+    strategyVersion: identity.strategyVersion,
+    parameterHash: identity.parameterHash,
+    parameterDigest: identity.parameterDigest,
+    researchCodeSha: identity.researchCodeSha,
+    costPolicyVersion: identity.costPolicyVersion,
+    accountMode: identity.accountMode,
+    publicOnly: true,
+    source: "public-position-observation",
+    provenance: "public-only-position-observation-v1",
+    observedAtMs: NOW,
+    maxAgeMs: 60_000,
+    cycleIdentityDigest: input.cycleIdentity.identityDigest,
+    accountIdentityDigest: input.accountIdentity.identityDigest,
+    entryEvidenceDigest: binding.entryProvenance.evidenceSnapshotDigest,
+    riskPolicyIdentityDigest: binding.riskPolicyIdentity.identityDigest,
+    naturalEvidence: {
+      provenanceClass: "NATURAL_FORWARD",
+      synthetic: false,
+      replay: false,
+      testOnly: false,
+      backfill: false,
+      historical: false,
+      duplicate: false,
+      observationId: "observation-1",
+      observedAtMs: NOW,
+      source: "public-position-observation",
+      provenance: "public-only-position-observation-v1",
+    },
+    bar: { open: 100, high: 102, low: 99, close: 101 },
+  };
+  return {
+    ...base,
+    ...overrides,
+    naturalEvidence: { ...base.naturalEvidence, ...(overrides.naturalEvidence ?? {}) },
+  };
+}
+
+function memberAutomationCandidate() {
+  const market = "CRYPTO_SPOT";
+  const signal = {
+    signalId: "member-auto-spot-1",
+    market,
+    symbol: "BTC",
+    timestampMs: NOW - 1_000,
+    expiresAtMs: NOW + 60_000,
+    style: "SWING",
+    timeframe: "4h",
+    horizon: 6,
+    direction: "BUY",
+    signalDirection: "BUY",
+    regime: "TREND",
+    strategyIdentity: {
+      candidateId: `paper-candidate-v1:${"f".repeat(64)}`,
+      strategyId: "trend-breakout-v1",
+      strategyVersion: "1.0.0",
+      parameterHash: "params-v1",
+      researchCodeSha: "a".repeat(40),
+    },
+    learningSnapshot: { stopLoss: 95, target1: 110, target2: 120 },
+  };
+  return {
+    signal,
+    paperIdentity: {
+      signalId: signal.signalId,
+      candidateId: signal.strategyIdentity.candidateId,
+      strategyId: signal.strategyIdentity.strategyId,
+      strategyVersion: signal.strategyIdentity.strategyVersion,
+      parameterHash: signal.strategyIdentity.parameterHash,
+      market,
+      symbol: signal.symbol,
+      timeframe: signal.timeframe,
+      horizon: signal.horizon,
+      direction: signal.signalDirection,
+      regime: signal.regime,
+      costPolicyVersion: "cost-v1",
+      researchCodeSha: signal.strategyIdentity.researchCodeSha,
+      executionAuthority: "NONE",
+    },
+    profitEvidence: {
+      status: "READY",
+      expectedNetEdge: 0.02,
+      expectedNetReturn: 0.01,
+      riskRewardRatio: 2,
+      sampleSize: 80,
+      costPolicyId: "cost-v1",
+      executionAuthority: "NONE",
+    },
+    riskEvidence: { status: "APPROVED", evaluatedAtMs: NOW - 500, simulatedOnly: true },
+    execution: {
+      marketAdapterIdentity: { id: "upbit-paper-v1", version: "1" },
+      costPolicy: {
+        version: "cost-v1", commissionRate: 0.001, taxRate: 0, spreadRate: 0.001,
+        slippageRate: 0.001, latencyRate: 0.0002, liquidityImpactRate: 0.0003,
+        partialFillImpactRate: 0.0001, fundingRate: 0,
+      },
+      executionPolicy: {
+        version: "execution-v1", fillModel: "DEPTH_PARTICIPATION", sameBarPolicy: "STOP_FIRST",
+        allowPartialFill: true, maxParticipationRate: 0.1,
+      },
+      dataEvidence: {
+        provider: "upbit", publicOnly: true, dataQuality: "READY",
+        provenance: "canonical-public-market-v1", asOfMs: NOW - 500, maxAgeMs: 60_000,
+        quoteEvidence: { bid: 100, ask: 101, asOfMs: NOW - 500, maxAgeMs: 60_000 },
+        depthEvidence: { available: true, bidSize: 100, askSize: 100 },
+      },
+    },
+    order: { type: "MARKET", quantity: 1, direction: "BUY" },
+    quote: { bid: 100, ask: 101, last: 100.5, asOfMs: NOW - 500, maxAgeMs: 60_000 },
+    executionAuthority: "NONE",
+    simulatedOnly: true,
+    liveOrderAllowed: false,
+    privateTradingApiAllowed: false,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+  };
+}
+
+test("scheduler exposes a safe member automation handoff without changing canonical Paper mutation", async (t) => {
+  const candidate = memberAutomationCandidate();
+  const { calls, options } = await harness(t, {
+    publicEvidenceProvider: {
+      async collectPublicEvidence({ market }) {
+        return market === "CRYPTO_SPOT"
+          ? readyLane({ candidates: [candidate] })
+          : readyLane();
+      },
+    },
+  });
+  const result = await runScheduledPaperCycle(options);
+  assert.equal(result.status, "COMPLETED");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].candidates.length, 1);
+  assert.equal(result.memberAutoTradingHandoff.status, "READY");
+  assert.equal(result.memberAutoTradingHandoff.entryCount, 1);
+  assert.equal(result.memberAutoTradingHandoff.entries[0].identity.signalId, candidate.signal.signalId);
+  assert.equal(result.memberAutoTradingHandoff.safety.executionAuthority, "NONE");
+  assert.equal(result.memberAutoTradingHandoff.safety.liveTrading, false);
+});
+
+test("unsafe member handoff blocks only the consumer and does not block canonical Paper cycle", async (t) => {
+  const candidate = memberAutomationCandidate();
+  candidate.liveOrderAllowed = true;
+  const { calls, options } = await harness(t, {
+    publicEvidenceProvider: {
+      async collectPublicEvidence({ market }) {
+        return market === "CRYPTO_SPOT"
+          ? readyLane({ candidates: [candidate] })
+          : readyLane();
+      },
+    },
+  });
+  const result = await runScheduledPaperCycle(options);
+  assert.equal(result.status, "COMPLETED");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].candidates.length, 1);
+  assert.equal(result.memberAutoTradingHandoff.status, "BLOCKED_DATA");
+  assert.equal(result.memberAutoTradingHandoff.entryCount, 0);
+  assert.ok(result.memberAutoTradingHandoff.blockers.some((code) => code.includes("HANDOFF_EXECUTION_AUTHORITY_FORBIDDEN")));
+});
+
+test("scheduler passes immutable open Positions and account binding while missing observations stay missing", async (t) => {
+  const canonicalState = stateWithPosition();
+  const { calls, providerCalls, options } = await harness(t, { state: canonicalState });
+  const result = await runScheduledPaperCycle(options);
+  const futures = providerCalls.find((row) => row.market === "CRYPTO_FUTURES");
+  assert.equal(futures.openPositions.length, 1);
+  assert.equal(futures.openPositions[0].positionId, "position-1");
+  assert.equal(futures.positionBindings[0].positionIdentity.paperSampleId, "sample-1");
+  assert.equal(futures.positionBindings[0].entryProvenance.evidenceSnapshotDigest, "c".repeat(64));
+  assert.equal(futures.positionBindings[0].costPolicyIdentity.version, "cost-v1");
+  assert.equal(futures.positionBindings[0].riskPolicyIdentity, null);
+  assert.equal(futures.accountIdentity.publisherAccountIdSha256, "d".repeat(64));
+  assert.equal(futures.accountIdentity.accountIdSha256, createHash("sha256").update("canonical-paper-account-1").digest("hex"));
+  assert.equal(result.positionObservationHandoff.status, "MISSING");
+  assert.equal(result.positionObservationHandoff.observationCount, null);
+  assert.equal(Object.hasOwn(calls[0], "positionObservations"), false);
+});
+
+test("scheduler passes an explicitly identity-bound genuine Position observation to the lifecycle input", async (t) => {
+  const canonicalState = stateWithPosition({ withRiskPolicy: true });
+  const { calls, options } = await harness(t, {
+    state: canonicalState,
+    publicEvidenceProvider: {
+      async collectPublicEvidence(input) {
+        if (input.market !== "CRYPTO_FUTURES") return readyLane();
+        return readyLane({ positionObservations: [genuineObservationFromProvider(input)] });
+      },
+    },
+  });
+  const result = await runScheduledPaperCycle(options);
+  assert.equal(result.status, "COMPLETED");
+  assert.equal(result.positionObservationHandoff.status, "PRESENT");
+  assert.equal(result.positionObservationHandoff.observationCount, 1);
+  assert.equal(calls[0].positionObservations.length, 1);
+  const observation = calls[0].positionObservations[0];
+  assert.equal(observation.schedulerHandoff.cycleIdentity.cycleId, CYCLE_ID);
+  assert.equal(observation.schedulerHandoff.positionIdentity.signalId, "signal-1");
+  assert.equal(observation.schedulerHandoff.accountIdentity.publisherAccountIdSha256, "d".repeat(64));
+  assert.equal(observation.schedulerHandoff.entryProvenance.evidenceSnapshotDigest, "c".repeat(64));
+  assert.equal(observation.schedulerHandoff.costPolicyIdentity.version, "cost-v1");
+  assert.equal(observation.schedulerHandoff.riskPolicyIdentity.policyId, "risk-v1");
+  assert.equal(observation.schedulerHandoff.naturalSampleCreditAuthority, "IDENTITY_GATES_PASSED");
+});
+
+for (const flag of ["synthetic", "replay", "testOnly", "backfill", "historical", "duplicate"]) {
+  test(`genuine Position observation rejects ${flag} credit`, async (t) => {
+    const canonicalState = stateWithPosition({ withRiskPolicy: true });
+    const { calls, options } = await harness(t, {
+      state: canonicalState,
+      publicEvidenceProvider: {
+        async collectPublicEvidence(input) {
+          if (input.market !== "CRYPTO_FUTURES") return readyLane();
+          return readyLane({
+            positionObservations: [genuineObservationFromProvider(input, { naturalEvidence: { [flag]: true } })],
+          });
+        },
+      },
+    });
+    const result = await runScheduledPaperCycle(options);
+    assert.equal(result.status, "BLOCKED_DATA");
+    assert.equal(result.mutationCount, 0);
+    assert.equal(calls.length, 0);
+    assert.ok(result.positionObservationHandoff.blockers.includes("POSITION_OBSERVATION_GENUINE_PROVENANCE_REQUIRED"));
+  });
+}
+
+for (const [name, mutate] of [
+  ["wrong cycle", (row) => { row.cycleIdentityDigest = "e".repeat(64); }],
+  ["wrong account", (row) => { row.accountIdentityDigest = "e".repeat(64); }],
+  ["wrong strategy", (row) => { row.strategyId = "wrong-strategy"; }],
+  ["wrong signal", (row) => { row.signalId = "wrong-signal"; }],
+  ["missing Entry provenance", (row) => { delete row.entryEvidenceDigest; }],
+  ["wrong risk policy", (row) => { row.riskPolicyIdentityDigest = "e".repeat(64); }],
+]) {
+  test(`genuine Position observation rejects ${name}`, async (t) => {
+    const canonicalState = stateWithPosition({ withRiskPolicy: true });
+    const { calls, options } = await harness(t, {
+      state: canonicalState,
+      publicEvidenceProvider: {
+        async collectPublicEvidence(input) {
+          if (input.market !== "CRYPTO_FUTURES") return readyLane();
+          const row = genuineObservationFromProvider(input);
+          mutate(row);
+          return readyLane({ positionObservations: [row] });
+        },
+      },
+    });
+    const result = await runScheduledPaperCycle(options);
+    assert.equal(result.status, "BLOCKED_DATA");
+    assert.equal(result.mutationCount, 0);
+    assert.equal(calls.length, 0);
+  });
+}
+
+test("legacy exits remain exits and are never synthesized into genuine Position observations", async (t) => {
+  const canonicalState = stateWithPosition({ withRiskPolicy: true });
+  const legacyExit = { positionId: "position-1", settlementInput: { legacy: true } };
+  const { calls, options } = await harness(t, {
+    state: canonicalState,
+    publicEvidenceProvider: {
+      async collectPublicEvidence(input) {
+        return input.market === "CRYPTO_FUTURES" ? readyLane({ exits: [legacyExit] }) : readyLane();
+      },
+    },
+  });
+  const result = await runScheduledPaperCycle(options);
+  assert.equal(result.status, "COMPLETED");
+  assert.deepEqual(calls[0].exits, [legacyExit]);
+  assert.equal(Object.hasOwn(calls[0], "positionObservations"), false);
+  assert.equal(result.positionObservationHandoff.status, "MISSING");
 });

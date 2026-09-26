@@ -1,6 +1,6 @@
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { apiGet } from '@/lib/api';
-import type { DataStatus, FuturesContractRules, FuturesMarketSnapshot, NormalizedCandle } from '@/lib/futures-market-data';
+import { getFuturesMarketSnapshot, type DataStatus, type FuturesContractRules, type FuturesMarketSnapshot, type NormalizedCandle } from '@/lib/futures-market-data';
 import type { RiskEngineInput, RiskEngineResult } from '@/lib/trading-risk';
 
 export type PaperSide = 'long' | 'short';
@@ -74,26 +74,83 @@ export type PaperTradingAction =
   | { type: 'mark_price'; eventId: string; symbol: string; price: number; at?: string }
   | { type: 'close_position'; eventId: string; positionId: string; quantity?: number | null; percentage?: 25|50|75|100|null; market: FuturesMarketSnapshot; reason?: 'partial_close'|'manual_close'; at?: string };
 
+export type PaperStateTransport = {
+  status: 'PUBLISHED' | 'BLOCKED_DATA';
+  reason: string | null;
+  publisherAccountBound: boolean;
+  executionAuthority: 'NONE';
+  privateApiAllowed: false;
+  liveTrading: false;
+  financialMutationAllowed: false;
+};
+
 export type PaperTradingActionResult = {
   ok: true; mode: 'paper-only'; orderSubmitted: false; exchangeRequestSent: false; state: PaperTradingState;
   order: PaperOrder | null; position: PaperPosition | null; fills: PaperFill[]; warnings: string[]; duplicateEvent: boolean;
+  paperStateTransport?: PaperStateTransport | null;
 };
 
 type PaperEvaluateResponse = {
   ok: boolean; mode: 'paper-only'; orderSubmitted: false; exchangeRequestSent: false;
-  result?: PaperTradingActionResult; code?: string; message?: string;
+  result?: PaperTradingActionResult; paperStateTransport?: unknown; code?: string; message?: string;
 };
 
+export async function resolvePaperTradingActionMarket(
+  state: PaperTradingState,
+  action: PaperTradingAction,
+  loadMarket: (symbol: string) => Promise<FuturesMarketSnapshot> = getFuturesMarketSnapshot,
+): Promise<PaperTradingAction> {
+  if (action.type !== 'close_position') return action;
+  const position = state.positions.find((item) => item.id === action.positionId);
+  if (!position) return action;
+  const market = await loadMarket(position.symbol);
+  return { ...action, market };
+}
+
+export function normalizePaperStateTransport(value: unknown): PaperStateTransport | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const candidate = value as Partial<PaperStateTransport>;
+  if ((candidate.status !== 'PUBLISHED' && candidate.status !== 'BLOCKED_DATA')
+    || candidate.executionAuthority !== 'NONE'
+    || candidate.privateApiAllowed !== false
+    || candidate.liveTrading !== false
+    || candidate.financialMutationAllowed !== false
+    || typeof candidate.publisherAccountBound !== 'boolean'
+    || !(candidate.reason == null || typeof candidate.reason === 'string')) return null;
+  return {
+    status: candidate.status,
+    reason: candidate.reason ?? null,
+    publisherAccountBound: candidate.publisherAccountBound,
+    executionAuthority: 'NONE',
+    privateApiAllowed: false,
+    liveTrading: false,
+    financialMutationAllowed: false,
+  };
+}
+
+export function paperStateTransportNotice(transport: PaperStateTransport | null) {
+  if (!transport) return 'Natural Paper 스냅샷: UNKNOWN';
+  if (transport.status === 'PUBLISHED') return 'Natural Paper 스냅샷: PUBLISHED';
+  return `Natural Paper 스냅샷: BLOCKED_DATA${transport.reason ? ` (${transport.reason})` : ''}`;
+}
+
 export async function evaluatePaperTrading(state: PaperTradingState, action: PaperTradingAction, signal?: AbortSignal) {
+  const resolvedAction = await resolvePaperTradingActionMarket(state, action);
   const response = await authorizedFetch('/api/paper-trading/evaluate', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state, action }), signal,
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state, action: resolvedAction }), signal,
   });
   const body = await response.json().catch(() => null) as PaperEvaluateResponse | null;
   if (!body || body.mode !== 'paper-only' || body.orderSubmitted !== false || body.exchangeRequestSent !== false) {
     throw new Error('모의거래 안전 계약을 확인하지 못했습니다.');
   }
   if (!response.ok || !body.ok || !body.result) throw new Error(body.message ?? body.code ?? '모의거래 계산을 처리하지 못했습니다.');
-  return body.result;
+  const paperStateTransport = normalizePaperStateTransport(body.paperStateTransport);
+  const transportNotice = paperStateTransportNotice(paperStateTransport);
+  return {
+    ...body.result,
+    warnings: [...body.result.warnings.filter((item) => !item.startsWith('Natural Paper 스냅샷:')), transportNotice],
+    paperStateTransport,
+  };
 }
 
 export async function getLatestCompletedCandle(symbol: string, timeframe = '15m') {

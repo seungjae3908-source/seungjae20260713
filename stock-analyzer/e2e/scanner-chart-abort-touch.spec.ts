@@ -243,19 +243,56 @@ async function installApplicationMocks(page: Page, state: MockState) {
   await page.route('**/api/**', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }),
   );
-  await page.route('**/api/market/scan**', (route) =>
-    route.fulfill({
+  await page.route('**/api/market/scan**', (route) => {
+    const request = new URL(route.request().url());
+    const market = request.searchParams.get('market') === 'US' ? 'US' : 'KR';
+    const scanTimeframe = request.searchParams.get('timeframe') ?? '1D';
+    return route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         ok: true,
-        searchRunId: 'legacy-chart-abort:e2e',
-        timeframe: '1D',
-        supportedIndicators: [],
+        requestId: `legacy-chart-abort:${market}:${scanTimeframe}:e2e`,
+        assetClass: 'stock',
+        market,
+        timeframe: scanTimeframe,
         cards: [],
+        alerts: [],
+        failures: [],
+        execution: {
+          requestedCount: 1,
+          startedCount: 1,
+          completedCount: 1,
+          excludedCount: 1,
+          providerErrorCount: 0,
+          timeoutCount: 0,
+          partial: false,
+          timedOut: false,
+          cancelled: false,
+          duplicate: false,
+          elapsedMs: 10,
+          deadlineMs: 8500,
+          itemTimeoutMs: 4000,
+          maxConcurrency: 6,
+        },
+        universe: {
+          totalCount: 1,
+          cursor: 0,
+          nextCursor: null,
+          source: 'fixture-universe',
+          partial: false,
+          stale: false,
+          listingStatusCoverage: 'listed-or-unknown',
+        },
+        dataState: 'complete',
+        outcome: 'VALID_ZERO_SIGNAL',
+        message: '조건을 통과한 후보가 없습니다.',
+        generatedAt: new Date().toISOString(),
+        orderSubmitted: false,
+        exchangeRequestSent: false,
       }),
-    }),
-  );
+    });
+  });
   await page.route('**/api/quotes**', (route) =>
     route.fulfill({
       status: 200,
