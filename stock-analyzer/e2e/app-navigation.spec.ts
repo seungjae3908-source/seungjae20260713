@@ -262,6 +262,66 @@ test('admin account keeps the ordinary user information menu and exposes researc
   assertClean();
 });
 
+for (const [width, height, expectedLayout] of [
+  [390, 844, 'mobile'],
+  [768, 1024, 'tablet'],
+  [1024, 820, 'tablet'],
+  [1440, 900, 'desktop'],
+] as const) {
+  test(`Home ${width}px has one content scroll owner, no horizontal overflow, and the ${expectedLayout} workspace`, async ({ page }) => {
+    const assertClean = await installApprovedRuntime(page);
+    await page.setViewportSize({ width, height });
+    await page.goto('/home');
+    await expect(page.getByRole('heading', { name: '홈', exact: true })).toBeVisible();
+    await expect(page.getByTestId('home-professional-overview')).toBeVisible();
+
+    if (expectedLayout === 'mobile') {
+      await expect(page.getByTestId('home-mobile-tabs')).toBeVisible();
+      await expect(page.getByTestId('home-tablet-workspace')).toHaveCount(0);
+      await expect(page.getByTestId('home-desktop-workspace')).toHaveCount(0);
+    } else if (expectedLayout === 'tablet') {
+      await expect(page.getByTestId('home-mobile-tabs')).toHaveCount(0);
+      await expect(page.getByTestId('home-tablet-workspace')).toBeVisible();
+      await expect(page.getByTestId('home-desktop-workspace')).toHaveCount(0);
+    } else {
+      await expect(page.getByTestId('home-mobile-tabs')).toHaveCount(0);
+      await expect(page.getByTestId('home-tablet-workspace')).toHaveCount(0);
+      await expect(page.getByTestId('home-desktop-workspace')).toBeVisible();
+    }
+
+    const geometry = await page.evaluate(() => {
+      const shell = document.querySelector<HTMLElement>('[data-testid="app-shell"]');
+      const main = document.querySelector<HTMLElement>('[data-testid="home-page-scroll"]');
+      const nav = document.querySelector<HTMLElement>('nav[aria-label="주요 메뉴"]');
+      if (!shell || !main || !nav) throw new Error('home shell geometry missing');
+      const nestedScrollOwners = Array.from(main.querySelectorAll<HTMLElement>('*')).filter((node) => {
+        const style = getComputedStyle(node);
+        return /(auto|scroll)/u.test(style.overflowY) && node.scrollHeight > node.clientHeight + 1;
+      });
+      const mainRect = main.getBoundingClientRect();
+      const navRect = nav.getBoundingClientRect();
+      return {
+        viewportWidth: window.innerWidth,
+        rootScrollWidth: document.documentElement.scrollWidth,
+        bodyScrollWidth: document.body.scrollWidth,
+        shellOverflowY: getComputedStyle(shell).overflowY,
+        mainOverflowY: getComputedStyle(main).overflowY,
+        nestedScrollOwners: nestedScrollOwners.length,
+        mainBottom: mainRect.bottom,
+        navTop: navRect.top,
+      };
+    });
+
+    expect(geometry.rootScrollWidth).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+    expect(geometry.bodyScrollWidth).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+    expect(geometry.shellOverflowY).toBe('hidden');
+    expect(['auto', 'scroll']).toContain(geometry.mainOverflowY);
+    expect(geometry.nestedScrollOwners).toBe(0);
+    expect(geometry.mainBottom).toBeLessThanOrEqual(geometry.navTop + 1);
+    assertClean();
+  });
+}
+
 test('keyboard, focus, Escape, Enter and Space operate anchored popovers', async ({ page }) => {
   const assertClean = await installApprovedRuntime(page);
   await page.setViewportSize({ width: 390, height: 844 });
