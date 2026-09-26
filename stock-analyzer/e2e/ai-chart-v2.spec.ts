@@ -224,10 +224,10 @@ test('desktop AI Chart 2.0 preserves one initial chart request, loads MTF on dem
   await expect.poll(() => mock.calls.size).toBeGreaterThanOrEqual(4);
 
   await expect(page.getByTestId('ai-evidence-panel')).toBeVisible();
-  await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('ENTRY 3');
-  await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('UNAVAILABLE');
-  await expect(page.getByTestId('ai-chart-data-provenance')).toContainText('Historical Performance');
-  await expect(page.getByTestId('ai-chart-data-provenance')).toContainText('UNAVAILABLE');
+  await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('진입 3');
+  await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('미확인');
+  await expect(page.getByTestId('ai-chart-data-provenance')).toContainText('과거 성과 검증');
+  await expect(page.getByTestId('ai-chart-data-provenance')).toContainText('미검증');
 
   await page.getByRole('button', { name: '30분', exact: true }).click();
   await expect(page).toHaveURL(/timeframe=30m/);
