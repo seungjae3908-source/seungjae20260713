@@ -66,6 +66,13 @@ export type ManualPaperCanonicalRuntimeReadinessResult = Readonly<{
   forwardObserverArtifactsReady: boolean;
   validationReceiptPathReady: boolean;
   safetyBoundaryReady: boolean;
+  evidenceCounts: Readonly<{
+    naturalPositions: number;
+    naturalSettlements: number;
+    fullCostReadyPositions: number;
+    durableSettlementPackets: number;
+    canonicalRebinds: number;
+  }>;
   checks: readonly ManualPaperCanonicalRuntimeReadinessCheck[];
   blockers: readonly string[];
   safety: Readonly<{
@@ -158,10 +165,17 @@ function durableSettlementReadiness(
   recurringState: any,
   expectedMainSha: string,
   rebindSettlementEvidence: RuntimeReadinessDependencies['rebindSettlementEvidence'],
-): Readonly<{ packetReady: boolean; rebindReady: boolean }> {
+): Readonly<{
+  packetReady: boolean;
+  rebindReady: boolean;
+  packetCount: number;
+  rebindCount: number;
+}> {
   const settlements = Array.isArray(recurringState?.settlements) ? recurringState.settlements : [];
   let packetReady = false;
   let rebindReady = false;
+  let packetCount = 0;
+  let rebindCount = 0;
 
   for (const settlement of settlements) {
     const packet = settlement?.canonicalOwnerEvidence;
@@ -207,6 +221,7 @@ function durableSettlementReadiness(
     }
 
     packetReady = true;
+    packetCount += 1;
     try {
       const rebound = rebindSettlementEvidence({
         position: packet.position,
@@ -220,14 +235,14 @@ function durableSettlementReadiness(
         && rebound?.exitTriggerId === settlement.exitTriggerId
         && rebound?.exitExecutionId === settlement.exitExecutionId) {
         rebindReady = true;
-        break;
+        rebindCount += 1;
       }
     } catch {
       // Readiness is fail-closed; a producer rebind error remains a blocker.
     }
   }
 
-  return Object.freeze({ packetReady, rebindReady });
+  return Object.freeze({ packetReady, rebindReady, packetCount, rebindCount });
 }
 
 function parseJson(text: string, blocker: string, blockers: string[]): unknown | null {
@@ -449,9 +464,10 @@ export async function probeManualPaperCanonicalRuntimeReadiness(
           : []),
       ]
     : [];
-  const fullCostComponentsReady = durablePositions.some((position: any) => (
+  const fullCostReadyPositions = durablePositions.filter((position: any) => (
     fullCostPositionReady(position, expectedMainSha)
-  ));
+  )).length;
+  const fullCostComponentsReady = fullCostReadyPositions > 0;
   check(
     'FULL_COST_EIGHT_COMPONENT_DURABLE_READBACK',
     fullCostComponentsReady,
@@ -464,7 +480,12 @@ export async function probeManualPaperCanonicalRuntimeReadiness(
         expectedMainSha,
         dependencies.rebindSettlementEvidence,
       )
-    : Object.freeze({ packetReady: false, rebindReady: false });
+    : Object.freeze({
+        packetReady: false,
+        rebindReady: false,
+        packetCount: 0,
+        rebindCount: 0,
+      });
   check(
     'SETTLEMENT_DURABLE_OWNER_PACKET',
     settlementReadiness.packetReady,
@@ -581,6 +602,17 @@ export async function probeManualPaperCanonicalRuntimeReadiness(
     forwardObserverArtifactsReady: artifactsReady,
     validationReceiptPathReady: receiptPathReady && maximumAgeReady,
     safetyBoundaryReady,
+    evidenceCounts: Object.freeze({
+      naturalPositions: recurringReady && Array.isArray(recurringState?.positions)
+        ? recurringState.positions.length
+        : 0,
+      naturalSettlements: recurringReady && Array.isArray(recurringState?.settlements)
+        ? recurringState.settlements.length
+        : 0,
+      fullCostReadyPositions,
+      durableSettlementPackets: settlementReadiness.packetCount,
+      canonicalRebinds: settlementReadiness.rebindCount,
+    }),
     checks: Object.freeze(checks),
     blockers: Object.freeze(blockers),
     safety: Object.freeze({
