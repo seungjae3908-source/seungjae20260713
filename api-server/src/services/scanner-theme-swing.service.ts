@@ -14,6 +14,45 @@ type TaggedCard = {
   tags: readonly ScannerThemeTag[];
 };
 
+type ThemeSwingNewsDisclosure = {
+  status?: string;
+  eventCount?: number;
+  analyzedCount?: number;
+  officialRiskEvents?: string[];
+  events?: Array<{
+    freshness?: string;
+    aiStatus?: string;
+    catalystFlags?: string[];
+  }>;
+};
+
+type ThemeSwingMarketIntelligence = {
+  status?: string;
+  scanner?: {
+    intelligenceScore?: number | null;
+    bullishScore?: number | null;
+    bearishScore?: number | null;
+  };
+  autoTrading?: {
+    mode?: string;
+    hardBlockReason?: string | null;
+  };
+};
+
+type ThemeSwingCryptoPublicEvent = {
+  status?: string;
+  marketWarning?: boolean | null;
+  tradingStatus?: string | null;
+  events?: Array<{ kind?: string }>;
+  verifiedCoinNews?: { connected?: boolean };
+};
+
+type ThemeSwingCard = ScannerSignalCard & {
+  newsDisclosureIntelligence?: ThemeSwingNewsDisclosure;
+  marketIntelligence?: ThemeSwingMarketIntelligence;
+  cryptoPublicEventContext?: ThemeSwingCryptoPublicEvent;
+};
+
 const VERSION = 'theme-swing-v1' as const;
 
 const CRYPTO_THEME_MAP: ReadonlyArray<{
@@ -73,15 +112,63 @@ export function inferCryptoThemeTags(card: Pick<ScannerSignalCard, 'symbol' | 'a
 }
 
 function catalystScore(card: ScannerSignalCard): number {
+  const enriched = card as ThemeSwingCard;
+  const news = enriched.newsDisclosureIntelligence;
+  if (news && (news.status === 'READY' || news.status === 'PARTIAL')) {
+    const events = Array.isArray(news.events) ? news.events : [];
+    const freshCatalysts = events.filter((event) =>
+      (event.freshness === 'FRESH' || event.freshness === 'AGING')
+      && Array.isArray(event.catalystFlags)
+      && event.catalystFlags.length > 0,
+    );
+    if (freshCatalysts.some((event) => event.aiStatus === 'ANALYZED')) return 100;
+    if (freshCatalysts.length > 0) return 85;
+    if ((news.analyzedCount ?? 0) > 0) return 65;
+    if ((news.eventCount ?? 0) > 0) return 55;
+  }
+
+  const marketIntelligence = enriched.marketIntelligence;
+  if (marketIntelligence?.status === 'READY') {
+    const directional = card.direction === 'SHORT'
+      ? marketIntelligence.scanner?.bearishScore
+      : marketIntelligence.scanner?.bullishScore;
+    if (typeof directional === 'number' && Number.isFinite(directional)) return clamp(directional);
+    const intelligenceScore = marketIntelligence.scanner?.intelligenceScore;
+    if (typeof intelligenceScore === 'number' && Number.isFinite(intelligenceScore)) return clamp(intelligenceScore);
+  }
+
+  const cryptoPublic = enriched.cryptoPublicEventContext;
+  if ((cryptoPublic?.status === 'READY' || cryptoPublic?.status === 'PARTIAL')
+    && cryptoPublic.verifiedCoinNews?.connected === true) {
+    return 55;
+  }
+
   const matched = card.evidence.filter((item) => item.status === 'matched');
   const eventEvidence = matched.some((item) =>
     /news|filing|disclosure|공시|뉴스|event|catalyst/i.test(`${item.source} ${item.label} ${item.reasons.join(' ')}`),
   );
-  if (eventEvidence) return 100;
-  if (card.aiValidation?.status === 'PASS') return 75;
-  if (matched.length >= 3) return 55;
-  if (matched.length > 0) return 40;
+  if (eventEvidence) return 70;
+  if (card.aiValidation?.status === 'PASS') return 60;
+  if (matched.length >= 3) return 50;
+  if (matched.length > 0) return 35;
   return 20;
+}
+
+function intelligenceRiskBlockers(card: ScannerSignalCard): string[] {
+  const enriched = card as ThemeSwingCard;
+  const blockers: string[] = [];
+  if ((enriched.newsDisclosureIntelligence?.officialRiskEvents?.length ?? 0) > 0) {
+    blockers.push('OFFICIAL_EVENT_RISK_BLOCK');
+  }
+  if (enriched.marketIntelligence?.autoTrading?.mode === 'BLOCKED_RISK') {
+    blockers.push('MARKET_INTELLIGENCE_RISK_BLOCK');
+  }
+  const publicEvent = enriched.cryptoPublicEventContext;
+  if (publicEvent?.marketWarning === true
+    || publicEvent?.events?.some((event) => event.kind === 'EXCHANGE_WARNING' || event.kind === 'TRADING_STATUS')) {
+    blockers.push('CRYPTO_PUBLIC_EVENT_RISK_BLOCK');
+  }
+  return blockers;
 }
 
 function triggerFor(card: ScannerSignalCard): ScannerThemeSwingSummary['trigger'] {
@@ -203,6 +290,7 @@ function summaryFor(card: ScannerSignalCard, tags: readonly ScannerThemeTag[], g
   if (card.dataState !== 'complete' || card.dataQuality?.state === 'DATA_UNTRUSTED') blockers.push('DATA_NOT_TRUSTED_COMPLETE');
   if ((card.pricePlan.riskReward ?? 0) < 1.5) blockers.push('RISK_REWARD_BELOW_1_5');
   if (trigger === 'UNCONFIRMED') blockers.push('ENTRY_TRIGGER_UNCONFIRMED');
+  blockers.push(...intelligenceRiskBlockers(card));
 
   const state: ScannerThemeSwingSummary['state'] = blockers.length === 0
     ? 'ELIGIBLE'
@@ -243,8 +331,9 @@ function summaryFor(card: ScannerSignalCard, tags: readonly ScannerThemeTag[], g
 export function applyThemeSwingOverlay(
   cards: readonly ScannerSignalCard[],
   themeTagsForCard: (card: ScannerSignalCard) => readonly ScannerThemeTag[],
+  groupUniverse: readonly ScannerSignalCard[] = cards,
 ): ScannerSignalCard[] {
-  const tagged: TaggedCard[] = cards
+  const tagged: TaggedCard[] = groupUniverse
     .filter((card) => card.strategyMode === 'swing')
     .map((card) => ({ card, tags: themeTagsForCard(card) }));
 
@@ -259,13 +348,10 @@ export function applyThemeSwingOverlay(
     }
   }
 
-  const bySignal = new Map(tagged.map((row) => [
-    row.card.signalId,
-    summaryFor(row.card, row.tags, groups),
-  ]));
-
   return cards.map((card) => {
-    const themeSwing = bySignal.get(card.signalId);
-    return themeSwing ? { ...card, themeSwing } : card;
+    if (card.strategyMode !== 'swing') return card;
+    const tags = themeTagsForCard(card);
+    const themeSwing = summaryFor(card, tags, groups);
+    return { ...card, themeSwing };
   });
 }
