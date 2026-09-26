@@ -90,6 +90,45 @@ test('scanner lifecycle reaches approval pending once and never submits an order
   assert.equal(getScannerSignalLifecycleSnapshot('member-1', repeated.cards[0].signalId)?.state, 'READY_FOR_APPROVAL');
 });
 
+test('decision history records only meaningful Scanner decision changes and remains bounded', () => {
+  clearScannerSignalLifecycleForTests();
+  const now = Date.parse('2026-08-05T01:00:00.000Z');
+
+  const first = applyScannerSignalLifecycle('member-history', [card({ strongSignalEligible: false })], now).cards[0];
+  assert.equal(first.decisionHistory?.length, 1);
+  assert.equal(first.decisionHistory?.[0].decision, 'WATCH');
+  assert.equal(first.decisionHistory?.[0].state, 'CANDIDATE');
+
+  const unchanged = applyScannerSignalLifecycle('member-history', [card({
+    signalId: first.signalId,
+    strongSignalEligible: false,
+  })], now + 1_000).cards[0];
+  assert.equal(unchanged.decisionHistory?.length, 1);
+
+  const longReview = applyScannerSignalLifecycle('member-history', [card({
+    signalId: first.signalId,
+    strongSignalEligible: true,
+  })], now + 2_000).cards[0];
+  assert.equal(longReview.decisionHistory?.at(-1)?.decision, 'LONG_REVIEW');
+  assert.equal(longReview.decisionHistory?.at(-1)?.eligible, true);
+
+  const blocked = applyScannerSignalLifecycle('member-history', [card({
+    signalId: longReview.signalId,
+    strongSignalEligible: false,
+    dataState: 'untrusted',
+    dataQuality: {
+      state: 'DATA_UNTRUSTED',
+      score: 30,
+      strongSignalAllowed: false,
+      issues: [{ code: 'STALE_TIMESTAMP', severity: 'blocking', message: '시세가 오래됐습니다.' }],
+    },
+  })], now + 3_000).cards[0];
+  assert.equal(blocked.signalState, 'INVALIDATED');
+  assert.equal(blocked.decisionHistory?.at(-1)?.decision, 'BLOCKED');
+  assert.ok(blocked.decisionHistory?.at(-1)?.reasons.includes('시세가 오래됐습니다.'));
+  assert.ok((blocked.decisionHistory?.length ?? 0) <= 12);
+});
+
 test('DATA_UNTRUSTED invalidates before ARMED, ENTRY_ZONE or approval can continue', () => {
   clearScannerSignalLifecycleForTests();
   const now = Date.parse('2026-08-05T01:00:00.000Z');
