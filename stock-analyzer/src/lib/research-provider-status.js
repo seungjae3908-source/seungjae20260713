@@ -14,7 +14,14 @@ export function parseResearchProviderStatus(raw) {
     check(p.provider===['youtube','gemini','groq'][i]&&['PRESENT','MISSING_IN_SELECTED_RUNTIME','INVALID','CONFLICT'].includes(p.credentialState));
     check(['NOT_APPLICABLE','DEFAULT_NOT_RESOLVED','EXPLICIT','INVALID','CONFLICT'].includes(p.modelState));
     check(p.callVerified===false&&p.quotaState==='NOT_CHECKED'&&p.billingState==='NOT_CHECKED');
-    return {provider:p.provider,credentialState:p.credentialState,modelState:p.modelState};
+    return {
+      provider:p.provider,
+      credentialState:p.credentialState,
+      modelState:p.modelState,
+      callVerified:p.callVerified,
+      quotaState:p.quotaState,
+      billingState:p.billingState,
+    };
   });
   return {checkedAt:raw.checkedAt,unmappedGenericCredential:raw.unmappedGenericCredential,providers};
 }
