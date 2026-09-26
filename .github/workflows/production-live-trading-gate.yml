@@ -311,72 +311,12 @@ jobs:
             throw new Error('LIVE_TRADING_RUNTIME_IDENTITY_INVALID');
           }
 
-          const alreadyDesired = pre.live
-            && pre.auto === false
-            && pre.real
-            && pre.privateApi
-            && pre.orderExecution
-            && pre.activationApproved
-            && pre.automaticLive === false
-            && pre.authority === 'MANUAL'
-            && allowedProviders.every((provider) => pre.provider[provider] === desiredProviders[provider]);
-
-          if (!alreadyDesired) {
-            const anyAuthority = pre.live || pre.auto || pre.real || pre.privateApi
-              || pre.orderExecution || pre.activationApproved || pre.automaticLive
-              || Object.values(pre.provider).some(Boolean)
-              || pre.authority !== 'NONE';
-            if (anyAuthority) throw new Error('LIVE_TRADING_ALREADY_ACTIVE_DIFFERENT_SCOPE');
-
-            const activationEnv = {
-              ...process.env,
-              LIVE_TRADING: 'true',
-              AUTO_TRADING: 'false',
-              REAL_ORDER_ENABLED: 'true',
-              PRIVATE_TRADING_API_ALLOWED: 'true',
-              ORDER_EXECUTION_ENABLED: 'true',
-              LIVE_TRADING_ACTIVATION_APPROVED: 'true',
-              LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
-              BITGET_LIVE_ORDER_ENABLED: String(desiredProviders.bitget),
-              UPBIT_LIVE_ORDER_ENABLED: String(desiredProviders.upbit),
-              KIWOOM_LIVE_ORDER_ENABLED: String(desiredProviders.kiwoom),
-              TOSS_LIVE_ORDER_ENABLED: String(desiredProviders.toss),
-              executionAuthority: 'MANUAL',
-              DEPLOY_SHA: target,
-            };
-            try {
-              execFileSync('pm2', ['restart', 'stock-app', '--update-env'], {
-                env: activationEnv,
-                stdio: ['ignore', 'ignore', 'pipe'],
-              });
-              execFileSync('pm2', ['save'], { stdio: ['ignore', 'ignore', 'pipe'] });
-            } catch (error) {
-              throw new Error(`LIVE_TRADING_PM2_ACTIVATION_FAILED:${error instanceof Error ? error.message : 'UNKNOWN'}`);
-            }
-          }
-
-          const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-          let healthOk = false;
-          for (let attempt = 0; attempt < 10; attempt += 1) {
-            try {
-              const response = await fetch('http://127.0.0.1:8080/api/health', { signal: AbortSignal.timeout(8000) });
-              const value = response.ok ? await response.json() : null;
-              if (value?.ok === true
-                && value?.deploySha === target
-                && value?.processDeploySha === target
-                && value?.deployMarkerSha === target
-                && value?.identityMatch === true) {
-                healthOk = true;
-                break;
-              }
-            } catch {}
-            if (attempt < 9) await wait(2000);
-          }
-
-          if (!healthOk) {
+          const disableTradingGates = () => {
             execFileSync('pm2', ['restart', 'stock-app', '--update-env'], {
               env: {
                 ...process.env,
+                LIVE_TELEGRAM_ACTIVATION_APPROVED: String(pre.telegramApproved),
+                TELEGRAM_INTELLIGENCE_WORKER_ENABLED: String(pre.telegramWorker),
                 LIVE_TRADING: 'false',
                 AUTO_TRADING: 'false',
                 REAL_ORDER_ENABLED: 'false',
@@ -394,24 +334,97 @@ jobs:
               stdio: ['ignore', 'ignore', 'pipe'],
             });
             execFileSync('pm2', ['save'], { stdio: ['ignore', 'ignore', 'pipe'] });
-            throw new Error('LIVE_TRADING_HEALTH_FAILED_ROLLED_BACK');
-          }
+          };
 
-          const post = readRuntime();
-          if (post.status !== 'online'
-            || post.deploySha !== target
-            || post.telegramApproved !== pre.telegramApproved
-            || post.telegramWorker !== pre.telegramWorker
-            || post.live !== true
-            || post.auto !== false
-            || post.real !== true
-            || post.privateApi !== true
-            || post.orderExecution !== true
-            || post.activationApproved !== true
-            || post.automaticLive !== false
-            || post.authority !== 'MANUAL'
-            || !allowedProviders.every((provider) => post.provider[provider] === desiredProviders[provider])) {
-            throw new Error('LIVE_TRADING_POST_ACTIVATION_STATE_INVALID');
+          const alreadyDesired = pre.live
+            && pre.auto === false
+            && pre.real
+            && pre.privateApi
+            && pre.orderExecution
+            && pre.activationApproved
+            && pre.automaticLive === false
+            && pre.authority === 'MANUAL'
+            && allowedProviders.every((provider) => pre.provider[provider] === desiredProviders[provider]);
+
+          try {
+            if (!alreadyDesired) {
+              const anyAuthority = pre.live || pre.auto || pre.real || pre.privateApi
+                || pre.orderExecution || pre.activationApproved || pre.automaticLive
+                || Object.values(pre.provider).some(Boolean)
+                || pre.authority !== 'NONE';
+              if (anyAuthority) throw new Error('LIVE_TRADING_ALREADY_ACTIVE_DIFFERENT_SCOPE');
+
+              const activationEnv = {
+                ...process.env,
+                LIVE_TELEGRAM_ACTIVATION_APPROVED: String(pre.telegramApproved),
+                TELEGRAM_INTELLIGENCE_WORKER_ENABLED: String(pre.telegramWorker),
+                LIVE_TRADING: 'true',
+                AUTO_TRADING: 'false',
+                REAL_ORDER_ENABLED: 'true',
+                PRIVATE_TRADING_API_ALLOWED: 'true',
+                ORDER_EXECUTION_ENABLED: 'true',
+                LIVE_TRADING_ACTIVATION_APPROVED: 'true',
+                LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
+                BITGET_LIVE_ORDER_ENABLED: String(desiredProviders.bitget),
+                UPBIT_LIVE_ORDER_ENABLED: String(desiredProviders.upbit),
+                KIWOOM_LIVE_ORDER_ENABLED: String(desiredProviders.kiwoom),
+                TOSS_LIVE_ORDER_ENABLED: String(desiredProviders.toss),
+                executionAuthority: 'MANUAL',
+                DEPLOY_SHA: target,
+              };
+              execFileSync('pm2', ['restart', 'stock-app', '--update-env'], {
+                env: activationEnv,
+                stdio: ['ignore', 'ignore', 'pipe'],
+              });
+              execFileSync('pm2', ['save'], { stdio: ['ignore', 'ignore', 'pipe'] });
+            }
+
+            const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            let healthOk = false;
+            for (let attempt = 0; attempt < 10; attempt += 1) {
+              try {
+                const response = await fetch('http://127.0.0.1:8080/api/health', { signal: AbortSignal.timeout(8000) });
+                const value = response.ok ? await response.json() : null;
+                if (value?.ok === true
+                  && value?.deploySha === target
+                  && value?.processDeploySha === target
+                  && value?.deployMarkerSha === target
+                  && value?.identityMatch === true) {
+                  healthOk = true;
+                  break;
+                }
+              } catch {}
+              if (attempt < 9) await wait(2000);
+            }
+            if (!healthOk) throw new Error('LIVE_TRADING_HEALTH_INVALID');
+
+            const post = readRuntime();
+            if (post.status !== 'online'
+              || post.deploySha !== target
+              || post.telegramApproved !== pre.telegramApproved
+              || post.telegramWorker !== pre.telegramWorker
+              || post.live !== true
+              || post.auto !== false
+              || post.real !== true
+              || post.privateApi !== true
+              || post.orderExecution !== true
+              || post.activationApproved !== true
+              || post.automaticLive !== false
+              || post.authority !== 'MANUAL'
+              || !allowedProviders.every((provider) => post.provider[provider] === desiredProviders[provider])) {
+              throw new Error('LIVE_TRADING_POST_ACTIVATION_STATE_INVALID');
+            }
+          } catch (error) {
+            try {
+              disableTradingGates();
+            } catch (rollbackError) {
+              throw new Error(
+                `LIVE_TRADING_ACTIVATION_FAILED_AND_ROLLBACK_FAILED:${error instanceof Error ? error.message : 'UNKNOWN'}:${rollbackError instanceof Error ? rollbackError.message : 'UNKNOWN'}`,
+              );
+            }
+            throw new Error(
+              `LIVE_TRADING_ACTIVATION_FAILED_ROLLED_BACK:${error instanceof Error ? error.message : 'UNKNOWN'}`,
+            );
           }
 
           process.stdout.write(JSON.stringify({
