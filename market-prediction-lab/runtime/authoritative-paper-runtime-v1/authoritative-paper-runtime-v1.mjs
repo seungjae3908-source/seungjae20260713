@@ -2655,6 +2655,57 @@ var ORDER_OWNED_STATES = /* @__PURE__ */ new Set([
   "REJECTED",
   "CANCELLED"
 ]);
+var MAX_DECISION_HISTORY = 12;
+function decisionOutcome(card, state) {
+  if (["INVALIDATED", "EXPIRED", "REJECTED", "CANCELLED", "CLOSED"].includes(state)) return "BLOCKED";
+  if (!card.strongSignalEligible) return state === "CANDIDATE" ? "WATCH" : "BLOCKED";
+  if (card.direction === "LONG") return "LONG_REVIEW";
+  if (card.direction === "SHORT") return "SHORT_REVIEW";
+  return "NO_TRADE";
+}
+function decisionReasons(previous, state, card) {
+  const reasons = [];
+  if (previous !== state) reasons.push(previous == null ? `신호 상태 시작: ${state}` : `신호 상태 ${previous} → ${state}`);
+  if (!card.strongSignalEligible) reasons.push("강신호 Gate 미충족");
+  reasons.push(...(card.dataQuality?.issues ?? []).filter((issue) => issue.severity === "blocking").map((issue) => issue.message));
+  reasons.push(...card.candidateRanking?.watchReasons ?? []);
+  reasons.push(...card.notMatched.slice(0, 2));
+  reasons.push(...card.warnings.slice(0, 2));
+  if (card.strongSignalEligible && card.direction === "LONG") reasons.push("현재 LONG 방향 검토 조건 유지");
+  if (card.strongSignalEligible && card.direction === "SHORT") reasons.push("현재 SHORT 방향 검토 조건 유지");
+  return [...new Set(reasons.filter(Boolean))].slice(0, 6);
+}
+function decisionKey(card, state) {
+  const blocking = (card.dataQuality?.issues ?? []).filter((issue) => issue.severity === "blocking").map((issue) => issue.code).sort().join(",");
+  const watch = (card.candidateRanking?.watchReasons ?? []).slice(0, 3).join("|");
+  return [
+    state,
+    card.direction,
+    card.action ?? "NONE",
+    card.strongSignalEligible ? "eligible" : "blocked",
+    card.signalGrade ?? "NO_GRADE",
+    card.dataState,
+    card.riskLevel,
+    blocking,
+    watch
+  ].join(":");
+}
+function withDecisionHistory(existing, resetCycle, previous, state, card, now) {
+  const key = decisionKey(card, state);
+  const previousHistory = resetCycle ? [] : existing?.decisionHistory ?? [];
+  if (!resetCycle && existing?.lastDecisionKey === key) return { history: previousHistory, key };
+  const entry = {
+    sequence: (previousHistory.at(-1)?.sequence ?? 0) + 1,
+    state,
+    direction: card.direction,
+    action: card.action ?? null,
+    decision: decisionOutcome(card, state),
+    eligible: card.strongSignalEligible,
+    observedAt: new Date(now).toISOString(),
+    reasons: decisionReasons(previous, state, card)
+  };
+  return { history: [...previousHistory, entry].slice(-MAX_DECISION_HISTORY), key };
+}
 function alertKey(signalId2, expiresAt) {
   return `scanner-alert:${createHash3("sha256").update(`${signalId2}:APPROVAL_PENDING:${expiresAt}`).digest("hex").slice(0, 32)}`;
 }
@@ -2744,7 +2795,13 @@ function applyScannerSignalLifecycle(memberId, cards, now = Date.now()) {
     const state = nextState(previous, card, now);
     const confirmationStreak = card.strongSignalEligible ? resetCycle ? 1 : (existing?.confirmationStreak ?? 0) + 1 : 0;
     const signalId2 = cycle === 1 ? baseSignalId : `${baseSignalId}:cycle:${cycle}`;
-    const nextCard = { ...card, signalId: signalId2, signalState: state };
+    const historyResult = withDecisionHistory(existing, resetCycle, previous, state, card, now);
+    const nextCard = {
+      ...card,
+      signalId: signalId2,
+      signalState: state,
+      decisionHistory: historyResult.history
+    };
     const idempotencyKey = alertKey(signalId2, card.expiresAt);
     let lastAlertKey = resetCycle ? null : existing?.lastAlertKey ?? null;
     if (state === "APPROVAL_PENDING" && lastAlertKey !== idempotencyKey) {
@@ -2758,7 +2815,9 @@ function applyScannerSignalLifecycle(memberId, cards, now = Date.now()) {
       confirmationStreak,
       firstSeenAt: resetCycle ? now : existing?.firstSeenAt ?? now,
       lastSeenAt: now,
-      lastAlertKey
+      lastAlertKey,
+      decisionHistory: historyResult.history,
+      lastDecisionKey: historyResult.key
     });
     return nextCard;
   });
