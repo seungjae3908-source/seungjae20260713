@@ -332,6 +332,155 @@ test('exit preview re-reads the real position in read-only mode and never submit
   }
 });
 
+test('order dashboard maps crypto execution markets back to AI Chart market identities', async () => {
+  const now = new Date().toISOString();
+  const cases = [
+    { key: 'upbit', exchange: 'upbit', planMarket: 'KRW', uiMarket: 'UPBIT', symbol: 'BTC', querySymbol: 'KRW-BTC', side: 'buy' },
+    { key: 'bitget', exchange: 'bitget', planMarket: 'USDT-FUTURES', uiMarket: 'BITGET', symbol: 'BTCUSDT', querySymbol: 'BTCUSDT', side: 'long' },
+  ] as const;
+
+  for (const item of cases) {
+    const planId = `dashboard-${item.key}-plan`;
+    const orderId = `dashboard-${item.key}-order`;
+    await repository.savePlan({
+      id: planId,
+      userId: USER,
+      idempotencyKey: `dashboard-${item.key}-key`,
+      state: 'SUBMITTED',
+      version: 0,
+      exchange: item.exchange,
+      accountMode: 'live',
+      stockBroker: null,
+      stockExchange: null,
+      strategyId: 'dashboard-test',
+      signalId: `dashboard-${item.key}-signal`,
+      symbol: item.symbol,
+      market: item.planMarket,
+      side: item.side,
+      orderType: 'limit',
+      quantity: 1,
+      quoteAmount: null,
+      limitPrice: 100,
+      estimatedKrw: 100,
+      stopPrice: 90,
+      targetPrices: [110],
+      splitRatios: [100],
+      leverage: item.exchange === 'bitget' ? 2 : null,
+      marginMode: item.exchange === 'bitget' ? 'isolated' : null,
+      reduceOnly: false,
+      invalidateAction: 'hold',
+      signalReasons: ['dashboard-market-identity'],
+      marketSnapshot: {
+        observedAt: now,
+        riskObservedAt: now,
+        dataDelayMs: 0,
+        oneMinuteMovePercent: 0,
+        spreadPercent: 0.1,
+        orderbookGapPercent: 0.1,
+        halted: false,
+        availableBalance: 1_000_000,
+        accountValueKrw: 1_000_000,
+        dailyPnlPercent: 0,
+        assetExposurePercent: 0,
+        openPositionCount: 0,
+        dailyOrderCount: 0,
+        consecutiveLosses: 0,
+        currentPrice: 100,
+        plannedPrice: 100,
+        marketStatus: 'OPEN',
+        availableLiquidityKrw: 1_000_000,
+        estimatedSlippagePercent: 0.1,
+        estimatedFeePercent: 0.05,
+        signalState: 'entry_ready',
+        signalObservedAt: now,
+      },
+      approvalExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      approvedAt: now,
+      createdAt: now,
+      updatedAt: now,
+      riskAssessment: null,
+      riskEnvelope: null,
+    } as any);
+    await repository.saveOrder({
+      id: orderId,
+      userId: USER,
+      planId,
+      exchange: item.exchange,
+      stockBroker: null,
+      clientOrderId: `dashboard-${item.key}-client`,
+      exchangeOrderId: `dashboard-${item.key}-exchange`,
+      state: 'ACCEPTED',
+      version: 0,
+      requestedQuantity: 1,
+      remainingQuantity: 1,
+      currentLimitPrice: 100,
+      filledQuantity: 0,
+      averageFillPrice: null,
+      fills: [],
+      feeAmount: null,
+      feeCurrency: null,
+      exchangeCreatedAt: now,
+      exchangeUpdatedAt: now,
+      cancelable: true,
+      providerStatusCode: 'open',
+      retryCount: 0,
+      nextRetryAt: null,
+      lastReconciledAt: now,
+      lastErrorCode: null,
+      manualReviewRequired: false,
+      executionClaimId: null,
+      submissionStartedAt: null,
+      submissionAttemptId: null,
+      approvedPlanVersion: 0,
+      preSubmissionCheckedAt: null,
+      preSubmissionDecision: null,
+      preSubmissionSnapshot: null,
+      cancelRequestedAt: null,
+      cancelRequestClaimId: null,
+      cancelSubmittedAt: null,
+      cancelAcknowledgedAt: null,
+      cancelOperationId: null,
+      recoveryLeaseOwner: null,
+      recoveryLeaseUntil: null,
+      protectionStatus: 'NOT_REQUIRED',
+      protectionErrorCode: null,
+      amendments: [],
+      lastAmendRequestId: null,
+      createdAt: now,
+      updatedAt: now,
+    } as any);
+
+    const { server, baseUrl } = await startServer();
+    try {
+      const query = new URLSearchParams({
+        dashboard: '1',
+        market: item.uiMarket,
+        symbol: item.querySymbol,
+        exchange: item.exchange,
+      });
+      const response = await fetch(`${baseUrl}/api/trade-automation/orders?${query.toString()}`);
+      assert.equal(response.status, 200);
+      const body = await response.json() as {
+        dashboardItems: Array<{ id: string; market: string; symbol: string }>;
+        orderSubmitted: boolean;
+        orderCanceled: boolean;
+        orderAmended: boolean;
+        privateTradingRequestSent: boolean;
+      };
+      assert.equal(body.dashboardItems.length, 1);
+      assert.equal(body.dashboardItems[0]?.id, orderId);
+      assert.equal(body.dashboardItems[0]?.market, item.uiMarket);
+      assert.equal(body.dashboardItems[0]?.symbol, item.symbol);
+      assert.equal(body.orderSubmitted, false);
+      assert.equal(body.orderCanceled, false);
+      assert.equal(body.orderAmended, false);
+      assert.equal(body.privateTradingRequestSent, false);
+    } finally {
+      await close(server);
+    }
+  }
+});
+
 test('status is authenticated, automatic execution defaults off, and never returns credential values', async () => {
   const unauthenticated = await startServer(false);
   try {
