@@ -7,6 +7,7 @@ export type ResearchProviderStatus = {
 };
 export function inspectExistingResearchProviders(env:unknown,options?:{now?:string;source?:ResearchProviderStatus['source']}):ResearchProviderStatus;
 export function runExistingEnvironmentVideo(argv:string[],options?:{env?:unknown;invokeVideo:(argv:string[],options:{env:Record<string,string>})=>Promise<unknown>}):Promise<unknown>;
+export function runExistingEnvironmentGroqReview(request:unknown,options?:{env?:unknown;invokeGroq:(request:unknown,options:{apiKey:string;model:string})=>Promise<unknown>}):Promise<unknown>;
 type ResponseLike={setHeader:(key:string,value:string)=>unknown;status:(code:number)=>ResponseLike;json:(value:unknown)=>unknown};
 export function createProviderReadinessHandler<Request>(options:{authorize:(req:Request)=>Promise<boolean>;readEnvironment?:()=>unknown;clock?:()=>string}):
   (req:Request,res:ResponseLike)=>Promise<unknown>;
