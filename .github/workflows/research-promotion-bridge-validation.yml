@@ -12,6 +12,8 @@ on:
       - 'api-server/src/services/strategy-promotion-research-bridge.service.test.ts'
       - 'api-server/src/services/research-center-readonly-contract.service.test.ts'
       - 'api-server/src/routes/strategy-promotion.ts'
+      - 'stock-analyzer/src/lib/strategy-promotion.ts'
+      - 'stock-analyzer/src/pages/strategy-promotion.tsx'
       - '.github/workflows/research-promotion-bridge-validation.yml'
 
 permissions:
@@ -90,3 +92,15 @@ jobs:
           grep -Fq "promotionIdentity" research-dashboard/server.py
           grep -Fq "promotionIdentity" research-dashboard/test/dashboard.test.mjs
           grep -Fq "promotionIdentity" research-dashboard/test/test_server.py
+
+      - name: Verify Promotion Center read-only bridge presentation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          client='stock-analyzer/src/lib/strategy-promotion.ts'
+          page='stock-analyzer/src/pages/strategy-promotion.tsx'
+          grep -Fq "/api/strategy-promotion/research-bridge" "$client"
+          grep -Fq "RESEARCH_PROMOTION_BRIDGE_AUTHORITY_INVALID" "$client"
+          grep -Fq "Research → 전략 승격 연결" "$page"
+          grep -Fq "자동채택 없음 · Paper 전달 없음 · Scanner 변경 없음 · 실행 권한 NONE" "$page"
+          ! grep -E "submitOrder|placeOrder|cancelOrder|amendOrder|withdraw|transfer" "$client" "$page"
