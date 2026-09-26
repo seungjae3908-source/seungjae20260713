@@ -32,13 +32,13 @@ export function ResponsiveTabs<T extends string>({
       data-testid={testId}
       data-ui-role="tabs"
       className={cn(
-        'no-scrollbar flex min-w-0 gap-1 overflow-x-auto overscroll-x-contain border border-card-border min-[1200px]:grid min-[1200px]:overflow-visible',
+        'grid w-full min-w-0 gap-1 overflow-visible border border-card-border',
         compact ? 'rounded-xl bg-background p-0.5' : 'rounded-2xl bg-card p-1',
-        options.length === 2 && 'min-[1200px]:grid-cols-2',
-        options.length === 3 && 'min-[1200px]:grid-cols-3',
-        options.length === 4 && 'min-[1200px]:grid-cols-4',
-        options.length === 5 && 'min-[1200px]:grid-cols-5',
-        options.length === 6 && 'min-[1200px]:grid-cols-6',
+        options.length === 2 && 'grid-cols-2',
+        options.length === 3 && 'grid-cols-3',
+        options.length === 4 && 'grid-cols-4',
+        options.length === 5 && 'grid-cols-3 min-[600px]:grid-cols-5',
+        options.length === 6 && 'grid-cols-3 min-[600px]:grid-cols-6',
         className,
       )}
     >
@@ -59,8 +59,8 @@ export function ResponsiveTabs<T extends string>({
               if (!option.disabled) onChange(option.value);
             }}
             className={cn(
-              'inline-flex min-h-11 shrink-0 items-center justify-center rounded-xl text-center text-xs font-semibold leading-4 transition-colors min-[1200px]:min-w-0',
-              compact ? 'min-w-[88px] px-3' : 'min-w-[76px] px-3',
+              'inline-flex min-h-11 min-w-0 items-center justify-center rounded-xl text-center text-xs font-semibold leading-4 transition-colors',
+              compact ? 'px-2.5' : 'px-3',
               option.disabled && 'cursor-not-allowed opacity-45',
               selected
                 ? 'bg-primary text-primary-foreground shadow-sm'
