@@ -1,0 +1,378 @@
+name: Research Workspace Reviewed One-shot Execution V14
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/research-workspace-one-shot-execution-v14.yml'
+      - 'api-server/scripts/run-research-workspace-one-shot-v12.ts'
+      - 'api-server/src/tools/research-workspace-one-shot-v12.ts'
+      - 'api-server/src/services/research-groq-json-transport.service.ts'
+      - 'packages/external-research/src/research-workspace-one-shot-v12.js'
+      - 'packages/external-research/src/research-workspace-orchestrator-v10.js'
+      - 'packages/external-research/src/research-workspace-providers-v8.js'
+      - 'scripts/agent_hub_rollover_v2.py'
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+  statuses: read
+
+concurrency:
+  group: research-workspace-reviewed-one-shot-execution
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Validate Phase14 execution contract without providers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          workflow=.github/workflows/research-workspace-one-shot-execution-v14.yml
+          grep -Fq "/research-workspace-one-shot-execute " "$workflow"
+          grep -Fq "[RESEARCH_WORKSPACE_ONE_SHOT_PREFLIGHT_V13]" "$workflow"
+          grep -Fq "READY_FOR_REVIEWED_ONE_SHOT" "$workflow"
+          grep -Fq "environment: production" "$workflow"
+          grep -Fq "HUMAN_RULE_DIGEST_REVIEW" packages/external-research/src/research-workspace-one-shot-v12.js
+          grep -Fq "ONE_SHOT_RUN_ALREADY_EXISTS" api-server/src/tools/research-workspace-one-shot-v12.ts
+          ! grep -Eq '^\s*schedule:|^\s*workflow_dispatch:' "$workflow"
+          ! grep -Eq 'GEMINI_API_KEY:.*secrets\.|GROQ_API_KEY:.*secrets\.|GOOGLE_API_KEY:.*secrets\.' "$workflow"
+          ! grep -Eq 'pm2 (restart|reload|save)|systemctl (start|restart|enable)|AUTO_TRADING=true|LIVE_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true' "$workflow"
+          node --check api-server/scripts/research-workspace-one-shot-preflight-v13.cjs
+
+  execute-reviewed-one-shot:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      !github.event.issue.pull_request &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/research-workspace-one-shot-execute ')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Resolve canonical Central Hub
+        id: hub
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/agent_hub_rollover_v2.py resolve
+
+      - name: Authorize exact-main one-shot from fresh READY preflight
+        id: authorize
+        uses: actions/github-script@v7
+        env:
+          HUB_ISSUE_NUMBER: ${{ steps.hub.outputs.active_issue }}
+        with:
+          script: |
+            const body = String(context.payload.comment?.body ?? '').trim();
+            const match = body.match(/^\/research-workspace-one-shot-execute ([0-9a-fA-F]{40})$/);
+            if (!match) {
+              core.setFailed('Expected /research-workspace-one-shot-execute <40-char-current-main-sha>');
+              return;
+            }
+            const canonicalHub = Number(process.env.HUB_ISSUE_NUMBER ?? 0);
+            const issueNumber = Number(context.payload.issue?.number ?? 0);
+            if (!Number.isInteger(canonicalHub) || canonicalHub <= 0 || issueNumber !== canonicalHub) {
+              core.setFailed('Execution command must be posted on the canonical Central Hub.');
+              return;
+            }
+            const targetSha = match[1].toLowerCase();
+            const main = (await github.rest.repos.getBranch({
+              owner: context.repo.owner, repo: context.repo.repo, branch: 'main',
+            })).data.commit.sha.toLowerCase();
+            if (targetSha !== main) {
+              core.setFailed('ONE_SHOT_EXECUTION_TARGET_NOT_EXACT_CURRENT_MAIN');
+              return;
+            }
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const combined = await github.rest.repos.getCombinedStatusForRef({
+              owner: context.repo.owner, repo: context.repo.repo, ref: targetSha,
+            });
+            const latest = new Map();
+            for (const row of combined.data.statuses ?? []) if (!latest.has(row.context)) latest.set(row.context, row.state);
+            const missing = required.filter(name => latest.get(name) !== 'success');
+            if (missing.length) {
+              core.setFailed('ONE_SHOT_EXECUTION_REQUIRED_CI_NOT_6_OF_6:' + missing.join(','));
+              return;
+            }
+            const deploys = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner, repo: context.repo.repo,
+              workflow_id: 'production-deploy.yml', per_page: 20,
+            });
+            if ((deploys.data.workflow_runs ?? []).some(run => ['queued','in_progress','waiting','pending'].includes(String(run.status)))) {
+              core.setFailed('ONE_SHOT_EXECUTION_BLOCKED_PRODUCTION_DEPLOY_ACTIVE');
+              return;
+            }
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: issueNumber, per_page: 100,
+            });
+            const now = Date.now();
+            const preflight = [...comments].reverse().find(comment => {
+              if (comment.user?.login !== 'github-actions[bot]' || comment.user?.type !== 'Bot') return false;
+              const lines = String(comment.body ?? '').trim().split(/\r?\n/).map(line => line.trim());
+              const ageMs = now - Date.parse(comment.created_at);
+              return ageMs >= 0 && ageMs <= 20 * 60_000
+                && lines[0] === '[RESEARCH_WORKSPACE_ONE_SHOT_PREFLIGHT_V13]'
+                && lines.includes('status: READY_FOR_REVIEWED_ONE_SHOT')
+                && lines.includes('target_sha: ' + targetSha)
+                && lines.includes('active_deploy_sha: ' + targetSha)
+                && lines.includes('pm2_online: true')
+                && lines.includes('root_configured: true')
+                && lines.includes('root_safe: true')
+                && lines.includes('source_file_safe: true')
+                && lines.includes('spec_file_safe: true')
+                && lines.includes('manifest_file_safe: true')
+                && lines.includes('video_approval_safe: true')
+                && lines.includes('groq_approval_safe: true')
+                && lines.includes('gemini_credential: PRESENT')
+                && lines.includes('groq_credential: PRESENT')
+                && lines.includes('groq_model: EXPLICIT')
+                && lines.includes('approval_binding: true')
+                && lines.includes('provider_calls: 0')
+                && lines.includes('execution_authority: NONE');
+            });
+            if (!preflight) {
+              core.setFailed('ONE_SHOT_EXECUTION_FRESH_READY_PREFLIGHT_REQUIRED');
+              return;
+            }
+            core.setOutput('target_sha', targetSha);
+            core.setOutput('source_comment_id', String(context.payload.comment.id));
+            core.setOutput('preflight_comment_id', String(preflight.id));
+
+      - name: Configure canonical Production SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Execute exact reviewed provider one-shot once
+        id: execute
+        env:
+          TARGET_SHA: ${{ steps.authorize.outputs.target_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          artifact="$RUNNER_TEMP/research-one-shot-v14-result.json"
+          quoted_sha="$(printf '%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
+            -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "TARGET_SHA=$quoted_sha bash -s" > "$artifact" <<'REMOTE'
+          set -Eeuo pipefail
+          LIVE_DIR=/opt/stock-app
+          marker="$LIVE_DIR/.deploy/current-sha"
+          test -f "$marker"
+          test "$(tr -d '[:space:]' < "$marker")" = "$TARGET_SHA"
+
+          pm2_json="$(mktemp /tmp/research-one-shot-pm2.XXXXXX.json)"
+          bundle="$(mktemp /tmp/research-one-shot-v14.XXXXXX.mjs)"
+          raw="$(mktemp /tmp/research-one-shot-v14.XXXXXX.out)"
+          cleanup(){ rm -f "$pm2_json" "$bundle" "$raw"; }
+          trap cleanup EXIT
+
+          pm2 jlist > "$pm2_json"
+          eval "$(node - "$pm2_json" "$TARGET_SHA" <<'NODE'
+          const fs=require('node:fs');
+          const [file,target]=process.argv.slice(2);
+          const rows=JSON.parse(fs.readFileSync(file,'utf8'));
+          const matches=rows.filter(row=>row?.name==='stock-app'&&row?.pm2_env);
+          const fail=code=>{console.error(code);process.exit(1);};
+          if(matches.length!==1)fail('ONE_SHOT_PM2_AMBIGUOUS');
+          const row=matches[0],env=row.pm2_env;
+          if(env.status!=='online')fail('ONE_SHOT_PM2_NOT_ONLINE');
+          if(String(env.DEPLOY_SHA??'').toLowerCase()!==target)fail('ONE_SHOT_PM2_SHA_MISMATCH');
+          const authority=String(env.executionAuthority??env.EXECUTION_AUTHORITY??'NONE').toUpperCase();
+          const flags=['LIVE_TRADING','AUTO_TRADING','REAL_ORDER_ENABLED','PRIVATE_TRADING_API_ALLOWED','ORDER_EXECUTION_ENABLED'];
+          for(const name of flags){
+            const value=String(env[name]??'false').trim().toLowerCase();
+            if(!['true','false'].includes(value))fail('ONE_SHOT_FLAG_MALFORMED');
+            if(value==='true')fail('ONE_SHOT_TRADING_AUTHORITY_ENABLED');
+          }
+          if(authority!=='NONE')fail('ONE_SHOT_EXECUTION_AUTHORITY_ENABLED');
+          const root=String(env.RESEARCH_WORKSPACE_ONE_SHOT_ROOT??'').trim();
+          if(!root.startsWith('/')||root.includes('\n')||root.includes('\r'))fail('ONE_SHOT_ROOT_INVALID');
+          const pid=Number(row.pid);
+          if(!Number.isSafeInteger(pid)||pid<=0)fail('ONE_SHOT_PID_INVALID');
+          console.log('ROOT_B64='+Buffer.from(root).toString('base64'));
+          console.log('APP_PID='+pid);
+          NODE
+          )"
+          root="$(printf '%s' "$ROOT_B64" | base64 -d)"
+          test "$(id -u)" = "$(stat -c '%u' "/proc/$APP_PID")"
+          test "$(id -u)" = "$(stat -c '%u' "$root")"
+          test "$(stat -c '%a' "$root")" = 700
+
+          cd "$LIVE_DIR/api-server"
+          pnpm exec esbuild scripts/run-research-workspace-one-shot-v12.ts \
+            --bundle --platform=node --format=esm --target=node22 \
+            --outfile="$bundle" >/dev/null
+
+          set +e
+          node "$bundle" --execute \
+            --source "$root/source.json" \
+            --spec "$root/spec.json" \
+            --manifest "$root/manifest.json" \
+            --video-approval "$root/video-approval.json" \
+            --groq-approval "$root/groq-approval.json" \
+            --output-root "$root" > "$raw" 2>&1
+          rc=$?
+          set -e
+
+          node - "$raw" "$rc" <<'NODE'
+          const fs=require('node:fs');
+          const [file,rcRaw]=process.argv.slice(2);
+          const lines=fs.readFileSync(file,'utf8').split(/\r?\n/).filter(Boolean);
+          let value=null;
+          for(const line of lines){
+            try{
+              const row=JSON.parse(line);
+              if(row&&typeof row==='object'&&typeof row.status==='string')value=row;
+            }catch{}
+          }
+          const rc=Number(rcRaw);
+          const safeStatus=new Set(['REVIEW_REQUIRED','BLOCKED','BLOCKED_UNCERTAIN']);
+          if(!value||!safeStatus.has(value.status)){
+            value={status:'BLOCKED',reason:'ONE_SHOT_EXECUTION_OUTPUT_INVALID',manifestDigest:null,packageDigest:null,
+              providerCalls:{gemini:0,groq:0},executionAuthority:'NONE'};
+          }
+          const providerCalls={
+            gemini:Number.isInteger(value.providerCalls?.gemini)?value.providerCalls.gemini:0,
+            groq:Number.isInteger(value.providerCalls?.groq)?value.providerCalls.groq:0,
+          };
+          if(providerCalls.gemini<0||providerCalls.gemini>1||providerCalls.groq<0||providerCalls.groq>1) {
+            value={status:'BLOCKED',reason:'ONE_SHOT_PROVIDER_CALL_COUNT_INVALID',manifestDigest:null,packageDigest:null,
+              providerCalls:{gemini:0,groq:0},executionAuthority:'NONE'};
+          }
+          const out={
+            schemaVersion:'research-workspace-one-shot-execution-v14',
+            status:value.status,
+            reason:typeof value.reason==='string'&&/^[A-Z0-9_]{3,96}$/.test(value.reason)?value.reason:null,
+            manifestDigest:typeof value.manifestDigest==='string'&&/^[a-f0-9]{64}$/.test(value.manifestDigest)?value.manifestDigest:null,
+            packageDigest:typeof value.packageDigest==='string'&&/^[a-f0-9]{64}$/.test(value.packageDigest)?value.packageDigest:null,
+            providerCalls,
+            runnerExitCode:Number.isSafeInteger(rc)?rc:null,
+            requiredNextStep:value.status==='REVIEW_REQUIRED'?'HUMAN_RULE_DIGEST_REVIEW':'OPERATOR_REVIEW_NO_RETRY',
+            automaticCompilerRun:false,automaticBacktestRun:false,automaticAdoption:false,
+            executionAuthority:'NONE',
+          };
+          process.stdout.write(JSON.stringify(out)+'\n');
+          NODE
+          REMOTE
+
+          test -s "$artifact"
+          node - "$artifact" <<'NODE'
+          const fs=require('node:fs');
+          const value=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if(value?.schemaVersion!=='research-workspace-one-shot-execution-v14'
+            || !['REVIEW_REQUIRED','BLOCKED','BLOCKED_UNCERTAIN'].includes(value?.status)
+            || !Number.isInteger(value?.providerCalls?.gemini) || value.providerCalls.gemini<0 || value.providerCalls.gemini>1
+            || !Number.isInteger(value?.providerCalls?.groq) || value.providerCalls.groq<0 || value.providerCalls.groq>1
+            || value?.automaticCompilerRun!==false || value?.automaticBacktestRun!==false || value?.automaticAdoption!==false
+            || value?.executionAuthority!=='NONE') process.exit(1);
+          if(/Bearer\s+\S+|BEGIN .*PRIVATE KEY|api[_ -]?key\s*[:=]/i.test(JSON.stringify(value))) process.exit(1);
+          NODE
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+
+      - name: Upload sanitized one-shot execution evidence
+        if: always() && steps.execute.outputs.artifact != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-workspace-one-shot-execution-${{ steps.authorize.outputs.target_sha }}
+          path: ${{ steps.execute.outputs.artifact }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report sanitized one-shot result to Central Hub
+        if: always() && steps.execute.outputs.artifact != ''
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.authorize.outputs.target_sha }}
+          SOURCE_COMMENT_ID: ${{ steps.authorize.outputs.source_comment_id }}
+          PREFLIGHT_COMMENT_ID: ${{ steps.authorize.outputs.preflight_comment_id }}
+          ARTIFACT: ${{ steps.execute.outputs.artifact }}
+          HUB_ISSUE_NUMBER: ${{ steps.hub.outputs.active_issue }}
+        with:
+          script: |
+            const fs=require('node:fs');
+            const value=JSON.parse(fs.readFileSync(process.env.ARTIFACT,'utf8'));
+            const body=[
+              '[RESEARCH_WORKSPACE_ONE_SHOT_EXECUTION_V14]',
+              'status: '+value.status,
+              'target_sha: '+process.env.TARGET_SHA,
+              'manifest_digest: '+(value.manifestDigest??'UNKNOWN'),
+              'package_digest: '+(value.packageDigest??'UNKNOWN'),
+              'gemini_calls: '+String(value.providerCalls?.gemini??0),
+              'groq_calls: '+String(value.providerCalls?.groq??0),
+              'required_next_step: '+value.requiredNextStep,
+              'automatic_compiler_run: false',
+              'automatic_backtest_run: false',
+              'automatic_adoption: false',
+              'execution_authority: NONE',
+              'workflow_run: '+context.runId,
+              'preflight_comment_id: '+process.env.PREFLIGHT_COMMENT_ID,
+              'source_comment_id: '+process.env.SOURCE_COMMENT_ID,
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner:context.repo.owner,repo:context.repo.repo,
+              issue_number:Number(process.env.HUB_ISSUE_NUMBER),body,
+            });
+
+      - name: Enforce no-blind-retry terminal result
+        if: always() && steps.execute.outputs.artifact != ''
+        env:
+          ARTIFACT: ${{ steps.execute.outputs.artifact }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          status="$(node -e "const v=require(process.argv[1]);process.stdout.write(String(v.status))" "$ARTIFACT")"
+          if [[ "$status" == REVIEW_REQUIRED ]]; then
+            exit 0
+          fi
+          echo "One-shot ended $status. Do not retry blindly; inspect server-private evidence and prepare a new reviewed manifest if needed." >&2
+          exit 1
+
+      - name: Clean runner SSH material
+        if: always()
+        shell: bash
+        run: |
+          rm -f ~/.ssh/id_ed25519 ~/.ssh/known_hosts
