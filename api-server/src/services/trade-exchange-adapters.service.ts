@@ -377,6 +377,10 @@ export function prepareBitgetUtaAccountInfo(credentials: BitgetCredentials, time
   return bitgetRequest(credentials, 'GET', '/api/v3/account/info', null, '', timestamp);
 }
 
+export function prepareBitgetUtaAccountSettings(credentials: BitgetCredentials, timestamp?: string) {
+  return bitgetRequest(credentials, 'GET', '/api/v3/account/settings', null, '', timestamp);
+}
+
 export function prepareBitgetUtaAssets(credentials: BitgetCredentials, timestamp?: string) {
   return bitgetRequest(credentials, 'GET', '/api/v3/account/assets', null, '', timestamp);
 }
