@@ -77,6 +77,13 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain("setExitPreviewState({ kind: 'idle' });");
   expect(panel).toContain("payload.preview.requiresFinalRiskRecheck !== true");
   expect(panel).toContain("payload.preview.requiresExplicitApproval !== true");
+  expect(panel).toContain("authorizedFetch('/api/trade-automation/positions/exit-plan'");
+  expect(panel).toContain("plan.schemaVersion !== 'ai-chart-canonical-exit-plan-v2'");
+  expect(panel).toContain("plan.requiresFreshAccountRecheckAtApproval !== true");
+  expect(panel).toContain("plan.requiresOrderTimeRiskRecheck !== true");
+  expect(panel).toContain("plan.executionAuthority !== 'NONE'");
+  expect(panel).toContain("data-testid=\"ai-chart-prepare-exit-plan\"");
+  expect(panel).toContain("data-testid=\"ai-chart-canonical-exit-plan\"");
   expect(panel).toContain("payload.preview.state !== 'SERVER_VERIFIED_DRAFT'");
   expect(panel).toContain("!/^[0-9a-f]{64}$/u.test(payload.preview.draftId)");
   expect(panel).toContain("confirmed: true");
@@ -305,6 +312,7 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await page.setViewportSize({ width: 1440, height: 960 });
   let accountReads = 0;
   let exitPreviewReads = 0;
+  let exitPlanReads = 0;
   let entryReadinessReads = 0;
   const financialMutations: string[] = [];
 
@@ -441,6 +449,81 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
             orderSubmissionPerformedByPreview: false,
             executionAuthorityGrantedByPreview: false,
           },
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/positions/exit-plan') {
+      exitPlanReads += 1;
+      expect(request.method()).toBe('POST');
+      const body = request.postDataJSON() as {
+        confirmed?: boolean;
+        provider?: string;
+        market?: string;
+        symbol?: string;
+        percent?: number;
+        draftId?: string;
+        draftIssuedAt?: string;
+        draftExpiresAt?: string;
+        positionQuantity?: number | null;
+        availableQuantity?: number;
+        exitQuantity?: number;
+        side?: string;
+        sourceCheckedAt?: string;
+      };
+      expect(body.confirmed).toBe(true);
+      expect(body.provider).toBe('toss');
+      expect(body.market).toBe('KR');
+      expect(body.symbol).toBe('005930');
+      expect(body.percent).toBe(25);
+      expect(body.draftId).toBe('e'.repeat(64));
+      expect(body.positionQuantity).toBe(20);
+      expect(body.availableQuantity).toBe(20);
+      expect(body.exitQuantity).toBe(5);
+      expect(body.side).toBe('sell');
+      expect(Number.isFinite(Date.parse(body.draftIssuedAt ?? ''))).toBe(true);
+      expect(Number.isFinite(Date.parse(body.draftExpiresAt ?? ''))).toBe(true);
+      expect(Number.isFinite(Date.parse(body.sourceCheckedAt ?? ''))).toBe(true);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          canonicalExitPlan: {
+            schemaVersion: 'ai-chart-canonical-exit-plan-v2',
+            state: 'SERVER_VERIFIED_PLAN',
+            planId: 'a'.repeat(64),
+            exitDraftId: 'e'.repeat(64),
+            provider: 'toss',
+            market: 'KR',
+            symbol: '005930',
+            accountMode: 'live',
+            orderType: 'market',
+            side: 'sell',
+            quantity: 5,
+            percent: 25,
+            reduceOnly: true,
+            sourceCheckedAt: new Date().toISOString(),
+            issuedAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            approvalEligible: false,
+            blockers: ['LIVE_CONNECTION_NOT_CONFIGURED', 'MANUAL_LIVE_SERVER_GATE_OFF'],
+            requiresFreshAccountRecheckAtApproval: true,
+            requiresOrderTimeRiskRecheck: true,
+            requiresExplicitApproval: true,
+            nextOwner: 'CANONICAL_EXIT_APPROVAL_OWNER',
+            executionAuthority: 'NONE',
+            orderSubmissionPerformed: false,
+            financialMutationPerformed: false,
+          },
+          planPrepared: true,
+          privateAccountReadPerformed: true,
+          financialMutationPerformed: false,
+          orderSubmitted: false,
+          orderCanceled: false,
+          orderAmended: false,
+          privateTradingMutationSent: false,
+          executionAuthority: 'NONE',
         }),
       });
       return;
@@ -634,6 +717,17 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await expect(cockpit.getByTestId('ai-chart-exit-readiness')).toContainText('실전 종료 준비 · 차단');
   await expect(cockpit.getByTestId('ai-chart-exit-readiness')).toContainText('실전 거래키가 연결되지 않음');
   await expect(cockpit.getByTestId('ai-chart-exit-readiness')).toContainText('실주문 서버게이트가 꺼져 있음');
+  await cockpit.getByTestId('ai-chart-prepare-exit-plan').click();
+  await expect.poll(() => exitPlanReads).toBe(1);
+  const exitPlan = cockpit.getByTestId('ai-chart-canonical-exit-plan');
+  await expect(exitPlan).toContainText('종료 승인계획 준비됨 · 현재 승인 차단');
+  await expect(exitPlan).toContainText('25% · 5');
+  await expect(exitPlan).toContainText('reduce-only');
+  await expect(exitPlan).toContainText('Plan aaaaaaaaaaaa…');
+  await expect(exitPlan).toContainText('Draft eeeeeeeeeeee…');
+  await expect(exitPlan).toContainText('실전 거래키가 연결되지 않음');
+  await expect(exitPlan).toContainText('실주문 서버게이트가 꺼져 있음');
+  await expect(exitPlan).toContainText('최종 승인 시 실계좌 재확인 + 주문시점 Risk 재검증');
 
   await cockpit.getByRole('tab', { name: '주문', exact: true }).click();
   await cockpit.getByTestId('ai-chart-load-orders').click();
