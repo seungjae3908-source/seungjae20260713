@@ -392,8 +392,19 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
           readOnly: true,
           connected: true,
           status: 'CONNECTED',
-          accounts: null,
-          balances: null,
+          accounts: [{
+            market: 'KR',
+            accountRef: '12****34',
+            currency: 'KRW',
+            buyingPower: 500_000,
+          }],
+          balances: [{
+            currency: 'KRW',
+            available: 400_000,
+            locked: 0,
+            total: 400_000,
+            estimatedKrwValue: 400_000,
+          }],
           positions: [{
             market: 'KR',
             symbol: '005930',
@@ -409,7 +420,16 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
             marginMode: null,
             side: null,
           }],
-          openOrders: null,
+          openOrders: [{
+            id: 'provider-open-005930',
+            market: 'KR',
+            symbol: '005930',
+            side: 'BUY',
+            price: 70_300,
+            quantity: 3,
+            remainingQuantity: 2,
+            status: 'OPEN',
+          }],
           checkedAt: new Date().toISOString(),
           lastGoodAt: new Date().toISOString(),
           stale: false,
@@ -441,6 +461,9 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await expect(panel).toContainText('70,000원');
   await expect(panel).toContainText('20');
   await expect(panel).toContainText('+42,000원');
+  await expect(panel.getByTestId('ai-chart-account-capacity')).toContainText('500,000원');
+  await expect(panel.getByTestId('ai-chart-account-capacity')).toContainText('Provider 미체결');
+  await expect(panel.getByTestId('ai-chart-account-capacity')).toContainText('1건');
   await expect(panel.getByTestId('ai-chart-position-guidance')).toContainText('평단 기준 수익 구간');
   await expect(page.getByTestId('unified-chart-wrapper')).toHaveAttribute('data-position-average', '70000');
 
@@ -453,6 +476,11 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   const cockpit = panel.getByTestId('ai-chart-trading-cockpit');
   await cockpit.locator('summary').click();
   await expect(cockpit).toContainText('현재 종목의 승인 대기 진입이 없습니다.');
+  await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('Provider 실제 미체결');
+  await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('BUY · OPEN');
+  await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('70,300원');
+  await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('잔량 2');
+  await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('여기서 취소·정정 권한을 만들지 않습니다.');
   await expect(cockpit.getByTestId('ai-chart-exit-dashboard')).toContainText('종료 예정 비중');
   await expect(cockpit.getByTestId('ai-chart-exit-dashboard')).toContainText('20');
   await cockpit.getByRole('button', { name: '25%' }).click();
