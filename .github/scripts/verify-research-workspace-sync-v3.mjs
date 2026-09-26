@@ -5,6 +5,17 @@ const OWNER='adfcb23baf956bcaa025f0846313faf8db7a4e4a';
 const BASE='9057c4a3767db0f81e595fc481f5066bda6c9e43';
 const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trimEnd();
 const added=[
+ 'packages/external-research/src/research-workspace-one-shot-v12.js',
+ 'packages/external-research/src/research-workspace-one-shot-v12.d.ts',
+ 'packages/external-research/test/research-workspace-one-shot-v12.test.js',
+ 'packages/external-research/docs/research-workspace-phase12.md',
+ 'packages/external-research/scripts/run-existing-research-providers-v8.d.mts',
+ 'api-server/src/services/ai-chat.service.ts',
+ 'api-server/src/services/research-groq-one-shot-transport.service.test.ts',
+ 'api-server/src/tools/research-workspace-one-shot-v12.ts',
+ 'api-server/src/tools/research-workspace-one-shot-v12.test.ts',
+ 'api-server/scripts/run-research-workspace-one-shot-v12.ts',
+ 'api-server/test.mjs',
  'packages/external-research/src/research-workspace-runtime-binding-v11.js',
  'packages/external-research/test/research-workspace-runtime-binding-v11.test.js',
  'packages/external-research/docs/research-workspace-phase11.md',
