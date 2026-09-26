@@ -1,5 +1,5 @@
 import { emptySnapshot, type AccountProvider, type CanonicalAccountSnapshot } from './account-readonly.contract';
-import { classifyProviderError } from './account-readonly.errors';
+import { classifyProviderError, isAccountReadonlyCredentialAccessError } from './account-readonly.errors';
 
 export type AccountReadScope = {
   userId: string;
@@ -74,7 +74,7 @@ export class AccountReadonlyService {
       return value;
     } catch (error) {
       const classified = classifyProviderError(error);
-      if (classified.code === 'AUTH_FAILED') {
+      if (isAccountReadonlyCredentialAccessError(classified.code)) {
         this.lastGood.delete(cacheKey);
         return emptySnapshot(provider, 'AUTH_FAILED', this.now().toISOString(), classified.code);
       }

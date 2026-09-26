@@ -38,7 +38,7 @@ type ApprovalStatus = {
 
 export type TradeApprovalQueueItem = {
   id: string;
-  exchange: 'bitget' | 'upbit' | 'kiwoom';
+  exchange: 'bitget' | 'upbit' | 'kiwoom' | 'toss';
   accountMode: 'paper' | 'mock' | 'live';
   strategyId: string;
   signalId: string;
@@ -91,7 +91,8 @@ type ApprovalStatusResponse = {
 const EXCHANGE_LABEL: Record<TradeApprovalQueueItem['exchange'], string> = {
   bitget: 'Bitget 선물',
   upbit: 'Upbit 현물',
-  kiwoom: 'Kiwoom 국내주식',
+  kiwoom: 'Kiwoom 주식',
+  toss: 'Toss 주식',
 };
 
 const SIGNAL_LABEL: Record<SignalState, string> = {
@@ -125,7 +126,7 @@ function stateClass(state: SignalState) {
 }
 
 function accountModeClass(mode: TradeApprovalQueueItem['accountMode']) {
-  if (mode === 'live') return 'border-destructive/40 bg-destructive/10 text-destructive';
+  if (mode === 'live') return 'border-warning/40 bg-warning/10 text-warning';
   if (mode === 'mock') return 'border-warning/40 bg-warning/10 text-warning';
   return 'border-primary/30 bg-primary/10 text-primary';
 }
@@ -255,7 +256,6 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
       const countdown = approvalCountdown(item.approval.expiresAt, now);
       const enabled = item.approval.approvalEnabled
         && item.state === 'APPROVAL_PENDING'
-        && item.accountMode !== 'live'
         && !countdown.expired;
       if (enabled) available += 1;
       if (enabled && countdown.seconds <= 60) expiringSoon += 1;
@@ -322,18 +322,15 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
       && item.state === 'APPROVAL_PENDING'
       && item.signalState === 'READY_FOR_APPROVAL'
       && !countdown.expired
-      && item.accountMode !== 'live'
       && !stale
       && !offline
       && dataState === 'ready';
     setConfirmationId(item.id);
     setValidationMessage(locallyEnabled
       ? '서버 승인 상태를 확인하고 있습니다.'
-      : item.accountMode === 'live'
-        ? '실전 계좌 주문은 현재 차단 상태입니다.'
-        : stale || offline || dataState !== 'ready'
-          ? '통신 상태가 최신이 아니어서 서버 재검증 전까지 승인할 수 없습니다.'
-          : approvalMessage(item.approval.reasonCode, item.signalInvalidationReason));
+      : stale || offline || dataState !== 'ready'
+        ? '통신 상태가 최신이 아니어서 서버 재검증 전까지 승인할 수 없습니다.'
+        : approvalMessage(item.approval.reasonCode, item.signalInvalidationReason));
     void revalidateConfirmation(item.id);
   }
 
@@ -358,16 +355,13 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
       setItems((current) => current.map((candidate) => candidate.id === item.id ? checkedItem : candidate));
       const countdown = approvalCountdown(checkedItem.approval.expiresAt);
       if (!queueMutationAllowedRef.current
-        || checkedItem.accountMode === 'live'
         || !checkedItem.approval.approvalEnabled
         || checkedItem.state !== 'APPROVAL_PENDING'
         || checkedItem.signalState !== 'READY_FOR_APPROVAL'
         || countdown.expired) {
         setValidationMessage(!queueMutationAllowedRef.current
           ? '최신 승인 목록 상태를 확인할 수 없어 주문 승인을 잠갔습니다.'
-          : checkedItem.accountMode === 'live'
-            ? '실전 계좌 주문은 현재 차단 상태입니다.'
-            : approvalMessage(checkedItem.approval.reasonCode, checkedItem.signalInvalidationReason));
+          : approvalMessage(checkedItem.approval.reasonCode, checkedItem.signalInvalidationReason));
         return;
       }
 
@@ -498,7 +492,7 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
 
           {!loading && sorted.map((item) => {
             const countdown = approvalCountdown(item.approval.expiresAt, now);
-            const liveBlocked = item.accountMode === 'live';
+            const liveBlocked = item.accountMode === 'live' && item.approval.reasonCode === 'LIVE_EXECUTION_DISABLED';
             const enabled = item.approval.approvalEnabled
               && !countdown.expired
               && item.state === 'APPROVAL_PENDING'
@@ -544,7 +538,7 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
                     <p className="font-extrabold">{busy ? '서버 확인 중' : enabled ? '최종 승인 가능' : liveBlocked ? '실전 주문 차단' : '주문 승인 비활성화'}</p>
                     <p className="mt-0.5 break-keep leading-5 text-muted-foreground">
                       {liveBlocked
-                        ? '실전 계좌 주문은 현재 활성화되지 않았습니다.'
+                        ? '실전 주문 서버게이트가 꺼져 있어 실제 주문을 보낼 수 없습니다.'
                         : stale || offline || dataState !== 'ready'
                           ? '최신 상태를 확인할 수 없어 승인·거절 기능을 잠갔습니다.'
                           : countdown.expired
@@ -591,7 +585,15 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
                     className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-primary px-3 text-xs font-extrabold text-primary-foreground disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
                   >
                     {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : enabled ? <ShieldCheck className="h-4 w-4" /> : <ShieldX className="h-4 w-4" />}
-                    {busy ? '서버 확인 중' : liveBlocked ? '실전 주문 차단' : item.accountMode === 'paper' ? 'Paper 주문 승인' : '모의 주문 승인'}
+                    {busy
+                      ? '서버 확인 중'
+                      : liveBlocked
+                        ? '실전 주문 차단'
+                        : item.accountMode === 'live'
+                          ? '실전 주문 승인'
+                          : item.accountMode === 'paper'
+                            ? 'Paper 주문 승인'
+                            : '모의 주문 승인'}
                   </button>
                 </div>
               </article>
