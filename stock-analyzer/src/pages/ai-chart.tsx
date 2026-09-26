@@ -156,6 +156,19 @@ function actionLabel(action: AnalysisSelection['action']): string {
   return '판단 대기';
 }
 
+function actionDirection(action: AnalysisSelection['action']): -1 | 0 | 1 {
+  if (action === 'BUY' || action === 'LONG') return 1;
+  if (action === 'SELL' || action === 'SHORT') return -1;
+  return 0;
+}
+
+function contextualActionLabel(selection: AnalysisSelection, analysis: ChartAnalysis | null): string {
+  const scannerDirection = actionDirection(selection.action);
+  const chartDirection = analysis?.bias === 'bullish' ? 1 : analysis?.bias === 'bearish' ? -1 : 0;
+  if (scannerDirection !== 0 && chartDirection !== 0 && scannerDirection !== chartDirection) return '판단 보류';
+  return actionLabel(selection.action);
+}
+
 function strategyModeLabel(mode: AiChartStrategyMode): string {
   if (mode === 'SCALPING') return '단타';
   if (mode === 'SWING') return '스윙';
@@ -230,7 +243,7 @@ function MobileSummary({ selection, analysis }: { selection: AnalysisSelection; 
           </p>
         </div>
         <span className="shrink-0 rounded-full border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-black text-primary">
-          {actionLabel(selection.action)}
+          {contextualActionLabel(selection, analysis)}
         </span>
       </div>
 
@@ -240,7 +253,7 @@ function MobileSummary({ selection, analysis }: { selection: AnalysisSelection; 
           <strong className="mt-0.5 block text-sm tabular-nums">{formatAiChartScore(selection.signalScore)}</strong>
         </div>
         <div className="rounded-2xl bg-background p-2.5">
-          <p className="text-[10px] text-muted-foreground">신뢰도</p>
+          <p className="text-[10px] text-muted-foreground">근거 강도</p>
           <strong className="mt-0.5 block text-sm tabular-nums">{formatAiChartScore(confidence)}</strong>
         </div>
         <div className="rounded-2xl bg-background p-2.5">
@@ -303,7 +316,7 @@ function ContextCard({ selection, analysis }: { selection: AnalysisSelection; an
           <strong>{analysis ? biasLabel(analysis.bias) : '-'}</strong>
         </div>
         <div data-testid="analysis-signal-score" className="rounded-2xl bg-background p-2">
-          <p className="text-[10px] text-muted-foreground">신뢰도</p>
+          <p className="text-[10px] text-muted-foreground">근거 강도</p>
           <strong>{formatAiChartScore(analysis?.confidence ?? selection.confidence)}</strong>
         </div>
       </div>
@@ -826,13 +839,14 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
                 ariaLabel="AI 차트 모바일 보기"
                 testId="ai-chart-mobile-tabs"
                 compact
+                fluid
               />
             </div>
           </div>
           <main className="mx-auto w-full max-w-7xl p-3 sm:p-4">
             {mobileTab === 'summary' ? (hasSelection ? <MobileSummary selection={selection} analysis={analysis} /> : emptyState) : null}
             {mobileTab === 'chart' ? (
-              <section data-testid="ai-chart-mobile-chart" className="min-w-0 [&_[data-testid=ai-chart-position-panel]]:hidden">
+              <section data-testid="ai-chart-mobile-chart" className="min-w-0 space-y-3">
                 {chart}
                 {hasSelection ? <div className="hidden" aria-hidden="true" data-testid="ai-chart-mobile-overlay-controller">{intelligencePanel}</div> : null}
               </section>
@@ -841,6 +855,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
               <section data-testid="ai-chart-mobile-position" className="min-w-0">
                 {hasSelection ? (
                   <AiChartPositionPanel
+                    selection={selection}
                     market={selection.market}
                     symbol={selection.symbol || selection.ticker}
                     chartPrice={null}
