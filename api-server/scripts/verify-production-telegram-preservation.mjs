@@ -173,6 +173,24 @@ function assertFlags(event, expected) {
 }
 function success(result) { assert.equal(result.status, 0, result.stderr || result.stdout); }
 
+check('generic deploy refuses active live-trading authority before any restart', () => {
+  const result = run(sameTarget, {
+    same: true,
+    rows: state('false', 'false', {
+      LIVE_TRADING: 'true',
+      REAL_ORDER_ENABLED: 'true',
+      PRIVATE_TRADING_API_ALLOWED: 'true',
+      ORDER_EXECUTION_ENABLED: 'true',
+      LIVE_TRADING_ACTIVATION_APPROVED: 'true',
+      UPBIT_LIVE_ORDER_ENABLED: 'true',
+      executionAuthority: 'MANUAL',
+    }),
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /LIVE_TRADING_ACTIVE_DEPLOY_FORBIDDEN/);
+  assert.deepEqual(result.events, []);
+});
+
 check('already-active healthy app accepts Telegram OFF without restart', () => {
   const result = run(sameTarget, { same: true });
   success(result); assert.deepEqual(result.events, []); assert.equal(result.marker, target);
