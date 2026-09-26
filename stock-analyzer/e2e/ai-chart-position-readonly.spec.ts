@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
+import { safeTradeErrorMessage } from '../src/lib/trade-approval-ui';
 import {
   buildPositionGuidance,
   feeInclusiveBreakEvenPrice,
@@ -68,10 +69,73 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain('snapshot.autoTradingEnabled !== false');
   expect(panel).toContain("code: 'ACCOUNT_SNAPSHOT_SAFETY_MISMATCH'");
 
-  expect(panel).not.toContain("method: 'POST'");
-  expect(panel).not.toContain("method: 'PUT'");
-  expect(panel).not.toContain("method: 'PATCH'");
-  expect(panel).not.toContain("method: 'DELETE'");
+  expect(panel).toContain("window.confirm");
+  expect(panel).toContain("/api/trade-automation/orders/");
+  expect(panel).toContain("/cancel");
+  expect(panel).toContain("/amend");
+  expect(panel).toContain("JSON.stringify({ confirmed: true })");
+  expect(panel).toContain("setExitPreviewState({ kind: 'idle' });");
+  expect(panel).toContain("confirmed: true");
+  expect(panel).toContain("자동 조회·자동 취소·자동 정정 없음");
+  expect(panel).toContain("item.state === 'ACCEPTED'");
+  expect(panel).toContain("item.filledQuantity === 0");
+  expect(panel).toContain("isUsStockPriceOnlyAmend(item)");
+  expect(panel).toContain("const quantity = priceOnly ? null");
+  expect(panel).toContain("부분체결된 주문은 정정하지 않고 미체결 잔량 취소 후 새 계획으로 다시 검증합니다.");
+  expect(panel).toContain("ScannerApprovalComposer selection={selection}");
+  expect(panel).toContain("data-testid=\"ai-chart-entry-planning\"");
+  expect(panel).toContain("이 화면에서 새로 만드는 진입은 현재 Paper 전용입니다.");
+  expect(panel).toContain("실전 신규진입은 브라우저에서 임의 생성하지 않으며");
+  expect(panel).toContain("Live 신규계획 생성 · 미연결");
+  expect(panel).toContain("data-testid=\"ai-chart-exit-dashboard-unavailable\"");
+  expect(panel).toContain("현재 종목 보유 포지션이 없어 종료계획을 만들지 않습니다.");
+  expect(panel).toContain("{tradingCockpit}");
+  expect(panel).toContain("const orderAbortRef = useRef<AbortController | null>(null);");
+  expect(panel).toContain("const exitAbortRef = useRef<AbortController | null>(null);");
+  expect(panel).toContain("orderAbortRef.current?.abort();");
+  expect(panel).toContain("exitAbortRef.current?.abort();");
+  expect(panel).toContain("dashboard: '1'");
+  expect(panel).toContain("if (market !== 'KR' && market !== 'US') query.set('exchange', provider);");
+  expect(panel).toContain("signal: controller.signal");
+  const approvalQueue = source('src/components/trade-approval-queue.tsx');
+  const tradeRoute = source('../api-server/src/routes/trade-automation.ts');
+  expect(approvalQueue).toContain("if (symbolFilter) query.set('symbol', symbolFilter);");
+  expect(approvalQueue).toContain("if (exchangeFilter) query.set('exchange', exchangeFilter);");
+  expect(tradeRoute).toContain("if (requestedExchange && plan.exchange !== requestedExchange) return false;");
+  expect(tradeRoute).toContain("if (requestedSymbol && normalizedExitSymbol(plan.symbol) !== requestedSymbol) return false;");
+  expect(tradeRoute).toContain("exchangeOrderId: order.exchangeOrderId");
+  expect(panel).toContain("providerOrderStatusLabel(canonicalProviderOrderStatus(item, providerOpenOrders))");
+  expect(panel).toContain("data-testid=\"ai-chart-cockpit-tabs\"");
+  expect(panel).toContain("type CockpitTab = 'entry' | 'orders' | 'exit';");
+  expect(panel).toContain("data-testid=\"ai-chart-entry-readiness\"");
+  expect(panel).toContain("data-testid=\"ai-chart-load-entry-readiness\"");
+  expect(panel).toContain("authorizedFetch('/api/trade-automation/status'");
+  expect(panel).toContain("actualOrderSubmittedByStatusRequest !== false");
+  expect(panel).toContain("payload.policy?.stockBrokerByMarket?.domestic_stock");
+  expect(panel).toContain("payload.policy?.stockBrokerByMarket?.us_stock");
+  expect(panel).toContain("orderTimeRiskRecheckRequired !== true");
+});
+
+test('AI Chart order dashboard server read model is instrument-scoped and mutation-free', () => {
+  const route = source('../api-server/src/routes/trade-automation.ts');
+  expect(route).toContain("const dashboardOnly = String(req.query.dashboard ?? '') === '1';");
+  expect(route).toContain("if (dashboardOnly && !requestedSymbol) throw new Error('ORDER_DASHBOARD_SYMBOL_REQUIRED');");
+  expect(route).toContain("if (requestedExchange && order.exchange !== requestedExchange) return [];");
+  expect(route).toContain("if (normalizedExitSymbol(plan.symbol) !== requestedSymbol) return [];");
+  expect(route).toContain("events,");
+  expect(route).toContain("dashboardScoped: dashboardOnly");
+  expect(route).toContain("orderSubmitted: false");
+  expect(route).toContain("orderCanceled: false");
+  expect(route).toContain("orderAmended: false");
+  expect(route).toContain("privateTradingRequestSent: false");
+});
+
+test('cockpit translates canonical cancel and amend blockers without exposing raw codes', () => {
+  expect(safeTradeErrorMessage('LIVE_EXECUTION_DISABLED', 'fallback')).toContain('실전 주문');
+  expect(safeTradeErrorMessage('CANCEL_CONNECTION_UNAVAILABLE', 'fallback')).toContain('실전 거래 연결');
+  expect(safeTradeErrorMessage('PARTIAL_FILL_AMEND_REQUIRES_CANCEL_AND_REPLAN', 'fallback')).toContain('부분체결');
+  expect(safeTradeErrorMessage('AMEND_PRICE_EXCEEDS_APPROVED_RISK_ENVELOPE', 'fallback')).toContain('위험범위');
+  expect(safeTradeErrorMessage('US_STOCK_AMEND_QUANTITY_NOT_SUPPORTED', 'fallback')).toContain('가격만 정정');
 });
 
 test('AI Chart matches four-market positions without inventing missing values', () => {
@@ -79,7 +143,10 @@ test('AI Chart matches four-market positions without inventing missing values', 
 
   expect(panel).toContain("if (market === 'UPBIT') return 'upbit';");
   expect(panel).toContain("if (market === 'BITGET') return 'bitget';");
-  expect(panel).toContain("return 'toss';");
+  expect(panel).toContain("type StockReadOnlyProvider = 'toss' | 'kiwoom';");
+  expect(panel).toContain('return stockProvider;');
+  expect(panel).toContain('data-testid="ai-chart-stock-provider-picker"');
+  expect(panel).toContain('data-testid={`ai-chart-stock-provider-${item}`}');
   expect(panel).toContain("if (upper.startsWith('KRW-'))");
   expect(panel).toContain('positionMarketMatches(market, position.market)');
   expect(panel).toContain('if (matches.length > 1) return { position: null, ambiguous: true };');
@@ -210,6 +277,9 @@ test('Bitget target PnL uses provider-implied current PnL sensitivity instead of
 test('desktop AI Chart reads the Toss position only after an explicit click and renders money scenarios without financial mutation', async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   let accountReads = 0;
+  let exitPreviewReads = 0;
+  let exitPlanReads = 0;
+  let entryReadinessReads = 0;
   const financialMutations: string[] = [];
 
   await context.route('**/*', async (route) => {
@@ -237,6 +307,261 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ quotes: [] }) });
       return;
     }
+    if (url.pathname === '/api/trade-automation/status') {
+      entryReadinessReads += 1;
+      expect(request.method()).toBe('GET');
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          actualOrderSubmittedByStatusRequest: false,
+          policy: {
+            stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'toss' },
+          },
+          liveExecutionReadiness: {
+            kiwoom: {
+              connectionConfigured: false,
+              providerVerified: false,
+              manualServerGateEnabled: false,
+              automaticServerGateEnabled: false,
+              readyForManualOrderEvaluation: false,
+              readyForAutomaticOrderEvaluation: false,
+              blockers: ['LIVE_CONNECTION_NOT_CONFIGURED', 'MANUAL_LIVE_SERVER_GATE_OFF'],
+              orderTimeRiskRecheckRequired: true,
+              orderSubmissionPerformedByStatusRequest: false,
+            },
+          },
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/approval-queue') {
+      expect(request.method()).toBe('GET');
+      expect(url.searchParams.get('symbol')).toBe('005930');
+      expect(url.searchParams.get('exchange')).toBeNull();
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          items: [],
+          count: 0,
+          updatedAt: new Date().toISOString(),
+          orderSubmitted: false,
+          orderCanceled: false,
+          privateTradingRequestSent: false,
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/positions/exit-preview') {
+      exitPreviewReads += 1;
+      expect(request.method()).toBe('POST');
+      const body = request.postDataJSON() as {
+        confirmed?: boolean;
+        provider?: string;
+        market?: string;
+        symbol?: string;
+        percent?: number;
+      };
+      expect(body).toEqual({
+        confirmed: true,
+        provider: 'toss',
+        market: 'KR',
+        symbol: '005930',
+        percent: 25,
+      });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          preview: {
+            provider: 'toss',
+            market: 'KR',
+            symbol: '005930',
+            percent: 25,
+            positionSide: null,
+            positionQuantity: 20,
+            availableQuantity: 20,
+            exitQuantity: 5,
+            quantityRule: 'INTEGER_ONLY',
+            side: 'sell',
+            reduceOnly: true,
+            checkedAt: new Date().toISOString(),
+            stale: false,
+            fingerprint: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          },
+          canonicalExitDraft: {
+            schemaVersion: 'ai-chart-canonical-exit-draft-v1',
+            fingerprint: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            provider: 'toss',
+            market: 'KR',
+            symbol: '005930',
+            accountMode: 'live',
+            orderType: 'market',
+            side: 'sell',
+            quantity: 5,
+            percent: 25,
+            reduceOnly: true,
+            sourceCheckedAt: new Date().toISOString(),
+            planCreationPerformed: false,
+            orderSubmissionPerformed: false,
+            requiresFreshAccountRecheck: true,
+            requiresOrderTimeRiskRecheck: true,
+            requiresExplicitApproval: true,
+            nextOwner: 'CANONICAL_EXIT_PLAN_OWNER',
+          },
+          privateAccountReadPerformed: true,
+          orderSubmitted: false,
+          orderCanceled: false,
+          orderAmended: false,
+          privateTradingMutationSent: false,
+          executionAuthority: 'NONE',
+          executionReadiness: {
+            connectionConfigured: false,
+            providerVerified: false,
+            manualServerGateEnabled: false,
+            readyForManualExitEvaluation: false,
+            blockers: ['LIVE_CONNECTION_NOT_CONFIGURED', 'MANUAL_LIVE_SERVER_GATE_OFF'],
+            orderSubmissionPerformedByPreview: false,
+            executionAuthorityGrantedByPreview: false,
+          },
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/positions/exit-plan') {
+      exitPlanReads += 1;
+      expect(request.method()).toBe('POST');
+      const body = request.postDataJSON() as {
+        confirmed?: boolean;
+        provider?: string;
+        market?: string;
+        symbol?: string;
+        percent?: number;
+        previewFingerprint?: string;
+        availableQuantity?: number;
+        exitQuantity?: number;
+        side?: string;
+        sourceCheckedAt?: string;
+      };
+      expect(body.confirmed).toBe(true);
+      expect(body.provider).toBe('toss');
+      expect(body.market).toBe('KR');
+      expect(body.symbol).toBe('005930');
+      expect(body.percent).toBe(25);
+      expect(body.previewFingerprint).toBe('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+      expect(body.availableQuantity).toBe(20);
+      expect(body.exitQuantity).toBe(5);
+      expect(body.side).toBe('sell');
+      expect(Number.isFinite(Date.parse(body.sourceCheckedAt ?? ''))).toBe(true);
+      const now = new Date();
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          canonicalExitPlan: {
+            schemaVersion: 'ai-chart-canonical-exit-plan-v1',
+            planFingerprint: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+            previewFingerprint: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            freshAccountFingerprint: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            provider: 'toss',
+            market: 'KR',
+            symbol: '005930',
+            accountMode: 'live',
+            orderType: 'market',
+            side: 'sell',
+            quantity: 5,
+            percent: 25,
+            reduceOnly: true,
+            sourceCheckedAt: now.toISOString(),
+            issuedAt: now.toISOString(),
+            expiresAt: new Date(now.getTime() + 60_000).toISOString(),
+            approvalEligible: false,
+            blockers: ['LIVE_CONNECTION_NOT_CONFIGURED', 'MANUAL_LIVE_SERVER_GATE_OFF'],
+            requiresFreshAccountRecheckAtApproval: true,
+            requiresOrderTimeRiskRecheck: true,
+            requiresExplicitApproval: true,
+            nextOwner: 'CANONICAL_EXIT_APPROVAL_OWNER',
+            orderSubmissionPerformed: false,
+            financialMutationPerformed: false,
+          },
+          planPrepared: true,
+          privateAccountReadPerformed: true,
+          financialMutationPerformed: false,
+          orderSubmitted: false,
+          orderCanceled: false,
+          orderAmended: false,
+          privateTradingMutationSent: false,
+          executionAuthority: 'NONE',
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/orders') {
+      expect(request.method()).toBe('GET');
+      expect(url.searchParams.get('dashboard')).toBe('1');
+      expect(url.searchParams.get('symbol')).toBe('005930');
+      expect(url.searchParams.get('exchange')).toBeNull();
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          orders: [],
+          events: [],
+          dashboardItems: [{
+            id: 'order-005930',
+            planId: 'plan-005930',
+            exchange: 'toss',
+            symbol: '005930',
+            market: 'KR',
+            side: 'buy',
+            accountMode: 'paper',
+            orderType: 'limit',
+            reduceOnly: false,
+            state: 'ACCEPTED',
+            clientOrderId: 'client-order-005930',
+            exchangeOrderId: 'provider-open-005930',
+            requestedQuantity: 10,
+            remainingQuantity: 4,
+            filledQuantity: 6,
+            currentLimitPrice: 70_500,
+            averageFillPrice: 70_200,
+            cancelable: true,
+            lastErrorCode: null,
+            updatedAt: new Date().toISOString(),
+          }, {
+            id: 'order-005930-kiwoom',
+            planId: 'plan-005930-kiwoom',
+            exchange: 'kiwoom',
+            symbol: '005930',
+            market: 'KR',
+            side: 'sell',
+            accountMode: 'paper',
+            orderType: 'limit',
+            reduceOnly: true,
+            state: 'PARTIALLY_FILLED',
+            requestedQuantity: 5,
+            remainingQuantity: 2,
+            filledQuantity: 3,
+            currentLimitPrice: 72_500,
+            averageFillPrice: 72_300,
+            cancelable: true,
+            lastErrorCode: null,
+            updatedAt: new Date().toISOString(),
+          }],
+          orderSubmitted: false,
+          orderCanceled: false,
+          orderAmended: false,
+          privateTradingRequestSent: false,
+        }),
+      });
+      return;
+    }
     if (url.pathname === '/api/accounts/read-only/toss') {
       accountReads += 1;
       expect(request.method()).toBe('GET');
@@ -248,8 +573,19 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
           readOnly: true,
           connected: true,
           status: 'CONNECTED',
-          accounts: null,
-          balances: null,
+          accounts: [{
+            market: 'KR',
+            accountRef: '12****34',
+            currency: 'KRW',
+            buyingPower: 500_000,
+          }],
+          balances: [{
+            currency: 'KRW',
+            available: 400_000,
+            locked: 0,
+            total: 400_000,
+            estimatedKrwValue: 400_000,
+          }],
           positions: [{
             market: 'KR',
             symbol: '005930',
@@ -265,7 +601,16 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
             marginMode: null,
             side: null,
           }],
-          openOrders: null,
+          openOrders: [{
+            id: 'provider-open-005930',
+            market: 'KR',
+            symbol: '005930',
+            side: 'BUY',
+            price: 70_300,
+            quantity: 3,
+            remainingQuantity: 2,
+            status: 'OPEN',
+          }],
           checkedAt: new Date().toISOString(),
           lastGoodAt: new Date().toISOString(),
           stale: false,
@@ -297,6 +642,9 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await expect(panel).toContainText('70,000원');
   await expect(panel).toContainText('20');
   await expect(panel).toContainText('+42,000원');
+  await expect(panel.getByTestId('ai-chart-account-capacity')).toContainText('500,000원');
+  await expect(panel.getByTestId('ai-chart-account-capacity')).toContainText('Provider 미체결');
+  await expect(panel.getByTestId('ai-chart-account-capacity')).toContainText('1건');
   await expect(panel.getByTestId('ai-chart-position-guidance')).toContainText('평단 기준 수익 구간');
   await expect(page.getByTestId('unified-chart-wrapper')).toHaveAttribute('data-position-average', '70000');
 
@@ -306,7 +654,479 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
 
   await expect(panel.getByTestId('ai-chart-fee-break-even')).toContainText('Provider 수수료 근거가 계좌 스냅샷에 없으므로 자동으로 추정하지 않습니다.');
 
+  const cockpit = panel.getByTestId('ai-chart-trading-cockpit');
+  await expect(cockpit).toHaveAttribute('open', '');
+  await expect(cockpit.getByRole('tab', { name: '주문', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('신호 필요');
+  await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('포지션 있음');
+  await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('미조회');
+  await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('재검증 필요');
+  await cockpit.getByRole('tab', { name: '진입', exact: true }).click();
+  await expect(cockpit).toContainText('현재 종목의 승인 대기 진입이 없습니다.');
+  await cockpit.getByTestId('ai-chart-load-entry-readiness').click();
+  await expect.poll(() => entryReadinessReads).toBe(1);
+  await expect(cockpit.getByTestId('ai-chart-entry-readiness')).toContainText('수동 실전 진입 · 차단');
+  await expect(cockpit.getByTestId('ai-chart-entry-readiness')).toContainText('실행 경로 Kiwoom');
+  await expect(cockpit.getByTestId('ai-chart-entry-readiness')).toContainText('LIVE_CONNECTION_NOT_CONFIGURED');
+  await expect(cockpit.getByTestId('ai-chart-entry-readiness')).toContainText('주문 제출 없음');
+  await cockpit.getByRole('tab', { name: '주문', exact: true }).click();
+  await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('Provider 실제 미체결');
+  await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('BUY · OPEN');
+  await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('70,300원');
+  await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('잔량 2');
+  await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('여기서 취소·정정 권한을 만들지 않습니다.');
+  await cockpit.getByRole('tab', { name: '종료', exact: true }).click();
+  await expect(cockpit.getByTestId('ai-chart-exit-dashboard')).toContainText('종료 예정 비중');
+  await expect(cockpit.getByTestId('ai-chart-exit-dashboard')).toContainText('20');
+  await cockpit.getByRole('button', { name: '25%' }).click();
+  await expect(cockpit.getByTestId('ai-chart-exit-dashboard')).toContainText('5');
+  await cockpit.getByTestId('ai-chart-verify-exit-preview').click();
+  await expect.poll(() => exitPreviewReads).toBe(1);
+  await expect(cockpit.getByTestId('ai-chart-exit-preview-verified')).toContainText('서버 확인 수량 5');
+  await expect(cockpit.getByTestId('ai-chart-exit-preview-verified')).toContainText('수량규칙 정수');
+  await expect(cockpit.getByTestId('ai-chart-exit-preview-verified')).toContainText('executionAuthority=NONE');
+  await expect(cockpit.getByTestId('ai-chart-canonical-exit-draft')).toContainText('Canonical 종료계획 고정됨');
+  await expect(cockpit.getByTestId('ai-chart-canonical-exit-draft')).toHaveAttribute('data-exit-fingerprint', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+  await cockpit.getByTestId('ai-chart-prepare-exit-plan').click();
+  await expect.poll(() => exitPlanReads).toBe(1);
+  await expect(cockpit.getByTestId('ai-chart-canonical-exit-plan')).toContainText('종료 승인계획 준비됨');
+  await expect(cockpit.getByTestId('ai-chart-canonical-exit-plan')).toContainText('현재 승인 차단');
+  await expect(cockpit.getByTestId('ai-chart-canonical-exit-plan')).toContainText('실제 주문 0');
+  await expect(cockpit.getByTestId('ai-chart-canonical-exit-plan')).toContainText('financial mutation 0');
+  await expect(cockpit.getByTestId('ai-chart-canonical-exit-plan')).toHaveAttribute('data-exit-plan-fingerprint', 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc');
+  await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('재검증됨');
+  await expect(cockpit.getByTestId('ai-chart-exit-readiness')).toContainText('실전 종료 준비 · 차단');
+  await expect(cockpit.getByTestId('ai-chart-exit-readiness')).toContainText('실전 거래키가 연결되지 않음');
+  await expect(cockpit.getByTestId('ai-chart-exit-readiness')).toContainText('실주문 서버게이트가 꺼져 있음');
+
+  await cockpit.getByRole('tab', { name: '주문', exact: true }).click();
+  await cockpit.getByTestId('ai-chart-load-orders').click();
+  await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('거래소 접수');
+  await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('잔량 4');
+  await expect(cockpit.getByTestId('ai-chart-order-provider-match-order-005930')).toContainText('Provider 원장 일치');
+  await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('Kiwoom');
+  await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('부분체결');
+  await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('잔량 2');
+  await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('2건');
+
   await page.getByTestId('ai-chart-toggle-position-lines').click();
   await expect(page.getByTestId('unified-chart-wrapper')).toHaveAttribute('data-position-average', '');
   expect(financialMutations).toEqual([]);
+});
+
+
+test('AI Chart keeps entry approval and order management available when the selected symbol has no position', async ({ page, context }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const financialMutations: string[] = [];
+
+  await context.route('**/*', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (/\/(orders?|cancel|amend|transfer|withdraw)(?:\/|\?|$)/i.test(url.pathname) && request.method() !== 'GET') {
+      financialMutations.push(`${request.method()} ${url.pathname}`);
+    }
+    if (/\/api\/stocks\/[^/]+\/(?:chart|candles)$/.test(url.pathname)) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ticker: '005930',
+          timeframe: url.searchParams.get('tf') ?? '5m',
+          provider: 'no-position-fixture',
+          fetchedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          candles: candleRows(),
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/quotes') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ quotes: [] }) });
+      return;
+    }
+    if (url.pathname === '/api/accounts/read-only/toss') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          provider: 'toss',
+          readOnly: true,
+          connected: true,
+          status: 'CONNECTED',
+          accounts: null,
+          balances: null,
+          positions: [],
+          openOrders: null,
+          checkedAt: new Date().toISOString(),
+          lastGoodAt: new Date().toISOString(),
+          stale: false,
+          errorCode: null,
+          orderRequests: 0,
+          cancelRequests: 0,
+          amendRequests: 0,
+          transferRequests: 0,
+          withdrawalRequests: 0,
+          credentialsReturned: false,
+          liveTradingEnabled: false,
+          autoTradingEnabled: false,
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/approval-queue') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          items: [],
+          count: 0,
+          updatedAt: new Date().toISOString(),
+          orderSubmitted: false,
+          orderCanceled: false,
+          privateTradingRequestSent: false,
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/orders') {
+      expect(url.searchParams.get('dashboard')).toBe('1');
+      expect(url.searchParams.get('symbol')).toBe('005930');
+      expect(url.searchParams.get('exchange')).toBeNull();
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          orders: [],
+          events: [],
+          dashboardItems: [],
+          orderSubmitted: false,
+          orderCanceled: false,
+          orderAmended: false,
+          privateTradingRequestSent: false,
+        }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto(chartUrl);
+  await page.getByRole('tab', { name: '차트', exact: true }).click();
+  const panel = page.getByTestId('ai-chart-position-panel');
+  await panel.getByTestId('ai-chart-load-position').click();
+  await expect(panel).toContainText('현재 선택 종목의 보유/포지션 없음');
+
+  const cockpit = panel.getByTestId('ai-chart-trading-cockpit');
+  await expect(cockpit).toHaveAttribute('open', '');
+  await expect(cockpit.getByRole('tab', { name: '진입', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('없음');
+  await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('해당 없음');
+  await expect(cockpit).toContainText('현재 종목의 승인 대기 진입이 없습니다.');
+  await cockpit.getByRole('tab', { name: '종료', exact: true }).click();
+  await expect(cockpit.getByTestId('ai-chart-exit-dashboard-unavailable')).toContainText('종료계획을 만들지 않습니다.');
+  await cockpit.getByRole('tab', { name: '주문', exact: true }).click();
+  await cockpit.getByTestId('ai-chart-load-orders').click();
+  await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('canonical 주문 기록이 없습니다.');
+  expect(financialMutations).toEqual([]);
+});
+
+
+for (const viewport of [
+  { width: 768, height: 1024, mobileTabs: true },
+  { width: 1024, height: 900, mobileTabs: false },
+] as const) {
+  test(`AI Chart cockpit fits ${viewport.width}px without horizontal overflow`, async ({ page, context }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+
+    await context.route('**/*', async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      if (/\/api\/stocks\/[^/]+\/(?:chart|candles)$/.test(url.pathname)) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ticker: '005930',
+            timeframe: url.searchParams.get('tf') ?? '5m',
+            provider: 'tablet-cockpit-fixture',
+            fetchedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            candles: candleRows(),
+          }),
+        });
+        return;
+      }
+      if (url.pathname === '/api/quotes') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ quotes: [] }) });
+        return;
+      }
+      if (url.pathname === '/api/accounts/read-only/toss') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            provider: 'toss',
+            readOnly: true,
+            connected: true,
+            status: 'CONNECTED',
+            accounts: [{ market: 'KR', accountRef: '12****34', currency: 'KRW', buyingPower: 500_000 }],
+            balances: [],
+            positions: [{
+              market: 'KR', symbol: '005930', quantity: 20, availableQuantity: 20,
+              averageEntryPrice: 70_000, currentPrice: 72_100, marketValue: 1_442_000,
+              unrealizedPnl: 42_000, unrealizedPnlPercent: 3, leverage: null,
+              liquidationPrice: null, marginMode: null, side: null,
+            }],
+            openOrders: [],
+            checkedAt: new Date().toISOString(),
+            lastGoodAt: new Date().toISOString(),
+            stale: false,
+            errorCode: null,
+            orderRequests: 0,
+            cancelRequests: 0,
+            amendRequests: 0,
+            transferRequests: 0,
+            withdrawalRequests: 0,
+            credentialsReturned: false,
+            liveTradingEnabled: false,
+            autoTradingEnabled: false,
+          }),
+        });
+        return;
+      }
+      if (url.pathname === '/api/trade-automation/approval-queue') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true, items: [], count: 0, updatedAt: new Date().toISOString() }),
+        });
+        return;
+      }
+      if (url.pathname === '/api/trade-automation/orders') {
+        expect(url.searchParams.get('dashboard')).toBe('1');
+        expect(url.searchParams.get('exchange')).toBeNull();
+        expect(url.searchParams.get('symbol')).toBe('005930');
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            orders: [],
+            events: [],
+            dashboardItems: [],
+            dashboardScoped: true,
+            orderSubmitted: false,
+            orderCanceled: false,
+            orderAmended: false,
+            privateTradingRequestSent: false,
+          }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    await page.goto(chartUrl);
+    if (viewport.mobileTabs) {
+      await page.getByRole('tab', { name: '차트', exact: true }).click();
+    } else {
+      await expect(page.getByTestId('ai-chart-mobile-tabs')).toHaveCount(0);
+    }
+
+    const panel = page.getByTestId('ai-chart-position-panel');
+    await expect(panel).toBeVisible();
+    await panel.getByTestId('ai-chart-load-position').click();
+    await expect(panel).toContainText('70,000원');
+    const cockpit = panel.getByTestId('ai-chart-trading-cockpit');
+    await expect(cockpit).toHaveAttribute('open', '');
+    await expect(cockpit.getByRole('tab', { name: '종료', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await cockpit.getByRole('tab', { name: '진입', exact: true }).click();
+    await expect(cockpit.getByTestId('ai-chart-entry-planning')).toBeVisible();
+    await cockpit.getByRole('tab', { name: '주문', exact: true }).click();
+    await expect(cockpit.getByTestId('ai-chart-order-management')).toBeVisible();
+    await cockpit.getByTestId('ai-chart-load-orders').click();
+    await cockpit.getByRole('tab', { name: '종료', exact: true }).click();
+    await expect(cockpit.getByTestId('ai-chart-exit-dashboard')).toBeVisible();
+
+    const overflow = await page.evaluate(() => ({
+      viewport: window.innerWidth,
+      body: document.body.scrollWidth,
+      root: document.documentElement.scrollWidth,
+    }));
+    expect(overflow.body).toBeLessThanOrEqual(overflow.viewport + 1);
+    expect(overflow.root).toBeLessThanOrEqual(overflow.viewport + 1);
+  });
+}
+
+
+test('AI Chart cockpit cancel and amend require explicit user confirmation and reuse canonical routes', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1024, height: 900 });
+  let cancelPosts = 0;
+  let amendPosts = 0;
+  let dashboardReads = 0;
+
+  await context.route('**/*', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+
+    if (/\/api\/stocks\/[^/]+\/(?:chart|candles)$/.test(url.pathname)) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ticker: '005930',
+          timeframe: url.searchParams.get('tf') ?? '5m',
+          provider: 'cockpit-action-fixture',
+          fetchedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          candles: candleRows(),
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/quotes') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ quotes: [] }) });
+      return;
+    }
+    if (url.pathname === '/api/accounts/read-only/toss') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          provider: 'toss',
+          readOnly: true,
+          connected: true,
+          status: 'CONNECTED',
+          accounts: [{ market: 'KR', accountRef: '12****34', currency: 'KRW', buyingPower: 500_000 }],
+          balances: [],
+          positions: [],
+          openOrders: [],
+          checkedAt: new Date().toISOString(),
+          lastGoodAt: new Date().toISOString(),
+          stale: false,
+          errorCode: null,
+          orderRequests: 0,
+          cancelRequests: 0,
+          amendRequests: 0,
+          transferRequests: 0,
+          withdrawalRequests: 0,
+          credentialsReturned: false,
+          liveTradingEnabled: false,
+          autoTradingEnabled: false,
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/approval-queue') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, items: [], count: 0, updatedAt: new Date().toISOString() }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/orders' && request.method() === 'GET') {
+      expect(url.searchParams.get('dashboard')).toBe('1');
+      expect(url.searchParams.get('symbol')).toBe('005930');
+      expect(url.searchParams.get('exchange')).toBeNull();
+      dashboardReads += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          orders: [],
+          events: [],
+          dashboardScoped: true,
+          dashboardItems: [{
+            id: 'order-005930',
+            planId: 'plan-005930',
+            exchange: 'toss',
+            symbol: '005930',
+            market: 'KR',
+            side: 'buy',
+            accountMode: 'live',
+            orderType: 'limit',
+            reduceOnly: false,
+            state: 'ACCEPTED',
+            requestedQuantity: 10,
+            remainingQuantity: 10,
+            filledQuantity: 0,
+            currentLimitPrice: 70_500,
+            averageFillPrice: null,
+            cancelable: true,
+            lastErrorCode: null,
+            updatedAt: new Date().toISOString(),
+          }],
+          orderSubmitted: false,
+          orderCanceled: false,
+          orderAmended: false,
+          privateTradingRequestSent: false,
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/orders/order-005930/cancel') {
+      cancelPosts += 1;
+      expect(request.method()).toBe('POST');
+      expect(request.postDataJSON()).toEqual({ confirmed: true });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, order: { state: 'CANCEL_REQUESTED' } }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/orders/order-005930/amend') {
+      amendPosts += 1;
+      expect(request.method()).toBe('POST');
+      const body = request.postDataJSON() as { confirmed?: boolean; requestId?: string; price?: number; quantity?: number };
+      expect(body.confirmed).toBe(true);
+      expect(body.requestId).toBeTruthy();
+      expect(body.price).toBe(70_400);
+      expect(body.quantity).toBe(8);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, orderAmended: true }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto(chartUrl);
+  const panel = page.getByTestId('ai-chart-position-panel');
+  await panel.getByTestId('ai-chart-load-position').click();
+  await expect(panel).toContainText('현재 선택 종목의 보유/포지션 없음');
+  const cockpit = panel.getByTestId('ai-chart-trading-cockpit');
+  await expect(cockpit).toHaveAttribute('open', '');
+  await expect(cockpit.getByRole('tab', { name: '진입', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await cockpit.getByRole('tab', { name: '주문', exact: true }).click();
+  await cockpit.getByTestId('ai-chart-load-orders').click();
+  await expect.poll(() => dashboardReads).toBeGreaterThanOrEqual(1);
+
+  page.once('dialog', async (dialog) => dialog.dismiss());
+  await cockpit.getByRole('button', { name: '미체결 취소' }).click();
+  await page.waitForTimeout(100);
+  expect(cancelPosts).toBe(0);
+
+  page.once('dialog', async (dialog) => dialog.accept());
+  await cockpit.getByRole('button', { name: '미체결 취소' }).click();
+  await expect.poll(() => cancelPosts).toBe(1);
+
+  await cockpit.getByLabel('정정 가격').fill('70400');
+  await cockpit.getByLabel('정정 수량').fill('8');
+
+  page.once('dialog', async (dialog) => dialog.dismiss());
+  await cockpit.getByRole('button', { name: '정정', exact: true }).click();
+  await page.waitForTimeout(100);
+  expect(amendPosts).toBe(0);
+
+  page.once('dialog', async (dialog) => dialog.accept());
+  await cockpit.getByRole('button', { name: '정정', exact: true }).click();
+  await expect.poll(() => amendPosts).toBe(1);
+  await expect(cockpit.getByTestId('ai-chart-order-management')).toContainText('정정 요청이 canonical 주문엔진에 반영되었습니다.');
 });
