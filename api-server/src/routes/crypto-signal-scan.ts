@@ -45,6 +45,7 @@ import {
 } from '../services/scanner-market-intelligence.service';
 import { enrichCryptoScannerCardsWithPublicEventContext } from '../services/scanner-crypto-public-event-intelligence.service';
 import { applyThemeSwingOverlay, inferCryptoThemeTags } from '../services/scanner-theme-swing.service';
+import { observeScannerDecisionHistory } from '../services/scanner-decision-history.service';
 
 export type CryptoScannerRunner = {
   scan(request: CryptoSignalScanRequest): ReturnType<typeof CryptoSignalScannerService.scan>;
@@ -209,7 +210,10 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
       if (controller.signal.aborted || res.writableEnded) return;
       // Recompute Theme Swing only after the read-only Market Intelligence/public-event
       // enrichments are available. The overlay never mutates canonical Scanner score/rank.
-      const rankedCards = applyThemeSwingOverlay(publicEventCards, inferCryptoThemeTags, result.cards);
+      const rankedCards = observeScannerDecisionHistory(
+        req.member!.id,
+        applyThemeSwingOverlay(publicEventCards, inferCryptoThemeTags, result.cards),
+      );
       const discovery = buildScannerDiscoveryView(result.cards, {
         tradeReviewCount: rankedCards.length,
         limit: 100,
