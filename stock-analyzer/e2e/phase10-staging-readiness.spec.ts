@@ -147,6 +147,8 @@ const activeResearchReloadObservations = new WeakMap<Page, ResearchReloadObserva
 const activeAuthFaultObservations = new WeakMap<Page, AuthFaultObservation>();
 const pendingMutatingRequests = new WeakMap<Page, Set<Request>>();
 const pendingApiGetRequests = new WeakMap<Page, Set<Request>>();
+const successfulPrimaryStockChartReads = new WeakMap<Page, Map<string, number>>();
+const stockChartHedgeAbortProofWindowMs = 2_000;
 const diagnostics: {
   console_errors: Diagnostic[];
   page_errors: Diagnostic[];
@@ -156,6 +158,7 @@ const diagnostics: {
   expected_auth_faults: Diagnostic[];
   expected_scanner_aborts: Diagnostic[];
   expected_route_transition_aborts: Diagnostic[];
+  expected_stock_chart_hedge_aborts: Diagnostic[];
   expected_capability_denials: Diagnostic[];
   expected_capability_console_errors: Diagnostic[];
   expected_research_reload_aborts: Diagnostic[];
@@ -178,6 +181,7 @@ const diagnostics: {
   expected_auth_faults: [],
   expected_scanner_aborts: [],
   expected_route_transition_aborts: [],
+  expected_stock_chart_hedge_aborts: [],
   expected_capability_denials: [],
   expected_capability_console_errors: [],
   expected_research_reload_aborts: [],
@@ -214,6 +218,57 @@ function diagnosticText(raw: string) {
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[redacted-token]')
     .replace(/\b(?:sb_publishable|sb_secret|service_role|anon)_[A-Za-z0-9._-]+\b/gi, '[redacted-key]')
     .replace(/((?:authorization|apikey|api[_-]?key|token|password|secret|key)\s*[:=]\s*)([^\s,;]+)/gi, '$1[redacted]');
+}
+
+function stockChartReadIdentity(input: {
+  method: string;
+  rawUrl: string;
+  frameUrl: string;
+  endpoint: 'candles' | 'chart';
+}): string | null {
+  try {
+    const parsed = new URL(input.rawUrl);
+    const frame = new URL(input.frameUrl);
+    const match = /^\/api\/stocks\/([^/]+)\/(candles|chart)$/.exec(parsed.pathname);
+    const timeframe = parsed.searchParams.get('tf')?.trim() ?? '';
+    if (
+      input.method !== 'GET'
+      || parsed.origin !== frame.origin
+      || !match
+      || match[2] !== input.endpoint
+      || !timeframe
+      || parsed.searchParams.size !== 1
+    ) return null;
+    return `${decodeURIComponent(match[1] ?? '').toUpperCase()}|${timeframe}`;
+  } catch {
+    return null;
+  }
+}
+
+function isExpectedStockChartHedgeAbortIdentity(input: {
+  method: string;
+  rawUrl: string;
+  frameUrl: string;
+  errorText: string | undefined;
+  successfulPrimaryIdentity: string | null;
+  successfulPrimaryAt: number | undefined;
+  now: number;
+}): boolean {
+  if (
+    input.errorText !== 'net::ERR_ABORTED'
+    || !input.successfulPrimaryIdentity
+    || input.successfulPrimaryAt == null
+  ) return false;
+  const chartIdentity = stockChartReadIdentity({
+    method: input.method,
+    rawUrl: input.rawUrl,
+    frameUrl: input.frameUrl,
+    endpoint: 'chart',
+  });
+  const ageMs = input.now - input.successfulPrimaryAt;
+  return chartIdentity === input.successfulPrimaryIdentity
+    && ageMs >= 0
+    && ageMs <= stockChartHedgeAbortProofWindowMs;
 }
 
 function isLogoutScopedReadIdentity(
@@ -501,7 +556,21 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
     if (researchReloadObservation?.replacementResearchRequests.has(response.request())) {
       researchReloadObservation.replacementResponseStatuses.push(response.status());
     }
-    if (response.status() < 400) return;
+    if (response.status() < 400) {
+      const request = response.request();
+      const identity = stockChartReadIdentity({
+        method: request.method(),
+        rawUrl: response.url(),
+        frameUrl: request.frame().url(),
+        endpoint: 'candles',
+      });
+      if (identity) {
+        const successful = successfulPrimaryStockChartReads.get(page) ?? new Map<string, number>();
+        successful.set(identity, Date.now());
+        successfulPrimaryStockChartReads.set(page, successful);
+      }
+      return;
+    }
     const capabilityDenial = activeCapabilityDenialObservations.get(page);
     if (capabilityDenial && isExpectedCapabilityDenialResponse(response, capabilityDenial)) {
       capabilityDenial.httpCandidates.push({
@@ -563,6 +632,27 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
     if (authFault && authFault.kind === 'timeout' && isExpectedAuthFault(request, authFault)) {
       authFault.failedAt = Date.now();
       authFault.candidates.push(diagnostic);
+      return;
+    }
+    const chartIdentity = stockChartReadIdentity({
+      method: request.method(),
+      rawUrl: request.url(),
+      frameUrl: request.frame().url(),
+      endpoint: 'chart',
+    });
+    const successfulPrimary = successfulPrimaryStockChartReads.get(page);
+    const successfulPrimaryAt = chartIdentity ? successfulPrimary?.get(chartIdentity) : undefined;
+    if (isExpectedStockChartHedgeAbortIdentity({
+      method: request.method(),
+      rawUrl: request.url(),
+      frameUrl: request.frame().url(),
+      errorText: request.failure()?.errorText,
+      successfulPrimaryIdentity: chartIdentity,
+      successfulPrimaryAt,
+      now: Date.now(),
+    })) {
+      if (chartIdentity) successfulPrimary?.delete(chartIdentity);
+      diagnostics.expected_stock_chart_hedge_aborts.push(diagnostic);
       return;
     }
     const routeObservation = activeRouteTransitionObservations.get(page);
@@ -1657,6 +1747,35 @@ test('capability denial diagnostics admit only same-origin API GET 401/403 and m
   expect(isExpectedCapabilityDenialConsole('Failed to load resource: the server responded with a status of 403 ()')).toBe(true);
   expect(isExpectedCapabilityDenialConsole('Failed to load resource: the server responded with a status of 401 ()')).toBe(true);
   expect(isExpectedCapabilityDenialConsole('TypeError: failed to fetch')).toBe(false);
+});
+
+test('stock chart hedge abort proof requires a matching successful primary candle identity', () => {
+  const origin = 'https://staging.example.test';
+  const successfulPrimaryIdentity = stockChartReadIdentity({
+    method: 'GET',
+    rawUrl: `${origin}/api/stocks/AAPL/candles?tf=5m`,
+    frameUrl: `${origin}/stock-info/analysis?asset=stock&market=US&ticker=AAPL`,
+    endpoint: 'candles',
+  });
+  expect(successfulPrimaryIdentity).toBe('AAPL|5m');
+
+  const base = {
+    method: 'GET',
+    rawUrl: `${origin}/api/stocks/AAPL/chart?tf=5m`,
+    frameUrl: `${origin}/stock-info/analysis?asset=stock&market=US&ticker=AAPL`,
+    errorText: 'net::ERR_ABORTED',
+    successfulPrimaryIdentity,
+    successfulPrimaryAt: 10_000,
+    now: 10_250,
+  };
+  expect(isExpectedStockChartHedgeAbortIdentity(base)).toBe(true);
+  expect(isExpectedStockChartHedgeAbortIdentity({ ...base, rawUrl: `${origin}/api/stocks/MSFT/chart?tf=5m` })).toBe(false);
+  expect(isExpectedStockChartHedgeAbortIdentity({ ...base, rawUrl: `${origin}/api/stocks/AAPL/chart?tf=1D` })).toBe(false);
+  expect(isExpectedStockChartHedgeAbortIdentity({ ...base, rawUrl: `${origin}/api/stocks/AAPL/chart?tf=5m&extra=1` })).toBe(false);
+  expect(isExpectedStockChartHedgeAbortIdentity({ ...base, rawUrl: 'https://other.example.test/api/stocks/AAPL/chart?tf=5m' })).toBe(false);
+  expect(isExpectedStockChartHedgeAbortIdentity({ ...base, errorText: 'net::ERR_FAILED' })).toBe(false);
+  expect(isExpectedStockChartHedgeAbortIdentity({ ...base, successfulPrimaryIdentity: null })).toBe(false);
+  expect(isExpectedStockChartHedgeAbortIdentity({ ...base, now: 12_001 })).toBe(false);
 });
 
 test('logout abort proof keeps session-scoped account reads exact and query-free', () => {
