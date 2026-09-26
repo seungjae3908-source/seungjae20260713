@@ -94,6 +94,7 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain("authorizedFetch('/api/trade-automation/scanner/live-draft'");
   expect(panel).toContain("data-testid=\"ai-chart-prepare-live-entry-draft\"");
   expect(panel).toContain("payload.livePlanCreated !== false");
+  expect(panel).toContain("!/^[0-9a-f]{64}$/u.test(payload.draft.draftId)");
   expect(panel).toContain("payload.providerMutationRequests !== 0");
   expect(panel).toContain("payload.draft.requiresFinalRiskRecheck !== true");
   expect(panel).toContain("payload.draft.requiresExplicitApproval !== true");
@@ -746,6 +747,7 @@ test('AI Chart creates a server-verified live entry draft without submitting an 
           draft: {
             schemaVersion: 'scanner-live-entry-draft-v1',
             state: 'SERVER_VERIFIED_DRAFT',
+            draftId: 'f'.repeat(64),
             market: 'KR_STOCK',
             symbol: '005930',
             timeframe: '5m',
@@ -799,6 +801,7 @@ test('AI Chart creates a server-verified live entry draft without submitting an 
   await expect(draft).toContainText('70,000원 ~ 70,500원');
   await expect(draft).toContainText('68,500원');
   await expect(draft).toContainText('TP1 72,000원');
+  await expect(draft).toContainText('Draft ffffffffffff…');
   await expect(draft).toContainText('최종 Risk 재검증 필요');
   await expect(draft).toContainText('수량·레버리지·잔고·실제 주문은 생성하거나 전송하지 않습니다.');
   expect(financialMutations).toEqual([]);
