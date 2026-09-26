@@ -52,14 +52,8 @@ export default function AccountPage() {
     <CenteredPageHeader
       title="계정"
       leading={backButton}
-      infoTitle="계정 안내"
-      infoItems={[
-        '회원가입, 승인 상태와 로그인 정보를 관리합니다.',
-        '실계좌 조회 연결과 실주문 거래 연결은 서로 다른 권한으로 분리됩니다.',
-        '거래키 저장만으로 실주문이 활성화되지는 않습니다.',
-      ]}
     />
-    <main className="mx-auto w-full max-w-3xl min-w-0 flex-1 px-3 pb-28 pt-4 sm:px-5 sm:pt-5">
+    <main className="mx-auto w-full max-w-6xl min-w-0 flex-1 px-3 pb-28 pt-3 sm:px-5 lg:px-6">
       {!auth.configured && <Card><p className="text-center font-bold text-destructive">계정 저장소 설정이 필요합니다.</p><p className="mt-2 text-center text-sm text-muted-foreground">계정 저장소 연결 정보를 관리자 설정에 등록해 주세요.</p></Card>}
       {auth.loading && <Card><p className="text-center text-sm font-medium">계정 상태를 확인하고 있습니다.</p></Card>}
       {!auth.loading && auth.user ? <Card>
@@ -92,5 +86,5 @@ export default function AccountPage() {
   </div>;
 }
 
-function Card({ children }: { children: React.ReactNode }) { return <section className="min-w-0 rounded-2xl border border-card-border bg-card p-4 shadow-sm sm:p-5">{children}</section>; }
+function Card({ children }: { children: React.ReactNode }) { return <section className="mx-auto w-full max-w-3xl min-w-0 rounded-2xl border border-card-border bg-card p-4 shadow-sm sm:p-5">{children}</section>; }
 function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="block min-w-0"><span className="text-xs font-semibold text-muted-foreground">{label}</span><div className="mt-2 min-w-0 [&_.input]:h-12 [&_.input]:w-full [&_.input]:min-w-0 [&_.input]:rounded-2xl [&_.input]:border [&_.input]:border-card-border [&_.input]:bg-background [&_.input]:px-4 [&_.input]:text-sm [&_.input]:font-medium [&_.input]:outline-none [&_.input]:focus:border-primary">{children}</div></label>; }
