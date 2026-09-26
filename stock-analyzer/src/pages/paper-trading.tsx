@@ -8,14 +8,15 @@ import { readBacktestPaperHandoff } from '../../../packages/strategy-hypothesis/
 export default function PaperTradingPage() {
   const search = useSearch();
   const imported = useMemo(() => readBacktestPaperHandoff(search), [search]);
+  const importedPreview = imported.active ? <BacktestPaperCandidatePreview imported={imported} /> : null;
 
-  if (imported.active) {
+  if (importedPreview) {
     return (
       <div
         className="relative h-full min-h-0 overflow-hidden pb-[calc(5rem+env(safe-area-inset-bottom))]"
         data-testid="paper-trading-backtest-handoff"
       >
-        <BacktestPaperCandidatePreview imported={imported} />
+        {importedPreview}
         <BottomNav />
       </div>
     );
