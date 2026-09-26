@@ -345,14 +345,15 @@ function paperProof(
   if (!canonical || canonical.schemaVersion !== 'canonical-natural-paper-stage-evidence-v1') blockers.push(`${stage}_CANONICAL_NATURAL_STAGE_EVIDENCE_MISSING`);
   if (!identity) blockers.push(`${stage}_CANONICAL_NATURAL_IDENTITY_MISSING`);
   if (!measured) blockers.push(`${stage}_RUNTIME_STAGE_NOT_MEASURED`);
-  if (identity) blockers.push(`${stage}_RUNTIME_RESEARCH_DATASET_IDENTITY_UNAVAILABLE`);
+  const datasetIdentity = text(identity?.datasetIdentity) ? String(identity?.datasetIdentity) : null;
+  if (!datasetIdentity) blockers.push(`${stage}_RUNTIME_RESEARCH_DATASET_IDENTITY_UNAVAILABLE`);
   return runtimeProof(stage, source, {
     runtimeStatus: canonical && identity ? 'PRESENT' : 'MISSING_EVIDENCE',
     sampleCount,
     strategyIdentityDigest: digest64(identity?.strategyIdentityDigest) ? identity?.strategyIdentityDigest : null,
     modelIdentityDigest: digest64(identity?.modelIdentityDigest) ? identity?.modelIdentityDigest : null,
     researchCodeSha: sha40(identity?.runtimeSha) ? identity?.runtimeSha : (sha40(result.naturalRuntimeSha) ? result.naturalRuntimeSha : null),
-    datasetIdentity: null,
+    datasetIdentity,
     blockers,
   });
 }
