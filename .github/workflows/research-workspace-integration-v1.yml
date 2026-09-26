@@ -9,6 +9,7 @@ on:
       - api-server/src/services/research-workspace-transcript-v6*.ts
       - api-server/src/services/ai-chat.service.ts
       - api-server/src/services/research-groq-one-shot-transport.service.test.ts
+      - api-server/src/services/research-groq-json-transport.service.ts
       - api-server/src/tools/research-workspace-one-shot-v12*.ts
       - api-server/scripts/run-research-workspace-one-shot-v12.ts
       - api-server/test.mjs
