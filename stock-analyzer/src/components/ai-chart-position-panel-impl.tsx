@@ -1463,6 +1463,11 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
       {state.kind === 'unavailable' && (
         <p role="alert" className="mt-2 rounded-xl bg-warning/10 px-3 py-2 text-[10px] font-bold text-warning">포지션을 표시할 수 없습니다 · {state.code}</p>
       )}
+
+      <div className="mt-2">
+        {tradingCockpit}
+      </div>
+
       {state.kind === 'ready' && !position && (
         <div className="mt-2 space-y-2.5">
           <div className="rounded-xl bg-secondary/60 px-3 py-2">
@@ -1473,7 +1478,6 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
             <Metric label="주문가능/가용" value={formatPrice(availableFunds, market)} />
             <Metric label="Provider 미체결" value={providerOpenOrders == null ? '미확인' : `${providerOpenOrders.length}건`} />
           </div>
-          {tradingCockpit}
         </div>
       )}
       {state.kind === 'ready' && position && (
@@ -1646,8 +1650,6 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
             {feeInputsPresent && !feeEvidence && <p role="alert" className="mt-1.5 text-[8px] font-black text-destructive">비용률은 각각 0 이상 100 미만 숫자로 입력해야 합니다.</p>}
             {feeEvidence && <p className="mt-1.5 text-[8px] font-bold text-muted-foreground">사용자 입력 비용률 기준 단순 손익분기점입니다. funding·슬리피지·기타 세금/비용은 입력률에 포함되지 않았다면 별도입니다.</p>}
           </details>
-
-          {tradingCockpit}
 
           <p className="text-[9px] font-bold text-muted-foreground">
             {providerLabel(state.snapshot.provider)} 조회 {checkedAtLabel(state.snapshot.checkedAt)}
