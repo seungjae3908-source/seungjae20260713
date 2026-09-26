@@ -3,7 +3,7 @@ import { AlertTriangle, CheckCircle2, Power, RefreshCw, ShieldAlert } from 'luci
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { cn } from '@/lib/utils';
 
-type Exchange = 'bitget' | 'upbit' | 'kiwoom';
+type Exchange = 'bitget' | 'upbit' | 'kiwoom' | 'toss';
 type Market = 'domestic_stock' | 'us_stock' | 'crypto_spot' | 'crypto_futures';
 type StockMarket = 'domestic_stock' | 'us_stock';
 type StockBroker = 'kiwoom' | 'toss';
@@ -43,12 +43,14 @@ type Status = {
   emergencyStopped: boolean;
   credentialVault: { encryptionConfigured: boolean; keyValueExposed: false };
   lastOrder: { exchange: Exchange; state: string; updatedAt: string; lastErrorCode: string | null } | null;
+  liveExecutionServerEnabled?: Record<Exchange, boolean>;
 };
 
 const EXCHANGE_LABELS: Record<Exchange, string> = {
   bitget: 'Bitget 코인선물',
   upbit: 'Upbit 코인현물',
   kiwoom: 'Kiwoom 주식 실행 연결',
+  toss: 'Toss 주식 실행 연결',
 };
 
 const STOCK_BROKER_LABELS: Record<StockBroker, string> = {
@@ -64,8 +66,8 @@ const MARKET_LABELS: Record<Market, string> = {
 };
 
 const MARKET_DESCRIPTIONS: Record<Market, string> = {
-  domestic_stock: '모의매매 지원 · Toss/Kiwoom 중 사용자별 선택',
-  us_stock: '모의매매 지원 · Toss/Kiwoom 중 사용자별 선택',
+  domestic_stock: '모의 + 거래키·서버게이트 충족 시 Toss/Kiwoom 실전',
+  us_stock: '모의 + 거래키·서버게이트 충족 시 Toss/Kiwoom 실전',
   crypto_spot: 'Upbit 고정 · 모의매매 지원',
   crypto_futures: 'Bitget 고정 · LONG/SHORT, 2~3배 제한',
 };
@@ -83,8 +85,8 @@ const DEFAULT_POLICY: UiPolicy = {
   emergencyStopped: false,
   marketEnabled: DEFAULT_MARKETS,
   stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'kiwoom' },
-  exchangeEnabled: { bitget: true, upbit: true, kiwoom: true },
-  enabledAssets: { bitget: [], upbit: [], kiwoom: [] },
+  exchangeEnabled: { bitget: true, upbit: true, kiwoom: true, toss: false },
+  enabledAssets: { bitget: [], upbit: [], kiwoom: [], toss: [] },
   enabledStrategies: [],
   totalCapitalKrw: 1_000_000,
   maxOrderKrw: 1_000_000,
@@ -116,16 +118,31 @@ function normalizeUiPolicy(policy?: Policy | null): UiPolicy {
     exchangeEnabled: {
       bitget: marketEnabled.crypto_futures,
       upbit: marketEnabled.crypto_spot,
-      kiwoom: marketEnabled.domestic_stock || marketEnabled.us_stock,
+      kiwoom: (marketEnabled.domestic_stock && stockBrokerByMarket.domestic_stock === 'kiwoom')
+        || (marketEnabled.us_stock && stockBrokerByMarket.us_stock === 'kiwoom'),
+      toss: (marketEnabled.domestic_stock && stockBrokerByMarket.domestic_stock === 'toss')
+        || (marketEnabled.us_stock && stockBrokerByMarket.us_stock === 'toss'),
+    },
+    enabledAssets: {
+      bitget: policy.enabledAssets.bitget ?? [],
+      upbit: policy.enabledAssets.upbit ?? [],
+      kiwoom: policy.enabledAssets.kiwoom ?? [],
+      toss: policy.enabledAssets.toss ?? [],
     },
   };
 }
 
-function exchangesForMarkets(markets: MarketSwitches): Record<Exchange, boolean> {
+function exchangesForMarkets(
+  markets: MarketSwitches,
+  brokers: StockBrokerByMarket,
+): Record<Exchange, boolean> {
   return {
     bitget: markets.crypto_futures,
     upbit: markets.crypto_spot,
-    kiwoom: markets.domestic_stock || markets.us_stock,
+    kiwoom: (markets.domestic_stock && brokers.domestic_stock === 'kiwoom')
+      || (markets.us_stock && brokers.us_stock === 'kiwoom'),
+    toss: (markets.domestic_stock && brokers.domestic_stock === 'toss')
+      || (markets.us_stock && brokers.us_stock === 'toss'),
   };
 }
 
@@ -175,23 +192,27 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
         ...current,
         mode: 'automatic',
         marketEnabled,
-        exchangeEnabled: exchangesForMarkets(marketEnabled),
+        exchangeEnabled: exchangesForMarkets(marketEnabled, current.stockBrokerByMarket),
       };
     });
   }
 
   function selectStockBroker(market: StockMarket, broker: StockBroker) {
-    setDraft((current) => ({
-      ...current,
-      stockBrokerByMarket: { ...current.stockBrokerByMarket, [market]: broker },
-    }));
+    setDraft((current) => {
+      const stockBrokerByMarket = { ...current.stockBrokerByMarket, [market]: broker };
+      return {
+        ...current,
+        stockBrokerByMarket,
+        exchangeEnabled: exchangesForMarkets(current.marketEnabled, stockBrokerByMarket),
+      };
+    });
   }
 
   async function save(confirmed: boolean) {
     const outbound: UiPolicy = {
       ...draft,
       mode: 'automatic',
-      exchangeEnabled: exchangesForMarkets(draft.marketEnabled),
+      exchangeEnabled: exchangesForMarkets(draft.marketEnabled, draft.stockBrokerByMarket),
     };
     if (fixture) {
       setDraft(outbound);
@@ -234,7 +255,7 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
         automaticEnabled: false,
         emergencyStopped: true,
         marketEnabled: stoppedMarkets,
-        exchangeEnabled: exchangesForMarkets(stoppedMarkets),
+        exchangeEnabled: exchangesForMarkets(stoppedMarkets, current.stockBrokerByMarket),
       }));
       setMessage('비상정지: 4시장 신규 주문이 모두 차단되었습니다.');
       return;
@@ -251,7 +272,7 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
       automaticEnabled: false,
       emergencyStopped: true,
       marketEnabled: stoppedMarkets,
-      exchangeEnabled: exchangesForMarkets(stoppedMarkets),
+      exchangeEnabled: exchangesForMarkets(stoppedMarkets, current.stockBrokerByMarket),
     }));
     setMessage('비상정지: 4시장 신규 주문이 모두 차단되었습니다.');
   }
@@ -336,11 +357,11 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
         <p className="rounded-xl bg-secondary/60 p-2">코인선물 · Bitget 고정</p>
       </div>
       <p className="mt-2 text-[10px] leading-4 text-muted-foreground">
-        현재 증권사 선택은 Paper 자동매매 라우팅에 적용됩니다. Toss/Kiwoom 실전 주문은 각각 검증된 private-order 어댑터가 활성화되기 전까지 차단됩니다.
+        실전 주문은 거래용 키 저장, 사용자 정책, 서버 provider 게이트, 주문 직전 Risk 재검증을 모두 통과해야 합니다. 키 저장만으로 실주문은 켜지지 않습니다.
       </p>
     </div>
 
-    <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
+    <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
       {(Object.keys(EXCHANGE_LABELS) as Exchange[]).map((exchange) => {
         const connection = connections[exchange];
         return <div key={exchange} className="rounded-2xl border border-card-border bg-background p-3" data-testid={`connection-${exchange}`}>
@@ -352,15 +373,15 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
           </div>
           <p className="mt-1 text-[11px] text-muted-foreground">
             {connection?.configured
-              ? `${connection.accountMode === 'live' ? '실전' : connection.accountMode === 'mock' ? '모의' : 'Paper'} 연결됨`
-              : '실전 연결 안 됨 · 모의매매는 가능'}
+              ? `${connection.accountMode === 'live' ? '실전 거래키 저장됨' : connection.accountMode === 'mock' ? '모의' : 'Paper'} · ${status?.liveExecutionServerEnabled?.[exchange] ? '서버게이트 ON' : '서버게이트 OFF'}`
+              : '거래키 미연결 · 모의매매는 가능'}
           </p>
           <p className="mt-1 text-[10px] text-muted-foreground">API 키 값은 화면에 표시하지 않습니다.</p>
         </div>;
       })}
     </div>
 
-    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
       {(Object.keys(EXCHANGE_LABELS) as Exchange[]).map((exchange) => (
         <label key={exchange} className="rounded-2xl border border-card-border bg-background p-3 text-xs font-extrabold">
           {EXCHANGE_LABELS[exchange]} 허용 종목
@@ -374,7 +395,7 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
                 [exchange]: event.target.value.split(',').map((item) => item.trim()).filter(Boolean),
               },
             }))}
-            placeholder={exchange === 'kiwoom' ? '비우면 전체 · 005930, AAPL' : '비우면 전체 · BTC, ETH'}
+            placeholder={exchange === 'kiwoom' || exchange === 'toss' ? '비우면 전체 · 005930, AAPL' : '비우면 전체 · BTC, ETH'}
             className="mt-2 h-10 w-full rounded-xl border border-card-border bg-card px-2 text-xs"
           />
         </label>
@@ -461,7 +482,7 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
           <dt className="font-bold">미국주식 증권사</dt><dd>{STOCK_BROKER_LABELS[draft.stockBrokerByMarket.us_stock]}</dd>
           <dt className="font-bold">코인현물</dt><dd>Upbit 고정</dd>
           <dt className="font-bold">코인선물</dt><dd>Bitget 고정</dd>
-          <dt className="font-bold">주식 실전주문</dt><dd>Toss/Kiwoom private-order 어댑터 검증 전까지 차단</dd>
+          <dt className="font-bold">실전주문</dt><dd>거래키 + provider 서버게이트 + 주문 직전 Risk Gate 모두 필요</dd>
           <dt className="font-bold">긴급정지</dt><dd>누르면 4시장 신규 주문 즉시 OFF</dd>
         </dl>
         <div className="mt-5 grid grid-cols-2 gap-2">
