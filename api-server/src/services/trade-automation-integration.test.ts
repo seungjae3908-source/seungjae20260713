@@ -397,6 +397,108 @@ test('persistent global emergency stop blocks new work and standing automatic re
   assert.ok(submitted.riskEnvelope);
   assert.equal(await repository.findOrderByPlan(USER_A, automaticPlan.plan!.id), null);
 });
+test('live connection verification authenticates all four providers with zero order mutation', async () => {
+  const previousKey = process.env.TRADING_CREDENTIAL_MASTER_KEY;
+  process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
+  const nativeFetch = globalThis.fetch;
+  const financialMutations: string[] = [];
+  const seen: string[] = [];
+  try {
+    const providers = [
+      { exchange: 'upbit', credentials: { accessKey: 'upbit-access', secretKey: 'upbit-secret' } },
+      { exchange: 'bitget', credentials: { apiKey: 'bitget-key', secretKey: 'bitget-secret', passphrase: 'bitget-pass' } },
+      { exchange: 'kiwoom', credentials: { appKey: 'kiwoom-key', secretKey: 'kiwoom-secret' } },
+      { exchange: 'toss', credentials: { clientId: 'toss-client', clientSecret: 'toss-secret', accountSeq: 'account-1' } },
+    ] as const;
+
+    const repository = new InMemoryTradingRepository();
+    for (const row of providers) {
+      await repository.saveConnection({
+        userId: USER_A,
+        exchange: row.exchange,
+        accountMode: 'live',
+        configured: true,
+        encryptedCredentials: encryptTradingCredentials(row.credentials, MASTER_KEY),
+        lastVerifiedAt: null,
+        lastErrorCode: 'LIVE_EXECUTION_NOT_VERIFIED',
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      const method = String(init?.method ?? 'GET').toUpperCase();
+      seen.push(`${method} ${url}`);
+      if (
+        (url.includes('api.upbit.com/v1/orders') && method !== 'GET')
+        || url.includes('api.bitget.com/api/v2/mix/order/place-order')
+        || url.includes('api.kiwoom.com/api/dostk/ordr')
+        || url.includes('api.kiwoom.com/api/us/ordr')
+        || (url.includes('openapi.tossinvest.com/api/v1/orders') && method !== 'GET')
+      ) {
+        financialMutations.push(`${method} ${url}`);
+        throw new Error('TEST_FINANCIAL_MUTATION_FORBIDDEN');
+      }
+      if (url.includes('api.upbit.com/v1/accounts')) {
+        return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (url.includes('api.bitget.com/api/v2/mix/account/accounts')
+        || url.includes('api.bitget.com/api/v2/mix/position/all-position')) {
+        return new Response(JSON.stringify({ code: '00000', data: [] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.includes('api.kiwoom.com/oauth2/token')) {
+        return new Response(JSON.stringify({ return_code: 0, token: 'kiwoom-token' }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.includes('api.kiwoom.com/api/dostk/acnt')) {
+        return new Response(JSON.stringify({ return_code: 0 }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.includes('openapi.tossinvest.com/oauth2/token')) {
+        return new Response(JSON.stringify({ access_token: 'toss-token' }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.includes('openapi.tossinvest.com/api/v1/accounts')) {
+        return new Response(JSON.stringify({ result: [] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.includes('openapi.tossinvest.com/api/v1/buying-power')) {
+        return new Response(JSON.stringify({ result: { buyingPower: '0' } }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      throw new Error(`UNEXPECTED_VERIFICATION_REQUEST:${method}:${url}`);
+    }) as typeof fetch;
+
+    const execution = new TradeExecutionService(repository);
+    for (const row of providers) {
+      const result = await execution.verifyLiveConnection(USER_A, row.exchange);
+      assert.equal(result.verified, true, row.exchange);
+      assert.equal(result.orderRequests, 0, row.exchange);
+      assert.equal(result.cancelRequests, 0, row.exchange);
+      assert.equal(result.amendRequests, 0, row.exchange);
+      assert.equal(result.transferRequests, 0, row.exchange);
+      assert.equal(result.withdrawalRequests, 0, row.exchange);
+      assert.equal(result.realOrderSubmitted, false, row.exchange);
+      const connection = await repository.getConnection(USER_A, row.exchange);
+      assert.ok(connection?.lastVerifiedAt, row.exchange);
+      assert.equal(connection?.lastErrorCode, null, row.exchange);
+    }
+    assert.deepEqual(financialMutations, []);
+    assert.ok(seen.length >= 7);
+  } finally {
+    globalThis.fetch = nativeFetch;
+    if (previousKey == null) delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
+    else process.env.TRADING_CREDENTIAL_MASTER_KEY = previousKey;
+  }
+});
+
 test('paper execution has zero outbound calls and restart scan marks an accepted order for reconciliation', async () => {
   const repository = new InMemoryTradingRepository();
   const automation = new TradeAutomationService(repository);
