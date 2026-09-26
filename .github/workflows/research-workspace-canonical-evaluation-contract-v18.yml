@@ -25,6 +25,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -45,7 +46,33 @@ jobs:
             'maxCompilerRuns:1','maxBacktestRuns:1','finalHoldoutPreAccess:false','selectionFeedbackToGenerator:false',
             'replayAllowed:false','RESEARCH_EVIDENCE_ONLY','automaticAdoption:false','paperActivation:false',
             'liveActivation:false','profitabilityProven:false',"executionAuthority:'NONE'",
+            'FRESH_PHASE17_READY_RECEIPT_REQUIRED','CANONICAL_STATISTICAL_FIREWALL_NOT_PRESENT_ON_CURRENT_SHA',
           ]) if(!source.includes(token)) throw new Error('PHASE18_CONTRACT_TOKEN_MISSING:'+token);
-          for(const pattern of [/^\\s*issue_comment:/m,/^\\s*workflow_dispatch:/m,/^\\s*schedule:/m])
+          for(const pattern of [/^\s*issue_comment:/m,/^\s*workflow_dispatch:/m,/^\s*schedule:/m])
             if(pattern.test(workflow)) throw new Error('PHASE18_OPERATIONAL_TRIGGER_FORBIDDEN:'+pattern);
+          NODE
+      - name: Audit exact-head runtime dependency presence without executing research
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const {execFileSync}=require('node:child_process');
+          const head=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
+          const rows=[
+            ['formulaCompiler','#550','BOUNDED_FORMULA_COMPILER_V1','market-prediction-lab/src/autonomous-strategy-formula-generator-v1.js'],
+            ['canonicalBacktester','#690','ONE_PASS_EXECUTION_EQUIVALENT_BACKTESTER_V1','market-prediction-lab/src/independent-strategy-backtest.js'],
+            ['statisticalFirewall','#547','CANONICAL_STATISTICAL_FIREWALL_V1','market-prediction-lab/src/global-strategy-statistical-firewall-v1.js'],
+          ];
+          const proof={sourceSha:head,dependencies:{}};
+          for(const [key,ownerRef,capability,path] of rows){
+            let blob=null;
+            try{blob=execFileSync('git',['rev-parse',`HEAD:${path}`],{encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();}catch{}
+            proof.dependencies[key]={status:/^[0-9a-f]{40}$/.test(blob??'')?'PRESENT':'MISSING',ownerRef,capability,implementationPath:path,implementationBlobSha:blob};
+          }
+          if(proof.dependencies.formulaCompiler.status!=='PRESENT')throw new Error('PHASE18_COMPILER_CURRENT_HEAD_MISSING');
+          if(proof.dependencies.canonicalBacktester.status!=='PRESENT')throw new Error('PHASE18_BACKTESTER_CURRENT_HEAD_MISSING');
+          const status=proof.dependencies.statisticalFirewall.status==='PRESENT'
+            ?'CURRENT_HEAD_RUNTIME_DEPENDENCIES_PRESENT'
+            :'BLOCKED_CANONICAL_STATISTICAL_FIREWALL_NOT_PRESENT_ON_CURRENT_SHA';
+          process.stdout.write(JSON.stringify({status,...proof})+'\n');
           NODE
