@@ -407,7 +407,7 @@ function buildCurrentAnalysis(input: {
         : pattern.status === 'invalidated'
           ? `${pattern.label} 후보가 기준 가격을 벗어나 무효화됐습니다.`
           : `${pattern.label} 후보가 감지됐지만 넥라인 확인 전이므로 확정으로 판단하지 않습니다.`
-      : `${input.selection.timeframe} 기준 ${trend} 구조입니다. 현재가 ${latest.close}, 지지 ${input.levels.support}, 저항 ${input.levels.resistance}를 기준으로 다음 완료봉을 확인합니다.`;
+      : `${input.selection.timeframe} 기준 ${trend} 구조입니다. 현재가 ${formatPrice(latest.close, input.selection.market)}, 지지 ${formatPrice(input.levels.support, input.selection.market)}, 저항 ${formatPrice(input.levels.resistance, input.selection.market)}를 기준으로 다음 완료봉을 확인합니다.`;
   const anchors = pattern?.anchorPivots ?? [];
 
   return buildChartAnalysis({
@@ -768,9 +768,16 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
   const warnings = chartQuery.data?.normalization.warnings ?? [];
   const errorMessage = chartQuery.error instanceof Error ? chartQuery.error.message : '차트 데이터를 불러오지 못했습니다.';
   const pricePlan = selection.pricePlan;
-  const entryText = pricePlan?.entryZone
-    ? `${formatPlanPrice(pricePlan.entryZone.from, market)} ~ ${formatPlanPrice(pricePlan.entryZone.to, market)}`
+  const entry1Text = formatPlanPrice(pricePlan?.entryZone?.from, market);
+  const entry2Text = pricePlan?.entryZone?.to != null
+    && pricePlan.entryZone.to !== pricePlan.entryZone.from
+    ? formatPlanPrice(pricePlan.entryZone.to, market)
     : '미확인';
+  const structureReferenceLabel = analysis?.bias === 'bearish'
+    ? '상단 무효화 참고'
+    : analysis?.bias === 'bullish'
+      ? '상승 목표 참고'
+      : '상단 구조 참고';
 
   const realtimeStatusLabel = live ? realtimeHealth.connectionState : 'POLLING_PAUSED';
   const realtimeDescription = !live
@@ -791,21 +798,21 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
     >
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
         <div className="flex items-start justify-between gap-3">
-          <div><p className="text-[11px] font-extrabold text-primary">시장·종목 선택</p><h2 className="mt-1 text-base font-black">실제 차트 데이터</h2></div>
+          <div><p className="text-xs font-semibold text-primary">시장·종목 선택</p><h2 className="mt-1 text-base font-bold">실제 차트 데이터</h2></div>
           <button
             type="button"
             aria-label={live ? '자동 갱신 중' : '갱신 일시정지'}
             data-testid="chart-stream-status"
             onClick={() => setLive((current) => !current)}
-            className={cn('rounded-full border px-3 py-1.5 text-xs font-extrabold', live ? 'border-warning/30 bg-warning/10 text-warning' : 'border-card-border bg-background text-muted-foreground')}
+            className={cn('rounded-full border px-3 py-1.5 text-xs font-semibold', live ? 'border-warning/30 bg-warning/10 text-warning' : 'border-card-border bg-background text-muted-foreground')}
           >
             {realtimeStatusLabel}
           </button>
         </div>
-        <p className="mt-2 text-[10px] font-bold text-muted-foreground">{realtimeDescription}</p>
+        <p className="mt-2 text-xs font-bold text-muted-foreground">{realtimeDescription}</p>
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
           {MARKET_OPTIONS.map((item) => (
-            <button key={item.key} type="button" data-testid={`market-${item.key}`} onClick={() => changeMarket(item.key)} className={cn('rounded-xl border px-2 py-2 text-xs font-black', market === item.key ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-background text-muted-foreground')}>{item.label}</button>
+            <button key={item.key} type="button" data-testid={`market-${item.key}`} onClick={() => changeMarket(item.key)} className={cn('rounded-xl border px-2 py-2 text-xs font-bold', market === item.key ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-background text-muted-foreground')}>{item.label}</button>
           ))}
         </div>
         <div className="mt-3 flex gap-2">
@@ -831,7 +838,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
             />
             {draft && <button type="button" aria-label="심볼 지우기" onClick={() => { setDraft(''); setQuery(''); setSearchOpen(false); }}><X className="h-4 w-4 text-muted-foreground" /></button>}
           </label>
-          <button type="button" data-testid="apply-chart-symbol" onClick={submitDraft} className="shrink-0 rounded-2xl bg-primary px-4 text-xs font-black text-primary-foreground">적용</button>
+          <button type="button" data-testid="apply-chart-symbol" onClick={submitDraft} className="shrink-0 rounded-2xl bg-primary px-4 text-xs font-bold text-primary-foreground">적용</button>
         </div>
         {inputError && <p role="alert" className="mt-2 text-xs font-bold text-destructive">{inputError}</p>}
         {searchOpen && (
@@ -839,8 +846,8 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
             <div className="max-h-60 overflow-y-auto">
               {searchQuery.isLoading ? <Centered><Loader2 className="h-4 w-4 animate-spin" /> 검색 중</Centered> : searchQuery.isError ? <p role="alert" className="p-4 text-center text-xs font-bold text-destructive">검색 데이터를 불러오지 못했습니다.</p> : searchRows.length ? searchRows.map((row) => (
                 <button key={`${row.market}:${row.symbol}`} type="button" onClick={() => { setDraft(row.symbol); setQuery(''); setSearchOpen(false); commitSelection({ market: row.market, symbol: row.symbol, name: row.name }); }} className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-secondary">
-                  <div className="min-w-0"><p className="truncate text-sm font-black">{row.name}</p><p className="text-[10px] font-bold text-muted-foreground">{row.symbol}</p></div>
-                  <div className="text-right text-[10px] font-bold"><p>{formatPrice(row.price, row.market)}</p><p>{formatPercent(row.changePercent)}</p></div>
+                  <div className="min-w-0"><p className="truncate text-sm font-bold">{row.name}</p><p className="text-xs font-bold text-muted-foreground">{row.symbol}</p></div>
+                  <div className="text-right text-xs font-bold"><p>{formatPrice(row.price, row.market)}</p><p>{formatPercent(row.changePercent)}</p></div>
                 </button>
               )) : <p className="p-4 text-center text-xs font-bold text-muted-foreground">검색 결과가 없습니다. 심볼을 직접 입력한 뒤 적용할 수 있습니다.</p>}
             </div>
@@ -851,27 +858,27 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
       <section className="overflow-hidden rounded-3xl border border-card-border bg-card shadow-sm">
         <div className="border-b border-card-border p-4">
           <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="truncate text-lg font-black">{selection.displayName}</h2><span className="rounded-full bg-secondary px-2 py-1 text-[10px] font-extrabold text-muted-foreground">{selection.ticker}</span><span data-testid="chart-data-status" className={cn('rounded-full border px-2 py-1 text-[10px] font-black', dataStatusClass(dataStatus))}>{dataStatusLabel(dataStatus)}</span></div><p className="mt-1 text-[11px] font-bold text-muted-foreground">{unifiedMarketLabel(market)} · {chartQuery.data?.provider ?? '데이터 연결 대기'}</p></div>
+            <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="truncate text-lg font-bold">{selection.displayName}</h2><span className="rounded-full bg-secondary px-2 py-1 text-xs font-semibold text-muted-foreground">{selection.ticker}</span><span data-testid="chart-data-status" className={cn('rounded-full border px-2 py-1 text-xs font-bold', dataStatusClass(dataStatus))}>{dataStatusLabel(dataStatus)}</span></div><p className="mt-1 text-xs font-bold text-muted-foreground">{unifiedMarketLabel(market)} · {chartQuery.data?.provider ?? '데이터 연결 대기'}</p></div>
             <button type="button" aria-label="차트 새로고침" onClick={() => void chartQuery.refetch()} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-card-border bg-background"><RefreshCw className={cn('h-4 w-4', chartQuery.isFetching && 'animate-spin')} /></button>
           </div>
-          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-            {UNIFIED_CHART_TIMEFRAMES.map((item) => <button key={item.key} type="button" data-testid={`timeframe-${item.key}`} onClick={() => changeTimeframe(item.key)} className={cn('shrink-0 rounded-xl border px-3 py-2 text-xs font-extrabold', timeframe === item.key ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-background text-muted-foreground')}>{item.label}</button>)}
+          <div className="mt-3 grid grid-cols-4 gap-1.5 min-[768px]:grid-cols-8" data-testid="ai-chart-timeframe-grid">
+            {UNIFIED_CHART_TIMEFRAMES.map((item) => <button key={item.key} type="button" data-testid={`timeframe-${item.key}`} onClick={() => changeTimeframe(item.key)} className={cn('min-h-10 min-w-0 rounded-xl border px-2 py-2 text-xs font-semibold', timeframe === item.key ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-background text-muted-foreground')}>{item.label}</button>)}
           </div>
-          <button type="button" onClick={() => setSettingsOpen((current) => !current)} className="mt-3 flex w-full items-center justify-between rounded-2xl border border-card-border bg-background px-3 py-2.5 text-left"><span className="inline-flex items-center gap-2 text-xs font-extrabold"><Settings2 className="h-4 w-4 text-primary" /> 지표 설정 · 브라우저 저장</span>{settingsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}</button>
-          {settingsOpen && <div className="mt-2 flex flex-wrap gap-2 rounded-2xl border border-card-border bg-background p-3">{OVERLAY_OPTIONS.map((item) => <button key={item.key} type="button" data-testid={`overlay-${item.key}`} onClick={() => toggleOverlay(item.key)} className={cn('rounded-full border px-3 py-1.5 text-[11px] font-extrabold', overlays[item.key] ? 'border-primary bg-primary/10 text-primary' : 'border-card-border bg-card text-muted-foreground')}>{overlays[item.key] ? '✓ ' : '+ '}{item.label}</button>)}</div>}
+          <button type="button" onClick={() => setSettingsOpen((current) => !current)} className="mt-3 flex w-full items-center justify-between rounded-2xl border border-card-border bg-background px-3 py-2.5 text-left"><span className="inline-flex items-center gap-2 text-xs font-semibold"><Settings2 className="h-4 w-4 text-primary" /> 지표 설정 · 브라우저 저장</span>{settingsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}</button>
+          {settingsOpen && <div className="mt-2 flex flex-wrap gap-2 rounded-2xl border border-card-border bg-background p-3">{OVERLAY_OPTIONS.map((item) => <button key={item.key} type="button" data-testid={`overlay-${item.key}`} onClick={() => toggleOverlay(item.key)} className={cn('rounded-full border px-3 py-1.5 text-xs font-semibold', overlays[item.key] ? 'border-primary bg-primary/10 text-primary' : 'border-card-border bg-card text-muted-foreground')}>{overlays[item.key] ? '✓ ' : '+ '}{item.label}</button>)}</div>}
         </div>
         <div className="min-h-[390px] bg-background/30">
-          {chartQuery.isLoading ? <Centered tall><Loader2 className="h-5 w-5 animate-spin" /> 차트 불러오는 중</Centered> : chartQuery.isError ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-error-state"><AlertTriangle className="h-8 w-8 text-destructive" /><p className="mt-3 text-sm font-black">차트 데이터를 불러오지 못했습니다.</p><p role="alert" className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">{errorMessage}</p><button type="button" onClick={() => void chartQuery.refetch()} className="mt-4 rounded-full bg-primary px-4 py-2 text-xs font-black text-primary-foreground">다시 시도</button></div> : candles.length < 2 || !levels ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-empty-state"><BarChart3 className="h-8 w-8 text-muted-foreground" /><p className="mt-3 text-sm font-black">표시할 유효한 캔들이 없습니다.</p><p className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">잘못된 심볼, 데이터 없는 종목 또는 지원하지 않는 시간봉인지 확인하세요. 임시 캔들은 만들지 않습니다.</p></div> : <PatternAwareUnifiedChartCanvas ref={realtimeCanvasRef} candles={candles} indicators={indicators} levels={levels} analysis={analysis} pricePlan={pricePlan} overlays={overlays} timeframe={timeframe} resetKey={`${market}:${selection.ticker}:${timeframe}`} market={market} onCandleSelect={handleCandleSelect} />}
+          {chartQuery.isLoading ? <Centered tall><Loader2 className="h-5 w-5 animate-spin" /> 차트 불러오는 중</Centered> : chartQuery.isError ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-error-state"><AlertTriangle className="h-8 w-8 text-destructive" /><p className="mt-3 text-sm font-bold">차트 데이터를 불러오지 못했습니다.</p><p role="alert" className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">{errorMessage}</p><button type="button" onClick={() => void chartQuery.refetch()} className="mt-4 rounded-full bg-primary px-4 py-2 text-xs font-bold text-primary-foreground">다시 시도</button></div> : candles.length < 2 || !levels ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-empty-state"><BarChart3 className="h-8 w-8 text-muted-foreground" /><p className="mt-3 text-sm font-bold">표시할 유효한 캔들이 없습니다.</p><p className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">잘못된 심볼, 데이터 없는 종목 또는 지원하지 않는 시간봉인지 확인하세요. 임시 캔들은 만들지 않습니다.</p></div> : <PatternAwareUnifiedChartCanvas ref={realtimeCanvasRef} candles={candles} indicators={indicators} levels={levels} analysis={analysis} pricePlan={pricePlan} overlays={overlays} timeframe={timeframe} resetKey={`${market}:${selection.ticker}:${timeframe}`} market={market} onCandleSelect={handleCandleSelect} />}
         </div>
       </section>
 
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="ai-chart-v3-evidence-status" data-realtime-provider={realtimeHealth.provider}>
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <p className="text-[11px] font-extrabold text-primary">AI Chart V3 Evidence Truth</p>
-            <h2 className="mt-1 text-sm font-black">Transport · Provenance · Calibration</h2>
+            <p className="text-xs font-semibold text-primary">AI Chart V3 Evidence Truth</p>
+            <h2 className="mt-1 text-sm font-bold">Transport · Provenance · Calibration</h2>
           </div>
-          <span className={cn('rounded-full border px-3 py-1 text-[10px] font-black', dataStatusClass(dataStatus))}>{dataStatusLabel(dataStatus)}</span>
+          <span className={cn('rounded-full border px-3 py-1 text-xs font-bold', dataStatusClass(dataStatus))}>{dataStatusLabel(dataStatus)}</span>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
           <Metric label="STREAM STATUS" value={realtimeHealth.connectionState} />
@@ -889,25 +896,27 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
           <Metric label="EXPECTED VALUE" value="UNAVAILABLE" />
           <Metric label="DATA QUALITY" value={dataStatusLabel(dataStatus)} />
         </div>
-        <p className="mt-3 rounded-2xl bg-background p-3 text-[11px] font-bold leading-5 text-muted-foreground">TECHNICAL SCORE는 규칙 기반 차트 강도 점수이며 실제 승률이 아닙니다. Backtest/OOS/Walk-Forward/Shadow/Paper의 검증 표본이 이 차트와 정식으로 연결되기 전에는 확률·승률·EV를 생성하지 않습니다. 지연·오래된·불충분 데이터에서는 방향 신호를 강행하지 않고 WATCH로 제한합니다.</p>
+        <p className="mt-3 rounded-2xl bg-background p-3 text-xs font-bold leading-5 text-muted-foreground">TECHNICAL SCORE는 규칙 기반 차트 강도 점수이며 실제 승률이 아닙니다. Backtest/OOS/Walk-Forward/Shadow/Paper의 검증 표본이 이 차트와 정식으로 연결되기 전에는 확률·승률·EV를 생성하지 않습니다. 지연·오래된·불충분 데이터에서는 방향 신호를 강행하지 않고 WATCH로 제한합니다.</p>
       </section>
 
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="scanner-price-plan-chart">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <p className="text-[11px] font-extrabold text-primary">신호검색기 계획</p>
-            <h2 className="mt-1 break-keep text-sm font-black">진입 · 손절 · 목표가</h2>
-            <p className="mt-1 text-[10px] font-bold text-muted-foreground">Scanner 계획·점수·근거는 같은 시장·종목·시간봉 identity에서만 유지됩니다.</p>
+            <p className="text-xs font-semibold text-primary">신호검색기 계획</p>
+            <h2 className="mt-1 break-keep text-sm font-bold">진입 · 손절 · 목표가</h2>
+            <p className="mt-1 text-xs font-bold text-muted-foreground">Scanner 계획·점수·근거는 같은 시장·종목·시간봉 identity에서만 유지됩니다.</p>
           </div>
-          <span data-testid="scanner-price-plan-action" className="shrink-0 rounded-full border border-card-border bg-background px-3 py-1 text-xs font-black">{scannerActionLabel(selection.action)}</span>
+          <span data-testid="scanner-price-plan-action" className="shrink-0 rounded-full border border-card-border bg-background px-3 py-1 text-xs font-bold">{scannerActionLabel(selection.action)}</span>
         </div>
         {pricePlan ? (
           <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-            <Metric label="진입" value={entryText} />
+            <Metric label="진입 1" value={entry1Text} />
+            <Metric label="진입 2" value={entry2Text} />
             <Metric label="손절" value={formatPlanPrice(pricePlan.stopLoss, market)} />
+            <Metric label="목표 1" value={formatPlanPrice(pricePlan.targets[0], market)} />
+            <Metric label="목표 2" value={formatPlanPrice(pricePlan.targets[1], market)} />
+            <Metric label="목표 3" value={formatPlanPrice(pricePlan.targets[2], market)} />
             <Metric label="무효화" value={formatPlanPrice(pricePlan.invalidation, market)} />
-            <Metric label="목표1" value={formatPlanPrice(pricePlan.targets[0], market)} />
-            <Metric label="목표2" value={formatPlanPrice(pricePlan.targets[1], market)} />
             <Metric label="R:R" value={pricePlan.riskReward != null && Number.isFinite(pricePlan.riskReward) && pricePlan.riskReward > 0 ? pricePlan.riskReward.toFixed(2) : '미확인'} />
           </div>
         ) : (
@@ -924,12 +933,12 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
         onReset={() => setSelectedCandleTime(null)}
       />
 
-      {warnings.length > 0 && <section className="rounded-3xl border border-warning/30 bg-warning/5 p-4" data-testid="chart-data-warnings"><div className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-warning" /><h2 className="text-sm font-black">데이터 품질 알림</h2></div><ul className="mt-2 space-y-1 text-xs font-bold text-muted-foreground">{warnings.map((warning) => <li key={warning}>• {warning}</li>)}</ul></section>}
+      {warnings.length > 0 && <section className="rounded-3xl border border-warning/30 bg-warning/5 p-4" data-testid="chart-data-warnings"><div className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-warning" /><h2 className="text-sm font-bold">데이터 품질 알림</h2></div><ul className="mt-2 space-y-1 text-xs font-bold text-muted-foreground">{warnings.map((warning) => <li key={warning}>• {warning}</li>)}</ul></section>}
 
-      {latest && levels && <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-[11px] font-extrabold text-primary">기술지표·분석 참고선</p><h2 className="mt-1 text-lg font-black">{analysis?.title ?? '분석 준비 중'}</h2></div><div className="rounded-full border border-card-border bg-secondary px-3 py-1.5 text-xs font-black">{analysis?.bias === 'bullish' ? '상승 우세' : analysis?.bias === 'bearish' ? '하락 우세' : '중립'}</div></div><p className="mt-3 rounded-2xl bg-secondary/70 p-3 text-xs font-bold leading-5">{analysis?.summary ?? '유효한 완료봉과 지표가 준비되면 분석을 표시합니다.'}</p><div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4"><Metric label="현재가" value={formatPrice(latest.close, market)} icon={<BarChart3 className="h-4 w-4" />} /><Metric label="1차 지지" value={formatPrice(levels.support, market)} icon={<TrendingDown className="h-4 w-4" />} /><Metric label="1차 저항" value={formatPrice(levels.resistance, market)} icon={<TrendingUp className="h-4 w-4" />} /><Metric label="목표 참고" value={formatPrice(levels.targetReference, market)} icon={<TrendingUp className="h-4 w-4" />} />{overlays.rsi && <Metric label="RSI14" value={currentIndicator?.rsi14 == null ? '-' : currentIndicator.rsi14.toFixed(1)} />}{overlays.macd && <Metric label="MACD" value={currentIndicator?.macd == null ? '-' : currentIndicator.macd.toFixed(4)} />}{overlays.atr && <Metric label="ATR14" value={formatPrice(currentIndicator?.atr14, market)} />}<Metric label="거래량 비율" value={currentIndicator?.volumeRatio20 == null ? '-' : `${currentIndicator.volumeRatio20.toFixed(2)}배`} /></div></section>}
+      {latest && levels && <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-semibold text-primary">기술지표·분석 참고선</p><h2 className="mt-1 text-lg font-bold">{analysis?.title ?? '분석 준비 중'}</h2></div><div className="rounded-full border border-card-border bg-secondary px-3 py-1.5 text-xs font-bold">{analysis?.bias === 'bullish' ? '상승 우세' : analysis?.bias === 'bearish' ? '하락 우세' : '중립'}</div></div><p className="mt-3 rounded-2xl bg-secondary/70 p-3 text-xs font-bold leading-5">{analysis?.summary ?? '유효한 완료봉과 지표가 준비되면 분석을 표시합니다.'}</p><div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4"><Metric label="현재가" value={formatPrice(latest.close, market)} icon={<BarChart3 className="h-4 w-4" />} /><Metric label="1차 지지" value={formatPrice(levels.support, market)} icon={<TrendingDown className="h-4 w-4" />} /><Metric label="1차 저항" value={formatPrice(levels.resistance, market)} icon={<TrendingUp className="h-4 w-4" />} /><Metric label={structureReferenceLabel} value={formatPrice(levels.targetReference, market)} icon={<TrendingUp className="h-4 w-4" />} />{overlays.rsi && <Metric label="RSI14" value={currentIndicator?.rsi14 == null ? '-' : currentIndicator.rsi14.toFixed(1)} />}{overlays.macd && <Metric label="MACD" value={currentIndicator?.macd == null ? '-' : currentIndicator.macd.toFixed(4)} />}{overlays.atr && <Metric label="ATR14" value={formatPrice(currentIndicator?.atr14, market)} />}<Metric label="거래량 비율" value={currentIndicator?.volumeRatio20 == null ? '-' : `${currentIndicator.volumeRatio20.toFixed(2)}배`} /></div></section>}
 
-      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm"><div className="flex items-center justify-between gap-2"><div><p className="text-[11px] font-extrabold text-primary">분석 상태 타임라인</p><h2 className="mt-1 text-sm font-black">형성 → 후보 → 확정·무효화</h2></div><span className="text-[10px] font-bold text-muted-foreground">최근 {timeline.length}건</span></div><div className="mt-3 max-h-72 space-y-2 overflow-y-auto">{timeline.length ? timeline.map((item) => <div key={item.key} className="rounded-2xl bg-background p-3 text-xs"><div className="flex items-center justify-between gap-2"><strong>{item.analysis.title}</strong><span className="text-[10px] font-black text-primary">{item.analysis.status}</span></div><p className="mt-1 break-keep font-bold leading-5 text-muted-foreground">{item.analysis.transitionReason}</p><p className="mt-1 text-[10px] font-semibold text-muted-foreground">{new Date(item.analysis.detectedAt).toLocaleString('ko-KR')}</p></div>) : <p className="rounded-2xl bg-background p-5 text-center text-xs font-bold text-muted-foreground">새 분석 상태를 기다리는 중입니다.</p>}</div></section>
-      <p className="px-1 text-[10px] font-semibold leading-4 text-muted-foreground">국내주식·미국주식·업비트 현물·비트겟 선물의 공개 시세를 읽기 전용으로 분석합니다. 업비트·비트겟은 검증된 공개 WebSocket을 우선 사용하고 이상 시 REST polling으로 fail-closed 전환합니다. 주문 API와 연결하지 않으며 실제 주문을 실행하지 않습니다.</p>
+      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm"><div className="flex items-center justify-between gap-2"><div><p className="text-xs font-semibold text-primary">분석 상태 타임라인</p><h2 className="mt-1 text-sm font-bold">형성 → 후보 → 확정·무효화</h2></div><span className="text-xs font-bold text-muted-foreground">최근 {timeline.length}건</span></div><div className="mt-3 space-y-2">{timeline.length ? timeline.map((item) => <div key={item.key} className="rounded-2xl bg-background p-3 text-xs"><div className="flex items-center justify-between gap-2"><strong>{item.analysis.title}</strong><span className="text-xs font-bold text-primary">{item.analysis.status}</span></div><p className="mt-1 break-keep font-bold leading-5 text-muted-foreground">{item.analysis.transitionReason}</p><p className="mt-1 text-xs font-semibold text-muted-foreground">{new Date(item.analysis.detectedAt).toLocaleString('ko-KR')}</p></div>) : <p className="rounded-2xl bg-background p-5 text-center text-xs font-bold text-muted-foreground">새 분석 상태를 기다리는 중입니다.</p>}</div></section>
+      <p className="px-1 text-xs font-semibold leading-4 text-muted-foreground">국내주식·미국주식·업비트 현물·비트겟 선물의 공개 시세를 읽기 전용으로 분석합니다. 업비트·비트겟은 검증된 공개 WebSocket을 우선 사용하고 이상 시 REST polling으로 fail-closed 전환합니다. 주문 API와 연결하지 않으며 실제 주문을 실행하지 않습니다.</p>
     </div>
   );
 }
@@ -939,5 +948,5 @@ function Centered({ children, tall = false }: { children: ReactNode; tall?: bool
 }
 
 function Metric({ label, value, icon }: { label: string; value: string; icon?: ReactNode }) {
-  return <div className="rounded-2xl border border-card-border bg-background p-3"><div className="flex items-center gap-1.5 text-primary">{icon}<span className="text-[10px] font-extrabold text-muted-foreground">{label}</span></div><p className="mt-2 break-words text-sm font-black">{value}</p></div>;
+  return <div className="rounded-2xl border border-card-border bg-background p-3"><div className="flex items-center gap-1.5 text-primary">{icon}<span className="text-xs font-semibold text-muted-foreground">{label}</span></div><p className="mt-2 break-words text-sm font-bold">{value}</p></div>;
 }

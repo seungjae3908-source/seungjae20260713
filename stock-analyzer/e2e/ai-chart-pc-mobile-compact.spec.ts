@@ -55,7 +55,34 @@ test('AI Chart source keeps desktop dense and mobile summary-first', () => {
   expect(pageSource).toContain('읽기 전용 · 주문 실행 없음');
   expect(pageSource).toContain("if (mode === 'SCALPING') return '단타';");
   expect(pageSource).toContain("if (mode === 'SWING') return '스윙';");
+  expect(pageSource).toContain("return '판단 보류';");
+  expect(pageSource).toContain('contextualActionLabel(selection, analysis)');
   expect(pageSource).not.toContain('<p>{strategyMode} · 공개 시세 읽기 전용</p>');
+});
+
+test('AI Chart user surfaces keep 12px floor and avoid nested timeline/evidence scrollers', () => {
+  const files = [
+    source('src/components/ai-chart-market-intelligence-evidence-panel.tsx'),
+    source('src/components/futures-public-context-panel.tsx'),
+    source('src/components/ai-chart-v2-intelligence-panel.tsx'),
+    source('src/components/unified-analysis-chart.tsx'),
+  ];
+  for (const fileSource of files) {
+    expect(fileSource).not.toContain('text-[8px]');
+    expect(fileSource).not.toContain('text-[9px]');
+    expect(fileSource).not.toContain('text-[10px]');
+    expect(fileSource).not.toContain('text-[11px]');
+    expect(fileSource).not.toContain('font-black');
+  }
+  const unified = files[3];
+  expect(unified).not.toContain('overflow-x-auto');
+  expect(unified).not.toContain('max-h-72');
+  expect(unified).toContain('data-testid="ai-chart-timeframe-grid"');
+
+  const newsEvidence = files[0];
+  expect(newsEvidence).not.toContain('max-h-[420px]');
+  expect(newsEvidence).not.toContain('AI 신뢰');
+  expect(newsEvidence).toContain('AI 근거 강도');
 });
 
 for (const width of [360, 390, 412, 430]) {
@@ -64,7 +91,16 @@ for (const width of [360, 390, 412, 430]) {
     await primeSelection(page);
     await page.goto(chartUrl);
 
-    await expect(page.getByTestId('ai-chart-mobile-tabs')).toBeVisible();
+    const tabs = page.getByTestId('ai-chart-mobile-tabs');
+    await expect(tabs).toBeVisible();
+    await expect(tabs.getByRole('tab')).toHaveCount(4);
+    const tabBoxes = await tabs.getByRole('tab').evaluateAll((nodes) => nodes.map((node) => {
+      const rect = node.getBoundingClientRect();
+      return { left: rect.left, right: rect.right, width: rect.width, text: node.textContent ?? '' };
+    }));
+    expect(tabBoxes.every((box) => box.width >= 60)).toBe(true);
+    expect(tabBoxes.at(-1)?.text).toContain('상세');
+    expect(tabBoxes.at(-1)?.right ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(width + 1);
     await expect(page.getByTestId('ai-chart-mobile-summary')).toBeVisible();
     await expect(page.getByTestId('ai-chart-mobile-summary')).toContainText('매수');
     await expect(page.getByTestId('ai-chart-mobile-summary')).toContainText('진입');
