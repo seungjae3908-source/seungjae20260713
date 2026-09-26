@@ -42,6 +42,9 @@ export type AiChatResult = {
   answer: string;
   kind: 'answer' | 'refusal';
   model: string | null;
+  provider: AiChatProvider | null;
+  fallbackUsed: boolean;
+  providerLatencyMs: number | null;
   generatedAt: string;
   data: AiChatDataDisclosure;
   selection?: AiChatContext;
@@ -304,6 +307,9 @@ export function actionRefusal(message: string): AiChatResult | null {
     answer: 'AI 채팅은 공개 금융정보와 앱 사용법을 설명하는 정보 기능입니다. 주문·자동매매·계좌·서버·GitHub·배포 작업이나 불법·위험한 금융 행동은 실행할 수 없습니다. 안내하지 않습니다. 거래 기능은 별도의 승인 화면에서 직접 확인해 주세요.',
     kind: 'refusal',
     model: null,
+    provider: null,
+    fallbackUsed: false,
+    providerLatencyMs: null,
     generatedAt: new Date().toISOString(),
     data: { ...emptyDataDisclosure },
   };
@@ -314,6 +320,9 @@ function missingCurrentDataResult(): AiChatResult {
     answer: '현재 선택된 종목이나 시장의 공개 데이터가 없어 실시간·오늘·현재가·최근 뉴스·종목별 기술분석 답변을 만들 수 없습니다. 앱에서 종목을 먼저 선택한 뒤 다시 질문해 주세요.',
     kind: 'answer',
     model: null,
+    provider: null,
+    fallbackUsed: false,
+    providerLatencyMs: null,
     generatedAt: new Date().toISOString(),
     data: {
       status: 'unavailable',
@@ -592,23 +601,44 @@ async function requestConfiguredProvider(config: AiChatProviderConfig, prompt: s
   return requestOpenAiCompatibleAnswer(config, prompt, fetchImpl, signal);
 }
 
-const aiChatInFlight = new Map<string, Promise<{ answer: string; model: string }>>();
+type AiChatProviderResult = {
+  answer: string;
+  model: string;
+  provider: AiChatProvider;
+  fallbackUsed: boolean;
+  providerLatencyMs: number;
+};
 
-function sharedProviderAnswer(configs: { primary: AiChatProviderConfig; secondary: AiChatProviderConfig | null }, prompt: string, fetchImpl: typeof fetch, timeoutMs: number): Promise<{ answer: string; model: string }> {
+const aiChatInFlight = new Map<string, Promise<AiChatProviderResult>>();
+
+function sharedProviderAnswer(configs: { primary: AiChatProviderConfig; secondary: AiChatProviderConfig | null }, prompt: string, fetchImpl: typeof fetch, timeoutMs: number): Promise<AiChatProviderResult> {
   const key = JSON.stringify([configs.primary.provider, configs.primary.model, configs.secondary?.provider, configs.secondary?.model, prompt]);
   const existing = aiChatInFlight.get(key);
   if (existing) return existing;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const promise = (async () => {
+    const startedAt = Date.now();
     try {
       try {
-        return { answer: await requestConfiguredProvider(configs.primary, prompt, fetchImpl, controller.signal), model: configs.primary.model };
+        return {
+          answer: await requestConfiguredProvider(configs.primary, prompt, fetchImpl, controller.signal),
+          model: configs.primary.model,
+          provider: configs.primary.provider,
+          fallbackUsed: false,
+          providerLatencyMs: Math.max(0, Date.now() - startedAt),
+        };
       } catch (cause) {
         if (controller.signal.aborted) throw cause;
         if (!(cause instanceof AiChatProviderFailure) || !cause.retryable || !configs.secondary) throw cause;
         try {
-          return { answer: await requestConfiguredProvider(configs.secondary, prompt, fetchImpl, controller.signal), model: configs.secondary.model };
+          return {
+            answer: await requestConfiguredProvider(configs.secondary, prompt, fetchImpl, controller.signal),
+            model: configs.secondary.model,
+            provider: configs.secondary.provider,
+            fallbackUsed: true,
+            providerLatencyMs: Math.max(0, Date.now() - startedAt),
+          };
         } catch {
           throw new AiChatError('AI_TEMPORARILY_UNAVAILABLE', '무료 AI 공급자를 일시적으로 사용할 수 없습니다. 정량 분석 기능은 계속 사용할 수 있습니다.', 503);
         }
@@ -686,6 +716,9 @@ export async function answerAiChat(
       answer,
       kind: 'answer',
       model: providerResult.model,
+      provider: providerResult.provider,
+      fallbackUsed: providerResult.fallbackUsed,
+      providerLatencyMs: providerResult.providerLatencyMs,
       generatedAt: new Date().toISOString(),
       data: publicContext.data,
       selection: context,
