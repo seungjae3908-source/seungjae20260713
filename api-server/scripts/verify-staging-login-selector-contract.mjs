@@ -116,7 +116,20 @@ assert(
 );
 assert(spec.includes('unconfirmed logout abort:'), 'unconfirmed candidates must return to unexpected HTTP errors');
 assert(spec.includes('diagnostics.unexpected_http_errors.push(diagnostic);'), 'all non-matching failed requests must remain unexpected');
-assert(spec.includes('if (response.status() < 400) return;'), 'all browser 4xx and 5xx responses must remain unexpected');
+assert(spec.includes('if (response.status() < 400) {'), 'successful browser responses must remain separated from 4xx/5xx diagnostics');
+assert(spec.includes('const successfulPrimaryStockChartReads = new WeakMap<Page, Map<string, number>>()'), 'stock chart hedge proof must be scoped to the active page');
+assert(spec.includes('const stockChartHedgeAbortProofWindowMs = 2_000;'), 'stock chart hedge proof window must remain narrowly bounded');
+assert(spec.includes("endpoint: 'candles'"), 'only a successful primary candle request may establish hedge-abort proof');
+assert(spec.includes("endpoint: 'chart'"), 'only the alternate chart request may consume hedge-abort proof');
+assert(spec.includes("input.errorText !== 'net::ERR_ABORTED'"), 'stock chart hedge exemption must require the exact Chromium abort reason');
+assert(spec.includes("parsed.origin !== frame.origin"), 'stock chart hedge exemption must remain same-origin');
+assert(spec.includes("parsed.searchParams.size !== 1"), 'stock chart hedge exemption must reject extra query parameters');
+assert(spec.includes("chartIdentity === input.successfulPrimaryIdentity"), 'stock chart hedge exemption must require exact symbol and timeframe identity');
+assert(spec.includes('ageMs <= stockChartHedgeAbortProofWindowMs'), 'stock chart hedge exemption must require recent primary success');
+assert(spec.includes('diagnostics.expected_stock_chart_hedge_aborts.push(diagnostic);'), 'proven stock chart hedge aborts must use a dedicated diagnostics bucket');
+assert(spec.includes("expect(isExpectedStockChartHedgeAbortIdentity({ ...base, rawUrl: \`\${origin}/api/stocks/MSFT/chart?tf=5m\` })).toBe(false);"), 'stock chart hedge proof must reject symbol mismatch');
+assert(spec.includes("expect(isExpectedStockChartHedgeAbortIdentity({ ...base, rawUrl: \`\${origin}/api/stocks/AAPL/chart?tf=1D\` })).toBe(false);"), 'stock chart hedge proof must reject timeframe mismatch');
+assert(spec.includes("expect(isExpectedStockChartHedgeAbortIdentity({ ...base, errorText: 'net::ERR_FAILED' })).toBe(false);"), 'stock chart hedge proof must reject non-abort failures');
 
 const responsiveLogoutStart = spec.indexOf("test(`${name}: login, refresh session retention, responsive layout, and logout`");
 const responsiveReloadIndex = spec.indexOf('await page.reload();', responsiveLogoutStart);
