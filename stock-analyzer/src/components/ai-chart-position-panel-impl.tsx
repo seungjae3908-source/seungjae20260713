@@ -189,6 +189,7 @@ type EntryReadinessState =
   | { kind: 'unavailable'; code: string };
 
 type StockReadOnlyProvider = 'toss' | 'kiwoom';
+type CockpitTab = 'entry' | 'orders' | 'exit';
 
 function providerForMarket(market: AnalysisMarket, stockProvider: StockReadOnlyProvider): Snapshot['provider'] {
   if (market === 'UPBIT') return 'upbit';
@@ -399,6 +400,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
   const [exitFeeText, setExitFeeText] = useState('');
   const [targetPercents, setTargetPercents] = useState<Record<number, string>>({});
   const [cockpitOpen, setCockpitOpen] = useState(false);
+  const [cockpitTab, setCockpitTab] = useState<CockpitTab>('entry');
   const [orderDashboard, setOrderDashboard] = useState<OrderDashboardState>({ kind: 'idle' });
   const [orderMessage, setOrderMessage] = useState('');
   const [orderActionId, setOrderActionId] = useState<string | null>(null);
@@ -436,6 +438,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setExitFeeText('');
     setTargetPercents({});
     setCockpitOpen(false);
+    setCockpitTab('entry');
     setOrderDashboard({ kind: 'idle' });
     setOrderMessage('');
     setOrderActionId(null);
@@ -874,6 +877,27 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                   <Metric label="앱 주문" value={canonicalOrderStatus} />
                   <Metric label="종료" value={exitStatus} />
                 </div>
+                <div role="tablist" aria-label="트레이딩 콕핏" data-testid="ai-chart-cockpit-tabs" className="grid grid-cols-3 gap-1 rounded-xl border border-card-border bg-background p-1">
+                  {([
+                    ['entry', '진입'],
+                    ['orders', '주문'],
+                    ['exit', '종료'],
+                  ] as const).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      role="tab"
+                      aria-selected={cockpitTab === value}
+                      onClick={() => setCockpitTab(value)}
+                      className={`min-h-10 min-w-0 rounded-lg px-2 text-[10px] font-black ${cockpitTab === value ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {cockpitTab === 'entry' ? (
+                  <>
                 <section className="rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-entry-planning">
                   <p className="text-[10px] font-black">새 진입 계획</p>
                   <p className="mt-0.5 text-[8px] font-bold leading-4 text-muted-foreground">
@@ -940,7 +964,11 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                   exchangeFilter={market === 'KR' || market === 'US' ? undefined : provider}
                   compact
                 />
+                  </>
+                ) : null}
 
+                {cockpitTab === 'orders' ? (
+                  <>
                 <section className="rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-provider-open-orders">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
@@ -1094,7 +1122,11 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                   ) : null}
                 </section>
 
-                {position ? (
+                  </>
+                ) : null}
+
+                {cockpitTab === 'exit' ? (
+                  position ? (
                 <section className="rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-exit-dashboard">
                   <div className="flex items-start justify-between gap-2">
                     <div>
@@ -1174,7 +1206,8 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                     현재 종목 보유 포지션이 없어 종료계획을 만들지 않습니다. 진입 승인과 미체결 주문관리는 위에서 계속 사용할 수 있습니다.
                   </p>
                 </section>
-              )}
+              )
+                ) : null}
               </div>
             ) : null}
           </details>
