@@ -4,6 +4,7 @@ import {
   type StrategyPromotionRecord,
   type StrategyPromotionService,
 } from './strategy-promotion.service';
+import { createLiveProfitabilityPromotionReader } from './trade-live-profitability-certificate.service';
 import {
   DEFAULT_TRADING_POLICY,
   type TradingEconomics,
@@ -16,6 +17,23 @@ const HASH64 = /^[0-9a-f]{64}$/i;
 const REGIMES = new Set<TradingMarketRegime>(['bull', 'bear', 'sideways', 'stress', 'unknown']);
 
 type PromotionReader = Pick<StrategyPromotionService, 'get'>;
+
+function defaultPromotionReader(): PromotionReader {
+  const certificatePath = String(process.env.LIVE_PROFITABILITY_CERTIFICATE_PATH ?? '').trim();
+  if (!certificatePath) return createDefaultStrategyPromotionService();
+  const targetSha = String(process.env.DEPLOY_SHA ?? process.env.GITHUB_SHA ?? '').trim().toLowerCase();
+  if (!SHA40.test(targetSha)) {
+    return Object.freeze({
+      get() {
+        throw new Error('LIVE_PROFITABILITY_DEPLOY_SHA_REQUIRED');
+      },
+    });
+  }
+  return createLiveProfitabilityPromotionReader({
+    certificatePath,
+    targetSha,
+  });
+}
 
 type ProfitabilityEvidenceFreshness = {
   now: number;
@@ -139,7 +157,7 @@ function projectedEconomics(
 
 export function attestLiveTradingProfitability(
   input: TradingPlanInput,
-  promotion: PromotionReader = createDefaultStrategyPromotionService(),
+  promotion: PromotionReader = defaultPromotionReader(),
   freshness: Partial<ProfitabilityEvidenceFreshness> = {},
 ): TradeProfitabilityAttestation {
   if (profitabilityAttestationRunnerForTests) {
@@ -162,7 +180,12 @@ export function attestLiveTradingProfitability(
   };
   if (input.accountMode !== 'live') return base;
 
-  const record = promotion.get(input.strategyId);
+  let record: StrategyPromotionRecord | null;
+  try {
+    record = promotion.get(input.strategyId);
+  } catch {
+    return { ...base, blockCodes: ['SERVER_STRATEGY_PROMOTION_EVIDENCE_INVALID'] };
+  }
   if (!record) {
     return { ...base, blockCodes: ['SERVER_STRATEGY_PROMOTION_NOT_FOUND'] };
   }
