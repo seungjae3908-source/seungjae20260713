@@ -60,6 +60,31 @@ test('AI Chart source keeps desktop dense and mobile summary-first', () => {
   expect(pageSource).not.toContain('<p>{strategyMode} · 공개 시세 읽기 전용</p>');
 });
 
+test('AI Chart user surfaces keep 12px floor and avoid nested timeline/evidence scrollers', () => {
+  const files = [
+    source('src/components/ai-chart-market-intelligence-evidence-panel.tsx'),
+    source('src/components/futures-public-context-panel.tsx'),
+    source('src/components/ai-chart-v2-intelligence-panel.tsx'),
+    source('src/components/unified-analysis-chart.tsx'),
+  ];
+  for (const fileSource of files) {
+    expect(fileSource).not.toContain('text-[8px]');
+    expect(fileSource).not.toContain('text-[9px]');
+    expect(fileSource).not.toContain('text-[10px]');
+    expect(fileSource).not.toContain('text-[11px]');
+    expect(fileSource).not.toContain('font-black');
+  }
+  const unified = files[3];
+  expect(unified).not.toContain('overflow-x-auto');
+  expect(unified).not.toContain('max-h-72');
+  expect(unified).toContain('data-testid="ai-chart-timeframe-grid"');
+
+  const newsEvidence = files[0];
+  expect(newsEvidence).not.toContain('max-h-[420px]');
+  expect(newsEvidence).not.toContain('AI 신뢰');
+  expect(newsEvidence).toContain('AI 근거 강도');
+});
+
 for (const width of [360, 390, 412, 430]) {
   test(`mobile ${width}px opens compact summary without horizontal overflow`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 });
