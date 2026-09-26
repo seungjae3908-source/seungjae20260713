@@ -259,13 +259,15 @@ export const StockSignalScannerService = {
     }).filter((card): card is ScannerSignalCard => card != null)
       .filter((card) => request.filters.maximumRiskScore == null || (card.riskScore != null && card.riskScore <= request.filters.maximumRiskScore));
 
-    const themeSwingCandidates = applyThemeSwingOverlay(broadCandidates, (card) => {
+    const themeTagsForCard = (card: ScannerSignalCard) => {
       const entry = entryByTicker.get(card.symbol);
       return entry ? classifyCatalogEntryThemeTags(entry) : [];
-    });
+    };
+
+    const preliminaryThemeSwingCandidates = applyThemeSwingOverlay(broadCandidates, themeTagsForCard);
 
     const ranking = rankScannerCandidates({
-      cards: themeSwingCandidates,
+      cards: preliminaryThemeSwingCandidates,
       market: request.market,
       strategy: strategyMode,
       softMinimumScore: request.filters.minimumScore,
@@ -284,14 +286,18 @@ export const StockSignalScannerService = {
       budgetMs: intelligenceBudgetMs,
       signal: request.signal,
     });
-    const visibleTradeReviewCount = intelligenceCards.filter((card) => card.direction === 'LONG').length;
-    const discovery = buildScannerDiscoveryView(themeSwingCandidates, {
+    // Theme Swing is research-only and must not alter the canonical Scanner rank/score.
+    // Recompute its catalyst component after News/Disclosure enrichment while retaining
+    // the full pre-ranking theme universe for breadth/leader context.
+    const finalCards = applyThemeSwingOverlay(intelligenceCards, themeTagsForCard, broadCandidates);
+    const visibleTradeReviewCount = finalCards.filter((card) => card.direction === 'LONG').length;
+    const discovery = buildScannerDiscoveryView(preliminaryThemeSwingCandidates, {
       tradeReviewCount: visibleTradeReviewCount,
       limit: 100,
     });
     const partial = raw.partial || universe.partial;
     const timedOut = raw.timedOut;
-    const hasUntrusted = themeSwingCandidates.some((card) => card.dataQuality?.state === 'DATA_UNTRUSTED');
+    const hasUntrusted = broadCandidates.some((card) => card.dataQuality?.state === 'DATA_UNTRUSTED');
     const dataState = universe.stale ? 'stale' as const : hasUntrusted ? 'untrusted' as const : partial ? 'partial' as const : 'complete' as const;
     const completedCount = raw.completedCount;
     const actionableCount = ranking.diagnostics.sGradeCount + ranking.diagnostics.aGradeCount;
@@ -301,7 +307,7 @@ export const StockSignalScannerService = {
         ? `일부 공급자 지연으로 ${completedCount}/${universe.entries.length}종목 중 확인 가능한 후보만 표시합니다.`
         : raw.dataSuccessCount === 0 && raw.insufficientDataCount > 0
           ? `현재 묶음에서 공급자 응답은 받았지만 ${raw.insufficientDataCount}종목의 분석 데이터가 부족합니다.`
-          : intelligenceCards.length === 0
+          : finalCards.length === 0
             ? `현재 묶음 ${completedCount}종목에서 Hard Risk Filter를 통과한 후보가 없습니다.`
             : actionableCount === 0
               ? `현재 진입 가능한 강한 신호 없음 · 관찰 후보 ${ranking.diagnostics.bGradeCount}개`
@@ -314,7 +320,7 @@ export const StockSignalScannerService = {
       assetClass: 'stock',
       market: request.market,
       timeframe: primaryTimeframe,
-      cards: intelligenceCards,
+      cards: finalCards,
       discovery,
       alerts: lifecycle.alerts,
       failures: [],
