@@ -3,11 +3,11 @@ import { useLocation } from 'wouter';
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import { Star } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
-import { AssetSwitch } from '@/components/asset-switch';
 import { ErrorState, LoadingState } from '@/components/data-state';
 import { UnifiedAssetSearch } from '@/components/unified-asset-search';
 import { api, apiGet } from '@/lib/api';
 import { useAssetMode } from '@/lib/asset-mode';
+import { useAuth } from '@/lib/auth';
 import { requireMarketMoversResponse, type MarketMoversResponse } from '@/lib/market-movers-response';
 import { requireRecommendationResponse } from '@/lib/recommendation-response';
 import { requireThemesData } from '@/lib/theme-response';
@@ -50,6 +50,28 @@ interface RecoResponse {
   error?: string;
 }
 
+function MarketButton({ label, active, disabled = false, onClick }: {
+  label: string;
+  active: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        'inline-flex min-h-11 min-w-0 items-center justify-center rounded-xl px-1.5 text-center text-xs font-semibold transition sm:px-3',
+        active ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
+        disabled && 'cursor-not-allowed opacity-35',
+      )}
+    >
+      <span className="min-w-0 break-keep">{label}</span>
+    </button>
+  );
+}
+
 function finitePercent(value: unknown): number | null {
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
   if (typeof value !== 'string') return null;
@@ -62,7 +84,23 @@ function finitePercent(value: unknown): number | null {
 export default function StocksPage() {
   const [, navigate] = useLocation();
   const mode = useAssetMode();
+  const auth = useAuth();
   const [category, setCategory] = useState<CategoryKey>('ai');
+
+  const chooseMarket = (target: 'KR' | 'US' | 'spot' | 'futures') => {
+    if (target === 'KR' || target === 'US') {
+      mode.setAsset('stock');
+      mode.setStockMarket(target);
+      return;
+    }
+    if (target === 'spot' && !auth.can('canAccessSpot')) return;
+    if (target === 'futures' && !auth.can('canAccessFutures')) return;
+    mode.setAsset('coin');
+    mode.setCoinMarket(target);
+    if (category === 'ai' || category === 'theme') setCategory('tradingValue');
+  };
+
+  const activeMarket = mode.asset === 'stock' ? mode.stockMarket : mode.coinMarket;
 
   // ── 코인 검색용 데이터 (주식 검색은 canonical UnifiedAssetSearch 재사용) ──
   const spotMarkets = useQuery({
@@ -148,48 +186,65 @@ export default function StocksPage() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background" data-testid="stocks-shell">
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain" data-testid="stocks-scroll-content">
-      {/* 상단 고정 없음 — 제목·검색창·탭·목록이 한 페이지로 함께 스크롤. */}
-      <header className="border-b border-card-border px-4 pb-3 pt-4">
-        <h1 className="text-xl font-black text-center">종목</h1>
+      {/* 제목·검색·시장·필터·목록은 하나의 vertical owner에서만 스크롤합니다. */}
+      <header className="border-b border-card-border px-3 pb-4 pt-3 sm:px-5 min-[1200px]:px-6 min-[1200px]:pt-4">
+        <div className="mx-auto w-full max-w-[90rem]">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold tracking-[0.08em] text-primary">MARKET</p>
+              <h1 className="mt-0.5 text-xl font-bold tracking-[-0.015em] min-[1200px]:text-2xl">종목</h1>
+            </div>
+            <p className="hidden text-xs font-medium text-muted-foreground min-[768px]:block">검색 · 시장순위 · 추천을 한 곳에서 확인합니다.</p>
+          </div>
 
-        {/* 1) [주식][코인]  2) [국내][해외] / [현물][선물] — 검색 popup 위에 두어 항상 클릭 가능하게 유지 */}
-        <AssetSwitch className="mt-3" />
+          <div className="mt-3 grid grid-cols-4 gap-1 rounded-2xl border border-card-border bg-card p-1" aria-label="시장 선택" data-testid="stocks-market-bar">
+            <MarketButton label="국내" active={activeMarket === 'KR'} onClick={() => chooseMarket('KR')} />
+            <MarketButton label="미국" active={activeMarket === 'US'} onClick={() => chooseMarket('US')} />
+            <MarketButton label="코인 현물" active={activeMarket === 'spot'} disabled={!auth.can('canAccessSpot')} onClick={() => chooseMarket('spot')} />
+            <MarketButton label="코인 선물" active={activeMarket === 'futures'} disabled={!auth.can('canAccessFutures')} onClick={() => chooseMarket('futures')} />
+          </div>
 
-        {/* 3) 주식·코인 모두 canonical Unified Search 사용 — ticker 목록 장애와 검색을 분리 */}
-        <div className="mt-3">
-          <UnifiedAssetSearch
-            key={mode.asset === 'stock' ? `stock:${mode.stockMarket}` : `coin:${mode.coinMarket}`}
-            asset={mode.asset}
-            market={mode.asset === 'stock' ? mode.stockMarket : mode.coinMarket}
-            allowedMarkets={[mode.asset === 'stock' ? mode.stockMarket : mode.coinMarket]}
-            placeholder={mode.asset === 'stock' ? '종목명·코드·영문명 검색' : '코인명·심볼 검색'}
-            onSelect={(item) => navigate(unifiedAssetDetailPath(item, '/market-browser'))}
-          />
-        </div>
+          <div className="mt-3">
+            <UnifiedAssetSearch
+              key={mode.asset === 'stock' ? `stock:${mode.stockMarket}` : `coin:${mode.coinMarket}`}
+              asset={mode.asset}
+              market={mode.asset === 'stock' ? mode.stockMarket : mode.coinMarket}
+              allowedMarkets={[mode.asset === 'stock' ? mode.stockMarket : mode.coinMarket]}
+              placeholder={mode.asset === 'stock' ? '종목명·코드·영문명 검색' : '코인명·심볼 검색'}
+              onSelect={(item) => navigate(unifiedAssetDetailPath(item, '/market-browser'))}
+            />
+          </div>
 
-        {/* 4) 분류 버튼 6개 */}
-        <div className="mt-3 grid grid-cols-3 gap-2">
-          {CATEGORIES.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              onClick={() => setCategory(item.key)}
-              className={cn(
-                'inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border px-2 py-2 text-[11px] font-black',
-                category === item.key ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground',
-              )}
-            >
-              {item.label}
-            </button>
-          ))}
+          <div className="mt-3 grid grid-cols-3 gap-1.5 min-[600px]:grid-cols-6" aria-label="종목 분류" data-testid="stocks-category-bar">
+            {CATEGORIES.map((item) => {
+              const unsupported = mode.asset === 'coin' && (item.key === 'ai' || item.key === 'theme');
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  disabled={unsupported}
+                  onClick={() => setCategory(item.key)}
+                  className={cn(
+                    'inline-flex min-h-10 min-w-0 items-center justify-center rounded-xl px-2 text-center text-xs font-semibold leading-4 transition',
+                    category === item.key
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
+                    unsupported && 'cursor-not-allowed opacity-35',
+                  )}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </header>
 
-      <main className="space-y-4 px-4 pb-6 pt-4">
+      <main className="mx-auto w-full max-w-[90rem] space-y-4 px-3 pb-6 pt-4 sm:px-5 min-[1200px]:px-6">
         {/* 5) 선택한 분류의 실제 결과 목록 */}
         <section>
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-black">{CATEGORIES.find((c) => c.key === category)?.label}</h2>
+            <h2 className="text-base font-bold tracking-[-0.01em]">{CATEGORIES.find((c) => c.key === category)?.label}</h2>
           </div>
 
           {isStock ? (
@@ -220,17 +275,17 @@ export default function StocksPage() {
 }
 
 function EmptyBox({ children }: { children: React.ReactNode }) {
-  return <div className="rounded-3xl border border-card-border bg-card p-6 text-center text-sm font-bold text-muted-foreground">{children}</div>;
+  return <div className="rounded-2xl border border-card-border bg-card p-6 text-center text-sm font-semibold text-muted-foreground">{children}</div>;
 }
 
 // ── 공통 행 디자인 (기존 행 클래스 재사용) ──────────────────────────
 function StockRow({ stock, onClick }: { stock: AnyObj; onClick: () => void }) {
   const change = finitePercent(stock.changePercent);
   return (
-    <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl border border-card-border bg-card p-3 text-left shadow-sm">
+    <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-xl border border-card-border bg-card p-3 text-left transition hover:border-primary/30 min-[1200px]:rounded-none min-[1200px]:border-x-0 min-[1200px]:border-t-0 min-[1200px]:shadow-none">
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10"><Star className="h-4 w-4 text-primary" /></div>
-      <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-black">{displayStockName(String(stock.ticker), String(stock.name ?? ''), String(stock.market))}</p><span className="rounded-full bg-secondary px-2 py-0.5 text-[9px] font-black text-muted-foreground">{stock.market}</span></div><p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{stock.ticker}</p></div>
-      <div className="text-right"><p className="text-sm font-black">{formatAppPrice(stock.price, String(stock.currency))}</p><p className={cn('mt-0.5 text-[11px] font-black', change !== null && change > 0 ? 'text-positive' : change !== null && change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{change === null ? '데이터 없음' : formatAppPercent(change)}</p></div>
+      <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-bold">{displayStockName(String(stock.ticker), String(stock.name ?? ''), String(stock.market))}</p><span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-semibold text-muted-foreground">{stock.market}</span></div><p className="mt-0.5 text-xs font-medium text-muted-foreground">{stock.ticker}</p></div>
+      <div className="text-right"><p className="text-sm font-bold">{formatAppPrice(stock.price, String(stock.currency))}</p><p className={cn('mt-0.5 text-xs font-semibold', change !== null && change > 0 ? 'text-positive' : change !== null && change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{change === null ? '데이터 없음' : formatAppPercent(change)}</p></div>
     </button>
   );
 }
@@ -239,10 +294,10 @@ function CoinRow({ row, coinMarket, onClick }: { row: AnyObj; coinMarket: 'spot'
   const change = Number(row.changePercent ?? row.changePercent24h);
   const currency = coinMarket === 'spot' ? 'KRW' : 'USDT';
   return (
-    <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl border border-card-border bg-card p-3 text-left shadow-sm">
+    <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-xl border border-card-border bg-card p-3 text-left transition hover:border-primary/30 min-[1200px]:rounded-none min-[1200px]:border-x-0 min-[1200px]:border-t-0 min-[1200px]:shadow-none">
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10"><Star className="h-4 w-4 text-primary" /></div>
-      <div className="min-w-0 flex-1"><p className="truncate text-sm font-black">{displayCoinName(String(row.symbol), row.koreanName, row.englishName)}</p><p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{row.symbol} · {coinMarket === 'spot' ? 'UPBIT' : 'BITGET'}</p></div>
-      <div className="text-right"><p className="text-sm font-black">{formatAppPrice(Number(row.price), currency)}</p><p className={cn('mt-0.5 text-[11px] font-black', change > 0 ? 'text-positive' : change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{Number.isFinite(change) ? formatAppPercent(change) : '데이터 없음'}</p></div>
+      <div className="min-w-0 flex-1"><p className="truncate text-sm font-bold">{displayCoinName(String(row.symbol), row.koreanName, row.englishName)}</p><p className="mt-0.5 text-xs font-medium text-muted-foreground">{row.symbol} · {coinMarket === 'spot' ? 'UPBIT' : 'BITGET'}</p></div>
+      <div className="text-right"><p className="text-sm font-bold">{formatAppPrice(Number(row.price), currency)}</p><p className={cn('mt-0.5 text-xs font-semibold', change > 0 ? 'text-positive' : change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{Number.isFinite(change) ? formatAppPercent(change) : '데이터 없음'}</p></div>
     </button>
   );
 }
@@ -272,7 +327,7 @@ function StockCategoryResults({
     if (rows.length === 0) return <EmptyBox>현재 조건을 충족하는 실제 추천 종목이 없습니다. (조건 미달 종목으로 채우지 않습니다)</EmptyBox>;
     return (
       <div className="space-y-4">
-        <p className="text-center text-[11px] font-bold text-muted-foreground">규칙 기반 분석 · AI(LLM) 미연결</p>
+        <p className="text-center text-xs font-medium text-muted-foreground">규칙 기반 분석 · AI(LLM) 미연결</p>
         <RecoGroup title="저평가 회복" rows={undervalued} onOpenStock={onOpenStock} />
         <RecoGroup title="초기 추세돌파" rows={breakout} onOpenStock={onOpenStock} />
       </div>
@@ -289,8 +344,8 @@ function StockCategoryResults({
         {groups.map((group) => (
           <div key={group.key} className="space-y-2">
             <div className="flex items-center justify-between px-1">
-              <h3 className="text-sm font-black">{group.label}</h3>
-              <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-black text-muted-foreground">{group.count}</span>
+              <h3 className="text-sm font-bold">{group.label}</h3>
+              <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-semibold text-muted-foreground">{group.count}</span>
             </div>
             <div className="space-y-2">
               {group.stocks.map((stock) => (
@@ -329,10 +384,10 @@ function StockCategoryResults({
 function StockRankRow({ rank, stock, onClick }: { rank: number; stock: AnyObj; onClick: () => void }) {
   const change = finitePercent(stock.changePercent);
   return (
-    <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl border border-card-border bg-card p-3 text-left shadow-sm">
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-sm font-black text-primary">{rank}</div>
-      <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-black">{displayStockName(String(stock.ticker), String(stock.name ?? ''), String(stock.market))}</p><span className="rounded-full bg-secondary px-2 py-0.5 text-[9px] font-black text-muted-foreground">{stock.market}</span></div><p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{stock.ticker}</p></div>
-      <div className="text-right"><p className="text-sm font-black">{formatAppPrice(stock.price, String(stock.currency))}</p><p className={cn('mt-0.5 text-[11px] font-black', change !== null && change > 0 ? 'text-positive' : change !== null && change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{change === null ? '데이터 없음' : formatAppPercent(change)}</p></div>
+    <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-xl border border-card-border bg-card p-3 text-left transition hover:border-primary/30 min-[1200px]:rounded-none min-[1200px]:border-x-0 min-[1200px]:border-t-0 min-[1200px]:shadow-none">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-sm font-bold text-primary">{rank}</div>
+      <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-bold">{displayStockName(String(stock.ticker), String(stock.name ?? ''), String(stock.market))}</p><span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-semibold text-muted-foreground">{stock.market}</span></div><p className="mt-0.5 text-xs font-medium text-muted-foreground">{stock.ticker}</p></div>
+      <div className="text-right"><p className="text-sm font-bold">{formatAppPrice(stock.price, String(stock.currency))}</p><p className={cn('mt-0.5 text-xs font-semibold', change !== null && change > 0 ? 'text-positive' : change !== null && change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{change === null ? '데이터 없음' : formatAppPercent(change)}</p></div>
     </button>
   );
 }
@@ -341,21 +396,21 @@ function RecoGroup({ title, rows, onOpenStock }: { title: string; rows: RecoRow[
   if (rows.length === 0) return null;
   return (
     <div className="space-y-2">
-      <h3 className="px-1 text-sm font-black">{title}</h3>
+      <h3 className="px-1 text-sm font-bold">{title}</h3>
       <div className="space-y-2">
         {rows.map((row) => {
           const change = finitePercent(row.changePercent);
           return (
-          <button key={`${row.market}:${row.ticker}`} type="button" onClick={() => onOpenStock(row.ticker)} className="w-full rounded-2xl border border-card-border bg-card p-3 text-left shadow-sm">
+          <button key={`${row.market}:${row.ticker}`} type="button" onClick={() => onOpenStock(row.ticker)} className="w-full rounded-xl border border-card-border bg-card p-3 text-left transition hover:border-primary/30 min-[1200px]:rounded-none min-[1200px]:border-x-0 min-[1200px]:border-t-0 min-[1200px]:shadow-none">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2"><p className="truncate text-sm font-black">{displayStockName(row.ticker, row.name, row.market)}</p><span className="rounded-full bg-secondary px-2 py-0.5 text-[9px] font-black text-muted-foreground">{row.market}</span></div>
-                <p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{row.ticker} · 규칙 점수 {row.score}점</p>
+                <div className="flex items-center gap-2"><p className="truncate text-sm font-bold">{displayStockName(row.ticker, row.name, row.market)}</p><span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-semibold text-muted-foreground">{row.market}</span></div>
+                <p className="mt-0.5 text-xs font-medium text-muted-foreground">{row.ticker} · 규칙 점수 {row.score}점</p>
               </div>
-              <div className="shrink-0 text-right"><p className="text-sm font-black">{formatAppPrice(row.price, row.currency)}</p><p className={cn('mt-0.5 text-[11px] font-black', change !== null && change > 0 ? 'text-positive' : change !== null && change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{change === null ? '데이터 없음' : formatAppPercent(change)}</p></div>
+              <div className="shrink-0 text-right"><p className="text-sm font-bold">{formatAppPrice(row.price, row.currency)}</p><p className={cn('mt-0.5 text-xs font-semibold', change !== null && change > 0 ? 'text-positive' : change !== null && change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{change === null ? '데이터 없음' : formatAppPercent(change)}</p></div>
             </div>
             {row.reasons.length > 0 && (
-              <ul className="mt-2 list-disc space-y-0.5 pl-4 text-[11px] font-bold text-foreground/90">
+              <ul className="mt-2 list-disc space-y-0.5 pl-4 text-xs font-medium text-foreground/90">
                 {row.reasons.slice(0, 3).map((reason) => <li key={reason}>{reason}</li>)}
               </ul>
             )}
@@ -403,10 +458,10 @@ function CoinRankRow({ rank, row, coinMarket, onClick }: { rank: number; row: An
   const change = Number(row.changePercent ?? row.changePercent24h);
   const currency = coinMarket === 'spot' ? 'KRW' : 'USDT';
   return (
-    <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl border border-card-border bg-card p-3 text-left shadow-sm">
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-sm font-black text-primary">{rank}</div>
-      <div className="min-w-0 flex-1"><p className="truncate text-sm font-black">{displayCoinName(String(row.symbol), row.koreanName, row.englishName)}</p><p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{row.symbol} · {coinMarket === 'spot' ? 'UPBIT' : 'BITGET'}</p></div>
-      <div className="text-right"><p className="text-sm font-black">{formatAppPrice(Number(row.price), currency)}</p><p className={cn('mt-0.5 text-[11px] font-black', change > 0 ? 'text-positive' : change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{Number.isFinite(change) ? formatAppPercent(change) : '데이터 없음'}</p></div>
+    <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-xl border border-card-border bg-card p-3 text-left transition hover:border-primary/30 min-[1200px]:rounded-none min-[1200px]:border-x-0 min-[1200px]:border-t-0 min-[1200px]:shadow-none">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-sm font-bold text-primary">{rank}</div>
+      <div className="min-w-0 flex-1"><p className="truncate text-sm font-bold">{displayCoinName(String(row.symbol), row.koreanName, row.englishName)}</p><p className="mt-0.5 text-xs font-medium text-muted-foreground">{row.symbol} · {coinMarket === 'spot' ? 'UPBIT' : 'BITGET'}</p></div>
+      <div className="text-right"><p className="text-sm font-bold">{formatAppPrice(Number(row.price), currency)}</p><p className={cn('mt-0.5 text-xs font-semibold', change > 0 ? 'text-positive' : change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{Number.isFinite(change) ? formatAppPercent(change) : '데이터 없음'}</p></div>
     </button>
   );
 }
