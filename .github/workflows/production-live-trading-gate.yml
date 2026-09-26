@@ -59,6 +59,29 @@ jobs:
           ! grep -Eq 'contents:[[:space:]]+write' "$workflow"
           ! grep -Eq 'AUTO_TRADING:[[:space:]]+["'\'']?true' "$workflow"
           ! grep -Eq 'LIVE_AUTOMATIC_TRADING_ENABLED:[[:space:]]+["'\'']?true' "$workflow"
+          node <<'NODE'
+          const fs = require('node:fs');
+          const os = require('node:os');
+          const path = require('node:path');
+          const { spawnSync } = require('node:child_process');
+          const source = fs.readFileSync('.github/workflows/production-live-trading-gate.yml', 'utf8');
+          const blocks = [...source.matchAll(/<<'NODE'\n([\s\S]*?)\n\s+NODE/g)].map((match) => match[1]);
+          const operational = blocks.filter((block) =>
+            block.includes('LIVE_TRADING_') || block.includes('activate-production-live-trading')
+          );
+          if (operational.length < 3) throw new Error('LIVE_TRADING_OPERATIONAL_HEREDOC_MISSING');
+          const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'live-trading-gate-js-'));
+          try {
+            operational.forEach((block, index) => {
+              const file = path.join(dir, `block-${index}.mjs`);
+              fs.writeFileSync(file, block);
+              const result = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
+              if (result.status !== 0) throw new Error(result.stderr || result.stdout || `BLOCK_${index}_SYNTAX_FAILED`);
+            });
+          } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+          }
+          NODE
 
   activate:
     name: Owner-approved manual Production live-trading gate activation
