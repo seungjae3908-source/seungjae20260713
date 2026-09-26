@@ -313,6 +313,44 @@ def empty_candidate_performance(status, present, reason=None):
     }
 
 
+def safe_candidate_promotion_identity(value):
+    if not isinstance(value, dict):
+        return None
+    required = (
+        'candidateId', 'strategyId', 'strategyVersion', 'parameterHash', 'researchCodeSha',
+        'market', 'timeframe', 'sidePolicy', 'accountMode', 'costPolicyVersion', 'executionPolicyVersion',
+    )
+    if not all(isinstance(value.get(key), str) and value.get(key) for key in required):
+        return None
+    if (
+        not CANDIDATE_ID_PATTERN.fullmatch(value['candidateId'])
+        or not SAFE_ID_PATTERN.fullmatch(value['strategyId'])
+        or not SAFE_ID_PATTERN.fullmatch(value['strategyVersion'])
+        or not DIGEST_PATTERN.fullmatch(value['parameterHash'])
+        or not SHA_PATTERN.fullmatch(value['researchCodeSha'])
+        or not SAFE_ID_PATTERN.fullmatch(value['market'])
+        or not SAFE_ID_PATTERN.fullmatch(value['timeframe'])
+        or not SAFE_ID_PATTERN.fullmatch(value['sidePolicy'])
+        or value['accountMode'] != 'PAPER'
+        or not SAFE_ID_PATTERN.fullmatch(value['costPolicyVersion'])
+        or not SAFE_ID_PATTERN.fullmatch(value['executionPolicyVersion'])
+    ):
+        return None
+    return {
+        'candidateId': value['candidateId'],
+        'strategyId': value['strategyId'],
+        'strategyVersion': value['strategyVersion'],
+        'parameterHash': value['parameterHash'].lower(),
+        'researchCodeSha': value['researchCodeSha'].lower(),
+        'market': value['market'],
+        'timeframe': value['timeframe'],
+        'sidePolicy': value['sidePolicy'],
+        'accountMode': 'PAPER',
+        'costPolicyVersion': value['costPolicyVersion'],
+        'executionPolicyVersion': value['executionPolicyVersion'],
+    }
+
+
 def summarize_candidate_performance(value, read_failed=False):
     if read_failed:
         return empty_candidate_performance('INVALID', True, 'CANDIDATE_PERFORMANCE_READ_FAILED')
@@ -387,6 +425,7 @@ def summarize_candidate_performance(value, read_failed=False):
         and value['provenance'].get('backfill') is False
         and value['provenance'].get('manual') is False
     )
+    promotion_identity = safe_candidate_promotion_identity(value.get('identity'))
     matched = counts['candidateMatchedN']
     direction_counts = [counts[key] for key in ('LONG_SIGNAL_N', 'SHORT_SIGNAL_N', 'NO_TRADE_N')]
     split_counts = [counts[key] for key in ('TRAIN_N', 'VALIDATION_N', 'OOS_N')]
@@ -418,6 +457,7 @@ def summarize_candidate_performance(value, read_failed=False):
         'strategyId': value.get('strategyId'),
         'freezeTimestamp': value.get('freezeTimestamp'),
         'identity14Verified': True,
+        'promotionIdentity': promotion_identity,
         'fullCostEvidence': full_cost_evidence,
         **counts,
         **metrics,
