@@ -77,6 +77,7 @@ async function setup() {
   process.env.REAL_ORDER_ENABLED = 'true';
   process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
   process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+  process.env.LIVE_TRADING = 'true';
   process.env.executionAuthority = 'MANUAL';
   const repository = new InMemoryTradingRepository();
   const p = plan();
@@ -99,6 +100,7 @@ async function setupToss() {
   process.env.REAL_ORDER_ENABLED = 'true';
   process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
   process.env.TOSS_LIVE_ORDER_ENABLED = 'true';
+  process.env.LIVE_TRADING = 'true';
   process.env.executionAuthority = 'MANUAL';
 
   const repository = new InMemoryTradingRepository();
