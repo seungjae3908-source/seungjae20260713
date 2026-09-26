@@ -109,6 +109,89 @@ describe('scanner theme swing overlay', () => {
     assert.ok(tags.some((tag) => tag.key === 'ai'));
   });
 
+  it('uses post-enrichment News/Disclosure catalyst evidence without changing canonical scanner score', () => {
+    const rows = [
+      card({ signalId: 'leader', symbol: 'AAA', score: 90, changePercent: 9, tradingValue: 300_000_000 }),
+      card({ signalId: 'peer-1', symbol: 'BBB', score: 78, changePercent: 5, tradingValue: 180_000_000 }),
+      card({ signalId: 'peer-2', symbol: 'CCC', score: 72, changePercent: 2, tradingValue: 120_000_000 }),
+    ];
+    const enrichedLeader = Object.assign({ ...rows[0] }, {
+      newsDisclosureIntelligence: {
+        status: 'READY',
+        eventCount: 1,
+        analyzedCount: 1,
+        officialRiskEvents: [],
+        events: [{
+          freshness: 'FRESH',
+          aiStatus: 'ANALYZED',
+          catalystFlags: ['POSITIVE_CATALYST'],
+        }],
+      },
+    });
+    const output = applyThemeSwingOverlay(
+      [enrichedLeader],
+      () => aiTag,
+      rows,
+    );
+    assert.equal(output[0].score, 90);
+    assert.equal(output[0].themeSwing?.breakdown.catalystEvidence, 12);
+    assert.equal(output[0].themeSwing?.executionAuthority, 'NONE');
+  });
+
+  it('fails closed Theme Swing eligibility on official risk intelligence', () => {
+    const universe = [
+      card({ signalId: 'leader', symbol: 'AAA', score: 92, changePercent: 10, tradingValue: 320_000_000 }),
+      card({ signalId: 'peer-1', symbol: 'BBB', score: 80, changePercent: 6, tradingValue: 190_000_000 }),
+      card({ signalId: 'peer-2', symbol: 'CCC', score: 74, changePercent: 3, tradingValue: 130_000_000 }),
+    ];
+    const risky = Object.assign({ ...universe[0] }, {
+      newsDisclosureIntelligence: {
+        status: 'READY',
+        eventCount: 1,
+        analyzedCount: 1,
+        officialRiskEvents: ['CAPITAL_RAISE'],
+        events: [{
+          freshness: 'FRESH',
+          aiStatus: 'ANALYZED',
+          catalystFlags: [],
+        }],
+      },
+    });
+    const [output] = applyThemeSwingOverlay([risky], () => aiTag, universe);
+    assert.equal(output.score, 92);
+    assert.notEqual(output.themeSwing?.state, 'ELIGIBLE');
+    assert.ok(output.themeSwing?.blockers.includes('OFFICIAL_EVENT_RISK_BLOCK'));
+  });
+
+  it('uses Market Intelligence after enrichment for crypto catalyst without granting execution authority', () => {
+    const universe = [
+      card({ signalId: 'fet', assetClass: 'coin_futures', symbol: 'FETUSDT', score: 88, changePercent: 8, tradingValue: 250_000_000 }),
+      card({ signalId: 'tao', assetClass: 'coin_futures', symbol: 'TAOUSDT', score: 78, changePercent: 4, tradingValue: 180_000_000 }),
+    ];
+    const enriched = Object.assign({ ...universe[0] }, {
+      marketIntelligence: {
+        status: 'READY',
+        scanner: {
+          intelligenceScore: 82,
+          bullishScore: 91,
+          bearishScore: 18,
+        },
+        autoTrading: { mode: 'PAPER_ONLY', hardBlockReason: null },
+      },
+      cryptoPublicEventContext: {
+        status: 'READY',
+        marketWarning: false,
+        tradingStatus: 'normal',
+        events: [],
+        verifiedCoinNews: { connected: true },
+      },
+    });
+    const [output] = applyThemeSwingOverlay([enriched], inferCryptoThemeTags, universe);
+    assert.equal(output.score, 88);
+    assert.equal(output.themeSwing?.breakdown.catalystEvidence, 11);
+    assert.equal(output.themeSwing?.executionAuthority, 'NONE');
+  });
+
   it('keeps weak breadth as watch/reject instead of eligible', () => {
     const rows = [
       card({ signalId: 'a', symbol: 'AAA', changePercent: 6 }),
