@@ -41,6 +41,15 @@ const APPROVAL_MESSAGES: Record<string, string> = {
   AMEND_QUANTITY_INCREASE_NOT_ALLOWED: '정정으로 주문 수량을 늘릴 수 없습니다.',
   US_STOCK_AMEND_QUANTITY_NOT_SUPPORTED: '미국주식 주문은 가격만 정정할 수 있습니다.',
   TRADE_ORDER_NOT_FOUND: '주문을 찾지 못했습니다. 주문상태를 다시 불러와 주세요.',
+  CAPABILITY_REQUIRED: '실전 주문 준비 권한이 필요합니다.',
+  LIVE_DRAFT_APPROVAL_ENVELOPE_REQUIRED: '실전 진입초안 요청 형식이 올바르지 않습니다.',
+  CLIENT_LIVE_DRAFT_AUTHORITY_FORBIDDEN: '브라우저가 수량·레버리지·Risk 같은 실행권한 값을 지정할 수 없습니다.',
+  SCANNER_SOURCE_NOT_EXECUTION_ELIGIBLE: '현재 Scanner 신호가 실전 초안 검토 조건을 충족하지 못했습니다.',
+  SCANNER_LIVE_PRICE_PLAN_REQUIRED: '진입구간·손절·목표가 근거가 완전하지 않아 실전 초안을 만들지 않았습니다.',
+  SCANNER_AND_CONDITIONS_NOT_MAINTAINED: '선택했던 Scanner 조건이 더 이상 유지되지 않습니다.',
+  PAPER_SOURCE_NOT_RESOLVABLE: '원본 Scanner 신호가 만료됐거나 현재 서버에서 확인되지 않습니다.',
+  PAPER_SOURCE_STALE: '원본 Scanner 신호가 오래되어 다시 검색해야 합니다.',
+  PAPER_SOURCE_CODE_SHA_MISMATCH: 'Scanner 신호가 현재 앱 버전과 달라 다시 검색해야 합니다.',
 };
 
 const ORDER_STATE_LABELS: Record<string, string> = {
