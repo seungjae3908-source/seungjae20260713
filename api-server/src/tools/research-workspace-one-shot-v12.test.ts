@@ -29,6 +29,11 @@ function geminiResponse(){
     limitations:['Synthetic provider transport only.'],
   })}]}}]}),{status:200,headers:{'content-type':'application/json'}});
 }
+function geminiInsufficientResponse(){
+  return new Response(JSON.stringify({modelVersion:'gemini-test',candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify({
+    videoId:'abcdefghijk',observations:[],limitations:['Synthetic insufficient evidence.'],
+  })}]}}]}),{status:200,headers:{'content-type':'application/json'}});
+}
 function groqResponse(){
   const kinds=['ENTRY','EXIT','STOP_LOSS','POSITION_SIZING','EXECUTION_ASSUMPTION'];
   return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({
@@ -76,12 +81,51 @@ test('execute performs exactly one Gemini and one Groq call then stops for human
     mode:'execute',sourcePath:f.sourcePath,specPath:f.specPath,manifestPath,videoApprovalPath,groqApprovalPath,outputRoot:f.root,
   },{clock:()=>at,env,fetchImpl:fetchImpl as any});
   assert.equal(result.status,'REVIEW_REQUIRED');
+  assert.equal(result.reason,'HUMAN_RULE_DIGEST_REVIEW_REQUIRED');
   assert.equal(result.reviewPackage.requiredNextStep,'HUMAN_REVIEW_AND_BIND_RULE_DIGEST_BEFORE_COMPILER');
   assert.match(result.reviewPackage.reviewedRuleDigestCandidate,/^[a-f0-9]{64}$/);
+  assert.equal(result.reviewedRuleDigestCandidate,result.reviewPackage.reviewedRuleDigestCandidate);
   assert.deepEqual(result.providerCalls,{gemini:1,groq:1});
   assert.equal(geminiCalls,1);assert.equal(groqCalls,1);
   await assert.rejects(()=>runResearchWorkspaceOneShotV12({
     mode:'execute',sourcePath:f.sourcePath,specPath:f.specPath,manifestPath,videoApprovalPath,groqApprovalPath,outputRoot:f.root,
   },{clock:()=>at,env,fetchImpl:fetchImpl as any}),/ONE_SHOT_RUN_ALREADY_EXISTS/);
   assert.equal(geminiCalls,1);assert.equal(groqCalls,1);
+});
+
+
+test('Gemini insufficient evidence stops before Groq and preserves a distinct review reason',async t=>{
+  const f=await fixture(t);
+  const prepared=await runResearchWorkspaceOneShotV12({
+    mode:'prepare',sourcePath:f.sourcePath,specPath:f.specPath,outputRoot:f.root,pipelineId:'PIPE_V12_INSUFFICIENT',market:'US_STOCK',
+  },{clock:()=>at,env:{}});
+  const manifest=prepared.manifest;
+  const manifestPath=join(f.root,'manifest-'+manifest.manifestDigest+'.json');
+  const plan=prepareVideoResearch(f.spec);
+  const videoApproval={schemaVersion:'research-video-call-approval-v7',approvalId:'VIDEO_V12_INSUFFICIENT',planDigest:plan.planDigest,
+    notBefore:'2026-09-26T06:29:00.000Z',expiresAt:'2026-09-26T06:40:00.000Z',maxCalls:1,sourceUseApproved:true,
+    freeTierReviewed:true,paidFallback:false,executionAuthority:'NONE'};
+  const groqApproval={schemaVersion:'research-groq-call-approval-v12',approvalId:'GROQ_V12_INSUFFICIENT',orchestratorPlanDigest:manifest.orchestratorPlanDigest,
+    notBefore:'2026-09-26T06:29:00.000Z',expiresAt:'2026-09-26T06:40:00.000Z',maxCalls:1,sourceUseApproved:true,
+    freeTierReviewed:true,paidFallback:false,executionAuthority:'NONE'};
+  const videoApprovalPath=join(f.root,'video-approval.json'),groqApprovalPath=join(f.root,'groq-approval.json');
+  await writeFile(videoApprovalPath,JSON.stringify(videoApproval),{mode:0o600});
+  await writeFile(groqApprovalPath,JSON.stringify(groqApproval),{mode:0o600});
+  const env={GEMINI_API_KEY:'synthetic_gemini_key',GROQ_API_KEY:'synthetic_groq_key',GROQ_MODEL:'groq-test'};
+  let geminiCalls=0,groqCalls=0;
+  const fetchImpl=async(input:any)=>{
+    const url=String(input);
+    if(url.includes('generativelanguage.googleapis.com')){geminiCalls++;return geminiInsufficientResponse();}
+    if(url.includes('api.groq.com')){groqCalls++;return groqResponse();}
+    throw new Error('unexpected network target: '+url);
+  };
+  const result=await runResearchWorkspaceOneShotV12({
+    mode:'execute',sourcePath:f.sourcePath,specPath:f.specPath,manifestPath,videoApprovalPath,groqApprovalPath,outputRoot:f.root,
+  },{clock:()=>at,env,fetchImpl:fetchImpl as any});
+  assert.equal(result.status,'REVIEW_REQUIRED');
+  assert.equal(result.reason,'GEMINI_INSUFFICIENT_EVIDENCE');
+  assert.equal(result.reviewPackage,undefined);
+  assert.deepEqual(result.providerCalls,{gemini:1,groq:0});
+  assert.equal(geminiCalls,1);
+  assert.equal(groqCalls,0);
 });
