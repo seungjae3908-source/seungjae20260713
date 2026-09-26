@@ -71,6 +71,7 @@ test('every live provider requires the global gates plus its own explicit provid
     KIWOOM_LIVE_ORDER_ENABLED: process.env.KIWOOM_LIVE_ORDER_ENABLED,
     TOSS_LIVE_ORDER_ENABLED: process.env.TOSS_LIVE_ORDER_ENABLED,
     LIVE_AUTOMATIC_TRADING_ENABLED: process.env.LIVE_AUTOMATIC_TRADING_ENABLED,
+    executionAuthority: process.env.executionAuthority,
   };
   try {
     process.env.ORDER_EXECUTION_ENABLED = 'true';
@@ -81,6 +82,7 @@ test('every live provider requires the global gates plus its own explicit provid
     process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
     process.env.KIWOOM_LIVE_ORDER_ENABLED = 'true';
     process.env.TOSS_LIVE_ORDER_ENABLED = 'true';
+    process.env.executionAuthority = 'MANUAL';
 
     assert.equal(liveExecutionEnabled('bitget'), true);
     assert.equal(liveExecutionEnabled('upbit'), true);
@@ -92,12 +94,14 @@ test('every live provider requires the global gates plus its own explicit provid
     assert.equal(automaticLiveExecutionEnabled('toss'), false);
 
     process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'true';
+    process.env.executionAuthority = 'AUTOMATIC';
     assert.equal(automaticLiveExecutionEnabled('bitget'), true);
     assert.equal(automaticLiveExecutionEnabled('upbit'), true);
     assert.equal(automaticLiveExecutionEnabled('kiwoom'), true);
     assert.equal(automaticLiveExecutionEnabled('toss'), true);
 
     process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'false';
+    process.env.executionAuthority = 'MANUAL';
     assert.equal(liveExecutionEnabled('bitget'), true);
     assert.equal(liveExecutionEnabled('upbit'), true);
 
