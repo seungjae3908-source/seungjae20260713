@@ -679,19 +679,19 @@ function SignalDetailPanel({
                   <p className="mt-1 text-xs text-muted-foreground">{stockFlow.shortSale.tradeDate ?? '일자 미확인'}</p>
                 </div>
                 <div className="rounded-xl bg-background p-2.5">
-                  <p className="text-xs text-muted-foreground">Short Interest</p>
+                  <p className="text-xs text-muted-foreground">Short Interest · {stockFlow.shortInterest.status === 'READY' ? '연결' : '미연결'}</p>
                   <p className="mt-1 font-semibold tabular-nums">{formatNumber(stockFlow.shortInterest.currentShortPosition, 0)}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{stockFlow.shortInterest.settlementDate ?? '결제일 미확인'}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{stockFlow.shortInterest.settlementDate ?? '상장 거래소 Provider 필요'}</p>
                 </div>
                 <div className="rounded-xl bg-background p-2.5">
                   <p className="text-xs text-muted-foreground">Short Interest 변화</p>
                   <p className="mt-1 font-semibold tabular-nums">{formatMetric(stockFlow.shortInterest.changePercent, '%')}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">공식 보고값</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{stockFlow.shortInterest.status === 'READY' ? '공식 보고값' : '미연결'}</p>
                 </div>
                 <div className="rounded-xl bg-background p-2.5">
                   <p className="text-xs text-muted-foreground">Days to Cover</p>
                   <p className="mt-1 font-semibold tabular-nums">{formatMetric(stockFlow.shortInterest.daysToCover)}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">숏커버 신호 아님</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{stockFlow.shortInterest.status === 'READY' ? '숏커버 신호 아님' : 'Short Interest 미연결'}</p>
                 </div>
               </div>
 
