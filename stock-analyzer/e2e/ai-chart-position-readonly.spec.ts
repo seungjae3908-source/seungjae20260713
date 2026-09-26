@@ -673,7 +673,7 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
           ok: true,
           canonicalExitRisk: {
             schemaVersion: 'ai-chart-exit-order-time-risk-v1',
-            state: 'BLOCKED_NON_EXECUTING',
+            state: 'PASSED_NON_EXECUTING',
             riskIntentId: 'c'.repeat(64),
             approvalIntentId: 'b'.repeat(64),
             planId: 'a'.repeat(64),
@@ -694,9 +694,9 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
             evaluatedAt: new Date().toISOString(),
             expiresAt: new Date(Date.now() + 15_000).toISOString(),
             providerOpenOrdersChecked: true,
-            conflictingOpenOrderCount: 1,
-            blockers: ['LIVE_CONNECTION_NOT_CONFIGURED', 'MANUAL_LIVE_SERVER_GATE_OFF', 'EXIT_RISK_PROVIDER_OPEN_ORDER_PRESENT'],
-            riskPassed: false,
+            conflictingOpenOrderCount: 0,
+            blockers: [],
+            riskPassed: true,
             marketExecutionPreflightRequired: true,
             nextOwner: 'CANONICAL_EXIT_EXECUTION_PREFLIGHT_OWNER',
             executionAuthority: 'NONE',
@@ -1020,9 +1020,9 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await cockpit.getByTestId('ai-chart-recheck-exit-risk').click();
   await expect.poll(() => exitRiskReads).toBe(1);
   const riskIntent = cockpit.getByTestId('ai-chart-exit-risk-intent');
-  await expect(riskIntent).toContainText('주문시점 Risk 차단 · 주문 미전송');
+  await expect(riskIntent).toContainText('주문시점 Risk 통과 · 아직 주문 미전송');
   await expect(riskIntent).toContainText('Provider 미체결 확인 완료');
-  await expect(riskIntent).toContainText('충돌 주문 1');
+  await expect(riskIntent).toContainText('충돌 주문 0');
   await expect(riskIntent).toContainText('Risk cccccccccccc…');
   await expect(riskIntent).toContainText('Approval bbbbbbbbbbbb…');
   await expect(riskIntent).toContainText('실행 직전 market preflight');
