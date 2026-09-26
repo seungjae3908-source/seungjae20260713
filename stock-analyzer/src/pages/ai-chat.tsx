@@ -22,6 +22,10 @@ type ChatMessage = {
   at: string;
   kind?: 'answer' | 'refusal';
   data?: AiChatDataDisclosure;
+  model?: string | null;
+  provider?: 'google-gemini' | 'groq' | 'openai-compatible' | null;
+  fallbackUsed?: boolean;
+  providerLatencyMs?: number | null;
 };
 
 type AiChatPayload = {
@@ -31,6 +35,10 @@ type AiChatPayload = {
   error?: string;
   data?: AiChatDataDisclosure;
   selection?: unknown;
+  model?: string | null;
+  provider?: 'google-gemini' | 'groq' | 'openai-compatible' | null;
+  fallbackUsed?: boolean;
+  providerLatencyMs?: number | null;
 };
 
 type HubTab = 'AI' | 'Portfolio';
@@ -90,6 +98,19 @@ function formatBasisTime(value: string | null): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function providerLabel(provider: ChatMessage['provider']): string {
+  if (provider === 'google-gemini') return 'Gemini';
+  if (provider === 'groq') return 'Groq';
+  if (provider === 'openai-compatible') return 'OpenAI 호환';
+  return 'AI 공급자 미사용';
+}
+
+function latencyLabel(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value) || value < 0) return '';
+  if (value < 1000) return `${Math.round(value)}ms`;
+  return `${(value / 1000).toFixed(1)}초`;
 }
 
 function errorMessage(payload: AiChatPayload | null): string {
@@ -158,6 +179,10 @@ function AiChatConversation({ selection }: { selection: AnalysisSelection | null
         content: answer,
         kind: payload.kind,
         data: payload.data,
+        model: payload.model,
+        provider: payload.provider,
+        fallbackUsed: payload.fallbackUsed,
+        providerLatencyMs: payload.providerLatencyMs,
         at: new Date().toISOString(),
       }]);
     } catch (cause) {
@@ -221,6 +246,14 @@ function AiChatConversation({ selection }: { selection: AnalysisSelection | null
                         : 'bg-card',
                   )}>
                     <p className="whitespace-pre-wrap break-words">{message.content}</p>
+                    {message.role === 'assistant' && message.provider ? (
+                      <div data-testid="ai-chat-provider-meta" className="mt-2 flex flex-wrap items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                        <span className="rounded-full border border-card-border bg-background/70 px-2 py-1">{providerLabel(message.provider)}</span>
+                        {message.fallbackUsed ? <span className="rounded-full border border-warning/30 bg-warning/10 px-2 py-1 text-warning">Fallback 사용</span> : <span className="rounded-full border border-positive/30 bg-positive/10 px-2 py-1 text-positive">Primary 응답</span>}
+                        {latencyLabel(message.providerLatencyMs) ? <span className="rounded-full border border-card-border bg-background/70 px-2 py-1">{latencyLabel(message.providerLatencyMs)}</span> : null}
+                        {message.model ? <span className="max-w-full truncate rounded-full border border-card-border bg-background/70 px-2 py-1">{message.model}</span> : null}
+                      </div>
+                    ) : null}
                     {message.role === 'assistant' && message.data && message.data.status !== 'not_requested' && (
                       <details className="mt-2 rounded-xl border border-card-border/70 bg-background/60">
                         <summary className="cursor-pointer list-none px-2.5 py-2 text-xs font-semibold text-foreground/80 [&::-webkit-details-marker]:hidden">
