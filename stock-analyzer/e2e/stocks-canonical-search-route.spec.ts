@@ -321,7 +321,7 @@ test('rapid input and market switch never allow an older stock result to overwri
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify(successfulResponse(request.q, request.market, [krSamsung])),
+        body: JSON.stringify(successfulResponse(request.q, request.asset ?? 'stock', request.market, [krSamsung])),
       }).catch(() => undefined);
       delayedKrACompleted = true;
       return;
@@ -332,7 +332,7 @@ test('rapid input and market switch never allow an older stock result to overwri
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify(successfulResponse(request.q, request.market, [krSamsung])),
+        body: JSON.stringify(successfulResponse(request.q, request.asset ?? 'stock', request.market, [krSamsung])),
       }).catch(() => undefined);
       delayedKrCodeCompleted = true;
       return;
