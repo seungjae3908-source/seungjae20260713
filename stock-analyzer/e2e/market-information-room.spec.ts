@@ -425,9 +425,9 @@ test('all four information rooms support direct routes, reload, history, source 
   await page.goto('/stocks/kr');
   await page.goto('/stocks/us');
   await page.goBack();
-  await expect(page.getByRole('heading', { name: '국내주식 정보' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '국내주식 정보', exact: true })).toBeVisible();
   await page.goForward();
-  await expect(page.getByRole('heading', { name: '미국주식 정보' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '미국주식 정보', exact: true })).toBeVisible();
 
   await page.goto('/coins/spot');
   await expect(page.getByText('검증된 코인 뉴스 provider가 아직 연결되지 않았습니다.').first()).toBeVisible();
@@ -460,7 +460,7 @@ test('partial, stale, unsupported, 429, and provider error states remain card-sc
   const limitedPage = await page.context().newPage();
   const limitedDiagnostics = await mockInformationApi(limitedPage, { errorRoom: 'coins-spot', errorStatus: 429 });
   await limitedPage.goto('/coins/spot');
-  await expect(limitedPage.getByRole('heading', { name: '코인 현물 정보' })).toBeVisible();
+  await expect(limitedPage.getByRole('heading', { name: '코인 현물 정보', exact: true })).toBeVisible();
   await expect(limitedPage.getByText('제공기관 호출 한도에 도달했습니다.').first()).toBeVisible();
   await expect(limitedPage.getByText('검증된 코인 뉴스 provider가 아직 연결되지 않았습니다.').first()).toBeVisible();
   limitedDiagnostics.assertClean();
@@ -469,7 +469,7 @@ test('partial, stale, unsupported, 429, and provider error states remain card-sc
   const outagePage = await page.context().newPage();
   const outageDiagnostics = await mockInformationApi(outagePage, { errorRoom: 'coins-futures', errorStatus: 503 });
   await outagePage.goto('/coins/futures');
-  await expect(outagePage.getByRole('heading', { name: '코인 선물 정보' })).toBeVisible();
+  await expect(outagePage.getByRole('heading', { name: '코인 선물 정보', exact: true })).toBeVisible();
   await expect(outagePage.getByText('제공기관 장애입니다.').first()).toBeVisible();
   await expect(outagePage.getByText('선물 지표')).toBeVisible();
   outageDiagnostics.assertClean();
@@ -536,7 +536,7 @@ test('360, 390, 430, and desktop layouts avoid overflow and keep 44px primary to
   for (const width of [360, 390, 430, 1440]) {
     await page.setViewportSize({ width, height: width >= 1000 ? 900 : 844 });
     await page.goto('/coins/futures');
-    await expect(page.getByRole('heading', { name: '코인 선물 정보' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '코인 선물 정보', exact: true })).toBeVisible();
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     expect(overflow).toBeLessThanOrEqual(0);
     const refresh = page.getByRole('button', { name: '시장정보 새로고침' });
