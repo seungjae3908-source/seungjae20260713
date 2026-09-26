@@ -35,6 +35,9 @@ const requiredFragments = [
   'staging-postgres-auth-${targetSha}',
   'staging-verdict-${targetSha}',
   'verify-staging-verdict.mjs',
+  'Validate complete Telegram runtime and external reachability before any mutation',
+  'TELEGRAM_PREFLIGHT_MISSING_CONFIG',
+  'TELEGRAM_PREFLIGHT_EXTERNAL_FAILED',
   'Apply and verify Production personal Telegram storage atomically',
   'PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}',
   'IFS= read -r PROD_DATABASE_URL && export PROD_DATABASE_URL',
@@ -96,7 +99,11 @@ if (!personalWorkerSource.includes("console.log('[user-telegram-worker] started'
   throw new Error('Personal Telegram delivery worker must emit a sanitized startup marker for Production proof');
 }
 
+const runtimePreflightIndex = source.indexOf('Validate complete Telegram runtime and external reachability before any mutation');
 const storageMigrationIndex = source.indexOf('Apply and verify Production personal Telegram storage atomically');
+if (runtimePreflightIndex < 0 || storageMigrationIndex <= runtimePreflightIndex) {
+  throw new Error('Complete Telegram runtime/external read-only preflight must run before any Production storage mutation');
+}
 const productionEvidenceIndex = source.indexOf('Require already-successful exact-SHA Production Deploy evidence');
 if (storageMigrationIndex < 0 || productionEvidenceIndex <= storageMigrationIndex) {
   console.error('[telegram-production-release-contract] atomic personal Telegram storage migration must precede Production deployment evidence validation');
