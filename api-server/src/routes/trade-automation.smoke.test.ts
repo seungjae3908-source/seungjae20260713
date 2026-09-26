@@ -578,6 +578,121 @@ test('exit preview re-reads the real position in read-only mode and never submit
   }
 });
 
+test('canonical exit plan fails closed when the draft position changes before plan preparation', async () => {
+  let reads = 0;
+  setTradeExitPreviewReadersFactoryForTests(() => ({
+    toss: async () => {
+      reads += 1;
+      const quantity = reads === 1 ? 20 : 19;
+      const checkedAt = new Date().toISOString();
+      return {
+        provider: 'toss' as const,
+        readOnly: true as const,
+        connected: true,
+        status: 'CONNECTED' as const,
+        accounts: null,
+        balances: null,
+        positions: [{
+          market: 'KR',
+          symbol: '005930',
+          quantity,
+          availableQuantity: quantity,
+          averageEntryPrice: 70_000,
+          currentPrice: 72_000,
+          marketValue: quantity * 72_000,
+          unrealizedPnl: null,
+          unrealizedPnlPercent: null,
+          leverage: null,
+          liquidationPrice: null,
+          marginMode: null,
+          side: null,
+        }],
+        openOrders: null,
+        checkedAt,
+        lastGoodAt: checkedAt,
+        stale: false,
+        errorCode: null,
+        orderRequests: 0 as const,
+        cancelRequests: 0 as const,
+        amendRequests: 0 as const,
+        transferRequests: 0 as const,
+        withdrawalRequests: 0 as const,
+        credentialsReturned: false as const,
+        liveTradingEnabled: false as const,
+        autoTradingEnabled: false as const,
+      };
+    },
+  }));
+
+  const { server, baseUrl } = await startServer();
+  try {
+    const previewResponse = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        confirmed: true,
+        provider: 'toss',
+        market: 'KR',
+        symbol: '005930',
+        percent: 25,
+      }),
+    });
+    assert.equal(previewResponse.status, 200);
+    const previewBody = await previewResponse.json() as {
+      preview: {
+        draftId: string;
+        issuedAt: string;
+        expiresAt: string;
+        positionQuantity: number | null;
+        availableQuantity: number;
+        exitQuantity: number;
+        side: string;
+        checkedAt: string;
+      };
+    };
+    assert.equal(previewBody.preview.positionQuantity, 20);
+    assert.equal(previewBody.preview.availableQuantity, 20);
+    assert.equal(previewBody.preview.exitQuantity, 5);
+
+    const planResponse = await fetch(`${baseUrl}/api/trade-automation/positions/exit-plan`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        confirmed: true,
+        provider: 'toss',
+        market: 'KR',
+        symbol: '005930',
+        percent: 25,
+        draftId: previewBody.preview.draftId,
+        draftIssuedAt: previewBody.preview.issuedAt,
+        draftExpiresAt: previewBody.preview.expiresAt,
+        positionQuantity: previewBody.preview.positionQuantity,
+        availableQuantity: previewBody.preview.availableQuantity,
+        exitQuantity: previewBody.preview.exitQuantity,
+        side: previewBody.preview.side,
+        sourceCheckedAt: previewBody.preview.checkedAt,
+      }),
+    });
+    assert.equal(planResponse.status, 409);
+    const planBody = await planResponse.json() as {
+      error?: string;
+      planPrepared?: boolean;
+      financialMutationPerformed?: boolean;
+      orderSubmitted?: boolean;
+      privateTradingMutationSent?: boolean;
+    };
+    assert.equal(reads, 2);
+    assert.equal(planBody.error, 'EXIT_PLAN_DRAFT_STALE_OR_POSITION_CHANGED');
+    assert.equal(planBody.planPrepared, false);
+    assert.equal(planBody.financialMutationPerformed, false);
+    assert.equal(planBody.orderSubmitted, false);
+    assert.equal(planBody.privateTradingMutationSent, false);
+  } finally {
+    setTradeExitPreviewReadersFactoryForTests(null);
+    await close(server);
+  }
+});
+
 test('order dashboard maps crypto execution markets back to AI Chart market identities', async () => {
   const now = new Date().toISOString();
   const cases = [
