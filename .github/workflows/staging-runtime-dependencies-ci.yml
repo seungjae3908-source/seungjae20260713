@@ -1,0 +1,33 @@
+name: Staging Runtime Dependencies CI
+
+on:
+  pull_request:
+    paths:
+      - ops/deploy-staging.sh
+      - api-server/scripts/verify-staging-runtime-dependencies.mjs
+      - .github/workflows/staging-runtime-dependencies-ci.yml
+  push:
+    branches:
+      - main
+    paths:
+      - ops/deploy-staging.sh
+      - api-server/scripts/verify-staging-runtime-dependencies.mjs
+      - .github/workflows/staging-runtime-dependencies-ci.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Reproduce legacy missing module and verify promoted runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Require rsync fixture dependency
+        run: command -v rsync
+      - name: Verify staging runtime dependencies survive promotion
+        run: node api-server/scripts/verify-staging-runtime-dependencies.mjs

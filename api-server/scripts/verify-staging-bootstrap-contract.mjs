@@ -1,0 +1,178 @@
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+
+const root = path.basename(process.cwd()) === 'api-server'
+  ? path.resolve(process.cwd(), '..')
+  : path.resolve(process.cwd());
+const read = (relative) => readFile(path.join(root, relative), 'utf8');
+const assert = (condition, message) => {
+  if (!condition) throw new Error(`[staging-bootstrap-contract] ${message}`);
+};
+
+const manifest = await read('api-server/supabase/bootstrap/staging-bootstrap.sql');
+const guard = await read('api-server/supabase/bootstrap/staging-empty-project-guard.sql');
+const base = await read('api-server/supabase/bootstrap/staging-allowlist-base.sql');
+const assertion = await read('api-server/supabase/bootstrap/staging-bootstrap-assert.sql');
+const telegramStorage = await read('api-server/supabase/migrations/2026081501_personal_telegram_storage.sql');
+const telegramPolicyCleanup = await read('api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql');
+const telegramPolicyCleanupNormalized = telegramPolicyCleanup.replaceAll('\r\n', '\n');
+const memberWatchlistStorage = await read('api-server/supabase/migrations/2026082704_member_watchlist_items.sql');
+const runner = await read('api-server/scripts/apply-staging-supabase-bootstrap.mjs');
+const watchlistVerifier = await read('api-server/scripts/verify-staging-watchlist-store.mjs');
+const verdict = await read('api-server/scripts/build-staging-verdict.mjs');
+const serverEntry = await read('api-server/src/index.ts');
+const playwright = await read('stock-analyzer/playwright.config.ts');
+const dbVerifier = await read('api-server/scripts/verify-phase8-db.sh');
+const authHarness = await read('api-server/supabase/test/staging_bootstrap_auth_harness.sql');
+const triggerTest = await read('api-server/supabase/test/staging_bootstrap_trigger_integration.sql');
+const telegramPolicyCleanupTest = await read('api-server/supabase/test/personal_telegram_policy_cleanup_integration.sql');
+
+assert(!manifest.includes('20260716_full_schema_idempotent.sql'), 'must not import the historical full schema');
+assert(!manifest.includes('../schema.sql'), 'must not import the broad legacy schema file');
+assert(manifest.includes('staging-allowlist-base.sql'), 'manifest must use the allowlisted base schema');
+assert(manifest.includes('2026081501_personal_telegram_storage.sql'), 'manifest must include personal Telegram storage');
+assert(runner.includes('2026081501_personal_telegram_storage.sql'), 'atomic runner must include personal Telegram storage');
+assert(manifest.includes('2026081502_personal_telegram_policy_cleanup.sql'), 'manifest must include personal Telegram policy cleanup');
+assert(runner.includes('2026081502_personal_telegram_policy_cleanup.sql'), 'atomic runner must include personal Telegram policy cleanup');
+assert(manifest.includes('2026082704_member_watchlist_items.sql'), 'manifest must include authenticated member watchlist storage');
+assert(runner.includes('2026082704_member_watchlist_items.sql'), 'atomic runner must include authenticated member watchlist storage');
+
+for (const marker of [
+  'create table if not exists public.member_watchlist_items',
+  'primary key (user_id, market, symbol)',
+  'alter table public.member_watchlist_items enable row level security',
+  'alter table public.member_watchlist_items force row level security',
+  'grant select, insert, update, delete on table public.member_watchlist_items to authenticated',
+  'member_watchlist_select_own',
+  'member_watchlist_insert_own',
+  'member_watchlist_update_own',
+  'member_watchlist_delete_own',
+]) {
+  assert(memberWatchlistStorage.includes(marker), `member watchlist migration is missing ${marker}`);
+}
+
+for (const serverTable of [
+  'telegram_connections',
+  'telegram_link_tokens',
+  'user_execution_events',
+  'notification_deliveries',
+]) {
+  assert(telegramStorage.includes(`public.${serverTable}`), `personal Telegram migration is missing ${serverTable}`);
+  assert(telegramPolicyCleanup.includes(`'${serverTable}'`), `personal Telegram policy cleanup is missing ${serverTable}`);
+  assert(assertion.includes(`'${serverTable}'`), `final assertion is missing ${serverTable}`);
+}
+assert(!telegramStorage.includes('public.notification_preferences'), 'personal Telegram migration must not mutate unified notification preferences');
+assert(
+  telegramStorage.includes('from public, anon, authenticated'),
+  'personal Telegram tables must revoke every API role',
+);
+assert(
+  telegramStorage.includes('to service_role'),
+  'personal Telegram tables must remain available only to the server role',
+);
+assert(telegramPolicyCleanupNormalized.includes("select pol.polname\n      from pg_policy pol"), 'legacy Telegram policies must be enumerated for removal');
+assert(telegramPolicyCleanup.includes("for all using (false) with check (false)"), 'Telegram policy cleanup must remain fail-closed');
+assert(telegramPolicyCleanupTest.includes('telegram_connections select own'), 'cleanup integration must reproduce a legacy Telegram self-read policy');
+assert(telegramPolicyCleanupTest.includes('2026081502_personal_telegram_policy_cleanup.sql'), 'cleanup integration must apply the cleanup migration');
+assert(dbVerifier.includes('personal_telegram_policy_cleanup_integration.sql'), 'disposable PostgreSQL verification must execute the Telegram policy cleanup test');
+
+for (const forbidden of [
+  'STAGING_PENDING_EMAIL', 'STAGING_PENDING_PASSWORD',
+  'STAGING_ASSOCIATE_EMAIL', 'STAGING_ASSOCIATE_PASSWORD',
+  'STAGING_REGULAR_EMAIL', 'STAGING_REGULAR_PASSWORD',
+  'STAGING_ADMIN_EMAIL', 'STAGING_ADMIN_PASSWORD',
+]) {
+  assert(!`${manifest}\n${guard}\n${base}\n${assertion}\n${runner}`.includes(forbidden), `${forbidden} must never return`);
+}
+
+for (const requiredTable of [
+  'profiles', 'watchlist_items', 'market_cache', 'portfolio_holdings',
+  'app_backups', 'notification_preferences', 'push_subscriptions',
+  'notification_history', 'price_alerts',
+]) {
+  assert(base.includes(`public.${requiredTable}`), `allowlist base is missing ${requiredTable}`);
+  assert(assertion.includes(`'${requiredTable}'`), `final assertion is missing ${requiredTable}`);
+}
+for (const requiredProfileColumn of [
+  'membership_level', 'status', 'role', 'is_active', 'permissions_updated_at',
+]) {
+  assert(base.includes(requiredProfileColumn), `profiles is missing ${requiredProfileColumn}`);
+}
+assert(base.includes('create or replace function public.handle_new_user()'), 'profile trigger function is missing');
+assert(base.includes('create trigger on_auth_user_created'), 'auth.users profile trigger is missing');
+assert(base.includes('enable row level security'), 'RLS enablement is missing');
+assert(base.includes('grant all on public.profiles to service_role'), 'server grant is missing');
+assert(base.includes('revoke all on public.watchlist_items from anon, authenticated'), 'server-only watchlist grant is not enforced');
+assert(!base.includes('insert into auth.users'), 'bootstrap must not create or copy Auth users');
+assert(!base.includes('from auth.users u'), 'bootstrap must not backfill Auth users');
+assert(!base.includes('storage.'), 'bootstrap must not touch Storage objects');
+
+assert(guard.includes('bawcbkoyovbeajkrnduq'), 'known production project ref guard is missing');
+assert(guard.includes('first staging bootstrap requires an empty auth.users table'), 'first-run empty Auth guard is missing');
+assert(guard.includes('staging_bootstrap_state'), 'repeat-run marker guard is missing');
+
+assert(runner.includes("required('STAGING_DATABASE_URL')"), 'runner must require a DDL-capable staging database URL');
+assert(runner.includes('STAGING_DATABASE_URL does not resolve to the same Supabase project ref'), 'database/project identity check is missing');
+assert(runner.includes('stripOuterTransaction'), 'outer migration envelopes must be removed');
+assert(runner.includes('Second application proves idempotency'), 'two-pass idempotency execution is missing');
+assert(runner.includes("'begin;'"), 'single outer transaction is missing');
+assert(runner.includes("'commit;'"), 'single outer commit is missing');
+assert(runner.includes('credentials_recorded: false'), 'artifact credential redaction contract is missing');
+assert(playwright.includes('staging-bootstrap-global-setup.ts'), 'staging browser suite must bootstrap before account creation');
+assert(
+  watchlistVerifier.includes('const preflightRows = await listDeviceRows();'),
+  'watchlist verification must establish a read-only Data API boundary before its first mutation',
+);
+assert(
+  watchlistVerifier.includes("throw new Error('watchlist run fixture collision detected before CRUD verification')"),
+  'watchlist verification must fail closed on a run fixture collision instead of deleting pre-existing rows',
+);
+assert(
+  watchlistVerifier.includes('preflight_rows: preflightRows.length'),
+  'watchlist verification artifact must record the read-only preflight result',
+);
+assert(
+  watchlistVerifier.indexOf('const preflightRows = await listDeviceRows();')
+    < watchlistVerifier.indexOf(".upsert(initialRows, { onConflict: 'device_id,ticker' })"),
+  'watchlist read-only preflight must precede the first CRUD mutation',
+);
+
+for (const requiredArtifactField of [
+  'atomic_transaction', 'idempotency_passes', 'auth_users_copied',
+  'profile_rows_copied', 'storage_objects_copied', 'credentials_recorded',
+]) {
+  assert(runner.includes(requiredArtifactField), `bootstrap artifact is missing ${requiredArtifactField}`);
+}
+for (const marker of [
+  'apply-staging-supabase-bootstrap.mjs',
+  'STAGING_BOOTSTRAP_ALLOW_DISPOSABLE_CI=true',
+  'staging_bootstrap_trigger_integration.sql',
+]) {
+  assert(dbVerifier.includes(marker), `database CI is missing ${marker}`);
+}
+assert(authHarness.includes('create table if not exists auth.users'), 'CI harness must create auth.users');
+assert(authHarness.includes('raw_user_meta_data jsonb'), 'CI harness must support Auth metadata');
+assert(!authHarness.includes('insert into auth.users'), 'empty CI harness must not seed users');
+assert(triggerTest.includes('delete from auth.users'), 'trigger integration must test Auth cleanup');
+assert(triggerTest.includes('profile remained after Auth user deletion'), 'trigger integration must verify profile cascade');
+
+for (const marker of [
+  "readJson('staging-bootstrap-verification.json')",
+  'bootstrap.atomic_transaction === true',
+  'Number(bootstrap.idempotency_passes) === 2',
+  'Number(bootstrap.auth_users_copied) === 0',
+  'Number(bootstrap.profile_rows_copied) === 0',
+  'Number(bootstrap.storage_objects_copied) === 0',
+  'accountsCreated === 4',
+  'accountsDeleted === 4',
+  'profilesRemaining === 0',
+]) {
+  assert(verdict.includes(marker), `release verdict is missing ${marker}`);
+}
+assert(serverEntry.includes('process.env.DEPLOY_SHA'), 'health response must read the immutable deploy SHA');
+assert(
+  serverEntry.includes('deploySha: identity.processDeploySha,'),
+  'health response must expose deploySha from the process-start identity',
+);
+
+console.log('[staging-bootstrap-contract] allowlist, atomicity, isolation, health SHA, exact account cleanup, member watchlist storage, no-user-copy, and no-manual-account-secret contracts verified');

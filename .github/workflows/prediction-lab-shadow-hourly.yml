@@ -1,0 +1,399 @@
+name: Prediction Lab Hourly Shadow Validation
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/prediction-lab-shadow-hourly.yml
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: prediction-lab-artifact-writer
+  cancel-in-progress: false
+
+env:
+  SHADOW_BRANCH: feature/prediction-lab-standalone
+  LAB_DIR: market-prediction-lab
+  SHADOW_ARTIFACT: prediction-lab-shadow-state
+  SHADOW_CUTOVER_FROM_SHA: 84bb50cf6d0b90c29f47f043de36b9a239547c9b
+  SHADOW_CUTOVER_TO_SHA: ea1d873c93d603e61960c5bfbff1f6d6d9933fec
+  SHADOW_CUTOVER_REASON: deployed-inference-parity
+
+jobs:
+  shadow-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Locate previous successful shadow artifact
+        id: previous
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const currentRunId = Number(context.runId);
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner,
+              repo,
+              workflow_id: 'prediction-lab-shadow-hourly.yml',
+              status: 'completed',
+              per_page: 100,
+            });
+            for (const run of runs) {
+              if (run.id === currentRunId || run.conclusion !== 'success') continue;
+              const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+                owner,
+                repo,
+                run_id: run.id,
+                per_page: 100,
+              });
+              const artifact = artifacts.find((item) => item.name === process.env.SHADOW_ARTIFACT && !item.expired);
+              if (!artifact) continue;
+              core.setOutput('found', 'true');
+              core.setOutput('run_id', String(run.id));
+              core.setOutput('artifact_id', String(artifact.id));
+              core.info(`Using predecessor shadow artifact ${artifact.id} from run ${run.id}.`);
+              return;
+            }
+            core.setOutput('found', 'false');
+            core.setOutput('run_id', '');
+            core.setOutput('artifact_id', '');
+            core.info('No previous successful shadow artifact exists; cutover seed validation will be required.');
+
+      - name: Download previous shadow artifact
+        if: steps.previous.outputs.found == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.SHADOW_ARTIFACT }}
+          path: ${{ runner.temp }}/previous-shadow
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.previous.outputs.run_id }}
+
+      - name: Resolve immutable Prediction Lab code SHA
+        id: code
+        uses: actions/github-script@v7
+        env:
+          PREVIOUS_FOUND: ${{ steps.previous.outputs.found }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const ref = await github.rest.git.getRef({ owner, repo, ref: `heads/${process.env.SHADOW_BRANCH}` });
+            const sha = ref.data.object.sha;
+            if (!/^[0-9a-f]{40}$/.test(sha)) {
+              core.setFailed('Prediction Lab branch did not resolve to an immutable SHA.');
+              return;
+            }
+            core.setOutput('sha', sha);
+
+      - name: Checkout immutable Prediction Lab code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.code.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Restore and verify previous state
+        id: restore
+        shell: bash
+        env:
+          PREVIOUS_FOUND: ${{ steps.previous.outputs.found }}
+          PREVIOUS_RUN_ID: ${{ steps.previous.outputs.run_id }}
+          PREVIOUS_ARTIFACT_ID: ${{ steps.previous.outputs.artifact_id }}
+          PREVIOUS_DIR: ${{ runner.temp }}/previous-shadow
+          RESEARCH_CODE_SHA: ${{ steps.code.outputs.sha }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const path = require('path');
+          const digestBuffer = (value) => crypto.createHash('sha256').update(value).digest('hex');
+          const digest = (file) => digestBuffer(fs.readFileSync(file));
+          const combinedDigest = (stateFile, summaryFile) => digestBuffer(Buffer.concat([
+            fs.readFileSync(stateFile),
+            Buffer.from([0]),
+            fs.readFileSync(summaryFile),
+          ]));
+          const ledgerRecordCount = (value) => {
+            if (!value || typeof value !== 'object') return 0;
+            if (Array.isArray(value)) return value.length;
+            let count = 0;
+            for (const key of ['records', 'ledger', 'entries', 'predictions']) {
+              if (Array.isArray(value[key])) count += value[key].length;
+            }
+            if (value.groups && typeof value.groups === 'object' && !Array.isArray(value.groups)) {
+              count += Object.values(value.groups).reduce((sum, group) => sum + ledgerRecordCount(group), 0);
+            }
+            return count;
+          };
+          const nonEmptyLedger = (value) => ledgerRecordCount(value) > 0;
+          const output = (name, value) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+
+          const lab = process.env.LAB_DIR;
+          const statePath = path.join(lab, 'docs/shadow-state.json');
+          const summaryPath = path.join(lab, 'docs/shadow-summary.json');
+          const currentResearchCodeSha = process.env.RESEARCH_CODE_SHA;
+          const cutoverFromSha = process.env.SHADOW_CUTOVER_FROM_SHA;
+          const cutoverToSha = process.env.SHADOW_CUTOVER_TO_SHA;
+          const cutoverReason = process.env.SHADOW_CUTOVER_REASON;
+
+          if (![currentResearchCodeSha, cutoverFromSha, cutoverToSha].every((value) => /^[0-9a-f]{40}$/.test(String(value ?? '')))) {
+            throw new Error('Hourly Shadow cutover SHA contract is invalid.');
+          }
+
+          const writeCleanCutover = ({ previousValue = {}, previousSummaryValue = {}, predecessorSha = '', previousDigest = '', seedMode }) => {
+            const now = Date.now();
+            const freshState = {
+              schemaVersion: 3,
+              createdAt: now,
+              updatedAt: now,
+              groups: {},
+              forwardStrategies: previousValue.forwardStrategies ?? {},
+            };
+            const freshSummary = {
+              schemaVersion: 3,
+              status: 'pass',
+              generatedAt: now,
+              groups: {},
+              forwardStrategies: previousSummaryValue.forwardStrategies ?? {},
+              safety: {
+                usesPublicMarketDataOnly: true,
+                usesAccountOrOrderApi: false,
+                modifiesExistingAppApi: false,
+                backfillsHistoricalOpenInterest: false,
+                mixesModelPairsInPromotionMetrics: false,
+                deploysModel: false,
+                frozenEthV6LiveOrderAllowed: false,
+                cleanCutoverReason: cutoverReason,
+                cleanCutoverFromResearchCodeSha: cutoverFromSha,
+                cleanCutoverToResearchCodeSha: cutoverToSha,
+              },
+            };
+            fs.writeFileSync(statePath, `${JSON.stringify(freshState, null, 2)}\n`);
+            fs.writeFileSync(summaryPath, `${JSON.stringify(freshSummary, null, 2)}\n`);
+            output('previous_state_digest', previousDigest || digest(statePath));
+            output('source_generated_head', currentResearchCodeSha);
+            output('predecessor_research_code_sha', predecessorSha);
+            output('seed_mode', seedMode);
+          };
+
+          if (process.env.PREVIOUS_FOUND === 'true') {
+            const manifestPath = path.join(process.env.PREVIOUS_DIR, 'manifest.json');
+            const previousState = path.join(process.env.PREVIOUS_DIR, 'shadow-state.json');
+            const previousSummary = path.join(process.env.PREVIOUS_DIR, 'shadow-summary.json');
+            for (const file of [manifestPath, previousState, previousSummary]) {
+              if (!fs.existsSync(file)) throw new Error(`Missing predecessor artifact file: ${file}`);
+            }
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            if (manifest.schemaVersion !== 1 || manifest.kind !== 'prediction-lab-shadow-state') {
+              throw new Error('Unsupported predecessor shadow manifest.');
+            }
+            if (!/^[0-9a-f]{40}$/.test(String(manifest.researchCodeSha ?? ''))) {
+              throw new Error('Predecessor researchCodeSha is invalid.');
+            }
+            if (manifest.stateSha256 !== digest(previousState) || manifest.summarySha256 !== digest(previousSummary)) {
+              throw new Error('Predecessor shadow artifact digest mismatch.');
+            }
+            if (manifest.sha256 !== combinedDigest(previousState, previousSummary)) {
+              throw new Error('Predecessor shadow combined SHA-256 mismatch.');
+            }
+            if (manifest.branchWrite !== false || manifest.liveOrderAllowed !== false || manifest.privateAccountRequestAllowed !== false) {
+              throw new Error('Predecessor safety flags are not fail-closed.');
+            }
+            const previousValue = JSON.parse(fs.readFileSync(previousState, 'utf8'));
+            const previousSummaryValue = JSON.parse(fs.readFileSync(previousSummary, 'utf8'));
+            if (manifest.researchCodeSha !== currentResearchCodeSha) {
+              const approvedResearchCutover = manifest.researchCodeSha === cutoverFromSha && currentResearchCodeSha === cutoverToSha;
+              if (!approvedResearchCutover) {
+                throw new Error('Shadow research code changed outside approved research cutover; chain mixing forbidden.');
+              }
+              writeCleanCutover({
+                previousValue,
+                previousSummaryValue,
+                predecessorSha: manifest.researchCodeSha,
+                previousDigest: manifest.stateSha256,
+                seedMode: 'research-code-clean-cutover',
+              });
+            } else {
+              if (!nonEmptyLedger(previousValue)) {
+                throw new Error('Refusing to restart from an empty predecessor shadow state.');
+              }
+              fs.copyFileSync(previousState, statePath);
+              fs.copyFileSync(previousSummary, summaryPath);
+              output('previous_state_digest', manifest.stateSha256);
+              output('source_generated_head', manifest.sourceGeneratedHead || manifest.researchCodeSha);
+              output('predecessor_research_code_sha', manifest.researchCodeSha);
+              output('seed_mode', 'artifact');
+            }
+          } else {
+            for (const file of [statePath, summaryPath]) {
+              if (!fs.existsSync(file)) throw new Error(`Cutover seed is missing required file: ${file}`);
+            }
+            const branchState = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+            const branchSummary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+            if (currentResearchCodeSha === cutoverToSha) {
+              writeCleanCutover({
+                previousValue: branchState,
+                previousSummaryValue: branchSummary,
+                predecessorSha: '',
+                previousDigest: digest(statePath),
+                seedMode: 'research-code-clean-cutover-no-predecessor',
+              });
+            } else {
+              if (currentResearchCodeSha !== cutoverFromSha) {
+                throw new Error('No predecessor artifact exists for an unapproved Hourly Shadow research SHA.');
+              }
+              if (!nonEmptyLedger(branchState)) {
+                throw new Error('Refusing artifact cutover from an empty branch shadow state.');
+              }
+              output('previous_state_digest', digest(statePath));
+              output('source_generated_head', currentResearchCodeSha);
+              output('predecessor_research_code_sha', '');
+              output('seed_mode', 'branch-cutover');
+            }
+          }
+          NODE
+
+      - name: Inspect current shadow decision
+        id: inspect
+        working-directory: ${{ env.LAB_DIR }}
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const summary = JSON.parse(fs.readFileSync('docs/shadow-summary.json', 'utf8'));
+          const groups = Object.entries(summary.groups ?? {});
+          const failures = groups.filter(([, group]) => group?.status === 'fail');
+          const output = (name, value) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+          if (summary.status === 'fail' || failures.length > 0) {
+            output('decision', 'technical_failure');
+            process.exit(0);
+          }
+          const ready = groups.some(([, group]) => group?.promotion?.status === 'integration_review_ready');
+          output('decision', ready ? 'integration_review_ready' : 'shadow_continue');
+          NODE
+
+      - name: Validate isolated shadow modules
+        if: steps.inspect.outputs.decision == 'shadow_continue'
+        working-directory: ${{ env.LAB_DIR }}
+        run: node --test tests/derivatives-history.test.js tests/derivatives-normalized-compat.test.js tests/temporal-training-dataset.test.js tests/shadow-ledger.test.js
+
+      - name: Update local artifact trigger
+        if: steps.inspect.outputs.decision == 'shadow_continue'
+        working-directory: ${{ env.LAB_DIR }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          fs.writeFileSync('docs/shadow-trigger.json', `${JSON.stringify({
+            schemaVersion: 2,
+            requestedAt: Date.now(),
+            reason: 'hourly-shadow-validation',
+            artifactOnly: true,
+            branchWrite: false,
+            deploy: false,
+          }, null, 2)}\n`);
+          NODE
+
+      - name: Run one independent live shadow cycle
+        if: steps.inspect.outputs.decision == 'shadow_continue'
+        working-directory: ${{ env.LAB_DIR }}
+        run: node scripts/run-shadow-cycle.js docs/shadow-state.json docs/shadow-summary.json
+
+      - name: Build provenance manifest
+        if: steps.inspect.outputs.decision != 'technical_failure'
+        shell: bash
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.code.outputs.sha }}
+          PREVIOUS_RUN_ID: ${{ steps.previous.outputs.run_id }}
+          PREVIOUS_ARTIFACT_ID: ${{ steps.previous.outputs.artifact_id }}
+          PREVIOUS_STATE_DIGEST: ${{ steps.restore.outputs.previous_state_digest }}
+          PREDECESSOR_RESEARCH_CODE_SHA: ${{ steps.restore.outputs.predecessor_research_code_sha }}
+          SOURCE_GENERATED_HEAD: ${{ steps.restore.outputs.source_generated_head }}
+          SEED_MODE: ${{ steps.restore.outputs.seed_mode }}
+        run: |
+          rm -rf shadow-artifact
+          mkdir -p shadow-artifact
+          cp "$LAB_DIR/docs/shadow-state.json" shadow-artifact/shadow-state.json
+          cp "$LAB_DIR/docs/shadow-summary.json" shadow-artifact/shadow-summary.json
+          if [ -f "$LAB_DIR/docs/shadow-trigger.json" ]; then cp "$LAB_DIR/docs/shadow-trigger.json" shadow-artifact/shadow-trigger.json; fi
+          node <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const digestBuffer = (value) => crypto.createHash('sha256').update(value).digest('hex');
+          const digest = (file) => digestBuffer(fs.readFileSync(file));
+          const stateBytes = fs.readFileSync('shadow-artifact/shadow-state.json');
+          const summaryBytes = fs.readFileSync('shadow-artifact/shadow-summary.json');
+          const summary = JSON.parse(summaryBytes.toString('utf8'));
+          const groups = Object.values(summary.groups ?? {});
+          const unique = (values) => [...new Set(values.filter(Boolean))];
+          const candidateModelIds = unique(groups.map((group) => group?.filter?.modelId ?? group?.modelSelection?.candidateModelId ?? null));
+          const referenceModelIds = unique(groups.map((group) => group?.filter?.referenceModelId ?? group?.modelSelection?.referenceModelId ?? null));
+          const cutoverSeed = String(process.env.SEED_MODE ?? '').startsWith('research-code-clean-cutover');
+          const manifest = {
+            schemaVersion: 1,
+            kind: 'prediction-lab-shadow-state',
+            researchCodeSha: process.env.RESEARCH_CODE_SHA,
+            predecessorRunId: process.env.PREVIOUS_RUN_ID || null,
+            predecessorArtifactId: process.env.PREVIOUS_ARTIFACT_ID || null,
+            predecessorResearchCodeSha: process.env.PREDECESSOR_RESEARCH_CODE_SHA || null,
+            previousStateDigest: process.env.PREVIOUS_STATE_DIGEST,
+            sourceGeneratedHead: process.env.SOURCE_GENERATED_HEAD,
+            candidateModelIds,
+            referenceModelIds,
+            candidateModelId: candidateModelIds[0] ?? null,
+            referenceModelId: referenceModelIds[0] ?? null,
+            seedMode: process.env.SEED_MODE,
+            cutoverReason: cutoverSeed ? process.env.SHADOW_CUTOVER_REASON : null,
+            cutoverFromResearchCodeSha: cutoverSeed ? process.env.SHADOW_CUTOVER_FROM_SHA : null,
+            cutoverToResearchCodeSha: cutoverSeed ? process.env.SHADOW_CUTOVER_TO_SHA : null,
+            createdAt: new Date().toISOString(),
+            stateSha256: digest('shadow-artifact/shadow-state.json'),
+            summarySha256: digest('shadow-artifact/shadow-summary.json'),
+            sha256: digestBuffer(Buffer.concat([stateBytes, Buffer.from([0]), summaryBytes])),
+            branchWrite: false,
+            liveOrderAllowed: false,
+            privateAccountRequestAllowed: false,
+          };
+          if (!/^[0-9a-f]{40}$/.test(String(manifest.sourceGeneratedHead ?? ''))) {
+            throw new Error('sourceGeneratedHead is invalid.');
+          }
+          fs.writeFileSync('shadow-artifact/manifest.json', `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
+
+      - name: Upload immutable shadow state artifact
+        if: steps.inspect.outputs.decision != 'technical_failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.SHADOW_ARTIFACT }}
+          path: shadow-artifact
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Assert source branch stayed immutable
+        if: always() && steps.code.outputs.sha != ''
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ steps.code.outputs.sha }}"
+          git fetch --no-tags origin "${SHADOW_BRANCH}"
+          test "$(git rev-parse FETCH_HEAD)" = "${{ steps.code.outputs.sha }}" || {
+            echo "Prediction Lab source branch moved during artifact-only run." >&2
+            exit 1
+          }
+
+      - name: Stop on existing technical failure
+        if: steps.inspect.outputs.decision == 'technical_failure'
+        run: exit 1
