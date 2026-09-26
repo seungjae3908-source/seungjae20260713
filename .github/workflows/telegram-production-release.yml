@@ -8,6 +8,10 @@ on:
       - .github/workflows/telegram-production-release.yml
       - api-server/scripts/verify-telegram-production-release-contract.mjs
       - api-server/scripts/verify-production-telegram-preservation.mjs
+      - api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts
+      - api-server/src/features/user-broker-telegram/user-broker-telegram.service.ts
+      - api-server/src/services/scanner-telegram-delivery.service.ts
+      - api-server/src/services/scanner-telegram-plan-format.service.test.ts
       - ops/deploy-production.sh
       - .github/workflows/production-app-release-control.yml
       - api-server/supabase/migrations/2026081501_personal_telegram_storage.sql
@@ -624,6 +628,7 @@ jobs:
               const worker = flag(runtime.TELEGRAM_INTELLIGENCE_WORKER_ENABLED);
               if (approved !== worker) throw new Error('Mixed Telegram activation state');
               const telegramFeatureFlags = [
+                'PERSONAL_TELEGRAM_WORKER_ENABLED',
                 'TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED',
                 'TELEGRAM_SIGNAL_AI_ENABLED',
                 'TELEGRAM_DAILY_BRIEF_RICH_ENABLED',
@@ -632,15 +637,32 @@ jobs:
                 'MEMBER_HOLDINGS_NEWS_INTELLIGENCE_ENABLED',
                 'MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED',
               ];
-              const allTelegramFeaturesEnabled = telegramFeatureFlags.every((key) => flag(runtime[key]));
-              if (!String(runtime.TELEGRAM_BOT_TOKEN ?? '').trim() || !String(runtime.TELEGRAM_CHAT_ID ?? '').trim()) {
-                throw new Error('Telegram runtime configuration is incomplete');
+              const requiredConfigKeys = [
+                'TELEGRAM_BOT_TOKEN',
+                'TELEGRAM_CHAT_ID',
+                'TELEGRAM_STOCK_CHAT_ID',
+                'TELEGRAM_CRYPTO_CHAT_ID',
+                'TELEGRAM_BOT_USERNAME',
+                'TELEGRAM_WEBHOOK_SECRET',
+              ];
+              const missingConfigKeys = requiredConfigKeys.filter((key) => !String(runtime[key] ?? '').trim());
+              if (missingConfigKeys.length) {
+                throw new Error(`Telegram runtime configuration missing: ${missingConfigKeys.join(', ')}`);
               }
+              if (String(runtime.BACKGROUND_WORKERS_ENABLED ?? 'true') === 'false') {
+                throw new Error('Telegram background workers are disabled by BACKGROUND_WORKERS_ENABLED=false');
+              }
+              const allTelegramFeaturesEnabled = telegramFeatureFlags.every((key) => flag(runtime[key]));
               if (approved && worker && allTelegramFeaturesEnabled) return false;
+              const preservedRuntimeEnv = Object.fromEntries(Object.entries(runtime)
+                .filter(([key, value]) => /^[A-Z_][A-Z0-9_]*$/.test(key)
+                  && value !== undefined && value !== null && typeof value !== 'object')
+                .map(([key, value]) => [key, String(value)]));
               execFileSync('pm2', ['restart', 'stock-app', '--update-env'], {
-                env: { ...process.env, DEPLOY_SHA: approvedSha,
+                env: { ...process.env, ...preservedRuntimeEnv, DEPLOY_SHA: approvedSha,
                   LIVE_TELEGRAM_ACTIVATION_APPROVED: 'true',
                   TELEGRAM_INTELLIGENCE_WORKER_ENABLED: 'true',
+                  PERSONAL_TELEGRAM_WORKER_ENABLED: 'true',
                   TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED: 'true',
                   TELEGRAM_SIGNAL_AI_ENABLED: 'true',
                   TELEGRAM_DAILY_BRIEF_RICH_ENABLED: 'true',
@@ -655,6 +677,72 @@ jobs:
               execFileSync('pm2', ['save'], { stdio: ['ignore', 'ignore', 'pipe'] });
               return true;
             }
+            const requiredTelegramConfigKeys = [
+              'TELEGRAM_BOT_TOKEN',
+              'TELEGRAM_CHAT_ID',
+              'TELEGRAM_STOCK_CHAT_ID',
+              'TELEGRAM_CRYPTO_CHAT_ID',
+              'TELEGRAM_BOT_USERNAME',
+              'TELEGRAM_WEBHOOK_SECRET',
+            ];
+            const missingTelegramConfig = requiredTelegramConfigKeys
+              .filter((key) => !String(env[key] ?? '').trim());
+            if (missingTelegramConfig.length) {
+              console.error(`Telegram runtime configuration missing: ${missingTelegramConfig.join(', ')}`);
+              process.exit(13);
+            }
+            if (String(env.BACKGROUND_WORKERS_ENABLED ?? 'true') === 'false') {
+              console.error('Telegram background workers are disabled by BACKGROUND_WORKERS_ENABLED=false.');
+              process.exit(13);
+            }
+
+            const preflightBotToken = String(env.TELEGRAM_BOT_TOKEN).trim();
+            const preflightBotUsername = String(env.TELEGRAM_BOT_USERNAME).trim().replace(/^@/, '').toLowerCase();
+            const preflightRooms = [
+              ['DEFAULT_CHAT', String(env.TELEGRAM_CHAT_ID).trim()],
+              ['STOCK_CHAT', String(env.TELEGRAM_STOCK_CHAT_ID).trim()],
+              ['CRYPTO_CHAT', String(env.TELEGRAM_CRYPTO_CHAT_ID).trim()],
+            ];
+            async function telegramApiRead(method, params = {}) {
+              const url = new URL(`https://api.telegram.org/bot${encodeURIComponent(preflightBotToken)}/${method}`);
+              for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value));
+              const response = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
+              const value = await response.json().catch(() => null);
+              return { ok: response.ok && value?.ok === true, value };
+            }
+            const telegramPreflightErrors = [];
+            try {
+              const bot = await telegramApiRead('getMe');
+              const actualUsername = String(bot.value?.result?.username ?? '').trim().toLowerCase();
+              if (!bot.ok) telegramPreflightErrors.push('BOT_TOKEN_INVALID_OR_UNREACHABLE');
+              else if (!actualUsername || actualUsername !== preflightBotUsername) telegramPreflightErrors.push('BOT_USERNAME_MISMATCH');
+            } catch {
+              telegramPreflightErrors.push('BOT_IDENTITY_CHECK_FAILED');
+            }
+            for (const [label, roomId] of preflightRooms) {
+              try {
+                const room = await telegramApiRead('getChat', { chat_id: roomId });
+                if (!room.ok) telegramPreflightErrors.push(`${label}_UNREACHABLE`);
+              } catch {
+                telegramPreflightErrors.push(`${label}_CHECK_FAILED`);
+              }
+            }
+            try {
+              const webhook = await telegramApiRead('getWebhookInfo');
+              const webhookUrl = String(webhook.value?.result?.url ?? '').trim();
+              let webhookPath = '';
+              try { webhookPath = webhookUrl ? new URL(webhookUrl).pathname : ''; } catch {}
+              if (!webhook.ok) telegramPreflightErrors.push('WEBHOOK_INFO_UNREACHABLE');
+              else if (!webhookUrl) telegramPreflightErrors.push('WEBHOOK_NOT_REGISTERED');
+              else if (webhookPath !== '/api/telegram/webhook') telegramPreflightErrors.push('WEBHOOK_PATH_MISMATCH');
+            } catch {
+              telegramPreflightErrors.push('WEBHOOK_CHECK_FAILED');
+            }
+            if (telegramPreflightErrors.length) {
+              console.error(`Telegram external preflight failed: ${[...new Set(telegramPreflightErrors)].join(', ')}`);
+              process.exit(13);
+            }
+
             const activationChanged = activateApprovedTelegram(env, targetSha, markerSha, sourceCommentId);
             if (activationChanged) {
               const current = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
@@ -719,6 +807,7 @@ jobs:
               process.exit(12);
             }
             for (const key of [
+              'PERSONAL_TELEGRAM_WORKER_ENABLED',
               'TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED',
               'TELEGRAM_SIGNAL_AI_ENABLED',
               'TELEGRAM_DAILY_BRIEF_RICH_ENABLED',
@@ -750,8 +839,10 @@ jobs:
             const cryptoChatId = String(env.TELEGRAM_CRYPTO_CHAT_ID ?? '').trim();
             const botUsername = String(env.TELEGRAM_BOT_USERNAME ?? '').trim();
             const webhookSecret = String(env.TELEGRAM_WEBHOOK_SECRET ?? '').trim();
-            if (!botToken || !chatId || !stockChatId || !cryptoChatId || !botUsername || !webhookSecret) {
-              console.error('Telegram runtime configuration is incomplete.');
+            const missingAfterRestart = requiredTelegramConfigKeys
+              .filter((key) => !String(env[key] ?? '').trim());
+            if (missingAfterRestart.length) {
+              console.error(`Telegram runtime configuration lost after restart: ${missingAfterRestart.join(', ')}`);
               process.exit(13);
             }
 
@@ -765,8 +856,14 @@ jobs:
               ? Math.max(0, logBuffer.length - 262144)
               : Math.min(Math.max(0, preLogSize), logBuffer.length);
             const newLog = logBuffer.subarray(start).toString('utf8');
-            if (!newLog.includes('[telegram-intelligence-worker] started')) {
-              console.error('Telegram intelligence worker startup evidence is missing.');
+            const requiredWorkerMarkers = [
+              '[telegram-intelligence-worker] started',
+              '[user-telegram-worker] started',
+              '[signal-intelligence-telegram] subscriber started',
+            ];
+            const missingWorkerMarkers = requiredWorkerMarkers.filter((marker) => !newLog.includes(marker));
+            if (missingWorkerMarkers.length) {
+              console.error(`Telegram worker startup evidence missing: ${missingWorkerMarkers.join(', ')}`);
               process.exit(15);
             }
 
@@ -864,7 +961,12 @@ jobs:
               exactSha: targetSha,
               identityMatch: true,
               workerStarted: true,
+              personalWorkerStarted: true,
+              signalSubscriberStarted: true,
               telegramConfigured: true,
+              telegramBotIdentityVerified: true,
+              telegramRoomsVerified: true,
+              telegramWebhookVerified: true,
               telegramAccepted: true,
               telegramEditInPlaceAccepted: true,
               messageId,
@@ -886,7 +988,12 @@ jobs:
           const valid = value?.ok === true
             && value?.identityMatch === true
             && value?.workerStarted === true
+            && value?.personalWorkerStarted === true
+            && value?.signalSubscriberStarted === true
             && value?.telegramConfigured === true
+            && value?.telegramBotIdentityVerified === true
+            && value?.telegramRoomsVerified === true
+            && value?.telegramWebhookVerified === true
             && value?.telegramAccepted === true
             && value?.telegramEditInPlaceAccepted === true
             && Number.isSafeInteger(value?.messageId)
