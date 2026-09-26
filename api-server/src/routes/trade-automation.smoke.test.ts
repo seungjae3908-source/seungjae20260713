@@ -288,10 +288,12 @@ test('exit preview re-reads the real position in read-only mode and never submit
     const body = await response.json() as {
       preview: {
         provider: string;
+        availableQuantity: number;
         exitQuantity: number;
         quantityRule: string;
         side: string;
         reduceOnly: boolean;
+        checkedAt: string;
         stale: boolean;
         fingerprint: string;
       };
@@ -350,6 +352,83 @@ test('exit preview re-reads the real position in read-only mode and never submit
     assert.equal(body.executionReadiness.orderSubmissionPerformedByPreview, false);
     assert.equal(body.executionReadiness.executionAuthorityGrantedByPreview, false);
     assert.ok(body.executionReadiness.blockers.includes('LIVE_CONNECTION_NOT_CONFIGURED'));
+
+    const prepared = await fetch(`${baseUrl}/api/trade-automation/positions/exit-plan`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        confirmed: true,
+        provider: body.preview.provider,
+        market: 'KR',
+        symbol: '005930',
+        percent: 25,
+        previewFingerprint: body.preview.fingerprint,
+        availableQuantity: body.preview.availableQuantity,
+        exitQuantity: body.preview.exitQuantity,
+        side: body.preview.side,
+        sourceCheckedAt: body.preview.checkedAt,
+      }),
+    });
+    assert.equal(prepared.status, 200);
+    const preparedBody = await prepared.json() as {
+      canonicalExitPlan: {
+        schemaVersion: string;
+        planFingerprint: string;
+        previewFingerprint: string;
+        freshAccountFingerprint: string;
+        provider: string;
+        market: string;
+        symbol: string;
+        side: string;
+        quantity: number;
+        percent: number;
+        reduceOnly: boolean;
+        approvalEligible: boolean;
+        blockers: string[];
+        requiresFreshAccountRecheckAtApproval: boolean;
+        requiresOrderTimeRiskRecheck: boolean;
+        requiresExplicitApproval: boolean;
+        nextOwner: string;
+        orderSubmissionPerformed: boolean;
+        financialMutationPerformed: boolean;
+      };
+      planPrepared: boolean;
+      privateAccountReadPerformed: boolean;
+      financialMutationPerformed: boolean;
+      orderSubmitted: boolean;
+      orderCanceled: boolean;
+      orderAmended: boolean;
+      privateTradingMutationSent: boolean;
+      executionAuthority: string;
+    };
+    assert.equal(reads, 2);
+    assert.equal(preparedBody.canonicalExitPlan.schemaVersion, 'ai-chart-canonical-exit-plan-v1');
+    assert.match(preparedBody.canonicalExitPlan.planFingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(preparedBody.canonicalExitPlan.previewFingerprint, body.preview.fingerprint);
+    assert.match(preparedBody.canonicalExitPlan.freshAccountFingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(preparedBody.canonicalExitPlan.provider, 'toss');
+    assert.equal(preparedBody.canonicalExitPlan.market, 'KR');
+    assert.equal(preparedBody.canonicalExitPlan.symbol, '005930');
+    assert.equal(preparedBody.canonicalExitPlan.side, 'sell');
+    assert.equal(preparedBody.canonicalExitPlan.quantity, 5);
+    assert.equal(preparedBody.canonicalExitPlan.percent, 25);
+    assert.equal(preparedBody.canonicalExitPlan.reduceOnly, true);
+    assert.equal(preparedBody.canonicalExitPlan.approvalEligible, false);
+    assert.ok(preparedBody.canonicalExitPlan.blockers.includes('LIVE_CONNECTION_NOT_CONFIGURED'));
+    assert.equal(preparedBody.canonicalExitPlan.requiresFreshAccountRecheckAtApproval, true);
+    assert.equal(preparedBody.canonicalExitPlan.requiresOrderTimeRiskRecheck, true);
+    assert.equal(preparedBody.canonicalExitPlan.requiresExplicitApproval, true);
+    assert.equal(preparedBody.canonicalExitPlan.nextOwner, 'CANONICAL_EXIT_APPROVAL_OWNER');
+    assert.equal(preparedBody.canonicalExitPlan.orderSubmissionPerformed, false);
+    assert.equal(preparedBody.canonicalExitPlan.financialMutationPerformed, false);
+    assert.equal(preparedBody.planPrepared, true);
+    assert.equal(preparedBody.privateAccountReadPerformed, true);
+    assert.equal(preparedBody.financialMutationPerformed, false);
+    assert.equal(preparedBody.orderSubmitted, false);
+    assert.equal(preparedBody.orderCanceled, false);
+    assert.equal(preparedBody.orderAmended, false);
+    assert.equal(preparedBody.privateTradingMutationSent, false);
+    assert.equal(preparedBody.executionAuthority, 'NONE');
   } finally {
     setTradeExitPreviewReadersFactoryForTests(null);
     await close(server);
