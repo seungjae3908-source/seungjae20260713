@@ -33,7 +33,9 @@ export function createCanonicalTranscriptInvoker({provider,model,freeTierReviewe
       assertIsolated();
       const url=typeof input==='string'?input:input instanceof URL?input.href:input.url;
       const expected=provider==='gemini'?`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`:'https://api.groq.com/openai/v1/chat/completions';
-      if(url!==expected || init?.method!=='POST' || typeof init.body!=='string' || calls!==0)reject('TEXT_PROVIDER_ROUTE_MISMATCH');
+      if(!init || url!==expected || init.method!=='POST' || typeof init.body!=='string' || calls!==0) {
+        return reject('TEXT_PROVIDER_ROUTE_MISMATCH');
+      }
       if(provider==='groq' && (JSON.parse(init.body) as {model?:string}).model!==model)reject('TEXT_PROVIDER_MODEL_MISMATCH');
       if(options.signal.aborted)reject('TEXT_PROVIDER_CANCELLED');
       calls++;
