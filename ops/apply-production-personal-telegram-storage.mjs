@@ -190,6 +190,9 @@ const migrationPaths = [
   'api-server/supabase/migrations/2026081501_personal_telegram_storage.sql',
   'api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql',
   'api-server/supabase/migrations/2026082701_personal_telegram_generic_outbox.sql',
+  'api-server/supabase/migrations/2026082702_telegram_signal_followup_ledger.sql',
+  'api-server/supabase/migrations/2026082703_personal_telegram_digest_outbox.sql',
+  'api-server/supabase/migrations/2026092503_telegram_signal_message_edit_state.sql',
 ];
 let migrationBodies;
 try {
@@ -299,6 +302,45 @@ begin
   ) then
     raise exception 'durable personal Telegram outbox constraints are missing';
   end if;
+
+  if to_regclass('public.telegram_signal_followup_ledger') is null then
+    raise exception 'Telegram signal followup ledger is missing';
+  end if;
+  if not (select relrowsecurity from pg_class where oid = 'public.telegram_signal_followup_ledger'::regclass) then
+    raise exception 'Telegram signal followup ledger RLS is not enabled';
+  end if;
+  if exists (
+    select 1 from information_schema.table_privileges privilege
+    where privilege.table_schema = 'public'
+      and privilege.table_name = 'telegram_signal_followup_ledger'
+      and privilege.grantee in ('PUBLIC', 'anon', 'authenticated')
+  ) then
+    raise exception 'Telegram signal followup ledger is exposed to an API role';
+  end if;
+  if not (
+    has_table_privilege('service_role', 'public.telegram_signal_followup_ledger', 'SELECT')
+    and has_table_privilege('service_role', 'public.telegram_signal_followup_ledger', 'INSERT')
+    and has_table_privilege('service_role', 'public.telegram_signal_followup_ledger', 'UPDATE')
+    and has_table_privilege('service_role', 'public.telegram_signal_followup_ledger', 'DELETE')
+  ) then
+    raise exception 'service role lacks Telegram signal followup ledger access';
+  end if;
+
+  select count(*) into missing_column_count
+  from unnest(array['telegram_message_id', 'telegram_message_kind', 'base_message_text']) as required(column_name)
+  where not exists (
+    select 1 from information_schema.columns candidate
+    where candidate.table_schema = 'public'
+      and candidate.table_name = 'telegram_signal_followup_ledger'
+      and candidate.column_name = required.column_name
+  );
+  if missing_column_count <> 0 then
+    raise exception 'Telegram edit-in-place columns are missing';
+  end if;
+
+  if to_regprocedure('public.append_personal_telegram_digest_item(uuid,uuid,text,timestamptz,jsonb,text,timestamptz)') is null then
+    raise exception 'personal Telegram digest append function is missing';
+  end if;
 end
 $production_personal_telegram_storage_verify$;
 
@@ -308,9 +350,12 @@ select json_build_object(
   'approved_target_sha', current_setting('app.approved_target_sha'),
   'production_project_match', true,
   'atomic_transaction', true,
-  'migrations_applied', 3,
-  'tables_verified', 4,
+  'migrations_applied', 6,
+  'tables_verified', 5,
   'generic_outbox_verified', true,
+  'signal_followup_verified', true,
+  'message_edit_state_verified', true,
+  'digest_outbox_verified', true,
   'canonical_preferences_verified', true,
   'api_roles_revoked', true,
   'policies_fail_closed', true,
@@ -376,9 +421,12 @@ if (artifact?.status !== 'passed'
   || artifact?.approved_target_sha !== approvedTargetSha
   || artifact?.production_project_match !== true
   || artifact?.atomic_transaction !== true
-  || artifact?.migrations_applied !== 3
-  || artifact?.tables_verified !== 4
+  || artifact?.migrations_applied !== 6
+  || artifact?.tables_verified !== 5
   || artifact?.generic_outbox_verified !== true
+  || artifact?.signal_followup_verified !== true
+  || artifact?.message_edit_state_verified !== true
+  || artifact?.digest_outbox_verified !== true
   || artifact?.policies_fail_closed !== true
   || artifact?.database_changed !== true
   || artifact?.credentials_recorded !== false

@@ -37,6 +37,7 @@ export type TelegramPhotoAttachment = {
 
 export interface TelegramAlertInput {
   type: TelegramAlertType;
+  title?: string;
   symbol?: string;
   market?: string;
   provider?: string;
@@ -61,8 +62,27 @@ export type TelegramAlertResult =
       skipped: 'NOT_CONFIGURED' | 'DUPLICATE' | 'COOLDOWN' | 'DELIVERY_FAILED';
     };
 
+export type TelegramMessageKind = 'TEXT' | 'PHOTO';
+
+export type TelegramDeliveryReceipt = {
+  messageId: number | null;
+  messageKind: TelegramMessageKind;
+  renderedText: string;
+};
+
+export type TelegramTrackedAlertResult =
+  | { ok: true; attempts: number; receipt: TelegramDeliveryReceipt }
+  | {
+      ok: false;
+      attempts: number;
+      skipped: 'NOT_CONFIGURED' | 'DUPLICATE' | 'COOLDOWN' | 'DELIVERY_FAILED';
+    };
+
 type TelegramSendResponse = {
   ok?: unknown;
+  result?: {
+    message_id?: unknown;
+  };
 };
 
 const deliveredAtByHash = new Map<string, number>();
@@ -127,19 +147,21 @@ function titleForType(type: TelegramAlertType): string {
 }
 
 export function renderTelegramAlert(input: TelegramAlertInput): string {
-  const lines = [`<b>${escapeTelegramHtml(titleForType(input.type))}</b>`];
-  if (input.symbol) lines.push(`종목: <code>${escapeTelegramHtml(input.symbol)}</code>`);
-  if (input.market) lines.push(`시장: ${escapeTelegramHtml(input.market)}`);
-  if (input.provider) lines.push(`Provider: ${escapeTelegramHtml(input.provider)}`);
+  const customTitle = typeof input.title === 'string' && input.title.trim()
+    ? input.title.trim().slice(0, 180)
+    : null;
+  const lines = [`<b>${escapeTelegramHtml(customTitle || titleForType(input.type))}</b>`];
+
+  if (!customTitle && input.symbol) lines.push(`<code>${escapeTelegramHtml(input.symbol)}</code>${input.market ? ` · ${escapeTelegramHtml(input.market)}` : ''}`);
+  if (input.provider) lines.push(`${escapeTelegramHtml(input.provider)}`);
 
   const currentPrice = formatNumber(input.currentPrice);
-  if (currentPrice) lines.push(`현재가: ${escapeTelegramHtml(currentPrice)}`);
+  if (currentPrice) lines.push(`현재가 ${escapeTelegramHtml(currentPrice)}`);
   const targetPrice = formatNumber(input.targetPrice);
-  if (targetPrice) lines.push(`기준가: ${escapeTelegramHtml(targetPrice)}`);
+  if (targetPrice) lines.push(`기준가 ${escapeTelegramHtml(targetPrice)}`);
 
-  if (input.details) lines.push(`내용: ${escapeTelegramHtml(input.details)}`);
-  if (input.timestamp) lines.push(`시각: ${escapeTelegramHtml(input.timestamp)}`);
-  lines.push('실주문 실행 기능은 포함되지 않습니다.');
+  if (input.details) lines.push(escapeTelegramHtml(input.details));
+  if (input.timestamp && !customTitle) lines.push(escapeTelegramHtml(input.timestamp));
   return lines.join('\n').slice(0, TELEGRAM_TEXT_LIMIT);
 }
 
@@ -227,12 +249,20 @@ async function sendOnce(
   text: string,
   input: TelegramAlertInput,
   attempt: number,
-): Promise<{ delivered: boolean; attempts: number }> {
+): Promise<{
+  delivered: boolean;
+  attempts: number;
+  messageId: number | null;
+  messageKind: TelegramMessageKind;
+  renderedText: string;
+}> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     const keyboard = telegramInlineKeyboard(input.buttons);
     const photo = safePhoto(input.photo);
+    const messageKind: TelegramMessageKind = photo ? 'PHOTO' : 'TEXT';
+    const renderedText = text.slice(0, photo ? TELEGRAM_CAPTION_LIMIT : TELEGRAM_TEXT_LIMIT);
     const endpoint = photo ? 'sendPhoto' : 'sendMessage';
     let body: BodyInit;
     let headers: HeadersInit;
@@ -240,7 +270,7 @@ async function sendOnce(
     if (photo?.bytes) {
       const form = new FormData();
       form.append('chat_id', destination);
-      form.append('caption', text.slice(0, TELEGRAM_CAPTION_LIMIT));
+      form.append('caption', renderedText);
       form.append('parse_mode', 'HTML');
       form.append('protect_content', 'true');
       if (keyboard) form.append('reply_markup', JSON.stringify(keyboard));
@@ -254,13 +284,13 @@ async function sendOnce(
         ? {
             chat_id: destination,
             photo: photo.url,
-            caption: text.slice(0, TELEGRAM_CAPTION_LIMIT),
+            caption: renderedText,
             parse_mode: 'HTML',
             protect_content: true,
           }
         : {
             chat_id: destination,
-            text,
+            text: renderedText,
             parse_mode: 'HTML',
             protect_content: true,
             link_preview_options: { is_disabled: input.linkPreview !== true },
@@ -282,30 +312,60 @@ async function sendOnce(
       await sleep(delay);
       return sendOnce(botToken, destination, text, input, attempt + 1);
     }
-    if (!response.ok) return { delivered: false, attempts: attempt + 1 };
+    if (!response.ok) {
+      return {
+        delivered: false,
+        attempts: attempt + 1,
+        messageId: null,
+        messageKind,
+        renderedText,
+      };
+    }
 
     let result: TelegramSendResponse;
     try {
       result = (await response.json()) as TelegramSendResponse;
     } catch {
-      return { delivered: false, attempts: attempt + 1 };
+      return {
+        delivered: false,
+        attempts: attempt + 1,
+        messageId: null,
+        messageKind,
+        renderedText,
+      };
     }
-    return { delivered: result.ok === true, attempts: attempt + 1 };
+    const rawMessageId = result.result?.message_id;
+    const messageId = typeof rawMessageId === 'number' && Number.isInteger(rawMessageId) && rawMessageId > 0
+      ? rawMessageId
+      : null;
+    return {
+      delivered: result.ok === true,
+      attempts: attempt + 1,
+      messageId,
+      messageKind,
+      renderedText,
+    };
   } catch {
     if (attempt < MAX_RETRIES) {
       clearTimeout(timeout);
       await sleep(300 * (attempt + 1));
       return sendOnce(botToken, destination, text, input, attempt + 1);
     }
-    return { delivered: false, attempts: attempt + 1 };
+    return {
+      delivered: false,
+      attempts: attempt + 1,
+      messageId: null,
+      messageKind: safePhoto(input.photo) ? 'PHOTO' : 'TEXT',
+      renderedText: text.slice(0, safePhoto(input.photo) ? TELEGRAM_CAPTION_LIMIT : TELEGRAM_TEXT_LIMIT),
+    };
   } finally {
     clearTimeout(timeout);
   }
 }
 
-export async function sendTelegramAlert(
+export async function sendTelegramAlertWithReceipt(
   input: TelegramAlertInput,
-): Promise<TelegramAlertResult> {
+): Promise<TelegramTrackedAlertResult> {
   const botToken = token();
   const destination = destinationFor(input);
   if (!botToken || !destination) {
@@ -354,11 +414,104 @@ export async function sendTelegramAlert(
     const deliveredAt = Date.now();
     deliveredAtByHash.set(hash, deliveredAt);
     deliveredAtByCooldownKey.set(cooldownKey, deliveredAt);
-    return { ok: true, attempts: result.attempts };
+    return {
+      ok: true,
+      attempts: result.attempts,
+      receipt: {
+        messageId: result.messageId,
+        messageKind: result.messageKind,
+        renderedText: result.renderedText,
+      },
+    };
   } catch {
     logger.warn({ alertType: input.type }, 'telegram alert delivery failed');
     return { ok: false, attempts: 0, skipped: 'DELIVERY_FAILED' };
   } finally {
     inFlightHashes.delete(hash);
   }
+}
+
+export async function sendTelegramAlert(
+  input: TelegramAlertInput,
+): Promise<TelegramAlertResult> {
+  const result = await sendTelegramAlertWithReceipt(input);
+  return result.ok
+    ? { ok: true, attempts: result.attempts }
+    : result;
+}
+
+export async function editTelegramMessage(input: {
+  destinationChatId: string;
+  messageId: number;
+  messageKind: TelegramMessageKind;
+  text: string;
+}): Promise<TelegramAlertResult> {
+  const botToken = token();
+  const destination = input.destinationChatId.trim();
+  if (!botToken || !destination || !Number.isInteger(input.messageId) || input.messageId <= 0) {
+    return { ok: false, attempts: 0, skipped: 'NOT_CONFIGURED' };
+  }
+
+  const renderedText = input.text.slice(
+    0,
+    input.messageKind === 'PHOTO' ? TELEGRAM_CAPTION_LIMIT : TELEGRAM_TEXT_LIMIT,
+  );
+
+  const run = async (attempt: number): Promise<TelegramAlertResult> => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const endpoint = input.messageKind === 'PHOTO' ? 'editMessageCaption' : 'editMessageText';
+      const payload: Record<string, unknown> = {
+        chat_id: destination,
+        message_id: input.messageId,
+        parse_mode: 'HTML',
+      };
+      if (input.messageKind === 'PHOTO') payload.caption = renderedText;
+      else {
+        payload.text = renderedText;
+        payload.link_preview_options = { is_disabled: true };
+      }
+
+      const response = await fetch(
+        `${TELEGRAM_API_BASE_URL}/bot${encodeURIComponent(botToken)}/${endpoint}`,
+        {
+          method: 'POST',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        },
+      );
+
+      const retryable = response.status === 429 || response.status >= 500;
+      if (retryable && attempt < MAX_RETRIES) {
+        const delay = retryDelay(response, attempt);
+        clearTimeout(timeout);
+        await sleep(delay);
+        return run(attempt + 1);
+      }
+      if (!response.ok) return { ok: false, attempts: attempt + 1, skipped: 'DELIVERY_FAILED' };
+
+      let result: TelegramSendResponse;
+      try {
+        result = (await response.json()) as TelegramSendResponse;
+      } catch {
+        return { ok: false, attempts: attempt + 1, skipped: 'DELIVERY_FAILED' };
+      }
+      return result.ok === true
+        ? { ok: true, attempts: attempt + 1 }
+        : { ok: false, attempts: attempt + 1, skipped: 'DELIVERY_FAILED' };
+    } catch {
+      if (attempt < MAX_RETRIES) {
+        clearTimeout(timeout);
+        await sleep(300 * (attempt + 1));
+        return run(attempt + 1);
+      }
+      return { ok: false, attempts: attempt + 1, skipped: 'DELIVERY_FAILED' };
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
+  return run(0);
 }
