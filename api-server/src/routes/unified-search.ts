@@ -6,6 +6,7 @@ import {
   refreshUnifiedAssetSearchIndex,
   searchUnifiedAssets,
   startUnifiedAssetSearchRefreshTimer,
+  type UnifiedSearchResponse,
 } from '../services/unified-asset-search.service';
 import {
   buildFuturesSearchFallback,
@@ -68,18 +69,12 @@ function canUseUsMetadataFallback(asset: 'all' | UnifiedAssetType, market: Unifi
   return (asset === 'all' || asset === 'stock') && market === 'US';
 }
 
-type MetadataFallbackResponse =
-  | NonNullable<ReturnType<typeof buildKrSearchFallback>>
-  | NonNullable<ReturnType<typeof buildUsSearchFallback>>
-  | NonNullable<ReturnType<typeof buildSpotSearchFallback>>
-  | NonNullable<ReturnType<typeof buildFuturesSearchFallback>>;
-
 function buildSingleMarketMetadataFallback(
   q: string,
   asset: 'all' | UnifiedAssetType,
   market: UnifiedSearchMarket,
   limit: number,
-): MetadataFallbackResponse | null {
+): UnifiedSearchResponse | null {
   if (canUseKrMetadataFallback(asset, market)) return buildKrSearchFallback(q, limit);
   if (canUseUsMetadataFallback(asset, market)) return buildUsSearchFallback(q, limit);
   if (canUseSpotMetadataFallback(asset, market)) return buildSpotSearchFallback(q, limit);
@@ -110,10 +105,10 @@ function buildMetadataFallback(
   asset: 'all' | UnifiedAssetType,
   market: UnifiedSearchMarket | null,
   limit: number,
-) {
+): UnifiedSearchResponse | null {
   const fallbacks = fallbackMarketsForRequest(asset, market)
     .map((fallbackMarket) => buildSingleMarketMetadataFallback(q, asset, fallbackMarket, limit))
-    .filter((value): value is MetadataFallbackResponse => value != null);
+    .filter((value): value is UnifiedSearchResponse => value != null);
 
   if (fallbacks.length === 0) return null;
   if (market) return fallbacks[0];
