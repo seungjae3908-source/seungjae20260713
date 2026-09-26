@@ -454,6 +454,159 @@ test('scanner shows server decision changes and only exposes cost-adjusted EV wi
   await expect(performance.getByTestId('scanner-net-ev')).toHaveText('0.84%');
 });
 
+test('stock Signal Detail shows official flow evidence truthfully without changing Scanner authority', async ({ page }) => {
+  const mutations: string[] = [];
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() !== 'GET' && forbiddenRequest.test(path)) mutations.push(`${request.method()} ${path}`);
+  });
+
+  await installBaseMocks(page, []);
+  await page.route('**/api/market/flow**', (route) => {
+    const url = new URL(route.request().url());
+    const market = url.searchParams.get('market') === 'US' ? 'US' : 'KR';
+    const symbol = url.searchParams.get('symbol') ?? '';
+    const evidence = market === 'US'
+      ? {
+        schemaVersion: 'scanner-stock-flow-evidence-v1',
+        market: 'US',
+        symbol,
+        status: 'READY',
+        observedAt: '2026-09-26T08:00:00.000Z',
+        shortSale: {
+          status: 'READY',
+          tradeDate: '2026-09-24',
+          shortVolume: 300,
+          shortExemptVolume: 30,
+          totalVolume: 1000,
+          shortVolumeRatioPercent: 30,
+        },
+        shortInterest: {
+          status: 'READY',
+          settlementDate: '2026-09-15',
+          currentShortPosition: 1200,
+          previousShortPosition: 1100,
+          changePercent: 9.09,
+          averageDailyVolume: 400,
+          daysToCover: 3,
+        },
+        institutional: {
+          status: 'NOT_CONNECTED',
+          asOf: null,
+          note: 'SEC Form 13F point-in-time ingest가 아직 연결되지 않았습니다.',
+        },
+        foreignFlow: {
+          status: 'NOT_APPLICABLE',
+          asOf: null,
+          note: '미국 시장에서 국내식 외국인 순매수 지표를 임의 변환하지 않습니다.',
+        },
+        shortCover: {
+          status: 'NOT_INFERRED',
+          note: 'Short volume과 short interest만으로 숏커버를 단정하지 않습니다.',
+        },
+        sources: [
+          { provider: 'FINRA', dataset: 'Reg SHO Daily Short Sale Volume', asOf: '2026-09-24', url: 'https://developer.finra.org/docs' },
+          { provider: 'FINRA', dataset: 'Consolidated Short Interest', asOf: '2026-09-15', url: 'https://developer.finra.org/docs' },
+        ],
+        warnings: [],
+        safety: {
+          evidenceOnly: true,
+          scoreImpact: 0,
+          rankImpact: 0,
+          directionImpact: 0,
+          executionAuthority: 'NONE',
+          orderAllowed: false,
+        },
+      }
+      : {
+        schemaVersion: 'scanner-stock-flow-evidence-v1',
+        market: 'KR',
+        symbol,
+        status: 'NOT_CONNECTED',
+        observedAt: '2026-09-26T08:00:00.000Z',
+        shortSale: {
+          status: 'NOT_CONNECTED',
+          tradeDate: null,
+          shortVolume: null,
+          shortExemptVolume: null,
+          totalVolume: null,
+          shortVolumeRatioPercent: null,
+        },
+        shortInterest: {
+          status: 'NOT_CONNECTED',
+          settlementDate: null,
+          currentShortPosition: null,
+          previousShortPosition: null,
+          changePercent: null,
+          averageDailyVolume: null,
+          daysToCover: null,
+        },
+        institutional: {
+          status: 'NOT_CONNECTED',
+          asOf: null,
+          note: 'KRX 공식 기관 수급 Provider 연결이 필요합니다.',
+        },
+        foreignFlow: {
+          status: 'NOT_CONNECTED',
+          asOf: null,
+          note: 'KRX 공식 외국인 수급 Provider 연결이 필요합니다.',
+        },
+        shortCover: {
+          status: 'NOT_INFERRED',
+          note: '공식 원자료 없이 숏커버를 추정하지 않습니다.',
+        },
+        sources: [
+          { provider: 'KRX', dataset: 'KRX official stock market data feed', asOf: null, url: 'https://openapi.krx.co.kr/contents/OPP/DATA/OPPDATA002.jsp' },
+        ],
+        warnings: ['KRX 공식 수급 데이터 provider가 현재 앱에 연결되지 않았습니다.'],
+        safety: {
+          evidenceOnly: true,
+          scoreImpact: 0,
+          rankImpact: 0,
+          directionImpact: 0,
+          executionAuthority: 'NONE',
+          orderAllowed: false,
+        },
+      };
+    return fulfill(route, { ok: true, evidence, orderSubmitted: false, exchangeRequestSent: false });
+  });
+  await page.route('**/api/market/scan**', (route) => {
+    const market = new URL(route.request().url()).searchParams.get('market') === 'US' ? 'US' : 'KR';
+    return fulfill(route, scannerResponse({
+      market,
+      symbol: market === 'US' ? 'AAPL' : '005930',
+      name: market === 'US' ? 'Apple' : '삼성전자',
+    }));
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/__phase11-technical-workspace-e2e');
+  await page.getByRole('button', { name: /^삼성전자 005930 · KR · STOCK$/ }).click();
+  let detail = page.getByTestId('scanner-mobile-sheet').getByTestId('signal-detail');
+  await detail.getByRole('tab', { name: '근거', exact: true }).click();
+  let flow = detail.getByTestId('scanner-stock-flow-evidence');
+  await expect(flow).toContainText('공식 Provider 미연결');
+  await expect(flow).toContainText('기관 근거 · 미연결');
+  await expect(flow).toContainText('외국인 근거 · 미연결');
+  await expect(flow).toContainText('숏커버 · 추정하지 않음');
+  await expect(flow).toContainText('Score 0 · Rank 0 · Direction 0 · 실행 권한 NONE');
+
+  await page.getByTestId('scanner-mobile-sheet').getByRole('button', { name: 'Signal Detail 닫기' }).click();
+  await page.getByRole('region', { name: '검색 시장' }).getByRole('button', { name: /^미국주식/ }).click();
+  await page.getByRole('button', { name: /^Apple AAPL/ }).click();
+  detail = page.getByTestId('scanner-mobile-sheet').getByTestId('signal-detail');
+  await detail.getByRole('tab', { name: '근거', exact: true }).click();
+  flow = detail.getByTestId('scanner-stock-flow-evidence');
+  await expect(flow).toContainText('공식 데이터 정상');
+  await expect(flow).toContainText('30%');
+  await expect(flow).toContainText('1,200');
+  await expect(flow).toContainText('9.09%');
+  await expect(flow).toContainText('Days to Cover');
+  await expect(flow).toContainText('숏커버 · 추정하지 않음');
+  await expect(flow.getByRole('link', { name: /FINRA · Reg SHO Daily Short Sale Volume/ })).toHaveAttribute('href', 'https://developer.finra.org/docs');
+  expect(mutations).toEqual([]);
+});
+
 test('scanner source has no sub-12px labels or horizontal mobile detail tabs', async () => {
   const fs = await import('node:fs/promises');
   const source = await fs.readFile(new URL('../src/pages/signal-scanner.tsx', import.meta.url), 'utf8');
