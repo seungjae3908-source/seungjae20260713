@@ -414,6 +414,37 @@ function exitExecutionPackageIdentity(input: {
   ].join(':')).digest('hex');
 }
 
+const EXIT_PROVIDER_SUBMISSION_GATE_TTL_MS = 2_000;
+
+function exitProviderSubmissionGateIdentity(input: {
+  userId: string;
+  executionPackageId: string;
+  provider: AccountProvider;
+  market: string;
+  symbol: string;
+  percent: number;
+  exitQuantity: number;
+  side: 'buy' | 'sell';
+  evaluatedAt: string;
+  expiresAt: string;
+  blockers: string[];
+}) {
+  return createHash('sha256').update([
+    'ai-chart-exit-provider-submission-gate-v1',
+    input.userId,
+    input.executionPackageId,
+    input.provider,
+    input.market,
+    normalizedExitSymbol(input.symbol),
+    String(input.percent),
+    String(input.exitQuantity),
+    input.side,
+    input.evaluatedAt,
+    input.expiresAt,
+    [...input.blockers].sort().join(','),
+  ].join(':')).digest('hex');
+}
+
 function exitOpenOrderConflicts(
   openOrders: Array<{ market: string | null; symbol: string | null; side: string | null }> | null,
   market: string,
@@ -2415,6 +2446,216 @@ router.post('/positions/exit-execution-package', async (req: AuthenticatedReques
     req.removeListener('aborted', abort);
     res.removeListener('close', abort);
   }
+});
+
+router.post('/positions/exit-submission-gate', async (req: AuthenticatedRequest, res) => {
+  const userId = req.member?.id ?? '';
+  if (!userId) return res.status(401).json({ ok: false, error: 'LOGIN_REQUIRED' });
+  if (req.body?.confirmed !== true) {
+    return res.status(409).json({
+      ok: false,
+      error: 'EXPLICIT_EXIT_SUBMISSION_GATE_CONFIRMATION_REQUIRED',
+      gateEvaluated: false,
+      providerMutationAllowed: false,
+      providerRequestPrepared: false,
+      financialMutationPerformed: false,
+      orderSubmitted: false,
+      privateTradingMutationSent: false,
+      executionAuthority: 'NONE',
+    });
+  }
+
+  let provider: AccountProvider;
+  let market: string;
+  let symbol: string;
+  let percent: number;
+  let executionPackageId: string;
+  let preflightIntentId: string;
+  let riskIntentId: string;
+  let approvalIntentId: string;
+  let planId: string;
+  let exitDraftId: string;
+  let positionQuantity: number | null;
+  let availableQuantity: number;
+  let exitQuantity: number;
+  let side: 'buy' | 'sell';
+  let preflightCheckedAt: string;
+  let packageCheckedAt: string;
+  let preflightReferencePrice: number;
+  let packageReferencePrice: number;
+  let issuedAt: string;
+  let packageExpiresAt: string;
+  let packageBlockers: string[];
+
+  try {
+    provider = exitPreviewProvider(req.body?.provider);
+    market = String(req.body?.market ?? '').trim().toUpperCase();
+    symbol = String(req.body?.symbol ?? '').trim().toUpperCase();
+    percent = Number(req.body?.percent);
+    executionPackageId = String(req.body?.executionPackageId ?? '').trim().toLowerCase();
+    preflightIntentId = String(req.body?.preflightIntentId ?? '').trim().toLowerCase();
+    riskIntentId = String(req.body?.riskIntentId ?? '').trim().toLowerCase();
+    approvalIntentId = String(req.body?.approvalIntentId ?? '').trim().toLowerCase();
+    planId = String(req.body?.planId ?? '').trim().toLowerCase();
+    exitDraftId = String(req.body?.exitDraftId ?? '').trim().toLowerCase();
+    positionQuantity = req.body?.positionQuantity == null ? null : Number(req.body.positionQuantity);
+    availableQuantity = Number(req.body?.availableQuantity);
+    exitQuantity = Number(req.body?.quantity);
+    side = String(req.body?.side ?? '').trim().toLowerCase() as 'buy' | 'sell';
+    preflightCheckedAt = String(req.body?.preflightCheckedAt ?? '').trim();
+    packageCheckedAt = String(req.body?.packageCheckedAt ?? '').trim();
+    preflightReferencePrice = Number(req.body?.preflightReferencePrice);
+    packageReferencePrice = Number(req.body?.packageReferencePrice);
+    issuedAt = String(req.body?.issuedAt ?? '').trim();
+    packageExpiresAt = String(req.body?.expiresAt ?? '').trim();
+    packageBlockers = Array.isArray(req.body?.blockers)
+      ? req.body.blockers.map((value: unknown) => String(value).trim()).filter(Boolean)
+      : [];
+
+    if (!['KR', 'US', 'UPBIT', 'BITGET'].includes(market)) throw new Error('EXIT_SUBMISSION_GATE_MARKET_UNSUPPORTED');
+    if (!normalizedExitSymbol(symbol)) throw new Error('EXIT_SUBMISSION_GATE_SYMBOL_REQUIRED');
+    if (![25, 50, 75, 100].includes(percent)) throw new Error('EXIT_SUBMISSION_GATE_PERCENT_UNSUPPORTED');
+    for (const [value, code] of [
+      [executionPackageId, 'EXIT_SUBMISSION_GATE_PACKAGE_ID_INVALID'],
+      [preflightIntentId, 'EXIT_SUBMISSION_GATE_PREFLIGHT_ID_INVALID'],
+      [riskIntentId, 'EXIT_SUBMISSION_GATE_RISK_ID_INVALID'],
+      [approvalIntentId, 'EXIT_SUBMISSION_GATE_APPROVAL_ID_INVALID'],
+      [planId, 'EXIT_SUBMISSION_GATE_PLAN_ID_INVALID'],
+      [exitDraftId, 'EXIT_SUBMISSION_GATE_DRAFT_ID_INVALID'],
+    ] as const) {
+      if (!/^[a-f0-9]{64}$/.test(value)) throw new Error(code);
+    }
+    if (positionQuantity != null && (!Number.isFinite(positionQuantity) || positionQuantity <= 0)) {
+      throw new Error('EXIT_SUBMISSION_GATE_POSITION_QUANTITY_INVALID');
+    }
+    if (!Number.isFinite(availableQuantity) || availableQuantity <= 0) {
+      throw new Error('EXIT_SUBMISSION_GATE_AVAILABLE_QUANTITY_INVALID');
+    }
+    if (!Number.isFinite(exitQuantity) || exitQuantity <= 0) {
+      throw new Error('EXIT_SUBMISSION_GATE_EXIT_QUANTITY_INVALID');
+    }
+    if (side !== 'buy' && side !== 'sell') throw new Error('EXIT_SUBMISSION_GATE_SIDE_INVALID');
+    if (!Number.isFinite(preflightReferencePrice) || preflightReferencePrice <= 0
+      || !Number.isFinite(packageReferencePrice) || packageReferencePrice <= 0) {
+      throw new Error('EXIT_SUBMISSION_GATE_REFERENCE_PRICE_INVALID');
+    }
+    for (const value of [preflightCheckedAt, packageCheckedAt, issuedAt, packageExpiresAt]) {
+      if (!Number.isFinite(Date.parse(value))) throw new Error('EXIT_SUBMISSION_GATE_TIMESTAMP_INVALID');
+    }
+    if (Date.parse(packageExpiresAt) <= Date.now()) throw new Error('EXIT_SUBMISSION_GATE_PACKAGE_EXPIRED');
+    if (req.body?.packageReady !== true || packageBlockers.length !== 0) {
+      throw new Error('EXIT_SUBMISSION_GATE_PACKAGE_NOT_READY');
+    }
+    if ((market === 'UPBIT' && provider !== 'upbit')
+      || (market === 'BITGET' && provider !== 'bitget')
+      || ((market === 'KR' || market === 'US') && provider !== 'toss' && provider !== 'kiwoom')) {
+      throw new Error('EXIT_SUBMISSION_GATE_PROVIDER_MARKET_MISMATCH');
+    }
+
+    const claimedPackageId = exitExecutionPackageIdentity({
+      userId,
+      preflightIntentId,
+      riskIntentId,
+      approvalIntentId,
+      planId,
+      exitDraftId,
+      provider,
+      market,
+      symbol,
+      percent,
+      positionQuantity,
+      availableQuantity,
+      exitQuantity,
+      side,
+      preflightCheckedAt,
+      packageCheckedAt,
+      preflightReferencePrice,
+      packageReferencePrice,
+      issuedAt,
+      expiresAt: packageExpiresAt,
+      blockers: packageBlockers,
+    });
+    if (claimedPackageId !== executionPackageId) throw new Error('EXIT_SUBMISSION_GATE_PACKAGE_ID_MISMATCH');
+  } catch (error) {
+    return errorResponse(res, error);
+  }
+
+  const { repository } = context(req);
+  const [connection, policy, persistentGlobalStop] = await Promise.all([
+    repository.getConnection(userId, provider as TradingExchange),
+    repository.getPolicy(userId),
+    repository.getGlobalEmergencyStop(),
+  ]);
+  const executionReadiness = liveExecutionReadinessForConnection(
+    provider as TradingExchange,
+    connection,
+    credentialConfigurationStatus().encryptionConfigured,
+  );
+  const blockers = [...executionReadiness.blockers];
+  if (policy.emergencyStopped || persistentGlobalStop || process.env.TRADING_EMERGENCY_STOP === 'true') {
+    blockers.push('EXIT_SUBMISSION_GATE_EMERGENCY_STOP_ACTIVE');
+  }
+
+  // Draft-only boundary: this endpoint intentionally cannot prepare or submit a provider mutation.
+  blockers.push('DRAFT_PROVIDER_SUBMISSION_NOT_AUTHORIZED');
+  const uniqueBlockers = [...new Set(blockers)];
+  const evaluatedAt = new Date().toISOString();
+  const expiresAt = new Date(Date.parse(evaluatedAt) + EXIT_PROVIDER_SUBMISSION_GATE_TTL_MS).toISOString();
+  const gateId = exitProviderSubmissionGateIdentity({
+    userId,
+    executionPackageId,
+    provider,
+    market,
+    symbol,
+    percent,
+    exitQuantity,
+    side,
+    evaluatedAt,
+    expiresAt,
+    blockers: uniqueBlockers,
+  });
+
+  return res.json({
+    ok: true,
+    canonicalExitSubmissionGate: {
+      schemaVersion: 'ai-chart-exit-provider-submission-gate-v1',
+      state: 'LOCKED_DRAFT_ONLY',
+      gateId,
+      executionPackageId,
+      provider,
+      market,
+      symbol: normalizedExitSymbol(symbol),
+      accountMode: 'live',
+      orderType: 'market',
+      side,
+      quantity: exitQuantity,
+      percent,
+      reduceOnly: true,
+      evaluatedAt,
+      expiresAt,
+      blockers: uniqueBlockers,
+      packageValidated: true,
+      connectionReadinessChecked: true,
+      finalProviderOrderbookRiskRequired: true,
+      separateLiveExecutionAuthorizationRequired: true,
+      providerMutationAllowed: false,
+      providerRequestPrepared: false,
+      orderSubmissionPerformed: false,
+      financialMutationPerformed: false,
+      executionAuthority: 'NONE',
+      nextOwner: 'CANONICAL_EXIT_PROVIDER_SUBMISSION_OWNER',
+    },
+    executionReadiness,
+    gateEvaluated: true,
+    providerMutationAllowed: false,
+    providerRequestPrepared: false,
+    financialMutationPerformed: false,
+    orderSubmitted: false,
+    orderCanceled: false,
+    orderAmended: false,
+    privateTradingMutationSent: false,
+    executionAuthority: 'NONE',
+  });
 });
 
 router.get('/orders', async (req: AuthenticatedRequest, res) => {
