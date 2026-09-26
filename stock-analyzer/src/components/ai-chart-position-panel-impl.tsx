@@ -302,9 +302,15 @@ function canCancelOrder(item: OrderDashboardItem): boolean {
     && item.cancelable !== false;
 }
 
+function isUsStockPriceOnlyAmend(item: OrderDashboardItem): boolean {
+  return item.market?.trim().toUpperCase() === 'US'
+    && (item.exchange === 'toss' || item.exchange === 'kiwoom');
+}
+
 function canAmendOrder(item: OrderDashboardItem): boolean {
   return item.orderType === 'limit'
-    && ['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED'].includes(item.state)
+    && item.state === 'ACCEPTED'
+    && item.filledQuantity === 0
     && item.cancelable !== false
     && finite(item.currentLimitPrice) != null;
 }
@@ -637,12 +643,15 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     if (!canAmendOrder(item) || orderActionId) return;
     const draft = amendDrafts[item.id];
     const price = positiveText(draft?.price ?? '');
-    const quantity = positiveText(draft?.quantity ?? '');
-    if (price == null || quantity == null) {
-      setOrderMessage('정정 가격과 수량을 양수로 입력해야 합니다.');
+    const priceOnly = isUsStockPriceOnlyAmend(item);
+    const quantity = priceOnly ? null : positiveText(draft?.quantity ?? '');
+    if (price == null || (!priceOnly && quantity == null)) {
+      setOrderMessage(priceOnly ? '정정 가격을 양수로 입력해야 합니다.' : '정정 가격과 수량을 양수로 입력해야 합니다.');
       return;
     }
-    const confirmed = window.confirm(`${symbol} 주문을 가격 ${price}, 수량 ${quantity}로 정정하시겠습니까?`);
+    const confirmed = window.confirm(priceOnly
+      ? `${symbol} 미국주식 주문 가격을 ${price}로 정정하시겠습니까? 수량은 기존 잔량을 유지합니다.`
+      : `${symbol} 주문을 가격 ${price}, 수량 ${quantity}로 정정하시겠습니까?`);
     if (!confirmed) return;
     setOrderActionId(item.id);
     setOrderMessage('정정 요청을 처리하고 있습니다.');
@@ -843,7 +852,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                               <span className="rounded-full bg-secondary px-2 py-1 text-[8px] font-black">{item.accountMode ?? '미확인'}</span>
                             </div>
                             {canAmendOrder(item) ? (
-                              <div className="mt-2 grid grid-cols-2 gap-2">
+                              <div className={`mt-2 grid gap-2 ${isUsStockPriceOnlyAmend(item) ? 'grid-cols-1' : 'grid-cols-2'}`}>
                                 <input
                                   aria-label="정정 가격"
                                   inputMode="decimal"
@@ -855,18 +864,28 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                                   className="min-h-10 rounded-lg border border-card-border bg-background px-2 text-[10px] font-black"
                                   placeholder="정정 가격"
                                 />
-                                <input
-                                  aria-label="정정 수량"
-                                  inputMode="decimal"
-                                  value={draft.quantity}
-                                  onChange={(event) => setAmendDrafts((current) => ({
-                                    ...current,
-                                    [item.id]: { ...draft, quantity: event.target.value },
-                                  }))}
-                                  className="min-h-10 rounded-lg border border-card-border bg-background px-2 text-[10px] font-black"
-                                  placeholder="정정 수량"
-                                />
+                                {isUsStockPriceOnlyAmend(item) ? (
+                                  <p className="rounded-lg bg-secondary/50 px-2 py-2 text-[8px] font-bold text-muted-foreground">
+                                    미국주식은 가격만 정정 · 수량은 기존 잔량 유지
+                                  </p>
+                                ) : (
+                                  <input
+                                    aria-label="정정 수량"
+                                    inputMode="decimal"
+                                    value={draft.quantity}
+                                    onChange={(event) => setAmendDrafts((current) => ({
+                                      ...current,
+                                      [item.id]: { ...draft, quantity: event.target.value },
+                                    }))}
+                                    className="min-h-10 rounded-lg border border-card-border bg-background px-2 text-[10px] font-black"
+                                    placeholder="정정 수량"
+                                  />
+                                )}
                               </div>
+                            ) : item.state === 'PARTIALLY_FILLED' || item.filledQuantity > 0 ? (
+                              <p className="mt-2 text-[8px] font-bold text-muted-foreground">
+                                부분체결된 주문은 정정하지 않고 미체결 잔량 취소 후 새 계획으로 다시 검증합니다.
+                              </p>
                             ) : null}
                             <div className="mt-2 grid grid-cols-2 gap-2">
                               <button
