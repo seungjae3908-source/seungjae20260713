@@ -77,6 +77,7 @@ async function setup() {
   process.env.REAL_ORDER_ENABLED = 'true';
   process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
   process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+  process.env.executionAuthority = 'MANUAL';
   const repository = new InMemoryTradingRepository();
   const p = plan();
   const o = order(p);
@@ -98,6 +99,7 @@ async function setupToss() {
   process.env.REAL_ORDER_ENABLED = 'true';
   process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
   process.env.TOSS_LIVE_ORDER_ENABLED = 'true';
+  process.env.executionAuthority = 'MANUAL';
 
   const repository = new InMemoryTradingRepository();
   const base = plan();
@@ -149,7 +151,7 @@ async function setupToss() {
 
 test.afterEach(() => {
   globalThis.fetch = nativeFetch;
-  for (const key of ['TRADING_CREDENTIAL_MASTER_KEY','ORDER_EXECUTION_ENABLED','LIVE_TRADING_ACTIVATION_APPROVED','REAL_ORDER_ENABLED','PRIVATE_TRADING_API_ALLOWED','UPBIT_LIVE_ORDER_ENABLED','TOSS_LIVE_ORDER_ENABLED']) {
+  for (const key of ['TRADING_CREDENTIAL_MASTER_KEY','ORDER_EXECUTION_ENABLED','LIVE_TRADING_ACTIVATION_APPROVED','REAL_ORDER_ENABLED','PRIVATE_TRADING_API_ALLOWED','UPBIT_LIVE_ORDER_ENABLED','TOSS_LIVE_ORDER_ENABLED','executionAuthority']) {
     delete process.env[key];
   }
 });
