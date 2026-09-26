@@ -259,8 +259,9 @@ test('admin account panel shows Toss Upbit Bitget only and remains read-only', a
   await expect(page.getByTestId('connection-upbit')).toContainText('Upbit');
   await expect(page.getByTestId('connection-bitget')).toContainText('Bitget');
   await expect(page.getByTestId('connection-kiwoom')).toHaveCount(0);
-  await expect(panel).toContainText('READ-ONLY');
-  await expect(panel).toContainText('실주문/취소/이체/출금 0건');
+  await expect(panel).toContainText('조회 전용');
+  await expect(panel).not.toContainText('실주문/취소/이체/출금 0건');
+  await expect(panel).not.toContainText('READ-ONLY');
   await assertNoHorizontalOverflow(page, 'account panel mobile');
   await page.setViewportSize({ width: 1440, height: 900 });
   await assertNoHorizontalOverflow(page, 'account panel desktop');
