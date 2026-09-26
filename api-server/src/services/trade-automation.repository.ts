@@ -30,6 +30,7 @@ export interface TradingRepository {
   getConnections(userId: string): Promise<ExchangeConnection[]>;
   getConnection(userId: string, exchange: TradingExchange): Promise<ExchangeConnection | null>;
   saveConnection(connection: ExchangeConnection): Promise<void>;
+  deleteConnection(userId: string, exchange: TradingExchange): Promise<void>;
   findPlanByIdempotency(userId: string, key: string): Promise<TradingPlan | null>;
   getPlan(userId: string, id: string): Promise<TradingPlan | null>;
   listPlans(userId: string): Promise<TradingPlan[]>;
@@ -71,6 +72,7 @@ function normalizedOrder(order: TradingOrder): TradingOrder {
     remainingQuantity: order.remainingQuantity ?? (order.requestedQuantity == null
       ? null
       : Math.max(0, order.requestedQuantity - order.filledQuantity)),
+    currentLimitPrice: order.currentLimitPrice ?? null,
     fills: copy(order.fills ?? []),
     feeAmount: order.feeAmount ?? null,
     feeCurrency: order.feeCurrency ?? null,
@@ -81,11 +83,14 @@ function normalizedOrder(order: TradingOrder): TradingOrder {
     nextRetryAt: order.nextRetryAt ?? null,
     lastReconciledAt: order.lastReconciledAt ?? null,
     manualReviewRequired: order.manualReviewRequired === true,
+    cancelOperationId: order.cancelOperationId ?? null,
     executionClaimId: order.executionClaimId ?? null,
     recoveryLeaseOwner: order.recoveryLeaseOwner ?? null,
     recoveryLeaseUntil: order.recoveryLeaseUntil ?? null,
     protectionStatus: order.protectionStatus ?? 'NOT_REQUIRED',
     protectionErrorCode: order.protectionErrorCode ?? null,
+    amendments: copy(order.amendments ?? []),
+    lastAmendRequestId: order.lastAmendRequestId ?? null,
   };
 }
 
@@ -108,6 +113,7 @@ export class InMemoryTradingRepository implements TradingRepository {
     return value ? copy(value) : null;
   }
   async saveConnection(connection: ExchangeConnection) { this.connections.set(`${connection.userId}:${connection.exchange}`, copy(connection)); }
+  async deleteConnection(userId: string, exchange: TradingExchange) { this.connections.delete(`${userId}:${exchange}`); }
   async findPlanByIdempotency(userId: string, key: string) {
     const value = [...this.plans.values()].find((item) => item.userId === userId && item.idempotencyKey === key);
     return value ? copy(value) : null;
@@ -350,6 +356,12 @@ function createScopedTradingRepository(
         last_verified_at: connection.lastVerifiedAt, last_error_code: connection.lastErrorCode,
         updated_at: connection.updatedAt,
       }, { onConflict: 'user_id,exchange' });
+      if (error) throw databaseError();
+    },
+    async deleteConnection(userId, exchange) {
+      owned(userId);
+      const { error } = await secureClient().from('trade_exchange_connections')
+        .delete().eq('user_id', userId).eq('exchange', exchange);
       if (error) throw databaseError();
     },
     async findPlanByIdempotency(userId, key) { return selectPlanByIdempotency(userId, key); },
