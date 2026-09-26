@@ -10,8 +10,9 @@ The current-main runtime proof must independently verify these implementation pa
 - #550 bounded formula compiler: `market-prediction-lab/src/autonomous-strategy-formula-generator-v1.js`
 - #690 execution-equivalent canonical backtester: `market-prediction-lab/src/independent-strategy-backtest.js`
 - #547 canonical statistical firewall: `market-prediction-lab/src/global-strategy-statistical-firewall-v1.js`
+- #547 → #551 tournament adapter: `market-prediction-lab/src/research-tournament-statistical-firewall-adapter-v1.js`
 
-Every dependency row is exact-SHA bound and carries the Git blob identity. A configured owner reference is not sufficient when its implementation is absent from the exact current SHA. Missing #547 must return `CANONICAL_STATISTICAL_FIREWALL_NOT_PRESENT_ON_CURRENT_SHA` with compilerRuns=0 and backtestRuns=0.
+Every dependency row is exact-SHA bound and carries the Git blob identity. A configured owner reference is not sufficient when its implementation is absent from the exact current SHA. Missing #547 core must return `CANONICAL_STATISTICAL_FIREWALL_NOT_PRESENT_ON_CURRENT_SHA`; missing the #547→#551 adapter must return `TOURNAMENT_STATISTICAL_FIREWALL_ADAPTER_NOT_PRESENT_ON_CURRENT_SHA`. Both keep compilerRuns=0 and backtestRuns=0.
 
 The contract permits at most one bounded compiler run through owner #550 and one execution-equivalent canonical backtest run through owner #690. The #547 statistical firewall is mandatory and cannot be bypassed. Arbitrary executable code remains forbidden.
 
