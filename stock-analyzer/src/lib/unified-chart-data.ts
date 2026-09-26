@@ -4,16 +4,12 @@ import {
   type ChartCandleTimeframe,
 } from './chart-candle-normalizer';
 import type { AnalysisAssetType, AnalysisMarket } from './analysis-selection';
-
-export type UnifiedChartTimeframe =
-  | '1m'
-  | '3m'
-  | '5m'
-  | '15m'
-  | '30m'
-  | '1H'
-  | '4H'
-  | '1D';
+import { type UnifiedChartTimeframe } from './unified-chart-metadata';
+export {
+  UNIFIED_CHART_TIMEFRAMES,
+  unifiedMarketLabel,
+  type UnifiedChartTimeframe,
+} from './unified-chart-metadata';
 
 export type UnifiedChartDataStatus =
   | 'ok'
@@ -67,36 +63,15 @@ export function configureUnifiedChartFetch(fetcher: UnifiedChartFetch | null): v
 }
 
 const DEFAULT_TIMEOUT_MS = 12_000;
-const PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS = 2_500;
-
-export const UNIFIED_CHART_TIMEFRAMES: Array<{
-  key: UnifiedChartTimeframe;
-  label: string;
-}> = [
-  { key: '1m', label: '1분' },
-  { key: '3m', label: '3분' },
-  { key: '5m', label: '5분' },
-  { key: '15m', label: '15분' },
-  { key: '30m', label: '30분' },
-  { key: '1H', label: '1시간' },
-  { key: '4H', label: '4시간' },
-  { key: '1D', label: '일봉' },
-];
+const US_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS = 3_500;
+const KR_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS = 3_500;
+const STOCK_ALTERNATE_HEDGE_DELAY_MS = 2_000;
+const INSUFFICIENT_CANDLE_RETRY_DELAY_MS = 150;
 
 export function marketAssetType(market: AnalysisMarket): AnalysisAssetType {
   if (market === 'UPBIT') return 'coin_spot';
   if (market === 'BITGET') return 'coin_futures';
   return 'stock';
-}
-
-export function unifiedMarketLabel(market: AnalysisMarket): string {
-  const labels: Record<AnalysisMarket, string> = {
-    KR: '국내주식',
-    US: '미국주식',
-    UPBIT: '코인 현물',
-    BITGET: '코인 선물',
-  };
-  return labels[market];
 }
 
 export function defaultUnifiedSymbol(market: AnalysisMarket): {
@@ -133,17 +108,10 @@ export function buildUnifiedChartUrls(input: {
   const encodedSymbol = encodeURIComponent(symbol);
   const encodedFrame = encodeURIComponent(input.timeframe);
 
-  if (input.market === 'US') {
+  if (input.market === 'US' || input.market === 'KR') {
     return [
       `/api/stocks/${encodedSymbol}/candles?tf=${encodedFrame}`,
       `/api/stocks/${encodedSymbol}/chart?tf=${encodedFrame}`,
-    ];
-  }
-
-  if (input.market === 'KR') {
-    return [
-      `/api/stocks/${encodedSymbol}/chart?tf=${encodedFrame}`,
-      `/api/stocks/${encodedSymbol}/candles?tf=${encodedFrame}`,
     ];
   }
 
@@ -232,6 +200,7 @@ async function parsePayload(response: Response): Promise<Record<string, unknown>
 function createLinkedSignal(external: AbortSignal | undefined, timeoutMs: number): {
   signal: AbortSignal;
   timedOut: () => boolean;
+  abort: () => void;
   cleanup: () => void;
 } {
   const controller = new AbortController();
@@ -247,11 +216,44 @@ function createLinkedSignal(external: AbortSignal | undefined, timeoutMs: number
   return {
     signal: controller.signal,
     timedOut: () => timeoutReached,
+    abort: () => controller.abort(),
     cleanup: () => {
       globalThis.clearTimeout(timeout);
       external?.removeEventListener('abort', abortFromExternal);
     },
   };
+}
+
+async function waitForSignalAwareDelay(ms: number, signal: AbortSignal): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      globalThis.clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+    };
+    const timer = globalThis.setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function primaryStockEndpointTimeoutMs(market: AnalysisMarket, totalTimeoutMs: number): number {
+  /*
+   * The app-facing stock candle backends already terminate their live-provider
+   * work before the 5s release gate: KR has a 2s hard terminal, while a cold US
+   * request can spend up to 750ms on persistent cache lookup plus the 1.65s
+   * Yahoo hedge before auth/transport/JSON overhead. A 2.5s US browser cutoff
+   * can therefore abort a healthy bounded primary request and restart the same
+   * candle chain through /chart. Keep the 5s release gate unchanged and give
+   * both stock markets a 3.5s primary budget so bounded /candles can terminate.
+   */
+  const endpointBudgetMs = market === 'KR'
+    ? KR_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS
+    : US_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS;
+  return Math.min(endpointBudgetMs, Math.max(250, Math.floor(totalTimeoutMs / 2)));
 }
 
 function canTryAlternateEndpoint(error: UnifiedChartDataError): boolean {
@@ -280,39 +282,79 @@ export async function fetchUnifiedChartData(input: {
   const totalTimeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const linked = createLinkedSignal(input.signal, totalTimeoutMs);
   let lastError: UnifiedChartDataError | null = null;
+  const requestInit = (signal: AbortSignal): RequestInit => ({
+    cache: 'no-store',
+    headers: {
+      'Cache-Control': 'no-cache, no-store, max-age=0',
+      Pragma: 'no-cache',
+    },
+    signal,
+  });
+  const alternateHedge = urls.length > 1
+    ? createLinkedSignal(linked.signal, totalTimeoutMs)
+    : null;
+  const alternateGate = alternateHedge
+    ? (() => {
+        let release: () => void = () => undefined;
+        const promise = new Promise<void>((resolve) => { release = resolve; });
+        return { promise, release };
+      })()
+    : null;
+  const alternateResponse = alternateHedge && alternateGate
+    ? Promise.race([
+        waitForSignalAwareDelay(STOCK_ALTERNATE_HEDGE_DELAY_MS, alternateHedge.signal),
+        alternateGate.promise,
+      ]).then(() => fetcher(urls[1], requestInit(alternateHedge.signal)))
+    : null;
+  void alternateResponse?.catch(() => undefined);
 
   try {
     for (const [index, url] of urls.entries()) {
       const alternateAvailable = index < urls.length - 1;
       const attempt = alternateAvailable
-        ? createLinkedSignal(linked.signal, Math.min(PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS, Math.max(250, Math.floor(totalTimeoutMs / 2))))
+        ? createLinkedSignal(linked.signal, primaryStockEndpointTimeoutMs(input.market, totalTimeoutMs))
         : null;
       const attemptSignal = attempt?.signal ?? linked.signal;
 
       try {
-        const response = await fetcher(url, {
-          cache: 'no-store',
-          headers: {
-            'Cache-Control': 'no-cache, no-store, max-age=0',
-            Pragma: 'no-cache',
-          },
-          signal: attemptSignal,
-        });
-        const payload = await parsePayload(response);
+        const response = index === 1 && alternateResponse
+          ? await alternateResponse
+          : await fetcher(url, requestInit(attemptSignal));
+        let payload = await parsePayload(response);
         if (!response.ok) {
           const error = httpError(response.status, payload);
           if (alternateAvailable && canTryAlternateEndpoint(error)) {
             lastError = error;
+            alternateGate?.release();
             continue;
           }
           throw error;
         }
 
-        const rows = candleRows(payload);
-        const normalization = normalizeChartCandles(
-          rows,
+        let normalization = normalizeChartCandles(
+          candleRows(payload),
           input.timeframe as ChartCandleTimeframe,
         );
+        if (normalization.candles.length < 2) {
+          await waitForSignalAwareDelay(INSUFFICIENT_CANDLE_RETRY_DELAY_MS, attemptSignal);
+          const retryResponse = await fetcher(url, requestInit(attemptSignal));
+          payload = await parsePayload(retryResponse);
+          if (!retryResponse.ok) throw httpError(retryResponse.status, payload);
+          normalization = normalizeChartCandles(
+            candleRows(payload),
+            input.timeframe as ChartCandleTimeframe,
+          );
+        }
+        // A successful HTTP response is not usable chart evidence when fewer
+        // than two real candles survive normalization. For stock markets, use
+        // the already-defined alternate endpoint instead of presenting a
+        // misleading terminal empty state. Single-endpoint markets stay
+        // explicit and never synthesize candles.
+        if (normalization.candles.length < 2 && alternateAvailable) {
+          alternateGate?.release();
+          continue;
+        }
+        alternateHedge?.abort();
         return {
           market: input.market,
           symbol,
@@ -329,7 +371,11 @@ export async function fetchUnifiedChartData(input: {
       } catch (error) {
         if (error instanceof UnifiedChartDataError) {
           lastError = error;
-          if (alternateAvailable && canTryAlternateEndpoint(error)) continue;
+          if (alternateAvailable && canTryAlternateEndpoint(error)) {
+            alternateGate?.release();
+            continue;
+          }
+          alternateHedge?.abort();
           throw error;
         }
 
@@ -341,7 +387,10 @@ export async function fetchUnifiedChartData(input: {
             true,
           );
           lastError = timeoutError;
-          if (alternateAvailable) continue;
+          if (alternateAvailable) {
+            alternateGate?.release();
+            continue;
+          }
           throw timeoutError;
         }
 
@@ -382,6 +431,8 @@ export async function fetchUnifiedChartData(input: {
       true,
     );
   } finally {
+    alternateHedge?.abort();
+    alternateHedge?.cleanup();
     linked.cleanup();
   }
 }

@@ -282,9 +282,14 @@ async function installChartMocks(page: Page) {
     }),
   }));
   await page.route('**/api/stocks/*/candles**', (route) => route.fulfill({
-    status: 404,
+    status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ message: 'NOT_FOUND' }),
+    body: JSON.stringify({
+      provider: 'auth-stock-fixture',
+      fetchedAt: '2026-08-05T00:00:00.000Z',
+      updatedAt: '2026-08-05T00:00:00.000Z',
+      candles: candles(80_000),
+    }),
   }));
   await page.route('**/api/crypto/spot/candles**', (route) => route.fulfill({
     status: 200,
@@ -405,11 +410,18 @@ test.describe('production auth session and AI chart route', () => {
         body: '{}',
       });
     });
-    await page.route(`https://${SUPABASE_HOST}/rest/v1/profiles**`, async (route) => {
-      const requestUrl = decodeURIComponent(route.request().url());
-      const user = USERS.find((candidate) => requestUrl.includes(candidate.id))
-        ?? currentUser
-        ?? USERS[0];
+    await page.route('**/api/auth/profile', async (route) => {
+      const authorization = route.request().headers()['authorization'] ?? '';
+      const user = USERS.find((candidate) => authorization === `Bearer ${candidate.token}`);
+      if (!user) {
+        await route.fulfill({
+          status: 401,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'INVALID_SESSION' }),
+        });
+        return;
+      }
+
       const count = (profileCalls.get(user.id) ?? 0) + 1;
       profileCalls.set(user.id, count);
 
@@ -419,7 +431,6 @@ test.describe('production auth session and AI chart route', () => {
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
-          headers: { 'Content-Range': '0-0/1' },
           body: JSON.stringify(profilePayload(user, '늦은 이전 사용자')),
         }).catch(() => undefined);
         return;
@@ -428,7 +439,6 @@ test.describe('production auth session and AI chart route', () => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        headers: { 'Content-Range': '0-0/1' },
         body: JSON.stringify(profilePayload(user)),
       });
     });
@@ -450,7 +460,7 @@ test.describe('production auth session and AI chart route', () => {
     await expect(page.getByText('auth-stock-fixture', { exact: false })).toBeVisible();
 
     await navigateSpa(page, '/account');
-    await expect(page.getByText(USERS[0].displayName, { exact: true })).toBeVisible();
+    await expect(page.getByRole('main').getByText(USERS[0].displayName, { exact: true })).toBeVisible();
     await page.evaluate(() => {
       const advance = (
         window as typeof window & { __authE2eAdvanceTime?: (milliseconds: number) => void }
@@ -484,7 +494,7 @@ test.describe('production auth session and AI chart route', () => {
     await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toHaveCount(0);
 
     await login(page, USERS[1].loginName);
-    await expect(page.getByText(USERS[1].displayName, { exact: true })).toBeVisible();
+    await expect(page.getByRole('main').getByText(USERS[1].displayName, { exact: true })).toBeVisible();
     expect(profileCalls.get(SECOND_USER_ID)).toBe(1);
 
     await navigateSpa(

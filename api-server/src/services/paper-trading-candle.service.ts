@@ -145,10 +145,15 @@ export function processCandle(state: PaperTradingState, action: ProcessPaperCand
   };
 }
 
-export function closePosition(state: PaperTradingState, action: ClosePaperPositionAction, now: Date): PaperTradingActionResult {
+export function closePosition(state: PaperTradingState, action: ClosePaperPositionAction, now: Date, canonical?: NonNullable<ReturnType<typeof import('./manual-paper-canonical-contract.service').prepareManualPaperCanonicalEvidence>>): PaperTradingActionResult {
   const at = toIso(action.at, now);
   const position = state.positions.find((item) => item.id === action.positionId);
   if (!position) throw new PaperTradingError('POSITION_NOT_FOUND', '청산할 모의포지션을 찾을 수 없습니다.');
+  const positionSymbol = String(position.symbol ?? '').trim().toUpperCase();
+  const marketSymbol = String(action.market.symbol ?? '').trim().toUpperCase();
+  if (!positionSymbol || marketSymbol !== positionSymbol) {
+    throw new PaperTradingError('MARKET_SYMBOL_MISMATCH', '모의포지션 종목과 청산 시장 데이터 종목이 일치하지 않습니다.');
+  }
   if (action.market.status !== 'live' || !isFresh(action.market.updatedAt, now, MARKET_FRESHNESS_MS)) {
     throw new PaperTradingError('DATA_NOT_LIVE', '실시간 시장 데이터가 아니므로 모의청산을 처리하지 않습니다.');
   }
@@ -161,7 +166,7 @@ export function closePosition(state: PaperTradingState, action: ClosePaperPositi
   const reason: PaperFillReason = quantity + EPSILON < position.remainingQuantity
     ? 'partial_close'
     : action.reason ?? 'manual_close';
-  const fill = closePositionInternal(state, position, quantity, reference, reason, action.eventId, at);
+  const fill = closePositionInternal(state, position, quantity, reference, reason, action.eventId, at, canonical);
   return {
     ok: true,
     mode: MODE,

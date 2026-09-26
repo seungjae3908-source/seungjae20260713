@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import { buildUpbitJwt } from '../../../services/trade-exchange-adapters.service';
-import { maskAccountRef } from '../account-readonly.contract';
+import { maskAccountRef, nullableNumber } from '../account-readonly.contract';
+import { AccountReadonlyError } from '../account-readonly.errors';
+import { bindAccountReadonlyDisconnectAbort } from '../account-readonly.route';
 import { AccountReadonlyService } from '../account-readonly.service';
 import { TossReadonlyProvider, TossTokenManager, type ReadonlyTransport } from '../providers/toss-readonly.provider';
 import { readBitgetSnapshot, readUpbitSnapshot } from '../providers/exchange-readonly.providers';
@@ -9,16 +12,128 @@ import { readBitgetSnapshot, readUpbitSnapshot } from '../providers/exchange-rea
 const USER_A = { userId: 'user-a', accessToken: 'SUPABASE_ACCESS_A_TEST_ONLY' };
 const USER_B = { userId: 'user-b', accessToken: 'SUPABASE_ACCESS_B_TEST_ONLY' };
 
-test('disabled feature flag performs zero private calls', async () => {
-  let calls = 0;
+test('read-only account numbers reject coercion and preserve actual zero', () => {
+  for (const value of [true, false, [], [1], {}, '', ' ', '0x10', '1,2']) assert.equal(nullableNumber(value), null);
+  assert.equal(nullableNumber('0'), 0);
+  assert.equal(nullableNumber('-1.25'), -1.25);
+  assert.equal(nullableNumber('1,000.50'), 1000.5);
+});
+
+test('Bitget read-only provider errors and malformed data fail closed without becoming a connected empty account', async () => {
+  const credentials = { apiKey: 'fixture', secretKey: 'fixture', passphrase: 'fixture' };
+  for (const response of [{}, { code: '00000' }, { code: '00000', data: [null] }]) {
+    await assert.rejects(readBitgetSnapshot(credentials, async () => response), /RESPONSE_INVALID/);
+  }
+  await assert.rejects(
+    readBitgetSnapshot(credentials, async () => ({ code: '40009', msg: 'provider-secret-text', data: [] })),
+    (error: unknown) => error instanceof AccountReadonlyError
+      && error.code === 'BITGET_AUTH_FAILED'
+      && !error.message.includes('provider-secret-text'),
+  );
+  await assert.rejects(readBitgetSnapshot(credentials, async (request) => {
+    if (request.path === '/api/v3/account/info') return { code: '00000', data: { permissions: [] } };
+    return { code: '00000', data: request.path.includes('position') ? [] : [{ accountEquity: '1' }] };
+  }), /IDENTITY_INVALID/);
+});
+
+test('client response close aborts unfinished account read and cleanup removes both listeners', () => {
+  const request = new EventEmitter();
+  const response = Object.assign(new EventEmitter(), { writableEnded: false });
+  const controller = new AbortController();
+  const cleanup = bindAccountReadonlyDisconnectAbort(request, response, controller);
+
+  assert.equal(request.listenerCount('aborted'), 1);
+  assert.equal(response.listenerCount('close'), 1);
+  response.emit('close');
+  assert.equal(controller.signal.aborted, true);
+
+  cleanup();
+  assert.equal(request.listenerCount('aborted'), 0);
+  assert.equal(response.listenerCount('close'), 0);
+});
+
+test('normal completed response close does not abort completed account read', () => {
+  const request = new EventEmitter();
+  const response = Object.assign(new EventEmitter(), { writableEnded: true });
+  const controller = new AbortController();
+  const cleanup = bindAccountReadonlyDisconnectAbort(request, response, controller);
+
+  response.emit('close');
+  assert.equal(controller.signal.aborted, false);
+  cleanup();
+});
+
+test('request aborted event still aborts unfinished account read', () => {
+  const request = new EventEmitter();
+  const response = Object.assign(new EventEmitter(), { writableEnded: false });
+  const controller = new AbortController();
+  const cleanup = bindAccountReadonlyDisconnectAbort(request, response, controller);
+
+  request.emit('aborted');
+  assert.equal(controller.signal.aborted, true);
+  cleanup();
+});
+
+test('disabled feature flag reports configured credentials as unverified with zero private calls', async () => {
+  let privateCalls = 0;
+  let metadataCalls = 0;
   const service = new AccountReadonlyService(
-    { toss: async () => { calls++; throw new Error('unexpected'); } },
+    { toss: async () => { privateCalls++; throw new Error('unexpected'); } },
     { toss: false },
+    () => new Date('2026-08-26T00:00:00.000Z'),
+    async (userId, provider) => {
+      metadataCalls += 1;
+      assert.equal(userId, USER_A.userId);
+      assert.equal(provider, 'toss');
+      return true;
+    },
   );
   const result = await service.read(USER_A, 'toss');
-  assert.equal(calls, 0);
-  assert.equal(result.status, 'NOT_CONFIGURED');
+  assert.equal(privateCalls, 0);
+  assert.equal(metadataCalls, 1);
+  assert.equal(result.status, 'CONFIGURED_UNVERIFIED');
+  assert.equal(result.errorCode, 'ACCOUNT_READ_DISABLED');
+  assert.equal(result.accounts, null);
+  assert.equal(result.balances, null);
+  assert.equal(result.positions, null);
   assert.equal(result.orderRequests, 0);
+  assert.equal(result.cancelRequests, 0);
+  assert.equal(result.transferRequests, 0);
+  assert.equal(result.withdrawalRequests, 0);
+  assert.equal(result.credentialsReturned, false);
+});
+
+test('disabled feature flag reports not configured only when metadata confirms no credential', async () => {
+  let privateCalls = 0;
+  const service = new AccountReadonlyService(
+    { upbit: async () => { privateCalls++; throw new Error('unexpected'); } },
+    { upbit: false },
+    () => new Date('2026-08-26T00:00:00.000Z'),
+    async () => false,
+  );
+
+  const result = await service.read(USER_A, 'upbit');
+  assert.equal(privateCalls, 0);
+  assert.equal(result.status, 'NOT_CONFIGURED');
+  assert.equal(result.errorCode, 'ACCOUNT_NOT_CONFIGURED');
+  assert.equal(result.balances, null);
+});
+
+test('credential metadata outage remains unavailable instead of becoming not configured', async () => {
+  let privateCalls = 0;
+  const service = new AccountReadonlyService(
+    { bitget: async () => { privateCalls++; throw new Error('unexpected'); } },
+    { bitget: false },
+    () => new Date('2026-08-26T00:00:00.000Z'),
+    async () => { throw new Error('metadata storage unavailable'); },
+  );
+
+  const result = await service.read(USER_A, 'bitget');
+  assert.equal(privateCalls, 0);
+  assert.equal(result.status, 'UNAVAILABLE');
+  assert.equal(result.errorCode, 'ACCOUNT_CREDENTIAL_METADATA_UNAVAILABLE');
+  assert.equal(result.accounts, null);
+  assert.equal(result.positions, null);
 });
 
 test('missing authenticated request scope fails closed before private reader use', async () => {
@@ -49,40 +164,175 @@ test('Toss provider rejects every mutation path and masks accountSeq', async () 
 });
 
 test('Upbit wrapper reuses JWT signer and preserves locked and missing values', async () => {
-  const seen: any[] = []; const result = await readUpbitSnapshot({ accessKey: 'UPBIT_ACCESS_TEST_ONLY', secretKey: 'UPBIT_SECRET_TEST_ONLY' }, async (request) => { seen.push(request); return [{ currency: 'BTC', balance: '1', locked: '0.25', avg_buy_price: '' }]; });
-  assert.match(seen[0].headers.Authorization, /^Bearer /); assert.equal(result.balances[0]?.total, 1.25); assert.equal(result.positions[0]?.averageEntryPrice, null); assert.equal(result.orderRequests, 0);
+  const seen: any[] = []; const result = await readUpbitSnapshot({ accessKey: 'UPBIT_ACCESS_TEST_ONLY', secretKey: 'UPBIT_SECRET_TEST_ONLY' }, async (request) => {
+    seen.push(request);
+    if (request.path === '/v1/orders/open') return [];
+    return [{ currency: 'BTC', balance: '1', locked: '0.25', avg_buy_price: '' }];
+  });
+  assert.match(seen[0].headers.Authorization, /^Bearer /); assert.equal(result.balances?.[0]?.total, 1.25); assert.equal(result.positions?.[0]?.averageEntryPrice, null); assert.equal(result.orderRequests, 0);
   assert.notEqual(buildUpbitJwt({ accessKey: 'a', secretKey: 'b' }, ''), buildUpbitJwt({ accessKey: 'a', secretKey: 'b' }, ''));
 });
 
-test('Bitget wrapper uses only signed GET account and position requests and redacts passphrase', async () => {
-  const seen: any[] = []; const result = await readBitgetSnapshot({ apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' }, async (request) => { seen.push(request); return request.path.includes('position') ? { data: [{ symbol: 'BTCUSDT', total: '1', openPriceAvg: '60000', markPrice: '61000', leverage: '3', liquidationPrice: '' }] } : { data: [{ marginCoin: 'USDT', accountEquity: '100', available: '80' }] }; });
-  assert.ok(seen.every((r) => r.method === 'GET')); assert.equal(result.positions[0]?.liquidationPrice, null); assert.equal(JSON.stringify(result).includes('BITGET_PASSPHRASE_TEST_ONLY'), false); assert.equal(result.withdrawalRequests, 0);
+test('Upbit balance read stays connected when only optional open-order scope is denied', async () => {
+  let accountCalls = 0;
+  let openOrderCalls = 0;
+  const result = await readUpbitSnapshot(
+    { accessKey: 'UPBIT_ACCESS_TEST_ONLY', secretKey: 'UPBIT_SECRET_TEST_ONLY' },
+    async (request) => {
+      if (request.path === '/v1/accounts') {
+        accountCalls += 1;
+        return [{ currency: 'KRW', balance: '100000', locked: '0', avg_buy_price: '0' }];
+      }
+      if (request.path === '/v1/orders/open') {
+        openOrderCalls += 1;
+        throw new AccountReadonlyError('UPBIT_PERMISSION_DENIED');
+      }
+      throw new Error('UNEXPECTED_UPBIT_READ_PATH');
+    },
+  );
+
+  assert.equal(accountCalls, 1);
+  assert.equal(openOrderCalls, 2);
+  assert.equal(result.connected, true);
+  assert.equal(result.status, 'CONNECTED');
+  assert.equal(result.stale, false);
+  assert.equal(result.errorCode, 'UPBIT_OPEN_ORDERS_UPBIT_PERMISSION_DENIED');
+  assert.equal(result.balances?.[0]?.total, 100000);
+  assert.equal(result.openOrders, null);
+  assert.notEqual(result.lastGoodAt, null);
+  assert.equal(result.orderRequests, 0);
+  assert.equal(result.cancelRequests, 0);
+  assert.equal(result.amendRequests, 0);
+  assert.equal(result.transferRequests, 0);
+  assert.equal(result.withdrawalRequests, 0);
 });
 
-test('last-good data becomes stale only inside the same authenticated user scope', async () => {
-  let failUserA = false;
+test('Bitget Classic fallback is selected when official UTA error 25245 reports non-unified account mode', async () => {
+  const seen: string[] = [];
+  const result = await readBitgetSnapshot(
+    { apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' },
+    async (request) => {
+      seen.push(request.path);
+      if (request.path === '/api/v3/account/info') {
+        return { code: '25245', msg: 'The account is not the unified account mode', data: null };
+      }
+      if (request.path === '/api/v2/mix/account/accounts') {
+        return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '80', locked: '20' }] };
+      }
+      if (request.path === '/api/v2/mix/position/all-position') {
+        return { code: '00000', data: [] };
+      }
+      if (request.path === '/api/v2/mix/order/orders-pending') {
+        return { code: '00000', data: { entrustedList: [] } };
+      }
+      throw new Error('UNEXPECTED_BITGET_CLASSIC_FALLBACK_PATH');
+    },
+  );
+
+  assert.deepEqual(new Set(seen), new Set([
+    '/api/v3/account/info',
+    '/api/v2/mix/account/accounts',
+    '/api/v2/mix/position/all-position',
+    '/api/v2/mix/order/orders-pending',
+  ]));
+  assert.equal(result.connected, true);
+  assert.equal(result.status, 'CONNECTED');
+  assert.equal(result.errorCode, null);
+  assert.equal(result.balances?.[0]?.currency, 'USDT');
+  assert.equal(result.orderRequests, 0);
+  assert.equal(result.cancelRequests, 0);
+  assert.equal(result.amendRequests, 0);
+  assert.equal(result.transferRequests, 0);
+  assert.equal(result.withdrawalRequests, 0);
+});
+
+test('Bitget wrapper probes UTA mode then preserves Classic signed GET reads and redacts passphrase', async () => {
+  const seen: any[] = []; const result = await readBitgetSnapshot({ apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' }, async (request) => {
+    seen.push(request);
+    if (request.path === '/api/v3/account/info') return { code: '00000', data: { permissions: [] } };
+    if (request.path.includes('position')) return { code: '00000', data: [{ symbol: 'BTCUSDT', total: '1', openPriceAvg: '60000', markPrice: '61000', leverage: '3', liquidationPrice: '' }] };
+    if (request.path.includes('orders-pending')) return { code: '00000', data: { entrustedList: [] } };
+    return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '80' }] };
+  });
+  assert.equal(seen[0]?.path, '/api/v3/account/info');
+  assert.ok(seen.every((r) => r.method === 'GET')); assert.equal(result.positions?.[0]?.liquidationPrice, null); assert.equal(JSON.stringify(result).includes('BITGET_PASSPHRASE_TEST_ONLY'), false); assert.equal(result.withdrawalRequests, 0);
+});
+
+test('Bitget UTA wrapper maps v3 account, position, and open-order envelopes without mutation authority', async () => {
+  const seen: any[] = [];
+  const result = await readBitgetSnapshot(
+    { apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' },
+    async (request) => {
+      seen.push(request);
+      if (request.path === '/api/v3/account/info') return { code: '00000', data: { permissions: ['uta_mgt', 'uta_trade'] } };
+      if (request.path === '/api/v3/account/assets') {
+        return { code: '00000', data: { assets: [{ coin: 'USDT', equity: '100', available: '90', locked: '10' }] } };
+      }
+      if (request.path === '/api/v3/position/current-position') {
+        return { code: '00000', data: { list: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.08', avgPrice: '60000', markPrice: '61000', unrealisedPnl: '100', leverage: '2', liquidationPrice: '30000', marginMode: 'crossed', posSide: 'long' }] } };
+      }
+      if (request.path === '/api/v3/trade/unfilled-orders') {
+        return { code: '00000', data: { list: [{ orderId: 'UTA-1', symbol: 'BTCUSDT', side: 'buy', price: '60000', qty: '0.1', cumExecQty: '0.04', orderStatus: 'partially_filled' }] } };
+      }
+      throw new Error('UNEXPECTED_BITGET_UTA_PATH');
+    },
+  );
+  assert.deepEqual(seen.map((row) => row.path).sort(), [
+    '/api/v3/account/assets',
+    '/api/v3/account/info',
+    '/api/v3/position/current-position',
+    '/api/v3/trade/unfilled-orders',
+  ].sort());
+  assert.ok(seen.every((row) => row.method === 'GET' && row.body === null));
+  assert.equal(result.connected, true);
+  assert.equal(result.balances?.[0]?.total, 100);
+  assert.equal(result.positions?.[0]?.side, 'long');
+  assert.equal(result.openOrders?.[0]?.id, 'UTA-1');
+  assert.ok(Math.abs((result.openOrders?.[0]?.remainingQuantity ?? 0) - 0.06) < 1e-12);
+  assert.equal(result.orderRequests, 0);
+  assert.equal(result.cancelRequests, 0);
+  assert.equal(result.amendRequests, 0);
+  assert.equal(result.transferRequests, 0);
+  assert.equal(result.withdrawalRequests, 0);
+});
+
+test('last-good fallback is same-user only and auth failure evicts it fail-closed', async () => {
+  let userAMode: 'ok' | 'timeout' | 'auth' = 'ok';
   const snapshot = { provider: 'upbit' as const, readOnly: true as const, connected: true, status: 'CONNECTED' as const, accounts: [], balances: [{ currency: 'KRW', available: 0, locked: 0, total: 0, estimatedKrwValue: 0 }], positions: [], openOrders: [], checkedAt: '2026-01-01T00:00:00.000Z', lastGoodAt: '2026-01-01T00:00:00.000Z', stale: false, errorCode: null, orderRequests: 0 as const, cancelRequests: 0 as const, amendRequests: 0 as const, transferRequests: 0 as const, withdrawalRequests: 0 as const, credentialsReturned: false as const, liveTradingEnabled: false as const, autoTradingEnabled: false as const };
   const service = new AccountReadonlyService(
     {
       upbit: async (scope) => {
         if (scope.userId === USER_B.userId) throw new Error('401 user-b');
-        if (failUserA) throw new Error('401 user-a');
+        if (userAMode === 'timeout') throw new Error('provider timeout');
+        if (userAMode === 'auth') throw new Error('401 user-a');
         return snapshot;
       },
     },
     { upbit: true },
   );
 
-  assert.equal((await service.read(USER_A, 'upbit')).balances[0]?.total, 0);
+  assert.equal((await service.read(USER_A, 'upbit')).balances?.[0]?.total, 0);
 
   const userB = await service.read(USER_B, 'upbit');
   assert.equal(userB.status, 'AUTH_FAILED');
   assert.equal(userB.stale, false);
-  assert.deepEqual(userB.balances, []);
+  assert.equal(userB.balances, null);
 
-  failUserA = true;
+  userAMode = 'timeout';
   const staleUserA = await service.read(USER_A, 'upbit');
   assert.equal(staleUserA.status, 'STALE');
-  assert.equal(staleUserA.errorCode, 'AUTH_FAILED');
-  assert.equal(staleUserA.balances[0]?.total, 0);
+  assert.equal(staleUserA.errorCode, 'PROVIDER_TIMEOUT');
+  assert.equal(staleUserA.balances?.[0]?.total, 0);
+
+  userAMode = 'auth';
+  const authFailedUserA = await service.read(USER_A, 'upbit');
+  assert.equal(authFailedUserA.status, 'AUTH_FAILED');
+  assert.equal(authFailedUserA.stale, false);
+  assert.equal(authFailedUserA.balances, null);
+
+  userAMode = 'timeout';
+  const afterEviction = await service.read(USER_A, 'upbit');
+  assert.equal(afterEviction.status, 'UNAVAILABLE');
+  assert.equal(afterEviction.stale, false);
+  assert.equal(afterEviction.balances, null);
 });

@@ -1,10 +1,18 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
-import { isStagingReadonlyCredentialRuntime, resolveApiBindHost } from '../../../lib/api-bind-host';
+import {
+  areBackgroundWorkersEnabled,
+  isStagingReadonlyCredentialRuntime,
+  resolveApiBindHost,
+} from '../../../lib/api-bind-host';
 import { decryptTradingCredentials } from '../../../services/trade-credential-vault.service';
 import { InMemoryAccountReadonlyCredentialRepository } from '../account-readonly.repository';
 import {
+  accountReadFlags,
   parseReadonlyCredentialRequest,
+  readonlyProviderCapability,
   saveReadonlyCredentialConfiguration,
 } from '../account-readonly.route';
 
@@ -24,11 +32,13 @@ function privateReadRuntime() {
     APP_ENV: 'staging',
     TRADING_CREDENTIAL_MASTER_KEY: TEST_MASTER_KEY,
     TOSS_ACCOUNT_READ_ENABLED: 'true',
+    KIWOOM_ACCOUNT_READ_ENABLED: 'true',
     UPBIT_ACCOUNT_READ_ENABLED: 'true',
     BITGET_ACCOUNT_READ_ENABLED: 'true',
     LIVE_TRADING_ENABLED: 'false',
     AUTO_TRADING_ENABLED: 'false',
     TOSS_ORDER_ENABLED: 'false',
+    KIWOOM_ORDER_ENABLED: 'false',
     UPBIT_ORDER_ENABLED: 'false',
     BITGET_ORDER_ENABLED: 'false',
     TRANSFER_ENABLED: 'false',
@@ -36,7 +46,34 @@ function privateReadRuntime() {
   };
 }
 
-test('read-only credential parser accepts only Toss, Upbit and Bitget credential shapes', () => {
+test('read-only account routes require the same provider capabilities as the UI market boundaries', () => {
+  assert.equal(readonlyProviderCapability('toss'), 'canAccessBasicInfo');
+  assert.equal(readonlyProviderCapability('kiwoom'), 'canAccessBasicInfo');
+  assert.equal(readonlyProviderCapability('upbit'), 'canAccessSpot');
+  assert.equal(readonlyProviderCapability('bitget'), 'canAccessFutures');
+  assert.equal(readonlyProviderCapability('unknown'), null);
+
+  const apiServerRoot = path.basename(process.cwd()) === 'api-server'
+    ? process.cwd()
+    : path.join(process.cwd(), 'api-server');
+  const routeSource = readFileSync(
+    path.join(apiServerRoot, 'src/features/account-readonly/account-readonly.route.ts'),
+    'utf8',
+  );
+  assert.match(
+    routeSource,
+    /router\.put\('\/credentials\/:provider',\s*requireReadonlyProviderCapability/,
+  );
+  assert.match(
+    routeSource,
+    /router\.get\('\/:provider',\s*requireReadonlyProviderCapability/,
+  );
+  assert.match(routeSource, /normalized === 'bitget'.*'canAccessFutures'/s);
+  assert.match(routeSource, /normalized === 'upbit'.*'canAccessSpot'/s);
+  assert.match(routeSource, /normalized === 'toss' \|\| normalized === 'kiwoom'.*'canAccessBasicInfo'/s);
+});
+
+test('read-only credential parser accepts only Toss, Kiwoom, Upbit and Bitget credential shapes', () => {
   assert.deepEqual(parseReadonlyCredentialRequest('toss', {
     purpose: 'read_only', permissions: ['read'],
     credentials: { clientId: 'toss-client-test', clientSecret: 'toss-secret-test' },
@@ -45,6 +82,10 @@ test('read-only credential parser accepts only Toss, Upbit and Bitget credential
     purpose: 'read_only', permissions: ['read'],
     credentials: { clientId: 'toss-client-test', clientSecret: 'toss-secret-test', accountSeq: '12345678' },
   }), { clientId: 'toss-client-test', clientSecret: 'toss-secret-test', accountSeq: '12345678' });
+  assert.deepEqual(parseReadonlyCredentialRequest('kiwoom', {
+    purpose: 'read_only', permissions: ['read'],
+    credentials: { appKey: 'kiwoom-app-test', appSecret: 'kiwoom-secret-test' },
+  }), { appKey: 'kiwoom-app-test', appSecret: 'kiwoom-secret-test' });
   assert.deepEqual(parseReadonlyCredentialRequest('upbit', {
     purpose: 'read_only', permissions: ['read'],
     credentials: { accessKey: 'upbit-access-test', secretKey: 'upbit-secret-test' },
@@ -71,11 +112,12 @@ test('read-only credential parser rejects mutation permissions, missing Toss sec
   }), /READONLY_PURPOSE_CONFIRMATION_REQUIRED/);
 });
 
-test('three-provider credentials are encrypted in the account-readonly vault and never stored in trading policy state', async () => {
+test('four-provider credentials are encrypted in the account-readonly vault and never stored in trading policy state', async () => {
   await withMasterKey(async () => {
     const repository = new InMemoryAccountReadonlyCredentialRepository();
     const fixtures = {
       toss: { clientId: 'TOSS_CLIENT_SAVE_TEST', clientSecret: 'TOSS_SECRET_SAVE_TEST' },
+      kiwoom: { appKey: 'KIWOOM_APP_SAVE_TEST', appSecret: 'KIWOOM_SECRET_SAVE_TEST' },
       upbit: { accessKey: 'UPBIT_ACCESS_SAVE_TEST', secretKey: 'UPBIT_SECRET_SAVE_TEST' },
       bitget: { apiKey: 'BITGET_API_SAVE_TEST', secretKey: 'BITGET_SECRET_SAVE_TEST', passphrase: 'BITGET_PASS_SAVE_TEST' },
     } as const;
@@ -92,12 +134,13 @@ test('three-provider credentials are encrypted in the account-readonly vault and
     }
 
     assert.equal(await repository.get('user-a', 'toss') !== null, true);
+    assert.equal(await repository.get('user-a', 'kiwoom') !== null, true);
     assert.equal(await repository.get('user-a', 'upbit') !== null, true);
     assert.equal(await repository.get('user-a', 'bitget') !== null, true);
   });
 });
 
-test('secret-bearing staging private-read runtime defaults to loopback for Toss, Upbit or Bitget', () => {
+test('secret-bearing staging private-read runtime defaults to loopback for Toss, Kiwoom, Upbit or Bitget', () => {
   const runtime = privateReadRuntime();
   assert.equal(isStagingReadonlyCredentialRuntime({}), false);
   assert.equal(isStagingReadonlyCredentialRuntime({ APP_ENV: 'staging' }), false);
@@ -118,4 +161,113 @@ test('normal-runtime bind host override remains restricted to known listener add
   assert.equal(resolveApiBindHost({ API_BIND_HOST: '0.0.0.0' }), '0.0.0.0');
   assert.equal(resolveApiBindHost({ API_BIND_HOST: '::1' }), '::1');
   assert.throws(() => resolveApiBindHost({ API_BIND_HOST: 'example.com' }), /API_BIND_HOST_INVALID/);
+});
+
+test('background workers can be disabled explicitly without changing trading authority', () => {
+  assert.equal(areBackgroundWorkersEnabled({}), true);
+  assert.equal(areBackgroundWorkersEnabled({ BACKGROUND_WORKERS_ENABLED: 'false' }), false);
+  assert.equal(areBackgroundWorkersEnabled({ BACKGROUND_WORKERS_ENABLED: 'true' }), true);
+  assert.equal(areBackgroundWorkersEnabled(privateReadRuntime()), false);
+});
+
+
+test('Kiwoom vault migration expands provider check without applying credentials or weakening browser revokes', () => {
+  const apiServerRoot = path.basename(process.cwd()) === 'api-server'
+    ? process.cwd()
+    : path.join(process.cwd(), 'api-server');
+  const migration = readFileSync(
+    path.join(apiServerRoot, 'supabase/migrations/2026092501_account_readonly_kiwoom_provider.sql'),
+    'utf8',
+  );
+  const rollback = readFileSync(
+    path.join(apiServerRoot, 'supabase/migrations/2026092501_account_readonly_kiwoom_provider.down.sql'),
+    'utf8',
+  );
+  assert.match(migration, /provider in \('toss', 'kiwoom', 'upbit', 'bitget'\)/);
+  const migrationSql = migration.split(/\r?\n/).filter((line) => !line.trim().startsWith('--')).join('\n');
+  assert.equal(/insert\s+into\s+public\.account_readonly_credentials/i.test(migrationSql), false);
+  assert.equal(/^\s*grant\s+/im.test(migrationSql), false);
+  assert.match(rollback, /where provider = 'kiwoom'/);
+  assert.match(rollback, /MUST_BE_REMOVED_EXPLICITLY_BEFORE_ROLLBACK/);
+  assert.equal(/delete\s+from\s+public\.account_readonly_credentials/i.test(rollback), false);
+});
+
+
+test('read-only credential disconnect deletes only the selected user/provider ciphertext', async () => {
+  await withMasterKey(async () => {
+    const repository = new InMemoryAccountReadonlyCredentialRepository();
+    await saveReadonlyCredentialConfiguration(repository, 'user-a', 'upbit', {
+      accessKey: 'UPBIT_ACCESS_DELETE_TEST',
+      secretKey: 'UPBIT_SECRET_DELETE_TEST',
+    });
+    await saveReadonlyCredentialConfiguration(repository, 'user-a', 'bitget', {
+      apiKey: 'BITGET_KEY_DELETE_TEST',
+      secretKey: 'BITGET_SECRET_DELETE_TEST',
+      passphrase: 'BITGET_PASS_DELETE_TEST',
+    });
+    await saveReadonlyCredentialConfiguration(repository, 'user-b', 'upbit', {
+      accessKey: 'UPBIT_ACCESS_OTHER_USER_TEST',
+      secretKey: 'UPBIT_SECRET_OTHER_USER_TEST',
+    });
+
+    await repository.remove('user-a', 'upbit');
+
+    assert.equal(await repository.get('user-a', 'upbit'), null);
+    assert.notEqual(await repository.get('user-a', 'bitget'), null);
+    assert.notEqual(await repository.get('user-b', 'upbit'), null);
+  });
+});
+
+test('account read-only router exposes provider-capability-gated credential DELETE without any trading route', () => {
+  const apiServerRoot = path.basename(process.cwd()) === 'api-server'
+    ? process.cwd()
+    : path.join(process.cwd(), 'api-server');
+  const routeSource = readFileSync(
+    path.join(apiServerRoot, 'src/features/account-readonly/account-readonly.route.ts'),
+    'utf8',
+  );
+  assert.match(routeSource, /router\.delete\('\/credentials\/:provider',\s*requireReadonlyProviderCapability/);
+  assert.match(routeSource, /\.remove\(userId, provider\)/);
+  assert.equal(/router\.(?:post|put|patch|delete)\('\/(?:order|orders|trade|withdraw|transfer)/i.test(routeSource), false);
+});
+
+test('Production account storage tooling includes read-only Kiwoom and live-schema Toss migrations without applying them in tests', () => {
+  const root = path.basename(process.cwd()) === 'api-server'
+    ? path.resolve(process.cwd(), '..')
+    : process.cwd();
+  const workflow = readFileSync(path.join(root, '.github/workflows/production-account-readonly-storage-apply.yml'), 'utf8');
+  const apply = readFileSync(path.join(root, 'ops/apply-production-account-readonly-storage.mjs'), 'utf8');
+  for (const migration of [
+    'api-server/supabase/migrations/2026081701_account_readonly_credentials.sql',
+    'api-server/supabase/migrations/2026081801_account_readonly_service_role.sql',
+    'api-server/supabase/migrations/2026092501_account_readonly_kiwoom_provider.sql',
+    'api-server/supabase/migrations/2026092502_trade_live_execution_toss_provider.sql',
+  ]) {
+    assert.equal(apply.includes(migration), true);
+    assert.equal(workflow.includes(migration), true);
+  }
+  assert.equal(apply.includes("provider not in ('toss', 'kiwoom', 'upbit', 'bitget')"), true);
+  assert.equal(apply.includes("'provider_constraint_toss', true"), true);
+  assert.equal(apply.includes("'trade_secret_column_exposed', false"), true);
+  assert.equal(apply.includes("'migrations_applied', 4"), true);
+  assert.equal(apply.includes('artifact?.migrations_applied !== 4'), true);
+  assert.equal(workflow.includes('value?.migrations_applied === 4'), true);
+});
+
+
+test('Kiwoom provider stays hidden until its private read capability is explicitly enabled', () => {
+  const off = accountReadFlags({});
+  const on = accountReadFlags({ KIWOOM_ACCOUNT_READ_ENABLED: 'true' });
+  assert.equal(off.kiwoom, false);
+  assert.equal(on.kiwoom, true);
+
+  const apiServerRoot = path.basename(process.cwd()) === 'api-server'
+    ? process.cwd()
+    : path.join(process.cwd(), 'api-server');
+  const routeSource = readFileSync(
+    path.join(apiServerRoot, 'src/features/account-readonly/account-readonly.route.ts'),
+    'utf8',
+  );
+  assert.match(routeSource, /supportedProviders: \['toss', \.\.\.\(flags\.kiwoom \? \['kiwoom'\] : \[\]\), 'upbit', 'bitget'\]/);
+  assert.match(routeSource, /hiddenProviders: flags\.kiwoom \? \[\] : \['kiwoom'\]/);
 });

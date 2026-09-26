@@ -1,4 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { buildChartAnalysis, type ChartAnalysisInput } from '../src/lib/chart-analysis';
 import {
   aggregateMultiTimeframe,
   buildTechnicalTimeframeEvidence,
@@ -156,6 +157,42 @@ test('AI Chart 2.0 domain helpers preserve lifecycle, price-plan gaps, and highe
   expect(aggregate.conflictTimeframes).toEqual(['4H']);
 });
 
+test('AI Chart analysis requires complete identity and provenance before confirmation', () => {
+  const baseInput: ChartAnalysisInput = {
+    symbol: 'BTCUSDT',
+    market: 'BITGET',
+    timeframe: '15m',
+    latestTime: 1_790_254_800,
+    currentPrice: 100,
+    previousClose: 99,
+    trend: '상승',
+    rsi: 58,
+    macd: 1.2,
+    volumeRatio: 1.4,
+    support: 95,
+    resistance: 105,
+    signal: 'ENTER',
+    confidence: 90,
+    title: 'BTC 구조 분석',
+    summary: '완료봉 기준 구조 분석',
+    patterns: [],
+    source: 'ai-chart-v2',
+    isClosedCandle: true,
+    dataStatus: 'ok',
+  };
+
+  expect(buildChartAnalysis(baseInput).status).toBe('confirmed');
+  for (const field of ['symbol', 'market', 'timeframe', 'source'] as const) {
+    for (const missing of ['', '   ']) {
+      const result = buildChartAnalysis({ ...baseInput, [field]: missing });
+      expect(result.status).toBe('expired');
+      expect(result.confirmedAt).toBeUndefined();
+      expect(result.expiredAt).toBe(result.detectedAt);
+      expect(result.reasons).toContain('분석 식별자/출처: unavailable');
+    }
+  }
+});
+
 test('desktop AI Chart 2.0 preserves one initial chart request, loads MTF on demand, and stays read-only', async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   const mock = await installMocks(context);
@@ -243,21 +280,26 @@ test('mobile AI Chart 2.0 keeps chart usable and on-demand MTF inside viewport',
   const mock = await installMocks(context);
   await page.goto(chartUrl);
 
+  await expect(page.getByTestId('ai-chart-mobile-summary')).toBeVisible();
+  expect(totalChartCalls(mock.calls)).toBe(0);
+  await expectNoHorizontalOverflow(page);
+
+  await page.getByRole('tab', { name: '차트', exact: true }).click();
   await expect(page.getByTestId('unified-analysis-chart')).toBeVisible();
-  await expect(page.getByTestId('ai-chart-v2-intelligence')).toBeVisible();
   await expect(page.getByTestId('ai-chart-v2-signal-overlay')).toBeVisible();
   await expect.poll(() => totalChartCalls(mock.calls)).toBe(1);
-  await page.getByTestId('strategy-mode-SWING').click();
+  await page.getByRole('button', { name: /지표 설정/ }).click();
+  await expect(page.getByTestId('overlay-markers')).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+
+  await page.getByRole('tab', { name: '상세', exact: true }).click();
+  await expect(page.getByTestId('ai-chart-v2-intelligence')).toBeVisible();
   await expect(page.getByTestId('multi-timeframe-ai')).toBeVisible();
   await expect(page.getByTestId('mtf-not-loaded')).toBeVisible();
   await page.getByTestId('load-multi-timeframe').click();
-  for (const timeframe of ['15m', '1H', '4H', '1D']) {
+  for (const timeframe of ['1m', '3m', '5m', '15m']) {
     await expect(page.getByTestId(`mtf-${timeframe}`)).toBeVisible();
   }
-  await expectNoHorizontalOverflow(page);
-
-  await page.getByRole('button', { name: /지표 설정/ }).click();
-  await expect(page.getByTestId('overlay-markers')).toBeVisible();
   await expectNoHorizontalOverflow(page);
   expect(mock.privateTradingRequests).toEqual([]);
 });

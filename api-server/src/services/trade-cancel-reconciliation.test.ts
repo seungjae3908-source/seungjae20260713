@@ -137,17 +137,27 @@ test.before(() => {
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
   process.env.ORDER_EXECUTION_ENABLED = 'true';
   process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+  process.env.REAL_ORDER_ENABLED = 'true';
+  process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
   process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+  process.env.TOSS_LIVE_ORDER_ENABLED = 'true';
+  process.env.LIVE_TRADING = 'true';
+  process.env.executionAuthority = 'MANUAL';
 });
 
 test.after(() => {
   delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
   delete process.env.ORDER_EXECUTION_ENABLED;
   delete process.env.LIVE_TRADING_ACTIVATION_APPROVED;
+  delete process.env.REAL_ORDER_ENABLED;
+  delete process.env.PRIVATE_TRADING_API_ALLOWED;
   delete process.env.UPBIT_LIVE_ORDER_ENABLED;
+  delete process.env.TOSS_LIVE_ORDER_ENABLED;
+  delete process.env.LIVE_TRADING;
+  delete process.env.executionAuthority;
 });
 
-test('two concurrent cancel requests submit one exchange cancel and a concurrent fill wins', async () => {
+test('two concurrent cancel requests submit one exchange cancel and a concurrent fill wins', { timeout: 10_000 }, async () => {
   const { repository, plan, order } = await setup('duplicate-fill');
   const firstCandidate = await repository.getOrder(USER_ID, order.id);
   const secondCandidate = await repository.getOrder(USER_ID, order.id);
@@ -281,7 +291,7 @@ test('uncertain cancel never resends DELETE and later recovery performs lookup o
   }
 });
 
-test('newer full fill corrects a stale canceled winner from a concurrent recovery worker', async () => {
+test('newer full fill corrects a stale canceled winner from a concurrent recovery worker', { timeout: 10_000 }, async () => {
   const { repository, plan, order } = await setup('terminal-correction', 'RECOVERY_REQUIRED');
   order.cancelRequestClaimId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   order.cancelRequestedAt = '2026-08-05T04:03:00.000Z';
@@ -347,6 +357,100 @@ test('terminal cancellation requests perform no outbound request', async () => {
     const result = await new TradeCancelReconciliationService(repository).cancel(USER_ID, plan, order);
     assert.equal(result.state, 'FILLED');
     assert.equal(outbound, 0);
+  } finally {
+    globalThis.fetch = nativeFetch;
+  }
+});
+
+
+test('Toss cancel preserves the newly issued cancel operation id and reconciles the original order', async () => {
+  const repository = new InMemoryTradingRepository();
+  const base = fixtures('toss-cancel-operation');
+  const plan: TradingPlan = {
+    ...base.plan,
+    exchange: 'toss',
+    stockBroker: 'toss',
+    symbol: '005930',
+    market: 'KR',
+    side: 'buy',
+    orderType: 'limit',
+    quantity: 1,
+    quoteAmount: null,
+    limitPrice: 70_000,
+    estimatedKrw: 70_000,
+  };
+  const order: TradingOrder = {
+    ...base.order,
+    exchange: 'toss',
+    clientOrderId: 'toss-client-cancel-operation',
+    exchangeOrderId: 'toss-order-original',
+    currentLimitPrice: 70_000,
+  };
+  await repository.savePlan(plan);
+  await repository.saveOrder(order);
+  await repository.saveConnection({
+    userId: USER_ID,
+    exchange: 'toss',
+    accountMode: 'live',
+    configured: true,
+    encryptedCredentials: encryptTradingCredentials({
+      clientId: 'client',
+      clientSecret: 'secret',
+      accountSeq: 'account-1',
+    }, MASTER_KEY),
+    lastVerifiedAt: null,
+    lastErrorCode: null,
+    updatedAt: new Date().toISOString(),
+  });
+
+  const nativeFetch = globalThis.fetch;
+  const seen: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(String(input));
+    const method = String(init?.method ?? 'GET').toUpperCase();
+    seen.push(`${method} ${url.pathname}`);
+
+    if (url.pathname === '/oauth2/token') {
+      return new Response(JSON.stringify({ access_token: 'token', expires_in: 3600 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (url.pathname === '/api/v1/orders/toss-order-original/cancel') {
+      return new Response(JSON.stringify({ result: { orderId: 'toss-cancel-operation-new' } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (url.pathname === '/api/v1/orders/toss-order-original') {
+      return new Response(JSON.stringify({
+        result: {
+          orderId: 'toss-order-original',
+          symbol: '005930',
+          status: 'CANCELED',
+          quantity: '1',
+          remainingQuantity: '1',
+          execution: { filledQuantity: '0' },
+        },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    throw new Error(`UNEXPECTED_TOSS_CANCEL_PATH:${method}:${url.pathname}`);
+  }) as typeof fetch;
+
+  try {
+    const result = await new TradeCancelReconciliationService(repository).cancel(USER_ID, plan, order);
+    assert.equal(result.state, 'CANCELED');
+    assert.equal(result.exchangeOrderId, 'toss-order-original');
+    assert.equal(result.cancelOperationId, 'toss-cancel-operation-new');
+    assert.deepEqual(seen, [
+      'POST /oauth2/token',
+      'POST /api/v1/orders/toss-order-original/cancel',
+      'POST /oauth2/token',
+      'GET /api/v1/orders/toss-order-original',
+    ]);
   } finally {
     globalThis.fetch = nativeFetch;
   }

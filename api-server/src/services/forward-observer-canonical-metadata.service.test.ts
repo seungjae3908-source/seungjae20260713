@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ScannerResponse, ScannerSignalCard } from './scanner-signal.types';
-import { StrategyPromotionService } from './strategy-promotion.service';
+import { StrategyPromotionService, strategyCandidateId } from './strategy-promotion.service';
 import {
   attachForwardObserverCanonicalMetadata,
   resolveForwardObserverCanonicalMetadata,
@@ -63,11 +63,16 @@ test('authoritative Promotion identity is forwarded unchanged into the pre-Profi
   const result = resolveForwardObserverCanonicalMetadata({ card: card(), lane: KR_LANE, researchCodeSha: SHA });
   assert.deepEqual(result.blockers, []);
   assert.ok(result.paperCandidate);
+  assert.equal(result.paperCandidate.candidateId, strategyCandidateId(source.identity));
   assert.deepEqual(result.paperCandidate.signal.strategyIdentity, {
+    candidateId: strategyCandidateId(source.identity),
+    strategyFamily: source.identity.strategyFamily,
     strategyId: source.identity.strategyId,
     strategyVersion: source.identity.strategyVersion,
     parameterHash: source.identity.parameterHash,
+    parameterDigest: source.identity.parameterHash,
     researchCodeSha: source.identity.researchCodeSha,
+    accountMode: 'PAPER',
   });
   assert.equal(result.paperCandidate.signal.signalId, 'forward-canonical-1');
   assert.equal(result.paperCandidate.signal.market, 'KR_STOCK');

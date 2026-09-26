@@ -5,6 +5,23 @@ on:
     branches: [main]
     paths:
       - .github/workflows/paper-forward-schedule-no-deploy-activation.yml
+      - ops/install-paper-forward-schedule.sh
+      - ops/bridge-paper-forward-no-deploy-snapshot.mjs
+      - ops/run-paper-forward-flat-snapshot-republish.mjs
+      - ops/collect-paper-forward-no-deploy-diagnostics.mjs
+      - market-prediction-lab/tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js
+      - market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js
+      - market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js
+      - market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
+      - market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v1.json
+      - market-prediction-lab/scripts/materialize-paper-risk-policy-record.mjs
+      - market-prediction-lab/tests/paper-risk-policy-human-approval-v1.test.js
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact current main SHA to certify for isolated Paper activation
+        required: true
+        type: string
   issue_comment:
     types: [created]
 
@@ -15,7 +32,7 @@ permissions:
   statuses: read
 
 concurrency:
-  group: paper-forward-no-deploy-schedule-activation
+  group: paper-forward-no-deploy-schedule-activation-${{ github.event_name }}
   cancel-in-progress: false
 
 jobs:
@@ -27,16 +44,24 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Verify Paper-only activation and no application deployment authority
+      - name: Verify Paper-only certification and activation boundary
         shell: bash
         run: |
           set -Eeuo pipefail
           workflow=.github/workflows/paper-forward-schedule-no-deploy-activation.yml
           install=ops/install-paper-forward-schedule.sh
           active_contract="$RUNNER_TEMP/paper-forward-active-contract.yml"
+          operational_contract="$RUNNER_TEMP/paper-forward-operational-contract.yml"
           awk '/^  activate:/{emit=1} emit{print}' "$workflow" > "$active_contract"
+          awk '/^  certify:/{emit=1} emit{print}' "$workflow" > "$operational_contract"
           test -s "$active_contract"
-          grep -F "startsWith(github.event.comment.body, '/activate-paper-forward-no-deploy ')" "$workflow" >/dev/null
+          test -s "$operational_contract"
+          grep -F 'workflow_dispatch:' "$workflow" >/dev/null
+          grep -F 'paper-forward-no-deploy-certification-' "$operational_contract" >/dev/null
+          grep -F 'Required CI 6/6' "$operational_contract" >/dev/null
+          grep -F 'PostgreSQL Auth evidence' "$operational_contract" >/dev/null
+          grep -F "startsWith(github.event.comment.body, '/activate-paper-forward-no-deploy ')" "$operational_contract" >/dev/null
+          ! grep -F 'staging-verdict-' "$operational_contract" >/dev/null
           grep -F "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=true" "$active_contract" >/dev/null
           grep -F 'productionAppDeployPerformed = false' "$active_contract" >/dev/null
           grep -F 'productionAppMutationAllowed = false' "$active_contract" >/dev/null
@@ -46,9 +71,252 @@ jobs:
           grep -F "REAL_ORDER_ENABLED='false'" "$install" >/dev/null
           grep -F "PRIVATE_TRADING_API_ALLOWED='false'" "$install" >/dev/null
           grep -F "PRIVATE_ACCOUNT_ACCESS='false'" "$install" >/dev/null
+          grep -F 'bridge-paper-forward-no-deploy-snapshot.mjs' "$install" >/dev/null
+          grep -F 'snapshotEconomicStatePreserved: true' "$install" >/dev/null
+          grep -F 'naturalCycleCredit: 0' "$install" >/dev/null
+          grep -F 'exec /usr/bin/env -i' "$install" >/dev/null
+          grep -F 'PAPER_FORWARD_RISK_POLICY_DECISION_PATH' "$install" >/dev/null
+          grep -F 'materialize-paper-risk-policy-record.mjs' "$install" >/dev/null
+          grep -F 'financialValuesFromApprovedDecision:true' market-prediction-lab/scripts/materialize-paper-risk-policy-record.mjs >/dev/null
+          grep -F '"maximumLeverage": 5' market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v1.json >/dev/null
           grep -F "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='\$OUTCOME_ACCUMULATION_ENABLED'" "$install" >/dev/null
+          ! grep -F 'deploy-production.sh' "$operational_contract" >/dev/null
+          ! grep -E 'pm2 (start|restart|reload|delete|stop)|systemctl .*caddy|caddy reload|supabase db|psql .*-(c|f)' "$operational_contract" >/dev/null
+
+  focused-paper-tests:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.target_sha || github.event.pull_request.head.sha }}
+    steps:
+      - name: Validate exact target syntax
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Checkout exact Paper target
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact checkout
+        run: test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Paper scheduler core regression
+        run: npm --prefix market-prediction-lab run paper:scheduler:verify
+
+      - name: Run authoritative Natural Paper focused regression
+        run: >-
+          node --test
+          market-prediction-lab/tests/authoritative-paper-runtime-factory-v1.test.js
+          market-prediction-lab/tests/authoritative-paper-runtime-package-v1.test.js
+          market-prediction-lab/tests/authoritative-paper-natural-funnel-v1.test.js
+          market-prediction-lab/tests/natural-paper-position-settlement-lifecycle-v1.test.js
+          market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js
+          market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js
+          market-prediction-lab/tests/adaptive-multi-evidence-natural-paper-v2.test.js
+          market-prediction-lab/tests/adaptive-multi-evidence-e2e-v2.test.js
+          market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js
+          market-prediction-lab/tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js
+          market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
+          market-prediction-lab/tests/paper-risk-policy-human-approval-v1.test.js
+
+      - name: Bundle authenticated Paper snapshot transport regression
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/routes/paper-trading.smoke.test.ts
+          --bundle --platform=node --format=cjs --target=node22
+          --outfile=/tmp/paper-trading-snapshot-transport.test.cjs
+
+      - name: Run authenticated Paper snapshot transport regression
+        run: node --test /tmp/paper-trading-snapshot-transport.test.cjs
+
+      - name: Rebuild and verify exact authoritative runtime package
+        run: |
+          node api-server/scripts/build-authoritative-paper-runtime-package.mjs
+          git diff --exit-code -- \
+            market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs \
+            market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
+
+      - name: Verify installer and activation safety boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          install=ops/install-paper-forward-schedule.sh
+          workflow=.github/workflows/paper-forward-schedule-no-deploy-activation.yml
+          active_contract="$RUNNER_TEMP/paper-forward-active-contract.yml"
+          awk '/^  activate:/{emit=1} emit{print}' "$workflow" > "$active_contract"
+          test -s "$active_contract"
+          grep -F "LIVE_TRADING='false'" "$install" >/dev/null
+          grep -F "REAL_ORDER_ENABLED='false'" "$install" >/dev/null
+          grep -F "PRIVATE_TRADING_API_ALLOWED='false'" "$install" >/dev/null
+          grep -F "PRIVATE_ACCOUNT_ACCESS='false'" "$install" >/dev/null
+          grep -F 'bridge-paper-forward-no-deploy-snapshot.mjs' "$install" >/dev/null
+          grep -F 'snapshotEconomicStatePreserved: true' "$install" >/dev/null
+          grep -F 'naturalCycleCredit: 0' "$install" >/dev/null
+          grep -F 'exec /usr/bin/env -i' "$install" >/dev/null
+          grep -F 'PAPER_FORWARD_RISK_POLICY_DECISION_PATH' "$install" >/dev/null
+          grep -F 'materialize-paper-risk-policy-record.mjs' "$install" >/dev/null
+          grep -F '/opt/stock-app-data/paper-forward-v1' "$install" >/dev/null
+          grep -F 'productionAppDeployPerformed = false' "$active_contract" >/dev/null
+          grep -F 'productionAppMutationAllowed = false' "$active_contract" >/dev/null
+          grep -F 'environment: production' "$active_contract" >/dev/null
           ! grep -F 'deploy-production.sh' "$active_contract" >/dev/null
           ! grep -E 'pm2 (start|restart|reload|delete|stop)|systemctl .*caddy|caddy reload|supabase db|psql .*-(c|f)' "$active_contract" >/dev/null
+
+  certify:
+    if: github.event_name == 'workflow_dispatch'
+    needs: focused-paper-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      TARGET_SHA: ${{ inputs.target_sha }}
+    steps:
+      - name: Checkout exact target
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require exact current main and Required CI 6/6
+        id: required
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ env.TARGET_SHA }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            if (!/^[0-9a-f]{40}$/.test(target)) {
+              core.setFailed('Exact lowercase 40-character target SHA required.');
+              return;
+            }
+            const main = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: 'main' });
+            if (main.data.commit.sha !== target) {
+              core.setFailed(`Certification target is stale: target=${target} main=${main.data.commit.sha}`);
+              return;
+            }
+            const required = new Set([
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ]);
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner, repo: context.repo.repo, ref: target, per_page: 100,
+            });
+            const latest = new Map();
+            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+            const evidence = [...required].map((contextName) => latest.get(contextName));
+            if (evidence.length !== 6 || evidence.some((status) => status?.state !== 'success')) {
+              core.setFailed('Exact current main does not have Required CI 6/6 SUCCESS.');
+              return;
+            }
+            const runIds = new Set(evidence.map((status) => /\/actions\/runs\/(\d+)/.exec(String(status.target_url ?? ''))?.[1] ?? null));
+            if (runIds.size !== 1 || runIds.has(null)) {
+              core.setFailed('Required CI 6/6 does not share one coherent provenance run.');
+              return;
+            }
+            const runId = Number([...runIds][0]);
+            const run = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: runId });
+            if (run.data.head_sha !== target || run.data.status !== 'completed' || run.data.conclusion !== 'success') {
+              core.setFailed('Required CI provenance is not an exact successful target run.');
+              return;
+            }
+            core.setOutput('run_id', String(runId));
+
+      - name: Locate successful exact-SHA PostgreSQL Auth evidence
+        id: postgres
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ env.TARGET_SHA }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, head_sha: target, branch: 'main', event: 'issue_comment', status: 'completed', per_page: 100,
+            });
+            for (const run of runs) {
+              if (run.name !== 'Staging PostgreSQL Auth Gate' || run.path !== '.github/workflows/staging-postgres-auth-gate.yml' || run.conclusion !== 'success') continue;
+              const artifacts = await github.rest.actions.listWorkflowRunArtifacts({ owner: context.repo.owner, repo: context.repo.repo, run_id: run.id, per_page: 100 });
+              const expected = `staging-postgres-auth-${target}`;
+              const artifact = (artifacts.data.artifacts ?? []).find((item) => item.name === expected && item.expired !== true && item.workflow_run?.head_sha === target);
+              if (artifact) {
+                core.setOutput('run_id', String(run.id));
+                return;
+              }
+            }
+            core.setFailed(`No successful exact-SHA PostgreSQL Auth evidence exists for ${target}.`);
+
+      - name: Write immutable Paper-only certification
+        env:
+          REQUIRED_CI_RUN_ID: ${{ steps.required.outputs.run_id }}
+          POSTGRES_AUTH_RUN_ID: ${{ steps.postgres.outputs.run_id }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p paper-forward-no-deploy-certification
+          node <<'NODE'
+          const fs = require('node:fs');
+          const targetSha = process.env.TARGET_SHA;
+          const requiredCiRunId = Number(process.env.REQUIRED_CI_RUN_ID);
+          const postgresAuthRunId = Number(process.env.POSTGRES_AUTH_RUN_ID);
+          if (!/^[0-9a-f]{40}$/.test(targetSha) || !Number.isSafeInteger(requiredCiRunId) || !Number.isSafeInteger(postgresAuthRunId)) process.exit(1);
+          const value = {
+            schemaVersion: 'paper-forward-no-deploy-certification-v1',
+            targetSha,
+            certifiedAt: new Date().toISOString(),
+            requiredCiRunId,
+            postgresAuthRunId,
+            certificationReady: true,
+            checks: {
+              exactCurrentMain: true,
+              requiredCi6Of6: true,
+              postgresAuthEvidence: true,
+              focusedPaperRegression: true,
+              paperSchedulerRegression: true,
+              authenticatedSnapshotTransport: true,
+              authoritativeRuntimePackageClean: true,
+              isolatedPersistentStateRoot: '/opt/stock-app-data/paper-forward-v1',
+              productionAppDeployAllowed: false,
+              productionAppMutationAllowed: false,
+              liveTrading: false,
+              autoTrading: false,
+              realOrderEnabled: false,
+              privateTradingApiAllowed: false,
+              executionAuthority: 'NONE',
+            },
+          };
+          fs.writeFileSync('paper-forward-no-deploy-certification/certification.json', `${JSON.stringify(value, null, 2)}\n`);
+          NODE
+
+      - name: Upload exact-SHA Paper-only certification
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-forward-no-deploy-certification-${{ env.TARGET_SHA }}
+          path: paper-forward-no-deploy-certification/certification.json
+          if-no-files-found: error
+          retention-days: 30
 
   gate:
     if: >-
@@ -60,7 +328,7 @@ jobs:
     timeout-minutes: 15
     outputs:
       target_sha: ${{ steps.command.outputs.sha }}
-      staging_run_id: ${{ steps.staging.outputs.run_id }}
+      certification_run_id: ${{ steps.certification.outputs.run_id }}
       postgres_run_id: ${{ steps.postgres.outputs.run_id }}
     steps:
       - name: Parse exact owner activation command
@@ -156,15 +424,15 @@ jobs:
             }
             core.setFailed(`No successful exact-SHA PostgreSQL Auth evidence exists for ${target}.`);
 
-      - name: Locate successful exact-SHA Staging Readiness evidence
-        id: staging
+      - name: Locate successful exact-SHA Paper-only certification
+        id: certification
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
         with:
           script: |
             const target = process.env.TARGET_SHA;
-            const name = `staging-verdict-${target}`;
+            const name = `paper-forward-no-deploy-certification-${target}`;
             const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
               owner: context.repo.owner, repo: context.repo.repo, name, per_page: 100,
             });
@@ -172,24 +440,59 @@ jobs:
               if (artifact.expired || artifact.workflow_run?.head_sha !== target) continue;
               const response = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: artifact.workflow_run.id });
               const run = response.data;
-              if (run.event === 'workflow_dispatch' && run.head_branch === 'main' && run.head_sha === target && run.path === '.github/workflows/staging-readiness.yml' && run.status === 'completed' && run.conclusion === 'success') {
+              if (run.event === 'workflow_dispatch'
+                && run.head_branch === 'main'
+                && run.head_sha === target
+                && run.path === '.github/workflows/paper-forward-schedule-no-deploy-activation.yml'
+                && run.status === 'completed'
+                && run.conclusion === 'success') {
                 core.setOutput('run_id', String(run.id));
                 return;
               }
             }
-            core.setFailed(`No successful exact-SHA Staging Readiness verdict exists for ${target}.`);
+            core.setFailed(`No successful exact-SHA Paper-only certification exists for ${target}.`);
 
-      - name: Download and verify release-ready Staging verdict
+      - name: Download exact-SHA Paper-only certification
         uses: actions/download-artifact@v4
         with:
-          name: staging-verdict-${{ steps.command.outputs.sha }}
-          path: staging-verdict
+          name: paper-forward-no-deploy-certification-${{ steps.command.outputs.sha }}
+          path: paper-forward-no-deploy-certification
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
-          run-id: ${{ steps.staging.outputs.run_id }}
+          run-id: ${{ steps.certification.outputs.run_id }}
 
-      - name: Require exact release-ready Staging verdict
-        run: node api-server/scripts/verify-staging-verdict.mjs staging-verdict/staging-verdict.json
+      - name: Require exact Paper-only certification safety contract
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          POSTGRES_RUN_ID: ${{ steps.postgres.outputs.run_id }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const value = JSON.parse(fs.readFileSync('paper-forward-no-deploy-certification/certification.json', 'utf8'));
+          const checks = value?.checks ?? {};
+          const valid = value?.schemaVersion === 'paper-forward-no-deploy-certification-v1'
+            && value?.targetSha === process.env.TARGET_SHA
+            && value?.certificationReady === true
+            && Number.isSafeInteger(value?.requiredCiRunId)
+            && Number.isSafeInteger(value?.postgresAuthRunId)
+            && String(value.postgresAuthRunId) === process.env.POSTGRES_RUN_ID
+            && checks.exactCurrentMain === true
+            && checks.requiredCi6Of6 === true
+            && checks.postgresAuthEvidence === true
+            && checks.focusedPaperRegression === true
+            && checks.paperSchedulerRegression === true
+            && checks.authenticatedSnapshotTransport === true
+            && checks.authoritativeRuntimePackageClean === true
+            && checks.isolatedPersistentStateRoot === '/opt/stock-app-data/paper-forward-v1'
+            && checks.productionAppDeployAllowed === false
+            && checks.productionAppMutationAllowed === false
+            && checks.liveTrading === false
+            && checks.autoTrading === false
+            && checks.realOrderEnabled === false
+            && checks.privateTradingApiAllowed === false
+            && checks.executionAuthority === 'NONE';
+          if (!valid) process.exit(1);
+          NODE
 
   activate:
     if: github.event_name == 'issue_comment'
@@ -204,6 +507,7 @@ jobs:
       SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
       SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
       TARGET_SHA: ${{ needs.gate.outputs.target_sha }}
+      CERTIFICATION_RUN_ID: ${{ needs.gate.outputs.certification_run_id }}
       REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
       EVIDENCE_DIR: ${{ github.workspace }}/paper-forward-no-deploy-evidence
     steps:
@@ -252,13 +556,22 @@ jobs:
         id: install
         env:
           PRODUCTION_APP_SHA: ${{ steps.app_before.outputs.sha }}
+          PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256: ${{ secrets.PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256 }}
         shell: bash
         run: |
           set -Eeuo pipefail
+          [[ "$PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+            printf '%s\n' '::error::Protected Paper publisher SHA-256 binding is missing or invalid.' >&2
+            exit 14
+          }
+          printf -v remote_command \
+            'TARGET_SHA=%q REPOSITORY_URL=%q PRODUCTION_APP_SHA=%q PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=%q bash -s' \
+            "$TARGET_SHA" "$REPOSITORY_URL" "$PRODUCTION_APP_SHA" "$PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" \
-            "TARGET_SHA='$TARGET_SHA' REPOSITORY_URL='$REPOSITORY_URL' PRODUCTION_APP_SHA='$PRODUCTION_APP_SHA' bash -s" <<'REMOTE' > "$EVIDENCE_DIR/activation.json"
+            "$remote_command" <<'REMOTE' > "$EVIDENCE_DIR/activation.json"
           set -Eeuo pipefail
+          [[ "$PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256" =~ ^[0-9a-f]{64}$ ]] || exit 14
           STATE_ROOT=/opt/stock-app-data/paper-forward-v1
           SOURCE_DIR="$(mktemp -d /tmp/paper-forward-source.XXXXXX)"
           cleanup() { rm -rf -- "$SOURCE_DIR"; }
@@ -271,6 +584,8 @@ jobs:
           mkdir -p "$SOURCE_DIR/.deploy"
           printf '%s\n' "$TARGET_SHA" > "$SOURCE_DIR/.deploy/current-sha"
           LIVE_DIR="$SOURCE_DIR" PAPER_FORWARD_STATE_ROOT="$STATE_ROOT" PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=true \
+            PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256" \
+            PAPER_FORWARD_RISK_POLICY_DECISION_PATH="$SOURCE_DIR/market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v1.json" \
             "$SOURCE_DIR/ops/install-paper-forward-schedule.sh" "$TARGET_SHA" >/dev/null
           PRODUCTION_APP_SHA="$PRODUCTION_APP_SHA" TARGET_SHA="$TARGET_SHA" node - "$STATE_ROOT/activation.json" <<'NODE'
           const fs = require('node:fs');
@@ -306,6 +621,12 @@ jobs:
             || value.paperTradeOutcomeAccumulationEnabled !== true
             || value.simulatedFinancialAdaptersEnabled !== true
             || value.externalFinancialMutationAllowed !== false
+            || value.snapshotSourceShaAfter !== process.env.TARGET_SHA
+            || value.snapshotEconomicStatePreserved !== true
+            || ![0, 1].includes(value.snapshotMetadataMutationCount)
+            || value.naturalCycleCredit !== 0
+            || value.naturalSampleCredit !== 0
+            || value.naturalSettlementCredit !== 0
             || value.scheduleActive !== true
             || value.liveTrading !== false
             || value.privateAccountAccess !== false
@@ -413,6 +734,18 @@ jobs:
           echo 'No natural cron cycle observed within bounded window.' >&2
           exit 78
 
+      - name: Capture sanitized Paper cron failure diagnostics before disable
+        if: failure()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          failed_at_ms="$(date +%s%3N)"
+          printf -v remote_command 'node --input-type=module - %q %q %q' "$TARGET_SHA" "${{ github.run_id }}" "$failed_at_ms"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" \
+            < ops/collect-paper-forward-no-deploy-diagnostics.mjs \
+            > "$EVIDENCE_DIR/cron-diagnostic-before-disable.json"
+
       - name: Revalidate current main after natural cycle
         uses: actions/github-script@v7
         env:
@@ -430,6 +763,18 @@ jobs:
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" 'bash -s' < ops/disable-paper-forward-schedule.sh > "$EVIDENCE_DIR/automatic-disable.json" 2>&1
           exit 0
 
+      - name: Capture sanitized Paper cron failure diagnostics after disable
+        if: failure()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          failed_at_ms="$(date +%s%3N)"
+          printf -v remote_command 'node --input-type=module - %q %q %q' "$TARGET_SHA" "${{ github.run_id }}" "$failed_at_ms"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" \
+            < ops/collect-paper-forward-no-deploy-diagnostics.mjs \
+            > "$EVIDENCE_DIR/cron-diagnostic-after-disable.json"
+
       - name: Upload sanitized activation evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -444,6 +789,7 @@ jobs:
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ env.TARGET_SHA }}
+          CERTIFICATION_RUN_ID: ${{ env.CERTIFICATION_RUN_ID }}
           PRODUCTION_APP_SHA: ${{ steps.app_before.outputs.sha }}
           EVIDENCE_FILE: ${{ env.EVIDENCE_DIR }}/natural-cycle.json
         with:
@@ -457,6 +803,7 @@ jobs:
               body: [
                 '[PAPER_FORWARD_NO_DEPLOY_ACTIVATED]',
                 `TARGET_SHA=${process.env.TARGET_SHA}`,
+                `PAPER_ONLY_CERTIFICATION_RUN_ID=${process.env.CERTIFICATION_RUN_ID}`,
                 `PRODUCTION_APP_SHA_UNCHANGED=${process.env.PRODUCTION_APP_SHA}`,
                 'PRODUCTION_APP_DEPLOY_PERFORMED=false',
                 'FIRST_NATURAL_CRON_VERIFIED=true',

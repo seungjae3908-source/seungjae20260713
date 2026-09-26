@@ -3,15 +3,35 @@ import { MarketDataService, type QuoteRow } from '../services/market-data.servic
 import {
   MarketListingService,
   type MarketKey,
+  type MarketListingDiagnostics,
 } from '../services/market-listing.service';
 import { ThemesService } from '../services/themes.service';
-import { SectorPopularService } from '../services/sector-popular.service';
+import {
+  SectorPopularAvailabilityError,
+  SectorPopularService,
+} from '../services/sector-popular.service';
 import { SignalService } from '../services/signal.service';
 import { RecommendationService } from '../services/recommendation.service';
 
 const router: IRouter = Router();
 
 type MarketScope = 'ALL' | 'KR' | 'US';
+
+interface LiveListingsDiagnostics {
+  status: 'complete' | 'partial';
+  requestedMarkets: MarketKey[];
+  completedMarkets: MarketKey[];
+  failedMarkets: MarketKey[];
+  listingDiagnostics: Array<{
+    market: MarketKey;
+    diagnostics: MarketListingDiagnostics | null;
+  }>;
+}
+
+interface LiveListingsResult {
+  rows: QuoteRow[];
+  diagnostics: LiveListingsDiagnostics;
+}
 
 function normalizeMarket(value: unknown): MarketScope {
   const raw = String(value ?? 'ALL').toUpperCase();
@@ -27,6 +47,27 @@ function normalizeTicker(value: unknown): string {
 
 function uniqueTickers(values: string[]): string[] {
   return Array.from(new Set(values.map(normalizeTicker).filter(Boolean)));
+}
+
+export function sectorPopularUnavailablePayload(
+  market: 'KR' | 'US',
+  error: SectorPopularAvailabilityError,
+) {
+  return {
+    ok: false,
+    market,
+    provider: 'public-market-providers',
+    sortBasis: '거래대금 기준',
+    sectors: [],
+    updatedAt: new Date().toISOString(),
+    available: false,
+    partial: false,
+    dataState: 'provider_error' as const,
+    retryable: true,
+    error: 'SECTOR_POPULAR_PROVIDER_UNAVAILABLE',
+    errorCode: error.code,
+    message: '섹터 순위 공개 데이터 제공기관의 근거를 확인하지 못했습니다. 임의 순위를 만들지 않으며 다시 확인할 수 있습니다.',
+  };
 }
 
 function uniqueRows(rows: QuoteRow[]): QuoteRow[] {
@@ -69,21 +110,62 @@ function marketKeys(scope: MarketScope): MarketKey[] {
   return ['KRX', 'NASDAQ', 'NYSE'];
 }
 
-async function liveListings(scope: MarketScope): Promise<QuoteRow[]> {
+async function liveListingsWithDiagnostics(
+  scope: MarketScope,
+): Promise<LiveListingsResult> {
+  const requestedMarkets = marketKeys(scope);
   const settled = await Promise.allSettled(
-    marketKeys(scope).map((market) => MarketListingService.getMarketListings(market)),
+    requestedMarkets.map(async (market) => ({
+      market,
+      listings: await MarketListingService.getMarketListings(market),
+    })),
   );
   const rows: QuoteRow[] = [];
-  for (const result of settled) {
-    if (result.status !== 'fulfilled') continue;
+  const completedMarkets: MarketKey[] = [];
+  const failedMarkets: MarketKey[] = [];
+  const listingDiagnostics: LiveListingsDiagnostics['listingDiagnostics'] = [];
+
+  settled.forEach((result, index) => {
+    const market = requestedMarkets[index];
+
+    if (result.status !== 'fulfilled') {
+      failedMarkets.push(market);
+      return;
+    }
+
+    completedMarkets.push(market);
+    listingDiagnostics.push({
+      market,
+      diagnostics: result.value.listings.diagnostics ?? null,
+    });
     rows.push(
-      ...result.value.popular,
-      ...result.value.gainers,
-      ...result.value.losers,
-      ...result.value.recommended,
+      ...result.value.listings.popular,
+      ...result.value.listings.gainers,
+      ...result.value.listings.losers,
+      ...result.value.listings.recommended,
     );
-  }
-  return uniqueRows(rows);
+  });
+
+  const status: LiveListingsDiagnostics['status'] =
+    failedMarkets.length > 0
+    || listingDiagnostics.some((item) => item.diagnostics?.status !== 'complete')
+      ? 'partial'
+      : 'complete';
+
+  return {
+    rows: uniqueRows(rows),
+    diagnostics: {
+      status,
+      requestedMarkets,
+      completedMarkets,
+      failedMarkets,
+      listingDiagnostics,
+    },
+  };
+}
+
+async function liveListings(scope: MarketScope): Promise<QuoteRow[]> {
+  return (await liveListingsWithDiagnostics(scope)).rows;
 }
 
 router.get('/config', (_req, res) => {
@@ -145,10 +227,13 @@ router.get('/quotes', async (req, res) => {
 router.get('/market/movers', async (req, res) => {
   const scope = normalizeMarket(req.query.market);
   try {
-    const rows = await liveListings(scope);
+    const live = await liveListingsWithDiagnostics(scope);
+    const rows = live.rows;
     if (!rows.length) {
       return res.status(503).json({
         market: scope,
+        dataStatus: 'unavailable',
+        diagnostics: live.diagnostics,
         popular: [],
         volume: [],
         recommended: [],
@@ -169,6 +254,8 @@ router.get('/market/movers', async (req, res) => {
     return res.json({
       market: scope,
       provider: 'live-market-providers',
+      dataStatus: live.diagnostics.status,
+      diagnostics: live.diagnostics,
       popular,
       volume,
       recommended,
@@ -187,6 +274,7 @@ router.get('/market/movers', async (req, res) => {
     console.error('market movers error:', error);
     return res.status(502).json({
       market: scope,
+      dataStatus: 'error',
       popular: [],
       volume: [],
       recommended: [],
@@ -203,13 +291,26 @@ router.get('/market/sector-popular', async (req, res) => {
   const market = String(req.query.market ?? 'KR').toUpperCase() === 'US' ? 'US' : 'KR';
   try {
     const result = await SectorPopularService.getSectorPopular(market);
-    return res.json(result);
+    return res.json({
+      ...result,
+      ok: true,
+      available: true,
+      partial: false,
+      dataState: 'ready',
+      retryable: false,
+      error: null,
+      errorCode: null,
+    });
   } catch (error) {
+    if (error instanceof SectorPopularAvailabilityError) {
+      return res.status(200).json(sectorPopularUnavailablePayload(market, error));
+    }
     console.error('market sector-popular error:', error);
     return res.status(502).json({
       market,
       sortBasis: '거래대금 기준',
       sectors: [],
+      updatedAt: new Date().toISOString(),
       error: 'SECTOR_POPULAR_PROVIDER_ERROR',
     });
   }

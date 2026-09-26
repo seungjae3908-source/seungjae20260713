@@ -34,6 +34,10 @@ import {
   type UnifiedJournalFilters,
 } from '../services/unified-trade-journal.service';
 import {
+  bindCanonicalResearchToUnifiedJournal,
+  readCanonicalResearchOwnerStateForJournalBinding,
+} from '../services/unified-trade-journal-canonical-binding.service';
+import {
   PaperJournalSignalPerformanceRepository,
   buildSignalPerformanceReadModel,
   type PerformanceQuery,
@@ -278,10 +282,17 @@ export function createPaperJournalRouter(
 
   router.get('/paper-journal/unified-ledger', async (request: AuthenticatedRequest, response) => {
     try {
-      const payloads = await repositoryFactory(request).listJournalPayloads(request.member?.id ?? '');
+      const ownerId = request.member?.id ?? '';
+      const payloads = await repositoryFactory(request).listJournalPayloads(ownerId);
+      const observedAt = now();
+      const journal = buildUnifiedTradeJournal(payloads, unifiedFilters(request.query), observedAt);
+      const ownerReadback = await readCanonicalResearchOwnerStateForJournalBinding({
+        authenticatedAccountId: ownerId,
+        nowMs: observedAt.getTime(),
+      });
       return response.json(analysisEnvelope({
         ok: true,
-        result: buildUnifiedTradeJournal(payloads, unifiedFilters(request.query), now()),
+        result: bindCanonicalResearchToUnifiedJournal(journal, ownerReadback, observedAt.getTime()),
       }));
     } catch (cause) {
       return handleError(response, cause, 'UNIFIED_JOURNAL_FAILED', '통합 매매일지를 처리하지 못했습니다.', analysisEnvelope);

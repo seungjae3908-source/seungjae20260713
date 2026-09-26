@@ -1,5 +1,5 @@
-import { Router, type IRouter } from 'express';
-import type { AuthenticatedRequest } from '../../middleware/auth';
+import { Router, type IRouter, type NextFunction, type Response } from 'express';
+import { requireCapability, type AuthenticatedRequest } from '../../middleware/auth';
 import {
   credentialConfigurationStatus,
   encryptTradingCredentials,
@@ -12,10 +12,11 @@ import {
 } from './account-readonly.repository';
 import { AccountReadonlyService } from './account-readonly.service';
 
-const PROVIDERS = new Set<AccountProvider>(['toss', 'upbit', 'bitget']);
-const CREDENTIAL_PROVIDERS = new Set<ReadonlyCredentialProvider>(['toss', 'upbit', 'bitget']);
+const PROVIDERS = new Set<AccountProvider>(['toss', 'kiwoom', 'upbit', 'bitget']);
+const CREDENTIAL_PROVIDERS = new Set<ReadonlyCredentialProvider>(['toss', 'kiwoom', 'upbit', 'bitget']);
 const CREDENTIAL_FIELDS: Record<ReadonlyCredentialProvider, { required: readonly string[]; optional: readonly string[] }> = {
   toss: { required: ['clientId', 'clientSecret'], optional: ['accountSeq'] },
+  kiwoom: { required: ['appKey', 'appSecret'], optional: [] },
   upbit: { required: ['accessKey', 'secretKey'], optional: [] },
   bitget: { required: ['apiKey', 'secretKey', 'passphrase'], optional: [] },
 };
@@ -24,6 +25,15 @@ const FORBIDDEN_PERMISSION_PATTERN = /(trade|order|write|withdraw|transfer|ë§¤ë§
 type CredentialRepositoryFactory = (userId: string) => AccountReadonlyCredentialRepository;
 let credentialRepositoryFactoryForTests: CredentialRepositoryFactory | null = null;
 
+type DisconnectEventSource = {
+  once(event: string, listener: () => void): unknown;
+  removeListener(event: string, listener: () => void): unknown;
+};
+
+type DisconnectResponse = DisconnectEventSource & {
+  writableEnded: boolean;
+};
+
 export function setAccountReadonlyCredentialRepositoryFactoryForTests(factory: CredentialRepositoryFactory | null) {
   credentialRepositoryFactoryForTests = factory;
 }
@@ -31,6 +41,7 @@ export function setAccountReadonlyCredentialRepositoryFactoryForTests(factory: C
 export function accountReadFlags(environment: NodeJS.ProcessEnv = process.env) {
   return {
     toss: environment.TOSS_ACCOUNT_READ_ENABLED === 'true',
+    kiwoom: environment.KIWOOM_ACCOUNT_READ_ENABLED === 'true',
     upbit: environment.UPBIT_ACCOUNT_READ_ENABLED === 'true',
     bitget: environment.BITGET_ACCOUNT_READ_ENABLED === 'true',
   } as const;
@@ -61,6 +72,24 @@ function authScope(req: AuthenticatedRequest) {
 function credentialRepository(userId: string): AccountReadonlyCredentialRepository {
   return credentialRepositoryFactoryForTests?.(userId)
     ?? createAccountReadonlyCredentialRepository(userId);
+}
+
+export function readonlyProviderCapability(provider: unknown) {
+  const normalized = String(provider ?? '').trim().toLowerCase();
+  if (normalized === 'bitget') return 'canAccessFutures' as const;
+  if (normalized === 'upbit') return 'canAccessSpot' as const;
+  if (normalized === 'toss' || normalized === 'kiwoom') return 'canAccessBasicInfo' as const;
+  return null;
+}
+
+function requireReadonlyProviderCapability(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction,
+) {
+  const capability = readonlyProviderCapability(req.params.provider);
+  if (!capability) return next();
+  return requireCapability(capability)(req, res, next);
 }
 
 export function parseReadonlyCredentialRequest(
@@ -119,6 +148,22 @@ function credentialErrorStatus(errorCode: string) {
   return 400;
 }
 
+export function bindAccountReadonlyDisconnectAbort(
+  request: DisconnectEventSource,
+  response: DisconnectResponse,
+  controller: AbortController,
+) {
+  const abortIfUnfinished = () => {
+    if (!response.writableEnded) controller.abort();
+  };
+  request.once('aborted', abortIfUnfinished);
+  response.once('close', abortIfUnfinished);
+  return () => {
+    request.removeListener('aborted', abortIfUnfinished);
+    response.removeListener('close', abortIfUnfinished);
+  };
+}
+
 export function createAccountReadonlyRouter(service: AccountReadonlyService): IRouter {
   const router: IRouter = Router();
 
@@ -127,17 +172,18 @@ export function createAccountReadonlyRouter(service: AccountReadonlyService): IR
     const { userId, accessToken } = authScope(req);
     if (!userId || !accessToken) return res.status(401).json(deniedResponse('LOGIN_REQUIRED'));
     const vault = credentialConfigurationStatus();
+    const flags = accountReadFlags();
     return res.json({
       ok: true,
       encryptionConfigured: vault.encryptionConfigured,
-      supportedProviders: ['toss', 'upbit', 'bitget'],
-      hiddenProviders: ['kiwoom'],
+      supportedProviders: ['toss', ...(flags.kiwoom ? ['kiwoom'] : []), 'upbit', 'bitget'],
+      hiddenProviders: flags.kiwoom ? [] : ['kiwoom'],
       storage: 'user_scoped_account_readonly_encrypted_vault',
       ...safetyCounters(),
     });
   });
 
-  router.put('/credentials/:provider', async (req: AuthenticatedRequest, res) => {
+  router.put('/credentials/:provider', requireReadonlyProviderCapability, async (req: AuthenticatedRequest, res) => {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     const { userId, accessToken } = authScope(req);
     if (!userId || !accessToken) return res.status(401).json(deniedResponse('LOGIN_REQUIRED'));
@@ -171,7 +217,32 @@ export function createAccountReadonlyRouter(service: AccountReadonlyService): IR
     }
   });
 
-  router.get('/:provider', async (req: AuthenticatedRequest, res) => {
+  router.delete('/credentials/:provider', requireReadonlyProviderCapability, async (req: AuthenticatedRequest, res) => {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    const { userId, accessToken } = authScope(req);
+    if (!userId || !accessToken) return res.status(401).json(deniedResponse('LOGIN_REQUIRED'));
+
+    const provider = String(req.params.provider ?? '').toLowerCase() as ReadonlyCredentialProvider;
+    if (!CREDENTIAL_PROVIDERS.has(provider)) {
+      return res.status(404).json(deniedResponse('READONLY_CREDENTIAL_PROVIDER_NOT_SUPPORTED'));
+    }
+
+    try {
+      await credentialRepository(userId).remove(userId, provider);
+      return res.json({
+        ok: true,
+        provider,
+        configured: false,
+        purpose: 'read_only',
+        ...safetyCounters(),
+      });
+    } catch (error) {
+      const errorCode = error instanceof Error ? error.message.split(':')[0] : 'READONLY_CREDENTIAL_DELETE_FAILED';
+      return res.status(credentialErrorStatus(errorCode)).json(deniedResponse(errorCode));
+    }
+  });
+
+  router.get('/:provider', requireReadonlyProviderCapability, async (req: AuthenticatedRequest, res) => {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     const provider = String(req.params.provider ?? '').toLowerCase() as AccountProvider;
     if (!PROVIDERS.has(provider)) {
@@ -182,13 +253,12 @@ export function createAccountReadonlyRouter(service: AccountReadonlyService): IR
     if (!userId || !accessToken) return res.status(401).json(deniedResponse('LOGIN_REQUIRED'));
 
     const controller = new AbortController();
-    const abort = () => controller.abort();
-    req.once('aborted', abort);
+    const cleanupDisconnectAbort = bindAccountReadonlyDisconnectAbort(req, res, controller);
     try {
       const snapshot = await service.read({ userId, accessToken }, provider, controller.signal);
       if (!res.writableEnded) return res.json(snapshot);
     } finally {
-      req.removeListener('aborted', abort);
+      cleanupDisconnectAbort();
     }
   });
   return router;

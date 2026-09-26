@@ -32,7 +32,7 @@ if [[ ! -d "$LIVE_DIR" ]]; then
   exit 4
 fi
 
-for command_name in git node pnpm pm2 curl flock df awk rsync tar; do
+for command_name in git node pnpm pm2 curl flock df awk rsync tar ss readlink sed sort tr; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "[deploy] missing command: $command_name" >&2
     exit 5
@@ -122,15 +122,15 @@ probe_json() {
 probe_health() {
   local base_url="$1"
   local expected_sha="${2:-}"
-  local output_file
+  local output_file attempt
   output_file="$(mktemp /tmp/stock-app-health.XXXXXX)"
 
-  if ! probe_json "$base_url/api/health" "$output_file" 10 3; then
-    rm -f "$output_file"
-    return 1
-  fi
-
-  node - "$output_file" "$expected_sha" <<'NODE'
+  # A PM2 restart can leave the previous process serving valid JSON briefly.
+  # Keep the existing 10-attempt readiness budget, but require the complete
+  # health and exact deployment-identity contract on every attempt.
+  for ((attempt = 1; attempt <= 10; attempt += 1)); do
+    if curl --fail --silent --show-error --max-time 25 "$base_url/api/health" -o "$output_file" \
+      && node - "$output_file" "$expected_sha" <<'NODE'
 const fs = require('fs');
 const [file, expectedSha] = process.argv.slice(2);
 const value = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -146,9 +146,17 @@ if (expectedSha) {
   if (!identityValid) process.exit(1);
 }
 NODE
-  local result=$?
+    then
+      rm -f "$output_file"
+      return 0
+    fi
+
+    echo "[deploy] health identity not ready (attempt $attempt/10)" >&2
+    (( attempt < 10 )) && sleep 3
+  done
+
   rm -f "$output_file"
-  return "$result"
+  return 1
 }
 
 probe_data() {
@@ -176,25 +184,172 @@ probe_data() {
   return "$result"
 }
 
-telegram_runtime_activation_ready() {
-  local output_file
-  output_file="$(mktemp /tmp/stock-app-telegram-runtime.XXXXXX)"
-  pm2 jlist >"$output_file"
+read_telegram_activation_state() {
+  # Only two existing PM2 booleans leave this pipe; never persist its secret-bearing env.
+  pm2 jlist | node -e '
+const reject = () => { console.error("[deploy] invalid or ambiguous PM2 Telegram state"); process.exit(1); };
+let processes;
+try { processes = JSON.parse(require("node:fs").readFileSync(0, "utf8")); } catch { reject(); }
+if (!Array.isArray(processes)) reject();
+const matches = processes.filter(item => item?.name === process.argv[1]);
+const env = matches.length === 1 ? matches[0].pm2_env : null;
+if (!env || typeof env !== "object" || Array.isArray(env)) reject();
+const flag = key => {
+  const value = env[key];
+  if (value === undefined || value === false || value === "false") return "false";
+  if (value === true || value === "true") return "true";
+  reject();
+};
+const approved = flag("LIVE_TELEGRAM_ACTIVATION_APPROVED");
+const worker = flag("TELEGRAM_INTELLIGENCE_WORKER_ENABLED");
+if (approved !== worker) reject();
+process.stdout.write(`${approved} ${worker}\n`);
+  ' "$PM2_NAME"
+}
 
-  node - "$output_file" "$PM2_NAME" <<'NODE'
-const fs = require('fs');
-const [file, processName] = process.argv.slice(2);
-const processes = JSON.parse(fs.readFileSync(file, 'utf8'));
-const selected = processes.find((item) => item.name === processName);
-const env = selected?.pm2_env;
-const valid = env?.status === 'online'
-  && String(env?.LIVE_TELEGRAM_ACTIVATION_APPROVED ?? '') === 'true'
-  && String(env?.TELEGRAM_INTELLIGENCE_WORKER_ENABLED ?? 'true') !== 'false';
-if (!valid) process.exit(1);
-NODE
-  local result=$?
-  rm -f "$output_file"
-  return "$result"
+pm2_runtime_snapshot() {
+  pm2 jlist | node -e '
+const reject = () => process.exit(1);
+let rows;
+try { rows = JSON.parse(require("node:fs").readFileSync(0, "utf8")); } catch { reject(); }
+if (!Array.isArray(rows)) reject();
+const matches = rows.filter((row) => row?.name === process.argv[1]);
+if (matches.length !== 1) reject();
+const row = matches[0];
+const env = row?.pm2_env;
+if (!env || typeof env !== "object" || Array.isArray(env)) reject();
+const bool = (key) => {
+  const value = env[key];
+  if (value === undefined || value === false || value === "false") return "false";
+  if (value === true || value === "true") return "true";
+  reject();
+};
+const watched = env.watch === true || (Array.isArray(env.watch) && env.watch.length > 0);
+process.stdout.write([
+  String(Number(row?.pid ?? 0)),
+  String(env.status ?? "missing"),
+  String(env.pm_cwd ?? "missing"),
+  String(env.pm_exec_path ?? "missing"),
+  watched ? "true" : "false",
+  bool("LIVE_TRADING"),
+  bool("AUTO_TRADING"),
+  bool("REAL_ORDER_ENABLED"),
+  bool("PRIVATE_TRADING_API_ALLOWED"),
+  bool("ORDER_EXECUTION_ENABLED"),
+  bool("LIVE_TRADING_ACTIVATION_APPROVED"),
+  bool("LIVE_AUTOMATIC_TRADING_ENABLED"),
+  bool("BITGET_LIVE_ORDER_ENABLED"),
+  bool("UPBIT_LIVE_ORDER_ENABLED"),
+  bool("KIWOOM_LIVE_ORDER_ENABLED"),
+  bool("TOSS_LIVE_ORDER_ENABLED"),
+  String(env.executionAuthority ?? "NONE"),
+].join("\t") + "\n");
+  ' "$PM2_NAME"
+}
+
+assert_live_trading_inactive_before_deploy() {
+  pm2 jlist | node -e '
+const reject = (message) => { if (message) console.error(message); process.exit(1); };
+let rows;
+try { rows = JSON.parse(require("node:fs").readFileSync(0, "utf8")); } catch { reject("[deploy] PM2 live-trading state is unreadable"); }
+if (!Array.isArray(rows)) reject("[deploy] PM2 live-trading state is invalid");
+const matches = rows.filter((row) => row?.name === process.argv[1]);
+if (matches.length !== 1) reject("[deploy] PM2 live-trading runtime is ambiguous");
+const env = matches[0]?.pm2_env;
+if (!env || typeof env !== "object" || Array.isArray(env)) reject("[deploy] PM2 live-trading env is unavailable");
+const bool = (key) => {
+  const value = env[key];
+  if (value === undefined || value === false || value === "false") return false;
+  if (value === true || value === "true") return true;
+  reject("[deploy] malformed live-trading flag: " + key);
+};
+const activeFlags = [
+  "LIVE_TRADING",
+  "AUTO_TRADING",
+  "REAL_ORDER_ENABLED",
+  "PRIVATE_TRADING_API_ALLOWED",
+  "ORDER_EXECUTION_ENABLED",
+  "LIVE_TRADING_ACTIVATION_APPROVED",
+  "LIVE_AUTOMATIC_TRADING_ENABLED",
+  "BITGET_LIVE_ORDER_ENABLED",
+  "UPBIT_LIVE_ORDER_ENABLED",
+  "KIWOOM_LIVE_ORDER_ENABLED",
+  "TOSS_LIVE_ORDER_ENABLED",
+].filter((key) => bool(key));
+const authority = String(env.executionAuthority ?? "NONE").trim().toUpperCase();
+if (activeFlags.length > 0 || authority !== "NONE") {
+  console.error("[deploy] LIVE_TRADING_ACTIVE_DEPLOY_FORBIDDEN: disable live trading only after all live orders are terminal");
+  process.exit(1);
+}
+  ' "$PM2_NAME"
+}
+
+listener_pids() {
+  ss -H -ltnp 2>/dev/null \
+    | awk -v port="$LIVE_PORT" '$4 ~ (":" port "$") { print }' \
+    | sed -nE 's/.*pid=([0-9]+).*/\1/p' \
+    | sort -u
+}
+
+normalize_pm2_watch_before_restart() {
+  local snapshot="" pid="" status="" cwd="" exec_path="" watched="" _rest=""
+  snapshot="$(pm2_runtime_snapshot)" || {
+    echo "[deploy] unable to read PM2 runtime definition before restart" >&2
+    return 1
+  }
+  IFS=$'\t' read -r pid status cwd exec_path watched _rest <<< "$snapshot"
+  [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && "$status" == online ]] || {
+    echo "[deploy] PM2 runtime is not online before restart" >&2
+    return 1
+  }
+  [[ "$cwd" == "$LIVE_DIR" ]] || {
+    echo "[deploy] PM2 cwd differs from canonical Production root" >&2
+    return 1
+  }
+  [[ "$(readlink -m "$exec_path")" == "$LIVE_DIR/api-server/dist/index.mjs" ]] || {
+    echo "[deploy] PM2 entrypoint differs from canonical prebuilt Production API" >&2
+    return 1
+  }
+  if [[ "$watched" == true ]]; then
+    echo "[deploy] disabling PM2 watch before application restart"
+    pm2 stop "$PM2_NAME" --watch >/dev/null
+  elif [[ "$watched" != false ]]; then
+    echo "[deploy] PM2 watch state is ambiguous" >&2
+    return 1
+  fi
+}
+
+restart_application_preserving_telegram() {
+  local TARGET_SHA="$1" current_state approved worker
+  current_state="$(read_telegram_activation_state)" || return 1
+  # Pre-deploy approval is an upper bound, not authority to undo a later disable.
+  approved=false
+  worker=false
+  if [[ "$TELEGRAM_PREDEPLOY_STATE" == "true true" && "$current_state" == "$TELEGRAM_PREDEPLOY_STATE" ]]; then
+    read -r approved worker <<< "$TELEGRAM_PREDEPLOY_STATE"
+  fi
+  normalize_pm2_watch_before_restart || return 1
+  LIVE_TELEGRAM_ACTIVATION_APPROVED="$approved" TELEGRAM_INTELLIGENCE_WORKER_ENABLED="$worker" \
+    LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false \
+    ORDER_EXECUTION_ENABLED=false LIVE_TRADING_ACTIVATION_APPROVED=false LIVE_AUTOMATIC_TRADING_ENABLED=false \
+    BITGET_LIVE_ORDER_ENABLED=false UPBIT_LIVE_ORDER_ENABLED=false KIWOOM_LIVE_ORDER_ENABLED=false TOSS_LIVE_ORDER_ENABLED=false \
+    executionAuthority=NONE DEPLOY_SHA="$TARGET_SHA" pm2 restart "$PM2_NAME" --update-env
+}
+
+application_runtime_ready() {
+  local snapshot="" pid="" status="" cwd="" exec_path="" watched="" live="" auto="" real="" private_api="" order_execution="" live_approved="" live_auto="" bitget_live="" upbit_live="" kiwoom_live="" toss_live="" authority=""
+  snapshot="$(pm2_runtime_snapshot)" || return 1
+  IFS=$'\t' read -r pid status cwd exec_path watched live auto real private_api order_execution live_approved live_auto bitget_live upbit_live kiwoom_live toss_live authority <<< "$snapshot"
+  [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && "$status" == online ]] || return 1
+  [[ "$cwd" == "$LIVE_DIR" ]] || return 1
+  [[ "$(readlink -m "$exec_path")" == "$LIVE_DIR/api-server/dist/index.mjs" ]] || return 1
+  [[ "$watched" == false ]] || return 1
+  [[ "$live" == false && "$auto" == false && "$real" == false && "$private_api" == false ]] || return 1
+  [[ "$order_execution" == false && "$live_approved" == false && "$live_auto" == false ]] || return 1
+  [[ "$bitget_live" == false && "$upbit_live" == false && "$kiwoom_live" == false && "$toss_live" == false ]] || return 1
+  [[ "$authority" == NONE ]] || return 1
+  mapfile -t current_listeners < <(listener_pids)
+  [[ "${#current_listeners[@]}" -eq 1 && "${current_listeners[0]}" == "$pid" ]] || return 1
 }
 
 restore_backup() {
@@ -213,9 +368,9 @@ restore_backup() {
   fi
 
   if [[ "$CURRENT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-    DEPLOY_SHA="$CURRENT_SHA" pm2 restart "$PM2_NAME" --update-env
+    restart_application_preserving_telegram "$CURRENT_SHA"
   else
-    DEPLOY_SHA="" pm2 restart "$PM2_NAME" --update-env
+    restart_application_preserving_telegram ""
   fi
   pm2 save
 
@@ -238,21 +393,29 @@ if ! pm2 describe "$PM2_NAME" >/dev/null 2>&1; then
   exit 8
 fi
 
+# PRODUCTION_APP_APPROVAL_DOES_NOT_AUTHORIZE_TELEGRAM_ACTIVATION.
+# Missing flags are OFF; malformed/mixed state blocks before any application restart.
+TELEGRAM_PREDEPLOY_STATE="$(read_telegram_activation_state)"
+readonly TELEGRAM_PREDEPLOY_STATE
+
+# A generic application deploy must never silently revoke the ability to manage an
+# already-live real order. The owner must first close/cancel live orders, explicitly
+# disable the live-trading gate, and only then may Production deploy proceed.
+assert_live_trading_inactive_before_deploy
+
 if [[ "$CURRENT_SHA" == "$TARGET_SHA" ]]; then
   echo "[deploy] target marker is already active: $TARGET_SHA"
   if probe_health "http://127.0.0.1:$LIVE_PORT" "$TARGET_SHA" \
     && probe_data "http://127.0.0.1:$LIVE_PORT" \
-    && telegram_runtime_activation_ready; then
+    && application_runtime_ready; then
     exit 0
   fi
-  echo "[deploy] runtime identity or Telegram activation is stale; refreshing PM2 environment for the already-active target"
-  export LIVE_TELEGRAM_ACTIVATION_APPROVED=true
-  export TELEGRAM_INTELLIGENCE_WORKER_ENABLED=true
-  DEPLOY_SHA="$TARGET_SHA" pm2 restart "$PM2_NAME" --update-env
+  echo "[deploy] application runtime identity or health is stale; refreshing the already-active target without Telegram activation"
+  restart_application_preserving_telegram "$TARGET_SHA"
   pm2 save
   probe_health "http://127.0.0.1:$LIVE_PORT" "$TARGET_SHA"
   probe_data "http://127.0.0.1:$LIVE_PORT"
-  telegram_runtime_activation_ready
+  application_runtime_ready
   exit 0
 fi
 
@@ -327,7 +490,10 @@ rm -f "$PM2_JSON"
   cd "$RELEASE_DIR/api-server"
   nohup env PORT="$CANARY_PORT" API_PORT="$CANARY_PORT" NODE_ENV=production DEPLOY_SHA="$TARGET_SHA" \
     LIVE_TELEGRAM_ACTIVATION_APPROVED=false TELEGRAM_INTELLIGENCE_WORKER_ENABLED=false \
-    node --env-file="$CANARY_ENV" --enable-source-maps ./dist/index.mjs \
+    LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false \
+    ORDER_EXECUTION_ENABLED=false LIVE_TRADING_ACTIVATION_APPROVED=false LIVE_AUTOMATIC_TRADING_ENABLED=false \
+    BITGET_LIVE_ORDER_ENABLED=false UPBIT_LIVE_ORDER_ENABLED=false KIWOOM_LIVE_ORDER_ENABLED=false TOSS_LIVE_ORDER_ENABLED=false \
+    executionAuthority=NONE node --env-file="$CANARY_ENV" --enable-source-maps ./dist/index.mjs \
     >"$CANARY_LOG" 2>&1 &
   echo $! >"$RELEASE_DIR/.canary.pid"
 )
@@ -373,14 +539,12 @@ set +e
   cp -a "$RELEASE_DIR/stock-analyzer/dist" "$LIVE_DIR/stock-analyzer/dist"
   printf '%s\n' "$TARGET_SHA" > "$DEPLOY_STATE_DIR/current-sha"
 
-  export LIVE_TELEGRAM_ACTIVATION_APPROVED=true
-  export TELEGRAM_INTELLIGENCE_WORKER_ENABLED=true
-  DEPLOY_SHA="$TARGET_SHA" pm2 restart "$PM2_NAME" --update-env
+  restart_application_preserving_telegram "$TARGET_SHA"
   pm2 save
 
   probe_health "http://127.0.0.1:$LIVE_PORT" "$TARGET_SHA"
   probe_data "http://127.0.0.1:$LIVE_PORT"
-  telegram_runtime_activation_ready
+  application_runtime_ready
 
   if [[ -n "$PUBLIC_BASE_URL" ]]; then
     probe_health "${PUBLIC_BASE_URL%/}" "$TARGET_SHA"

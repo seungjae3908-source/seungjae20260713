@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly Research Factory read-only status snapshot
+
+[Timer]
+OnCalendar=*-*-* *:07:00 UTC
+Persistent=false
+RandomizedDelaySec=20
+Unit=research-production-factory-status.service
+
+[Install]
+WantedBy=timers.target
