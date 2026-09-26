@@ -221,6 +221,7 @@ for (const width of [320, 390, 768, 1200, 1440]) {
 test('account provider cards use one column on mobile, two on tablet, and four on desktop', async ({ page }) => {
   await installRuntime(page, { connectedBalances: true, kiwoomSupported: true });
   await page.goto('/account');
+  await expect(page.getByTestId('brokerage-account-connections').locator('[data-testid^="connection-"]')).toHaveCount(4);
 
   const columnsAt = async (width: number) => {
     await page.setViewportSize({ width, height: 900 });
