@@ -316,11 +316,21 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
   const [exitPreviewState, setExitPreviewState] = useState<ExitPreviewState>({ kind: 'idle' });
   const abortRef = useRef<AbortController | null>(null);
   const requestSequenceRef = useRef(0);
+  const orderAbortRef = useRef<AbortController | null>(null);
+  const orderSequenceRef = useRef(0);
+  const exitAbortRef = useRef<AbortController | null>(null);
+  const exitSequenceRef = useRef(0);
 
   useEffect(() => {
     requestSequenceRef.current += 1;
     abortRef.current?.abort();
     abortRef.current = null;
+    orderSequenceRef.current += 1;
+    orderAbortRef.current?.abort();
+    orderAbortRef.current = null;
+    exitSequenceRef.current += 1;
+    exitAbortRef.current?.abort();
+    exitAbortRef.current = null;
     setState({ kind: 'idle' });
     setLinesVisible(true);
     setAdditionalValueText('');
@@ -341,6 +351,8 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      orderAbortRef.current?.abort();
+      exitAbortRef.current?.abort();
     };
   }, []);
 
@@ -432,6 +444,12 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     requestSequenceRef.current += 1;
     abortRef.current?.abort();
     abortRef.current = null;
+    orderSequenceRef.current += 1;
+    orderAbortRef.current?.abort();
+    orderAbortRef.current = null;
+    exitSequenceRef.current += 1;
+    exitAbortRef.current?.abort();
+    exitAbortRef.current = null;
     setStockProvider(next);
     setState({ kind: 'idle' });
     setLinesVisible(true);
@@ -483,15 +501,26 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
   const exitQuantity = position ? exitPreviewQuantity(position, exitPercent, market) : null;
 
   const loadOrderDashboard = useCallback(async () => {
+    const controller = new AbortController();
+    orderAbortRef.current?.abort();
+    orderAbortRef.current = controller;
+    const sequence = ++orderSequenceRef.current;
     setOrderDashboard({ kind: 'loading' });
     setOrderMessage('');
     try {
-      const response = await authorizedFetch('/api/trade-automation/orders', {
+      const query = new URLSearchParams({
+        dashboard: '1',
+        exchange: provider,
+        symbol,
+      });
+      const response = await authorizedFetch(`/api/trade-automation/orders?${query.toString()}`, {
         method: 'GET',
         cache: 'no-store',
         headers: { 'Cache-Control': 'no-cache' },
+        signal: controller.signal,
       });
       const payload = await response.json().catch(() => null) as OrderDashboardResponse | null;
+      if (controller.signal.aborted || sequence !== orderSequenceRef.current) return;
       if (!response.ok || payload?.ok !== true || !Array.isArray(payload.dashboardItems)) {
         setOrderDashboard({ kind: 'unavailable', code: payload?.error ?? `HTTP_${response.status}` });
         return;
@@ -517,7 +546,10 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
         },
       ])));
     } catch (error) {
+      if (controller.signal.aborted || sequence !== orderSequenceRef.current) return;
       setOrderDashboard({ kind: 'unavailable', code: error instanceof Error ? error.name : 'ORDER_DASHBOARD_LOAD_FAILED' });
+    } finally {
+      if (orderAbortRef.current === controller) orderAbortRef.current = null;
     }
   }, [market, provider, symbol]);
 
@@ -579,6 +611,10 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
 
   const verifyExitPreview = useCallback(async () => {
     if (!position || exitPreviewState.kind === 'loading') return;
+    const controller = new AbortController();
+    exitAbortRef.current?.abort();
+    exitAbortRef.current = controller;
+    const sequence = ++exitSequenceRef.current;
     setExitPreviewState({ kind: 'loading' });
     try {
       const response = await authorizedFetch('/api/trade-automation/positions/exit-preview', {
@@ -591,6 +627,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
           symbol,
           percent: exitPercent,
         }),
+        signal: controller.signal,
       });
       const payload = await response.json().catch(() => null) as {
         ok?: boolean;
@@ -603,6 +640,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
         executionAuthority?: string;
         executionReadiness?: ExitPreview['executionReadiness'];
       } | null;
+      if (controller.signal.aborted || sequence !== exitSequenceRef.current) return;
       if (!response.ok || payload?.ok !== true || !payload.preview) {
         setExitPreviewState({ kind: 'unavailable', code: payload?.error ?? `HTTP_${response.status}` });
         return;
@@ -622,7 +660,10 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
         preview: { ...payload.preview, executionReadiness: payload.executionReadiness },
       });
     } catch (error) {
+      if (controller.signal.aborted || sequence !== exitSequenceRef.current) return;
       setExitPreviewState({ kind: 'unavailable', code: error instanceof Error ? error.name : 'EXIT_PREVIEW_FAILED' });
+    } finally {
+      if (exitAbortRef.current === controller) exitAbortRef.current = null;
     }
   }, [exitPercent, exitPreviewState.kind, market, position, provider, symbol]);
 
