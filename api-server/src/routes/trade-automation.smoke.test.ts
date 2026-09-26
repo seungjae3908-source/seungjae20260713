@@ -105,6 +105,7 @@ test('Scanner live entry draft is server-verified, non-executing, and rejects cl
     assert.equal(body.serverVerified, true);
     assert.equal(body.draft.schemaVersion, 'scanner-live-entry-draft-v1');
     assert.equal(body.draft.state, 'SERVER_VERIFIED_DRAFT');
+    assert.match(body.draft.draftId, /^[0-9a-f]{64}$/u);
     assert.equal(body.draft.symbol, '005930');
     assert.equal(body.draft.side, 'BUY');
     assert.deepEqual(body.draft.entryZone, card.pricePlan.entryZone);
