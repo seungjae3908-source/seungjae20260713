@@ -552,6 +552,48 @@ jobs:
             stdio: ['ignore', 'ignore', 'pipe'],
           });
           execFileSync('pm2', ['save'], { stdio: ['ignore', 'ignore', 'pipe'] });
+
+          const postRows = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+          const postMatches = postRows.filter((row) => row?.name === 'stock-app');
+          const postEnv = postMatches.length === 1 ? postMatches[0]?.pm2_env : null;
+          if (!postEnv || postEnv.status !== 'online' || postEnv.DEPLOY_SHA !== target) {
+            throw new Error('LIVE_TRADING_DISABLE_POST_RUNTIME_INVALID');
+          }
+          const flag = (key) => {
+            const value = postEnv[key];
+            if (value === undefined || value === false || value === 'false') return false;
+            if (value === true || value === 'true') return true;
+            throw new Error(`LIVE_TRADING_DISABLE_FLAG_MALFORMED:${key}`);
+          };
+          for (const key of [
+            'LIVE_TRADING', 'AUTO_TRADING', 'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED',
+            'ORDER_EXECUTION_ENABLED', 'LIVE_TRADING_ACTIVATION_APPROVED', 'LIVE_AUTOMATIC_TRADING_ENABLED',
+            'BITGET_LIVE_ORDER_ENABLED', 'UPBIT_LIVE_ORDER_ENABLED', 'KIWOOM_LIVE_ORDER_ENABLED', 'TOSS_LIVE_ORDER_ENABLED',
+          ]) {
+            if (flag(key)) throw new Error(`LIVE_TRADING_DISABLE_FLAG_STILL_ENABLED:${key}`);
+          }
+          if (String(postEnv.executionAuthority ?? 'NONE').toUpperCase() !== 'NONE') {
+            throw new Error('LIVE_TRADING_DISABLE_AUTHORITY_STILL_ENABLED');
+          }
+
+          let healthOk = false;
+          for (let attempt = 0; attempt < 10; attempt += 1) {
+            try {
+              const response = await fetch('http://127.0.0.1:8080/api/health', { signal: AbortSignal.timeout(8000) });
+              const value = response.ok ? await response.json() : null;
+              if (value?.ok === true
+                && value?.deploySha === target
+                && value?.processDeploySha === target
+                && value?.deployMarkerSha === target
+                && value?.identityMatch === true) {
+                healthOk = true;
+                break;
+              }
+            } catch {}
+            if (attempt < 9) await new Promise((resolve) => setTimeout(resolve, 2000));
+          }
+          if (!healthOk) throw new Error('LIVE_TRADING_DISABLE_HEALTH_INVALID');
+
           process.stdout.write(JSON.stringify({
             status: 'DISABLED',
             targetSha: target,
