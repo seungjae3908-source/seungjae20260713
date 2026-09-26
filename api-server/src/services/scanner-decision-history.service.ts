@@ -64,11 +64,11 @@ function recordKey(memberId: string, card: ScannerSignalCard): string {
   return `${memberId}:${card.signalId}`;
 }
 
-export function observeScannerDecisionHistory(
+export function observeScannerDecisionHistory<T extends ScannerSignalCard>(
   memberId: string,
-  cards: ScannerSignalCard[],
+  cards: readonly T[],
   now = Date.now(),
-): ScannerSignalCard[] {
+): T[] {
   for (const [key, record] of records) {
     if (now - record.lastSeenAt > RECORD_TTL_MS) records.delete(key);
   }
@@ -81,7 +81,7 @@ export function observeScannerDecisionHistory(
 
     if (record?.lastDecisionKey === decisionKeyValue) {
       record.lastSeenAt = now;
-      return { ...card, decisionHistory: priorHistory };
+      return { ...card, decisionHistory: priorHistory } as T;
     }
 
     const entry: ScannerDecisionHistoryEntry = {
@@ -96,7 +96,7 @@ export function observeScannerDecisionHistory(
     };
     const history = [...priorHistory, entry].slice(-MAX_DECISION_HISTORY);
     records.set(key, { lastSeenAt: now, lastDecisionKey: decisionKeyValue, history });
-    return { ...card, decisionHistory: history };
+    return { ...card, decisionHistory: history } as T;
   });
 }
 
