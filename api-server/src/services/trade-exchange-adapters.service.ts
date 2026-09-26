@@ -373,10 +373,6 @@ export function prepareBitgetPendingOrders(credentials: BitgetCredentials, symbo
   return bitgetRequest(credentials, 'GET', '/api/v2/mix/order/orders-pending', null, query, timestamp);
 }
 
-export function prepareBitgetUtaAccountInfo(credentials: BitgetCredentials, timestamp?: string) {
-  return bitgetRequest(credentials, 'GET', '/api/v3/account/info', null, '', timestamp);
-}
-
 export function prepareBitgetUtaAccountSettings(credentials: BitgetCredentials, timestamp?: string) {
   return bitgetRequest(credentials, 'GET', '/api/v3/account/settings', null, '', timestamp);
 }
