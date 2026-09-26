@@ -740,10 +740,14 @@ router.get('/orders', async (req: AuthenticatedRequest, res) => {
     const { userId, repository } = context(req);
     const dashboardOnly = String(req.query.dashboard ?? '') === '1';
     const requestedSymbol = normalizedExitSymbol(req.query.symbol);
+    const requestedMarket = String(req.query.market ?? '').trim().toUpperCase();
     const requestedExchange = req.query.exchange == null || String(req.query.exchange).trim() === ''
       ? null
       : exchangeValue(req.query.exchange);
     if (dashboardOnly && !requestedSymbol) throw new Error('ORDER_DASHBOARD_SYMBOL_REQUIRED');
+    if (requestedMarket && !['KR', 'US', 'UPBIT', 'BITGET'].includes(requestedMarket)) {
+      throw new Error('ORDER_DASHBOARD_MARKET_UNSUPPORTED');
+    }
 
     const [orders, events, plans] = await Promise.all([
       repository.listOrders(userId),
@@ -756,6 +760,7 @@ router.get('/orders', async (req: AuthenticatedRequest, res) => {
       if (dashboardOnly) {
         if (!plan) return [];
         if (requestedExchange && order.exchange !== requestedExchange) return [];
+        if (requestedMarket && plan.market.trim().toUpperCase() !== requestedMarket) return [];
         if (normalizedExitSymbol(plan.symbol) !== requestedSymbol) return [];
       }
       return [{
