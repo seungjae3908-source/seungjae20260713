@@ -282,7 +282,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           <span aria-hidden className="text-muted-foreground">⌄</span>
         </summary>
         <div className="border-t border-card-border p-3 sm:p-4">
-          <TradeAutomationSettings fixture={fixture} />
+          <TradeAutomationSettings fixture={fixture} selectedMarket={market} />
         </div>
       </details>
       <details className="rounded-2xl border border-card-border bg-card">
