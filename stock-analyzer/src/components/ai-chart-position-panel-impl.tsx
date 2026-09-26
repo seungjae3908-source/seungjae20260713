@@ -179,6 +179,40 @@ type ExitPreviewState =
   | { kind: 'ready'; preview: ExitPreview }
   | { kind: 'unavailable'; code: string };
 
+type CanonicalExitPlan = {
+  schemaVersion: 'ai-chart-canonical-exit-plan-v2';
+  state: 'SERVER_VERIFIED_PLAN';
+  planId: string;
+  exitDraftId: string;
+  provider: ExitPreview['provider'];
+  market: string;
+  symbol: string;
+  accountMode: 'live';
+  orderType: 'market';
+  side: 'buy' | 'sell';
+  quantity: number;
+  percent: number;
+  reduceOnly: true;
+  sourceCheckedAt: string;
+  issuedAt: string;
+  expiresAt: string;
+  approvalEligible: boolean;
+  blockers: string[];
+  requiresFreshAccountRecheckAtApproval: true;
+  requiresOrderTimeRiskRecheck: true;
+  requiresExplicitApproval: true;
+  nextOwner: 'CANONICAL_EXIT_APPROVAL_OWNER';
+  executionAuthority: 'NONE';
+  orderSubmissionPerformed: false;
+  financialMutationPerformed: false;
+};
+
+type ExitPlanState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'ready'; plan: CanonicalExitPlan }
+  | { kind: 'unavailable'; code: string };
+
 type ExecutionReadiness = {
   connectionConfigured: boolean;
   providerVerified: boolean;
@@ -459,6 +493,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
   const [amendDrafts, setAmendDrafts] = useState<Record<string, { price: string; quantity: string }>>({});
   const [exitPercent, setExitPercent] = useState(100);
   const [exitPreviewState, setExitPreviewState] = useState<ExitPreviewState>({ kind: 'idle' });
+  const [exitPlanState, setExitPlanState] = useState<ExitPlanState>({ kind: 'idle' });
   const [entryReadiness, setEntryReadiness] = useState<EntryReadinessState>({ kind: 'idle' });
   const [liveEntryDraft, setLiveEntryDraft] = useState<LiveEntryDraftState>({ kind: 'idle' });
   const abortRef = useRef<AbortController | null>(null);
@@ -467,6 +502,8 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
   const orderSequenceRef = useRef(0);
   const exitAbortRef = useRef<AbortController | null>(null);
   const exitSequenceRef = useRef(0);
+  const exitPlanAbortRef = useRef<AbortController | null>(null);
+  const exitPlanSequenceRef = useRef(0);
   const entryReadinessAbortRef = useRef<AbortController | null>(null);
   const entryReadinessSequenceRef = useRef(0);
   const liveDraftAbortRef = useRef<AbortController | null>(null);
@@ -482,6 +519,9 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     exitSequenceRef.current += 1;
     exitAbortRef.current?.abort();
     exitAbortRef.current = null;
+    exitPlanSequenceRef.current += 1;
+    exitPlanAbortRef.current?.abort();
+    exitPlanAbortRef.current = null;
     entryReadinessSequenceRef.current += 1;
     entryReadinessAbortRef.current?.abort();
     entryReadinessAbortRef.current = null;
@@ -503,6 +543,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setAmendDrafts({});
     setExitPercent(100);
     setExitPreviewState({ kind: 'idle' });
+    setExitPlanState({ kind: 'idle' });
     setEntryReadiness({ kind: 'idle' });
     setLiveEntryDraft({ kind: 'idle' });
     onOverlayChange(null);
@@ -513,6 +554,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
       abortRef.current?.abort();
       orderAbortRef.current?.abort();
       exitAbortRef.current?.abort();
+      exitPlanAbortRef.current?.abort();
       entryReadinessAbortRef.current?.abort();
       liveDraftAbortRef.current?.abort();
     };
@@ -530,6 +572,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setOrderActionId(null);
     setAmendDrafts({});
     setExitPreviewState({ kind: 'idle' });
+    setExitPlanState({ kind: 'idle' });
     onOverlayChange(null);
     try {
       const response = await authorizedFetch(`/api/accounts/read-only/${provider}`, {
@@ -612,6 +655,9 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     exitSequenceRef.current += 1;
     exitAbortRef.current?.abort();
     exitAbortRef.current = null;
+    exitPlanSequenceRef.current += 1;
+    exitPlanAbortRef.current?.abort();
+    exitPlanAbortRef.current = null;
     entryReadinessSequenceRef.current += 1;
     entryReadinessAbortRef.current?.abort();
     entryReadinessAbortRef.current = null;
@@ -623,6 +669,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setOrderActionId(null);
     setAmendDrafts({});
     setExitPreviewState({ kind: 'idle' });
+    setExitPlanState({ kind: 'idle' });
     setEntryReadiness({ kind: 'idle' });
     onOverlayChange(null);
   }, [onOverlayChange, stockProvider]);
@@ -874,6 +921,83 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
       if (exitAbortRef.current === controller) exitAbortRef.current = null;
     }
   }, [exitPercent, exitPreviewState.kind, market, position, provider, symbol]);
+
+  const prepareCanonicalExitPlan = useCallback(async () => {
+    if (exitPreviewState.kind !== 'ready' || exitPlanState.kind === 'loading') return;
+    const preview = exitPreviewState.preview;
+    const controller = new AbortController();
+    exitPlanAbortRef.current?.abort();
+    exitPlanAbortRef.current = controller;
+    const sequence = ++exitPlanSequenceRef.current;
+    setExitPlanState({ kind: 'loading' });
+    try {
+      const response = await authorizedFetch('/api/trade-automation/positions/exit-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          confirmed: true,
+          provider: preview.provider,
+          market: preview.market,
+          symbol: preview.symbol,
+          percent: preview.percent,
+          draftId: preview.draftId,
+          draftIssuedAt: preview.issuedAt,
+          draftExpiresAt: preview.expiresAt,
+          positionQuantity: preview.positionQuantity,
+          availableQuantity: preview.availableQuantity,
+          exitQuantity: preview.exitQuantity,
+          side: preview.side,
+          sourceCheckedAt: preview.checkedAt,
+        }),
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => null) as {
+        ok?: boolean;
+        error?: string;
+        canonicalExitPlan?: CanonicalExitPlan;
+        planPrepared?: boolean;
+        financialMutationPerformed?: boolean;
+        orderSubmitted?: boolean;
+        orderCanceled?: boolean;
+        orderAmended?: boolean;
+        privateTradingMutationSent?: boolean;
+        executionAuthority?: string;
+      } | null;
+      if (controller.signal.aborted || sequence !== exitPlanSequenceRef.current) return;
+      const plan = payload?.canonicalExitPlan;
+      if (!response.ok || payload?.ok !== true || !plan) {
+        setExitPlanState({ kind: 'unavailable', code: payload?.error ?? `HTTP_${response.status}` });
+        return;
+      }
+      if (payload.planPrepared !== true
+        || payload.financialMutationPerformed !== false
+        || payload.orderSubmitted !== false
+        || payload.orderCanceled !== false
+        || payload.orderAmended !== false
+        || payload.privateTradingMutationSent !== false
+        || payload.executionAuthority !== 'NONE'
+        || plan.schemaVersion !== 'ai-chart-canonical-exit-plan-v2'
+        || plan.state !== 'SERVER_VERIFIED_PLAN'
+        || !/^[0-9a-f]{64}$/u.test(plan.planId)
+        || plan.exitDraftId !== preview.draftId
+        || plan.reduceOnly !== true
+        || plan.requiresFreshAccountRecheckAtApproval !== true
+        || plan.requiresOrderTimeRiskRecheck !== true
+        || plan.requiresExplicitApproval !== true
+        || plan.executionAuthority !== 'NONE'
+        || plan.orderSubmissionPerformed !== false
+        || plan.financialMutationPerformed !== false) {
+        setExitPlanState({ kind: 'unavailable', code: 'EXIT_PLAN_SAFETY_CONTRACT_MISMATCH' });
+        return;
+      }
+      setExitPlanState({ kind: 'ready', plan });
+    } catch (error) {
+      if (controller.signal.aborted || sequence !== exitPlanSequenceRef.current) return;
+      setExitPlanState({ kind: 'unavailable', code: error instanceof Error ? error.name : 'EXIT_PLAN_PREPARE_FAILED' });
+    } finally {
+      if (exitPlanAbortRef.current === controller) exitPlanAbortRef.current = null;
+    }
+  }, [exitPlanState.kind, exitPreviewState]);
 
   const loadEntryReadiness = useCallback(async () => {
     const controller = new AbortController();
@@ -1327,6 +1451,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                         onClick={() => {
                           setExitPercent(percent);
                           setExitPreviewState({ kind: 'idle' });
+                          setExitPlanState({ kind: 'idle' });
                         }}
                         className={`min-h-10 rounded-lg border text-[9px] font-black ${exitPercent === percent ? 'border-primary bg-primary/10 text-primary' : 'border-card-border'}`}
                       >
@@ -1380,13 +1505,52 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                           )}
                         </div>
                       ) : null}
+                      <button
+                        type="button"
+                        data-testid="ai-chart-prepare-exit-plan"
+                        onClick={() => void prepareCanonicalExitPlan()}
+                        disabled={exitPlanState.kind === 'loading'}
+                        className="mt-2 min-h-10 w-full rounded-lg border border-primary/30 bg-background px-3 text-[9px] font-black text-primary disabled:opacity-50"
+                      >
+                        {exitPlanState.kind === 'loading' ? '실계좌 연속성 재확인 중...' : 'Canonical 종료 승인계획 준비'}
+                      </button>
+                      {exitPlanState.kind === 'ready' ? (
+                        <div
+                          className="mt-2 rounded-lg border border-primary/20 bg-primary/5 p-2 text-[8px] font-bold text-muted-foreground"
+                          data-testid="ai-chart-canonical-exit-plan"
+                          data-exit-plan-id={exitPlanState.plan.planId}
+                        >
+                          <p className="font-black text-foreground">
+                            종료 승인계획 준비됨 · {exitPlanState.plan.approvalEligible ? '승인 게이트 준비' : '현재 승인 차단'}
+                          </p>
+                          <p className="mt-1">
+                            {exitPlanState.plan.percent}% · {formatQuantity(exitPlanState.plan.quantity)}
+                            {' · '}reduce-only · 만료 {checkedAtLabel(exitPlanState.plan.expiresAt)}
+                          </p>
+                          <p className="mt-1 break-all">
+                            Plan {exitPlanState.plan.planId.slice(0, 12)}…
+                            {' · '}Draft {exitPlanState.plan.exitDraftId.slice(0, 12)}…
+                          </p>
+                          {!exitPlanState.plan.approvalEligible && exitPlanState.plan.blockers.length ? (
+                            <p className="mt-1 break-words">
+                              차단 사유 · {exitPlanState.plan.blockers.map(exitReadinessBlockerLabel).join(' · ')}
+                            </p>
+                          ) : null}
+                          <p className="mt-1">최종 승인 시 실계좌 재확인 + 주문시점 Risk 재검증이 다시 필요합니다. 이 단계에서는 주문을 제출하지 않습니다.</p>
+                        </div>
+                      ) : null}
+                      {exitPlanState.kind === 'unavailable' ? (
+                        <p role="alert" className="mt-2 rounded-lg bg-warning/10 p-2 text-[8px] font-black text-warning">
+                          종료 승인계획 준비 실패 · {safeTradeErrorMessage(exitPlanState.code, exitPlanState.code)}
+                        </p>
+                      ) : null}
                     </div>
                   ) : null}
                   {exitPreviewState.kind === 'unavailable' ? (
                     <p role="alert" className="mt-2 rounded-xl bg-warning/10 px-3 py-2 text-[9px] font-bold text-warning">종료계획 재검증 실패 · {exitPreviewState.code}</p>
                   ) : null}
                   <p className="mt-2 text-[8px] font-bold leading-4 text-muted-foreground">
-                    이 단계는 실계좌를 read-only로 다시 확인해 종료 비중·수량·reduce-only 방향만 확정합니다. 실제 청산 주문은 아직 제출하지 않습니다. 다음 단계에서 이 검증 결과를 canonical 승인계획과 최종 Risk 재검증에 연결합니다.
+                    종료 Draft는 실계좌를 read-only로 재확인하고, Canonical 종료 승인계획은 같은 보유수량·방향이 유지되는지 다시 검증합니다. 둘 다 주문을 제출하지 않으며 실제 청산은 별도 명시적 승인 + 주문시점 Risk 재검증 이후 단계입니다.
                   </p>
                 </section>
               ) : (
