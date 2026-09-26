@@ -81,11 +81,15 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain("authorizedFetch('/api/trade-automation/positions/exit-approval'");
   expect(panel).toContain("authorizedFetch('/api/trade-automation/positions/exit-risk'");
   expect(panel).toContain("authorizedFetch('/api/trade-automation/positions/exit-preflight'");
+  expect(panel).toContain("authorizedFetch('/api/trade-automation/positions/exit-execution-package'");
   expect(panel).toContain("approval.schemaVersion !== 'ai-chart-exit-approval-intent-v1'");
   expect(panel).toContain("preflight.schemaVersion !== 'ai-chart-exit-execution-preflight-v1'");
   expect(panel).toContain("preflight.nextOwner !== 'CANONICAL_EXIT_EXECUTION_OWNER'");
   expect(panel).toContain("data-testid=\"ai-chart-prepare-exit-preflight\"");
   expect(panel).toContain("data-testid=\"ai-chart-exit-preflight-intent\"");
+  expect(panel).toContain("data-testid=\"ai-chart-prepare-exit-execution-package\"");
+  expect(panel).toContain("data-testid=\"ai-chart-exit-execution-package\"");
+  expect(panel).toContain("executionPackage.nextOwner !== 'CANONICAL_EXIT_PROVIDER_SUBMISSION_OWNER'");
   expect(panel).toContain("risk.schemaVersion !== 'ai-chart-exit-order-time-risk-v1'");
   expect(panel).toContain("risk.nextOwner !== 'CANONICAL_EXIT_EXECUTION_PREFLIGHT_OWNER'");
   expect(panel).toContain("data-testid=\"ai-chart-recheck-exit-risk\"");
@@ -332,6 +336,7 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   let exitApprovalReads = 0;
   let exitRiskReads = 0;
   let exitPreflightReads = 0;
+  let exitExecutionPackageReads = 0;
   let entryReadinessReads = 0;
   const financialMutations: string[] = [];
 
@@ -807,6 +812,102 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
       });
       return;
     }
+    if (url.pathname === '/api/trade-automation/positions/exit-execution-package') {
+      exitExecutionPackageReads += 1;
+      expect(request.method()).toBe('POST');
+      const body = request.postDataJSON() as {
+        confirmed?: boolean;
+        preflightIntentId?: string;
+        riskIntentId?: string;
+        approvalIntentId?: string;
+        planId?: string;
+        exitDraftId?: string;
+        provider?: string;
+        market?: string;
+        symbol?: string;
+        percent?: number;
+        positionQuantity?: number | null;
+        availableQuantity?: number;
+        quantity?: number;
+        side?: string;
+        preflightReferencePrice?: number | null;
+        preflightBlockers?: string[];
+        preflightPassed?: boolean;
+      };
+      expect(body.confirmed).toBe(true);
+      expect(body.preflightIntentId).toBe('d'.repeat(64));
+      expect(body.riskIntentId).toBe('c'.repeat(64));
+      expect(body.approvalIntentId).toBe('b'.repeat(64));
+      expect(body.planId).toBe('a'.repeat(64));
+      expect(body.exitDraftId).toBe('e'.repeat(64));
+      expect(body.provider).toBe('toss');
+      expect(body.market).toBe('KR');
+      expect(body.symbol).toBe('005930');
+      expect(body.percent).toBe(25);
+      expect(body.positionQuantity).toBe(20);
+      expect(body.availableQuantity).toBe(20);
+      expect(body.quantity).toBe(5);
+      expect(body.side).toBe('sell');
+      expect(body.preflightReferencePrice).toBe(72_100);
+      expect(body.preflightBlockers).toEqual([]);
+      expect(body.preflightPassed).toBe(true);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          canonicalExitExecutionPackage: {
+            schemaVersion: 'ai-chart-exit-execution-package-v1',
+            state: 'BOUND_NON_EXECUTING_PACKAGE',
+            executionPackageId: 'f'.repeat(64),
+            preflightIntentId: 'd'.repeat(64),
+            riskIntentId: 'c'.repeat(64),
+            approvalIntentId: 'b'.repeat(64),
+            planId: 'a'.repeat(64),
+            exitDraftId: 'e'.repeat(64),
+            provider: 'toss',
+            market: 'KR',
+            symbol: '005930',
+            accountMode: 'live',
+            orderType: 'market',
+            side: 'sell',
+            quantity: 5,
+            percent: 25,
+            positionQuantity: 20,
+            availableQuantity: 20,
+            reduceOnly: true,
+            preflightReferencePrice: 72_100,
+            packageReferencePrice: 72_120,
+            referencePriceDriftPercent: 0.027739,
+            preflightCheckedAt: new Date().toISOString(),
+            packageCheckedAt: new Date().toISOString(),
+            issuedAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 3_000).toISOString(),
+            providerOpenOrdersChecked: true,
+            conflictingOpenOrderCount: 0,
+            blockers: [],
+            packageReady: true,
+            finalProviderOrderbookRiskRequired: true,
+            providerSubmissionRequired: true,
+            nextOwner: 'CANONICAL_EXIT_PROVIDER_SUBMISSION_OWNER',
+            executionAuthority: 'NONE',
+            executable: false,
+            providerRequestPrepared: false,
+            orderSubmissionPerformed: false,
+            financialMutationPerformed: false,
+          },
+          packagePrepared: true,
+          privateAccountReadPerformed: true,
+          financialMutationPerformed: false,
+          orderSubmitted: false,
+          orderCanceled: false,
+          orderAmended: false,
+          privateTradingMutationSent: false,
+          executionAuthority: 'NONE',
+        }),
+      });
+      return;
+    }
     if (url.pathname === '/api/trade-automation/orders') {
       expect(request.method()).toBe('GET');
       expect(url.searchParams.get('dashboard')).toBe('1');
@@ -1039,6 +1140,18 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await expect(preflightIntent).toContainText('provider orderbook·slippage 최종검사');
   await expect(preflightIntent).toContainText('executionAuthority=NONE');
   await expect(preflightIntent).toContainText('executable=false');
+  await cockpit.getByTestId('ai-chart-prepare-exit-execution-package').click();
+  await expect.poll(() => exitExecutionPackageReads).toBe(1);
+  const executionPackage = cockpit.getByTestId('ai-chart-exit-execution-package');
+  await expect(executionPackage).toContainText('최종 실행 패키지 준비 · 아직 주문 미전송');
+  await expect(executionPackage).toContainText('72,120원');
+  await expect(executionPackage).toContainText('Preflight 기준가 72,100원');
+  await expect(executionPackage).toContainText('Package ffffffffffff…');
+  await expect(executionPackage).toContainText('Preflight dddddddddddd…');
+  await expect(executionPackage).toContainText('provider orderbook/slippage 최종검사');
+  await expect(executionPackage).toContainText('providerRequestPrepared=false');
+  await expect(executionPackage).toContainText('executionAuthority=NONE');
+  await expect(executionPackage).toContainText('executable=false');
 
   await cockpit.getByRole('tab', { name: '주문', exact: true }).click();
   await cockpit.getByTestId('ai-chart-load-orders').click();
