@@ -29,14 +29,14 @@ export type AiChartAccountPosition = {
 };
 
 export type AiChartPositionOverlay = {
-  provider: 'toss' | 'upbit' | 'bitget';
+  provider: 'toss' | 'kiwoom' | 'upbit' | 'bitget';
   position: AiChartAccountPosition;
   stale: boolean;
   checkedAt: string | null;
 };
 
 type Snapshot = {
-  provider: 'toss' | 'upbit' | 'bitget';
+  provider: 'toss' | 'kiwoom' | 'upbit' | 'bitget';
   readOnly: true;
   connected: boolean;
   status: string;
@@ -68,10 +68,12 @@ type Props = {
   onOverlayChange: (overlay: AiChartPositionOverlay | null) => void;
 };
 
-function providerForMarket(market: AnalysisMarket): Snapshot['provider'] {
+type StockReadOnlyProvider = 'toss' | 'kiwoom';
+
+function providerForMarket(market: AnalysisMarket, stockProvider: StockReadOnlyProvider): Snapshot['provider'] {
   if (market === 'UPBIT') return 'upbit';
   if (market === 'BITGET') return 'bitget';
-  return 'toss';
+  return stockProvider;
 }
 
 function normalizedSymbol(value: string): string {
@@ -166,7 +168,10 @@ function priceDistance(position: AiChartAccountPosition, chartPrice: number | nu
 }
 
 function providerLabel(provider: Snapshot['provider']): string {
-  return provider === 'toss' ? 'Toss' : provider === 'upbit' ? 'Upbit' : 'Bitget';
+  if (provider === 'toss') return 'Toss';
+  if (provider === 'kiwoom') return 'Kiwoom';
+  if (provider === 'upbit') return 'Upbit';
+  return 'Bitget';
 }
 
 function checkedAtLabel(value: string | null | undefined): string {
@@ -190,6 +195,7 @@ function pnlSourceLabel(source: 'POSITION_QUANTITY' | 'PROVIDER_IMPLIED' | null)
 
 export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, onOverlayChange }: Props) {
   const [state, setState] = useState<PanelState>({ kind: 'idle' });
+  const [stockProvider, setStockProvider] = useState<StockReadOnlyProvider>('toss');
   const [linesVisible, setLinesVisible] = useState(true);
   const [additionalValueText, setAdditionalValueText] = useState('');
   const [additionalPriceText, setAdditionalPriceText] = useState('');
@@ -220,7 +226,7 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
   }, []);
 
   const loadPosition = useCallback(async () => {
-    const provider = providerForMarket(market);
+    const provider = providerForMarket(market, stockProvider);
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
@@ -279,7 +285,7 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [linesVisible, market, onOverlayChange, symbol]);
+  }, [linesVisible, market, onOverlayChange, stockProvider, symbol]);
 
   const toggleLines = useCallback(() => {
     if (state.kind !== 'ready' || !state.position) return;
@@ -297,7 +303,18 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
     });
   }, [onOverlayChange, state]);
 
-  const provider = providerForMarket(market);
+  const changeStockProvider = useCallback((next: StockReadOnlyProvider) => {
+    if (next === stockProvider) return;
+    requestSequenceRef.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setStockProvider(next);
+    setState({ kind: 'idle' });
+    setLinesVisible(true);
+    onOverlayChange(null);
+  }, [onOverlayChange, stockProvider]);
+
+  const provider = providerForMarket(market, stockProvider);
   const position = state.kind === 'ready' ? state.position : null;
   const distance = position ? priceDistance(position, chartPrice) : null;
   const additionalValue = positiveText(additionalValueText);
@@ -371,6 +388,23 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
           </button>
         ) : null}
       </div>
+
+      {(market === 'KR' || market === 'US') && (
+        <div data-testid="ai-chart-stock-provider-picker" className="mt-2 grid grid-cols-2 gap-1.5">
+          {(['toss', 'kiwoom'] as const).map((item) => (
+            <button
+              key={item}
+              type="button"
+              data-testid={`ai-chart-stock-provider-${item}`}
+              aria-pressed={stockProvider === item}
+              onClick={() => changeStockProvider(item)}
+              className={`min-h-10 rounded-xl border px-3 text-[10px] font-black ${stockProvider === item ? 'border-primary bg-primary/10 text-primary' : 'border-card-border text-muted-foreground'}`}
+            >
+              {providerLabel(item)} 조회
+            </button>
+          ))}
+        </div>
+      )}
 
       {state.kind === 'idle' && (
         <p className="mt-2 text-[10px] font-bold leading-4 text-muted-foreground">차트를 열기만 해서는 계좌를 조회하지 않습니다. 버튼을 눌렀을 때 현재 시장의 조회 전용 스냅샷만 확인합니다.</p>

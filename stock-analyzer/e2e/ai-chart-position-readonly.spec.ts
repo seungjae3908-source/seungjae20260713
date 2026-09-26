@@ -79,7 +79,10 @@ test('AI Chart matches four-market positions without inventing missing values', 
 
   expect(panel).toContain("if (market === 'UPBIT') return 'upbit';");
   expect(panel).toContain("if (market === 'BITGET') return 'bitget';");
-  expect(panel).toContain("return 'toss';");
+  expect(panel).toContain("type StockReadOnlyProvider = 'toss' | 'kiwoom';");
+  expect(panel).toContain('return stockProvider;');
+  expect(panel).toContain('data-testid="ai-chart-stock-provider-picker"');
+  expect(panel).toContain('data-testid={`ai-chart-stock-provider-${item}`}');
   expect(panel).toContain("if (upper.startsWith('KRW-'))");
   expect(panel).toContain('positionMarketMatches(market, position.market)');
   expect(panel).toContain('if (matches.length > 1) return { position: null, ambiguous: true };');
