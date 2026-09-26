@@ -248,7 +248,7 @@ test('server-declared Kiwoom capability exposes a read-only setup card and saves
 
   const kiwoom = page.getByTestId('connection-kiwoom');
   await expect(kiwoom).toBeVisible();
-  await expect(kiwoom).toContainText('공식 REST 잔고·미체결 조회');
+  await expect(kiwoom).toContainText('공식 REST KR/US 잔고·미체결 조회');
   await page.getByRole('button', { name: 'Kiwoom 조회 연결 설정' }).click();
 
   const appKey = 'KIWOOM_APP_E2E_TEST_ONLY';
