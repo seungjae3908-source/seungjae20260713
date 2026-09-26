@@ -112,11 +112,14 @@ test('Validation counts are visible without manufacturing Validation completion 
 });
 
 test('immutable identity mismatch remains UNMAPPED with zero adoption authority', () => {
-  const candidate = trainingCandidate();
-  candidate.promotionIdentity = {
-    ...(candidate.promotionIdentity as Record<string, unknown>),
-    strategyId: 'research-only-strategy-alpha',
-    parameterHash: 'f'.repeat(64),
+  const original = trainingCandidate();
+  const candidate = {
+    ...original,
+    promotionIdentity: {
+      ...original.promotionIdentity,
+      strategyId: 'research-only-strategy-alpha',
+      parameterHash: 'f'.repeat(64),
+    },
   };
   const bridge = buildResearchPromotionBridge(researchOverview(candidate), SHA, NOW.toISOString());
   assert.equal(bridge.status, 'UNMAPPED');
