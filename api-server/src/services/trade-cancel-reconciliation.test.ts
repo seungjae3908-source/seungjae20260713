@@ -140,7 +140,9 @@ test.before(() => {
   process.env.REAL_ORDER_ENABLED = 'true';
   process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
   process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+  process.env.executionAuthority = 'MANUAL';
   process.env.TOSS_LIVE_ORDER_ENABLED = 'true';
+  process.env.executionAuthority = 'MANUAL';
 });
 
 test.after(() => {
@@ -150,7 +152,9 @@ test.after(() => {
   delete process.env.REAL_ORDER_ENABLED;
   delete process.env.PRIVATE_TRADING_API_ALLOWED;
   delete process.env.UPBIT_LIVE_ORDER_ENABLED;
+    delete process.env.executionAuthority;
   delete process.env.TOSS_LIVE_ORDER_ENABLED;
+  delete process.env.executionAuthority;
 });
 
 test('two concurrent cancel requests submit one exchange cancel and a concurrent fill wins', { timeout: 10_000 }, async () => {
