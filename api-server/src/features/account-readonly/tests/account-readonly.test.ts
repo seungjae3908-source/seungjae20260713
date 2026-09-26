@@ -207,6 +207,45 @@ test('Upbit balance read stays connected when only optional open-order scope is 
   assert.equal(result.withdrawalRequests, 0);
 });
 
+test('Bitget Classic fallback is selected when official UTA error 25245 reports non-unified account mode', async () => {
+  const seen: string[] = [];
+  const result = await readBitgetSnapshot(
+    { apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' },
+    async (request) => {
+      seen.push(request.path);
+      if (request.path === '/api/v3/account/info') {
+        return { code: '25245', msg: 'The account is not the unified account mode', data: null };
+      }
+      if (request.path === '/api/v2/mix/account/accounts') {
+        return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '80', locked: '20' }] };
+      }
+      if (request.path === '/api/v2/mix/position/all-position') {
+        return { code: '00000', data: [] };
+      }
+      if (request.path === '/api/v2/mix/order/orders-pending') {
+        return { code: '00000', data: { entrustedList: [] } };
+      }
+      throw new Error('UNEXPECTED_BITGET_CLASSIC_FALLBACK_PATH');
+    },
+  );
+
+  assert.deepEqual(new Set(seen), new Set([
+    '/api/v3/account/info',
+    '/api/v2/mix/account/accounts',
+    '/api/v2/mix/position/all-position',
+    '/api/v2/mix/order/orders-pending',
+  ]));
+  assert.equal(result.connected, true);
+  assert.equal(result.status, 'CONNECTED');
+  assert.equal(result.errorCode, null);
+  assert.equal(result.balances?.[0]?.currency, 'USDT');
+  assert.equal(result.orderRequests, 0);
+  assert.equal(result.cancelRequests, 0);
+  assert.equal(result.amendRequests, 0);
+  assert.equal(result.transferRequests, 0);
+  assert.equal(result.withdrawalRequests, 0);
+});
+
 test('Bitget wrapper probes UTA mode then preserves Classic signed GET reads and redacts passphrase', async () => {
   const seen: any[] = []; const result = await readBitgetSnapshot({ apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' }, async (request) => {
     seen.push(request);
