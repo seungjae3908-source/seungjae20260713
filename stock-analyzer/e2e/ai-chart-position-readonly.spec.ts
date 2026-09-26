@@ -742,7 +742,8 @@ test('AI Chart keeps entry approval and order management available when the sele
   await expect(panel).toContainText('현재 선택 종목의 보유/포지션 없음');
 
   const cockpit = panel.getByTestId('ai-chart-trading-cockpit');
-  await cockpit.locator('summary').click();
+  await expect(cockpit).toHaveAttribute('open', '');
+  await expect(cockpit.getByRole('tab', { name: '진입', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('없음');
   await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('해당 없음');
   await expect(cockpit).toContainText('현재 종목의 승인 대기 진입이 없습니다.');
@@ -862,7 +863,9 @@ for (const viewport of [
     await panel.getByTestId('ai-chart-load-position').click();
     await expect(panel).toContainText('70,000원');
     const cockpit = panel.getByTestId('ai-chart-trading-cockpit');
-    await cockpit.locator('summary').click();
+    await expect(cockpit).toHaveAttribute('open', '');
+    await expect(cockpit.getByRole('tab', { name: '종료', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await cockpit.getByRole('tab', { name: '진입', exact: true }).click();
     await expect(cockpit.getByTestId('ai-chart-entry-planning')).toBeVisible();
     await cockpit.getByRole('tab', { name: '주문', exact: true }).click();
     await expect(cockpit.getByTestId('ai-chart-order-management')).toBeVisible();
@@ -1022,7 +1025,8 @@ test('AI Chart cockpit cancel and amend require explicit user confirmation and r
   await panel.getByTestId('ai-chart-load-position').click();
   await expect(panel).toContainText('현재 선택 종목의 보유/포지션 없음');
   const cockpit = panel.getByTestId('ai-chart-trading-cockpit');
-  await cockpit.locator('summary').click();
+  await expect(cockpit).toHaveAttribute('open', '');
+  await expect(cockpit.getByRole('tab', { name: '진입', exact: true })).toHaveAttribute('aria-selected', 'true');
   await cockpit.getByRole('tab', { name: '주문', exact: true }).click();
   await cockpit.getByTestId('ai-chart-load-orders').click();
   await expect.poll(() => dashboardReads).toBeGreaterThanOrEqual(1);
