@@ -190,7 +190,13 @@ export function TradeApprovalQueue({
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 8_000);
     try {
-      const response = await authorizedFetch('/api/trade-automation/approval-queue', {
+      const query = new URLSearchParams();
+      if (symbolFilter) query.set('symbol', symbolFilter);
+      if (exchangeFilter) query.set('exchange', exchangeFilter);
+      const endpoint = query.size
+        ? `/api/trade-automation/approval-queue?${query.toString()}`
+        : '/api/trade-automation/approval-queue';
+      const response = await authorizedFetch(endpoint, {
         headers: { 'Cache-Control': 'no-cache' },
         signal: controller.signal,
       });
@@ -228,7 +234,7 @@ export function TradeApprovalQueue({
       window.clearTimeout(timeout);
       if (requestSequence === requestSequenceRef.current && !silent) setLoading(false);
     }
-  }, [fixture]);
+  }, [exchangeFilter, fixture, symbolFilter]);
 
   useEffect(() => {
     void load();
