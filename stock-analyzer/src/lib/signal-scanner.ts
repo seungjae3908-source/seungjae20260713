@@ -71,6 +71,11 @@ export interface ScannerBacktestQualitySummary {
   survivorshipGuarded?: boolean;
   oos?: boolean;
   walkForward?: boolean;
+  fullCostVerified?: boolean;
+  forwardVerified?: boolean;
+  forwardSampleCount?: number | null;
+  paperVerified?: boolean;
+  paperSampleCount?: number | null;
   source?: string | null;
 }
 
