@@ -12,7 +12,6 @@ import {
   Radar,
   Search,
   Settings,
-  Sparkles,
   X,
   type LucideIcon,
 } from 'lucide-react';
@@ -75,8 +74,8 @@ export function ProfessionalCommandBarContent({ initialOpen = false }: Professio
     { id: 'ai-chart', label: 'AI 차트', description: '차트·분석 워크스페이스', href: APP_ROUTES.aiChart, icon: BarChart3, visible: auth.can('canAccessRiskPreview') },
     { id: 'portfolio', label: '포트폴리오', description: '자산·손익·위험 확인', href: APP_ROUTES.portfolio, icon: BriefcaseBusiness, visible: auth.can('canAccessPaperTrading') },
     { id: 'alerts', label: '가격 알림', description: '알림 상태 확인', href: APP_ROUTES.alerts, icon: Bell, visible: true },
-    { id: 'research', label: '연구센터', description: '검증 근거와 연구 상태', href: APP_ROUTES.researchCenter, icon: Sparkles, visible: auth.can('canManageMembers') },
     { id: 'settings', label: '앱 설정', description: '화면·계정 설정', href: APP_ROUTES.settings, icon: Settings, visible: true },
+    { id: 'admin', label: '관리자 도구', description: '연구·회원·운영 도구', href: APP_ROUTES.admin, icon: Settings, visible: auth.can('canManageMembers') },
   ];
   const visibleActions = actions.filter((item) => item.visible);
   const needle = query.trim().toLocaleLowerCase('ko-KR');
