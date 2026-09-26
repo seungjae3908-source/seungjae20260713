@@ -545,6 +545,11 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
         return;
       }
       setState({ kind: 'ready', snapshot, position: selected.position });
+      const currentProviderOrders = Array.isArray(snapshot.openOrders)
+        ? snapshot.openOrders.filter((order) => providerOrderMatches(market, symbol, order))
+        : [];
+      setCockpitOpen(true);
+      setCockpitTab(currentProviderOrders.length > 0 ? 'orders' : selected.position ? 'exit' : 'entry');
       if (selected.position && linesVisible) {
         onOverlayChange({ provider, position: selected.position, stale: snapshot.stale, checkedAt: snapshot.checkedAt ?? null });
       }
