@@ -113,6 +113,7 @@ export const NAVIGATION_FEATURE_DECISIONS = {
   'market-browser': 'INTERNAL_ONLY',
   alerts: 'KEEP_VISIBLE',
   recommendations: 'KEEP_VISIBLE',
+  'research-center': 'INTERNAL_ONLY',
 } as const satisfies Record<string, NavigationFeatureDecision>;
 
 export function navigationMenuItemIsUserVisible(item: Pick<NavigationMenuItem, 'id'>): boolean {
@@ -303,7 +304,8 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
     menu: [
       { id: 'settings', href: APP_ROUTES.settings, label: '앱 설정', icon: 'settings' },
       { id: 'account', href: APP_ROUTES.account, label: '계정', icon: 'settings' },
-      { id: 'admin', href: APP_ROUTES.admin, label: '회원 관리', icon: 'settings', capability: 'canManageMembers' },
+      { id: 'admin-research', href: APP_ROUTES.researchCenter, label: '연구센터', icon: 'chart', capability: 'canManageMembers' },
+      { id: 'admin', href: APP_ROUTES.admin, label: '관리자 도구', icon: 'settings', capability: 'canManageMembers' },
     ],
   },
 ] as const;
