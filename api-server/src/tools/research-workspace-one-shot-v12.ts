@@ -110,7 +110,7 @@ export async function runResearchWorkspaceOneShotV12(input:OneShotInput,deps:Dep
 
     const plan=planFromManifest(manifest);
     if(plan.planDigest!==manifest.orchestratorPlanDigest)fail('ONE_SHOT_ORCHESTRATOR_PLAN_MISMATCH');
-    const request=createGroqAdversarialReviewRequestV10(plan,gemini);
+    const request:any=createGroqAdversarialReviewRequestV10(plan,gemini);
     const approval=await readJson(input.groqApprovalPath,64*1024);
     verifyGroqCallApprovalV12(approval,manifest,clock());
     await exclusive(join(runDir,'groq-request.json'),request);
