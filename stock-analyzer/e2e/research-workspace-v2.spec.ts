@@ -55,7 +55,10 @@ for (const width of [390,768,1024,1440]) test(`mounted workspace filters and dis
   await expect(panel.getByTestId('workspace-strategy')).toHaveCount(2);
   const providerPanel=panel.getByTestId('research-provider-status');
   await expect(providerPanel.locator('[data-provider]')).toHaveCount(3);
-  await expect(providerPanel).toContainText('실제 호출·영상 분석·무료 한도는 별도 검증');
+  await expect(providerPanel).toContainText('설정 상태와 실제 호출 검증은 별개입니다.');
+  await expect(providerPanel.locator('[data-provider="gemini"]')).toContainText('설정 확인');
+  await expect(providerPanel.locator('[data-provider="gemini"]')).toContainText('실제 호출 미검증');
+  await expect(providerPanel.locator('[data-provider="groq"]')).toContainText('실제 호출 미검증');
   const workerPanel=panel.getByTestId('research-worker-status');await expect(workerPanel).toContainText('작업자 신호 확인');await expect(workerPanel).toContainText('확인 필요');
   const orchestratorPanel=panel.getByTestId('research-orchestrator-status');await expect(orchestratorPanel).toContainText('Groq 반대검토');await expect(orchestratorPanel).toContainText('주식 완료');await expect(orchestratorPanel).toContainText('코인 완료');await expect(orchestratorPanel).toContainText('백테스터 결과만 사용');
   await page.screenshot({path:testInfo.outputPath(`providers-${width}.png`),fullPage:true});
