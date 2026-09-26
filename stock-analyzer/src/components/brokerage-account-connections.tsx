@@ -251,7 +251,7 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
       return next;
     });
     const validFx = validAccountDisplayFx(fxResult.value) ? fxResult.value : null;
-    if (validFx) setFx(validFx);
+    setFx(validFx);
     setFxWarning(
       fxResult.error || (fxResult.value !== null && !validFx)
         ? '환율 조회 불가'
@@ -575,7 +575,9 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
             ? convertMoney(row.estimatedKrwValue, 'KRW', displayCurrency, fx)
             : null;
           const value = converted == null
-            ? `${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 8 }).format(row.total ?? 0)} ${row.currency}`
+            ? validMoney(row.total)
+              ? `${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 8 }).format(row.total)} ${row.currency}`
+              : '—'
             : formatDisplayMoney(converted, displayCurrency);
           return <HoldingRow key={row.currency} symbol={row.currency} value={value} />;
         })}
