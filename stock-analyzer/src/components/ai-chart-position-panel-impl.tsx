@@ -618,6 +618,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     try {
       const query = new URLSearchParams({
         dashboard: '1',
+        market,
         symbol,
       });
       if (market !== 'KR' && market !== 'US') query.set('exchange', provider);
