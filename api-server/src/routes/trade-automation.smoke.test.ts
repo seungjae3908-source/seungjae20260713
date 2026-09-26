@@ -229,10 +229,14 @@ test('status is authenticated, automatic execution defaults off, and never retur
     assert.doesNotMatch(text, /encryptedCredentials|accessKey|secretKey|passphrase/);
     const body = JSON.parse(text) as {
       policy: { mode: string; automaticEnabled: boolean };
+      liveExecutionServerEnabled: Record<string, boolean>;
+      liveAutomaticExecutionServerEnabled: Record<string, boolean>;
       actualOrderSubmittedByStatusRequest: boolean;
     };
     assert.equal(body.policy.mode, 'approval');
     assert.equal(body.policy.automaticEnabled, false);
+    assert.deepEqual(body.liveExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
+    assert.deepEqual(body.liveAutomaticExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
     assert.equal(body.actualOrderSubmittedByStatusRequest, false);
   } finally { await close(authenticated.server); }
 });
