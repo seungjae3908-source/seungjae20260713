@@ -235,8 +235,52 @@ process.stdout.write([
   bool("AUTO_TRADING"),
   bool("REAL_ORDER_ENABLED"),
   bool("PRIVATE_TRADING_API_ALLOWED"),
+  bool("ORDER_EXECUTION_ENABLED"),
+  bool("LIVE_TRADING_ACTIVATION_APPROVED"),
+  bool("LIVE_AUTOMATIC_TRADING_ENABLED"),
+  bool("BITGET_LIVE_ORDER_ENABLED"),
+  bool("UPBIT_LIVE_ORDER_ENABLED"),
+  bool("KIWOOM_LIVE_ORDER_ENABLED"),
+  bool("TOSS_LIVE_ORDER_ENABLED"),
   String(env.executionAuthority ?? "NONE"),
 ].join("\t") + "\n");
+  ' "$PM2_NAME"
+}
+
+assert_live_trading_inactive_before_deploy() {
+  pm2 jlist | node -e '
+const reject = (message) => { if (message) console.error(message); process.exit(1); };
+let rows;
+try { rows = JSON.parse(require("node:fs").readFileSync(0, "utf8")); } catch { reject("[deploy] PM2 live-trading state is unreadable"); }
+if (!Array.isArray(rows)) reject("[deploy] PM2 live-trading state is invalid");
+const matches = rows.filter((row) => row?.name === process.argv[1]);
+if (matches.length !== 1) reject("[deploy] PM2 live-trading runtime is ambiguous");
+const env = matches[0]?.pm2_env;
+if (!env || typeof env !== "object" || Array.isArray(env)) reject("[deploy] PM2 live-trading env is unavailable");
+const bool = (key) => {
+  const value = env[key];
+  if (value === undefined || value === false || value === "false") return false;
+  if (value === true || value === "true") return true;
+  reject("[deploy] malformed live-trading flag: " + key);
+};
+const activeFlags = [
+  "LIVE_TRADING",
+  "AUTO_TRADING",
+  "REAL_ORDER_ENABLED",
+  "PRIVATE_TRADING_API_ALLOWED",
+  "ORDER_EXECUTION_ENABLED",
+  "LIVE_TRADING_ACTIVATION_APPROVED",
+  "LIVE_AUTOMATIC_TRADING_ENABLED",
+  "BITGET_LIVE_ORDER_ENABLED",
+  "UPBIT_LIVE_ORDER_ENABLED",
+  "KIWOOM_LIVE_ORDER_ENABLED",
+  "TOSS_LIVE_ORDER_ENABLED",
+].filter((key) => bool(key));
+const authority = String(env.executionAuthority ?? "NONE").trim().toUpperCase();
+if (activeFlags.length > 0 || authority !== "NONE") {
+  console.error("[deploy] LIVE_TRADING_ACTIVE_DEPLOY_FORBIDDEN: disable live trading only after all live orders are terminal");
+  process.exit(1);
+}
   ' "$PM2_NAME"
 }
 
@@ -248,7 +292,7 @@ listener_pids() {
 }
 
 normalize_pm2_watch_before_restart() {
-  local snapshot pid status cwd exec_path watched _rest
+  local snapshot="" pid="" status="" cwd="" exec_path="" watched="" _rest=""
   snapshot="$(pm2_runtime_snapshot)" || {
     echo "[deploy] unable to read PM2 runtime definition before restart" >&2
     return 1
@@ -287,18 +331,22 @@ restart_application_preserving_telegram() {
   normalize_pm2_watch_before_restart || return 1
   LIVE_TELEGRAM_ACTIVATION_APPROVED="$approved" TELEGRAM_INTELLIGENCE_WORKER_ENABLED="$worker" \
     LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false \
+    ORDER_EXECUTION_ENABLED=false LIVE_TRADING_ACTIVATION_APPROVED=false LIVE_AUTOMATIC_TRADING_ENABLED=false \
+    BITGET_LIVE_ORDER_ENABLED=false UPBIT_LIVE_ORDER_ENABLED=false KIWOOM_LIVE_ORDER_ENABLED=false TOSS_LIVE_ORDER_ENABLED=false \
     executionAuthority=NONE DEPLOY_SHA="$TARGET_SHA" pm2 restart "$PM2_NAME" --update-env
 }
 
 application_runtime_ready() {
-  local snapshot pid status cwd exec_path watched live auto real private_api authority
+  local snapshot="" pid="" status="" cwd="" exec_path="" watched="" live="" auto="" real="" private_api="" order_execution="" live_approved="" live_auto="" bitget_live="" upbit_live="" kiwoom_live="" toss_live="" authority=""
   snapshot="$(pm2_runtime_snapshot)" || return 1
-  IFS=$'\t' read -r pid status cwd exec_path watched live auto real private_api authority <<< "$snapshot"
+  IFS=$'\t' read -r pid status cwd exec_path watched live auto real private_api order_execution live_approved live_auto bitget_live upbit_live kiwoom_live toss_live authority <<< "$snapshot"
   [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && "$status" == online ]] || return 1
   [[ "$cwd" == "$LIVE_DIR" ]] || return 1
   [[ "$(readlink -m "$exec_path")" == "$LIVE_DIR/api-server/dist/index.mjs" ]] || return 1
   [[ "$watched" == false ]] || return 1
   [[ "$live" == false && "$auto" == false && "$real" == false && "$private_api" == false ]] || return 1
+  [[ "$order_execution" == false && "$live_approved" == false && "$live_auto" == false ]] || return 1
+  [[ "$bitget_live" == false && "$upbit_live" == false && "$kiwoom_live" == false && "$toss_live" == false ]] || return 1
   [[ "$authority" == NONE ]] || return 1
   mapfile -t current_listeners < <(listener_pids)
   [[ "${#current_listeners[@]}" -eq 1 && "${current_listeners[0]}" == "$pid" ]] || return 1
@@ -349,6 +397,11 @@ fi
 # Missing flags are OFF; malformed/mixed state blocks before any application restart.
 TELEGRAM_PREDEPLOY_STATE="$(read_telegram_activation_state)"
 readonly TELEGRAM_PREDEPLOY_STATE
+
+# A generic application deploy must never silently revoke the ability to manage an
+# already-live real order. The owner must first close/cancel live orders, explicitly
+# disable the live-trading gate, and only then may Production deploy proceed.
+assert_live_trading_inactive_before_deploy
 
 if [[ "$CURRENT_SHA" == "$TARGET_SHA" ]]; then
   echo "[deploy] target marker is already active: $TARGET_SHA"
@@ -437,8 +490,10 @@ rm -f "$PM2_JSON"
   cd "$RELEASE_DIR/api-server"
   nohup env PORT="$CANARY_PORT" API_PORT="$CANARY_PORT" NODE_ENV=production DEPLOY_SHA="$TARGET_SHA" \
     LIVE_TELEGRAM_ACTIVATION_APPROVED=false TELEGRAM_INTELLIGENCE_WORKER_ENABLED=false \
-    LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false executionAuthority=NONE \
-    node --env-file="$CANARY_ENV" --enable-source-maps ./dist/index.mjs \
+    LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false \
+    ORDER_EXECUTION_ENABLED=false LIVE_TRADING_ACTIVATION_APPROVED=false LIVE_AUTOMATIC_TRADING_ENABLED=false \
+    BITGET_LIVE_ORDER_ENABLED=false UPBIT_LIVE_ORDER_ENABLED=false KIWOOM_LIVE_ORDER_ENABLED=false TOSS_LIVE_ORDER_ENABLED=false \
+    executionAuthority=NONE node --env-file="$CANARY_ENV" --enable-source-maps ./dist/index.mjs \
     >"$CANARY_LOG" 2>&1 &
   echo $! >"$RELEASE_DIR/.canary.pid"
 )

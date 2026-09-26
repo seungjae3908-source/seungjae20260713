@@ -69,16 +69,44 @@ export function tradingIdempotencyKey(userId: string, input: TradingPlanInput) {
   ].join(':')).digest('hex');
 }
 
+export type LiveExecutionAuthority = 'NONE' | 'MANUAL' | 'AUTOMATIC';
+
+export function liveExecutionAuthority(): LiveExecutionAuthority {
+  const authority = String(process.env.executionAuthority ?? 'NONE').trim().toUpperCase();
+  if (authority === 'MANUAL' || authority === 'AUTOMATIC') return authority;
+  return 'NONE';
+}
+
 export function liveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
-  const global = process.env.ORDER_EXECUTION_ENABLED === 'true' && process.env.LIVE_TRADING_ACTIVATION_APPROVED === 'true';
+  const authority = liveExecutionAuthority();
+  const global = authority !== 'NONE'
+    && process.env.LIVE_TRADING === 'true'
+    && process.env.ORDER_EXECUTION_ENABLED === 'true'
+    && process.env.LIVE_TRADING_ACTIVATION_APPROVED === 'true'
+    && process.env.REAL_ORDER_ENABLED === 'true'
+    && process.env.PRIVATE_TRADING_API_ALLOWED === 'true';
   const perExchange = {
     bitget: process.env.BITGET_LIVE_ORDER_ENABLED === 'true',
     upbit: process.env.UPBIT_LIVE_ORDER_ENABLED === 'true',
-    // Stock live execution stays disabled regardless of the user's Toss/Kiwoom Paper broker choice
-    // until each broker's private order adapter is separately verified and activated.
-    kiwoom: false,
+    kiwoom: process.env.KIWOOM_LIVE_ORDER_ENABLED === 'true',
+    toss: process.env.TOSS_LIVE_ORDER_ENABLED === 'true',
   };
   return global && perExchange[exchange];
+}
+
+export function automaticLiveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
+  return liveExecutionAuthority() === 'AUTOMATIC'
+    && process.env.AUTO_TRADING === 'true'
+    && process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'
+    && liveExecutionEnabled(exchange);
+}
+
+function serverLiveEnabledForPlan(input: TradingPlanInput, policy: TradingPolicy) {
+  if (input.accountMode !== 'live') return true;
+  if (policy.mode === 'automatic' && policy.automaticEnabled) {
+    return automaticLiveExecutionEnabled(input.exchange);
+  }
+  return liveExecutionEnabled(input.exchange);
 }
 
 export class TradeAutomationService {
@@ -114,7 +142,7 @@ export class TradeAutomationService {
 
     const riskDecision = evaluateTradingPlan(input, policy, {
       emergencyStopped: emergencyStopped || await this.emergencyStopActive(userId, policy),
-      serverLiveEnabled: input.accountMode !== 'live' || liveExecutionEnabled(input.exchange),
+      serverLiveEnabled: serverLiveEnabledForPlan(input, policy),
     });
     const decision = withMarketIntelligenceWarnings(riskDecision, intelligence.warnings);
     if (!decision.allowed) {
@@ -156,7 +184,7 @@ export class TradeAutomationService {
     const policy = await this.repository.getPolicy(userId);
     const decision = evaluateTradingPlan(plan, policy, {
       emergencyStopped: await this.emergencyStopActive(userId, policy),
-      serverLiveEnabled: plan.accountMode !== 'live' || liveExecutionEnabled(plan.exchange),
+      serverLiveEnabled: serverLiveEnabledForPlan(plan, policy),
     });
     if (!decision.allowed) {
       await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
@@ -202,7 +230,7 @@ export class TradeAutomationService {
     }
     const decision = evaluateTradingPlan(plan, policy, {
       emergencyStopped: await this.emergencyStopActive(userId, policy),
-      serverLiveEnabled: plan.accountMode !== 'live' || liveExecutionEnabled(plan.exchange),
+      serverLiveEnabled: serverLiveEnabledForPlan(plan, policy),
     });
     if (!decision.allowed) {
       await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
@@ -243,6 +271,7 @@ export class TradeAutomationService {
       clientOrderId: `sj-${plan.exchange}-${plan.idempotencyKey.slice(0, 20)}`,
       exchangeOrderId: null, state: 'SUBMITTED', version: 0,
       requestedQuantity: plan.quantity ?? null,
+      currentLimitPrice: plan.limitPrice ?? null,
       filledQuantity: 0, averageFillPrice: null, retryCount: 0, lastErrorCode: null,
       approvedPlanVersion: planVersion(plan),
       preSubmissionCheckedAt: null,

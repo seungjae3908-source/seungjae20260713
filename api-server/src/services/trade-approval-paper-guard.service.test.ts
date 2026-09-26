@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
-import { liveExecutionEnabled } from './trade-automation.service';
+import { automaticLiveExecutionEnabled, liveExecutionEnabled } from './trade-automation.service';
 import {
   DEFAULT_TRADING_POLICY,
   type TradingPlan,
@@ -49,35 +51,128 @@ test('approval policy always disables automatic execution and every exchange swi
     ...DEFAULT_TRADING_POLICY,
     mode: 'automatic',
     automaticEnabled: true,
-    exchangeEnabled: { bitget: true, upbit: true, kiwoom: true },
-    enabledAssets: { bitget: ['BTCUSDT'], upbit: ['BTC'], kiwoom: ['005930'] },
+    exchangeEnabled: { bitget: true, upbit: true, kiwoom: true, toss: true },
+    enabledAssets: { bitget: ['BTCUSDT'], upbit: ['BTC'], kiwoom: ['005930'], toss: ['005930'] },
     enabledStrategies: ['unsafe-auto'],
   });
   assert.equal(policy.mode, 'approval');
   assert.equal(policy.automaticEnabled, false);
-  assert.deepEqual(policy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false });
-  assert.deepEqual(policy.enabledAssets, { bitget: [], upbit: [], kiwoom: [] });
+  assert.deepEqual(policy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
+  assert.deepEqual(policy.enabledAssets, { bitget: [], upbit: [], kiwoom: [], toss: [] });
   assert.deepEqual(policy.enabledStrategies, []);
 });
 
-test('legacy Kiwoom live execution stays fail-closed even when every live flag is enabled', () => {
+test('production deploy resets every live-order authority gate to fail closed', () => {
+  const deploy = readFileSync(path.resolve(process.cwd(), 'ops/deploy-production.sh'), 'utf8');
+  for (const flag of [
+    'LIVE_TRADING=false',
+    'AUTO_TRADING=false',
+    'REAL_ORDER_ENABLED=false',
+    'PRIVATE_TRADING_API_ALLOWED=false',
+    'ORDER_EXECUTION_ENABLED=false',
+    'LIVE_TRADING_ACTIVATION_APPROVED=false',
+    'LIVE_AUTOMATIC_TRADING_ENABLED=false',
+    'BITGET_LIVE_ORDER_ENABLED=false',
+    'UPBIT_LIVE_ORDER_ENABLED=false',
+    'KIWOOM_LIVE_ORDER_ENABLED=false',
+    'TOSS_LIVE_ORDER_ENABLED=false',
+    'executionAuthority=NONE',
+  ]) {
+    assert.ok(deploy.includes(flag), `missing deploy reset: ${flag}`);
+  }
+  assert.ok(deploy.includes('bool("ORDER_EXECUTION_ENABLED")'));
+  assert.ok(deploy.includes('bool("LIVE_AUTOMATIC_TRADING_ENABLED")'));
+  assert.ok(deploy.includes('application_runtime_ready()'));
+});
+
+test('every live provider requires the global gates plus its own explicit provider gate', () => {
   const previous = {
     ORDER_EXECUTION_ENABLED: process.env.ORDER_EXECUTION_ENABLED,
     LIVE_TRADING_ACTIVATION_APPROVED: process.env.LIVE_TRADING_ACTIVATION_APPROVED,
+    REAL_ORDER_ENABLED: process.env.REAL_ORDER_ENABLED,
+    PRIVATE_TRADING_API_ALLOWED: process.env.PRIVATE_TRADING_API_ALLOWED,
     BITGET_LIVE_ORDER_ENABLED: process.env.BITGET_LIVE_ORDER_ENABLED,
     UPBIT_LIVE_ORDER_ENABLED: process.env.UPBIT_LIVE_ORDER_ENABLED,
     KIWOOM_LIVE_ORDER_ENABLED: process.env.KIWOOM_LIVE_ORDER_ENABLED,
+    TOSS_LIVE_ORDER_ENABLED: process.env.TOSS_LIVE_ORDER_ENABLED,
+    LIVE_AUTOMATIC_TRADING_ENABLED: process.env.LIVE_AUTOMATIC_TRADING_ENABLED,
+    LIVE_TRADING: process.env.LIVE_TRADING,
+    AUTO_TRADING: process.env.AUTO_TRADING,
+    executionAuthority: process.env.executionAuthority,
   };
   try {
     process.env.ORDER_EXECUTION_ENABLED = 'true';
     process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+    process.env.REAL_ORDER_ENABLED = 'true';
+    process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
     process.env.BITGET_LIVE_ORDER_ENABLED = 'true';
     process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
     process.env.KIWOOM_LIVE_ORDER_ENABLED = 'true';
+    process.env.TOSS_LIVE_ORDER_ENABLED = 'true';
+    process.env.LIVE_TRADING = 'false';
+    process.env.AUTO_TRADING = 'false';
+    process.env.executionAuthority = 'MANUAL';
+    assert.equal(liveExecutionEnabled('bitget'), false);
+    assert.equal(liveExecutionEnabled('upbit'), false);
+    assert.equal(liveExecutionEnabled('kiwoom'), false);
+    assert.equal(liveExecutionEnabled('toss'), false);
 
+    process.env.LIVE_TRADING = 'true';
+    process.env.executionAuthority = 'NONE';
+    assert.equal(liveExecutionEnabled('bitget'), false);
+    assert.equal(liveExecutionEnabled('upbit'), false);
+    assert.equal(liveExecutionEnabled('kiwoom'), false);
+    assert.equal(liveExecutionEnabled('toss'), false);
+
+    process.env.executionAuthority = 'MANUAL';
     assert.equal(liveExecutionEnabled('bitget'), true);
     assert.equal(liveExecutionEnabled('upbit'), true);
+    assert.equal(liveExecutionEnabled('kiwoom'), true);
+    assert.equal(liveExecutionEnabled('toss'), true);
+    assert.equal(automaticLiveExecutionEnabled('bitget'), false);
+    assert.equal(automaticLiveExecutionEnabled('upbit'), false);
+    assert.equal(automaticLiveExecutionEnabled('kiwoom'), false);
+    assert.equal(automaticLiveExecutionEnabled('toss'), false);
+
+    process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'true';
+    process.env.executionAuthority = 'AUTOMATIC';
+    process.env.AUTO_TRADING = 'false';
+    assert.equal(automaticLiveExecutionEnabled('bitget'), false);
+    assert.equal(automaticLiveExecutionEnabled('upbit'), false);
+    assert.equal(automaticLiveExecutionEnabled('kiwoom'), false);
+    assert.equal(automaticLiveExecutionEnabled('toss'), false);
+
+    process.env.AUTO_TRADING = 'true';
+    assert.equal(automaticLiveExecutionEnabled('bitget'), true);
+    assert.equal(automaticLiveExecutionEnabled('upbit'), true);
+    assert.equal(automaticLiveExecutionEnabled('kiwoom'), true);
+    assert.equal(automaticLiveExecutionEnabled('toss'), true);
+
+    process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'false';
+    process.env.AUTO_TRADING = 'false';
+    process.env.executionAuthority = 'MANUAL';
+    assert.equal(liveExecutionEnabled('bitget'), true);
+    assert.equal(liveExecutionEnabled('upbit'), true);
+
+    process.env.REAL_ORDER_ENABLED = 'false';
+    assert.equal(liveExecutionEnabled('bitget'), false);
+    assert.equal(liveExecutionEnabled('upbit'), false);
     assert.equal(liveExecutionEnabled('kiwoom'), false);
+    assert.equal(liveExecutionEnabled('toss'), false);
+
+    process.env.REAL_ORDER_ENABLED = 'true';
+    process.env.PRIVATE_TRADING_API_ALLOWED = 'false';
+    assert.equal(liveExecutionEnabled('bitget'), false);
+    assert.equal(liveExecutionEnabled('upbit'), false);
+    assert.equal(liveExecutionEnabled('kiwoom'), false);
+    assert.equal(liveExecutionEnabled('toss'), false);
+
+    process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
+    process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'false';
+    assert.equal(liveExecutionEnabled('bitget'), false);
+    assert.equal(liveExecutionEnabled('upbit'), false);
+    assert.equal(liveExecutionEnabled('kiwoom'), false);
+    assert.equal(liveExecutionEnabled('toss'), false);
   } finally {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];

@@ -1,0 +1,250 @@
+name: Production Account Read-only Live QA
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/production-account-readonly-live-qa.yml'
+      - '.github/workflows/production-account-readonly-live-qa-dispatch-bridge.yml'
+      - 'stock-analyzer/playwright.production-account-readonly.config.ts'
+      - 'stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts'
+      - 'stock-analyzer/e2e/support/production-readonly-policy.ts'
+      - 'api-server/src/features/account-readonly/**'
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact deployed Production SHA to verify with real read-only account calls
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: production-account-readonly-live-qa-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static-contract:
+    name: Validate Production real-account read-only QA safety contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate exact-head isolated QA contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          node <<'NODE'
+          const fs = require('node:fs');
+          const workflow = fs.readFileSync('.github/workflows/production-account-readonly-live-qa.yml', 'utf8');
+          const spec = fs.readFileSync('stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts', 'utf8');
+          const config = fs.readFileSync('stock-analyzer/playwright.production-account-readonly.config.ts', 'utf8');
+          const live = workflow.split('\n  production-account-readonly-live-qa:\n')[1] ?? '';
+          const requireText = (source, value, code) => {
+            if (!source.includes(value)) throw new Error(code);
+          };
+          requireText(live, "if: github.event_name == 'workflow_dispatch'", 'LIVE_QA_MUST_BE_DISPATCH_ONLY');
+          requireText(live, 'environment: production', 'LIVE_QA_MUST_USE_PRODUCTION_ENVIRONMENT');
+          requireText(live, 'PRODUCTION_BASE_URL: https://lsj119.com', 'LIVE_QA_OFFICIAL_HOST_REQUIRED');
+          requireText(live, 'ref: ' + '$' + '{{ inputs.sha }}', 'LIVE_QA_EXACT_SHA_CHECKOUT_REQUIRED');
+          requireText(spec, 'installProductionReadOnlyPolicy', 'READONLY_BROWSER_POLICY_REQUIRED');
+          requireText(spec, '/api/accounts/read-only/credentials/status', 'CREDENTIAL_STATUS_READ_REQUIRED');
+          for (const provider of ['toss', 'upbit', 'bitget']) {
+            requireText(spec, "'" + provider + "'", 'REQUIRED_PROVIDER_MISSING_' + provider.toUpperCase());
+          }
+          for (const mutation of ['page.request.post(', 'page.request.put(', 'page.request.patch(', 'page.request.delete(']) {
+            if (spec.includes(mutation)) throw new Error('DIRECT_MUTATION_REQUEST_FORBIDDEN');
+          }
+          for (const secret of ['TOSS_CLIENT_SECRET', 'UPBIT_SECRET_KEY', 'BITGET_SECRET_KEY', 'KIWOOM_APP_SECRET']) {
+            if (live.includes(secret)) throw new Error('PROVIDER_SECRET_MUST_NOT_ENTER_QA_WORKFLOW_' + secret);
+          }
+          for (const line of ["trace: 'off'", "video: 'off'", "screenshot: 'off'"]) {
+            requireText(config, line, 'RAW_AUTHENTICATED_ARTIFACT_RETENTION_FORBIDDEN');
+          }
+          NODE
+
+  production-account-readonly-live-qa:
+    name: Real Production account read-only provider QA
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      PRODUCTION_BASE_URL: https://lsj119.com
+      PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+      PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+      PRODUCTION_ACCOUNT_READONLY_LIVE_QA: "true"
+      PRODUCTION_ACCOUNT_READONLY_ARTIFACT_DIR: production-account-readonly-artifacts
+      EXPECTED_DEPLOY_SHA: ${{ inputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require exact deployed source checkout
+        run: |
+          set -Eeuo pipefail
+          [[ "$EXPECTED_DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_DEPLOY_SHA"
+
+      - name: Require latest successful official Production Deploy
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ inputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'production-deploy.yml',
+              event: 'workflow_dispatch',
+              status: 'completed',
+              per_page: 100,
+            });
+            const latest = runs
+              .filter((run) => run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            if (!latest || String(latest.head_sha).toLowerCase() !== target) {
+              core.setFailed('Target is not latest successful Production Deploy: target=' + target + ' latest=' + String(latest?.head_sha ?? 'missing'));
+              return;
+            }
+            core.info('Production Deploy provenance accepted from Run ' + latest.id + '.');
+
+      - name: Require exact Production runtime identity
+        run: |
+          set -Eeuo pipefail
+          curl --fail --silent --show-error --max-time 15 "$PRODUCTION_BASE_URL/api/health" -o /tmp/production-account-qa-health.json
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const health = JSON.parse(fs.readFileSync('/tmp/production-account-qa-health.json', 'utf8'));
+          const expected = String(process.env.EXPECTED_DEPLOY_SHA ?? '').toLowerCase();
+          const deploySha = String(health?.deploySha ?? '').toLowerCase();
+          if (health?.ok !== true
+            || deploySha !== expected
+            || String(health?.processDeploySha ?? '').toLowerCase() !== expected
+            || String(health?.deployMarkerSha ?? '').toLowerCase() !== expected
+            || health?.identityMatch !== true
+            || health?.identityStatus !== 'match') {
+            throw new Error('PRODUCTION_ACCOUNT_QA_IDENTITY_MISMATCH');
+          }
+          NODE
+
+      - name: Require Production QA login credential
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$PRODUCTION_QA_LOGIN" && -n "$PRODUCTION_QA_PASSWORD" ]] || {
+            echo 'BLOCKED_BY_PRODUCTION_QA_CREDENTIAL' >&2
+            exit 1
+          }
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install isolated Chromium runtime
+        working-directory: stock-analyzer
+        run: pnpm exec playwright install chromium
+
+      - name: Run authenticated real-account read-only QA
+        working-directory: stock-analyzer
+        run: pnpm exec playwright test --config=playwright.production-account-readonly.config.ts
+
+      - name: Verify sanitized immutable QA evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          evidence="stock-analyzer/production-account-readonly-artifacts/production-account-readonly-live-qa.json"
+          test -s "$evidence"
+          node - "$evidence" "$EXPECTED_DEPLOY_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const [file, expectedSha] = process.argv.slice(2);
+          const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+          const requiredCrypto = ['upbit', 'bitget'];
+          const stockProviders = ['toss', 'kiwoom'];
+          const providers = Array.isArray(value?.providers) ? value.providers : [];
+          if (value?.schemaVersion !== 'production-account-readonly-live-qa-v1'
+            || value?.targetSha !== expectedSha
+            || value?.officialProductionOrigin !== true
+            || value?.authenticatedProductionSession !== true
+            || value?.credentialVaultEncryptionConfigured !== true
+            || value?.secretValuesRecorded !== false
+            || value?.accountValuesRecorded !== false
+            || value?.orderRequests !== 0
+            || value?.cancelRequests !== 0
+            || value?.amendRequests !== 0
+            || value?.transferRequests !== 0
+            || value?.withdrawalRequests !== 0
+            || value?.blockedMutationRequests !== 0
+            || value?.observedAppMutationRequests !== 0
+            || value?.liveTradingAuthorityGranted !== false
+            || value?.autoTradingAuthorityGranted !== false) {
+            throw new Error('PRODUCTION_ACCOUNT_QA_EVIDENCE_CONTRACT_FAILED');
+          }
+          for (const provider of requiredCrypto) {
+            const row = providers.find((item) => item?.provider === provider);
+            if (!row || row.connected !== true || row.status !== 'CONNECTED'
+              || row.stale !== false || row.errorCode !== null
+              || row.checkedAtPresent !== true || row.lastGoodAtPresent !== true) {
+              throw new Error('PRODUCTION_ACCOUNT_QA_PROVIDER_FAILED_' + provider.toUpperCase());
+            }
+          }
+          const connectedStock = providers.filter((item) =>
+            stockProviders.includes(item?.provider)
+            && item?.connected === true
+            && item?.status === 'CONNECTED'
+            && item?.stale === false
+            && item?.errorCode === null
+            && item?.checkedAtPresent === true
+            && item?.lastGoodAtPresent === true);
+          if (connectedStock.length < 1) {
+            throw new Error('PRODUCTION_ACCOUNT_QA_STOCK_PROVIDER_NOT_CONNECTED');
+          }
+          const serialized = JSON.stringify(value);
+          if (/(clientSecret|secretKey|accessKey|apiKey|passphrase|accountRef|balances|positions|openOrders)/i.test(serialized)) {
+            throw new Error('PRODUCTION_ACCOUNT_QA_SECRET_OR_ACCOUNT_VALUE_LEAK');
+          }
+          NODE
+
+      - name: Upload sanitized Production account QA evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-account-readonly-live-${{ inputs.sha }}
+          path: stock-analyzer/production-account-readonly-artifacts/production-account-readonly-live-qa.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Write safety summary
+        if: always()
+        run: |
+          {
+            echo '## Production Account Read-only Live QA'
+            echo
+            echo "- Exact deployed Production SHA: $EXPECTED_DEPLOY_SHA"
+            echo '- Session: authenticated Production QA member'
+            echo '- Credential source: member-scoped encrypted Production Vault'
+            echo '- Stock provider: Toss or Kiwoom, at least one real connected account required'
+            echo '- Crypto providers: Upbit and Bitget real connected accounts required'
+            echo '- Account/holding/order values retained in evidence: false'
+            echo '- Provider Secret values retained in evidence: false'
+            echo '- Actual orders/cancels/amends/transfers/withdrawals: 0'
+            echo '- Live/auto trading authority granted by QA: false'
+          } >> "$GITHUB_STEP_SUMMARY"

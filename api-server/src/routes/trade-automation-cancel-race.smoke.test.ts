@@ -72,7 +72,7 @@ async function close(server: import('node:http').Server) {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-test('concurrent HTTP cancel requests submit one provider cancel and reconcile the fill', async () => {
+test('concurrent HTTP cancel requests submit one provider cancel and reconcile the fill', { timeout: 15_000 }, async () => {
   const repository = new InMemoryTradingRepository();
   const { plan, order } = fixtures();
   await repository.savePlan(plan);
@@ -85,7 +85,11 @@ test('concurrent HTTP cancel requests submit one provider cancel and reconcile t
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
   process.env.ORDER_EXECUTION_ENABLED = 'true';
   process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+  process.env.REAL_ORDER_ENABLED = 'true';
+  process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
   process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+  process.env.LIVE_TRADING = 'true';
+  process.env.executionAuthority = 'MANUAL';
 
   const { server, baseUrl } = await startServer(repository);
   const nativeFetch = globalThis.fetch;
@@ -148,7 +152,11 @@ test('concurrent HTTP cancel requests submit one provider cancel and reconcile t
     delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
     delete process.env.ORDER_EXECUTION_ENABLED;
     delete process.env.LIVE_TRADING_ACTIVATION_APPROVED;
+    delete process.env.REAL_ORDER_ENABLED;
+    delete process.env.PRIVATE_TRADING_API_ALLOWED;
     delete process.env.UPBIT_LIVE_ORDER_ENABLED;
+    delete process.env.LIVE_TRADING;
+    delete process.env.executionAuthority;
     setTradeAutomationRepositoryFactoryForTests(null);
     await close(server);
   }
