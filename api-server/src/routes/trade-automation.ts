@@ -253,6 +253,35 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       repository.getGlobalEmergencyStop(),
     ]);
     const environmentGlobalStop = process.env.TRADING_EMERGENCY_STOP === 'true';
+    const vaultStatus = credentialConfigurationStatus();
+    const liveExecutionReadiness = Object.fromEntries(
+      [...EXCHANGES].map((exchange) => {
+        const connection = connections.find((row) => row.exchange === exchange) ?? null;
+        const blockers: string[] = [];
+        if (!vaultStatus.encryptionConfigured) blockers.push('CREDENTIAL_VAULT_NOT_READY');
+        if (!connection?.configured || connection.accountMode !== 'live') blockers.push('LIVE_CONNECTION_NOT_CONFIGURED');
+        if (connection?.configured && connection.accountMode === 'live'
+          && (!connection.lastVerifiedAt || connection.lastErrorCode)) {
+          blockers.push('LIVE_CONNECTION_NOT_VERIFIED');
+        }
+        if (!liveExecutionEnabled(exchange)) blockers.push('MANUAL_LIVE_SERVER_GATE_OFF');
+        if (!automaticLiveExecutionEnabled(exchange)) blockers.push('AUTOMATIC_LIVE_SERVER_GATE_OFF');
+        return [exchange, {
+          connectionConfigured: connection?.configured === true && connection.accountMode === 'live',
+          providerVerified: Boolean(connection?.lastVerifiedAt) && !connection?.lastErrorCode,
+          manualServerGateEnabled: liveExecutionEnabled(exchange),
+          automaticServerGateEnabled: automaticLiveExecutionEnabled(exchange),
+          readyForManualOrderEvaluation: blockers.every((code) => code !== 'CREDENTIAL_VAULT_NOT_READY'
+            && code !== 'LIVE_CONNECTION_NOT_CONFIGURED'
+            && code !== 'LIVE_CONNECTION_NOT_VERIFIED'
+            && code !== 'MANUAL_LIVE_SERVER_GATE_OFF'),
+          readyForAutomaticOrderEvaluation: blockers.length === 0,
+          blockers,
+          orderTimeRiskRecheckRequired: true,
+          orderSubmissionPerformedByStatusRequest: false,
+        }];
+      }),
+    );
     return res.json({
       ok: true,
       policy,
@@ -275,7 +304,8 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
         kiwoom: automaticLiveExecutionEnabled('kiwoom'),
         toss: automaticLiveExecutionEnabled('toss'),
       },
-      credentialVault: credentialConfigurationStatus(),
+      credentialVault: vaultStatus,
+      liveExecutionReadiness,
       lastOrder: orders[0] ?? null,
       actualOrderSubmittedByStatusRequest: false,
     });
