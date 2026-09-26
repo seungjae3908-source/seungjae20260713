@@ -350,6 +350,17 @@ test.after(() => {
 
 test('exit preview re-reads the real position in read-only mode and never submits a trade', async () => {
   let reads = 0;
+  await repository.deleteConnection(USER, 'toss');
+  const liveGateKeys = [
+    'executionAuthority',
+    'LIVE_TRADING',
+    'ORDER_EXECUTION_ENABLED',
+    'LIVE_TRADING_ACTIVATION_APPROVED',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+    'TOSS_LIVE_ORDER_ENABLED',
+  ] as const;
+  const previousLiveGateEnv = Object.fromEntries(liveGateKeys.map((key) => [key, process.env[key]]));
   setTradeExitPreviewReadersFactoryForTests(() => ({
     toss: async () => {
       reads += 1;
@@ -527,8 +538,18 @@ test('exit preview re-reads the real position in read-only mode and never submit
         state: string;
         planId: string;
         exitDraftId: string;
+        provider: 'toss' | 'kiwoom' | 'upbit' | 'bitget';
+        market: string;
+        symbol: string;
+        side: 'buy' | 'sell';
         quantity: number;
         percent: number;
+        positionQuantity: number | null;
+        availableQuantity: number;
+        quantityRule: 'INTEGER_ONLY' | 'FRACTIONAL_ALLOWED';
+        sourceCheckedAt: string;
+        issuedAt: string;
+        expiresAt: string;
         reduceOnly: boolean;
         approvalEligible: boolean;
         blockers: string[];
@@ -555,6 +576,9 @@ test('exit preview re-reads the real position in read-only mode and never submit
     assert.equal(planBody.canonicalExitPlan.exitDraftId, body.preview.draftId);
     assert.equal(planBody.canonicalExitPlan.quantity, 5);
     assert.equal(planBody.canonicalExitPlan.percent, 25);
+    assert.equal(planBody.canonicalExitPlan.positionQuantity, 20);
+    assert.equal(planBody.canonicalExitPlan.availableQuantity, 20);
+    assert.equal(planBody.canonicalExitPlan.quantityRule, 'INTEGER_ONLY');
     assert.equal(planBody.canonicalExitPlan.reduceOnly, true);
     assert.equal(planBody.canonicalExitPlan.approvalEligible, false);
     assert.ok(planBody.canonicalExitPlan.blockers.includes('LIVE_CONNECTION_NOT_CONFIGURED'));
@@ -572,7 +596,139 @@ test('exit preview re-reads the real position in read-only mode and never submit
     assert.equal(planBody.orderAmended, false);
     assert.equal(planBody.privateTradingMutationSent, false);
     assert.equal(planBody.executionAuthority, 'NONE');
+
+    const approvalRequest = {
+      provider: planBody.canonicalExitPlan.provider,
+      market: planBody.canonicalExitPlan.market,
+      symbol: planBody.canonicalExitPlan.symbol,
+      percent: planBody.canonicalExitPlan.percent,
+      planId: planBody.canonicalExitPlan.planId,
+      exitDraftId: planBody.canonicalExitPlan.exitDraftId,
+      positionQuantity: planBody.canonicalExitPlan.positionQuantity,
+      availableQuantity: planBody.canonicalExitPlan.availableQuantity,
+      quantity: planBody.canonicalExitPlan.quantity,
+      side: planBody.canonicalExitPlan.side,
+      sourceCheckedAt: planBody.canonicalExitPlan.sourceCheckedAt,
+      planIssuedAt: planBody.canonicalExitPlan.issuedAt,
+      planExpiresAt: planBody.canonicalExitPlan.expiresAt,
+    };
+
+    const missingApprovalConfirmation = await fetch(`${baseUrl}/api/trade-automation/positions/exit-approval`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(approvalRequest),
+    });
+    assert.equal(missingApprovalConfirmation.status, 409);
+    assert.equal(reads, 2);
+
+    const blockedApproval = await fetch(`${baseUrl}/api/trade-automation/positions/exit-approval`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, ...approvalRequest }),
+    });
+    assert.equal(blockedApproval.status, 409);
+    const blockedApprovalBody = await blockedApproval.json() as {
+      error: string;
+      blockers: string[];
+      explicitApprovalConfirmed: boolean;
+      orderSubmitted: boolean;
+      financialMutationPerformed: boolean;
+      executionAuthority: string;
+    };
+    assert.equal(reads, 3);
+    assert.equal(blockedApprovalBody.error, 'EXIT_APPROVAL_BLOCKED');
+    assert.ok(blockedApprovalBody.blockers.includes('LIVE_CONNECTION_NOT_CONFIGURED'));
+    assert.equal(blockedApprovalBody.explicitApprovalConfirmed, false);
+    assert.equal(blockedApprovalBody.orderSubmitted, false);
+    assert.equal(blockedApprovalBody.financialMutationPerformed, false);
+    assert.equal(blockedApprovalBody.executionAuthority, 'NONE');
+
+    const verifiedAt = new Date().toISOString();
+    await repository.saveConnection({
+      userId: USER,
+      exchange: 'toss',
+      accountMode: 'live',
+      configured: true,
+      encryptedCredentials: 'test-only-not-used-by-approval-intent',
+      lastVerifiedAt: verifiedAt,
+      lastErrorCode: null,
+      updatedAt: verifiedAt,
+    });
+    process.env.executionAuthority = 'MANUAL';
+    process.env.LIVE_TRADING = 'true';
+    process.env.ORDER_EXECUTION_ENABLED = 'true';
+    process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+    process.env.REAL_ORDER_ENABLED = 'true';
+    process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
+    process.env.TOSS_LIVE_ORDER_ENABLED = 'true';
+
+    const approvalResponse = await fetch(`${baseUrl}/api/trade-automation/positions/exit-approval`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, ...approvalRequest }),
+    });
+    assert.equal(approvalResponse.status, 200);
+    const approvalBody = await approvalResponse.json() as {
+      canonicalExitApproval: {
+        schemaVersion: string;
+        state: string;
+        approvalIntentId: string;
+        planId: string;
+        exitDraftId: string;
+        quantity: number;
+        percent: number;
+        reduceOnly: boolean;
+        explicitApprovalConfirmed: boolean;
+        orderTimeRiskRecheckRequired: boolean;
+        nextOwner: string;
+        executionAuthority: string;
+        executable: boolean;
+        orderSubmissionPerformed: boolean;
+        financialMutationPerformed: boolean;
+        approvedAt: string;
+        expiresAt: string;
+      };
+      explicitApprovalConfirmed: boolean;
+      privateAccountReadPerformed: boolean;
+      financialMutationPerformed: boolean;
+      orderSubmitted: boolean;
+      orderCanceled: boolean;
+      orderAmended: boolean;
+      privateTradingMutationSent: boolean;
+      executionAuthority: string;
+    };
+    assert.equal(reads, 4);
+    assert.equal(approvalBody.canonicalExitApproval.schemaVersion, 'ai-chart-exit-approval-intent-v1');
+    assert.equal(approvalBody.canonicalExitApproval.state, 'EXPLICITLY_CONFIRMED_NON_EXECUTING_INTENT');
+    assert.match(approvalBody.canonicalExitApproval.approvalIntentId, /^[0-9a-f]{64}$/u);
+    assert.equal(approvalBody.canonicalExitApproval.planId, planBody.canonicalExitPlan.planId);
+    assert.equal(approvalBody.canonicalExitApproval.exitDraftId, planBody.canonicalExitPlan.exitDraftId);
+    assert.equal(approvalBody.canonicalExitApproval.quantity, 5);
+    assert.equal(approvalBody.canonicalExitApproval.percent, 25);
+    assert.equal(approvalBody.canonicalExitApproval.reduceOnly, true);
+    assert.equal(approvalBody.canonicalExitApproval.explicitApprovalConfirmed, true);
+    assert.equal(approvalBody.canonicalExitApproval.orderTimeRiskRecheckRequired, true);
+    assert.equal(approvalBody.canonicalExitApproval.nextOwner, 'CANONICAL_EXIT_ORDER_TIME_RISK_OWNER');
+    assert.equal(approvalBody.canonicalExitApproval.executionAuthority, 'NONE');
+    assert.equal(approvalBody.canonicalExitApproval.executable, false);
+    assert.equal(approvalBody.canonicalExitApproval.orderSubmissionPerformed, false);
+    assert.equal(approvalBody.canonicalExitApproval.financialMutationPerformed, false);
+    assert.ok(Date.parse(approvalBody.canonicalExitApproval.expiresAt) > Date.parse(approvalBody.canonicalExitApproval.approvedAt));
+    assert.equal(approvalBody.explicitApprovalConfirmed, true);
+    assert.equal(approvalBody.privateAccountReadPerformed, true);
+    assert.equal(approvalBody.financialMutationPerformed, false);
+    assert.equal(approvalBody.orderSubmitted, false);
+    assert.equal(approvalBody.orderCanceled, false);
+    assert.equal(approvalBody.orderAmended, false);
+    assert.equal(approvalBody.privateTradingMutationSent, false);
+    assert.equal(approvalBody.executionAuthority, 'NONE');
   } finally {
+    await repository.deleteConnection(USER, 'toss');
+    for (const key of liveGateKeys) {
+      const previous = previousLiveGateEnv[key];
+      if (previous == null) delete process.env[key];
+      else process.env[key] = previous;
+    }
     setTradeExitPreviewReadersFactoryForTests(null);
     await close(server);
   }

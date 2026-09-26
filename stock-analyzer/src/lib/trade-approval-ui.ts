@@ -50,6 +50,12 @@ const APPROVAL_MESSAGES: Record<string, string> = {
   PAPER_SOURCE_NOT_RESOLVABLE: '원본 Scanner 신호가 만료됐거나 현재 서버에서 확인되지 않습니다.',
   PAPER_SOURCE_STALE: '원본 Scanner 신호가 오래되어 다시 검색해야 합니다.',
   PAPER_SOURCE_CODE_SHA_MISMATCH: 'Scanner 신호가 현재 앱 버전과 달라 다시 검색해야 합니다.',
+  EXPLICIT_EXIT_APPROVAL_REQUIRED: '종료 승인은 사용자가 직접 확인해야 합니다.',
+  EXIT_APPROVAL_BLOCKED: '실전 거래 연결 또는 서버게이트가 준비되지 않아 종료 승인을 진행할 수 없습니다.',
+  EXIT_APPROVAL_PLAN_EXPIRED: '종료 승인계획이 만료됐습니다. 실계좌를 다시 확인해 새 계획을 만들어 주세요.',
+  EXIT_APPROVAL_PLAN_ID_MISMATCH: '종료 승인계획 식별자가 일치하지 않아 다시 검증해야 합니다.',
+  EXIT_APPROVAL_PLAN_STALE_OR_POSITION_CHANGED: '보유수량이나 방향이 변경되어 종료계획을 다시 만들어야 합니다.',
+  EXIT_APPROVAL_ACCOUNT_SNAPSHOT_NOT_FRESH: '실계좌 최신 상태를 확인하지 못해 종료 승인을 잠갔습니다.',
 };
 
 const ORDER_STATE_LABELS: Record<string, string> = {
