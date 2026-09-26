@@ -623,10 +623,20 @@ jobs:
               const approved = flag(runtime.LIVE_TELEGRAM_ACTIVATION_APPROVED);
               const worker = flag(runtime.TELEGRAM_INTELLIGENCE_WORKER_ENABLED);
               if (approved !== worker) throw new Error('Mixed Telegram activation state');
+              const telegramFeatureFlags = [
+                'TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED',
+                'TELEGRAM_SIGNAL_AI_ENABLED',
+                'TELEGRAM_DAILY_BRIEF_RICH_ENABLED',
+                'TELEGRAM_SIGNAL_FOLLOWUP_ENABLED',
+                'MEMBER_HOLDINGS_TELEGRAM_PRODUCER_ENABLED',
+                'MEMBER_HOLDINGS_NEWS_INTELLIGENCE_ENABLED',
+                'MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED',
+              ];
+              const allTelegramFeaturesEnabled = telegramFeatureFlags.every((key) => flag(runtime[key]));
               if (!String(runtime.TELEGRAM_BOT_TOKEN ?? '').trim() || !String(runtime.TELEGRAM_CHAT_ID ?? '').trim()) {
                 throw new Error('Telegram runtime configuration is incomplete');
               }
-              if (approved && worker) return false;
+              if (approved && worker && allTelegramFeaturesEnabled) return false;
               execFileSync('pm2', ['restart', 'stock-app', '--update-env'], {
                 env: { ...process.env, DEPLOY_SHA: approvedSha,
                   LIVE_TELEGRAM_ACTIVATION_APPROVED: 'true',
