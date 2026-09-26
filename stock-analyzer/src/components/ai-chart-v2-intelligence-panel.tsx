@@ -318,7 +318,7 @@ function AiChartSignalOverlayPortal({
   return createPortal(
     <div
       data-testid="ai-chart-v2-signal-overlay"
-      data-signal-id={signalId ?? '미확인'}
+      data-signal-id={signalId ?? 'UNAVAILABLE'}
       data-signal-status={lifecycle}
       className={cn(
         'pointer-events-none relative z-20 mx-3 mb-2 mt-2 max-w-[calc(100%-1.5rem)] rounded-xl border bg-background px-3 py-2 shadow-sm sm:absolute sm:left-3 sm:top-3 sm:mx-0 sm:mb-0 sm:mt-0 sm:bg-background/90 sm:backdrop-blur-sm',
