@@ -140,15 +140,21 @@ function exitPositionMatches(position: CanonicalPosition, market: string, symbol
   return normalizedExitSymbol(position.symbol) === normalizedExitSymbol(symbol);
 }
 
-function exitPreviewQuantity(position: CanonicalPosition, percent: number, market: string) {
+function exitPreviewQuantity(
+  position: CanonicalPosition,
+  percent: number,
+  market: string,
+  provider: AccountProvider,
+) {
   const available = Number(position.availableQuantity ?? position.quantity);
   if (!Number.isFinite(available) || available <= 0) throw new Error('EXIT_POSITION_QUANTITY_UNAVAILABLE');
   const raw = available * percent / 100;
-  const quantity = market === 'KR'
+  const integerOnly = market === 'KR' || (market === 'US' && provider === 'kiwoom');
+  const quantity = integerOnly
     ? Math.floor(raw)
     : Math.round(raw * 100_000_000) / 100_000_000;
   if (!Number.isFinite(quantity) || quantity <= 0) throw new Error('EXIT_PREVIEW_QUANTITY_TOO_SMALL');
-  return { availableQuantity: available, exitQuantity: quantity };
+  return { availableQuantity: available, exitQuantity: quantity, integerOnly };
 }
 
 function exitPreviewSide(provider: AccountProvider, position: CanonicalPosition) {
@@ -716,7 +722,7 @@ router.post('/positions/exit-preview', async (req: AuthenticatedRequest, res) =>
       });
     }
     const position = matches[0]!;
-    const quantities = exitPreviewQuantity(position, percent, market);
+    const quantities = exitPreviewQuantity(position, percent, market, provider);
     const side = exitPreviewSide(provider, position);
     return res.json({
       ok: true,
@@ -729,6 +735,7 @@ router.post('/positions/exit-preview', async (req: AuthenticatedRequest, res) =>
         positionQuantity: position.quantity,
         availableQuantity: quantities.availableQuantity,
         exitQuantity: quantities.exitQuantity,
+        quantityRule: quantities.integerOnly ? 'INTEGER_ONLY' : 'FRACTIONAL_ALLOWED',
         side,
         reduceOnly: true,
         checkedAt: snapshot.checkedAt,
