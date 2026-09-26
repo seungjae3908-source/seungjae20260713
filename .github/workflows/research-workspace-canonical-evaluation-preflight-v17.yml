@@ -1,0 +1,225 @@
+name: Research Workspace Canonical Evaluation Preflight V17
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/research-workspace-canonical-evaluation-preflight-v17.yml'
+      - 'api-server/scripts/run-research-workspace-canonical-evaluation-preflight-v17.ts'
+      - 'packages/external-research/src/research-workspace-canonical-evaluation-readiness-v17.*'
+      - 'packages/external-research/test/research-workspace-canonical-evaluation-readiness-v17.test.js'
+      - 'scripts/agent_hub_rollover_v2.py'
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+  statuses: read
+
+concurrency:
+  group: research-workspace-canonical-evaluation-preflight
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.11.0'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Validate Phase17 canonical evaluation preflight
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          pnpm install --frozen-lockfile --ignore-scripts
+          node --test packages/external-research/test/research-workspace-canonical-evaluation-readiness-v17.test.js
+          pnpm --dir api-server exec esbuild scripts/run-research-workspace-canonical-evaluation-preflight-v17.ts \
+            --bundle --platform=node --format=cjs --target=node22 \
+            --outfile="$RUNNER_TEMP/research-canonical-evaluation-preflight-v17.cjs"
+          test -s "$RUNNER_TEMP/research-canonical-evaluation-preflight-v17.cjs"
+          workflow=.github/workflows/research-workspace-canonical-evaluation-preflight-v17.yml
+          grep -Fq "/research-workspace-canonical-evaluation-preflight " "$workflow"
+          grep -Fq "[RESEARCH_WORKSPACE_HUMAN_RULE_DIGEST_BINDING_V16]" "$workflow"
+          grep -Fq "READY_FOR_CANONICAL_EVALUATION_ONE_SHOT" "$workflow"
+          grep -Fq "RESEARCH_V17_PRODUCTION_PREFLIGHT=true" "$workflow"
+          grep -Fq "providerCalls:0" packages/external-research/src/research-workspace-canonical-evaluation-readiness-v17.js
+          grep -Fq "compilerRuns:0" packages/external-research/src/research-workspace-canonical-evaluation-readiness-v17.js
+          grep -Fq "backtestRuns:0" packages/external-research/src/research-workspace-canonical-evaluation-readiness-v17.js
+          ! grep -Eq '^\s*schedule:|^\s*workflow_dispatch:' "$workflow"
+          ! grep -Eq 'api\.groq\.com|generativelanguage\.googleapis|pm2 (restart|reload|save)|systemctl (start|restart|enable)' "$workflow"
+
+  preflight:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      !github.event.issue.pull_request &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/research-workspace-canonical-evaluation-preflight ')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Resolve canonical Central Hub
+        id: hub
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/agent_hub_rollover_v2.py resolve
+
+      - name: Authorize exact-main Phase17 preflight
+        id: authorize
+        uses: actions/github-script@v7
+        env:
+          HUB_ISSUE_NUMBER: ${{ steps.hub.outputs.active_issue }}
+        with:
+          script: |
+            const body=String(context.payload.comment?.body??'').trim();
+            const match=body.match(/^\/research-workspace-canonical-evaluation-preflight ([0-9a-fA-F]{40}) ([0-9a-fA-F]{64})$/);
+            if(!match){core.setFailed('Expected /research-workspace-canonical-evaluation-preflight <current-main-sha> <decision-digest>');return;}
+            const hub=Number(process.env.HUB_ISSUE_NUMBER??0),issue=Number(context.payload.issue?.number??0);
+            if(!Number.isInteger(hub)||hub<=0||issue!==hub){core.setFailed('Phase17 command must be on canonical Hub.');return;}
+            const targetSha=match[1].toLowerCase(),decisionDigest=match[2].toLowerCase();
+            const main=(await github.rest.repos.getBranch({owner:context.repo.owner,repo:context.repo.repo,branch:'main'})).data.commit.sha.toLowerCase();
+            if(targetSha!==main){core.setFailed('CANONICAL_EVALUATION_PREFLIGHT_TARGET_NOT_EXACT_MAIN');return;}
+            const required=['application-ci/verified','browser-ui/verified','database-rls/verified','security-integration/verified','ai-privacy/verified','futures-public-network-smoke/verified'];
+            const combined=await github.rest.repos.getCombinedStatusForRef({owner:context.repo.owner,repo:context.repo.repo,ref:targetSha});
+            const latest=new Map();for(const row of combined.data.statuses??[])if(!latest.has(row.context))latest.set(row.context,row.state);
+            const missing=required.filter(name=>latest.get(name)!=='success');
+            if(missing.length){core.setFailed('CANONICAL_EVALUATION_PREFLIGHT_REQUIRED_CI_NOT_6_OF_6:'+missing.join(','));return;}
+            const deploys=await github.rest.actions.listWorkflowRuns({owner:context.repo.owner,repo:context.repo.repo,workflow_id:'production-deploy.yml',per_page:20});
+            if((deploys.data.workflow_runs??[]).some(run=>['queued','in_progress','waiting','pending'].includes(String(run.status)))){
+              core.setFailed('CANONICAL_EVALUATION_PREFLIGHT_BLOCKED_DEPLOY_ACTIVE');return;
+            }
+            const comments=await github.paginate(github.rest.issues.listComments,{owner:context.repo.owner,repo:context.repo.repo,issue_number:issue,per_page:100});
+            const now=Date.now();
+            const binding=[...comments].reverse().find(comment=>{
+              if(comment.user?.login!=='github-actions[bot]'||comment.user?.type!=='Bot')return false;
+              const lines=String(comment.body??'').trim().split(/\r?\n/).map(x=>x.trim());
+              const expires=lines.find(x=>x.startsWith('expires_at: '))?.slice('expires_at: '.length);
+              return lines[0]==='[RESEARCH_WORKSPACE_HUMAN_RULE_DIGEST_BINDING_V16]'
+                &&lines.includes('status: BOUND_FOR_RESEARCH_EVALUATION')
+                &&lines.includes('target_sha: '+targetSha)
+                &&lines.includes('decision_digest: '+decisionDigest)
+                &&lines.includes('allowed_next_action: CANONICAL_RESEARCH_EVALUATION_ONE_SHOT')
+                &&lines.includes('max_canonical_evaluation_runs: 1')
+                &&lines.includes('provider_calls: 0')&&lines.includes('compiler_runs: 0')&&lines.includes('backtest_runs: 0')
+                &&lines.includes('automatic_adoption: false')&&lines.includes('profitability_proven: false')&&lines.includes('execution_authority: NONE')
+                &&expires&&Number.isFinite(Date.parse(expires))&&Date.parse(expires)>now;
+            });
+            if(!binding){core.setFailed('CANONICAL_EVALUATION_PREFLIGHT_ACTIVE_PHASE16_BINDING_REQUIRED');return;}
+            core.setOutput('target_sha',targetSha);core.setOutput('decision_digest',decisionDigest);
+            core.setOutput('binding_comment_id',String(binding.id));core.setOutput('source_comment_id',String(context.payload.comment.id));
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.11.0'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Build exact-main zero-write preflight bundle
+        id: bundle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm install --frozen-lockfile --ignore-scripts
+          bundle="$RUNNER_TEMP/research-canonical-evaluation-preflight-v17.cjs"
+          pnpm --dir api-server exec esbuild scripts/run-research-workspace-canonical-evaluation-preflight-v17.ts \
+            --bundle --platform=node --format=cjs --target=node22 --outfile="$bundle"
+          test -s "$bundle"
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+
+      - name: Configure canonical Production SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Run zero-write canonical evaluation preflight
+        id: probe
+        env:
+          TARGET_SHA: ${{ steps.authorize.outputs.target_sha }}
+          BUNDLE: ${{ steps.bundle.outputs.bundle }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          artifact="$RUNNER_TEMP/research-canonical-evaluation-preflight-v17.json"
+          q_sha="$(printf '%q' "$TARGET_SHA")"
+          cat "$BUNDLE" | ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
+            -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "TARGET_SHA=$q_sha RESEARCH_V17_PRODUCTION_PREFLIGHT=true node -" > "$artifact"
+          test -s "$artifact"
+          node - "$artifact" "$TARGET_SHA" <<'NODE'
+          const fs=require('node:fs');const [file,sha]=process.argv.slice(2);const value=JSON.parse(fs.readFileSync(file,'utf8'));
+          if(value?.schemaVersion!=='research-canonical-evaluation-readiness-v17'||value?.currentSha!==sha
+            ||!['READY_FOR_CANONICAL_EVALUATION_ONE_SHOT','BLOCKED'].includes(value?.status)
+            ||value?.providerCalls!==0||value?.compilerRuns!==0||value?.backtestRuns!==0
+            ||value?.automaticAdoption!==false||value?.profitabilityProven!==false||value?.executionAuthority!=='NONE'
+            ||value?.finalHoldoutPreAccess!==false||value?.selectionFeedbackToGenerator!==false)process.exit(1);
+          fs.writeFileSync(file,JSON.stringify(value,null,2)+'\n');
+          NODE
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+
+      - name: Upload sanitized Phase17 receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-canonical-evaluation-preflight-${{ steps.authorize.outputs.target_sha }}
+          path: ${{ steps.probe.outputs.artifact }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report Phase17 readiness to Central Hub
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.authorize.outputs.target_sha }}
+          DECISION_DIGEST: ${{ steps.authorize.outputs.decision_digest }}
+          BINDING_COMMENT_ID: ${{ steps.authorize.outputs.binding_comment_id }}
+          SOURCE_COMMENT_ID: ${{ steps.authorize.outputs.source_comment_id }}
+          ARTIFACT: ${{ steps.probe.outputs.artifact }}
+          HUB_ISSUE_NUMBER: ${{ steps.hub.outputs.active_issue }}
+        with:
+          script: |
+            const fs=require('node:fs'),v=JSON.parse(fs.readFileSync(process.env.ARTIFACT,'utf8'));
+            const body=[
+              '[RESEARCH_WORKSPACE_CANONICAL_EVALUATION_PREFLIGHT_V17]',
+              'status: '+v.status,'target_sha: '+process.env.TARGET_SHA,'decision_digest: '+process.env.DECISION_DIGEST,
+              'config_digest: '+(v.configDigest??'UNKNOWN'),'reason_codes: '+(v.reasonCodes??[]).join(','),
+              'provider_calls: 0','compiler_runs: 0','backtest_runs: 0','final_holdout_pre_access: false',
+              'selection_feedback_to_generator: false','automatic_adoption: false','profitability_proven: false','execution_authority: NONE',
+              'server_files_written: 0','workflow_run: '+context.runId,'phase16_comment_id: '+process.env.BINDING_COMMENT_ID,
+              'source_comment_id: '+process.env.SOURCE_COMMENT_ID,
+            ].join('\n');
+            await github.rest.issues.createComment({owner:context.repo.owner,repo:context.repo.repo,issue_number:Number(process.env.HUB_ISSUE_NUMBER),body});
+
+      - name: Clean runner SSH material
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519 ~/.ssh/known_hosts
