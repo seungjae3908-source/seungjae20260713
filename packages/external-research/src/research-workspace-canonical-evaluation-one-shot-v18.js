@@ -33,6 +33,11 @@ const DEPENDENCIES=Object.freeze({
     implementationPath:'market-prediction-lab/src/global-strategy-statistical-firewall-v1.js',
     missingCode:'CANONICAL_STATISTICAL_FIREWALL_NOT_PRESENT_ON_CURRENT_SHA',
   }),
+  statisticalFirewallAdapter:Object.freeze({
+    ownerRef:'#547',capability:'TOURNAMENT_STATISTICAL_FIREWALL_ADAPTER_V1',
+    implementationPath:'market-prediction-lab/src/research-tournament-statistical-firewall-adapter-v1.js',
+    missingCode:'TOURNAMENT_STATISTICAL_FIREWALL_ADAPTER_NOT_PRESENT_ON_CURRENT_SHA',
+  }),
 });
 const COMPILER=DEPENDENCIES.formulaCompiler;
 const BACKTESTER=DEPENDENCIES.canonicalBacktester;
