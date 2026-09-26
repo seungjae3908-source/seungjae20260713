@@ -12,15 +12,17 @@ const artifactDir = path.resolve(
   process.env.PRODUCTION_ACCOUNT_READONLY_ARTIFACT_DIR ?? 'production-account-readonly-artifacts',
 );
 
-if (!baseUrl) throw new Error('PRODUCTION_BASE_URL is required');
-if (process.env.PRODUCTION_ACCOUNT_READONLY_LIVE_QA !== 'true') {
-  throw new Error('PRODUCTION_ACCOUNT_READONLY_LIVE_QA=true is required');
-}
-if (!qaLogin || !qaPassword) throw new Error('Production QA login credential is required');
-if (!/^[0-9a-f]{40}$/.test(expectedDeploySha)) throw new Error('EXPECTED_DEPLOY_SHA must be exact');
-if (new URL(baseUrl).origin !== 'https://lsj119.com') throw new Error('Official Production origin is required');
+const productionLiveQaEnabled = process.env.PRODUCTION_ACCOUNT_READONLY_LIVE_QA === 'true';
+test.skip(!productionLiveQaEnabled, 'Production real-account read-only QA runs only in its protected dedicated workflow.');
 
-const productionOrigin = new URL(baseUrl).origin;
+if (productionLiveQaEnabled) {
+  if (!baseUrl) throw new Error('PRODUCTION_BASE_URL is required');
+  if (!qaLogin || !qaPassword) throw new Error('Production QA login credential is required');
+  if (!/^[0-9a-f]{40}$/.test(expectedDeploySha)) throw new Error('EXPECTED_DEPLOY_SHA must be exact');
+  if (new URL(baseUrl).origin !== 'https://lsj119.com') throw new Error('Official Production origin is required');
+}
+
+const productionOrigin = productionLiveQaEnabled ? new URL(baseUrl).origin : 'https://lsj119.com';
 const cryptoProviders = ['upbit', 'bitget'] as const;
 const stockProviders = ['toss', 'kiwoom'] as const;
 type Provider = typeof cryptoProviders[number] | typeof stockProviders[number];
