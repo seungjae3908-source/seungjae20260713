@@ -170,12 +170,17 @@ async function installAuthenticatedUser(page: Page) {
   });
 }
 
-async function installNonSearchApiMocks(page: Page) {
+async function installNonSearchApiMocks(page: Page, options: { memberWatchlistItems?: unknown[] } = {}) {
   await page.route('**/api/backup/latest**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, exists: false, itemCount: 0, updatedAt: null }) });
   });
   await page.route('**/api/member-watchlist**', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, items: [] }) });
+    const items = options.memberWatchlistItems ?? [];
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, items, identitySource: 'AUTHENTICATED_MEMBER' }),
+    });
   });
   await page.route('**/api/stocks/*/quote**', async (route) => {
     const parts = new URL(route.request().url()).pathname.split('/');
@@ -209,9 +214,9 @@ async function installNonSearchApiMocks(page: Page) {
   });
 }
 
-async function openStocksPage(page: Page) {
+async function openStocksPage(page: Page, options: { memberWatchlistItems?: unknown[] } = {}) {
   await installAuthenticatedUser(page);
-  await installNonSearchApiMocks(page);
+  await installNonSearchApiMocks(page, options);
   await page.goto('/market-browser');
   await expect(page.getByTestId('stocks-shell')).toBeVisible();
   await expect(page.getByRole('combobox', { name: '통합 자산 검색' })).toHaveCount(1);
@@ -273,9 +278,6 @@ test('mobile search selection keeps direct-detail behavior', async ({ page }) =>
 
 test('search badges expose only factual local watchlist and holding state', async ({ page }) => {
   await page.addInitScript(() => {
-    localStorage.setItem('seungjae_watchlist_v1', JSON.stringify([
-      { ticker: '005930', name: '삼성전자', market: 'KR', currency: 'KRW' },
-    ]));
     localStorage.setItem('sa-portfolio-chart-overlays-v1', JSON.stringify([
       {
         ticker: '005930',
@@ -302,7 +304,15 @@ test('search badges expose only factual local watchlist and holding state', asyn
     });
   });
 
-  await openStocksPage(page);
+  await openStocksPage(page, {
+    memberWatchlistItems: [{
+      ticker: '005930',
+      name: '삼성전자',
+      market: 'KR_STOCK',
+      currency: 'KRW',
+      targetPrice: null,
+    }],
+  });
   await page.getByRole('combobox', { name: '통합 자산 검색' }).fill('삼성전자');
   const option = page.getByRole('option', { name: /삼성전자.*005930/ });
   await expect(option).toContainText('관심');
@@ -455,6 +465,10 @@ test('StocksPage uses canonical KR/US search and never calls legacy search/quote
   await expectLatestRequest(requests, { q: '005930', asset: 'stock', market: 'KR' });
   await expect(page.getByRole('option', { name: /삼성전자.*005930/ })).toBeVisible();
   await page.getByRole('option', { name: /삼성전자.*005930/ }).click();
+  await expect(page).toHaveURL(/\/market-browser$/u);
+  const krPreview = page.getByTestId('stocks-preview-pane');
+  await expect(krPreview).toContainText('삼성전자');
+  await krPreview.getByRole('button', { name: '상세 보기', exact: true }).click();
   await expect(page).toHaveURL(/\/stock-info\/analysis\?back=%2Fmarket-browser&asset=stock&market=KR&ticker=005930$/);
 
   await page.goto('/market-browser');
@@ -465,6 +479,10 @@ test('StocksPage uses canonical KR/US search and never calls legacy search/quote
   await expectLatestRequest(requests, { q: 'AAPL', asset: 'stock', market: 'US' });
   await expect(page.getByRole('option', { name: /애플.*AAPL/ })).toBeVisible();
   await page.getByRole('option', { name: /애플.*AAPL/ }).click();
+  await expect(page).toHaveURL(/\/market-browser$/u);
+  const usPreview = page.getByTestId('stocks-preview-pane');
+  await expect(usPreview).toContainText('애플');
+  await usPreview.getByRole('button', { name: '상세 보기', exact: true }).click();
   await expect(page).toHaveURL(/\/stock-info\/analysis\?back=%2Fmarket-browser&asset=stock&market=US&ticker=AAPL$/);
 
   expect(legacyCalls).toBe(0);
