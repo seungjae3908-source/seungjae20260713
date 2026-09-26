@@ -44,6 +44,10 @@ const READONLY_TARGETS = {
       '/api/v2/mix/account/accounts',
       '/api/v2/mix/position/all-position',
       '/api/v2/mix/order/orders-pending',
+      '/api/v3/account/info',
+      '/api/v3/account/assets',
+      '/api/v3/position/current-position',
+      '/api/v3/trade/unfilled-orders',
     ]),
   },
 } as const;
