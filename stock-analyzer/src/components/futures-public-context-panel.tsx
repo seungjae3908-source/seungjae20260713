@@ -20,6 +20,25 @@ type FuturesPublicContext = {
   warnings: string[];
 };
 
+type FuturesMarketFlow = {
+  symbol: string;
+  longRatio: number | null;
+  shortRatio: number | null;
+  longShortRatio: number | null;
+  ratioObservedAt: string | null;
+  longLiquidationAmount: number | null;
+  shortLiquidationAmount: number | null;
+  liquidationCount: number;
+  liquidationObservedAt: string | null;
+  status: FuturesPublicStatus;
+  updatedAt: string;
+  warnings: string[];
+  publicDataOnly: true;
+  directionalScoreImpact: 0;
+  probabilityImpact: 0;
+  executionAuthority: 'NONE';
+};
+
 type Props = {
   selection: AnalysisSelection;
 };
@@ -76,6 +95,24 @@ async function fetchFuturesPublicContext(symbol: string, signal: AbortSignal): P
     updatedAt: nullableText(data.updatedAt),
     warnings: normalizeWarnings(data.warnings),
   };
+}
+
+async function fetchFuturesMarketFlow(symbol: string, signal: AbortSignal): Promise<FuturesMarketFlow> {
+  const normalizedSymbol = normalizeUnifiedSymbol('BITGET', symbol);
+  if (!normalizedSymbol) throw new Error('INVALID_FUTURES_SYMBOL');
+  const response = await authorizedFetch(`/api/crypto/futures/${encodeURIComponent(normalizedSymbol)}/flow`, {
+    method: 'GET',
+    cache: 'no-store',
+    headers: { Accept: 'application/json' },
+    signal,
+  });
+  const payload = await response.json().catch(() => null) as { ok?: boolean; data?: FuturesMarketFlow } | null;
+  const data = payload?.data;
+  if (!response.ok || payload?.ok !== true || !data || data.publicDataOnly !== true
+    || data.directionalScoreImpact !== 0 || data.probabilityImpact !== 0 || data.executionAuthority !== 'NONE') {
+    throw new Error('FUTURES_MARKET_FLOW_UNAVAILABLE');
+  }
+  return data;
 }
 
 function formatNumber(value: number | null, maximumFractionDigits = 2): string {
@@ -139,11 +176,48 @@ export function FuturesPublicContextPanel({ selection }: Props) {
     refetchOnReconnect: false,
     retry: false,
   });
+  const flowQuery = useQuery({
+    queryKey: ['ai-chart-futures-market-flow', symbol],
+    queryFn: ({ signal }) => fetchFuturesMarketFlow(symbol, signal),
+    enabled: selection.market === 'BITGET' && Boolean(symbol),
+    staleTime: 10_000,
+    gcTime: 10 * 60 * 1000,
+    refetchInterval: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: false,
+  });
 
   const newsDisclosureEvidence = <AiChartMarketIntelligenceEvidencePanel selection={selection} />;
+  if (selection.market === 'KR' || selection.market === 'US') {
+    return (
+      <>
+        {newsDisclosureEvidence}
+        <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="stock-flow-evidence">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[11px] font-extrabold text-primary">주식 수급·공매도 근거</p>
+              <h2 className="mt-1 text-sm font-black">기관·외국인 · 공매도 · 숏커버</h2>
+            </div>
+            <span className="shrink-0 rounded-full border border-card-border bg-background px-2 py-1 text-[9px] font-black text-muted-foreground">미연결</span>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <Metric label="기관·외국인 수급" value="공식 근거 미연결" />
+            <Metric label="공매도·대차" value="공식 근거 미연결" />
+            <Metric label="숏커버 추정" value="비활성" />
+            <Metric label="방향 점수 영향" value="0" />
+          </div>
+          <p className="mt-3 text-[10px] font-bold leading-4 text-muted-foreground">
+            공식·검증 가능한 수급/공매도 provider가 연결되기 전에는 빈 값을 0으로 만들거나 숏커버를 추정하지 않습니다. 연결 전 방향 점수·확률 영향은 0입니다.
+          </p>
+        </section>
+      </>
+    );
+  }
   if (selection.market !== 'BITGET') return newsDisclosureEvidence;
 
   const data = query.data;
+  const flow = flowQuery.data;
   const missingEvidence = resolveEvidenceDisplay({ value: null, collected: false }).display;
   return (
     <>
@@ -191,6 +265,40 @@ export function FuturesPublicContextPanel({ selection }: Props) {
         {data?.updatedAt ? (
           <p className="mt-1 text-[9px] font-semibold text-muted-foreground">Last update · {formatDate(data.updatedAt)}</p>
         ) : null}
+      </section>
+
+      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="futures-market-flow">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[11px] font-extrabold text-primary">롱·숏 · 청산 수급</p>
+            <h2 className="mt-1 text-sm font-black">{symbol || selection.ticker} · 선택 종목 공개 근거</h2>
+          </div>
+          <span className="shrink-0 rounded-full border border-card-border bg-background px-2 py-1 text-[9px] font-black">
+            {flowQuery.isError ? 'UNAVAILABLE' : flow ? statusText(flow.status) : 'LOADING'}
+          </span>
+        </div>
+        {flowQuery.isError ? (
+          <p className="mt-3 rounded-2xl border border-warning/30 bg-warning/5 p-3 text-[10px] font-bold text-muted-foreground">
+            선택 종목의 롱·숏·청산 공개 근거를 확인할 수 없습니다. 방향 점수로 대체값을 만들지 않습니다.
+          </p>
+        ) : (
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <Metric label="롱 비중" value={flow?.longRatio == null ? missingEvidence : formatPercent(flow.longRatio * 100)} />
+            <Metric label="숏 비중" value={flow?.shortRatio == null ? missingEvidence : formatPercent(flow.shortRatio * 100)} />
+            <Metric label="롱/숏 비율" value={flow?.longShortRatio == null ? missingEvidence : formatNumber(flow.longShortRatio, 4)} />
+            <Metric label="롱 청산 수량" value={flow?.longLiquidationAmount == null ? missingEvidence : formatNumber(flow.longLiquidationAmount, 8)} />
+            <Metric label="숏 청산 수량" value={flow?.shortLiquidationAmount == null ? missingEvidence : formatNumber(flow.shortLiquidationAmount, 8)} />
+            <Metric label="방향 점수 영향" value="0 · 연구 검증 전" />
+          </div>
+        )}
+        {flow?.warnings.length ? (
+          <ul className="mt-3 space-y-1 rounded-2xl border border-warning/20 bg-warning/5 p-3 text-[10px] font-bold text-muted-foreground">
+            {flow.warnings.map((warning) => <li key={warning}>• {warning}</li>)}
+          </ul>
+        ) : null}
+        <p className="mt-3 text-[10px] font-black text-muted-foreground">
+          Bitget public evidence · 선택 종목 기준 · 방향점수 영향 0 · 확률 영향 0 · 실행권한 NONE
+        </p>
       </section>
     </>
   );

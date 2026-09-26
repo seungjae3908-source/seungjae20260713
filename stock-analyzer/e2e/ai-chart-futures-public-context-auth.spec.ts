@@ -13,6 +13,11 @@ test('AI Chart Bitget public context uses the authenticated app API transport', 
   expect(panel).toContain("import { authorizedFetch } from '@/lib/auth-fetch';");
   expect(panel).toContain('const response = await authorizedFetch(`/api/crypto/futures/${encodeURIComponent(normalizedSymbol)}/snapshot`');
   expect(panel).not.toContain('const response = await fetch(`/api/crypto/futures/${encodeURIComponent(normalizedSymbol)}/snapshot`');
+  expect(panel).toContain('authorizedFetch(`/api/crypto/futures/${encodeURIComponent(normalizedSymbol)}/flow`');
+  expect(panel).toContain('directionalScoreImpact !== 0');
+  expect(panel).toContain('probabilityImpact !== 0');
+  expect(panel).toContain('data-testid="futures-market-flow"');
+  expect(panel).toContain('data-testid="stock-flow-evidence"');
 
   expect(authFetch).toContain("headers.set('Authorization', `Bearer ${token}`)");
   expect(authFetch).toContain('fetch(input, { ...init, headers, signal: controller.signal });');
