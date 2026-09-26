@@ -28,6 +28,19 @@ const APPROVAL_MESSAGES: Record<string, string> = {
   EXCHANGE_NETWORK_ERROR: '거래소 통신 상태를 확인하지 못했습니다.',
   LIVE_EXECUTION_DISABLED: '실전 주문은 현재 비활성화되어 있습니다.',
   EMERGENCY_STOP_ACTIVE: '긴급정지가 활성화되어 신규 주문이 차단됐습니다.',
+  EXPLICIT_CANCEL_CONFIRMATION_REQUIRED: '주문 취소는 사용자 확인 후에만 처리할 수 있습니다.',
+  EXPLICIT_AMEND_CONFIRMATION_REQUIRED: '주문 정정은 사용자 확인 후에만 처리할 수 있습니다.',
+  CANCEL_EXECUTION_DISABLED: '실주문 서버게이트가 꺼져 있어 Provider 취소를 보내지 않았습니다.',
+  CANCEL_CONNECTION_UNAVAILABLE: '실전 거래 연결을 확인할 수 없어 취소를 보내지 않았습니다.',
+  LIVE_ACCOUNT_REQUIRED_FOR_PROVIDER_AMEND: '실전 계좌 주문만 Provider 정정을 사용할 수 있습니다.',
+  AMEND_CONNECTION_UNAVAILABLE: '실전 거래 연결을 확인할 수 없어 정정을 보내지 않았습니다.',
+  PARTIAL_FILL_AMEND_REQUIRES_CANCEL_AND_REPLAN: '부분체결 주문은 잔량 취소 후 새 계획으로 다시 검증해야 합니다.',
+  ORDER_NOT_AMENDABLE: '현재 주문 상태에서는 정정할 수 없습니다.',
+  ORDER_NOT_CANCELABLE: '현재 주문 상태에서는 취소할 수 없습니다.',
+  AMEND_PRICE_EXCEEDS_APPROVED_RISK_ENVELOPE: '정정 가격이 승인된 위험범위를 벗어나 차단됐습니다.',
+  AMEND_QUANTITY_INCREASE_NOT_ALLOWED: '정정으로 주문 수량을 늘릴 수 없습니다.',
+  US_STOCK_AMEND_QUANTITY_NOT_SUPPORTED: '미국주식 주문은 가격만 정정할 수 있습니다.',
+  TRADE_ORDER_NOT_FOUND: '주문을 찾지 못했습니다. 주문상태를 다시 불러와 주세요.',
 };
 
 const ORDER_STATE_LABELS: Record<string, string> = {
