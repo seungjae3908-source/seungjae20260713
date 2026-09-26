@@ -247,6 +247,43 @@ process.stdout.write([
   ' "$PM2_NAME"
 }
 
+assert_live_trading_inactive_before_deploy() {
+  pm2 jlist | node -e '
+const reject = (message) => { if (message) console.error(message); process.exit(1); };
+let rows;
+try { rows = JSON.parse(require("node:fs").readFileSync(0, "utf8")); } catch { reject("[deploy] PM2 live-trading state is unreadable"); }
+if (!Array.isArray(rows)) reject("[deploy] PM2 live-trading state is invalid");
+const matches = rows.filter((row) => row?.name === process.argv[1]);
+if (matches.length !== 1) reject("[deploy] PM2 live-trading runtime is ambiguous");
+const env = matches[0]?.pm2_env;
+if (!env || typeof env !== "object" || Array.isArray(env)) reject("[deploy] PM2 live-trading env is unavailable");
+const bool = (key) => {
+  const value = env[key];
+  if (value === undefined || value === false || value === "false") return false;
+  if (value === true || value === "true") return true;
+  reject("[deploy] malformed live-trading flag: " + key);
+};
+const activeFlags = [
+  "LIVE_TRADING",
+  "AUTO_TRADING",
+  "REAL_ORDER_ENABLED",
+  "PRIVATE_TRADING_API_ALLOWED",
+  "ORDER_EXECUTION_ENABLED",
+  "LIVE_TRADING_ACTIVATION_APPROVED",
+  "LIVE_AUTOMATIC_TRADING_ENABLED",
+  "BITGET_LIVE_ORDER_ENABLED",
+  "UPBIT_LIVE_ORDER_ENABLED",
+  "KIWOOM_LIVE_ORDER_ENABLED",
+  "TOSS_LIVE_ORDER_ENABLED",
+].filter((key) => bool(key));
+const authority = String(env.executionAuthority ?? "NONE").trim().toUpperCase();
+if (activeFlags.length > 0 || authority !== "NONE") {
+  console.error("[deploy] LIVE_TRADING_ACTIVE_DEPLOY_FORBIDDEN: disable live trading only after all live orders are terminal");
+  process.exit(1);
+}
+  ' "$PM2_NAME"
+}
+
 listener_pids() {
   ss -H -ltnp 2>/dev/null \
     | awk -v port="$LIVE_PORT" '$4 ~ (":" port "$") { print }' \
@@ -360,6 +397,11 @@ fi
 # Missing flags are OFF; malformed/mixed state blocks before any application restart.
 TELEGRAM_PREDEPLOY_STATE="$(read_telegram_activation_state)"
 readonly TELEGRAM_PREDEPLOY_STATE
+
+# A generic application deploy must never silently revoke the ability to manage an
+# already-live real order. The owner must first close/cancel live orders, explicitly
+# disable the live-trading gate, and only then may Production deploy proceed.
+assert_live_trading_inactive_before_deploy
 
 if [[ "$CURRENT_SHA" == "$TARGET_SHA" ]]; then
   echo "[deploy] target marker is already active: $TARGET_SHA"
