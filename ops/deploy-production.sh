@@ -255,7 +255,7 @@ listener_pids() {
 }
 
 normalize_pm2_watch_before_restart() {
-  local snapshot pid status cwd exec_path watched _rest
+  local snapshot="" pid="" status="" cwd="" exec_path="" watched="" _rest=""
   snapshot="$(pm2_runtime_snapshot)" || {
     echo "[deploy] unable to read PM2 runtime definition before restart" >&2
     return 1
@@ -300,7 +300,7 @@ restart_application_preserving_telegram() {
 }
 
 application_runtime_ready() {
-  local snapshot pid status cwd exec_path watched live auto real private_api order_execution live_approved live_auto bitget_live upbit_live kiwoom_live toss_live authority
+  local snapshot="" pid="" status="" cwd="" exec_path="" watched="" live="" auto="" real="" private_api="" order_execution="" live_approved="" live_auto="" bitget_live="" upbit_live="" kiwoom_live="" toss_live="" authority=""
   snapshot="$(pm2_runtime_snapshot)" || return 1
   IFS=
   mapfile -t current_listeners < <(listener_pids)
