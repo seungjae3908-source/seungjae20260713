@@ -373,8 +373,21 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
 router.get('/approval-queue', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
+    const requestedSymbol = req.query.symbol == null || String(req.query.symbol).trim() === ''
+      ? null
+      : normalizedExitSymbol(req.query.symbol);
+    const requestedExchange = req.query.exchange == null || String(req.query.exchange).trim() === ''
+      ? null
+      : exchangeValue(req.query.exchange);
+    if (req.query.symbol != null && !requestedSymbol) throw new Error('APPROVAL_QUEUE_SYMBOL_INVALID');
+
     const plans = await repository.listPlans(userId);
-    const relevant = plans.filter((plan) => plan.state === 'APPROVAL_PENDING' || plan.state === 'EXPIRED');
+    const relevant = plans.filter((plan) => {
+      if (plan.state !== 'APPROVAL_PENDING' && plan.state !== 'EXPIRED') return false;
+      if (requestedExchange && plan.exchange !== requestedExchange) return false;
+      if (requestedSymbol && normalizedExitSymbol(plan.symbol) !== requestedSymbol) return false;
+      return true;
+    });
     const items = await Promise.all(relevant.map(async (plan) => approvalQueueItem(
       plan,
       await repository.findOrderByPlan(userId, plan.id),
@@ -383,6 +396,7 @@ router.get('/approval-queue', async (req: AuthenticatedRequest, res) => {
       ok: true,
       items,
       count: items.length,
+      scoped: requestedSymbol != null || requestedExchange != null,
       updatedAt: new Date().toISOString(),
       orderSubmitted: false,
       orderCanceled: false,
