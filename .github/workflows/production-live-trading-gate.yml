@@ -45,6 +45,7 @@ jobs:
           workflow=.github/workflows/production-live-trading-gate.yml
           grep -Fq "/activate-production-live-trading " "$workflow"
           grep -Fq "/disable-production-live-trading " "$workflow"
+          grep -Fq "CONFIRM_NO_OPEN_LIVE_ORDERS" "$workflow"
           grep -Fq "environment: production" "$workflow"
           grep -Fq "ORDER_EXECUTION_ENABLED: 'true'" "$workflow"
           grep -Fq "LIVE_TRADING_ACTIVATION_APPROVED: 'true'" "$workflow"
@@ -488,8 +489,8 @@ jobs:
           node <<'NODE'
           const fs = require('node:fs');
           const body = String(process.env.COMMENT_BODY ?? '').trim();
-          const match = /^\/disable-production-live-trading ([0-9a-f]{40})$/u.exec(body);
-          if (!match) throw new Error('Expected /disable-production-live-trading <40-char-deployed-sha>');
+          const match = /^\/disable-production-live-trading ([0-9a-f]{40}) CONFIRM_NO_OPEN_LIVE_ORDERS$/u.exec(body);
+          if (!match) throw new Error('Expected /disable-production-live-trading <40-char-deployed-sha> CONFIRM_NO_OPEN_LIVE_ORDERS');
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1]}\n`);
           NODE
 
@@ -615,6 +616,7 @@ jobs:
               body: [
                 '[PRODUCTION_LIVE_TRADING_GATE]',
                 'status: DISABLED',
+                'owner_attestation: CONFIRM_NO_OPEN_LIVE_ORDERS',
                 `target_sha: ${process.env.TARGET_SHA}`,
                 'LIVE_TRADING=false',
                 'AUTO_TRADING=false',
