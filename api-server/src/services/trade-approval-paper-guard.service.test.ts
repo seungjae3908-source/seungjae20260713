@@ -63,7 +63,7 @@ test('approval policy always disables automatic execution and every exchange swi
 });
 
 test('production deploy resets every live-order authority gate to fail closed', () => {
-  const deploy = readFileSync(path.resolve(process.cwd(), '..', 'ops/deploy-production.sh'), 'utf8');
+  const deploy = readFileSync(path.resolve(process.cwd(), 'ops/deploy-production.sh'), 'utf8');
   for (const flag of [
     'LIVE_TRADING=false',
     'AUTO_TRADING=false',
