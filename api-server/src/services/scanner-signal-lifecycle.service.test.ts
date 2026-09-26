@@ -9,6 +9,10 @@ import {
   setScannerExternalLifecycleState,
 } from './scanner-signal-lifecycle.service';
 import type { ScannerSignalCard, ScannerSignalState } from './scanner-signal.types';
+import {
+  clearScannerDecisionHistoryForTests,
+  observeScannerDecisionHistory,
+} from './scanner-decision-history.service';
 
 function card(overrides: Partial<ScannerSignalCard> = {}): ScannerSignalCard {
   const observedAt = new Date('2026-08-05T00:00:00.000Z').toISOString();
@@ -63,6 +67,43 @@ function card(overrides: Partial<ScannerSignalCard> = {}): ScannerSignalCard {
     ...overrides,
   };
 }
+
+test('scanner decision observer records meaningful final-decision changes without polling duplicates', () => {
+  clearScannerDecisionHistoryForTests();
+  const now = Date.parse('2026-08-05T01:00:00.000Z');
+
+  const watching = observeScannerDecisionHistory('member-decision', [
+    card({ strongSignalEligible: false, signalState: 'CANDIDATE' }),
+  ], now)[0];
+  assert.equal(watching.decisionHistory?.length, 1);
+  assert.equal(watching.decisionHistory?.[0].decision, 'WATCH');
+
+  const unchanged = observeScannerDecisionHistory('member-decision', [
+    card({ strongSignalEligible: false, signalState: 'CANDIDATE' }),
+  ], now + 1_000)[0];
+  assert.equal(unchanged.decisionHistory?.length, 1);
+
+  const longReview = observeScannerDecisionHistory('member-decision', [
+    card({ strongSignalEligible: true, signalState: 'CONFIRMED' }),
+  ], now + 2_000)[0];
+  assert.equal(longReview.decisionHistory?.length, 2);
+  assert.equal(longReview.decisionHistory?.at(-1)?.decision, 'LONG_REVIEW');
+
+  const blocked = observeScannerDecisionHistory('member-decision', [card({
+    strongSignalEligible: false,
+    signalState: 'INVALIDATED',
+    dataState: 'untrusted',
+    dataQuality: {
+      state: 'DATA_UNTRUSTED',
+      score: 30,
+      strongSignalAllowed: false,
+      issues: [{ code: 'STALE_TIMESTAMP', severity: 'blocking', message: '시세가 오래됐습니다.' }],
+    },
+  })], now + 3_000)[0];
+  assert.equal(blocked.decisionHistory?.length, 3);
+  assert.equal(blocked.decisionHistory?.at(-1)?.decision, 'BLOCKED');
+  assert.ok(blocked.decisionHistory?.at(-1)?.reasons.includes('시세가 오래됐습니다.'));
+});
 
 test('scanner lifecycle reaches approval pending once and never submits an order', () => {
   clearScannerSignalLifecycleForTests();
