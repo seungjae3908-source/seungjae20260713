@@ -201,6 +201,97 @@ async function openStocksPage(page: Page) {
   await expect(page.getByRole('combobox', { name: '통합 자산 검색' })).toHaveCount(1);
 }
 
+test('StocksPage source removes sub-12px labels and two-step market switching', async () => {
+  const fs = await import('node:fs/promises');
+  const source = await fs.readFile(new URL('../src/pages/stocks.tsx', import.meta.url), 'utf8');
+  expect(source).not.toContain('text-[9px]');
+  expect(source).not.toContain('text-[10px]');
+  expect(source).not.toContain('text-[11px]');
+  expect(source).not.toContain('<AssetSwitch');
+  expect(source).toContain('data-testid="stocks-market-bar"');
+  expect(source).toContain('data-testid="stocks-category-bar"');
+  expect(source).toContain("if (category === 'ai' || category === 'theme') setCategory('tradingValue');");
+});
+
+for (const [width, height] of [[390, 844], [768, 1024], [1024, 820], [1440, 900]] as const) {
+  test(`StocksPage ${width}px keeps market/search/category controls bounded with one vertical owner`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    await page.route('**/api/search/suggest**', async (route) => {
+      const url = new URL(route.request().url());
+      const q = url.searchParams.get('q') ?? '';
+      const asset = url.searchParams.get('asset') ?? 'stock';
+      const market = url.searchParams.get('market');
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(successfulResponse(q, asset, market, [])),
+      });
+    });
+    await openStocksPage(page);
+
+    const marketBar = page.getByTestId('stocks-market-bar');
+    const categoryBar = page.getByTestId('stocks-category-bar');
+    await expect(marketBar).toBeVisible();
+    await expect(categoryBar).toBeVisible();
+    for (const label of ['국내', '미국', '코인 현물', '코인 선물']) {
+      const button = marketBar.getByRole('button', { name: label, exact: true });
+      await expect(button).toBeVisible();
+      const box = await button.boundingBox();
+      expect(box?.height ?? 0).toBeGreaterThanOrEqual(40);
+    }
+
+    const geometry = await page.evaluate(() => {
+      const shell = document.querySelector<HTMLElement>('[data-testid="stocks-shell"]');
+      const content = document.querySelector<HTMLElement>('[data-testid="stocks-scroll-content"]');
+      if (!shell || !content) throw new Error('stocks layout owner missing');
+      const nested = Array.from(content.querySelectorAll<HTMLElement>('*')).filter((node) => {
+        const style = getComputedStyle(node);
+        return /(auto|scroll)/u.test(style.overflowY) && node.scrollHeight > node.clientHeight + 1;
+      });
+      return {
+        viewport: innerWidth,
+        root: document.documentElement.scrollWidth,
+        body: document.body.scrollWidth,
+        shellOverflow: getComputedStyle(shell).overflowY,
+        contentOverflow: getComputedStyle(content).overflowY,
+        nestedScrollOwners: nested.length,
+      };
+    });
+    expect(geometry.root).toBeLessThanOrEqual(geometry.viewport + 1);
+    expect(geometry.body).toBeLessThanOrEqual(geometry.viewport + 1);
+    expect(geometry.shellOverflow).toBe('hidden');
+    expect(['auto', 'scroll']).toContain(geometry.contentOverflow);
+    expect(geometry.nestedScrollOwners).toBe(0);
+  });
+}
+
+test('switching from stock-only recommendation category to coin chooses a supported category immediately', async ({ page }) => {
+  await page.route('**/api/crypto/spot/markets**', async (route) => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify({ markets: [] }),
+  }));
+  await page.route('**/api/crypto/spot/tickers**', async (route) => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify({ tickers: [] }),
+  }));
+  await page.route('**/api/search/suggest**', async (route) => {
+    const url = new URL(route.request().url());
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(successfulResponse(
+        url.searchParams.get('q') ?? '',
+        url.searchParams.get('asset') ?? 'coin',
+        url.searchParams.get('market'),
+        [],
+      )),
+    });
+  });
+  await openStocksPage(page);
+  await expect(page.getByTestId('stocks-category-bar').getByRole('button', { name: 'AI추천', exact: true })).toHaveClass(/bg-primary/);
+  await page.getByTestId('stocks-market-bar').getByRole('button', { name: '코인 현물', exact: true }).click();
+  await expect(page.getByTestId('stocks-category-bar').getByRole('button', { name: '거래대금', exact: true })).toHaveClass(/bg-primary/);
+  await expect(page.getByText(/코인에는 해당 분류를 제공하지 않습니다/)).toHaveCount(0);
+});
+
 test('StocksPage uses canonical KR/US search and never calls legacy search/quotes', async ({ page }) => {
   const requests: SearchRequest[] = [];
   let legacyCalls = 0;
@@ -244,7 +335,7 @@ test('StocksPage uses canonical KR/US search and never calls legacy search/quote
 
   await page.goto('/market-browser');
   await expect(page.getByTestId('stocks-shell')).toBeVisible();
-  await page.getByRole('button', { name: '해외', exact: true }).click();
+  await page.getByRole('button', { name: '미국', exact: true }).click();
   const usInput = page.getByRole('combobox', { name: '통합 자산 검색' });
   await usInput.fill('AAPL');
   await expectLatestRequest(requests, { q: 'AAPL', asset: 'stock', market: 'US' });
@@ -288,14 +379,14 @@ test('coin search uses canonical unified search even when ticker-list APIs are u
   });
 
   await openStocksPage(page);
-  await page.getByRole('button', { name: '코인', exact: true }).click();
+  await page.getByRole('button', { name: '코인 현물', exact: true }).click();
 
   const spotInput = page.getByRole('combobox', { name: '통합 자산 검색' });
   await spotInput.fill('BTC');
   await expectLatestRequest(requests, { q: 'BTC', asset: 'coin', market: 'spot' });
   await expect(page.getByRole('option', { name: /비트코인.*BTC\/KRW/ })).toBeVisible();
 
-  await page.getByRole('button', { name: '선물', exact: true }).click();
+  await page.getByRole('button', { name: '코인 선물', exact: true }).click();
   const futuresInput = page.getByRole('combobox', { name: '통합 자산 검색' });
   await futuresInput.fill('BTCUSDT');
   await expectLatestRequest(requests, { q: 'BTCUSDT', asset: 'coin', market: 'futures' });
@@ -354,7 +445,7 @@ test('rapid input and market switch never allow an older stock result to overwri
   await input.fill('AA');
   await input.fill('AAP');
   await input.fill('AAPL');
-  await page.getByRole('button', { name: '해외', exact: true }).click();
+  await page.getByRole('button', { name: '미국', exact: true }).click();
   await input.fill('AAPL');
   await expectLatestRequest(requests, { q: 'AAPL', asset: 'stock', market: 'US' });
   await expect(page.getByRole('option', { name: /애플.*AAPL/ })).toBeVisible();
@@ -369,7 +460,7 @@ test('rapid input and market switch never allow an older stock result to overwri
   await expectRequestStarted(requests, { q: '005930', asset: 'stock', market: 'KR' });
 
   // Switch again while the KR response is still pending. The late KR result must never contaminate US.
-  await page.getByRole('button', { name: '해외', exact: true }).click();
+  await page.getByRole('button', { name: '미국', exact: true }).click();
   await input.fill('AAPL');
   await expectLatestRequest(requests, { q: 'AAPL', asset: 'stock', market: 'US' });
   await expect(page.getByRole('option', { name: /애플.*AAPL/ })).toBeVisible();
