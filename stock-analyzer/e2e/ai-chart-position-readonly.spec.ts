@@ -149,7 +149,11 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(tradeRoute).toContain("exchangeOrderId: order.exchangeOrderId");
   expect(panel).toContain("providerOrderStatusLabel(canonicalProviderOrderStatus(item, providerOpenOrders))");
   expect(panel).toContain("data-testid=\"ai-chart-cockpit-tabs\"");
+  expect(panel).toContain("data-testid=\"ai-chart-cockpit-summary-strip\"");
+  expect(panel).toContain("data-testid=\"ai-chart-exit-progress\"");
   expect(panel).toContain("type CockpitTab = 'entry' | 'orders' | 'exit';");
+  expect(panel).toContain("type CockpitStageTone = 'done' | 'active' | 'blocked' | 'idle';");
+  expect(panel).toContain("Draft Lock");
   expect(panel).toContain("data-testid=\"ai-chart-entry-readiness\"");
   expect(panel).toContain("data-testid=\"ai-chart-load-entry-readiness\"");
   expect(panel).toContain("authorizedFetch('/api/trade-automation/status'");
@@ -1085,6 +1089,8 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await expect(panel.getByTestId('ai-chart-fee-break-even')).toContainText('Provider 수수료 근거가 계좌 스냅샷에 없으므로 자동으로 추정하지 않습니다.');
 
   const cockpit = panel.getByTestId('ai-chart-trading-cockpit');
+  await expect(cockpit.getByTestId('ai-chart-cockpit-summary-strip')).toContainText('진입');
+  await expect(cockpit.getByTestId('ai-chart-cockpit-summary-strip')).toContainText('보유 있음');
   await cockpit.locator('summary').click();
   await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('신호 필요');
   await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('포지션 있음');
@@ -1104,6 +1110,9 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('잔량 2');
   await expect(cockpit.getByTestId('ai-chart-provider-open-orders')).toContainText('여기서 취소·정정 권한을 만들지 않습니다.');
   await cockpit.getByRole('tab', { name: '종료', exact: true }).click();
+  await expect(cockpit.getByTestId('ai-chart-exit-progress')).toContainText('Draft');
+  await expect(cockpit.getByTestId('ai-chart-exit-progress')).toContainText('Submit');
+  await expect(cockpit.getByTestId('ai-chart-exit-progress')).toContainText('Draft Lock');
   await expect(cockpit.getByTestId('ai-chart-exit-dashboard')).toContainText('종료 예정 비중');
   await expect(cockpit.getByTestId('ai-chart-exit-dashboard')).toContainText('20');
   await cockpit.getByRole('button', { name: '25%' }).click();
