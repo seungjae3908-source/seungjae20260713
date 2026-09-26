@@ -269,6 +269,63 @@ function exitApprovalIntentIdentity(input: {
   ].join(':')).digest('hex');
 }
 
+
+const EXIT_ORDER_TIME_RISK_TTL_MS = 10_000;
+const EXIT_ORDER_TIME_RISK_MAX_ACCOUNT_AGE_MS = 15_000;
+
+function exitRiskIntentIdentity(input: {
+  userId: string;
+  approvalIntentId: string;
+  planId: string;
+  exitDraftId: string;
+  provider: AccountProvider;
+  market: string;
+  symbol: string;
+  percent: number;
+  positionQuantity: number | null;
+  availableQuantity: number;
+  exitQuantity: number;
+  side: 'buy' | 'sell';
+  approvalCheckedAt: string;
+  riskCheckedAt: string;
+  evaluatedAt: string;
+  expiresAt: string;
+  blockers: string[];
+}) {
+  return createHash('sha256').update([
+    'ai-chart-exit-order-time-risk-v1',
+    input.userId,
+    input.approvalIntentId,
+    input.planId,
+    input.exitDraftId,
+    input.provider,
+    input.market,
+    normalizedExitSymbol(input.symbol),
+    String(input.percent),
+    String(input.positionQuantity ?? 'missing'),
+    String(input.availableQuantity),
+    String(input.exitQuantity),
+    input.side,
+    input.approvalCheckedAt,
+    input.riskCheckedAt,
+    input.evaluatedAt,
+    input.expiresAt,
+    [...input.blockers].sort().join(','),
+  ].join(':')).digest('hex');
+}
+
+function exitOpenOrderConflicts(
+  openOrders: Array<{ market: string | null; symbol: string | null; side: string | null }> | null,
+  market: string,
+  symbol: string,
+) {
+  if (openOrders == null) return null;
+  return openOrders.filter((order) => (
+    String(order.market ?? '').trim().toUpperCase() === market
+    && normalizedExitSymbol(order.symbol) === normalizedExitSymbol(symbol)
+  )).length;
+}
+
 function exchangeValue(value: unknown): TradingExchange {
   const exchange = String(value ?? '').toLowerCase() as TradingExchange;
   if (!EXCHANGES.has(exchange)) throw new Error('UNSUPPORTED_EXCHANGE');
@@ -1357,6 +1414,291 @@ router.post('/positions/exit-approval', async (req: AuthenticatedRequest, res) =
       },
       executionReadiness,
       explicitApprovalConfirmed: true,
+      privateAccountReadPerformed: true,
+      financialMutationPerformed: false,
+      orderSubmitted: false,
+      orderCanceled: false,
+      orderAmended: false,
+      privateTradingMutationSent: false,
+      executionAuthority: 'NONE',
+    });
+  } catch (error) {
+    if (controller.signal.aborted || res.writableEnded) return undefined;
+    return errorResponse(res, error);
+  } finally {
+    req.removeListener('aborted', abort);
+    res.removeListener('close', abort);
+  }
+});
+
+
+router.post('/positions/exit-risk', async (req: AuthenticatedRequest, res) => {
+  const userId = req.member?.id ?? '';
+  const accessToken = req.accessToken ?? '';
+  if (!userId || !accessToken) return res.status(401).json({ ok: false, error: 'LOGIN_REQUIRED' });
+  if (req.body?.confirmed !== true) {
+    return res.status(409).json({
+      ok: false,
+      error: 'EXPLICIT_EXIT_RISK_RECHECK_REQUIRED',
+      riskChecked: false,
+      financialMutationPerformed: false,
+      orderSubmitted: false,
+      privateTradingMutationSent: false,
+      executionAuthority: 'NONE',
+    });
+  }
+
+  let provider: AccountProvider;
+  let market: string;
+  let symbol: string;
+  let percent: number;
+  let approvalIntentId: string;
+  let planId: string;
+  let exitDraftId: string;
+  let expectedPositionQuantity: number | null;
+  let expectedAvailableQuantity: number;
+  let expectedExitQuantity: number;
+  let expectedSide: 'buy' | 'sell';
+  let planSourceCheckedAt: string;
+  let approvalCheckedAt: string;
+  let approvedAt: string;
+  let approvalExpiresAt: string;
+
+  try {
+    provider = exitPreviewProvider(req.body?.provider);
+    market = String(req.body?.market ?? '').trim().toUpperCase();
+    symbol = String(req.body?.symbol ?? '').trim().toUpperCase();
+    percent = Number(req.body?.percent);
+    approvalIntentId = String(req.body?.approvalIntentId ?? '').trim().toLowerCase();
+    planId = String(req.body?.planId ?? '').trim().toLowerCase();
+    exitDraftId = String(req.body?.exitDraftId ?? '').trim().toLowerCase();
+    expectedPositionQuantity = req.body?.positionQuantity == null ? null : Number(req.body.positionQuantity);
+    expectedAvailableQuantity = Number(req.body?.availableQuantity);
+    expectedExitQuantity = Number(req.body?.quantity);
+    expectedSide = String(req.body?.side ?? '').trim().toLowerCase() as 'buy' | 'sell';
+    planSourceCheckedAt = String(req.body?.planSourceCheckedAt ?? '').trim();
+    approvalCheckedAt = String(req.body?.approvalCheckedAt ?? '').trim();
+    approvedAt = String(req.body?.approvedAt ?? '').trim();
+    approvalExpiresAt = String(req.body?.approvalExpiresAt ?? '').trim();
+
+    if (!['KR', 'US', 'UPBIT', 'BITGET'].includes(market)) throw new Error('EXIT_RISK_MARKET_UNSUPPORTED');
+    if (!normalizedExitSymbol(symbol)) throw new Error('EXIT_RISK_SYMBOL_REQUIRED');
+    if (![25, 50, 75, 100].includes(percent)) throw new Error('EXIT_RISK_PERCENT_UNSUPPORTED');
+    for (const [value, code] of [
+      [approvalIntentId, 'EXIT_RISK_APPROVAL_INTENT_ID_INVALID'],
+      [planId, 'EXIT_RISK_PLAN_ID_INVALID'],
+      [exitDraftId, 'EXIT_RISK_DRAFT_ID_INVALID'],
+    ] as const) {
+      if (!/^[a-f0-9]{64}$/.test(value)) throw new Error(code);
+    }
+    if (expectedPositionQuantity != null
+      && (!Number.isFinite(expectedPositionQuantity) || expectedPositionQuantity <= 0)) {
+      throw new Error('EXIT_RISK_POSITION_QUANTITY_INVALID');
+    }
+    if (!Number.isFinite(expectedAvailableQuantity) || expectedAvailableQuantity <= 0) {
+      throw new Error('EXIT_RISK_AVAILABLE_QUANTITY_INVALID');
+    }
+    if (!Number.isFinite(expectedExitQuantity) || expectedExitQuantity <= 0) {
+      throw new Error('EXIT_RISK_EXIT_QUANTITY_INVALID');
+    }
+    if (expectedSide !== 'buy' && expectedSide !== 'sell') throw new Error('EXIT_RISK_SIDE_INVALID');
+    for (const value of [planSourceCheckedAt, approvalCheckedAt, approvedAt, approvalExpiresAt]) {
+      if (!Number.isFinite(Date.parse(value))) throw new Error('EXIT_RISK_TIMESTAMP_INVALID');
+    }
+    const now = Date.now();
+    if (Date.parse(approvedAt) > now + 5_000
+      || Date.parse(approvalExpiresAt) <= Date.parse(approvedAt)
+      || Date.parse(approvalExpiresAt) <= now) {
+      throw new Error('EXIT_RISK_APPROVAL_INTENT_EXPIRED');
+    }
+    if ((market === 'UPBIT' && provider !== 'upbit')
+      || (market === 'BITGET' && provider !== 'bitget')
+      || ((market === 'KR' || market === 'US') && provider !== 'toss' && provider !== 'kiwoom')) {
+      throw new Error('EXIT_RISK_PROVIDER_MARKET_MISMATCH');
+    }
+
+    const claimedApprovalIntentId = exitApprovalIntentIdentity({
+      userId,
+      planId,
+      exitDraftId,
+      provider,
+      market,
+      symbol,
+      percent,
+      positionQuantity: expectedPositionQuantity,
+      availableQuantity: expectedAvailableQuantity,
+      exitQuantity: expectedExitQuantity,
+      side: expectedSide,
+      planSourceCheckedAt,
+      approvalCheckedAt,
+      approvedAt,
+      expiresAt: approvalExpiresAt,
+    });
+    if (claimedApprovalIntentId !== approvalIntentId) throw new Error('EXIT_RISK_APPROVAL_INTENT_ID_MISMATCH');
+  } catch (error) {
+    return errorResponse(res, error);
+  }
+
+  const readers = exitPreviewReadersFactoryForTests?.() ?? createVaultBackedAccountReaders();
+  const reader = readers[provider];
+  if (!reader) return res.status(503).json({ ok: false, error: 'EXIT_RISK_READER_UNAVAILABLE' });
+  const { repository } = context(req);
+  const controller = new AbortController();
+  const abort = () => controller.abort(new Error('EXIT_RISK_ABORTED'));
+  req.once('aborted', abort);
+  res.once('close', abort);
+
+  try {
+    const [snapshot, connection, policy, persistentGlobalStop] = await Promise.all([
+      reader({ userId, accessToken }, controller.signal),
+      repository.getConnection(userId, provider as TradingExchange),
+      repository.getPolicy(userId),
+      repository.getGlobalEmergencyStop(),
+    ]);
+    if (controller.signal.aborted || res.writableEnded) return undefined;
+    if (snapshot.readOnly !== true
+      || snapshot.connected !== true
+      || snapshot.stale === true
+      || snapshot.orderRequests !== 0
+      || snapshot.cancelRequests !== 0
+      || snapshot.amendRequests !== 0
+      || snapshot.transferRequests !== 0
+      || snapshot.withdrawalRequests !== 0
+      || snapshot.liveTradingEnabled !== false
+      || snapshot.autoTradingEnabled !== false) {
+      return res.status(409).json({
+        ok: false,
+        error: snapshot.errorCode ?? 'EXIT_RISK_ACCOUNT_SNAPSHOT_NOT_FRESH',
+        riskChecked: false,
+        privateAccountReadPerformed: true,
+        financialMutationPerformed: false,
+        orderSubmitted: false,
+        privateTradingMutationSent: false,
+        executionAuthority: 'NONE',
+      });
+    }
+
+    const matches = (snapshot.positions ?? []).filter((position) => exitPositionMatches(position, market, symbol));
+    if (matches.length !== 1) {
+      return res.status(409).json({
+        ok: false,
+        error: matches.length > 1 ? 'EXIT_RISK_POSITION_AMBIGUOUS' : 'EXIT_RISK_POSITION_NOT_FOUND',
+        riskChecked: false,
+        privateAccountReadPerformed: true,
+        financialMutationPerformed: false,
+        orderSubmitted: false,
+        privateTradingMutationSent: false,
+        executionAuthority: 'NONE',
+      });
+    }
+
+    const position = matches[0]!;
+    const quantities = exitPreviewQuantity(position, percent, market, provider);
+    const side = exitPreviewSide(provider, position);
+    const currentPositionQuantity = position.quantity == null ? null : Number(position.quantity);
+    if (currentPositionQuantity !== expectedPositionQuantity
+      || quantities.availableQuantity !== expectedAvailableQuantity
+      || quantities.exitQuantity !== expectedExitQuantity
+      || side !== expectedSide) {
+      return res.status(409).json({
+        ok: false,
+        error: 'EXIT_RISK_APPROVAL_STALE_OR_POSITION_CHANGED',
+        riskChecked: false,
+        privateAccountReadPerformed: true,
+        financialMutationPerformed: false,
+        orderSubmitted: false,
+        privateTradingMutationSent: false,
+        executionAuthority: 'NONE',
+      });
+    }
+
+    const blockers: string[] = [];
+    const executionReadiness = liveExecutionReadinessForConnection(
+      provider as TradingExchange,
+      connection,
+      credentialConfigurationStatus().encryptionConfigured,
+    );
+    blockers.push(...executionReadiness.blockers);
+
+    if (policy.emergencyStopped
+      || persistentGlobalStop
+      || process.env.TRADING_EMERGENCY_STOP === 'true') {
+      blockers.push('EXIT_RISK_EMERGENCY_STOP_ACTIVE');
+    }
+
+    const checkedAtMs = Date.parse(snapshot.checkedAt);
+    const now = Date.now();
+    if (!Number.isFinite(checkedAtMs)
+      || checkedAtMs > now + 5_000
+      || now - checkedAtMs > EXIT_ORDER_TIME_RISK_MAX_ACCOUNT_AGE_MS) {
+      blockers.push('EXIT_RISK_ACCOUNT_EVIDENCE_STALE');
+    }
+
+    const conflictingOpenOrders = exitOpenOrderConflicts(snapshot.openOrders, market, symbol);
+    if (conflictingOpenOrders == null) blockers.push('EXIT_RISK_PROVIDER_OPEN_ORDERS_UNAVAILABLE');
+    else if (conflictingOpenOrders > 0) blockers.push('EXIT_RISK_PROVIDER_OPEN_ORDER_PRESENT');
+
+    const uniqueBlockers = [...new Set(blockers)];
+    const riskPassed = uniqueBlockers.length === 0;
+    const evaluatedAt = new Date().toISOString();
+    const expiresAt = new Date(Date.parse(evaluatedAt) + EXIT_ORDER_TIME_RISK_TTL_MS).toISOString();
+    const riskIntentId = exitRiskIntentIdentity({
+      userId,
+      approvalIntentId,
+      planId,
+      exitDraftId,
+      provider,
+      market,
+      symbol,
+      percent,
+      positionQuantity: currentPositionQuantity,
+      availableQuantity: quantities.availableQuantity,
+      exitQuantity: quantities.exitQuantity,
+      side,
+      approvalCheckedAt,
+      riskCheckedAt: snapshot.checkedAt,
+      evaluatedAt,
+      expiresAt,
+      blockers: uniqueBlockers,
+    });
+
+    return res.json({
+      ok: true,
+      canonicalExitRisk: {
+        schemaVersion: 'ai-chart-exit-order-time-risk-v1',
+        state: riskPassed ? 'PASSED_NON_EXECUTING' : 'BLOCKED_NON_EXECUTING',
+        riskIntentId,
+        approvalIntentId,
+        planId,
+        exitDraftId,
+        provider,
+        market,
+        symbol: normalizedExitSymbol(symbol),
+        accountMode: 'live',
+        orderType: 'market',
+        side,
+        quantity: quantities.exitQuantity,
+        percent,
+        positionQuantity: currentPositionQuantity,
+        availableQuantity: quantities.availableQuantity,
+        reduceOnly: true,
+        approvalCheckedAt,
+        riskCheckedAt: snapshot.checkedAt,
+        evaluatedAt,
+        expiresAt,
+        providerOpenOrdersChecked: conflictingOpenOrders != null,
+        conflictingOpenOrderCount: conflictingOpenOrders,
+        blockers: uniqueBlockers,
+        riskPassed,
+        marketExecutionPreflightRequired: true,
+        nextOwner: 'CANONICAL_EXIT_EXECUTION_PREFLIGHT_OWNER',
+        executionAuthority: 'NONE',
+        executable: false,
+        orderSubmissionPerformed: false,
+        financialMutationPerformed: false,
+      },
+      executionReadiness,
+      riskChecked: true,
       privateAccountReadPerformed: true,
       financialMutationPerformed: false,
       orderSubmitted: false,
