@@ -367,7 +367,7 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
       <p className="mt-2 text-[10px] leading-4 text-muted-foreground">
         실전 주문은 거래용 키 저장, 사용자 정책, 서버 provider 게이트, 주문 직전 Risk 재검증을 모두 통과해야 합니다. 키 저장만으로 실주문은 켜지지 않습니다.
       </p>
-    </div> : null}    </div>
+    </div> : null}
 
     <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
       {visibleExchanges.map((exchange) => {
