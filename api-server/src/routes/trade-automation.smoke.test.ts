@@ -423,9 +423,15 @@ test('exit preview re-reads the real position in read-only mode and never submit
         issuedAt: string;
         expiresAt: string;
         provider: string;
+        market: string;
+        symbol: string;
+        percent: number;
+        positionQuantity: number | null;
+        availableQuantity: number;
         exitQuantity: number;
         quantityRule: string;
         side: string;
+        checkedAt: string;
         reduceOnly: boolean;
         stale: boolean;
         requiresFinalRiskRecheck: boolean;
@@ -473,6 +479,99 @@ test('exit preview re-reads the real position in read-only mode and never submit
     assert.equal(body.executionReadiness.orderSubmissionPerformedByPreview, false);
     assert.equal(body.executionReadiness.executionAuthorityGrantedByPreview, false);
     assert.ok(body.executionReadiness.blockers.includes('LIVE_CONNECTION_NOT_CONFIGURED'));
+
+    const missingPlanConfirmation = await fetch(`${baseUrl}/api/trade-automation/positions/exit-plan`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        provider: body.preview.provider,
+        market: body.preview.market,
+        symbol: body.preview.symbol,
+        percent: body.preview.percent,
+        draftId: body.preview.draftId,
+        draftIssuedAt: body.preview.issuedAt,
+        draftExpiresAt: body.preview.expiresAt,
+        positionQuantity: body.preview.positionQuantity,
+        availableQuantity: body.preview.availableQuantity,
+        exitQuantity: body.preview.exitQuantity,
+        side: body.preview.side,
+        sourceCheckedAt: body.preview.checkedAt,
+      }),
+    });
+    assert.equal(missingPlanConfirmation.status, 409);
+    assert.equal(reads, 1);
+
+    const planResponse = await fetch(`${baseUrl}/api/trade-automation/positions/exit-plan`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        confirmed: true,
+        provider: body.preview.provider,
+        market: body.preview.market,
+        symbol: body.preview.symbol,
+        percent: body.preview.percent,
+        draftId: body.preview.draftId,
+        draftIssuedAt: body.preview.issuedAt,
+        draftExpiresAt: body.preview.expiresAt,
+        positionQuantity: body.preview.positionQuantity,
+        availableQuantity: body.preview.availableQuantity,
+        exitQuantity: body.preview.exitQuantity,
+        side: body.preview.side,
+        sourceCheckedAt: body.preview.checkedAt,
+      }),
+    });
+    assert.equal(planResponse.status, 200);
+    const planBody = await planResponse.json() as {
+      canonicalExitPlan: {
+        schemaVersion: string;
+        state: string;
+        planId: string;
+        exitDraftId: string;
+        quantity: number;
+        percent: number;
+        reduceOnly: boolean;
+        approvalEligible: boolean;
+        blockers: string[];
+        requiresFreshAccountRecheckAtApproval: boolean;
+        requiresOrderTimeRiskRecheck: boolean;
+        requiresExplicitApproval: boolean;
+        executionAuthority: string;
+        orderSubmissionPerformed: boolean;
+        financialMutationPerformed: boolean;
+      };
+      planPrepared: boolean;
+      privateAccountReadPerformed: boolean;
+      financialMutationPerformed: boolean;
+      orderSubmitted: boolean;
+      orderCanceled: boolean;
+      orderAmended: boolean;
+      privateTradingMutationSent: boolean;
+      executionAuthority: string;
+    };
+    assert.equal(reads, 2);
+    assert.equal(planBody.canonicalExitPlan.schemaVersion, 'ai-chart-canonical-exit-plan-v2');
+    assert.equal(planBody.canonicalExitPlan.state, 'SERVER_VERIFIED_PLAN');
+    assert.match(planBody.canonicalExitPlan.planId, /^[0-9a-f]{64}$/u);
+    assert.equal(planBody.canonicalExitPlan.exitDraftId, body.preview.draftId);
+    assert.equal(planBody.canonicalExitPlan.quantity, 5);
+    assert.equal(planBody.canonicalExitPlan.percent, 25);
+    assert.equal(planBody.canonicalExitPlan.reduceOnly, true);
+    assert.equal(planBody.canonicalExitPlan.approvalEligible, false);
+    assert.ok(planBody.canonicalExitPlan.blockers.includes('LIVE_CONNECTION_NOT_CONFIGURED'));
+    assert.equal(planBody.canonicalExitPlan.requiresFreshAccountRecheckAtApproval, true);
+    assert.equal(planBody.canonicalExitPlan.requiresOrderTimeRiskRecheck, true);
+    assert.equal(planBody.canonicalExitPlan.requiresExplicitApproval, true);
+    assert.equal(planBody.canonicalExitPlan.executionAuthority, 'NONE');
+    assert.equal(planBody.canonicalExitPlan.orderSubmissionPerformed, false);
+    assert.equal(planBody.canonicalExitPlan.financialMutationPerformed, false);
+    assert.equal(planBody.planPrepared, true);
+    assert.equal(planBody.privateAccountReadPerformed, true);
+    assert.equal(planBody.financialMutationPerformed, false);
+    assert.equal(planBody.orderSubmitted, false);
+    assert.equal(planBody.orderCanceled, false);
+    assert.equal(planBody.orderAmended, false);
+    assert.equal(planBody.privateTradingMutationSent, false);
+    assert.equal(planBody.executionAuthority, 'NONE');
   } finally {
     setTradeExitPreviewReadersFactoryForTests(null);
     await close(server);
