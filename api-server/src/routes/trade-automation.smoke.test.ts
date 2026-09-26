@@ -293,6 +293,18 @@ test('exit preview re-reads the real position in read-only mode and never submit
         side: string;
         reduceOnly: boolean;
         stale: boolean;
+        fingerprint: string;
+      };
+      canonicalExitDraft: {
+        schemaVersion: string;
+        fingerprint: string;
+        reduceOnly: boolean;
+        planCreationPerformed: boolean;
+        orderSubmissionPerformed: boolean;
+        requiresFreshAccountRecheck: boolean;
+        requiresOrderTimeRiskRecheck: boolean;
+        requiresExplicitApproval: boolean;
+        nextOwner: string;
       };
       privateAccountReadPerformed: boolean;
       orderSubmitted: boolean;
@@ -317,6 +329,16 @@ test('exit preview re-reads the real position in read-only mode and never submit
     assert.equal(body.preview.side, 'sell');
     assert.equal(body.preview.reduceOnly, true);
     assert.equal(body.preview.stale, false);
+    assert.match(body.preview.fingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(body.canonicalExitDraft.schemaVersion, 'ai-chart-canonical-exit-draft-v1');
+    assert.equal(body.canonicalExitDraft.fingerprint, body.preview.fingerprint);
+    assert.equal(body.canonicalExitDraft.reduceOnly, true);
+    assert.equal(body.canonicalExitDraft.planCreationPerformed, false);
+    assert.equal(body.canonicalExitDraft.orderSubmissionPerformed, false);
+    assert.equal(body.canonicalExitDraft.requiresFreshAccountRecheck, true);
+    assert.equal(body.canonicalExitDraft.requiresOrderTimeRiskRecheck, true);
+    assert.equal(body.canonicalExitDraft.requiresExplicitApproval, true);
+    assert.equal(body.canonicalExitDraft.nextOwner, 'CANONICAL_EXIT_PLAN_OWNER');
     assert.equal(body.privateAccountReadPerformed, true);
     assert.equal(body.orderSubmitted, false);
     assert.equal(body.orderCanceled, false);
