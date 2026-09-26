@@ -358,8 +358,8 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
         <div className="flex min-w-0 items-center gap-2">
           <WalletCards className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
           <div className="min-w-0">
-            <p className="text-[11px] font-black text-primary">내 포지션 · READ-ONLY</p>
-            <p className="truncate text-[10px] font-bold text-muted-foreground">{providerLabel(provider)} · {symbol}</p>
+            <p className="text-xs font-bold text-primary">내 포지션 · 읽기 전용</p>
+            <p className="truncate text-xs font-bold text-muted-foreground">{providerLabel(provider)} · {symbol}</p>
           </div>
         </div>
         {state.kind === 'idle' || state.kind === 'unavailable' ? (
@@ -367,13 +367,13 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
             type="button"
             data-testid="ai-chart-load-position"
             onClick={() => void loadPosition()}
-            className="flex min-h-10 items-center gap-1.5 rounded-xl border border-card-border px-3 py-2 text-[11px] font-black"
+            className="flex min-h-10 items-center gap-1.5 rounded-xl border border-card-border px-3 py-2 text-xs font-bold"
           >
             <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
             내 포지션 확인
           </button>
         ) : state.kind === 'loading' ? (
-          <span role="status" className="flex min-h-10 items-center gap-1.5 rounded-xl bg-secondary px-3 py-2 text-[11px] font-black text-muted-foreground">
+          <span role="status" className="flex min-h-10 items-center gap-1.5 rounded-xl bg-secondary px-3 py-2 text-xs font-bold text-muted-foreground">
             <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> 확인 중
           </span>
         ) : position ? (
@@ -381,7 +381,7 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
             type="button"
             data-testid="ai-chart-toggle-position-lines"
             onClick={toggleLines}
-            className="flex min-h-10 items-center gap-1.5 rounded-xl border border-card-border px-3 py-2 text-[11px] font-black"
+            className="flex min-h-10 items-center gap-1.5 rounded-xl border border-card-border px-3 py-2 text-xs font-bold"
           >
             {linesVisible ? <EyeOff className="h-3.5 w-3.5" aria-hidden="true" /> : <Eye className="h-3.5 w-3.5" aria-hidden="true" />}
             {linesVisible ? '평단선 숨기기' : '평단선 표시'}
@@ -398,7 +398,7 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
               data-testid={`ai-chart-stock-provider-${item}`}
               aria-pressed={stockProvider === item}
               onClick={() => changeStockProvider(item)}
-              className={`min-h-10 rounded-xl border px-3 text-[10px] font-black ${stockProvider === item ? 'border-primary bg-primary/10 text-primary' : 'border-card-border text-muted-foreground'}`}
+              className={`min-h-10 rounded-xl border px-3 text-xs font-bold ${stockProvider === item ? 'border-primary bg-primary/10 text-primary' : 'border-card-border text-muted-foreground'}`}
             >
               {providerLabel(item)} 조회
             </button>
@@ -407,15 +407,15 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
       )}
 
       {state.kind === 'idle' && (
-        <p className="mt-2 text-[10px] font-bold leading-4 text-muted-foreground">차트를 열기만 해서는 계좌를 조회하지 않습니다. 버튼을 눌렀을 때 현재 시장의 조회 전용 스냅샷만 확인합니다.</p>
+        <p className="mt-2 text-xs font-bold leading-4 text-muted-foreground">차트를 열기만 해서는 계좌를 조회하지 않습니다. 버튼을 눌렀을 때 현재 시장의 조회 전용 스냅샷만 확인합니다.</p>
       )}
       {state.kind === 'unavailable' && (
-        <p role="alert" className="mt-2 rounded-xl bg-warning/10 px-3 py-2 text-[10px] font-bold text-warning">포지션을 표시할 수 없습니다 · {state.code}</p>
+        <p role="alert" className="mt-2 rounded-xl bg-warning/10 px-3 py-2 text-xs font-bold text-warning">포지션을 표시할 수 없습니다 · {state.code}</p>
       )}
       {state.kind === 'ready' && !position && (
         <div className="mt-2 rounded-xl bg-secondary/60 px-3 py-2">
-          <p className="text-[10px] font-black">현재 선택 종목의 보유/포지션 없음</p>
-          <p className="mt-1 text-[9px] font-bold text-muted-foreground">조회 시각 {checkedAtLabel(state.snapshot.checkedAt)}{state.snapshot.stale ? ' · 이전 정상값' : ''}</p>
+          <p className="text-xs font-bold">현재 선택 종목의 보유/포지션 없음</p>
+          <p className="mt-1 text-xs font-bold text-muted-foreground">조회 시각 {checkedAtLabel(state.snapshot.checkedAt)}{state.snapshot.stale ? ' · 이전 정상값' : ''}</p>
         </div>
       )}
       {state.kind === 'ready' && position && (
@@ -430,7 +430,7 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
           </div>
 
           {market === 'BITGET' && (
-            <div className="flex flex-wrap gap-1.5 text-[9px] font-black text-muted-foreground">
+            <div className="flex flex-wrap gap-1.5 text-xs font-bold text-muted-foreground">
               <span className="rounded-full bg-secondary px-2 py-1">방향 {position.side ?? '미제공'}</span>
               <span className="rounded-full bg-secondary px-2 py-1">레버리지 {finite(position.leverage) == null ? '미제공' : `${position.leverage}x`}</span>
               <span className="rounded-full bg-secondary px-2 py-1">마진 {position.marginMode ?? '미제공'}</span>
@@ -441,27 +441,27 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
             <div data-testid="ai-chart-position-guidance" className="rounded-xl border border-card-border bg-secondary/35 p-3">
               <div className="flex items-center gap-1.5">
                 <ShieldAlert className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
-                <p className="text-[10px] font-black">AI 포지션 보조 판단 · 결정론적</p>
+                <p className="text-xs font-bold">포지션 보조 판단 · 확정 데이터 기반</p>
               </div>
-              <p className="mt-1 text-[12px] font-black">{guidance.headline}</p>
-              <p className="mt-1 text-[9px] font-bold leading-4 text-muted-foreground">{guidance.detail}</p>
-              <div className="mt-2 flex flex-wrap gap-1.5 text-[9px] font-black text-muted-foreground">
+              <p className="mt-1 text-[12px] font-bold">{guidance.headline}</p>
+              <p className="mt-1 text-xs font-bold leading-4 text-muted-foreground">{guidance.detail}</p>
+              <div className="mt-2 flex flex-wrap gap-1.5 text-xs font-bold text-muted-foreground">
                 <span className="rounded-full bg-background px-2 py-1">평단대비 {formatPercent(guidance.averageDistancePercent)}</span>
                 <span className="rounded-full bg-background px-2 py-1">손절까지 {guidance.stopGapPercent == null ? '미제공' : `${guidance.stopGapPercent.toFixed(2)}%`}</span>
                 <span className="rounded-full bg-background px-2 py-1">다음 목표까지 {guidance.targetGapPercent == null ? '미제공' : `${guidance.targetGapPercent.toFixed(2)}%`}</span>
                 {market === 'BITGET' && <span className="rounded-full bg-background px-2 py-1">청산가까지 {guidance.liquidationGapPercent == null ? '미제공' : `${guidance.liquidationGapPercent.toFixed(2)}%`}</span>}
               </div>
-              <p className="mt-1.5 text-[8px] font-bold text-muted-foreground">실행 신호가 아니며 주문 권한이 없습니다. 실제 계좌값·차트 가격·Scanner PricePlan이 있는 범위만 사용합니다.</p>
+              <p className="mt-1.5 text-xs font-bold text-muted-foreground">실행 신호가 아니며 주문 권한이 없습니다. 실제 계좌값·차트 가격·Scanner 계획이 확인된 범위만 사용합니다.</p>
             </div>
           )}
 
           <div data-testid="ai-chart-price-scenarios" className="rounded-xl border border-card-border p-3">
             <div className="flex items-center gap-1.5">
               <Calculator className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
-              <p className="text-[10px] font-black">목표/손절 예상손익 · 수수료 전</p>
+              <p className="text-xs font-bold">목표/손절 예상손익 · 수수료 전</p>
             </div>
             {(pricePlan?.targets?.length ?? 0) === 0 && riskPrice == null ? (
-              <p className="mt-2 text-[9px] font-bold text-muted-foreground">Scanner PricePlan이 없어 목표/손절 금액을 임의 생성하지 않습니다.</p>
+              <p className="mt-2 text-xs font-bold text-muted-foreground">Scanner PricePlan이 없어 목표/손절 금액을 임의 생성하지 않습니다.</p>
             ) : (
               <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
                 {targetOutcomes.map((outcome, index) => outcome ? (
@@ -488,9 +488,9 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
           </div>
 
           <div data-testid="ai-chart-additional-entry" className="rounded-xl border border-card-border p-3">
-            <p className="text-[10px] font-black">추가 진입 후 예상평단</p>
+            <p className="text-xs font-bold">추가 진입 후 예상평단</p>
             <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              <label className="text-[9px] font-bold text-muted-foreground">
+              <label className="text-xs font-bold text-muted-foreground">
                 {market === 'BITGET' ? '추가 수량' : `추가 금액 (${market === 'US' ? 'USD' : 'KRW'})`}
                 <input
                   data-testid="ai-chart-additional-value"
@@ -498,10 +498,10 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
                   value={additionalValueText}
                   onChange={(event) => setAdditionalValueText(event.target.value)}
                   placeholder={market === 'BITGET' ? '예: 0.01' : '예: 300000'}
-                  className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-3 text-[11px] font-black text-foreground"
+                  className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-3 text-xs font-bold text-foreground"
                 />
               </label>
-              <label className="text-[9px] font-bold text-muted-foreground">
+              <label className="text-xs font-bold text-muted-foreground">
                 추가 진입가 · 비우면 현재가
                 <input
                   data-testid="ai-chart-additional-price"
@@ -509,35 +509,35 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
                   value={additionalPriceText}
                   onChange={(event) => setAdditionalPriceText(event.target.value)}
                   placeholder={formatPrice(finite(position.currentPrice) ?? chartPrice, market)}
-                  className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-3 text-[11px] font-black text-foreground"
+                  className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-3 text-xs font-bold text-foreground"
                 />
               </label>
               <Metric label="예상 새 평단" value={formatPrice(additionalProjection?.projectedAverageEntryPrice, market)} />
             </div>
-            <p className="mt-1.5 text-[8px] font-bold text-muted-foreground">
+            <p className="mt-1.5 text-xs font-bold text-muted-foreground">
               {market === 'BITGET' ? '선물은 provider 포지션 수량과 동일한 단위의 추가 수량만 입력합니다.' : '추가 금액 ÷ 추가 진입가로 수량을 계산한 단순 가중평단입니다.'} 수수료·세금·슬리피지는 포함하지 않습니다.
             </p>
           </div>
 
           <div data-testid="ai-chart-partial-exit" className="rounded-xl border border-card-border p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-[10px] font-black">목표가별 분할청산 계산</p>
-              <span className={`text-[9px] font-black ${allocationValid ? 'text-muted-foreground' : 'text-destructive'}`}>합계 {allocationTotal.toFixed(0)}%</span>
+              <p className="text-xs font-bold">목표가별 분할청산 계산</p>
+              <span className={`text-xs font-bold ${allocationValid ? 'text-muted-foreground' : 'text-destructive'}`}>합계 {allocationTotal.toFixed(0)}%</span>
             </div>
             {allocationRows.length === 0 ? (
-              <p className="mt-2 text-[9px] font-bold text-muted-foreground">Scanner 목표가가 없어 분할청산 수치를 만들지 않습니다.</p>
+              <p className="mt-2 text-xs font-bold text-muted-foreground">Scanner 목표가가 없어 분할청산 수치를 만들지 않습니다.</p>
             ) : (
               <div className="mt-2 space-y-1.5">
                 {allocationRows.map((row) => (
                   <div key={`allocation-${row.index}`} className="grid grid-cols-[minmax(0,1fr)_86px] gap-2 rounded-xl bg-secondary/45 p-2 sm:grid-cols-[minmax(0,1fr)_100px]">
                     <div className="min-w-0">
-                      <p className="text-[10px] font-black">TP{row.index + 1} · {formatPrice(row.target, market)}</p>
-                      <p className="mt-0.5 text-[9px] font-bold text-muted-foreground">
+                      <p className="text-xs font-bold">TP{row.index + 1} · {formatPrice(row.target, market)}</p>
+                      <p className="mt-0.5 text-xs font-bold text-muted-foreground">
                         수량 {allocationValid ? formatQuantity(row.projection?.quantity) : '미제공'}
                         {' · '}{market === 'BITGET' ? '부분 예상손익' : '예상 매도금액'} {allocationValid ? (market === 'BITGET' ? formatPnl(row.projection?.pnlAmount, market) : formatPrice(row.projection?.grossValue, market)) : '미제공'}
                       </p>
                     </div>
-                    <label className="text-[8px] font-bold text-muted-foreground">
+                    <label className="text-xs font-bold text-muted-foreground">
                       비중 %
                       <input
                         data-testid={`ai-chart-target-percent-${row.index}`}
@@ -545,47 +545,47 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
                         value={row.raw}
                         onChange={(event) => setTargetPercents((current) => ({ ...current, [row.index]: event.target.value }))}
                         placeholder="0"
-                        className="mt-1 min-h-10 w-full rounded-lg border border-card-border bg-background px-2 text-right text-[10px] font-black text-foreground"
+                        className="mt-1 min-h-10 w-full rounded-lg border border-card-border bg-background px-2 text-right text-xs font-bold text-foreground"
                       />
                     </label>
                   </div>
                 ))}
               </div>
             )}
-            {!allocationValid && <p role="alert" className="mt-1.5 text-[9px] font-black text-destructive">분할청산 비중 합계는 100%를 넘길 수 없습니다.</p>}
+            {!allocationValid && <p role="alert" className="mt-1.5 text-xs font-bold text-destructive">분할청산 비중 합계는 100%를 넘길 수 없습니다.</p>}
           </div>
 
           <details data-testid="ai-chart-fee-break-even" className="rounded-xl border border-card-border p-3">
-            <summary className="cursor-pointer text-[10px] font-black">수수료 포함 손익분기점 · 근거 입력 시만</summary>
+            <summary className="cursor-pointer text-xs font-bold">수수료 포함 손익분기점 · 근거 입력 시만</summary>
             <div className="mt-2 grid gap-2 sm:grid-cols-3">
-              <label className="text-[9px] font-bold text-muted-foreground">
+              <label className="text-xs font-bold text-muted-foreground">
                 진입 수수료/비용률 %
                 <input
                   inputMode="decimal"
                   value={entryFeeText}
                   onChange={(event) => setEntryFeeText(event.target.value)}
                   placeholder="예: 0.05"
-                  className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-3 text-[11px] font-black text-foreground"
+                  className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-3 text-xs font-bold text-foreground"
                 />
               </label>
-              <label className="text-[9px] font-bold text-muted-foreground">
+              <label className="text-xs font-bold text-muted-foreground">
                 청산 수수료/비용률 %
                 <input
                   inputMode="decimal"
                   value={exitFeeText}
                   onChange={(event) => setExitFeeText(event.target.value)}
                   placeholder="예: 0.05"
-                  className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-3 text-[11px] font-black text-foreground"
+                  className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-3 text-xs font-bold text-foreground"
                 />
               </label>
               <Metric label="수수료 포함 본전가" value={formatPrice(breakEven, market)} />
             </div>
-            {!feeInputsPresent && <p className="mt-1.5 text-[8px] font-bold text-muted-foreground">Provider 수수료 근거가 계좌 스냅샷에 없으므로 자동으로 추정하지 않습니다. 알고 있는 실제 비용률을 직접 입력한 경우에만 계산합니다.</p>}
-            {feeInputsPresent && !feeEvidence && <p role="alert" className="mt-1.5 text-[8px] font-black text-destructive">비용률은 각각 0 이상 100 미만 숫자로 입력해야 합니다.</p>}
-            {feeEvidence && <p className="mt-1.5 text-[8px] font-bold text-muted-foreground">사용자 입력 비용률 기준 단순 손익분기점입니다. funding·슬리피지·기타 세금/비용은 입력률에 포함되지 않았다면 별도입니다.</p>}
+            {!feeInputsPresent && <p className="mt-1.5 text-xs font-bold text-muted-foreground">Provider 수수료 근거가 계좌 스냅샷에 없으므로 자동으로 추정하지 않습니다. 알고 있는 실제 비용률을 직접 입력한 경우에만 계산합니다.</p>}
+            {feeInputsPresent && !feeEvidence && <p role="alert" className="mt-1.5 text-xs font-bold text-destructive">비용률은 각각 0 이상 100 미만 숫자로 입력해야 합니다.</p>}
+            {feeEvidence && <p className="mt-1.5 text-xs font-bold text-muted-foreground">사용자 입력 비용률 기준 단순 손익분기점입니다. funding·슬리피지·기타 세금/비용은 입력률에 포함되지 않았다면 별도입니다.</p>}
           </details>
 
-          <p className="text-[9px] font-bold text-muted-foreground">
+          <p className="text-xs font-bold text-muted-foreground">
             {providerLabel(state.snapshot.provider)} 조회 {checkedAtLabel(state.snapshot.checkedAt)}
             {state.snapshot.stale ? ' · 오래된 마지막 정상값' : ' · 최신 조회'}
             {' · '}누락된 가격·수량·수수료 근거는 0으로 바꾸지 않고 미제공으로 유지합니다.
@@ -599,8 +599,8 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 rounded-xl bg-secondary/60 px-2.5 py-2">
-      <p className="truncate text-[9px] font-bold text-muted-foreground">{label}</p>
-      <p className="mt-0.5 truncate text-[11px] font-black tabular-nums">{value}</p>
+      <p className="truncate text-xs font-bold text-muted-foreground">{label}</p>
+      <p className="mt-0.5 truncate text-xs font-bold tabular-nums">{value}</p>
     </div>
   );
 }
@@ -615,11 +615,11 @@ function ScenarioRow({ label, price, percent, pnl, source }: {
   return (
     <div className="rounded-xl bg-secondary/50 p-2.5">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[10px] font-black">{label} · {price}</p>
-        <span className="text-[10px] font-black tabular-nums">{percent}</span>
+        <p className="text-xs font-bold">{label} · {price}</p>
+        <span className="text-xs font-bold tabular-nums">{percent}</span>
       </div>
-      <p className="mt-1 text-[11px] font-black tabular-nums">예상손익 {pnl}</p>
-      <p className="mt-0.5 text-[8px] font-bold text-muted-foreground">{source}</p>
+      <p className="mt-1 text-xs font-bold tabular-nums">예상손익 {pnl}</p>
+      <p className="mt-0.5 text-xs font-bold text-muted-foreground">{source}</p>
     </div>
   );
 }
