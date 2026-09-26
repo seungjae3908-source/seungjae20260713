@@ -11,6 +11,8 @@ on:
       - api-server/src/routes/index.ts
       - stock-analyzer/src/components/research-workspace-panel.tsx
       - stock-analyzer/src/components/research-workspace-providers.tsx
+      - stock-analyzer/src/components/research-workspace-worker.tsx
+      - stock-analyzer/src/lib/research-worker-status.*
       - stock-analyzer/src/lib/research-provider-status.*
       - stock-analyzer/src/components/research-video*.tsx
       - stock-analyzer/src/lib/research-workspace-response.*
