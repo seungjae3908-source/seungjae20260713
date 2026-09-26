@@ -183,7 +183,7 @@ type ExecutionReadiness = {
 type EntryReadinessState =
   | { kind: 'idle' }
   | { kind: 'loading' }
-  | { kind: 'ready'; value: ExecutionReadiness }
+  | { kind: 'ready'; provider: Snapshot['provider']; value: ExecutionReadiness }
   | { kind: 'unavailable'; code: string };
 
 type StockReadOnlyProvider = 'toss' | 'kiwoom';
@@ -802,6 +802,12 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
       const payload = await response.json().catch(() => null) as {
         ok?: boolean;
         error?: string;
+        policy?: {
+          stockBrokerByMarket?: {
+            domestic_stock?: 'toss' | 'kiwoom';
+            us_stock?: 'toss' | 'kiwoom';
+          };
+        };
         liveExecutionReadiness?: Partial<Record<Snapshot['provider'], ExecutionReadiness>>;
         actualOrderSubmittedByStatusRequest?: boolean;
       } | null;
@@ -810,19 +816,24 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
         setEntryReadiness({ kind: 'unavailable', code: payload?.error ?? 'ENTRY_READINESS_STATUS_INVALID' });
         return;
       }
-      const value = payload.liveExecutionReadiness?.[provider];
+      const executionProvider: Snapshot['provider'] = market === 'KR'
+        ? payload.policy?.stockBrokerByMarket?.domestic_stock ?? provider
+        : market === 'US'
+          ? payload.policy?.stockBrokerByMarket?.us_stock ?? provider
+          : provider;
+      const value = payload.liveExecutionReadiness?.[executionProvider];
       if (!value || value.orderSubmissionPerformedByStatusRequest !== false || value.orderTimeRiskRecheckRequired !== true) {
         setEntryReadiness({ kind: 'unavailable', code: 'ENTRY_READINESS_CONTRACT_MISMATCH' });
         return;
       }
-      setEntryReadiness({ kind: 'ready', value });
+      setEntryReadiness({ kind: 'ready', provider: executionProvider, value });
     } catch (error) {
       if (controller.signal.aborted || sequence !== entryReadinessSequenceRef.current) return;
       setEntryReadiness({ kind: 'unavailable', code: error instanceof Error ? error.name : 'ENTRY_READINESS_FAILED' });
     } finally {
       if (entryReadinessAbortRef.current === controller) entryReadinessAbortRef.current = null;
     }
-  }, [provider]);
+  }, [market, provider]);
 
   const tradingCockpit = (
     <details
@@ -883,7 +894,8 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                           수동 실전 진입 · {entryReadiness.value.readyForManualOrderEvaluation ? '게이트 준비' : '차단'}
                         </p>
                         <p className="mt-1">
-                          거래키 {entryReadiness.value.connectionConfigured ? '연결' : '미연결'}
+                          실행 경로 {providerLabel(entryReadiness.provider)}
+                          {' · '}거래키 {entryReadiness.value.connectionConfigured ? '연결' : '미연결'}
                           {' · '}provider {entryReadiness.value.providerVerified ? '검증됨' : '미검증'}
                           {' · '}서버게이트 {entryReadiness.value.manualServerGateEnabled ? 'ON' : 'OFF'}
                         </p>
