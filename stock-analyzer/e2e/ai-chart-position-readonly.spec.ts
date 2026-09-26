@@ -75,6 +75,10 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain("/amend");
   expect(panel).toContain("JSON.stringify({ confirmed: true })");
   expect(panel).toContain("setExitPreviewState({ kind: 'idle' });");
+  expect(panel).toContain("payload.preview.requiresFinalRiskRecheck !== true");
+  expect(panel).toContain("payload.preview.requiresExplicitApproval !== true");
+  expect(panel).toContain("payload.preview.state !== 'SERVER_VERIFIED_DRAFT'");
+  expect(panel).toContain("!/^[0-9a-f]{64}$/u.test(payload.preview.draftId)");
   expect(panel).toContain("confirmed: true");
   expect(panel).toContain("자동 조회·자동 취소·자동 정정 없음");
   expect(panel).toContain("item.state === 'ACCEPTED'");
@@ -399,6 +403,11 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
         body: JSON.stringify({
           ok: true,
           preview: {
+            schemaVersion: 'manual-exit-draft-v1',
+            state: 'SERVER_VERIFIED_DRAFT',
+            draftId: 'e'.repeat(64),
+            issuedAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 30_000).toISOString(),
             provider: 'toss',
             market: 'KR',
             symbol: '005930',
@@ -412,6 +421,9 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
             reduceOnly: true,
             checkedAt: new Date().toISOString(),
             stale: false,
+            requiresFinalRiskRecheck: true,
+            requiresExplicitApproval: true,
+            executionAuthority: 'NONE',
           },
           privateAccountReadPerformed: true,
           orderSubmitted: false,
@@ -613,6 +625,9 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await expect.poll(() => exitPreviewReads).toBe(1);
   await expect(cockpit.getByTestId('ai-chart-exit-preview-verified')).toContainText('서버 확인 수량 5');
   await expect(cockpit.getByTestId('ai-chart-exit-preview-verified')).toContainText('수량규칙 정수');
+  await expect(cockpit.getByTestId('ai-chart-exit-preview-verified')).toContainText('종료 Draft eeeeeeeeeeee…');
+  await expect(cockpit.getByTestId('ai-chart-exit-preview-verified')).toContainText('최종 Risk 재검증 필요');
+  await expect(cockpit.getByTestId('ai-chart-exit-preview-verified')).toContainText('명시적 승인 필요');
   await expect(cockpit.getByTestId('ai-chart-exit-preview-verified')).toContainText('executionAuthority=NONE');
   await expect(cockpit.getByTestId('ai-chart-cockpit-lifecycle')).toContainText('재검증됨');
   await expect(cockpit.getByTestId('ai-chart-exit-readiness')).toContainText('실전 종료 준비 · 차단');
