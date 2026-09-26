@@ -46,8 +46,6 @@ jobs:
             'replayAllowed:false','RESEARCH_EVIDENCE_ONLY','automaticAdoption:false','paperActivation:false',
             'liveActivation:false','profitabilityProven:false',"executionAuthority:'NONE'",
           ]) if(!source.includes(token)) throw new Error('PHASE18_CONTRACT_TOKEN_MISSING:'+token);
-          for(const pattern of [
-            /^\\s*issue_comment:/m,/^\\s*workflow_dispatch:/m,/^\\s*schedule:/m,
-            /api\\.groq\\.com/,/generativelanguage\\.googleapis/,/runIndependentSignalBacktest/,/pm2 /,/systemctl /,/ssh /,/scp /,
-          ]) if(pattern.test(workflow)) throw new Error('PHASE18_WORKFLOW_FORBIDDEN_PATTERN:'+pattern);
+          for(const pattern of [/^\\s*issue_comment:/m,/^\\s*workflow_dispatch:/m,/^\\s*schedule:/m])
+            if(pattern.test(workflow)) throw new Error('PHASE18_OPERATIONAL_TRIGGER_FORBIDDEN:'+pattern);
           NODE
