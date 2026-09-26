@@ -52,6 +52,7 @@ const requiredFragments = [
   'LIVE_TELEGRAM_ACTIVATION_APPROVED',
   'TELEGRAM_INTELLIGENCE_WORKER_ENABLED',
   'PERSONAL_TELEGRAM_WORKER_ENABLED',
+  'PUBLIC_BASE_URL: https://lsj119.com',
   'TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED',
   'TELEGRAM_SIGNAL_AI_ENABLED',
   'TELEGRAM_DAILY_BRIEF_RICH_ENABLED',
@@ -74,6 +75,10 @@ const requiredFragments = [
   "telegramApiRead('getMe')",
   "telegramApiRead('getChat'",
   "telegramApiRead('getWebhookInfo')",
+  'api.telegram.org/bot${encodeURIComponent(botToken)}/setWebhook',
+  'secret_token: webhookSecret',
+  'drop_pending_updates: false',
+  'telegramRoomDeliveryVerified: true',
   'api.telegram.org/bot${encodeURIComponent(botToken)}/sendMessage',
   'api.telegram.org/bot${encodeURIComponent(botToken)}/editMessageText',
   'telegramValue?.ok !== true',
@@ -232,8 +237,8 @@ const forbiddenPatterns = [
   [/repository_dispatch\s*:/, 'repository_dispatch is forbidden'],
   [/cancel-in-progress:\s*true/, 'release cancellation is forbidden'],
   [/echo[^\n]*(TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID)/i, 'Telegram secrets must never be echoed'],
-  [/console\.(log|error)\([^\n]*(botToken|chatId)/, 'Telegram secrets must never be logged'],
-  [/core\.(info|notice|warning|error)\([^\n]*(botToken|chatId)/, 'Telegram secrets must never enter GitHub logs'],
+  [/console\.(log|error)\([^\n]*(botToken|chatId|webhookSecret)/, 'Telegram secrets must never be logged'],
+  [/core\.(info|notice|warning|error)\([^\n]*(botToken|chatId|webhookSecret)/, 'Telegram secrets must never enter GitHub logs'],
   [/pm2\s+(delete|stop)\s+stock-app/, 'Production process destructive control is forbidden'],
   [/\b(order|cancel|amend|withdraw|transfer)\s*\(/i, 'Trading mutations are forbidden'],
 ];
@@ -252,7 +257,14 @@ if (exactCommandMatches.length !== 1) {
   process.exit(1);
 }
 
-const secretNames = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'PROD_DATABASE_URL'];
+const secretNames = [
+  'TELEGRAM_BOT_TOKEN',
+  'TELEGRAM_CHAT_ID',
+  'TELEGRAM_STOCK_CHAT_ID',
+  'TELEGRAM_CRYPTO_CHAT_ID',
+  'TELEGRAM_WEBHOOK_SECRET',
+  'PROD_DATABASE_URL',
+];
 for (const name of secretNames) {
   const outputPattern = new RegExp(`(?:GITHUB_OUTPUT|GITHUB_STEP_SUMMARY)[^\\n]*${name}`, 'i');
   if (outputPattern.test(source) || outputPattern.test(deploySource)) {
