@@ -23,15 +23,17 @@ function alert(overrides: Partial<ScannerAlertCandidate> = {}): ScannerAlertCand
   };
 }
 
-test('Telegram signal shows compact entry, targets, and stop without execution clutter', () => {
+test('Telegram signal shows direction, action, TP/SL percentages, reasons, and no-order action state', () => {
   const input = scannerTelegramInput(alert(), () => 'stock-room');
   assert.ok(input);
   const details = input?.details ?? '';
   assert.match(details, /🚨 진입가능/);
+  assert.match(details, /신호 LONG · 행동 BUY/);
   assert.match(details, /진입 100~101/);
-  assert.match(details, /목표 TP1 105 · TP2 110 · TP3 115/);
-  assert.match(details, /Stop 95/);
-  assert.doesNotMatch(details, /실제 주문\/체결 아님/);
+  assert.match(details, /익절 TP1 105 \(\+4\.48%\) · TP2 110 \(\+9\.45%\) · TP3 115 \(\+14\.43%\)/);
+  assert.match(details, /손절 95 \(-5\.47%\)/);
+  assert.match(details, /실제 행동: 주문 미제출 · 거래소 요청 없음/);
+  assert.match(details, /판단 이유: 거래량 증가/);
 });
 
 test('Telegram signal never invents missing targets or stop prices', () => {
@@ -39,6 +41,28 @@ test('Telegram signal never invents missing targets or stop prices', () => {
   assert.ok(input);
   const details = input?.details ?? '';
   assert.match(details, /진입 N\/A/);
-  assert.match(details, /목표 N\/A/);
-  assert.match(details, /Stop N\/A/);
+  assert.match(details, /익절 N\/A/);
+  assert.match(details, /손절 N\/A \(N\/A\)/);
+});
+
+
+test('Telegram futures SHORT expresses favorable target and adverse stop as signed percentages', () => {
+  const input = scannerTelegramInput(alert({
+    assetClass: 'coin_futures',
+    market: 'CRYPTO_FUTURES',
+    symbol: 'BTCUSDT',
+    direction: 'SHORT',
+    action: 'SHORT',
+    entryZone: { from: 99, to: 101 },
+    stopLoss: 105,
+    targets: [95, 90],
+    evidence: ['하락 구조 확인'],
+  }), () => 'crypto-room');
+  assert.ok(input);
+  const details = input?.details ?? '';
+  assert.match(details, /신호 SHORT · 행동 SHORT/);
+  assert.match(details, /TP1 95 \(\+5\.00%\)/);
+  assert.match(details, /TP2 90 \(\+10\.00%\)/);
+  assert.match(details, /손절 105 \(-5\.00%\)/);
+  assert.match(details, /판단 이유: 하락 구조 확인/);
 });

@@ -119,6 +119,20 @@ export function manualPortfolioEvent(input: {
 }
 
 function formatNumber(value: number | null): string { return value == null ? '-' : value.toLocaleString('ko-KR', { maximumFractionDigits: 8 }); }
+function signedPlanPercent(
+  entry: number | null,
+  price: number | null,
+  side: UserExecutionEvent['side'],
+): number | null {
+  if (entry == null || entry <= 0 || price == null || price <= 0) return null;
+  const descendingProfit = side === 'sell' || side === 'short';
+  const raw = descendingProfit ? ((entry - price) / entry) * 100 : ((price - entry) / entry) * 100;
+  return Number(raw.toFixed(2));
+}
+function formatSignedPercent(value: number | null): string {
+  if (value == null) return 'N/A';
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+}
 function title(event: UserExecutionEvent): string {
   switch (event.type) {
     case 'ORDER_SUBMITTED': return '🟦 주문 제출';
@@ -159,14 +173,21 @@ export function renderUserExecutionTelegramMessage(event: UserExecutionEvent): s
   const marginMode = metadataText(event.metadata.marginMode, 24);
 
   if (event.executionMethod === 'AUTO_POLICY') {
+    const planEntry = entryPrice ?? (
+      entryZoneLow != null && entryZoneHigh != null
+        ? (entryZoneLow + entryZoneHigh) / 2
+        : null
+    );
     lines.push('', '[자동매매 체결 근거]');
+    lines.push(`신호/행동: ${event.side ? event.side.toUpperCase() : 'N/A'} · ${event.type}`);
     if (signalReasons.length) signalReasons.forEach((reason) => lines.push(`• ${reason}`));
     else lines.push('• 검증된 진입 근거 N/A');
     if (transitionReason) lines.push(`상태 전환 이유: ${transitionReason}`);
     if (entryPrice != null) lines.push(`기준 진입가: ${formatNumber(entryPrice)}`);
     if (entryZoneLow != null && entryZoneHigh != null) lines.push(`진입구간: ${formatNumber(entryZoneLow)}~${formatNumber(entryZoneHigh)}`);
-    if (targets.length) lines.push(`목표가: ${targets.map((value, index) => `TP${index + 1} ${formatNumber(value)}`).join(' · ')}`);
-    if (stopPrice != null) lines.push(`손절/무효: ${formatNumber(stopPrice)}`);
+    if (targets.length) lines.push(`익절 계획: ${targets.map((value, index) =>
+      `TP${index + 1} ${formatNumber(value)} (${formatSignedPercent(signedPlanPercent(planEntry, value, event.side))})`).join(' · ')}`);
+    if (stopPrice != null) lines.push(`손절/무효: ${formatNumber(stopPrice)} (${formatSignedPercent(signedPlanPercent(planEntry, stopPrice, event.side))})`);
     if (leverage != null) lines.push(`레버리지: ${formatNumber(leverage)}x${marginMode ? ` · ${marginMode}` : ''}`);
   } else if (transitionReason) {
     lines.push('', `체결/상태 이유: ${transitionReason}`);
