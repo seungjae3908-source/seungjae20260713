@@ -271,7 +271,11 @@ check('generic deploy contains no literal true assignment or Telegram-active hea
 
 const telegramWorkflow = fs.readFileSync(path.join(root, '.github/workflows/telegram-production-release.yml'), 'utf8');
 const activationStart = telegramWorkflow.indexOf('function activateApprovedTelegram(');
-const activationEnd = telegramWorkflow.indexOf('const activationChanged =', activationStart);
+const activationEndCandidates = [
+  telegramWorkflow.indexOf('const requiredTelegramConfigKeys =', activationStart),
+  telegramWorkflow.indexOf('const activationChanged =', activationStart),
+].filter((index) => index > activationStart);
+const activationEnd = activationEndCandidates.length ? Math.min(...activationEndCandidates) : -1;
 assert(activationStart >= 0 && activationEnd > activationStart, 'canonical Telegram-only activation seam missing');
 const activationFunction = telegramWorkflow.slice(activationStart, activationEnd);
 const telegramFeatureFlags = [
