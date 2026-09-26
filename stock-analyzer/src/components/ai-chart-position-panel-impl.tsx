@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Calculator, Eye, EyeOff, RefreshCw, ShieldAlert, WalletCards } from 'lucide-react';
+import { TradeApprovalQueue } from '@/components/trade-approval-queue';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import type { AnalysisMarket, AnalysisPricePlan } from '@/lib/analysis-selection';
 import {
@@ -67,6 +68,43 @@ type Props = {
   pricePlan?: AnalysisPricePlan;
   onOverlayChange: (overlay: AiChartPositionOverlay | null) => void;
 };
+
+type OrderDashboardItem = {
+  id: string;
+  planId: string;
+  exchange: 'toss' | 'kiwoom' | 'upbit' | 'bitget';
+  symbol: string | null;
+  market: string | null;
+  side: 'buy' | 'sell' | 'long' | 'short' | null;
+  accountMode: 'paper' | 'mock' | 'live' | null;
+  orderType: 'market' | 'limit' | null;
+  reduceOnly: boolean;
+  state: string;
+  requestedQuantity: number | null;
+  remainingQuantity: number | null;
+  filledQuantity: number;
+  currentLimitPrice: number | null;
+  averageFillPrice: number | null;
+  cancelable: boolean | null;
+  lastErrorCode: string | null;
+  updatedAt: string;
+};
+
+type OrderDashboardResponse = {
+  ok?: boolean;
+  dashboardItems?: OrderDashboardItem[];
+  error?: string;
+  orderSubmitted?: boolean;
+  orderCanceled?: boolean;
+  orderAmended?: boolean;
+  privateTradingRequestSent?: boolean;
+};
+
+type OrderDashboardState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'ready'; items: OrderDashboardItem[] }
+  | { kind: 'unavailable'; code: string };
 
 type StockReadOnlyProvider = 'toss' | 'kiwoom';
 
@@ -167,6 +205,41 @@ function priceDistance(position: AiChartAccountPosition, chartPrice: number | nu
   return direction * raw;
 }
 
+function orderStateLabel(state: string): string {
+  const labels: Record<string, string> = {
+    SUBMITTED: '제출 대기',
+    ACCEPTED: '거래소 접수',
+    PARTIALLY_FILLED: '부분체결',
+    FILLED: '체결완료',
+    CANCEL_REQUESTED: '취소 요청',
+    CANCELED: '취소완료',
+    REJECTED: '거절',
+    EXPIRED: '만료',
+    RECOVERY_REQUIRED: '재조정 필요',
+  };
+  return labels[state] ?? state;
+}
+
+function canCancelOrder(item: OrderDashboardItem): boolean {
+  return ['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'RECOVERY_REQUIRED'].includes(item.state)
+    && item.cancelable !== false;
+}
+
+function canAmendOrder(item: OrderDashboardItem): boolean {
+  return item.orderType === 'limit'
+    && ['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED'].includes(item.state)
+    && item.cancelable !== false
+    && finite(item.currentLimitPrice) != null;
+}
+
+function exitPreviewQuantity(position: AiChartAccountPosition, percent: number, market: AnalysisMarket): number | null {
+  const available = finite(position.availableQuantity) ?? finite(position.quantity);
+  if (available == null || available <= 0 || !Number.isFinite(percent) || percent <= 0 || percent > 100) return null;
+  const raw = available * percent / 100;
+  if (market === 'KR') return Math.max(0, Math.floor(raw));
+  return Math.round(raw * 100_000_000) / 100_000_000;
+}
+
 function providerLabel(provider: Snapshot['provider']): string {
   if (provider === 'toss') return 'Toss';
   if (provider === 'kiwoom') return 'Kiwoom';
@@ -202,6 +275,12 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
   const [entryFeeText, setEntryFeeText] = useState('');
   const [exitFeeText, setExitFeeText] = useState('');
   const [targetPercents, setTargetPercents] = useState<Record<number, string>>({});
+  const [cockpitOpen, setCockpitOpen] = useState(false);
+  const [orderDashboard, setOrderDashboard] = useState<OrderDashboardState>({ kind: 'idle' });
+  const [orderMessage, setOrderMessage] = useState('');
+  const [orderActionId, setOrderActionId] = useState<string | null>(null);
+  const [amendDrafts, setAmendDrafts] = useState<Record<string, { price: string; quantity: string }>>({});
+  const [exitPercent, setExitPercent] = useState(100);
   const abortRef = useRef<AbortController | null>(null);
   const requestSequenceRef = useRef(0);
 
@@ -216,6 +295,12 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
     setEntryFeeText('');
     setExitFeeText('');
     setTargetPercents({});
+    setCockpitOpen(false);
+    setOrderDashboard({ kind: 'idle' });
+    setOrderMessage('');
+    setOrderActionId(null);
+    setAmendDrafts({});
+    setExitPercent(100);
     onOverlayChange(null);
   }, [market, onOverlayChange, symbol]);
 
@@ -351,6 +436,102 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
   }), [chartPrice, market, position, pricePlan, targetPercents]);
   const allocationTotal = allocationRows.reduce((sum, row) => Number.isFinite(row.percent) ? sum + row.percent : sum, 0);
   const allocationValid = allocationTotal <= 100;
+  const exitQuantity = position ? exitPreviewQuantity(position, exitPercent, market) : null;
+
+  const loadOrderDashboard = useCallback(async () => {
+    setOrderDashboard({ kind: 'loading' });
+    setOrderMessage('');
+    try {
+      const response = await authorizedFetch('/api/trade-automation/orders', {
+        method: 'GET',
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' },
+      });
+      const payload = await response.json().catch(() => null) as OrderDashboardResponse | null;
+      if (!response.ok || payload?.ok !== true || !Array.isArray(payload.dashboardItems)) {
+        setOrderDashboard({ kind: 'unavailable', code: payload?.error ?? `HTTP_${response.status}` });
+        return;
+      }
+      if (payload.orderSubmitted !== false
+        || payload.orderCanceled !== false
+        || payload.orderAmended !== false
+        || payload.privateTradingRequestSent !== false) {
+        setOrderDashboard({ kind: 'unavailable', code: 'ORDER_DASHBOARD_READ_SAFETY_MISMATCH' });
+        return;
+      }
+      const items = payload.dashboardItems.filter((item) => (
+        item.exchange === provider
+        && typeof item.symbol === 'string'
+        && symbolMatches(market, symbol, item.symbol)
+      ));
+      setOrderDashboard({ kind: 'ready', items });
+      setAmendDrafts(Object.fromEntries(items.map((item) => [
+        item.id,
+        {
+          price: finite(item.currentLimitPrice)?.toString() ?? '',
+          quantity: finite(item.remainingQuantity ?? item.requestedQuantity)?.toString() ?? '',
+        },
+      ])));
+    } catch (error) {
+      setOrderDashboard({ kind: 'unavailable', code: error instanceof Error ? error.name : 'ORDER_DASHBOARD_LOAD_FAILED' });
+    }
+  }, [market, provider, symbol]);
+
+  const cancelOrder = useCallback(async (item: OrderDashboardItem) => {
+    if (!canCancelOrder(item) || orderActionId) return;
+    const confirmed = window.confirm(`${symbol} 주문을 취소하시겠습니까? 이미 체결된 수량은 취소되지 않습니다.`);
+    if (!confirmed) return;
+    setOrderActionId(item.id);
+    setOrderMessage('취소 요청을 처리하고 있습니다.');
+    try {
+      const response = await authorizedFetch(`/api/trade-automation/orders/${encodeURIComponent(item.id)}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmed: true }),
+      });
+      const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
+      if (!response.ok || payload.ok !== true) throw new Error(payload.error ?? 'ORDER_CANCEL_FAILED');
+      setOrderMessage('취소 요청이 canonical 주문엔진에 반영되었습니다.');
+      await loadOrderDashboard();
+    } catch (error) {
+      setOrderMessage(error instanceof Error ? error.message : '주문 취소에 실패했습니다.');
+    } finally {
+      setOrderActionId(null);
+    }
+  }, [loadOrderDashboard, orderActionId, symbol]);
+
+  const amendOrder = useCallback(async (item: OrderDashboardItem) => {
+    if (!canAmendOrder(item) || orderActionId) return;
+    const draft = amendDrafts[item.id];
+    const price = positiveText(draft?.price ?? '');
+    const quantity = positiveText(draft?.quantity ?? '');
+    if (price == null || quantity == null) {
+      setOrderMessage('정정 가격과 수량을 양수로 입력해야 합니다.');
+      return;
+    }
+    const confirmed = window.confirm(`${symbol} 주문을 가격 ${price}, 수량 ${quantity}로 정정하시겠습니까?`);
+    if (!confirmed) return;
+    setOrderActionId(item.id);
+    setOrderMessage('정정 요청을 처리하고 있습니다.');
+    try {
+      const requestId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `amend-${Date.now()}-${item.id}`;
+      const response = await authorizedFetch(`/api/trade-automation/orders/${encodeURIComponent(item.id)}/amend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmed: true, requestId, price, quantity }),
+      });
+      const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
+      if (!response.ok || payload.ok !== true) throw new Error(payload.error ?? 'ORDER_AMEND_FAILED');
+      setOrderMessage('정정 요청이 canonical 주문엔진에 반영되었습니다.');
+      await loadOrderDashboard();
+    } catch (error) {
+      setOrderMessage(error instanceof Error ? error.message : '주문 정정에 실패했습니다.');
+    } finally {
+      setOrderActionId(null);
+    }
+  }, [amendDrafts, loadOrderDashboard, orderActionId, symbol]);
 
   return (
     <section data-testid="ai-chart-position-panel" className="rounded-2xl border border-card-border bg-background/85 p-3 text-left shadow-sm">
@@ -583,6 +764,146 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
             {!feeInputsPresent && <p className="mt-1.5 text-[8px] font-bold text-muted-foreground">Provider 수수료 근거가 계좌 스냅샷에 없으므로 자동으로 추정하지 않습니다. 알고 있는 실제 비용률을 직접 입력한 경우에만 계산합니다.</p>}
             {feeInputsPresent && !feeEvidence && <p role="alert" className="mt-1.5 text-[8px] font-black text-destructive">비용률은 각각 0 이상 100 미만 숫자로 입력해야 합니다.</p>}
             {feeEvidence && <p className="mt-1.5 text-[8px] font-bold text-muted-foreground">사용자 입력 비용률 기준 단순 손익분기점입니다. funding·슬리피지·기타 세금/비용은 입력률에 포함되지 않았다면 별도입니다.</p>}
+          </details>
+
+          <details
+            open={cockpitOpen}
+            onToggle={(event) => setCockpitOpen(event.currentTarget.open)}
+            data-testid="ai-chart-trading-cockpit"
+            className="rounded-xl border border-primary/25 bg-primary/5 p-3"
+          >
+            <summary className="cursor-pointer list-none text-[11px] font-black [&::-webkit-details-marker]:hidden">
+              진입 · 주문관리 · 종료 대시보드
+            </summary>
+            {cockpitOpen ? (
+              <div className="mt-3 space-y-3">
+                <TradeApprovalQueue
+                  symbolFilter={symbol}
+                  exchangeFilter={provider}
+                  compact
+                />
+
+                <section className="rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-order-management">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <p className="text-[10px] font-black">현재 종목 주문 상태</p>
+                      <p className="mt-0.5 text-[8px] font-bold text-muted-foreground">자동 조회·자동 취소·자동 정정 없음</p>
+                    </div>
+                    <button
+                      type="button"
+                      data-testid="ai-chart-load-orders"
+                      onClick={() => void loadOrderDashboard()}
+                      disabled={orderDashboard.kind === 'loading' || orderActionId !== null}
+                      className="min-h-10 rounded-xl border border-card-border px-3 text-[10px] font-black disabled:opacity-50"
+                    >
+                      {orderDashboard.kind === 'loading' ? '조회 중' : '주문상태 불러오기'}
+                    </button>
+                  </div>
+
+                  {orderMessage ? <p role="status" className="mt-2 rounded-xl bg-secondary px-3 py-2 text-[9px] font-bold">{orderMessage}</p> : null}
+                  {orderDashboard.kind === 'unavailable' ? (
+                    <p role="alert" className="mt-2 rounded-xl bg-warning/10 px-3 py-2 text-[9px] font-bold text-warning">주문상태 조회 실패 · {orderDashboard.code}</p>
+                  ) : null}
+                  {orderDashboard.kind === 'ready' && orderDashboard.items.length === 0 ? (
+                    <p className="mt-2 rounded-xl bg-secondary/50 px-3 py-3 text-[9px] font-bold text-muted-foreground">현재 종목의 canonical 주문 기록이 없습니다.</p>
+                  ) : null}
+                  {orderDashboard.kind === 'ready' && orderDashboard.items.length > 0 ? (
+                    <div className="mt-2 space-y-2">
+                      {orderDashboard.items.map((item) => {
+                        const draft = amendDrafts[item.id] ?? { price: '', quantity: '' };
+                        return (
+                          <article key={item.id} className="rounded-xl border border-card-border p-2.5">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <p className="text-[10px] font-black">{item.side?.toUpperCase() ?? '-'} · {orderStateLabel(item.state)}</p>
+                                <p className="mt-0.5 text-[8px] font-bold text-muted-foreground">
+                                  요청 {formatQuantity(item.requestedQuantity)} · 체결 {formatQuantity(item.filledQuantity)} · 잔량 {formatQuantity(item.remainingQuantity)}
+                                </p>
+                              </div>
+                              <span className="rounded-full bg-secondary px-2 py-1 text-[8px] font-black">{item.accountMode ?? '미확인'}</span>
+                            </div>
+                            {canAmendOrder(item) ? (
+                              <div className="mt-2 grid grid-cols-2 gap-2">
+                                <input
+                                  aria-label="정정 가격"
+                                  inputMode="decimal"
+                                  value={draft.price}
+                                  onChange={(event) => setAmendDrafts((current) => ({
+                                    ...current,
+                                    [item.id]: { ...draft, price: event.target.value },
+                                  }))}
+                                  className="min-h-10 rounded-lg border border-card-border bg-background px-2 text-[10px] font-black"
+                                  placeholder="정정 가격"
+                                />
+                                <input
+                                  aria-label="정정 수량"
+                                  inputMode="decimal"
+                                  value={draft.quantity}
+                                  onChange={(event) => setAmendDrafts((current) => ({
+                                    ...current,
+                                    [item.id]: { ...draft, quantity: event.target.value },
+                                  }))}
+                                  className="min-h-10 rounded-lg border border-card-border bg-background px-2 text-[10px] font-black"
+                                  placeholder="정정 수량"
+                                />
+                              </div>
+                            ) : null}
+                            <div className="mt-2 grid grid-cols-2 gap-2">
+                              <button
+                                type="button"
+                                disabled={!canAmendOrder(item) || orderActionId !== null}
+                                onClick={() => void amendOrder(item)}
+                                className="min-h-10 rounded-lg border border-card-border px-2 text-[9px] font-black disabled:opacity-40"
+                              >
+                                정정
+                              </button>
+                              <button
+                                type="button"
+                                disabled={!canCancelOrder(item) || orderActionId !== null}
+                                onClick={() => void cancelOrder(item)}
+                                className="min-h-10 rounded-lg border border-destructive/30 bg-destructive/5 px-2 text-[9px] font-black text-destructive disabled:opacity-40"
+                              >
+                                미체결 취소
+                              </button>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </section>
+
+                <section className="rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-exit-dashboard">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-[10px] font-black">부분청산 · 전량종료 준비</p>
+                      <p className="mt-0.5 text-[8px] font-bold text-muted-foreground">실제 보유수량 기준 · 주문 미제출</p>
+                    </div>
+                    <span className="rounded-full border border-warning/30 bg-warning/5 px-2 py-1 text-[8px] font-black text-warning">EXIT PLAN PREVIEW</span>
+                  </div>
+                  <div className="mt-2 grid grid-cols-4 gap-1.5">
+                    {[25, 50, 75, 100].map((percent) => (
+                      <button
+                        key={percent}
+                        type="button"
+                        aria-pressed={exitPercent === percent}
+                        onClick={() => setExitPercent(percent)}
+                        className={`min-h-10 rounded-lg border text-[9px] font-black ${exitPercent === percent ? 'border-primary bg-primary/10 text-primary' : 'border-card-border'}`}
+                      >
+                        {percent}%
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <Metric label="종료 예정 비중" value={`${exitPercent}%`} />
+                    <Metric label="종료 예정 수량" value={formatQuantity(exitQuantity)} />
+                  </div>
+                  <p className="mt-2 text-[8px] font-bold leading-4 text-muted-foreground">
+                    현재 canonical 엔진에는 실계좌 보유수량을 서버에서 재확인해 reduce-only 종료계획으로 만드는 전용 owner가 아직 없습니다. 그래서 이 화면은 수량을 계산하되 종료 주문으로 위장하지 않습니다. 다음 Draft 단계에서 서버 재조회 + reduce-only + 최종 Risk 재검증 owner를 연결합니다.
+                  </p>
+                </section>
+              </div>
+            ) : null}
           </details>
 
           <p className="text-[9px] font-bold text-muted-foreground">
