@@ -5,6 +5,11 @@ const OWNER='adfcb23baf956bcaa025f0846313faf8db7a4e4a';
 const BASE='9057c4a3767db0f81e595fc481f5066bda6c9e43';
 const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trimEnd();
 const added=[
+ 'packages/external-research/src/research-workspace-canonical-evaluation-one-shot-v18.js',
+ 'packages/external-research/src/research-workspace-canonical-evaluation-one-shot-v18.d.ts',
+ 'packages/external-research/test/research-workspace-canonical-evaluation-one-shot-v18.test.js',
+ 'packages/external-research/docs/research-workspace-phase18.md',
+ '.github/workflows/research-workspace-canonical-evaluation-contract-v18.yml',
  'packages/external-research/src/research-workspace-canonical-evaluation-readiness-v17.js',
  'packages/external-research/src/research-workspace-canonical-evaluation-readiness-v17.d.ts',
  'packages/external-research/test/research-workspace-canonical-evaluation-readiness-v17.test.js',
