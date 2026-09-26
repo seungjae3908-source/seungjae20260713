@@ -13,6 +13,8 @@ on:
       - api-server/src/tools/research-workspace-one-shot-v12*.ts
       - api-server/scripts/run-research-workspace-one-shot-v12.ts
       - api-server/test.mjs
+      - api-server/scripts/run-research-workspace-canonical-evaluation-preflight-v17.ts
+      - .github/workflows/research-workspace-canonical-evaluation-preflight-v17.yml
       - api-server/scripts/research-workspace-one-shot-preflight-v13.cjs
       - api-server/scripts/research-workspace-one-shot-preflight-v13.test.cjs
       - .github/workflows/research-workspace-one-shot-preflight-v13.yml
