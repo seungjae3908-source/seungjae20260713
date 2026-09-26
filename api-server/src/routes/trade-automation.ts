@@ -783,6 +783,14 @@ router.post('/orders/:id/amend', async (req: AuthenticatedRequest, res) => {
 
 router.post('/orders/:id/cancel', async (req: AuthenticatedRequest, res) => {
   try {
+    if (req.body?.confirmed !== true) {
+      return res.status(409).json({
+        ok: false,
+        error: 'EXPLICIT_CANCEL_CONFIRMATION_REQUIRED',
+        orderCanceled: false,
+        providerCancelRequested: false,
+      });
+    }
     const { userId, repository, cancellation } = context(req);
     const order = await repository.getOrder(userId, String(req.params.id));
     if (!order) throw new Error('TRADE_ORDER_NOT_FOUND');

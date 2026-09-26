@@ -72,6 +72,8 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain("/api/trade-automation/orders/");
   expect(panel).toContain("/cancel");
   expect(panel).toContain("/amend");
+  expect(panel).toContain("JSON.stringify({ confirmed: true })");
+  expect(panel).toContain("setExitPreviewState({ kind: 'idle' });");
   expect(panel).toContain("confirmed: true");
   expect(panel).toContain("자동 조회·자동 취소·자동 정정 없음");
 });
