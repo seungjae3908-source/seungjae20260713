@@ -15,9 +15,11 @@ import {
 } from '@/lib/labels';
 import {
   completedPromotionStages,
+  fetchResearchAdoptionReview,
   fetchResearchPromotionBridge,
   fetchStrategyPromotions,
   type PromotionStage,
+  type ResearchAdoptionReview,
   type ResearchPromotionBridge,
   type StrategyPromotionItem,
 } from '@/lib/strategy-promotion';
@@ -194,12 +196,89 @@ function ResearchPromotionBridgePanel({ bridge }: { bridge: ResearchPromotionBri
   );
 }
 
+function adoptionReviewStatusLabel(status: ResearchAdoptionReview['status']): string {
+  if (status === 'HUMAN_REVIEW_READY') return '사람 검토 준비';
+  if (status === 'CANDIDATE_MISMATCH') return '후보 불일치 · 증거 전이 금지';
+  if (status === 'STATISTICAL_REVIEW_BLOCKED') return '통계 검증 미통과';
+  if (status === 'ECONOMIC_EVIDENCE_BLOCKED') return '비용·경제성 근거 부족';
+  if (status === 'FINAL_HOLDOUT_BLOCKED') return '최종 Holdout 미검증';
+  if (status === 'PAPER_EVIDENCE_BLOCKED') return 'Paper·Shadow 근거 부족';
+  if (status === 'RESEARCH_BRIDGE_BLOCKED') return 'Research bridge 미준비';
+  return '증거 계약 오류';
+}
+
+function ResearchAdoptionReviewPanel({ review }: { review: ResearchAdoptionReview }) {
+  const evidence = review.evidence;
+  return (
+    <section data-testid="research-adoption-review" className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" aria-label="연구 채택 검토 게이트">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-sm font-bold">#547 통계·경제적 채택 검토 Gate</h2>
+          <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">
+            통계 검증, 비용 후 경제성, 최종 Holdout, Shadow/Paper 근거가 모두 같은 후보에 묶였는지 확인합니다.
+          </p>
+        </div>
+        <span className="rounded-full border border-card-border bg-background px-3 py-1 text-xs font-semibold">
+          {adoptionReviewStatusLabel(review.status)}
+        </span>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+        <div className="rounded-xl bg-background p-3"><p className="text-xs text-muted-foreground">OOS</p><strong className="mt-1 block text-base tabular-nums">{evidence.oosN ?? '미확인'}</strong></div>
+        <div className="rounded-xl bg-background p-3"><p className="text-xs text-muted-foreground">Walk-Forward</p><strong className="mt-1 block text-base tabular-nums">{evidence.walkForwardN ?? '미확인'}</strong></div>
+        <div className="rounded-xl bg-background p-3"><p className="text-xs text-muted-foreground">Final Holdout</p><strong className="mt-1 block text-base tabular-nums">{evidence.finalHoldoutN ?? '미확인'}</strong></div>
+        <div className="rounded-xl bg-background p-3"><p className="text-xs text-muted-foreground">Shadow</p><strong className="mt-1 block text-base tabular-nums">{evidence.shadowN ?? '미확인'}</strong></div>
+        <div className="rounded-xl bg-background p-3"><p className="text-xs text-muted-foreground">Paper</p><strong className="mt-1 block text-base tabular-nums">{evidence.paperN ?? '미확인'}</strong></div>
+        <div className="rounded-xl bg-background p-3"><p className="text-xs text-muted-foreground">Settled</p><strong className="mt-1 block text-base tabular-nums">{evidence.settledN ?? '미확인'}</strong></div>
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <div className="rounded-xl border border-card-border bg-background p-3">
+          <p className="text-xs font-semibold">통계 검증</p>
+          <p className="mt-1 text-xs text-muted-foreground">Evidence: {evidence.statisticalEvidenceStatus ?? '미확인'}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Decision: {evidence.statisticalDecisionStatus ?? '미확인'}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Pre-Holdout: {evidence.preHoldoutGateStatus ?? '미확인'}</p>
+        </div>
+        <div className="rounded-xl border border-card-border bg-background p-3">
+          <p className="text-xs font-semibold">경제성·비용 근거</p>
+          <p className="mt-1 text-xs text-muted-foreground">All-in Cost: {evidence.allInCostComplete ? '완료' : '미완료'}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Admission Grade: {evidence.admissionGrade ? '확인됨' : '미확인'}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Research Candidate Freeze: {evidence.frozenResearchCandidate ? '완료' : '미완료'}</p>
+        </div>
+      </div>
+
+      {evidence.unresolvedCostDimensions.length ? (
+        <p className="mt-3 break-words text-xs leading-5 text-muted-foreground">
+          미완료 비용 항목: {evidence.unresolvedCostDimensions.join(' · ')}
+        </p>
+      ) : null}
+
+      {review.blockers.length ? (
+        <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
+          <p className="text-xs font-semibold">채택 검토 차단 사유</p>
+          <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">{review.blockers.join(' · ')}</p>
+        </div>
+      ) : null}
+
+      <p className="mt-3 text-xs font-semibold text-muted-foreground">
+        자동채택 없음 · 사람 검토 필수 · Scanner/Paper 변경 없음 · 실행 권한 NONE
+      </p>
+    </section>
+  );
+}
+
 export default function StrategyPromotionPage() {
   const [, navigate] = useLocation();
   const query = useQuery({ queryKey: ['strategy-promotion', 'all'], queryFn: ({ signal }) => fetchStrategyPromotions(signal), staleTime: 60_000 });
   const bridgeQuery = useQuery({
     queryKey: ['strategy-promotion', 'research-bridge'],
     queryFn: ({ signal }) => fetchResearchPromotionBridge(signal),
+    staleTime: 30_000,
+    retry: false,
+  });
+  const adoptionReviewQuery = useQuery({
+    queryKey: ['strategy-promotion', 'research-adoption-review'],
+    queryFn: ({ signal }) => fetchResearchAdoptionReview(signal),
     staleTime: 30_000,
     retry: false,
   });
@@ -211,7 +290,7 @@ export default function StrategyPromotionPage() {
           <div className="flex min-w-0 items-start gap-3">
             <button type="button" aria-label="검색기로 돌아가기" onClick={() => navigate('/scanner')} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-card-border"><ArrowLeft className="h-4 w-4" /></button>
             <div className="min-w-0 flex-1"><p className="text-[10px] font-black text-primary">근거 기반 검증 · 주문 실행 권한 없음</p><h1 className="mt-1 text-xl font-black">전략 승격센터</h1><p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">연구·과거검증·모의자동매매·실시간 추적검증·추천 결과를 정확한 전략 식별자에 연결합니다. 근거가 없거나 오래된 경우 통과시키지 않습니다.</p></div>
-            <button type="button" aria-label="승격 근거 새로고침" onClick={() => { void query.refetch(); void bridgeQuery.refetch(); }} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-card-border"><RefreshCw className={`h-4 w-4 ${query.isFetching || bridgeQuery.isFetching ? 'animate-spin' : ''}`} /></button>
+            <button type="button" aria-label="승격 근거 새로고침" onClick={() => { void query.refetch(); void bridgeQuery.refetch(); void adoptionReviewQuery.refetch(); }} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-card-border"><RefreshCw className={`h-4 w-4 ${query.isFetching || bridgeQuery.isFetching || adoptionReviewQuery.isFetching ? 'animate-spin' : ''}`} /></button>
           </div>
         </header>
 
@@ -225,6 +304,7 @@ export default function StrategyPromotionPage() {
         </section> : null}
 
         {bridgeQuery.data ? <ResearchPromotionBridgePanel bridge={bridgeQuery.data} /> : null}
+        {adoptionReviewQuery.data ? <ResearchAdoptionReviewPanel review={adoptionReviewQuery.data} /> : null}
 
         {query.data ? <section className="grid grid-cols-2 gap-2" aria-label="주문 실행 안전 요약">
           <div className="rounded-2xl border border-card-border bg-card p-3"><p className="text-[10px] text-muted-foreground">실전 주문 권한</p><strong className="text-sm">없음 (NONE)</strong></div>
