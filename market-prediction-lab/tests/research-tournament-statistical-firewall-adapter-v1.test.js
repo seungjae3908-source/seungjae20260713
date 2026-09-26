@@ -15,7 +15,7 @@ const trials = [
   { trialId: "C", returnSeries: [-0.002,0.004,0.001,0.003,-0.001,0.002,0.001,0.005,0.0,0.003,0.001,0.004] },
 ];
 const benchmark = Array(12).fill(0);
-const realityCheckPolicy = { status:"empirically_calibrated", alpha:1, bootstrapIterations:200, blockLength:2, seed:17 };
+const realityCheckPolicy = { status:"empirically_calibrated", alpha:0.49, bootstrapIterations:200, blockLength:2, seed:17 };
 const decisionPolicy = { status:"empirically_calibrated", maxPbo:1, minDsrProbability:0, alpha:1 };
 const stability = {
   minimumN:{passed:true,evidenceId:"n:1"},
