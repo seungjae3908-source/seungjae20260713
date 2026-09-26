@@ -12,13 +12,13 @@ test('trading shell exposes auto and paper as first-class modes while preserving
   const workspace = source('src/pages/technical-workspace.tsx');
   const navigation = source('src/lib/app-navigation.ts');
 
-  expect(page).toContain('<CenteredPageHeader title="매매" />');
+  expect(page).toContain("title={initialMode === 'paper' ? '모의매매' : '자동매매'}");
   expect(page).toContain('data-testid="trading-mode-tabs"');
   expect(page).toContain('자동매매</SegmentedButton>');
   expect(page).toContain('모의매매</SegmentedButton>');
   expect(paper).toContain('<AutoTradingPage initialMode="paper" />');
-  expect(workspace).toContain("{ value: 'trade', label: '매매' }");
-  expect(workspace).toContain("trade: '매매'");
+  expect(workspace).toContain("{ value: 'trade', label: '자동매매' }");
+  expect(workspace).toContain("trade: '자동매매'");
   expect(navigation).toContain("label: '자동매매'");
   expect(navigation).toContain("label: '모의매매'");
   expect(navigation).not.toContain("label: '승인형 주문'");
