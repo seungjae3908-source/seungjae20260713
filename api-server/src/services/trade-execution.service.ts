@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { TradingRepository } from './trade-automation.repository';
-import { TradeAutomationService, liveExecutionEnabled } from './trade-automation.service';
+import {
+  TradeAutomationService,
+  automaticLiveExecutionEnabled,
+  liveExecutionEnabled,
+} from './trade-automation.service';
 import { TradeCancelReconciliationService } from './trade-cancel-reconciliation.service';
 import { TradeOrderRecoveryService } from './trade-order-recovery.service';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
@@ -522,10 +526,19 @@ export class TradeExecutionService {
     }
 
     const mockKiwoom = plan.exchange === 'kiwoom' && plan.accountMode === 'mock';
-    if (plan.accountMode === 'live' && !liveExecutionEnabled(plan.exchange)) {
-      return this.automation.transition(order, 'REJECTED', 'LIVE_EXECUTION_DISABLED', {
-        errorCode: 'LIVE_EXECUTION_DISABLED', orderSubmissionAttempted: false,
-      });
+    if (plan.accountMode === 'live') {
+      const currentPolicy = await this.repository.getPolicy(userId);
+      const automaticLive = currentPolicy.mode === 'automatic' && currentPolicy.automaticEnabled;
+      const currentLiveAuthority = automaticLive
+        ? automaticLiveExecutionEnabled(plan.exchange)
+        : liveExecutionEnabled(plan.exchange);
+      if (!currentLiveAuthority) {
+        return this.automation.transition(order, 'REJECTED', 'LIVE_EXECUTION_DISABLED', {
+          errorCode: 'LIVE_EXECUTION_DISABLED',
+          orderSubmissionAttempted: false,
+          automaticLiveAuthorityRequired: automaticLive,
+        });
+      }
     }
     if (mockKiwoom && process.env.KIWOOM_MOCK_ORDER_ENABLED !== 'true') {
       return this.automation.transition(order, 'REJECTED', 'KIWOOM_MOCK_EXECUTION_DISABLED', {
