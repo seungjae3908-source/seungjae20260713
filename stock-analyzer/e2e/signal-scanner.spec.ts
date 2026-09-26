@@ -471,7 +471,7 @@ test('stock Signal Detail shows official flow evidence truthfully without changi
         schemaVersion: 'scanner-stock-flow-evidence-v1',
         market: 'US',
         symbol,
-        status: 'READY',
+        status: 'PARTIAL',
         observedAt: '2026-09-26T08:00:00.000Z',
         shortSale: {
           status: 'READY',
@@ -482,13 +482,13 @@ test('stock Signal Detail shows official flow evidence truthfully without changi
           shortVolumeRatioPercent: 30,
         },
         shortInterest: {
-          status: 'READY',
-          settlementDate: '2026-09-15',
-          currentShortPosition: 1200,
-          previousShortPosition: 1100,
-          changePercent: 9.09,
-          averageDailyVolume: 400,
-          daysToCover: 3,
+          status: 'NOT_CONNECTED',
+          settlementDate: null,
+          currentShortPosition: null,
+          previousShortPosition: null,
+          changePercent: null,
+          averageDailyVolume: null,
+          daysToCover: null,
         },
         institutional: {
           status: 'NOT_CONNECTED',
@@ -502,13 +502,19 @@ test('stock Signal Detail shows official flow evidence truthfully without changi
         },
         shortCover: {
           status: 'NOT_INFERRED',
-          note: 'Short volume과 short interest만으로 숏커버를 단정하지 않습니다.',
+          note: 'FINRA 일별 Short Sale Volume은 Short Interest 포지션이 아니며 숏커버를 단정하지 않습니다.',
         },
         sources: [
-          { provider: 'FINRA', dataset: 'Reg SHO Daily Short Sale Volume', asOf: '2026-09-24', url: 'https://developer.finra.org/docs' },
-          { provider: 'FINRA', dataset: 'Consolidated Short Interest', asOf: '2026-09-15', url: 'https://developer.finra.org/docs' },
+          {
+            provider: 'FINRA',
+            dataset: 'Consolidated NMS Daily Short Sale Volume',
+            asOf: '2026-09-24',
+            url: 'https://cdn.finra.org/equity/regsho/daily/CNMSshvol20260924.txt',
+          },
         ],
-        warnings: [],
+        warnings: [
+          '상장주식 Short Interest는 상장 거래소별 공식 데이터 provider가 연결되기 전까지 미연결로 유지합니다.',
+        ],
         safety: {
           evidenceOnly: true,
           scoreImpact: 0,
@@ -597,13 +603,12 @@ test('stock Signal Detail shows official flow evidence truthfully without changi
   detail = page.getByTestId('scanner-mobile-sheet').getByTestId('signal-detail');
   await detail.getByRole('tab', { name: '근거', exact: true }).click();
   flow = detail.getByTestId('scanner-stock-flow-evidence');
-  await expect(flow).toContainText('공식 데이터 정상');
+  await expect(flow).toContainText('공식 데이터 일부');
   await expect(flow).toContainText('30%');
-  await expect(flow).toContainText('1,200');
-  await expect(flow).toContainText('9.09%');
-  await expect(flow).toContainText('Days to Cover');
+  await expect(flow).toContainText('Short Interest · 미연결');
   await expect(flow).toContainText('숏커버 · 추정하지 않음');
-  await expect(flow.getByRole('link', { name: /FINRA · Reg SHO Daily Short Sale Volume/ })).toHaveAttribute('href', 'https://developer.finra.org/docs');
+  await expect(flow).toContainText('상장주식 Short Interest');
+  await expect(flow.getByRole('link', { name: /FINRA · Consolidated NMS Daily Short Sale Volume/ })).toHaveAttribute('href', 'https://cdn.finra.org/equity/regsho/daily/CNMSshvol20260924.txt');
   expect(mutations).toEqual([]);
 });
 
