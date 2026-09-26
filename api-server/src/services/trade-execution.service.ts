@@ -67,6 +67,7 @@ import {
 } from './trade-pre-submission-risk.service';
 import { getScannerSignalLifecycleSnapshot } from './scanner-signal-lifecycle.service';
 import type {
+  TradingExchange,
   TradingOrder,
   TradingPlan,
   TradingRiskDecision,
@@ -391,6 +392,101 @@ export class TradeExecutionService {
     this.recovery = new TradeOrderRecoveryService(repository);
     this.cancelService = new TradeCancelReconciliationService(repository);
     this.riskService = new TradePreSubmissionRiskService(repository);
+  }
+
+  async verifyLiveConnection(userId: string, exchange: TradingExchange) {
+    const connection = await this.repository.getConnection(userId, exchange);
+    if (!connection?.configured || connection.accountMode !== 'live' || !connection.encryptedCredentials) {
+      throw new Error('LIVE_EXECUTION_CONNECTION_NOT_CONFIGURED');
+    }
+    const credentials = decryptTradingCredentials(connection.encryptedCredentials);
+    let providerRequests = 0;
+    const request = async <T>(operation: () => Promise<T>) => {
+      providerRequests += 1;
+      return operation();
+    };
+
+    try {
+      if (exchange === 'upbit') {
+        await request(() => sendExchangeListRequest(
+          BASE_URLS.upbit,
+          prepareUpbitAccounts(credentials as UpbitCredentials),
+          PREFLIGHT_TIMEOUT_MS,
+        ));
+      } else if (exchange === 'bitget') {
+        assertBitgetSuccess(await request(() => sendExchangeRequest(
+          BASE_URLS.bitget,
+          prepareBitgetAccount(credentials as BitgetCredentials),
+          PREFLIGHT_TIMEOUT_MS,
+        )));
+        assertBitgetSuccess(await request(() => sendExchangeRequest(
+          BASE_URLS.bitget,
+          prepareBitgetPositions(credentials as BitgetCredentials),
+          PREFLIGHT_TIMEOUT_MS,
+        )));
+      } else if (exchange === 'kiwoom') {
+        const kiwoom = credentials as KiwoomCredentials;
+        const tokenPayload = assertKiwoomSuccess(await request(() => sendExchangeRequest(
+          BASE_URLS.kiwoom,
+          prepareKiwoomToken(kiwoom),
+          PREFLIGHT_TIMEOUT_MS,
+        )));
+        const token = String(tokenPayload.token ?? (isRecord(tokenPayload.data) ? tokenPayload.data.token : '') ?? '');
+        if (!token) throw new Error('KIWOOM_TOKEN_MISSING');
+        assertKiwoomSuccess(await request(() => sendExchangeRequest(
+          BASE_URLS.kiwoom,
+          prepareKiwoomOrderable({ ...kiwoom, accessToken: token }),
+          PREFLIGHT_TIMEOUT_MS,
+        )));
+      } else {
+        const toss = credentials as TossCredentials;
+        const tokenPayload = await request(() => sendExchangeRequest(
+          BASE_URLS.toss,
+          prepareTossToken(toss),
+          PREFLIGHT_TIMEOUT_MS,
+        ));
+        const authenticated = { ...toss, accessToken: tossToken(tokenPayload) };
+        tossResult(await request(() => sendExchangeRequest(
+          BASE_URLS.toss,
+          prepareTossAccounts(authenticated),
+          PREFLIGHT_TIMEOUT_MS,
+        )));
+        tossResult(await request(() => sendExchangeRequest(
+          BASE_URLS.toss,
+          prepareTossBuyingPower(authenticated, 'KRW'),
+          PREFLIGHT_TIMEOUT_MS,
+        )));
+      }
+
+      const verifiedAt = new Date().toISOString();
+      await this.repository.saveConnection({
+        ...connection,
+        lastVerifiedAt: verifiedAt,
+        lastErrorCode: null,
+        updatedAt: verifiedAt,
+      });
+      return {
+        exchange,
+        verified: true,
+        lastVerifiedAt: verifiedAt,
+        providerRequests,
+        orderRequests: 0,
+        cancelRequests: 0,
+        amendRequests: 0,
+        transferRequests: 0,
+        withdrawalRequests: 0,
+        realOrderSubmitted: false,
+      } as const;
+    } catch (error) {
+      const errorCode = error instanceof Error ? error.message.split(':')[0] : 'LIVE_EXECUTION_VERIFICATION_FAILED';
+      await this.repository.saveConnection({
+        ...connection,
+        lastVerifiedAt: null,
+        lastErrorCode: errorCode,
+        updatedAt: new Date().toISOString(),
+      });
+      throw error;
+    }
   }
 
   async execute(userId: string, plan: TradingPlan, candidate: TradingOrder) {
