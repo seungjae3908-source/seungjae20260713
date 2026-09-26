@@ -3,6 +3,7 @@ import { Calculator, Eye, EyeOff, RefreshCw, ShieldAlert, WalletCards } from 'lu
 import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import { TradeApprovalQueue } from '@/components/trade-approval-queue';
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { safeTradeErrorMessage } from '@/lib/trade-approval-ui';
 import type { AnalysisMarket, AnalysisPricePlan, AnalysisSelection } from '@/lib/analysis-selection';
 import {
   buildPositionGuidance,
@@ -678,7 +679,10 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
       setOrderMessage('취소 요청이 canonical 주문엔진에 반영되었습니다.');
       await loadOrderDashboard();
     } catch (error) {
-      setOrderMessage(error instanceof Error ? error.message : '주문 취소에 실패했습니다.');
+      setOrderMessage(safeTradeErrorMessage(
+        error instanceof Error ? error.message : null,
+        '주문 취소에 실패했습니다. 최신 주문상태를 다시 확인해 주세요.',
+      ));
     } finally {
       setOrderActionId(null);
     }
@@ -714,7 +718,10 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
       setOrderMessage('정정 요청이 canonical 주문엔진에 반영되었습니다.');
       await loadOrderDashboard();
     } catch (error) {
-      setOrderMessage(error instanceof Error ? error.message : '주문 정정에 실패했습니다.');
+      setOrderMessage(safeTradeErrorMessage(
+        error instanceof Error ? error.message : null,
+        '주문 정정에 실패했습니다. 최신 주문상태를 다시 확인해 주세요.',
+      ));
     } finally {
       setOrderActionId(null);
     }
