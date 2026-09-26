@@ -97,6 +97,12 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain("dashboard: '1'");
   expect(panel).toContain("exchange: provider");
   expect(panel).toContain("signal: controller.signal");
+  const approvalQueue = source('src/components/trade-approval-queue.tsx');
+  const tradeRoute = source('../api-server/src/routes/trade-automation.ts');
+  expect(approvalQueue).toContain("if (symbolFilter) query.set('symbol', symbolFilter);");
+  expect(approvalQueue).toContain("if (exchangeFilter) query.set('exchange', exchangeFilter);");
+  expect(tradeRoute).toContain("if (requestedExchange && plan.exchange !== requestedExchange) return false;");
+  expect(tradeRoute).toContain("if (requestedSymbol && normalizedExitSymbol(plan.symbol) !== requestedSymbol) return false;");
   expect(panel).toContain("data-testid=\"ai-chart-entry-readiness\"");
   expect(panel).toContain("data-testid=\"ai-chart-load-entry-readiness\"");
   expect(panel).toContain("authorizedFetch('/api/trade-automation/status'");
@@ -322,6 +328,8 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
     }
     if (url.pathname === '/api/trade-automation/approval-queue') {
       expect(request.method()).toBe('GET');
+      expect(url.searchParams.get('symbol')).toBe('005930');
+      expect(url.searchParams.get('exchange')).toBeNull();
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
