@@ -399,6 +399,104 @@ jobs:
           ].join('\n'));
           NODE
 
+      - name: Validate complete Telegram runtime and external reachability before any mutation
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env node -" <<'NODE'
+          const { execFileSync } = require('node:child_process');
+
+          (async () => {
+            const targetSha = String(process.env.TARGET_SHA ?? '').trim().toLowerCase();
+            const processes = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+            const matches = Array.isArray(processes) ? processes.filter((item) => item?.name === 'stock-app') : [];
+            const env = matches.length === 1 ? matches[0]?.pm2_env : null;
+            if (!env || env.status !== 'online' || String(env.DEPLOY_SHA ?? '').toLowerCase() !== targetSha) {
+              console.error('TELEGRAM_PREFLIGHT_RUNTIME_IDENTITY_INVALID');
+              process.exit(2);
+            }
+
+            const requiredConfigKeys = [
+              'TELEGRAM_BOT_TOKEN',
+              'TELEGRAM_CHAT_ID',
+              'TELEGRAM_STOCK_CHAT_ID',
+              'TELEGRAM_CRYPTO_CHAT_ID',
+              'TELEGRAM_BOT_USERNAME',
+              'TELEGRAM_WEBHOOK_SECRET',
+            ];
+            const missing = requiredConfigKeys.filter((key) => !String(env[key] ?? '').trim());
+            if (missing.length) {
+              console.error(`TELEGRAM_PREFLIGHT_MISSING_CONFIG: ${missing.join(', ')}`);
+              process.exit(3);
+            }
+            if (String(env.BACKGROUND_WORKERS_ENABLED ?? 'true') === 'false') {
+              console.error('TELEGRAM_PREFLIGHT_BACKGROUND_WORKERS_DISABLED');
+              process.exit(4);
+            }
+
+            const botToken = String(env.TELEGRAM_BOT_TOKEN).trim();
+            const configuredUsername = String(env.TELEGRAM_BOT_USERNAME).trim().replace(/^@/, '').toLowerCase();
+            async function api(method, params = {}) {
+              const url = new URL(`https://api.telegram.org/bot${encodeURIComponent(botToken)}/${method}`);
+              for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value));
+              const response = await fetch(url, {
+                headers: { Accept: 'application/json' },
+                signal: AbortSignal.timeout(15000),
+              });
+              const value = await response.json().catch(() => null);
+              return { ok: response.ok && value?.ok === true, value };
+            }
+
+            const errors = [];
+            try {
+              const me = await api('getMe');
+              const username = String(me.value?.result?.username ?? '').trim().toLowerCase();
+              if (!me.ok) errors.push('BOT_TOKEN_INVALID_OR_UNREACHABLE');
+              else if (!username || username !== configuredUsername) errors.push('BOT_USERNAME_MISMATCH');
+            } catch {
+              errors.push('BOT_IDENTITY_CHECK_FAILED');
+            }
+
+            for (const [label, chatId] of [
+              ['DEFAULT_CHAT', String(env.TELEGRAM_CHAT_ID).trim()],
+              ['STOCK_CHAT', String(env.TELEGRAM_STOCK_CHAT_ID).trim()],
+              ['CRYPTO_CHAT', String(env.TELEGRAM_CRYPTO_CHAT_ID).trim()],
+            ]) {
+              try {
+                const chat = await api('getChat', { chat_id: chatId });
+                if (!chat.ok) errors.push(`${label}_UNREACHABLE`);
+              } catch {
+                errors.push(`${label}_CHECK_FAILED`);
+              }
+            }
+
+            try {
+              const webhook = await api('getWebhookInfo');
+              const webhookUrl = String(webhook.value?.result?.url ?? '').trim();
+              let webhookPath = '';
+              try { webhookPath = webhookUrl ? new URL(webhookUrl).pathname : ''; } catch {}
+              if (!webhook.ok) errors.push('WEBHOOK_INFO_UNREACHABLE');
+              else if (!webhookUrl) errors.push('WEBHOOK_NOT_REGISTERED');
+              else if (webhookPath !== '/api/telegram/webhook') errors.push('WEBHOOK_PATH_MISMATCH');
+            } catch {
+              errors.push('WEBHOOK_CHECK_FAILED');
+            }
+
+            if (errors.length) {
+              console.error(`TELEGRAM_PREFLIGHT_EXTERNAL_FAILED: ${[...new Set(errors)].join(', ')}`);
+              process.exit(5);
+            }
+
+            console.log('TELEGRAM_PREFLIGHT_OK: runtime config, bot identity, rooms, webhook, zero-mutation checks passed');
+          })().catch(() => {
+            console.error('TELEGRAM_PREFLIGHT_UNEXPECTED_FAILURE');
+            process.exit(6);
+          });
+          NODE
+
       - name: Apply and verify Production personal Telegram storage atomically
         id: storage
         env:
