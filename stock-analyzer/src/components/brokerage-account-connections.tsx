@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
-import { Eye, EyeOff, KeyRound, RefreshCw, ShieldCheck, WalletCards, X } from 'lucide-react';
+import { Eye, EyeOff, KeyRound, RefreshCw, WalletCards, X } from 'lucide-react';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { resolveEvidenceDisplay } from '@/lib/evidence-display';
 
@@ -19,8 +19,88 @@ type CanonicalAccountSnapshot = {
 };
 type CredentialDraft = { first: string; second: string; third: string };
 type Props = { canAccessSpot?: boolean; canAccessFutures?: boolean };
+type DisplayCurrency = 'KRW' | 'USD';
+type MoneyCurrency = 'KRW' | 'USD' | 'USDT';
+type FxPoint = { krwRate: number; source: string; asOf: string; quality: string };
+type AccountDisplayFx = {
+  ok: true;
+  displayCurrencies: readonly ['KRW', 'USD'];
+  usdKrw: FxPoint | null;
+  usdtKrw: FxPoint | null;
+  missing: string[];
+  checkedAt: string;
+  publicMarketDataOnly: true;
+};
+type MoneyFact = { amount: number; currency: MoneyCurrency };
 
 const EMPTY_CREDENTIALS: CredentialDraft = { first: '', second: '', third: '' };
+const DISPLAY_CURRENCY_KEY = 'account-display-currency-v1';
+
+function initialDisplayCurrency(): DisplayCurrency {
+  if (typeof window === 'undefined') return 'KRW';
+  return window.localStorage.getItem(DISPLAY_CURRENCY_KEY) === 'USD' ? 'USD' : 'KRW';
+}
+
+function validMoney(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function convertMoney(
+  value: number | null | undefined,
+  source: MoneyCurrency,
+  target: DisplayCurrency,
+  fx: AccountDisplayFx | null,
+) {
+  if (!validMoney(value)) return null;
+  if (source === target) return value;
+  const usdKrw = fx?.usdKrw?.krwRate;
+  const usdtKrw = fx?.usdtKrw?.krwRate;
+  if (source === 'KRW' && target === 'USD') return validMoney(usdKrw) && usdKrw > 0 ? value / usdKrw : null;
+  if (source === 'USD' && target === 'KRW') return validMoney(usdKrw) && usdKrw > 0 ? value * usdKrw : null;
+  if (source === 'USDT' && target === 'KRW') return validMoney(usdtKrw) && usdtKrw > 0 ? value * usdtKrw : null;
+  if (source === 'USDT' && target === 'USD') {
+    return validMoney(usdtKrw) && usdtKrw > 0 && validMoney(usdKrw) && usdKrw > 0
+      ? value * (usdtKrw / usdKrw)
+      : null;
+  }
+  return null;
+}
+
+function formatDisplayMoney(value: number | null, currency: DisplayCurrency) {
+  if (!validMoney(value)) return '—';
+  const digits = currency === 'KRW' ? 0 : 2;
+  const formatted = new Intl.NumberFormat('ko-KR', {
+    minimumFractionDigits: currency === 'USD' ? 2 : 0,
+    maximumFractionDigits: digits,
+  }).format(value);
+  return currency === 'KRW' ? `₩${formatted}` : `${formatted}`;
+}
+
+function summarizeFacts(facts: MoneyFact[], currency: DisplayCurrency, fx: AccountDisplayFx | null) {
+  let value = 0;
+  let converted = 0;
+  let missing = 0;
+  for (const fact of facts) {
+    const amount = convertMoney(fact.amount, fact.currency, currency, fx);
+    if (amount == null) {
+      missing += 1;
+      continue;
+    }
+    value += amount;
+    converted += 1;
+  }
+  return {
+    value: converted > 0 ? value : null,
+    partial: missing > 0,
+  };
+}
+
+function marketCurrency(market: string): MoneyCurrency | null {
+  if (market === 'KR') return 'KRW';
+  if (market === 'US') return 'USD';
+  if (market === 'BITGET') return 'USDT';
+  return null;
+}
 
 function evidenceAvailable(snapshot?: CanonicalAccountSnapshot) {
   if (!snapshot) return true;
