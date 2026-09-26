@@ -28,6 +28,7 @@ import {
   readWatchlistItems,
   WATCHLIST_CHANGE_EVENT,
 } from '@/lib/stock-display';
+import { loadPortfolioChartOverlays } from '@/lib/portfolio-overlay';
 
 const RECENT_KEY = 'unified-asset-search:recent:v1';
 const GROUP_ORDER: UnifiedMarketFilter[] = ['KR', 'US', 'spot', 'futures'];
@@ -61,6 +62,10 @@ function saveRecent(item: UnifiedAssetSuggestion) {
 
 function readSearchWatchlist() {
   return readWatchlistItems().map((item) => ({ ticker: item.ticker, market: item.market }));
+}
+
+function readHeldTickers() {
+  return new Set(loadPortfolioChartOverlays().map((item) => item.ticker.toUpperCase()));
 }
 
 function marketDescription(item: UnifiedAssetSuggestion) {
@@ -117,6 +122,7 @@ export function UnifiedAssetSearch({
   const [activeIndex, setActiveIndex] = useState(-1);
   const [recent, setRecent] = useState<UnifiedAssetSuggestion[]>(() => readRecent());
   const [watchlist, setWatchlist] = useState(() => readSearchWatchlist());
+  const [heldTickers, setHeldTickers] = useState(() => readHeldTickers());
   const [popupStyle, setPopupStyle] = useState<CSSProperties>({});
   const trimmed = query.trim();
   const effectiveAllowedMarkets = useMemo(
@@ -161,11 +167,16 @@ export function UnifiedAssetSearch({
 
   useEffect(() => {
     const updateWatchlist = () => setWatchlist(readSearchWatchlist());
+    const updateHeldTickers = () => setHeldTickers(readHeldTickers());
     window.addEventListener(WATCHLIST_CHANGE_EVENT, updateWatchlist);
+    window.addEventListener('sa-portfolio-overlay-updated', updateHeldTickers);
     window.addEventListener('storage', updateWatchlist);
+    window.addEventListener('storage', updateHeldTickers);
     return () => {
       window.removeEventListener(WATCHLIST_CHANGE_EVENT, updateWatchlist);
+      window.removeEventListener('sa-portfolio-overlay-updated', updateHeldTickers);
       window.removeEventListener('storage', updateWatchlist);
+      window.removeEventListener('storage', updateHeldTickers);
     };
   }, []);
 
@@ -331,32 +342,41 @@ export function UnifiedAssetSearch({
 
       {open && (
         <div ref={popupRef} id="unified-asset-search-listbox" role="listbox" aria-label="통합 자산 자동완성 결과" style={popupStyle} className="z-[120] overflow-y-auto overscroll-contain rounded-2xl border border-card-border bg-card shadow-2xl">
-          {!trimmed && filteredRecent.length > 0 && <div className="flex items-center gap-2 border-b border-card-border px-4 py-3 text-xs font-extrabold text-muted-foreground"><Clock3 className="h-4 w-4" /> 최근 검색</div>}
+          {!trimmed && filteredRecent.length > 0 && <div className="flex items-center gap-2 border-b border-card-border px-4 py-3 text-xs font-semibold text-muted-foreground"><Clock3 className="h-4 w-4" /> 최근 검색</div>}
           {loading && !hasLastGoodResults && <div className="space-y-3 px-4 py-5" aria-live="polite" data-testid="unified-search-skeleton"><div className="flex items-center gap-2 text-sm font-bold text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> 검색 인덱스에서 찾는 중입니다.</div><div className="h-12 animate-pulse rounded-xl bg-muted" /><div className="h-12 animate-pulse rounded-xl bg-muted" /></div>}
           {loading && hasLastGoodResults && <div className="flex items-center gap-2 border-b border-primary/20 bg-primary/5 px-4 py-2 text-xs font-bold text-muted-foreground" aria-live="polite" data-testid="unified-search-refreshing"><Loader2 className="h-4 w-4 animate-spin" /> 이전 결과를 유지하며 새 검색을 확인 중입니다.</div>}
-          {error && !hasLastGoodResults && <div className="space-y-3 px-4 py-5 text-center" data-testid="unified-search-outcome"><AlertTriangle className="mx-auto h-6 w-6 text-warning" /><p className="text-xs font-black text-warning">DATA_UNAVAILABLE · 검색 데이터 사용 불가</p><p className="break-keep text-sm font-bold">{error}</p><button type="button" onClick={retrySearch} className="h-11 rounded-xl border border-card-border px-4 text-sm font-extrabold">재시도</button></div>}
-          {error && hasLastGoodResults && <div className="flex flex-wrap items-center justify-between gap-2 border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs font-bold text-warning" data-testid="unified-search-last-good"><span>새 검색에 실패해 마지막 정상 결과를 표시합니다.</span><button type="button" onClick={retrySearch} className="h-9 rounded-lg border border-warning/40 px-3 font-extrabold">재시도</button></div>}
+          {error && !hasLastGoodResults && <div className="space-y-3 px-4 py-5 text-center" data-testid="unified-search-outcome"><AlertTriangle className="mx-auto h-6 w-6 text-warning" /><p className="text-xs font-semibold text-warning">DATA_UNAVAILABLE · 검색 데이터 사용 불가</p><p className="break-keep text-sm font-bold">{error}</p><button type="button" onClick={retrySearch} className="h-11 rounded-xl border border-card-border px-4 text-sm font-semibold">재시도</button></div>}
+          {error && hasLastGoodResults && <div className="flex flex-wrap items-center justify-between gap-2 border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs font-bold text-warning" data-testid="unified-search-last-good"><span>새 검색에 실패해 마지막 정상 결과를 표시합니다.</span><button type="button" onClick={retrySearch} className="h-9 rounded-lg border border-warning/40 px-3 font-semibold">재시도</button></div>}
           {!error && trimmed && errorProviders.length > 0 && <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs font-bold text-destructive">공급자 연결 실패: {providerNames(errorProviders)}. 해당 시장 결과가 누락될 수 있습니다.</div>}
           {!error && trimmed && staleProviders.length > 0 && <div className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs font-bold text-warning">마지막 정상 인덱스 사용: {providerNames(staleProviders)}.</div>}
           {!error && trimmed && response?.stale && <div className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs font-bold text-warning">가장 오래된 데이터 기준시각: {response.dataAsOf ? new Date(response.dataAsOf).toLocaleString('ko-KR') : '확인 필요'}</div>}
           {(hasLastGoodResults || (!loading && !error)) && grouped.map((group) => (
             <Fragment key={group.market}>
-              <div className="sticky top-0 z-10 border-y border-card-border bg-secondary/90 px-4 py-2 text-xs font-black backdrop-blur">{GROUP_LABEL[group.market]}</div>
-              {group.items.map(({ item, index }) => (
-                <button id={`unified-search-option-${index}`} key={item.id} type="button" role="option" aria-selected={activeIndex === index} onMouseEnter={() => setActiveIndex(index)} onClick={() => selectItem(item)} className={cn('flex min-h-14 w-full items-center gap-3 border-b border-card-border px-4 py-3 text-left last:border-b-0', activeIndex === index ? 'bg-primary/10' : 'bg-card active:bg-muted')}>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-black"><Highlight text={item.displayName} query={trimmed} /></p>
-                    {item.englishName && item.englishName !== item.displayName && <p className="mt-0.5 truncate text-xs font-bold text-muted-foreground"><Highlight text={item.englishName} query={trimmed} /></p>}
-                    <p className="mt-1 truncate text-[11px] font-bold text-muted-foreground">{marketDescription(item)}</p>
-                  </div>
-                  <div className="shrink-0 text-right"><p className="max-w-28 truncate text-xs font-black"><Highlight text={displayCode(item)} query={trimmed} /></p><p className={cn('mt-1 text-[10px] font-bold', item.active ? 'text-positive' : 'text-warning')}>{item.active ? '거래 가능' : '거래 중지'}</p></div>
-                </button>
-              ))}
+              <div className="sticky top-0 z-10 border-y border-card-border bg-secondary/90 px-4 py-2 text-xs font-semibold backdrop-blur">{GROUP_LABEL[group.market]}</div>
+              {group.items.map(({ item, index }) => {
+                const ticker = String(item.ticker ?? item.productCode).trim().toUpperCase();
+                const watched = watchlist.some((row) => row.ticker.trim().toUpperCase() === ticker && (!row.market || row.market === item.market));
+                const held = item.assetType === 'stock' && heldTickers.has(ticker);
+                return (
+                  <button id={`unified-search-option-${index}`} key={item.id} type="button" role="option" aria-selected={activeIndex === index} onMouseEnter={() => setActiveIndex(index)} onClick={() => selectItem(item)} className={cn('flex min-h-14 w-full items-center gap-3 border-b border-card-border px-4 py-3 text-left last:border-b-0', activeIndex === index ? 'bg-primary/10' : 'bg-card active:bg-muted')}>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <p className="truncate text-sm font-bold"><Highlight text={item.displayName} query={trimmed} /></p>
+                        {watched ? <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">관심</span> : null}
+                        {held ? <span className="shrink-0 rounded-full bg-positive/10 px-2 py-0.5 text-xs font-semibold text-positive">보유</span> : null}
+                      </div>
+                      {item.englishName && item.englishName !== item.displayName && <p className="mt-0.5 truncate text-xs font-medium text-muted-foreground"><Highlight text={item.englishName} query={trimmed} /></p>}
+                      <p className="mt-1 truncate text-xs font-medium text-muted-foreground">{marketDescription(item)}</p>
+                    </div>
+                    <div className="shrink-0 text-right"><p className="max-w-28 truncate text-xs font-semibold"><Highlight text={displayCode(item)} query={trimmed} /></p><p className={cn('mt-1 text-xs font-semibold', item.active ? 'text-positive' : 'text-warning')}>{item.active ? '거래 가능' : '거래 중지'}</p></div>
+                  </button>
+                );
+              })}
             </Fragment>
           ))}
           {!loading && !error && trimmed && response && response.results.length === 0 && (
             <div className="space-y-2 px-4 py-6 text-center" data-testid="unified-search-outcome">
-              <p className={`text-sm font-black ${outcome === 'PROVIDER_UNAVAILABLE' ? 'text-warning' : ''}`}>
+              <p className={`text-sm font-semibold ${outcome === 'PROVIDER_UNAVAILABLE' ? 'text-warning' : ''}`}>
                 {outcome === 'PROVIDER_UNAVAILABLE'
                   ? 'PROVIDER_UNAVAILABLE · 공급자 결과 확인 불가'
                   : 'NO_MATCH · 일치하는 자산 없음'}
