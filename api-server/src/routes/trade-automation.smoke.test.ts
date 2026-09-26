@@ -416,12 +416,20 @@ test('exit preview re-reads the real position in read-only mode and never submit
     assert.equal(response.status, 200);
     const body = await response.json() as {
       preview: {
+        schemaVersion: string;
+        state: string;
+        draftId: string;
+        issuedAt: string;
+        expiresAt: string;
         provider: string;
         exitQuantity: number;
         quantityRule: string;
         side: string;
         reduceOnly: boolean;
         stale: boolean;
+        requiresFinalRiskRecheck: boolean;
+        requiresExplicitApproval: boolean;
+        executionAuthority: string;
       };
       privateAccountReadPerformed: boolean;
       orderSubmitted: boolean;
@@ -440,6 +448,13 @@ test('exit preview re-reads the real position in read-only mode and never submit
       };
     };
     assert.equal(reads, 1);
+    assert.equal(body.preview.schemaVersion, 'manual-exit-draft-v1');
+    assert.equal(body.preview.state, 'SERVER_VERIFIED_DRAFT');
+    assert.match(body.preview.draftId, /^[0-9a-f]{64}$/u);
+    assert.ok(Date.parse(body.preview.expiresAt) > Date.parse(body.preview.issuedAt));
+    assert.equal(body.preview.requiresFinalRiskRecheck, true);
+    assert.equal(body.preview.requiresExplicitApproval, true);
+    assert.equal(body.preview.executionAuthority, 'NONE');
     assert.equal(body.preview.provider, 'toss');
     assert.equal(body.preview.exitQuantity, 5);
     assert.equal(body.preview.quantityRule, 'INTEGER_ONLY');
