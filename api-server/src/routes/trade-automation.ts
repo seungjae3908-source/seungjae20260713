@@ -399,6 +399,24 @@ router.put('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
   } catch (error) { return errorResponse(res, error); }
 });
 
+router.post('/connections/:exchange/verify', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, execution } = context(req);
+    const exchange = exchangeValue(req.params.exchange);
+    if (req.body?.confirmed !== true) {
+      return res.status(409).json({ ok: false, error: 'LIVE_EXECUTION_VERIFICATION_CONFIRMATION_REQUIRED' });
+    }
+    const verification = await execution.verifyLiveConnection(userId, exchange);
+    return res.json({
+      ok: true,
+      ...verification,
+      credentialsReturned: false,
+      liveExecutionActivated: false,
+      automaticLiveExecutionActivated: false,
+    });
+  } catch (error) { return errorResponse(res, error); }
+});
+
 router.delete('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
