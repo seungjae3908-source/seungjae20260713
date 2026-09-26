@@ -190,6 +190,7 @@ const database = resolveProductionPostgresConnection(runtime, projectRef);
 const migrationPaths = [
   'api-server/supabase/migrations/2026081701_account_readonly_credentials.sql',
   'api-server/supabase/migrations/2026081801_account_readonly_service_role.sql',
+  'api-server/supabase/migrations/2026092501_account_readonly_kiwoom_provider.sql',
 ];
 let migrationBodies;
 try {
@@ -228,9 +229,21 @@ begin
   if exists (
     select 1
     from public.account_readonly_credentials
-    where provider not in ('toss', 'upbit', 'bitget')
+    where provider not in ('toss', 'kiwoom', 'upbit', 'bitget')
   ) then
     raise exception 'unexpected provider row exists';
+  end if;
+
+  if not exists (
+    select 1
+    from pg_constraint
+    where conrelid = 'public.account_readonly_credentials'::regclass
+      and contype = 'c'
+      and pg_get_constraintdef(oid) ilike '%provider%'
+      and pg_get_constraintdef(oid) ilike '%kiwoom%'
+      and pg_get_constraintdef(oid) ilike '%bitget%'
+  ) then
+    raise exception 'account readonly provider constraint is missing Kiwoom';
   end if;
 
   select count(*) into api_privilege_count
@@ -266,11 +279,12 @@ select json_build_object(
   'approved_target_sha', current_setting('app.approved_target_sha'),
   'production_project_match', true,
   'atomic_transaction', true,
-  'migrations_applied', 2,
+  'migrations_applied', 3,
   'tables_verified', 1,
   'rls_enabled', true,
   'api_roles_revoked', true,
   'service_role_access', true,
+  'provider_constraint_kiwoom', true,
   'database_changed', true,
   'credentials_recorded', false,
   'raw_credentials_exposed', false,
@@ -336,10 +350,12 @@ if (artifact?.status !== 'passed'
   || artifact?.approved_target_sha !== approvedTargetSha
   || artifact?.production_project_match !== true
   || artifact?.atomic_transaction !== true
+  || artifact?.migrations_applied !== 3
   || artifact?.tables_verified !== 1
   || artifact?.rls_enabled !== true
   || artifact?.api_roles_revoked !== true
   || artifact?.service_role_access !== true
+  || artifact?.provider_constraint_kiwoom !== true
   || artifact?.database_changed !== true
   || artifact?.credentials_recorded !== false
   || artifact?.raw_credentials_exposed !== false

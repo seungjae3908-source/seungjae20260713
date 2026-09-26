@@ -9,6 +9,8 @@ on:
       - 'api-server/supabase/migrations/2026081701_account_readonly_credentials.sql'
       - 'api-server/supabase/migrations/2026081801_account_readonly_service_role.sql'
       - 'api-server/supabase/migrations/2026081801_account_readonly_service_role.down.sql'
+      - 'api-server/supabase/migrations/2026092501_account_readonly_kiwoom_provider.sql'
+      - 'api-server/supabase/migrations/2026092501_account_readonly_kiwoom_provider.down.sql'
   issue_comment:
     types: [created]
 
@@ -45,6 +47,9 @@ jobs:
           grep -Fq "grant select, insert, update, delete on table public.account_readonly_credentials to service_role" api-server/supabase/migrations/2026081801_account_readonly_service_role.sql
           grep -Fq "'order_submitted', false" ops/apply-production-account-readonly-storage.mjs
           grep -Fq "'live_trading_authority', false" ops/apply-production-account-readonly-storage.mjs
+          grep -Fq "provider in ('toss', 'kiwoom', 'upbit', 'bitget')" api-server/supabase/migrations/2026092501_account_readonly_kiwoom_provider.sql
+          grep -Fq "ACCOUNT_READONLY_KIWOOM_ROWS_MUST_BE_REMOVED_EXPLICITLY_BEFORE_ROLLBACK" api-server/supabase/migrations/2026092501_account_readonly_kiwoom_provider.down.sql
+          grep -Fq "'api-server/supabase/migrations/2026092501_account_readonly_kiwoom_provider.sql'" ops/apply-production-account-readonly-storage.mjs
 
   apply:
     name: Owner-approved atomic Production account read-only storage apply
@@ -287,7 +292,8 @@ jobs:
           tar -czf "$archive" \
             ops/apply-production-account-readonly-storage.mjs \
             api-server/supabase/migrations/2026081701_account_readonly_credentials.sql \
-            api-server/supabase/migrations/2026081801_account_readonly_service_role.sql
+            api-server/supabase/migrations/2026081801_account_readonly_service_role.sql \
+            api-server/supabase/migrations/2026092501_account_readonly_kiwoom_provider.sql
           scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$archive" "$SSH_USER@$SSH_HOST:$remote_dir/tooling.tar.gz"
           remote_command="$(printf 'cd %q && tar -xzf tooling.tar.gz && EXPECTED_ACTIVE_SHA=%q APPROVED_TARGET_SHA=%q node ops/apply-production-account-readonly-storage.mjs' \
@@ -306,10 +312,12 @@ jobs:
             && value?.expected_active_sha === activeSha
             && value?.production_project_match === true
             && value?.atomic_transaction === true
+            && value?.migrations_applied === 3
             && value?.tables_verified === 1
             && value?.rls_enabled === true
             && value?.api_roles_revoked === true
             && value?.service_role_access === true
+            && value?.provider_constraint_kiwoom === true
             && value?.database_changed === true
             && value?.credentials_recorded === false
             && value?.raw_credentials_exposed === false
