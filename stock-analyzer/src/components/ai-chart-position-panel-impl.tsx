@@ -500,6 +500,19 @@ function exitReadinessBlockerLabel(code: string): string {
     LIVE_CONNECTION_NOT_CONFIGURED: '실전 거래키가 연결되지 않음',
     LIVE_CONNECTION_NOT_VERIFIED: '실계좌 Provider 검증이 필요함',
     MANUAL_LIVE_SERVER_GATE_OFF: '실주문 서버게이트가 꺼져 있음',
+    EXIT_RISK_EMERGENCY_STOP_ACTIVE: '긴급정지 활성화',
+    EXIT_RISK_ACCOUNT_EVIDENCE_STALE: '실계좌 근거가 오래됨',
+    EXIT_RISK_PROVIDER_OPEN_ORDERS_UNAVAILABLE: 'Provider 미체결 주문 조회 불가',
+    EXIT_RISK_PROVIDER_OPEN_ORDER_PRESENT: '같은 종목 미체결 주문 존재',
+    EXIT_PREFLIGHT_ACCOUNT_SNAPSHOT_NOT_FRESH: '실행 직전 실계좌 상태 확인 실패',
+    EXIT_PREFLIGHT_POSITION_AMBIGUOUS: '동일 종목 포지션이 여러 개라 식별 불가',
+    EXIT_PREFLIGHT_POSITION_NOT_FOUND: '실행 직전 보유 포지션 없음',
+    EXIT_PREFLIGHT_POSITION_CHANGED: '보유수량 또는 방향 변경',
+    EXIT_PREFLIGHT_CURRENT_PRICE_UNAVAILABLE: '현재가격 확인 불가',
+    EXIT_PREFLIGHT_EMERGENCY_STOP_ACTIVE: '긴급정지 활성화',
+    EXIT_PREFLIGHT_ACCOUNT_EVIDENCE_STALE: '실행 직전 실계좌 근거가 오래됨',
+    EXIT_PREFLIGHT_PROVIDER_OPEN_ORDERS_UNAVAILABLE: 'Provider 미체결 주문 조회 불가',
+    EXIT_PREFLIGHT_PROVIDER_OPEN_ORDER_PRESENT: '같은 종목 미체결 주문 존재',
   };
   return labels[code] ?? code;
 }
