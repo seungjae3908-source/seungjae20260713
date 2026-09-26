@@ -16,7 +16,7 @@ const trials = [
 ];
 const benchmark = Array(12).fill(0);
 const realityCheckPolicy = { status:"empirically_calibrated", alpha:0.49, bootstrapIterations:200, blockLength:2, seed:17 };
-const decisionPolicy = { status:"empirically_calibrated", maxPbo:1, minDsrProbability:0, alpha:1 };
+const decisionPolicy = { status:"empirically_calibrated", maxPbo:1, minDsrProbability:0, alpha:0.49 };
 const stability = {
   minimumN:{passed:true,evidenceId:"n:1"},
   parameterStability:{passed:true,evidenceId:"param:1"},
@@ -70,6 +70,16 @@ test("adapter fails closed when upstream stability evidence is incomplete",()=>{
   });
   assert.equal(out.status,"FAIL");
   assert.equal(out.code,"PARAMETER_INSTABILITY");
+});
+
+test("adapter rejects out-of-domain statistical thresholds even when labeled calibrated",()=>{
+  const out=adaptGlobalStatisticalFirewallToTournamentV1({
+    tournamentRequest:request,trials,selectedTrialId:"A",benchmarkReturns:benchmark,
+    blockCount:4,maxCombinations:100,realityCheckPolicy,
+    decisionPolicy:{...decisionPolicy,alpha:1},stabilityEvidence:stability,
+  });
+  assert.equal(out.status,"MISSING_EVIDENCE");
+  assert.equal(out.code,"STATISTICAL_EVIDENCE_MISSING");
 });
 
 test("adapter refuses uncalibrated decision policy rather than inventing thresholds",()=>{
