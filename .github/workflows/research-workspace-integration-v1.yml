@@ -17,6 +17,8 @@ on:
       - api-server/scripts/research-workspace-one-shot-preflight-v13.test.cjs
       - .github/workflows/research-workspace-one-shot-preflight-v13.yml
       - .github/workflows/research-workspace-one-shot-execution-v14.yml
+      - .github/workflows/research-workspace-human-rule-digest-binding-v16.yml
+      - api-server/scripts/run-research-workspace-one-shot-bind-v16.ts
       - api-server/src/routes/video-research*.ts
       - api-server/src/routes/index.ts
       - stock-analyzer/src/components/research-workspace-panel.tsx
@@ -116,6 +118,21 @@ jobs:
           node "$RUNNER_TEMP/run-research-one-shot-v12.mjs" --help             | tee "$RUNNER_TEMP/research-one-shot-v12-help.log"
           grep -Fq 'at most one Gemini call and one Groq call' "$RUNNER_TEMP/research-one-shot-v12-help.log"
           grep -Fq 'No compiler/backtest, schedule, deployment, trading or paid fallback' "$RUNNER_TEMP/research-one-shot-v12-help.log"
+      - name: Phase16 human rule-digest binding synthetic contract
+        if: always() && steps.install.outcome == 'success'
+        working-directory: api-server
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --test ../packages/external-research/test/research-workspace-one-shot-bind-v16.test.js \
+            | tee "$RUNNER_TEMP/research-human-bind-v16-tests.log"
+          pnpm exec esbuild scripts/run-research-workspace-one-shot-bind-v16.ts \
+            --bundle --platform=node --format=esm --target=node22 \
+            --outfile="$RUNNER_TEMP/run-research-human-bind-v16.mjs"
+          node "$RUNNER_TEMP/run-research-human-bind-v16.mjs" --help \
+            | tee "$RUNNER_TEMP/research-human-bind-v16-help.log"
+          grep -Fq 'one canonical research evaluation only' "$RUNNER_TEMP/research-human-bind-v16-help.log"
+          grep -Fq 'Provider calls, compiler runs and backtests remain zero' "$RUNNER_TEMP/research-human-bind-v16-help.log"
       - name: Existing source-reader HTTP regressions
         if: always() && steps.install.outcome == 'success'
         working-directory: api-server
@@ -209,5 +226,7 @@ jobs:
             ${{ runner.temp }}/workspace-transcript-tests.log
             ${{ runner.temp }}/research-one-shot-v12-tests.log
             ${{ runner.temp }}/research-one-shot-v12-help.log
+            ${{ runner.temp }}/research-human-bind-v16-tests.log
+            ${{ runner.temp }}/research-human-bind-v16-help.log
           if-no-files-found: warn
           retention-days: 30
