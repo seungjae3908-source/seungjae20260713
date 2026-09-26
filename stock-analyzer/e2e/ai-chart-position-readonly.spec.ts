@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
+import { safeTradeErrorMessage } from '../src/lib/trade-approval-ui';
 import {
   buildPositionGuidance,
   feeInclusiveBreakEvenPrice,
@@ -115,6 +116,14 @@ test('AI Chart order dashboard server read model is instrument-scoped and mutati
   expect(route).toContain("orderCanceled: false");
   expect(route).toContain("orderAmended: false");
   expect(route).toContain("privateTradingRequestSent: false");
+});
+
+test('cockpit translates canonical cancel and amend blockers without exposing raw codes', () => {
+  expect(safeTradeErrorMessage('LIVE_EXECUTION_DISABLED', 'fallback')).toContain('실전 주문');
+  expect(safeTradeErrorMessage('CANCEL_CONNECTION_UNAVAILABLE', 'fallback')).toContain('실전 거래 연결');
+  expect(safeTradeErrorMessage('PARTIAL_FILL_AMEND_REQUIRES_CANCEL_AND_REPLAN', 'fallback')).toContain('부분체결');
+  expect(safeTradeErrorMessage('AMEND_PRICE_EXCEEDS_APPROVED_RISK_ENVELOPE', 'fallback')).toContain('위험범위');
+  expect(safeTradeErrorMessage('US_STOCK_AMEND_QUANTITY_NOT_SUPPORTED', 'fallback')).toContain('가격만 정정');
 });
 
 test('AI Chart matches four-market positions without inventing missing values', () => {
