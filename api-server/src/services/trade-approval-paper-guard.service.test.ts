@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { liveExecutionEnabled } from './trade-automation.service';
+import { automaticLiveExecutionEnabled, liveExecutionEnabled } from './trade-automation.service';
 import {
   DEFAULT_TRADING_POLICY,
   type TradingPlan,
@@ -70,6 +70,7 @@ test('every live provider requires the global gates plus its own explicit provid
     UPBIT_LIVE_ORDER_ENABLED: process.env.UPBIT_LIVE_ORDER_ENABLED,
     KIWOOM_LIVE_ORDER_ENABLED: process.env.KIWOOM_LIVE_ORDER_ENABLED,
     TOSS_LIVE_ORDER_ENABLED: process.env.TOSS_LIVE_ORDER_ENABLED,
+    LIVE_AUTOMATIC_TRADING_ENABLED: process.env.LIVE_AUTOMATIC_TRADING_ENABLED,
   };
   try {
     process.env.ORDER_EXECUTION_ENABLED = 'true';
@@ -85,6 +86,20 @@ test('every live provider requires the global gates plus its own explicit provid
     assert.equal(liveExecutionEnabled('upbit'), true);
     assert.equal(liveExecutionEnabled('kiwoom'), true);
     assert.equal(liveExecutionEnabled('toss'), true);
+    assert.equal(automaticLiveExecutionEnabled('bitget'), false);
+    assert.equal(automaticLiveExecutionEnabled('upbit'), false);
+    assert.equal(automaticLiveExecutionEnabled('kiwoom'), false);
+    assert.equal(automaticLiveExecutionEnabled('toss'), false);
+
+    process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'true';
+    assert.equal(automaticLiveExecutionEnabled('bitget'), true);
+    assert.equal(automaticLiveExecutionEnabled('upbit'), true);
+    assert.equal(automaticLiveExecutionEnabled('kiwoom'), true);
+    assert.equal(automaticLiveExecutionEnabled('toss'), true);
+
+    process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'false';
+    assert.equal(liveExecutionEnabled('bitget'), true);
+    assert.equal(liveExecutionEnabled('upbit'), true);
 
     process.env.REAL_ORDER_ENABLED = 'false';
     assert.equal(liveExecutionEnabled('bitget'), false);
