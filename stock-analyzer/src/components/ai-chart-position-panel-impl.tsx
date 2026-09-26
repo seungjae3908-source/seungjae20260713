@@ -121,6 +121,15 @@ type ExitPreview = {
   reduceOnly: true;
   checkedAt: string;
   stale: false;
+  executionReadiness?: {
+    connectionConfigured: boolean;
+    providerVerified: boolean;
+    manualServerGateEnabled: boolean;
+    readyForManualExitEvaluation: boolean;
+    blockers: string[];
+    orderSubmissionPerformedByPreview: boolean;
+    executionAuthorityGrantedByPreview: boolean;
+  };
 };
 
 type ExitPreviewState =
@@ -592,6 +601,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
         orderAmended?: boolean;
         privateTradingMutationSent?: boolean;
         executionAuthority?: string;
+        executionReadiness?: ExitPreview['executionReadiness'];
       } | null;
       if (!response.ok || payload?.ok !== true || !payload.preview) {
         setExitPreviewState({ kind: 'unavailable', code: payload?.error ?? `HTTP_${response.status}` });
@@ -607,7 +617,10 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
         setExitPreviewState({ kind: 'unavailable', code: 'EXIT_PREVIEW_SAFETY_CONTRACT_MISMATCH' });
         return;
       }
-      setExitPreviewState({ kind: 'ready', preview: payload.preview });
+      setExitPreviewState({
+        kind: 'ready',
+        preview: { ...payload.preview, executionReadiness: payload.executionReadiness },
+      });
     } catch (error) {
       setExitPreviewState({ kind: 'unavailable', code: error instanceof Error ? error.name : 'EXIT_PREVIEW_FAILED' });
     }
@@ -784,6 +797,23 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                         {' · '}조회 {checkedAtLabel(exitPreviewState.preview.checkedAt)}
                       </p>
                       <p className="mt-1 text-[8px] font-bold text-muted-foreground">executionAuthority=NONE · 주문 제출 0 · 취소/정정 0</p>
+                      {exitPreviewState.preview.executionReadiness ? (
+                        <div className="mt-2 rounded-lg bg-background/80 p-2 text-[8px] font-bold text-muted-foreground" data-testid="ai-chart-exit-readiness">
+                          <p className="font-black text-foreground">
+                            실전 종료 준비 · {exitPreviewState.preview.executionReadiness.readyForManualExitEvaluation ? '게이트 준비' : '차단'}
+                          </p>
+                          <p className="mt-1">
+                            거래키 {exitPreviewState.preview.executionReadiness.connectionConfigured ? '연결' : '미연결'}
+                            {' · '}provider {exitPreviewState.preview.executionReadiness.providerVerified ? '검증됨' : '미검증'}
+                            {' · '}서버게이트 {exitPreviewState.preview.executionReadiness.manualServerGateEnabled ? 'ON' : 'OFF'}
+                          </p>
+                          {!exitPreviewState.preview.executionReadiness.readyForManualExitEvaluation ? (
+                            <p className="mt-1 break-words">차단 사유 · {exitPreviewState.preview.executionReadiness.blockers.join(' · ') || 'UNKNOWN'}</p>
+                          ) : (
+                            <p className="mt-1">이 표시는 실행 준비조건만 뜻하며, 종료 주문 승인이나 실행 권한을 부여하지 않습니다.</p>
+                          )}
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
                   {exitPreviewState.kind === 'unavailable' ? (
