@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import router, { setTradeAutomationRepositoryFactoryForTests } from './trade-automation';
+import router, {
+  setTradeAutomationRepositoryFactoryForTests,
+  setTradeExitPreviewReadersFactoryForTests,
+} from './trade-automation';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import { InMemoryTradingRepository } from '../services/trade-automation.repository';
 import { marketIntelligenceNotAvailable, tradingMarket } from '../services/market-intelligence-client.service';
@@ -210,8 +213,109 @@ test.beforeEach(async () => {
 });
 test.after(() => {
   setTradeAutomationRepositoryFactoryForTests(null);
+  setTradeExitPreviewReadersFactoryForTests(null);
   setTradingPlanMarketIntelligenceRunnerForTests(null);
   delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
+});
+
+test('exit preview re-reads the real position in read-only mode and never submits a trade', async () => {
+  let reads = 0;
+  setTradeExitPreviewReadersFactoryForTests(() => ({
+    toss: async () => {
+      reads += 1;
+      const checkedAt = new Date().toISOString();
+      return {
+        provider: 'toss' as const,
+        readOnly: true as const,
+        connected: true,
+        status: 'CONNECTED' as const,
+        accounts: null,
+        balances: null,
+        positions: [{
+          market: 'KR',
+          symbol: '005930',
+          quantity: 20,
+          availableQuantity: 20,
+          averageEntryPrice: 70_000,
+          currentPrice: 72_000,
+          marketValue: 1_440_000,
+          unrealizedPnl: 40_000,
+          unrealizedPnlPercent: 2.86,
+          leverage: null,
+          liquidationPrice: null,
+          marginMode: null,
+          side: null,
+        }],
+        openOrders: null,
+        checkedAt,
+        lastGoodAt: checkedAt,
+        stale: false,
+        errorCode: null,
+        orderRequests: 0 as const,
+        cancelRequests: 0 as const,
+        amendRequests: 0 as const,
+        transferRequests: 0 as const,
+        withdrawalRequests: 0 as const,
+        credentialsReturned: false as const,
+        liveTradingEnabled: false as const,
+        autoTradingEnabled: false as const,
+      };
+    },
+  }));
+
+  const { server, baseUrl } = await startServer();
+  try {
+    const missingConfirmation = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'toss', market: 'KR', symbol: '005930', percent: 25 }),
+    });
+    assert.equal(missingConfirmation.status, 409);
+    assert.equal(reads, 0);
+
+    const response = await fetch(`${baseUrl}/api/trade-automation/positions/exit-preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        confirmed: true,
+        provider: 'toss',
+        market: 'KR',
+        symbol: '005930',
+        percent: 25,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json() as {
+      preview: {
+        provider: string;
+        exitQuantity: number;
+        side: string;
+        reduceOnly: boolean;
+        stale: boolean;
+      };
+      privateAccountReadPerformed: boolean;
+      orderSubmitted: boolean;
+      orderCanceled: boolean;
+      orderAmended: boolean;
+      privateTradingMutationSent: boolean;
+      executionAuthority: string;
+    };
+    assert.equal(reads, 1);
+    assert.equal(body.preview.provider, 'toss');
+    assert.equal(body.preview.exitQuantity, 5);
+    assert.equal(body.preview.side, 'sell');
+    assert.equal(body.preview.reduceOnly, true);
+    assert.equal(body.preview.stale, false);
+    assert.equal(body.privateAccountReadPerformed, true);
+    assert.equal(body.orderSubmitted, false);
+    assert.equal(body.orderCanceled, false);
+    assert.equal(body.orderAmended, false);
+    assert.equal(body.privateTradingMutationSent, false);
+    assert.equal(body.executionAuthority, 'NONE');
+  } finally {
+    setTradeExitPreviewReadersFactoryForTests(null);
+    await close(server);
+  }
 });
 
 test('status is authenticated, automatic execution defaults off, and never returns credential values', async () => {
