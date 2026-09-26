@@ -340,6 +340,11 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
     abortRef.current = controller;
     const sequence = ++requestSequenceRef.current;
     setState({ kind: 'loading' });
+    setOrderDashboard({ kind: 'idle' });
+    setOrderMessage('');
+    setOrderActionId(null);
+    setAmendDrafts({});
+    setExitPreviewState({ kind: 'idle' });
     onOverlayChange(null);
     try {
       const response = await authorizedFetch(`/api/accounts/read-only/${provider}`, {
@@ -419,6 +424,11 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
     setStockProvider(next);
     setState({ kind: 'idle' });
     setLinesVisible(true);
+    setOrderDashboard({ kind: 'idle' });
+    setOrderMessage('');
+    setOrderActionId(null);
+    setAmendDrafts({});
+    setExitPreviewState({ kind: 'idle' });
     onOverlayChange(null);
   }, [onOverlayChange, stockProvider]);
 
