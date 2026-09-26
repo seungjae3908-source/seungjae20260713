@@ -23,6 +23,24 @@ export type ScannerSignalState =
   | 'WATCHING'
   | 'READY_FOR_APPROVAL'
   | 'WEAKENED';
+
+export type ScannerDecisionOutcome =
+  | 'LONG_REVIEW'
+  | 'SHORT_REVIEW'
+  | 'WATCH'
+  | 'BLOCKED'
+  | 'NO_TRADE';
+
+export interface ScannerDecisionHistoryEntry {
+  sequence: number;
+  state: ScannerSignalState;
+  direction: ScannerSignalDirection;
+  action: ScannerTradeAction | null;
+  decision: ScannerDecisionOutcome;
+  eligible: boolean;
+  observedAt: string;
+  reasons: string[];
+}
 export type ScannerEvidenceStatus = 'matched' | 'not_matched' | 'unverified';
 export type ScannerDataState =
   | 'complete'
@@ -189,6 +207,7 @@ export interface ScannerSignalCard {
   direction: ScannerSignalDirection;
   action?: ScannerTradeAction;
   signalState: ScannerSignalState;
+  decisionHistory?: ScannerDecisionHistoryEntry[];
   score: number;
   confidence: number;
   dataCompleteness: number;
