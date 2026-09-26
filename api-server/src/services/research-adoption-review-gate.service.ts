@@ -40,7 +40,7 @@ export interface ResearchAdoptionReviewResult {
     frozenResearchCandidate: boolean;
     finalHoldoutNotOpened: boolean;
     oneShotFinalHoldoutReady: boolean;
-    unresolvedCostDimensions: string[];
+    unresolvedCostDimensions: readonly string[];
   };
   blockers: readonly string[];
   automaticAdoptionAllowed: false;
@@ -114,7 +114,7 @@ function base(
     canonicalOwner: '#547',
     bridgeStatus,
     candidateAligned,
-    evidence: Object.freeze({ ...evidence, unresolvedCostDimensions: Object.freeze([...evidence.unresolvedCostDimensions]) as unknown as string[] }),
+    evidence: Object.freeze({ ...evidence, unresolvedCostDimensions: Object.freeze([...evidence.unresolvedCostDimensions]) }),
     blockers: Object.freeze([...new Set(blockers)]),
     automaticAdoptionAllowed: false,
     humanReviewRequired: true,
