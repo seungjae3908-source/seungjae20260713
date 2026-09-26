@@ -78,6 +78,9 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain("payload.preview.requiresFinalRiskRecheck !== true");
   expect(panel).toContain("payload.preview.requiresExplicitApproval !== true");
   expect(panel).toContain("authorizedFetch('/api/trade-automation/positions/exit-plan'");
+  expect(panel).toContain("authorizedFetch('/api/trade-automation/positions/exit-approval'");
+  expect(panel).toContain("approval.schemaVersion !== 'ai-chart-exit-approval-intent-v1'");
+  expect(panel).toContain("approval.nextOwner !== 'CANONICAL_EXIT_ORDER_TIME_RISK_OWNER'");
   expect(panel).toContain("plan.schemaVersion !== 'ai-chart-canonical-exit-plan-v2'");
   expect(panel).toContain("plan.requiresFreshAccountRecheckAtApproval !== true");
   expect(panel).toContain("plan.requiresOrderTimeRiskRecheck !== true");
@@ -313,6 +316,7 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   let accountReads = 0;
   let exitPreviewReads = 0;
   let exitPlanReads = 0;
+  let exitApprovalReads = 0;
   let entryReadinessReads = 0;
   const financialMutations: string[] = [];
 
@@ -502,6 +506,9 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
             side: 'sell',
             quantity: 5,
             percent: 25,
+            positionQuantity: 20,
+            availableQuantity: 20,
+            quantityRule: 'INTEGER_ONLY',
             reduceOnly: true,
             sourceCheckedAt: new Date().toISOString(),
             issuedAt: new Date().toISOString(),
@@ -517,6 +524,86 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
             financialMutationPerformed: false,
           },
           planPrepared: true,
+          privateAccountReadPerformed: true,
+          financialMutationPerformed: false,
+          orderSubmitted: false,
+          orderCanceled: false,
+          orderAmended: false,
+          privateTradingMutationSent: false,
+          executionAuthority: 'NONE',
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/positions/exit-approval') {
+      exitApprovalReads += 1;
+      expect(request.method()).toBe('POST');
+      const body = request.postDataJSON() as {
+        confirmed?: boolean;
+        planId?: string;
+        exitDraftId?: string;
+        provider?: string;
+        market?: string;
+        symbol?: string;
+        percent?: number;
+        positionQuantity?: number | null;
+        availableQuantity?: number;
+        quantity?: number;
+        side?: string;
+        sourceCheckedAt?: string;
+        planIssuedAt?: string;
+        planExpiresAt?: string;
+      };
+      expect(body.confirmed).toBe(true);
+      expect(body.planId).toBe('a'.repeat(64));
+      expect(body.exitDraftId).toBe('e'.repeat(64));
+      expect(body.provider).toBe('toss');
+      expect(body.market).toBe('KR');
+      expect(body.symbol).toBe('005930');
+      expect(body.percent).toBe(25);
+      expect(body.positionQuantity).toBe(20);
+      expect(body.availableQuantity).toBe(20);
+      expect(body.quantity).toBe(5);
+      expect(body.side).toBe('sell');
+      expect(Number.isFinite(Date.parse(body.sourceCheckedAt ?? ''))).toBe(true);
+      expect(Number.isFinite(Date.parse(body.planIssuedAt ?? ''))).toBe(true);
+      expect(Number.isFinite(Date.parse(body.planExpiresAt ?? ''))).toBe(true);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          canonicalExitApproval: {
+            schemaVersion: 'ai-chart-exit-approval-intent-v1',
+            state: 'EXPLICITLY_CONFIRMED_NON_EXECUTING_INTENT',
+            approvalIntentId: 'b'.repeat(64),
+            planId: 'a'.repeat(64),
+            exitDraftId: 'e'.repeat(64),
+            provider: 'toss',
+            market: 'KR',
+            symbol: '005930',
+            accountMode: 'live',
+            orderType: 'market',
+            side: 'sell',
+            quantity: 5,
+            percent: 25,
+            positionQuantity: 20,
+            availableQuantity: 20,
+            quantityRule: 'INTEGER_ONLY',
+            reduceOnly: true,
+            sourcePlanCheckedAt: new Date().toISOString(),
+            approvalCheckedAt: new Date().toISOString(),
+            approvedAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 20_000).toISOString(),
+            explicitApprovalConfirmed: true,
+            orderTimeRiskRecheckRequired: true,
+            nextOwner: 'CANONICAL_EXIT_ORDER_TIME_RISK_OWNER',
+            executionAuthority: 'NONE',
+            executable: false,
+            orderSubmissionPerformed: false,
+            financialMutationPerformed: false,
+          },
+          explicitApprovalConfirmed: true,
           privateAccountReadPerformed: true,
           financialMutationPerformed: false,
           orderSubmitted: false,
@@ -728,6 +815,16 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await expect(exitPlan).toContainText('실전 거래키가 연결되지 않음');
   await expect(exitPlan).toContainText('실주문 서버게이트가 꺼져 있음');
   await expect(exitPlan).toContainText('최종 승인 시 실계좌 재확인 + 주문시점 Risk 재검증');
+  await cockpit.getByTestId('ai-chart-confirm-exit-approval').click();
+  await expect.poll(() => exitApprovalReads).toBe(1);
+  const approvalIntent = cockpit.getByTestId('ai-chart-exit-approval-intent');
+  await expect(approvalIntent).toContainText('명시적 종료 승인 확인됨 · 주문 미전송');
+  await expect(approvalIntent).toContainText('25% · 5');
+  await expect(approvalIntent).toContainText('Approval bbbbbbbbbbbb…');
+  await expect(approvalIntent).toContainText('Plan aaaaaaaaaaaa…');
+  await expect(approvalIntent).toContainText('주문시점 Risk 재검증');
+  await expect(approvalIntent).toContainText('executionAuthority=NONE');
+  await expect(approvalIntent).toContainText('executable=false');
 
   await cockpit.getByRole('tab', { name: '주문', exact: true }).click();
   await cockpit.getByTestId('ai-chart-load-orders').click();

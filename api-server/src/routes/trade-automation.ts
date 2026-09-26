@@ -203,6 +203,7 @@ function exitPlanIdentity(input: {
   market: string;
   symbol: string;
   percent: number;
+  positionQuantity: number | null;
   availableQuantity: number;
   exitQuantity: number;
   side: 'buy' | 'sell';
@@ -218,11 +219,52 @@ function exitPlanIdentity(input: {
     input.market,
     normalizedExitSymbol(input.symbol),
     String(input.percent),
+    String(input.positionQuantity ?? 'missing'),
     String(input.availableQuantity),
     String(input.exitQuantity),
     input.side,
     input.sourceCheckedAt,
     input.issuedAt,
+    input.expiresAt,
+  ].join(':')).digest('hex');
+}
+
+
+const EXIT_APPROVAL_INTENT_TTL_MS = 20_000;
+
+function exitApprovalIntentIdentity(input: {
+  userId: string;
+  planId: string;
+  exitDraftId: string;
+  provider: AccountProvider;
+  market: string;
+  symbol: string;
+  percent: number;
+  positionQuantity: number | null;
+  availableQuantity: number;
+  exitQuantity: number;
+  side: 'buy' | 'sell';
+  planSourceCheckedAt: string;
+  approvalCheckedAt: string;
+  approvedAt: string;
+  expiresAt: string;
+}) {
+  return createHash('sha256').update([
+    'ai-chart-exit-approval-intent-v1',
+    input.userId,
+    input.planId,
+    input.exitDraftId,
+    input.provider,
+    input.market,
+    normalizedExitSymbol(input.symbol),
+    String(input.percent),
+    String(input.positionQuantity ?? 'missing'),
+    String(input.availableQuantity),
+    String(input.exitQuantity),
+    input.side,
+    input.planSourceCheckedAt,
+    input.approvalCheckedAt,
+    input.approvedAt,
     input.expiresAt,
   ].join(':')).digest('hex');
 }
@@ -1014,6 +1056,7 @@ router.post('/positions/exit-plan', async (req: AuthenticatedRequest, res) => {
       market,
       symbol,
       percent,
+      positionQuantity: currentPositionQuantity,
       availableQuantity: quantities.availableQuantity,
       exitQuantity: quantities.exitQuantity,
       side,
@@ -1037,6 +1080,9 @@ router.post('/positions/exit-plan', async (req: AuthenticatedRequest, res) => {
         side,
         quantity: quantities.exitQuantity,
         percent,
+        positionQuantity: currentPositionQuantity,
+        availableQuantity: quantities.availableQuantity,
+        quantityRule: quantities.integerOnly ? 'INTEGER_ONLY' : 'FRACTIONAL_ALLOWED',
         reduceOnly: true,
         sourceCheckedAt: snapshot.checkedAt,
         issuedAt,
@@ -1053,6 +1099,264 @@ router.post('/positions/exit-plan', async (req: AuthenticatedRequest, res) => {
       },
       executionReadiness,
       planPrepared: true,
+      privateAccountReadPerformed: true,
+      financialMutationPerformed: false,
+      orderSubmitted: false,
+      orderCanceled: false,
+      orderAmended: false,
+      privateTradingMutationSent: false,
+      executionAuthority: 'NONE',
+    });
+  } catch (error) {
+    if (controller.signal.aborted || res.writableEnded) return undefined;
+    return errorResponse(res, error);
+  } finally {
+    req.removeListener('aborted', abort);
+    res.removeListener('close', abort);
+  }
+});
+
+
+router.post('/positions/exit-approval', async (req: AuthenticatedRequest, res) => {
+  const userId = req.member?.id ?? '';
+  const accessToken = req.accessToken ?? '';
+  if (!userId || !accessToken) return res.status(401).json({ ok: false, error: 'LOGIN_REQUIRED' });
+  if (req.body?.confirmed !== true) {
+    return res.status(409).json({
+      ok: false,
+      error: 'EXPLICIT_EXIT_APPROVAL_REQUIRED',
+      explicitApprovalConfirmed: false,
+      financialMutationPerformed: false,
+      orderSubmitted: false,
+      privateTradingMutationSent: false,
+      executionAuthority: 'NONE',
+    });
+  }
+
+  let provider: AccountProvider;
+  let market: string;
+  let symbol: string;
+  let percent: number;
+  let planId: string;
+  let exitDraftId: string;
+  let expectedPositionQuantity: number | null;
+  let expectedAvailableQuantity: number;
+  let expectedExitQuantity: number;
+  let expectedSide: 'buy' | 'sell';
+  let sourceCheckedAt: string;
+  let planIssuedAt: string;
+  let planExpiresAt: string;
+
+  try {
+    provider = exitPreviewProvider(req.body?.provider);
+    market = String(req.body?.market ?? '').trim().toUpperCase();
+    symbol = String(req.body?.symbol ?? '').trim().toUpperCase();
+    percent = Number(req.body?.percent);
+    planId = String(req.body?.planId ?? '').trim().toLowerCase();
+    exitDraftId = String(req.body?.exitDraftId ?? '').trim().toLowerCase();
+    expectedPositionQuantity = req.body?.positionQuantity == null ? null : Number(req.body.positionQuantity);
+    expectedAvailableQuantity = Number(req.body?.availableQuantity);
+    expectedExitQuantity = Number(req.body?.quantity);
+    expectedSide = String(req.body?.side ?? '').trim().toLowerCase() as 'buy' | 'sell';
+    sourceCheckedAt = String(req.body?.sourceCheckedAt ?? '').trim();
+    planIssuedAt = String(req.body?.planIssuedAt ?? '').trim();
+    planExpiresAt = String(req.body?.planExpiresAt ?? '').trim();
+
+    if (!['KR', 'US', 'UPBIT', 'BITGET'].includes(market)) throw new Error('EXIT_APPROVAL_MARKET_UNSUPPORTED');
+    if (!normalizedExitSymbol(symbol)) throw new Error('EXIT_APPROVAL_SYMBOL_REQUIRED');
+    if (![25, 50, 75, 100].includes(percent)) throw new Error('EXIT_APPROVAL_PERCENT_UNSUPPORTED');
+    if (!/^[a-f0-9]{64}$/.test(planId)) throw new Error('EXIT_APPROVAL_PLAN_ID_INVALID');
+    if (!/^[a-f0-9]{64}$/.test(exitDraftId)) throw new Error('EXIT_APPROVAL_DRAFT_ID_INVALID');
+    if (expectedPositionQuantity != null
+      && (!Number.isFinite(expectedPositionQuantity) || expectedPositionQuantity <= 0)) {
+      throw new Error('EXIT_APPROVAL_POSITION_QUANTITY_INVALID');
+    }
+    if (!Number.isFinite(expectedAvailableQuantity) || expectedAvailableQuantity <= 0) {
+      throw new Error('EXIT_APPROVAL_AVAILABLE_QUANTITY_INVALID');
+    }
+    if (!Number.isFinite(expectedExitQuantity) || expectedExitQuantity <= 0) {
+      throw new Error('EXIT_APPROVAL_EXIT_QUANTITY_INVALID');
+    }
+    if (expectedSide !== 'buy' && expectedSide !== 'sell') throw new Error('EXIT_APPROVAL_SIDE_INVALID');
+    if (!Number.isFinite(Date.parse(sourceCheckedAt))) throw new Error('EXIT_APPROVAL_SOURCE_TIMESTAMP_INVALID');
+    if (!Number.isFinite(Date.parse(planIssuedAt)) || !Number.isFinite(Date.parse(planExpiresAt))) {
+      throw new Error('EXIT_APPROVAL_PLAN_TIMESTAMP_INVALID');
+    }
+    if (Date.parse(planIssuedAt) > Date.now() + 5_000 || Date.parse(planExpiresAt) <= Date.parse(planIssuedAt)) {
+      throw new Error('EXIT_APPROVAL_PLAN_TIMESTAMP_INVALID');
+    }
+    if (Date.parse(planExpiresAt) <= Date.now()) throw new Error('EXIT_APPROVAL_PLAN_EXPIRED');
+    if ((market === 'UPBIT' && provider !== 'upbit')
+      || (market === 'BITGET' && provider !== 'bitget')
+      || ((market === 'KR' || market === 'US') && provider !== 'toss' && provider !== 'kiwoom')) {
+      throw new Error('EXIT_APPROVAL_PROVIDER_MARKET_MISMATCH');
+    }
+
+    const claimedPlanId = exitPlanIdentity({
+      userId,
+      exitDraftId,
+      provider,
+      market,
+      symbol,
+      percent,
+      positionQuantity: expectedPositionQuantity,
+      availableQuantity: expectedAvailableQuantity,
+      exitQuantity: expectedExitQuantity,
+      side: expectedSide,
+      sourceCheckedAt,
+      issuedAt: planIssuedAt,
+      expiresAt: planExpiresAt,
+    });
+    if (claimedPlanId !== planId) throw new Error('EXIT_APPROVAL_PLAN_ID_MISMATCH');
+  } catch (error) {
+    return errorResponse(res, error);
+  }
+
+  const readers = exitPreviewReadersFactoryForTests?.() ?? createVaultBackedAccountReaders();
+  const reader = readers[provider];
+  if (!reader) return res.status(503).json({ ok: false, error: 'EXIT_APPROVAL_READER_UNAVAILABLE' });
+  const { repository } = context(req);
+  const controller = new AbortController();
+  const abort = () => controller.abort(new Error('EXIT_APPROVAL_ABORTED'));
+  req.once('aborted', abort);
+  res.once('close', abort);
+
+  try {
+    const [snapshot, connection] = await Promise.all([
+      reader({ userId, accessToken }, controller.signal),
+      repository.getConnection(userId, provider as TradingExchange),
+    ]);
+    if (controller.signal.aborted || res.writableEnded) return undefined;
+    if (snapshot.readOnly !== true
+      || snapshot.connected !== true
+      || snapshot.stale === true
+      || snapshot.orderRequests !== 0
+      || snapshot.cancelRequests !== 0
+      || snapshot.amendRequests !== 0
+      || snapshot.transferRequests !== 0
+      || snapshot.withdrawalRequests !== 0
+      || snapshot.liveTradingEnabled !== false
+      || snapshot.autoTradingEnabled !== false) {
+      return res.status(409).json({
+        ok: false,
+        error: snapshot.errorCode ?? 'EXIT_APPROVAL_ACCOUNT_SNAPSHOT_NOT_FRESH',
+        explicitApprovalConfirmed: false,
+        privateAccountReadPerformed: true,
+        financialMutationPerformed: false,
+        orderSubmitted: false,
+        privateTradingMutationSent: false,
+        executionAuthority: 'NONE',
+      });
+    }
+
+    const matches = (snapshot.positions ?? []).filter((position) => exitPositionMatches(position, market, symbol));
+    if (matches.length !== 1) {
+      return res.status(409).json({
+        ok: false,
+        error: matches.length > 1 ? 'EXIT_APPROVAL_POSITION_AMBIGUOUS' : 'EXIT_APPROVAL_POSITION_NOT_FOUND',
+        explicitApprovalConfirmed: false,
+        privateAccountReadPerformed: true,
+        financialMutationPerformed: false,
+        orderSubmitted: false,
+        privateTradingMutationSent: false,
+        executionAuthority: 'NONE',
+      });
+    }
+
+    const position = matches[0]!;
+    const quantities = exitPreviewQuantity(position, percent, market, provider);
+    const side = exitPreviewSide(provider, position);
+    const currentPositionQuantity = position.quantity == null ? null : Number(position.quantity);
+    if (currentPositionQuantity !== expectedPositionQuantity
+      || quantities.availableQuantity !== expectedAvailableQuantity
+      || quantities.exitQuantity !== expectedExitQuantity
+      || side !== expectedSide) {
+      return res.status(409).json({
+        ok: false,
+        error: 'EXIT_APPROVAL_PLAN_STALE_OR_POSITION_CHANGED',
+        explicitApprovalConfirmed: false,
+        privateAccountReadPerformed: true,
+        financialMutationPerformed: false,
+        orderSubmitted: false,
+        privateTradingMutationSent: false,
+        executionAuthority: 'NONE',
+      });
+    }
+
+    const executionReadiness = liveExecutionReadinessForConnection(
+      provider as TradingExchange,
+      connection,
+      credentialConfigurationStatus().encryptionConfigured,
+    );
+    if (!executionReadiness.readyForManualExitEvaluation) {
+      return res.status(409).json({
+        ok: false,
+        error: 'EXIT_APPROVAL_BLOCKED',
+        blockers: executionReadiness.blockers,
+        executionReadiness,
+        explicitApprovalConfirmed: false,
+        privateAccountReadPerformed: true,
+        financialMutationPerformed: false,
+        orderSubmitted: false,
+        privateTradingMutationSent: false,
+        executionAuthority: 'NONE',
+      });
+    }
+
+    const approvedAt = new Date().toISOString();
+    const expiresAt = new Date(Date.parse(approvedAt) + EXIT_APPROVAL_INTENT_TTL_MS).toISOString();
+    const approvalIntentId = exitApprovalIntentIdentity({
+      userId,
+      planId,
+      exitDraftId,
+      provider,
+      market,
+      symbol,
+      percent,
+      positionQuantity: currentPositionQuantity,
+      availableQuantity: quantities.availableQuantity,
+      exitQuantity: quantities.exitQuantity,
+      side,
+      planSourceCheckedAt: sourceCheckedAt,
+      approvalCheckedAt: snapshot.checkedAt,
+      approvedAt,
+      expiresAt,
+    });
+
+    return res.json({
+      ok: true,
+      canonicalExitApproval: {
+        schemaVersion: 'ai-chart-exit-approval-intent-v1',
+        state: 'EXPLICITLY_CONFIRMED_NON_EXECUTING_INTENT',
+        approvalIntentId,
+        planId,
+        exitDraftId,
+        provider,
+        market,
+        symbol: normalizedExitSymbol(symbol),
+        accountMode: 'live',
+        orderType: 'market',
+        side,
+        quantity: quantities.exitQuantity,
+        percent,
+        positionQuantity: currentPositionQuantity,
+        availableQuantity: quantities.availableQuantity,
+        quantityRule: quantities.integerOnly ? 'INTEGER_ONLY' : 'FRACTIONAL_ALLOWED',
+        reduceOnly: true,
+        sourcePlanCheckedAt: sourceCheckedAt,
+        approvalCheckedAt: snapshot.checkedAt,
+        approvedAt,
+        expiresAt,
+        explicitApprovalConfirmed: true,
+        orderTimeRiskRecheckRequired: true,
+        nextOwner: 'CANONICAL_EXIT_ORDER_TIME_RISK_OWNER',
+        executionAuthority: 'NONE',
+        executable: false,
+        orderSubmissionPerformed: false,
+        financialMutationPerformed: false,
+      },
+      executionReadiness,
+      explicitApprovalConfirmed: true,
       privateAccountReadPerformed: true,
       financialMutationPerformed: false,
       orderSubmitted: false,
