@@ -762,19 +762,6 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   ) : <div className="space-y-4"><SafetyNote /></div>;
 
   const mobile = !desktop && !externalMode && !embedded;
-  const chartPositionPrice = typeof analysis?.relatedIndicators?.currentPrice === 'number'
-    && Number.isFinite(analysis.relatedIndicators.currentPrice)
-    ? analysis.relatedIndicators.currentPrice
-    : null;
-  const cockpitPosition = hasSelection ? (
-    <AiChartPositionPanel
-      market={selection.market}
-      symbol={selection.symbol || selection.ticker}
-      chartPrice={chartPositionPrice}
-      pricePlan={selection.pricePlan}
-      onOverlayChange={ignorePositionOverlay}
-    />
-  ) : null;
 
   return (
     <div className={`h-full min-w-0 overflow-y-auto overscroll-contain bg-background ${embedded || externalMode ? 'pb-4' : 'pb-24'}`}>
@@ -848,7 +835,6 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
             {mobileTab === 'chart' ? (
               <section data-testid="ai-chart-mobile-chart" className="min-w-0 space-y-3">
                 {chart}
-                {cockpitPosition}
                 {hasSelection ? <div className="hidden" aria-hidden="true" data-testid="ai-chart-mobile-overlay-controller">{intelligencePanel}</div> : null}
               </section>
             ) : null}
@@ -870,10 +856,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
         </>
       ) : (
         <main className="mx-auto grid max-w-7xl gap-4 p-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
-          <section className="min-w-0 space-y-4">
-            {chart}
-            {cockpitPosition}
-          </section>
+          <section className="min-w-0">{chart}</section>
           <aside className="min-w-0 lg:sticky lg:top-20 lg:self-start">{details}</aside>
         </main>
       )}
