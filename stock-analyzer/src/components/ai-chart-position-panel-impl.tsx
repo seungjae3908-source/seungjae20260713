@@ -200,6 +200,7 @@ type EntryReadinessState =
 type LiveEntryDraft = {
   schemaVersion: 'scanner-live-entry-draft-v1';
   state: 'SERVER_VERIFIED_DRAFT';
+  draftId: string;
   market: string;
   symbol: string;
   timeframe: string;
@@ -972,6 +973,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
         || payload.exchangeRequestSent !== false
         || payload.providerMutationRequests !== 0
         || payload.livePlanCreated !== false
+        || !/^[0-9a-f]{64}$/u.test(payload.draft.draftId)
         || payload.draft.executionAuthority !== 'NONE'
         || payload.draft.requiresFinalRiskRecheck !== true
         || payload.draft.requiresExplicitApproval !== true) {
@@ -1123,6 +1125,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                         <p className="mt-2 break-words text-[8px] font-bold text-muted-foreground">
                           전략 {liveEntryDraft.draft.strategy.strategyId}
                           {' · '}만료 {checkedAtLabel(liveEntryDraft.draft.expiresAt)}
+                          {' · '}Draft {liveEntryDraft.draft.draftId.slice(0, 12)}…
                           {' · '}최종 Risk 재검증 필요
                           {' · '}명시적 승인 필요
                         </p>
