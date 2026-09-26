@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AiChatError, answerGroqResearchJsonWithConfig } from './ai-chat.service';
+import { ResearchGroqTransportError, answerGroqResearchJsonWithConfig } from './research-groq-json-transport.service';
 
 test('research Groq JSON transport calls only the reviewed Groq endpoint and model', async () => {
   let calls=0;let url='';let body:any=null;let auth='';
@@ -29,7 +29,7 @@ test('research Groq JSON transport has no Gemini or provider fallback', async ()
       calls++;assert.match(String(input),/api\.groq\.com/);
       return new Response('{}',{status:503,headers:{'content-type':'application/json'}});
     }),
-    (cause:unknown)=>cause instanceof AiChatError && cause.code==='AI_CHAT_PROVIDER_ERROR',
+    (cause:unknown)=>cause instanceof ResearchGroqTransportError && cause.code==='RESEARCH_GROQ_PROVIDER_ERROR',
   );
   assert.equal(calls,1);
 });
@@ -38,7 +38,7 @@ test('research Groq JSON transport blocks secrets before provider access', async
   let calls=0;
   await assert.rejects(
     answerGroqResearchJsonWithConfig({message:'api_key=secret-secret-secret-value',apiKey:'synthetic_groq_key',model:'groq-test'},async()=>{calls++;throw new Error('must not call');}),
-    (cause:unknown)=>cause instanceof AiChatError && cause.code==='RESEARCH_GROQ_INPUT_INVALID',
+    (cause:unknown)=>cause instanceof ResearchGroqTransportError && cause.code==='RESEARCH_GROQ_INPUT_INVALID',
   );
   assert.equal(calls,0);
 });
