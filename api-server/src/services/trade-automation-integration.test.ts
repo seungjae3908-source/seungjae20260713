@@ -411,6 +411,7 @@ test('live provider execution is blocked until the saved credential is explicitl
     PRIVATE_TRADING_API_ALLOWED: process.env.PRIVATE_TRADING_API_ALLOWED,
     UPBIT_LIVE_ORDER_ENABLED: process.env.UPBIT_LIVE_ORDER_ENABLED,
     TRADING_CREDENTIAL_MASTER_KEY: process.env.TRADING_CREDENTIAL_MASTER_KEY,
+    LIVE_TRADING: process.env.LIVE_TRADING,
     executionAuthority: process.env.executionAuthority,
   };
   const nativeFetch = globalThis.fetch;
@@ -475,6 +476,8 @@ test('provider submission rechecks automatic live authority and blocks before ou
     UPBIT_LIVE_ORDER_ENABLED: process.env.UPBIT_LIVE_ORDER_ENABLED,
     LIVE_AUTOMATIC_TRADING_ENABLED: process.env.LIVE_AUTOMATIC_TRADING_ENABLED,
     TRADING_CREDENTIAL_MASTER_KEY: process.env.TRADING_CREDENTIAL_MASTER_KEY,
+    LIVE_TRADING: process.env.LIVE_TRADING,
+    AUTO_TRADING: process.env.AUTO_TRADING,
     executionAuthority: process.env.executionAuthority,
   };
   const nativeFetch = globalThis.fetch;
