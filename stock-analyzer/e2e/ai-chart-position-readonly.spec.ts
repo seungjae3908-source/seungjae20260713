@@ -183,6 +183,9 @@ test('cockpit translates canonical cancel and amend blockers without exposing ra
   expect(safeTradeErrorMessage('PARTIAL_FILL_AMEND_REQUIRES_CANCEL_AND_REPLAN', 'fallback')).toContain('부분체결');
   expect(safeTradeErrorMessage('AMEND_PRICE_EXCEEDS_APPROVED_RISK_ENVELOPE', 'fallback')).toContain('위험범위');
   expect(safeTradeErrorMessage('US_STOCK_AMEND_QUANTITY_NOT_SUPPORTED', 'fallback')).toContain('가격만 정정');
+  expect(safeTradeErrorMessage('EXIT_RISK_PROVIDER_OPEN_ORDER_PRESENT', 'fallback')).toContain('미체결 주문');
+  expect(safeTradeErrorMessage('EXIT_PREFLIGHT_CURRENT_PRICE_UNAVAILABLE', 'fallback')).toContain('현재가격');
+  expect(safeTradeErrorMessage('EXIT_PREFLIGHT_PRIOR_RISK_NOT_PASSED', 'fallback')).toContain('위험검증');
 });
 
 test('AI Chart matches four-market positions without inventing missing values', () => {
