@@ -118,6 +118,23 @@ test('account display FX carries only public USD/USDT rates and zero trading aut
   assert.deepEqual(partial.missing, ['FX:USDT_KRW:UNAVAILABLE']);
 });
 
+test('account FX route is registered before provider wildcard and remains public-market read-only', () => {
+  const apiServerRoot = path.basename(process.cwd()) === 'api-server'
+    ? process.cwd()
+    : path.join(process.cwd(), 'api-server');
+  const routeSource = readFileSync(
+    path.join(apiServerRoot, 'src/features/account-readonly/account-readonly.route.ts'),
+    'utf8',
+  );
+  const fxIndex = routeSource.indexOf("router.get('/fx'");
+  const providerIndex = routeSource.indexOf("router.get('/:provider'");
+  assert.ok(fxIndex >= 0);
+  assert.ok(providerIndex > fxIndex);
+  assert.match(routeSource, /loadFreePublicFxQuotes/);
+  assert.match(routeSource, /publicMarketDataOnly:s*true/);
+  assert.equal(/router.(?:post|put|patch|delete)('/fx'/i.test(routeSource), false);
+});
+
 test('read-only credential parser accepts only Toss, Kiwoom, Upbit and Bitget credential shapes', () => {
   assert.deepEqual(parseReadonlyCredentialRequest('toss', {
     purpose: 'read_only', permissions: ['read'],
