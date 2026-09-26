@@ -6,6 +6,7 @@ import {
   nullableNumber,
   type CanonicalAccount,
   type CanonicalAccountSnapshot,
+  type CanonicalBalance,
   type CanonicalPosition,
   type CanonicalReadonlyOrder,
 } from '../account-readonly.contract';
@@ -20,7 +21,7 @@ export type ReadonlyTransport = (request: {
   signal?: AbortSignal;
 }) => Promise<{ status: number; headers?: Record<string, string>; body: unknown }>;
 
-const PRIVATE_GETS = new Set(['/api/v1/accounts', '/api/v1/holdings', '/api/v1/orders']);
+const PRIVATE_GETS = new Set(['/api/v1/accounts', '/api/v1/holdings', '/api/v1/orders', '/api/v1/buying-power']);
 const TOSS_API_ORIGIN = 'https://openapi.tossinvest.com';
 const TOSS_OAUTH_ORIGIN = TOSS_API_ORIGIN;
 
@@ -148,6 +149,38 @@ function requiredNumber(value: unknown, code: string) {
   return parsed;
 }
 
+function officialBuyingPower(value: unknown, expectedCurrency: 'KRW' | 'USD') {
+  const root = requiredRecord(value, 'TOSS_BUYING_POWER_RESPONSE_INVALID');
+  const result = requiredRecord(root.result, 'TOSS_BUYING_POWER_RESPONSE_INVALID');
+  const currency = String(result.currency ?? '').trim().toUpperCase();
+  if (currency !== expectedCurrency) throw new AccountReadonlyError('TOSS_BUYING_POWER_CURRENCY_INVALID');
+  const cashBuyingPower = requiredNumber(result.cashBuyingPower, 'TOSS_BUYING_POWER_RESPONSE_INVALID');
+  if (cashBuyingPower < 0) throw new AccountReadonlyError('TOSS_BUYING_POWER_RESPONSE_INVALID');
+  return { currency: expectedCurrency, cashBuyingPower };
+}
+
+async function readTossBuyingPower(
+  provider: TossReadonlyProvider,
+  credentials: TossCredentials,
+  accountSeq: string,
+  currency: 'KRW' | 'USD',
+  signal?: AbortSignal,
+) {
+  try {
+    const value = await provider.request(
+      '/api/v1/buying-power',
+      credentials,
+      signal,
+      accountSeq,
+      `currency=${currency}`,
+    );
+    return { value: officialBuyingPower(value, currency), error: null as AccountReadonlyError | null };
+  } catch (error) {
+    if (error instanceof AccountReadonlyError) return { value: null, error };
+    throw error;
+  }
+}
+
 function officialHoldingsItems(value: unknown) {
   const root = requiredRecord(value, 'TOSS_HOLDINGS_RESPONSE_INVALID');
   const result = requiredRecord(root.result, 'TOSS_HOLDINGS_RESPONSE_INVALID');
@@ -253,9 +286,11 @@ export class TossReadonlyProvider {
         if (error instanceof AccountReadonlyError) return { value: null, error };
         throw error;
       });
-    const [holdingsRaw, openOrdersResult] = await Promise.all([
+    const [holdingsRaw, openOrdersResult, krwBuyingPower, usdBuyingPower] = await Promise.all([
       this.request('/api/v1/holdings', credentials, signal, accountSeq),
       openOrdersPromise,
+      readTossBuyingPower(this, credentials, accountSeq, 'KRW', signal),
+      readTossBuyingPower(this, credentials, accountSeq, 'USD', signal),
     ]);
     const items = officialHoldingsItems(holdingsRaw);
 
@@ -286,13 +321,40 @@ export class TossReadonlyProvider {
       throw new AccountReadonlyError('TOSS_HOLDING_IDENTITY_DUPLICATE');
     }
 
+    const buyingPowerByCurrency = new Map<'KRW' | 'USD', number>();
+    if (krwBuyingPower.value) buyingPowerByCurrency.set('KRW', krwBuyingPower.value.cashBuyingPower);
+    if (usdBuyingPower.value) buyingPowerByCurrency.set('USD', usdBuyingPower.value.cashBuyingPower);
+
     const detectedMarkets = new Set(positions.map((row) => row.market).filter((market) => market === 'KR' || market === 'US'));
-    const accounts: CanonicalAccount[] = [...detectedMarkets].map((market) => ({
-      market: market as 'KR' | 'US',
-      accountRef: maskAccountRef(accountSeq),
-      currency: market === 'KR' ? 'KRW' : 'USD',
-      buyingPower: null,
-    }));
+    if (krwBuyingPower.value) detectedMarkets.add('KR');
+    if (usdBuyingPower.value) detectedMarkets.add('US');
+
+    const accounts: CanonicalAccount[] = [...detectedMarkets].map((market) => {
+      const currency = market === 'KR' ? 'KRW' as const : 'USD' as const;
+      return {
+        market: market as 'KR' | 'US',
+        accountRef: maskAccountRef(accountSeq),
+        currency,
+        buyingPower: buyingPowerByCurrency.get(currency) ?? null,
+      };
+    });
+
+    const balances: CanonicalBalance[] = [
+      ...(krwBuyingPower.value ? [{
+        currency: 'KRW',
+        available: krwBuyingPower.value.cashBuyingPower,
+        locked: null,
+        total: null,
+        estimatedKrwValue: krwBuyingPower.value.cashBuyingPower,
+      }] : []),
+      ...(usdBuyingPower.value ? [{
+        currency: 'USD',
+        available: usdBuyingPower.value.cashBuyingPower,
+        locked: null,
+        total: null,
+        estimatedKrwValue: null,
+      }] : []),
+    ];
 
     let openOrders: CanonicalReadonlyOrder[] | null = null;
     let openOrderError: string | null = null;
@@ -304,10 +366,15 @@ export class TossReadonlyProvider {
       if (new Set(ids).size !== ids.length) throw new AccountReadonlyError('TOSS_OPEN_ORDER_IDENTITY_DUPLICATE');
     }
 
+    const buyingPowerError = krwBuyingPower.error ?? usdBuyingPower.error;
+    const partialError = openOrderError
+      ?? (buyingPowerError ? `TOSS_BUYING_POWER_${buyingPowerError.code}` : null);
+
     return {
-      ...emptySnapshot('toss', 'CONNECTED', checkedAt, openOrderError),
+      ...emptySnapshot('toss', 'CONNECTED', checkedAt, partialError),
       connected: true,
       accounts,
+      balances,
       positions,
       openOrders,
       lastGoodAt: checkedAt,
