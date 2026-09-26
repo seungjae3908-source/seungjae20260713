@@ -5,6 +5,13 @@ const OWNER='adfcb23baf956bcaa025f0846313faf8db7a4e4a';
 const BASE='9057c4a3767db0f81e595fc481f5066bda6c9e43';
 const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trimEnd();
 const added=[
+ 'packages/external-research/src/research-workspace-one-shot-review-v15.js',
+ 'packages/external-research/src/research-workspace-one-shot-review-v15.d.ts',
+ 'packages/external-research/test/research-workspace-one-shot-review-v15.test.js',
+ 'packages/external-research/docs/research-workspace-phase15.md',
+ 'stock-analyzer/src/lib/research-one-shot-review.js',
+ 'stock-analyzer/src/lib/research-one-shot-review.d.ts',
+ 'stock-analyzer/src/components/research-workspace-one-shot-review.tsx',
  '.github/workflows/research-workspace-one-shot-execution-v14.yml',
  'packages/external-research/docs/research-workspace-phase14.md',
  'api-server/src/services/market-intelligence-ai-analysis.service.test.ts',
