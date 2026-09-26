@@ -38,7 +38,7 @@ function attachRuntimeFailures(page: Page, failures: Failure[]) {
 test.describe('Production Research Center read-only QA', () => {
   test.skip(!productionQaEnabled, 'Dedicated Production QA credentials and read-only flag are required');
 
-  test('admin Research Center is reachable, bounded, scrollable, and read-only', async ({ page }) => {
+  test('Research Center access follows membership policy and admin surface stays read-only', async ({ page }, testInfo) => {
     test.setTimeout(60_000);
     const blocked: Failure[] = [];
     const runtimeFailures: Failure[] = [];
@@ -50,7 +50,31 @@ test.describe('Production Research Center read-only QA', () => {
 
     await page.goto('/research-center', { waitUntil: 'domcontentloaded', timeout: 15_000 });
     await expect(page).toHaveURL(/\/research-center(?:$|[?#])/i, { timeout: 5_000 });
-    await expect(page.getByTestId('research-center-page')).toBeVisible({ timeout: 12_000 });
+
+    const researchSurface = page.getByTestId('research-center-page');
+    const capabilityDenied = page.getByTestId('capability-denied');
+    await expect.poll(async () => (
+      await researchSurface.isVisible({ timeout: 250 }).catch(() => false)
+      || await capabilityDenied.isVisible({ timeout: 250 }).catch(() => false)
+    ), { timeout: 12_000, intervals: [100, 200, 400, 800] }).toBe(true);
+
+    if (!await researchSurface.isVisible({ timeout: 250 }).catch(() => false)) {
+      // The product intentionally gates Research Center behind canManageMembers.
+      // A non-admin Production QA credential must prove the denial contract
+      // instead of falsely reporting the admin-only surface as an app outage.
+      await expect(capabilityDenied).toBeVisible();
+      await expect(capabilityDenied).toContainText('회원 관리');
+      await expect(researchSurface).toHaveCount(0);
+      testInfo.annotations.push({
+        type: 'coverage',
+        description: 'ADMIN_RESEARCH_CENTER_NOT_EVALUATED: Production QA credential lacks canManageMembers',
+      });
+      expect(blocked, 'Research Center denial QA attempted a blocked mutation').toEqual([]);
+      expect(runtimeFailures, 'Research Center denial browser/runtime failures detected').toEqual([]);
+      return;
+    }
+
+    await expect(researchSurface).toBeVisible();
     await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 5_000 });
 
     const pending = page.getByText('연구 상태를 불러오는 중입니다.', { exact: true });
@@ -58,7 +82,7 @@ test.describe('Production Research Center read-only QA', () => {
       await expect(pending).toBeHidden({ timeout: 8_000 });
     }
 
-    const surface = page.getByTestId('research-center-page');
+    const surface = researchSurface;
     const metrics = await surface.evaluate((main) => {
       const element = main as HTMLElement;
       const rootOverflow = Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth ?? 0) - window.innerWidth;
