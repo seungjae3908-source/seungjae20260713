@@ -88,7 +88,7 @@ test('worker restart recovers stale SENDING leases through the same queue before
   expect(worker).toContain(".in('state', ['PENDING', 'RETRY_SCHEDULED', 'FAILED'])");
 });
 
-test('protected Production storage apply knows and verifies the complete Telegram V3 storage bundle before app deploy', () => {
+test('protected Production storage apply knows and verifies the complete Telegram V3 storage bundle before deployment evidence validation', () => {
   for (const migrationName of [
     '2026082701_personal_telegram_generic_outbox.sql',
     '2026082702_telegram_signal_followup_ledger.sql',
@@ -113,5 +113,5 @@ test('protected Production storage apply knows and verifies the complete Telegra
   expect(productionVerifier).toContain('value?.signal_followup_verified === true');
   expect(productionVerifier).toContain('value?.message_edit_state_verified === true');
   expect(productionVerifier).toContain('value?.digest_outbox_verified === true');
-  expect(productionVerifier).toContain('storage migration must finish before Production deployment dispatch');
+  expect(productionVerifier).toContain('storage migration must finish before Production deployment evidence validation');
 });
