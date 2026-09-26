@@ -608,6 +608,25 @@ function exitReadinessBlockerLabel(code: string): string {
   return labels[code] ?? code;
 }
 
+type CockpitStageTone = 'done' | 'active' | 'blocked' | 'idle';
+
+function cockpitStageClass(tone: CockpitStageTone): string {
+  if (tone === 'done') return 'border-positive/30 bg-positive/10 text-positive';
+  if (tone === 'active') return 'border-primary/30 bg-primary/10 text-primary';
+  if (tone === 'blocked') return 'border-warning/30 bg-warning/10 text-warning';
+  return 'border-card-border bg-background text-muted-foreground';
+}
+
+function stageTone(
+  state: { kind: string },
+  passed?: boolean,
+): CockpitStageTone {
+  if (state.kind === 'loading') return 'active';
+  if (state.kind === 'unavailable') return 'blocked';
+  if (state.kind === 'ready') return passed === false ? 'blocked' : 'done';
+  return 'idle';
+}
+
 function orderStateLabel(state: string): string {
   const labels: Record<string, string> = {
     SUBMITTED: '제출 대기',
@@ -1867,8 +1886,32 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
             data-testid="ai-chart-trading-cockpit"
             className="rounded-xl border border-primary/25 bg-primary/5 p-3"
           >
-            <summary className="cursor-pointer list-none text-[11px] font-black [&::-webkit-details-marker]:hidden">
-              진입 · 주문관리 · 종료 대시보드
+            <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+              <div className="flex min-w-0 items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-black">진입 · 주문관리 · 종료 대시보드</p>
+                  <p className="mt-0.5 truncate text-[8px] font-bold text-muted-foreground">
+                    현재 종목 한 화면 트레이딩 콕핏 · {cockpitOpen ? '접기' : '펼치기'}
+                  </p>
+                </div>
+                <span className="shrink-0 rounded-full border border-card-border bg-background px-2 py-1 text-[8px] font-black text-muted-foreground">
+                  {cockpitOpen ? '열림' : '요약'}
+                </span>
+              </div>
+              <div className="mt-2 grid grid-cols-4 gap-1" data-testid="ai-chart-cockpit-summary-strip">
+                <span className={`min-w-0 truncate rounded-lg border px-1.5 py-1 text-center text-[8px] font-black ${entryContextReady ? 'border-positive/30 bg-positive/10 text-positive' : 'border-card-border bg-background text-muted-foreground'}`}>
+                  진입 {entryContextReady ? '근거' : '대기'}
+                </span>
+                <span className={`min-w-0 truncate rounded-lg border px-1.5 py-1 text-center text-[8px] font-black ${position ? 'border-positive/30 bg-positive/10 text-positive' : 'border-card-border bg-background text-muted-foreground'}`}>
+                  보유 {position ? '있음' : '없음'}
+                </span>
+                <span className={`min-w-0 truncate rounded-lg border px-1.5 py-1 text-center text-[8px] font-black ${orderDashboard.kind === 'ready' ? 'border-primary/30 bg-primary/10 text-primary' : orderDashboard.kind === 'unavailable' ? 'border-warning/30 bg-warning/10 text-warning' : 'border-card-border bg-background text-muted-foreground'}`}>
+                  주문 {canonicalOrderStatus}
+                </span>
+                <span className={`min-w-0 truncate rounded-lg border px-1.5 py-1 text-center text-[8px] font-black ${exitPreviewState.kind === 'ready' ? 'border-positive/30 bg-positive/10 text-positive' : exitPreviewState.kind === 'unavailable' ? 'border-warning/30 bg-warning/10 text-warning' : 'border-card-border bg-background text-muted-foreground'}`}>
+                  종료 {exitStatus}
+                </span>
+              </div>
             </summary>
             {cockpitOpen ? (
               <div className="mt-3 space-y-3">
@@ -2188,6 +2231,27 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                       <p className="mt-0.5 text-[8px] font-bold text-muted-foreground">실제 보유수량 기준 · 주문 미제출</p>
                     </div>
                     <span className="rounded-full border border-warning/30 bg-warning/5 px-2 py-1 text-[8px] font-black text-warning">종료 계획 미리보기</span>
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-4" data-testid="ai-chart-exit-progress">
+                    {[
+                      ['Draft', stageTone(exitPreviewState)],
+                      ['Plan', stageTone(exitPlanState)],
+                      ['승인', stageTone(exitApprovalState)],
+                      ['Risk', stageTone(exitRiskState, exitRiskState.kind === 'ready' ? exitRiskState.risk.riskPassed : undefined)],
+                      ['Preflight', stageTone(exitPreflightState, exitPreflightState.kind === 'ready' ? exitPreflightState.preflight.preflightPassed : undefined)],
+                      ['Package', stageTone(exitExecutionPackageState, exitExecutionPackageState.kind === 'ready' ? exitExecutionPackageState.executionPackage.packageReady : undefined)],
+                      ['Submit', stageTone(exitSubmissionGateState, false)],
+                    ].map(([label, tone]) => (
+                      <span
+                        key={String(label)}
+                        className={`min-w-0 truncate rounded-lg border px-2 py-1.5 text-center text-[8px] font-black ${cockpitStageClass(tone as CockpitStageTone)}`}
+                      >
+                        {label}
+                      </span>
+                    ))}
+                    <span className="min-w-0 truncate rounded-lg border border-warning/30 bg-warning/5 px-2 py-1.5 text-center text-[8px] font-black text-warning">
+                      Draft Lock
+                    </span>
                   </div>
                   <div className="mt-2 grid grid-cols-4 gap-1.5">
                     {[25, 50, 75, 100].map((percent) => (
