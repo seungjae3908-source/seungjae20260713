@@ -25,6 +25,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -33,6 +34,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          git merge-base --is-ancestor "${{ github.event.pull_request.base.sha }}" HEAD
           node --test             market-prediction-lab/tests/global-strategy-statistical-firewall-v1.test.js             market-prediction-lab/tests/research-tournament-statistical-firewall-adapter-v1.test.js
           node <<'NODE'
           const fs=require('node:fs');
