@@ -88,6 +88,7 @@ test('concurrent HTTP cancel requests submit one provider cancel and reconcile t
   process.env.REAL_ORDER_ENABLED = 'true';
   process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
   process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+  process.env.LIVE_TRADING = 'true';
   process.env.executionAuthority = 'MANUAL';
 
   const { server, baseUrl } = await startServer(repository);
@@ -154,6 +155,7 @@ test('concurrent HTTP cancel requests submit one provider cancel and reconcile t
     delete process.env.REAL_ORDER_ENABLED;
     delete process.env.PRIVATE_TRADING_API_ALLOWED;
     delete process.env.UPBIT_LIVE_ORDER_ENABLED;
+    delete process.env.LIVE_TRADING;
     delete process.env.executionAuthority;
     setTradeAutomationRepositoryFactoryForTests(null);
     await close(server);
