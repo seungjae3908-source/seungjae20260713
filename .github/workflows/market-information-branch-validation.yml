@@ -1,0 +1,117 @@
+name: Market Information Branch Validation
+
+on:
+  push:
+    branches:
+      - audit/market-information-room-improvements
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: market-information-branch-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout market information branch
+        uses: actions/checkout@v4
+        with:
+          ref: audit/market-information-room-improvements
+          fetch-depth: 0
+
+      - name: Confirm exact main ancestry and diff hygiene
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git branch --show-current)" = "audit/market-information-room-improvements"
+          git fetch origin main --no-tags
+          git merge-base --is-ancestor origin/main HEAD
+          BASE="$(git merge-base origin/main HEAD)"
+          test -n "$BASE"
+          git diff --check "$BASE"...HEAD
+
+      - name: Confirm isolated market-information scope
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          BASE="$(git merge-base origin/main HEAD)"
+          changed="$(git diff --name-only "$BASE"...HEAD)"
+          if grep -Eq '^(ops/|supabase/|api-server/supabase/|.*migration|\.github/workflows/(production|staging)-)' <<<"$changed"; then
+            echo 'Market-information branch changed a prohibited deployment, database, or production/staging workflow path.' >&2
+            printf '%s\n' "$changed" >&2
+            exit 1
+          fi
+          if grep -Eq '^(api-server/src/data/search-aliases\.ts|api-server/src/lib/search-normalization\.ts|api-server/src/middleware/search-rate-limit\.ts|api-server/src/routes/unified-search|api-server/src/services/unified-asset-search|stock-analyzer/src/components/unified-asset-search|stock-analyzer/src/lib/unified-asset-search|stock-analyzer/src/pages/unified-asset-search)' <<<"$changed"; then
+            echo 'PR #58 unified-search implementation was duplicated or modified by PR #76.' >&2
+            printf '%s\n' "$changed" >&2
+            exit 1
+          fi
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck frontend
+        run: pnpm --dir stock-analyzer run typecheck
+
+      - name: Typecheck backend
+        run: pnpm --dir api-server run typecheck
+
+      - name: Lint market-information implementation and tests
+        run: >-
+          pnpm dlx @biomejs/biome@2.4.16 lint --error-on-warnings
+          api-server/src/routes/market-information.ts
+          api-server/src/routes/market-information.smoke.test.ts
+          api-server/src/services/market-information.contract.ts
+          api-server/src/services/market-information.service.ts
+          api-server/src/services/market-information.service.test.ts
+          api-server/src/services/public-market-http.ts
+          api-server/src/services/public-market-http.test.ts
+          stock-analyzer/src/lib/market-information.ts
+          stock-analyzer/src/lib/market-information.test.ts
+          stock-analyzer/src/pages/market-information.tsx
+          stock-analyzer/e2e/market-information-room.spec.ts
+          stock-analyzer/e2e/phase12-market-information-room-edge-cases.spec.ts
+
+      - name: Run market-information unit and integration tests
+        run: cd api-server && node ./test.mjs phase12
+
+      - name: Run API smoke tests
+        run: cd api-server && node ./test.mjs smoke
+
+      - name: Run backend regression
+        run: pnpm --dir api-server run test
+
+      - name: Build frontend and backend production bundles
+        run: |
+          pnpm --dir stock-analyzer run build
+          pnpm --dir api-server run build
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Run market-information browser regression
+        run: >-
+          pnpm --dir stock-analyzer exec playwright test
+          e2e/market-information-room.spec.ts
+          e2e/phase12-market-information-room-edge-cases.spec.ts
+          --reporter=line
+
+      - name: Run full desktop and mobile browser regression
+        run: pnpm --dir stock-analyzer run test:e2e

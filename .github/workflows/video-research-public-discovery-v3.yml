@@ -1,0 +1,164 @@
+name: Video Research Public Provider Runtime V3
+
+on:
+  pull_request:
+    types:
+      - opened
+    paths:
+      - packages/external-research/src/video-intelligence-phase3-runtime.js
+      - packages/external-research/test/video-intelligence-phase3-runtime.test.js
+      - packages/external-research/scripts/video-public-discovery-v3.mjs
+      - .github/workflows/video-research-public-discovery-v3.yml
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact commit SHA to validate and use for the read-only discovery run.
+        required: false
+        type: string
+      query:
+        description: Bounded public video research query.
+        required: false
+        default: bitcoin technical analysis strategy
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: video-research-public-provider-v3-${{ github.event.pull_request.number || github.event.inputs.target_sha || github.ref }}
+  cancel-in-progress: false
+
+env:
+  VIDEO_RESEARCH_EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.target_sha || github.sha }}
+
+jobs:
+  phase3-runtime-contract:
+    name: Verify Phase 3 public-provider runtime contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact owner head without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.VIDEO_RESEARCH_EXPECTED_SHA }}
+          persist-credentials: false
+      - name: Verify immutable checkout identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          actual_branch="$(git symbolic-ref --quiet --short HEAD || true)"
+          if [[ ! "$VIDEO_RESEARCH_EXPECTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error title=Video Research exact-head check failed::[INVALID_SHA] expected an exact 40-character SHA"
+            exit 1
+          fi
+          if [ -n "$actual_branch" ]; then
+            echo "::error title=Video Research exact-head check failed::[UNEXPECTED_BRANCH] checkout must be detached"
+            exit 1
+          fi
+          if [ "${actual_sha,,}" != "${VIDEO_RESEARCH_EXPECTED_SHA,,}" ]; then
+            echo "::error title=Video Research exact-head check failed::[HEAD_SHA_MISMATCH] expected ${VIDEO_RESEARCH_EXPECTED_SHA,,}, got ${actual_sha,,}"
+            exit 1
+          fi
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Run Phase 3 runtime safety tests
+        run: node --test packages/external-research/test/video-intelligence-phase3-runtime.test.js
+
+  real-public-discovery:
+    name: Read-only real YouTube public discovery
+    needs: phase3-runtime-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      YOUTUBE_DATA_API_KEY: ${{ secrets.YOUTUBE_DATA_API_KEY }}
+    steps:
+      - name: Checkout exact owner head without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.VIDEO_RESEARCH_EXPECTED_SHA }}
+          persist-credentials: false
+      - name: Verify immutable checkout identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "${actual_sha,,}" != "${VIDEO_RESEARCH_EXPECTED_SHA,,}" ]; then
+            echo "::error title=Video Research exact-head check failed::[HEAD_SHA_MISMATCH] expected ${VIDEO_RESEARCH_EXPECTED_SHA,,}, got ${actual_sha,,}"
+            exit 1
+          fi
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Require approved minimal provider credential connection
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${YOUTUBE_DATA_API_KEY:-}" ]; then
+            echo "::error title=Video Research provider not configured::[PROVIDER_NOT_CONFIGURED] YOUTUBE_DATA_API_KEY is not connected to this read-only workflow runtime"
+            exit 2
+          fi
+          echo "provider_credential_configured=true"
+          echo "provider_credential_value_exposed=false"
+      - name: Execute one bounded read-only public discovery
+        shell: bash
+        env:
+          VIDEO_RESEARCH_QUERY: ${{ github.event.inputs.query || 'bitcoin technical analysis strategy' }}
+        run: |
+          set -euo pipefail
+          node packages/external-research/scripts/video-public-discovery-v3.mjs "$VIDEO_RESEARCH_QUERY" > "$RUNNER_TEMP/video-research-public-discovery-v3.json"
+          cat "$RUNNER_TEMP/video-research-public-discovery-v3.json"
+      - name: Verify discovery truth and authority locks
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const file = path.join(process.env.RUNNER_TEMP, 'video-research-public-discovery-v3.json');
+          const result = JSON.parse(fs.readFileSync(file, 'utf8'));
+          const fail = (message) => { console.error(message); process.exit(1); };
+          if (result.status !== 'SUCCESS') fail(`discovery status=${result.status}`);
+          if (result.provider !== 'YOUTUBE_DATA_API_V3') fail(`provider=${result.provider}`);
+          if (result.requestMode !== 'READ_ONLY_GET') fail(`requestMode=${result.requestMode}`);
+          if (result.credentialConfigured !== true || result.credentialValueExposed !== false) fail('credential truth lock failed');
+          if (result.safety?.paidProviderEnabled !== false) fail('paidProviderEnabled must remain false');
+          if (result.safety?.scheduleActive !== false) fail('scheduleActive must remain false');
+          if (result.safety?.automaticDiscoveryEnabled !== false) fail('automaticDiscoveryEnabled must remain false');
+          if (result.safety?.liveTrading !== false) fail('liveTrading must remain false');
+          if (result.safety?.economicEvidenceCredit !== 0) fail('economicEvidenceCredit must remain 0');
+          if (result.safety?.profitabilityCredit !== 0) fail('profitabilityCredit must remain 0');
+          if (result.safety?.executionAuthority !== 'NONE') fail('executionAuthority must remain NONE');
+          for (const record of result.records ?? []) {
+            if (record.economicEvidenceCredit !== 0 || record.profitabilityCredit !== 0 || record.executionAuthority !== 'NONE') fail('record economic truth lock failed');
+          }
+          console.log(`REAL_VIDEO_DISCOVERY_STATUS=${result.status}`);
+          console.log(`REAL_VIDEO_DISCOVERY_SOURCE_COUNT=${result.sourceCount}`);
+          console.log(`REAL_VIDEO_DISCOVERY_PAGES_USED=${result.pagesUsed}`);
+          NODE
+      - name: Publish sanitized evidence summary
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const result = JSON.parse(fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'video-research-public-discovery-v3.json'), 'utf8'));
+          console.log('## Video Research Phase 3 — Public Provider Runtime');
+          console.log(`- status: ${result.status}`);
+          console.log(`- provider: ${result.provider}`);
+          console.log(`- request mode: ${result.requestMode}`);
+          console.log(`- source count: ${result.sourceCount}`);
+          console.log(`- pages used: ${result.pagesUsed}`);
+          console.log('- paid provider: false');
+          console.log('- schedule active: false');
+          console.log('- live trading: false');
+          console.log('- economic evidence credit: 0');
+          console.log('- profitability credit: 0');
+          console.log('- execution authority: NONE');
+          for (const [index, record] of (result.records ?? []).entries()) {
+            console.log(`- source ${index + 1}: ${record.title ?? 'Untitled'} — ${record.canonicalUrl ?? 'URL_MISSING'}`);
+          }
+          NODE

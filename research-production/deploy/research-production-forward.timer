@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly isolated Paper and Shadow forward research
+
+[Timer]
+OnCalendar=*-*-* *:11:00 UTC
+Persistent=false
+RandomizedDelaySec=60
+Unit=research-production@forward.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,457 @@
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import type { Session, User } from '@supabase/supabase-js';
+import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import { ProfileRequestCoordinator } from '@/lib/profile-request-coordinator';
+import { userIntegrationsRequestLifecycle } from '@/lib/user-integrations-request-lifecycle';
+import {
+  AUTH_PROFILE_BOOTSTRAP_TIMEOUT_MS,
+  authBootstrapErrorMessage,
+  reconcileInitialSessionProfile,
+  runFiniteAuthBootstrap,
+  shouldReconcileInitialSession,
+  shouldRecoverDeferredInitialSession,
+  withFiniteDeadline,
+} from '@/lib/auth-bootstrap';
+import {
+  claimInitialAuthBootstrap,
+  getInitialAuthBootstrapUserId,
+  type InitialMemberProfile,
+} from '@/lib/auth-initial-bootstrap';
+import {
+  prepareBackupForSessionEnd,
+  resumeBackupForSession,
+} from '@/lib/backup-sync-lifecycle';
+import {
+  deriveMemberTier,
+  hasCapability,
+  permissionsFor,
+  type MemberCapability,
+  type MemberTier,
+} from '../../../packages/member-access/src/index.js';
+
+export type MemberProfile = InitialMemberProfile;
+
+type AuthContextValue = {
+  configured: boolean;
+  loading: boolean;
+  bootstrapError: string | null;
+  session: Session | null;
+  user: User | null;
+  profile: MemberProfile | null;
+  displayName: string | null;
+  membershipLevel: MemberTier;
+  permissions: Readonly<Record<MemberCapability, boolean>>;
+  can(capability: MemberCapability): boolean;
+  isAdmin: boolean;
+  isApproved: boolean;
+  retryBootstrap(): void;
+  signIn(loginName: string, password: string): Promise<void>;
+  signUp(loginName: string, password: string): Promise<void>;
+  signOut(): Promise<void>;
+  refreshProfile(): Promise<void>;
+};
+
+const AuthContext = createContext<AuthContextValue | null>(null);
+const normalizeName = (value: string) => value.trim().normalize('NFKC').toLowerCase();
+const PROFILE_AUTO_REFRESH_MS = 30_000;
+
+function validate(loginName: string, password: string) {
+  const name = loginName.trim();
+  if (name.length < 2 || name.length > 20) throw new Error('아이디는 2~20자로 입력해 주세요.');
+  if (!/^[가-힣a-zA-Z0-9 _.-]+$/.test(name)) throw new Error('아이디에는 한글, 영문, 숫자, 공백, _, -, .만 사용할 수 있습니다.');
+  if (password.length < 8 || password.length > 72) throw new Error('비밀번호는 8~72자로 입력해 주세요.');
+  return name;
+}
+
+async function internalEmail(loginName: string) {
+  const source = new TextEncoder().encode(`seungjae-stock-account:${normalizeName(loginName)}`);
+  const digest = await crypto.subtle.digest('SHA-256', source);
+  const token = Array.from(new Uint8Array(digest)).slice(0, 20).map((v) => v.toString(16).padStart(2, '0')).join('');
+  return `${token}@accounts.seungjae-stock.com`;
+}
+
+function authMessage(cause: unknown) {
+  const message = cause instanceof Error ? cause.message.toLowerCase() : '';
+  if (message.includes('invalid login') || message.includes('invalid credentials')) return '아이디 또는 비밀번호가 맞지 않습니다.';
+  if (message.includes('already')) return '이미 사용 중인 아이디입니다.';
+  if (message.includes('rate limit')) return '요청이 많습니다. 잠시 후 다시 시도해 주세요.';
+  if (message.includes('timeout') || message.includes('timed out')) return '계정 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도해 주세요.';
+  if (message.includes('session token')) return cause instanceof Error ? cause.message : '로그인 세션을 적용하지 못했습니다.';
+  return '계정 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.';
+}
+
+async function signInWithSupabase(loginName: string, password: string) {
+  const client = getSupabase();
+  const { data, error } = await client.auth.signInWithPassword({
+    email: await internalEmail(loginName),
+    password,
+  });
+  if (error || !data.session) throw error ?? new Error('Invalid login credentials');
+
+  const { data: verified, error: verifyError } = await client.auth.getUser();
+  if (verifyError || !verified.user) {
+    await client.auth.signOut({ scope: 'local' });
+    throw new Error('로그인 session token 검증에 실패했습니다.');
+  }
+  return data.session;
+}
+
+function profileRequestKey(value: Session | null): string | null {
+  return value ? `${value.user.id}:${value.access_token}` : null;
+}
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [session, setSession] = useState<Session | null>(null);
+  const [profile, setProfile] = useState<MemberProfile | null>(null);
+  const [loading, setLoading] = useState(isSupabaseConfigured);
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+  const signingInRef = useRef(false);
+  const signingOutRef = useRef(false);
+  const signOutTaskRef = useRef<Promise<void> | null>(null);
+  const sessionRef = useRef<Session | null>(null);
+  const profileRef = useRef<MemberProfile | null>(null);
+  const profileLoadQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const profileRequestsRef = useRef(new ProfileRequestCoordinator<MemberProfile | null>());
+  const bootstrapAttemptRef = useRef(0);
+  const initialBootstrapPendingRef = useRef(false);
+  const deferredInitialSessionRef = useRef<Session | null>(null);
+  const failedInitialBootstrapUserIdRef = useRef<string | null>(null);
+
+  function applyProfile(next: MemberProfile | null) {
+    profileRef.current = next;
+    if (mountedRef.current) setProfile(next);
+  }
+
+  function applySession(next: Session | null) {
+    sessionRef.current = next;
+    setSession(next);
+    const requestKey = profileRequestKey(next);
+    profileRequestsRef.current.setIdentity(next?.user.id ?? null, requestKey);
+    userIntegrationsRequestLifecycle.setIdentity(next?.user.id ?? null, requestKey);
+    if (!next) applyProfile(null);
+  }
+
+  function loadProfile(user: User | null, options: { force?: boolean; maxAgeMs?: number; signal?: AbortSignal } = {}): Promise<void> {
+    if (!user) {
+      applyProfile(null);
+      return Promise.resolve();
+    }
+    if (signingOutRef.current || sessionRef.current?.user.id !== user.id) return Promise.resolve();
+
+    const queued = profileLoadQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (signingOutRef.current || sessionRef.current?.user.id !== user.id) return;
+        const current = sessionRef.current;
+        const requestKey = profileRequestKey(current);
+        if (!current || !requestKey) return;
+        await profileRequestsRef.current.request({
+          identity: user.id,
+          requestKey,
+          force: options.force,
+          maxAgeMs: options.maxAgeMs ?? PROFILE_AUTO_REFRESH_MS,
+          load: async () => {
+            const query = getSupabase().from('profiles').select('*').eq('id', user.id);
+            const { data, error } = await (options.signal ? query.abortSignal(options.signal) : query).maybeSingle();
+            if (error) throw error;
+            const nextProfile = (data as MemberProfile | null) ?? null;
+            if (
+              hasCapability(profileRef.current, 'canAccessBasicInfo')
+              && !hasCapability(nextProfile, 'canAccessBasicInfo')
+            ) {
+              await prepareBackupForSessionEnd();
+            }
+            return nextProfile;
+          },
+          apply: (nextProfile) => {
+            if (!signingOutRef.current && sessionRef.current?.user.id === user.id) {
+              applyProfile(nextProfile);
+            }
+          },
+        });
+      });
+
+    profileLoadQueueRef.current = queued.catch(() => undefined);
+    return queued;
+  }
+
+  function loadProfileWithDeadline(user: User | null, options: { force?: boolean } = {}) {
+    const controller = new AbortController();
+    return withFiniteDeadline(
+      loadProfile(user, { ...options, signal: controller.signal }),
+      AUTH_PROFILE_BOOTSTRAP_TIMEOUT_MS,
+      'AUTH_PROFILE_TIMEOUT',
+      (error) => controller.abort(error),
+    );
+  }
+
+  function reconcileRestoredInitialSession(restoredSession: Session) {
+    failedInitialBootstrapUserIdRef.current = null;
+    const incomingUserId = restoredSession.user.id;
+    const currentUserId = sessionRef.current?.user.id ?? null;
+    const attempt = ++bootstrapAttemptRef.current;
+    const prepare = currentUserId && currentUserId !== incomingUserId
+      ? prepareBackupForSessionEnd()
+      : Promise.resolve();
+    setBootstrapError(null);
+    setLoading(true);
+    void prepare.finally(() => {
+      if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
+      applySession(restoredSession);
+      void reconcileInitialSessionProfile({
+        loadProfile: () => loadProfileWithDeadline(restoredSession.user, { force: true }),
+        hasProfile: () => profileRef.current !== null,
+        isSessionCurrent: () => sessionRef.current?.user.id === restoredSession.user.id,
+      }).catch((cause) => {
+        if (mountedRef.current && bootstrapAttemptRef.current === attempt) {
+          setBootstrapError(authBootstrapErrorMessage(cause));
+        }
+      }).finally(() => {
+        if (mountedRef.current && bootstrapAttemptRef.current === attempt) setLoading(false);
+      });
+    });
+  }
+
+  function runInitialBootstrap() {
+    if (!isSupabaseConfigured) {
+      setBootstrapError(null);
+      setLoading(false);
+      return;
+    }
+
+    const attempt = ++bootstrapAttemptRef.current;
+    let resolvedBootstrapUserId: string | null | undefined;
+    initialBootstrapPendingRef.current = true;
+    deferredInitialSessionRef.current = null;
+    failedInitialBootstrapUserIdRef.current = null;
+    setBootstrapError(null);
+    setLoading(true);
+
+    const primedBootstrap = claimInitialAuthBootstrap();
+    const bootstrap = primedBootstrap
+      ? primedBootstrap
+        .then((result) => {
+          resolvedBootstrapUserId = result.session?.user.id ?? null;
+          if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
+          applySession(result.session);
+          applyProfile(result.profile);
+        })
+        .catch((cause) => {
+          resolvedBootstrapUserId = getInitialAuthBootstrapUserId();
+          throw cause;
+        })
+      : runFiniteAuthBootstrap<Session | null>({
+        getSession: async () => {
+          const { data, error } = await getSupabase().auth.getSession();
+          if (error) throw error;
+          return data.session;
+        },
+        applySession: (next) => {
+          resolvedBootstrapUserId = next?.user.id ?? null;
+          if (mountedRef.current && bootstrapAttemptRef.current === attempt) applySession(next);
+        },
+        loadProfile: async (next, signal) => {
+          if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
+          await loadProfile(next?.user ?? null, { signal });
+        },
+      });
+
+    void bootstrap.catch((cause) => {
+      if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
+      failedInitialBootstrapUserIdRef.current = resolvedBootstrapUserId ?? null;
+      setBootstrapError(authBootstrapErrorMessage(cause));
+    }).finally(() => {
+      if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
+      initialBootstrapPendingRef.current = false;
+      const deferredInitialSession = deferredInitialSessionRef.current;
+      deferredInitialSessionRef.current = null;
+      if (deferredInitialSession && shouldRecoverDeferredInitialSession({
+        incomingUserId: deferredInitialSession.user.id,
+        initialBootstrapUserId: resolvedBootstrapUserId,
+      })) {
+        reconcileRestoredInitialSession(deferredInitialSession);
+        return;
+      }
+      setLoading(false);
+    });
+  }
+
+  useEffect(() => {
+    mountedRef.current = true;
+    if (!isSupabaseConfigured) { setLoading(false); return; }
+    runInitialBootstrap();
+    const { data: sub } = getSupabase().auth.onAuthStateChange((event, next) => {
+      const incomingUserId = next?.user.id ?? null;
+      const currentUserId = sessionRef.current?.user.id ?? null;
+
+      if (event === 'INITIAL_SESSION') {
+        if (!next) return;
+        if (initialBootstrapPendingRef.current) {
+          deferredInitialSessionRef.current = next;
+          return;
+        }
+        if (failedInitialBootstrapUserIdRef.current === incomingUserId) return;
+        if (!shouldReconcileInitialSession({
+          event,
+          incomingUserId,
+          currentUserId,
+          hasProfile: profileRef.current !== null,
+        })) return;
+        reconcileRestoredInitialSession(next);
+        return;
+      }
+
+      if (signingInRef.current && next) return;
+      if (signingOutRef.current && next) return;
+      bootstrapAttemptRef.current += 1;
+      const previousUserId = sessionRef.current?.user.id ?? null;
+      const nextUserId = next?.user.id ?? null;
+      const prepare = previousUserId && previousUserId !== nextUserId
+        ? prepareBackupForSessionEnd()
+        : Promise.resolve();
+      void prepare.finally(() => {
+        if (!mountedRef.current) return;
+        setBootstrapError(null);
+        applySession(next);
+        void loadProfileWithDeadline(next?.user ?? null).catch((cause) => {
+          if (mountedRef.current) setBootstrapError(authBootstrapErrorMessage(cause));
+        }).finally(() => {
+          if (mountedRef.current) setLoading(false);
+        });
+      });
+    });
+    return () => {
+      mountedRef.current = false;
+      bootstrapAttemptRef.current += 1;
+      initialBootstrapPendingRef.current = false;
+      deferredInitialSessionRef.current = null;
+      sub.subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!session?.user) return;
+    let active = true;
+    const refresh = () => {
+      if (active && !signingOutRef.current) void loadProfile(session.user).catch(() => undefined);
+    };
+    const visibility = () => { if (document.visibilityState === 'visible') refresh(); };
+    const timer = window.setInterval(refresh, PROFILE_AUTO_REFRESH_MS);
+    window.addEventListener('focus', refresh);
+    window.addEventListener('online', refresh);
+    document.addEventListener('visibilitychange', visibility);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('online', refresh);
+      document.removeEventListener('visibilitychange', visibility);
+    };
+  }, [session?.user?.id]);
+
+  const membershipLevel = deriveMemberTier(profile);
+  const permissions = permissionsFor(profile);
+  const value = useMemo<AuthContextValue>(() => ({
+    configured: isSupabaseConfigured,
+    loading,
+    bootstrapError,
+    session,
+    user: session?.user ?? null,
+    profile,
+    displayName: profile?.display_name ?? (session?.user?.user_metadata?.display_name as string | undefined) ?? null,
+    membershipLevel,
+    permissions,
+    can: (capability) => hasCapability(profile, capability),
+    isAdmin: permissions.canManageMembers,
+    isApproved: permissions.canAccessBasicInfo,
+    retryBootstrap() {
+      runInitialBootstrap();
+    },
+    async signIn(loginName, password) {
+      const name = validate(loginName, password);
+      signingInRef.current = true;
+      setBootstrapError(null);
+      setLoading(true);
+      try {
+        const nextSession = await signInWithSupabase(name, password);
+        applySession(nextSession);
+        await loadProfileWithDeadline(nextSession.user);
+      } catch (cause) {
+        applySession(null);
+        throw new Error(authMessage(cause));
+      } finally {
+        signingInRef.current = false;
+        setLoading(false);
+      }
+    },
+    async signUp(loginName, password) {
+      const name = validate(loginName, password);
+      const normalized = normalizeName(name);
+      const { data, error } = await getSupabase().auth.signUp({
+        email: await internalEmail(normalized), password,
+        options: { data: { display_name: name, login_name: normalized } },
+      });
+      if (error || data.user?.identities?.length === 0) throw new Error(authMessage(error ?? new Error('already')));
+    },
+    async signOut() {
+      if (signOutTaskRef.current) return signOutTaskRef.current;
+      const previousSession = sessionRef.current;
+      const previousRequestKey = profileRequestKey(previousSession);
+      const task = (async () => {
+        signingOutRef.current = true;
+        setBootstrapError(null);
+        setLoading(true);
+        try {
+          const backupDrain = prepareBackupForSessionEnd();
+          const coordinatorDrain = profileRequestsRef.current.beginLogout();
+          const integrationsDrain = userIntegrationsRequestLifecycle.beginLogout();
+          await profileLoadQueueRef.current;
+          await Promise.all([
+            coordinatorDrain,
+            backupDrain,
+            integrationsDrain,
+          ]);
+          const { error } = await getSupabase().auth.signOut();
+          if (error) throw error;
+          applySession(null);
+          profileRequestsRef.current.finishLogout();
+          userIntegrationsRequestLifecycle.finishLogout();
+        } catch (cause) {
+          const { data } = await getSupabase().auth.getSession();
+          const restored = data.session ?? previousSession;
+          const restoredRequestKey = profileRequestKey(restored) ?? previousRequestKey;
+          if (restored && restoredRequestKey) {
+            profileRequestsRef.current.restoreAfterFailedLogout(restored.user.id, restoredRequestKey);
+            userIntegrationsRequestLifecycle.restoreAfterFailedLogout(restored.user.id, restoredRequestKey);
+            applySession(restored);
+            resumeBackupForSession(restored.user.id);
+          } else {
+            profileRequestsRef.current.finishLogout();
+            userIntegrationsRequestLifecycle.finishLogout();
+            applySession(null);
+          }
+          throw cause;
+        } finally {
+          signingOutRef.current = false;
+          signOutTaskRef.current = null;
+          setLoading(false);
+        }
+      })();
+      signOutTaskRef.current = task;
+      return task;
+    },
+    async refreshProfile() {
+      const current = sessionRef.current;
+      await loadProfileWithDeadline(current?.user ?? null, { force: true });
+    },
+  }), [bootstrapError, loading, membershipLevel, permissions, profile, session]);
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+export function useAuth() {
+  const value = useContext(AuthContext);
+  if (!value) throw new Error('useAuth는 AuthProvider 안에서 사용해야 합니다.');
+  return value;
+}

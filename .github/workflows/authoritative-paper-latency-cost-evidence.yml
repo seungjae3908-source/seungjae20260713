@@ -1,0 +1,65 @@
+name: Authoritative Paper Latency Cost Evidence
+
+on:
+  pull_request:
+    paths:
+      - 'api-server/src/services/authoritative-paper-latency-cost-evidence.service.ts'
+      - 'api-server/src/services/authoritative-paper-latency-cost-evidence.service.test.ts'
+      - '.github/workflows/authoritative-paper-latency-cost-evidence.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck API server
+        run: pnpm --dir api-server run typecheck
+      - name: Bundle focused latency evidence test
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/services/authoritative-paper-latency-cost-evidence.service.test.ts
+          --bundle --platform=node --format=cjs --target=node20
+          --outfile=/tmp/authoritative-paper-latency-cost-evidence.test.cjs
+      - name: Run focused latency evidence test
+        run: node --test /tmp/authoritative-paper-latency-cost-evidence.test.cjs
+      - name: Bundle canonical admission composer parity test
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/services/scanner-crypto-futures-paper-admission-composer.service.test.ts
+          --bundle --platform=node --format=cjs --target=node20
+          --outfile=/tmp/scanner-crypto-futures-paper-admission-composer.test.cjs
+      - name: Run canonical admission composer parity test
+        run: node --test /tmp/scanner-crypto-futures-paper-admission-composer.test.cjs
+      - name: Regenerate canonical runtime package
+        run: node api-server/scripts/build-authoritative-paper-runtime-package.mjs
+      - name: Verify runtime package and source wiring
+        run: node --test market-prediction-lab/tests/authoritative-paper-runtime-package-v1.test.js
+      - name: Verify generator reproducibility
+        run: >-
+          git diff --exit-code --
+          market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
+          market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
+      - name: Verify safety invariants
+        run: |
+          grep -q "executionAuthority: 'NONE'" api-server/src/services/authoritative-paper-latency-cost-evidence.service.ts
+          grep -q "privateApiAllowed: false" api-server/src/services/authoritative-paper-latency-cost-evidence.service.ts
+          grep -q "liveTrading: false" api-server/src/services/authoritative-paper-latency-cost-evidence.service.ts
+          grep -q "missingDataMayProduceZeroCost: false" api-server/src/services/authoritative-paper-latency-cost-evidence.service.ts
+          grep -q "requestDurationMayBeUsedAsPercentCost: false" api-server/src/services/authoritative-paper-latency-cost-evidence.service.ts
+          grep -q "otherCostComponentsMutable: false" api-server/src/services/authoritative-paper-latency-cost-evidence.service.ts
+          grep -q "readBitgetPublicLatencyMidpointQuote" api-server/src/services/authoritative-paper-evidence-sources.service.ts
+          grep -q "bindAuthoritativePaperLatencyToSupplementalCostInput" api-server/src/services/authoritative-paper-evidence-sources.service.ts

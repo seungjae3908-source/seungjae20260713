@@ -1,0 +1,413 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  buildRecurringPaperSettlementRecord,
+  createRecurringPaperLoopState,
+  restoreRecurringPaperLoopState,
+  runRecurringPaperCycle,
+  serializeRecurringPaperLoopState,
+} from "../src/recurring-paper-loop-v1.js";
+import { FOUR_MARKET_EXECUTION_PROFILES } from "../src/four-market-execution-v2.js";
+
+const T0 = 1_800_000_000_000;
+const SHA = "a".repeat(40);
+const PHASE3_CANDIDATE_ID = `phase3-candidate:sha256:${"1".repeat(64)}`;
+const LEGACY_PAPER_CANDIDATE_ID = `paper-candidate-v1:${"2".repeat(64)}`;
+const identity = Object.freeze({
+  strategyId: "profit-first-v1",
+  strategyVersion: "v1",
+  parameterHash: "params-v1",
+  researchCodeSha: SHA,
+  costPolicyVersion: "cost-v1",
+  executionPolicyVersion: "execution-v1",
+});
+
+function ledger(status = "READY") {
+  return {
+    status,
+    initialCapitalKrw: 1_000_000,
+    baseCurrency: "KRW",
+    knownEquityKrw: 1_000_000,
+    totalEquityKrw: status === "READY" ? 1_000_000 : null,
+    simulatedOnly: true,
+    liveOrderAllowed: false,
+    privateTradingApiAllowed: false,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+  };
+}
+
+function execution(market, now = T0, overrides = {}) {
+  const profile = FOUR_MARKET_EXECUTION_PROFILES[market];
+  const common = {
+    marketAdapterIdentity: profile.marketAdapter,
+    strategyIdentity: identity,
+    costPolicy: {
+      version: "cost-v1", commissionRate: 0.001, taxRate: 0, spreadRate: 0,
+      slippageRate: 0, latencyRate: 0, liquidityImpactRate: 0,
+      partialFillImpactRate: 0, fundingRate: 0,
+    },
+    executionPolicy: {
+      version: "execution-v1", fillModel: "TOP_OF_BOOK", sameBarPolicy: "STOP_FIRST",
+      allowPartialFill: true, maxParticipationRate: 1,
+    },
+    dataEvidence: {
+      provider: profile.provider, publicOnly: true, dataQuality: "READY", provenance: "public-fixture",
+      asOfMs: now - 1, maxAgeMs: 60_000, quoteEvidence: { available: true, bid: 99, ask: 100, asOfMs: now - 1, maxAgeMs: 60_000 },
+    },
+  };
+  if (market === "KR_STOCK") Object.assign(common.dataEvidence, { tickSize: 1, taxPolicyKnown: true, session: { version: "krx-v1", status: "OPEN" }, volatilityInterruptionKnown: true, volatilityInterruptionActive: false });
+  if (market === "US_STOCK") Object.assign(common.dataEvidence, { tickSize: 0.01, taxPolicyKnown: true, session: { version: "us-v1", status: "OPEN", kind: "REGULAR" } });
+  if (market === "CRYPTO_SPOT") Object.assign(common.dataEvidence, { marketStatus: "TRADABLE", tickSize: 1, minOrderNotional: 5_000 });
+  if (market === "CRYPTO_FUTURES") Object.assign(common.dataEvidence, { contractStatus: "TRADABLE", tickSize: 0.1, minQty: 0.001, qtyStep: 0.001, markPrice: 100, indexPrice: 100, fundingRate: 0, openInterest: 1, leverage: 2, maxLeverage: 20, marginMode: "ISOLATED", liquidationDistancePct: 20 });
+  return { ...common, ...overrides, dataEvidence: { ...common.dataEvidence, ...(overrides.dataEvidence ?? {}) } };
+}
+
+function candidate(market, id, decision = "ELIGIBLE", direction = market === "CRYPTO_FUTURES" ? "LONG" : "BUY", now = T0) {
+  const signalTimestampMs = now - 2;
+  return {
+    signal: {
+      signalId: id, market, symbol: `${market}:${id}`, timestampMs: signalTimestampMs, style: "SWING", timeframe: "1h", horizon: 4, direction, strategyIdentity: identity,
+      learningSnapshot: {
+        signalId: id, timestamp: new Date(signalTimestampMs).toISOString(), market, symbol: `${market}:${id}`, symbolName: null,
+        strategyHorizon: "SWING", direction, signalScore: 70, displayConfidence: null, referencePrice: 100, entryPrice: 100,
+        stopLoss: null, target1: null, target2: null, riskReward: null, timeframes: ["1h"], strategyProfileVersion: identity.strategyVersion,
+        indicatorSnapshot: {}, indicatorScores: {}, patternSnapshot: {}, volumeContext: {}, volatilityContext: {}, trendContext: {},
+        marketRegime: "UNKNOWN", liquidityContext: {}, aiValidatorResult: null, riskEngineResult: null,
+        dataProvenance: ["public-fixture"], dataTimestamp: new Date(signalTimestampMs - 1).toISOString(),
+        immutable: true, executionAuthority: "NONE",
+      },
+    },
+    riskEvidence: { status: "APPROVED", evaluatedAtMs: now - 1, simulatedOnly: true },
+    profitGate: { decision, eligible: decision === "ELIGIBLE", reasons: decision === "ELIGIBLE" ? [] : ["NO_POSITIVE_NET_EDGE"], executionAuthority: "NONE" },
+    profitEvidence: { status: decision === "ELIGIBLE" ? "READY" : "INSUFFICIENT_SAMPLE", expectedNetEdge: decision === "ELIGIBLE" ? 0.01 : null, expectedNetReturn: decision === "ELIGIBLE" ? 0.01 : null, riskRewardRatio: decision === "ELIGIBLE" ? 1.5 : null, sampleSize: decision === "ELIGIBLE" ? 30 : 0, costPolicyId: "cost-v1", executionAuthority: "NONE" },
+    execution: execution(market, now),
+    order: { type: "MARKET", quantity: 1, direction },
+    quote: { bid: 99, ask: 100, bidSize: 10, askSize: 10, asOfMs: now - 1, maxAgeMs: 60_000 },
+  };
+}
+
+function genuineNaturalCandidate(market, id, {
+  strategyCandidateId = PHASE3_CANDIDATE_ID,
+  frozenCandidateId = strategyCandidateId,
+  now = T0,
+} = {}) {
+  const row = candidate(market, id, "ELIGIBLE", market === "CRYPTO_FUTURES" ? "LONG" : "BUY", now);
+  const strategyIdentity = Object.freeze({
+    ...identity,
+    candidateId: strategyCandidateId,
+    strategyFamily: "MOMENTUM_CROSS",
+    parameterDigest: identity.parameterHash,
+    accountMode: "PAPER",
+  });
+  row.candidateId = frozenCandidateId;
+  row.signal.strategyIdentity = strategyIdentity;
+  row.execution = execution(market, now, { strategyIdentity });
+  row.naturalEvidence = Object.freeze({
+    provenanceClass: "NATURAL_FORWARD",
+    synthetic: false,
+    replay: false,
+    testOnly: false,
+    backfill: false,
+    historical: false,
+    duplicate: false,
+    observationId: `natural-forward:${id}`,
+    source: "recurring-paper-loop-v1.test",
+    observedAtMs: now - 1,
+  });
+  row.riskPolicyIdentity = Object.freeze({
+    policyId: "paper-risk-policy-v1",
+    policyVersion: "v1",
+    source: "recurring-paper-loop-v1.test",
+    researchCodeSha: SHA,
+  });
+  return row;
+}
+
+function harness(initial = ledger()) {
+  let entryMutations = 0;
+  let settlementMutations = 0;
+  let saves = 0;
+  const learnedSignals = new Set();
+  const learnedOutcomes = new Set();
+  let failNextOutcome = false;
+  return {
+    state: createRecurringPaperLoopState({ identity, ledger: initial, createdAtMs: T0 - 10 }),
+    ledgerAdapter: {
+      async applyEntry({ ledger: current }) { entryMutations += 1; return current; },
+      async applySettlement({ ledger: current, settlement }) {
+        settlementMutations += 1;
+        return { ...current, knownEquityKrw: current.knownEquityKrw + settlement.netPnl, totalEquityKrw: current.totalEquityKrw == null ? null : current.totalEquityKrw + settlement.netPnl };
+      },
+    },
+    stateStore: { async save() { saves += 1; } },
+    learningAdapter: {
+      async persistSignal({ sample }) { learnedSignals.add(sample.identity.signalId); },
+      async persistOutcome({ settlement }) {
+        if (failNextOutcome) { failNextOutcome = false; throw new Error("TEMPORARY_LEARNING_FAILURE"); }
+        learnedOutcomes.add(settlement.settlementId);
+      },
+    },
+    failNextOutcome: () => { failNextOutcome = true; },
+    counts: () => ({ entryMutations, settlementMutations, saves, learnedSignals: learnedSignals.size, learnedOutcomes: learnedOutcomes.size }),
+  };
+}
+
+function run(h, input) {
+  return runRecurringPaperCycle({ ...input, ledgerAdapter: h.ledgerAdapter, learningAdapter: h.learningAdapter, stateStore: h.stateStore });
+}
+
+function cycle(id, time = T0) { return { cycleId: id, evaluatedAtMs: time, identity }; }
+
+test("NO_TRADE creates no entry and same cycle replay is idempotent", async () => {
+  const h = harness();
+  const first = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [candidate("KR_STOCK", "s1", "NO_TRADE")] });
+  assert.equal(first.summary.entries, 0);
+  assert.equal(first.summary.noTrade, 1);
+  assert.equal(first.summary.canonicalNaturalStageEvidence.stageCounts.entryEligible.count, 0);
+  assert.equal(first.summary.canonicalNaturalStageEvidence.stageCounts.entry.count, 0);
+  assert.equal(first.summary.canonicalNaturalStageEvidence.stageCounts.position.count, 0);
+  const replay = await run(h, { state: first.state, cycle: cycle("c1"), candidates: [candidate("KR_STOCK", "s1")] });
+  assert.equal(replay.summary.replayed, true);
+  assert.equal(replay.summary.canonicalNaturalStageEvidence.stageCounts.entryEligible.status, "UNKNOWN");
+  assert.equal(replay.summary.canonicalNaturalStageEvidence.naturalCredit, 0);
+  assert.equal(replay.summary.canonicalNaturalStageEvidence.replayCredit, 0);
+  assert.equal(replay.summary.canonicalNaturalStageEvidence.reasonObservations[0].canonicalReason, "REPLAY_ONLY");
+  assert.deepEqual(h.counts(), { entryMutations: 0, settlementMutations: 0, saves: 1, learnedSignals: 0, learnedOutcomes: 0 });
+});
+
+test("four markets and futures SHORT enter once with canonical public evidence", async () => {
+  const h = harness();
+  const rows = [candidate("KR_STOCK", "kr"), candidate("US_STOCK", "us"), candidate("CRYPTO_SPOT", "spot"), candidate("CRYPTO_FUTURES", "long"), candidate("CRYPTO_FUTURES", "short", "ELIGIBLE", "SHORT")];
+  const first = await run(h, { state: h.state, cycle: cycle("c1"), candidates: rows });
+  assert.equal(first.summary.entries, 5);
+  assert.equal(first.summary.canonicalNaturalStageEvidence.stageCounts.entryEligible.count, 5);
+  assert.equal(first.summary.canonicalNaturalStageEvidence.stageCounts.entry.count, 5);
+  assert.equal(first.summary.canonicalNaturalStageEvidence.stageCounts.position.count, 5);
+  assert.notEqual(
+    first.summary.canonicalNaturalStageEvidence.stageCounts.entry.provenance,
+    first.summary.canonicalNaturalStageEvidence.stageCounts.position.provenance,
+  );
+  const second = await run(h, { state: first.state, cycle: cycle("c2", T0 + 1), candidates: rows });
+  assert.equal(second.summary.entries, 0);
+  assert.equal(h.counts().entryMutations, 5);
+  assert.equal(h.counts().learnedSignals, 5);
+});
+
+
+test("new positions preserve an immutable settlement execution policy without backfilling old state", async () => {
+  const h = harness();
+  const row = genuineNaturalCandidate("CRYPTO_FUTURES", "settlement-policy");
+  const result = await run(h, { state: h.state, cycle: cycle("policy-cycle"), candidates: [row] });
+  assert.equal(result.summary.entries, 1);
+  assert.equal(result.state.positions.length, 1);
+  const position = result.state.positions[0];
+  assert.notEqual(position.settlementExecutionPolicy, row.execution);
+  assert.deepEqual(position.settlementExecutionPolicy.marketAdapterIdentity, row.execution.marketAdapterIdentity);
+  assert.deepEqual(position.settlementExecutionPolicy.executionPolicy, row.execution.executionPolicy);
+  assert.deepEqual(position.settlementExecutionPolicy.entryDataEvidence, row.execution.dataEvidence);
+  assert.equal(position.settlementExecutionPolicy.costPolicyIdentity.version, row.execution.costPolicy.version);
+  assert.equal(Object.isFrozen(position.settlementExecutionPolicy), true);
+  assert.equal(Object.isFrozen(position.settlementExecutionPolicy.executionPolicy), true);
+  assert.equal(Object.isFrozen(position.settlementExecutionPolicy.entryDataEvidence), true);
+});
+
+test("entry candidate and authoritative cost provenance survive durable recurring state unchanged", async () => {
+  const h = harness();
+  const row = genuineNaturalCandidate("CRYPTO_FUTURES", "entry-provenance");
+  const component = (valuePercent, source, quality = "OBSERVED") => ({
+    valuePercent,
+    source,
+    quality,
+    observedAtMs: T0 - 1,
+  });
+  const provenance = {
+    market: "CRYPTO_FUTURES",
+    policyId: "cost-v1",
+    paperCostPolicyVersion: "cost-v1",
+    providerProvenance: "public-fixture",
+    components: {
+      commission: component(0.10, "public:commission"),
+      tax: component(0, "public:tax", "NOT_APPLICABLE"),
+      spread: component(0.02, "public:spread"),
+      slippage: component(0.03, "public:slippage", "ESTIMATED"),
+      funding: component(0.01, "public:funding"),
+      latency: component(0.01, "public:latency", "ESTIMATED"),
+      liquidityImpact: component(0.02, "public:liquidity", "ESTIMATED"),
+      partialFillImpact: component(0.03, "public:partial-fill", "ESTIMATED"),
+    },
+  };
+  row.execution = { ...row.execution, costProvenance: provenance };
+
+  const result = await run(h, {
+    state: h.state,
+    cycle: cycle("entry-provenance-cycle"),
+    candidates: [row],
+  });
+  assert.equal(result.summary.entries, 1);
+  const position = result.state.positions[0];
+  assert.notEqual(position.entryCandidate, row);
+  assert.deepEqual(position.entryCandidate.execution.costProvenance, provenance);
+  assert.deepEqual(position.entryCostProvenance, provenance);
+  assert.deepEqual(position.settlementExecutionPolicy.entryCostProvenance, provenance);
+  assert.equal(Object.isFrozen(position.entryCandidate), true);
+  assert.equal(Object.isFrozen(position.entryCostProvenance), true);
+  assert.equal(Object.isFrozen(position.settlementExecutionPolicy.entryCostProvenance), true);
+
+  const restored = restoreRecurringPaperLoopState(
+    serializeRecurringPaperLoopState(result.state),
+    identity,
+  );
+  assert.deepEqual(restored.positions[0].entryCandidate, position.entryCandidate);
+  assert.deepEqual(restored.positions[0].entryCostProvenance, position.entryCostProvenance);
+  assert.deepEqual(
+    restored.positions[0].settlementExecutionPolicy.entryCostProvenance,
+    position.settlementExecutionPolicy.entryCostProvenance,
+  );
+});
+
+test("canonical Phase3 candidate ID is preserved unchanged through genuine recurring Paper entry", async () => {
+  const h = harness();
+  const row = genuineNaturalCandidate("CRYPTO_SPOT", "phase3");
+  const result = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [row] });
+  assert.equal(result.summary.entries, 1);
+  assert.equal(result.summary.blocked, 0);
+  assert.equal(result.state.samples[0].identity.candidateId, PHASE3_CANDIDATE_ID);
+  assert.equal(result.state.positions[0].candidateId, PHASE3_CANDIDATE_ID);
+  assert.equal(result.state.positions[0].lifecycle.strategyIdentity.candidateId, PHASE3_CANDIDATE_ID);
+  assert.equal(h.counts().entryMutations, 1);
+});
+
+test("legacy Paper candidate namespace remains compatible for genuine recurring entry", async () => {
+  const h = harness();
+  const row = genuineNaturalCandidate("CRYPTO_SPOT", "legacy", {
+    strategyCandidateId: LEGACY_PAPER_CANDIDATE_ID,
+  });
+  const result = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [row] });
+  assert.equal(result.summary.entries, 1);
+  assert.equal(result.summary.blocked, 0);
+  assert.equal(result.state.positions[0].candidateId, LEGACY_PAPER_CANDIDATE_ID);
+  assert.equal(h.counts().entryMutations, 1);
+});
+
+test("unknown frozen candidate namespace remains fail-closed", async () => {
+  const h = harness();
+  const row = genuineNaturalCandidate("CRYPTO_SPOT", "unknown", {
+    strategyCandidateId: `unknown-candidate-v1:${"3".repeat(64)}`,
+  });
+  const result = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [row] });
+  assert.equal(result.summary.entries, 0);
+  assert.equal(result.summary.blocked, 1);
+  assert.equal(result.state.samples[0].status, "BLOCKED");
+  assert.equal(result.state.samples[0].blockers.includes("PAPER_CANDIDATE_ID_REQUIRED"), true);
+  assert.equal(h.counts().entryMutations, 0);
+  assert.equal(h.counts().learnedSignals, 0);
+});
+
+test("canonical candidate namespace never weakens exact frozen candidate equality", async () => {
+  const h = harness();
+  const row = genuineNaturalCandidate("CRYPTO_SPOT", "mismatch", {
+    strategyCandidateId: PHASE3_CANDIDATE_ID,
+    frozenCandidateId: `phase3-candidate:sha256:${"4".repeat(64)}`,
+  });
+  const result = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [row] });
+  assert.equal(result.summary.entries, 0);
+  assert.equal(result.summary.blocked, 1);
+  assert.equal(result.state.samples[0].blockers.includes("PAPER_CANDIDATE_IDENTITY_MISMATCH"), true);
+  assert.equal(h.counts().entryMutations, 0);
+});
+
+test("future and stale market evidence fail closed", async () => {
+  const h = harness();
+  const future = candidate("CRYPTO_SPOT", "future");
+  future.execution.dataEvidence.asOfMs = T0 + 1;
+  const stale = candidate("CRYPTO_SPOT", "stale");
+  stale.execution.dataEvidence.asOfMs = T0 - 61_000;
+  const result = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [future, stale] });
+  assert.equal(result.summary.blocked, 2);
+  assert.equal(result.summary.entries, 0);
+  assert.equal(result.summary.canonicalNaturalStageEvidence.stageCounts.entryEligible.count, 0);
+  assert.equal(
+    result.summary.canonicalNaturalStageEvidence.reasonObservations.some((row) => row.canonicalReason === "DATA_STALE"),
+    true,
+  );
+  assert.equal(h.counts().learnedSignals, 0);
+  assert.equal(h.counts().learnedOutcomes, 0);
+});
+
+test("valid future exit settles exactly once and replay cannot mutate ledger", async () => {
+  const h = harness();
+  const opened = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [candidate("CRYPTO_SPOT", "spot")] });
+  const positionId = opened.state.positions[0].positionId;
+  const exitExecution = execution("CRYPTO_SPOT", T0 + 10);
+  const exit = { positionId, settlementInput: { exitExecution, exitQuote: { bid: 105, ask: 106, bidSize: 10, askSize: 10, asOfMs: T0 + 9, maxAgeMs: 60_000 }, pathBars: [{ timestampMs: T0 + 5, high: 107, low: 98 }], fundingEvidence: { complete: true, payments: [] } } };
+  const settled = await run(h, { state: opened.state, cycle: cycle("c2", T0 + 10), exits: [exit] });
+  assert.equal(settled.summary.tradesSettled, 1);
+  assert.equal(settled.summary.canonicalNaturalStageEvidence.stageCounts.settlement.count, 1);
+  assert.equal(settled.summary.canonicalNaturalStageEvidence.stageCounts.settlement.observationIds.length, 1);
+  assert.equal(settled.state.positions.length, 0);
+  const record = settled.state.settlements[0];
+  assert.match(record.settlementId, /^[0-9a-f]{64}$/);
+  assert.equal(record.positionId, positionId);
+  assert.equal(record.entryId, opened.state.positions[0].paperSampleId);
+  assert.equal(record.settlementIdentity.netPnl, record.netPnl);
+  assert.equal(record.netPnl, record.grossPnl - record.entryCost - record.exitCost - record.fundingCost);
+  // Legacy monetary PnL is not complete canonical evidence. Enrichment must
+  // keep an absent cost reference absent, not create an all8 completion claim.
+  assert.equal(record.settlementIdentity.costEvidenceDigest, null);
+  assert.equal(record.lifecycleEvidence, null);
+  assert.equal(record.fullCostReady, undefined);
+  assert.equal(record.naturalSampleCredit, 0);
+  assert.equal(record.orderSubmitted, false);
+  const partial = { costEvidence: { status: 'BLOCKED_DATA', fullCostReady: false, components: {} } };
+  const transported = buildRecurringPaperSettlementRecord({ settlement: record, position: opened.state.positions[0],
+    canonicalLifecycleEvidence: partial, settlementRecordedAtMs: T0 + 10 });
+  assert.equal(transported.settlementIdentity.costEvidenceDigest, null);
+  assert.deepEqual(transported.lifecycleEvidence, partial);
+  assert.equal(transported.lifecycleEvidence.costEvidence.fullCostReady, false);
+  assert.equal(transported.fullCostReady, undefined);
+  assert.equal(transported.netPnl, record.netPnl);
+  const replay = await run(h, { state: settled.state, cycle: cycle("c3", T0 + 11), exits: [exit] });
+  assert.equal(replay.summary.tradesSettled, 0);
+  assert.equal(h.counts().settlementMutations, 1);
+  assert.equal(h.counts().learnedOutcomes, 1);
+});
+
+test("restart restores open position and rejects policy identity mismatch", async () => {
+  const h = harness();
+  const opened = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [candidate("US_STOCK", "us")] });
+  const restored = restoreRecurringPaperLoopState(serializeRecurringPaperLoopState(opened.state), identity);
+  assert.equal(restored.positions.length, 1);
+  assert.throws(() => restoreRecurringPaperLoopState(serializeRecurringPaperLoopState(opened.state), { ...identity, costPolicyVersion: "cost-v2" }), /PREDECESSOR_IDENTITY_MISMATCH/);
+});
+
+test("missing FX keeps total equity N/A and never fabricates a number", async () => {
+  const h = harness(ledger("PARTIAL"));
+  const result = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [] });
+  assert.equal(result.summary.totalEquityKrw, null);
+  assert.equal(result.summary.equityStatus, "PARTIAL");
+  assert.equal(result.summary.sampleStatus, "N/A_INSUFFICIENT_SETTLED_SAMPLE");
+});
+
+test("learning persistence failure is retry-safe and precedes ledger settlement mutation", async () => {
+  const h = harness();
+  const opened = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [candidate("CRYPTO_SPOT", "retry")] });
+  const positionId = opened.state.positions[0].positionId;
+  const exit = {
+    positionId,
+    settlementInput: {
+      exitExecution: execution("CRYPTO_SPOT", T0 + 10),
+      exitQuote: { bid: 105, ask: 106, bidSize: 10, askSize: 10, asOfMs: T0 + 9, maxAgeMs: 60_000 },
+      pathBars: [{ timestampMs: T0 + 5, high: 107, low: 98 }],
+      fundingEvidence: { complete: true, payments: [] },
+    },
+  };
+  h.failNextOutcome();
+  await assert.rejects(() => run(h, { state: opened.state, cycle: cycle("c2", T0 + 10), exits: [exit] }), /TEMPORARY_LEARNING_FAILURE/);
+  assert.equal(h.counts().settlementMutations, 0);
+  assert.equal(h.counts().learnedOutcomes, 0);
+  const retried = await run(h, { state: opened.state, cycle: cycle("c2", T0 + 10), exits: [exit] });
+  assert.equal(retried.summary.tradesSettled, 1);
+  assert.equal(h.counts().settlementMutations, 1);
+  assert.equal(h.counts().learnedOutcomes, 1);
+});

@@ -1,0 +1,124 @@
+name: Research Dual-Free-AI Seam Validation
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+    paths:
+      - api-server/src/services/research-dual-free-ai.service.ts
+      - api-server/src/services/research-dual-free-ai.service.test.ts
+      - api-server/scripts/run-dual-free-ai-research.ts
+      - .github/workflows/research-ai-one-shot-pilot.yml
+  push:
+    branches:
+      - main
+    paths:
+      - api-server/src/services/research-dual-free-ai.service.ts
+      - api-server/src/services/research-dual-free-ai.service.test.ts
+      - api-server/scripts/run-dual-free-ai-research.ts
+      - .github/workflows/research-ai-one-shot-pilot.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-dual-free-ai-seam-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  PAID_FALLBACK: "false"
+  LIVE_TRADING: "false"
+  EXECUTION_AUTHORITY: "NONE"
+
+jobs:
+  validate:
+    name: Dual free AI research-only contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact tested SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify exact detached checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if ! [[ "$EXPECTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error title=Invalid exact SHA::Expected a 40-character commit SHA"
+            exit 1
+          fi
+          test "${actual_sha,,}" = "${EXPECTED_SHA,,}"
+          echo "tested_sha=${actual_sha,,}"
+
+      - name: Assert current-hub and research-only safety contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow=.github/workflows/research-ai-one-shot-pilot.yml
+          service=api-server/src/services/research-dual-free-ai.service.ts
+          runner=api-server/scripts/run-dual-free-ai-research.ts
+
+          ! grep -Eq 'HUB_ISSUE_NUMBER.{0,12}62|github\.event\.issue\.number\s*==\s*62|pulls/555|PR_NUMBER.{0,12}555' "$workflow"
+          ! grep -Eq 'generativelanguage\.googleapis\.com|api\.groq\.com|api\.openai\.com' "$service" "$runner"
+          grep -Fq "answerAiChat" "$runner"
+          grep -Fq "delete process.env.GROQ_API_KEY" "$runner"
+          grep -Fq "delete process.env.GEMINI_API_KEY" "$runner"
+          grep -Fq "PAID_FALLBACK: \"false\"" "$workflow"
+          grep -Fq "LIVE_TRADING: \"false\"" "$workflow"
+          grep -Fq "EXECUTION_AUTHORITY: \"NONE\"" "$workflow"
+          ! grep -Eq '^\s*schedule:' "$workflow"
+          ! grep -Eq '^\s*workflow_dispatch:' "$workflow"
+          ! grep -Eq 'GEMINI_API_KEY:.*secrets\.|GROQ_API_KEY:.*secrets\.' "$workflow"
+          echo 'providerRuntimeInvoked=false'
+          echo 'paidFallback=false'
+          echo 'executionAuthority=NONE'
+          echo 'orderAllowed=false'
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Backend typecheck
+        run: pnpm --dir api-server run typecheck
+
+      - name: Bundle isolated dual-free-ai contract tests
+        run: >-
+          pnpm --dir api-server exec esbuild src/services/research-dual-free-ai.service.test.ts
+          --bundle --platform=node --format=cjs
+          --outfile=/tmp/research-dual-free-ai.service.test.cjs
+
+      - name: Run isolated dual-free-ai contract tests
+        run: node --test /tmp/research-dual-free-ai.service.test.cjs
+
+      - name: Compile provider-isolated runner without executing providers
+        run: >-
+          pnpm --dir api-server exec esbuild scripts/run-dual-free-ai-research.ts
+          --bundle --platform=node --format=esm --packages=external
+          --outfile=/tmp/run-dual-free-ai-research.mjs
+
+      - name: Verify validation did not mutate repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          test -z "$(git status --porcelain=v1)"
