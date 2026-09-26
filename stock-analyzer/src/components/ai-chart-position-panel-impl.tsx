@@ -617,9 +617,9 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     try {
       const query = new URLSearchParams({
         dashboard: '1',
-        exchange: provider,
         symbol,
       });
+      if (market !== 'KR' && market !== 'US') query.set('exchange', provider);
       const response = await authorizedFetch(`/api/trade-automation/orders?${query.toString()}`, {
         method: 'GET',
         cache: 'no-store',
