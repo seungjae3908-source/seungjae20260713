@@ -189,7 +189,7 @@ test('timeframe changes clear stale Scanner price plan and expose one symbol sea
   await chart.getByTestId('timeframe-1H').click();
   await expect(page.locator('header')).toContainText('1H');
   await expect(plan.getByTestId('scanner-price-plan-action')).toHaveText('미확인');
-  await expect(plan).toContainText('Scanner에서 전달된 Price Plan이 없습니다.');
+  await expect(plan).toContainText('확인된 매매 계획이 없습니다.');
   await expect(plan).not.toContainText('80.95');
   await expect(plan).not.toContainText('85.3');
 
