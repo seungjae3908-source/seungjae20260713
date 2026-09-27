@@ -70,3 +70,25 @@ test('adapter source reuses merged canonical replay, settlement and dataset owne
   assert.doesNotMatch(source,/function\s+discoverCandidates/);
   assert.doesNotMatch(source,/function\s+buildWalkForward/);
 });
+
+
+test('three-year readiness blocks missing dataset manifests even when canonical cells claim READY',()=>{
+  const readiness={profiles:ADAPTIVE_MULTI_MARKET_PROFILES_V1.map(p=>({...p,status:'READY',missingRequirements:[]}))};
+  const result=summarizeThreeYearProfileReadiness({readiness,datasetManifestsByProfile:{}});
+  assert.equal(result.fourMarketReady,false);
+  assert.equal(result.readyMarketCount,0);
+  assert.equal(result.blockedMarketCount,4);
+  for(const market of Object.values(result.markets)) assert.ok(market.blockers.includes('DATASET_MANIFEST_MISSING'));
+});
+
+test('three-year readiness requires every canonical profile to cover the exact audit range',()=>{
+  const readiness={profiles:ADAPTIVE_MULTI_MARKET_PROFILES_V1.map(p=>({...p,status:'READY',missingRequirements:[]}))};
+  const manifests=Object.fromEntries(ADAPTIVE_MULTI_MARKET_PROFILES_V1.map(p=>[p.profileId,{
+    profileId:p.profileId,market:p.market,datasetSnapshotHash:'a'.repeat(64),
+    scope:{startTime:MOVE_HUNTER_AUDIT_START_MS,endTime:MOVE_HUNTER_AUDIT_END_MS,timeframe:p.timeframe},
+  }]));
+  const result=summarizeThreeYearProfileReadiness({readiness,datasetManifestsByProfile:manifests});
+  assert.equal(result.fourMarketReady,true);
+  assert.equal(result.readyMarketCount,4);
+  assert.equal(result.blockedMarketCount,0);
+});
