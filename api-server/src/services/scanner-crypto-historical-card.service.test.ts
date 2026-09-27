@@ -4,7 +4,9 @@ import { createHash } from 'node:crypto';
 
 import {
   buildHistoricalCryptoScannerDecisionV1,
+  clearHistoricalCryptoScannerReplaySessionsForTests,
 } from './scanner-crypto-historical-card.service';
+import { clearScannerSignalLifecycleForTests } from './scanner-signal-lifecycle.service';
 import type {
   CryptoCandle,
   CryptoTicker,
@@ -57,6 +59,7 @@ function ticker(): CryptoTicker {
 function input(overrides: Record<string, unknown> = {}) {
   const primary = candles();
   return {
+    replaySessionId: digest('default-session'),
     decisionTimeMs: DECISION,
     market: 'futures' as const,
     timeframe: '60m' as const,
@@ -90,6 +93,11 @@ function input(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+test.beforeEach(() => {
+  clearHistoricalCryptoScannerReplaySessionsForTests();
+  clearScannerSignalLifecycleForTests();
+});
 
 test('historical futures decision reuses the live crypto Scanner factory with point-in-time public evidence', async () => {
   const result = await buildHistoricalCryptoScannerDecisionV1(input());
@@ -189,4 +197,18 @@ test('provenance from after the decision boundary is rejected', async () => {
   const result = await buildHistoricalCryptoScannerDecisionV1(value);
   assert.equal(result.status, 'BLOCKED_DATA');
   assert.equal(result.reason, 'HISTORICAL_SCANNER_TICKER_OR_SPREAD_PROVENANCE_INVALID');
+});
+
+
+test('historical replay session rejects non-monotonic decision order to prevent fold leakage', async () => {
+  const replaySessionId = digest('monotonic-session');
+  const first = await buildHistoricalCryptoScannerDecisionV1(input({ replaySessionId }));
+  assert.notEqual(first.status, 'BLOCKED_DATA');
+
+  const second = await buildHistoricalCryptoScannerDecisionV1(input({
+    replaySessionId,
+    decisionTimeMs: DECISION - HOUR,
+  }));
+  assert.equal(second.status, 'BLOCKED_DATA');
+  assert.equal(second.reason, 'HISTORICAL_SCANNER_NON_MONOTONIC_SESSION');
 });
