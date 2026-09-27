@@ -1,13 +1,28 @@
 // Keep the HTML entry intentionally dependency-free. On a direct AI Chart
-// document, give the route chunk first request priority before starting the much
-// larger application graph. The app/runtime imports still begin in the same task,
-// but the user-critical chart request enters the browser queue first.
-if (window.location.pathname.endsWith('/ai-chart')) {
-	void import('@/pages/ai-chart').catch(() => undefined);
-}
-const appModulePromise = import('./App');
-const runtimeModulePromise = import('./app-runtime');
+// document, start the user-critical route preloads first, promote those exact
+// modulepreload links, then yield one task before adding the much larger App and
+// runtime preload graphs. This gives the cold route a real network scheduling
+// head start without delaying any non-AI-Chart document.
+const directAiChartColdRoute = window.location.pathname.endsWith('/ai-chart');
 
-void Promise.all([appModulePromise, runtimeModulePromise]).then(([{ default: App }, { mountApp }]) => {
-	mountApp(App);
-});
+if (directAiChartColdRoute) {
+	void import('@/pages/ai-chart').catch(() => undefined);
+	for (const link of document.querySelectorAll<HTMLLinkElement>('link[rel="modulepreload"]')) {
+		link.setAttribute('fetchpriority', 'high');
+	}
+}
+
+function startApplicationGraph() {
+	const appModulePromise = import('./App');
+	const runtimeModulePromise = import('./app-runtime');
+
+	void Promise.all([appModulePromise, runtimeModulePromise]).then(([{ default: App }, { mountApp }]) => {
+		mountApp(App);
+	});
+}
+
+if (directAiChartColdRoute) {
+	window.setTimeout(startApplicationGraph, 0);
+} else {
+	startApplicationGraph();
+}
