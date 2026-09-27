@@ -92,6 +92,7 @@ test('portfolio applies indicator invalidation on next bar open', () => {
         [String(invalidTs)]: { state: 'INVALID', trailAtrMult: 1.5, exitNextOpen: true },
       },
     },
+    indicatorExitEnabled: true,
     initialCapital: 1_000_000,
     costs: { feeBps: 15 },
   });
