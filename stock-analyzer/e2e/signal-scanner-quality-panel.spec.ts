@@ -190,7 +190,7 @@ test('desktop Signal Detail exposes server quality, quant and ranking evidence w
   const desktopDetail = page.getByTestId('scanner-master-list').getByTestId('signal-detail');
   const panel = desktopDetail.getByTestId('scanner-signal-quality-panel');
   await expect(panel).toBeVisible();
-  await expect(desktopDetail.getByTestId('scanner-signal-state')).toHaveText('상태 CONFIRMED');
+  await expect(desktopDetail.getByTestId('scanner-signal-state')).toHaveText('상태 확인됨');
   await panel.getByText('신호 품질 상세', { exact: true }).click();
   await expect(panel.getByTestId('scanner-quality-data-state')).toHaveText('양호');
   await expect(panel.getByTestId('scanner-quality-data-score')).toHaveText('96');
@@ -220,7 +220,7 @@ test('mobile quality panel fails closed for untrusted and missing evidence', asy
 
   const sheet = page.getByTestId('scanner-mobile-sheet');
   await expect(sheet).toBeVisible();
-  await expect(sheet.getByTestId('scanner-signal-state')).toHaveText('상태 WEAKENED');
+  await expect(sheet.getByTestId('scanner-signal-state')).toHaveText('상태 약화');
   await sheet.getByRole('tab', { name: '근거', exact: true }).click();
   const panel = sheet.getByTestId('scanner-signal-quality-panel');
   await expect(panel).toBeVisible();
