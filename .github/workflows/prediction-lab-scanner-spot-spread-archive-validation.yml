@@ -11,10 +11,12 @@ on:
     types: [opened, synchronize, reopened]
     paths:
       - .github/workflows/prediction-lab-scanner-spot-spread-archive-validation.yml
+      - .github/workflows/prediction-lab-scanner-spot-spread-forward-collector-dormant.yml
       - market-prediction-lab/src/scanner-spot-spread-archive-v1.js
       - market-prediction-lab/src/market-digital-twin-microstructure-v1.js
       - market-prediction-lab/scripts/run-scanner-spot-spread-archive-v1.js
       - market-prediction-lab/tests/scanner-spot-spread-archive-v1.test.js
+      - market-prediction-lab/tests/scanner-spot-spread-forward-collector-dormant.test.js
       - market-prediction-lab/tests/market-digital-twin-microstructure-v1.test.js
 
 permissions:
@@ -71,6 +73,7 @@ jobs:
           set -euo pipefail
           node --test \
             market-prediction-lab/tests/scanner-spot-spread-archive-v1.test.js \
+            market-prediction-lab/tests/scanner-spot-spread-forward-collector-dormant.test.js \
             market-prediction-lab/tests/market-digital-twin-microstructure-v1.test.js
 
       - name: Capture genuine public Upbit BTC orderbook once
