@@ -53,6 +53,7 @@ const requiredFragments = [
   'TELEGRAM_INTELLIGENCE_WORKER_ENABLED',
   'PERSONAL_TELEGRAM_WORKER_ENABLED',
   'PUBLIC_BASE_URL: https://lsj119.com',
+  'TELEGRAM_REMOTE_NODE_OPTIONS: --dns-result-order=ipv4first --no-network-family-autoselection',
   'TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED',
   'TELEGRAM_SIGNAL_AI_ENABLED',
   'TELEGRAM_DAILY_BRIEF_RICH_ENABLED',
@@ -108,6 +109,30 @@ const runtimePreflightIndex = source.indexOf('Validate complete Telegram runtime
 const storageMigrationIndex = source.indexOf('Apply and verify Production personal Telegram storage atomically');
 if (runtimePreflightIndex < 0 || storageMigrationIndex <= runtimePreflightIndex) {
   throw new Error('Complete Telegram runtime/external read-only preflight must run before any Production storage mutation');
+}
+const remoteNodeOptionsValue = '--dns-result-order=ipv4first --no-network-family-autoselection';
+const remoteNodeOptionsDeclaration = `TELEGRAM_REMOTE_NODE_OPTIONS: ${remoteNodeOptionsValue}`;
+if (!source.includes(remoteNodeOptionsDeclaration)) {
+  throw new Error('Telegram Production must declare the tested IPv4-first remote Node network policy');
+}
+const runtimePreflightBlock = source.slice(runtimePreflightIndex, storageMigrationIndex);
+if (!runtimePreflightBlock.includes('NODE_OPTIONS=%q')
+  || !runtimePreflightBlock.includes('"$TELEGRAM_REMOTE_NODE_OPTIONS"')) {
+  throw new Error('Telegram runtime preflight must inject the IPv4-first Node policy into the remote SSH process');
+}
+const telegramSmokeIndex = source.indexOf('Activate approved Telegram runtime, verify exact identity, and send one sanitized proof');
+const completionEvidenceIndex = source.indexOf('Record sanitized Production completion evidence', telegramSmokeIndex);
+if (telegramSmokeIndex < 0 || completionEvidenceIndex <= telegramSmokeIndex) {
+  throw new Error('Telegram Production smoke verification block was not found');
+}
+const telegramSmokeBlock = source.slice(telegramSmokeIndex, completionEvidenceIndex);
+if (!telegramSmokeBlock.includes('NODE_OPTIONS=%q')
+  || !telegramSmokeBlock.includes('"$TELEGRAM_REMOTE_NODE_OPTIONS"')) {
+  throw new Error('Telegram Production smoke verification must inject the IPv4-first Node policy into the remote SSH process');
+}
+const remoteNodeOptionsInjectionCount = (source.match(/NODE_OPTIONS=%q/g) ?? []).length;
+if (remoteNodeOptionsInjectionCount !== 2) {
+  throw new Error(`Telegram remote Node network policy must be injected exactly twice; found ${remoteNodeOptionsInjectionCount}`);
 }
 const productionEvidenceIndex = source.indexOf('Require already-successful exact-SHA Production Deploy evidence');
 if (storageMigrationIndex < 0 || productionEvidenceIndex <= storageMigrationIndex) {
