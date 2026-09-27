@@ -214,6 +214,20 @@ assert(
 );
 assert(!spec.includes("behavior: 'ignoreErrors'"), 'route callback teardown must not suppress in-flight failures');
 
+const aiCertificationStart = spec.indexOf('async function runAuthenticatedAiChartCertification(');
+const aiCertificationEnd = spec.indexOf('\nasync function auditAuthenticatedViewport(', aiCertificationStart);
+assert(
+  aiCertificationStart >= 0 && aiCertificationEnd > aiCertificationStart,
+  'authenticated AI chart certification helper boundaries are missing',
+);
+const aiCertificationBlock = spec.slice(aiCertificationStart, aiCertificationEnd);
+const aiCertificationLogoutIndex = aiCertificationBlock.indexOf('await logout(page);');
+const aiCertificationCloseIndex = aiCertificationBlock.indexOf('await context.close();');
+assert(
+  aiCertificationLogoutIndex >= 0 && aiCertificationCloseIndex > aiCertificationLogoutIndex,
+  'authenticated AI chart contexts must complete the app logout lifecycle before browser context teardown',
+);
+
 const scannerReadinessTestStart = spec.indexOf("test('scanner readiness:");
 const scannerReadinessTestEnd = spec.indexOf("\n  test('pending:", scannerReadinessTestStart);
 assert(
