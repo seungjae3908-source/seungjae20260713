@@ -1,13 +1,20 @@
-// Keep the HTML entry intentionally dependency-free. On a direct AI Chart
-// document, give the route chunk first request priority before starting the much
-// larger application graph. The app/runtime imports still begin in the same task,
-// but the user-critical chart request enters the browser queue first.
-if (window.location.pathname.endsWith('/ai-chart')) {
-	void import('@/pages/ai-chart').catch(() => undefined);
-}
-const appModulePromise = import('./App');
-const runtimeModulePromise = import('./app-runtime');
+// Keep the HTML entry intentionally dependency-free. A direct AI Chart document
+// has a stricter cold-start path: finish fetching/evaluating the small route
+// module and the chart renderer before starting the much larger application
+// graph. This avoids browser request-queue contention while preserving the
+// normal App/runtime parallel load on every other route.
+const directAiChartRoute = window.location.pathname.endsWith('/ai-chart');
+const aiChartCriticalPreload = directAiChartRoute
+	? Promise.all([
+			import('@/pages/ai-chart'),
+			import('@/components/unified-analysis-chart'),
+		]).then(() => undefined, () => undefined)
+	: Promise.resolve();
 
-void Promise.all([appModulePromise, runtimeModulePromise]).then(([{ default: App }, { mountApp }]) => {
+void aiChartCriticalPreload.then(async () => {
+	const [{ default: App }, { mountApp }] = await Promise.all([
+		import('./App'),
+		import('./app-runtime'),
+	]);
 	mountApp(App);
 });
