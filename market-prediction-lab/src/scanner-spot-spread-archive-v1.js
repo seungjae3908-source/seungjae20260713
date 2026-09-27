@@ -142,6 +142,7 @@ export function buildScannerSpotSpreadObservationV1({
 
   const observationCore = {
     contract: SCANNER_SPOT_SPREAD_ARCHIVE_V1,
+    producerCodeSha: sha,
     researchCodeSha: sha,
     market: "CRYPTO_SPOT",
     exchange: "UPBIT",
@@ -266,11 +267,12 @@ export function summarizeScannerSpotSpreadArchiveV1({
     });
   }
 
-  const valid = observations.filter((row) =>
-    row?.schemaVersion === 1
+  const valid = observations.filter((row) => {
+    const producerSha = exactResearchSha(row?.producerCodeSha ?? row?.researchCodeSha);
+    return row?.schemaVersion === 1
     && row?.artifactType === "SPOT_SPREAD_OBSERVATION"
     && row?.status === "SPOT_SPREAD_OBSERVATION_READY"
-    && row?.researchCodeSha === sha
+    && producerSha != null
     && row?.symbol === normalizedSymbol
     && row?.market === "CRYPTO_SPOT"
     && row?.exchange === "UPBIT"
@@ -281,7 +283,8 @@ export function summarizeScannerSpotSpreadArchiveV1({
     && /^[0-9a-f]{64}$/u.test(row.observationDigest)
     && Number.isSafeInteger(row.providerTimestamp)
     && Number.isFinite(row.spreadBps)
-    && row.spreadBps >= 0);
+    && row.spreadBps >= 0;
+  });
 
   const dedup = new Map();
   for (const row of valid) dedup.set(row.observationDigest, row);
@@ -304,6 +307,9 @@ export function summarizeScannerSpotSpreadArchiveV1({
   const missingBucketCount = expectedBucketCount == null ? null : Math.max(0, expectedBucketCount - covered.size);
   const historicalReplayReady = expectedBucketCount != null && expectedBucketCount > 0 && missingBucketCount === 0;
   const spreads = ordered.map((row) => row.spreadBps);
+  const producerCodeShas = [...new Set(ordered
+    .map((row) => exactResearchSha(row?.producerCodeSha ?? row?.researchCodeSha))
+    .filter(Boolean))].sort();
   const status = historicalReplayReady
     ? "READY"
     : ordered.length > 0
@@ -312,11 +318,13 @@ export function summarizeScannerSpotSpreadArchiveV1({
 
   const core = {
     contract: SCANNER_SPOT_SPREAD_ARCHIVE_V1,
-    researchCodeSha: sha,
+    consumerResearchCodeSha: sha,
     market: "CRYPTO_SPOT",
     exchange: "UPBIT",
     symbol: normalizedSymbol,
     observationCount: ordered.length,
+    producerCodeShaCount: producerCodeShas.length,
+    producerCodeShas,
     firstObservedAt: ordered[0]?.observedAt ?? null,
     lastObservedAt: ordered.at(-1)?.observedAt ?? null,
     requiredStartTime: rangeValid ? start : null,
@@ -338,6 +346,7 @@ export function summarizeScannerSpotSpreadArchiveV1({
     blockers: historicalReplayReady
       ? []
       : [ordered.length > 0 ? SPOT_SPREAD_ARCHIVE_FIRST_ZERO : SPOT_SPREAD_OWNER_RESOLVES],
+    researchCodeSha: sha,
     ...core,
     archiveDigest: hash(core),
     ownerReady: ordered.length > 0,
@@ -361,6 +370,8 @@ export function summarizeScannerSpotSpreadArchiveV1({
       syntheticSpreadAllowed: false,
       currentSpreadHistoricalBackfillAllowed: false,
       scheduleActivated: false,
+      crossProducerShaAccumulationAllowed: true,
+      producerShaProvenanceRequired: true,
     },
   });
 }
