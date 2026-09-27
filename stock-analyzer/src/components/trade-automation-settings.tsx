@@ -146,7 +146,7 @@ function exchangesForMarkets(
   };
 }
 
-export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
+export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?: Status; selectedMarket?: Market }) {
   const [status, setStatus] = useState<Status | null>(fixture ?? null);
   const [draft, setDraft] = useState<UiPolicy>(() => normalizeUiPolicy(fixture?.policy));
   const [loading, setLoading] = useState(!fixture);
@@ -281,6 +281,14 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
     (status?.connections ?? []).map((item) => [item.exchange, item]),
   ) as Partial<Record<Exchange, Status['connections'][number]>>;
   const activeMarkets = (Object.keys(MARKET_LABELS) as Market[]).filter((market) => draft.marketEnabled[market]);
+  const visibleMarkets: Market[] = selectedMarket ? [selectedMarket] : (Object.keys(MARKET_LABELS) as Market[]);
+  const visibleExchanges: Exchange[] = selectedMarket === 'crypto_futures'
+    ? ['bitget']
+    : selectedMarket === 'crypto_spot'
+      ? ['upbit']
+      : selectedMarket === 'domestic_stock' || selectedMarket === 'us_stock'
+        ? [draft.stockBrokerByMarket[selectedMarket]]
+        : (Object.keys(EXCHANGE_LABELS) as Exchange[]);
 
   return <section className="rounded-3xl border border-card-border bg-card p-4 text-left shadow-sm" data-testid="trade-automation-settings">
     <div className="flex items-start justify-between gap-3">
@@ -312,7 +320,7 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
     </button>
 
     <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2" aria-label="시장별 자동매매">
-      {(Object.keys(MARKET_LABELS) as Market[]).map((market) => (
+      {visibleMarkets.map((market) => (
         <button
           key={market}
           type="button"
@@ -330,13 +338,13 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
       ))}
     </div>
 
-    <div className="mt-4 rounded-2xl border border-card-border bg-background p-3" data-testid="stock-broker-routing">
+    {!selectedMarket || selectedMarket === 'domestic_stock' || selectedMarket === 'us_stock' ? <div className="mt-4 rounded-2xl border border-card-border bg-background p-3" data-testid="stock-broker-routing">
       <p className="text-xs font-extrabold">주식 증권사 선택</p>
       <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
         국내·미국주식은 사용자마다 Toss 또는 Kiwoom을 선택합니다. 코인현물은 Upbit, 코인선물은 Bitget으로 고정됩니다.
       </p>
       <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {(['domestic_stock', 'us_stock'] as StockMarket[]).map((market) => (
+        {((selectedMarket === 'domestic_stock' || selectedMarket === 'us_stock') ? [selectedMarket] : ['domestic_stock', 'us_stock'] as StockMarket[]).map((market) => (
           <label key={market} className="rounded-xl border border-card-border bg-card p-3 text-xs font-extrabold">
             {MARKET_LABELS[market]} 증권사
             <select
@@ -359,10 +367,10 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
       <p className="mt-2 text-[10px] leading-4 text-muted-foreground">
         실전 주문은 거래용 키 저장, 사용자 정책, 서버 provider 게이트, 주문 직전 Risk 재검증을 모두 통과해야 합니다. 키 저장만으로 실주문은 켜지지 않습니다.
       </p>
-    </div>
+    </div> : null}
 
     <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
-      {(Object.keys(EXCHANGE_LABELS) as Exchange[]).map((exchange) => {
+      {visibleExchanges.map((exchange) => {
         const connection = connections[exchange];
         return <div key={exchange} className="rounded-2xl border border-card-border bg-background p-3" data-testid={`connection-${exchange}`}>
           <div className="flex items-center gap-2">
@@ -382,7 +390,7 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
     </div>
 
     <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
-      {(Object.keys(EXCHANGE_LABELS) as Exchange[]).map((exchange) => (
+      {visibleExchanges.map((exchange) => (
         <label key={exchange} className="rounded-2xl border border-card-border bg-background p-3 text-xs font-extrabold">
           {EXCHANGE_LABELS[exchange]} 허용 종목
           <input
@@ -426,7 +434,7 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
       />
     </label>
 
-    <label className="mt-3 block rounded-2xl border border-card-border bg-background p-3 text-xs font-extrabold">
+    {!selectedMarket || selectedMarket === 'crypto_futures' ? <label className="mt-3 block rounded-2xl border border-card-border bg-background p-3 text-xs font-extrabold">
       Bitget 레버리지
       <select
         aria-label="Bitget 레버리지"
@@ -440,7 +448,7 @@ export function TradeAutomationSettings({ fixture }: { fixture?: Status }) {
         <option value="2">2배 (기본)</option>
         <option value="3">3배</option>
       </select>
-    </label>
+    </label> : null}
 
     <div className="mt-3 rounded-2xl border border-card-border bg-background p-3 text-xs">
       <p className="font-extrabold">마지막 주문 · 체결 · 오류</p>
