@@ -71,6 +71,7 @@ function roundTripCostRate({feeBps=0,slippageBps=0,spreadBps=0}={}){
 
 export function simulateRunner({
   candles, signalAtMs, direction='LONG', maxBars=120,
+  profitMilestones=[0.03,0.05,0.10,0.20,0.30,0.50,1.00],
   atrStopMult=1.2, structureLookback=10, minStopPct=.003, maxStopPct=.025,
   breakEvenAtR=1, trailActivateAtR=2, trailAtrMult=2,
   sameBarPolicy='STOP_FIRST', costs={},
@@ -87,10 +88,12 @@ export function simulateRunner({
   const riskDistance=Math.abs(entry-init.stop);
   if(!(riskDistance>0)) throw new RangeError('invalid initial risk');
 
+  if(!Array.isArray(profitMilestones)||profitMilestones.some(v=>!Number.isFinite(v)||v<=0)) throw new TypeError('profitMilestones must be positive finite returns');
+  const milestones=[...new Set(profitMilestones)].sort((a,b)=>a-b);
   let stop=init.stop;
   let best=entry;
   let mfe=0,mae=0,maxR=0,exitPrice=null,exitTs=null,exitReason=null,ambiguousBars=0;
-  const targetHitTs={pct3:null,pct5:null,pct10:null};
+  const milestoneHitTs=Object.fromEntries(milestones.map(v=>[String(v),null]));
   const stopHistory=[{ts:entryBar.ts,stop,reason:'INITIAL'}];
   const endIndex=Math.min(candles.length-1,entryIndex+maxBars-1);
 
@@ -111,9 +114,11 @@ export function simulateRunner({
     mfe=Math.max(mfe,directionalReturn(entry,favorableExtreme,side));
     mae=Math.min(mae,directionalReturn(entry,adverseExtreme,side));
     maxR=Math.max(maxR,(mfe*entry)/riskDistance);
-    if(targetHitTs.pct3===null&&directionalReturn(entry,favorableExtreme,side)>=.03) targetHitTs.pct3=bar.ts;
-    if(targetHitTs.pct5===null&&directionalReturn(entry,favorableExtreme,side)>=.05) targetHitTs.pct5=bar.ts;
-    if(targetHitTs.pct10===null&&directionalReturn(entry,favorableExtreme,side)>=.10) targetHitTs.pct10=bar.ts;
+    const favorableReturn=directionalReturn(entry,favorableExtreme,side);
+    for(const milestone of milestones){
+      const key=String(milestone);
+      if(milestoneHitTs[key]===null&&favorableReturn>=milestone) milestoneHitTs[key]=bar.ts;
+    }
 
     const currentR=(directionalReturn(entry,best,side)*entry)/riskDistance;
     let nextStop=stop,reason=null;
@@ -135,10 +140,16 @@ export function simulateRunner({
   if(exitPrice===null){ const last=candles[endIndex]; exitPrice=last.close; exitTs=last.ts; exitReason='TIME_EXIT'; }
   const grossReturn=directionalReturn(entry,exitPrice,side);
   const netReturn=grossReturn-roundTripCostRate(costs);
+  const grossCaptureRatio=mfe>0?clamp(Math.max(0,grossReturn)/mfe,0,1):0;
+  const netCaptureRatio=mfe>0?clamp(Math.max(0,netReturn)/mfe,0,1):0;
+  const givebackFromPeak=Math.max(0,mfe-Math.max(0,grossReturn));
   return {
     signalAtMs,direction:side,entryTs:entryBar.ts,entry,initialStop:init.stop,initialRiskPct:riskDistance/entry,
     structure:init.structure,discoveryAtr:init.atr,exitTs,exitPrice,exitReason,grossReturn,netReturn,
-    netR:netReturn/(riskDistance/entry),mfe,mae,maxR,targetHitTs,finalStop:stop,stopHistory,
+    netR:netReturn/(riskDistance/entry),mfe,mae,maxR,
+    peakReturn:mfe,milestoneHitTs,grossCaptureRatio,netCaptureRatio,givebackFromPeak,
+    targetHitTs:{pct3:milestoneHitTs['0.03']??null,pct5:milestoneHitTs['0.05']??null,pct10:milestoneHitTs['0.1']??null},
+    finalStop:stop,stopHistory,
     ambiguousBars,sameBarPolicy,barsObserved:Math.max(1,candles.findIndex(c=>c.ts===exitTs)-entryIndex+1),
   };
 }
@@ -156,6 +167,12 @@ export function summarizeRunnerTrials(trials=[]){
     pct3HitRate:settled.filter(t=>t.targetHitTs?.pct3!==null).length/n,
     pct5HitRate:settled.filter(t=>t.targetHitTs?.pct5!==null).length/n,
     pct10HitRate:settled.filter(t=>t.targetHitTs?.pct10!==null).length/n,
+    pct20HitRate:settled.filter(t=>t.milestoneHitTs?.['0.2']!==null&&t.milestoneHitTs?.['0.2']!==undefined).length/n,
+    pct50HitRate:settled.filter(t=>t.milestoneHitTs?.['0.5']!==null&&t.milestoneHitTs?.['0.5']!==undefined).length/n,
+    pct100HitRate:settled.filter(t=>t.milestoneHitTs?.['1']!==null&&t.milestoneHitTs?.['1']!==undefined).length/n,
     avgMfe:mean(settled.map(t=>t.mfe)),avgMae:mean(settled.map(t=>t.mae)),
+    maxMfe:Math.max(...settled.map(t=>t.mfe)),maxNetReturn:Math.max(...settled.map(t=>t.netReturn)),
+    avgGrossCaptureRatio:mean(settled.map(t=>t.grossCaptureRatio??0)),avgNetCaptureRatio:mean(settled.map(t=>t.netCaptureRatio??0)),
+    avgGivebackFromPeak:mean(settled.map(t=>t.givebackFromPeak??0)),
   };
 }
