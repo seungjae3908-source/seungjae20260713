@@ -180,6 +180,25 @@ function response(lane: ForwardObserverLane, cards: ScannerSignalCard[]): Scanne
   };
 }
 
+test('observer lane topology preserves 60m stocks/futures and canonical Spot 4H', () => {
+  assert.deepEqual(
+    FORWARD_OBSERVER_LANES.map((lane) => [lane.id, lane.market, lane.timeframe]),
+    [
+      ['KR_SWING_60M', 'KR_STOCK', '60m'],
+      ['US_SWING_60M', 'US_STOCK', '60m'],
+      ['SPOT_SWING_4H', 'CRYPTO_SPOT', '4H'],
+      ['FUTURES_SWING_60M', 'CRYPTO_FUTURES', '60m'],
+    ],
+  );
+  const state = createForwardObserverRuntimeState(SHA, new Date(T0));
+  assert.deepEqual(state.cursors, {
+    KR_SWING_60M: 0,
+    US_SWING_60M: 0,
+    SPOT_SWING_4H: 0,
+    FUTURES_SWING_60M: 0,
+  });
+});
+
 test('runtime state is immutable-SHA scoped and fail-closed on cursor or safety mixing', () => {
   const state = createForwardObserverRuntimeState(SHA, new Date(T0));
   validateForwardObserverRuntimeState(state, SHA);
@@ -302,7 +321,7 @@ test('cycle creates one idempotent public observation, ignores pre-signal bars a
   assert.deepEqual(first.state.cursors, {
     KR_SWING_60M: 20,
     US_SWING_60M: 20,
-    SPOT_SWING_60M: 20,
+    SPOT_SWING_4H: 20,
     FUTURES_SWING_60M: 20,
   });
 
@@ -443,4 +462,21 @@ test('missing matched evidence timestamps are blocked instead of fabricated from
   const kr = result.summary.lanes.find((lane) => lane.laneId === 'KR_SWING_60M');
   assert.equal(kr?.blocked, 1);
   assert.equal(kr?.blockers.DATA_TIMESTAMP_FROM_MATCHED_EVIDENCE_REQUIRED, 1);
+});
+
+
+test('summary reports exact mixed Forward timeframes', async () => {
+  const state = createForwardObserverRuntimeState(SHA, new Date(T0));
+  const result = await runForwardRecommendationObserverCycle({
+    state,
+    researchCodeSha: SHA,
+    dependencies: {
+      scanLane: async (lane) => response(lane, []),
+      loadFutureBars: async () => [],
+      now: () => new Date(T0 + 60_000),
+    },
+  });
+  assert.deepEqual(result.summary.coverage.strategies, ['SWING']);
+  assert.deepEqual(result.summary.coverage.timeframes, ['60m', '4H']);
+  assert.equal(result.summary.coverage.fullStrategyCoverage, false);
 });
