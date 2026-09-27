@@ -113,3 +113,36 @@ Recommended first proving lane:
 - still requires a genuine dataset snapshot binding, purged OOS/WF fold result packet, and complete canonical 8-component cost evidence before the producer may emit quality status=verified.
 
 No quality.json is materialized from current evidence in this audit because doing so would require inventing or cross-crediting missing evidence.
+
+
+## Exact Long-History artifact inspection
+
+Read-only artifact inspected:
+- workflow run: 36301991026
+- artifact id: 10926366457
+- artifact name: long-history-v1-v6-36301991026
+- archive digest: sha256:0370af481f8e0b16d870a602d6c9dcb012a8ad46aa415962d04fd7f3997175e5
+
+The archive contains raw candles, funding and actual trade-row result JSON for BTCUSDT/ETHUSDT futures and BTC/ETH spot.
+
+BTCUSDT Futures LONG raw result:
+- market = CRYPTO_FUTURES
+- symbol = BTCUSDT
+- timeframe = 1d
+- mode = backtest-only
+- total trades = 39
+- development trades = 31
+- validation trades = 8
+- final holdout trades = 0
+- validation profit factor ≈ 0.599
+- validation return ≈ -2.519%
+- safeguards include closed-candle signal, next-candle-open entry, stop-first ambiguity and costsIncluded=true
+
+Why this cannot be transferred into current Forward Scanner SWING quality:
+1. current Futures SWING identity is 60m, not 1d;
+2. Long-History phases are development/validation, not the required exact purged OOS + Walk-forward fold packet;
+3. the result is not bound to the Scanner Promotion strategyId/version/parameterHash plus datasetSnapshotHash;
+4. the execution result includes fee/funding/slippage/spread/latency modeling, but does not prove the canonical 8-component transaction-cost owner packet including liquidityImpact and partialFillImpact;
+5. final holdout remains locked with N=0.
+
+Therefore this real artifact is useful historical evidence, but receives zero Scanner S/A quality transfer credit.
