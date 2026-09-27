@@ -112,3 +112,77 @@ Therefore candle/structure descriptors should remain candidate features/context 
 - preserve +3/+5/+10/+20/+50/+100 milestones without take-profit caps
 - compare account net return, PF, MDD, opportunity rejection, peak-profit giveback and concentration
 - then require genuinely unused Forward evidence before promotion
+
+
+## Capital-feasible portfolio replay on the same archived FIRST_RETEST signals
+
+This second layer applies the same Runner exits to a bounded long-cash model account.
+
+Frozen account constraints:
+- initial capital: KRW 10,000,000
+- risk per accepted trade: 0.5% of current equity
+- aggregate initial risk cap: 2.0%
+- max simultaneous positions: 5
+- per-symbol gross cap: 20%
+- per-theme gross cap: 40%
+- total gross exposure cap: 100%
+- same-bar intrabar exits do NOT fund new entries at that same bar open
+- fractional crypto units allowed
+- no leverage
+- cost: 0.15% per side
+- 4h close marks used for MTM drawdown
+
+This is still observed-history research and is not actual fill evidence.
+
+| Window | Policy | Account net | MTM MDD | Trades | Win rate | PF | Best modeled trade |
+|---|---|---:|---:|---:|---:|---:|---|
+| PRIOR_H1 | TIGHT_DEFAULT | +15.327% | 15.293% | 175 | 28.00% | 1.308 | SUI +~KRW879k |
+| PRIOR_H2 | TIGHT_DEFAULT | +0.037% | 14.739% | 124 | 24.19% | 1.001 | NEAR +~KRW567k |
+| RECENT_6M | TIGHT_DEFAULT | +13.582% | 13.478% | 192 | 23.96% | 1.271 | PEPE +~KRW756k |
+| PRIOR_H1 | LONG_RUNNER_3ATR | +20.415% | 15.123% | 155 | 21.94% | 1.462 | SUI +~KRW853k |
+| PRIOR_H2 | LONG_RUNNER_3ATR | +2.318% | 15.700% | 112 | 16.07% | 1.073 | RENDER +~KRW1.097m |
+| RECENT_6M | LONG_RUNNER_3ATR | +26.079% | 13.431% | 176 | 15.91% | 1.558 | NEAR +~KRW1.416m |
+| PRIOR_H1 | DELAYED_BE_TRAIL | +15.990% | 16.473% | 148 | 23.65% | 1.323 | SUI +~KRW844k |
+| PRIOR_H2 | DELAYED_BE_TRAIL | +13.307% | 14.984% | 100 | 22.00% | 1.360 | RENDER +~KRW1.211m |
+| RECENT_6M | DELAYED_BE_TRAIL | +25.688% | 16.812% | 161 | 19.25% | 1.512 | NEAR +~KRW1.372m |
+| PRIOR_H1 | NO_BE_TRAIL_3ATR | +11.762% | 17.172% | 148 | 23.65% | 1.222 | SUI +~KRW844k |
+| PRIOR_H2 | NO_BE_TRAIL_3ATR | +11.341% | 15.451% | 99 | 22.22% | 1.297 | RENDER +~KRW1.207m |
+| RECENT_6M | NO_BE_TRAIL_3ATR | +28.197% | 17.944% | 156 | 23.08% | 1.545 | NEAR +~KRW1.399m |
+
+Capacity rejections are material. For example, LONG_RUNNER_3ATR accepted 155 / 112 / 176 positions in H1/H2/Recent while rejecting additional signals because of position, same-symbol or risk/cash capacity. Therefore candidate-level averages cannot be multiplied by signal count to claim account returns.
+
+### Concentration warning
+
+Observed profits remain highly dependent on a few very large winners.
+
+LONG_RUNNER_3ATR:
+- PRIOR_H1: top single winner contributed about 41.8% of modeled net PnL; top 3 about 94.8%.
+- PRIOR_H2: net result was only +2.318%; the largest winner was several times larger than final total PnL because many other trades lost.
+- RECENT_6M: top single winner contributed about 54.3% of modeled net PnL; top 3 slightly exceeded final net because the remaining book was net negative.
+
+DELAYED_BE_TRAIL and NO_BE_TRAIL_3ATR show similar concentration. This is exactly why a large return on observed history is not enough for adoption.
+
+### Current research interpretation
+
+- TIGHT_DEFAULT is more likely to clip large moves and failed to produce meaningful account growth in PRIOR_H2.
+- LONG_RUNNER_3ATR kept all three modeled account windows positive and materially expanded the best modeled winner, but its H2 margin was thin and winner concentration is high.
+- DELAYED_BE_TRAIL produced positive account returns in all three observed windows and was less dependent on early break-even exits, but MDD remained about 15–17%.
+- NO_BE_TRAIL_3ATR produced the largest RECENT_6M account return among these frozen comparisons, but also the highest recent MDD and more open-profit giveback.
+
+No policy is promoted from this table. All policies remain frozen research candidates for unused data and genuine Forward.
+
+## Required next evidence before any adoption
+
+1. strict point-in-time 3-year data readiness for each market/profile;
+2. full-market Recall@K, not a static survivor universe;
+3. genuine unused chronological OOS or Forward;
+4. full cost / partial-fill / settlement evidence;
+5. concentration stress:
+   - remove top 1 and top 3 contributions descriptively,
+   - sector/theme cluster stress,
+   - liquidity/capacity stress;
+6. account-level daily distribution:
+   - median/worst/no-trade/negative days,
+   - daily +3/+5/+10% attainment frequencies,
+   - MDD and tail loss;
+7. only then evaluate Paper adoption.
