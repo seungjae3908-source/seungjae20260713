@@ -405,8 +405,13 @@ test('Bitget application error codes map to bounded account-access causes withou
   for (const [providerCode, expected] of [
     ['40038', 'BITGET_IP_NOT_ALLOWED'],
     ['40014', 'BITGET_PERMISSION_DENIED'],
+    ['40025', 'BITGET_PERMISSION_DENIED'],
+    ['40040', 'BITGET_PERMISSION_DENIED'],
     ['40009', 'BITGET_AUTH_FAILED'],
+    ['40012', 'BITGET_AUTH_FAILED'],
+    ['40037', 'BITGET_AUTH_FAILED'],
     ['40008', 'BITGET_TIMESTAMP_REJECTED'],
+    ['400172', 'BITGET_PARAMETER_REJECTED'],
     ['99999', 'BITGET_REQUEST_REJECTED'],
   ] as const) {
     const readers = createVaultBackedAccountReaders({
