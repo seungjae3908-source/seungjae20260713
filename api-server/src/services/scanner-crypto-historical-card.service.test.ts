@@ -210,5 +210,19 @@ test('historical replay session rejects non-monotonic decision order to prevent 
     decisionTimeMs: DECISION - HOUR,
   }));
   assert.equal(second.status, 'BLOCKED_DATA');
-  assert.equal(second.reason, 'HISTORICAL_SCANNER_NON_MONOTONIC_SESSION');
+  assert.equal(second.reason, 'HISTORICAL_SCANNER_NON_MONOTONIC_STREAM');
+});
+
+
+test('same fold timestamp is allowed across different symbols while each signal stream stays monotonic', async () => {
+  const replaySessionId = digest('multi-symbol-session');
+  const btc = await buildHistoricalCryptoScannerDecisionV1(input({ replaySessionId }));
+  assert.notEqual(btc.status, 'BLOCKED_DATA');
+
+  const ethTicker = { ...ticker(), symbol: 'ETHUSDT', name: 'ETHUSDT' };
+  const eth = await buildHistoricalCryptoScannerDecisionV1(input({
+    replaySessionId,
+    ticker: ethTicker,
+  }));
+  assert.notEqual(eth.status, 'BLOCKED_DATA');
 });
