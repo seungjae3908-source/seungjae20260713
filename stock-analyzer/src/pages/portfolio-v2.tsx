@@ -317,17 +317,6 @@ function IntelligenceDashboard() {
   });
   const intelligence = query.data?.portfolio;
 
-  useEffect(() => {
-    const locationQuery = location.includes('?') ? location.slice(location.indexOf('?') + 1) : '';
-    const browserQuery = typeof window !== 'undefined' ? window.location.search.replace(/^\?/, '') : '';
-    const focus = new URLSearchParams(locationQuery || browserQuery).get('focus');
-    if (focus !== 'ai') return;
-    const timer = window.setTimeout(() => {
-      document.getElementById('portfolio-ai-diagnosis')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [location]);
-
   return <div className="h-full overflow-y-auto overscroll-contain bg-background pb-24">
     <div className="mx-auto w-full max-w-6xl space-y-4 px-3 py-4 sm:px-5">
       <header className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-2 rounded-2xl border border-border bg-card p-3">
