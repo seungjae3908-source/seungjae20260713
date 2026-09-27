@@ -34,7 +34,8 @@ test('react-query cancellation, stale data, and member mutations stay fail close
   expect(source.match(/retry: false,/g)).toHaveLength(2);
   expect(source.match(/refetchOnWindowFocus: false,/g)).toHaveLength(2);
   expect(source).toContain('data-testid="admin-members-unavailable"');
-  expect(source).toContain('회원 목록 다시 시도');
+  expect(source).toContain('회원 목록을 불러오지 못했습니다.');
+  expect(source).toContain('다시 시도');
   expect(source).toContain('const memberMutationEnabled = Boolean(members.data) && !members.error && !members.isFetching;');
   expect(source).toContain("if (!memberMutationEnabled) { setError('회원 목록의 최신 상태를 확인한 뒤 다시 시도해 주세요.'); return; }");
   expect(source).toContain('mutationEnabled={memberMutationEnabled}');
