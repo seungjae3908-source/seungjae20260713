@@ -164,6 +164,9 @@ function validateResult(result, identity, window, label) {
           || String(trade?.side ?? "").toLowerCase() !== expectedResultDirection(identity)) {
         blockers.push(`${label}_TRADE_IDENTITY_MISMATCH`);
       }
+      if (!text(trade?.strategy) || !text(trade?.regime)) {
+        blockers.push(`${label}_TRADE_SEGMENT_DIMENSION_MISSING`);
+      }
       if (!(finite(trade?.netPnl) != null)
           || !(finite(trade?.netReturnOnMargin) != null)
           || trade?.costsIncluded !== true
