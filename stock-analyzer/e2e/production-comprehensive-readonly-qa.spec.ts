@@ -15,6 +15,7 @@ const productionQaEnabled = Boolean(
   && qaPassword
   && process.env.PRODUCTION_READONLY_E2E === 'true',
 );
+const telegramQaEnabled = process.env.PRODUCTION_QA_INCLUDE_TELEGRAM === 'true';
 const productionOrigin = baseUrl ? new URL(baseUrl).origin : 'http://production-qa-disabled.invalid';
 
 const ARTIFACT_DIR = path.resolve('production-comprehensive-artifacts');
@@ -200,6 +201,9 @@ async function login(
       await restoreCachedAuthState(page, cached);
       await page.goto('/', { waitUntil: 'commit', timeout: LOGIN_READY_BUDGET_MS });
       await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: LOGIN_READY_BUDGET_MS });
+      // Supabase may rotate session material while the restored page boots.
+      // Refresh the reusable in-memory state so later tests do not replay stale auth.
+      authStateByViewport.set(cacheKey, await page.context().storageState());
       return;
     }
 
@@ -631,6 +635,7 @@ test.describe('Production comprehensive read-only QA', () => {
   test.skip(!productionQaEnabled, 'Dedicated Production QA credentials and read-only flag are required');
 
   test('Production Telegram runtime readiness is complete and zero-authority', async ({ page }, testInfo) => {
+    test.skip(!telegramQaEnabled, 'Telegram runtime QA is isolated to Telegram release');
     test.skip(testInfo.project.name !== 'prod-desktop-1440');
     const diagnostics: Diagnostic[] = [];
     const blocked: Diagnostic[] = [];
