@@ -162,10 +162,6 @@ export async function buildHistoricalCryptoScannerDecisionV1(
   if (!SHA64.test(replaySessionId)) {
     return blocked(input, contextTimeframe, 'HISTORICAL_SCANNER_REPLAY_SESSION_ID_REQUIRED');
   }
-  const previousDecision = historicalSessionLastDecision.get(replaySessionId);
-  if (previousDecision != null && input.decisionTimeMs <= previousDecision) {
-    return blocked(input, contextTimeframe, 'HISTORICAL_SCANNER_NON_MONOTONIC_SESSION');
-  }
   if (!Number.isSafeInteger(input.decisionTimeMs) || input.decisionTimeMs <= 0) {
     return blocked(input, contextTimeframe, 'HISTORICAL_SCANNER_DECISION_TIME_INVALID');
   }
@@ -181,6 +177,17 @@ export async function buildHistoricalCryptoScannerDecisionV1(
       || (input.ticker.timestamp as number) <= 0
       || (input.ticker.timestamp as number) > input.decisionTimeMs) {
     return blocked(input, contextTimeframe, 'HISTORICAL_SCANNER_TICKER_INVALID_OR_FUTURE');
+  }
+  const replayStreamKey = [
+    replaySessionId,
+    input.market,
+    symbol,
+    input.timeframe,
+    input.condition,
+  ].join('|');
+  const previousDecision = historicalSessionLastDecision.get(replayStreamKey);
+  if (previousDecision != null && input.decisionTimeMs <= previousDecision) {
+    return blocked(input, contextTimeframe, 'HISTORICAL_SCANNER_NON_MONOTONIC_STREAM');
   }
   if (!evidenceValid(input.provenance?.ticker, input.decisionTimeMs)
       || !evidenceValid(input.provenance?.spread, input.decisionTimeMs)) {
@@ -257,7 +264,7 @@ export async function buildHistoricalCryptoScannerDecisionV1(
     strategyMode: input.strategyMode,
   }));
 
-  historicalSessionLastDecision.set(replaySessionId, input.decisionTimeMs);
+  historicalSessionLastDecision.set(replayStreamKey, input.decisionTimeMs);
 
   const evidenceIdentity = {
     replaySessionId,
