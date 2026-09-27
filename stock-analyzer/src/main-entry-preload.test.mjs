@@ -10,12 +10,16 @@ test('prioritizes the direct AI Chart route chunk before the application graph',
 
   assert.match(indexSource, /<script type="module" src="\/src\/main\.tsx"><\/script>/);
   assert.doesNotMatch(indexSource, /pages\/ai-chart/);
-  assert.match(mainSource, /window\.location\.pathname\.endsWith\('\/ai-chart'\)/);
+  assert.match(mainSource, /const directAiChartColdRoute = window\.location\.pathname\.endsWith\('\/ai-chart'\);/);
   assert.notEqual(aiChartPreloadIndex, -1);
   assert.notEqual(appLoadIndex, -1);
   assert.equal(aiChartPreloadIndex < appLoadIndex, true);
+  assert.match(mainSource, /querySelectorAll<HTMLLinkElement>\('link\[rel="modulepreload"\]'\)/);
+  assert.match(mainSource, /setAttribute\('fetchpriority', 'high'\)/);
+  assert.match(mainSource, /function startApplicationGraph\(\)/);
   assert.match(mainSource, /const runtimeModulePromise = import\('\.\/app-runtime'\);/);
   assert.match(mainSource, /Promise\.all\(\[appModulePromise, runtimeModulePromise\]\)/);
+  assert.match(mainSource, /if \(directAiChartColdRoute\) \{\s*window\.setTimeout\(startApplicationGraph, 0\);\s*\} else \{\s*startApplicationGraph\(\);\s*\}/);
   assert.doesNotMatch(mainSource, /^import\s/m);
 });
 
