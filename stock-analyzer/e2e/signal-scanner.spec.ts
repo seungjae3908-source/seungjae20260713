@@ -266,8 +266,8 @@ test('signal click explains why, preserves PricePlan, and exposes only safe cont
   await expect(detail).toContainText('왜 이 신호인가');
   await expect(detail).toContainText('실제 공개 캔들로 추세를 확인했습니다.');
   await expect(detail).toContainText('74,000~75,000');
-  await expect(detail).toContainText('서버 계획');
-  await expect(detail).toContainText('public-candles');
+  await expect(detail).toContainText('확인된 계획');
+  await expect(detail).not.toContainText('public-candles');
   await detail.getByRole('button', { name: '매매 검토 열기' }).click();
   await expect(detail.getByTestId('order-preparation')).toContainText('매매 검토');
   await expect(detail.getByTestId('order-preparation')).toContainText('이 화면만으로 주문되지 않습니다.');
