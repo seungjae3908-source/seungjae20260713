@@ -71,3 +71,27 @@ The current expected strict result is therefore:
 - fourMarketReady: false
 
 This is an evidence-readiness result, not a statement that the strategy is unprofitable.
+
+
+## Indicator-Adaptive Runner
+
+Move Hunter now reuses the merged canonical `adaptive-multi-evidence-market-features-v2` output instead of creating a second indicator engine.
+
+Canonical evidence used:
+- EMA direction/slope
+- ADX / +DI / -DI
+- Donchian / price structure
+- ROC / RSI / MACD histogram / momentum acceleration
+- benchmark-relative strength
+- relative volume / signed volume / price-volume disagreement
+- realized volatility / range expansion-compression
+
+Runner states:
+- ACCELERATION -> 4 ATR trail
+- NORMAL -> 3 ATR trail
+- WARNING -> 2 ATR trail
+- INVALID -> next-bar-open exit
+
+Closed-bar state never causes same-close exit. It only changes the next bar's protection or schedules a next-open invalidation exit.
+
+This module has no automatic entry authority, no strategy promotion authority and no execution authority. The fixed archived Runner policies remain the only policies with observed-history comparison evidence; Indicator-Adaptive Runner still requires frozen replay + unused OOS/Forward validation.
