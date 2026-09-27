@@ -75,3 +75,63 @@ The next valid evidence event is a genuine existing-owner Forward Recommendation
 - exact decision timestamp
 
 No separate Forward schedule or duplicate observer is introduced by Move Hunter.
+
+
+## Structural FIRST_ZERO diagnosis
+
+Current-main source audit reveals two code-contract bottlenecks that explain why genuine Forward observations remain at N=0.
+
+### 1. Scanner grade path does not receive backtest evidence
+
+Current crypto Forward lane:
+`api-server/src/scripts/run-forward-recommendation-observer-cycle.ts::scanCryptoLane()`
+
+calls:
+`rankScannerCandidates({ cards, market, strategy, limit })`
+
+without a `backtests` map.
+
+Current stock Scanner ranking call also omits `backtests`.
+
+But:
+`scanner-candidate-ranking.service.ts::gradeCandidate()`
+
+returns `B` immediately when backtest evidence is absent or fails minimum quality.
+
+Forward Recommendation Observer accepts only signalGrade S/A.
+
+Therefore the current source graph makes S/A structurally unreachable through these ranking calls unless the ranking input is wired to verified backtest/OOS evidence.
+
+This does NOT justify fabricating or bypassing OOS/Walk-forward evidence.
+
+### 2. CRYPTO_SPOT SWING timeframe identity conflict
+
+Current canonical Scanner profile:
+- CRYPTO_SPOT SWING primary timeframe = 4H
+
+Current Forward Observer lane:
+- SPOT_SWING_60M timeframe = 60m
+
+`forward-observer-canonical-metadata.service.ts` requires:
+`identity.timeframe === lane.timeframe`
+
+and otherwise emits:
+`PROMOTION_TIMEFRAME_MISMATCH`.
+
+Thus Spot paperCandidate cannot be canonically attached on the current 60m lane while the canonical Spot SWING profile remains 4H.
+
+No value is silently rewritten.
+
+## Safe repair boundary
+
+These are existing Scanner/Forward owner issues, not Move Hunter Runner issues.
+
+Potential repairs require a separate owner/approval because they touch active product lanes:
+
+A. Wire the existing verified scanner backtest metrics into candidate ranking without weakening any S/A quality gate.
+
+B. Resolve Spot timeframe identity by one explicit canonical choice:
+- preserve Spot SWING=4H and align the Forward Spot lane to 4H, or
+- create/approve a genuine 60m Spot SWING canonical profile with its own OOS/Walk-forward/cost evidence.
+
+Move Hunter #1407 does not perform either mutation.
