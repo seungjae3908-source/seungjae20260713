@@ -178,41 +178,41 @@ for (const [width, height] of [[320, 740], [390, 844], [768, 900], [1199, 900], 
     await installRuntime(page);
     await page.goto('/research-center');
 
-    await expect(page.getByRole('heading', { name: '현재 어디까지 왔나요?', exact: true })).toBeVisible();
+    const general = page.getByTestId('research-general-view');
+    await expect(general.getByRole('heading', { name: '연구센터', exact: true })).toBeVisible();
     const expertButton = page.getByRole('button', { name: '상세', exact: true });
     const generalButton = page.getByRole('button', { name: '요약', exact: true });
     await expect(generalButton).toHaveAttribute('aria-pressed', 'true');
     await expect(expertButton).toBeVisible();
     await expect(page.getByRole('button', { name: 'AI 도우미', exact: true })).toBeVisible();
+    await expect(page.getByTestId('research-workspace-selection')).toHaveCount(0);
 
-    const general = page.getByTestId('research-general-view');
     await expect(general).toContainText('근거 수집 중');
     await expect(general).toContainText('7건');
-    await expect(general).toContainText('12건');
     await expect(general).toContainText('검증 중');
-    await expect(general).toContainText('실거래 비활성');
+    await expect(general).not.toContainText('현재 어디까지 왔나요?');
     await expect(general).not.toContainText('Source SHA');
-    await expect(general).not.toContainText('Evidence state');
-    await expect(general).not.toContainText('Canonical records');
+    await expect(general).not.toContainText('FIRST_ZERO');
     await expect(general).not.toContainText('LIVE_TRADING=false');
+
     const paperCard = page.getByTestId('research-summary-paper');
     await expect(paperCard).toContainText('모의매매 표본');
     await paperCard.click();
-    await expect(page.getByTestId('research-general-selected-detail')).toContainText('다음에 뭘 보면 되나요?');
+
+    const detailPanel = page.getByTestId('research-general-detail-panel');
+    await expect(detailPanel).toBeVisible();
+    await expect(detailPanel).toContainText('모의매매 표본');
+    await expect(detailPanel).not.toContainText('다음에 뭘 보면 되나요?');
+    await expect(page.getByTestId('research-full-cost-summary')).not.toBeVisible();
+
+    await detailPanel.getByText('비용 근거 상세', { exact: true }).click();
     const fullCost = page.getByTestId('research-full-cost-summary');
     await expect(fullCost).toBeVisible();
     await expect(fullCost).toContainText('FULL_COST_READY · 미충족');
     await expect(fullCost).toContainText('4/8');
-    await expect(fullCost).toContainText('후보 Settlement 3건 연결');
-    await expect(fullCost).toContainText('CANONICAL_SUPPLEMENTAL_COST_EVIDENCE_MISSING');
-    await expect(page.getByTestId('research-full-cost-commission')).toContainText('관측됨');
-    await expect(page.getByTestId('research-full-cost-commission')).toContainText('public:commission');
-    await expect(page.getByTestId('research-full-cost-slippage')).toContainText('모델값 · 경제증거 아님');
-    await expect(page.getByTestId('research-full-cost-latency')).toContainText('미확인');
-    await expect(page.getByTestId('research-full-cost-liquidityImpact')).toContainText('데이터 차단');
-    await expect(page.getByTestId('research-full-cost-partialFillImpact')).toContainText('Freshness · API 미제공');
-    await expect(page.getByTestId('research-full-cost-partialFillImpact')).toContainText('Quality · API 미제공');
-    await expect(page.getByTestId('research-workspace-selection')).toContainText('현재 · 요약');
+
+    await detailPanel.getByRole('button', { name: '닫기', exact: true }).click();
+    await expect(detailPanel).toHaveCount(0);
 
     const overflow = await page.evaluate(() => Math.max(
       document.documentElement.scrollWidth,
@@ -221,6 +221,26 @@ for (const [width, height] of [[320, 740], [390, 844], [768, 900], [1199, 900], 
     expect(overflow).toBeLessThanOrEqual(2);
   });
 }
+
+test('expert stage cards open a responsive inspector without scrollIntoView jumps', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installRuntime(page);
+  await page.goto('/research-center');
+
+  await page.getByRole('button', { name: '상세', exact: true }).click();
+  const firstStage = page.locator('[data-testid^="research-stage-"]').first();
+  await expect(firstStage).toBeVisible();
+  await firstStage.click();
+
+  const detail = page.locator('[data-testid^="research-detail-"]').first();
+  await expect(detail).toBeVisible();
+  const box = await detail.boundingBox();
+  expect(box).not.toBeNull();
+  expect((box?.y ?? 0) + (box?.height ?? 0)).toBeGreaterThanOrEqual(800);
+
+  await detail.getByRole('button', { name: '닫기', exact: true }).click();
+  await expect(detail).toHaveCount(0);
+});
 
 test('expert view preserves the canonical research evidence surface', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
