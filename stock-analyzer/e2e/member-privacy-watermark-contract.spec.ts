@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 const componentPath = fileURLToPath(new URL('../src/components/member-privacy-watermark.tsx', import.meta.url));
 const backgroundPath = fileURLToPath(new URL('../src/components/app-background.tsx', import.meta.url));
 
-test('member watermark is anonymous, non-interactive, and mounted globally', async () => {
+test('legacy member watermark stays anonymous but is not mounted on normal app screens', async () => {
   const [component, background] = await Promise.all([
     readFile(componentPath, 'utf8'),
     readFile(backgroundPath, 'utf8'),
@@ -28,9 +28,11 @@ test('member watermark is anonymous, non-interactive, and mounted globally', asy
   expect(component).not.toContain('{displayName}');
   expect(component).not.toContain('phone');
 
-  // It must live outside the z-0 background so the watermark remains visible over app content.
-  expect(background).toContain("import { MemberPrivacyWatermark }");
-  expect(background).toContain('<MemberPrivacyWatermark />');
+  // Normal product screens stay visually clean. The privacy-safe legacy component
+  // remains available for an explicitly protected surface, but it is not mounted
+  // by the global app background.
+  expect(background).not.toContain("import { MemberPrivacyWatermark }");
+  expect(background).not.toContain('<MemberPrivacyWatermark />');
 });
 
 test('web watermark does not falsely claim native screenshot blocking', async () => {
