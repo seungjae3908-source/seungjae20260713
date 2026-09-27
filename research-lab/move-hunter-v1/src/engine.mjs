@@ -1,5 +1,24 @@
 export const DIRECTIONS = Object.freeze({ LONG: 'LONG', SHORT: 'SHORT' });
 
+export const RUNNER_RESEARCH_PRESETS = Object.freeze({
+  TIGHT_DEFAULT: Object.freeze({
+    atrStopMult: 1.2, minStopPct: 0.003, maxStopPct: 0.025,
+    breakEvenAtR: 1.0, trailActivateAtR: 2.0, trailAtrMult: 2.0, maxBars: 120,
+  }),
+  LONG_RUNNER_3ATR: Object.freeze({
+    atrStopMult: 1.2, minStopPct: 0.003, maxStopPct: 0.025,
+    breakEvenAtR: 1.0, trailActivateAtR: 2.0, trailAtrMult: 3.0, maxBars: 120,
+  }),
+  DELAYED_BE_TRAIL: Object.freeze({
+    atrStopMult: 1.2, minStopPct: 0.003, maxStopPct: 0.025,
+    breakEvenAtR: 2.0, trailActivateAtR: 3.0, trailAtrMult: 3.0, maxBars: 120,
+  }),
+  NO_BE_TRAIL_3ATR: Object.freeze({
+    atrStopMult: 1.2, minStopPct: 0.003, maxStopPct: 0.025,
+    breakEvenAtR: 999.0, trailActivateAtR: 2.0, trailAtrMult: 3.0, maxBars: 120,
+  }),
+});
+
 function finite(value, name) {
   if (!Number.isFinite(value)) throw new TypeError(`${name} must be finite`);
   return value;
