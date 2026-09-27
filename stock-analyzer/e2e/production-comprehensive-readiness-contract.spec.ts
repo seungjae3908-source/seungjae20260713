@@ -60,7 +60,7 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(login).toContain('const cached = authStateByViewport.get(cacheKey);');
   expect(login).toContain('await restoreCachedAuthState(page, cached);');
   expect(login).not.toContain("await page.goto('/', { waitUntil: 'commit', timeout: LOGIN_READY_BUDGET_MS })");
-  expect(login).toContain("throw new Error(\`PRODUCTION_QA_CACHED_SESSION_PROFILE_\${response.status()}\`)");
+  expect(validateCachedAuth).toContain("throw new Error(`PRODUCTION_QA_CACHED_SESSION_PROFILE_${response.status()}`)");
   expect(login).toContain('const state = await page.context().storageState();');
   expect(login).toContain('authStateByViewport.set(cacheKey, state);');
   const cachedBranch = login.slice(login.indexOf('if (cached) {'), login.indexOf('// Judge readiness'));
