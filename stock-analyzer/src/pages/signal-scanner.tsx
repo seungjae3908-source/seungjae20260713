@@ -189,16 +189,24 @@ function compareScannerCards(left: ScannerSignalCard, right: ScannerSignalCard):
 }
 
 const OUTCOME_COPY: Record<ScannerOutcomeCode, { title: string; description: string }> = {
-  CANDIDATES_AVAILABLE: { title: 'CANDIDATES_AVAILABLE', description: '검증 후보를 표시했습니다.' },
-  VALID_ZERO_SIGNAL: { title: 'VALID_ZERO_SIGNAL', description: '공급자 데이터와 분석은 정상이며 현재 조건에 맞는 신호만 없습니다.' },
-  UNIVERSE_EMPTY: { title: 'UNIVERSE_EMPTY', description: '선택 시장의 스캔 대상 유니버스가 비어 있습니다.' },
-  PROVIDER_FAILURE: { title: 'PROVIDER_FAILURE', description: '시장데이터 공급 실패이며 정상적인 신호 0건이 아닙니다.' },
-  SYMBOL_MAPPING_FAILURE: { title: 'SYMBOL_MAPPING_FAILURE', description: '공급자 심볼을 표준 자산 코드로 연결하지 못했습니다.' },
-  REQUEST_TIMEOUT: { title: 'REQUEST_TIMEOUT', description: '요청 제한시간 안에 검증을 완료하지 못했습니다.' },
-  DATA_QUALITY_REJECT: { title: 'DATA_QUALITY_REJECT', description: '응답은 받았지만 데이터 품질 기준을 통과하지 못했습니다.' },
-  FILTER_TOO_STRICT: { title: 'FILTER_TOO_STRICT', description: '데이터는 정상이지만 현재 Risk·전략 필터가 모든 후보를 제외했습니다.' },
-  FRONTEND_RENDER_FAILURE: { title: 'FRONTEND_RENDER_FAILURE', description: 'API 후보가 있으나 화면에서 안전하게 표시할 수 없습니다.' },
+  CANDIDATES_AVAILABLE: { title: '후보 있음', description: '현재 조건에 맞는 후보를 표시합니다.' },
+  VALID_ZERO_SIGNAL: { title: '신호 없음', description: '현재 조건에 맞는 신호가 없습니다.' },
+  UNIVERSE_EMPTY: { title: '검색 대상 없음', description: '선택한 시장에서 분석할 종목이 없습니다.' },
+  PROVIDER_FAILURE: { title: '데이터 확인 필요', description: '일부 시장 데이터를 불러오지 못했습니다.' },
+  SYMBOL_MAPPING_FAILURE: { title: '종목 정보 확인 필요', description: '일부 종목 정보를 확인하지 못했습니다.' },
+  REQUEST_TIMEOUT: { title: '응답 지연', description: '분석이 지연되고 있습니다. 다시 시도해 주세요.' },
+  DATA_QUALITY_REJECT: { title: '데이터 확인 필요', description: '분석에 필요한 데이터가 충분하지 않습니다.' },
+  FILTER_TOO_STRICT: { title: '조건에 맞는 후보 없음', description: '현재 검색 조건을 충족하는 후보가 없습니다.' },
+  FRONTEND_RENDER_FAILURE: { title: '표시 오류', description: '검색 결과를 표시하지 못했습니다.' },
 };
+
+function scannerDataStateLabel(value: string): string {
+  if (value === 'ready' || value === 'complete') return '정상';
+  if (value === 'partial') return '일부 데이터';
+  if (value === 'stale') return '지연';
+  if (value === 'untrusted') return '확인 필요';
+  return '확인 중';
+}
 
 function formatObservedAt(value: string | null | undefined): string {
   if (!value || !Number.isFinite(Date.parse(value))) return '미확인';
@@ -206,14 +214,14 @@ function formatObservedAt(value: string | null | undefined): string {
 }
 
 function remainingValidityLabel(value: string | null | undefined): string {
-  if (!value || !Number.isFinite(Date.parse(value))) return 'TTL 미확인';
+  if (!value || !Number.isFinite(Date.parse(value))) return '유효시간 미확인';
   const remainingMs = Date.parse(value) - Date.now();
-  if (remainingMs <= 0) return 'TTL 만료';
+  if (remainingMs <= 0) return '유효시간 만료';
   const remainingMinutes = Math.ceil(remainingMs / 60_000);
-  if (remainingMinutes < 60) return `TTL ${remainingMinutes}분`;
+  if (remainingMinutes < 60) return `유효 ${remainingMinutes}분`;
   const remainingHours = Math.ceil(remainingMinutes / 60);
-  if (remainingHours < 24) return `TTL ${remainingHours}시간`;
-  return `TTL ${Math.ceil(remainingHours / 24)}일`;
+  if (remainingHours < 24) return `유효 ${remainingHours}시간`;
+  return `유효 ${Math.ceil(remainingHours / 24)}일`;
 }
 
 function SignalDetailPanel({
@@ -363,8 +371,8 @@ function SignalDetailPanel({
       </section>
 
       <div className="grid grid-cols-2 gap-2">
-        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary px-3 text-xs font-black text-primary-foreground">AI 차트</button>
-        <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-xs font-black">주문 준비</button>
+        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary/12 px-3 text-xs font-black text-primary ring-1 ring-inset ring-primary/35">AI 차트</button>
+        <button type="button" aria-label="매매 검토 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-xs font-black">매매 검토</button>
       </div>
     </div>
   );
@@ -426,15 +434,15 @@ function SignalDetailPanel({
         {risks.length ? <ul className="mt-2 space-y-1 text-[11px] leading-5 text-warning">{risks.map((risk) => <li key={risk}>• {risk}</li>)}</ul> : <p className="mt-2 text-[11px] text-muted-foreground">추가 Risk 경고 없음</p>}
       </section>
       <div className="grid grid-cols-2 gap-2">
-        <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-black">주문 준비</button>
+        <button type="button" aria-label="매매 검토 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-black">매매 검토</button>
         <button type="button" onClick={onOpenAsset} className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold">자산 상세</button>
       </div>
-      <p className="text-center text-[10px] font-bold text-muted-foreground">두 액션 모두 클릭만으로 주문을 제출하지 않습니다 · real order 0</p>
+      <p className="text-center text-[10px] font-bold text-muted-foreground">차트 확인과 매매 검토만으로 주문되지 않습니다.</p>
       {showOrderPreparation ? (
         <div data-testid="order-preparation" className="border-t border-card-border pt-3">
           <div className="mb-3 rounded-2xl border border-warning/30 bg-warning/10 p-3">
-            <h3 className="text-xs font-black">주문 준비 · 실행 아님</h3>
-            <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">기존 Risk Engine·승인형 Paper 계획만 재사용합니다. 이 화면은 실주문을 전송하지 않습니다.</p>
+            <h3 className="text-xs font-black">매매 검토</h3>
+            <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">진입·손절·목표를 확인하는 단계이며 이 화면만으로 주문되지 않습니다.</p>
           </div>
           <ScannerApprovalComposer selection={selection} />
         </div>
@@ -518,16 +526,16 @@ function SignalDetailPanel({
             {risks.length ? <ul className="mt-2 space-y-1 text-[11px] leading-5 text-warning">{risks.map((risk) => <li key={risk}>• {risk}</li>)}</ul> : <p className="mt-2 text-[11px] text-muted-foreground">추가 Risk 경고 없음</p>}
           </section>
           <div className="mt-3 grid grid-cols-2 gap-2">
-            <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-black text-primary-foreground">AI 차트</button>
-            <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-black">주문 준비</button>
+            <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary/12 px-3 text-sm font-black text-primary ring-1 ring-inset ring-primary/35">AI 차트</button>
+            <button type="button" aria-label="매매 검토 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-black">매매 검토</button>
             <button type="button" onClick={onOpenAsset} className="col-span-2 min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold">기존 자산 상세 열기</button>
           </div>
-          <p className="mt-2 text-center text-[10px] font-bold text-muted-foreground">두 액션 모두 클릭만으로 주문을 제출하지 않습니다 · real order 0</p>
+          <p className="mt-2 text-center text-[10px] font-bold text-muted-foreground">차트 확인과 매매 검토만으로 주문되지 않습니다.</p>
           {showOrderPreparation ? (
             <div data-testid="order-preparation" className="mt-4 border-t border-card-border pt-4">
               <div className="mb-3 rounded-2xl border border-warning/30 bg-warning/10 p-3">
-                <h3 className="text-xs font-black">주문 준비 · 실행 아님</h3>
-                <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">기존 Risk Engine·승인형 Paper 계획만 재사용합니다. 이 화면은 실주문을 전송하지 않습니다.</p>
+                <h3 className="text-xs font-black">매매 검토</h3>
+                <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">진입·손절·목표를 확인하는 단계이며 이 화면만으로 주문되지 않습니다.</p>
               </div>
               <ScannerApprovalComposer selection={selection} />
             </div>
@@ -834,26 +842,28 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
           <>
             <section data-testid={status === 'partial' ? 'scanner-partial' : undefined} className={`rounded-3xl border p-4 ${status === 'partial' ? 'border-amber-500/40 bg-amber-500/10' : 'border-card-border bg-card'}`}>
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div><p className="text-sm font-black">{data.message}</p><p className="mt-1 text-xs text-muted-foreground">{strategyLabel(strategy)} · {data.timeframe} · {new Date(data.generatedAt).toLocaleString('ko-KR')}</p></div>
-                <div className="flex flex-wrap justify-end gap-1"><span className="rounded-full border border-card-border px-3 py-1 text-xs font-bold">{data.dataState}</span>{outcome ? <span data-testid="scanner-outcome" className="rounded-full border border-card-border px-3 py-1 text-[10px] font-black">{outcome}</span> : null}</div>
+                <div><p className="text-sm font-black">검색 결과</p><p className="mt-1 text-xs text-muted-foreground">{strategyLabel(strategy)} · {data.timeframe}</p></div>
+                <div className="flex flex-wrap justify-end gap-1"><span className="rounded-full border border-card-border px-3 py-1 text-xs font-bold">{scannerDataStateLabel(data.dataState)}</span>{outcome ? <span data-testid="scanner-outcome" className="rounded-full border border-card-border px-3 py-1 text-[10px] font-black">{OUTCOME_COPY[outcome].title}</span> : null}</div>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
                 <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">스캔</p><p className="text-sm font-black">{data.execution.requestedCount}</p></div>
                 <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">분석 완료</p><p className="text-sm font-black">{data.execution.dataSuccessCount ?? data.execution.completedCount}</p></div>
                 <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">표시</p><p className="text-sm font-black">{data.execution.finalDisplayedCount ?? normalizedCards.length}</p></div>
-                <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Provider 오류</p><p className="text-sm font-black">{data.execution.providerErrorCount}</p></div>
+                <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">확인 실패</p><p className="text-sm font-black">{data.execution.providerErrorCount}</p></div>
               </div>
             </section>
 
             {data.failures.length > 0 && (
-              <section className="rounded-3xl border border-amber-500/30 bg-card p-4">
-                <h2 className="text-sm font-black">분석하지 못한 종목 {data.failures.length}개</h2>
-                <div className="mt-2 space-y-1">
+              <details className="rounded-xl border border-amber-500/30 bg-card">
+                <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between px-3 text-sm font-semibold">
+                  <span>데이터 확인 필요</span><span className="text-xs text-warning">{data.failures.length}개 ⌄</span>
+                </summary>
+                <div className="space-y-1 border-t border-amber-500/20 p-3">
                   {data.failures.map((failure) => (
-                    <p key={`${failure.symbol}:${failure.reason}`} className="text-xs text-muted-foreground">{failure.symbol} · {failure.reason}</p>
+                    <p key={`${failure.symbol}:${failure.reason}`} className="text-xs text-muted-foreground">{failure.symbol}</p>
                   ))}
                 </div>
-              </section>
+              </details>
             )}
 
             {data.alerts.length > 0 && (
@@ -870,7 +880,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
 
             {normalizedCards.length === 0 ? (
               <section data-testid="scanner-zero-outcome" className="rounded-3xl border border-card-border bg-card p-6 text-center">
-                <p className="text-sm font-black">{outcome ? OUTCOME_COPY[outcome].title : 'VALID_ZERO_SIGNAL'}</p>
+                <p className="text-sm font-black">{outcome ? OUTCOME_COPY[outcome].title : '신호 없음'}</p>
                 <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">{outcome ? OUTCOME_COPY[outcome].description : '현재 조건에서 표시할 검증 후보가 없습니다.'}</p>
                 <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] sm:grid-cols-4">
                   <span className="rounded-xl bg-background p-2">유니버스 {data.universe.totalCount}</span>
@@ -901,10 +911,10 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                         </button>
                         <div className="shrink-0 text-right"><p className="text-sm font-black">{formatNumber(card.price, card.currency === 'KRW' ? 0 : 6)}</p><p className="text-xs text-muted-foreground">신호점수 {formatNumber(card.score, 1)} · 위험 {formatNumber(card.riskScore, 1)}</p></div>
                       </div>
-                      <div className="mt-2 flex min-w-0 flex-wrap gap-1">{card.matched.slice(0, 3).map((item) => <span key={item} className="max-w-full truncate rounded-lg bg-background px-2 py-1 text-[10px]">{item}</span>)}{card.unverified.length ? <span className="rounded-lg bg-warning/10 px-2 py-1 text-[10px] text-warning">미검증 {card.unverified.length}</span> : null}</div>
+                      <div className="mt-2 flex min-w-0 flex-wrap gap-1">{card.matched.slice(0, 3).map((item) => <span key={item} className="max-w-full truncate rounded-lg bg-background px-2 py-1 text-[10px]">{item}</span>)}{card.unverified.length ? <span className="rounded-lg bg-warning/10 px-2 py-1 text-[10px] text-warning">확인 필요 {card.unverified.length}</span> : null}</div>
                       <div className="mt-2 grid grid-cols-2 gap-2">
-                        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={() => openInAiChart(card)} className="min-h-11 rounded-xl bg-primary px-2 text-xs font-black text-primary-foreground">AI 차트</button>
-                        <button type="button" aria-label={`${card.name} 주문 준비`} onClick={() => openOrderPreparation(card)} className="min-h-11 rounded-xl border border-primary/40 px-2 text-xs font-black">주문 준비</button>
+                        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={() => openInAiChart(card)} className="min-h-11 rounded-xl bg-primary/12 px-2 text-xs font-black text-primary ring-1 ring-inset ring-primary/35">AI 차트</button>
+                        <button type="button" aria-label={`${card.name} 매매 검토`} onClick={() => openOrderPreparation(card)} className="min-h-11 rounded-xl border border-primary/40 px-2 text-xs font-black">매매 검토</button>
                       </div>
                     </article>
                   ))}
