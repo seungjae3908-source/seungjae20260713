@@ -94,3 +94,26 @@ test('three-year readiness requires every canonical profile to cover the exact a
   assert.equal(result.readyMarketCount,4);
   assert.equal(result.blockedMarketCount,0);
 });
+
+
+test('indicator INVALID state exits only on the next bar open',()=>{
+  const data=candles({count:60,drift:.001});
+  const signalAtMs=data[34].ts;
+  const invalidTs=data[37].ts;
+  const expectedExitTs=data[38].ts;
+  const expectedExitPrice=data[38].open;
+  const result=simulateRunner({
+    candles:data,
+    signalAtMs,
+    maxBars:20,
+    trailActivateAtR:999,
+    runnerControlByTs:{
+      [String(invalidTs)]:{state:'INVALID',trailAtrMult:1.5,exitNextOpen:true},
+    },
+  });
+  assert.equal(result.exitReason,'INDICATOR_INVALID_NEXT_OPEN');
+  assert.equal(result.exitTs,expectedExitTs);
+  assert.equal(result.exitPrice,expectedExitPrice);
+  assert.equal(result.controlHistory.length,1);
+  assert.equal(result.controlHistory[0].ts,invalidTs);
+});
