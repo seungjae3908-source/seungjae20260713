@@ -182,7 +182,7 @@ export function TradeExecutionConnections({
       }
       closeSetup();
       await load();
-      setMessage('거래키를 암호화 저장했습니다. 서버 실주문 게이트는 별도이며, 저장만으로 주문은 실행되지 않습니다.');
+      setMessage('거래 연결을 저장했습니다. 주문 기능은 별도 확인 후 사용할 수 있습니다.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '실주문 거래키 저장에 실패했습니다.');
     } finally {
@@ -285,11 +285,9 @@ export function TradeExecutionConnections({
       </button>
     </div>
 
-    <div className="mt-3 flex items-start gap-2 rounded-2xl border border-warning/30 bg-warning/10 p-3 text-xs leading-5 text-warning">
+    <div className="mt-3 flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/10 p-3 text-xs leading-5 text-warning">
       <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
-      <p>
-        거래키 저장 ≠ 실주문 활성화입니다. REAL ORDER·Private API·전체 활성화 승인·provider 게이트가 모두 ON이고 주문 직전 Risk 검사를 통과해야만 전송됩니다. 자동 실주문은 LIVE_AUTOMATIC_TRADING_ENABLED가 추가로 ON이어야 합니다.
-      </p>
+      <p>거래 연결과 주문 사용은 별도입니다. 연결만으로 주문이 실행되지 않습니다.</p>
     </div>
 
     <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -310,19 +308,13 @@ export function TradeExecutionConnections({
               ? <CheckCircle2 className="h-5 w-5 shrink-0 text-positive" />
               : <AlertTriangle className="h-5 w-5 shrink-0 text-warning" />}
           </div>
-          <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4">
-            <StateChip label="거래키" value={connected ? '저장됨' : '미연결'} good={connected} />
-            <StateChip label="provider 검증" value={providerVerified ? '검증됨' : '미검증'} good={providerVerified} />
-            <StateChip label="수동 실주문" value={serverEnabled ? 'ON' : 'OFF'} good={serverEnabled} />
-            <StateChip label="자동 실주문" value={automaticServerEnabled ? 'ON' : 'OFF'} good={automaticServerEnabled} />
+          <div className="mt-3 grid grid-cols-3 gap-2 text-[11px]">
+            <StateChip label="연결" value={providerVerified ? '확인됨' : connected ? '확인 필요' : '미연결'} good={providerVerified} />
+            <StateChip label="수동 주문" value={serverEnabled ? '사용 가능' : '사용 안 함'} good={serverEnabled} />
+            <StateChip label="자동 주문" value={automaticServerEnabled ? '사용 가능' : '사용 안 함'} good={automaticServerEnabled} />
           </div>
-          <p className="mt-2 break-words text-[10px] leading-4 text-muted-foreground">
-            {connection?.lastVerifiedAt ? `마지막 확인 ${new Date(connection.lastVerifiedAt).toLocaleString('ko-KR')}` : '실주문 provider 검증 증거 없음'}
-            {connection?.lastErrorCode ? ` · ${connection.lastErrorCode}` : ''}
-          </p>
-          {readiness && readiness.blockers.length > 0 && <p className="mt-1 break-words text-[10px] leading-4 text-warning">
-            준비 blocker: {readiness.blockers.join(' · ')}
-          </p>}
+          {connected && !providerVerified ? <p className="mt-2 text-center text-[10px] leading-4 text-muted-foreground">주문 기능을 사용하기 전에 연결 확인이 필요합니다.</p> : null}
+          {readiness && readiness.blockers.length > 0 ? <p className="mt-1 text-center text-[10px] leading-4 text-warning">주문 사용 전 확인할 항목이 있습니다.</p> : null}
           <div className="mt-3 grid grid-cols-3 gap-2">
             {connected && <button
               type="button"
@@ -330,7 +322,7 @@ export function TradeExecutionConnections({
               onClick={() => void verifyConnection(provider)}
               className="min-h-10 rounded-xl border border-positive/30 px-2 text-[11px] font-extrabold text-positive disabled:opacity-50"
             >
-              {busy === provider ? '검증 중' : '실계좌 검증'}
+              {busy === provider ? '확인 중' : '연결 확인'}
             </button>}
             <button
               type="button"
