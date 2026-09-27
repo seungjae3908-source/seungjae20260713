@@ -74,10 +74,10 @@ function requestErrorMessage(error: unknown): string {
     }
     if (error.status === 502) return '시장데이터 공급자 응답이 불안정합니다. 마지막 정상 결과가 있으면 유지합니다.';
     if (error.code.includes('STRATEGY_TIMEFRAME_MISMATCH')) return '선택한 투자 스타일의 자동 시간봉 구성을 사용할 수 없습니다.';
-    return `검색 요청 실패: ${error.code}`;
+    return '검색 데이터를 확인하지 못했습니다. 다시 시도해 주세요.';
   }
   if (error instanceof Error && error.name === 'AbortError') return '이전 검색 요청을 취소했습니다.';
-  return error instanceof Error ? error.message : '검색 요청 중 알 수 없는 오류가 발생했습니다.';
+  return '검색 데이터를 확인하지 못했습니다. 다시 시도해 주세요.';
 }
 
 function formatNumber(value: number | null | undefined, maximumFractionDigits = 2): string {
