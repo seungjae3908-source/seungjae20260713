@@ -208,6 +208,16 @@ function scannerDataStateLabel(value: string): string {
   return '확인 중';
 }
 
+function signalStateLabel(value: string | null | undefined): string {
+  if (value === 'CONFIRMED') return '확인됨';
+  if (value === 'WATCHING') return '관찰 중';
+  if (value === 'WEAKENED') return '약화';
+  if (value === 'INVALIDATED') return '무효';
+  if (value === 'FORMING') return '형성 중';
+  if (value === 'EXPIRED') return '만료';
+  return '확인 중';
+}
+
 function formatObservedAt(value: string | null | undefined): string {
   if (!value || !Number.isFinite(Date.parse(value))) return '미확인';
   return new Date(value).toLocaleString('ko-KR');
@@ -346,11 +356,10 @@ function SignalDetailPanel({
         {why.length > 0
           ? <ul className="mt-2 space-y-1 text-xs leading-5">{why.slice(0, 3).map((reason, index) => <li key={`${reason}:${index}`}>• {reason}</li>)}</ul>
           : <p className="mt-2 text-xs text-muted-foreground">검증된 이유 설명이 없습니다. 근거가 없는 설명은 만들지 않습니다.</p>}
-        <p className="mt-2 break-words text-[10px] leading-4 text-muted-foreground">근거 소스 {matchedEvidence.length ? [...new Set(matchedEvidence.map((item) => item.source).filter(Boolean))].join(' · ') : '미확인'}</p>
       </section>
 
       <section className="rounded-2xl border border-card-border p-3" data-testid="scanner-price-plan">
-        <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">서버 계획</span></div>
+        <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">확인된 계획</span></div>
         <div className="mt-2 grid grid-cols-2 gap-2 text-center">
           <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">진입</p><p className="text-xs font-black">{card.pricePlan.entryZone ? `${formatNumber(card.pricePlan.entryZone.from)}~${formatNumber(card.pricePlan.entryZone.to)}` : '미확인'}</p></div>
           <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">손절</p><p className="text-xs font-black">{formatNumber(card.pricePlan.stopLoss)}</p></div>
@@ -464,7 +473,7 @@ function SignalDetailPanel({
           <p className="mt-1 text-xs font-bold text-muted-foreground">{marketDisplayLabel(card)}</p>
           <div className="mt-2 flex flex-wrap gap-1">
             <span data-testid="scanner-direction-badge" className={`rounded-full border px-2 py-1 text-[10px] font-black ${actionBadgeClass(card)}`}>{actionLabel(card)}</span>
-            <span data-testid="scanner-signal-state" className="rounded-full border border-primary/30 px-2 py-1 text-[10px] font-black">상태 {card.signalState || '미확인'}</span>
+            <span data-testid="scanner-signal-state" className="rounded-full border border-primary/30 px-2 py-1 text-[10px] font-black">상태 {signalStateLabel(card.signalState)}</span>
             <span data-testid="scanner-evidence-grade" className="rounded-full border border-card-border px-2 py-1 text-[10px] font-black">등급 {evidenceGradeLabel(card)}</span>
             <span data-testid="scanner-ttl-badge" className="rounded-full border border-card-border px-2 py-1 text-[10px] font-black">{remainingValidityLabel(card.expiresAt)}</span>
           </div>
@@ -503,7 +512,7 @@ function SignalDetailPanel({
         <>
           {evidenceContent}
           <section className="mt-3 rounded-2xl border border-card-border p-3" data-testid="scanner-price-plan">
-            <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">서버 계획</span></div>
+            <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">확인된 계획</span></div>
             <div className="mt-2 grid grid-cols-2 gap-2 text-center sm:grid-cols-5">
               <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">진입</p><p className="text-xs font-black">{card.pricePlan.entryZone ? `${formatNumber(card.pricePlan.entryZone.from)}~${formatNumber(card.pricePlan.entryZone.to)}` : '미확인'}</p></div>
               <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">손절</p><p className="text-xs font-black">{formatNumber(card.pricePlan.stopLoss)}</p></div>
