@@ -2,6 +2,7 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
+  persistScannerSpotSpreadObservationRecordV1,
   persistScannerSpotSpreadObservationV1,
   summarizeScannerSpotSpreadArchiveV1,
 } from "../src/scanner-spot-spread-archive-v1.js";
@@ -39,9 +40,20 @@ const symbol = arg("symbol", "BTC").toUpperCase();
 const outputRaw = arg("output-dir");
 if (!outputRaw) throw new Error("SCANNER_SPOT_SPREAD_OUTPUT_DIR_REQUIRED");
 const outputDir = path.resolve(outputRaw);
+const seedRaw = arg("seed-root");
+const seedDir = seedRaw ? path.resolve(seedRaw) : null;
 const requiredDays = Number(arg("required-days", "730"));
 if (!Number.isInteger(requiredDays) || requiredDays < 1 || requiredDays > 730) {
   throw new Error("SCANNER_SPOT_SPREAD_REQUIRED_DAYS_INVALID");
+}
+
+let seedObservationCount = 0;
+if (seedDir) {
+  const seeded = await collectStoredObservations(seedDir, symbol);
+  for (const observation of seeded) {
+    await persistScannerSpotSpreadObservationRecordV1({ stateRoot: outputDir, observation });
+  }
+  seedObservationCount = seeded.length;
 }
 
 const requestStartedAtMs = Date.now();
@@ -90,7 +102,9 @@ if (persisted.status !== "READY") {
     status: summary.status,
     researchCodeSha,
     symbol,
+    seedObservationCount,
     observationCount: summary.observationCount,
+    producerCodeShaCount: summary.producerCodeShaCount,
     spreadBps: persisted.observation.spreadBps,
     ownerReady: summary.ownerReady,
     historicalReplayReady: summary.historicalReplayReady,
