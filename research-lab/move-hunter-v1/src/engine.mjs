@@ -93,6 +93,7 @@ export function simulateRunner({
   profitMilestones=[0.03,0.05,0.10,0.20,0.30,0.50,1.00],
   atrStopMult=1.2, structureLookback=10, minStopPct=.003, maxStopPct=.025,
   breakEvenAtR=1, trailActivateAtR=2, trailAtrMult=2,
+  runnerControlByTs=null, indicatorExitEnabled=true,
   sameBarPolicy='STOP_FIRST', costs={},
 }={}){
   const side=normalizeDirection(direction);
@@ -109,15 +110,23 @@ export function simulateRunner({
 
   if(!Array.isArray(profitMilestones)||profitMilestones.some(v=>!Number.isFinite(v)||v<=0)) throw new TypeError('profitMilestones must be positive finite returns');
   const milestones=[...new Set(profitMilestones)].sort((a,b)=>a-b);
+  if(runnerControlByTs!=null&&(typeof runnerControlByTs!=='object'||Array.isArray(runnerControlByTs))) throw new TypeError('runnerControlByTs must be an object keyed by candle timestamp');
   let stop=init.stop;
   let best=entry;
   let mfe=0,mae=0,maxR=0,exitPrice=null,exitTs=null,exitReason=null,ambiguousBars=0;
+  let pendingIndicatorExit=false;
   const milestoneHitTs=Object.fromEntries(milestones.map(v=>[String(v),null]));
   const stopHistory=[{ts:entryBar.ts,stop,reason:'INITIAL'}];
+  const controlHistory=[];
   const endIndex=Math.min(candles.length-1,entryIndex+maxBars-1);
 
   for(let i=entryIndex;i<=endIndex;i+=1){
     const bar=candles[i], activeStop=stop;
+    if(pendingIndicatorExit){
+      exitPrice=bar.open; exitTs=bar.ts; exitReason='INDICATOR_INVALID_NEXT_OPEN';
+      mae=Math.min(mae,directionalReturn(entry,exitPrice,side));
+      break;
+    }
     if(stopHit(bar,activeStop,side)){
       const favorableExtreme=side===DIRECTIONS.LONG?bar.high:bar.low;
       if(directionalReturn(entry,favorableExtreme,side)>=.03) ambiguousBars+=1;
@@ -140,14 +149,20 @@ export function simulateRunner({
     }
 
     const currentR=(directionalReturn(entry,best,side)*entry)/riskDistance;
+    const control=runnerControlByTs?.[String(bar.ts)]??runnerControlByTs?.[bar.ts]??null;
+    const adaptiveTrailAtrMult=Number.isFinite(control?.trailAtrMult)&&control.trailAtrMult>0?control.trailAtrMult:trailAtrMult;
+    if(control){
+      controlHistory.push({ts:bar.ts,state:control.state??'UNKNOWN',trailAtrMult:adaptiveTrailAtrMult,exitNextOpen:control.exitNextOpen===true});
+      if(indicatorExitEnabled===true&&control.exitNextOpen===true) pendingIndicatorExit=true;
+    }
     let nextStop=stop,reason=null;
     if(currentR>=breakEvenAtR){
       if((side===DIRECTIONS.LONG&&entry>nextStop)||(side===DIRECTIONS.SHORT&&entry<nextStop)){ nextStop=entry; reason='BREAKEVEN'; }
     }
     if(currentR>=trailActivateAtR){
       const rollingAtr=atr(candles.slice(0,i+1),14)||init.atr;
-      const trail=side===DIRECTIONS.LONG ? best-rollingAtr*trailAtrMult : best+rollingAtr*trailAtrMult;
-      if((side===DIRECTIONS.LONG&&trail>nextStop)||(side===DIRECTIONS.SHORT&&trail<nextStop)){ nextStop=trail; reason='ATR_TRAIL'; }
+      const trail=side===DIRECTIONS.LONG ? best-rollingAtr*adaptiveTrailAtrMult : best+rollingAtr*adaptiveTrailAtrMult;
+      if((side===DIRECTIONS.LONG&&trail>nextStop)||(side===DIRECTIONS.SHORT&&trail<nextStop)){ nextStop=trail; reason=control?`INDICATOR_${String(control.state??'UNKNOWN')}_ATR_TRAIL`:'ATR_TRAIL'; }
     }
     if(side===DIRECTIONS.LONG) nextStop=Math.min(nextStop,bar.close*.999999);
     else nextStop=Math.max(nextStop,bar.close*1.000001);
@@ -168,7 +183,7 @@ export function simulateRunner({
     netR:netReturn/(riskDistance/entry),mfe,mae,maxR,
     peakReturn:mfe,milestoneHitTs,grossCaptureRatio,netCaptureRatio,givebackFromPeak,
     targetHitTs:{pct3:milestoneHitTs['0.03']??null,pct5:milestoneHitTs['0.05']??null,pct10:milestoneHitTs['0.1']??null},
-    finalStop:stop,stopHistory,
+    finalStop:stop,stopHistory,controlHistory,
     ambiguousBars,sameBarPolicy,barsObserved:Math.max(1,candles.findIndex(c=>c.ts===exitTs)-entryIndex+1),
   };
 }
