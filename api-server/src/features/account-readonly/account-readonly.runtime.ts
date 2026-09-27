@@ -44,7 +44,7 @@ const READONLY_TARGETS = {
       '/api/v2/mix/account/accounts',
       '/api/v2/mix/position/all-position',
       '/api/v2/mix/order/orders-pending',
-      '/api/v3/account/info',
+      '/api/v3/account/settings',
       '/api/v3/account/assets',
       '/api/v3/position/current-position',
       '/api/v3/trade/unfilled-orders',
@@ -112,6 +112,35 @@ async function upbitFailureName(response: Response) {
   }
 }
 
+async function bitgetFailureCode(response: Response) {
+  try {
+    const body: unknown = await response.clone().json();
+    const root = objectRecord(body);
+    const code = root?.code;
+    return typeof code === 'string' || typeof code === 'number'
+      ? String(code)
+      : '';
+  } catch {
+    return '';
+  }
+}
+
+function classifyBitgetApplicationCode(code: string) {
+  if (code === '25245') return new AccountReadonlyError('BITGET_NOT_UTA');
+  if (code === '40018' || code === '40038') return new AccountReadonlyError('BITGET_IP_NOT_ALLOWED');
+  if (code === '40014') return new AccountReadonlyError('BITGET_PERMISSION_DENIED');
+  if (code === '40006' || code === '40009' || code === '40036') return new AccountReadonlyError('BITGET_AUTH_FAILED');
+  if (code === '40008') return new AccountReadonlyError('BITGET_TIMESTAMP_REJECTED', true);
+  if (code === '40017' || code === '40034' || code === '25200') {
+    return new AccountReadonlyError('BITGET_PARAMETER_REJECTED');
+  }
+  if (code === '25003' || code === '25004' || code === '40725' || code === '40808' || code === '45001') {
+    return new AccountReadonlyError('PROVIDER_UNAVAILABLE', true);
+  }
+  if (code === '429') return new AccountReadonlyError('RATE_LIMITED', true);
+  return null;
+}
+
 async function classifyReadonlyHttpFailure(provider: ReadonlyHttpProvider, response: Response) {
   if (response.status === 429 || (provider === 'upbit' && response.status === 418)) {
     return new AccountReadonlyError('RATE_LIMITED', true);
@@ -132,6 +161,8 @@ async function classifyReadonlyHttpFailure(provider: ReadonlyHttpProvider, respo
     return new AccountReadonlyError('UPBIT_REQUEST_REJECTED');
   }
 
+  const application = classifyBitgetApplicationCode(await bitgetFailureCode(response));
+  if (application) return application;
   if (response.status === 401) return new AccountReadonlyError('BITGET_AUTH_FAILED');
   if (response.status === 403) return new AccountReadonlyError('BITGET_PERMISSION_DENIED');
   return new AccountReadonlyError('BITGET_REQUEST_REJECTED');

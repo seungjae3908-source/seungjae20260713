@@ -63,7 +63,7 @@ jobs:
           const adapter = fs.readFileSync('api-server/src/services/trade-exchange-adapters.service.ts', 'utf8');
           const runtime = fs.readFileSync('api-server/src/features/account-readonly/account-readonly.runtime.ts', 'utf8');
           const exchange = fs.readFileSync('api-server/src/features/account-readonly/providers/exchange-readonly.providers.ts', 'utf8');
-          for (const endpoint of ['/api/v3/account/info', '/api/v3/account/assets', '/api/v3/position/current-position', '/api/v3/trade/unfilled-orders']) {
+          for (const endpoint of ['/api/v3/account/settings', '/api/v3/account/assets', '/api/v3/position/current-position', '/api/v3/trade/unfilled-orders']) {
             requireText(adapter, endpoint, 'BITGET_UTA_ADAPTER_ENDPOINT_REQUIRED_' + endpoint);
             requireText(runtime, endpoint, 'BITGET_UTA_RUNTIME_ENDPOINT_REQUIRED_' + endpoint);
           }
