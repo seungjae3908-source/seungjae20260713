@@ -93,7 +93,7 @@ export function simulateRunner({
   profitMilestones=[0.03,0.05,0.10,0.20,0.30,0.50,1.00],
   atrStopMult=1.2, structureLookback=10, minStopPct=.003, maxStopPct=.025,
   breakEvenAtR=1, trailActivateAtR=2, trailAtrMult=2,
-  runnerControlByTs=null, indicatorExitEnabled=true,
+  runnerControlByTs=null, indicatorExitEnabled=false,
   sameBarPolicy='STOP_FIRST', costs={},
 }={}){
   const side=normalizeDirection(direction);
