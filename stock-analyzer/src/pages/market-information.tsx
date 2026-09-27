@@ -139,9 +139,9 @@ function statusText(error: unknown): { title: string; description: string; icon:
     if (error.status === 403) return { title: '권한 없음', description: '현재 등급에서 사용할 수 없습니다.', icon: <AlertTriangle className="h-5 w-5" /> };
     if (error.status === 429) return { title: '잠시 후 재시도', description: '호출 한도에 도달했습니다.', icon: <AlertTriangle className="h-5 w-5" /> };
     if (error.code.includes('TIMEOUT')) return { title: '응답 지연', description: '잠시 후 다시 시도해 주세요.', icon: <AlertTriangle className="h-5 w-5" /> };
-    return { title: '시장정보 확인 실패', description: error.message, icon: <AlertTriangle className="h-5 w-5" /> };
+    return { title: '시장정보 확인 실패', description: '데이터를 불러오지 못했습니다. 다시 시도해 주세요.', icon: <AlertTriangle className="h-5 w-5" /> };
   }
-  return { title: '시장정보 확인 실패', description: error instanceof Error ? error.message : '알 수 없는 오류', icon: <AlertTriangle className="h-5 w-5" /> };
+  return { title: '시장정보 확인 실패', description: '데이터를 불러오지 못했습니다. 다시 시도해 주세요.', icon: <AlertTriangle className="h-5 w-5" /> };
 }
 
 function useDesktopRoom(): boolean {
@@ -160,23 +160,18 @@ function useDesktopRoom(): boolean {
 }
 
 function SourceMeta({ meta }: { meta: MarketInformationMeta }) {
-  return (
-    <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-bold text-muted-foreground" aria-label="데이터 상태">
-      <span>출처 {meta.source ?? meta.provider ?? '미연결'}</span>
-      <span>기준 {formatDate(meta.providerUpdatedAt ?? meta.observedAt)}</span>
-      <span>
-        {meta.marketStatus === '24H' ? '24시간' : meta.marketStatus === 'OPEN' ? '장중' : meta.marketStatus === 'CLOSED' ? '마감' : '미확인'}
-      </span>
-      {meta.isDelayed ? <span className="text-amber-600">지연</span> : null}
-      {meta.isStale ? <span className="text-red-600">오래됨</span> : null}
-      {meta.partial ? <span className="text-amber-600">일부</span> : null}
-    </div>
-  );
+  const issues = [
+    meta.isStale ? '오래된 데이터' : '',
+    meta.isDelayed ? '지연' : '',
+    meta.partial ? '일부 데이터' : '',
+  ].filter(Boolean);
+  if (!issues.length) return null;
+  return <p className="mt-3 text-[10px] font-bold text-warning" aria-label="데이터 상태">{issues.join(' · ')}</p>;
 }
 
 function SectionFrame<T>({ title, section, children }: { title: string; section: MarketInformationSection<T>; children: ReactNode }) {
-  const unavailable = section.status === 'unsupported'
-    || section.status === 'unavailable'
+  if (section.status === 'unsupported') return null;
+  const unavailable = section.status === 'unavailable'
     || section.status === 'error'
     || section.status === 'empty';
 
@@ -228,7 +223,7 @@ function RankingTabs({ value, onChange }: { value: RankingKey; onChange: (value:
           onClick={() => onChange(item.key)}
           className={cn(
             'min-h-11 min-w-0 rounded-xl border px-2 text-xs font-black',
-            value === item.key ? 'border-primary bg-primary text-primary-foreground' : 'bg-background hover:bg-muted',
+            value === item.key ? 'border-primary/40 bg-primary/10 text-primary' : 'bg-background hover:bg-muted',
           )}
         >
           <span className="break-keep">{item.label}</span>
@@ -335,7 +330,7 @@ function MarketDataLoading({ route }: { route: MarketInformationRoute }) {
 function MarketDataError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
   const state = statusText(error);
   return (
-    <section className="mt-4 rounded-2xl border bg-card p-4 text-center shadow-sm" aria-label="시장정보 오류">
+    <section className="mt-4 rounded-xl border bg-card p-4 text-center" aria-label="시장정보 오류">
       <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-muted">{state.icon}</div>
       <h2 className="mt-3 text-base font-black">{state.title}</h2>
       <p className="mt-1 line-clamp-2 text-xs font-bold text-muted-foreground">{state.description}</p>
