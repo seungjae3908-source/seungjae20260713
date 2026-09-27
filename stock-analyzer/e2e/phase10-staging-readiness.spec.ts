@@ -1527,6 +1527,12 @@ async function runAuthenticatedAiChartCertification(
       sessions.push(timing);
       diagnostics.authenticated_ai_chart.sessions.push(timing);
       await expectHealthyRoute(page, '/');
+      // Each certification context restores a real approved session, which starts
+      // the same automatic backup lifecycle as a user session. End it through the
+      // application logout path so its drain completes before Playwright tears the
+      // browser context down; closing an authenticated context mid-drain would
+      // manufacture a network abort rather than prove a release defect.
+      await logout(page);
     } finally {
       await context.close();
     }
