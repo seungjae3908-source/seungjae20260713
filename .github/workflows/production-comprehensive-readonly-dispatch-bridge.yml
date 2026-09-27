@@ -132,7 +132,7 @@ jobs:
               repo: context.repo.repo,
               workflow_id: workflowId,
               ref: 'main',
-              inputs: { sha: target },
+              inputs: { sha: target, include_telegram: 'false' },
               return_run_details: true,
               headers: {
                 accept: 'application/vnd.github+json',
@@ -183,6 +183,7 @@ jobs:
                 '- Exact Production deploy SHA + identityMatch are enforced by the QA workflow before browser tests.',
                 '- Production environment protection bypassed: `false`',
                 '- Production DB/app mutations by this bridge: `0`',
+                '- Telegram runtime readiness in comprehensive QA: `excluded`',
                 '- Trading/private/order authority granted: `false`',
                 `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
               ].join('\n'),
