@@ -359,6 +359,11 @@ export function summarizeScannerSpotSpreadArchiveV1({
   }
 
   const valid = observations.filter((row) => {
+    try {
+      assertScannerSpotSpreadObservationRecordV1(row);
+    } catch {
+      return false;
+    }
     const producerSha = exactResearchSha(row?.producerCodeSha ?? row?.researchCodeSha);
     return row?.schemaVersion === 1
     && row?.artifactType === "SPOT_SPREAD_OBSERVATION"
