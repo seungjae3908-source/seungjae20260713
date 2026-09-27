@@ -224,6 +224,11 @@ nav[aria-label='주요 메뉴'] [role='menuitem'] {
 }
 
 
+/* Clean-density V1: quiet typography/borders/shadows and preserve touch-safe controls. */
+[data-testid='app-shell'] .font-black {
+  font-weight: var(--pro-ui-weight-bold) !important;
+}
+
 /* Clean-density V1: quiet borders/shadows and preserve touch-safe controls. */
 [data-testid='app-shell'] .shadow-sm {
   box-shadow: 0 6px 18px rgb(2 8 23 / 0.08);
