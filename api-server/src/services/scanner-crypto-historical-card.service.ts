@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import {
   createCryptoSignalScannerService,
   type CryptoCandle,
-  type CryptoMarket,
   type CryptoSignalScanRequest,
   type CryptoTicker,
   type CryptoTimeframe,
@@ -13,6 +12,8 @@ import {
   type ScannerStrategyMode,
 } from './scanner-quant-strategy.service';
 import type { ScannerResponse } from './scanner-signal.types';
+
+type CryptoMarket = 'spot' | 'futures';
 
 const SHA64 = /^[0-9a-f]{64}$/iu;
 
