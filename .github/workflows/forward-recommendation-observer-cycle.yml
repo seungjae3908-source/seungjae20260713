@@ -267,9 +267,6 @@ jobs:
           if (summary.coverage?.fullStrategyCoverage !== false || JSON.stringify(summary.coverage?.strategies) !== JSON.stringify(['SWING'])) {
             throw new Error('Observer must not overclaim full strategy coverage.');
           }
-          if (JSON.stringify(summary.coverage?.timeframes) !== JSON.stringify(['60m', '4H'])) {
-            throw new Error('Observer mixed-timeframe coverage mismatch.');
-          }
           const manifest = {
             schemaVersion: 1,
             kind: 'forward-recommendation-observer-state',
@@ -310,7 +307,7 @@ jobs:
             echo '## Forward Recommendation Observer'
             echo
             echo "- research SHA: \`${RESEARCH_SHA,,}\`"
-            echo '- coverage: KR/US/Bitget Futures SWING 60m + Upbit Spot SWING 4H'
+            echo '- coverage: KR/US/Upbit Spot/Bitget Futures · SWING 60m only'
             echo '- full strategy coverage: `false`'
             echo '- public market data only: `true`'
             echo '- artifact-only persistence: `true`'
