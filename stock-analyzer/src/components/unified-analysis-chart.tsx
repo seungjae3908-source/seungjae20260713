@@ -865,14 +865,14 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
         </div>
       </section>
 
-      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="ai-chart-v3-evidence-status" data-realtime-provider={realtimeHealth.provider}>
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div>
-            <p className="text-[11px] font-extrabold text-primary">AI Chart V3 Evidence Truth</p>
-            <h2 className="mt-1 text-sm font-black">Transport · Provenance · Calibration</h2>
-          </div>
-          <span className={cn('rounded-full border px-3 py-1 text-[10px] font-black', dataStatusClass(dataStatus))}>{dataStatusLabel(dataStatus)}</span>
-        </div>
+      <details className="rounded-xl border border-card-border bg-card" data-testid="ai-chart-v3-evidence-status" data-realtime-provider={realtimeHealth.provider}>
+        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 text-sm font-semibold">
+          <span>데이터 상태</span>
+          <span className={cn('rounded-full border px-2.5 py-1 text-[10px] font-black', dataStatusClass(dataStatus))}>{dataStatusLabel(dataStatus)}</span>
+        </summary>
+        <div className="border-t border-card-border p-3">
+
+        
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
           <Metric label="STREAM STATUS" value={realtimeHealth.connectionState} />
           <Metric label="TRANSPORT" value={realtimeHealth.transportMode} />
@@ -890,14 +890,15 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
           <Metric label="DATA QUALITY" value={dataStatusLabel(dataStatus)} />
         </div>
         <p className="mt-3 rounded-2xl bg-background p-3 text-[11px] font-bold leading-5 text-muted-foreground">TECHNICAL SCORE는 규칙 기반 차트 강도 점수이며 실제 승률이 아닙니다. Backtest/OOS/Walk-Forward/Shadow/Paper의 검증 표본이 이 차트와 정식으로 연결되기 전에는 확률·승률·EV를 생성하지 않습니다. 지연·오래된·불충분 데이터에서는 방향 신호를 강행하지 않고 WATCH로 제한합니다.</p>
-      </section>
+        </div>
+      </details>
 
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="scanner-price-plan-chart">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
             <p className="text-[11px] font-extrabold text-primary">신호검색기 계획</p>
             <h2 className="mt-1 break-keep text-sm font-black">진입 · 손절 · 목표가</h2>
-            <p className="mt-1 text-[10px] font-bold text-muted-foreground">Scanner 계획·점수·근거는 같은 시장·종목·시간봉 identity에서만 유지됩니다.</p>
+            <p className="mt-1 text-[10px] font-bold text-muted-foreground">확인된 신호 계획만 표시합니다.</p>
           </div>
           <span data-testid="scanner-price-plan-action" className="shrink-0 rounded-full border border-card-border bg-background px-3 py-1 text-xs font-black">{scannerActionLabel(selection.action)}</span>
         </div>
@@ -911,7 +912,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
             <Metric label="R:R" value={pricePlan.riskReward != null && Number.isFinite(pricePlan.riskReward) && pricePlan.riskReward > 0 ? pricePlan.riskReward.toFixed(2) : '미확인'} />
           </div>
         ) : (
-          <p className="mt-3 rounded-2xl bg-background p-3 break-keep text-xs font-bold text-muted-foreground">Scanner에서 전달된 Price Plan이 없습니다. 신호검색기 계획이 없는 경우 차트가 임의의 진입가·손절가·목표가를 만들지 않습니다.</p>
+          <p className="mt-3 rounded-xl bg-background p-3 break-keep text-xs font-bold text-muted-foreground">확인된 매매 계획이 없습니다.</p>
         )}
       </section>
 
@@ -926,10 +927,10 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
 
       {warnings.length > 0 && <section className="rounded-3xl border border-warning/30 bg-warning/5 p-4" data-testid="chart-data-warnings"><div className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-warning" /><h2 className="text-sm font-black">데이터 품질 알림</h2></div><ul className="mt-2 space-y-1 text-xs font-bold text-muted-foreground">{warnings.map((warning) => <li key={warning}>• {warning}</li>)}</ul></section>}
 
-      {latest && levels && <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-[11px] font-extrabold text-primary">기술지표·분석 참고선</p><h2 className="mt-1 text-lg font-black">{analysis?.title ?? '분석 준비 중'}</h2></div><div className="rounded-full border border-card-border bg-secondary px-3 py-1.5 text-xs font-black">{analysis?.bias === 'bullish' ? '상승 우세' : analysis?.bias === 'bearish' ? '하락 우세' : '중립'}</div></div><p className="mt-3 rounded-2xl bg-secondary/70 p-3 text-xs font-bold leading-5">{analysis?.summary ?? '유효한 완료봉과 지표가 준비되면 분석을 표시합니다.'}</p><div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4"><Metric label="현재가" value={formatPrice(latest.close, market)} icon={<BarChart3 className="h-4 w-4" />} /><Metric label="1차 지지" value={formatPrice(levels.support, market)} icon={<TrendingDown className="h-4 w-4" />} /><Metric label="1차 저항" value={formatPrice(levels.resistance, market)} icon={<TrendingUp className="h-4 w-4" />} /><Metric label="목표 참고" value={formatPrice(levels.targetReference, market)} icon={<TrendingUp className="h-4 w-4" />} />{overlays.rsi && <Metric label="RSI14" value={currentIndicator?.rsi14 == null ? '-' : currentIndicator.rsi14.toFixed(1)} />}{overlays.macd && <Metric label="MACD" value={currentIndicator?.macd == null ? '-' : currentIndicator.macd.toFixed(4)} />}{overlays.atr && <Metric label="ATR14" value={formatPrice(currentIndicator?.atr14, market)} />}<Metric label="거래량 비율" value={currentIndicator?.volumeRatio20 == null ? '-' : `${currentIndicator.volumeRatio20.toFixed(2)}배`} /></div></section>}
+      {latest && levels && <section className="rounded-2xl border border-card-border bg-card p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-[11px] font-extrabold text-primary">AI 분석</p><h2 className="mt-1 text-lg font-black">{analysis?.title ?? '분석 준비 중'}</h2></div><div className="rounded-full border border-card-border bg-secondary px-3 py-1.5 text-xs font-black">{analysis?.bias === 'bullish' ? '상승 우세' : analysis?.bias === 'bearish' ? '하락 우세' : '중립'}</div></div><p className="mt-3 rounded-xl bg-secondary/70 p-3 text-xs font-bold leading-5">{analysis?.summary ?? '유효한 완료봉과 지표가 준비되면 분석을 표시합니다.'}</p><div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4"><Metric label="현재가" value={formatPrice(latest.close, market)} icon={<BarChart3 className="h-4 w-4" />} /><Metric label="지지" value={formatPrice(levels.support, market)} icon={<TrendingDown className="h-4 w-4" />} /><Metric label="저항" value={formatPrice(levels.resistance, market)} icon={<TrendingUp className="h-4 w-4" />} /><Metric label="목표" value={formatPrice(levels.targetReference, market)} icon={<TrendingUp className="h-4 w-4" />} /></div><details className="mt-3 rounded-xl border border-card-border bg-background"><summary className="flex min-h-11 cursor-pointer list-none items-center justify-between px-3 text-xs font-bold"><span>기술지표</span><span className="text-muted-foreground">RSI · MACD · ATR ⌄</span></summary><div className="grid grid-cols-2 gap-2 border-t border-card-border p-3 sm:grid-cols-4">{overlays.rsi && <Metric label="RSI14" value={currentIndicator?.rsi14 == null ? '-' : currentIndicator.rsi14.toFixed(1)} />}{overlays.macd && <Metric label="MACD" value={currentIndicator?.macd == null ? '-' : currentIndicator.macd.toFixed(4)} />}{overlays.atr && <Metric label="ATR14" value={formatPrice(currentIndicator?.atr14, market)} />}<Metric label="거래량 비율" value={currentIndicator?.volumeRatio20 == null ? '-' : `${currentIndicator.volumeRatio20.toFixed(2)}배`} /></div></details></section>}
 
-      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm"><div className="flex items-center justify-between gap-2"><div><p className="text-[11px] font-extrabold text-primary">분석 상태 타임라인</p><h2 className="mt-1 text-sm font-black">형성 → 후보 → 확정·무효화</h2></div><span className="text-[10px] font-bold text-muted-foreground">최근 {timeline.length}건</span></div><div className="mt-3 max-h-72 space-y-2 overflow-y-auto">{timeline.length ? timeline.map((item) => <div key={item.key} className="rounded-2xl bg-background p-3 text-xs"><div className="flex items-center justify-between gap-2"><strong>{item.analysis.title}</strong><span className="text-[10px] font-black text-primary">{item.analysis.status}</span></div><p className="mt-1 break-keep font-bold leading-5 text-muted-foreground">{item.analysis.transitionReason}</p><p className="mt-1 text-[10px] font-semibold text-muted-foreground">{new Date(item.analysis.detectedAt).toLocaleString('ko-KR')}</p></div>) : <p className="rounded-2xl bg-background p-5 text-center text-xs font-bold text-muted-foreground">새 분석 상태를 기다리는 중입니다.</p>}</div></section>
-      <p className="px-1 text-[10px] font-semibold leading-4 text-muted-foreground">국내주식·미국주식·업비트 현물·비트겟 선물의 공개 시세를 읽기 전용으로 분석합니다. 업비트·비트겟은 검증된 공개 WebSocket을 우선 사용하고 이상 시 REST polling으로 fail-closed 전환합니다. 주문 API와 연결하지 않으며 실제 주문을 실행하지 않습니다.</p>
+      <details className="rounded-xl border border-card-border bg-card"><summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 text-sm font-semibold"><span>분석 변화</span><span className="text-xs text-muted-foreground">최근 {timeline.length}건 ⌄</span></summary><div className="max-h-72 space-y-2 overflow-y-auto border-t border-card-border p-3">{timeline.length ? timeline.map((item) => <div key={item.key} className="rounded-xl bg-background p-3 text-xs"><div className="flex items-center justify-between gap-2"><strong>{item.analysis.title}</strong><span className="text-[10px] font-black text-primary">{item.analysis.status}</span></div><p className="mt-1 break-keep font-bold leading-5 text-muted-foreground">{item.analysis.transitionReason}</p></div>) : <p className="rounded-xl bg-background p-5 text-center text-xs font-bold text-muted-foreground">새 분석 상태를 기다리는 중입니다.</p>}</div></details>
+      <p className="px-1 text-[10px] font-semibold leading-4 text-muted-foreground">공개 시세 기반 읽기 전용 분석입니다.</p>
     </div>
   );
 }
