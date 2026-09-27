@@ -110,6 +110,7 @@ test('indicator INVALID state exits only on the next bar open',()=>{
     runnerControlByTs:{
       [String(invalidTs)]:{state:'INVALID',trailAtrMult:1.5,exitNextOpen:true},
     },
+    indicatorExitEnabled:true,
   });
   assert.equal(result.exitReason,'INDICATOR_INVALID_NEXT_OPEN');
   assert.equal(result.exitTs,expectedExitTs);
