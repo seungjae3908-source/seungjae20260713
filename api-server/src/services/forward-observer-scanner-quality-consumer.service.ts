@@ -122,7 +122,14 @@ function validateArtifactShape(artifact: ForwardObserverScannerQualityArtifact, 
       || entry.profitabilityClaimAllowed !== false) {
       throw new Error('SCANNER_QUALITY_ARTIFACT_ENTRY_INVALID');
     }
-    if (!entry.quality || entry.quality.status !== 'verified' || !passesMinimumBacktestQuality(entry.quality)) {
+    if (!entry.quality
+      || entry.quality.status !== 'verified'
+      || entry.quality.costsIncluded !== true
+      || entry.quality.slippageIncluded !== true
+      || entry.quality.lookaheadGuarded !== true
+      || entry.quality.survivorshipGuarded !== true
+      || entry.quality.oos !== true
+      || entry.quality.walkForward !== true) {
       throw new Error('SCANNER_QUALITY_ARTIFACT_ENTRY_NOT_VERIFIED');
     }
     const key = [
