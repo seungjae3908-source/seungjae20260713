@@ -139,7 +139,7 @@ test('AI Chart consumes selected scanner signalId and strategyMode without inven
   await page.goto(directSignalUrl);
   const overlay = page.getByTestId('ai-chart-v2-signal-overlay');
   await expect(overlay).toBeVisible();
-  await expect(overlay).toContainText('scanner-signal-42');
+  await expect(overlay).toHaveAttribute('data-signal-id', 'scanner-signal-42');
   await expect(page.getByTestId('strategy-mode-SCALPING')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('진입 3');
   await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('미확인');
@@ -155,7 +155,7 @@ test('AI Chart restores the canonical MID_LONG mode used by Scanner position str
   page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
 
   await page.goto(positionSignalUrl);
-  await expect(page.getByTestId('ai-chart-v2-signal-overlay')).toContainText('position-signal-9');
+  await expect(page.getByTestId('ai-chart-v2-signal-overlay')).toHaveAttribute('data-signal-id', 'position-signal-9');
   await expect(page.getByTestId('strategy-mode-MID_LONG')).toHaveAttribute('aria-pressed', 'true');
   expect(privateTradingRequests).toEqual([]);
   expect(consoleErrors).toEqual([]);
@@ -176,7 +176,7 @@ test('BITGET AI Chart shows one public futures snapshot without promoting it to 
   await expect(panel).toContainText('+2.88%');
   await expect(panel).toContainText('NOT A TRADE SIGNAL');
   await expect(page.getByTestId('strategy-mode-SWING')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('ai-chart-v2-signal-overlay')).toContainText('futures-signal-7');
+  await expect(page.getByTestId('ai-chart-v2-signal-overlay')).toHaveAttribute('data-signal-id', 'futures-signal-7');
   expect(mock.snapshotCalls()).toBe(1);
   expect(mock.privateTradingRequests).toEqual([]);
   expect(consoleErrors).toEqual([]);
