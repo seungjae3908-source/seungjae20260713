@@ -122,3 +122,33 @@ Required outcomes:
 - Forward first-hit + MFE/MAE
 
 The observed-history component table is hypothesis-generating evidence only. It cannot be counted again as OOS evidence for MOMENTUM_GUARD_FORWARD_V1.
+
+
+## Observed-history Momentum Guard diagnostic — hypothesis generation only
+
+After the component diagnosis above, the frozen MOMENTUM condition was applied descriptively to the same already-observed history. This is explicitly NOT OOS and cannot be reused as Forward credit.
+
+Eligibility:
+- ROC12 > 0
+- MACD histogram > 0
+- RSI14 >= 50 and < 82
+
+Account replay keeps LONG_RUNNER_3ATR and all account constraints unchanged.
+
+| Window | Eligible candidates | Guard net | Baseline net | Guard MDD | Baseline MDD | Guard PF |
+|---|---:|---:|---:|---:|---:|---:|
+| PRIOR_H1 | 293 / 315 | +18.658% | +20.415% | 14.458% | 15.123% | 1.435 |
+| PRIOR_H2 | 179 / 192 | +5.246% | +2.318% | 13.891% | 15.700% | 1.176 |
+| RECENT_6M | 277 / 296 | +29.128% | +26.079% | 12.053% | 13.431% | 1.665 |
+
+Observed-history interpretation:
+- H1 gives up some return.
+- H2 and Recent improve return.
+- all three show lower modeled MDD.
+- this is promising enough to freeze for future testing, but not enough to adopt because the guard was selected after observing component diagnostics.
+
+The source module `momentum-guard.mjs` therefore has:
+- no automatic entry authority,
+- no automatic promotion authority,
+- zero economic sample credit,
+- `observedHistoryMayCountAsOos=false`.
