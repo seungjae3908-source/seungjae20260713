@@ -56,7 +56,7 @@ jobs:
           runtime='api-server/src/features/account-readonly/account-readonly.runtime.ts'
           provider='api-server/src/features/account-readonly/providers/exchange-readonly.providers.ts'
           spec='stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts'
-          for endpoint in '/api/v3/account/info' '/api/v3/account/assets' '/api/v3/position/current-position' '/api/v3/trade/unfilled-orders'; do
+          for endpoint in '/api/v3/account/settings' '/api/v3/account/assets' '/api/v3/position/current-position' '/api/v3/trade/unfilled-orders'; do
             grep -Fq "$endpoint" "$adapter"
             grep -Fq "$endpoint" "$runtime"
           done

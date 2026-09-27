@@ -72,8 +72,8 @@ test('vault-backed Bitget Classic reader probes v3 safely then emits only allowl
     decryptCredentials: () => ({ apiKey: 'BITGET_KEY_RUNTIME_TEST_ONLY', secretKey: 'BITGET_SECRET_RUNTIME_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_RUNTIME_TEST_ONLY' }),
     fetchImpl: async (input, init) => {
       const url = new URL(String(input)); assert.equal(url.origin, 'https://api.bitget.com'); paths.push(url.pathname); methods.push(String(init?.method));
-      if (url.pathname === '/api/v3/account/info') {
-        return new Response(JSON.stringify({ code: '00000', data: { permissions: [] } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname === '/api/v3/account/settings') {
+        return new Response(JSON.stringify({ code: '25245', msg: 'The account is not the unified account mode', data: null }), { status: 400, headers: { 'Content-Type': 'application/json' } });
       }
       const body = url.pathname.includes('/position/')
         ? { code: '00000', data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', leverage: '2' }] }
@@ -85,7 +85,7 @@ test('vault-backed Bitget Classic reader probes v3 safely then emits only allowl
   });
   const result = await readers.bitget!(SCOPE);
   assert.deepEqual(new Set(paths), new Set([
-    '/api/v3/account/info',
+    '/api/v3/account/settings',
     '/api/v2/mix/account/accounts',
     '/api/v2/mix/position/all-position',
     '/api/v2/mix/order/orders-pending',
@@ -93,6 +93,28 @@ test('vault-backed Bitget Classic reader probes v3 safely then emits only allowl
   assert.ok(methods.every((method) => method === 'GET')); assert.equal(result.connected, true); assert.equal(result.openOrders?.[0]?.id, 'BG-OPEN-1'); assert.ok(Math.abs((result.openOrders?.[0]?.remainingQuantity ?? 0) - 0.06) < 1e-12); assert.equal(result.orderRequests, 0); assert.equal(result.withdrawalRequests, 0);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('BITGET_KEY_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('BITGET_PASSPHRASE_RUNTIME_TEST_ONLY'), false);
+});
+
+test('vault-backed Bitget classifies non-2xx JSON error bodies before generic HTTP status fallback', async () => {
+  for (const fixture of [
+    { code: '40009', expected: 'BITGET_AUTH_FAILED' },
+    { code: '40017', expected: 'BITGET_PARAMETER_REJECTED' },
+  ]) {
+    const readers = createVaultBackedAccountReaders({
+      repositoryFactory: () => repositoryFor('bitget'),
+      decryptCredentials: () => ({ apiKey: 'BITGET_KEY_RUNTIME_TEST_ONLY', secretKey: 'BITGET_SECRET_RUNTIME_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_RUNTIME_TEST_ONLY' }),
+      fetchImpl: async () => new Response(
+        JSON.stringify({ code: fixture.code, msg: 'redacted-provider-message', data: null }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } },
+      ),
+    });
+    await assert.rejects(
+      readers.bitget!(SCOPE),
+      (error: unknown) => error instanceof AccountReadonlyError
+        && error.code === fixture.expected
+        && !error.message.includes('redacted-provider-message'),
+    );
+  }
 });
 
 test('vault-backed Bitget UTA reader uses only v3 signed GET reads and maps assets positions and open orders', async () => {
@@ -105,10 +127,10 @@ test('vault-backed Bitget UTA reader uses only v3 signed GET reads and maps asse
       assert.equal(url.origin, 'https://api.bitget.com');
       seen.push({ path: url.pathname, search: url.search, method: String(init?.method), body: init?.body });
 
-      if (url.pathname === '/api/v3/account/info') {
+      if (url.pathname === '/api/v3/account/settings') {
         return new Response(JSON.stringify({
           code: '00000',
-          data: { permType: 'read-only', permissions: ['uta_mgt', 'uta_trade'] },
+          data: { accountMode: 'unified', accountLevel: 'basic' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.pathname === '/api/v3/account/assets') {
@@ -147,7 +169,7 @@ test('vault-backed Bitget UTA reader uses only v3 signed GET reads and maps asse
 
   const result = await readers.bitget!(SCOPE);
   assert.deepEqual(new Set(seen.map((row) => row.path)), new Set([
-    '/api/v3/account/info',
+    '/api/v3/account/settings',
     '/api/v3/account/assets',
     '/api/v3/position/current-position',
     '/api/v3/trade/unfilled-orders',
