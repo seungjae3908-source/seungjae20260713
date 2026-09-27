@@ -1,0 +1,131 @@
+name: Prediction Lab Scanner Spot Spread Archive Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      research_ref:
+        description: Exact 40-character research commit SHA to validate
+        required: true
+        type: string
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/prediction-lab-scanner-spot-spread-archive-validation.yml
+      - market-prediction-lab/src/scanner-spot-spread-archive-v1.js
+      - market-prediction-lab/src/market-digital-twin-microstructure-v1.js
+      - market-prediction-lab/scripts/run-scanner-spot-spread-archive-v1.js
+      - market-prediction-lab/tests/scanner-spot-spread-archive-v1.test.js
+      - market-prediction-lab/tests/market-digital-twin-microstructure-v1.test.js
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scanner-spot-spread-archive-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Exact Spot Spread Archive
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Resolve immutable research ref
+        id: ref
+        shell: bash
+        env:
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          INPUT_REF: ${{ inputs.research_ref }}
+        run: |
+          ref="$PR_SHA"
+          if [ -z "$ref" ]; then ref="$INPUT_REF"; fi
+          if [[ ! "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error title=Exact SHA required::Spot spread archive requires one exact 40-character SHA"
+            exit 1
+          fi
+          echo "value=${ref,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ref.outputs.value }}
+          persist-credentials: false
+
+      - name: Verify detached exact head
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.ref.outputs.value }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run spread archive and microstructure contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test \
+            market-prediction-lab/tests/scanner-spot-spread-archive-v1.test.js \
+            market-prediction-lab/tests/market-digital-twin-microstructure-v1.test.js
+
+      - name: Capture genuine public Upbit BTC orderbook once
+        shell: bash
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.ref.outputs.value }}
+          OUTPUT_ROOT: ${{ runner.temp }}/scanner-spot-spread-archive
+        run: |
+          set -euo pipefail
+          node market-prediction-lab/scripts/run-scanner-spot-spread-archive-v1.js \
+            --output-dir "$OUTPUT_ROOT" --symbol BTC --required-days 730 \
+            | tee "$RUNNER_TEMP/scanner-spot-spread-status.json"
+
+      - name: Assert owner is real but historical coverage remains fail-closed
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.ref.outputs.value }}
+          OUTPUT_ROOT: ${{ runner.temp }}/scanner-spot-spread-archive
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          const root = process.env.OUTPUT_ROOT;
+          const summary = JSON.parse(
+            await readFile(`${root}/scanner-spot-spread-archive-readiness.json`, 'utf8'),
+          );
+          if (summary.status !== 'FORWARD_ACCUMULATING') throw new Error('SPREAD_ARCHIVE_STATUS_INVALID');
+          if (summary.researchCodeSha !== process.env.EXPECTED_SHA) throw new Error('SPREAD_ARCHIVE_SHA_MISMATCH');
+          if (summary.ownerReady !== true) throw new Error('SPREAD_ARCHIVE_OWNER_NOT_READY');
+          if (summary.historicalReplayReady !== false) throw new Error('SPREAD_ARCHIVE_HISTORICAL_REPLAY_MUST_REMAIN_BLOCKED');
+          if (summary.resolvesFirstZero !== 'SPOT_SCANNER_HISTORICAL_SPREAD_SERIES_MISSING') throw new Error('SPREAD_ARCHIVE_OWNER_FIRST_ZERO_NOT_RESOLVED');
+          if (summary.nextFirstZero !== 'SPOT_SCANNER_SPREAD_ARCHIVE_FORWARD_COVERAGE_INSUFFICIENT') throw new Error('SPREAD_ARCHIVE_NEXT_FIRST_ZERO_INVALID');
+          if (!(summary.observationCount >= 1)) throw new Error('SPREAD_ARCHIVE_OBSERVATION_MISSING');
+          if (!(summary.covered4hBucketCount >= 1)) throw new Error('SPREAD_ARCHIVE_CURRENT_BUCKET_NOT_COVERED');
+          if (!(summary.missing4hBucketCount > 0)) throw new Error('SPREAD_ARCHIVE_MUST_NOT_CLAIM_HISTORICAL_COVERAGE');
+          if (summary.economicSampleCredit !== 0) throw new Error('SPREAD_ARCHIVE_ECONOMIC_CREDIT_FORBIDDEN');
+          if (summary.safety?.historicalBackfillAllowed !== false
+              || summary.safety?.syntheticSpreadAllowed !== false
+              || summary.safety?.currentSpreadHistoricalBackfillAllowed !== false
+              || summary.safety?.scheduleActivated !== false
+              || summary.safety?.executionAuthority !== 'NONE') {
+            throw new Error('SPREAD_ARCHIVE_SAFETY_INVALID');
+          }
+          NODE
+
+      - name: Upload immutable validation copy
+        uses: actions/upload-artifact@v4
+        with:
+          name: scanner-spot-spread-archive-${{ github.run_id }}
+          path: ${{ runner.temp }}/scanner-spot-spread-archive
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Assert repository remained immutable
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
