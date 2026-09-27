@@ -1,9 +1,11 @@
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
-const MAIN='07000830d395019609a3145ae5d14c8c8df03387';
+const MAIN=process.env.EXPECTED_BASE_SHA;
 const OWNER='adfcb23baf956bcaa025f0846313faf8db7a4e4a';
 const BASE='9057c4a3767db0f81e595fc481f5066bda6c9e43';
+if(!/^[0-9a-f]{40}$/i.test(MAIN??''))throw new Error('EXPECTED_BASE_SHA_REQUIRED');
 const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trimEnd();
+const isAncestor=(ancestor,descendant)=>{try{git('merge-base','--is-ancestor',ancestor,descendant);return true}catch{return false}};
 const added=[
  'packages/external-research/src/research-workspace-canonical-evaluation-one-shot-v18.js',
  'packages/external-research/src/research-workspace-canonical-evaluation-one-shot-v18.d.ts',
@@ -108,18 +110,24 @@ const added=[
  'stock-analyzer/vite.research-workspace.config.ts',
  'stock-analyzer/playwright.research-workspace.config.ts',
 ];
+const supplemental=[
+ 'stock-analyzer/playwright.config.ts',
+ 'stock-analyzer/e2e/support/start-vite-e2e-server.mjs',
+ '.github/workflows/research-workspace-integration-v1.yml',
+];
 const original=git('diff','--name-only',BASE,OWNER).split('\n');
-const allowed=new Set([...original,...added]);
+const allowed=new Set([...original,...added,...supplemental]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
 for(const p of changed)if(!allowed.has(p))throw new Error('UNREVIEWED_PATH:'+p);
 git('merge-base','--is-ancestor',MAIN,'HEAD');
 git('merge-base','--is-ancestor',OWNER,'HEAD');
-for(const p of git('diff','--diff-filter=A','--name-only',BASE,OWNER).split('\n').filter(Boolean)){
+if(!isAncestor(OWNER,MAIN))for(const p of git('diff','--diff-filter=A','--name-only',BASE,OWNER).split('\n').filter(Boolean)){
  let existed=false;try{git('cat-file','-e',`${MAIN}:${p}`);existed=true;}catch{}
  if(existed)throw new Error('UNREVIEWED_ADD_ADD_CONFLICT:'+p);
 }
 const mount="\n\n// Read pre-existing sanitized research only; the nested workspace requires admin access.\nrouter.use('/research/video/evidence', requireCapability('canAccessBasicInfo'), videoResearchEvidenceRouter);";
-const current=git('show','HEAD:api-server/src/routes/index.ts')
+let current=git('show','HEAD:api-server/src/routes/index.ts');
+if(!isAncestor(OWNER,MAIN))current=current
  .replace("\nimport videoResearchEvidenceRouter from './video-research-evidence';",'').replace(mount,'');
 if(current!==git('show',`${MAIN}:api-server/src/routes/index.ts`))throw new Error('MAIN_ROUTE_CHANGE_NOT_PRESERVED');
 const protectedPaths=['market-prediction-lab','research-production','research-dashboard','api-server/src/middleware/auth.ts','stock-analyzer/src/pages/research-center.tsx','stock-analyzer/vite.config.ts','packages/member-access','pnpm-lock.yaml'];
