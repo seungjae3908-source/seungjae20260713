@@ -16,6 +16,7 @@ import type { ScannerResponse } from './scanner-signal.types';
 type CryptoMarket = 'spot' | 'futures';
 
 const SHA64 = /^[0-9a-f]{64}$/iu;
+const historicalSessionLastDecision = new Map<string, number>();
 
 export const SCANNER_CRYPTO_HISTORICAL_CARD_V1 =
   'scanner-crypto-historical-card-v1' as const;
@@ -28,6 +29,7 @@ export type HistoricalPublicEvidence = Readonly<{
 }>;
 
 export type HistoricalCryptoScannerInput = Readonly<{
+  replaySessionId: string;
   decisionTimeMs: number;
   market: CryptoMarket;
   timeframe: CryptoTimeframe;
@@ -148,10 +150,22 @@ function requestedContextTimeframe(
   return scannerContextTimeframe(strategyMode) as CryptoTimeframe;
 }
 
+export function clearHistoricalCryptoScannerReplaySessionsForTests(): void {
+  historicalSessionLastDecision.clear();
+}
+
 export async function buildHistoricalCryptoScannerDecisionV1(
   input: HistoricalCryptoScannerInput,
 ): Promise<HistoricalCryptoScannerDecision> {
   const contextTimeframe = requestedContextTimeframe(input.strategyMode);
+  const replaySessionId = String(input.replaySessionId ?? '').trim().toLowerCase();
+  if (!SHA64.test(replaySessionId)) {
+    return blocked(input, contextTimeframe, 'HISTORICAL_SCANNER_REPLAY_SESSION_ID_REQUIRED');
+  }
+  const previousDecision = historicalSessionLastDecision.get(replaySessionId);
+  if (previousDecision != null && input.decisionTimeMs <= previousDecision) {
+    return blocked(input, contextTimeframe, 'HISTORICAL_SCANNER_NON_MONOTONIC_SESSION');
+  }
   if (!Number.isSafeInteger(input.decisionTimeMs) || input.decisionTimeMs <= 0) {
     return blocked(input, contextTimeframe, 'HISTORICAL_SCANNER_DECISION_TIME_INVALID');
   }
@@ -234,7 +248,7 @@ export async function buildHistoricalCryptoScannerDecisionV1(
 
   const scanner = createCryptoSignalScannerService(providers);
   const response = withScannerCanonicalActions(await scanner.scan({
-    memberId: 'historical-scanner-v1',
+    memberId: `historical-scanner-v1:${replaySessionId}`,
     market: input.market,
     timeframe: input.timeframe,
     condition: input.condition,
@@ -243,7 +257,10 @@ export async function buildHistoricalCryptoScannerDecisionV1(
     strategyMode: input.strategyMode,
   }));
 
+  historicalSessionLastDecision.set(replaySessionId, input.decisionTimeMs);
+
   const evidenceIdentity = {
+    replaySessionId,
     decisionTimeMs: input.decisionTimeMs,
     market: input.market,
     timeframe: input.timeframe,
