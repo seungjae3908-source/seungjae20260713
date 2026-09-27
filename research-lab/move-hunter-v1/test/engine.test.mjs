@@ -37,6 +37,18 @@ test('short futures runner supports asymmetric downside capture',()=>{
   assert.ok(r.mfe>.10); assert.notEqual(r.targetHitTs.pct10,null); assert.ok(r.initialStop>r.entry);
 });
 
+test('runner has no 10 percent ceiling and records 100 percent milestone',()=>{
+  const data=candles({count:90,drift:0}),signalAtMs=data[34].ts; let p=data[35].open;
+  for(let i=35;i<55;i+=1){ const open=p,close=open*1.04; data[i]={...data[i],open,high:close*1.002,low:open*.998,close}; p=close; }
+  for(let i=55;i<data.length;i+=1){ const open=p,close=open*.98; data[i]={...data[i],open,high:open*1.002,low:close*.998,close}; p=close; }
+  const result=simulateRunner({candles:data,signalAtMs,maxBars:45,trailActivateAtR:2,trailAtrMult:2});
+  assert.ok(result.peakReturn>1);
+  assert.notEqual(result.milestoneHitTs['1'],null);
+  assert.notEqual(result.targetHitTs.pct10,null);
+  assert.ok(result.grossCaptureRatio>=0&&result.grossCaptureRatio<=1);
+  assert.ok(result.givebackFromPeak>=0);
+});
+
 test('costs reduce net return',()=>{
   const data=candles({count:60,drift:.0015}),signalAtMs=data[34].ts;
   const gross=simulateRunner({candles:data,signalAtMs,maxBars:10,costs:{}});
@@ -47,7 +59,7 @@ test('costs reduce net return',()=>{
 test('summary reports hit rates and risk-adjusted results',()=>{
   const data=candles({count:60,drift:.0015}),signalAtMs=data[34].ts;
   const trial=simulateRunner({candles:data,signalAtMs,maxBars:10});
-  const s=summarizeRunnerTrials([trial]); assert.equal(s.n,1); assert.ok(Number.isFinite(s.avgNetR));
+  const s=summarizeRunnerTrials([trial]); assert.equal(s.n,1); assert.ok(Number.isFinite(s.avgNetR)); assert.ok(Number.isFinite(s.avgGrossCaptureRatio)); assert.ok(Number.isFinite(s.avgGivebackFromPeak));
 });
 
 test('adapter source reuses merged canonical replay, settlement and dataset owners',async()=>{
