@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ComponentProps, type ReactNode } from 'react';
-import { BookOpenCheck, CheckCircle2, ClipboardList, Settings2, ShieldCheck, WalletCards } from 'lucide-react';
+import { CheckCircle2, ClipboardList, Settings2, WalletCards } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
@@ -159,30 +159,6 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
 
   const dashboard = mode === 'auto' ? (
     <div className="space-y-3">
-      <section
-        aria-label="자동매매 실행 상태"
-        className="rounded-2xl border border-primary/20 bg-primary/5 p-3"
-        data-testid="auto-trading-safety-summary"
-      >
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-bold">자동매매 실행 방식</h2>
-          </div>
-          <span className="rounded-full border border-primary/20 bg-background px-2.5 py-1 text-xs font-bold">
-            {runtimeLoading ? '확인 중' : policy?.automaticEnabled ? '자동 실행 ON' : '자동 실행 OFF'}
-          </span>
-        </div>
-        <div className="mt-3 grid grid-cols-3 gap-2">
-          <StatusItem label="주문별 승인" value="불필요" />
-          <StatusItem label="시장 제어" value="4시장" />
-          <StatusItem label="위험검사" value="매 주문 재검증" />
-        </div>
-        <p className="mt-3 break-keep text-xs leading-5 text-muted-foreground">
-          4시장 개별 ON/OFF로 시장별 자동 실행을 제어하며, 주문마다 승인을 요청하지 않습니다. 실제 주문 권한은 서버 Gate를 통과해야 합니다.
-        </p>
-      </section>
-
       <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="auto-trading-runtime-summary">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
@@ -196,11 +172,10 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             {marketEnabled && !emergencyStopped ? '시장 ON' : '시장 OFF'}
           </span>
         </div>
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="mt-3 grid grid-cols-3 gap-2">
           <StatusItem label="연결" value={providerConnection?.configured ? '설정됨' : '미설정'} />
           <StatusItem label="최근 주문" value={lastOrder?.state ?? '없음'} />
           <StatusItem label="비상정지" value={emergencyStopped ? '작동 중' : '정상'} />
-          <StatusItem label="실거래 권한" value="서버 Gate 필요" />
         </div>
       </section>
     </div>
@@ -208,10 +183,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="paper-trading-dashboard">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h2 className="text-sm font-bold">Canonical 모의매매 · {marketMeta.label}</h2>
-          <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">
-            국내주식·미국주식·코인현물·코인선물 모두 동일한 서버 검증형 Paper 경로를 사용합니다.
-          </p>
+          <h2 className="text-sm font-bold">{marketMeta.label} 모의매매</h2>
         </div>
         <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-bold text-emerald-700">
           실제 주문 0
@@ -221,7 +193,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         <StatusItem label="시장" value={marketMeta.label} />
         <StatusItem label="Provider" value={marketMeta.provider} />
         <StatusItem label="선택 종목" value={selectionMatchesMarket ? selection?.ticker ?? '선택됨' : '미선택'} />
-        <StatusItem label="경제적 증거" value="Settlement 후 판정" />
+        <StatusItem label="수익성 검증" value="정산 후 판정" />
       </div>
     </section>
   );
@@ -243,9 +215,6 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         <button type="button" className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold" onClick={() => navigate('/ai-chart')}>AI 차트·포지션</button>
         <button type="button" className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold" onClick={() => navigate('/account')}>실계좌 연결</button>
       </div>
-      <p className="mt-3 break-keep text-xs leading-5 text-muted-foreground">
-        주문·취소·정정은 기존 canonical OMS와 서버 Gate를 그대로 사용합니다. 이 화면은 별도 실행 권한을 만들지 않습니다.
-      </p>
     </section>
   ) : (
     <div className="space-y-3" data-testid="paper-trading-orders">
@@ -311,11 +280,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         <Settings2 className="h-4 w-4 text-primary" />
         <h2 className="text-sm font-bold">모의매매 설정</h2>
       </div>
-      <div className="mt-3 space-y-2 text-xs leading-5 text-muted-foreground">
-        <p>시장 선택은 상단 4시장 버튼에서 통합 관리합니다.</p>
-        <p>Canonical Paper는 실제 거래소 주문을 전송하지 않으며, 수량·레버리지·진입가격은 서버 evidence가 결정합니다.</p>
-        <p>코인선물 수동 시뮬레이터는 포지션·주문 탭에서만 선택적으로 열 수 있습니다.</p>
-      </div>
+      <p className="mt-3 text-xs leading-5 text-muted-foreground">시장과 기록은 같은 화면에서 관리하며, 모의매매는 실제 주문을 전송하지 않습니다.</p>
     </section>
   );
 
@@ -385,14 +350,6 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
 
           {sectionContent}
 
-          <section className="rounded-2xl border border-card-border bg-card p-3 text-xs text-muted-foreground" data-testid="trading-workspace-safety-note">
-            <div className="flex items-start gap-2">
-              <BookOpenCheck className="mt-0.5 h-4 w-4 shrink-0" />
-              <p className="break-keep leading-5">
-                자동매매와 모의매매는 같은 4시장 UI와 매매일지를 사용하지만 실행 권한은 분리됩니다. LIVE/AUTO/REAL/Private API Gate는 이 UI 변경으로 켜지지 않습니다.
-              </p>
-            </div>
-          </section>
         </div>
       </main>
       {!embedded ? <BottomNav /> : null}
