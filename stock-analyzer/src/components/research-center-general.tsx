@@ -384,7 +384,7 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
                     paper: {
                       label: '모의매매 표본',
                       state: paperSummary,
-                      context: '확인된 canonical 표본만 집계하며 누락값을 임의로 채우지 않습니다.',
+                      context: '확인된 표본만 집계하며 누락값을 임의로 채우지 않습니다.',
                     },
                     profitability: {
                       label: '수익성 검증',
