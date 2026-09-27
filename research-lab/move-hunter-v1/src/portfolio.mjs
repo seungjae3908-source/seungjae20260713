@@ -55,6 +55,7 @@ function rvolOf(candidate) {
 export function replayLongCashRunnerPortfolio({
   candidates,
   candlesBySymbol,
+  runnerControlBySymbol = {},
   presetName = 'LONG_RUNNER_3ATR',
   costs = { feeBps: 15 },
   initialCapital = 10_000_000,
@@ -96,6 +97,7 @@ export function replayLongCashRunnerPortfolio({
         signalAtMs,
         direction,
         ...preset,
+        runnerControlByTs: runnerControlBySymbol?.[symbol] ?? null,
         costs,
       });
       planned.push(Object.freeze({
@@ -314,6 +316,7 @@ export function replayLongCashRunnerPortfolio({
       marginTrading: false,
       shortTrading: false,
       actualFills: false,
+      indicatorAdaptiveRunnerSupported: true,
       historicalReplayOnly: true,
     }),
     profitabilityClaimAllowed: false,
