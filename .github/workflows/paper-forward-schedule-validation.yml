@@ -79,6 +79,8 @@ on:
       - api-server/src/scripts/run-forward-recommendation-observer-cycle.ts
       - api-server/src/services/forward-observer-canonical-metadata.service.ts
       - api-server/src/services/forward-observer-canonical-metadata.service.test.ts
+      - api-server/src/services/forward-observer-scanner-quality-consumer.service.ts
+      - api-server/src/services/forward-observer-scanner-quality-consumer.service.test.ts
       - api-server/src/services/forward-observer-validation-receipt-owner.service.ts
       - api-server/src/services/forward-observer-validation-receipt-owner.service.test.ts
       - api-server/src/services/scanner-canonical-paper-identity.service.ts
@@ -301,6 +303,8 @@ jobs:
             api-server/src/scripts/run-forward-recommendation-observer-cycle.ts
             api-server/src/services/forward-observer-canonical-metadata.service.ts
             api-server/src/services/forward-observer-canonical-metadata.service.test.ts
+            api-server/src/services/forward-observer-scanner-quality-consumer.service.ts
+            api-server/src/services/forward-observer-scanner-quality-consumer.service.test.ts
             api-server/src/services/forward-observer-validation-receipt-owner.service.ts
             api-server/src/services/forward-observer-validation-receipt-owner.service.test.ts
             api-server/src/services/scanner-canonical-paper-identity.service.ts
