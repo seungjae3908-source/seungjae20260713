@@ -102,12 +102,21 @@ export function projectQualityIndexToCurrentSymbolMap({
     map[symbol]=selected.quality;
   }
 
+  const uniqueBlockers=[];
+  const seenBlockers=new Set();
+  for(const blocker of blockers){
+    const key=JSON.stringify(blocker);
+    if(seenBlockers.has(key)) continue;
+    seenBlockers.add(key);
+    uniqueBlockers.push(blocker);
+  }
+
   return frozen({
     schemaVersion:'move-hunter-current-ranking-quality-projection/v1',
-    status:blockers.length?'BLOCKED':'READY',
-    backtests:blockers.length?frozen({}):frozen({...map}),
-    blockers:frozen(blockers),
-    safeForCurrentSymbolOnlyRanking:blockers.length===0,
+    status:uniqueBlockers.length?'BLOCKED':'READY',
+    backtests:uniqueBlockers.length?frozen({}):frozen({...map}),
+    blockers:frozen(uniqueBlockers),
+    safeForCurrentSymbolOnlyRanking:uniqueBlockers.length===0,
     activeLaneMutation:false,
     executionAuthority:'NONE',
   });
