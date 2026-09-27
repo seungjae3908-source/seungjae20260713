@@ -212,3 +212,40 @@ test('dataset-components symlink output is rejected before writing outside compo
     /dataset-components must be a regular non-symlink directory|must not traverse symbolic links/,
   );
 });
+
+
+test('canonical dataset component accepts exact Scanner Spot 4H snapshot without relabeling 1h rows',()=>{
+  const step=4*60*60*1000;
+  const spotRows=Array.from({length:12},(_,i)=>({
+    timestamp:START+i*step,open:200+i,high:202+i,low:199+i,close:201+i,volume:500+i,
+  }));
+  const spotEnd=START+spotRows.length*step;
+  const manifest=buildResearchDatasetSnapshotManifestV1({
+    researchSha:SHA,createdAt:'2026-09-20T00:00:00.000Z',profileId:'CRYPTO_SPOT:SCANNER_SWING_4H',
+    evidence:{
+      benchmarkDatasetDigest:H('7'),
+      sentimentHistoryDigest:H('8'),sentimentCoverage:0.95,sentimentTemporalParityConfirmed:true,
+    },
+    scope:{
+      timeframe:'4H',symbols:['BTC'],startTime:START,endTime:spotEnd,
+      primaryDatasetDigest:H('9'),universeDigest:null,publicDataOnly:true,
+    },
+  });
+  const split={
+    TRAIN:spotRows.slice(0,7).map(row=>row.timestamp),
+    VALIDATION:spotRows.slice(7,9).map(row=>row.timestamp),
+    OOS:spotRows.slice(9).map(row=>row.timestamp),
+  };
+  const built=buildCanonicalDatasetComponentV1({
+    datasetSnapshotManifest:manifest,datasetId:'dataset:BTC:4H:v1',symbol:'BTC',rows:spotRows,
+    splitAssignments:split,metadata:{
+      provider:'upbit-public',providerVersion:'v1',sourceType:'PUBLIC_MARKET_DATA',
+      adjustmentMode:'not_applicable',corporateActionMode:'not_applicable',timezone:'UTC',
+      sourceDigest:hash(spotRows),loaderVersion:'upbit-candle-collector-v1',
+      missingIntervalCount:0,duplicateRowCount:0,dataQualityStatus:'VERIFIED',profileSourceDigest:H('9'),
+    },observedAtMs:spotEnd+1000,
+  });
+  assert.equal(built.component.identity.timeframe,'4H');
+  assert.equal(built.component.observationIntervalMs,step);
+  assert.equal(built.record.datasetSnapshotHash,manifest.datasetSnapshotHash);
+});

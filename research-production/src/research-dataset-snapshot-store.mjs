@@ -9,6 +9,13 @@ import { buildResearchDataReadinessV1 } from './research-data-factory.mjs';
 
 export const RESEARCH_DATASET_SNAPSHOT_MANIFEST_CONTRACT_V1 = 'research-dataset-snapshot-manifest/v1';
 
+export const RESEARCH_SCANNER_DATASET_PROFILES_V1 = Object.freeze([
+  Object.freeze({profileId:'KR_STOCK:SCANNER_SWING_60M',market:'KR_STOCK',timeframe:'60m'}),
+  Object.freeze({profileId:'US_STOCK:SCANNER_SWING_60M',market:'US_STOCK',timeframe:'60m'}),
+  Object.freeze({profileId:'CRYPTO_SPOT:SCANNER_SWING_4H',market:'CRYPTO_SPOT',timeframe:'4H'}),
+  Object.freeze({profileId:'CRYPTO_FUTURES:SCANNER_SWING_60M',market:'CRYPTO_FUTURES',timeframe:'60m'}),
+]);
+
 const SHA40=/^[0-9a-f]{40}$/i;
 const HASH64=/^[0-9a-f]{64}$/i;
 const SYMBOL=/^[A-Z0-9._:-]{1,64}$/;
@@ -61,7 +68,8 @@ async function safeRoot(value){
   return root;
 }
 function profile(profileId){
-  const row=ADAPTIVE_MULTI_MARKET_PROFILES_V1.find(item=>item.profileId===profileId);
+  const row=ADAPTIVE_MULTI_MARKET_PROFILES_V1.find(item=>item.profileId===profileId)
+    ??RESEARCH_SCANNER_DATASET_PROFILES_V1.find(item=>item.profileId===profileId);
   if(!row) throw new TypeError('profileId invalid');
   return row;
 }
