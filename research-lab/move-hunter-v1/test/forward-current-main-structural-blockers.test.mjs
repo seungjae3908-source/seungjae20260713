@@ -39,3 +39,15 @@ test('Forward remains fail-closed instead of rewriting canonical timeframe or in
   assert.doesNotMatch(observer,/backtests\s*:\s*\{/u);
   assert.doesNotMatch(metadata,/identity\.timeframe\s*=\s*lane\.timeframe/u);
 });
+
+
+test('current stock Scanner ranking also omits backtest map, making S/A structurally unreachable through this call', async()=>{
+  const stock=await source('api-server/src/services/stock-signal-scanner.service.ts');
+  const ranking=await source('api-server/src/services/scanner-candidate-ranking.service.ts');
+  const start=stock.indexOf('const ranking = rankScannerCandidates');
+  assert.ok(start>=0);
+  const call=stock.slice(start,start+1400);
+  assert.match(call,/rankScannerCandidates\(\{/u);
+  assert.doesNotMatch(call,/backtests\s*:/u);
+  assert.match(ranking,/if\s*\(!backtest\s*\|\|\s*!passesMinimumBacktestQuality\(backtest\)\)\s*return\s*'B'/u);
+});
