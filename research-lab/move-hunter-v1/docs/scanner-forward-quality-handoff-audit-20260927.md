@@ -140,3 +140,25 @@ PR #1407:
 - does not activate schedules,
 - does not lower any S/A threshold,
 - grants zero economic sample credit and zero execution authority.
+
+
+## Direction-aware quality selection
+
+Current `ScannerCandidateRankingInput.backtests` is keyed only by symbol:
+
+`Record<string, ScannerBacktestQualitySummary>`
+
+This is insufficient as a storage identity for CRYPTO_FUTURES because LONG and SHORT quality for the same symbol are different evidence.
+
+Safe minimal future wiring:
+
+1. store verified quality packets under an exact identity that includes direction;
+2. for the current Scanner request, select the packet matching each card's exact direction/profile/dataset;
+3. only then project to the existing symbol-keyed `backtests` map;
+4. if one request contains both LONG and SHORT cards for the same symbol, fail closed instead of projecting.
+
+#1407 implements this safety rule in:
+- `src/scanner-quality-index.mjs`
+- `test/scanner-quality-index.test.mjs`
+
+This permits a minimal active repair without weakening the current ranking gate or borrowing opposite-side quality.
