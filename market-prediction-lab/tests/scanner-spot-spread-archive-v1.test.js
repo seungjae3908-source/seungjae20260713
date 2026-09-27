@@ -7,12 +7,17 @@ import test from "node:test";
 import {
   SPOT_SPREAD_ARCHIVE_FIRST_ZERO,
   SPOT_SPREAD_OWNER_RESOLVES,
+  assertScannerSpotSpreadObservationRecordV1,
   buildScannerSpotSpreadObservationV1,
+  persistScannerSpotSpreadObservationRecordV1,
   persistScannerSpotSpreadObservationV1,
   summarizeScannerSpotSpreadArchiveV1,
 } from "../src/scanner-spot-spread-archive-v1.js";
+import { sha256Canonical as hash } from "../src/research-cache-provenance.js";
 
 const SHA = "a".repeat(40);
+const SHA_B = "b".repeat(40);
+const SHA_C = "c".repeat(40);
 const NOW = Date.parse("2026-09-27T10:00:00.000Z");
 
 function orderbook(timestamp = NOW - 1000, overrides = {}) {
@@ -37,6 +42,8 @@ test("builds public-only immutable spread observation from exact Upbit orderbook
   });
   assert.equal(built.status, "READY");
   assert.equal(built.observation.status, "SPOT_SPREAD_OBSERVATION_READY");
+  assert.equal(built.observation.producerCodeSha, SHA);
+  assert.equal(built.observation.researchCodeSha, SHA);
   assert.equal(built.observation.market, "CRYPTO_SPOT");
   assert.equal(built.observation.exchange, "UPBIT");
   assert.equal(built.observation.symbol, "BTC");
@@ -147,6 +154,100 @@ test("one genuine observation resolves owner-missing FIRST_ZERO but not historic
   assert.equal(summary.missing4hBucketCount, 9);
   assert.equal(summary.economicSampleCredit, 0);
   assert.equal(summary.safety.scheduleActivated, false);
+});
+
+
+test("archive accumulation survives producer SHA changes while retaining exact provenance", () => {
+  const firstTime = NOW - 4 * 60 * 60 * 1000 + 60_000;
+  const secondTime = NOW - 60_000;
+  const first = buildScannerSpotSpreadObservationV1({
+    researchCodeSha: SHA,
+    symbol: "BTC",
+    capturedAtMs: firstTime,
+    orderbook: orderbook(firstTime - 1000),
+  });
+  const second = buildScannerSpotSpreadObservationV1({
+    researchCodeSha: SHA_B,
+    symbol: "BTC",
+    capturedAtMs: secondTime,
+    orderbook: orderbook(secondTime - 1000),
+  });
+  assert.equal(first.status, "READY");
+  assert.equal(second.status, "READY");
+
+  const summary = summarizeScannerSpotSpreadArchiveV1({
+    observations: [first.observation, second.observation],
+    researchCodeSha: SHA_C,
+    symbol: "BTC",
+    requiredStartTime: NOW - 2 * 4 * 60 * 60 * 1000,
+    requiredEndTime: NOW,
+  });
+  assert.equal(summary.researchCodeSha, SHA_C);
+  assert.equal(summary.consumerResearchCodeSha, SHA_C);
+  assert.equal(summary.observationCount, 2);
+  assert.equal(summary.producerCodeShaCount, 2);
+  assert.deepEqual(summary.producerCodeShas, [SHA, SHA_B]);
+  assert.equal(summary.safety.crossProducerShaAccumulationAllowed, true);
+  assert.equal(summary.safety.producerShaProvenanceRequired, true);
+  assert.equal(summary.economicSampleCredit, 0);
+});
+
+test("legacy v1 observation without producerCodeSha can be rehydrated without rewriting its digest", async () => {
+  const built = buildScannerSpotSpreadObservationV1({
+    researchCodeSha: SHA,
+    symbol: "BTC",
+    capturedAtMs: NOW,
+    orderbook: orderbook(),
+  });
+  const legacy = structuredClone(built.observation);
+  delete legacy.producerCodeSha;
+  const core = {
+    contract: legacy.contract,
+    researchCodeSha: legacy.researchCodeSha,
+    market: legacy.market,
+    exchange: legacy.exchange,
+    providerMarket: legacy.providerMarket,
+    symbol: legacy.symbol,
+    observedAt: legacy.observedAt,
+    providerTimestamp: legacy.providerTimestamp,
+    capturedAtMs: legacy.capturedAtMs,
+    sourceDigest: legacy.sourceDigest,
+    bestBid: legacy.bestBid,
+    bestAsk: legacy.bestAsk,
+    spreadBps: legacy.spreadBps,
+    bidDepthNotional: legacy.bidDepthNotional,
+    askDepthNotional: legacy.askDepthNotional,
+    depthLevels: legacy.depthLevels,
+    microstructureSnapshotDigest: legacy.microstructureSnapshotDigest,
+  };
+  legacy.observationDigest = hash(core);
+  assert.doesNotThrow(() => assertScannerSpotSpreadObservationRecordV1(legacy));
+
+  const root = await mkdtemp(path.join(os.tmpdir(), "spot-spread-legacy-"));
+  const persisted = await persistScannerSpotSpreadObservationRecordV1({
+    stateRoot: root,
+    observation: legacy,
+  });
+  assert.equal(persisted.status, "created");
+  const disk = JSON.parse(await readFile(persisted.path, "utf8"));
+  assert.equal(disk.producerCodeSha, undefined);
+  assert.equal(disk.observationDigest, legacy.observationDigest);
+});
+
+test("tampered rehydrated observation is rejected", async () => {
+  const built = buildScannerSpotSpreadObservationV1({
+    researchCodeSha: SHA,
+    symbol: "BTC",
+    capturedAtMs: NOW,
+    orderbook: orderbook(),
+  });
+  const tampered = { ...structuredClone(built.observation), spreadBps: built.observation.spreadBps + 1 };
+  assert.throws(() => assertScannerSpotSpreadObservationRecordV1(tampered), /RECORD_INVALID/u);
+  const root = await mkdtemp(path.join(os.tmpdir(), "spot-spread-tamper-"));
+  await assert.rejects(
+    persistScannerSpotSpreadObservationRecordV1({ stateRoot: root, observation: tampered }),
+    /RECORD_INVALID/u,
+  );
 });
 
 test("archive becomes replay-ready only when every required 4H bucket has observed evidence", () => {
