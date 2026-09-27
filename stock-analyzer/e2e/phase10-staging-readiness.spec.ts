@@ -147,6 +147,7 @@ const activeResearchReloadObservations = new WeakMap<Page, ResearchReloadObserva
 const activeAuthFaultObservations = new WeakMap<Page, AuthFaultObservation>();
 const pendingMutatingRequests = new WeakMap<Page, Set<Request>>();
 const pendingApiGetRequests = new WeakMap<Page, Set<Request>>();
+const pendingSameOriginReadRequests = new WeakMap<Page, Set<Request>>();
 const successfulPrimaryStockChartReads = new WeakMap<Page, Map<string, number>>();
 const stockChartHedgeAbortProofWindowMs = 2_000;
 const diagnostics: {
@@ -472,9 +473,20 @@ function isMutatingBrowserRequest(request: Request) {
   }
 }
 
+function isSameOriginBrowserRead(request: Request) {
+  try {
+    const parsed = new URL(request.url());
+    return ['GET', 'HEAD'].includes(request.method())
+      && parsed.origin === new URL(request.frame().url()).origin;
+  } catch {
+    return false;
+  }
+}
+
 function completeBrowserRequest(page: Page, request: Request) {
   pendingMutatingRequests.get(page)?.delete(request);
   pendingApiGetRequests.get(page)?.delete(request);
+  pendingSameOriginReadRequests.get(page)?.delete(request);
 }
 
 function recordUnhandled(testName: string, url: string, detail: string) {
@@ -487,8 +499,10 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
   const testName = testInfo.titlePath.join(' > ');
   const mutations = new Set<Request>();
   const apiGets = new Set<Request>();
+  const browserReads = new Set<Request>();
   pendingMutatingRequests.set(page, mutations);
   pendingApiGetRequests.set(page, apiGets);
+  pendingSameOriginReadRequests.set(page, browserReads);
   page.on('request', (request) => {
     const logoutObservation = activeLogoutObservations.get(page);
     if (
@@ -498,6 +512,7 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
       logoutObservation.logoutScopedReads.add(request);
     }
     if (isMutatingBrowserRequest(request)) mutations.add(request);
+    if (isSameOriginBrowserRead(request)) browserReads.add(request);
     const capabilityDenial = activeCapabilityDenialObservations.get(page);
     if (capabilityDenial && isCapabilityDenialApiGet(request, capabilityDenial)) {
       capabilityDenial.requests.add(request);
@@ -700,6 +715,27 @@ async function waitForPendingMutations(page: Page) {
       intervals: [100, 200, 300, 500],
     },
   ).toBe(0);
+}
+
+async function waitForBrowserNetworkQuiescence(page: Page) {
+  let quietSince: number | null = null;
+  await expect.poll(
+    () => {
+      const outstanding = (pendingMutatingRequests.get(page)?.size ?? 0)
+        + (pendingSameOriginReadRequests.get(page)?.size ?? 0);
+      if (outstanding > 0) {
+        quietSince = null;
+        return 'pending';
+      }
+      if (quietSince === null) quietSince = Date.now();
+      return Date.now() - quietSince >= 500 ? 'quiescent' : 'quiet';
+    },
+    {
+      message: 'same-origin browser reads and mutations must settle before context teardown',
+      timeout: 15_000,
+      intervals: [100, 200, 300, 500],
+    },
+  ).toBe('quiescent');
 }
 
 async function waitForPendingPersonalIntegrationReads(page: Page) {
@@ -1527,12 +1563,7 @@ async function runAuthenticatedAiChartCertification(
       sessions.push(timing);
       diagnostics.authenticated_ai_chart.sessions.push(timing);
       await expectHealthyRoute(page, '/');
-      // Each certification context restores a real approved session, which starts
-      // the same automatic backup lifecycle as a user session. End it through the
-      // application logout path so its drain completes before Playwright tears the
-      // browser context down; closing an authenticated context mid-drain would
-      // manufacture a network abort rather than prove a release defect.
-      await logout(page);
+      await waitForBrowserNetworkQuiescence(page);
     } finally {
       await context.close();
     }
@@ -2188,6 +2219,7 @@ test.describe('real staging release readiness', () => {
     expect(previewDiagnostic.exchangeRequestSent).toBe(false);
     await runAuthenticatedSearchCertification(page);
     await runAuthenticatedAiChartCertification(page, browser, testInfo);
+    await waitForBrowserNetworkQuiescence(page);
   });
 
   test('admin: member management is allowed while another users private journal remains blocked', async ({ page }) => {
