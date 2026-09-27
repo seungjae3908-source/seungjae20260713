@@ -37,8 +37,10 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(qa).toContain('const LOGIN_READY_BUDGET_MS = 15_000;');
   const login = qa.slice(qa.indexOf('async function login('), qa.indexOf('async function auditLayout'));
   const loginNavigation = login.slice(login.indexOf("await page.goto('/login'"), login.indexOf('const loginId'));
-  expect(login.match(/page\.goto\(/g)).toHaveLength(2);
+  expect(login.match(/page\.goto\(/g)).toHaveLength(1);
   expect(login).toContain("page.goto('/login', { waitUntil: 'commit', timeout: remainingReadinessMs() })");
+  expect(login).toContain('await validateCachedAuthState(page, cached);');
+  expect(login).toContain("page.request.get(new URL('/api/auth/profile', baseUrl).toString()");
   expect(login).toContain('Math.max(1, LOGIN_READY_BUDGET_MS - (Date.now() - readinessStartedAt))');
   expect(login).toContain("page.getByLabel('아이디')");
   expect(login).toContain("page.getByLabel('비밀번호')");
@@ -49,7 +51,8 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(qa).toContain('const authStateByViewport = new Map<string, CachedAuthState>();');
   expect(login).toContain('const cached = authStateByViewport.get(cacheKey);');
   expect(login).toContain('await restoreCachedAuthState(page, cached);');
-  expect(login).toContain("await page.goto('/', { waitUntil: 'commit', timeout: LOGIN_READY_BUDGET_MS })");
+  expect(login).not.toContain("await page.goto('/', { waitUntil: 'commit', timeout: LOGIN_READY_BUDGET_MS })");
+  expect(login).toContain("throw new Error(\`PRODUCTION_QA_CACHED_SESSION_PROFILE_\${response.status()}\`)");
   expect(login).toContain('const state = await page.context().storageState();');
   expect(login).toContain('authStateByViewport.set(cacheKey, state);');
   const cachedBranch = login.slice(login.indexOf('if (cached) {'), login.indexOf('// Judge readiness'));
