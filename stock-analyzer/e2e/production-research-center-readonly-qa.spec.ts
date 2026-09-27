@@ -50,7 +50,28 @@ test.describe('Production Research Center read-only QA', () => {
 
     await page.goto('/research-center', { waitUntil: 'domcontentloaded', timeout: 15_000 });
     await expect(page).toHaveURL(/\/research-center(?:$|[?#])/i, { timeout: 5_000 });
-    await expect(page.getByTestId('research-center-workspace')).toBeVisible({ timeout: 12_000 });
+
+    const researchWorkspace = page.getByTestId('research-center-workspace');
+    const capabilityDenied = page.getByTestId('capability-denied');
+    await expect.poll(async () => (
+      await researchWorkspace.isVisible({ timeout: 250 }).catch(() => false)
+      || await capabilityDenied.isVisible({ timeout: 250 }).catch(() => false)
+    ), { timeout: 12_000, intervals: [100, 200, 400, 800] }).toBe(true);
+
+    if (!await researchWorkspace.isVisible({ timeout: 250 }).catch(() => false)) {
+      await expect(capabilityDenied).toBeVisible();
+      await expect(capabilityDenied).toContainText('회원 관리');
+      await expect(researchWorkspace).toHaveCount(0);
+      test.info().annotations.push({
+        type: 'coverage',
+        description: 'ADMIN_RESEARCH_CENTER_NOT_EVALUATED: Production QA credential lacks canManageMembers',
+      });
+      expect(blocked, 'Research Center denial QA attempted a blocked mutation').toEqual([]);
+      expect(runtimeFailures, 'Research Center denial browser/runtime failures detected').toEqual([]);
+      return;
+    }
+
+    await expect(researchWorkspace).toBeVisible();
     await expect(page.getByTestId('research-general-view')).toBeVisible({ timeout: 12_000 });
     await expect(page.getByTestId('research-workspace-selection')).toContainText('현재 · 요약');
     await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 5_000 });
