@@ -26,8 +26,11 @@ The additive Runner overlay evaluates already-discovered candidates with:
 - breakeven protection after R progress
 - ATR trailing after further R progress
 - no fixed take-profit ceiling
-- +3% / +5% / +10% first-hit timestamps
+- +3% / +5% / +10% remain measurement checkpoints only; they are never take-profit caps
+- higher milestones (+20% / +30% / +50% / +100% by default) and unlimited peak MFE tracking
 - MFE / MAE / max-R
+- gross/net capture ratio: realized return divided by the best favorable excursion
+- giveback from peak: how much open profit the trailing exit surrendered before exit
 - STOP_FIRST conservative same-bar handling
 - fees + slippage + spread
 - immutable Dataset Snapshot identity binding
