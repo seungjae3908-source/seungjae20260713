@@ -77,6 +77,16 @@ jobs:
           grep -Fq 'gh api --paginate --slurp' "$WORKFLOW"
           grep -Fq "throw new Error('V3_RUN_HISTORY_PAGINATION_INVALID')" "$WORKFLOW"
           grep -Fq 'pages.flatMap((page) => Array.isArray(page?.workflow_runs) ? page.workflow_runs : [])' "$WORKFLOW"
+          grep -Fq "console.error('V3_SOURCE_HISTORY_INDEX_LAG_FALLBACK')" "$WORKFLOW"
+          grep -Fq "Number(source.workflow_id) === 347888347" "$WORKFLOW"
+          grep -Fq "if (!supportedSource || !eligible(source)) {" "$WORKFLOW"
+          grep -Fq "throw new Error('SOURCE_RUN_NOT_IN_CANONICAL_V3_HISTORY')" "$WORKFLOW"
+          grep -Fq 'runs.push(source);' "$WORKFLOW"
+          grep -Fq "throw new Error('SELECTED_SUCCESSOR_V3_COHORT_IDENTITY_INVALID')" "$WORKFLOW"
+          grep -Fq 'const sameSelectedCohort = (capture) =>' "$WORKFLOW"
+          grep -Fq 'capture?.cohortId === selected.capture.cohortId' "$WORKFLOW"
+          grep -Fq 'const excludedForeignCohortN = eligible.filter' "$WORKFLOW"
+          grep -Fq 'foreignCohortExcludedN: excludedForeignCohortN' "$WORKFLOW"
 
       - name: Verify no-capture schedule runs remain zero-credit no-ops
         shell: bash
@@ -240,17 +250,26 @@ jobs:
           const listedRuns = pages.flatMap((page) => Array.isArray(page?.workflow_runs) ? page.workflow_runs : []);
           const limit = Date.parse(source.run_started_at ?? source.created_at);
           if (!Number.isFinite(limit)) throw new Error('SOURCE_RUN_TIME_INVALID');
-          const runs = listedRuns
-            .filter((run) => run.name === source.name
-              && run.event === 'schedule'
-              && run.status === 'completed'
-              && run.conclusion === 'success'
-              && run.head_branch === 'main'
-              && Number(run.run_attempt) === 1
-              && Date.parse(run.run_started_at ?? run.created_at) <= limit)
-            .sort((a, b) => Date.parse(a.run_started_at ?? a.created_at) - Date.parse(b.run_started_at ?? b.created_at)
-              || Number(a.id) - Number(b.id));
-          if (!runs.some((run) => String(run.id) === String(source.id))) throw new Error('SOURCE_RUN_NOT_IN_CANONICAL_V3_HISTORY');
+          const eligible = (run) => run.name === source.name
+            && run.event === 'schedule'
+            && run.status === 'completed'
+            && run.conclusion === 'success'
+            && run.head_branch === 'main'
+            && Number(run.run_attempt) === 1
+            && Date.parse(run.run_started_at ?? run.created_at) <= limit;
+          const runs = listedRuns.filter(eligible);
+          if (!runs.some((run) => String(run.id) === String(source.id))) {
+            const supportedSource = source.name === 'Public Forward Liquidity Calibration Scheduled V3'
+              || (source.name === 'Public Forward Liquidity Successor Scheduled Capture'
+                && Number(source.workflow_id) === 347888347);
+            if (!supportedSource || !eligible(source)) {
+              throw new Error('SOURCE_RUN_NOT_IN_CANONICAL_V3_HISTORY');
+            }
+            console.error('V3_SOURCE_HISTORY_INDEX_LAG_FALLBACK');
+            runs.push(source);
+          }
+          runs.sort((a, b) => Date.parse(a.run_started_at ?? a.created_at) - Date.parse(b.run_started_at ?? b.created_at)
+            || Number(a.id) - Number(b.id));
           for (const run of runs) process.stdout.write(`${run.id}\n`);
           NODE
           test -s "$RUNNER_TEMP/candidate-runs.txt"
@@ -332,18 +351,35 @@ jobs:
           const selected = all.find((entry) => entry.runId === selectedRunId);
           if (!selected || !Number.isInteger(selected.capture?.slotIndex)) throw new Error('SELECTED_V3_SLOT_UNRESOLVED');
           const targetSlotIndex = selected.capture.slotIndex;
-          const credited = all
-            .filter((entry) => (entry.capture?.triggerSource === 'GITHUB_ACTIONS_SCHEDULED_CANONICAL_PUBLIC_CAPTURE'
-                || (entry.capture?.schemaVersion === 'public-forward-liquidity-successor-scheduled-capture-receipt-v3'
-                  && entry.capture?.eventName === 'schedule'
-                  && entry.capture?.priorCreditedSlotCheck === 'CLEAR'))
-              && entry.capture?.captureStatus === 'PRESENT'
-              && entry.capture?.prospectiveSlotCredit === 1
-              && entry.capture?.ATTEMPTED === true
-              && entry.capture?.collectorInvoked === true
-              && String(entry.capture?.runAttempt) === '1'
-              && Number.isInteger(entry.capture?.slotIndex)
-              && entry.capture.slotIndex <= targetSlotIndex)
+          const selectedSuccessor =
+            selected.capture?.schemaVersion === 'public-forward-liquidity-successor-scheduled-capture-receipt-v3';
+          if (selectedSuccessor
+            && (![selected.capture?.scheduleReliabilityContractVersion, selected.capture?.cohortId,
+              selected.capture?.policyDigest, selected.capture?.cohortDigest]
+              .every((value) => typeof value === 'string' && value.length > 0))) {
+            throw new Error('SELECTED_SUCCESSOR_V3_COHORT_IDENTITY_INVALID');
+          }
+          const creditEligible = (entry) => (entry.capture?.triggerSource === 'GITHUB_ACTIONS_SCHEDULED_CANONICAL_PUBLIC_CAPTURE'
+              || (entry.capture?.schemaVersion === 'public-forward-liquidity-successor-scheduled-capture-receipt-v3'
+                && entry.capture?.eventName === 'schedule'
+                && entry.capture?.priorCreditedSlotCheck === 'CLEAR'))
+            && entry.capture?.captureStatus === 'PRESENT'
+            && entry.capture?.prospectiveSlotCredit === 1
+            && entry.capture?.ATTEMPTED === true
+            && entry.capture?.collectorInvoked === true
+            && String(entry.capture?.runAttempt) === '1'
+            && Number.isInteger(entry.capture?.slotIndex)
+            && entry.capture.slotIndex <= targetSlotIndex;
+          const sameSelectedCohort = (capture) => !selectedSuccessor
+            || (capture?.schemaVersion === selected.capture.schemaVersion
+              && capture?.scheduleReliabilityContractVersion === selected.capture.scheduleReliabilityContractVersion
+              && capture?.cohortId === selected.capture.cohortId
+              && capture?.policyDigest === selected.capture.policyDigest
+              && capture?.cohortDigest === selected.capture.cohortDigest);
+          const eligible = all.filter(creditEligible);
+          const excludedForeignCohortN = eligible.filter((entry) => !sameSelectedCohort(entry.capture)).length;
+          const credited = eligible
+            .filter((entry) => sameSelectedCohort(entry.capture))
             .sort((a, b) => a.capture.slotIndex - b.capture.slotIndex
               || String(a.capture.laneId ?? '').localeCompare(String(b.capture.laneId ?? ''))
               || Number(a.runId) - Number(b.runId));
@@ -388,6 +424,7 @@ jobs:
             selectedRunId,
             creditedReceiptN: entries.length,
             genuineScheduledSlotN: new Set(entries.map((entry) => entry.slotIndex)).size,
+            foreignCohortExcludedN: excludedForeignCohortN,
             entries,
           };
           await writeFile(join(root, 'credited-manifest.json'), JSON.stringify(manifest));
@@ -396,6 +433,7 @@ jobs:
             `target_slot_index=${targetSlotIndex}`,
             `credited_receipt_n=${manifest.creditedReceiptN}`,
             `genuine_scheduled_slot_n=${manifest.genuineScheduledSlotN}`,
+            `foreign_cohort_excluded_n=${manifest.foreignCohortExcludedN}`,
             '',
           ].join('\n')));
           NODE
