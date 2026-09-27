@@ -36,18 +36,23 @@ function stockEvidence() {
     institutionFlowHistoryDigest: "b".repeat(64), institutionFlowCoverage: 0.95, institutionFlowTemporalParityConfirmed: true,
   };
 }
-function scannerSnapshot({ profileId, timeframe, symbols, evidence }) {
+function scannerSnapshot({ profileId, timeframe, symbols }) {
+  const primaryDatasetDigest = "d".repeat(64);
   return buildResearchDatasetSnapshotManifestV1({
     researchSha: SHA,
     createdAt: "2026-09-27T00:00:00.000Z",
     profileId,
-    evidence,
+    evidence: {
+      primaryDatasetDigest, primaryDatasetCoverage: 1, missingIntervalCount: 0, duplicateRowCount: 0,
+      closedCandlesOnly: true, publicDataOnly: true, syntheticDataAllowed: false,
+      source: "fixture-public-ohlcv", sourceType: "PUBLIC_MARKET_DATA",
+    },
     scope: {
       timeframe,
       symbols,
       startTime: START,
       endTime: START + 100 * 60 * 60 * 1000,
-      primaryDatasetDigest: "d".repeat(64),
+      primaryDatasetDigest,
       universeDigest: null,
       publicDataOnly: true,
     },

@@ -31,6 +31,13 @@ function spotEvidence(){
     sentimentHistoryDigest:H('8'),sentimentCoverage:0.95,sentimentTemporalParityConfirmed:true,
   };
 }
+function scannerEvidence(primaryDatasetDigest=H('6'),overrides={}){
+  return {
+    primaryDatasetDigest,primaryDatasetCoverage:1,missingIntervalCount:0,duplicateRowCount:0,
+    closedCandlesOnly:true,publicDataOnly:true,syntheticDataAllowed:false,
+    source:'fixture-public-ohlcv',sourceType:'PUBLIC_MARKET_DATA',...overrides,
+  };
+}
 
 function scope(overrides={}){
   return {
@@ -90,14 +97,14 @@ test('profile timeframe is enforced, symbol order is canonicalized, and duplicat
 test('Scanner SWING dataset profiles use exact 60m/4H labels while adaptive research profiles remain unchanged',()=>{
   const futuresScanner=buildResearchDatasetSnapshotManifestV1({
     researchSha:SHA,createdAt:AT,profileId:'CRYPTO_FUTURES:SCANNER_SWING_60M',
-    evidence:futuresEvidence(),scope:scope({timeframe:'60m'}),
+    evidence:scannerEvidence(),scope:scope({timeframe:'60m'}),
   });
   assert.equal(futuresScanner.scope.timeframe,'60m');
   assert.equal(futuresScanner.profileId,'CRYPTO_FUTURES:SCANNER_SWING_60M');
 
   const spotScanner=buildResearchDatasetSnapshotManifestV1({
     researchSha:SHA,createdAt:AT,profileId:'CRYPTO_SPOT:SCANNER_SWING_4H',
-    evidence:spotEvidence(),scope:scope({timeframe:'4H'}),
+    evidence:scannerEvidence(),scope:scope({timeframe:'4H'}),
   });
   assert.equal(spotScanner.market,'CRYPTO_SPOT');
   assert.equal(spotScanner.scope.timeframe,'4H');
@@ -112,6 +119,14 @@ test('Scanner SWING dataset profiles use exact 60m/4H labels while adaptive rese
     researchSha:SHA,createdAt:AT,profileId:'CRYPTO_SPOT:SCANNER_SWING_4H',
     evidence:spotEvidence(),scope:scope({timeframe:'1h'}),
   }),/TIMEFRAME_MISMATCH/);
+});
+
+test('Scanner Dataset Snapshot fails closed on generic inference evidence, digest drift, gaps, or incomplete candles',()=>{
+  const base={researchSha:SHA,createdAt:AT,profileId:'CRYPTO_SPOT:SCANNER_SWING_4H',scope:scope({timeframe:'4H'})};
+  assert.throws(()=>buildResearchDatasetSnapshotManifestV1({...base,evidence:spotEvidence()}),/DATASET_NOT_RESEARCH_READY/);
+  assert.throws(()=>buildResearchDatasetSnapshotManifestV1({...base,evidence:scannerEvidence(H('f'))}),/DATASET_NOT_RESEARCH_READY/);
+  assert.throws(()=>buildResearchDatasetSnapshotManifestV1({...base,evidence:scannerEvidence(H('6'),{missingIntervalCount:1})}),/DATASET_NOT_RESEARCH_READY/);
+  assert.throws(()=>buildResearchDatasetSnapshotManifestV1({...base,evidence:scannerEvidence(H('6'),{closedCandlesOnly:false})}),/DATASET_NOT_RESEARCH_READY/);
 });
 
 test('profile, symbol set and time range are part of immutable dataset identity',()=>{
