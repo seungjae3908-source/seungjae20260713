@@ -563,7 +563,7 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
                 <div className="flex items-center justify-between gap-2">
                   <strong className="text-xs">{context.timeframe}</strong>
                   <span className={cn('rounded-full border px-1.5 py-0.5 text-[8px] font-black', qualityClass(context.quality))}>
-                    {context.quality}
+                    {qualityLabel(context.quality)}
                   </span>
                 </div>
                 <div className="mt-2 flex items-end justify-between gap-2">
@@ -603,7 +603,7 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
             </div>
           </div>
           <span className={cn('rounded-full border px-2 py-1 text-[9px] font-black', qualityClass(current.quality))}>
-            {current.quality}
+            {qualityLabel(current.quality)}
           </span>
         </div>
 
@@ -673,10 +673,10 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
             empty="추가 위험 근거 없음"
           />
           <EvidenceList
-            title="Invalidation"
+            title="무효화 조건"
             icon={<AlertTriangle className="h-3.5 w-3.5 text-destructive" />}
             items={[invalidationText]}
-            empty="UNAVAILABLE"
+            empty="미확인"
           />
         </div>
       </section>
@@ -684,10 +684,9 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="ai-chart-order-plan-preview">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-[11px] font-extrabold text-primary">ORDER PLAN PREVIEW</p>
-            <h2 className="mt-1 text-sm font-black">Entry · Stop · Target</h2>
+            <h2 className="text-sm font-black">매매 계획</h2>
           </div>
-          <span className="rounded-full border border-warning/30 bg-warning/5 px-2 py-1 text-[9px] font-black text-warning">PREVIEW ONLY</span>
+          <span className="rounded-full border border-warning/30 bg-warning/5 px-2 py-1 text-[9px] font-black text-warning">참고</span>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4">
           <PlanMetric label="진입 1" value={formatPrice(plan.entries[0], selection.market)} />
@@ -697,7 +696,7 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
           <PlanMetric label="목표 1" value={formatPrice(plan.targets[0], selection.market)} />
           <PlanMetric label="목표 2" value={formatPrice(plan.targets[1], selection.market)} />
           <PlanMetric label="목표 3" value={formatPrice(plan.targets[2], selection.market)} />
-          <PlanMetric label="R:R" value={plan.riskReward == null ? 'UNAVAILABLE' : plan.riskReward.toFixed(2)} />
+          <PlanMetric label="R:R" value={plan.riskReward == null ? '미확인' : plan.riskReward.toFixed(2)} />
         </div>
         <p className="mt-3 text-[10px] font-bold leading-4 text-muted-foreground">
           확인된 계획만 표시하며 없는 가격을 임의로 만들지 않습니다.
