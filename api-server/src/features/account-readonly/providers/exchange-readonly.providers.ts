@@ -3,7 +3,6 @@ import {
   prepareBitgetPendingOrders,
   prepareBitgetPositions,
   prepareBitgetUtaAccountInfo,
-  prepareBitgetUtaAccountSettings,
   prepareBitgetUtaAssets,
   prepareBitgetUtaPendingOrders,
   prepareBitgetUtaPositions,
@@ -217,28 +216,7 @@ async function readBitgetClassicSnapshot(credentials: BitgetCredentials, transpo
   };
 }
 
-function bitgetAccountMode(value: unknown): 'classic' | 'uta' {
-  if (!record(value)) throw new Error('BITGET_ACCOUNT_SETTINGS_RESPONSE_INVALID');
-  const code = typeof value.code === 'string' || typeof value.code === 'number'
-    ? String(value.code)
-    : '';
-  if (!code) throw new Error('BITGET_ACCOUNT_SETTINGS_RESPONSE_INVALID');
-  if (code === '25245') return 'classic';
-  if (code !== '00000') throw bitgetApplicationFailure(code);
-
-  const payload = value.data;
-  if (!record(payload)) throw new Error('BITGET_ACCOUNT_SETTINGS_RESPONSE_INVALID');
-  const accountMode = typeof payload.accountMode === 'string'
-    ? payload.accountMode.trim().toLowerCase()
-    : '';
-  if (accountMode === 'unified' || accountMode === 'hybrid') return 'uta';
-  if (accountMode === 'upgrading' || accountMode === 'switching') {
-    throw new AccountReadonlyError('BITGET_ACCOUNT_MODE_TRANSITION', true);
-  }
-  throw new Error('BITGET_ACCOUNT_MODE_INVALID');
-}
-
-function assertBitgetUtaTradeReadPermission(value: unknown) {
+function bitgetAccountCapability(value: unknown): 'classic' | 'uta' {
   if (!record(value)) throw new Error('BITGET_ACCOUNT_INFO_RESPONSE_INVALID');
   const code = typeof value.code === 'string' || typeof value.code === 'number'
     ? String(value.code)
@@ -250,13 +228,17 @@ function assertBitgetUtaTradeReadPermission(value: unknown) {
   if (!record(payload) || !Array.isArray(payload.permissions)) {
     throw new Error('BITGET_ACCOUNT_INFO_RESPONSE_INVALID');
   }
-  const permissions = payload.permissions;
-  if (!permissions.every((permission) => typeof permission === 'string')) {
+  if (!payload.permissions.every((permission) => typeof permission === 'string')) {
     throw new Error('BITGET_ACCOUNT_INFO_RESPONSE_INVALID');
   }
-  if (!permissions.some((permission) => permission.trim().toLowerCase() === 'uta_trade')) {
+  const permissions = new Set(
+    payload.permissions.map((permission) => String(permission).trim().toLowerCase()),
+  );
+  if (permissions.has('uta_trade')) return 'uta';
+  if (permissions.has('uta_mgt')) {
     throw new AccountReadonlyError('BITGET_PERMISSION_DENIED');
   }
+  return 'classic';
 }
 
 function bitgetUtaData(value: unknown, code: string): Row {
@@ -369,21 +351,9 @@ export async function readBitgetSnapshot(
   signal?: AbortSignal,
   now = new Date(),
 ): Promise<CanonicalAccountSnapshot> {
-  let mode: 'classic' | 'uta';
-  try {
-    mode = bitgetAccountMode(
-      await transport(prepareBitgetUtaAccountSettings(credentials), signal),
-    );
-  } catch (error) {
-    if (error instanceof AccountReadonlyError && error.code === 'BITGET_NOT_UTA') {
-      mode = 'classic';
-    } else if (error instanceof AccountReadonlyError && error.code === 'BITGET_PERMISSION_DENIED') {
-      await transport(prepareBitgetUtaAccountInfo(credentials), signal).then(assertBitgetUtaTradeReadPermission);
-      mode = 'uta';
-    } else {
-      throw error;
-    }
-  }
+  const mode = bitgetAccountCapability(
+    await transport(prepareBitgetUtaAccountInfo(credentials), signal),
+  );
 
   if (mode === 'classic') {
     return readBitgetClassicSnapshot(credentials, transport, signal, now);
