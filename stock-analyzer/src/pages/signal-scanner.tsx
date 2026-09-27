@@ -501,7 +501,6 @@ function SignalDetailPanel({
         </>
       ) : (
         <>
-          {qualityPanel}
           {evidenceContent}
           <section className="mt-3 rounded-2xl border border-card-border p-3" data-testid="scanner-price-plan">
             <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">서버 계획</span></div>
