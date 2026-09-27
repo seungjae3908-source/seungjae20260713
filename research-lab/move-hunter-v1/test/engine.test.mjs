@@ -1,133 +1,60 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  MARKETS,
-  buildWalkForwardWindows,
-  candlesAtOrBefore,
-  discoverCandidates,
-  evaluateForward,
-  recallAtK,
-} from '../src/engine.mjs';
-import { runHistoricalReplay } from '../src/replay.mjs';
+import { readFile } from 'node:fs/promises';
+import { DIRECTIONS, candlesAtOrBefore, simulateRunner, summarizeRunnerTrials } from '../src/engine.mjs';
 
-function makeCandles({ start = 1_700_000_000_000, count = 80, drift = 0.002, volumeBoostAt = null } = {}) {
-  const out = [];
-  let price = 100;
-  for (let i = 0; i < count; i += 1) {
-    const open = price;
-    const close = open * (1 + drift);
-    out.push({
-      ts: start + (i * 60_000),
-      open,
-      high: Math.max(open, close) * 1.004,
-      low: Math.min(open, close) * 0.996,
-      close,
-      volume: 1000 * (volumeBoostAt === i ? 5 : 1),
-    });
-    price = close;
-  }
+function candles({start=1_700_000_000_000,count=80,drift=.002}={}){
+  const out=[]; let price=100;
+  for(let i=0;i<count;i+=1){ const open=price,close=open*(1+drift); out.push({ts:start+i*60000,open,high:Math.max(open,close)*1.004,low:Math.min(open,close)*.996,close,volume:1000}); price=close; }
   return out;
 }
 
-test('past-only slicing never exposes future candles', () => {
-  const data = makeCandles({ count: 40 });
-  const asOf = data[20].ts;
-  const past = candlesAtOrBefore(data, asOf);
-  assert.equal(past.at(-1).ts, asOf);
-  assert.equal(past.length, 21);
+test('past-only slicing never exposes future candles',()=>{
+  const data=candles({count:40}),asOf=data[20].ts,past=candlesAtOrBefore(data,asOf);
+  assert.equal(past.at(-1).ts,asOf); assert.equal(past.length,21);
 });
 
-test('candidate discovery ranks stronger impulse first', () => {
-  const weak = makeCandles({ drift: 0.0002, volumeBoostAt: 39 });
-  const strong = makeCandles({ drift: 0.0025, volumeBoostAt: 39 });
-  const asOf = strong[39].ts;
-  const ranked = discoverCandidates({
-    market: MARKETS.US_STOCK,
-    symbols: ['WEAK', 'STRONG'],
-    candlesBySymbol: { WEAK: weak, STRONG: strong },
-    asOf,
-    topK: 2,
-    minScore: -100,
-  });
-  assert.equal(ranked[0].symbol, 'STRONG');
-  assert.equal(ranked[0].rank, 1);
+test('next-bar entry and active stop are conservative',()=>{
+  const data=candles({count:50,drift:.001}),signalAtMs=data[34].ts,entry=data[35].open;
+  data[35]={...data[35],high:entry*1.12,low:entry*.90,close:entry*1.01};
+  const r=simulateRunner({candles:data,signalAtMs,maxBars:5});
+  assert.equal(r.entryTs,data[35].ts); assert.match(r.exitReason,/STOP/); assert.equal(r.targetHitTs.pct3,null); assert.ok(r.ambiguousBars>=1);
 });
 
-test('forward evaluation enters only on the next bar and treats active stop conservatively', () => {
-  const data = makeCandles({ count: 50, drift: 0.001 });
-  const discoveredAt = data[34].ts;
-  const entry = data[35].open;
-  data[35] = { ...data[35], high: entry * 1.12, low: entry * 0.90, close: entry * 1.01 };
-  const result = evaluateForward({ candles: data, discoveredAt, maxBars: 5 });
-  assert.equal(result.entryTs, data[35].ts);
-  assert.match(result.exitReason, /STOP/);
-  assert.equal(result.targetHitTs.pct3, null);
-  assert.ok(result.ambiguousBars >= 1);
+test('long runner can hold beyond +10 percent without fixed take profit',()=>{
+  const data=candles({count:70,drift:.001}),signalAtMs=data[34].ts; let p=data[35].open;
+  for(let i=35;i<45;i+=1){ const open=p,close=open*1.02; data[i]={...data[i],open,high:close*1.003,low:open*.997,close}; p=close; }
+  for(let i=45;i<data.length;i+=1){ const open=p,close=open*.985; data[i]={...data[i],open,high:open*1.002,low:close*.995,close}; p=close; }
+  const r=simulateRunner({candles:data,signalAtMs,maxBars:30,trailActivateAtR:2,trailAtrMult:2});
+  assert.ok(r.mfe>.10); assert.notEqual(r.targetHitTs.pct10,null); assert.ok(r.maxR>2);
 });
 
-test('runner can hold beyond +10 percent before trailing exit', () => {
-  const data = makeCandles({ count: 70, drift: 0.001 });
-  const discoveredAt = data[34].ts;
-  let p = data[35].open;
-  for (let i = 35; i < 45; i += 1) {
-    const open = p;
-    const close = open * 1.02;
-    data[i] = { ...data[i], open, high: close * 1.003, low: open * 0.997, close };
-    p = close;
-  }
-  for (let i = 45; i < data.length; i += 1) {
-    const open = p;
-    const close = open * 0.985;
-    data[i] = { ...data[i], open, high: open * 1.002, low: close * 0.995, close };
-    p = close;
-  }
-  const result = evaluateForward({ candles: data, discoveredAt, maxBars: 30, trailActivateAtR: 2, trailAtrMult: 2 });
-  assert.ok(result.mfe > 0.10);
-  assert.notEqual(result.targetHitTs.pct10, null);
-  assert.ok(result.maxR > 2);
+test('short futures runner supports asymmetric downside capture',()=>{
+  const data=candles({count:70,drift:0}),signalAtMs=data[34].ts; let p=data[35].open;
+  for(let i=35;i<45;i+=1){ const open=p,close=open*.985; data[i]={...data[i],open,high:open*1.003,low:close*.997,close}; p=close; }
+  for(let i=45;i<data.length;i+=1){ const open=p,close=open*1.012; data[i]={...data[i],open,high:close*1.003,low:open*.998,close}; p=close; }
+  const r=simulateRunner({candles:data,signalAtMs,direction:DIRECTIONS.SHORT,maxBars:30});
+  assert.ok(r.mfe>.10); assert.notEqual(r.targetHitTs.pct10,null); assert.ok(r.initialStop>r.entry);
 });
 
-test('costs reduce net return', () => {
-  const data = makeCandles({ count: 60, drift: 0.0015 });
-  const discoveredAt = data[34].ts;
-  const gross = evaluateForward({ candles: data, discoveredAt, maxBars: 10, costs: {} });
-  const net = evaluateForward({ candles: data, discoveredAt, maxBars: 10, costs: { feeBps: 5, slippageBps: 3, spreadBps: 2 } });
-  assert.ok(net.netReturn < gross.netReturn);
+test('costs reduce net return',()=>{
+  const data=candles({count:60,drift:.0015}),signalAtMs=data[34].ts;
+  const gross=simulateRunner({candles:data,signalAtMs,maxBars:10,costs:{}});
+  const net=simulateRunner({candles:data,signalAtMs,maxBars:10,costs:{feeBps:5,slippageBps:3,spreadBps:2}});
+  assert.ok(net.netReturn<gross.netReturn);
 });
 
-test('walk-forward windows preserve purge gaps', () => {
-  const start = Date.UTC(2023, 8, 27);
-  const end = Date.UTC(2026, 8, 27);
-  const windows = buildWalkForwardWindows({ startTs: start, endTs: end });
-  assert.ok(windows.length > 0);
-  for (const w of windows) {
-    assert.ok(w.validationStart > w.trainEnd);
-    assert.ok(w.testStart > w.validationEnd);
-  }
+test('summary reports hit rates and risk-adjusted results',()=>{
+  const data=candles({count:60,drift:.0015}),signalAtMs=data[34].ts;
+  const trial=simulateRunner({candles:data,signalAtMs,maxBars:10});
+  const s=summarizeRunnerTrials([trial]); assert.equal(s.n,1); assert.ok(Number.isFinite(s.avgNetR));
 });
 
-test('Recall@K measures captured realized movers', () => {
-  assert.deepEqual(
-    recallAtK({ discoveredSymbols: ['A', 'B', 'C'], realizedMoverSymbols: ['B', 'C', 'D', 'E'] }),
-    { captured: 2, totalMovers: 4, recall: 0.5 },
-  );
-});
-
-test('historical replay stays market-agnostic and produces settled summary', () => {
-  const a = makeCandles({ drift: 0.002, count: 65, volumeBoostAt: 35 });
-  const b = makeCandles({ drift: 0.0003, count: 65, volumeBoostAt: 35 });
-  const decisionTimes = [a[35].ts, a[40].ts];
-  const result = runHistoricalReplay({
-    market: MARKETS.CRYPTO_SPOT,
-    decisionTimes,
-    universeAt: () => ['A', 'B'],
-    candlesBySymbol: { A: a, B: b },
-    topK: 1,
-    minScore: -100,
-    forwardConfig: { maxBars: 10, costs: { feeBps: 5, slippageBps: 3, spreadBps: 2 } },
-  });
-  assert.equal(result.market, MARKETS.CRYPTO_SPOT);
-  assert.equal(result.decisionPoints, 2);
-  assert.equal(result.discoveries.length, 2);
-  assert.equal(result.summary.n, 2);
+test('adapter source reuses merged canonical replay, settlement and dataset owners',async()=>{
+  const source=await readFile(new URL('../src/replay.mjs',import.meta.url),'utf8');
+  assert.match(source,/historical-market-replay-v1\.js/);
+  assert.match(source,/historical-discovery-settlement-v1\.js/);
+  assert.match(source,/research-dataset-snapshot-store\.mjs/);
+  assert.doesNotMatch(source,/function\s+discoverCandidates/);
+  assert.doesNotMatch(source,/function\s+buildWalkForward/);
 });
