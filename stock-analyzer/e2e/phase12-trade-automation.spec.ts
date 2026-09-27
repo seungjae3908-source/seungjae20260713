@@ -50,61 +50,72 @@ function expectNoBrowserFailures(failures: ReturnType<typeof captureBrowserFailu
 }
 
 for (const width of [360, 390, 430]) {
-  test(`four-market automatic controls fit ${width}px mobile without approval queue`, async ({ page }) => {
+  test(`four-market unified trading workspace fits ${width}px mobile`, async ({ page }) => {
     const failures = captureBrowserFailures(page);
     await page.setViewportSize({ width, height: 900 });
     await page.goto('/__phase12-trade-automation-e2e');
 
-    await expect(page.getByRole('heading', { name: '자동매매', level: 1 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '매매', level: 1 })).toBeVisible();
+    await expect(page.getByTestId('trading-mode-auto')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('trading-mode-paper')).toContainText('모의매매');
+
     const safetySummary = page.getByTestId('auto-trading-safety-summary');
     await expect(safetySummary).toContainText('주문별 승인');
     await expect(safetySummary).toContainText('불필요');
-    await expect(safetySummary).toContainText('4시장 개별 ON/OFF');
+    await expect(safetySummary).toContainText('4시장');
     await expect(page.getByTestId('trade-approval-queue')).toHaveCount(0);
 
-    await expect(page.getByTestId('automatic-trading-master-toggle')).toHaveAttribute('aria-pressed', 'false');
-    for (const market of ['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures']) {
-      await expect(page.getByTestId(`auto-market-${market}`)).toHaveAttribute('aria-pressed', 'true');
-    }
+    await expect(page.getByTestId('auto-trading-runtime-summary')).toContainText('국내주식');
 
-    await expect(page.getByTestId('auto-market-domestic_stock')).toContainText('국내주식');
-    await expect(page.getByTestId('auto-market-us_stock')).toContainText('미국주식');
-    await expect(page.getByTestId('auto-market-crypto_spot')).toContainText('코인현물');
-    await expect(page.getByTestId('auto-market-crypto_futures')).toContainText('코인선물');
-    await expect(page.getByTestId('stock-broker-routing')).toContainText('Toss');
-    await expect(page.getByTestId('stock-broker-routing')).toContainText('Kiwoom');
-    await expect(page.getByTestId('stock-broker-routing')).toContainText('Upbit 고정');
-    await expect(page.getByTestId('stock-broker-routing')).toContainText('Bitget 고정');
-    await expect(page.getByTestId('auto-trading-runtime-summary')).toContainText('미국주식');
-    await expect(page.getByTestId('auto-trading-runtime-summary')).toContainText('실주문 4중 서버게이트');
+    await page.getByTestId('trading-section-settings').click();
+
+    await expect(page.getByTestId('automatic-trading-master-toggle')).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.getByTestId('auto-market-domestic_stock')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('stock-broker-domestic_stock')).toHaveValue('kiwoom');
+    await expect(page.getByTestId('stock-broker-us_stock')).toHaveCount(0);
+
+    await page.getByTestId('trading-market-us_stock').click();
+    await expect(page.getByTestId('auto-market-us_stock')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('stock-broker-us_stock')).toHaveValue('kiwoom');
+    await expect(page.getByTestId('stock-broker-domestic_stock')).toHaveCount(0);
+
+    await page.getByTestId('trading-market-crypto_spot').click();
+    await expect(page.getByTestId('auto-market-crypto_spot')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('connection-upbit')).toBeVisible();
+    await expect(page.getByTestId('stock-broker-routing')).toHaveCount(0);
+    await expect(page.getByLabel('Bitget 레버리지')).toHaveCount(0);
+
+    await page.getByTestId('trading-market-crypto_futures').click();
+    await expect(page.getByTestId('auto-market-crypto_futures')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('connection-bitget')).toBeVisible();
+    await expect(page.getByLabel('Bitget 레버리지')).toBeVisible();
 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     expectNoBrowserFailures(failures);
   });
 }
 
-test('automatic trading is standing authorization with independent market switches and one emergency stop', async ({ page }) => {
+test('automatic trading keeps standing authorization while settings follow one selected market', async ({ page }) => {
   const failures = captureBrowserFailures(page);
   await page.goto('/__phase12-trade-automation-e2e');
+  await page.getByTestId('trading-section-settings').click();
 
   const master = page.getByTestId('automatic-trading-master-toggle');
   await master.click();
   await expect(master).toHaveAttribute('aria-pressed', 'true');
 
   const domesticBroker = page.getByTestId('stock-broker-domestic_stock');
-  const usBroker = page.getByTestId('stock-broker-us_stock');
   await expect(domesticBroker).toHaveValue('kiwoom');
-  await expect(usBroker).toHaveValue('kiwoom');
   await domesticBroker.selectOption('toss');
   await expect(domesticBroker).toHaveValue('toss');
+
+  await page.getByTestId('trading-market-us_stock').click();
+  const usBroker = page.getByTestId('stock-broker-us_stock');
   await expect(usBroker).toHaveValue('kiwoom');
 
   const us = page.getByTestId('auto-market-us_stock');
   await us.click();
   await expect(us).toHaveAttribute('aria-pressed', 'false');
-  await expect(page.getByTestId('auto-market-domestic_stock')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('auto-market-crypto_spot')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('auto-market-crypto_futures')).toHaveAttribute('aria-pressed', 'true');
 
   await page.getByRole('button', { name: '설정 저장' }).click();
   const dialog = page.getByRole('dialog', { name: '자동매매 설정 확인' });
@@ -125,7 +136,9 @@ test('automatic trading is standing authorization with independent market switch
   await page.getByRole('button', { name: '긴급정지' }).click();
   await expect(page.getByRole('status')).toContainText('4시장 신규 주문이 모두 차단');
   await expect(master).toHaveAttribute('aria-pressed', 'false');
+
   for (const market of ['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures']) {
+    await page.getByTestId(`trading-market-${market}`).click();
     await expect(page.getByTestId(`auto-market-${market}`)).toHaveAttribute('aria-pressed', 'false');
   }
   expectNoBrowserFailures(failures);
@@ -142,8 +155,28 @@ test('automatic trading surface never exposes per-order approval actions', async
   await page.goto('/__phase12-trade-automation-e2e');
   await expect(page.getByText('승인형 주문', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /승인/ })).toHaveCount(0);
+
+  await page.getByTestId('trading-section-settings').click();
   await page.getByTestId('automatic-trading-master-toggle').click();
   await page.getByRole('button', { name: '설정 저장' }).click();
   await page.getByRole('dialog', { name: '자동매매 설정 확인' }).getByRole('button', { name: '설정 적용' }).click();
   expect(approvalRequests).toEqual([]);
+});
+
+test('paper mode exposes the same four-market navigation without enabling live authority', async ({ page }) => {
+  const failures = captureBrowserFailures(page);
+  await page.goto('/__phase12-trade-automation-e2e');
+
+  await page.getByTestId('trading-mode-paper').click();
+  await expect(page.getByTestId('trading-mode-paper')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('paper-trading-dashboard')).toBeVisible();
+  await expect(page.getByTestId('paper-trading-dashboard')).toContainText('실제 주문 0');
+
+  for (const market of ['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures']) {
+    await page.getByTestId(`trading-market-${market}`).click();
+    await expect(page.getByTestId(`trading-market-${market}`)).toHaveAttribute('aria-pressed', 'true');
+  }
+
+  await expect(page.getByTestId('trading-workspace-safety-note')).toContainText('LIVE/AUTO/REAL/Private API Gate');
+  expectNoBrowserFailures(failures);
 });
