@@ -420,22 +420,29 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: Fail closed unless this is eligible credit evidence or the exact UTC27 zero-credit diagnostic
+      - name: Fail closed unless this is eligible credit evidence or an exact zero-credit diagnostic
         shell: bash
         env:
           CAPTURE_STATUS: ${{ steps.capture.outputs.capture_status }}
           PROSPECTIVE_SLOT_CREDIT: ${{ steps.capture.outputs.prospective_slot_credit }}
           RAW_BATCH_PRESENT: ${{ steps.capture.outputs.raw_batch_present }}
           PHASE2_UTC27_DIAGNOSTIC: ${{ steps.capture.outputs.phase2_utc27_diagnostic }}
+          DUPLICATE_SLOT_ZERO_CREDIT_DIAGNOSTIC: ${{ steps.capture.outputs.duplicate_slot_zero_credit_diagnostic }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
           test "$RUN_ATTEMPT" = '1'
-          test "$RAW_BATCH_PRESENT" = 'true'
-          if [[ "$PHASE2_UTC27_DIAGNOSTIC" == 'true' ]]; then
+          if [[ "$DUPLICATE_SLOT_ZERO_CREDIT_DIAGNOSTIC" == 'true' ]]; then
+            test "$PHASE2_UTC27_DIAGNOSTIC" = 'false'
+            test "$CAPTURE_STATUS" = 'DIAGNOSTIC_ONLY'
+            test "$PROSPECTIVE_SLOT_CREDIT" = '0'
+            test "$RAW_BATCH_PRESENT" = 'false'
+          elif [[ "$PHASE2_UTC27_DIAGNOSTIC" == 'true' ]]; then
             test "$CAPTURE_STATUS" = 'PRESENT_ZERO_CREDIT'
             test "$PROSPECTIVE_SLOT_CREDIT" = '0'
+            test "$RAW_BATCH_PRESENT" = 'true'
           else
             test "$CAPTURE_STATUS" = 'PRESENT'
             test "$PROSPECTIVE_SLOT_CREDIT" = '1'
+            test "$RAW_BATCH_PRESENT" = 'true'
           fi
