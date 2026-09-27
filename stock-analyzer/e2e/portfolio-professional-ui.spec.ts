@@ -122,6 +122,8 @@ test('portfolio hides internal calculation contract names until the user opens e
   await expect(page.getByText('NO_VALIDATED_RETURN_ASSUMPTION', { exact: false })).toBeHidden();
   await expect(page.getByText('CURRENT_KNOWN_ALLOCATION', { exact: false })).toBeHidden();
   await expect(page.getByText('NORMALIZED_KRW', { exact: false })).toBeHidden();
+  await expect(page.getByText('미래 수익을 예측하지 않습니다.', { exact: true })).toBeHidden();
+  await page.getByText('투자 시뮬레이션', { exact: true }).click();
   await expect(page.getByText('미래 수익을 예측하지 않습니다.', { exact: true })).toBeVisible();
 
   const monthly = page.getByTestId('portfolio-monthly-basis');
