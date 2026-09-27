@@ -89,9 +89,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     root.classList.toggle('dark', settings.theme === 'dark');
     root.style.colorScheme = settings.theme;
     root.style.fontSize = `${Math.round(16 * settings.fontScale)}px`;
-    // Cards float translucently over the app's dark gradient backdrop.
-    root.style.setProperty('--bg-alpha', '0');
-    root.style.setProperty('--card-alpha', '0.72');
+    // Keep the backdrop visible, but make information surfaces solid enough to
+    // scan quickly on mobile/tablet/desktop.
+    root.style.setProperty('--bg-alpha', settings.theme === 'dark' ? '0.12' : '0.78');
+    root.style.setProperty('--card-alpha', settings.theme === 'dark' ? '0.94' : '0.98');
   }, [settings.theme, settings.fontScale]);
 
   useEffect(() => {
