@@ -20,6 +20,7 @@ import {
   Sparkles,
   TriangleAlert,
   WalletCards,
+  X,
 } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { PaperClosedLoopObserver } from '@/components/paper-closed-loop-observer';
@@ -117,107 +118,113 @@ function PipelineCard({ card, selected, onOpen }: {
       aria-expanded={selected}
       aria-label={`${card.label} 상세 보기`}
       aria-controls={card.key === 'paper' ? 'research-tab-paper' : 'research-stage-detail'}
-      className={`group min-w-0 rounded-2xl border bg-card p-3 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${selected ? 'border-primary ring-1 ring-primary/30' : 'border-card-border hover:border-primary/40'}`}
+      className={`group min-w-0 rounded-xl border bg-card px-3 py-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${selected ? 'border-primary/60 bg-primary/5 ring-1 ring-primary/20' : 'border-card-border hover:border-primary/30 hover:bg-muted/25'}`}
       data-testid={`research-stage-${card.key}`}
     >
-      <div className="flex items-start justify-between gap-2">
-        <h3 className="min-w-0 break-keep text-sm font-black">{card.label}</h3>
-        <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5" aria-hidden="true" />
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="min-w-0 break-keep text-sm font-bold">{card.label}</h3>
+        <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5" aria-hidden="true" />
       </div>
-      <div className="mt-2 flex items-center justify-between gap-2">
+      <div className="mt-2">
         <StatusBadge status={card.status} />
-        <span className="truncate text-[10px] text-muted-foreground">{formatDate(card.updatedAt)}</span>
       </div>
       <dl className="mt-3 grid grid-cols-3 gap-1.5">
         {(card.metrics.length ? card.metrics : [
           { label: '표본', value: '미측정', availability: 'MISSING' as const },
         ]).slice(0, 3).map((metric) => <MetricValue key={metric.label} metric={metric} compact />)}
       </dl>
-      <p className="mt-2 text-[10px] font-bold text-primary">{selected ? '아래에 이 단계의 설명이 열려 있습니다' : '눌러서 왜 이런 상태인지 보기'}</p>
     </button>
   );
 }
 
-function StageDetail({ card }: { card: ResearchPipelineCard }) {
+function StageDetail({ card, onClose }: { card: ResearchPipelineCard; onClose: () => void }) {
   return (
-    <aside id="research-stage-detail" className="min-w-0 rounded-3xl border border-card-border bg-card p-4 shadow-sm lg:sticky lg:top-4 lg:self-start" aria-live="polite" data-testid={`research-detail-${card.key}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">선택한 연구 단계</p>
-          <h2 className="mt-1 text-lg font-black">{card.label}</h2>
-        </div>
-        <StatusBadge status={card.status} />
-      </div>
-      <div className="mt-4 grid gap-2 sm:grid-cols-2">
-        <div className="rounded-xl bg-muted/40 p-3">
-          <p className="text-xs font-black">왜 이런 상태인가요?</p>
-          <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">{blockerCopy(card)}</p>
-        </div>
-        <div className="rounded-xl bg-muted/40 p-3">
-          <p className="text-xs font-black">다음에 뭘 보면 되나요?</p>
-          <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">
-            {card.blocker ? '필요한 근거가 들어오거나 blocker가 해소되는지 확인하세요.' : '표본과 다음 검증 단계가 증가하는지 확인하면 됩니다.'}
-          </p>
-        </div>
-      </div>
-      <dl className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
-        {card.metrics.map((metric) => <MetricValue key={metric.label} metric={metric} />)}
-      </dl>
-      <div className="mt-4 grid gap-2 text-xs sm:grid-cols-2">
-        <div className="rounded-xl border border-card-border bg-background p-3">
-          <p className="text-muted-foreground">최근 업데이트</p>
-          <p className="mt-1 font-bold">{formatDate(card.updatedAt)}</p>
-        </div>
-        <div className="rounded-xl border border-card-border bg-background p-3">
-          <p className="text-muted-foreground">기술 상태 코드</p>
-          <p className="mt-1 font-mono font-bold">{card.evidenceState}</p>
-        </div>
-      </div>
-      {card.blocker ? (
-        <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs">
-          <p className="font-black text-amber-700 dark:text-amber-300">현재 막힌 이유</p>
-          <p className="mt-1 text-[11px] text-muted-foreground">{blockerCopy(card)}</p>
-        </div>
-      ) : null}
-      {card.records.length ? (
-        <div className="mt-4 space-y-2">
-          <h3 className="text-xs font-black">원본 검증 기록</h3>
-          <div className="max-h-[31rem] space-y-2 overflow-y-auto pr-1">
-            {card.records.map((record) => (
-              <details key={record.id} className="group rounded-xl border border-card-border bg-background">
-                <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 p-3 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-                  <span className="min-w-0 truncate font-black">{record.label}</span>
-                  <span className="flex shrink-0 items-center gap-2"><StatusBadge status={record.status} /><ChevronDown className="h-3.5 w-3.5 transition group-open:rotate-180" /></span>
-                </summary>
-                <div className="border-t border-card-border p-3 text-[11px]">
-                  <dl className="grid grid-cols-2 gap-2">
-                    <div><dt className="text-muted-foreground">기간</dt><dd className="mt-1 break-words font-bold">{record.period}</dd></div>
-                    <div><dt className="text-muted-foreground">표본</dt><dd className="mt-1 font-bold">{record.sampleN}</dd></div>
-                    <div><dt className="text-muted-foreground">Dataset</dt><dd className="mt-1 break-all font-mono">{record.datasetId ?? '미측정'}</dd></div>
-                    <div><dt className="text-muted-foreground">Source SHA</dt><dd className="mt-1 break-all font-mono">{record.sourceSha ?? '미측정'}</dd></div>
-                  </dl>
-                  <dl className="mt-3 grid grid-cols-2 gap-2">
-                    {record.metrics.map((metric) => <MetricValue key={metric.label} metric={metric} compact />)}
-                  </dl>
-                  <details className="mt-3 rounded-lg border border-card-border p-2">
-                    <summary className="min-h-8 cursor-pointer font-bold">검증 근거 보기</summary>
-                    <p className="mt-2 break-all text-muted-foreground">Source: {record.source}</p>
-                    <p className="mt-1 text-muted-foreground">Blocker: {record.blocker ? '검증 근거 확인 필요' : '없음'}</p>
-                    <ul className="mt-2 space-y-1 text-muted-foreground">
-                      {record.provenance.length ? record.provenance.map((line) => <li key={line}>• {line}</li>) : <li>• provenance 미측정</li>}
-                    </ul>
-                  </details>
-                </div>
-              </details>
-            ))}
+    <>
+      <button
+        type="button"
+        aria-label="단계 상세 닫기"
+        onClick={onClose}
+        className="fixed inset-0 z-50 bg-black/30 backdrop-blur-[1px] lg:hidden"
+        data-testid="research-stage-detail-backdrop"
+      />
+      <aside
+        id="research-stage-detail"
+        className="fixed inset-x-0 bottom-0 z-[51] max-h-[82dvh] min-w-0 overflow-y-auto rounded-t-3xl border border-card-border bg-card p-4 shadow-2xl md:inset-y-0 md:left-auto md:right-0 md:w-[min(30rem,92vw)] md:max-h-none md:rounded-none md:border-y-0 md:border-r-0 lg:sticky lg:inset-auto lg:z-auto lg:max-h-[calc(100dvh-10rem)] lg:w-auto lg:rounded-2xl lg:border lg:self-start lg:shadow-sm"
+        aria-live="polite"
+        data-testid={`research-detail-${card.key}`}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold text-primary">연구 단계</p>
+            <h2 className="mt-1 text-lg font-bold">{card.label}</h2>
+          </div>
+          <div className="flex items-center gap-2">
+            <StatusBadge status={card.status} />
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="닫기"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-card-border text-muted-foreground transition hover:bg-muted hover:text-foreground"
+            >
+              <X className="h-4 w-4" aria-hidden="true" />
+            </button>
           </div>
         </div>
-      ) : (
-        <div className="mt-4 rounded-xl border border-dashed border-card-border p-4 text-center text-xs text-muted-foreground">
-          상세 canonical record가 현재 read-only API에 공개되지 않았습니다. 없는 값을 만들지 않습니다.
-        </div>
-      )}
-    </aside>
+
+        <p className="mt-4 rounded-xl bg-muted/45 p-3 text-sm font-medium leading-6 text-foreground">
+          {blockerCopy(card)}
+        </p>
+
+        <dl className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {card.metrics.map((metric) => <MetricValue key={metric.label} metric={metric} />)}
+        </dl>
+
+        <details className="mt-3 rounded-xl border border-card-border bg-background/60">
+          <summary className="flex min-h-11 cursor-pointer list-none items-center px-3 text-sm font-semibold">기술 정보</summary>
+          <div className="grid gap-2 border-t border-card-border p-3 text-xs sm:grid-cols-2">
+            <div className="rounded-lg bg-muted/35 p-3">
+              <p className="text-muted-foreground">최근 업데이트</p>
+              <p className="mt-1 font-semibold">{formatDate(card.updatedAt)}</p>
+            </div>
+            <div className="rounded-lg bg-muted/35 p-3">
+              <p className="text-muted-foreground">상태 코드</p>
+              <p className="mt-1 break-all font-mono font-semibold">{card.evidenceState}</p>
+            </div>
+          </div>
+        </details>
+
+        {card.records.length ? (
+          <details className="mt-3 rounded-xl border border-card-border bg-background/60">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center px-3 text-sm font-semibold">원본 검증 기록</summary>
+            <div className="max-h-[26rem] space-y-2 overflow-y-auto border-t border-card-border p-3">
+              {card.records.map((record) => (
+                <details key={record.id} className="group rounded-xl border border-card-border bg-card">
+                  <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 p-3 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+                    <span className="min-w-0 truncate font-semibold">{record.label}</span>
+                    <span className="flex shrink-0 items-center gap-2"><StatusBadge status={record.status} /><ChevronDown className="h-3.5 w-3.5 transition group-open:rotate-180" /></span>
+                  </summary>
+                  <div className="border-t border-card-border p-3 text-[11px]">
+                    <dl className="grid grid-cols-2 gap-2">
+                      <div><dt className="text-muted-foreground">기간</dt><dd className="mt-1 break-words font-semibold">{record.period}</dd></div>
+                      <div><dt className="text-muted-foreground">표본</dt><dd className="mt-1 font-semibold">{record.sampleN}</dd></div>
+                      <div><dt className="text-muted-foreground">Dataset</dt><dd className="mt-1 break-all font-mono">{record.datasetId ?? '미측정'}</dd></div>
+                      <div><dt className="text-muted-foreground">Source SHA</dt><dd className="mt-1 break-all font-mono">{record.sourceSha ?? '미측정'}</dd></div>
+                    </dl>
+                    <dl className="mt-3 grid grid-cols-2 gap-2">
+                      {record.metrics.map((metric) => <MetricValue key={metric.label} metric={metric} compact />)}
+                    </dl>
+                    <div className="mt-3 rounded-lg bg-muted/35 p-2 text-muted-foreground">
+                      <p className="break-all">Source: {record.source}</p>
+                      <p className="mt-1">Blocker: {record.blocker ? '검증 근거 확인 필요' : '없음'}</p>
+                    </div>
+                  </div>
+                </details>
+              ))}
+            </div>
+          </details>
+        ) : null}
+      </aside>
+    </>
   );
 }
 
@@ -248,12 +255,14 @@ function LoadingState() {
   );
 }
 
-function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
+function OverviewTab({ overview, promotion, cards, selected, detailOpen, onSelect, onCloseDetail }: {
   overview: ResearchCenterOverview;
   promotion: StrategyPromotionResponse | null;
   cards: ResearchPipelineCard[];
   selected: ResearchPipelineKey;
+  detailOpen: boolean;
   onSelect: (key: ResearchPipelineKey) => void;
+  onCloseDetail: () => void;
 }) {
   const selectedCard = cards.find((card) => card.key === selected) ?? cards[0]!;
   const paper = cards.find((card) => card.key === 'paper')!;
@@ -264,7 +273,6 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
       : overview.state.present
         ? 'normal'
         : 'insufficient';
-  const staleCount = cards.filter((card) => card.status === 'stale').length;
   const factory = overview.factory ?? {
     present: false,
     status: 'MISSING' as const,
@@ -340,7 +348,6 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
         <TopStatus label="실거래" value="비활성" status="inactive" detail="executionAuthority=NONE" />
         <TopStatus label="모의매매" value={statusLabel(paper.status)} status={paper.status} detail={blockerCopy(paper)} />
         <TopStatus label="수익성 검증" value={overview.profitability.proven ? '충족' : '미검증'} status={overview.profitability.proven ? 'verified' : 'waiting'} detail="미검증은 수익성 없음과 다릅니다" />
-        <TopStatus label="마지막 업데이트" value={formatDate(overview.state.latestCycleAt)} status={staleCount ? 'stale' : overview.state.latestCycleAt ? 'normal' : 'unmeasured'} detail={staleCount ? `오래된 단계 ${staleCount}개` : '명시적 stale 상태 기준'} />
       </section>
 
       {!promotion ? (
@@ -349,31 +356,23 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
         </div>
       ) : null}
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]">
+      <div className={`grid gap-4 ${detailOpen ? 'lg:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]' : 'lg:grid-cols-1'}`}>
         <section className="min-w-0" aria-labelledby="research-pipeline-title">
           <div className="mb-3 flex items-end justify-between gap-3">
             <div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">Research pipeline</p><h2 id="research-pipeline-title" className="mt-1 text-base font-black">연구 파이프라인</h2></div>
-            <p className="text-[10px] text-muted-foreground">카드를 눌러 상세 확인</p>
           </div>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
             {cards.map((card) => (
               <PipelineCard
                 key={card.key}
                 card={card}
-                selected={selected === card.key}
-                onOpen={() => {
-                  onSelect(card.key);
-                  if (typeof window !== 'undefined' && window.innerWidth < 1024) {
-                    window.requestAnimationFrame(() => {
-                      document.getElementById('research-stage-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                    });
-                  }
-                }}
+                selected={detailOpen && selected === card.key}
+                onOpen={() => onSelect(card.key)}
               />
             ))}
           </div>
         </section>
-        <StageDetail card={selectedCard} />
+        {detailOpen ? <StageDetail card={selectedCard} onClose={onCloseDetail} /> : null}
       </div>
     </section>
   );
@@ -716,6 +715,7 @@ function PaperTab({
 export default function ResearchCenterPage() {
   const [tab, setTab] = useState<ResearchTab>('overview');
   const [selected, setSelected] = useState<ResearchPipelineKey>('external-research');
+  const [detailOpen, setDetailOpen] = useState(false);
   const overviewQuery = useQuery({
     queryKey: ['admin', 'research-center', 'overview'],
     queryFn: ({ signal }) => fetchResearchCenterOverview(signal),
@@ -748,10 +748,12 @@ export default function ResearchCenterPage() {
 
   function selectCard(key: ResearchPipelineKey) {
     if (key === 'paper') {
+      setDetailOpen(false);
       setTab('paper');
       return;
     }
     setSelected(key);
+    setDetailOpen(true);
   }
 
   function moveTabFocus(event: KeyboardEvent<HTMLButtonElement>, index: number) {
@@ -780,7 +782,6 @@ export default function ResearchCenterPage() {
             <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary"><FlaskConical className="h-5 w-5" aria-hidden="true" /></span>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2"><h1 className="text-xl font-black sm:text-2xl">연구센터</h1><span className="rounded-full border border-card-border bg-background px-2 py-0.5 text-[10px] font-black text-muted-foreground">READ ONLY</span></div>
-              <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">상태를 먼저 보고, 눌러서 근거를 확인하세요.</p>
             </div>
             <button type="button" aria-label="연구센터 새로고침" onClick={refreshAll} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-card-border bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" /></button>
           </div>
@@ -796,7 +797,10 @@ export default function ResearchCenterPage() {
               aria-selected={tab === key}
               aria-controls={`research-tab-${key}`}
               tabIndex={tab === key ? 0 : -1}
-              onClick={() => setTab(key)}
+              onClick={() => {
+                setDetailOpen(false);
+                setTab(key);
+              }}
               onKeyDown={(event) => moveTabFocus(event, index)}
               className={`flex min-h-11 min-w-0 items-center justify-center gap-1 rounded-xl px-1.5 text-[11px] font-black transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary sm:text-xs ${tab === key ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-muted'}`}
             >
@@ -816,7 +820,7 @@ export default function ResearchCenterPage() {
 
         {overview && cards.length ? (
           <>
-            {tab === 'overview' ? <OverviewTab overview={overview} promotion={promotion} cards={cards} selected={selected} onSelect={selectCard} /> : null}
+            {tab === 'overview' ? <OverviewTab overview={overview} promotion={promotion} cards={cards} selected={selected} detailOpen={detailOpen} onSelect={selectCard} onCloseDetail={() => setDetailOpen(false)} /> : null}
             {tab === 'ai-lab' ? <AiLabTab overview={overview} cards={cards} /> : null}
             {tab === 'evidence' ? <EvidenceTab overview={overview} promotion={promotion} cards={cards} /> : null}
             {tab === 'paper' ? (
