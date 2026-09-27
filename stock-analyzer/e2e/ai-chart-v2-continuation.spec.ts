@@ -141,8 +141,8 @@ test('AI Chart consumes selected scanner signalId and strategyMode without inven
   await expect(overlay).toBeVisible();
   await expect(overlay).toContainText('scanner-signal-42');
   await expect(page.getByTestId('strategy-mode-SCALPING')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('ENTRY 3');
-  await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('UNAVAILABLE');
+  await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('진입 3');
+  await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('미확인');
   await expect(page.getByTestId('futures-public-context')).toHaveCount(0);
   expect(privateTradingRequests).toEqual([]);
   expect(consoleErrors).toEqual([]);
