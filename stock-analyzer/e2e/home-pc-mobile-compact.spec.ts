@@ -135,15 +135,15 @@ test('Home source separates desktop and mobile and keeps primary labels Korean-f
 });
 
 for (const width of [360, 390, 412, 430]) {
-  test(`Home mobile ${width}px shows professional summary plus one compact detail section without horizontal overflow`, async ({ page }) => {
+  test(`Home mobile ${width}px shows one compact detail section without duplicate overview cards`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 });
     await installHomeRuntime(page);
     await page.goto('/home');
 
     await expect(page.getByTestId('home-mobile-tabs')).toBeVisible();
     await expect(page.getByTestId('home-single-search')).toBeVisible();
-    await expect(page.getByTestId('home-professional-overview')).toBeVisible();
-    await expect(page.getByRole('heading', { name: '오늘의 투자 상태', exact: true })).toBeVisible();
+    await expect(page.getByTestId('home-professional-overview')).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: '오늘의 투자 상태', exact: true })).toHaveCount(0);
     await expect(page.getByTestId('home-market-summary')).toBeVisible();
     await expect(page.getByTestId('home-signal-summary')).toHaveCount(0);
     await expect(page.getByTestId('home-watchlist-summary')).toHaveCount(0);
