@@ -238,7 +238,7 @@ function bitgetAccountMode(value: unknown): 'classic' | 'uta' {
   throw new Error('BITGET_ACCOUNT_MODE_INVALID');
 }
 
-function assertBitgetUtaTradeReadPermission(value: unknown) {
+function bitgetModeFromAccountInfo(value: unknown): 'classic' | 'uta' {
   if (!record(value)) throw new Error('BITGET_ACCOUNT_INFO_RESPONSE_INVALID');
   const code = typeof value.code === 'string' || typeof value.code === 'number'
     ? String(value.code)
@@ -254,9 +254,10 @@ function assertBitgetUtaTradeReadPermission(value: unknown) {
   if (!permissions.every((permission) => typeof permission === 'string')) {
     throw new Error('BITGET_ACCOUNT_INFO_RESPONSE_INVALID');
   }
-  if (!permissions.some((permission) => permission.trim().toLowerCase() === 'uta_trade')) {
-    throw new AccountReadonlyError('BITGET_PERMISSION_DENIED');
-  }
+  const normalized = permissions.map((permission) => permission.trim().toLowerCase());
+  return normalized.some((permission) => permission === 'uta_trade' || permission === 'uta_mgt')
+    ? 'uta'
+    : 'classic';
 }
 
 function bitgetUtaData(value: unknown, code: string): Row {
@@ -377,9 +378,11 @@ export async function readBitgetSnapshot(
   } catch (error) {
     if (error instanceof AccountReadonlyError && error.code === 'BITGET_NOT_UTA') {
       mode = 'classic';
-    } else if (error instanceof AccountReadonlyError && error.code === 'BITGET_PERMISSION_DENIED') {
-      await transport(prepareBitgetUtaAccountInfo(credentials), signal).then(assertBitgetUtaTradeReadPermission);
-      mode = 'uta';
+    } else if (error instanceof AccountReadonlyError
+      && (error.code === 'BITGET_PERMISSION_DENIED' || error.code === 'BITGET_REQUEST_REJECTED')) {
+      mode = bitgetModeFromAccountInfo(
+        await transport(prepareBitgetUtaAccountInfo(credentials), signal),
+      );
     } else {
       throw error;
     }

@@ -95,6 +95,68 @@ test('vault-backed Bitget Classic reader probes v3 safely then emits only allowl
   assert.equal(serialized.includes('BITGET_KEY_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('BITGET_PASSPHRASE_RUNTIME_TEST_ONLY'), false);
 });
 
+test('vault-backed Bitget falls back to permissionless account info when the UTA settings probe rejects a Classic account', async () => {
+  const paths: string[] = [];
+  const readers = createVaultBackedAccountReaders({
+    repositoryFactory: () => repositoryFor('bitget'),
+    decryptCredentials: () => ({
+      apiKey: 'BITGET_KEY_RUNTIME_TEST_ONLY',
+      secretKey: 'BITGET_SECRET_RUNTIME_TEST_ONLY',
+      passphrase: 'BITGET_PASSPHRASE_RUNTIME_TEST_ONLY',
+    }),
+    fetchImpl: async (input) => {
+      const url = new URL(String(input));
+      paths.push(url.pathname);
+      if (url.pathname === '/api/v3/account/settings') {
+        return new Response(JSON.stringify({
+          code: '99999',
+          msg: 'UNTRUSTED_PROVIDER_MESSAGE',
+          data: null,
+        }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v3/account/info') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          msg: 'success',
+          data: { permissions: [] },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v2/mix/position/all-position') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', leverage: '2' }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v2/mix/order/orders-pending') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: { entrustedList: [], endId: '' },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        code: '00000',
+        data: [{ marginCoin: 'USDT', accountEquity: '100', available: '90' }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+
+  const result = await readers.bitget!(SCOPE);
+  assert.equal(result.connected, true);
+  assert.deepEqual(new Set(paths), new Set([
+    '/api/v3/account/settings',
+    '/api/v3/account/info',
+    '/api/v2/mix/account/accounts',
+    '/api/v2/mix/position/all-position',
+    '/api/v2/mix/order/orders-pending',
+  ]));
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes('BITGET_KEY_RUNTIME_TEST_ONLY'), false);
+  assert.equal(serialized.includes('BITGET_SECRET_RUNTIME_TEST_ONLY'), false);
+  assert.equal(serialized.includes('BITGET_PASSPHRASE_RUNTIME_TEST_ONLY'), false);
+  assert.equal(serialized.includes('99999'), false);
+  assert.equal(serialized.includes('UNTRUSTED_PROVIDER_MESSAGE'), false);
+});
+
 test('vault-backed Bitget classifies non-2xx JSON error bodies before generic HTTP status fallback', async () => {
   for (const fixture of [
     { code: '40009', expected: 'BITGET_AUTH_FAILED' },
