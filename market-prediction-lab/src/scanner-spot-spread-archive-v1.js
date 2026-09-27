@@ -142,6 +142,7 @@ export function buildScannerSpotSpreadObservationV1({
 
   const observationCore = {
     contract: SCANNER_SPOT_SPREAD_ARCHIVE_V1,
+    producerCodeSha: sha,
     researchCodeSha: sha,
     market: "CRYPTO_SPOT",
     exchange: "UPBIT",
@@ -195,6 +196,89 @@ export function buildScannerSpotSpreadObservationV1({
   });
 }
 
+function observationRecordCore(row) {
+  const producerCodeSha = exactResearchSha(row?.producerCodeSha ?? row?.researchCodeSha);
+  const researchCodeSha = exactResearchSha(row?.researchCodeSha ?? row?.producerCodeSha);
+  const fields = {
+    contract: row?.contract,
+    researchCodeSha,
+    market: row?.market,
+    exchange: row?.exchange,
+    providerMarket: row?.providerMarket,
+    symbol: row?.symbol,
+    observedAt: row?.observedAt,
+    providerTimestamp: row?.providerTimestamp,
+    capturedAtMs: row?.capturedAtMs,
+    sourceDigest: row?.sourceDigest,
+    bestBid: row?.bestBid,
+    bestAsk: row?.bestAsk,
+    spreadBps: row?.spreadBps,
+    bidDepthNotional: row?.bidDepthNotional,
+    askDepthNotional: row?.askDepthNotional,
+    depthLevels: row?.depthLevels,
+    microstructureSnapshotDigest: row?.microstructureSnapshotDigest,
+  };
+  return row?.producerCodeSha == null
+    ? fields
+    : { contract: fields.contract, producerCodeSha, ...fields };
+}
+
+export function assertScannerSpotSpreadObservationRecordV1(row) {
+  const producerCodeSha = exactResearchSha(row?.producerCodeSha ?? row?.researchCodeSha);
+  const researchCodeSha = exactResearchSha(row?.researchCodeSha ?? row?.producerCodeSha);
+  const blockers = [];
+  if (row?.schemaVersion !== 1
+      || row?.artifactType !== "SPOT_SPREAD_OBSERVATION"
+      || row?.status !== "SPOT_SPREAD_OBSERVATION_READY") blockers.push("SPOT_SPREAD_RECORD_CONTRACT_INVALID");
+  if (!producerCodeSha || !researchCodeSha || producerCodeSha !== researchCodeSha) blockers.push("SPOT_SPREAD_RECORD_PRODUCER_SHA_INVALID");
+  if (row?.contract !== SCANNER_SPOT_SPREAD_ARCHIVE_V1
+      || row?.market !== "CRYPTO_SPOT"
+      || row?.exchange !== "UPBIT"
+      || !exactSymbol(row?.symbol)
+      || row?.providerMarket !== `KRW-${exactSymbol(row?.symbol) ?? ""}`) {
+    blockers.push("SPOT_SPREAD_RECORD_IDENTITY_INVALID");
+  }
+  if (!Number.isSafeInteger(row?.providerTimestamp) || row.providerTimestamp <= 0
+      || !Number.isSafeInteger(row?.capturedAtMs) || row.capturedAtMs <= 0
+      || typeof row?.observedAt !== "string" || !Number.isFinite(Date.parse(row.observedAt))) {
+    blockers.push("SPOT_SPREAD_RECORD_TIME_INVALID");
+  }
+  if (!/^[0-9a-f]{64}$/u.test(String(row?.sourceDigest ?? ""))
+      || !/^[0-9a-f]{64}$/u.test(String(row?.microstructureSnapshotDigest ?? ""))
+      || !/^[0-9a-f]{64}$/u.test(String(row?.observationDigest ?? ""))) {
+    blockers.push("SPOT_SPREAD_RECORD_DIGEST_REQUIRED");
+  }
+  if (![row?.bestBid,row?.bestAsk,row?.spreadBps,row?.bidDepthNotional,row?.askDepthNotional].every(
+    (value) => Number.isFinite(value) && value >= 0,
+  ) || !(row?.bestBid > 0) || !(row?.bestAsk > row?.bestBid)
+      || !Number.isSafeInteger(row?.depthLevels) || row.depthLevels < 1) {
+    blockers.push("SPOT_SPREAD_RECORD_NUMERICS_INVALID");
+  }
+  if (row?.rawPrivateDataUsed !== false
+      || row?.economicSampleCredit !== 0
+      || row?.profitabilityClaimAllowed !== false
+      || row?.automaticPromotionAuthority !== false
+      || row?.safety?.executionAuthority !== "NONE"
+      || row?.safety?.financialMutationAllowed !== false
+      || row?.safety?.liveOrderAllowed !== false
+      || row?.safety?.privateTradingApiAllowed !== false
+      || row?.safety?.publicDataOnly !== true
+      || row?.safety?.immutable !== true
+      || row?.safety?.historicalBackfillAllowed !== false
+      || row?.safety?.syntheticSpreadAllowed !== false
+      || row?.safety?.currentSpreadHistoricalBackfillAllowed !== false) {
+    blockers.push("SPOT_SPREAD_RECORD_SAFETY_INVALID");
+  }
+  const core = observationRecordCore(row);
+  if (row?.observationDigest !== hash(core)) blockers.push("SPOT_SPREAD_RECORD_DIGEST_MISMATCH");
+  if (blockers.length) {
+    const error = new Error("SPOT_SPREAD_OBSERVATION_RECORD_INVALID");
+    error.blockers = [...new Set(blockers)].sort();
+    throw error;
+  }
+  return row;
+}
+
 async function safeRoot(value) {
   const raw = String(value ?? "").trim();
   if (!raw || !isAbsolute(raw)) throw new Error("SPOT_SPREAD_STATE_ROOT_MUST_BE_ABSOLUTE");
@@ -217,26 +301,34 @@ async function safeRoot(value) {
   return root;
 }
 
-export async function persistScannerSpotSpreadObservationV1({ stateRoot, ...input } = {}) {
-  const built = buildScannerSpotSpreadObservationV1(input);
-  if (built.status !== "READY") return built;
+export async function persistScannerSpotSpreadObservationRecordV1({ stateRoot, observation } = {}) {
+  assertScannerSpotSpreadObservationRecordV1(observation);
   const root = await safeRoot(stateRoot);
-  const directory = join(root, "spread-observations", built.observation.symbol);
+  const directory = join(root, "spread-observations", observation.symbol);
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  const filename = `${built.observation.providerTimestamp}-${built.observation.observationDigest}.json`;
+  const filename = `${observation.providerTimestamp}-${observation.observationDigest}.json`;
   const path = join(directory, filename);
-  const bytes = `${JSON.stringify(built.observation, null, 2)}\n`;
+  const bytes = `${JSON.stringify(observation, null, 2)}\n`;
   try {
     await writeFile(path, bytes, { encoding: "utf8", mode: 0o600, flag: "wx" });
-    return deepFreeze({ ...built, persistence: { status: "created", path } });
+    return deepFreeze({ status: "created", path, observationDigest: observation.observationDigest });
   } catch (error) {
     if (error?.code !== "EEXIST") throw error;
     const existing = JSON.parse(await readFile(path, "utf8"));
-    if (hash(existing) !== hash(built.observation)) {
-      throw new Error("SPOT_SPREAD_OBSERVATION_CONTENT_CONFLICT");
-    }
-    return deepFreeze({ ...built, persistence: { status: "already_present", path } });
+    assertScannerSpotSpreadObservationRecordV1(existing);
+    if (hash(existing) !== hash(observation)) throw new Error("SPOT_SPREAD_OBSERVATION_CONTENT_CONFLICT");
+    return deepFreeze({ status: "already_present", path, observationDigest: observation.observationDigest });
   }
+}
+
+export async function persistScannerSpotSpreadObservationV1({ stateRoot, ...input } = {}) {
+  const built = buildScannerSpotSpreadObservationV1(input);
+  if (built.status !== "READY") return built;
+  const persistence = await persistScannerSpotSpreadObservationRecordV1({
+    stateRoot,
+    observation: built.observation,
+  });
+  return deepFreeze({ ...built, persistence });
 }
 
 export function summarizeScannerSpotSpreadArchiveV1({
@@ -266,11 +358,17 @@ export function summarizeScannerSpotSpreadArchiveV1({
     });
   }
 
-  const valid = observations.filter((row) =>
-    row?.schemaVersion === 1
+  const valid = observations.filter((row) => {
+    try {
+      assertScannerSpotSpreadObservationRecordV1(row);
+    } catch {
+      return false;
+    }
+    const producerSha = exactResearchSha(row?.producerCodeSha ?? row?.researchCodeSha);
+    return row?.schemaVersion === 1
     && row?.artifactType === "SPOT_SPREAD_OBSERVATION"
     && row?.status === "SPOT_SPREAD_OBSERVATION_READY"
-    && row?.researchCodeSha === sha
+    && producerSha != null
     && row?.symbol === normalizedSymbol
     && row?.market === "CRYPTO_SPOT"
     && row?.exchange === "UPBIT"
@@ -281,7 +379,8 @@ export function summarizeScannerSpotSpreadArchiveV1({
     && /^[0-9a-f]{64}$/u.test(row.observationDigest)
     && Number.isSafeInteger(row.providerTimestamp)
     && Number.isFinite(row.spreadBps)
-    && row.spreadBps >= 0);
+    && row.spreadBps >= 0;
+  });
 
   const dedup = new Map();
   for (const row of valid) dedup.set(row.observationDigest, row);
@@ -304,6 +403,9 @@ export function summarizeScannerSpotSpreadArchiveV1({
   const missingBucketCount = expectedBucketCount == null ? null : Math.max(0, expectedBucketCount - covered.size);
   const historicalReplayReady = expectedBucketCount != null && expectedBucketCount > 0 && missingBucketCount === 0;
   const spreads = ordered.map((row) => row.spreadBps);
+  const producerCodeShas = [...new Set(ordered
+    .map((row) => exactResearchSha(row?.producerCodeSha ?? row?.researchCodeSha))
+    .filter(Boolean))].sort();
   const status = historicalReplayReady
     ? "READY"
     : ordered.length > 0
@@ -312,11 +414,13 @@ export function summarizeScannerSpotSpreadArchiveV1({
 
   const core = {
     contract: SCANNER_SPOT_SPREAD_ARCHIVE_V1,
-    researchCodeSha: sha,
+    consumerResearchCodeSha: sha,
     market: "CRYPTO_SPOT",
     exchange: "UPBIT",
     symbol: normalizedSymbol,
     observationCount: ordered.length,
+    producerCodeShaCount: producerCodeShas.length,
+    producerCodeShas,
     firstObservedAt: ordered[0]?.observedAt ?? null,
     lastObservedAt: ordered.at(-1)?.observedAt ?? null,
     requiredStartTime: rangeValid ? start : null,
@@ -338,6 +442,7 @@ export function summarizeScannerSpotSpreadArchiveV1({
     blockers: historicalReplayReady
       ? []
       : [ordered.length > 0 ? SPOT_SPREAD_ARCHIVE_FIRST_ZERO : SPOT_SPREAD_OWNER_RESOLVES],
+    researchCodeSha: sha,
     ...core,
     archiveDigest: hash(core),
     ownerReady: ordered.length > 0,
@@ -361,6 +466,8 @@ export function summarizeScannerSpotSpreadArchiveV1({
       syntheticSpreadAllowed: false,
       currentSpreadHistoricalBackfillAllowed: false,
       scheduleActivated: false,
+      crossProducerShaAccumulationAllowed: true,
+      producerShaProvenanceRequired: true,
     },
   });
 }
