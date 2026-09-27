@@ -2,6 +2,7 @@ import {
   prepareBitgetAccount,
   prepareBitgetPendingOrders,
   prepareBitgetPositions,
+  prepareBitgetUtaAccountInfo,
   prepareBitgetUtaAccountSettings,
   prepareBitgetUtaAssets,
   prepareBitgetUtaPendingOrders,
@@ -95,10 +96,12 @@ async function readUpbitOpenOrderSnapshot(
 function bitgetApplicationFailure(code: string) {
   if (code === '25245') return new AccountReadonlyError('BITGET_NOT_UTA');
   if (code === '40018' || code === '40038') return new AccountReadonlyError('BITGET_IP_NOT_ALLOWED');
-  if (code === '40014') return new AccountReadonlyError('BITGET_PERMISSION_DENIED');
-  if (code === '40006' || code === '40009' || code === '40036') return new AccountReadonlyError('BITGET_AUTH_FAILED');
+  if (code === '40014' || code === '40025' || code === '40040') return new AccountReadonlyError('BITGET_PERMISSION_DENIED');
+  if (code === '40006' || code === '40009' || code === '40012' || code === '40036' || code === '40037') {
+    return new AccountReadonlyError('BITGET_AUTH_FAILED');
+  }
   if (code === '40008') return new AccountReadonlyError('BITGET_TIMESTAMP_REJECTED', true);
-  if (code === '40017' || code === '40034' || code === '25200') return new AccountReadonlyError('BITGET_PARAMETER_REJECTED');
+  if (code === '40017' || code === '40034' || code === '400172' || code === '25200') return new AccountReadonlyError('BITGET_PARAMETER_REJECTED');
   if (code === '25003' || code === '25004' || code === '40725' || code === '40808' || code === '45001') {
     return new AccountReadonlyError('PROVIDER_UNAVAILABLE', true);
   }
@@ -235,6 +238,27 @@ function bitgetAccountMode(value: unknown): 'classic' | 'uta' {
   throw new Error('BITGET_ACCOUNT_MODE_INVALID');
 }
 
+function assertBitgetUtaTradeReadPermission(value: unknown) {
+  if (!record(value)) throw new Error('BITGET_ACCOUNT_INFO_RESPONSE_INVALID');
+  const code = typeof value.code === 'string' || typeof value.code === 'number'
+    ? String(value.code)
+    : '';
+  if (!code) throw new Error('BITGET_ACCOUNT_INFO_RESPONSE_INVALID');
+  if (code !== '00000') throw bitgetApplicationFailure(code);
+
+  const payload = value.data;
+  if (!record(payload) || !Array.isArray(payload.permissions)) {
+    throw new Error('BITGET_ACCOUNT_INFO_RESPONSE_INVALID');
+  }
+  const permissions = payload.permissions;
+  if (!permissions.every((permission) => typeof permission === 'string')) {
+    throw new Error('BITGET_ACCOUNT_INFO_RESPONSE_INVALID');
+  }
+  if (!permissions.some((permission) => permission.trim().toLowerCase() === 'uta_trade')) {
+    throw new AccountReadonlyError('BITGET_PERMISSION_DENIED');
+  }
+}
+
 function bitgetUtaData(value: unknown, code: string): Row {
   if (!record(value)) throw new Error(code);
   const providerCode = typeof value.code === 'string' || typeof value.code === 'number'
@@ -353,6 +377,9 @@ export async function readBitgetSnapshot(
   } catch (error) {
     if (error instanceof AccountReadonlyError && error.code === 'BITGET_NOT_UTA') {
       mode = 'classic';
+    } else if (error instanceof AccountReadonlyError && error.code === 'BITGET_PERMISSION_DENIED') {
+      await transport(prepareBitgetUtaAccountInfo(credentials), signal).then(assertBitgetUtaTradeReadPermission);
+      mode = 'uta';
     } else {
       throw error;
     }
