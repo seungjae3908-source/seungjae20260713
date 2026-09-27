@@ -78,3 +78,25 @@ test('portfolio preserves risk and exposure caps in its disclosed assumptions', 
   assert.equal(result.assumptions.themeExposureCap, 0.40);
   assert.equal(result.assumptions.maxGrossExposure, 1);
 });
+
+
+test('portfolio applies indicator invalidation on next bar open', () => {
+  const a = candles();
+  const signal = a[34].ts;
+  const invalidTs = a[37].ts;
+  const result = replayLongCashRunnerPortfolio({
+    candidates: [{ id: 'A', symbol: 'A', signalTimestamp: signal, priorityScore: 1, theme: { primary: 'T1' } }],
+    candlesBySymbol: { A: a },
+    runnerControlBySymbol: {
+      A: {
+        [String(invalidTs)]: { state: 'INVALID', trailAtrMult: 1.5, exitNextOpen: true },
+      },
+    },
+    initialCapital: 1_000_000,
+    costs: { feeBps: 15 },
+  });
+  assert.equal(result.tradeCount, 1);
+  assert.equal(result.ledger[0].exitReason, 'INDICATOR_INVALID_NEXT_OPEN');
+  assert.equal(result.ledger[0].exitTs, a[38].ts);
+  assert.equal(result.assumptions.indicatorAdaptiveRunnerSupported, true);
+});
