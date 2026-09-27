@@ -121,7 +121,7 @@ test('immutable research SHA is mandatory', () => {
   assert.deepEqual(result.blockers, ['IMMUTABLE_RESEARCH_SHA_REQUIRED']);
 });
 
-test('CRYPTO_SPOT SWING 4H Promotion identity is not silently rewritten into the 60m observer lane', () => {
+test('CRYPTO_SPOT SWING 4H Promotion identity attaches only to the exact 4H observer lane', () => {
   const spot = card({
     assetClass: 'coin_spot',
     market: 'spot',
@@ -131,12 +131,25 @@ test('CRYPTO_SPOT SWING 4H Promotion identity is not silently rewritten into the
     assetType: 'coin',
     direction: 'LONG',
     action: 'BUY',
+    expiresAt: '2026-08-20T12:00:00.000Z',
   });
-  const result = resolveForwardObserverCanonicalMetadata({
+  const exact = resolveForwardObserverCanonicalMetadata({
+    card: spot,
+    lane: { market: 'CRYPTO_SPOT', timeframe: '4H' },
+    researchCodeSha: SHA,
+  });
+  assert.deepEqual(exact.blockers, []);
+  assert.ok(exact.paperCandidate);
+  assert.equal(exact.paperCandidate.signal.timeframe, '4H');
+  assert.equal(exact.paperCandidate.signal.horizon, 12);
+  assert.equal(exact.paperCandidate.signal.market, 'CRYPTO_SPOT');
+  assert.equal(exact.paperCandidate.executionAuthority, 'NONE');
+
+  const wrongLane = resolveForwardObserverCanonicalMetadata({
     card: spot,
     lane: { market: 'CRYPTO_SPOT', timeframe: '60m' },
     researchCodeSha: SHA,
   });
-  assert.equal(result.paperCandidate, null);
-  assert.ok(result.blockers.includes('PROMOTION_TIMEFRAME_MISMATCH'));
+  assert.equal(wrongLane.paperCandidate, null);
+  assert.ok(wrongLane.blockers.includes('PROMOTION_TIMEFRAME_MISMATCH'));
 });
