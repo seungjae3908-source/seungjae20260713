@@ -135,7 +135,11 @@ test("stranded recovery workflow is approval-gated, one-shot, and refuses a seco
   assert.match(workflow, /agent_hub_rollover_v2\.py resolve/);
   assert.doesNotMatch(workflow, /issues\/(?:660|838)\/comments\?per_page=100/);
   assert.doesNotMatch(workflow, /issue\?\.number !== (?:660|838)/);
-  assert.match(workflow, /--paginate --slurp/);
+  assert.match(workflow, /gh api --paginate "repos\/\$REPOSITORY\/issues\/\$HUB_ISSUE_NUMBER\/comments\?per_page=100"/);
+  assert.match(workflow, /jq -sr --arg owner "\$recovery_owner" --arg expected "\$recovery_expected"/);
+  assert.match(workflow, /flatten\(1\)/);
+  assert.doesNotMatch(workflow, /comments_json=/);
+  assert.doesNotMatch(workflow, /--paginate --slurp/);
   assert.match(workflow, /approve-canonical-shadow-recovery/);
   assert.match(workflow, /actions\/artifacts\?per_page=100/);
   assert.ok(
