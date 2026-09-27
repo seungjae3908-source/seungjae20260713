@@ -10,6 +10,12 @@ const STOCK_MARKETS = new Set(["KR_STOCK", "US_STOCK"]);
 const CASH_MARKETS = new Set(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT"]);
 const SHA40 = /^[0-9a-f]{40}$/iu;
 const SHA64 = /^[0-9a-f]{64}$/iu;
+const SCANNER_DATASET_PROFILE_BY_MARKET = Object.freeze({
+  KR_STOCK: Object.freeze({ profileId: "KR_STOCK:SCANNER_SWING_60M", timeframe: "60m" }),
+  US_STOCK: Object.freeze({ profileId: "US_STOCK:SCANNER_SWING_60M", timeframe: "60m" }),
+  CRYPTO_SPOT: Object.freeze({ profileId: "CRYPTO_SPOT:SCANNER_SWING_4H", timeframe: "4H" }),
+  CRYPTO_FUTURES: Object.freeze({ profileId: "CRYPTO_FUTURES:SCANNER_SWING_60M", timeframe: "60m" }),
+});
 
 function deepFreeze(value) {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
@@ -27,6 +33,16 @@ function finite(value) {
 
 function sha256Text(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]));
+}
+
+function sha256CanonicalObject(value) {
+  return createHash("sha256").update(JSON.stringify(canonical(value)), "utf8").digest("hex");
 }
 
 function mean(values) {
@@ -183,8 +199,85 @@ function validateResult(result, identity, window, label) {
   return [...new Set(blockers)];
 }
 
-function validateDatasetEvidence(identity, datasetAudit, stockUniverseBiasAudit) {
+function validateScannerDatasetSnapshotBinding(identity, datasetAudit) {
   const blockers = [];
+  const expected = SCANNER_DATASET_PROFILE_BY_MARKET[identity.market];
+  if (!expected || identity.timeframe !== expected.timeframe) {
+    blockers.push("QUALITY_SCANNER_TIMEFRAME_PROFILE_MISMATCH");
+  }
+  const manifest = datasetAudit?.snapshotManifest;
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    blockers.push("QUALITY_SCANNER_DATASET_SNAPSHOT_MANIFEST_REQUIRED");
+    return blockers;
+  }
+  if (manifest.contract !== "research-dataset-snapshot-manifest/v1" || manifest.schemaVersion !== 1) {
+    blockers.push("QUALITY_SCANNER_DATASET_SNAPSHOT_CONTRACT_INVALID");
+  }
+  if (manifest.profileId !== expected?.profileId) blockers.push("QUALITY_SCANNER_DATASET_PROFILE_MISMATCH");
+  if (manifest.market !== identity.market) blockers.push("QUALITY_SCANNER_DATASET_MARKET_MISMATCH");
+  if (String(manifest.researchSha ?? "").toLowerCase() !== String(identity.researchCodeSha).toLowerCase()) {
+    blockers.push("QUALITY_SCANNER_DATASET_RESEARCH_SHA_MISMATCH");
+  }
+  if (manifest.datasetSnapshotHash !== identity.datasetSnapshotHash) {
+    blockers.push("QUALITY_SCANNER_DATASET_SNAPSHOT_HASH_MISMATCH");
+  }
+  const scope = manifest.scope;
+  if (!scope || typeof scope !== "object" || Array.isArray(scope)) {
+    blockers.push("QUALITY_SCANNER_DATASET_SCOPE_INVALID");
+  } else {
+    if (scope.timeframe !== expected?.timeframe || scope.timeframe !== identity.timeframe) {
+      blockers.push("QUALITY_SCANNER_DATASET_TIMEFRAME_MISMATCH");
+    }
+    if (!Array.isArray(scope.symbols)
+        || !scope.symbols.map((value) => String(value).toUpperCase()).includes(String(identity.symbol).toUpperCase())) {
+      blockers.push("QUALITY_SCANNER_DATASET_SYMBOL_MISSING");
+    }
+    if (!SHA64.test(String(scope.primaryDatasetDigest ?? "")) || scope.publicDataOnly !== true) {
+      blockers.push("QUALITY_SCANNER_DATASET_SCOPE_EVIDENCE_INVALID");
+    }
+  }
+  if (!SHA64.test(String(manifest.marketReadinessHash ?? ""))
+      || !SHA64.test(String(manifest.evidenceDigest ?? ""))
+      || !SHA64.test(String(manifest.manifestDigest ?? ""))) {
+    blockers.push("QUALITY_SCANNER_DATASET_DIGEST_INVALID");
+  }
+  const safety = manifest.safety ?? {};
+  if (safety.immutable !== true
+      || safety.contentAddressed !== true
+      || safety.profileScoped !== true
+      || safety.publicDataOnly !== true
+      || safety.syntheticImputation !== false
+      || safety.zeroImputation !== false
+      || safety.currentValueHistoricalBackfill !== false
+      || safety.futureLeakage !== false
+      || safety.economicCredit !== false
+      || safety.executionAuthority !== "NONE") {
+    blockers.push("QUALITY_SCANNER_DATASET_SAFETY_INVALID");
+  }
+  if (scope && SHA64.test(String(manifest.marketReadinessHash ?? "")) && SHA64.test(String(manifest.evidenceDigest ?? ""))) {
+    const expectedSnapshotHash = sha256CanonicalObject({
+      market: manifest.market,
+      profileId: manifest.profileId,
+      scope,
+      marketReadinessHash: manifest.marketReadinessHash,
+      evidenceDigest: manifest.evidenceDigest,
+    });
+    if (expectedSnapshotHash !== manifest.datasetSnapshotHash) {
+      blockers.push("QUALITY_SCANNER_DATASET_CONTENT_HASH_MISMATCH");
+    }
+  }
+  if (SHA64.test(String(manifest.manifestDigest ?? ""))) {
+    const core = { ...manifest };
+    delete core.manifestDigest;
+    if (sha256CanonicalObject(core) !== manifest.manifestDigest) {
+      blockers.push("QUALITY_SCANNER_DATASET_MANIFEST_DIGEST_MISMATCH");
+    }
+  }
+  return [...new Set(blockers)];
+}
+
+function validateDatasetEvidence(identity, datasetAudit, stockUniverseBiasAudit) {
+  const blockers = [...validateScannerDatasetSnapshotBinding(identity, datasetAudit)];
   if (datasetAudit?.eligible !== true) blockers.push("QUALITY_DATASET_AUDIT_NOT_ELIGIBLE");
   const safeguards = datasetAudit?.safeguards ?? {};
   if (safeguards.lookaheadBlocked !== true) blockers.push("QUALITY_DATASET_LOOKAHEAD_GUARD_MISSING");

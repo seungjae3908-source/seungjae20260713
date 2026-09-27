@@ -7,11 +7,28 @@ import test from "node:test";
 import { promisify } from "node:util";
 
 import { TRANSACTION_COST_COMPONENTS } from "../../market-intelligence-sidecar/src/transaction-cost-evidence.mjs";
+import { buildResearchDatasetSnapshotManifestV1 } from "../../research-production/src/research-dataset-snapshot-store.mjs";
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(new URL("../..", import.meta.url).pathname);
 const CLI = path.join(ROOT, "market-prediction-lab", "scripts", "run-scanner-quality-artifact-producer-v1.js");
 const SHA = "a".repeat(40);
+const DATASET_MANIFEST = buildResearchDatasetSnapshotManifestV1({
+  researchSha: SHA,
+  createdAt: "2026-09-27T00:00:00.000Z",
+  profileId: "CRYPTO_FUTURES:SCANNER_SWING_60M",
+  evidence: {
+    benchmarkDatasetDigest: "1".repeat(64),
+    fundingHistoryDigest: "2".repeat(64), fundingCoverage: 0.95,
+    longShortHistoryDigest: "3".repeat(64), longShortCoverage: 0.96, longShortTrainingParityConfirmed: true,
+    openInterestHistoryDigest: "4".repeat(64), openInterestCoverage: 0.97, openInterestTrainingParityConfirmed: true,
+    sentimentHistoryDigest: "5".repeat(64), sentimentCoverage: 0.95, sentimentTemporalParityConfirmed: true,
+  },
+  scope: {
+    timeframe: "60m", symbols: ["BTCUSDT"], startTime: 1_699_999_000_000, endTime: 1_700_100_000_000,
+    primaryDatasetDigest: "6".repeat(64), universeDigest: null, publicDataOnly: true,
+  },
+});
 const identity = {
   strategyId: "CRYPTO_FUTURES_SWING_V1_LONG",
   strategyVersion: "signal-profile-v1",
@@ -21,7 +38,7 @@ const identity = {
   symbol: "BTCUSDT",
   timeframe: "60m",
   direction: "LONG",
-  datasetSnapshotHash: "c".repeat(64),
+  datasetSnapshotHash: DATASET_MANIFEST.datasetSnapshotHash,
 };
 
 function fold() {
@@ -134,6 +151,7 @@ async function fixture(root, invalidCost = false) {
     }],
     datasetAudit: {
       eligible: true,
+      snapshotManifest: DATASET_MANIFEST,
       safeguards: { lookaheadBlocked: true, closedCandlesOnly: true, survivorshipProtected: true },
     },
     transactionCostEvidence: costs(),

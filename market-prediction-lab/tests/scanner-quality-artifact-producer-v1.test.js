@@ -6,11 +6,56 @@ import {
   materializeForwardObserverScannerQualityArtifactV1,
 } from "../src/scanner-quality-artifact-producer-v1.js";
 import { TRANSACTION_COST_COMPONENTS } from "../../market-intelligence-sidecar/src/transaction-cost-evidence.mjs";
+import { buildResearchDatasetSnapshotManifestV1 } from "../../research-production/src/research-dataset-snapshot-store.mjs";
 
 const SHA = "a".repeat(40);
 const DATASET = "b".repeat(64);
 const PARAMS = "c".repeat(64);
 const START = Date.parse("2025-01-01T00:00:00.000Z");
+
+function futuresEvidence() {
+  return {
+    benchmarkDatasetDigest: "1".repeat(64),
+    fundingHistoryDigest: "2".repeat(64), fundingCoverage: 0.95,
+    longShortHistoryDigest: "3".repeat(64), longShortCoverage: 0.96, longShortTrainingParityConfirmed: true,
+    openInterestHistoryDigest: "4".repeat(64), openInterestCoverage: 0.97, openInterestTrainingParityConfirmed: true,
+    sentimentHistoryDigest: "5".repeat(64), sentimentCoverage: 0.95, sentimentTemporalParityConfirmed: true,
+  };
+}
+function spotEvidence() {
+  return {
+    benchmarkDatasetDigest: "6".repeat(64),
+    sentimentHistoryDigest: "7".repeat(64), sentimentCoverage: 0.95, sentimentTemporalParityConfirmed: true,
+  };
+}
+function stockEvidence() {
+  return {
+    benchmarkDatasetDigest: "8".repeat(64),
+    sentimentHistoryDigest: "9".repeat(64), sentimentCoverage: 0.95, sentimentTemporalParityConfirmed: true,
+    foreignFlowHistoryDigest: "a".repeat(64), foreignFlowCoverage: 0.95, foreignFlowTemporalParityConfirmed: true,
+    institutionFlowHistoryDigest: "b".repeat(64), institutionFlowCoverage: 0.95, institutionFlowTemporalParityConfirmed: true,
+  };
+}
+function scannerSnapshot({ profileId, timeframe, symbols, evidence }) {
+  return buildResearchDatasetSnapshotManifestV1({
+    researchSha: SHA,
+    createdAt: "2026-09-27T00:00:00.000Z",
+    profileId,
+    evidence,
+    scope: {
+      timeframe,
+      symbols,
+      startTime: START,
+      endTime: START + 100 * 60 * 60 * 1000,
+      primaryDatasetDigest: "d".repeat(64),
+      universeDigest: null,
+      publicDataOnly: true,
+    },
+  });
+}
+const FUTURES_DATASET_MANIFEST = scannerSnapshot({
+  profileId: "CRYPTO_FUTURES:SCANNER_SWING_60M", timeframe: "60m", symbols: ["BTCUSDT"], evidence: futuresEvidence(),
+});
 
 const identity = Object.freeze({
   strategyId: "CRYPTO_FUTURES_SWING_V1_LONG",
@@ -21,7 +66,7 @@ const identity = Object.freeze({
   symbol: "BTCUSDT",
   timeframe: "60m",
   direction: "LONG",
-  datasetSnapshotHash: DATASET,
+  datasetSnapshotHash: FUTURES_DATASET_MANIFEST.datasetSnapshotHash,
 });
 
 function fold(number, base) {
@@ -152,6 +197,7 @@ function costEvidence(overrides = {}) {
 
 const datasetAudit = Object.freeze({
   eligible: true,
+  snapshotManifest: FUTURES_DATASET_MANIFEST,
   safeguards: {
     lookaheadBlocked: true,
     closedCandlesOnly: true,
@@ -234,11 +280,15 @@ test("exact fold window binding is mandatory", () => {
 });
 
 test("stock quality requires point-in-time removed-name universe audit", () => {
+  const stockManifest = scannerSnapshot({
+    profileId: "KR_STOCK:SCANNER_SWING_60M", timeframe: "60m", symbols: ["005930"], evidence: stockEvidence(),
+  });
   const stockIdentity = {
     ...identity,
     market: "KR_STOCK",
     symbol: "005930",
     direction: "BUY",
+    datasetSnapshotHash: stockManifest.datasetSnapshotHash,
   };
   const f = fold(1, START);
   const p = packet(f);
@@ -265,7 +315,7 @@ test("stock quality requires point-in-time removed-name universe audit", () => {
     identity: stockIdentity,
     folds: [f],
     foldResults: [stockPacket],
-    datasetAudit,
+    datasetAudit: { ...datasetAudit, snapshotManifest: stockManifest },
     transactionCostEvidence: costs,
   });
   assert.equal(built.status, "BLOCKED_DATA");
@@ -275,7 +325,7 @@ test("stock quality requires point-in-time removed-name universe audit", () => {
     identity: stockIdentity,
     folds: [f],
     foldResults: [stockPacket],
-    datasetAudit,
+    datasetAudit: { ...datasetAudit, snapshotManifest: stockManifest },
     transactionCostEvidence: costs,
     stockUniverseBiasAudit: {
       status: "point_in_time_bias_gate_passed",
@@ -287,6 +337,53 @@ test("stock quality requires point-in-time removed-name universe audit", () => {
     },
   });
   assert.equal(built.status, "READY");
+});
+
+test("Scanner dataset binding rejects hidden 1h reuse and accepts only exact Scanner-owned timeframe manifest", () => {
+  const adaptiveSpot = buildResearchDatasetSnapshotManifestV1({
+    researchSha: SHA,
+    createdAt: "2026-09-27T00:00:00.000Z",
+    profileId: "CRYPTO_SPOT:SWING",
+    evidence: spotEvidence(),
+    scope: {
+      timeframe: "1h", symbols: ["BTC"], startTime: START, endTime: START + 100 * 60 * 60 * 1000,
+      primaryDatasetDigest: "e".repeat(64), universeDigest: null, publicDataOnly: true,
+    },
+  });
+  const spotIdentity = {
+    ...identity,
+    strategyId: "CRYPTO_SPOT_SWING_V1_BUY",
+    market: "CRYPTO_SPOT",
+    symbol: "BTC",
+    timeframe: "4H",
+    direction: "BUY",
+    datasetSnapshotHash: adaptiveSpot.datasetSnapshotHash,
+  };
+  const f = fold(1, START);
+  const blocked = buildScannerQualityEntryV1({
+    identity: spotIdentity,
+    folds: [f],
+    foldResults: [{}],
+    datasetAudit: { ...datasetAudit, snapshotManifest: adaptiveSpot },
+    transactionCostEvidence: costEvidence({ market: "CRYPTO_SPOT" }),
+  });
+  assert.equal(blocked.status, "BLOCKED_DATA");
+  assert.equal(blocked.reason, "QUALITY_DATASET_EVIDENCE_BLOCKED");
+  assert.ok(blocked.details.blockers.includes("QUALITY_SCANNER_DATASET_PROFILE_MISMATCH"));
+  assert.ok(blocked.details.blockers.includes("QUALITY_SCANNER_DATASET_TIMEFRAME_MISMATCH"));
+
+  const exactSpot = scannerSnapshot({
+    profileId: "CRYPTO_SPOT:SCANNER_SWING_4H", timeframe: "4H", symbols: ["BTC"], evidence: spotEvidence(),
+  });
+  const exactIdentity = { ...spotIdentity, datasetSnapshotHash: exactSpot.datasetSnapshotHash };
+  const exact = buildScannerQualityEntryV1({
+    identity: exactIdentity,
+    folds: [f],
+    foldResults: [{}],
+    datasetAudit: { ...datasetAudit, snapshotManifest: exactSpot },
+    transactionCostEvidence: costEvidence({ market: "CRYPTO_SPOT" }),
+  });
+  assert.equal(exact.reason, "QUALITY_EXACT_BINDING_MISMATCH");
 });
 
 test("materializer produces consumer-compatible immutable quality and manifest digests", () => {

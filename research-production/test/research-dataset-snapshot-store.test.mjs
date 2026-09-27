@@ -25,6 +25,12 @@ function futuresEvidence(){
     sentimentHistoryDigest:H('5'),sentimentCoverage:0.93,sentimentTemporalParityConfirmed:true,
   };
 }
+function spotEvidence(){
+  return {
+    benchmarkDatasetDigest:H('7'),
+    sentimentHistoryDigest:H('8'),sentimentCoverage:0.95,sentimentTemporalParityConfirmed:true,
+  };
+}
 
 function scope(overrides={}){
   return {
@@ -79,6 +85,33 @@ test('profile timeframe is enforced, symbol order is canonicalized, and duplicat
   const sorted=build({scope:scope({symbols:['ETHUSDT','BTCUSDT']})});
   assert.deepEqual(sorted.scope.symbols,['BTCUSDT','ETHUSDT']);
   assert.throws(()=>build({scope:scope({symbols:['BTCUSDT','BTCUSDT']})}),/unique canonical symbols/);
+});
+
+test('Scanner SWING dataset profiles use exact 60m/4H labels while adaptive research profiles remain unchanged',()=>{
+  const futuresScanner=buildResearchDatasetSnapshotManifestV1({
+    researchSha:SHA,createdAt:AT,profileId:'CRYPTO_FUTURES:SCANNER_SWING_60M',
+    evidence:futuresEvidence(),scope:scope({timeframe:'60m'}),
+  });
+  assert.equal(futuresScanner.scope.timeframe,'60m');
+  assert.equal(futuresScanner.profileId,'CRYPTO_FUTURES:SCANNER_SWING_60M');
+
+  const spotScanner=buildResearchDatasetSnapshotManifestV1({
+    researchSha:SHA,createdAt:AT,profileId:'CRYPTO_SPOT:SCANNER_SWING_4H',
+    evidence:spotEvidence(),scope:scope({timeframe:'4H'}),
+  });
+  assert.equal(spotScanner.market,'CRYPTO_SPOT');
+  assert.equal(spotScanner.scope.timeframe,'4H');
+  assert.equal(spotScanner.profileId,'CRYPTO_SPOT:SCANNER_SWING_4H');
+
+  const adaptiveSpot=buildResearchDatasetSnapshotManifestV1({
+    researchSha:SHA,createdAt:AT,profileId:'CRYPTO_SPOT:SWING',
+    evidence:spotEvidence(),scope:scope({timeframe:'1h'}),
+  });
+  assert.equal(adaptiveSpot.scope.timeframe,'1h');
+  assert.throws(()=>buildResearchDatasetSnapshotManifestV1({
+    researchSha:SHA,createdAt:AT,profileId:'CRYPTO_SPOT:SCANNER_SWING_4H',
+    evidence:spotEvidence(),scope:scope({timeframe:'1h'}),
+  }),/TIMEFRAME_MISMATCH/);
 });
 
 test('profile, symbol set and time range are part of immutable dataset identity',()=>{

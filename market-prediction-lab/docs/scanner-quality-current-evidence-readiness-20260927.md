@@ -146,3 +146,26 @@ Why this cannot be transferred into current Forward Scanner SWING quality:
 5. final holdout remains locked with N=0.
 
 Therefore this real artifact is useful historical evidence, but receives zero Scanner S/A quality transfer credit.
+
+
+## Dataset-timeframe owner hardening — latest Draft update
+
+The Dataset Snapshot owner now has Scanner-specific immutable profiles instead of reusing Adaptive Tournament labels:
+- KR_STOCK SWING -> `KR_STOCK:SCANNER_SWING_60M` / `60m`
+- US_STOCK SWING -> `US_STOCK:SCANNER_SWING_60M` / `60m`
+- CRYPTO_SPOT SWING -> `CRYPTO_SPOT:SCANNER_SWING_4H` / `4H`
+- CRYPTO_FUTURES SWING -> `CRYPTO_FUTURES:SCANNER_SWING_60M` / `60m`
+
+Adaptive research profiles remain unchanged (`SWING=1h`). No implicit `1h -> 60m` or `1h -> 4H` relabel is allowed.
+
+The Scanner quality producer now requires the exact Scanner-owned Dataset Snapshot manifest and verifies:
+- market / symbol / research SHA;
+- exact Scanner profileId + timeframe;
+- datasetSnapshotHash content identity;
+- manifestDigest integrity;
+- immutable/public-only/no-imputation safety flags.
+
+Therefore the Spot owner/binding code gap is closed in this Draft. The current real-evidence FIRST_ZERO becomes:
+`SPOT_SCANNER_4H_CANONICAL_SNAPSHOT_AND_EXACT_OOS_WF_PACKET_NOT_MATERIALIZED`.
+
+This is still BLOCKED_DATA and creates no quality.json, economic credit, promotion authority, or execution authority.
