@@ -183,6 +183,27 @@ on:
       - .github/workflows/paper-forward-no-deploy-readonly-diagnostics.yml
       - .github/workflows/paper-forward-schedule-disable.yml
       - .github/workflows/paper-forward-schedule-validation.yml
+      - .github/workflows/prediction-lab-scanner-spot-4h-dataset-evidence.yml
+      - .github/workflows/prediction-lab-scanner-spot-spread-archive-validation.yml
+      - .github/workflows/prediction-lab-scanner-spot-spread-forward-collector-dormant.yml
+      - market-prediction-lab/docs/scanner-quality-current-evidence-readiness-20260927.md
+      - market-prediction-lab/scripts/run-scanner-quality-artifact-producer-v1.js
+      - market-prediction-lab/scripts/run-scanner-spot-4h-dataset-materializer-v1.js
+      - market-prediction-lab/scripts/run-scanner-spot-spread-archive-v1.js
+      - market-prediction-lab/src/scanner-quality-artifact-producer-v1.js
+      - market-prediction-lab/src/scanner-spot-4h-dataset-materializer-v1.js
+      - market-prediction-lab/src/scanner-spot-spread-archive-v1.js
+      - market-prediction-lab/src/upbit-spot-history.js
+      - market-prediction-lab/tests/scanner-quality-artifact-producer-cli-v1.test.js
+      - market-prediction-lab/tests/scanner-quality-artifact-producer-v1.test.js
+      - market-prediction-lab/tests/scanner-spot-4h-dataset-materializer-v1.test.js
+      - market-prediction-lab/tests/scanner-spot-spread-archive-v1.test.js
+      - market-prediction-lab/tests/scanner-spot-spread-forward-collector-dormant.test.js
+      - market-prediction-lab/tests/upbit-spot-history.test.js
+      - research-production/src/research-canonical-dataset-component.mjs
+      - research-production/src/research-dataset-snapshot-store.mjs
+      - research-production/test/research-canonical-dataset-component.test.mjs
+      - research-production/test/research-dataset-snapshot-store.test.mjs
   push:
     branches:
       - agent/paper-forward-schedule-activation-v1
@@ -440,6 +461,27 @@ jobs:
             .github/workflows/paper-forward-schedule-no-deploy-activation.yml
             .github/workflows/paper-forward-no-deploy-readonly-diagnostics.yml
             .github/workflows/paper-forward-schedule-disable.yml
+            .github/workflows/prediction-lab-scanner-spot-4h-dataset-evidence.yml
+            .github/workflows/prediction-lab-scanner-spot-spread-archive-validation.yml
+            .github/workflows/prediction-lab-scanner-spot-spread-forward-collector-dormant.yml
+            market-prediction-lab/docs/scanner-quality-current-evidence-readiness-20260927.md
+            market-prediction-lab/scripts/run-scanner-quality-artifact-producer-v1.js
+            market-prediction-lab/scripts/run-scanner-spot-4h-dataset-materializer-v1.js
+            market-prediction-lab/scripts/run-scanner-spot-spread-archive-v1.js
+            market-prediction-lab/src/scanner-quality-artifact-producer-v1.js
+            market-prediction-lab/src/scanner-spot-4h-dataset-materializer-v1.js
+            market-prediction-lab/src/scanner-spot-spread-archive-v1.js
+            market-prediction-lab/src/upbit-spot-history.js
+            market-prediction-lab/tests/scanner-quality-artifact-producer-cli-v1.test.js
+            market-prediction-lab/tests/scanner-quality-artifact-producer-v1.test.js
+            market-prediction-lab/tests/scanner-spot-4h-dataset-materializer-v1.test.js
+            market-prediction-lab/tests/scanner-spot-spread-archive-v1.test.js
+            market-prediction-lab/tests/scanner-spot-spread-forward-collector-dormant.test.js
+            market-prediction-lab/tests/upbit-spot-history.test.js
+            research-production/src/research-canonical-dataset-component.mjs
+            research-production/src/research-dataset-snapshot-store.mjs
+            research-production/test/research-canonical-dataset-component.test.mjs
+            research-production/test/research-dataset-snapshot-store.test.mjs
           )
           test "${#changed[@]}" -ge 1
           test "${#changed[@]}" -le "${#allowed[@]}"
