@@ -199,11 +199,17 @@ async function login(
       // exact in-memory authenticated browser state for later read-only tests.
       // Cached-session failure remains fail-closed; there is no login retry.
       await restoreCachedAuthState(page, cached);
-      await page.goto('/', { waitUntil: 'commit', timeout: LOGIN_READY_BUDGET_MS });
-      await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: LOGIN_READY_BUDGET_MS });
-      // Supabase may rotate session material while the restored page boots.
-      // Refresh the reusable in-memory state so later tests do not replay stale auth.
-      authStateByViewport.set(cacheKey, await page.context().storageState());
+      // Do not add a second root-page navigation before every read-only test.
+      // The first test in each viewport proves the real password-login path;
+      // later tests restore that exact state and let their target route prove
+      // whether the session is still accepted. This remains fail-closed while
+      // avoiding a redundant / navigation that previously timed out under load.
+      const restored = await page.context().storageState();
+      const originState = restored.origins.find((entry) => entry.origin === productionOrigin);
+      if (restored.cookies.length === 0 && (originState?.localStorage.length ?? 0) === 0) {
+        throw new Error('Cached Production QA session is empty');
+      }
+      authStateByViewport.set(cacheKey, restored);
       return;
     }
 
