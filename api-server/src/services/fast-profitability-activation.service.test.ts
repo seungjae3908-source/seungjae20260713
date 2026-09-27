@@ -159,7 +159,7 @@ function observerState(observations: ForwardRecommendationObservation[]): Forwar
     cursors: {
       KR_SWING_60M: 0,
       US_SWING_60M: 0,
-      SPOT_SWING_60M: 0,
+      SPOT_SWING_4H: 0,
       FUTURES_SWING_60M: 0,
     },
     observations,
