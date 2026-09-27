@@ -181,6 +181,57 @@ async function restoreCachedAuthState(page: Page, state: CachedAuthState) {
   }
 }
 
+function accessTokenFromUnknown(value: unknown, depth = 0): string | null {
+  if (depth > 6 || value == null) return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const token = accessTokenFromUnknown(item, depth + 1);
+      if (token) return token;
+    }
+    return null;
+  }
+  if (typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.access_token === 'string' && record.access_token.length > 20) return record.access_token;
+  for (const item of Object.values(record)) {
+    const token = accessTokenFromUnknown(item, depth + 1);
+    if (token) return token;
+  }
+  return null;
+}
+
+function accessTokenFromStorageState(state: CachedAuthState) {
+  const originState = state.origins.find((entry) => entry.origin === productionOrigin);
+  for (const entry of originState?.localStorage ?? []) {
+    try {
+      const token = accessTokenFromUnknown(JSON.parse(entry.value));
+      if (token) return token;
+    } catch {
+      // Non-JSON localStorage entries are unrelated to Supabase auth.
+    }
+  }
+  throw new Error('PRODUCTION_QA_ACCESS_TOKEN_UNAVAILABLE');
+}
+
+async function validateCachedAuthState(page: Page, state: CachedAuthState) {
+  const token = accessTokenFromStorageState(state);
+  const response = await page.request.get(new URL('/api/auth/profile', baseUrl).toString(), {
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    timeout: LOGIN_READY_BUDGET_MS,
+    failOnStatusCode: false,
+  });
+  if (response.status() !== 200) {
+    throw new Error(`PRODUCTION_QA_CACHED_SESSION_PROFILE_${response.status()}`);
+  }
+  const payload = await response.json().catch(() => null);
+  if (!payload || typeof payload !== 'object' || typeof (payload as Record<string, unknown>).id !== 'string') {
+    throw new Error('PRODUCTION_QA_CACHED_SESSION_PROFILE_INVALID');
+  }
+}
+
 async function login(
   page: Page,
   testInfo: TestInfo,
@@ -204,12 +255,8 @@ async function login(
       // later tests restore that exact state and let their target route prove
       // whether the session is still accepted. This remains fail-closed while
       // avoiding a redundant / navigation that previously timed out under load.
-      const restored = await page.context().storageState();
-      const originState = restored.origins.find((entry) => entry.origin === productionOrigin);
-      if (restored.cookies.length === 0 && (originState?.localStorage.length ?? 0) === 0) {
-        throw new Error('Cached Production QA session is empty');
-      }
-      authStateByViewport.set(cacheKey, restored);
+      await validateCachedAuthState(page, cached);
+      authStateByViewport.set(cacheKey, await page.context().storageState());
       return;
     }
 
