@@ -21,5 +21,8 @@ test('direct AI Chart prioritizes the route request without adding document-leve
   expect(main.match(/import\('\.\/App'\)/g)).toHaveLength(1);
   expect(main.match(/import\('@\/pages\/ai-chart'\)/g)).toHaveLength(1);
   expect(main.indexOf(routeImport)).toBeLessThan(main.indexOf(appImport));
-  expect(main).not.toMatch(/setTimeout\([^)]*(?:App|ai-chart)/s);
+  expect(main).toContain("querySelectorAll<HTMLLinkElement>('link[rel=\"modulepreload\"]')");
+  expect(main).toContain("setAttribute('fetchpriority', 'high')");
+  expect(main).toContain('function startApplicationGraph()');
+  expect(main).toMatch(/if \(directAiChartColdRoute\) \{\s*window\.setTimeout\(startApplicationGraph, 0\);\s*\} else \{\s*startApplicationGraph\(\);\s*\}/);
 });
