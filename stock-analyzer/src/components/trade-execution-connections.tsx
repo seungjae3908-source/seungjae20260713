@@ -50,22 +50,22 @@ const PROVIDERS: Record<Provider, {
   fields: [string, string, string?];
 }> = {
   toss: {
-    title: 'Toss · 주식 실주문',
+    title: 'Toss · 주식',
     subtitle: '국내/미국주식 · 주문조회 + 주문',
     fields: ['Client ID', 'Client Secret', 'Account Seq'],
   },
   kiwoom: {
-    title: 'Kiwoom · 주식 실주문',
+    title: 'Kiwoom · 주식',
     subtitle: '국내/미국주식 · 주문조회 + 주문',
     fields: ['App Key', 'Secret Key'],
   },
   upbit: {
-    title: 'Upbit · 현물 실주문',
+    title: 'Upbit · 현물',
     subtitle: 'KRW 현물 · 주문조회 + 주문',
     fields: ['Access Key', 'Secret Key'],
   },
   bitget: {
-    title: 'Bitget · 선물 실주문',
+    title: 'Bitget · 선물',
     subtitle: 'USDT 선물 · 주문조회 + 주문',
     fields: ['API Key', 'Secret Key', 'Passphrase'],
   },
@@ -264,16 +264,12 @@ export function TradeExecutionConnections({
     }
   }
 
-  return <section className="mt-4 min-w-0 rounded-2xl border border-card-border bg-card p-4 shadow-sm sm:p-5" data-testid="trade-execution-connections">
-    <div className="flex min-w-0 items-start justify-between gap-3">
-      <div className="min-w-0">
-        <div className="flex items-center gap-2">
-          <KeyRound className="h-5 w-5 shrink-0 text-primary" />
-          <h2 className="text-sm font-extrabold">실주문 거래 연결</h2>
-        </div>
-        <p className="mt-1 text-xs leading-5 text-muted-foreground">
-          조회 전용 연결과 별도입니다. 거래키는 계좌조회·주문조회·주문 권한만 사용하며 출금·이체 권한은 허용하지 않습니다.
-        </p>
+  return <section className="mt-3 min-w-0 rounded-2xl border border-card-border bg-card p-3 shadow-sm sm:p-4" data-testid="trade-execution-connections">
+    <div className="flex items-center justify-between gap-3">
+      <div className="flex min-w-0 items-center gap-2">
+        <KeyRound className="h-5 w-5 shrink-0 text-primary" />
+        <h2 className="truncate text-base font-bold">실주문 연결</h2>
+        <span className="rounded-full bg-warning/10 px-2 py-0.5 text-[10px] font-bold text-warning">별도 권한</span>
       </div>
       <button
         type="button"
@@ -285,14 +281,7 @@ export function TradeExecutionConnections({
       </button>
     </div>
 
-    <div className="mt-3 flex items-start gap-2 rounded-2xl border border-warning/30 bg-warning/10 p-3 text-xs leading-5 text-warning">
-      <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
-      <p>
-        거래키 저장 ≠ 실주문 활성화입니다. REAL ORDER·Private API·전체 활성화 승인·provider 게이트가 모두 ON이고 주문 직전 Risk 검사를 통과해야만 전송됩니다. 자동 실주문은 LIVE_AUTOMATIC_TRADING_ENABLED가 추가로 ON이어야 합니다.
-      </p>
-    </div>
-
-    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+    <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
       {visibleProviders.map((provider) => {
         const connection = connections[provider];
         const connected = connection?.configured === true && connection.accountMode === 'live';
@@ -300,77 +289,71 @@ export function TradeExecutionConnections({
         const serverEnabled = status.liveExecutionServerEnabled?.[provider] === true;
         const automaticServerEnabled = status.liveAutomaticExecutionServerEnabled?.[provider] === true;
         const readiness = status.liveExecutionReadiness?.[provider];
-        return <article key={provider} className="min-w-0 rounded-2xl border border-card-border bg-background p-3" data-testid={`live-connection-${provider}`}>
-          <div className="flex min-w-0 items-start justify-between gap-2">
-            <div className="min-w-0">
-              <p className="truncate text-sm font-extrabold">{PROVIDERS[provider].title}</p>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">{PROVIDERS[provider].subtitle}</p>
-            </div>
+        return <article key={provider} className="min-w-0 rounded-xl border border-card-border bg-background p-3" data-testid={`live-connection-${provider}`}>
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <p className="truncate text-sm font-bold">{PROVIDERS[provider].title}</p>
             {connected
-              ? <CheckCircle2 className="h-5 w-5 shrink-0 text-positive" />
-              : <AlertTriangle className="h-5 w-5 shrink-0 text-warning" />}
+              ? <CheckCircle2 className="h-4 w-4 shrink-0 text-positive" />
+              : <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />}
           </div>
-          <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4">
-            <StateChip label="거래키" value={connected ? '저장됨' : '미연결'} good={connected} />
-            <StateChip label="provider 검증" value={providerVerified ? '검증됨' : '미검증'} good={providerVerified} />
-            <StateChip label="수동 실주문" value={serverEnabled ? 'ON' : 'OFF'} good={serverEnabled} />
-            <StateChip label="자동 실주문" value={automaticServerEnabled ? 'ON' : 'OFF'} good={automaticServerEnabled} />
+
+          <div className="mt-2 grid grid-cols-2 gap-1.5 text-[10px]">
+            <StateChip label="거래키" value={connected ? '연결' : '미연결'} good={connected} />
+            <StateChip label="검증" value={providerVerified ? '완료' : '대기'} good={providerVerified} />
+            <StateChip label="수동" value={serverEnabled ? 'ON' : 'OFF'} good={serverEnabled} />
+            <StateChip label="자동" value={automaticServerEnabled ? 'ON' : 'OFF'} good={automaticServerEnabled} />
           </div>
-          <p className="mt-2 break-words text-[10px] leading-4 text-muted-foreground">
-            {connection?.lastVerifiedAt ? `마지막 확인 ${new Date(connection.lastVerifiedAt).toLocaleString('ko-KR')}` : '실주문 provider 검증 증거 없음'}
-            {connection?.lastErrorCode ? ` · ${connection.lastErrorCode}` : ''}
-          </p>
-          {readiness && readiness.blockers.length > 0 && <p className="mt-1 break-words text-[10px] leading-4 text-warning">
-            준비 blocker: {readiness.blockers.join(' · ')}
-          </p>}
-          <div className="mt-3 grid grid-cols-3 gap-2">
-            {connected && <button
+
+          <div className="mt-2 flex min-h-5 items-center justify-between gap-2 text-[10px] text-muted-foreground">
+            <span>{connection?.lastVerifiedAt ? new Date(connection.lastVerifiedAt).toLocaleString('ko-KR') : '검증 기록 없음'}</span>
+            {readiness?.blockers?.length ? <span className="shrink-0 font-semibold text-warning">미준비 {readiness.blockers.length}</span> : null}
+          </div>
+
+          {connection?.lastErrorCode ? <p className="mt-1 truncate text-[10px] font-semibold text-warning">연결 오류</p> : null}
+
+          <div className="mt-2 grid grid-cols-2 gap-1.5">
+            {connected ? <button
               type="button"
               disabled={busy === provider}
               onClick={() => void verifyConnection(provider)}
-              className="min-h-10 rounded-xl border border-positive/30 px-2 text-[11px] font-extrabold text-positive disabled:opacity-50"
+              className="min-h-10 rounded-lg border border-positive/30 px-2 text-[11px] font-bold text-positive disabled:opacity-50"
             >
               {busy === provider ? '검증 중' : '실계좌 검증'}
-            </button>}
+            </button> : null}
             <button
               type="button"
               onClick={() => openSetup(provider)}
-              className={`min-h-10 rounded-xl bg-primary px-2 text-[11px] font-extrabold text-primary-foreground ${connected ? '' : 'col-span-3'}`}
+              className={`min-h-10 rounded-lg bg-primary px-2 text-[11px] font-bold text-primary-foreground ${connected ? '' : 'col-span-2'}`}
             >
-              {connected ? '거래키 교체' : '거래키 연결'}
+              {connected ? '키 변경' : '거래키 연결'}
             </button>
             {connected && disconnectConfirm !== provider ? <button
               type="button"
               onClick={() => setDisconnectConfirm(provider)}
-              className="min-h-10 rounded-xl border border-destructive/30 px-2 text-[11px] font-extrabold text-destructive"
+              className="col-span-2 min-h-9 rounded-lg border border-destructive/30 px-2 text-[11px] font-bold text-destructive"
             >
               연결 해제
             </button> : connected ? <button
               type="button"
               disabled={busy === provider}
               onClick={() => void disconnect(provider)}
-              className="min-h-10 rounded-xl bg-destructive px-2 text-[11px] font-extrabold text-white disabled:opacity-50"
+              className="col-span-2 min-h-9 rounded-lg bg-destructive px-2 text-[11px] font-bold text-white disabled:opacity-50"
             >
               {busy === provider ? '해제 중' : '해제 확인'}
             </button> : null}
           </div>
-          {disconnectConfirm === provider && <button
+          {disconnectConfirm === provider ? <button
             type="button"
             onClick={() => setDisconnectConfirm(null)}
-            className="mt-2 flex min-h-9 w-full items-center justify-center gap-1 rounded-xl border border-card-border text-[11px] font-bold"
+            className="mt-1.5 flex min-h-9 w-full items-center justify-center gap-1 rounded-lg border border-card-border text-[11px] font-bold"
           >
-            <X className="h-3.5 w-3.5" />해제 취소
-          </button>}
+            <X className="h-3.5 w-3.5" />취소
+          </button> : null}
         </article>;
       })}
     </div>
 
-    <div className="mt-3 flex items-center gap-2 rounded-xl bg-secondary/60 p-2 text-[11px] text-muted-foreground">
-      <LockKeyhole className="h-4 w-4 shrink-0" />
-      <span>Secret 원문은 다시 표시하지 않으며 서버 암호화 Vault에만 저장합니다.</span>
-    </div>
-
-    {message && <p role="status" className="mt-3 break-words rounded-xl bg-secondary p-3 text-xs font-bold">{message}</p>}
+    {message ? <p role="status" className="mt-2 break-words rounded-xl bg-secondary px-3 py-2 text-xs font-bold">{friendlyTradeMessage(message)}</p> : null}
 
     {editing && <div className="fixed inset-0 z-50 flex items-end bg-black/50 p-3 sm:items-center sm:justify-center" role="dialog" aria-modal="true" aria-label="실주문 거래키 연결">
       <div className="max-h-[88dvh] w-full max-w-md overflow-y-auto rounded-3xl bg-card p-5 shadow-2xl">
@@ -408,6 +391,12 @@ export function TradeExecutionConnections({
       </div>
     </div>}
   </section>;
+}
+
+function friendlyTradeMessage(value: string) {
+  if (value === 'TRADE_AUTOMATION_STORAGE_UNAVAILABLE') return '거래 연결 저장소 확인 필요';
+  if (/SAFETY_CONTRACT_FAILED/.test(value)) return '안전 검증 실패';
+  return value;
 }
 
 function StateChip({ label, value, good }: { label: string; value: string; good: boolean }) {

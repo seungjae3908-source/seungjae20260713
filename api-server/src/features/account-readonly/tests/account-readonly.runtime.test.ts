@@ -72,8 +72,8 @@ test('vault-backed Bitget Classic reader probes v3 safely then emits only allowl
     decryptCredentials: () => ({ apiKey: 'BITGET_KEY_RUNTIME_TEST_ONLY', secretKey: 'BITGET_SECRET_RUNTIME_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_RUNTIME_TEST_ONLY' }),
     fetchImpl: async (input, init) => {
       const url = new URL(String(input)); assert.equal(url.origin, 'https://api.bitget.com'); paths.push(url.pathname); methods.push(String(init?.method));
-      if (url.pathname === '/api/v3/account/info') {
-        return new Response(JSON.stringify({ code: '00000', data: { permissions: [] } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname === '/api/v3/account/settings') {
+        return new Response(JSON.stringify({ code: '25245', msg: 'The account is not the unified account mode', data: null }), { status: 400, headers: { 'Content-Type': 'application/json' } });
       }
       const body = url.pathname.includes('/position/')
         ? { code: '00000', data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', leverage: '2' }] }
@@ -85,7 +85,7 @@ test('vault-backed Bitget Classic reader probes v3 safely then emits only allowl
   });
   const result = await readers.bitget!(SCOPE);
   assert.deepEqual(new Set(paths), new Set([
-    '/api/v3/account/info',
+    '/api/v3/account/settings',
     '/api/v2/mix/account/accounts',
     '/api/v2/mix/position/all-position',
     '/api/v2/mix/order/orders-pending',
@@ -93,6 +93,28 @@ test('vault-backed Bitget Classic reader probes v3 safely then emits only allowl
   assert.ok(methods.every((method) => method === 'GET')); assert.equal(result.connected, true); assert.equal(result.openOrders?.[0]?.id, 'BG-OPEN-1'); assert.ok(Math.abs((result.openOrders?.[0]?.remainingQuantity ?? 0) - 0.06) < 1e-12); assert.equal(result.orderRequests, 0); assert.equal(result.withdrawalRequests, 0);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('BITGET_KEY_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('BITGET_PASSPHRASE_RUNTIME_TEST_ONLY'), false);
+});
+
+test('vault-backed Bitget classifies non-2xx JSON error bodies before generic HTTP status fallback', async () => {
+  for (const fixture of [
+    { code: '40009', expected: 'BITGET_AUTH_FAILED' },
+    { code: '40017', expected: 'BITGET_PARAMETER_REJECTED' },
+  ]) {
+    const readers = createVaultBackedAccountReaders({
+      repositoryFactory: () => repositoryFor('bitget'),
+      decryptCredentials: () => ({ apiKey: 'BITGET_KEY_RUNTIME_TEST_ONLY', secretKey: 'BITGET_SECRET_RUNTIME_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_RUNTIME_TEST_ONLY' }),
+      fetchImpl: async () => new Response(
+        JSON.stringify({ code: fixture.code, msg: 'redacted-provider-message', data: null }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } },
+      ),
+    });
+    await assert.rejects(
+      readers.bitget!(SCOPE),
+      (error: unknown) => error instanceof AccountReadonlyError
+        && error.code === fixture.expected
+        && !error.message.includes('redacted-provider-message'),
+    );
+  }
 });
 
 test('vault-backed Bitget UTA reader uses only v3 signed GET reads and maps assets positions and open orders', async () => {
@@ -105,10 +127,10 @@ test('vault-backed Bitget UTA reader uses only v3 signed GET reads and maps asse
       assert.equal(url.origin, 'https://api.bitget.com');
       seen.push({ path: url.pathname, search: url.search, method: String(init?.method), body: init?.body });
 
-      if (url.pathname === '/api/v3/account/info') {
+      if (url.pathname === '/api/v3/account/settings') {
         return new Response(JSON.stringify({
           code: '00000',
-          data: { permType: 'read-only', permissions: ['uta_mgt', 'uta_trade'] },
+          data: { accountMode: 'unified', accountLevel: 'basic' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.pathname === '/api/v3/account/assets') {
@@ -147,7 +169,7 @@ test('vault-backed Bitget UTA reader uses only v3 signed GET reads and maps asse
 
   const result = await readers.bitget!(SCOPE);
   assert.deepEqual(new Set(seen.map((row) => row.path)), new Set([
-    '/api/v3/account/info',
+    '/api/v3/account/settings',
     '/api/v3/account/assets',
     '/api/v3/position/current-position',
     '/api/v3/trade/unfilled-orders',
@@ -208,17 +230,37 @@ test('vault-backed Toss reader parses the canonical OpenAPI accounts and holding
           nextCursor: null, hasNext: false,
         },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname === '/api/v1/buying-power') {
+        const currency = url.searchParams.get('currency');
+        return new Response(JSON.stringify({
+          result: {
+            currency,
+            cashBuyingPower: currency === 'KRW' ? '5000000' : '3500.5',
+          },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
       return new Response('{}', { status: 404 });
     },
   });
   const result = await readers.toss!(SCOPE);
-  assert.deepEqual(seen.map((row) => `${row.method} ${row.origin}${row.path}`), [
+  assert.deepEqual(new Set(seen.map((row) => `${row.method} ${row.origin}${row.path}`)), new Set([
     'POST https://openapi.tossinvest.com/oauth2/token',
     'GET https://openapi.tossinvest.com/api/v1/accounts',
     'GET https://openapi.tossinvest.com/api/v1/orders',
     'GET https://openapi.tossinvest.com/api/v1/holdings',
-  ]);
-  assert.equal(seen[1]?.accountHeader, null); assert.equal(seen[2]?.accountHeader, '1'); assert.equal(seen[2]?.search, '?status=OPEN'); assert.equal(seen[3]?.accountHeader, '1');
+    'GET https://openapi.tossinvest.com/api/v1/buying-power',
+  ]));
+  const accountsCall = seen.find((row) => row.path === '/api/v1/accounts');
+  const ordersCall = seen.find((row) => row.path === '/api/v1/orders');
+  const holdingsCall = seen.find((row) => row.path === '/api/v1/holdings');
+  const buyingPowerCalls = seen.filter((row) => row.path === '/api/v1/buying-power');
+  assert.equal(accountsCall?.accountHeader, null);
+  assert.equal(ordersCall?.accountHeader, '1');
+  assert.equal(ordersCall?.search, '?status=OPEN');
+  assert.equal(holdingsCall?.accountHeader, '1');
+  assert.equal(buyingPowerCalls.length, 2);
+  assert.deepEqual(new Set(buyingPowerCalls.map((row) => row.search)), new Set(['?currency=KRW', '?currency=USD']));
+  assert.ok(buyingPowerCalls.every((row) => row.accountHeader === '1' && row.method === 'GET'));
   assert.equal(result.connected, true);
   assert.equal(result.positions?.[0]?.symbol, '005930');
   assert.equal(result.positions?.[0]?.market, 'KR');
@@ -229,10 +271,75 @@ test('vault-backed Toss reader parses the canonical OpenAPI accounts and holding
   assert.equal(result.positions?.[0]?.marketValue, 213000);
   assert.equal(result.positions?.[0]?.unrealizedPnl, 3000);
   assert.ok(Math.abs((result.positions?.[0]?.unrealizedPnlPercent ?? 0) - 1.42857143) < 1e-8);
+  assert.equal(result.accounts?.find((row) => row.market === 'KR')?.buyingPower, 5000000);
+  assert.equal(result.accounts?.find((row) => row.market === 'US')?.buyingPower, 3500.5);
+  assert.equal(result.balances?.find((row) => row.currency === 'KRW')?.available, 5000000);
+  assert.equal(result.balances?.find((row) => row.currency === 'KRW')?.total, null);
+  assert.equal(result.balances?.find((row) => row.currency === 'USD')?.available, 3500.5);
+  assert.equal(result.balances?.find((row) => row.currency === 'USD')?.total, null);
   assert.equal(result.openOrders?.[0]?.id, 'TOSS-OPEN-1'); assert.equal(result.openOrders?.[0]?.remainingQuantity, 6);
   assert.equal(result.orderRequests, 0); assert.equal(result.cancelRequests, 0); assert.equal(result.transferRequests, 0); assert.equal(result.withdrawalRequests, 0);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('TOSS_CLIENT_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('TOSS_SECRET_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('TOSS_TOKEN_RUNTIME_TEST_ONLY'), false);
+});
+
+test('vault-backed Toss keeps holdings connected when one cash buying-power currency is unavailable', async () => {
+  const readers = createVaultBackedAccountReaders({
+    repositoryFactory: () => repositoryFor('toss'),
+    decryptCredentials: () => ({ clientId: 'TOSS_CLIENT_RUNTIME_TEST_ONLY', clientSecret: 'TOSS_SECRET_RUNTIME_TEST_ONLY' }),
+    fetchImpl: async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/oauth2/token') {
+        return new Response(JSON.stringify({ access_token: 'TOSS_TOKEN_RUNTIME_TEST_ONLY', expires_in: 3600 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v1/accounts') {
+        return new Response(JSON.stringify({ result: [{ accountNo: '12345678901', accountSeq: 1, accountType: 'BROKERAGE' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v1/holdings') {
+        return new Response(JSON.stringify({
+          result: {
+            items: [{
+              symbol: '005930', marketCountry: 'KR', currency: 'KRW', quantity: '3',
+              lastPrice: '71000', averagePurchasePrice: '70000',
+              marketValue: { amount: '213000' },
+              profitLoss: { amount: '3000', rate: '0.0142857143' },
+            }],
+          },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v1/orders') {
+        return new Response(JSON.stringify({ result: { orders: [], nextCursor: null, hasNext: false } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v1/buying-power') {
+        const currency = url.searchParams.get('currency');
+        if (currency === 'USD') {
+          return new Response(JSON.stringify({ error: 'forbidden-test-only' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({ result: { currency: 'KRW', cashBuyingPower: '5000000' } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response('{}', { status: 404 });
+    },
+  });
+
+  const result = await readers.toss!(SCOPE);
+  assert.equal(result.connected, true);
+  assert.equal(result.status, 'CONNECTED');
+  assert.equal(result.stale, false);
+  assert.equal(result.errorCode, 'TOSS_BUYING_POWER_AUTH_FAILED');
+  assert.equal(result.positions?.[0]?.symbol, '005930');
+  assert.equal(result.positions?.[0]?.quantity, 3);
+  assert.equal(result.balances?.find((row) => row.currency === 'KRW')?.available, 5000000);
+  assert.equal(result.balances?.some((row) => row.currency === 'USD'), false);
+  assert.equal(result.accounts?.find((row) => row.market === 'KR')?.buyingPower, 5000000);
+  assert.equal(result.accounts?.some((row) => row.market === 'US'), false);
+  assert.equal(result.orderRequests, 0);
+  assert.equal(result.cancelRequests, 0);
+  assert.equal(result.amendRequests, 0);
+  assert.equal(result.transferRequests, 0);
+  assert.equal(result.withdrawalRequests, 0);
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes('forbidden-test-only'), false);
+  assert.equal(serialized.includes('TOSS_TOKEN_RUNTIME_TEST_ONLY'), false);
 });
 
 test('vault-backed Toss reader rejects legacy or malformed holdings instead of reporting connected empty', async () => {
@@ -244,6 +351,11 @@ test('vault-backed Toss reader rejects legacy or malformed holdings instead of r
       if (url.pathname === '/oauth2/token') return new Response(JSON.stringify({ access_token: 'TOSS_TOKEN_RUNTIME_TEST_ONLY', expires_in: 3600 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       if (url.pathname === '/api/v1/accounts') return new Response(JSON.stringify({ result: [{ accountNo: '12345678901', accountSeq: 1, accountType: 'BROKERAGE' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       if (url.pathname === '/api/v1/holdings') return new Response(JSON.stringify({ products: [{ productCode: '005930', quantity: '3' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname === '/api/v1/orders') return new Response(JSON.stringify({ result: { orders: [], nextCursor: null, hasNext: false } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname === '/api/v1/buying-power') {
+        const currency = url.searchParams.get('currency');
+        return new Response(JSON.stringify({ result: { currency, cashBuyingPower: '0' } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
       return new Response('{}', { status: 404 });
     },
   });
