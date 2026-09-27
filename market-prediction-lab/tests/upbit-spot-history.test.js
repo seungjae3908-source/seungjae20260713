@@ -11,6 +11,7 @@ function row(timestamp, price = 100) {
     low_price: price - 1,
     trade_price: price + 0.2,
     candle_acc_trade_volume: 10,
+    candle_acc_trade_price: price * 10,
   };
 }
 
@@ -76,4 +77,27 @@ test("collector uses the candle boundary rather than an intra-candle trade times
     fetchImpl: async () => response(all),
   });
   assert.ok(result.candles.every((item) => item.timestamp % (4 * 60 * 60 * 1000) === 0));
+});
+
+
+test("collector supports exact 60m Scanner context history without relabeling", async () => {
+  const endTime = Date.UTC(2026, 7, 12, 0, 0);
+  const interval = 60 * 60 * 1000;
+  const all = Array.from({ length: 130 }, (_, index) => row(endTime - (index + 1) * interval, 200 + index));
+  const calls = [];
+  const result = await collectUpbitSpotHistory({
+    symbol: "BTC", timeframe: "60m", startTime: endTime - 130 * interval, endTime, minIntervalMs: 0,
+    fetchImpl: async (url) => { calls.push(url); return response(all); },
+  });
+  assert.equal(result.timeframe, "60m");
+  assert.equal(result.intervalMs, interval);
+  assert.ok(calls.every((url) => url.includes("/v1/candles/minutes/60?")));
+  assert.ok(result.candles.every((item) => item.quoteVolume != null && item.quoteVolume >= 0));
+});
+
+test("collector rejects unsupported timeframe instead of silently rewriting it", async () => {
+  await assert.rejects(
+    collectUpbitSpotHistory({ symbol: "BTC", timeframe: "1h", startTime: 1, endTime: 2 }),
+    /unsupported Upbit history timeframe/,
+  );
 });
