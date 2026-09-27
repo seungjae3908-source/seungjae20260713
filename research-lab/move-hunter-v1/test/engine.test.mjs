@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { DIRECTIONS, candlesAtOrBefore, simulateRunner, summarizeRunnerTrials } from '../src/engine.mjs';
+import { summarizeThreeYearProfileReadiness, MOVE_HUNTER_AUDIT_START_MS, MOVE_HUNTER_AUDIT_END_MS } from '../src/readiness.mjs';
+import { ADAPTIVE_MULTI_MARKET_PROFILES_V1 } from '../../../market-prediction-lab/src/adaptive-multi-market-tournament-orchestrator-v1.js';
 
 function candles({start=1_700_000_000_000,count=80,drift=.002}={}){
   const out=[]; let price=100;
