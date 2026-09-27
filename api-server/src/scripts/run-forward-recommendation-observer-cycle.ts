@@ -5,6 +5,11 @@ import { StockSignalScannerService } from '../services/stock-signal-scanner.serv
 import { CryptoSignalScannerService } from '../services/crypto-signal-scanner.service';
 import { CryptoPricePrecisionService } from '../services/scanner-crypto-price-precision.service';
 import { rankScannerCandidates } from '../services/scanner-candidate-ranking.service';
+import {
+  readForwardObserverScannerQualityArtifact,
+  selectForwardObserverScannerBacktests,
+  type ForwardObserverScannerQualityArtifact,
+} from '../services/forward-observer-scanner-quality-consumer.service';
 import { withScannerCanonicalActions } from '../services/scanner-market-action.service';
 import type { ScannerResponse, ScannerSignalCard } from '../services/scanner-signal.types';
 import type { ForwardRecommendationObservation } from '../services/forward-recommendation-observer.service';
@@ -111,7 +116,12 @@ async function withYahooPublicOnlyStockData<T>(operation: () => Promise<T>): Pro
   }
 }
 
-async function scanStockLane(lane: ForwardObserverLane, cursor: number): Promise<ScannerResponse> {
+async function scanStockLane(
+  lane: ForwardObserverLane,
+  cursor: number,
+  scannerQuality: ForwardObserverScannerQualityArtifact | null,
+  researchCodeSha: string,
+): Promise<ScannerResponse> {
   const market = lane.scannerMarket;
   if (market !== 'KR' && market !== 'US') throw new Error('STOCK_LANE_MARKET_INVALID');
   return await withYahooPublicOnlyStockData(async () => {
@@ -124,14 +134,50 @@ async function scanStockLane(lane: ForwardObserverLane, cursor: number): Promise
       batchSize: lane.batchSize,
       strategyMode: 'swing',
     });
+    const sourcedCards = scanned.cards.map((card) => addSource(card, 'yahoo-public'));
+    if (!scannerQuality) {
+      return withScannerCanonicalActions({
+        ...scanned,
+        cards: sourcedCards,
+      });
+    }
+    const qualitySelection = selectForwardObserverScannerBacktests({
+      artifact: scannerQuality,
+      cards: sourcedCards,
+      lane,
+      researchCodeSha,
+    });
+    const ranking = rankScannerCandidates({
+      cards: sourcedCards,
+      market: scanned.market,
+      strategy: 'swing',
+      backtests: qualitySelection.backtests,
+      limit: lane.batchSize,
+    });
     return withScannerCanonicalActions({
       ...scanned,
-      cards: scanned.cards.map((card) => addSource(card, 'yahoo-public')),
+      cards: ranking.cards,
+      execution: {
+        ...scanned.execution,
+        hardFilterPassCount: ranking.diagnostics.hardFilterPassCount,
+        hardFilterRejectedCount: ranking.diagnostics.hardFilterRejectedCount,
+        softCandidateCount: ranking.diagnostics.softCandidateCount,
+        finalDisplayedCount: ranking.diagnostics.finalDisplayedCount,
+        sGradeCount: ranking.diagnostics.sGradeCount,
+        aGradeCount: ranking.diagnostics.aGradeCount,
+        bGradeCount: ranking.diagnostics.bGradeCount,
+        backtestMissingCount: ranking.diagnostics.backtestMissingCount,
+      },
     });
   });
 }
 
-async function scanCryptoLane(lane: ForwardObserverLane, cursor: number): Promise<ScannerResponse> {
+async function scanCryptoLane(
+  lane: ForwardObserverLane,
+  cursor: number,
+  scannerQuality: ForwardObserverScannerQualityArtifact | null,
+  researchCodeSha: string,
+): Promise<ScannerResponse> {
   const market = lane.scannerMarket;
   if (market !== 'spot' && market !== 'futures') throw new Error('CRYPTO_LANE_MARKET_INVALID');
   const scanned = await CryptoSignalScannerService.scan({
@@ -144,10 +190,17 @@ async function scanCryptoLane(lane: ForwardObserverLane, cursor: number): Promis
     batchSize: lane.batchSize,
   });
   const aligned = await CryptoPricePrecisionService.align(market, scanned);
+  const qualitySelection = selectForwardObserverScannerBacktests({
+    artifact: scannerQuality,
+    cards: aligned.cards,
+    lane,
+    researchCodeSha,
+  });
   const ranking = rankScannerCandidates({
     cards: aligned.cards,
     market: aligned.market,
     strategy: 'swing',
+    backtests: qualitySelection.backtests,
     limit: 10,
   });
   const rankedCards = ranking.cards
@@ -239,6 +292,13 @@ async function readState(file: string | null, researchCodeSha: string): Promise<
 async function main(): Promise<void> {
   const researchCodeSha = requiredArgument('research-sha').toLowerCase();
   const outputDir = path.resolve(requiredArgument('output-dir'));
+  const scannerQualityRoot = argument('scanner-quality-root');
+  const scannerQuality = scannerQualityRoot
+    ? await readForwardObserverScannerQualityArtifact({
+      artifactRoot: path.resolve(scannerQualityRoot),
+      researchCodeSha,
+    })
+    : null;
   const stateInput = argument('state-input');
   const state = await readState(stateInput ? path.resolve(stateInput) : null, researchCodeSha);
   const result = await runForwardRecommendationObserverCycle({
@@ -247,8 +307,8 @@ async function main(): Promise<void> {
     dependencies: {
       scanLane: async (lane, cursor) => {
         const response = lane.market === 'KR_STOCK' || lane.market === 'US_STOCK'
-          ? await scanStockLane(lane, cursor)
-          : await scanCryptoLane(lane, cursor);
+          ? await scanStockLane(lane, cursor, scannerQuality, researchCodeSha)
+          : await scanCryptoLane(lane, cursor, scannerQuality, researchCodeSha);
         return attachForwardObserverCanonicalMetadata({ response, lane, researchCodeSha });
       },
       loadFutureBars: async (observation) => observation.identity.market === 'KR_STOCK' || observation.identity.market === 'US_STOCK'
