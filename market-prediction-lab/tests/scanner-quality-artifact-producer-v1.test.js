@@ -313,3 +313,25 @@ test("materializer produces consumer-compatible immutable quality and manifest d
   assert.equal(materialized.artifact.entries[0].executionAuthority, "NONE");
   assert.equal(materialized.profitabilityClaimAllowed, false);
 });
+
+
+test("missing trade segment dimensions fail closed before summarization", () => {
+  const f = fold(1, START);
+  const p = packet(f);
+  p.walkForwardResult = {
+    ...p.walkForwardResult,
+    trades: p.walkForwardResult.trades.map((row, index) =>
+      index === 0 ? { ...row, strategy: undefined, regime: undefined } : row),
+  };
+  const built = buildScannerQualityEntryV1({
+    identity,
+    folds: [f],
+    foldResults: [p],
+    datasetAudit,
+    transactionCostEvidence: costEvidence(),
+  });
+  assert.equal(built.status, "BLOCKED_DATA");
+  assert.equal(built.reason, "QUALITY_BACKTEST_RESULT_INVALID");
+  assert.ok(built.details.blockers.some((value) =>
+    value.includes("TRADE_SEGMENT_DIMENSION_MISSING")));
+});
