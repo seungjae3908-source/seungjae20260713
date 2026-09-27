@@ -100,13 +100,16 @@ test("primary 4H interval gap fails closed", () => {
   );
 });
 
-test("60m context coverage or quote-volume evidence cannot be invented", () => {
-  assert.throws(
-    () => buildScannerSpot4hDatasetMaterializationV1(input({
-      contextHistory: history("60m", HOUR, 1279),
-    })),
-    /60M_CONTEXT_COVERAGE_INCOMPLETE/u,
-  );
+test("60m no-trade gaps are preserved as missing intervals without synthetic fill", () => {
+  const sparse = buildScannerSpot4hDatasetMaterializationV1(input({
+    contextHistory: history("60m", HOUR, 1279),
+  }));
+  assert.equal(sparse.contextEvidence.expectedRowCount, 1280);
+  assert.equal(sparse.contextEvidence.rowCount, 1279);
+  assert.equal(sparse.contextEvidence.missingIntervalCount, 1);
+  assert.equal(sparse.contextEvidence.sparseIntervalsPreserved, true);
+  assert.equal(sparse.contextEvidence.syntheticGapFillAllowed, false);
+
   assert.throws(
     () => buildScannerSpot4hDatasetMaterializationV1(input({
       contextHistory: history("60m", HOUR, 1280, { quote: false }),
