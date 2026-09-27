@@ -52,13 +52,6 @@ export function buildDirectionAwareScannerQualityIndex(packets=[]){
   });
 }
 
-function sameProjectionIdentity(a,b){
-  for(const key of ['market','symbol','timeframe','strategyProfileId','strategyVersion','parameterHash','researchCodeSha','datasetSnapshotHash']){
-    if(String(a?.[key]??'')!==String(b?.[key]??'')) return false;
-  }
-  return dir(a?.direction)===dir(b?.direction);
-}
-
 export function projectQualityIndexToCurrentSymbolMap({
   cards=[],
   index,
@@ -102,19 +95,6 @@ export function projectQualityIndexToCurrentSymbolMap({
         code:'SYMBOL_ONLY_BACKTEST_MAP_CANNOT_REPRESENT_MULTIPLE_DIRECTIONS',
         symbol,
         directions:frozen(directions),
-      }));
-      continue;
-    }
-
-    const selectedIdentity=selected.identity;
-    const conflicting=candidates.some(packet=>packet!==selected&&sameProjectionIdentity(packet.identity,selectedIdentity)===false);
-    if(conflicting&&candidates.length>1){
-      // Even if the current card direction selects one packet, a symbol-only map
-      // cannot carry proof of which direction/profile produced the quality.
-      blockers.push(frozen({
-        code:'SYMBOL_ONLY_BACKTEST_MAP_IDENTITY_COLLISION',
-        symbol,
-        packetCount:candidates.length,
       }));
       continue;
     }
