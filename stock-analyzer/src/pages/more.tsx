@@ -59,13 +59,13 @@ function SettingsCard({ section, onOpen }: { section: SettingsSection; onOpen: (
     <button
       type="button"
       onClick={onOpen}
-      className="relative flex min-h-28 w-full min-w-0 flex-col items-center justify-center gap-2 rounded-2xl border border-card-border bg-card/80 p-3 text-center shadow-sm transition hover:border-primary/30 hover:bg-muted/50 active:scale-[0.99] sm:min-h-32 sm:p-4"
+      className="relative flex min-h-20 w-full min-w-0 items-center gap-3 rounded-xl border border-card-border bg-card/90 px-3 py-3 text-left transition hover:border-primary/30 hover:bg-muted/40 active:scale-[0.99] sm:min-h-24 sm:flex-col sm:justify-center sm:gap-2 sm:text-center"
     >
-      <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
-        <Icon className="h-5 w-5" aria-hidden="true" />
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+        <Icon className="h-4 w-4" aria-hidden="true" />
       </span>
-      <span className="break-keep text-sm font-semibold text-foreground">{section.title}</span>
-      <ChevronRight className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/70" aria-hidden="true" />
+      <span className="min-w-0 break-keep text-sm font-semibold text-foreground">{section.title}</span>
+      <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-muted-foreground/70 sm:absolute sm:right-3 sm:top-1/2 sm:-translate-y-1/2" aria-hidden="true" />
     </button>
   );
 }
@@ -275,7 +275,7 @@ export default function MorePage() {
           {selected ? (
             <DetailPanel section={selected} navigate={navigate} />
           ) : (
-            <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-3" data-testid="settings-compact-grid">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3 lg:grid-cols-3" data-testid="settings-compact-grid">
               {SECTIONS.map((section) => (
                 <SettingsCard
                   key={section.id}
