@@ -79,6 +79,7 @@ jobs:
       SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
       SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
       PUBLIC_BASE_URL: https://lsj119.com
+      TELEGRAM_REMOTE_NODE_OPTIONS: --dns-result-order=ipv4first --no-network-family-autoselection
     steps:
       - uses: actions/checkout@v4
         with:
@@ -404,7 +405,7 @@ jobs:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
         run: |
           set -Eeuo pipefail
-          remote_env="$(printf 'TARGET_SHA=%q PUBLIC_BASE_URL=%q' "$TARGET_SHA" "$PUBLIC_BASE_URL")"
+          remote_env="$(printf 'TARGET_SHA=%q PUBLIC_BASE_URL=%q NODE_OPTIONS=%q' "$TARGET_SHA" "$PUBLIC_BASE_URL" "$TELEGRAM_REMOTE_NODE_OPTIONS")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env node -" <<'NODE'
           const { execFileSync } = require('node:child_process');
@@ -665,8 +666,8 @@ jobs:
           smoke_file="$(mktemp)"
           cleanup() { rm -f "$smoke_file"; }
           trap cleanup EXIT
-          remote_env="$(printf 'TARGET_SHA=%q PRE_ACTIVE_SHA=%q PRE_PM_UPTIME=%q PRE_LOG_SIZE=%q SOURCE_COMMENT_ID=%q PUBLIC_BASE_URL=%q' \
-            "$TARGET_SHA" "$PRE_ACTIVE_SHA" "$PRE_PM_UPTIME" "$PRE_LOG_SIZE" "$SOURCE_COMMENT_ID" "$PUBLIC_BASE_URL")"
+          remote_env="$(printf 'TARGET_SHA=%q PRE_ACTIVE_SHA=%q PRE_PM_UPTIME=%q PRE_LOG_SIZE=%q SOURCE_COMMENT_ID=%q PUBLIC_BASE_URL=%q NODE_OPTIONS=%q' \
+            "$TARGET_SHA" "$PRE_ACTIVE_SHA" "$PRE_PM_UPTIME" "$PRE_LOG_SIZE" "$SOURCE_COMMENT_ID" "$PUBLIC_BASE_URL" "$TELEGRAM_REMOTE_NODE_OPTIONS")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env node -" > "$smoke_file" <<'NODE'
           const fs = require('node:fs');
