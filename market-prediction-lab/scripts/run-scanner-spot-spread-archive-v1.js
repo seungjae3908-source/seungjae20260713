@@ -44,7 +44,7 @@ if (!Number.isInteger(requiredDays) || requiredDays < 1 || requiredDays > 730) {
   throw new Error("SCANNER_SPOT_SPREAD_REQUIRED_DAYS_INVALID");
 }
 
-const capturedAtMs = Date.now();
+const requestStartedAtMs = Date.now();
 const market = `KRW-${symbol}`;
 const response = await fetch(
   `${BASE_URL}/v1/orderbook?markets=${encodeURIComponent(market)}&level=0`,
@@ -59,6 +59,8 @@ if (!response.ok) {
   throw Object.assign(new Error(`UPBIT_ORDERBOOK_HTTP_${response.status}`), { status: response.status });
 }
 const orderbook = await response.json();
+const capturedAtMs = Date.now();
+if (capturedAtMs < requestStartedAtMs) throw new Error("SCANNER_SPOT_SPREAD_CAPTURE_CLOCK_INVALID");
 const persisted = await persistScannerSpotSpreadObservationV1({
   stateRoot: outputDir,
   researchCodeSha,
