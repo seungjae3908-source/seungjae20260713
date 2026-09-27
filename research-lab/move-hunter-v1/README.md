@@ -95,3 +95,46 @@ Runner states:
 Closed-bar state never causes same-close exit. It only changes the next bar's protection or schedules a next-open invalidation exit.
 
 This module has no automatic entry authority, no strategy promotion authority and no execution authority. The fixed archived Runner policies remain the only policies with observed-history comparison evidence; Indicator-Adaptive Runner still requires frozen replay + unused OOS/Forward validation.
+
+
+## Scanner Quality Bridge
+
+Move Hunter now contains a research-only fail-closed bridge that can produce a Scanner-compatible `backtestQuality.status=verified` packet only when exact evidence is supplied for the same strategy/symbol/dataset identity.
+
+Required:
+- exact Scanner strategyProfileId / strategyVersion
+- parameterHash / researchCodeSha / datasetSnapshotHash
+- exact market / symbol / timeframe / direction
+- execution-aware canonical OOS backtest results
+- exact leak-free purged walk-forward fold results
+- complete full-cost evidence, including measured/documented slippage
+- lookahead-protected historical dataset audit
+- survivorship protection
+- KR/US additionally require the point-in-time removed-name stock-universe audit
+- minimum Walk-forward trade count
+
+Metrics are recomputed from canonical trade rows rather than trusting caller-supplied summary numbers.
+
+The bridge is not connected to active Scanner ranking in this PR:
+- activeLaneMutation=false
+- automaticPromotionAuthority=false
+- profitabilityClaimAllowed=false
+- executionAuthority=NONE
+
+## Spot Forward identity plan
+
+Current Spot SWING canonical timeframe remains 4H while Forward Spot is hardcoded to 60m.
+
+The repo already supports:
+- Swing at 4H
+- Upbit 4H public candles through `minutes/240`
+
+Therefore the lower-semantic-change future repair is to keep the canonical Spot SWING 4H definition and make Forward lane timeframes market-specific:
+- KR 60m
+- US 60m
+- Spot 4H
+- Futures 60m
+
+No active Forward/Scanner file is changed by #1407.
+See:
+`docs/spot-forward-4h-alignment-plan-20260927.md`
