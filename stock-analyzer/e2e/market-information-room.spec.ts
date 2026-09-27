@@ -385,7 +385,7 @@ test('all four information rooms support direct routes, reload, history, source 
     await expect(page.getByText(exchange, { exact: true })).toBeVisible();
     await expect(page.getByText('공개 데이터', { exact: true })).toBeVisible();
     await expect(page.getByText('private 요청 0', { exact: true })).toHaveCount(0);
-    await expect(page.getByLabel('데이터 상태').first()).toContainText('출처');
+    await expect(page.getByLabel('데이터 상태')).toHaveCount(0);
     await page.reload();
     await expect(page.getByRole('heading', { name: title })).toBeVisible();
     await page.getByRole('button', { name: '시장정보 새로고침' }).click();
