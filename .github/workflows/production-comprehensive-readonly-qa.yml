@@ -4,8 +4,10 @@ on:
   pull_request:
     paths:
       - .github/workflows/production-comprehensive-readonly-qa.yml
+      - .github/workflows/production-comprehensive-readonly-dispatch-bridge.yml
       - stock-analyzer/playwright.production-comprehensive.config.ts
       - stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts
+      - stock-analyzer/e2e/production-research-center-readonly-qa.spec.ts
       - stock-analyzer/e2e/production-mobile-scroll-readonly-qa.spec.ts
       - stock-analyzer/e2e/production-critical-http-readonly-qa.spec.ts
       - stock-analyzer/e2e/production-performance-readonly-qa.spec.ts
@@ -16,6 +18,11 @@ on:
         description: Exact deployed Production SHA to verify
         required: true
         type: string
+      include_telegram:
+        description: Include Telegram runtime readiness in comprehensive QA
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -38,6 +45,8 @@ jobs:
           const fs = require('node:fs');
           const workflow = fs.readFileSync('.github/workflows/production-comprehensive-readonly-qa.yml', 'utf8');
           const config = fs.readFileSync('stock-analyzer/playwright.production-comprehensive.config.ts', 'utf8');
+          const comprehensiveSpec = fs.readFileSync('stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts', 'utf8');
+          const researchSpec = fs.readFileSync('stock-analyzer/e2e/production-research-center-readonly-qa.spec.ts', 'utf8');
           const liveJob = workflow.split('\n  production-comprehensive-readonly:\n')[1] ?? '';
           const uploadStep = liveJob.split('\n      - name: Upload comprehensive QA evidence\n')[1] ?? '';
 
@@ -62,6 +71,24 @@ jobs:
           }
           if (!liveJob.includes('git show "$QA_HARNESS_SHA:stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts"')) {
             throw new Error('Live comprehensive QA may only overlay the approved QA harness spec when workflow-generation SHA differs');
+          }
+          if (!liveJob.includes('git show "$QA_HARNESS_SHA:stock-analyzer/e2e/production-research-center-readonly-qa.spec.ts"')) {
+            throw new Error('Live comprehensive QA must overlay the approved Research Center QA harness when workflow-generation SHA differs');
+          }
+          if (!workflow.includes('include_telegram:') || !workflow.includes('default: false')) {
+            throw new Error('Telegram runtime QA must remain opt-in and default false');
+          }
+          if (!liveJob.includes('PRODUCTION_QA_INCLUDE_TELEGRAM:')
+            || !workflow.includes('inputs.include_telegram')) {
+            throw new Error('Live comprehensive QA must bind Telegram opt-in explicitly');
+          }
+          if (!comprehensiveSpec.includes("const telegramQaEnabled = process.env.PRODUCTION_QA_INCLUDE_TELEGRAM === 'true';")
+            || !comprehensiveSpec.includes("test.skip(!telegramQaEnabled, 'Telegram runtime QA is isolated to Telegram release');")) {
+            throw new Error('Comprehensive QA must isolate Telegram readiness behind the explicit opt-in');
+          }
+          if (!researchSpec.includes("getByTestId('capability-denied')")
+            || !researchSpec.includes('ADMIN_RESEARCH_CENTER_NOT_EVALUATED')) {
+            throw new Error('Research Center QA must distinguish membership-policy denial from product failure');
           }
           if (!config.includes("trace: 'off'")) {
             throw new Error('Authenticated Production QA must not retain Playwright traces');
@@ -88,6 +115,7 @@ jobs:
       PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
       PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
       PRODUCTION_READONLY_E2E: "true"
+      PRODUCTION_QA_INCLUDE_TELEGRAM: ${{ inputs.include_telegram && 'true' || 'false' }}
       EXPECTED_DEPLOY_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || '' }}
     steps:
       - uses: actions/checkout@v4
@@ -109,6 +137,7 @@ jobs:
           [[ "$EXPECTED_DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
           if [[ "$QA_HARNESS_SHA" == "$EXPECTED_DEPLOY_SHA" ]]; then
             test -s stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts
+            test -s stock-analyzer/e2e/production-research-center-readonly-qa.spec.ts
             echo "QA harness already belongs to the exact deployed SHA; overlay not required."
           else
             git fetch --no-tags --depth 1 origin "$QA_HARNESS_SHA"
@@ -118,6 +147,11 @@ jobs:
             test -s /tmp/production-comprehensive-readonly-qa.spec.ts
             install -m 0644 /tmp/production-comprehensive-readonly-qa.spec.ts \
               stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts
+            git show "$QA_HARNESS_SHA:stock-analyzer/e2e/production-research-center-readonly-qa.spec.ts" \
+              > /tmp/production-research-center-readonly-qa.spec.ts
+            test -s /tmp/production-research-center-readonly-qa.spec.ts
+            install -m 0644 /tmp/production-research-center-readonly-qa.spec.ts \
+              stock-analyzer/e2e/production-research-center-readonly-qa.spec.ts
           fi
 
       - uses: pnpm/action-setup@v4
@@ -193,6 +227,7 @@ jobs:
             echo '- Production DB/app mutations: blocked'
             echo '- private provider/account live requests: blocked or mocked disconnected'
             echo '- actual order/cancel/amend/transfer/withdrawal authority: 0'
+            echo "- Telegram runtime readiness included: ${PRODUCTION_QA_INCLUDE_TELEGRAM}"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload comprehensive QA evidence
