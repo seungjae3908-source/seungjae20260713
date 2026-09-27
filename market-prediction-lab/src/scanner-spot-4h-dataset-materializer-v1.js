@@ -37,7 +37,7 @@ function exactSymbol(value) {
 function finite(value) {
   return typeof value === "number" && Number.isFinite(value);
 }
-function normalizeClosedRows(history, expectedTimeframe, intervalMs, observedAtMs) {
+function normalizeClosedRows(history, expectedTimeframe, intervalMs, observedAtMs, { requireContiguous = true } = {}) {
   if (!history || history.market !== "CRYPTO_SPOT" || history.exchange !== "UPBIT"
       || history.timeframe !== expectedTimeframe || history.intervalMs !== intervalMs
       || !Array.isArray(history.candles)) {
@@ -64,8 +64,14 @@ function normalizeClosedRows(history, expectedTimeframe, intervalMs, observedAtM
         || row.low > Math.min(row.open, row.close, row.high)) {
       throw new Error(`SPOT_SCANNER_${expectedTimeframe.toUpperCase()}_ROW_INVALID`);
     }
-    if (index > 0 && row.timestamp !== rows[index - 1].timestamp + intervalMs) {
-      throw new Error(`SPOT_SCANNER_${expectedTimeframe.toUpperCase()}_INTERVAL_GAP`);
+    if (index > 0) {
+      const delta = row.timestamp - rows[index - 1].timestamp;
+      if (delta <= 0 || delta % intervalMs !== 0) {
+        throw new Error(`SPOT_SCANNER_${expectedTimeframe.toUpperCase()}_INTERVAL_ALIGNMENT_INVALID`);
+      }
+      if (requireContiguous && delta !== intervalMs) {
+        throw new Error(`SPOT_SCANNER_${expectedTimeframe.toUpperCase()}_INTERVAL_GAP`);
+      }
     }
   }
   return rows;
@@ -103,23 +109,30 @@ function prepare(input = {}) {
   const primaryStart = primaryRows[0].timestamp;
   const primaryEnd = primaryRows.at(-1).timestamp + FOUR_HOURS;
 
-  const allContext = normalizeClosedRows(input.contextHistory, "60m", HOUR, observedAtMs);
+  const allContext = normalizeClosedRows(input.contextHistory, "60m", HOUR, observedAtMs, { requireContiguous: false });
   const contextRows = allContext.filter((row) => row.timestamp >= primaryStart && row.timestamp < primaryEnd);
   const expectedContextCount = (primaryEnd - primaryStart) / HOUR;
-  if (contextRows.length !== expectedContextCount
-      || contextRows[0]?.timestamp !== primaryStart
-      || contextRows.at(-1)?.timestamp !== primaryEnd - HOUR) {
-    throw new Error("SPOT_SCANNER_60M_CONTEXT_COVERAGE_INCOMPLETE");
+  if (contextRows.length < 300) throw new Error("SPOT_SCANNER_60M_CONTEXT_HISTORY_INSUFFICIENT");
+  const contextSlots = new Set();
+  for (const row of contextRows) {
+    const offset = row.timestamp - primaryStart;
+    if (offset < 0 || offset >= primaryEnd - primaryStart || offset % HOUR !== 0) {
+      throw new Error("SPOT_SCANNER_60M_CONTEXT_INTERVAL_ALIGNMENT_INVALID");
+    }
+    const slot = offset / HOUR;
+    if (contextSlots.has(slot)) throw new Error("SPOT_SCANNER_60M_CONTEXT_DUPLICATE_INTERVAL");
+    contextSlots.add(slot);
   }
+  const contextMissingIntervalCount = expectedContextCount - contextSlots.size;
+  if (contextMissingIntervalCount < 0) throw new Error("SPOT_SCANNER_60M_CONTEXT_COVERAGE_INVALID");
   for (let index = 0; index < contextRows.length; index += 1) {
     if (contextRows[index].quoteVolume == null
         || !finite(contextRows[index].quoteVolume)
         || contextRows[index].quoteVolume < 0) {
       throw new Error("SPOT_SCANNER_60M_CONTEXT_QUOTE_VOLUME_MISSING");
     }
-    if (index > 0 && contextRows[index].timestamp !== contextRows[index - 1].timestamp + HOUR) {
-      throw new Error("SPOT_SCANNER_60M_CONTEXT_INTERVAL_GAP");
-    }
+    // Upbit legitimately omits candle intervals with no trades. Preserve those gaps exactly;
+    // never synthesize, forward-fill, or convert them into zero-volume candles.
   }
 
   const primaryDatasetDigest = hash(primaryRows);
@@ -209,11 +222,16 @@ function prepare(input = {}) {
       source: "upbit-public-candles",
       timeframe: "60m",
       rowCount: contextRows.length,
+      expectedRowCount: expectedContextCount,
       startTime: primaryStart,
       endTime: primaryEnd,
+      actualFirstTimestamp: contextRows[0]?.timestamp ?? null,
+      actualLastTimestamp: contextRows.at(-1)?.timestamp ?? null,
       datasetDigest: contextDigest,
       quoteVolumeCoverage: 1,
-      missingIntervalCount: 0,
+      missingIntervalCount: contextMissingIntervalCount,
+      sparseIntervalsPreserved: contextMissingIntervalCount > 0,
+      syntheticGapFillAllowed: false,
       duplicateRowCount: 0,
     },
     historicalReplay: {
