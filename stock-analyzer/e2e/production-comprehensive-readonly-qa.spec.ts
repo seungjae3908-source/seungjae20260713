@@ -639,13 +639,28 @@ test.describe('Production comprehensive read-only QA', () => {
     await login(page, testInfo, diagnostics, blocked, 'telegram-runtime');
 
     const result = await page.evaluate(async () => {
+      const sessionEntry = Object.entries(localStorage).find(([key]) => /^sb-[^-]+-auth-token$/.test(key));
+      let accessToken: string | null = null;
+      if (sessionEntry) {
+        try {
+          const session = JSON.parse(sessionEntry[1]) as { access_token?: unknown };
+          if (typeof session.access_token === 'string' && session.access_token.trim()) {
+            accessToken = session.access_token;
+          }
+        } catch {
+          // A malformed client session remains unauthenticated and fails closed below.
+        }
+      }
       const response = await fetch('/api/user-integrations', {
         method: 'GET',
         credentials: 'include',
-        headers: { Accept: 'application/json' },
+        headers: {
+          Accept: 'application/json',
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
       });
       const payload = await response.json().catch(() => null);
-      return { status: response.status, payload };
+      return { status: response.status, accessTokenPresent: Boolean(accessToken), payload };
     });
     const root = result.payload && typeof result.payload === 'object'
       ? result.payload as Record<string, unknown>
@@ -676,6 +691,7 @@ test.describe('Production comprehensive read-only QA', () => {
     writeJson('prod-desktop-1440-telegram-runtime.json', sanitized);
 
     expect(blocked, 'Telegram runtime QA attempted a blocked mutation').toEqual([]);
+    expect(result.accessTokenPresent, 'app authentication session token').toBe(true);
     expect(result.status, 'user integrations runtime endpoint').toBe(200);
     expect(sanitized).toMatchObject({
       deliveryReady: true,
