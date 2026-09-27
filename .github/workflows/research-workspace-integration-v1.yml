@@ -47,6 +47,7 @@ concurrency:
   cancel-in-progress: true
 env:
   EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+  EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
   LIVE_TRADING: 'false'
   AUTO_TRADING: 'false'
   REAL_ORDER_ENABLED: 'false'
