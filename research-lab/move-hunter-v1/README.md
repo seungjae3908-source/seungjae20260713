@@ -1,44 +1,48 @@
-# Move Hunter V1
+# Move Hunter V1 — canonical adapter + Runner overlay
 
-Isolated research-only lane for four markets:
-
+This is an isolated research-only lane for the user's four markets:
 - KR_STOCK
 - US_STOCK
 - CRYPTO_SPOT
 - CRYPTO_FUTURES
 
-## Guarantees in V1
+## No duplicate research engine
 
-- point-in-time candidate discovery: only candles at or before `asOf`
-- next-bar entry; no same-close fantasy fills
-- MFE / MAE / R-multiple tracking
+Move Hunter reuses the merged canonical owners already present on main:
+- `market-prediction-lab/src/historical-market-replay-v1.js` (#475)
+- `market-prediction-lab/src/historical-discovery-settlement-v1.js` (#479)
+- `research-production/src/research-dataset-snapshot-store.mjs` (#1153)
+- existing 4-market tournament/data readiness owners remain authoritative.
+
+This lane does not replace or edit them.
+
+## New ownership in this lane only
+
+The additive Runner overlay evaluates already-discovered candidates with:
+- next-bar entry
+- LONG and CRYPTO_FUTURES SHORT
+- ATR + recent structure initial stop
+- configurable minimum/maximum stop distance
+- breakeven protection after R progress
+- ATR trailing after further R progress
+- no fixed take-profit ceiling
 - +3% / +5% / +10% first-hit timestamps
-- short initial risk using ATR + recent structure
-- long-runner behavior with breakeven + ATR trailing; no fixed profit ceiling
-- conservative active-stop-first intrabar handling
-- fees + slippage + spread deduction
-- rolling Train / Validation / Test windows with purge gaps
-- Recall@K for realized movers
-- market-agnostic historical replay
+- MFE / MAE / max-R
+- STOP_FIRST conservative same-bar handling
+- fees + slippage + spread
+- immutable Dataset Snapshot identity binding
 
 ## Hard isolation
 
-This directory does not wire into Research Center, Backtester, Forward, Auto/Paper Trading, Member/Auth, Telegram, DB, secrets, schedules, or deployment workflows. No Replit/Replit Agent.
+No changes to Research Center, Auto/Paper Trading, Forward, Backtester, Member/Auth, Telegram, stock-analyzer UI, api-server, DB, Secret, Env, schedules, deployment workflows, private APIs, or real orders.
 
-Historical replay is not genuine Forward evidence and cannot prove profitability.
+Replit / Replit Agent: forbidden and unused.
 
-## Real 3-year audit contract
+## Truth boundary
 
-A real 2023-09-27 through 2026-09-27 four-market audit additionally requires immutable point-in-time datasets with:
-1. historical universe membership including delisted symbols;
-2. sorted OHLCV;
-3. corporate-action normalization for equities;
-4. listing/delisting/halt truth;
-5. exchange/session metadata;
-6. provider lineage + immutable dataset identity.
+Historical Replay is not Genuine Forward. Search quality is not profitability proof. A real 2023-09-27 through 2026-09-27 four-market run is permitted only when the existing canonical Dataset Snapshot and point-in-time evidence gates are READY for the exact market/profile. Missing evidence fails closed.
 
-Run tests:
-
+Local isolated tests:
 ```bash
 node --test research-lab/move-hunter-v1/test/engine.test.mjs
 ```
