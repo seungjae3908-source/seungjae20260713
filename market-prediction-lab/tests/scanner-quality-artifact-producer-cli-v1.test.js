@@ -48,6 +48,8 @@ function trade(id, entry, exit, ret, pnl) {
     id,
     market: "CRYPTO_FUTURES",
     symbol: "BTCUSDT",
+    strategy: "fixture-strategy",
+    regime: "fixture-regime",
     timeframe: "60m",
     side: "long",
     action: "LONG",
