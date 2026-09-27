@@ -110,13 +110,13 @@ export default function RecommendationsPage() {
               <ArrowLeft className="h-4 w-4" aria-hidden="true" />
             </button>
             <div className="min-w-0 text-center">
-              <h1 className="truncate text-xl font-bold sm:text-2xl">AI 추천</h1>
-              <p className="mt-1 truncate text-xs font-medium text-muted-foreground">규칙 기반 후보 · LLM 미연결</p>
+              <h1 className="truncate text-xl font-bold sm:text-2xl">AI 종목 선별</h1>
+              <p className="mt-1 truncate text-xs font-medium text-muted-foreground">조건에 맞는 후보만 보여줍니다.</p>
             </div>
             <button
               type="button"
               onClick={() => void query.refetch()}
-              aria-label="추천 새로고침"
+              aria-label="종목 선별 새로고침"
               className="flex h-11 w-11 items-center justify-center rounded-xl border border-card-border bg-card"
             >
               <RefreshCw
@@ -198,7 +198,7 @@ export default function RecommendationsPage() {
             )}
             {!query.isLoading && !query.isError && rows.length === 0 && (
               <StateBox>
-                현재 조건을 충족하는 {category === 'undervalued' ? '저평가' : '초기 추세돌파'} 후보가 없습니다. 조건 미달 종목으로 채우지 않습니다.
+                현재 조건에 맞는 종목이 없습니다.
               </StateBox>
             )}
           </div>
