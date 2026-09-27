@@ -256,7 +256,7 @@ test('current AI evidence fails closed on stale shared chart data without duplic
 
   const evidence = page.getByTestId('ai-evidence-panel');
   await expect(evidence).toContainText('WAIT');
-  await expect(evidence).toContainText('STALE');
+  await expect(evidence).toContainText('현재 시간봉 데이터가 오래되어 방향 판단을 보류');
   await expect(page.getByTestId('insufficient-data-evidence')).toBeVisible();
   await expect.poll(() => totalChartCalls(mock.calls)).toBe(1);
   expect(mock.privateTradingRequests).toEqual([]);
