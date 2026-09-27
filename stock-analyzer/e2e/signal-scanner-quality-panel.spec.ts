@@ -191,17 +191,20 @@ test('desktop Signal Detail exposes server quality, quant and ranking evidence w
   const panel = desktopDetail.getByTestId('scanner-signal-quality-panel');
   await expect(panel).toBeVisible();
   await expect(desktopDetail.getByTestId('scanner-signal-state')).toHaveText('상태 CONFIRMED');
-  await expect(panel.getByTestId('scanner-quality-data-state')).toHaveText('TRUSTED');
+  await panel.getByText('신호 품질 상세', { exact: true }).click();
+  await expect(panel.getByTestId('scanner-quality-data-state')).toHaveText('양호');
   await expect(panel.getByTestId('scanner-quality-data-score')).toHaveText('96');
-  await expect(panel.getByTestId('scanner-quality-strong-allowed')).toHaveText('YES');
-  await expect(panel.getByTestId('scanner-quality-hard-filter')).toHaveText('PASS');
+  await expect(panel.getByTestId('scanner-quality-strong-allowed')).toHaveText('허용');
+  await expect(panel.getByTestId('scanner-quality-hard-filter')).toHaveText('통과');
   await expect(panel.getByTestId('scanner-quality-rank')).toHaveText('1위');
+  await panel.getByText('세부 점수', { exact: true }).click();
   await expect(panel.getByText('91', { exact: true })).toBeVisible();
+  await panel.getByText('후보 순위 근거', { exact: true }).click();
   await expect(panel.getByText('92', { exact: true })).toBeVisible();
   await expect(panel.getByText('87%', { exact: true })).toBeVisible();
   await expect(panel.getByText('• 추세 상위권 유지', { exact: true })).toBeVisible();
   await expect(panel.getByText('• 유동성 통과', { exact: true })).toBeVisible();
-  await expect(panel.getByText('차단·경고 이슈 없음', { exact: true })).toBeVisible();
+  await expect(panel.getByText('데이터 확인 항목', { exact: true })).toBeVisible();
   expect(forbidden).toEqual([]);
 });
 
@@ -217,15 +220,17 @@ test('mobile quality panel fails closed for untrusted and missing evidence', asy
 
   const sheet = page.getByTestId('scanner-mobile-sheet');
   await expect(sheet).toBeVisible();
+  await expect(sheet.getByTestId('scanner-signal-state')).toHaveText('상태 WEAKENED');
+  await sheet.getByRole('tab', { name: '근거', exact: true }).click();
   const panel = sheet.getByTestId('scanner-signal-quality-panel');
   await expect(panel).toBeVisible();
-  await expect(sheet.getByTestId('scanner-signal-state')).toHaveText('상태 WEAKENED');
-  await expect(panel.getByTestId('scanner-quality-data-state')).toHaveText('DATA_UNTRUSTED');
+  await panel.getByText('신호 품질 상세', { exact: true }).click();
+  await expect(panel.getByTestId('scanner-quality-data-state')).toHaveText('확인 필요');
   await expect(panel.getByTestId('scanner-quality-data-score')).toHaveText('41');
-  await expect(panel.getByTestId('scanner-quality-strong-allowed')).toHaveText('NO');
+  await expect(panel.getByTestId('scanner-quality-strong-allowed')).toHaveText('제한');
   await expect(panel.getByTestId('scanner-quality-hard-filter')).toHaveText('미확인');
   await expect(panel.getByTestId('scanner-quality-rank')).toHaveText('미확인');
-  await expect(panel.getByText('• 차단 · STALE_CANDLES · 캔들 freshness 기준 미충족', { exact: true })).toBeVisible();
-  expect(await panel.getByText('미확인', { exact: true }).count()).toBeGreaterThan(5);
+  await panel.getByText('후보 순위 근거', { exact: true }).click();
+  await expect(panel.getByText('• 차단 · 캔들 freshness 기준 미충족', { exact: true })).toBeVisible();
   expect(forbidden).toEqual([]);
 });
