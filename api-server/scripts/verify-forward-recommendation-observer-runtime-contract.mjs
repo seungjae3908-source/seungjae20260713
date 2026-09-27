@@ -40,6 +40,12 @@ for (const marker of [
 ]) {
   assert(runtime.includes(marker), `runtime safety marker missing: ${marker}`);
 }
+assert(runtime.includes("SPOT_SWING_4H"), 'Spot observer lane must use the canonical 4H identity');
+assert(runtime.includes("timeframe: FORWARD_OBSERVER_SPOT_TIMEFRAME"), 'Spot lane must bind the dedicated 4H timeframe constant');
+assert(runtime.includes("timeframes: ['60m', '4H']"), 'coverage must report mixed 60m and 4H observer timeframes');
+assert(runner.includes('timeframe: lane.timeframe'), 'crypto observer scan must follow the lane timeframe');
+assert(runner.includes("observation.identity.timeframe === '4H'") && runner.includes('? 240'), 'Spot future bars must use Upbit 240-minute candles for 4H');
+assert(runner.includes("BITGET_FORWARD_TIMEFRAME_UNSUPPORTED"), 'Futures observer must fail closed outside its 60m lane');
 assert(runtime.includes('latestCardEvidenceTimestamp'), 'runtime must derive data time from actual scanner evidence');
 assert(runtime.includes('DATA_TIMESTAMP_FROM_MATCHED_EVIDENCE_REQUIRED'), 'missing evidence timestamp must fail closed');
 assert(runtime.includes('futureOnlyBars'), 'settlement must filter pre-signal bars');
