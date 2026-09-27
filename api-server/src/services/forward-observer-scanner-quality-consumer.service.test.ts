@@ -11,6 +11,7 @@ import {
 } from './forward-observer-scanner-quality-consumer.service';
 import { FORWARD_OBSERVER_LANES } from './forward-recommendation-observer-runtime.service';
 import { StrategyPromotionService } from './strategy-promotion.service';
+import { rankScannerCandidates } from './scanner-candidate-ranking.service';
 import type { ScannerSignalCard } from './scanner-signal.types';
 
 const SHA = 'a'.repeat(40);
@@ -81,6 +82,8 @@ function card(symbol = 'BTCUSDT', action: 'LONG' | 'SHORT' = 'LONG'): ScannerSig
     warnings: [],
     strategyMode: 'swing',
     signalGrade: 'B',
+    dataQuality: { state: 'TRUSTED', score: 100, strongSignalAllowed: true, issues: [] },
+    quantScore: { technical: 80, trend: 82, momentum: 84, volume: 75, liquidity: 90, volatility: 70, marketRegime: 80, risk: 80 },
   };
 }
 
@@ -204,4 +207,28 @@ test('missing artifact preserves fail-closed unavailable state with no invented 
   });
   assert.equal(selected.status, 'UNAVAILABLE');
   assert.deepEqual(selected.backtests, {});
+});
+
+
+test('verified artifact can raise an otherwise B-only Forward ranking without changing grade thresholds', () => {
+  const lane = FORWARD_OBSERVER_LANES.find((item) => item.market === 'CRYPTO_FUTURES')!;
+  const candidate = card('BTCUSDT', 'LONG');
+  candidate.score = 90;
+  const selected = selectForwardObserverScannerBacktests({
+    artifact: artifactFor('BTCUSDT', 'LONG'),
+    cards: [candidate],
+    lane,
+    researchCodeSha: SHA,
+  });
+  const ranked = rankScannerCandidates({
+    cards: [candidate],
+    market: 'futures',
+    strategy: 'swing',
+    backtests: selected.backtests,
+    limit: 10,
+  });
+  assert.equal(selected.status, 'READY');
+  assert.equal(ranked.cards.length, 1);
+  assert.equal(ranked.cards[0]?.signalGrade, 'S');
+  assert.equal(ranked.diagnostics.backtestMissingCount, 0);
 });
