@@ -138,7 +138,7 @@ async function scanCryptoLane(lane: ForwardObserverLane, cursor: number): Promis
     memberId: 'forward-observer-public-only',
     market,
     strategyMode: 'swing',
-    timeframe: '60m',
+    timeframe: lane.timeframe,
     condition: 'trend',
     cursor,
     batchSize: lane.batchSize,
@@ -175,6 +175,7 @@ async function scanCryptoLane(lane: ForwardObserverLane, cursor: number): Promis
 }
 
 async function stockFutureBars(observation: ForwardRecommendationObservation): Promise<SignalOutcomeBar[]> {
+  if (observation.identity.timeframe !== '60m') throw new Error('STOCK_FORWARD_TIMEFRAME_UNSUPPORTED');
   const candles = await yahoo.getCandles(observation.snapshot.symbol, '60m');
   return candles.flatMap((candle) => {
     const at = timestamp(candle.time);
@@ -194,8 +195,14 @@ type BitgetEnvelope = { code?: unknown; data?: unknown[] };
 async function cryptoFutureBars(observation: ForwardRecommendationObservation): Promise<SignalOutcomeBar[]> {
   const symbol = observation.snapshot.symbol.trim().toUpperCase();
   if (observation.identity.market === 'CRYPTO_SPOT') {
+    const unit = observation.identity.timeframe === '4H'
+      ? 240
+      : observation.identity.timeframe === '60m'
+        ? 60
+        : null;
+    if (unit == null) throw new Error('UPBIT_FORWARD_TIMEFRAME_UNSUPPORTED');
     const rows = await fetchJson<UpbitCandleRow[]>(
-      `${UPBIT_BASE}/v1/candles/minutes/60?market=${encodeURIComponent(`KRW-${symbol}`)}&count=200`,
+      `${UPBIT_BASE}/v1/candles/minutes/${unit}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=200`,
     );
     return rows.flatMap((row) => {
       const at = finite(row.timestamp);
@@ -206,6 +213,7 @@ async function cryptoFutureBars(observation: ForwardRecommendationObservation): 
       return [{ timestamp: new Date(at).toISOString(), high, low, close }];
     });
   }
+  if (observation.identity.timeframe !== '60m') throw new Error('BITGET_FORWARD_TIMEFRAME_UNSUPPORTED');
   const payload = await fetchJson<BitgetEnvelope>(
     `${BITGET_BASE}/api/v2/mix/market/candles?symbol=${encodeURIComponent(symbol)}&productType=${BITGET_PRODUCT_TYPE}&granularity=1H&limit=200`,
   );
