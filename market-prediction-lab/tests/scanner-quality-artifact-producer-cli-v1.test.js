@@ -18,11 +18,9 @@ const DATASET_MANIFEST = buildResearchDatasetSnapshotManifestV1({
   createdAt: "2026-09-27T00:00:00.000Z",
   profileId: "CRYPTO_FUTURES:SCANNER_SWING_60M",
   evidence: {
-    benchmarkDatasetDigest: "1".repeat(64),
-    fundingHistoryDigest: "2".repeat(64), fundingCoverage: 0.95,
-    longShortHistoryDigest: "3".repeat(64), longShortCoverage: 0.96, longShortTrainingParityConfirmed: true,
-    openInterestHistoryDigest: "4".repeat(64), openInterestCoverage: 0.97, openInterestTrainingParityConfirmed: true,
-    sentimentHistoryDigest: "5".repeat(64), sentimentCoverage: 0.95, sentimentTemporalParityConfirmed: true,
+    primaryDatasetDigest: "6".repeat(64), primaryDatasetCoverage: 1, missingIntervalCount: 0, duplicateRowCount: 0,
+    closedCandlesOnly: true, publicDataOnly: true, syntheticDataAllowed: false,
+    source: "fixture-public-ohlcv", sourceType: "PUBLIC_MARKET_DATA",
   },
   scope: {
     timeframe: "60m", symbols: ["BTCUSDT"], startTime: 1_699_999_000_000, endTime: 1_700_100_000_000,
