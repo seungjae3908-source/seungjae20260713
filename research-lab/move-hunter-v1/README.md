@@ -49,3 +49,25 @@ Local isolated tests:
 ```bash
 node --test research-lab/move-hunter-v1/test/engine.test.mjs
 ```
+
+
+## Current strict 3-year readiness audit — 2026-09-27
+
+Exact requested audit window: 2023-09-27T00:00:00Z through 2026-09-27T00:00:00Z.
+
+No market is claimed READY from the GitHub evidence inspected. The gate therefore remains fail-closed:
+
+- KR_STOCK: exact 3-year official corporate-action + exchange-session evidence is not proven as an owner artifact for the requested range; latest selective-research stock data is bounded/static rather than a full point-in-time market universe.
+- US_STOCK: same exact-range corporate-action/session/universe proof gap; latest bounded research explicitly says corporate-action correctness remains unverified.
+- CRYPTO_SPOT: listing + delisting history remains unproven by the current canonical owner chain; latest-list data cannot substitute for historical membership.
+- CRYPTO_FUTURES: continuous historical OPEN_INTEREST readiness is not proven and exhaustive LIQUIDATION_RISK / position-tier history remains unavailable in the canonical evidence chain.
+- All markets: exact profile-scoped COST_POLICY_IDENTITY and exact 3-year Dataset Snapshot coverage must be present for the precise profile before the audit can run.
+
+Code contracts being merged does not count as source evidence. Missing evidence is never replaced with zero/current values/synthetic backfill.
+
+The current expected strict result is therefore:
+- readyMarketCount: 0 (not yet proven READY)
+- blockedMarketCount: 4
+- fourMarketReady: false
+
+This is an evidence-readiness result, not a statement that the strategy is unprofitable.
