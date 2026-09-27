@@ -379,7 +379,7 @@ test("Scanner dataset binding rejects hidden 1h reuse and accepts only exact Sca
   const exact = buildScannerQualityEntryV1({
     identity: exactIdentity,
     folds: [f],
-    foldResults: [{}],
+    foldResults: [{ fold: 1, binding: {} }],
     datasetAudit: { ...datasetAudit, snapshotManifest: exactSpot },
     transactionCostEvidence: costEvidence({ market: "CRYPTO_SPOT" }),
   });
