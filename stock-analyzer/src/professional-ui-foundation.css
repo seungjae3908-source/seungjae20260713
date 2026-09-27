@@ -10,8 +10,8 @@
   --pro-ui-weight-bold: 700;
   --pro-ui-control-mobile: 2.75rem;
   --pro-ui-control-desktop: 3rem;
-  --pro-ui-card-radius: 1rem;
-  --pro-ui-panel-radius: 1.25rem;
+  --pro-ui-card-radius: 0.875rem;
+  --pro-ui-panel-radius: 1rem;
 }
 
 /*
@@ -220,5 +220,35 @@ nav[aria-label='주요 메뉴'] [role='menuitem'] {
   nav[aria-label='주요 메뉴'] > div:last-child > button,
   nav[aria-label='주요 메뉴'] > div:last-child > div > button:not([role='menuitem']) {
     min-height: var(--pro-ui-control-desktop) !important;
+  }
+}
+
+
+/* Clean-density V1: quiet borders/shadows and preserve touch-safe controls. */
+[data-testid='app-shell'] .shadow-sm {
+  box-shadow: 0 6px 18px rgb(2 8 23 / 0.08);
+}
+
+.dark [data-testid='app-shell'] .shadow-sm {
+  box-shadow: 0 8px 22px rgb(2 8 23 / 0.18);
+}
+
+@media (max-width: 599px) {
+  [data-testid='research-center-page'] .rounded-3xl,
+  [data-testid='research-general-view'] .rounded-3xl {
+    border-radius: var(--pro-ui-panel-radius) !important;
+  }
+}
+
+@media (min-width: 600px) and (max-width: 1199px) {
+  [data-testid='research-general-view'] > main > div,
+  [data-testid='research-center-page'] > div {
+    max-width: 64rem;
+  }
+}
+
+@media (min-width: 1200px) {
+  [data-testid='research-general-view'] > main > div {
+    max-width: 72rem;
   }
 }
