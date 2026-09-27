@@ -31,7 +31,7 @@ test('Bitget read-only provider errors and malformed data fail closed without be
       && !error.message.includes('provider-secret-text'),
   );
   await assert.rejects(readBitgetSnapshot(credentials, async (request) => {
-    if (request.path === '/api/v3/account/info') return { code: '00000', data: { permissions: [] } };
+    if (request.path === '/api/v3/account/settings') return { code: '25245', msg: 'The account is not the unified account mode', data: null };
     return { code: '00000', data: request.path.includes('position') ? [] : [{ accountEquity: '1' }] };
   }), /IDENTITY_INVALID/);
 });
@@ -213,7 +213,7 @@ test('Bitget Classic fallback is selected when official UTA error 25245 reports 
     { apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' },
     async (request) => {
       seen.push(request.path);
-      if (request.path === '/api/v3/account/info') {
+      if (request.path === '/api/v3/account/settings') {
         return { code: '25245', msg: 'The account is not the unified account mode', data: null };
       }
       if (request.path === '/api/v2/mix/account/accounts') {
@@ -230,7 +230,7 @@ test('Bitget Classic fallback is selected when official UTA error 25245 reports 
   );
 
   assert.deepEqual(new Set(seen), new Set([
-    '/api/v3/account/info',
+    '/api/v3/account/settings',
     '/api/v2/mix/account/accounts',
     '/api/v2/mix/position/all-position',
     '/api/v2/mix/order/orders-pending',
@@ -249,13 +249,28 @@ test('Bitget Classic fallback is selected when official UTA error 25245 reports 
 test('Bitget wrapper probes UTA mode then preserves Classic signed GET reads and redacts passphrase', async () => {
   const seen: any[] = []; const result = await readBitgetSnapshot({ apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' }, async (request) => {
     seen.push(request);
-    if (request.path === '/api/v3/account/info') return { code: '00000', data: { permissions: [] } };
+    if (request.path === '/api/v3/account/settings') return { code: '25245', msg: 'The account is not the unified account mode', data: null };
     if (request.path.includes('position')) return { code: '00000', data: [{ symbol: 'BTCUSDT', total: '1', openPriceAvg: '60000', markPrice: '61000', leverage: '3', liquidationPrice: '' }] };
     if (request.path.includes('orders-pending')) return { code: '00000', data: { entrustedList: [] } };
     return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '80' }] };
   });
-  assert.equal(seen[0]?.path, '/api/v3/account/info');
+  assert.equal(seen[0]?.path, '/api/v3/account/settings');
   assert.ok(seen.every((r) => r.method === 'GET')); assert.equal(result.positions?.[0]?.liquidationPrice, null); assert.equal(JSON.stringify(result).includes('BITGET_PASSPHRASE_TEST_ONLY'), false); assert.equal(result.withdrawalRequests, 0);
+});
+
+test('Bitget account-mode transition fails closed as retryable instead of guessing Classic or UTA', async () => {
+  await assert.rejects(
+    readBitgetSnapshot(
+      { apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' },
+      async (request) => {
+        assert.equal(request.path, '/api/v3/account/settings');
+        return { code: '00000', data: { accountMode: 'upgrading' } };
+      },
+    ),
+    (error: unknown) => error instanceof AccountReadonlyError
+      && error.code === 'BITGET_ACCOUNT_MODE_TRANSITION'
+      && error.retryable === true,
+  );
 });
 
 test('Bitget UTA wrapper maps v3 account, position, and open-order envelopes without mutation authority', async () => {
@@ -264,7 +279,7 @@ test('Bitget UTA wrapper maps v3 account, position, and open-order envelopes wit
     { apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' },
     async (request) => {
       seen.push(request);
-      if (request.path === '/api/v3/account/info') return { code: '00000', data: { permissions: ['uta_mgt', 'uta_trade'] } };
+      if (request.path === '/api/v3/account/settings') return { code: '00000', data: { accountMode: 'unified', accountLevel: 'basic' } };
       if (request.path === '/api/v3/account/assets') {
         return { code: '00000', data: { assets: [{ coin: 'USDT', equity: '100', available: '90', locked: '10' }] } };
       }
@@ -279,7 +294,7 @@ test('Bitget UTA wrapper maps v3 account, position, and open-order envelopes wit
   );
   assert.deepEqual(seen.map((row) => row.path).sort(), [
     '/api/v3/account/assets',
-    '/api/v3/account/info',
+    '/api/v3/account/settings',
     '/api/v3/position/current-position',
     '/api/v3/trade/unfilled-orders',
   ].sort());
