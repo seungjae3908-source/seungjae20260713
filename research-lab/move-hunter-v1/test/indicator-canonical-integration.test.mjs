@@ -9,6 +9,9 @@ import {
 import {
   classifyCanonicalIndicatorRunnerState,
 } from '../src/indicator-policy.mjs';
+import {
+  evaluateMomentumGuardForwardV1,
+} from '../src/momentum-guard.mjs';
 
 const START = Date.parse('2026-09-14T00:00:00.000Z');
 const STEP = 15 * 60 * 1000;
@@ -162,4 +165,18 @@ test('future and unclosed bars remain excluded before Runner state classificatio
     classifyCanonicalIndicatorRunnerState(after),
     classifyCanonicalIndicatorRunnerState(before),
   );
+});
+
+
+test('canonical Market Features V2 feeds frozen Momentum Guard with zero execution authority', () => {
+  const canonical = buildAdaptiveMultiEvidenceMarketFeaturesV2(completeInput());
+  assert.equal(canonical.status, 'READY_FOR_SPECIALIST_RESEARCH_ONLY');
+  const guard = evaluateMomentumGuardForwardV1(canonical);
+  assert.equal(guard.status, 'RESEARCH_EVIDENCE_ONLY');
+  assert.equal(typeof guard.eligible, 'boolean');
+  assert.equal(guard.automaticEntryAuthority, false);
+  assert.equal(guard.automaticPromotionAuthority, false);
+  assert.equal(guard.observedHistoryMayCountAsOos, false);
+  assert.equal(guard.economicSampleCredit, 0);
+  assert.equal(guard.executionAuthority, 'NONE');
 });
