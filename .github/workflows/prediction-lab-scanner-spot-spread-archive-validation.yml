@@ -104,6 +104,7 @@ jobs:
           if (summary.resolvesFirstZero !== 'SPOT_SCANNER_HISTORICAL_SPREAD_SERIES_MISSING') throw new Error('SPREAD_ARCHIVE_OWNER_FIRST_ZERO_NOT_RESOLVED');
           if (summary.nextFirstZero !== 'SPOT_SCANNER_SPREAD_ARCHIVE_FORWARD_COVERAGE_INSUFFICIENT') throw new Error('SPREAD_ARCHIVE_NEXT_FIRST_ZERO_INVALID');
           if (!(summary.observationCount >= 1)) throw new Error('SPREAD_ARCHIVE_OBSERVATION_MISSING');
+          if (!(summary.covered4hBucketCount >= 1)) throw new Error('SPREAD_ARCHIVE_CURRENT_BUCKET_NOT_COVERED');
           if (!(summary.missing4hBucketCount > 0)) throw new Error('SPREAD_ARCHIVE_MUST_NOT_CLAIM_HISTORICAL_COVERAGE');
           if (summary.economicSampleCredit !== 0) throw new Error('SPREAD_ARCHIVE_ECONOMIC_CREDIT_FORBIDDEN');
           if (summary.safety?.historicalBackfillAllowed !== false
