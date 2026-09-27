@@ -150,7 +150,7 @@ for (const [width, height] of viewports) {
     await page.setViewportSize({ width, height });
     const diagnostics = await setup(page);
     await page.goto('/research-center');
-    await expect(page.getByRole('heading', { name: '현재 어디까지 왔나요?', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '연구센터', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'AI 도우미', exact: true }).click();
     await expect(page.getByTestId('research-copilot')).toBeVisible();
     await expect(page.getByText('AI는 가설과 연구 절차를 설명합니다.', { exact: false })).toBeVisible();
