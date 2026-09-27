@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { Candle } from '../sample/types';
-import { ScannerUniverseService, clearScannerUniverseCacheForTests } from './scanner-universe.service';
+import {
+  ScannerUniverseService,
+  clearScannerUniverseCacheForTests,
+  excludeUnsupportedKrPublicProviderSymbols,
+  requiresPublicOnlyKrUniverse,
+  type ScannerUniverseEntry,
+} from './scanner-universe.service';
 import { aggregateUsSessionCandles } from './stock-signal-scanner.service';
 
 function row(
@@ -18,6 +24,33 @@ function row(
 function simple(time: string, value: number): Candle {
   return row(time, value, value + 2, value - 2, value + 1, value * 10);
 }
+
+test('KR scanner treats an unconfigured Kiwoom provider as public-only and excludes unsupported KRX codes', () => {
+  assert.equal(requiresPublicOnlyKrUniverse(undefined, false), true);
+  assert.equal(requiresPublicOnlyKrUniverse(undefined, true), false);
+  assert.equal(requiresPublicOnlyKrUniverse('true', true), true);
+
+  const entries: ScannerUniverseEntry[] = [
+    {
+      ticker: '005930', name: '삼성전자', market: 'KR', currency: 'KRW', assetType: 'STOCK',
+      exchange: 'KOSPI', listingStatus: 'LISTED', source: 'krx-symbol-master',
+    },
+    {
+      ticker: '0000Z0', name: '공개 공급자 미지원 상품', market: 'KR', currency: 'KRW', assetType: 'ETF',
+      exchange: 'ETF·ETN', listingStatus: 'LISTED', source: 'krx-symbol-master',
+    },
+  ];
+
+  const filtered = excludeUnsupportedKrPublicProviderSymbols(entries);
+  assert.deepEqual(filtered.entries.map((entry) => entry.ticker), ['005930']);
+  assert.deepEqual(filtered.exclusions, [{
+    ticker: '0000Z0',
+    name: '공개 공급자 미지원 상품',
+    exchange: 'ETF·ETN',
+    assetType: 'ETF',
+    reason: 'PUBLIC_PROVIDER_UNSUPPORTED_ALPHANUMERIC_KRX_SYMBOL',
+  }]);
+});
 
 test('KR scanner universe deadline aborts live provider work and returns explicit stale fallback', async () => {
   clearScannerUniverseCacheForTests();
