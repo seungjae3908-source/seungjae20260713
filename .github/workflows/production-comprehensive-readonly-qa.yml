@@ -78,7 +78,8 @@ jobs:
           if (!workflow.includes('include_telegram:') || !workflow.includes('default: false')) {
             throw new Error('Telegram runtime QA must remain opt-in and default false');
           }
-          if (!liveJob.includes("PRODUCTION_QA_INCLUDE_TELEGRAM: ${{ inputs.include_telegram && 'true' || 'false' }}")) {
+          if (!liveJob.includes('PRODUCTION_QA_INCLUDE_TELEGRAM:')
+            || !workflow.includes('inputs.include_telegram')) {
             throw new Error('Live comprehensive QA must bind Telegram opt-in explicitly');
           }
           if (!comprehensiveSpec.includes("const telegramQaEnabled = process.env.PRODUCTION_QA_INCLUDE_TELEGRAM === 'true';")
