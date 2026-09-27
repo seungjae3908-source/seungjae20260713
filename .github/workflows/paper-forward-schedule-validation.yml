@@ -75,6 +75,7 @@ on:
       - api-server/src/services/crypto-signal-scanner.service.test.ts
       - api-server/src/services/forward-recommendation-observer-runtime.service.ts
       - api-server/src/services/forward-recommendation-observer-runtime.service.test.ts
+      - api-server/src/services/fast-profitability-activation.service.test.ts
       - api-server/src/scripts/run-forward-recommendation-observer-cycle.ts
       - api-server/src/services/forward-observer-canonical-metadata.service.ts
       - api-server/src/services/forward-observer-canonical-metadata.service.test.ts
@@ -296,6 +297,7 @@ jobs:
             api-server/src/services/crypto-signal-scanner.service.test.ts
             api-server/src/services/forward-recommendation-observer-runtime.service.ts
             api-server/src/services/forward-recommendation-observer-runtime.service.test.ts
+            api-server/src/services/fast-profitability-activation.service.test.ts
             api-server/src/scripts/run-forward-recommendation-observer-cycle.ts
             api-server/src/services/forward-observer-canonical-metadata.service.ts
             api-server/src/services/forward-observer-canonical-metadata.service.test.ts
