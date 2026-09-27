@@ -56,6 +56,7 @@ export function replayLongCashRunnerPortfolio({
   candidates,
   candlesBySymbol,
   runnerControlBySymbol = {},
+  indicatorExitEnabled = false,
   presetName = 'LONG_RUNNER_3ATR',
   costs = { feeBps: 15 },
   initialCapital = 10_000_000,
@@ -98,6 +99,7 @@ export function replayLongCashRunnerPortfolio({
         direction,
         ...preset,
         runnerControlByTs: runnerControlBySymbol?.[symbol] ?? null,
+        indicatorExitEnabled,
         costs,
       });
       planned.push(Object.freeze({
@@ -317,6 +319,7 @@ export function replayLongCashRunnerPortfolio({
       shortTrading: false,
       actualFills: false,
       indicatorAdaptiveRunnerSupported: true,
+      indicatorForcedExitDefaultEnabled: false,
       historicalReplayOnly: true,
     }),
     profitabilityClaimAllowed: false,
