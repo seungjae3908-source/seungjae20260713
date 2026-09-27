@@ -238,9 +238,12 @@ test('mobile futures scanner sorts canonical ranks, labels signal/ranking scores
   await expect(sheet.getByText('HYPEUSDT · HYPEUSDT', { exact: true })).toHaveCount(0);
   await expect(sheet.getByText('신호점수', { exact: true })).toBeVisible();
   await expect(sheet.getByText('61.8점', { exact: true })).toBeVisible();
-  await expect(sheet.getByText('상대점수', { exact: true })).toBeVisible();
-  await expect(sheet.getByText('랭킹점수', { exact: true })).toBeVisible();
-  await expect(sheet.getByText('순위는 신호점수 단독 정렬이 아닌 서버 랭킹 기준입니다.', { exact: true })).toBeVisible();
+  await sheet.getByRole('tab', { name: '근거', exact: true }).click();
+  const quality = sheet.getByTestId('scanner-signal-quality-panel');
+  await quality.getByText('신호 품질 상세', { exact: true }).click();
+  await quality.getByText('후보 순위 근거', { exact: true }).click();
+  await expect(quality.getByText('상대점수', { exact: true })).toBeVisible();
+  await expect(quality.getByText('랭킹점수', { exact: true })).toBeVisible();
   await expect(sheet.getByTestId('scanner-direction-badge')).toHaveText('롱');
   await expect(sheet).toHaveClass(/bg-card/);
 
