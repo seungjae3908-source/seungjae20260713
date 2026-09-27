@@ -26,7 +26,7 @@ const FULL_ROUTES = [
   '/market-overview', '/market-rankings', '/market-browser', '/scanner', '/ai-chart',
   '/ai-chat', '/themes', '/news-information', '/learn', '/watchlist', '/alerts',
   '/portfolio', '/position', '/strategy-promotion', '/recommendations', '/backtests',
-  '/paper-trading', '/account', '/more', '/settings',
+  '/auto-trading', '/paper-trading', '/account', '/more', '/settings',
   '/stock-info/analysis?asset=stock&market=KR&ticker=005930',
   '/stock-info/analysis?asset=stock&market=US&ticker=AAPL',
   '/stock-info?asset=coin&coinMarket=spot&symbol=BTC',
@@ -34,7 +34,7 @@ const FULL_ROUTES = [
 ] as const;
 
 const CRITICAL_ROUTES = [
-  '/', '/stocks', '/scanner', '/ai-chart', '/paper-trading', '/portfolio', '/account',
+  '/', '/stocks', '/scanner', '/ai-chart', '/auto-trading', '/paper-trading', '/portfolio', '/account',
   '/stock-info/analysis?asset=stock&market=KR&ticker=005930',
 ] as const;
 
