@@ -96,6 +96,19 @@ function decisionLabel(side: AiChartSignalSide): string {
   return sideLabel(side);
 }
 
+function signalLifecycleLabel(lifecycle: AiChartSignalLifecycle): string {
+  if (lifecycle === 'ACTIVE') return '활성';
+  if (lifecycle === 'WEAKENED') return '약화';
+  if (lifecycle === 'INVALIDATED') return '무효';
+  return '만료';
+}
+
+function strategyModeDisplayLabel(mode: AiChartStrategyMode): string {
+  if (mode === 'SCALPING') return '단타';
+  if (mode === 'SWING') return '스윙';
+  return '중장기';
+}
+
 function isPositiveSide(side: AiChartSignalSide): boolean {
   return side === 'BUY' || side === 'LONG';
 }
@@ -313,18 +326,15 @@ function AiChartSignalOverlayPortal({
         'pointer-events-none relative z-20 mx-3 mb-2 mt-2 max-w-[calc(100%-1.5rem)] rounded-xl border bg-background px-3 py-2 shadow-sm sm:absolute sm:left-3 sm:top-3 sm:mx-0 sm:mb-0 sm:mt-0 sm:bg-background/90 sm:backdrop-blur-sm',
         inactive ? 'border-dashed border-muted-foreground/40 opacity-60' : 'border-card-border',
       )}
-      aria-label={`AI 신호 ${side}, 상태 ${lifecycle}`}
+      aria-label={`AI 신호 ${sideLabel(side)}, 상태 ${signalLifecycleLabel(lifecycle)}`}
     >
       <div className={cn('flex items-center gap-1.5 text-xs font-black', sideClass(side))}>
         <SignalDirectionIcon side={side} />
-        <span>{side}</span>
+        <span>{sideLabel(side)}</span>
         {score != null && <span>· {score}</span>}
       </div>
       <p className="mt-0.5 text-[9px] font-black text-foreground">
-        {lifecycle} · {mode} · {selection.timeframe}
-      </p>
-      <p className="mt-0.5 truncate text-[8px] font-semibold text-muted-foreground">
-        Signal {signalId ?? 'UNAVAILABLE'}
+        {signalLifecycleLabel(lifecycle)} · {strategyModeDisplayLabel(mode)} · {selection.timeframe}
       </p>
     </div>,
     target,
