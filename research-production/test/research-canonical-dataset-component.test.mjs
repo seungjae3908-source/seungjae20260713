@@ -223,8 +223,9 @@ test('canonical dataset component accepts exact Scanner Spot 4H snapshot without
   const manifest=buildResearchDatasetSnapshotManifestV1({
     researchSha:SHA,createdAt:'2026-09-20T00:00:00.000Z',profileId:'CRYPTO_SPOT:SCANNER_SWING_4H',
     evidence:{
-      benchmarkDatasetDigest:H('7'),
-      sentimentHistoryDigest:H('8'),sentimentCoverage:0.95,sentimentTemporalParityConfirmed:true,
+      primaryDatasetDigest:H('9'),primaryDatasetCoverage:1,missingIntervalCount:0,duplicateRowCount:0,
+      closedCandlesOnly:true,publicDataOnly:true,syntheticDataAllowed:false,
+      source:'upbit-public-candles',sourceType:'PUBLIC_MARKET_DATA',
     },
     scope:{
       timeframe:'4H',symbols:['BTC'],startTime:START,endTime:spotEnd,
