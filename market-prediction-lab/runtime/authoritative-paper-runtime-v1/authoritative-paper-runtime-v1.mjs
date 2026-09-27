@@ -6041,13 +6041,14 @@ function prepareForwardRecommendationObservation(input) {
 }
 
 // src/services/forward-recommendation-observer-runtime.service.ts
-var FORWARD_OBSERVER_TIMEFRAME = "60m";
+var FORWARD_OBSERVER_DEFAULT_TIMEFRAME = "60m";
+var FORWARD_OBSERVER_SPOT_TIMEFRAME = "4H";
 var FORWARD_OBSERVER_DATA_MAX_AGE_MS = 90 * 60 * 1e3;
 var FORWARD_OBSERVER_LANES = Object.freeze([
-  { id: "KR_SWING_60M", market: "KR_STOCK", scannerMarket: "KR", batchSize: 20, timeframe: FORWARD_OBSERVER_TIMEFRAME },
-  { id: "US_SWING_60M", market: "US_STOCK", scannerMarket: "US", batchSize: 20, timeframe: FORWARD_OBSERVER_TIMEFRAME },
-  { id: "SPOT_SWING_60M", market: "CRYPTO_SPOT", scannerMarket: "spot", batchSize: 20, timeframe: FORWARD_OBSERVER_TIMEFRAME },
-  { id: "FUTURES_SWING_60M", market: "CRYPTO_FUTURES", scannerMarket: "futures", batchSize: 20, timeframe: FORWARD_OBSERVER_TIMEFRAME }
+  { id: "KR_SWING_60M", market: "KR_STOCK", scannerMarket: "KR", batchSize: 20, timeframe: FORWARD_OBSERVER_DEFAULT_TIMEFRAME },
+  { id: "US_SWING_60M", market: "US_STOCK", scannerMarket: "US", batchSize: 20, timeframe: FORWARD_OBSERVER_DEFAULT_TIMEFRAME },
+  { id: "SPOT_SWING_4H", market: "CRYPTO_SPOT", scannerMarket: "spot", batchSize: 20, timeframe: FORWARD_OBSERVER_SPOT_TIMEFRAME },
+  { id: "FUTURES_SWING_60M", market: "CRYPTO_FUTURES", scannerMarket: "futures", batchSize: 20, timeframe: FORWARD_OBSERVER_DEFAULT_TIMEFRAME }
 ]);
 var SAFETY = Object.freeze({
   publicDataOnly: true,
