@@ -9,7 +9,7 @@ function source(relativePath: string) {
 test('rule-based recommendation score is not presented as calibrated probability', () => {
   const page = source('src/pages/recommendations.tsx');
 
-  expect(page).toContain('규칙 기반 후보 · LLM 미연결');
+  expect(page).toContain('조건에 맞는 후보만 보여줍니다.');
   expect(page).toContain('규칙 점수 {row.score}점');
   expect(page).not.toContain('상승 가능성 {row.score}점');
   expect(page).not.toContain('상승 확률 {row.score}');
