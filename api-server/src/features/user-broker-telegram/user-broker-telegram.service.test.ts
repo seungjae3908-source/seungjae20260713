@@ -171,6 +171,67 @@ test('user A manual event queues only Telegram A and does not re-sync canonical 
   assert.match(transport.sent[0].text, /등록방식: 수동등록/);
 });
 
+test('owner AUTO_POLICY events mirror only to the dedicated auto-trading room', async () => {
+  const repository = new InMemoryUserBrokerTelegramRepository();
+  repository.setMemberProfile('user-a', APPROVED_ASSOCIATE);
+  repository.setMemberProfile('user-b', APPROVED_ASSOCIATE);
+  const transport = new FakeTelegramTransport();
+  const portfolio = new FakePortfolioSink();
+  const service = new UserBrokerTelegramService(
+    repository,
+    transport,
+    portfolio,
+    'ci_test_bot',
+    undefined,
+    'user-a',
+    'owner-auto-room',
+  );
+
+  await link(service, 'user-a', 'chat-a');
+  await link(service, 'user-b', 'chat-b', 'tg-b', new Date('2026-08-12T00:01:00.000Z'));
+
+  const ownerEvent: UserExecutionEvent = {
+    ...manualPortfolioEvent({
+      id: 'owner-auto',
+      userId: 'user-a',
+      symbol: '005930',
+      market: 'KR',
+      side: 'buy',
+      quantity: 1,
+      price: 72000,
+    }),
+    type: 'ORDER_FILLED',
+    source: 'PAPER_EXECUTION',
+    executionMethod: 'AUTO_POLICY',
+  };
+  const otherEvent: UserExecutionEvent = {
+    ...manualPortfolioEvent({
+      id: 'other-auto',
+      userId: 'user-b',
+      symbol: 'AAPL',
+      market: 'US',
+      side: 'buy',
+      quantity: 1,
+      price: 220,
+    }),
+    type: 'ORDER_FILLED',
+    source: 'PAPER_EXECUTION',
+    executionMethod: 'AUTO_POLICY',
+  };
+
+  const ownerQueued = await service.recordEvent(ownerEvent, new Date('2026-08-12T00:02:00.000Z'), 'associate');
+  const otherQueued = await service.recordEvent(otherEvent, new Date('2026-08-12T00:02:01.000Z'), 'associate');
+  await service.processDelivery('user-a', ownerQueued.deliveryId!, new Date('2026-08-12T00:03:00.000Z'));
+  await service.processDelivery('user-b', otherQueued.deliveryId!, new Date('2026-08-12T00:03:01.000Z'));
+
+  assert.deepEqual(transport.sent.map((item) => item.chatId), [
+    'chat-a',
+    'owner-auto-room',
+    'chat-b',
+  ]);
+  assert.match(transport.sent[1].text, /🤖 자동매매 · 매수 신호/);
+});
+
 test('member revoked after queueing is dead-lettered before Telegram transport', async () => {
   const { service, repository, transport } = fixture();
   await link(service, 'user-a', 'chat-a');
@@ -298,13 +359,18 @@ test('canonical trading order event maps to user execution event with owner chec
   assert.equal(event?.metadata.estimatedSlippagePercent, 0.2);
   assert.equal(event?.metadata.actualSlippagePercent, 0.6993);
   const message = renderUserExecutionTelegramMessage(event!);
-  assert.match(message, /자동매매 체결 근거/);
-  assert.match(message, /신호\/행동: BUY · ORDER_FILLED/);
+  assert.match(message, /🤖 자동매매 · 매수 신호/);
+  assert.match(message, /자동매매 판단 근거/);
+  assert.match(message, /판단: 매수/);
+  assert.match(message, /상태: 체결 완료/);
+  assert.match(message, /전략: 단타/);
   assert.match(message, /거래량 증가/);
   assert.match(message, /익절 계획: TP1 75,000 \(\+4\.90%\) · TP2 78,000 \(\+9\.09%\)/);
   assert.match(message, /손절\/무효: 70,000 \(-2\.10%\)/);
   assert.match(message, /수수료: 1,200 KRW/);
   assert.match(message, /실제 슬리피지: 0\.6993%/);
+  assert.match(message, /시각:/);
+  assert.equal(message.includes('ORDER_FILLED'), false);
   assert.equal(maskBrokerAccount('12'), '****12');
   assert.throws(() => executionEventFromTradingOrder({ ...transition, userId: 'user-b' }, order, plan), /EXECUTION_OWNER_MISMATCH/);
 });

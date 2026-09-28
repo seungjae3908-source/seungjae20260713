@@ -5,7 +5,11 @@ export type TelegramIntelligenceReportKind =
   | 'WEEKLY';
 
 export type TelegramMembership = 'pending' | 'associate' | 'regular' | 'admin';
-export type TelegramReportDestination = 'STOCK_ROOM' | 'CRYPTO_ROOM' | 'PERSONAL';
+export type TelegramReportDestination =
+  | 'KR_STOCK_ROOM'
+  | 'US_STOCK_ROOM'
+  | 'CRYPTO_SPOT_ROOM'
+  | 'CRYPTO_FUTURES_ROOM';
 export type TelegramReportPriority = 'NORMAL' | 'HIGH';
 
 export interface TelegramIntelligenceReportPlan {
@@ -81,12 +85,11 @@ export function telegramReportDestinations(input: TelegramReportAudienceInput): 
 
   const destinations: TelegramReportDestination[] = [];
   if (input.includeStocks !== false && ['associate', 'regular', 'admin'].includes(input.membership)) {
-    destinations.push('STOCK_ROOM');
+    destinations.push('KR_STOCK_ROOM', 'US_STOCK_ROOM');
   }
   if (input.includeCrypto !== false && ['regular', 'admin'].includes(input.membership)) {
-    destinations.push('CRYPTO_ROOM');
+    destinations.push('CRYPTO_SPOT_ROOM', 'CRYPTO_FUTURES_ROOM');
   }
-  if (input.portfolioRelevant || input.watchlistRelevant) destinations.push('PERSONAL');
   return destinations;
 }
 
@@ -100,7 +103,12 @@ function reportPlan(
   clock: LocalClock,
   audience: TelegramReportAudienceInput,
 ): TelegramIntelligenceReportPlan {
-  const destinations = telegramReportDestinations(audience);
+  const allDestinations = telegramReportDestinations(audience);
+  const destinations = kind === 'KR_CLOSING'
+    ? allDestinations.filter((destination) => destination === 'KR_STOCK_ROOM')
+    : kind === 'US_PREMARKET'
+      ? allDestinations.filter((destination) => destination === 'US_STOCK_ROOM')
+      : allDestinations;
   return {
     kind,
     scheduledTimezone,
