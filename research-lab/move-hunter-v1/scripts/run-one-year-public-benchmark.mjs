@@ -129,19 +129,20 @@ async function collectVisionBitgetCompositeFutures({symbol,bitget,window}) {
     client:bitget,
     market:'CRYPTO_FUTURES',
     symbol,
-    timeframe:'1d',
+    timeframe:'4h',
     startTime:window.warmupStart,
     endTime:window.endTime+1,
-    maxCandles:1_000,
+    maxCandles:4_000,
     productType:'usdt-futures',
   });
-  const recentRows=runnerCandles(recent.candles).sort((a,b)=>a.ts-b.ts);
-  if(recentRows.length<60) throw new Error(`BITGET_RECENT_DAILY_TOO_SHORT:${recentRows.length}`);
+  const recentRows=[...aggregateFourHourCandlesToUtcDaily(runnerCandles(recent.candles))]
+    .sort((a,b)=>a.ts-b.ts);
+  if(recentRows.length<60) throw new Error(`BITGET_RECENT_UTC_DAILY_TOO_SHORT:${recentRows.length}`);
   const expectedLast=Math.floor(window.endTime/ONE_DAY_MS)*ONE_DAY_MS;
   if(recentRows.at(-1).ts<expectedLast) throw new Error('BITGET_RECENT_END_COVERAGE_MISSING');
   for(let i=1;i<recentRows.length;i+=1){
     if(recentRows[i].ts-recentRows[i-1].ts!==ONE_DAY_MS) {
-      throw new Error(`BITGET_RECENT_DAILY_GAP:${recentRows[i-1].ts}->${recentRows[i].ts}`);
+      throw new Error(`BITGET_RECENT_UTC_DAILY_GAP:${recentRows[i-1].ts}->${recentRows[i].ts}`);
     }
   }
 
@@ -193,7 +194,7 @@ async function collectVisionBitgetCompositeFutures({symbol,bitget,window}) {
     symbol,
     candles,
     fundingRates,
-    provider:'binance-vision-monthly+bitget-public-v2-recent-composite',
+    provider:'binance-vision-monthly+bitget-public-v2-4h-utc-daily-composite',
     fundingProvider:'binance-vision-monthly+bitget-public-v2-recent-composite',
     providerFallbackUsed:true,
     crossVenueComposite:true,
