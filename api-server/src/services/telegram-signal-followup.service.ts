@@ -380,7 +380,10 @@ function destinationFor(card: ScannerSignalCard): string | null {
   );
 }
 
-function lifecycleTimeframe(card: ScannerSignalCard): string {
+function lifecycleTimeframe(card: ScannerSignalCard, state: AnnouncedSignal): string {
+  const base = state.baseMessageText ?? '';
+  const match = base.match(/(?:신호:[^\n]*·\s*)(1m|3m|5m|15m|30m|60m|1H|4H|6H|12H|1D|1W|1M)\b/u);
+  if (match?.[1]) return match[1];
   if (card.strategyMode === 'scalping') return '15m';
   if (card.strategyMode === 'swing') return '60m';
   return '1D';
@@ -402,7 +405,7 @@ function lifecycleOrderEnabled(card: ScannerSignalCard, state: AnnouncedSignal, 
 
 function lifecycleButtons(card: ScannerSignalCard, state: AnnouncedSignal, now: number): TelegramUrlButton[][] {
   const context = {
-    timeframe: lifecycleTimeframe(card),
+    timeframe: lifecycleTimeframe(card, state),
     strategyMode: card.strategyMode ?? 'swing',
   } as const;
   const buttons = buildTelegramSignalAppButtons(card, context, {
