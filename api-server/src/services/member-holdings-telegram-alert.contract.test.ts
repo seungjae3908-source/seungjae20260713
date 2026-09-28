@@ -175,7 +175,7 @@ test('member holdings messages separate stock and crypto without exposing user i
   assert.equal(crypto.event.market, 'CRYPTO_FUTURES');
   assert.equal(crypto.event.priority, 'CRITICAL');
   assert.match(crypto.alert.details ?? '', /👤 보유종목 · 코인선물/u);
-  assert.match(crypto.alert.details ?? '', /AI 분석: N\/A/u);
+  assert.doesNotMatch(crypto.alert.details ?? '', /AI 보유 판단|AI 분석/u);
   assert.equal((crypto.alert.details ?? '').includes('user-b-secret-id'), false);
 });
 
@@ -236,21 +236,23 @@ test('member AI advisor renders only supplied provenance-backed analysis and fac
 
   const details = dispatch.alert.details ?? '';
   assert.equal(dispatch.event.priority, 'CRITICAL');
-  assert.match(details, /평단 기준 손익률: \+5\.13%/u);
-  assert.match(details, /개인 분석 기준: 스윙 · 균형형/u);
-  assert.match(details, /AI 판단: 보유 유지/u);
-  assert.match(details, /AI 신뢰도: 82\.4% · validated-ai-evidence-v1/u);
-  assert.match(details, /\[알림 발생 이유\]/u);
+  assert.match(details, /손익 \+5\.13%/u);
+  assert.match(details, /분석 기준: 스윙 · 균형형/u);
+  assert.match(details, /\[AI 보유 판단\]/u);
+  assert.match(details, /판단: 보유 유지/u);
+  assert.match(details, /신뢰도: 82\.4%/u);
+  assert.equal(details.includes('validated-ai-evidence-v1'), false);
+  assert.match(details, /\[알림 이유\]/u);
   assert.match(details, /거래량 급증/u);
-  assert.match(details, /\[AI 판단 근거\]/u);
+  assert.match(details, /거래량 증가가 확인됨/u);
   assert.match(details, /목표가 근거: 검증된 저항 구간 evidence/u);
-  assert.match(details, /손절가 근거: 검증된 무효화 가격 evidence/u);
-  assert.match(details, /\[위험 판단\] CRITICAL/u);
-  assert.match(details, /\[과거 유사조건 성과\] 검증됨/u);
-  assert.match(details, /표본: N=42/u);
-  assert.match(details, /승률: 64\.29%/u);
-  assert.match(details, /평균 수익률: \+3\.70%/u);
-  assert.match(details, /최대 낙폭: 6\.20%/u);
+  assert.match(details, /손절 근거: 검증된 무효화 가격 evidence/u);
+  assert.match(details, /\[위험\] 매우 높음/u);
+  assert.match(details, /\[유사조건 성과\] 검증됨/u);
+  assert.match(details, /표본 N=42/u);
+  assert.match(details, /승률 64\.29%/u);
+  assert.match(details, /평균수익 \+3\.70%/u);
+  assert.match(details, /최대낙폭 6\.20%/u);
   assert.match(details, /영향 혼재/u);
   assert.equal(details.includes('member-private-id'), false);
 
@@ -288,18 +290,14 @@ test('member AI advisor fails closed when confidence, performance, prices, or li
   });
 
   const details = dispatch.alert.details ?? '';
-  assert.match(details, /평단 기준 손익률: N\/A/u);
-  assert.match(details, /AI 판단: N\/A/u);
-  assert.match(details, /AI 신뢰도: N\/A/u);
-  assert.match(details, /\[AI 판단 근거\] 검증된 근거 N\/A/u);
-  assert.match(details, /분할 매수\/진입: N\/A/u);
-  assert.match(details, /분할 매도\/목표: N\/A/u);
-  assert.match(details, /손절가: N\/A/u);
-  assert.match(details, /진입 근거: N\/A/u);
-  assert.match(details, /목표가 근거: N\/A/u);
-  assert.match(details, /손절가 근거: N\/A/u);
-  assert.match(details, /\[과거 유사조건 성과\] 근거 없음/u);
-  assert.match(details, /승률\/평균수익\/낙폭: N\/A/u);
+  assert.match(details, /손익 N\/A/u);
+  assert.match(details, /\[AI 보유 판단\]/u);
+  assert.match(details, /판단: N\/A/u);
+  assert.match(details, /요약: 요약은 공급됐지만 actionable AI reasons는 없음/u);
+  assert.equal(details.includes('신뢰도:'), false);
+  assert.equal(details.includes('[매매 관리]'), false);
+  assert.equal(details.includes('[유사조건 성과]'), false);
+  assert.match(details, /※ 확인되지 않은 값은 표시하지 않습니다/u);
   assert.equal(dispatch.alert.buttons?.some((row) => row.some((button) => button.url.startsWith('javascript:'))), false);
 });
 
