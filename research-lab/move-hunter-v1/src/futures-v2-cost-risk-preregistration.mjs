@@ -25,10 +25,10 @@ export const FUTURES_V2_COST_RISK_DECLARATION_V1 = Object.freeze({
     executionOverrideAllowed: false,
   }),
   freezeBoundary: Object.freeze({
-    active: false,
-    declarationCommitSha: null,
-    preregisteredAt: null,
-    note: 'The declaration semantics exist in Git, but evaluation remains blocked until a later commit binds this exact declaration commit SHA and timestamp.',
+    active: true,
+    declarationCommitSha: '37b3ffacdaa2c8d8611917b79c66e923241cc5a6',
+    preregisteredAt: '2026-09-28T07:37:20Z',
+    note: 'This later binding activates the exact candidate semantics that already existed in the declaration commit.',
   }),
   validation: Object.freeze({
     allowedEvidence: 'POST_DECLARATION_COMMIT_UNUSED_OOS_OR_PROSPECTIVE_FORWARD_ONLY',
