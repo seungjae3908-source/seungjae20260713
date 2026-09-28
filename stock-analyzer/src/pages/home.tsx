@@ -36,6 +36,7 @@ interface CryptoTickerResponse {
 }
 
 type MobileHomeTab = 'market' | 'signal' | 'watchlist' | 'portfolio';
+type HomeLayoutMode = 'mobile' | 'tablet' | 'desktop';
 
 const MOBILE_HOME_TABS = [
   { value: 'market', label: '시장' },
@@ -86,26 +87,40 @@ function actionLabel(action: AnalysisTradeAction | undefined): string {
   return '관찰';
 }
 
-function useDesktopHome(): boolean {
-  const query = `(min-width: ${ADAPTIVE_VIEWPORT_BREAKPOINTS.desktopMin}px)`;
-  const [desktop, setDesktop] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches);
+function useHomeLayoutMode(): HomeLayoutMode {
+  const desktopQuery = `(min-width: ${ADAPTIVE_VIEWPORT_BREAKPOINTS.desktopMin}px)`;
+  const tabletQuery = '(min-width: 600px)';
+  const read = (): HomeLayoutMode => {
+    if (typeof window === 'undefined') return 'mobile';
+    if (window.matchMedia(desktopQuery).matches) return 'desktop';
+    if (window.matchMedia(tabletQuery).matches) return 'tablet';
+    return 'mobile';
+  };
+  const [mode, setMode] = useState<HomeLayoutMode>(read);
 
   useEffect(() => {
-    const media = window.matchMedia(query);
-    const update = () => setDesktop(media.matches);
+    const desktopMedia = window.matchMedia(desktopQuery);
+    const tabletMedia = window.matchMedia(tabletQuery);
+    const update = () => setMode(read());
     update();
-    media.addEventListener('change', update);
-    return () => media.removeEventListener('change', update);
-  }, [query]);
+    desktopMedia.addEventListener('change', update);
+    tabletMedia.addEventListener('change', update);
+    return () => {
+      desktopMedia.removeEventListener('change', update);
+      tabletMedia.removeEventListener('change', update);
+    };
+  }, [desktopQuery]);
 
-  return desktop;
+  return mode;
 }
 
 export default function HomePage() {
   const [, navigate] = useLocation();
   const assetMode = useAssetMode();
   const { selection } = useAnalysisSelection();
-  const desktop = useDesktopHome();
+  const layoutMode = useHomeLayoutMode();
+  const desktop = layoutMode === 'desktop';
+  const tablet = layoutMode === 'tablet';
   const [mobileTab, setMobileTab] = useState<MobileHomeTab>('market');
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>(() => readWatchlistItems().slice(0, 8));
 
@@ -181,14 +196,15 @@ export default function HomePage() {
   const professionalOverview = (
     <section
       data-testid="home-professional-overview"
-      className="rounded-3xl border border-card-border bg-card p-4 shadow-sm sm:p-5"
+      className="rounded-2xl border border-card-border bg-card p-4 shadow-sm sm:p-5"
       aria-labelledby="home-professional-overview-title"
     >
-      <div className="text-center">
+      <div className="flex flex-col gap-1 text-center min-[1200px]:text-left">
         <p className="text-xs font-semibold tracking-[0.12em] text-primary">투자 대시보드</p>
-        <h2 id="home-professional-overview-title" className="mt-1 text-lg font-bold sm:text-xl">오늘의 투자 상태</h2>
+        <h2 id="home-professional-overview-title" className="text-lg font-bold tracking-[-0.015em] sm:text-xl">오늘의 투자 상태</h2>
+        <p className="text-xs font-medium text-muted-foreground">시장 · 신호 · 관심종목 · 자산을 한 화면에서 확인합니다.</p>
       </div>
-      <div className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
+      <div className="mt-4 grid grid-cols-2 gap-2 min-[600px]:grid-cols-4">
         <DashboardStatusCard
           icon={<BarChart3 className="h-5 w-5" />}
           label="시세"
@@ -222,9 +238,9 @@ export default function HomePage() {
   );
 
   const marketSection = (
-    <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-market-summary">
+    <section className="rounded-2xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-market-summary">
       <HomeSectionHeader title="시장" actionLabel="시황" onAction={() => navigate('/market-overview')} />
-      <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-5">
+      <div className="mt-3 grid grid-cols-2 gap-2 min-[600px]:grid-cols-3 min-[900px]:grid-cols-5">
         {indices.length === 0
           ? <DashboardPlaceholder label={marketState} />
           : indices.map((item) => <MetricCard key={item.key} label={item.label} value={item.price.toLocaleString('ko-KR', { maximumFractionDigits: 2 })} sub={formatAppPercent(item.changePercent)} />)}
@@ -238,7 +254,7 @@ export default function HomePage() {
   );
 
   const signalSection = (
-    <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-signal-summary">
+    <section className="rounded-2xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-signal-summary">
       <HomeSectionHeader icon={<Radar className="h-4 w-4" />} title="최근 신호" actionLabel="검색기" onAction={() => navigate('/scanner')} />
       {selection && signalIsCurrent && selection.signalScore != null ? (
         <button type="button" onClick={() => navigate('/scanner')} className="mt-3 flex min-h-16 w-full min-w-0 items-center justify-between gap-3 rounded-2xl border border-card-border bg-background p-3 text-left">
@@ -256,7 +272,7 @@ export default function HomePage() {
   );
 
   const watchlistSection = (
-    <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-watchlist-summary">
+    <section className="rounded-2xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-watchlist-summary">
       <HomeSectionHeader icon={<Star className="h-4 w-4" />} title="관심종목" actionLabel="전체" onAction={() => navigate('/watchlist')} />
       <div className="mt-3 space-y-2">
         {watchlist.length
@@ -285,24 +301,29 @@ export default function HomePage() {
   );
 
   const portfolioSection = (
-    <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-portfolio-summary">
+    <section className="rounded-2xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-portfolio-summary">
       <HomeSectionHeader icon={<BriefcaseBusiness className="h-4 w-4" />} title="포트폴리오" />
-      <button type="button" onClick={() => navigate('/portfolio')} className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-card-border bg-background px-4 text-sm font-semibold">
-        <span>자산·손익·위험</span><ArrowRight className="h-4 w-4" />
-      </button>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <button type="button" onClick={() => navigate('/portfolio')} className="flex min-h-12 min-w-0 items-center justify-center gap-2 rounded-xl border border-card-border bg-background px-3 text-sm font-semibold transition hover:border-primary/40">
+          <span className="truncate">자산·손익·위험</span><ArrowRight className="h-4 w-4 shrink-0" />
+        </button>
+        <button type="button" onClick={() => navigate('/account')} className="flex min-h-12 min-w-0 items-center justify-center gap-2 rounded-xl border border-card-border bg-background px-3 text-sm font-semibold transition hover:border-primary/40">
+          <span className="truncate">계좌 연결</span><ArrowRight className="h-4 w-4 shrink-0" />
+        </button>
+      </div>
     </section>
   );
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background">
       <CenteredPageHeader title="홈" />
-      {!desktop ? (
+      {layoutMode === 'mobile' ? (
         <div className="shrink-0 border-b border-card-border bg-background px-2 py-2">
           <ResponsiveTabs value={mobileTab} options={MOBILE_HOME_TABS} onChange={setMobileTab} ariaLabel="홈 보기" testId="home-mobile-tabs" compact />
         </div>
       ) : null}
-      <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain pb-[calc(5.5rem+env(safe-area-inset-bottom))]">
-        <div className="mx-auto w-full max-w-6xl space-y-4 px-3 py-4 sm:px-5 lg:py-6">
+      <main data-testid="home-page-scroll" className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain pb-4 sm:pb-5 min-[1200px]:pb-6">
+        <div className="mx-auto w-full max-w-[90rem] space-y-4 px-3 py-4 sm:px-5 min-[1200px]:px-6 min-[1200px]:py-5">
           <section className="rounded-2xl border border-card-border bg-card p-3 sm:p-4" data-testid="home-single-search">
             <UnifiedAssetSearch placeholder="종목·코인 검색" onSelect={openAsset} />
           </section>
@@ -320,17 +341,32 @@ export default function HomePage() {
 
           {desktop ? (
             <>
-              <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]" data-testid="home-desktop-workspace">
-                <div className="min-w-0 space-y-4">
+              <div className="grid grid-cols-12 gap-4" data-testid="home-desktop-workspace">
+                <div className="col-span-8 min-w-0 space-y-4">
                   {marketSection}
                   {signalSection}
                 </div>
-                <aside className="min-w-0 space-y-4">
-                  {portfolioSection}
+                <aside className="col-span-4 min-w-0 space-y-4">
                   {watchlistSection}
+                  {portfolioSection}
                 </aside>
               </div>
-              <section className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="빠른 이동">
+              <section className="grid grid-cols-4 gap-2" aria-label="빠른 이동">
+                <QuickLink label="국내" onClick={() => navigate('/stocks/kr')} />
+                <QuickLink label="미국" onClick={() => navigate('/stocks/us')} />
+                <QuickLink label="코인 현물" onClick={() => navigate('/coins/spot')} />
+                <QuickLink label="코인 선물" onClick={() => navigate('/coins/futures')} />
+              </section>
+            </>
+          ) : tablet ? (
+            <>
+              <div className="grid grid-cols-2 gap-4" data-testid="home-tablet-workspace">
+                <div className="col-span-2 min-w-0">{marketSection}</div>
+                <div className="min-w-0">{signalSection}</div>
+                <div className="min-w-0">{portfolioSection}</div>
+                <div className="col-span-2 min-w-0">{watchlistSection}</div>
+              </div>
+              <section className="grid grid-cols-4 gap-2" aria-label="빠른 이동">
                 <QuickLink label="국내" onClick={() => navigate('/stocks/kr')} />
                 <QuickLink label="미국" onClick={() => navigate('/stocks/us')} />
                 <QuickLink label="코인 현물" onClick={() => navigate('/coins/spot')} />
@@ -359,9 +395,9 @@ function HomeSectionHeader({ icon, title, actionLabel, onAction }: {
   onAction?: () => void;
 }) {
   return (
-    <div className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-2">
-      <span className="flex h-11 w-11 items-center justify-center text-primary" aria-hidden="true">{icon}</span>
-      <h2 className="text-center text-base font-bold">{title}</h2>
+    <div className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-2 min-[1200px]:grid-cols-[minmax(0,1fr)_auto]">
+      <span className="flex h-11 w-11 items-center justify-center text-primary min-[1200px]:hidden" aria-hidden="true">{icon}</span>
+      <h2 className="text-center text-base font-bold tracking-[-0.01em] min-[1200px]:text-left">{title}</h2>
       {actionLabel && onAction ? (
         <button type="button" onClick={onAction} className="flex h-11 w-11 items-center justify-center text-xs font-semibold text-primary">{actionLabel}</button>
       ) : <span aria-hidden="true" className="h-11 w-11" />}
@@ -380,18 +416,18 @@ function DashboardStatusCard({ icon, label, value, detail, onClick }: {
     <button
       type="button"
       onClick={onClick}
-      className="flex min-h-24 min-w-0 flex-col items-center justify-center rounded-2xl border border-card-border bg-background p-3 text-center transition hover:border-primary/40 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      className="flex min-h-20 min-w-0 flex-col items-center justify-center rounded-xl border border-card-border bg-background p-3 text-center transition hover:border-primary/40 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
     >
       <span className="text-primary" aria-hidden="true">{icon}</span>
       <span className="mt-2 text-xs font-semibold text-muted-foreground">{label}</span>
-      <strong className="mt-1 max-w-full truncate text-sm font-bold">{value}</strong>
+      <strong data-ui-role="metric" className="mt-1 max-w-full truncate text-sm font-bold">{value}</strong>
       <span className="mt-1 max-w-full truncate text-xs font-medium text-muted-foreground">{detail}</span>
     </button>
   );
 }
 
 function MetricCard({ label, value, sub }: { label: string; value: string; sub: string }) {
-  return <div className="min-w-0 rounded-2xl bg-background p-3 text-center"><p className="truncate text-xs font-medium text-muted-foreground">{label}</p><p className="mt-1 truncate text-sm font-bold">{value}</p><p className="mt-1 truncate text-xs font-medium text-muted-foreground">{sub}</p></div>;
+  return <div className="min-w-0 rounded-2xl bg-background p-3 text-center"><p className="truncate text-xs font-medium text-muted-foreground">{label}</p><p data-ui-role="metric" className="mt-1 truncate text-sm font-bold">{value}</p><p className="mt-1 truncate text-xs font-medium text-muted-foreground">{sub}</p></div>;
 }
 
 function DashboardPlaceholder({ label }: { label: string }) {

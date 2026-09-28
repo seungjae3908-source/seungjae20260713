@@ -122,7 +122,7 @@ test('real user path stays coherent from login through session expiry', async ({
   await expect(page).toHaveURL(/\/paper-trading$/u);
   await expect(page.getByTestId('paper-trading-shell')).toBeVisible();
 
-  await openMenuItem(page, '정보', '연구센터');
+  await openMenuItem(page, '설정', '연구센터');
   await expect(page).toHaveURL(/\/research-center$/u);
   await expect(page.getByRole('button', { name: '요약', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('research-general-view')).toBeVisible();

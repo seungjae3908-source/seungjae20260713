@@ -15,7 +15,9 @@ test('shared structural layouts use the 1200px desktop contract', async () => {
 
   expect(home).toContain('ADAPTIVE_VIEWPORT_BREAKPOINTS.desktopMin');
   expect(technical).toContain('ADAPTIVE_VIEWPORT_BREAKPOINTS.desktopMin');
-  expect(tabs).toContain('min-[1200px]:grid');
+  expect(tabs).toContain("'grid w-full min-w-0 gap-1 overflow-visible border border-card-border'");
+  expect(tabs).toContain("options.length === 5 && 'grid-cols-3 min-[600px]:grid-cols-5'");
+  expect(tabs).not.toContain('overflow-x-auto');
   expect(tabs).not.toContain('lg:grid lg:overflow-visible');
   expect(autoTrading).toContain('mx-auto w-full max-w-6xl space-y-3');
   expect(autoTrading).toContain('grid grid-cols-2 gap-2 sm:grid-cols-4');

@@ -44,15 +44,15 @@ export function CenteredPageHeader({
     <header
       data-testid={testId}
       data-ui-role="page-header"
-      className={cn('shrink-0 border-b border-card-border bg-background/95 px-3 py-3 backdrop-blur sm:px-4', className)}
+      className={cn('shrink-0 border-b border-card-border bg-background/95 px-3 py-2.5 backdrop-blur sm:px-4 min-[1200px]:px-5 min-[1200px]:py-3', className)}
     >
-      <div className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-2">
-        <div className="flex min-w-0 justify-start">{leading ?? <span aria-hidden className="h-11 w-11" />}</div>
-        <div className="min-w-0 text-center">
+      <div className="mx-auto grid w-full max-w-screen-2xl grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-2 min-[1200px]:grid-cols-[auto_minmax(0,1fr)_auto] min-[1200px]:gap-4">
+        <div className="flex min-w-0 justify-start">{leading ?? <span aria-hidden className="h-11 w-11 min-[1200px]:hidden" />}</div>
+        <div className="min-w-0 text-center min-[1200px]:text-left">
           {eyebrow ? <p data-ui-role="eyebrow" className="truncate text-xs font-semibold text-primary">{eyebrow}</p> : null}
-          <h1 data-ui-role="page-title" className="truncate text-xl font-bold sm:text-2xl">{title}</h1>
+          <h1 data-ui-role="page-title" className="truncate text-xl font-bold tracking-[-0.015em] sm:text-2xl">{title}</h1>
         </div>
-        <div className="flex min-w-0 justify-end">{action ?? infoAction ?? <span aria-hidden className="h-11 w-11" />}</div>
+        <div className="flex min-w-0 justify-end">{action ?? infoAction ?? <span aria-hidden className="h-11 w-11 min-[1200px]:hidden" />}</div>
       </div>
     </header>
   );
