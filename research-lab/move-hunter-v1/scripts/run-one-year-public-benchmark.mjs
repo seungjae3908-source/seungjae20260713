@@ -124,7 +124,7 @@ function laneAlignedRows(comparison, hypotheses, failures, datasetCount) {
     '- Dataset count: ' + datasetCount,
     '- KR/US=60m, Spot=4H, Futures=60m',
     '- Purpose: exact timeframe research alignment with current Forward Observer lanes',
-    '- Feature history: fixed past-only 1,500 completed bars per decision',
+    '- Feature history: fixed past-only 300 completed bars per decision',
     '',
     '| Market | Baseline return | B trades | B MDD | B PF | Improved return | I trades | I MDD | I PF |',
     '|---|---:|---:|---:|---:|---:|---:|---:|---:|',
@@ -393,7 +393,7 @@ const ablation = runFourMarketOneYearAblation({ datasets });
 const hypotheses = freezeMarketSpecificHypotheses(ablation);
 const laneAlignedAblation = runFourMarketOneYearAblation({
   datasets: laneAlignedDatasets,
-  featureHistoryBars: 1500,
+  featureHistoryBars: 300,
 });
 const laneAlignedHypotheses = freezeMarketSpecificHypotheses(laneAlignedAblation);
 const laneAlignedComparison = comparisonFromAblation(laneAlignedAblation);
