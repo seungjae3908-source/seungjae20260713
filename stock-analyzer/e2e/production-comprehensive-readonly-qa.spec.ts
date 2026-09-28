@@ -15,6 +15,7 @@ const productionQaEnabled = Boolean(
   && qaPassword
   && process.env.PRODUCTION_READONLY_E2E === 'true',
 );
+const telegramQaEnabled = process.env.PRODUCTION_QA_INCLUDE_TELEGRAM === 'true';
 const productionOrigin = baseUrl ? new URL(baseUrl).origin : 'http://production-qa-disabled.invalid';
 
 const ARTIFACT_DIR = path.resolve('production-comprehensive-artifacts');
@@ -25,7 +26,7 @@ const FULL_ROUTES = [
   '/market-overview', '/market-rankings', '/market-browser', '/scanner', '/ai-chart',
   '/ai-chat', '/themes', '/news-information', '/learn', '/watchlist', '/alerts',
   '/portfolio', '/position', '/strategy-promotion', '/recommendations', '/backtests',
-  '/paper-trading', '/account', '/more', '/settings',
+  '/auto-trading', '/paper-trading', '/account', '/more', '/settings',
   '/stock-info/analysis?asset=stock&market=KR&ticker=005930',
   '/stock-info/analysis?asset=stock&market=US&ticker=AAPL',
   '/stock-info?asset=coin&coinMarket=spot&symbol=BTC',
@@ -33,7 +34,7 @@ const FULL_ROUTES = [
 ] as const;
 
 const CRITICAL_ROUTES = [
-  '/', '/stocks', '/scanner', '/ai-chart', '/paper-trading', '/portfolio', '/account',
+  '/', '/stocks', '/scanner', '/ai-chart', '/auto-trading', '/paper-trading', '/portfolio', '/account',
   '/stock-info/analysis?asset=stock&market=KR&ticker=005930',
 ] as const;
 
@@ -180,6 +181,57 @@ async function restoreCachedAuthState(page: Page, state: CachedAuthState) {
   }
 }
 
+function accessTokenFromUnknown(value: unknown, depth = 0): string | null {
+  if (depth > 6 || value == null) return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const token = accessTokenFromUnknown(item, depth + 1);
+      if (token) return token;
+    }
+    return null;
+  }
+  if (typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.access_token === 'string' && record.access_token.length > 20) return record.access_token;
+  for (const item of Object.values(record)) {
+    const token = accessTokenFromUnknown(item, depth + 1);
+    if (token) return token;
+  }
+  return null;
+}
+
+function accessTokenFromStorageState(state: CachedAuthState) {
+  const originState = state.origins.find((entry) => entry.origin === productionOrigin);
+  for (const entry of originState?.localStorage ?? []) {
+    try {
+      const token = accessTokenFromUnknown(JSON.parse(entry.value));
+      if (token) return token;
+    } catch {
+      // Non-JSON localStorage entries are unrelated to Supabase auth.
+    }
+  }
+  throw new Error('PRODUCTION_QA_ACCESS_TOKEN_UNAVAILABLE');
+}
+
+async function validateCachedAuthState(page: Page, state: CachedAuthState) {
+  const token = accessTokenFromStorageState(state);
+  const response = await page.request.get(new URL('/api/auth/profile', baseUrl).toString(), {
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    timeout: LOGIN_READY_BUDGET_MS,
+    failOnStatusCode: false,
+  });
+  if (response.status() !== 200) {
+    throw new Error(`PRODUCTION_QA_CACHED_SESSION_PROFILE_${response.status()}`);
+  }
+  const payload = await response.json().catch(() => null);
+  if (!payload || typeof payload !== 'object' || typeof (payload as Record<string, unknown>).id !== 'string') {
+    throw new Error('PRODUCTION_QA_CACHED_SESSION_PROFILE_INVALID');
+  }
+}
+
 async function login(
   page: Page,
   testInfo: TestInfo,
@@ -198,8 +250,13 @@ async function login(
       // exact in-memory authenticated browser state for later read-only tests.
       // Cached-session failure remains fail-closed; there is no login retry.
       await restoreCachedAuthState(page, cached);
-      await page.goto('/', { waitUntil: 'commit', timeout: LOGIN_READY_BUDGET_MS });
-      await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: LOGIN_READY_BUDGET_MS });
+      // Do not add a second root-page navigation before every read-only test.
+      // The first test in each viewport proves the real password-login path;
+      // later tests restore that exact state and let their target route prove
+      // whether the session is still accepted. This remains fail-closed while
+      // avoiding a redundant / navigation that previously timed out under load.
+      await validateCachedAuthState(page, cached);
+      authStateByViewport.set(cacheKey, await page.context().storageState());
       return;
     }
 
@@ -631,6 +688,7 @@ test.describe('Production comprehensive read-only QA', () => {
   test.skip(!productionQaEnabled, 'Dedicated Production QA credentials and read-only flag are required');
 
   test('Production Telegram runtime readiness is complete and zero-authority', async ({ page }, testInfo) => {
+    test.skip(!telegramQaEnabled, 'Telegram runtime QA is isolated to Telegram release');
     test.skip(testInfo.project.name !== 'prod-desktop-1440');
     const diagnostics: Diagnostic[] = [];
     const blocked: Diagnostic[] = [];
@@ -639,13 +697,28 @@ test.describe('Production comprehensive read-only QA', () => {
     await login(page, testInfo, diagnostics, blocked, 'telegram-runtime');
 
     const result = await page.evaluate(async () => {
+      const sessionEntry = Object.entries(localStorage).find(([key]) => /^sb-[^-]+-auth-token$/.test(key));
+      let accessToken: string | null = null;
+      if (sessionEntry) {
+        try {
+          const session = JSON.parse(sessionEntry[1]) as { access_token?: unknown };
+          if (typeof session.access_token === 'string' && session.access_token.trim()) {
+            accessToken = session.access_token;
+          }
+        } catch {
+          // A malformed client session remains unauthenticated and fails closed below.
+        }
+      }
       const response = await fetch('/api/user-integrations', {
         method: 'GET',
         credentials: 'include',
-        headers: { Accept: 'application/json' },
+        headers: {
+          Accept: 'application/json',
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
       });
       const payload = await response.json().catch(() => null);
-      return { status: response.status, payload };
+      return { status: response.status, accessTokenPresent: Boolean(accessToken), payload };
     });
     const root = result.payload && typeof result.payload === 'object'
       ? result.payload as Record<string, unknown>
@@ -676,6 +749,7 @@ test.describe('Production comprehensive read-only QA', () => {
     writeJson('prod-desktop-1440-telegram-runtime.json', sanitized);
 
     expect(blocked, 'Telegram runtime QA attempted a blocked mutation').toEqual([]);
+    expect(result.accessTokenPresent, 'app authentication session token').toBe(true);
     expect(result.status, 'user integrations runtime endpoint').toBe(200);
     expect(sanitized).toMatchObject({
       deliveryReady: true,

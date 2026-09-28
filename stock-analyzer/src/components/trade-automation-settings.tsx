@@ -158,8 +158,13 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
     setLoading(true);
     try {
       const response = await authorizedFetch('/api/trade-automation/status');
-      const payload = await response.json() as Status & { error?: string };
-      if (!response.ok) throw new Error(payload.error ?? '설정을 불러오지 못했습니다.');
+      const payload = await response.json() as Status & { ok?: boolean; status?: string; error?: string };
+      if (!response.ok || payload.ok === false) {
+        const message = payload.status === 'UNAVAILABLE'
+          ? '자동매매 상태 저장소를 확인할 수 없습니다. 주문 실행 없이 안전하게 차단했습니다.'
+          : (payload.error ?? '설정을 불러오지 못했습니다.');
+        throw new Error(message);
+      }
       setStatus(payload);
       setDraft(normalizeUiPolicy(payload.policy));
       setMessage('');

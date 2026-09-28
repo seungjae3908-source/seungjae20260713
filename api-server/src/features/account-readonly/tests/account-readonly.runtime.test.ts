@@ -72,8 +72,8 @@ test('vault-backed Bitget Classic reader probes v3 safely then emits only allowl
     decryptCredentials: () => ({ apiKey: 'BITGET_KEY_RUNTIME_TEST_ONLY', secretKey: 'BITGET_SECRET_RUNTIME_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_RUNTIME_TEST_ONLY' }),
     fetchImpl: async (input, init) => {
       const url = new URL(String(input)); assert.equal(url.origin, 'https://api.bitget.com'); paths.push(url.pathname); methods.push(String(init?.method));
-      if (url.pathname === '/api/v3/account/info') {
-        return new Response(JSON.stringify({ code: '00000', data: { permissions: [] } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname === '/api/v3/account/settings') {
+        return new Response(JSON.stringify({ code: '25245', msg: 'The account is not the unified account mode', data: null }), { status: 400, headers: { 'Content-Type': 'application/json' } });
       }
       const body = url.pathname.includes('/position/')
         ? { code: '00000', data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', leverage: '2' }] }
@@ -85,7 +85,7 @@ test('vault-backed Bitget Classic reader probes v3 safely then emits only allowl
   });
   const result = await readers.bitget!(SCOPE);
   assert.deepEqual(new Set(paths), new Set([
-    '/api/v3/account/info',
+    '/api/v3/account/settings',
     '/api/v2/mix/account/accounts',
     '/api/v2/mix/position/all-position',
     '/api/v2/mix/order/orders-pending',
@@ -93,6 +93,291 @@ test('vault-backed Bitget Classic reader probes v3 safely then emits only allowl
   assert.ok(methods.every((method) => method === 'GET')); assert.equal(result.connected, true); assert.equal(result.openOrders?.[0]?.id, 'BG-OPEN-1'); assert.ok(Math.abs((result.openOrders?.[0]?.remainingQuantity ?? 0) - 0.06) < 1e-12); assert.equal(result.orderRequests, 0); assert.equal(result.withdrawalRequests, 0);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('BITGET_KEY_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('BITGET_PASSPHRASE_RUNTIME_TEST_ONLY'), false);
+});
+
+test('vault-backed Bitget falls back to permissionless account info when the UTA settings probe rejects a Classic account', async () => {
+  const paths: string[] = [];
+  const readers = createVaultBackedAccountReaders({
+    repositoryFactory: () => repositoryFor('bitget'),
+    decryptCredentials: () => ({
+      apiKey: 'BITGET_KEY_RUNTIME_TEST_ONLY',
+      secretKey: 'BITGET_SECRET_RUNTIME_TEST_ONLY',
+      passphrase: 'BITGET_PASSPHRASE_RUNTIME_TEST_ONLY',
+    }),
+    fetchImpl: async (input) => {
+      const url = new URL(String(input));
+      paths.push(url.pathname);
+      if (url.pathname === '/api/v3/account/settings') {
+        return new Response(JSON.stringify({
+          code: '99999',
+          msg: 'UNTRUSTED_PROVIDER_MESSAGE',
+          data: null,
+        }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v3/account/info') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          msg: 'success',
+          data: { permissions: [] },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v2/mix/position/all-position') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', leverage: '2' }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v2/mix/order/orders-pending') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: { entrustedList: [], endId: '' },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        code: '00000',
+        data: [{ marginCoin: 'USDT', accountEquity: '100', available: '90' }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+
+  const result = await readers.bitget!(SCOPE);
+  assert.equal(result.connected, true);
+  assert.deepEqual(new Set(paths), new Set([
+    '/api/v3/account/settings',
+    '/api/v3/account/info',
+    '/api/v2/mix/account/accounts',
+    '/api/v2/mix/position/all-position',
+    '/api/v2/mix/order/orders-pending',
+  ]));
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes('BITGET_KEY_RUNTIME_TEST_ONLY'), false);
+  assert.equal(serialized.includes('BITGET_SECRET_RUNTIME_TEST_ONLY'), false);
+  assert.equal(serialized.includes('BITGET_PASSPHRASE_RUNTIME_TEST_ONLY'), false);
+  assert.equal(serialized.includes('99999'), false);
+  assert.equal(serialized.includes('UNTRUSTED_PROVIDER_MESSAGE'), false);
+});
+
+test('vault-backed Bitget falls back to Classic reads when both v3 mode probes are generically rejected', async () => {
+  const paths: string[] = [];
+  const readers = createVaultBackedAccountReaders({
+    repositoryFactory: () => repositoryFor('bitget'),
+    decryptCredentials: () => ({
+      apiKey: 'BITGET_KEY_RUNTIME_TEST_ONLY',
+      secretKey: 'BITGET_SECRET_RUNTIME_TEST_ONLY',
+      passphrase: 'BITGET_PASSPHRASE_RUNTIME_TEST_ONLY',
+    }),
+    fetchImpl: async (input) => {
+      const url = new URL(String(input));
+      paths.push(url.pathname);
+      if (url.pathname === '/api/v3/account/settings' || url.pathname === '/api/v3/account/info') {
+        return new Response(JSON.stringify({
+          code: '99999',
+          msg: 'UNTRUSTED_PROVIDER_MESSAGE',
+          data: null,
+        }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v2/mix/position/all-position') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', leverage: '2' }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v2/mix/order/orders-pending') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: { entrustedList: [], endId: '' },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        code: '00000',
+        data: [{ marginCoin: 'USDT', accountEquity: '100', available: '90' }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+
+  const result = await readers.bitget!(SCOPE);
+  assert.equal(result.connected, true);
+  assert.deepEqual(new Set(paths), new Set([
+    '/api/v3/account/settings',
+    '/api/v3/account/info',
+    '/api/v2/mix/account/accounts',
+    '/api/v2/mix/position/all-position',
+    '/api/v2/mix/order/orders-pending',
+  ]));
+  assert.equal(result.orderRequests, 0);
+  assert.equal(result.cancelRequests, 0);
+  assert.equal(result.transferRequests, 0);
+  assert.equal(result.withdrawalRequests, 0);
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes('BITGET_KEY_RUNTIME_TEST_ONLY'), false);
+  assert.equal(serialized.includes('BITGET_SECRET_RUNTIME_TEST_ONLY'), false);
+  assert.equal(serialized.includes('BITGET_PASSPHRASE_RUNTIME_TEST_ONLY'), false);
+  assert.equal(serialized.includes('99999'), false);
+  assert.equal(serialized.includes('UNTRUSTED_PROVIDER_MESSAGE'), false);
+});
+
+test('vault-backed Bitget falls through unknown-mode Classic rejection to UTA read-only GETs', async () => {
+  const paths: string[] = [];
+  const readers = createVaultBackedAccountReaders({
+    repositoryFactory: () => repositoryFor('bitget'),
+    decryptCredentials: () => ({
+      apiKey: 'BITGET_KEY_RUNTIME_TEST_ONLY',
+      secretKey: 'BITGET_SECRET_RUNTIME_TEST_ONLY',
+      passphrase: 'BITGET_PASSPHRASE_RUNTIME_TEST_ONLY',
+    }),
+    fetchImpl: async (input) => {
+      const url = new URL(String(input));
+      paths.push(url.pathname);
+      if (url.pathname === '/api/v3/account/settings' || url.pathname === '/api/v3/account/info') {
+        return new Response(JSON.stringify({
+          code: '99999',
+          msg: 'UNTRUSTED_PROVIDER_MESSAGE',
+          data: null,
+        }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname.startsWith('/api/v2/mix/')) {
+        return new Response(JSON.stringify({
+          code: '25245',
+          msg: 'UNTRUSTED_CLASSIC_REJECTION',
+          data: null,
+        }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v3/account/assets') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: { assets: [{ coin: 'USDT', equity: '100', balance: '100', available: '90', locked: '10' }] },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v3/position/current-position') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: { list: [] },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v3/trade/unfilled-orders') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: { list: [], cursor: '' },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+
+  const result = await readers.bitget!(SCOPE);
+  assert.equal(result.connected, true);
+  assert.ok(paths.includes('/api/v2/mix/account/accounts'));
+  assert.ok(paths.includes('/api/v3/account/assets'));
+  assert.ok(paths.includes('/api/v3/position/current-position'));
+  assert.ok(paths.includes('/api/v3/trade/unfilled-orders'));
+  assert.equal(result.orderRequests, 0);
+  assert.equal(result.cancelRequests, 0);
+  assert.equal(result.transferRequests, 0);
+  assert.equal(result.withdrawalRequests, 0);
+});
+
+test('vault-backed Bitget uses UTA v3 reads when settings is denied but account info grants uta_trade', async () => {
+  const seen: Array<{ path: string; search: string; method: string }> = [];
+  const readers = createVaultBackedAccountReaders({
+    repositoryFactory: () => repositoryFor('bitget'),
+    decryptCredentials: () => ({
+      apiKey: 'BITGET_KEY_RUNTIME_TEST_ONLY',
+      secretKey: 'BITGET_SECRET_RUNTIME_TEST_ONLY',
+      passphrase: 'BITGET_PASSPHRASE_RUNTIME_TEST_ONLY',
+    }),
+    fetchImpl: async (input, init) => {
+      const url = new URL(String(input));
+      seen.push({ path: url.pathname, search: url.search, method: String(init?.method) });
+      if (url.pathname === '/api/v3/account/settings') {
+        return new Response(JSON.stringify({
+          code: '40014',
+          msg: 'UNTRUSTED_PROVIDER_PERMISSION_MESSAGE',
+          data: null,
+        }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v3/account/info') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          msg: 'success',
+          data: { permType: 'read-only', permissions: ['uta_trade'] },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v3/account/assets') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: { assets: [{ coin: 'USDT', equity: '100', balance: '100', available: '90', locked: '10' }] },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v3/position/current-position') {
+        assert.equal(url.search, '?category=USDT-FUTURES');
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: { list: [{
+            category: 'USDT-FUTURES',
+            symbol: 'BTCUSDT',
+            total: '0.1',
+            available: '0.08',
+            avgPrice: '60000',
+            markPrice: '61000',
+            unrealisedPnl: '100',
+            leverage: '2',
+            liquidationPrice: '30000',
+            marginMode: 'crossed',
+            posSide: 'long',
+          }] },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v3/trade/unfilled-orders') {
+        assert.equal(url.search, '?category=USDT-FUTURES');
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: { list: [], cursor: '' },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+
+  const result = await readers.bitget!(SCOPE);
+  assert.equal(result.connected, true);
+  assert.deepEqual(new Set(seen.map((row) => row.path)), new Set([
+    '/api/v3/account/settings',
+    '/api/v3/account/info',
+    '/api/v3/account/assets',
+    '/api/v3/position/current-position',
+    '/api/v3/trade/unfilled-orders',
+  ]));
+  assert.ok(seen.every((row) => row.method === 'GET'));
+  assert.equal(result.balances?.[0]?.currency, 'USDT');
+  assert.equal(result.positions?.[0]?.symbol, 'BTCUSDT');
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes('BITGET_KEY_RUNTIME_TEST_ONLY'), false);
+  assert.equal(serialized.includes('BITGET_SECRET_RUNTIME_TEST_ONLY'), false);
+  assert.equal(serialized.includes('BITGET_PASSPHRASE_RUNTIME_TEST_ONLY'), false);
+  assert.equal(serialized.includes('40014'), false);
+  assert.equal(serialized.includes('UNTRUSTED_PROVIDER_PERMISSION_MESSAGE'), false);
+});
+
+test('vault-backed Bitget classifies non-2xx JSON error bodies before generic HTTP status fallback', async () => {
+  for (const fixture of [
+    { code: '40009', expected: 'BITGET_AUTH_FAILED' },
+    { code: '40017', expected: 'BITGET_PARAMETER_REJECTED' },
+  ]) {
+    const readers = createVaultBackedAccountReaders({
+      repositoryFactory: () => repositoryFor('bitget'),
+      decryptCredentials: () => ({ apiKey: 'BITGET_KEY_RUNTIME_TEST_ONLY', secretKey: 'BITGET_SECRET_RUNTIME_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_RUNTIME_TEST_ONLY' }),
+      fetchImpl: async () => new Response(
+        JSON.stringify({ code: fixture.code, msg: 'redacted-provider-message', data: null }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } },
+      ),
+    });
+    await assert.rejects(
+      readers.bitget!(SCOPE),
+      (error: unknown) => error instanceof AccountReadonlyError
+        && error.code === fixture.expected
+        && !error.message.includes('redacted-provider-message'),
+    );
+  }
 });
 
 test('vault-backed Bitget UTA reader uses only v3 signed GET reads and maps assets positions and open orders', async () => {
@@ -105,10 +390,10 @@ test('vault-backed Bitget UTA reader uses only v3 signed GET reads and maps asse
       assert.equal(url.origin, 'https://api.bitget.com');
       seen.push({ path: url.pathname, search: url.search, method: String(init?.method), body: init?.body });
 
-      if (url.pathname === '/api/v3/account/info') {
+      if (url.pathname === '/api/v3/account/settings') {
         return new Response(JSON.stringify({
           code: '00000',
-          data: { permType: 'read-only', permissions: ['uta_mgt', 'uta_trade'] },
+          data: { accountMode: 'unified', accountLevel: 'basic' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.pathname === '/api/v3/account/assets') {
@@ -147,7 +432,7 @@ test('vault-backed Bitget UTA reader uses only v3 signed GET reads and maps asse
 
   const result = await readers.bitget!(SCOPE);
   assert.deepEqual(new Set(seen.map((row) => row.path)), new Set([
-    '/api/v3/account/info',
+    '/api/v3/account/settings',
     '/api/v3/account/assets',
     '/api/v3/position/current-position',
     '/api/v3/trade/unfilled-orders',
@@ -383,8 +668,13 @@ test('Bitget application error codes map to bounded account-access causes withou
   for (const [providerCode, expected] of [
     ['40038', 'BITGET_IP_NOT_ALLOWED'],
     ['40014', 'BITGET_PERMISSION_DENIED'],
+    ['40025', 'BITGET_PERMISSION_DENIED'],
+    ['40040', 'BITGET_PERMISSION_DENIED'],
     ['40009', 'BITGET_AUTH_FAILED'],
+    ['40012', 'BITGET_AUTH_FAILED'],
+    ['40037', 'BITGET_AUTH_FAILED'],
     ['40008', 'BITGET_TIMESTAMP_REJECTED'],
+    ['400172', 'BITGET_PARAMETER_REJECTED'],
     ['99999', 'BITGET_REQUEST_REJECTED'],
   ] as const) {
     const readers = createVaultBackedAccountReaders({

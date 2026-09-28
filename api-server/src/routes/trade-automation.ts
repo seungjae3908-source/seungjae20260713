@@ -309,7 +309,22 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       lastOrder: orders[0] ?? null,
       actualOrderSubmittedByStatusRequest: false,
     });
-  } catch (error) { return errorResponse(res, error); }
+  } catch (error) {
+    const code = error instanceof Error ? error.message.split(':')[0] : 'TRADE_AUTOMATION_FAILED';
+    if (code.includes('STORAGE') || code.includes('MASTER_KEY')) {
+      return res.status(200).json({
+        ok: false,
+        status: 'UNAVAILABLE',
+        error: code,
+        readOnlyStatusRequest: true,
+        readinessKnown: false,
+        credentialsReturned: false,
+        privateTradingRequestSent: false,
+        actualOrderSubmittedByStatusRequest: false,
+      });
+    }
+    return errorResponse(res, error);
+  }
 });
 
 router.get('/approval-queue', async (req: AuthenticatedRequest, res) => {

@@ -21,6 +21,7 @@ import {
   MemoryTelegramIntelligenceStateStore,
   TelegramIntelligenceWorker,
 } from './telegram-intelligence-worker.service';
+import { buildSignalIntelligenceTelegramInput } from './signal-intelligence-telegram-subscriber.service';
 import {
   deliverScannerTelegramAlerts,
   scannerInAppNotificationInput,
@@ -257,6 +258,56 @@ test('supports all requested alert templates', () => {
     assert.ok(rendered.length > 0);
   }
   assert.match(renderTelegramAlert({ type: 'crypto_spot_buy', symbol: 'BTC' }), /코인현물 매수 신호/);
+});
+
+test('signal intelligence Telegram turns internal state codes into a concise Korean user message', () => {
+  process.env.TELEGRAM_CRYPTO_CHAT_ID = 'crypto-room';
+  const input = buildSignalIntelligenceTelegramInput({
+    type: 'STATE_CHANGED',
+    id: 'ada-position-1d',
+    market: 'CRYPTO_SPOT',
+    symbol: 'ADA',
+    strategy: 'POSITION',
+    timeframe: '1D',
+    direction: 'BUY',
+    previousState: 'BLOCKED_DATA',
+    state: 'NO_TRADE',
+    validationTier: 'RESEARCH_CANDIDATE',
+    reasons: [
+      'QUANT_NOT_ELIGIBLE',
+      'PROFIT_GATE_REJECTED',
+      'RISK_NOT_READY',
+      'UTILITY_EVIDENCE_INCOMPLETE:INCOMPLETE_EXPECTED_EDGE',
+    ],
+  }, 'a'.repeat(40), new Date('2026-09-28T02:46:13.197Z'));
+
+  assert.ok(input);
+  const rendered = renderTelegramAlert(input!);
+  assert.match(rendered, /📊 ADA · 코인현물/);
+  assert.match(rendered, /🟡 현재 판단: 관망/);
+  assert.match(rendered, /중장기 · 1일봉/);
+  assert.match(rendered, /검증: 연구 후보 · 실전수익 미검증/);
+  assert.match(rendered, /정량 조건 미충족/);
+  assert.match(rendered, /수익성 검증 기준 미충족/);
+  assert.match(rendered, /리스크 조건 미충족/);
+  assert.match(rendered, /예상 수익 우위 근거 부족/);
+  assert.match(rendered, /조건 충족 시 다시 분석합니다/);
+  assert.match(rendered, /9월 28일 11:46/);
+
+  for (const internalCode of [
+    'CRYPTO_SPOT',
+    'POSITION/1D',
+    'BUY',
+    'BLOCKED_DATA',
+    'NO_TRADE',
+    'QUANT_NOT_ELIGIBLE',
+    'PROFIT_GATE_REJECTED',
+    'RISK_NOT_READY',
+    'UTILITY_EVIDENCE_INCOMPLETE',
+    'INCOMPLETE_EXPECTED_EDGE',
+  ]) {
+    assert.equal(rendered.includes(internalCode), false, internalCode);
+  }
 });
 
 test('scanner signal room routing is strict and does not fall back to the default chat', () => {

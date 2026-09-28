@@ -31,7 +31,8 @@ import SearchPage from '@/pages/search';
 
 const loadWatchlistPage = () => import('@/pages/watchlist');
 const WatchlistPage = lazy(loadWatchlistPage);
-const AlertsPage = lazy(() => import('@/pages/alerts'));
+const loadAlertsPage = () => import('@/pages/alerts');
+const AlertsPage = lazy(loadAlertsPage);
 const ScannerPage = lazy(() => import('@/pages/scanner'));
 const loadSignalScannerPage = () => import('@/pages/signal-scanner');
 const SignalScannerPage = lazy(loadSignalScannerPage);
@@ -126,12 +127,20 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: true, refetchOnReconnect: true, staleTime: 0, gcTime: 30 * 60 * 1000, retry: 2 } },
 });
 
-async function prewarmPrimaryMarketInformation(): Promise<void> {
+async function prewarmPrimaryMarketInformation(includeFutures: boolean): Promise<void> {
   const marketInformation = await loadMarketInformationPage();
   if (typeof window === 'undefined') return;
   const currentPath = window.location.pathname.replace(/\/+$/, '') || '/';
   if (currentPath !== '/' && !currentPath.endsWith('/home')) return;
-  await marketInformation.prefetchMarketInformationRoom(queryClient, '/stocks/kr');
+  const prefetches = [
+    marketInformation.prefetchMarketInformationRoom(queryClient, '/stocks/kr'),
+  ];
+  if (includeFutures) {
+    prefetches.push(
+      marketInformation.prefetchMarketInformationRoom(queryClient, '/coins/futures'),
+    );
+  }
+  await Promise.allSettled(prefetches);
 }
 
 function DirectAiChartDataPrewarm() {
@@ -440,8 +449,9 @@ function AuthenticatedApp() {
       loadSignalScannerPage(),
       loadAiChartPage(),
       loadLearnPage(),
-    ]).then(() => prewarmPrimaryMarketInformation()).catch(() => undefined);
-  }, [auth.isApproved]);
+      loadAlertsPage(),
+    ]).then(() => prewarmPrimaryMarketInformation(auth.can('canAccessFutures'))).catch(() => undefined);
+  }, [auth.isApproved, auth.membershipLevel]);
   useEffect(() => {
     if (auth.isApproved && auth.can('canAccessPaperTrading')) {
       void loadPaperTradingPage();
