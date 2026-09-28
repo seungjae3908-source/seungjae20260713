@@ -171,6 +171,7 @@ test('public signal lifecycle edits the original Telegram message instead of cre
     expect(JSON.stringify(edits[0].buttons)).not.toContain('🛒 주문');
     expect(JSON.stringify(edits[0].buttons)).toContain('📊 AI차트');
     expect(JSON.stringify(edits[0].buttons)).toContain('/ai-chart');
+    expect(JSON.stringify(edits[0].buttons)).toContain('timeframe=15m');
 
     const [stored] = await repository.list(['signal-edit-in-place']);
     expect(stored.telegramMessageId).toBe(42);
@@ -224,6 +225,7 @@ test('rearmed signal restores the order button only after price returns inside t
     expect(edits.at(-1)?.text).toContain('매수 활성');
     expect(JSON.stringify(edits.at(-1)?.buttons)).toContain('🛒 주문');
     expect(JSON.stringify(edits.at(-1)?.buttons)).toContain('📊 AI차트');
+    expect(JSON.stringify(edits.at(-1)?.buttons)).toContain('timeframe=15m');
   });
 });
 
