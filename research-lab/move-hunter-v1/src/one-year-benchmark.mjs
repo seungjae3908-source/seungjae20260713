@@ -318,7 +318,8 @@ export function runOneYearDatasetBenchmark(dataset, {
     if (variant === 'BASELINE_EMA_PULLBACK_V1') {
       matched = baselineSignal(rows, index, tradeSide, cheap);
     } else if (variant === 'IMPROVED_TECH_STRUCTURE_V2' || variant.startsWith('ABLATION_')) {
-      if (!improvedRequiredPrefilter(index, tradeSide, cheap, normalizedDisabledFamilies)) continue;
+      // Keep the candidate universe fixed across decision-layer ablations.
+      if (!improvedRequiredPrefilter(index, tradeSide, cheap, [])) continue;
       const snapshot = buildFeatureSnapshotFromRows(dataset, rows, index, tradeSide);
       decision = improvedSignalDecision(snapshot, tradeSide, { disabledFamilies: normalizedDisabledFamilies });
       matched = decision.matched;
@@ -482,10 +483,12 @@ function runOneYearDatasetAblationRows(dataset, {
     const entryTime = rows[index + 1].ts;
     if (signalTime < startTime || entryTime > endTime) continue;
 
+    // Ablation changes only the final decision layer; every variant sees the
+    // exact same trend+momentum-prefiltered candidate universe.
+    if (!improvedRequiredPrefilter(index, tradeSide, cheap, [])) continue;
     const eligible = ABLATION_DEFINITIONS.filter((definition) => {
       const state = states.get(definition.id);
-      return signalTime > state.lastExit
-        && improvedRequiredPrefilter(index, tradeSide, cheap, definition.disabledFamilies);
+      return signalTime > state.lastExit;
     });
     if (eligible.length === 0) continue;
 
@@ -622,6 +625,8 @@ export function runFourMarketOneYearAblation({
     markets: freeze(markets),
     interpretation: freeze({
       observedHistoryOnly: true,
+      candidatePrefilterFrozenAcrossVariants: true,
+      ablationScope: 'FINAL_DECISION_LAYER_ONLY',
       selectionFromThisWindowMayNotCountAsOos: true,
       automaticMarketSpecificAdoptionAllowed: false,
       economicSampleCredit: 0,
