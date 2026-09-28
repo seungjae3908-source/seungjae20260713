@@ -173,6 +173,7 @@ test('tracked Telegram delivery captures message id and lifecycle updates edit t
     assert.equal(body.chat_id, 'ci-chat-id-sentinel');
     assert.equal(body.message_id, 77);
     assert.match(String(body.text), /TP1 도달/);
+    assert.deepEqual(body.reply_markup, { inline_keyboard: [] });
     return new Response(JSON.stringify({ ok: true, result: { message_id: 77 } }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -201,6 +202,7 @@ test('tracked Telegram delivery captures message id and lifecycle updates edit t
     messageId: tracked.receipt.messageId!,
     messageKind: tracked.receipt.messageKind,
     text: tracked.receipt.renderedText + '\nTP1 도달',
+    buttons: [],
   }), { ok: true, attempts: 1 });
   assert.equal(endpoints.length, 2);
 });
