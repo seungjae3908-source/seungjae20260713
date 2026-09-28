@@ -49,15 +49,25 @@ function roomLabel(room: MarketInformationRoomId): string {
 }
 
 function destinationLabel(destination: TelegramReportDestination): string {
-  if (destination === 'STOCK_ROOM') return '주식방 · 국내주식 / 미국주식';
-  if (destination === 'CRYPTO_ROOM') return '코인방 · 코인현물 / 코인선물';
-  return '개인 브리핑 · 전체 공개시장';
+  switch (destination) {
+    case 'KR_STOCK_ROOM': return '🇰🇷 국내주식';
+    case 'US_STOCK_ROOM': return '🇺🇸 해외주식';
+    case 'CRYPTO_SPOT_ROOM': return '🪙 코인현물';
+    case 'CRYPTO_FUTURES_ROOM': return '⚡ 코인선물';
+  }
 }
 
 function destinationRooms(destination: TelegramReportDestination): ReadonlySet<MarketInformationRoomId> {
-  if (destination === 'STOCK_ROOM') return new Set(STOCK_ROOMS);
-  if (destination === 'CRYPTO_ROOM') return new Set(CRYPTO_ROOMS);
-  return new Set(ROOMS);
+  switch (destination) {
+    case 'KR_STOCK_ROOM': return new Set(['stocks-kr']);
+    case 'US_STOCK_ROOM': return new Set(['stocks-us']);
+    case 'CRYPTO_SPOT_ROOM': return new Set(['coins-spot']);
+    case 'CRYPTO_FUTURES_ROOM': return new Set(['coins-futures']);
+  }
+}
+
+function stockDestination(destination: TelegramReportDestination): boolean {
+  return destination === 'KR_STOCK_ROOM' || destination === 'US_STOCK_ROOM';
 }
 
 function number(value: number | null, digits = 2): string {
@@ -165,12 +175,12 @@ function newsRows(rooms: readonly BriefRoom[]) {
 }
 
 function scopedWarnings(snapshot: TelegramMarketBriefSnapshot, destination: TelegramReportDestination): string[] {
-  if (destination === 'PERSONAL') return snapshot.warnings;
   const allowed = destinationRooms(destination);
   return snapshot.warnings.filter((warning) => {
     const room = ROOMS.find((candidate) => warning.startsWith(`${candidate}:`));
     if (room) return allowed.has(room);
-    if (destination === 'STOCK_ROOM') return warning === 'KR_THEME_UNAVAILABLE' || warning === 'US_THEME_UNAVAILABLE';
+    if (destination === 'KR_STOCK_ROOM') return warning === 'KR_THEME_UNAVAILABLE';
+    if (destination === 'US_STOCK_ROOM') return warning === 'US_THEME_UNAVAILABLE';
     return false;
   });
 }
@@ -194,20 +204,18 @@ export function buildTelegramMarketBriefInput(input: {
     ...rooms.flatMap(roomLines),
   ];
 
-  if (input.destination !== 'CRYPTO_ROOM') {
-    lines.push(
-      '',
-      '[오늘의 테마/주도주]',
-      ...themeLines('KR', input.snapshot.krThemes),
-      ...themeLines('US', input.snapshot.usThemes),
-    );
+  if (input.destination === 'KR_STOCK_ROOM') {
+    lines.push('', '[오늘의 테마/주도주]', ...themeLines('KR', input.snapshot.krThemes));
+  } else if (input.destination === 'US_STOCK_ROOM') {
+    lines.push('', '[오늘의 테마/주도주]', ...themeLines('US', input.snapshot.usThemes));
   }
 
+  const newsScope = stockDestination(input.destination) ? '주식' : '코인';
   if (news.length) {
-    lines.push('', `[뉴스 브리핑 · ${input.destination === 'CRYPTO_ROOM' ? '코인' : '주식'}]`);
+    lines.push('', `[뉴스 브리핑 · ${newsScope}]`);
     news.forEach((item, index) => lines.push(`${index + 1}. ${item.provider} · ${item.symbol} · ${item.title}`));
   } else {
-    lines.push('', `[뉴스 브리핑 · ${input.destination === 'CRYPTO_ROOM' ? '코인' : '주식'}] 검증된 최신 뉴스 N/A`);
+    lines.push('', `[뉴스 브리핑 · ${newsScope}] 검증된 최신 뉴스 N/A`);
   }
   if (warnings.length) lines.push('', `데이터 경고: ${warnings.slice(0, 6).join(' · ')}`);
   lines.push('', '실제 데이터가 없는 값은 N/A로 유지하며 신호·수익률·목표가를 새로 만들지 않습니다.');
