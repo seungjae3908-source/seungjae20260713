@@ -1,0 +1,45 @@
+[Unit]
+Description=Stock App public Forward evidence shadow capture
+Documentation=https://github.com/seungjae3908-source/seungjae20260713
+After=network-online.target time-sync.target
+Wants=network-online.target time-sync.target
+ConditionPathExists=/opt/stock-app/.deploy/current-sha
+
+[Service]
+Type=oneshot
+DynamicUser=true
+WorkingDirectory=/opt/stock-app
+Environment=SERVER_EVIDENCE_SHADOW_ONLY=true
+Environment=SERVER_EVIDENCE_SERVER_CANONICAL=false
+Environment=SERVER_EVIDENCE_STATE_ROOT=/var/lib/stock-app-server-evidence-shadow-v1
+Environment=SERVER_EVIDENCE_DEPLOY_SHA_FILE=/opt/stock-app/.deploy/current-sha
+EnvironmentFile=-/etc/stock-app/server-evidence-shadow-v1.env
+ExecStart=/usr/bin/env node market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-shadow-worker-v1.mjs tick
+StateDirectory=stock-app-server-evidence-shadow-v1
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadOnlyPaths=/opt/stock-app
+ReadWritePaths=/var/lib/stock-app-server-evidence-shadow-v1
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=5m
+
+# Safety boundary:
+# - public market data only
+# - SHADOW_ONLY=true
+# - SERVER_CANONICAL=false
+# - prospective/economic/profitability credit always 0
+# - no private trading API, order, cancel, amend, transfer, withdrawal or Replit authority
