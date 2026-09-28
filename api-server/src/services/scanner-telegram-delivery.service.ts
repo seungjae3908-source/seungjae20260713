@@ -262,7 +262,8 @@ export function addTelegramSignalFreshness(
   const lines = input.details ? input.details.split('\n') : [];
 
   if (freshness.status !== 'FRESH' && warning) lines.push(warning);
-  const buttons = freshness.status === 'FRESH'
+  const orderStillReviewable = freshness.status === 'FRESH' || freshness.status === 'PARTIAL';
+  const buttons = orderStillReviewable
     ? input.buttons
     : input.buttons
       ?.map((row) => row.filter((button) => !button.text.includes('주문')))
