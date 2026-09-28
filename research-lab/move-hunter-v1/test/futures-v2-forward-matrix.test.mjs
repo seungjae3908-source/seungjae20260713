@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildFuturesV2ProspectiveDecisionMatrix } from '../src/futures-v2-forward-matrix.mjs';
+import { buildFeatureSnapshotAt } from '../src/one-year-benchmark.mjs';
 
 const DECISION = '2026-09-29T00:00:00.000Z';
 
@@ -48,63 +49,33 @@ function observation(overrides = {}) {
 }
 
 function featureSnapshot(overrides = {}) {
-  const identity = {
-    lineageId: 'ADAPTIVE_MULTI_EVIDENCE_V2',
+  const symbol = overrides.symbol ?? 'BTCUSDT';
+  const timeframe = overrides.timeframe ?? '60m';
+  const side = overrides.side ?? 'LONG';
+  const decisionMs = Date.parse(DECISION);
+  const count = 140;
+  const candles = Array.from({ length: count }, (_, index) => {
+    const timestamp = decisionMs - (count - 1 - index) * 60 * 60 * 1000;
+    const trend = 100 + index * 0.12;
+    const wave = Math.sin(index / 5) * 1.4 + Math.sin(index / 13) * 0.7;
+    const close = trend + wave;
+    const open = close - Math.sin(index / 3) * 0.3;
+    return {
+      timestamp,
+      open,
+      high: Math.max(open, close) + 0.8,
+      low: Math.min(open, close) - 0.8,
+      close,
+      volume: 1200 + (index % 20) * 35,
+    };
+  });
+  return buildFeatureSnapshotAt({
     market: 'CRYPTO_FUTURES',
-    symbol: overrides.symbol ?? 'BTCUSDT',
-    timeframe: overrides.timeframe ?? '60m',
-    side: overrides.side ?? 'LONG',
-    temporal: { decisionTime: DECISION },
-  };
-  return {
-    schemaVersion: 'adaptive-multi-evidence-market-features-v2',
-    lineageId: 'ADAPTIVE_MULTI_EVIDENCE_V2',
-    status: 'READY_FOR_SPECIALIST_RESEARCH_ONLY',
-    decisionTime: DECISION,
-    contentDigest: 'b'.repeat(64),
-    decisionAuthority: 'EVIDENCE_ONLY',
-    executionAuthority: 'NONE',
-    features: {
-      trend: {
-        adx: 25,
-        emaDirection: 'UP',
-        adxDirection: 'UP',
-        structureTrend: 'BULLISH',
-        multiTimeframe: [],
-      },
-      momentum: {
-        roc: 0.02,
-        rsi: 58,
-        macdHistogramPct: 0.01,
-      },
-      volume: {
-        relativeVolume: 1.1,
-        abnormalVolume: false,
-        priceVolumeDisagreement: false,
-      },
-      volatility: {
-        atrPct: 0.02,
-        recentToPriorRangeRatio: 1,
-        abnormalVolatility: false,
-      },
-      priceAction: {
-        structureTrend: 'BULLISH',
-        structureTransition: 'NONE',
-        latestSwingLegDirection: 'UP',
-        latestSwingLegAtr: 1.2,
-        swingRetracementRatio: 0.5,
-        swingSequence: ['HL', 'HH'],
-        candlestickPatterns: [],
-      },
-    },
-    evidence: {
-      trend: { status: 'ADMISSIBLE', executionAuthority: 'NONE', evidence: { lineageId: 'ADAPTIVE_MULTI_EVIDENCE_V2', identity } },
-      momentum: { status: 'ADMISSIBLE', executionAuthority: 'NONE', evidence: { lineageId: 'ADAPTIVE_MULTI_EVIDENCE_V2', identity } },
-      volume: { status: 'ADMISSIBLE', executionAuthority: 'NONE', evidence: { lineageId: 'ADAPTIVE_MULTI_EVIDENCE_V2', identity } },
-      volatility: { status: 'ADMISSIBLE', executionAuthority: 'NONE', evidence: { lineageId: 'ADAPTIVE_MULTI_EVIDENCE_V2', identity } },
-    },
-    missingEvidence: [],
-  };
+    symbol,
+    timeframe,
+    source: 'synthetic-canonical-test-fixture',
+    candles,
+  }, count - 2, side);
 }
 
 const costModel = Object.freeze({
