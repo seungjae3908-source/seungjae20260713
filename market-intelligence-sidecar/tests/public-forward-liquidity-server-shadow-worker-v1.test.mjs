@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import {
   SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+  materializeSuccessorScheduleReliabilityV3Contract,
 } from '../src/public-forward-liquidity-successor-schedule-reliability-v3.mjs';
 import {
   buildServerEvidenceShadowEquivalenceReport,
@@ -18,8 +19,43 @@ import {
 const CODE_SHA = 'a'.repeat(40);
 const BINDING_DIGEST = 'b'.repeat(64);
 const RECEIPT_COMMENT_ID = 5865071720;
-const START_MS =
-  SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyCore.cohort.startInclusiveMs;
+
+// Existing Market Intelligence Sidecar CI deliberately stashes the real activation
+// binding while running preserved inactive-contract regressions. This immutable test
+// fixture reproduces the already-merged frozen activation identity only for tests;
+// it does not mint authority, economic credit, or runtime activation.
+const FROZEN_ACTIVATION_FIXTURE = Object.freeze({
+  schemaVersion:
+    'public-forward-liquidity-successor-schedule-reliability-activation-binding-v3',
+  authorityIssue: 23,
+  authorityCommentId: 5805902930,
+  hubFreezeAuthorityCommentId: 5804802177,
+  hubFreezeTimestampCommentId: 5804808369,
+  frozenCohortFreezeBlobSha: '65ef02d9ef5611c767755e71b40b840737b0658a',
+  frozenCohortFreezeMs: 1790207015000,
+  frozenCohortEffectiveStartMs: 1790263020000,
+  activationBoundaryMs: 1790212089000,
+  cutoverStartMs: 1790263020000,
+  authorizedCurrentMainSha: '24d9c8b4bbca54c1b3bce4ad28a8c1286beaff92',
+  numericFreezeSha256:
+    '10b157de8e1902865f9b386a02439bb56d67b5c2fcd20dd48870d851bdb97ff1',
+  minActivationLeadSlots: 1,
+  priorV2CreditImported: 0,
+  priorV2MissedSlotRecovery: 0,
+  priorV2DiagnosticArtifactCredit: 0,
+  replayCredit: 0,
+  backfillCredit: 0,
+  syntheticCredit: 0,
+});
+
+const ACTIVE_CONTRACT =
+  SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound === true
+    ? SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT
+    : materializeSuccessorScheduleReliabilityV3Contract(
+        FROZEN_ACTIVATION_FIXTURE,
+      );
+
+const START_MS = ACTIVE_CONTRACT.policyCore.cohort.startInclusiveMs;
 
 async function tempRoot() {
   return mkdtemp(join(tmpdir(), 'server-evidence-shadow-v1-'));
@@ -37,6 +73,7 @@ function baseOptions({ root, nowMs, collector, ntpSynchronized = true } = {}) {
     serverCanonical: false,
     ntpSynchronized,
     collector,
+    contract: ACTIVE_CONTRACT,
   };
 }
 
@@ -51,7 +88,7 @@ function fakeBatch(tag = 'A') {
 }
 
 test('self-check preserves frozen split and zero-authority invariants', () => {
-  const report = buildServerEvidenceShadowSelfCheck();
+  const report = buildServerEvidenceShadowSelfCheck(ACTIVE_CONTRACT);
   assert.equal(report.contractValid, true);
   assert.equal(report.activationBound, true);
   assert.deepEqual(report.triggerMinutesUtc, [17, 27, 37]);
@@ -138,6 +175,7 @@ test('late trigger is recorded as missed shadow evidence and never backfilled', 
   try {
     const authority = resolveServerEvidenceShadowSlot({
       nowMs: START_MS + 56_000,
+      contract: ACTIVE_CONTRACT,
     });
     assert.equal(authority.eligible, false);
     assert.equal(authority.blocker, 'SERVER_EVIDENCE_TRIGGER_STARTED_TOO_LATE');
