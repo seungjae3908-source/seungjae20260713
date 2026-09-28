@@ -26,3 +26,21 @@ test('futures market-information prewarm is capability-gated', () => {
     'prewarm effect must re-evaluate when membership capability changes',
   );
 });
+
+
+test('strategy promotion route chunk is preloaded for approved sessions', () => {
+  assert.match(
+    appSource,
+    /const loadStrategyPromotionPage = \(\) => import\('@\/pages\/strategy-promotion'\);/,
+    'strategy promotion must expose a reusable lazy loader',
+  );
+  const effectStart = appSource.indexOf('void Promise.allSettled([');
+  const effectEnd = appSource.indexOf(']).then(() => prewarmPrimaryMarketInformation', effectStart);
+  assert.ok(effectStart >= 0 && effectEnd > effectStart, 'approved-session route preload effect must exist');
+  const routePreloads = appSource.slice(effectStart, effectEnd);
+  assert.match(
+    routePreloads,
+    /loadStrategyPromotionPage\(\)/,
+    'strategy promotion chunk must preload before Production route sweeps reach it',
+  );
+});
