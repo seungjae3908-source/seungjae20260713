@@ -7,6 +7,9 @@ import {
   collectBinanceFuturesDailyKlines,
   collectBinanceFuturesFundingRates,
 } from '../../../market-prediction-lab/src/binance-futures-history.js';
+import { BitgetPublicClient } from '../../../market-prediction-lab/src/bitget-public-client.js';
+import { collectBitgetCandles } from '../../../market-prediction-lab/src/bitget-candle-collector.js';
+import { collectFundingRateHistory as collectBitgetFundingRateHistory } from '../../../market-prediction-lab/src/derivatives-history.js';
 import { replayLongCashRunnerPortfolio } from '../src/portfolio.mjs';
 import {
   ONE_DAY_MS,
@@ -35,8 +38,11 @@ const COSTS = Object.freeze({
   CRYPTO_FUTURES: Object.freeze({feeBps:6,slippageBps:5,spreadBps:3,taxBps:0,assumption:'CONSERVATIVE_RESEARCH_ASSUMPTION_PLUS_ACTUAL_PUBLIC_FUNDING_HISTORY'}),
 });
 
-function source(market) {
+function source(market, provider = '') {
   if (market === 'CRYPTO_SPOT') return {sourceId:'UPBIT_PUBLIC_4H_AGG_1D',originalSourceId:'UPBIT_PUBLIC_CANDLES',sourceType:'PUBLIC_MARKET_OHLCV_AGGREGATED',sourceUrl:'https://api.upbit.com/'};
+  if (market === 'CRYPTO_FUTURES' && String(provider).includes('bitget')) {
+    return {sourceId:'BITGET_PUBLIC_V2_1D',originalSourceId:'BITGET_PUBLIC_HISTORY_CANDLES',sourceType:'PUBLIC_MARKET_OHLCV',sourceUrl:'https://api.bitget.com/'};
+  }
   if (market === 'CRYPTO_FUTURES') return {sourceId:'BINANCE_USDM_PUBLIC_1D',originalSourceId:'BINANCE_USDM_PUBLIC_REST',sourceType:'PUBLIC_MARKET_OHLCV',sourceUrl:'https://fapi.binance.com/'};
   return {sourceId:`YAHOO_PUBLIC_${market}_1D`,originalSourceId:'YAHOO_PUBLIC_CHART',sourceType:'PUBLIC_MARKET_OHLCV',sourceUrl:'https://query1.finance.yahoo.com/'};
 }
@@ -67,16 +73,43 @@ async function collectSpot() {
   return {datasets,failures};
 }
 async function collectFutures() {
-  const client=new BinanceFuturesPublicClient();
+  const binance=new BinanceFuturesPublicClient();
+  const bitget=new BitgetPublicClient({timeoutMs:20_000,maxRetries:3,minIntervalMs:150});
   const datasets=[],failures=[];
   for(const symbol of UNIVERSES.CRYPTO_FUTURES){
+    let binanceFailure=null;
     try{
       const [klines,funding]=await Promise.all([
-        collectBinanceFuturesDailyKlines({client,symbol,startTime:WARMUP_START_MS,endTime:ONE_YEAR_BENCHMARK_END_MS}),
-        collectBinanceFuturesFundingRates({client,symbol,startTime:WARMUP_START_MS,endTime:ONE_YEAR_BENCHMARK_END_MS}),
+        collectBinanceFuturesDailyKlines({client:binance,symbol,startTime:WARMUP_START_MS,endTime:ONE_YEAR_BENCHMARK_END_MS}),
+        collectBinanceFuturesFundingRates({client:binance,symbol,startTime:WARMUP_START_MS,endTime:ONE_YEAR_BENCHMARK_END_MS}),
       ]);
-      datasets.push({market:'CRYPTO_FUTURES',symbol,candles:runnerCandles(klines.candles),fundingRates:funding.records,provider:klines.provider});
-    }catch(error){ failures.push({market:'CRYPTO_FUTURES',symbol,error:error instanceof Error?error.message:String(error)}); }
+      datasets.push({market:'CRYPTO_FUTURES',symbol,candles:runnerCandles(klines.candles),fundingRates:funding.records,provider:klines.provider,providerFallbackUsed:false});
+      continue;
+    }catch(error){
+      binanceFailure=error instanceof Error?error.message:String(error);
+    }
+    try{
+      const [klines,funding]=await Promise.all([
+        collectBitgetCandles({
+          client:bitget,market:'CRYPTO_FUTURES',symbol,timeframe:'1d',
+          startTime:WARMUP_START_MS,endTime:ONE_YEAR_BENCHMARK_END_MS+1,maxCandles:1_000,productType:'usdt-futures',
+        }),
+        collectBitgetFundingRateHistory({
+          client:bitget,symbol,startTime:WARMUP_START_MS,endTime:ONE_YEAR_BENCHMARK_END_MS,
+          productType:'usdt-futures',pageSize:100,maxPages:20,
+        }),
+      ]);
+      if(!funding.exhausted) throw new Error('BITGET_FUNDING_HISTORY_NOT_EXHAUSTIVE_FOR_WINDOW');
+      datasets.push({
+        market:'CRYPTO_FUTURES',symbol,candles:runnerCandles(klines.candles),fundingRates:funding.records,
+        provider:klines.provider,providerFallbackUsed:true,primaryProviderFailure:binanceFailure,
+      });
+    }catch(error){
+      failures.push({
+        market:'CRYPTO_FUTURES',symbol,
+        error:`BINANCE: ${binanceFailure}; BITGET_FALLBACK: ${error instanceof Error?error.message:String(error)}`,
+      });
+    }
   }
   return {datasets,failures};
 }
@@ -85,7 +118,7 @@ function buildMarketResearch(market,datasets,side='LONG'){
   const timelines=[];
   for(const dataset of datasets){
     const timeline=buildOneYearCandidateTimeline({
-      market,symbol:dataset.symbol,side,timeframe:'1D',candles:dataset.candles,intervalMs:ONE_DAY_MS,source:source(market),
+      market,symbol:dataset.symbol,side,timeframe:'1D',candles:dataset.candles,intervalMs:ONE_DAY_MS,source:source(market,dataset.provider),
     });
     timelines.push({dataset,timeline});
   }
@@ -163,6 +196,9 @@ async function main(){
     window:{startTime:ONE_YEAR_BENCHMARK_START_MS,endTime:ONE_YEAR_BENCHMARK_END_MS,start:new Date(ONE_YEAR_BENCHMARK_START_MS).toISOString(),end:new Date(ONE_YEAR_BENCHMARK_END_MS).toISOString()},
     warmupStart:new Date(WARMUP_START_MS).toISOString(),
     universes:UNIVERSES,results,providerFailures:failures,
+    providers:{
+      futures:futures.datasets.map(x=>({symbol:x.symbol,provider:x.provider,providerFallbackUsed:x.providerFallbackUsed===true,primaryProviderFailure:x.primaryProviderFailure??null})),
+    },
     truth:{historicalReplayOnly:true,fullStackBacktestBlocked:true,fullStackBlocker:ONE_YEAR_FULL_STACK_GATE_V1.blocker,
       pointInTimeNewsDisclosureAiBound:false,independentOos:false,profitabilityProven:false,economicSampleCredit:0,executionAuthority:'NONE',
       replitUsed:false,privateApiUsed:false,realOrders:0},
