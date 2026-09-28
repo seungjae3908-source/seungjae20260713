@@ -101,13 +101,15 @@ test('Production cold-route modules settle before primary market data prewarm wi
   const app = source('src/App.tsx');
   const marketInformation = source('src/pages/market-information.tsx');
   const moduleWarmup = app.indexOf('void Promise.allSettled([');
-  const marketDataWarmup = app.indexOf(']).then(() => prewarmPrimaryMarketInformation())', moduleWarmup);
+  const marketDataWarmup = app.indexOf("]).then(() => prewarmPrimaryMarketInformation(auth.can('canAccessFutures')))", moduleWarmup);
   expect(moduleWarmup).toBeGreaterThanOrEqual(0);
   expect(marketDataWarmup).toBeGreaterThan(moduleWarmup);
   expect(app).toContain('loadMarketInformationPage()');
   expect(app).toContain('loadWatchlistPage()');
-  expect(app).toContain('prewarmPrimaryMarketInformation()');
+  expect(app).toContain("prewarmPrimaryMarketInformation(auth.can('canAccessFutures'))");
   expect(app).toContain("prefetchMarketInformationRoom(queryClient, '/stocks/kr')");
+  expect(app).toContain('if (includeFutures)');
+  expect(app).toContain("prefetchMarketInformationRoom(queryClient, '/coins/futures')");
   expect(marketInformation).toContain('export async function prefetchMarketInformationRoom(');
   expect(marketInformation).toContain("queryKey: ['market-information-room', route.id]");
   expect(app).toContain('loadBacktestsPage()');
