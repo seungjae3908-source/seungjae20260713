@@ -214,6 +214,36 @@ assert(
 );
 assert(!spec.includes("behavior: 'ignoreErrors'"), 'route callback teardown must not suppress in-flight failures');
 
+const aiCertificationStart = spec.indexOf('async function runAuthenticatedAiChartCertification(');
+const aiCertificationEnd = spec.indexOf('\nasync function auditAuthenticatedViewport(', aiCertificationStart);
+assert(
+  aiCertificationStart >= 0 && aiCertificationEnd > aiCertificationStart,
+  'authenticated AI chart certification helper boundaries are missing',
+);
+const aiCertificationBlock = spec.slice(aiCertificationStart, aiCertificationEnd);
+const aiCertificationQuiescenceIndex = aiCertificationBlock.indexOf('await waitForBrowserNetworkQuiescence(page);');
+const aiCertificationCloseIndex = aiCertificationBlock.indexOf('await context.close();');
+assert(
+  aiCertificationQuiescenceIndex >= 0 && aiCertificationCloseIndex > aiCertificationQuiescenceIndex,
+  'authenticated AI chart contexts must prove browser network quiescence before context teardown',
+);
+const networkQuiescenceStart = spec.indexOf('async function waitForBrowserNetworkQuiescence(page: Page)');
+const networkQuiescenceEnd = spec.indexOf('\nasync function waitForPendingPersonalIntegrationReads(', networkQuiescenceStart);
+assert(
+  networkQuiescenceStart >= 0 && networkQuiescenceEnd > networkQuiescenceStart,
+  'browser network quiescence helper boundaries are missing',
+);
+const networkQuiescenceBlock = spec.slice(networkQuiescenceStart, networkQuiescenceEnd);
+for (const marker of [
+  'pendingMutatingRequests.get(page)?.size',
+  'pendingSameOriginReadRequests.get(page)?.size',
+  "? 'quiescent' : 'quiet'",
+  "timeout: 15_000",
+]) {
+  assert(networkQuiescenceBlock.includes(marker), `browser network quiescence contract is missing ${marker}`);
+}
+assert(!aiCertificationBlock.includes('await logout(page);'), 'AI chart certification contexts must not globally revoke the shared authenticated session');
+
 const scannerReadinessTestStart = spec.indexOf("test('scanner readiness:");
 const scannerReadinessTestEnd = spec.indexOf("\n  test('pending:", scannerReadinessTestStart);
 assert(
