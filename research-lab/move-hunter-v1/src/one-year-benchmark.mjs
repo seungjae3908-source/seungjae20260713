@@ -1,4 +1,3 @@
-import { ema } from '../../../market-prediction-lab/src/indicators.js';
 import {
   ADAPTIVE_MULTI_EVIDENCE_V2_LINEAGE_ID,
 } from '../../../market-prediction-lab/src/adaptive-multi-evidence-point-in-time-v2.js';
@@ -117,18 +116,45 @@ export function buildFeatureSnapshotAt(dataset, index, side = 'LONG') {
   return buildFeatureSnapshotFromRows(dataset, normalizeRows(dataset?.candles), index, side);
 }
 
-function baselineSignal(rows, index, side) {
-  const closes = rows.slice(0, index + 1).map((row) => row.close);
-  if (closes.length < 51) return false;
-  const fast = ema(closes, 20);
-  const slow = ema(closes, 50);
-  const previousFast = ema(closes.slice(0, -1), 20);
-  const previousClose = closes.at(-2);
-  const latestClose = closes.at(-1);
+function emaSeries(values, period) {
+  const result = new Array(values.length).fill(null);
+  if (values.length < period) return result;
+  const multiplier = 2 / (period + 1);
+  let current = values.slice(0, period).reduce((sum, value) => sum + value, 0) / period;
+  result[period - 1] = current;
+  for (let index = period; index < values.length; index += 1) {
+    current = (values[index] - current) * multiplier + current;
+    result[index] = current;
+  }
+  return result;
+}
+function buildCheapSignalSeries(rows) {
+  const closes = rows.map((row) => row.close);
+  const fast = emaSeries(closes, 20);
+  const slow = emaSeries(closes, 50);
+  const roc12 = closes.map((close, index) => index >= 12 && closes[index - 12] > 0
+    ? close / closes[index - 12] - 1
+    : null);
+  return { fast, slow, roc12 };
+}
+function baselineSignal(rows, index, side, cheap) {
+  const fast = cheap.fast[index];
+  const slow = cheap.slow[index];
+  const previousFast = cheap.fast[index - 1];
+  if (![fast, slow, previousFast].every(Number.isFinite)) return false;
+  const previousClose = rows[index - 1].close;
+  const latestClose = rows[index].close;
   if (side === 'LONG') {
     return fast > slow && previousClose <= previousFast * 1.005 && latestClose > fast;
   }
   return fast < slow && previousClose >= previousFast * 0.995 && latestClose < fast;
+}
+function improvedRequiredPrefilter(index, side, cheap) {
+  const fast = cheap.fast[index];
+  const slow = cheap.slow[index];
+  const roc = cheap.roc12[index];
+  if (![fast, slow, roc].every(Number.isFinite)) return false;
+  return side === 'LONG' ? fast > slow && roc > 0 : fast < slow && roc < 0;
 }
 
 export function improvedSignalDecision(snapshot, side = 'LONG') {
@@ -230,6 +256,7 @@ export function runOneYearDatasetBenchmark(dataset, {
   const rows = normalizeRows(dataset.candles).filter((row) => row.ts <= endTime);
   if (rows.length < 90) throw new RangeError('at least 90 candles are required');
   const runnerCandles = rows.map((row) => ({ ...row }));
+  const cheap = buildCheapSignalSeries(rows);
   const preset = RUNNER_RESEARCH_PRESETS.LONG_RUNNER_3ATR;
   const laneCosts = costs ?? DEFAULT_COSTS[dataset.market];
   const trades = [];
@@ -242,8 +269,9 @@ export function runOneYearDatasetBenchmark(dataset, {
     let matched = false;
     let decision = null;
     if (variant === 'BASELINE_EMA_PULLBACK_V1') {
-      matched = baselineSignal(rows, index, tradeSide);
+      matched = baselineSignal(rows, index, tradeSide, cheap);
     } else if (variant === 'IMPROVED_TECH_STRUCTURE_V2') {
+      if (!improvedRequiredPrefilter(index, tradeSide, cheap)) continue;
       const snapshot = buildFeatureSnapshotFromRows(dataset, rows, index, tradeSide);
       decision = improvedSignalDecision(snapshot, tradeSide);
       matched = decision.matched;
