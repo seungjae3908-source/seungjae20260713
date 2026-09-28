@@ -83,8 +83,8 @@ function hypothesisRows(hypotheses) {
     '',
     '## Market-specific future-validation hypotheses',
     '',
-    '| Market | Descriptive best | Status | Frozen candidate | Reasons |',
-    '|---|---|---|---|---|',
+    '| Market | Descriptive best | Status | Frozen candidate | Source→Forward TF | Forward admission | Reasons |',
+    '|---|---|---|---|---|---|---|',
   ];
   for (const [market, row] of Object.entries(hypotheses.markets)) {
     lines.push('| ' + [
@@ -92,12 +92,14 @@ function hypothesisRows(hypotheses) {
       row.descriptiveBestVariant,
       row.status,
       row.selectedVariant ?? '-',
+      (row.futureValidation.sourceTimeframe ?? '?') + '→' + (row.futureValidation.targetForwardTimeframe ?? '?'),
+      row.futureValidation.forwardAdmissionStatus,
       row.reasons.length ? row.reasons.join(', ') : '-',
     ].join(' | ') + ' |');
   }
   lines.push(
     '',
-    '> A frozen hypothesis is selected from observed history and is eligible only for future unused OOS/Forward testing. It has zero OOS/economic credit now.',
+    '> A frozen hypothesis is selected from observed history and has zero OOS/economic credit now. Forward use additionally requires exact timeframe identity; cross-timeframe credit is forbidden.',
   );
   return lines;
 }
@@ -298,6 +300,11 @@ console.log(JSON.stringify({
       status: row.status,
       descriptiveBestVariant: row.descriptiveBestVariant,
       selectedVariant: row.selectedVariant,
+      sourceTimeframe: row.futureValidation.sourceTimeframe,
+      targetForwardTimeframe: row.futureValidation.targetForwardTimeframe,
+      timeframeMatch: row.futureValidation.timeframeMatch,
+      forwardAdmissionStatus: row.futureValidation.forwardAdmissionStatus,
+      forwardAdmissionReasons: row.futureValidation.forwardAdmissionReasons,
       reasons: row.reasons,
     },
   ])),
