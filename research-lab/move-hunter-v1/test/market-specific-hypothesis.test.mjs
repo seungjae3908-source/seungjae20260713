@@ -141,3 +141,33 @@ test('freezer selects the best gate-passing candidate instead of rejecting marke
   assert.equal(kr.selectedVariant, 'NO_MOMENTUM');
   assert.equal(kr.eligibleCandidateCount >= 1, true);
 });
+
+
+test('loss-making variants cannot be frozen merely because they lose less than baseline', () => {
+  const result = freezeMarketSpecificHypotheses({
+    schemaVersion: 'move-hunter-one-year-factor-ablation/v1',
+    markets: {
+      US_STOCK: {
+        sourceTimeframes: ['60M'],
+        variants: {
+          BASELINE: metric(-0.06, 0.12, 0.71, 100),
+          FULL: metric(-0.065, 0.14, 0.72, 120),
+          NO_TREND: metric(-0.041, 0.12, 0.80, 110),
+          NO_MOMENTUM: metric(-0.047, 0.12, 0.78, 115),
+          NO_STRUCTURE: metric(-0.042, 0.11, 0.79, 112),
+          NO_VOLUME: metric(-0.068, 0.16, 0.69, 118),
+          NO_VOLATILITY: metric(-0.039, 0.12, 0.79, 108),
+        },
+      },
+    },
+  });
+  const us = result.markets.US_STOCK;
+  assert.equal(us.status, 'RESEARCH_HOLD');
+  assert.equal(us.selectedVariant, null);
+  assert.equal(us.eligibleCandidateCount, 0);
+  assert.equal(us.futureValidation.forwardAdmissionStatus, 'NONE');
+  assert.equal(us.futureValidation.executionAuthority, 'NONE');
+  assert.ok(us.candidateDiagnostics.every((row) =>
+    row.reasons.includes('CANDIDATE_RETURN_NOT_POSITIVE')
+    || row.reasons.includes('PROFIT_FACTOR_BELOW_MINIMUM')));
+});
