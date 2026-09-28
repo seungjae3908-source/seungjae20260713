@@ -6,11 +6,9 @@ import {
 import {
   collectUpbitSpotHistory,
 } from '../../../market-prediction-lab/src/upbit-spot-history.js';
-import {
-  BinanceFuturesPublicClient,
-  collectBinanceFuturesDailyKlines,
-  collectBinanceFuturesFundingRates,
-} from '../../../market-prediction-lab/src/binance-futures-history.js';
+import { BitgetPublicClient } from '../../../market-prediction-lab/src/bitget-public-client.js';
+import { collectBitgetCandles } from '../../../market-prediction-lab/src/bitget-candle-collector.js';
+import { collectFundingRateHistory } from '../../../market-prediction-lab/src/derivatives-history.js';
 import {
   ONE_YEAR_BENCHMARK_END_MS,
   ONE_YEAR_BENCHMARK_START_MS,
@@ -139,27 +137,38 @@ async function collectSpot(datasets, failures) {
 }
 
 async function collectFutures(datasets, failures) {
-  const client = new BinanceFuturesPublicClient({ timeoutMs: 20_000, maxRetries: 4 });
+  const client = new BitgetPublicClient({
+    timeoutMs: 20_000,
+    maxRetries: 4,
+    minIntervalMs: 140,
+  });
   for (const symbol of FUTURES) {
     try {
       const [history, funding] = await Promise.all([
-        collectBinanceFuturesDailyKlines({
+        collectBitgetCandles({
           client,
+          market: 'CRYPTO_FUTURES',
           symbol,
+          timeframe: '4h',
           startTime: WARMUP_START_MS,
           endTime: ONE_YEAR_BENCHMARK_END_MS,
+          productType: 'usdt-futures',
+          maxCandles: 10_000,
         }),
-        collectBinanceFuturesFundingRates({
+        collectFundingRateHistory({
           client,
           symbol,
           startTime: WARMUP_START_MS,
           endTime: ONE_YEAR_BENCHMARK_END_MS,
+          productType: 'usdt-futures',
+          pageSize: 100,
+          maxPages: 30,
         }),
       ]);
       datasets.push({
         market: 'CRYPTO_FUTURES',
         symbol,
-        timeframe: '1d',
+        timeframe: '4h',
         source: history.provider,
         candles: history.candles,
         fundingRates: funding.records,
