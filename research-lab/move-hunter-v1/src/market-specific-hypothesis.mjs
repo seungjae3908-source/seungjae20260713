@@ -1,5 +1,8 @@
 export const FORWARD_TARGET_TIMEFRAME_AUDITED_MAIN_SHA_V1 =
-  '3a4e34a9116a381e3fca61d28953f44cbdc05991';
+  'd88f114f3cc7a0223adeb446850398485d4c3144';
+
+export const FORWARD_TARGET_TIMEFRAME_OWNER_FILE_SHA_V1 =
+  '6287a3aed94896b7c22c03be33cb1b2885c3b1e3';
 
 export const FORWARD_TARGET_TIMEFRAME_BY_MARKET_V1 = Object.freeze({
   KR_STOCK: '60M',
@@ -90,6 +93,7 @@ export function freezeMarketSpecificHypotheses(ablation, {
   policy = MARKET_SPECIFIC_HYPOTHESIS_POLICY_V1,
   forwardTargetTimeframes = FORWARD_TARGET_TIMEFRAME_BY_MARKET_V1,
   forwardTargetTimeframeOwnerSha = FORWARD_TARGET_TIMEFRAME_AUDITED_MAIN_SHA_V1,
+  forwardTargetTimeframeOwnerFileSha = FORWARD_TARGET_TIMEFRAME_OWNER_FILE_SHA_V1,
 } = {}) {
   if (!ablation || ablation.schemaVersion !== 'move-hunter-one-year-factor-ablation/v1') {
     throw new TypeError('one-year factor ablation result is required');
@@ -141,6 +145,7 @@ export function freezeMarketSpecificHypotheses(ablation, {
       sourceTimeframes: freeze(sourceTimeframes),
       targetForwardTimeframe,
       forwardTargetTimeframeOwnerSha,
+      forwardTargetTimeframeOwnerFileSha,
       baseline: freeze({
         totalReturn: baseline.totalReturn,
         maximumDrawdown: baseline.maximumDrawdown,
@@ -192,6 +197,7 @@ export function freezeMarketSpecificHypotheses(ablation, {
     sourceSchemaVersion: ablation.schemaVersion,
     policy: freeze({ ...policy }),
     forwardTargetTimeframeOwnerSha,
+    forwardTargetTimeframeOwnerFileSha,
     forwardTargetTimeframes: freeze({ ...forwardTargetTimeframes }),
     markets: freeze(markets),
     safety: freeze({
