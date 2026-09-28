@@ -228,10 +228,21 @@ function stateEvent(
   if (current === 'APPROVED') {
     return { kind: 'APPROVED', details: '✅ 주문 승인이 확인되었습니다. 중복 주문을 막기 위해 주문 버튼을 제거합니다.' };
   }
-  if (current === 'ARMED' && ['ENTRY_ZONE', 'APPROVAL_PENDING', 'READY_FOR_APPROVAL'].includes(previous)) {
-    return { kind: 'ENTRY_ZONE_LEFT', details: '🟡 진입구간을 벗어나 관망 상태로 전환되었습니다. 주문 버튼을 비활성화합니다.' };
+  if (
+    ['ARMED', 'WEAKENED', 'WATCHING', 'CANDIDATE', 'CONFIRMED', 'DETECTED'].includes(current)
+    && ['ENTRY_ZONE', 'APPROVAL_PENDING', 'READY_FOR_APPROVAL'].includes(previous)
+  ) {
+    return {
+      kind: 'ENTRY_ZONE_LEFT',
+      details: current === 'WEAKENED'
+        ? '🟡 신호 근거가 약화되어 관망 상태로 전환되었습니다. 주문 버튼을 비활성화합니다.'
+        : '🟡 현재 진입 조건이 해제되어 관망 상태로 전환되었습니다. 주문 버튼을 비활성화합니다.',
+    };
   }
-  if ((current === 'ENTRY_ZONE' || current === 'APPROVAL_PENDING' || current === 'READY_FOR_APPROVAL') && previous === 'ARMED') {
+  if (
+    (current === 'ENTRY_ZONE' || current === 'APPROVAL_PENDING' || current === 'READY_FOR_APPROVAL')
+    && ['ARMED', 'WEAKENED', 'WATCHING', 'CANDIDATE', 'CONFIRMED', 'DETECTED'].includes(previous)
+  ) {
     return { kind: 'REARMED', details: '🟢 조건이 회복되어 진입 신호가 다시 활성화되었습니다.' };
   }
   return null;
