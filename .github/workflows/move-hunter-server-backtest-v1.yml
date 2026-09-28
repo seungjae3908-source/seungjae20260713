@@ -60,15 +60,23 @@ jobs:
 
   run-server-backtest:
     if: >-
-      github.event_name == 'issue_comment' &&
-      github.event.action == 'created' &&
-      github.event.issue.number == 23 &&
-      github.event.issue.pull_request == null &&
-      github.event.issue.state == 'open' &&
-      github.event.issue.title == 'Staging Readiness Control' &&
-      github.event.comment.user.login == github.repository_owner &&
-      github.event.comment.author_association == 'OWNER' &&
-      startsWith(github.event.comment.body, '/run-move-hunter-server-backtest-v1 ')
+      (
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.number == 1446 &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.head.ref == 'ops/move-hunter-server-backtest-v1-20260928'
+      ) ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.action == 'created' &&
+        github.event.issue.number == 23 &&
+        github.event.issue.pull_request == null &&
+        github.event.issue.state == 'open' &&
+        github.event.issue.title == 'Staging Readiness Control' &&
+        github.event.comment.user.login == github.repository_owner &&
+        github.event.comment.author_association == 'OWNER' &&
+        startsWith(github.event.comment.body, '/run-move-hunter-server-backtest-v1 ')
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 40
     environment: staging
@@ -83,22 +91,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'main' }}
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Parse exact owner command
+      - name: Resolve exact main and research command
         id: command
         shell: bash
         env:
+          EVENT_NAME: ${{ github.event_name }}
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           set -Eeuo pipefail
-          read -r command main_sha research_sha extra <<< "$COMMENT_BODY"
-          [[ "$command" == '/run-move-hunter-server-backtest-v1' ]]
+          if [[ "$EVENT_NAME" == 'pull_request' ]]; then
+            main_sha="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+            research_sha='e0256c55ec61f26f4749be6a5e0d361f372aba79'
+          else
+            read -r command main_sha research_sha extra <<< "$COMMENT_BODY"
+            [[ "$command" == '/run-move-hunter-server-backtest-v1' ]]
+            [[ -z "$extra" ]]
+          fi
           [[ "$main_sha" =~ ^[0-9a-fA-F]{40}$ ]]
           [[ "$research_sha" =~ ^[0-9a-fA-F]{40}$ ]]
-          [[ -z "$extra" ]]
           printf 'main_sha=%s\n' "${main_sha,,}" >> "$GITHUB_OUTPUT"
           printf 'research_sha=%s\n' "${research_sha,,}" >> "$GITHUB_OUTPUT"
 
