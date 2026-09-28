@@ -200,6 +200,47 @@ function regimeRows(ablation, hypotheses) {
   return lines;
 }
 
+
+function attributionRows(ablation, hypotheses) {
+  const lines = [
+    '',
+    '### Return attribution — selected/descriptive candidate',
+    '',
+    '| Market | Symbol | Side | Variant | Gross Σ | Cost drag Σ | Funding Σ | Net arithmetic Σ | Avg gross/trade | Avg cost/trade | Avg funding/trade | Avg bars | Exit reasons |',
+    '|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|',
+  ];
+  for (const [market, marketResult] of Object.entries(ablation.markets)) {
+    const hypothesis = hypotheses.markets[market];
+    const candidate = hypothesis?.selectedVariant ?? hypothesis?.descriptiveBestVariant ?? 'FULL';
+    for (const row of (marketResult.stability?.lanes ?? []).filter((item) => item.variant === candidate)) {
+      const a = row.attribution;
+      const exitReasons = Object.entries(a.exitReasons ?? {})
+        .map(([reason, value]) => reason + ':' + value.n)
+        .join(', ');
+      lines.push('| ' + [
+        market,
+        row.symbol,
+        row.side,
+        candidate,
+        pct(a.grossAccountReturnSum),
+        pct(-a.tradingCostAccountDragSum),
+        pct(a.fundingAccountImpactSum),
+        pct(a.netAccountReturnArithmeticSum),
+        pct(a.averageGrossTradeReturn),
+        pct(a.averageRoundTripCostRate),
+        pct(a.averageFundingImpact),
+        num(a.averageBarsObserved),
+        exitReasons || '-',
+      ].join(' | ') + ' |');
+    }
+  }
+  lines.push(
+    '',
+    '> Gross/cost/funding sums are arithmetic diagnostics, not compounded equity returns. They do not create OOS, Forward, profitability, sizing, promotion, or execution authority.',
+  );
+  return lines;
+}
+
 function comparisonFromAblation(ablation) {
   return {
     startTime: ablation.startTime,
@@ -231,6 +272,7 @@ function laneAlignedRows(comparison, ablation, hypotheses, failures, datasetCoun
   lines.push(...hypothesisRows(hypotheses));
   lines.push(...stabilityRows(ablation, hypotheses));
   lines.push(...regimeRows(ablation, hypotheses));
+  lines.push(...attributionRows(ablation, hypotheses));
   lines.push('', '### Lane-aligned provider failures', '');
   if (!failures.length) lines.push('- none');
   else for (const item of failures) lines.push('- ' + item.market + '/' + item.symbol + ': ' + item.error);

@@ -95,6 +95,7 @@ test('factor ablation keeps all five family-removal variants research-only', () 
   assert.equal(result.interpretation.ablationScope, 'FINAL_DECISION_LAYER_ONLY');
   assert.equal(result.interpretation.automaticMarketSpecificAdoptionAllowed, false);
   assert.equal(result.interpretation.regimeAttributionAuthority, 'DIAGNOSTIC_ONLY');
+  assert.equal(result.interpretation.returnAttributionAuthority, 'DIAGNOSTIC_ONLY');
   assert.equal(result.interpretation.economicSampleCredit, 0);
   assert.equal(result.interpretation.executionAuthority, 'NONE');
   for (const market of ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']) {
@@ -166,6 +167,20 @@ test('stability decomposition preserves symbol, side, and half-period metrics wi
       assert.ok(Object.keys(row.directionalRegimes).length > 0);
       assert.ok(Object.keys(row.volatilityRegimes).length > 0);
     }
+    assert.equal(row.attribution.tradeCount, row.overall.tradeCount);
+    assert.equal(
+      Number.isFinite(row.attribution.grossAccountReturnSum),
+      true,
+    );
+    assert.equal(
+      Number.isFinite(row.attribution.tradingCostAccountDragSum),
+      true,
+    );
+    assert.equal(
+      Number.isFinite(row.attribution.fundingAccountImpactSum),
+      true,
+    );
+    assert.equal(row.attribution.accountingNote, 'ARITHMETIC_DIAGNOSTIC_NOT_COMPOUNDED_EQUITY_RETURN');
   }
   assert.equal(result.interpretation.economicSampleCredit, 0);
   assert.equal(result.interpretation.profitabilityClaimAllowed, false);
