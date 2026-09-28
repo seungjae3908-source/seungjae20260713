@@ -1,0 +1,70 @@
+name: Move Hunter Server Monitor V1
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/move-hunter-server-monitor-v1.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: move-hunter-server-monitor-v1
+  cancel-in-progress: true
+
+jobs:
+  monitor:
+    if: >-
+      github.event.pull_request.number == 1446 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'ops/move-hunter-server-backtest-v1-20260928'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: staging
+    env:
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+      RESEARCH_SHA: e0256c55ec61f26f4749be6a5e0d361f372aba79
+    steps:
+      - name: Configure pinned SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_HOST"
+          test -n "$STAGING_SSH_USER"
+          test -n "$STAGING_SSH_PRIVATE_KEY"
+          test -n "$STAGING_SSH_KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Read isolated backtest status only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'RESEARCH_SHA=%q bash -s' "$RESEARCH_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT"             -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes             "$STAGING_SSH_USER@$STAGING_SSH_HOST" "$remote_env" <<'REMOTE'
+          set -u
+          log="/var/log/backtest-worker/move-hunter-server-fast-$RESEARCH_SHA.log"
+          results="/var/lib/backtest-worker/results/server-fast-$RESEARCH_SHA"
+          cache="/var/lib/backtest-worker/cache/move-hunter-v1"
+          echo '=== PROCESS ==='
+          ps -eo pid,etime,%cpu,%mem,args | grep -E 'run-daily-target-fast-v1|move-hunter|one-year-benchmark' | grep -v grep || true
+          echo '=== LOG TAIL ==='
+          if [[ -r "$log" ]]; then tail -n 120 "$log"; else echo LOG_NOT_CREATED; fi
+          echo '=== RESULTS ==='
+          if [[ -d "$results" ]]; then find "$results" -maxdepth 1 -type f -printf '%f %s bytes\n' | sort; else echo RESULTS_DIR_MISSING; fi
+          echo '=== CACHE ==='
+          if [[ -d "$cache" ]]; then find "$cache" -maxdepth 1 -type f -printf '%f %s bytes\n' | sort; else echo CACHE_DIR_MISSING; fi
+          echo '=== SAFETY ==='
+          echo 'READ_ONLY_MONITOR=true'
+          echo 'PRODUCTION_APP_MUTATION=false'
+          echo 'PM2_MUTATION=false'
+          echo 'DATABASE_MUTATION=false'
+          echo 'REAL_ORDERS=0'
+          REMOTE
