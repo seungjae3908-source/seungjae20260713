@@ -295,6 +295,8 @@ export class UserBrokerTelegramService {
     private readonly portfolioSink: PortfolioSyncSink,
     private readonly botUsername: string | null = process.env.TELEGRAM_BOT_USERNAME?.trim() || null,
     private readonly personalAlertSender?: PersonalAlertSender,
+    private readonly ownerMemberId: string | null = process.env.TELEGRAM_OWNER_MEMBER_ID?.trim() || null,
+    private readonly ownerAutoTradingChatId: string | null = process.env.TELEGRAM_AUTO_TRADING_CHAT_ID?.trim() || null,
   ) {}
 
   private async personalTelegramEligible(userId: string) {
@@ -442,10 +444,24 @@ export class UserBrokerTelegramService {
       return { processed: true, state: result?.state ?? 'DEAD_LETTER' };
     }
     const attempt = claimed.attempts + 1;
+    const rendered = renderUserExecutionTelegramMessage(event);
     let transportResult: Awaited<ReturnType<TelegramTransport['send']>>;
-    try { transportResult = await this.transport.send(connection.telegramChatId, renderUserExecutionTelegramMessage(event)); }
+    try { transportResult = await this.transport.send(connection.telegramChatId, rendered); }
     catch { transportResult = { ok: false, errorCode: 'TELEGRAM_TRANSPORT_ERROR' }; }
     if (transportResult.ok) {
+      if (
+        event.executionMethod === 'AUTO_POLICY'
+        && this.ownerMemberId
+        && this.ownerMemberId === event.userId
+        && this.ownerAutoTradingChatId
+        && this.ownerAutoTradingChatId !== connection.telegramChatId
+      ) {
+        try {
+          await this.transport.send(this.ownerAutoTradingChatId, rendered);
+        } catch {
+          // Owner mirror is advisory and never changes the canonical member delivery state.
+        }
+      }
       await this.repository.finishDelivery(userId, deliveryId, 'SENT', attempt, null, null, timestamp);
       return { processed: true, state: 'SENT' as const };
     }
