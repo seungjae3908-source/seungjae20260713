@@ -86,10 +86,9 @@ function canonicalCandlesThrough(rows, index) {
   });
 }
 
-export function buildFeatureSnapshotAt(dataset, index, side = 'LONG') {
+function buildFeatureSnapshotFromRows(dataset, rows, index, side = 'LONG') {
   if (!dataset || typeof dataset !== 'object') throw new TypeError('dataset is required');
   if (!SUPPORTED_MARKETS.has(dataset.market)) throw new RangeError('unsupported market');
-  const rows = normalizeRows(dataset.candles);
   if (!Number.isInteger(index) || index < 80 || index + 1 >= rows.length) {
     throw new RangeError('feature index requires >=80 history bars and one next bar');
   }
@@ -112,6 +111,10 @@ export function buildFeatureSnapshotAt(dataset, index, side = 'LONG') {
       documentId: sourceDocumentId(dataset),
     },
   });
+}
+
+export function buildFeatureSnapshotAt(dataset, index, side = 'LONG') {
+  return buildFeatureSnapshotFromRows(dataset, normalizeRows(dataset?.candles), index, side);
 }
 
 function baselineSignal(rows, index, side) {
@@ -241,7 +244,7 @@ export function runOneYearDatasetBenchmark(dataset, {
     if (variant === 'BASELINE_EMA_PULLBACK_V1') {
       matched = baselineSignal(rows, index, tradeSide);
     } else if (variant === 'IMPROVED_TECH_STRUCTURE_V2') {
-      const snapshot = buildFeatureSnapshotAt({ ...dataset, candles: rows }, index, tradeSide);
+      const snapshot = buildFeatureSnapshotFromRows(dataset, rows, index, tradeSide);
       decision = improvedSignalDecision(snapshot, tradeSide);
       matched = decision.matched;
     } else {
