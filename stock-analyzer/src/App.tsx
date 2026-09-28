@@ -127,15 +127,20 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: true, refetchOnReconnect: true, staleTime: 0, gcTime: 30 * 60 * 1000, retry: 2 } },
 });
 
-async function prewarmPrimaryMarketInformation(): Promise<void> {
+async function prewarmPrimaryMarketInformation(includeFutures: boolean): Promise<void> {
   const marketInformation = await loadMarketInformationPage();
   if (typeof window === 'undefined') return;
   const currentPath = window.location.pathname.replace(/\/+$/, '') || '/';
   if (currentPath !== '/' && !currentPath.endsWith('/home')) return;
-  await Promise.allSettled([
+  const prefetches = [
     marketInformation.prefetchMarketInformationRoom(queryClient, '/stocks/kr'),
-    marketInformation.prefetchMarketInformationRoom(queryClient, '/coins/futures'),
-  ]);
+  ];
+  if (includeFutures) {
+    prefetches.push(
+      marketInformation.prefetchMarketInformationRoom(queryClient, '/coins/futures'),
+    );
+  }
+  await Promise.allSettled(prefetches);
 }
 
 function DirectAiChartDataPrewarm() {
@@ -445,8 +450,8 @@ function AuthenticatedApp() {
       loadAiChartPage(),
       loadLearnPage(),
       loadAlertsPage(),
-    ]).then(() => prewarmPrimaryMarketInformation()).catch(() => undefined);
-  }, [auth.isApproved]);
+    ]).then(() => prewarmPrimaryMarketInformation(auth.can('canAccessFutures'))).catch(() => undefined);
+  }, [auth.isApproved, auth.membershipLevel]);
   useEffect(() => {
     if (auth.isApproved && auth.can('canAccessPaperTrading')) {
       void loadPaperTradingPage();
