@@ -75,27 +75,17 @@ jobs:
           fast_pattern='research-lab/move-hunter-v1/scripts/run-daily-target-fast-v1.mjs /var/lib/backtest-worker/results/server-fast-e0256c55ec61f26f4749be6a5e0d361f372aba79/result.json'
           mapfile -t fast_pids < <(pgrep -f "$fast_pattern" || true)
           echo "SERIAL_FAST_MATCH_COUNT=${#fast_pids[@]}"
-          for pid in "${fast_pids[@]}"; do
-            cmd="$(tr '\\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
-            case "$cmd" in
-              *"run-daily-target-fast-v1.mjs /var/lib/backtest-worker/results/server-fast-e0256c55ec61f26f4749be6a5e0d361f372aba79/result.json"*)
-                echo "TERM_SERIAL_FAST_PID=$pid"
-                kill -TERM "$pid" 2>/dev/null || true
-                ;;
-            esac
-          done
-          sleep 2
-          for pid in "${fast_pids[@]}"; do
-            if kill -0 "$pid" 2>/dev/null; then
-              cmd="$(tr '\\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
-              case "$cmd" in
-                *"run-daily-target-fast-v1.mjs /var/lib/backtest-worker/results/server-fast-e0256c55ec61f26f4749be6a5e0d361f372aba79/result.json"*)
-                  echo "KILL_SERIAL_FAST_PID=$pid"
-                  kill -KILL "$pid" 2>/dev/null || true
-                  ;;
-              esac
-            fi
-          done
+          if (( ${#fast_pids[@]} > 0 )); then
+            printf 'TERM_SERIAL_FAST_PID=%s\n' "${fast_pids[@]}"
+            kill -TERM "${fast_pids[@]}" 2>/dev/null || true
+            sleep 2
+            for pid in "${fast_pids[@]}"; do
+              if kill -0 "$pid" 2>/dev/null; then
+                echo "KILL_SERIAL_FAST_PID=$pid"
+                kill -KILL "$pid" 2>/dev/null || true
+              fi
+            done
+          fi
           echo '=== REMAINING MOVE HUNTER COMPUTE ==='
           ps -eo pid,etime,%cpu,%mem,args | grep -E 'run-daily-target-fast-v1|run-one-year-public-benchmark' | grep -v grep || true
           echo 'PRODUCTION_APP_MUTATION=false'
