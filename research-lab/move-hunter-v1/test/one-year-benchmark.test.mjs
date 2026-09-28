@@ -94,6 +94,7 @@ test('factor ablation keeps all five family-removal variants research-only', () 
   assert.equal(result.interpretation.candidatePrefilterFrozenAcrossVariants, true);
   assert.equal(result.interpretation.ablationScope, 'FINAL_DECISION_LAYER_ONLY');
   assert.equal(result.interpretation.automaticMarketSpecificAdoptionAllowed, false);
+  assert.equal(result.interpretation.regimeAttributionAuthority, 'DIAGNOSTIC_ONLY');
   assert.equal(result.interpretation.economicSampleCredit, 0);
   assert.equal(result.interpretation.executionAuthority, 'NONE');
   for (const market of ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']) {
@@ -112,6 +113,9 @@ test('factor ablation keeps all five family-removal variants research-only', () 
     assert.ok(Array.isArray(result.markets[market].stability.lanes));
     assert.ok(result.markets[market].stability.variantRobustness.BASELINE);
     assert.ok(result.markets[market].stability.variantRobustness.FULL);
+    const baselineLane = result.markets[market].stability.lanes.find((row) => row.variant === 'BASELINE');
+    assert.ok(baselineLane);
+    assert.equal(typeof baselineLane.regimes, 'object');
   }
   assert.equal(result.markets.KR_STOCK.stability.variantRobustness.BASELINE.laneCount, 1);
   assert.equal(result.markets.CRYPTO_FUTURES.stability.variantRobustness.BASELINE.laneCount, 2);
@@ -157,6 +161,11 @@ test('stability decomposition preserves symbol, side, and half-period metrics wi
     assert.equal(Number.isFinite(row.overall.totalReturn), true);
     assert.equal(Number.isFinite(row.firstHalf.totalReturn), true);
     assert.equal(Number.isFinite(row.secondHalf.totalReturn), true);
+    if (row.overall.tradeCount > 0) {
+      assert.ok(Object.keys(row.regimes).length > 0);
+      assert.ok(Object.keys(row.directionalRegimes).length > 0);
+      assert.ok(Object.keys(row.volatilityRegimes).length > 0);
+    }
   }
   assert.equal(result.interpretation.economicSampleCredit, 0);
   assert.equal(result.interpretation.profitabilityClaimAllowed, false);

@@ -4,6 +4,9 @@ import {
 import {
   buildAdaptiveMultiEvidenceMarketFeaturesV2,
 } from '../../../market-prediction-lab/src/adaptive-multi-evidence-market-features-v2.js';
+import {
+  buildAdaptiveMultiEvidenceRegimeRouterV2,
+} from '../../../market-prediction-lab/src/adaptive-multi-evidence-regime-router-v2.js';
 import { RUNNER_RESEARCH_PRESETS, simulateRunner } from './engine.mjs';
 
 export const ONE_YEAR_BENCHMARK_START_MS = Date.parse('2025-09-28T00:00:00.000Z');
@@ -152,6 +155,30 @@ export function buildFeatureSnapshotAt(dataset, index, side = 'LONG') {
   return buildFeatureSnapshotFromRows(dataset, normalizeRows(dataset?.candles), index, side);
 }
 
+function regimeContextFromSnapshot(snapshot) {
+  try {
+    const result = buildAdaptiveMultiEvidenceRegimeRouterV2({ marketFeatures: snapshot });
+    return freeze({
+      status: result?.status ?? 'BLOCKED_DATA',
+      regime: result?.regime ?? 'UNKNOWN',
+      directionalRegime: result?.directionalRegime ?? 'UNKNOWN',
+      volatilityRegime: result?.volatilityRegime ?? 'UNKNOWN',
+      economicSampleCredit: 0,
+      executionAuthority: 'NONE',
+    });
+  } catch (error) {
+    return freeze({
+      status: 'BLOCKED_DATA',
+      regime: 'UNKNOWN',
+      directionalRegime: 'UNKNOWN',
+      volatilityRegime: 'UNKNOWN',
+      error: error instanceof Error ? error.message : String(error),
+      economicSampleCredit: 0,
+      executionAuthority: 'NONE',
+    });
+  }
+}
+
 function emaSeries(values, period) {
   const result = new Array(values.length).fill(null);
   if (values.length < period) return result;
@@ -291,6 +318,21 @@ function summarizeTrades(trades, initialCapital) {
   });
 }
 
+
+function summarizeTradeDimension(trades, key, initialCapital = 1_000_000) {
+  const groups = new Map();
+  for (const trade of trades) {
+    const value = String(trade?.[key] ?? 'UNKNOWN');
+    if (!groups.has(value)) groups.set(value, []);
+    groups.get(value).push(trade);
+  }
+  return freeze(Object.fromEntries(
+    [...groups.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([value, rows]) => [value, summarizeTrades(rows, initialCapital)]),
+  ));
+}
+
 export function runOneYearDatasetBenchmark(dataset, {
   variant = 'IMPROVED_TECH_STRUCTURE_V2',
   side = 'LONG',
@@ -302,6 +344,7 @@ export function runOneYearDatasetBenchmark(dataset, {
   costs = null,
   disabledFamilies = [],
   featureHistoryBars = null,
+  includeRegimeContext = false,
 } = {}) {
   if (!SUPPORTED_MARKETS.has(dataset?.market)) throw new RangeError('unsupported market');
   const tradeSide = direction(side);
@@ -322,18 +365,23 @@ export function runOneYearDatasetBenchmark(dataset, {
     if (signalTime < startTime || entryTime > endTime || signalTime <= lastExit) continue;
     let matched = false;
     let decision = null;
+    let featureSnapshot = null;
     if (variant === 'BASELINE_EMA_PULLBACK_V1') {
       matched = baselineSignal(rows, index, tradeSide, cheap);
     } else if (variant === 'IMPROVED_TECH_STRUCTURE_V2' || variant.startsWith('ABLATION_')) {
       // Keep the candidate universe fixed across decision-layer ablations.
       if (!improvedRequiredPrefilter(index, tradeSide, cheap, [])) continue;
-      const snapshot = buildFeatureSnapshotFromRows(dataset, rows, index, tradeSide, featureHistoryBars);
-      decision = improvedSignalDecision(snapshot, tradeSide, { disabledFamilies: normalizedDisabledFamilies });
+      featureSnapshot = buildFeatureSnapshotFromRows(dataset, rows, index, tradeSide, featureHistoryBars);
+      decision = improvedSignalDecision(featureSnapshot, tradeSide, { disabledFamilies: normalizedDisabledFamilies });
       matched = decision.matched;
     } else {
       throw new RangeError('unknown benchmark variant');
     }
     if (!matched) continue;
+    if (includeRegimeContext && !featureSnapshot) {
+      featureSnapshot = buildFeatureSnapshotFromRows(dataset, rows, index, tradeSide, featureHistoryBars);
+    }
+    const regimeContext = featureSnapshot ? regimeContextFromSnapshot(featureSnapshot) : null;
 
     const trial = simulateRunner({
       candles: runnerCandles,
@@ -368,6 +416,10 @@ export function runOneYearDatasetBenchmark(dataset, {
       decisionThreshold: decision?.threshold ?? null,
       disabledFamilies: freeze([...normalizedDisabledFamilies]),
       structureTransition: decision?.structureTransition ?? null,
+      regimeStatus: regimeContext?.status ?? null,
+      regime: regimeContext?.regime ?? null,
+      directionalRegime: regimeContext?.directionalRegime ?? null,
+      volatilityRegime: regimeContext?.volatilityRegime ?? null,
     }));
     lastExit = trial.exitTs;
   }
@@ -503,6 +555,7 @@ function runOneYearDatasetAblationRows(dataset, {
     if (eligible.length === 0) continue;
 
     const snapshot = buildFeatureSnapshotFromRows(dataset, rows, index, tradeSide, featureHistoryBars);
+    const regimeContext = regimeContextFromSnapshot(snapshot);
     for (const definition of eligible) {
       const decision = improvedSignalDecision(snapshot, tradeSide, {
         disabledFamilies: definition.disabledFamilies,
@@ -548,6 +601,10 @@ function runOneYearDatasetAblationRows(dataset, {
         decisionThreshold: decision.threshold,
         disabledFamilies: freeze([...definition.disabledFamilies]),
         structureTransition: decision.structureTransition ?? null,
+        regimeStatus: regimeContext.status,
+        regime: regimeContext.regime,
+        directionalRegime: regimeContext.directionalRegime,
+        volatilityRegime: regimeContext.volatilityRegime,
       }));
       state.lastExit = trial.exitTs;
     }
@@ -592,6 +649,9 @@ function buildLaneBreakdown(rows, midpoint, initialCapital = 1_000_000) {
       overall: row.performance,
       firstHalf: summarizeTrades(firstHalfTrades, initialCapital),
       secondHalf: summarizeTrades(secondHalfTrades, initialCapital),
+      regimes: summarizeTradeDimension(row.trades, 'regime', initialCapital),
+      directionalRegimes: summarizeTradeDimension(row.trades, 'directionalRegime', initialCapital),
+      volatilityRegimes: summarizeTradeDimension(row.trades, 'volatilityRegime', initialCapital),
     });
   });
 }
@@ -638,6 +698,8 @@ export function runFourMarketOneYearAblation({
         side,
         startTime,
         endTime,
+        featureHistoryBars,
+        includeRegimeContext: true,
       }));
       rows.push(...runOneYearDatasetAblationRows(dataset, {
         side,
@@ -704,6 +766,7 @@ export function runFourMarketOneYearAblation({
       featureHistoryBars,
       candidatePrefilterFrozenAcrossVariants: true,
       ablationScope: 'FINAL_DECISION_LAYER_ONLY',
+      regimeAttributionAuthority: 'DIAGNOSTIC_ONLY',
       selectionFromThisWindowMayNotCountAsOos: true,
       automaticMarketSpecificAdoptionAllowed: false,
       economicSampleCredit: 0,
