@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   KR_NO_STRUCTURE_60M_FORWARD_HYPOTHESIS_V1,
   buildMarketHypothesisForwardRecord,
+  evaluateFrozenKrNoStructureDecisionV1,
   summarizeMarketHypothesisForwardRecords,
 } from '../src/market-hypothesis-forward.mjs';
 
@@ -121,6 +122,33 @@ test('frozen KR hypothesis is immutable research-only metadata', () => {
   assert.equal(h.automaticPromotionAllowed, false);
   assert.equal(h.economicSampleCredit, 0);
   assert.equal(h.executionAuthority, 'NONE');
+});
+
+
+
+test('frozen KR NO_STRUCTURE decision semantics are self-contained and structure-independent', () => {
+  const base = featureSnapshot();
+  const first = evaluateFrozenKrNoStructureDecisionV1(base, 'LONG');
+  assert.equal(first.schemaVersion, 'move-hunter-kr-no-structure-decision/v1');
+  assert.equal(first.maximumScore, 7);
+  assert.equal(first.threshold, 6);
+  assert.deepEqual(first.disabledFamilies, ['STRUCTURE']);
+  assert.equal(first.components.ema, true);
+  assert.equal(first.components.roc, true);
+  assert.equal(first.matched, true);
+
+  const changedStructure = featureSnapshot();
+  changedStructure.features.priceAction.structureTrend = 'BEARISH';
+  changedStructure.features.priceAction.structureTransition = 'CHOCH_DOWN';
+  const second = evaluateFrozenKrNoStructureDecisionV1(changedStructure, 'LONG');
+  assert.equal(second.matched, first.matched);
+  assert.equal(second.score, first.score);
+
+  const weakMomentum = featureSnapshot({ roc: -0.01 });
+  const blocked = evaluateFrozenKrNoStructureDecisionV1(weakMomentum, 'LONG');
+  assert.equal(blocked.matched, false);
+  assert.equal(blocked.components.roc, false);
+  assert.equal(blocked.executionAuthority, 'NONE');
 });
 
 test('pre-freeze observations are blocked from prospective credit', () => {
