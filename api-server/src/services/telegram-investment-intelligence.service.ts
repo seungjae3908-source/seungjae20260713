@@ -332,6 +332,13 @@ function warningLabel(value: string): string {
   }
 }
 
+function formatSignalPrice(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return 'N/A';
+  return value.toLocaleString('ko-KR', {
+    maximumFractionDigits: value >= 1_000 ? 2 : 8,
+  });
+}
+
 function strategyLabel(context: TelegramSignalDeliveryContext): string {
   if (context.strategyMode === 'scalping') return '단타';
   if (context.strategyMode === 'swing') return '스윙';
@@ -346,12 +353,12 @@ function pricePlan(alert: ScannerAlertCandidate): string {
   const secondEntry = alert.entryZone
     ? (alert.direction === 'SHORT' ? alert.entryZone.to : alert.entryZone.from)
     : null;
-  const stop = alert.stopLoss == null ? 'N/A' : String(alert.stopLoss);
-  const target1 = alert.targets[0] == null ? 'N/A' : String(alert.targets[0]);
-  const target2 = alert.targets[1] == null ? 'N/A' : String(alert.targets[1]);
+  const stop = formatSignalPrice(alert.stopLoss);
+  const target1 = formatSignalPrice(alert.targets[0] ?? null);
+  const target2 = formatSignalPrice(alert.targets[1] ?? null);
   return [
-    `1차 진입 ${firstEntry ?? 'N/A'} · 기본 60%`,
-    `2차 진입 ${secondEntry ?? 'N/A'} · 기본 40%`,
+    `1차 진입 ${formatSignalPrice(firstEntry)} · 기본 60%`,
+    `2차 진입 ${formatSignalPrice(secondEntry)} · 기본 40%`,
     `1차 목표 ${target1} · 2차 목표 ${target2}`,
     `손절/무효 ${stop}`,
   ].join('\n');
