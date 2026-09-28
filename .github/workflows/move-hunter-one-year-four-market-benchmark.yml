@@ -48,16 +48,17 @@ jobs:
       - name: Run bounded public one-year benchmark
         shell: bash
         run: |
+          mkdir -p "$RUNNER_TEMP/move-hunter-one-year"
           node research-lab/move-hunter-v1/scripts/run-one-year-public-benchmark.mjs \
-            research-lab/move-hunter-v1/docs/one-year-four-market-public-benchmark.json \
-            research-lab/move-hunter-v1/docs/one-year-four-market-public-benchmark.md
+            "$RUNNER_TEMP/move-hunter-one-year/result.json" \
+            "$RUNNER_TEMP/move-hunter-one-year/result.md"
 
       - name: Show benchmark summary
         if: always()
         shell: bash
         run: |
-          if [ -f research-lab/move-hunter-v1/docs/one-year-four-market-public-benchmark.md ]; then
-            cat research-lab/move-hunter-v1/docs/one-year-four-market-public-benchmark.md >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "$RUNNER_TEMP/move-hunter-one-year/result.md" ]; then
+            cat "$RUNNER_TEMP/move-hunter-one-year/result.md" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload immutable research result
@@ -66,8 +67,8 @@ jobs:
         with:
           name: move-hunter-one-year-four-market-\${{ github.run_id }}
           path: |
-            research-lab/move-hunter-v1/docs/one-year-four-market-public-benchmark.json
-            research-lab/move-hunter-v1/docs/one-year-four-market-public-benchmark.md
+            ${{ runner.temp }}/move-hunter-one-year/result.json
+            ${{ runner.temp }}/move-hunter-one-year/result.md
           if-no-files-found: warn
           retention-days: 90
 
