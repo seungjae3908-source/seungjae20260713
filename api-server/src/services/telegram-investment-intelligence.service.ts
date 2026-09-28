@@ -368,7 +368,7 @@ export function buildTelegramSignalAppButtons(
   const market = alert.assetClass === 'stock'
     ? (alert.market.toUpperCase().includes('US') ? 'US' : 'KR')
     : alert.assetClass === 'coin_spot' ? 'UPBIT' : 'BITGET';
-  const assetType = alert.assetClass === 'stock' ? 'stock' : 'crypto';
+  const assetType = alert.assetClass;
   const chart = new URL('/ai-chart', url);
   chart.searchParams.set('assetType', assetType);
   chart.searchParams.set('market', market);
