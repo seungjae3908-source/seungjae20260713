@@ -298,7 +298,7 @@ test('canonical trading order event maps to user execution event with owner chec
   assert.equal(event?.metadata.estimatedSlippagePercent, 0.2);
   assert.equal(event?.metadata.actualSlippagePercent, 0.6993);
   const message = renderUserExecutionTelegramMessage(event!);
-  assert.match(message, /🤖 자동매매/);
+  assert.match(message, /🤖 자동매매 · 매수 신호/);
   assert.match(message, /자동매매 체결 근거/);
   assert.match(message, /신호\/행동: BUY · ORDER_FILLED/);
   assert.match(message, /거래량 증가/);
