@@ -251,7 +251,7 @@ test('daily brief keeps missing market data explicit and exposes only source lin
       warnings: ['KR_THEME_UNAVAILABLE'],
     },
   });
-  assert.match(input.details ?? '', /데이터 공급 장애/);
+  assert.match(input.details ?? '', /데이터 공급 지연/);
   assert.match(input.details ?? '', /테마: N\/A/);
   assert.match(input.details ?? '', /검증된 최신 뉴스 N\/A/);
   assert.equal(input.buttons?.length, 0);
@@ -289,8 +289,8 @@ test('daily market briefs strictly separate all four market rooms', () => {
     snapshot,
   });
   assert.match(kr.details ?? '', /국내주식/);
-  assert.match(kr.details ?? '', /KR_PROVIDER_FAILURE/);
-  assert.doesNotMatch(kr.details ?? '', /미국주식|US_PROVIDER_FAILURE|코인현물|코인선물/);
+  assert.match(kr.details ?? '', /국내주식 데이터 일부 확인 지연/);
+  assert.doesNotMatch(kr.details ?? '', /KR_PROVIDER_FAILURE|미국주식|US_PROVIDER_FAILURE|코인현물|코인선물/);
   assert.match(kr.details ?? '', /KR 테마: N\/A/);
   assert.doesNotMatch(kr.details ?? '', /US 테마/);
 
@@ -304,8 +304,8 @@ test('daily market briefs strictly separate all four market rooms', () => {
     snapshot,
   });
   assert.match(us.details ?? '', /해외주식/);
-  assert.match(us.details ?? '', /US_PROVIDER_FAILURE/);
-  assert.doesNotMatch(us.details ?? '', /KR_PROVIDER_FAILURE|코인현물|코인선물/);
+  assert.match(us.details ?? '', /해외주식 데이터 일부 확인 지연/);
+  assert.doesNotMatch(us.details ?? '', /US_PROVIDER_FAILURE|KR_PROVIDER_FAILURE|코인현물|코인선물/);
   assert.match(us.details ?? '', /US 테마: N\/A/);
   assert.doesNotMatch(us.details ?? '', /KR 테마/);
 
@@ -319,8 +319,8 @@ test('daily market briefs strictly separate all four market rooms', () => {
     snapshot,
   });
   assert.match(spot.details ?? '', /코인현물/);
-  assert.match(spot.details ?? '', /SPOT_PROVIDER_FAILURE/);
-  assert.doesNotMatch(spot.details ?? '', /FUTURES_PROVIDER_FAILURE|국내주식|해외주식|오늘의 테마\/주도주/);
+  assert.match(spot.details ?? '', /코인현물 데이터 일부 확인 지연/);
+  assert.doesNotMatch(spot.details ?? '', /SPOT_PROVIDER_FAILURE|FUTURES_PROVIDER_FAILURE|국내주식|해외주식|오늘의 테마\/주도주/);
 
   const futures = buildTelegramMarketBriefInput({
     kind: 'MORNING',
@@ -332,6 +332,6 @@ test('daily market briefs strictly separate all four market rooms', () => {
     snapshot,
   });
   assert.match(futures.details ?? '', /코인선물/);
-  assert.match(futures.details ?? '', /FUTURES_PROVIDER_FAILURE/);
-  assert.doesNotMatch(futures.details ?? '', /SPOT_PROVIDER_FAILURE|국내주식|해외주식|오늘의 테마\/주도주/);
+  assert.match(futures.details ?? '', /코인선물 데이터 일부 확인 지연/);
+  assert.doesNotMatch(futures.details ?? '', /FUTURES_PROVIDER_FAILURE|SPOT_PROVIDER_FAILURE|국내주식|해외주식|오늘의 테마\/주도주/);
 });
