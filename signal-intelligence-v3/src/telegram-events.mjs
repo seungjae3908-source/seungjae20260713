@@ -22,7 +22,18 @@ function alertTypeFor(event) {
 }
 
 export function telegramRoomForSignalEvent(event) {
-  return STOCK_MARKETS.has(event.market) ? 'STOCK_ROOM' : 'CRYPTO_ROOM';
+  switch (event.market) {
+    case 'KR_STOCK': return 'KR_STOCK_ROOM';
+    case 'US_STOCK': return 'US_STOCK_ROOM';
+    case 'CRYPTO_SPOT': return 'CRYPTO_SPOT_ROOM';
+    case 'CRYPTO_FUTURES': return 'CRYPTO_FUTURES_ROOM';
+    default: return null;
+  }
+}
+
+function signalLabel(event) {
+  if (event.market === 'CRYPTO_FUTURES') return event.direction === 'SHORT' ? 'SHORT' : 'LONG';
+  return '매수';
 }
 
 function leverageText(leverage) {
@@ -36,7 +47,7 @@ function detailsFor(event) {
   if (event.type === 'NEW_CANDIDATE') {
     const parts = [
       `${event.strategy}/${event.timeframe}`,
-      `방향 ${event.direction}`,
+      `신호 ${signalLabel(event)}`,
       `Net utility ${format(event.utilityR)}R`,
     ];
     const leverage = leverageText(event.leverage);

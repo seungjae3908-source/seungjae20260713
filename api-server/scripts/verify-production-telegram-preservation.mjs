@@ -54,6 +54,9 @@ const keys = ['LIVE_TELEGRAM_ACTIVATION_APPROVED', 'TELEGRAM_INTELLIGENCE_WORKER
   'MEMBER_HOLDINGS_TELEGRAM_PRODUCER_ENABLED', 'MEMBER_HOLDINGS_NEWS_INTELLIGENCE_ENABLED',
   'MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED',
   'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_STOCK_CHAT_ID', 'TELEGRAM_CRYPTO_CHAT_ID',
+  'TELEGRAM_KR_STOCK_CHAT_ID', 'TELEGRAM_US_STOCK_CHAT_ID',
+  'TELEGRAM_CRYPTO_SPOT_CHAT_ID', 'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
+  'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID', 'TELEGRAM_AUTO_TRADING_CHAT_ID', 'TELEGRAM_OWNER_MEMBER_ID',
   'TELEGRAM_BOT_USERNAME', 'TELEGRAM_WEBHOOK_SECRET', 'BACKGROUND_WORKERS_ENABLED',
   'LIVE_TRADING', 'AUTO_TRADING', 'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED',
   'ORDER_EXECUTION_ENABLED', 'LIVE_TRADING_ACTIVATION_APPROVED', 'LIVE_AUTOMATIC_TRADING_ENABLED',
@@ -294,6 +297,13 @@ const readyRuntime = { ...state('false', 'false')[0].pm2_env, DEPLOY_SHA: target
   TELEGRAM_CHAT_ID: 'test-only-not-a-destination',
   TELEGRAM_STOCK_CHAT_ID: 'test-only-stock-room',
   TELEGRAM_CRYPTO_CHAT_ID: 'test-only-crypto-room',
+  TELEGRAM_KR_STOCK_CHAT_ID: 'test-only-kr-stock-room',
+  TELEGRAM_US_STOCK_CHAT_ID: 'test-only-us-stock-room',
+  TELEGRAM_CRYPTO_SPOT_CHAT_ID: 'test-only-crypto-spot-room',
+  TELEGRAM_CRYPTO_FUTURES_CHAT_ID: 'test-only-crypto-futures-room',
+  TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID: 'test-only-holdings-room',
+  TELEGRAM_AUTO_TRADING_CHAT_ID: 'test-only-auto-room',
+  TELEGRAM_OWNER_MEMBER_ID: 'test-only-owner-member',
   TELEGRAM_BOT_USERNAME: 'test_only_bot',
   TELEGRAM_WEBHOOK_SECRET: 'test-only-webhook-secret' };
 const completeTelegramRuntime = {
@@ -322,7 +332,10 @@ check('only canonical Telegram seam creates activation after exact approval iden
   for (const key of telegramFeatureFlags) assert.equal(env[key], 'true');
   for (const key of [
     'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_STOCK_CHAT_ID',
-    'TELEGRAM_CRYPTO_CHAT_ID', 'TELEGRAM_BOT_USERNAME', 'TELEGRAM_WEBHOOK_SECRET',
+    'TELEGRAM_CRYPTO_CHAT_ID', 'TELEGRAM_KR_STOCK_CHAT_ID', 'TELEGRAM_US_STOCK_CHAT_ID',
+    'TELEGRAM_CRYPTO_SPOT_CHAT_ID', 'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
+    'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID', 'TELEGRAM_AUTO_TRADING_CHAT_ID', 'TELEGRAM_OWNER_MEMBER_ID',
+    'TELEGRAM_BOT_USERNAME', 'TELEGRAM_WEBHOOK_SECRET',
   ]) assert.equal(env[key], readyRuntime[key]);
   for (const key of ['LIVE_TRADING', 'AUTO_TRADING', 'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED']) assert.equal(env[key], 'false');
   assert.equal(env.executionAuthority, 'NONE');
@@ -337,7 +350,10 @@ check('Telegram seam rejects missing approval, wrong identity, mixed state and a
   ];
   for (const key of [
     'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_STOCK_CHAT_ID',
-    'TELEGRAM_CRYPTO_CHAT_ID', 'TELEGRAM_BOT_USERNAME', 'TELEGRAM_WEBHOOK_SECRET',
+    'TELEGRAM_CRYPTO_CHAT_ID', 'TELEGRAM_KR_STOCK_CHAT_ID', 'TELEGRAM_US_STOCK_CHAT_ID',
+    'TELEGRAM_CRYPTO_SPOT_CHAT_ID', 'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
+    'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID', 'TELEGRAM_AUTO_TRADING_CHAT_ID', 'TELEGRAM_OWNER_MEMBER_ID',
+    'TELEGRAM_BOT_USERNAME', 'TELEGRAM_WEBHOOK_SECRET',
   ]) invalid.push([{ ...readyRuntime, [key]: '' }, {}]);
   for (const [runtime, options] of invalid) {
     const result = activation(runtime, options);
@@ -356,6 +372,13 @@ check('Telegram activation preserves PM2-owned configuration over conflicting am
       TELEGRAM_CHAT_ID: '',
       TELEGRAM_STOCK_CHAT_ID: '',
       TELEGRAM_CRYPTO_CHAT_ID: '',
+      TELEGRAM_KR_STOCK_CHAT_ID: '',
+      TELEGRAM_US_STOCK_CHAT_ID: '',
+      TELEGRAM_CRYPTO_SPOT_CHAT_ID: '',
+      TELEGRAM_CRYPTO_FUTURES_CHAT_ID: '',
+      TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID: '',
+      TELEGRAM_AUTO_TRADING_CHAT_ID: '',
+      TELEGRAM_OWNER_MEMBER_ID: '',
       TELEGRAM_BOT_USERNAME: '',
       TELEGRAM_WEBHOOK_SECRET: '',
     } },
@@ -366,7 +389,10 @@ check('Telegram activation preserves PM2-owned configuration over conflicting am
   const env = calls[0][2].env;
   for (const key of [
     'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_STOCK_CHAT_ID',
-    'TELEGRAM_CRYPTO_CHAT_ID', 'TELEGRAM_BOT_USERNAME', 'TELEGRAM_WEBHOOK_SECRET',
+    'TELEGRAM_CRYPTO_CHAT_ID', 'TELEGRAM_KR_STOCK_CHAT_ID', 'TELEGRAM_US_STOCK_CHAT_ID',
+    'TELEGRAM_CRYPTO_SPOT_CHAT_ID', 'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
+    'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID', 'TELEGRAM_AUTO_TRADING_CHAT_ID', 'TELEGRAM_OWNER_MEMBER_ID',
+    'TELEGRAM_BOT_USERNAME', 'TELEGRAM_WEBHOOK_SECRET',
   ]) assert.equal(env[key], readyRuntime[key]);
 });
 
