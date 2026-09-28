@@ -13,6 +13,7 @@ test('market-specific freezer only freezes candidates that beat baseline/full wi
     schemaVersion: 'move-hunter-one-year-factor-ablation/v1',
     markets: {
       KR_STOCK: {
+        sourceTimeframes: ['1D'],
         variants: {
           BASELINE: metric(0.1199, 0.0330, 3.216, 24),
           FULL: metric(0.5157, 0.0329, 9.649, 30),
@@ -24,6 +25,7 @@ test('market-specific freezer only freezes candidates that beat baseline/full wi
         },
       },
       US_STOCK: {
+        sourceTimeframes: ['1D'],
         variants: {
           BASELINE: metric(-0.0011, 0.0445, 0.964, 24),
           FULL: metric(-0.0229, 0.0557, 0.532, 29),
@@ -35,6 +37,7 @@ test('market-specific freezer only freezes candidates that beat baseline/full wi
         },
       },
       CRYPTO_SPOT: {
+        sourceTimeframes: ['4H'],
         variants: {
           BASELINE: metric(0.0092, 0.0511, 1.079, 93),
           FULL: metric(0.0052, 0.1173, 1.044, 115),
@@ -46,6 +49,7 @@ test('market-specific freezer only freezes candidates that beat baseline/full wi
         },
       },
       CRYPTO_FUTURES: {
+        sourceTimeframes: ['4H'],
         variants: {
           BASELINE: metric(0.0992, 0.0747, 1.551, 229),
           FULL: metric(0.0313, 0.1181, 1.169, 276),
@@ -62,11 +66,19 @@ test('market-specific freezer only freezes candidates that beat baseline/full wi
   const result = freezeMarketSpecificHypotheses(ablation);
   assert.equal(result.markets.KR_STOCK.status, 'FROZEN_HYPOTHESIS');
   assert.equal(result.markets.KR_STOCK.selectedVariant, 'NO_VOLUME');
+  assert.equal(result.markets.KR_STOCK.futureValidation.sourceTimeframe, '1D');
+  assert.equal(result.markets.KR_STOCK.futureValidation.targetForwardTimeframe, '60M');
+  assert.equal(result.markets.KR_STOCK.futureValidation.timeframeMatch, false);
+  assert.equal(result.markets.KR_STOCK.futureValidation.forwardAdmissionStatus, 'BLOCKED_TIMEFRAME_IDENTITY');
+  assert.ok(result.markets.KR_STOCK.futureValidation.forwardAdmissionReasons.includes('SOURCE_FORWARD_TIMEFRAME_MISMATCH'));
+  assert.equal(result.markets.KR_STOCK.futureValidation.crossTimeframeCreditAllowed, false);
   assert.equal(result.markets.US_STOCK.status, 'RESEARCH_HOLD');
   assert.equal(result.markets.CRYPTO_SPOT.status, 'RESEARCH_HOLD');
+  assert.equal(result.markets.CRYPTO_SPOT.futureValidation.timeframeMatch, true);
   assert.ok(result.markets.CRYPTO_SPOT.reasons.includes('MDD_EXPANSION_LIMIT_EXCEEDED'));
   assert.equal(result.markets.CRYPTO_FUTURES.status, 'RESEARCH_HOLD');
   assert.equal(result.safety.observedHistoryMayCountAsOos, false);
+  assert.equal(result.safety.crossTimeframeCreditAllowed, false);
   assert.equal(result.safety.automaticScannerAdoptionAllowed, false);
   assert.equal(result.safety.executionAuthority, 'NONE');
 });
