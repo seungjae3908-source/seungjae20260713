@@ -1,6 +1,10 @@
 import path from 'node:path';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { logger } from '../lib/logger';
+import {
+  telegramMarketRoomChatId,
+  telegramMarketRoomForLane,
+} from './telegram-market-room.service';
 import { sendTelegramAlert, type TelegramAlertInput } from './telegram-notification.service';
 import {
   deliverMemberWatchlistTelegramForSignal,
@@ -62,8 +66,11 @@ function endpoint(): string {
 }
 
 function chatIdForMarket(market: V3Event['market']): string | null {
-  if (market === 'KR_STOCK' || market === 'US_STOCK') return process.env.TELEGRAM_STOCK_CHAT_ID?.trim() || null;
-  return process.env.TELEGRAM_CRYPTO_CHAT_ID?.trim() || null;
+  return telegramMarketRoomChatId(
+    telegramMarketRoomForLane(market),
+    process.env,
+    { allowLegacyFallback: true },
+  );
 }
 
 function tierLabel(tier: V3Event['validationTier']): string {
@@ -107,8 +114,8 @@ function timeframeLabel(timeframe: string): string {
 
 function directionLabel(direction: V3Event['direction']): string | null {
   if (direction === 'BUY') return '매수';
-  if (direction === 'LONG') return '롱';
-  if (direction === 'SHORT') return '숏';
+  if (direction === 'LONG') return 'LONG';
+  if (direction === 'SHORT') return 'SHORT';
   return null;
 }
 
@@ -174,6 +181,18 @@ function kstTimestamp(now: Date): string {
   return `${Number(parts.month)}월 ${Number(parts.day)}일 ${parts.hour}:${parts.minute}`;
 }
 
+function signalLabel(event: V3Event): string {
+  if (event.market === 'CRYPTO_FUTURES') return event.direction === 'SHORT' ? 'SHORT' : 'LONG';
+  return '매수';
+}
+
+function alertTitle(event: V3Event): string {
+  const suffix = event.type === 'NEW_CANDIDATE'
+    ? `${signalLabel(event)} 신호`
+    : '상태 업데이트';
+  return `📊 ${event.symbol} · ${marketLabel(event.market)} · ${suffix}`;
+}
+
 function alertType(event: V3Event): TelegramAlertInput['type'] | null {
   if (event.type !== 'NEW_CANDIDATE') return 'intelligence_report';
   if (event.market === 'KR_STOCK' || event.market === 'US_STOCK') return event.direction === 'BUY' ? 'strong_buy' : null;
@@ -222,7 +241,7 @@ export function buildSignalIntelligenceTelegramInput(
   if (!type || !destinationChatId) return null;
   return {
     type,
-    title: `📊 ${event.symbol} · ${marketLabel(event.market)}`,
+    title: alertTitle(event),
     symbol: event.symbol,
     market: event.market,
     details: details(event, now),

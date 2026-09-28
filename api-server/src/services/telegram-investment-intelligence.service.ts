@@ -304,7 +304,22 @@ export async function collectTelegramSignalIntelligence(
 function marketLabel(alert: ScannerAlertCandidate): string {
   if (alert.assetClass === 'coin_futures') return '코인선물';
   if (alert.assetClass === 'coin_spot') return '코인현물';
-  return alert.market.toUpperCase().includes('US') ? '미국' : '국내';
+  return alert.market.toUpperCase().includes('US') ? '해외주식' : '국내주식';
+}
+
+function publicSignalLabel(alert: ScannerAlertCandidate): string {
+  if (alert.assetClass === 'coin_futures') return alert.direction === 'SHORT' ? 'SHORT' : 'LONG';
+  return '매수';
+}
+
+function warningLabel(value: string): string {
+  switch (value) {
+    case 'CHART_EVIDENCE_UNAVAILABLE': return '차트 근거 확인 불가';
+    case 'NEWS_DISCLOSURE_EVIDENCE_UNAVAILABLE': return '뉴스·공시 근거 확인 불가';
+    case 'THEME_EVIDENCE_UNAVAILABLE': return '테마 정보 확인 불가';
+    case 'AI_EXPLANATION_UNAVAILABLE': return 'AI 설명 확인 불가';
+    default: return '일부 보조 근거 확인 필요';
+  }
 }
 
 function strategyLabel(context: TelegramSignalDeliveryContext): string {
@@ -329,7 +344,7 @@ function pricePlan(alert: ScannerAlertCandidate): string {
     `2차 진입 ${secondEntry ?? 'N/A'} · 기본 40%`,
     `1차 목표 ${target1} · 2차 목표 ${target2}`,
     `손절/무효 ${stop}`,
-    '앱 주문 준비에서 현재 시장데이터로 다시 검증·재계산',
+    '🛒 주문하기를 누르면 앱에서 최신 시장데이터로 다시 검증합니다.',
   ].join('\n');
 }
 
@@ -370,7 +385,7 @@ function appButtons(alert: ScannerAlertCandidate, context: TelegramSignalDeliver
 
   return [
     [
-      { text: '🛒 주문 준비', url: order.toString() },
+      { text: '🛒 주문하기', url: order.toString() },
       { text: '📊 AI차트', url: chart.toString() },
     ],
     [
@@ -387,9 +402,10 @@ export function buildTelegramSignalIntelligenceInput(
   context: TelegramSignalDeliveryContext = {},
 ): TelegramAlertInput {
   const events = evidence.marketEvents ?? [];
-  const title = `${alert.symbol} | ${marketLabel(alert)} · ${strategyLabel(context)} · ${evidence.theme || '테마 미확인'}`;
+  const signal = `${publicSignalLabel(alert)} 신호`;
+  const title = `${alert.symbol} | ${marketLabel(alert)} · ${signal} · ${strategyLabel(context)} · ${evidence.theme || '테마 미확인'}`;
   const lines = [
-    `🚨 진입가능 · ${alert.direction} · ${context.timeframe || 'N/A'}`,
+    `🟢 신호: ${publicSignalLabel(alert)} · ${context.timeframe || 'N/A'}`,
     pricePlan(alert),
   ];
   if (alert.evidence.length) lines.push(`근거: ${alert.evidence.slice(0, 5).join(' · ')}`);
@@ -405,7 +421,7 @@ export function buildTelegramSignalIntelligenceInput(
     lines.push('뉴스');
     evidence.news.slice(0, 2).forEach((item, index) => lines.push(`${index + 1}. ${item.title}`));
   }
-  if (evidence.warnings.length) lines.push(`주의: ${evidence.warnings.join(' · ')}`);
+  if (evidence.warnings.length) lines.push(`⚠️ ${[...new Set(evidence.warnings.map(warningLabel))].join(' · ')}`);
 
   const buttons = appButtons(alert, context);
   const linkedEvents = events.filter((item): item is TelegramMarketEventEvidence & { url: string } => Boolean(item.url)).slice(0, 2);
