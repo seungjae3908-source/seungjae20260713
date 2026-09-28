@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Calculator, Eye, EyeOff, RefreshCw, ShieldAlert, WalletCards } from 'lucide-react';
+import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
+import { TradeApprovalQueue } from '@/components/trade-approval-queue';
 import { authorizedFetch } from '@/lib/auth-fetch';
-import type { AnalysisMarket, AnalysisPricePlan } from '@/lib/analysis-selection';
+import { safeTradeErrorMessage } from '@/lib/trade-approval-ui';
+import type { AnalysisMarket, AnalysisPricePlan, AnalysisSelection } from '@/lib/analysis-selection';
 import {
   buildPositionGuidance,
   feeInclusiveBreakEvenPrice,
@@ -29,18 +32,47 @@ export type AiChartAccountPosition = {
 };
 
 export type AiChartPositionOverlay = {
-  provider: 'toss' | 'upbit' | 'bitget';
+  provider: 'toss' | 'kiwoom' | 'upbit' | 'bitget';
   position: AiChartAccountPosition;
   stale: boolean;
   checkedAt: string | null;
 };
 
+type AiChartAccount = {
+  market: 'KR' | 'US' | 'UPBIT' | 'BITGET';
+  accountRef: string | null;
+  currency: string | null;
+  buyingPower: number | null;
+};
+
+type AiChartBalance = {
+  currency: string;
+  available: number | null;
+  locked: number | null;
+  total: number | null;
+  estimatedKrwValue: number | null;
+};
+
+type AiChartReadonlyOrder = {
+  id: string | null;
+  market: string | null;
+  symbol: string | null;
+  side: string | null;
+  price: number | null;
+  quantity: number | null;
+  remainingQuantity: number | null;
+  status: string | null;
+};
+
 type Snapshot = {
-  provider: 'toss' | 'upbit' | 'bitget';
+  provider: 'toss' | 'kiwoom' | 'upbit' | 'bitget';
   readOnly: true;
   connected: boolean;
   status: string;
+  accounts: AiChartAccount[] | null;
+  balances: AiChartBalance[] | null;
   positions: AiChartAccountPosition[];
+  openOrders: AiChartReadonlyOrder[] | null;
   checkedAt: string;
   lastGoodAt: string | null;
   stale: boolean;
@@ -61,6 +93,7 @@ type PanelState =
   | { kind: 'unavailable'; code: string };
 
 type Props = {
+  selection: AnalysisSelection;
   market: AnalysisMarket;
   symbol: string;
   chartPrice: number | null;
@@ -68,10 +101,123 @@ type Props = {
   onOverlayChange: (overlay: AiChartPositionOverlay | null) => void;
 };
 
-function providerForMarket(market: AnalysisMarket): Snapshot['provider'] {
+type OrderDashboardItem = {
+  id: string;
+  planId: string;
+  exchange: 'toss' | 'kiwoom' | 'upbit' | 'bitget';
+  symbol: string | null;
+  market: string | null;
+  side: 'buy' | 'sell' | 'long' | 'short' | null;
+  accountMode: 'paper' | 'mock' | 'live' | null;
+  orderType: 'market' | 'limit' | null;
+  reduceOnly: boolean;
+  state: string;
+  clientOrderId: string;
+  exchangeOrderId: string | null;
+  requestedQuantity: number | null;
+  remainingQuantity: number | null;
+  filledQuantity: number;
+  currentLimitPrice: number | null;
+  averageFillPrice: number | null;
+  cancelable: boolean | null;
+  lastErrorCode: string | null;
+  updatedAt: string;
+};
+
+type OrderDashboardResponse = {
+  ok?: boolean;
+  dashboardItems?: OrderDashboardItem[];
+  error?: string;
+  orderSubmitted?: boolean;
+  orderCanceled?: boolean;
+  orderAmended?: boolean;
+  privateTradingRequestSent?: boolean;
+};
+
+type OrderDashboardState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'ready'; items: OrderDashboardItem[] }
+  | { kind: 'unavailable'; code: string };
+
+type ExitPreview = {
+  provider: 'toss' | 'kiwoom' | 'upbit' | 'bitget';
+  market: string;
+  symbol: string;
+  percent: number;
+  positionSide: string | null;
+  positionQuantity: number | null;
+  availableQuantity: number;
+  exitQuantity: number;
+  quantityRule: 'INTEGER_ONLY' | 'FRACTIONAL_ALLOWED';
+  side: 'buy' | 'sell';
+  reduceOnly: true;
+  checkedAt: string;
+  stale: false;
+  fingerprint: string;
+  executionReadiness?: {
+    connectionConfigured: boolean;
+    providerVerified: boolean;
+    manualServerGateEnabled: boolean;
+    readyForManualExitEvaluation: boolean;
+    blockers: string[];
+    orderSubmissionPerformedByPreview: boolean;
+    executionAuthorityGrantedByPreview: boolean;
+  };
+};
+
+type CanonicalExitDraft = {
+  schemaVersion: 'ai-chart-canonical-exit-draft-v1';
+  fingerprint: string;
+  provider: ExitPreview['provider'];
+  market: string;
+  symbol: string;
+  accountMode: 'live';
+  orderType: 'market';
+  side: 'buy' | 'sell';
+  quantity: number;
+  percent: number;
+  reduceOnly: true;
+  sourceCheckedAt: string;
+  planCreationPerformed: false;
+  orderSubmissionPerformed: false;
+  requiresFreshAccountRecheck: true;
+  requiresOrderTimeRiskRecheck: true;
+  requiresExplicitApproval: true;
+  nextOwner: 'CANONICAL_EXIT_PLAN_OWNER';
+};
+
+type ExitPreviewState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'ready'; preview: ExitPreview; draft: CanonicalExitDraft }
+  | { kind: 'unavailable'; code: string };
+
+type ExecutionReadiness = {
+  connectionConfigured: boolean;
+  providerVerified: boolean;
+  manualServerGateEnabled: boolean;
+  automaticServerGateEnabled: boolean;
+  readyForManualOrderEvaluation: boolean;
+  readyForAutomaticOrderEvaluation: boolean;
+  blockers: string[];
+  orderTimeRiskRecheckRequired: boolean;
+  orderSubmissionPerformedByStatusRequest: false;
+};
+
+type EntryReadinessState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'ready'; provider: Snapshot['provider']; value: ExecutionReadiness }
+  | { kind: 'unavailable'; code: string };
+
+type StockReadOnlyProvider = 'toss' | 'kiwoom';
+type CockpitTab = 'entry' | 'orders' | 'exit';
+
+function providerForMarket(market: AnalysisMarket, stockProvider: StockReadOnlyProvider): Snapshot['provider'] {
   if (market === 'UPBIT') return 'upbit';
   if (market === 'BITGET') return 'bitget';
-  return 'toss';
+  return stockProvider;
 }
 
 function normalizedSymbol(value: string): string {
@@ -93,6 +239,12 @@ function symbolMatches(market: AnalysisMarket, chartSymbol: string, positionSymb
 
 function positionMarketMatches(market: AnalysisMarket, positionMarket: string): boolean {
   return positionMarket.trim().toUpperCase() === market;
+}
+
+function providerOrderMatches(market: AnalysisMarket, chartSymbol: string, order: AiChartReadonlyOrder): boolean {
+  if (!order.market || !order.symbol) return false;
+  if (order.market.trim().toUpperCase() !== market) return false;
+  return symbolMatches(market, chartSymbol, order.symbol);
 }
 
 function activePosition(position: AiChartAccountPosition): boolean {
@@ -165,8 +317,89 @@ function priceDistance(position: AiChartAccountPosition, chartPrice: number | nu
   return direction * raw;
 }
 
+function exitReadinessBlockerLabel(code: string): string {
+  const labels: Record<string, string> = {
+    CREDENTIAL_VAULT_NOT_READY: '거래키 암호화 저장소가 준비되지 않음',
+    LIVE_CONNECTION_NOT_CONFIGURED: '실전 거래키가 연결되지 않음',
+    LIVE_CONNECTION_NOT_VERIFIED: '실계좌 Provider 검증이 필요함',
+    MANUAL_LIVE_SERVER_GATE_OFF: '실주문 서버게이트가 꺼져 있음',
+  };
+  return labels[code] ?? code;
+}
+
+function orderStateLabel(state: string): string {
+  const labels: Record<string, string> = {
+    SUBMITTED: '제출 대기',
+    ACCEPTED: '거래소 접수',
+    PARTIALLY_FILLED: '부분체결',
+    FILLED: '체결완료',
+    CANCEL_REQUESTED: '취소 요청',
+    CANCELED: '취소완료',
+    REJECTED: '거절',
+    EXPIRED: '만료',
+    RECOVERY_REQUIRED: '재조정 필요',
+  };
+  return labels[state] ?? state;
+}
+
+function canonicalProviderOrderStatus(
+  item: OrderDashboardItem,
+  providerOrders: AiChartReadonlyOrder[] | null,
+): 'MATCHED' | 'PROVIDER_NOT_READ' | 'EXCHANGE_ID_MISSING' | 'NOT_IN_OPEN_ORDERS' {
+  if (providerOrders == null) return 'PROVIDER_NOT_READ';
+  const exchangeId = String(item.exchangeOrderId ?? '').trim();
+  if (!exchangeId) return 'EXCHANGE_ID_MISSING';
+  return providerOrders.some((order) => String(order.id ?? '').trim() === exchangeId)
+    ? 'MATCHED'
+    : 'NOT_IN_OPEN_ORDERS';
+}
+
+function providerOrderStatusLabel(status: ReturnType<typeof canonicalProviderOrderStatus>): string {
+  if (status === 'MATCHED') return 'Provider 원장 일치';
+  if (status === 'PROVIDER_NOT_READ') return 'Provider 원장 미조회';
+  if (status === 'EXCHANGE_ID_MISSING') return '거래소 주문 ID 미확인';
+  return '현재 미체결 원장에서 미확인';
+}
+
+function canCancelOrder(item: OrderDashboardItem): boolean {
+  return ['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'RECOVERY_REQUIRED'].includes(item.state)
+    && item.cancelable !== false;
+}
+
+function isUsStockPriceOnlyAmend(item: OrderDashboardItem): boolean {
+  return item.market?.trim().toUpperCase() === 'US'
+    && (item.exchange === 'toss' || item.exchange === 'kiwoom');
+}
+
+function canAmendOrder(item: OrderDashboardItem): boolean {
+  return item.orderType === 'limit'
+    && item.state === 'ACCEPTED'
+    && item.filledQuantity === 0
+    && item.cancelable !== false
+    && finite(item.currentLimitPrice) != null;
+}
+
+function exitPreviewQuantity(
+  position: AiChartAccountPosition,
+  percent: number,
+  market: AnalysisMarket,
+  provider: Snapshot['provider'],
+): number | null {
+  const available = finite(position.availableQuantity) ?? finite(position.quantity);
+  if (available == null || available <= 0 || !Number.isFinite(percent) || percent <= 0 || percent > 100) return null;
+  const raw = available * percent / 100;
+  const integerOnly = market === 'KR' || (market === 'US' && provider === 'kiwoom');
+  const quantity = integerOnly
+    ? Math.floor(raw)
+    : Math.round(raw * 100_000_000) / 100_000_000;
+  return quantity > 0 ? quantity : null;
+}
+
 function providerLabel(provider: Snapshot['provider']): string {
-  return provider === 'toss' ? 'Toss' : provider === 'upbit' ? 'Upbit' : 'Bitget';
+  if (provider === 'toss') return 'Toss';
+  if (provider === 'kiwoom') return 'Kiwoom';
+  if (provider === 'upbit') return 'Upbit';
+  return 'Bitget';
 }
 
 function checkedAtLabel(value: string | null | undefined): string {
@@ -188,21 +421,46 @@ function pnlSourceLabel(source: 'POSITION_QUANTITY' | 'PROVIDER_IMPLIED' | null)
   return '금액 근거 없음';
 }
 
-export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, onOverlayChange }: Props) {
+export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pricePlan, onOverlayChange }: Props) {
   const [state, setState] = useState<PanelState>({ kind: 'idle' });
+  const [stockProvider, setStockProvider] = useState<StockReadOnlyProvider>('toss');
   const [linesVisible, setLinesVisible] = useState(true);
   const [additionalValueText, setAdditionalValueText] = useState('');
   const [additionalPriceText, setAdditionalPriceText] = useState('');
   const [entryFeeText, setEntryFeeText] = useState('');
   const [exitFeeText, setExitFeeText] = useState('');
   const [targetPercents, setTargetPercents] = useState<Record<number, string>>({});
+  const [cockpitOpen, setCockpitOpen] = useState(false);
+  const [cockpitTab, setCockpitTab] = useState<CockpitTab>('entry');
+  const [orderDashboard, setOrderDashboard] = useState<OrderDashboardState>({ kind: 'idle' });
+  const [orderMessage, setOrderMessage] = useState('');
+  const [orderActionId, setOrderActionId] = useState<string | null>(null);
+  const [amendDrafts, setAmendDrafts] = useState<Record<string, { price: string; quantity: string }>>({});
+  const [exitPercent, setExitPercent] = useState(100);
+  const [exitPreviewState, setExitPreviewState] = useState<ExitPreviewState>({ kind: 'idle' });
+  const [entryReadiness, setEntryReadiness] = useState<EntryReadinessState>({ kind: 'idle' });
   const abortRef = useRef<AbortController | null>(null);
   const requestSequenceRef = useRef(0);
+  const orderAbortRef = useRef<AbortController | null>(null);
+  const orderSequenceRef = useRef(0);
+  const exitAbortRef = useRef<AbortController | null>(null);
+  const exitSequenceRef = useRef(0);
+  const entryReadinessAbortRef = useRef<AbortController | null>(null);
+  const entryReadinessSequenceRef = useRef(0);
 
   useEffect(() => {
     requestSequenceRef.current += 1;
     abortRef.current?.abort();
     abortRef.current = null;
+    orderSequenceRef.current += 1;
+    orderAbortRef.current?.abort();
+    orderAbortRef.current = null;
+    exitSequenceRef.current += 1;
+    exitAbortRef.current?.abort();
+    exitAbortRef.current = null;
+    entryReadinessSequenceRef.current += 1;
+    entryReadinessAbortRef.current?.abort();
+    entryReadinessAbortRef.current = null;
     setState({ kind: 'idle' });
     setLinesVisible(true);
     setAdditionalValueText('');
@@ -210,22 +468,39 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
     setEntryFeeText('');
     setExitFeeText('');
     setTargetPercents({});
+    setCockpitOpen(false);
+    setCockpitTab('entry');
+    setOrderDashboard({ kind: 'idle' });
+    setOrderMessage('');
+    setOrderActionId(null);
+    setAmendDrafts({});
+    setExitPercent(100);
+    setExitPreviewState({ kind: 'idle' });
+    setEntryReadiness({ kind: 'idle' });
     onOverlayChange(null);
   }, [market, onOverlayChange, symbol]);
 
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      orderAbortRef.current?.abort();
+      exitAbortRef.current?.abort();
+      entryReadinessAbortRef.current?.abort();
     };
   }, []);
 
   const loadPosition = useCallback(async () => {
-    const provider = providerForMarket(market);
+    const provider = providerForMarket(market, stockProvider);
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
     const sequence = ++requestSequenceRef.current;
     setState({ kind: 'loading' });
+    setOrderDashboard({ kind: 'idle' });
+    setOrderMessage('');
+    setOrderActionId(null);
+    setAmendDrafts({});
+    setExitPreviewState({ kind: 'idle' });
     onOverlayChange(null);
     try {
       const response = await authorizedFetch(`/api/accounts/read-only/${provider}`, {
@@ -270,6 +545,11 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
         return;
       }
       setState({ kind: 'ready', snapshot, position: selected.position });
+      const currentProviderOrders = Array.isArray(snapshot.openOrders)
+        ? snapshot.openOrders.filter((order) => providerOrderMatches(market, symbol, order))
+        : [];
+      setCockpitOpen(true);
+      setCockpitTab(currentProviderOrders.length > 0 ? 'orders' : selected.position ? 'exit' : 'entry');
       if (selected.position && linesVisible) {
         onOverlayChange({ provider, position: selected.position, stale: snapshot.stale, checkedAt: snapshot.checkedAt ?? null });
       }
@@ -279,7 +559,7 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [linesVisible, market, onOverlayChange, symbol]);
+  }, [linesVisible, market, onOverlayChange, stockProvider, symbol]);
 
   const toggleLines = useCallback(() => {
     if (state.kind !== 'ready' || !state.position) return;
@@ -297,8 +577,45 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
     });
   }, [onOverlayChange, state]);
 
-  const provider = providerForMarket(market);
+  const changeStockProvider = useCallback((next: StockReadOnlyProvider) => {
+    if (next === stockProvider) return;
+    requestSequenceRef.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    orderSequenceRef.current += 1;
+    orderAbortRef.current?.abort();
+    orderAbortRef.current = null;
+    exitSequenceRef.current += 1;
+    exitAbortRef.current?.abort();
+    exitAbortRef.current = null;
+    entryReadinessSequenceRef.current += 1;
+    entryReadinessAbortRef.current?.abort();
+    entryReadinessAbortRef.current = null;
+    setStockProvider(next);
+    setState({ kind: 'idle' });
+    setLinesVisible(true);
+    setOrderDashboard({ kind: 'idle' });
+    setOrderMessage('');
+    setOrderActionId(null);
+    setAmendDrafts({});
+    setExitPreviewState({ kind: 'idle' });
+    setEntryReadiness({ kind: 'idle' });
+    onOverlayChange(null);
+  }, [onOverlayChange, stockProvider]);
+
+  const provider = providerForMarket(market, stockProvider);
   const position = state.kind === 'ready' ? state.position : null;
+  const matchingAccount = state.kind === 'ready'
+    ? (state.snapshot.accounts ?? []).find((account) => account.market === market) ?? null
+    : null;
+  const cashCurrency = market === 'US' ? 'USD' : market === 'BITGET' ? 'USDT' : 'KRW';
+  const cashBalance = state.kind === 'ready'
+    ? (state.snapshot.balances ?? []).find((balance) => balance.currency.trim().toUpperCase() === cashCurrency) ?? null
+    : null;
+  const availableFunds = finite(matchingAccount?.buyingPower) ?? finite(cashBalance?.available);
+  const providerOpenOrders = state.kind === 'ready' && Array.isArray(state.snapshot.openOrders)
+    ? state.snapshot.openOrders.filter((order) => providerOrderMatches(market, symbol, order))
+    : null;
   const distance = position ? priceDistance(position, chartPrice) : null;
   const additionalValue = positiveText(additionalValueText);
   const additionalPrice = positiveText(additionalPriceText);
@@ -334,6 +651,628 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
   }), [chartPrice, market, position, pricePlan, targetPercents]);
   const allocationTotal = allocationRows.reduce((sum, row) => Number.isFinite(row.percent) ? sum + row.percent : sum, 0);
   const allocationValid = allocationTotal <= 100;
+  const exitQuantity = position ? exitPreviewQuantity(position, exitPercent, market, provider) : null;
+  const entryContextReady = Boolean(
+    selection.searchRunId
+    && selection.signalId
+    && selection.action
+    && (selection.matchedSignals?.length ?? 0) > 0,
+  );
+  const canonicalOrderStatus = orderDashboard.kind === 'ready'
+    ? `${orderDashboard.items.length}건`
+    : orderDashboard.kind === 'loading' ? '조회 중' : orderDashboard.kind === 'unavailable' ? '조회 실패' : '미조회';
+  const exitStatus = !position
+    ? '해당 없음'
+    : exitPreviewState.kind === 'ready' ? '재검증됨'
+      : exitPreviewState.kind === 'loading' ? '재검증 중'
+        : exitPreviewState.kind === 'unavailable' ? '재검증 실패'
+          : '재검증 필요';
+
+  const loadOrderDashboard = useCallback(async (preserveMessage = false) => {
+    const controller = new AbortController();
+    orderAbortRef.current?.abort();
+    orderAbortRef.current = controller;
+    const sequence = ++orderSequenceRef.current;
+    setOrderDashboard({ kind: 'loading' });
+    if (!preserveMessage) setOrderMessage('');
+    try {
+      const query = new URLSearchParams({
+        dashboard: '1',
+        market,
+        symbol,
+      });
+      if (market !== 'KR' && market !== 'US') query.set('exchange', provider);
+      const response = await authorizedFetch(`/api/trade-automation/orders?${query.toString()}`, {
+        method: 'GET',
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' },
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => null) as OrderDashboardResponse | null;
+      if (controller.signal.aborted || sequence !== orderSequenceRef.current) return;
+      if (!response.ok || payload?.ok !== true || !Array.isArray(payload.dashboardItems)) {
+        setOrderDashboard({ kind: 'unavailable', code: payload?.error ?? `HTTP_${response.status}` });
+        return;
+      }
+      if (payload.orderSubmitted !== false
+        || payload.orderCanceled !== false
+        || payload.orderAmended !== false
+        || payload.privateTradingRequestSent !== false) {
+        setOrderDashboard({ kind: 'unavailable', code: 'ORDER_DASHBOARD_READ_SAFETY_MISMATCH' });
+        return;
+      }
+      const items = payload.dashboardItems.filter((item) => (
+        typeof item.symbol === 'string'
+        && item.market?.trim().toUpperCase() === market
+        && symbolMatches(market, symbol, item.symbol)
+        && ((market === 'KR' || market === 'US') || item.exchange === provider)
+      ));
+      setOrderDashboard({ kind: 'ready', items });
+      setAmendDrafts(Object.fromEntries(items.map((item) => [
+        item.id,
+        {
+          price: finite(item.currentLimitPrice)?.toString() ?? '',
+          quantity: finite(item.remainingQuantity ?? item.requestedQuantity)?.toString() ?? '',
+        },
+      ])));
+    } catch (error) {
+      if (controller.signal.aborted || sequence !== orderSequenceRef.current) return;
+      setOrderDashboard({ kind: 'unavailable', code: error instanceof Error ? error.name : 'ORDER_DASHBOARD_LOAD_FAILED' });
+    } finally {
+      if (orderAbortRef.current === controller) orderAbortRef.current = null;
+    }
+  }, [market, provider, symbol]);
+
+  const cancelOrder = useCallback(async (item: OrderDashboardItem) => {
+    if (!canCancelOrder(item) || orderActionId) return;
+    const confirmed = window.confirm(`${symbol} 주문을 취소하시겠습니까? 이미 체결된 수량은 취소되지 않습니다.`);
+    if (!confirmed) return;
+    setOrderActionId(item.id);
+    setOrderMessage('취소 요청을 처리하고 있습니다.');
+    try {
+      const response = await authorizedFetch(`/api/trade-automation/orders/${encodeURIComponent(item.id)}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmed: true }),
+      });
+      const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
+      if (!response.ok || payload.ok !== true) throw new Error(payload.error ?? 'ORDER_CANCEL_FAILED');
+      setOrderMessage('취소 요청이 canonical 주문엔진에 반영되었습니다.');
+      await loadOrderDashboard(true);
+    } catch (error) {
+      setOrderMessage(safeTradeErrorMessage(
+        error instanceof Error ? error.message : null,
+        '주문 취소에 실패했습니다. 최신 주문상태를 다시 확인해 주세요.',
+      ));
+    } finally {
+      setOrderActionId(null);
+    }
+  }, [loadOrderDashboard, orderActionId, symbol]);
+
+  const amendOrder = useCallback(async (item: OrderDashboardItem) => {
+    if (!canAmendOrder(item) || orderActionId) return;
+    const draft = amendDrafts[item.id];
+    const price = positiveText(draft?.price ?? '');
+    const priceOnly = isUsStockPriceOnlyAmend(item);
+    const quantity = priceOnly ? null : positiveText(draft?.quantity ?? '');
+    if (price == null || (!priceOnly && quantity == null)) {
+      setOrderMessage(priceOnly ? '정정 가격을 양수로 입력해야 합니다.' : '정정 가격과 수량을 양수로 입력해야 합니다.');
+      return;
+    }
+    const confirmed = window.confirm(priceOnly
+      ? `${symbol} 미국주식 주문 가격을 ${price}로 정정하시겠습니까? 수량은 기존 잔량을 유지합니다.`
+      : `${symbol} 주문을 가격 ${price}, 수량 ${quantity}로 정정하시겠습니까?`);
+    if (!confirmed) return;
+    setOrderActionId(item.id);
+    setOrderMessage('정정 요청을 처리하고 있습니다.');
+    try {
+      const requestId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `amend-${Date.now()}-${item.id}`;
+      const response = await authorizedFetch(`/api/trade-automation/orders/${encodeURIComponent(item.id)}/amend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmed: true, requestId, price, quantity }),
+      });
+      const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
+      if (!response.ok || payload.ok !== true) throw new Error(payload.error ?? 'ORDER_AMEND_FAILED');
+      setOrderMessage('정정 요청이 canonical 주문엔진에 반영되었습니다.');
+      await loadOrderDashboard(true);
+    } catch (error) {
+      setOrderMessage(safeTradeErrorMessage(
+        error instanceof Error ? error.message : null,
+        '주문 정정에 실패했습니다. 최신 주문상태를 다시 확인해 주세요.',
+      ));
+    } finally {
+      setOrderActionId(null);
+    }
+  }, [amendDrafts, loadOrderDashboard, orderActionId, symbol]);
+
+  const verifyExitPreview = useCallback(async () => {
+    if (!position || exitPreviewState.kind === 'loading') return;
+    const controller = new AbortController();
+    exitAbortRef.current?.abort();
+    exitAbortRef.current = controller;
+    const sequence = ++exitSequenceRef.current;
+    setExitPreviewState({ kind: 'loading' });
+    try {
+      const response = await authorizedFetch('/api/trade-automation/positions/exit-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          confirmed: true,
+          provider,
+          market,
+          symbol,
+          percent: exitPercent,
+        }),
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => null) as {
+        ok?: boolean;
+        error?: string;
+        preview?: ExitPreview;
+        canonicalExitDraft?: CanonicalExitDraft;
+        orderSubmitted?: boolean;
+        orderCanceled?: boolean;
+        orderAmended?: boolean;
+        privateTradingMutationSent?: boolean;
+        executionAuthority?: string;
+        executionReadiness?: ExitPreview['executionReadiness'];
+      } | null;
+      if (controller.signal.aborted || sequence !== exitSequenceRef.current) return;
+      if (!response.ok || payload?.ok !== true || !payload.preview || !payload.canonicalExitDraft) {
+        setExitPreviewState({ kind: 'unavailable', code: payload?.error ?? `HTTP_${response.status}` });
+        return;
+      }
+      const draft = payload.canonicalExitDraft;
+      if (payload.orderSubmitted !== false
+        || payload.orderCanceled !== false
+        || payload.orderAmended !== false
+        || payload.privateTradingMutationSent !== false
+        || payload.executionAuthority !== 'NONE'
+        || payload.preview.reduceOnly !== true
+        || payload.preview.stale !== false
+        || !/^[a-f0-9]{64}$/.test(payload.preview.fingerprint)
+        || draft.schemaVersion !== 'ai-chart-canonical-exit-draft-v1'
+        || draft.fingerprint !== payload.preview.fingerprint
+        || draft.reduceOnly !== true
+        || draft.planCreationPerformed !== false
+        || draft.orderSubmissionPerformed !== false
+        || draft.requiresFreshAccountRecheck !== true
+        || draft.requiresOrderTimeRiskRecheck !== true
+        || draft.requiresExplicitApproval !== true
+        || draft.nextOwner !== 'CANONICAL_EXIT_PLAN_OWNER') {
+        setExitPreviewState({ kind: 'unavailable', code: 'EXIT_PREVIEW_SAFETY_CONTRACT_MISMATCH' });
+        return;
+      }
+      setExitPreviewState({
+        kind: 'ready',
+        preview: { ...payload.preview, executionReadiness: payload.executionReadiness },
+        draft,
+      });
+    } catch (error) {
+      if (controller.signal.aborted || sequence !== exitSequenceRef.current) return;
+      setExitPreviewState({ kind: 'unavailable', code: error instanceof Error ? error.name : 'EXIT_PREVIEW_FAILED' });
+    } finally {
+      if (exitAbortRef.current === controller) exitAbortRef.current = null;
+    }
+  }, [exitPercent, exitPreviewState.kind, market, position, provider, symbol]);
+
+  const loadEntryReadiness = useCallback(async () => {
+    const controller = new AbortController();
+    entryReadinessAbortRef.current?.abort();
+    entryReadinessAbortRef.current = controller;
+    const sequence = ++entryReadinessSequenceRef.current;
+    setEntryReadiness({ kind: 'loading' });
+    try {
+      const response = await authorizedFetch('/api/trade-automation/status', {
+        method: 'GET',
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' },
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => null) as {
+        ok?: boolean;
+        error?: string;
+        policy?: {
+          stockBrokerByMarket?: {
+            domestic_stock?: 'toss' | 'kiwoom';
+            us_stock?: 'toss' | 'kiwoom';
+          };
+        };
+        liveExecutionReadiness?: Partial<Record<Snapshot['provider'], ExecutionReadiness>>;
+        actualOrderSubmittedByStatusRequest?: boolean;
+      } | null;
+      if (controller.signal.aborted || sequence !== entryReadinessSequenceRef.current) return;
+      if (!response.ok || payload?.ok !== true || payload.actualOrderSubmittedByStatusRequest !== false) {
+        setEntryReadiness({ kind: 'unavailable', code: payload?.error ?? 'ENTRY_READINESS_STATUS_INVALID' });
+        return;
+      }
+      const executionProvider: Snapshot['provider'] = market === 'KR'
+        ? payload.policy?.stockBrokerByMarket?.domestic_stock ?? provider
+        : market === 'US'
+          ? payload.policy?.stockBrokerByMarket?.us_stock ?? provider
+          : provider;
+      const value = payload.liveExecutionReadiness?.[executionProvider];
+      if (!value || value.orderSubmissionPerformedByStatusRequest !== false || value.orderTimeRiskRecheckRequired !== true) {
+        setEntryReadiness({ kind: 'unavailable', code: 'ENTRY_READINESS_CONTRACT_MISMATCH' });
+        return;
+      }
+      setEntryReadiness({ kind: 'ready', provider: executionProvider, value });
+    } catch (error) {
+      if (controller.signal.aborted || sequence !== entryReadinessSequenceRef.current) return;
+      setEntryReadiness({ kind: 'unavailable', code: error instanceof Error ? error.name : 'ENTRY_READINESS_FAILED' });
+    } finally {
+      if (entryReadinessAbortRef.current === controller) entryReadinessAbortRef.current = null;
+    }
+  }, [market, provider]);
+
+  const tradingCockpit = (
+    <details
+            open={cockpitOpen}
+            onToggle={(event) => setCockpitOpen(event.currentTarget.open)}
+            data-testid="ai-chart-trading-cockpit"
+            className="rounded-xl border border-primary/25 bg-primary/5 p-3"
+          >
+            <summary className="cursor-pointer list-none text-[11px] font-black [&::-webkit-details-marker]:hidden">
+              진입 · 주문관리 · 종료 대시보드
+            </summary>
+            {cockpitOpen ? (
+              <div className="mt-3 space-y-3">
+                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4" data-testid="ai-chart-cockpit-lifecycle">
+                  <Metric label="진입" value={entryContextReady ? 'Scanner 근거 있음' : '신호 필요'} />
+                  <Metric label="보유" value={position ? '포지션 있음' : '없음'} />
+                  <Metric label="앱 주문" value={canonicalOrderStatus} />
+                  <Metric label="종료" value={exitStatus} />
+                </div>
+                <div role="tablist" aria-label="트레이딩 콕핏" data-testid="ai-chart-cockpit-tabs" className="grid grid-cols-3 gap-1 rounded-xl border border-card-border bg-background p-1">
+                  {([
+                    ['entry', '진입'],
+                    ['orders', '주문'],
+                    ['exit', '종료'],
+                  ] as const).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      role="tab"
+                      aria-selected={cockpitTab === value}
+                      onClick={() => setCockpitTab(value)}
+                      className={`min-h-10 min-w-0 rounded-lg px-2 text-[10px] font-black ${cockpitTab === value ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {cockpitTab === 'entry' ? (
+                  <>
+                <section className="rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-entry-planning">
+                  <p className="text-[10px] font-black">새 진입 계획</p>
+                  <p className="mt-0.5 text-[8px] font-bold leading-4 text-muted-foreground">
+                    Scanner 근거가 있는 경우에만 기존 canonical Paper owner를 재사용합니다. 이 화면에서 새로 만드는 진입은 현재 Paper 전용입니다.
+                    실전 신규진입은 브라우저에서 임의 생성하지 않으며, 서버가 이미 만든 live 승인계획이 있을 때만 아래 승인 큐에서 서버 live gate를 거쳐 처리합니다.
+                  </p>
+                  <div className="mt-2 grid grid-cols-2 gap-1.5 text-[8px] font-black">
+                    <span className="rounded-lg bg-positive/10 px-2 py-1.5 text-positive">Paper 신규진입 · 연결됨</span>
+                    <span className="rounded-lg bg-warning/10 px-2 py-1.5 text-warning">Live 신규계획 생성 · 미연결</span>
+                  </div>
+                  {entryContextReady ? (
+                    <div className="mt-2 [&_[data-testid=scanner-approval-composer]]:rounded-2xl [&_[data-testid=scanner-approval-composer]]:shadow-none">
+                      <ScannerApprovalComposer selection={selection} />
+                    </div>
+                  ) : (
+                    <p className="mt-2 rounded-xl bg-secondary/50 px-3 py-2 text-[9px] font-bold text-muted-foreground">
+                      신호검색기에서 현재 종목을 선택하면 검증된 신호 identity를 사용해 Paper 진입계획을 만들 수 있습니다.
+                    </p>
+                  )}
+                  <div className="mt-2 rounded-xl border border-card-border p-2.5" data-testid="ai-chart-entry-readiness">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-[9px] font-black">실전 진입 준비상태</p>
+                        <p className="mt-0.5 text-[8px] font-bold text-muted-foreground">조회만 수행 · 주문 제출 없음</p>
+                      </div>
+                      <button
+                        type="button"
+                        data-testid="ai-chart-load-entry-readiness"
+                        disabled={entryReadiness.kind === 'loading'}
+                        onClick={() => void loadEntryReadiness()}
+                        className="min-h-10 rounded-lg border border-card-border px-2.5 text-[9px] font-black disabled:opacity-50"
+                      >
+                        {entryReadiness.kind === 'loading' ? '확인 중' : '준비상태 확인'}
+                      </button>
+                    </div>
+                    {entryReadiness.kind === 'ready' ? (
+                      <div className="mt-2 rounded-lg bg-secondary/50 p-2 text-[8px] font-bold text-muted-foreground">
+                        <p className="font-black text-foreground">
+                          수동 실전 진입 · {entryReadiness.value.readyForManualOrderEvaluation ? '게이트 준비' : '차단'}
+                        </p>
+                        <p className="mt-1">
+                          실행 경로 {providerLabel(entryReadiness.provider)}
+                          {' · '}거래키 {entryReadiness.value.connectionConfigured ? '연결' : '미연결'}
+                          {' · '}provider {entryReadiness.value.providerVerified ? '검증됨' : '미검증'}
+                          {' · '}서버게이트 {entryReadiness.value.manualServerGateEnabled ? 'ON' : 'OFF'}
+                        </p>
+                        {entryReadiness.value.blockers.length ? (
+                          <p className="mt-1 break-words">차단 사유 · {entryReadiness.value.blockers.join(' · ')}</p>
+                        ) : (
+                          <p className="mt-1">실제 제출 시에도 주문 직전 Risk 재검증이 별도로 필요합니다.</p>
+                        )}
+                      </div>
+                    ) : null}
+                    {entryReadiness.kind === 'unavailable' ? (
+                      <p role="alert" className="mt-2 rounded-lg bg-warning/10 p-2 text-[8px] font-bold text-warning">
+                        진입 준비상태 확인 실패 · {entryReadiness.code}
+                      </p>
+                    ) : null}
+                  </div>
+                </section>
+
+                <TradeApprovalQueue
+                  symbolFilter={symbol}
+                  exchangeFilter={market === 'KR' || market === 'US' ? undefined : provider}
+                  compact
+                />
+                  </>
+                ) : null}
+
+                {cockpitTab === 'orders' ? (
+                  <>
+                <section className="rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-provider-open-orders">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-[10px] font-black">Provider 실제 미체결 · 조회 전용</p>
+                      <p className="mt-0.5 text-[8px] font-bold text-muted-foreground">
+                        {providerLabel(provider)} 계좌 스냅샷 · 앱 밖에서 낸 주문도 식별
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-secondary px-2 py-1 text-[8px] font-black">
+                      {providerOpenOrders == null ? '조회 근거 없음' : `${providerOpenOrders.length}건`}
+                    </span>
+                  </div>
+                  {providerOpenOrders == null ? (
+                    <p className="mt-2 rounded-xl bg-warning/5 px-3 py-2 text-[9px] font-bold text-muted-foreground">
+                      Provider 미체결 주문 응답이 없어 0건으로 단정하지 않습니다.
+                      {state.kind === 'ready' && state.snapshot.errorCode ? ` · ${state.snapshot.errorCode}` : ''}
+                    </p>
+                  ) : providerOpenOrders.length === 0 ? (
+                    <p className="mt-2 rounded-xl bg-secondary/50 px-3 py-2 text-[9px] font-bold text-muted-foreground">
+                      현재 선택 종목의 Provider 미체결 주문이 없습니다.
+                    </p>
+                  ) : (
+                    <div className="mt-2 space-y-1.5">
+                      {providerOpenOrders.map((order, index) => (
+                        <div key={order.id ?? `provider-order-${index}`} className="rounded-xl border border-card-border p-2.5">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-[10px] font-black">
+                              {order.side ?? '방향 미확인'} · {order.status ?? '상태 미확인'}
+                            </p>
+                            <span className="text-[8px] font-bold text-muted-foreground">Provider 원장</span>
+                          </div>
+                          <p className="mt-1 text-[8px] font-bold text-muted-foreground">
+                            가격 {formatPrice(order.price, market)}
+                            {' · '}주문 {formatQuantity(order.quantity)}
+                            {' · '}잔량 {formatQuantity(order.remainingQuantity)}
+                          </p>
+                          <p className="mt-1 text-[8px] font-bold text-muted-foreground">
+                            앱 canonical ID와 확인되지 않은 Provider 주문에는 여기서 취소·정정 권한을 만들지 않습니다.
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
+
+                <section className="rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-order-management">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <p className="text-[10px] font-black">현재 종목 주문 상태</p>
+                      <p className="mt-0.5 text-[8px] font-bold text-muted-foreground">자동 조회·자동 취소·자동 정정 없음</p>
+                    </div>
+                    <button
+                      type="button"
+                      data-testid="ai-chart-load-orders"
+                      onClick={() => void loadOrderDashboard()}
+                      disabled={orderDashboard.kind === 'loading' || orderActionId !== null}
+                      className="min-h-10 rounded-xl border border-card-border px-3 text-[10px] font-black disabled:opacity-50"
+                    >
+                      {orderDashboard.kind === 'loading' ? '조회 중' : '주문상태 불러오기'}
+                    </button>
+                  </div>
+
+                  {orderMessage ? <p role="status" className="mt-2 rounded-xl bg-secondary px-3 py-2 text-[9px] font-bold">{orderMessage}</p> : null}
+                  {orderDashboard.kind === 'unavailable' ? (
+                    <p role="alert" className="mt-2 rounded-xl bg-warning/10 px-3 py-2 text-[9px] font-bold text-warning">주문상태 조회 실패 · {orderDashboard.code}</p>
+                  ) : null}
+                  {orderDashboard.kind === 'ready' && orderDashboard.items.length === 0 ? (
+                    <p className="mt-2 rounded-xl bg-secondary/50 px-3 py-3 text-[9px] font-bold text-muted-foreground">현재 종목의 canonical 주문 기록이 없습니다.</p>
+                  ) : null}
+                  {orderDashboard.kind === 'ready' && orderDashboard.items.length > 0 ? (
+                    <div className="mt-2 space-y-2">
+                      {orderDashboard.items.map((item) => {
+                        const draft = amendDrafts[item.id] ?? { price: '', quantity: '' };
+                        return (
+                          <article key={item.id} className="rounded-xl border border-card-border p-2.5">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <p className="text-[10px] font-black">{item.side?.toUpperCase() ?? '-'} · {orderStateLabel(item.state)}</p>
+                                <p className="mt-0.5 text-[8px] font-bold text-muted-foreground">
+                                  {providerLabel(item.exchange)} · 요청 {formatQuantity(item.requestedQuantity)} · 체결 {formatQuantity(item.filledQuantity)} · 잔량 {formatQuantity(item.remainingQuantity)}
+                                </p>
+                              </div>
+                              <div className="flex flex-wrap justify-end gap-1">
+                                <span className="rounded-full bg-secondary px-2 py-1 text-[8px] font-black">{item.accountMode ?? '미확인'}</span>
+                                <span
+                                  data-testid={`ai-chart-order-provider-match-${item.id}`}
+                                  className="rounded-full border border-card-border px-2 py-1 text-[8px] font-black text-muted-foreground"
+                                >
+                                  {providerOrderStatusLabel(canonicalProviderOrderStatus(item, providerOpenOrders))}
+                                </span>
+                              </div>
+                            </div>
+                            {canAmendOrder(item) ? (
+                              <div className={`mt-2 grid gap-2 ${isUsStockPriceOnlyAmend(item) ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                                <input
+                                  aria-label="정정 가격"
+                                  inputMode="decimal"
+                                  value={draft.price}
+                                  onChange={(event) => setAmendDrafts((current) => ({
+                                    ...current,
+                                    [item.id]: { ...draft, price: event.target.value },
+                                  }))}
+                                  className="min-h-10 rounded-lg border border-card-border bg-background px-2 text-[10px] font-black"
+                                  placeholder="정정 가격"
+                                />
+                                {isUsStockPriceOnlyAmend(item) ? (
+                                  <p className="rounded-lg bg-secondary/50 px-2 py-2 text-[8px] font-bold text-muted-foreground">
+                                    미국주식은 가격만 정정 · 수량은 기존 잔량 유지
+                                  </p>
+                                ) : (
+                                  <input
+                                    aria-label="정정 수량"
+                                    inputMode="decimal"
+                                    value={draft.quantity}
+                                    onChange={(event) => setAmendDrafts((current) => ({
+                                      ...current,
+                                      [item.id]: { ...draft, quantity: event.target.value },
+                                    }))}
+                                    className="min-h-10 rounded-lg border border-card-border bg-background px-2 text-[10px] font-black"
+                                    placeholder="정정 수량"
+                                  />
+                                )}
+                              </div>
+                            ) : item.state === 'PARTIALLY_FILLED' || item.filledQuantity > 0 ? (
+                              <p className="mt-2 text-[8px] font-bold text-muted-foreground">
+                                부분체결된 주문은 정정하지 않고 미체결 잔량 취소 후 새 계획으로 다시 검증합니다.
+                              </p>
+                            ) : null}
+                            <div className="mt-2 grid grid-cols-2 gap-2">
+                              <button
+                                type="button"
+                                disabled={!canAmendOrder(item) || orderActionId !== null}
+                                onClick={() => void amendOrder(item)}
+                                className="min-h-10 rounded-lg border border-card-border px-2 text-[9px] font-black disabled:opacity-40"
+                              >
+                                정정
+                              </button>
+                              <button
+                                type="button"
+                                disabled={!canCancelOrder(item) || orderActionId !== null}
+                                onClick={() => void cancelOrder(item)}
+                                className="min-h-10 rounded-lg border border-destructive/30 bg-destructive/5 px-2 text-[9px] font-black text-destructive disabled:opacity-40"
+                              >
+                                미체결 취소
+                              </button>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </section>
+
+                  </>
+                ) : null}
+
+                {cockpitTab === 'exit' ? (
+                  position ? (
+                <section className="rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-exit-dashboard">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-[10px] font-black">부분청산 · 전량종료 준비</p>
+                      <p className="mt-0.5 text-[8px] font-bold text-muted-foreground">실제 보유수량 기준 · 주문 미제출</p>
+                    </div>
+                    <span className="rounded-full border border-warning/30 bg-warning/5 px-2 py-1 text-[8px] font-black text-warning">종료 계획 미리보기</span>
+                  </div>
+                  <div className="mt-2 grid grid-cols-4 gap-1.5">
+                    {[25, 50, 75, 100].map((percent) => (
+                      <button
+                        key={percent}
+                        type="button"
+                        aria-pressed={exitPercent === percent}
+                        onClick={() => {
+                          setExitPercent(percent);
+                          setExitPreviewState({ kind: 'idle' });
+                        }}
+                        className={`min-h-10 rounded-lg border text-[9px] font-black ${exitPercent === percent ? 'border-primary bg-primary/10 text-primary' : 'border-card-border'}`}
+                      >
+                        {percent}%
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <Metric label="종료 예정 비중" value={`${exitPercent}%`} />
+                    <Metric label="종료 예정 수량" value={formatQuantity(exitQuantity)} />
+                  </div>
+                  <button
+                    type="button"
+                    data-testid="ai-chart-verify-exit-preview"
+                    onClick={() => void verifyExitPreview()}
+                    disabled={exitPreviewState.kind === 'loading'}
+                    className="mt-2 min-h-11 w-full rounded-xl border border-primary/30 bg-primary/5 px-3 text-[10px] font-black text-primary disabled:opacity-50"
+                  >
+                    {exitPreviewState.kind === 'loading' ? '실계좌 수량 재확인 중...' : '서버에서 종료계획 재검증'}
+                  </button>
+                  {exitPreviewState.kind === 'ready' ? (
+                    <div className="mt-2 rounded-xl border border-positive/30 bg-positive/5 p-2.5" data-testid="ai-chart-exit-preview-verified">
+                      <p className="text-[9px] font-black text-positive">실계좌 read-only 재검증 완료 · reduce-only</p>
+                      <p className="mt-1 text-[9px] font-bold text-muted-foreground">
+                        서버 확인 수량 {formatQuantity(exitPreviewState.preview.exitQuantity)}
+                        {' · '}방향 {exitPreviewState.preview.side.toUpperCase()}
+                        {' · '}수량규칙 {exitPreviewState.preview.quantityRule === 'INTEGER_ONLY' ? '정수' : '소수 허용'}
+                        {' · '}조회 {checkedAtLabel(exitPreviewState.preview.checkedAt)}
+                      </p>
+                      <p className="mt-1 text-[8px] font-bold text-muted-foreground">executionAuthority=NONE · 주문 제출 0 · 취소/정정 0</p>
+                      <div
+                        className="mt-2 rounded-lg border border-card-border bg-background/80 p-2 text-[8px] font-bold text-muted-foreground"
+                        data-testid="ai-chart-canonical-exit-draft"
+                        data-exit-fingerprint={exitPreviewState.draft.fingerprint}
+                      >
+                        <p className="font-black text-foreground">Canonical 종료계획 고정됨 · 아직 미제출</p>
+                        <p className="mt-1">
+                          {exitPreviewState.draft.percent}% · {formatQuantity(exitPreviewState.draft.quantity)}
+                          {' · '}reduce-only · 실행 직전 실계좌/시장/Risk 재검증 필수
+                        </p>
+                      </div>
+                      {exitPreviewState.preview.executionReadiness ? (
+                        <div className="mt-2 rounded-lg bg-background/80 p-2 text-[8px] font-bold text-muted-foreground" data-testid="ai-chart-exit-readiness">
+                          <p className="font-black text-foreground">
+                            실전 종료 준비 · {exitPreviewState.preview.executionReadiness.readyForManualExitEvaluation ? '게이트 준비' : '차단'}
+                          </p>
+                          <p className="mt-1">
+                            거래키 {exitPreviewState.preview.executionReadiness.connectionConfigured ? '연결' : '미연결'}
+                            {' · '}provider {exitPreviewState.preview.executionReadiness.providerVerified ? '검증됨' : '미검증'}
+                            {' · '}서버게이트 {exitPreviewState.preview.executionReadiness.manualServerGateEnabled ? 'ON' : 'OFF'}
+                          </p>
+                          {!exitPreviewState.preview.executionReadiness.readyForManualExitEvaluation ? (
+                            <p className="mt-1 break-words">차단 사유 · {exitPreviewState.preview.executionReadiness.blockers.map(exitReadinessBlockerLabel).join(' · ') || '확인 필요'}</p>
+                          ) : (
+                            <p className="mt-1">이 표시는 실행 준비조건만 뜻하며, 종료 주문 승인이나 실행 권한을 부여하지 않습니다.</p>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {exitPreviewState.kind === 'unavailable' ? (
+                    <p role="alert" className="mt-2 rounded-xl bg-warning/10 px-3 py-2 text-[9px] font-bold text-warning">종료계획 재검증 실패 · {exitPreviewState.code}</p>
+                  ) : null}
+                  <p className="mt-2 text-[8px] font-bold leading-4 text-muted-foreground">
+                    이 단계는 실계좌를 read-only로 다시 확인해 종료 비중·수량·reduce-only 방향만 확정합니다. 실제 청산 주문은 아직 제출하지 않습니다. 다음 단계에서 이 검증 결과를 canonical 승인계획과 최종 Risk 재검증에 연결합니다.
+                  </p>
+                </section>
+              ) : (
+                <section className="rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-exit-dashboard-unavailable">
+                  <p className="text-[10px] font-black">부분청산 · 전량종료</p>
+                  <p className="mt-1 text-[9px] font-bold leading-4 text-muted-foreground">
+                    현재 종목 보유 포지션이 없어 종료계획을 만들지 않습니다. 진입 승인과 미체결 주문관리는 위에서 계속 사용할 수 있습니다.
+                  </p>
+                </section>
+              )
+                ) : null}
+              </div>
+            ) : null}
+          </details>
+  );
 
   return (
     <section data-testid="ai-chart-position-panel" className="rounded-2xl border border-card-border bg-background/85 p-3 text-left shadow-sm">
@@ -341,7 +1280,7 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
         <div className="flex min-w-0 items-center gap-2">
           <WalletCards className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
           <div className="min-w-0">
-            <p className="text-[11px] font-black text-primary">내 포지션 · READ-ONLY</p>
+            <p className="text-[11px] font-black text-primary">내 포지션 · 조회 전용</p>
             <p className="truncate text-[10px] font-bold text-muted-foreground">{providerLabel(provider)} · {symbol}</p>
           </div>
         </div>
@@ -372,6 +1311,23 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
         ) : null}
       </div>
 
+      {(market === 'KR' || market === 'US') && (
+        <div data-testid="ai-chart-stock-provider-picker" className="mt-2 grid grid-cols-2 gap-1.5">
+          {(['toss', 'kiwoom'] as const).map((item) => (
+            <button
+              key={item}
+              type="button"
+              data-testid={`ai-chart-stock-provider-${item}`}
+              aria-pressed={stockProvider === item}
+              onClick={() => changeStockProvider(item)}
+              className={`min-h-10 rounded-xl border px-3 text-[10px] font-black ${stockProvider === item ? 'border-primary bg-primary/10 text-primary' : 'border-card-border text-muted-foreground'}`}
+            >
+              {providerLabel(item)} 조회
+            </button>
+          ))}
+        </div>
+      )}
+
       {state.kind === 'idle' && (
         <p className="mt-2 text-[10px] font-bold leading-4 text-muted-foreground">차트를 열기만 해서는 계좌를 조회하지 않습니다. 버튼을 눌렀을 때 현재 시장의 조회 전용 스냅샷만 확인합니다.</p>
       )}
@@ -379,9 +1335,16 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
         <p role="alert" className="mt-2 rounded-xl bg-warning/10 px-3 py-2 text-[10px] font-bold text-warning">포지션을 표시할 수 없습니다 · {state.code}</p>
       )}
       {state.kind === 'ready' && !position && (
-        <div className="mt-2 rounded-xl bg-secondary/60 px-3 py-2">
-          <p className="text-[10px] font-black">현재 선택 종목의 보유/포지션 없음</p>
-          <p className="mt-1 text-[9px] font-bold text-muted-foreground">조회 시각 {checkedAtLabel(state.snapshot.checkedAt)}{state.snapshot.stale ? ' · 이전 정상값' : ''}</p>
+        <div className="mt-2 space-y-2.5">
+          <div className="rounded-xl bg-secondary/60 px-3 py-2">
+            <p className="text-[10px] font-black">현재 선택 종목의 보유/포지션 없음</p>
+            <p className="mt-1 text-[9px] font-bold text-muted-foreground">조회 시각 {checkedAtLabel(state.snapshot.checkedAt)}{state.snapshot.stale ? ' · 이전 정상값' : ''}</p>
+          </div>
+          <div className="grid grid-cols-2 gap-1.5" data-testid="ai-chart-account-capacity">
+            <Metric label="주문가능/가용" value={formatPrice(availableFunds, market)} />
+            <Metric label="Provider 미체결" value={providerOpenOrders == null ? '미확인' : `${providerOpenOrders.length}건`} />
+          </div>
+          {tradingCockpit}
         </div>
       )}
       {state.kind === 'ready' && position && (
@@ -393,6 +1356,10 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
             <Metric label="계좌 수익률" value={formatPercent(position.unrealizedPnlPercent)} />
             <Metric label="평단 대비 가격" value={formatPercent(distance)} />
             {market === 'BITGET' ? <Metric label="청산가" value={formatPrice(position.liquidationPrice, market)} /> : <Metric label="계좌 현재가" value={formatPrice(position.currentPrice, market)} />}
+          </div>
+          <div className="grid grid-cols-2 gap-1.5" data-testid="ai-chart-account-capacity">
+            <Metric label="주문가능/가용" value={formatPrice(availableFunds, market)} />
+            <Metric label="Provider 미체결" value={providerOpenOrders == null ? '미확인' : `${providerOpenOrders.length}건`} />
           </div>
 
           {market === 'BITGET' && (
@@ -550,6 +1517,8 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, pricePlan, on
             {feeInputsPresent && !feeEvidence && <p role="alert" className="mt-1.5 text-[8px] font-black text-destructive">비용률은 각각 0 이상 100 미만 숫자로 입력해야 합니다.</p>}
             {feeEvidence && <p className="mt-1.5 text-[8px] font-bold text-muted-foreground">사용자 입력 비용률 기준 단순 손익분기점입니다. funding·슬리피지·기타 세금/비용은 입력률에 포함되지 않았다면 별도입니다.</p>}
           </details>
+
+          {tradingCockpit}
 
           <p className="text-[9px] font-bold text-muted-foreground">
             {providerLabel(state.snapshot.provider)} 조회 {checkedAtLabel(state.snapshot.checkedAt)}
