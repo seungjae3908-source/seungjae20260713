@@ -42,9 +42,14 @@ function followupCard(
     assetClass: 'stock',
     direction: 'LONG',
     symbol: '005930',
+    name: '삼성전자',
     market: 'KR',
-    price: options.price ?? 105,
+    price: options.price ?? 101,
     signalState: options.signalState ?? 'APPROVAL_PENDING',
+    dataState: 'complete',
+    strongSignalEligible: true,
+    expiresAt: EXPIRES_AT,
+    strategyMode: 'scalping',
     pricePlan: {
       entryZone: { from: 100, to: 102 },
       invalidation: 89,
@@ -58,8 +63,12 @@ function followupCard(
 async function withFollowupEnv(run: () => Promise<void>) {
   const previousEnabled = process.env.TELEGRAM_SIGNAL_FOLLOWUP_ENABLED;
   const previousRoom = process.env.TELEGRAM_STOCK_CHAT_ID;
+  const previousKrRoom = process.env.TELEGRAM_KR_STOCK_CHAT_ID;
+  const previousPublicApp = process.env.PUBLIC_APP_URL;
   process.env.TELEGRAM_SIGNAL_FOLLOWUP_ENABLED = 'true';
-  process.env.TELEGRAM_STOCK_CHAT_ID = 'stock-room-test';
+  process.env.TELEGRAM_STOCK_CHAT_ID = 'legacy-stock-room-test';
+  process.env.TELEGRAM_KR_STOCK_CHAT_ID = 'kr-stock-room-test';
+  process.env.PUBLIC_APP_URL = 'https://example.test';
   clearTelegramSignalFollowupState();
   try {
     await run();
@@ -68,6 +77,10 @@ async function withFollowupEnv(run: () => Promise<void>) {
     else process.env.TELEGRAM_SIGNAL_FOLLOWUP_ENABLED = previousEnabled;
     if (previousRoom == null) delete process.env.TELEGRAM_STOCK_CHAT_ID;
     else process.env.TELEGRAM_STOCK_CHAT_ID = previousRoom;
+    if (previousKrRoom == null) delete process.env.TELEGRAM_KR_STOCK_CHAT_ID;
+    else process.env.TELEGRAM_KR_STOCK_CHAT_ID = previousKrRoom;
+    if (previousPublicApp == null) delete process.env.PUBLIC_APP_URL;
+    else process.env.PUBLIC_APP_URL = previousPublicApp;
     clearTelegramSignalFollowupState();
   }
 }
@@ -135,7 +148,7 @@ test('public signal lifecycle edits the original Telegram message instead of cre
     clearTelegramSignalFollowupState();
 
     let newMessages = 0;
-    const edits: Array<{ messageId: number; text: string }> = [];
+    const edits: Array<{ messageId: number; text: string; buttons?: unknown }> = [];
     await deliverScannerTelegramFollowups(
       [followupCard('signal-edit-in-place')],
       async () => {
@@ -145,7 +158,7 @@ test('public signal lifecycle edits the original Telegram message instead of cre
       ANNOUNCED_AT + 1_000,
       repository,
       async (input) => {
-        edits.push({ messageId: input.messageId, text: input.text });
+        edits.push({ messageId: input.messageId, text: input.text, buttons: input.buttons });
         return { ok: true, attempts: 1 };
       },
     );
@@ -155,12 +168,51 @@ test('public signal lifecycle edits the original Telegram message instead of cre
     expect(edits[0].messageId).toBe(42);
     expect(edits[0].text).toContain('TP1 105 ✅');
     expect(edits[0].text).toContain('현재 상태');
+    expect(JSON.stringify(edits[0].buttons)).toContain('🛒 주문');
+    expect(JSON.stringify(edits[0].buttons)).toContain('📊 AI차트');
+    expect(JSON.stringify(edits[0].buttons)).toContain('/ai-chart');
 
     const [stored] = await repository.list(['signal-edit-in-place']);
     expect(stored.telegramMessageId).toBe(42);
     expect(stored.telegramMessageKind).toBe('TEXT');
     expect(stored.baseMessageText).toContain('진입가능');
     expect(stored.reachedTargets).toEqual([0]);
+  });
+});
+
+test('invalidated signal edits the original message and removes the order button while keeping AI chart access', async () => {
+  await withFollowupEnv(async () => {
+    const signalId = 'signal-invalid-order-guard';
+    const repository = new InMemoryTelegramSignalFollowupRepository();
+    await markTelegramSignalAnnounced(
+      announcedAlert(signalId),
+      ANNOUNCED_AT,
+      repository,
+      {
+        messageId: 77,
+        messageKind: 'TEXT',
+        renderedText: '<b>삼성전자(005930) / 국내주식 · 단타 · 반도체</b>\n🟢 신호: 매수 · 15m',
+      },
+    );
+    clearTelegramSignalFollowupState();
+
+    const edits: Array<{ text: string; buttons?: unknown }> = [];
+    await deliverScannerTelegramFollowups(
+      [followupCard(signalId, { signalState: 'INVALIDATED', price: 97, targets: [110], stopLoss: 95 })],
+      async () => ({ ok: true, attempts: 1 }),
+      ANNOUNCED_AT + 1_000,
+      repository,
+      async (input) => {
+        edits.push({ text: input.text, buttons: input.buttons });
+        return { ok: true, attempts: 1 };
+      },
+    );
+
+    expect(edits).toHaveLength(1);
+    expect(edits[0].text).toContain('매수 신호 무효 · 주문 비활성');
+    expect(JSON.stringify(edits[0].buttons)).not.toContain('🛒 주문');
+    expect(JSON.stringify(edits[0].buttons)).toContain('📊 AI차트');
+    expect(JSON.stringify(edits[0].buttons)).toContain('/ai-chart');
   });
 });
 
