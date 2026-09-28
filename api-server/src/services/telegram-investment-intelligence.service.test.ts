@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Candle } from '../sample/types';
 import {
+  buildTelegramSignalAppButtons,
   buildTelegramSignalIntelligenceInput,
   type TelegramSignalIntelligenceEvidence,
 } from './telegram-investment-intelligence.service';
@@ -193,6 +194,41 @@ test('rich signal card uses evidence, AI explanation, news links and read-only a
     assert.equal(orderUrl.searchParams.has(forbidden), false);
   }
   assert.equal(JSON.stringify(result).includes('callback_data'), false);
+});
+
+test('AI chart deep links preserve exact asset class for spot and futures', () => {
+  process.env.PUBLIC_APP_URL = 'https://example.test';
+
+  const spot = buildTelegramSignalAppButtons({
+    assetClass: 'coin_spot',
+    market: 'UPBIT',
+    symbol: 'BTC',
+    direction: 'LONG',
+  }, { timeframe: '15m', strategyMode: 'scalping' }, { orderEnabled: true });
+  const spotChart = spot.flat().find((button) => button.text.includes('AI차트'));
+  assert.ok(spotChart);
+  const spotUrl = new URL(spotChart!.url);
+  assert.equal(spotUrl.pathname, '/ai-chart');
+  assert.equal(spotUrl.searchParams.get('assetType'), 'coin_spot');
+  assert.equal(spotUrl.searchParams.get('market'), 'UPBIT');
+  assert.equal(spotUrl.searchParams.get('symbol'), 'BTC');
+  assert.equal(spotUrl.searchParams.get('timeframe'), '15m');
+
+  const futures = buildTelegramSignalAppButtons({
+    assetClass: 'coin_futures',
+    market: 'BITGET',
+    symbol: 'BTCUSDT',
+    direction: 'SHORT',
+  }, { timeframe: '60m', strategyMode: 'swing' }, { orderEnabled: false });
+  const futuresFlat = futures.flat();
+  assert.equal(futuresFlat.some((button) => button.text.includes('주문')), false);
+  const futuresChart = futuresFlat.find((button) => button.text.includes('AI차트'));
+  assert.ok(futuresChart);
+  const futuresUrl = new URL(futuresChart!.url);
+  assert.equal(futuresUrl.searchParams.get('assetType'), 'coin_futures');
+  assert.equal(futuresUrl.searchParams.get('market'), 'BITGET');
+  assert.equal(futuresUrl.searchParams.get('symbol'), 'BTCUSDT');
+  assert.equal(futuresUrl.searchParams.get('timeframe'), '60m');
 });
 
 test('Telegram rich transport uses sendPhoto multipart and accepts URL buttons only', async () => {
