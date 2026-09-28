@@ -405,13 +405,13 @@ test('REARMED, ENTRY_ZONE_LEFT, INVALIDATED and EXPIRED lifecycle semantics pers
     };
 
     await deliverState('ARMED', 1_000);
-    expect(messages.at(-1)).toContain('진입구간을 벗어나');
+    expect(messages.at(-1)).toContain('진입 조건이 해제되어 관망 상태로 전환');
 
     await deliverState('ENTRY_ZONE', 2_000);
     expect(messages.at(-1)).toContain('조건이 회복되어');
 
     await deliverState('INVALIDATED', 3_000);
-    expect(messages.at(-1)).toContain('무효 상태로 전환');
+    expect(messages.at(-1)).toContain('기존 진입 조건이 무효화');
     const afterInvalidated = messages.length;
     await deliverState('INVALIDATED', 4_000);
     expect(messages).toHaveLength(afterInvalidated);
