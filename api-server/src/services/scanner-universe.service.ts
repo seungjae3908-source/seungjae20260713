@@ -1,6 +1,7 @@
 import { classifyAssetType, type AssetType } from '../data/asset-type';
 import { CATALOG, type CatalogEntry } from '../data/catalog';
 import { getKrUniverse } from '../providers/krx';
+import { isKiwoomConfigured } from '../providers/kiwoom';
 import { getUsUniverse } from '../providers/us-universe';
 
 export type ScannerListingStatus = 'LISTED' | 'UNKNOWN';
@@ -79,23 +80,21 @@ function dedupe(entries: ScannerUniverseEntry[]): ScannerUniverseEntry[] {
   return [...rows.values()].sort((left, right) => left.ticker.localeCompare(right.ticker));
 }
 
-function publicOnlyCapability(
-  market: MarketScope,
-  entries: ScannerUniverseEntry[],
-): { entries: ScannerUniverseEntry[]; rawTotalCount: number; exclusions: ScannerUniverseExplainedExclusion[] } {
-  const rawTotalCount = entries.length;
-  const publicOnly = String(process.env.SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE ?? '').trim().toLowerCase() === 'true';
-  if (!publicOnly || market !== 'KR') return { entries, rawTotalCount, exclusions: [] };
+export function requiresPublicOnlyKrUniverse(
+  configuredValue: string | undefined = process.env.SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE,
+  kiwoomConfigured = isKiwoomConfigured(),
+): boolean {
+  return configuredValue?.trim().toLowerCase() === 'true' || !kiwoomConfigured;
+}
 
+export function excludeUnsupportedKrPublicProviderSymbols(
+  entries: ScannerUniverseEntry[],
+): { entries: ScannerUniverseEntry[]; exclusions: ScannerUniverseExplainedExclusion[] } {
   const exclusions: ScannerUniverseExplainedExclusion[] = [];
   const supported = entries.filter((entry) => {
     const ticker = String(entry.ticker ?? '').trim().toUpperCase();
-    // The standalone public-only V3 uses Yahoo for KR candles/quotes. Yahoo
-    // supports the traditional numeric KRX short-code form via .KS/.KQ, but
-    // not the newer alphanumeric KRX short codes. Keep those symbols visible
-    // as explained capability exclusions instead of counting them as provider
-    // outages. The normal app universe is unchanged because this branch is
-    // enabled only by SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE=true.
+    // Yahoo supports the traditional numeric KRX short-code form via .KS/.KQ,
+    // but not the newer alphanumeric KRX short codes.
     const unsupported = !/^\d{6}$/u.test(ticker);
     if (!unsupported) return true;
     exclusions.push({
@@ -107,6 +106,22 @@ function publicOnlyCapability(
     });
     return false;
   });
+  return { entries: supported, exclusions };
+}
+
+function publicOnlyCapability(
+  market: MarketScope,
+  entries: ScannerUniverseEntry[],
+): { entries: ScannerUniverseEntry[]; rawTotalCount: number; exclusions: ScannerUniverseExplainedExclusion[] } {
+  const rawTotalCount = entries.length;
+  const publicOnly = requiresPublicOnlyKrUniverse();
+  if (!publicOnly || market !== 'KR') return { entries, rawTotalCount, exclusions: [] };
+
+  // When Kiwoom credentials are absent, the normal app has the same public
+  // provider limitation as the standalone public-only runtime. Do not send an
+  // impossible alphanumeric KRX request into the bounded scanner; preserve it
+  // as an explained exclusion instead.
+  const { entries: supported, exclusions } = excludeUnsupportedKrPublicProviderSymbols(entries);
 
   if (exclusions.length > 0) {
     const tickers = exclusions.slice(0, 20).map((row) => row.ticker).join(',');
