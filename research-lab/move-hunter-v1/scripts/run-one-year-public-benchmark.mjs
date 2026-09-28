@@ -50,7 +50,7 @@ function rowForMarket(name, row) {
 function ablationRows(ablation) {
   const lines = [
     '',
-    '## Factor ablation — remove one family from the improved formula',
+    '## Factor ablation — fixed-candidate decision-layer removal',
     '',
     '| Market | Variant | Return | Trades | MDD | PF | Return Δ vs Full |',
     '|---|---|---:|---:|---:|---:|---:|',
@@ -72,7 +72,7 @@ function ablationRows(ablation) {
   }
   lines.push(
     '',
-    '> Ablation results are observed-history diagnostics only. Choosing a market-specific rule from this same window creates selection bias and receives zero OOS/economic credit.',
+    '> Candidate prefilter is frozen across variants; only the final decision layer removes one factor family. Results are observed-history diagnostics only. Choosing a market-specific rule from this same window creates selection bias and receives zero OOS/economic credit.',
   );
   return lines;
 }
