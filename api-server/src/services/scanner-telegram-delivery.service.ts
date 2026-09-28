@@ -226,19 +226,6 @@ export function scannerTelegramInput(
   return null;
 }
 
-function normalizeRichTradePlan(
-  input: TelegramAlertInput,
-  alert: ScannerAlertCandidate,
-): TelegramAlertInput {
-  if (!input.details) return input;
-  const lines = input.details.split('\n');
-  // buildTelegramSignalIntelligenceInput puts its legacy compact price-plan on
-  // line 2. Replace only that canonical line so evidence/news/AI stay intact.
-  if (lines.length >= 2) lines.splice(1, 1, ...tradePlanLines(alert));
-  else lines.push(...tradePlanLines(alert));
-  return { ...input, details: lines.join('\n') };
-}
-
 function freshnessWarning(freshness: TelegramSignalFreshness): string | null {
   if (freshness.status === 'FRESH') return null;
   if (freshness.status === 'PARTIAL') return '⚠️ 일부 Evidence 미확인 · 표시된 근거만 사용';
