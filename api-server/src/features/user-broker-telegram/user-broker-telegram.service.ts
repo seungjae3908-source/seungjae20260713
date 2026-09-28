@@ -149,9 +149,17 @@ function title(event: UserExecutionEvent): string {
     case 'MANUAL_PORTFOLIO_ENTRY': return '📌 포트폴리오 등록';
   }
 }
+function autoTradingSignalLabel(event: UserExecutionEvent): string {
+  if (event.side === 'long') return 'LONG 신호';
+  if (event.side === 'short') return 'SHORT 신호';
+  if (event.side === 'sell') return '매도 신호';
+  if (event.side === 'buy') return '매수 신호';
+  return '상태 알림';
+}
+
 export function renderUserExecutionTelegramMessage(event: UserExecutionEvent): string {
   const lane = event.executionMethod === 'AUTO_POLICY'
-    ? '🤖 자동매매'
+    ? `🤖 자동매매 · ${autoTradingSignalLabel(event)}`
     : event.type === 'MANUAL_PORTFOLIO_ENTRY'
       ? '👤 개인보유'
       : '👤 개인 주문/체결';
