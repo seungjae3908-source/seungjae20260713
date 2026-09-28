@@ -75,7 +75,7 @@ const result = await consumeFuturesV2ForwardState({
       startTime,
       endTime,
       productType: 'usdt-futures',
-      maxCandles: 2000,
+      maxCandles: 20_000,
     });
     return history.candles;
   },
