@@ -18,6 +18,36 @@ const DEFAULT_COSTS = Object.freeze({
   CRYPTO_FUTURES: Object.freeze({ feeBps: 5, slippageBps: 5, spreadBps: 6 }),
 });
 
+export const ABLATION_DEFINITIONS = Object.freeze([
+  Object.freeze({ id: 'FULL', disabledFamilies: Object.freeze([]) }),
+  Object.freeze({ id: 'NO_TREND', disabledFamilies: Object.freeze(['TREND']) }),
+  Object.freeze({ id: 'NO_MOMENTUM', disabledFamilies: Object.freeze(['MOMENTUM']) }),
+  Object.freeze({ id: 'NO_STRUCTURE', disabledFamilies: Object.freeze(['STRUCTURE']) }),
+  Object.freeze({ id: 'NO_VOLUME', disabledFamilies: Object.freeze(['VOLUME']) }),
+  Object.freeze({ id: 'NO_VOLATILITY', disabledFamilies: Object.freeze(['VOLATILITY']) }),
+]);
+
+const FACTOR_FAMILIES = Object.freeze({
+  TREND: Object.freeze(['ema', 'adx']),
+  MOMENTUM: Object.freeze(['roc', 'macd', 'rsi']),
+  STRUCTURE: Object.freeze(['structure']),
+  VOLUME: Object.freeze(['volume']),
+  VOLATILITY: Object.freeze(['volatility']),
+});
+const COMPONENT_TO_FAMILY = Object.freeze(Object.fromEntries(
+  Object.entries(FACTOR_FAMILIES).flatMap(([family, components]) =>
+    components.map((component) => [component, family])),
+));
+
+function normalizeDisabledFamilies(values = []) {
+  if (!Array.isArray(values)) throw new TypeError('disabledFamilies must be an array');
+  const normalized = [...new Set(values.map((value) => String(value).trim().toUpperCase()))];
+  for (const family of normalized) {
+    if (!Object.hasOwn(FACTOR_FAMILIES, family)) throw new RangeError('unknown factor family: ' + family);
+  }
+  return normalized;
+}
+
 function freeze(value) {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
   for (const child of Object.values(value)) freeze(child);
@@ -149,15 +179,19 @@ function baselineSignal(rows, index, side, cheap) {
   }
   return fast < slow && previousClose >= previousFast * 0.995 && latestClose < fast;
 }
-function improvedRequiredPrefilter(index, side, cheap) {
+function improvedRequiredPrefilter(index, side, cheap, disabledFamilies = []) {
+  const disabled = new Set(normalizeDisabledFamilies(disabledFamilies));
   const fast = cheap.fast[index];
   const slow = cheap.slow[index];
   const roc = cheap.roc12[index];
-  if (![fast, slow, roc].every(Number.isFinite)) return false;
-  return side === 'LONG' ? fast > slow && roc > 0 : fast < slow && roc < 0;
+  if (!disabled.has('TREND') && ![fast, slow].every(Number.isFinite)) return false;
+  if (!disabled.has('MOMENTUM') && !Number.isFinite(roc)) return false;
+  const trendPass = disabled.has('TREND') || (side === 'LONG' ? fast > slow : fast < slow);
+  const momentumPass = disabled.has('MOMENTUM') || (side === 'LONG' ? roc > 0 : roc < 0);
+  return trendPass && momentumPass;
 }
 
-export function improvedSignalDecision(snapshot, side = 'LONG') {
+export function improvedSignalDecision(snapshot, side = 'LONG', { disabledFamilies = [] } = {}) {
   const tradeSide = direction(side);
   if (!snapshot || !['READY_FOR_SPECIALIST_RESEARCH_ONLY', 'PARTIAL_FOR_SPECIALIST_RESEARCH_ONLY'].includes(snapshot.status)) {
     return freeze({ matched: false, score: 0, reason: 'FEATURE_SNAPSHOT_NOT_READY' });
@@ -189,11 +223,22 @@ export function improvedSignalDecision(snapshot, side = 'LONG') {
     volume: volumePass,
     volatility: volatilityPass,
   };
-  const score = Object.values(components).filter(Boolean).length;
-  const hardDirection = components.ema && components.roc && priceAction.structureTrend !== oppositeStructure;
+  const disabled = new Set(normalizeDisabledFamilies(disabledFamilies));
+  const enabledComponents = Object.entries(components)
+    .filter(([component]) => !disabled.has(COMPONENT_TO_FAMILY[component]));
+  const score = enabledComponents.filter(([, passed]) => passed).length;
+  const maximumScore = enabledComponents.length;
+  const threshold = Math.max(1, Math.ceil(maximumScore * 0.75));
+  const hardDirection =
+    (disabled.has('TREND') || components.ema)
+    && (disabled.has('MOMENTUM') || components.roc)
+    && (disabled.has('STRUCTURE') || priceAction.structureTrend !== oppositeStructure);
   return freeze({
-    matched: hardDirection && score >= 6,
+    matched: hardDirection && score >= threshold,
     score,
+    maximumScore,
+    threshold,
+    disabledFamilies: freeze([...disabled].sort()),
     components: freeze(components),
     structureTransition: priceAction.structureTransition ?? 'NONE',
     wave: freeze({
@@ -249,9 +294,11 @@ export function runOneYearDatasetBenchmark(dataset, {
   riskFraction = 0.005,
   futuresMaximumExposure = 3,
   costs = null,
+  disabledFamilies = [],
 } = {}) {
   if (!SUPPORTED_MARKETS.has(dataset?.market)) throw new RangeError('unsupported market');
   const tradeSide = direction(side);
+  const normalizedDisabledFamilies = normalizeDisabledFamilies(disabledFamilies);
   if (CASH_MARKETS.has(dataset.market) && tradeSide === 'SHORT') throw new RangeError('cash markets are long-only');
   const rows = normalizeRows(dataset.candles).filter((row) => row.ts <= endTime);
   if (rows.length < 90) throw new RangeError('at least 90 candles are required');
@@ -270,10 +317,10 @@ export function runOneYearDatasetBenchmark(dataset, {
     let decision = null;
     if (variant === 'BASELINE_EMA_PULLBACK_V1') {
       matched = baselineSignal(rows, index, tradeSide, cheap);
-    } else if (variant === 'IMPROVED_TECH_STRUCTURE_V2') {
-      if (!improvedRequiredPrefilter(index, tradeSide, cheap)) continue;
+    } else if (variant === 'IMPROVED_TECH_STRUCTURE_V2' || variant.startsWith('ABLATION_')) {
+      if (!improvedRequiredPrefilter(index, tradeSide, cheap, normalizedDisabledFamilies)) continue;
       const snapshot = buildFeatureSnapshotFromRows(dataset, rows, index, tradeSide);
-      decision = improvedSignalDecision(snapshot, tradeSide);
+      decision = improvedSignalDecision(snapshot, tradeSide, { disabledFamilies: normalizedDisabledFamilies });
       matched = decision.matched;
     } else {
       throw new RangeError('unknown benchmark variant');
@@ -309,6 +356,9 @@ export function runOneYearDatasetBenchmark(dataset, {
       accountReturn,
       exitReason: trial.exitReason,
       decisionScore: decision?.score ?? null,
+      decisionMaximumScore: decision?.maximumScore ?? null,
+      decisionThreshold: decision?.threshold ?? null,
+      disabledFamilies: freeze([...normalizedDisabledFamilies]),
       structureTransition: decision?.structureTransition ?? null,
     }));
     lastExit = trial.exitTs;
@@ -322,6 +372,7 @@ export function runOneYearDatasetBenchmark(dataset, {
     variant,
     source: dataset.source ?? null,
     costs: freeze({ ...laneCosts }),
+    disabledFamilies: freeze([...normalizedDisabledFamilies]),
     performance: summarizeTrades(trades, initialCapital),
     trades: freeze(trades),
   });
@@ -397,6 +448,87 @@ export function runFourMarketOneYearBenchmark({
       liveTrading: false,
       realOrder: false,
       privateApi: false,
+    }),
+  });
+}
+
+
+export function runFourMarketOneYearAblation({
+  datasets = [],
+  startTime = ONE_YEAR_BENCHMARK_START_MS,
+  endTime = ONE_YEAR_BENCHMARK_END_MS,
+} = {}) {
+  if (!Array.isArray(datasets)) throw new TypeError('datasets must be an array');
+  const rows = [];
+  for (const dataset of datasets) {
+    const sides = dataset.market === 'CRYPTO_FUTURES' ? ['LONG', 'SHORT'] : ['LONG'];
+    for (const side of sides) {
+      rows.push(runOneYearDatasetBenchmark(dataset, {
+        variant: 'BASELINE_EMA_PULLBACK_V1',
+        side,
+        startTime,
+        endTime,
+      }));
+      for (const definition of ABLATION_DEFINITIONS) {
+        rows.push(runOneYearDatasetBenchmark(dataset, {
+          variant: definition.id === 'FULL'
+            ? 'IMPROVED_TECH_STRUCTURE_V2'
+            : 'ABLATION_' + definition.id,
+          disabledFamilies: definition.disabledFamilies,
+          side,
+          startTime,
+          endTime,
+        }));
+      }
+    }
+  }
+
+  const markets = {};
+  for (const market of SUPPORTED_MARKETS) {
+    const marketRows = rows.filter((row) => row.market === market);
+    const variants = {
+      BASELINE: aggregateResults(marketRows.filter((row) => row.variant === 'BASELINE_EMA_PULLBACK_V1')),
+    };
+    for (const definition of ABLATION_DEFINITIONS) {
+      const variant = definition.id === 'FULL'
+        ? 'IMPROVED_TECH_STRUCTURE_V2'
+        : 'ABLATION_' + definition.id;
+      variants[definition.id] = aggregateResults(marketRows.filter((row) => row.variant === variant));
+    }
+    const full = variants.FULL;
+    const deltas = Object.fromEntries(
+      ABLATION_DEFINITIONS.filter((definition) => definition.id !== 'FULL').map((definition) => {
+        const row = variants[definition.id];
+        return [definition.id, freeze({
+          returnDeltaVsFull: row.totalReturn == null || full.totalReturn == null ? null : row.totalReturn - full.totalReturn,
+          maximumDrawdownDeltaVsFull: row.maximumDrawdown == null || full.maximumDrawdown == null
+            ? null : row.maximumDrawdown - full.maximumDrawdown,
+          profitFactorDeltaVsFull: Number.isFinite(row.profitFactor) && Number.isFinite(full.profitFactor)
+            ? row.profitFactor - full.profitFactor
+            : null,
+          tradeCountDeltaVsFull: row.tradeCount - full.tradeCount,
+        })];
+      }),
+    );
+    markets[market] = freeze({
+      market,
+      variants: freeze(variants),
+      deltas: freeze(deltas),
+    });
+  }
+
+  return freeze({
+    schemaVersion: 'move-hunter-one-year-factor-ablation/v1',
+    startTime,
+    endTime,
+    markets: freeze(markets),
+    interpretation: freeze({
+      observedHistoryOnly: true,
+      selectionFromThisWindowMayNotCountAsOos: true,
+      automaticMarketSpecificAdoptionAllowed: false,
+      economicSampleCredit: 0,
+      profitabilityClaimAllowed: false,
+      executionAuthority: 'NONE',
     }),
   });
 }
