@@ -105,6 +105,65 @@ function hypothesisRows(hypotheses) {
   return lines;
 }
 
+
+function stabilityRows(ablation, hypotheses) {
+  const lines = [
+    '',
+    '### Stability decomposition — baseline vs selected/descriptive candidate',
+    '',
+    '| Market | Symbol | Side | Variant | Return | N | PF | H1 return | H1 N | H1 PF | H2 return | H2 N | H2 PF |',
+    '|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
+  ];
+  for (const [market, marketResult] of Object.entries(ablation.markets)) {
+    const hypothesis = hypotheses.markets[market];
+    const candidate = hypothesis?.selectedVariant ?? hypothesis?.descriptiveBestVariant ?? 'FULL';
+    const wanted = new Set(['BASELINE', candidate]);
+    const rows = marketResult.stability?.lanes ?? [];
+    for (const row of rows.filter((item) => wanted.has(item.variant))) {
+      lines.push('| ' + [
+        market,
+        row.symbol,
+        row.side,
+        row.variant,
+        pct(row.overall.totalReturn),
+        row.overall.tradeCount,
+        num(row.overall.profitFactor),
+        pct(row.firstHalf.totalReturn),
+        row.firstHalf.tradeCount,
+        num(row.firstHalf.profitFactor),
+        pct(row.secondHalf.totalReturn),
+        row.secondHalf.tradeCount,
+        num(row.secondHalf.profitFactor),
+      ].join(' | ') + ' |');
+    }
+    const robustness = marketResult.stability?.variantRobustness?.[candidate];
+    if (robustness) {
+      lines.push(
+        '| ' + [
+          market,
+          'ROBUSTNESS',
+          '-',
+          candidate,
+          '-',
+          '-',
+          '-',
+          robustness.firstHalfPositiveLaneCount + '/' + robustness.firstHalfLaneCountWithTrades + ' H1 positive',
+          '-',
+          '-',
+          robustness.secondHalfPositiveLaneCount + '/' + robustness.secondHalfLaneCountWithTrades + ' H2 positive',
+          '-',
+          '-',
+        ].join(' | ') + ' |',
+      );
+    }
+  }
+  lines.push(
+    '',
+    '> Stability decomposition is descriptive only. It is used to detect concentration by symbol, direction, or half-period; it creates zero OOS/Forward/profitability credit.',
+  );
+  return lines;
+}
+
 function comparisonFromAblation(ablation) {
   return {
     startTime: ablation.startTime,
@@ -134,6 +193,7 @@ function laneAlignedRows(comparison, ablation, hypotheses, failures, datasetCoun
   }
   lines.push(...ablationRows(ablation));
   lines.push(...hypothesisRows(hypotheses));
+  lines.push(...stabilityRows(ablation, hypotheses));
   lines.push('', '### Lane-aligned provider failures', '');
   if (!failures.length) lines.push('- none');
   else for (const item of failures) lines.push('- ' + item.market + '/' + item.symbol + ': ' + item.error);
@@ -461,6 +521,14 @@ console.log(JSON.stringify({
   laneAligned: {
     datasetCount: laneAlignedDatasets.length,
     failures: laneAlignedFailures,
+    stability: Object.fromEntries(Object.entries(laneAlignedAblation.markets).map(([market, row]) => {
+      const hypothesis = laneAlignedHypotheses.markets[market];
+      const variant = hypothesis?.selectedVariant ?? hypothesis?.descriptiveBestVariant ?? 'FULL';
+      return [market, {
+        variant,
+        robustness: row.stability?.variantRobustness?.[variant] ?? null,
+      }];
+    })),
     hypotheses: Object.fromEntries(Object.entries(laneAlignedHypotheses.markets).map(([market, row]) => [
       market,
       {

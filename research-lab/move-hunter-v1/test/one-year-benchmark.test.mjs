@@ -108,7 +108,13 @@ test('factor ablation keeps all five family-removal variants research-only', () 
     }
     assert.equal(result.markets[market].sourceTimeframeIdentityExact, true);
     assert.deepEqual(result.markets[market].sourceTimeframes, ['1D']);
+    assert.equal(result.markets[market].stability.midpoint, result.midpoint);
+    assert.ok(Array.isArray(result.markets[market].stability.lanes));
+    assert.ok(result.markets[market].stability.variantRobustness.BASELINE);
+    assert.ok(result.markets[market].stability.variantRobustness.FULL);
   }
+  assert.equal(result.markets.KR_STOCK.stability.variantRobustness.BASELINE.laneCount, 1);
+  assert.equal(result.markets.CRYPTO_FUTURES.stability.variantRobustness.BASELINE.laneCount, 2);
 });
 
 
@@ -126,4 +132,33 @@ test('lane-aligned ablation may use a bounded past-only feature window without c
   assert.equal(result.interpretation.executionAuthority, 'NONE');
   assert.equal(result.interpretation.economicSampleCredit, 0);
   assert.equal(result.markets.KR_STOCK.variants.FULL.sampleCount, 1);
+});
+
+
+test('stability decomposition preserves symbol, side, and half-period metrics without authority', () => {
+  const result = runFourMarketOneYearAblation({
+    datasets: [
+      dataset('KR_STOCK', '005930'),
+      dataset('KR_STOCK', '000660'),
+      dataset('CRYPTO_FUTURES', 'BTCUSDT'),
+      dataset('CRYPTO_FUTURES', 'ETHUSDT'),
+    ],
+    featureHistoryBars: 150,
+  });
+  const kr = result.markets.KR_STOCK.stability;
+  const futures = result.markets.CRYPTO_FUTURES.stability;
+  assert.equal(kr.lanes.filter((row) => row.variant === 'BASELINE').length, 2);
+  assert.equal(futures.lanes.filter((row) => row.variant === 'BASELINE').length, 4);
+  assert.deepEqual(
+    [...new Set(futures.lanes.filter((row) => row.variant === 'BASELINE').map((row) => row.side))].sort(),
+    ['LONG', 'SHORT'],
+  );
+  for (const row of [...kr.lanes, ...futures.lanes]) {
+    assert.equal(Number.isFinite(row.overall.totalReturn), true);
+    assert.equal(Number.isFinite(row.firstHalf.totalReturn), true);
+    assert.equal(Number.isFinite(row.secondHalf.totalReturn), true);
+  }
+  assert.equal(result.interpretation.economicSampleCredit, 0);
+  assert.equal(result.interpretation.profitabilityClaimAllowed, false);
+  assert.equal(result.interpretation.executionAuthority, 'NONE');
 });
