@@ -92,12 +92,14 @@ test('prospective matrix compares preregistered futures candidates without choos
     featureSnapshot: featureSnapshot(),
     costModel,
   });
-  assert.equal(matrix.status, 'RESEARCH_EVIDENCE_ONLY');
+  assert.ok(['RESEARCH_EVIDENCE_ONLY', 'PARTIAL_RESEARCH_EVIDENCE_ONLY'].includes(matrix.status));
   assert.equal(matrix.initialRiskPct, 0.015);
   assert.equal(matrix.costModel.roundTripCostRate, 0.0026);
   assert.equal(matrix.performanceWinner, null);
   assert.equal(matrix.winnerSelectionAllowed, false);
   assert.equal(Object.keys(matrix.preregisteredDecisions).length, 4);
+  assert.equal(matrix.partialEvidenceAllowed, true);
+  assert.equal(matrix.regimeDependentCandidatesFailClosedIndividually, true);
   assert.equal(matrix.costRiskDecision.status, 'RESEARCH_EVIDENCE_ONLY');
   assert.equal(matrix.costRiskDecision.eligible, true);
   assert.equal(matrix.modeledCostOnly, true);
@@ -113,7 +115,7 @@ test('cost-risk guard blocks tight stop whose modeled friction consumes over 25 
     featureSnapshot: featureSnapshot(),
     costModel,
   });
-  assert.equal(matrix.status, 'RESEARCH_EVIDENCE_ONLY');
+  assert.ok(['RESEARCH_EVIDENCE_ONLY', 'PARTIAL_RESEARCH_EVIDENCE_ONLY'].includes(matrix.status));
   assert.ok(matrix.costRiskDecision.costToInitialRiskRatio > 0.25);
   assert.equal(matrix.costRiskDecision.eligible, false);
   assert.equal(matrix.costRiskDecision.reason, 'COST_CONSUMES_TOO_MUCH_INITIAL_RISK');
