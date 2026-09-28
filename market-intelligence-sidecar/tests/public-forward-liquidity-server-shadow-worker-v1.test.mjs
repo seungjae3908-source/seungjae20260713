@@ -11,6 +11,7 @@ import {
 import {
   buildServerEvidenceShadowEquivalenceReport,
   buildServerEvidenceShadowSelfCheck,
+  resolveServerEvidenceNtpSynchronization,
   resolveServerEvidenceShadowSlot,
   runServerEvidenceShadowTick,
   summarizeServerEvidenceShadowState,
@@ -214,6 +215,35 @@ test('late trigger is recorded as missed shadow evidence and never backfilled', 
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('NTP resolver accepts an explicit synchronized timedatectl verdict', () => {
+  assert.equal(resolveServerEvidenceNtpSynchronization({
+    timedatectlSucceeded: true,
+    timedatectlValue: 'yes\n',
+    systemdSyncMarkerPresent: false,
+  }), true);
+});
+
+test('NTP resolver never lets the marker override an explicit unsynchronized verdict', () => {
+  assert.equal(resolveServerEvidenceNtpSynchronization({
+    timedatectlSucceeded: true,
+    timedatectlValue: 'no\n',
+    systemdSyncMarkerPresent: true,
+  }), false);
+});
+
+test('NTP resolver uses the systemd sync marker only when timedatectl is unavailable', () => {
+  assert.equal(resolveServerEvidenceNtpSynchronization({
+    timedatectlSucceeded: false,
+    timedatectlValue: null,
+    systemdSyncMarkerPresent: true,
+  }), true);
+  assert.equal(resolveServerEvidenceNtpSynchronization({
+    timedatectlSucceeded: false,
+    timedatectlValue: null,
+    systemdSyncMarkerPresent: false,
+  }), false);
 });
 
 test('NTP-unsynchronized host fails closed before public capture', async () => {
