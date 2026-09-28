@@ -23,12 +23,12 @@ function alert(overrides: Partial<ScannerAlertCandidate> = {}): ScannerAlertCand
   };
 }
 
-test('Telegram signal shows direction, action, TP/SL percentages, reasons, and no-order action state', () => {
+test('Telegram cash signal uses unified buy wording with TP/SL percentages, reasons, and no-order action state', () => {
   const input = scannerTelegramInput(alert(), () => 'stock-room');
   assert.ok(input);
   const details = input?.details ?? '';
   assert.match(details, /🚨 진입가능/);
-  assert.match(details, /신호 LONG · 행동 BUY/);
+  assert.match(details, /신호 매수 · 행동 매수/);
   assert.match(details, /진입 100~101/);
   assert.match(details, /익절 TP1 105 \(\+4\.48%\) · TP2 110 \(\+9\.45%\) · TP3 115 \(\+14\.43%\)/);
   assert.match(details, /손절 95 \(-5\.47%\)/);
