@@ -168,8 +168,8 @@ test('loss-making variants cannot be frozen merely because they lose less than b
   assert.equal(us.futureValidation.forwardAdmissionStatus, 'NONE');
   assert.equal(us.futureValidation.executionAuthority, 'NONE');
   assert.ok(us.candidateDiagnostics.every((row) =>
-    row.reasons.includes('CANDIDATE_RETURN_NOT_POSITIVE')
-    || row.reasons.includes('PROFIT_FACTOR_BELOW_MINIMUM')));
+    row.reasons.includes('NON_POSITIVE_TOTAL_RETURN')
+    || row.reasons.includes('PROFIT_FACTOR_NOT_ABOVE_ONE')));
 });
 
 
