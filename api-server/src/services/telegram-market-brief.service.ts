@@ -162,7 +162,10 @@ function themeLines(label: string, data: SectorPopularResult | null): string[] {
 function newsRows(rooms: readonly BriefRoom[]) {
   const seen = new Set<string>();
   return rooms
-    .flatMap((room) => room.response?.sections.news.data ?? [])
+    .flatMap((room) => [
+      ...(room.response?.sections.news.data ?? []),
+      ...(room.response?.sections.disclosures.data ?? []),
+    ])
     .filter((item) => {
       const url = normalizeTelegramHttpUrl(item.url);
       if (!url || seen.has(url)) return false;
@@ -222,7 +225,10 @@ export function buildTelegramMarketBriefInput(input: {
   const newsScope = stockDestination(input.destination) ? '주식' : '코인';
   if (news.length) {
     lines.push('', `[뉴스 브리핑 · ${newsScope}]`);
-    news.forEach((item, index) => lines.push(`${index + 1}. ${item.provider} · ${item.symbol} · ${item.title}`));
+    news.forEach((item, index) => {
+      const kind = item.kind === 'disclosure' ? '공시' : '뉴스';
+      lines.push(`${index + 1}. [${kind}] ${item.provider} · ${item.symbol} · ${item.title}`);
+    });
   } else {
     lines.push('', `[뉴스 브리핑 · ${newsScope}] 검증된 최신 뉴스 N/A`);
   }
@@ -232,7 +238,10 @@ export function buildTelegramMarketBriefInput(input: {
   const buttons: TelegramUrlButton[][] = [];
   for (const [index, item] of news.slice(0, 3).entries()) {
     const url = normalizeTelegramHttpUrl(item.url);
-    if (url) buttons.push([{ text: `📰 주요뉴스 ${index + 1}`, url }]);
+    if (url) buttons.push([{
+      text: item.kind === 'disclosure' ? `🏛️ 공시 원문 ${index + 1}` : `📰 뉴스 원문 ${index + 1}`,
+      url,
+    }]);
   }
 
   return {
