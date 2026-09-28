@@ -123,13 +123,13 @@ export function buildFuturesV2ProspectiveDecisionMatrix({
   if (!costs) return blocked('EXPLICIT_COST_MODEL_REQUIRED');
 
   const regimeRouter = buildAdaptiveMultiEvidenceRegimeRouterV2({ marketFeatures: featureSnapshot });
-  if (regimeRouter.status !== 'READY_FOR_STRATEGY_ROUTING_RESEARCH_ONLY'
-      || regimeRouter.executionAuthority !== 'NONE') {
-    return blocked('CANONICAL_REGIME_ROUTER_NOT_READY', {
+  if (regimeRouter.executionAuthority !== 'NONE') {
+    return blocked('CANONICAL_REGIME_ROUTER_AUTHORITY_INVALID', {
       status: regimeRouter.status,
       blockers: freeze([...(regimeRouter.blockers ?? [])]),
     });
   }
+  const regimeRouterReady = regimeRouter.status === 'READY_FOR_STRATEGY_ROUTING_RESEARCH_ONLY';
 
   const preregisteredDecisions = Object.fromEntries(
     Object.keys(FUTURES_V2_PREREGISTRATION_V1.candidates).map((candidateId) => [
@@ -150,7 +150,7 @@ export function buildFuturesV2ProspectiveDecisionMatrix({
 
   return freeze({
     schemaVersion: 'move-hunter-futures-v2-forward-matrix/v1',
-    status: 'RESEARCH_EVIDENCE_ONLY',
+    status: regimeRouterReady ? 'RESEARCH_EVIDENCE_ONLY' : 'PARTIAL_RESEARCH_EVIDENCE_ONLY',
     observationId: observation.observationId,
     identity: freeze({
       market: identity.market,
@@ -163,13 +163,19 @@ export function buildFuturesV2ProspectiveDecisionMatrix({
     initialRiskPct,
     costModel: costs,
     regime: freeze({
-      regime: regimeRouter.regime,
-      directionalRegime: regimeRouter.directionalRegime,
-      volatilityRegime: regimeRouter.volatilityRegime,
-      regimeDigest: regimeRouter.regimeDigest,
+      status: regimeRouter.status,
+      ready: regimeRouterReady,
+      blockers: freeze([...(regimeRouter.blockers ?? [])]),
+      missingEvidence: freeze([...(regimeRouter.missingEvidence ?? [])]),
+      regime: regimeRouter.regime ?? 'UNKNOWN',
+      directionalRegime: regimeRouter.directionalRegime ?? 'UNKNOWN',
+      volatilityRegime: regimeRouter.volatilityRegime ?? 'UNKNOWN',
+      regimeDigest: regimeRouter.regimeDigest ?? null,
     }),
     preregisteredDecisions: freeze(preregisteredDecisions),
     costRiskDecision,
+    partialEvidenceAllowed: true,
+    regimeDependentCandidatesFailClosedIndividually: true,
     performanceWinner: null,
     winnerSelectionAllowed: false,
     historicalReplayMaySelectWinner: false,
