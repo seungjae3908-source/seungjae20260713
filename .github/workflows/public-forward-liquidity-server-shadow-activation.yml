@@ -82,12 +82,29 @@ jobs:
           grep -Fq "serverCanonical: false" "$installer"
           grep -Fq "executionAuthority: 'NONE'" "$installer"
           ! grep -Eq 'issues:[[:space:]]+write|contents:[[:space:]]+write|actions:[[:space:]]+write|deployments:[[:space:]]+write|id-token:[[:space:]]+write' "$workflow"
-          forbidden='SERVER_EVIDENCE_SERVER_CANONICAL=true|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true'
-          if grep -Ev '^[[:space:]]*(forbidden=|! grep -Eq|if grep -Ev)' "$workflow" | grep -Eq "$forbidden"; then
-            echo 'activation workflow contains forbidden authority elevation' >&2
-            exit 1
-          fi
-          ! grep -Eq "$forbidden" "$service" "$installer"
+          WORKFLOW_PATH="$workflow" SERVICE_PATH="$service" INSTALLER_PATH="$installer" node <<'NODE'
+          const fs = require('node:fs');
+          const files = [
+            process.env.WORKFLOW_PATH,
+            process.env.SERVICE_PATH,
+            process.env.INSTALLER_PATH,
+          ];
+          const forbidden = [
+            ['SERVER_EVIDENCE_SERVER_CANONICAL', 'true'].join('='),
+            ['LIVE_TRADING', 'true'].join('='),
+            ['AUTO_TRADING', 'true'].join('='),
+            ['REAL_ORDER_ENABLED', 'true'].join('='),
+            ['PRIVATE_TRADING_API_ALLOWED', 'true'].join('='),
+          ];
+          for (const path of files) {
+            const source = fs.readFileSync(path, 'utf8');
+            for (const token of forbidden) {
+              if (source.includes(token)) {
+                throw new Error('FORBIDDEN_AUTHORITY_ELEVATION:' + path + ':' + token);
+              }
+            }
+          }
+          NODE
 
       - name: Zero-network worker self-check
         run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-shadow-worker-v1.mjs self-check
