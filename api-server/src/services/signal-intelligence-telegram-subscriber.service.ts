@@ -94,9 +94,9 @@ function strategyLabel(strategy: string): string {
 
 function timeframeLabel(timeframe: string): string {
   const normalized = timeframe.trim();
+  if (normalized === '60m' || normalized === '1H') return '1시간봉';
   const minute = normalized.match(/^(\d+)m$/u);
   if (minute) return `${minute[1]}분봉`;
-  if (normalized === '60m' || normalized === '1H') return '1시간봉';
   const hour = normalized.match(/^(\d+)H$/u);
   if (hour) return `${hour[1]}시간봉`;
   if (normalized === '1D') return '1일봉';
