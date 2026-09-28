@@ -236,7 +236,7 @@ export function buildTelegramMarketBriefInput(input: {
   lines.push('', '실제 데이터가 없는 값은 N/A로 유지하며 신호·수익률·목표가를 새로 만들지 않습니다.');
 
   const buttons: TelegramUrlButton[][] = [];
-  for (const [index, item] of news.slice(0, 3).entries()) {
+  for (const [index, item] of news.slice(0, 6).entries()) {
     const url = normalizeTelegramHttpUrl(item.url);
     if (url) buttons.push([{
       text: item.kind === 'disclosure' ? `🏛️ 공시 원문 ${index + 1}` : `📰 뉴스 원문 ${index + 1}`,
