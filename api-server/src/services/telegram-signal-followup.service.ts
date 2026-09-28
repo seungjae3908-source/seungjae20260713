@@ -13,17 +13,31 @@ import {
 import {
   editTelegramMessage,
   escapeTelegramHtml,
+  normalizeTelegramHttpUrl,
   sendTelegramAlert,
   type TelegramAlertInput,
   type TelegramAlertResult,
   type TelegramMessageKind,
+  type TelegramUrlButton,
 } from './telegram-notification.service';
+import { buildTelegramSignalAppButtons } from './telegram-investment-intelligence.service';
+import {
+  telegramMarketRoomChatId,
+  telegramMarketRoomForLane,
+} from './telegram-market-room.service';
 
 export type TelegramSignalFollowupKind =
   | 'REARMED'
   | 'ENTRY_ZONE_LEFT'
   | 'TARGET_REACHED'
   | 'STOP_THRESHOLD_REACHED'
+  | 'APPROVED'
+  | 'EXECUTING'
+  | 'PARTIALLY_FILLED'
+  | 'FILLED'
+  | 'CLOSED'
+  | 'REJECTED'
+  | 'CANCELLED'
   | 'INVALIDATED'
   | 'EXPIRED';
 
@@ -188,16 +202,37 @@ function stateEvent(
   const current = card.signalState;
   if (!current || current === previous) return null;
   if (current === 'INVALIDATED') {
-    return { kind: 'INVALIDATED', details: '🛑 Scanner 근거 또는 위험 조건이 무효 상태로 전환되었습니다.' };
+    return { kind: 'INVALIDATED', details: '🔴 기존 진입 조건이 무효화되었습니다. 주문 버튼을 비활성화합니다.' };
   }
   if (current === 'EXPIRED') {
-    return { kind: 'EXPIRED', details: '⌛ 신호 유효시간이 만료되었습니다. 새 신호 없이는 재사용하지 않습니다.' };
+    return { kind: 'EXPIRED', details: '⌛ 신호 유효시간이 만료되었습니다. 주문 버튼을 비활성화합니다.' };
   }
-  if (current === 'ARMED' && ['ENTRY_ZONE', 'APPROVAL_PENDING'].includes(previous)) {
-    return { kind: 'ENTRY_ZONE_LEFT', details: '⚠️ 진입구간을 벗어나 재관찰 상태로 전환되었습니다.' };
+  if (current === 'CANCELLED') {
+    return { kind: 'CANCELLED', details: '⛔ 신호 또는 주문 준비가 취소되었습니다. 새 활성 신호 전에는 주문하지 않습니다.' };
   }
-  if ((current === 'ENTRY_ZONE' || current === 'APPROVAL_PENDING') && previous === 'ARMED') {
-    return { kind: 'REARMED', details: '✅ 조건이 회복되어 진입구간 감시 상태로 다시 전환되었습니다.' };
+  if (current === 'REJECTED') {
+    return { kind: 'REJECTED', details: '⛔ 현재 진입 조건이 거절되었습니다. 주문 버튼을 비활성화합니다.' };
+  }
+  if (current === 'CLOSED') {
+    return { kind: 'CLOSED', details: '🏁 포지션이 종료되었습니다. 기존 진입 버튼을 제거합니다.' };
+  }
+  if (current === 'FILLED') {
+    return { kind: 'FILLED', details: '✅ 체결 상태가 확인되어 중복 주문 버튼을 제거합니다.' };
+  }
+  if (current === 'PARTIALLY_FILLED') {
+    return { kind: 'PARTIALLY_FILLED', details: '🔵 부분 체결 상태입니다. 중복 주문을 막기 위해 주문 버튼을 제거합니다.' };
+  }
+  if (current === 'EXECUTING') {
+    return { kind: 'EXECUTING', details: '🟦 주문 처리 중입니다. 중복 주문을 막기 위해 주문 버튼을 제거합니다.' };
+  }
+  if (current === 'APPROVED') {
+    return { kind: 'APPROVED', details: '✅ 주문 승인이 확인되었습니다. 중복 주문을 막기 위해 주문 버튼을 제거합니다.' };
+  }
+  if (current === 'ARMED' && ['ENTRY_ZONE', 'APPROVAL_PENDING', 'READY_FOR_APPROVAL'].includes(previous)) {
+    return { kind: 'ENTRY_ZONE_LEFT', details: '🟡 진입구간을 벗어나 관망 상태로 전환되었습니다. 주문 버튼을 비활성화합니다.' };
+  }
+  if ((current === 'ENTRY_ZONE' || current === 'APPROVAL_PENDING' || current === 'READY_FOR_APPROVAL') && previous === 'ARMED') {
+    return { kind: 'REARMED', details: '🟢 조건이 회복되어 진입 신호가 다시 활성화되었습니다.' };
   }
   return null;
 }
@@ -267,16 +302,22 @@ function publicStatusLabel(
   state: AnnouncedSignal,
   updates: readonly TelegramSignalFollowup[],
 ): string {
-  if (state.stopReached || updates.some((update) => update.kind === 'STOP_THRESHOLD_REACHED')) return '🛑 손절 기준 도달';
-  if (card.signalState === 'INVALIDATED' || updates.some((update) => update.kind === 'INVALIDATED')) return '⛔ 신호 무효';
-  if (card.signalState === 'EXPIRED' || updates.some((update) => update.kind === 'EXPIRED')) return '⌛ 신호 종료';
+  const signal = card.assetClass === 'coin_futures'
+    ? (card.direction === 'SHORT' ? 'SHORT' : 'LONG')
+    : '매수';
+  if (state.stopReached || updates.some((update) => update.kind === 'STOP_THRESHOLD_REACHED')) return '🔴 손절 기준 도달 · 주문 비활성';
+  if (card.signalState === 'INVALIDATED' || updates.some((update) => update.kind === 'INVALIDATED')) return `🔴 ${signal} 신호 무효 · 주문 비활성`;
+  if (card.signalState === 'EXPIRED' || updates.some((update) => update.kind === 'EXPIRED')) return `⌛ ${signal} 신호 만료 · 주문 비활성`;
+  if (card.signalState === 'CANCELLED' || card.signalState === 'REJECTED') return `⛔ ${signal} 신호 종료 · 주문 비활성`;
+  if (card.signalState === 'APPROVED' || card.signalState === 'EXECUTING' || card.signalState === 'PARTIALLY_FILLED') return '🟦 주문 진행 중 · 중복 주문 비활성';
+  if (card.signalState === 'FILLED' || card.signalState === 'MANAGING') return '✅ 체결/보유중 · 중복 주문 비활성';
+  if (card.signalState === 'CLOSED') return '🏁 포지션 종료 · 주문 비활성';
   const reached = [...state.reachedTargets].sort((left, right) => left - right);
   if (reached.length) return `🎯 TP${reached.at(-1)! + 1} 도달`;
-  if (card.signalState === 'FILLED' || card.signalState === 'MANAGING') return '✅ 보유중';
   if (card.signalState === 'ENTRY_ZONE' || card.signalState === 'APPROVAL_PENDING' || card.signalState === 'READY_FOR_APPROVAL') {
-    return '🚨 진입가능';
+    return `🟢 ${signal} 활성`;
   }
-  return '👀 관찰중';
+  return '🟡 관망 · 주문 비활성';
 }
 
 function editedSignalMessage(
@@ -294,7 +335,6 @@ function editedSignalMessage(
   const stop = card.pricePlan.stopLoss == null ? 'N/A' : escapeTelegramHtml(card.pricePlan.stopLoss);
   const price = finite(card.price) ? escapeTelegramHtml(card.price) : 'N/A';
   const dynamic = [
-    '',
     '<b>현재 상태</b>',
     publicStatusLabel(card, state, updates),
     `현재가 ${price}`,
@@ -305,7 +345,7 @@ function editedSignalMessage(
 
   const limit = state.telegramMessageKind === 'PHOTO' ? 1_024 : 4_096;
   const base = state.baseMessageText ?? '';
-  if (base.length + dynamic.length + 1 <= limit) return `${base}\n${dynamic}`;
+  if (base.length + dynamic.length + 2 <= limit) return `${dynamic}\n\n${base}`;
 
   return [
     `<b>${escapeTelegramHtml(card.symbol)} · 신호 업데이트</b>`,
@@ -315,9 +355,62 @@ function editedSignalMessage(
 }
 
 function destinationFor(card: ScannerSignalCard): string | null {
-  return card.assetClass === 'stock'
-    ? process.env.TELEGRAM_STOCK_CHAT_ID?.trim() || null
-    : process.env.TELEGRAM_CRYPTO_CHAT_ID?.trim() || null;
+  const lane = card.assetClass === 'coin_spot'
+    ? 'CRYPTO_SPOT'
+    : card.assetClass === 'coin_futures'
+      ? 'CRYPTO_FUTURES'
+      : card.market.trim().toUpperCase().includes('US')
+        ? 'US_STOCK'
+        : 'KR_STOCK';
+  return telegramMarketRoomChatId(
+    telegramMarketRoomForLane(lane),
+    process.env,
+    { allowLegacyFallback: true },
+  );
+}
+
+function lifecycleTimeframe(card: ScannerSignalCard): string {
+  if (card.strategyMode === 'scalping') return '15m';
+  if (card.strategyMode === 'swing') return '60m';
+  return '1D';
+}
+
+function lifecycleOrderEnabled(card: ScannerSignalCard, now: number): boolean {
+  if (!['ENTRY_ZONE', 'APPROVAL_PENDING', 'READY_FOR_APPROVAL'].includes(card.signalState)) return false;
+  if (card.dataState !== 'complete' || card.strongSignalEligible !== true) return false;
+  if (card.direction !== 'LONG' && card.direction !== 'SHORT') return false;
+  const expiresAt = Date.parse(card.expiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= now) return false;
+  const zone = card.pricePlan.entryZone;
+  if (!zone || !finite(card.price)) return false;
+  const low = Math.min(zone.from, zone.to);
+  const high = Math.max(zone.from, zone.to);
+  return card.price >= low && card.price <= high;
+}
+
+function lifecycleButtons(card: ScannerSignalCard, now: number): TelegramUrlButton[][] {
+  const context = {
+    timeframe: lifecycleTimeframe(card),
+    strategyMode: card.strategyMode ?? 'swing',
+  } as const;
+  const buttons = buildTelegramSignalAppButtons(card, context, {
+    orderEnabled: lifecycleOrderEnabled(card, now),
+    displayName: card.name,
+  });
+  const base = normalizeTelegramHttpUrl(process.env.PUBLIC_APP_URL || process.env.APP_PUBLIC_URL);
+  if (!base) return buttons;
+  const url = new URL(base);
+  const detail = card.assetClass === 'stock'
+    ? new URL('/stock-info', url)
+    : new URL(card.assetClass === 'coin_futures' ? '/coins/futures' : '/coins/spot', url);
+  detail.searchParams.set('symbol', card.symbol);
+  if (card.assetClass === 'stock') {
+    detail.searchParams.set('ticker', card.symbol);
+    detail.searchParams.set('market', card.market.toUpperCase().includes('US') ? 'US' : 'KR');
+    detail.searchParams.set('tab', 'news');
+  }
+  buttons.push([{ text: card.assetClass === 'stock' ? '📰 뉴스·공시' : '📰 뉴스', url: detail.toString() }]);
+  return buttons;
 }
 
 export async function deliverScannerTelegramFollowups(
@@ -392,6 +485,8 @@ export async function deliverScannerTelegramFollowups(
           messageId: state.telegramMessageId,
           messageKind: state.telegramMessageKind,
           text: editedSignalMessage(card, state, signalUpdates),
+          buttons: lifecycleButtons(card, now),
+          linkPreview: false,
         });
         if (!result.ok) failedSignals.add(signalId);
       } catch (error) {
