@@ -124,6 +124,7 @@ function laneAlignedRows(comparison, hypotheses, failures, datasetCount) {
     '- Dataset count: ' + datasetCount,
     '- KR/US=60m, Spot=4H, Futures=60m',
     '- Purpose: exact timeframe research alignment with current Forward Observer lanes',
+    '- Feature history: fixed past-only 1,500 completed bars per decision',
     '',
     '| Market | Baseline return | B trades | B MDD | B PF | Improved return | I trades | I MDD | I PF |',
     '|---|---:|---:|---:|---:|---:|---:|---:|---:|',
@@ -390,7 +391,10 @@ if (datasets.length === 0) throw new Error('NO_PUBLIC_BENCHMARK_DATA_COLLECTED')
 const result = runFourMarketOneYearBenchmark({ datasets });
 const ablation = runFourMarketOneYearAblation({ datasets });
 const hypotheses = freezeMarketSpecificHypotheses(ablation);
-const laneAlignedAblation = runFourMarketOneYearAblation({ datasets: laneAlignedDatasets });
+const laneAlignedAblation = runFourMarketOneYearAblation({
+  datasets: laneAlignedDatasets,
+  featureHistoryBars: 1500,
+});
 const laneAlignedHypotheses = freezeMarketSpecificHypotheses(laneAlignedAblation);
 const laneAlignedComparison = comparisonFromAblation(laneAlignedAblation);
 const laneAligned = {
