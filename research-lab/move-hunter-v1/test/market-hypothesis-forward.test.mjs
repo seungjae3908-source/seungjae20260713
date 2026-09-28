@@ -9,6 +9,7 @@ import {
 function observation({
   timestamp = '2026-09-28T07:00:00.000Z',
   symbol = '005930',
+  timeframe = '60m',
   status = 'PENDING',
   outcome = null,
   liveOrderAllowed = false,
@@ -25,7 +26,7 @@ function observation({
       researchCodeSha: '1'.repeat(40),
       market: 'KR_STOCK',
       symbol,
-      timeframe: '60m',
+      timeframe,
       horizon: 24,
       direction: 'BUY',
     },
@@ -58,12 +59,13 @@ function observation({
 function featureSnapshot({
   timestamp = '2026-09-28T07:00:00.000Z',
   symbol = '005930',
+  timeframe = '60m',
   roc = 0.03,
 } = {}) {
   const identity = {
     market: 'KR_STOCK',
     symbol,
-    timeframe: '60m',
+    timeframe,
     side: 'BUY',
     temporal: { decisionTime: timestamp },
   };
@@ -156,6 +158,30 @@ test('post-freeze exact-identity observation can be compared without execution a
   assert.equal(row.automaticPromotionAuthority, false);
   assert.equal(row.economicSampleCredit, 0);
   assert.equal(row.executionAuthority, 'NONE');
+});
+
+
+
+test('timeframe mismatch cannot borrow 4H evidence into frozen 60m hypothesis', () => {
+  const row = buildMarketHypothesisForwardRecord({
+    observation: observation({ timeframe: '4H' }),
+    featureSnapshot: featureSnapshot({ timeframe: '4H' }),
+  });
+  assert.equal(row.status, 'BLOCKED_DATA');
+  assert.equal(row.reason, 'HYPOTHESIS_TIMEFRAME_MISMATCH');
+  assert.equal(row.economicSampleCredit, 0);
+  assert.equal(row.executionAuthority, 'NONE');
+});
+
+test('canonical feature identity mismatch fails closed even within frozen symbol scope', () => {
+  const row = buildMarketHypothesisForwardRecord({
+    observation: observation({ symbol: '005930' }),
+    featureSnapshot: featureSnapshot({ symbol: '000660' }),
+  });
+  assert.equal(row.status, 'BLOCKED_DATA');
+  assert.equal(row.reason, 'FORWARD_FEATURE_IDENTITY_MISMATCH');
+  assert.ok(row.details.mismatches.includes('SYMBOL'));
+  assert.equal(row.economicSampleCredit, 0);
 });
 
 test('unsafe Forward observation envelope is rejected', () => {
