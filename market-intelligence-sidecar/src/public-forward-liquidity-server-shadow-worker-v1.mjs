@@ -44,6 +44,17 @@ function bool(value) {
   return value === true || String(value ?? '').toLowerCase() === 'true';
 }
 
+export function resolveServerEvidenceNtpSynchronization({
+  timedatectlSucceeded,
+  timedatectlValue,
+  systemdSyncMarkerPresent,
+} = {}) {
+  if (timedatectlSucceeded === true) {
+    return String(timedatectlValue ?? '').trim().toLowerCase() === 'yes';
+  }
+  return systemdSyncMarkerPresent === true;
+}
+
 function safeErrorCode(error) {
   const first = String(error?.message ?? 'UNKNOWN').split('\n')[0].slice(0, 160);
   return first.replace(/[^A-Za-z0-9_.:-]/gu, '_');
