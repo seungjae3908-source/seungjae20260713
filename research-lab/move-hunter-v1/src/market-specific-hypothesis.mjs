@@ -16,8 +16,6 @@ export const MARKET_SPECIFIC_HYPOTHESIS_POLICY_V1 = Object.freeze({
   minimumTradeCount: 20,
   minimumTotalReturnExclusive: 0,
   minimumProfitFactorExclusive: 1,
-  requirePositiveReturn: true,
-  minimumProfitFactor: 1.0,
   requireReturnAboveBaseline: true,
   requireReturnAboveFull: true,
   requireProfitFactorNotBelowBaseline: true,
@@ -63,16 +61,6 @@ function gateCandidate({ candidate, baseline, full, policy }) {
   else if (!(candidate.profitFactor > policy.minimumProfitFactorExclusive)) reasons.push('PROFIT_FACTOR_NOT_ABOVE_ONE');
   if (!Number.isFinite(candidate.tradeCount) || candidate.tradeCount < policy.minimumTradeCount) {
     reasons.push('MINIMUM_TRADE_COUNT_NOT_MET');
-  }
-  if (policy.requirePositiveReturn
-      && Number.isFinite(candidate.totalReturn)
-      && candidate.totalReturn <= 0) {
-    reasons.push('CANDIDATE_RETURN_NOT_POSITIVE');
-  }
-  if (Number.isFinite(candidate.profitFactor)
-      && Number.isFinite(policy.minimumProfitFactor)
-      && candidate.profitFactor < policy.minimumProfitFactor) {
-    reasons.push('PROFIT_FACTOR_BELOW_MINIMUM');
   }
   if (policy.requireReturnAboveBaseline
       && Number.isFinite(candidate.totalReturn)
