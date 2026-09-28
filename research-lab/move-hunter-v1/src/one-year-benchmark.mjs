@@ -426,6 +426,7 @@ export function runFourMarketOneYearBenchmark({
       }
     }
   }
+  const midpoint = startTime + Math.floor((endTime - startTime) / 2);
   const markets = {};
   for (const market of SUPPORTED_MARKETS) {
     const marketRows = rows.filter((row) => row.market === market);
@@ -570,6 +571,57 @@ function runOneYearDatasetAblationRows(dataset, {
   });
 }
 
+
+function publicVariantId(variant) {
+  if (variant === 'BASELINE_EMA_PULLBACK_V1') return 'BASELINE';
+  if (variant === 'IMPROVED_TECH_STRUCTURE_V2') return 'FULL';
+  if (String(variant).startsWith('ABLATION_')) return String(variant).slice('ABLATION_'.length);
+  return String(variant);
+}
+
+function buildLaneBreakdown(rows, midpoint, initialCapital = 1_000_000) {
+  return rows.map((row) => {
+    const firstHalfTrades = row.trades.filter((trade) => trade.signalTime < midpoint);
+    const secondHalfTrades = row.trades.filter((trade) => trade.signalTime >= midpoint);
+    return freeze({
+      market: row.market,
+      symbol: row.symbol,
+      timeframe: row.timeframe,
+      side: row.side,
+      variant: publicVariantId(row.variant),
+      overall: row.performance,
+      firstHalf: summarizeTrades(firstHalfTrades, initialCapital),
+      secondHalf: summarizeTrades(secondHalfTrades, initialCapital),
+    });
+  });
+}
+
+function buildVariantRobustness(lanes) {
+  const variants = ['BASELINE', 'FULL', 'NO_TREND', 'NO_MOMENTUM', 'NO_STRUCTURE', 'NO_VOLUME', 'NO_VOLATILITY'];
+  return freeze(Object.fromEntries(variants.map((variant) => {
+    const rows = lanes.filter((row) => row.variant === variant);
+    const firstHalfWithTrades = rows.filter((row) => row.firstHalf.tradeCount > 0);
+    const secondHalfWithTrades = rows.filter((row) => row.secondHalf.tradeCount > 0);
+    return [variant, freeze({
+      laneCount: rows.length,
+      positiveOverallLaneCount: rows.filter((row) => row.overall.totalReturn > 0).length,
+      profitFactorAboveOneLaneCount: rows.filter((row) => Number.isFinite(row.overall.profitFactor) && row.overall.profitFactor > 1).length,
+      firstHalfLaneCountWithTrades: firstHalfWithTrades.length,
+      firstHalfPositiveLaneCount: firstHalfWithTrades.filter((row) => row.firstHalf.totalReturn > 0).length,
+      secondHalfLaneCountWithTrades: secondHalfWithTrades.length,
+      secondHalfPositiveLaneCount: secondHalfWithTrades.filter((row) => row.secondHalf.totalReturn > 0).length,
+      allOverallLanesPositive: rows.length > 0 && rows.every((row) => row.overall.totalReturn > 0),
+      allOverallProfitFactorsAboveOne: rows.length > 0 && rows.every((row) => Number.isFinite(row.overall.profitFactor) && row.overall.profitFactor > 1),
+      allFirstHalfLanesPositive: firstHalfWithTrades.length === rows.length
+        && rows.length > 0
+        && firstHalfWithTrades.every((row) => row.firstHalf.totalReturn > 0),
+      allSecondHalfLanesPositive: secondHalfWithTrades.length === rows.length
+        && rows.length > 0
+        && secondHalfWithTrades.every((row) => row.secondHalf.totalReturn > 0),
+    })];
+  })));
+}
+
 export function runFourMarketOneYearAblation({
   datasets = [],
   startTime = ONE_YEAR_BENCHMARK_START_MS,
@@ -624,12 +676,19 @@ export function runFourMarketOneYearAblation({
       }),
     );
     const sourceTimeframes = [...new Set(marketRows.map((row) => String(row.timeframe).toUpperCase()))].sort();
+    const laneBreakdown = freeze(buildLaneBreakdown(marketRows, midpoint));
+    const variantRobustness = buildVariantRobustness(laneBreakdown);
     markets[market] = freeze({
       market,
       sourceTimeframes: freeze(sourceTimeframes),
       sourceTimeframeIdentityExact: sourceTimeframes.length === 1,
       variants: freeze(variants),
       deltas: freeze(deltas),
+      stability: freeze({
+        midpoint,
+        lanes: laneBreakdown,
+        variantRobustness,
+      }),
     });
   }
 
@@ -637,6 +696,7 @@ export function runFourMarketOneYearAblation({
     schemaVersion: 'move-hunter-one-year-factor-ablation/v1',
     startTime,
     endTime,
+    midpoint,
     markets: freeze(markets),
     interpretation: freeze({
       observedHistoryOnly: true,
