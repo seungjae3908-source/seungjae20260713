@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildFeatureSnapshotAt,
   improvedSignalDecision,
+  runFourMarketOneYearAblation,
   runFourMarketOneYearBenchmark,
 } from '../src/one-year-benchmark.mjs';
 
@@ -49,7 +50,14 @@ test('canonical feature snapshot uses only closed bars available by next-bar dec
   const decision = improvedSignalDecision(snapshot, 'LONG');
   assert.equal(typeof decision.matched, 'boolean');
   assert.ok(decision.score >= 0 && decision.score <= 8);
+  assert.equal(decision.maximumScore, 8);
+  assert.equal(decision.threshold, 6);
   assert.ok(Array.isArray(decision.wave.swingSequence));
+
+  const noMomentum = improvedSignalDecision(snapshot, 'LONG', { disabledFamilies: ['MOMENTUM'] });
+  assert.equal(noMomentum.maximumScore, 5);
+  assert.equal(noMomentum.threshold, 4);
+  assert.deepEqual(noMomentum.disabledFamilies, ['MOMENTUM']);
 });
 
 test('four-market benchmark remains research-only and produces bounded A/B rows', () => {
@@ -70,5 +78,31 @@ test('four-market benchmark remains research-only and produces bounded A/B rows'
     assert.ok(result.markets[market].improved.sampleCount > 0);
     assert.equal(Number.isFinite(result.markets[market].baseline.totalReturn), true);
     assert.equal(Number.isFinite(result.markets[market].improved.totalReturn), true);
+  }
+});
+
+
+test('factor ablation keeps all five family-removal variants research-only', () => {
+  const result = runFourMarketOneYearAblation({
+    datasets: [
+      dataset('KR_STOCK', '005930'),
+      dataset('US_STOCK', 'AAPL'),
+      dataset('CRYPTO_SPOT', 'BTC'),
+      dataset('CRYPTO_FUTURES', 'BTCUSDT'),
+    ],
+  });
+  assert.equal(result.interpretation.automaticMarketSpecificAdoptionAllowed, false);
+  assert.equal(result.interpretation.economicSampleCredit, 0);
+  assert.equal(result.interpretation.executionAuthority, 'NONE');
+  for (const market of ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']) {
+    const variants = result.markets[market].variants;
+    for (const id of ['BASELINE', 'FULL', 'NO_TREND', 'NO_MOMENTUM', 'NO_STRUCTURE', 'NO_VOLUME', 'NO_VOLATILITY']) {
+      assert.ok(Object.hasOwn(variants, id));
+      assert.ok(variants[id].sampleCount > 0);
+      assert.equal(Number.isFinite(variants[id].totalReturn), true);
+    }
+    for (const id of ['NO_TREND', 'NO_MOMENTUM', 'NO_STRUCTURE', 'NO_VOLUME', 'NO_VOLATILITY']) {
+      assert.ok(Object.hasOwn(result.markets[market].deltas, id));
+    }
   }
 });
