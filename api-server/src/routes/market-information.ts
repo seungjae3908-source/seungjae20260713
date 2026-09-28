@@ -22,7 +22,7 @@ export interface MarketInformationRouterOptions {
   stockWarmupDeadlineMs?: number;
 }
 
-const DEFAULT_STOCK_FIRST_PAINT_TIMEOUT_MS = 4_000;
+const DEFAULT_STOCK_FIRST_PAINT_TIMEOUT_MS = 2_500;
 const DEFAULT_STOCK_WARMUP_DEADLINE_MS = 12_000;
 const FIRST_PAINT_TIMEOUT_CODE = 'MARKET_INFORMATION_FIRST_PAINT_TIMEOUT';
 type StockRoom = Extract<MarketInformationRoomId, 'stocks-kr' | 'stocks-us'>;
