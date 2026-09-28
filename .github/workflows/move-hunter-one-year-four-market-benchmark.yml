@@ -58,6 +58,7 @@ jobs:
         shell: bash
         run: |
           if [ -f "$RUNNER_TEMP/move-hunter-one-year/result.md" ]; then
+            cat "$RUNNER_TEMP/move-hunter-one-year/result.md"
             cat "$RUNNER_TEMP/move-hunter-one-year/result.md" >> "$GITHUB_STEP_SUMMARY"
           fi
 
