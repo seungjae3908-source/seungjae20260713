@@ -453,6 +453,110 @@ export function runFourMarketOneYearBenchmark({
 }
 
 
+function runOneYearDatasetAblationRows(dataset, {
+  side = 'LONG',
+  startTime = ONE_YEAR_BENCHMARK_START_MS,
+  endTime = ONE_YEAR_BENCHMARK_END_MS,
+  initialCapital = 1_000_000,
+  riskFraction = 0.005,
+  futuresMaximumExposure = 3,
+  costs = null,
+} = {}) {
+  if (!SUPPORTED_MARKETS.has(dataset?.market)) throw new RangeError('unsupported market');
+  const tradeSide = direction(side);
+  if (CASH_MARKETS.has(dataset.market) && tradeSide === 'SHORT') throw new RangeError('cash markets are long-only');
+  const rows = normalizeRows(dataset.candles).filter((row) => row.ts <= endTime);
+  if (rows.length < 90) throw new RangeError('at least 90 candles are required');
+  const runnerCandles = rows.map((row) => ({ ...row }));
+  const cheap = buildCheapSignalSeries(rows);
+  const preset = RUNNER_RESEARCH_PRESETS.LONG_RUNNER_3ATR;
+  const laneCosts = costs ?? DEFAULT_COSTS[dataset.market];
+  const states = new Map(ABLATION_DEFINITIONS.map((definition) => [
+    definition.id,
+    { trades: [], lastExit: -Infinity },
+  ]));
+  const trialCache = new Map();
+
+  for (let index = 80; index + 1 < rows.length; index += 1) {
+    const signalTime = rows[index].ts;
+    const entryTime = rows[index + 1].ts;
+    if (signalTime < startTime || entryTime > endTime) continue;
+
+    const eligible = ABLATION_DEFINITIONS.filter((definition) => {
+      const state = states.get(definition.id);
+      return signalTime > state.lastExit
+        && improvedRequiredPrefilter(index, tradeSide, cheap, definition.disabledFamilies);
+    });
+    if (eligible.length === 0) continue;
+
+    const snapshot = buildFeatureSnapshotFromRows(dataset, rows, index, tradeSide);
+    for (const definition of eligible) {
+      const decision = improvedSignalDecision(snapshot, tradeSide, {
+        disabledFamilies: definition.disabledFamilies,
+      });
+      if (!decision.matched) continue;
+
+      let trial = trialCache.get(signalTime);
+      if (!trial) {
+        trial = simulateRunner({
+          candles: runnerCandles,
+          signalAtMs: signalTime,
+          direction: tradeSide,
+          ...preset,
+          costs: laneCosts,
+        });
+        trialCache.set(signalTime, trial);
+      }
+      if (trial.entryTs > endTime) continue;
+
+      const funding = fundingImpact(dataset, trial, tradeSide);
+      const netReturn = trial.netReturn + funding;
+      const maximumExposure = dataset.market === 'CRYPTO_FUTURES' ? futuresMaximumExposure : 1;
+      const positionFraction = Math.min(maximumExposure, riskFraction / Math.max(trial.initialRiskPct, 1e-9));
+      const accountReturn = netReturn * positionFraction;
+      const state = states.get(definition.id);
+      state.trades.push(freeze({
+        market: dataset.market,
+        symbol: dataset.symbol,
+        timeframe: dataset.timeframe,
+        variant: definition.id === 'FULL' ? 'IMPROVED_TECH_STRUCTURE_V2' : 'ABLATION_' + definition.id,
+        side: tradeSide,
+        signalTime,
+        entryTs: trial.entryTs,
+        exitTs: trial.exitTs,
+        initialRiskPct: trial.initialRiskPct,
+        positionFraction,
+        rawNetReturn: trial.netReturn,
+        fundingImpact: funding,
+        accountReturn,
+        exitReason: trial.exitReason,
+        decisionScore: decision.score,
+        decisionMaximumScore: decision.maximumScore,
+        decisionThreshold: decision.threshold,
+        disabledFamilies: freeze([...definition.disabledFamilies]),
+        structureTransition: decision.structureTransition ?? null,
+      }));
+      state.lastExit = trial.exitTs;
+    }
+  }
+
+  return ABLATION_DEFINITIONS.map((definition) => {
+    const state = states.get(definition.id);
+    return freeze({
+      market: dataset.market,
+      symbol: dataset.symbol,
+      timeframe: dataset.timeframe,
+      side: tradeSide,
+      variant: definition.id === 'FULL' ? 'IMPROVED_TECH_STRUCTURE_V2' : 'ABLATION_' + definition.id,
+      source: dataset.source ?? null,
+      costs: freeze({ ...laneCosts }),
+      disabledFamilies: freeze([...definition.disabledFamilies]),
+      performance: summarizeTrades(state.trades, initialCapital),
+      trades: freeze(state.trades),
+    });
+  });
+}
+
 export function runFourMarketOneYearAblation({
   datasets = [],
   startTime = ONE_YEAR_BENCHMARK_START_MS,
@@ -469,17 +573,11 @@ export function runFourMarketOneYearAblation({
         startTime,
         endTime,
       }));
-      for (const definition of ABLATION_DEFINITIONS) {
-        rows.push(runOneYearDatasetBenchmark(dataset, {
-          variant: definition.id === 'FULL'
-            ? 'IMPROVED_TECH_STRUCTURE_V2'
-            : 'ABLATION_' + definition.id,
-          disabledFamilies: definition.disabledFamilies,
-          side,
-          startTime,
-          endTime,
-        }));
-      }
+      rows.push(...runOneYearDatasetAblationRows(dataset, {
+        side,
+        startTime,
+        endTime,
+      }));
     }
   }
 
