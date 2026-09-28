@@ -20,9 +20,10 @@ test('Market Information client timeout cannot preempt the server first-paint fa
   const clientTimeout = numericConstant(clientSource, 'MARKET_INFORMATION_REQUEST_TIMEOUT_MS');
   const serverFirstPaintTimeout = numericConstant(serverSource, 'DEFAULT_STOCK_FIRST_PAINT_TIMEOUT_MS');
 
-  expect(serverFirstPaintTimeout).toBe(4_000);
+  expect(serverFirstPaintTimeout).toBe(2_500);
   expect(clientTimeout).toBe(6_000);
   expect(clientTimeout).toBeGreaterThan(serverFirstPaintTimeout);
+  expect(5_000 - serverFirstPaintTimeout).toBeGreaterThanOrEqual(2_500);
   expect(clientSource).toContain("requestPath(input).startsWith('/api/market-information/')");
   expect(clientSource).toContain("errorCode: 'MARKET_INFORMATION_TIMEOUT'");
   expect(clientSource).not.toContain('MARKET_INFORMATION_REQUEST_TIMEOUT_MS = 2_500');
