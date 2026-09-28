@@ -1,6 +1,7 @@
 import { logger } from '../lib/logger';
 import { deliverMemberNotification } from './notification.service';
 import {
+  buildTelegramSignalAppButtons,
   buildTelegramSignalIntelligenceInput,
   collectTelegramSignalIntelligence,
   type TelegramSignalDeliveryContext,
@@ -77,6 +78,33 @@ function tradePlanLines(alert: ScannerAlertCandidate): string[] {
     target3 ? `3차 목표 ${target3}` : null,
     `손절/무효 ${stop}`,
   ].filter((line): line is string => line != null);
+}
+
+function basicMarketLabel(alert: ScannerAlertCandidate): string {
+  if (alert.assetClass === 'coin_futures') return '코인선물';
+  if (alert.assetClass === 'coin_spot') return '코인현물';
+  return alert.market.trim().toUpperCase().includes('US') ? '해외주식' : '국내주식';
+}
+
+function basicStrategyLabel(context: TelegramSignalDeliveryContext): string {
+  if (context.strategyMode === 'scalping') return '단타';
+  if (context.strategyMode === 'position') return '중장기';
+  return '스윙';
+}
+
+function withBasicSignalLinks(
+  input: TelegramAlertInput,
+  alert: ScannerAlertCandidate,
+  context: TelegramSignalDeliveryContext,
+): TelegramAlertInput {
+  return {
+    ...input,
+    title: input.title ?? `${alert.symbol} / ${basicMarketLabel(alert)} · ${basicStrategyLabel(context)}`,
+    buttons: input.buttons?.length
+      ? input.buttons
+      : buildTelegramSignalAppButtons(alert, context, { orderEnabled: true }),
+    linkPreview: false,
+  };
 }
 
 function pricePlanDetails(alert: ScannerAlertCandidate): string {
@@ -234,7 +262,12 @@ export function addTelegramSignalFreshness(
   const lines = input.details ? input.details.split('\n') : [];
 
   if (freshness.status !== 'FRESH' && warning) lines.push(warning);
-  return { ...input, details: lines.join('\n') };
+  const buttons = freshness.status === 'FRESH'
+    ? input.buttons
+    : input.buttons
+      ?.map((row) => row.filter((button) => !button.text.includes('주문')))
+      .filter((row) => row.length > 0);
+  return { ...input, details: lines.join('\n'), buttons };
 }
 
 async function richInput(
@@ -242,8 +275,9 @@ async function richInput(
   alert: ScannerAlertCandidate,
   context: TelegramSignalDeliveryContext,
 ): Promise<TelegramAlertInput> {
+  const fallback = withBasicSignalLinks(base, alert, context);
   if (process.env.TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED !== 'true') {
-    return addTelegramSignalFreshness(base, alert, context);
+    return addTelegramSignalFreshness(fallback, alert, context);
   }
   try {
     const evidence = await collectTelegramSignalIntelligence(alert, context);
@@ -258,7 +292,7 @@ async function richInput(
       { signalId: alert.signalId, errorName: error instanceof Error ? error.name : 'UnknownError' },
       'scanner Telegram rich evidence unavailable; falling back to base alert',
     );
-    return addTelegramSignalFreshness(base, alert, context);
+    return addTelegramSignalFreshness(fallback, alert, context);
   }
 }
 
