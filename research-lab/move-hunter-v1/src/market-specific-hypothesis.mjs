@@ -14,6 +14,8 @@ export const FORWARD_TARGET_TIMEFRAME_BY_MARKET_V1 = Object.freeze({
 export const MARKET_SPECIFIC_HYPOTHESIS_POLICY_V1 = Object.freeze({
   maximumMddExpansionVsBaseline: 0.10,
   minimumTradeCount: 20,
+  minimumTotalReturnExclusive: 0,
+  minimumProfitFactorExclusive: 1,
   requirePositiveReturn: true,
   minimumProfitFactor: 1.0,
   requireReturnAboveBaseline: true,
@@ -55,7 +57,10 @@ function compareCandidate(left, right) {
 function gateCandidate({ candidate, baseline, full, policy }) {
   const reasons = [];
   if (!Number.isFinite(candidate.totalReturn)) reasons.push('CANDIDATE_RETURN_UNAVAILABLE');
+  else if (!(candidate.totalReturn > policy.minimumTotalReturnExclusive)) reasons.push('NON_POSITIVE_TOTAL_RETURN');
   if (!Number.isFinite(candidate.maximumDrawdown)) reasons.push('CANDIDATE_MDD_UNAVAILABLE');
+  if (!Number.isFinite(candidate.profitFactor)) reasons.push('PROFIT_FACTOR_NOT_COMPARABLE');
+  else if (!(candidate.profitFactor > policy.minimumProfitFactorExclusive)) reasons.push('PROFIT_FACTOR_NOT_ABOVE_ONE');
   if (!Number.isFinite(candidate.tradeCount) || candidate.tradeCount < policy.minimumTradeCount) {
     reasons.push('MINIMUM_TRADE_COUNT_NOT_MET');
   }
@@ -97,7 +102,6 @@ function gateCandidate({ candidate, baseline, full, policy }) {
       && candidate.profitFactor < full.profitFactor) {
     reasons.push('PROFIT_FACTOR_BELOW_FULL');
   }
-  if (!Number.isFinite(candidate.profitFactor)) reasons.push('PROFIT_FACTOR_NOT_COMPARABLE');
   return freeze([...new Set(reasons)].sort());
 }
 
