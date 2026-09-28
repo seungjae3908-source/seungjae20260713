@@ -128,6 +128,36 @@ function fixedCandidatePrefilter(snapshot, direction) {
   return trend.emaDirection === expected && directionalRoc > 0;
 }
 
+
+export function evaluateFrozenKrNoStructureCandidateV1(snapshot, direction = 'LONG') {
+  const side = directionGroup(direction);
+  if (side !== 'LONG') {
+    return freeze({
+      schemaVersion: 'move-hunter-kr-no-structure-candidate/v1',
+      prefilterEligible: false,
+      hypothesisEligible: false,
+      reason: 'FROZEN_KR_V1_LONG_ONLY',
+      decision: evaluateFrozenKrNoStructureDecisionV1(snapshot, direction),
+      economicSampleCredit: 0,
+      executionAuthority: 'NONE',
+    });
+  }
+  const prefilterEligible = fixedCandidatePrefilter(snapshot, side);
+  const decision = evaluateFrozenKrNoStructureDecisionV1(snapshot, side);
+  return freeze({
+    schemaVersion: 'move-hunter-kr-no-structure-candidate/v1',
+    prefilterEligible,
+    hypothesisEligible: prefilterEligible && decision.matched,
+    reason: prefilterEligible ? null : 'FROZEN_CANDIDATE_PREFILTER_NOT_MET',
+    decision,
+    economicSampleCredit: 0,
+    profitabilityClaimAllowed: false,
+    automaticScannerAdoptionAllowed: false,
+    automaticPromotionAllowed: false,
+    executionAuthority: 'NONE',
+  });
+}
+
 export function evaluateFrozenKrNoStructureDecisionV1(snapshot, direction = 'LONG') {
   const trend = snapshot?.features?.trend;
   const momentum = snapshot?.features?.momentum;
@@ -258,9 +288,10 @@ export function buildMarketHypothesisForwardRecord({
   if (directionGroup(signal.direction) !== side) mismatches.push('SNAPSHOT_DIRECTION');
   if (mismatches.length) return blocked('FORWARD_FEATURE_IDENTITY_MISMATCH', { mismatches: freeze(mismatches) });
 
-  const prefilterEligible = fixedCandidatePrefilter(featureSnapshot, side);
-  const decision = evaluateFrozenKrNoStructureDecisionV1(featureSnapshot, side);
-  const hypothesisEligible = prefilterEligible && decision.matched;
+  const candidate = evaluateFrozenKrNoStructureCandidateV1(featureSnapshot, side);
+  const prefilterEligible = candidate.prefilterEligible;
+  const decision = candidate.decision;
+  const hypothesisEligible = candidate.hypothesisEligible;
 
   const settled = observation.status === 'SETTLED' && observation.outcome != null;
   const pending = observation.status === 'PENDING' && observation.outcome == null;
