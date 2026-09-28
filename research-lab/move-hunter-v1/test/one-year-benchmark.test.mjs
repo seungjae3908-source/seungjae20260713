@@ -91,6 +91,8 @@ test('factor ablation keeps all five family-removal variants research-only', () 
       dataset('CRYPTO_FUTURES', 'BTCUSDT'),
     ],
   });
+  assert.equal(result.interpretation.candidatePrefilterFrozenAcrossVariants, true);
+  assert.equal(result.interpretation.ablationScope, 'FINAL_DECISION_LAYER_ONLY');
   assert.equal(result.interpretation.automaticMarketSpecificAdoptionAllowed, false);
   assert.equal(result.interpretation.economicSampleCredit, 0);
   assert.equal(result.interpretation.executionAuthority, 'NONE');
