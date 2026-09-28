@@ -171,3 +171,31 @@ test('loss-making variants cannot be frozen merely because they lose less than b
     row.reasons.includes('CANDIDATE_RETURN_NOT_POSITIVE')
     || row.reasons.includes('PROFIT_FACTOR_BELOW_MINIMUM')));
 });
+
+
+test('relative improvement cannot freeze a still-losing candidate', () => {
+  const result = freezeMarketSpecificHypotheses({
+    schemaVersion: 'move-hunter-one-year-factor-ablation/v1',
+    markets: {
+      US_STOCK: {
+        sourceTimeframes: ['60M'],
+        variants: {
+          BASELINE: metric(-0.10, 0.10, 0.70, 80),
+          FULL: metric(-0.08, 0.09, 0.75, 75),
+          NO_TREND: metric(-0.05, 0.08, 0.90, 70),
+          NO_MOMENTUM: metric(-0.04, 0.08, 0.95, 70),
+          NO_STRUCTURE: metric(-0.03, 0.07, 0.98, 70),
+          NO_VOLUME: metric(-0.02, 0.07, 0.99, 70),
+          NO_VOLATILITY: metric(-0.01, 0.06, 0.995, 70),
+        },
+      },
+    },
+  });
+  const us = result.markets.US_STOCK;
+  assert.equal(us.status, 'RESEARCH_HOLD');
+  assert.equal(us.selectedVariant, null);
+  const leader = us.candidateDiagnostics.find((row) => row.id === 'NO_VOLATILITY');
+  assert.ok(leader.reasons.includes('NON_POSITIVE_TOTAL_RETURN'));
+  assert.ok(leader.reasons.includes('PROFIT_FACTOR_NOT_ABOVE_ONE'));
+  assert.equal(us.futureValidation.forwardAdmissionStatus, 'NONE');
+});
