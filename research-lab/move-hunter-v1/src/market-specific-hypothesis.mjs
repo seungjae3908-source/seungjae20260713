@@ -114,13 +114,24 @@ export function freezeMarketSpecificHypotheses(ablation, {
     const best = ranked[0] ?? null;
     if (!best) throw new TypeError('factor ablation variants are required for ' + market);
 
-    const reasons = gateCandidate({
-      candidate: best.metrics,
-      baseline,
-      full,
-      policy,
-    });
-    const eligible = reasons.length === 0;
+    const evaluated = ranked.map((item) => freeze({
+      id: item.id,
+      metrics: item.metrics,
+      reasons: gateCandidate({
+        candidate: item.metrics,
+        baseline,
+        full,
+        policy,
+      }),
+    }));
+    const eligibleCandidates = evaluated
+      .filter((item) => item.reasons.length === 0)
+      .sort(compareCandidate);
+    const selected = eligibleCandidates[0] ?? null;
+    const eligible = selected != null;
+    const reasons = eligible
+      ? []
+      : evaluated.find((item) => item.id === best.id)?.reasons ?? freeze(['NO_ELIGIBLE_CANDIDATE']);
     const sourceTimeframes = Array.isArray(row.sourceTimeframes)
       ? [...new Set(row.sourceTimeframes.map((value) => String(value).toUpperCase()))].sort()
       : [];
@@ -140,7 +151,12 @@ export function freezeMarketSpecificHypotheses(ablation, {
       market,
       status: eligible ? 'FROZEN_HYPOTHESIS' : 'RESEARCH_HOLD',
       descriptiveBestVariant: best.id,
-      selectedVariant: eligible ? best.id : null,
+      selectedVariant: selected?.id ?? null,
+      eligibleCandidateCount: eligibleCandidates.length,
+      candidateDiagnostics: freeze(evaluated.map((item) => freeze({
+        id: item.id,
+        reasons: item.reasons,
+      }))),
       reasons,
       sourceTimeframes: freeze(sourceTimeframes),
       targetForwardTimeframe,
@@ -164,6 +180,13 @@ export function freezeMarketSpecificHypotheses(ablation, {
         profitFactor: best.metrics.profitFactor,
         tradeCount: best.metrics.tradeCount,
       }),
+      selectedCandidate: selected ? freeze({
+        id: selected.id,
+        totalReturn: selected.metrics.totalReturn,
+        maximumDrawdown: selected.metrics.maximumDrawdown,
+        profitFactor: selected.metrics.profitFactor,
+        tradeCount: selected.metrics.tradeCount,
+      }) : null,
       futureValidation: freeze({
         candidateFrozen: eligible,
         sourceTimeframe: exactSourceTimeframe,
