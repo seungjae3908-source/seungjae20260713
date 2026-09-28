@@ -82,3 +82,35 @@ test('market-specific freezer only freezes candidates that beat baseline/full wi
   assert.equal(result.safety.automaticScannerAdoptionAllowed, false);
   assert.equal(result.safety.executionAuthority, 'NONE');
 });
+
+
+test('matching 60m hypothesis only opens unused Forward observation, never execution authority', () => {
+  const result = freezeMarketSpecificHypotheses({
+    schemaVersion: 'move-hunter-one-year-factor-ablation/v1',
+    markets: {
+      KR_STOCK: {
+        sourceTimeframes: ['60M'],
+        variants: {
+          BASELINE: metric(0.10, 0.05, 1.5, 40),
+          FULL: metric(0.12, 0.045, 1.6, 38),
+          NO_TREND: metric(0.11, 0.045, 1.55, 37),
+          NO_MOMENTUM: metric(0.115, 0.044, 1.57, 36),
+          NO_STRUCTURE: metric(0.105, 0.046, 1.52, 39),
+          NO_VOLUME: metric(0.15, 0.043, 1.8, 35),
+          NO_VOLATILITY: metric(0.13, 0.044, 1.65, 34),
+        },
+      },
+    },
+  });
+  const kr = result.markets.KR_STOCK;
+  assert.equal(kr.status, 'FROZEN_HYPOTHESIS');
+  assert.equal(kr.selectedVariant, 'NO_VOLUME');
+  assert.equal(kr.futureValidation.timeframeMatch, true);
+  assert.equal(kr.futureValidation.forwardAdmissionStatus, 'ELIGIBLE_FOR_UNUSED_FORWARD_OBSERVATION');
+  assert.equal(kr.futureValidation.allowedUse, 'UNUSED_OOS_OR_FORWARD_ONLY');
+  assert.equal(kr.futureValidation.observedHistoryMayCountAsForward, false);
+  assert.equal(kr.futureValidation.crossTimeframeCreditAllowed, false);
+  assert.equal(kr.futureValidation.automaticScannerAdoptionAllowed, false);
+  assert.equal(kr.futureValidation.automaticPromotionAllowed, false);
+  assert.equal(kr.futureValidation.executionAuthority, 'NONE');
+});
