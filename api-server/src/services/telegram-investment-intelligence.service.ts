@@ -370,7 +370,7 @@ function appButtons(alert: ScannerAlertCandidate, context: TelegramSignalDeliver
 
   return [
     [
-      { text: '🛒 주문 준비', url: order.toString() },
+      { text: '🛒 주문하기', url: order.toString() },
       { text: '📊 AI차트', url: chart.toString() },
     ],
     [
@@ -387,7 +387,10 @@ export function buildTelegramSignalIntelligenceInput(
   context: TelegramSignalDeliveryContext = {},
 ): TelegramAlertInput {
   const events = evidence.marketEvents ?? [];
-  const title = `${alert.symbol} | ${marketLabel(alert)} · ${strategyLabel(context)} · ${evidence.theme || '테마 미확인'}`;
+  const signal = alert.assetClass === 'coin_futures'
+    ? (alert.direction === 'SHORT' ? 'SHORT 신호' : 'LONG 신호')
+    : '매수 신호';
+  const title = `${alert.symbol} | ${marketLabel(alert)} · ${signal} · ${strategyLabel(context)} · ${evidence.theme || '테마 미확인'}`;
   const lines = [
     `🚨 진입가능 · ${alert.direction} · ${context.timeframe || 'N/A'}`,
     pricePlan(alert),
