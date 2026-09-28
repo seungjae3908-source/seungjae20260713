@@ -40,3 +40,14 @@ test('Futures V2 shadow workflow remains manual read-only post-freeze and canoni
   assert.doesNotMatch(text, /\bREAL_ORDER\w*\s*=\s*true\b/iu);
   assert.doesNotMatch(text, /\bPRIVATE_TRADING_API\w*\s*=\s*true\b/iu);
 });
+
+
+test('Futures V2 shadow retains enough 60m public history for delayed state consumption', async () => {
+  const script = await readFile(
+    new URL('../scripts/run-futures-v2-forward-shadow.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.match(script, /maxCandles:\s*20_000/u);
+  assert.match(script, /freezeMs\s*-\s*30\s*\*\s*DAY_MS/u);
+  assert.match(script, /canonicalFullCostProven:\s*false/u);
+});
