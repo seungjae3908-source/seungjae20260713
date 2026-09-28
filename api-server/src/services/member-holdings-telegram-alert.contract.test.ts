@@ -155,7 +155,7 @@ test('member holdings messages separate stock and crypto without exposing user i
   });
   assert.equal(stock.event.market, 'KR');
   assert.equal(stock.event.userId, 'user-a-secret-id');
-  assert.match(stock.alert.details ?? '', /👤 개인보유 · 국내주식/u);
+  assert.match(stock.alert.details ?? '', /👤 보유종목 · 국내주식/u);
   assert.match(stock.alert.details ?? '', /1차 81,000/u);
   assert.match(stock.alert.details ?? '', /공시/u);
   assert.equal((stock.alert.details ?? '').includes('user-a-secret-id'), false);
@@ -174,7 +174,7 @@ test('member holdings messages separate stock and crypto without exposing user i
   });
   assert.equal(crypto.event.market, 'CRYPTO_FUTURES');
   assert.equal(crypto.event.priority, 'CRITICAL');
-  assert.match(crypto.alert.details ?? '', /👤 개인보유 · 코인선물/u);
+  assert.match(crypto.alert.details ?? '', /👤 보유종목 · 코인선물/u);
   assert.match(crypto.alert.details ?? '', /AI 분석: N\/A/u);
   assert.equal((crypto.alert.details ?? '').includes('user-b-secret-id'), false);
 });
