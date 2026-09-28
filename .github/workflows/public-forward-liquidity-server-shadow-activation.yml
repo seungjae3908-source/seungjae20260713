@@ -1,0 +1,402 @@
+name: Public Forward Liquidity Server Shadow Activation
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/public-forward-liquidity-server-shadow-activation.yml'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-server-shadow-worker-v1.mjs'
+      - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-shadow-worker-v1.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-server-shadow-worker-v1.test.mjs'
+      - 'market-intelligence-sidecar/deploy/public-forward-liquidity-server-shadow-worker-v1.service'
+      - 'market-intelligence-sidecar/deploy/public-forward-liquidity-server-shadow-worker-v1.timer'
+      - 'market-intelligence-sidecar/deploy/public-forward-liquidity-server-shadow-worker-v1.env.example'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+      - 'api-server/scripts/production-ci-provenance.cjs'
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: read
+  statuses: read
+
+concurrency:
+  group: ${${ github.event_name == 'issue_comment' && 'public-forward-liquidity-server-shadow-production' || format('public-forward-liquidity-server-shadow-pr-{0}', github.event.pull_request.number || github.run_id) }}
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${${ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Verify exact pull request head
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${${ github.event.pull_request.head.sha }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Verify shadow worker syntax and focused tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-server-shadow-worker-v1.mjs
+          node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-shadow-worker-v1.mjs
+          node --test market-intelligence-sidecar/tests/public-forward-liquidity-server-shadow-worker-v1.test.mjs
+
+      - name: Verify activation workflow fail-closed contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          workflow='.github/workflows/public-forward-liquidity-server-shadow-activation.yml'
+          service='market-intelligence-sidecar/deploy/public-forward-liquidity-server-shadow-worker-v1.service'
+          timer='market-intelligence-sidecar/deploy/public-forward-liquidity-server-shadow-worker-v1.timer'
+          grep -Fq '/activate-public-forward-liquidity-server-shadow-v1 ' "$workflow"
+          grep -Fq 'environment: production' "$workflow"
+          grep -Fq 'SERVER_EVIDENCE_SHADOW_ONLY=true' "$service"
+          grep -Fq 'SERVER_EVIDENCE_SERVER_CANONICAL=false' "$service"
+          grep -Fq 'Persistent=false' "$timer"
+          grep -Fq 'RandomizedDelaySec=0' "$timer"
+          grep -Fq 'AccuracySec=1s' "$timer"
+          grep -Fq 'OnCalendar=*-*-* *:17:00 UTC' "$timer"
+          grep -Fq 'OnCalendar=*-*-* *:27:00 UTC' "$timer"
+          grep -Fq 'OnCalendar=*-*-* *:37:00 UTC' "$timer"
+          ! grep -Eq 'issues:[[:space:]]+write|contents:[[:space:]]+write|actions:[[:space:]]+write|deployments:[[:space:]]+write|id-token:[[:space:]]+write' "$workflow"
+          ! grep -Eq 'SERVER_EVIDENCE_SERVER_CANONICAL=true|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true' "$workflow" "$service"
+
+      - name: Zero-network worker self-check
+        run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-shadow-worker-v1.mjs self-check
+
+  activation-gate:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 23 &&
+      !github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/activate-public-forward-liquidity-server-shadow-v1 ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      target_sha: ${${ steps.command.outputs.target_sha }}
+      receipt_comment_id: ${${ steps.command.outputs.receipt_comment_id }}
+      binding_digest: ${${ steps.command.outputs.binding_digest }}
+      source_comment_id: ${${ steps.command.outputs.source_comment_id }}
+    steps:
+      - name: Parse exact OWNER activation command
+        id: command
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = String(context.payload.comment?.body ?? '').trim();
+            const parts = body.split(/\s+/u);
+            const command = '/activate-public-forward-liquidity-server-shadow-v1';
+            if (parts.length !== 4 || parts[0] !== command) {
+              core.setFailed('SERVER_SHADOW_ACTIVATION_COMMAND_INVALID');
+              return;
+            }
+            if (context.payload.comment?.user?.login !== context.repo.owner
+                || context.payload.comment?.author_association !== 'OWNER') {
+              core.setFailed('SERVER_SHADOW_ACTIVATION_OWNER_REQUIRED');
+              return;
+            }
+            if (context.payload.issue?.state !== 'open'
+                || context.payload.issue?.title !== 'Staging Readiness Control') {
+              core.setFailed('SERVER_SHADOW_RELEASE_CONTROL_INVALID');
+              return;
+            }
+            if (!/^[a-f0-9]{40}$/u.test(parts[1])) {
+              core.setFailed('SERVER_SHADOW_TARGET_SHA_INVALID');
+              return;
+            }
+            if (!/^[1-9][0-9]*$/u.test(parts[2])) {
+              core.setFailed('SERVER_SHADOW_RECEIPT_COMMENT_ID_INVALID');
+              return;
+            }
+            if (!/^[a-f0-9]{64}$/u.test(parts[3])) {
+              core.setFailed('SERVER_SHADOW_BINDING_DIGEST_INVALID');
+              return;
+            }
+            core.setOutput('target_sha', parts[1]);
+            core.setOutput('receipt_comment_id', parts[2]);
+            core.setOutput('binding_digest', parts[3]);
+            core.setOutput('source_comment_id', String(context.payload.comment.id));
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${${ steps.command.outputs.target_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require exact current main
+        shell: bash
+        env:
+          TARGET_SHA: ${${ steps.command.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          git fetch --no-tags --depth=1 origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$TARGET_SHA"
+
+      - name: Require Required CI 6/6 and exact Application CI provenance
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${${ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const provenance = require(process.env.GITHUB_WORKSPACE + '/api-server/scripts/production-ci-provenance.cjs');
+            if (JSON.stringify(required) !== JSON.stringify(provenance.REQUIRED_PRODUCTION_STATUSES)) {
+              core.setFailed('SERVER_SHADOW_REQUIRED_STATUS_CONTRACT_DRIFT');
+              return;
+            }
+            const targetSha = process.env.TARGET_SHA;
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: targetSha,
+              per_page: 100,
+            });
+            const evidence = provenance.inspectRequiredStatusEvidence(statuses);
+            if (!evidence.ok) {
+              core.setFailed('SERVER_SHADOW_REQUIRED_CI_REJECTED:' + evidence.reason);
+              return;
+            }
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: targetSha,
+              branch: 'main',
+              status: 'completed',
+              per_page: 100,
+            });
+            const run = runs.find((candidate) => Number(candidate.id) === evidence.runId);
+            const verified = provenance.evaluateProductionCiProvenance({
+              targetSha,
+              currentMainSha: targetSha,
+              statuses,
+              run,
+            });
+            if (!verified.ok) {
+              core.setFailed('SERVER_SHADOW_CI_PROVENANCE_REJECTED:' + verified.reason);
+              return;
+            }
+            core.info('SERVER_SHADOW_REQUIRED_CI_6_OF_6 run=' + verified.runId);
+
+      - name: Verify exact current-main V3 OWNER receipt remains authoritative
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${${ steps.command.outputs.target_sha }}
+          RECEIPT_COMMENT_ID: ${${ steps.command.outputs.receipt_comment_id }}
+          BINDING_DIGEST: ${${ steps.command.outputs.binding_digest }}
+        with:
+          script: |
+            const targetSha = process.env.TARGET_SHA;
+            const bindingDigest = process.env.BINDING_DIGEST;
+            const receiptId = Number(process.env.RECEIPT_COMMENT_ID);
+            const authorize = '/authorize-public-only-partial-fill-v3-schedule-activation';
+            const revoke = '/revoke-public-only-partial-fill-v3-schedule-activation';
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              per_page: 100,
+            });
+            comments.sort((a, b) => Number(a.id) - Number(b.id));
+            let latest = null;
+            for (const comment of comments) {
+              if (comment.user?.login !== context.repo.owner
+                  || comment.author_association !== 'OWNER') continue;
+              const parts = String(comment.body ?? '').trim().split(/\s+/u);
+              if (parts.length !== 3 || (parts[0] !== authorize && parts[0] !== revoke)) continue;
+              if (parts[1] !== targetSha || parts[2] !== bindingDigest) continue;
+              latest = {
+                action: parts[0] === authorize ? 'AUTHORIZE' : 'REVOKE',
+                id: Number(comment.id),
+                body: String(comment.body ?? '').trim(),
+              };
+            }
+            if (!latest) {
+              core.setFailed('SERVER_SHADOW_EXACT_MAIN_ACTIVATION_RECEIPT_MISSING');
+              return;
+            }
+            if (latest.action !== 'AUTHORIZE') {
+              core.setFailed('SERVER_SHADOW_ACTIVATION_RECEIPT_REVOKED');
+              return;
+            }
+            if (latest.id !== receiptId) {
+              core.setFailed('SERVER_SHADOW_RECEIPT_ID_NOT_LATEST:' + latest.id);
+              return;
+            }
+            const expected = authorize + ' ' + targetSha + ' ' + bindingDigest;
+            if (latest.body !== expected) {
+              core.setFailed('SERVER_SHADOW_ACTIVATION_RECEIPT_BODY_MISMATCH');
+              return;
+            }
+            core.info('SERVER_SHADOW_RECEIPT_ACCEPTED comment=' + latest.id);
+
+      - name: Verify activation binding digest and V1 safety
+        shell: bash
+        env:
+          EXPECTED_BINDING_DIGEST: ${${ steps.command.outputs.binding_digest }}
+        run: |
+          set -Eeuo pipefail
+          actual="$(node --input-type=module - <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          import { canonicalJson, sha256 } from './market-intelligence-sidecar/src/public-forward-liquidity-calibration.mjs';
+          const binding = JSON.parse(await readFile(
+            './market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json',
+            'utf8',
+          ));
+          process.stdout.write(sha256(canonicalJson(binding)));
+          NODE
+          )"
+          test "$actual" = "$EXPECTED_BINDING_DIGEST"
+          grep -Fq 'Environment=SERVER_EVIDENCE_SHADOW_ONLY=true' market-intelligence-sidecar/deploy/public-forward-liquidity-server-shadow-worker-v1.service
+          grep -Fq 'Environment=SERVER_EVIDENCE_SERVER_CANONICAL=false' market-intelligence-sidecar/deploy/public-forward-liquidity-server-shadow-worker-v1.service
+          grep -Fq 'Persistent=false' market-intelligence-sidecar/deploy/public-forward-liquidity-server-shadow-worker-v1.timer
+          node market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-shadow-worker-v1.mjs self-check
+
+  activate-production-shadow:
+    needs: activation-gate
+    if: needs.activation-gate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      SSH_HOST: ${${ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${${ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${${ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${${ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${${ secrets.PROD_SSH_KNOWN_HOSTS }}
+      TARGET_SHA: ${${ needs.activation-gate.outputs.target_sha }}
+      RECEIPT_COMMENT_ID: ${${ needs.activation-gate.outputs.receipt_comment_id }}
+      BINDING_DIGEST: ${${ needs.activation-gate.outputs.binding_digest }}
+      SOURCE_COMMENT_ID: ${${ needs.activation-gate.outputs.source_comment_id }}
+    steps:
+      - name: Validate Production SSH inputs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RECEIPT_COMMENT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$BINDING_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          [[ -n "$SSH_HOST" ]]
+          [[ -n "$SSH_USER" ]]
+          [[ -n "$SSH_PRIVATE_KEY" ]]
+
+      - name: Configure Production SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Install and enable SHADOW_ONLY timer without immediate capture
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q RECEIPT_COMMENT_ID=%q BINDING_DIGEST=%q' "$TARGET_SHA" "$RECEIPT_COMMENT_ID" "$BINDING_DIGEST")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          LIVE_DIR=/opt/stock-app
+          SERVICE_NAME=public-forward-liquidity-server-shadow-worker-v1.service
+          TIMER_NAME=public-forward-liquidity-server-shadow-worker-v1.timer
+          DEPLOY_SHA_FILE="$LIVE_DIR/.deploy/current-sha"
+          SERVICE_SOURCE="$LIVE_DIR/market-intelligence-sidecar/deploy/$SERVICE_NAME"
+          TIMER_SOURCE="$LIVE_DIR/market-intelligence-sidecar/deploy/$TIMER_NAME"
+          RUNNER="$LIVE_DIR/market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-shadow-worker-v1.mjs"
+
+          [[ -s "$DEPLOY_SHA_FILE" ]]
+          deployed_sha="$(tr -d '[:space:]' < "$DEPLOY_SHA_FILE")"
+          [[ "$deployed_sha" == "$TARGET_SHA" ]] || {
+            echo "SERVER_SHADOW_PRODUCTION_SHA_MISMATCH deployed=$deployed_sha target=$TARGET_SHA" >&2
+            exit 1
+          }
+          [[ -f "$SERVICE_SOURCE" && -f "$TIMER_SOURCE" && -f "$RUNNER" ]]
+          [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null | tr '[:upper:]' '[:lower:]')" == "yes" ]] || {
+            echo 'SERVER_SHADOW_NTP_NOT_SYNCHRONIZED' >&2
+            exit 1
+          }
+
+          if [[ "$(id -u)" == "0" ]]; then
+            SUDO=()
+          else
+            command -v sudo >/dev/null
+            sudo -n true
+            SUDO=(sudo -n)
+          fi
+
+          "${SUDO[@]}" install -d -m 0755 /etc/stock-app
+          tmp_env="$(mktemp)"
+          trap 'rm -f "$tmp_env"' EXIT
+          umask 077
+          {
+            printf 'SERVER_EVIDENCE_ACTIVATION_RECEIPT_COMMENT_ID=%s\n' "$RECEIPT_COMMENT_ID"
+            printf 'SERVER_EVIDENCE_ACTIVATION_RECEIPT_MAIN_SHA=%s\n' "$TARGET_SHA"
+            printf 'SERVER_EVIDENCE_EXPECTED_BINDING_DIGEST=%s\n' "$BINDING_DIGEST"
+          } > "$tmp_env"
+          "${SUDO[@]}" install -m 0600 "$tmp_env" /etc/stock-app/server-evidence-shadow-v1.env
+          "${SUDO[@]}" install -m 0644 "$SERVICE_SOURCE" "/etc/systemd/system/$SERVICE_NAME"
+          "${SUDO[@]}" install -m 0644 "$TIMER_SOURCE" "/etc/systemd/system/$TIMER_NAME"
+
+          SERVER_EVIDENCE_EXPECTED_BINDING_DIGEST="$BINDING_DIGEST" \
+            /usr/bin/env node "$RUNNER" self-check > /tmp/server-evidence-shadow-self-check.json
+          grep -Fq '"serverCanonical":false' /tmp/server-evidence-shadow-self-check.json
+          grep -Fq '"prospectiveSlotCredit":0' /tmp/server-evidence-shadow-self-check.json
+          grep -Fq '"executionAuthority":"NONE"' /tmp/server-evidence-shadow-self-check.json
+          rm -f /tmp/server-evidence-shadow-self-check.json
+
+          "${SUDO[@]}" systemctl daemon-reload
+          "${SUDO[@]}" systemctl enable --now "$TIMER_NAME"
+          "${SUDO[@]}" systemctl is-enabled --quiet "$TIMER_NAME"
+          "${SUDO[@]}" systemctl is-active --quiet "$TIMER_NAME"
+
+          # No manual service start. First capture must be a future natural timer event.
+          "${SUDO[@]}" systemctl list-timers "$TIMER_NAME" --all --no-pager
+          printf 'SERVER_SHADOW_ACTIVATED=true\n'
+          printf 'SERVER_CANONICAL=false\n'
+          printf 'ECONOMIC_CREDIT=0\n'
+          printf 'EXECUTION_AUTHORITY=NONE\n'
+          REMOTE
+
+      - name: Production SHADOW_ONLY activation summary
+        shell: bash
+        run: |
+          {
+            echo '## Server Evidence Shadow V1 activated'
+            echo "- target SHA: $TARGET_SHA"
+            echo "- activation receipt comment: $RECEIPT_COMMENT_ID"
+            echo "- source Release Control command: $SOURCE_COMMENT_ID"
+            echo '- timer: exact UTC :17/:27/:37, Persistent=false'
+            echo '- manual capture executed: false'
+            echo '- SERVER_CANONICAL=false'
+            echo '- economic/profitability credit: 0'
+            echo '- executionAuthority=NONE'
+            echo '- live/private/order authority granted: false'
+          } >> "$GITHUB_STEP_SUMMARY"
