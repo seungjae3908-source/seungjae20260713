@@ -150,7 +150,12 @@ function title(event: UserExecutionEvent): string {
   }
 }
 export function renderUserExecutionTelegramMessage(event: UserExecutionEvent): string {
-  const lines = [title(event), '', event.symbol];
+  const lane = event.executionMethod === 'AUTO_POLICY'
+    ? '🤖 자동매매'
+    : event.type === 'MANUAL_PORTFOLIO_ENTRY'
+      ? '👤 개인보유'
+      : '👤 개인 주문/체결';
+  const lines = [lane, title(event), '', event.symbol];
   if (event.quantity != null || event.price != null) lines.push(`${formatNumber(event.quantity)} × ${formatNumber(event.price)}`);
   if (event.maskedAccount) lines.push('', `계좌 ${event.maskedAccount}`);
   if (event.strategy) lines.push(`전략 ${event.strategy}`);
