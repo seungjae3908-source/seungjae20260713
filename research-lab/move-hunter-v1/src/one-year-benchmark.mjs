@@ -319,6 +319,53 @@ function summarizeTrades(trades, initialCapital) {
 }
 
 
+
+function summarizeReturnAttribution(trades) {
+  const grossAccountReturnSum = trades.reduce((sum, row) =>
+    sum + Number(row.grossAccountReturn ?? 0), 0);
+  const tradingCostAccountDragSum = trades.reduce((sum, row) =>
+    sum + Number(row.tradingCostAccountDrag ?? 0), 0);
+  const fundingAccountImpactSum = trades.reduce((sum, row) =>
+    sum + Number(row.fundingAccountImpact ?? 0), 0);
+  const netAccountReturnArithmeticSum = trades.reduce((sum, row) =>
+    sum + Number(row.accountReturn ?? 0), 0);
+  const exitReasons = {};
+  for (const trade of trades) {
+    const reason = String(trade.exitReason ?? 'UNKNOWN');
+    if (!exitReasons[reason]) {
+      exitReasons[reason] = { n: 0, netAccountReturnArithmeticSum: 0, grossAccountReturnSum: 0 };
+    }
+    exitReasons[reason].n += 1;
+    exitReasons[reason].netAccountReturnArithmeticSum += Number(trade.accountReturn ?? 0);
+    exitReasons[reason].grossAccountReturnSum += Number(trade.grossAccountReturn ?? 0);
+  }
+  return freeze({
+    tradeCount: trades.length,
+    grossAccountReturnSum,
+    tradingCostAccountDragSum,
+    fundingAccountImpactSum,
+    netAccountReturnArithmeticSum,
+    averageGrossTradeReturn: trades.length
+      ? trades.reduce((sum, row) => sum + Number(row.grossReturn ?? 0), 0) / trades.length
+      : 0,
+    averageRoundTripCostRate: trades.length
+      ? trades.reduce((sum, row) => sum + Number(row.roundTripCostRate ?? 0), 0) / trades.length
+      : 0,
+    averageFundingImpact: trades.length
+      ? trades.reduce((sum, row) => sum + Number(row.fundingImpact ?? 0), 0) / trades.length
+      : 0,
+    averageBarsObserved: trades.length
+      ? trades.reduce((sum, row) => sum + Number(row.barsObserved ?? 0), 0) / trades.length
+      : 0,
+    exitReasons: freeze(Object.fromEntries(
+      Object.entries(exitReasons)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([reason, value]) => [reason, freeze(value)]),
+    )),
+    accountingNote: 'ARITHMETIC_DIAGNOSTIC_NOT_COMPOUNDED_EQUITY_RETURN',
+  });
+}
+
 function summarizeTradeDimension(trades, key, initialCapital = 1_000_000) {
   const groups = new Map();
   for (const trade of trades) {
@@ -407,9 +454,15 @@ export function runOneYearDatasetBenchmark(dataset, {
       exitTs: trial.exitTs,
       initialRiskPct: trial.initialRiskPct,
       positionFraction,
+      grossReturn: trial.grossReturn,
+      roundTripCostRate: trial.grossReturn - trial.netReturn,
       rawNetReturn: trial.netReturn,
       fundingImpact: funding,
+      grossAccountReturn: trial.grossReturn * positionFraction,
+      tradingCostAccountDrag: (trial.grossReturn - trial.netReturn) * positionFraction,
+      fundingAccountImpact: funding * positionFraction,
       accountReturn,
+      barsObserved: trial.barsObserved,
       exitReason: trial.exitReason,
       decisionScore: decision?.score ?? null,
       decisionMaximumScore: decision?.maximumScore ?? null,
@@ -592,9 +645,15 @@ function runOneYearDatasetAblationRows(dataset, {
         exitTs: trial.exitTs,
         initialRiskPct: trial.initialRiskPct,
         positionFraction,
+        grossReturn: trial.grossReturn,
+        roundTripCostRate: trial.grossReturn - trial.netReturn,
         rawNetReturn: trial.netReturn,
         fundingImpact: funding,
+        grossAccountReturn: trial.grossReturn * positionFraction,
+        tradingCostAccountDrag: (trial.grossReturn - trial.netReturn) * positionFraction,
+        fundingAccountImpact: funding * positionFraction,
         accountReturn,
+        barsObserved: trial.barsObserved,
         exitReason: trial.exitReason,
         decisionScore: decision.score,
         decisionMaximumScore: decision.maximumScore,
@@ -652,6 +711,9 @@ function buildLaneBreakdown(rows, midpoint, initialCapital = 1_000_000) {
       regimes: summarizeTradeDimension(row.trades, 'regime', initialCapital),
       directionalRegimes: summarizeTradeDimension(row.trades, 'directionalRegime', initialCapital),
       volatilityRegimes: summarizeTradeDimension(row.trades, 'volatilityRegime', initialCapital),
+      attribution: summarizeReturnAttribution(row.trades),
+      firstHalfAttribution: summarizeReturnAttribution(firstHalfTrades),
+      secondHalfAttribution: summarizeReturnAttribution(secondHalfTrades),
     });
   });
 }
@@ -767,6 +829,7 @@ export function runFourMarketOneYearAblation({
       candidatePrefilterFrozenAcrossVariants: true,
       ablationScope: 'FINAL_DECISION_LAYER_ONLY',
       regimeAttributionAuthority: 'DIAGNOSTIC_ONLY',
+      returnAttributionAuthority: 'DIAGNOSTIC_ONLY',
       selectionFromThisWindowMayNotCountAsOos: true,
       automaticMarketSpecificAdoptionAllowed: false,
       economicSampleCredit: 0,
