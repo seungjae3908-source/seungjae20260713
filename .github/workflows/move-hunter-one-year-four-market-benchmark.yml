@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: move-hunter-one-year-\${{ github.event.pull_request.number || github.run_id }}
+  group: move-hunter-one-year-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -24,13 +24,13 @@ jobs:
       - name: Checkout exact PR head
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Verify immutable head
         shell: bash
         env:
-          EXPECTED_SHA: \${{ github.event.pull_request.head.sha || github.sha }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
@@ -65,7 +65,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: move-hunter-one-year-four-market-\${{ github.run_id }}
+          name: move-hunter-one-year-four-market-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/move-hunter-one-year/result.json
             ${{ runner.temp }}/move-hunter-one-year/result.md
