@@ -10,7 +10,6 @@ import {
 import { BitgetPublicClient } from '../../../market-prediction-lab/src/bitget-public-client.js';
 import {
   collectVisionFuturesDailyKlines,
-  collectVisionFuturesDailyArchiveKlines,
   collectVisionFuturesFunding,
 } from '../../../market-prediction-lab/src/binance-vision-futures-archive.js';
 import { collectBitgetCandles } from '../../../market-prediction-lab/src/bitget-candle-collector.js';
@@ -18,6 +17,7 @@ import { collectFundingRateHistory as collectBitgetFundingRateHistory } from '..
 import { replayLongCashRunnerPortfolio } from '../src/portfolio.mjs';
 import {
   ONE_DAY_MS,
+  ONE_YEAR_BENCHMARK_START_MS,
   ONE_YEAR_BENCHMARK_END_MS,
   ONE_YEAR_FULL_STACK_GATE_V1,
   aggregateFourHourCandlesToUtcDaily,
@@ -45,6 +45,14 @@ const COSTS = Object.freeze({
 
 function source(market, provider = '') {
   if (market === 'CRYPTO_SPOT') return {sourceId:'UPBIT_PUBLIC_4H_AGG_1D',originalSourceId:'UPBIT_PUBLIC_CANDLES',sourceType:'PUBLIC_MARKET_OHLCV_AGGREGATED',sourceUrl:'https://api.upbit.com/'};
+  if (market === 'CRYPTO_FUTURES' && String(provider).includes('composite')) {
+    return {
+      sourceId:'BINANCE_VISION_BITGET_COMPOSITE_1D',
+      originalSourceId:'PUBLIC_CROSS_VENUE_COMPOSITE',
+      sourceType:'PUBLIC_MARKET_OHLCV_CROSS_VENUE_COMPOSITE',
+      sourceUrl:'https://data.binance.vision/',
+    };
+  }
   if (market === 'CRYPTO_FUTURES' && String(provider).includes('vision')) {
     return {sourceId:'BINANCE_VISION_USDM_1D',originalSourceId:'BINANCE_VISION_CHECKSUM_ARCHIVE',sourceType:'PUBLIC_MARKET_OHLCV_ARCHIVE',sourceUrl:'https://data.binance.vision/'};
   }
@@ -116,42 +124,82 @@ function uniqueFunding(rows) {
   return [...map.values()].sort((a,b)=>a.timestamp-b.timestamp);
 }
 
-async function collectVisionHybridFutures({symbol,bitget,window}) {
-  const endDate=new Date(window.endTime);
-  const currentMonthStart=Date.UTC(endDate.getUTCFullYear(),endDate.getUTCMonth(),1);
-  const completedMonthEnd=currentMonthStart-1;
-  const [monthlyCandles,currentDailyCandles,monthlyFunding,currentFunding]=await Promise.all([
+async function collectVisionBitgetCompositeFutures({symbol,bitget,window}) {
+  const recent=await collectBitgetCandles({
+    client:bitget,
+    market:'CRYPTO_FUTURES',
+    symbol,
+    timeframe:'1d',
+    startTime:window.warmupStart,
+    endTime:window.endTime+1,
+    maxCandles:1_000,
+    productType:'usdt-futures',
+  });
+  const recentRows=runnerCandles(recent.candles).sort((a,b)=>a.ts-b.ts);
+  if(recentRows.length<60) throw new Error(`BITGET_RECENT_DAILY_TOO_SHORT:${recentRows.length}`);
+  const expectedLast=Math.floor(window.endTime/ONE_DAY_MS)*ONE_DAY_MS;
+  if(recentRows.at(-1).ts<expectedLast) throw new Error('BITGET_RECENT_END_COVERAGE_MISSING');
+  for(let i=1;i<recentRows.length;i+=1){
+    if(recentRows[i].ts-recentRows[i-1].ts!==ONE_DAY_MS) {
+      throw new Error(`BITGET_RECENT_DAILY_GAP:${recentRows[i-1].ts}->${recentRows[i].ts}`);
+    }
+  }
+
+  const crossoverTimestamp=recentRows[0].ts;
+  if(crossoverTimestamp<=window.warmupStart+30*ONE_DAY_MS) {
+    throw new Error('COMPOSITE_CROSSOVER_TOO_EARLY_FOR_ARCHIVE_VALUE');
+  }
+  const archiveEnd=crossoverTimestamp-1;
+
+  const [archiveCandles,archiveFunding,recentFunding]=await Promise.all([
     collectVisionFuturesDailyKlines({
-      symbol,startTime:window.warmupStart,endTime:completedMonthEnd,concurrency:4,
-    }),
-    collectVisionFuturesDailyArchiveKlines({
-      symbol,startTime:currentMonthStart,endTime:window.endTime,concurrency:8,
+      symbol,
+      startTime:window.warmupStart,
+      endTime:archiveEnd,
+      concurrency:4,
     }),
     collectVisionFuturesFunding({
-      symbol,startTime:window.warmupStart,endTime:completedMonthEnd,concurrency:4,
+      symbol,
+      startTime:window.warmupStart,
+      endTime:archiveEnd,
+      concurrency:4,
     }),
     collectBitgetFundingRateHistory({
-      client:bitget,symbol,startTime:currentMonthStart,endTime:window.endTime,
-      productType:'usdt-futures',pageSize:100,maxPages:4,
+      client:bitget,
+      symbol,
+      startTime:crossoverTimestamp,
+      endTime:window.endTime,
+      productType:'usdt-futures',
+      pageSize:100,
+      maxPages:20,
     }),
   ]);
+
   const tailFunding=strictFundingTailCoverage(
-    currentFunding.records,currentMonthStart,window.endTime,'BITGET_CURRENT_MONTH_FUNDING',
+    recentFunding.records,
+    crossoverTimestamp,
+    window.endTime,
+    'BITGET_RECENT_FUNDING',
   );
   const candles=strictDailyCoverage(
-    [...monthlyCandles.candles,...currentDailyCandles.candles],
-    'BINANCE_VISION_HYBRID',
+    [...archiveCandles.candles,...recentRows],
+    'BINANCE_VISION_BITGET_COMPOSITE',
     window,
   );
-  const fundingRates=uniqueFunding([...monthlyFunding.records,...tailFunding]);
+  const fundingRates=uniqueFunding([...archiveFunding.records,...tailFunding]);
+
   return {
-    market:'CRYPTO_FUTURES',symbol,candles,fundingRates,
-    provider:'binance-vision-usdm-monthly+daily',
-    fundingProvider:'binance-vision-usdm-monthly+bitget-public-v2-current-month',
+    market:'CRYPTO_FUTURES',
+    symbol,
+    candles,
+    fundingRates,
+    provider:'binance-vision-monthly+bitget-public-v2-recent-composite',
+    fundingProvider:'binance-vision-monthly+bitget-public-v2-recent-composite',
     providerFallbackUsed:true,
-    archiveChecksumVerified:monthlyCandles.checksumVerified===true
-      && currentDailyCandles.checksumVerified===true
-      && monthlyFunding.checksumVerified===true,
+    crossVenueComposite:true,
+    crossoverTimestamp,
+    archiveChecksumVerified:archiveCandles.checksumVerified===true
+      && archiveFunding.checksumVerified===true,
   };
 }
 
@@ -163,46 +211,38 @@ async function collectFutures(window) {
     let binanceFailure=null;
     try{
       const [klines,funding]=await Promise.all([
-        collectBinanceFuturesDailyKlines({client:binance,symbol,startTime:window.warmupStart,endTime:window.endTime}),
-        collectBinanceFuturesFundingRates({client:binance,symbol,startTime:window.warmupStart,endTime:window.endTime}),
+        collectBinanceFuturesDailyKlines({
+          client:binance,symbol,startTime:window.warmupStart,endTime:window.endTime,
+        }),
+        collectBinanceFuturesFundingRates({
+          client:binance,symbol,startTime:window.warmupStart,endTime:window.endTime,
+        }),
       ]);
       const candles=strictDailyCoverage(klines.candles,'BINANCE_API',window);
-      datasets.push({market:'CRYPTO_FUTURES',symbol,candles,fundingRates:funding.records,provider:klines.provider,fundingProvider:funding.provider,providerFallbackUsed:false});
+      datasets.push({
+        market:'CRYPTO_FUTURES',
+        symbol,
+        candles,
+        fundingRates:funding.records,
+        provider:klines.provider,
+        fundingProvider:funding.provider,
+        providerFallbackUsed:false,
+        crossVenueComposite:false,
+        archiveChecksumVerified:null,
+      });
       continue;
     }catch(error){
       binanceFailure=error instanceof Error?error.message:String(error);
     }
 
-    let archiveFailure=null;
     try{
-      const hybrid=await collectVisionHybridFutures({symbol,bitget,window});
-      datasets.push({...hybrid,primaryProviderFailure:binanceFailure});
-      continue;
-    }catch(error){
-      archiveFailure=error instanceof Error?error.message:String(error);
-    }
-
-    try{
-      const [klines,funding]=await Promise.all([
-        collectBitgetCandles({
-          client:bitget,market:'CRYPTO_FUTURES',symbol,timeframe:'1d',
-          startTime:window.warmupStart,endTime:window.endTime+1,maxCandles:1_000,productType:'usdt-futures',
-        }),
-        collectBitgetFundingRateHistory({
-          client:bitget,symbol,startTime:window.warmupStart,endTime:window.endTime,
-          productType:'usdt-futures',pageSize:100,maxPages:20,
-        }),
-      ]);
-      const candles=strictDailyCoverage(klines.candles,'BITGET_FALLBACK',window);
-      datasets.push({
-        market:'CRYPTO_FUTURES',symbol,candles,fundingRates:funding.records,
-        provider:klines.provider,fundingProvider:funding.provider,providerFallbackUsed:true,
-        primaryProviderFailure:binanceFailure,archiveProviderFailure:archiveFailure,
-      });
+      const composite=await collectVisionBitgetCompositeFutures({symbol,bitget,window});
+      datasets.push({...composite,primaryProviderFailure:binanceFailure});
     }catch(error){
       failures.push({
-        market:'CRYPTO_FUTURES',symbol,
-        error:`BINANCE_API: ${binanceFailure}; BINANCE_VISION: ${archiveFailure}; BITGET_FALLBACK: ${error instanceof Error?error.message:String(error)}`,
+        market:'CRYPTO_FUTURES',
+        symbol,
+        error:`BINANCE_API: ${binanceFailure}; CROSS_VENUE_COMPOSITE: ${error instanceof Error?error.message:String(error)}`,
       });
     }
   }
@@ -277,34 +317,11 @@ function marketRow(row){
   return `| ${row.market} | ${row.side} | ${row.status} | ${row.symbolCount} | ${row.candidateCount} | ${fixedN} | ${pct(fixedReturn)} | ${pct(fixedWr)} | ${fmt(fixedPf)} | ${pct(fixedDd)} | ${adaptiveN} | ${pct(adaptiveReturn)} | ${pct(adaptiveWr)} | ${fmt(adaptivePf)} | ${pct(adaptiveDd)} |`;
 }
 
-async function checksumAvailable(url){
-  try{
-    const response=await fetch(url,{method:'GET',headers:{'user-agent':'market-prediction-lab/one-year-benchmark'}});
-    if(!response.ok) return false;
-    const text=(await response.text()).trim();
-    return /^[a-f0-9]{64}\\s+/iu.test(text);
-  }catch{return false;}
-}
-
-async function resolveLatestCommonFuturesArchiveDay(){
-  const anchorDay=Math.floor(ONE_YEAR_BENCHMARK_END_MS/ONE_DAY_MS)*ONE_DAY_MS;
-  for(let offset=0;offset<=10;offset+=1){
-    const dayMs=anchorDay-offset*ONE_DAY_MS;
-    const day=new Date(dayMs).toISOString().slice(0,10);
-    const checks=await Promise.all(UNIVERSES.CRYPTO_FUTURES.map(symbol=>checksumAvailable(
-      `https://data.binance.vision/data/futures/um/daily/klines/${symbol}/1d/${symbol}-1d-${day}.zip.CHECKSUM`,
-    )));
-    if(checks.every(Boolean)) return dayMs;
-  }
-  throw new Error('NO_COMMON_BINANCE_VISION_DAILY_ARCHIVE_WITHIN_10_DAYS');
-}
-
 async function main(){
-  const latestCommonDay=await resolveLatestCommonFuturesArchiveDay();
-  const endTime=latestCommonDay+ONE_DAY_MS-1;
-  const startTime=latestCommonDay-(BENCHMARK_DAYS-1)*ONE_DAY_MS;
   const window=Object.freeze({
-    startTime,endTime,warmupStart:startTime-WARMUP_DAYS*ONE_DAY_MS,latestCommonDay,
+    startTime:ONE_YEAR_BENCHMARK_START_MS,
+    endTime:ONE_YEAR_BENCHMARK_END_MS,
+    warmupStart:ONE_YEAR_BENCHMARK_START_MS-WARMUP_DAYS*ONE_DAY_MS,
   });
   const [kr,us,spot,futures]=await Promise.all([
     collectStocks('KR_STOCK',window),collectStocks('US_STOCK',window),collectSpot(window),collectFutures(window),
@@ -322,15 +339,18 @@ async function main(){
     window:{
       startTime:window.startTime,endTime:window.endTime,
       start:new Date(window.startTime).toISOString(),end:new Date(window.endTime).toISOString(),
-      resolutionPolicy:'LATEST_COMMON_CHECKSUM_VERIFIED_BINANCE_VISION_DAILY_ARCHIVE',
+      resolutionPolicy:'FIXED_2025_09_28_TO_2026_09_27',
     },
     warmupStart:new Date(window.warmupStart).toISOString(),
     universes:UNIVERSES,results,providerFailures:failures,
     providers:{
       futures:futures.datasets.map(x=>({
         symbol:x.symbol,provider:x.provider,fundingProvider:x.fundingProvider??null,
-        providerFallbackUsed:x.providerFallbackUsed===true,archiveChecksumVerified:x.archiveChecksumVerified??null,
-        primaryProviderFailure:x.primaryProviderFailure??null,archiveProviderFailure:x.archiveProviderFailure??null,
+        providerFallbackUsed:x.providerFallbackUsed===true,
+        crossVenueComposite:x.crossVenueComposite===true,
+        crossoverTimestamp:x.crossoverTimestamp??null,
+        archiveChecksumVerified:x.archiveChecksumVerified??null,
+        primaryProviderFailure:x.primaryProviderFailure??null,
       })),
     },
     truth:{historicalReplayOnly:true,fullStackBacktestBlocked:true,fullStackBlocker:ONE_YEAR_FULL_STACK_GATE_V1.blocker,
