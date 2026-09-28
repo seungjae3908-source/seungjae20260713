@@ -10,7 +10,12 @@ import {
   fanoutMemberHoldingScannerAlert,
   type MemberHoldingProducerSummary,
 } from './member-holdings-telegram-producer.service';
-import type { ScannerAlertCandidate, ScannerAssetClass } from './scanner-signal.types';
+import type { ScannerAlertCandidate } from './scanner-signal.types';
+import {
+  telegramMarketRoomChatId,
+  telegramMarketRoomForLane,
+  type TelegramMarketRoom,
+} from './telegram-market-room.service';
 import { markTelegramSignalAnnounced } from './telegram-signal-followup.service';
 import {
   sendTelegramAlert,
@@ -28,7 +33,7 @@ export type ScannerTelegramSender = (
   input: TelegramAlertInput,
 ) => Promise<TelegramAlertResult>;
 
-export type ScannerTelegramRoom = 'STOCK_ROOM' | 'CRYPTO_ROOM';
+export type ScannerTelegramRoom = TelegramMarketRoom;
 export type ScannerTelegramRoomResolver = (room: ScannerTelegramRoom) => string | null;
 export type ScannerMemberHoldingProducer = (
   alert: ScannerAlertCandidate,
@@ -61,12 +66,15 @@ function formatPlanPercent(value: number | null): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
 }
 
+function signalLabel(alert: ScannerAlertCandidate): string {
+  if (alert.assetClass === 'coin_futures') return alert.direction === 'SHORT' ? 'SHORT' : 'LONG';
+  return '매수';
+}
+
 function inferredAction(alert: ScannerAlertCandidate): string {
-  if (alert.action && alert.action !== 'NONE') return alert.action;
-  if (alert.assetClass === 'coin_futures') return alert.direction;
-  if (alert.direction === 'LONG') return 'BUY';
-  if (alert.direction === 'SHORT') return 'SELL';
-  return 'NONE';
+  if (alert.assetClass === 'coin_futures') return alert.direction === 'SHORT' ? 'SHORT' : 'LONG';
+  if (alert.action === 'SELL' || alert.direction === 'SHORT') return '매도';
+  return '매수';
 }
 
 function formatTargetPlan(alert: ScannerAlertCandidate): string {
@@ -85,7 +93,7 @@ function tradePlanLines(alert: ScannerAlertCandidate): string[] {
     ? '실행 상태 확인 필요'
     : '주문 미제출 · 거래소 요청 없음';
   return [
-    `신호 ${alert.direction} · 행동 ${action}`,
+    `신호 ${signalLabel(alert)} · 행동 ${action}`,
     `진입 ${entry}`,
     `익절 ${formatTargetPlan(alert)}`,
     `손절 ${stop} (${formatPlanPercent(planPercent(alert, alert.stopLoss))})`,
@@ -121,7 +129,7 @@ export function scannerInAppNotificationInput(
   return {
     memberId,
     type: alert.direction === 'SHORT' ? 'ai_sell_signal' : 'ai_strong_buy',
-    title: `검색기 ${alert.direction} · ${alert.symbol}`,
+    title: `검색기 ${signalLabel(alert)} 신호 · ${alert.symbol}`,
     body: `${lane} · ${alert.market}${reasons.length ? ` · 근거 ${reasons.join(' / ')}` : ''} · 실제 주문/체결 아님`,
     url: '/scanner',
     app: true,
@@ -162,17 +170,18 @@ async function runScannerInAppNotification(
   }
 }
 
-export function scannerTelegramRoomFor(assetClass: ScannerAssetClass): ScannerTelegramRoom {
-  return assetClass === 'stock' ? 'STOCK_ROOM' : 'CRYPTO_ROOM';
+export function scannerTelegramRoomFor(
+  alert: Pick<ScannerAlertCandidate, 'assetClass' | 'market'>,
+): ScannerTelegramRoom {
+  if (alert.assetClass === 'coin_spot') return telegramMarketRoomForLane('CRYPTO_SPOT');
+  if (alert.assetClass === 'coin_futures') return telegramMarketRoomForLane('CRYPTO_FUTURES');
+  return telegramMarketRoomForLane(
+    alert.market.trim().toUpperCase().includes('US') ? 'US_STOCK' : 'KR_STOCK',
+  );
 }
 
 export function scannerTelegramRoomChatId(room: ScannerTelegramRoom): string | null {
-  switch (room) {
-    case 'STOCK_ROOM':
-      return process.env.TELEGRAM_STOCK_CHAT_ID?.trim() || null;
-    case 'CRYPTO_ROOM':
-      return process.env.TELEGRAM_CRYPTO_CHAT_ID?.trim() || null;
-  }
+  return telegramMarketRoomChatId(room, process.env, { allowLegacyFallback: true });
 }
 
 export function scannerTelegramInput(
@@ -181,7 +190,7 @@ export function scannerTelegramInput(
 ): TelegramAlertInput | null {
   if (alert.state !== 'APPROVAL_PENDING' && alert.state !== 'READY_FOR_APPROVAL') return null;
 
-  const destinationChatId = resolveRoomChatId(scannerTelegramRoomFor(alert.assetClass));
+  const destinationChatId = resolveRoomChatId(scannerTelegramRoomFor(alert));
   if (!destinationChatId) return null;
 
   if (alert.assetClass === 'stock') {
