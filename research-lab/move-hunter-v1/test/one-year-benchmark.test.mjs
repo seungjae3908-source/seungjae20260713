@@ -106,5 +106,7 @@ test('factor ablation keeps all five family-removal variants research-only', () 
     for (const id of ['NO_TREND', 'NO_MOMENTUM', 'NO_STRUCTURE', 'NO_VOLUME', 'NO_VOLATILITY']) {
       assert.ok(Object.hasOwn(result.markets[market].deltas, id));
     }
+    assert.equal(result.markets[market].sourceTimeframeIdentityExact, true);
+    assert.deepEqual(result.markets[market].sourceTimeframes, ['1D']);
   }
 });
