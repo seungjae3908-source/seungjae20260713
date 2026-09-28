@@ -152,10 +152,12 @@ test('rich signal card uses evidence, AI explanation, news links and read-only a
     destinationChatId: 'stock-room',
   }, alert(), evidence, { timeframe: '15m', strategyMode: 'scalping' });
 
+  assert.match(result.details ?? '', /🟢 신호: 매수 · 15m/);
   assert.match(result.details ?? '', /거래량 증가/);
-  assert.match(result.title ?? '', /005930 \| 국내 · 매수 신호 · 단타 · 반도체/);
+  assert.match(result.title ?? '', /005930 \| 국내주식 · 매수 신호 · 단타 · 반도체/);
   assert.match(result.details ?? '', /1차 진입 111 · 기본 60%/);
   assert.match(result.details ?? '', /2차 진입 109 · 기본 40%/);
+  assert.match(result.details ?? '', /주문하기를 누르면 앱에서 최신 시장데이터로 다시 검증합니다/);
   assert.match(result.details ?? '', /AI:/);
   assert.match(result.details ?? '', /신규 공급계약 공시/);
   assert.match(result.details ?? '', /AI 요약/);
