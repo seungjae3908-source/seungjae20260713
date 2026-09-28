@@ -1,0 +1,121 @@
+name: Read Move Hunter Server Result
+
+on:
+  push:
+    branches:
+      - ops/read-move-hunter-result-20260928
+    paths:
+      - '.github/workflows/read-move-hunter-server-result.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  read-result:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: staging
+    env:
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+      RESULT_PATH: /var/lib/backtest-worker/results/server-fast-e0256c55ec61f26f4749be6a5e0d361f372aba79/result.json
+    steps:
+      - name: Configure pinned SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_HOST"
+          test -n "$STAGING_SSH_USER"
+          test -n "$STAGING_SSH_PRIVATE_KEY"
+          test -n "$STAGING_SSH_KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Read existing isolated result summary only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'RESULT_PATH=%q bash -s' "$RESULT_PATH")"
+          ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT"             -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes             "$STAGING_SSH_USER@$STAGING_SSH_HOST" "$remote_env" <<'REMOTE'
+          set -Eeuo pipefail
+          test -s "$RESULT_PATH"
+          stat -c 'RESULT_MTIME=%y RESULT_SIZE=%s' "$RESULT_PATH"
+          RESULT_PATH="$RESULT_PATH" node <<'NODE'
+          const fs = require('node:fs');
+          const p = process.env.RESULT_PATH;
+          const r = JSON.parse(fs.readFileSync(p, 'utf8'));
+          const slim = {
+            schemaVersion: r.schemaVersion,
+            generatedAt: r.generatedAt,
+            researchSha: r.researchSha,
+            status: r.status,
+            strategy: r.strategy,
+            collection: r.collection,
+            markets: Object.fromEntries(Object.entries(r.markets ?? {}).map(([market,row]) => [market,{
+              performance: row.performance,
+              daily: row.daily ? {
+                dayBoundary: row.daily.dayBoundary,
+                metricType: row.daily.metricType,
+                totalCalendarDays: row.daily.totalCalendarDays,
+                tradingDays: row.daily.tradingDays,
+                noExitDays: row.daily.noExitDays,
+                positiveDays: row.daily.positiveDays,
+                negativeDays: row.daily.negativeDays,
+                flatDays: row.daily.flatDays,
+                hit3PctDays: row.daily.hit3PctDays,
+                hit5PctDays: row.daily.hit5PctDays,
+                hit10PctDays: row.daily.hit10PctDays,
+                hit3PctRateTrading: row.daily.hit3PctRateTrading,
+                hit5PctRateTrading: row.daily.hit5PctRateTrading,
+                hit10PctRateTrading: row.daily.hit10PctRateTrading,
+                averageTradingDayReturn: row.daily.averageTradingDayReturn,
+                medianTradingDayReturn: row.daily.medianTradingDayReturn,
+                bestDay: row.daily.bestDay,
+                worstDay: row.daily.worstDay,
+                maxConsecutiveNegativeDays: row.daily.maxConsecutiveNegativeDays,
+                realizedWindowTotalReturn: row.daily.realizedWindowTotalReturn,
+                postWindowExitCount: row.daily.postWindowExitCount,
+              } : null,
+            }])),
+            combined: r.combined?.daily ? {
+              performance: r.combined.performance,
+              daily: {
+                totalCalendarDays: r.combined.daily.totalCalendarDays,
+                tradingDays: r.combined.daily.tradingDays,
+                noExitDays: r.combined.daily.noExitDays,
+                positiveDays: r.combined.daily.positiveDays,
+                negativeDays: r.combined.daily.negativeDays,
+                flatDays: r.combined.daily.flatDays,
+                hit3PctDays: r.combined.daily.hit3PctDays,
+                hit5PctDays: r.combined.daily.hit5PctDays,
+                hit10PctDays: r.combined.daily.hit10PctDays,
+                hit3PctRateTrading: r.combined.daily.hit3PctRateTrading,
+                hit5PctRateTrading: r.combined.daily.hit5PctRateTrading,
+                hit10PctRateTrading: r.combined.daily.hit10PctRateTrading,
+                averageTradingDayReturn: r.combined.daily.averageTradingDayReturn,
+                medianTradingDayReturn: r.combined.daily.medianTradingDayReturn,
+                bestDay: r.combined.daily.bestDay,
+                worstDay: r.combined.daily.worstDay,
+                maxConsecutiveNegativeDays: r.combined.daily.maxConsecutiveNegativeDays,
+                realizedWindowTotalReturn: r.combined.daily.realizedWindowTotalReturn,
+                postWindowExitCount: r.combined.daily.postWindowExitCount,
+              },
+            } : null,
+            evidenceBoundary: r.evidenceBoundary,
+          };
+          console.log('RESULT_SUMMARY_JSON_BEGIN');
+          console.log(JSON.stringify(slim, null, 2));
+          console.log('RESULT_SUMMARY_JSON_END');
+          NODE
+          echo 'READ_ONLY=true'
+          echo 'PRODUCTION_APP_MUTATION=false'
+          echo 'PM2_MUTATION=false'
+          echo 'DATABASE_MUTATION=false'
+          echo 'REAL_ORDERS=0'
+          REMOTE
