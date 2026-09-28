@@ -104,6 +104,7 @@ test('rich signal card uses evidence, AI explanation, news links and read-only a
     aiExplanation: '공개 데이터 기준 추세와 거래량 근거가 있으나 손절선 이탈 시 무효입니다.',
     aiModel: 'test-model',
     aiAsOf: '2026-08-21T04:30:00.000Z',
+    displayName: '삼성전자',
     theme: '반도체',
     news: [{
       title: '반도체 업황 관련 공개 뉴스',
@@ -154,10 +155,10 @@ test('rich signal card uses evidence, AI explanation, news links and read-only a
 
   assert.match(result.details ?? '', /🟢 신호: 매수 · 15m/);
   assert.match(result.details ?? '', /거래량 증가/);
-  assert.match(result.title ?? '', /005930 \| 국내주식 · 매수 신호 · 단타 · 반도체/);
+  assert.match(result.title ?? '', /삼성전자\(005930\) \/ 국내주식 · 단타 · 반도체/);
   assert.match(result.details ?? '', /1차 진입 111 · 기본 60%/);
   assert.match(result.details ?? '', /2차 진입 109 · 기본 40%/);
-  assert.match(result.details ?? '', /주문하기를 누르면 앱에서 최신 시장데이터로 다시 검증합니다/);
+  assert.equal((result.details ?? '').includes('주문하기를 누르면 앱에서 최신 시장데이터로 다시 검증합니다'), false);
   assert.match(result.details ?? '', /AI:/);
   assert.match(result.details ?? '', /신규 공급계약 공시/);
   assert.match(result.details ?? '', /AI 요약/);
@@ -165,10 +166,10 @@ test('rich signal card uses evidence, AI explanation, news links and read-only a
   assert.equal(result.linkPreview, false);
   assert.ok(result.photo?.bytes instanceof Uint8Array);
   assert.equal(result.buttons?.flat().some((button) => button.text.includes('AI차트')), true);
-  assert.equal(result.buttons?.flat().some((button) => button.text.includes('주문하기')), true);
-  assert.equal(result.buttons?.flat().some((button) => button.text.includes('뉴스·공시')), true);
+  assert.equal(result.buttons?.flat().some((button) => button.text.includes('🛒 주문')), true);
+  assert.equal(result.buttons?.flat().some((button) => button.text.includes('뉴스·공시')), false);
   assert.equal(result.buttons?.flat().some((button) => button.text.includes('공시') && button.text.includes('원문')), true);
-  const orderButton = result.buttons?.flat().find((button) => button.text.includes('주문하기'));
+  const orderButton = result.buttons?.flat().find((button) => button.text.includes('🛒 주문'));
   assert.ok(orderButton);
   const orderUrl = new URL(orderButton!.url);
   assert.equal(orderUrl.pathname, '/telegram-order');
@@ -177,6 +178,17 @@ test('rich signal card uses evidence, AI explanation, news links and read-only a
   assert.equal(orderUrl.searchParams.get('strategyMode'), 'scalping');
   assert.equal(orderUrl.searchParams.get('orderPreparation'), '1');
   assert.equal(orderUrl.searchParams.get('source'), 'telegram');
+  const chartButton = result.buttons?.flat().find((button) => button.text.includes('AI차트'));
+  assert.ok(chartButton);
+  const chartUrl = new URL(chartButton!.url);
+  assert.equal(chartUrl.pathname, '/ai-chart');
+  assert.equal(chartUrl.searchParams.get('assetType'), 'stock');
+  assert.equal(chartUrl.searchParams.get('market'), 'KR');
+  assert.equal(chartUrl.searchParams.get('symbol'), '005930');
+  assert.equal(chartUrl.searchParams.get('ticker'), '005930');
+  assert.equal(chartUrl.searchParams.get('timeframe'), '15m');
+  assert.equal(chartUrl.searchParams.get('strategyMode'), 'scalping');
+  assert.equal(chartUrl.searchParams.get('name'), '삼성전자');
   for (const forbidden of ['userId', 'memberId', 'chatId', 'accountId', 'signalId']) {
     assert.equal(orderUrl.searchParams.has(forbidden), false);
   }
