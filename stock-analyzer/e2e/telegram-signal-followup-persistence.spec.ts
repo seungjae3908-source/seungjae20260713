@@ -229,6 +229,42 @@ test('rearmed signal restores the order button only after price returns inside t
   });
 });
 
+test('weakened active signal becomes watch-only and loses the order button', async () => {
+  await withFollowupEnv(async () => {
+    const signalId = 'signal-weakened-order-guard';
+    const repository = new InMemoryTelegramSignalFollowupRepository();
+    await markTelegramSignalAnnounced(
+      announcedAlert(signalId),
+      ANNOUNCED_AT,
+      repository,
+      {
+        messageId: 71,
+        messageKind: 'TEXT',
+        renderedText: '<b>삼성전자(005930) / 국내주식 · 단타 · 반도체</b>\n🟢 신호: 매수 · 15m',
+      },
+    );
+    clearTelegramSignalFollowupState();
+
+    const edits: Array<{ text: string; buttons?: unknown }> = [];
+    await deliverScannerTelegramFollowups(
+      [followupCard(signalId, { signalState: 'WEAKENED', price: 101, targets: [110], stopLoss: 95 })],
+      async () => ({ ok: true, attempts: 1 }),
+      ANNOUNCED_AT + 1_000,
+      repository,
+      async (input) => {
+        edits.push({ text: input.text, buttons: input.buttons });
+        return { ok: true, attempts: 1 };
+      },
+    );
+
+    expect(edits).toHaveLength(1);
+    expect(edits[0].text).toContain('관망');
+    expect(edits[0].text).toContain('신호 근거가 약화');
+    expect(JSON.stringify(edits[0].buttons)).not.toContain('🛒 주문');
+    expect(JSON.stringify(edits[0].buttons)).toContain('📊 AI차트');
+  });
+});
+
 test('invalidated signal edits the original message and removes the order button while keeping AI chart access', async () => {
   await withFollowupEnv(async () => {
     const signalId = 'signal-invalid-order-guard';
