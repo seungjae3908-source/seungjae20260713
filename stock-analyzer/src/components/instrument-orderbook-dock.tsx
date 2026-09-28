@@ -15,7 +15,7 @@ export type OrderbookAssetClass = 'stock' | 'crypto_spot' | 'crypto_futures';
 export type OrderbookMarket = 'KR' | 'US' | 'UPBIT' | 'BITGET';
 type OrderbookStatus = 'ready' | 'partial' | 'stale' | 'unavailable' | 'invalid';
 type Currency = 'KRW' | 'USD' | 'USDT';
-type Provider = 'kiwoom' | 'upbit' | 'bitget' | null;
+type Provider = 'kiwoom' | 'toss' | 'upbit' | 'bitget' | null;
 
 type Level = {
   rank: number;
@@ -80,9 +80,9 @@ function parseLevel(value: unknown): Level | null {
   const cumulativeQuantity = finite(row.cumulativeQuantity);
   if (
     rank == null || price == null || quantity == null || cumulativeQuantity == null
-    || rank < 1 || price <= 0 || quantity <= 0 || cumulativeQuantity < quantity
+    || !Number.isInteger(rank) || rank < 1 || price <= 0 || quantity <= 0 || cumulativeQuantity < quantity
   ) return null;
-  return { rank: Math.trunc(rank), price, quantity, cumulativeQuantity };
+  return { rank, price, quantity, cumulativeQuantity };
 }
 
 function parsePayload(value: unknown): Payload {
@@ -119,7 +119,11 @@ function parsePayload(value: unknown): Payload {
     }
     rows.sort((left, right) => side === 'ask' ? left.price - right.price : right.price - left.price);
     let cumulative = 0;
-    for (const item of rows) {
+    for (let index = 0; index < rows.length; index += 1) {
+      const item = rows[index];
+      if (item.rank !== index + 1) {
+        throw new Error('ORDERBOOK_LEVELS_CORRUPT');
+      }
       cumulative += item.quantity;
       if (Math.abs(item.cumulativeQuantity - cumulative) > 1e-8) {
         throw new Error('ORDERBOOK_LEVELS_CORRUPT');
@@ -174,8 +178,21 @@ function parsePayload(value: unknown): Payload {
     throw new Error('ORDERBOOK_LEVELS_CORRUPT');
   }
   const spread = derivedSpread ?? declaredSpread;
+  const declaredSpreadPct = finite(row.spreadPct);
+  const midpoint = bestAsk != null && bestBid != null ? (bestAsk + bestBid) / 2 : null;
+  const derivedSpreadPct = spread != null && midpoint != null && midpoint > 0
+    ? (spread / midpoint) * 100
+    : null;
+  if (
+    declaredSpreadPct != null
+    && derivedSpreadPct != null
+    && Math.abs(declaredSpreadPct - derivedSpreadPct) > 1e-4
+  ) {
+    throw new Error('ORDERBOOK_LEVELS_CORRUPT');
+  }
+  const spreadPct = derivedSpreadPct ?? declaredSpreadPct;
 
-  const provider: Provider = row.provider === 'kiwoom' || row.provider === 'upbit' || row.provider === 'bitget'
+  const provider: Provider = row.provider === 'kiwoom' || row.provider === 'toss' || row.provider === 'upbit' || row.provider === 'bitget'
     ? row.provider
     : null;
   const providerTimestamp = cleanText(row.providerTimestamp);
@@ -189,7 +206,7 @@ function parsePayload(value: unknown): Payload {
     freshness,
     asks, bids, bestAsk, bestBid,
     spread,
-    spreadPct: finite(row.spreadPct),
+    spreadPct,
     imbalance: finite(row.imbalance),
     warnings,
     reason: cleanText(row.reason),
@@ -260,6 +277,7 @@ function formatTime(value: string | null | undefined): string {
 
 function providerLabel(provider: Provider): string {
   if (provider === 'kiwoom') return 'Kiwoom read-only';
+  if (provider === 'toss') return 'Toss read-only';
   if (provider === 'upbit') return 'Upbit public REST';
   if (provider === 'bitget') return 'Bitget public REST';
   return 'Provider unavailable';

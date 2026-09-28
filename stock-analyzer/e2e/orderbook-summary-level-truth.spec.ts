@@ -36,7 +36,7 @@ async function serve(page: Page, body: Record<string, unknown>) {
   await page.route('**/api/orderbook**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
   });
-  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
   return page.getByRole('dialog', { name: /005930 호가창/ });
 }
@@ -57,6 +57,22 @@ test('fails closed when declared spread disagrees with canonical best ask and bi
   await expect(dialog.getByText('ORDERBOOK_LEVELS_CORRUPT')).toBeVisible();
   await expect(dialog.getByTestId('ask-levels')).toBeEmpty();
   await expect(dialog.getByTestId('bid-levels')).toBeEmpty();
+});
+
+test('fails closed when declared spread percentage disagrees with canonical top of book', async ({ page }) => {
+  const dialog = await serve(page, { ...readyFixture, spreadPct: 99 });
+
+  await expect(dialog.getByText('Invalid', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('ORDERBOOK_LEVELS_CORRUPT')).toBeVisible();
+  await expect(dialog.getByTestId('ask-levels')).toBeEmpty();
+  await expect(dialog.getByTestId('bid-levels')).toBeEmpty();
+});
+
+test('preserves canonical Toss provider identity in the read-only orderbook UI', async ({ page }) => {
+  const dialog = await serve(page, { ...readyFixture, provider: 'toss' });
+
+  await expect(dialog.getByText(/Toss read-only/)).toBeVisible();
+  await expect(dialog.getByText(/Provider unavailable/)).toHaveCount(0);
 });
 
 test('preserves crossed-book diagnosis even when a stale declared spread disagrees', async ({ page }) => {
