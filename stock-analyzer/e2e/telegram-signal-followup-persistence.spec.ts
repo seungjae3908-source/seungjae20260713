@@ -44,7 +44,7 @@ function followupCard(
     symbol: '005930',
     name: '삼성전자',
     market: 'KR',
-    price: options.price ?? 101,
+    price: options.price ?? 105,
     signalState: options.signalState ?? 'APPROVAL_PENDING',
     dataState: 'complete',
     strongSignalEligible: true,
@@ -168,7 +168,7 @@ test('public signal lifecycle edits the original Telegram message instead of cre
     expect(edits[0].messageId).toBe(42);
     expect(edits[0].text).toContain('TP1 105 ✅');
     expect(edits[0].text).toContain('현재 상태');
-    expect(JSON.stringify(edits[0].buttons)).toContain('🛒 주문');
+    expect(JSON.stringify(edits[0].buttons)).not.toContain('🛒 주문');
     expect(JSON.stringify(edits[0].buttons)).toContain('📊 AI차트');
     expect(JSON.stringify(edits[0].buttons)).toContain('/ai-chart');
 
@@ -177,6 +177,53 @@ test('public signal lifecycle edits the original Telegram message instead of cre
     expect(stored.telegramMessageKind).toBe('TEXT');
     expect(stored.baseMessageText).toContain('진입가능');
     expect(stored.reachedTargets).toEqual([0]);
+  });
+});
+
+test('rearmed signal restores the order button only after price returns inside the live entry range', async () => {
+  await withFollowupEnv(async () => {
+    const signalId = 'signal-rearmed-order-guard';
+    const repository = new InMemoryTelegramSignalFollowupRepository();
+    await markTelegramSignalAnnounced(
+      announcedAlert(signalId),
+      ANNOUNCED_AT,
+      repository,
+      {
+        messageId: 66,
+        messageKind: 'TEXT',
+        renderedText: '<b>삼성전자(005930) / 국내주식 · 단타 · 반도체</b>\n🟢 신호: 매수 · 15m',
+      },
+    );
+
+    const edits: Array<{ text: string; buttons?: unknown }> = [];
+    await deliverScannerTelegramFollowups(
+      [followupCard(signalId, { signalState: 'ARMED', price: 103, targets: [110], stopLoss: 95 })],
+      async () => ({ ok: true, attempts: 1 }),
+      ANNOUNCED_AT + 1_000,
+      repository,
+      async (input) => {
+        edits.push({ text: input.text, buttons: input.buttons });
+        return { ok: true, attempts: 1 };
+      },
+    );
+    expect(edits.at(-1)?.text).toContain('관망');
+    expect(JSON.stringify(edits.at(-1)?.buttons)).not.toContain('🛒 주문');
+
+    clearTelegramSignalFollowupState();
+    await deliverScannerTelegramFollowups(
+      [followupCard(signalId, { signalState: 'ENTRY_ZONE', price: 101, targets: [110], stopLoss: 95 })],
+      async () => ({ ok: true, attempts: 1 }),
+      ANNOUNCED_AT + 2_000,
+      repository,
+      async (input) => {
+        edits.push({ text: input.text, buttons: input.buttons });
+        return { ok: true, attempts: 1 };
+      },
+    );
+
+    expect(edits.at(-1)?.text).toContain('매수 활성');
+    expect(JSON.stringify(edits.at(-1)?.buttons)).toContain('🛒 주문');
+    expect(JSON.stringify(edits.at(-1)?.buttons)).toContain('📊 AI차트');
   });
 });
 
