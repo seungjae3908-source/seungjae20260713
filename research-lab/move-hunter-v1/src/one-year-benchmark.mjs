@@ -648,6 +648,7 @@ export function runFourMarketOneYearAblation({
     }
   }
 
+  const midpoint = startTime + Math.floor((endTime - startTime) / 2);
   const markets = {};
   for (const market of SUPPORTED_MARKETS) {
     const marketRows = rows.filter((row) => row.market === market);
