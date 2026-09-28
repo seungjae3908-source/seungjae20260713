@@ -296,7 +296,7 @@ jobs:
           test "$(grep -Ec "requiredRun[.]name !== 'Application CI'" "$workflow")" -eq 1
           test "$(grep -Ec "requiredRun[.]path !== '[.]github/workflows/futures-public-network-smoke[.]yml'" "$workflow")" -eq 1
           test "$(grep -Ec 'Number[(]requiredRun[.]workflow_id[)] !== 325169344' "$workflow")" -eq 1
-          test "$(grep -Ec "requiredRun[.]event !== 'push'" "$workflow")" -eq 1
+          grep -Fq "!['push', 'workflow_dispatch'].includes(requiredRun.event)" "$workflow"
           test "$(grep -Ec "requiredRun[.]head_branch !== 'main'" "$workflow")" -eq 1
           test "$(grep -Ec 'Number[(]requiredRun[.]run_attempt[)] !== 1' "$workflow")" -eq 1
           test "$(grep -Ec 'SUCCESSOR_V3_REQUIRED_CI_WORKFLOW_IDENTITY_REJECTED' "$workflow")" -eq 1
