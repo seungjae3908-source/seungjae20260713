@@ -110,3 +110,20 @@ test('factor ablation keeps all five family-removal variants research-only', () 
     assert.deepEqual(result.markets[market].sourceTimeframes, ['1D']);
   }
 });
+
+
+test('lane-aligned ablation may use a bounded past-only feature window without changing safety authority', () => {
+  const result = runFourMarketOneYearAblation({
+    datasets: [
+      dataset('KR_STOCK', '005930'),
+      dataset('US_STOCK', 'AAPL'),
+      dataset('CRYPTO_SPOT', 'BTC'),
+      dataset('CRYPTO_FUTURES', 'BTCUSDT'),
+    ],
+    featureHistoryBars: 150,
+  });
+  assert.equal(result.interpretation.featureHistoryBars, 150);
+  assert.equal(result.interpretation.executionAuthority, 'NONE');
+  assert.equal(result.interpretation.economicSampleCredit, 0);
+  assert.equal(result.markets.KR_STOCK.variants.FULL.sampleCount, 1);
+});
