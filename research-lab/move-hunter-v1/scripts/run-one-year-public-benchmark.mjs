@@ -12,6 +12,7 @@ import { collectFundingRateHistory } from '../../../market-prediction-lab/src/de
 import {
   ONE_YEAR_BENCHMARK_END_MS,
   ONE_YEAR_BENCHMARK_START_MS,
+  runFourMarketOneYearAblation,
   runFourMarketOneYearBenchmark,
 } from '../src/one-year-benchmark.mjs';
 
@@ -46,7 +47,37 @@ function rowForMarket(name, row) {
     num(row.improved.profitFactor),
   ];
 }
-function markdown(result, failures, datasetCount) {
+function ablationRows(ablation) {
+  const lines = [
+    '',
+    '## Factor ablation — remove one family from the improved formula',
+    '',
+    '| Market | Variant | Return | Trades | MDD | PF | Return Δ vs Full |',
+    '|---|---|---:|---:|---:|---:|---:|',
+  ];
+  for (const [market, marketResult] of Object.entries(ablation.markets)) {
+    for (const id of ['FULL', 'NO_TREND', 'NO_MOMENTUM', 'NO_STRUCTURE', 'NO_VOLUME', 'NO_VOLATILITY']) {
+      const row = marketResult.variants[id];
+      const delta = id === 'FULL' ? 0 : marketResult.deltas[id]?.returnDeltaVsFull;
+      lines.push('| ' + [
+        market,
+        id,
+        pct(row.totalReturn),
+        row.tradeCount,
+        pct(row.maximumDrawdown),
+        num(row.profitFactor),
+        pct(delta),
+      ].join(' | ') + ' |');
+    }
+  }
+  lines.push(
+    '',
+    '> Ablation results are observed-history diagnostics only. Choosing a market-specific rule from this same window creates selection bias and receives zero OOS/economic credit.',
+  );
+  return lines;
+}
+
+function markdown(result, ablation, failures, datasetCount) {
   const lines = [
     '# Move Hunter — 1Y Four-Market Public Benchmark',
     '',
@@ -63,6 +94,7 @@ function markdown(result, failures, datasetCount) {
   for (const [market, row] of Object.entries(result.markets)) {
     lines.push('| ' + rowForMarket(market, row).join(' | ') + ' |');
   }
+  lines.push(...ablationRows(ablation));
   lines.push(
     '',
     '## Evidence boundary',
@@ -195,6 +227,7 @@ await collectFutures(datasets, failures);
 if (datasets.length === 0) throw new Error('NO_PUBLIC_BENCHMARK_DATA_COLLECTED');
 
 const result = runFourMarketOneYearBenchmark({ datasets });
+const ablation = runFourMarketOneYearAblation({ datasets });
 const coverage = Object.fromEntries(
   ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'].map((market) => [
     market,
@@ -203,6 +236,7 @@ const coverage = Object.fromEntries(
 );
 const report = {
   ...result,
+  ablation,
   collection: {
     warmupStartTime: WARMUP_START_MS,
     datasetCount: datasets.length,
@@ -214,12 +248,21 @@ const report = {
 await mkdir(dirname(jsonPath), { recursive: true });
 await mkdir(dirname(mdPath), { recursive: true });
 await writeFile(jsonPath, JSON.stringify(report, null, 2) + '\n', 'utf8');
-await writeFile(mdPath, markdown(result, failures, datasets.length), 'utf8');
+await writeFile(mdPath, markdown(result, ablation, failures, datasets.length), 'utf8');
 
 console.log(JSON.stringify({
   status: result.status,
   datasetCount: datasets.length,
   coverage,
   failures,
+  ablation: Object.fromEntries(Object.entries(ablation.markets).map(([market, row]) => [
+    market,
+    Object.fromEntries(Object.entries(row.variants).map(([id, metrics]) => [id, {
+      totalReturn: metrics.totalReturn,
+      tradeCount: metrics.tradeCount,
+      maximumDrawdown: metrics.maximumDrawdown,
+      profitFactor: metrics.profitFactor,
+    }])),
+  ])),
   outputs: { jsonPath, mdPath },
 }, null, 2));
