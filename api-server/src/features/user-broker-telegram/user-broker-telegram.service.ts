@@ -137,7 +137,10 @@ function title(event: UserExecutionEvent): string {
   switch (event.type) {
     case 'ORDER_SUBMITTED': return '🟦 주문 제출';
     case 'ORDER_PARTIALLY_FILLED': return '🔵 부분 체결';
-    case 'ORDER_FILLED': return event.side === 'sell' || event.side === 'short' ? '✅ 매도 체결' : '✅ 매수 체결';
+    case 'ORDER_FILLED':
+      if (event.side === 'long') return '✅ LONG 체결';
+      if (event.side === 'short') return '✅ SHORT 체결';
+      return event.side === 'sell' ? '✅ 매도 체결' : '✅ 매수 체결';
     case 'ORDER_CANCELLED': return '⛔ 주문 취소';
     case 'ORDER_REJECTED': return '⚠️ 주문 거절';
     case 'POSITION_OPENED': return '📈 포지션 시작';
@@ -146,14 +149,77 @@ function title(event: UserExecutionEvent): string {
     case 'POSITION_CLOSED': return '🏁 포지션 종료';
     case 'TAKE_PROFIT_FILLED': return '💰 익절 체결';
     case 'STOP_FILLED': return '🛑 손절 체결';
-    case 'MANUAL_PORTFOLIO_ENTRY': return '📌 포트폴리오 등록';
+    case 'MANUAL_PORTFOLIO_ENTRY': return '📌 보유종목 등록';
   }
 }
+function executionStateLabel(event: UserExecutionEvent): string {
+  switch (event.type) {
+    case 'ORDER_SUBMITTED': return '주문 제출';
+    case 'ORDER_PARTIALLY_FILLED': return '부분 체결';
+    case 'ORDER_FILLED': return '체결 완료';
+    case 'ORDER_CANCELLED': return '주문 취소';
+    case 'ORDER_REJECTED': return '주문 거절';
+    case 'POSITION_OPENED': return '포지션 시작';
+    case 'POSITION_INCREASED': return '포지션 추가';
+    case 'POSITION_REDUCED': return '일부 청산';
+    case 'POSITION_CLOSED': return '포지션 종료';
+    case 'TAKE_PROFIT_FILLED': return '익절 체결';
+    case 'STOP_FILLED': return '손절 체결';
+    case 'MANUAL_PORTFOLIO_ENTRY': return '보유종목 등록';
+  }
+}
+
+function strategyLabel(value: string | null): string | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'scalping') return '단타';
+  if (normalized === 'swing') return '스윙';
+  if (normalized === 'position') return '중장기';
+  return value;
+}
+
+function marginModeLabel(value: string | null): string | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'isolated') return '격리';
+  if (normalized === 'cross') return '교차';
+  return value;
+}
+
+function kstTimestamp(value: string): string | null {
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return null;
+  const formatter = new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  });
+  return formatter.format(new Date(time));
+}
+
+function autoTradingSignalLabel(event: UserExecutionEvent): string {
+  if (event.side === 'long') return 'LONG 신호';
+  if (event.side === 'short') return 'SHORT 신호';
+  if (event.side === 'sell') return '매도 신호';
+  if (event.side === 'buy') return '매수 신호';
+  return '상태 알림';
+}
+
 export function renderUserExecutionTelegramMessage(event: UserExecutionEvent): string {
-  const lines = [title(event), '', event.symbol];
-  if (event.quantity != null || event.price != null) lines.push(`${formatNumber(event.quantity)} × ${formatNumber(event.price)}`);
-  if (event.maskedAccount) lines.push('', `계좌 ${event.maskedAccount}`);
-  if (event.strategy) lines.push(`전략 ${event.strategy}`);
+  const lane = event.executionMethod === 'AUTO_POLICY'
+    ? `🤖 자동매매 · ${autoTradingSignalLabel(event)}`
+    : event.type === 'MANUAL_PORTFOLIO_ENTRY'
+      ? '👤 보유종목'
+      : '👤 개인 주문/체결';
+  const lines = [lane, title(event), '', event.symbol];
+  if (event.quantity != null) lines.push(`수량: ${formatNumber(event.quantity)}`);
+  if (event.price != null) lines.push(`가격: ${formatNumber(event.price)}`);
+  if (event.maskedAccount) lines.push('', `계좌: ${event.maskedAccount}`);
+  const strategy = strategyLabel(event.strategy);
+  if (strategy) lines.push(`전략: ${strategy}`);
   if (event.remainingQuantity != null) lines.push(`잔여수량 ${formatNumber(event.remainingQuantity)}`);
 
   const transitionReason = metadataText(event.metadata.reason);
@@ -178,17 +244,23 @@ export function renderUserExecutionTelegramMessage(event: UserExecutionEvent): s
         ? (entryZoneLow + entryZoneHigh) / 2
         : null
     );
-    lines.push('', '[자동매매 체결 근거]');
-    lines.push(`신호/행동: ${event.side ? event.side.toUpperCase() : 'N/A'} · ${event.type}`);
+    lines.push('', '[자동매매 판단 근거]');
+    lines.push(`판단: ${autoTradingSignalLabel(event).replace(' 신호', '')}`);
+    lines.push(`상태: ${executionStateLabel(event)}`);
     if (signalReasons.length) signalReasons.forEach((reason) => lines.push(`• ${reason}`));
     else lines.push('• 검증된 진입 근거 N/A');
-    if (transitionReason) lines.push(`상태 전환 이유: ${transitionReason}`);
+    if (transitionReason && !['FILLED', 'SUBMITTED', 'ACCEPTED'].includes(transitionReason.toUpperCase())) {
+      lines.push('상태 이유: 정책/브로커 상태가 변경되었습니다.');
+    }
     if (entryPrice != null) lines.push(`기준 진입가: ${formatNumber(entryPrice)}`);
     if (entryZoneLow != null && entryZoneHigh != null) lines.push(`진입구간: ${formatNumber(entryZoneLow)}~${formatNumber(entryZoneHigh)}`);
     if (targets.length) lines.push(`익절 계획: ${targets.map((value, index) =>
       `TP${index + 1} ${formatNumber(value)} (${formatSignedPercent(signedPlanPercent(planEntry, value, event.side))})`).join(' · ')}`);
     if (stopPrice != null) lines.push(`손절/무효: ${formatNumber(stopPrice)} (${formatSignedPercent(signedPlanPercent(planEntry, stopPrice, event.side))})`);
-    if (leverage != null) lines.push(`레버리지: ${formatNumber(leverage)}x${marginMode ? ` · ${marginMode}` : ''}`);
+    if (leverage != null) {
+      const mode = marginModeLabel(marginMode);
+      lines.push(`레버리지: ${formatNumber(leverage)}x${mode ? ` · ${mode}` : ''}`);
+    }
   } else if (transitionReason) {
     lines.push('', `체결/상태 이유: ${transitionReason}`);
   }
@@ -207,6 +279,8 @@ export function renderUserExecutionTelegramMessage(event: UserExecutionEvent): s
   }
   if (event.type === 'MANUAL_PORTFOLIO_ENTRY') lines.push('', '등록방식: 수동등록');
   if (event.executionMethod) lines.push('', `실행방식: ${event.executionMethod === 'AUTO_POLICY' ? '자동매매 정책' : '사용자 승인'}`);
+  const occurredAt = kstTimestamp(event.occurredAt);
+  if (occurredAt) lines.push(`시각: ${occurredAt}`);
   return lines.join('\n');
 }
 function nextRetryAt(now: Date, attempts: number): string {
@@ -221,6 +295,8 @@ export class UserBrokerTelegramService {
     private readonly portfolioSink: PortfolioSyncSink,
     private readonly botUsername: string | null = process.env.TELEGRAM_BOT_USERNAME?.trim() || null,
     private readonly personalAlertSender?: PersonalAlertSender,
+    private readonly ownerMemberId: string | null = process.env.TELEGRAM_OWNER_MEMBER_ID?.trim() || null,
+    private readonly ownerAutoTradingChatId: string | null = process.env.TELEGRAM_AUTO_TRADING_CHAT_ID?.trim() || null,
   ) {}
 
   private async personalTelegramEligible(userId: string) {
@@ -368,10 +444,24 @@ export class UserBrokerTelegramService {
       return { processed: true, state: result?.state ?? 'DEAD_LETTER' };
     }
     const attempt = claimed.attempts + 1;
+    const rendered = renderUserExecutionTelegramMessage(event);
     let transportResult: Awaited<ReturnType<TelegramTransport['send']>>;
-    try { transportResult = await this.transport.send(connection.telegramChatId, renderUserExecutionTelegramMessage(event)); }
+    try { transportResult = await this.transport.send(connection.telegramChatId, rendered); }
     catch { transportResult = { ok: false, errorCode: 'TELEGRAM_TRANSPORT_ERROR' }; }
     if (transportResult.ok) {
+      if (
+        event.executionMethod === 'AUTO_POLICY'
+        && this.ownerMemberId
+        && this.ownerMemberId === event.userId
+        && this.ownerAutoTradingChatId
+        && this.ownerAutoTradingChatId !== connection.telegramChatId
+      ) {
+        try {
+          await this.transport.send(this.ownerAutoTradingChatId, rendered);
+        } catch {
+          // Owner mirror is advisory and never changes the canonical member delivery state.
+        }
+      }
       await this.repository.finishDelivery(userId, deliveryId, 'SENT', attempt, null, null, timestamp);
       return { processed: true, state: 'SENT' as const };
     }
