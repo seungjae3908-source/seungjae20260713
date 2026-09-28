@@ -153,7 +153,7 @@ test('rich signal card uses evidence, AI explanation, news links and read-only a
   }, alert(), evidence, { timeframe: '15m', strategyMode: 'scalping' });
 
   assert.match(result.details ?? '', /거래량 증가/);
-  assert.match(result.title ?? '', /005930 \| 국내 · 단타 · 반도체/);
+  assert.match(result.title ?? '', /005930 \| 국내 · 매수 신호 · 단타 · 반도체/);
   assert.match(result.details ?? '', /1차 진입 111 · 기본 60%/);
   assert.match(result.details ?? '', /2차 진입 109 · 기본 40%/);
   assert.match(result.details ?? '', /AI:/);
@@ -163,10 +163,10 @@ test('rich signal card uses evidence, AI explanation, news links and read-only a
   assert.equal(result.linkPreview, false);
   assert.ok(result.photo?.bytes instanceof Uint8Array);
   assert.equal(result.buttons?.flat().some((button) => button.text.includes('AI차트')), true);
-  assert.equal(result.buttons?.flat().some((button) => button.text.includes('주문 준비')), true);
+  assert.equal(result.buttons?.flat().some((button) => button.text.includes('주문하기')), true);
   assert.equal(result.buttons?.flat().some((button) => button.text.includes('뉴스·공시')), true);
   assert.equal(result.buttons?.flat().some((button) => button.text.includes('공시') && button.text.includes('원문')), true);
-  const orderButton = result.buttons?.flat().find((button) => button.text.includes('주문 준비'));
+  const orderButton = result.buttons?.flat().find((button) => button.text.includes('주문하기'));
   assert.ok(orderButton);
   const orderUrl = new URL(orderButton!.url);
   assert.equal(orderUrl.pathname, '/telegram-order');
@@ -206,7 +206,7 @@ test('Telegram rich transport uses sendPhoto multipart and accepts URL buttons o
     assert.ok(init?.body instanceof FormData);
     const body = init.body as FormData;
     assert.equal(body.get('chat_id'), 'test-chat');
-    assert.match(String(body.get('caption')), /강한매수 신호/);
+    assert.match(String(body.get('caption')), /매수 신호/);
     assert.ok(body.get('photo') instanceof Blob);
     assert.match(String(body.get('reply_markup')), /https:\/\/example\.test\/detail/);
     return new Response(JSON.stringify({ ok: true, result: { message_id: 7 } }), {
@@ -232,8 +232,8 @@ test('daily brief keeps missing market data explicit and exposes only source lin
   const input = buildTelegramMarketBriefInput({
     kind: 'MORNING',
     localDate: '2026-08-21',
-    destination: 'STOCK_ROOM',
-    destinationChatId: 'stock-room',
+    destination: 'KR_STOCK_ROOM',
+    destinationChatId: 'kr-stock-room',
     dedupeKey: 'brief:test',
     now: new Date('2026-08-21T00:00:00.000Z'),
     snapshot: {
@@ -256,7 +256,7 @@ test('daily brief keeps missing market data explicit and exposes only source lin
   assert.equal(JSON.stringify(input).includes('주문'), false);
 });
 
-test('daily market briefs strictly separate stock room from crypto room', () => {
+test('daily market briefs strictly separate all four market rooms', () => {
   const snapshot = {
     generatedAt: '2026-08-21T00:00:00.000Z',
     rooms: [
@@ -277,31 +277,59 @@ test('daily market briefs strictly separate stock room from crypto room', () => 
     ],
   };
 
-  const stock = buildTelegramMarketBriefInput({
+  const kr = buildTelegramMarketBriefInput({
     kind: 'MORNING',
     localDate: '2026-08-21',
-    destination: 'STOCK_ROOM',
-    destinationChatId: 'stock-room',
-    dedupeKey: 'brief:stock',
+    destination: 'KR_STOCK_ROOM',
+    destinationChatId: 'kr-stock-room',
+    dedupeKey: 'brief:kr',
     now: new Date('2026-08-21T00:00:00.000Z'),
     snapshot,
   });
-  assert.match(stock.details ?? '', /국내주식/);
-  assert.match(stock.details ?? '', /미국주식/);
-  assert.doesNotMatch(stock.details ?? '', /코인현물|코인선물|SPOT_PROVIDER_FAILURE|FUTURES_PROVIDER_FAILURE/);
-  assert.match(stock.details ?? '', /오늘의 테마\/주도주/);
+  assert.match(kr.details ?? '', /국내주식/);
+  assert.match(kr.details ?? '', /KR_PROVIDER_FAILURE/);
+  assert.doesNotMatch(kr.details ?? '', /미국주식|US_PROVIDER_FAILURE|코인현물|코인선물/);
+  assert.match(kr.details ?? '', /KR 테마: N\/A/);
+  assert.doesNotMatch(kr.details ?? '', /US 테마/);
 
-  const crypto = buildTelegramMarketBriefInput({
+  const us = buildTelegramMarketBriefInput({
     kind: 'MORNING',
     localDate: '2026-08-21',
-    destination: 'CRYPTO_ROOM',
-    destinationChatId: 'crypto-room',
-    dedupeKey: 'brief:crypto',
+    destination: 'US_STOCK_ROOM',
+    destinationChatId: 'us-stock-room',
+    dedupeKey: 'brief:us',
     now: new Date('2026-08-21T00:00:00.000Z'),
     snapshot,
   });
-  assert.match(crypto.details ?? '', /코인현물/);
-  assert.match(crypto.details ?? '', /코인선물/);
-  assert.doesNotMatch(crypto.details ?? '', /국내주식|미국주식|KR_PROVIDER_FAILURE|US_PROVIDER_FAILURE/);
-  assert.doesNotMatch(crypto.details ?? '', /오늘의 테마\/주도주|KR 테마|US 테마/);
+  assert.match(us.details ?? '', /해외주식/);
+  assert.match(us.details ?? '', /US_PROVIDER_FAILURE/);
+  assert.doesNotMatch(us.details ?? '', /KR_PROVIDER_FAILURE|코인현물|코인선물/);
+  assert.match(us.details ?? '', /US 테마: N\/A/);
+  assert.doesNotMatch(us.details ?? '', /KR 테마/);
+
+  const spot = buildTelegramMarketBriefInput({
+    kind: 'MORNING',
+    localDate: '2026-08-21',
+    destination: 'CRYPTO_SPOT_ROOM',
+    destinationChatId: 'crypto-spot-room',
+    dedupeKey: 'brief:spot',
+    now: new Date('2026-08-21T00:00:00.000Z'),
+    snapshot,
+  });
+  assert.match(spot.details ?? '', /코인현물/);
+  assert.match(spot.details ?? '', /SPOT_PROVIDER_FAILURE/);
+  assert.doesNotMatch(spot.details ?? '', /FUTURES_PROVIDER_FAILURE|국내주식|해외주식|오늘의 테마\/주도주/);
+
+  const futures = buildTelegramMarketBriefInput({
+    kind: 'MORNING',
+    localDate: '2026-08-21',
+    destination: 'CRYPTO_FUTURES_ROOM',
+    destinationChatId: 'crypto-futures-room',
+    dedupeKey: 'brief:futures',
+    now: new Date('2026-08-21T00:00:00.000Z'),
+    snapshot,
+  });
+  assert.match(futures.details ?? '', /코인선물/);
+  assert.match(futures.details ?? '', /FUTURES_PROVIDER_FAILURE/);
+  assert.doesNotMatch(futures.details ?? '', /SPOT_PROVIDER_FAILURE|국내주식|해외주식|오늘의 테마\/주도주/);
 });
