@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
 import { canonicalJson, sha256 } from '../src/public-forward-liquidity-calibration.mjs';
 import {
   buildServerEvidenceShadowSelfCheck,
+  resolveServerEvidenceNtpSynchronization,
   runServerEvidenceShadowTick,
   summarizeServerEvidenceShadowState,
 } from '../src/public-forward-liquidity-server-shadow-worker-v1.mjs';
@@ -76,9 +78,17 @@ function ntpSynchronized() {
       },
     );
   } catch {
-    return false;
+    return resolveServerEvidenceNtpSynchronization({
+      timedatectlSucceeded: false,
+      timedatectlValue: null,
+      systemdSyncMarkerPresent: existsSync('/run/systemd/timesync/synchronized'),
+    });
   }
-  return String(output ?? '').trim().toLowerCase() === 'yes';
+  return resolveServerEvidenceNtpSynchronization({
+    timedatectlSucceeded: true,
+    timedatectlValue: output,
+    systemdSyncMarkerPresent: false,
+  });
 }
 
 function stateRoot() {
