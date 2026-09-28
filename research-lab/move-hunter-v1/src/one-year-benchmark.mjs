@@ -611,8 +611,11 @@ export function runFourMarketOneYearAblation({
         })];
       }),
     );
+    const sourceTimeframes = [...new Set(marketRows.map((row) => String(row.timeframe).toUpperCase()))].sort();
     markets[market] = freeze({
       market,
+      sourceTimeframes: freeze(sourceTimeframes),
+      sourceTimeframeIdentityExact: sourceTimeframes.length === 1,
       variants: freeze(variants),
       deltas: freeze(deltas),
     });
