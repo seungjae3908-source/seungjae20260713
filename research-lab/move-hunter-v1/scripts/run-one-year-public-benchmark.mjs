@@ -8,6 +8,11 @@ import {
   collectBinanceFuturesFundingRates,
 } from '../../../market-prediction-lab/src/binance-futures-history.js';
 import { BitgetPublicClient } from '../../../market-prediction-lab/src/bitget-public-client.js';
+import {
+  collectVisionFuturesDailyKlines,
+  collectVisionFuturesDailyArchiveKlines,
+  collectVisionFuturesFunding,
+} from '../../../market-prediction-lab/src/binance-vision-futures-archive.js';
 import { collectBitgetCandles } from '../../../market-prediction-lab/src/bitget-candle-collector.js';
 import { collectFundingRateHistory as collectBitgetFundingRateHistory } from '../../../market-prediction-lab/src/derivatives-history.js';
 import { replayLongCashRunnerPortfolio } from '../src/portfolio.mjs';
@@ -40,6 +45,9 @@ const COSTS = Object.freeze({
 
 function source(market, provider = '') {
   if (market === 'CRYPTO_SPOT') return {sourceId:'UPBIT_PUBLIC_4H_AGG_1D',originalSourceId:'UPBIT_PUBLIC_CANDLES',sourceType:'PUBLIC_MARKET_OHLCV_AGGREGATED',sourceUrl:'https://api.upbit.com/'};
+  if (market === 'CRYPTO_FUTURES' && String(provider).includes('vision')) {
+    return {sourceId:'BINANCE_VISION_USDM_1D',originalSourceId:'BINANCE_VISION_CHECKSUM_ARCHIVE',sourceType:'PUBLIC_MARKET_OHLCV_ARCHIVE',sourceUrl:'https://data.binance.vision/'};
+  }
   if (market === 'CRYPTO_FUTURES' && String(provider).includes('bitget')) {
     return {sourceId:'BITGET_PUBLIC_V2_1D',originalSourceId:'BITGET_PUBLIC_HISTORY_CANDLES',sourceType:'PUBLIC_MARKET_OHLCV',sourceUrl:'https://api.bitget.com/'};
   }
@@ -72,6 +80,78 @@ async function collectSpot() {
   }
   return {datasets,failures};
 }
+function strictDailyCoverage(candles, label) {
+  const rows=runnerCandles(candles).sort((a,b)=>a.ts-b.ts);
+  const expectedLast=Date.UTC(2026,8,27);
+  if(rows.length<500) throw new Error(`${label}_DAILY_COVERAGE_TOO_SHORT:${rows.length}`);
+  if(rows[0].ts>WARMUP_START_MS+ONE_DAY_MS) throw new Error(`${label}_START_COVERAGE_MISSING`);
+  if(rows.at(-1).ts<expectedLast) throw new Error(`${label}_END_COVERAGE_MISSING`);
+  for(let i=1;i<rows.length;i+=1){
+    if(rows[i].ts-rows[i-1].ts!==ONE_DAY_MS) {
+      throw new Error(`${label}_DAILY_GAP:${rows[i-1].ts}->${rows[i].ts}`);
+    }
+  }
+  return rows;
+}
+
+function strictFundingTailCoverage(records, startTime, endTime, label) {
+  const rows=[...records].sort((a,b)=>a.timestamp-b.timestamp);
+  if(rows.length===0) throw new Error(`${label}_EMPTY`);
+  if(rows[0].timestamp>startTime+12*60*60*1000) throw new Error(`${label}_START_COVERAGE_MISSING`);
+  if(rows.at(-1).timestamp<endTime-12*60*60*1000) throw new Error(`${label}_END_COVERAGE_MISSING`);
+  for(let i=1;i<rows.length;i+=1){
+    if(rows[i].timestamp-rows[i-1].timestamp>12*60*60*1000) throw new Error(`${label}_GAP_TOO_LARGE`);
+  }
+  return rows;
+}
+
+function uniqueFunding(rows) {
+  const map=new Map();
+  for(const row of rows){
+    const existing=map.get(row.timestamp);
+    if(existing && existing.rate!==row.rate) throw new Error(`FUNDING_CONFLICT_AT_${row.timestamp}`);
+    map.set(row.timestamp,row);
+  }
+  return [...map.values()].sort((a,b)=>a.timestamp-b.timestamp);
+}
+
+async function collectVisionHybridFutures({symbol,bitget}) {
+  const currentMonthStart=Date.UTC(2026,8,1);
+  const completedMonthEnd=currentMonthStart-1;
+  const [monthlyCandles,currentDailyCandles,monthlyFunding,currentFunding]=await Promise.all([
+    collectVisionFuturesDailyKlines({
+      symbol,startTime:WARMUP_START_MS,endTime:completedMonthEnd,concurrency:4,
+    }),
+    collectVisionFuturesDailyArchiveKlines({
+      symbol,startTime:currentMonthStart,endTime:ONE_YEAR_BENCHMARK_END_MS,concurrency:8,
+    }),
+    collectVisionFuturesFunding({
+      symbol,startTime:WARMUP_START_MS,endTime:completedMonthEnd,concurrency:4,
+    }),
+    collectBitgetFundingRateHistory({
+      client:bitget,symbol,startTime:currentMonthStart,endTime:ONE_YEAR_BENCHMARK_END_MS,
+      productType:'usdt-futures',pageSize:100,maxPages:4,
+    }),
+  ]);
+  const tailFunding=strictFundingTailCoverage(
+    currentFunding.records,currentMonthStart,ONE_YEAR_BENCHMARK_END_MS,'BITGET_CURRENT_MONTH_FUNDING',
+  );
+  const candles=strictDailyCoverage(
+    [...monthlyCandles.candles,...currentDailyCandles.candles],
+    'BINANCE_VISION_HYBRID',
+  );
+  const fundingRates=uniqueFunding([...monthlyFunding.records,...tailFunding]);
+  return {
+    market:'CRYPTO_FUTURES',symbol,candles,fundingRates,
+    provider:'binance-vision-usdm-monthly+daily',
+    fundingProvider:'binance-vision-usdm-monthly+bitget-public-v2-current-month',
+    providerFallbackUsed:true,
+    archiveChecksumVerified:monthlyCandles.checksumVerified===true
+      && currentDailyCandles.checksumVerified===true
+      && monthlyFunding.checksumVerified===true,
+  };
+}
+
 async function collectFutures() {
   const binance=new BinanceFuturesPublicClient();
   const bitget=new BitgetPublicClient({timeoutMs:20_000,maxRetries:3,minIntervalMs:150});
@@ -83,11 +163,22 @@ async function collectFutures() {
         collectBinanceFuturesDailyKlines({client:binance,symbol,startTime:WARMUP_START_MS,endTime:ONE_YEAR_BENCHMARK_END_MS}),
         collectBinanceFuturesFundingRates({client:binance,symbol,startTime:WARMUP_START_MS,endTime:ONE_YEAR_BENCHMARK_END_MS}),
       ]);
-      datasets.push({market:'CRYPTO_FUTURES',symbol,candles:runnerCandles(klines.candles),fundingRates:funding.records,provider:klines.provider,providerFallbackUsed:false});
+      const candles=strictDailyCoverage(klines.candles,'BINANCE_API');
+      datasets.push({market:'CRYPTO_FUTURES',symbol,candles,fundingRates:funding.records,provider:klines.provider,fundingProvider:funding.provider,providerFallbackUsed:false});
       continue;
     }catch(error){
       binanceFailure=error instanceof Error?error.message:String(error);
     }
+
+    let archiveFailure=null;
+    try{
+      const hybrid=await collectVisionHybridFutures({symbol,bitget});
+      datasets.push({...hybrid,primaryProviderFailure:binanceFailure});
+      continue;
+    }catch(error){
+      archiveFailure=error instanceof Error?error.message:String(error);
+    }
+
     try{
       const [klines,funding]=await Promise.all([
         collectBitgetCandles({
@@ -99,15 +190,16 @@ async function collectFutures() {
           productType:'usdt-futures',pageSize:100,maxPages:20,
         }),
       ]);
-      if(!funding.exhausted) throw new Error('BITGET_FUNDING_HISTORY_NOT_EXHAUSTIVE_FOR_WINDOW');
+      const candles=strictDailyCoverage(klines.candles,'BITGET_FALLBACK');
       datasets.push({
-        market:'CRYPTO_FUTURES',symbol,candles:runnerCandles(klines.candles),fundingRates:funding.records,
-        provider:klines.provider,providerFallbackUsed:true,primaryProviderFailure:binanceFailure,
+        market:'CRYPTO_FUTURES',symbol,candles,fundingRates:funding.records,
+        provider:klines.provider,fundingProvider:funding.provider,providerFallbackUsed:true,
+        primaryProviderFailure:binanceFailure,archiveProviderFailure:archiveFailure,
       });
     }catch(error){
       failures.push({
         market:'CRYPTO_FUTURES',symbol,
-        error:`BINANCE: ${binanceFailure}; BITGET_FALLBACK: ${error instanceof Error?error.message:String(error)}`,
+        error:`BINANCE_API: ${binanceFailure}; BINANCE_VISION: ${archiveFailure}; BITGET_FALLBACK: ${error instanceof Error?error.message:String(error)}`,
       });
     }
   }
@@ -197,7 +289,11 @@ async function main(){
     warmupStart:new Date(WARMUP_START_MS).toISOString(),
     universes:UNIVERSES,results,providerFailures:failures,
     providers:{
-      futures:futures.datasets.map(x=>({symbol:x.symbol,provider:x.provider,providerFallbackUsed:x.providerFallbackUsed===true,primaryProviderFailure:x.primaryProviderFailure??null})),
+      futures:futures.datasets.map(x=>({
+        symbol:x.symbol,provider:x.provider,fundingProvider:x.fundingProvider??null,
+        providerFallbackUsed:x.providerFallbackUsed===true,archiveChecksumVerified:x.archiveChecksumVerified??null,
+        primaryProviderFailure:x.primaryProviderFailure??null,archiveProviderFailure:x.archiveProviderFailure??null,
+      })),
     },
     truth:{historicalReplayOnly:true,fullStackBacktestBlocked:true,fullStackBlocker:ONE_YEAR_FULL_STACK_GATE_V1.blocker,
       pointInTimeNewsDisclosureAiBound:false,independentOos:false,profitabilityProven:false,economicSampleCredit:0,executionAuthority:'NONE',
