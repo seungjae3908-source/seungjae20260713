@@ -175,6 +175,16 @@ function normalizedRiskLevel(value: unknown): MemberHoldingRiskLevel | null {
     : null;
 }
 
+function riskLevelLabel(value: MemberHoldingRiskLevel | null): string {
+  switch (value) {
+    case 'LOW': return '낮음';
+    case 'MEDIUM': return '보통';
+    case 'HIGH': return '높음';
+    case 'CRITICAL': return '매우 높음';
+    default: return '확인 필요';
+  }
+}
+
 function priorityFor(input: MemberHoldingTelegramEvidence): TelegramPolicyPriority {
   const riskLevel = normalizedRiskLevel(input.risk?.level);
   const change = finite(input.changePercent);
@@ -355,80 +365,75 @@ export function buildMemberHoldingTelegramDispatch(
   const targetRationale = cleanText(tradePlan?.targetRationale, 240);
   const stopRationale = cleanText(tradePlan?.stopRationale, 240);
 
+  const entryPrices = Array.isArray(tradePlan?.entryPrices)
+    ? tradePlan.entryPrices.filter((value) => Number.isFinite(value)).slice(0, 3)
+    : [];
+  const targetPrices = Array.isArray(tradePlan?.targetPrices)
+    ? tradePlan.targetPrices.filter((value) => Number.isFinite(value)).slice(0, 3)
+    : [];
+  const hasTradePlan = entryPrices.length > 0
+    || targetPrices.length > 0
+    || stopLoss != null
+    || Boolean(entryRationale || targetRationale || stopRationale);
+
   const lines = [
     headerFor(input.assetClass, input.market),
     `${name ? `${name} · ` : ''}${symbol}`,
-    `현재가: ${formatNumber(currentPrice)}`,
-    `평단가: ${formatNumber(averageEntryPrice)}`,
-    `평단 기준 손익률: ${formatPercent(positionReturn)}`,
-    `시장 등락률: ${formatPercent(changePercent)}`,
+    `현재 ${formatNumber(currentPrice)} · 평단 ${formatNumber(averageEntryPrice)} · 손익 ${formatPercent(positionReturn)}`,
   ];
-
-  if (analysisProfileLabel) lines.push(`개인 분석 기준: ${analysisProfileLabel}`);
-
-  lines.push(
-    '',
-    `AI 판단: ${aiVerdictLabel(verdict)}`,
-    `AI 분석: ${aiSummary || 'N/A'}`,
-    `AI 신뢰도: ${confidence ? `${confidence.percent.toFixed(1)}% · ${confidence.source}` : 'N/A'}`,
-  );
-  if (confidence?.generatedAt) lines.push(`AI 근거 시각: ${confidence.generatedAt}`);
+  if (changePercent != null) lines.push(`오늘 등락 ${formatPercent(changePercent)}`);
+  if (analysisProfileLabel) lines.push(`분석 기준: ${analysisProfileLabel}`);
 
   if (triggerReasons.length) {
-    lines.push('', '[알림 발생 이유]');
+    lines.push('', '[알림 이유]');
     triggerReasons.forEach((reason) => lines.push(`• ${reason}`));
   }
 
-  if (aiReasons.length) {
-    lines.push('', '[AI 판단 근거]');
-    aiReasons.forEach((reason) => lines.push(`• ${reason}`));
-  } else {
-    lines.push('', '[AI 판단 근거] 검증된 근거 N/A');
+  if (aiSummary || aiReasons.length) {
+    lines.push('', '[AI 보유 판단]');
+    lines.push(`판단: ${aiVerdictLabel(verdict)}`);
+    if (aiSummary) lines.push(`요약: ${aiSummary}`);
+    if (confidence) lines.push(`신뢰도: ${confidence.percent.toFixed(1)}%`);
+    if (aiReasons.length) aiReasons.forEach((reason) => lines.push(`• ${reason}`));
   }
 
-  lines.push(
-    '',
-    '[매매 관리]',
-    `분할 매수/진입: ${priceList(tradePlan?.entryPrices)}`,
-    `진입 근거: ${entryRationale || 'N/A'}`,
-    `분할 매도/목표: ${priceList(tradePlan?.targetPrices)}`,
-    `목표가 근거: ${targetRationale || 'N/A'}`,
-    `손절가: ${formatNumber(stopLoss)}`,
-    `손절가 근거: ${stopRationale || 'N/A'}`,
-  );
+  if (hasTradePlan) {
+    lines.push('', '[매매 관리]');
+    if (entryPrices.length) lines.push(`분할 진입: ${priceList(entryPrices)}`);
+    if (entryRationale) lines.push(`진입 근거: ${entryRationale}`);
+    if (targetPrices.length) lines.push(`목표가: ${priceList(targetPrices)}`);
+    if (targetRationale) lines.push(`목표가 근거: ${targetRationale}`);
+    if (stopLoss != null) lines.push(`손절/무효: ${formatNumber(stopLoss)}`);
+    if (stopRationale) lines.push(`손절 근거: ${stopRationale}`);
+  }
 
-  lines.push('', `[위험 판단] ${riskLevel || 'N/A'}`);
-  if (riskReasons.length) riskReasons.forEach((reason) => lines.push(`• ${reason}`));
-  else lines.push('• 검증된 위험 근거 N/A');
+  if (riskLevel || riskReasons.length) {
+    lines.push('', `[위험] ${riskLevelLabel(riskLevel)}`);
+    riskReasons.forEach((reason) => lines.push(`• ${reason}`));
+  }
 
-  lines.push('', `[과거 유사조건 성과] ${performanceStateLabel(performance.state)}`);
-  if (performance.state === 'READY') {
-    lines.push(
-      `표본: N=${performance.sampleSize}`,
-      `승률: ${performance.winRatePercent == null ? 'N/A' : `${performance.winRatePercent.toFixed(2)}%`}`,
-      `평균 수익률: ${formatPercent(performance.averageReturnPercent)}`,
-      `최대 낙폭: ${performance.maxDrawdownPercent == null ? 'N/A' : `${performance.maxDrawdownPercent.toFixed(2)}%`}`,
-      `성과 근거: ${performance.source}`,
-    );
-    if (performance.observedAt) lines.push(`성과 관측시각: ${performance.observedAt}`);
-  } else {
-    lines.push('승률/평균수익/낙폭: N/A');
+  if (performance.state !== 'NOT_EVIDENCED') {
+    lines.push('', `[유사조건 성과] ${performanceStateLabel(performance.state)}`);
+    if (performance.state === 'READY') {
+      lines.push(`표본 N=${performance.sampleSize}`);
+      if (performance.winRatePercent != null) lines.push(`승률 ${performance.winRatePercent.toFixed(2)}%`);
+      if (performance.averageReturnPercent != null) lines.push(`평균수익 ${formatPercent(performance.averageReturnPercent)}`);
+      if (performance.maxDrawdownPercent != null) lines.push(`최대낙폭 ${performance.maxDrawdownPercent.toFixed(2)}%`);
+    }
   }
 
   if (news.length) {
-    lines.push('', '[뉴스·공시 영향]');
+    lines.push('', '[보유종목 뉴스·공시]');
     news.forEach((item, index) => {
       const kind = item.kind === 'DISCLOSURE' ? '공시' : '뉴스';
       const impact = impactLabel(item.impact ?? null);
       const impactText = impact ? ` · 영향 ${impact}${item.impactReason ? ` (${item.impactReason})` : ''}` : '';
       lines.push(`${index + 1}. [${kind}] ${item.source || '출처 미상'} · ${item.title}${impactText}`);
     });
-  } else {
-    lines.push('', '[뉴스·공시 영향] 검증된 최신 정보 N/A');
   }
 
-  if (warnings.length) lines.push('', `위험/데이터 경고: ${warnings.join(' · ')}`);
-  lines.push('', '표시되지 않은 값은 N/A이며, 없는 목표가·손절가·AI 판단·신뢰도·성과를 새로 만들지 않습니다.');
+  if (warnings.length) lines.push('', `⚠️ ${warnings.join(' · ')}`);
+  lines.push('', '※ 확인되지 않은 값은 표시하지 않습니다.');
 
   const buttons: TelegramUrlButton[][] = [];
   if (detailUrl) buttons.push([{ text: '📲 앱에서 상세 분석', url: detailUrl }]);
