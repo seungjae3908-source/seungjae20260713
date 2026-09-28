@@ -1,3 +1,13 @@
+export const FORWARD_TARGET_TIMEFRAME_AUDITED_MAIN_SHA_V1 =
+  '3a4e34a9116a381e3fca61d28953f44cbdc05991';
+
+export const FORWARD_TARGET_TIMEFRAME_BY_MARKET_V1 = Object.freeze({
+  KR_STOCK: '60M',
+  US_STOCK: '60M',
+  CRYPTO_SPOT: '4H',
+  CRYPTO_FUTURES: '60M',
+});
+
 export const MARKET_SPECIFIC_HYPOTHESIS_POLICY_V1 = Object.freeze({
   maximumMddExpansionVsBaseline: 0.10,
   minimumTradeCount: 20,
@@ -78,6 +88,8 @@ function gateCandidate({ candidate, baseline, full, policy }) {
 
 export function freezeMarketSpecificHypotheses(ablation, {
   policy = MARKET_SPECIFIC_HYPOTHESIS_POLICY_V1,
+  forwardTargetTimeframes = FORWARD_TARGET_TIMEFRAME_BY_MARKET_V1,
+  forwardTargetTimeframeOwnerSha = FORWARD_TARGET_TIMEFRAME_AUDITED_MAIN_SHA_V1,
 } = {}) {
   if (!ablation || ablation.schemaVersion !== 'move-hunter-one-year-factor-ablation/v1') {
     throw new TypeError('one-year factor ablation result is required');
@@ -105,6 +117,20 @@ export function freezeMarketSpecificHypotheses(ablation, {
       policy,
     });
     const eligible = reasons.length === 0;
+    const sourceTimeframes = Array.isArray(row.sourceTimeframes)
+      ? [...new Set(row.sourceTimeframes.map((value) => String(value).toUpperCase()))].sort()
+      : [];
+    const targetForwardTimeframe = String(forwardTargetTimeframes?.[market] ?? '').toUpperCase() || null;
+    const exactSourceTimeframe = sourceTimeframes.length === 1 ? sourceTimeframes[0] : null;
+    const forwardTimeframeMatch = exactSourceTimeframe != null
+      && targetForwardTimeframe != null
+      && exactSourceTimeframe === targetForwardTimeframe;
+    const forwardAdmissionReasons = [];
+    if (sourceTimeframes.length !== 1) forwardAdmissionReasons.push('SOURCE_TIMEFRAME_IDENTITY_NOT_EXACT');
+    if (!targetForwardTimeframe) forwardAdmissionReasons.push('FORWARD_TARGET_TIMEFRAME_UNKNOWN');
+    if (sourceTimeframes.length === 1 && targetForwardTimeframe && !forwardTimeframeMatch) {
+      forwardAdmissionReasons.push('SOURCE_FORWARD_TIMEFRAME_MISMATCH');
+    }
 
     markets[market] = freeze({
       market,
@@ -112,6 +138,9 @@ export function freezeMarketSpecificHypotheses(ablation, {
       descriptiveBestVariant: best.id,
       selectedVariant: eligible ? best.id : null,
       reasons,
+      sourceTimeframes: freeze(sourceTimeframes),
+      targetForwardTimeframe,
+      forwardTargetTimeframeOwnerSha,
       baseline: freeze({
         totalReturn: baseline.totalReturn,
         maximumDrawdown: baseline.maximumDrawdown,
@@ -132,9 +161,23 @@ export function freezeMarketSpecificHypotheses(ablation, {
       }),
       futureValidation: freeze({
         candidateFrozen: eligible,
-        allowedUse: eligible ? 'UNUSED_OOS_OR_FORWARD_ONLY' : 'NONE',
+        sourceTimeframe: exactSourceTimeframe,
+        targetForwardTimeframe,
+        timeframeMatch: forwardTimeframeMatch,
+        forwardAdmissionStatus: eligible && forwardTimeframeMatch
+          ? 'ELIGIBLE_FOR_UNUSED_FORWARD_OBSERVATION'
+          : eligible
+            ? 'BLOCKED_TIMEFRAME_IDENTITY'
+            : 'NONE',
+        forwardAdmissionReasons: freeze([...new Set(forwardAdmissionReasons)].sort()),
+        allowedUse: eligible
+          ? forwardTimeframeMatch
+            ? 'UNUSED_OOS_OR_FORWARD_ONLY'
+            : 'UNUSED_MATCHING_TIMEFRAME_OOS_ONLY'
+          : 'NONE',
         observedHistoryMayCountAsOos: false,
         observedHistoryMayCountAsForward: false,
+        crossTimeframeCreditAllowed: false,
         automaticScannerAdoptionAllowed: false,
         automaticPromotionAllowed: false,
         economicSampleCredit: 0,
@@ -148,12 +191,15 @@ export function freezeMarketSpecificHypotheses(ablation, {
     schemaVersion: 'move-hunter-market-specific-hypothesis/v1',
     sourceSchemaVersion: ablation.schemaVersion,
     policy: freeze({ ...policy }),
+    forwardTargetTimeframeOwnerSha,
+    forwardTargetTimeframes: freeze({ ...forwardTargetTimeframes }),
     markets: freeze(markets),
     safety: freeze({
       selectedFromObservedHistory: true,
       sameWindowSelectionBiasAcknowledged: true,
       observedHistoryMayCountAsOos: false,
       observedHistoryMayCountAsForward: false,
+      crossTimeframeCreditAllowed: false,
       automaticScannerAdoptionAllowed: false,
       automaticPromotionAllowed: false,
       economicSampleCredit: 0,
