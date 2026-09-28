@@ -324,6 +324,7 @@ function editedSignalMessage(
   card: ScannerSignalCard,
   state: AnnouncedSignal,
   updates: readonly TelegramSignalFollowup[],
+  now: number,
 ): string {
   const reachedTargets = new Set(state.reachedTargets);
   const targetLine = card.pricePlan.targets.slice(0, 3).map((target, index) => (
@@ -334,17 +335,27 @@ function editedSignalMessage(
     : 'N/A';
   const stop = card.pricePlan.stopLoss == null ? 'N/A' : escapeTelegramHtml(card.pricePlan.stopLoss);
   const price = finite(card.price) ? escapeTelegramHtml(card.price) : 'N/A';
+  const stateDetail = updates
+    .map((update) => update.details)
+    .find((details) => /주문 버튼|진입구간|체결|포지션|만료|무효|취소|거절/u.test(details));
   const dynamic = [
     '<b>현재 상태</b>',
     publicStatusLabel(card, state, updates),
+    stateDetail ? escapeTelegramHtml(stateDetail) : null,
     `현재가 ${price}`,
     `진입 ${entry}`,
     targetLine,
     `Stop ${stop} ${state.stopReached ? '🛑' : ''}`,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 
   const limit = state.telegramMessageKind === 'PHOTO' ? 1_024 : 4_096;
-  const base = state.baseMessageText ?? '';
+  const rawBase = state.baseMessageText ?? '';
+  const orderEnabled = lifecycleOrderEnabled(card, state, now);
+  const base = orderEnabled
+    ? rawBase.replace(/🔴 기존 신호:/gu, '🟢 신호:').replace(/🟡 기존 신호:/gu, '🟢 신호:')
+    : card.signalState === 'INVALIDATED' || card.signalState === 'EXPIRED' || card.signalState === 'REJECTED' || card.signalState === 'CANCELLED' || state.stopReached
+      ? rawBase.replace(/🟢 신호:/gu, '🔴 기존 신호:')
+      : rawBase.replace(/🟢 신호:/gu, '🟡 기존 신호:');
   if (base.length + dynamic.length + 2 <= limit) return `${dynamic}\n\n${base}`;
 
   return [
@@ -375,8 +386,9 @@ function lifecycleTimeframe(card: ScannerSignalCard): string {
   return '1D';
 }
 
-function lifecycleOrderEnabled(card: ScannerSignalCard, now: number): boolean {
+function lifecycleOrderEnabled(card: ScannerSignalCard, state: AnnouncedSignal, now: number): boolean {
   if (!['ENTRY_ZONE', 'APPROVAL_PENDING', 'READY_FOR_APPROVAL'].includes(card.signalState)) return false;
+  if (state.stopReached || state.reachedTargets.size > 0) return false;
   if (card.dataState !== 'complete' || card.strongSignalEligible !== true) return false;
   if (card.direction !== 'LONG' && card.direction !== 'SHORT') return false;
   const expiresAt = Date.parse(card.expiresAt);
@@ -388,13 +400,13 @@ function lifecycleOrderEnabled(card: ScannerSignalCard, now: number): boolean {
   return card.price >= low && card.price <= high;
 }
 
-function lifecycleButtons(card: ScannerSignalCard, now: number): TelegramUrlButton[][] {
+function lifecycleButtons(card: ScannerSignalCard, state: AnnouncedSignal, now: number): TelegramUrlButton[][] {
   const context = {
     timeframe: lifecycleTimeframe(card),
     strategyMode: card.strategyMode ?? 'swing',
   } as const;
   const buttons = buildTelegramSignalAppButtons(card, context, {
-    orderEnabled: lifecycleOrderEnabled(card, now),
+    orderEnabled: lifecycleOrderEnabled(card, state, now),
     displayName: card.name,
   });
   const base = normalizeTelegramHttpUrl(process.env.PUBLIC_APP_URL || process.env.APP_PUBLIC_URL);
@@ -484,8 +496,8 @@ export async function deliverScannerTelegramFollowups(
           destinationChatId,
           messageId: state.telegramMessageId,
           messageKind: state.telegramMessageKind,
-          text: editedSignalMessage(card, state, signalUpdates),
-          buttons: lifecycleButtons(card, now),
+          text: editedSignalMessage(card, state, signalUpdates, now),
+          buttons: lifecycleButtons(card, state, now),
           linkPreview: false,
         });
         if (!result.ok) failedSignals.add(signalId);
