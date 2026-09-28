@@ -86,7 +86,7 @@ function finiteText(value: unknown, digits = 2): string {
 
 function marketLabel(market: V3Event['market']): string {
   if (market === 'KR_STOCK') return '국내주식';
-  if (market === 'US_STOCK') return '미국주식';
+  if (market === 'US_STOCK') return '해외주식';
   if (market === 'CRYPTO_SPOT') return '코인현물';
   return '코인선물';
 }
@@ -121,11 +121,15 @@ function directionLabel(direction: V3Event['direction']): string | null {
 
 function decisionLine(event: V3Event): string {
   if (event.type === 'NEW_CANDIDATE') return '🟢 현재 판단: 진입 후보';
-  if (event.type === 'RESCAN_REQUESTED') return '🔄 현재 판단: 재분석 중';
+  if (event.type === 'RESCAN_REQUESTED') return '🔄 현재 판단: 재분석 중 · 주문 비활성';
   if (event.state === 'CANDIDATE') return '🟢 현재 판단: 진입 후보';
-  if (event.state === 'BLOCKED_DATA') return '⚪ 현재 판단: 데이터 확인 중';
-  if (event.state === 'NO_TRADE' || event.state === 'ABSTAIN') return '🟡 현재 판단: 관망';
-  return '🟡 현재 판단: 재평가 중';
+  if (event.state === 'BLOCKED_DATA') return '⚪ 현재 판단: 데이터 확인 중 · 주문 비활성';
+  if (event.state === 'NO_TRADE' || event.state === 'ABSTAIN') return '🟡 현재 판단: 관망 · 주문 비활성';
+  if (event.state === 'INVALIDATED' || event.state === 'CANCELLED' || event.state === 'REJECTED') {
+    return '🔴 현재 판단: 무효 · 주문 비활성';
+  }
+  if (event.state === 'EXPIRED') return '⌛ 현재 판단: 만료 · 주문 비활성';
+  return '🟡 현재 판단: 재평가 중 · 주문 비활성';
 }
 
 function reasonLabel(reason: string): string {
@@ -165,7 +169,7 @@ function leverageText(event: V3Event): string | null {
   const max = leverage.recommendedRange?.max;
   const hard = leverage.hardMaximum;
   if (![min, max, hard].every((value) => Number.isFinite(Number(value)))) return null;
-  return `레버리지 참고: ${finiteText(min, 1)}x~${finiteText(max, 1)}x · 상한 ${finiteText(hard, 1)}x`;
+  return `적정 레버리지 참고: ${finiteText(min, 1)}x~${finiteText(max, 1)}x · 상한 ${finiteText(hard, 1)}x`;
 }
 
 function kstTimestamp(now: Date): string {
