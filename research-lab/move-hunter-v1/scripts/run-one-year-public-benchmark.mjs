@@ -164,6 +164,42 @@ function stabilityRows(ablation, hypotheses) {
   return lines;
 }
 
+
+function regimeRows(ablation, hypotheses) {
+  const lines = [
+    '',
+    '### Regime decomposition — selected/descriptive candidate',
+    '',
+    '| Market | Symbol | Side | Variant | Regime | Return | N | MDD | PF |',
+    '|---|---|---|---|---|---:|---:|---:|---:|',
+  ];
+  for (const [market, marketResult] of Object.entries(ablation.markets)) {
+    const hypothesis = hypotheses.markets[market];
+    const candidate = hypothesis?.selectedVariant ?? hypothesis?.descriptiveBestVariant ?? 'FULL';
+    const rows = marketResult.stability?.lanes ?? [];
+    for (const row of rows.filter((item) => item.variant === candidate)) {
+      for (const [regime, metrics] of Object.entries(row.regimes ?? {})) {
+        lines.push('| ' + [
+          market,
+          row.symbol,
+          row.side,
+          candidate,
+          regime,
+          pct(metrics.totalReturn),
+          metrics.tradeCount,
+          pct(metrics.maximumDrawdown),
+          num(metrics.profitFactor),
+        ].join(' | ') + ' |');
+      }
+    }
+  }
+  lines.push(
+    '',
+    '> Regime attribution reuses canonical Regime Router V2 point-in-time classifications. It is diagnostic only and cannot authorize routing, promotion, sizing, or execution.',
+  );
+  return lines;
+}
+
 function comparisonFromAblation(ablation) {
   return {
     startTime: ablation.startTime,
@@ -194,6 +230,7 @@ function laneAlignedRows(comparison, ablation, hypotheses, failures, datasetCoun
   lines.push(...ablationRows(ablation));
   lines.push(...hypothesisRows(hypotheses));
   lines.push(...stabilityRows(ablation, hypotheses));
+  lines.push(...regimeRows(ablation, hypotheses));
   lines.push('', '### Lane-aligned provider failures', '');
   if (!failures.length) lines.push('- none');
   else for (const item of failures) lines.push('- ' + item.market + '/' + item.symbol + ': ' + item.error);
