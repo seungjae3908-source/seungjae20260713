@@ -303,6 +303,53 @@ jobs:
       SOURCE_COMMENT_ID: ${{ needs.activation-gate.outputs.source_comment_id }}
       REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
     steps:
+      - name: Revalidate exact current main after Production approval
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ env.TARGET_SHA }}
+          RECEIPT_COMMENT_ID: ${{ env.RECEIPT_COMMENT_ID }}
+          BINDING_DIGEST: ${{ env.BINDING_DIGEST }}
+        with:
+          script: |
+            const targetSha = process.env.TARGET_SHA;
+            const main = (await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            })).data;
+            if (main.commit.sha !== targetSha) {
+              core.setFailed('SERVER_SHADOW_TARGET_MOVED_DURING_PRODUCTION_APPROVAL:' + main.commit.sha);
+              return;
+            }
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              per_page: 100,
+            });
+            comments.sort((a, b) => Number(a.id) - Number(b.id));
+            const authorize = '/authorize-public-only-partial-fill-v3-schedule-activation';
+            const revoke = '/revoke-public-only-partial-fill-v3-schedule-activation';
+            let latest = null;
+            for (const comment of comments) {
+              if (comment.user?.login !== context.repo.owner
+                  || comment.author_association !== 'OWNER') continue;
+              const parts = String(comment.body ?? '').trim().split(/\s+/u);
+              if (parts.length !== 3 || (parts[0] !== authorize && parts[0] !== revoke)) continue;
+              if (parts[1] !== targetSha || parts[2] !== process.env.BINDING_DIGEST) continue;
+              latest = {
+                id: Number(comment.id),
+                action: parts[0] === authorize ? 'AUTHORIZE' : 'REVOKE',
+              };
+            }
+            if (!latest
+                || latest.action !== 'AUTHORIZE'
+                || latest.id !== Number(process.env.RECEIPT_COMMENT_ID)) {
+              core.setFailed('SERVER_SHADOW_RECEIPT_CHANGED_DURING_PRODUCTION_APPROVAL');
+              return;
+            }
+            core.info('Production approval race-check passed for exact current main and receipt.');
+
       - name: Validate Production SSH inputs
         shell: bash
         run: |
