@@ -153,7 +153,7 @@ export default function AdminPage() {
       </label>
       {(notice || error) && <p role="status" className={`rounded-2xl p-3 text-sm font-bold ${error ? 'bg-destructive/10 text-destructive' : 'bg-positive/10 text-positive'}`}>{error || notice}</p>}
       {members.isLoading && <p>회원 목록을 불러오는 중입니다.</p>}
-      {members.error && <div data-testid="admin-members-unavailable" className="rounded-2xl border border-destructive/30 bg-destructive/10 p-3"><p className="text-sm font-bold text-destructive">{members.error.message}</p><button type="button" onClick={() => void members.refetch()} className="mt-3 rounded-xl border border-destructive/30 px-3 py-2 text-xs font-bold">회원 목록 다시 시도</button></div>}
+      {members.error && <div data-testid="admin-members-unavailable" className="rounded-xl border border-destructive/30 bg-destructive/10 p-3"><p className="text-sm font-bold text-destructive">회원 목록을 불러오지 못했습니다.</p><button type="button" onClick={() => void members.refetch()} className="mt-3 rounded-xl border border-destructive/30 px-3 py-2 text-xs font-bold">다시 시도</button></div>}
       {members.data && (members.error || members.isFetching) && <p data-testid="admin-member-mutations-locked" className="rounded-2xl bg-warning/10 p-3 text-xs font-bold text-warning">최신 회원 상태 확인이 끝날 때까지 등급·활성·승인 변경을 잠급니다.</p>}
       <section className="space-y-3" aria-label="회원 목록">
         {members.data?.members.map((member) => <MemberCard key={`${member.id}:${member.membership_level ?? member.status}:${member.is_active !== false}`} member={member} mutationEnabled={memberMutationEnabled} onApprove={approve} onSubmit={submitChange} />)}
@@ -163,19 +163,37 @@ export default function AdminPage() {
         <div className="flex items-center justify-between"><div><h2 className="font-black">변경 이력</h2><p className="mt-1 text-xs text-muted-foreground">개인 거래기록이나 원본 메모는 포함하지 않습니다.</p></div><button type="button" onClick={() => void audits.refetch()} className="rounded-xl border border-card-border px-3 py-2 text-xs font-bold">새로고침</button></div>
         <div className="mt-4 space-y-2">
           {audits.isLoading && <p className="text-sm">감사 이력을 불러오는 중입니다.</p>}
-          {audits.error && <div data-testid="admin-audit-unavailable" className="rounded-2xl border border-destructive/30 bg-destructive/10 p-3"><p className="text-sm font-bold text-destructive">{audits.error.message}</p><button type="button" onClick={() => void audits.refetch()} className="mt-3 rounded-xl border border-destructive/30 px-3 py-2 text-xs font-bold">감사 이력 다시 시도</button></div>}
+          {audits.error && <div data-testid="admin-audit-unavailable" className="rounded-xl border border-destructive/30 bg-destructive/10 p-3"><p className="text-sm font-bold text-destructive">변경 이력을 불러오지 못했습니다.</p><button type="button" onClick={() => void audits.refetch()} className="mt-3 rounded-xl border border-destructive/30 px-3 py-2 text-xs font-bold">다시 시도</button></div>}
           {audits.error && Boolean(audits.data?.logs.length) && <p data-testid="admin-audit-stale" className="rounded-xl bg-warning/10 p-3 text-xs font-bold text-warning">아래 이력은 마지막 정상 조회 데이터입니다. 현재 조회는 실패했습니다.</p>}
-          {audits.data?.logs.map((log) => <article key={log.id} className="rounded-2xl bg-secondary/50 p-3 text-xs">
-            <p className="font-extrabold">{log.action}</p>
-            <p className="mt-1 break-all text-muted-foreground">대상 {log.target_user_id} · 관리자 {log.actor_id}</p>
+          {audits.data?.logs.map((log) => <article key={log.id} className="rounded-xl bg-secondary/50 p-3 text-xs">
+            <div className="flex items-center justify-between gap-3">
+              <p className="font-extrabold">{log.action}</p>
+              <span className="shrink-0 text-[10px] text-muted-foreground">{new Date(log.created_at).toLocaleDateString()}</span>
+            </div>
             <p className="mt-1">{log.reason}</p>
-            <p className="mt-1 text-muted-foreground">{new Date(log.created_at).toLocaleString()}</p>
+            <details className="mt-2 rounded-lg border border-card-border bg-background/60">
+              <summary className="flex min-h-9 cursor-pointer list-none items-center px-2 text-[10px] font-semibold text-muted-foreground">기록 상세</summary>
+              <div className="border-t border-card-border p-2 text-[10px] text-muted-foreground">
+                <p className="break-all">대상 {log.target_user_id}</p>
+                <p className="mt-1 break-all">관리자 {log.actor_id}</p>
+                <p className="mt-1">{new Date(log.created_at).toLocaleString()}</p>
+              </div>
+            </details>
           </article>)}
           {!audits.isLoading && !audits.error && audits.data?.logs.length === 0 && <p className="text-sm text-muted-foreground">기록된 권한 변경이 없습니다.</p>}
         </div>
       </section>
     </main>
   </div>;
+}
+
+function memberStatusLabel(status: string): string {
+  if (status === 'approved') return '승인됨';
+  if (status === 'pending') return '승인 대기';
+  if (status === 'rejected') return '반려';
+  if (status === 'suspended') return '정지';
+  if (status === 'withdrawn') return '탈퇴';
+  return '확인 필요';
 }
 
 function MemberCard({ member, mutationEnabled, onApprove, onSubmit }: {
@@ -196,9 +214,17 @@ function MemberCard({ member, mutationEnabled, onApprove, onSubmit }: {
     try { await action(); setReason(''); } finally { setBusy(false); }
   }
 
-  return <article className="rounded-3xl border border-card-border bg-card p-4">
-    <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="truncate font-black">{member.display_name}</p><p className="truncate text-xs text-muted-foreground">{member.login_name}</p><p className="mt-1 break-all text-[10px] text-muted-foreground">{member.id}</p></div><span className="shrink-0 rounded-full bg-secondary px-3 py-1 text-xs font-bold">{MEMBER_TIER_LABELS[initialTier]}</span></div>
-    <dl className="mt-3 grid grid-cols-2 gap-2 rounded-2xl bg-secondary/40 p-3 text-xs"><div><dt className="text-muted-foreground">상태</dt><dd className="font-bold">{member.status}</dd></div><div><dt className="text-muted-foreground">활성</dt><dd className="font-bold">{member.is_active !== false ? '활성' : '비활성'}</dd></div><div><dt className="text-muted-foreground">가입</dt><dd>{member.created_at ? new Date(member.created_at).toLocaleDateString() : '미확인'}</dd></div><div><dt className="text-muted-foreground">권한 갱신</dt><dd>{member.permissions_updated_at ? new Date(member.permissions_updated_at).toLocaleString() : '미확인'}</dd></div></dl>
+  return <article className="rounded-2xl border border-card-border bg-card p-4">
+    <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="truncate font-black">{member.display_name}</p><p className="truncate text-xs text-muted-foreground">{member.login_name}</p></div><span className="shrink-0 rounded-full bg-secondary px-3 py-1 text-xs font-bold">{MEMBER_TIER_LABELS[initialTier]}</span></div>
+    <dl className="mt-3 grid grid-cols-2 gap-2 rounded-xl bg-secondary/40 p-3 text-xs"><div><dt className="text-muted-foreground">상태</dt><dd className="font-bold">{memberStatusLabel(member.status)}</dd></div><div><dt className="text-muted-foreground">활성</dt><dd className="font-bold">{member.is_active !== false ? '활성' : '비활성'}</dd></div></dl>
+    <details className="mt-2 rounded-xl border border-card-border bg-background/60">
+      <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between px-3 text-[11px] font-semibold"><span>회원 상세</span><span className="text-muted-foreground">ID · 날짜 ⌄</span></summary>
+      <div className="border-t border-card-border p-3 text-[10px] text-muted-foreground">
+        <p className="break-all">ID {member.id}</p>
+        <p className="mt-1">가입 {member.created_at ? new Date(member.created_at).toLocaleDateString() : '미확인'}</p>
+        <p className="mt-1">권한 갱신 {member.permissions_updated_at ? new Date(member.permissions_updated_at).toLocaleString() : '미확인'}</p>
+      </div>
+    </details>
     <div className="mt-4 grid grid-cols-2 gap-2">
       <label className="text-xs font-bold">등급<select disabled={!mutationEnabled || busy} aria-label={`${member.display_name} 등급`} value={tier} onChange={(event) => setTier(event.target.value as MemberTier)} className="mt-1 h-11 w-full rounded-xl border border-card-border bg-background px-2 text-sm disabled:opacity-50"><option value="pending">일반회원 · 승인대기</option><option value="associate">준회원</option><option value="regular">정회원</option><option value="admin">관리자</option></select></label>
       <label className="text-xs font-bold">활성 상태<select disabled={!mutationEnabled || busy} aria-label={`${member.display_name} 활성 상태`} value={active ? 'active' : 'inactive'} onChange={(event) => setActive(event.target.value === 'active')} className="mt-1 h-11 w-full rounded-xl border border-card-border bg-background px-2 text-sm disabled:opacity-50"><option value="active">활성</option><option value="inactive">비활성</option></select></label>

@@ -74,10 +74,10 @@ function requestErrorMessage(error: unknown): string {
     }
     if (error.status === 502) return '시장데이터 공급자 응답이 불안정합니다. 마지막 정상 결과가 있으면 유지합니다.';
     if (error.code.includes('STRATEGY_TIMEFRAME_MISMATCH')) return '선택한 투자 스타일의 자동 시간봉 구성을 사용할 수 없습니다.';
-    return `검색 요청 실패: ${error.code}`;
+    return '검색 데이터를 확인하지 못했습니다. 다시 시도해 주세요.';
   }
   if (error instanceof Error && error.name === 'AbortError') return '이전 검색 요청을 취소했습니다.';
-  return error instanceof Error ? error.message : '검색 요청 중 알 수 없는 오류가 발생했습니다.';
+  return '검색 데이터를 확인하지 못했습니다. 다시 시도해 주세요.';
 }
 
 function formatNumber(value: number | null | undefined, maximumFractionDigits = 2): string {
@@ -189,16 +189,34 @@ function compareScannerCards(left: ScannerSignalCard, right: ScannerSignalCard):
 }
 
 const OUTCOME_COPY: Record<ScannerOutcomeCode, { title: string; description: string }> = {
-  CANDIDATES_AVAILABLE: { title: 'CANDIDATES_AVAILABLE', description: '검증 후보를 표시했습니다.' },
-  VALID_ZERO_SIGNAL: { title: 'VALID_ZERO_SIGNAL', description: '공급자 데이터와 분석은 정상이며 현재 조건에 맞는 신호만 없습니다.' },
-  UNIVERSE_EMPTY: { title: 'UNIVERSE_EMPTY', description: '선택 시장의 스캔 대상 유니버스가 비어 있습니다.' },
-  PROVIDER_FAILURE: { title: 'PROVIDER_FAILURE', description: '시장데이터 공급 실패이며 정상적인 신호 0건이 아닙니다.' },
-  SYMBOL_MAPPING_FAILURE: { title: 'SYMBOL_MAPPING_FAILURE', description: '공급자 심볼을 표준 자산 코드로 연결하지 못했습니다.' },
-  REQUEST_TIMEOUT: { title: 'REQUEST_TIMEOUT', description: '요청 제한시간 안에 검증을 완료하지 못했습니다.' },
-  DATA_QUALITY_REJECT: { title: 'DATA_QUALITY_REJECT', description: '응답은 받았지만 데이터 품질 기준을 통과하지 못했습니다.' },
-  FILTER_TOO_STRICT: { title: 'FILTER_TOO_STRICT', description: '데이터는 정상이지만 현재 Risk·전략 필터가 모든 후보를 제외했습니다.' },
-  FRONTEND_RENDER_FAILURE: { title: 'FRONTEND_RENDER_FAILURE', description: 'API 후보가 있으나 화면에서 안전하게 표시할 수 없습니다.' },
+  CANDIDATES_AVAILABLE: { title: '후보 있음', description: '현재 조건에 맞는 후보를 표시합니다.' },
+  VALID_ZERO_SIGNAL: { title: '신호 없음', description: '현재 조건에 맞는 신호가 없습니다.' },
+  UNIVERSE_EMPTY: { title: '검색 대상 없음', description: '선택한 시장에서 분석할 종목이 없습니다.' },
+  PROVIDER_FAILURE: { title: '데이터 확인 필요', description: '일부 시장 데이터를 불러오지 못했습니다.' },
+  SYMBOL_MAPPING_FAILURE: { title: '종목 정보 확인 필요', description: '일부 종목 정보를 확인하지 못했습니다.' },
+  REQUEST_TIMEOUT: { title: '응답 지연', description: '분석이 지연되고 있습니다. 다시 시도해 주세요.' },
+  DATA_QUALITY_REJECT: { title: '데이터 확인 필요', description: '분석에 필요한 데이터가 충분하지 않습니다.' },
+  FILTER_TOO_STRICT: { title: '조건에 맞는 후보 없음', description: '현재 검색 조건을 충족하는 후보가 없습니다.' },
+  FRONTEND_RENDER_FAILURE: { title: '표시 오류', description: '검색 결과를 표시하지 못했습니다.' },
 };
+
+function scannerDataStateLabel(value: string): string {
+  if (value === 'ready' || value === 'complete') return '정상';
+  if (value === 'partial') return '일부 데이터';
+  if (value === 'stale') return '지연';
+  if (value === 'untrusted') return '확인 필요';
+  return '확인 중';
+}
+
+function signalStateLabel(value: string | null | undefined): string {
+  if (value === 'CONFIRMED') return '확인됨';
+  if (value === 'WATCHING') return '관찰 중';
+  if (value === 'WEAKENED') return '약화';
+  if (value === 'INVALIDATED') return '무효';
+  if (value === 'FORMING') return '형성 중';
+  if (value === 'EXPIRED') return '만료';
+  return '확인 중';
+}
 
 function formatObservedAt(value: string | null | undefined): string {
   if (!value || !Number.isFinite(Date.parse(value))) return '미확인';
@@ -206,14 +224,14 @@ function formatObservedAt(value: string | null | undefined): string {
 }
 
 function remainingValidityLabel(value: string | null | undefined): string {
-  if (!value || !Number.isFinite(Date.parse(value))) return 'TTL 미확인';
+  if (!value || !Number.isFinite(Date.parse(value))) return '유효시간 미확인';
   const remainingMs = Date.parse(value) - Date.now();
-  if (remainingMs <= 0) return 'TTL 만료';
+  if (remainingMs <= 0) return '유효시간 만료';
   const remainingMinutes = Math.ceil(remainingMs / 60_000);
-  if (remainingMinutes < 60) return `TTL ${remainingMinutes}분`;
+  if (remainingMinutes < 60) return `유효 ${remainingMinutes}분`;
   const remainingHours = Math.ceil(remainingMinutes / 60);
-  if (remainingHours < 24) return `TTL ${remainingHours}시간`;
-  return `TTL ${Math.ceil(remainingHours / 24)}일`;
+  if (remainingHours < 24) return `유효 ${remainingHours}시간`;
+  return `유효 ${Math.ceil(remainingHours / 24)}일`;
 }
 
 function SignalDetailPanel({
@@ -245,11 +263,16 @@ function SignalDetailPanel({
   const ranking = card.candidateRanking;
   const qualityIssues = signalQuality?.issues ?? [];
   const strongSignalLabel = signalQuality?.strongSignalAllowed === true
-    ? 'YES'
-    : signalQuality?.strongSignalAllowed === false ? 'NO' : '미확인';
+    ? '허용'
+    : signalQuality?.strongSignalAllowed === false ? '제한' : '미확인';
   const hardFilterLabel = ranking?.hardFilterPassed === true
-    ? 'PASS'
-    : ranking?.hardFilterPassed === false ? 'REJECT' : '미확인';
+    ? '통과'
+    : ranking?.hardFilterPassed === false ? '제외' : '미확인';
+  const qualityStateLabel = signalQuality?.state === 'TRUSTED'
+    ? '양호'
+    : signalQuality?.state === 'DATA_UNTRUSTED' || signalQuality?.state === 'DEGRADED'
+      ? '확인 필요'
+      : signalQuality?.state ?? '미확인';
 
   useEffect(() => {
     setMobileTab('summary');
@@ -260,81 +283,67 @@ function SignalDetailPanel({
   }, [showOrderPreparation]);
 
   const qualityPanel = (
-    <section data-testid="scanner-signal-quality-panel" aria-label="신호 품질" className="rounded-2xl border border-primary/25 bg-primary/5 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h3 className="text-xs font-black">신호 품질 · 서버 근거</h3>
-          <p className="mt-1 text-[10px] leading-4 text-muted-foreground">서버가 계산한 값만 표시하며 누락값은 미확인으로 유지합니다.</p>
+    <details data-testid="scanner-signal-quality-panel" className="rounded-xl border border-card-border bg-background">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 text-xs font-semibold">
+        <span>신호 품질 상세</span>
+        <span className="text-[10px] text-muted-foreground">
+          {qualityStateLabel}{ranking?.rank != null ? ` · ${ranking.rank}위` : ''}
+        </span>
+      </summary>
+      <div className="space-y-3 border-t border-card-border p-3">
+        <div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
+          <div className="rounded-xl bg-card p-2"><p className="text-[10px] text-muted-foreground">데이터 품질</p><p data-testid="scanner-quality-data-state" className="text-xs font-black">{qualityStateLabel}</p></div>
+          <div className="rounded-xl bg-card p-2"><p className="text-[10px] text-muted-foreground">품질 점수</p><p data-testid="scanner-quality-data-score" className="text-xs font-black">{formatMetric(signalQuality?.score)}</p></div>
+          <div className="rounded-xl bg-card p-2"><p className="text-[10px] text-muted-foreground">강한 신호</p><p data-testid="scanner-quality-strong-allowed" className="text-xs font-black">{strongSignalLabel}</p></div>
+          <div className="rounded-xl bg-card p-2"><p className="text-[10px] text-muted-foreground">필수 조건</p><p data-testid="scanner-quality-hard-filter" className="text-xs font-black">{hardFilterLabel}</p></div>
         </div>
-        <span data-testid="scanner-quality-signal-state" className="rounded-full border border-primary/25 px-2 py-1 text-[10px] font-black">{card.signalState || '미확인'}</span>
-      </div>
 
-      <div className="mt-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">데이터 품질</p><p data-testid="scanner-quality-data-state" className="text-xs font-black">{signalQuality?.state ?? '미확인'}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">품질 점수</p><p data-testid="scanner-quality-data-score" className="text-xs font-black">{formatMetric(signalQuality?.score)}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">강신호 허용</p><p data-testid="scanner-quality-strong-allowed" className="text-xs font-black">{strongSignalLabel}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Hard Filter</p><p data-testid="scanner-quality-hard-filter" className="text-xs font-black">{hardFilterLabel}</p></div>
-      </div>
+        <details className="rounded-xl border border-card-border bg-card">
+          <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between px-3 text-[11px] font-semibold">
+            <span>세부 점수</span><span className="text-muted-foreground">기술 · 추세 · 거래량 ⌄</span>
+          </summary>
+          <div className="grid grid-cols-2 gap-2 border-t border-card-border p-3 text-center sm:grid-cols-4">
+            <div className="rounded-lg bg-background p-2"><p className="text-[10px] text-muted-foreground">기술</p><p className="text-xs font-black">{formatMetric(quant?.technical)}</p></div>
+            <div className="rounded-lg bg-background p-2"><p className="text-[10px] text-muted-foreground">추세</p><p className="text-xs font-black">{formatMetric(quant?.trend)}</p></div>
+            <div className="rounded-lg bg-background p-2"><p className="text-[10px] text-muted-foreground">모멘텀</p><p className="text-xs font-black">{formatMetric(quant?.momentum)}</p></div>
+            <div className="rounded-lg bg-background p-2"><p className="text-[10px] text-muted-foreground">거래량</p><p className="text-xs font-black">{formatMetric(quant?.volume)}</p></div>
+            <div className="rounded-lg bg-background p-2"><p className="text-[10px] text-muted-foreground">유동성</p><p className="text-xs font-black">{formatMetric(quant?.liquidity)}</p></div>
+            <div className="rounded-lg bg-background p-2"><p className="text-[10px] text-muted-foreground">변동성</p><p className="text-xs font-black">{formatMetric(quant?.volatility)}</p></div>
+            <div className="rounded-lg bg-background p-2"><p className="text-[10px] text-muted-foreground">시장국면</p><p className="text-xs font-black">{formatMetric(quant?.marketRegime)}</p></div>
+            <div className="rounded-lg bg-background p-2"><p className="text-[10px] text-muted-foreground">위험</p><p className="text-xs font-black">{formatMetric(quant?.risk)}</p></div>
+          </div>
+        </details>
 
-      <div className="mt-3">
-        <p className="text-[10px] font-black text-muted-foreground">Quant Score</p>
-        <div className="mt-1 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">기술</p><p className="text-xs font-black">{formatMetric(quant?.technical)}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">추세</p><p className="text-xs font-black">{formatMetric(quant?.trend)}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">모멘텀</p><p className="text-xs font-black">{formatMetric(quant?.momentum)}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">거래량</p><p className="text-xs font-black">{formatMetric(quant?.volume)}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">유동성</p><p className="text-xs font-black">{formatMetric(quant?.liquidity)}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">변동성</p><p className="text-xs font-black">{formatMetric(quant?.volatility)}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">시장국면</p><p className="text-xs font-black">{formatMetric(quant?.marketRegime)}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Risk</p><p className="text-xs font-black">{formatMetric(quant?.risk)}</p></div>
-        </div>
+        <details className="rounded-xl border border-card-border bg-card">
+          <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between px-3 text-[11px] font-semibold">
+            <span>후보 순위 근거</span>
+            <span data-testid="scanner-quality-rank" className="text-muted-foreground">{ranking?.rank == null ? '미확인' : `${ranking.rank}위`}</span>
+          </summary>
+          <div className="space-y-2 border-t border-card-border p-3">
+            <div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
+              <div className="rounded-lg bg-background p-2"><p className="text-[10px] text-muted-foreground">상대점수</p><p className="text-xs font-black">{formatMetric(ranking?.relativeScore)}</p></div>
+              <div className="rounded-lg bg-background p-2"><p className="text-[10px] text-muted-foreground">관찰 완성도</p><p className="text-xs font-black">{formatMetric(ranking?.watchCompletionPercent, '%')}</p></div>
+              <div className="rounded-lg bg-background p-2"><p className="text-[10px] text-muted-foreground">랭킹점수</p><p className="text-xs font-black">{formatMetric(ranking?.score)}</p></div>
+              <div className="rounded-lg bg-background p-2"><p className="text-[10px] text-muted-foreground">거래대금 순위</p><p className="text-xs font-black">{formatMetric(ranking?.relative.tradingValuePercentile, '%')}</p></div>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-3">
+              <div className="rounded-lg bg-background p-2">
+                <p className="text-[10px] font-black">관찰 이유</p>
+                {ranking?.watchReasons.length ? <ul className="mt-1 space-y-1 text-[10px] leading-4">{ranking.watchReasons.map((reason) => <li key={reason}>• {reason}</li>)}</ul> : <p className="mt-1 text-[10px] text-muted-foreground">없음</p>}
+              </div>
+              <div className="rounded-lg bg-background p-2">
+                <p className="text-[10px] font-black">필수 조건 근거</p>
+                {ranking?.hardFilterReasons.length ? <ul className="mt-1 space-y-1 text-[10px] leading-4">{ranking.hardFilterReasons.map((reason) => <li key={reason}>• {reason}</li>)}</ul> : <p className="mt-1 text-[10px] text-muted-foreground">없음</p>}
+              </div>
+              <div className="rounded-lg bg-background p-2">
+                <p className="text-[10px] font-black">데이터 확인 항목</p>
+                {qualityIssues.length ? <ul className="mt-1 space-y-1 text-[10px] leading-4">{qualityIssues.map((issue) => <li key={`${issue.code}:${issue.message}`} className={issue.severity === 'blocking' ? 'text-destructive' : 'text-warning'}>• {issue.severity === 'blocking' ? '차단' : '경고'} · {issue.message}</li>)}</ul> : <p className="mt-1 text-[10px] text-muted-foreground">없음</p>}
+              </div>
+            </div>
+          </div>
+        </details>
       </div>
-
-      <div className="mt-3">
-        <p className="text-[10px] font-black text-muted-foreground">후보 랭킹</p>
-        <p className="mt-1 text-[10px] leading-4 text-muted-foreground">순위는 신호점수 단독 정렬이 아닌 서버 랭킹 기준입니다.</p>
-        <div className="mt-1 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">순위</p><p data-testid="scanner-quality-rank" className="text-xs font-black">{ranking?.rank == null ? '미확인' : `${ranking.rank}위`}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">상대점수</p><p className="text-xs font-black">{formatMetric(ranking?.relativeScore)}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Watch 완성도</p><p className="text-xs font-black">{formatMetric(ranking?.watchCompletionPercent, '%')}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">랭킹점수</p><p className="text-xs font-black">{formatMetric(ranking?.score)}</p></div>
-        </div>
-        <div className="mt-2 grid grid-cols-2 gap-2 text-center sm:grid-cols-5">
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">거래대금 %ile</p><p className="text-xs font-black">{formatMetric(ranking?.relative.tradingValuePercentile, '%')}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">모멘텀 %ile</p><p className="text-xs font-black">{formatMetric(ranking?.relative.momentumPercentile, '%')}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">추세 %ile</p><p className="text-xs font-black">{formatMetric(ranking?.relative.trendPercentile, '%')}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">거래량 %ile</p><p className="text-xs font-black">{formatMetric(ranking?.relative.volumePercentile, '%')}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">변동성 %ile</p><p className="text-xs font-black">{formatMetric(ranking?.relative.volatilityPercentile, '%')}</p></div>
-        </div>
-      </div>
-
-      <div className="mt-3 grid gap-2 sm:grid-cols-3">
-        <div className="rounded-xl border border-card-border bg-background p-2">
-          <p className="text-[10px] font-black">Watch 이유</p>
-          {ranking == null
-            ? <p className="mt-1 text-[10px] text-muted-foreground">미확인</p>
-            : ranking.watchReasons.length
-              ? <ul className="mt-1 space-y-1 text-[10px] leading-4">{ranking.watchReasons.map((reason) => <li key={reason}>• {reason}</li>)}</ul>
-              : <p className="mt-1 text-[10px] text-muted-foreground">없음</p>}
-        </div>
-        <div className="rounded-xl border border-card-border bg-background p-2">
-          <p className="text-[10px] font-black">Hard Filter 근거</p>
-          {ranking == null
-            ? <p className="mt-1 text-[10px] text-muted-foreground">미확인</p>
-            : ranking.hardFilterReasons.length
-              ? <ul className="mt-1 space-y-1 text-[10px] leading-4">{ranking.hardFilterReasons.map((reason) => <li key={reason}>• {reason}</li>)}</ul>
-              : <p className="mt-1 text-[10px] text-muted-foreground">없음</p>}
-        </div>
-        <div className="rounded-xl border border-card-border bg-background p-2">
-          <p className="text-[10px] font-black">데이터 품질 이슈</p>
-          {signalQuality == null
-            ? <p className="mt-1 text-[10px] text-muted-foreground">미확인</p>
-            : qualityIssues.length
-              ? <ul className="mt-1 space-y-1 text-[10px] leading-4">{qualityIssues.map((issue) => <li key={`${issue.code}:${issue.message}`} className={issue.severity === 'blocking' ? 'text-destructive' : 'text-warning'}>• {issue.severity === 'blocking' ? '차단' : '경고'} · {issue.code} · {issue.message}</li>)}</ul>
-              : <p className="mt-1 text-[10px] text-muted-foreground">차단·경고 이슈 없음</p>}
-        </div>
-      </div>
-    </section>
+    </details>
   );
 
   const summaryContent = (
@@ -347,13 +356,10 @@ function SignalDetailPanel({
         {why.length > 0
           ? <ul className="mt-2 space-y-1 text-xs leading-5">{why.slice(0, 3).map((reason, index) => <li key={`${reason}:${index}`}>• {reason}</li>)}</ul>
           : <p className="mt-2 text-xs text-muted-foreground">검증된 이유 설명이 없습니다. 근거가 없는 설명은 만들지 않습니다.</p>}
-        <p className="mt-2 break-words text-[10px] leading-4 text-muted-foreground">근거 소스 {matchedEvidence.length ? [...new Set(matchedEvidence.map((item) => item.source).filter(Boolean))].join(' · ') : '미확인'}</p>
       </section>
 
-      {qualityPanel}
-
       <section className="rounded-2xl border border-card-border p-3" data-testid="scanner-price-plan">
-        <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">서버 계획</span></div>
+        <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">확인된 계획</span></div>
         <div className="mt-2 grid grid-cols-2 gap-2 text-center">
           <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">진입</p><p className="text-xs font-black">{card.pricePlan.entryZone ? `${formatNumber(card.pricePlan.entryZone.from)}~${formatNumber(card.pricePlan.entryZone.to)}` : '미확인'}</p></div>
           <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">손절</p><p className="text-xs font-black">{formatNumber(card.pricePlan.stopLoss)}</p></div>
@@ -363,8 +369,8 @@ function SignalDetailPanel({
       </section>
 
       <div className="grid grid-cols-2 gap-2">
-        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary px-3 text-xs font-black text-primary-foreground">AI 차트</button>
-        <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-xs font-black">주문 준비</button>
+        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary/12 px-3 text-xs font-black text-primary ring-1 ring-inset ring-primary/35">AI 차트</button>
+        <button type="button" aria-label="매매 검토 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-xs font-black">매매 검토</button>
       </div>
     </div>
   );
@@ -382,6 +388,7 @@ function SignalDetailPanel({
         <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-black">불일치 조건</h3><div className="mt-2 flex flex-wrap gap-1">{card.notMatched.length ? card.notMatched.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-destructive/10 px-2 py-1 text-[10px] text-destructive">{item}</span>) : <span className="text-[10px] text-muted-foreground">없음</span>}</div></section>
         <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-black">누락·미검증</h3><div className="mt-2 flex flex-wrap gap-1">{missing.length ? missing.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-warning/10 px-2 py-1 text-[10px] text-warning">{item}</span>) : <span className="text-[10px] text-muted-foreground">없음</span>}</div></section>
       </div>
+      {qualityPanel}
     </div>
   );
 
@@ -389,18 +396,18 @@ function SignalDetailPanel({
     <section data-testid="scanner-mobile-performance" className="rounded-2xl border border-card-border p-3">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-xs font-black">검증 성과</h3>
-        <span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">{quality?.status ?? 'missing'}</span>
+        <span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">{quality?.status ? '검증 정보 있음' : '미확인'}</span>
       </div>
       <p className="mt-2 text-[10px] leading-4 text-muted-foreground">검증 이력이 없거나 표본이 부족하면 0%로 만들지 않고 미확인으로 표시합니다.</p>
       <div className="mt-3 grid grid-cols-2 gap-2 text-center">
         <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">OOS 승률</p><p className="text-xs font-black">{formatMetric(quality?.oosWinRate, '%')}</p></div>
         <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">WF 승률</p><p className="text-xs font-black">{formatMetric(quality?.walkForwardWinRate, '%')}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Expectancy</p><p className="text-xs font-black">{formatMetric(quality?.expectancyPercent, '%')}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Profit Factor</p><p className="text-xs font-black">{formatMetric(quality?.profitFactor)}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">MDD</p><p className="text-xs font-black">{formatMetric(quality?.maxDrawdownPercent, '%')}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">기대값</p><p className="text-xs font-black">{formatMetric(quality?.expectancyPercent, '%')}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">손익비 지표</p><p className="text-xs font-black">{formatMetric(quality?.profitFactor)}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">최대낙폭</p><p className="text-xs font-black">{formatMetric(quality?.maxDrawdownPercent, '%')}</p></div>
         <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">표본 거래</p><p className="text-xs font-black">{formatMetric(quality?.tradeCount)}</p></div>
       </div>
-      <p className="mt-3 text-[10px] leading-4 text-muted-foreground">비용 반영 {quality?.costsIncluded === true ? '확인' : '미확인'} · 슬리피지 {quality?.slippageIncluded === true ? '확인' : '미확인'} · Regime {quality?.regime ?? '미확인'}</p>
+      <p className="mt-3 text-[10px] leading-4 text-muted-foreground">비용 반영 {quality?.costsIncluded === true ? '확인' : '미확인'} · 슬리피지 {quality?.slippageIncluded === true ? '확인' : '미확인'}</p>
     </section>
   );
 
@@ -419,22 +426,27 @@ function SignalDetailPanel({
         <h3 className="text-xs font-black">위험 · 데이터 상태</h3>
         <div className="mt-2 grid grid-cols-2 gap-2 text-center">
           <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">위험</p><p className="text-xs font-black">{formatNumber(card.riskScore, 1)} · {card.riskLevel}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Data</p><p className="text-xs font-black">{card.dataState}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">데이터</p><p className="text-xs font-black">{scannerDataStateLabel(card.dataState)}</p></div>
         </div>
-        <p className="mt-2 break-words text-[11px] leading-5 text-muted-foreground">출처 {card.dataSources.length ? card.dataSources.join(' · ') : '미확인'}</p>
-        <p className="mt-1 text-[11px] text-muted-foreground">관측 {formatObservedAt(card.observedAt)} · 만료 {formatObservedAt(card.expiresAt)}</p>
-        {risks.length ? <ul className="mt-2 space-y-1 text-[11px] leading-5 text-warning">{risks.map((risk) => <li key={risk}>• {risk}</li>)}</ul> : <p className="mt-2 text-[11px] text-muted-foreground">추가 Risk 경고 없음</p>}
+        {risks.length ? <ul className="mt-2 space-y-1 text-[11px] leading-5 text-warning">{risks.map((risk) => <li key={risk}>• {risk}</li>)}</ul> : <p className="mt-2 text-[11px] text-muted-foreground">추가 위험 경고 없음</p>}
+        <details className="mt-2 rounded-xl border border-card-border bg-background">
+          <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between px-3 text-[11px] font-semibold"><span>데이터 상세</span><span className="text-muted-foreground">출처 · 시각 ⌄</span></summary>
+          <div className="border-t border-card-border p-3 text-[10px] leading-4 text-muted-foreground">
+            <p className="break-words">출처 {card.dataSources.length ? card.dataSources.join(' · ') : '미확인'}</p>
+            <p className="mt-1">관측 {formatObservedAt(card.observedAt)} · 만료 {formatObservedAt(card.expiresAt)}</p>
+          </div>
+        </details>
       </section>
       <div className="grid grid-cols-2 gap-2">
-        <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-black">주문 준비</button>
+        <button type="button" aria-label="매매 검토 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-black">매매 검토</button>
         <button type="button" onClick={onOpenAsset} className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold">자산 상세</button>
       </div>
-      <p className="text-center text-[10px] font-bold text-muted-foreground">두 액션 모두 클릭만으로 주문을 제출하지 않습니다 · real order 0</p>
+      <p className="text-center text-[10px] font-bold text-muted-foreground">차트 확인과 매매 검토만으로 주문되지 않습니다.</p>
       {showOrderPreparation ? (
         <div data-testid="order-preparation" className="border-t border-card-border pt-3">
           <div className="mb-3 rounded-2xl border border-warning/30 bg-warning/10 p-3">
-            <h3 className="text-xs font-black">주문 준비 · 실행 아님</h3>
-            <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">기존 Risk Engine·승인형 Paper 계획만 재사용합니다. 이 화면은 실주문을 전송하지 않습니다.</p>
+            <h3 className="text-xs font-black">매매 검토</h3>
+            <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">진입·손절·목표를 확인하는 단계이며 이 화면만으로 주문되지 않습니다.</p>
           </div>
           <ScannerApprovalComposer selection={selection} />
         </div>
@@ -461,7 +473,7 @@ function SignalDetailPanel({
           <p className="mt-1 text-xs font-bold text-muted-foreground">{marketDisplayLabel(card)}</p>
           <div className="mt-2 flex flex-wrap gap-1">
             <span data-testid="scanner-direction-badge" className={`rounded-full border px-2 py-1 text-[10px] font-black ${actionBadgeClass(card)}`}>{actionLabel(card)}</span>
-            <span data-testid="scanner-signal-state" className="rounded-full border border-primary/30 px-2 py-1 text-[10px] font-black">상태 {card.signalState || '미확인'}</span>
+            <span data-testid="scanner-signal-state" className="rounded-full border border-primary/30 px-2 py-1 text-[10px] font-black">상태 {signalStateLabel(card.signalState)}</span>
             <span data-testid="scanner-evidence-grade" className="rounded-full border border-card-border px-2 py-1 text-[10px] font-black">등급 {evidenceGradeLabel(card)}</span>
             <span data-testid="scanner-ttl-badge" className="rounded-full border border-card-border px-2 py-1 text-[10px] font-black">{remainingValidityLabel(card.expiresAt)}</span>
           </div>
@@ -498,10 +510,9 @@ function SignalDetailPanel({
         </>
       ) : (
         <>
-          {qualityPanel}
           {evidenceContent}
           <section className="mt-3 rounded-2xl border border-card-border p-3" data-testid="scanner-price-plan">
-            <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">서버 계획</span></div>
+            <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">확인된 계획</span></div>
             <div className="mt-2 grid grid-cols-2 gap-2 text-center sm:grid-cols-5">
               <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">진입</p><p className="text-xs font-black">{card.pricePlan.entryZone ? `${formatNumber(card.pricePlan.entryZone.from)}~${formatNumber(card.pricePlan.entryZone.to)}` : '미확인'}</p></div>
               <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">손절</p><p className="text-xs font-black">{formatNumber(card.pricePlan.stopLoss)}</p></div>
@@ -510,24 +521,25 @@ function SignalDetailPanel({
               <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">R:R</p><p className="text-xs font-black">{card.pricePlan.riskReward == null ? '미확인' : card.pricePlan.riskReward.toFixed(2)}</p></div>
             </div>
           </section>
-          <section className="mt-3 rounded-2xl border border-card-border p-3">
-            <h3 className="text-xs font-black">데이터 근거·Freshness</h3>
-            <p className="mt-2 break-words text-[11px] leading-5 text-muted-foreground">출처 {card.dataSources.length ? card.dataSources.join(' · ') : '미확인'}</p>
-            <p className="mt-1 break-words text-[11px] leading-5 text-muted-foreground">근거 소스 {matchedEvidence.length ? [...new Set(matchedEvidence.map((item) => item.source).filter(Boolean))].join(' · ') : '미확인'}</p>
-            <p className="mt-1 text-[11px] text-muted-foreground">관측 {formatObservedAt(card.observedAt)} · 만료 {formatObservedAt(card.expiresAt)} · {card.dataState}</p>
-            {risks.length ? <ul className="mt-2 space-y-1 text-[11px] leading-5 text-warning">{risks.map((risk) => <li key={risk}>• {risk}</li>)}</ul> : <p className="mt-2 text-[11px] text-muted-foreground">추가 Risk 경고 없음</p>}
-          </section>
+          <details className="mt-3 rounded-xl border border-card-border">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between px-3 text-xs font-semibold"><span>데이터 상세</span><span className="text-muted-foreground">출처 · 시각 ⌄</span></summary>
+            <div className="border-t border-card-border p-3 text-[11px] leading-5 text-muted-foreground">
+              <p className="break-words">출처 {card.dataSources.length ? card.dataSources.join(' · ') : '미확인'}</p>
+              <p className="mt-1 break-words">근거 {matchedEvidence.length ? [...new Set(matchedEvidence.map((item) => item.source).filter(Boolean))].join(' · ') : '미확인'}</p>
+              <p className="mt-1">관측 {formatObservedAt(card.observedAt)} · 만료 {formatObservedAt(card.expiresAt)}</p>
+            </div>
+          </details>
           <div className="mt-3 grid grid-cols-2 gap-2">
-            <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-black text-primary-foreground">AI 차트</button>
-            <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-black">주문 준비</button>
+            <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary/12 px-3 text-sm font-black text-primary ring-1 ring-inset ring-primary/35">AI 차트</button>
+            <button type="button" aria-label="매매 검토 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-black">매매 검토</button>
             <button type="button" onClick={onOpenAsset} className="col-span-2 min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold">기존 자산 상세 열기</button>
           </div>
-          <p className="mt-2 text-center text-[10px] font-bold text-muted-foreground">두 액션 모두 클릭만으로 주문을 제출하지 않습니다 · real order 0</p>
+          <p className="mt-2 text-center text-[10px] font-bold text-muted-foreground">차트 확인과 매매 검토만으로 주문되지 않습니다.</p>
           {showOrderPreparation ? (
             <div data-testid="order-preparation" className="mt-4 border-t border-card-border pt-4">
               <div className="mb-3 rounded-2xl border border-warning/30 bg-warning/10 p-3">
-                <h3 className="text-xs font-black">주문 준비 · 실행 아님</h3>
-                <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">기존 Risk Engine·승인형 Paper 계획만 재사용합니다. 이 화면은 실주문을 전송하지 않습니다.</p>
+                <h3 className="text-xs font-black">매매 검토</h3>
+                <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">진입·손절·목표를 확인하는 단계이며 이 화면만으로 주문되지 않습니다.</p>
               </div>
               <ScannerApprovalComposer selection={selection} />
             </div>
@@ -749,11 +761,8 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
         <header className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <p className="text-xs font-semibold text-primary">공개 시장데이터 전용 · 자동 전략 Profile</p>
-              <h1 className="mt-1 text-xl font-black">AI 신호검색기</h1>
-              <p className="mt-1 hidden max-w-3xl break-keep text-xs leading-relaxed text-muted-foreground sm:block">
-                시장과 투자 스타일만 선택하면 시간봉·기술지표·패턴·변동성·거래량·추세·시장국면·리스크 조건을 내부 엔진이 자동 조합합니다. 계좌·주문·취소 API는 호출하지 않습니다.
-              </p>
+              <h1 className="text-xl font-black">AI 신호검색기</h1>
+              <p className="mt-1 hidden text-xs text-muted-foreground sm:block">시장과 투자 스타일을 선택하면 조건에 맞는 후보를 자동으로 찾습니다.</p>
             </div>
             <button type="button" onClick={() => setRefreshToken((value) => value + 1)} className="min-h-11 shrink-0 rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground">
               새로고침
@@ -784,10 +793,10 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
         <section aria-label="자동 전략 안내" className="rounded-3xl border border-card-border bg-card p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <p className="text-sm font-black">{strategyLabel(strategy)} · 자동 Profile</p>
-              <p className="mt-1 break-keep text-xs text-muted-foreground">분석 시간봉 {effectiveTimeframe} · 확인 시간봉과 지표 가중치는 시장별 Profile에서 자동 관리</p>
+              <p className="text-sm font-black">{strategyLabel(strategy)} · 자동 설정</p>
+              <p className="mt-1 break-keep text-xs text-muted-foreground">분석 시간봉 {effectiveTimeframe} · 세부 조건은 자동으로 조정됩니다.</p>
             </div>
-            <span className="rounded-full border border-card-border px-3 py-1 text-[11px] font-bold">{profile.profileVersion}</span>
+            <span className="rounded-full border border-card-border px-3 py-1 text-[11px] font-bold">{effectiveTimeframe}</span>
           </div>
           <p data-testid="scanner-market-signal-guide" className="mt-2 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-black text-primary">
             {view === 'FUTURES' ? '코인 선물 · ↑ 롱 신호 / ↓ 숏 신호' : `${view === 'KR' ? '국내주식' : view === 'US' ? '미국주식' : '코인 현물'} · ↗ 매수 신호`}
@@ -834,26 +843,28 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
           <>
             <section data-testid={status === 'partial' ? 'scanner-partial' : undefined} className={`rounded-3xl border p-4 ${status === 'partial' ? 'border-amber-500/40 bg-amber-500/10' : 'border-card-border bg-card'}`}>
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div><p className="text-sm font-black">{data.message}</p><p className="mt-1 text-xs text-muted-foreground">{strategyLabel(strategy)} · {data.timeframe} · {new Date(data.generatedAt).toLocaleString('ko-KR')}</p></div>
-                <div className="flex flex-wrap justify-end gap-1"><span className="rounded-full border border-card-border px-3 py-1 text-xs font-bold">{data.dataState}</span>{outcome ? <span data-testid="scanner-outcome" className="rounded-full border border-card-border px-3 py-1 text-[10px] font-black">{outcome}</span> : null}</div>
+                <div><p className="text-sm font-black">검색 결과</p><p className="mt-1 text-xs text-muted-foreground">{strategyLabel(strategy)} · {data.timeframe}</p></div>
+                <div className="flex flex-wrap justify-end gap-1"><span className="rounded-full border border-card-border px-3 py-1 text-xs font-bold">{scannerDataStateLabel(data.dataState)}</span>{outcome ? <span data-testid="scanner-outcome" className="rounded-full border border-card-border px-3 py-1 text-[10px] font-black">{OUTCOME_COPY[outcome].title}</span> : null}</div>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
                 <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">스캔</p><p className="text-sm font-black">{data.execution.requestedCount}</p></div>
                 <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">분석 완료</p><p className="text-sm font-black">{data.execution.dataSuccessCount ?? data.execution.completedCount}</p></div>
                 <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">표시</p><p className="text-sm font-black">{data.execution.finalDisplayedCount ?? normalizedCards.length}</p></div>
-                <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Provider 오류</p><p className="text-sm font-black">{data.execution.providerErrorCount}</p></div>
+                <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">확인 실패</p><p className="text-sm font-black">{data.execution.providerErrorCount}</p></div>
               </div>
             </section>
 
             {data.failures.length > 0 && (
-              <section className="rounded-3xl border border-amber-500/30 bg-card p-4">
-                <h2 className="text-sm font-black">분석하지 못한 종목 {data.failures.length}개</h2>
-                <div className="mt-2 space-y-1">
+              <details className="rounded-xl border border-amber-500/30 bg-card">
+                <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between px-3 text-sm font-semibold">
+                  <span>데이터 확인 필요</span><span className="text-xs text-warning">{data.failures.length}개 ⌄</span>
+                </summary>
+                <div className="space-y-1 border-t border-amber-500/20 p-3">
                   {data.failures.map((failure) => (
-                    <p key={`${failure.symbol}:${failure.reason}`} className="text-xs text-muted-foreground">{failure.symbol} · {failure.reason}</p>
+                    <p key={`${failure.symbol}:${failure.reason}`} className="text-xs text-muted-foreground">{failure.symbol}</p>
                   ))}
                 </div>
-              </section>
+              </details>
             )}
 
             {data.alerts.length > 0 && (
@@ -870,7 +881,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
 
             {normalizedCards.length === 0 ? (
               <section data-testid="scanner-zero-outcome" className="rounded-3xl border border-card-border bg-card p-6 text-center">
-                <p className="text-sm font-black">{outcome ? OUTCOME_COPY[outcome].title : 'VALID_ZERO_SIGNAL'}</p>
+                <p className="text-sm font-black">{outcome ? OUTCOME_COPY[outcome].title : '신호 없음'}</p>
                 <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">{outcome ? OUTCOME_COPY[outcome].description : '현재 조건에서 표시할 검증 후보가 없습니다.'}</p>
                 <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] sm:grid-cols-4">
                   <span className="rounded-xl bg-background p-2">유니버스 {data.universe.totalCount}</span>
@@ -901,10 +912,10 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                         </button>
                         <div className="shrink-0 text-right"><p className="text-sm font-black">{formatNumber(card.price, card.currency === 'KRW' ? 0 : 6)}</p><p className="text-xs text-muted-foreground">신호점수 {formatNumber(card.score, 1)} · 위험 {formatNumber(card.riskScore, 1)}</p></div>
                       </div>
-                      <div className="mt-2 flex min-w-0 flex-wrap gap-1">{card.matched.slice(0, 3).map((item) => <span key={item} className="max-w-full truncate rounded-lg bg-background px-2 py-1 text-[10px]">{item}</span>)}{card.unverified.length ? <span className="rounded-lg bg-warning/10 px-2 py-1 text-[10px] text-warning">미검증 {card.unverified.length}</span> : null}</div>
+                      <div className="mt-2 flex min-w-0 flex-wrap gap-1">{card.matched.slice(0, 3).map((item) => <span key={item} className="max-w-full truncate rounded-lg bg-background px-2 py-1 text-[10px]">{item}</span>)}{card.unverified.length ? <span className="rounded-lg bg-warning/10 px-2 py-1 text-[10px] text-warning">확인 필요 {card.unverified.length}</span> : null}</div>
                       <div className="mt-2 grid grid-cols-2 gap-2">
-                        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={() => openInAiChart(card)} className="min-h-11 rounded-xl bg-primary px-2 text-xs font-black text-primary-foreground">AI 차트</button>
-                        <button type="button" aria-label={`${card.name} 주문 준비`} onClick={() => openOrderPreparation(card)} className="min-h-11 rounded-xl border border-primary/40 px-2 text-xs font-black">주문 준비</button>
+                        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={() => openInAiChart(card)} className="min-h-11 rounded-xl bg-primary/12 px-2 text-xs font-black text-primary ring-1 ring-inset ring-primary/35">AI 차트</button>
+                        <button type="button" aria-label={`${card.name} 매매 검토`} onClick={() => openOrderPreparation(card)} className="min-h-11 rounded-xl border border-primary/40 px-2 text-xs font-black">매매 검토</button>
                       </div>
                     </article>
                   ))}

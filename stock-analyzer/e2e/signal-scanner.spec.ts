@@ -266,11 +266,11 @@ test('signal click explains why, preserves PricePlan, and exposes only safe cont
   await expect(detail).toContainText('왜 이 신호인가');
   await expect(detail).toContainText('실제 공개 캔들로 추세를 확인했습니다.');
   await expect(detail).toContainText('74,000~75,000');
-  await expect(detail).toContainText('서버 계획');
-  await expect(detail).toContainText('public-candles');
-  await detail.getByRole('button', { name: '주문 준비 열기' }).click();
-  await expect(detail.getByTestId('order-preparation')).toContainText('실행 아님');
-  await expect(detail.getByTestId('order-preparation')).toContainText(/검색·분석 전용|승인 대기 등록/);
+  await expect(detail).toContainText('확인된 계획');
+  await expect(detail).not.toContainText('public-candles');
+  await detail.getByRole('button', { name: '매매 검토 열기' }).click();
+  await expect(detail.getByTestId('order-preparation')).toContainText('매매 검토');
+  await expect(detail.getByTestId('order-preparation')).toContainText('이 화면만으로 주문되지 않습니다.');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   expect(forbidden).toEqual([]);
 });
@@ -312,8 +312,8 @@ test('actual-provider semantics with zero signals remains a valid flow fixture',
   await installBaseMocks(page, []);
   await page.route('**/api/market/scan**', (route) => fulfill(route, validZeroScannerResponse()));
   await page.goto('/__phase11-technical-workspace-e2e');
-  await expect(page.getByTestId('scanner-zero-outcome')).toContainText('VALID_ZERO_SIGNAL');
-  await expect(page.getByTestId('scanner-zero-outcome')).toContainText('공급자 데이터와 분석은 정상');
+  await expect(page.getByTestId('scanner-zero-outcome')).toContainText('신호 없음');
+  await expect(page.getByTestId('scanner-zero-outcome')).toContainText('현재 조건에 맞는 신호가 없습니다.');
   await expect(page.getByTestId('scanner-zero-outcome')).toContainText('유니버스 80');
   await expect(page.getByRole('alert')).toHaveCount(0);
 });
@@ -421,9 +421,13 @@ test('partial data and provider failure are distinguished without fake success',
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/__phase11-technical-workspace-e2e');
-  await expect(page.getByTestId('scanner-partial')).toContainText('공개 공급자 일부 지연 결과입니다.');
-  await expect(page.getByRole('heading', { name: '분석하지 못한 종목 1개' })).toBeVisible();
-  await expect(page.getByText('FAILED · provider_error')).toBeVisible();
+  await expect(page.getByTestId('scanner-partial')).toContainText('검색 결과');
+  await expect(page.getByTestId('scanner-partial')).toContainText('일부 데이터');
+  const failures = page.getByText('데이터 확인 필요', { exact: true });
+  await expect(failures).toBeVisible();
+  await failures.click();
+  await expect(page.getByText('FAILED', { exact: true })).toBeVisible();
+  await expect(page.getByText('provider_error', { exact: true })).toHaveCount(0);
 
   mode = 'error';
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));

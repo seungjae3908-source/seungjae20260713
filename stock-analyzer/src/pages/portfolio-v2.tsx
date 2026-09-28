@@ -107,6 +107,21 @@ const money = (value: number | null | undefined) => value == null || !Number.isF
   : `${Math.round(value).toLocaleString('ko-KR')}원`;
 const percent = (value: number | null | undefined) => value == null || !Number.isFinite(value) ? '미확인' : `${value.toFixed(1)}%`;
 
+function assetClassLabel(value: string): string {
+  const key = value.trim().toUpperCase();
+  const labels: Record<string, string> = {
+    KR_STOCKS: '국내주식',
+    KR_STOCK: '국내주식',
+    US_STOCKS: '미국주식',
+    US_STOCK: '미국주식',
+    CRYPTO_SPOT: '코인 현물',
+    CRYPTO_FUTURES: '코인 선물',
+    CRYPTO_FUTURES_EQUITY: '코인 선물',
+    CASH: '현금',
+  };
+  return labels[key] ?? value.replaceAll('_', ' ');
+}
+
 function stateLabel(value: string | null | undefined): string {
   const normalized = String(value ?? '').trim().toUpperCase();
   if (!normalized) return '상태 미확인';
@@ -133,8 +148,8 @@ function missingSourceLabel(source: string): string {
   if (source.includes('READONLY_CASH_SOURCE_UNAVAILABLE')) return '현금 계좌 조회 원본 미연결';
   if (source.includes('PRIVATE_PROVIDER_NOT_CALLED')) return '안전 경계로 비공개 공급자 데이터 미수집';
   if (source.includes('CORRELATION:HISTORY_UNAVAILABLE')) return '상관관계 계산용 공개 일봉 이력 수집 실패';
-  if (source.toUpperCase().includes('FX')) return `환율 근거 부족: ${source}`;
-  return source;
+  if (source.toUpperCase().includes('FX')) return '환율 데이터 확인 필요';
+  return '일부 자산 데이터 확인 필요';
 }
 
 async function postJson<T>(path: string, body: Record<string, unknown>): Promise<T> {
@@ -302,17 +317,6 @@ function IntelligenceDashboard() {
   });
   const intelligence = query.data?.portfolio;
 
-  useEffect(() => {
-    const locationQuery = location.includes('?') ? location.slice(location.indexOf('?') + 1) : '';
-    const browserQuery = typeof window !== 'undefined' ? window.location.search.replace(/^\?/, '') : '';
-    const focus = new URLSearchParams(locationQuery || browserQuery).get('focus');
-    if (focus !== 'ai') return;
-    const timer = window.setTimeout(() => {
-      document.getElementById('portfolio-ai-diagnosis')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [location]);
-
   return <div className="h-full overflow-y-auto overscroll-contain bg-background pb-24">
     <div className="mx-auto w-full max-w-6xl space-y-4 px-3 py-4 sm:px-5">
       <header className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-2 rounded-2xl border border-border bg-card p-3">
@@ -321,49 +325,64 @@ function IntelligenceDashboard() {
         <button type="button" aria-label="포트폴리오 인텔리전스 새로고침" onClick={() => void query.refetch()} disabled={query.isFetching} className="flex h-11 w-11 items-center justify-center rounded-xl border border-border"><RefreshCw className={cn('h-4 w-4', query.isFetching && 'animate-spin')} /></button>
       </header>
 
-      <PortfolioAiDiagnosis />
       {query.isLoading ? <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">{Array.from({ length: 8 }, (_, index) => <div key={index} className="h-24 animate-pulse rounded-2xl bg-muted/40" />)}</div> : null}
       {query.isError ? <div className="rounded-2xl border border-destructive/30 bg-destructive/10 p-4 text-center text-sm font-semibold text-destructive">자산 정보를 불러오지 못했습니다. 서버 오류를 정상값으로 바꾸지 않습니다.</div> : null}
 
       {intelligence ? <>
-        <div data-testid="portfolio-data-quality" className="flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-border bg-card p-3 text-center">
-          <StateBadge value={intelligence.status} />
-          <span className="text-xs font-medium text-muted-foreground">기준 {basisTime(intelligence.asOf)}</span>
-          <span className="text-xs font-medium text-muted-foreground">공급자 {intelligence.dataQuality.includedProviderCount}/{intelligence.dataQuality.providerCount}</span>
-          {intelligence.dataQuality.invalidHoldingRows > 0 ? <span className="text-xs font-semibold text-destructive">원본 검증 실패 {intelligence.dataQuality.invalidHoldingRows}건</span> : null}
+        <div data-testid="portfolio-data-quality" className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2.5">
+          <span className="text-xs font-semibold text-muted-foreground">데이터 상태</span>
+          <div className="flex items-center gap-2">
+            {intelligence.dataQuality.invalidHoldingRows > 0 ? <span className="text-xs font-semibold text-warning">확인 필요</span> : null}
+            <StateBadge value={intelligence.status} />
+          </div>
         </div>
 
         <section className="grid grid-cols-2 gap-2 lg:grid-cols-5">
           <Metric label="총 자산" value={money(intelligence.totalAssets.normalizedKRW)} state={intelligence.totalAssets.status} />
-          <Metric testId="portfolio-known-total" label="확인된 자산 합계" value={money(intelligence.totalAssets.knownNormalizedKRW)} state="KNOWN_BASIS" />
-          <Metric label="투자 원금" value={money(intelligence.investmentPrincipal.normalizedKRW)} state={intelligence.investmentPrincipal.status} />
           <Metric label="평가손익" value={money(intelligence.valuationPnl.normalizedKRW)} state={intelligence.valuationPnl.status} />
-          <Metric label="전체 수익률" value={percent(intelligence.valuationPnl.returnPercent)} state={intelligence.valuationPnl.status} />
+          <Metric label="수익률" value={percent(intelligence.valuationPnl.returnPercent)} state={intelligence.valuationPnl.status} />
           <Metric label="현금" value={money(intelligence.cash.totalKRW)} state={intelligence.cash.status} />
-          <Metric label="최소 현금 여유" value={money(intelligence.minimumCashBuffer.normalizedKRW)} state={intelligence.minimumCashBuffer.status} />
-          <Metric label="추가 투자 가능" value={money(intelligence.investableCash.normalizedKRW)} state={intelligence.investableCash.status} />
-          <Metric label="포트폴리오 위험" value={intelligence.riskClassification.level ?? '미확인'} state={intelligence.riskClassification.status} />
+          <Metric label="위험도" value={intelligence.riskClassification.level ?? '미확인'} state={intelligence.riskClassification.status} />
         </section>
+
+        <details className="rounded-xl border border-border bg-card" data-testid="portfolio-secondary-metrics">
+          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between px-3 text-sm font-semibold">
+            <span>자산 상세</span><span className="text-xs text-muted-foreground">원금 · 현금여유</span>
+          </summary>
+          <div className="grid grid-cols-2 gap-2 border-t border-border p-3 sm:grid-cols-4">
+            <Metric testId="portfolio-known-total" label="확인된 자산" value={money(intelligence.totalAssets.knownNormalizedKRW)} state="KNOWN_BASIS" />
+            <Metric label="투자 원금" value={money(intelligence.investmentPrincipal.normalizedKRW)} state={intelligence.investmentPrincipal.status} />
+            <Metric label="최소 현금 여유" value={money(intelligence.minimumCashBuffer.normalizedKRW)} state={intelligence.minimumCashBuffer.status} />
+            <Metric label="추가 투자 가능" value={money(intelligence.investableCash.normalizedKRW)} state={intelligence.investableCash.status} />
+          </div>
+        </details>
 
         {intelligence.totalAssets.normalizedKRW == null ? <p className="rounded-xl bg-muted/40 p-3 text-center text-xs font-medium leading-5 text-muted-foreground">누락된 계좌·현금 근거가 있어 총 자산은 확정하지 않습니다. 확인된 자산 합계는 실제로 수집된 항목만 더한 값입니다.</p> : null}
 
         <section className="grid gap-3 lg:grid-cols-2">
-          <div className="rounded-2xl border border-border bg-card p-4"><h2 className="text-center text-base font-bold">자산배분</h2><div className="mt-3 space-y-2">{Object.entries(intelligence.allocation.buckets).map(([key, value]) => <div key={key} className="flex items-center justify-between gap-3 text-sm font-semibold"><span>{key}</span><span className="tabular-nums">{percent(value)}</span></div>)}</div><p className="mt-3 text-center text-xs font-medium text-muted-foreground">확인된 자산 {money(intelligence.allocation.knownTotalKRW)} 기준 · 미수집 자산은 0%로 바꾸지 않습니다.</p></div>
-          <div className="rounded-2xl border border-border bg-card p-4"><h2 className="text-center text-base font-bold">집중도 · 분산</h2><p className="mt-3 text-center text-sm font-semibold">상위 5개 집중도 {percent(intelligence.top5Concentration.percent)}</p><p className="mt-2 text-center text-sm font-semibold">상관관계 {intelligence.correlation.pair.join(' / ') || '—'} · {intelligence.correlation.correlation == null ? '미확인' : intelligence.correlation.correlation.toFixed(3)}</p><p className="mt-1 text-center text-xs font-medium text-muted-foreground">정렬 표본 {intelligence.correlation.sampleSize}</p><p className="mt-2 text-center text-xs font-medium text-muted-foreground">위험 근거: {intelligence.riskClassification.reason}</p></div>
+          <div className="rounded-2xl border border-border bg-card p-4"><h2 className="text-center text-base font-bold">자산배분</h2><div className="mt-3 space-y-2">{Object.entries(intelligence.allocation.buckets).map(([key, value]) => <div key={key} className="flex items-center justify-between gap-3 text-sm font-semibold"><span>{assetClassLabel(key)}</span><span className="tabular-nums">{percent(value)}</span></div>)}</div><p className="mt-3 text-center text-xs font-medium text-muted-foreground">확인된 자산 {money(intelligence.allocation.knownTotalKRW)} 기준 · 미수집 자산은 0%로 바꾸지 않습니다.</p></div>
+          <div className="rounded-2xl border border-border bg-card p-4"><h2 className="text-center text-base font-bold">집중도 · 분산</h2><p className="mt-3 text-center text-sm font-semibold">상위 5개 집중도 {percent(intelligence.top5Concentration.percent)}</p><p className="mt-2 text-center text-sm font-semibold">상관관계 {intelligence.correlation.pair.join(' / ') || '—'} · {intelligence.correlation.correlation == null ? '미확인' : intelligence.correlation.correlation.toFixed(3)}</p><details className="mt-2 text-center text-xs text-muted-foreground"><summary className="cursor-pointer font-medium">분산 근거</summary><p className="mt-2">정렬 표본 {intelligence.correlation.sampleSize} · {intelligence.riskClassification.reason}</p></details></div>
         </section>
 
         <section className="rounded-2xl border border-border bg-card p-4"><h2 className="text-center text-base font-bold">상위 보유자산</h2><div className="mt-3 divide-y divide-border">{intelligence.topHoldings.length ? intelligence.topHoldings.map((holding) => <div key={holding.id} className="flex items-center justify-between gap-3 py-2 text-sm"><div className="min-w-0"><p className="truncate font-semibold">{holding.name}</p><p className="text-xs font-medium text-muted-foreground">{holding.ticker} · {holding.market} · {holding.currentPrice.toLocaleString()} {holding.currency}</p></div><span className="shrink-0 font-semibold tabular-nums">{money(holding.normalizedKRW)}</span></div>) : <p className="text-center text-sm font-medium text-muted-foreground">보유자산 없음</p>}</div></section>
 
-        <section className="rounded-2xl border border-border bg-card p-4"><div className="flex flex-wrap items-center justify-center gap-2"><BrainCircuit className="h-4 w-4" /><h2 className="font-bold">자산배분 정책</h2><select aria-label="투자 성향" className="rounded-xl border border-border bg-background px-2 py-2 text-xs font-semibold" value={profile} onChange={(event) => setProfile(event.target.value)}><option value="STABLE">안정형</option><option value="BALANCED">균형형</option><option value="GROWTH">성장형</option></select></div><div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">{intelligence.allocationPolicy.comparison.map((row) => <div key={row.assetClass} className="rounded-xl bg-muted/40 p-3 text-center"><p className="text-xs font-semibold">{row.assetClass}</p><p className="mt-1 text-xs font-medium text-muted-foreground">현재 {percent(row.currentPercent)} · 허용 {row.minPercent}–{row.maxPercent}%</p><p className="mt-2 text-sm font-bold" title={row.state}>{stateLabel(row.state)}</p></div>)}</div><p className="mt-3 text-center text-xs font-medium text-muted-foreground">현재 비중을 허용범위와 비교하며 단일 목표비중을 의미하지 않습니다.</p></section>
+        <PortfolioAiDiagnosis />
 
-        <div className="grid gap-4 lg:grid-cols-2"><AdditionalBuySimulator intelligence={intelligence} /><MonthlySimulator intelligence={intelligence} profile={profile} /></div>
+        <details className="rounded-2xl border border-border bg-card"><summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold"><span>자산배분 설정</span><span className="text-muted-foreground">⌄</span></summary><div className="border-t border-border p-4"><div className="flex flex-wrap items-center justify-center gap-2"><BrainCircuit className="h-4 w-4" /><h2 className="font-bold">허용 범위</h2><select aria-label="투자 성향" className="rounded-xl border border-border bg-background px-2 py-2 text-xs font-semibold" value={profile} onChange={(event) => setProfile(event.target.value)}><option value="STABLE">안정형</option><option value="BALANCED">균형형</option><option value="GROWTH">성장형</option></select></div><div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">{intelligence.allocationPolicy.comparison.map((row) => <div key={row.assetClass} className="rounded-xl bg-muted/40 p-3 text-center"><p className="text-xs font-semibold">{assetClassLabel(row.assetClass)}</p><p className="mt-1 text-xs font-medium text-muted-foreground">현재 {percent(row.currentPercent)} · 허용 {row.minPercent}–{row.maxPercent}%</p><p className="mt-2 text-sm font-bold" title={row.state}>{stateLabel(row.state)}</p></div>)}</div><p className="mt-3 text-center text-xs font-medium text-muted-foreground">현재 비중을 허용범위와 비교하며 단일 목표비중을 의미하지 않습니다.</p></div></details>
 
-        {intelligence.missingSources.length ? <section data-testid="portfolio-partial-sources" className="rounded-2xl border border-warning/30 bg-warning/10 p-4"><div className="flex items-center justify-center gap-2"><ShieldAlert className="h-4 w-4" /><h2 className="font-bold">수집하지 못한 데이터</h2></div><p className="mt-1 text-center text-xs font-medium text-muted-foreground">누락 항목은 0으로 간주하지 않으며 관련 계산을 일부 데이터 상태로 유지합니다.</p><ul className="mt-2 space-y-1 text-xs font-medium text-muted-foreground">{intelligence.missingSources.map((source) => <li key={source}>• {missingSourceLabel(source)}</li>)}</ul></section> : null}
+        <details className="rounded-2xl border border-border bg-card">
+          <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold"><span>투자 시뮬레이션</span><span className="text-muted-foreground">추가매수 · 월 적립 ⌄</span></summary>
+          <div className="grid gap-4 border-t border-border p-3 lg:grid-cols-2"><AdditionalBuySimulator intelligence={intelligence} /><MonthlySimulator intelligence={intelligence} profile={profile} /></div>
+        </details>
 
-        <section data-testid="portfolio-fx-provenance" className="rounded-2xl border border-border bg-card p-4">
-          <div className="flex items-center justify-center gap-2"><h2 className="font-bold">환율 근거</h2><StateBadge value={intelligence.fx.status} /></div>
-          {intelligence.fx.quotes.length ? <div className="mt-3 grid gap-2 sm:grid-cols-2">{intelligence.fx.quotes.map((quote) => <div key={`${quote.pair}-${quote.source}`} className="rounded-xl bg-muted/40 p-3 text-center"><div className="flex items-center justify-center gap-2"><p className="text-sm font-semibold">{quote.pair}</p><StateBadge value={quote.quality} /></div><p className="mt-1 text-lg font-bold tabular-nums">{quote.rate.toLocaleString()}</p><p className="mt-1 text-xs font-medium text-muted-foreground">{quote.source}</p><p className="mt-1 text-xs font-medium text-muted-foreground">근거 시각 {basisTime(quote.asOf)}</p></div>)}</div> : <p className="mt-3 text-center text-xs font-medium text-muted-foreground">환율 근거가 없어 필요한 자산은 원화 합계에 임의 반영하지 않습니다.</p>}
-        </section>
+        {intelligence.missingSources.length ? <details data-testid="portfolio-partial-sources" className="rounded-xl border border-warning/30 bg-warning/10"><summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 text-sm font-semibold"><span className="flex items-center gap-2"><ShieldAlert className="h-4 w-4" />일부 자산 데이터 미연결</span><span className="text-xs text-warning">{intelligence.missingSources.length}개</span></summary><ul className="space-y-1 border-t border-warning/20 p-3 text-xs font-medium text-muted-foreground">{intelligence.missingSources.map((source) => <li key={source}>• {missingSourceLabel(source)}</li>)}</ul></details> : null}
+
+        <details data-testid="portfolio-fx-provenance" className="rounded-xl border border-border bg-card">
+          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between px-3 text-sm font-semibold"><span>적용 환율</span><StateBadge value={intelligence.fx.status} /></summary>
+          <div className="border-t border-border p-3">
+            {intelligence.fx.quotes.length ? <div className="grid gap-2 sm:grid-cols-2">{intelligence.fx.quotes.map((quote) => <div key={`${quote.pair}-${quote.source}`} className="rounded-xl bg-muted/40 p-3"><div className="flex items-center justify-between gap-3"><p className="text-sm font-semibold">{quote.pair}</p><p className="text-base font-bold tabular-nums">{quote.rate.toLocaleString()}</p></div><details className="mt-2 text-xs text-muted-foreground"><summary className="cursor-pointer">데이터 상세</summary><p className="mt-1">{quote.source} · {basisTime(quote.asOf)}</p></details></div>)}</div> : <p className="text-center text-xs font-medium text-muted-foreground">환율 데이터가 확인되지 않았습니다.</p>}
+          </div>
+        </details>
       </> : null}
     </div>
     <BottomNav />

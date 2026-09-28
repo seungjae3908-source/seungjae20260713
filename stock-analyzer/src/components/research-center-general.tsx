@@ -1,20 +1,10 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, Clock3, Database, RefreshCw, TrendingUp, WalletCards } from 'lucide-react';
+import { Activity, Database, RefreshCw, TrendingUp, WalletCards, X } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { PROMOTION_STAGE_KO } from '@/lib/labels';
 import { fetchResearchCenterOverview, type ResearchCandidatePerformance, type ResearchCenterOverview } from '@/lib/research-center';
 
-function formatDate(value: number | null | undefined) {
-  if (value == null) return '미확인';
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return '미확인';
-  return new Intl.DateTimeFormat('ko-KR', {
-    dateStyle: 'short',
-    timeStyle: 'short',
-    timeZone: 'Asia/Seoul',
-  }).format(date);
-}
 
 function researchState(overview: ResearchCenterOverview) {
   if (!overview.state.present) return { value: '근거 미수집', detail: '연구 overview 근거가 아직 없습니다.', tone: 'neutral' as const };
@@ -191,19 +181,18 @@ function SummaryCard({ icon, label, value, detail, tone, selected, onClick, test
       onClick={onClick}
       aria-pressed={selected}
       aria-label={`${label} · ${value}`}
+      title={detail}
       data-testid={testId}
       className={
-        'min-w-0 rounded-2xl border bg-card p-3 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary '
-        + (selected ? 'border-primary ring-1 ring-primary/25' : 'border-card-border')
+        'min-w-0 rounded-xl border bg-card px-3 py-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary '
+        + (selected ? 'border-primary/60 bg-primary/5 ring-1 ring-primary/20' : 'border-card-border hover:border-primary/30 hover:bg-muted/30')
       }
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className={'flex h-9 w-9 items-center justify-center rounded-xl border ' + TONE[tone]} aria-hidden="true">{icon}</div>
-        <span className="text-xs font-black text-muted-foreground">{selected ? '선택됨' : '보기'}</span>
+      <div className="flex min-w-0 items-center gap-2">
+        <span className={'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ' + TONE[tone]} aria-hidden="true">{icon}</span>
+        <p className="min-w-0 truncate text-xs font-semibold text-muted-foreground">{label}</p>
       </div>
-      <p className="mt-3 text-xs font-medium text-muted-foreground">{label}</p>
-      <p className="mt-1 break-words text-lg font-bold tabular-nums">{value}</p>
-      <p className="mt-1 line-clamp-2 break-keep text-xs font-medium leading-5 text-muted-foreground">{detail}</p>
+      <p className="mt-3 break-words text-lg font-bold tabular-nums">{value}</p>
     </button>
   );
 }
@@ -294,33 +283,27 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
   });
 
   const overview = query.data;
-  const [selected, setSelected] = useState<'research' | 'data' | 'paper' | 'profitability'>('research');
+  const [selected, setSelected] = useState<'research' | 'data' | 'paper' | 'profitability' | null>(null);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background" data-testid="research-general-view">
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-24">
         <div className="mx-auto w-full max-w-6xl space-y-4 px-3 py-4 sm:px-5 lg:py-6">
 
-          <header className="rounded-2xl border border-card-border bg-card p-4 shadow-sm sm:p-5">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-[11px] font-black uppercase tracking-[0.14em] text-primary">Research Center</p>
-                <h1 className="mt-1 text-xl font-black sm:text-2xl">현재 어디까지 왔나요?</h1>
-                <p className="mt-2 break-keep text-sm leading-6 text-muted-foreground">
-                  카드 하나를 누르면 왜 그런 상태인지와 다음에 볼 것을 바로 설명합니다.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => void query.refetch()}
-                disabled={query.isFetching}
-                className="flex min-h-11 shrink-0 items-center justify-center rounded-xl border border-card-border px-3 disabled:opacity-50"
-                aria-label="연구 상태 새로고침"
-              >
-                <RefreshCw className={'h-4 w-4 ' + (query.isFetching ? 'animate-spin' : '')} aria-hidden="true" />
-              </button>
+          <header className="flex items-center justify-between gap-3 border-b border-card-border/80 px-1 pb-3">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-primary">Research Center</p>
+              <h1 className="mt-0.5 text-xl font-bold sm:text-2xl">연구센터</h1>
             </div>
-            {overview ? <p className="mt-3 text-xs text-muted-foreground">마지막 업데이트 · <strong className="text-foreground">{formatDate(overview.state.latestCycleAt)}</strong></p> : null}
+            <button
+              type="button"
+              onClick={() => void query.refetch()}
+              disabled={query.isFetching}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-card-border bg-card text-muted-foreground transition hover:text-foreground disabled:opacity-50"
+              aria-label="연구 상태 새로고침"
+            >
+              <RefreshCw className={'h-4 w-4 ' + (query.isFetching ? 'animate-spin' : '')} aria-hidden="true" />
+            </button>
           </header>
 
           {query.isPending ? (
@@ -353,123 +336,141 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
             return (
               <>
 
-                <section className="rounded-2xl border border-card-border bg-card p-4 shadow-sm" aria-label="연구 진행 흐름">
-                  <p className="text-xs font-bold text-muted-foreground">전체 흐름</p>
-                  <h2 className="mt-1 text-base font-black">수집 → 검증 → 모의매매 → 수익성</h2>
+                <section className="rounded-2xl border border-card-border bg-card/95 p-3 sm:p-4" aria-label="연구 진행">
+                  <div className="flex items-center justify-between gap-3">
+                    <h2 className="text-sm font-bold">연구 진행</h2>
+                    <span className="rounded-full bg-muted/70 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">
+                      {profitability.tone === 'normal' ? '검증 완료' : '진행 중'}
+                    </span>
+                  </div>
                   <div className="mt-3 grid grid-cols-4 gap-2 text-center">
                     {[
                       ['수집', dataFactory],
                       ['검증', research],
-                      ['모의매매', sample],
+                      ['모의', sample],
                       ['수익성', profitability],
                     ].map(([label, state]) => {
                       const item = state as typeof research;
                       return (
                         <div key={label as string} className="min-w-0">
-                          <div className={'mx-auto h-1.5 rounded-full ' + (item.tone === 'normal' ? 'bg-positive' : item.tone === 'warning' ? 'bg-warning' : item.tone === 'progress' ? 'bg-primary' : 'bg-muted')} />
-                          <p className="mt-2 truncate text-[11px] font-bold">{label as string}</p>
-                          <p className="truncate text-[10px] text-muted-foreground">{item.value}</p>
+                          <div className={'mx-auto h-1 rounded-full ' + (item.tone === 'normal' ? 'bg-positive' : item.tone === 'warning' ? 'bg-warning' : item.tone === 'progress' ? 'bg-primary' : 'bg-muted')} />
+                          <p className="mt-2 truncate text-[11px] font-semibold">{label as string}</p>
+                          <p className="mt-0.5 truncate text-[10px] text-muted-foreground">{item.value}</p>
                         </div>
                       );
                     })}
                   </div>
                 </section>
 
-                <section className="grid grid-cols-2 gap-2" aria-label="연구 핵심 상태">
-                  <SummaryCard testId="research-summary-research" selected={selected === 'research'} onClick={() => setSelected('research')} icon={<Activity className="h-5 w-5" />} label="연구 상태" {...research} />
-                  <SummaryCard testId="research-summary-data" selected={selected === 'data'} onClick={() => setSelected('data')} icon={<Database className="h-5 w-5" />} label="데이터 수집" {...dataFactory} />
-                  <SummaryCard testId="research-summary-paper" selected={selected === 'paper'} onClick={() => setSelected('paper')} icon={<WalletCards className="h-5 w-5" />} label="모의매매 표본" {...paperSummary} />
-                  <SummaryCard testId="research-summary-profitability" selected={selected === 'profitability'} onClick={() => setSelected('profitability')} icon={<TrendingUp className="h-5 w-5" />} label="수익성 검증" {...profitability} />
+                <section className="grid grid-cols-2 gap-2 lg:grid-cols-4" aria-label="연구 핵심 상태">
+                  <SummaryCard testId="research-summary-research" selected={selected === 'research'} onClick={() => setSelected('research')} icon={<Activity className="h-4 w-4" />} label="연구 상태" {...research} />
+                  <SummaryCard testId="research-summary-data" selected={selected === 'data'} onClick={() => setSelected('data')} icon={<Database className="h-4 w-4" />} label="데이터 수집" {...dataFactory} />
+                  <SummaryCard testId="research-summary-paper" selected={selected === 'paper'} onClick={() => setSelected('paper')} icon={<WalletCards className="h-4 w-4" />} label="모의매매 표본" {...paperSummary} />
+                  <SummaryCard testId="research-summary-profitability" selected={selected === 'profitability'} onClick={() => setSelected('profitability')} icon={<TrendingUp className="h-4 w-4" />} label="수익성 검증" {...profitability} />
                 </section>
 
-                {(() => {
+                {selected ? (() => {
                   const info = {
                     research: {
                       label: '연구 상태',
                       state: research,
-                      why: '최근 연구 작업과 데이터 대기·실패 상태를 합쳐 보여주는 값입니다.',
-                      next: '실패 작업이 있으면 상세 근거에서 FIRST_ZERO를 확인하고, 데이터 대기면 자연 표본을 기다립니다.',
+                      context: '최근 연구 작업과 데이터 대기 상태를 합쳐 표시합니다.',
                     },
                     data: {
                       label: '데이터 수집',
                       state: dataFactory,
-                      why: '시간 순서 기반 public evidence가 실제로 들어왔는지 보여줍니다.',
-                      next: '표본이 0이면 억지로 채우지 않고 첫 자연 observation이 들어오는지 확인합니다.',
+                      context: '실제로 수집된 시간순 public evidence만 집계합니다.',
                     },
                     paper: {
                       label: '모의매매 표본',
                       state: paperSummary,
-                      why: '모의매매 중에서도 canonical ledger가 확인한 표본만 집계하고, 후보별 Full Cost 근거는 별도로 확인합니다.',
-                      next: '아래 8개 비용의 실측 여부와 후보 Settlement 연결을 같이 확인하세요.',
+                      context: '확인된 표본만 집계하며 누락값을 임의로 채우지 않습니다.',
                     },
                     profitability: {
                       label: '수익성 검증',
                       state: profitability,
-                      why: '표본·정산·비용·OOS 근거가 모두 충족되기 전에는 검증 중으로 유지합니다.',
-                      next: '미검증을 손실로 해석하지 말고, 다음 evidence 단계가 채워지는지 확인합니다.',
+                      context: '표본·정산·비용·OOS 근거가 충족되기 전까지 검증 중으로 유지합니다.',
                     },
                   }[selected];
+
                   return (
-                    <section className="rounded-2xl border border-primary/25 bg-card p-4 shadow-sm" data-testid="research-general-selected-detail" aria-live="polite">
-                      <p className="text-[11px] font-black text-primary">선택한 항목</p>
-                      <h2 className="mt-1 text-lg font-black">{info.label} · {info.state.value}</h2>
-                      <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                        <div className="rounded-xl bg-muted/40 p-3">
-                          <p className="text-xs font-black">왜 이렇게 표시되나요?</p>
-                          <p className="mt-2 break-keep text-sm leading-6 text-muted-foreground">{info.why}</p>
+                    <>
+                      <button
+                        type="button"
+                        aria-label="연구 상세 닫기"
+                        onClick={() => setSelected(null)}
+                        className="fixed inset-0 z-50 bg-black/30 backdrop-blur-[1px]"
+                        data-testid="research-general-detail-backdrop"
+                      />
+                      <aside
+                        className="fixed inset-x-0 bottom-0 z-[51] max-h-[78dvh] overflow-y-auto rounded-t-3xl border border-card-border bg-card p-4 shadow-2xl md:inset-y-0 md:left-auto md:right-0 md:w-[min(30rem,92vw)] md:max-h-none md:rounded-none md:border-y-0 md:border-r-0 lg:w-[28rem]"
+                        data-testid="research-general-detail-panel"
+                        aria-live="polite"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-primary">{info.label}</p>
+                            <h2 className="mt-1 text-xl font-bold">{info.state.value}</h2>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setSelected(null)}
+                            aria-label="닫기"
+                            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-card-border text-muted-foreground hover:bg-muted hover:text-foreground"
+                          >
+                            <X className="h-4 w-4" aria-hidden="true" />
+                          </button>
                         </div>
-                        <div className="rounded-xl bg-muted/40 p-3">
-                          <p className="text-xs font-black">다음에 뭘 보면 되나요?</p>
-                          <p className="mt-2 break-keep text-sm leading-6 text-muted-foreground">{info.next}</p>
+
+                        <div className="mt-4 rounded-xl bg-muted/45 p-3">
+                          <p className="text-sm font-medium leading-6 text-foreground">{info.state.detail}</p>
+                          <p className="mt-1 text-xs leading-5 text-muted-foreground">{info.context}</p>
                         </div>
-                      </div>
-                      {onOpenExpert ? (
-                        <button type="button" onClick={onOpenExpert} className="mt-3 min-h-11 w-full rounded-xl border border-primary/30 bg-primary/5 px-4 text-sm font-black text-primary">
-                          상세 근거 보기
-                        </button>
-                      ) : null}
-                    </section>
+
+                        {(selected === 'paper' || selected === 'profitability') ? (
+                          <details className="mt-3 rounded-xl border border-card-border bg-background/60">
+                            <summary className="flex min-h-11 cursor-pointer list-none items-center px-3 text-sm font-semibold">비용 근거 상세</summary>
+                            <div className="border-t border-card-border p-3">
+                              <FullCostVisibility overview={overview} />
+                            </div>
+                          </details>
+                        ) : null}
+
+                        <details className="mt-3 rounded-xl border border-card-border bg-background/60">
+                          <summary className="flex min-h-11 cursor-pointer list-none items-center px-3 text-sm font-semibold">추가 상태</summary>
+                          <div className="space-y-2 border-t border-card-border p-3">
+                            {[
+                              ['리서치 팩토리', factoryRuntime],
+                              ['실시간 관찰', shadow],
+                              ['실행 권한', execution],
+                            ].map(([label, state]) => {
+                              const item = state as typeof research;
+                              return (
+                                <div key={label as string} className="flex items-center justify-between gap-3 rounded-lg bg-muted/35 px-3 py-2">
+                                  <span className="text-xs text-muted-foreground">{label as string}</span>
+                                  <span className="text-sm font-semibold">{item.value}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </details>
+
+                        {onOpenExpert ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelected(null);
+                              onOpenExpert();
+                            }}
+                            className="mt-4 min-h-11 w-full rounded-xl border border-primary/35 bg-primary/10 px-4 text-sm font-semibold text-primary"
+                          >
+                            상세 근거
+                          </button>
+                        ) : null}
+                      </aside>
+                    </>
                   );
-                })()}
-
-                {selected === 'paper' || selected === 'profitability'
-                  ? <FullCostVisibility overview={overview} />
-                  : null}
-
-                <details className="rounded-2xl border border-card-border bg-card shadow-sm">
-                  <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-black">
-                    <span>기타 상태 보기</span>
-                    <span className="text-xs font-medium text-muted-foreground">팩토리 · Shadow · 실행 권한</span>
-                  </summary>
-                  <div className="grid gap-2 border-t border-card-border p-3 sm:grid-cols-3">
-                    {[
-                      ['리서치 팩토리', factoryRuntime],
-                      ['Shadow 기록', shadow],
-                      ['실행 권한', execution],
-                    ].map(([label, state]) => {
-                      const item = state as typeof research;
-                      return (
-                        <article key={label as string} className="rounded-xl bg-muted/35 p-3">
-                          <p className="text-xs font-bold text-muted-foreground">{label as string}</p>
-                          <p className="mt-2 text-base font-black">{item.value}</p>
-                          <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">{item.detail}</p>
-                        </article>
-                      );
-                    })}
-                  </div>
-                </details>
-
-                <section className="rounded-2xl border border-card-border bg-card p-4 shadow-sm">
-                  <div className="flex items-start gap-3">
-                    <Clock3 className="mt-0.5 h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
-                    <div>
-                      <h2 className="text-sm font-black">이 화면은 이렇게 보면 됩니다</h2>
-                      <p className="mt-1 break-keep text-sm leading-6 text-muted-foreground">
-                        위 카드 하나를 누르면 설명이 바뀝니다. SHA·원본 식별자·검증 코드는 필요할 때만 ‘상세 근거 보기’에서 확인하세요.
-                      </p>
-                    </div>
-                  </div>
-                </section>
+                })() : null}
               </>
             );
           })() : null}

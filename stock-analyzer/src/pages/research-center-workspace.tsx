@@ -12,25 +12,21 @@ const WORKSPACE_TABS = [
   {
     value: 'general',
     label: '요약',
-    description: '지금 상태와 다음에 볼 것만 간단히 보여줍니다.',
     icon: LayoutDashboard,
   },
   {
     value: 'expert',
     label: '상세',
-    description: '단계별 근거·표본·원본 식별자를 자세히 확인합니다.',
     icon: ListTree,
   },
   {
     value: 'copilot',
     label: 'AI 도우미',
-    description: '현재 근거 안에서 가설과 검증 절차를 설명합니다.',
     icon: Bot,
   },
   {
     value: 'video',
     label: '영상',
-    description: '승인된 영상·전사본을 연구 아이디어 소스로만 확인합니다.',
     icon: Clapperboard,
   },
 ] as const;
@@ -41,7 +37,6 @@ const WORKSPACE_TABS = [
  */
 export default function ResearchCenterWorkspace() {
   const [view, setView] = useState<ResearchWorkspaceView>('general');
-  const selected = WORKSPACE_TABS.find((tab) => tab.value === view) ?? WORKSPACE_TABS[0];
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background" data-testid="research-center-workspace">
@@ -61,10 +56,10 @@ export default function ResearchCenterWorkspace() {
                 aria-label={tab.label}
                 onClick={() => setView(tab.value)}
                 className={cn(
-                  'flex min-h-12 min-w-0 flex-col items-center justify-center gap-0.5 rounded-xl px-1 text-center text-[11px] font-semibold transition sm:flex-row sm:gap-1.5 sm:text-sm',
+                  'flex min-h-11 min-w-0 flex-col items-center justify-center gap-0.5 rounded-xl px-1 text-center text-[11px] font-semibold transition sm:flex-row sm:gap-1.5 sm:text-sm',
                   view === tab.value
-                    ? 'bg-primary text-primary-foreground shadow-sm'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                    ? 'bg-primary/12 text-primary ring-1 ring-inset ring-primary/35'
+                    : 'text-muted-foreground hover:bg-muted/70 hover:text-foreground',
                 )}
               >
                 <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -72,14 +67,6 @@ export default function ResearchCenterWorkspace() {
               </button>
             );
           })}
-        </div>
-        <div
-          className="mx-auto mt-2 flex min-h-9 w-full max-w-3xl items-center gap-2 rounded-xl bg-muted/50 px-3 py-2 text-xs"
-          data-testid="research-workspace-selection"
-          aria-live="polite"
-        >
-          <strong className="shrink-0 text-foreground">현재 · {selected.label}</strong>
-          <span className="min-w-0 break-keep text-muted-foreground">{selected.description}</span>
         </div>
       </div>
 

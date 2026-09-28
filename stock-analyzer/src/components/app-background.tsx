@@ -1,5 +1,4 @@
 import { useSettings } from '@/lib/settings';
-import { MemberPrivacyWatermark } from '@/components/member-privacy-watermark';
 
 // Theme-aware backdrop. In dark mode it renders a subtle top-lit gradient over
 // a near-black base; in light mode it renders a soft light gradient so the
@@ -22,21 +21,16 @@ export function AppBackground() {
         </div>
       )
     : (
-        <div className="fixed inset-0 z-0 bg-[#04070c]">
+        <div className="fixed inset-0 z-0 bg-[#101722]">
           <div
             className="absolute inset-0"
             style={{
               background:
-                'radial-gradient(120% 80% at 50% -10%, rgba(37,99,235,0.14) 0%, rgba(4,7,12,0) 45%), linear-gradient(180deg, #070b12 0%, #05080d 55%, #04060a 100%)',
+                'radial-gradient(120% 78% at 50% -12%, rgba(59,130,246,0.15) 0%, rgba(16,23,34,0) 46%), linear-gradient(180deg, #141d2b 0%, #111925 52%, #0f1621 100%)',
             }}
           />
         </div>
       );
 
-  return (
-    <>
-      {background}
-      <MemberPrivacyWatermark />
-    </>
-  );
+  return background;
 }

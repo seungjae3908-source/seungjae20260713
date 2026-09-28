@@ -307,7 +307,7 @@ export default function HomePage() {
             <UnifiedAssetSearch placeholder="종목·코인 검색" onSelect={openAsset} />
           </section>
 
-          {professionalOverview}
+          {desktop ? professionalOverview : null}
 
           {warnings.length > 0 && (
             <details role="alert" className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3 py-2">

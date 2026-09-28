@@ -224,8 +224,8 @@ test('desktop AI Chart 2.0 preserves one initial chart request, loads MTF on dem
   await expect.poll(() => mock.calls.size).toBeGreaterThanOrEqual(4);
 
   await expect(page.getByTestId('ai-evidence-panel')).toBeVisible();
-  await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('ENTRY 3');
-  await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('UNAVAILABLE');
+  await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('진입 3');
+  await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('미확인');
   await expect(page.getByTestId('ai-chart-data-provenance')).toContainText('Historical Performance');
   await expect(page.getByTestId('ai-chart-data-provenance')).toContainText('UNAVAILABLE');
 
@@ -256,7 +256,7 @@ test('current AI evidence fails closed on stale shared chart data without duplic
 
   const evidence = page.getByTestId('ai-evidence-panel');
   await expect(evidence).toContainText('WAIT');
-  await expect(evidence).toContainText('STALE');
+  await expect(evidence).toContainText('현재 시간봉 데이터가 오래되어 방향 판단을 보류');
   await expect(page.getByTestId('insufficient-data-evidence')).toBeVisible();
   await expect.poll(() => totalChartCalls(mock.calls)).toBe(1);
   expect(mock.privateTradingRequests).toEqual([]);

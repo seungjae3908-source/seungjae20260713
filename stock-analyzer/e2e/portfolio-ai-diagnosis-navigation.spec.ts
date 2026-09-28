@@ -205,7 +205,8 @@ test('Portfolio Intelligence와 AI Mentor는 partial provenance를 숨기지 않
   await page.getByRole('button', { name: '내 포트폴리오 분석 열기' }).click();
 
   await expect(page).toHaveURL(/\/portfolio\?focus=ai$/);
-  await expect(page.getByTestId('portfolio-data-quality')).toContainText('공급자 2/5');
+  await expect(page.getByTestId('portfolio-v2-tabs')).toBeVisible();
+  await expect(page.getByTestId('portfolio-data-quality')).toContainText('일부 데이터');
   await expect(page.getByTestId('portfolio-known-total')).toContainText('4,820,000원');
   await expect(page.getByText('누락된 계좌·현금 근거가 있어 총 자산은 확정하지 않습니다. 확인된 자산 합계는 실제로 수집된 항목만 더한 값입니다.')).toBeVisible();
   await expect(page.getByTestId('portfolio-partial-sources')).toContainText('현금 계좌 조회 원본 미연결');
@@ -214,6 +215,7 @@ test('Portfolio Intelligence와 AI Mentor는 partial provenance를 숨기지 않
   await expect(page.getByTestId('portfolio-fx-provenance')).toContainText('fixture-public-fx');
   await expect(page.getByTestId('portfolio-fx-provenance')).toContainText('근거 시각');
 
+  await page.getByText('투자 시뮬레이션', { exact: true }).click();
   await page.getByLabel('추가 투자 금액').fill('100000');
   await page.getByRole('button', { name: '추가매수 계산' }).click();
   await expect(page.getByTestId('portfolio-additional-buy-basis')).toContainText('NORMALIZED_KRW');

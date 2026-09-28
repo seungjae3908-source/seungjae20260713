@@ -59,13 +59,10 @@ for (const width of [360, 390, 430]) {
     await expect(page.getByTestId('trading-mode-auto')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('trading-mode-paper')).toContainText('모의매매');
 
-    const safetySummary = page.getByTestId('auto-trading-safety-summary');
-    await expect(safetySummary).toContainText('주문별 승인');
-    await expect(safetySummary).toContainText('불필요');
-    await expect(safetySummary).toContainText('4시장');
+    await expect(page.getByTestId('auto-trading-safety-summary')).toHaveCount(0);
     await expect(page.getByTestId('trade-approval-queue')).toHaveCount(0);
-
     await expect(page.getByTestId('auto-trading-runtime-summary')).toContainText('국내주식');
+    await expect(page.getByTestId('auto-trading-runtime-summary')).toContainText('비상정지');
 
     await page.getByTestId('trading-section-settings').click();
 
@@ -177,6 +174,7 @@ test('paper mode exposes the same four-market navigation without enabling live a
     await expect(page.getByTestId(`trading-market-${market}`)).toHaveAttribute('aria-pressed', 'true');
   }
 
-  await expect(page.getByTestId('trading-workspace-safety-note')).toContainText('LIVE/AUTO/REAL/Private API Gate');
+  await expect(page.getByTestId('trading-workspace-safety-note')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /승인형 주문/ })).toHaveCount(0);
   expectNoBrowserFailures(failures);
 });

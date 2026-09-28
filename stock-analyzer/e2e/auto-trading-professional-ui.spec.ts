@@ -27,12 +27,10 @@ test('trading shell exposes auto and paper as first-class modes while preserving
 test('trading shell keeps professional typography and standing-authorization safety contract', () => {
   const page = source('src/pages/auto-trading.tsx');
 
-  expect(page).toContain('data-testid="auto-trading-safety-summary"');
-  expect(page).toContain('자동매매 실행 방식');
-  expect(page).toContain('주문별 승인');
-  expect(page).toContain('불필요');
-  expect(page).toContain('위험검사');
+  expect(page).toContain('data-testid="auto-trading-runtime-summary"');
   expect(page).toContain('data-testid="trading-market-tabs"');
+  expect(page).not.toContain('data-testid="auto-trading-safety-summary"');
+  expect(page).not.toContain('LIVE/AUTO/REAL/Private API Gate');
   expect(page).toContain('data-testid="trading-section-tabs"');
   expect(page).toContain('forcedSource={mode === \'auto\' ? \'APP_AUTO\' : \'APP_PAPER\'}');
   expect(page).not.toContain('text-[10px]');

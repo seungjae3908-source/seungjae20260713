@@ -100,10 +100,10 @@ test('regular user saves Upbit credentials only through canonical account-readon
   });
   await page.setViewportSize({ width: 390, height: 844 }); await page.goto('/account');
   await page.getByRole('button', { name: 'Upbit 조회 연결 설정' }).click();
-  const accessKey = 'UPBIT_ACCESS_TEST_ONLY_123'; const secretKey = 'UPBIT_SECRET_TEST_ONLY_456';
+  const accessKey = 'read-key-a'; const secretKey = 'read-key-b';
   await page.getByTestId('upbit-credential-primary').fill(accessKey); await page.getByTestId('upbit-credential-secret').fill(secretKey); await page.getByTestId('upbit-save-connection').click();
   const upbit = page.getByTestId('connection-upbit');
-  await expect(page.getByRole('status')).toContainText('저장 완료 · Upbit 조회 전용 키를 암호화 Vault에 저장했습니다.');
+  await expect(page.getByRole('status')).toContainText('Upbit 조회 연결을 안전하게 저장했습니다.');
   await expect(upbit).toContainText('검증 필요');
   await expect(upbit).toContainText('보유 자산 미수집');
   await expect(upbit).not.toContainText('보유 자산 0개');
@@ -132,8 +132,8 @@ test('Toss credential form is read-only, Account Seq is optional, and mobile dia
   await page.getByRole('button', { name: 'Toss 조회 연결 설정' }).click();
   const dialog = page.getByRole('dialog'); await expect(dialog).toBeVisible();
   const box = await dialog.boundingBox(); expect(box).not.toBeNull(); expect(box!.x).toBeGreaterThanOrEqual(0); expect(box!.x + box!.width).toBeLessThanOrEqual(361);
-  await page.getByTestId('toss-credential-primary').fill('TOSS_CLIENT_TEST_ONLY'); await page.getByTestId('toss-credential-secret').fill('TOSS_SECRET_TEST_ONLY'); await page.getByTestId('toss-save-connection').click();
-  expect(tossBody).toEqual({ purpose: 'read_only', permissions: ['read'], credentials: { clientId: 'TOSS_CLIENT_TEST_ONLY', clientSecret: 'TOSS_SECRET_TEST_ONLY' } });
+  await page.getByTestId('toss-credential-primary').fill('read-key-c'); await page.getByTestId('toss-credential-secret').fill('read-key-d'); await page.getByTestId('toss-save-connection').click();
+  expect(tossBody).toEqual({ purpose: 'read_only', permissions: ['read'], credentials: { clientId: 'read-key-c', clientSecret: 'read-key-d' } });
   await page.getByRole('button', { name: 'Bitget 조회 연결 설정' }).click(); const bitgetBox = await page.getByRole('dialog').boundingBox(); expect(bitgetBox).not.toBeNull(); expect(bitgetBox!.x + bitgetBox!.width).toBeLessThanOrEqual(361);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(361);
   await expect(page.getByTestId('brokerage-account-connections')).not.toContainText('Kiwoom');
@@ -251,8 +251,8 @@ test('server-declared Kiwoom capability exposes a read-only setup card and saves
   await expect(kiwoom).toContainText('공식 REST KR/US 잔고·미체결 조회');
   await page.getByRole('button', { name: 'Kiwoom 조회 연결 설정' }).click();
 
-  const appKey = 'KIWOOM_APP_E2E_TEST_ONLY';
-  const appSecret = 'KIWOOM_SECRET_E2E_TEST_ONLY';
+  const appKey = 'read-key-e';
+  const appSecret = 'read-key-f';
   await page.getByTestId('kiwoom-credential-primary').fill(appKey);
   await page.getByTestId('kiwoom-credential-secret').fill(appSecret);
   await page.getByTestId('kiwoom-save-connection').click();
@@ -262,7 +262,7 @@ test('server-declared Kiwoom capability exposes a read-only setup card and saves
     permissions: ['read'],
     credentials: { appKey, appSecret },
   });
-  await expect(page.getByRole('status')).toContainText('저장 완료 · Kiwoom 조회 전용 키를 암호화 Vault에 저장했습니다.');
+  await expect(page.getByRole('status')).toContainText('Kiwoom 조회 연결을 안전하게 저장했습니다.');
   const body = await page.locator('body').innerText();
   expect(body).not.toContain(appKey);
   expect(body).not.toContain(appSecret);
@@ -355,8 +355,8 @@ test('live Upbit trading key is saved separately with read+orders only and does 
   const dialog = page.getByRole('dialog', { name: '실주문 거래키 연결' });
   await expect(dialog).toBeVisible();
 
-  const accessKey = 'UPBIT_LIVE_ACCESS_TEST_ONLY';
-  const secretKey = 'UPBIT_LIVE_SECRET_TEST_ONLY';
+  const accessKey = 'trade-key-a';
+  const secretKey = 'trade-key-b';
   await dialog.getByLabel('Access Key').fill(accessKey);
   await dialog.getByLabel('Secret Key').fill(secretKey);
   await dialog.getByRole('checkbox').check();
@@ -369,8 +369,8 @@ test('live Upbit trading key is saved separately with read+orders only and does 
     credentials: { accessKey, secretKey },
   });
   await expect(page.getByTestId('live-connection-upbit')).toContainText(/거래키\s*저장됨/);
-  await expect(page.getByTestId('live-connection-upbit')).toContainText(/수동 실주문\s*OFF/);
-  await expect(page.getByTestId('live-connection-upbit')).toContainText(/자동 실주문\s*OFF/);
+  await expect(page.getByTestId('live-connection-upbit')).toContainText(/수동 주문\s*사용 안 함/);
+  await expect(page.getByTestId('live-connection-upbit')).toContainText(/자동 주문\s*사용 안 함/);
   await expect(page.getByRole('status')).toContainText('저장만으로 주문은 실행되지 않습니다.');
 
   const body = await page.locator('body').innerText();
