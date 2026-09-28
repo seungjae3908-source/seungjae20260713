@@ -82,7 +82,12 @@ jobs:
           grep -Fq "serverCanonical: false" "$installer"
           grep -Fq "executionAuthority: 'NONE'" "$installer"
           ! grep -Eq 'issues:[[:space:]]+write|contents:[[:space:]]+write|actions:[[:space:]]+write|deployments:[[:space:]]+write|id-token:[[:space:]]+write' "$workflow"
-          ! grep -Eq 'SERVER_EVIDENCE_SERVER_CANONICAL=true|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true' "$workflow" "$service" "$installer"
+          forbidden='SERVER_EVIDENCE_SERVER_CANONICAL=true|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true'
+          if grep -Ev '^[[:space:]]*(forbidden=|! grep -Eq|if grep -Ev)' "$workflow" | grep -Eq "$forbidden"; then
+            echo 'activation workflow contains forbidden authority elevation' >&2
+            exit 1
+          fi
+          ! grep -Eq "$forbidden" "$service" "$installer"
 
       - name: Zero-network worker self-check
         run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-shadow-worker-v1.mjs self-check
