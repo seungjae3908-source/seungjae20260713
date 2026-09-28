@@ -48,6 +48,7 @@ export type TelegramSignalIntelligenceEvidence = {
   aiExplanation: string | null;
   aiModel: string | null;
   aiAsOf: string | null;
+  displayName: string | null;
   theme: string | null;
   news: TelegramNewsEvidence[];
   marketEvents?: TelegramMarketEventEvidence[];
@@ -214,10 +215,15 @@ async function collectStockMarketEvents(alert: ScannerAlertCandidate): Promise<T
   });
 }
 
-async function collectTheme(alert: ScannerAlertCandidate): Promise<string | null> {
-  if (alert.assetClass !== 'stock') return null;
+async function collectStockProfile(
+  alert: ScannerAlertCandidate,
+): Promise<{ displayName: string | null; theme: string | null }> {
+  if (alert.assetClass !== 'stock') return { displayName: null, theme: null };
   const profile = await MarketDataService.getCompanyProfile(alert.symbol);
-  return profile.sector?.trim() || profile.industry?.trim() || null;
+  return {
+    displayName: profile.name?.trim() || null,
+    theme: profile.sector?.trim() || profile.industry?.trim() || null,
+  };
 }
 
 function aiContext(alert: ScannerAlertCandidate): { market: 'KR' | 'US' | 'UPBIT' | 'BITGET'; symbol: string } | null {
@@ -266,16 +272,16 @@ export async function collectTelegramSignalIntelligence(
 ): Promise<TelegramSignalIntelligenceEvidence> {
   const timeframe = context.timeframe || '1D';
   const warnings: string[] = [];
-  const [chartResult, eventResult, themeResult, aiResult] = await Promise.allSettled([
+  const [chartResult, eventResult, profileResult, aiResult] = await Promise.allSettled([
     collectChart(alert, timeframe),
     collectStockMarketEvents(alert),
-    collectTheme(alert),
+    collectStockProfile(alert),
     collectAiExplanation(alert, timeframe),
   ]);
 
   if (chartResult.status === 'rejected') warnings.push('CHART_EVIDENCE_UNAVAILABLE');
   if (eventResult.status === 'rejected') warnings.push('NEWS_DISCLOSURE_EVIDENCE_UNAVAILABLE');
-  if (themeResult.status === 'rejected') warnings.push('THEME_EVIDENCE_UNAVAILABLE');
+  if (profileResult.status === 'rejected') warnings.push('THEME_EVIDENCE_UNAVAILABLE');
   if (aiResult.status === 'rejected') warnings.push('AI_EXPLANATION_UNAVAILABLE');
 
   const ai = aiResult.status === 'fulfilled' ? aiResult.value : null;
@@ -289,11 +295,15 @@ export async function collectTelegramSignalIntelligence(
       publishedAt: event.publishedAt ?? '',
       tone: event.sentiment,
     }));
+  const stockProfile = profileResult.status === 'fulfilled'
+    ? profileResult.value
+    : { displayName: null, theme: null };
   return {
     aiExplanation: ai?.explanation ?? null,
     aiModel: ai?.model ?? null,
     aiAsOf: ai?.asOf ?? null,
-    theme: themeResult.status === 'fulfilled' ? themeResult.value : null,
+    displayName: stockProfile.displayName,
+    theme: stockProfile.theme,
     news,
     marketEvents,
     chart: chartResult.status === 'fulfilled' ? chartResult.value : null,
@@ -325,7 +335,7 @@ function warningLabel(value: string): string {
 function strategyLabel(context: TelegramSignalDeliveryContext): string {
   if (context.strategyMode === 'scalping') return '단타';
   if (context.strategyMode === 'swing') return '스윙';
-  if (context.strategyMode === 'position') return '포지션';
+  if (context.strategyMode === 'position') return '중장기';
   return '전략 미확인';
 }
 
@@ -344,11 +354,14 @@ function pricePlan(alert: ScannerAlertCandidate): string {
     `2차 진입 ${secondEntry ?? 'N/A'} · 기본 40%`,
     `1차 목표 ${target1} · 2차 목표 ${target2}`,
     `손절/무효 ${stop}`,
-    '🛒 주문하기를 누르면 앱에서 최신 시장데이터로 다시 검증합니다.',
   ].join('\n');
 }
 
-function appButtons(alert: ScannerAlertCandidate, context: TelegramSignalDeliveryContext): TelegramUrlButton[][] {
+export function buildTelegramSignalAppButtons(
+  alert: Pick<ScannerAlertCandidate, 'assetClass' | 'market' | 'symbol' | 'direction'>,
+  context: TelegramSignalDeliveryContext,
+  options: { orderEnabled?: boolean; displayName?: string | null } = {},
+): TelegramUrlButton[][] {
   const base = normalizeTelegramHttpUrl(process.env.PUBLIC_APP_URL || process.env.APP_PUBLIC_URL);
   if (!base) return [];
   const url = new URL(base);
@@ -362,37 +375,23 @@ function appButtons(alert: ScannerAlertCandidate, context: TelegramSignalDeliver
   chart.searchParams.set('symbol', alert.symbol);
   chart.searchParams.set('ticker', alert.symbol);
   chart.searchParams.set('timeframe', context.timeframe || '1D');
+  chart.searchParams.set('strategyMode', context.strategyMode || 'swing');
+  if (options.displayName?.trim()) chart.searchParams.set('name', options.displayName.trim());
 
-  const order = new URL('/telegram-order', url);
-  order.searchParams.set('market', market);
-  order.searchParams.set('symbol', alert.symbol);
-  order.searchParams.set('timeframe', context.timeframe || '1D');
-  order.searchParams.set('action', alert.direction === 'SHORT' ? 'SHORT' : alert.assetClass === 'coin_futures' ? 'LONG' : 'BUY');
-  order.searchParams.set('strategyMode', context.strategyMode || 'swing');
-  order.searchParams.set('orderPreparation', '1');
-  order.searchParams.set('source', 'telegram');
-
-  const detail = alert.assetClass === 'stock'
-    ? new URL('/stock-info', url)
-    : new URL('/market-information', url);
-  detail.searchParams.set('market', market);
-  detail.searchParams.set(alert.assetClass === 'stock' ? 'ticker' : 'symbol', alert.symbol);
-  detail.searchParams.set('tab', 'news');
-
-  const watchlist = new URL('/watchlist', url);
-  watchlist.searchParams.set('market', market);
-  watchlist.searchParams.set('symbol', alert.symbol);
-
-  return [
-    [
-      { text: '🛒 주문하기', url: order.toString() },
-      { text: '📊 AI차트', url: chart.toString() },
-    ],
-    [
-      { text: '📰 뉴스·공시', url: detail.toString() },
-      { text: '⭐ 관심종목', url: watchlist.toString() },
-    ],
-  ];
+  const primary: TelegramUrlButton[] = [];
+  if (options.orderEnabled !== false) {
+    const order = new URL('/telegram-order', url);
+    order.searchParams.set('market', market);
+    order.searchParams.set('symbol', alert.symbol);
+    order.searchParams.set('timeframe', context.timeframe || '1D');
+    order.searchParams.set('action', alert.direction === 'SHORT' ? 'SHORT' : alert.assetClass === 'coin_futures' ? 'LONG' : 'BUY');
+    order.searchParams.set('strategyMode', context.strategyMode || 'swing');
+    order.searchParams.set('orderPreparation', '1');
+    order.searchParams.set('source', 'telegram');
+    primary.push({ text: '🛒 주문', url: order.toString() });
+  }
+  primary.push({ text: '📊 AI차트', url: chart.toString() });
+  return primary.length ? [primary] : [];
 }
 
 export function buildTelegramSignalIntelligenceInput(
@@ -402,37 +401,45 @@ export function buildTelegramSignalIntelligenceInput(
   context: TelegramSignalDeliveryContext = {},
 ): TelegramAlertInput {
   const events = evidence.marketEvents ?? [];
-  const signal = `${publicSignalLabel(alert)} 신호`;
-  const title = `${alert.symbol} | ${marketLabel(alert)} · ${signal} · ${strategyLabel(context)} · ${evidence.theme || '테마 미확인'}`;
+  const instrument = evidence.displayName
+    ? `${evidence.displayName}(${alert.symbol})`
+    : alert.symbol;
+  const titleParts = [marketLabel(alert), strategyLabel(context)];
+  if (alert.assetClass === 'stock' && evidence.theme) titleParts.push(evidence.theme);
+  const title = `${instrument} / ${titleParts.join(' · ')}`;
   const lines = [
     `🟢 신호: ${publicSignalLabel(alert)} · ${context.timeframe || 'N/A'}`,
+    '',
     pricePlan(alert),
   ];
-  if (alert.evidence.length) lines.push(`근거: ${alert.evidence.slice(0, 5).join(' · ')}`);
-  if (evidence.aiExplanation) lines.push(`AI: ${evidence.aiExplanation}`);
+  if (alert.evidence.length) lines.push('', '근거:', alert.evidence.slice(0, 5).join(' · '));
+  if (evidence.aiExplanation) lines.push('', 'AI:', evidence.aiExplanation);
   if (events.length) {
-    lines.push('뉴스·공시');
+    lines.push('', '뉴스·공시');
     events.slice(0, 2).forEach((item, index) => {
       const label = item.kind === 'NEWS' ? '뉴스' : item.kind === 'DISCLOSURE' ? '공시' : '공식';
       lines.push(`${index + 1}. [${label}] ${item.title}`);
-      if (item.summary) lines.push(`AI 요약: ${item.summary}`);
+      if (item.summary) lines.push(`AI 요약: ${item.summary} 세부 내용은 아래 원문 버튼을 확인해 주세요.`);
     });
   } else if (evidence.news.length) {
-    lines.push('뉴스');
+    lines.push('', '뉴스');
     evidence.news.slice(0, 2).forEach((item, index) => lines.push(`${index + 1}. ${item.title}`));
   }
-  if (evidence.warnings.length) lines.push(`⚠️ ${[...new Set(evidence.warnings.map(warningLabel))].join(' · ')}`);
+  if (evidence.warnings.length) lines.push('', `⚠️ ${[...new Set(evidence.warnings.map(warningLabel))].join(' · ')}`);
 
-  const buttons = appButtons(alert, context);
+  const buttons = buildTelegramSignalAppButtons(alert, context, {
+    orderEnabled: true,
+    displayName: evidence.displayName,
+  });
   const linkedEvents = events.filter((item): item is TelegramMarketEventEvidence & { url: string } => Boolean(item.url)).slice(0, 2);
   if (linkedEvents.length) {
     linkedEvents.forEach((item, index) => buttons.push([{
-      text: `${item.kind === 'NEWS' ? '📰 뉴스' : '🏛️ 공시'} 원문 ${index + 1}`,
+      text: `${item.kind === 'NEWS' ? '📰 뉴스' : '🏛️ 공시'} 원문`,
       url: item.url,
     }]));
   } else {
     for (const [index, news] of evidence.news.slice(0, 2).entries()) {
-      buttons.push([{ text: `📰 뉴스 원문 ${index + 1}`, url: news.url }]);
+      buttons.push([{ text: '📰 뉴스 원문', url: news.url }]);
     }
   }
 
