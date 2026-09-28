@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import {
   collectYahooStockHistory,
 } from '../../../market-prediction-lab/src/yahoo-stock-history.js';
+import { collectYahooStock60mHistory } from '../src/yahoo-stock-60m-history.mjs';
 import {
   collectUpbitSpotHistory,
 } from '../../../market-prediction-lab/src/upbit-spot-history.js';
@@ -104,7 +105,40 @@ function hypothesisRows(hypotheses) {
   return lines;
 }
 
-function markdown(result, ablation, hypotheses, failures, datasetCount) {
+function comparisonFromAblation(ablation) {
+  return {
+    startTime: ablation.startTime,
+    endTime: ablation.endTime,
+    markets: Object.fromEntries(Object.entries(ablation.markets).map(([market, row]) => [
+      market,
+      { market, baseline: row.variants.BASELINE, improved: row.variants.FULL },
+    ])),
+  };
+}
+
+function laneAlignedRows(comparison, hypotheses, failures, datasetCount) {
+  const lines = [
+    '',
+    '## Forward-lane-aligned one-year benchmark',
+    '',
+    '- Dataset count: ' + datasetCount,
+    '- KR/US=60m, Spot=4H, Futures=60m',
+    '- Purpose: exact timeframe research alignment with current Forward Observer lanes',
+    '',
+    '| Market | Baseline return | B trades | B MDD | B PF | Improved return | I trades | I MDD | I PF |',
+    '|---|---:|---:|---:|---:|---:|---:|---:|---:|',
+  ];
+  for (const [market, row] of Object.entries(comparison.markets)) {
+    lines.push('| ' + rowForMarket(market, row).join(' | ') + ' |');
+  }
+  lines.push(...hypothesisRows(hypotheses));
+  lines.push('', '### Lane-aligned provider failures', '');
+  if (!failures.length) lines.push('- none');
+  else for (const item of failures) lines.push('- ' + item.market + '/' + item.symbol + ': ' + item.error);
+  return lines;
+}
+
+function markdown(result, ablation, hypotheses, laneAligned, failures, datasetCount) {
   const lines = [
     '# Move Hunter — 1Y Four-Market Public Benchmark',
     '',
@@ -123,6 +157,14 @@ function markdown(result, ablation, hypotheses, failures, datasetCount) {
   }
   lines.push(...ablationRows(ablation));
   lines.push(...hypothesisRows(hypotheses));
+  if (laneAligned) {
+    lines.push(...laneAlignedRows(
+      laneAligned.comparison,
+      laneAligned.hypotheses,
+      laneAligned.failures,
+      laneAligned.datasetCount,
+    ));
+  }
   lines.push(
     '',
     '## Evidence boundary',
@@ -243,20 +285,105 @@ async function collectFutures(datasets, failures) {
   }
 }
 
+
+async function collectLaneAlignedStocks(datasets, failures) {
+  for (const item of STOCKS) {
+    try {
+      const history = await collectYahooStock60mHistory({
+        market: item.market,
+        symbol: item.symbol,
+        startTime: WARMUP_START_MS,
+        endTime: ONE_YEAR_BENCHMARK_END_MS,
+        timeoutMs: 20_000,
+      });
+      datasets.push({
+        market: item.market,
+        symbol: item.symbol,
+        timeframe: '60m',
+        source: history.source,
+        candles: history.candles,
+      });
+    } catch (error) {
+      failures.push({
+        market: item.market,
+        symbol: item.symbol,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+}
+
+async function collectLaneAlignedFutures(datasets, failures, descriptiveDatasets) {
+  const client = new BitgetPublicClient({
+    timeoutMs: 20_000,
+    maxRetries: 4,
+    minIntervalMs: 140,
+  });
+  for (const symbol of FUTURES) {
+    try {
+      const history = await collectBitgetCandles({
+        client,
+        market: 'CRYPTO_FUTURES',
+        symbol,
+        timeframe: '1h',
+        startTime: WARMUP_START_MS,
+        endTime: ONE_YEAR_BENCHMARK_END_MS,
+        productType: 'usdt-futures',
+        maxCandles: 20_000,
+      });
+      const existing = descriptiveDatasets.find((row) =>
+        row.market === 'CRYPTO_FUTURES' && row.symbol === symbol);
+      datasets.push({
+        market: 'CRYPTO_FUTURES',
+        symbol,
+        timeframe: '60m',
+        providerTimeframe: '1h',
+        source: history.provider,
+        candles: history.candles,
+        fundingRates: existing?.fundingRates ?? [],
+      });
+    } catch (error) {
+      failures.push({
+        market: 'CRYPTO_FUTURES',
+        symbol,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+}
+
 const jsonPath = process.argv[2] || 'research-lab/move-hunter-v1/docs/one-year-four-market-public-benchmark.json';
 const mdPath = process.argv[3] || 'research-lab/move-hunter-v1/docs/one-year-four-market-public-benchmark.md';
 const datasets = [];
 const failures = [];
+const laneAlignedDatasets = [];
+const laneAlignedFailures = [];
 
 await collectStocks(datasets, failures);
 await collectSpot(datasets, failures);
 await collectFutures(datasets, failures);
+
+await collectLaneAlignedStocks(laneAlignedDatasets, laneAlignedFailures);
+laneAlignedDatasets.push(...datasets
+  .filter((row) => row.market === 'CRYPTO_SPOT')
+  .map((row) => ({ ...row, timeframe: '4H' })));
+await collectLaneAlignedFutures(laneAlignedDatasets, laneAlignedFailures, datasets);
 
 if (datasets.length === 0) throw new Error('NO_PUBLIC_BENCHMARK_DATA_COLLECTED');
 
 const result = runFourMarketOneYearBenchmark({ datasets });
 const ablation = runFourMarketOneYearAblation({ datasets });
 const hypotheses = freezeMarketSpecificHypotheses(ablation);
+const laneAlignedAblation = runFourMarketOneYearAblation({ datasets: laneAlignedDatasets });
+const laneAlignedHypotheses = freezeMarketSpecificHypotheses(laneAlignedAblation);
+const laneAlignedComparison = comparisonFromAblation(laneAlignedAblation);
+const laneAligned = {
+  comparison: laneAlignedComparison,
+  ablation: laneAlignedAblation,
+  hypotheses: laneAlignedHypotheses,
+  failures: laneAlignedFailures,
+  datasetCount: laneAlignedDatasets.length,
+};
 const coverage = Object.fromEntries(
   ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'].map((market) => [
     market,
@@ -267,6 +394,7 @@ const report = {
   ...result,
   ablation,
   marketSpecificHypotheses: hypotheses,
+  laneAligned,
   collection: {
     warmupStartTime: WARMUP_START_MS,
     datasetCount: datasets.length,
@@ -278,7 +406,7 @@ const report = {
 await mkdir(dirname(jsonPath), { recursive: true });
 await mkdir(dirname(mdPath), { recursive: true });
 await writeFile(jsonPath, JSON.stringify(report, null, 2) + '\n', 'utf8');
-await writeFile(mdPath, markdown(result, ablation, hypotheses, failures, datasets.length), 'utf8');
+await writeFile(mdPath, markdown(result, ablation, hypotheses, laneAligned, failures, datasets.length), 'utf8');
 
 console.log(JSON.stringify({
   status: result.status,
@@ -308,5 +436,23 @@ console.log(JSON.stringify({
       reasons: row.reasons,
     },
   ])),
+  laneAligned: {
+    datasetCount: laneAlignedDatasets.length,
+    failures: laneAlignedFailures,
+    hypotheses: Object.fromEntries(Object.entries(laneAlignedHypotheses.markets).map(([market, row]) => [
+      market,
+      {
+        status: row.status,
+        descriptiveBestVariant: row.descriptiveBestVariant,
+        selectedVariant: row.selectedVariant,
+        sourceTimeframe: row.futureValidation.sourceTimeframe,
+        targetForwardTimeframe: row.futureValidation.targetForwardTimeframe,
+        timeframeMatch: row.futureValidation.timeframeMatch,
+        forwardAdmissionStatus: row.futureValidation.forwardAdmissionStatus,
+        forwardAdmissionReasons: row.futureValidation.forwardAdmissionReasons,
+        reasons: row.reasons,
+      },
+    ])),
+  },
   outputs: { jsonPath, mdPath },
 }, null, 2));
