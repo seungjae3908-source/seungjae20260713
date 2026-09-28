@@ -115,14 +115,20 @@ function canonicalCandlesThrough(rows, index) {
   });
 }
 
-function buildFeatureSnapshotFromRows(dataset, rows, index, side = 'LONG') {
+function buildFeatureSnapshotFromRows(dataset, rows, index, side = 'LONG', featureHistoryBars = null) {
   if (!dataset || typeof dataset !== 'object') throw new TypeError('dataset is required');
   if (!SUPPORTED_MARKETS.has(dataset.market)) throw new RangeError('unsupported market');
   if (!Number.isInteger(index) || index < 80 || index + 1 >= rows.length) {
     throw new RangeError('feature index requires >=80 history bars and one next bar');
   }
+  if (featureHistoryBars != null && (!Number.isInteger(featureHistoryBars) || featureHistoryBars < 100)) {
+    throw new RangeError('featureHistoryBars must be null or an integer >=100');
+  }
   const tradeSide = direction(side);
-  const decisionTime = rows[index + 1].ts;
+  const startIndex = featureHistoryBars == null ? 0 : Math.max(0, index - featureHistoryBars + 1);
+  const featureRows = startIndex === 0 ? rows : rows.slice(startIndex, index + 2);
+  const featureIndex = index - startIndex;
+  const decisionTime = featureRows[featureIndex + 1].ts;
   return buildAdaptiveMultiEvidenceMarketFeaturesV2({
     lineageId: ADAPTIVE_MULTI_EVIDENCE_V2_LINEAGE_ID,
     market: dataset.market,
@@ -130,7 +136,7 @@ function buildFeatureSnapshotFromRows(dataset, rows, index, side = 'LONG') {
     timeframe: dataset.timeframe,
     side: tradeSide,
     decisionTime: new Date(decisionTime).toISOString(),
-    candles: canonicalCandlesThrough(rows, index),
+    candles: canonicalCandlesThrough(featureRows, featureIndex),
     higherTimeframeEvidence: [],
     benchmark: null,
     source: {
@@ -295,6 +301,7 @@ export function runOneYearDatasetBenchmark(dataset, {
   futuresMaximumExposure = 3,
   costs = null,
   disabledFamilies = [],
+  featureHistoryBars = null,
 } = {}) {
   if (!SUPPORTED_MARKETS.has(dataset?.market)) throw new RangeError('unsupported market');
   const tradeSide = direction(side);
@@ -320,7 +327,7 @@ export function runOneYearDatasetBenchmark(dataset, {
     } else if (variant === 'IMPROVED_TECH_STRUCTURE_V2' || variant.startsWith('ABLATION_')) {
       // Keep the candidate universe fixed across decision-layer ablations.
       if (!improvedRequiredPrefilter(index, tradeSide, cheap, [])) continue;
-      const snapshot = buildFeatureSnapshotFromRows(dataset, rows, index, tradeSide);
+      const snapshot = buildFeatureSnapshotFromRows(dataset, rows, index, tradeSide, featureHistoryBars);
       decision = improvedSignalDecision(snapshot, tradeSide, { disabledFamilies: normalizedDisabledFamilies });
       matched = decision.matched;
     } else {
@@ -374,6 +381,7 @@ export function runOneYearDatasetBenchmark(dataset, {
     source: dataset.source ?? null,
     costs: freeze({ ...laneCosts }),
     disabledFamilies: freeze([...normalizedDisabledFamilies]),
+    featureHistoryBars,
     performance: summarizeTrades(trades, initialCapital),
     trades: freeze(trades),
   });
@@ -462,6 +470,7 @@ function runOneYearDatasetAblationRows(dataset, {
   riskFraction = 0.005,
   futuresMaximumExposure = 3,
   costs = null,
+  featureHistoryBars = null,
 } = {}) {
   if (!SUPPORTED_MARKETS.has(dataset?.market)) throw new RangeError('unsupported market');
   const tradeSide = direction(side);
@@ -492,7 +501,7 @@ function runOneYearDatasetAblationRows(dataset, {
     });
     if (eligible.length === 0) continue;
 
-    const snapshot = buildFeatureSnapshotFromRows(dataset, rows, index, tradeSide);
+    const snapshot = buildFeatureSnapshotFromRows(dataset, rows, index, tradeSide, featureHistoryBars);
     for (const definition of eligible) {
       const decision = improvedSignalDecision(snapshot, tradeSide, {
         disabledFamilies: definition.disabledFamilies,
@@ -554,6 +563,7 @@ function runOneYearDatasetAblationRows(dataset, {
       source: dataset.source ?? null,
       costs: freeze({ ...laneCosts }),
       disabledFamilies: freeze([...definition.disabledFamilies]),
+      featureHistoryBars,
       performance: summarizeTrades(state.trades, initialCapital),
       trades: freeze(state.trades),
     });
@@ -564,6 +574,7 @@ export function runFourMarketOneYearAblation({
   datasets = [],
   startTime = ONE_YEAR_BENCHMARK_START_MS,
   endTime = ONE_YEAR_BENCHMARK_END_MS,
+  featureHistoryBars = null,
 } = {}) {
   if (!Array.isArray(datasets)) throw new TypeError('datasets must be an array');
   const rows = [];
@@ -580,6 +591,7 @@ export function runFourMarketOneYearAblation({
         side,
         startTime,
         endTime,
+        featureHistoryBars,
       }));
     }
   }
@@ -628,6 +640,7 @@ export function runFourMarketOneYearAblation({
     markets: freeze(markets),
     interpretation: freeze({
       observedHistoryOnly: true,
+      featureHistoryBars,
       candidatePrefilterFrozenAcrossVariants: true,
       ablationScope: 'FINAL_DECISION_LAYER_ONLY',
       selectionFromThisWindowMayNotCountAsOos: true,
