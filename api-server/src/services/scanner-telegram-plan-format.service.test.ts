@@ -23,15 +23,16 @@ function alert(overrides: Partial<ScannerAlertCandidate> = {}): ScannerAlertCand
   };
 }
 
-test('Telegram cash signal uses unified buy wording with TP/SL percentages, reasons, and no-order action state', () => {
+test('Telegram cash signal uses unified buy wording and the same compact price plan as rich cards', () => {
   const input = scannerTelegramInput(alert(), () => 'stock-room');
   assert.ok(input);
   const details = input?.details ?? '';
   assert.match(details, /🟢 신호: 매수/);
   assert.match(details, /🟢 신호: 매수/);
   assert.match(details, /1차 진입 101 · 기본 60%/);
-  assert.match(details, /목표가 TP1 105 \(\+4\.48%\) · TP2 110 \(\+9\.45%\) · TP3 115 \(\+14\.43%\)/);
-  assert.match(details, /손절\/무효 95 \(-5\.47%\)/);
+  assert.match(details, /1차 목표 105 · 2차 목표 110/);
+  assert.match(details, /3차 목표 115/);
+  assert.match(details, /손절\/무효 95/);
   assert.match(details, /근거:\n거래량 증가/);
   assert.match(details, /거래량 증가/);
 });
@@ -41,12 +42,12 @@ test('Telegram signal never invents missing targets or stop prices', () => {
   assert.ok(input);
   const details = input?.details ?? '';
   assert.match(details, /1차 진입 N\/A · 기본 60%/);
-  assert.match(details, /목표가 N\/A/);
-  assert.match(details, /손절\/무효 N\/A \(N\/A\)/);
+  assert.match(details, /1차 목표 N\/A · 2차 목표 N\/A/);
+  assert.match(details, /손절\/무효 N\/A/);
 });
 
 
-test('Telegram futures SHORT expresses favorable target and adverse stop as signed percentages', () => {
+test('Telegram futures SHORT keeps the same compact entry target and stop copy', () => {
   const input = scannerTelegramInput(alert({
     assetClass: 'coin_futures',
     market: 'CRYPTO_FUTURES',
@@ -61,8 +62,7 @@ test('Telegram futures SHORT expresses favorable target and adverse stop as sign
   assert.ok(input);
   const details = input?.details ?? '';
   assert.match(details, /🟢 신호: SHORT/);
-  assert.match(details, /TP1 95 \(\+5\.00%\)/);
-  assert.match(details, /TP2 90 \(\+10\.00%\)/);
-  assert.match(details, /손절\/무효 105 \(-5\.00%\)/);
+  assert.match(details, /1차 목표 95 · 2차 목표 90/);
+  assert.match(details, /손절\/무효 105/);
   assert.match(details, /근거:\n하락 구조 확인/);
 });
