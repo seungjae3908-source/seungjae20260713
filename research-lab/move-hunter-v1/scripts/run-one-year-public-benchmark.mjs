@@ -9,6 +9,7 @@ import {
 import { BitgetPublicClient } from '../../../market-prediction-lab/src/bitget-public-client.js';
 import { collectBitgetCandles } from '../../../market-prediction-lab/src/bitget-candle-collector.js';
 import { collectFundingRateHistory } from '../../../market-prediction-lab/src/derivatives-history.js';
+import { freezeMarketSpecificHypotheses } from '../src/market-specific-hypothesis.mjs';
 import {
   ONE_YEAR_BENCHMARK_END_MS,
   ONE_YEAR_BENCHMARK_START_MS,
@@ -77,7 +78,31 @@ function ablationRows(ablation) {
   return lines;
 }
 
-function markdown(result, ablation, failures, datasetCount) {
+function hypothesisRows(hypotheses) {
+  const lines = [
+    '',
+    '## Market-specific future-validation hypotheses',
+    '',
+    '| Market | Descriptive best | Status | Frozen candidate | Reasons |',
+    '|---|---|---|---|---|',
+  ];
+  for (const [market, row] of Object.entries(hypotheses.markets)) {
+    lines.push('| ' + [
+      market,
+      row.descriptiveBestVariant,
+      row.status,
+      row.selectedVariant ?? '-',
+      row.reasons.length ? row.reasons.join(', ') : '-',
+    ].join(' | ') + ' |');
+  }
+  lines.push(
+    '',
+    '> A frozen hypothesis is selected from observed history and is eligible only for future unused OOS/Forward testing. It has zero OOS/economic credit now.',
+  );
+  return lines;
+}
+
+function markdown(result, ablation, hypotheses, failures, datasetCount) {
   const lines = [
     '# Move Hunter — 1Y Four-Market Public Benchmark',
     '',
@@ -95,6 +120,7 @@ function markdown(result, ablation, failures, datasetCount) {
     lines.push('| ' + rowForMarket(market, row).join(' | ') + ' |');
   }
   lines.push(...ablationRows(ablation));
+  lines.push(...hypothesisRows(hypotheses));
   lines.push(
     '',
     '## Evidence boundary',
@@ -228,6 +254,7 @@ if (datasets.length === 0) throw new Error('NO_PUBLIC_BENCHMARK_DATA_COLLECTED')
 
 const result = runFourMarketOneYearBenchmark({ datasets });
 const ablation = runFourMarketOneYearAblation({ datasets });
+const hypotheses = freezeMarketSpecificHypotheses(ablation);
 const coverage = Object.fromEntries(
   ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'].map((market) => [
     market,
@@ -237,6 +264,7 @@ const coverage = Object.fromEntries(
 const report = {
   ...result,
   ablation,
+  marketSpecificHypotheses: hypotheses,
   collection: {
     warmupStartTime: WARMUP_START_MS,
     datasetCount: datasets.length,
@@ -248,7 +276,7 @@ const report = {
 await mkdir(dirname(jsonPath), { recursive: true });
 await mkdir(dirname(mdPath), { recursive: true });
 await writeFile(jsonPath, JSON.stringify(report, null, 2) + '\n', 'utf8');
-await writeFile(mdPath, markdown(result, ablation, failures, datasets.length), 'utf8');
+await writeFile(mdPath, markdown(result, ablation, hypotheses, failures, datasets.length), 'utf8');
 
 console.log(JSON.stringify({
   status: result.status,
@@ -263,6 +291,15 @@ console.log(JSON.stringify({
       maximumDrawdown: metrics.maximumDrawdown,
       profitFactor: metrics.profitFactor,
     }])),
+  ])),
+  marketSpecificHypotheses: Object.fromEntries(Object.entries(hypotheses.markets).map(([market, row]) => [
+    market,
+    {
+      status: row.status,
+      descriptiveBestVariant: row.descriptiveBestVariant,
+      selectedVariant: row.selectedVariant,
+      reasons: row.reasons,
+    },
   ])),
   outputs: { jsonPath, mdPath },
 }, null, 2));
