@@ -116,7 +116,7 @@ function comparisonFromAblation(ablation) {
   };
 }
 
-function laneAlignedRows(comparison, hypotheses, failures, datasetCount) {
+function laneAlignedRows(comparison, ablation, hypotheses, failures, datasetCount) {
   const lines = [
     '',
     '## Forward-lane-aligned one-year benchmark',
@@ -132,6 +132,7 @@ function laneAlignedRows(comparison, hypotheses, failures, datasetCount) {
   for (const [market, row] of Object.entries(comparison.markets)) {
     lines.push('| ' + rowForMarket(market, row).join(' | ') + ' |');
   }
+  lines.push(...ablationRows(ablation));
   lines.push(...hypothesisRows(hypotheses));
   lines.push('', '### Lane-aligned provider failures', '');
   if (!failures.length) lines.push('- none');
@@ -161,6 +162,7 @@ function markdown(result, ablation, hypotheses, laneAligned, failures, datasetCo
   if (laneAligned) {
     lines.push(...laneAlignedRows(
       laneAligned.comparison,
+      laneAligned.ablation,
       laneAligned.hypotheses,
       laneAligned.failures,
       laneAligned.datasetCount,
