@@ -53,7 +53,8 @@ const loadMorePage = () => import('@/pages/more');
 const MorePage = lazy(loadMorePage);
 const PortfolioPage = lazy(() => import('@/pages/portfolio'));
 const PortfolioV2Page = lazy(() => import('@/pages/portfolio-v2'));
-const StrategyPromotionPage = lazy(() => import('@/pages/strategy-promotion'));
+const loadStrategyPromotionPage = () => import('@/pages/strategy-promotion');
+const StrategyPromotionPage = lazy(loadStrategyPromotionPage);
 const ResearchCenterPage = lazy(() => import('@/pages/research-center-workspace'));
 const AccountPage = lazy(() => import('@/pages/account'));
 const AdminPage = lazy(() => import('@/pages/admin'));
@@ -442,6 +443,7 @@ function AuthenticatedApp() {
       loadMarketInformationPage(),
       loadWatchlistPage(),
       loadBacktestsPage(),
+      loadStrategyPromotionPage(),
       loadMorePage(),
       loadStockInfoPage(),
       loadDetailPage(),
