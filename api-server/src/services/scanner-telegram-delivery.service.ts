@@ -45,27 +45,6 @@ export type ScannerMemberNotificationDeliverer = typeof deliverMemberNotificatio
 
 const MAX_RICH_ALERTS_PER_BATCH = 3;
 
-function entryReference(alert: ScannerAlertCandidate): number | null {
-  if (!alert.entryZone) return null;
-  const { from, to } = alert.entryZone;
-  if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to <= 0) return null;
-  return (from + to) / 2;
-}
-
-function planPercent(alert: ScannerAlertCandidate, price: number | null): number | null {
-  const entry = entryReference(alert);
-  if (entry == null || price == null || !Number.isFinite(price) || price <= 0) return null;
-  const raw = alert.direction === 'SHORT'
-    ? ((entry - price) / entry) * 100
-    : ((price - entry) / entry) * 100;
-  return Number(raw.toFixed(2));
-}
-
-function formatPlanPercent(value: number | null): string {
-  if (value == null) return 'N/A';
-  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
-}
-
 function formatSignalPrice(value: number | null): string {
   if (value == null || !Number.isFinite(value)) return 'N/A';
   return value.toLocaleString('ko-KR', {
@@ -78,12 +57,6 @@ function signalLabel(alert: ScannerAlertCandidate): string {
   return '매수';
 }
 
-function formatTargetPlan(alert: ScannerAlertCandidate): string {
-  if (!alert.targets.length) return 'N/A';
-  return alert.targets.slice(0, 3).map((target, index) =>
-    `TP${index + 1} ${formatSignalPrice(target)} (${formatPlanPercent(planPercent(alert, target))})`).join(' · ');
-}
-
 function tradePlanLines(alert: ScannerAlertCandidate): string[] {
   const firstEntry = alert.entryZone
     ? (alert.direction === 'SHORT' ? alert.entryZone.from : alert.entryZone.to)
@@ -92,14 +65,18 @@ function tradePlanLines(alert: ScannerAlertCandidate): string[] {
     ? (alert.direction === 'SHORT' ? alert.entryZone.to : alert.entryZone.from)
     : null;
   const stop = formatSignalPrice(alert.stopLoss);
+  const target1 = formatSignalPrice(alert.targets[0] ?? null);
+  const target2 = formatSignalPrice(alert.targets[1] ?? null);
+  const target3 = alert.targets[2] == null ? null : formatSignalPrice(alert.targets[2]);
   return [
     `🟢 신호: ${signalLabel(alert)}`,
     '',
     `1차 진입 ${formatSignalPrice(firstEntry)} · 기본 60%`,
     `2차 진입 ${formatSignalPrice(secondEntry)} · 기본 40%`,
-    `목표가 ${formatTargetPlan(alert)}`,
-    `손절/무효 ${stop} (${formatPlanPercent(planPercent(alert, alert.stopLoss))})`,
-  ];
+    `1차 목표 ${target1} · 2차 목표 ${target2}`,
+    target3 ? `3차 목표 ${target3}` : null,
+    `손절/무효 ${stop}`,
+  ].filter((line): line is string => line != null);
 }
 
 function pricePlanDetails(alert: ScannerAlertCandidate): string {
