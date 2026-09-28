@@ -114,3 +114,30 @@ test('matching 60m hypothesis only opens unused Forward observation, never execu
   assert.equal(kr.futureValidation.automaticPromotionAllowed, false);
   assert.equal(kr.futureValidation.executionAuthority, 'NONE');
 });
+
+
+test('freezer selects the best gate-passing candidate instead of rejecting market when raw return leader fails risk', () => {
+  const result = freezeMarketSpecificHypotheses({
+    schemaVersion: 'move-hunter-one-year-factor-ablation/v1',
+    markets: {
+      KR_STOCK: {
+        sourceTimeframes: ['60M'],
+        variants: {
+          BASELINE: metric(0.10, 0.05, 1.40, 40),
+          FULL: metric(0.11, 0.05, 1.45, 40),
+          NO_TREND: metric(0.20, 0.08, 1.70, 35),
+          NO_MOMENTUM: metric(0.16, 0.052, 1.60, 34),
+          NO_STRUCTURE: metric(0.12, 0.05, 1.46, 33),
+          NO_VOLUME: metric(0.14, 0.049, 1.55, 32),
+          NO_VOLATILITY: metric(0.13, 0.05, 1.50, 31),
+        },
+      },
+    },
+  });
+  const kr = result.markets.KR_STOCK;
+  assert.equal(kr.descriptiveBestVariant, 'NO_TREND');
+  assert.ok(kr.candidateDiagnostics.find((row) => row.id === 'NO_TREND').reasons.includes('MDD_EXPANSION_LIMIT_EXCEEDED'));
+  assert.equal(kr.status, 'FROZEN_HYPOTHESIS');
+  assert.equal(kr.selectedVariant, 'NO_MOMENTUM');
+  assert.equal(kr.eligibleCandidateCount >= 1, true);
+});
