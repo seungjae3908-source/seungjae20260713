@@ -31,7 +31,8 @@ import SearchPage from '@/pages/search';
 
 const loadWatchlistPage = () => import('@/pages/watchlist');
 const WatchlistPage = lazy(loadWatchlistPage);
-const AlertsPage = lazy(() => import('@/pages/alerts'));
+const loadAlertsPage = () => import('@/pages/alerts');
+const AlertsPage = lazy(loadAlertsPage);
 const ScannerPage = lazy(() => import('@/pages/scanner'));
 const loadSignalScannerPage = () => import('@/pages/signal-scanner');
 const SignalScannerPage = lazy(loadSignalScannerPage);
@@ -131,7 +132,10 @@ async function prewarmPrimaryMarketInformation(): Promise<void> {
   if (typeof window === 'undefined') return;
   const currentPath = window.location.pathname.replace(/\/+$/, '') || '/';
   if (currentPath !== '/' && !currentPath.endsWith('/home')) return;
-  await marketInformation.prefetchMarketInformationRoom(queryClient, '/stocks/kr');
+  await Promise.allSettled([
+    marketInformation.prefetchMarketInformationRoom(queryClient, '/stocks/kr'),
+    marketInformation.prefetchMarketInformationRoom(queryClient, '/coins/futures'),
+  ]);
 }
 
 function DirectAiChartDataPrewarm() {
@@ -440,6 +444,7 @@ function AuthenticatedApp() {
       loadSignalScannerPage(),
       loadAiChartPage(),
       loadLearnPage(),
+      loadAlertsPage(),
     ]).then(() => prewarmPrimaryMarketInformation()).catch(() => undefined);
   }, [auth.isApproved]);
   useEffect(() => {
