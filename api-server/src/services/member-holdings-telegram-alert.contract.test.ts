@@ -6,6 +6,7 @@ import { HttpUserTelegramTransport } from '../features/user-broker-telegram/user
 import {
   buildMemberHoldingTelegramDispatch,
   deliverMemberHoldingTelegramAlert,
+  ownerHoldingsChatIdForUser,
 } from './member-holdings-telegram-alert.service';
 import { defaultTelegramAlertPolicy } from './telegram-alert-policy.service';
 import { telegramDestinationChatId } from './telegram-intelligence-worker.service';
@@ -126,6 +127,18 @@ test('four market report routing requires exact dedicated room ids and never fal
     restore('TELEGRAM_CRYPTO_SPOT_CHAT_ID', original.spot);
     restore('TELEGRAM_CRYPTO_FUTURES_CHAT_ID', original.futures);
   }
+});
+
+test('owner holdings room is resolved only for the configured owner member', () => {
+  const env = {
+    TELEGRAM_OWNER_MEMBER_ID: 'owner-user',
+    TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID: 'owner-holdings-room',
+  } as NodeJS.ProcessEnv;
+  assert.equal(ownerHoldingsChatIdForUser('owner-user', env), 'owner-holdings-room');
+  assert.equal(ownerHoldingsChatIdForUser('other-user', env), null);
+  assert.equal(ownerHoldingsChatIdForUser('owner-user', {
+    TELEGRAM_OWNER_MEMBER_ID: 'owner-user',
+  } as NodeJS.ProcessEnv), null);
 });
 
 test('member holdings messages separate stock and crypto without exposing user identity', () => {
