@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 
 import { collectYahooStock60mHistory } from '../src/yahoo-stock-60m-history.mjs';
 import { collectUpbitSpotHistory } from '../../../market-prediction-lab/src/upbit-spot-history.js';
@@ -452,142 +453,200 @@ function markdown(report) {
   return lines.join('\n') + '\n';
 }
 
-const jsonPath = process.argv[2] || '/var/lib/backtest-worker/results/move-hunter-server-fast-1y.json';
-const mdPath = process.argv[3] || '/var/lib/backtest-worker/results/move-hunter-server-fast-1y.md';
-const researchSha = process.env.MOVE_HUNTER_RESEARCH_SHA || 'UNKNOWN';
-
-const collection = await collectDatasets();
-const lanes = [];
-
-for (const dataset of collection.datasets) {
-  const sides = dataset.market === 'CRYPTO_FUTURES' ? ['LONG', 'SHORT'] : ['LONG'];
-  for (const side of sides) {
-    const result = runOneYearDatasetBenchmark(dataset, {
-      variant: 'IMPROVED_TECH_STRUCTURE_V2',
-      side,
-      startTime: ONE_YEAR_BENCHMARK_START_MS,
-      endTime: ONE_YEAR_BENCHMARK_END_MS,
-      featureHistoryBars: FEATURE_HISTORY_BARS,
+function runLaneInWorker(dataset, side) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL(import.meta.url), {
+      type: 'module',
+      workerData: { dataset, side },
     });
-    lanes.push(result);
-  }
+    worker.once('message', resolve);
+    worker.once('error', reject);
+    worker.once('exit', (code) => {
+      if (code !== 0) reject(new Error('LANE_WORKER_EXIT_' + code + ':' + dataset.market + ':' + dataset.symbol + ':' + side));
+    });
+  });
 }
 
-const lanesByMarket = Object.fromEntries(MARKETS.map((market) => [
-  market,
-  lanes.filter((row) => row.market === market),
-]));
-
-const markets = {};
-for (const market of MARKETS) {
-  const marketLanes = lanesByMarket[market];
-  markets[market] = {
-    performance: aggregateLanes(marketLanes),
-    daily: summarizeDaily(marketLanes, marketWeights(marketLanes)),
-    lanes: marketLanes,
-  };
-}
-
-const allMarketsPresent = MARKETS.every((market) => lanesByMarket[market].length > 0);
-const combinedDaily = allMarketsPresent
-  ? summarizeDaily(lanes, combinedWeights(lanesByMarket))
-  : null;
-const marketMultiples = MARKETS
-  .filter((market) => Number.isFinite(markets[market].performance.totalReturn))
-  .map((market) => 1 + markets[market].performance.totalReturn);
-const combinedPerformance = allMarketsPresent
-  ? {
-      totalReturn: marketMultiples.reduce((sum, value) => sum + value, 0) / MARKETS.length - 1,
-      marketCount: MARKETS.length,
+async function runWithConcurrency(tasks, limit) {
+  const results = new Array(tasks.length);
+  let next = 0;
+  async function consume() {
+    while (true) {
+      const index = next++;
+      if (index >= tasks.length) return;
+      const task = tasks[index];
+      const started = Date.now();
+      console.log('LANE_START ' + task.dataset.market + '/' + task.dataset.symbol + '/' + task.side);
+      results[index] = await runLaneInWorker(task.dataset, task.side);
+      console.log('LANE_DONE ' + task.dataset.market + '/' + task.dataset.symbol + '/' + task.side
+        + ' ms=' + (Date.now() - started)
+        + ' trades=' + (results[index]?.performance?.tradeCount ?? 0));
     }
-  : {
-      totalReturn: null,
-      marketCount: marketMultiples.length,
+  }
+  const workers = Array.from({ length: Math.min(limit, tasks.length) }, () => consume());
+  await Promise.all(workers);
+  return results;
+}
+
+async function main() {
+  const jsonPath = process.argv[2] || '/var/lib/backtest-worker/results/move-hunter-server-fast-1y.json';
+  const mdPath = process.argv[3] || '/var/lib/backtest-worker/results/move-hunter-server-fast-1y.md';
+  const researchSha = process.env.MOVE_HUNTER_RESEARCH_SHA || 'UNKNOWN';
+
+  const collectionStarted = Date.now();
+  const collection = await collectDatasets();
+  console.log('COLLECTION_DONE ms=' + (Date.now() - collectionStarted)
+    + ' datasets=' + collection.datasets.length
+    + ' failures=' + collection.failures.length);
+  for (const row of collection.cache) {
+    console.log('CACHE ' + row.market + '/' + row.symbol + '/' + row.timeframe + ' hit=' + row.hit);
+  }
+  for (const failure of collection.failures) {
+    console.log('COLLECTION_FAILURE ' + failure.market + '/' + failure.symbol + '/' + failure.timeframe + ' ' + failure.error);
+  }
+
+  const tasks = [];
+  for (const dataset of collection.datasets) {
+    const sides = dataset.market === 'CRYPTO_FUTURES' ? ['LONG', 'SHORT'] : ['LONG'];
+    for (const side of sides) tasks.push({ dataset, side });
+  }
+
+  const requested = Number(process.env.MOVE_HUNTER_WORKERS || 2);
+  const workerCount = Number.isInteger(requested) && requested >= 1 ? Math.min(requested, 2) : 2;
+  console.log('PARALLEL_WORKERS=' + workerCount + ' LANES=' + tasks.length);
+  const lanes = await runWithConcurrency(tasks, workerCount);
+
+  const lanesByMarket = Object.fromEntries(MARKETS.map((market) => [
+    market,
+    lanes.filter((row) => row.market === market),
+  ]));
+
+  const markets = {};
+  for (const market of MARKETS) {
+    const marketLanes = lanesByMarket[market];
+    markets[market] = {
+      performance: aggregateLanes(marketLanes),
+      daily: summarizeDaily(marketLanes, marketWeights(marketLanes)),
+      lanes: marketLanes,
     };
+  }
 
-const report = {
-  schemaVersion: 'move-hunter-server-fast-daily-target-audit/v1',
-  generatedAt: new Date().toISOString(),
-  researchSha,
-  startTime: ONE_YEAR_BENCHMARK_START_MS,
-  endTime: ONE_YEAR_BENCHMARK_END_MS,
-  status: allMarketsPresent ? 'BOUNDED_FOUR_MARKET_RESULT' : 'PARTIAL_MARKET_RESULT',
-  strategy: {
-    variant: 'IMPROVED_TECH_STRUCTURE_V2',
-    runner: 'LONG_RUNNER_3ATR',
-    featureHistoryBars: FEATURE_HISTORY_BARS,
-    timeframes: {
-      KR_STOCK: '60m',
-      US_STOCK: '60m',
-      CRYPTO_SPOT: '4H',
-      CRYPTO_FUTURES: '60m',
+  const allMarketsPresent = MARKETS.every((market) => lanesByMarket[market].length > 0);
+  const combinedDaily = allMarketsPresent
+    ? summarizeDaily(lanes, combinedWeights(lanesByMarket))
+    : null;
+  const marketMultiples = MARKETS
+    .filter((market) => Number.isFinite(markets[market].performance.totalReturn))
+    .map((market) => 1 + markets[market].performance.totalReturn);
+  const combinedPerformance = allMarketsPresent
+    ? {
+        totalReturn: marketMultiples.reduce((sum, value) => sum + value, 0) / MARKETS.length - 1,
+        marketCount: MARKETS.length,
+      }
+    : {
+        totalReturn: null,
+        marketCount: marketMultiples.length,
+      };
+
+  const report = {
+    schemaVersion: 'move-hunter-server-fast-daily-target-audit/v2',
+    generatedAt: new Date().toISOString(),
+    researchSha,
+    startTime: ONE_YEAR_BENCHMARK_START_MS,
+    endTime: ONE_YEAR_BENCHMARK_END_MS,
+    status: allMarketsPresent ? 'BOUNDED_FOUR_MARKET_RESULT' : 'PARTIAL_MARKET_RESULT',
+    strategy: {
+      variant: 'IMPROVED_TECH_STRUCTURE_V2',
+      runner: 'LONG_RUNNER_3ATR',
+      featureHistoryBars: FEATURE_HISTORY_BARS,
+      parallelWorkers: workerCount,
+      timeframes: {
+        KR_STOCK: '60m',
+        US_STOCK: '60m',
+        CRYPTO_SPOT: '4H',
+        CRYPTO_FUTURES: '60m',
+      },
     },
-  },
-  collection: {
-    datasetCount: collection.datasets.length,
-    coverage: Object.fromEntries(MARKETS.map((market) => [
-      market,
-      collection.datasets.filter((row) => row.market === market).length,
-    ])),
-    cache: collection.cache,
-    failures: collection.failures,
-  },
-  markets,
-  combined: {
-    performance: combinedPerformance,
-    daily: combinedDaily,
-  },
-  evidenceBoundary: {
-    historicalReplayOnly: true,
-    dailyMetricType: 'REALIZED_EXIT_DAY_ACCOUNT_EQUITY_CHANGE',
-    markToMarketDailyNav: false,
-    intradayTargetHitRate: false,
-    pointInTimeFullUniverseProven: false,
-    canonicalFullCostProven: false,
-    oosCredit: 0,
-    economicSampleCredit: 0,
-    profitabilityClaimAllowed: false,
-    executionAuthority: 'NONE',
-    liveTrading: false,
-    realOrder: false,
-    privateApi: false,
-  },
-};
+    collection: {
+      datasetCount: collection.datasets.length,
+      coverage: Object.fromEntries(MARKETS.map((market) => [
+        market,
+        collection.datasets.filter((row) => row.market === market).length,
+      ])),
+      cache: collection.cache,
+      failures: collection.failures,
+    },
+    markets,
+    combined: {
+      performance: combinedPerformance,
+      daily: combinedDaily,
+    },
+    evidenceBoundary: {
+      historicalReplayOnly: true,
+      dailyMetricType: 'REALIZED_EXIT_DAY_ACCOUNT_EQUITY_CHANGE',
+      markToMarketDailyNav: false,
+      intradayTargetHitRate: false,
+      pointInTimeFullUniverseProven: false,
+      canonicalFullCostProven: false,
+      oosCredit: 0,
+      economicSampleCredit: 0,
+      profitabilityClaimAllowed: false,
+      executionAuthority: 'NONE',
+      liveTrading: false,
+      realOrder: false,
+      privateApi: false,
+    },
+  };
 
-await mkdir(dirname(jsonPath), { recursive: true });
-await mkdir(dirname(mdPath), { recursive: true });
-await writeFile(jsonPath, JSON.stringify(report, null, 2) + '\n', 'utf8');
-await writeFile(mdPath, markdown(report), 'utf8');
+  await mkdir(dirname(jsonPath), { recursive: true });
+  await mkdir(dirname(mdPath), { recursive: true });
+  await writeFile(jsonPath, JSON.stringify(report, null, 2) + '\n', 'utf8');
+  await writeFile(mdPath, markdown(report), 'utf8');
 
-const consoleSummary = {
-  status: report.status,
-  datasetCount: report.collection.datasetCount,
-  coverage: report.collection.coverage,
-  cache: report.collection.cache,
-  failures: report.collection.failures,
-  markets: Object.fromEntries(MARKETS.map((market) => [market, {
-    totalReturn: report.markets[market].performance.totalReturn,
-    tradeCount: report.markets[market].performance.tradeCount,
-    profitFactor: report.markets[market].performance.profitFactor,
-    conservativeLaneMaxMdd: report.markets[market].performance.conservativeLaneMaxMdd,
-    hit3PctDays: report.markets[market].daily.hit3PctDays,
-    hit5PctDays: report.markets[market].daily.hit5PctDays,
-    hit10PctDays: report.markets[market].daily.hit10PctDays,
-    negativeDays: report.markets[market].daily.negativeDays,
-  }])),
-  combined: report.combined.daily ? {
-    totalReturn: report.combined.performance.totalReturn,
-    realizedWindowTotalReturn: report.combined.daily.realizedWindowTotalReturn,
-    tradingDays: report.combined.daily.tradingDays,
-    hit3PctDays: report.combined.daily.hit3PctDays,
-    hit5PctDays: report.combined.daily.hit5PctDays,
-    hit10PctDays: report.combined.daily.hit10PctDays,
-    negativeDays: report.combined.daily.negativeDays,
-    bestDay: report.combined.daily.bestDay,
-    worstDay: report.combined.daily.worstDay,
-    maxConsecutiveNegativeDays: report.combined.daily.maxConsecutiveNegativeDays,
-  } : null,
-  outputs: { jsonPath, mdPath },
-};
+  const consoleSummary = {
+    status: report.status,
+    datasetCount: report.collection.datasetCount,
+    coverage: report.collection.coverage,
+    cache: report.collection.cache,
+    failures: report.collection.failures,
+    markets: Object.fromEntries(MARKETS.map((market) => [market, {
+      totalReturn: report.markets[market].performance.totalReturn,
+      tradeCount: report.markets[market].performance.tradeCount,
+      profitFactor: report.markets[market].performance.profitFactor,
+      conservativeLaneMaxMdd: report.markets[market].performance.conservativeLaneMaxMdd,
+      hit3PctDays: report.markets[market].daily.hit3PctDays,
+      hit5PctDays: report.markets[market].daily.hit5PctDays,
+      hit10PctDays: report.markets[market].daily.hit10PctDays,
+      negativeDays: report.markets[market].daily.negativeDays,
+    }])),
+    combined: report.combined.daily ? {
+      totalReturn: report.combined.performance.totalReturn,
+      realizedWindowTotalReturn: report.combined.daily.realizedWindowTotalReturn,
+      tradingDays: report.combined.daily.tradingDays,
+      hit3PctDays: report.combined.daily.hit3PctDays,
+      hit5PctDays: report.combined.daily.hit5PctDays,
+      hit10PctDays: report.combined.daily.hit10PctDays,
+      negativeDays: report.combined.daily.negativeDays,
+      bestDay: report.combined.daily.bestDay,
+      worstDay: report.combined.daily.worstDay,
+      maxConsecutiveNegativeDays: report.combined.daily.maxConsecutiveNegativeDays,
+    } : null,
+    outputs: { jsonPath, mdPath },
+  };
 
-console.log(JSON.stringify(consoleSummary, null, 2));
+  console.log(JSON.stringify(consoleSummary, null, 2));
+}
+
+if (!isMainThread) {
+  const { dataset, side } = workerData;
+  const result = runOneYearDatasetBenchmark(dataset, {
+    variant: 'IMPROVED_TECH_STRUCTURE_V2',
+    side,
+    startTime: ONE_YEAR_BENCHMARK_START_MS,
+    endTime: ONE_YEAR_BENCHMARK_END_MS,
+    featureHistoryBars: FEATURE_HISTORY_BARS,
+  });
+  parentPort.postMessage(result);
+} else {
+  await main();
+}
