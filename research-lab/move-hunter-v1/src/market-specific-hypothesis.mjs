@@ -14,6 +14,8 @@ export const FORWARD_TARGET_TIMEFRAME_BY_MARKET_V1 = Object.freeze({
 export const MARKET_SPECIFIC_HYPOTHESIS_POLICY_V1 = Object.freeze({
   maximumMddExpansionVsBaseline: 0.10,
   minimumTradeCount: 20,
+  requirePositiveReturn: true,
+  minimumProfitFactor: 1.0,
   requireReturnAboveBaseline: true,
   requireReturnAboveFull: true,
   requireProfitFactorNotBelowBaseline: true,
@@ -56,6 +58,16 @@ function gateCandidate({ candidate, baseline, full, policy }) {
   if (!Number.isFinite(candidate.maximumDrawdown)) reasons.push('CANDIDATE_MDD_UNAVAILABLE');
   if (!Number.isFinite(candidate.tradeCount) || candidate.tradeCount < policy.minimumTradeCount) {
     reasons.push('MINIMUM_TRADE_COUNT_NOT_MET');
+  }
+  if (policy.requirePositiveReturn
+      && Number.isFinite(candidate.totalReturn)
+      && candidate.totalReturn <= 0) {
+    reasons.push('CANDIDATE_RETURN_NOT_POSITIVE');
+  }
+  if (Number.isFinite(candidate.profitFactor)
+      && Number.isFinite(policy.minimumProfitFactor)
+      && candidate.profitFactor < policy.minimumProfitFactor) {
+    reasons.push('PROFIT_FACTOR_BELOW_MINIMUM');
   }
   if (policy.requireReturnAboveBaseline
       && Number.isFinite(candidate.totalReturn)
