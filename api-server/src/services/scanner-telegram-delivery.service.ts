@@ -71,12 +71,6 @@ function signalLabel(alert: ScannerAlertCandidate): string {
   return '매수';
 }
 
-function inferredAction(alert: ScannerAlertCandidate): string {
-  if (alert.assetClass === 'coin_futures') return alert.direction === 'SHORT' ? 'SHORT' : 'LONG';
-  if (alert.action === 'SELL' || alert.direction === 'SHORT') return '매도';
-  return '매수';
-}
-
 function formatTargetPlan(alert: ScannerAlertCandidate): string {
   if (!alert.targets.length) return 'N/A';
   return alert.targets.slice(0, 3).map((target, index) =>
@@ -88,16 +82,15 @@ function tradePlanLines(alert: ScannerAlertCandidate): string[] {
     ? `${alert.entryZone.from}~${alert.entryZone.to}`
     : 'N/A';
   const stop = alert.stopLoss == null ? 'N/A' : String(alert.stopLoss);
-  const action = inferredAction(alert);
   const actionState = alert.orderSubmitted || alert.exchangeRequestSent
     ? '실행 상태 확인 필요'
     : '주문 미제출 · 거래소 요청 없음';
   return [
-    `신호 ${signalLabel(alert)} · 행동 ${action}`,
-    `진입 ${entry}`,
-    `익절 ${formatTargetPlan(alert)}`,
-    `손절 ${stop} (${formatPlanPercent(planPercent(alert, alert.stopLoss))})`,
-    `실제 행동: ${actionState}`,
+    `신호: ${signalLabel(alert)}`,
+    `진입구간: ${entry}`,
+    `목표가: ${formatTargetPlan(alert)}`,
+    `손절/무효: ${stop} (${formatPlanPercent(planPercent(alert, alert.stopLoss))})`,
+    `주문상태: ${actionState}`,
   ];
 }
 
@@ -130,7 +123,7 @@ export function scannerInAppNotificationInput(
     memberId,
     type: alert.direction === 'SHORT' ? 'ai_sell_signal' : 'ai_strong_buy',
     title: `검색기 ${signalLabel(alert)} 신호 · ${alert.symbol}`,
-    body: `${lane} · ${alert.market}${reasons.length ? ` · 근거 ${reasons.join(' / ')}` : ''} · 실제 주문/체결 아님`,
+    body: `${lane}${reasons.length ? ` · 근거 ${reasons.join(' / ')}` : ''} · 실제 주문/체결 아님`,
     url: '/scanner',
     app: true,
     push: false,
