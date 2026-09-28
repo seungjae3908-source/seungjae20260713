@@ -22,7 +22,7 @@ test('strategy modes use distinct multi-timeframe contexts', () => {
 });
 
 test('data quality preserves stale, partial, and unavailable states', () => {
-  assert.equal(dataQualityFromStatus('ok'), 'LIVE');
+  assert.equal(dataQualityFromStatus('ok'), 'FRESH');
   assert.equal(dataQualityFromStatus('delayed'), 'DELAYED');
   assert.equal(dataQualityFromStatus('stale'), 'STALE');
   assert.equal(dataQualityFromStatus('insufficient'), 'PARTIAL');
