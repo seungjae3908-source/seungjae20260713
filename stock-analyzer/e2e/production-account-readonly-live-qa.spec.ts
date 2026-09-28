@@ -78,16 +78,18 @@ function writeEvidence(value: unknown) {
   );
 }
 
-function assertZeroMutationSafety(value: SafetySnapshot) {
-  expect(value.readOnly).toBe(true);
-  expect(value.orderRequests).toBe(0);
-  expect(value.cancelRequests).toBe(0);
-  expect(value.amendRequests).toBe(0);
-  expect(value.transferRequests).toBe(0);
-  expect(value.withdrawalRequests).toBe(0);
-  expect(value.credentialsReturned).toBe(false);
-  expect(value.liveTradingEnabled).toBe(false);
-  expect(value.autoTradingEnabled).toBe(false);
+function zeroMutationSafetyFailures(value: SafetySnapshot): string[] {
+  const failures: string[] = [];
+  if (value.readOnly !== true) failures.push('readOnly!=true');
+  if (value.orderRequests !== 0) failures.push(`orderRequests=${value.orderRequests}`);
+  if (value.cancelRequests !== 0) failures.push(`cancelRequests=${value.cancelRequests}`);
+  if (value.amendRequests !== 0) failures.push(`amendRequests=${value.amendRequests}`);
+  if (value.transferRequests !== 0) failures.push(`transferRequests=${value.transferRequests}`);
+  if (value.withdrawalRequests !== 0) failures.push(`withdrawalRequests=${value.withdrawalRequests}`);
+  if (value.credentialsReturned !== false) failures.push('credentialsReturned!=false');
+  if (value.liveTradingEnabled !== false) failures.push('liveTradingEnabled!=false');
+  if (value.autoTradingEnabled !== false) failures.push('autoTradingEnabled!=false');
+  return failures;
 }
 
 async function login(page: Page) {
@@ -234,34 +236,55 @@ test('Production real-account read-only providers return fresh connected snapsho
     autoTradingAuthorityGranted: credentialStatus?.autoTradingEnabled === true,
   });
 
+  const providerFailures: string[] = [];
   for (const provider of providers) {
     const snapshot = snapshots.get(provider);
-    expect(snapshot, `${provider} Production snapshot must be captured`).toBeTruthy();
-    expect(snapshot!.provider).toBe(provider);
-    assertZeroMutationSafety(snapshot!);
+    if (!snapshot) {
+      providerFailures.push(`${provider}: snapshot missing`);
+      continue;
+    }
+    if (snapshot.provider !== provider) {
+      providerFailures.push(`${provider}: provider identity=${snapshot.provider}`);
+    }
+    for (const failure of zeroMutationSafetyFailures(snapshot)) {
+      providerFailures.push(`${provider}: ${failure}`);
+    }
 
     const isRequiredCrypto = cryptoProviders.includes(provider as typeof cryptoProviders[number]);
-    if (isRequiredCrypto || snapshot!.connected) {
-      expect(
-        snapshot!.connected,
-        `${provider} must prove a real connected account read; status=${snapshot!.status}; errorCode=${snapshot!.errorCode ?? 'none'}`,
-      ).toBe(true);
-      expect(snapshot!.status).toBe('CONNECTED');
-      expect(snapshot!.stale).toBe(false);
-      expect(
-        providerReadErrorAccepted(provider, snapshot!.errorCode),
-        `${provider} returned an unexpected provider read error: ${snapshot!.errorCode ?? 'none'}`,
-      ).toBe(true);
-      expect(Number.isFinite(Date.parse(snapshot!.checkedAt))).toBe(true);
-      expect(snapshot!.lastGoodAt).not.toBeNull();
-      expect(Number.isFinite(Date.parse(String(snapshot!.lastGoodAt)))).toBe(true);
+    if (isRequiredCrypto || snapshot.connected) {
+      if (snapshot.connected !== true) {
+        providerFailures.push(
+          `${provider}: not connected; status=${snapshot.status}; errorCode=${snapshot.errorCode ?? 'none'}`,
+        );
+      }
+      if (snapshot.status !== 'CONNECTED') providerFailures.push(`${provider}: status=${snapshot.status}`);
+      if (snapshot.stale !== false) providerFailures.push(`${provider}: stale=${snapshot.stale}`);
+      if (!providerReadErrorAccepted(provider, snapshot.errorCode)) {
+        providerFailures.push(`${provider}: unexpected errorCode=${snapshot.errorCode ?? 'none'}`);
+      }
+      if (!Number.isFinite(Date.parse(snapshot.checkedAt))) providerFailures.push(`${provider}: checkedAt invalid`);
+      if (snapshot.lastGoodAt === null || !Number.isFinite(Date.parse(String(snapshot.lastGoodAt)))) {
+        providerFailures.push(`${provider}: lastGoodAt invalid`);
+      }
     }
   }
 
   const connectedStockProviders = stockProviders.filter((provider) => snapshots.get(provider)?.connected === true);
-  expect(connectedStockProviders.length, 'At least one real stock account provider must be connected').toBeGreaterThanOrEqual(1);
+  if (connectedStockProviders.length < 1) {
+    const stockState = stockProviders
+      .map((provider) => {
+        const snapshot = snapshots.get(provider);
+        return `${provider}=${snapshot?.status ?? 'MISSING'}/${snapshot?.errorCode ?? 'none'}`;
+      })
+      .join(',');
+    providerFailures.push(`stock-provider: no connected provider; ${stockState}`);
+  }
+  if (blocked.length > 0) providerFailures.push(`blocked mutation requests=${blocked.length}`);
+  if (observedAppMutations.length > 0) providerFailures.push(`observed app mutations=${observedAppMutations.length}`);
 
-  expect(blocked).toEqual([]);
-  expect(observedAppMutations).toEqual([]);
+  expect(
+    providerFailures,
+    'Production account read-only QA blockers (all providers collected in one run)',
+  ).toEqual([]);
 
 });
