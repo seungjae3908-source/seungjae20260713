@@ -117,9 +117,9 @@ export async function collectTelegramMarketBrief(): Promise<TelegramMarketBriefS
 }
 
 function roomLines(room: BriefRoom): string[] {
-  if (!room.response) return [`[${roomLabel(room.room)}] 데이터 공급 장애 · ${room.error ?? '원인 미확인'}`];
+  if (!room.response) return [`[${roomLabel(room.room)}] 데이터 공급 지연`];
   const response = room.response;
-  const lines = [`[${roomLabel(room.room)}] ${response.partial ? 'PARTIAL' : 'READY'}`];
+  const lines = [`[${roomLabel(room.room)}] ${response.partial ? '일부 데이터 확인 중' : '데이터 정상'}`];
   if (response.sections.indices.data.length) {
     const indices = response.sections.indices.data.slice(0, 4)
       .map((item) => `${item.label} ${number(item.value)} (${percent(item.changePercent)})`)
@@ -136,10 +136,9 @@ function roomLines(room: BriefRoom): string[] {
       lines.push(`선물 수급: LONG ${number(derivatives.longRatio)} · SHORT ${number(derivatives.shortRatio)} · L/S ${number(derivatives.longShortRatio)}`);
     }
   }
-  const problemSections = Object.entries(response.sections)
-    .filter(([, section]) => ['error', 'unavailable', 'stale'].includes(section.status))
-    .map(([name, section]) => `${name}:${section.status}`);
-  if (problemSections.length) lines.push(`데이터 상태: ${problemSections.join(' · ')}`);
+  const delayedSections = Object.values(response.sections)
+    .filter((section) => ['error', 'unavailable', 'stale'].includes(section.status)).length;
+  if (delayedSections > 0) lines.push(`데이터 상태: ${delayedSections}개 항목 확인 지연`);
   return lines;
 }
 
@@ -172,6 +171,16 @@ function newsRows(rooms: readonly BriefRoom[]) {
     })
     .sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt))
     .slice(0, 6);
+}
+
+function warningLabel(warning: string): string {
+  if (warning.startsWith('stocks-kr:')) return '국내주식 데이터 일부 확인 지연';
+  if (warning.startsWith('stocks-us:')) return '해외주식 데이터 일부 확인 지연';
+  if (warning.startsWith('coins-spot:')) return '코인현물 데이터 일부 확인 지연';
+  if (warning.startsWith('coins-futures:')) return '코인선물 데이터 일부 확인 지연';
+  if (warning === 'KR_THEME_UNAVAILABLE') return '국내 테마 정보 확인 지연';
+  if (warning === 'US_THEME_UNAVAILABLE') return '해외 테마 정보 확인 지연';
+  return '일부 시장데이터 확인 필요';
 }
 
 function scopedWarnings(snapshot: TelegramMarketBriefSnapshot, destination: TelegramReportDestination): string[] {
@@ -217,7 +226,7 @@ export function buildTelegramMarketBriefInput(input: {
   } else {
     lines.push('', `[뉴스 브리핑 · ${newsScope}] 검증된 최신 뉴스 N/A`);
   }
-  if (warnings.length) lines.push('', `데이터 경고: ${warnings.slice(0, 6).join(' · ')}`);
+  if (warnings.length) lines.push('', `⚠️ ${[...new Set(warnings.slice(0, 6).map(warningLabel))].join(' · ')}`);
   lines.push('', '실제 데이터가 없는 값은 N/A로 유지하며 신호·수익률·목표가를 새로 만들지 않습니다.');
 
   const buttons: TelegramUrlButton[][] = [];
