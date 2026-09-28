@@ -333,6 +333,22 @@ async function collectLaneAlignedFutures(datasets, failures, descriptiveDatasets
       });
       const existing = descriptiveDatasets.find((row) =>
         row.market === 'CRYPTO_FUTURES' && row.symbol === symbol);
+      let fundingRates = existing?.fundingRates ?? [];
+      if (!Array.isArray(fundingRates) || fundingRates.length === 0) {
+        const funding = await collectFundingRateHistory({
+          client,
+          symbol,
+          startTime: WARMUP_START_MS,
+          endTime: ONE_YEAR_BENCHMARK_END_MS,
+          productType: 'usdt-futures',
+          pageSize: 100,
+          maxPages: 30,
+        });
+        fundingRates = funding.records;
+      }
+      if (!Array.isArray(fundingRates) || fundingRates.length === 0) {
+        throw new Error('LANE_ALIGNED_FUNDING_HISTORY_REQUIRED');
+      }
       datasets.push({
         market: 'CRYPTO_FUTURES',
         symbol,
@@ -340,7 +356,7 @@ async function collectLaneAlignedFutures(datasets, failures, descriptiveDatasets
         providerTimeframe: '1h',
         source: history.provider,
         candles: history.candles,
-        fundingRates: existing?.fundingRates ?? [],
+        fundingRates,
       });
     } catch (error) {
       failures.push({
