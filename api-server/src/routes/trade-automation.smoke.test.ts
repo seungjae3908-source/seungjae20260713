@@ -4,7 +4,7 @@ import express from 'express';
 import type { AddressInfo } from 'node:net';
 import router, { setTradeAutomationRepositoryFactoryForTests } from './trade-automation';
 import type { AuthenticatedRequest } from '../middleware/auth';
-import { InMemoryTradingRepository } from '../services/trade-automation.repository';
+import { InMemoryTradingRepository, type TradingRepository } from '../services/trade-automation.repository';
 import { marketIntelligenceNotAvailable, tradingMarket } from '../services/market-intelligence-client.service';
 import {
   marketIntelligenceSymbolForTradingPlan,
@@ -239,6 +239,37 @@ test('status is authenticated, automatic execution defaults off, and never retur
     assert.deepEqual(body.liveAutomaticExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
     assert.equal(body.actualOrderSubmittedByStatusRequest, false);
   } finally { await close(authenticated.server); }
+});
+
+test('status degrades storage failures to a read-only unavailable payload without a 5xx or trading side effects', async () => {
+  const unavailable = new Proxy(repository as TradingRepository, {
+    get(target, property) {
+      if (property === 'getPolicy') {
+        return async () => { throw new Error('TRADE_AUTOMATION_STORAGE_UNAVAILABLE'); };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  setTradeAutomationRepositoryFactoryForTests(() => unavailable);
+
+  const authenticated = await startServer();
+  try {
+    const response = await fetch(`${authenticated.baseUrl}/api/trade-automation/status`);
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(body.ok, false);
+    assert.equal(body.status, 'UNAVAILABLE');
+    assert.equal(body.error, 'TRADE_AUTOMATION_STORAGE_UNAVAILABLE');
+    assert.equal(body.readOnlyStatusRequest, true);
+    assert.equal(body.readinessKnown, false);
+    assert.equal(body.credentialsReturned, false);
+    assert.equal(body.privateTradingRequestSent, false);
+    assert.equal(body.actualOrderSubmittedByStatusRequest, false);
+  } finally {
+    await close(authenticated.server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
 });
 
 test('automatic policy cannot be enabled without explicit final confirmation', async () => {
