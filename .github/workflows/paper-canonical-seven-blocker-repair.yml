@@ -46,6 +46,23 @@ jobs:
           node-version: '20'
           cache: pnpm
       - run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Validate operational build-only bundle commands
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server run build:server
+          (
+            cd api-server
+            pnpm exec esbuild src/scripts/run-forward-recommendation-observer-cycle.ts \
+              --outfile=.paper-seven-blocker-observer.mjs \
+              --bundle \
+              --packages=external \
+              --platform=node \
+              --format=esm \
+              --target=node20 \
+              --log-level=warning
+            test -s .paper-seven-blocker-observer.mjs
+          )
       - name: Validate deterministic seven-blocker planner
         shell: bash
         run: |
@@ -272,19 +289,15 @@ jobs:
           pnpm --dir api-server run build:server
           (
             cd api-server
-            node --input-type=module <<'NODE'
-            import { build } from 'esbuild';
-            await build({
-              entryPoints: ['src/scripts/run-forward-recommendation-observer-cycle.ts'],
-              outfile: '.paper-seven-blocker-observer.mjs',
-              bundle: true,
-              packages: 'external',
-              platform: 'node',
-              format: 'esm',
-              target: 'node20',
-              logLevel: 'warning',
-            });
-            NODE
+            pnpm exec esbuild src/scripts/run-forward-recommendation-observer-cycle.ts \
+              --outfile=.paper-seven-blocker-observer.mjs \
+              --bundle \
+              --packages=external \
+              --platform=node \
+              --format=esm \
+              --target=node20 \
+              --log-level=warning
+            test -s .paper-seven-blocker-observer.mjs
           )
       - name: Configure protected Production SSH
         shell: bash
