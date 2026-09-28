@@ -78,26 +78,27 @@ function formatTargetPlan(alert: ScannerAlertCandidate): string {
 }
 
 function tradePlanLines(alert: ScannerAlertCandidate): string[] {
-  const entry = alert.entryZone
-    ? `${alert.entryZone.from}~${alert.entryZone.to}`
-    : 'N/A';
+  const firstEntry = alert.entryZone
+    ? (alert.direction === 'SHORT' ? alert.entryZone.from : alert.entryZone.to)
+    : null;
+  const secondEntry = alert.entryZone
+    ? (alert.direction === 'SHORT' ? alert.entryZone.to : alert.entryZone.from)
+    : null;
   const stop = alert.stopLoss == null ? 'N/A' : String(alert.stopLoss);
-  const actionState = alert.orderSubmitted || alert.exchangeRequestSent
-    ? '실행 상태 확인 필요'
-    : '주문 미제출 · 거래소 요청 없음';
   return [
-    `신호: ${signalLabel(alert)}`,
-    `진입구간: ${entry}`,
-    `목표가: ${formatTargetPlan(alert)}`,
-    `손절/무효: ${stop} (${formatPlanPercent(planPercent(alert, alert.stopLoss))})`,
-    `주문상태: ${actionState}`,
+    `🟢 신호: ${signalLabel(alert)}`,
+    '',
+    `1차 진입 ${firstEntry ?? 'N/A'} · 기본 60%`,
+    `2차 진입 ${secondEntry ?? 'N/A'} · 기본 40%`,
+    `목표가 ${formatTargetPlan(alert)}`,
+    `손절/무효 ${stop} (${formatPlanPercent(planPercent(alert, alert.stopLoss))})`,
   ];
 }
 
 function pricePlanDetails(alert: ScannerAlertCandidate): string {
-  const lines = ['🚨 진입가능', ...tradePlanLines(alert)];
-  if (alert.evidence.length) lines.push(`판단 이유: ${alert.evidence.slice(0, 4).join(' · ')}`);
-  else lines.push('판단 이유: N/A');
+  const lines = [...tradePlanLines(alert)];
+  if (alert.evidence.length) lines.push('', '근거:', alert.evidence.slice(0, 4).join(' · '));
+  else lines.push('', '근거: N/A');
   return lines.join('\n');
 }
 
@@ -276,10 +277,7 @@ async function richInput(
   try {
     const evidence = await collectTelegramSignalIntelligence(alert, context);
     return addTelegramSignalFreshness(
-      normalizeRichTradePlan(
-        buildTelegramSignalIntelligenceInput(base, alert, evidence, context),
-        alert,
-      ),
+      buildTelegramSignalIntelligenceInput(base, alert, evidence, context),
       alert,
       context,
       evidence,
