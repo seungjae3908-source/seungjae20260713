@@ -32,7 +32,9 @@ jobs:
           grep -Fq "workflow_id: 347888347" "$workflow"
           grep -Fq "/diagnose-public-forward-liquidity-schedule-delivery " "$workflow"
           grep -Fq "/enable-public-forward-liquidity-schedule-delivery " "$workflow"
+          grep -Fq "/refresh-public-forward-liquidity-schedule-delivery " "$workflow"
           grep -Fq "github.rest.actions.getWorkflow" "$workflow"
+          grep -Fq "github.rest.actions.disableWorkflow" "$workflow"
           grep -Fq "github.rest.actions.enableWorkflow" "$workflow"
           ! grep -Eq 'createWorkflowDispatch|reRunWorkflow|rerun|repository_dispatch|workflow_dispatch' "$workflow"
           ! grep -Eq 'contents:[[:space:]]+write|issues:[[:space:]]+write|deployments:[[:space:]]+write|id-token:[[:space:]]+write' "$workflow"
@@ -254,6 +256,161 @@ jobs:
               before_state: before.state,
               after_state: after.state,
               mutation_performed: mutationPerformed,
+              capture_dispatched: false,
+              economic_credit_created: 0,
+              replay_backfill_manual_credit: 0,
+            }));
+
+  refresh:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 23 &&
+      !github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/refresh-public-forward-liquidity-schedule-delivery ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+      issues: read
+      statuses: read
+    steps:
+      - name: Parse exact OWNER refresh command
+        id: command
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = String(context.payload.comment?.body ?? '').trim();
+            const parts = body.split(/\s+/u);
+            if (parts.length !== 2
+                || parts[0] !== '/refresh-public-forward-liquidity-schedule-delivery'
+                || !/^[a-f0-9]{40}$/u.test(parts[1])) {
+              core.setFailed('SCHEDULE_DELIVERY_REFRESH_COMMAND_INVALID');
+              return;
+            }
+            if (context.payload.comment?.user?.login !== context.repo.owner
+                || context.payload.comment?.author_association !== 'OWNER') {
+              core.setFailed('SCHEDULE_DELIVERY_OWNER_REQUIRED');
+              return;
+            }
+            if (context.payload.issue?.state !== 'open'
+                || context.payload.issue?.title !== 'Staging Readiness Control') {
+              core.setFailed('SCHEDULE_DELIVERY_RELEASE_CONTROL_INVALID');
+              return;
+            }
+            core.setOutput('target_sha', parts[1]);
+            core.setOutput('comment_created_at', String(context.payload.comment?.created_at ?? ''));
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.command.outputs.target_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require exact current main and Required CI 6/6
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const targetSha = process.env.TARGET_SHA;
+            const main = (await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            })).data.commit.sha;
+            if (main !== targetSha) {
+              core.setFailed('SCHEDULE_DELIVERY_TARGET_SHA_STALE:' + main);
+              return;
+            }
+            const provenance = require(process.env.GITHUB_WORKSPACE + '/api-server/scripts/production-ci-provenance.cjs');
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: targetSha,
+              per_page: 100,
+            });
+            const evidence = provenance.inspectRequiredStatusEvidence(statuses);
+            if (!evidence.ok) {
+              core.setFailed('SCHEDULE_DELIVERY_REQUIRED_CI_REJECTED:' + evidence.reason);
+              return;
+            }
+            core.info('SCHEDULE_DELIVERY_REQUIRED_CI_6_OF_6 run=' + evidence.runId);
+
+      - name: Refresh fixed workflow registration only after matured delivery outage
+        uses: actions/github-script@v7
+        env:
+          COMMENT_CREATED_AT: ${{ steps.command.outputs.comment_created_at }}
+        with:
+          script: |
+            const workflowId = 347888347;
+            const nowMs = Date.parse(process.env.COMMENT_CREATED_AT);
+            if (!Number.isFinite(nowMs)) {
+              core.setFailed('SCHEDULE_DELIVERY_REFRESH_TIME_INVALID');
+              return;
+            }
+            const before = (await github.rest.actions.getWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+            })).data;
+            if (before.state !== 'active') {
+              core.setFailed('SCHEDULE_DELIVERY_REFRESH_REQUIRES_ACTIVE:' + before.state);
+              return;
+            }
+            const targetRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+              event: 'schedule',
+              per_page: 100,
+            });
+            const repositoryRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              event: 'schedule',
+              per_page: 100,
+            });
+            const lastTargetMs = targetRuns[0] ? Date.parse(targetRuns[0].created_at) : 0;
+            const lastRepositoryMs = repositoryRuns[0] ? Date.parse(repositoryRuns[0].created_at) : 0;
+            const maturedMs = 45 * 60 * 1000;
+            if (!(lastTargetMs > 0 && nowMs - lastTargetMs > maturedMs)) {
+              core.setFailed('SCHEDULE_DELIVERY_TARGET_OUTAGE_NOT_MATURED');
+              return;
+            }
+            if (!(lastRepositoryMs > 0 && nowMs - lastRepositoryMs > maturedMs)) {
+              core.setFailed('SCHEDULE_DELIVERY_REPOSITORY_OUTAGE_NOT_MATURED');
+              return;
+            }
+            await github.rest.actions.disableWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+            });
+            await github.rest.actions.enableWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+            });
+            const after = (await github.rest.actions.getWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+            })).data;
+            if (after.state !== 'active') {
+              core.setFailed('SCHEDULE_DELIVERY_REFRESH_DID_NOT_REACH_ACTIVE:' + after.state);
+              return;
+            }
+            core.info('SCHEDULE_DELIVERY_REFRESH_RESULT=' + JSON.stringify({
+              workflow_id: workflowId,
+              before_state: before.state,
+              after_state: after.state,
+              latest_target_schedule_run_id: targetRuns[0]?.id ?? null,
+              latest_target_schedule_created_at: targetRuns[0]?.created_at ?? null,
+              latest_repository_schedule_run_id: repositoryRuns[0]?.id ?? null,
+              latest_repository_schedule_created_at: repositoryRuns[0]?.created_at ?? null,
+              mutation_performed: true,
               capture_dispatched: false,
               economic_credit_created: 0,
               replay_backfill_manual_credit: 0,
