@@ -18,7 +18,6 @@ import { collectFundingRateHistory as collectBitgetFundingRateHistory } from '..
 import { replayLongCashRunnerPortfolio } from '../src/portfolio.mjs';
 import {
   ONE_DAY_MS,
-  ONE_YEAR_BENCHMARK_START_MS,
   ONE_YEAR_BENCHMARK_END_MS,
   ONE_YEAR_FULL_STACK_GATE_V1,
   aggregateFourHourCandlesToUtcDaily,
@@ -26,8 +25,9 @@ import {
   buildSequentialRunnerTrials,
 } from '../src/one-year-public-benchmark.mjs';
 
-const WARMUP_START_MS = ONE_YEAR_BENCHMARK_START_MS - 140 * ONE_DAY_MS;
 const INITIAL_CAPITAL = 1_000_000;
+const BENCHMARK_DAYS = 365;
+const WARMUP_DAYS = 140;
 const sleep = ms => new Promise(resolve=>setTimeout(resolve,ms));
 
 const UNIVERSES = Object.freeze({
@@ -56,11 +56,11 @@ function source(market, provider = '') {
 }
 function runnerCandles(rows){ return rows.map(row=>({ts:Number(row.ts??row.timestamp),open:row.open,high:row.high,low:row.low,close:row.close,volume:row.volume??0})); }
 
-async function collectStocks(market) {
+async function collectStocks(market, window) {
   const datasets=[], failures=[];
   for (const symbol of UNIVERSES[market]) {
     try {
-      const result = await collectYahooStockHistory({market,symbol,startTime:WARMUP_START_MS,endTime:ONE_YEAR_BENCHMARK_END_MS+1,timeoutMs:20_000});
+      const result = await collectYahooStockHistory({market,symbol,startTime:window.warmupStart,endTime:window.endTime+1,timeoutMs:20_000});
       datasets.push({market,symbol,candles:runnerCandles(result.candles),fundingRates:[],provider:result.source,providerSymbol:result.providerSymbol});
     } catch (error) {
       failures.push({market,symbol,error:error instanceof Error?error.message:String(error)});
@@ -69,22 +69,23 @@ async function collectStocks(market) {
   }
   return {datasets,failures};
 }
-async function collectSpot() {
+async function collectSpot(window) {
   const datasets=[],failures=[];
   for(const symbol of UNIVERSES.CRYPTO_SPOT){
     try{
-      const result=await collectUpbitSpotHistory({symbol,timeframe:'4h',startTime:WARMUP_START_MS,endTime:ONE_YEAR_BENCHMARK_END_MS+1,maxPages:40,minIntervalMs:120});
+      const result=await collectUpbitSpotHistory({symbol,timeframe:'4h',startTime:window.warmupStart,endTime:window.endTime+1,maxPages:40,minIntervalMs:120});
       const daily=aggregateFourHourCandlesToUtcDaily(runnerCandles(result.candles));
       datasets.push({market:'CRYPTO_SPOT',symbol,candles:daily,fundingRates:[],provider:result.source});
     }catch(error){ failures.push({market:'CRYPTO_SPOT',symbol,error:error instanceof Error?error.message:String(error)}); }
   }
   return {datasets,failures};
 }
-function strictDailyCoverage(candles, label) {
+function strictDailyCoverage(candles, label, window) {
   const rows=runnerCandles(candles).sort((a,b)=>a.ts-b.ts);
-  const expectedLast=Date.UTC(2026,8,27);
-  if(rows.length<500) throw new Error(`${label}_DAILY_COVERAGE_TOO_SHORT:${rows.length}`);
-  if(rows[0].ts>WARMUP_START_MS+ONE_DAY_MS) throw new Error(`${label}_START_COVERAGE_MISSING`);
+  const expectedLast=Math.floor(window.endTime/ONE_DAY_MS)*ONE_DAY_MS;
+  const minimumRows=BENCHMARK_DAYS+WARMUP_DAYS-5;
+  if(rows.length<minimumRows) throw new Error(`${label}_DAILY_COVERAGE_TOO_SHORT:${rows.length}`);
+  if(rows[0].ts>window.warmupStart+ONE_DAY_MS) throw new Error(`${label}_START_COVERAGE_MISSING`);
   if(rows.at(-1).ts<expectedLast) throw new Error(`${label}_END_COVERAGE_MISSING`);
   for(let i=1;i<rows.length;i+=1){
     if(rows[i].ts-rows[i-1].ts!==ONE_DAY_MS) {
@@ -115,30 +116,32 @@ function uniqueFunding(rows) {
   return [...map.values()].sort((a,b)=>a.timestamp-b.timestamp);
 }
 
-async function collectVisionHybridFutures({symbol,bitget}) {
-  const currentMonthStart=Date.UTC(2026,8,1);
+async function collectVisionHybridFutures({symbol,bitget,window}) {
+  const endDate=new Date(window.endTime);
+  const currentMonthStart=Date.UTC(endDate.getUTCFullYear(),endDate.getUTCMonth(),1);
   const completedMonthEnd=currentMonthStart-1;
   const [monthlyCandles,currentDailyCandles,monthlyFunding,currentFunding]=await Promise.all([
     collectVisionFuturesDailyKlines({
-      symbol,startTime:WARMUP_START_MS,endTime:completedMonthEnd,concurrency:4,
+      symbol,startTime:window.warmupStart,endTime:completedMonthEnd,concurrency:4,
     }),
     collectVisionFuturesDailyArchiveKlines({
-      symbol,startTime:currentMonthStart,endTime:ONE_YEAR_BENCHMARK_END_MS,concurrency:8,
+      symbol,startTime:currentMonthStart,endTime:window.endTime,concurrency:8,
     }),
     collectVisionFuturesFunding({
-      symbol,startTime:WARMUP_START_MS,endTime:completedMonthEnd,concurrency:4,
+      symbol,startTime:window.warmupStart,endTime:completedMonthEnd,concurrency:4,
     }),
     collectBitgetFundingRateHistory({
-      client:bitget,symbol,startTime:currentMonthStart,endTime:ONE_YEAR_BENCHMARK_END_MS,
+      client:bitget,symbol,startTime:currentMonthStart,endTime:window.endTime,
       productType:'usdt-futures',pageSize:100,maxPages:4,
     }),
   ]);
   const tailFunding=strictFundingTailCoverage(
-    currentFunding.records,currentMonthStart,ONE_YEAR_BENCHMARK_END_MS,'BITGET_CURRENT_MONTH_FUNDING',
+    currentFunding.records,currentMonthStart,window.endTime,'BITGET_CURRENT_MONTH_FUNDING',
   );
   const candles=strictDailyCoverage(
     [...monthlyCandles.candles,...currentDailyCandles.candles],
     'BINANCE_VISION_HYBRID',
+    window,
   );
   const fundingRates=uniqueFunding([...monthlyFunding.records,...tailFunding]);
   return {
@@ -152,7 +155,7 @@ async function collectVisionHybridFutures({symbol,bitget}) {
   };
 }
 
-async function collectFutures() {
+async function collectFutures(window) {
   const binance=new BinanceFuturesPublicClient();
   const bitget=new BitgetPublicClient({timeoutMs:20_000,maxRetries:3,minIntervalMs:150});
   const datasets=[],failures=[];
@@ -160,10 +163,10 @@ async function collectFutures() {
     let binanceFailure=null;
     try{
       const [klines,funding]=await Promise.all([
-        collectBinanceFuturesDailyKlines({client:binance,symbol,startTime:WARMUP_START_MS,endTime:ONE_YEAR_BENCHMARK_END_MS}),
-        collectBinanceFuturesFundingRates({client:binance,symbol,startTime:WARMUP_START_MS,endTime:ONE_YEAR_BENCHMARK_END_MS}),
+        collectBinanceFuturesDailyKlines({client:binance,symbol,startTime:window.warmupStart,endTime:window.endTime}),
+        collectBinanceFuturesFundingRates({client:binance,symbol,startTime:window.warmupStart,endTime:window.endTime}),
       ]);
-      const candles=strictDailyCoverage(klines.candles,'BINANCE_API');
+      const candles=strictDailyCoverage(klines.candles,'BINANCE_API',window);
       datasets.push({market:'CRYPTO_FUTURES',symbol,candles,fundingRates:funding.records,provider:klines.provider,fundingProvider:funding.provider,providerFallbackUsed:false});
       continue;
     }catch(error){
@@ -172,7 +175,7 @@ async function collectFutures() {
 
     let archiveFailure=null;
     try{
-      const hybrid=await collectVisionHybridFutures({symbol,bitget});
+      const hybrid=await collectVisionHybridFutures({symbol,bitget,window});
       datasets.push({...hybrid,primaryProviderFailure:binanceFailure});
       continue;
     }catch(error){
@@ -183,14 +186,14 @@ async function collectFutures() {
       const [klines,funding]=await Promise.all([
         collectBitgetCandles({
           client:bitget,market:'CRYPTO_FUTURES',symbol,timeframe:'1d',
-          startTime:WARMUP_START_MS,endTime:ONE_YEAR_BENCHMARK_END_MS+1,maxCandles:1_000,productType:'usdt-futures',
+          startTime:window.warmupStart,endTime:window.endTime+1,maxCandles:1_000,productType:'usdt-futures',
         }),
         collectBitgetFundingRateHistory({
-          client:bitget,symbol,startTime:WARMUP_START_MS,endTime:ONE_YEAR_BENCHMARK_END_MS,
+          client:bitget,symbol,startTime:window.warmupStart,endTime:window.endTime,
           productType:'usdt-futures',pageSize:100,maxPages:20,
         }),
       ]);
-      const candles=strictDailyCoverage(klines.candles,'BITGET_FALLBACK');
+      const candles=strictDailyCoverage(klines.candles,'BITGET_FALLBACK',window);
       datasets.push({
         market:'CRYPTO_FUTURES',symbol,candles,fundingRates:funding.records,
         provider:klines.provider,fundingProvider:funding.provider,providerFallbackUsed:true,
@@ -206,11 +209,12 @@ async function collectFutures() {
   return {datasets,failures};
 }
 
-function buildMarketResearch(market,datasets,side='LONG'){
+function buildMarketResearch(market,datasets,side='LONG',window){
   const timelines=[];
   for(const dataset of datasets){
     const timeline=buildOneYearCandidateTimeline({
       market,symbol:dataset.symbol,side,timeframe:'1D',candles:dataset.candles,intervalMs:ONE_DAY_MS,source:source(market,dataset.provider),
+      startTime:window.startTime,endTime:window.endTime,
     });
     timelines.push({dataset,timeline});
   }
@@ -273,20 +277,54 @@ function marketRow(row){
   return `| ${row.market} | ${row.side} | ${row.status} | ${row.symbolCount} | ${row.candidateCount} | ${fixedN} | ${pct(fixedReturn)} | ${pct(fixedWr)} | ${fmt(fixedPf)} | ${pct(fixedDd)} | ${adaptiveN} | ${pct(adaptiveReturn)} | ${pct(adaptiveWr)} | ${fmt(adaptivePf)} | ${pct(adaptiveDd)} |`;
 }
 
+async function checksumAvailable(url){
+  try{
+    const response=await fetch(url,{method:'GET',headers:{'user-agent':'market-prediction-lab/one-year-benchmark'}});
+    if(!response.ok) return false;
+    const text=(await response.text()).trim();
+    return /^[a-f0-9]{64}\\s+/iu.test(text);
+  }catch{return false;}
+}
+
+async function resolveLatestCommonFuturesArchiveDay(){
+  const anchorDay=Math.floor(ONE_YEAR_BENCHMARK_END_MS/ONE_DAY_MS)*ONE_DAY_MS;
+  for(let offset=0;offset<=10;offset+=1){
+    const dayMs=anchorDay-offset*ONE_DAY_MS;
+    const day=new Date(dayMs).toISOString().slice(0,10);
+    const checks=await Promise.all(UNIVERSES.CRYPTO_FUTURES.map(symbol=>checksumAvailable(
+      `https://data.binance.vision/data/futures/um/daily/klines/${symbol}/1d/${symbol}-1d-${day}.zip.CHECKSUM`,
+    )));
+    if(checks.every(Boolean)) return dayMs;
+  }
+  throw new Error('NO_COMMON_BINANCE_VISION_DAILY_ARCHIVE_WITHIN_10_DAYS');
+}
+
 async function main(){
-  const [kr,us,spot,futures]=await Promise.all([collectStocks('KR_STOCK'),collectStocks('US_STOCK'),collectSpot(),collectFutures()]);
+  const latestCommonDay=await resolveLatestCommonFuturesArchiveDay();
+  const endTime=latestCommonDay+ONE_DAY_MS-1;
+  const startTime=latestCommonDay-(BENCHMARK_DAYS-1)*ONE_DAY_MS;
+  const window=Object.freeze({
+    startTime,endTime,warmupStart:startTime-WARMUP_DAYS*ONE_DAY_MS,latestCommonDay,
+  });
+  const [kr,us,spot,futures]=await Promise.all([
+    collectStocks('KR_STOCK',window),collectStocks('US_STOCK',window),collectSpot(window),collectFutures(window),
+  ]);
   const results=[
-    buildMarketResearch('KR_STOCK',kr.datasets,'LONG'),
-    buildMarketResearch('US_STOCK',us.datasets,'LONG'),
-    buildMarketResearch('CRYPTO_SPOT',spot.datasets,'LONG'),
-    buildMarketResearch('CRYPTO_FUTURES',futures.datasets,'LONG'),
-    buildMarketResearch('CRYPTO_FUTURES',futures.datasets,'SHORT'),
+    buildMarketResearch('KR_STOCK',kr.datasets,'LONG',window),
+    buildMarketResearch('US_STOCK',us.datasets,'LONG',window),
+    buildMarketResearch('CRYPTO_SPOT',spot.datasets,'LONG',window),
+    buildMarketResearch('CRYPTO_FUTURES',futures.datasets,'LONG',window),
+    buildMarketResearch('CRYPTO_FUTURES',futures.datasets,'SHORT',window),
   ];
   const failures=[...kr.failures,...us.failures,...spot.failures,...futures.failures];
   const output={
     schemaVersion:'move-hunter-one-year-four-market-public-benchmark/v1',
-    window:{startTime:ONE_YEAR_BENCHMARK_START_MS,endTime:ONE_YEAR_BENCHMARK_END_MS,start:new Date(ONE_YEAR_BENCHMARK_START_MS).toISOString(),end:new Date(ONE_YEAR_BENCHMARK_END_MS).toISOString()},
-    warmupStart:new Date(WARMUP_START_MS).toISOString(),
+    window:{
+      startTime:window.startTime,endTime:window.endTime,
+      start:new Date(window.startTime).toISOString(),end:new Date(window.endTime).toISOString(),
+      resolutionPolicy:'LATEST_COMMON_CHECKSUM_VERIFIED_BINANCE_VISION_DAILY_ARCHIVE',
+    },
+    warmupStart:new Date(window.warmupStart).toISOString(),
     universes:UNIVERSES,results,providerFailures:failures,
     providers:{
       futures:futures.datasets.map(x=>({
