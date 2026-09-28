@@ -40,7 +40,23 @@ jobs:
           grep -Fq 'MOVE_HUNTER_CACHE_DIR' "$workflow"
           grep -Fq 'executionAuthority' ops/run-move-hunter-daily-target-fast-v1.mjs
           grep -Fq "profitabilityClaimAllowed: false" ops/run-move-hunter-daily-target-fast-v1.mjs
-          ! grep -Eq 'pm2[[:space:]]+(restart|stop|delete)|psql|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true' "$workflow"
+          WORKFLOW_PATH="$workflow" node <<'NODE'
+          const fs = require('node:fs');
+          const source = fs.readFileSync(process.env.WORKFLOW_PATH, 'utf8');
+          const forbidden = [
+            ['pm2', 'restart'].join(' '),
+            ['pm2', 'stop'].join(' '),
+            ['pm2', 'delete'].join(' '),
+            ['p', 'sql'].join(''),
+            ['LIVE_TRADING', 'true'].join('='),
+            ['AUTO_TRADING', 'true'].join('='),
+            ['REAL_ORDER_ENABLED', 'true'].join('='),
+            ['PRIVATE_TRADING_API_ALLOWED', 'true'].join('='),
+          ];
+          for (const token of forbidden) {
+            if (source.includes(token)) throw new Error('FORBIDDEN_SERVER_BACKTEST_AUTHORITY:' + token);
+          }
+          NODE
 
   run-server-backtest:
     if: >-
