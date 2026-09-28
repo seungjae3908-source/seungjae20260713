@@ -255,8 +255,8 @@ function scannerEvidenceForHolder(
       stopLoss: alert.stopLoss,
     },
     warnings: [
-      `Scanner ${alert.state} 신호와 실제 앱 보유종목이 일치했습니다.`,
-      '실제 주문/체결이 아니며 AI 판단·신뢰도·성과 근거가 없으면 N/A로 유지됩니다.',
+      '검색기 신호와 현재 보유종목이 일치했습니다.',
+      '실제 주문/체결 알림이 아닙니다.',
       ...(newsWarning ? [newsWarning] : []),
     ],
   };
@@ -314,7 +314,7 @@ export async function fanoutMemberHoldingScannerAlert(
     try {
       news = await newsReader(symbol, market, holders[0]?.name ?? symbol);
     } catch {
-      newsWarning = '보유종목 뉴스·공시 분석을 불러오지 못해 해당 영역은 N/A로 유지됩니다.';
+      newsWarning = '보유종목 뉴스·공시 확인이 지연되고 있습니다.';
     }
   }
 
