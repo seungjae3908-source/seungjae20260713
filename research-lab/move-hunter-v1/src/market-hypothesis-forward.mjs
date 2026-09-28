@@ -1,5 +1,3 @@
-import { improvedSignalDecision } from './one-year-benchmark.mjs';
-
 export const KR_NO_STRUCTURE_60M_FORWARD_HYPOTHESIS_V1 = Object.freeze({
   schemaVersion: 'move-hunter-frozen-forward-hypothesis/v1',
   hypothesisId: 'MOVE_HUNTER_KR_STOCK_60M_NO_STRUCTURE_V1',
@@ -10,6 +8,19 @@ export const KR_NO_STRUCTURE_60M_FORWARD_HYPOTHESIS_V1 = Object.freeze({
   selectedVariant: 'NO_STRUCTURE',
   disabledFamilies: Object.freeze(['STRUCTURE']),
   candidatePrefilter: 'EMA20_50_DIRECTION_AND_ROC12_DIRECTION',
+  decisionContract: Object.freeze({
+    version: 'KR_NO_STRUCTURE_60M_DECISION_V1',
+    disabledFamilies: Object.freeze(['STRUCTURE']),
+    enabledComponents: Object.freeze(['ema', 'adx', 'roc', 'macd', 'rsi', 'volume', 'volatility']),
+    requiredPassCount: 6,
+    hardRequirements: Object.freeze(['ema', 'roc']),
+    rsiLongMinInclusive: 45,
+    rsiLongMaxExclusive: 78,
+    adxMinInclusive: 18,
+    relativeVolumeMinInclusive: 0.8,
+    forbidPriceVolumeDisagreement: true,
+    forbidAbnormalVolatility: true,
+  }),
   sourceWindow: Object.freeze({
     startTime: '2025-09-28T00:00:00.000Z',
     endTime: '2026-09-27T23:59:59.999Z',
@@ -117,6 +128,70 @@ function fixedCandidatePrefilter(snapshot, direction) {
   return trend.emaDirection === expected && directionalRoc > 0;
 }
 
+export function evaluateFrozenKrNoStructureDecisionV1(snapshot, direction = 'LONG') {
+  const trend = snapshot?.features?.trend;
+  const momentum = snapshot?.features?.momentum;
+  const volume = snapshot?.features?.volume;
+  const volatility = snapshot?.features?.volatility;
+  const priceAction = snapshot?.features?.priceAction;
+  if (!trend || !momentum || !volume || !volatility || !priceAction) {
+    return freeze({
+      matched: false,
+      score: 0,
+      maximumScore: 7,
+      threshold: 6,
+      reason: 'FROZEN_DECISION_FEATURE_FAMILIES_MISSING',
+      components: freeze({}),
+      structureTransition: priceAction?.structureTransition ?? null,
+    });
+  }
+  const side = directionGroup(direction);
+  if (side !== 'LONG') {
+    return freeze({
+      matched: false,
+      score: 0,
+      maximumScore: 7,
+      threshold: 6,
+      reason: 'FROZEN_KR_V1_LONG_ONLY',
+      components: freeze({}),
+      structureTransition: priceAction.structureTransition ?? null,
+    });
+  }
+  const roc = Number(momentum.roc);
+  const macd = Number(momentum.macdHistogramPct);
+  const rsi = Number(momentum.rsi);
+  const adx = Number(trend.adx);
+  const relativeVolume = Number(volume.relativeVolume);
+  const components = freeze({
+    ema: trend.emaDirection === 'UP',
+    adx: Number.isFinite(adx) && adx >= 18 && trend.adxDirection === 'UP',
+    roc: Number.isFinite(roc) && roc > 0,
+    macd: Number.isFinite(macd) && macd > 0,
+    rsi: Number.isFinite(rsi) && rsi >= 45 && rsi < 78,
+    volume: Number.isFinite(relativeVolume)
+      && relativeVolume >= 0.8
+      && volume.priceVolumeDisagreement !== true,
+    volatility: volatility.abnormalVolatility !== true,
+  });
+  const score = Object.values(components).filter(Boolean).length;
+  const threshold = 6;
+  const matched = components.ema && components.roc && score >= threshold;
+  return freeze({
+    schemaVersion: 'move-hunter-kr-no-structure-decision/v1',
+    matched,
+    score,
+    maximumScore: 7,
+    threshold,
+    components,
+    disabledFamilies: freeze(['STRUCTURE']),
+    structureTransition: priceAction.structureTransition ?? 'NONE',
+    automaticScannerAdoptionAllowed: false,
+    automaticPromotionAllowed: false,
+    economicSampleCredit: 0,
+    executionAuthority: 'NONE',
+  });
+}
+
 export function buildMarketHypothesisForwardRecord({
   observation,
   featureSnapshot,
@@ -184,9 +259,7 @@ export function buildMarketHypothesisForwardRecord({
   if (mismatches.length) return blocked('FORWARD_FEATURE_IDENTITY_MISMATCH', { mismatches: freeze(mismatches) });
 
   const prefilterEligible = fixedCandidatePrefilter(featureSnapshot, side);
-  const decision = improvedSignalDecision(featureSnapshot, side, {
-    disabledFamilies: hypothesis.disabledFamilies,
-  });
+  const decision = evaluateFrozenKrNoStructureDecisionV1(featureSnapshot, side);
   const hypothesisEligible = prefilterEligible && decision.matched;
 
   const settled = observation.status === 'SETTLED' && observation.outcome != null;
