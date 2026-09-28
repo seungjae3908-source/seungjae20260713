@@ -66,6 +66,13 @@ function formatPlanPercent(value: number | null): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
 }
 
+function formatSignalPrice(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return 'N/A';
+  return value.toLocaleString('ko-KR', {
+    maximumFractionDigits: value >= 1_000 ? 2 : 8,
+  });
+}
+
 function signalLabel(alert: ScannerAlertCandidate): string {
   if (alert.assetClass === 'coin_futures') return alert.direction === 'SHORT' ? 'SHORT' : 'LONG';
   return '매수';
@@ -74,7 +81,7 @@ function signalLabel(alert: ScannerAlertCandidate): string {
 function formatTargetPlan(alert: ScannerAlertCandidate): string {
   if (!alert.targets.length) return 'N/A';
   return alert.targets.slice(0, 3).map((target, index) =>
-    `TP${index + 1} ${target} (${formatPlanPercent(planPercent(alert, target))})`).join(' · ');
+    `TP${index + 1} ${formatSignalPrice(target)} (${formatPlanPercent(planPercent(alert, target))})`).join(' · ');
 }
 
 function tradePlanLines(alert: ScannerAlertCandidate): string[] {
@@ -84,12 +91,12 @@ function tradePlanLines(alert: ScannerAlertCandidate): string[] {
   const secondEntry = alert.entryZone
     ? (alert.direction === 'SHORT' ? alert.entryZone.to : alert.entryZone.from)
     : null;
-  const stop = alert.stopLoss == null ? 'N/A' : String(alert.stopLoss);
+  const stop = formatSignalPrice(alert.stopLoss);
   return [
     `🟢 신호: ${signalLabel(alert)}`,
     '',
-    `1차 진입 ${firstEntry ?? 'N/A'} · 기본 60%`,
-    `2차 진입 ${secondEntry ?? 'N/A'} · 기본 40%`,
+    `1차 진입 ${formatSignalPrice(firstEntry)} · 기본 60%`,
+    `2차 진입 ${formatSignalPrice(secondEntry)} · 기본 40%`,
     `목표가 ${formatTargetPlan(alert)}`,
     `손절/무효 ${stop} (${formatPlanPercent(planPercent(alert, alert.stopLoss))})`,
   ];
