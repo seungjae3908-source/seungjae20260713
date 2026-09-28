@@ -80,35 +80,51 @@ test('public and member Telegram transports always request protected content', a
   }
 });
 
-test('new stock and crypto routing never falls back to the legacy default room', () => {
-  const originalDefault = process.env.TELEGRAM_CHAT_ID;
-  const originalStock = process.env.TELEGRAM_STOCK_CHAT_ID;
-  const originalCrypto = process.env.TELEGRAM_CRYPTO_CHAT_ID;
-  const originalPersonal = process.env.TELEGRAM_PERSONAL_CHAT_ID;
+test('four market report routing requires exact dedicated room ids and never falls back to legacy rooms', () => {
+  const original = {
+    defaultChat: process.env.TELEGRAM_CHAT_ID,
+    stock: process.env.TELEGRAM_STOCK_CHAT_ID,
+    crypto: process.env.TELEGRAM_CRYPTO_CHAT_ID,
+    kr: process.env.TELEGRAM_KR_STOCK_CHAT_ID,
+    us: process.env.TELEGRAM_US_STOCK_CHAT_ID,
+    spot: process.env.TELEGRAM_CRYPTO_SPOT_CHAT_ID,
+    futures: process.env.TELEGRAM_CRYPTO_FUTURES_CHAT_ID,
+  };
   try {
-    process.env.TELEGRAM_CHAT_ID = 'legacy-stock-ai-signal-room';
-    delete process.env.TELEGRAM_STOCK_CHAT_ID;
-    delete process.env.TELEGRAM_CRYPTO_CHAT_ID;
-    delete process.env.TELEGRAM_PERSONAL_CHAT_ID;
-    assert.equal(telegramDestinationChatId('STOCK_ROOM'), null);
-    assert.equal(telegramDestinationChatId('CRYPTO_ROOM'), null);
-    assert.equal(telegramDestinationChatId('PERSONAL'), null);
+    process.env.TELEGRAM_CHAT_ID = 'legacy-default-room';
+    process.env.TELEGRAM_STOCK_CHAT_ID = 'legacy-stock-room';
+    process.env.TELEGRAM_CRYPTO_CHAT_ID = 'legacy-crypto-room';
+    delete process.env.TELEGRAM_KR_STOCK_CHAT_ID;
+    delete process.env.TELEGRAM_US_STOCK_CHAT_ID;
+    delete process.env.TELEGRAM_CRYPTO_SPOT_CHAT_ID;
+    delete process.env.TELEGRAM_CRYPTO_FUTURES_CHAT_ID;
 
-    process.env.TELEGRAM_STOCK_CHAT_ID = 'seungjae-stock-room';
-    process.env.TELEGRAM_CRYPTO_CHAT_ID = 'seungjae-crypto-room';
-    process.env.TELEGRAM_PERSONAL_CHAT_ID = 'admin-personal-room';
-    assert.equal(telegramDestinationChatId('STOCK_ROOM'), 'seungjae-stock-room');
-    assert.equal(telegramDestinationChatId('CRYPTO_ROOM'), 'seungjae-crypto-room');
-    assert.equal(telegramDestinationChatId('PERSONAL'), 'admin-personal-room');
+    assert.equal(telegramDestinationChatId('KR_STOCK_ROOM'), null);
+    assert.equal(telegramDestinationChatId('US_STOCK_ROOM'), null);
+    assert.equal(telegramDestinationChatId('CRYPTO_SPOT_ROOM'), null);
+    assert.equal(telegramDestinationChatId('CRYPTO_FUTURES_ROOM'), null);
+
+    process.env.TELEGRAM_KR_STOCK_CHAT_ID = 'kr-room';
+    process.env.TELEGRAM_US_STOCK_CHAT_ID = 'us-room';
+    process.env.TELEGRAM_CRYPTO_SPOT_CHAT_ID = 'spot-room';
+    process.env.TELEGRAM_CRYPTO_FUTURES_CHAT_ID = 'futures-room';
+
+    assert.equal(telegramDestinationChatId('KR_STOCK_ROOM'), 'kr-room');
+    assert.equal(telegramDestinationChatId('US_STOCK_ROOM'), 'us-room');
+    assert.equal(telegramDestinationChatId('CRYPTO_SPOT_ROOM'), 'spot-room');
+    assert.equal(telegramDestinationChatId('CRYPTO_FUTURES_ROOM'), 'futures-room');
   } finally {
-    if (originalDefault == null) delete process.env.TELEGRAM_CHAT_ID;
-    else process.env.TELEGRAM_CHAT_ID = originalDefault;
-    if (originalStock == null) delete process.env.TELEGRAM_STOCK_CHAT_ID;
-    else process.env.TELEGRAM_STOCK_CHAT_ID = originalStock;
-    if (originalCrypto == null) delete process.env.TELEGRAM_CRYPTO_CHAT_ID;
-    else process.env.TELEGRAM_CRYPTO_CHAT_ID = originalCrypto;
-    if (originalPersonal == null) delete process.env.TELEGRAM_PERSONAL_CHAT_ID;
-    else process.env.TELEGRAM_PERSONAL_CHAT_ID = originalPersonal;
+    const restore = (key: string, value: string | undefined) => {
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    };
+    restore('TELEGRAM_CHAT_ID', original.defaultChat);
+    restore('TELEGRAM_STOCK_CHAT_ID', original.stock);
+    restore('TELEGRAM_CRYPTO_CHAT_ID', original.crypto);
+    restore('TELEGRAM_KR_STOCK_CHAT_ID', original.kr);
+    restore('TELEGRAM_US_STOCK_CHAT_ID', original.us);
+    restore('TELEGRAM_CRYPTO_SPOT_CHAT_ID', original.spot);
+    restore('TELEGRAM_CRYPTO_FUTURES_CHAT_ID', original.futures);
   }
 });
 
@@ -139,7 +155,7 @@ test('member holdings messages separate stock and crypto without exposing user i
   });
   assert.equal(stock.event.market, 'KR');
   assert.equal(stock.event.userId, 'user-a-secret-id');
-  assert.match(stock.alert.details ?? '', /📈 보유종목\(주식\)/u);
+  assert.match(stock.alert.details ?? '', /👤 개인보유 · 국내주식/u);
   assert.match(stock.alert.details ?? '', /1차 81,000/u);
   assert.match(stock.alert.details ?? '', /공시/u);
   assert.equal((stock.alert.details ?? '').includes('user-a-secret-id'), false);
@@ -158,7 +174,7 @@ test('member holdings messages separate stock and crypto without exposing user i
   });
   assert.equal(crypto.event.market, 'CRYPTO_FUTURES');
   assert.equal(crypto.event.priority, 'CRITICAL');
-  assert.match(crypto.alert.details ?? '', /₿ 보유종목\(코인\)/u);
+  assert.match(crypto.alert.details ?? '', /👤 개인보유 · 코인선물/u);
   assert.match(crypto.alert.details ?? '', /AI 분석: N\/A/u);
   assert.equal((crypto.alert.details ?? '').includes('user-b-secret-id'), false);
 });
