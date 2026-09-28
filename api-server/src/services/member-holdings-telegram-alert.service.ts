@@ -5,6 +5,7 @@ import {
 } from './personal-telegram-alert.service';
 import {
   normalizeTelegramHttpUrl,
+  sendTelegramAlert,
   type TelegramAlertInput,
   type TelegramUrlButton,
 } from './telegram-notification.service';
@@ -468,14 +469,41 @@ export function buildMemberHoldingTelegramDispatch(
   };
 }
 
+export function ownerHoldingsChatIdForUser(
+  userId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const ownerUserId = env.TELEGRAM_OWNER_MEMBER_ID?.trim();
+  const chatId = env.TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID?.trim();
+  if (!ownerUserId || !chatId || ownerUserId !== userId.trim()) return null;
+  return chatId;
+}
+
 export async function deliverMemberHoldingTelegramAlert(
   input: MemberHoldingTelegramEvidence,
   dependencies: PersonalTelegramAlertDependencies = {},
 ): Promise<PersonalTelegramAlertDispatchResult> {
   const dispatch = buildMemberHoldingTelegramDispatch(input);
-  return deliverPersonalTelegramAlert({
+  const personal = await deliverPersonalTelegramAlert({
     userId: dispatch.event.userId,
     event: dispatch.event,
     alert: dispatch.alert,
   }, dependencies);
+
+  const ownerChatId = ownerHoldingsChatIdForUser(dispatch.event.userId);
+  if (ownerChatId && !dependencies.sender) {
+    try {
+      await sendTelegramAlert({
+        ...dispatch.alert,
+        destinationChatId: ownerChatId,
+        dedupeKey: `owner-holdings:${dispatch.event.eventId}`,
+        duplicateWindowMs: 24 * 60 * 60 * 1000,
+        cooldownMs: 0,
+      });
+    } catch {
+      // Owner mirror is best-effort and must never affect the member delivery path.
+    }
+  }
+
+  return personal;
 }
