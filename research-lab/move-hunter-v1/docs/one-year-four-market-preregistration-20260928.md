@@ -26,7 +26,7 @@ This is a bounded research basket, not a full point-in-time market universe.
 - Crypto Futures preferred path: Binance USD-M public REST for daily candles and funding
 - If Binance REST is region-blocked:
   - older daily candles: checksum-verified Binance Vision USD-M monthly archives
-  - recent daily candles: Bitget public futures daily history
+  - recent candles: Bitget public 4H futures history, aggregated only from complete six-bar UTC days
   - older funding: checksum-verified Binance Vision funding archives
   - recent funding: Bitget public funding history
   - the crossover is the oldest available recent Bitget daily candle and is recorded in the output
