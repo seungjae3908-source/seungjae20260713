@@ -192,11 +192,11 @@ function priorityFor(input: MemberHoldingTelegramEvidence): TelegramPolicyPriori
 }
 
 function headerFor(assetClass: MemberHoldingAssetClass, market: string): string {
-  if (assetClass === 'coin_spot') return '👤 개인보유 · 코인현물';
-  if (assetClass === 'coin_futures') return '👤 개인보유 · 코인선물';
+  if (assetClass === 'coin_spot') return '👤 보유종목 · 코인현물';
+  if (assetClass === 'coin_futures') return '👤 보유종목 · 코인선물';
   return market.trim().toUpperCase().includes('US')
-    ? '👤 개인보유 · 해외주식'
-    : '👤 개인보유 · 국내주식';
+    ? '👤 보유종목 · 해외주식'
+    : '👤 보유종목 · 국내주식';
 }
 
 function priceList(values: readonly number[] | null | undefined): string {
