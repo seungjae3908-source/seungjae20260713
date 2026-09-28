@@ -171,6 +171,65 @@ test('user A manual event queues only Telegram A and does not re-sync canonical 
   assert.match(transport.sent[0].text, /등록방식: 수동등록/);
 });
 
+test('owner AUTO_POLICY events mirror only to the dedicated auto-trading room', async () => {
+  const repository = new InMemoryUserBrokerTelegramRepository();
+  repository.setMemberProfile('user-a', APPROVED_ASSOCIATE);
+  repository.setMemberProfile('user-b', APPROVED_ASSOCIATE);
+  const transport = new FakeTelegramTransport();
+  const portfolio = new FakePortfolioSink();
+  const service = new UserBrokerTelegramService(
+    repository,
+    transport,
+    portfolio,
+    'ci_test_bot',
+    undefined,
+    'user-a',
+    'owner-auto-room',
+  );
+
+  await link(service, 'user-a', 'chat-a');
+  await link(service, 'user-b', 'chat-b', 'tg-b', new Date('2026-08-12T00:01:00.000Z'));
+
+  const ownerEvent: UserExecutionEvent = {
+    ...manualPortfolioEvent({
+      id: 'owner-auto',
+      userId: 'user-a',
+      symbol: '005930',
+      market: 'KR',
+      quantity: 1,
+      price: 72000,
+    }),
+    type: 'ORDER_FILLED',
+    source: 'PAPER_EXECUTION',
+    executionMethod: 'AUTO_POLICY',
+  };
+  const otherEvent: UserExecutionEvent = {
+    ...manualPortfolioEvent({
+      id: 'other-auto',
+      userId: 'user-b',
+      symbol: 'AAPL',
+      market: 'US',
+      quantity: 1,
+      price: 220,
+    }),
+    type: 'ORDER_FILLED',
+    source: 'PAPER_EXECUTION',
+    executionMethod: 'AUTO_POLICY',
+  };
+
+  const ownerQueued = await service.recordEvent(ownerEvent, new Date('2026-08-12T00:02:00.000Z'), 'associate');
+  const otherQueued = await service.recordEvent(otherEvent, new Date('2026-08-12T00:02:01.000Z'), 'associate');
+  await service.processDelivery('user-a', ownerQueued.deliveryId!, new Date('2026-08-12T00:03:00.000Z'));
+  await service.processDelivery('user-b', otherQueued.deliveryId!, new Date('2026-08-12T00:03:01.000Z'));
+
+  assert.deepEqual(transport.sent.map((item) => item.chatId), [
+    'chat-a',
+    'owner-auto-room',
+    'chat-b',
+  ]);
+  assert.match(transport.sent[1].text, /🤖 자동매매 · 매수 신호/);
+});
+
 test('member revoked after queueing is dead-lettered before Telegram transport', async () => {
   const { service, repository, transport } = fixture();
   await link(service, 'user-a', 'chat-a');
