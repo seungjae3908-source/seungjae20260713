@@ -1,0 +1,260 @@
+name: Public Forward Liquidity Schedule Delivery Control
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/public-forward-liquidity-schedule-delivery-control.yml'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-forward-liquidity-schedule-delivery-control-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify bounded control contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          workflow='.github/workflows/public-forward-liquidity-schedule-delivery-control.yml'
+          grep -Fq "workflow_id: 347888347" "$workflow"
+          grep -Fq "/diagnose-public-forward-liquidity-schedule-delivery " "$workflow"
+          grep -Fq "/enable-public-forward-liquidity-schedule-delivery " "$workflow"
+          grep -Fq "github.rest.actions.getWorkflow" "$workflow"
+          grep -Fq "github.rest.actions.enableWorkflow" "$workflow"
+          ! grep -Eq 'createWorkflowDispatch|reRunWorkflow|rerun|repository_dispatch|workflow_dispatch' "$workflow"
+          ! grep -Eq 'contents:[[:space:]]+write|issues:[[:space:]]+write|deployments:[[:space:]]+write|id-token:[[:space:]]+write' "$workflow"
+
+  diagnose:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 23 &&
+      !github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/diagnose-public-forward-liquidity-schedule-delivery ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+    steps:
+      - name: Parse exact OWNER diagnostic command
+        id: command
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = String(context.payload.comment?.body ?? '').trim();
+            const parts = body.split(/\s+/u);
+            if (parts.length !== 2
+                || parts[0] !== '/diagnose-public-forward-liquidity-schedule-delivery'
+                || !/^[a-f0-9]{40}$/u.test(parts[1])) {
+              core.setFailed('SCHEDULE_DELIVERY_DIAGNOSTIC_COMMAND_INVALID');
+              return;
+            }
+            if (context.payload.comment?.user?.login !== context.repo.owner
+                || context.payload.comment?.author_association !== 'OWNER') {
+              core.setFailed('SCHEDULE_DELIVERY_OWNER_REQUIRED');
+              return;
+            }
+            if (context.payload.issue?.state !== 'open'
+                || context.payload.issue?.title !== 'Staging Readiness Control') {
+              core.setFailed('SCHEDULE_DELIVERY_RELEASE_CONTROL_INVALID');
+              return;
+            }
+            core.setOutput('target_sha', parts[1]);
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.command.outputs.target_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require exact current main and frozen cron contract
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          git fetch --no-tags --depth=1 origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$TARGET_SHA"
+          target='.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
+          test "$(grep -Ec "^[[:space:]]{4}- cron: '17 \\* \\* \\* \\*'[[:space:]]*$" "$target")" -eq 1
+          test "$(grep -Ec "^[[:space:]]{4}- cron: '27 \\* \\* \\* \\*'[[:space:]]*$" "$target")" -eq 1
+          test "$(grep -Ec "^[[:space:]]{4}- cron: '37 \\* \\* \\* \\*'[[:space:]]*$" "$target")" -eq 1
+
+      - name: Read GitHub workflow state and recent schedule delivery
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const workflowId = 347888347;
+            const workflow = (await github.rest.actions.getWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+            })).data;
+            const targetRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+              event: 'schedule',
+              per_page: 100,
+            });
+            const repositoryRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              event: 'schedule',
+              per_page: 100,
+            });
+            const summarize = (run) => run ? {
+              id: run.id,
+              head_sha: run.head_sha,
+              status: run.status,
+              conclusion: run.conclusion,
+              created_at: run.created_at,
+              updated_at: run.updated_at,
+              run_attempt: run.run_attempt,
+            } : null;
+            core.info('SCHEDULE_DELIVERY_DIAGNOSTIC=' + JSON.stringify({
+              workflow_id: workflow.id,
+              workflow_name: workflow.name,
+              workflow_path: workflow.path,
+              workflow_state: workflow.state,
+              target_latest_schedule_run: summarize(targetRuns[0]),
+              repository_latest_schedule_run: summarize(repositoryRuns[0]),
+              target_schedule_run_count_scanned: targetRuns.length,
+              repository_schedule_run_count_scanned: repositoryRuns.length,
+              mutation_performed: false,
+              economic_credit_created: 0,
+            }));
+
+  enable:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 23 &&
+      !github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/enable-public-forward-liquidity-schedule-delivery ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+      issues: read
+      statuses: read
+    steps:
+      - name: Parse exact OWNER enable command
+        id: command
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = String(context.payload.comment?.body ?? '').trim();
+            const parts = body.split(/\s+/u);
+            if (parts.length !== 2
+                || parts[0] !== '/enable-public-forward-liquidity-schedule-delivery'
+                || !/^[a-f0-9]{40}$/u.test(parts[1])) {
+              core.setFailed('SCHEDULE_DELIVERY_ENABLE_COMMAND_INVALID');
+              return;
+            }
+            if (context.payload.comment?.user?.login !== context.repo.owner
+                || context.payload.comment?.author_association !== 'OWNER') {
+              core.setFailed('SCHEDULE_DELIVERY_OWNER_REQUIRED');
+              return;
+            }
+            if (context.payload.issue?.state !== 'open'
+                || context.payload.issue?.title !== 'Staging Readiness Control') {
+              core.setFailed('SCHEDULE_DELIVERY_RELEASE_CONTROL_INVALID');
+              return;
+            }
+            core.setOutput('target_sha', parts[1]);
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.command.outputs.target_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require exact current main and Required CI 6/6
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const targetSha = process.env.TARGET_SHA;
+            const main = (await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            })).data.commit.sha;
+            if (main !== targetSha) {
+              core.setFailed('SCHEDULE_DELIVERY_TARGET_SHA_STALE:' + main);
+              return;
+            }
+            const provenance = require(process.env.GITHUB_WORKSPACE + '/api-server/scripts/production-ci-provenance.cjs');
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: targetSha,
+              per_page: 100,
+            });
+            const evidence = provenance.inspectRequiredStatusEvidence(statuses);
+            if (!evidence.ok) {
+              core.setFailed('SCHEDULE_DELIVERY_REQUIRED_CI_REJECTED:' + evidence.reason);
+              return;
+            }
+            core.info('SCHEDULE_DELIVERY_REQUIRED_CI_6_OF_6 run=' + evidence.runId);
+
+      - name: Enable fixed V3 scheduled workflow only if disabled
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const workflowId = 347888347;
+            const before = (await github.rest.actions.getWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+            })).data;
+            let mutationPerformed = false;
+            if (before.state !== 'active') {
+              if (!['disabled_manually', 'disabled_inactivity'].includes(before.state)) {
+                core.setFailed('SCHEDULE_DELIVERY_UNEXPECTED_WORKFLOW_STATE:' + before.state);
+                return;
+              }
+              await github.rest.actions.enableWorkflow({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: workflowId,
+              });
+              mutationPerformed = true;
+            }
+            const after = (await github.rest.actions.getWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+            })).data;
+            if (after.state !== 'active') {
+              core.setFailed('SCHEDULE_DELIVERY_ENABLE_DID_NOT_REACH_ACTIVE:' + after.state);
+              return;
+            }
+            core.info('SCHEDULE_DELIVERY_ENABLE_RESULT=' + JSON.stringify({
+              workflow_id: workflowId,
+              before_state: before.state,
+              after_state: after.state,
+              mutation_performed: mutationPerformed,
+              capture_dispatched: false,
+              economic_credit_created: 0,
+              replay_backfill_manual_credit: 0,
+            }));
