@@ -61,6 +61,24 @@ async function cached(name, loader) {
   return { payload, cacheHit: false, path };
 }
 
+async function withPublicRetry(label, loader, attempts = 4) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await loader();
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      const retryable = /HTTP_(429|5\d\d)/.test(message) || /ECONNRESET|ETIMEDOUT|fetch failed/i.test(message);
+      if (!retryable || attempt === attempts) throw error;
+      const delayMs = Math.min(8000, 1000 * (2 ** (attempt - 1)));
+      console.log('PUBLIC_RETRY ' + label + ' attempt=' + attempt + ' delayMs=' + delayMs + ' reason=' + message);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastError;
+}
+
 async function collectDatasets() {
   const datasets = [];
   const failures = [];
@@ -110,14 +128,17 @@ async function collectDatasets() {
       ONE_YEAR_BENCHMARK_END_MS,
     ].join('-');
     try {
-      const row = await cached(key, () => collectUpbitSpotHistory({
-        symbol,
-        timeframe: '4h',
-        startTime: WARMUP_START_MS,
-        endTime: ONE_YEAR_BENCHMARK_END_MS,
-        minIntervalMs: 140,
-        maxPages: 50,
-      }));
+      const row = await cached(key, () => withPublicRetry(
+        'UPBIT/' + symbol + '/4H',
+        () => collectUpbitSpotHistory({
+          symbol,
+          timeframe: '4h',
+          startTime: WARMUP_START_MS,
+          endTime: ONE_YEAR_BENCHMARK_END_MS,
+          minIntervalMs: 220,
+          maxPages: 50,
+        }),
+      ));
       const history = row.payload;
       datasets.push({
         market: 'CRYPTO_SPOT',
