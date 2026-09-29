@@ -175,6 +175,29 @@ export function ResearchStrategyLifecycle() {
                   </div>
                 ))}
               </dl>
+              {candidate ? (
+                <dl
+                  className="mt-3 grid gap-2 rounded-xl border border-card-border bg-muted/20 p-3 sm:grid-cols-2"
+                  data-testid="research-reproducibility-identity"
+                  aria-label="연구 재현성 식별자"
+                >
+                  {[
+                    ['Candidate', candidate.candidateId],
+                    ['Strategy Version', candidate.strategyVersion],
+                    ['Parameter Hash', candidate.parameterHash],
+                    ['Research SHA', candidate.researchCodeSha],
+                    ['Cost Policy', candidate.costPolicyVersion],
+                    ['Execution Policy', candidate.executionPolicyVersion],
+                    ['Market / Timeframe', `${candidate.market} · ${candidate.timeframe}`],
+                    ['Side Policy', candidate.sidePolicy],
+                  ].map(([label, value]) => (
+                    <div key={label} className="min-w-0">
+                      <dt className="text-[10px] font-bold text-muted-foreground">{label}</dt>
+                      <dd className="mt-0.5 break-all font-mono text-[10px] font-bold">{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              ) : null}
               {bridge.data.blockers.length ? (
                 <p className="mt-2 break-words text-[10px] leading-4 text-amber-700 dark:text-amber-300">
                   차단: {bridge.data.blockers.join(' · ')}
