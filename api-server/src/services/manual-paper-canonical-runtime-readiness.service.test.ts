@@ -296,14 +296,14 @@ test('complete read-only evidence is ready for activation review without enablin
   assert.equal(result.naturalPaperStateReady, true);
   assert.equal(result.fullCostComponentsReady, true);
   assert.deepEqual(result.fullCostComponentEvidenceCounts, {
-    commission: 2,
-    tax: 2,
-    spread: 2,
-    slippage: 2,
-    funding: 2,
-    latency: 2,
-    liquidityImpact: 2,
-    partialFillImpact: 2,
+    commission: 1,
+    tax: 1,
+    spread: 1,
+    slippage: 1,
+    funding: 1,
+    latency: 1,
+    liquidityImpact: 1,
+    partialFillImpact: 1,
   });
   assert.equal(result.settlementDurablePacketReady, true);
   assert.equal(result.closePositionCanonicalRebindReady, true);
@@ -313,10 +313,15 @@ test('complete read-only evidence is ready for activation review without enablin
   assert.deepEqual(result.evidenceCounts, {
     naturalPositions: 1,
     naturalSettlements: 1,
-    fullCostReadyPositions: 2,
+    fullCostReadyPositions: 1,
     durableSettlementPackets: 1,
     canonicalRebinds: 1,
   });
+  assert.equal(
+    result.fullCostComponentEvidenceCounts.commission,
+    1,
+    'the same canonical position must not be double-counted through positions + settlement owner evidence',
+  );
   assert.deepEqual(result.blockers, []);
   assert.deepEqual(result.safety, {
     liveTrading: false,
@@ -479,7 +484,7 @@ test('Full Cost component diagnostics identify the exact missing cost without we
 
   assert.equal(result.fullCostComponentsReady, false);
   assert.equal(result.fullCostComponentEvidenceCounts.funding, 0);
-  assert.equal(result.fullCostComponentEvidenceCounts.partialFillImpact, 2);
+  assert.equal(result.fullCostComponentEvidenceCounts.partialFillImpact, 1);
   assert.ok(result.blockers.includes('PAPER_CANONICAL_FULL_COST_EIGHT_COMPONENTS_NOT_READY'));
   assert.ok(result.blockers.includes('PAPER_CANONICAL_FULL_COST_COMPONENT_FUNDING_NOT_READY'));
   assert.equal(result.readyForActivationReview, false);
@@ -493,7 +498,7 @@ test('missing Full Cost, settlement packet, or canonical rebind stays fail-close
   });
   assert.equal(noCost.fullCostComponentsReady, false);
   assert.equal(noCost.fullCostComponentEvidenceCounts.partialFillImpact, 0);
-  assert.equal(noCost.fullCostComponentEvidenceCounts.commission, 2);
+  assert.equal(noCost.fullCostComponentEvidenceCounts.commission, 1);
   assert.ok(noCost.blockers.includes('PAPER_CANONICAL_FULL_COST_EIGHT_COMPONENTS_NOT_READY'));
   assert.ok(noCost.blockers.includes('PAPER_CANONICAL_FULL_COST_COMPONENT_PARTIAL_FILL_IMPACT_NOT_READY'));
 
