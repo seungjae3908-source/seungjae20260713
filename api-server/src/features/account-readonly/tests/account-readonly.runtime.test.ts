@@ -130,10 +130,10 @@ test('vault-backed Bitget UTA reader uses only v3 signed GET reads and maps asse
       assert.equal(url.origin, 'https://api.bitget.com');
       seen.push({ path: url.pathname, search: url.search, method: String(init?.method), body: init?.body });
 
-      if (url.pathname === '/api/v3/account/settings') {
+      if (url.pathname === '/api/v3/account/info') {
         return new Response(JSON.stringify({
           code: '00000',
-          data: { accountMode: 'unified', accountLevel: 'basic' },
+          data: { permissions: ['uta_trade'] },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.pathname === '/api/v3/account/assets') {
@@ -172,7 +172,7 @@ test('vault-backed Bitget UTA reader uses only v3 signed GET reads and maps asse
 
   const result = await readers.bitget!(SCOPE);
   assert.deepEqual(new Set(seen.map((row) => row.path)), new Set([
-    '/api/v3/account/settings',
+    '/api/v3/account/info',
     '/api/v3/account/assets',
     '/api/v3/position/current-position',
     '/api/v3/trade/unfilled-orders',
