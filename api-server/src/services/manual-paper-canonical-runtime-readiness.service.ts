@@ -35,6 +35,15 @@ const ENTRY_COMPONENT_QUALITIES = Object.freeze(['OBSERVED', 'DOCUMENTED', 'ESTI
 const TRUTHY = new Set(['1', 'true', 'yes', 'on', 'enabled']);
 
 type EntryCostComponentName = (typeof ENTRY_COMPONENTS)[number];
+type EntryCostComponentFailureReason =
+  | 'POSITION_CONTEXT_NOT_READY'
+  | 'COMPONENT_MISSING'
+  | 'VALUE_INVALID'
+  | 'SOURCE_MISSING'
+  | 'QUALITY_INVALID'
+  | 'OBSERVED_AT_INVALID'
+  | 'OBSERVED_AFTER_ENTRY'
+  | 'STALE';
 
 const ENTRY_COMPONENT_BLOCKERS: Readonly<Record<EntryCostComponentName, string>> = Object.freeze({
   commission: 'PAPER_CANONICAL_FULL_COST_COMPONENT_COMMISSION_NOT_READY',
@@ -75,6 +84,9 @@ export type ManualPaperCanonicalRuntimeReadinessResult = Readonly<{
   naturalPaperStateReady: boolean;
   fullCostComponentsReady: boolean;
   fullCostComponentEvidenceCounts: Readonly<Record<EntryCostComponentName, number>>;
+  fullCostComponentFailureReasons: Readonly<
+    Record<EntryCostComponentName, readonly EntryCostComponentFailureReason[]>
+  >;
   settlementDurablePacketReady: boolean;
   closePositionCanonicalRebindReady: boolean;
   forwardObserverArtifactsReady: boolean;
@@ -153,23 +165,34 @@ function fullCostPositionContext(
   return Object.freeze({ provenance, maximumAgeMs, entryTimestampMs });
 }
 
+function fullCostComponentFailureReason(
+  position: Record<string, any>,
+  expectedMainSha: string,
+  name: EntryCostComponentName,
+): EntryCostComponentFailureReason | null {
+  const context = fullCostPositionContext(position, expectedMainSha);
+  if (!context) return 'POSITION_CONTEXT_NOT_READY';
+  const component = context.provenance?.components?.[name];
+  if (!record(component)) return 'COMPONENT_MISSING';
+  if (typeof component.valuePercent !== 'number'
+    || !Number.isFinite(component.valuePercent)
+    || component.valuePercent < 0) {
+    return 'VALUE_INVALID';
+  }
+  if (!nonEmpty(component.source)) return 'SOURCE_MISSING';
+  if (!ENTRY_COMPONENT_QUALITIES.includes(component.quality)) return 'QUALITY_INVALID';
+  if (!positiveInteger(component.observedAtMs)) return 'OBSERVED_AT_INVALID';
+  if (component.observedAtMs > context.entryTimestampMs) return 'OBSERVED_AFTER_ENTRY';
+  if (context.entryTimestampMs - component.observedAtMs > context.maximumAgeMs) return 'STALE';
+  return null;
+}
+
 function fullCostComponentReady(
   position: Record<string, any>,
   expectedMainSha: string,
   name: EntryCostComponentName,
 ): boolean {
-  const context = fullCostPositionContext(position, expectedMainSha);
-  if (!context) return false;
-  const component = context.provenance?.components?.[name];
-  return record(component)
-    && typeof component.valuePercent === 'number'
-    && Number.isFinite(component.valuePercent)
-    && component.valuePercent >= 0
-    && nonEmpty(component.source)
-    && ENTRY_COMPONENT_QUALITIES.includes(component.quality)
-    && positiveInteger(component.observedAtMs)
-    && component.observedAtMs <= context.entryTimestampMs
-    && context.entryTimestampMs - component.observedAtMs <= context.maximumAgeMs;
+  return fullCostComponentFailureReason(position, expectedMainSha, name) === null;
 }
 
 function fullCostPositionReady(position: Record<string, any>, expectedMainSha: string): boolean {
@@ -539,6 +562,17 @@ export async function probeManualPaperCanonicalRuntimeReadiness(
       ),
     ]),
   ) as Record<EntryCostComponentName, number>);
+  const fullCostComponentFailureReasons = Object.freeze(Object.fromEntries(
+    ENTRY_COMPONENTS.map((name) => {
+      if (fullCostComponentEvidenceCounts[name] > 0) return [name, Object.freeze([])];
+      const reasons = new Set<EntryCostComponentFailureReason>();
+      for (const position of durablePositions) {
+        const reason = fullCostComponentFailureReason(position, expectedMainSha, name);
+        if (reason) reasons.add(reason);
+      }
+      return [name, Object.freeze([...reasons])];
+    }),
+  ) as Record<EntryCostComponentName, readonly EntryCostComponentFailureReason[]>);
   const fullCostComponentsReady = fullCostReadyPositions > 0;
   check(
     'FULL_COST_EIGHT_COMPONENT_DURABLE_READBACK',
@@ -677,6 +711,7 @@ export async function probeManualPaperCanonicalRuntimeReadiness(
     naturalPaperStateReady: recurringReady,
     fullCostComponentsReady,
     fullCostComponentEvidenceCounts,
+    fullCostComponentFailureReasons,
     settlementDurablePacketReady: settlementReadiness.packetReady,
     closePositionCanonicalRebindReady: settlementReadiness.rebindReady,
     forwardObserverArtifactsReady: artifactsReady,
