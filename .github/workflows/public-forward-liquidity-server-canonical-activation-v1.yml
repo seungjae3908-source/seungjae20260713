@@ -105,6 +105,12 @@ jobs:
             if (context.payload.issue?.state !== 'open' || context.payload.issue?.title !== 'Staging Readiness Control') {
               core.setFailed('SERVER_CANONICAL_RELEASE_CONTROL_INVALID'); return;
             }
+            const release = (await github.rest.issues.get({ owner: context.repo.owner, repo: context.repo.repo, issue_number: 23 })).data;
+            const authorizeTemplate = '/authorize-public-forward-liquidity-server-canonical-cutover-v1 <current-main-sha> <v3-owner-receipt-comment-id> <binding-digest>';
+            const activateTemplate = '/activate-public-forward-liquidity-server-canonical-v1 <current-main-sha> <v3-owner-receipt-comment-id> <binding-digest> <cutover-authority-comment-id>';
+            if (!String(release.body ?? '').includes(authorizeTemplate) || !String(release.body ?? '').includes(activateTemplate)) {
+              core.setFailed('SERVER_CANONICAL_COMMANDS_NOT_REGISTERED'); return;
+            }
             if (!/^[a-f0-9]{40}$/u.test(parts[1]) || !/^[1-9][0-9]*$/u.test(parts[2]) || !/^[a-f0-9]{64}$/u.test(parts[3])) {
               core.setFailed('SERVER_CANONICAL_AUTHORITY_ARGUMENT_INVALID'); return;
             }
@@ -216,6 +222,10 @@ jobs:
             if (p.length !== 5 || p[0] !== '/activate-public-forward-liquidity-server-canonical-v1') { core.setFailed('SERVER_CANONICAL_ACTIVATION_COMMAND_INVALID'); return; }
             if (context.payload.comment?.user?.login !== context.repo.owner || context.payload.comment?.author_association !== 'OWNER') { core.setFailed('SERVER_CANONICAL_ACTIVATION_OWNER_REQUIRED'); return; }
             if (context.payload.issue?.state !== 'open' || context.payload.issue?.title !== 'Staging Readiness Control') { core.setFailed('SERVER_CANONICAL_RELEASE_CONTROL_INVALID'); return; }
+            const release = (await github.rest.issues.get({ owner: context.repo.owner, repo: context.repo.repo, issue_number: 23 })).data;
+            const authorizeTemplate = '/authorize-public-forward-liquidity-server-canonical-cutover-v1 <current-main-sha> <v3-owner-receipt-comment-id> <binding-digest>';
+            const activateTemplate = '/activate-public-forward-liquidity-server-canonical-v1 <current-main-sha> <v3-owner-receipt-comment-id> <binding-digest> <cutover-authority-comment-id>';
+            if (!String(release.body ?? '').includes(authorizeTemplate) || !String(release.body ?? '').includes(activateTemplate)) { core.setFailed('SERVER_CANONICAL_COMMANDS_NOT_REGISTERED'); return; }
             if (!/^[a-f0-9]{40}$/u.test(p[1]) || !/^[1-9][0-9]*$/u.test(p[2]) || !/^[a-f0-9]{64}$/u.test(p[3]) || !/^[1-9][0-9]*$/u.test(p[4])) { core.setFailed('SERVER_CANONICAL_ACTIVATION_ARGUMENT_INVALID'); return; }
             core.setOutput('target_sha', p[1]); core.setOutput('receipt_comment_id', p[2]); core.setOutput('binding_digest', p[3]); core.setOutput('authority_comment_id', p[4]);
 
@@ -373,6 +383,9 @@ jobs:
             node "$RUNNER" prepare-activation
           privileged test -s "$ROOT/canonical-cutover-readiness.json"
           privileged test -s "$ROOT/canonical-runtime-activation.json"
+          privileged chmod 0644 "$ROOT/canonical-cutover-readiness.json" "$ROOT/canonical-runtime-activation.json"
+          [[ "$(privileged stat -c '%a' "$ROOT/canonical-cutover-readiness.json")" == "644" ]]
+          [[ "$(privileged stat -c '%a' "$ROOT/canonical-runtime-activation.json")" == "644" ]]
           privileged install -m 0644 "$SERVICE_SOURCE" "$SYSTEMD_DIR/$CANONICAL_SERVICE"
           privileged install -m 0644 "$TIMER_SOURCE" "$SYSTEMD_DIR/$CANONICAL_TIMER"
           privileged systemctl daemon-reload
