@@ -6,6 +6,8 @@ import {
   type UnifiedJournalFilters,
   type UnifiedTradeCycle,
   type UnifiedTradeJournal,
+  type UnifiedTradeMarket,
+  type UnifiedTradeSource,
 } from '@/lib/paper-journal-sync';
 import {
   USER_CONTEXT_SOURCE_KO,
@@ -19,6 +21,10 @@ import {
 
 type Props = {
   loadApi?: typeof getUnifiedTradeJournal;
+  forcedMarket?: UnifiedTradeMarket;
+  forcedSource?: UnifiedTradeSource;
+  title?: string;
+  description?: string;
 };
 
 const controlClass = 'min-h-10 min-w-0 rounded-lg border border-border bg-background px-3 text-sm';
@@ -169,8 +175,19 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
   </article>;
 }
 
-export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: Props) {
-  const [filters, setFilters] = useState<UnifiedJournalFilters>({ range: '30D', market: 'ALL', source: 'ALL', grade: 'ALL' });
+export function UnifiedTradeJournalPanel({
+  loadApi = getUnifiedTradeJournal,
+  forcedMarket,
+  forcedSource,
+  title = '통합 매매일지·매매 품질 복기',
+  description = '수익 성과와 매매 과정의 품질을 분리해 결정론적으로 평가합니다.',
+}: Props) {
+  const [filters, setFilters] = useState<UnifiedJournalFilters>({
+    range: '30D',
+    market: forcedMarket ?? 'ALL',
+    source: forcedSource ?? 'ALL',
+    grade: 'ALL',
+  });
   const [bindingFilter, setBindingFilter] = useState<'ALL'|'VERIFIED'|'MISMATCH'|'NOT_AVAILABLE'>('ALL');
   const [triggerFilter, setTriggerFilter] = useState<'ALL'|'VERIFIED'|'UNVERIFIED'>('ALL');
   const [searchText, setSearchText] = useState('');
@@ -180,6 +197,15 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
   const [error, setError] = useState('');
   const [refreshVersion, setRefreshVersion] = useState(0);
   const requestKey = JSON.stringify(filters);
+
+  useEffect(() => {
+    setFilters((current) => {
+      const nextMarket = forcedMarket ?? current.market ?? 'ALL';
+      const nextSource = forcedSource ?? current.source ?? 'ALL';
+      if (current.market === nextMarket && current.source === nextSource) return current;
+      return { ...current, market: nextMarket, source: nextSource };
+    });
+  }, [forcedMarket, forcedSource]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -260,8 +286,8 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
     <div className="min-w-0 rounded-2xl border border-border bg-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="flex items-center gap-2 font-extrabold"><BookOpenCheck className="h-4 w-4" />통합 매매일지·매매 품질 복기</h2>
-          <p className="mt-1 text-xs text-muted-foreground">수익 성과와 매매 과정의 품질을 분리해 결정론적으로 평가합니다.</p>
+          <h2 className="flex items-center gap-2 font-extrabold"><BookOpenCheck className="h-4 w-4" />{title}</h2>
+          <p className="mt-1 text-xs text-muted-foreground">{description}</p>
         </div>
         <button type="button" className={buttonClass} disabled={busy} onClick={() => setRefreshVersion((value) => value + 1)} data-testid="unified-journal-refresh">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}새로고침
@@ -303,8 +329,8 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
 
       <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
         <label className="grid min-w-0 gap-1 text-xs">기간<select className={controlClass} value={filters.range} onChange={(event) => change('range', event.target.value)}><option value="TODAY">오늘</option><option value="7D">7일</option><option value="30D">30일</option><option value="90D">90일</option><option value="1Y">1년</option><option value="ALL">전체</option></select></label>
-        <label className="grid min-w-0 gap-1 text-xs">시장<select className={controlClass} value={filters.market} onChange={(event) => change('market', event.target.value)}><option value="ALL">전체 시장</option><option value="KR_STOCK">{USER_MARKET_KO.KR_STOCK}</option><option value="US_STOCK">{USER_MARKET_KO.US_STOCK}</option><option value="CRYPTO_SPOT">{USER_MARKET_KO.CRYPTO_SPOT}</option><option value="CRYPTO_FUTURES">{USER_MARKET_KO.CRYPTO_FUTURES}</option></select></label>
-        <label className="grid min-w-0 gap-1 text-xs">출처<select className={controlClass} value={filters.source} onChange={(event) => change('source', event.target.value)}><option value="ALL">전체</option><option value="TOSS_MANUAL">{USER_TRADE_SOURCE_KO.TOSS_MANUAL}</option><option value="TOSS_API">{USER_TRADE_SOURCE_KO.TOSS_API}</option><option value="UPBIT_API">{USER_TRADE_SOURCE_KO.UPBIT_API}</option><option value="BITGET_API">{USER_TRADE_SOURCE_KO.BITGET_API}</option><option value="KIWOOM_API">{USER_TRADE_SOURCE_KO.KIWOOM_API}</option><option value="APP_PAPER">{USER_TRADE_SOURCE_KO.APP_PAPER}</option><option value="APP_SHADOW">{USER_TRADE_SOURCE_KO.APP_SHADOW}</option><option value="APP_AUTO">{USER_TRADE_SOURCE_KO.APP_AUTO}</option></select></label>
+        <label className="grid min-w-0 gap-1 text-xs">시장<select className={controlClass} value={filters.market} disabled={Boolean(forcedMarket)} onChange={(event) => change('market', event.target.value)}><option value="ALL">전체 시장</option><option value="KR_STOCK">{USER_MARKET_KO.KR_STOCK}</option><option value="US_STOCK">{USER_MARKET_KO.US_STOCK}</option><option value="CRYPTO_SPOT">{USER_MARKET_KO.CRYPTO_SPOT}</option><option value="CRYPTO_FUTURES">{USER_MARKET_KO.CRYPTO_FUTURES}</option></select></label>
+        <label className="grid min-w-0 gap-1 text-xs">출처<select className={controlClass} value={filters.source} disabled={Boolean(forcedSource)} onChange={(event) => change('source', event.target.value)}><option value="ALL">전체</option><option value="TOSS_MANUAL">{USER_TRADE_SOURCE_KO.TOSS_MANUAL}</option><option value="TOSS_API">{USER_TRADE_SOURCE_KO.TOSS_API}</option><option value="UPBIT_API">{USER_TRADE_SOURCE_KO.UPBIT_API}</option><option value="BITGET_API">{USER_TRADE_SOURCE_KO.BITGET_API}</option><option value="KIWOOM_API">{USER_TRADE_SOURCE_KO.KIWOOM_API}</option><option value="APP_PAPER">{USER_TRADE_SOURCE_KO.APP_PAPER}</option><option value="APP_SHADOW">{USER_TRADE_SOURCE_KO.APP_SHADOW}</option><option value="APP_AUTO">{USER_TRADE_SOURCE_KO.APP_AUTO}</option></select></label>
         <label className="grid min-w-0 gap-1 text-xs">품질 등급<select className={controlClass} value={filters.grade} onChange={(event) => change('grade', event.target.value)}><option value="ALL">전체 등급</option><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option></select></label>
       </div>
 
