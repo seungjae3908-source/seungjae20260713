@@ -335,6 +335,16 @@ async function main(){
     familyResults:familyResults.map(x=>({family:x.family,selectionScore:x.selectionScore,calibrationGatePass:x.calibrationGatePass,validationGatePass:x.validationGatePass,calibration:{metrics:x.calibration.metrics,trades:x.calibration.trades.length},calibrationStress:{metrics:x.calibrationStress.metrics,trades:x.calibrationStress.trades.length},validation:{metrics:x.validation.metrics,trades:x.validation.trades.length},validationStress:{metrics:x.validationStress.metrics,trades:x.validationStress.trades.length}})),
     selectedFamily:selectedFamily.family,
     selectedStatus:gatePassed?"CALIBRATION_AND_VALIDATION_GATE_PASS":selectedFamily.calibrationGatePass?"RESEARCH_HOLD_VALIDATION_FAILED":"RESEARCH_HOLD_CALIBRATION_FAILED",
+    selectedTradeDiagnostics:{
+      calibrationNormal:selectedFamily.calibration.trades,
+      calibrationStress:selectedFamily.calibrationStress.trades,
+      validationNormal:selectedFamily.validation.trades,
+      validationStress:selectedFamily.validationStress.trades,
+      testNormal:discoveryTestNormal.trades,
+      testStress:discoveryTestStress.trades,
+      holdoutNormal:holdoutNormal.trades,
+      holdoutStress:holdoutStress.trades,
+    },
     sameCohortTestDiagnostic:{normal:{metrics:discoveryTestNormal.metrics,trades:discoveryTestNormal.trades.length},stress:{metrics:discoveryTestStress.metrics,trades:discoveryTestStress.trades.length}},
     crossSymbolHoldout:{
       normal:{metrics:holdoutNormal.metrics,days:holdoutNormal.days,trades:holdoutNormal.trades.map(t=>({symbol:t.symbol,date:t.date,family:t.family,setupScore:t.setupScore,triggerScore:t.triggerScore,entryTime:new Date(t.entryTime).toISOString(),exitTime:new Date(t.exitTime).toISOString(),netReturn:t.netReturn,stopDistancePct:t.stopDistancePct,tp1:t.tp1,tp2:t.tp2,exitReason:t.exitReason,aiInputBundle:t.aiInputBundle}))},
