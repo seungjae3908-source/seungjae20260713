@@ -149,9 +149,9 @@ test("catalog exposes exactly 12 market-horizon profiles with 9 cash READY and 3
 
 test("catalog carries primary-source strategy recipes before any local formula invention", () => {
   const catalog = buildEvidenceBackedFormulaSeedCatalogV1();
-  assert.equal(catalog.referenceRecipeCount, 7);
+  assert.equal(catalog.referenceRecipeCount, 8);
   assert.deepEqual(catalog.referenceRecipes, EVIDENCE_BACKED_REFERENCE_RECIPES);
-  assert.equal(new Set(catalog.referenceRecipes.map((recipe) => recipe.recipeId)).size, 7);
+  assert.equal(new Set(catalog.referenceRecipes.map((recipe) => recipe.recipeId)).size, 8);
   assert.equal(Object.isFrozen(catalog.referenceRecipes), true);
 
   const ep = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "QULLAMAGGIE_EP_V1");
@@ -170,6 +170,7 @@ test("catalog carries primary-source strategy recipes before any local formula i
     "PEAD_EARNINGS_SURPRISE_V1",
     "FIFTY_TWO_WEEK_HIGH_MOMENTUM_V1",
     "TIME_SERIES_MOMENTUM_V1",
+    "LIU_TSYVINSKI_WU_CRYPTO_CROSS_SECTIONAL_MOMENTUM_V1",
   ]) {
     const recipe = catalog.referenceRecipes.find((entry) => entry.recipeId === id);
     assert.equal(recipe.origin, "ACADEMIC_PEER_REVIEWED", id);
@@ -177,6 +178,24 @@ test("catalog carries primary-source strategy recipes before any local formula i
     assert.equal(recipe.localReplicationRequired, true, id);
     assert.equal(recipe.automaticActivationAllowed, false, id);
   }
+
+  const cryptoCrossSectional = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "LIU_TSYVINSKI_WU_CRYPTO_CROSS_SECTIONAL_MOMENTUM_V1");
+  assert.deepEqual(cryptoCrossSectional.confirmation.publishedMomentumLookbackWeeks, [1, 2, 3, 4]);
+  assert.equal(cryptoCrossSectional.confirmation.rebalanceFrequency, "WEEKLY");
+  assert.equal(cryptoCrossSectional.confirmation.portfolioCount, 5);
+  assert.equal(cryptoCrossSectional.confirmation.portfolioWeighting, "VALUE_WEIGHTED");
+  assert.equal(cryptoCrossSectional.requiredDataEvidence.pointInTimeUniverseRequired, true);
+  assert.equal(cryptoCrossSectional.requiredDataEvidence.listingDelistingHistoryRequired, true);
+  assert.equal(cryptoCrossSectional.requiredDataEvidence.weeklyMarketCapRequired, true);
+  assert.equal(cryptoCrossSectional.requiredDataEvidence.currentMembershipBackfillForbidden, true);
+  assert.equal(cryptoCrossSectional.localReadiness.status, "BLOCKED_DATA");
+  assert.deepEqual(cryptoCrossSectional.localReadiness.blockers, [
+    "CRYPTO_PIT_LISTING_DELISTING_HISTORY_NOT_MATERIALIZED",
+    "CRYPTO_WEEKLY_MARKET_CAP_HISTORY_NOT_MATERIALIZED",
+  ]);
+  assert.equal(cryptoCrossSectional.localReadiness.currentUpbitBitgetUniverseMayCount, false);
+  assert.equal(cryptoCrossSectional.localReadiness.threeCoinProxyMayCountAsReplication, false);
+  assert.equal(cryptoCrossSectional.automaticActivationAllowed, false);
 
   const orb = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "ORB_STANDALONE_COST_CONTROL_V1");
   assert.equal(orb.researchRole, "NEGATIVE_CONTROL");
