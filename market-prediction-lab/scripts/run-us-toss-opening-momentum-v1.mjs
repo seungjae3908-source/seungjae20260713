@@ -975,6 +975,8 @@ function pitDecileSummary(records, signalKey) {
     const wipeout = rows.map((row) => Number.isFinite(row.netReturn) ? row.netReturn : -1);
     const completedReturns = complete.map((row) => row.netReturn).sort((a, b) => b - a);
     const positiveSum = completedReturns.filter((value) => value > 0).reduce((sum, value) => sum + value, 0);
+    const leaveBest1 = completedReturns.length > 1 ? completedReturns.slice(1) : [];
+    const leaveBest3 = completedReturns.length > 3 ? completedReturns.slice(3) : [];
     return {
       count: rows.length,
       completedOutcomes: complete.length,
@@ -986,6 +988,8 @@ function pitDecileSummary(records, signalKey) {
       lastObservedBoundMeanReturn: lastObserved.length === rows.length ? mean(lastObserved) : null,
       wipeoutStressMeanReturn: mean(wipeout),
       maxNetReturn: completedReturns[0] ?? null,
+      leaveBest1MeanNetReturn: leaveBest1.length ? mean(leaveBest1) : null,
+      leaveBest3MeanNetReturn: leaveBest3.length ? mean(leaveBest3) : null,
       top3PositiveReturnShare: positiveSum > 0
         ? completedReturns.slice(0, 3).filter((value) => value > 0).reduce((sum, value) => sum + value, 0) / positiveSum
         : null,
@@ -1005,6 +1009,12 @@ function pitDecileSummary(records, signalKey) {
     top: topMetrics,
     bottom: bottomMetrics,
     observedOnlyTopMinusBottomMeanReturn: observedSpread,
+    leaveBest1TopMinusBottomMeanReturn: topMetrics.leaveBest1MeanNetReturn != null && bottomMetrics.observedOnlyMeanNetReturn != null
+      ? topMetrics.leaveBest1MeanNetReturn - bottomMetrics.observedOnlyMeanNetReturn
+      : null,
+    leaveBest3TopMinusBottomMeanReturn: topMetrics.leaveBest3MeanNetReturn != null && bottomMetrics.observedOnlyMeanNetReturn != null
+      ? topMetrics.leaveBest3MeanNetReturn - bottomMetrics.observedOnlyMeanNetReturn
+      : null,
     wipeoutStressTopMinusBottomMeanReturn: topMetrics.wipeoutStressMeanReturn - bottomMetrics.wipeoutStressMeanReturn,
     allOutcomesProven: topMetrics.allOutcomesProven && bottomMetrics.allOutcomesProven,
     tradableLongShortClaimAllowed: false,
@@ -1013,13 +1023,23 @@ function pitDecileSummary(records, signalKey) {
 function aggregateFormationMetric(formations, key) {
   const usable = formations.map((formation) => formation[key]).filter((value) => value?.top && value?.bottom);
   const proven = usable.filter((value) => value.allOutcomesProven && value.top.meanNetReturn != null && value.bottom.meanNetReturn != null);
+  const rawSpreads = usable.map((value) => value.observedOnlyTopMinusBottomMeanReturn).filter(Number.isFinite);
+  const leave1Spreads = usable.map((value) => value.leaveBest1TopMinusBottomMeanReturn).filter(Number.isFinite);
+  const leave3Spreads = usable.map((value) => value.leaveBest3TopMinusBottomMeanReturn).filter(Number.isFinite);
   return {
     formationCount: usable.length,
     allOutcomeProvenFormationCount: proven.length,
     meanTopDecileReturn: proven.length ? mean(proven.map((value) => value.top.meanNetReturn)) : null,
     meanBottomDecileReturn: proven.length ? mean(proven.map((value) => value.bottom.meanNetReturn)) : null,
     meanDescriptiveTopMinusBottomReturn: proven.length ? mean(proven.map((value) => value.top.meanNetReturn - value.bottom.meanNetReturn)) : null,
-    meanObservedOnlyTopMinusBottomReturn: usable.length ? mean(usable.map((value) => value.observedOnlyTopMinusBottomMeanReturn).filter(Number.isFinite)) : null,
+    meanObservedOnlyTopMinusBottomReturn: rawSpreads.length ? mean(rawSpreads) : null,
+    positiveFormationRate: rawSpreads.length ? rawSpreads.filter((value) => value > 0).length / rawSpreads.length : null,
+    concentrationStress: {
+      meanLeaveBest1TopMinusBottomReturn: leave1Spreads.length ? mean(leave1Spreads) : null,
+      positiveFormationRateLeaveBest1: leave1Spreads.length ? leave1Spreads.filter((value) => value > 0).length / leave1Spreads.length : null,
+      meanLeaveBest3TopMinusBottomReturn: leave3Spreads.length ? mean(leave3Spreads) : null,
+      positiveFormationRateLeaveBest3: leave3Spreads.length ? leave3Spreads.filter((value) => value > 0).length / leave3Spreads.length : null,
+    },
     meanWipeoutStressTopMinusBottomReturn: usable.length ? mean(usable.map((value) => value.wipeoutStressTopMinusBottomMeanReturn).filter(Number.isFinite)) : null,
     terminalBlockedFormationCount: usable.filter((value) => !value.allOutcomesProven).length,
     canonicalReplicationClaimAllowed: false,
