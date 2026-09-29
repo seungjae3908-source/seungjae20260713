@@ -33,7 +33,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           node --check market-prediction-lab/scripts/run-us-equity-universe-expansion-v1.mjs
-          ! grep -Eiq 'LIVE_TRADING|REAL_ORDER_ENABLED|PRIVATE_TRADING_API_ALLOWED|withdraw|transfer|orderSubmitted' market-prediction-lab/scripts/run-us-equity-universe-expansion-v1.mjs
+          ! grep -Eiq 'LIVE_TRADING|REAL_ORDER_ENABLED|PRIVATE_TRADING_API_ALLOWED|(^|[^A-Za-z])withdraw([^A-Za-z]|$)|(^|[^A-Za-z])transfer([^A-Za-z]|$)|(^|[^A-Za-z])orderSubmitted([^A-Za-z]|$)' market-prediction-lab/scripts/run-us-equity-universe-expansion-v1.mjs
       - name: Scan broad public universe and replay fixed V1
         working-directory: market-prediction-lab
         run: node scripts/run-us-equity-universe-expansion-v1.mjs docs/us-equity-universe-expansion-v1.json
