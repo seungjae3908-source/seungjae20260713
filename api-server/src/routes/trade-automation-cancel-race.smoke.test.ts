@@ -85,11 +85,14 @@ test('concurrent HTTP cancel requests submit one provider cancel and reconcile t
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
   process.env.ORDER_EXECUTION_ENABLED = 'true';
   process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+  process.env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED = 'true';
   process.env.REAL_ORDER_ENABLED = 'true';
   process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
   process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
   process.env.LIVE_TRADING = 'true';
-  process.env.executionAuthority = 'MANUAL';
+  process.env.executionAuthority = 'SPOT_LIVE_LIMITED';
+  process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST = 'OPEN_ORDER_READ,ORDER_CANCEL';
+  process.env.SPOT_LIVE_MARKET_ALLOWLIST = 'CRYPTO_SPOT';
 
   const { server, baseUrl } = await startServer(repository);
   const nativeFetch = globalThis.fetch;
@@ -152,11 +155,14 @@ test('concurrent HTTP cancel requests submit one provider cancel and reconcile t
     delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
     delete process.env.ORDER_EXECUTION_ENABLED;
     delete process.env.LIVE_TRADING_ACTIVATION_APPROVED;
+    delete process.env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED;
     delete process.env.REAL_ORDER_ENABLED;
     delete process.env.PRIVATE_TRADING_API_ALLOWED;
     delete process.env.UPBIT_LIVE_ORDER_ENABLED;
     delete process.env.LIVE_TRADING;
     delete process.env.executionAuthority;
+    delete process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST;
+    delete process.env.SPOT_LIVE_MARKET_ALLOWLIST;
     setTradeAutomationRepositoryFactoryForTests(null);
     await close(server);
   }

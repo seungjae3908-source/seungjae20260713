@@ -13,6 +13,12 @@ import {
   fetchTradingPlanMarketIntelligence,
   marketIntelligenceTradeDecision,
 } from './trade-market-intelligence.service';
+import {
+  liveExecutionAuthority,
+  spotLiveCapabilityEnabled,
+  spotLivePlanCapabilityDecision,
+  type LiveExecutionAuthority,
+} from './spot-live-limited-capability.service';
 import type {
   TradingMarketSnapshot,
   TradingOrder, TradingOrderEvent, TradingOrderState, TradingPlan, TradingPlanInput, TradingPolicy,
@@ -69,33 +75,14 @@ export function tradingIdempotencyKey(userId: string, input: TradingPlanInput) {
   ].join(':')).digest('hex');
 }
 
-export type LiveExecutionAuthority = 'NONE' | 'MANUAL' | 'AUTOMATIC';
-
-export function liveExecutionAuthority(): LiveExecutionAuthority {
-  const authority = String(process.env.executionAuthority ?? 'NONE').trim().toUpperCase();
-  if (authority === 'MANUAL' || authority === 'AUTOMATIC') return authority;
-  return 'NONE';
-}
+export { liveExecutionAuthority, type LiveExecutionAuthority };
 
 export function liveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
-  const authority = liveExecutionAuthority();
-  const global = authority !== 'NONE'
-    && process.env.LIVE_TRADING === 'true'
-    && process.env.ORDER_EXECUTION_ENABLED === 'true'
-    && process.env.LIVE_TRADING_ACTIVATION_APPROVED === 'true'
-    && process.env.REAL_ORDER_ENABLED === 'true'
-    && process.env.PRIVATE_TRADING_API_ALLOWED === 'true';
-  const perExchange = {
-    bitget: process.env.BITGET_LIVE_ORDER_ENABLED === 'true',
-    upbit: process.env.UPBIT_LIVE_ORDER_ENABLED === 'true',
-    kiwoom: process.env.KIWOOM_LIVE_ORDER_ENABLED === 'true',
-    toss: process.env.TOSS_LIVE_ORDER_ENABLED === 'true',
-  };
-  return global && perExchange[exchange];
+  return spotLiveCapabilityEnabled(exchange, 'ORDER_CREATE');
 }
 
 export function automaticLiveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
-  return liveExecutionAuthority() === 'AUTOMATIC'
+  return liveExecutionAuthority() === 'SPOT_LIVE_LIMITED'
     && process.env.AUTO_TRADING === 'true'
     && process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'
     && liveExecutionEnabled(exchange);
@@ -103,6 +90,7 @@ export function automaticLiveExecutionEnabled(exchange: TradingPlanInput['exchan
 
 function serverLiveEnabledForPlan(input: TradingPlanInput, policy: TradingPolicy) {
   if (input.accountMode !== 'live') return true;
+  if (!spotLivePlanCapabilityDecision(input, 'ORDER_CREATE').allowed) return false;
   if (policy.mode === 'automatic' && policy.automaticEnabled) {
     return automaticLiveExecutionEnabled(input.exchange);
   }
