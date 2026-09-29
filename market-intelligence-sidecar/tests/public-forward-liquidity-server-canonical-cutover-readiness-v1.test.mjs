@@ -115,6 +115,7 @@ function receiptWithDigest(overrides = {}) {
     schemaVersion: SERVER_EVIDENCE_SHADOW_SCHEMA,
     stateContract: SERVER_EVIDENCE_STATE_CONTRACT,
     mode: SERVER_EVIDENCE_SHADOW_MODE,
+    captureStatus: 'PRESENT_SHADOW',
     shadowOnly: true,
     serverCanonical: false,
     codeSha: MAIN,
