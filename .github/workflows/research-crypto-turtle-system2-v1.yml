@@ -1,0 +1,68 @@
+name: Research Crypto Turtle System2 V1
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/run-crypto-turtle-system2-v1.mjs
+      - .github/workflows/research-crypto-turtle-system2-v1.yml
+      - market-prediction-lab/src/binance-vision-futures-archive.js
+      - market-prediction-lab/src/research-validation-layer.js
+      - market-prediction-lab/src/historical-backtest-data.js
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-crypto-turtle-system2-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Validate frozen Turtle System 2 contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/scripts/run-crypto-turtle-system2-v1.mjs
+          node market-prediction-lab/scripts/run-crypto-turtle-system2-v1.mjs --self-test
+          grep -Fq 'TURTLE_SYSTEM2_55_20_V1' market-prediction-lab/scripts/run-crypto-turtle-system2-v1.mjs
+          grep -Fq 'entryLookback: 55' market-prediction-lab/scripts/run-crypto-turtle-system2-v1.mjs
+          grep -Fq 'exitLookback: 20' market-prediction-lab/scripts/run-crypto-turtle-system2-v1.mjs
+          grep -Fq 'initialStopN: 2' market-prediction-lab/scripts/run-crypto-turtle-system2-v1.mjs
+          grep -Fq 'addEveryN: 0.5' market-prediction-lab/scripts/run-crypto-turtle-system2-v1.mjs
+          grep -Fq 'maxUnits: 4' market-prediction-lab/scripts/run-crypto-turtle-system2-v1.mjs
+          ! grep -Eiq '/api/v1/orders|PRIVATE_TRADING_API_ALLOWED|REAL_ORDER_ENABLED|LIVE_TRADING|BITGET_SECRET|(^|[^A-Za-z])withdraw([^A-Za-z]|$)|(^|[^A-Za-z])transfer([^A-Za-z]|$)' market-prediction-lab/scripts/run-crypto-turtle-system2-v1.mjs
+      - name: Run public Turtle System 2 replay
+        working-directory: market-prediction-lab
+        run: node scripts/run-crypto-turtle-system2-v1.mjs docs/crypto-turtle-system2-v1.json
+      - name: Assert source fidelity and safety
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('docs/crypto-turtle-system2-v1.json','utf8'));
+          if(r.status!=='pass'||r.recipeId!=='TURTLE_SYSTEM2_55_20_V1') throw new Error('STATUS');
+          if(r.implementation?.parameterSearch!==false||r.implementation?.ruleRetuning!==false||r.implementation?.priorCompletedBarNUsed!==true) throw new Error('FROZEN_RULE');
+          if(r.source?.rules?.entry!=='55-day breakout, every signal taken'||r.source?.rules?.exit!=='20-day opposite breakout') throw new Error('SOURCE_RULE');
+          if((r.data?.datasets?.length??0)<2) throw new Error('DATA');
+          if(r.promotionAssessment?.automaticPromotionAllowed!==false||r.promotionAssessment?.economicSampleCredit!==0||r.promotionAssessment?.profitabilityClaimAllowed!==false) throw new Error('PROMOTION');
+          if(r.safeguards?.researchOnly!==true||r.safeguards?.publicDataOnly!==true||r.safeguards?.actualOrders!==0||r.safeguards?.orderRouteCalled!==false||r.safeguards?.executionAuthority!=='NONE') throw new Error('SAFETY');
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crypto-turtle-system2-v1-${{ github.event.pull_request.head.sha }}
+          path: market-prediction-lab/docs/crypto-turtle-system2-v1.json
+          if-no-files-found: error
+          retention-days: 30
