@@ -43,6 +43,7 @@ assert(legacyStockBlockIndex >= 0 && stocksMountIndex > legacyStockBlockIndex, '
 
 const automationRoute = await text('api-server/src/routes/trade-automation.ts');
 const automationService = await text('api-server/src/services/trade-automation.service.ts');
+const spotLiveCapabilityService = await text('api-server/src/services/spot-live-limited-capability.service.ts');
 const automationRepository = await text('api-server/src/services/trade-automation.repository.ts');
 const orderRecovery = await text('api-server/src/services/trade-order-recovery.service.ts');
 const recoveryWorker = await text('api-server/src/services/trade-recovery-worker.service.ts');
@@ -51,8 +52,11 @@ const aiChatRoute = await text('api-server/src/routes/ai-chat.ts');
 const aiChatService = await text('api-server/src/services/ai-chat.service.ts');
 const automationUi = await text('stock-analyzer/src/components/trade-automation-settings.tsx');
 const unifiedJournalService = await text('api-server/src/services/unified-trade-journal.service.ts');
-assert(automationService.includes("process.env.ORDER_EXECUTION_ENABLED === 'true'")
-  && automationService.includes("process.env.LIVE_TRADING_ACTIVATION_APPROVED === 'true'"), 'live execution does not require both server and explicit activation gates');
+assert(automationService.includes("spotLiveCapabilityEnabled(exchange, 'ORDER_CREATE')")
+  && spotLiveCapabilityService.includes("'ORDER_EXECUTION_ENABLED'")
+  && spotLiveCapabilityService.includes("'LIVE_TRADING_ACTIVATION_APPROVED'")
+  && spotLiveCapabilityService.includes("'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED'"),
+  'live execution does not require server, explicit, and spot-limited activation gates');
 assert(recoveryWorker.includes("process.env.TRADE_RECOVERY_WORKER_ENABLED === 'true'")
   && recoveryWorker.includes("process.env.TRADE_PRIVATE_RECOVERY_LOOKUP_ENABLED === 'true'"),
   'trade recovery worker is not guarded by both explicit read-only lookup gates');
@@ -101,6 +105,7 @@ const phase8SensitiveFiles = [
   'stock-analyzer/src/components/unified-trade-journal-panel.tsx',
   'stock-analyzer/src/pages/phase8-release-candidate-e2e.tsx',
   'api-server/src/services/trade-automation.service.ts',
+  'api-server/src/services/spot-live-limited-capability.service.ts',
   'api-server/src/services/trade-execution.service.ts',
   'api-server/src/services/trade-order-recovery.service.ts',
   'api-server/src/services/trade-recovery-worker.service.ts',
