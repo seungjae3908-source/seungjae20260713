@@ -16,6 +16,10 @@ on:
         description: Exact deployed Production SHA to verify with real read-only account calls
         required: true
         type: string
+      providers:
+        description: Comma-separated SPOT_LIVE_LIMITED activation target providers (toss,kiwoom,upbit)
+        required: true
+        type: string
 
 permissions:
   actions: read
@@ -47,6 +51,7 @@ jobs:
           node <<'NODE'
           const fs = require('node:fs');
           const workflow = fs.readFileSync('.github/workflows/production-account-readonly-live-qa.yml', 'utf8');
+          const bridge = fs.readFileSync('.github/workflows/production-account-readonly-live-qa-dispatch-bridge.yml', 'utf8');
           const spec = fs.readFileSync('stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts', 'utf8');
           const config = fs.readFileSync('stock-analyzer/playwright.production-account-readonly.config.ts', 'utf8');
           const live = workflow.split('\n  production-account-readonly-live-qa:\n')[1] ?? '';
@@ -57,9 +62,14 @@ jobs:
           requireText(live, 'environment: production', 'LIVE_QA_MUST_USE_PRODUCTION_ENVIRONMENT');
           requireText(live, 'PRODUCTION_BASE_URL: https://lsj119.com', 'LIVE_QA_OFFICIAL_HOST_REQUIRED');
           requireText(live, 'ref: ' + '$' + '{{ inputs.sha }}', 'LIVE_QA_EXACT_SHA_CHECKOUT_REQUIRED');
+          requireText(live, 'PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS: ' + '$' + '{{ inputs.providers }}', 'LIVE_QA_TARGET_PROVIDERS_REQUIRED');
           requireText(spec, 'installProductionReadOnlyPolicy', 'READONLY_BROWSER_POLICY_REQUIRED');
           requireText(spec, '/api/accounts/read-only/credentials/status', 'CREDENTIAL_STATUS_READ_REQUIRED');
           requireText(spec, 'Persist bounded, sanitized provider state before any connectivity assertion', 'SANITIZED_FAILURE_DIAGNOSTICS_REQUIRED');
+          requireText(spec, 'testedProviders', 'TESTED_PROVIDERS_EVIDENCE_REQUIRED');
+          requireText(spec, 'reconciliationPassed', 'TARGET_PROVIDER_RECONCILIATION_REQUIRED');
+          requireText(bridge, "new Set(['toss', 'kiwoom', 'upbit'])", 'BRIDGE_ALLOWED_TARGET_PROVIDERS_REQUIRED');
+          requireText(bridge, 'inputs: { sha: target, providers }', 'BRIDGE_TARGET_PROVIDER_DISPATCH_REQUIRED');
           const adapter = fs.readFileSync('api-server/src/services/trade-exchange-adapters.service.ts', 'utf8');
           const runtime = fs.readFileSync('api-server/src/features/account-readonly/account-readonly.runtime.ts', 'utf8');
           const exchange = fs.readFileSync('api-server/src/features/account-readonly/providers/exchange-readonly.providers.ts', 'utf8');
@@ -95,6 +105,7 @@ jobs:
       PRODUCTION_ACCOUNT_READONLY_LIVE_QA: "true"
       PRODUCTION_ACCOUNT_READONLY_ARTIFACT_DIR: production-account-readonly-artifacts
       EXPECTED_DEPLOY_SHA: ${{ inputs.sha }}
+      PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS: ${{ inputs.providers }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -184,17 +195,23 @@ jobs:
           set -Eeuo pipefail
           evidence="stock-analyzer/production-account-readonly-artifacts/production-account-readonly-live-qa.json"
           test -s "$evidence"
-          node - "$evidence" "$EXPECTED_DEPLOY_SHA" <<'NODE'
+          node - "$evidence" "$EXPECTED_DEPLOY_SHA" "$PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS" <<'NODE'
           const fs = require('node:fs');
-          const [file, expectedSha] = process.argv.slice(2);
+          const [file, expectedSha, rawTargetProviders] = process.argv.slice(2);
           const value = JSON.parse(fs.readFileSync(file, 'utf8'));
-          const requiredCrypto = ['upbit', 'bitget'];
-          const stockProviders = ['toss', 'kiwoom'];
+          const allowedTargets = new Set(['toss', 'kiwoom', 'upbit']);
+          const requestedProviders = String(rawTargetProviders ?? '').split(',').filter(Boolean);
+          const expectedTestedProviders = [...requestedProviders].sort();
+          if (requestedProviders.length === 0
+            || new Set(requestedProviders).size !== requestedProviders.length
+            || requestedProviders.some((provider) => !allowedTargets.has(provider))) {
+            throw new Error('PRODUCTION_ACCOUNT_QA_TARGET_PROVIDER_SET_INVALID');
+          }
           const providers = Array.isArray(value?.providers) ? value.providers : [];
-          const providerErrorAccepted = (provider, errorCode) => errorCode === null
-            || (provider === 'upbit' && errorCode === 'UPBIT_OPEN_ORDERS_UPBIT_PERMISSION_DENIED');
           if (value?.schemaVersion !== 'production-account-readonly-live-qa-v1'
             || value?.targetSha !== expectedSha
+            || !Array.isArray(value?.testedProviders)
+            || JSON.stringify(value.testedProviders) !== JSON.stringify(expectedTestedProviders)
             || value?.officialProductionOrigin !== true
             || value?.authenticatedProductionSession !== true
             || value?.credentialVaultEncryptionConfigured !== true
@@ -211,24 +228,17 @@ jobs:
             || value?.autoTradingAuthorityGranted !== false) {
             throw new Error('PRODUCTION_ACCOUNT_QA_EVIDENCE_CONTRACT_FAILED');
           }
-          for (const provider of requiredCrypto) {
+          if (!providers.some((item) => item?.provider === 'bitget')) {
+            throw new Error('PRODUCTION_ACCOUNT_QA_BITGET_DIAGNOSTIC_MISSING');
+          }
+          for (const provider of expectedTestedProviders) {
             const row = providers.find((item) => item?.provider === provider);
             if (!row || row.connected !== true || row.status !== 'CONNECTED'
-              || row.stale !== false || !providerErrorAccepted(provider, row.errorCode)
-              || row.checkedAtPresent !== true || row.lastGoodAtPresent !== true) {
-              throw new Error('PRODUCTION_ACCOUNT_QA_PROVIDER_FAILED_' + provider.toUpperCase());
+              || row.stale !== false || row.fresh !== true || row.errorCode !== null
+              || row.checkedAtPresent !== true || row.lastGoodAtPresent !== true
+              || row.reconciliation !== 'PASS' || row.reconciliationPassed !== true) {
+              throw new Error('PRODUCTION_ACCOUNT_QA_TARGET_PROVIDER_FAILED_' + provider.toUpperCase());
             }
-          }
-          const connectedStock = providers.filter((item) =>
-            stockProviders.includes(item?.provider)
-            && item?.connected === true
-            && item?.status === 'CONNECTED'
-            && item?.stale === false
-            && item?.errorCode === null
-            && item?.checkedAtPresent === true
-            && item?.lastGoodAtPresent === true);
-          if (connectedStock.length < 1) {
-            throw new Error('PRODUCTION_ACCOUNT_QA_STOCK_PROVIDER_NOT_CONNECTED');
           }
           const serialized = JSON.stringify(value);
           if (/(clientSecret|secretKey|accessKey|apiKey|passphrase|accountRef|balances|positions|openOrders)/i.test(serialized)) {
@@ -254,8 +264,9 @@ jobs:
             echo "- Exact deployed Production SHA: $EXPECTED_DEPLOY_SHA"
             echo '- Session: authenticated Production QA member'
             echo '- Credential source: member-scoped encrypted Production Vault'
-            echo '- Stock provider: Toss or Kiwoom, at least one real connected account required'
-            echo '- Crypto providers: Upbit and Bitget real connected accounts required'
+            echo "- Activation target providers: $PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS"
+            echo '- Target provider contract: CONNECTED, fresh, reconciliation PASS'
+            echo '- Bitget: retained as non-blocking read-only diagnostic unless it becomes an allowed activation target'
             echo '- Account/holding/order values retained in evidence: false'
             echo '- Provider Secret values retained in evidence: false'
             echo '- Actual orders/cancels/amends/transfers/withdrawals: 0'
