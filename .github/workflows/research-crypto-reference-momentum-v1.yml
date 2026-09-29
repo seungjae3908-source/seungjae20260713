@@ -1,0 +1,66 @@
+name: Research Crypto Reference Momentum V1
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/run-crypto-reference-momentum-v1.mjs
+      - .github/workflows/research-crypto-reference-momentum-v1.yml
+      - market-prediction-lab/src/bitget-candle-collector.js
+      - market-prediction-lab/src/candle-gap-repair.js
+      - market-prediction-lab/src/historical-backtest-data.js
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-crypto-reference-momentum-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Validate frozen reference contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/scripts/run-crypto-reference-momentum-v1.mjs
+          node market-prediction-lab/scripts/run-crypto-reference-momentum-v1.mjs --self-test
+          grep -Fq 'LIU_TSYVINSKI_CRYPTO_WEEKLY_MOMENTUM_V1' market-prediction-lab/scripts/run-crypto-reference-momentum-v1.mjs
+          grep -Fq 'MOP_TSMOM_12M_1M_SPOT_PROXY_V1' market-prediction-lab/scripts/run-crypto-reference-momentum-v1.mjs
+          ! grep -Eiq '/api/v1/orders|PRIVATE_TRADING_API_ALLOWED|REAL_ORDER_ENABLED|LIVE_TRADING|TOSS_CLIENT_SECRET|BITGET_SECRET|(^|[^A-Za-z])withdraw([^A-Za-z]|$)|(^|[^A-Za-z])transfer([^A-Za-z]|$)' market-prediction-lab/scripts/run-crypto-reference-momentum-v1.mjs
+      - name: Run public crypto reference momentum replay
+        working-directory: market-prediction-lab
+        run: node scripts/run-crypto-reference-momentum-v1.mjs docs/crypto-reference-momentum-v1.json
+      - name: Assert truth and safety
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('docs/crypto-reference-momentum-v1.json','utf8'));
+          if(r.status!=='pass') throw new Error('STATUS');
+          if((r.data?.symbolsReady?.length??0)<2) throw new Error('DATA_COVERAGE');
+          const liu=r.recipes?.LIU_TSYVINSKI_CRYPTO_WEEKLY_MOMENTUM_V1;
+          const mop=r.recipes?.MOP_TSMOM_12M_1M_SPOT_PROXY_V1;
+          if(!liu||liu.parameterSearch!==false||liu.tradableLongShortClaimAllowed!==false) throw new Error('LIU_TRUTH');
+          if(!mop||mop.parameterSearch!==false||mop.volatilityScaledCanonicalReplication!==false||mop.canonicalMopFuturesReplicationClaimAllowed!==false) throw new Error('MOP_TRUTH');
+          if(r.promotionAssessment?.automaticPromotionAllowed!==false||r.promotionAssessment?.economicSampleCredit!==0) throw new Error('PROMOTION');
+          if(r.safeguards?.researchOnly!==true||r.safeguards?.publicDataOnly!==true||r.safeguards?.privateAccountRequestAllowed!==false||r.safeguards?.orderRouteCalled!==false||r.safeguards?.actualOrders!==0||r.safeguards?.executionAuthority!=='NONE') throw new Error('SAFETY');
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crypto-reference-momentum-v1-${{ github.event.pull_request.head.sha }}
+          path: market-prediction-lab/docs/crypto-reference-momentum-v1.json
+          if-no-files-found: error
+          retention-days: 30
