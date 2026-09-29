@@ -587,14 +587,29 @@ function decileSummary(records, signalKey) {
   const decileN = Math.max(1, Math.ceil(valid.length * 0.10));
   const bottom = valid.slice(0, decileN);
   const top = valid.slice(-decileN);
-  const metrics = (rows) => ({
-    count: rows.length,
-    meanNetReturn: mean(rows.map((row) => row.netReturn)),
-    medianNetReturn: median(rows.map((row) => row.netReturn)),
-    winRate: rows.filter((row) => row.netReturn > 0).length / rows.length,
-    minSignal: Math.min(...rows.map((row) => row[signalKey])),
-    maxSignal: Math.max(...rows.map((row) => row[signalKey])),
-  });
+  const metrics = (rows) => {
+    const returns = rows.map((row) => row.netReturn).sort((a, b) => b - a);
+    const positiveSum = returns.filter((value) => value > 0).reduce((sum, value) => sum + value, 0);
+    const byBucket = Object.fromEntries(["LARGE", "MID", "SMALL"].map((bucket) => {
+      const bucketRows = rows.filter((row) => row.bucket === bucket);
+      return [bucket, {
+        count: bucketRows.length,
+        meanNetReturn: bucketRows.length ? mean(bucketRows.map((row) => row.netReturn)) : null,
+        medianNetReturn: bucketRows.length ? median(bucketRows.map((row) => row.netReturn)) : null,
+      }];
+    }));
+    return {
+      count: rows.length,
+      meanNetReturn: mean(rows.map((row) => row.netReturn)),
+      medianNetReturn: median(rows.map((row) => row.netReturn)),
+      winRate: rows.filter((row) => row.netReturn > 0).length / rows.length,
+      minSignal: Math.min(...rows.map((row) => row[signalKey])),
+      maxSignal: Math.max(...rows.map((row) => row[signalKey])),
+      maxNetReturn: returns[0] ?? null,
+      top3PositiveReturnShare: positiveSum > 0 ? returns.slice(0, 3).filter((value) => value > 0).reduce((sum, value) => sum + value, 0) / positiveSum : null,
+      byBucket,
+    };
+  };
   const topMetrics = metrics(top);
   const bottomMetrics = metrics(bottom);
   return {
@@ -614,6 +629,7 @@ function buildAcademicMomentumBaselines(rows) {
       const candles = row.daily;
       const index = monthEndIndex(candles, month);
       if (index < 252) continue;
+      if (candles[index].close < 5) continue;
       const forward = sixMonthForwardReturn(candles, index, NORMAL_COST);
       if (!forward) continue;
       const sixMonthEnd = index - 21;
@@ -653,6 +669,7 @@ function buildAcademicMomentumBaselines(rows) {
       recipeId: "CROSS_SECTIONAL_PRICE_MOMENTUM_V1",
       sourceDoi: JT_MOMENTUM_DOI,
       signal: "past 6-month return ending one month before formation",
+      formationPriceFloorUsd: 5,
       holding: "subsequent 6 months",
       portfolio: "top/bottom signal deciles within bounded cohort; descriptive return spread only",
       aggregate: aggregate("jtMomentumJ6K6Skip1"),
@@ -661,6 +678,7 @@ function buildAcademicMomentumBaselines(rows) {
       recipeId: "FIFTY_TWO_WEEK_HIGH_MOMENTUM_V1",
       sourceDoi: GH_52W_HIGH_DOI,
       signal: "formation close / maximum daily high over previous 252 sessions",
+      formationPriceFloorUsd: 5,
       holding: "subsequent 6 months",
       portfolio: "top/bottom signal deciles within bounded cohort; descriptive return spread only",
       aggregate: aggregate("high52WeekK6"),
@@ -873,7 +891,7 @@ async function main() {
       "PEAD uses an analyst-SUE proxy from Nasdaq actual/consensus EPS scaled by a one-month-prior price. Nasdaq does not prove the exact 30-day I/B/E/S forecast vintage, so this is not canonical SUEAF.",
       "Canonical Foster-Olsen-Shevlin SUE needs current EPS, EPS four quarters earlier, and the standard deviation of quarterly EPS changes over prior quarters; those fields are not available in the current repository and remain fail-closed.",
       "No historical guidance, revenue-growth, analyst-revision, news-text, order-book, short-interest, wave/candle or AI overlay is used in the baseline.",
-      "Academic momentum and 52-week-high outputs use current-snapshot symbols, daily approximations to monthly portfolio formation, and do not construct the papers' full overlapping monthly portfolio return series.",
+      "Academic momentum and 52-week-high outputs apply a $5 formation-price floor, use current-snapshot symbols, daily approximations to monthly portfolio formation, and do not construct the papers' full overlapping monthly portfolio return series.",
       "Historical replay is not genuine OOS/Forward, broker fill evidence, or PROFITABILITY_PROVEN.",
     ],
   };
