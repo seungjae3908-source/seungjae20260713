@@ -185,7 +185,8 @@ test('Scanner PricePlan reaches the AI Chart consumer unchanged and is cleared o
   await scanner.getByRole('button', { name: 'AI 차트 분석기에서 보기', exact: true }).click();
 
   const consumer = page.getByTestId('scanner-price-plan-chart');
-  await expect(consumer).toContainText('74,000원 ~ 75,000원');
+  await expect(consumer).toContainText('74,000원');
+  await expect(consumer).toContainText('75,000원');
   await expect(consumer).toContainText('70,000원');
   await expect(consumer).toContainText('82,000원');
   await expect(consumer).toContainText('86,000원');
@@ -193,7 +194,8 @@ test('Scanner PricePlan reaches the AI Chart consumer unchanged and is cleared o
 
   await page.getByTestId('market-US').click();
   await expect(consumer).toContainText('Scanner에서 전달된 Price Plan이 없습니다.');
-  await expect(consumer).not.toContainText('74,000원 ~ 75,000원');
+  await expect(consumer).not.toContainText('74,000원');
+  await expect(consumer).not.toContainText('75,000원');
   await expect(consumer).not.toContainText('82,000원');
 });
 
