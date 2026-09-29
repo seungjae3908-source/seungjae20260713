@@ -396,7 +396,7 @@ const report = {
   schemaVersion: 1,
   status: "pass",
   market: "CRYPTO_FUTURES",
-  purpose: "source-faithful MOP 12-month time-series-momentum transfer baseline on crypto perpetual futures",
+  purpose: "source-faithful MOP 12-month time-series-momentum application baseline on crypto perpetual futures",
   sourceContract: {
     recipeId: "TIME_SERIES_MOMENTUM_V1",
     sourceDoi: MOP_DOI,
@@ -420,7 +420,7 @@ const report = {
   },
   transferBoundary: {
     canonicalMopReplication: false,
-    reason: "crypto perpetual futures transfer using BTCUSDT/ETHUSDT only, not the paper's diversified 58 futures/forwards",
+    reason: "crypto perpetual application using BTCUSDT/ETHUSDT only, not the paper's diversified 58 futures/forwards",
     cryptoTradesSevenDaysPerWeekButSourceAnnualization261Preserved: true,
     excessReturnIdentityExactToPaper: false,
     perpetualFundingIncluded: true,
@@ -477,7 +477,7 @@ const report = {
     actualOrders: 0,
   },
   limitations: [
-    "The original paper studies a diversified set of 58 liquid futures/forwards; this is a two-asset crypto-perpetual transfer test.",
+    "The original paper studies a diversified set of 58 liquid futures/forwards; this is a two-asset crypto-perpetual application test.",
     "The source 261-day annualization and 40% per-asset volatility target are preserved even though crypto trades seven days per week.",
     "Perpetual futures funding is included because crypto perpetuals differ from dated futures.",
     "Binance Vision history is used with a Bitget-oriented execution-cost assumption, so the run is a cross-venue proxy.",
