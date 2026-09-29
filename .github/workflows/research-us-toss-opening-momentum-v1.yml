@@ -19,7 +19,6 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 50
-    environment: production
     env:
       ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
     steps:
