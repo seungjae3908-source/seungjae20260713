@@ -13,7 +13,9 @@ import {
   ArrowLeft,
   BarChart3,
   BookOpen,
+  CheckCircle2,
   ChevronRight,
+  FlaskConical,
   GraduationCap,
   LineChart,
   Search,
@@ -22,6 +24,11 @@ import {
 } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { cn } from '@/lib/utils';
+import {
+  readLearnProgress,
+  toggleLearnTopic,
+  writeLearnProgress,
+} from '@/lib/learn-progress';
 
 type AnyObj = Record<string, any>;
 
@@ -479,6 +486,23 @@ export default function LearnPage() {
     [selectedId],
   );
 
+  const validTopicIds = useMemo(() => TOPICS.map((topic) => topic.id), []);
+  const [completedTopicIds, setCompletedTopicIds] = useState<string[]>(() => (
+    typeof window === 'undefined'
+      ? []
+      : readLearnProgress(window.localStorage, TOPICS.map((topic) => topic.id)).completedTopicIds
+  ));
+  const completedSet = useMemo(() => new Set(completedTopicIds), [completedTopicIds]);
+  const progressPercent = TOPICS.length ? Math.round(completedTopicIds.length / TOPICS.length * 100) : 0;
+
+  const toggleCompleted = useCallback((topicId: string) => {
+    setCompletedTopicIds((current) => {
+      const next = toggleLearnTopic(current, topicId, validTopicIds);
+      if (typeof window !== 'undefined') writeLearnProgress(window.localStorage, next, validTopicIds);
+      return next;
+    });
+  }, [validTopicIds]);
+
   const related = useQuery({
     queryKey: ['learn-related-stocks', selected?.id],
     queryFn: () => fetchRelatedStocks(selected?.indicators ?? []),
@@ -614,7 +638,47 @@ export default function LearnPage() {
               </div>
             </StudyCard>
 
-            <StudyCard title="조건에 맞는 관련 종목">
+            <StudyCard title="학습 완료 · 바로 실습">
+              <div className="grid gap-2 sm:grid-cols-3">
+                <button
+                  type="button"
+                  onClick={() => toggleCompleted(selected.id)}
+                  className={cn(
+                    'flex min-h-12 items-center justify-center gap-2 rounded-2xl border px-3 text-sm font-extrabold',
+                    completedSet.has(selected.id)
+                      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700'
+                      : 'border-card-border bg-background',
+                  )}
+                  data-testid="learn-topic-complete"
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                  {completedSet.has(selected.id) ? '완료됨 · 다시 표시 해제' : '이 주제 학습 완료'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate('/ai-chart')}
+                  className="flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-card-border bg-background px-3 text-sm font-extrabold"
+                  data-testid="learn-practice-chart"
+                >
+                  <LineChart className="h-4 w-4" />
+                  AI 차트에서 실습
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate('/backtests')}
+                  className="flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-card-border bg-background px-3 text-sm font-extrabold"
+                  data-testid="learn-practice-backtest"
+                >
+                  <FlaskConical className="h-4 w-4" />
+                  백테스트로 확인
+                </button>
+              </div>
+              <p className="mt-3 break-keep text-xs leading-5 text-muted-foreground">
+                학습 완료는 로컬 진도 표시일 뿐 투자 성과·시험 점수·전략 검증을 의미하지 않습니다. 실습 화면에서도 실제 주문은 자동 실행되지 않습니다.
+              </p>
+            </StudyCard>
+
+                        <StudyCard title="조건에 맞는 관련 종목">
               <p className="break-keep text-sm font-semibold leading-relaxed text-muted-foreground">
                 아래 종목은 “{selected.conditionTitle}” 조건에 맞는 후보입니다.
                 단독 매수 신호가 아니라 공부용 예시로 확인하세요.
@@ -736,6 +800,21 @@ export default function LearnPage() {
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-24 pt-4"
       >
         <div className="space-y-6">
+          <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="learn-progress">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-extrabold">투자공부 진도</p>
+                <p className="mt-1 text-xs font-semibold text-muted-foreground">
+                  {completedTopicIds.length}/{TOPICS.length}개 완료
+                </p>
+              </div>
+              <span className="text-xl font-extrabold tabular-nums">{progressPercent}%</span>
+            </div>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-secondary">
+              <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${progressPercent}%` }} />
+            </div>
+          </section>
+
           {GROUPS.map((group) => {
             const topics = TOPICS.filter((topic) => topic.group === group);
 
@@ -750,6 +829,7 @@ export default function LearnPage() {
                     <StudyTopicButton
                       key={topic.id}
                       topic={topic}
+                      completed={completedSet.has(topic.id)}
                       onClick={() => openTopic(topic)}
                     />
                   ))}
@@ -767,9 +847,11 @@ export default function LearnPage() {
 
 function StudyTopicButton({
   topic,
+  completed,
   onClick,
 }: {
   topic: StudyTopic;
+  completed: boolean;
   onClick: () => void;
 }) {
   const Icon = iconForGroup(topic.group);
@@ -792,7 +874,9 @@ function StudyTopicButton({
         </p>
       </div>
 
-      <ChevronRight className="h-5 w-5 text-muted-foreground" />
+      {completed
+        ? <CheckCircle2 className="h-5 w-5 text-emerald-600" aria-label="학습 완료" />
+        : <ChevronRight className="h-5 w-5 text-muted-foreground" />}
     </button>
   );
 }
