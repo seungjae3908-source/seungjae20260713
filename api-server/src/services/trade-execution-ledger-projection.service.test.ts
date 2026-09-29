@@ -222,3 +222,22 @@ test('duplicate provider identities are surfaced as canonical integrity blockers
     assert.ok(entry.integrityBlockers.includes('CANONICAL_EXCHANGE_ORDER_ID_DUPLICATED'));
   }
 });
+
+
+test('execution claim already owns submission and is never exposed as safe to resubmit', async () => {
+  const repository = new InMemoryTradingRepository();
+  await repository.savePlan(plan('plan-claim'));
+  await repository.saveOrder(order('order-claim', 'plan-claim', 'SUBMITTED', {
+    executionClaimId: 'worker-claim-1',
+    submissionStartedAt: null,
+    submissionAttemptId: null,
+  }));
+  await repository.appendEvent(event('order-claim', 'SUBMITTED', 'PLAN_EXECUTION_CLAIMED'));
+
+  const snapshot = await new TradeExecutionLedgerProjectionService(repository).list('user-1');
+  const entry = snapshot.entries[0];
+
+  assert.equal(entry.orderState, 'SUBMITTED');
+  assert.equal(entry.safeToResubmit, false);
+  assert.equal(entry.providerMutationAllowed, false);
+});
