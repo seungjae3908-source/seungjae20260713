@@ -11,7 +11,7 @@ export function ResearchVideoPanel() {
           영상·전사본은 가설의 출처로만 사용합니다. 수식·백테스트·검증·승격 상태는 상단의 전략 연구 탭에서 확인합니다.
         </p>
       </header>
-      <details className="mx-auto mt-3 max-w-6xl rounded-2xl border border-card-border bg-card" open>
+      <details className="mx-auto mt-3 max-w-6xl rounded-2xl border border-card-border bg-card">
         <summary className="min-h-12 cursor-pointer px-4 py-3 text-sm font-bold">기술 상태 자세히 보기</summary>
         <ResearchVideoSourcePanel />
       </details>
