@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { encryptTradingCredentials } from './trade-credential-vault.service';
 import { TradeOrderAmendmentService } from './trade-order-amendment.service';
-import { TradeExecutionService } from './trade-execution.service';
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
 
 const USER = '11111111-1111-1111-1111-111111111111';
@@ -74,11 +73,14 @@ async function setup() {
   process.env.TRADING_CREDENTIAL_MASTER_KEY = KEY;
   process.env.ORDER_EXECUTION_ENABLED = 'true';
   process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+  process.env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED = 'true';
   process.env.REAL_ORDER_ENABLED = 'true';
   process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
   process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
   process.env.LIVE_TRADING = 'true';
-  process.env.executionAuthority = 'MANUAL';
+  process.env.executionAuthority = 'SPOT_LIVE_LIMITED';
+  process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST = 'BALANCE_READ,POSITION_READ,OPEN_ORDER_READ,ORDER_CREATE,ORDER_CANCEL,ORDER_AMEND';
+  process.env.SPOT_LIVE_MARKET_ALLOWLIST = 'KR_STOCK,US_STOCK,CRYPTO_SPOT';
   const repository = new InMemoryTradingRepository();
   const p = plan();
   const o = order(p);
@@ -97,11 +99,14 @@ async function setupToss() {
   process.env.TRADING_CREDENTIAL_MASTER_KEY = KEY;
   process.env.ORDER_EXECUTION_ENABLED = 'true';
   process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+  process.env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED = 'true';
   process.env.REAL_ORDER_ENABLED = 'true';
   process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
   process.env.TOSS_LIVE_ORDER_ENABLED = 'true';
   process.env.LIVE_TRADING = 'true';
-  process.env.executionAuthority = 'MANUAL';
+  process.env.executionAuthority = 'SPOT_LIVE_LIMITED';
+  process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST = 'BALANCE_READ,POSITION_READ,OPEN_ORDER_READ,ORDER_CREATE,ORDER_CANCEL,ORDER_AMEND';
+  process.env.SPOT_LIVE_MARKET_ALLOWLIST = 'KR_STOCK,US_STOCK,CRYPTO_SPOT';
 
   const repository = new InMemoryTradingRepository();
   const base = plan();
@@ -153,125 +158,29 @@ async function setupToss() {
 
 test.afterEach(() => {
   globalThis.fetch = nativeFetch;
-  for (const key of ['TRADING_CREDENTIAL_MASTER_KEY','ORDER_EXECUTION_ENABLED','LIVE_TRADING_ACTIVATION_APPROVED','REAL_ORDER_ENABLED','PRIVATE_TRADING_API_ALLOWED','UPBIT_LIVE_ORDER_ENABLED','TOSS_LIVE_ORDER_ENABLED','LIVE_TRADING','executionAuthority']) {
+  for (const key of ['TRADING_CREDENTIAL_MASTER_KEY','ORDER_EXECUTION_ENABLED','LIVE_TRADING_ACTIVATION_APPROVED','SPOT_LIVE_LIMITED_ACTIVATION_APPROVED','REAL_ORDER_ENABLED','PRIVATE_TRADING_API_ALLOWED','UPBIT_LIVE_ORDER_ENABLED','TOSS_LIVE_ORDER_ENABLED','LIVE_TRADING','executionAuthority','SPOT_LIVE_CAPABILITY_ALLOWLIST','SPOT_LIVE_MARKET_ALLOWLIST']) {
     delete process.env[key];
   }
 });
 
-test('same amend request mutates provider once and replay is local-only', async () => {
+test('Upbit spot amendment is hard disabled before provider mutation', async () => {
   const { p, o, service } = await setup();
-  let mutations = 0;
-  let reads = 0;
-  globalThis.fetch = (async (input, init) => {
-    const url = new URL(String(input));
-    if (url.pathname === '/v1/orders/cancel_and_new') {
-      mutations += 1;
-      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string,string>;
-      return new Response(JSON.stringify({
-        uuid: 'exchange-original',
-        identifier: 'sj-upbit-original',
-        state: 'cancel',
-        new_order_uuid: 'exchange-new',
-        new_order_identifier: body.new_identifier,
-      }), { status: 200 });
-    }
-    if (url.pathname === '/v1/order') {
-      reads += 1;
-      return new Response(JSON.stringify({ uuid: 'exchange-new', identifier: url.searchParams.get('identifier'), state: 'wait' }), { status: 200 });
-    }
-    throw new Error('UNEXPECTED_NETWORK_PATH');
-  }) as typeof fetch;
-
-  const first = await service.amend(USER, o, p, { requestId: 'amend-request-01', price: 101_000, quantity: 1 });
-  assert.equal(first.order.state, 'ACCEPTED');
-  assert.equal(first.order.amendments?.[0]?.status, 'ACKNOWLEDGED');
-  assert.equal(first.order.currentLimitPrice, 101_000);
-  assert.equal(mutations, 1);
-  assert.equal(reads, 1);
-
-  const replay = await service.amend(USER, first.order, p, { requestId: 'amend-request-01', price: 101_000, quantity: 1 });
-  assert.equal(replay.replayed, true);
-  assert.equal(replay.recoveryRequired, false);
-  assert.equal(mutations, 1);
-  assert.equal(reads, 1);
+  let outbound = 0;
+  globalThis.fetch = (async () => { outbound += 1; throw new Error('NO_NETWORK'); }) as typeof fetch;
+  await assert.rejects(
+    () => service.amend(USER, o, p, { requestId: 'amend-request-01', price: 101_000, quantity: 1 }),
+    /CRYPTO_SPOT_AMEND_HARD_DISABLED|SPOT_LIVE_PROVIDER_CAPABILITY_UNSUPPORTED_ORDER_AMEND/,
+  );
+  assert.equal(outbound, 0);
 });
 
 
-test('acknowledged Upbit amend preserves new identity when post-query fails and recovery never resubmits', async () => {
-  const { repository, p, o, service } = await setup();
-  let mutations = 0;
-  let reads = 0;
-  let nextIdentifier = '';
-
-  globalThis.fetch = (async (input, init) => {
-    const url = new URL(String(input));
-    if (url.pathname === '/v1/orders/cancel_and_new') {
-      mutations += 1;
-      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, string>;
-      nextIdentifier = String(body.new_identifier ?? '');
-      return new Response(JSON.stringify({
-        uuid: 'exchange-original',
-        identifier: 'sj-upbit-original',
-        state: 'cancel',
-        new_order_uuid: 'exchange-new',
-        new_order_identifier: nextIdentifier,
-      }), { status: 200, headers: { 'content-type': 'application/json' } });
-    }
-    if (url.pathname === '/v1/order') {
-      reads += 1;
-      assert.equal(url.searchParams.get('identifier'), nextIdentifier);
-      if (reads === 1) {
-        return new Response('{}', {
-          status: 503,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      return new Response(JSON.stringify({
-        uuid: 'exchange-new',
-        identifier: nextIdentifier,
-        market: 'KRW-BTC',
-        state: 'wait',
-        volume: '1',
-        remaining_volume: '1',
-        executed_volume: '0',
-        paid_fee: '0',
-        created_at: new Date().toISOString(),
-        trades: [],
-      }), { status: 200, headers: { 'content-type': 'application/json' } });
-    }
-    throw new Error(`UNEXPECTED_NETWORK_PATH:${url.pathname}`);
-  }) as typeof fetch;
-
-  const amended = await service.amend(USER, o, p, {
-    requestId: 'amend-post-query-01',
-    price: 101_000,
-    quantity: 1,
-  });
-
-  assert.equal(amended.recoveryRequired, true);
-  assert.equal(amended.order.state, 'RECOVERY_REQUIRED');
-  assert.equal(amended.order.manualReviewRequired, false);
-  assert.equal(amended.order.clientOrderId, nextIdentifier);
-  assert.equal(amended.order.exchangeOrderId, 'exchange-new');
-  assert.equal(amended.order.currentLimitPrice, 101_000);
-  assert.equal(amended.order.amendments?.[0]?.status, 'RECOVERY_REQUIRED');
-  assert.equal(amended.order.amendments?.[0]?.nextClientOrderId, nextIdentifier);
-  assert.equal(amended.order.amendments?.[0]?.nextExchangeOrderId, 'exchange-new');
-  assert.equal(mutations, 1);
-  assert.equal(reads, 1);
-
-  const recovered = await new TradeExecutionService(repository).execute(
-    USER,
-    p,
-    amended.order,
+test('Upbit spot cannot bypass the amend deny with a different request id', async () => {
+  const { p, o, service } = await setup();
+  await assert.rejects(
+    () => service.amend(USER, o, p, { requestId: 'amend-post-query-01', price: 101_000, quantity: 1 }),
+    /SPOT_LIVE_AMEND_CAPABILITY_BLOCKED/,
   );
-
-  assert.equal(recovered.state, 'ACCEPTED');
-  assert.equal(recovered.clientOrderId, nextIdentifier);
-  assert.equal(recovered.exchangeOrderId, 'exchange-new');
-  assert.equal(recovered.manualReviewRequired, false);
-  assert.equal(mutations, 1, 'provider amend mutation must never be replayed during recovery');
-  assert.equal(reads, 2);
 });
 
 test('interrupted amend intent is recovery-required without another provider request', async () => {
@@ -330,7 +239,7 @@ test('real-order global gate blocks amendment before provider mutation', async (
 
   await assert.rejects(
     () => service.amend(USER, o, p, { requestId: 'amend-gate-01', price: 101_000, quantity: 1 }),
-    /LIVE_EXECUTION_DISABLED/,
+    /SPOT_LIVE_AMEND_CAPABILITY_BLOCKED/,
   );
   assert.equal(outbound, 0);
 });

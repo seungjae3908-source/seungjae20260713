@@ -71,7 +71,10 @@ test('production deploy resets every live-order authority gate to fail closed', 
     'PRIVATE_TRADING_API_ALLOWED=false',
     'ORDER_EXECUTION_ENABLED=false',
     'LIVE_TRADING_ACTIVATION_APPROVED=false',
+    'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED=false',
     'LIVE_AUTOMATIC_TRADING_ENABLED=false',
+    'SPOT_LIVE_CAPABILITY_ALLOWLIST=',
+    'SPOT_LIVE_MARKET_ALLOWLIST=',
     'BITGET_LIVE_ORDER_ENABLED=false',
     'UPBIT_LIVE_ORDER_ENABLED=false',
     'KIWOOM_LIVE_ORDER_ENABLED=false',
@@ -85,7 +88,7 @@ test('production deploy resets every live-order authority gate to fail closed', 
   assert.ok(deploy.includes('application_runtime_ready()'));
 });
 
-test('every live provider requires the global gates plus its own explicit provider gate', () => {
+test('spot live providers require exact limited authority plus capability and market allowlists', () => {
   const previous = {
     ORDER_EXECUTION_ENABLED: process.env.ORDER_EXECUTION_ENABLED,
     LIVE_TRADING_ACTIVATION_APPROVED: process.env.LIVE_TRADING_ACTIVATION_APPROVED,
@@ -99,6 +102,9 @@ test('every live provider requires the global gates plus its own explicit provid
     LIVE_TRADING: process.env.LIVE_TRADING,
     AUTO_TRADING: process.env.AUTO_TRADING,
     executionAuthority: process.env.executionAuthority,
+    SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: process.env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED,
+    SPOT_LIVE_CAPABILITY_ALLOWLIST: process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST,
+    SPOT_LIVE_MARKET_ALLOWLIST: process.env.SPOT_LIVE_MARKET_ALLOWLIST,
   };
   try {
     process.env.ORDER_EXECUTION_ENABLED = 'true';
@@ -111,6 +117,9 @@ test('every live provider requires the global gates plus its own explicit provid
     process.env.TOSS_LIVE_ORDER_ENABLED = 'true';
     process.env.LIVE_TRADING = 'false';
     process.env.AUTO_TRADING = 'false';
+    process.env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED = 'true';
+    process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST = 'BALANCE_READ,POSITION_READ,OPEN_ORDER_READ,ORDER_CREATE,ORDER_CANCEL,ORDER_AMEND';
+    process.env.SPOT_LIVE_MARKET_ALLOWLIST = 'KR_STOCK,US_STOCK,CRYPTO_SPOT';
     process.env.executionAuthority = 'MANUAL';
     assert.equal(liveExecutionEnabled('bitget'), false);
     assert.equal(liveExecutionEnabled('upbit'), false);
@@ -124,8 +133,8 @@ test('every live provider requires the global gates plus its own explicit provid
     assert.equal(liveExecutionEnabled('kiwoom'), false);
     assert.equal(liveExecutionEnabled('toss'), false);
 
-    process.env.executionAuthority = 'MANUAL';
-    assert.equal(liveExecutionEnabled('bitget'), true);
+    process.env.executionAuthority = 'SPOT_LIVE_LIMITED';
+    assert.equal(liveExecutionEnabled('bitget'), false);
     assert.equal(liveExecutionEnabled('upbit'), true);
     assert.equal(liveExecutionEnabled('kiwoom'), true);
     assert.equal(liveExecutionEnabled('toss'), true);
@@ -135,7 +144,7 @@ test('every live provider requires the global gates plus its own explicit provid
     assert.equal(automaticLiveExecutionEnabled('toss'), false);
 
     process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'true';
-    process.env.executionAuthority = 'AUTOMATIC';
+    process.env.executionAuthority = 'SPOT_LIVE_LIMITED';
     process.env.AUTO_TRADING = 'false';
     assert.equal(automaticLiveExecutionEnabled('bitget'), false);
     assert.equal(automaticLiveExecutionEnabled('upbit'), false);
@@ -143,15 +152,15 @@ test('every live provider requires the global gates plus its own explicit provid
     assert.equal(automaticLiveExecutionEnabled('toss'), false);
 
     process.env.AUTO_TRADING = 'true';
-    assert.equal(automaticLiveExecutionEnabled('bitget'), true);
+    assert.equal(automaticLiveExecutionEnabled('bitget'), false);
     assert.equal(automaticLiveExecutionEnabled('upbit'), true);
     assert.equal(automaticLiveExecutionEnabled('kiwoom'), true);
     assert.equal(automaticLiveExecutionEnabled('toss'), true);
 
     process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'false';
     process.env.AUTO_TRADING = 'false';
-    process.env.executionAuthority = 'MANUAL';
-    assert.equal(liveExecutionEnabled('bitget'), true);
+    process.env.executionAuthority = 'SPOT_LIVE_LIMITED';
+    assert.equal(liveExecutionEnabled('bitget'), false);
     assert.equal(liveExecutionEnabled('upbit'), true);
 
     process.env.REAL_ORDER_ENABLED = 'false';
