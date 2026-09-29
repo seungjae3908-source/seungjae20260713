@@ -138,7 +138,15 @@ function executeUnit({ action, unit, exitPrice, exitTimestamp, fundingRates, cos
     fundingRates,
   });
 }
-function simulateSystem2({ symbol, candles, fundingRates, costMultiplier = 1, maxUnits = SYSTEM.maxUnits }) {
+function simulateSystem2({
+  symbol,
+  candles,
+  fundingRates,
+  costMultiplier = 1,
+  maxUnits = SYSTEM.maxUnits,
+  startTime = START,
+  endTime = END,
+}) {
   const nSeries = buildN(candles);
   const warmup = Math.max(SYSTEM.entryLookback, SYSTEM.nPeriod) + 1;
   let equity = INITIAL_CAPITAL;
@@ -191,6 +199,8 @@ function simulateSystem2({ symbol, candles, fundingRates, costMultiplier = 1, ma
 
   for (let index = warmup; index < candles.length; index += 1) {
     const candle = candles[index];
+    if (candle.timestamp < startTime) continue;
+    if (candle.timestamp > endTime) break;
     const n = nSeries[index - 1] ?? nSeries[index];
     if (!(n > 0)) continue;
 
@@ -295,24 +305,27 @@ function simulateSystem2({ symbol, candles, fundingRates, costMultiplier = 1, ma
   }
 
   if (position) {
-    closePosition(candles.length - 1, candles.at(-1).close, "DATASET_END");
+    let lastIndex = -1;
+    for (let index = candles.length - 1; index >= 0; index -= 1) {
+      if (candles[index].timestamp <= endTime) {
+        lastIndex = index;
+        break;
+      }
+    }
+    if (lastIndex >= 0) closePosition(lastIndex, candles[lastIndex].close, "WINDOW_END");
   }
   return {
     symbol,
     maxUnits,
     costMultiplier,
+    startTime,
+    endTime,
     initialCapital: INITIAL_CAPITAL,
     finalCapital: equity,
     metrics: summarize(trades),
     trades,
     diagnostics,
   };
-}
-function windowSummary(trades) {
-  return Object.fromEntries(WINDOWS.map((window) => {
-    const rows = trades.filter((trade) => trade.entryTimestamp >= window.start && trade.entryTimestamp <= window.end);
-    return [window.id, summarize(rows)];
-  }));
 }
 function aggregateRuns(runs) {
   const totalInitial = runs.length * INITIAL_CAPITAL;
@@ -328,11 +341,34 @@ function aggregateRuns(runs) {
       metrics: run.metrics,
       diagnostics: run.diagnostics,
     }])),
-    windows: Object.fromEntries(WINDOWS.map((window) => {
-      const rows = runs.flatMap((run) => run.trades.filter((trade) => trade.entryTimestamp >= window.start && trade.entryTimestamp <= window.end));
-      return [window.id, summarize(rows, totalInitial)];
-    })),
   };
+}
+function runFrozenSet({ datasets, maxUnits, costMultiplier, startTime = START, endTime = END }) {
+  return SYMBOLS.map((symbol) => simulateSystem2({
+    symbol,
+    ...datasets[symbol],
+    maxUnits,
+    costMultiplier,
+    startTime,
+    endTime,
+  }));
+}
+function buildIndependentWindows({ datasets, maxUnits, costMultiplier }) {
+  return Object.fromEntries(WINDOWS.map((window) => {
+    const runs = runFrozenSet({
+      datasets,
+      maxUnits,
+      costMultiplier,
+      startTime: window.start,
+      endTime: window.end,
+    });
+    return [window.id, {
+      startTime: window.start,
+      endTime: window.end,
+      resetCapitalPerSymbol: INITIAL_CAPITAL,
+      aggregate: aggregateRuns(runs),
+    }];
+  }));
 }
 function selfTest() {
   const candles = [];
@@ -372,12 +408,17 @@ for (const symbol of SYMBOLS) {
   datasets[symbol] = { candles: price.candles, fundingRates: funding.records };
 }
 
-const sourceNormal = SYMBOLS.map((symbol) => simulateSystem2({ symbol, ...datasets[symbol], maxUnits: 4, costMultiplier: 1 }));
-const sourceStress = SYMBOLS.map((symbol) => simulateSystem2({ symbol, ...datasets[symbol], maxUnits: 4, costMultiplier: 1.5 }));
-const singleUnitNormal = SYMBOLS.map((symbol) => simulateSystem2({ symbol, ...datasets[symbol], maxUnits: 1, costMultiplier: 1 }));
+const sourceNormal = runFrozenSet({ datasets, maxUnits: 4, costMultiplier: 1 });
+const sourceStress = runFrozenSet({ datasets, maxUnits: 4, costMultiplier: 1.5 });
+const singleUnitNormal = runFrozenSet({ datasets, maxUnits: 1, costMultiplier: 1 });
 const sourceAggregate = aggregateRuns(sourceNormal);
 const stressAggregate = aggregateRuns(sourceStress);
 const singleUnitAggregate = aggregateRuns(singleUnitNormal);
+const independentWindows = {
+  sourceNormal: buildIndependentWindows({ datasets, maxUnits: 4, costMultiplier: 1 }),
+  sourceStress: buildIndependentWindows({ datasets, maxUnits: 4, costMultiplier: 1.5 }),
+  singleUnitControl: buildIndependentWindows({ datasets, maxUnits: 1, costMultiplier: 1 }),
+};
 
 const report = {
   schemaVersion: 1,
@@ -418,6 +459,7 @@ const report = {
     sourceNormal: sourceAggregate,
     sourceStress: stressAggregate,
     singleUnitControl: singleUnitAggregate,
+    independentWindows,
     pyramidContribution: {
       totalReturnDelta: sourceAggregate.totalReturn - singleUnitAggregate.totalReturn,
       tradeReturnDelta: sourceAggregate.tradeMetrics.additiveReturnOnInitialCapital - singleUnitAggregate.tradeMetrics.additiveReturnOnInitialCapital,
@@ -432,6 +474,8 @@ const report = {
   },
   decisionBoundary: {
     observedHistoryUsedForParameterSelection: false,
+    temporalWindowReplayIndependentCapital: true,
+    windowWarmupMayUsePreWindowPricesButNotPreWindowPnl: true,
     automaticPromotionAllowed: false,
     economicSampleCredit: 0,
     profitabilityClaimAllowed: false,
@@ -452,6 +496,7 @@ const report = {
     "Funding is included for perpetual futures even though the original dated-futures rules had no perpetual funding.",
     "Binance historical market data is combined with Bitget-oriented cost assumptions and is therefore a cross-venue proxy.",
     "System 1 is deliberately excluded until its previous-breakout winner skip rule is implemented without approximation.",
+    "PRIOR and RECENT temporal windows are rerun independently from fresh per-symbol capital; earlier history is used only to warm up N and breakout channels, never to carry PnL into the later window.",
   ],
 };
 
@@ -466,6 +511,8 @@ console.log(JSON.stringify({
   sourceTrades: report.results.sourceNormal.tradeMetrics.trades,
   sourcePF: report.results.sourceNormal.tradeMetrics.profitFactor,
   sourceMDD: report.results.sourceNormal.tradeMetrics.maxDrawdown,
-  priorReturn: report.results.sourceNormal.windows.PRIOR_2021_2023.additiveReturnOnInitialCapital,
-  recentReturn: report.results.sourceNormal.windows.RECENT_2024_2025.additiveReturnOnInitialCapital,
+  priorReturn: report.results.independentWindows.sourceNormal.PRIOR_2021_2023.aggregate.totalReturn,
+  recentReturn: report.results.independentWindows.sourceNormal.RECENT_2024_2025.aggregate.totalReturn,
+  priorStressReturn: report.results.independentWindows.sourceStress.PRIOR_2021_2023.aggregate.totalReturn,
+  recentStressReturn: report.results.independentWindows.sourceStress.RECENT_2024_2025.aggregate.totalReturn,
 }));
