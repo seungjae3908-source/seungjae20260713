@@ -1,0 +1,66 @@
+name: Research US Toss Opening Momentum V1
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/run-us-toss-opening-momentum-v1.mjs
+      - .github/workflows/research-us-toss-opening-momentum-v1.yml
+      - market-prediction-lab/src/yahoo-stock-history.js
+      - market-prediction-lab/src/adaptive-multi-evidence-price-structure-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-point-in-time-v2.js
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-us-toss-opening-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    environment: production
+    env:
+      TOSS_CLIENT_ID: ${{ secrets.TOSS_CLIENT_ID }}
+      TOSS_CLIENT_SECRET: ${{ secrets.TOSS_CLIENT_SECRET }}
+      TOSS_API_BASE_URL: ${{ vars.TOSS_API_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Verify read-only market-data boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/scripts/run-us-toss-opening-momentum-v1.mjs
+          ! grep -Eiq '/api/v1/orders|X-Tossinvest-Account|LIVE_TRADING|REAL_ORDER_ENABLED|PRIVATE_TRADING_API_ALLOWED|(^|[^A-Za-z])withdraw([^A-Za-z]|$)|(^|[^A-Za-z])transfer([^A-Za-z]|$)|(^|[^A-Za-z])orderSubmitted([^A-Za-z]|$)' market-prediction-lab/scripts/run-us-toss-opening-momentum-v1.mjs
+          test -n "${TOSS_CLIENT_ID:-}"
+          test -n "${TOSS_CLIENT_SECRET:-}"
+      - name: Run fresh-symbol US opening replay
+        working-directory: market-prediction-lab
+        run: node scripts/run-us-toss-opening-momentum-v1.mjs docs/us-toss-opening-momentum-v1.json
+      - name: Assert chronology and safety
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('docs/us-toss-opening-momentum-v1.json','utf8'));
+          if(r.status!=='pass') throw new Error('STATUS');
+          if(r.selectionContract.selectedFamilyChosenByCalibrationOnly!==true||r.selectionContract.validationCanOnlyPassOrFailSelectedFamily!==true||r.selectionContract.testUsedForSelection!==false) throw new Error('SELECTION_LEAK');
+          if(!r.lookahead.guardPassed||!r.lookahead.D1UsesPriorCompletedDailyCandle||!r.lookahead.intradayUsesCompleted1mAggregated5m15m||!r.lookahead.entryNext1mOpen) throw new Error('LOOKAHEAD');
+          if(r.universe.selected.length<10) throw new Error('SYMBOL_COVERAGE');
+          if(r.safety.researchOnly!==true||r.safety.marketDataOnly!==true||r.safety.accountHeaderUsed!==false||r.safety.orderRouteCalled!==false||r.safety.executionAuthority!=='NONE') throw new Error('SAFETY');
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: us-toss-opening-momentum-v1-${{ github.event.pull_request.head.sha }}
+          path: market-prediction-lab/docs/us-toss-opening-momentum-v1.json
+          if-no-files-found: error
+          retention-days: 30
