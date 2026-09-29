@@ -387,8 +387,8 @@ async function main() {
       automaticPromotionAllowed: false,
       economicSampleCredit: 0,
       LIU_TSYVINSKI_CRYPTO_WEEKLY_MOMENTUM_V1: {
-        status: "RESEARCH_HOLD_TRANSFER_AND_CONCENTRATION_REVIEW",
-        reason: "positive pooled means must be checked against BTC/ETH/XRP transfer, PRIOR/RECENT stability, medians, and leave-best-1/3 concentration before any overlay experiment",
+        status: "RESEARCH_HOLD_TEMPORAL_AND_CONCENTRATION_REVIEW",
+        reason: "positive pooled means must be checked against BTC/ETH/XRP generalization, PRIOR/RECENT stability, medians, and leave-best-1/3 concentration before any overlay experiment",
         automaticPromotionAllowed: false,
       },
       MOP_TSMOM_12M_1M_SPOT_PROXY_V1: {
