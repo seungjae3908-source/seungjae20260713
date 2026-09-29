@@ -42,9 +42,14 @@ function followupCard(
     assetClass: 'stock',
     direction: 'LONG',
     symbol: '005930',
+    name: '삼성전자',
     market: 'KR',
     price: options.price ?? 105,
     signalState: options.signalState ?? 'APPROVAL_PENDING',
+    dataState: 'complete',
+    strongSignalEligible: true,
+    expiresAt: EXPIRES_AT,
+    strategyMode: 'scalping',
     pricePlan: {
       entryZone: { from: 100, to: 102 },
       invalidation: 89,
@@ -58,8 +63,12 @@ function followupCard(
 async function withFollowupEnv(run: () => Promise<void>) {
   const previousEnabled = process.env.TELEGRAM_SIGNAL_FOLLOWUP_ENABLED;
   const previousRoom = process.env.TELEGRAM_STOCK_CHAT_ID;
+  const previousKrRoom = process.env.TELEGRAM_KR_STOCK_CHAT_ID;
+  const previousPublicApp = process.env.PUBLIC_APP_URL;
   process.env.TELEGRAM_SIGNAL_FOLLOWUP_ENABLED = 'true';
-  process.env.TELEGRAM_STOCK_CHAT_ID = 'stock-room-test';
+  process.env.TELEGRAM_STOCK_CHAT_ID = 'legacy-stock-room-test';
+  process.env.TELEGRAM_KR_STOCK_CHAT_ID = 'kr-stock-room-test';
+  process.env.PUBLIC_APP_URL = 'https://example.test';
   clearTelegramSignalFollowupState();
   try {
     await run();
@@ -68,6 +77,10 @@ async function withFollowupEnv(run: () => Promise<void>) {
     else process.env.TELEGRAM_SIGNAL_FOLLOWUP_ENABLED = previousEnabled;
     if (previousRoom == null) delete process.env.TELEGRAM_STOCK_CHAT_ID;
     else process.env.TELEGRAM_STOCK_CHAT_ID = previousRoom;
+    if (previousKrRoom == null) delete process.env.TELEGRAM_KR_STOCK_CHAT_ID;
+    else process.env.TELEGRAM_KR_STOCK_CHAT_ID = previousKrRoom;
+    if (previousPublicApp == null) delete process.env.PUBLIC_APP_URL;
+    else process.env.PUBLIC_APP_URL = previousPublicApp;
     clearTelegramSignalFollowupState();
   }
 }
@@ -135,7 +148,7 @@ test('public signal lifecycle edits the original Telegram message instead of cre
     clearTelegramSignalFollowupState();
 
     let newMessages = 0;
-    const edits: Array<{ messageId: number; text: string }> = [];
+    const edits: Array<{ messageId: number; text: string; buttons?: unknown }> = [];
     await deliverScannerTelegramFollowups(
       [followupCard('signal-edit-in-place')],
       async () => {
@@ -145,7 +158,7 @@ test('public signal lifecycle edits the original Telegram message instead of cre
       ANNOUNCED_AT + 1_000,
       repository,
       async (input) => {
-        edits.push({ messageId: input.messageId, text: input.text });
+        edits.push({ messageId: input.messageId, text: input.text, buttons: input.buttons });
         return { ok: true, attempts: 1 };
       },
     );
@@ -155,12 +168,136 @@ test('public signal lifecycle edits the original Telegram message instead of cre
     expect(edits[0].messageId).toBe(42);
     expect(edits[0].text).toContain('TP1 105 ✅');
     expect(edits[0].text).toContain('현재 상태');
+    expect(JSON.stringify(edits[0].buttons)).not.toContain('🛒 주문');
+    expect(JSON.stringify(edits[0].buttons)).toContain('📊 AI차트');
+    expect(JSON.stringify(edits[0].buttons)).toContain('/ai-chart');
+    expect(JSON.stringify(edits[0].buttons)).toContain('timeframe=15m');
 
     const [stored] = await repository.list(['signal-edit-in-place']);
     expect(stored.telegramMessageId).toBe(42);
     expect(stored.telegramMessageKind).toBe('TEXT');
     expect(stored.baseMessageText).toContain('진입가능');
     expect(stored.reachedTargets).toEqual([0]);
+  });
+});
+
+test('rearmed signal restores the order button only after price returns inside the live entry range', async () => {
+  await withFollowupEnv(async () => {
+    const signalId = 'signal-rearmed-order-guard';
+    const repository = new InMemoryTelegramSignalFollowupRepository();
+    await markTelegramSignalAnnounced(
+      announcedAlert(signalId),
+      ANNOUNCED_AT,
+      repository,
+      {
+        messageId: 66,
+        messageKind: 'TEXT',
+        renderedText: '<b>삼성전자(005930) / 국내주식 · 단타 · 반도체</b>\n🟢 신호: 매수 · 15m',
+      },
+    );
+
+    const edits: Array<{ text: string; buttons?: unknown }> = [];
+    await deliverScannerTelegramFollowups(
+      [followupCard(signalId, { signalState: 'ARMED', price: 103, targets: [110], stopLoss: 95 })],
+      async () => ({ ok: true, attempts: 1 }),
+      ANNOUNCED_AT + 1_000,
+      repository,
+      async (input) => {
+        edits.push({ text: input.text, buttons: input.buttons });
+        return { ok: true, attempts: 1 };
+      },
+    );
+    expect(edits.at(-1)?.text).toContain('관망');
+    expect(JSON.stringify(edits.at(-1)?.buttons)).not.toContain('🛒 주문');
+
+    clearTelegramSignalFollowupState();
+    await deliverScannerTelegramFollowups(
+      [followupCard(signalId, { signalState: 'ENTRY_ZONE', price: 101, targets: [110], stopLoss: 95 })],
+      async () => ({ ok: true, attempts: 1 }),
+      ANNOUNCED_AT + 2_000,
+      repository,
+      async (input) => {
+        edits.push({ text: input.text, buttons: input.buttons });
+        return { ok: true, attempts: 1 };
+      },
+    );
+
+    expect(edits.at(-1)?.text).toContain('매수 활성');
+    expect(JSON.stringify(edits.at(-1)?.buttons)).toContain('🛒 주문');
+    expect(JSON.stringify(edits.at(-1)?.buttons)).toContain('📊 AI차트');
+    expect(JSON.stringify(edits.at(-1)?.buttons)).toContain('timeframe=15m');
+  });
+});
+
+test('weakened active signal becomes watch-only and loses the order button', async () => {
+  await withFollowupEnv(async () => {
+    const signalId = 'signal-weakened-order-guard';
+    const repository = new InMemoryTelegramSignalFollowupRepository();
+    await markTelegramSignalAnnounced(
+      announcedAlert(signalId),
+      ANNOUNCED_AT,
+      repository,
+      {
+        messageId: 71,
+        messageKind: 'TEXT',
+        renderedText: '<b>삼성전자(005930) / 국내주식 · 단타 · 반도체</b>\n🟢 신호: 매수 · 15m',
+      },
+    );
+    clearTelegramSignalFollowupState();
+
+    const edits: Array<{ text: string; buttons?: unknown }> = [];
+    await deliverScannerTelegramFollowups(
+      [followupCard(signalId, { signalState: 'WEAKENED', price: 101, targets: [110], stopLoss: 95 })],
+      async () => ({ ok: true, attempts: 1 }),
+      ANNOUNCED_AT + 1_000,
+      repository,
+      async (input) => {
+        edits.push({ text: input.text, buttons: input.buttons });
+        return { ok: true, attempts: 1 };
+      },
+    );
+
+    expect(edits).toHaveLength(1);
+    expect(edits[0].text).toContain('관망');
+    expect(edits[0].text).toContain('신호 근거가 약화');
+    expect(JSON.stringify(edits[0].buttons)).not.toContain('🛒 주문');
+    expect(JSON.stringify(edits[0].buttons)).toContain('📊 AI차트');
+  });
+});
+
+test('invalidated signal edits the original message and removes the order button while keeping AI chart access', async () => {
+  await withFollowupEnv(async () => {
+    const signalId = 'signal-invalid-order-guard';
+    const repository = new InMemoryTelegramSignalFollowupRepository();
+    await markTelegramSignalAnnounced(
+      announcedAlert(signalId),
+      ANNOUNCED_AT,
+      repository,
+      {
+        messageId: 77,
+        messageKind: 'TEXT',
+        renderedText: '<b>삼성전자(005930) / 국내주식 · 단타 · 반도체</b>\n🟢 신호: 매수 · 15m',
+      },
+    );
+    clearTelegramSignalFollowupState();
+
+    const edits: Array<{ text: string; buttons?: unknown }> = [];
+    await deliverScannerTelegramFollowups(
+      [followupCard(signalId, { signalState: 'INVALIDATED', price: 97, targets: [110], stopLoss: 95 })],
+      async () => ({ ok: true, attempts: 1 }),
+      ANNOUNCED_AT + 1_000,
+      repository,
+      async (input) => {
+        edits.push({ text: input.text, buttons: input.buttons });
+        return { ok: true, attempts: 1 };
+      },
+    );
+
+    expect(edits).toHaveLength(1);
+    expect(edits[0].text).toContain('매수 신호 무효 · 주문 비활성');
+    expect(JSON.stringify(edits[0].buttons)).not.toContain('🛒 주문');
+    expect(JSON.stringify(edits[0].buttons)).toContain('📊 AI차트');
+    expect(JSON.stringify(edits[0].buttons)).toContain('/ai-chart');
   });
 });
 
@@ -268,13 +405,13 @@ test('REARMED, ENTRY_ZONE_LEFT, INVALIDATED and EXPIRED lifecycle semantics pers
     };
 
     await deliverState('ARMED', 1_000);
-    expect(messages.at(-1)).toContain('진입구간을 벗어나');
+    expect(messages.at(-1)).toContain('진입 조건이 해제되어 관망 상태로 전환');
 
     await deliverState('ENTRY_ZONE', 2_000);
     expect(messages.at(-1)).toContain('조건이 회복되어');
 
     await deliverState('INVALIDATED', 3_000);
-    expect(messages.at(-1)).toContain('무효 상태로 전환');
+    expect(messages.at(-1)).toContain('기존 진입 조건이 무효화');
     const afterInvalidated = messages.length;
     await deliverState('INVALIDATED', 4_000);
     expect(messages).toHaveLength(afterInvalidated);
