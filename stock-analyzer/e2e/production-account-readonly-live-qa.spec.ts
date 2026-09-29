@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { loginProductionReadOnly } from './support/production-readonly-login';
 import { installProductionReadOnlyPolicy } from './support/production-readonly-policy';
 
 const baseUrl = String(process.env.PRODUCTION_BASE_URL ?? '').replace(/\/$/, '');
@@ -93,19 +94,7 @@ function zeroMutationSafetyFailures(value: SafetySnapshot): string[] {
 }
 
 async function login(page: Page) {
-  await page.goto('/login', { waitUntil: 'commit', timeout: 15_000 });
-  const loginId = page.getByLabel('아이디');
-  const loginPassword = page.getByLabel('비밀번호');
-  const loginButton = page.getByRole('button', { name: '로그인', exact: true });
-
-  await expect(loginId).toBeVisible({ timeout: 15_000 });
-  await expect(loginPassword).toBeVisible({ timeout: 15_000 });
-  await expect(loginButton).toBeVisible({ timeout: 15_000 });
-
-  await loginId.fill(qaLogin);
-  await loginPassword.fill(qaPassword);
-  await loginButton.click();
-  await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: 15_000 });
+  await loginProductionReadOnly(page, { login: qaLogin, password: qaPassword });
 }
 
 test('Production real-account read-only providers return fresh connected snapshots with zero mutation authority', async ({ page }) => {
