@@ -5,7 +5,7 @@ import {
   type UnifiedAssetDocument,
 } from '../lib/search-normalization';
 
-export const SPOT_SEARCH_SOFT_DEADLINE_MS = 4_500;
+export const SPOT_SEARCH_SOFT_DEADLINE_MS = 2_500;
 
 export interface SpotSearchFallbackResponse {
   results: Array<{
