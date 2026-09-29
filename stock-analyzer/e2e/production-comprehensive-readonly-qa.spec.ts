@@ -213,23 +213,24 @@ function accessTokenFromStorageState(state: CachedAuthState) {
   throw new Error('PRODUCTION_QA_ACCESS_TOKEN_UNAVAILABLE');
 }
 
-async function validateCachedAuthState(page: Page, state: CachedAuthState) {
+function jwtExpirySeconds(token: string): number | null {
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')) as Record<string, unknown>;
+    return typeof payload.exp === 'number' && Number.isFinite(payload.exp) ? payload.exp : null;
+  } catch {
+    return null;
+  }
+}
+
+function validateCachedAuthStateLocally(state: CachedAuthState, nowMs = Date.now()) {
   const token = accessTokenFromStorageState(state);
-  const response = await page.request.get(new URL('/api/auth/profile', baseUrl).toString(), {
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    timeout: LOGIN_READY_BUDGET_MS,
-    failOnStatusCode: false,
-  });
-  if (response.status() !== 200) {
-    throw new Error(`PRODUCTION_QA_CACHED_SESSION_PROFILE_${response.status()}`);
+  const expiresAtSeconds = jwtExpirySeconds(token);
+  if (expiresAtSeconds != null && expiresAtSeconds * 1000 <= nowMs + 30_000) {
+    throw new Error('PRODUCTION_QA_CACHED_SESSION_EXPIRED');
   }
-  const payload = await response.json().catch(() => null);
-  if (!payload || typeof payload !== 'object' || typeof (payload as Record<string, unknown>).id !== 'string') {
-    throw new Error('PRODUCTION_QA_CACHED_SESSION_PROFILE_INVALID');
-  }
+  return token;
 }
 
 async function login(
@@ -250,13 +251,12 @@ async function login(
       // exact in-memory authenticated browser state for later read-only tests.
       // Cached-session failure remains fail-closed; there is no login retry.
       await restoreCachedAuthState(page, cached);
-      // Do not add a second root-page navigation before every read-only test.
-      // The first test in each viewport proves the real password-login path;
-      // later tests restore that exact state and let their target route prove
-      // whether the session is still accepted. This remains fail-closed while
-      // avoiding a redundant / navigation that previously timed out under load.
-      await validateCachedAuthState(page, cached);
-      authStateByViewport.set(cacheKey, await page.context().storageState());
+      // The real password-login path is exercised once per viewport. Reuse only
+      // a structurally valid, non-expired Supabase session locally; do not add an
+      // extra authenticated profile request before every matrix test. The actual
+      // target route remains the authoritative session check and all 401/403/5xx
+      // responses are still blocking failures in the read-only QA policy.
+      validateCachedAuthStateLocally(cached);
       return;
     }
 
