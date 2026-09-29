@@ -114,9 +114,9 @@ async function fetchUniverse() {
   return {
     rawRows: raw.length,
     buckets: {
-      LARGE: rows.filter((row) => row.marketCap >= 10_000_000_000).sort((a, b) => b.dollarVolume - a.dollarVolume || a.symbol.localeCompare(b.symbol)).slice(160, 180),
-      MID: rows.filter((row) => row.marketCap >= 2_000_000_000 && row.marketCap < 10_000_000_000).sort((a, b) => b.dollarVolume - a.dollarVolume || a.symbol.localeCompare(b.symbol)).slice(100, 120),
-      SMALL: rows.filter((row) => row.marketCap >= 300_000_000 && row.marketCap < 2_000_000_000).sort((a, b) => b.dollarVolume - a.dollarVolume || a.symbol.localeCompare(b.symbol)).slice(240, 280),
+      LARGE: rows.filter((row) => row.marketCap >= 10_000_000_000 && row.dollarVolume >= 10_000_000).sort((a, b) => b.dollarVolume - a.dollarVolume || a.symbol.localeCompare(b.symbol)).slice(0, 80),
+      MID: rows.filter((row) => row.marketCap >= 2_000_000_000 && row.marketCap < 10_000_000_000 && row.dollarVolume >= 5_000_000).sort((a, b) => b.dollarVolume - a.dollarVolume || a.symbol.localeCompare(b.symbol)).slice(0, 100),
+      SMALL: rows.filter((row) => row.marketCap >= 300_000_000 && row.marketCap < 2_000_000_000 && row.dollarVolume >= 2_000_000).sort((a, b) => b.dollarVolume - a.dollarVolume || a.symbol.localeCompare(b.symbol)).slice(0, 120),
     },
   };
 }
@@ -343,6 +343,23 @@ function entryOn5mOrh(candidate, day, { ep = false } = {}) {
   }
   return null;
 }
+function diagnoseEpEntry(candidate, day) {
+  if (!day?.length) return { status: "NO_INTRADAY_DAY", entry: null };
+  const first = day.find((row) => minuteOfDay(row.timestamp) === 570) ?? day[0];
+  const firstIndex = day.indexOf(first);
+  if (firstIndex < 0 || firstIndex + 1 >= day.length) return { status: "OPENING_BAR_MISSING", entry: null };
+  for (let i = firstIndex + 1; i < day.length - 1; i += 1) {
+    if (minuteOfDay(day[i].timestamp) > 660) break;
+    if (day[i].high < first.high) continue;
+    const next = day[i + 1];
+    const lowToDate = minLow(day.slice(0, i + 1));
+    const risk = next.open - lowToDate;
+    if (!(risk > 0)) return { status: "NON_POSITIVE_RISK", entry: null, risk, atrCap: candidate.atr20 * 1.5 };
+    if (risk > candidate.atr20 * 1.5) return { status: "RISK_GT_1_5_ATR", entry: null, risk, atrCap: candidate.atr20 * 1.5 };
+    return { status: "ELIGIBLE", entry: { index: i + 1, entryTime: next.timestamp, rawEntry: next.open, initialStop: lowToDate, stopDistancePct: risk / next.open, trigger: first.high, first5High: first.high }, risk, atrCap: candidate.atr20 * 1.5 };
+  }
+  return { status: "ORH_NOT_REBROKEN_BY_1100", entry: null };
+}
 function exitReturn(entryFill, exitRaw, cost) { return exitRaw * (1 - cost) / entryFill - 1; }
 function simulateCommonBreakout(row, candidate, day, entry, cost) {
   const entryFill = entry.rawEntry * (1 + cost);
@@ -497,7 +514,14 @@ function peadRows(row, earnings) {
 function summarizePead(rows) {
   return Object.fromEntries(PEAD_HORIZONS.map((horizon) => {
     const subset = rows.filter((row) => row.horizonSessions === horizon);
-    return [String(horizon), summarizeTrades(subset.map((row, index) => ({ ...row, entryTime: index, exitTime: index + 1, stopDistancePct: 1 })))];
+    const surprise = subset.map((row) => row.surprisePct).sort((a, b) => a - b);
+    const threshold = surprise.length ? surprise[Math.floor((surprise.length - 1) * 0.75)] : null;
+    const topQuartile = threshold == null ? [] : subset.filter((row) => row.surprisePct >= threshold);
+    const normalize = (values) => summarizeTrades(values.map((row, index) => ({ ...row, entryTime: index, exitTime: index + 1, stopDistancePct: 1 })));
+    return [String(horizon), {
+      allPositive: normalize(subset),
+      topPositiveSurpriseQuartile: { thresholdSurprisePct: threshold, metrics: normalize(topQuartile) },
+    }];
   }));
 }
 async function main() {
@@ -505,7 +529,13 @@ async function main() {
   const requested = Object.entries(universe.buckets).flatMap(([bucket, rows]) => rows.map((row) => ({ ...row, bucket })));
   const dailyFetched = await mapLimit(requested, 10, async (row) => ({ ...row, daily: (await collectYahooStockHistory({ market: "US_STOCK", symbol: row.symbol, startTime: DAILY_START, endTime: DAILY_END })).candles }));
   const dailyUniverse = dailyFetched.filter((result) => result.ok && result.value.daily.length >= 160).map((result) => result.value);
-  if (dailyUniverse.length < 30) throw new Error(`DAILY_UNIVERSE_INSUFFICIENT_${dailyUniverse.length}`);
+  if (dailyUniverse.length < 240) throw new Error(`DAILY_UNIVERSE_INSUFFICIENT_${dailyUniverse.length}`);
+  const rowBySymbol = new Map(dailyUniverse.map((row) => [row.symbol, row]));
+  const earningsResearchUniverse = [
+    ...dailyUniverse.filter((row) => row.bucket === "LARGE").slice(0, 20),
+    ...dailyUniverse.filter((row) => row.bucket === "MID").slice(0, 20),
+    ...dailyUniverse.filter((row) => row.bucket === "SMALL").slice(0, 40),
+  ];
 
   const spy5m = await yahoo5m("SPY");
   const dates = completeDates(spy5m);
@@ -527,7 +557,8 @@ async function main() {
     }
   }
 
-  const earningsResults = await mapLimit(dailyUniverse, 6, async (row) => ({ symbol: row.symbol, earnings: await fetchNasdaqEarnings(row.symbol) }));
+  const earningsRequestSymbols = [...new Set([...earningsResearchUniverse.map((row) => row.symbol), ...epGapCandidates.map((candidate) => candidate.symbol)])];
+  const earningsResults = await mapLimit(earningsRequestSymbols, 6, async (symbol) => ({ symbol, earnings: await fetchNasdaqEarnings(symbol) }));
   const earningsBySymbol = new Map(earningsResults.filter((result) => result.ok).map((result) => [result.value.symbol, result.value.earnings]));
   const earningsAvailableSymbols = [...earningsBySymbol.values()].filter((value) => value.status === "AVAILABLE").length;
 
@@ -535,7 +566,6 @@ async function main() {
   const intradayFetched = await mapLimit(neededIntraday, 5, async (symbol) => ({ symbol, rows: await yahoo5m(symbol) }));
   const intradayBySymbol = new Map(intradayFetched.filter((result) => result.ok && result.value.rows.length).map((result) => [result.value.symbol, groupDays(result.value.rows)]));
 
-  const rowBySymbol = new Map(dailyUniverse.map((row) => [row.symbol, row]));
   const commonNormal = [];
   const commonStress = [];
   for (const [date, candidates] of commonByDate.entries()) {
@@ -563,9 +593,10 @@ async function main() {
     if (volumeRatio30m < 1) continue;
     const earnings = earningsBySymbol.get(candidate.symbol) ?? { status: "UNAVAILABLE", events: [] };
     const event = matchEarningsEvent(earnings.events, candidate.date);
-    epMechanics.push({ ...candidate, volumeRatio30m, catalystConfirmed: Boolean(event), event });
+    const entryDiagnostic = diagnoseEpEntry(candidate, day);
+    epMechanics.push({ ...candidate, volumeRatio30m, catalystConfirmed: Boolean(event), event, entryDiagnostic: { status: entryDiagnostic.status, risk: entryDiagnostic.risk ?? null, atrCap: entryDiagnostic.atrCap ?? null } });
     if (!event) continue;
-    const entry = entryOn5mOrh(candidate, day, { ep: true });
+    const entry = entryDiagnostic.entry;
     if (!entry) continue;
     const normal = simulateEp(row, candidate, day, entry, NORMAL_COST);
     const stress = simulateEp(row, candidate, day, entry, STRESS_COST);
@@ -574,7 +605,7 @@ async function main() {
   }
 
   const pead = [];
-  for (const row of dailyUniverse) pead.push(...peadRows(row, earningsBySymbol.get(row.symbol) ?? { status: "UNAVAILABLE", events: [] }));
+  for (const row of earningsResearchUniverse) pead.push(...peadRows(row, earningsBySymbol.get(row.symbol) ?? { status: "UNAVAILABLE", events: [] }));
 
   const report = {
     schemaVersion: 2,
@@ -614,8 +645,9 @@ async function main() {
       rawNasdaqRows: universe.rawRows,
       requestedSymbols: requested.length,
       dailyReadySymbols: dailyUniverse.length,
-      cohortPolicy: "fresh current-liquidity ranks retained from #1491: LARGE 161-180, MID 101-120, SMALL 241-280",
+      cohortPolicy: "broad current-liquidity approximation reused from #1473: LARGE top80, MID top100, SMALL top120",
       fullUsMarketTop2PctClaimAllowed: false,
+      earningsResearchSymbols: earningsResearchUniverse.length,
     },
     dataSources: {
       daily: "Yahoo public chart 1d",
@@ -669,7 +701,7 @@ async function main() {
       economicSampleCredit: 0,
     },
     limitations: [
-      "This is a bounded fresh current-liquidity cohort, not the entire US market; Qullamaggie's top-1-2% scan is reproduced only inside this bounded cohort.",
+      "This is a 300-symbol broad current-liquidity approximation, not the entire US market; Qullamaggie's top-1-2% scan is reproduced only inside this bounded cohort.",
       "Current Nasdaq membership/liquidity introduces survivorship/current-snapshot bias.",
       "Yahoo public 5m history is bounded to recent history; this is not a multi-year intraday proof.",
       "Common Breakout qualitative terms such as orderly consolidation are converted into fixed, preregistered higher-low/range-tightening rules without parameter search.",
