@@ -172,6 +172,8 @@ async function main() {
   for(const [bucket,rows] of Object.entries(selected)) for(const row of rows) flat.push({...row,bucket});
   const histories=await mapLimit(flat,5,async(row)=>{
     const h=await historyWithRetry(row.symbol);
+    const evalStartIndex=h.candles.findIndex((c)=>c.timestamp>=EVAL_START);
+    if(evalStartIndex<206) throw new Error(`HISTORY_WARMUP_INSUFFICIENT:${row.symbol}:${evalStartIndex}`);
     return {...row,candles:h.candles,providerSymbol:h.providerSymbol};
   });
   const successes=histories.filter((x)=>x.ok).map((x)=>x.value);
