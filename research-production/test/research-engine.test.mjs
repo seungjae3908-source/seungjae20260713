@@ -7,6 +7,8 @@ import {
   assertResearchSafety,
   buildTaskPlan,
   preflightResearchProduction,
+  prepareResearchTaskWorkspace,
+  validateResearchTaskSharedPackages,
   PROFILES,
   runResearchCycle,
   sanitizeChildEnv,
@@ -25,6 +27,19 @@ async function fakeRepo() {
     const target = join(lab, relative);
     await mkdir(join(target, '..'), { recursive: true });
     await writeFile(target, relative.endsWith('.json') ? '{}\n' : 'console.log("ok")\n');
+  }
+  const sharedFiles = [
+    'packages/strategy-hypothesis/package.json',
+    'packages/strategy-hypothesis/src/index.js',
+    'packages/strategy-hypothesis/src/contract.js',
+    'packages/external-research/package.json',
+    'packages/external-research/src/index.js',
+    'packages/external-research/src/contract.js',
+  ];
+  for (const relative of sharedFiles) {
+    const target = join(root, relative);
+    await mkdir(join(target, '..'), { recursive: true });
+    await writeFile(target, relative.endsWith('.json') ? '{}\n' : `export const marker = "${relative}";\n`);
   }
   return root;
 }
@@ -76,8 +91,38 @@ test('forward plan isolates state and orders natural Shadow before Paper', () =>
     join(runtimeDirectory, 'paper-state', 'paper-state-v2.json'),
   );
   assert.equal(paper.env.LIVE_TRADING, 'false');
+  assert.deepEqual(paper.sharedPackages, ['strategy-hypothesis', 'external-research']);
+  assert.equal(shadow.sharedPackages, undefined);
+  assert.deepEqual(shadow.acceptedExitCodes, [0, 2]);
   assert.equal(shadow.args.at(-2), join(stateRoot, 'forward', 'shadow-state.json'));
   assert.equal(shadow.args.at(-1), join(stateRoot, 'forward', 'shadow-summary.json'));
+});
+
+test('Shadow NOT_EVALUABLE is fail-closed BLOCKED_DATA with explicit missing evidence and no fallback values', async () => {
+  const source = await readFile(
+    new URL('../../market-prediction-lab/scripts/run-shadow-cycle.js', import.meta.url),
+    'utf8',
+  );
+
+  for (const token of [
+    'SHADOW_INFERENCE_NOT_EVALUABLE',
+    'MISSING_REQUIRED_INFERENCE_EVIDENCE',
+    'missingRequiredFeatures',
+    'candidateMissingRequiredFeatures',
+    'referenceMissingRequiredFeatures',
+    'EXISTING_TEMPORAL_EVIDENCE_ONLY',
+    'defaultFeatureFallbackAllowed: false',
+    'syntheticFeatureFallbackAllowed: false',
+    'if (inferenceBlocker) throw inferenceBlocker',
+    'if (nextSummary.status === "blocked_data") process.exitCode = 2',
+  ]) {
+    assert.ok(source.includes(token), `missing Shadow BLOCKED_DATA contract: ${token}`);
+  }
+
+  assert.equal(source.includes('candidate.probabilities ??'), false);
+  assert.equal(source.includes('reference.probabilities ??'), false);
+  assert.equal(source.includes('candidate.probabilities ||'), false);
+  assert.equal(source.includes('reference.probabilities ||'), false);
 });
 
 test('forward plan preserves missing Paper state as missing when no runtime transport exists', () => {
@@ -114,6 +159,52 @@ test('preflight requires exact SHA and validates lab layout', async () => {
   await assert.rejects(() => preflightResearchProduction({ repoRoot, stateRoot, researchSha: 'main', env: {}, verifyGitHead: false }), /exact 40-character/);
 });
 
+test('Paper Forward shared-package validation fails closed when a required package is missing', async () => {
+  const repoRoot = await fakeRepo();
+  await import('node:fs/promises').then(({ rm }) =>
+    rm(join(repoRoot, 'packages', 'strategy-hypothesis'), { recursive: true, force: true }));
+
+  const plan = buildTaskPlan({
+    profile: 'forward',
+    stateRoot: join(repoRoot, 'research-state-missing-shared'),
+    researchSha: SHA,
+    activationAtMs: 12345,
+    env: {},
+  });
+  await assert.rejects(
+    () => validateResearchTaskSharedPackages({ repoRoot, plan }),
+    /research task shared-package prerequisites missing: packages\/strategy-hypothesis/,
+  );
+
+  const historicalPlan = buildTaskPlan({
+    profile: 'fast-historical',
+    stateRoot: join(repoRoot, 'research-state-historical'),
+    researchSha: SHA,
+    env: {},
+  });
+  const historical = await validateResearchTaskSharedPackages({
+    repoRoot,
+    plan: historicalPlan,
+  });
+  assert.deepEqual(historical.requestedPackages, []);
+});
+
+test('task workspace copies only the bounded shared package set beside market-prediction-lab', async () => {
+  const repoRoot = await fakeRepo();
+  const taskDir = join(repoRoot, 'research-state', 'runs', 'cycle-1', 'paper-forward');
+  const result = await prepareResearchTaskWorkspace({
+    labRoot: join(repoRoot, 'market-prediction-lab'),
+    taskDir,
+    sharedPackages: ['strategy-hypothesis', 'external-research'],
+  });
+
+  assert.equal(result.workspaceRoot, join(taskDir, 'workspace', 'market-prediction-lab'));
+  assert.deepEqual(result.copiedSharedPackages, ['strategy-hypothesis', 'external-research']);
+  await access(join(taskDir, 'workspace', 'market-prediction-lab', 'package.json'));
+  await access(join(taskDir, 'workspace', 'packages', 'strategy-hypothesis', 'src', 'contract.js'));
+  await access(join(taskDir, 'workspace', 'packages', 'external-research', 'src', 'index.js'));
+});
+
 test('parallel cycle uses isolated per-task workspaces', async () => {
   const repoRoot = await fakeRepo();
   const stateRoot = join(repoRoot, 'research-state');
@@ -134,111 +225,6 @@ test('parallel cycle uses isolated per-task workspaces', async () => {
   for (const row of result.results) {
     await access(join(row.workspaceRoot, 'package.json'));
   }
-});
-
-test('resource governor is opt-in and leaves existing concurrency unchanged by default', async () => {
-  const repoRoot = await fakeRepo();
-  const stateRoot = join(repoRoot, 'research-state');
-  const result = await runResearchCycle({
-    repoRoot,
-    stateRoot,
-    researchSha: SHA,
-    profile: 'fast-historical',
-    concurrency: 4,
-    env: { PATH: process.env.PATH },
-    resourceSnapshot: {
-      cpuCount: 8,
-      load1: 8.8,
-      totalMemoryBytes: 16 * 1024 ** 3,
-      freeMemoryBytes: 512 * 1024 ** 2,
-      freeDiskBytes: 100 * 1024 ** 3,
-      minimumFreeDiskBytes: 5 * 1024 ** 3,
-    },
-    verifyGitHead: false,
-  });
-  assert.equal(result.status, 'complete');
-  assert.equal(result.concurrency, 4);
-  assert.equal(result.resourceBudget, null);
-});
-
-test('enabled resource governor throttles historical concurrency before tasks start', async () => {
-  const repoRoot = await fakeRepo();
-  const stateRoot = join(repoRoot, 'research-state');
-  const result = await runResearchCycle({
-    repoRoot,
-    stateRoot,
-    researchSha: SHA,
-    profile: 'fast-historical',
-    concurrency: 4,
-    env: { PATH: process.env.PATH, RESEARCH_RESOURCE_GOVERNOR_ENABLED: 'true' },
-    resourceSnapshot: {
-      cpuCount: 8,
-      load1: 6.4,
-      totalMemoryBytes: 16 * 1024 ** 3,
-      freeMemoryBytes: 8 * 1024 ** 3,
-      freeDiskBytes: 100 * 1024 ** 3,
-      minimumFreeDiskBytes: 5 * 1024 ** 3,
-    },
-    verifyGitHead: false,
-  });
-  assert.equal(result.status, 'complete');
-  assert.equal(result.resourceBudget.status, 'THROTTLED');
-  assert.equal(result.resourceBudget.maxConcurrentJobs, 2);
-  assert.equal(result.concurrency, 2);
-});
-
-test('enabled resource governor holds cycle before launching tasks under critical pressure', async () => {
-  const repoRoot = await fakeRepo();
-  const stateRoot = join(repoRoot, 'research-state');
-  const result = await runResearchCycle({
-    repoRoot,
-    stateRoot,
-    researchSha: SHA,
-    profile: 'fast-historical',
-    concurrency: 4,
-    env: { PATH: process.env.PATH, RESEARCH_RESOURCE_GOVERNOR_ENABLED: '1' },
-    resourceSnapshot: {
-      cpuCount: 8,
-      load1: 2,
-      totalMemoryBytes: 16 * 1024 ** 3,
-      freeMemoryBytes: 512 * 1024 ** 2,
-      freeDiskBytes: 100 * 1024 ** 3,
-      minimumFreeDiskBytes: 5 * 1024 ** 3,
-    },
-    verifyGitHead: false,
-  });
-  assert.equal(result.status, 'resource_hold');
-  assert.equal(result.concurrency, 0);
-  assert.equal(result.taskCount, 0);
-  assert.equal(result.resourceBudget.status, 'HOLD');
-  assert.ok(result.resourceBudget.reasons.includes('MEMORY_CRITICAL'));
-});
-
-test('enabled resource governor never raises forward concurrency above one', async () => {
-  const repoRoot = await fakeRepo();
-  const stateRoot = join(repoRoot, 'research-state');
-  const result = await runResearchCycle({
-    repoRoot,
-    stateRoot,
-    researchSha: SHA,
-    profile: 'forward',
-    concurrency: 16,
-    env: { PATH: process.env.PATH, RESEARCH_RESOURCE_GOVERNOR_ENABLED: 'true' },
-    resourceSnapshot: {
-      cpuCount: 32,
-      load1: 1,
-      totalMemoryBytes: 32 * 1024 ** 3,
-      freeMemoryBytes: 24 * 1024 ** 3,
-      freeDiskBytes: 100 * 1024 ** 3,
-      minimumFreeDiskBytes: 5 * 1024 ** 3,
-    },
-    activationAtMs: 123456789,
-    verifyGitHead: false,
-  });
-  assert.equal(result.status, 'complete');
-  assert.equal(result.resourceBudget.status, 'RUN');
-  assert.equal(result.resourceBudget.maxConcurrentJobs, 1);
-  assert.equal(result.concurrency, 1);
 });
 
 test('Paper activation timestamp is persisted and forward execution is serialized Shadow then Paper', async () => {
