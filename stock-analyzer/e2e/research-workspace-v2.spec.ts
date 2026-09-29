@@ -24,6 +24,37 @@ const oneShotInsufficient={schemaVersion:'research-one-shot-review-v15',availabl
  limitations:['Video content was insufficient for reviewed rules.'],groq:null,missingRuleKinds:[],
  authority:{readOnly:true,providerCallsFromRead:0,automaticBinding:false,automaticCompiler:false,automaticBacktest:false,
   automaticAdoption:false,profitabilityProven:false,executionAuthority:'NONE'}};
+const promotionBridgeFixture={
+ contract:'research-promotion-readonly-bridge-v1',status:'VALIDATION_COLLECTING',generatedAt:'2026-09-26T09:00:00.000Z',
+ candidate:{candidateId:'candidate-v1',strategyId:'SYNTH_RESEARCH_V1',strategyVersion:'v1',parameterHash:'p'.repeat(64),researchCodeSha:'1'.repeat(40),
+  market:'CRYPTO_FUTURES',timeframe:'4H',sidePolicy:'LONG_SHORT',accountMode:'PAPER',costPolicyVersion:'cost-v1',executionPolicyVersion:'exec-v1'},
+ scannerProfile:null,evidence:{trainN:12,validationN:3,oosN:0,settlementN:0,fullCostReady:false,validationComplete:false,oosComplete:false,profitabilityProven:false},
+ blockers:['VALIDATION_SAMPLE_INCOMPLETE'],automaticAdoptionAllowed:false,paperHandoffAllowed:false,scannerMutationAllowed:false,liveTradingAllowed:false,
+ privateTradingApiAllowed:false,orderAllowed:false,executionAuthority:'NONE'};
+const adoptionReviewFixture={
+ contract:'research-adoption-review-gate-v1',status:'RESEARCH_BRIDGE_BLOCKED',generatedAt:'2026-09-26T09:00:00.000Z',canonicalOwner:'#547',
+ bridgeStatus:'VALIDATION_COLLECTING',candidateAligned:true,
+ evidence:{researchCodeSha:'1'.repeat(40),strategyId:'SYNTH_RESEARCH_V1',parameterHash:'p'.repeat(64),statisticalEvidenceStatus:'PENDING',
+  statisticalDecisionStatus:'PENDING',preHoldoutGateStatus:'BLOCKED',oosN:0,walkForwardN:0,finalHoldoutN:0,shadowN:0,paperN:0,settledN:0,
+  allInCostComplete:false,admissionGrade:false,frozenResearchCandidate:false,finalHoldoutNotOpened:true,oneShotFinalHoldoutReady:false,unresolvedCostDimensions:['slippage']},
+ blockers:['RESEARCH_BRIDGE_NOT_READY'],automaticAdoptionAllowed:false,humanReviewRequired:true,paperHandoffAllowed:false,scannerMutationAllowed:false,
+ liveTradingAllowed:false,privateTradingApiAllowed:false,orderAllowed:false,executionAuthority:'NONE'};
+test('strategy research tab reuses canonical formula and registry owners without cloning their engines', () => {
+  const workspacePage=readFileSync(new URL('../src/pages/research-center-workspace.tsx',import.meta.url),'utf8');
+  const lifecycle=readFileSync(new URL('../src/components/research-strategy-lifecycle.tsx',import.meta.url),'utf8');
+  const formula=readFileSync(new URL('../../market-prediction-lab/src/autonomous-strategy-formula-generator-v1.js',import.meta.url),'utf8');
+  const registry=readFileSync(new URL('../../market-prediction-lab/src/strategy-registry.js',import.meta.url),'utf8');
+  expect(workspacePage).toContain("value: 'strategy'");
+  expect(workspacePage).toContain('<ResearchWorkspacePanel />');
+  expect(lifecycle).toContain('fetchResearchPromotionBridge');
+  expect(lifecycle).toContain('fetchResearchAdoptionReview');
+  expect(formula).toContain('"CROSS_ABOVE"');
+  expect(formula).toContain('arbitraryExecutableCodeAllowed: false');
+  expect(registry).toContain('livePromotionAllowed: false');
+  expect(registry).toContain('finalHoldoutExecutionAllowed: false');
+  expect(lifecycle).not.toContain('eval(');
+});
+
 test('AI chat user surface exposes factual provider and fallback metadata without secrets', () => {
   const aiChat = readFileSync(new URL('../src/pages/ai-chat.tsx', import.meta.url), 'utf8');
   expect(aiChat).toContain('data-testid="ai-chat-provider-meta"');
@@ -56,18 +87,26 @@ async function setup(page:Page,payload:unknown={available:true,workspace},status
     if(path==='/api/research/video/evidence/workspace/worker')return route.fulfill({status:workerStatus,contentType:'application/json',body:JSON.stringify(workerPayload)});
     if(path==='/api/research/video/evidence/workspace/orchestrator')return route.fulfill({status:orchestratorStatus,contentType:'application/json',body:JSON.stringify(orchestratorPayload)});
     if(path==='/api/research/video/evidence/workspace/one-shot-review')return route.fulfill({status:oneShotStatus,contentType:'application/json',body:JSON.stringify(oneShotPayload)});
+    if(path==='/api/strategy-promotion/research-bridge')return route.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,bridge:promotionBridgeFixture})});
+    if(path==='/api/strategy-promotion/research-adoption-review')return route.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,adoptionReview:adoptionReviewFixture})});
     if(path==='/api/research/video/evidence/workspace')return route.fulfill({status,contentType:'application/json',body:JSON.stringify(payload)});
     if(path==='/api/research/video/evidence')return route.fulfill({contentType:'application/json',body:JSON.stringify({available:false,dataState:'UNKNOWN'})});
     return route.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,items:[],rows:[],results:[]})});
   });
   await page.goto('/research-center');
-  await page.getByRole('button',{name:'영상',exact:true}).click();
-  await page.getByRole('button',{name:'전략·백테스트',exact:true}).click();
+  await page.getByRole('button',{name:'전략 연구',exact:true}).click();
   return requests;
 }
 for (const width of [390,768,1024,1440]) test(`mounted workspace filters and disabled adoption ${width}px`,async({page},testInfo)=>{
   await page.setViewportSize({width,height:900});const requests=await setup(page);
   const panel=page.getByTestId('research-workspace-panel');await expect(panel).toBeVisible();
+  const lifecycle=panel.getByTestId('research-strategy-lifecycle');await expect(lifecycle).toBeVisible();
+  await expect(lifecycle).toContainText('수식 → 검증 → Registry → 승격 검토');
+  await expect(lifecycle).toContainText('SYNTH_RESEARCH_V1');
+  await expect(lifecycle).toContainText('TRAIN');
+  await expect(lifecycle.getByTestId('research-formula-dsl')).toContainText('CROSS_ABOVE / CROSS_BELOW');
+  await expect(lifecycle.getByRole('link',{name:'백테스터 열기'})).toHaveAttribute('href',/backtests/);
+  await expect(lifecycle.getByRole('link',{name:'승격 근거 전체 보기'})).toHaveAttribute('href',/strategy-promotion/);
   await expect(panel.getByTestId('workspace-strategy')).toHaveCount(2);
   const providerPanel=panel.getByTestId('research-provider-status');
   await expect(providerPanel.locator('[data-provider]')).toHaveCount(3);
@@ -91,6 +130,8 @@ for (const width of [390,768,1024,1440]) test(`mounted workspace filters and dis
   const workerCalls=requests.filter(x=>x.path.endsWith('/workspace/worker'));expect(workerCalls.length).toBeGreaterThan(0);expect(workerCalls.every(x=>x.method==='GET'&&x.hasAuth)).toBe(true);
   const orchestratorCalls=requests.filter(x=>x.path.endsWith('/workspace/orchestrator'));expect(orchestratorCalls.length).toBeGreaterThan(0);expect(orchestratorCalls.every(x=>x.method==='GET'&&x.hasAuth)).toBe(true);
   const oneShotCalls=requests.filter(x=>x.path.endsWith('/workspace/one-shot-review'));expect(oneShotCalls.length).toBeGreaterThan(0);expect(oneShotCalls.every(x=>x.method==='GET'&&x.hasAuth)).toBe(true);
+  const bridgeCalls=requests.filter(x=>x.path==='/api/strategy-promotion/research-bridge');expect(bridgeCalls.length).toBeGreaterThan(0);expect(bridgeCalls.every(x=>x.method==='GET'&&x.hasAuth)).toBe(true);
+  const adoptionCalls=requests.filter(x=>x.path==='/api/strategy-promotion/research-adoption-review');expect(adoptionCalls.length).toBeGreaterThan(0);expect(adoptionCalls.every(x=>x.method==='GET'&&x.hasAuth)).toBe(true);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth-window.innerWidth)).toBeLessThanOrEqual(2);
 });
 test('unavailable registry is not rendered as a zero-return result',async({page})=>{
