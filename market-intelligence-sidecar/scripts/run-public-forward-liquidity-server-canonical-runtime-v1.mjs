@@ -113,6 +113,85 @@ async function remoteMainSha() {
   return exactSha(branch?.commit?.sha, 'SERVER_CANONICAL_REMOTE_MAIN_INVALID');
 }
 
+async function githubIssueComment(commentId) {
+  const id = positiveInteger(commentId, 'SERVER_CANONICAL_GITHUB_COMMENT_ID_INVALID');
+  return githubJson(`/issues/comments/${id}`);
+}
+
+async function verifyProtectedAuthorityComments({
+  targetSha,
+  activationReceiptCommentId,
+  bindingDigest,
+  authorityCommentId,
+  authorizedAtMs,
+} = {}) {
+  const [receipt, authority] = await Promise.all([
+    githubIssueComment(activationReceiptCommentId),
+    githubIssueComment(authorityCommentId),
+  ]);
+  const owner = REPOSITORY.split('/')[0];
+  const receiptBody = [
+    '/authorize-public-only-partial-fill-v3-schedule-activation',
+    targetSha,
+    bindingDigest,
+  ].join(' ');
+  if (Number(receipt?.id) !== activationReceiptCommentId
+    || receipt?.user?.login !== owner
+    || receipt?.author_association !== 'OWNER'
+    || String(receipt?.body ?? '').trim() !== receiptBody) {
+    throw new Error('SERVER_CANONICAL_V3_OWNER_RECEIPT_INVALID');
+  }
+
+  const authorityBody = [
+    '/activate-public-forward-liquidity-server-canonical-v1',
+    targetSha,
+    String(activationReceiptCommentId),
+    bindingDigest,
+  ].join(' ');
+  if (Number(authority?.id) !== authorityCommentId
+    || authority?.user?.login !== owner
+    || authority?.author_association !== 'OWNER'
+    || String(authority?.body ?? '').trim() !== authorityBody
+    || Date.parse(authority?.created_at ?? '') !== authorizedAtMs) {
+    throw new Error('SERVER_CANONICAL_OWNER_CUTOVER_AUTHORITY_INVALID');
+  }
+
+  const since = encodeURIComponent(receipt?.created_at ?? '');
+  let page = 1;
+  let latest = null;
+  while (page <= 20) {
+    const response = await githubJson(
+      `/issues/23/comments?since=${since}&per_page=100&page=${page}`,
+    );
+    if (!Array.isArray(response)) {
+      throw new Error('SERVER_CANONICAL_RELEASE_COMMENTS_INVALID');
+    }
+    for (const comment of response) {
+      if (comment?.user?.login !== owner || comment?.author_association !== 'OWNER') continue;
+      const parts = String(comment?.body ?? '').trim().split(/\s+/u);
+      if (parts.length !== 3
+        || ![
+          '/authorize-public-only-partial-fill-v3-schedule-activation',
+          '/revoke-public-only-partial-fill-v3-schedule-activation',
+        ].includes(parts[0])
+        || parts[1] !== targetSha
+        || parts[2] !== bindingDigest) continue;
+      latest = {
+        commentId: Number(comment.id),
+        action: parts[0].startsWith('/authorize-') ? 'AUTHORIZE' : 'REVOKE',
+      };
+    }
+    if (response.length < 100) break;
+    page += 1;
+  }
+  if (!latest
+    || latest.commentId !== activationReceiptCommentId
+    || latest.action !== 'AUTHORIZE') {
+    throw new Error('SERVER_CANONICAL_V3_OWNER_RECEIPT_NOT_LATEST');
+  }
+  return Object.freeze({ receipt, authority });
+}
+
 async function requiredCi(targetSha) {
   const combined = await githubJson(`/commits/${targetSha}/status?per_page=100`);
   const statuses = Array.isArray(combined?.statuses) ? [...combined.statuses] : [];
@@ -343,6 +422,13 @@ async function prepareActivation() {
   );
   const remote = await remoteMainSha();
   if (remote !== targetSha) throw new Error('SERVER_CANONICAL_MAIN_MOVED_BEFORE_ACTIVATION');
+  const authorityEvidence = await verifyProtectedAuthorityComments({
+    targetSha,
+    activationReceiptCommentId,
+    bindingDigest,
+    authorityCommentId,
+    authorizedAtMs,
+  });
   const ci = await requiredCi(targetSha);
   if (ci.workflowId !== REQUIRED_WORKFLOW_ID) throw new Error('SERVER_CANONICAL_REQUIRED_CI_WORKFLOW_INVALID');
   const shadow = await shadowEvidenceSnapshot({
@@ -397,9 +483,9 @@ async function prepareActivation() {
     targetMainSha: targetSha,
     activationBindingDigest: bindingDigest,
     commentId: activationReceiptCommentId,
-    authorAssociation: 'OWNER',
-    actorLogin: REPOSITORY.split('/')[0],
-    body: `/authorize-public-only-partial-fill-v3-schedule-activation ${targetSha} ${bindingDigest}`,
+    authorAssociation: authorityEvidence.receipt.author_association,
+    actorLogin: authorityEvidence.receipt.user.login,
+    body: String(authorityEvidence.receipt.body ?? '').trim(),
     latestForTargetBinding: true,
   });
   const record = prepareProtectedServerCanonicalActivation({
