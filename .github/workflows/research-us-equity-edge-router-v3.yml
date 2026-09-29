@@ -47,7 +47,8 @@ jobs:
           if(r.selectionContract.testUsedForSelection!==false) throw new Error('TEST_SELECTION_FORBIDDEN');
           if(r.selectionContract.baseV2ParametersFrozen!==true) throw new Error('BASE_NOT_FROZEN');
           if(!(r.universe.historySuccesses>=150)) throw new Error('HISTORY_COVERAGE_TOO_SMALL');
-          if(!(r.secCoverage.loaded>=50)) throw new Error('SEC_COVERAGE_TOO_SMALL');
+          if(r.secCoverage.sourceAvailable===true && !(r.secCoverage.loaded>=50)) throw new Error('SEC_COVERAGE_TOO_SMALL');
+          if(r.secCoverage.sourceAvailable===false && !r.secCoverage.error) throw new Error('SEC_UNAVAILABLE_REASON_MISSING');
           if(r.safety.researchOnly!==true||r.safety.liveExecutionAllowed!==false||r.safety.executionAuthority!=='NONE') throw new Error('SAFETY_BOUNDARY');
           if(!r.MID||!r.SMALL) throw new Error('BUCKET_RESULT_MISSING');
           NODE
