@@ -61,7 +61,7 @@ jobs:
           }
           if(!mop||mop.parameterSearch!==false||mop.volatilityScaledCanonicalReplication!==false||mop.canonicalMopFuturesReplicationClaimAllowed!==false) throw new Error('MOP_TRUTH');
           if(r.promotionAssessment?.automaticPromotionAllowed!==false||r.promotionAssessment?.economicSampleCredit!==0) throw new Error('PROMOTION');
-          if(r.promotionAssessment?.LIU_TSYVINSKI_CRYPTO_WEEKLY_MOMENTUM_V1?.automaticPromotionAllowed!==false) throw new Error('LIU_PROMOTION');
+          if(r.promotionAssessment?.LIU_TSYVINSKI_CRYPTO_WEEKLY_MOMENTUM_V1?.status!=='RESEARCH_HOLD_TEMPORAL_AND_CONCENTRATION_FAILED'||r.promotionAssessment?.LIU_TSYVINSKI_CRYPTO_WEEKLY_MOMENTUM_V1?.automaticPromotionAllowed!==false) throw new Error('LIU_PROMOTION');
           if(r.promotionAssessment?.LIU_TSYVINSKI_CRYPTO_WEEKLY_MOMENTUM_V1?.status!=='RESEARCH_HOLD_REGIME_DEPENDENT_AND_CONCENTRATED') throw new Error('LIU_STATUS');
           if(r.promotionAssessment?.MOP_TSMOM_12M_1M_SPOT_PROXY_V1?.automaticPromotionAllowed!==false) throw new Error('MOP_PROMOTION');
           if(r.safeguards?.researchOnly!==true||r.safeguards?.publicDataOnly!==true||r.safeguards?.privateAccountRequestAllowed!==false||r.safeguards?.orderRouteCalled!==false||r.safeguards?.actualOrders!==0||r.safeguards?.executionAuthority!=='NONE') throw new Error('SAFETY');
