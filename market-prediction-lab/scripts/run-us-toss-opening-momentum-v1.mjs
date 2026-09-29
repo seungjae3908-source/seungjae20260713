@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { collectYahooStockHistory } from "../src/yahoo-stock-history.js";
@@ -9,6 +10,10 @@ const DAILY_END = Date.parse("2026-09-30T00:00:00.000Z");
 const ACADEMIC_FORMATION_MONTHS = Object.freeze(["2025-09", "2025-10", "2025-11", "2025-12", "2026-01", "2026-02"]);
 const JT_MOMENTUM_DOI = "10.1111/j.1540-6261.1993.tb04702.x";
 const GH_52W_HIGH_DOI = "10.1111/j.1540-6261.2004.00695.x";
+const PIT_SAMPLE_SIZE = 180;
+const PIT_MIN_HISTORY_READY = 120;
+const ALPHA_VANTAGE_BASE = "https://www.alphavantage.co/query";
+const PIT_SAMPLE_SEED = "US_PIT_REFERENCE_SAMPLE_V1";
 const NORMAL_COST = 0.0015;
 const STRESS_COST = NORMAL_COST * 1.5;
 const COMMON_CANDIDATES_PER_DAY = 5;
@@ -626,6 +631,253 @@ function decileSummary(records, signalKey) {
     tradableLongShortClaimAllowed: false,
   };
 }
+function parseCsvLine(line) {
+  const cells = [];
+  let current = "";
+  let quoted = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (quoted && line[i + 1] === '"') {
+        current += '"';
+        i += 1;
+      } else {
+        quoted = !quoted;
+      }
+      continue;
+    }
+    if (ch === "," && !quoted) {
+      cells.push(current);
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  cells.push(current);
+  return cells.map((cell) => cell.trim());
+}
+function monthEndDate(month) {
+  const [year, monthNumber] = month.split("-").map(Number);
+  return new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10);
+}
+function pitSampleHash(symbol) {
+  return createHash("sha256").update(`${PIT_SAMPLE_SEED}:${symbol}`).digest("hex");
+}
+function cleanPitTicker(value) {
+  const symbol = String(value ?? "").trim().toUpperCase();
+  return /^[A-Z][A-Z0-9.-]{0,9}$/.test(symbol) ? symbol : null;
+}
+async function alphaListingStatus(date = null) {
+  const apiKey = String(process.env.ALPHA_VANTAGE_API_KEY ?? "").trim();
+  if (!apiKey) return { status: "BLOCKED_ALPHA_VANTAGE_KEY_MISSING", date, rows: [], error: "ALPHA_VANTAGE_API_KEY_MISSING" };
+  const url = new URL(ALPHA_VANTAGE_BASE);
+  url.searchParams.set("function", "LISTING_STATUS");
+  if (date) url.searchParams.set("date", date);
+  url.searchParams.set("state", "active");
+  url.searchParams.set("apikey", apiKey);
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error("ALPHA_VANTAGE_LISTING_STATUS_TIMEOUT")), 20_000);
+    try {
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: { accept: "text/csv,text/plain,*/*", "user-agent": "reference-recipe-pit-research/1.0" },
+      });
+      if (!response.ok) throw new Error(`ALPHA_VANTAGE_LISTING_STATUS_HTTP_${response.status}`);
+      const text = await response.text();
+      if (/thank you for using alpha vantage|rate limit|information|premium/i.test(text) && !/^symbol,/im.test(text)) {
+        throw new Error("ALPHA_VANTAGE_LISTING_STATUS_THROTTLED_OR_UNAVAILABLE");
+      }
+      const lines = text.trim().split(/\r?\n/u).filter(Boolean);
+      const header = lines.length ? parseCsvLine(lines[0]).map((value) => value.toLowerCase()) : [];
+      if (!header.includes("symbol") || !header.includes("assettype") || !header.includes("status")) {
+        throw new Error("ALPHA_VANTAGE_LISTING_STATUS_SCHEMA");
+      }
+      const index = Object.fromEntries(header.map((name, position) => [name, position]));
+      const rows = lines.slice(1).map((line) => {
+        const cells = parseCsvLine(line);
+        const symbol = cleanPitTicker(cells[index.symbol]);
+        return {
+          symbol,
+          name: String(cells[index.name] ?? "").trim(),
+          exchange: String(cells[index.exchange] ?? "").trim().toUpperCase(),
+          assetType: String(cells[index.assettype] ?? "").trim().toUpperCase(),
+          ipoDate: String(cells[index.ipodate] ?? "").trim() || null,
+          delistingDate: String(cells[index.delistingdate] ?? "").trim() || null,
+          listingStatus: String(cells[index.status] ?? "").trim().toUpperCase(),
+        };
+      }).filter((row) =>
+        row.symbol
+        && row.assetType === "STOCK"
+        && ["NASDAQ", "NYSE", "NYSE MKT", "AMEX"].includes(row.exchange)
+        && row.listingStatus === "ACTIVE"
+      );
+      if (rows.length < 500) throw new Error(`ALPHA_VANTAGE_LISTING_STATUS_INSUFFICIENT_${rows.length}`);
+      return { status: "AVAILABLE", date, rows };
+    } catch (error) {
+      lastError = error;
+      await sleep(1_500 * (attempt + 1));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return { status: "BLOCKED_ALPHA_VANTAGE_LISTING_STATUS", date, rows: [], error: String(lastError?.message ?? lastError) };
+}
+function deterministicPitSample(rows) {
+  return [...rows]
+    .sort((left, right) => pitSampleHash(left.symbol).localeCompare(pitSampleHash(right.symbol)) || left.symbol.localeCompare(right.symbol))
+    .slice(0, PIT_SAMPLE_SIZE);
+}
+function academicRecord(row, month) {
+  const candles = row.daily;
+  const index = monthEndIndex(candles, month);
+  if (index < 252 || candles[index].close < 5) return null;
+  const forward = sixMonthForwardReturn(candles, index, NORMAL_COST);
+  if (!forward) return null;
+  const sixMonthEnd = index - 21;
+  const sixMonthStart = sixMonthEnd - 126;
+  if (sixMonthStart < 0) return null;
+  const jt6mSignal = candles[sixMonthEnd].close / candles[sixMonthStart].close - 1;
+  const high52 = maxHigh(candles.slice(index - 251, index + 1));
+  if (!(high52 > 0)) return null;
+  return {
+    symbol: row.symbol,
+    bucket: row.bucket ?? "PIT",
+    sector: row.sector ?? "PIT_UNKNOWN",
+    formationMonth: month,
+    jt6mSignal,
+    high52Ratio: candles[index].close / high52,
+    ...forward,
+  };
+}
+function aggregateFormationMetric(formations, key) {
+  const usable = formations.map((formation) => formation[key]).filter((value) => value?.top && value?.bottom);
+  return {
+    formationCount: usable.length,
+    meanTopDecileReturn: usable.length ? mean(usable.map((value) => value.top.meanNetReturn)) : null,
+    meanBottomDecileReturn: usable.length ? mean(usable.map((value) => value.bottom.meanNetReturn)) : null,
+    meanDescriptiveTopMinusBottomReturn: usable.length ? mean(usable.map((value) => value.descriptiveTopMinusBottomMeanReturn)) : null,
+    canonicalReplicationClaimAllowed: false,
+  };
+}
+async function buildPitMembershipMomentumStress() {
+  const apiKeyPresent = Boolean(String(process.env.ALPHA_VANTAGE_API_KEY ?? "").trim());
+  if (!apiKeyPresent) {
+    return {
+      status: "BLOCKED_ALPHA_VANTAGE_KEY_MISSING",
+      provider: "alpha-vantage-listing-status",
+      providerConfigured: false,
+      selectionUsesCurrentMembership: false,
+      sampleSizePerFormation: PIT_SAMPLE_SIZE,
+      canonicalPitDatasetClaimAllowed: false,
+      formations: [],
+      jtMomentumJ6K6Skip1: { aggregate: aggregateFormationMetric([], "jtMomentumJ6K6Skip1") },
+      high52WeekK6: { aggregate: aggregateFormationMetric([], "high52WeekK6") },
+    };
+  }
+
+  const formationMemberships = [];
+  for (const month of ACADEMIC_FORMATION_MONTHS) {
+    const asOfDate = monthEndDate(month);
+    const listing = await alphaListingStatus(asOfDate);
+    if (listing.status !== "AVAILABLE") {
+      return {
+        status: listing.status,
+        provider: "alpha-vantage-listing-status",
+        providerConfigured: true,
+        selectionUsesCurrentMembership: false,
+        failedFormationMonth: month,
+        error: listing.error ?? null,
+        sampleSizePerFormation: PIT_SAMPLE_SIZE,
+        canonicalPitDatasetClaimAllowed: false,
+        formations: formationMemberships,
+        jtMomentumJ6K6Skip1: { aggregate: aggregateFormationMetric([], "jtMomentumJ6K6Skip1") },
+        high52WeekK6: { aggregate: aggregateFormationMetric([], "high52WeekK6") },
+      };
+    }
+    const sample = deterministicPitSample(listing.rows);
+    formationMemberships.push({ month, asOfDate, sourceRows: listing.rows.length, sample });
+    await sleep(13_000);
+  }
+
+  const latestListing = await alphaListingStatus(null);
+  const latestActive = latestListing.status === "AVAILABLE" ? new Set(latestListing.rows.map((row) => row.symbol)) : null;
+  const unionSymbols = [...new Set(formationMemberships.flatMap((formation) => formation.sample.map((row) => row.symbol)))];
+  const histories = await mapLimit(unionSymbols, 8, async (symbol) => ({
+    symbol,
+    daily: (await collectYahooStockHistory({
+      market: "US_STOCK",
+      symbol,
+      startTime: DAILY_START,
+      endTime: DAILY_END,
+      timeoutMs: 15_000,
+    })).candles,
+  }));
+  const historyBySymbol = new Map(histories.filter((result) => result.ok && result.value.daily.length >= 300).map((result) => [result.value.symbol, result.value.daily]));
+  const historyFailures = histories.filter((result) => !result.ok || !result.value?.daily || result.value.daily.length < 300).map((result, index) => ({
+    symbol: result.ok ? result.value.symbol : unionSymbols[index] ?? null,
+    error: result.ok ? "HISTORY_INSUFFICIENT" : result.error,
+  }));
+
+  const formations = formationMemberships.map((formation) => {
+    const readyRows = formation.sample.map((member) => {
+      const daily = historyBySymbol.get(member.symbol);
+      return daily ? { symbol: member.symbol, bucket: "PIT", sector: "PIT_UNKNOWN", daily } : null;
+    }).filter(Boolean);
+    const records = readyRows.map((row) => academicRecord(row, formation.month)).filter(Boolean);
+    const futureRemovedFromLatest = latestActive
+      ? formation.sample.filter((member) => !latestActive.has(member.symbol)).map((member) => member.symbol)
+      : [];
+    return {
+      month: formation.month,
+      asOfDate: formation.asOfDate,
+      sourceRows: formation.sourceRows,
+      deterministicSampleSize: formation.sample.length,
+      historyReady: readyRows.length,
+      evaluableRecords: records.length,
+      historyCoverage: formation.sample.length ? readyRows.length / formation.sample.length : 0,
+      futureRemovedFromLatestCount: futureRemovedFromLatest.length,
+      futureRemovedFromLatestSymbols: futureRemovedFromLatest,
+      jtMomentumJ6K6Skip1: decileSummary(records, "jt6mSignal"),
+      high52WeekK6: decileSummary(records, "high52Ratio"),
+    };
+  });
+  const minimumHistoryReady = formations.length ? Math.min(...formations.map((formation) => formation.historyReady)) : 0;
+  const status = minimumHistoryReady >= PIT_MIN_HISTORY_READY ? "PIT_MEMBERSHIP_STRESS_COMPLETE" : "BLOCKED_PIT_HISTORY_COVERAGE";
+
+  return {
+    status,
+    provider: "alpha-vantage-listing-status",
+    providerConfigured: true,
+    providerHistoricalMembershipAsOfDate: true,
+    selectionUsesCurrentMembership: false,
+    currentMembershipUsedForSelection: false,
+    currentMembershipUsedForRemovedNameDiagnosticOnly: true,
+    deterministicSampleSeed: PIT_SAMPLE_SEED,
+    sampleSizePerFormation: PIT_SAMPLE_SIZE,
+    minimumHistoryReadyRequired: PIT_MIN_HISTORY_READY,
+    minimumHistoryReadyObserved: minimumHistoryReady,
+    unionSymbols: unionSymbols.length,
+    yahooHistoryReadySymbols: historyBySymbol.size,
+    yahooHistoryFailures: historyFailures.slice(0, 30),
+    latestListingDiagnosticAvailable: Boolean(latestActive),
+    canonicalPitDatasetClaimAllowed: false,
+    corporateActionReceiptReady: false,
+    delistedTerminalPricePolicyReady: false,
+    fullUniverseReplicationClaimAllowed: false,
+    formations,
+    jtMomentumJ6K6Skip1: {
+      recipeId: "CROSS_SECTIONAL_PRICE_MOMENTUM_V1",
+      aggregate: aggregateFormationMetric(formations, "jtMomentumJ6K6Skip1"),
+    },
+    high52WeekK6: {
+      recipeId: "FIFTY_TWO_WEEK_HIGH_MOMENTUM_V1",
+      aggregate: aggregateFormationMetric(formations, "high52WeekK6"),
+    },
+  };
+}
+
 function buildAcademicMomentumBaselines(rows) {
   const formations = [];
   for (const month of ACADEMIC_FORMATION_MONTHS) {
@@ -774,6 +1026,7 @@ async function main() {
   const pead = [];
   for (const row of earningsResearchUniverse) pead.push(...peadRows(row, earningsBySymbol.get(row.symbol) ?? { status: "UNAVAILABLE", events: [] }));
   const academicMomentum = buildAcademicMomentumBaselines(dailyUniverse);
+  const pitMembershipStress = await buildPitMembershipMomentumStress();
 
   const report = {
     schemaVersion: 2,
@@ -869,6 +1122,7 @@ async function main() {
       rows: pead,
     },
     academicMomentum,
+    pitMembershipStress,
     costs: { normalPerSide: NORMAL_COST, stressPerSide: STRESS_COST },
     accountPolicy: ACCOUNT,
     lookahead: {
@@ -913,6 +1167,8 @@ async function main() {
       pitUniverseEvidence: {
         canonicalAdapterOnMain: true,
         adapter: "stock-point-in-time-evidence-adapter-v1",
+        alphaVantageHistoricalMembershipStressStatus: pitMembershipStress.status,
+        historicalMembershipStressUsesCurrentMembershipForSelection: pitMembershipStress.selectionUsesCurrentMembership,
         materializedUsPitDatasetReady: false,
         firstZero: "US_PIT_MEMBERSHIP_REMOVED_LISTINGS_CORPORATE_ACTION_DATASET_NOT_MATERIALIZED",
       },
@@ -938,6 +1194,7 @@ async function main() {
       "Canonical Foster-Olsen-Shevlin SUE needs current EPS, EPS four quarters earlier, and the standard deviation of quarterly EPS changes over prior quarters; those fields are not available in the current repository and remain fail-closed.",
       "No historical guidance, revenue-growth, analyst-revision, news-text, order-book, short-interest, wave/candle or AI overlay is used in the baseline.",
       "Academic momentum and 52-week-high outputs apply a $5 formation-price floor, use current-snapshot symbols, daily approximations to monthly portfolio formation, and do not construct the papers' full overlapping monthly portfolio return series.",
+      "The Alpha Vantage PIT membership stress lane uses historical active membership only for deterministic sampling, but Yahoo history is not canonical removed-listing terminal-price or corporate-action evidence, so it cannot set materializedUsPitDatasetReady=true.",
       "Historical replay is not genuine OOS/Forward, broker fill evidence, or PROFITABILITY_PROVEN.",
     ],
   };
@@ -956,6 +1213,9 @@ async function main() {
     pead5TopDecileMean: report.pead.byHorizon?.["5"]?.analystSueTopDecile?.metrics?.meanNetReturn ?? null,
     jtMomentumSpread: report.academicMomentum.jtMomentumJ6K6Skip1.aggregate.meanDescriptiveTopMinusBottomReturn,
     high52Spread: report.academicMomentum.high52WeekK6.aggregate.meanDescriptiveTopMinusBottomReturn,
+    pitMembershipStatus: report.pitMembershipStress.status,
+    pitMomentumSpread: report.pitMembershipStress.jtMomentumJ6K6Skip1.aggregate.meanDescriptiveTopMinusBottomReturn,
+    pitHigh52Spread: report.pitMembershipStress.high52WeekK6.aggregate.meanDescriptiveTopMinusBottomReturn,
     earningsAvailableSymbols,
   }));
 }
