@@ -63,6 +63,15 @@ function overallState(components: readonly OperationsHealthComponent[]): Operati
   return 'GREEN';
 }
 
+function releaseDecision(
+  state: OperationsHealthState,
+  rollbackTargetKnown: boolean,
+): 'HEALTHY' | 'HOLD' | 'ROLLBACK_RECOMMENDED' | 'MANUAL_RECOVERY_REQUIRED' {
+  if (state === 'GREEN') return 'HEALTHY';
+  if (state === 'BLOCKED') return rollbackTargetKnown ? 'ROLLBACK_RECOMMENDED' : 'MANUAL_RECOVERY_REQUIRED';
+  return 'HOLD';
+}
+
 export async function buildOperationsHealthSnapshot(input: OperationsHealthInput) {
   const env = input.env ?? process.env;
   const checkedAt = (input.now ?? (() => new Date()))().toISOString();
@@ -109,16 +118,20 @@ export async function buildOperationsHealthSnapshot(input: OperationsHealthInput
       ?? 'NONE',
   ).trim().toUpperCase() || 'NONE';
 
+  const state = overallState(components);
+  const rollbackTargetKnown = /^[0-9a-f]{7,64}$/u.test(rollbackSha);
+
   return Object.freeze({
     schemaVersion: 'production-operations-health/v1',
     checkedAt,
-    state: overallState(components),
-    components: Object.freeze(components),
+    state,
+    releaseDecision: releaseDecision(state, rollbackTargetKnown),
     deployment: Object.freeze({
       deploySha: /^[0-9a-f]{7,64}$/u.test(deploySha) ? deploySha : null,
-      rollbackSha: /^[0-9a-f]{7,64}$/u.test(rollbackSha) ? rollbackSha : null,
-      rollbackTargetKnown: /^[0-9a-f]{7,64}$/u.test(rollbackSha),
+      rollbackSha: rollbackTargetKnown ? rollbackSha : null,
+      rollbackTargetKnown,
     }),
+    components: Object.freeze(components),
     executionGates: Object.freeze({
       liveTrading: truthy(env.LIVE_TRADING),
       autoTrading: truthy(env.AUTO_TRADING),
