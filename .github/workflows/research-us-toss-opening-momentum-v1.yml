@@ -1,4 +1,4 @@
-name: Research US Toss Opening Momentum V1
+name: Research US Reference Recipes V2
 
 on:
   pull_request:
@@ -7,25 +7,18 @@ on:
       - market-prediction-lab/scripts/run-us-toss-opening-momentum-v1.mjs
       - .github/workflows/research-us-toss-opening-momentum-v1.yml
       - market-prediction-lab/src/yahoo-stock-history.js
-      - market-prediction-lab/src/adaptive-multi-evidence-price-structure-v2.js
-      - market-prediction-lab/src/adaptive-multi-evidence-point-in-time-v2.js
 
 permissions:
   contents: read
 
 concurrency:
-  group: research-us-toss-opening-v1-${{ github.event.pull_request.number || github.ref }}
+  group: research-us-reference-recipes-v2-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 50
-    environment: production
-    env:
-      TOSS_CLIENT_ID: ${{ secrets.TOSS_CLIENT_ID }}
-      TOSS_CLIENT_SECRET: ${{ secrets.TOSS_CLIENT_SECRET }}
-      TOSS_API_BASE_URL: ${{ vars.TOSS_API_BASE_URL }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,33 +27,36 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Verify read-only market-data boundary
+      - name: Verify public-data and reference-first boundary
         shell: bash
         run: |
           set -Eeuo pipefail
           node --check market-prediction-lab/scripts/run-us-toss-opening-momentum-v1.mjs
-          ! grep -Eiq '/api/v1/orders|X-Tossinvest-Account|LIVE_TRADING|REAL_ORDER_ENABLED|PRIVATE_TRADING_API_ALLOWED|(^|[^A-Za-z])withdraw([^A-Za-z]|$)|(^|[^A-Za-z])transfer([^A-Za-z]|$)|(^|[^A-Za-z])orderSubmitted([^A-Za-z]|$)' market-prediction-lab/scripts/run-us-toss-opening-momentum-v1.mjs
-          test -n "${TOSS_CLIENT_ID:-}"
-          test -n "${TOSS_CLIENT_SECRET:-}"
-      - name: Run fresh-symbol US opening replay
+          grep -Fq 'QULLAMAGGIE_COMMON_BREAKOUT_V1' market-prediction-lab/scripts/run-us-toss-opening-momentum-v1.mjs
+          grep -Fq 'QULLAMAGGIE_EP_V1' market-prediction-lab/scripts/run-us-toss-opening-momentum-v1.mjs
+          grep -Fq 'PEAD_EARNINGS_SURPRISE_V1' market-prediction-lab/scripts/run-us-toss-opening-momentum-v1.mjs
+          ! grep -Eiq 'TOSS_CLIENT_ID|TOSS_CLIENT_SECRET|oauth2/token|/api/v1/orders|X-Tossinvest-Account|PRIVATE_TRADING_API_ALLOWED|REAL_ORDER_ENABLED|LIVE_TRADING|(^|[^A-Za-z])withdraw([^A-Za-z]|$)|(^|[^A-Za-z])transfer([^A-Za-z]|$)' market-prediction-lab/scripts/run-us-toss-opening-momentum-v1.mjs
+      - name: Run public US reference-recipe replay
         working-directory: market-prediction-lab
-        run: node scripts/run-us-toss-opening-momentum-v1.mjs docs/us-toss-opening-momentum-v1.json
-      - name: Assert chronology and safety
+        run: node scripts/run-us-toss-opening-momentum-v1.mjs docs/us-reference-recipes-v2.json
+      - name: Assert chronology, source fidelity and safety
         working-directory: market-prediction-lab
         shell: bash
         run: |
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const r=JSON.parse(fs.readFileSync('docs/us-toss-opening-momentum-v1.json','utf8'));
+          const r=JSON.parse(fs.readFileSync('docs/us-reference-recipes-v2.json','utf8'));
           if(r.status!=='pass') throw new Error('STATUS');
-          if(r.selectionContract.selectedFamilyChosenByCalibrationOnly!==true||r.selectionContract.validationCanOnlyPassOrFailSelectedFamily!==true||r.selectionContract.testUsedForSelection!==false) throw new Error('SELECTION_LEAK');
-          if(!r.lookahead.guardPassed||!r.lookahead.D1UsesPriorCompletedDailyCandle||!r.lookahead.intradayUsesCompleted1mAggregated5m15m||!r.lookahead.entryNext1mOpen) throw new Error('LOOKAHEAD');
-          if(r.universe.selected.length<10) throw new Error('SYMBOL_COVERAGE');
-          if(r.safety.researchOnly!==true||r.safety.marketDataOnly!==true||r.safety.accountHeaderUsed!==false||r.safety.orderRouteCalled!==false||r.safety.executionAuthority!=='NONE') throw new Error('SAFETY');
+          if(r.recipeContract.noInventedCompositeBeforeBaseline!==true||r.recipeContract.noWaveCandleVwapAiOverlayInBaseline!==true||r.recipeContract.winnerSelectionFromThisWindow!==false) throw new Error('REFERENCE_FIRST');
+          if(r.recipeContract.commonBreakout.parameterSearch!==false||r.recipeContract.episodicPivot.parameterSearch!==false||r.recipeContract.pead.parameterSearch!==false) throw new Error('PARAMETER_SEARCH');
+          if(!r.lookahead.D1CandidateUsesOnlyPriorCompletedDailyBars||!r.lookahead.ORHEntryUsesNextCompleted5mOpenAfterTriggerBar||!r.lookahead.lowOfDayStopUsesOnlyLowObservedBeforeEntry||!r.lookahead.peadEntersFirstFullSessionStrictlyAfterReportDate) throw new Error('LOOKAHEAD');
+          if(r.universe.dailyReadySymbols<30) throw new Error('DAILY_COVERAGE');
+          if(r.episodicPivot.trueEpRequiresCatalyst!==true) throw new Error('EP_CATALYST');
+          if(r.safety.researchOnly!==true||r.safety.publicMarketDataOnly!==true||r.safety.privateAccountRequestAllowed!==false||r.safety.orderRouteCalled!==false||r.safety.executionAuthority!=='NONE'||r.safety.economicSampleCredit!==0) throw new Error('SAFETY');
           NODE
       - uses: actions/upload-artifact@v4
         with:
-          name: us-toss-opening-momentum-v1-${{ github.event.pull_request.head.sha }}
-          path: market-prediction-lab/docs/us-toss-opening-momentum-v1.json
+          name: us-reference-recipes-v2-${{ github.event.pull_request.head.sha }}
+          path: market-prediction-lab/docs/us-reference-recipes-v2.json
           if-no-files-found: error
           retention-days: 30
