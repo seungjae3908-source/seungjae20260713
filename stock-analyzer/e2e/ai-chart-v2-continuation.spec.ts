@@ -58,6 +58,7 @@ async function installReadOnlyChartMocks(context: BrowserContext) {
 async function installFuturesChartMocks(context: BrowserContext) {
   const privateTradingRequests: string[] = [];
   let snapshotCalls = 0;
+  let flowCalls = 0;
   await context.route('**/*', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -103,6 +104,35 @@ async function installFuturesChartMocks(context: BrowserContext) {
       });
       return;
     }
+    if (url.pathname === '/api/crypto/futures/BTCUSDT/flow') {
+      flowCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            symbol: 'BTCUSDT',
+            longRatio: 0.52,
+            shortRatio: 0.48,
+            longShortRatio: 1.0833,
+            ratioObservedAt: new Date().toISOString(),
+            longLiquidationAmount: 100,
+            shortLiquidationAmount: 120,
+            liquidationCount: 2,
+            liquidationObservedAt: new Date().toISOString(),
+            status: 'live',
+            updatedAt: new Date().toISOString(),
+            warnings: [],
+            publicDataOnly: true,
+            directionalScoreImpact: 0,
+            probabilityImpact: 0,
+            executionAuthority: 'NONE',
+          },
+        }),
+      });
+      return;
+    }
     if (url.pathname === '/api/quotes') {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ quotes: [] }) });
       return;
@@ -112,6 +142,7 @@ async function installFuturesChartMocks(context: BrowserContext) {
   return {
     privateTradingRequests,
     snapshotCalls: () => snapshotCalls,
+    flowCalls: () => flowCalls,
   };
 }
 
@@ -179,6 +210,7 @@ test('BITGET AI Chart shows one public futures snapshot without promoting it to 
   await expect(page.getByTestId('strategy-mode-SWING')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('ai-chart-v2-signal-overlay')).toContainText('futures-signal-7');
   expect(mock.snapshotCalls()).toBe(1);
+  expect(mock.flowCalls()).toBe(1);
   expect(mock.privateTradingRequests).toEqual([]);
   expect(consoleErrors).toEqual([]);
 });
