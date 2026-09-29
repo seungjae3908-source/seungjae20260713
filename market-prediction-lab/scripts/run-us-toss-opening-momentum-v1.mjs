@@ -1,223 +1,698 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { collectYahooStockHistory } from "../src/yahoo-stock-history.js";
-import { buildAdaptiveMultiEvidencePriceStructureV2 } from "../src/adaptive-multi-evidence-price-structure-v2.js";
-import { ADAPTIVE_MULTI_EVIDENCE_V2_LINEAGE_ID } from "../src/adaptive-multi-evidence-point-in-time-v2.js";
 
-const TOSS_BASE=String(process.env.TOSS_API_BASE_URL??"https://openapi.tossinvest.com").replace(/\/$/,"");
-const EVAL_START=Date.parse("2026-08-03T00:00:00.000Z");
-const EVAL_END=Date.parse("2026-09-01T00:00:00.000Z");
-const DAILY_START=Date.parse("2025-08-01T00:00:00.000Z");
-const NORMAL_COST=0.0015;
-const STRESS_COST=NORMAL_COST*1.5;
-const CANDIDATES_PER_DAY=5;
-const ACCOUNT=Object.freeze({riskPerTrade:0.005,maxWeight:0.20,maxConcurrent:3,maxPerSector:2});
-const FAMILIES=Object.freeze({
-  OPENING_BREAKOUT:Object.freeze({name:"OPENING_BREAKOUT"}),
-  FIRST_PULLBACK:Object.freeze({name:"FIRST_PULLBACK"}),
-});
-const ny=new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hourCycle:"h23"});
-const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-let tokenCache=null,lastTossAt=0;
+const EVAL_START = Date.parse("2026-08-03T00:00:00.000Z");
+const EVAL_END = Date.parse("2026-09-26T00:00:00.000Z");
+const DAILY_START = Date.parse("2025-11-01T00:00:00.000Z");
+const DAILY_END = Date.parse("2026-09-30T00:00:00.000Z");
+const NORMAL_COST = 0.0015;
+const STRESS_COST = NORMAL_COST * 1.5;
+const COMMON_CANDIDATES_PER_DAY = 5;
+const ACCOUNT = Object.freeze({ riskPerTrade: 0.005, maxWeight: 0.20, maxConcurrent: 3, maxPerSector: 2 });
+const PEAD_HORIZONS = Object.freeze([5, 20, 40]);
+const QULLAMAGGIE_BREAKOUT_SOURCE = "https://qullamaggie.com/my-3-timeless-setups-that-have-made-me-tens-of-millions/";
+const QULLAMAGGIE_EP_SOURCE = "https://qullamaggie.com/how-to-master-a-setup-episodic-pivots/";
+const PEAD_REVIEW_DOI = "10.1016/j.jbef.2020.100446";
+const ny = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const sleep = (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 
-function parts(ms){const p=Object.fromEntries(ny.formatToParts(new Date(ms)).filter(x=>x.type!=="literal").map(x=>[x.type,x.value]));return {date:`${p.year}-${p.month}-${p.day}`,hour:+p.hour,minute:+p.minute};}
-function mean(v){return v.length?v.reduce((a,b)=>a+b,0)/v.length:0;}
-function median(v){if(!v.length)return 0;const x=[...v].sort((a,b)=>a-b),m=Math.floor(x.length/2);return x.length%2?x[m]:(x[m-1]+x[m])/2;}
-function clamp(x,a=0,b=1){return Math.min(b,Math.max(a,x));}
-function num(v){const n=Number(String(v??"").replace(/[$,% ,]/g,""));return Number.isFinite(n)?n:null;}
-function sma(c,i,p){if(i-p+1<0)return null;let s=0;for(let j=i-p+1;j<=i;j++)s+=c[j].close;return s/p;}
-function highBefore(c,i,p){if(i-p<0)return null;let h=-Infinity;for(let j=i-p;j<i;j++)h=Math.max(h,c[j].high);return Number.isFinite(h)?h:null;}
-function avgDollar(c,i,p){if(i-p<0)return null;let s=0;for(let j=i-p;j<i;j++)s+=c[j].close*c[j].volume;return s/p;}
-function regular(ms){const p=parts(ms),m=p.hour*60+p.minute;return m>=570&&m<960;}
-function minuteOfDay(ms){const p=parts(ms);return p.hour*60+p.minute;}
-function securityEligible(row){const s=String(row.symbol??"").trim().toUpperCase(),n=String(row.name??""),industry=String(row.industry??"");if(!/^[A-Z][A-Z0-9.-]{0,9}$/.test(s))return false;if(/(Warrant|Rights?|Units?|Preferred|Depositary Preferred)/i.test(n))return false;if(/Blank Checks/i.test(industry)||/Acquisition Corp/i.test(n))return false;if(/[RWU]$/.test(s)&&s.length>=4)return false;return true;}
-
-async function issueToken(){
-  const clientId=String(process.env.TOSS_CLIENT_ID??"").trim(),clientSecret=String(process.env.TOSS_CLIENT_SECRET??"").trim();
-  if(!clientId||!clientSecret)throw new Error("TOSS_RESEARCH_CREDENTIAL_MISSING");
-  const body=new URLSearchParams({grant_type:"client_credentials",client_id:clientId,client_secret:clientSecret});
-  const r=await fetch(`${TOSS_BASE}/oauth2/token`,{method:"POST",headers:{accept:"application/json","content-type":"application/x-www-form-urlencoded"},body});
-  if(!r.ok)throw new Error(`TOSS_TOKEN_HTTP_${r.status}`);
-  const j=await r.json(),token=String(j?.access_token??""),expires=Number(j?.expires_in??0);
-  if(token.length<30||!(expires>0))throw new Error("TOSS_TOKEN_INVALID");
-  tokenCache={token,expiresAt:Date.now()+expires*1000};
-  return token;
+function nyParts(ms) {
+  const values = Object.fromEntries(ny.formatToParts(new Date(ms)).filter((item) => item.type !== "literal").map((item) => [item.type, item.value]));
+  return { date: `${values.year}-${values.month}-${values.day}`, hour: Number(values.hour), minute: Number(values.minute) };
 }
-async function token(){if(tokenCache&&Date.now()<tokenCache.expiresAt-60_000)return tokenCache.token;return issueToken();}
-async function tossGet(path,params){
-  const wait=Math.max(0,140-(Date.now()-lastTossAt));if(wait)await sleep(wait);lastTossAt=Date.now();
-  const url=new URL(`${TOSS_BASE}${path}`);for(const [k,v] of Object.entries(params))if(v!=null)url.searchParams.set(k,String(v));
-  let last;
-  for(let attempt=0;attempt<4;attempt++){
-    const r=await fetch(url,{headers:{accept:"application/json",authorization:`Bearer ${await token()}`}});
-    if(r.status===401&&attempt===0){tokenCache=null;continue;}
-    if(r.status===429){await sleep(600*(attempt+1));last=new Error("TOSS_RATE_LIMIT");continue;}
-    if(r.status>=500){await sleep(400*(attempt+1));last=new Error(`TOSS_HTTP_${r.status}`);continue;}
-    if(!r.ok)throw new Error(`TOSS_HTTP_${r.status}`);
-    return r.json();
+function mean(values) { return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0; }
+function median(values) { if (!values.length) return 0; const copy = [...values].sort((a, b) => a - b); const mid = Math.floor(copy.length / 2); return copy.length % 2 ? copy[mid] : (copy[mid - 1] + copy[mid]) / 2; }
+function safeNumber(value) { const parsed = Number(String(value ?? "").replace(/[$,% ,]/g, "")); return Number.isFinite(parsed) ? parsed : null; }
+function regular(ms) { const p = nyParts(ms); const minute = p.hour * 60 + p.minute; return minute >= 570 && minute < 960; }
+function minuteOfDay(ms) { const p = nyParts(ms); return p.hour * 60 + p.minute; }
+function sma(candles, index, period) { if (index - period + 1 < 0) return null; let sum = 0; for (let i = index - period + 1; i <= index; i += 1) sum += candles[i].close; return sum / period; }
+function atr(candles, index, period = 20) {
+  if (index - period + 1 < 1) return null;
+  const tr = [];
+  for (let i = index - period + 1; i <= index; i += 1) {
+    const prev = candles[i - 1].close;
+    tr.push(Math.max(candles[i].high - candles[i].low, Math.abs(candles[i].high - prev), Math.abs(candles[i].low - prev)));
   }
-  throw last??new Error("TOSS_FETCH_FAILED");
+  return mean(tr);
 }
-function normalizeTossCandle(raw){
-  const timestamp=Date.parse(String(raw?.timestamp??"")),open=num(raw?.openPrice),high=num(raw?.highPrice),low=num(raw?.lowPrice),close=num(raw?.closePrice),volume=num(raw?.volume);
-  if(!Number.isFinite(timestamp)||![open,high,low,close,volume].every(Number.isFinite)||Math.min(open,high,low,close)<=0||volume<0)return null;
-  return {timestamp,open,high,low,close,volume};
+function avgVolume(candles, index, period = 20) { if (index - period + 1 < 0) return null; return mean(candles.slice(index - period + 1, index + 1).map((row) => row.volume)); }
+function minLow(rows) { return rows.length ? Math.min(...rows.map((row) => row.low)) : null; }
+function maxHigh(rows) { return rows.length ? Math.max(...rows.map((row) => row.high)) : null; }
+function avgRange(rows) { return rows.length ? mean(rows.map((row) => row.high - row.low)) : null; }
+function securityEligible(row) {
+  const symbol = String(row.symbol ?? "").trim().toUpperCase();
+  const name = String(row.name ?? "");
+  const industry = String(row.industry ?? "");
+  if (!/^[A-Z][A-Z0-9.-]{0,9}$/.test(symbol)) return false;
+  if (/(Warrant|Rights?|Units?|Preferred|Depositary Preferred)/i.test(name)) return false;
+  if (/Blank Checks/i.test(industry) || /Acquisition Corp/i.test(name)) return false;
+  if (/[RWU]$/.test(symbol) && symbol.length >= 4) return false;
+  return true;
 }
-async function tossMinuteHistory(symbol){
-  const map=new Map();let before="2026-09-01T23:59:59-04:00";
-  for(let page=0;page<110;page++){
-    const payload=await tossGet("/api/v1/candles",{symbol,interval:"1m",count:200,before,adjusted:true});
-    const result=payload?.result??{},rows=Array.isArray(result?.candles)?result.candles:[],normalized=rows.map(normalizeTossCandle).filter(Boolean);
-    if(!normalized.length)break;
-    for(const row of normalized)if(row.timestamp>=EVAL_START-2*86_400_000&&row.timestamp<EVAL_END+86_400_000)map.set(row.timestamp,row);
-    const oldest=Math.min(...normalized.map(x=>x.timestamp));
-    if(oldest<EVAL_START-2*86_400_000)break;
-    const next=String(result?.nextBefore??"").trim();
-    if(!next||next===before)break;
-    before=next;
-  }
-  return [...map.values()].filter(x=>x.timestamp>=EVAL_START-2*86_400_000&&x.timestamp<EVAL_END+86_400_000).sort((a,b)=>a.timestamp-b.timestamp);
-}
-
-async function fetchUniverse(){
-  const r=await fetch("https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=10000&offset=0&download=true",{headers:{accept:"application/json,text/plain,*/*","user-agent":"Mozilla/5.0 Chrome/120"}});
-  if(!r.ok)throw new Error(`NASDAQ_HTTP_${r.status}`);
-  const raw=(await r.json())?.data?.rows;if(!Array.isArray(raw)||raw.length<1000)throw new Error("NASDAQ_UNIVERSE_INSUFFICIENT");
-  const rows=raw.map(row=>{const price=num(row.lastsale),volume=num(row.volume),marketCap=num(row.marketCap);return {symbol:String(row.symbol??"").trim().toUpperCase(),name:String(row.name??""),sector:String(row.sector??"UNKNOWN")||"UNKNOWN",industry:String(row.industry??""),price,volume,marketCap,dollarVolume:price!=null&&volume!=null?price*volume:null};}).filter(r=>securityEligible(r)&&r.price>=2&&r.marketCap>0&&r.dollarVolume>0);
-  const buckets={
-    LARGE:rows.filter(r=>r.marketCap>=10_000_000_000).sort((a,b)=>b.dollarVolume-a.dollarVolume||a.symbol.localeCompare(b.symbol)).slice(160,180),
-    MID:rows.filter(r=>r.marketCap>=2_000_000_000&&r.marketCap<10_000_000_000).sort((a,b)=>b.dollarVolume-a.dollarVolume||a.symbol.localeCompare(b.symbol)).slice(100,120),
-    SMALL:rows.filter(r=>r.marketCap>=300_000_000&&r.marketCap<2_000_000_000).sort((a,b)=>b.dollarVolume-a.dollarVolume||a.symbol.localeCompare(b.symbol)).slice(240,280),
-  };
-  return {rawRows:raw.length,buckets};
-}
-async function mapLimit(items,limit,fn){const out=new Array(items.length);let next=0;async function w(){for(;;){const i=next++;if(i>=items.length)return;try{out[i]={ok:true,value:await fn(items[i],i)};}catch(e){out[i]={ok:false,error:String(e?.message??e)};}}}await Promise.all(Array.from({length:Math.min(limit,items.length)},()=>w()));return out;}
-function dailyIndexBefore(candles,date){let idx=-1;for(let i=0;i<candles.length;i++){if(parts(candles[i].timestamp).date<date)idx=i;else break;}return idx;}
-function dailyCandidate(row,spyDaily,date){
-  const c=row.daily,i=dailyIndexBefore(c,date),si=dailyIndexBefore(spyDaily,date);if(i<60||si<20)return null;
-  const close=c[i].close,m20=sma(c,i,20),m20p=sma(c,i-5,20),m50=sma(c,i,50),h20=highBefore(c,i+1,20),ad=avgDollar(c,i,20);
-  if(![m20,m20p,m50,h20,ad].every(x=>x>0))return null;
-  const rs20=(close/c[i-20].close-1)-(spyDaily[si].close/spyDaily[si-20].close-1),dv=(close*c[i].volume)/ad,near=close/h20,range=c[i].high-c[i].low,body=range?Math.abs(c[i].close-c[i].open)/range:0,closeLoc=range?(c[i].close-c[i].low)/range:0;
-  if(!(close>m20&&m20>m20p&&close>m50&&near>=0.88&&rs20>=-0.02&&dv>=0.75))return null;
-  const score=30+20*clamp((rs20+0.02)/0.18)+15*clamp((dv-0.75)/2.25)+15*clamp((near-0.88)/0.12)+10*clamp((closeLoc-0.4)/0.6)+10*clamp((body-0.25)/0.65);
-  return {symbol:row.symbol,sector:row.sector,bucket:row.bucket,date,setupScore:+Math.min(100,score).toFixed(2),setup:{rs20,dollarVolumeAcceleration:dv,near20dHigh:near,closeLocation:closeLoc,bodyRangeRatio:body}};
-}
-function groupDays(rows){const m=new Map();for(const r of rows){if(!regular(r.timestamp))continue;const d=parts(r.timestamp).date,a=m.get(d)??[];a.push(r);m.set(d,a);}return m;}
-function completeDates(rows){return [...groupDays(rows).entries()].filter(([d,v])=>Date.parse(d+"T00:00:00Z")>=EVAL_START&&Date.parse(d+"T00:00:00Z")<EVAL_END&&v.length>=300).map(([d])=>d).sort();}
-function aggregate(rows,min){
-  const out=[];let cur=null;
-  for(const r of rows){const mod=minuteOfDay(r.timestamp)-570;if(mod<0)continue;const bucket=Math.floor(mod/min);if(!cur||cur.bucket!==bucket){if(cur)out.push(cur);cur={bucket,open:r.open,high:r.high,low:r.low,close:r.close,volume:r.volume,timestamp:r.timestamp,last:r.timestamp};}else{cur.high=Math.max(cur.high,r.high);cur.low=Math.min(cur.low,r.low);cur.close=r.close;cur.volume+=r.volume;cur.last=r.timestamp;}}
-  if(cur)out.push(cur);return out.map(x=>({...x,closeTime:x.last+60_000}));
-}
-function vwap(rows,cutoff){let pv=0,v=0;for(const r of rows){if(r.timestamp>=cutoff)break;if(r.volume>0){pv+=((r.high+r.low+r.close)/3)*r.volume;v+=r.volume;}}return v?pv/v:null;}
-function structure(symbol,timeframe,bars,decision){
-  const mapped=bars.map(b=>{const iso=new Date(b.closeTime).toISOString();return {isClosed:true,eventTime:iso,publishedAt:iso,availableAt:iso,observedAt:iso,open:b.open,high:b.high,low:b.low,close:b.close,volume:b.volume};});
-  return buildAdaptiveMultiEvidencePriceStructureV2({lineageId:ADAPTIVE_MULTI_EVIDENCE_V2_LINEAGE_ID,market:"US_STOCK",symbol,timeframe,side:"LONG",decisionTime:new Date(decision).toISOString(),source:{sourceId:"toss-openapi",originalSourceId:"toss-openapi",sourceType:"PUBLIC_MARKET_DATA",sourceUrl:TOSS_BASE,documentId:`${symbol}:${timeframe}`},candles:mapped,options:timeframe==="5m"?{atrPeriod:8,volumeLookback:8,pivotLeftBars:1,pivotRightBars:1,compressionLookback:4}:{atrPeriod:5,volumeLookback:4,pivotLeftBars:1,pivotRightBars:1,compressionLookback:2}});
-}
-function volumeReaccel(bars,index,lookback=5){const prev=bars.slice(Math.max(0,index-lookback),index).map(x=>x.volume).filter(x=>x>0);return prev.length?bars[index].volume/median(prev):1;}
-function openingRange(day){const rows=day.filter(r=>minuteOfDay(r.timestamp)>=570&&minuteOfDay(r.timestamp)<585);if(rows.length<10)return null;return {high:Math.max(...rows.map(x=>x.high)),low:Math.min(...rows.map(x=>x.low)),open:rows[0].open};}
-function nextMinuteIndex(day,closeTime){return day.findIndex(x=>x.timestamp>=closeTime);}
-function simulateExit(day,entryIndex,entryRaw,stopRaw,cost){
-  const entry=entryRaw*(1+cost),risk=entryRaw-stopRaw,t1=entryRaw+risk,t2=entryRaw+2*risk;let rem=1,ret=0,tp1=false,tp2=false,exitIndex=day.length-1,reason="EOD",below=0;const fill=x=>x*(1-cost);
-  for(let i=entryIndex+1;i<day.length;i++){const b=day[i],vw=vwap(day,b.timestamp+1),protect=tp1&&vw?Math.max(entryRaw,Math.min(vw*0.998,entryRaw*1.01)):stopRaw;if(b.low<=protect){ret+=rem*(fill(protect)/entry-1);rem=0;exitIndex=i;reason=tp1?"PROTECT_STOP":"STRUCTURAL_STOP";break;}if(!tp1&&b.high>=t1){ret+=.25*(fill(t1)/entry-1);rem-=.25;tp1=true;}if(tp1&&!tp2&&b.high>=t2){ret+=.25*(fill(t2)/entry-1);rem-=.25;tp2=true;}if(tp2&&vw){below=b.close<vw?below+1:0;if(below>=3){ret+=rem*(fill(b.close)/entry-1);rem=0;exitIndex=i;reason="RUNNER_VWAP_BREAK";break;}}}
-  if(rem>0){ret+=rem*(fill(day.at(-1).close)/entry-1);reason=tp2?"RUNNER_EOD":tp1?"PARTIAL_EOD":"EOD";}
-  return {netReturn:ret,stopDistancePct:risk/entryRaw,tp1,tp2,exitTime:day[exitIndex].timestamp,exitReason:reason};
-}
-function openingBreakoutTrade(candidate,day,spyDay,cost){
-  const or=openingRange(day);if(!or)return null;
-  const b5=aggregate(day,5),b15=aggregate(day,15),spy5=aggregate(spyDay,5);
-  for(let i=3;i<b5.length-1;i++){
-    const bar=b5[i],m=minuteOfDay(bar.closeTime);if(m<585||m>690)continue;
-    const completed=b5.slice(0,i+1),p15=b15.filter(x=>x.closeTime<=bar.closeTime);if(completed.length<6||p15.length<3)continue;
-    const ps5=structure(candidate.symbol,"5m",completed,bar.closeTime+1);if(ps5.status!=="READY_FOR_SPECIALIST_RESEARCH_ONLY")continue;
-    const f5=ps5.features,ps15=structure(candidate.symbol,"15m",p15,bar.closeTime+1),f15=ps15.status==="READY_FOR_SPECIALIST_RESEARCH_ONLY"?ps15.features:null;
-    const vw=vwap(day,bar.closeTime),vr=volumeReaccel(b5,i,5),range=bar.high-bar.low,body=range?Math.abs(bar.close-bar.open)/range:0,cl=range?(bar.close-bar.low)/range:0;
-    const spyBar=spy5.find(x=>x.closeTime===bar.closeTime),spyVw=vwap(spyDay,bar.closeTime),marketOk=spyBar&&spyVw?spyBar.close>=spyVw*0.998:true;
-    const upEvent=f5.priceStructure.structureEventDirection==="UP"||["BOS_UP","CHOCH_UP"].includes(f5.pattern.structureTransition);
-    if(!(marketOk&&bar.close>or.high&&vw&&bar.close>vw&&bar.close/vw-1<=0.025&&f5.priceStructure.trend!=="BEARISH"&&f15?.priceStructure?.trend!=="BEARISH"&&upEvent&&bar.close>bar.open&&body>=0.45&&cl>=0.70&&vr>=1.2))continue;
-    const entryIndex=nextMinuteIndex(day,bar.closeTime);if(entryIndex<0)continue;const entryRaw=day[entryIndex].open,support=f5.priceStructure.support;
-    const logical=Math.min(or.high*0.997,support&&support<entryRaw?support*0.998:or.high*0.997),risk=(entryRaw-logical)/entryRaw;if(!(risk>=0.003&&risk<=0.03))continue;
-    const ex=simulateExit(day,entryIndex,entryRaw,logical,cost);
-    return {symbol:candidate.symbol,sector:candidate.sector,bucket:candidate.bucket,date:candidate.date,family:"OPENING_BREAKOUT",setupScore:candidate.setupScore,triggerScore:+Math.min(100,candidate.setupScore+10*clamp((vr-1.2)/2)+10*clamp((cl-.70)/.3)).toFixed(2),entryTime:day[entryIndex].timestamp,aiInputBundle:{setup:candidate.setup,openingRange:or,wave5m:f5.pattern,candle5m:f5.candle,structure5m:f5.priceStructure,structure15m:f15?.priceStructure??null,vwapDistance:bar.close/vw-1,volumeReaccel:vr,marketAboveVwap:marketOk},...ex};
-  }
-  return null;
-}
-function firstPullbackTrade(candidate,day,spyDay,cost){
-  const or=openingRange(day);if(!or)return null;
-  const b5=aggregate(day,5),b15=aggregate(day,15),spy5=aggregate(spyDay,5);
-  let impulse=null;
-  for(let i=3;i<b5.length-1;i++){
-    const bar=b5[i],m=minuteOfDay(bar.closeTime);if(m<585||m>660)continue;
-    const completed=b5.slice(0,i+1),p15=b15.filter(x=>x.closeTime<=bar.closeTime);if(completed.length<6||p15.length<3)continue;
-    const ps5=structure(candidate.symbol,"5m",completed,bar.closeTime+1);if(ps5.status!=="READY_FOR_SPECIALIST_RESEARCH_ONLY")continue;
-    const f5=ps5.features,vw=vwap(day,bar.closeTime),vr=volumeReaccel(b5,i,5),up=f5.priceStructure.structureEventDirection==="UP"||["BOS_UP","CHOCH_UP"].includes(f5.pattern.structureTransition);
-    const spyBar=spy5.find(x=>x.closeTime===bar.closeTime),spyVw=vwap(spyDay,bar.closeTime),marketOk=spyBar&&spyVw?spyBar.close>=spyVw*0.998:true;
-    if(!impulse){
-      if(marketOk&&bar.close>or.high&&vw&&bar.close>vw&&f5.priceStructure.trend!=="BEARISH"&&up&&vr>=1.2)impulse={index:i,high:bar.high};
-      continue;
+async function fetchJson(url, label, { timeoutMs = 15_000, attempts = 3 } = {}) {
+  let last = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        redirect: "follow",
+        signal: controller.signal,
+        headers: {
+          accept: "application/json,text/plain,*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "user-agent": "Mozilla/5.0 research-reference-recipes/2.0",
+          referer: "https://www.nasdaq.com/",
+        },
+      });
+      if (!response.ok) throw new Error(`${label}_HTTP_${response.status}`);
+      return await response.json();
+    } catch (error) {
+      last = error;
+      await sleep(250 * (attempt + 1));
+    } finally {
+      clearTimeout(timer);
     }
-    if(i>impulse.index+6)break;
-    const range=bar.high-bar.low,body=range?Math.abs(bar.close-bar.open)/range:0,cl=range?(bar.close-bar.low)/range:0;
-    const retest=bar.low<=or.high*1.006&&bar.close>=or.high&&vw&&bar.close>vw;
-    if(!(retest&&bar.close>bar.open&&body>=0.30&&cl>=0.60&&vr>=0.85))continue;
-    const ps15=structure(candidate.symbol,"15m",p15,bar.closeTime+1);const f15=ps15.status==="READY_FOR_SPECIALIST_RESEARCH_ONLY"?ps15.features:null;if(f15?.priceStructure?.trend==="BEARISH")continue;
-    const entryIndex=nextMinuteIndex(day,bar.closeTime);if(entryIndex<0)continue;const entryRaw=day[entryIndex].open,logical=bar.low*0.998,risk=(entryRaw-logical)/entryRaw;if(!(risk>=0.003&&risk<=0.03))continue;
-    const ex=simulateExit(day,entryIndex,entryRaw,logical,cost);
-    return {symbol:candidate.symbol,sector:candidate.sector,bucket:candidate.bucket,date:candidate.date,family:"FIRST_PULLBACK",setupScore:candidate.setupScore,triggerScore:+Math.min(100,candidate.setupScore+10*clamp((vr-.85)/2)+10*clamp((cl-.60)/.4)).toFixed(2),entryTime:day[entryIndex].timestamp,aiInputBundle:{setup:candidate.setup,openingRange:or,impulseHigh:impulse.high,wave5m:f5.pattern,candle5m:f5.candle,structure5m:f5.priceStructure,structure15m:f15?.priceStructure??null,vwapDistance:bar.close/vw-1,volumeReaccel:vr},...ex};
+  }
+  throw last ?? new Error(`${label}_FAILED`);
+}
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    for (;;) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      try { out[index] = { ok: true, value: await fn(items[index], index) }; }
+      catch (error) { out[index] = { ok: false, error: String(error?.message ?? error) }; }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return out;
+}
+async function fetchUniverse() {
+  const payload = await fetchJson("https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=10000&offset=0&download=true", "NASDAQ_UNIVERSE");
+  const raw = payload?.data?.rows;
+  if (!Array.isArray(raw) || raw.length < 1000) throw new Error("NASDAQ_UNIVERSE_INSUFFICIENT");
+  const rows = raw.map((row) => {
+    const price = safeNumber(row.lastsale);
+    const volume = safeNumber(row.volume);
+    const marketCap = safeNumber(row.marketCap);
+    return {
+      symbol: String(row.symbol ?? "").trim().toUpperCase(),
+      name: String(row.name ?? ""),
+      sector: String(row.sector ?? "UNKNOWN") || "UNKNOWN",
+      industry: String(row.industry ?? ""),
+      price,
+      volume,
+      marketCap,
+      dollarVolume: price != null && volume != null ? price * volume : null,
+    };
+  }).filter((row) => securityEligible(row) && row.price >= 2 && row.marketCap > 0 && row.dollarVolume > 0);
+  return {
+    rawRows: raw.length,
+    buckets: {
+      LARGE: rows.filter((row) => row.marketCap >= 10_000_000_000).sort((a, b) => b.dollarVolume - a.dollarVolume || a.symbol.localeCompare(b.symbol)).slice(160, 180),
+      MID: rows.filter((row) => row.marketCap >= 2_000_000_000 && row.marketCap < 10_000_000_000).sort((a, b) => b.dollarVolume - a.dollarVolume || a.symbol.localeCompare(b.symbol)).slice(100, 120),
+      SMALL: rows.filter((row) => row.marketCap >= 300_000_000 && row.marketCap < 2_000_000_000).sort((a, b) => b.dollarVolume - a.dollarVolume || a.symbol.localeCompare(b.symbol)).slice(240, 280),
+    },
+  };
+}
+function parseYahooChart(payload) {
+  const result = payload?.chart?.result?.[0];
+  if (!result) throw new Error(`YAHOO_CHART_${payload?.chart?.error?.code ?? "EMPTY"}`);
+  const timestamps = Array.isArray(result.timestamp) ? result.timestamp : [];
+  const quote = result?.indicators?.quote?.[0] ?? {};
+  const rows = [];
+  for (let index = 0; index < timestamps.length; index += 1) {
+    const timestamp = Number(timestamps[index]) * 1000;
+    const open = Number(quote.open?.[index]);
+    const high = Number(quote.high?.[index]);
+    const low = Number(quote.low?.[index]);
+    const close = Number(quote.close?.[index]);
+    const volume = Number(quote.volume?.[index]);
+    if (!Number.isFinite(timestamp) || ![open, high, low, close, volume].every(Number.isFinite)) continue;
+    if (Math.min(open, high, low, close) <= 0 || volume < 0 || high < low) continue;
+    rows.push({ timestamp, open, high, low, close, volume });
+  }
+  return rows.sort((a, b) => a.timestamp - b.timestamp);
+}
+async function yahoo5m(symbol) {
+  const encoded = encodeURIComponent(symbol);
+  const query = "range=60d&interval=5m&includePrePost=false&events=div%2Csplits";
+  const urls = [
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?${query}`,
+    `https://query2.finance.yahoo.com/v8/finance/chart/${encoded}?${query}`,
+  ];
+  let last = null;
+  for (const url of urls) {
+    try {
+      const payload = await fetchJson(url, "YAHOO_5M", { attempts: 2 });
+      return parseYahooChart(payload).filter((row) => regular(row.timestamp) && row.timestamp >= EVAL_START - 3 * 86_400_000 && row.timestamp < EVAL_END + 3 * 86_400_000);
+    } catch (error) { last = error; }
+  }
+  throw last ?? new Error("YAHOO_5M_FAILED");
+}
+function normalizeDate(value) {
+  const text = String(value ?? "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(text);
+  if (us) return `${us[3]}-${String(us[1]).padStart(2, "0")}-${String(us[2]).padStart(2, "0")}`;
+  const parsed = Date.parse(text);
+  if (!Number.isFinite(parsed)) return null;
+  return new Date(parsed).toISOString().slice(0, 10);
+}
+function firstDefined(row, keys) { for (const key of keys) if (row?.[key] != null && String(row[key]).trim() !== "") return row[key]; return null; }
+async function fetchNasdaqEarnings(symbol) {
+  try {
+    const payload = await fetchJson(`https://api.nasdaq.com/api/company/${encodeURIComponent(symbol)}/earnings-surprise`, "NASDAQ_EARNINGS", { attempts: 2 });
+    const data = payload?.data ?? {};
+    const rows = data?.earningsSurpriseTable?.rows ?? data?.quarterlyEarnings?.rows ?? data?.rows ?? [];
+    if (!Array.isArray(rows)) return { status: "UNAVAILABLE", events: [] };
+    const events = rows.map((row) => {
+      const date = normalizeDate(firstDefined(row, ["dateReported", "reportDate", "reportedDate", "fiscalQtrEnd", "periodEnding"]));
+      const actual = safeNumber(firstDefined(row, ["eps", "reportedEPS", "actualEPS", "actual", "reported"]));
+      const forecast = safeNumber(firstDefined(row, ["consensusForecast", "forecastEPS", "estimate", "consensus", "estimatedEPS"]));
+      let surprisePct = safeNumber(firstDefined(row, ["percentageSurprise", "surprisePercentage", "surprisePct", "%Surprise", "surprise"]));
+      if (surprisePct == null && actual != null && forecast != null && forecast !== 0) surprisePct = ((actual - forecast) / Math.abs(forecast)) * 100;
+      return { date, actual, forecast, surprisePct };
+    }).filter((event) => event.date && event.surprisePct != null);
+    return { status: events.length ? "AVAILABLE" : "UNAVAILABLE", events };
+  } catch (error) {
+    return { status: "UNAVAILABLE", events: [], error: String(error?.message ?? error) };
+  }
+}
+function dailyIndexBefore(candles, date) {
+  let index = -1;
+  for (let i = 0; i < candles.length; i += 1) {
+    if (nyParts(candles[i].timestamp).date < date) index = i;
+    else break;
+  }
+  return index;
+}
+function dailyIndexOnDate(candles, date) { return candles.findIndex((row) => nyParts(row.timestamp).date === date); }
+function leaderSnapshot(row, date) {
+  const candles = row.daily;
+  const index = dailyIndexBefore(candles, date);
+  if (index < 126) return null;
+  return {
+    row,
+    index,
+    r21: candles[index].close / candles[index - 21].close - 1,
+    r63: candles[index].close / candles[index - 63].close - 1,
+    r126: candles[index].close / candles[index - 126].close - 1,
+  };
+}
+function rankLeaders(rows, date) {
+  const snapshots = rows.map((row) => leaderSnapshot(row, date)).filter(Boolean);
+  if (!snapshots.length) return new Map();
+  const topN = Math.max(1, Math.ceil(snapshots.length * 0.02));
+  for (const key of ["r21", "r63", "r126"]) {
+    [...snapshots].sort((a, b) => b[key] - a[key]).forEach((snapshot, position) => { snapshot[`rank_${key}`] = position + 1; });
+  }
+  return new Map(snapshots.map((snapshot) => [snapshot.row.symbol, {
+    r21: snapshot.r21, r63: snapshot.r63, r126: snapshot.r126,
+    rank21: snapshot.rank_r21, rank63: snapshot.rank_r63, rank126: snapshot.rank_r126,
+    topN, top2pctAny: Math.min(snapshot.rank_r21, snapshot.rank_r63, snapshot.rank_r126) <= topN,
+  }]));
+}
+function maxPriorMove(candles, index) {
+  let best = 0;
+  const start = Math.max(0, index - 63);
+  for (let from = start; from <= index - 5; from += 1) {
+    for (let to = from + 5; to <= Math.min(index, from + 20); to += 1) {
+      best = Math.max(best, candles[to].high / candles[from].close - 1);
+    }
+  }
+  return best;
+}
+function detectConsolidation(candles, index) {
+  const ma10 = sma(candles, index, 10);
+  const ma20 = sma(candles, index, 20);
+  const ma20Prev = sma(candles, index - 5, 20);
+  if (![ma10, ma20, ma20Prev].every((value) => value > 0)) return null;
+  if (!(candles[index].close >= ma10 && ma10 >= ma20 && ma20 > ma20Prev)) return null;
+  for (let window = 10; window <= 42; window += 1) {
+    if (index - window + 1 < 0) break;
+    const slice = candles.slice(index - window + 1, index + 1);
+    const split = Math.floor(slice.length / 2);
+    const first = slice.slice(0, split);
+    const second = slice.slice(split);
+    if (!first.length || !second.length) continue;
+    const higherLow = minLow(second) > minLow(first);
+    const tightening = avgRange(second) < avgRange(first);
+    if (!higherLow || !tightening) continue;
+    return {
+      sessions: window,
+      higherLow,
+      tightening,
+      breakoutLevel: maxHigh(slice),
+      firstHalfAvgRange: avgRange(first),
+      secondHalfAvgRange: avgRange(second),
+      ma10,
+      ma20,
+    };
   }
   return null;
 }
-function portfolio(trades){const sorted=[...trades].sort((a,b)=>a.entryTime-b.entryTime||b.triggerScore-a.triggerScore),active=[],sectors=new Map();let ret=0,admitted=0;for(const t of sorted){for(let i=active.length-1;i>=0;i--)if(active[i].exitTime<=t.entryTime){const s=active[i].sector;sectors.set(s,Math.max(0,(sectors.get(s)??1)-1));active.splice(i,1);}if(active.length>=ACCOUNT.maxConcurrent||(sectors.get(t.sector)??0)>=ACCOUNT.maxPerSector)continue;const w=Math.min(ACCOUNT.maxWeight,ACCOUNT.riskPerTrade/Math.max(t.stopDistancePct,1e-9));ret+=w*t.netReturn;active.push(t);sectors.set(t.sector,(sectors.get(t.sector)??0)+1);admitted++;}return {return:ret,admitted};}
-function dayMetrics(days){const r=days.map(x=>x.return),pos=r.filter(x=>x>0),neg=r.filter(x=>x<0);let eq=1,peak=1,mdd=0;for(const x of r){eq*=1+x;peak=Math.max(peak,eq);mdd=Math.max(mdd,(peak-eq)/peak);}return {days:days.length,totalReturn:eq-1,averageDailyReturn:mean(r),medianDailyReturn:median(r),positiveDayRate:r.length?pos.length/r.length:0,averageWinningDay:mean(pos),averageLosingDay:mean(neg),bestDay:r.length?Math.max(...r):0,worstDay:r.length?Math.min(...r):0,maxDrawdown:mdd,daysAtLeast1Pct:r.filter(x=>x>=.01).length,daysAtLeast3Pct:r.filter(x=>x>=.03).length,daysAtLeast5Pct:r.filter(x=>x>=.05).length,daysAtLeast10Pct:r.filter(x=>x>=.10).length};}
-function runFamily(name,dates,candidates,dataBySymbol,spyDays,cost){
-  const days=[],trades=[];
-  for(const date of dates){const xs=[];for(const c of candidates.get(date)??[]){const day=dataBySymbol.get(c.symbol)?.minuteDays.get(date),spyDay=spyDays.get(date);if(!day||!spyDay)continue;const t=name==="OPENING_BREAKOUT"?openingBreakoutTrade(c,day,spyDay,cost):firstPullbackTrade(c,day,spyDay,cost);if(t){xs.push(t);trades.push(t);}}const p=portfolio(xs);days.push({date,candidateCount:(candidates.get(date)??[]).length,triggered:xs.length,...p});}
-  return {metrics:dayMetrics(days),days,trades};
-}
-function selectionScore(r){if(r.trades.length<5)return -999;return r.metrics.totalReturn-1.5*r.metrics.maxDrawdown+0.25*r.metrics.averageDailyReturn;}
-function validationPass(normal,stress){return normal.metrics.days>=4&&normal.trades.length>=3&&normal.metrics.totalReturn>0&&normal.metrics.averageDailyReturn>0&&stress.metrics.totalReturn>0&&stress.metrics.averageDailyReturn>0&&normal.metrics.maxDrawdown<=0.06&&stress.metrics.maxDrawdown<=0.07;}
-
-async function main(){
-  const u=await fetchUniverse(),spyDaily=(await collectYahooStockHistory({market:"US_STOCK",symbol:"SPY",startTime:DAILY_START,endTime:EVAL_END})).candles;
-  const selected=[];
-  for(const [bucket,rows] of Object.entries(u.buckets)){
-    const tested=await mapLimit(rows,4,async row=>({...row,bucket,daily:(await collectYahooStockHistory({market:"US_STOCK",symbol:row.symbol,startTime:DAILY_START,endTime:EVAL_END})).candles}));
-    for(const x of tested.filter(x=>x.ok).map(x=>x.value)){if(x.daily.length>=180)selected.push(x);if(selected.filter(y=>y.bucket===bucket).length>=4)break;}
-  }
-  if(["LARGE","MID","SMALL"].some(b=>selected.filter(x=>x.bucket===b).length<4))throw new Error("FRESH_BUCKET_HISTORY_INSUFFICIENT");
-  const spyMinute=await tossMinuteHistory("SPY"),spyDays=groupDays(spyMinute),dates=completeDates(spyMinute);if(dates.length<12)throw new Error(`COMPLETE_DATES_INSUFFICIENT_${dates.length}`);
-  const minuteFetched=await mapLimit(selected,2,async row=>({...row,minute:await tossMinuteHistory(row.symbol)})),ok=minuteFetched.filter(x=>x.ok).map(x=>x.value);
-  if(ok.length<10)throw new Error(`TOSS_SYMBOL_COVERAGE_INSUFFICIENT_${ok.length}`);
-  const dataBySymbol=new Map(ok.map(x=>[x.symbol,{...x,minuteDays:groupDays(x.minute)}]));
-  const candidates=new Map();
-  for(const date of dates){const rows=ok.map(r=>dailyCandidate(r,spyDaily,date)).filter(Boolean).sort((a,b)=>b.setupScore-a.setupScore).slice(0,CANDIDATES_PER_DAY);candidates.set(date,rows);}
-  const testCount=Math.max(3,Math.floor(dates.length*.25)),validationCount=Math.max(3,Math.floor(dates.length*.25)),calCount=dates.length-testCount-validationCount;if(calCount<6)throw new Error("CALIBRATION_DATES_INSUFFICIENT");
-  const calibration=dates.slice(0,calCount),validation=dates.slice(calCount,calCount+validationCount),test=dates.slice(calCount+validationCount);
-  const familyResults=[];
-  for(const family of Object.keys(FAMILIES)){
-    const cal=runFamily(family,calibration,candidates,dataBySymbol,spyDays,NORMAL_COST);
-    const val=runFamily(family,validation,candidates,dataBySymbol,spyDays,NORMAL_COST);
-    const valStress=runFamily(family,validation,candidates,dataBySymbol,spyDays,STRESS_COST);
-    familyResults.push({family,selectionScore:selectionScore(cal),validationPass:validationPass(val,valStress),calibration:cal,validation:val,validationStress:valStress});
-  }
-  familyResults.sort((a,b)=>b.selectionScore-a.selectionScore);
-  const selectedFamily=familyResults[0],gatePassed=selectedFamily.validationPass;
-  const testNormal=runFamily(selectedFamily.family,test,candidates,dataBySymbol,spyDays,NORMAL_COST),testStress=runFamily(selectedFamily.family,test,candidates,dataBySymbol,spyDays,STRESS_COST);
-  const report={
-    schemaVersion:1,status:"pass",market:"US_STOCK",provider:"toss-openapi",
-    purpose:"fresh-symbol D-1 candidate -> US opening momentum / first pullback intraday replay",
-    dataWindow:{startInclusive:new Date(EVAL_START).toISOString(),endExclusive:new Date(EVAL_END).toISOString(),completeDates:dates,calibrationDates:calibration,validationDates:validation,testDates:test},
-    universe:{currentSnapshotBias:true,rawRows:u.rawRows,selectionPolicy:{largeCurrentLiquidityRanks:"161-180 -> first 4 with sufficient history",midCurrentLiquidityRanks:"101-120 -> first 4 with sufficient history",smallCurrentLiquidityRanks:"241-280 -> first 4 with sufficient history"},selected:ok.map(x=>({symbol:x.symbol,bucket:x.bucket,sector:x.sector,marketCap:x.marketCap,dollarVolume:x.dollarVolume}))},
-    selectionContract:{familiesPreRegistered:Object.keys(FAMILIES),selectedFamilyChosenByCalibrationOnly:true,validationCanOnlyPassOrFailSelectedFamily:true,testUsedForSelection:false,actualHistoricalLlmCalled:false,critic:"DETERMINISTIC_WAVE_CANDLE_VWAP_GATE_US_V1"},
-    costs:{normalPerSide:NORMAL_COST,stressPerSide:STRESS_COST,note:"research all-in fee+spread+slippage assumption"},
-    accountPolicy:ACCOUNT,
-    familyResults:familyResults.map(x=>({family:x.family,selectionScore:x.selectionScore,validationPass:x.validationPass,calibration:{metrics:x.calibration.metrics,trades:x.calibration.trades.length},validation:{metrics:x.validation.metrics,trades:x.validation.trades.length},validationStress:{metrics:x.validationStress.metrics,trades:x.validationStress.trades.length}})),
-    selectedFamily:selectedFamily.family,selectedStatus:gatePassed?"VALIDATION_GATE_PASS":"RESEARCH_HOLD_VALIDATION_FAILED",
-    test:{normal:{metrics:testNormal.metrics,days:testNormal.days,trades:testNormal.trades.map(t=>({symbol:t.symbol,date:t.date,bucket:t.bucket,family:t.family,setupScore:t.setupScore,triggerScore:t.triggerScore,entryTime:new Date(t.entryTime).toISOString(),exitTime:new Date(t.exitTime).toISOString(),netReturn:t.netReturn,stopDistancePct:t.stopDistancePct,tp1:t.tp1,tp2:t.tp2,exitReason:t.exitReason,aiInputBundle:t.aiInputBundle}))},stress:{metrics:testStress.metrics,days:testStress.days,trades:testStress.trades.length}},
-    lookahead:{D1UsesPriorCompletedDailyCandle:true,intradayUsesCompleted1mAggregated5m15m:true,entryNext1mOpen:true,testUsedForSelection:false,guardPassed:true},
-    safety:{researchOnly:true,marketDataOnly:true,accountHeaderUsed:false,orderRouteCalled:false,liveExecutionAllowed:false,privateAccountRequestAllowed:false,executionAuthority:"NONE",profitabilityPromotionAllowed:false},
-    limitations:["Toss credentials are used only for authenticated market-data GET requests; no account header or order route is used.","Universe uses a current Nasdaq liquidity snapshot and therefore has survivorship/current-membership bias.","The August period is retrospective and the strategy family was designed later, so this is not prospective proof.","Historical news/catalyst/order-book/short-interest and historical LLM outputs are not included.","Candle replay is not broker fill evidence and cannot establish PROFITABILITY_PROVEN."]
+function buildCommonBreakoutCandidate(row, date, leader) {
+  if (!leader?.top2pctAny) return null;
+  const candles = row.daily;
+  const index = dailyIndexBefore(candles, date);
+  if (index < 126) return null;
+  const priorMove = maxPriorMove(candles, index);
+  if (priorMove < 0.30) return null;
+  const consolidation = detectConsolidation(candles, index);
+  if (!consolidation) return null;
+  const atr20 = atr(candles, index, 20);
+  if (!(atr20 > 0)) return null;
+  return {
+    symbol: row.symbol,
+    sector: row.sector,
+    bucket: row.bucket,
+    date,
+    recipeId: "QULLAMAGGIE_COMMON_BREAKOUT_V1",
+    leader,
+    priorMove,
+    consolidation,
+    breakoutLevel: consolidation.breakoutLevel,
+    atr20,
   };
-  const out=resolve(process.argv[2]??"docs/us-toss-opening-momentum-v1.json");await mkdir(dirname(out),{recursive:true});await writeFile(out,JSON.stringify(report,null,2)+"\n","utf8");console.log(JSON.stringify(report,null,2));
+}
+function buildEpGapCandidate(row, date) {
+  const candles = row.daily;
+  const dayIndex = dailyIndexOnDate(candles, date);
+  if (dayIndex <= 126) return null;
+  const prev = candles[dayIndex - 1];
+  const day = candles[dayIndex];
+  const gap = day.open / prev.close - 1;
+  if (gap < 0.10) return null;
+  const atr20 = atr(candles, dayIndex - 1, 20);
+  const adv20 = avgVolume(candles, dayIndex - 1, 20);
+  const r63 = prev.close / candles[dayIndex - 64].close - 1;
+  const r126 = prev.close / candles[dayIndex - 127].close - 1;
+  if (!(atr20 > 0) || !(adv20 > 0)) return null;
+  return {
+    symbol: row.symbol, sector: row.sector, bucket: row.bucket, date,
+    recipeId: "QULLAMAGGIE_EP_V1", gap, atr20, adv20, prior3mReturn: r63, prior6mReturn: r126,
+  };
+}
+function groupDays(rows) {
+  const map = new Map();
+  for (const row of rows) {
+    if (!regular(row.timestamp)) continue;
+    const date = nyParts(row.timestamp).date;
+    const list = map.get(date) ?? [];
+    list.push(row);
+    map.set(date, list);
+  }
+  for (const list of map.values()) list.sort((a, b) => a.timestamp - b.timestamp);
+  return map;
+}
+function completeDates(rows) {
+  return [...groupDays(rows).entries()]
+    .filter(([date, values]) => Date.parse(`${date}T00:00:00Z`) >= EVAL_START && Date.parse(`${date}T00:00:00Z`) < EVAL_END && values.length >= 70)
+    .map(([date]) => date).sort();
+}
+function entryOn5mOrh(candidate, day, { ep = false } = {}) {
+  if (!day?.length) return null;
+  const first = day.find((row) => minuteOfDay(row.timestamp) === 570) ?? day[0];
+  const firstIndex = day.indexOf(first);
+  if (firstIndex < 0 || firstIndex + 1 >= day.length) return null;
+  const trigger = ep ? first.high : Math.max(first.high, candidate.breakoutLevel);
+  const endMinute = ep ? 660 : 720;
+  for (let i = firstIndex + 1; i < day.length - 1; i += 1) {
+    if (minuteOfDay(day[i].timestamp) > endMinute) break;
+    if (day[i].high < trigger) continue;
+    const next = day[i + 1];
+    const lowToDate = minLow(day.slice(0, i + 1));
+    const risk = next.open - lowToDate;
+    const cap = candidate.atr20 * (ep ? 1.5 : 1.0);
+    if (!(risk > 0) || risk > cap) return null;
+    return {
+      index: i + 1,
+      entryTime: next.timestamp,
+      rawEntry: next.open,
+      initialStop: lowToDate,
+      stopDistancePct: risk / next.open,
+      trigger,
+      first5High: first.high,
+    };
+  }
+  return null;
+}
+function exitReturn(entryFill, exitRaw, cost) { return exitRaw * (1 - cost) / entryFill - 1; }
+function simulateCommonBreakout(row, candidate, day, entry, cost) {
+  const entryFill = entry.rawEntry * (1 + cost);
+  let remaining = 1;
+  let realized = 0;
+  let partialDone = false;
+  let exitNextOpen = false;
+  let exitTime = day.at(-1)?.timestamp ?? entry.entryTime;
+  let exitReason = "HORIZON_END";
+  for (let i = entry.index + 1; i < day.length; i += 1) {
+    if (day[i].low <= entry.initialStop) {
+      realized += remaining * exitReturn(entryFill, entry.initialStop, cost);
+      return { netReturn: realized, exitTime: day[i].timestamp, exitReason: "INITIAL_STOP", partialDone, stopDistancePct: entry.stopDistancePct };
+    }
+  }
+  const candles = row.daily;
+  const dayIndex = dailyIndexOnDate(candles, candidate.date);
+  if (dayIndex < 0) return null;
+  const maxIndex = Math.min(candles.length - 1, dayIndex + 45);
+  for (let index = dayIndex + 1; index <= maxIndex; index += 1) {
+    const bar = candles[index];
+    if (exitNextOpen) {
+      realized += remaining * exitReturn(entryFill, bar.open, cost);
+      remaining = 0;
+      exitTime = bar.timestamp;
+      exitReason = "NEXT_OPEN_AFTER_10DMA_CLOSE_BREAK";
+      break;
+    }
+    const activeStop = partialDone ? Math.max(entry.initialStop, entry.rawEntry) : entry.initialStop;
+    if (bar.low <= activeStop) {
+      realized += remaining * exitReturn(entryFill, activeStop, cost);
+      remaining = 0;
+      exitTime = bar.timestamp;
+      exitReason = partialDone ? "BREAKEVEN_STOP" : "INITIAL_STOP";
+      break;
+    }
+    const heldSessions = index - dayIndex + 1;
+    if (!partialDone && heldSessions >= 4) {
+      realized += (1 / 3) * exitReturn(entryFill, bar.close, cost);
+      remaining -= 1 / 3;
+      partialDone = true;
+    }
+    if (partialDone) {
+      const ma10 = sma(candles, index, 10);
+      if (ma10 && bar.close < ma10) exitNextOpen = true;
+    }
+    exitTime = bar.timestamp;
+  }
+  if (remaining > 0) {
+    const lastIndex = Math.min(maxIndex, candles.length - 1);
+    const last = candles[lastIndex];
+    realized += remaining * exitReturn(entryFill, last.close, cost);
+    exitTime = last.timestamp;
+    exitReason = "HORIZON_END";
+  }
+  return { netReturn: realized, exitTime, exitReason, partialDone, stopDistancePct: entry.stopDistancePct };
+}
+function simulateEp(row, candidate, day, entry, cost) {
+  const entryFill = entry.rawEntry * (1 + cost);
+  for (let i = entry.index + 1; i < day.length; i += 1) {
+    if (day[i].low <= entry.initialStop) {
+      return { netReturn: exitReturn(entryFill, entry.initialStop, cost), exitTime: day[i].timestamp, exitReason: "INITIAL_STOP", stopDistancePct: entry.stopDistancePct };
+    }
+  }
+  const candles = row.daily;
+  const dayIndex = dailyIndexOnDate(candles, candidate.date);
+  if (dayIndex < 0) return null;
+  let exitNextOpen = false;
+  const maxIndex = Math.min(candles.length - 1, dayIndex + 60);
+  for (let index = dayIndex + 1; index <= maxIndex; index += 1) {
+    const bar = candles[index];
+    if (exitNextOpen) return { netReturn: exitReturn(entryFill, bar.open, cost), exitTime: bar.timestamp, exitReason: "NEXT_OPEN_AFTER_20DMA_CLOSE_BREAK", stopDistancePct: entry.stopDistancePct };
+    if (bar.low <= entry.initialStop) return { netReturn: exitReturn(entryFill, entry.initialStop, cost), exitTime: bar.timestamp, exitReason: "INITIAL_STOP", stopDistancePct: entry.stopDistancePct };
+    const ma20 = sma(candles, index, 20);
+    if (ma20 && ma20 > entry.initialStop && bar.close < ma20) exitNextOpen = true;
+  }
+  const last = candles[maxIndex];
+  return { netReturn: exitReturn(entryFill, last.close, cost), exitTime: last.timestamp, exitReason: "HORIZON_END", stopDistancePct: entry.stopDistancePct };
+}
+function summarizeTrades(trades) {
+  if (!trades.length) return { trades: 0, meanNetReturn: null, medianNetReturn: null, winRate: null, profitFactor: null, compoundSequentialReturn: null, maxSequentialDrawdown: null };
+  const returns = trades.map((trade) => trade.netReturn);
+  const gains = returns.filter((value) => value > 0).reduce((sum, value) => sum + value, 0);
+  const losses = -returns.filter((value) => value < 0).reduce((sum, value) => sum + value, 0);
+  let equity = 1;
+  let peak = 1;
+  let maxDrawdown = 0;
+  for (const value of returns) {
+    equity *= 1 + value;
+    peak = Math.max(peak, equity);
+    maxDrawdown = Math.max(maxDrawdown, (peak - equity) / peak);
+  }
+  return {
+    trades: trades.length,
+    meanNetReturn: mean(returns),
+    medianNetReturn: median(returns),
+    winRate: returns.filter((value) => value > 0).length / returns.length,
+    profitFactor: losses > 0 ? gains / losses : null,
+    compoundSequentialReturn: equity - 1,
+    maxSequentialDrawdown: maxDrawdown,
+  };
+}
+function portfolioDiagnostic(trades) {
+  const ordered = [...trades].sort((a, b) => a.entryTime - b.entryTime || a.symbol.localeCompare(b.symbol));
+  const active = [];
+  const sectors = new Map();
+  let capitalReturn = 0;
+  let admitted = 0;
+  for (const trade of ordered) {
+    for (let index = active.length - 1; index >= 0; index -= 1) {
+      if (active[index].exitTime <= trade.entryTime) {
+        const sector = active[index].sector;
+        sectors.set(sector, Math.max(0, (sectors.get(sector) ?? 1) - 1));
+        active.splice(index, 1);
+      }
+    }
+    if (active.length >= ACCOUNT.maxConcurrent || (sectors.get(trade.sector) ?? 0) >= ACCOUNT.maxPerSector) continue;
+    const weight = Math.min(ACCOUNT.maxWeight, ACCOUNT.riskPerTrade / Math.max(trade.stopDistancePct, 1e-9));
+    capitalReturn += weight * trade.netReturn;
+    admitted += 1;
+    active.push(trade);
+    sectors.set(trade.sector, (sectors.get(trade.sector) ?? 0) + 1);
+  }
+  return { admitted, additiveCapitalReturn: capitalReturn, canonicalPortfolioClaimAllowed: false };
+}
+function matchEarningsEvent(events, date) {
+  const previous = new Date(`${date}T12:00:00Z`);
+  previous.setUTCDate(previous.getUTCDate() - 1);
+  const previousDate = previous.toISOString().slice(0, 10);
+  return events.find((event) => (event.date === date || event.date === previousDate) && event.surprisePct > 0) ?? null;
+}
+function first30mVolume(day) { return day.filter((bar) => minuteOfDay(bar.timestamp) >= 570 && minuteOfDay(bar.timestamp) < 600).reduce((sum, bar) => sum + bar.volume, 0); }
+function peadRows(row, earnings) {
+  const output = [];
+  if (earnings.status !== "AVAILABLE") return output;
+  for (const event of earnings.events) {
+    if (event.surprisePct <= 0) continue;
+    if (event.date < "2026-07-01" || event.date >= "2026-09-20") continue;
+    const candles = row.daily;
+    const eventIndex = candles.findIndex((bar) => nyParts(bar.timestamp).date > event.date);
+    if (eventIndex < 0) continue;
+    for (const horizon of PEAD_HORIZONS) {
+      const exitIndex = eventIndex + horizon - 1;
+      if (exitIndex >= candles.length) continue;
+      const entry = candles[eventIndex].open * (1 + NORMAL_COST);
+      const exit = candles[exitIndex].close * (1 - NORMAL_COST);
+      output.push({ symbol: row.symbol, sector: row.sector, bucket: row.bucket, eventDate: event.date, surprisePct: event.surprisePct, horizonSessions: horizon, netReturn: exit / entry - 1 });
+    }
+  }
+  return output;
+}
+function summarizePead(rows) {
+  return Object.fromEntries(PEAD_HORIZONS.map((horizon) => {
+    const subset = rows.filter((row) => row.horizonSessions === horizon);
+    return [String(horizon), summarizeTrades(subset.map((row, index) => ({ ...row, entryTime: index, exitTime: index + 1, stopDistancePct: 1 })))];
+  }));
+}
+async function main() {
+  const universe = await fetchUniverse();
+  const requested = Object.entries(universe.buckets).flatMap(([bucket, rows]) => rows.map((row) => ({ ...row, bucket })));
+  const dailyFetched = await mapLimit(requested, 10, async (row) => ({ ...row, daily: (await collectYahooStockHistory({ market: "US_STOCK", symbol: row.symbol, startTime: DAILY_START, endTime: DAILY_END })).candles }));
+  const dailyUniverse = dailyFetched.filter((result) => result.ok && result.value.daily.length >= 160).map((result) => result.value);
+  if (dailyUniverse.length < 30) throw new Error(`DAILY_UNIVERSE_INSUFFICIENT_${dailyUniverse.length}`);
+
+  const spy5m = await yahoo5m("SPY");
+  const dates = completeDates(spy5m);
+  if (dates.length < 20) throw new Error(`COMPLETE_DATES_INSUFFICIENT_${dates.length}`);
+
+  const commonByDate = new Map();
+  const commonSymbols = new Set();
+  const epGapCandidates = [];
+  for (const date of dates) {
+    const leaders = rankLeaders(dailyUniverse, date);
+    const common = dailyUniverse.map((row) => buildCommonBreakoutCandidate(row, date, leaders.get(row.symbol))).filter(Boolean)
+      .sort((a, b) => Math.min(a.leader.rank21, a.leader.rank63, a.leader.rank126) - Math.min(b.leader.rank21, b.leader.rank63, b.leader.rank126) || b.priorMove - a.priorMove)
+      .slice(0, COMMON_CANDIDATES_PER_DAY);
+    commonByDate.set(date, common);
+    for (const candidate of common) commonSymbols.add(candidate.symbol);
+    for (const row of dailyUniverse) {
+      const candidate = buildEpGapCandidate(row, date);
+      if (candidate) epGapCandidates.push(candidate);
+    }
+  }
+
+  const earningsResults = await mapLimit(dailyUniverse, 6, async (row) => ({ symbol: row.symbol, earnings: await fetchNasdaqEarnings(row.symbol) }));
+  const earningsBySymbol = new Map(earningsResults.filter((result) => result.ok).map((result) => [result.value.symbol, result.value.earnings]));
+  const earningsAvailableSymbols = [...earningsBySymbol.values()].filter((value) => value.status === "AVAILABLE").length;
+
+  const neededIntraday = [...new Set([...commonSymbols, ...epGapCandidates.map((candidate) => candidate.symbol)])];
+  const intradayFetched = await mapLimit(neededIntraday, 5, async (symbol) => ({ symbol, rows: await yahoo5m(symbol) }));
+  const intradayBySymbol = new Map(intradayFetched.filter((result) => result.ok && result.value.rows.length).map((result) => [result.value.symbol, groupDays(result.value.rows)]));
+
+  const rowBySymbol = new Map(dailyUniverse.map((row) => [row.symbol, row]));
+  const commonNormal = [];
+  const commonStress = [];
+  for (const [date, candidates] of commonByDate.entries()) {
+    for (const candidate of candidates) {
+      const row = rowBySymbol.get(candidate.symbol);
+      const day = intradayBySymbol.get(candidate.symbol)?.get(date);
+      if (!row || !day) continue;
+      const entry = entryOn5mOrh(candidate, day, { ep: false });
+      if (!entry) continue;
+      const normal = simulateCommonBreakout(row, candidate, day, entry, NORMAL_COST);
+      const stress = simulateCommonBreakout(row, candidate, day, entry, STRESS_COST);
+      if (normal) commonNormal.push({ ...candidate, ...entry, ...normal });
+      if (stress) commonStress.push({ ...candidate, ...entry, ...stress });
+    }
+  }
+
+  const epConfirmed = [];
+  const epStress = [];
+  const epMechanics = [];
+  for (const candidate of epGapCandidates) {
+    const row = rowBySymbol.get(candidate.symbol);
+    const day = intradayBySymbol.get(candidate.symbol)?.get(candidate.date);
+    if (!row || !day) continue;
+    const volumeRatio30m = first30mVolume(day) / candidate.adv20;
+    if (volumeRatio30m < 1) continue;
+    const earnings = earningsBySymbol.get(candidate.symbol) ?? { status: "UNAVAILABLE", events: [] };
+    const event = matchEarningsEvent(earnings.events, candidate.date);
+    epMechanics.push({ ...candidate, volumeRatio30m, catalystConfirmed: Boolean(event), event });
+    if (!event) continue;
+    const entry = entryOn5mOrh(candidate, day, { ep: true });
+    if (!entry) continue;
+    const normal = simulateEp(row, candidate, day, entry, NORMAL_COST);
+    const stress = simulateEp(row, candidate, day, entry, STRESS_COST);
+    if (normal) epConfirmed.push({ ...candidate, volumeRatio30m, event, ...entry, ...normal });
+    if (stress) epStress.push({ ...candidate, volumeRatio30m, event, ...entry, ...stress });
+  }
+
+  const pead = [];
+  for (const row of dailyUniverse) pead.push(...peadRows(row, earningsBySymbol.get(row.symbol) ?? { status: "UNAVAILABLE", events: [] }));
+
+  const report = {
+    schemaVersion: 2,
+    status: "pass",
+    market: "US_STOCK",
+    purpose: "reference-first reproduction of published/practitioner strategy recipes before wave/candle/AI overlays",
+    recipeContract: {
+      noInventedCompositeBeforeBaseline: true,
+      noWaveCandleVwapAiOverlayInBaseline: true,
+      winnerSelectionFromThisWindow: false,
+      commonBreakout: {
+        recipeId: "QULLAMAGGIE_COMMON_BREAKOUT_V1",
+        source: QULLAMAGGIE_BREAKOUT_SOURCE,
+        sourceRules: ["top 1-2% leaders by 1m/3m/6m", "30-100%+ prior move", "2w-2m higher-low tightening consolidation", "opening-range-high entry", "stop at low of day and no wider than ATR/ADR", "sell 1/3 after day 4 then breakeven", "trail remainder on first close below 10DMA"],
+        deterministicOperationalizationOnly: true,
+        parameterSearch: false,
+      },
+      episodicPivot: {
+        recipeId: "QULLAMAGGIE_EP_V1",
+        source: QULLAMAGGIE_EP_SOURCE,
+        sourceRules: ["10%+ gap", "large volume with best cases near ADV in first 15-30m", "unexpected earnings/guidance catalyst", "opening-range-high entry", "low-of-day stop <=1.5 ATR", "20DMA close trail"],
+        requiresConfirmedCatalyst: true,
+        priceVolumeOnlyCannotCountAsEp: true,
+        parameterSearch: false,
+      },
+      pead: {
+        recipeId: "PEAD_EARNINGS_SURPRISE_V1",
+        sourceDoi: PEAD_REVIEW_DOI,
+        implementation: "positive consensus-surprise events, first full session after report, 5/20/40-session forward return; descriptive replication only",
+        canonicalSueReplication: false,
+        parameterSearch: false,
+      },
+    },
+    dataWindow: { startInclusive: new Date(EVAL_START).toISOString(), endExclusive: new Date(EVAL_END).toISOString(), completeDates: dates },
+    universe: {
+      currentSnapshotBias: true,
+      rawNasdaqRows: universe.rawRows,
+      requestedSymbols: requested.length,
+      dailyReadySymbols: dailyUniverse.length,
+      cohortPolicy: "fresh current-liquidity ranks retained from #1491: LARGE 161-180, MID 101-120, SMALL 241-280",
+      fullUsMarketTop2PctClaimAllowed: false,
+    },
+    dataSources: {
+      daily: "Yahoo public chart 1d",
+      intraday: "Yahoo public chart 5m range=60d",
+      earningsSurprise: "Nasdaq public company earnings-surprise endpoint, best-effort fail-closed",
+      earningsAvailableSymbols,
+    },
+    commonBreakout: {
+      status: "BASELINE_REPLAY_COMPLETE",
+      candidateDays: [...commonByDate.values()].filter((rows) => rows.length).length,
+      candidateCount: [...commonByDate.values()].reduce((sum, rows) => sum + rows.length, 0),
+      intradaySymbolsRequested: neededIntraday.length,
+      normal: { metrics: summarizeTrades(commonNormal), portfolioDiagnostic: portfolioDiagnostic(commonNormal), trades: commonNormal },
+      stress: { metrics: summarizeTrades(commonStress), portfolioDiagnostic: portfolioDiagnostic(commonStress), trades: commonStress.length },
+    },
+    episodicPivot: {
+      status: earningsAvailableSymbols > 0 ? "CATALYST_AWARE_REPLAY_COMPLETE" : "BLOCKED_EARNINGS_CATALYST_DATA",
+      gapCandidates: epGapCandidates.length,
+      priceVolumeMechanicsCandidates: epMechanics.length,
+      confirmedEarningsCandidates: epMechanics.filter((row) => row.catalystConfirmed).length,
+      trueEpRequiresCatalyst: true,
+      normal: { metrics: summarizeTrades(epConfirmed), trades: epConfirmed },
+      stress: { metrics: summarizeTrades(epStress), trades: epStress.length },
+      mechanicsOnly: epMechanics,
+    },
+    pead: {
+      status: earningsAvailableSymbols > 0 ? "DESCRIPTIVE_REPLICATION_COMPLETE" : "BLOCKED_EARNINGS_SURPRISE_DATA",
+      positiveEventHorizonRows: pead.length,
+      byHorizon: summarizePead(pead),
+      rows: pead,
+    },
+    costs: { normalPerSide: NORMAL_COST, stressPerSide: STRESS_COST },
+    accountPolicy: ACCOUNT,
+    lookahead: {
+      D1CandidateUsesOnlyPriorCompletedDailyBars: true,
+      leaderRanksArePointInTimeWithinBoundedCohort: true,
+      ORHEntryUsesNextCompleted5mOpenAfterTriggerBar: true,
+      lowOfDayStopUsesOnlyLowObservedBeforeEntry: true,
+      movingAverageExitExecutesNextSessionOpenAfterCloseSignal: true,
+      earningsEventTradeUsesSameOrPreviousReportDateOnly: true,
+      peadEntersFirstFullSessionStrictlyAfterReportDate: true,
+    },
+    safety: {
+      researchOnly: true,
+      publicMarketDataOnly: true,
+      privateAccountRequestAllowed: false,
+      orderRouteCalled: false,
+      liveExecutionAllowed: false,
+      executionAuthority: "NONE",
+      profitabilityPromotionAllowed: false,
+      economicSampleCredit: 0,
+    },
+    limitations: [
+      "This is a bounded fresh current-liquidity cohort, not the entire US market; Qullamaggie's top-1-2% scan is reproduced only inside this bounded cohort.",
+      "Current Nasdaq membership/liquidity introduces survivorship/current-snapshot bias.",
+      "Yahoo public 5m history is bounded to recent history; this is not a multi-year intraday proof.",
+      "Common Breakout qualitative terms such as orderly consolidation are converted into fixed, preregistered higher-low/range-tightening rules without parameter search.",
+      "True EP credit requires a matched positive earnings-surprise event. Gap+volume without catalyst remains mechanics-only and cannot be labeled EP.",
+      "Nasdaq earnings-surprise availability is best-effort; missing event data fails closed instead of being inferred from price.",
+      "PEAD here uses consensus surprise when available and is not a canonical standardized-unexpected-earnings replication.",
+      "No historical guidance, revenue-growth, analyst-revision, news-text, order-book, short-interest, wave/candle or AI overlay is used in the baseline.",
+      "Historical replay is not genuine OOS/Forward, broker fill evidence, or PROFITABILITY_PROVEN.",
+    ],
+  };
+
+  const out = resolve(process.argv[2] ?? "docs/us-reference-recipes-v2.json");
+  await mkdir(dirname(out), { recursive: true });
+  await writeFile(out, JSON.stringify(report, null, 2) + "\n", "utf8");
+  console.log(JSON.stringify({
+    status: report.status,
+    dailyReadySymbols: report.universe.dailyReadySymbols,
+    commonCandidates: report.commonBreakout.candidateCount,
+    commonTrades: report.commonBreakout.normal.metrics.trades,
+    epGapCandidates: report.episodicPivot.gapCandidates,
+    epConfirmedTrades: report.episodicPivot.normal.metrics.trades,
+    peadRows: report.pead.positiveEventHorizonRows,
+    earningsAvailableSymbols,
+  }));
 }
 await main();
