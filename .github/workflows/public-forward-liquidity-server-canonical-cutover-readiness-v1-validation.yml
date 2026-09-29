@@ -5,7 +5,12 @@ on:
     paths:
       - '.github/workflows/public-forward-liquidity-server-canonical-cutover-readiness-v1-validation.yml'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-runtime-v1.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-v3-capture-ingest.mjs'
+      - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-v3-capture-ingest.mjs'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-cutover-readiness-v1.test.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-runtime-v1.test.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-v3-capture-ingest.test.mjs'
 
 permissions:
   contents: read
@@ -31,6 +36,7 @@ jobs:
           set -Eeuo pipefail
           workflow='.github/workflows/public-forward-liquidity-server-canonical-cutover-readiness-v1-validation.yml'
           source='market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs'
+          runtime='market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-runtime-v1.mjs'
 
           ! grep -Eq '^[[:space:]]{2}(schedule|workflow_dispatch|issue_comment):' "$workflow"
           ! grep -Eq 'contents:[[:space:]]+write|actions:[[:space:]]+write|issues:[[:space:]]+write|deployments:[[:space:]]+write|id-token:[[:space:]]+write' "$workflow"
@@ -42,12 +48,25 @@ jobs:
           grep -Fq "SERVER_CANONICAL_RETROACTIVE_SHADOW_RECEIPT_FORBIDDEN" "$source"
           grep -Fq "SERVER_CANONICAL_CUTOVER_FUTURE_SLOT_LEAD_REQUIRED" "$source"
           grep -Fq "executionAuthority: 'NONE'" "$source"
+          grep -Fq 'defaultEnabled: false' "$runtime"
+          grep -Fq "githubRecoveryPolicy: 'STOP_SERVER_CANONICAL_AND_EMIT_NO_CREDIT'" "$runtime"
+          grep -Fq "receiptPersistence: 'CREATE_ONLY_WX'" "$runtime"
+          grep -Fq 'shadowReceiptPromotionPerformed: false' "$runtime"
+          grep -Fq "executionAuthority: 'NONE'" "$runtime"
+          ! grep -Fq 'SERVER_EVIDENCE_SERVER_CANONICAL=true' "$runtime"
 
       - name: Syntax check cutover contract
-        run: node --check market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs
+        run: |
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-runtime-v1.mjs
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-v3-capture-ingest.mjs
+          node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-v3-capture-ingest.mjs
 
       - name: Run future-only cutover regressions
-        run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-cutover-readiness-v1.test.mjs
+        run: |
+          node --test market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-cutover-readiness-v1.test.mjs
+          node --test market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-runtime-v1.test.mjs
+          node --test market-intelligence-sidecar/tests/public-forward-liquidity-v3-capture-ingest.test.mjs
 
       - name: Verify repository remained clean
         run: |

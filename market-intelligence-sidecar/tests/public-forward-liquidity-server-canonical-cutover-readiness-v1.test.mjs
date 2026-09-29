@@ -9,6 +9,7 @@ import {
 } from '../src/public-forward-liquidity-server-shadow-worker-v1.mjs';
 import {
   SERVER_CANONICAL_CUTOVER_AUTHORITY_SCHEMA,
+  SERVER_CANONICAL_SOURCE_PRECEDENCE,
   buildServerCanonicalCutoverReadiness,
 } from '../src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs';
 import {
@@ -58,6 +59,7 @@ const AUTHORIZED_AT_MS = AUTHORIZATION_SLOT.nominalScheduledAtMs + 5 * 60 * 1000
 
 function requiredCi(overrides = {}) {
   return {
+    runId: 36501705672,
     headSha: MAIN,
     workflowId: 325169344,
     workflowName: 'Application CI',
@@ -81,10 +83,15 @@ function requiredCi(overrides = {}) {
 
 function activationReceipt(overrides = {}) {
   return {
+    issueNumber: 23,
     action: 'AUTHORIZE',
     commentId: RECEIPT_COMMENT_ID,
     targetMainSha: MAIN,
     activationBindingDigest: BINDING,
+    authorAssociation: 'OWNER',
+    actorLogin: 'repository-owner',
+    body: `/authorize-public-only-partial-fill-v3-schedule-activation ${MAIN} ${BINDING}`,
+    latestForTargetBinding: true,
     ...overrides,
   };
 }
@@ -93,7 +100,14 @@ function githubDelivery(overrides = {}) {
   return {
     targetWorkflowId: 347888347,
     targetWorkflowState: 'active',
+    targetLatestScheduleWorkflowId: 347888347,
+    targetLatestScheduleEvent: 'schedule',
+    targetLatestScheduleHeadSha: 'f'.repeat(40),
+    targetCurrentMainScheduleRunCount: 0,
     targetLatestScheduleCreatedAtMs: AUTHORIZED_AT_MS - 2 * 60 * 60 * 1000,
+    repositoryLatestScheduleWorkflowId: 343418331,
+    repositoryLatestScheduleEvent: 'schedule',
+    repositoryLatestScheduleHeadSha: MAIN,
     repositoryLatestScheduleCreatedAtMs: AUTHORIZED_AT_MS - 5 * 60 * 1000,
     observedAtMs: AUTHORIZED_AT_MS,
     ...overrides,
@@ -106,11 +120,23 @@ function serverRuntime(overrides = {}) {
     timerEnabled: true,
     timerActive: true,
     persistent: false,
+    timerUnit: 'public-forward-liquidity-server-shadow-worker-v1.timer',
+    serviceUnit: 'public-forward-liquidity-server-shadow-worker-v1.service',
+    timerTimezone: 'UTC',
+    onCalendarUtc: [
+      '*-*-* *:17:00 UTC',
+      '*-*-* *:27:00 UTC',
+      '*-*-* *:37:00 UTC',
+    ],
+    accuracySec: 1,
+    randomizedDelaySec: 0,
     ntpSynchronized: true,
     shadowOnly: true,
     serverCanonical: false,
+    receiptPersistence: 'CREATE_ONLY_WX',
     triggerMinutesUtc: [17, 27, 37],
     productionAppMutationPerformed: false,
+    manualCapturePerformed: false,
     executionAuthority: 'NONE',
     ...overrides,
   };
@@ -187,7 +213,23 @@ function receiptWithDigest(overrides = {}) {
   };
 }
 
+function canonicalCreditLedger(receipt = receiptWithDigest(), overrides = {}) {
+  return {
+    lookupComplete: true,
+    creditKey: {
+      policyDigest: receipt.policyDigest,
+      cohortDigest: receipt.cohortDigest,
+      slotIndex: receipt.slotIndex,
+    },
+    sourcePrecedence: [...SERVER_CANONICAL_SOURCE_PRECEDENCE],
+    matchingCanonicalCredits: [],
+    maximumCanonicalEconomicCredit: 1,
+    ...overrides,
+  };
+}
+
 function readiness(overrides = {}) {
+  const shadowReceipt = overrides.shadowReceipt ?? receiptWithDigest();
   return buildServerCanonicalCutoverReadiness({
     currentMainSha: MAIN,
     activationBindingDigest: BINDING,
@@ -196,7 +238,8 @@ function readiness(overrides = {}) {
     githubDelivery: githubDelivery(),
     serverRuntime: serverRuntime(),
     cutoverAuthority: cutoverAuthority(),
-    shadowReceipt: receiptWithDigest(),
+    shadowReceipt,
+    canonicalCreditLedger: canonicalCreditLedger(shadowReceipt),
     contract: ACTIVE_CONTRACT,
     ...overrides,
   });
@@ -213,6 +256,11 @@ test('future natural server receipt can become cutover-ready but receives zero c
   assert.equal(result.futureCanonicalCreditPermittedByThisReadinessCheck, false);
   assert.equal(result.requiresSeparateProtectedRuntimeActivation, true);
   assert.equal(result.firstEligibleSlotIndex, FIRST_ELIGIBLE_SLOT_INDEX);
+  assert.deepEqual(result.sourcePrecedence, [
+    'GITHUB_V3_SCHEDULE',
+    'SERVER_NATURAL_TIMER',
+  ]);
+  assert.equal(result.maximumCanonicalEconomicCreditPerPolicyCohortSlot, 1);
   assert.deepEqual(result.blockers, []);
   assert.equal(result.safety.executionAuthority, 'NONE');
   assert.equal(result.safety.replayCredit, 0);
@@ -264,6 +312,23 @@ test('GitHub target outage must be mature while other repository schedules remai
   assert.ok(result.blockers.includes('SERVER_CANONICAL_GITHUB_TARGET_OUTAGE_NOT_MATURED'));
 });
 
+test('current-main GitHub schedule absence and other-schedule current-main identity must be proven', () => {
+  const result = readiness({
+    githubDelivery: githubDelivery({
+      targetCurrentMainScheduleRunCount: 1,
+      repositoryLatestScheduleHeadSha: 'e'.repeat(40),
+    }),
+  });
+
+  assert.equal(result.readyForFutureCanonicalCutover, false);
+  assert.ok(result.blockers.includes(
+    'SERVER_CANONICAL_CURRENT_MAIN_GITHUB_SCHEDULE_ABSENCE_UNPROVEN',
+  ));
+  assert.ok(result.blockers.includes(
+    'SERVER_CANONICAL_REPOSITORY_SCHEDULE_HEALTH_NOT_OBSERVED',
+  ));
+});
+
 test('current-main CI and OWNER receipt mismatches fail closed', () => {
   const result = readiness({
     requiredCi: requiredCi({ headSha: 'd'.repeat(40) }),
@@ -271,6 +336,19 @@ test('current-main CI and OWNER receipt mismatches fail closed', () => {
   });
 
   assert.equal(result.readyForFutureCanonicalCutover, false);
+  assert.ok(result.blockers.includes('SERVER_CANONICAL_REQUIRED_CI_PROVENANCE_INVALID'));
+  assert.ok(result.blockers.includes('SERVER_CANONICAL_CURRENT_MAIN_OWNER_RECEIPT_INVALID'));
+});
+
+test('OWNER receipt body and exact Application CI run provenance fail closed when incomplete', () => {
+  const result = readiness({
+    requiredCi: requiredCi({ runId: null }),
+    latestActivationReceipt: activationReceipt({
+      body: '/authorize-public-only-partial-fill-v3-schedule-activation wrong',
+      latestForTargetBinding: false,
+    }),
+  });
+
   assert.ok(result.blockers.includes('SERVER_CANONICAL_REQUIRED_CI_PROVENANCE_INVALID'));
   assert.ok(result.blockers.includes('SERVER_CANONICAL_CURRENT_MAIN_OWNER_RECEIPT_INVALID'));
 });
@@ -301,4 +379,21 @@ test('unsafe server runtime state fails closed before any cutover', () => {
   assert.equal(result.readyForFutureCanonicalCutover, false);
   assert.ok(result.blockers.includes('SERVER_CANONICAL_SHADOW_RUNTIME_NOT_READY'));
   assert.equal(result.activationApplied, false);
+});
+
+test('timer calendar, create-only receipt persistence, and prior-credit lookup are mandatory', () => {
+  const shadowReceipt = receiptWithDigest();
+  const result = readiness({
+    shadowReceipt,
+    serverRuntime: serverRuntime({
+      onCalendarUtc: ['*-*-* *:17:00 UTC'],
+      receiptPersistence: 'OVERWRITE',
+    }),
+    canonicalCreditLedger: canonicalCreditLedger(shadowReceipt, {
+      matchingCanonicalCredits: [{ source: 'GITHUB_V3_SCHEDULE' }],
+    }),
+  });
+
+  assert.ok(result.blockers.includes('SERVER_CANONICAL_SHADOW_RUNTIME_NOT_READY'));
+  assert.ok(result.blockers.includes('SERVER_CANONICAL_PRIOR_CREDIT_DEDUPE_UNPROVEN'));
 });
