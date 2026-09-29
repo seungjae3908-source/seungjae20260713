@@ -35,6 +35,7 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(auditRoute).toContain('await navigateInMountedApp(page, route)');
   expect(auditRoute).not.toContain('page.goto(route');
   expect(qa).toContain('const LOGIN_READY_BUDGET_MS = 15_000;');
+  expect(qa).toContain('const CACHED_AUTH_TIMEOUT_RETRIES = 1;');
   const validateCachedAuthStart = qa.indexOf('async function validateCachedAuthState');
   const loginStart = qa.indexOf('async function login(');
   const validateCachedAuth = qa.slice(validateCachedAuthStart, loginStart);
@@ -47,6 +48,9 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(loginStart).toBeGreaterThan(validateCachedAuthStart);
   expect(validateCachedAuth).toContain("page.request.get(new URL('/api/auth/profile', baseUrl).toString()");
   expect(validateCachedAuth).toContain('Authorization: `Bearer ${token}`');
+  expect(validateCachedAuth).toContain("error.name === 'TimeoutError'");
+  expect(validateCachedAuth).toContain('/Timeout \\d+ms exceeded/i.test(error.message)');
+  expect(validateCachedAuth).toContain('attempt >= CACHED_AUTH_TIMEOUT_RETRIES');
   expect(validateCachedAuth).toContain('if (response.status() !== 200)');
   expect(validateCachedAuth).toContain('PRODUCTION_QA_CACHED_SESSION_PROFILE_INVALID');
   expect(login).toContain('Math.max(1, LOGIN_READY_BUDGET_MS - (Date.now() - readinessStartedAt))');

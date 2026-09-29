@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { expect, test, type BrowserContext, type Page, type Request, type TestInfo } from '@playwright/test';
+import { expect, test, type APIResponse, type BrowserContext, type Page, type Request, type TestInfo } from '@playwright/test';
 import {
   installProductionReadOnlyPolicy,
   isIgnorableProductionRequestFailure,
@@ -157,6 +157,7 @@ async function installSafety(page: Page, blocked: Diagnostic[]) {
 }
 
 const LOGIN_READY_BUDGET_MS = 15_000;
+const CACHED_AUTH_TIMEOUT_RETRIES = 1;
 type CachedAuthState = Awaited<ReturnType<BrowserContext['storageState']>>;
 const authStateByViewport = new Map<string, CachedAuthState>();
 
@@ -215,14 +216,25 @@ function accessTokenFromStorageState(state: CachedAuthState) {
 
 async function validateCachedAuthState(page: Page, state: CachedAuthState) {
   const token = accessTokenFromStorageState(state);
-  const response = await page.request.get(new URL('/api/auth/profile', baseUrl).toString(), {
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    timeout: LOGIN_READY_BUDGET_MS,
-    failOnStatusCode: false,
-  });
+  let response: APIResponse | null = null;
+  for (let attempt = 0; attempt <= CACHED_AUTH_TIMEOUT_RETRIES; attempt += 1) {
+    try {
+      response = await page.request.get(new URL('/api/auth/profile', baseUrl).toString(), {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        timeout: LOGIN_READY_BUDGET_MS,
+        failOnStatusCode: false,
+      });
+      break;
+    } catch (error) {
+      const timeoutOnly = error instanceof Error
+        && (error.name === 'TimeoutError' || /Timeout \d+ms exceeded/i.test(error.message));
+      if (!timeoutOnly || attempt >= CACHED_AUTH_TIMEOUT_RETRIES) throw error;
+    }
+  }
+  if (!response) throw new Error('PRODUCTION_QA_CACHED_SESSION_PROFILE_UNAVAILABLE');
   if (response.status() !== 200) {
     throw new Error(`PRODUCTION_QA_CACHED_SESSION_PROFILE_${response.status()}`);
   }
@@ -248,7 +260,8 @@ async function login(
     if (cached) {
       // Validate the real password-login path once per viewport, then reuse the
       // exact in-memory authenticated browser state for later read-only tests.
-      // Cached-session failure remains fail-closed; there is no login retry.
+      // Cached-session auth/status failures remain fail-closed. Only a transport
+      // timeout gets one bounded repeat of the same read-only profile proof.
       await restoreCachedAuthState(page, cached);
       // Do not add a second root-page navigation before every read-only test.
       // The first test in each viewport proves the real password-login path;
