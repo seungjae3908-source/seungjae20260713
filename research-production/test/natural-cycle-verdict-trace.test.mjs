@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildCanonicalNaturalPaperFirstZeroTrace,
   buildNaturalPaperFirstZeroTrace,
   buildNaturalPaperFirstZeroTraceFromRuntime,
+  CANONICAL_NATURAL_PAPER_STAGE_FIELDS,
+  CANONICAL_NATURAL_PAPER_STAGE_ORDER,
   NATURAL_PAPER_STAGE_ORDER,
 } from '../src/natural-cycle-verdict-trace.mjs';
 
@@ -54,6 +57,62 @@ function runtimeMeasurements(overrides = {}) {
     ['Settlement', 'settlementCount'],
     ['Outcome', 'outcomeCount'],
   ].map(([stage, field]) => ({ stage, field, count: values[field] }));
+}
+
+function canonicalEvidence(overrides = {}) {
+  const cycleId = 'cycle:canonical';
+  const canonicalIdentity = Object.freeze({
+    cycleId,
+    strategySha: STRATEGY_SHA,
+    runtimeSha: RUNTIME_SHA,
+    datasetIdentity: DATASET,
+    triggerSource: 'cron',
+  });
+  const values = {
+    SIGNAL_CANDIDATE: 20,
+    QUALITY_PASSED: 5,
+    RISK_PASSED: 2,
+    ENTRY_ELIGIBLE: 1,
+    ENTRY: 1,
+    POSITION: 1,
+    EXIT_ELIGIBLE: 1,
+    SETTLEMENT: 1,
+    ...(overrides.counts ?? {}),
+  };
+  const stageCounts = Object.fromEntries(CANONICAL_NATURAL_PAPER_STAGE_ORDER.map((stage) => {
+    const field = CANONICAL_NATURAL_PAPER_STAGE_FIELDS[stage];
+    const count = values[stage];
+    return [field, Object.freeze({
+      stage,
+      field,
+      status: 'MEASURED',
+      count,
+      blocker: null,
+      provenance: `direct:${stage}`,
+      observationIds: Object.freeze(Array.from({ length: count }, (_, index) => `${stage}:${index + 1}`)),
+      identity: canonicalIdentity,
+      naturalCredit: count,
+      replayCredit: 0,
+      duplicateCredit: 0,
+    })];
+  }));
+  for (const [field, measurement] of Object.entries(overrides.stageCounts ?? {})) {
+    stageCounts[field] = measurement;
+  }
+  return {
+    schemaVersion: 'canonical-natural-paper-stage-evidence-v1',
+    identity: canonicalIdentity,
+    stageCounts,
+    reasonObservations: overrides.reasonObservations ?? [],
+    firstZeroStage: overrides.firstZeroStage ?? 'FORGED_RUNTIME_VERDICT',
+    firstZeroReason: overrides.firstZeroReason ?? 'FORGED_RUNTIME_REASON',
+    naturalCredit: 1,
+    replayCredit: 0,
+    duplicateCredit: 0,
+    historicalCredit: 0,
+    unknownIsZero: false,
+    ...overrides.topLevel,
+  };
 }
 
 test('records the exact twelve-stage Natural Paper funnel', () => {
@@ -329,4 +388,85 @@ test('runtime authoritative reason evidence must still pass the independent reas
   assert.equal(trace.firstZeroReason, 'SPREAD_EXCEEDS_COST_POLICY');
   assert.equal(trace.firstZeroReasonEvidenceStatus, 'ACCEPTED');
   assert.equal(trace.runtimeAdapter.suppliedFirstZeroReasonIgnored, true);
+});
+
+test('canonical trace classifies FIRST_ZERO only from the directly measured prefix', () => {
+  const evidence = canonicalEvidence({
+    counts: { ENTRY_ELIGIBLE: 0, ENTRY: 0, POSITION: 0, EXIT_ELIGIBLE: 0, SETTLEMENT: 0 },
+  });
+  evidence.reasonObservations = [{
+    sourceStage: 'ENTRY_ELIGIBLE',
+    sourceReason: 'AUTHORITATIVE_ACCOUNT_NOT_READY',
+    canonicalReason: 'ACCOUNT_STATE_BLOCK',
+    lossless: true,
+    identity: { ...evidence.identity, observationId: 'account-block-1' },
+    naturalCredit: 1,
+    replayCredit: 0,
+    duplicateCredit: 0,
+  }];
+
+  const trace = buildCanonicalNaturalPaperFirstZeroTrace(evidence);
+
+  assert.equal(trace.status, 'BLOCKED');
+  assert.equal(trace.firstZeroStageName, 'ENTRY_ELIGIBLE');
+  assert.equal(trace.firstZeroReason, 'ACCOUNT_STATE_BLOCK');
+  assert.equal(trace.firstZeroReasonEvidenceStatus, 'ACCEPTED_LOSSLESS');
+  assert.equal(trace.suppliedFirstZeroIgnored, true);
+});
+
+test('canonical trace keeps a later zero UNKNOWN when an earlier boundary is unmeasured', () => {
+  const evidence = canonicalEvidence({ counts: { RISK_PASSED: 0, ENTRY_ELIGIBLE: 0 } });
+  evidence.stageCounts.qualityPassed = {
+    status: 'UNKNOWN',
+    count: null,
+    blocker: 'QUALITY_GATE_NOT_DIRECTLY_OBSERVED',
+  };
+
+  const trace = buildCanonicalNaturalPaperFirstZeroTrace(evidence);
+
+  assert.equal(trace.status, 'WAITING_EVIDENCE');
+  assert.equal(trace.firstUnknownStage, 'QUALITY_PASSED');
+  assert.equal(trace.firstZeroStageName, 'UNKNOWN');
+  assert.equal(trace.firstZeroReason, 'UNKNOWN');
+});
+
+test('canonical trace rejects lossy reason mapping and non-zero replay credit', () => {
+  const lossyEvidence = canonicalEvidence({ counts: { RISK_PASSED: 0, ENTRY_ELIGIBLE: 0 } });
+  lossyEvidence.reasonObservations = [{
+    sourceStage: 'RISK_GATE',
+    rawReason: 'OPAQUE_RISK_RESPONSE',
+    canonicalReason: 'RISK_GATE',
+    lossless: false,
+    identity: lossyEvidence.identity,
+    naturalCredit: 1,
+    replayCredit: 0,
+    duplicateCredit: 0,
+  }];
+  const lossyTrace = buildCanonicalNaturalPaperFirstZeroTrace(lossyEvidence);
+  assert.equal(lossyTrace.firstZeroStageName, 'RISK_PASSED');
+  assert.equal(lossyTrace.firstZeroReason, 'UNKNOWN');
+  assert.equal(lossyTrace.firstZeroReasonEvidenceStatus, 'MISSING_OR_LOSSY');
+
+  const creditedReplay = canonicalEvidence();
+  creditedReplay.stageCounts.signalCandidate = {
+    ...creditedReplay.stageCounts.signalCandidate,
+    replayCredit: 1,
+  };
+  const rejected = buildCanonicalNaturalPaperFirstZeroTrace(creditedReplay);
+  assert.equal(rejected.status, 'WAITING_EVIDENCE');
+  assert.equal(rejected.firstUnknownStage, 'SIGNAL_CANDIDATE');
+  assert.equal(rejected.stages[0].evidenceStatus, 'NON_NATURAL_CREDIT_REJECTED');
+});
+
+test('runtime adapter exposes the canonical trace without changing the legacy verdict', () => {
+  const trace = buildNaturalPaperFirstZeroTraceFromRuntime({
+    cycleId: 'cycle:legacy-and-canonical',
+    ...identity(),
+    authoritativeStageMeasurements: runtimeMeasurements({ settlementCount: 0, outcomeCount: 0 }),
+    canonicalNaturalStageEvidence: canonicalEvidence({ counts: { ENTRY_ELIGIBLE: 0, ENTRY: 0, POSITION: 0 } }),
+  });
+
+  assert.equal(trace.firstZeroStageName, 'SETTLEMENT');
+  assert.equal(trace.canonicalTrace.firstZeroStageName, 'ENTRY_ELIGIBLE');
+  assert.equal(trace.runtimeAdapter.canonicalMeasurementsPresent, true);
 });

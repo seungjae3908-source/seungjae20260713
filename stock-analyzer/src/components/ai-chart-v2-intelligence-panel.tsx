@@ -24,6 +24,12 @@ import {
   type AiChartStrategyMode,
   type AiChartTimeframeEvidence,
 } from '@/lib/ai-chart-v2-intelligence';
+import {
+  decideAiChartV3,
+  type AiChartV3Decision,
+  type AiChartV3Direction,
+  type AiChartV3EngineEvidence,
+} from '@/lib/ai-chart-v3-decision-engine';
 import type { AnalysisSelection, AnalysisTradeAction } from '@/lib/analysis-selection';
 import type { ChartAnalysis } from '@/lib/chart-analysis';
 import { computeChartIndicators } from '@/lib/chart-indicator-engine';
@@ -53,14 +59,14 @@ const MODE_OPTIONS: Array<{ key: AiChartStrategyMode; label: string; description
 ];
 
 function formatPrice(value: number | null, market: AnalysisSelection['market']): string {
-  if (value == null || !Number.isFinite(value)) return 'UNAVAILABLE';
+  if (value == null || !Number.isFinite(value)) return '미확인';
   if (market === 'US') return `$${value.toLocaleString('ko-KR', { maximumFractionDigits: 2 })}`;
   if (market === 'BITGET') return `${value.toLocaleString('ko-KR', { maximumFractionDigits: value >= 1000 ? 2 : 8 })} USDT`;
   return `${value.toLocaleString('ko-KR', { maximumFractionDigits: value >= 1000 ? 0 : 8 })}원`;
 }
 
 function qualityClass(quality: AiChartTimeframeEvidence['quality']): string {
-  if (quality === 'LIVE') return 'border-positive/30 bg-positive/10 text-positive';
+  if (quality === 'FRESH') return 'border-positive/30 bg-positive/10 text-positive';
   if (quality === 'DELAYED' || quality === 'PARTIAL') return 'border-warning/30 bg-warning/10 text-warning';
   return 'border-destructive/30 bg-destructive/10 text-destructive';
 }
@@ -99,7 +105,7 @@ function currentEvidenceFromExistingChart(
 ): AiChartTimeframeEvidence {
   const quality = dataQualityFromStatus(dataStatus);
   const scannerSide = normalizeContextSide(selection.action, selection.market);
-  const scannerScore = finiteScore(selection.confidence ?? selection.signalScore);
+  const scannerScore = finiteScore(selection.signalScore ?? selection.confidence);
   const reasons = (selection.reasons ?? []).filter(Boolean).slice(0, 8);
   const failClosed = quality === 'STALE' || quality === 'UNAVAILABLE' || quality === 'PARTIAL';
 
@@ -124,7 +130,37 @@ function currentEvidenceFromExistingChart(
   }
 
   const qualityRisks = quality === 'DELAYED' ? ['현재 시간봉 시세가 지연 상태'] : [];
+  const chartSide: AiChartSignalSide | null = analysis
+    ? analysis.bias === 'bullish'
+      ? selection.market === 'BITGET' ? 'LONG' : 'BUY'
+      : analysis.bias === 'bearish'
+        ? selection.market === 'BITGET' ? 'SHORT' : 'SELL'
+        : 'WAIT'
+    : null;
+  const directional = (side: AiChartSignalSide | null) => (
+    side === 'BUY' || side === 'LONG' ? 1
+      : side === 'SELL' || side === 'SHORT' ? -1
+        : 0
+  );
+
   if (scannerSide && scannerScore != null) {
+    if (directional(scannerSide) !== 0 && directional(chartSide) !== 0 && directional(scannerSide) !== directional(chartSide)) {
+      return {
+        timeframe: selection.timeframe as UnifiedChartTimeframe,
+        state: 'INSUFFICIENT_DATA',
+        side: 'WAIT',
+        score: null,
+        quality,
+        positiveFactors: [],
+        negativeFactors: [],
+        riskFactors: [
+          ...qualityRisks,
+          `신호검색기 ${scannerSide}와 현재 차트 패턴 ${chartSide} 방향이 충돌하여 신규 방향 점수를 보류`,
+        ],
+        reasonCodes: ['SCANNER_CHART_DIRECTION_CONFLICT', 'FAIL_CLOSED_DIRECTION_CONFLICT'],
+        source: 'NONE',
+      };
+    }
     const positive = scannerSide === 'BUY' || scannerSide === 'LONG';
     return {
       timeframe: selection.timeframe as UnifiedChartTimeframe,
@@ -180,6 +216,50 @@ function currentContext(
   timeframe: string,
 ): AiChartTimeframeEvidence | null {
   return contexts.find((context) => context.timeframe === timeframe) ?? null;
+}
+
+function v3DirectionFromSide(side: AiChartSignalSide): AiChartV3Direction {
+  if (side === 'BUY' || side === 'LONG') return 'BULLISH';
+  if (side === 'SELL' || side === 'SHORT') return 'BEARISH';
+  return side === 'WAIT' ? 'WAIT' : 'NEUTRAL';
+}
+
+function v3DecisionSignalSide(decision: AiChartV3Decision): AiChartSignalSide {
+  if (decision === 'BUY') return 'BUY';
+  if (decision === 'LONG') return 'LONG';
+  if (decision === 'SHORT') return 'SHORT';
+  return 'WAIT';
+}
+
+function v3EvidenceFromContexts(
+  contexts: AiChartTimeframeEvidence[],
+  selectedTimeframe: UnifiedChartTimeframe,
+): AiChartV3EngineEvidence[] {
+  return contexts.map((context) => ({
+    engine: context.timeframe === selectedTimeframe ? 'TECHNICAL' : 'MTF',
+    direction: v3DirectionFromSide(context.side),
+    score: context.score,
+    weight: context.timeframe === selectedTimeframe ? 1 : 0.8,
+    available: context.state === 'READY'
+      && context.score != null
+      && context.quality !== 'STALE'
+      && context.quality !== 'PARTIAL'
+      && context.quality !== 'UNAVAILABLE',
+    reasons: [
+      ...context.positiveFactors,
+      ...context.negativeFactors,
+      ...context.riskFactors,
+      ...context.reasonCodes,
+    ].slice(0, 8),
+  }));
+}
+
+function formatDecisionProbability(value: number | null): string {
+  return value == null ? '미검증' : `${(value * 100).toFixed(1)}%`;
+}
+
+function formatDecisionEv(value: number | null): string {
+  return value == null ? '미검증' : `${value.toFixed(3)}%`;
 }
 
 function initialSignalOverlayVisible(): boolean {
@@ -241,7 +321,7 @@ function AiChartSignalOverlayPortal({
       data-signal-id={signalId ?? 'UNAVAILABLE'}
       data-signal-status={lifecycle}
       className={cn(
-        'pointer-events-none absolute left-3 top-3 z-20 max-w-[calc(100%-1.5rem)] rounded-xl border bg-background/90 px-3 py-2 shadow-sm backdrop-blur-sm',
+        'pointer-events-none relative z-20 mx-3 mb-2 mt-2 max-w-[calc(100%-1.5rem)] rounded-xl border bg-background px-3 py-2 shadow-sm sm:absolute sm:left-3 sm:top-3 sm:mx-0 sm:mb-0 sm:mt-0 sm:bg-background/90 sm:backdrop-blur-sm',
         inactive ? 'border-dashed border-muted-foreground/40 opacity-60' : 'border-card-border',
       )}
       aria-label={`AI 신호 ${side}, 상태 ${lifecycle}`}
@@ -255,7 +335,7 @@ function AiChartSignalOverlayPortal({
         {lifecycle} · {mode} · {selection.timeframe}
       </p>
       <p className="mt-0.5 truncate text-[8px] font-semibold text-muted-foreground">
-        Signal {signalId ?? 'UNAVAILABLE'}
+        Signal {signalId ?? '미확인'}
       </p>
     </div>,
     target,
@@ -365,11 +445,45 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
     [contexts, mode, selectedTimeframe],
   );
   const current = currentContext(contexts, selection.timeframe) ?? currentChartEvidence;
+  const v3Evidence = useMemo(
+    () => v3EvidenceFromContexts(contexts, selectedTimeframe),
+    [contexts, selectedTimeframe],
+  );
+  const v3Decision = useMemo(() => decideAiChartV3({
+    identity: {
+      market: selection.market,
+      symbol: selection.ticker,
+      timeframe: selection.timeframe,
+      strategyId: mode,
+    },
+    market: selection.market,
+    dataQuality: current.quality,
+    regime: 'INSUFFICIENT_DATA',
+    strategyHealth: 'UNKNOWN',
+    eventRisk: 'UNKNOWN',
+    higherTimeframeConflict: multiTimeframeRequested && aggregate.higherTimeframeConflict,
+    hasPosition: false,
+    evidence: v3Evidence,
+    calibration: null,
+  }), [aggregate.higherTimeframeConflict, current.quality, mode, multiTimeframeRequested, selection.market, selection.ticker, selection.timeframe, v3Evidence]);
+  const decisionSide = v3DecisionSignalSide(v3Decision.decision);
+  const decisionOverlayScore = decisionSide === 'BUY' || decisionSide === 'LONG'
+    ? v3Decision.longScore
+    : decisionSide === 'SHORT'
+      ? v3Decision.shortScore
+      : null;
   const plan = mapPricePlan(selection.pricePlan);
   const lifecycle = signalLifecycleFromAnalysis(analysis?.status);
   const invalidationText = analysis?.invalidationConditions?.[0]
-    ?? (plan.invalidation != null ? `가격 ${formatPrice(plan.invalidation, selection.market)} 무효화` : 'UNAVAILABLE');
+    ?? (plan.invalidation != null ? `가격 ${formatPrice(plan.invalidation, selection.market)} 무효화` : '미확인');
   const scannerLinked = Boolean(selection.searchRunId || selection.action || selection.signalScore != null || selection.confidence != null);
+  const hasPlanEvidence = [
+    ...plan.entries,
+    plan.stop,
+    plan.invalidation,
+    ...plan.targets,
+    plan.riskReward,
+  ].some((value) => value != null && Number.isFinite(value));
   const signalId = signalIdFromContext();
   const supplementalLoading = multiTimeframeRequested && queries.some((query) => query.isFetching);
 
@@ -386,8 +500,8 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
       <AiChartSignalOverlayPortal
         visible={signalOverlayVisible}
         selection={selection}
-        side={current.side}
-        score={current.score}
+        side={decisionSide}
+        score={decisionOverlayScore}
         lifecycle={lifecycle}
         mode={mode}
         signalId={signalId}
@@ -430,7 +544,7 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
           onClick={toggleSignalOverlay}
           className="mt-2 flex w-full items-center justify-between rounded-2xl border border-card-border bg-background px-3 py-2 text-left text-[10px] font-black"
         >
-          <span>AI Signals · BUY / SELL / LONG / SHORT / WAIT</span>
+          <span>AI Signals · BUY / LONG / SHORT / WAIT</span>
           <span>{signalOverlayVisible ? 'ON' : 'OFF'}</span>
         </button>
       </section>
@@ -498,15 +612,15 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="ai-evidence-panel">
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
-            {isPositiveSide(current.side)
+            {isPositiveSide(decisionSide)
               ? <TrendingUp className="h-4 w-4 shrink-0 text-destructive" />
-              : current.side === 'SELL' || current.side === 'SHORT'
+              : decisionSide === 'SHORT'
                 ? <TrendingDown className="h-4 w-4 shrink-0 text-blue-500" />
                 : <BarChart3 className="h-4 w-4 shrink-0 text-muted-foreground" />}
             <div className="min-w-0">
-              <p className="text-[10px] font-bold text-muted-foreground">Current Decision</p>
-              <h2 className={cn('truncate text-base font-black', sideClass(current.side))}>
-                {current.side} {current.score == null ? '' : `· ${current.score}`}
+              <p className="text-[10px] font-bold text-muted-foreground">현재 결정 · V3 Gate</p>
+              <h2 className={cn('truncate text-base font-black', sideClass(decisionSide))}>
+                {v3Decision.decision}
               </h2>
             </div>
           </div>
@@ -514,6 +628,46 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
             {current.quality}
           </span>
         </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] font-bold" data-testid="ai-chart-v3-decision-gate">
+          <div className="rounded-2xl bg-background p-3">
+            <span className="text-muted-foreground">기술 근거 강도</span>
+            <strong className="mt-1 block">{current.side} {current.score == null ? '· INSUFFICIENT' : `· ${current.score}`}</strong>
+          </div>
+          <div className="rounded-2xl bg-background p-3">
+            <span className="text-muted-foreground">LONG / 상승 근거</span>
+            <strong className="mt-1 block">{v3Decision.longScore ?? '미검증'}</strong>
+          </div>
+          <div className="rounded-2xl bg-background p-3">
+            <span className="text-muted-foreground">SHORT / 하락 근거</span>
+            <strong className="mt-1 block">{v3Decision.shortScore ?? '미검증'}</strong>
+          </div>
+          <div className="rounded-2xl bg-background p-3">
+            <span className="text-muted-foreground">검증 상태</span>
+            <strong className="mt-1 block">{v3Decision.calibrationState}</strong>
+          </div>
+          <div className="rounded-2xl bg-background p-3">
+            <span className="text-muted-foreground">검증 확률</span>
+            <strong className="mt-1 block">{formatDecisionProbability(v3Decision.calibratedProbability)}</strong>
+          </div>
+          <div className="rounded-2xl bg-background p-3">
+            <span className="text-muted-foreground">비용 반영 EV</span>
+            <strong className="mt-1 block">{formatDecisionEv(v3Decision.costAdjustedEvPct)}</strong>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-v3-decision-reasons">
+          <p className="text-[10px] font-black">판단 보류 이유</p>
+          <ul className="mt-2 space-y-1 text-[10px] font-bold leading-4 text-muted-foreground">
+            {v3Decision.reasons.length
+              ? v3Decision.reasons.map((reason) => <li key={reason}>• {reason}</li>)
+              : <li>• NO_ENTRY_VETO</li>}
+          </ul>
+        </div>
+
+        <p className="mt-3 text-[10px] font-semibold leading-4 text-muted-foreground">
+          기술 근거 강도 점수는 방향 근거 강도이지 수익확률이 아닙니다. canonical regime/strategy/event/calibration provenance가 연결되기 전에는 결정게이트가 WAIT/NO_TRADE로 fail-closed하며 probability/EV를 만들지 않습니다.
+        </p>
 
         {current.state === 'INSUFFICIENT_DATA' ? (
           <div className="mt-3 rounded-2xl border border-warning/30 bg-warning/5 p-3 text-xs font-bold text-muted-foreground" data-testid="insufficient-data-evidence">
@@ -523,19 +677,19 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
 
         <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
           <EvidenceList
-            title="Positive Factors"
+            title="상승 근거"
             icon={<CheckCircle2 className="h-3.5 w-3.5 text-positive" />}
             items={current.positiveFactors}
             empty="상승 근거 없음"
           />
           <EvidenceList
-            title="Negative Factors"
+            title="하락 근거"
             icon={<TrendingDown className="h-3.5 w-3.5 text-blue-500" />}
             items={current.negativeFactors}
             empty="하락 근거 없음"
           />
           <EvidenceList
-            title="Risk Factors"
+            title="위험 요인"
             icon={<ShieldAlert className="h-3.5 w-3.5 text-warning" />}
             items={[
               ...current.riskFactors,
@@ -544,10 +698,10 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
             empty="추가 위험 근거 없음"
           />
           <EvidenceList
-            title="Invalidation"
+            title="무효화 조건"
             icon={<AlertTriangle className="h-3.5 w-3.5 text-destructive" />}
             items={[invalidationText]}
-            empty="UNAVAILABLE"
+            empty="미확인"
           />
         </div>
       </section>
@@ -555,54 +709,68 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="ai-chart-order-plan-preview">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-[11px] font-extrabold text-primary">ORDER PLAN PREVIEW</p>
-            <h2 className="mt-1 text-sm font-black">Entry · Stop · Target</h2>
+            <p className="text-[11px] font-extrabold text-primary">진입·청산 계획</p>
+            <h2 className="mt-1 text-sm font-black">분할진입 · 손절 · 분할청산</h2>
           </div>
-          <span className="rounded-full border border-warning/30 bg-warning/5 px-2 py-1 text-[9px] font-black text-warning">PREVIEW ONLY</span>
+          <span className="rounded-full border border-warning/30 bg-warning/5 px-2 py-1 text-[9px] font-black text-warning">미리보기 전용</span>
         </div>
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4">
-          <PlanMetric label="ENTRY 1" value={formatPrice(plan.entries[0], selection.market)} />
-          <PlanMetric label="ENTRY 2" value={formatPrice(plan.entries[1], selection.market)} />
-          <PlanMetric label="ENTRY 3" value={formatPrice(plan.entries[2], selection.market)} />
-          <PlanMetric label="STOP" value={formatPrice(plan.stop, selection.market)} />
-          <PlanMetric label="TP 1" value={formatPrice(plan.targets[0], selection.market)} />
-          <PlanMetric label="TP 2" value={formatPrice(plan.targets[1], selection.market)} />
-          <PlanMetric label="TP 3" value={formatPrice(plan.targets[2], selection.market)} />
-          <PlanMetric label="R:R" value={plan.riskReward == null ? 'UNAVAILABLE' : plan.riskReward.toFixed(2)} />
-        </div>
+        {hasPlanEvidence ? (
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4">
+            <PlanMetric label="진입 1" value={formatPrice(plan.entries[0], selection.market)} />
+            <PlanMetric label="진입 2" value={formatPrice(plan.entries[1], selection.market)} />
+            <PlanMetric label="진입 3" value={formatPrice(plan.entries[2], selection.market)} />
+            <PlanMetric label="손절" value={formatPrice(plan.stop, selection.market)} />
+            <PlanMetric label="TP 1" value={formatPrice(plan.targets[0], selection.market)} />
+            <PlanMetric label="TP 2" value={formatPrice(plan.targets[1], selection.market)} />
+            <PlanMetric label="TP 3" value={formatPrice(plan.targets[2], selection.market)} />
+            <PlanMetric label="R:R" value={plan.riskReward == null ? '미확인' : plan.riskReward.toFixed(2)} />
+          </div>
+        ) : (
+          <p className="mt-3 rounded-2xl bg-background p-3 text-[10px] font-bold leading-4 text-muted-foreground">
+            Scanner/Risk에서 확인된 진입·손절·목표 가격이 없습니다. 빈 계획을 0이나 임의 가격으로 채우지 않습니다.
+          </p>
+        )}
         <p className="mt-3 text-[10px] font-bold leading-4 text-muted-foreground">
-          Scanner/Risk output만 표시합니다. 없는 ENTRY/TP 가격을 차트가 임의 생성하지 않습니다.
+          Scanner/Risk output만 표시합니다. 없는 진입·TP 가격을 차트가 임의 생성하지 않습니다.
         </p>
       </section>
 
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="ai-chart-data-provenance">
         <div className="flex items-center gap-2">
           <Database className="h-4 w-4 text-primary" />
-          <h2 className="text-sm font-black">Data Quality · Provenance</h2>
+          <h2 className="text-sm font-black">데이터 상태 · 근거 출처</h2>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] font-bold">
           <div className="rounded-2xl bg-background p-3">
             <span className="text-muted-foreground">Scanner 연결</span>
-            <strong className="mt-1 block">{scannerLinked ? 'LINKED' : 'NO_SCANNER_CONTEXT'}</strong>
+            <strong className="mt-1 block">{scannerLinked ? 'LINKED' : '미연결'}</strong>
           </div>
           <div className="rounded-2xl bg-background p-3">
             <span className="text-muted-foreground">실행 계층</span>
-            <strong className="mt-1 block">READ_ONLY_PREVIEW</strong>
+            <strong className="mt-1 block">읽기 전용 미리보기</strong>
           </div>
           <div className="rounded-2xl bg-background p-3">
-            <span className="text-muted-foreground">Historical Performance</span>
-            <strong className="mt-1 block">UNAVAILABLE</strong>
+            <span className="text-muted-foreground">과거 성과 검증</span>
+            <strong className="mt-1 block">미확인</strong>
           </div>
           <div className="rounded-2xl bg-background p-3">
             <span className="text-muted-foreground">현재 Data Quality</span>
             <strong className="mt-1 block">{current.quality}</strong>
+          </div>
+          <div className="rounded-2xl bg-background p-3">
+            <span className="text-muted-foreground">시장국면 근거</span>
+            <strong className="mt-1 block">미검증</strong>
+          </div>
+          <div className="rounded-2xl bg-background p-3">
+            <span className="text-muted-foreground">전략·이벤트 근거</span>
+            <strong className="mt-1 block">미검증</strong>
           </div>
         </div>
         <p className="mt-3 text-[10px] font-semibold leading-4 text-muted-foreground">
           현재 차트 데이터는 기존 단일 owner를 재사용합니다. 보조 시간봉은 명시적 MTF 분석 요청에서만 기존 provider/cache 계약으로 읽고 별도 polling을 만들지 않습니다.
         </p>
         <p className="mt-2 text-[10px] font-semibold leading-4 text-muted-foreground">
-          Confidence는 현재 근거의 합성 강도이며 검증된 historical win probability가 아닙니다. 검증된 이력 소스가 없으므로 win rate, PF, expectancy, probability를 생성하지 않습니다.
+          근거 강도는 현재 관측 근거의 합성 강도이며 검증된 승률이 아닙니다. canonical calibration/full-cost provenance가 없으므로 win rate, PF, expectancy, probability, cost-adjusted EV를 생성하지 않습니다.
         </p>
       </section>
     </section>

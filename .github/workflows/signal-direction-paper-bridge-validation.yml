@@ -63,8 +63,12 @@ jobs:
           grep -Fq "'NO_TRADE' | 'UNKNOWN' | 'NONE'" stock-analyzer/src/lib/signal-scanner.ts
           grep -Fq "'NO_TRADE' | 'UNKNOWN' | 'NONE'" stock-analyzer/src/lib/analysis-selection.tsx
           grep -Fq "'NO_TRADE' | 'UNKNOWN' | 'WAIT'" stock-analyzer/src/lib/ai-chart-v2-intelligence.ts
-          grep -Fq "거래 안 함 · NO_TRADE" stock-analyzer/src/pages/signal-scanner.tsx
-          grep -Fq "방향 확인 필요 · UNKNOWN" stock-analyzer/src/pages/signal-scanner.tsx
+          grep -Fq "if (card.action === 'LONG') return '롱';" stock-analyzer/src/pages/signal-scanner.tsx
+          grep -Fq "if (card.action === 'SHORT') return '숏';" stock-analyzer/src/pages/signal-scanner.tsx
+          grep -Fq "if (card.action === 'BUY') return '매수';" stock-analyzer/src/pages/signal-scanner.tsx
+          grep -Fq "if (card.action === 'SELL') return '매도 참고';" stock-analyzer/src/pages/signal-scanner.tsx
+          grep -Fq "if (card.action === 'NONE' || card.action === 'NO_TRADE') return '거래 안 함';" stock-analyzer/src/pages/signal-scanner.tsx
+          grep -Fq "return '방향 미확인';" stock-analyzer/src/pages/signal-scanner.tsx
           grep -Fq "scanner-direction-badge" stock-analyzer/src/pages/signal-scanner.tsx
           grep -Fq "scanner-card-direction" stock-analyzer/src/pages/signal-scanner.tsx
 

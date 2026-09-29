@@ -82,6 +82,16 @@ test('recovery scan marks open order, queries provider once, and submits no exch
     lastVerifiedAt: null, lastErrorCode: null, updatedAt: new Date().toISOString(),
   });
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
+  process.env.ORDER_EXECUTION_ENABLED = 'true';
+  process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+  process.env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED = 'true';
+  process.env.REAL_ORDER_ENABLED = 'true';
+  process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
+  process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+  process.env.LIVE_TRADING = 'true';
+  process.env.executionAuthority = 'SPOT_LIVE_LIMITED';
+  process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST = 'OPEN_ORDER_READ';
+  process.env.SPOT_LIVE_MARKET_ALLOWLIST = 'CRYPTO_SPOT';
   const { server, baseUrl } = await startServer(repository);
   const nativeFetch = globalThis.fetch;
   const externalRequests: Array<{ url: string; method: string }> = [];
@@ -123,7 +133,19 @@ test('recovery scan marks open order, queries provider once, and submits no exch
     assert.equal(events.some((event) => event.reason === 'EXCHANGE_ORDER_RECONCILED'), true);
   } finally {
     globalThis.fetch = nativeFetch;
-    delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
+    for (const key of [
+      'TRADING_CREDENTIAL_MASTER_KEY',
+      'ORDER_EXECUTION_ENABLED',
+      'LIVE_TRADING_ACTIVATION_APPROVED',
+      'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED',
+      'REAL_ORDER_ENABLED',
+      'PRIVATE_TRADING_API_ALLOWED',
+      'UPBIT_LIVE_ORDER_ENABLED',
+      'LIVE_TRADING',
+      'executionAuthority',
+      'SPOT_LIVE_CAPABILITY_ALLOWLIST',
+      'SPOT_LIVE_MARKET_ALLOWLIST',
+    ]) delete process.env[key];
     setTradeAutomationRepositoryFactoryForTests(null);
     await close(server);
   }

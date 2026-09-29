@@ -21,7 +21,7 @@ const repositoryRoot = process.cwd();
 const source = (relativePath: string) => fs.readFileSync(
   path.join(repositoryRoot, relativePath),
   'utf8',
-);
+).replace(/\r\n/g, '\n'); // Keep the same source assertions on Windows checkouts.
 
 function installWindowTimerBridge(): void {
   if (typeof window !== 'undefined') return;
@@ -182,7 +182,8 @@ test('active scanner query signal is available synchronously and restored afterw
 test('authorized fetch captures the active query signal before async session lookup', () => {
   const authFetch = source('stock-analyzer/src/lib/auth-fetch.ts');
   assert.match(authFetch, /const signal = init\.signal \?\? getActiveQuerySignal\(\)/);
-  assert.match(authFetch, /return await fetch\(input, \{ \.\.\.init, headers, signal: controller\.signal \}\)/);
+  assert.match(authFetch, /const response = await fetch\(input, \{ \.\.\.init, headers, signal: controller\.signal \}\)/);
+  assert.match(authFetch, /return await validateInvestmentResponse\(input, init, response\)/);
   const signalCapture = authFetch.indexOf('const signal =');
   const sessionLookup = authFetch.indexOf('getSupabase().auth.getSession()');
   assert.ok(sessionLookup >= 0, 'Supabase auth session lookup must remain explicit');

@@ -62,6 +62,18 @@ const countPlaywright = (report) => {
   return records;
 };
 
+const safeHttpDiagnostic = (value) => {
+  const rawUrl = String(value?.url ?? '[missing-url]');
+  const pathname = rawUrl.startsWith('/') ? rawUrl.split('?')[0] : '[invalid-url]';
+  const statusValue = Number(value?.status);
+  return {
+    test: String(value?.test ?? '').slice(0, 500),
+    url: pathname.slice(0, 500),
+    status: Number.isFinite(statusValue) ? statusValue : 0,
+    detail: String(value?.detail ?? '').slice(0, 1_000),
+  };
+};
+
 if (!/^[0-9a-f]{40}$/.test(targetSha)) {
   addCheck('immutable target SHA', 'failed', 'TARGET_SHA is missing or invalid');
 } else {
@@ -138,7 +150,10 @@ if (!playwright) {
 const consoleErrors = Array.isArray(browser?.console_errors) ? browser.console_errors.length : 0;
 const pageErrors = Array.isArray(browser?.page_errors) ? browser.page_errors.length : 0;
 const unhandledRejections = Array.isArray(browser?.unhandled_rejections) ? browser.unhandled_rejections.length : 0;
-const unexpectedHttpErrors = Array.isArray(browser?.unexpected_http_errors) ? browser.unexpected_http_errors.length : 0;
+const unexpectedHttpErrorDetails = Array.isArray(browser?.unexpected_http_errors)
+  ? browser.unexpected_http_errors.map(safeHttpDiagnostic)
+  : [];
+const unexpectedHttpErrors = unexpectedHttpErrorDetails.length;
 
 if (!browser) {
   addCheck('browser diagnostic report produced', 'failed', 'staging-browser-results.json is missing');
@@ -146,7 +161,11 @@ if (!browser) {
   addCheck('browser console errors', consoleErrors === 0 ? 'passed' : 'failed', `${consoleErrors}`);
   addCheck('browser page errors', pageErrors === 0 ? 'passed' : 'failed', `${pageErrors}`);
   addCheck('unhandled browser rejections', unhandledRejections === 0 ? 'passed' : 'failed', `${unhandledRejections}`);
-  addCheck('unexpected HTTP errors', unexpectedHttpErrors === 0 ? 'passed' : 'failed', `${unexpectedHttpErrors}`);
+  addCheck(
+    'unexpected HTTP errors',
+    unexpectedHttpErrors === 0 ? 'passed' : 'failed',
+    unexpectedHttpErrors === 0 ? '0' : JSON.stringify(unexpectedHttpErrorDetails),
+  );
 }
 
 if (!runtime) {
@@ -191,6 +210,7 @@ const result = {
   page_errors: pageErrors,
   unhandled_rejections: unhandledRejections,
   unexpected_http_errors: unexpectedHttpErrors,
+  unexpected_http_error_details: unexpectedHttpErrorDetails,
   ephemeral_accounts_created: accountsCreated,
   ephemeral_accounts_deleted: accountsDeleted,
   ephemeral_profiles_remaining: profilesRemaining,

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ScannerResponse, ScannerSignalCard } from './scanner-signal.types';
-import { StrategyPromotionService } from './strategy-promotion.service';
+import { StrategyPromotionService, strategyCandidateId } from './strategy-promotion.service';
 import {
   attachForwardObserverCanonicalMetadata,
   resolveForwardObserverCanonicalMetadata,
@@ -63,11 +63,16 @@ test('authoritative Promotion identity is forwarded unchanged into the pre-Profi
   const result = resolveForwardObserverCanonicalMetadata({ card: card(), lane: KR_LANE, researchCodeSha: SHA });
   assert.deepEqual(result.blockers, []);
   assert.ok(result.paperCandidate);
+  assert.equal(result.paperCandidate.candidateId, strategyCandidateId(source.identity));
   assert.deepEqual(result.paperCandidate.signal.strategyIdentity, {
+    candidateId: strategyCandidateId(source.identity),
+    strategyFamily: source.identity.strategyFamily,
     strategyId: source.identity.strategyId,
     strategyVersion: source.identity.strategyVersion,
     parameterHash: source.identity.parameterHash,
+    parameterDigest: source.identity.parameterHash,
     researchCodeSha: source.identity.researchCodeSha,
+    accountMode: 'PAPER',
   });
   assert.equal(result.paperCandidate.signal.signalId, 'forward-canonical-1');
   assert.equal(result.paperCandidate.signal.market, 'KR_STOCK');
@@ -116,7 +121,7 @@ test('immutable research SHA is mandatory', () => {
   assert.deepEqual(result.blockers, ['IMMUTABLE_RESEARCH_SHA_REQUIRED']);
 });
 
-test('CRYPTO_SPOT SWING 4H Promotion identity is not silently rewritten into the 60m observer lane', () => {
+test('CRYPTO_SPOT SWING 4H Promotion identity attaches only to the exact 4H observer lane', () => {
   const spot = card({
     assetClass: 'coin_spot',
     market: 'spot',
@@ -126,12 +131,25 @@ test('CRYPTO_SPOT SWING 4H Promotion identity is not silently rewritten into the
     assetType: 'coin',
     direction: 'LONG',
     action: 'BUY',
+    expiresAt: '2026-08-20T12:00:00.000Z',
   });
-  const result = resolveForwardObserverCanonicalMetadata({
+  const exact = resolveForwardObserverCanonicalMetadata({
+    card: spot,
+    lane: { market: 'CRYPTO_SPOT', timeframe: '4H' },
+    researchCodeSha: SHA,
+  });
+  assert.deepEqual(exact.blockers, []);
+  assert.ok(exact.paperCandidate);
+  assert.equal(exact.paperCandidate.signal.timeframe, '4H');
+  assert.equal(exact.paperCandidate.signal.horizon, 12);
+  assert.equal(exact.paperCandidate.signal.market, 'CRYPTO_SPOT');
+  assert.equal(exact.paperCandidate.executionAuthority, 'NONE');
+
+  const wrongLane = resolveForwardObserverCanonicalMetadata({
     card: spot,
     lane: { market: 'CRYPTO_SPOT', timeframe: '60m' },
     researchCodeSha: SHA,
   });
-  assert.equal(result.paperCandidate, null);
-  assert.ok(result.blockers.includes('PROMOTION_TIMEFRAME_MISMATCH'));
+  assert.equal(wrongLane.paperCandidate, null);
+  assert.ok(wrongLane.blockers.includes('PROMOTION_TIMEFRAME_MISMATCH'));
 });

@@ -13,6 +13,11 @@ import {
   withFiniteDeadline,
 } from '@/lib/auth-bootstrap';
 import {
+  claimInitialAuthBootstrap,
+  getInitialAuthBootstrapUserId,
+  type InitialMemberProfile,
+} from '@/lib/auth-initial-bootstrap';
+import {
   prepareBackupForSessionEnd,
   resumeBackupForSession,
 } from '@/lib/backup-sync-lifecycle';
@@ -24,17 +29,7 @@ import {
   type MemberTier,
 } from '../../../packages/member-access/src/index.js';
 
-export type MemberProfile = {
-  id: string;
-  login_name: string;
-  display_name: string;
-  role: string;
-  status: 'pending' | 'approved' | 'rejected' | 'suspended' | 'withdrawn';
-  membership_level?: MemberTier | null;
-  is_active?: boolean | null;
-  permissions_updated_at?: string | null;
-  updated_at?: string | null;
-};
+export type MemberProfile = InitialMemberProfile;
 
 type AuthContextValue = {
   configured: boolean;
@@ -121,6 +116,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const bootstrapAttemptRef = useRef(0);
   const initialBootstrapPendingRef = useRef(false);
   const deferredInitialSessionRef = useRef<Session | null>(null);
+  const failedInitialBootstrapUserIdRef = useRef<string | null>(null);
 
   function applyProfile(next: MemberProfile | null) {
     profileRef.current = next;
@@ -191,6 +187,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function reconcileRestoredInitialSession(restoredSession: Session) {
+    failedInitialBootstrapUserIdRef.current = null;
     const incomingUserId = restoredSession.user.id;
     const currentUserId = sessionRef.current?.user.id ?? null;
     const attempt = ++bootstrapAttemptRef.current;
@@ -227,25 +224,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let resolvedBootstrapUserId: string | null | undefined;
     initialBootstrapPendingRef.current = true;
     deferredInitialSessionRef.current = null;
+    failedInitialBootstrapUserIdRef.current = null;
     setBootstrapError(null);
     setLoading(true);
 
-    void runFiniteAuthBootstrap<Session | null>({
-      getSession: async () => {
-        const { data, error } = await getSupabase().auth.getSession();
-        if (error) throw error;
-        return data.session;
-      },
-      applySession: (next) => {
-        resolvedBootstrapUserId = next?.user.id ?? null;
-        if (mountedRef.current && bootstrapAttemptRef.current === attempt) applySession(next);
-      },
-      loadProfile: async (next, signal) => {
-        if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
-        await loadProfile(next?.user ?? null, { signal });
-      },
-    }).catch((cause) => {
+    const primedBootstrap = claimInitialAuthBootstrap();
+    const bootstrap = primedBootstrap
+      ? primedBootstrap
+        .then((result) => {
+          resolvedBootstrapUserId = result.session?.user.id ?? null;
+          if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
+          applySession(result.session);
+          applyProfile(result.profile);
+        })
+        .catch((cause) => {
+          resolvedBootstrapUserId = getInitialAuthBootstrapUserId();
+          throw cause;
+        })
+      : runFiniteAuthBootstrap<Session | null>({
+        getSession: async () => {
+          const { data, error } = await getSupabase().auth.getSession();
+          if (error) throw error;
+          return data.session;
+        },
+        applySession: (next) => {
+          resolvedBootstrapUserId = next?.user.id ?? null;
+          if (mountedRef.current && bootstrapAttemptRef.current === attempt) applySession(next);
+        },
+        loadProfile: async (next, signal) => {
+          if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
+          await loadProfile(next?.user ?? null, { signal });
+        },
+      });
+
+    void bootstrap.catch((cause) => {
       if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
+      failedInitialBootstrapUserIdRef.current = resolvedBootstrapUserId ?? null;
       setBootstrapError(authBootstrapErrorMessage(cause));
     }).finally(() => {
       if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
@@ -277,6 +291,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           deferredInitialSessionRef.current = next;
           return;
         }
+        if (failedInitialBootstrapUserIdRef.current === incomingUserId) return;
         if (!shouldReconcileInitialSession({
           event,
           incomingUserId,

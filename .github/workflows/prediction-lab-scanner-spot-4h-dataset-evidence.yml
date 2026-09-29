@@ -1,0 +1,131 @@
+name: Prediction Lab Scanner Spot 4H Dataset Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      research_ref:
+        description: Exact 40-character research commit SHA to validate
+        required: true
+        type: string
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/prediction-lab-scanner-spot-4h-dataset-evidence.yml
+      - research-production/src/research-dataset-snapshot-store.mjs
+      - research-production/src/research-canonical-dataset-component.mjs
+      - research-production/test/research-dataset-snapshot-store.test.mjs
+      - research-production/test/research-canonical-dataset-component.test.mjs
+      - market-prediction-lab/src/upbit-spot-history.js
+      - market-prediction-lab/src/scanner-spot-4h-dataset-materializer-v1.js
+      - market-prediction-lab/src/scanner-quality-artifact-producer-v1.js
+      - market-prediction-lab/scripts/run-scanner-spot-4h-dataset-materializer-v1.js
+      - market-prediction-lab/tests/upbit-spot-history.test.js
+      - market-prediction-lab/tests/scanner-spot-4h-dataset-materializer-v1.test.js
+      - market-prediction-lab/tests/scanner-quality-artifact-producer-v1.test.js
+      - market-prediction-lab/tests/scanner-quality-artifact-producer-cli-v1.test.js
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scanner-spot-4h-dataset-evidence-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Exact Spot 4H Dataset Evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve immutable research ref
+        id: ref
+        shell: bash
+        env:
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          INPUT_REF: ${{ inputs.research_ref }}
+        run: |
+          ref="$PR_SHA"
+          if [ -z "$ref" ]; then ref="$INPUT_REF"; fi
+          if [[ ! "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error title=Exact SHA required::Scanner Spot dataset evidence requires one exact 40-character SHA"
+            exit 1
+          fi
+          echo "value=${ref,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ref.outputs.value }}
+          persist-credentials: false
+
+      - name: Verify detached exact head
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.ref.outputs.value }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run exact dataset and quality contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test \
+            research-production/test/research-dataset-snapshot-store.test.mjs \
+            research-production/test/research-canonical-dataset-component.test.mjs \
+            market-prediction-lab/tests/upbit-spot-history.test.js \
+            market-prediction-lab/tests/scanner-spot-4h-dataset-materializer-v1.test.js \
+            market-prediction-lab/tests/scanner-quality-artifact-producer-v1.test.js \
+            market-prediction-lab/tests/scanner-quality-artifact-producer-cli-v1.test.js
+
+      - name: Materialize genuine Upbit BTC 4H and 60m evidence
+        shell: bash
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.ref.outputs.value }}
+          OUTPUT_ROOT: ${{ runner.temp }}/scanner-spot-4h-evidence
+        run: |
+          set -euo pipefail
+          node market-prediction-lab/scripts/run-scanner-spot-4h-dataset-materializer-v1.js \
+            --output-dir "$OUTPUT_ROOT" --symbol BTC --days 730 | tee "$RUNNER_TEMP/scanner-spot-4h-status.json"
+
+      - name: Assert exact materialization and fail-closed replay boundary
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.ref.outputs.value }}
+          OUTPUT_ROOT: ${{ runner.temp }}/scanner-spot-4h-evidence
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          const root=process.env.OUTPUT_ROOT;
+          const result=JSON.parse(await readFile(`${root}/scanner-spot-4h-materialization.json`,'utf8'));
+          if(result.status!=='DATASET_READY_REPLAY_BLOCKED') throw new Error('SPOT_DATASET_STATUS_INVALID');
+          if(result.researchCodeSha!==process.env.EXPECTED_SHA) throw new Error('SPOT_DATASET_SHA_MISMATCH');
+          if(result.datasetSnapshotManifest?.profileId!=='CRYPTO_SPOT:SCANNER_SWING_4H') throw new Error('SPOT_DATASET_PROFILE_INVALID');
+          if(result.datasetSnapshotManifest?.scope?.timeframe!=='4H') throw new Error('SPOT_DATASET_TIMEFRAME_INVALID');
+          if(!/^[0-9a-f]{64}$/.test(result.dataset?.datasetSnapshotHash??'')) throw new Error('SPOT_DATASET_SNAPSHOT_HASH_INVALID');
+          if(result.historicalReplay?.firstZero!=='SPOT_SCANNER_HISTORICAL_SPREAD_SERIES_MISSING') throw new Error('SPOT_REPLAY_FIRST_ZERO_INVALID');
+          if(result.historicalReplay?.exactScannerReplayAllowed!==false||result.historicalReplay?.crossStrategyTransferAllowed!==false) throw new Error('SPOT_REPLAY_FAIL_CLOSED_REQUIRED');
+          if(result.qualityArtifactWritten!==false||result.economicSampleCredit!==0) throw new Error('SPOT_QUALITY_CREDIT_FORBIDDEN');
+          if(result.safety?.executionAuthority!=='NONE'||result.safety?.liveOrderAllowed!==false||result.safety?.privateTradingApiAllowed!==false) throw new Error('SPOT_DATASET_SAFETY_INVALID');
+          NODE
+
+      - name: Upload immutable public-data evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: scanner-spot-4h-dataset-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/scanner-spot-4h-evidence
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Assert repository remained immutable
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"

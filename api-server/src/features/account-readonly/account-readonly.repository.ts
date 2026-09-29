@@ -1,6 +1,6 @@
 import { getSupabase, hasSupabaseServerKey } from '../../lib/supabase';
 
-export type ReadonlyCredentialProvider = 'toss' | 'upbit' | 'bitget';
+export type ReadonlyCredentialProvider = 'toss' | 'kiwoom' | 'upbit' | 'bitget';
 
 export type ReadonlyCredentialRecord = {
   userId: string;
@@ -15,6 +15,7 @@ export type ReadonlyCredentialRecord = {
 export type AccountReadonlyCredentialRepository = {
   get(userId: string, provider: ReadonlyCredentialProvider): Promise<ReadonlyCredentialRecord | null>;
   save(record: ReadonlyCredentialRecord): Promise<void>;
+  remove(userId: string, provider: ReadonlyCredentialProvider): Promise<void>;
 };
 
 function storageUnavailable() {
@@ -33,6 +34,23 @@ function toRecord(row: Record<string, unknown>): ReadonlyCredentialRecord {
   };
 }
 
+export async function accountReadonlyCredentialConfigured(
+  authenticatedUserId: string,
+  provider: ReadonlyCredentialProvider,
+): Promise<boolean> {
+  const owner = authenticatedUserId.trim();
+  if (!owner) throw new Error('LOGIN_REQUIRED');
+  if (!hasSupabaseServerKey()) throw storageUnavailable();
+
+  const { data, error } = await getSupabase().from('account_readonly_credentials')
+    .select('configured')
+    .eq('user_id', owner)
+    .eq('provider', provider)
+    .maybeSingle();
+  if (error) throw storageUnavailable();
+  return data?.configured === true;
+}
+
 export class InMemoryAccountReadonlyCredentialRepository implements AccountReadonlyCredentialRepository {
   private readonly rows = new Map<string, ReadonlyCredentialRecord>();
 
@@ -47,6 +65,10 @@ export class InMemoryAccountReadonlyCredentialRepository implements AccountReado
 
   async save(record: ReadonlyCredentialRecord) {
     this.rows.set(this.key(record.userId, record.provider), { ...record });
+  }
+
+  async remove(userId: string, provider: ReadonlyCredentialProvider) {
+    this.rows.delete(this.key(userId, provider));
   }
 }
 
@@ -83,6 +105,14 @@ export function createAccountReadonlyCredentialRepository(
         last_error_code: record.lastErrorCode,
         updated_at: record.updatedAt,
       }, { onConflict: 'user_id,provider' });
+      if (error) throw storageUnavailable();
+    },
+    async remove(userId, provider) {
+      assertOwner(userId);
+      const { error } = await client.from('account_readonly_credentials')
+        .delete()
+        .eq('user_id', userId)
+        .eq('provider', provider);
       if (error) throw storageUnavailable();
     },
   };

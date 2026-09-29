@@ -130,15 +130,16 @@ export function evaluateCalibratedFillModel(raw = {}, policyInput = {}, nowInput
   const evaluatedAt = finite(raw.evaluatedAt);
   const now = finite(nowInput, Date.now());
   const ageMs = evaluatedAt == null ? null : Math.max(0, now - evaluatedAt);
-  if (!modelId || fillProbability == null || brierScore == null || calibrationError == null || evaluatedAt == null) return { status: 'NOT_AVAILABLE', reason: 'CALIBRATED_FILL_MODEL_EVIDENCE_MISSING' };
-  if (!(fillProbability >= 0 && fillProbability <= 1)) return { status: 'NOT_AVAILABLE', reason: 'FILL_PROBABILITY_INVALID' };
+  const minimumSamples = policy.minFillModelSamples;
+  if (!modelId || fillProbability == null || brierScore == null || calibrationError == null || evaluatedAt == null) return { status: 'NOT_AVAILABLE', reason: 'CALIBRATED_FILL_MODEL_EVIDENCE_MISSING', minimumSamples };
+  if (!(fillProbability >= 0 && fillProbability <= 1)) return { status: 'NOT_AVAILABLE', reason: 'FILL_PROBABILITY_INVALID', minimumSamples };
   if (evaluationSamples < policy.minFillModelSamples) return { status: 'NOT_AVAILABLE', reason: 'FILL_MODEL_SAMPLE_INSUFFICIENT', evaluationSamples, minimumSamples: policy.minFillModelSamples };
-  if (ageMs > policy.maxFillModelAgeMs) return { status: 'NOT_AVAILABLE', reason: 'FILL_MODEL_EVIDENCE_STALE', ageMs };
-  if (brierScore > policy.maxFillModelBrierScore || calibrationError > policy.maxFillModelCalibrationError) return { status: 'NOT_AVAILABLE', reason: 'FILL_MODEL_CALIBRATION_QUALITY_INSUFFICIENT', brierScore, calibrationError };
+  if (ageMs > policy.maxFillModelAgeMs) return { status: 'NOT_AVAILABLE', reason: 'FILL_MODEL_EVIDENCE_STALE', ageMs, minimumSamples };
+  if (brierScore > policy.maxFillModelBrierScore || calibrationError > policy.maxFillModelCalibrationError) return { status: 'NOT_AVAILABLE', reason: 'FILL_MODEL_CALIBRATION_QUALITY_INSUFFICIENT', brierScore, calibrationError, minimumSamples };
   return {
     status: fillProbability >= policy.minFillProbability ? 'PASS' : 'VETO',
     reason: fillProbability >= policy.minFillProbability ? null : 'FILL_PROBABILITY_TOO_LOW', modelId, fillProbability,
-    threshold: policy.minFillProbability, evaluationSamples, brierScore, calibrationError, evaluatedAt, ageMs,
+    threshold: policy.minFillProbability, evaluationSamples, minimumSamples, brierScore, calibrationError, evaluatedAt, ageMs,
   };
 }
 

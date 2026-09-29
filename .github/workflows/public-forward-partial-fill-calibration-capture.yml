@@ -1,0 +1,396 @@
+name: Public Forward Partial Fill Calibration Capture
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/public-forward-partial-fill-calibration-capture.yml'
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact current main SHA to capture against
+        required: true
+        type: string
+      symbol:
+        description: Bitget USDT futures symbol, for example BTCUSDT
+        required: true
+        type: string
+      side:
+        description: Hypothetical passive side
+        required: true
+        type: choice
+        options:
+          - LONG
+          - SHORT
+      requested_quantity:
+        description: Positive hypothetical requested quantity
+        required: true
+        type: string
+      quantity_notional_bucket_identity:
+        description: Frozen quantity/notional bucket identity
+        required: true
+        type: string
+      event_window_ms:
+        description: Explicit prospective observation window in milliseconds, 250 to 30000
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck API server
+        run: pnpm --dir api-server run typecheck
+
+      - name: Bundle merged partial-fill collector tests
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/services/public-forward-partial-fill-calibration-collector.service.test.ts
+          --bundle --platform=node --format=cjs --target=node20
+          --outfile=/tmp/public-forward-partial-fill-calibration-collector.test.cjs
+
+      - name: Run merged partial-fill collector tests
+        run: node --test /tmp/public-forward-partial-fill-calibration-collector.test.cjs
+
+      - name: Verify fail-closed capture contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='.github/workflows/public-forward-partial-fill-calibration-capture.yml'
+          grep -Fq 'workflow_dispatch:' "$FILE"
+          if grep -Eq '^[[:space:]]+schedule:' "$FILE"; then
+            echo 'Scheduled capture is forbidden.' >&2
+            exit 1
+          fi
+          grep -Fq 'collectBitgetPublicForwardPartialFillCalibrationObservation' "$FILE"
+          grep -Fq "sampleClass: 'FORWARD_NATURAL_SAMPLE'" "$FILE"
+          grep -Fq 'actualFillObserved !== false' "$FILE"
+          grep -Fq 'queuePositionKnown !== false' "$FILE"
+          grep -Fq 'partialFillCostPercent !== null' "$FILE"
+          grep -Fq 'canonicalDatasetCreditApplied: false' "$FILE"
+          grep -Fq 'calibrationArtifactProduced: false' "$FILE"
+          grep -Fq 'partialFillCostPresent: false' "$FILE"
+          grep -Fq 'fullCostReady: false' "$FILE"
+          grep -Fq "executionAuthority: 'NONE'" "$FILE"
+          grep -Fq 'privateApiUsed: false' "$FILE"
+          grep -Fq 'liveTrading: false' "$FILE"
+          grep -Fq 'orderSubmitted: false' "$FILE"
+
+  capture:
+    if: github.event_name == 'workflow_dispatch'
+    needs: verify-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact requested SHA without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact current main and explicit capture inputs
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          SYMBOL: ${{ inputs.symbol }}
+          SIDE: ${{ inputs.side }}
+          REQUESTED_QUANTITY: ${{ inputs.requested_quantity }}
+          BUCKET_IDENTITY: ${{ inputs.quantity_notional_bucket_identity }}
+          EVENT_WINDOW_MS: ${{ inputs.event_window_ms }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != 'refs/heads/main' ]]; then
+            echo 'Capture must be dispatched from main.' >&2
+            exit 1
+          fi
+          if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'expected_sha must be an exact 40-character lowercase commit SHA.' >&2
+            exit 1
+          fi
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [[ "$ACTUAL_SHA" != "$EXPECTED_SHA" || "$GITHUB_SHA" != "$EXPECTED_SHA" ]]; then
+            echo 'Requested SHA does not match the dispatched/checked-out SHA.' >&2
+            exit 1
+          fi
+          git fetch --no-tags --depth=1 origin main
+          REMOTE_MAIN="$(git rev-parse FETCH_HEAD)"
+          if [[ "$REMOTE_MAIN" != "$EXPECTED_SHA" ]]; then
+            echo 'Requested SHA is no longer exact current main.' >&2
+            exit 1
+          fi
+          if [[ ! "$SYMBOL" =~ ^[A-Za-z0-9]{4,30}$ ]]; then
+            echo 'Invalid symbol.' >&2
+            exit 1
+          fi
+          if [[ "$SIDE" != 'LONG' && "$SIDE" != 'SHORT' ]]; then
+            echo 'Invalid side.' >&2
+            exit 1
+          fi
+          node -e "const q=Number(process.argv[1]); if (!(Number.isFinite(q)&&q>0)) process.exit(1)" "$REQUESTED_QUANTITY"
+          if [[ -z "$BUCKET_IDENTITY" || ${#BUCKET_IDENTITY} -gt 160 ]]; then
+            echo 'Invalid quantity/notional bucket identity.' >&2
+            exit 1
+          fi
+          node -e "const n=Number(process.argv[1]); if (!(Number.isInteger(n)&&n>=250&&n<=30000)) process.exit(1)" "$EVENT_WINDOW_MS"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build exact collector capture runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > api-server/.public-forward-partial-fill-capture-runner.ts <<'TS'
+          import { createHash } from 'node:crypto';
+          import { mkdir, writeFile } from 'node:fs/promises';
+          import { collectBitgetPublicForwardPartialFillCalibrationObservation } from './src/services/public-forward-partial-fill-calibration-collector.service';
+
+          function canonicalize(value: unknown): unknown {
+            if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+            if (typeof value === 'number') {
+              if (!Number.isFinite(value)) throw new TypeError('NON_FINITE_NUMBER_NOT_CANONICAL');
+              return value;
+            }
+            if (Array.isArray(value)) return value.map(canonicalize);
+            if (!value || typeof value !== 'object') throw new TypeError('UNSUPPORTED_CANONICAL_VALUE');
+            return Object.fromEntries(
+              Object.entries(value as Record<string, unknown>)
+                .filter(([, child]) => child !== undefined)
+                .sort(([left], [right]) => left.localeCompare(right))
+                .map(([key, child]) => [key, canonicalize(child)]),
+            );
+          }
+
+          function sha256(value: unknown): string {
+            return createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex');
+          }
+
+          async function main() {
+            const exactMainSha = String(process.env.EXPECTED_SHA ?? '').trim().toLowerCase();
+            const symbol = String(process.env.SYMBOL ?? '').trim().toUpperCase();
+            const side = String(process.env.SIDE ?? '').trim().toUpperCase() as 'LONG' | 'SHORT';
+            const requestedQuantity = Number(process.env.REQUESTED_QUANTITY);
+            const quantityNotionalBucketIdentity = String(process.env.BUCKET_IDENTITY ?? '').trim();
+            const eventWindowMs = Number(process.env.EVENT_WINDOW_MS);
+            const result = await collectBitgetPublicForwardPartialFillCalibrationObservation({
+              symbol,
+              side,
+              requestedQuantity,
+              quantityNotionalBucketIdentity,
+              collectorCodeSha: exactMainSha,
+              eventWindowMs,
+              sampleClass: 'FORWARD_NATURAL_SAMPLE',
+            });
+
+            if (!['PRESENT', 'BLOCKED_DATA'].includes(result.status)) throw new Error('CAPTURE_STATUS_INVALID');
+            if (result.status === 'PRESENT') {
+              const observation = result.observation;
+              if (!observation) throw new Error('PRESENT_OBSERVATION_MISSING');
+              if (observation.sourceType !== 'PUBLIC_FORWARD_SIMULATION') throw new Error('SOURCE_TYPE_INVALID');
+              if (observation.sampleClass !== 'FORWARD_NATURAL_SAMPLE') throw new Error('SAMPLE_CLASS_INVALID');
+              if (observation.market !== 'CRYPTO_FUTURES') throw new Error('MARKET_INVALID');
+              if (observation.collectorCodeSha !== exactMainSha) throw new Error('COLLECTOR_SHA_MISMATCH');
+              if (observation.symbol !== symbol || observation.side !== side) throw new Error('SCOPE_MISMATCH');
+              if (observation.requestedQuantity !== requestedQuantity) throw new Error('QUANTITY_MISMATCH');
+              if (observation.quantityNotionalBucketIdentity !== quantityNotionalBucketIdentity) throw new Error('BUCKET_MISMATCH');
+              if (observation.actualFillObserved !== false || observation.actualFillFraction !== null) throw new Error('ACTUAL_FILL_CLAIM_FORBIDDEN');
+              if (observation.queuePositionKnown !== false) throw new Error('QUEUE_POSITION_CLAIM_FORBIDDEN');
+              if (observation.partialFillCostPercent !== null) throw new Error('PARTIAL_FILL_COST_CLAIM_FORBIDDEN');
+              if (observation.forwardCalibrationSampleCredit !== 1) throw new Error('FORWARD_SAMPLE_CLASS_CREDIT_INVALID');
+              if (observation.historicalBackfillCredit !== 0 || observation.testFixtureCredit !== 0) throw new Error('NON_FORWARD_CREDIT_FORBIDDEN');
+              if (observation.naturalEntryCredit !== 0 || observation.runtimeCostCredit !== 0) throw new Error('RUNTIME_CREDIT_FORBIDDEN');
+              if (observation.calibrationArtifactProduced !== false || observation.durablePersistencePerformed !== false) throw new Error('CALIBRATION_BOUNDARY_INVALID');
+              if (observation.calibrationSampleSufficient !== false || observation.partialFillStatus !== 'BLOCKED_DATA') throw new Error('SUFFICIENCY_BOUNDARY_INVALID');
+              if (observation.fullCostReady !== false) throw new Error('FULL_COST_CLAIM_FORBIDDEN');
+              if (observation.privateApiUsed !== false || observation.executionAuthority !== 'NONE') throw new Error('EXECUTION_AUTHORITY_INVALID');
+              if (observation.liveTrading !== false || observation.orderSubmitted !== false) throw new Error('LIVE_EXECUTION_CLAIM_FORBIDDEN');
+              for (const value of [
+                observation.sourceDigest,
+                observation.sourceObservationLineageDigest,
+                observation.preEventBookDigest,
+                observation.forwardPublicFillsDigest,
+                observation.postEventBookDigest,
+              ]) {
+                if (!/^[a-f0-9]{64}$/u.test(value)) throw new Error('SOURCE_DIGEST_INVALID');
+              }
+            } else {
+              if (result.observation !== null) throw new Error('BLOCKED_DATA_OBSERVATION_MUST_BE_NULL');
+              if (!Array.isArray(result.blockers) || result.blockers.length === 0) throw new Error('BLOCKED_DATA_REASON_REQUIRED');
+            }
+
+            const receiptBody = Object.freeze({
+              schemaVersion: 'public-forward-partial-fill-capture-receipt-v1',
+              evidenceClass: 'PUBLIC_FORWARD_PARTIAL_FILL_CAPTURE_RECEIPT',
+              triggerSource: 'MANUAL_WORKFLOW_DISPATCH',
+              runId: String(process.env.GITHUB_RUN_ID ?? ''),
+              runAttempt: String(process.env.GITHUB_RUN_ATTEMPT ?? ''),
+              repository: String(process.env.GITHUB_REPOSITORY ?? ''),
+              exactMainSha,
+              collectorCodeSha: exactMainSha,
+              market: 'CRYPTO_FUTURES',
+              symbol,
+              side,
+              requestedQuantity,
+              quantityNotionalBucketIdentity,
+              eventWindowMs,
+              captureStatus: result.status,
+              blockers: result.blockers,
+              observation: result.observation,
+              durableDatasetPersistencePerformed: false,
+              canonicalDatasetCreditApplied: false,
+              duplicateCreditEvaluated: false,
+              calibrationArtifactProduced: false,
+              partialFillCostPresent: false,
+              fullCostReady: false,
+              evidenceCompleteCredit: 0,
+              naturalEntryCredit: 0,
+              runtimeCostCredit: 0,
+              executionAuthority: 'NONE',
+              privateApiUsed: false,
+              liveTrading: false,
+              orderSubmitted: false,
+              realOrders: 0,
+            });
+            const receipt = Object.freeze({ ...receiptBody, receiptDigest: sha256(receiptBody) });
+            await mkdir('partial-fill-capture', { recursive: true });
+            await writeFile('partial-fill-capture/capture-receipt.json', `${JSON.stringify(receipt, null, 2)}\n`, 'utf8');
+            console.log(JSON.stringify({
+              status: result.status,
+              blockers: result.blockers,
+              observationId: result.observation?.observationId ?? null,
+              sourceObservationLineageDigest: result.observation?.sourceObservationLineageDigest ?? null,
+              receiptDigest: receipt.receiptDigest,
+              canonicalDatasetCreditApplied: false,
+              fullCostReady: false,
+              naturalEntryCredit: 0,
+            }));
+          }
+
+          main().catch((error) => {
+            console.error(error instanceof Error ? error.message : String(error));
+            process.exit(1);
+          });
+          TS
+          pnpm --dir api-server exec esbuild .public-forward-partial-fill-capture-runner.ts \
+            --bundle --platform=node --format=cjs --target=node20 \
+            --outfile=/tmp/public-forward-partial-fill-capture-runner.cjs
+          rm -f api-server/.public-forward-partial-fill-capture-runner.ts
+
+      - name: Capture one genuine prospective public observation
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          SYMBOL: ${{ inputs.symbol }}
+          SIDE: ${{ inputs.side }}
+          REQUESTED_QUANTITY: ${{ inputs.requested_quantity }}
+          BUCKET_IDENTITY: ${{ inputs.quantity_notional_bucket_identity }}
+          EVENT_WINDOW_MS: ${{ inputs.event_window_ms }}
+        run: node /tmp/public-forward-partial-fill-capture-runner.cjs
+
+      - name: Verify main remained exact through capture
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin main
+          REMOTE_MAIN="$(git rev-parse FETCH_HEAD)"
+          if [[ "$REMOTE_MAIN" != "$EXPECTED_SHA" ]]; then
+            echo 'main moved during capture; discard this run as stale.' >&2
+            exit 1
+          fi
+
+      - name: Upload immutable raw capture receipt
+        id: capture_upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-forward-partial-fill-capture-${{ github.run_id }}-${{ github.run_attempt }}
+          path: partial-fill-capture/capture-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Bind capture receipt to immutable GitHub artifact
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.capture_upload.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.capture_upload.outputs.artifact-digest }}
+          ARTIFACT_NAME: public-forward-partial-fill-capture-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { readFile, writeFile } from 'node:fs/promises';
+          function canonicalize(value) {
+            if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') return value;
+            if (Array.isArray(value)) return value.map(canonicalize);
+            return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, canonicalize(v)]));
+          }
+          const sha256 = (value) => createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex');
+          const capture = JSON.parse(await readFile('partial-fill-capture/capture-receipt.json', 'utf8'));
+          const artifactId = String(process.env.ARTIFACT_ID ?? '').trim();
+          const artifactDigest = String(process.env.ARTIFACT_DIGEST ?? '').trim().replace(/^sha256:/u, '').toLowerCase();
+          if (!/^[0-9]+$/u.test(artifactId)) throw new Error('ARTIFACT_ID_INVALID');
+          if (!/^[a-f0-9]{64}$/u.test(artifactDigest)) throw new Error('ARTIFACT_DIGEST_INVALID');
+          const body = {
+            schemaVersion: 'public-forward-partial-fill-capture-artifact-receipt-v1',
+            captureReceiptDigest: capture.receiptDigest,
+            captureStatus: capture.captureStatus,
+            exactMainSha: capture.exactMainSha,
+            observationId: capture.observation?.observationId ?? null,
+            sourceObservationLineageId: capture.observation?.sourceObservationLineageId ?? null,
+            sourceObservationLineageDigest: capture.observation?.sourceObservationLineageDigest ?? null,
+            artifactId,
+            artifactName: process.env.ARTIFACT_NAME,
+            artifactDigest,
+            artifactReference: `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}/artifacts/${artifactId}`,
+            durableDatasetPersistencePerformed: false,
+            canonicalDatasetCreditApplied: false,
+            calibrationArtifactProduced: false,
+            partialFillCostPresent: false,
+            fullCostReady: false,
+            naturalEntryCredit: 0,
+            runtimeCostCredit: 0,
+            executionAuthority: 'NONE',
+            privateApiUsed: false,
+            liveTrading: false,
+            orderSubmitted: false,
+          };
+          const receipt = { ...body, receiptDigest: sha256(body) };
+          await writeFile('partial-fill-capture/artifact-receipt.json', `${JSON.stringify(receipt, null, 2)}\n`, 'utf8');
+          NODE
+
+      - name: Upload finalized artifact receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-forward-partial-fill-capture-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: partial-fill-capture/artifact-receipt.json
+          if-no-files-found: error
+          retention-days: 90

@@ -1,0 +1,106 @@
+name: Public Forward Liquidity Runtime Cost Evidence
+
+on:
+  pull_request:
+    paths:
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-runtime-cost-evidence.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-runtime-cost-evidence.test.mjs'
+      - '.github/workflows/public-forward-liquidity-runtime-cost-evidence.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-forward-liquidity-runtime-cost-evidence-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact pull request head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact pull request head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Check source and test syntax
+        run: |
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-runtime-cost-evidence.mjs
+          node --check market-intelligence-sidecar/tests/public-forward-liquidity-runtime-cost-evidence.test.mjs
+
+      - name: Run Native V3 liquidity runtime cost adapter tests
+        run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-runtime-cost-evidence.test.mjs
+
+      - name: Run upstream Native calibration and liquidity firewall regressions
+        run: |
+          node --test \
+            market-intelligence-sidecar/tests/public-forward-liquidity-calibration-artifact.test.mjs \
+            market-intelligence-sidecar/tests/liquidity-impact-evidence-firewall.test.mjs
+
+      - name: Parse workflow YAML
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e "require 'yaml'; abort('YAML_PARSE_FAILED') unless YAML.parse_file(ARGV.fetch(0))" \
+            .github/workflows/public-forward-liquidity-runtime-cost-evidence.yml
+
+      - name: Run actionlint 1.7.12
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/actionlint_1.7.12_linux_amd64.tar.gz"
+          curl -fsSL \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            -o "$archive"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -version
+          "$RUNNER_TEMP/actionlint" \
+            .github/workflows/public-forward-liquidity-runtime-cost-evidence.yml
+
+      - name: Verify fail-closed runtime cost invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='market-intelligence-sidecar/src/public-forward-liquidity-runtime-cost-evidence.mjs'
+          grep -Fq 'rawCalibrationArtifactRevalidated: true' "$FILE"
+          grep -Fq 'rawProducerOutputRevalidated: true' "$FILE"
+          grep -Fq 'rawLiquidityFirewallRevalidated: true' "$FILE"
+          grep -Fq 'nativeSuccessorV3Only: true' "$FILE"
+          grep -Fq 'nativeAndResidualLineageSeparated: true' "$FILE"
+          grep -Fq 'legacySingleDatasetDigestBridgeAllowed: false' "$FILE"
+          grep -Fq 'nativeSourceDigestAsResidualDatasetAllowed: false' "$FILE"
+          grep -Fq 'nativeResidualSampleCountEqualityRequired: false' "$FILE"
+          grep -Fq 'coefficientInventedByThisAdapter: false' "$FILE"
+          grep -Fq 'unknownCostIsZero: false' "$FILE"
+          grep -Fq 'runtimeCostCredit: 0' "$FILE"
+          grep -Fq 'evidenceComplete: 0' "$FILE"
+          grep -Fq 'fullCostReady: false' "$FILE"
+          grep -Fq 'netAlphaReady: false' "$FILE"
+          grep -Fq 'profitabilityProven: false' "$FILE"
+          grep -Fq "currentValidatedChampion: 'NONE'" "$FILE"
+          grep -Fq "executionAuthority: 'NONE'" "$FILE"
+          if grep -Fq 'fullCostReady: true' "$FILE"; then
+            echo 'PREMATURE_FULL_COST_PROMOTION_FORBIDDEN' >&2
+            exit 1
+          fi
+          if grep -Fq 'profitabilityProven: true' "$FILE"; then
+            echo 'PREMATURE_PROFITABILITY_PROMOTION_FORBIDDEN' >&2
+            exit 1
+          fi

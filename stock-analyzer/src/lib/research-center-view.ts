@@ -213,6 +213,19 @@ export function buildResearchSimpleItems(overview: ResearchCenterOverview): Rese
     ? 'waiting'
     : ledger.settlementCount > 0 ? 'good' : 'warning';
   const profitabilityInsufficient = !ledger.present || ledger.settlementCount == null || ledger.settlementCount === 0 || !overview.profitability.proven;
+  const strategyHealth = overview.strategyHealth;
+  const strategyHealthTone: ResearchSimpleTone = strategyHealth?.status === 'HEALTHY'
+    ? 'good'
+    : strategyHealth?.status === 'FAIL'
+      ? 'blocked'
+      : strategyHealth?.status === 'WATCH'
+        ? 'warning'
+        : 'waiting';
+  const strategyHealthReason = strategyHealth?.reasons.length
+    ? strategyHealth.reasons.join(' · ')
+    : strategyHealth?.status === 'HEALTHY'
+      ? '모든 canonical runtime gate가 HEALTHY입니다.'
+      : 'Strategy Health canonical evidence가 current Research overview에 연결되지 않았습니다.';
 
   return [
     {
@@ -269,9 +282,9 @@ export function buildResearchSimpleItems(overview: ResearchCenterOverview): Rese
     {
       key: 'strategy-health',
       label: '10. Strategy Health',
-      value: '미수집',
-      note: 'Missing Evidence · Strategy Health canonical evidence가 current Research overview에 연결되지 않았습니다. 없는 값을 HEALTHY/PASS로 만들지 않습니다.',
-      tone: 'waiting',
+      value: strategyHealth?.status ?? 'MISSING_EVIDENCE',
+      note: `${strategyHealth ? `근거: ${strategyHealth.evaluator}` : 'Missing Evidence'} · ${strategyHealthReason} · 없는 값을 HEALTHY/PASS 또는 0으로 만들지 않습니다.`,
+      tone: strategyHealthTone,
     },
     {
       key: 'promotion',

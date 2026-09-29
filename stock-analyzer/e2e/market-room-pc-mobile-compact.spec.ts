@@ -61,7 +61,7 @@ function meta(market: 'KR' | 'futures') {
   } as const;
 }
 
-function roomResponse(room: 'stocks-kr' | 'coins-futures') {
+function roomResponse(room: 'stocks-kr' | 'coins-futures', rankingCount = 1) {
   const futures = room === 'coins-futures';
   const roomMeta = meta(futures ? 'futures' : 'KR');
   const ready = <T,>(data: T) => ({ status: 'ready' as const, data, meta: roomMeta, message: null });
@@ -77,13 +77,13 @@ function roomResponse(room: 'stocks-kr' | 'coins-futures') {
     tradingValue24h: 2000, marketCap: null, warning: false, tradingStatus: 'normal',
     fundingRatePercent: 0.01, nextFundingAt: '2026-08-22T08:00:00.000Z', openInterest: 4000,
     rangeVolatility24hPercent: 4.6, providerUpdatedAt: NOW,
-  }] : [{
-    symbol: '005930', name: '삼성전자', exchange: 'KRX', currency: 'KRW', price: 70000,
-    changePercent: 1.2, high24h: 71000, low24h: 69000, volume24h: 1000,
-    tradingValue24h: 2000, marketCap: null, warning: false, tradingStatus: null,
+  }] : Array.from({ length: rankingCount }, (_, index) => ({
+    symbol: String(5930 + index).padStart(6, '0'), name: `검증 종목 ${index + 1}`, exchange: 'KRX', currency: 'KRW', price: 70000 + index,
+    changePercent: 1.2, high24h: 71000 + index, low24h: 69000 + index, volume24h: 1000 + index,
+    tradingValue24h: 2000 + index, marketCap: null, warning: false, tradingStatus: null,
     fundingRatePercent: null, nextFundingAt: null, openInterest: null,
     rangeVolatility24hPercent: null, providerUpdatedAt: NOW,
-  }];
+  }));
   return {
     ok: true,
     room,
@@ -123,7 +123,7 @@ function roomResponse(room: 'stocks-kr' | 'coins-futures') {
   };
 }
 
-async function installMocks(page: Page) {
+async function installMocks(page: Page, rankingCount = 1) {
   await installSession(page);
   await page.route('**/__e2e-supabase/**', async (route) => {
     const pathname = new URL(route.request().url()).pathname;
@@ -156,11 +156,25 @@ async function installMocks(page: Page) {
   });
   await page.route('**/api/**', async (route) => {
     const pathname = new URL(route.request().url()).pathname;
-    if (pathname === '/api/market-information/stocks-kr') return fulfill(route, roomResponse('stocks-kr'));
+    if (pathname === '/api/market-information/stocks-kr') return fulfill(route, roomResponse('stocks-kr', rankingCount));
     if (pathname === '/api/market-information/coins-futures') return fulfill(route, roomResponse('coins-futures'));
     if (pathname === '/api/notifications/price-alerts') return fulfill(route, { alerts: [] });
     return fulfill(route, { ok: true, items: [], results: [] });
   });
+}
+
+async function navGeometry(page: Page) {
+  const nav = page.getByRole('navigation', { name: '주요 메뉴' });
+  await expect(nav).toBeVisible();
+  const box = await nav.boundingBox();
+  expect(box).not.toBeNull();
+  return { box: box!, innerHeight: await page.evaluate(() => window.innerHeight) };
+}
+
+async function expectNoHorizontalOverflow(page: Page) {
+  const overflow = await page.evaluate(() => ({ viewport: innerWidth, body: document.body.scrollWidth, root: document.documentElement.scrollWidth }));
+  expect(overflow.body).toBeLessThanOrEqual(overflow.viewport);
+  expect(overflow.root).toBeLessThanOrEqual(overflow.viewport);
 }
 
 test('market-room source is Korean-first and follows the app-wide 1200px desktop breakpoint', () => {
@@ -198,9 +212,7 @@ for (const width of [360, 390, 412, 430, 1024, 1180]) {
     await expect(page.getByTestId('market-room-rankings')).toBeVisible();
     await expect(page.getByTestId('market-room-overview')).toHaveCount(0);
 
-    const overflow = await page.evaluate(() => ({ viewport: innerWidth, body: document.body.scrollWidth, root: document.documentElement.scrollWidth }));
-    expect(overflow.body).toBeLessThanOrEqual(overflow.viewport);
-    expect(overflow.root).toBeLessThanOrEqual(overflow.viewport);
+    await expectNoHorizontalOverflow(page);
   });
 }
 
@@ -226,3 +238,41 @@ for (const width of [1200, 1440]) {
     await expect(page.getByTestId('market-room-news')).toBeVisible();
   });
 }
+
+test('390x844 short market room keeps BottomNav on the viewport floor', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installMocks(page);
+  await page.goto('/stocks/kr');
+
+  await expect(page.getByRole('heading', { name: '국내주식 정보', level: 1 })).toBeVisible();
+  const main = page.locator('main').filter({ has: page.getByRole('heading', { name: '국내주식 정보', level: 1 }) });
+  const mainBox = await main.boundingBox();
+  const nav = await navGeometry(page);
+  expect(mainBox).not.toBeNull();
+  expect(mainBox!.y + mainBox!.height).toBeLessThanOrEqual(nav.box.y + 1);
+  expect(Math.abs(nav.box.y + nav.box.height - nav.innerHeight)).toBeLessThanOrEqual(1);
+  expect(await main.evaluate((node) => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
+  await expectNoHorizontalOverflow(page);
+});
+
+test('390x844 long market ranking scrolls independently without moving BottomNav', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installMocks(page, 30);
+  await page.goto('/stocks/kr');
+  await page.getByRole('tab', { name: '순위' }).click();
+
+  const main = page.locator('main').filter({ has: page.getByRole('heading', { name: '국내주식 정보', level: 1 }) });
+  await expect(page.getByTestId('market-room-rankings')).toBeVisible();
+  expect(await main.evaluate((node) => node.scrollHeight > node.clientHeight + 1)).toBe(true);
+  const before = await navGeometry(page);
+  await main.evaluate((node) => { node.scrollTop = node.scrollHeight; });
+  await expect.poll(() => main.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+  const after = await navGeometry(page);
+  expect(Math.abs(before.box.y + before.box.height - before.innerHeight)).toBeLessThanOrEqual(1);
+  expect(Math.abs(after.box.y + after.box.height - after.innerHeight)).toBeLessThanOrEqual(1);
+  expect(Math.abs(after.box.y - before.box.y)).toBeLessThanOrEqual(1);
+  const mainBox = await main.boundingBox();
+  expect(mainBox).not.toBeNull();
+  expect(mainBox!.y + mainBox!.height).toBeLessThanOrEqual(after.box.y + 1);
+  await expectNoHorizontalOverflow(page);
+});

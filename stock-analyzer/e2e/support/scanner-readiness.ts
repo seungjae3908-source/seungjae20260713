@@ -2,12 +2,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test, type Page, type Request } from '@playwright/test';
 
+type ScannerReadinessCard = {
+  strongSignalEligible?: boolean;
+};
+
 type ScannerResponse = {
   ok?: boolean;
   partial?: boolean;
   elapsedMs?: number;
   dataState?: string;
-  cards?: unknown[];
+  cards?: ScannerReadinessCard[];
+  alerts?: unknown[];
+  universe?: {
+    stale?: boolean;
+  };
   message?: string;
   error?: unknown;
   outcome?: unknown;
@@ -23,7 +31,7 @@ type ScannerResponse = {
 
 export type ScannerReadinessEvidence = {
   httpStatus: number;
-  dataState: 'complete' | 'partial' | 'unavailable';
+  dataState: 'complete' | 'partial' | 'stale' | 'unavailable';
   partial: boolean | undefined;
   executionPartial: boolean | undefined;
   executionTimedOut: boolean | undefined;
@@ -180,7 +188,15 @@ export async function expectHealthyScannerRoute(
     const body = parsedBody as ScannerResponse;
     expect(body.ok).toBe(true);
     expect(Number(body.elapsedMs)).toBeLessThanOrEqual(12_000);
-    expect(['complete', 'partial', 'unavailable']).toContain(body.dataState);
+    expect(['complete', 'partial', 'stale', 'unavailable']).toContain(body.dataState);
+
+    if (body.dataState === 'stale') {
+      expect(body.universe?.stale, 'stale scanner state must preserve stale-universe provenance').toBe(true);
+      expect(body.alerts ?? [], 'stale scanner state must not expose approval alerts').toEqual([]);
+      for (const card of body.cards ?? []) {
+        expect(card.strongSignalEligible, 'stale scanner cards must remain fail-closed for strong signals').toBe(false);
+      }
+    }
 
     if (body.dataState === 'unavailable') {
       expect(body.partial, 'unavailable scanner state must be an explicit partial result').toBe(true);

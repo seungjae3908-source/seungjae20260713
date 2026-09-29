@@ -16,6 +16,7 @@ export interface Quote {
   low: number;
   open: number;
   previousClose: number;
+  updatedAt: string;
 }
 
 export interface Profile {
@@ -49,6 +50,24 @@ interface FinnhubQuote {
   l: number;
   o: number;
   pc: number;
+  t: number;
+}
+
+function providerTimestampToIso(value: unknown): string {
+  const seconds = Number(value);
+  const timestampMs = seconds * 1000;
+  if (
+    !Number.isFinite(timestampMs)
+    || timestampMs <= 0
+    || timestampMs > Date.now() + 5 * 60 * 1000
+  ) {
+    throw new ProviderError(
+      'UPSTREAM_ERROR',
+      'finnhub',
+      'finnhub: invalid quote timestamp',
+    );
+  }
+  return new Date(timestampMs).toISOString();
 }
 
 export async function getQuote(entry: CatalogEntry): Promise<Quote> {
@@ -75,6 +94,7 @@ export async function getQuote(entry: CatalogEntry): Promise<Quote> {
       low: data.l,
       open: data.o,
       previousClose: data.pc,
+      updatedAt: providerTimestampToIso(data.t),
     };
   });
 }

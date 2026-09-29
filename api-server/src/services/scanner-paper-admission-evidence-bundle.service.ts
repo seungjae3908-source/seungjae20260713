@@ -29,6 +29,13 @@ export type CanonicalPaperExecutionCostPolicy = Readonly<{
   unitConversion: 'PERCENT_DIV_100';
 }>;
 
+export type CanonicalPaperRiskPolicyIdentity = Readonly<{
+  policyId: string;
+  policyVersion: string;
+  source: string;
+  researchCodeSha: string;
+}>;
+
 export type CanonicalPaperRiskEvidence = Readonly<{
   status: 'APPROVED';
   source: 'TRADING_RISK_ENGINE';
@@ -40,6 +47,7 @@ export type CanonicalPaperRiskEvidence = Readonly<{
   actualRiskPercent: number | null;
   riskReward1: number | null;
   riskReward2: number | null;
+  policyIdentity: CanonicalPaperRiskPolicyIdentity | null;
   executionAuthority: 'NONE';
 }>;
 
@@ -111,6 +119,9 @@ function positive(value: unknown): value is number {
 }
 function nonNegative(value: unknown): value is number {
   return finite(value) && value >= 0;
+}
+function exactSha(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{40}$/u.test(value);
 }
 function add(blockers: string[], blocker: string, condition = true) {
   if (condition && !blockers.includes(blocker)) blockers.push(blocker);
@@ -197,6 +208,7 @@ function validateRisk(
   candidate: ScannerCanonicalPaperCandidate,
   riskInput: RiskEngineInput,
   riskResult: RiskEngineResult,
+  riskPolicyIdentity: CanonicalPaperRiskPolicyIdentity | null | undefined,
   nowMs: number,
   maxEvidenceAgeMs: number,
   blockers: string[],
@@ -217,11 +229,33 @@ function validateRisk(
   if (!finite(riskResult?.actualRiskPercent) && riskResult?.actualRiskPercent != null) add(blockers, 'RISK_PERCENT_INVALID');
   if (finite(riskResult?.actualRiskPercent) && positive(riskInput?.riskPercent)
     && riskResult.actualRiskPercent > riskInput.riskPercent + 1e-9) add(blockers, 'RISK_PERCENT_EXCEEDS_REQUEST');
+
+  let normalizedPolicyIdentity: CanonicalPaperRiskPolicyIdentity | null = null;
+  if (candidate.signal.market === 'CRYPTO_FUTURES') {
+    if (!riskPolicyIdentity
+      || !nonEmpty(riskPolicyIdentity.policyId)
+      || !nonEmpty(riskPolicyIdentity.policyVersion)
+      || !nonEmpty(riskPolicyIdentity.source)
+      || !exactSha(riskPolicyIdentity.researchCodeSha)) {
+      add(blockers, 'RISK_POLICY_IDENTITY_REQUIRED');
+    } else if (riskPolicyIdentity.researchCodeSha !== candidate.signal.strategyIdentity.researchCodeSha) {
+      add(blockers, 'RISK_POLICY_RESEARCH_SHA_MISMATCH');
+    } else {
+      normalizedPolicyIdentity = Object.freeze({
+        policyId: riskPolicyIdentity.policyId.trim(),
+        policyVersion: riskPolicyIdentity.policyVersion.trim(),
+        source: riskPolicyIdentity.source.trim(),
+        researchCodeSha: riskPolicyIdentity.researchCodeSha,
+      });
+    }
+  }
+
   if (blockers.length > 0 || evaluatedAtMs == null || !positive(riskResult.recommendedQuantity)) return null;
   return Object.freeze({
     status: 'APPROVED', source: 'TRADING_RISK_ENGINE', evaluatedAtMs, simulatedOnly: true, allowed: true,
     blockCodes: Object.freeze([]), recommendedQuantity: riskResult.recommendedQuantity,
     actualRiskPercent: riskResult.actualRiskPercent, riskReward1: riskResult.riskReward1, riskReward2: riskResult.riskReward2,
+    policyIdentity: normalizedPolicyIdentity,
     executionAuthority: 'NONE',
   });
 }
@@ -353,6 +387,7 @@ export function buildScannerCanonicalPaperAdmissionEvidence(input: {
   learningSnapshot: SignalSnapshot;
   riskInput: RiskEngineInput;
   riskResult: RiskEngineResult;
+  riskPolicyIdentity?: CanonicalPaperRiskPolicyIdentity | null;
   paperEvidence: PaperReadinessEvidence;
   supplementalCostEvidence: SupplementalExecutionCostEvidence;
   executionDataEvidence: unknown;
@@ -382,7 +417,15 @@ export function buildScannerCanonicalPaperAdmissionEvidence(input: {
   if (cost.provenance && (cost.provenance.policyId !== canonicalCostPolicyVersion
     || cost.provenance.paperCostPolicyVersion !== canonicalCostPolicyVersion)) add(blockers, 'COST_PROVENANCE_POLICY_VERSION_MISMATCH');
 
-  const riskEvidence = validateRisk(input.paperCandidate, input.riskInput, input.riskResult, nowMs, maxEvidenceAgeMs, blockers);
+  const riskEvidence = validateRisk(
+    input.paperCandidate,
+    input.riskInput,
+    input.riskResult,
+    input.riskPolicyIdentity,
+    nowMs,
+    maxEvidenceAgeMs,
+    blockers,
+  );
   const executionDataEvidence = normalizeExecutionEvidence(input.paperCandidate, input.paperEvidence, input.executionDataEvidence, nowMs, blockers);
   if (blockers.length > 0 || !riskEvidence || !executionDataEvidence || !cost.provenance) return blocked(blockers);
 

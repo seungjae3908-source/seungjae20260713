@@ -1,0 +1,444 @@
+name: Public Forward Partial Fill Release Binding Publication
+
+on:
+  pull_request:
+    paths:
+      - 'api-server/src/services/public-forward-partial-fill-calibration-release-binding.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-calibration-runtime-binding-resolver.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-calibration-runtime-binding-resolver.service.test.ts'
+      - 'api-server/src/services/public-forward-partial-fill-calibration-production-reader.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-calibration-production-caller.service.ts'
+      - '.github/workflows/public-forward-partial-fill-release-binding-publication.yml'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  statuses: read
+  actions: read
+
+concurrency:
+  group: >-
+    partial-fill-release-binding-${{
+      github.event_name == 'issue_comment'
+      && github.event.issue.number == 23
+      && startsWith(github.event.comment.body, '/publish-partial-fill-release-binding ')
+      && github.event.comment.id
+      || github.run_id
+    }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Validate Phase C runtime resolver and T01-T30
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir api-server run typecheck
+
+      - name: Verify exact Phase C T01-T30 inventory
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          FILE='api-server/src/services/public-forward-partial-fill-calibration-runtime-binding-resolver.service.test.ts'
+          test "$(grep -Ec "^test\\('T(0[1-9]|1[0-9]|2[0-9]|30) " "$FILE")" -eq 30
+          for n in $(seq -w 1 30); do
+            grep -Fq "test('T${n} " "$FILE"
+          done
+
+      - name: Bundle and run Phase C T01-T30
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server exec esbuild \
+            src/services/public-forward-partial-fill-calibration-runtime-binding-resolver.service.test.ts \
+            --bundle --platform=node --format=cjs --target=node20 \
+            --outfile=/tmp/public-forward-partial-fill-runtime-binding-resolver.test.cjs
+          node --test /tmp/public-forward-partial-fill-runtime-binding-resolver.test.cjs
+
+      - name: Verify Phase C authority boundaries
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          RESOLVER='api-server/src/services/public-forward-partial-fill-calibration-runtime-binding-resolver.service.ts'
+          CALLER='api-server/src/services/public-forward-partial-fill-calibration-production-caller.service.ts'
+          READER='api-server/src/services/public-forward-partial-fill-calibration-production-reader.service.ts'
+          BINDING='api-server/src/services/public-forward-partial-fill-calibration-release-binding.service.ts'
+          WORKFLOW='.github/workflows/public-forward-partial-fill-release-binding-publication.yml'
+
+          grep -Fq "runtimeBindingSource: 'IMMUTABLE_RELEASE_BINDING'" "$RESOLVER"
+          grep -Fq 'directoryScanAllowed: false' "$RESOLVER"
+          grep -Fq 'runtimeActivationPerformed: false' "$RESOLVER"
+          grep -Fq 'callPublicForwardPartialFillCalibrationReaderFromAuthoritativeRuntimeBinding' "$CALLER"
+          grep -Fq 'PARTIAL_FILL_RELEASE_BINDING_REF' "$CALLER"
+          grep -Fq 'PARTIAL_FILL_RELEASE_BINDING_DIGEST' "$CALLER"
+          grep -Fq 'runtimeBindingSource' "$READER"
+          grep -Fq 'publishPublicForwardPartialFillCalibrationReleaseBinding' "$BINDING"
+          grep -Fq 'rollbackByNewBindingRequired: true' "$BINDING"
+          grep -Fq "cat > \"\$ENTRY\" <<'TS'" "$WORKFLOW"
+          grep -Fq 'sudo -n -u investment-research env' "$WORKFLOW"
+
+          if grep -Eq '\b(readdir|opendir)\b' "$RESOLVER"; then
+            echo 'Directory scanning is forbidden in the runtime resolver.' >&2
+            exit 1
+          fi
+          if grep -Ev 'grep -Eq' "$WORKFLOW" \
+            | grep -Eq 'pm2 (restart|start|reload)|systemctl (enable|start|restart)|production-deploy[.]yml|/activate-research-production '; then
+            echo 'Publication workflow must not activate or deploy runtime.' >&2
+            exit 1
+          fi
+
+  publish:
+    name: Publish immutable #23-authorized release binding only
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      startsWith(github.event.comment.body, '/publish-partial-fill-release-binding ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Parse exact owner publication command
+        id: command
+        shell: bash
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$COMMENT_AUTHOR" == 'seungjae3908-source' ]] || {
+            echo 'Only repository owner seungjae3908-source may publish a Partial-Fill release binding.' >&2
+            exit 1
+          }
+          [[ "$AUTHOR_ASSOCIATION" == 'OWNER' ]] || {
+            echo 'Release-binding publication requires OWNER author association.' >&2
+            exit 1
+          }
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/publish-partial-fill-release-binding ([0-9a-fA-F]{40}) ([A-Za-z0-9._/-]+) ([0-9a-fA-F]{64})$/.exec(body);
+          if (!match) {
+            console.error('Exact command required: /publish-partial-fill-release-binding <current-main-sha> <pointer-relative-ref> <pointer-digest>');
+            process.exit(1);
+          }
+          const pointerRef = match[2];
+          const parts = pointerRef.split('/');
+          if (pointerRef.startsWith('/')
+            || pointerRef.includes('\\')
+            || parts.some((part) => !part || part === '.' || part === '..')
+            || !pointerRef.startsWith('forward/partial-fill-calibration-v1/dataset-pointers/')) {
+            console.error('Pointer ref must be an exact safe immutable dataset-pointer relative path.');
+            process.exit(1);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1].toLowerCase()}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `pointer_ref=${pointerRef}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `pointer_digest=${match[3].toLowerCase()}\n`);
+          NODE
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Require exact current main SHA
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main
+          MAIN_SHA="$(git rev-parse origin/main^{commit})"
+          [[ "$TARGET_SHA" == "$MAIN_SHA" ]] || {
+            echo "Release binding target must equal exact current main: target=$TARGET_SHA main=$MAIN_SHA" >&2
+            exit 1
+          }
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]] || {
+            echo 'Checked out main moved during publication authorization.' >&2
+            exit 1
+          }
+
+      - name: Require coherent exact-main Required CI 6/6 SUCCESS
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const targetSha = process.env.TARGET_SHA;
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: targetSha,
+              per_page: 100,
+            });
+            statuses.sort((left, right) => Number(right.id) - Number(left.id));
+            const latest = new Map();
+            for (const status of statuses) {
+              if (!latest.has(status.context)) latest.set(status.context, status);
+            }
+            const missing = required.filter((name) => latest.get(name)?.state !== 'success');
+            if (missing.length) {
+              core.setFailed(`Required CI not 6/6 SUCCESS: ${missing.join(', ')}`);
+              return;
+            }
+            const runIds = new Set();
+            for (const name of required) {
+              const match = String(latest.get(name)?.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
+              if (!match) {
+                core.setFailed(`Required status ${name} lacks an authoritative run URL.`);
+                return;
+              }
+              runIds.add(Number(match[1]));
+            }
+            if (runIds.size !== 1) {
+              core.setFailed(`Required CI statuses are not from one coherent run: ${[...runIds].join(', ')}`);
+              return;
+            }
+            const runId = [...runIds][0];
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            })).data;
+            const valid = run.head_sha === targetSha
+              && run.head_branch === 'main'
+              && run.status === 'completed'
+              && run.conclusion === 'success'
+              && run.path === '.github/workflows/futures-public-network-smoke.yml';
+            if (!valid) {
+              core.setFailed(`Required CI provenance rejected for run ${runId}.`);
+              return;
+            }
+            core.info(`Exact-main Required CI 6/6 accepted from run ${runId}.`);
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir api-server run typecheck
+
+      - name: Bundle create-only release-binding publisher
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ENTRY="$GITHUB_WORKSPACE/api-server/.phase-c-publish-entry.ts"
+          cat > "$ENTRY" <<'TS'
+          import { publishPublicForwardPartialFillCalibrationReleaseBinding } from './src/services/public-forward-partial-fill-calibration-release-binding.service.ts';
+
+          async function main() {
+            const required = [
+              'STATE_ROOT',
+              'RESEARCH_REPO_ROOT',
+              'POINTER_REF',
+              'POINTER_DIGEST',
+              'RELEASE_BINDING_IDENTITY',
+              'RELEASE_CONTROL_REFERENCE',
+              'REPOSITORY',
+              'TARGET_SHA',
+              'APPROVAL_REFERENCE',
+              'APPROVED_BY',
+              'APPROVED_AT',
+            ];
+            for (const name of required) {
+              if (!process.env[name]?.trim()) throw new Error(`MISSING_PUBLICATION_INPUT:${name}`);
+            }
+            const result = await publishPublicForwardPartialFillCalibrationReleaseBinding({
+              stateRoot: process.env.STATE_ROOT!,
+              researchRepoRoot: process.env.RESEARCH_REPO_ROOT!,
+              pointerRelativePath: process.env.POINTER_REF!,
+              expectedPointerDigest: process.env.POINTER_DIGEST!,
+              releaseBindingIdentity: process.env.RELEASE_BINDING_IDENTITY!,
+              releaseControlReference: process.env.RELEASE_CONTROL_REFERENCE!,
+              publicationProvenance: {
+                repository: process.env.REPOSITORY!,
+                exactMainSha: process.env.TARGET_SHA!,
+                issueNumber: 23,
+                approvalReference: process.env.APPROVAL_REFERENCE!,
+                approvedBy: process.env.APPROVED_BY!,
+              },
+              approvedAt: process.env.APPROVED_AT!,
+            });
+            process.stdout.write(JSON.stringify({
+              releaseBindingRef: result.releaseBindingRelativePath,
+              releaseBindingDigest: result.binding.releaseBindingDigest,
+              datasetPointerRef: result.binding.datasetPointerRef,
+              datasetPointerDigest: result.binding.datasetPointerDigest,
+              approvedMainSha: result.binding.approvedMainSha,
+              approvedBy: result.binding.approvedBy,
+              approvedAt: result.binding.approvedAt,
+              created: result.created,
+            }));
+          }
+
+          main().catch((error) => {
+            console.error(error instanceof Error ? error.message : String(error));
+            process.exit(1);
+          });
+          TS
+          pnpm --dir api-server exec esbuild "$ENTRY" \
+            --bundle --platform=node --format=cjs --target=node20 \
+            --outfile="$RUNNER_TEMP/publish-partial-fill-release-binding.cjs"
+          rm -f "$ENTRY"
+
+      - name: Configure SSH for immutable publication transport
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" ]]
+          [[ -n "$SSH_PRIVATE_KEY" ]]
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Publish immutable binding record without runtime activation
+        id: publication
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          POINTER_REF: ${{ steps.command.outputs.pointer_ref }}
+          POINTER_DIGEST: ${{ steps.command.outputs.pointer_digest }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
+          COMMENT_CREATED_AT: ${{ github.event.comment.created_at }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_USER" ]]
+          STATE_ROOT='/var/lib/investment-research-production'
+          RESEARCH_REPO_ROOT='/opt/investment-research/current'
+          RELEASE_CONTROL_REFERENCE="https://github.com/${GITHUB_REPOSITORY}/issues/23"
+          RELEASE_BINDING_IDENTITY="partial-fill-release:${TARGET_SHA}:${POINTER_DIGEST}:${COMMENT_ID}"
+
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" \
+            "test -d '$STATE_ROOT' && test -d '$RESEARCH_REPO_ROOT' && id investment-research >/dev/null"
+
+          REMOTE_ENV="$(printf \
+            'STATE_ROOT=%q RESEARCH_REPO_ROOT=%q POINTER_REF=%q POINTER_DIGEST=%q RELEASE_BINDING_IDENTITY=%q RELEASE_CONTROL_REFERENCE=%q REPOSITORY=%q TARGET_SHA=%q APPROVAL_REFERENCE=%q APPROVED_BY=%q APPROVED_AT=%q' \
+            "$STATE_ROOT" "$RESEARCH_REPO_ROOT" "$POINTER_REF" "$POINTER_DIGEST" "$RELEASE_BINDING_IDENTITY" \
+            "$RELEASE_CONTROL_REFERENCE" "$GITHUB_REPOSITORY" "$TARGET_SHA" "$COMMENT_URL" "$COMMENT_AUTHOR" "$COMMENT_CREATED_AT")"
+
+          REMOTE_UID="$(
+            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$SSH_USER@$SSH_HOST" 'id -u'
+          )"
+          if [[ "$REMOTE_UID" == '0' ]]; then
+            REMOTE_EXEC="$REMOTE_ENV node -"
+          else
+            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$SSH_USER@$SSH_HOST" \
+              "sudo -n -u investment-research test -w '$STATE_ROOT' && sudo -n -u investment-research test -r '$RESEARCH_REPO_ROOT'"
+            REMOTE_EXEC="sudo -n -u investment-research env $REMOTE_ENV node -"
+          fi
+
+          PUBLICATION_RESULT="$(
+            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$SSH_USER@$SSH_HOST" "$REMOTE_EXEC" \
+              < "$RUNNER_TEMP/publish-partial-fill-release-binding.cjs"
+          )"
+
+          PUBLICATION_RESULT="$PUBLICATION_RESULT" node <<'NODE'
+          const fs = require('node:fs');
+          const value = JSON.parse(process.env.PUBLICATION_RESULT);
+          const digest = /^[a-f0-9]{64}$/;
+          if (!value.releaseBindingRef
+            || !digest.test(value.releaseBindingDigest)
+            || !value.datasetPointerRef
+            || !digest.test(value.datasetPointerDigest)
+            || !/^[a-f0-9]{40}$/.test(value.approvedMainSha)
+            || !value.approvedBy
+            || !value.approvedAt) {
+            throw new Error('INVALID_PUBLICATION_RESULT');
+          }
+          for (const [key, output] of Object.entries({
+            release_binding_ref: value.releaseBindingRef,
+            release_binding_digest: value.releaseBindingDigest,
+            dataset_pointer_ref: value.datasetPointerRef,
+            dataset_pointer_digest: value.datasetPointerDigest,
+            created: String(Boolean(value.created)),
+          })) {
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${output}\n`);
+          }
+          NODE
+
+      - name: Record publication without activation
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          RELEASE_BINDING_REF: ${{ steps.publication.outputs.release_binding_ref }}
+          RELEASE_BINDING_DIGEST: ${{ steps.publication.outputs.release_binding_digest }}
+          DATASET_POINTER_REF: ${{ steps.publication.outputs.dataset_pointer_ref }}
+          DATASET_POINTER_DIGEST: ${{ steps.publication.outputs.dataset_pointer_digest }}
+          CREATED: ${{ steps.publication.outputs.created }}
+          SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                '[PARTIAL_FILL_RELEASE_BINDING_PUBLICATION]',
+                '',
+                `- Exact approved main SHA: \`${process.env.TARGET_SHA}\``,
+                `- Release binding ref: \`${process.env.RELEASE_BINDING_REF}\``,
+                `- Release binding digest: \`${process.env.RELEASE_BINDING_DIGEST}\``,
+                `- Dataset pointer ref: \`${process.env.DATASET_POINTER_REF}\``,
+                `- Dataset pointer digest: \`${process.env.DATASET_POINTER_DIGEST}\``,
+                `- Create-only record newly created: \`${process.env.CREATED}\``,
+                `- Source owner command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
+                '- Runtime activation executed: `false`',
+                '- Deployment executed: `false`',
+                '- Environment mutation executed: `false`',
+                '- Production policy authority connected: `false`',
+                '- FULL_COST_READY: `false`',
+                '- EVIDENCE_COMPLETE: `0`',
+                '- executionAuthority: `NONE`',
+              ].join('\n'),
+            });

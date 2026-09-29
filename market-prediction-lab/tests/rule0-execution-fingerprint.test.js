@@ -61,3 +61,25 @@ test("canonical Rule0 1h fingerprint includes prediction, collection and settlem
   for (const requiredPath of required) assert.equal(paths.has(requiredPath), true, `missing ${requiredPath}`);
   assert.match(result.fingerprint, /^[0-9a-f]{64}$/);
 });
+
+test("Rule0 shadow artifact namespace advances with the immutable chain contract", () => {
+  const workflowPath = path.join(repoRoot, ".github/workflows/prediction-lab-rule0-1h-shadow-sidecar.yml");
+  const workflow = fs.readFileSync(workflowPath, "utf8");
+  const artifactVersion = workflow.match(/ARTIFACT_NAME: prediction-lab-rule0-1h-shadow-state-v(\d+)/)?.[1];
+  const contractVersion = workflow.match(/CHAIN_CONTRACT: rule0-1h-artifact-chain-v(\d+)/)?.[1];
+  assert.ok(artifactVersion, "artifact chain version missing");
+  assert.equal(contractVersion, artifactVersion, "artifact and chain contract versions must match");
+  assert.ok(Number(artifactVersion) >= 8, "post-#1156 OI execution dependency rollover must not reuse the v7 chain");
+  assert.doesNotMatch(workflow, /prediction-lab-rule0-1h-shadow-state-v7|rule0-1h-artifact-chain-v7/);
+  assert.match(workflow, /execution dependency changed; start a separately versioned chain/);
+  assert.match(workflow, /cron: "7 \*\/2 \* \* \*"/);
+});
+
+test("Rule0 sidecar preserves missing inference as blocked data instead of invoking the blend", () => {
+  const sidecarPath = path.join(repoRoot, "market-prediction-lab/scripts/run-rule-model-1h-shadow-sidecar.js");
+  const sidecar = fs.readFileSync(sidecarPath, "utf8");
+  assert.match(sidecar, /deployedAnalysis\.inferenceEvaluation\?\.status !== "EVALUABLE"/);
+  assert.match(sidecar, /inferenceBlockersBySymbol\[symbol\]/);
+  assert.match(sidecar, /status: Object\.keys\(inferenceBlockers\)\.length === 0 \? "pass" : "blocked_data"/);
+  assert.match(sidecar, /continue;/);
+});

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildUnifiedTradeJournal, type UnifiedTradeOrder } from '../../services/unified-trade-journal.service.ts';
+import { buildUnifiedTradeJournal, costEvidenceFromValues, type UnifiedTradeOrder } from '../../services/unified-trade-journal.service.ts';
 import { buildAutonomousCapitalLab } from './autonomous-capital-lab.ts';
 import { buildCanonicalJournalPortfolioAdvisor } from './canonical-journal-adapter.ts';
 
@@ -36,6 +36,7 @@ function order(overrides: Partial<UnifiedTradeOrder> = {}): UnifiedTradeOrder {
     averageFillPrice: 100,
     fees: 0,
     tax: 0,
+    costEvidence: costEvidenceFromValues(0, 0, 'CANONICAL_ORDER_RECORD'),
     currency: 'USD',
     status: filledQuantity === quantity ? 'FILLED' : 'PARTIALLY_FILLED',
     strategy: 'paper-test',

@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AiChatError, answerAiChat } from './ai-chat.service';
+import { MarketDataService } from './market-data.service';
+import { NewsService } from './news.service';
+import { FinancialService } from './financial.service';
 
 const environmentKeys = [
   'AI_CHAT_PROVIDER',
@@ -188,6 +191,60 @@ test('AI chat distinguishes the server timeout from user cancellation', async ()
       (cause: unknown) => cause instanceof AiChatError && cause.code === 'AI_CHAT_CANCELLED' && cause.statusCode === 499,
     );
   } finally {
+    restoreEnvironment(previous);
+  }
+});
+
+test('AI Chat validates timeframe, explicit direction and selection scope before outbound work', async () => {
+  const base = { market: 'KR', symbol: '005930', ticker: '005930', timeframe: '15m', action: 'BUY', selectedAt: '2026-09-01T00:00:00.000Z' };
+  for (const context of [
+    { ...base, timeframe: 'invented' }, { ...base, timeframe: 0 }, { ...base, action: 'LONG' },
+    { ...base, action: 'SIGNAL_CONFLICT' }, { ...base, ticker: 'AAPL' }, { ...base, selectedAt: 'invalid' },
+    { ...base, selectedAt: new Date(Date.now() + 60_000).toISOString() }, { timeframe: '15m', action: 'BUY' },
+    { market: 'BITGET', symbol: 'BTCUSDT', action: 'BUY' },
+  ]) {
+    let calls = 0;
+    await assert.rejects(answerAiChat({ message: '선택 종목의 위험을 설명해줘', context }, async () => {
+      calls++; throw new Error('invalid scope cannot reach provider');
+    }), (cause: unknown) => cause instanceof AiChatError && cause.code === 'AI_CHAT_INVALID_CONTEXT');
+    assert.equal(calls, 0);
+  }
+});
+
+test('AI Chat refusals echo exact KR/US/Spot/Futures identity without execution or provider calls', async () => {
+  for (const [market, symbol, action] of [['KR', '005930', 'BUY'], ['US', 'AAPL', 'SELL'], ['UPBIT', 'ETH', 'BUY'], ['BITGET', 'ETHUSDT', 'SHORT']]) {
+    const context = { market, symbol, ticker: symbol, timeframe: '4H', action, selectedAt: '2026-09-01T00:00:00.000Z' };
+    let calls = 0;
+    const result = await answerAiChat({ message: '실제 주문 실행해줘', context }, async () => { calls++; throw new Error('forbidden'); });
+    assert.equal(calls, 0); assert.equal(result.kind, 'refusal');
+    assert.deepEqual(result.selection, { ...context, displayName: undefined });
+  }
+});
+
+test('AI Chat real public-context consumer and provider payload retain timeframe/action without inventing OHLCV', async () => {
+  const previous = snapshotEnvironment(); clearEnvironment(); process.env.GEMINI_API_KEY = 'test-gemini-key';
+  const methods = [MarketDataService.getQuote, MarketDataService.getCompanyProfile, NewsService.getNews, FinancialService.getFinancials] as const;
+  const symbols: string[] = [];
+  const unavailable = async (symbol: string): Promise<never> => { symbols.push(symbol); throw new Error('test provider data missing'); };
+  MarketDataService.getQuote = unavailable; MarketDataService.getCompanyProfile = unavailable;
+  NewsService.getNews = unavailable; FinancialService.getFinancials = unavailable;
+  const payloads: Array<Record<string, any>> = [];
+  try {
+    for (const timeframe of ['15m', '4H']) {
+      const context = { market: 'KR', symbol: '005930', ticker: '005930', timeframe, action: 'BUY', selectedAt: '2026-09-01T00:00:00.000Z' };
+      const result = await answerAiChat({ message: '선택 종목의 위험을 설명해줘', context }, async (_url, init) => {
+        const body = JSON.parse(String(init?.body)); payloads.push(JSON.parse(body.contents[0].parts[0].text));
+        return geminiResponse('공개 시세와 선택 시간봉 데이터가 없어 기술적 판단을 할 수 없습니다.');
+      });
+      assert.equal(result.selection?.timeframe, timeframe); assert.equal(result.selection?.action, 'BUY');
+      assert.equal(result.data.status, 'unavailable'); assert.ok(result.data.missing.includes(`선택 시간봉 ${timeframe} OHLCV·기술지표`));
+      assert.equal(payloads.at(-1)?.publicContext.selection.timeframe, timeframe);
+      assert.equal(payloads.at(-1)?.publicContext.selection.action, 'BUY');
+      assert.equal(payloads.at(-1)?.publicContext.quote, undefined);
+    }
+    assert.equal(payloads.length, 2); assert.deepEqual(symbols, Array(8).fill('005930'));
+  } finally {
+    [MarketDataService.getQuote, MarketDataService.getCompanyProfile, NewsService.getNews, FinancialService.getFinancials] = methods;
     restoreEnvironment(previous);
   }
 });

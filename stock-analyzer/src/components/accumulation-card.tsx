@@ -1,5 +1,6 @@
 import { Layers } from 'lucide-react';
 import type { AccumulationResult } from '@/lib/api';
+import { resolveEvidenceDisplay } from '@/lib/evidence-display';
 import { cn } from '@/lib/utils';
 
 function Stars({ n }: { n: number }) {
@@ -19,6 +20,17 @@ function scoreColor(score: number): string {
 
 export function AccumulationCard({ acc, onClick }: { acc: AccumulationResult; onClick: () => void }) {
   const insufficient = acc.dataQuality === 'insufficient';
+  const missingEvidence = resolveEvidenceDisplay({ value: null, collected: false }).display;
+  const confidence = resolveEvidenceDisplay({
+    value: acc.confidence,
+    formatter: (value) => `${value}%`,
+  }).display;
+  const breakoutProbability = resolveEvidenceDisplay({
+    value: acc.breakoutProbability,
+    formatter: (value) => `${value}%`,
+  }).display;
+  const expectedPeriod = resolveEvidenceDisplay({ value: acc.expectedPeriod }).display;
+
   return (
     <button
       type="button"
@@ -39,7 +51,7 @@ export function AccumulationCard({ acc, onClick }: { acc: AccumulationResult; on
       </div>
 
       {insufficient ? (
-        <p className="py-2 text-sm text-warning">데이터 부족으로 신뢰도 낮음</p>
+        <p className="py-2 text-sm text-warning">{missingEvidence} · 데이터 부족으로 신뢰도 낮음</p>
       ) : (
         <>
           <div className="flex items-end gap-3">
@@ -52,9 +64,9 @@ export function AccumulationCard({ acc, onClick }: { acc: AccumulationResult; on
           <p className={cn('mt-1 text-sm font-semibold', scoreColor(acc.score))}>{acc.label}</p>
 
           <div className="mt-3 grid grid-cols-3 gap-2">
-            <Metric label="신뢰도" value={`${acc.confidence}%`} />
-            <Metric label="돌파 가능성" value={`${acc.breakoutProbability}%`} />
-            <Metric label="예상 기간" value={acc.expectedPeriod} />
+            <Metric label="신뢰도" value={confidence} />
+            <Metric label="돌파 가능성" value={breakoutProbability} />
+            <Metric label="예상 기간" value={expectedPeriod} />
           </div>
 
           {acc.passed.length > 0 && (

@@ -1,3 +1,5 @@
+import { assertPortfolioMarketEvidence } from './portfolio-market-truth';
+
 export interface PortfolioChartOverlay {
   ticker: string;
   name: string;
@@ -25,6 +27,10 @@ interface PortfolioOverlayInput {
 
 const STORAGE_KEY = "sa-portfolio-chart-overlays-v1";
 const PURCHASE_DATE_KEY = "sa-portfolio-purchase-dates-v1";
+const RATE_EPSILON = 1e-8;
+const PORTFOLIO_TICKER_PATTERN = /^[A-Z0-9][A-Z0-9.-]{0,31}$/;
+const PORTFOLIO_OVERLAY_IDENTITY_INVALID = "PORTFOLIO_OVERLAY_IDENTITY_INVALID";
+const PORTFOLIO_OVERLAY_IDENTITY_CONFLICT = "PORTFOLIO_OVERLAY_IDENTITY_CONFLICT";
 
 function hasStorage() {
   return typeof window !== "undefined" && Boolean(window.localStorage);
@@ -33,12 +39,163 @@ function hasStorage() {
 function normalizeDate(value: unknown) {
   const text = String(value ?? "").trim();
 
-  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    const parsed = new Date(`${text}T00:00:00.000Z`);
+    if (Number.isNaN(parsed.getTime())) return "";
+    return parsed.toISOString().slice(0, 10) === text ? text : "";
+  }
 
   const parsed = new Date(text);
   if (Number.isNaN(parsed.getTime())) return "";
 
   return parsed.toISOString().slice(0, 10);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPositiveFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function assertPortfolioOverlayInputIdentities(rows: PortfolioOverlayInput[]): void {
+  const identities = new Map<
+    string,
+    { market: "KR" | "US"; currency: "KRW" | "USD" }
+  >();
+
+  for (const row of rows) {
+    const ticker = typeof row.ticker === "string"
+      ? row.ticker.trim().toUpperCase()
+      : "";
+    const market = row.market;
+    const expectedCurrency = market === "US"
+      ? "USD"
+      : market === "KR"
+        ? "KRW"
+        : null;
+
+    if (
+      !ticker ||
+      !PORTFOLIO_TICKER_PATTERN.test(ticker) ||
+      !expectedCurrency ||
+      row.currency !== expectedCurrency
+    ) {
+      throw new Error(`${PORTFOLIO_OVERLAY_IDENTITY_INVALID}: ${ticker || "UNKNOWN"}`);
+    }
+
+    const previous = identities.get(ticker);
+    if (
+      previous &&
+      (previous.market !== market || previous.currency !== row.currency)
+    ) {
+      throw new Error(`${PORTFOLIO_OVERLAY_IDENTITY_CONFLICT}: ${ticker}`);
+    }
+
+    identities.set(ticker, {
+      market,
+      currency: row.currency,
+    });
+  }
+}
+
+function isValidPortfolioChartOverlay(value: unknown): value is PortfolioChartOverlay {
+  if (!isRecord(value)) return false;
+
+  const ticker = typeof value.ticker === "string" ? value.ticker.trim().toUpperCase() : "";
+  const name = typeof value.name === "string" ? value.name.trim() : "";
+  if (!ticker || !PORTFOLIO_TICKER_PATTERN.test(ticker) || !name || value.ticker !== ticker) return false;
+
+  if (value.market !== "KR" && value.market !== "US") return false;
+  const expectedCurrency = value.market === "US" ? "USD" : "KRW";
+  if (value.currency !== expectedCurrency) return false;
+
+  if (!isPositiveFiniteNumber(value.averagePrice) || !isPositiveFiniteNumber(value.quantity)) {
+    return false;
+  }
+
+  if (typeof value.purchaseDate !== "string" || normalizeDate(value.purchaseDate) !== value.purchaseDate) {
+    return false;
+  }
+
+  if (typeof value.updatedAt !== "string" || !Number.isFinite(Date.parse(value.updatedAt))) {
+    return false;
+  }
+
+  if (value.currentPrice === null) {
+    return value.rate === null;
+  }
+
+  if (!isPositiveFiniteNumber(value.currentPrice)
+    || typeof value.rate !== "number"
+    || !Number.isFinite(value.rate)) {
+    return false;
+  }
+
+  const expectedRate = ((value.currentPrice - value.averagePrice) / value.averagePrice) * 100;
+  return Math.abs(value.rate - expectedRate) <= RATE_EPSILON;
+}
+
+export function parsePortfolioChartOverlays(value: unknown): PortfolioChartOverlay[] {
+  if (!Array.isArray(value)) return [];
+
+  const validRows = value.filter(isValidPortfolioChartOverlay);
+  const identities = new Map<
+    string,
+    { market: "KR" | "US"; currency: "KRW" | "USD" }
+  >();
+  const conflictedTickers = new Set<string>();
+
+  for (const row of validRows) {
+    const previous = identities.get(row.ticker);
+    if (
+      previous &&
+      (previous.market !== row.market || previous.currency !== row.currency)
+    ) {
+      conflictedTickers.add(row.ticker);
+      continue;
+    }
+
+    if (!previous) {
+      identities.set(row.ticker, {
+        market: row.market,
+        currency: row.currency,
+      });
+    }
+  }
+
+  const overlays: PortfolioChartOverlay[] = [];
+  const seenTickers = new Set<string>();
+
+  for (const row of validRows) {
+    if (conflictedTickers.has(row.ticker) || seenTickers.has(row.ticker)) {
+      continue;
+    }
+
+    seenTickers.add(row.ticker);
+    overlays.push(row);
+  }
+
+  return overlays;
+}
+
+export function parsePortfolioPurchaseDates(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+
+  const dates: Record<string, string> = {};
+  for (const [ticker, purchaseDate] of Object.entries(value)) {
+    const normalizedTicker = ticker.trim().toUpperCase();
+    if (ticker !== normalizedTicker || !PORTFOLIO_TICKER_PATTERN.test(normalizedTicker)) {
+      continue;
+    }
+    if (typeof purchaseDate !== "string" || normalizeDate(purchaseDate) !== purchaseDate) {
+      continue;
+    }
+    dates[normalizedTicker] = purchaseDate;
+  }
+
+  return dates;
 }
 
 function readPurchaseDates(): Record<string, string> {
@@ -49,7 +206,7 @@ function readPurchaseDates(): Record<string, string> {
       window.localStorage.getItem(PURCHASE_DATE_KEY) ?? "{}",
     );
 
-    return parsed && typeof parsed === "object" ? parsed : {};
+    return parsePortfolioPurchaseDates(parsed);
   } catch {
     return {};
   }
@@ -64,7 +221,7 @@ export function rememberPurchaseDate(ticker: string, date: string) {
 
   const normalizedTicker = ticker.trim().toUpperCase();
   const normalizedDate = normalizeDate(date);
-  if (!normalizedTicker || !normalizedDate) return;
+  if (!PORTFOLIO_TICKER_PATTERN.test(normalizedTicker) || !normalizedDate) return;
 
   const dates = readPurchaseDates();
   dates[normalizedTicker] = normalizedDate;
@@ -72,6 +229,23 @@ export function rememberPurchaseDate(ticker: string, date: string) {
 }
 
 export function syncPortfolioChartOverlays(rows: PortfolioOverlayInput[]) {
+  // A ticker is the persisted chart-overlay identity. Validate its market/currency
+  // binding before aggregation so two different asset identities can never be
+  // collapsed into one average-cost/PnL row that still looks internally valid.
+  assertPortfolioOverlayInputIdentities(rows);
+
+  // PortfolioPage currently falls back from missing currentPrice to average_price
+  // when rendering value/PnL. Stop before that safe-looking projection can become
+  // visible: missing current-market evidence is an explicit failure, never 0%.
+  assertPortfolioMarketEvidence(
+    rows.map((row) => ({
+      ticker: row.ticker,
+      quantity: row.quantity,
+      average_price: row.average_price,
+      currentPrice: row.currentPrice ?? null,
+    })),
+  );
+
   if (!hasStorage()) return;
 
   const purchaseDates = readPurchaseDates();
@@ -95,7 +269,7 @@ export function syncPortfolioChartOverlays(rows: PortfolioOverlayInput[]) {
     const averagePrice = Number(row.average_price);
 
     if (
-      !ticker ||
+      !PORTFOLIO_TICKER_PATTERN.test(ticker) ||
       !Number.isFinite(quantity) ||
       quantity <= 0 ||
       !Number.isFinite(averagePrice) ||
@@ -169,7 +343,7 @@ export function loadPortfolioChartOverlays(): PortfolioChartOverlay[] {
 
   try {
     const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "[]");
-    return Array.isArray(parsed) ? parsed : [];
+    return parsePortfolioChartOverlays(parsed);
   } catch {
     return [];
   }

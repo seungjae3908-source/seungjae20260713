@@ -1,0 +1,321 @@
+name: Research V3 Independence Production Read-only Overview
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/research-v3-independence-production-readonly-overview.yml'
+      - '.github/scripts/v3_publication_proof.py'
+      - '.github/scripts/test_v3_publication_proof.py'
+      - 'scripts/agent_hub_rollover_v2.py'
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+  statuses: read
+
+concurrency:
+  group: research-v3-independence-production-readonly-overview
+  cancel-in-progress: false
+
+jobs:
+  validate-workflow:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Validate read-only proof contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          workflow=.github/workflows/research-v3-independence-production-readonly-overview.yml
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          python3 -m py_compile .github/scripts/v3_publication_proof.py
+          python3 .github/scripts/test_v3_publication_proof.py
+          grep -Fq '/verify-v3-independence-overview ' "$workflow"
+          grep -Fq 'http://127.0.0.1:18090/api/research/overview' .github/scripts/v3_publication_proof.py
+          grep -Fq 'production_state_mutation: 0' "$workflow"
+          grep -Fq 'source_bound_http_readback_verified: true' "$workflow"
+
+  authorize:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      !github.event.issue.pull_request &&
+      github.event.issue.state == 'open' &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/verify-v3-independence-overview ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      active_issue: ${{ steps.hub.outputs.active_issue }}
+      target_sha: ${{ steps.gate.outputs.target_sha }}
+      application_run_id: ${{ steps.gate.outputs.application_run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Resolve canonical Hub
+        id: hub
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/agent_hub_rollover_v2.py resolve
+      - name: Gate canonical Hub, exact main, and Required CI 6/6
+        id: gate
+        uses: actions/github-script@v7
+        env:
+          ACTIVE_ISSUE: ${{ steps.hub.outputs.active_issue }}
+        with:
+          script: |
+            const body = String(context.payload.comment?.body ?? '').trim();
+            const match = /^\/verify-v3-independence-overview ([0-9a-f]{40})$/u.exec(body);
+            if (!match) {
+              core.setFailed('Expected /verify-v3-independence-overview <40-char-current-main-sha>');
+              return;
+            }
+            const targetSha = match[1];
+            const activeIssue = Number(process.env.ACTIVE_ISSUE);
+            if (!Number.isInteger(activeIssue) || activeIssue <= 0 || Number(context.issue.number) !== activeIssue) {
+              core.setFailed(`Command was not posted on resolved canonical Hub #${activeIssue}`);
+              return;
+            }
+            const main = (await github.rest.repos.getBranch({
+              owner: context.repo.owner, repo: context.repo.repo, branch: 'main',
+            })).data;
+            if (String(main.commit.sha).toLowerCase() !== targetSha) {
+              core.setFailed(`Target is not exact current main: ${targetSha}`);
+              return;
+            }
+            const required = [
+              'application-ci/verified', 'browser-ui/verified', 'database-rls/verified',
+              'security-integration/verified', 'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner, repo: context.repo.repo, ref: targetSha, per_page: 100,
+            });
+            const byRun = new Map();
+            for (const status of statuses) {
+              const runMatch = String(status.target_url ?? '').match(/\/actions\/runs\/(\d+)/u);
+              if (!runMatch) continue;
+              const runId = Number(runMatch[1]);
+              if (!byRun.has(runId)) byRun.set(runId, new Map());
+              const contexts = byRun.get(runId);
+              const previous = contexts.get(status.context);
+              if (!previous || Number(status.id) > Number(previous.id)) contexts.set(status.context, status);
+            }
+            let applicationRunId = null;
+            for (const runId of [...byRun.keys()].sort((a, b) => b - a)) {
+              const contexts = byRun.get(runId);
+              if (required.every((name) => contexts.get(name)?.state === 'success')) {
+                applicationRunId = runId;
+                break;
+              }
+            }
+            if (applicationRunId === null) {
+              core.setFailed('No exact-main Required CI 6/6 SUCCESS run exists.');
+              return;
+            }
+            const applicationRun = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner, repo: context.repo.repo, run_id: applicationRunId,
+            })).data;
+            if (String(applicationRun.head_sha).toLowerCase() !== targetSha
+                || applicationRun.status !== 'completed'
+                || applicationRun.conclusion !== 'success') {
+              core.setFailed(`Required CI run ${applicationRunId} is not terminal SUCCESS on target main.`);
+              return;
+            }
+            core.setOutput('target_sha', targetSha);
+            core.setOutput('application_run_id', String(applicationRunId));
+
+  production-readonly-overview:
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
+      PROOF_SCRIPT: .github/scripts/v3_publication_proof.py
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Recheck exact current main before Production read-only contact
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')" = "$TARGET_SHA"
+      - name: Bind reviewed proof closure
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          proof="$(python3 "$PROOF_SCRIPT" code-proof "$GITHUB_WORKSPACE" "$TARGET_SHA")"
+          printf 'CODE_PROOF_BASE64=%s\n' "$proof" >> "$GITHUB_ENV"
+      - name: Configure pinned Production SSH host
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST" && test -n "$SSH_USER" && test -n "$SSH_PRIVATE_KEY"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+          chmod 600 ~/.ssh/known_hosts
+      - name: Verify current server release is reviewed-code equivalent
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          proof_q="$(printf '%q' "$CODE_PROOF_BASE64")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "python3 - runtime-proof $proof_q" \
+            < "$PROOF_SCRIPT" > "$RUNNER_TEMP/runtime-proof.json"
+          python3 "$PROOF_SCRIPT" check-ancestor "$GITHUB_WORKSPACE" "$TARGET_SHA" \
+            "$RUNNER_TEMP/runtime-proof.json" > "$RUNNER_TEMP/runtime-ancestry.json"
+          runtime_sha="$(node -p "require(process.env.RUNNER_TEMP + '/runtime-ancestry.json').runtimeSha")"
+          [[ "$runtime_sha" =~ ^[0-9a-f]{40}$ ]]
+          printf 'RUNTIME_SHA=%s\n' "$runtime_sha" >> "$GITHUB_ENV"
+      - name: Read state file and live Dashboard once without mutation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          proof_q="$(printf '%q' "$CODE_PROOF_BASE64")"
+          runtime_q="$(printf '%q' "$RUNTIME_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "python3 - snapshot $proof_q $runtime_q" \
+            < "$PROOF_SCRIPT" > "$RUNNER_TEMP/readonly-overview-snapshot.json"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')" = "$TARGET_SHA"
+      - name: Verify Dashboard projects the exact published state
+        id: verify
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+          const snapshot = JSON.parse(readFileSync(process.env.RUNNER_TEMP + '/readonly-overview-snapshot.json', 'utf8'));
+          assert.equal(snapshot.schemaVersion, 'v3-publication-snapshot-v1');
+          assert.match(String(snapshot.fileDigest ?? ''), /^[0-9a-f]{64}$/u);
+          const summary = snapshot.summary;
+          const overview = snapshot.overview;
+          assert.equal(summary?.schemaVersion, 'public-forward-liquidity-v3-authoritative-independence-summary-v1');
+          assert.equal(overview?.schemaVersion, 'research-dashboard-overview-v1');
+          assert.equal(overview?.safety?.readOnlyDashboard, true);
+          for (const key of ['liveTrading', 'privateApi', 'orderAuthority', 'forbiddenAuthorityObserved']) {
+            assert.equal(overview?.safety?.[key], false);
+          }
+          assert.equal(overview?.profitability?.proven, false);
+          const li = overview?.research?.liquidityIndependence;
+          assert.equal(li?.present, true);
+          assert.equal(li?.status, 'PRESENT');
+          const fields = [
+            'schemaVersion', 'producerSha', 'upstreamIngestRunId', 'upstreamIngestArtifactId',
+            'upstreamIngestArtifactDigest', 'sourceInventoryDigest', 'targetSlotIndex',
+            'genuineScheduledSlotN', 'rawAcceptedN', 'effectiveIndependentN', 'independentBuyN',
+            'independentSellN', 'independenceAuditDigest', 'independentSplitSourceDigest',
+            'v3IndependentSplitIndexDigest', 'frozenSplitCounts', 'oosOutcomeCredit',
+            'calibrationArtifactProduced', 'liquidityImpactStatus', 'fullCostReady',
+            'evidenceComplete', 'executionAuthority', 'reportDigest',
+          ];
+          for (const field of fields) {
+            assert.ok(Object.hasOwn(summary, field), `STATE_FIELD_MISSING:${field}`);
+            assert.ok(Object.hasOwn(li, field), `OVERVIEW_FIELD_MISSING:${field}`);
+            assert.deepEqual(li[field], summary[field], `OVERVIEW_SOURCE_MISMATCH:${field}`);
+          }
+          const n = summary.effectiveIndependentN;
+          const buy = summary.independentBuyN;
+          const sell = summary.independentSellN;
+          assert.ok(Number.isInteger(n) && n >= 0);
+          assert.ok(Number.isInteger(buy) && buy >= 0);
+          assert.ok(Number.isInteger(sell) && sell >= 0);
+          assert.equal(buy + sell, n);
+          const split = summary.frozenSplitCounts;
+          for (const key of ['TRAIN', 'VALIDATION', 'OOS']) assert.ok(Number.isInteger(split?.[key]) && split[key] >= 0);
+          assert.equal(split.TRAIN + split.VALIDATION + split.OOS, n);
+          assert.equal(summary.oosOutcomeCredit, 0);
+          assert.equal(summary.fullCostReady, false);
+          assert.equal(summary.evidenceComplete, 0);
+          assert.equal(summary.executionAuthority, 'NONE');
+          const result = {
+            schemaVersion: 'research-v3-independence-production-readonly-overview-proof-v1',
+            status: 'VERIFIED', targetSha: process.env.TARGET_SHA, runtimeSha: process.env.RUNTIME_SHA,
+            sourcePath: '/var/lib/investment-research-production/forward/liquidity/v3-authoritative-independence-summary.json',
+            fileDigest: snapshot.fileDigest, reportDigest: summary.reportDigest,
+            effectiveIndependentN: n, independentBuyN: buy, independentSellN: sell,
+            frozenSplitCounts: split, oosOutcomeCredit: summary.oosOutcomeCredit,
+            fullCostReady: summary.fullCostReady, evidenceComplete: summary.evidenceComplete,
+            profitabilityProven: false, executionAuthority: 'NONE',
+            sourceBoundHttpReadbackVerified: true, productionStateMutation: 0,
+            liveTrading: false, privateApi: false, realOrders: 0,
+          };
+          writeFileSync(process.env.RUNNER_TEMP + '/readonly-overview-proof.json', JSON.stringify(result, null, 2) + '\n');
+          appendFileSync(process.env.GITHUB_OUTPUT, [
+            `effective_n=${n}`, `buy_n=${buy}`, `sell_n=${sell}`,
+            `train_n=${split.TRAIN}`, `validation_n=${split.VALIDATION}`, `oos_n=${split.OOS}`, '',
+          ].join('\n'));
+          NODE
+      - name: Retain sanitized read-only proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-v3-production-readonly-overview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/readonly-overview-proof.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Report verified read-only result to canonical Hub
+        uses: actions/github-script@v7
+        env:
+          ACTIVE_ISSUE: ${{ needs.authorize.outputs.active_issue }}
+          APPLICATION_RUN_ID: ${{ needs.authorize.outputs.application_run_id }}
+          EFFECTIVE_N: ${{ steps.verify.outputs.effective_n }}
+          BUY_N: ${{ steps.verify.outputs.buy_n }}
+          SELL_N: ${{ steps.verify.outputs.sell_n }}
+          TRAIN_N: ${{ steps.verify.outputs.train_n }}
+          VALIDATION_N: ${{ steps.verify.outputs.validation_n }}
+          OOS_N: ${{ steps.verify.outputs.oos_n }}
+        with:
+          script: |
+            const body = [
+              '[RESEARCH_V3_INDEPENDENCE_PRODUCTION_READONLY_OVERVIEW]',
+              'status: success', `workflow_run: ${context.runId}`,
+              `target_sha: ${process.env.TARGET_SHA}`, `runtime_code_sha: ${process.env.RUNTIME_SHA}`,
+              `required_ci_run: ${process.env.APPLICATION_RUN_ID}`,
+              'source_bound_http_readback_verified: true',
+              `effective_independent_n: ${process.env.EFFECTIVE_N}`,
+              `independent_buy_n: ${process.env.BUY_N}`, `independent_sell_n: ${process.env.SELL_N}`,
+              `TRAIN: ${process.env.TRAIN_N}`, `VALIDATION: ${process.env.VALIDATION_N}`, `OOS: ${process.env.OOS_N}`,
+              'production_state_mutation: 0', 'evidence_credit: 0',
+              'full_cost_ready: false', 'profitability_proven: false',
+              'execution_authority: NONE', 'live_trading: false', 'private_api: false', 'real_orders: 0',
+              'read_only: true',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: Number(process.env.ACTIVE_ISSUE), body,
+            });

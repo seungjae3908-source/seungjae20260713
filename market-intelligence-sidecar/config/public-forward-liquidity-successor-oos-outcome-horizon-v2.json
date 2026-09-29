@@ -1,0 +1,105 @@
+{
+  "contractVersion": "public-forward-liquidity-successor-oos-outcome-horizon-contract-v2",
+  "freezeStatus": "HUMAN_POLICY_VALUES_FROZEN_REPOSITORY_DRAFT_MATERIALIZATION",
+  "policyCore": {
+    "schemaVersion": "public-forward-liquidity-successor-oos-outcome-horizon-policy-v2",
+    "authority": {
+      "canonicalHubIssue": 838,
+      "humanApprovalCommentId": 5490310342,
+      "humanApprovalCreatedAt": "2026-09-01T07:15:31Z",
+      "humanApprovalCreatedAtMs": 1788246931000,
+      "approvalScope": "SUCCESSOR_OOS_OUTCOME_HORIZON_5000MS_DESIGN_AND_FREEZE_ONLY",
+      "sourceBaseMainSha": "7442fbfd859db01ce5f018ddeb027ccd3282be4e"
+    },
+    "capacityRebindingAuthority": {
+      "canonicalHubIssue": 838,
+      "capacityNumericFreezeCommentId": 5500894175,
+      "capacityNumericFreezeCreatedAt": "2026-09-01T21:49:01Z",
+      "capacityNumericFreezeCreatedAtMs": 1788299341000,
+      "capacityNumericFreezeDigest": "45b6e09909347e9d5ed41ed618b7874e2e528190838886eaa656997e22d4e947",
+      "rebindingScope": "COHORT_CAPACITY_BINDING_REMATERIALIZATION_ONLY_NO_HORIZON_RETUNE",
+      "outcomeHorizonRetuned": false
+    },
+    "successorCohortBinding": {
+      "contractVersion": "public-forward-liquidity-successor-prospective-cohort-contract-v2",
+      "cohortId": "PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_PROSPECTIVE_COHORT_V2_20260903_CAP1024:5d91ea09ac5a2982a26d00197433142455fa6634488fadc9201e4ddf1346ed6c",
+      "policyDigest": "5d91ea09ac5a2982a26d00197433142455fa6634488fadc9201e4ddf1346ed6c",
+      "cohortDigest": "9b2853a361e17dc429288cec4499fc972189b0bc2427a6d8bb2a999eff847454",
+      "firstEligibleSlotMs": 1788362220000,
+      "firstEligibleSlotUtc": "2026-09-02T15:17:00.000Z",
+      "firstEligibleSlotKst": "2026-09-03T00:17:00+09:00",
+      "firstOosSlotIndex": 768,
+      "firstOosSlotMs": 1791127020000,
+      "oosExpectedSlotN": 256
+    },
+    "outcomePolicy": {
+      "outcomeHorizonIdentity": "PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_OOS_HORIZON_V1_5000MS",
+      "outcomeHorizonMs": 5000,
+      "referenceTimestampField": "eventTimestampMs",
+      "referenceSemantics": "OOS_ASSIGNMENT_EVENT_TIMESTAMP_MS",
+      "targetTimestampFormula": "eventTimestampMs + outcomeHorizonMs",
+      "outcomeSelectionPolicy": "FIRST_PUBLIC_OBSERVATION_AT_OR_AFTER_HORIZON",
+      "uniqueEarliestCandidateRequired": true,
+      "genuinePublicForwardOnly": true,
+      "calibrationSourceOnlyRequired": true,
+      "outcomeExecutionCostEligible": false,
+      "causalMarketImpactClaimAllowed": false,
+      "captureFrameAuthoritySemantics": "CAPTURE_FRAME_IS_NOT_OOS_BY_ITSELF_AND_IS_ELIGIBLE_ONLY_IF_ALL_OOS_LINEAGE_AND_SELECTION_GATES_PASS",
+      "existingCapturePostObservationDelaysMs": [
+        1000,
+        5000
+      ]
+    },
+    "prospectiveIntegrity": {
+      "humanFreezePredatesCohortFirstEligible": true,
+      "humanFreezePredatesFirstOosSlot": true,
+      "capacityRebindingPredatesCohortFirstEligible": true,
+      "capacityRebindingPredatesFirstOosSlot": true,
+      "outcomeInspectionUsedForPolicySelection": false,
+      "oldV3OutcomeHorizonMs": 60000,
+      "oldV3OutcomeHorizonAuthorityInherited": false,
+      "outcomeBasedRetuningAllowed": false,
+      "horizonSwitchingAllowed": false,
+      "retrospectiveReassignmentAllowed": false,
+      "manualCredit": 0,
+      "replayCredit": 0,
+      "backfillCredit": 0,
+      "syntheticCredit": 0
+    },
+    "approvalBoundaries": {
+      "actualMergeApproved": false,
+      "scheduleActivationApproved": false,
+      "prospectiveObservationWorkflowAuthorityApproved": false,
+      "productionDeployApproved": false,
+      "stagingDeployApproved": false,
+      "dbSecretEnvServerMutationApproved": false
+    },
+    "safety": {
+      "publicDataOnly": true,
+      "executionAuthority": "NONE",
+      "privateTradingApiAllowed": false,
+      "liveTradingAllowed": false,
+      "autoTradingAllowed": false,
+      "realOrderAllowed": false,
+      "financialMutationAllowed": false,
+      "replitAgentAllowed": false,
+      "fullCostReady": false,
+      "evidenceComplete": 0,
+      "profitabilityProven": false,
+      "currentValidatedChampion": "NONE"
+    }
+  },
+  "policyDigest": "e20d2d05731ba720b93d51f706670b39fbd711c2ffed1ac41048d0f2bc126f3c",
+  "contractId": "PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_OOS_HORIZON_BINDING_V2_5000MS:e20d2d05731ba720b93d51f706670b39fbd711c2ffed1ac41048d0f2bc126f3c",
+  "contractDigest": "8559567aba09a2c71644b7ab5a239bf6a4d04cee7046a6c5ed09aa96f06df101",
+  "contractIdentityCore": {
+    "schemaVersion": "public-forward-liquidity-successor-oos-outcome-horizon-identity-v2",
+    "contractId": "PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_OOS_HORIZON_BINDING_V2_5000MS:e20d2d05731ba720b93d51f706670b39fbd711c2ffed1ac41048d0f2bc126f3c",
+    "policyDigest": "e20d2d05731ba720b93d51f706670b39fbd711c2ffed1ac41048d0f2bc126f3c",
+    "successorCohortDigest": "9b2853a361e17dc429288cec4499fc972189b0bc2427a6d8bb2a999eff847454",
+    "outcomeHorizonIdentity": "PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_OOS_HORIZON_V1_5000MS",
+    "outcomeHorizonMs": 5000,
+    "outcomeSelectionPolicy": "FIRST_PUBLIC_OBSERVATION_AT_OR_AFTER_HORIZON",
+    "referenceTimestampField": "eventTimestampMs"
+  }
+}

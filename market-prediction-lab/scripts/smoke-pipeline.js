@@ -14,7 +14,13 @@ try {
   const ingested = await ingestSnapshotFile(input, join(directory, "store"), {
     market: "CRYPTO_FUTURES", symbol: "BTCUSDT", timeframe: "15m", format: "bitget-array", source: "smoke-export",
   });
-  const records = buildTrainingRecords(ingested.normalized, { lookback: 200, horizon: 5, stride: 2 });
+  const records = buildTrainingRecords(ingested.normalized, {
+    lookback: 200,
+    horizon: 5,
+    stride: 2,
+    marketFeatures: { sentimentScore: 0, benchmarkReturn: 0 },
+    derivativesFeatures: { openInterestChange: 0, fundingRate: 0, longShortRatio: 1 },
+  });
   const split = walkForwardSplit(records);
   const manifest = await exportWalkForwardDataset(join(directory, "dataset"), split, ingested.normalized.metadata);
   const writtenManifest = JSON.parse(await readFile(join(directory, "dataset", "manifest.json"), "utf8"));

@@ -13,6 +13,12 @@ import {
   fetchTradingPlanMarketIntelligence,
   marketIntelligenceTradeDecision,
 } from './trade-market-intelligence.service';
+import {
+  liveExecutionAuthority,
+  spotLiveCapabilityEnabled,
+  spotLivePlanCapabilityDecision,
+  type LiveExecutionAuthority,
+} from './spot-live-limited-capability.service';
 import type {
   TradingMarketSnapshot,
   TradingOrder, TradingOrderEvent, TradingOrderState, TradingPlan, TradingPlanInput, TradingPolicy,
@@ -65,20 +71,30 @@ function withMarketIntelligenceWarnings(decision: TradingRiskDecision, warnings:
 
 export function tradingIdempotencyKey(userId: string, input: TradingPlanInput) {
   return createHash('sha256').update([
-    userId, input.exchange, input.signalId, input.strategyId, input.market, input.symbol.toUpperCase(), input.side,
+    userId, input.exchange, input.stockBroker ?? 'none', input.signalId, input.strategyId, input.market, input.symbol.toUpperCase(), input.side,
   ].join(':')).digest('hex');
 }
 
+export { liveExecutionAuthority, type LiveExecutionAuthority };
+
 export function liveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
-  const global = process.env.ORDER_EXECUTION_ENABLED === 'true' && process.env.LIVE_TRADING_ACTIVATION_APPROVED === 'true';
-  const perExchange = {
-    bitget: process.env.BITGET_LIVE_ORDER_ENABLED === 'true',
-    upbit: process.env.UPBIT_LIVE_ORDER_ENABLED === 'true',
-    // Canonical stock execution authority is Toss. The legacy Kiwoom adapter remains available
-    // only for non-live compatibility paths until a separately verified Toss execution adapter exists.
-    kiwoom: false,
-  };
-  return global && perExchange[exchange];
+  return spotLiveCapabilityEnabled(exchange, 'ORDER_CREATE');
+}
+
+export function automaticLiveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
+  return liveExecutionAuthority() === 'SPOT_LIVE_LIMITED'
+    && process.env.AUTO_TRADING === 'true'
+    && process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'
+    && liveExecutionEnabled(exchange);
+}
+
+function serverLiveEnabledForPlan(input: TradingPlanInput, policy: TradingPolicy) {
+  if (input.accountMode !== 'live') return true;
+  if (!spotLivePlanCapabilityDecision(input, 'ORDER_CREATE').allowed) return false;
+  if (policy.mode === 'automatic' && policy.automaticEnabled) {
+    return automaticLiveExecutionEnabled(input.exchange);
+  }
+  return liveExecutionEnabled(input.exchange);
 }
 
 export class TradeAutomationService {
@@ -114,7 +130,7 @@ export class TradeAutomationService {
 
     const riskDecision = evaluateTradingPlan(input, policy, {
       emergencyStopped: emergencyStopped || await this.emergencyStopActive(userId, policy),
-      serverLiveEnabled: input.accountMode !== 'live' || liveExecutionEnabled(input.exchange),
+      serverLiveEnabled: serverLiveEnabledForPlan(input, policy),
     });
     const decision = withMarketIntelligenceWarnings(riskDecision, intelligence.warnings);
     if (!decision.allowed) {
@@ -156,7 +172,7 @@ export class TradeAutomationService {
     const policy = await this.repository.getPolicy(userId);
     const decision = evaluateTradingPlan(plan, policy, {
       emergencyStopped: await this.emergencyStopActive(userId, policy),
-      serverLiveEnabled: plan.accountMode !== 'live' || liveExecutionEnabled(plan.exchange),
+      serverLiveEnabled: serverLiveEnabledForPlan(plan, policy),
     });
     if (!decision.allowed) {
       await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
@@ -185,8 +201,50 @@ export class TradeAutomationService {
     return approved;
   }
 
-  async beginAutomaticPlan(_userId: string, _planId: string) {
-    throw new Error('USER_APPROVAL_REQUIRED');
+  async beginAutomaticPlan(userId: string, planId: string) {
+    const plan = await this.repository.getPlan(userId, planId);
+    if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
+    if (plan.state !== 'APPROVAL_PENDING') throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
+    const expectedVersion = planVersion(plan);
+    const policy = await this.repository.getPolicy(userId);
+    if (policy.mode !== 'automatic' || !policy.automaticEnabled) {
+      throw new Error('USER_APPROVAL_REQUIRED');
+    }
+    const intelligence = await this.marketIntelligenceDecision(plan);
+    if (!intelligence.allowed) {
+      const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: new Date().toISOString() };
+      await this.repository.compareAndSetPlan(expired, 'APPROVAL_PENDING', expectedVersion);
+      throw new Error(`TRADE_PLAN_MARKET_INTELLIGENCE_FAILED:${intelligence.blockCode ?? 'MARKET_INTELLIGENCE_BLOCKED_RISK'}`);
+    }
+    const decision = evaluateTradingPlan(plan, policy, {
+      emergencyStopped: await this.emergencyStopActive(userId, policy),
+      serverLiveEnabled: serverLiveEnabledForPlan(plan, policy),
+    });
+    if (!decision.allowed) {
+      await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
+      const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: new Date().toISOString() };
+      await this.repository.compareAndSetPlan(expired, 'APPROVAL_PENDING', expectedVersion);
+      throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
+    }
+    const authorizedAt = new Date().toISOString();
+    const automaticCandidate = {
+      ...plan,
+      approvalExpiresAt: plan.approvalExpiresAt ?? new Date(Date.now() + APPROVAL_TTL_MS).toISOString(),
+    };
+    const envelope = buildRiskEnvelope(automaticCandidate, policy, authorizedAt);
+    const submittedCandidate = withRiskEnvelope({
+      ...automaticCandidate,
+      state: 'SUBMITTED',
+      approvedAt: authorizedAt,
+      updatedAt: authorizedAt,
+    }, envelope);
+    const submitted = await this.repository.compareAndSetPlan(
+      submittedCandidate,
+      'APPROVAL_PENDING',
+      expectedVersion,
+    );
+    if (!submitted) throw new Error('TRADE_PLAN_CONCURRENTLY_CHANGED');
+    return submitted;
   }
 
   async createOrder(userId: string, plan: TradingPlan) {
@@ -197,9 +255,11 @@ export class TradeAutomationService {
     const now = new Date().toISOString();
     const order: TradingOrder = {
       id: randomUUID(), userId, planId: plan.id, exchange: plan.exchange,
+      stockBroker: plan.stockBroker ?? null,
       clientOrderId: `sj-${plan.exchange}-${plan.idempotencyKey.slice(0, 20)}`,
       exchangeOrderId: null, state: 'SUBMITTED', version: 0,
       requestedQuantity: plan.quantity ?? null,
+      currentLimitPrice: plan.limitPrice ?? null,
       filledQuantity: 0, averageFillPrice: null, retryCount: 0, lastErrorCode: null,
       approvedPlanVersion: planVersion(plan),
       preSubmissionCheckedAt: null,

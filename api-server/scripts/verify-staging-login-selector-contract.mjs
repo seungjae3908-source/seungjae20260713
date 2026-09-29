@@ -71,13 +71,32 @@ assert(spec.includes('logoutScopedReadPaths.has(parsed.pathname)'), 'logout-scop
 assert(spec.includes('parsed.searchParams.size === 0'), 'logout-scoped read exception must reject query-bearing requests');
 assert(spec.includes('parsed.origin === expectedOrigin'), 'logout-scoped read exception must remain on the origin captured before logout');
 
-const visibleIndex = spec.indexOf('await expect(logoutButton).toBeVisible();');
-const observationIndex = spec.indexOf('activeLogoutObservations.set(page, observation);');
-const clickIndex = spec.indexOf('await logoutButton.click();');
-assert(visibleIndex >= 0 && observationIndex > visibleIndex && clickIndex > observationIndex, 'expected window must open only around an explicit visible logout-button click');
+assert(spec.includes('function logoutButtons(page: Page)'), 'logout selector helper is missing');
+assert(spec.includes('async function firstVisibleLogoutButton(page: Page)'), 'visible logout resolver is missing');
+assert(spec.includes(".getByTestId('professional-command-bar')"), 'logout resolver must prefer the professional command bar deterministically');
+assert(spec.includes('if (await candidate.isVisible()) return candidate;'), 'logout resolver fallback must select only an actually visible existing action');
+assert(spec.includes("if (!logoutButton) throw new Error('visible logout action disappeared after authenticated UI proof');"), 'visible logout proof must fail closed if the resolved action disappears');
+const logoutStart = spec.indexOf('async function logout(page: Page)');
+const visibleIndex = spec.indexOf('const logoutButton = await expectVisibleLogoutButton(page);', logoutStart);
+const observationIndex = spec.indexOf('activeLogoutObservations.set(page, observation);', logoutStart);
+const clickIndex = spec.indexOf('await logoutButton.click();', logoutStart);
+assert(logoutStart >= 0 && visibleIndex > logoutStart && observationIndex > visibleIndex && clickIndex > observationIndex, 'expected window must open only after a deterministic visible logout action is resolved and immediately around its explicit click');
+const logoutEnd = spec.indexOf('\nasync function expectMembership(', logoutStart);
+assert(logoutEnd > logoutStart, 'logout helper boundaries are missing');
+const logoutBlock = spec.slice(logoutStart, logoutEnd);
+assert(logoutBlock.includes('const origin = new URL(page.url()).origin;'), 'logout must freeze the same-origin identity before observing scoped reads');
+assert(logoutBlock.includes('[...(pendingApiGetRequests.get(page) ?? [])]'), 'logout observation must inherit exact GET request identities already pending before the click');
+assert(logoutBlock.includes('.filter((request) => isLogoutScopedRead(request, origin))'), 'pre-existing logout candidates must still pass the exact scoped-read identity matcher');
+const inheritedReadIndex = logoutBlock.indexOf('[...(pendingApiGetRequests.get(page) ?? [])]');
+const observationOpenIndex = logoutBlock.indexOf('activeLogoutObservations.set(page, observation);');
+assert(inheritedReadIndex >= 0 && observationOpenIndex > inheritedReadIndex, 'pending request identities must be frozen before the active logout observation opens');
+assert(
+  !logoutBlock.slice(inheritedReadIndex, observationOpenIndex).includes('await '),
+  'pending-read snapshot and active logout observation must remain one synchronous run-to-completion handoff',
+);
 assert(spec.includes('logoutObservation.candidates.push(diagnostic);'), 'matching logout aborts must be held as candidates first');
-assert(spec.includes("parsed.pathname === '/api/user-integrations'"), 'the personal integration drain must remain scoped to its exact API path');
-assert(spec.includes('logoutObservation.logoutScopedReads.add(request);'), 'only an exact logout-scoped request observed during the explicit logout window may become a delayed candidate');
+assert(spec.includes('return isLogoutScopedRead(request, expectedOrigin);'), 'read-only integration drain must reuse the exact enumerated same-origin GET classifier');
+assert(spec.includes('logoutObservation.logoutScopedReads.add(request);'), 'exact logout-scoped requests starting during the explicit window must join the same identity set as the pre-existing pending seed');
 assert(spec.includes('observation.logoutScopedReads.has(request)'), 'active abort classification must require exact request identity');
 assert(spec.includes('confirmedLogoutAbortRequests.get(request)'), 'delayed abort classification must require an exact confirmed request identity');
 assert(spec.includes('routeObservation.candidates.push(diagnostic);'), 'matching route-transition aborts must be held as candidates first');
@@ -87,7 +106,7 @@ assert(
   'candidates may become expected only after protected API denial is confirmed',
 );
 assert(spec.includes('await page.reload();'), 'logout validation must refresh the page');
-assert(spec.includes("await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toHaveCount(0);"), 'logout session must not return after refresh');
+assert(spec.includes('await expect(logoutButtons(page)).toHaveCount(0);'), 'logout session must not return after refresh');
 assert(spec.includes("page.request.get('/api/paper-journal/snapshot')"), 'logout validation must probe a protected API');
 assert(spec.includes('[401, 403]'), 'protected API must be denied with 401 or 403 after logout');
 assert(
@@ -97,7 +116,20 @@ assert(
 );
 assert(spec.includes('unconfirmed logout abort:'), 'unconfirmed candidates must return to unexpected HTTP errors');
 assert(spec.includes('diagnostics.unexpected_http_errors.push(diagnostic);'), 'all non-matching failed requests must remain unexpected');
-assert(spec.includes('if (response.status() < 400) return;'), 'all browser 4xx and 5xx responses must remain unexpected');
+assert(spec.includes('if (response.status() < 400) {'), 'successful browser responses must remain separated from 4xx/5xx diagnostics');
+assert(spec.includes('const successfulPrimaryStockChartReads = new WeakMap<Page, Map<string, number>>()'), 'stock chart hedge proof must be scoped to the active page');
+assert(spec.includes('const stockChartHedgeAbortProofWindowMs = 2_000;'), 'stock chart hedge proof window must remain narrowly bounded');
+assert(spec.includes("endpoint: 'candles'"), 'only a successful primary candle request may establish hedge-abort proof');
+assert(spec.includes("endpoint: 'chart'"), 'only the alternate chart request may consume hedge-abort proof');
+assert(spec.includes("input.errorText !== 'net::ERR_ABORTED'"), 'stock chart hedge exemption must require the exact Chromium abort reason');
+assert(spec.includes("parsed.origin !== frame.origin"), 'stock chart hedge exemption must remain same-origin');
+assert(spec.includes("parsed.searchParams.size !== 1"), 'stock chart hedge exemption must reject extra query parameters');
+assert(spec.includes("chartIdentity === input.successfulPrimaryIdentity"), 'stock chart hedge exemption must require exact symbol and timeframe identity');
+assert(spec.includes('ageMs <= stockChartHedgeAbortProofWindowMs'), 'stock chart hedge exemption must require recent primary success');
+assert(spec.includes('diagnostics.expected_stock_chart_hedge_aborts.push(diagnostic);'), 'proven stock chart hedge aborts must use a dedicated diagnostics bucket');
+assert(spec.includes("expect(isExpectedStockChartHedgeAbortIdentity({ ...base, rawUrl: \`\${origin}/api/stocks/MSFT/chart?tf=5m\` })).toBe(false);"), 'stock chart hedge proof must reject symbol mismatch');
+assert(spec.includes("expect(isExpectedStockChartHedgeAbortIdentity({ ...base, rawUrl: \`\${origin}/api/stocks/AAPL/chart?tf=1D\` })).toBe(false);"), 'stock chart hedge proof must reject timeframe mismatch');
+assert(spec.includes("expect(isExpectedStockChartHedgeAbortIdentity({ ...base, errorText: 'net::ERR_FAILED' })).toBe(false);"), 'stock chart hedge proof must reject non-abort failures');
 
 const responsiveLogoutStart = spec.indexOf("test(`${name}: login, refresh session retention, responsive layout, and logout`");
 const responsiveReloadIndex = spec.indexOf('await page.reload();', responsiveLogoutStart);
@@ -124,7 +156,10 @@ assert(
 );
 const profileMatcherBlock = spec.slice(profileMatcherStart, profileMatcherEnd);
 assert(profileMatcherBlock.includes("request.method() === 'GET'"), 'profile fault injection must match only GET requests');
-assert(profileMatcherBlock.includes("parsed.pathname === '/rest/v1/profiles'"), 'profile fault injection must match the exact Supabase profile pathname');
+assert(profileMatcherBlock.includes("parsed.pathname === '/rest/v1/profiles'"), 'profile diagnostics must retain the exact Supabase profile pathname');
+assert(profileMatcherBlock.includes("parsed.pathname === '/api/auth/profile'"), 'profile fault injection must match the exact deployed same-origin profile pathname');
+assert(profileMatcherBlock.includes('parsed.searchParams.size === 0'), 'same-origin profile fault injection must reject query-bearing requests');
+assert(spec.includes("const profileBootstrapRoute = '**/api/auth/profile';"), 'profile fault fixtures must intercept the deployed same-origin bootstrap endpoint');
 assert(!profileMatcherBlock.includes('.includes('), 'profile request identification must not use a broad substring matcher');
 assert(!profileMatcherBlock.includes('.startsWith('), 'profile request identification must not broaden to a pathname prefix');
 
@@ -178,6 +213,36 @@ assert(
   'scanner net::ERR_ABORTED must remain a zero-tolerance staging contract',
 );
 assert(!spec.includes("behavior: 'ignoreErrors'"), 'route callback teardown must not suppress in-flight failures');
+
+const aiCertificationStart = spec.indexOf('async function runAuthenticatedAiChartCertification(');
+const aiCertificationEnd = spec.indexOf('\nasync function auditAuthenticatedViewport(', aiCertificationStart);
+assert(
+  aiCertificationStart >= 0 && aiCertificationEnd > aiCertificationStart,
+  'authenticated AI chart certification helper boundaries are missing',
+);
+const aiCertificationBlock = spec.slice(aiCertificationStart, aiCertificationEnd);
+const aiCertificationQuiescenceIndex = aiCertificationBlock.indexOf('await waitForBrowserNetworkQuiescence(page);');
+const aiCertificationCloseIndex = aiCertificationBlock.indexOf('await context.close();');
+assert(
+  aiCertificationQuiescenceIndex >= 0 && aiCertificationCloseIndex > aiCertificationQuiescenceIndex,
+  'authenticated AI chart contexts must prove browser network quiescence before context teardown',
+);
+const networkQuiescenceStart = spec.indexOf('async function waitForBrowserNetworkQuiescence(page: Page)');
+const networkQuiescenceEnd = spec.indexOf('\nasync function waitForPendingPersonalIntegrationReads(', networkQuiescenceStart);
+assert(
+  networkQuiescenceStart >= 0 && networkQuiescenceEnd > networkQuiescenceStart,
+  'browser network quiescence helper boundaries are missing',
+);
+const networkQuiescenceBlock = spec.slice(networkQuiescenceStart, networkQuiescenceEnd);
+for (const marker of [
+  'pendingMutatingRequests.get(page)?.size',
+  'pendingSameOriginReadRequests.get(page)?.size',
+  "? 'quiescent' : 'quiet'",
+  "timeout: 15_000",
+]) {
+  assert(networkQuiescenceBlock.includes(marker), `browser network quiescence contract is missing ${marker}`);
+}
+assert(!aiCertificationBlock.includes('await logout(page);'), 'AI chart certification contexts must not globally revoke the shared authenticated session');
 
 const scannerReadinessTestStart = spec.indexOf("test('scanner readiness:");
 const scannerReadinessTestEnd = spec.indexOf("\n  test('pending:", scannerReadinessTestStart);
@@ -272,8 +337,8 @@ assert(
   'semantic retry failure must not create a network-error exemption',
 );
 assert(
-  retryRecoveryTestBlock.includes("await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible();"),
-  'retry recovery must finish on authenticated account UI',
+  retryRecoveryTestBlock.includes('await expectVisibleLogoutButton(page);'),
+  'retry recovery must finish on authenticated UI with a deterministic visible logout action',
 );
 
 const profileTimeoutTestStart = spec.indexOf("test('profile timeout abort:");
@@ -293,7 +358,7 @@ assert(
 );
 const timeoutRouteDrainIndex = profileTimeoutTestBlock.lastIndexOf('await timeoutRouteSettled;');
 const timeoutUnrouteIndex = profileTimeoutTestBlock.indexOf(
-  "await page.unroute('**/rest/v1/profiles*');",
+  'await page.unroute(profileBootstrapRoute);',
   timeoutRouteDrainIndex,
 );
 assert(
@@ -492,4 +557,4 @@ assert(
 assert(clearSessionIndex > globalLogoutIndex, 'successful global logout must synchronously invalidate session identity');
 assert(releaseBarrierIndex > clearSessionIndex, 'logout barrier must remain active until session identity and profile cleanup finish');
 
-console.log('[staging-login-selector-contract] exact logout-scoped read classification, route-transition candidate classification, scoped profile fault classification, current-session profile guard, diagnostic redaction, optional provider degradation, and polling-safe presentation stability are locked down');
+console.log('[staging-login-selector-contract] exact logout-scoped read classification, deterministic visible logout resolution, route-transition candidate classification, scoped profile fault classification, current-session profile guard, diagnostic redaction, optional provider degradation, and polling-safe presentation stability are locked down');

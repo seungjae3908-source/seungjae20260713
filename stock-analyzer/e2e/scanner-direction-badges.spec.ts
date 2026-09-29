@@ -3,12 +3,12 @@ import { expect, test, type Page, type Route } from '@playwright/test';
 type Action = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'NO_TRADE' | 'UNKNOWN';
 
 const directionLabels: Record<Action, string> = {
-  BUY: '↗ 매수 신호',
-  SELL: '↘ 보유분 매도·청산 참고',
-  LONG: '↑ 롱 신호',
-  SHORT: '↓ 숏 신호',
-  NO_TRADE: '— 거래 안 함 · NO_TRADE',
-  UNKNOWN: '? 현물 방향 확인 필요 · UNKNOWN',
+  BUY: '매수',
+  SELL: '매도 참고',
+  LONG: '롱',
+  SHORT: '숏',
+  NO_TRADE: '거래 안 함',
+  UNKNOWN: '방향 미확인',
 };
 
 function card(action: Action, index: number) {
@@ -167,8 +167,8 @@ test('cash and spot show buy-entry wording while futures show long short and sel
   expect(texts.every((text) => !text.includes('WATCH'))).toBe(true);
 
   const alerts = page.locator('section[aria-label="승인 대기 알림"]');
-  await expect(alerts).toContainText('↗ 매수 신호 승인 대기 · 005930');
-  await expect(alerts).toContainText('↓ 숏 신호 승인 대기 · BTCUSDT3');
+  await expect(alerts).toContainText('매수 승인 대기 · 005930');
+  await expect(alerts).toContainText('숏 승인 대기 · BTCUSDT3');
   await expect(alerts).not.toContainText('BUY 승인 대기');
   await expect(alerts).not.toContainText('SHORT 승인 대기');
 

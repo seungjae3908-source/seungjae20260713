@@ -1,0 +1,64 @@
+name: Public Forward Liquidity Calibration Split Audit
+
+on:
+  pull_request:
+    paths:
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-calibration-split-audit.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-calibration-split-audit.test.mjs'
+      - '.github/workflows/public-forward-liquidity-calibration-split-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Syntax check
+        run: >-
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-calibration-split-audit.mjs
+          && node --check market-intelligence-sidecar/tests/public-forward-liquidity-calibration-split-audit.test.mjs
+
+      - name: Run focused frozen split audit tests
+        run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-calibration-split-audit.test.mjs
+
+      - name: Verify fail-closed split and safety invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='market-intelligence-sidecar/src/public-forward-liquidity-calibration-split-audit.mjs'
+          grep -Fq 'verifiedForwardDatasetRequired: true' "$FILE"
+          grep -Fq 'externalScopeEvidenceRequired: true' "$FILE"
+          grep -Fq 'externalRegimeEvidenceRequired: true' "$FILE"
+          grep -Fq 'bucketComputationOwned: false' "$FILE"
+          grep -Fq 'regimeComputationOwned: false' "$FILE"
+          grep -Fq 'defaultSampleThresholdAllowed: false' "$FILE"
+          grep -Fq 'randomSplitAllowed: false' "$FILE"
+          grep -Fq 'chronologicalSplitRequired: true' "$FILE"
+          grep -Fq 'oosOutcomeEvaluationAllowed: false' "$FILE"
+          grep -Fq 'calibrationArtifactProduced: false' "$FILE"
+          grep -Fq 'liquidityImpactProduced: false' "$FILE"
+          grep -Fq 'naturalEntryCredit: 0' "$FILE"
+          grep -Fq 'runtimeCostCredit: 0' "$FILE"
+          grep -Fq "executionAuthority: 'NONE'" "$FILE"
+          grep -Fq 'privateApiAllowed: false' "$FILE"
+          grep -Fq 'liveTrading: false' "$FILE"
+          grep -Fq 'orderSubmissionAllowed: false' "$FILE"
+          grep -Fq 'fullCostReady: false' "$FILE"
+          grep -Fq 'SPLIT_POLICY_NOT_FROZEN_BEFORE_VALIDATION' "$FILE"
+          grep -Fq 'SCOPE_POLICY_NOT_FROZEN_BEFORE_EVENT' "$FILE"
+          grep -Fq 'REGIME_EVIDENCE_AFTER_EVENT' "$FILE"
+          grep -Fq 'REGIME_EVIDENCE_STALE' "$FILE"
+          grep -Fq 'UNPOLICIED_SCOPE_PRESENT' "$FILE"
+          grep -Fq 'DUPLICATE_PUBLIC_EXECUTION_CREDIT_FORBIDDEN' "$FILE"
+          grep -Fq 'DUPLICATE_SOURCE_DIGEST_CREDIT_FORBIDDEN' "$FILE"

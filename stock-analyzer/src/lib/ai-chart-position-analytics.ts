@@ -1,6 +1,7 @@
 import type { AnalysisMarket, AnalysisPricePlan } from './analysis-selection';
 
 export type PositionAnalyticsPosition = {
+  market?: string | null;
   quantity: number | null;
   averageEntryPrice: number | null;
   currentPrice: number | null;
@@ -62,8 +63,27 @@ function absoluteQuantity(position: PositionAnalyticsPosition): number | null {
   return quantity != null && Math.abs(quantity) > 0 ? Math.abs(quantity) : null;
 }
 
-export function positionDirection(position: PositionAnalyticsPosition): 1 | -1 {
-  return String(position.side ?? '').trim().toLowerCase() === 'short' ? -1 : 1;
+export function positionDirection(
+  position: PositionAnalyticsPosition,
+  marketOverride?: AnalysisMarket,
+): 1 | -1 | null {
+  const market = String(marketOverride ?? position.market ?? '').trim().toUpperCase();
+  const side = String(position.side ?? '').trim().toLowerCase();
+
+  if (market === 'BITGET') {
+    if (side === 'long') return 1;
+    if (side === 'short') return -1;
+    return null;
+  }
+
+  if (market === 'KR' || market === 'US' || market === 'UPBIT') {
+    if (!side || side === 'long') return 1;
+    return null;
+  }
+
+  if (side === 'long') return 1;
+  if (side === 'short') return -1;
+  return null;
 }
 
 export function positionCurrentPrice(
@@ -100,8 +120,9 @@ function bitgetPnlSensitivity(position: PositionAnalyticsPosition): number | nul
   const average = positive(position.averageEntryPrice);
   const current = positive(position.currentPrice);
   const pnl = finite(position.unrealizedPnl);
-  if (average == null || current == null || pnl == null) return null;
-  const directionalDelta = positionDirection(position) * (current - average);
+  const direction = positionDirection(position, 'BITGET');
+  if (average == null || current == null || pnl == null || direction == null) return null;
+  const directionalDelta = direction * (current - average);
   if (!Number.isFinite(directionalDelta) || Math.abs(directionalDelta) < 1e-9) return null;
   const sensitivity = pnl / directionalDelta;
   return Number.isFinite(sensitivity) && sensitivity > 0 ? sensitivity : null;
@@ -115,8 +136,8 @@ export function projectPriceOutcome(input: {
 }): PriceOutcomeProjection | null {
   const average = positive(input.position.averageEntryPrice);
   const price = positive(input.price);
-  if (average == null || price == null) return null;
-  const direction = positionDirection(input.position);
+  const direction = positionDirection(input.position, input.market);
+  if (average == null || price == null || direction == null) return null;
   const priceReturnPercent = direction * ((price - average) / average) * 100;
 
   if (input.market === 'BITGET') {
@@ -169,9 +190,11 @@ export function projectPartialExit(input: {
 export function feeInclusiveBreakEvenPrice(
   position: PositionAnalyticsPosition,
   evidence: FeeEvidence | null,
+  market?: AnalysisMarket,
 ): number | null {
   const average = positive(position.averageEntryPrice);
-  if (average == null || !evidence) return null;
+  const direction = positionDirection(position, market);
+  if (average == null || !evidence || direction == null) return null;
   const entryFeePercent = finite(evidence.entryFeePercent);
   const exitFeePercent = finite(evidence.exitFeePercent);
   if (
@@ -184,24 +207,28 @@ export function feeInclusiveBreakEvenPrice(
   ) return null;
   const entryRate = entryFeePercent / 100;
   const exitRate = exitFeePercent / 100;
-  const breakEven = positionDirection(position) === -1
+  const breakEven = direction === -1
     ? average * (1 - entryRate) / (1 + exitRate)
     : average * (1 + entryRate) / (1 - exitRate);
   return Number.isFinite(breakEven) && breakEven > 0 ? breakEven : null;
 }
 
 export function buildPositionGuidance(input: {
+  market?: AnalysisMarket;
   position: PositionAnalyticsPosition;
   chartPrice: number | null;
   pricePlan?: AnalysisPricePlan;
 }): PositionGuidance {
   const average = positive(input.position.averageEntryPrice);
   const current = positionCurrentPrice(input.position, input.chartPrice);
-  if (average == null || current == null) {
+  const direction = positionDirection(input.position, input.market);
+  if (average == null || current == null || direction == null) {
     return {
       state: 'UNAVAILABLE',
       headline: '포지션 판단 근거 부족',
-      detail: '평단 또는 현재 가격 근거가 없어 보유자 기준 판단을 만들지 않습니다.',
+      detail: direction == null
+        ? '포지션 방향 근거가 확인되지 않아 보유자 기준 판단을 만들지 않습니다.'
+        : '평단 또는 현재 가격 근거가 없어 보유자 기준 판단을 만들지 않습니다.',
       averageDistancePercent: null,
       stopGapPercent: null,
       targetGapPercent: null,
@@ -211,7 +238,6 @@ export function buildPositionGuidance(input: {
     };
   }
 
-  const direction = positionDirection(input.position);
   const averageDistancePercent = direction * ((current - average) / average) * 100;
   const stopPrice = positive(input.pricePlan?.stopLoss) ?? positive(input.pricePlan?.invalidation);
   const stopGapPercent = stopPrice == null ? null : direction * ((current - stopPrice) / current) * 100;

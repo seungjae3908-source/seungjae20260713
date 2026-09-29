@@ -49,6 +49,8 @@ for (const prohibited of [
 
 assert.ok(!/^\s*schedule\s*:/m.test(workflow), 'one-time backup workflow must not have a schedule trigger');
 assert.ok(!/^\s*workflow_dispatch\s*:/m.test(workflow), 'one-time backup workflow must not expose workflow_dispatch');
+assert.ok(!workflow.includes('LOCAL_BACKUP_DIR: ${{ runner.temp }}/backup-dr-one-time-create'), 'runner context is invalid at jobs.<job_id>.env and must not be used there');
+assert.ok(workflow.includes("printf 'LOCAL_BACKUP_DIR=%s\\n' \"$RUNNER_TEMP/backup-dr-one-time-create\" >> \"$GITHUB_ENV\""), 'runner-local backup path must be initialized inside a running step');
 assert.ok(workflow.includes("case \"$PARTIAL\" in .local/share/investment-platform/backups/postgres/.partial-*)"));
 assert.ok(workflow.includes('rm -rf -- "$PARTIAL"'), 'failure cleanup must be bounded to the known partial directory');
 assert.ok(!/rm\s+-rf\s+--?\s+\/(?:opt|srv|var)\b/.test(workflow), 'must not recursively delete application/system paths');

@@ -1,0 +1,73 @@
+name: Public Forward Partial Fill Calibration Production Caller
+
+on:
+  pull_request:
+    paths:
+      - 'api-server/src/index.ts'
+      - 'api-server/src/services/public-forward-partial-fill-calibration-production-caller.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-calibration-production-caller.service.test.ts'
+      - '.github/workflows/public-forward-partial-fill-calibration-production-caller.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck API server
+        run: pnpm --dir api-server run typecheck
+
+      - name: Bundle focused caller and existing reader regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --dir api-server exec esbuild \
+            src/services/public-forward-partial-fill-calibration-production-caller.service.test.ts \
+            --bundle --platform=node --format=cjs --target=node20 \
+            --outfile=/tmp/public-forward-partial-fill-calibration-production-caller.test.cjs
+          pnpm --dir api-server exec esbuild \
+            src/services/public-forward-partial-fill-calibration-production-reader.service.test.ts \
+            --bundle --platform=node --format=cjs --target=node20 \
+            --outfile=/tmp/public-forward-partial-fill-calibration-production-reader.test.cjs
+
+      - name: Run focused caller and existing reader regression tests
+        run: >-
+          node --test
+          /tmp/public-forward-partial-fill-calibration-production-caller.test.cjs
+          /tmp/public-forward-partial-fill-calibration-production-reader.test.cjs
+
+      - name: Verify production call graph and safety invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          CALLER='api-server/src/services/public-forward-partial-fill-calibration-production-caller.service.ts'
+          STARTUP='api-server/src/index.ts'
+          grep -Fq 'readAndConnectPublicForwardPartialFillCalibrationSplitAudit' "$CALLER"
+          grep -Fq 'productionPolicy: null' "$CALLER"
+          grep -Fq 'regimeBindings: null' "$CALLER"
+          grep -Fq 'productionCallerConnected: true' "$CALLER"
+          grep -Fq 'productionPolicyAuthorityConnected: false' "$CALLER"
+          grep -Fq 'datasetMutationAllowed: false' "$CALLER"
+          grep -Fq 'defaultStateRootAllowed: false' "$CALLER"
+          grep -Fq "executionAuthority: 'NONE'" "$CALLER"
+          grep -Fq 'runPublicForwardPartialFillCalibrationProductionReadback' "$STARTUP"
+          if grep -Eq '/tmp/|default-dataset|BUY_N|SELL_N|effectiveIndependentN:' "$CALLER"; then
+            echo 'forbidden caller fallback or invented truth found' >&2
+            exit 1
+          fi
