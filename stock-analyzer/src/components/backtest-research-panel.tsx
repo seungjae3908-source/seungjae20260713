@@ -18,6 +18,7 @@ import {
   type BacktestFormValues,
   type BacktestResult,
 } from '@/lib/backtest';
+import { analyzeBacktestLoss } from '@/lib/backtest-loss-attribution';
 
 const endDate = new Date().toISOString().slice(0, 10);
 const startDate = new Date(Date.now() - 30 * 24 * 60 * 60_000).toISOString().slice(0, 10);
@@ -247,6 +248,11 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
     drawdownPercent: Number(point.drawdownPercent.toFixed(2)),
   })) ?? [], [result]);
 
+  const lossAttribution = useMemo(
+    () => result ? analyzeBacktestLoss(result) : null,
+    [result],
+  );
+
   return (
     <main className="h-full overflow-y-auto overscroll-contain pb-28" data-testid="backtest-page">
       <div data-testid="backtest-research-panel" className={`mx-auto w-full ${compact ? 'max-w-5xl' : 'max-w-6xl'} space-y-4 px-3 py-4 sm:px-5`}>
@@ -419,6 +425,42 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
                 <Metric label="비용 합계" value={money(result.totalFees + result.totalSlippage + result.totalFunding)} />
               </div>
             </section>
+
+            {lossAttribution ? (
+              <section className="rounded-2xl border border-border bg-card p-4" data-testid="backtest-loss-attribution">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-black">손실 원인 분해</h3>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      거래 원장을 방향·시장 국면·종료 사유·기간·비용·검증 구간으로 결정론적으로 분해합니다. 인과관계나 미래 수익성을 주장하지 않습니다.
+                    </p>
+                  </div>
+                  <span className="rounded-full border border-border bg-background px-2.5 py-1 text-[10px] font-black">
+                    외부 AI 0회 · 주문 0건
+                  </span>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  {lossAttribution.findings.map((item) => (
+                    <article key={item.key} className="min-w-0 rounded-xl border border-border bg-background/70 p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <h4 className="text-xs font-black">{item.title}</h4>
+                        <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-bold">
+                          {item.severity === 'high' ? '우선 확인' : item.severity === 'medium' ? '확인 필요' : '참고'}
+                        </span>
+                      </div>
+                      <p className="mt-2 break-words text-sm font-black">{item.value}</p>
+                      <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">{item.detail}</p>
+                    </article>
+                  ))}
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <Metric label="손실 거래" value={`${lossAttribution.losingTradeCount}회`} />
+                  <Metric label="손실 거래 절대합" value={money(lossAttribution.grossLosingPnl)} />
+                  <Metric label="모델 비용 합계" value={money(lossAttribution.totalModeledCosts)} />
+                  <Metric label="검증 약화" value={lossAttribution.validationWeakness ? '확인됨' : '뚜렷하지 않음'} />
+                </div>
+              </section>
+            ) : null}
 
             <CurveChart title="실현 자산 곡선" data={equityData} dataKey="equity" />
             <CurveChart title="드로다운 곡선 (%)" data={drawdownData} dataKey="drawdownPercent" />
