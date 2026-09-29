@@ -770,14 +770,12 @@ function parseChangeDate(value) {
   return Number.isFinite(parsed) ? new Date(parsed).toISOString().slice(0, 10) : null;
 }
 let wikipediaNasdaq100Cache = null;
-async function loadWikipediaNasdaq100History() {
-  if (wikipediaNasdaq100Cache) return wikipediaNasdaq100Cache;
-  const url = "https://en.wikipedia.org/wiki/Nasdaq-100";
+async function fetchWikipediaHtml(url, label) {
   let html = null;
   let lastError = null;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(new Error("WIKIPEDIA_NDX_TIMEOUT")), 25_000);
+    const timer = setTimeout(() => controller.abort(new Error(`${label}_TIMEOUT`)), 25_000);
     try {
       const response = await fetch(url, {
         signal: controller.signal,
@@ -790,12 +788,13 @@ async function loadWikipediaNasdaq100History() {
       if (response.status === 429) {
         const retryAfter = Math.max(2_000, Number(response.headers.get("retry-after") ?? 0) * 1_000);
         await sleep(retryAfter || 3_000 * (attempt + 1));
-        lastError = new Error("WIKIPEDIA_NDX_HTTP_429");
+        lastError = new Error(`${label}_HTTP_429`);
         continue;
       }
-      if (!response.ok) throw new Error(`WIKIPEDIA_NDX_HTTP_${response.status}`);
+      if (!response.ok) throw new Error(`${label}_HTTP_${response.status}`);
       html = await response.text();
-      break;
+      if (html.length < 10_000) throw new Error(`${label}_HTML_TOO_SMALL_${html.length}`);
+      return html;
     } catch (error) {
       lastError = error;
       await sleep(2_000 * (attempt + 1));
@@ -803,16 +802,26 @@ async function loadWikipediaNasdaq100History() {
       clearTimeout(timer);
     }
   }
-  if (!html) throw lastError ?? new Error("WIKIPEDIA_NDX_UNAVAILABLE");
-  const tables = [...html.matchAll(/<table\b[\s\S]*?<\/table>/giu)].map((match) => match[0]);
-  const currentTable = tables.find((table) => /(Current components|ICB Industry|ICB Subsector)/iu.test(table) && /Ticker/iu.test(table));
-  const changesTable = tables.find((table) => /Reason/iu.test(table) && /Added/iu.test(table) && /Removed/iu.test(table) && /Date/iu.test(table));
+  throw lastError ?? new Error(`${label}_UNAVAILABLE`);
+}
+async function loadWikipediaNasdaq100History() {
+  if (wikipediaNasdaq100Cache) return wikipediaNasdaq100Cache;
+  const currentUrl = "https://en.wikipedia.org/wiki/List_of_NASDAQ-100_companies";
+  const historyUrl = "https://en.wikipedia.org/wiki/Historical_components_of_the_Nasdaq-100";
+  const [currentHtml, historyHtml] = await Promise.all([
+    fetchWikipediaHtml(currentUrl, "WIKIPEDIA_NDX_CURRENT"),
+    fetchWikipediaHtml(historyUrl, "WIKIPEDIA_NDX_HISTORY"),
+  ]);
+
+  const currentTables = [...currentHtml.matchAll(/<table\b[\s\S]*?<\/table>/giu)].map((match) => match[0]);
+  const historyTables = [...historyHtml.matchAll(/<table\b[\s\S]*?<\/table>/giu)].map((match) => match[0]);
+  const currentTable = currentTables.find((table) => /ICB\s*(?:Industry|Subsector)/iu.test(table) && /Ticker/iu.test(table));
+  const changesTable = historyTables.find((table) => /Reason/iu.test(table) && /Added/iu.test(table) && /Removed/iu.test(table) && /Date/iu.test(table));
   if (!currentTable) throw new Error("WIKIPEDIA_NDX_CURRENT_COMPONENTS_TABLE_MISSING");
   if (!changesTable) throw new Error("WIKIPEDIA_NDX_CHANGE_HISTORY_TABLE_MISSING");
 
-  const currentRows = htmlRows(currentTable);
   const currentSymbols = [];
-  for (const cells of currentRows) {
+  for (const cells of htmlRows(currentTable)) {
     const symbol = cleanPitTicker(cells[0]);
     if (symbol && symbol !== "TICKER") currentSymbols.push(symbol);
   }
@@ -841,9 +850,9 @@ async function loadWikipediaNasdaq100History() {
   wikipediaNasdaq100Cache = {
     current,
     changes,
-    sourceId: "wikipedia-nasdaq100-current-plus-change-history",
-    sourceDigest: sha256Text(html),
-    sourceUrl: url,
+    sourceId: "wikipedia-nasdaq100-components-plus-historical-components",
+    sourceDigest: sha256Text(currentHtml + "\n" + historyHtml),
+    sourceUrls: [currentUrl, historyUrl],
   };
   return wikipediaNasdaq100Cache;
 }
