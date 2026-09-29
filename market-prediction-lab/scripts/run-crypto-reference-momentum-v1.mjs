@@ -11,6 +11,7 @@ const END = Date.parse("2026-09-30T00:00:00.000Z");
 const SYMBOLS = Object.freeze(["BTCUSDT", "ETHUSDT", "XRPUSDT"]);
 const CALIBRATION_WEEKS = 104;
 const LIU_HORIZONS = Object.freeze([1, 2, 3, 4]);
+const LIU_PRIOR_END_EXCLUSIVE = "2024-01-01";
 const COST = BITGET_STANDARD_TAKER_RESEARCH_COSTS.CRYPTO_SPOT;
 const ROUND_TRIP_COST_FRACTION = 2 * (COST.entryFeeRate + COST.slippageRate + COST.spreadRate);
 const MOP_DOI = "10.1016/j.jfineco.2011.11.003";
@@ -52,13 +53,49 @@ function weekEndKey(ms) {
 }
 function summarize(values) {
   const clean = values.filter(Number.isFinite);
-  if (!clean.length) return { n: 0, mean: null, median: null, winRate: null, compoundSequential: null };
+  if (!clean.length) return {
+    n: 0, mean: null, median: null, winRate: null, compoundSequential: null,
+    maxReturn: null, leaveBest1Mean: null, leaveBest3Mean: null, top3PositiveReturnShare: null,
+  };
+  const ordered = [...clean].sort((a, b) => b - a);
+  const positives = ordered.filter((value) => value > 0);
+  const positiveSum = positives.reduce((sum, value) => sum + value, 0);
   return {
     n: clean.length,
     mean: mean(clean),
     median: median(clean),
     winRate: clean.filter((value) => value > 0).length / clean.length,
     compoundSequential: compound(clean),
+    maxReturn: ordered[0] ?? null,
+    leaveBest1Mean: ordered.length > 1 ? mean(ordered.slice(1)) : null,
+    leaveBest3Mean: ordered.length > 3 ? mean(ordered.slice(3)) : null,
+    top3PositiveReturnShare: positiveSum > 0
+      ? positives.slice(0, 3).reduce((sum, value) => sum + value, 0) / positiveSum
+      : null,
+  };
+}
+function liuWindow(weekEnd) {
+  return weekEnd < LIU_PRIOR_END_EXCLUSIVE ? "PRIOR" : "RECENT";
+}
+function liuSummaryBlock(rows) {
+  const top = rows.filter((row) => row.quintile === 5);
+  const bottom = rows.filter((row) => row.quintile === 1);
+  const topSummary = summarize(top.map((row) => row.futureReturn));
+  const bottomSummary = summarize(bottom.map((row) => row.futureReturn));
+  return {
+    all: summarize(rows.map((row) => row.futureReturn)),
+    topQuintile: topSummary,
+    bottomQuintile: bottomSummary,
+    topMinusBottomMean: topSummary.mean != null && bottomSummary.mean != null
+      ? topSummary.mean - bottomSummary.mean
+      : null,
+    leaveBest1TopMinusBottomMean: topSummary.leaveBest1Mean != null && bottomSummary.mean != null
+      ? topSummary.leaveBest1Mean - bottomSummary.mean
+      : null,
+    leaveBest3TopMinusBottomMean: topSummary.leaveBest3Mean != null && bottomSummary.mean != null
+      ? topSummary.leaveBest3Mean - bottomSummary.mean
+      : null,
+    executionAwareTopQuintileLong: summarize(top.map((row) => row.topQuintileLongNetDiagnostic)),
   };
 }
 async function collectSpot(client, symbol) {
@@ -153,6 +190,7 @@ function liuMomentumForSymbol(symbol, candles) {
       evaluation.push({
         symbol,
         signalWeekEnd: signal.weekEnd,
+        validationWindow: liuWindow(signal.weekEnd),
         signalReturn: signal.return,
         quintile: q,
         horizonWeeks: horizon,
@@ -164,16 +202,12 @@ function liuMomentumForSymbol(symbol, candles) {
   const horizons = {};
   for (const horizon of LIU_HORIZONS) {
     const rows = evaluation.filter((row) => row.horizonWeeks === horizon);
-    const top = rows.filter((row) => row.quintile === 5);
-    const bottom = rows.filter((row) => row.quintile === 1);
     horizons[horizon] = {
-      all: summarize(rows.map((row) => row.futureReturn)),
-      topQuintile: summarize(top.map((row) => row.futureReturn)),
-      bottomQuintile: summarize(bottom.map((row) => row.futureReturn)),
-      topMinusBottomMean: top.length && bottom.length
-        ? mean(top.map((row) => row.futureReturn)) - mean(bottom.map((row) => row.futureReturn))
-        : null,
-      executionAwareTopQuintileLong: summarize(top.map((row) => row.topQuintileLongNetDiagnostic)),
+      ...liuSummaryBlock(rows),
+      windows: {
+        PRIOR: liuSummaryBlock(rows.filter((row) => row.validationWindow === "PRIOR")),
+        RECENT: liuSummaryBlock(rows.filter((row) => row.validationWindow === "RECENT")),
+      },
     };
   }
   return {
@@ -190,16 +224,15 @@ function pooledLiu(results) {
   const output = {};
   for (const horizon of LIU_HORIZONS) {
     const rows = results.flatMap((result) => result.rows.filter((row) => row.horizonWeeks === horizon));
-    const top = rows.filter((row) => row.quintile === 5);
-    const bottom = rows.filter((row) => row.quintile === 1);
     output[horizon] = {
       symbols: results.map((row) => row.symbol),
-      topQuintile: summarize(top.map((row) => row.futureReturn)),
-      bottomQuintile: summarize(bottom.map((row) => row.futureReturn)),
-      topMinusBottomMean: top.length && bottom.length
-        ? mean(top.map((row) => row.futureReturn)) - mean(bottom.map((row) => row.futureReturn))
-        : null,
-      executionAwareTopQuintileLong: summarize(top.map((row) => row.topQuintileLongNetDiagnostic)),
+      ...liuSummaryBlock(rows),
+      windows: {
+        PRIOR: liuSummaryBlock(rows.filter((row) => row.validationWindow === "PRIOR")),
+        RECENT: liuSummaryBlock(rows.filter((row) => row.validationWindow === "RECENT")),
+      },
+      positiveSpreadSymbols: results.filter((result) => result.horizons[horizon]?.topMinusBottomMean > 0).map((result) => result.symbol),
+      nonPositiveSpreadSymbols: results.filter((result) => !(result.horizons[horizon]?.topMinusBottomMean > 0)).map((result) => result.symbol),
     };
   }
   return output;
@@ -337,6 +370,14 @@ async function main() {
     comparisons: {
       liuOneWeekTopMinusBottomMean: pooledLiuResult[1]?.topMinusBottomMean ?? null,
       liuFourWeekTopMinusBottomMean: pooledLiuResult[4]?.topMinusBottomMean ?? null,
+      liuOneWeekLeaveBest1Spread: pooledLiuResult[1]?.leaveBest1TopMinusBottomMean ?? null,
+      liuOneWeekLeaveBest3Spread: pooledLiuResult[1]?.leaveBest3TopMinusBottomMean ?? null,
+      liuOneWeekPriorSpread: pooledLiuResult[1]?.windows?.PRIOR?.topMinusBottomMean ?? null,
+      liuOneWeekRecentSpread: pooledLiuResult[1]?.windows?.RECENT?.topMinusBottomMean ?? null,
+      liuFourWeekPriorSpread: pooledLiuResult[4]?.windows?.PRIOR?.topMinusBottomMean ?? null,
+      liuFourWeekRecentSpread: pooledLiuResult[4]?.windows?.RECENT?.topMinusBottomMean ?? null,
+      liuOneWeekPositiveSpreadSymbols: pooledLiuResult[1]?.positiveSpreadSymbols ?? [],
+      liuFourWeekPositiveSpreadSymbols: pooledLiuResult[4]?.positiveSpreadSymbols ?? [],
       liuOneWeekTopLongAfterResearchCosts: pooledLiuResult[1]?.executionAwareTopQuintileLong ?? null,
       mopEqualWeightTsmMean: pooledMopResult.equalWeightTsm.mean,
       mopEqualWeightBuyHoldMean: pooledMopResult.equalWeightBuyHold.mean,
@@ -345,8 +386,16 @@ async function main() {
     promotionAssessment: {
       automaticPromotionAllowed: false,
       economicSampleCredit: 0,
-      status: "REFERENCE_BASELINE_ONLY",
-      reason: "first local replication; no tuning, no regime/wave/candle/AI overlay, no canonical futures replication, no genuine future-time OOS credit",
+      LIU_TSYVINSKI_CRYPTO_WEEKLY_MOMENTUM_V1: {
+        status: "RESEARCH_HOLD_TRANSFER_AND_CONCENTRATION_REVIEW",
+        reason: "positive pooled means must be checked against BTC/ETH/XRP transfer, PRIOR/RECENT stability, medians, and leave-best-1/3 concentration before any overlay experiment",
+        automaticPromotionAllowed: false,
+      },
+      MOP_TSMOM_12M_1M_SPOT_PROXY_V1: {
+        status: pooledMopResult.tsmMinusBuyHoldMean > 0 ? "RESEARCH_HOLD_SPOT_PROXY_POSITIVE_DIAGNOSTIC" : "RESEARCH_HOLD_SPOT_PROXY_BELOW_BUYHOLD",
+        reason: "unscaled crypto spot proxy is descriptive only and is not canonical MOP futures evidence",
+        automaticPromotionAllowed: false,
+      },
     },
     safeguards: {
       researchOnly: true,
@@ -365,6 +414,7 @@ async function main() {
       "MOP volatility scaling is excluded from the primary result because later literature shows scaling can materially drive reported performance.",
       "Close-to-close source replications are predictive diagnostics, not executable fill claims.",
       "Only the top-quintile long diagnostic subtracts the app's explicit spot research round-trip cost assumption.",
+      "Liu momentum is reported separately for fixed PRIOR (before 2024-01-01) and RECENT (2024-01-01 onward) evaluation windows and includes leave-best-1/3 concentration stress.",
       "Historical replay is not genuine Forward/OOS economic proof and cannot change PROFITABILITY_PROVEN.",
     ],
   };
@@ -378,6 +428,10 @@ async function main() {
     liu1wSpread: report.comparisons.liuOneWeekTopMinusBottomMean,
     liu4wSpread: report.comparisons.liuFourWeekTopMinusBottomMean,
     liu1wTopNetMean: report.comparisons.liuOneWeekTopLongAfterResearchCosts?.mean ?? null,
+    liu1wPriorSpread: report.comparisons.liuOneWeekPriorSpread,
+    liu1wRecentSpread: report.comparisons.liuOneWeekRecentSpread,
+    liu1wLeaveBest1Spread: report.comparisons.liuOneWeekLeaveBest1Spread,
+    liu1wLeaveBest3Spread: report.comparisons.liuOneWeekLeaveBest3Spread,
     mopTsmMean: report.comparisons.mopEqualWeightTsmMean,
     mopBuyHoldMean: report.comparisons.mopEqualWeightBuyHoldMean,
     mopMinusBuyHold: report.comparisons.mopTsmMinusBuyHoldMean,
