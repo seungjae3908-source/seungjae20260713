@@ -1,0 +1,79 @@
+name: Research Crypto Turtle S2 Reference V1
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/run-crypto-turtle-s2-reference-v1.mjs
+      - market-prediction-lab/src/binance-vision-futures-archive.js
+      - market-prediction-lab/src/research-validation-layer.js
+      - market-prediction-lab/src/historical-backtest-data.js
+      - .github/workflows/research-crypto-turtle-s2-reference-v1.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-crypto-turtle-s2-reference-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Verify exact head and research-only boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          node --check market-prediction-lab/scripts/run-crypto-turtle-s2-reference-v1.mjs
+          grep -Fq 'TURTLE_SYSTEM_2_V1' market-prediction-lab/scripts/run-crypto-turtle-s2-reference-v1.mjs
+          ! grep -Eiq '/api/v1/orders|X-Tossinvest-Account|PRIVATE_TRADING_API_ALLOWED|REAL_ORDER_ENABLED|LIVE_TRADING|(^|[^A-Za-z])withdraw([^A-Za-z]|$)|(^|[^A-Za-z])transfer([^A-Za-z]|$)' market-prediction-lab/scripts/run-crypto-turtle-s2-reference-v1.mjs
+
+      - name: Self-test Turtle source math
+        working-directory: market-prediction-lab
+        run: node scripts/run-crypto-turtle-s2-reference-v1.mjs --self-test
+
+      - name: Run public Turtle S2 replay
+        working-directory: market-prediction-lab
+        run: node scripts/run-crypto-turtle-s2-reference-v1.mjs docs/crypto-turtle-s2-reference-v1.json
+
+      - name: Assert source fidelity and safety
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('docs/crypto-turtle-s2-reference-v1.json','utf8'));
+          if(r.status!=='pass') throw new Error('STATUS');
+          if(r.sourceContract.recipeId!=='TURTLE_SYSTEM_2_V1') throw new Error('RECIPE');
+          if(r.sourceContract.parameterSearch!==false||r.sourceContract.takeProfit!==null) throw new Error('SOURCE_RULE');
+          if(r.sourceContract.entry!=='55-day high LONG / 55-day low SHORT; every breakout taken') throw new Error('ENTRY');
+          if(r.sourceContract.initialStop!=='2 N from most recently added unit') throw new Error('STOP');
+          if(r.sourceContract.pyramiding!=='add one unit every 0.5 N from actual previous fill, max 4 units') throw new Error('PYRAMID');
+          if(r.sourceContract.exit!=='20-day opposite breakout') throw new Error('EXIT');
+          if(r.data.reserved2026ForLaterIndependentCheck!==true||r.data.fundingIncluded!==true||r.data.checksumVerified!==true) throw new Error('DATA_TRUTH');
+          if(r.execution.dailyOhlcIntrabarPathKnown!==false||r.execution.simultaneousLongShortBreakoutPolicy!=='skip ambiguous daily bar') throw new Error('INTRABAR_TRUTH');
+          if(r.transferBoundary.canonicalOriginalTurtlePortfolioReplication!==false||r.transferBoundary.system1SkipRuleNotImplementedInThisBaseline!==true) throw new Error('TRANSFER_TRUTH');
+          if(r.decisionBoundary.observedHistoryUsedForParameterSelection!==false||r.decisionBoundary.automaticPromotionAllowed!==false||r.decisionBoundary.economicSampleCredit!==0||r.decisionBoundary.profitabilityClaimAllowed!==false) throw new Error('PROMOTION_BOUNDARY');
+          if(r.safety.researchOnly!==true||r.safety.publicDataOnly!==true||r.safety.liveExecutionAllowed!==false||r.safety.privateAccountRequestAllowed!==false||r.safety.orderRouteCalled!==false||r.safety.executionAuthority!=='NONE'||r.safety.actualOrders!==0) throw new Error('SAFETY');
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crypto-turtle-s2-reference-v1-${{ github.event.pull_request.head.sha }}
+          path: market-prediction-lab/docs/crypto-turtle-s2-reference-v1.json
+          if-no-files-found: error
+          retention-days: 30
