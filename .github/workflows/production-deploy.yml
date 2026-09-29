@@ -277,18 +277,27 @@ jobs:
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
           fi
       - name: Require canonical Production trade schema before application mutation
+        env:
+          PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
         run: |
           set -Eeuo pipefail
           umask 077
+          [[ -n "$PROD_DATABASE_URL" && "$PROD_DATABASE_URL" =~ ^postgres(ql)?:// ]] || {
+            echo 'Protected Production database credential is missing or invalid.' >&2
+            exit 1
+          }
           audit_artifact="$(mktemp "$RUNNER_TEMP/production-trade-schema-audit.XXXXXX.json")"
           audit_stderr="$(mktemp "$RUNNER_TEMP/production-trade-schema-audit.XXXXXX.stderr")"
           cleanup() { rm -f "$audit_artifact" "$audit_stderr"; }
           trap cleanup EXIT
+          audit_script_b64="$(base64 -w0 ops/production-trade-schema-readonly-audit.sh)"
+          quoted_script="$(printf '%q' "$audit_script_b64")"
+          remote_command="PM2_NAME=stock-app AUDIT_SCRIPT_B64=$quoted_script bash -c 'IFS= read -r PROD_DATABASE_URL; export PROD_DATABASE_URL; printf \"%s\" \"\$AUDIT_SCRIPT_B64\" | base64 -d | bash'"
 
           set +e
-          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
-            "$SSH_USER@$SSH_HOST" "PM2_NAME=stock-app bash -s" \
-            < ops/production-trade-schema-readonly-audit.sh \
+          printf '%s\n' "$PROD_DATABASE_URL" | ssh \
+            -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" \
             > "$audit_artifact" 2> "$audit_stderr"
           audit_status=$?
           set -e

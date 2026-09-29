@@ -1,12 +1,14 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { loginProductionReadOnly } from './support/production-readonly-login';
 import { installProductionReadOnlyPolicy } from './support/production-readonly-policy';
 
 const baseUrl = String(process.env.PRODUCTION_BASE_URL ?? '').replace(/\/$/, '');
 const qaLogin = String(process.env.PRODUCTION_QA_LOGIN ?? '');
 const qaPassword = String(process.env.PRODUCTION_QA_PASSWORD ?? '');
 const expectedDeploySha = String(process.env.EXPECTED_DEPLOY_SHA ?? '').trim().toLowerCase();
+const rawTargetProviders = String(process.env.PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS ?? '').trim();
 const artifactDir = path.resolve(
   process.cwd(),
   process.env.PRODUCTION_ACCOUNT_READONLY_ARTIFACT_DIR ?? 'production-account-readonly-artifacts',
@@ -25,7 +27,21 @@ if (productionLiveQaEnabled) {
 const productionOrigin = productionLiveQaEnabled ? new URL(baseUrl).origin : 'https://lsj119.com';
 const cryptoProviders = ['upbit', 'bitget'] as const;
 const stockProviders = ['toss', 'kiwoom'] as const;
+const activationProviders = ['toss', 'kiwoom', 'upbit'] as const;
 type Provider = typeof cryptoProviders[number] | typeof stockProviders[number];
+type ActivationProvider = typeof activationProviders[number];
+
+const requestedProviders = rawTargetProviders === '' ? [] : rawTargetProviders.split(',');
+const testedProviders = [...requestedProviders].sort() as ActivationProvider[];
+const activationProviderSet = new Set<string>(activationProviders);
+
+if (productionLiveQaEnabled && rawTargetProviders !== '') {
+  if (requestedProviders.length === 0
+    || new Set(requestedProviders).size !== requestedProviders.length
+    || requestedProviders.some((provider) => !activationProviderSet.has(provider))) {
+    throw new Error('PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS must be a unique toss,kiwoom,upbit subset');
+  }
+}
 
 const UPBIT_OPTIONAL_ORDER_READ_SCOPE_ERROR = 'UPBIT_OPEN_ORDERS_UPBIT_PERMISSION_DENIED';
 
@@ -43,6 +59,7 @@ type SafetySnapshot = {
   lastGoodAt: string | null;
   stale: boolean;
   errorCode: string | null;
+  openOrders: unknown[] | null;
   orderRequests: number;
   cancelRequests: number;
   amendRequests: number;
@@ -93,19 +110,7 @@ function zeroMutationSafetyFailures(value: SafetySnapshot): string[] {
 }
 
 async function login(page: Page) {
-  await page.goto('/login', { waitUntil: 'commit', timeout: 15_000 });
-  const loginId = page.getByLabel('아이디');
-  const loginPassword = page.getByLabel('비밀번호');
-  const loginButton = page.getByRole('button', { name: '로그인', exact: true });
-
-  await expect(loginId).toBeVisible({ timeout: 15_000 });
-  await expect(loginPassword).toBeVisible({ timeout: 15_000 });
-  await expect(loginButton).toBeVisible({ timeout: 15_000 });
-
-  await loginId.fill(qaLogin);
-  await loginPassword.fill(qaPassword);
-  await loginButton.click();
-  await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: 15_000 });
+  await loginProductionReadOnly(page, { login: qaLogin, password: qaPassword });
 }
 
 test('Production real-account read-only providers return fresh connected snapshots with zero mutation authority', async ({ page }) => {
@@ -166,13 +171,21 @@ test('Production real-account read-only providers return fresh connected snapsho
       : [],
   );
 
-  for (const provider of cryptoProviders) {
-    expect(supported.has(provider), `${provider} must be supported in Production account read-only QA`).toBe(true);
+  if (testedProviders.length > 0) {
+    for (const provider of testedProviders) {
+      expect(supported.has(provider), `${provider} activation target must be supported in Production account read-only QA`).toBe(true);
+    }
+  } else {
+    // The separate provider-activation recovery workflow overlays this spec without
+    // an activation target. Preserve its legacy all-provider readiness assertions.
+    for (const provider of cryptoProviders) {
+      expect(supported.has(provider), `${provider} must be supported in Production account read-only QA`).toBe(true);
+    }
+    expect(
+      stockProviders.some((provider) => supported.has(provider)),
+      'Toss or Kiwoom stock account read-only provider must be supported',
+    ).toBe(true);
   }
-  expect(
-    stockProviders.some((provider) => supported.has(provider)),
-    'Toss or Kiwoom stock account read-only provider must be supported',
-  ).toBe(true);
 
   const providers: Provider[] = [
     ...stockProviders.filter((provider) => supported.has(provider)),
@@ -183,8 +196,9 @@ test('Production real-account read-only providers return fresh connected snapsho
   await expect(refresh).toBeVisible({ timeout: 10_000 });
   await refresh.click();
 
+  const requiredSnapshots: Provider[] = testedProviders.length > 0 ? testedProviders : providers;
   await expect.poll(
-    () => providers.every((provider) => snapshots.has(provider)),
+    () => requiredSnapshots.every((provider) => snapshots.has(provider)),
     { timeout: 45_000, intervals: [500, 1_000, 2_000] },
   ).toBe(true);
 
@@ -202,14 +216,26 @@ test('Production real-account read-only providers return fresh connected snapsho
 
   const sanitizedProviders = providers.map((provider) => {
     const snapshot = snapshots.get(provider);
+    const checkedAtPresent = typeof snapshot?.checkedAt === 'string' && Number.isFinite(Date.parse(snapshot.checkedAt));
+    const lastGoodAtPresent = typeof snapshot?.lastGoodAt === 'string'
+      && Number.isFinite(Date.parse(snapshot.lastGoodAt));
+    const fresh = snapshot?.stale === false && checkedAtPresent && lastGoodAtPresent;
+    const reconciliationPassed = snapshot?.errorCode === null && Array.isArray(snapshot?.openOrders);
     return {
       provider,
       connected: snapshot?.connected === true,
       status: typeof snapshot?.status === 'string' ? snapshot.status : 'MISSING',
       stale: snapshot?.stale === true,
       errorCode: typeof snapshot?.errorCode === 'string' ? snapshot.errorCode : null,
-      checkedAtPresent: typeof snapshot?.checkedAt === 'string' && Number.isFinite(Date.parse(snapshot.checkedAt)),
-      lastGoodAtPresent: typeof snapshot?.lastGoodAt === 'string' && Number.isFinite(Date.parse(snapshot.lastGoodAt)),
+      checkedAtPresent,
+      lastGoodAtPresent,
+      fresh,
+      reconciliation: reconciliationPassed ? 'PASS' : 'FAIL',
+      reconciliationPassed,
+      diagnosticReadAccepted: snapshot !== undefined && providerReadErrorAccepted(
+        provider,
+        typeof snapshot.errorCode === 'string' ? snapshot.errorCode : null,
+      ),
     };
   });
 
@@ -222,6 +248,7 @@ test('Production real-account read-only providers return fresh connected snapsho
     officialProductionOrigin: true,
     authenticatedProductionSession: true,
     credentialVaultEncryptionConfigured: credentialStatus?.encryptionConfigured === true,
+    testedProviders,
     providers: sanitizedProviders,
     secretValuesRecorded: false,
     accountValuesRecorded: false,
@@ -239,8 +266,13 @@ test('Production real-account read-only providers return fresh connected snapsho
   const providerFailures: string[] = [];
   for (const provider of providers) {
     const snapshot = snapshots.get(provider);
+    const isActivationTarget = testedProviders.includes(provider as ActivationProvider);
+    const isLegacyRequiredCrypto = testedProviders.length === 0
+      && cryptoProviders.includes(provider as typeof cryptoProviders[number]);
     if (!snapshot) {
-      providerFailures.push(`${provider}: snapshot missing`);
+      if (isActivationTarget || isLegacyRequiredCrypto || testedProviders.length === 0) {
+        providerFailures.push(`${provider}: snapshot missing`);
+      }
       continue;
     }
     if (snapshot.provider !== provider) {
@@ -250,8 +282,7 @@ test('Production real-account read-only providers return fresh connected snapsho
       providerFailures.push(`${provider}: ${failure}`);
     }
 
-    const isRequiredCrypto = cryptoProviders.includes(provider as typeof cryptoProviders[number]);
-    if (isRequiredCrypto || snapshot.connected) {
+    if (isActivationTarget || isLegacyRequiredCrypto || (testedProviders.length === 0 && snapshot.connected)) {
       if (snapshot.connected !== true) {
         providerFailures.push(
           `${provider}: not connected; status=${snapshot.status}; errorCode=${snapshot.errorCode ?? 'none'}`,
@@ -259,18 +290,23 @@ test('Production real-account read-only providers return fresh connected snapsho
       }
       if (snapshot.status !== 'CONNECTED') providerFailures.push(`${provider}: status=${snapshot.status}`);
       if (snapshot.stale !== false) providerFailures.push(`${provider}: stale=${snapshot.stale}`);
-      if (!providerReadErrorAccepted(provider, snapshot.errorCode)) {
+      if (isActivationTarget && snapshot.errorCode !== null) {
+        providerFailures.push(`${provider}: reconciliation errorCode=${snapshot.errorCode}`);
+      } else if (!isActivationTarget && !providerReadErrorAccepted(provider, snapshot.errorCode)) {
         providerFailures.push(`${provider}: unexpected errorCode=${snapshot.errorCode ?? 'none'}`);
       }
       if (!Number.isFinite(Date.parse(snapshot.checkedAt))) providerFailures.push(`${provider}: checkedAt invalid`);
       if (snapshot.lastGoodAt === null || !Number.isFinite(Date.parse(String(snapshot.lastGoodAt)))) {
         providerFailures.push(`${provider}: lastGoodAt invalid`);
       }
+      if (isActivationTarget && !Array.isArray(snapshot.openOrders)) {
+        providerFailures.push(`${provider}: reconciliation openOrders unavailable`);
+      }
     }
   }
 
   const connectedStockProviders = stockProviders.filter((provider) => snapshots.get(provider)?.connected === true);
-  if (connectedStockProviders.length < 1) {
+  if (testedProviders.length === 0 && connectedStockProviders.length < 1) {
     const stockState = stockProviders
       .map((provider) => {
         const snapshot = snapshots.get(provider);
@@ -284,7 +320,9 @@ test('Production real-account read-only providers return fresh connected snapsho
 
   expect(
     providerFailures,
-    'Production account read-only QA blockers (all providers collected in one run)',
+    testedProviders.length > 0
+      ? `Production account read-only QA blockers (activation targets: ${testedProviders.join(',')})`
+      : 'Production account read-only QA blockers (legacy provider activation recovery)',
   ).toEqual([]);
 
 });
