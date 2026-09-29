@@ -62,11 +62,13 @@ jobs:
           if(r.promotionAssessment?.pitUniverseEvidence?.materializedUsPitDatasetReady!==false||r.promotionAssessment?.pitUniverseEvidence?.firstZero!=='US_PIT_MEMBERSHIP_REMOVED_LISTINGS_CORPORATE_ACTION_DATASET_NOT_MATERIALIZED') throw new Error('PIT_TRUTH');
           const pit=r.pitMembershipStress;
           if(!pit||pit.selectionUsesCurrentMembership!==false||pit.currentMembershipUsedForSelection===true||pit.canonicalPitDatasetClaimAllowed!==false) throw new Error('PIT_MEMBERSHIP_METHOD');
-          if(!['PIT_MEMBERSHIP_STRESS_COMPLETE','BLOCKED_ALPHA_VANTAGE_KEY_MISSING'].includes(pit.status)) throw new Error('PIT_MEMBERSHIP_STATUS:'+String(pit.status));
+          if(!['PIT_MEMBERSHIP_STRESS_COMPLETE','BLOCKED_ALPHA_VANTAGE_KEY_MISSING','BLOCKED_ALPHA_VANTAGE_LISTING_STATUS'].includes(pit.status)) throw new Error('PIT_MEMBERSHIP_STATUS:'+String(pit.status));
           if(pit.providerConfigured===true&&pit.status!=='PIT_MEMBERSHIP_STRESS_COMPLETE') throw new Error('PIT_CONFIGURED_BUT_INCOMPLETE:'+String(pit.status));
+          if(pit.status==='BLOCKED_ALPHA_VANTAGE_LISTING_STATUS'&&pit.credentialMode!=='PUBLIC_DEMO') throw new Error('PIT_DEMO_BLOCKER_IDENTITY');
           if(r.safety.researchOnly!==true||r.safety.publicMarketDataOnly!==true||r.safety.privateAccountRequestAllowed!==false||r.safety.orderRouteCalled!==false||r.safety.executionAuthority!=='NONE'||r.safety.economicSampleCredit!==0) throw new Error('SAFETY');
           NODE
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: us-reference-recipes-v2-${{ github.event.pull_request.head.sha }}
           path: market-prediction-lab/docs/us-reference-recipes-v2.json
