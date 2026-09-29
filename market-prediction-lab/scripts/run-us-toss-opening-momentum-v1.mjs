@@ -1626,16 +1626,16 @@ async function main() {
         automaticPromotionAllowed: false,
       },
       CROSS_SECTIONAL_PRICE_MOMENTUM_V1: {
-        status: "BLOCKED_PIT_UNIVERSE_AND_OUTLIER_CONCENTRATION",
-        reason: pitMembershipStress.status === "PIT_HISTORICAL_MEMBERSHIP_STRESS_COMPLETE"
-          ? "bounded Nasdaq-100 historical-membership stress preserves a positive descriptive spread, but full-US PIT coverage, overlapping monthly portfolio construction, corporate-action/terminal-value evidence, and extreme-winner concentration remain unresolved"
-          : "large current-snapshot descriptive spread remains unverified by usable historical-membership evidence and materially concentrated in extreme winners",
-        nextRequiredEvidence: "canonical full-US point-in-time membership + removed/delisted listings + corporate actions + overlapping monthly portfolio replay",
+        status: "RESEARCH_HOLD_CROSS_UNIVERSE_CONCENTRATION_FAILED",
+        reason: pitMembershipStress.status === "PIT_HISTORICAL_MEMBERSHIP_STRESS_COMPLETE" && sp500MembershipStress.status === "PIT_HISTORICAL_MEMBERSHIP_STRESS_COMPLETE"
+          ? "frozen J6/K6 remains positive in reconstructed Nasdaq-100 PIT membership but falls near zero on reconstructed S&P 500 PIT membership; leave-best-1/3 concentration stress removes the S&P 500 spread, so cross-universe robustness is not established"
+          : "cross-universe PIT membership validation is incomplete; no promotion is allowed",
+        nextRequiredEvidence: "a new independent literature baseline or genuinely unused canonical full-US PIT replay; do not tune J6/K6 on these observed windows",
         automaticPromotionAllowed: false,
       },
       FIFTY_TWO_WEEK_HIGH_MOMENTUM_V1: {
-        status: "RESEARCH_HOLD_UNSTABLE_FORMATION_SIGN",
-        reason: "descriptive six-month spreads change sign across fixed formation cohorts and PIT universe remains missing",
+        status: "RESEARCH_HOLD_PIT_CROSS_UNIVERSE_NEGATIVE",
+        reason: "frozen 52-week-high K6 is negative on both reconstructed Nasdaq-100 and S&P 500 PIT membership aggregates, with weak formation-sign stability",
         automaticPromotionAllowed: false,
       },
       pitUniverseEvidence: {
