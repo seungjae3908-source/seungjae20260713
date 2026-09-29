@@ -897,6 +897,91 @@ async function wikipediaNasdaq100Snapshot(asOfDate) {
   };
 }
 
+let wikipediaSp500Cache = null;
+async function loadWikipediaSp500History() {
+  if (wikipediaSp500Cache) return wikipediaSp500Cache;
+  const sourceUrl = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies";
+  const html = await fetchWikipediaHtml(sourceUrl, "WIKIPEDIA_SP500");
+  const tables = [...html.matchAll(/<table\b[\s\S]*?<\/table>/giu)].map((match) => match[0]);
+
+  const currentCandidates = tables.map((table) => {
+    const symbols = htmlRows(table)
+      .map((cells) => cleanPitTicker(cells[0]))
+      .filter((symbol) => symbol && symbol !== "SYMBOL" && symbol !== "TICKER");
+    return { symbols: [...new Set(symbols)] };
+  }).filter((candidate) => candidate.symbols.length >= 450 && candidate.symbols.length <= 550);
+  if (!currentCandidates.length) throw new Error(`WIKIPEDIA_SP500_CURRENT_TABLE_MISSING_${tables.length}`);
+  currentCandidates.sort((left, right) => right.symbols.length - left.symbols.length);
+  const current = currentCandidates[0].symbols;
+
+  function extractChanges(table) {
+    const output = [];
+    let lastDate = null;
+    for (const cells of htmlRows(table)) {
+      if (!cells.length) continue;
+      const maybeDate = parseChangeDate(cells[0]);
+      let offset = 0;
+      if (maybeDate) {
+        lastDate = maybeDate;
+        offset = 1;
+      }
+      if (!lastDate) continue;
+      const added = cleanPitTicker(cells[offset] ?? "");
+      const removed = cleanPitTicker(cells[offset + 2] ?? "");
+      if (!added && !removed) continue;
+      output.push({ date: lastDate, added, removed });
+    }
+    return output;
+  }
+  const historyCandidates = tables
+    .map((table) => ({ changes: extractChanges(table) }))
+    .filter((candidate) => candidate.changes.length >= 50)
+    .sort((left, right) => right.changes.length - left.changes.length);
+  if (!historyCandidates.length) throw new Error(`WIKIPEDIA_SP500_CHANGE_TABLE_MISSING_${tables.length}`);
+  const changes = historyCandidates[0].changes;
+  changes.sort((a, b) => b.date.localeCompare(a.date));
+
+  wikipediaSp500Cache = {
+    current,
+    changes,
+    sourceId: "wikipedia-sp500-current-plus-change-history",
+    sourceDigest: sha256Text(html),
+    sourceUrl,
+  };
+  return wikipediaSp500Cache;
+}
+async function wikipediaSp500Snapshot(asOfDate) {
+  const history = await loadWikipediaSp500History();
+  const members = new Set(history.current);
+  for (const change of history.changes) {
+    if (change.date <= asOfDate) continue;
+    if (change.added) members.delete(change.added);
+    if (change.removed) members.add(change.removed);
+  }
+  const rows = [...members].sort().map((symbol) => ({
+    symbol,
+    name: symbol,
+    exchange: "SP500",
+    assetType: "STOCK",
+    ipoDate: null,
+    delistingDate: null,
+    listingStatus: "ACTIVE",
+  }));
+  if (rows.length < 450 || rows.length > 550) {
+    throw new Error(`WIKIPEDIA_SP500_RECONSTRUCTED_MEMBERSHIP_INVALID_${asOfDate}_${rows.length}`);
+  }
+  return {
+    status: "AVAILABLE",
+    date: asOfDate,
+    rows,
+    credentialMode: "PUBLIC_NO_KEY",
+    sourceId: `${history.sourceId}:${asOfDate}`,
+    sourceDigest: history.sourceDigest,
+    historicalChangeLogApplied: true,
+    currentMembershipAnchorUsed: true,
+  };
+}
+
 function deterministicPitSample(rows) {
   return [...rows]
     .sort((left, right) => pitSampleHash(left.symbol).localeCompare(pitSampleHash(right.symbol)) || left.symbol.localeCompare(right.symbol))
@@ -1045,10 +1130,12 @@ function aggregateFormationMetric(formations, key) {
     canonicalReplicationClaimAllowed: false,
   };
 }
-async function buildPitMembershipMomentumStress() {
+async function buildPitMembershipMomentumStress(requestedMode = "AUTO") {
   const apiKeyPresent = Boolean(String(process.env.ALPHA_VANTAGE_API_KEY ?? "").trim());
   const formationMemberships = [];
-  let providerMode = apiKeyPresent ? "ALPHA_VANTAGE" : "WIKIPEDIA_NASDAQ100";
+  let providerMode = requestedMode === "WIKIPEDIA_SP500"
+    ? "WIKIPEDIA_SP500"
+    : (apiKeyPresent ? "ALPHA_VANTAGE" : "WIKIPEDIA_NASDAQ100");
   let alphaFallbackReason = null;
   let alphaProbe = null;
   if (providerMode === "ALPHA_VANTAGE") {
@@ -1063,11 +1150,17 @@ async function buildPitMembershipMomentumStress() {
     const asOfDate = monthEndDate(month);
     const listing = providerMode === "ALPHA_VANTAGE"
       ? (formationIndex === 0 && alphaProbe?.status === "AVAILABLE" ? alphaProbe : await alphaListingStatus(asOfDate))
-      : await wikipediaNasdaq100Snapshot(asOfDate);
+      : providerMode === "WIKIPEDIA_SP500"
+        ? await wikipediaSp500Snapshot(asOfDate)
+        : await wikipediaNasdaq100Snapshot(asOfDate);
     if (listing.status !== "AVAILABLE") {
       return {
         status: "BLOCKED_PIT_PUBLIC_MEMBERSHIP_SOURCE",
-        provider: providerMode === "ALPHA_VANTAGE" ? "alpha-vantage-listing-status" : "wikipedia-nasdaq100-change-history",
+        provider: providerMode === "ALPHA_VANTAGE"
+          ? "alpha-vantage-listing-status"
+          : providerMode === "WIKIPEDIA_SP500"
+            ? "wikipedia-sp500-change-history"
+            : "wikipedia-nasdaq100-change-history",
         providerConfigured: apiKeyPresent,
         credentialMode: listing.credentialMode ?? (apiKeyPresent ? "CONFIGURED_SECRET" : "PUBLIC_NO_KEY"),
         alphaFallbackReason,
@@ -1099,7 +1192,9 @@ async function buildPitMembershipMomentumStress() {
   const latestAsOfDate = "2026-09-29";
   const latestListing = providerMode === "ALPHA_VANTAGE"
     ? await alphaListingStatus(latestAsOfDate)
-    : await wikipediaNasdaq100Snapshot(latestAsOfDate);
+    : providerMode === "WIKIPEDIA_SP500"
+      ? await wikipediaSp500Snapshot(latestAsOfDate)
+      : await wikipediaNasdaq100Snapshot(latestAsOfDate);
   const latestActive = latestListing.status === "AVAILABLE" ? new Set(latestListing.rows.map((row) => row.symbol)) : null;
   const unionSymbols = [...new Set(formationMemberships.flatMap((formation) => formation.sample.map((row) => row.symbol)))];
   const histories = await mapLimit(unionSymbols, 8, async (symbol) => ({
@@ -1165,17 +1260,25 @@ async function buildPitMembershipMomentumStress() {
 
   return {
     status,
-    provider: providerMode === "ALPHA_VANTAGE" ? "alpha-vantage-listing-status" : "wikipedia-nasdaq100-change-history",
+    provider: providerMode === "ALPHA_VANTAGE"
+      ? "alpha-vantage-listing-status"
+      : providerMode === "WIKIPEDIA_SP500"
+        ? "wikipedia-sp500-change-history"
+        : "wikipedia-nasdaq100-change-history",
     providerConfigured: apiKeyPresent,
     credentialMode: providerMode === "ALPHA_VANTAGE" ? "CONFIGURED_SECRET" : "PUBLIC_NO_KEY",
     alphaFallbackReason,
     providerHistoricalMembershipAsOfDate: true,
-    providerUniverseScope: providerMode === "ALPHA_VANTAGE" ? "US_ACTIVE_STOCKS" : "NASDAQ_100_RECONSTRUCTED_COMPONENTS",
+    providerUniverseScope: providerMode === "ALPHA_VANTAGE"
+      ? "US_ACTIVE_STOCKS"
+      : providerMode === "WIKIPEDIA_SP500"
+        ? "SP500_RECONSTRUCTED_COMPONENTS"
+        : "NASDAQ_100_RECONSTRUCTED_COMPONENTS",
     selectionUsesCurrentMembership: false,
     currentMembershipUsedForSelection: false,
     currentMembershipUsedForRemovedNameDiagnosticOnly: true,
-    currentMembershipAnchorUsedForHistoricalReconstruction: providerMode === "WIKIPEDIA_NASDAQ100",
-    historicalChangeLogApplied: providerMode === "WIKIPEDIA_NASDAQ100",
+    currentMembershipAnchorUsedForHistoricalReconstruction: providerMode === "WIKIPEDIA_NASDAQ100" || providerMode === "WIKIPEDIA_SP500",
+    historicalChangeLogApplied: providerMode === "WIKIPEDIA_NASDAQ100" || providerMode === "WIKIPEDIA_SP500",
     deterministicSampleSeed: PIT_SAMPLE_SEED,
     sampleSizePerFormation: PIT_SAMPLE_SIZE,
     minimumHistoryReadyRequired: dynamicHistoryReadyRequired,
@@ -1352,6 +1455,7 @@ async function main() {
   for (const row of earningsResearchUniverse) pead.push(...peadRows(row, earningsBySymbol.get(row.symbol) ?? { status: "UNAVAILABLE", events: [] }));
   const academicMomentum = buildAcademicMomentumBaselines(dailyUniverse);
   const pitMembershipStress = await buildPitMembershipMomentumStress();
+  const sp500MembershipStress = await buildPitMembershipMomentumStress("WIKIPEDIA_SP500");
   const pitVsCurrentSnapshot = {
     jtMomentumJ6K6Skip1: {
       currentSnapshotSpread: academicMomentum.jtMomentumJ6K6Skip1.aggregate.meanDescriptiveTopMinusBottomReturn,
@@ -1463,7 +1567,20 @@ async function main() {
     },
     academicMomentum,
     pitMembershipStress,
+    sp500MembershipStress,
     pitVsCurrentSnapshot,
+    crossUniversePitComparison: {
+      jtMomentumJ6K6Skip1: {
+        nasdaq100Spread: pitMembershipStress.jtMomentumJ6K6Skip1?.aggregate?.meanDescriptiveTopMinusBottomReturn ?? null,
+        sp500Spread: sp500MembershipStress.jtMomentumJ6K6Skip1?.aggregate?.meanDescriptiveTopMinusBottomReturn ?? null,
+      },
+      high52WeekK6: {
+        nasdaq100Spread: pitMembershipStress.high52WeekK6?.aggregate?.meanDescriptiveTopMinusBottomReturn ?? null,
+        sp500Spread: sp500MembershipStress.high52WeekK6?.aggregate?.meanDescriptiveTopMinusBottomReturn ?? null,
+      },
+      sameRecipeNoRetuning: true,
+      automaticPromotionAllowed: false,
+    },
     costs: { normalPerSide: NORMAL_COST, stressPerSide: STRESS_COST },
     accountPolicy: ACCOUNT,
     lookahead: {
@@ -1567,6 +1684,9 @@ async function main() {
     pitError: report.pitMembershipStress.error ?? null,
     pitMomentumSpread: report.pitMembershipStress.jtMomentumJ6K6Skip1.aggregate.meanDescriptiveTopMinusBottomReturn,
     pitHigh52Spread: report.pitMembershipStress.high52WeekK6.aggregate.meanDescriptiveTopMinusBottomReturn,
+    sp500PitStatus: report.sp500MembershipStress.status,
+    sp500PitMomentumSpread: report.sp500MembershipStress.jtMomentumJ6K6Skip1.aggregate.meanDescriptiveTopMinusBottomReturn,
+    sp500PitHigh52Spread: report.sp500MembershipStress.high52WeekK6.aggregate.meanDescriptiveTopMinusBottomReturn,
     earningsAvailableSymbols,
   }));
 }
