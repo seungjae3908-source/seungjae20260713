@@ -49,6 +49,7 @@ const added=[
  'packages/external-research/scripts/run-existing-research-providers-v8.d.mts',
  'api-server/src/services/ai-chat.service.ts',
  'api-server/src/services/ai-chat.service.test.ts',
+ 'api-server/src/services/ai-chat-hardening.service.test.ts',
  'api-server/src/routes/ai-chat.ts',
  'api-server/src/services/ai-provider-runtime-health.service.ts',
  'api-server/src/services/ai-chat-timeframe-context.service.ts',
