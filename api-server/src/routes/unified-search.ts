@@ -6,6 +6,7 @@ import {
   refreshUnifiedAssetSearchIndex,
   searchUnifiedAssets,
   startUnifiedAssetSearchRefreshTimer,
+  type UnifiedSearchResponse,
 } from '../services/unified-asset-search.service';
 import {
   buildFuturesSearchFallback,
@@ -32,7 +33,9 @@ import {
 
 const router: IRouter = Router();
 const EXACT_CODE_METADATA_DEADLINE_MS = 350;
-const SEARCH_HARD_DEADLINE_MS = 4_000;
+const ALL_MARKET_FALLBACK_SOFT_DEADLINE_MS = 2_000;
+export const UNIFIED_SEARCH_HARD_DEADLINE_MS = 4_000;
+export const UNIFIED_SEARCH_FALLBACK_MARGIN_MS = 500;
 const SEARCH_DEADLINE = Symbol('SEARCH_DEADLINE');
 
 startUnifiedAssetSearchRefreshTimer();
@@ -66,12 +69,12 @@ function canUseUsMetadataFallback(asset: 'all' | UnifiedAssetType, market: Unifi
   return (asset === 'all' || asset === 'stock') && market === 'US';
 }
 
-function buildMetadataFallback(
+function buildSingleMarketMetadataFallback(
   q: string,
   asset: 'all' | UnifiedAssetType,
-  market: UnifiedSearchMarket | null,
+  market: UnifiedSearchMarket,
   limit: number,
-) {
+): UnifiedSearchResponse | null {
   if (canUseKrMetadataFallback(asset, market)) return buildKrSearchFallback(q, limit);
   if (canUseUsMetadataFallback(asset, market)) return buildUsSearchFallback(q, limit);
   if (canUseSpotMetadataFallback(asset, market)) return buildSpotSearchFallback(q, limit);
@@ -79,10 +82,60 @@ function buildMetadataFallback(
   return null;
 }
 
+function fallbackMarketsForRequest(
+  asset: 'all' | UnifiedAssetType,
+  market: UnifiedSearchMarket | null,
+): UnifiedSearchMarket[] {
+  if (market) return [market];
+  if (asset === 'stock') return ['KR', 'US'];
+  if (asset === 'coin') return ['spot', 'futures'];
+  return ['KR', 'US', 'spot', 'futures'];
+}
+
+function fallbackMatchPriority(matchType: string) {
+  if (matchType === 'code_exact') return 0;
+  if (matchType === 'name_exact') return 1;
+  if (matchType.endsWith('_prefix')) return 2;
+  if (matchType === 'alias') return 3;
+  return 4;
+}
+
+function buildMetadataFallback(
+  q: string,
+  asset: 'all' | UnifiedAssetType,
+  market: UnifiedSearchMarket | null,
+  limit: number,
+): UnifiedSearchResponse | null {
+  const fallbacks = fallbackMarketsForRequest(asset, market)
+    .map((fallbackMarket) => buildSingleMarketMetadataFallback(q, asset, fallbackMarket, limit))
+    .filter((value): value is UnifiedSearchResponse => value != null);
+
+  if (fallbacks.length === 0) return null;
+  if (market) return fallbacks[0];
+
+  const results = fallbacks
+    .flatMap((fallback) => fallback.results)
+    .sort((left, right) => fallbackMatchPriority(left.matchType) - fallbackMatchPriority(right.matchType))
+    .slice(0, limit);
+
+  if (results.length === 0) return null;
+
+  return {
+    results,
+    count: results.length,
+    dataAsOf: null,
+    stale: true as const,
+    partial: true as const,
+    providers: fallbacks.flatMap((fallback) => fallback.providers),
+    hiddenMatches: [] as Array<{ market: UnifiedSearchMarket; count: number }>,
+  };
+}
+
 function metadataFallbackSoftDeadlineMs(
   asset: 'all' | UnifiedAssetType,
   market: UnifiedSearchMarket | null,
 ) {
+  if (market == null) return ALL_MARKET_FALLBACK_SOFT_DEADLINE_MS;
   if (canUseKrMetadataFallback(asset, market)) return KR_SEARCH_SOFT_DEADLINE_MS;
   if (canUseUsMetadataFallback(asset, market)) return US_SEARCH_SOFT_DEADLINE_MS;
   if (canUseSpotMetadataFallback(asset, market)) return SPOT_SEARCH_SOFT_DEADLINE_MS;
@@ -119,15 +172,16 @@ async function searchWithMetadataSoftDeadline(input: {
   const configuredSoftDeadlineMs = metadataFallbackSoftDeadlineMs(input.asset, input.market);
   const exactCodeFallback = metadataFallback?.results.some((result) => result.matchType === 'code_exact') === true;
   const canonicalQuery = canonicalProductCode(input.q);
-  const exactProductCodeFallback = metadataFallback?.results.some((result) =>
+  const exactProductCodeFallbackCount = metadataFallback?.results.filter((result) =>
     result.matchType === 'code_exact' && canonicalProductCode(result.productCode) === canonicalQuery
-  ) === true;
+  ).length ?? 0;
+  const exactProductCodeFallback = exactProductCodeFallbackCount === 1;
 
-  // An explicit market + exact product code identity is already available from a factual static
-  // metadata catalog. Starting full provider discovery first can leave a cold shared
-  // index refresh running after the fallback response and monopolize the Node event loop
-  // for the immediately following request. Ambiguous base symbols such as BTC still need
-  // provider discovery for cross-market matches, as do broad/name/prefix/fuzzy searches.
+  // A unique exact product-code identity is already available from factual static metadata.
+  // Starting full provider discovery first can leave a cold shared index refresh running after
+  // the fallback response and monopolize the Node event loop for the immediately following request.
+  // Ambiguous base symbols such as BTC still need provider discovery for cross-market matches,
+  // as do broad/name/prefix/fuzzy searches.
   if (exactProductCodeFallback && metadataFallback) {
     return metadataFallback;
   }
@@ -135,7 +189,12 @@ async function searchWithMetadataSoftDeadline(input: {
   const searchPromise = searchUnifiedAssets(input);
   const firstDeadlineMs = exactCodeFallback
     ? EXACT_CODE_METADATA_DEADLINE_MS
-    : configuredSoftDeadlineMs;
+    : configuredSoftDeadlineMs == null
+      ? null
+      : Math.min(
+          configuredSoftDeadlineMs,
+          UNIFIED_SEARCH_HARD_DEADLINE_MS - UNIFIED_SEARCH_FALLBACK_MARGIN_MS,
+        );
 
   if (firstDeadlineMs != null) {
     const response = await raceSearchAgainstDeadline(searchPromise, firstDeadlineMs);
@@ -147,7 +206,7 @@ async function searchWithMetadataSoftDeadline(input: {
   }
 
   const elapsedBudgetMs = firstDeadlineMs ?? 0;
-  const remainingBudgetMs = Math.max(1, SEARCH_HARD_DEADLINE_MS - elapsedBudgetMs);
+  const remainingBudgetMs = Math.max(1, UNIFIED_SEARCH_HARD_DEADLINE_MS - elapsedBudgetMs);
   const terminalResponse = await raceSearchAgainstDeadline(searchPromise, remainingBudgetMs);
   if (terminalResponse !== SEARCH_DEADLINE) return terminalResponse;
   throw searchDeadlineError();
