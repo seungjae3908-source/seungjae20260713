@@ -491,7 +491,7 @@ const report = {
     exactContractTickSizeAndExchangeMarginNotModeled: true,
   },
   promotionAssessment: {
-    status: "RESEARCH_HOLD_TEMPORAL_AND_CROSS_SYMBOL_TRANSFER_FAILED",
+    status: "RESEARCH_HOLD_TEMPORAL_AND_CROSS_SYMBOL_GENERALIZATION_FAILED",
     sourceTemporalTransferPassed,
     sourceCrossSymbolTransferPassed,
     singleUnitTemporalTransferPassed,
@@ -499,7 +499,7 @@ const report = {
     pyramidingContributionStableAcrossWindows,
     pyramidingWindowDelta,
     holdout2026MayBeOpened: false,
-    reason: "frozen 4-unit System 2 is negative in PRIOR and positive in RECENT, BTC is negative in both source windows, and pyramiding helps RECENT while hurting PRIOR; the single-unit control is more stable in aggregate but still fails recent BTC transfer",
+    reason: "frozen 4-unit System 2 is negative in PRIOR and positive in RECENT, BTC is negative in both source windows, and pyramiding helps RECENT while hurting PRIOR; the single-unit control is more stable in aggregate but still fails recent BTC generalization",
     automaticPromotionAllowed: false,
     economicSampleCredit: 0,
     profitabilityClaimAllowed: false,
