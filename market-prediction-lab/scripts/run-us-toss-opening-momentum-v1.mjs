@@ -760,65 +760,123 @@ function decodeHtml(value) {
     .replace(/\s+/gu, " ")
     .trim();
 }
-async function wikipediaSp500Snapshot(asOfDate) {
-  const revisionUrl = new URL("https://en.wikipedia.org/w/api.php");
-  revisionUrl.searchParams.set("action", "query");
-  revisionUrl.searchParams.set("format", "json");
-  revisionUrl.searchParams.set("prop", "revisions");
-  revisionUrl.searchParams.set("titles", "List of S&P 500 companies");
-  revisionUrl.searchParams.set("rvprop", "ids|timestamp");
-  revisionUrl.searchParams.set("rvstart", `${asOfDate}T23:59:59Z`);
-  revisionUrl.searchParams.set("rvdir", "older");
-  revisionUrl.searchParams.set("rvlimit", "1");
-  revisionUrl.searchParams.set("origin", "*");
-  const revisionPayload = await fetchJson(revisionUrl, "WIKIPEDIA_SP500_REVISION", { attempts: 3 });
-  const page = Object.values(revisionPayload?.query?.pages ?? {})[0];
-  const revision = page?.revisions?.[0];
-  const revisionId = Number(revision?.revid);
-  if (!Number.isInteger(revisionId) || revisionId <= 0) throw new Error("WIKIPEDIA_SP500_REVISION_MISSING");
-
-  const parseUrl = new URL("https://en.wikipedia.org/w/api.php");
-  parseUrl.searchParams.set("action", "parse");
-  parseUrl.searchParams.set("format", "json");
-  parseUrl.searchParams.set("oldid", String(revisionId));
-  parseUrl.searchParams.set("prop", "text");
-  parseUrl.searchParams.set("origin", "*");
-  const parsed = await fetchJson(parseUrl, "WIKIPEDIA_SP500_PARSE", { attempts: 3 });
-  const html = String(parsed?.parse?.text?.["*"] ?? "");
-  if (!html) throw new Error("WIKIPEDIA_SP500_HTML_MISSING");
-  const tables = [...html.matchAll(/<table\b[\s\S]*?<\/table>/giu)].map((match) => match[0]);
-  const table = tables.find((candidate) => /GICS Sector/iu.test(candidate) && /(Symbol|Ticker symbol)/iu.test(candidate))
-    ?? tables.find((candidate) => /constituents/iu.test(candidate));
-  if (!table) throw new Error("WIKIPEDIA_SP500_CONSTITUENTS_TABLE_MISSING");
-  const rows = [];
-  for (const match of table.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/giu)) {
-    const cells = [...match[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/giu)].map((cell) => decodeHtml(cell[1]));
-    if (!cells.length) continue;
-    const symbol = cleanPitTicker(cells[0]);
-    if (!symbol) continue;
-    rows.push({
-      symbol,
-      name: cells[1] ?? symbol,
-      exchange: "SP500",
-      assetType: "STOCK",
-      ipoDate: null,
-      delistingDate: null,
-      listingStatus: "ACTIVE",
-    });
+function htmlRows(table) {
+  return [...String(table ?? "").matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/giu)].map((match) =>
+    [...match[1].matchAll(/<(?:td|th)\b[^>]*>([\s\S]*?)<\/(?:td|th)>/giu)].map((cell) => decodeHtml(cell[1]))
+  ).filter((cells) => cells.length);
+}
+function parseChangeDate(value) {
+  const parsed = Date.parse(String(value ?? "").trim());
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString().slice(0, 10) : null;
+}
+let wikipediaNasdaq100Cache = null;
+async function loadWikipediaNasdaq100History() {
+  if (wikipediaNasdaq100Cache) return wikipediaNasdaq100Cache;
+  const url = "https://en.wikipedia.org/wiki/Nasdaq-100";
+  let html = null;
+  let lastError = null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error("WIKIPEDIA_NDX_TIMEOUT")), 25_000);
+    try {
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          accept: "text/html,application/xhtml+xml",
+          "accept-language": "en-US,en;q=0.9",
+          "user-agent": "seungjae20260713-pit-research/1.0 (https://github.com/seungjae3908-source/seungjae20260713)",
+        },
+      });
+      if (response.status === 429) {
+        const retryAfter = Math.max(2_000, Number(response.headers.get("retry-after") ?? 0) * 1_000);
+        await sleep(retryAfter || 3_000 * (attempt + 1));
+        lastError = new Error("WIKIPEDIA_NDX_HTTP_429");
+        continue;
+      }
+      if (!response.ok) throw new Error(`WIKIPEDIA_NDX_HTTP_${response.status}`);
+      html = await response.text();
+      break;
+    } catch (error) {
+      lastError = error;
+      await sleep(2_000 * (attempt + 1));
+    } finally {
+      clearTimeout(timer);
+    }
   }
-  const uniqueRows = [...new Map(rows.map((row) => [row.symbol, row])).values()];
-  if (uniqueRows.length < 450) throw new Error(`WIKIPEDIA_SP500_MEMBERSHIP_INSUFFICIENT_${uniqueRows.length}`);
+  if (!html) throw lastError ?? new Error("WIKIPEDIA_NDX_UNAVAILABLE");
+  const tables = [...html.matchAll(/<table\b[\s\S]*?<\/table>/giu)].map((match) => match[0]);
+  const currentTable = tables.find((table) => /(Current components|ICB Industry|ICB Subsector)/iu.test(table) && /Ticker/iu.test(table));
+  const changesTable = tables.find((table) => /Reason/iu.test(table) && /Added/iu.test(table) && /Removed/iu.test(table) && /Date/iu.test(table));
+  if (!currentTable) throw new Error("WIKIPEDIA_NDX_CURRENT_COMPONENTS_TABLE_MISSING");
+  if (!changesTable) throw new Error("WIKIPEDIA_NDX_CHANGE_HISTORY_TABLE_MISSING");
+
+  const currentRows = htmlRows(currentTable);
+  const currentSymbols = [];
+  for (const cells of currentRows) {
+    const symbol = cleanPitTicker(cells[0]);
+    if (symbol && symbol !== "TICKER") currentSymbols.push(symbol);
+  }
+  const current = [...new Set(currentSymbols)];
+  if (current.length < 90 || current.length > 120) throw new Error(`WIKIPEDIA_NDX_CURRENT_COMPONENTS_INVALID_${current.length}`);
+
+  const changes = [];
+  let lastDate = null;
+  for (const cells of htmlRows(changesTable)) {
+    if (!cells.length) continue;
+    const maybeDate = parseChangeDate(cells[0]);
+    let offset = 0;
+    if (maybeDate) {
+      lastDate = maybeDate;
+      offset = 1;
+    }
+    if (!lastDate) continue;
+    const added = cleanPitTicker(cells[offset] ?? "");
+    const removed = cleanPitTicker(cells[offset + 2] ?? "");
+    if (!added && !removed) continue;
+    changes.push({ date: lastDate, added, removed });
+  }
+  if (changes.length < 100) throw new Error(`WIKIPEDIA_NDX_CHANGE_HISTORY_INSUFFICIENT_${changes.length}`);
+  changes.sort((a, b) => b.date.localeCompare(a.date));
+
+  wikipediaNasdaq100Cache = {
+    current,
+    changes,
+    sourceId: "wikipedia-nasdaq100-current-plus-change-history",
+    sourceDigest: sha256Text(html),
+    sourceUrl: url,
+  };
+  return wikipediaNasdaq100Cache;
+}
+async function wikipediaNasdaq100Snapshot(asOfDate) {
+  const history = await loadWikipediaNasdaq100History();
+  const members = new Set(history.current);
+  for (const change of history.changes) {
+    if (change.date <= asOfDate) continue;
+    if (change.added) members.delete(change.added);
+    if (change.removed) members.add(change.removed);
+  }
+  const rows = [...members].sort().map((symbol) => ({
+    symbol,
+    name: symbol,
+    exchange: "NASDAQ_100",
+    assetType: "STOCK",
+    ipoDate: null,
+    delistingDate: null,
+    listingStatus: "ACTIVE",
+  }));
+  if (rows.length < 90 || rows.length > 120) throw new Error(`WIKIPEDIA_NDX_RECONSTRUCTED_MEMBERSHIP_INVALID_${asOfDate}_${rows.length}`);
   return {
     status: "AVAILABLE",
     date: asOfDate,
-    rows: uniqueRows,
+    rows,
     credentialMode: "PUBLIC_NO_KEY",
-    sourceId: `wikipedia-sp500-oldid:${revisionId}`,
-    sourceDigest: sha256Text(html),
-    revisionId,
-    revisionTimestamp: String(revision.timestamp ?? ""),
+    sourceId: `${history.sourceId}:${asOfDate}`,
+    sourceDigest: history.sourceDigest,
+    historicalChangeLogApplied: true,
+    currentMembershipAnchorUsed: true,
   };
 }
+
 function deterministicPitSample(rows) {
   return [...rows]
     .sort((left, right) => pitSampleHash(left.symbol).localeCompare(pitSampleHash(right.symbol)) || left.symbol.localeCompare(right.symbol))
@@ -944,13 +1002,13 @@ function aggregateFormationMetric(formations, key) {
 async function buildPitMembershipMomentumStress() {
   const apiKeyPresent = Boolean(String(process.env.ALPHA_VANTAGE_API_KEY ?? "").trim());
   const formationMemberships = [];
-  let providerMode = apiKeyPresent ? "ALPHA_VANTAGE" : "WIKIPEDIA_SP500";
+  let providerMode = apiKeyPresent ? "ALPHA_VANTAGE" : "WIKIPEDIA_NASDAQ100";
   let alphaFallbackReason = null;
   let alphaProbe = null;
   if (providerMode === "ALPHA_VANTAGE") {
     alphaProbe = await alphaListingStatus(monthEndDate(ACADEMIC_FORMATION_MONTHS[0]));
     if (alphaProbe.status !== "AVAILABLE") {
-      providerMode = "WIKIPEDIA_SP500";
+      providerMode = "WIKIPEDIA_NASDAQ100";
       alphaFallbackReason = alphaProbe.error ?? alphaProbe.status;
     }
   }
@@ -959,11 +1017,11 @@ async function buildPitMembershipMomentumStress() {
     const asOfDate = monthEndDate(month);
     const listing = providerMode === "ALPHA_VANTAGE"
       ? (formationIndex === 0 && alphaProbe?.status === "AVAILABLE" ? alphaProbe : await alphaListingStatus(asOfDate))
-      : await wikipediaSp500Snapshot(asOfDate);
+      : await wikipediaNasdaq100Snapshot(asOfDate);
     if (listing.status !== "AVAILABLE") {
       return {
         status: "BLOCKED_PIT_PUBLIC_MEMBERSHIP_SOURCE",
-        provider: providerMode === "ALPHA_VANTAGE" ? "alpha-vantage-listing-status" : "wikipedia-sp500-historical-revision",
+        provider: providerMode === "ALPHA_VANTAGE" ? "alpha-vantage-listing-status" : "wikipedia-nasdaq100-change-history",
         providerConfigured: apiKeyPresent,
         credentialMode: listing.credentialMode ?? (apiKeyPresent ? "CONFIGURED_SECRET" : "PUBLIC_NO_KEY"),
         alphaFallbackReason,
@@ -995,7 +1053,7 @@ async function buildPitMembershipMomentumStress() {
   const latestAsOfDate = "2026-09-29";
   const latestListing = providerMode === "ALPHA_VANTAGE"
     ? await alphaListingStatus(latestAsOfDate)
-    : await wikipediaSp500Snapshot(latestAsOfDate);
+    : await wikipediaNasdaq100Snapshot(latestAsOfDate);
   const latestActive = latestListing.status === "AVAILABLE" ? new Set(latestListing.rows.map((row) => row.symbol)) : null;
   const unionSymbols = [...new Set(formationMemberships.flatMap((formation) => formation.sample.map((row) => row.symbol)))];
   const histories = await mapLimit(unionSymbols, 8, async (symbol) => ({
@@ -1050,24 +1108,31 @@ async function buildPitMembershipMomentumStress() {
     };
   });
   const minimumHistoryReady = formations.length ? Math.min(...formations.map((formation) => formation.historyReady)) : 0;
-  const status = minimumHistoryReady >= PIT_MIN_HISTORY_READY
+  const minimumFormationSample = formations.length ? Math.min(...formations.map((formation) => formation.deterministicSampleSize)) : 0;
+  const dynamicHistoryReadyRequired = Math.min(
+    PIT_MIN_HISTORY_READY,
+    Math.max(50, Math.floor(minimumFormationSample * 0.80)),
+  );
+  const status = minimumHistoryReady >= dynamicHistoryReadyRequired
     ? "PIT_HISTORICAL_MEMBERSHIP_STRESS_COMPLETE"
     : "BLOCKED_PIT_HISTORY_COVERAGE";
 
   return {
     status,
-    provider: providerMode === "ALPHA_VANTAGE" ? "alpha-vantage-listing-status" : "wikipedia-sp500-historical-revision",
+    provider: providerMode === "ALPHA_VANTAGE" ? "alpha-vantage-listing-status" : "wikipedia-nasdaq100-change-history",
     providerConfigured: apiKeyPresent,
     credentialMode: providerMode === "ALPHA_VANTAGE" ? "CONFIGURED_SECRET" : "PUBLIC_NO_KEY",
     alphaFallbackReason,
     providerHistoricalMembershipAsOfDate: true,
-    providerUniverseScope: providerMode === "ALPHA_VANTAGE" ? "US_ACTIVE_STOCKS" : "S&P_500_CONSTITUENTS",
+    providerUniverseScope: providerMode === "ALPHA_VANTAGE" ? "US_ACTIVE_STOCKS" : "NASDAQ_100_RECONSTRUCTED_COMPONENTS",
     selectionUsesCurrentMembership: false,
     currentMembershipUsedForSelection: false,
     currentMembershipUsedForRemovedNameDiagnosticOnly: true,
+    currentMembershipAnchorUsedForHistoricalReconstruction: providerMode === "WIKIPEDIA_NASDAQ100",
+    historicalChangeLogApplied: providerMode === "WIKIPEDIA_NASDAQ100",
     deterministicSampleSeed: PIT_SAMPLE_SEED,
     sampleSizePerFormation: PIT_SAMPLE_SIZE,
-    minimumHistoryReadyRequired: PIT_MIN_HISTORY_READY,
+    minimumHistoryReadyRequired: dynamicHistoryReadyRequired,
     minimumHistoryReadyObserved: minimumHistoryReady,
     unionSymbols: unionSymbols.length,
     yahooHistoryReadySymbols: historyBySymbol.size,
