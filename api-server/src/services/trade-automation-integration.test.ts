@@ -13,10 +13,52 @@ import {
 import { evaluateTradingPlan, normalizeTradingPolicy, upbitKrwPriceStep } from './trade-automation-risk.service';
 import { assertOrderTransition, canTransitionOrder } from './trade-order-state-machine.service';
 import { DEFAULT_TRADING_POLICY, type TradingPlanInput } from './trade-automation.types';
+import {
+  SPOT_LIVE_HARD_DENIED_CAPABILITIES,
+  spotLiveCapabilityDecision,
+  spotLivePlanCapabilityDecision,
+  spotLiveRuntimeStatus,
+} from './spot-live-limited-capability.service';
 
 const USER_A = '11111111-1111-1111-1111-111111111111';
 const USER_B = '22222222-2222-2222-2222-222222222222';
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
+const SPOT_LIVE_TEST_KEYS = [
+  'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED',
+  'SPOT_LIVE_CAPABILITY_ALLOWLIST',
+  'SPOT_LIVE_MARKET_ALLOWLIST',
+] as const;
+
+function spotLiveEnvironmentSnapshot() {
+  return Object.fromEntries(SPOT_LIVE_TEST_KEYS.map((key) => [key, process.env[key]]));
+}
+
+function enableSpotLiveTestEnvironment() {
+  process.env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED = 'true';
+  process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST = 'BALANCE_READ,POSITION_READ,OPEN_ORDER_READ,ORDER_CREATE,ORDER_CANCEL,ORDER_AMEND';
+  process.env.SPOT_LIVE_MARKET_ALLOWLIST = 'KR_STOCK,US_STOCK,CRYPTO_SPOT';
+  process.env.executionAuthority = 'SPOT_LIVE_LIMITED';
+}
+
+function spotLiveCapabilityEnvironment(overrides: Record<string, string> = {}) {
+  return {
+    executionAuthority: 'SPOT_LIVE_LIMITED',
+    LIVE_TRADING: 'true',
+    ORDER_EXECUTION_ENABLED: 'true',
+    LIVE_TRADING_ACTIVATION_APPROVED: 'true',
+    SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: 'true',
+    REAL_ORDER_ENABLED: 'true',
+    PRIVATE_TRADING_API_ALLOWED: 'true',
+    BITGET_LIVE_ORDER_ENABLED: 'false',
+    UPBIT_LIVE_ORDER_ENABLED: 'true',
+    KIWOOM_LIVE_ORDER_ENABLED: 'true',
+    TOSS_LIVE_ORDER_ENABLED: 'true',
+    SPOT_LIVE_CAPABILITY_ALLOWLIST:
+      'BALANCE_READ,POSITION_READ,OPEN_ORDER_READ,ORDER_CREATE,ORDER_CANCEL,ORDER_AMEND',
+    SPOT_LIVE_MARKET_ALLOWLIST: 'KR_STOCK,US_STOCK,CRYPTO_SPOT',
+    ...overrides,
+  };
+}
 
 function plan(overrides: Partial<TradingPlanInput> = {}): TradingPlanInput {
   const observedAt = new Date().toISOString();
@@ -47,6 +89,106 @@ test('automatic trading and every exchange default to OFF', () => {
   assert.deepEqual(policy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
   assert.deepEqual(policy.enabledAssets, { bitget: [], upbit: [], kiwoom: [], toss: [] });
   assert.equal(policy.bitgetLeverage, 2);
+});
+
+test('spot live create is capability allowlisted and exact-authority bound', () => {
+  assert.equal(
+    spotLivePlanCapabilityDecision(plan(), 'ORDER_CREATE', spotLiveCapabilityEnvironment()).allowed,
+    true,
+  );
+
+  const legacy = spotLivePlanCapabilityDecision(
+    plan(),
+    'ORDER_CREATE',
+    spotLiveCapabilityEnvironment({ executionAuthority: 'AUTOMATIC' }),
+  );
+  assert.equal(legacy.allowed, false);
+  assert.ok(legacy.blockCodes.includes('SPOT_LIVE_EXECUTION_AUTHORITY_MISMATCH'));
+
+  const missingRead = spotLivePlanCapabilityDecision(
+    plan(),
+    'ORDER_CREATE',
+    spotLiveCapabilityEnvironment({ SPOT_LIVE_CAPABILITY_ALLOWLIST: 'ORDER_CREATE' }),
+  );
+  assert.equal(missingRead.allowed, false);
+  assert.ok(missingRead.blockCodes.includes('SPOT_LIVE_CAPABILITY_MISSING_BALANCE_READ'));
+  assert.ok(missingRead.blockCodes.includes('SPOT_LIVE_CAPABILITY_MISSING_POSITION_READ'));
+  assert.ok(missingRead.blockCodes.includes('SPOT_LIVE_CAPABILITY_MISSING_OPEN_ORDER_READ'));
+});
+
+test('spot live permanently rejects futures, margin, short, leverage, and denied capabilities', () => {
+  const futures = spotLivePlanCapabilityDecision(
+    plan({ exchange: 'bitget', market: 'USDT', side: 'long', leverage: 2, marginMode: 'crossed' }),
+    'ORDER_CREATE',
+    spotLiveCapabilityEnvironment({ BITGET_LIVE_ORDER_ENABLED: 'true' }),
+  );
+  assert.equal(futures.allowed, false);
+  for (const code of [
+    'FUTURES_HARD_DISABLED',
+    'SHORT_HARD_DISABLED',
+    'LEVERAGE_HARD_DISABLED',
+    'MARGIN_HARD_DISABLED',
+  ]) {
+    assert.ok(futures.blockCodes.includes(code), `missing blocker ${code}`);
+  }
+
+  const denied = spotLiveCapabilityDecision({
+    exchange: 'upbit',
+    capability: 'ORDER_CREATE',
+    environment: spotLiveCapabilityEnvironment({
+      SPOT_LIVE_CAPABILITY_ALLOWLIST:
+        'BALANCE_READ,POSITION_READ,OPEN_ORDER_READ,ORDER_CREATE,WITHDRAW',
+    }),
+  });
+  assert.equal(denied.allowed, false);
+  assert.ok(denied.blockCodes.includes('SPOT_LIVE_DENIED_CAPABILITY_REQUESTED'));
+});
+
+test('spot live supports only the three spot market/provider combinations', () => {
+  const cases: Array<[Partial<TradingPlanInput>, boolean]> = [
+    [{ exchange: 'kiwoom', stockBroker: 'kiwoom', market: 'KR' }, true],
+    [{ exchange: 'kiwoom', stockBroker: 'kiwoom', market: 'US' }, true],
+    [{ exchange: 'toss', stockBroker: 'toss', market: 'KR' }, true],
+    [{ exchange: 'toss', stockBroker: 'toss', market: 'US' }, true],
+    [{ exchange: 'upbit', stockBroker: null, market: 'KRW' }, true],
+    [{ exchange: 'upbit', stockBroker: null, market: 'USDT' }, false],
+  ];
+  for (const [overrides, expected] of cases) {
+    assert.equal(
+      spotLivePlanCapabilityDecision(
+        plan(overrides),
+        'ORDER_CREATE',
+        spotLiveCapabilityEnvironment(),
+      ).allowed,
+      expected,
+      JSON.stringify(overrides),
+    );
+  }
+});
+
+test('crypto spot allows cancel but never amend', () => {
+  assert.equal(
+    spotLivePlanCapabilityDecision(plan(), 'ORDER_CANCEL', spotLiveCapabilityEnvironment()).allowed,
+    true,
+  );
+  const amend = spotLivePlanCapabilityDecision(
+    plan(),
+    'ORDER_AMEND',
+    spotLiveCapabilityEnvironment(),
+  );
+  assert.equal(amend.allowed, false);
+  assert.ok(amend.blockCodes.includes('SPOT_LIVE_PROVIDER_CAPABILITY_UNSUPPORTED_ORDER_AMEND'));
+  assert.ok(amend.blockCodes.includes('CRYPTO_SPOT_AMEND_HARD_DISABLED'));
+});
+
+test('spot live runtime status publishes every permanent deny as false', () => {
+  const status = spotLiveRuntimeStatus(spotLiveCapabilityEnvironment());
+  assert.equal(status.executionAuthority, 'SPOT_LIVE_LIMITED');
+  assert.equal(status.providerCapabilities.bitget.ORDER_CREATE, false);
+  assert.equal(status.providerCapabilities.upbit.ORDER_CREATE, true);
+  for (const capability of SPOT_LIVE_HARD_DENIED_CAPABILITIES) {
+    assert.equal(status.hardDeniedCapabilities[capability], false);
+  }
 });
 
 test('stock broker selection is per market, backward compatible, and enforced for automatic stock Paper plans', () => {
@@ -286,6 +428,7 @@ test('approval rechecks signal freshness and expires stale plans before order cr
 
 test('automatic live plans require separate global automatic-live authority', async () => {
   const previous = {
+    ...spotLiveEnvironmentSnapshot(),
     ORDER_EXECUTION_ENABLED: process.env.ORDER_EXECUTION_ENABLED,
     LIVE_TRADING_ACTIVATION_APPROVED: process.env.LIVE_TRADING_ACTIVATION_APPROVED,
     REAL_ORDER_ENABLED: process.env.REAL_ORDER_ENABLED,
@@ -316,7 +459,7 @@ test('automatic live plans require separate global automatic-live authority', as
     process.env.LIVE_TRADING = 'true';
     process.env.AUTO_TRADING = 'true';
     process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'false';
-    process.env.executionAuthority = 'AUTOMATIC';
+    enableSpotLiveTestEnvironment();
 
     const repository = new InMemoryTradingRepository();
     const service = new TradeAutomationService(repository);
@@ -405,6 +548,7 @@ test('persistent global emergency stop blocks new work and standing automatic re
 });
 test('live provider execution is blocked until the saved credential is explicitly verified', async () => {
   const previous = {
+    ...spotLiveEnvironmentSnapshot(),
     ORDER_EXECUTION_ENABLED: process.env.ORDER_EXECUTION_ENABLED,
     LIVE_TRADING_ACTIVATION_APPROVED: process.env.LIVE_TRADING_ACTIVATION_APPROVED,
     REAL_ORDER_ENABLED: process.env.REAL_ORDER_ENABLED,
@@ -423,7 +567,7 @@ test('live provider execution is blocked until the saved credential is explicitl
     process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
     process.env.LIVE_TRADING = 'true';
     process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
-    process.env.executionAuthority = 'MANUAL';
+    enableSpotLiveTestEnvironment();
 
     const repository = new InMemoryTradingRepository();
     const automation = new TradeAutomationService(repository);
@@ -469,6 +613,7 @@ test('live provider execution is blocked until the saved credential is explicitl
 
 test('provider submission rechecks canonical LIVE_TRADING and blocks before outbound request', async () => {
   const previous = {
+    ...spotLiveEnvironmentSnapshot(),
     ORDER_EXECUTION_ENABLED: process.env.ORDER_EXECUTION_ENABLED,
     LIVE_TRADING_ACTIVATION_APPROVED: process.env.LIVE_TRADING_ACTIVATION_APPROVED,
     REAL_ORDER_ENABLED: process.env.REAL_ORDER_ENABLED,
@@ -487,7 +632,7 @@ test('provider submission rechecks canonical LIVE_TRADING and blocks before outb
     process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
     process.env.LIVE_TRADING = 'false';
     process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
-    process.env.executionAuthority = 'MANUAL';
+    enableSpotLiveTestEnvironment();
 
     const repository = new InMemoryTradingRepository();
     const automation = new TradeAutomationService(repository);
@@ -521,7 +666,7 @@ test('provider submission rechecks canonical LIVE_TRADING and blocks before outb
 
     const executed = await new TradeExecutionService(repository).execute(USER_A, livePlan, order);
     assert.equal(executed.state, 'REJECTED');
-    assert.equal(executed.lastErrorCode, 'LIVE_EXECUTION_DISABLED');
+    assert.equal(executed.lastErrorCode, 'LIVE_TRADING_OFF');
     assert.equal(outbound, 0);
   } finally {
     globalThis.fetch = nativeFetch;
@@ -534,6 +679,7 @@ test('provider submission rechecks canonical LIVE_TRADING and blocks before outb
 
 test('provider submission rechecks canonical AUTO_TRADING and blocks automatic live before outbound request', async () => {
   const previous = {
+    ...spotLiveEnvironmentSnapshot(),
     ORDER_EXECUTION_ENABLED: process.env.ORDER_EXECUTION_ENABLED,
     LIVE_TRADING_ACTIVATION_APPROVED: process.env.LIVE_TRADING_ACTIVATION_APPROVED,
     REAL_ORDER_ENABLED: process.env.REAL_ORDER_ENABLED,
@@ -556,7 +702,7 @@ test('provider submission rechecks canonical AUTO_TRADING and blocks automatic l
     process.env.AUTO_TRADING = 'false';
     process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'true';
     process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
-    process.env.executionAuthority = 'AUTOMATIC';
+    enableSpotLiveTestEnvironment();
 
     const repository = new InMemoryTradingRepository();
     const automation = new TradeAutomationService(repository);
@@ -612,6 +758,7 @@ test('provider submission rechecks canonical AUTO_TRADING and blocks automatic l
 
 test('provider submission rechecks automatic live authority and blocks before outbound request', async () => {
   const previous = {
+    ...spotLiveEnvironmentSnapshot(),
     ORDER_EXECUTION_ENABLED: process.env.ORDER_EXECUTION_ENABLED,
     LIVE_TRADING_ACTIVATION_APPROVED: process.env.LIVE_TRADING_ACTIVATION_APPROVED,
     REAL_ORDER_ENABLED: process.env.REAL_ORDER_ENABLED,
@@ -634,7 +781,7 @@ test('provider submission rechecks automatic live authority and blocks before ou
     process.env.AUTO_TRADING = 'true';
     process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'false';
     process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
-    process.env.executionAuthority = 'AUTOMATIC';
+    enableSpotLiveTestEnvironment();
 
     const repository = new InMemoryTradingRepository();
     const automation = new TradeAutomationService(repository);
@@ -688,16 +835,36 @@ test('provider submission rechecks automatic live authority and blocks before ou
   }
 });
 
-test('live connection verification authenticates all four providers with zero order mutation', async () => {
-  const previousKey = process.env.TRADING_CREDENTIAL_MASTER_KEY;
+test('live connection verification authenticates the three spot providers with zero order mutation', async () => {
+  const previous = {
+    ...spotLiveEnvironmentSnapshot(),
+    TRADING_CREDENTIAL_MASTER_KEY: process.env.TRADING_CREDENTIAL_MASTER_KEY,
+    ORDER_EXECUTION_ENABLED: process.env.ORDER_EXECUTION_ENABLED,
+    LIVE_TRADING_ACTIVATION_APPROVED: process.env.LIVE_TRADING_ACTIVATION_APPROVED,
+    REAL_ORDER_ENABLED: process.env.REAL_ORDER_ENABLED,
+    PRIVATE_TRADING_API_ALLOWED: process.env.PRIVATE_TRADING_API_ALLOWED,
+    UPBIT_LIVE_ORDER_ENABLED: process.env.UPBIT_LIVE_ORDER_ENABLED,
+    KIWOOM_LIVE_ORDER_ENABLED: process.env.KIWOOM_LIVE_ORDER_ENABLED,
+    TOSS_LIVE_ORDER_ENABLED: process.env.TOSS_LIVE_ORDER_ENABLED,
+    LIVE_TRADING: process.env.LIVE_TRADING,
+    executionAuthority: process.env.executionAuthority,
+  };
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
+  process.env.ORDER_EXECUTION_ENABLED = 'true';
+  process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+  process.env.REAL_ORDER_ENABLED = 'true';
+  process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
+  process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+  process.env.KIWOOM_LIVE_ORDER_ENABLED = 'true';
+  process.env.TOSS_LIVE_ORDER_ENABLED = 'true';
+  process.env.LIVE_TRADING = 'true';
+  enableSpotLiveTestEnvironment();
   const nativeFetch = globalThis.fetch;
   const financialMutations: string[] = [];
   const seen: string[] = [];
   try {
     const providers = [
       { exchange: 'upbit', credentials: { accessKey: 'upbit-access', secretKey: 'upbit-secret' } },
-      { exchange: 'bitget', credentials: { apiKey: 'bitget-key', secretKey: 'bitget-secret', passphrase: 'bitget-pass' } },
       { exchange: 'kiwoom', credentials: { appKey: 'kiwoom-key', secretKey: 'kiwoom-secret' } },
       { exchange: 'toss', credentials: { clientId: 'toss-client', clientSecret: 'toss-secret', accountSeq: 'account-1' } },
     ] as const;
@@ -782,11 +949,13 @@ test('live connection verification authenticates all four providers with zero or
       assert.equal(connection?.lastErrorCode, null, row.exchange);
     }
     assert.deepEqual(financialMutations, []);
-    assert.ok(seen.length >= 7);
+    assert.ok(seen.length >= 6);
   } finally {
     globalThis.fetch = nativeFetch;
-    if (previousKey == null) delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
-    else process.env.TRADING_CREDENTIAL_MASTER_KEY = previousKey;
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });
 

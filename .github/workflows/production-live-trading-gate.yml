@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/production-live-trading-gate.yml
       - api-server/src/services/trade-automation.service.ts
+      - api-server/src/services/spot-live-limited-capability.service.ts
       - api-server/src/services/trade-execution.service.ts
       - ops/deploy-production.sh
   issue_comment:
@@ -49,13 +50,20 @@ jobs:
           grep -Fq "environment: production" "$workflow"
           grep -Fq "ORDER_EXECUTION_ENABLED: 'true'" "$workflow"
           grep -Fq "LIVE_TRADING_ACTIVATION_APPROVED: 'true'" "$workflow"
+          grep -Fq "SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: 'true'" "$workflow"
+          grep -Fq "SPOT_LIVE_CAPABILITY_ALLOWLIST" "$workflow"
+          grep -Fq "SPOT_LIVE_MARKET_ALLOWLIST" "$workflow"
           grep -Fq "REAL_ORDER_ENABLED: 'true'" "$workflow"
           grep -Fq "PRIVATE_TRADING_API_ALLOWED: 'true'" "$workflow"
           grep -Fq "LIVE_AUTOMATIC_TRADING_ENABLED: 'false'" "$workflow"
           grep -Fq "AUTO_TRADING: 'false'" "$workflow"
-          grep -Fq "executionAuthority: 'MANUAL'" "$workflow"
+          grep -Fq "executionAuthority: 'SPOT_LIVE_LIMITED'" "$workflow"
           grep -Fq "executionAuthority: 'NONE'" "$workflow"
           grep -Fq "REAL_ORDER_SUBMITTED=false" "$workflow"
+          grep -Fq "LIVE_TRADING_EXACT_COMPREHENSIVE_QA_REQUIRED" "$workflow"
+          grep -Fq "LIVE_TRADING_EXACT_ACCOUNT_QA_REQUIRED" "$workflow"
+          grep -Fq 'production-comprehensive-readonly-${run.id}' "$workflow"
+          grep -Fq 'production-account-readonly-live-${target}' "$workflow"
           grep -Fq "const disableTradingGates = () =>" "$workflow"
           grep -Fq "LIVE_TRADING_ACTIVATION_FAILED_ROLLED_BACK" "$workflow"
           grep -Fq "LIVE_TRADING_ACTIVATION_FAILED_AND_ROLLBACK_FAILED" "$workflow"
@@ -132,7 +140,7 @@ jobs:
           const body = String(process.env.COMMENT_BODY ?? '').trim();
           const match = /^\/activate-production-live-trading ([0-9a-f]{40}) ([a-z]+(?:,[a-z]+)*)$/u.exec(body);
           if (!match) throw new Error('Expected /activate-production-live-trading <40-char-current-main-sha> <provider[,provider...]>');
-          const allowed = new Set(['toss', 'kiwoom', 'upbit', 'bitget']);
+          const allowed = new Set(['toss', 'kiwoom', 'upbit']);
           const providers = match[2].split(',');
           if (providers.length === 0 || new Set(providers).size !== providers.length || providers.some((p) => !allowed.has(p))) {
             throw new Error('LIVE_TRADING_PROVIDER_SET_INVALID');
@@ -228,6 +236,82 @@ jobs:
             }
             core.setOutput('run_id', String(production.id));
 
+      - name: Require successful post-deploy exact-SHA Production read-only QA
+        id: production_qa
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          PRODUCTION_RUN_ID: ${{ steps.production.outputs.run_id }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const productionRunId = Number(process.env.PRODUCTION_RUN_ID);
+            const production = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: productionRunId,
+            })).data;
+            const productionCompletedAt = Date.parse(production.updated_at ?? '');
+            if (!Number.isFinite(productionCompletedAt)) {
+              core.setFailed('LIVE_TRADING_PRODUCTION_COMPLETION_TIME_INVALID');
+              return;
+            }
+
+            const requireQa = async ({ workflowId, workflowName, artifactName, errorCode }) => {
+              const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: workflowId,
+                branch: 'main',
+                event: 'workflow_dispatch',
+                status: 'completed',
+                per_page: 100,
+              });
+              const run = runs
+                .filter((candidate) => candidate.name === workflowName
+                  && candidate.path === `.github/workflows/${workflowId}`
+                  && candidate.head_sha === target
+                  && candidate.head_branch === 'main'
+                  && candidate.conclusion === 'success'
+                  && Date.parse(candidate.run_started_at ?? candidate.created_at) >= productionCompletedAt)
+                .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+              if (!run) {
+                core.setFailed(`${errorCode}:${target}`);
+                return null;
+              }
+              const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id,
+                per_page: 100,
+              });
+              const artifact = artifacts.find((candidate) => candidate.name === artifactName(run)
+                && candidate.expired !== true
+                && Number(candidate.size_in_bytes) > 0);
+              if (!artifact) {
+                core.setFailed(`${errorCode}_ARTIFACT_MISSING:${run.id}`);
+                return null;
+              }
+              return run;
+            };
+
+            const comprehensive = await requireQa({
+              workflowId: 'production-comprehensive-readonly-qa.yml',
+              workflowName: 'Production Comprehensive Read-Only QA',
+              artifactName: (run) => `production-comprehensive-readonly-${run.id}`,
+              errorCode: 'LIVE_TRADING_EXACT_COMPREHENSIVE_QA_REQUIRED',
+            });
+            if (!comprehensive) return;
+            const account = await requireQa({
+              workflowId: 'production-account-readonly-live-qa.yml',
+              workflowName: 'Production Account Read-only Live QA',
+              artifactName: () => `production-account-readonly-live-${target}`,
+              errorCode: 'LIVE_TRADING_EXACT_ACCOUNT_QA_REQUIRED',
+            });
+            if (!account) return;
+            core.setOutput('comprehensive_run_id', String(comprehensive.id));
+            core.setOutput('account_run_id', String(account.id));
+
       - name: Configure protected Production SSH
         shell: bash
         run: |
@@ -260,7 +344,9 @@ jobs:
 
           const target = String(process.env.TARGET_SHA ?? '');
           const providers = String(process.env.PROVIDERS ?? '').split(',').filter(Boolean);
-          const allowedProviders = ['toss', 'kiwoom', 'upbit', 'bitget'];
+          const allowedProviders = ['toss', 'kiwoom', 'upbit'];
+          const capabilityAllowlist = 'BALANCE_READ,POSITION_READ,OPEN_ORDER_READ,ORDER_CREATE,ORDER_CANCEL,ORDER_AMEND';
+          const marketAllowlist = 'KR_STOCK,US_STOCK,CRYPTO_SPOT';
           if (!/^[0-9a-f]{40}$/.test(target)
             || providers.length === 0
             || providers.some((provider) => !allowedProviders.includes(provider))) {
@@ -295,7 +381,10 @@ jobs:
               privateApi: bool('PRIVATE_TRADING_API_ALLOWED'),
               orderExecution: bool('ORDER_EXECUTION_ENABLED'),
               activationApproved: bool('LIVE_TRADING_ACTIVATION_APPROVED'),
+              spotLimitedApproved: bool('SPOT_LIVE_LIMITED_ACTIVATION_APPROVED'),
               automaticLive: bool('LIVE_AUTOMATIC_TRADING_ENABLED'),
+              capabilityAllowlist: String(env.SPOT_LIVE_CAPABILITY_ALLOWLIST ?? ''),
+              marketAllowlist: String(env.SPOT_LIVE_MARKET_ALLOWLIST ?? ''),
               provider: {
                 bitget: bool('BITGET_LIVE_ORDER_ENABLED'),
                 upbit: bool('UPBIT_LIVE_ORDER_ENABLED'),
@@ -326,7 +415,10 @@ jobs:
                 PRIVATE_TRADING_API_ALLOWED: 'false',
                 ORDER_EXECUTION_ENABLED: 'false',
                 LIVE_TRADING_ACTIVATION_APPROVED: 'false',
+                SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: 'false',
                 LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
+                SPOT_LIVE_CAPABILITY_ALLOWLIST: '',
+                SPOT_LIVE_MARKET_ALLOWLIST: '',
                 BITGET_LIVE_ORDER_ENABLED: 'false',
                 UPBIT_LIVE_ORDER_ENABLED: 'false',
                 KIWOOM_LIVE_ORDER_ENABLED: 'false',
@@ -345,14 +437,19 @@ jobs:
             && pre.privateApi
             && pre.orderExecution
             && pre.activationApproved
+            && pre.spotLimitedApproved
             && pre.automaticLive === false
-            && pre.authority === 'MANUAL'
+            && pre.authority === 'SPOT_LIVE_LIMITED'
+            && pre.capabilityAllowlist === capabilityAllowlist
+            && pre.marketAllowlist === marketAllowlist
+            && pre.provider.bitget === false
             && allowedProviders.every((provider) => pre.provider[provider] === desiredProviders[provider]);
 
           try {
             if (!alreadyDesired) {
               const anyAuthority = pre.live || pre.auto || pre.real || pre.privateApi
-                || pre.orderExecution || pre.activationApproved || pre.automaticLive
+                || pre.orderExecution || pre.activationApproved || pre.spotLimitedApproved || pre.automaticLive
+                || pre.capabilityAllowlist || pre.marketAllowlist
                 || Object.values(pre.provider).some(Boolean)
                 || pre.authority !== 'NONE';
               if (anyAuthority) throw new Error('LIVE_TRADING_ALREADY_ACTIVE_DIFFERENT_SCOPE');
@@ -367,12 +464,15 @@ jobs:
                 PRIVATE_TRADING_API_ALLOWED: 'true',
                 ORDER_EXECUTION_ENABLED: 'true',
                 LIVE_TRADING_ACTIVATION_APPROVED: 'true',
+                SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: 'true',
                 LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
-                BITGET_LIVE_ORDER_ENABLED: String(desiredProviders.bitget),
+                SPOT_LIVE_CAPABILITY_ALLOWLIST: capabilityAllowlist,
+                SPOT_LIVE_MARKET_ALLOWLIST: marketAllowlist,
+                BITGET_LIVE_ORDER_ENABLED: 'false',
                 UPBIT_LIVE_ORDER_ENABLED: String(desiredProviders.upbit),
                 KIWOOM_LIVE_ORDER_ENABLED: String(desiredProviders.kiwoom),
                 TOSS_LIVE_ORDER_ENABLED: String(desiredProviders.toss),
-                executionAuthority: 'MANUAL',
+                executionAuthority: 'SPOT_LIVE_LIMITED',
                 DEPLOY_SHA: target,
               };
               execFileSync('pm2', ['restart', 'stock-app', '--update-env'], {
@@ -412,8 +512,12 @@ jobs:
               || post.privateApi !== true
               || post.orderExecution !== true
               || post.activationApproved !== true
+              || post.spotLimitedApproved !== true
               || post.automaticLive !== false
-              || post.authority !== 'MANUAL'
+              || post.authority !== 'SPOT_LIVE_LIMITED'
+              || post.capabilityAllowlist !== capabilityAllowlist
+              || post.marketAllowlist !== marketAllowlist
+              || post.provider.bitget !== false
               || !allowedProviders.every((provider) => post.provider[provider] === desiredProviders[provider])) {
               throw new Error('LIVE_TRADING_POST_ACTIVATION_STATE_INVALID');
             }
@@ -431,23 +535,25 @@ jobs:
           }
 
           process.stdout.write(JSON.stringify({
-            status: 'ACTIVATED_MANUAL',
+            status: 'ACTIVATED_SPOT_LIVE_LIMITED_MANUAL',
             targetSha: target,
             providers,
             autoTrading: false,
             automaticLiveTrading: false,
-            executionAuthority: 'MANUAL',
+            executionAuthority: 'SPOT_LIVE_LIMITED',
             realOrderSubmitted: false,
           }));
           NODE
 
-      - name: Record sanitized manual live-trading activation receipt
+      - name: Record sanitized limited spot live-trading activation receipt
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
           PROVIDERS: ${{ steps.command.outputs.providers }}
           CI_RUN_ID: ${{ steps.gate.outputs.ci_run_id }}
           PRODUCTION_RUN_ID: ${{ steps.production.outputs.run_id }}
+          COMPREHENSIVE_QA_RUN_ID: ${{ steps.production_qa.outputs.comprehensive_run_id }}
+          ACCOUNT_QA_RUN_ID: ${{ steps.production_qa.outputs.account_run_id }}
         with:
           script: |
             await github.rest.issues.createComment({
@@ -456,14 +562,19 @@ jobs:
               issue_number: 23,
               body: [
                 '[PRODUCTION_LIVE_TRADING_GATE]',
-                'status: ACTIVATED_MANUAL',
+                'status: ACTIVATED_SPOT_LIVE_LIMITED_MANUAL',
                 `target_sha: ${process.env.TARGET_SHA}`,
                 `providers: ${process.env.PROVIDERS}`,
                 `required_ci_run: ${process.env.CI_RUN_ID}`,
                 `production_deploy_run: ${process.env.PRODUCTION_RUN_ID}`,
+                `production_comprehensive_qa_run: ${process.env.COMPREHENSIVE_QA_RUN_ID}`,
+                `production_account_qa_run: ${process.env.ACCOUNT_QA_RUN_ID}`,
                 'AUTO_TRADING=false',
                 'LIVE_AUTOMATIC_TRADING_ENABLED=false',
-                'executionAuthority=MANUAL',
+                'executionAuthority=SPOT_LIVE_LIMITED',
+                'SPOT_LIVE_CAPABILITY_ALLOWLIST=BALANCE_READ,POSITION_READ,OPEN_ORDER_READ,ORDER_CREATE,ORDER_CANCEL,ORDER_AMEND',
+                'SPOT_LIVE_MARKET_ALLOWLIST=KR_STOCK,US_STOCK,CRYPTO_SPOT',
+                'FUTURES=false',
                 'REAL_ORDER_SUBMITTED=false',
                 'transfer_withdrawal_authority=false',
                 `workflow_run: ${context.runId}`,
@@ -558,7 +669,10 @@ jobs:
               PRIVATE_TRADING_API_ALLOWED: 'false',
               ORDER_EXECUTION_ENABLED: 'false',
               LIVE_TRADING_ACTIVATION_APPROVED: 'false',
+              SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: 'false',
               LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
+              SPOT_LIVE_CAPABILITY_ALLOWLIST: '',
+              SPOT_LIVE_MARKET_ALLOWLIST: '',
               BITGET_LIVE_ORDER_ENABLED: 'false',
               UPBIT_LIVE_ORDER_ENABLED: 'false',
               KIWOOM_LIVE_ORDER_ENABLED: 'false',
@@ -585,12 +699,17 @@ jobs:
           for (const key of [
             'LIVE_TRADING', 'AUTO_TRADING', 'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED',
             'ORDER_EXECUTION_ENABLED', 'LIVE_TRADING_ACTIVATION_APPROVED', 'LIVE_AUTOMATIC_TRADING_ENABLED',
+            'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED',
             'BITGET_LIVE_ORDER_ENABLED', 'UPBIT_LIVE_ORDER_ENABLED', 'KIWOOM_LIVE_ORDER_ENABLED', 'TOSS_LIVE_ORDER_ENABLED',
           ]) {
             if (flag(key)) throw new Error(`LIVE_TRADING_DISABLE_FLAG_STILL_ENABLED:${key}`);
           }
           if (String(postEnv.executionAuthority ?? 'NONE').toUpperCase() !== 'NONE') {
             throw new Error('LIVE_TRADING_DISABLE_AUTHORITY_STILL_ENABLED');
+          }
+          if (String(postEnv.SPOT_LIVE_CAPABILITY_ALLOWLIST ?? '')
+            || String(postEnv.SPOT_LIVE_MARKET_ALLOWLIST ?? '')) {
+            throw new Error('LIVE_TRADING_DISABLE_ALLOWLIST_STILL_ENABLED');
           }
 
           let healthOk = false;
@@ -640,7 +759,10 @@ jobs:
                 'PRIVATE_TRADING_API_ALLOWED=false',
                 'ORDER_EXECUTION_ENABLED=false',
                 'LIVE_TRADING_ACTIVATION_APPROVED=false',
+                'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED=false',
                 'LIVE_AUTOMATIC_TRADING_ENABLED=false',
+                'SPOT_LIVE_CAPABILITY_ALLOWLIST=',
+                'SPOT_LIVE_MARKET_ALLOWLIST=',
                 'executionAuthority=NONE',
                 'REAL_ORDER_SUBMITTED=false',
                 `workflow_run: ${context.runId}`,
