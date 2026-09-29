@@ -1,0 +1,21 @@
+@media (min-width: 1200px) {
+  html[data-professional-focus="true"] [data-professional-focus-shell="true"] {
+    max-width: none !important;
+    --app-bottom-nav-reserve: 0px;
+  }
+
+  html[data-professional-focus="true"] [data-professional-focus-shell="true"] nav[aria-label="주요 메뉴"] {
+    display: none !important;
+  }
+
+  [data-testid="professional-focus-exit"] kbd {
+    font-size: 0.75rem !important;
+    line-height: 1rem !important;
+  }
+}
+
+@media (max-width: 1199.98px) {
+  [data-testid="professional-focus-exit"] {
+    display: none !important;
+  }
+}

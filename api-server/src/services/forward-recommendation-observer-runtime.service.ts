@@ -8,14 +8,20 @@ import {
   type ForwardObservationProfitCalibration,
   type ForwardRecommendationObservation,
 } from './forward-recommendation-observer.service';
+import {
+  buildForwardCalibrationGrossEdgeEvidence,
+  type ForwardGrossEdgeEvidence,
+} from './forward-calibration-gross-edge.service';
 import type { ScannerResponse, ScannerSignalCard } from './scanner-signal.types';
 import type { SignalOutcomeBar } from './signal-performance-learning.service';
 
 export const FORWARD_OBSERVER_RUNTIME_SCHEMA_VERSION = 1 as const;
-export const FORWARD_OBSERVER_TIMEFRAME = '60m' as const;
+export const FORWARD_OBSERVER_DEFAULT_TIMEFRAME = '60m' as const;
+export const FORWARD_OBSERVER_SPOT_TIMEFRAME = '4H' as const;
+export type ForwardObserverTimeframe = typeof FORWARD_OBSERVER_DEFAULT_TIMEFRAME | typeof FORWARD_OBSERVER_SPOT_TIMEFRAME;
 export const FORWARD_OBSERVER_DATA_MAX_AGE_MS = 90 * 60 * 1000;
 
-export type ForwardObserverLaneId = 'KR_SWING_60M' | 'US_SWING_60M' | 'SPOT_SWING_60M' | 'FUTURES_SWING_60M';
+export type ForwardObserverLaneId = 'KR_SWING_60M' | 'US_SWING_60M' | 'SPOT_SWING_4H' | 'FUTURES_SWING_60M';
 export type ForwardObserverMarket = 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES';
 
 export type ForwardObserverLane = Readonly<{
@@ -23,14 +29,14 @@ export type ForwardObserverLane = Readonly<{
   market: ForwardObserverMarket;
   scannerMarket: 'KR' | 'US' | 'spot' | 'futures';
   batchSize: number;
-  timeframe: typeof FORWARD_OBSERVER_TIMEFRAME;
+  timeframe: ForwardObserverTimeframe;
 }>;
 
 export const FORWARD_OBSERVER_LANES: readonly ForwardObserverLane[] = Object.freeze([
-  { id: 'KR_SWING_60M', market: 'KR_STOCK', scannerMarket: 'KR', batchSize: 20, timeframe: FORWARD_OBSERVER_TIMEFRAME },
-  { id: 'US_SWING_60M', market: 'US_STOCK', scannerMarket: 'US', batchSize: 20, timeframe: FORWARD_OBSERVER_TIMEFRAME },
-  { id: 'SPOT_SWING_60M', market: 'CRYPTO_SPOT', scannerMarket: 'spot', batchSize: 20, timeframe: FORWARD_OBSERVER_TIMEFRAME },
-  { id: 'FUTURES_SWING_60M', market: 'CRYPTO_FUTURES', scannerMarket: 'futures', batchSize: 20, timeframe: FORWARD_OBSERVER_TIMEFRAME },
+  { id: 'KR_SWING_60M', market: 'KR_STOCK', scannerMarket: 'KR', batchSize: 20, timeframe: FORWARD_OBSERVER_DEFAULT_TIMEFRAME },
+  { id: 'US_SWING_60M', market: 'US_STOCK', scannerMarket: 'US', batchSize: 20, timeframe: FORWARD_OBSERVER_DEFAULT_TIMEFRAME },
+  { id: 'SPOT_SWING_4H', market: 'CRYPTO_SPOT', scannerMarket: 'spot', batchSize: 20, timeframe: FORWARD_OBSERVER_SPOT_TIMEFRAME },
+  { id: 'FUTURES_SWING_60M', market: 'CRYPTO_FUTURES', scannerMarket: 'futures', batchSize: 20, timeframe: FORWARD_OBSERVER_DEFAULT_TIMEFRAME },
 ]);
 
 export type ForwardObserverRuntimeState = {
@@ -70,7 +76,7 @@ export type ForwardObserverRuntimeSummary = {
   coverage: {
     markets: ForwardObserverMarket[];
     strategies: ['SWING'];
-    timeframes: ['60m'];
+    timeframes: ['60m', '4H'];
     fullStrategyCoverage: false;
   };
   counts: {
@@ -83,6 +89,7 @@ export type ForwardObserverRuntimeSummary = {
   };
   lanes: ForwardObserverLaneSummary[];
   calibrations: ForwardObservationProfitCalibration[];
+  grossEdgeEvidence: ForwardGrossEdgeEvidence[];
   settlementErrors: Array<{ observationId: string; code: string }>;
   safety: ForwardObserverRuntimeState['safety'];
 };
@@ -309,7 +316,7 @@ export function createForwardObserverRuntimeState(researchCodeSha: string, now =
     researchCodeSha: sha,
     createdAt: at,
     updatedAt: at,
-    cursors: { KR_SWING_60M: 0, US_SWING_60M: 0, SPOT_SWING_60M: 0, FUTURES_SWING_60M: 0 },
+    cursors: { KR_SWING_60M: 0, US_SWING_60M: 0, SPOT_SWING_4H: 0, FUTURES_SWING_60M: 0 },
     observations: [],
     safety: { ...SAFETY },
   };
@@ -380,7 +387,9 @@ function scannerResponseBlockers(response: ScannerResponse): string[] {
   return [...new Set(blockers)];
 }
 
-function calibrationGroups(observations: ForwardRecommendationObservation[]): ForwardObservationProfitCalibration[] {
+function settledObservationGroups(
+  observations: readonly ForwardRecommendationObservation[],
+): ForwardRecommendationObservation[][] {
   const groups = new Map<string, ForwardRecommendationObservation[]>();
   for (const observation of observations) {
     if (observation.status !== 'SETTLED') continue;
@@ -389,7 +398,22 @@ function calibrationGroups(observations: ForwardRecommendationObservation[]): Fo
     rows.push(observation);
     groups.set(key, rows);
   }
-  return [...groups.values()].map((rows) => buildForwardObservationProfitCalibration(rows));
+  return [...groups.values()];
+}
+
+function calibrationGroups(observations: readonly ForwardRecommendationObservation[]): ForwardObservationProfitCalibration[] {
+  return settledObservationGroups(observations)
+    .map((rows) => buildForwardObservationProfitCalibration(rows));
+}
+
+export function buildForwardObserverRuntimeGrossEdgeEvidence(
+  observations: readonly ForwardRecommendationObservation[],
+  asOf: string,
+): ForwardGrossEdgeEvidence[] {
+  return settledObservationGroups(observations).map((rows) => {
+    const calibration = buildForwardObservationProfitCalibration(rows);
+    return buildForwardCalibrationGrossEdgeEvidence({ observations: rows, calibration, asOf });
+  });
 }
 
 function futureOnlyBars(observation: ForwardRecommendationObservation, bars: SignalOutcomeBar[]): SignalOutcomeBar[] {
@@ -561,7 +585,7 @@ export async function runForwardRecommendationObserverCycle(input: {
     coverage: {
       markets: FORWARD_OBSERVER_LANES.map((lane) => lane.market),
       strategies: ['SWING'],
-      timeframes: ['60m'],
+      timeframes: ['60m', '4H'],
       fullStrategyCoverage: false,
     },
     counts: {
@@ -574,6 +598,7 @@ export async function runForwardRecommendationObserverCycle(input: {
     },
     lanes,
     calibrations: calibrationGroups(observations),
+    grossEdgeEvidence: buildForwardObserverRuntimeGrossEdgeEvidence(observations, evaluatedAt),
     settlementErrors,
     safety: { ...SAFETY },
   };

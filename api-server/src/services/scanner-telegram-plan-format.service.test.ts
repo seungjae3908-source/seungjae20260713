@@ -23,21 +23,46 @@ function alert(overrides: Partial<ScannerAlertCandidate> = {}): ScannerAlertCand
   };
 }
 
-test('Telegram signal shows entry, split sell targets, and stop without implying execution', () => {
+test('Telegram cash signal uses unified buy wording with TP/SL percentages, reasons, and no-order action state', () => {
   const input = scannerTelegramInput(alert(), () => 'stock-room');
   assert.ok(input);
   const details = input?.details ?? '';
-  assert.match(details, /진입가\/진입구간 100~101/);
-  assert.match(details, /분할 매도가 TP1 105 · TP2 110 · TP3 115/);
-  assert.match(details, /손절가 95/);
-  assert.match(details, /실제 주문\/체결 아님/);
+  assert.match(details, /🚨 진입가능/);
+  assert.match(details, /신호: 매수/);
+  assert.match(details, /진입구간: 100~101/);
+  assert.match(details, /목표가: TP1 105 \(\+4\.48%\) · TP2 110 \(\+9\.45%\) · TP3 115 \(\+14\.43%\)/);
+  assert.match(details, /손절\/무효: 95 \(-5\.47%\)/);
+  assert.match(details, /주문상태: 주문 미제출 · 거래소 요청 없음/);
+  assert.match(details, /판단 이유: 거래량 증가/);
 });
 
-test('Telegram signal never invents missing sell targets or stop prices', () => {
+test('Telegram signal never invents missing targets or stop prices', () => {
   const input = scannerTelegramInput(alert({ targets: [], stopLoss: null, entryZone: null }), () => 'stock-room');
   assert.ok(input);
   const details = input?.details ?? '';
-  assert.match(details, /진입가\/진입구간 N\/A/);
-  assert.match(details, /분할 매도가 N\/A/);
-  assert.match(details, /손절가 N\/A/);
+  assert.match(details, /진입구간: N\/A/);
+  assert.match(details, /목표가: N\/A/);
+  assert.match(details, /손절\/무효: N\/A \(N\/A\)/);
+});
+
+
+test('Telegram futures SHORT expresses favorable target and adverse stop as signed percentages', () => {
+  const input = scannerTelegramInput(alert({
+    assetClass: 'coin_futures',
+    market: 'CRYPTO_FUTURES',
+    symbol: 'BTCUSDT',
+    direction: 'SHORT',
+    action: 'SHORT',
+    entryZone: { from: 99, to: 101 },
+    stopLoss: 105,
+    targets: [95, 90],
+    evidence: ['하락 구조 확인'],
+  }), () => 'crypto-room');
+  assert.ok(input);
+  const details = input?.details ?? '';
+  assert.match(details, /신호: SHORT/);
+  assert.match(details, /TP1 95 \(\+5\.00%\)/);
+  assert.match(details, /TP2 90 \(\+10\.00%\)/);
+  assert.match(details, /손절\/무효: 105 \(-5\.00%\)/);
+  assert.match(details, /판단 이유: 하락 구조 확인/);
 });

@@ -76,6 +76,115 @@ test("natural cron invocation persists one canonical 4h cycle and active status"
     assert.equal(snapshot.stateCycleCount, 1);
     assert.equal(snapshot.lastInvocation.status, "COMPLETED");
     assert.equal(snapshot.lastInvocation.privateRequestCount, 0);
+    assert.equal(snapshot.memberAutoTradingHandoff.status, "READY");
+    assert.equal(snapshot.memberAutoTradingHandoff.entryCount, 0);
+    assert.match(snapshot.memberAutoTradingHandoff.handoffDigest, /^[0-9a-f]{64}$/u);
+
+    const persistedHandoff = JSON.parse(await readFile(
+      join(root, "handoff", "member-auto-trading-latest.json"),
+      "utf8",
+    ));
+    assert.equal(persistedHandoff.status, "READY");
+    assert.equal(persistedHandoff.entryCount, 0);
+    assert.equal(persistedHandoff.safety.executionAuthority, "NONE");
+    assert.equal(persistedHandoff.safety.liveTrading, false);
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
+});
+
+test("blocked new cycle overwrites the prior READY member automation handoff", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "paper-forward-handoff-blocked-"));
+  const root = join(sandbox, "persistent-state");
+  let nowMs = 1_800_000_000_000;
+  try {
+    const first = await runPaperForwardScheduledInvocation({
+      rootDirectory: root,
+      researchCodeSha: RESEARCH_SHA,
+      triggerSource: "cron",
+      activationAtMs: nowMs - 10_000,
+      ownerId: "test-owner:handoff-ready",
+      clock: () => nowMs,
+      publicEvidenceProvider: readyProvider(nowMs),
+    });
+    assert.equal(first.memberAutoTradingHandoff.status, "READY");
+
+    nowMs += 4 * 60 * 60 * 1000;
+    const blocked = await runPaperForwardScheduledInvocation({
+      rootDirectory: root,
+      researchCodeSha: RESEARCH_SHA,
+      triggerSource: "cron",
+      activationAtMs: nowMs - 10_000,
+      ownerId: "test-owner:handoff-blocked",
+      clock: () => nowMs,
+      publicEvidenceProvider: readyProvider(nowMs),
+      runRuntime: async () => ({
+        status: "BLOCKED_DATA",
+        cycleId: "blocked-cycle-2",
+        mutationCount: 0,
+        evidenceEvaluatedAtMs: nowMs,
+        blockers: [{ market: "US_STOCK", reason: "PROVIDER_FAILED" }],
+      }),
+    });
+    assert.equal(blocked.status, "BLOCKED_DATA");
+    assert.equal(blocked.invocation.memberAutoTradingHandoff.status, "BLOCKED_DATA");
+
+    const latest = JSON.parse(await readFile(
+      join(root, "handoff", "member-auto-trading-latest.json"),
+      "utf8",
+    ));
+    assert.equal(latest.status, "BLOCKED_DATA");
+    assert.equal(latest.entryCount, 0);
+    assert.deepEqual(latest.blockers, ["HANDOFF_SOURCE_CYCLE_BLOCKED"]);
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
+});
+
+test("natural provider observations carry the exact immutable Paper identity", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "paper-forward-provider-identity-"));
+  const root = join(sandbox, "persistent-state");
+  const nowMs = 1_800_000_000_000;
+  const observedCycles = [];
+  const provider = Object.freeze({
+    async collectPublicEvidence({ market, cycle }) {
+      observedCycles.push(cycle);
+      return Object.freeze({
+        status: "READY",
+        publicOnly: true,
+        market,
+        provider: `test-public-${market.toLowerCase()}`,
+        provenance: Object.freeze({ provider: "test", market }),
+        observedAtMs: nowMs - 1_000,
+        dataAsOfMs: nowMs - 1_000,
+        maxAgeMs: 60_000,
+        candidates: Object.freeze([]),
+        exits: Object.freeze([]),
+        blocker: null,
+      });
+    },
+  });
+
+  try {
+    const result = await runPaperForwardScheduledInvocation({
+      rootDirectory: root,
+      researchCodeSha: RESEARCH_SHA,
+      triggerSource: "cron",
+      activationAtMs: nowMs - 10_000,
+      ownerId: "test-owner:provider-identity",
+      clock: () => nowMs,
+      publicEvidenceProvider: provider,
+    });
+
+    assert.equal(result.status, "COMPLETED");
+    assert.equal(observedCycles.length, MARKETS.length);
+    for (const cycle of observedCycles) {
+      assert.equal(cycle.identity.researchCodeSha, RESEARCH_SHA);
+      assert.equal(cycle.identity.strategyId, "paper-forward-public-evidence-v1");
+      assert.match(cycle.identity.parameterHash, /^[0-9a-f]{64}$/u);
+      assert.equal(Object.isFrozen(cycle.identity), true);
+      assert.equal(Object.isFrozen(cycle), true);
+    }
   } finally {
     await rm(sandbox, { recursive: true, force: true });
   }
@@ -206,6 +315,46 @@ test("state root cannot be relative or inside the live deploy tree", () => {
   assert.throws(
     () => __paperForwardScheduleTestables.assertRootDirectory("/opt/stock-app/state"),
     /outside the deploy source tree/u,
+  );
+});
+
+test("scheduled cycle binding forwards only the schedule-owned settlement producer", async () => {
+  const identity = __paperForwardScheduleTestables.buildIdentity(RESEARCH_SHA, true, false);
+  const scheduleProducer = async () => ({ status: "BLOCKED_DATA" });
+  const callerProducer = async () => ({ status: "PRESENT" });
+  let captured = null;
+  const boundRunCycle = __paperForwardScheduleTestables.bindRecurringPaperCycle({
+    identity,
+    settlementCostProducer: scheduleProducer,
+    runCycle: async (input) => {
+      captured = input;
+      return input;
+    },
+  });
+
+  const result = await boundRunCycle({
+    cycle: Object.freeze({ cycleId: "cycle-1", identity: Object.freeze({ researchCodeSha: "b".repeat(40) }) }),
+    settlementCostProducer: callerProducer,
+    marker: "preserved",
+  });
+
+  assert.equal(captured, result);
+  assert.equal(result.settlementCostProducer, scheduleProducer);
+  assert.notEqual(result.settlementCostProducer, callerProducer);
+  assert.equal(result.marker, "preserved");
+  assert.equal(result.cycle.cycleId, "cycle-1");
+  assert.equal(result.cycle.identity, identity);
+  assert.equal(Object.isFrozen(result.cycle), true);
+});
+
+test("scheduled cycle binding rejects a non-function settlement producer", () => {
+  const identity = __paperForwardScheduleTestables.buildIdentity(RESEARCH_SHA, true, false);
+  assert.throws(
+    () => __paperForwardScheduleTestables.bindRecurringPaperCycle({
+      identity,
+      settlementCostProducer: Object.freeze({ status: "PRESENT" }),
+    }),
+    (error) => error?.code === "PAPER_FORWARD_SETTLEMENT_COST_PRODUCER_INVALID",
   );
 });
 

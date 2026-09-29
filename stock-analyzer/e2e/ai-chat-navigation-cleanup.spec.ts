@@ -22,3 +22,16 @@ test('AI information navigation only exposes working Korean surfaces and preserv
   expect(source).not.toContain('Gemini Free → Groq Free');
   expect(source).not.toContain('canonical typed facts');
 });
+
+test('AI information uses readable hierarchy and progressive evidence disclosure', async () => {
+  const source = await readFile(new URL('../src/pages/ai-chat.tsx', import.meta.url), 'utf8');
+
+  expect(source).toContain('data-testid="ai-information-page"');
+  expect(source).toContain('max-w-4xl');
+  expect(source).toContain('<details className="mt-2 rounded-xl border border-card-border/70 bg-background/60">');
+  expect(source).toContain('민감정보 입력 금지 · 답변은 투자 조언이 아닙니다 · 데이터 시각은 서버 수집 기준입니다.');
+  expect(source).not.toContain('text-[10px]');
+  expect(source).not.toContain('text-[11px]');
+  expect(source).not.toContain('font-black');
+  expect(source).not.toContain('font-extrabold');
+});

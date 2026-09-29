@@ -49,6 +49,13 @@ test("Paper installer requires authenticated target-SHA seed before identity cut
   assert.ok(installer.includes("paper-state-publisher-runtime-binding-v1"));
   assert.ok(installer.includes("validateAuthoritativeNaturalPaperLedger"));
   assert.ok(installer.includes("createAuthoritativeNaturalPaperLedgerFromSnapshot"));
+  assert.ok(installer.includes("bridge-paper-forward-no-deploy-snapshot.mjs"));
+  assert.ok(installer.includes('ACCOUNT_SEED_SNAPSHOT_PATH="$SNAPSHOT_BRIDGE_STAGED_PATH"'));
+  assert.ok(installer.includes('mv -f -- "$SNAPSHOT_BRIDGE_ARCHIVE_PATH" "$PAPER_STATE_SNAPSHOT_PATH"'));
+  assert.ok(installer.includes('snapshotEconomicStatePreserved: true'));
+  assert.ok(installer.includes('naturalCycleCredit: 0'));
+  assert.ok(installer.includes('naturalSampleCredit: 0'));
+  assert.ok(installer.includes('naturalSettlementCredit: 0'));
   assert.ok(installer.includes("PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_SEED_REQUIRED"));
   assert.ok(installer.includes("PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH='$PAPER_STATE_SNAPSHOT_PATH'"));
   assert.ok(installer.includes("PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256='$PUBLISHER_ACCOUNT_ID_SHA256'"));
@@ -56,11 +63,17 @@ test("Paper installer requires authenticated target-SHA seed before identity cut
   assert.ok(installer.includes("PRIVATE_TRADING_API_ALLOWED='false'"));
   assert.ok(installer.includes("REAL_ORDER_ENABLED='false'"));
 
+  const snapshotBridgeIndex = installer.indexOf('"$NODE_BIN" "$SNAPSHOT_BRIDGE_SCRIPT"');
   const seedPreflightIndex = installer.indexOf("createAuthoritativeNaturalPaperLedgerFromSnapshot");
   const cutoverIndex = installer.indexOf('IDENTITY_CUTOVER="false"');
+  const snapshotCommitIndex = installer.indexOf('mv -- "$SNAPSHOT_BRIDGE_STAGED_PATH" "$PAPER_STATE_SNAPSHOT_PATH"');
   const cronMutationIndex = installer.indexOf('CRON_LINE="$CRON_EXPRESSION');
+  assert.ok(snapshotBridgeIndex >= 0);
+  assert.ok(seedPreflightIndex > snapshotBridgeIndex);
   assert.ok(seedPreflightIndex >= 0);
   assert.ok(cutoverIndex > seedPreflightIndex);
+  assert.ok(snapshotCommitIndex > cutoverIndex);
+  assert.ok(cronMutationIndex > snapshotCommitIndex);
   assert.ok(cronMutationIndex > cutoverIndex);
 });
 

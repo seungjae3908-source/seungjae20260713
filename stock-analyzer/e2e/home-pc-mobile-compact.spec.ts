@@ -119,25 +119,31 @@ test('Home source separates desktop and mobile and keeps primary labels Korean-f
   expect(home).toContain("{ value: 'portfolio', label: '자산' }");
   expect(home).toContain('testId="home-mobile-tabs"');
   expect(home).toContain('title="홈"');
-  expect(home).toContain('>검색기</button>');
+  expect(home).toContain('data-testid="home-professional-overview"');
+  expect(home).toContain('data-testid="home-desktop-workspace"');
+  expect(home).toContain('function HomeSectionHeader');
+  expect(home).toContain('actionLabel="검색기"');
+  expect(home).toContain('title="포트폴리오"');
   expect(home).toContain('점수 {selection.signalScore}');
-  expect(home).toContain('<h2 className="text-sm font-black">포트폴리오</h2>');
   expect(home).toContain('<span>자산·손익·위험</span>');
+  expect(home).toContain('value="자산 보기"');
+  expect(home).not.toContain('/api/accounts');
   expect(home).not.toContain('Scanner 열기');
   expect(home).not.toContain('Score {selection.signalScore}');
-  expect(home).not.toContain('<h2 className="text-sm font-black">Portfolio</h2>');
   expect(home).not.toContain('infoItems={[');
   expect(home).not.toContain('Home에서는 private 계좌');
 });
 
 for (const width of [360, 390, 412, 430]) {
-  test(`Home mobile ${width}px shows one compact section without horizontal overflow`, async ({ page }) => {
+  test(`Home mobile ${width}px shows professional summary plus one compact detail section without horizontal overflow`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 });
     await installHomeRuntime(page);
     await page.goto('/home');
 
     await expect(page.getByTestId('home-mobile-tabs')).toBeVisible();
     await expect(page.getByTestId('home-single-search')).toBeVisible();
+    await expect(page.getByTestId('home-professional-overview')).toBeVisible();
+    await expect(page.getByRole('heading', { name: '오늘의 투자 상태', exact: true })).toBeVisible();
     await expect(page.getByTestId('home-market-summary')).toBeVisible();
     await expect(page.getByTestId('home-signal-summary')).toHaveCount(0);
     await expect(page.getByTestId('home-watchlist-summary')).toHaveCount(0);
@@ -153,7 +159,7 @@ for (const width of [360, 390, 412, 430]) {
   });
 }
 
-test('Home mobile tabs replace the visible section instead of stacking all cards', async ({ page }) => {
+test('Home mobile tabs replace the visible detail section instead of stacking all cards', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await installHomeRuntime(page);
   await page.goto('/home');
@@ -172,16 +178,18 @@ test('Home mobile tabs replace the visible section instead of stacking all cards
   await expect(page.getByTestId('home-watchlist-summary')).toHaveCount(0);
 });
 
-test('Home desktop keeps the full dashboard and does not show mobile tabs', async ({ page }) => {
+test('Home desktop uses the professional dashboard workspace and does not show mobile tabs', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await installHomeRuntime(page);
   await page.goto('/home');
 
   await expect(page.getByTestId('home-mobile-tabs')).toHaveCount(0);
+  await expect(page.getByTestId('home-professional-overview')).toBeVisible();
+  await expect(page.getByTestId('home-desktop-workspace')).toBeVisible();
   await expect(page.getByTestId('home-market-summary')).toBeVisible();
   await expect(page.getByTestId('home-signal-summary')).toBeVisible();
   await expect(page.getByTestId('home-watchlist-summary')).toBeVisible();
   await expect(page.getByTestId('home-portfolio-summary')).toBeVisible();
-  await expect(page.getByText('포트폴리오')).toBeVisible();
-  await expect(page.getByText('검색기')).toBeVisible();
+  await expect(page.getByText('포트폴리오', { exact: true })).toBeVisible();
+  await expect(page.getByText('검색기', { exact: true })).toBeVisible();
 });

@@ -1,0 +1,88 @@
+name: Public Forward Liquidity Prospective Policy V3
+
+on:
+  pull_request:
+    paths:
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-prospective-policy-v3.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-prospective-policy-v3.test.mjs'
+      - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-prospective-policy-v3.mjs'
+      - '.github/workflows/public-forward-liquidity-prospective-policy-v3.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify-and-freeze-v3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact PR head without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Verify exact head and focused V3 contract
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_HEAD="$(git rev-parse HEAD)"
+          test "$ACTUAL_HEAD" = "$EXPECTED_HEAD"
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-prospective-policy-v3.mjs
+          node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-prospective-policy-v3.mjs
+          node --check market-intelligence-sidecar/tests/public-forward-liquidity-prospective-policy-v3.test.mjs
+          node --test market-intelligence-sidecar/tests/public-forward-liquidity-prospective-policy-v3.test.mjs
+
+      - name: Freeze immutable V3 future cohort policy
+        shell: bash
+        env:
+          EXACT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SYMBOL: BTCUSDT
+          OUTPUT_DIR: public-forward-liquidity-prospective-policy-v3
+        run: |
+          set -euo pipefail
+          COMMIT_SECONDS="$(git show -s --format=%ct HEAD)"
+          export POLICY_FROZEN_AT_MS="$((COMMIT_SECONDS * 1000))"
+          node market-intelligence-sidecar/scripts/run-public-forward-liquidity-prospective-policy-v3.mjs | tee prospective-policy-v3-summary.json
+
+      - name: Reverify V3 immutable artifact and unchanged carry-forward values
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          import { verifyProspectiveLiquidityPolicyV3Artifact } from './market-intelligence-sidecar/src/public-forward-liquidity-prospective-policy-v3.mjs';
+          const artifact = JSON.parse(await readFile('public-forward-liquidity-prospective-policy-v3/prospective-policy-artifact-v3.json', 'utf8'));
+          const verification = verifyProspectiveLiquidityPolicyV3Artifact(artifact);
+          if (!verification.valid) throw new Error(`V3_ARTIFACT_INVALID:${verification.blockers.join(',')}`);
+          if (artifact.policy.overallMinimums.train !== 18
+            || artifact.policy.overallMinimums.validation !== 6
+            || artifact.policy.overallMinimums.oos !== 6) throw new Error('V3_MINIMUMS_CHANGED');
+          if (artifact.captureSelectionPolicy.slotIntervalMs !== 1800000) throw new Error('V3_CADENCE_CHANGED');
+          if (artifact.outcomeMethodology.outcomeHorizonMs !== 60000) throw new Error('V3_HORIZON_CHANGED');
+          if (artifact.readiness.CAPTURE_SCHEDULE_ACTIVATED !== false
+            || artifact.readiness.NEW_PROSPECTIVE_SAMPLE_N !== 0
+            || artifact.readiness.FULL_COST_READY !== false
+            || artifact.readiness.EVIDENCE_COMPLETE !== 0) throw new Error('V3_TRUTH_ESCALATION');
+          if (artifact.safety.executionAuthority !== 'NONE'
+            || artifact.safety.privateApiUsed !== false
+            || artifact.safety.liveTrading !== false
+            || artifact.safety.orderSubmitted !== false) throw new Error('V3_SAFETY_ESCALATION');
+          NODE
+
+      - name: Upload immutable prospective policy V3
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-forward-liquidity-prospective-policy-v3-${{ github.event.pull_request.head.sha }}
+          path: |
+            public-forward-liquidity-prospective-policy-v3
+            prospective-policy-v3-summary.json
+          if-no-files-found: error
+          retention-days: 90

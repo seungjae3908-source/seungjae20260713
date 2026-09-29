@@ -205,11 +205,11 @@ test('Portfolio Intelligence와 AI Mentor는 partial provenance를 숨기지 않
   await page.getByRole('button', { name: '내 포트폴리오 분석 열기' }).click();
 
   await expect(page).toHaveURL(/\/portfolio\?focus=ai$/);
-  await expect(page.getByTestId('portfolio-data-quality')).toContainText('공급자 포함 2/5');
+  await expect(page.getByTestId('portfolio-data-quality')).toContainText('공급자 2/5');
   await expect(page.getByTestId('portfolio-known-total')).toContainText('4,820,000원');
-  await expect(page.getByText('총 자산은 현금/계좌 등 누락 소스 때문에 확정하지 않습니다.')).toBeVisible();
-  await expect(page.getByTestId('portfolio-partial-sources')).toContainText('현금 계좌 read-only 원본 미연결');
-  await expect(page.getByTestId('portfolio-partial-sources')).toContainText('Private provider 안전 경계로 계좌 데이터 미수집');
+  await expect(page.getByText('누락된 계좌·현금 근거가 있어 총 자산은 확정하지 않습니다. 확인된 자산 합계는 실제로 수집된 항목만 더한 값입니다.')).toBeVisible();
+  await expect(page.getByTestId('portfolio-partial-sources')).toContainText('현금 계좌 조회 원본 미연결');
+  await expect(page.getByTestId('portfolio-partial-sources')).toContainText('안전 경계로 비공개 공급자 데이터 미수집');
   await expect(page.getByTestId('portfolio-fx-provenance')).toContainText('USD/KRW');
   await expect(page.getByTestId('portfolio-fx-provenance')).toContainText('fixture-public-fx');
   await expect(page.getByTestId('portfolio-fx-provenance')).toContainText('근거 시각');

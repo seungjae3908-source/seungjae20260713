@@ -1,9 +1,9 @@
-import './forward-recommendation-observer.service.test';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ScannerResponse, ScannerSignalCard } from './scanner-signal.types';
 import {
   FORWARD_OBSERVER_LANES,
+  buildForwardObserverRuntimeGrossEdgeEvidence,
   canonicalForwardStrategyIdentityFromCard,
   createForwardObserverRuntimeState,
   latestCardEvidenceTimestamp,
@@ -180,6 +180,25 @@ function response(lane: ForwardObserverLane, cards: ScannerSignalCard[]): Scanne
   };
 }
 
+test('observer lane topology preserves 60m stocks/futures and canonical Spot 4H', () => {
+  assert.deepEqual(
+    FORWARD_OBSERVER_LANES.map((lane) => [lane.id, lane.market, lane.timeframe]),
+    [
+      ['KR_SWING_60M', 'KR_STOCK', '60m'],
+      ['US_SWING_60M', 'US_STOCK', '60m'],
+      ['SPOT_SWING_4H', 'CRYPTO_SPOT', '4H'],
+      ['FUTURES_SWING_60M', 'CRYPTO_FUTURES', '60m'],
+    ],
+  );
+  const state = createForwardObserverRuntimeState(SHA, new Date(T0));
+  assert.deepEqual(state.cursors, {
+    KR_SWING_60M: 0,
+    US_SWING_60M: 0,
+    SPOT_SWING_4H: 0,
+    FUTURES_SWING_60M: 0,
+  });
+});
+
 test('runtime state is immutable-SHA scoped and fail-closed on cursor or safety mixing', () => {
   const state = createForwardObserverRuntimeState(SHA, new Date(T0));
   validateForwardObserverRuntimeState(state, SHA);
@@ -294,6 +313,7 @@ test('cycle creates one idempotent public observation, ignores pre-signal bars a
   });
   assert.equal(first.summary.counts.createdThisCycle, 1);
   assert.equal(first.summary.counts.pending, 1);
+  assert.deepEqual(first.summary.grossEdgeEvidence, []);
   assert.equal(first.state.observations[0]?.identity.strategyId, 'kr-stock-swing-v1');
   assert.equal(first.state.observations[0]?.identity.parameterHash, 'kr-swing-params-v1');
   assert.equal(first.state.observations[0]?.snapshot.strategyProfileVersion, 'signal-profile-v1');
@@ -301,7 +321,7 @@ test('cycle creates one idempotent public observation, ignores pre-signal bars a
   assert.deepEqual(first.state.cursors, {
     KR_SWING_60M: 20,
     US_SWING_60M: 20,
-    SPOT_SWING_60M: 20,
+    SPOT_SWING_4H: 20,
     FUTURES_SWING_60M: 20,
   });
 
@@ -322,8 +342,58 @@ test('cycle creates one idempotent public observation, ignores pre-signal bars a
   assert.equal(second.summary.counts.settledThisCycle, 1);
   assert.equal(second.summary.counts.replayedThisCycle, 1);
   assert.equal(second.state.observations[0]?.outcome?.outcome, 'WIN');
+  assert.equal(second.summary.calibrations.length, 1);
+  assert.equal(second.summary.grossEdgeEvidence.length, 1);
+  assert.equal(second.summary.grossEdgeEvidence[0]?.status, 'NOT_AVAILABLE');
+  assert.equal(second.summary.grossEdgeEvidence[0]?.sampleSize, 1);
+  assert.equal(second.summary.grossEdgeEvidence[0]?.expectedGrossEdgeBps, null);
+  assert.equal(second.summary.grossEdgeEvidence[0]?.netAlphaReady, false);
+  assert.equal(second.summary.grossEdgeEvidence[0]?.profitabilityClaimAllowed, false);
+  assert.equal(second.summary.grossEdgeEvidence[0]?.executionAuthority, 'NONE');
   assert.equal(second.summary.safety.executionAuthority, 'NONE');
   assert.equal(second.summary.safety.profitabilityClaimAllowed, false);
+});
+
+test('runtime gross-edge seam accepts only actual settled rows and never promotes aggregate-only or pending evidence', async () => {
+  const initial = createForwardObserverRuntimeState(SHA, new Date(T0));
+  const scanLane = async (lane: ForwardObserverLane) => response(lane, lane.id === 'KR_SWING_60M' ? [card()] : []);
+  const pending = await runForwardRecommendationObserverCycle({
+    state: initial,
+    researchCodeSha: SHA,
+    dependencies: {
+      scanLane,
+      loadFutureBars: async () => [],
+      now: () => new Date(T0 + 60_000),
+    },
+  });
+
+  assert.equal(pending.summary.calibrations.length, 0);
+  assert.deepEqual(buildForwardObserverRuntimeGrossEdgeEvidence(pending.state.observations, iso(60_000)), []);
+
+  const settled = await runForwardRecommendationObserverCycle({
+    state: pending.state,
+    researchCodeSha: SHA,
+    dependencies: {
+      scanLane,
+      loadFutureBars: async () => [
+        { timestamp: iso(60 * 60 * 1000), high: 106, low: 99, close: 105 },
+      ],
+      now: () => new Date(T0 + 60 * 60 * 1000),
+    },
+  });
+
+  const evidence = settled.summary.grossEdgeEvidence[0];
+  assert.ok(evidence);
+  assert.deepEqual(evidence.identity, settled.summary.calibrations[0]?.identity);
+  assert.equal(evidence.sampleSize, settled.summary.calibrations[0]?.calibration.sampleSize);
+  assert.equal(evidence.status, 'NOT_AVAILABLE');
+  assert.ok(evidence.reasons.includes('FORWARD_CALIBRATION_SAMPLE_SIZE_INSUFFICIENT'));
+  assert.equal(evidence.netAlphaInput.evidenceReady, false);
+  assert.equal(evidence.costAdjusted, false);
+  assert.equal(evidence.netAlphaReady, false);
+  assert.equal(evidence.profitabilityClaimAllowed, false);
+  assert.equal(evidence.executionAuthority, 'NONE');
+  assert.equal('orderSubmitted' in evidence, false);
 });
 
 test('missing canonical paper identity is blocked without consuming the scanner cursor or fabricating a lane hash', async () => {
@@ -392,4 +462,21 @@ test('missing matched evidence timestamps are blocked instead of fabricated from
   const kr = result.summary.lanes.find((lane) => lane.laneId === 'KR_SWING_60M');
   assert.equal(kr?.blocked, 1);
   assert.equal(kr?.blockers.DATA_TIMESTAMP_FROM_MATCHED_EVIDENCE_REQUIRED, 1);
+});
+
+
+test('summary reports exact mixed Forward timeframes', async () => {
+  const state = createForwardObserverRuntimeState(SHA, new Date(T0));
+  const result = await runForwardRecommendationObserverCycle({
+    state,
+    researchCodeSha: SHA,
+    dependencies: {
+      scanLane: async (lane) => response(lane, []),
+      loadFutureBars: async () => [],
+      now: () => new Date(T0 + 60_000),
+    },
+  });
+  assert.deepEqual(result.summary.coverage.strategies, ['SWING']);
+  assert.deepEqual(result.summary.coverage.timeframes, ['60m', '4H']);
+  assert.equal(result.summary.coverage.fullStrategyCoverage, false);
 });

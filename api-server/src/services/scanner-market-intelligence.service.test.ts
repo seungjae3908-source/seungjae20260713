@@ -1,3 +1,5 @@
+import './scanner-news-disclosure-intelligence.service.test';
+import './scanner-crypto-public-event-intelligence.service.test';
 import './decision-gate-attribution.service.test';
 import test from 'node:test';
 import assert from 'node:assert/strict';

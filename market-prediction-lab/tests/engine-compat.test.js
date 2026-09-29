@@ -11,12 +11,19 @@ for (const market of ["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"]) 
       timeframe: "15m",
       horizon: 5,
       candles: generateCandles({ count: 200 }),
-      marketFeatures: market.includes("STOCK") ? { foreignNetRatio: 0.1, institutionNetRatio: 0.05 } : {},
-      derivativesFeatures: market === "CRYPTO_FUTURES" ? { openInterestChange: 0.02, fundingRate: 0.0001 } : {},
+      marketFeatures: {
+        sentimentScore: 0,
+        benchmarkReturn: 0,
+        ...(market.includes("STOCK") ? { foreignNetRatio: 0.1, institutionNetRatio: 0.05 } : {}),
+      },
+      derivativesFeatures: market === "CRYPTO_FUTURES"
+        ? { openInterestChange: 0.02, fundingRate: 0.0001, longShortRatio: 1 }
+        : {},
       collectedAt: 1_700_000_000_000,
       source: "compat-test",
     };
     const result = analyzeMarket(input);
+    assert.equal(result.inferenceEvaluation.status, "EVALUABLE");
     const total = result.probabilities.bullish + result.probabilities.neutral + result.probabilities.bearish;
     assert.ok(Math.abs(total - 1) < 0.00001);
     assert.equal(result.forecastCandles.length, 5);

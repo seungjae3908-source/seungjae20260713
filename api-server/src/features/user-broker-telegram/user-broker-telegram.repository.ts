@@ -1,10 +1,13 @@
+import type { MemberAccessProfile } from '../../../../packages/member-access/src/index.js';
 import { getSupabase, hasSupabaseServerKey } from '../../lib/supabase';
+import type { TelegramPolicyDeliveryHistory } from '../../services/telegram-alert-policy.service';
 import {
   DEFAULT_NOTIFICATION_PREFERENCES,
   NOTIFICATION_PREFERENCE_KEYS,
   type NotificationDelivery,
   type NotificationDeliveryState,
   type NotificationPreferences,
+  type PersonalTelegramOutboxPayload,
   type TelegramLinkTokenRecord,
   type UserExecutionEvent,
   type UserTelegramConnection,
@@ -13,6 +16,7 @@ import {
 export interface UserBrokerTelegramRepository {
   createLinkToken(record: TelegramLinkTokenRecord): Promise<void>;
   consumeLinkToken(tokenHash: string, consumedAt: string): Promise<string | null>;
+  getPersonalTelegramMemberProfile(userId: string): Promise<MemberAccessProfile | null>;
   getTelegramConnection(userId: string): Promise<UserTelegramConnection | null>;
   bindTelegramConnection(connection: UserTelegramConnection): Promise<void>;
   revokeTelegramConnection(userId: string, revokedAt: string): Promise<void>;
@@ -23,6 +27,7 @@ export interface UserBrokerTelegramRepository {
   enqueueDelivery(delivery: NotificationDelivery): Promise<boolean>;
   getDelivery(userId: string, deliveryId: string): Promise<NotificationDelivery | null>;
   listDeliveries(userId: string): Promise<NotificationDelivery[]>;
+  listPersonalAlertHistory(userId: string, since: string, limit?: number): Promise<TelegramPolicyDeliveryHistory[]>;
   claimDelivery(userId: string, deliveryId: string, updatedAt: string): Promise<NotificationDelivery | null>;
   finishDelivery(
     userId: string,
@@ -74,13 +79,34 @@ export function enabledTypesWithTelegramPreferences(
   ];
 }
 
+function personalHistoryFromDelivery(delivery: NotificationDelivery): TelegramPolicyDeliveryHistory | null {
+  if ((delivery.kind ?? 'EXECUTION_EVENT') !== 'PERSONAL_ALERT' || delivery.state !== 'SENT') return null;
+  const event = delivery.payload?.event;
+  if (!event || event.userId !== delivery.userId || !event.eventId || !event.signalType || !event.priority) return null;
+  return {
+    userId: event.userId,
+    eventId: event.eventId,
+    market: event.market,
+    signalType: event.signalType,
+    priority: event.priority,
+    symbol: event.symbol,
+    deliveredAt: delivery.updatedAt,
+  };
+}
+
 export class InMemoryUserBrokerTelegramRepository implements UserBrokerTelegramRepository {
   private linkTokens = new Map<string, TelegramLinkTokenRecord>();
+  private memberProfiles = new Map<string, MemberAccessProfile>();
   private connections = new Map<string, UserTelegramConnection>();
   private preferences = new Map<string, NotificationPreferences>();
   private events = new Map<string, UserExecutionEvent>();
   private deliveries = new Map<string, NotificationDelivery>();
   private deliveryDedupe = new Map<string, string>();
+
+  setMemberProfile(userId: string, profile: MemberAccessProfile | null) {
+    if (!profile) this.memberProfiles.delete(userId);
+    else this.memberProfiles.set(userId, copy(profile));
+  }
 
   async createLinkToken(record: TelegramLinkTokenRecord) {
     this.linkTokens.set(record.tokenHash, copy(record));
@@ -91,6 +117,11 @@ export class InMemoryUserBrokerTelegramRepository implements UserBrokerTelegramR
     if (!record || record.consumedAt || record.expiresAt <= consumedAt) return null;
     record.consumedAt = consumedAt;
     return record.userId;
+  }
+
+  async getPersonalTelegramMemberProfile(userId: string) {
+    const profile = this.memberProfiles.get(userId);
+    return profile ? copy(profile) : null;
   }
 
   async getTelegramConnection(userId: string) {
@@ -140,7 +171,11 @@ export class InMemoryUserBrokerTelegramRepository implements UserBrokerTelegramR
     const dedupe = `${delivery.userId}:${delivery.dedupeKey}`;
     if (this.deliveryDedupe.has(dedupe)) return false;
     this.deliveryDedupe.set(dedupe, delivery.id);
-    this.deliveries.set(`${delivery.userId}:${delivery.id}`, copy(delivery));
+    this.deliveries.set(`${delivery.userId}:${delivery.id}`, copy({
+      ...delivery,
+      kind: delivery.kind ?? 'EXECUTION_EVENT',
+      payload: delivery.payload ?? null,
+    }));
     return true;
   }
 
@@ -153,6 +188,19 @@ export class InMemoryUserBrokerTelegramRepository implements UserBrokerTelegramR
     return [...this.deliveries.values()]
       .filter((item) => item.userId === userId)
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .map(copy);
+  }
+
+  async listPersonalAlertHistory(userId: string, since: string, limit = 256) {
+    const bounded = Math.min(512, Math.max(1, Number.isInteger(limit) ? limit : 256));
+    return [...this.deliveries.values()]
+      .filter((item) => item.userId === userId && item.updatedAt >= since)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .flatMap((item) => {
+        const history = personalHistoryFromDelivery(item);
+        return history ? [history] : [];
+      })
+      .slice(0, bounded)
       .map(copy);
   }
 
@@ -262,10 +310,14 @@ function toConnection(row: Record<string, unknown>): UserTelegramConnection {
 }
 
 function toDelivery(row: Record<string, unknown>): NotificationDelivery {
+  const kind = row.delivery_kind === 'PERSONAL_ALERT' ? 'PERSONAL_ALERT' : 'EXECUTION_EVENT';
+  const payload = kind === 'PERSONAL_ALERT' && row.payload && typeof row.payload === 'object'
+    ? row.payload as PersonalTelegramOutboxPayload
+    : null;
   return {
     id: String(row.id),
     userId: String(row.user_id),
-    eventId: String(row.event_id),
+    eventId: row.event_id ? String(row.event_id) : null,
     dedupeKey: String(row.dedupe_key),
     state: String(row.state) as NotificationDeliveryState,
     attempts: Number(row.attempts ?? 0),
@@ -273,6 +325,17 @@ function toDelivery(row: Record<string, unknown>): NotificationDelivery {
     lastErrorCode: row.last_error_code ? String(row.last_error_code) : null,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+    kind,
+    payload,
+  };
+}
+
+function memberProfile(row: Record<string, unknown>): MemberAccessProfile {
+  return {
+    status: typeof row.status === 'string' ? row.status : null,
+    membership_level: typeof row.membership_level === 'string' ? row.membership_level : null,
+    is_active: typeof row.is_active === 'boolean' ? row.is_active : null,
+    role: typeof row.role === 'string' ? row.role : null,
   };
 }
 
@@ -299,6 +362,15 @@ export function createSupabaseUserBrokerTelegramRepository(): UserBrokerTelegram
         .maybeSingle();
       if (error) throw databaseError();
       return data?.user_id ? String(data.user_id) : null;
+    },
+
+    async getPersonalTelegramMemberProfile(userId) {
+      const { data, error } = await secureClient().from('profiles')
+        .select('status,membership_level,is_active,role')
+        .eq('id', userId)
+        .maybeSingle();
+      if (error) throw databaseError();
+      return data ? memberProfile(data as Record<string, unknown>) : null;
     },
 
     async getTelegramConnection(userId) {
@@ -373,6 +445,8 @@ export function createSupabaseUserBrokerTelegramRepository(): UserBrokerTelegram
         user_id: delivery.userId,
         id: delivery.id,
         event_id: delivery.eventId,
+        delivery_kind: delivery.kind ?? 'EXECUTION_EVENT',
+        payload: delivery.payload ?? null,
         dedupe_key: delivery.dedupeKey,
         state: delivery.state,
         attempts: delivery.attempts,
@@ -398,6 +472,23 @@ export function createSupabaseUserBrokerTelegramRepository(): UserBrokerTelegram
         .eq('user_id', userId).order('created_at', { ascending: false }).limit(100);
       if (error) throw databaseError();
       return (data ?? []).map((row) => toDelivery(row as Record<string, unknown>));
+    },
+
+    async listPersonalAlertHistory(userId, since, limit = 256) {
+      const bounded = Math.min(512, Math.max(1, Number.isInteger(limit) ? limit : 256));
+      const { data, error } = await secureClient().from('notification_deliveries')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('delivery_kind', 'PERSONAL_ALERT')
+        .eq('state', 'SENT')
+        .gte('updated_at', since)
+        .order('updated_at', { ascending: false })
+        .limit(bounded);
+      if (error) throw databaseError();
+      return (data ?? []).flatMap((row) => {
+        const history = personalHistoryFromDelivery(toDelivery(row as Record<string, unknown>));
+        return history ? [history] : [];
+      });
     },
 
     async claimDelivery(userId, deliveryId, updatedAt) {

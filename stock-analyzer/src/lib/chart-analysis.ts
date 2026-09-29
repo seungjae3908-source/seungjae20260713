@@ -84,6 +84,7 @@ type PatternDescriptor = {
 };
 
 const DEFAULT_ENGINE_VERSION = 'chart-analysis-v2';
+const ACTIONABLE_DATA_STATUSES = new Set(['ok', 'delayed']);
 
 function finite(value: number, fallback = 0): number {
   return Number.isFinite(value) ? value : fallback;
@@ -108,6 +109,39 @@ function stableHash(value: string): string {
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(36);
+}
+
+export function isChartAnalysisDataStatusActionable(dataStatus: unknown): boolean {
+  if (dataStatus == null) return true;
+  return ACTIONABLE_DATA_STATUSES.has(normalizeToken(dataStatus));
+}
+
+function hasAnalysisIdentityProvenance(input: ChartAnalysisInput): boolean {
+  return [input.symbol, input.market, input.timeframe, input.source].every(
+    (value) => typeof value === 'string' && value.trim().length > 0,
+  );
+}
+
+function hasValidSupportResistanceRange(input: ChartAnalysisInput): boolean {
+  return (
+    Number.isFinite(input.support) &&
+    input.support > 0 &&
+    Number.isFinite(input.resistance) &&
+    input.resistance > input.support
+  );
+}
+
+function isChartAnalysisCoreDataActionable(input: ChartAnalysisInput): boolean {
+  return (
+    hasAnalysisIdentityProvenance(input) &&
+    Number.isFinite(input.latestTime) &&
+    input.latestTime > 0 &&
+    Number.isFinite(input.currentPrice) &&
+    input.currentPrice > 0 &&
+    Number.isFinite(input.previousClose) &&
+    input.previousClose > 0 &&
+    hasValidSupportResistanceRange(input)
+  );
 }
 
 function patternDescriptor(patterns: string[], trend: string): PatternDescriptor {
@@ -164,6 +198,8 @@ export function createStableAnalysisId(input: {
 }
 
 function deriveStatus(input: ChartAnalysisInput, descriptor: PatternDescriptor): ChartAnalysisStatus {
+  if (!isChartAnalysisDataStatusActionable(input.dataStatus)) return 'expired';
+  if (!isChartAnalysisCoreDataActionable(input)) return 'expired';
   if (!input.isClosedCandle) return 'forming';
 
   if (descriptor.type === 'double-top') {
@@ -207,6 +243,13 @@ function transitionTargetLabel(status: ChartAnalysisStatus): string {
   return labels[status];
 }
 
+function formatAnalysisLevel(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '미확인';
+  const magnitude = Math.abs(value);
+  const maximumFractionDigits = magnitude >= 1000 ? 2 : magnitude >= 100 ? 3 : magnitude >= 1 ? 4 : 8;
+  return value.toLocaleString('ko-KR', { maximumFractionDigits });
+}
+
 function specializedCopy(
   input: ChartAnalysisInput,
   descriptor: PatternDescriptor,
@@ -222,16 +265,16 @@ function specializedCopy(
       title: `${descriptor.subtype} ${statusLabel(status)}`,
       summary:
         status === 'confirmed'
-          ? `넥라인 ${input.support} 아래에서 ${input.timeframe} 확정봉이 마감해 하락 패턴이 확인됐습니다.`
+          ? `넥라인 ${formatAnalysisLevel(input.support)} 아래에서 ${input.timeframe} 확정봉이 마감해 하락 패턴이 확인됐습니다.`
           : status === 'invalidated'
-            ? `기준 고점·저항 ${input.resistance} 위를 확정봉으로 회복해 이중천장 판단이 무효화됐습니다.`
+            ? `기준 고점·저항 ${formatAnalysisLevel(input.resistance)} 위를 확정봉으로 회복해 이중천장 판단이 무효화됐습니다.`
             : `두 고점이 비슷한 가격대에서 형성됐지만 넥라인 이탈 전이므로 하락 후보로만 표시합니다.`,
       confirmationConditions: [
-        `완료된 ${input.timeframe} 캔들이 넥라인 ${input.support} 아래에서 마감`,
+        `완료된 ${input.timeframe} 캔들이 넥라인 ${formatAnalysisLevel(input.support)} 아래에서 마감`,
         '두 번째 고점 이후 거래량과 모멘텀이 둔화',
       ],
       invalidationConditions: [
-        `완료된 ${input.timeframe} 캔들이 기준 고점·저항 ${input.resistance} 위를 회복`,
+        `완료된 ${input.timeframe} 캔들이 기준 고점·저항 ${formatAnalysisLevel(input.resistance)} 위를 회복`,
       ],
     };
   }
@@ -241,16 +284,16 @@ function specializedCopy(
       title: `${descriptor.subtype} ${statusLabel(status)}`,
       summary:
         status === 'confirmed'
-          ? `넥라인 ${input.resistance} 위에서 ${input.timeframe} 확정봉이 마감해 상승 패턴이 확인됐습니다.`
+          ? `넥라인 ${formatAnalysisLevel(input.resistance)} 위에서 ${input.timeframe} 확정봉이 마감해 상승 패턴이 확인됐습니다.`
           : status === 'invalidated'
-            ? `기준 저점·지지 ${input.support} 아래에서 확정봉이 마감해 이중바닥 판단이 무효화됐습니다.`
+            ? `기준 저점·지지 ${formatAnalysisLevel(input.support)} 아래에서 확정봉이 마감해 이중바닥 판단이 무효화됐습니다.`
             : `두 저점이 비슷한 가격대에서 형성됐지만 넥라인 돌파 전이므로 상승 후보로만 표시합니다.`,
       confirmationConditions: [
-        `완료된 ${input.timeframe} 캔들이 넥라인 ${input.resistance} 위에서 마감`,
+        `완료된 ${input.timeframe} 캔들이 넥라인 ${formatAnalysisLevel(input.resistance)} 위에서 마감`,
         '두 번째 저점 이후 거래량과 모멘텀이 개선',
       ],
       invalidationConditions: [
-        `완료된 ${input.timeframe} 캔들이 기준 저점·지지 ${input.support} 아래에서 마감`,
+        `완료된 ${input.timeframe} 캔들이 기준 저점·지지 ${formatAnalysisLevel(input.support)} 아래에서 마감`,
       ],
     };
   }
@@ -259,11 +302,11 @@ function specializedCopy(
     title: input.title,
     summary: input.summary,
     confirmationConditions: [
-      `완료된 ${input.timeframe} 캔들이 저항 ${input.resistance} 위에서 마감`,
+      `완료된 ${input.timeframe} 캔들이 저항 ${formatAnalysisLevel(input.resistance)} 위에서 마감`,
       '거래량과 추세 지표가 같은 방향을 유지',
     ],
     invalidationConditions: [
-      `완료된 ${input.timeframe} 캔들이 지지 ${input.support} 아래에서 마감`,
+      `완료된 ${input.timeframe} 캔들이 지지 ${formatAnalysisLevel(input.support)} 아래에서 마감`,
       '반대 방향 구조 전환 신호 발생',
     ],
   };
@@ -280,8 +323,10 @@ export function buildChartAnalysis(input: ChartAnalysisInput): ChartAnalysis {
   const bias = effectiveBias(input, descriptor);
   const engineVersion = input.engineVersion ?? DEFAULT_ENGINE_VERSION;
   const status = deriveStatus(input, descriptor);
-  const detectedAt = new Date(finite(input.latestTime) * 1000).toISOString();
-  const anchorTimes = input.anchorTimes?.length ? input.anchorTimes : [input.latestTime];
+  const latestTime = Number.isFinite(input.latestTime) && input.latestTime > 0 ? input.latestTime : 0;
+  const detectedAt = new Date(latestTime * 1000).toISOString();
+  const providedAnchorTimes = input.anchorTimes?.filter((time) => Number.isFinite(time) && time > 0) ?? [];
+  const anchorTimes = providedAnchorTimes.length ? providedAnchorTimes : latestTime > 0 ? [latestTime] : [];
   const id = createStableAnalysisId({
     engineVersion,
     market: input.market,
@@ -302,10 +347,22 @@ export function buildChartAnalysis(input: ChartAnalysisInput): ChartAnalysis {
     ...input.patterns.map((pattern) => `패턴 후보: ${pattern}`),
   ];
   if (input.dataStatus) reasons.push(`데이터 상태: ${input.dataStatus}`);
+  if (!hasAnalysisIdentityProvenance(input)) reasons.push('분석 식별자/출처: unavailable');
+  if (!isChartAnalysisCoreDataActionable(input)) reasons.push('핵심 가격/시간 데이터: unavailable');
 
   const points = input.anchorPoints?.length
-    ? input.anchorPoints.filter((point) => Number.isFinite(point.time) && Number.isFinite(point.price))
-    : [{ time: input.latestTime, price: input.currentPrice, role: 'latest' }];
+    ? input.anchorPoints.filter(
+        (point) => Number.isFinite(point.time) && point.time > 0 && Number.isFinite(point.price) && point.price > 0,
+      )
+    : latestTime > 0 && Number.isFinite(input.currentPrice) && input.currentPrice > 0
+      ? [{ time: latestTime, price: input.currentPrice, role: 'latest' }]
+      : [];
+  const priceLevels = hasValidSupportResistanceRange(input)
+    ? [
+        { price: input.support, role: 'support' },
+        { price: input.resistance, role: 'resistance' },
+      ]
+    : [];
 
   return {
     id,
@@ -323,13 +380,10 @@ export function buildChartAnalysis(input: ChartAnalysisInput): ChartAnalysis {
     weakenedAt: status === 'weakened' ? previous?.weakenedAt ?? detectedAt : previous?.weakenedAt,
     invalidatedAt: status === 'invalidated' ? previous?.invalidatedAt ?? detectedAt : previous?.invalidatedAt,
     expiredAt: status === 'expired' ? previous?.expiredAt ?? detectedAt : previous?.expiredAt,
-    startTime: Math.min(...anchorTimes.filter(Number.isFinite), input.latestTime),
-    endTime: status === 'invalidated' || status === 'expired' ? input.latestTime : undefined,
+    startTime: anchorTimes.length ? Math.min(...anchorTimes) : undefined,
+    endTime: (status === 'invalidated' || status === 'expired') && latestTime > 0 ? latestTime : undefined,
     points,
-    priceLevels: [
-      { price: finite(input.support), role: 'support' },
-      { price: finite(input.resistance), role: 'resistance' },
-    ],
+    priceLevels,
     title: copy.title,
     summary: copy.summary,
     reasons,
@@ -340,8 +394,8 @@ export function buildChartAnalysis(input: ChartAnalysisInput): ChartAnalysis {
       rsi: input.rsi,
       macd: input.macd,
       volumeRatio: finite(input.volumeRatio),
-      previousClose: finite(input.previousClose),
-      currentPrice: finite(input.currentPrice),
+      previousClose: Number.isFinite(input.previousClose) && input.previousClose > 0 ? input.previousClose : null,
+      currentPrice: Number.isFinite(input.currentPrice) && input.currentPrice > 0 ? input.currentPrice : null,
       closedCandle: input.isClosedCandle,
       dataStatus: input.dataStatus ?? null,
     },

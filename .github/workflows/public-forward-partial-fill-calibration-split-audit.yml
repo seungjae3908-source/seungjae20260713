@@ -1,0 +1,69 @@
+name: Public Forward Partial Fill Calibration Split Audit
+
+on:
+  pull_request:
+    paths:
+      - 'api-server/src/services/public-forward-partial-fill-calibration-split-audit.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-calibration-split-audit.service.test.ts'
+      - '.github/workflows/public-forward-partial-fill-calibration-split-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck API server
+        run: pnpm --dir api-server run typecheck
+
+      - name: Bundle focused split audit test
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/services/public-forward-partial-fill-calibration-split-audit.service.test.ts
+          --bundle --platform=node --format=cjs --target=node20
+          --outfile=/tmp/public-forward-partial-fill-calibration-split-audit.test.cjs
+
+      - name: Run focused split audit test
+        run: node --test /tmp/public-forward-partial-fill-calibration-split-audit.test.cjs
+
+      - name: Verify fail-closed split and sufficiency invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='api-server/src/services/public-forward-partial-fill-calibration-split-audit.service.ts'
+          grep -Fq "externalRegimeEvidenceRequired: true" "$FILE"
+          grep -Fq "regimeComputationOwned: false" "$FILE"
+          grep -Fq "defaultSampleThresholdAllowed: false" "$FILE"
+          grep -Fq "randomSplitAllowed: false" "$FILE"
+          grep -Fq "chronologicalSplitRequired: true" "$FILE"
+          grep -Fq "oosPerformanceEvaluationAllowed: false" "$FILE"
+          grep -Fq "partialFillCostProduced: false" "$FILE"
+          grep -Fq "calibrationArtifactProduced: false" "$FILE"
+          grep -Fq "oosValidationComplete: false" "$FILE"
+          grep -Fq "naturalEntryCredit: 0" "$FILE"
+          grep -Fq "runtimeCostCredit: 0" "$FILE"
+          grep -Fq "executionAuthority: 'NONE'" "$FILE"
+          grep -Fq "privateApiAllowed: false" "$FILE"
+          grep -Fq "liveTrading: false" "$FILE"
+          grep -Fq "orderSubmissionAllowed: false" "$FILE"
+          grep -Fq "fullCostReady: false" "$FILE"
+          grep -Fq "SPLIT_POLICY_NOT_FROZEN_BEFORE_VALIDATION" "$FILE"
+          grep -Fq "REGIME_EVIDENCE_AFTER_EVENT_START" "$FILE"
+          grep -Fq "UNPOLICIED_SCOPE_PRESENT" "$FILE"
