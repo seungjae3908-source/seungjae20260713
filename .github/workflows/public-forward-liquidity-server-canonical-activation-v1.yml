@@ -71,7 +71,9 @@ jobs:
           grep -Fq 'independentN: 4' "$runner"
           grep -Fq 'validationN: 0' "$runner"
           grep -Fq 'oosN: 0' "$runner"
-          ! grep -Eq 'LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true' "$workflow" "$service" "$runner"
+          forbidden="$(printf '%s=true|' LIVE_TRADING AUTO_TRADING REAL_ORDER_ENABLED PRIVATE_TRADING_API_ALLOWED)"
+          forbidden="${forbidden%|}"
+          ! grep -Eq "$forbidden" "$workflow" "$service" "$runner"
           ! grep -Eq 'contents:[[:space:]]+write|issues:[[:space:]]+write|actions:[[:space:]]+write|deployments:[[:space:]]+write|id-token:[[:space:]]+write' "$workflow"
 
       - name: Zero-network default-off self-check
