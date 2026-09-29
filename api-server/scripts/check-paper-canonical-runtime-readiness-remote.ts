@@ -44,6 +44,16 @@ function blocked(blocker: string) {
       liquidityImpact: 0,
       partialFillImpact: 0,
     }),
+    fullCostComponentFailureReasons: Object.freeze({
+      commission: Object.freeze([]),
+      tax: Object.freeze([]),
+      spread: Object.freeze([]),
+      slippage: Object.freeze([]),
+      funding: Object.freeze([]),
+      latency: Object.freeze([]),
+      liquidityImpact: Object.freeze([]),
+      partialFillImpact: Object.freeze([]),
+    }),
     evidenceCounts: Object.freeze({
       naturalPositions: 0,
       naturalSettlements: 0,
