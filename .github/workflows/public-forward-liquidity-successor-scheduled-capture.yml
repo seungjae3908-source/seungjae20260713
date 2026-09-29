@@ -22,9 +22,7 @@ on:
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-multi-lane-policy-v1.test.mjs'
   schedule:
-    - cron: '17 * * * *'
-    - cron: '27 * * * *'
-    - cron: '37 * * * *'
+    - cron: '17,27,37 * * * *'
 
 permissions:
   contents: read
@@ -64,9 +62,8 @@ jobs:
         run: |
           set -euo pipefail
           workflow='.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
-          test "$(grep -Ec "^[[:space:]]{4}- cron: '17 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
-          test "$(grep -Ec "^[[:space:]]{4}- cron: '27 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
-          test "$(grep -Ec "^[[:space:]]{4}- cron: '37 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
+          test "$(grep -Ec "^[[:space:]]{4}- cron: '17,27,37 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
+          ! grep -Eq "^[[:space:]]{4}- cron: '(17|27|37) \\* \\* \\* \\*'[[:space:]]*$" "$workflow"
           test "$(grep -Ec "^[[:space:]]{2}queue:[[:space:]]+max[[:space:]]*$" "$workflow")" -eq 1
           test "$(grep -Ec "^[[:space:]]{2}cancel-in-progress:[[:space:]]+false[[:space:]]*$" "$workflow")" -eq 1
           ! grep -Eq '^[[:space:]]{2}workflow_dispatch:[[:space:]]*$' "$workflow"
