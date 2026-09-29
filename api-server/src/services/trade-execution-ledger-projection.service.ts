@@ -178,8 +178,12 @@ export class TradeExecutionLedgerProjectionService {
         lastReconciledAt: order.lastReconciledAt ?? null,
         manualReviewRequired: order.manualReviewRequired === true,
         safeToResubmit: order.state === 'SUBMITTED'
+          && !order.executionClaimId
           && !order.submissionStartedAt
+          && !order.submissionAttemptId
+          && !order.exchangeOrderId
           && !order.cancelRequestClaimId
+          && order.manualReviewRequired !== true
           && !unknownSubmission,
         cancellationIntent,
         submissionAttemptId: order.submissionAttemptId ?? null,
