@@ -1,6 +1,7 @@
 import { createSafeStrategyDslV1 } from "./autonomous-strategy-formula-generator-v1.js";
 
 export const EVIDENCE_BACKED_FORMULA_SEED_CATALOG_VERSION = 1;
+export const EVIDENCE_BACKED_REFERENCE_RECIPES_VERSION = 1;
 export const EVIDENCE_BACKED_FORMULA_FAMILIES = Object.freeze([
   "TREND_BREAKOUT",
   "TIME_SERIES_MOMENTUM",
@@ -83,6 +84,193 @@ const HORIZON_CONFIG = Object.freeze({
     timeBars: [20, 250, 10],
   }),
 });
+
+export const EVIDENCE_BACKED_REFERENCE_RECIPES = deepFreeze([
+  {
+    recipeId: "QULLAMAGGIE_EP_V1",
+    name: "Qullamaggie Episodic Pivot",
+    origin: "PRACTITIONER_PUBLIC_METHOD",
+    researchRole: "REFERENCE_RECIPE",
+    markets: ["US_STOCK"],
+    candidatePreparation: [
+      "CATALYST_EARNINGS_GUIDANCE_OR_OTHER_REVALUATION_NEWS",
+      "PREFER_3_TO_6_MONTH_SIDEWAYS_BASE",
+      "PREMARKET_OR_AFTER_HOURS_GAP_SCAN",
+    ],
+    confirmation: {
+      gapUpMinFraction: 0.10,
+      massiveOpenVolumeRequired: true,
+      preferredAverageDailyVolumeTradedWithinMinutes: [15, 30],
+      openingRangeHighMinutes: [1, 5, 60],
+    },
+    riskFramework: {
+      initialStopReference: "LOW_OF_DAY",
+      maxInitialRiskAdrAtrMultiple: 1.5,
+      trailingReferences: ["SMA_10D", "SMA_20D"],
+    },
+    sourceEvidence: [{
+      kind: "PRACTITIONER_PRIMARY",
+      title: "How to master a setup: Episodic Pivots",
+      url: "https://qullamaggie.com/how-to-master-a-setup-episodic-pivots/",
+      evidenceScope: "SETUP_DEFINITION_AND_PRACTITIONER_PROCESS",
+      independentlyAuditedPerformance: false,
+    }],
+    localReplicationRequired: true,
+    automaticActivationAllowed: false,
+  },
+  {
+    recipeId: "QULLAMAGGIE_COMMON_BREAKOUT_V1",
+    name: "Qullamaggie Common Breakout",
+    origin: "PRACTITIONER_PUBLIC_METHOD",
+    researchRole: "REFERENCE_RECIPE",
+    markets: ["US_STOCK"],
+    candidatePreparation: [
+      "RANK_TOP_1_TO_2_PERCENT_BY_1M_3M_6M_PERFORMANCE",
+      "PRIOR_LARGE_ADVANCE",
+      "ORDERLY_PULLBACK_OR_CONSOLIDATION",
+      "HIGHER_LOWS_AND_TIGHTENING_RANGE",
+    ],
+    confirmation: {
+      preferredPriorMoveFractionRange: [0.30, 1.00],
+      typicalConsolidationWeeksRange: [2, 8],
+      risingMovingAverageContextDays: [10, 20, 50],
+      openingRangeHighMinutes: [1, 5, 60],
+    },
+    sourceEvidence: [{
+      kind: "PRACTITIONER_PRIMARY",
+      title: "3 TIMELESS setups that have made me TENS OF MILLIONS!",
+      url: "https://qullamaggie.com/my-3-timeless-setups-that-have-made-me-tens-of-millions/",
+      evidenceScope: "SETUP_DEFINITION_AND_PRACTITIONER_PROCESS",
+      independentlyAuditedPerformance: false,
+    }],
+    localReplicationRequired: true,
+    automaticActivationAllowed: false,
+  },
+  {
+    recipeId: "CROSS_SECTIONAL_PRICE_MOMENTUM_V1",
+    name: "Cross-sectional price momentum",
+    origin: "ACADEMIC_PEER_REVIEWED",
+    researchRole: "REFERENCE_RECIPE",
+    markets: ["US_STOCK", "KR_STOCK"],
+    candidatePreparation: [
+      "RANK_RECENT_WINNERS_AND_LOSERS",
+      "PRESERVE_FORMATION_AND_HOLDING_WINDOW_IDENTITY",
+    ],
+    confirmation: {
+      publishedFormationHoldingHorizonMonths: [3, 12],
+      localWindowSearchRequired: true,
+    },
+    sourceEvidence: [{
+      kind: "ACADEMIC_PEER_REVIEWED",
+      title: "Returns to Buying Winners and Selling Losers: Implications for Stock Market Efficiency",
+      doi: "10.1111/j.1540-6261.1993.tb04702.x",
+      url: "https://onlinelibrary.wiley.com/doi/10.1111/j.1540-6261.1993.tb04702.x",
+      evidenceScope: "MOMENTUM_PHENOMENON",
+    }],
+    localReplicationRequired: true,
+    automaticActivationAllowed: false,
+  },
+  {
+    recipeId: "PEAD_EARNINGS_SURPRISE_V1",
+    name: "Post-Earnings Announcement Drift / Earnings Surprise",
+    origin: "ACADEMIC_PEER_REVIEWED",
+    researchRole: "REFERENCE_RECIPE",
+    markets: ["US_STOCK", "KR_STOCK"],
+    candidatePreparation: [
+      "TIMESTAMP_EARNINGS_ANNOUNCEMENT",
+      "MEASURE_EARNINGS_SURPRISE_WITH_POINT_IN_TIME_EXPECTATIONS",
+      "SEPARATE_EVENT_RETURN_FROM_POST_EVENT_DRIFT",
+    ],
+    confirmation: {
+      positiveAndNegativeSurpriseDirectionsMustRemainSeparate: true,
+      localHoldingWindowCalibrationRequired: true,
+    },
+    sourceEvidence: [{
+      kind: "ACADEMIC_PEER_REVIEWED",
+      title: "Earnings expectations, investor trade size, and anomalous returns around earnings announcements",
+      doi: "10.1016/j.jfineco.2004.08.002",
+      url: "https://www.sciencedirect.com/science/article/pii/S0304405X05000541",
+      evidenceScope: "PEAD_AND_EARNINGS_EXPECTATION_UNDERREACTION",
+    }],
+    localReplicationRequired: true,
+    automaticActivationAllowed: false,
+  },
+  {
+    recipeId: "FIFTY_TWO_WEEK_HIGH_MOMENTUM_V1",
+    name: "52-week-high momentum",
+    origin: "ACADEMIC_PEER_REVIEWED",
+    researchRole: "REFERENCE_RECIPE",
+    markets: ["US_STOCK", "KR_STOCK"],
+    candidatePreparation: [
+      "COMPUTE_POINT_IN_TIME_52_WEEK_HIGH",
+      "RANK_NEARNESS_TO_52_WEEK_HIGH",
+      "KEEP_PRICE_MOMENTUM_AND_52_WEEK_HIGH_SIGNALS_SEPARATE_FOR_ATTRIBUTION",
+    ],
+    confirmation: {
+      publishedSignal: "CURRENT_PRICE_NEARNESS_TO_52_WEEK_HIGH",
+      localHoldingWindowCalibrationRequired: true,
+    },
+    sourceEvidence: [{
+      kind: "ACADEMIC_PEER_REVIEWED",
+      title: "The 52-Week High and Momentum Investing",
+      doi: "10.1111/j.1540-6261.2004.00695.x",
+      url: "https://onlinelibrary.wiley.com/doi/10.1111/j.1540-6261.2004.00695.x",
+      evidenceScope: "52_WEEK_HIGH_MOMENTUM_PHENOMENON",
+    }],
+    localReplicationRequired: true,
+    automaticActivationAllowed: false,
+  },
+  {
+    recipeId: "TIME_SERIES_MOMENTUM_V1",
+    name: "Time-series momentum / trend following",
+    origin: "ACADEMIC_PEER_REVIEWED",
+    researchRole: "REFERENCE_RECIPE",
+    markets: ["CRYPTO_FUTURES", "CRYPTO_SPOT", "US_STOCK", "KR_STOCK"],
+    candidatePreparation: [
+      "MEASURE_OWN_ASSET_PAST_RETURN_DIRECTION",
+      "KEEP_LOOKBACK_AND_HOLDING_WINDOW_PRE_REGISTERED",
+      "APPLY_MARKET_SPECIFIC_COST_AND_EXECUTION_MODEL",
+    ],
+    confirmation: {
+      publishedPersistenceHorizonMonths: [1, 12],
+      longShortAllowedOnlyWhereInstrumentAndPolicySupportIt: true,
+    },
+    sourceEvidence: [{
+      kind: "ACADEMIC_PEER_REVIEWED",
+      title: "Time series momentum",
+      doi: "10.1016/j.jfineco.2011.11.003",
+      url: "https://www.sciencedirect.com/science/article/pii/S0304405X11002613",
+      evidenceScope: "TIME_SERIES_MOMENTUM_PHENOMENON",
+    }],
+    localReplicationRequired: true,
+    automaticActivationAllowed: false,
+  },
+  {
+    recipeId: "ORB_STANDALONE_COST_CONTROL_V1",
+    name: "Standalone opening-range breakout cost control",
+    origin: "PRE_REGISTERED_WORKING_PAPER",
+    researchRole: "NEGATIVE_CONTROL",
+    markets: ["US_FUTURES"],
+    candidatePreparation: [
+      "DO_NOT_TREAT_SESSION_OPEN_BREAKOUT_AS_SUFFICIENT_EDGE",
+      "USE_AS_COST_AND_FALSE_DISCOVERY_CONTROL",
+    ],
+    confirmation: {
+      preRegisteredCells: 225,
+      marketsStudied: 9,
+      simpleCellsPassingPositiveBarAfterCosts: 0,
+    },
+    sourceEvidence: [{
+      kind: "PRE_REGISTERED_WORKING_PAPER",
+      title: "Opening-Range Breakout Does Not Survive Trading Costs: A Pre-Registered 225-Cell Study on Sixteen Years of Futures Data",
+      ssrnAbstractId: "7428398",
+      url: "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7428398",
+      evidenceScope: "COST_SENSITIVITY_AND_NEGATIVE_CONTROL",
+    }],
+    localReplicationRequired: true,
+    automaticActivationAllowed: false,
+  },
+]);
 
 function deepFreeze(value) {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
@@ -289,6 +477,9 @@ export function buildEvidenceBackedFormulaSeedCatalogV1() {
     profiles: PROFILES,
     families: EVIDENCE_BACKED_FORMULA_FAMILIES,
     futuresEvidenceRequirements: FUTURES_DERIVATIVES_EVIDENCE_REQUIREMENTS,
+    referenceRecipeVersion: EVIDENCE_BACKED_REFERENCE_RECIPES_VERSION,
+    referenceRecipeCount: EVIDENCE_BACKED_REFERENCE_RECIPES.length,
+    referenceRecipes: EVIDENCE_BACKED_REFERENCE_RECIPES,
     safety: catalogSafety(),
   });
 }
