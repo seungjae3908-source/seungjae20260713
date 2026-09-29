@@ -12,7 +12,7 @@ export function ResearchVideoPanel() {
         </p>
       </header>
       <details className="mx-auto mt-3 max-w-6xl rounded-2xl border border-card-border bg-card" open>
-        <summary className="min-h-12 cursor-pointer px-4 py-3 text-sm font-bold">영상 근거와 기술 상태</summary>
+        <summary className="min-h-12 cursor-pointer px-4 py-3 text-sm font-bold">기술 상태 자세히 보기</summary>
         <ResearchVideoSourcePanel />
       </details>
     </section>
