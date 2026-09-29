@@ -1,4 +1,4 @@
-name: Research Crypto Turtle System2 V1
+name: Research Crypto Turtle System2 V2
 
 on:
   pull_request:
@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: research-crypto-turtle-system2-v1-${{ github.event.pull_request.number || github.ref }}
+  group: research-crypto-turtle-system2-v2-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -57,12 +57,16 @@ jobs:
           if(r.source?.rules?.entry!=='55-day breakout, every signal taken'||r.source?.rules?.exit!=='20-day opposite breakout') throw new Error('SOURCE_RULE');
           if((r.data?.datasets?.length??0)<2) throw new Error('DATA');
           if(r.promotionAssessment?.automaticPromotionAllowed!==false||r.promotionAssessment?.economicSampleCredit!==0||r.promotionAssessment?.profitabilityClaimAllowed!==false) throw new Error('PROMOTION');
+          if(r.promotionAssessment?.status!=='RESEARCH_HOLD_CROSS_SYMBOL_GENERALIZATION_FAILED'||r.promotionAssessment?.crossSymbolTransferPassed!==false) throw new Error('TRANSFER_TRUTH');
+          if(r.promotionAssessment?.symbolSpecificWinnerSelectionAllowed!==false||r.promotionAssessment?.observedHistoryMaySelectETHOnly!==false) throw new Error('POST_HOC_SYMBOL_SELECTION');
+          if(!(r.results?.BTCUSDT?.MID?.normal?.metrics?.grossBeforeExecutionCostsReturn<0)) throw new Error('BTC_MID_GROSS_TRUTH');
+          if(!(r.results?.BTCUSDT?.RECENT?.normal?.metrics?.grossBeforeExecutionCostsReturn<0)) throw new Error('BTC_RECENT_GROSS_TRUTH');
           if(r.safeguards?.researchOnly!==true||r.safeguards?.publicDataOnly!==true||r.safeguards?.actualOrders!==0||r.safeguards?.orderRouteCalled!==false||r.safeguards?.executionAuthority!=='NONE') throw new Error('SAFETY');
           NODE
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: crypto-turtle-system2-v1-${{ github.event.pull_request.head.sha }}
+          name: crypto-turtle-system2-v2-${{ github.event.pull_request.head.sha }}
           path: market-prediction-lab/docs/crypto-turtle-system2-v1.json
           if-no-files-found: error
           retention-days: 30
