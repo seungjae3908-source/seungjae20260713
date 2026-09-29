@@ -276,7 +276,15 @@ function successorArtifactReceipt(capture, artifactId, overrides = {}) {
   return { ...body, receiptDigest: sha256(canonicalJson(body)) };
 }
 
-async function ingest(stateRoot, rawBatch, capture, artifact, artifactId) {
+async function ingest(
+  stateRoot,
+  rawBatch,
+  capture,
+  artifact,
+  artifactId,
+  serverCanonicalIngestAuthorization = null,
+  serverCanonicalReceipt = null,
+) {
   return ingestPublicForwardLiquidityV3Capture({
     stateRoot,
     researchRepoRoot: REPO_ROOT,
@@ -287,6 +295,8 @@ async function ingest(stateRoot, rawBatch, capture, artifact, artifactId) {
     rawBatch,
     captureReceipt: capture,
     artifactReceipt: artifact,
+    serverCanonicalReceipt,
+    serverCanonicalIngestAuthorization,
   });
 }
 
@@ -379,6 +389,169 @@ test('Run 36 shaped native Successor V3 receipt persists once and retains native
     assert.equal(duplicate.duplicateObservationCount, raw.observations.length);
     assert.equal(duplicate.datasetObservationCount, first.datasetObservationCount);
     assert.equal(duplicate.datasetDuplicateAttemptCount, 1);
+  } finally {
+    await rm(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test('server-natural Successor receipt requires a fresh protected ingest authorization and remains zero-credit', {
+  skip: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound !== true
+    ? 'preserved inactive-contract regression mode'
+    : false,
+}, async () => {
+  const stateRoot = await mkdtemp(join(tmpdir(), 'liquidity-server-canonical-v1-'));
+  try {
+    const raw = batch(35_000, 'server-canonical-slot-20');
+    const baseCapture = successorCaptureReceipt(raw);
+    const creditKey = {
+      policyDigest: baseCapture.policyDigest,
+      cohortDigest: baseCapture.cohortDigest,
+      slotIndex: baseCapture.slotIndex,
+    };
+    const captureBody = {
+      ...Object.fromEntries(
+        Object.entries(baseCapture).filter(([key]) => key !== 'captureReceiptDigest'),
+      ),
+      canonicalSource: 'SERVER_NATURAL_TIMER',
+      sourcePrecedence: ['GITHUB_V3_SCHEDULE', 'SERVER_NATURAL_TIMER'],
+      serverCanonical: true,
+      serverShadowOnly: false,
+      serverCanonicalRuntimeSchema: 'public-forward-liquidity-server-canonical-runtime-v1',
+      serverCanonicalCreditKey: creditKey,
+      serverCanonicalCreditKeyDigest: sha256(canonicalJson(creditKey)),
+      serverCanonicalReadinessDigest: 'c'.repeat(64),
+      serverCanonicalActivationDigest: 'd'.repeat(64),
+      serverCanonicalAuthorityCommentId: 6000000001,
+      serverCanonicalFirstEligibleSlotIndex: baseCapture.slotIndex,
+      activationBindingDigest: 'e'.repeat(64),
+      serverCanonicalReceiptPersistence: 'CREATE_ONLY_WX',
+      shadowReceiptPromotionPerformed: false,
+      hindsightCredit: 0,
+      privateTradingApiAllowed: false,
+      realOrderEnabled: false,
+    };
+    const capture = {
+      ...captureBody,
+      captureReceiptDigest: sha256(canonicalJson(captureBody)),
+    };
+    const artifactId = 9914306480;
+    const artifact = successorArtifactReceipt(capture, artifactId, {
+      artifactReference:
+        `server-create-only://${capture.serverCanonicalCreditKeyDigest}/${artifactId}`,
+    });
+    await assert.rejects(
+      ingest(stateRoot, raw, capture, artifact, artifactId),
+      /SERVER_CANONICAL_RECEIPT_REQUIRED/,
+    );
+    const serverReceiptBody = {
+      schemaVersion: 'public-forward-liquidity-server-canonical-receipt-v1',
+      canonicalSource: 'SERVER_NATURAL_TIMER',
+      sourcePrecedence: ['GITHUB_V3_SCHEDULE', 'SERVER_NATURAL_TIMER'],
+      receiptPersistence: 'CREATE_ONLY_WX',
+      targetMainSha: capture.exactMainSha,
+      activationBindingDigest: capture.activationBindingDigest,
+      readinessDigest: capture.serverCanonicalReadinessDigest,
+      runtimeActivationDigest: capture.serverCanonicalActivationDigest,
+      authorityCommentId: capture.serverCanonicalAuthorityCommentId,
+      firstEligibleSlotIndex: capture.serverCanonicalFirstEligibleSlotIndex,
+      creditKey,
+      creditKeyDigest: capture.serverCanonicalCreditKeyDigest,
+      slotIndex: capture.slotIndex,
+      split: capture.split,
+      policyDigest: capture.policyDigest,
+      cohortDigest: capture.cohortDigest,
+      triggerAtMs: capture.nominalScheduledAtMs,
+      authorizedAtMs: capture.actualRunStartedAtMs - 1_000,
+      serverStartedAtMs: capture.actualRunStartedAtMs,
+      captureStatus: 'PRESENT',
+      blockers: [],
+      rawBatchDigest: sha256(canonicalJson(raw)),
+      captureReceiptDigest: capture.captureReceiptDigest,
+      artifactReceiptDigest: artifact.receiptDigest,
+      artifactDigest: artifact.artifactDigest,
+      shadowReceiptPromotionPerformed: false,
+      preAuthorityShadowCanonicalCredit: 0,
+      preCutoverShadowCanonicalCredit: 0,
+      prospectiveSlotCredit: 1,
+      canonicalEconomicCredit: 0,
+      readyForProtectedCanonicalIngestGate: true,
+      canonicalIngestPermitted: false,
+      canonicalIngestPerformed: false,
+      independencePermitted: false,
+      independencePerformed: false,
+      replayCredit: 0,
+      backfillCredit: 0,
+      manualCredit: 0,
+      syntheticCredit: 0,
+      hindsightCredit: 0,
+      fullCostReady: false,
+      profitabilityProven: false,
+      liveTrading: false,
+      autoTrading: false,
+      privateTradingApiAllowed: false,
+      realOrderEnabled: false,
+      executionAuthority: 'NONE',
+    };
+    const serverReceipt = {
+      ...serverReceiptBody,
+      receiptDigest: sha256(canonicalJson(serverReceiptBody)),
+    };
+    await assert.rejects(
+      ingest(stateRoot, raw, capture, artifact, artifactId, null, serverReceipt),
+      /SERVER_CANONICAL_INGEST_AUTHORIZATION_REQUIRED/,
+    );
+    const authorizationBody = {
+      schemaVersion: 'public-forward-liquidity-server-canonical-ingest-authorization-v1',
+      status: 'AUTHORIZED_FOR_PROTECTED_CANONICAL_INGEST',
+      canonicalSource: 'SERVER_NATURAL_TIMER',
+      sourcePrecedence: ['GITHUB_V3_SCHEDULE', 'SERVER_NATURAL_TIMER'],
+      targetMainSha: capture.exactMainSha,
+      creditKey,
+      creditKeyDigest: capture.serverCanonicalCreditKeyDigest,
+      captureReceiptDigest: capture.captureReceiptDigest,
+      serverReceiptDigest: serverReceipt.receiptDigest,
+      githubObservedAtMs: capture.actualRunStartedAtMs + 1_000,
+      authorizedAtMs: capture.actualRunStartedAtMs + 2_000,
+      githubRecoveryObserved: false,
+      priorCanonicalCreditN: 0,
+      maximumCanonicalEconomicCredit: 1,
+      canonicalIngestPermitted: true,
+      canonicalIngestPerformed: false,
+      independencePerformed: false,
+      canonicalEconomicCredit: 0,
+      executionAuthority: 'NONE',
+    };
+    const authorization = {
+      ...authorizationBody,
+      authorizationDigest: sha256(canonicalJson(authorizationBody)),
+    };
+    await assert.rejects(
+      ingest(
+        stateRoot,
+        raw,
+        capture,
+        artifact,
+        artifactId,
+        authorization,
+        { ...serverReceipt, rawBatchDigest: '0'.repeat(64) },
+      ),
+      /SERVER_CANONICAL_RECEIPT_INVALID/,
+    );
+    const result = await ingest(
+      stateRoot,
+      raw,
+      capture,
+      artifact,
+      artifactId,
+      authorization,
+      serverReceipt,
+    );
+    assert.equal(result.sourceV3Lineage.canonicalSource, 'SERVER_NATURAL_TIMER');
+    assert.equal(result.sourceV3Lineage.producerWorkflowId, null);
+    assert.equal(result.forwardCalibrationSampleCreditDelta, 0);
+    assert.equal(result.independenceEvaluated, false);
+    assert.equal(result.serverCanonicalIngestAuthorizationDigest, authorization.authorizationDigest);
+    assert.equal(result.executionAuthority, 'NONE');
   } finally {
     await rm(stateRoot, { recursive: true, force: true });
   }
