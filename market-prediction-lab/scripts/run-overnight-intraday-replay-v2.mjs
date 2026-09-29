@@ -1,4 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { collectYahooStockHistory } from "../src/yahoo-stock-history.js";
 import { buildAdaptiveMultiEvidencePriceStructureV2 } from "../src/adaptive-multi-evidence-price-structure-v2.js";
@@ -47,9 +48,65 @@ function normalizePublicCandleRows(rows){
   }
   return out.sort((a,b)=>a.timestamp-b.timestamp);
 }
+
+let productionAccessTokenCache=null;
+function normalizeLoginName(value){return String(value??"").trim().normalize("NFKC").toLowerCase();}
+function internalEmailForLogin(loginName){
+  const digest=createHash("sha256").update(`seungjae-stock-account:${normalizeLoginName(loginName)}`).digest();
+  return `${digest.subarray(0,20).toString("hex")}@accounts.seungjae-stock.com`;
+}
+function jwtRole(token){
+  try{
+    const parts=String(token??"").split(".");
+    if(parts.length!==3)return null;
+    return JSON.parse(Buffer.from(parts[1],"base64url").toString("utf8"))?.role??null;
+  }catch{return null;}
+}
+async function discoverProductionSupabasePublicConfig(){
+  const root=await fetch("https://lsj119.com/",{headers:{accept:"text/html","user-agent":"seungjae-research-replay/2.1"}});
+  if(!root.ok)throw new Error(`PRODUCTION_ROOT_HTTP_${root.status}`);
+  const html=await root.text();
+  const srcs=[...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)].map(m=>m[1]).filter(Boolean);
+  if(!srcs.length)throw new Error("PRODUCTION_JS_BUNDLE_NOT_FOUND");
+  const urls=srcs.map(src=>new URL(src,"https://lsj119.com/").toString()).filter(url=>new URL(url).origin==="https://lsj119.com");
+  for(const url of urls){
+    const r=await fetch(url,{headers:{accept:"application/javascript,text/javascript,*/*","user-agent":"seungjae-research-replay/2.1"}});
+    if(!r.ok)continue;
+    const text=await r.text();
+    const supabaseUrl=text.match(/https:\/\/[a-z0-9-]+\.supabase\.co/iu)?.[0]??null;
+    const publishable=text.match(/sb_publishable_[A-Za-z0-9_-]+/u)?.[0]??null;
+    const jwts=[...text.matchAll(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/gu)].map(m=>m[0]);
+    const anonJwt=jwts.find(token=>jwtRole(token)==="anon")??null;
+    const anonKey=publishable??anonJwt;
+    if(supabaseUrl&&anonKey)return {supabaseUrl,anonKey};
+  }
+  throw new Error("PRODUCTION_SUPABASE_PUBLIC_CONFIG_NOT_FOUND");
+}
+async function productionAccessToken(){
+  if(productionAccessTokenCache)return productionAccessTokenCache;
+  const login=String(process.env.PRODUCTION_QA_LOGIN??"").trim();
+  const password=String(process.env.PRODUCTION_QA_PASSWORD??"");
+  if(!login||!password)throw new Error("PRODUCTION_QA_CREDENTIAL_MISSING");
+  const {supabaseUrl,anonKey}=await discoverProductionSupabasePublicConfig();
+  const r=await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`,{
+    method:"POST",
+    headers:{accept:"application/json","content-type":"application/json",apikey:anonKey,authorization:`Bearer ${anonKey}`},
+    body:JSON.stringify({email:internalEmailForLogin(login),password}),
+  });
+  if(!r.ok)throw new Error(`PRODUCTION_QA_SIGNIN_HTTP_${r.status}`);
+  const body=await r.json();
+  const token=String(body?.access_token??"");
+  if(token.length<40)throw new Error("PRODUCTION_QA_ACCESS_TOKEN_INVALID");
+  const profile=await fetch("https://lsj119.com/api/auth/profile",{headers:{accept:"application/json",authorization:`Bearer ${token}`}});
+  if(profile.status!==200)throw new Error(`PRODUCTION_QA_PROFILE_HTTP_${profile.status}`);
+  productionAccessTokenCache=token;
+  return token;
+}
+
 async function productionBars5(symbol){
+  const token=await productionAccessToken();
   const url=`https://lsj119.com/api/stocks/${encodeURIComponent(symbol)}/candles?tf=5m`;
-  const r=await fetch(url,{headers:{accept:"application/json","user-agent":"seungjae-research-replay/2.0"}});
+  const r=await fetch(url,{headers:{accept:"application/json","user-agent":"seungjae-research-replay/2.1",authorization:`Bearer ${token}`}});
   if(!r.ok)throw new Error(`PRODUCTION_CANDLE_HTTP_${r.status}`);
   const body=await r.json(),out=normalizePublicCandleRows(body?.candles);
   if(body?.ok!==true||body?.provider==="none"||out.length<100)throw new Error(`PRODUCTION_5M_INSUFFICIENT:${body?.provider??"unknown"}:${out.length}`);
@@ -125,7 +182,7 @@ async function main(){
   const symbols=[...union].sort((a,b)=>b[1]-a[1]).slice(0,INTRADAY_CAP).map(x=>x[0]),bf=await mapLimit(symbols,2,async symbol=>({symbol,...await bars5(symbol)})),ok=bf.filter(x=>x.ok).map(x=>x.value),intra=new Map(ok.map(x=>[x.symbol,groupDays(x.rows)])),intradaySources=Object.fromEntries(ok.map(x=>[x.symbol,x.source]));
   const familyRows=[];for(const f of Object.values(FAMILIES)){const c=runPeriod(f,cal,cands,intra),v=runPeriod(f,val,cands,intra);familyRows.push({family:f.name,calibration:c,validation:v,selectionScore:selectScore(c),validationPass:validationPass(v)});}
   familyRows.sort((a,b)=>b.selectionScore-a.selectionScore);const selected=familyRows.find(x=>x.validationPass)??familyRows[0],testRun=runPeriod(FAMILIES[selected.family],test,cands,intra);
-  const report={schemaVersion:2,status:"pass",market:"US_STOCK",purpose:"chronological D-1 candidate -> D-day 5m/15m wave/candle/VWAP replay V2",dataWindow:{completePreObservedDates:allDates,observedCutoffExclusive:OBSERVED_CUTOFF,calibrationDates:cal,validationDates:val,testDates:test,testWindowPreviouslyInspectedByThisReplay:false},universe:{rawRows:u.rawRows,screenedSymbols:u.rows.length,dailyHistorySuccesses:drows.length,intradayRequested:symbols.length,intradaySucceeded:ok.length,intradaySources,benchmarkSource:spy5.source},selectionContract:{triggerFamiliesPreRegistered:Object.keys(FAMILIES),calibrationUsedForRanking:true,validationUsedOnlyAsGate:true,testUsedForSelection:false,actualHistoricalLlmCalled:false,critic:"DETERMINISTIC_AI_READY_FEATURE_GATE_V2"},accountPolicy:ACCOUNT,familyResults:familyRows.map(x=>({family:x.family,selectionScore:x.selectionScore,validationPass:x.validationPass,calibration:{metrics:x.calibration.metrics,trades:x.calibration.trades.length},validation:{metrics:x.validation.metrics,trades:x.validation.trades.length}})),selectedFamily:selected.family,selectedStatus:selected.validationPass?"VALIDATION_GATE_PASS":"RESEARCH_HOLD_NO_FAMILY_VALIDATED",test:{metrics:testRun.metrics,days:testRun.days,trades:testRun.trades.map(t=>({symbol:t.symbol,date:t.date,bucket:t.bucket,setupScore:t.setupScore,triggerScore:t.triggerScore,entryTime:new Date(t.entryTime).toISOString(),exitTime:new Date(t.exitTime).toISOString(),netReturn:t.netReturn,stopDistancePct:t.stopDistancePct,tp1:t.tp1,tp2:t.tp2,exitReason:t.exitReason,aiInputBundle:t.aiInputBundle}))},lookahead:{D1UsesPriorDayOrEarlier:true,intradayCompleted5m15mOnly:true,entryNext5mOpen:true,testUsedForSelection:false,guardPassed:true},safety:{researchOnly:true,liveExecutionAllowed:false,privateAccountRequestAllowed:false,executionAuthority:"NONE",profitabilityPromotionAllowed:false},limitations:["Current Nasdaq universe causes survivorship/current-membership bias.","Public Production candle API is preferred; Yahoo direct is fallback. Available intraday history remains provider-bounded.","Historical catalyst/news/order-book/short-interest inputs are not available and are not fabricated.","AI is represented by deterministic feature gates; historical LLM decisions require archived model/prompt/input/output.","The V2 family design was created after V1 observations, but this V2 test window is restricted to dates before the V1 observed cutoff.","This is research evidence only, not broker fill evidence or PROFITABILITY_PROVEN."]};
+  const report={schemaVersion:2,status:"pass",market:"US_STOCK",purpose:"chronological D-1 candidate -> D-day 5m/15m wave/candle/VWAP replay V2",dataWindow:{completePreObservedDates:allDates,observedCutoffExclusive:OBSERVED_CUTOFF,calibrationDates:cal,validationDates:val,testDates:test,testWindowPreviouslyInspectedByThisReplay:false},universe:{rawRows:u.rawRows,screenedSymbols:u.rows.length,dailyHistorySuccesses:drows.length,intradayRequested:symbols.length,intradaySucceeded:ok.length,intradaySources,benchmarkSource:spy5.source},selectionContract:{triggerFamiliesPreRegistered:Object.keys(FAMILIES),calibrationUsedForRanking:true,validationUsedOnlyAsGate:true,testUsedForSelection:false,actualHistoricalLlmCalled:false,critic:"DETERMINISTIC_AI_READY_FEATURE_GATE_V2",productionQaAuthUsedForReadOnlyCandles:true,productionMutationRoutesCalled:false,privateAccountRoutesCalled:false},accountPolicy:ACCOUNT,familyResults:familyRows.map(x=>({family:x.family,selectionScore:x.selectionScore,validationPass:x.validationPass,calibration:{metrics:x.calibration.metrics,trades:x.calibration.trades.length},validation:{metrics:x.validation.metrics,trades:x.validation.trades.length}})),selectedFamily:selected.family,selectedStatus:selected.validationPass?"VALIDATION_GATE_PASS":"RESEARCH_HOLD_NO_FAMILY_VALIDATED",test:{metrics:testRun.metrics,days:testRun.days,trades:testRun.trades.map(t=>({symbol:t.symbol,date:t.date,bucket:t.bucket,setupScore:t.setupScore,triggerScore:t.triggerScore,entryTime:new Date(t.entryTime).toISOString(),exitTime:new Date(t.exitTime).toISOString(),netReturn:t.netReturn,stopDistancePct:t.stopDistancePct,tp1:t.tp1,tp2:t.tp2,exitReason:t.exitReason,aiInputBundle:t.aiInputBundle}))},lookahead:{D1UsesPriorDayOrEarlier:true,intradayCompleted5m15mOnly:true,entryNext5mOpen:true,testUsedForSelection:false,guardPassed:true},safety:{researchOnly:true,liveExecutionAllowed:false,privateAccountRequestAllowed:false,executionAuthority:"NONE",profitabilityPromotionAllowed:false},limitations:["Current Nasdaq universe causes survivorship/current-membership bias.","Public Production candle API is preferred; Yahoo direct is fallback. Available intraday history remains provider-bounded.","Historical catalyst/news/order-book/short-interest inputs are not available and are not fabricated.","AI is represented by deterministic feature gates; historical LLM decisions require archived model/prompt/input/output.","The V2 family design was created after V1 observations, but this V2 test window is restricted to dates before the V1 observed cutoff.","This is research evidence only, not broker fill evidence or PROFITABILITY_PROVEN."]};
   const out=resolve(process.argv[2]??"docs/overnight-intraday-replay-v2.json");await mkdir(dirname(out),{recursive:true});await writeFile(out,JSON.stringify(report,null,2)+"\n","utf8");console.log(JSON.stringify(report,null,2));
 }
 await main();
