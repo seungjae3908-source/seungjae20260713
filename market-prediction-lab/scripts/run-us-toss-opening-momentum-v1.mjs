@@ -888,7 +888,10 @@ async function main() {
     commonTrades: report.commonBreakout.normal.metrics.trades,
     epGapCandidates: report.episodicPivot.gapCandidates,
     epConfirmedTrades: report.episodicPivot.normal.metrics.trades,
-    peadRows: report.pead.positiveEventHorizonRows,
+    peadRows: report.pead.eventHorizonRows,
+    pead5TopDecileMean: report.pead.byHorizon?.["5"]?.analystSueTopDecile?.metrics?.meanNetReturn ?? null,
+    jtMomentumSpread: report.academicMomentum.jtMomentumJ6K6Skip1.aggregate.meanDescriptiveTopMinusBottomReturn,
+    high52Spread: report.academicMomentum.high52WeekK6.aggregate.meanDescriptiveTopMinusBottomReturn,
     earningsAvailableSymbols,
   }));
 }
