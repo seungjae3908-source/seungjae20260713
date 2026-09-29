@@ -667,10 +667,20 @@ function cleanPitTicker(value) {
   const symbol = String(value ?? "").trim().toUpperCase();
   return /^[A-Z][A-Z0-9.-]{0,9}$/.test(symbol) ? symbol : null;
 }
+function sha256Text(value) {
+  return "sha256:" + createHash("sha256").update(String(value)).digest("hex");
+}
 async function alphaListingStatus(date = null) {
-  const configuredKey = String(process.env.ALPHA_VANTAGE_API_KEY ?? "").trim();
-  const apiKey = configuredKey || "demo";
-  const credentialMode = configuredKey ? "CONFIGURED_SECRET" : "PUBLIC_DEMO";
+  const apiKey = String(process.env.ALPHA_VANTAGE_API_KEY ?? "").trim();
+  if (!apiKey) {
+    return {
+      status: "BLOCKED_ALPHA_VANTAGE_KEY_MISSING",
+      date,
+      rows: [],
+      credentialMode: "MISSING",
+      error: "ALPHA_VANTAGE_API_KEY_MISSING",
+    };
+  }
   const url = new URL(ALPHA_VANTAGE_BASE);
   url.searchParams.set("function", "LISTING_STATUS");
   if (date) url.searchParams.set("date", date);
@@ -715,7 +725,14 @@ async function alphaListingStatus(date = null) {
         && row.listingStatus === "ACTIVE"
       );
       if (rows.length < 500) throw new Error(`ALPHA_VANTAGE_LISTING_STATUS_INSUFFICIENT_${rows.length}`);
-      return { status: "AVAILABLE", date, rows, credentialMode };
+      return {
+        status: "AVAILABLE",
+        date,
+        rows,
+        credentialMode: "CONFIGURED_SECRET",
+        sourceId: `alpha-vantage-listing-status:${date ?? "latest"}`,
+        sourceDigest: sha256Text(text),
+      };
     } catch (error) {
       lastError = error;
       await sleep(1_500 * (attempt + 1));
@@ -723,58 +740,235 @@ async function alphaListingStatus(date = null) {
       clearTimeout(timer);
     }
   }
-  return { status: "BLOCKED_ALPHA_VANTAGE_LISTING_STATUS", date, rows: [], credentialMode, error: String(lastError?.message ?? lastError) };
+  return {
+    status: "BLOCKED_ALPHA_VANTAGE_LISTING_STATUS",
+    date,
+    rows: [],
+    credentialMode: "CONFIGURED_SECRET",
+    error: String(lastError?.message ?? lastError),
+  };
+}
+function decodeHtml(value) {
+  return String(value ?? "")
+    .replace(/<[^>]+>/gu, " ")
+    .replace(/&amp;/gu, "&")
+    .replace(/&nbsp;/gu, " ")
+    .replace(/&#39;|&apos;/gu, "'")
+    .replace(/&quot;/gu, '"')
+    .replace(/&#x([0-9a-f]+);/giu, (_match, hex) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/gu, (_match, dec) => String.fromCodePoint(Number.parseInt(dec, 10)))
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+async function wikipediaSp500Snapshot(asOfDate) {
+  const revisionUrl = new URL("https://en.wikipedia.org/w/api.php");
+  revisionUrl.searchParams.set("action", "query");
+  revisionUrl.searchParams.set("format", "json");
+  revisionUrl.searchParams.set("prop", "revisions");
+  revisionUrl.searchParams.set("titles", "List of S&P 500 companies");
+  revisionUrl.searchParams.set("rvprop", "ids|timestamp");
+  revisionUrl.searchParams.set("rvstart", `${asOfDate}T23:59:59Z`);
+  revisionUrl.searchParams.set("rvdir", "older");
+  revisionUrl.searchParams.set("rvlimit", "1");
+  revisionUrl.searchParams.set("origin", "*");
+  const revisionPayload = await fetchJson(revisionUrl, "WIKIPEDIA_SP500_REVISION", { attempts: 3 });
+  const page = Object.values(revisionPayload?.query?.pages ?? {})[0];
+  const revision = page?.revisions?.[0];
+  const revisionId = Number(revision?.revid);
+  if (!Number.isInteger(revisionId) || revisionId <= 0) throw new Error("WIKIPEDIA_SP500_REVISION_MISSING");
+
+  const parseUrl = new URL("https://en.wikipedia.org/w/api.php");
+  parseUrl.searchParams.set("action", "parse");
+  parseUrl.searchParams.set("format", "json");
+  parseUrl.searchParams.set("oldid", String(revisionId));
+  parseUrl.searchParams.set("prop", "text");
+  parseUrl.searchParams.set("origin", "*");
+  const parsed = await fetchJson(parseUrl, "WIKIPEDIA_SP500_PARSE", { attempts: 3 });
+  const html = String(parsed?.parse?.text?.["*"] ?? "");
+  if (!html) throw new Error("WIKIPEDIA_SP500_HTML_MISSING");
+  const tables = [...html.matchAll(/<table\b[\s\S]*?<\/table>/giu)].map((match) => match[0]);
+  const table = tables.find((candidate) => /GICS Sector/iu.test(candidate) && /(Symbol|Ticker symbol)/iu.test(candidate))
+    ?? tables.find((candidate) => /constituents/iu.test(candidate));
+  if (!table) throw new Error("WIKIPEDIA_SP500_CONSTITUENTS_TABLE_MISSING");
+  const rows = [];
+  for (const match of table.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/giu)) {
+    const cells = [...match[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/giu)].map((cell) => decodeHtml(cell[1]));
+    if (!cells.length) continue;
+    const symbol = cleanPitTicker(cells[0]);
+    if (!symbol) continue;
+    rows.push({
+      symbol,
+      name: cells[1] ?? symbol,
+      exchange: "SP500",
+      assetType: "STOCK",
+      ipoDate: null,
+      delistingDate: null,
+      listingStatus: "ACTIVE",
+    });
+  }
+  const uniqueRows = [...new Map(rows.map((row) => [row.symbol, row])).values()];
+  if (uniqueRows.length < 450) throw new Error(`WIKIPEDIA_SP500_MEMBERSHIP_INSUFFICIENT_${uniqueRows.length}`);
+  return {
+    status: "AVAILABLE",
+    date: asOfDate,
+    rows: uniqueRows,
+    credentialMode: "PUBLIC_NO_KEY",
+    sourceId: `wikipedia-sp500-oldid:${revisionId}`,
+    sourceDigest: sha256Text(html),
+    revisionId,
+    revisionTimestamp: String(revision.timestamp ?? ""),
+  };
 }
 function deterministicPitSample(rows) {
   return [...rows]
     .sort((left, right) => pitSampleHash(left.symbol).localeCompare(pitSampleHash(right.symbol)) || left.symbol.localeCompare(right.symbol))
     .slice(0, PIT_SAMPLE_SIZE);
 }
-function academicRecord(row, month) {
+function academicPitRecord(row, month) {
   const candles = row.daily;
   const index = monthEndIndex(candles, month);
   if (index < 252 || candles[index].close < 5) return null;
-  const forward = sixMonthForwardReturn(candles, index, NORMAL_COST);
-  if (!forward) return null;
   const sixMonthEnd = index - 21;
   const sixMonthStart = sixMonthEnd - 126;
   if (sixMonthStart < 0) return null;
+  const entryIndex = index + 1;
+  if (entryIndex >= candles.length) return null;
   const jt6mSignal = candles[sixMonthEnd].close / candles[sixMonthStart].close - 1;
   const high52 = maxHigh(candles.slice(index - 251, index + 1));
   if (!(high52 > 0)) return null;
-  return {
+  const entry = candles[entryIndex].open * (1 + NORMAL_COST);
+  const exitIndex = index + 126;
+  const base = {
     symbol: row.symbol,
     bucket: row.bucket ?? "PIT",
     sector: row.sector ?? "PIT_UNKNOWN",
     formationMonth: month,
+    formationDate: nyParts(candles[index].timestamp).date,
+    entryDate: nyParts(candles[entryIndex].timestamp).date,
     jt6mSignal,
     high52Ratio: candles[index].close / high52,
-    ...forward,
+  };
+  if (exitIndex < candles.length) {
+    const exit = candles[exitIndex].close * (1 - NORMAL_COST);
+    return {
+      ...base,
+      outcomeStatus: "COMPLETE",
+      netReturn: exit / entry - 1,
+      lastObservedNetReturn: exit / entry - 1,
+      wipeoutStressReturn: exit / entry - 1,
+      exitDate: nyParts(candles[exitIndex].timestamp).date,
+    };
+  }
+  const last = candles.at(-1);
+  const lastObservedNetReturn = last && last.timestamp > candles[entryIndex].timestamp
+    ? last.close * (1 - NORMAL_COST) / entry - 1
+    : null;
+  return {
+    ...base,
+    outcomeStatus: "TERMINAL_VALUE_UNPROVEN",
+    netReturn: null,
+    lastObservedNetReturn,
+    wipeoutStressReturn: -1,
+    exitDate: null,
+  };
+}
+function pitDecileSummary(records, signalKey) {
+  const valid = records.filter((row) => Number.isFinite(row[signalKey])).sort((a, b) => a[signalKey] - b[signalKey]);
+  if (!valid.length) {
+    return {
+      count: 0,
+      decileN: 0,
+      top: null,
+      bottom: null,
+      observedOnlyTopMinusBottomMeanReturn: null,
+      wipeoutStressTopMinusBottomMeanReturn: null,
+      allOutcomesProven: false,
+      tradableLongShortClaimAllowed: false,
+    };
+  }
+  const decileN = Math.max(1, Math.ceil(valid.length * 0.10));
+  const bottom = valid.slice(0, decileN);
+  const top = valid.slice(-decileN);
+  const metrics = (rows) => {
+    const complete = rows.filter((row) => Number.isFinite(row.netReturn));
+    const blocked = rows.filter((row) => !Number.isFinite(row.netReturn));
+    const observedMean = complete.length ? mean(complete.map((row) => row.netReturn)) : null;
+    const lastObserved = rows.map((row) => Number.isFinite(row.netReturn) ? row.netReturn : row.lastObservedNetReturn).filter(Number.isFinite);
+    const wipeout = rows.map((row) => Number.isFinite(row.netReturn) ? row.netReturn : -1);
+    return {
+      count: rows.length,
+      completedOutcomes: complete.length,
+      blockedTerminalOutcomes: blocked.length,
+      outcomeCoverage: rows.length ? complete.length / rows.length : 0,
+      allOutcomesProven: blocked.length === 0,
+      meanNetReturn: blocked.length === 0 ? observedMean : null,
+      observedOnlyMeanNetReturn: observedMean,
+      lastObservedBoundMeanReturn: lastObserved.length === rows.length ? mean(lastObserved) : null,
+      wipeoutStressMeanReturn: mean(wipeout),
+      minSignal: Math.min(...rows.map((row) => row[signalKey])),
+      maxSignal: Math.max(...rows.map((row) => row[signalKey])),
+      blockedSymbols: blocked.map((row) => row.symbol),
+    };
+  };
+  const topMetrics = metrics(top);
+  const bottomMetrics = metrics(bottom);
+  const observedSpread = topMetrics.observedOnlyMeanNetReturn != null && bottomMetrics.observedOnlyMeanNetReturn != null
+    ? topMetrics.observedOnlyMeanNetReturn - bottomMetrics.observedOnlyMeanNetReturn
+    : null;
+  return {
+    count: valid.length,
+    decileN,
+    top: topMetrics,
+    bottom: bottomMetrics,
+    observedOnlyTopMinusBottomMeanReturn: observedSpread,
+    wipeoutStressTopMinusBottomMeanReturn: topMetrics.wipeoutStressMeanReturn - bottomMetrics.wipeoutStressMeanReturn,
+    allOutcomesProven: topMetrics.allOutcomesProven && bottomMetrics.allOutcomesProven,
+    tradableLongShortClaimAllowed: false,
   };
 }
 function aggregateFormationMetric(formations, key) {
   const usable = formations.map((formation) => formation[key]).filter((value) => value?.top && value?.bottom);
+  const proven = usable.filter((value) => value.allOutcomesProven && value.top.meanNetReturn != null && value.bottom.meanNetReturn != null);
   return {
     formationCount: usable.length,
-    meanTopDecileReturn: usable.length ? mean(usable.map((value) => value.top.meanNetReturn)) : null,
-    meanBottomDecileReturn: usable.length ? mean(usable.map((value) => value.bottom.meanNetReturn)) : null,
-    meanDescriptiveTopMinusBottomReturn: usable.length ? mean(usable.map((value) => value.descriptiveTopMinusBottomMeanReturn)) : null,
+    allOutcomeProvenFormationCount: proven.length,
+    meanTopDecileReturn: proven.length ? mean(proven.map((value) => value.top.meanNetReturn)) : null,
+    meanBottomDecileReturn: proven.length ? mean(proven.map((value) => value.bottom.meanNetReturn)) : null,
+    meanDescriptiveTopMinusBottomReturn: proven.length ? mean(proven.map((value) => value.top.meanNetReturn - value.bottom.meanNetReturn)) : null,
+    meanObservedOnlyTopMinusBottomReturn: usable.length ? mean(usable.map((value) => value.observedOnlyTopMinusBottomMeanReturn).filter(Number.isFinite)) : null,
+    meanWipeoutStressTopMinusBottomReturn: usable.length ? mean(usable.map((value) => value.wipeoutStressTopMinusBottomMeanReturn).filter(Number.isFinite)) : null,
+    terminalBlockedFormationCount: usable.filter((value) => !value.allOutcomesProven).length,
     canonicalReplicationClaimAllowed: false,
   };
 }
 async function buildPitMembershipMomentumStress() {
   const apiKeyPresent = Boolean(String(process.env.ALPHA_VANTAGE_API_KEY ?? "").trim());
   const formationMemberships = [];
-  for (const month of ACADEMIC_FORMATION_MONTHS) {
+  let providerMode = apiKeyPresent ? "ALPHA_VANTAGE" : "WIKIPEDIA_SP500";
+  let alphaFallbackReason = null;
+  let alphaProbe = null;
+  if (providerMode === "ALPHA_VANTAGE") {
+    alphaProbe = await alphaListingStatus(monthEndDate(ACADEMIC_FORMATION_MONTHS[0]));
+    if (alphaProbe.status !== "AVAILABLE") {
+      providerMode = "WIKIPEDIA_SP500";
+      alphaFallbackReason = alphaProbe.error ?? alphaProbe.status;
+    }
+  }
+  for (let formationIndex = 0; formationIndex < ACADEMIC_FORMATION_MONTHS.length; formationIndex += 1) {
+    const month = ACADEMIC_FORMATION_MONTHS[formationIndex];
     const asOfDate = monthEndDate(month);
-    const listing = await alphaListingStatus(asOfDate);
+    const listing = providerMode === "ALPHA_VANTAGE"
+      ? (formationIndex === 0 && alphaProbe?.status === "AVAILABLE" ? alphaProbe : await alphaListingStatus(asOfDate))
+      : await wikipediaSp500Snapshot(asOfDate);
     if (listing.status !== "AVAILABLE") {
       return {
-        status: listing.status,
-        provider: "alpha-vantage-listing-status",
+        status: "BLOCKED_PIT_PUBLIC_MEMBERSHIP_SOURCE",
+        provider: providerMode === "ALPHA_VANTAGE" ? "alpha-vantage-listing-status" : "wikipedia-sp500-historical-revision",
         providerConfigured: apiKeyPresent,
-        credentialMode: listing.credentialMode ?? (apiKeyPresent ? "CONFIGURED_SECRET" : "PUBLIC_DEMO"),
+        credentialMode: listing.credentialMode ?? (apiKeyPresent ? "CONFIGURED_SECRET" : "PUBLIC_NO_KEY"),
+        alphaFallbackReason,
         selectionUsesCurrentMembership: false,
+        currentMembershipUsedForSelection: false,
         failedFormationMonth: month,
         error: listing.error ?? null,
         sampleSizePerFormation: PIT_SAMPLE_SIZE,
@@ -785,11 +979,23 @@ async function buildPitMembershipMomentumStress() {
       };
     }
     const sample = deterministicPitSample(listing.rows);
-    formationMemberships.push({ month, asOfDate, sourceRows: listing.rows.length, sample });
-    await sleep(13_000);
+    formationMemberships.push({
+      month,
+      asOfDate,
+      sourceRows: listing.rows.length,
+      sourceId: listing.sourceId,
+      sourceDigest: listing.sourceDigest,
+      revisionId: listing.revisionId ?? null,
+      revisionTimestamp: listing.revisionTimestamp ?? null,
+      sample,
+    });
+    if (providerMode === "ALPHA_VANTAGE" && formationIndex < ACADEMIC_FORMATION_MONTHS.length - 1) await sleep(13_000);
   }
 
-  const latestListing = await alphaListingStatus(null);
+  const latestAsOfDate = "2026-09-29";
+  const latestListing = providerMode === "ALPHA_VANTAGE"
+    ? await alphaListingStatus(latestAsOfDate)
+    : await wikipediaSp500Snapshot(latestAsOfDate);
   const latestActive = latestListing.status === "AVAILABLE" ? new Set(latestListing.rows.map((row) => row.symbol)) : null;
   const unionSymbols = [...new Set(formationMemberships.flatMap((formation) => formation.sample.map((row) => row.symbol)))];
   const histories = await mapLimit(unionSymbols, 8, async (symbol) => ({
@@ -802,18 +1008,25 @@ async function buildPitMembershipMomentumStress() {
       timeoutMs: 15_000,
     })).candles,
   }));
-  const historyBySymbol = new Map(histories.filter((result) => result.ok && result.value.daily.length >= 300).map((result) => [result.value.symbol, result.value.daily]));
-  const historyFailures = histories.filter((result) => !result.ok || !result.value?.daily || result.value.daily.length < 300).map((result, index) => ({
-    symbol: result.ok ? result.value.symbol : unionSymbols[index] ?? null,
-    error: result.ok ? "HISTORY_INSUFFICIENT" : result.error,
-  }));
+  const historyBySymbol = new Map(
+    histories
+      .filter((result) => result.ok && result.value.daily.length >= 300)
+      .map((result) => [result.value.symbol, result.value.daily]),
+  );
+  const historyFailures = histories.map((result, index) => {
+    if (result.ok && result.value?.daily?.length >= 300) return null;
+    return {
+      symbol: result.ok ? result.value.symbol : unionSymbols[index] ?? null,
+      error: result.ok ? `HISTORY_INSUFFICIENT_${result.value?.daily?.length ?? 0}` : result.error,
+    };
+  }).filter(Boolean);
 
   const formations = formationMemberships.map((formation) => {
     const readyRows = formation.sample.map((member) => {
       const daily = historyBySymbol.get(member.symbol);
       return daily ? { symbol: member.symbol, bucket: "PIT", sector: "PIT_UNKNOWN", daily } : null;
     }).filter(Boolean);
-    const records = readyRows.map((row) => academicRecord(row, formation.month)).filter(Boolean);
+    const records = readyRows.map((row) => academicPitRecord(row, formation.month)).filter(Boolean);
     const futureRemovedFromLatest = latestActive
       ? formation.sample.filter((member) => !latestActive.has(member.symbol)).map((member) => member.symbol)
       : [];
@@ -821,25 +1034,34 @@ async function buildPitMembershipMomentumStress() {
       month: formation.month,
       asOfDate: formation.asOfDate,
       sourceRows: formation.sourceRows,
+      sourceId: formation.sourceId,
+      sourceDigest: formation.sourceDigest,
+      revisionId: formation.revisionId,
+      revisionTimestamp: formation.revisionTimestamp,
       deterministicSampleSize: formation.sample.length,
       historyReady: readyRows.length,
       evaluableRecords: records.length,
       historyCoverage: formation.sample.length ? readyRows.length / formation.sample.length : 0,
       futureRemovedFromLatestCount: futureRemovedFromLatest.length,
       futureRemovedFromLatestSymbols: futureRemovedFromLatest,
-      jtMomentumJ6K6Skip1: decileSummary(records, "jt6mSignal"),
-      high52WeekK6: decileSummary(records, "high52Ratio"),
+      terminalValueBlockedRecords: records.filter((row) => row.outcomeStatus === "TERMINAL_VALUE_UNPROVEN").length,
+      jtMomentumJ6K6Skip1: pitDecileSummary(records, "jt6mSignal"),
+      high52WeekK6: pitDecileSummary(records, "high52Ratio"),
     };
   });
   const minimumHistoryReady = formations.length ? Math.min(...formations.map((formation) => formation.historyReady)) : 0;
-  const status = minimumHistoryReady >= PIT_MIN_HISTORY_READY ? "PIT_MEMBERSHIP_STRESS_COMPLETE" : "BLOCKED_PIT_HISTORY_COVERAGE";
+  const status = minimumHistoryReady >= PIT_MIN_HISTORY_READY
+    ? "PIT_HISTORICAL_MEMBERSHIP_STRESS_COMPLETE"
+    : "BLOCKED_PIT_HISTORY_COVERAGE";
 
   return {
     status,
-    provider: "alpha-vantage-listing-status",
+    provider: providerMode === "ALPHA_VANTAGE" ? "alpha-vantage-listing-status" : "wikipedia-sp500-historical-revision",
     providerConfigured: apiKeyPresent,
-    credentialMode: apiKeyPresent ? "CONFIGURED_SECRET" : "PUBLIC_DEMO",
+    credentialMode: providerMode === "ALPHA_VANTAGE" ? "CONFIGURED_SECRET" : "PUBLIC_NO_KEY",
+    alphaFallbackReason,
     providerHistoricalMembershipAsOfDate: true,
+    providerUniverseScope: providerMode === "ALPHA_VANTAGE" ? "US_ACTIVE_STOCKS" : "S&P_500_CONSTITUENTS",
     selectionUsesCurrentMembership: false,
     currentMembershipUsedForSelection: false,
     currentMembershipUsedForRemovedNameDiagnosticOnly: true,
@@ -850,11 +1072,14 @@ async function buildPitMembershipMomentumStress() {
     unionSymbols: unionSymbols.length,
     yahooHistoryReadySymbols: historyBySymbol.size,
     yahooHistoryFailures: historyFailures.slice(0, 30),
-    latestListingDiagnosticAvailable: Boolean(latestActive),
+    latestMembershipDiagnosticAvailable: Boolean(latestActive),
+    latestMembershipSourceId: latestListing.sourceId ?? null,
+    latestMembershipSourceDigest: latestListing.sourceDigest ?? null,
     canonicalPitDatasetClaimAllowed: false,
     corporateActionReceiptReady: false,
     delistedTerminalPricePolicyReady: false,
     fullUniverseReplicationClaimAllowed: false,
+    terminalValueMissingDoesNotDisappearFromDecile: true,
     formations,
     jtMomentumJ6K6Skip1: {
       recipeId: "CROSS_SECTIONAL_PRICE_MOMENTUM_V1",
