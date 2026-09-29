@@ -14,6 +14,9 @@ const STRESS_COST = NORMAL_COST * 1.5;
 const COMMON_CANDIDATES_PER_DAY = 5;
 const ACCOUNT = Object.freeze({ riskPerTrade: 0.005, maxWeight: 0.20, maxConcurrent: 3, maxPerSector: 2 });
 const PEAD_HORIZONS = Object.freeze([5, 20, 40]);
+const PEAD_PRIOR_START = "2025-07-01";
+const PEAD_RECENT_START = "2026-07-01";
+const PEAD_RECENT_END = "2026-09-20";
 const QULLAMAGGIE_BREAKOUT_SOURCE = "https://qullamaggie.com/my-3-timeless-setups-that-have-made-me-tens-of-millions/";
 const QULLAMAGGIE_EP_SOURCE = "https://qullamaggie.com/how-to-master-a-setup-episodic-pivots/";
 const PEAD_REVIEW_DOI = "10.1016/j.jbef.2020.100446";
@@ -510,7 +513,7 @@ function peadRows(row, earnings) {
   const output = [];
   if (earnings.status !== "AVAILABLE") return output;
   for (const event of earnings.events) {
-    if (event.date < "2026-07-01" || event.date >= "2026-09-20") continue;
+    if (event.date < PEAD_PRIOR_START || event.date >= PEAD_RECENT_END) continue;
     if (event.actual == null || event.forecast == null) continue;
     const candles = row.daily;
     const priceMonthPrior = priceOneMonthBefore(candles, event.date);
@@ -525,7 +528,9 @@ function peadRows(row, earnings) {
       const exit = candles[exitIndex].close * (1 - NORMAL_COST);
       output.push({
         symbol: row.symbol, sector: row.sector, bucket: row.bucket,
-        eventDate: event.date, actualEps: event.actual, consensusEps: event.forecast,
+        eventDate: event.date,
+        validationWindow: event.date < PEAD_RECENT_START ? "PRIOR" : "RECENT",
+        actualEps: event.actual, consensusEps: event.forecast,
         surprisePct: event.surprisePct, priceMonthPrior, analystSueProxy,
         horizonSessions: horizon, netReturn: exit / entry - 1,
       });
@@ -854,6 +859,10 @@ async function main() {
     pead: {
       status: earningsAvailableSymbols > 0 ? "ANALYST_SUE_PROXY_REPLICATION_COMPLETE" : "BLOCKED_EARNINGS_SURPRISE_DATA",
       eventHorizonRows: pead.length,
+      windows: {
+        PRIOR: { startInclusive: PEAD_PRIOR_START, endExclusive: PEAD_RECENT_START, byHorizon: summarizePead(pead.filter((row) => row.validationWindow === "PRIOR")) },
+        RECENT: { startInclusive: PEAD_RECENT_START, endExclusive: PEAD_RECENT_END, byHorizon: summarizePead(pead.filter((row) => row.validationWindow === "RECENT")) },
+      },
       byHorizon: summarizePead(pead),
       canonicalIbesSueafReplication: false,
       canonicalTimeSeriesSueStatus: "BLOCKED_QUARTERLY_EPS_HISTORY_AND_FORECAST_VINTAGE",
@@ -888,7 +897,7 @@ async function main() {
       "Common Breakout qualitative terms such as orderly consolidation are converted into fixed, preregistered higher-low/range-tightening rules without parameter search.",
       "True EP credit requires a matched positive earnings-surprise event. Gap+volume without catalyst remains mechanics-only and cannot be labeled EP.",
       "Nasdaq earnings-surprise availability is best-effort; missing event data fails closed instead of being inferred from price.",
-      "PEAD uses an analyst-SUE proxy from Nasdaq actual/consensus EPS scaled by a one-month-prior price. Nasdaq does not prove the exact 30-day I/B/E/S forecast vintage, so this is not canonical SUEAF.",
+      "PEAD uses an analyst-SUE proxy from Nasdaq actual/consensus EPS scaled by a one-month-prior price and reports PRIOR/RECENT windows separately. Nasdaq does not prove the exact 30-day I/B/E/S forecast vintage, so this is not canonical SUEAF.",
       "Canonical Foster-Olsen-Shevlin SUE needs current EPS, EPS four quarters earlier, and the standard deviation of quarterly EPS changes over prior quarters; those fields are not available in the current repository and remain fail-closed.",
       "No historical guidance, revenue-growth, analyst-revision, news-text, order-book, short-interest, wave/candle or AI overlay is used in the baseline.",
       "Academic momentum and 52-week-high outputs apply a $5 formation-price floor, use current-snapshot symbols, daily approximations to monthly portfolio formation, and do not construct the papers' full overlapping monthly portfolio return series.",
