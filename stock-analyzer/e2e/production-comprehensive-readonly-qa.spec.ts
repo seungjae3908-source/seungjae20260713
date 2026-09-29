@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { expect, test, type BrowserContext, type Page, type Request, type TestInfo } from '@playwright/test';
+import { expect, test, type APIResponse, type BrowserContext, type Page, type Request, type TestInfo } from '@playwright/test';
 import {
   installProductionReadOnlyPolicy,
   isIgnorableProductionRequestFailure,
@@ -157,12 +157,32 @@ async function installSafety(page: Page, blocked: Diagnostic[]) {
 }
 
 const LOGIN_READY_BUDGET_MS = 15_000;
+const LOGIN_NAVIGATION_TIMEOUT_RETRIES = 1;
+const LOGIN_INTERACTIVE_COLD_RETRIES = 1;
+const CACHED_AUTH_TIMEOUT_RETRIES = 1;
 type CachedAuthState = Awaited<ReturnType<BrowserContext['storageState']>>;
 const authStateByViewport = new Map<string, CachedAuthState>();
 
 function authCacheKey(page: Page) {
   const viewport = page.viewportSize();
   return viewport ? `${viewport.width}x${viewport.height}` : 'default';
+}
+
+function isPlaywrightTimeout(error: unknown) {
+  return error instanceof Error
+    && (error.name === 'TimeoutError' || /Timeout \d+ms exceeded/i.test(error.message));
+}
+
+async function gotoLoginWithTimeoutRetry(page: Page) {
+  for (let attempt = 0; attempt <= LOGIN_NAVIGATION_TIMEOUT_RETRIES; attempt += 1) {
+    try {
+      await page.goto('/login', { waitUntil: 'commit', timeout: LOGIN_READY_BUDGET_MS });
+      return;
+    } catch (error) {
+      if (!isPlaywrightTimeout(error) || attempt >= LOGIN_NAVIGATION_TIMEOUT_RETRIES) throw error;
+    }
+  }
+  throw new Error('PRODUCTION_QA_LOGIN_NAVIGATION_UNAVAILABLE');
 }
 
 async function restoreCachedAuthState(page: Page, state: CachedAuthState) {
@@ -215,14 +235,24 @@ function accessTokenFromStorageState(state: CachedAuthState) {
 
 async function validateCachedAuthState(page: Page, state: CachedAuthState) {
   const token = accessTokenFromStorageState(state);
-  const response = await page.request.get(new URL('/api/auth/profile', baseUrl).toString(), {
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    timeout: LOGIN_READY_BUDGET_MS,
-    failOnStatusCode: false,
-  });
+  let response: APIResponse | null = null;
+  for (let attempt = 0; attempt <= CACHED_AUTH_TIMEOUT_RETRIES; attempt += 1) {
+    try {
+      response = await page.request.get(new URL('/api/auth/profile', baseUrl).toString(), {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        timeout: LOGIN_READY_BUDGET_MS,
+        failOnStatusCode: false,
+      });
+      break;
+    } catch (error) {
+      const timeoutOnly = isPlaywrightTimeout(error);
+      if (!timeoutOnly || attempt >= CACHED_AUTH_TIMEOUT_RETRIES) throw error;
+    }
+  }
+  if (!response) throw new Error('PRODUCTION_QA_CACHED_SESSION_PROFILE_UNAVAILABLE');
   if (response.status() !== 200) {
     throw new Error(`PRODUCTION_QA_CACHED_SESSION_PROFILE_${response.status()}`);
   }
@@ -248,7 +278,8 @@ async function login(
     if (cached) {
       // Validate the real password-login path once per viewport, then reuse the
       // exact in-memory authenticated browser state for later read-only tests.
-      // Cached-session failure remains fail-closed; there is no login retry.
+      // Cached-session auth/status failures remain fail-closed. Only a transport
+      // timeout gets one bounded repeat of the same read-only profile proof.
       await restoreCachedAuthState(page, cached);
       // Do not add a second root-page navigation before every read-only test.
       // The first test in each viewport proves the real password-login path;
@@ -256,33 +287,59 @@ async function login(
       // whether the session is still accepted. This remains fail-closed while
       // avoiding a redundant / navigation that previously timed out under load.
       await validateCachedAuthState(page, cached);
-      authStateByViewport.set(cacheKey, await page.context().storageState());
+      // The new page is still about:blank here. restoreCachedAuthState installs
+      // the Production-origin localStorage seed for the next navigation, but it
+      // has not materialized that origin yet. Recapturing storageState now can
+      // therefore replace the valid cache with a tokenless state and make the
+      // following read-only test fail before navigation. The exact cached token
+      // was just proven by the profile GET, so preserve that verified state.
       return;
     }
 
-    // Judge readiness by the actual interactive login surface while preserving
-    // one total 15s readiness budget. Do not extend the gate through serial waits.
-    const readinessStartedAt = Date.now();
-    const remainingReadinessMs = () =>
-      Math.max(1, LOGIN_READY_BUDGET_MS - (Date.now() - readinessStartedAt));
-
-    await page.goto('/login', { waitUntil: 'commit', timeout: remainingReadinessMs() });
     const loginId = page.getByLabel('아이디');
     const loginPassword = page.getByLabel('비밀번호');
     const loginButton = page.getByRole('button', { name: '로그인', exact: true });
 
-    await expect.poll(async () => {
-      const [idVisible, passwordVisible, buttonVisible, fallbackVisible] = await Promise.all([
-        loginId.isVisible({ timeout: 250 }).catch(() => false),
-        loginPassword.isVisible({ timeout: 250 }).catch(() => false),
-        loginButton.isVisible({ timeout: 250 }).catch(() => false),
-        page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false),
-      ]);
-      return idVisible && passwordVisible && buttonVisible && !fallbackVisible ? 'READY' : 'PENDING';
-    }, {
-      timeout: remainingReadinessMs(),
-      intervals: [100, 200, 400, 800],
-    }).toBe('READY');
+    // Keep the 15s interactive criterion strict. A page that is still the
+    // diagnostic-free /login fallback after that full budget gets one fresh
+    // cold-start attempt; status, auth, browser, and mutation failures remain
+    // fail-closed and are never retried.
+    for (let attempt = 0; attempt <= LOGIN_INTERACTIVE_COLD_RETRIES; attempt += 1) {
+      await gotoLoginWithTimeoutRetry(page);
+      const readinessStartedAt = Date.now();
+      const remainingReadinessMs = () =>
+        Math.max(1, LOGIN_READY_BUDGET_MS - (Date.now() - readinessStartedAt));
+      try {
+        await expect.poll(async () => {
+          const [idVisible, passwordVisible, buttonVisible, fallbackVisible] = await Promise.all([
+            loginId.isVisible({ timeout: 250 }).catch(() => false),
+            loginPassword.isVisible({ timeout: 250 }).catch(() => false),
+            loginButton.isVisible({ timeout: 250 }).catch(() => false),
+            page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false),
+          ]);
+          return idVisible && passwordVisible && buttonVisible && !fallbackVisible ? 'READY' : 'PENDING';
+        }, {
+          timeout: remainingReadinessMs(),
+          intervals: [100, 200, 400, 800],
+        }).toBe('READY');
+        break;
+      } catch (error) {
+        const [idVisible, passwordVisible, buttonVisible, fallbackVisible] = await Promise.all([
+          loginId.isVisible({ timeout: 250 }).catch(() => false),
+          loginPassword.isVisible({ timeout: 250 }).catch(() => false),
+          loginButton.isVisible({ timeout: 250 }).catch(() => false),
+          page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false),
+        ]);
+        const diagnosticFreeColdFallback = currentPath(page) === '/login'
+          && fallbackVisible
+          && !idVisible
+          && !passwordVisible
+          && !buttonVisible
+          && diagnostics.length === diagnosticStart
+          && blocked.length === blockedStart;
+        if (!diagnosticFreeColdFallback || attempt >= LOGIN_INTERACTIVE_COLD_RETRIES) throw error;
+      }
+    }
 
     await loginId.fill(qaLogin, { timeout: 3_000 });
     await loginPassword.fill(qaPassword, { timeout: 3_000 });
@@ -630,17 +687,29 @@ function responseMatchesChart(rawUrl: string, market: string, timeframe: string)
 }
 
 async function chartMatrix(page: Page, onProgress: (audits: ChartAudit[]) => void): Promise<ChartAudit[]> {
+  const bootstrapStatuses = new Map<string, number[]>();
+  const bootstrapListener = (response: { url(): string; status(): number }) => {
+    for (const market of CHART_MARKETS) {
+      for (const timeframe of TIMEFRAMES) {
+        if (!responseMatchesChart(response.url(), market, timeframe)) continue;
+        const key = `${market}:${timeframe}`;
+        bootstrapStatuses.set(key, [...(bootstrapStatuses.get(key) ?? []), response.status()]);
+      }
+    }
+  };
+  page.on('response', bootstrapListener);
   await page.goto('/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m', {
     waitUntil: 'domcontentloaded',
     timeout: 15_000,
   });
   await expect(page.getByTestId('unified-analysis-chart')).toBeVisible({ timeout: 12_000 });
+  page.off('response', bootstrapListener);
   const audits: ChartAudit[] = [];
   for (const market of CHART_MARKETS) {
     await page.getByTestId(`market-${market}`).click({ timeout: 2_500 }).catch(() => undefined);
     await expect(page).toHaveURL(new RegExp(`market=${market}`), { timeout: 4_000 }).catch(() => undefined);
     for (const timeframe of TIMEFRAMES) {
-      const statuses: number[] = [];
+      const statuses: number[] = [...(bootstrapStatuses.get(`${market}:${timeframe}`) ?? [])];
       const listener = (response: { url(): string; status(): number }) => {
         if (responseMatchesChart(response.url(), market, timeframe)) statuses.push(response.status());
       };

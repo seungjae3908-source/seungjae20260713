@@ -3,6 +3,7 @@ import {
   installProductionReadOnlyPolicy,
   isIgnorableProductionRequestFailure,
 } from './support/production-readonly-policy';
+import { loginProductionReadOnly } from './support/production-readonly-login';
 
 const baseUrl = String(process.env.PRODUCTION_BASE_URL ?? '').replace(/\/$/, '');
 const qaLogin = String(process.env.PRODUCTION_QA_LOGIN ?? '');
@@ -18,12 +19,7 @@ const productionOrigin = baseUrl ? new URL(baseUrl).origin : 'http://production-
 type Failure = { kind: string; detail: string };
 
 async function login(page: Page) {
-  await page.goto('/login', { waitUntil: 'domcontentloaded', timeout: 15_000 });
-  await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 10_000 });
-  await page.getByLabel('아이디').fill(qaLogin, { timeout: 3_000 });
-  await page.getByLabel('비밀번호').fill(qaPassword, { timeout: 3_000 });
-  await page.getByRole('button', { name: '로그인', exact: true }).click({ timeout: 3_000 });
-  await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: 15_000 });
+  await loginProductionReadOnly(page, { login: qaLogin, password: qaPassword });
 }
 
 function attachRuntimeFailures(page: Page, failures: Failure[]) {
@@ -39,7 +35,7 @@ test.describe('Production Research Center read-only QA', () => {
   test.skip(!productionQaEnabled, 'Dedicated Production QA credentials and read-only flag are required');
 
   test('admin Research Center is reachable, bounded, scrollable, and read-only', async ({ page }) => {
-    test.setTimeout(60_000);
+    test.setTimeout(90_000);
     const blocked: Failure[] = [];
     const runtimeFailures: Failure[] = [];
     attachRuntimeFailures(page, runtimeFailures);

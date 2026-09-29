@@ -74,6 +74,10 @@ function verifyStaticContract() {
   );
   assert(workflow.includes('bash -n ops/production-trade-schema-readonly-audit.sh'), 'audit shell syntax validation missing');
   assert(workflow.includes('ref: ${{ env.TARGET_SHA }}'), 'exact approved checkout missing from deploy job');
+  assert((workflow.match(/secrets\.PROD_DATABASE_URL/g) ?? []).length === 1, 'Production database credential must be scoped exactly once');
+  assert(workflow.includes("printf '%s\\n' \"$PROD_DATABASE_URL\" | ssh"), 'database credential must enter the remote audit over stdin');
+  assert(workflow.includes('IFS= read -r PROD_DATABASE_URL; export PROD_DATABASE_URL'), 'remote stdin credential bridge missing');
+  assert(!workflow.includes('PROD_DATABASE_URL=%q'), 'database credential must not be embedded in remote command argv');
 
   assert(audit.startsWith('#!/usr/bin/env bash'), 'audit shebang missing');
   assert(audit.includes('set -Eeuo pipefail'), 'strict shell mode missing');
@@ -82,6 +86,9 @@ function verifyStaticContract() {
   assert(!/\/proc\/[^ \n]*environ/u.test(audit), 'raw process environment reads are forbidden');
   assert(!audit.includes('SUPABASE_SERVICE_ROLE_KEY'), 'service role key use is forbidden');
   assert(!audit.includes('SUPABASE_SECRET_KEY'), 'Supabase secret key use is forbidden');
+  assert(audit.includes('process.env.PROD_DATABASE_URL'), 'transient protected database credential input missing');
+  assert(audit.includes('transientProductionDatabaseUrl'), 'transient database credential candidate missing');
+  assert(audit.includes('delete baseEnv.PROD_DATABASE_URL'), 'database credential must be removed before spawning psql');
   assert(
     audit.includes("PGOPTIONS: '-c default_transaction_read_only=on -c statement_timeout=5000 -c lock_timeout=1000'"),
     'read-only PGOPTIONS missing',
