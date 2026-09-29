@@ -1,4 +1,4 @@
-name: Research Crypto Reference Momentum V2
+name: Research Crypto Reference Momentum V3
 
 on:
   pull_request:
@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: research-crypto-reference-momentum-v2-${{ github.event.pull_request.number || github.ref }}
+  group: research-crypto-reference-momentum-v3-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -56,18 +56,20 @@ jobs:
           for(const h of ['1','2','3','4']){
             const row=liu.result?.pooled?.[h];
             if(!row?.windows?.PRIOR||!row?.windows?.RECENT) throw new Error('LIU_WINDOWS_'+h);
+            if(!row?.years||Object.keys(row.years).length<4) throw new Error('LIU_YEARS_'+h);
             if(!('leaveBest1TopMinusBottomMean' in row)||!('leaveBest3TopMinusBottomMean' in row)) throw new Error('LIU_CONCENTRATION_'+h);
           }
           if(!mop||mop.parameterSearch!==false||mop.volatilityScaledCanonicalReplication!==false||mop.canonicalMopFuturesReplicationClaimAllowed!==false) throw new Error('MOP_TRUTH');
           if(r.promotionAssessment?.automaticPromotionAllowed!==false||r.promotionAssessment?.economicSampleCredit!==0) throw new Error('PROMOTION');
           if(r.promotionAssessment?.LIU_TSYVINSKI_CRYPTO_WEEKLY_MOMENTUM_V1?.automaticPromotionAllowed!==false) throw new Error('LIU_PROMOTION');
+          if(r.promotionAssessment?.LIU_TSYVINSKI_CRYPTO_WEEKLY_MOMENTUM_V1?.status!=='RESEARCH_HOLD_REGIME_DEPENDENT_AND_CONCENTRATED') throw new Error('LIU_STATUS');
           if(r.promotionAssessment?.MOP_TSMOM_12M_1M_SPOT_PROXY_V1?.automaticPromotionAllowed!==false) throw new Error('MOP_PROMOTION');
           if(r.safeguards?.researchOnly!==true||r.safeguards?.publicDataOnly!==true||r.safeguards?.privateAccountRequestAllowed!==false||r.safeguards?.orderRouteCalled!==false||r.safeguards?.actualOrders!==0||r.safeguards?.executionAuthority!=='NONE') throw new Error('SAFETY');
           NODE
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: crypto-reference-momentum-v2-${{ github.event.pull_request.head.sha }}
+          name: crypto-reference-momentum-v3-${{ github.event.pull_request.head.sha }}
           path: market-prediction-lab/docs/crypto-reference-momentum-v1.json
           if-no-files-found: error
           retention-days: 30
