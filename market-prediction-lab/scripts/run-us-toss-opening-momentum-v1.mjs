@@ -1381,10 +1381,16 @@ async function main() {
       pitUniverseEvidence: {
         canonicalAdapterOnMain: true,
         adapter: "stock-point-in-time-evidence-adapter-v1",
-        alphaVantageHistoricalMembershipStressStatus: pitMembershipStress.status,
+        historicalMembershipStressStatus: pitMembershipStress.status,
+        historicalMembershipStressProvider: pitMembershipStress.provider,
+        historicalMembershipStressUniverseScope: pitMembershipStress.providerUniverseScope,
         historicalMembershipStressUsesCurrentMembershipForSelection: pitMembershipStress.selectionUsesCurrentMembership,
+        boundedHistoricalMembershipStressReady: pitMembershipStress.status === "PIT_HISTORICAL_MEMBERSHIP_STRESS_COMPLETE",
         materializedUsPitDatasetReady: false,
-        firstZero: "US_PIT_MEMBERSHIP_REMOVED_LISTINGS_CORPORATE_ACTION_DATASET_NOT_MATERIALIZED",
+        canonicalFirstZero: "US_PIT_MEMBERSHIP_REMOVED_LISTINGS_CORPORATE_ACTION_DATASET_NOT_MATERIALIZED",
+        boundedStressFirstZero: pitMembershipStress.status === "PIT_HISTORICAL_MEMBERSHIP_STRESS_COMPLETE"
+          ? "US_PIT_TERMINAL_VALUE_AND_CORPORATE_ACTION_EVIDENCE_NOT_READY"
+          : "US_PIT_HISTORICAL_MEMBERSHIP_SOURCE_OR_PRICE_COVERAGE_NOT_READY",
       },
     },
     safety: {
