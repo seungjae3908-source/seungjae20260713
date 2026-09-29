@@ -146,6 +146,9 @@ SERVER_EVIDENCE_STATE_ROOT="$STATE_ROOT" \
 SERVER_EVIDENCE_SHADOW_STATE_ROOT="$SHADOW_STATE_ROOT" \
 node "$RELEASE_DIR/$RUNNER_REL" prepare-activation
 ACTIVATION_CREATED=true
+# The activation record contains only public provenance/safety metadata. The
+# DynamicUser service must be able to read it, while root remains the only writer.
+chmod 0644 "$ACTIVATION_PATH"
 
 MUTATION_STARTED=true
 install -m 0644 "$RELEASE_DIR/market-intelligence-sidecar/deploy/$CANONICAL_SERVICE" "$SYSTEMD_DIR/$CANONICAL_SERVICE"
