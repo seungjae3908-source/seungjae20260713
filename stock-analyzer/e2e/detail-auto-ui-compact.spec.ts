@@ -39,8 +39,8 @@ test('trading workspace unifies auto, paper, four markets, journal and selected-
   expect(settings).toContain('selectedMarket?: Market');
   expect(settings).toContain('visibleMarkets');
   expect(settings).toContain('visibleExchanges');
-  expect(journal).toContain('forcedMarket?: UnifiedTradeMarket');
-  expect(journal).toContain('forcedSource?: UnifiedTradeSource');
+  expect(journal).toContain('forcedMarket?: UnifiedJournalFilters');
+  expect(journal).toContain('forcedSource?: UnifiedJournalFilters');
   expect(auto).not.toContain('min-[1200px]:grid-cols-[minmax(0,1.05fr)_minmax(380px,0.95fr)]');
 });
 
