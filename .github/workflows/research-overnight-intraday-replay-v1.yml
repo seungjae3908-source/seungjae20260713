@@ -46,7 +46,7 @@ jobs:
           if(!(r.metrics.days>=2)) throw new Error('REPLAY_DAYS_TOO_SMALL');
           if(!(r.candidateRecords.length>0)) throw new Error('NO_D1_CANDIDATES');
           if(r.safety.researchOnly!==true||r.safety.liveExecutionAllowed!==false||r.safety.executionAuthority!=='NONE') throw new Error('SAFETY');
-          if(r.pipeline.critic.includes('actual LLM')) throw new Error('CRITIC_LABEL_AMBIGUOUS');
+          if(r.pipeline.criticActualLlmCalled!==false) throw new Error('HISTORICAL_LLM_FABRICATION_FORBIDDEN');
           NODE
       - uses: actions/upload-artifact@v4
         with:
