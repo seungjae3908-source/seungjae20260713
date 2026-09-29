@@ -4,8 +4,11 @@ import { collectYahooStockHistory } from "../src/yahoo-stock-history.js";
 
 const EVAL_START = Date.parse("2026-08-03T00:00:00.000Z");
 const EVAL_END = Date.parse("2026-09-26T00:00:00.000Z");
-const DAILY_START = Date.parse("2025-11-01T00:00:00.000Z");
+const DAILY_START = Date.parse("2024-06-01T00:00:00.000Z");
 const DAILY_END = Date.parse("2026-09-30T00:00:00.000Z");
+const ACADEMIC_FORMATION_MONTHS = Object.freeze(["2025-09", "2025-10", "2025-11", "2025-12", "2026-01", "2026-02"]);
+const JT_MOMENTUM_DOI = "10.1111/j.1540-6261.1993.tb04702.x";
+const GH_52W_HIGH_DOI = "10.1111/j.1540-6261.2004.00695.x";
 const NORMAL_COST = 0.0015;
 const STRESS_COST = NORMAL_COST * 1.5;
 const COMMON_CANDIDATES_PER_DAY = 5;
@@ -561,6 +564,110 @@ function summarizePead(rows) {
     }];
   }));
 }
+function monthEndIndex(candles, month) {
+  let index = -1;
+  for (let i = 0; i < candles.length; i += 1) {
+    const date = nyParts(candles[i].timestamp).date;
+    if (date.startsWith(month)) index = i;
+    else if (index >= 0 && date > `${month}-31`) break;
+  }
+  return index;
+}
+function sixMonthForwardReturn(candles, formationIndex, cost) {
+  const entryIndex = formationIndex + 1;
+  const exitIndex = formationIndex + 126;
+  if (entryIndex >= candles.length || exitIndex >= candles.length) return null;
+  const entry = candles[entryIndex].open * (1 + cost);
+  const exit = candles[exitIndex].close * (1 - cost);
+  return { netReturn: exit / entry - 1, entryDate: nyParts(candles[entryIndex].timestamp).date, exitDate: nyParts(candles[exitIndex].timestamp).date };
+}
+function decileSummary(records, signalKey) {
+  const valid = records.filter((row) => Number.isFinite(row[signalKey]) && Number.isFinite(row.netReturn)).sort((a, b) => a[signalKey] - b[signalKey]);
+  if (!valid.length) return { count: 0, decileN: 0, top: null, bottom: null, descriptiveTopMinusBottomMeanReturn: null };
+  const decileN = Math.max(1, Math.ceil(valid.length * 0.10));
+  const bottom = valid.slice(0, decileN);
+  const top = valid.slice(-decileN);
+  const metrics = (rows) => ({
+    count: rows.length,
+    meanNetReturn: mean(rows.map((row) => row.netReturn)),
+    medianNetReturn: median(rows.map((row) => row.netReturn)),
+    winRate: rows.filter((row) => row.netReturn > 0).length / rows.length,
+    minSignal: Math.min(...rows.map((row) => row[signalKey])),
+    maxSignal: Math.max(...rows.map((row) => row[signalKey])),
+  });
+  const topMetrics = metrics(top);
+  const bottomMetrics = metrics(bottom);
+  return {
+    count: valid.length,
+    decileN,
+    top: topMetrics,
+    bottom: bottomMetrics,
+    descriptiveTopMinusBottomMeanReturn: topMetrics.meanNetReturn - bottomMetrics.meanNetReturn,
+    tradableLongShortClaimAllowed: false,
+  };
+}
+function buildAcademicMomentumBaselines(rows) {
+  const formations = [];
+  for (const month of ACADEMIC_FORMATION_MONTHS) {
+    const records = [];
+    for (const row of rows) {
+      const candles = row.daily;
+      const index = monthEndIndex(candles, month);
+      if (index < 252) continue;
+      const forward = sixMonthForwardReturn(candles, index, NORMAL_COST);
+      if (!forward) continue;
+      const sixMonthEnd = index - 21;
+      const sixMonthStart = sixMonthEnd - 126;
+      if (sixMonthStart < 0) continue;
+      const jt6mSignal = candles[sixMonthEnd].close / candles[sixMonthStart].close - 1;
+      const high52 = maxHigh(candles.slice(index - 251, index + 1));
+      if (!(high52 > 0)) continue;
+      const high52Ratio = candles[index].close / high52;
+      records.push({
+        symbol: row.symbol, bucket: row.bucket, sector: row.sector, formationMonth: month,
+        jt6mSignal, high52Ratio, ...forward,
+      });
+    }
+    formations.push({
+      month,
+      records: records.length,
+      jtMomentumJ6K6Skip1: decileSummary(records, "jt6mSignal"),
+      high52WeekK6: decileSummary(records, "high52Ratio"),
+    });
+  }
+  const aggregate = (key) => {
+    const usable = formations.map((formation) => formation[key]).filter((value) => value?.top && value?.bottom);
+    return {
+      formationCount: usable.length,
+      meanTopDecileReturn: usable.length ? mean(usable.map((value) => value.top.meanNetReturn)) : null,
+      meanBottomDecileReturn: usable.length ? mean(usable.map((value) => value.bottom.meanNetReturn)) : null,
+      meanDescriptiveTopMinusBottomReturn: usable.length ? mean(usable.map((value) => value.descriptiveTopMinusBottomMeanReturn)) : null,
+      overlappingPortfolioReturnSeriesImplemented: false,
+      canonicalReplicationClaimAllowed: false,
+    };
+  };
+  return {
+    formationMonths: ACADEMIC_FORMATION_MONTHS,
+    formations,
+    jtMomentumJ6K6Skip1: {
+      recipeId: "CROSS_SECTIONAL_PRICE_MOMENTUM_V1",
+      sourceDoi: JT_MOMENTUM_DOI,
+      signal: "past 6-month return ending one month before formation",
+      holding: "subsequent 6 months",
+      portfolio: "top/bottom signal deciles within bounded cohort; descriptive return spread only",
+      aggregate: aggregate("jtMomentumJ6K6Skip1"),
+    },
+    high52WeekK6: {
+      recipeId: "FIFTY_TWO_WEEK_HIGH_MOMENTUM_V1",
+      sourceDoi: GH_52W_HIGH_DOI,
+      signal: "formation close / maximum daily high over previous 252 sessions",
+      holding: "subsequent 6 months",
+      portfolio: "top/bottom signal deciles within bounded cohort; descriptive return spread only",
+      aggregate: aggregate("high52WeekK6"),
+    },
+  };
+}
+
 async function main() {
   const universe = await fetchUniverse();
   const requested = Object.entries(universe.buckets).flatMap(([bucket, rows]) => rows.map((row) => ({ ...row, bucket })));
@@ -643,6 +750,7 @@ async function main() {
 
   const pead = [];
   for (const row of earningsResearchUniverse) pead.push(...peadRows(row, earningsBySymbol.get(row.symbol) ?? { status: "UNAVAILABLE", events: [] }));
+  const academicMomentum = buildAcademicMomentumBaselines(dailyUniverse);
 
   const report = {
     schemaVersion: 2,
@@ -676,6 +784,18 @@ async function main() {
         implementation: "analyst-SUE proxy=(actual EPS-consensus EPS)/price one month before announcement; rank bounded event cohort into top/bottom deciles; enter first full session strictly after report; measure 5/20/40-session returns",
         canonicalIbesSueafReplication: false,
         canonicalTimeSeriesSueStatus: "BLOCKED_QUARTERLY_EPS_HISTORY_AND_FORECAST_VINTAGE",
+        parameterSearch: false,
+      },
+      crossSectionalMomentum: {
+        recipeId: "CROSS_SECTIONAL_PRICE_MOMENTUM_V1",
+        sourceDoi: JT_MOMENTUM_DOI,
+        implementation: "J6/K6 with one-month skip, top/bottom deciles, six-month holding",
+        parameterSearch: false,
+      },
+      high52WeekMomentum: {
+        recipeId: "FIFTY_TWO_WEEK_HIGH_MOMENTUM_V1",
+        sourceDoi: GH_52W_HIGH_DOI,
+        implementation: "current price / prior 252-session high, top/bottom deciles, six-month holding",
         parameterSearch: false,
       },
     },
@@ -721,6 +841,7 @@ async function main() {
       canonicalTimeSeriesSueStatus: "BLOCKED_QUARTERLY_EPS_HISTORY_AND_FORECAST_VINTAGE",
       rows: pead,
     },
+    academicMomentum,
     costs: { normalPerSide: NORMAL_COST, stressPerSide: STRESS_COST },
     accountPolicy: ACCOUNT,
     lookahead: {
@@ -752,6 +873,7 @@ async function main() {
       "PEAD uses an analyst-SUE proxy from Nasdaq actual/consensus EPS scaled by a one-month-prior price. Nasdaq does not prove the exact 30-day I/B/E/S forecast vintage, so this is not canonical SUEAF.",
       "Canonical Foster-Olsen-Shevlin SUE needs current EPS, EPS four quarters earlier, and the standard deviation of quarterly EPS changes over prior quarters; those fields are not available in the current repository and remain fail-closed.",
       "No historical guidance, revenue-growth, analyst-revision, news-text, order-book, short-interest, wave/candle or AI overlay is used in the baseline.",
+      "Academic momentum and 52-week-high outputs use current-snapshot symbols, daily approximations to monthly portfolio formation, and do not construct the papers' full overlapping monthly portfolio return series.",
       "Historical replay is not genuine OOS/Forward, broker fill evidence, or PROFITABILITY_PROVEN.",
     ],
   };
