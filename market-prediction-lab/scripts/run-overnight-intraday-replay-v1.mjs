@@ -42,17 +42,37 @@ async function dailyHistory(symbol){
 }
 async function mapLimit(items,limit,fn){const out=new Array(items.length);let next=0;async function w(){for(;;){const i=next++;if(i>=items.length)return;try{out[i]={ok:true,value:await fn(items[i],i)};}catch(e){out[i]={ok:false,error:String(e?.message??e)};}}}await Promise.all(Array.from({length:Math.min(limit,items.length)},()=>w()));return out;}
 
-function parseIntraday(result){
+function parseIntraday(result,durationMin){
   const ts=result?.timestamp??[],q=result?.indicators?.quote?.[0]??{},out=[];
-  for(let i=0;i<ts.length;i++){const timestamp=Number(ts[i])*1000,open=Number(q.open?.[i]),high=Number(q.high?.[i]),low=Number(q.low?.[i]),close=Number(q.close?.[i]),volume=Number(q.volume?.[i]);if(!Number.isFinite(timestamp)||![open,high,low,close,volume].every(Number.isFinite)||Math.min(open,high,low,close)<=0||volume<0||high<Math.max(open,close)||low>Math.min(open,close))continue;out.push({timestamp,open,high,low,close,volume});}
+  for(let i=0;i<ts.length;i++){const timestamp=Number(ts[i])*1000,open=Number(q.open?.[i]),high=Number(q.high?.[i]),low=Number(q.low?.[i]),close=Number(q.close?.[i]),volume=Number(q.volume?.[i]);if(!Number.isFinite(timestamp)||![open,high,low,close,volume].every(Number.isFinite)||Math.min(open,high,low,close)<=0||volume<0||high<Math.max(open,close)||low>Math.min(open,close))continue;out.push({timestamp,open,high,low,close,volume,durationMin});}
   return out.sort((a,b)=>a.timestamp-b.timestamp);
 }
-async function intraday(symbol){
-  const enc=encodeURIComponent(symbol),query="range=7d&interval=1m&includePrePost=true&events=div%2Csplits";let last;
-  for(let attempt=0;attempt<3;attempt++){for(const host of ["query1.finance.yahoo.com","query2.finance.yahoo.com"]){try{const r=await fetch(`https://${host}/v8/finance/chart/${enc}?${query}`,{headers:{accept:"application/json,text/plain,*/*","user-agent":"Mozilla/5.0 Chrome/120"}});if(!r.ok)throw new Error(`YAHOO_1M_HTTP_${r.status}`);const result=(await r.json())?.chart?.result?.[0];const rows=parseIntraday(result);if(rows.length<100)throw new Error(`YAHOO_1M_INSUFFICIENT_${rows.length}`);return rows;}catch(e){last=e;}}await sleep(500*(attempt+1));}throw last;
+async function yahooBars(symbol){
+  const enc=encodeURIComponent(symbol);
+  const specs=[{interval:"1m",range:"7d",durationMin:1},{interval:"5m",range:"1mo",durationMin:5}];
+  const errors=[];
+  for(const spec of specs){
+    const query=`range=${spec.range}&interval=${spec.interval}&includePrePost=true&events=div%2Csplits`;
+    let last=null;
+    for(let attempt=0;attempt<3;attempt++){
+      for(const host of ["query1.finance.yahoo.com","query2.finance.yahoo.com"]){
+        try{
+          const r=await fetch(`https://${host}/v8/finance/chart/${enc}?${query}`,{headers:{accept:"application/json,text/plain,*/*","accept-language":"en-US,en;q=0.9","user-agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"}});
+          if(!r.ok)throw new Error(`YAHOO_${spec.interval}_HTTP_${r.status}`);
+          const result=(await r.json())?.chart?.result?.[0],rows=parseIntraday(result,spec.durationMin);
+          const minRows=spec.durationMin===1?100:40;
+          if(rows.length<minRows)throw new Error(`YAHOO_${spec.interval}_INSUFFICIENT_${rows.length}`);
+          return {rows,sourceInterval:spec.interval,durationMin:spec.durationMin};
+        }catch(e){last=e;}
+      }
+      await sleep(900*(attempt+1));
+    }
+    errors.push(String(last?.message??last));
+  }
+  throw new Error(`YAHOO_INTRADAY_ALL_FAILED:${errors.join("|")}`);
 }
 function groupRegularDays(rows){const m=new Map();for(const r of rows){if(!regular(r.timestamp))continue;const d=parts(r.timestamp).date,a=m.get(d)??[];a.push(r);m.set(d,a);}return m;}
-function completeDays(rows){return [...groupRegularDays(rows).entries()].filter(([,v])=>v.length>=300).map(([d])=>d).sort();}
+function completeDays(rows){return [...groupRegularDays(rows).entries()].filter(([,v])=>{const dur=v[0]?.durationMin??1;return v.length>=(dur===1?300:60);}).map(([d])=>d).sort();}
 
 function structureInput(symbol,timeframe,bars,decisionMs,options){
   if(!bars.length)return null;
@@ -78,8 +98,8 @@ function candidateForDay(row,spyCandles,targetDate,targetStartMs){
 
 function aggregate(rows,minutes){
   const out=[];let current=null;
-  for(const r of rows){const p=parts(r.timestamp),mod=p.hour*60+p.minute-570;if(mod<0)continue;const bucket=Math.floor(mod/minutes);if(!current||current.bucket!==bucket){if(current)out.push(current);current={bucket,open:r.open,high:r.high,low:r.low,close:r.close,volume:r.volume,startTime:r.timestamp,lastMinute:r.timestamp};}else{current.high=Math.max(current.high,r.high);current.low=Math.min(current.low,r.low);current.close=r.close;current.volume+=r.volume;current.lastMinute=r.timestamp;}}
-  if(current)out.push(current);return out.map(b=>({...b,closeTime:b.lastMinute+60_000}));
+  for(const r of rows){const p=parts(r.timestamp),mod=p.hour*60+p.minute-570;if(mod<0)continue;const bucket=Math.floor(mod/minutes);if(!current||current.bucket!==bucket){if(current)out.push(current);current={bucket,open:r.open,high:r.high,low:r.low,close:r.close,volume:r.volume,startTime:r.timestamp,lastMinute:r.timestamp,durationMin:r.durationMin??1};}else{current.high=Math.max(current.high,r.high);current.low=Math.min(current.low,r.low);current.close=r.close;current.volume+=r.volume;current.lastMinute=r.timestamp;}}
+  if(current)out.push(current);return out.map(b=>({...b,closeTime:b.lastMinute+((b.durationMin??1)*60_000)}));
 }
 function vwapAt(rows,cutoff){let pv=0,v=0;for(const r of rows){if(r.timestamp>=cutoff)break;if(r.volume>0){pv+=((r.high+r.low+r.close)/3)*r.volume;v+=r.volume;}}return v>0?pv/v:null;}
 function medianVol(bars,count=5){const v=bars.slice(-count).map(x=>x.volume).filter(x=>x>0);return median(v)??0;}
@@ -134,16 +154,16 @@ function portfolioDay(trades){
 function summarizeDays(days){const rs=days.map(x=>x.return),wins=rs.filter(x=>x>0),loss=rs.filter(x=>x<0);let eq=1,peak=1,mdd=0;for(const r of rs){eq*=1+r;peak=Math.max(peak,eq);mdd=Math.max(mdd,(peak-eq)/peak);}return {days:days.length,totalReturn:eq-1,averageDailyReturn:mean(rs)??0,medianDailyReturn:median(rs)??0,positiveDayRate:rs.length?wins.length/rs.length:0,averageWinningDay:mean(wins)??0,averageLosingDay:mean(loss)??0,bestDay:rs.length?Math.max(...rs):0,worstDay:rs.length?Math.min(...rs):0,maxDrawdown:mdd,daysAtLeast1Pct:rs.filter(x=>x>=0.01).length,daysAtLeast3Pct:rs.filter(x=>x>=0.03).length,daysAtLeast5Pct:rs.filter(x=>x>=0.05).length,daysAtLeast10Pct:rs.filter(x=>x>=0.10).length};}
 
 async function main(){
-  const universe=await fetchUniverse(),spyDaily=await dailyHistory("SPY"),spy1m=await intraday("SPY"),dates=completeDays(spy1m).slice(-MAX_REPLAY_DAYS);if(dates.length<2)throw new Error("REPLAY_DAYS_INSUFFICIENT");
+  const universe=await fetchUniverse(),spyDaily=await dailyHistory("SPY"),spyIntraday=await yahooBars("SPY"),dates=completeDays(spyIntraday.rows).slice(-MAX_REPLAY_DAYS);if(dates.length<2)throw new Error("REPLAY_DAYS_INSUFFICIENT");
   const dailyFetched=await mapLimit(universe.rows,6,async row=>({...row,candles:(await dailyHistory(row.symbol)).candles})),dailyRows=dailyFetched.filter(x=>x.ok).map(x=>x.value),dailyFailures=dailyFetched.filter(x=>!x.ok);
-  const spyDays=groupRegularDays(spy1m),candidateByDay=new Map(),allCandidates=[];
+  const spyDays=groupRegularDays(spyIntraday.rows),candidateByDay=new Map(),allCandidates=[];
   for(const date of dates){const start=spyDays.get(date)?.[0]?.timestamp;if(!start)continue;const candidates=dailyRows.map(row=>candidateForDay(row,spyDaily.candles,date,start)).filter(Boolean).sort((a,b)=>b.setupScore-a.setupScore||a.symbol.localeCompare(b.symbol)).slice(0,CANDIDATES_PER_DAY);candidateByDay.set(date,candidates);allCandidates.push(...candidates);}
   const bestSymbolScore=new Map();for(const c of allCandidates)bestSymbolScore.set(c.symbol,Math.max(bestSymbolScore.get(c.symbol)??0,c.setupScore));const intradaySymbols=[...bestSymbolScore.entries()].sort((a,b)=>b[1]-a[1]).slice(0,INTRADAY_SYMBOL_CAP).map(x=>x[0]);
-  const intradayFetched=await mapLimit(intradaySymbols,4,async symbol=>({symbol,rows:await intraday(symbol)})),intradayMap=new Map(intradayFetched.filter(x=>x.ok).map(x=>[x.value.symbol,groupRegularDays(x.value.rows)])),intradayFailures=intradayFetched.filter(x=>!x.ok);
+  const intradayFetched=await mapLimit(intradaySymbols,3,async symbol=>({symbol,...await yahooBars(symbol)})),intradayOk=intradayFetched.filter(x=>x.ok).map(x=>x.value),intradayMap=new Map(intradayOk.map(x=>[x.symbol,groupRegularDays(x.rows)])),intradaySourceBySymbol=Object.fromEntries(intradayOk.map(x=>[x.symbol,x.sourceInterval])),intradayFailures=intradayFetched.filter(x=>!x.ok);
   const replayDays=[],candidateRecords=[],tradeRecords=[];
   for(const date of dates){const cs=candidateByDay.get(date)??[],trades=[];for(const c of cs){const rows=intradayMap.get(c.symbol)?.get(date);if(!rows||rows.length<100){candidateRecords.push({...c,state:"DATA_UNAVAILABLE"});continue;}const r=replayCandidate(c,rows);candidateRecords.push({...c,replayState:r.state});if(r.state==="TRIGGERED"){trades.push(r);tradeRecords.push(r);}}
     const p=portfolioDay(trades);replayDays.push({date,candidateCount:cs.length,triggered:trades.length,...p});}
-  const metrics=summarizeDays(replayDays),report={schemaVersion:1,status:"pass",market:"US_STOCK",purpose:"D-1 candidate to D-day wave/candle/VWAP intraday replay",replayWindow:{dates},universe:{rawRows:universe.rawRows,screenedSymbols:universe.rows.length,dailyHistorySuccesses:dailyRows.length,dailyHistoryFailures:dailyFailures.length,intradaySymbolsRequested:intradaySymbols.length,intradaySymbolsSucceeded:intradayMap.size,intradayFailures:intradayFailures.length,currentUniverseSnapshotBias:true},pipeline:{D1:"daily trend + relative strength + dollar-volume acceleration + deterministic price-structure/wave/candle descriptors",D0:"completed 5m/15m bars only + VWAP + wave/HH-HL/BOS-CHOCH + candle body/wicks + volume reacceleration",critic:"deterministic AI-ready critic proxy; actual LLM not called",execution:"next 1m open after completed trigger bar",exit:"25% at +1R, 25% at +2R, 50% runner; structural/protection/VWAP/EOD exits"},lookahead:{futureCandlesVisibleAtDecision:false,D1CandidateUsesOnlyPriorDayOrEarlier:true,intradayUsesOnlyCompletedBars:true,nextBarEntry:true,sameBarAmbiguity:"stop/protection first",guardPassed:true},accountPolicy:ACCOUNT,metrics,replayDays,candidateRecords,tradeRecords:tradeRecords.map(t=>({symbol:t.symbol,targetDate:t.targetDate,bucket:t.bucket,setupScore:t.setupScore,triggerScore:t.triggerScore,entryTime:new Date(t.entryTime).toISOString(),exitTime:new Date(t.exitTime).toISOString(),stopDistancePct:t.stopDistancePct,netReturn:t.netReturn,tp1:t.tp1,tp2:t.tp2,exitReason:t.exitReason,critic:t.critic,aiInputBundle:t.aiInputBundle})),safety:{researchOnly:true,liveExecutionAllowed:false,privateAccountRequestAllowed:false,executionAuthority:"NONE"},limitations:["Yahoo public 1m history is limited to recent days; this validates replay mechanics, not long-horizon profitability.","Current Nasdaq universe membership introduces survivorship/current-membership bias.","Historical news/catalyst/order-book/short-interest snapshots are not available and are not fabricated.","The AI critic in this run is a deterministic replay proxy. Historical LLM decisions require archived model+prompt+input+output records.","Daily marked account return uses risk-normalized position returns and concurrency gates but is not broker fill evidence.","This run cannot establish PROFITABILITY_PROVEN or trading authority."]};
+  const metrics=summarizeDays(replayDays),report={schemaVersion:1,status:"pass",market:"US_STOCK",purpose:"D-1 candidate to D-day wave/candle/VWAP intraday replay",replayWindow:{dates},universe:{rawRows:universe.rawRows,screenedSymbols:universe.rows.length,dailyHistorySuccesses:dailyRows.length,dailyHistoryFailures:dailyFailures.length,intradaySymbolsRequested:intradaySymbols.length,intradaySymbolsSucceeded:intradayMap.size,intradayFailures:intradayFailures.length,intradaySourceBySymbol,spyIntradaySource:spyIntraday.sourceInterval,currentUniverseSnapshotBias:true},pipeline:{D1:"daily trend + relative strength + dollar-volume acceleration + deterministic price-structure/wave/candle descriptors",D0:"completed 5m/15m bars only + VWAP + wave/HH-HL/BOS-CHOCH + candle body/wicks + volume reacceleration",critic:"DETERMINISTIC_AI_READY_CRITIC_PROXY_V1",criticActualLlmCalled:false,execution:"next 1m open after completed trigger bar",exit:"25% at +1R, 25% at +2R, 50% runner; structural/protection/VWAP/EOD exits"},lookahead:{futureCandlesVisibleAtDecision:false,D1CandidateUsesOnlyPriorDayOrEarlier:true,intradayUsesOnlyCompletedBars:true,nextBarEntry:true,sameBarAmbiguity:"stop/protection first",guardPassed:true},accountPolicy:ACCOUNT,metrics,replayDays,candidateRecords,tradeRecords:tradeRecords.map(t=>({symbol:t.symbol,targetDate:t.targetDate,bucket:t.bucket,setupScore:t.setupScore,triggerScore:t.triggerScore,entryTime:new Date(t.entryTime).toISOString(),exitTime:new Date(t.exitTime).toISOString(),stopDistancePct:t.stopDistancePct,netReturn:t.netReturn,tp1:t.tp1,tp2:t.tp2,exitReason:t.exitReason,critic:t.critic,aiInputBundle:t.aiInputBundle})),safety:{researchOnly:true,liveExecutionAllowed:false,privateAccountRequestAllowed:false,executionAuthority:"NONE"},limitations:["Yahoo public intraday history is bounded; 1m is preferred and 5m is a fail-closed fallback. This validates replay mechanics, not long-horizon profitability.","Current Nasdaq universe membership introduces survivorship/current-membership bias.","Historical news/catalyst/order-book/short-interest snapshots are not available and are not fabricated.","The AI critic in this run is a deterministic replay proxy. Historical LLM decisions require archived model+prompt+input+output records.","Daily marked account return uses risk-normalized position returns and concurrency gates but is not broker fill evidence.","This run cannot establish PROFITABILITY_PROVEN or trading authority."]};
   const out=resolve(process.argv[2]??"docs/overnight-intraday-replay-v1.json");await mkdir(dirname(out),{recursive:true});await writeFile(out,JSON.stringify(report,null,2)+"\n","utf8");console.log(JSON.stringify(report,null,2));
 }
 await main();
