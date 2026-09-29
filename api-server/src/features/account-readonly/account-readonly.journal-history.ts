@@ -777,14 +777,18 @@ export function createAccountJournalHistoryReader(options: AccountJournalHistory
               ? await readBitget(loaded.credentials, userId, startMs, endMs, fetchImpl, controller.signal, counter, maxBitgetPages)
               : await readKiwoom(loaded.credentials, userId, endMs, days, fetchImpl, controller.signal, counter, maxKiwoomDomesticDates);
           payloads.push(...result.payloads);
-          if ('realizedEvidence' in result) realizedEvidence.push(...result.realizedEvidence);
+          const providerRealizedEvidence: AccountJournalRealizedEvidence[] =
+            'realizedEvidence' in result && Array.isArray(result.realizedEvidence)
+              ? result.realizedEvidence as AccountJournalRealizedEvidence[]
+              : [];
+          realizedEvidence.push(...providerRealizedEvidence);
           anyTruncated ||= result.truncated;
           providers.push({
             provider,
             configured: true,
             enabled: true,
             status: result.truncated ? 'PARTIAL' : 'READY',
-            records: result.payloads.length + ('realizedEvidence' in result ? result.realizedEvidence.length : 0),
+            records: result.payloads.length + providerRealizedEvidence.length,
             privateProviderRequests: counter.value,
             truncated: result.truncated,
             errorCode: result.normalizationFailures > 0 ? 'HISTORY_NORMALIZATION_PARTIAL' : null,
