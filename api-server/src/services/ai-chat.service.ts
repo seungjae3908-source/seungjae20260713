@@ -772,9 +772,12 @@ export async function answerAiChat(
       );
       publicContext.timeframeEvidence = timeframeEvidence;
       const timeframeAvailable = timeframeEvidence.status !== 'unavailable';
+      const timeframeFreshEnough = timeframeEvidence.freshness !== 'stale'
+        && timeframeEvidence.freshness !== 'unavailable';
+      const timeframeUsableForCurrentClaims = timeframeAvailable && timeframeFreshEnough;
       publicContext.data = {
         ...publicContext.data,
-        status: timeframeAvailable
+        status: timeframeUsableForCurrentClaims
           ? publicContext.data.status === 'unavailable' || publicContext.data.status === 'not_requested'
             ? 'partial'
             : publicContext.data.status
@@ -784,10 +787,16 @@ export async function answerAiChat(
         sources: unique([
           ...publicContext.data.sources,
           ...(timeframeEvidence.provider ? [`선택 시간봉: ${timeframeEvidence.provider}`] : []),
+          `선택 시간봉 최신성: ${timeframeEvidence.freshness.toUpperCase()}`,
         ]),
-        missing: timeframeAvailable
+        missing: timeframeUsableForCurrentClaims
           ? publicContext.data.missing.filter((item) => !item.includes('OHLCV·기술지표'))
-          : unique([...publicContext.data.missing, `선택 시간봉 ${context.timeframe} OHLCV·기술지표`]),
+          : unique([
+              ...publicContext.data.missing,
+              timeframeAvailable
+                ? `선택 시간봉 ${context.timeframe} OHLCV·기술지표 최신성(STALE)`
+                : `선택 시간봉 ${context.timeframe} OHLCV·기술지표`,
+            ]),
       };
     }
     const prompt = publicQuestionPayload(message, publicContext, portfolioAssistantContext);
