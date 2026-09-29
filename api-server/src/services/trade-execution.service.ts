@@ -70,6 +70,10 @@ import {
   type PreSubmissionRiskResult,
 } from './trade-pre-submission-risk.service';
 import { getScannerSignalLifecycleSnapshot } from './scanner-signal-lifecycle.service';
+import {
+  spotLiveCapabilityDecision,
+  spotLivePlanCapabilityDecision,
+} from './spot-live-limited-capability.service';
 import type {
   TradingExchange,
   TradingOrder,
@@ -411,6 +415,12 @@ export class TradeExecutionService {
     };
 
     try {
+      for (const capability of ['BALANCE_READ', 'POSITION_READ'] as const) {
+        const decision = spotLiveCapabilityDecision({ exchange, capability });
+        if (!decision.allowed) {
+          throw new Error(`SPOT_LIVE_CAPABILITY_BLOCKED:${decision.blockCodes.join(',')}`);
+        }
+      }
       if (exchange === 'upbit') {
         await request(() => sendExchangeListRequest(
           BASE_URLS.upbit,
@@ -535,12 +545,15 @@ export class TradeExecutionService {
       }
       const currentPolicy = await this.repository.getPolicy(userId);
       const automaticLive = currentPolicy.mode === 'automatic' && currentPolicy.automaticEnabled;
+      const capabilityDecision = spotLivePlanCapabilityDecision(plan, 'ORDER_CREATE');
       const currentLiveAuthority = automaticLive
         ? automaticLiveExecutionEnabled(plan.exchange)
         : liveExecutionEnabled(plan.exchange);
-      if (!currentLiveAuthority) {
-        return this.automation.transition(order, 'REJECTED', 'LIVE_EXECUTION_DISABLED', {
-          errorCode: 'LIVE_EXECUTION_DISABLED',
+      if (!currentLiveAuthority || !capabilityDecision.allowed) {
+        const errorCode = capabilityDecision.blockCodes[0] ?? 'LIVE_EXECUTION_DISABLED';
+        return this.automation.transition(order, 'REJECTED', 'SPOT_LIVE_CAPABILITY_BLOCKED', {
+          errorCode,
+          capabilityBlockCodes: capabilityDecision.blockCodes,
           orderSubmissionAttempted: false,
           automaticLiveAuthorityRequired: automaticLive,
         });

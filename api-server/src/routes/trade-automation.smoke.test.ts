@@ -356,6 +356,9 @@ test('exit preview re-reads the real position in read-only mode and never submit
     'LIVE_TRADING',
     'ORDER_EXECUTION_ENABLED',
     'LIVE_TRADING_ACTIVATION_APPROVED',
+    'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED',
+    'SPOT_LIVE_CAPABILITY_ALLOWLIST',
+    'SPOT_LIVE_MARKET_ALLOWLIST',
     'REAL_ORDER_ENABLED',
     'PRIVATE_TRADING_API_ALLOWED',
     'TOSS_LIVE_ORDER_ENABLED',
@@ -654,10 +657,13 @@ test('exit preview re-reads the real position in read-only mode and never submit
       lastErrorCode: null,
       updatedAt: verifiedAt,
     });
-    process.env.executionAuthority = 'MANUAL';
+    process.env.executionAuthority = 'SPOT_LIVE_LIMITED';
     process.env.LIVE_TRADING = 'true';
     process.env.ORDER_EXECUTION_ENABLED = 'true';
     process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+    process.env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED = 'true';
+    process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST = 'BALANCE_READ,POSITION_READ,OPEN_ORDER_READ,ORDER_CREATE,ORDER_CANCEL,ORDER_AMEND';
+    process.env.SPOT_LIVE_MARKET_ALLOWLIST = 'KR_STOCK,US_STOCK,CRYPTO_SPOT';
     process.env.REAL_ORDER_ENABLED = 'true';
     process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
     process.env.TOSS_LIVE_ORDER_ENABLED = 'true';
@@ -1545,6 +1551,16 @@ test('connection registration rejects withdrawal permission and does not echo se
 
 
 test('live trading connection requires explicit purpose plus read+orders and never activates by credential save', async () => {
+  process.env.ORDER_EXECUTION_ENABLED = 'true';
+  process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+  process.env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED = 'true';
+  process.env.REAL_ORDER_ENABLED = 'true';
+  process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
+  process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+  process.env.LIVE_TRADING = 'true';
+  process.env.executionAuthority = 'SPOT_LIVE_LIMITED';
+  process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST = 'BALANCE_READ,POSITION_READ';
+  process.env.SPOT_LIVE_MARKET_ALLOWLIST = 'CRYPTO_SPOT';
   const { server, baseUrl } = await startServer();
   try {
     const credentials = { accessKey: 'live-access-secret', secretKey: 'live-signing-secret' };
@@ -1682,7 +1698,21 @@ test('live trading connection requires explicit purpose plus read+orders and nev
     } finally {
       globalThis.fetch = nativeFetch;
     }
-  } finally { await close(server); }
+  } finally {
+    await close(server);
+    for (const key of [
+      'ORDER_EXECUTION_ENABLED',
+      'LIVE_TRADING_ACTIVATION_APPROVED',
+      'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED',
+      'REAL_ORDER_ENABLED',
+      'PRIVATE_TRADING_API_ALLOWED',
+      'UPBIT_LIVE_ORDER_ENABLED',
+      'LIVE_TRADING',
+      'executionAuthority',
+      'SPOT_LIVE_CAPABILITY_ALLOWLIST',
+      'SPOT_LIVE_MARKET_ALLOWLIST',
+    ]) delete process.env[key];
+  }
 });
 
 test('automatic policy executes US-stock Paper without per-order approval or private credentials', async () => {
