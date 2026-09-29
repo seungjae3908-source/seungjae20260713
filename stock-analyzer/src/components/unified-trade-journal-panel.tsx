@@ -21,8 +21,8 @@ import {
 
 type Props = {
   loadApi?: typeof getUnifiedTradeJournal;
-  forcedMarket?: UnifiedTradeMarket;
-  forcedSource?: UnifiedTradeSource;
+  forcedMarket?: UnifiedJournalFilters['market'] & UnifiedTradeMarket;
+  forcedSource?: UnifiedJournalFilters['source'] & UnifiedTradeSource;
   title?: string;
   description?: string;
 };
