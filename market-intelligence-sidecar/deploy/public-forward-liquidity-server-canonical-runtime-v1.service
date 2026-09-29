@@ -1,0 +1,44 @@
+[Unit]
+Description=Stock App public Forward server canonical natural capture
+Documentation=https://github.com/seungjae3908-source/seungjae20260713
+After=network-online.target time-sync.target
+Wants=network-online.target time-sync.target
+ConditionPathExists=/opt/stock-app-server-evidence-shadow-v1/current/.deploy/current-sha
+ConditionPathExists=/opt/stock-app-server-evidence-shadow-v1/canonical-runtime-activation.json
+
+[Service]
+Type=oneshot
+DynamicUser=true
+WorkingDirectory=/opt/stock-app-server-evidence-shadow-v1/current
+Environment=SERVER_EVIDENCE_SERVER_CANONICAL=true
+Environment=SERVER_EVIDENCE_STATE_ROOT=/var/lib/stock-app-server-evidence-shadow-v1
+Environment=SERVER_EVIDENCE_DEPLOY_SHA_FILE=/opt/stock-app-server-evidence-shadow-v1/current/.deploy/current-sha
+Environment=SERVER_EVIDENCE_CANONICAL_READINESS_FILE=/opt/stock-app-server-evidence-shadow-v1/canonical-cutover-readiness.json
+Environment=SERVER_EVIDENCE_CANONICAL_ACTIVATION_FILE=/opt/stock-app-server-evidence-shadow-v1/canonical-runtime-activation.json
+EnvironmentFile=-/etc/stock-app/server-evidence-shadow-v1.env
+ExecStart=/usr/bin/env node market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-canonical-runtime-v1.mjs tick
+StateDirectory=stock-app-server-evidence-shadow-v1
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadOnlyPaths=/opt/stock-app-server-evidence-shadow-v1/current
+ReadOnlyPaths=/opt/stock-app-server-evidence-shadow-v1/canonical-cutover-readiness.json
+ReadOnlyPaths=/opt/stock-app-server-evidence-shadow-v1/canonical-runtime-activation.json
+ReadWritePaths=/var/lib/stock-app-server-evidence-shadow-v1
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=5m
+
+# Public data only. No Production app, DB, Secret, private trading API or real-order authority.
