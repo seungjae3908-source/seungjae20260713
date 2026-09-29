@@ -34,6 +34,16 @@ function blocked(blocker: string) {
     runtimeProcessReady: false,
     bridgeEnabled: false,
     blockers: Object.freeze([blocker]),
+    fullCostComponentEvidenceCounts: Object.freeze({
+      commission: 0,
+      tax: 0,
+      spread: 0,
+      slippage: 0,
+      funding: 0,
+      latency: 0,
+      liquidityImpact: 0,
+      partialFillImpact: 0,
+    }),
     evidenceCounts: Object.freeze({
       naturalPositions: 0,
       naturalSettlements: 0,
