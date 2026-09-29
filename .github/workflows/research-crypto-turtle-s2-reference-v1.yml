@@ -1,4 +1,4 @@
-name: Research Crypto Turtle S2 Reference V1
+name: Research Crypto Turtle S2 Reference V2
 
 on:
   pull_request:
@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: research-crypto-turtle-s2-reference-v1-${{ github.event.pull_request.number || github.ref }}
+  group: research-crypto-turtle-s2-reference-v2-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -66,6 +66,14 @@ jobs:
           if(r.data.reserved2026ForLaterIndependentCheck!==true||r.data.fundingIncluded!==true||r.data.checksumVerified!==true) throw new Error('DATA_TRUTH');
           if(r.execution.dailyOhlcIntrabarPathKnown!==false||r.execution.simultaneousLongShortBreakoutPolicy!=='skip ambiguous daily bar') throw new Error('INTRABAR_TRUTH');
           if(r.transferBoundary.canonicalOriginalTurtlePortfolioReplication!==false||r.transferBoundary.system1SkipRuleNotImplementedInThisBaseline!==true) throw new Error('TRANSFER_TRUTH');
+          const windows=r.results?.independentWindows;
+          for(const lane of ['sourceNormal','sourceStress','singleUnitControl']){
+            for(const id of ['PRIOR_2021_2023','RECENT_2024_2025']){
+              const row=windows?.[lane]?.[id];
+              if(!row||row.resetCapitalPerSymbol!==1000000||row.aggregate?.initialCapital!==2000000) throw new Error('WINDOW_CAPITAL_'+lane+'_'+id);
+            }
+          }
+          if(r.decisionBoundary.temporalWindowReplayIndependentCapital!==true||r.decisionBoundary.windowWarmupMayUsePreWindowPricesButNotPreWindowPnl!==true) throw new Error('WINDOW_TRUTH');
           if(r.decisionBoundary.observedHistoryUsedForParameterSelection!==false||r.decisionBoundary.automaticPromotionAllowed!==false||r.decisionBoundary.economicSampleCredit!==0||r.decisionBoundary.profitabilityClaimAllowed!==false) throw new Error('PROMOTION_BOUNDARY');
           if(r.safety.researchOnly!==true||r.safety.publicDataOnly!==true||r.safety.liveExecutionAllowed!==false||r.safety.privateAccountRequestAllowed!==false||r.safety.orderRouteCalled!==false||r.safety.executionAuthority!=='NONE'||r.safety.actualOrders!==0) throw new Error('SAFETY');
           NODE
@@ -73,7 +81,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: crypto-turtle-s2-reference-v1-${{ github.event.pull_request.head.sha }}
+          name: crypto-turtle-s2-reference-v2-${{ github.event.pull_request.head.sha }}
           path: market-prediction-lab/docs/crypto-turtle-s2-reference-v1.json
           if-no-files-found: error
           retention-days: 30
