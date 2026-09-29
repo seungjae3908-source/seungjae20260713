@@ -31,8 +31,8 @@ export const ETH_TURTLE_SYSTEM2_FUTURE_HYPOTHESIS_V1 = Object.freeze({
     observedHistoryMayCountAsProfitabilityProof: false,
   }),
   freezeBoundary: Object.freeze({
-    declarationCommitSha: null,
-    declarationCommittedAt: null,
+    declarationCommitSha: "e7474cf8c5d878cb0d48fef4c27b8278ea8dc3ed",
+    declarationCommittedAt: "2026-09-29T23:51:00.000Z",
     evidenceDecisionTimestampMustBeStrictlyAfterDeclaration: true,
   }),
   futureEvidencePolicy: Object.freeze({
