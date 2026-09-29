@@ -237,11 +237,14 @@ process.stdout.write([
   bool("PRIVATE_TRADING_API_ALLOWED"),
   bool("ORDER_EXECUTION_ENABLED"),
   bool("LIVE_TRADING_ACTIVATION_APPROVED"),
+  bool("SPOT_LIVE_LIMITED_ACTIVATION_APPROVED"),
   bool("LIVE_AUTOMATIC_TRADING_ENABLED"),
   bool("BITGET_LIVE_ORDER_ENABLED"),
   bool("UPBIT_LIVE_ORDER_ENABLED"),
   bool("KIWOOM_LIVE_ORDER_ENABLED"),
   bool("TOSS_LIVE_ORDER_ENABLED"),
+  String(env.SPOT_LIVE_CAPABILITY_ALLOWLIST || "-"),
+  String(env.SPOT_LIVE_MARKET_ALLOWLIST || "-"),
   String(env.executionAuthority ?? "NONE"),
 ].join("\t") + "\n");
   ' "$PM2_NAME"
@@ -270,14 +273,17 @@ const activeFlags = [
   "PRIVATE_TRADING_API_ALLOWED",
   "ORDER_EXECUTION_ENABLED",
   "LIVE_TRADING_ACTIVATION_APPROVED",
+  "SPOT_LIVE_LIMITED_ACTIVATION_APPROVED",
   "LIVE_AUTOMATIC_TRADING_ENABLED",
   "BITGET_LIVE_ORDER_ENABLED",
   "UPBIT_LIVE_ORDER_ENABLED",
   "KIWOOM_LIVE_ORDER_ENABLED",
   "TOSS_LIVE_ORDER_ENABLED",
 ].filter((key) => bool(key));
+const capabilityAllowlist = String(env.SPOT_LIVE_CAPABILITY_ALLOWLIST ?? "").trim();
+const marketAllowlist = String(env.SPOT_LIVE_MARKET_ALLOWLIST ?? "").trim();
 const authority = String(env.executionAuthority ?? "NONE").trim().toUpperCase();
-if (activeFlags.length > 0 || authority !== "NONE") {
+if (activeFlags.length > 0 || capabilityAllowlist || marketAllowlist || authority !== "NONE") {
   console.error("[deploy] LIVE_TRADING_ACTIVE_DEPLOY_FORBIDDEN: disable live trading only after all live orders are terminal");
   process.exit(1);
 }
@@ -331,22 +337,24 @@ restart_application_preserving_telegram() {
   normalize_pm2_watch_before_restart || return 1
   LIVE_TELEGRAM_ACTIVATION_APPROVED="$approved" TELEGRAM_INTELLIGENCE_WORKER_ENABLED="$worker" \
     LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false \
-    ORDER_EXECUTION_ENABLED=false LIVE_TRADING_ACTIVATION_APPROVED=false LIVE_AUTOMATIC_TRADING_ENABLED=false \
+    ORDER_EXECUTION_ENABLED=false LIVE_TRADING_ACTIVATION_APPROVED=false SPOT_LIVE_LIMITED_ACTIVATION_APPROVED=false LIVE_AUTOMATIC_TRADING_ENABLED=false \
+    SPOT_LIVE_CAPABILITY_ALLOWLIST= SPOT_LIVE_MARKET_ALLOWLIST= \
     BITGET_LIVE_ORDER_ENABLED=false UPBIT_LIVE_ORDER_ENABLED=false KIWOOM_LIVE_ORDER_ENABLED=false TOSS_LIVE_ORDER_ENABLED=false \
     executionAuthority=NONE DEPLOY_SHA="$TARGET_SHA" pm2 restart "$PM2_NAME" --update-env
 }
 
 application_runtime_ready() {
-  local snapshot="" pid="" status="" cwd="" exec_path="" watched="" live="" auto="" real="" private_api="" order_execution="" live_approved="" live_auto="" bitget_live="" upbit_live="" kiwoom_live="" toss_live="" authority=""
+  local snapshot="" pid="" status="" cwd="" exec_path="" watched="" live="" auto="" real="" private_api="" order_execution="" live_approved="" spot_live_approved="" live_auto="" bitget_live="" upbit_live="" kiwoom_live="" toss_live="" capability_allowlist="" market_allowlist="" authority=""
   snapshot="$(pm2_runtime_snapshot)" || return 1
-  IFS=$'\t' read -r pid status cwd exec_path watched live auto real private_api order_execution live_approved live_auto bitget_live upbit_live kiwoom_live toss_live authority <<< "$snapshot"
+  IFS=$'\t' read -r pid status cwd exec_path watched live auto real private_api order_execution live_approved spot_live_approved live_auto bitget_live upbit_live kiwoom_live toss_live capability_allowlist market_allowlist authority <<< "$snapshot"
   [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && "$status" == online ]] || return 1
   [[ "$cwd" == "$LIVE_DIR" ]] || return 1
   [[ "$(readlink -m "$exec_path")" == "$LIVE_DIR/api-server/dist/index.mjs" ]] || return 1
   [[ "$watched" == false ]] || return 1
   [[ "$live" == false && "$auto" == false && "$real" == false && "$private_api" == false ]] || return 1
-  [[ "$order_execution" == false && "$live_approved" == false && "$live_auto" == false ]] || return 1
+  [[ "$order_execution" == false && "$live_approved" == false && "$spot_live_approved" == false && "$live_auto" == false ]] || return 1
   [[ "$bitget_live" == false && "$upbit_live" == false && "$kiwoom_live" == false && "$toss_live" == false ]] || return 1
+  [[ "$capability_allowlist" == - && "$market_allowlist" == - ]] || return 1
   [[ "$authority" == NONE ]] || return 1
   mapfile -t current_listeners < <(listener_pids)
   [[ "${#current_listeners[@]}" -eq 1 && "${current_listeners[0]}" == "$pid" ]] || return 1
@@ -491,7 +499,8 @@ rm -f "$PM2_JSON"
   nohup env PORT="$CANARY_PORT" API_PORT="$CANARY_PORT" NODE_ENV=production DEPLOY_SHA="$TARGET_SHA" \
     LIVE_TELEGRAM_ACTIVATION_APPROVED=false TELEGRAM_INTELLIGENCE_WORKER_ENABLED=false \
     LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false \
-    ORDER_EXECUTION_ENABLED=false LIVE_TRADING_ACTIVATION_APPROVED=false LIVE_AUTOMATIC_TRADING_ENABLED=false \
+    ORDER_EXECUTION_ENABLED=false LIVE_TRADING_ACTIVATION_APPROVED=false SPOT_LIVE_LIMITED_ACTIVATION_APPROVED=false LIVE_AUTOMATIC_TRADING_ENABLED=false \
+    SPOT_LIVE_CAPABILITY_ALLOWLIST= SPOT_LIVE_MARKET_ALLOWLIST= \
     BITGET_LIVE_ORDER_ENABLED=false UPBIT_LIVE_ORDER_ENABLED=false KIWOOM_LIVE_ORDER_ENABLED=false TOSS_LIVE_ORDER_ENABLED=false \
     executionAuthority=NONE node --env-file="$CANARY_ENV" --enable-source-maps ./dist/index.mjs \
     >"$CANARY_LOG" 2>&1 &
