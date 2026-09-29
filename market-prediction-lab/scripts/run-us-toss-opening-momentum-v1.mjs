@@ -5,9 +5,9 @@ import { collectYahooStockHistory } from "../src/yahoo-stock-history.js";
 
 const EVAL_START = Date.parse("2026-08-03T00:00:00.000Z");
 const EVAL_END = Date.parse("2026-09-26T00:00:00.000Z");
-const DAILY_START = Date.parse("2024-06-01T00:00:00.000Z");
+const DAILY_START = Date.parse("2024-01-01T00:00:00.000Z");
 const DAILY_END = Date.parse("2026-09-30T00:00:00.000Z");
-const ACADEMIC_FORMATION_MONTHS = Object.freeze(["2025-09", "2025-10", "2025-11", "2025-12", "2026-01", "2026-02"]);
+const ACADEMIC_FORMATION_MONTHS = Object.freeze(["2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08", "2025-09", "2025-10", "2025-11", "2025-12", "2026-01", "2026-02"]);
 const JT_MOMENTUM_DOI = "10.1111/j.1540-6261.1993.tb04702.x";
 const GH_52W_HIGH_DOI = "10.1111/j.1540-6261.2004.00695.x";
 const PIT_SAMPLE_SIZE = 180;
@@ -973,6 +973,8 @@ function pitDecileSummary(records, signalKey) {
     const observedMean = complete.length ? mean(complete.map((row) => row.netReturn)) : null;
     const lastObserved = rows.map((row) => Number.isFinite(row.netReturn) ? row.netReturn : row.lastObservedNetReturn).filter(Number.isFinite);
     const wipeout = rows.map((row) => Number.isFinite(row.netReturn) ? row.netReturn : -1);
+    const completedReturns = complete.map((row) => row.netReturn).sort((a, b) => b - a);
+    const positiveSum = completedReturns.filter((value) => value > 0).reduce((sum, value) => sum + value, 0);
     return {
       count: rows.length,
       completedOutcomes: complete.length,
@@ -983,6 +985,10 @@ function pitDecileSummary(records, signalKey) {
       observedOnlyMeanNetReturn: observedMean,
       lastObservedBoundMeanReturn: lastObserved.length === rows.length ? mean(lastObserved) : null,
       wipeoutStressMeanReturn: mean(wipeout),
+      maxNetReturn: completedReturns[0] ?? null,
+      top3PositiveReturnShare: positiveSum > 0
+        ? completedReturns.slice(0, 3).filter((value) => value > 0).reduce((sum, value) => sum + value, 0) / positiveSum
+        : null,
       minSignal: Math.min(...rows.map((row) => row[signalKey])),
       maxSignal: Math.max(...rows.map((row) => row[signalKey])),
       blockedSymbols: blocked.map((row) => row.symbol),
@@ -1326,6 +1332,21 @@ async function main() {
   for (const row of earningsResearchUniverse) pead.push(...peadRows(row, earningsBySymbol.get(row.symbol) ?? { status: "UNAVAILABLE", events: [] }));
   const academicMomentum = buildAcademicMomentumBaselines(dailyUniverse);
   const pitMembershipStress = await buildPitMembershipMomentumStress();
+  const pitVsCurrentSnapshot = {
+    jtMomentumJ6K6Skip1: {
+      currentSnapshotSpread: academicMomentum.jtMomentumJ6K6Skip1.aggregate.meanDescriptiveTopMinusBottomReturn,
+      historicalMembershipStressSpread: pitMembershipStress.jtMomentumJ6K6Skip1?.aggregate?.meanDescriptiveTopMinusBottomReturn ?? null,
+    },
+    high52WeekK6: {
+      currentSnapshotSpread: academicMomentum.high52WeekK6.aggregate.meanDescriptiveTopMinusBottomReturn,
+      historicalMembershipStressSpread: pitMembershipStress.high52WeekK6?.aggregate?.meanDescriptiveTopMinusBottomReturn ?? null,
+    },
+  };
+  for (const row of Object.values(pitVsCurrentSnapshot)) {
+    row.spreadDelta = row.historicalMembershipStressSpread != null && row.currentSnapshotSpread != null
+      ? row.historicalMembershipStressSpread - row.currentSnapshotSpread
+      : null;
+  }
 
   const report = {
     schemaVersion: 2,
@@ -1422,6 +1443,7 @@ async function main() {
     },
     academicMomentum,
     pitMembershipStress,
+    pitVsCurrentSnapshot,
     costs: { normalPerSide: NORMAL_COST, stressPerSide: STRESS_COST },
     accountPolicy: ACCOUNT,
     lookahead: {
@@ -1454,8 +1476,10 @@ async function main() {
       },
       CROSS_SECTIONAL_PRICE_MOMENTUM_V1: {
         status: "BLOCKED_PIT_UNIVERSE_AND_OUTLIER_CONCENTRATION",
-        reason: "large descriptive spread is current-snapshot survivorship-biased and materially concentrated in extreme winners",
-        nextRequiredEvidence: "materialized US point-in-time membership + removed/delisted listings + corporate actions + same recipe rerun",
+        reason: pitMembershipStress.status === "PIT_HISTORICAL_MEMBERSHIP_STRESS_COMPLETE"
+          ? "bounded Nasdaq-100 historical-membership stress preserves a positive descriptive spread, but full-US PIT coverage, overlapping monthly portfolio construction, corporate-action/terminal-value evidence, and extreme-winner concentration remain unresolved"
+          : "large current-snapshot descriptive spread remains unverified by usable historical-membership evidence and materially concentrated in extreme winners",
+        nextRequiredEvidence: "canonical full-US point-in-time membership + removed/delisted listings + corporate actions + overlapping monthly portfolio replay",
         automaticPromotionAllowed: false,
       },
       FIFTY_TWO_WEEK_HIGH_MOMENTUM_V1: {
