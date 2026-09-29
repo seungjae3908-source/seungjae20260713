@@ -45,12 +45,20 @@ jobs:
           node <<'NODE'
           const fs = require('node:fs');
           const body = String(process.env.COMMENT_BODY ?? '').trim();
-          const match = /^\/run-production-account-readonly-live-qa ([0-9a-fA-F]{40})$/.exec(body);
+          const match = /^\/run-production-account-readonly-live-qa ([0-9a-fA-F]{40}) ([a-z]+(?:,[a-z]+)*)$/.exec(body);
           if (!match) {
-            console.error('Exact command required: /run-production-account-readonly-live-qa <40-character-current-production-sha>');
+            console.error('Exact command required: /run-production-account-readonly-live-qa <40-character-current-production-sha> <provider[,provider...]>');
             process.exit(1);
           }
+          const allowed = new Set(['toss', 'kiwoom', 'upbit']);
+          const providers = match[2].split(',');
+          if (providers.length === 0
+            || new Set(providers).size !== providers.length
+            || providers.some((provider) => !allowed.has(provider))) {
+            throw new Error('PRODUCTION_ACCOUNT_QA_TARGET_PROVIDER_SET_INVALID');
+          }
           fs.appendFileSync(process.env.GITHUB_OUTPUT, 'sha=' + match[1].toLowerCase() + '\n');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'providers=' + [...providers].sort().join(',') + '\n');
           NODE
 
       - name: Require deployed target SHA to remain in current main history
@@ -99,9 +107,11 @@ jobs:
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
+          TARGET_PROVIDERS: ${{ steps.command.outputs.providers }}
         with:
           script: |
             const target = process.env.TARGET_SHA;
+            const providers = process.env.TARGET_PROVIDERS;
             const workflowId = 'production-account-readonly-live-qa.yml';
             const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
               owner: context.repo.owner,
@@ -123,7 +133,7 @@ jobs:
               repo: context.repo.repo,
               workflow_id: workflowId,
               ref: 'main',
-              inputs: { sha: target },
+              inputs: { sha: target, providers },
               return_run_details: true,
               headers: {
                 accept: 'application/vnd.github+json',
@@ -153,6 +163,7 @@ jobs:
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
+          TARGET_PROVIDERS: ${{ steps.command.outputs.providers }}
           PRODUCTION_DEPLOY_RUN_ID: ${{ steps.production.outputs.deploy_run_id }}
           QA_RUN_ID: ${{ steps.qa.outputs.run_id }}
           QA_RUN_URL: ${{ steps.qa.outputs.run_url }}
@@ -167,6 +178,7 @@ jobs:
                 'Production Account Read-only Live QA dispatched behind the protected production environment.',
                 '',
                 '- Exact deployed Production SHA: ' + process.env.TARGET_SHA,
+                '- Activation target providers: ' + process.env.TARGET_PROVIDERS,
                 '- Latest successful Production Deploy Run ID: ' + process.env.PRODUCTION_DEPLOY_RUN_ID,
                 '- Production Account Read-only QA Run ID: ' + process.env.QA_RUN_ID,
                 '- Run: ' + process.env.QA_RUN_URL,
