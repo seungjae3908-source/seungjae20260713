@@ -12,12 +12,35 @@ import {
   buildServerCanonicalCutoverReadiness,
 } from '../src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs';
 import {
-  SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
   buildSuccessorScheduleReliabilityV3SlotDescriptor,
+  materializeSuccessorScheduleReliabilityV3Contract,
 } from '../src/public-forward-liquidity-successor-schedule-reliability-v3.mjs';
 
+const ACTIVATION_BINDING = Object.freeze({
+  schemaVersion: 'public-forward-liquidity-successor-schedule-reliability-activation-binding-v3',
+  authorityIssue: 23,
+  authorityCommentId: 5805902930,
+  hubFreezeAuthorityCommentId: 5804802177,
+  hubFreezeTimestampCommentId: 5804808369,
+  frozenCohortFreezeBlobSha: '65ef02d9ef5611c767755e71b40b840737b0658a',
+  frozenCohortFreezeMs: 1790207015000,
+  frozenCohortEffectiveStartMs: 1790263020000,
+  activationBoundaryMs: 1790212089000,
+  cutoverStartMs: 1790263020000,
+  authorizedCurrentMainSha: '24d9c8b4bbca54c1b3bce4ad28a8c1286beaff92',
+  numericFreezeSha256: '10b157de8e1902865f9b386a02439bb56d67b5c2fcd20dd48870d851bdb97ff1',
+  minActivationLeadSlots: 1,
+  priorV2CreditImported: 0,
+  priorV2MissedSlotRecovery: 0,
+  priorV2DiagnosticArtifactCredit: 0,
+  replayCredit: 0,
+  backfillCredit: 0,
+  syntheticCredit: 0,
+});
+const ACTIVE_CONTRACT = materializeSuccessorScheduleReliabilityV3Contract(ACTIVATION_BINDING);
+
 const MAIN = 'a'.repeat(40);
-const BINDING = 'b'.repeat(64);
+const BINDING = sha256(canonicalJson(ACTIVATION_BINDING));
 const RAW = 'c'.repeat(64);
 const RECEIPT_COMMENT_ID = 5881193542;
 const AUTHORITY_COMMENT_ID = 6000000001;
@@ -25,9 +48,11 @@ const AUTHORIZATION_SLOT_INDEX = 105;
 const FIRST_ELIGIBLE_SLOT_INDEX = AUTHORIZATION_SLOT_INDEX + 1;
 const AUTHORIZATION_SLOT = buildSuccessorScheduleReliabilityV3SlotDescriptor(
   AUTHORIZATION_SLOT_INDEX,
+  ACTIVE_CONTRACT,
 );
 const FUTURE_SLOT = buildSuccessorScheduleReliabilityV3SlotDescriptor(
   FIRST_ELIGIBLE_SLOT_INDEX,
+  ACTIVE_CONTRACT,
 );
 const AUTHORIZED_AT_MS = AUTHORIZATION_SLOT.nominalScheduledAtMs + 5 * 60 * 1000;
 
@@ -122,8 +147,8 @@ function receiptWithDigest(overrides = {}) {
     activationReceiptCommentId: RECEIPT_COMMENT_ID,
     activationReceiptMainSha: MAIN,
     activationBindingDigest: BINDING,
-    policyDigest: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyDigest,
-    cohortDigest: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest,
+    policyDigest: ACTIVE_CONTRACT.policyDigest,
+    cohortDigest: ACTIVE_CONTRACT.cohortDigest,
     slotIndex: FUTURE_SLOT.slotIndex,
     split: FUTURE_SLOT.split,
     nominalScheduledAtMs: FUTURE_SLOT.nominalScheduledAtMs,
@@ -172,6 +197,7 @@ function readiness(overrides = {}) {
     serverRuntime: serverRuntime(),
     cutoverAuthority: cutoverAuthority(),
     shadowReceipt: receiptWithDigest(),
+    contract: ACTIVE_CONTRACT,
     ...overrides,
   });
 }
@@ -197,6 +223,7 @@ test('future natural server receipt can become cutover-ready but receives zero c
 test('pre-authority shadow evidence can never be promoted retroactively', () => {
   const oldSlot = buildSuccessorScheduleReliabilityV3SlotDescriptor(
     AUTHORIZATION_SLOT_INDEX,
+    ACTIVE_CONTRACT,
   );
   const result = readiness({
     shadowReceipt: receiptWithDigest({
