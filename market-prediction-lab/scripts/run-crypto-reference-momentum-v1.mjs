@@ -98,6 +98,13 @@ function liuSummaryBlock(rows) {
     executionAwareTopQuintileLong: summarize(top.map((row) => row.topQuintileLongNetDiagnostic)),
   };
 }
+function yearlyLiuSummary(rows) {
+  const years = [...new Set(rows.map((row) => row.signalWeekEnd.slice(0, 4)))].sort();
+  return Object.fromEntries(years.map((year) => [
+    year,
+    liuSummaryBlock(rows.filter((row) => row.signalWeekEnd.startsWith(year))),
+  ]));
+}
 async function collectSpot(client, symbol) {
   const raw = await collectBitgetCandles({
     client,
@@ -208,6 +215,7 @@ function liuMomentumForSymbol(symbol, candles) {
         PRIOR: liuSummaryBlock(rows.filter((row) => row.validationWindow === "PRIOR")),
         RECENT: liuSummaryBlock(rows.filter((row) => row.validationWindow === "RECENT")),
       },
+      years: yearlyLiuSummary(rows),
     };
   }
   return {
@@ -231,6 +239,7 @@ function pooledLiu(results) {
         PRIOR: liuSummaryBlock(rows.filter((row) => row.validationWindow === "PRIOR")),
         RECENT: liuSummaryBlock(rows.filter((row) => row.validationWindow === "RECENT")),
       },
+      years: yearlyLiuSummary(rows),
       positiveSpreadSymbols: results.filter((result) => result.horizons[horizon]?.topMinusBottomMean > 0).map((result) => result.symbol),
       nonPositiveSpreadSymbols: results.filter((result) => !(result.horizons[horizon]?.topMinusBottomMean > 0)).map((result) => result.symbol),
     };
@@ -378,6 +387,10 @@ async function main() {
       liuFourWeekRecentSpread: pooledLiuResult[4]?.windows?.RECENT?.topMinusBottomMean ?? null,
       liuOneWeekPositiveSpreadSymbols: pooledLiuResult[1]?.positiveSpreadSymbols ?? [],
       liuFourWeekPositiveSpreadSymbols: pooledLiuResult[4]?.positiveSpreadSymbols ?? [],
+      liuOneWeekYearlySpreads: Object.fromEntries(Object.entries(pooledLiuResult[1]?.years ?? {}).map(([year, row]) => [year, row.topMinusBottomMean])),
+      liuOneWeekPositiveYearRate: Object.values(pooledLiuResult[1]?.years ?? {}).length
+        ? Object.values(pooledLiuResult[1].years).filter((row) => row.topMinusBottomMean > 0).length / Object.values(pooledLiuResult[1].years).length
+        : null,
       liuOneWeekTopLongAfterResearchCosts: pooledLiuResult[1]?.executionAwareTopQuintileLong ?? null,
       mopEqualWeightTsmMean: pooledMopResult.equalWeightTsm.mean,
       mopEqualWeightBuyHoldMean: pooledMopResult.equalWeightBuyHold.mean,
@@ -387,8 +400,8 @@ async function main() {
       automaticPromotionAllowed: false,
       economicSampleCredit: 0,
       LIU_TSYVINSKI_CRYPTO_WEEKLY_MOMENTUM_V1: {
-        status: "RESEARCH_HOLD_TEMPORAL_AND_CONCENTRATION_REVIEW",
-        reason: "positive pooled means must be checked against BTC/ETH/XRP generalization, PRIOR/RECENT stability, medians, and leave-best-1/3 concentration before any overlay experiment",
+        status: "RESEARCH_HOLD_REGIME_DEPENDENT_AND_CONCENTRATED",
+        reason: "positive pooled means are not stable enough across years/horizons; BTC is weak, 2-4 week PRIOR spreads turn negative, and leave-best-3 stress removes most of the pooled advantage",
         automaticPromotionAllowed: false,
       },
       MOP_TSMOM_12M_1M_SPOT_PROXY_V1: {
@@ -432,6 +445,8 @@ async function main() {
     liu1wRecentSpread: report.comparisons.liuOneWeekRecentSpread,
     liu1wLeaveBest1Spread: report.comparisons.liuOneWeekLeaveBest1Spread,
     liu1wLeaveBest3Spread: report.comparisons.liuOneWeekLeaveBest3Spread,
+    liu1wPositiveYearRate: report.comparisons.liuOneWeekPositiveYearRate,
+    liu1wYearlySpreads: report.comparisons.liuOneWeekYearlySpreads,
     mopTsmMean: report.comparisons.mopEqualWeightTsmMean,
     mopBuyHoldMean: report.comparisons.mopEqualWeightBuyHoldMean,
     mopMinusBuyHold: report.comparisons.mopTsmMinusBuyHoldMean,
