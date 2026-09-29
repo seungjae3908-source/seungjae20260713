@@ -23,6 +23,7 @@ import {
 } from './telegram-intelligence-worker.service';
 import { buildSignalIntelligenceTelegramInput } from './signal-intelligence-telegram-subscriber.service';
 import {
+  addTelegramSignalFreshness,
   deliverScannerTelegramAlerts,
   scannerInAppNotificationInput,
   scannerTelegramInput,
@@ -173,6 +174,7 @@ test('tracked Telegram delivery captures message id and lifecycle updates edit t
     assert.equal(body.chat_id, 'ci-chat-id-sentinel');
     assert.equal(body.message_id, 77);
     assert.match(String(body.text), /TP1 도달/);
+    assert.deepEqual(body.reply_markup, { inline_keyboard: [] });
     return new Response(JSON.stringify({ ok: true, result: { message_id: 77 } }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -201,6 +203,7 @@ test('tracked Telegram delivery captures message id and lifecycle updates edit t
     messageId: tracked.receipt.messageId!,
     messageKind: tracked.receipt.messageKind,
     text: tracked.receipt.renderedText + '\nTP1 도달',
+    buttons: [],
   }), { ok: true, attempts: 1 });
   assert.equal(endpoints.length, 2);
 });
@@ -325,6 +328,40 @@ test('signal intelligence Telegram turns internal state codes into a concise Kor
   ]) {
     assert.equal(rendered.includes(internalCode), false, internalCode);
   }
+});
+
+test('signal freshness keeps review buttons for partial evidence but removes order on stale signals', () => {
+  const base = {
+    type: 'strong_buy' as const,
+    symbol: '005930',
+    market: 'KR',
+    details: '신호',
+    buttons: [[
+      { text: '🛒 주문', url: 'https://example.test/telegram-order' },
+      { text: '📊 AI차트', url: 'https://example.test/ai-chart' },
+    ]],
+  };
+
+  const partial = addTelegramSignalFreshness(
+    base,
+    scannerAlert({ expiresAt: '2026-08-10T14:30:00.000Z' }),
+    { generatedAt: '2026-08-10T14:00:00.000Z' },
+    null,
+    Date.parse('2026-08-10T14:05:00.000Z'),
+  );
+  assert.equal(partial.buttons?.flat().some((button) => button.text.includes('주문')), true);
+  assert.equal(partial.buttons?.flat().some((button) => button.text.includes('AI차트')), true);
+
+  const stale = addTelegramSignalFreshness(
+    base,
+    scannerAlert({ expiresAt: '2026-08-10T14:01:00.000Z' }),
+    { generatedAt: '2026-08-10T13:50:00.000Z' },
+    null,
+    Date.parse('2026-08-10T14:05:00.000Z'),
+  );
+  assert.equal(stale.buttons?.flat().some((button) => button.text.includes('주문')), false);
+  assert.equal(stale.buttons?.flat().some((button) => button.text.includes('AI차트')), true);
+  assert.match(stale.details ?? '', /재검증 전 실시간 신호로 사용 금지/);
 });
 
 test('scanner signal room routing splits domestic, overseas, spot, and futures rooms', () => {
