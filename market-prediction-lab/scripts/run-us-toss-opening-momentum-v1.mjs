@@ -14,6 +14,8 @@ const PEAD_HORIZONS = Object.freeze([5, 20, 40]);
 const QULLAMAGGIE_BREAKOUT_SOURCE = "https://qullamaggie.com/my-3-timeless-setups-that-have-made-me-tens-of-millions/";
 const QULLAMAGGIE_EP_SOURCE = "https://qullamaggie.com/how-to-master-a-setup-episodic-pivots/";
 const PEAD_REVIEW_DOI = "10.1016/j.jbef.2020.100446";
+const LIVNAT_MENDENHALL_DOI = "10.1111/j.1475-679X.2006.00196";
+const ANALYST_SUE_FORMULA_REFERENCE_DOI = "10.1016/j.frl.2020.101742";
 const ny = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 const sleep = (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 
@@ -492,13 +494,25 @@ function matchEarningsEvent(events, date) {
   return events.find((event) => (event.date === date || event.date === previousDate) && event.surprisePct > 0) ?? null;
 }
 function first30mVolume(day) { return day.filter((bar) => minuteOfDay(bar.timestamp) >= 570 && minuteOfDay(bar.timestamp) < 600).reduce((sum, bar) => sum + bar.volume, 0); }
+function priceOneMonthBefore(candles, eventDate) {
+  const target = Date.parse(`${eventDate}T12:00:00Z`) - 30 * 86_400_000;
+  let selected = null;
+  for (const bar of candles) {
+    if (bar.timestamp > target) break;
+    selected = bar;
+  }
+  return selected?.close ?? null;
+}
 function peadRows(row, earnings) {
   const output = [];
   if (earnings.status !== "AVAILABLE") return output;
   for (const event of earnings.events) {
-    if (event.surprisePct <= 0) continue;
     if (event.date < "2026-07-01" || event.date >= "2026-09-20") continue;
+    if (event.actual == null || event.forecast == null) continue;
     const candles = row.daily;
+    const priceMonthPrior = priceOneMonthBefore(candles, event.date);
+    if (!(priceMonthPrior > 0)) continue;
+    const analystSueProxy = (event.actual - event.forecast) / priceMonthPrior;
     const eventIndex = candles.findIndex((bar) => nyParts(bar.timestamp).date > event.date);
     if (eventIndex < 0) continue;
     for (const horizon of PEAD_HORIZONS) {
@@ -506,21 +520,44 @@ function peadRows(row, earnings) {
       if (exitIndex >= candles.length) continue;
       const entry = candles[eventIndex].open * (1 + NORMAL_COST);
       const exit = candles[exitIndex].close * (1 - NORMAL_COST);
-      output.push({ symbol: row.symbol, sector: row.sector, bucket: row.bucket, eventDate: event.date, surprisePct: event.surprisePct, horizonSessions: horizon, netReturn: exit / entry - 1 });
+      output.push({
+        symbol: row.symbol, sector: row.sector, bucket: row.bucket,
+        eventDate: event.date, actualEps: event.actual, consensusEps: event.forecast,
+        surprisePct: event.surprisePct, priceMonthPrior, analystSueProxy,
+        horizonSessions: horizon, netReturn: exit / entry - 1,
+      });
     }
   }
   return output;
 }
 function summarizePead(rows) {
+  const normalize = (values) => summarizeTrades(values.map((row, index) => ({ ...row, entryTime: index, exitTime: index + 1, stopDistancePct: 1 })));
   return Object.fromEntries(PEAD_HORIZONS.map((horizon) => {
-    const subset = rows.filter((row) => row.horizonSessions === horizon);
-    const surprise = subset.map((row) => row.surprisePct).sort((a, b) => a - b);
-    const threshold = surprise.length ? surprise[Math.floor((surprise.length - 1) * 0.75)] : null;
-    const topQuartile = threshold == null ? [] : subset.filter((row) => row.surprisePct >= threshold);
-    const normalize = (values) => summarizeTrades(values.map((row, index) => ({ ...row, entryTime: index, exitTime: index + 1, stopDistancePct: 1 })));
+    const subset = rows.filter((row) => row.horizonSessions === horizon && Number.isFinite(row.analystSueProxy));
+    const ordered = [...subset].sort((a, b) => a.analystSueProxy - b.analystSueProxy);
+    const decileN = ordered.length ? Math.max(1, Math.ceil(ordered.length * 0.10)) : 0;
+    const bottomDecile = decileN ? ordered.slice(0, decileN) : [];
+    const topDecile = decileN ? ordered.slice(-decileN) : [];
+    const positive = subset.filter((row) => row.analystSueProxy > 0);
+    const topMetrics = normalize(topDecile);
+    const bottomMetrics = normalize(bottomDecile);
     return [String(horizon), {
-      allPositive: normalize(subset),
-      topPositiveSurpriseQuartile: { thresholdSurprisePct: threshold, metrics: normalize(topQuartile) },
+      signalRows: subset.length,
+      positiveAnalystSue: normalize(positive),
+      analystSueTopDecile: {
+        count: topDecile.length,
+        threshold: topDecile.length ? topDecile[0].analystSueProxy : null,
+        metrics: topMetrics,
+      },
+      analystSueBottomDecile: {
+        count: bottomDecile.length,
+        threshold: bottomDecile.length ? bottomDecile.at(-1).analystSueProxy : null,
+        metrics: bottomMetrics,
+      },
+      descriptiveTopMinusBottomMeanReturn: topMetrics.meanNetReturn != null && bottomMetrics.meanNetReturn != null
+        ? topMetrics.meanNetReturn - bottomMetrics.meanNetReturn
+        : null,
+      tradableLongShortClaimAllowed: false,
     }];
   }));
 }
@@ -633,9 +670,12 @@ async function main() {
       },
       pead: {
         recipeId: "PEAD_EARNINGS_SURPRISE_V1",
-        sourceDoi: PEAD_REVIEW_DOI,
-        implementation: "positive consensus-surprise events, first full session after report, 5/20/40-session forward return; descriptive replication only",
-        canonicalSueReplication: false,
+        reviewSourceDoi: PEAD_REVIEW_DOI,
+        analystForecastSourceDoi: LIVNAT_MENDENHALL_DOI,
+        analystSueFormulaReferenceDoi: ANALYST_SUE_FORMULA_REFERENCE_DOI,
+        implementation: "analyst-SUE proxy=(actual EPS-consensus EPS)/price one month before announcement; rank bounded event cohort into top/bottom deciles; enter first full session strictly after report; measure 5/20/40-session returns",
+        canonicalIbesSueafReplication: false,
+        canonicalTimeSeriesSueStatus: "BLOCKED_QUARTERLY_EPS_HISTORY_AND_FORECAST_VINTAGE",
         parameterSearch: false,
       },
     },
@@ -674,9 +714,11 @@ async function main() {
       mechanicsOnly: epMechanics,
     },
     pead: {
-      status: earningsAvailableSymbols > 0 ? "DESCRIPTIVE_REPLICATION_COMPLETE" : "BLOCKED_EARNINGS_SURPRISE_DATA",
-      positiveEventHorizonRows: pead.length,
+      status: earningsAvailableSymbols > 0 ? "ANALYST_SUE_PROXY_REPLICATION_COMPLETE" : "BLOCKED_EARNINGS_SURPRISE_DATA",
+      eventHorizonRows: pead.length,
       byHorizon: summarizePead(pead),
+      canonicalIbesSueafReplication: false,
+      canonicalTimeSeriesSueStatus: "BLOCKED_QUARTERLY_EPS_HISTORY_AND_FORECAST_VINTAGE",
       rows: pead,
     },
     costs: { normalPerSide: NORMAL_COST, stressPerSide: STRESS_COST },
@@ -707,7 +749,8 @@ async function main() {
       "Common Breakout qualitative terms such as orderly consolidation are converted into fixed, preregistered higher-low/range-tightening rules without parameter search.",
       "True EP credit requires a matched positive earnings-surprise event. Gap+volume without catalyst remains mechanics-only and cannot be labeled EP.",
       "Nasdaq earnings-surprise availability is best-effort; missing event data fails closed instead of being inferred from price.",
-      "PEAD here uses consensus surprise when available and is not a canonical standardized-unexpected-earnings replication.",
+      "PEAD uses an analyst-SUE proxy from Nasdaq actual/consensus EPS scaled by a one-month-prior price. Nasdaq does not prove the exact 30-day I/B/E/S forecast vintage, so this is not canonical SUEAF.",
+      "Canonical Foster-Olsen-Shevlin SUE needs current EPS, EPS four quarters earlier, and the standard deviation of quarterly EPS changes over prior quarters; those fields are not available in the current repository and remain fail-closed.",
       "No historical guidance, revenue-growth, analyst-revision, news-text, order-book, short-interest, wave/candle or AI overlay is used in the baseline.",
       "Historical replay is not genuine OOS/Forward, broker fill evidence, or PROFITABILITY_PROVEN.",
     ],
