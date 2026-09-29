@@ -59,6 +59,12 @@ const GIT_OBJECT_SHA = /^[a-f0-9]{40}$/u;
 const DECIMAL_ID = /^[0-9]+$/u;
 const COLLECTOR_IMPLEMENTATION_PATH =
   'market-intelligence-sidecar/src/public-forward-liquidity-calibration.mjs';
+const GITHUB_V3_SCHEDULE_SOURCE = 'GITHUB_V3_SCHEDULE';
+const SERVER_NATURAL_TIMER_SOURCE = 'SERVER_NATURAL_TIMER';
+const CANONICAL_SOURCE_PRECEDENCE = Object.freeze([
+  GITHUB_V3_SCHEDULE_SOURCE,
+  SERVER_NATURAL_TIMER_SOURCE,
+]);
 const execFileAsync = promisify(execFile);
 
 function object(value, code) {
@@ -77,9 +83,9 @@ function integer(value, code) {
   return parsed;
 }
 
-function positiveFinite(value, code) {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  if (!(Number.isFinite(parsed) && parsed > 0)) throw new Error(code);
+function positiveInteger(value, code) {
+  const parsed = integer(value, code);
+  if (parsed <= 0) throw new Error(code);
   return parsed;
 }
 
@@ -301,6 +307,53 @@ function verifySuccessorScheduledIdentity(capture) {
   const slot = buildSuccessorScheduleReliabilityV3SlotDescriptor(
     integer(capture.slotIndex, 'SUCCESSOR_V3_SLOT_INDEX_INVALID'), contract,
   );
+  const canonicalSource = capture.canonicalSource ?? GITHUB_V3_SCHEDULE_SOURCE;
+  if (canonicalSource === SERVER_NATURAL_TIMER_SOURCE) {
+    const expectedCreditKey = {
+      policyDigest: contract.policyDigest,
+      cohortDigest: contract.cohortDigest,
+      slotIndex: slot.slotIndex,
+    };
+    if (canonicalJson(capture.sourcePrecedence) !== canonicalJson(CANONICAL_SOURCE_PRECEDENCE)
+      || capture.serverCanonical !== true
+      || capture.serverShadowOnly !== false
+      || capture.serverCanonicalRuntimeSchema
+        !== 'public-forward-liquidity-server-canonical-runtime-v1'
+      || canonicalJson(capture.serverCanonicalCreditKey) !== canonicalJson(expectedCreditKey)
+      || exactDigest(
+        capture.serverCanonicalCreditKeyDigest,
+        'SERVER_CANONICAL_CREDIT_KEY_DIGEST_INVALID',
+      ) !== sha256(canonicalJson(expectedCreditKey))
+      || !exactDigest(
+        capture.serverCanonicalReadinessDigest,
+        'SERVER_CANONICAL_READINESS_DIGEST_INVALID',
+      )
+      || !exactDigest(
+        capture.serverCanonicalActivationDigest,
+        'SERVER_CANONICAL_ACTIVATION_DIGEST_INVALID',
+      )
+      || !exactDigest(
+        capture.activationBindingDigest,
+        'SERVER_CANONICAL_BINDING_DIGEST_INVALID',
+      )
+      || integer(
+        capture.serverCanonicalAuthorityCommentId,
+        'SERVER_CANONICAL_AUTHORITY_COMMENT_ID_INVALID',
+      ) <= 0
+      || integer(
+        capture.serverCanonicalFirstEligibleSlotIndex,
+        'SERVER_CANONICAL_FIRST_ELIGIBLE_SLOT_INVALID',
+      ) > slot.slotIndex
+      || capture.serverCanonicalReceiptPersistence !== 'CREATE_ONLY_WX'
+      || capture.shadowReceiptPromotionPerformed !== false
+      || capture.hindsightCredit !== 0
+      || capture.privateTradingApiAllowed !== false
+      || capture.realOrderEnabled !== false) {
+      throw new Error('SERVER_CANONICAL_CAPTURE_PROVENANCE_INVALID');
+    }
+  } else if (canonicalSource !== GITHUB_V3_SCHEDULE_SOURCE) {
+    throw new Error('SUCCESSOR_V3_CANONICAL_SOURCE_INVALID');
+  }
   const expectedSlotValues = {
     split: slot.split,
     nominalScheduledAtMs: slot.nominalScheduledAtMs,
@@ -339,7 +392,12 @@ function verifySuccessorScheduledIdentity(capture) {
   }
   const multiLane = verifyMultiLaneCaptureIdentity(capture, slot);
   verifyCanonicalDigest(capture, 'captureReceiptDigest', 'SUCCESSOR_V3_CAPTURE_RECEIPT_DIGEST_INVALID');
-  return { slot, sourceContractFamily: 'SUCCESSOR_SCHEDULE_RELIABILITY_V3', multiLane };
+  return {
+    slot,
+    sourceContractFamily: 'SUCCESSOR_SCHEDULE_RELIABILITY_V3',
+    canonicalSource,
+    multiLane,
+  };
 }
 
 function verifyMultiLaneCaptureIdentity(capture, slot) {
@@ -564,7 +622,9 @@ function validateArtifactReceipt(artifactReceipt, capture, slot, sourceContractF
       ? `public-forward-liquidity-successor-lane-${capture.laneId}-slot-${slot.slotIndex}-${capture.laneCreditKeyDigest}`
       : `public-forward-liquidity-successor-slot-${slot.slotIndex}-${slotDigest}`)
     : `public-forward-liquidity-v3-slot-${slot.slotIndex}-${slotDigest}`;
-  const expectedReference = `https://github.com/${expectedRepository}/actions/runs/${capture.runId}/artifacts/${id}`;
+  const expectedReference = capture.canonicalSource === SERVER_NATURAL_TIMER_SOURCE
+    ? `server-create-only://${capture.serverCanonicalCreditKeyDigest}/${id}`
+    : `https://github.com/${expectedRepository}/actions/runs/${capture.runId}/artifacts/${id}`;
   if (artifactName !== expectedName) throw new Error('V3_ARTIFACT_NAME_MISMATCH');
   if (artifactReference !== expectedReference) throw new Error('V3_ARTIFACT_REFERENCE_MISMATCH');
   const actualReceiptDigest = exactDigest(receiptDigest, 'V3_ARTIFACT_RECEIPT_DIGEST_INVALID');
@@ -572,6 +632,133 @@ function validateArtifactReceipt(artifactReceipt, capture, slot, sourceContractF
     throw new Error('V3_ARTIFACT_RECEIPT_DIGEST_MISMATCH');
   }
   return { artifactId: id, artifactDigest: digest, artifactReceiptDigest: actualReceiptDigest };
+}
+
+function validateServerCanonicalIngestAuthorization(
+  authorization,
+  capture,
+  serverCanonicalReceipt,
+  { rawBatchDigest, artifactReceiptDigest, artifactDigest },
+) {
+  if (capture.canonicalSource !== SERVER_NATURAL_TIMER_SOURCE) {
+    if (authorization != null || serverCanonicalReceipt != null) {
+      throw new Error('SERVER_CANONICAL_INGEST_AUTHORIZATION_UNEXPECTED');
+    }
+    return null;
+  }
+  const receipt = object(
+    serverCanonicalReceipt,
+    'SERVER_CANONICAL_RECEIPT_REQUIRED',
+  );
+  const receiptBody = withoutKey(receipt, 'receiptDigest');
+  const receiptDigest = exactDigest(
+    receipt.receiptDigest,
+    'SERVER_CANONICAL_SERVER_RECEIPT_DIGEST_INVALID',
+  );
+  if (receipt.schemaVersion !== 'public-forward-liquidity-server-canonical-receipt-v1'
+    || receiptDigest !== sha256(canonicalJson(receiptBody))
+    || receipt.canonicalSource !== SERVER_NATURAL_TIMER_SOURCE
+    || canonicalJson(receipt.sourcePrecedence) !== canonicalJson(CANONICAL_SOURCE_PRECEDENCE)
+    || receipt.targetMainSha !== capture.exactMainSha
+    || receipt.activationBindingDigest !== capture.activationBindingDigest
+    || receipt.readinessDigest !== capture.serverCanonicalReadinessDigest
+    || receipt.runtimeActivationDigest !== capture.serverCanonicalActivationDigest
+    || receipt.authorityCommentId !== capture.serverCanonicalAuthorityCommentId
+    || receipt.firstEligibleSlotIndex !== capture.serverCanonicalFirstEligibleSlotIndex
+    || canonicalJson(receipt.creditKey) !== canonicalJson(capture.serverCanonicalCreditKey)
+    || receipt.creditKeyDigest !== capture.serverCanonicalCreditKeyDigest
+    || receipt.slotIndex !== capture.slotIndex
+    || receipt.split !== capture.split
+    || receipt.policyDigest !== capture.policyDigest
+    || receipt.cohortDigest !== capture.cohortDigest
+    || receipt.triggerAtMs !== capture.nominalScheduledAtMs
+    || receipt.serverStartedAtMs !== capture.actualRunStartedAtMs
+    || positiveInteger(
+      receipt.authorizedAtMs,
+      'SERVER_CANONICAL_SERVER_AUTHORIZED_AT_INVALID',
+    ) >= positiveInteger(
+      receipt.serverStartedAtMs,
+      'SERVER_CANONICAL_SERVER_STARTED_AT_INVALID',
+    )
+    || receipt.rawBatchDigest !== rawBatchDigest
+    || receipt.captureReceiptDigest !== capture.captureReceiptDigest
+    || receipt.artifactReceiptDigest !== artifactReceiptDigest
+    || receipt.artifactDigest !== artifactDigest
+    || receipt.captureStatus !== 'PRESENT'
+    || !Array.isArray(receipt.blockers)
+    || receipt.blockers.length !== 0
+    || receipt.receiptPersistence !== 'CREATE_ONLY_WX'
+    || receipt.shadowReceiptPromotionPerformed !== false
+    || receipt.preAuthorityShadowCanonicalCredit !== 0
+    || receipt.preCutoverShadowCanonicalCredit !== 0
+    || receipt.prospectiveSlotCredit !== 1
+    || receipt.readyForProtectedCanonicalIngestGate !== true
+    || receipt.canonicalIngestPermitted !== false
+    || receipt.canonicalIngestPerformed !== false
+    || receipt.independencePermitted !== false
+    || receipt.independencePerformed !== false
+    || receipt.canonicalEconomicCredit !== 0
+    || receipt.replayCredit !== 0
+    || receipt.backfillCredit !== 0
+    || receipt.manualCredit !== 0
+    || receipt.syntheticCredit !== 0
+    || receipt.hindsightCredit !== 0
+    || receipt.fullCostReady !== false
+    || receipt.profitabilityProven !== false
+    || receipt.liveTrading !== false
+    || receipt.autoTrading !== false
+    || receipt.privateTradingApiAllowed !== false
+    || receipt.realOrderEnabled !== false
+    || receipt.executionAuthority !== 'NONE') {
+    throw new Error('SERVER_CANONICAL_RECEIPT_INVALID');
+  }
+  const value = object(
+    authorization,
+    'SERVER_CANONICAL_INGEST_AUTHORIZATION_REQUIRED',
+  );
+  const body = withoutKey(value, 'authorizationDigest');
+  const githubObservedAtMs = positiveInteger(
+    value.githubObservedAtMs,
+    'SERVER_CANONICAL_GITHUB_OBSERVED_AT_INVALID',
+  );
+  const authorizedAtMs = positiveInteger(
+    value.authorizedAtMs,
+    'SERVER_CANONICAL_INGEST_AUTHORIZED_AT_INVALID',
+  );
+  const serverStartedAtMs = positiveInteger(
+    receipt.serverStartedAtMs,
+    'SERVER_CANONICAL_SERVER_STARTED_AT_INVALID',
+  );
+  if (value.schemaVersion
+      !== 'public-forward-liquidity-server-canonical-ingest-authorization-v1'
+    || value.status !== 'AUTHORIZED_FOR_PROTECTED_CANONICAL_INGEST'
+    || value.canonicalSource !== SERVER_NATURAL_TIMER_SOURCE
+    || canonicalJson(value.sourcePrecedence) !== canonicalJson(CANONICAL_SOURCE_PRECEDENCE)
+    || value.targetMainSha !== capture.exactMainSha
+    || canonicalJson(value.creditKey) !== canonicalJson(capture.serverCanonicalCreditKey)
+    || value.creditKeyDigest !== capture.serverCanonicalCreditKeyDigest
+    || value.captureReceiptDigest !== capture.captureReceiptDigest
+    || exactDigest(
+      value.serverReceiptDigest,
+      'SERVER_CANONICAL_SERVER_RECEIPT_DIGEST_INVALID',
+    ) !== receiptDigest
+    || githubObservedAtMs > authorizedAtMs
+    || authorizedAtMs < serverStartedAtMs
+    || value.githubRecoveryObserved !== false
+    || value.priorCanonicalCreditN !== 0
+    || value.maximumCanonicalEconomicCredit !== 1
+    || value.canonicalIngestPermitted !== true
+    || value.canonicalIngestPerformed !== false
+    || value.independencePerformed !== false
+    || value.canonicalEconomicCredit !== 0
+    || value.executionAuthority !== 'NONE'
+    || exactDigest(
+      value.authorizationDigest,
+      'SERVER_CANONICAL_INGEST_AUTHORIZATION_DIGEST_INVALID',
+    ) !== sha256(canonicalJson(body))) {
+    throw new Error('SERVER_CANONICAL_INGEST_AUTHORIZATION_INVALID');
+  }
+  return value;
 }
 
 export async function ingestPublicForwardLiquidityV3Capture({
@@ -584,6 +771,8 @@ export async function ingestPublicForwardLiquidityV3Capture({
   rawBatch,
   captureReceipt,
   artifactReceipt,
+  serverCanonicalReceipt = null,
+  serverCanonicalIngestAuthorization = null,
 }) {
   const safeStateRoot = assertPublicForwardLiquidityResearchStateRoot({ stateRoot, researchRepoRoot });
   const mainSha = exactSha(expectedMainSha, 'EXPECTED_MAIN_SHA_INVALID');
@@ -591,7 +780,12 @@ export async function ingestPublicForwardLiquidityV3Capture({
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository)) throw new Error('EXPECTED_REPOSITORY_INVALID');
 
   const capture = object(captureReceipt, 'V3_CAPTURE_RECEIPT_INVALID');
-  const { slot, sourceContractFamily, multiLane = null } = verifyScheduledIdentity(capture);
+  const {
+    slot,
+    sourceContractFamily,
+    canonicalSource = GITHUB_V3_SCHEDULE_SOURCE,
+    multiLane = null,
+  } = verifyScheduledIdentity(capture);
   if (capture.repository !== repository) throw new Error('CAPTURE_REPOSITORY_MISMATCH');
   const captureRunId = decimalId(capture.runId, 'CAPTURE_RUN_ID_INVALID');
   const captureRunAttempt = decimalId(capture.runAttempt, 'CAPTURE_RUN_ATTEMPT_INVALID');
@@ -616,6 +810,16 @@ export async function ingestPublicForwardLiquidityV3Capture({
     expectedArtifactDigest,
     expectedRepository: repository,
   });
+  const serverIngestAuthorization = validateServerCanonicalIngestAuthorization(
+    serverCanonicalIngestAuthorization,
+    capture,
+    serverCanonicalReceipt,
+    {
+      rawBatchDigest,
+      artifactReceiptDigest: artifact.artifactReceiptDigest,
+      artifactDigest: artifact.artifactDigest,
+    },
+  );
 
   const persisted = await persistLiquidityCalibrationBatch({
     stateRoot: safeStateRoot,
@@ -632,10 +836,16 @@ export async function ingestPublicForwardLiquidityV3Capture({
   );
   const sourceV3Lineage = Object.freeze({
     sourceContractFamily,
-    producerWorkflowName: sourceContractFamily === 'SUCCESSOR_SCHEDULE_RELIABILITY_V3'
-      ? 'Public Forward Liquidity Successor Scheduled Capture'
-      : 'Public Forward Liquidity Calibration Scheduled V3',
-    producerWorkflowId: sourceContractFamily === 'SUCCESSOR_SCHEDULE_RELIABILITY_V3' ? 347888347 : null,
+    canonicalSource,
+    sourcePrecedence: [...CANONICAL_SOURCE_PRECEDENCE],
+    producerWorkflowName: canonicalSource === SERVER_NATURAL_TIMER_SOURCE
+      ? 'Public Forward Liquidity Server Canonical Runtime V1'
+      : (sourceContractFamily === 'SUCCESSOR_SCHEDULE_RELIABILITY_V3'
+        ? 'Public Forward Liquidity Successor Scheduled Capture'
+        : 'Public Forward Liquidity Calibration Scheduled V3'),
+    producerWorkflowId: canonicalSource === SERVER_NATURAL_TIMER_SOURCE
+      ? null
+      : (sourceContractFamily === 'SUCCESSOR_SCHEDULE_RELIABILITY_V3' ? 347888347 : null),
     captureReceiptVersion: capture.schemaVersion,
     captureReceiptDigest: capture.captureReceiptDigest,
     artifactReceiptVersion: artifactReceipt.schemaVersion,
@@ -671,6 +881,8 @@ export async function ingestPublicForwardLiquidityV3Capture({
     canonicalSlotKey: slot.canonicalSlotKey,
     canonicalSlotKeyDigest: slot.canonicalSlotKeyDigest,
     prospectiveSlotCredit: 1,
+    maximumCanonicalEconomicCreditForPolicyCohortSlot: 1,
+    githubSourcePrecedenceEnforced: canonicalSource === SERVER_NATURAL_TIMER_SOURCE,
     manualCredit: 0,
     replayCredit: 0,
     backfillCredit: 0,
@@ -755,6 +967,14 @@ export async function ingestPublicForwardLiquidityV3Capture({
     orderSubmitted: false,
     realOrders: 0,
     sourceV3Lineage,
+    ...(serverIngestAuthorization ? {
+      serverCanonicalIngestAuthorizationDigest:
+        serverIngestAuthorization.authorizationDigest,
+      serverCanonicalGithubObservedAtMs:
+        serverIngestAuthorization.githubObservedAtMs,
+      serverCanonicalIngestAuthorizedAtMs:
+        serverIngestAuthorization.authorizedAtMs,
+    } : {}),
   });
   return Object.freeze({
     ...body,
