@@ -149,9 +149,9 @@ test("catalog exposes exactly 12 market-horizon profiles with 9 cash READY and 3
 
 test("catalog carries primary-source strategy recipes before any local formula invention", () => {
   const catalog = buildEvidenceBackedFormulaSeedCatalogV1();
-  assert.equal(catalog.referenceRecipeCount, 8);
+  assert.equal(catalog.referenceRecipeCount, 9);
   assert.deepEqual(catalog.referenceRecipes, EVIDENCE_BACKED_REFERENCE_RECIPES);
-  assert.equal(new Set(catalog.referenceRecipes.map((recipe) => recipe.recipeId)).size, 8);
+  assert.equal(new Set(catalog.referenceRecipes.map((recipe) => recipe.recipeId)).size, 9);
   assert.equal(Object.isFrozen(catalog.referenceRecipes), true);
 
   const ep = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "QULLAMAGGIE_EP_V1");
@@ -196,6 +196,18 @@ test("catalog carries primary-source strategy recipes before any local formula i
   assert.equal(cryptoCrossSectional.localReadiness.currentUpbitBitgetUniverseMayCount, false);
   assert.equal(cryptoCrossSectional.localReadiness.threeCoinProxyMayCountAsReplication, false);
   assert.equal(cryptoCrossSectional.automaticActivationAllowed, false);
+
+  const turtle = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "TURTLE_SYSTEM_2_DONCHIAN_V1");
+  assert.equal(turtle.origin, "PRACTITIONER_PUBLIC_METHOD");
+  assert.equal(turtle.confirmation.entryBreakoutDays, 55);
+  assert.equal(turtle.confirmation.exitBreakoutDays, 20);
+  assert.equal(turtle.confirmation.initialStopNMultiple, 2);
+  assert.equal(turtle.confirmation.addUnitEveryNMultiple, 0.5);
+  assert.equal(turtle.confirmation.maxUnits, 4);
+  assert.equal(turtle.confirmation.priorWinnerFilterApplied, false);
+  assert.equal(turtle.riskFramework.fixedProfitTarget, false);
+  assert.equal(turtle.sourceEvidence[0].independentlyAuditedPerformance, false);
+  assert.equal(turtle.automaticActivationAllowed, false);
 
   const orb = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "ORB_STANDALONE_COST_CONTROL_V1");
   assert.equal(orb.researchRole, "NEGATIVE_CONTROL");
