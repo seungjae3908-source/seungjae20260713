@@ -92,6 +92,14 @@ export function buildServerCanonicalCutoverReadiness({
   if (!exactDigest(activationBindingDigest)) {
     add(blockers, 'SERVER_CANONICAL_BINDING_DIGEST_INVALID');
   }
+  const contractActivationBindingDigest = contract?.activationBound === true
+    && contract?.policyCore?.activationBinding
+    ? sha256(canonicalJson(contract.policyCore.activationBinding))
+    : null;
+  if (!exactDigest(contractActivationBindingDigest)
+    || activationBindingDigest !== contractActivationBindingDigest) {
+    add(blockers, 'SERVER_CANONICAL_BINDING_DIGEST_MISMATCH');
+  }
 
   if (latestActivationReceipt?.action !== 'AUTHORIZE'
     || latestActivationReceipt?.targetMainSha !== currentMainSha
