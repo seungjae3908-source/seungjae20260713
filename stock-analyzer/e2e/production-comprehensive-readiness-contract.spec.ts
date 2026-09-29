@@ -35,21 +35,29 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(auditRoute).toContain('await navigateInMountedApp(page, route)');
   expect(auditRoute).not.toContain('page.goto(route');
   expect(qa).toContain('const LOGIN_READY_BUDGET_MS = 15_000;');
+  expect(qa).toContain('const LOGIN_NAVIGATION_TIMEOUT_RETRIES = 1;');
   expect(qa).toContain('const CACHED_AUTH_TIMEOUT_RETRIES = 1;');
+  const timeoutHelperStart = qa.indexOf('function isPlaywrightTimeout');
+  const navigationRetryStart = qa.indexOf('async function gotoLoginWithTimeoutRetry');
   const validateCachedAuthStart = qa.indexOf('async function validateCachedAuthState');
   const loginStart = qa.indexOf('async function login(');
+  const timeoutHelper = qa.slice(timeoutHelperStart, navigationRetryStart);
+  const loginNavigation = qa.slice(navigationRetryStart, qa.indexOf('async function restoreCachedAuthState'));
   const validateCachedAuth = qa.slice(validateCachedAuthStart, loginStart);
   const login = qa.slice(loginStart, qa.indexOf('async function auditLayout'));
-  const loginNavigation = login.slice(login.indexOf("await page.goto('/login'"), login.indexOf('const loginId'));
-  expect(login.match(/page\.goto\(/g)).toHaveLength(1);
-  expect(login).toContain("page.goto('/login', { waitUntil: 'commit', timeout: remainingReadinessMs() })");
+  expect(login.match(/page\.goto\(/g)).toBeNull();
+  expect(login).toContain('await gotoLoginWithTimeoutRetry(page);');
+  expect(loginNavigation).toContain("page.goto('/login', { waitUntil: 'commit', timeout: LOGIN_READY_BUDGET_MS })");
+  expect(loginNavigation).toContain('attempt >= LOGIN_NAVIGATION_TIMEOUT_RETRIES');
+  expect(loginNavigation).toContain('isPlaywrightTimeout(error)');
+  expect(timeoutHelper).toContain("error.name === 'TimeoutError'");
+  expect(timeoutHelper).toContain('/Timeout \\d+ms exceeded/i.test(error.message)');
   expect(login).toContain('await validateCachedAuthState(page, cached);');
   expect(validateCachedAuthStart).toBeGreaterThanOrEqual(0);
   expect(loginStart).toBeGreaterThan(validateCachedAuthStart);
   expect(validateCachedAuth).toContain("page.request.get(new URL('/api/auth/profile', baseUrl).toString()");
   expect(validateCachedAuth).toContain('Authorization: `Bearer ${token}`');
-  expect(validateCachedAuth).toContain("error.name === 'TimeoutError'");
-  expect(validateCachedAuth).toContain('/Timeout \\d+ms exceeded/i.test(error.message)');
+  expect(validateCachedAuth).toContain('const timeoutOnly = isPlaywrightTimeout(error);');
   expect(validateCachedAuth).toContain('attempt >= CACHED_AUTH_TIMEOUT_RETRIES');
   expect(validateCachedAuth).toContain('if (response.status() !== 200)');
   expect(validateCachedAuth).toContain('PRODUCTION_QA_CACHED_SESSION_PROFILE_INVALID');
@@ -59,7 +67,6 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(login).toContain("page.getByTestId('page-fallback').isVisible");
   expect(login).toContain("}).toBe('READY')");
   expect(login).not.toContain('timeout: 10_000');
-  expect(loginNavigation).not.toContain('catch');
   expect(qa).toContain('const authStateByViewport = new Map<string, CachedAuthState>();');
   expect(login).toContain('const cached = authStateByViewport.get(cacheKey);');
   expect(login).toContain('await restoreCachedAuthState(page, cached);');
@@ -67,7 +74,7 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(validateCachedAuth).toContain("throw new Error(`PRODUCTION_QA_CACHED_SESSION_PROFILE_${response.status()}`)");
   expect(login).toContain('const state = await page.context().storageState();');
   expect(login).toContain('authStateByViewport.set(cacheKey, state);');
-  const cachedBranch = login.slice(login.indexOf('if (cached) {'), login.indexOf('// Judge readiness'));
+  const cachedBranch = login.slice(login.indexOf('if (cached) {'), login.indexOf('// A cold Production'));
   expect(cachedBranch).not.toContain('loginButton.click');
   expect(cachedBranch).not.toContain('loginPassword.fill');
   expect(auditRoute).not.toContain("expect(page.getByTestId('page-fallback')).toHaveCount(0");
@@ -81,6 +88,10 @@ test('Production chart audit waits for the matching settled query before accepti
   const matrixStart = qa.indexOf('async function chartMatrix');
   const matrixEnd = qa.indexOf("test.describe('Production comprehensive read-only QA'", matrixStart);
   const matrix = qa.slice(matrixStart, matrixEnd);
+  const bootstrapAttach = matrix.indexOf("page.on('response', bootstrapListener)");
+  const initialNavigation = matrix.indexOf("page.goto('/ai-chart?");
+  const bootstrapDetach = matrix.indexOf("page.off('response', bootstrapListener)");
+  const seededStatuses = matrix.indexOf('bootstrapStatuses.get(`${market}:${timeframe}`)');
   const responseGate = matrix.indexOf("if (statuses.length === 0 || queryFetching === 'true') return 'timeout'");
   const terminalCheck = matrix.indexOf("page.getByTestId('unified-chart-canvas').isVisible", responseGate);
 
@@ -91,6 +102,10 @@ test('Production chart audit waits for the matching settled query before accepti
   expect(chart).toContain("data-chart-data-timeframe={chartQuery.data?.timeframe ?? ''}");
   expect(matrixStart).toBeGreaterThanOrEqual(0);
   expect(matrixEnd).toBeGreaterThan(matrixStart);
+  expect(bootstrapAttach).toBeGreaterThan(0);
+  expect(initialNavigation).toBeGreaterThan(bootstrapAttach);
+  expect(bootstrapDetach).toBeGreaterThan(initialNavigation);
+  expect(seededStatuses).toBeGreaterThan(bootstrapDetach);
   expect(responseGate).toBeGreaterThan(0);
   expect(terminalCheck).toBeGreaterThan(responseGate);
   expect(matrix).toContain("selectedMarket !== market || selectedTimeframe !== timeframe");
@@ -99,6 +114,19 @@ test('Production chart audit waits for the matching settled query before accepti
   expect(marketData).toContain("const oneMinuteDisk = await readCandleDiskCache(ticker, '1m')");
   expect(marketData).toContain('aggregateOneMinuteCandles(oneMinuteDisk.candles, derivationSize)');
   expect(marketData).toContain('void cached(cacheKey, candleCacheTtl(timeframeText), load)');
+});
+
+test('Production Research Center login keeps the same bounded cold-transport and interactive readiness contract', () => {
+  const qa = source('e2e/production-research-center-readonly-qa.spec.ts');
+  expect(qa).toContain('const LOGIN_READY_BUDGET_MS = 15_000;');
+  expect(qa).toContain('const LOGIN_NAVIGATION_TIMEOUT_RETRIES = 1;');
+  expect(qa).toContain("page.goto('/login', { waitUntil: 'commit', timeout: LOGIN_READY_BUDGET_MS })");
+  expect(qa).toContain('if (!isPlaywrightTimeout(error) || attempt >= LOGIN_NAVIGATION_TIMEOUT_RETRIES) throw error;');
+  expect(qa).toContain("page.getByLabel('아이디')");
+  expect(qa).toContain("page.getByLabel('비밀번호')");
+  expect(qa).toContain("page.getByTestId('page-fallback').isVisible");
+  expect(qa).toContain("}).toBe('READY')");
+  expect(qa).not.toContain("expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 10_000 })");
 });
 
 test('Production cold-route modules settle before primary market data prewarm without competing with direct AI Chart bootstrap', () => {
@@ -123,6 +151,10 @@ test('Production cold-route modules settle before primary market data prewarm wi
   expect(app).toContain('loadTechnicalWorkspacePage()');
   expect(app).toContain('loadSignalScannerPage()');
   expect(app).toContain('loadAiChartPage()');
+  expect(app).toContain('loadAiChatPage()');
+  expect(app).toContain('loadThemesPage()');
+  expect(app).toContain('const directLoginColdRoute');
+  expect(app).toContain('void loadAccountPage();');
   expect(app).toContain('loadLearnPage()');
   expect(app).toContain('if (!auth.isApproved || directAiChartColdRoute) return;');
 });
