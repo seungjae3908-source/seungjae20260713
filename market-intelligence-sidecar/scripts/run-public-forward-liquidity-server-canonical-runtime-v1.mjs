@@ -339,10 +339,28 @@ async function allShadowReceipts() {
 async function shadowEvidenceSnapshot({ targetSha, receiptCommentId, bindingDigest } = {}) {
   const receipts = await allShadowReceipts();
   for (const receipt of receipts) {
-    if (receipt?.serverCanonical !== false
-      || receipt?.canonicalEconomicCredit !== 0
+    const { receiptDigest, ...body } = receipt ?? {};
+    if (receipt?.shadowOnly !== true
+      || receipt?.serverCanonical !== false
       || receipt?.prospectiveSlotCredit !== 0
-      || receipt?.profitabilityCredit !== 0) {
+      || receipt?.canonicalEconomicCredit !== 0
+      || receipt?.economicSampleCredit !== 0
+      || receipt?.profitabilityCredit !== 0
+      || receipt?.replayCredit !== 0
+      || receipt?.backfillCredit !== 0
+      || receipt?.manualCredit !== 0
+      || receipt?.syntheticCredit !== 0
+      || receipt?.hindsightCredit !== 0
+      || receipt?.fullCostReady !== false
+      || receipt?.evidenceComplete !== 0
+      || receipt?.profitabilityProven !== false
+      || receipt?.liveTrading !== false
+      || receipt?.autoTrading !== false
+      || receipt?.realOrderEnabled !== false
+      || receipt?.privateTradingApiAllowed !== false
+      || receipt?.executionAuthority !== 'NONE'
+      || !/^[a-f0-9]{64}$/u.test(String(receiptDigest ?? ''))
+      || receiptDigest !== sha256(canonicalJson(body))) {
       throw new Error('SERVER_CANONICAL_HISTORICAL_SHADOW_ZERO_CREDIT_UNPROVEN');
     }
   }
@@ -465,7 +483,7 @@ async function prepareActivation() {
     currentMainSha: targetSha,
     authorizedAtMs,
   });
-  const creditKey = Object.freeze({
+  const activationCreditKey = buildServerCanonicalCreditKey({
     policyDigest: shadow.latest.policyDigest,
     cohortDigest: shadow.latest.cohortDigest,
     slotIndex: shadow.latest.slotIndex,
@@ -473,8 +491,10 @@ async function prepareActivation() {
   const canonicalCreditLedger = Object.freeze({
     lookupComplete: true,
     sourcePrecedence: [...SERVER_CANONICAL_SOURCE_PRECEDENCE],
-    creditKey,
-    matchingCanonicalCredits: [],
+    creditKey: activationCreditKey.key,
+    matchingCanonicalCredits: await matchingCanonicalReceipts(
+      activationCreditKey.keyDigest,
+    ),
     maximumCanonicalEconomicCredit: 1,
   });
   const latestActivationReceipt = Object.freeze({
