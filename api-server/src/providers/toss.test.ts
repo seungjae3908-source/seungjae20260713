@@ -406,7 +406,7 @@ test('market-data bounded KR 1m uses the existing Toss read-only hedge before re
   }
 });
 
-test('bounded KR fallback reuses the in-flight Toss candle read across candle/chart requests', async () => {
+test('bounded KR fallback reuses a genuine completed Toss candle read across delayed candle/chart requests', async () => {
   const kiwoomKeys = ['KIWOOM_APP_KEY', 'KIWOOM_APP_SECRET', 'KIWOOM_PROXY_KEY', 'KIWOOM_MODE'] as const;
   const savedKiwoom = Object.fromEntries(kiwoomKeys.map((key) => [key, process.env[key]]));
   for (const key of kiwoomKeys) delete process.env[key];
@@ -443,11 +443,15 @@ test('bounded KR fallback reuses the in-flight Toss candle read across candle/ch
   };
 
   try {
-    const first = await MarketDataService.getCandlesMeta('005930', '1m');
+    const first = await MarketDataService.getCandlesMeta('005931', '1m');
     assert.equal(first.provider, 'none');
     assert.equal(first.candles.length, 0);
 
-    const second = await MarketDataService.getCandlesMeta('005930', '1m');
+    // Let the genuine provider read settle and leave the in-flight map before
+    // the UI fallback endpoint arrives. Its short success tail must remain
+    // available without starting another cold token+candle request.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const second = await MarketDataService.getCandlesMeta('005931', '1m');
     assert.equal(second.provider, 'toss');
     assert.equal(second.candles.length, 2);
     assert.equal(tossCandleCalls, 1);

@@ -16,8 +16,10 @@ const FALLBACK_PROFILE_DESCRIPTION = '기업 정보를 확인 중입니다.';
 const APP_KR_INTERACTIVE_CANDLE_LIMIT = 300;
 export const APP_KR_INTRADAY_DEADLINE_MS = 2_000;
 const APP_KR_INTERACTIVE_YAHOO_HEDGE_DELAY_MS = 100;
+const KR_TOSS_SUCCESS_TAIL_MS = 10_000;
 const MAX_PROVIDER_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const krTossCandlesInFlight = new Map<string, Promise<Candle[]>>();
+const krTossCandlesSuccessTail = new Map<string, { candles: Candle[]; expiresAt: number }>();
 const KR_INTERACTIVE_TIMEFRAMES = new Set([
   '1m',
   '3m',
@@ -125,13 +127,25 @@ function getSharedKrTossCandles(
   timeframe: Timeframe,
 ): Promise<Candle[]> {
   const key = `${ticker}:${String(timeframe)}`;
+  const recent = krTossCandlesSuccessTail.get(key);
+  if (recent && recent.expiresAt > Date.now()) return Promise.resolve(recent.candles);
+  if (recent) krTossCandlesSuccessTail.delete(key);
+
   const existing = krTossCandlesInFlight.get(key);
   if (existing) return existing;
 
   const request = (async () => {
     const entry = await BaseMarketDataService.getCatalogEntry(ticker);
     return getTossCandles(entry, timeframe, 200);
-  })();
+  })().then((candles) => {
+    if (candles.length >= minimumUsefulCandles(timeframe)) {
+      krTossCandlesSuccessTail.set(key, {
+        candles,
+        expiresAt: Date.now() + KR_TOSS_SUCCESS_TAIL_MS,
+      });
+    }
+    return candles;
+  });
   krTossCandlesInFlight.set(key, request);
   void request.finally(() => {
     if (krTossCandlesInFlight.get(key) === request) {
