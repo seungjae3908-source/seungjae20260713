@@ -1,4 +1,4 @@
-name: Research US Reference Recipes V3
+name: Research US Reference Recipes V4
 
 on:
   pull_request:
@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: research-us-reference-recipes-v2-${{ github.event.pull_request.number || github.ref }}
+  group: research-us-reference-recipes-v4-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
