@@ -50,7 +50,7 @@ jobs:
           if(r.recipeContract.noInventedCompositeBeforeBaseline!==true||r.recipeContract.noWaveCandleVwapAiOverlayInBaseline!==true||r.recipeContract.winnerSelectionFromThisWindow!==false) throw new Error('REFERENCE_FIRST');
           if(r.recipeContract.commonBreakout.parameterSearch!==false||r.recipeContract.episodicPivot.parameterSearch!==false||r.recipeContract.pead.parameterSearch!==false) throw new Error('PARAMETER_SEARCH');
           if(!r.lookahead.D1CandidateUsesOnlyPriorCompletedDailyBars||!r.lookahead.ORHEntryUsesNextCompleted5mOpenAfterTriggerBar||!r.lookahead.lowOfDayStopUsesOnlyLowObservedBeforeEntry||!r.lookahead.peadEntersFirstFullSessionStrictlyAfterReportDate) throw new Error('LOOKAHEAD');
-          if(r.universe.dailyReadySymbols<30) throw new Error('DAILY_COVERAGE');
+          if(r.universe.dailyReadySymbols<240) throw new Error('DAILY_COVERAGE');
           if(r.episodicPivot.trueEpRequiresCatalyst!==true) throw new Error('EP_CATALYST');
           if(r.safety.researchOnly!==true||r.safety.publicMarketDataOnly!==true||r.safety.privateAccountRequestAllowed!==false||r.safety.orderRouteCalled!==false||r.safety.executionAuthority!=='NONE'||r.safety.economicSampleCredit!==0) throw new Error('SAFETY');
           NODE
