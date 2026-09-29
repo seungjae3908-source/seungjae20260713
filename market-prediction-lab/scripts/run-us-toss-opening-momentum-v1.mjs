@@ -668,8 +668,9 @@ function cleanPitTicker(value) {
   return /^[A-Z][A-Z0-9.-]{0,9}$/.test(symbol) ? symbol : null;
 }
 async function alphaListingStatus(date = null) {
-  const apiKey = String(process.env.ALPHA_VANTAGE_API_KEY ?? "").trim();
-  if (!apiKey) return { status: "BLOCKED_ALPHA_VANTAGE_KEY_MISSING", date, rows: [], error: "ALPHA_VANTAGE_API_KEY_MISSING" };
+  const configuredKey = String(process.env.ALPHA_VANTAGE_API_KEY ?? "").trim();
+  const apiKey = configuredKey || "demo";
+  const credentialMode = configuredKey ? "CONFIGURED_SECRET" : "PUBLIC_DEMO";
   const url = new URL(ALPHA_VANTAGE_BASE);
   url.searchParams.set("function", "LISTING_STATUS");
   if (date) url.searchParams.set("date", date);
@@ -714,7 +715,7 @@ async function alphaListingStatus(date = null) {
         && row.listingStatus === "ACTIVE"
       );
       if (rows.length < 500) throw new Error(`ALPHA_VANTAGE_LISTING_STATUS_INSUFFICIENT_${rows.length}`);
-      return { status: "AVAILABLE", date, rows };
+      return { status: "AVAILABLE", date, rows, credentialMode };
     } catch (error) {
       lastError = error;
       await sleep(1_500 * (attempt + 1));
@@ -722,7 +723,7 @@ async function alphaListingStatus(date = null) {
       clearTimeout(timer);
     }
   }
-  return { status: "BLOCKED_ALPHA_VANTAGE_LISTING_STATUS", date, rows: [], error: String(lastError?.message ?? lastError) };
+  return { status: "BLOCKED_ALPHA_VANTAGE_LISTING_STATUS", date, rows: [], credentialMode, error: String(lastError?.message ?? lastError) };
 }
 function deterministicPitSample(rows) {
   return [...rows]
@@ -763,20 +764,6 @@ function aggregateFormationMetric(formations, key) {
 }
 async function buildPitMembershipMomentumStress() {
   const apiKeyPresent = Boolean(String(process.env.ALPHA_VANTAGE_API_KEY ?? "").trim());
-  if (!apiKeyPresent) {
-    return {
-      status: "BLOCKED_ALPHA_VANTAGE_KEY_MISSING",
-      provider: "alpha-vantage-listing-status",
-      providerConfigured: false,
-      selectionUsesCurrentMembership: false,
-      sampleSizePerFormation: PIT_SAMPLE_SIZE,
-      canonicalPitDatasetClaimAllowed: false,
-      formations: [],
-      jtMomentumJ6K6Skip1: { aggregate: aggregateFormationMetric([], "jtMomentumJ6K6Skip1") },
-      high52WeekK6: { aggregate: aggregateFormationMetric([], "high52WeekK6") },
-    };
-  }
-
   const formationMemberships = [];
   for (const month of ACADEMIC_FORMATION_MONTHS) {
     const asOfDate = monthEndDate(month);
@@ -785,7 +772,8 @@ async function buildPitMembershipMomentumStress() {
       return {
         status: listing.status,
         provider: "alpha-vantage-listing-status",
-        providerConfigured: true,
+        providerConfigured: apiKeyPresent,
+        credentialMode: listing.credentialMode ?? (apiKeyPresent ? "CONFIGURED_SECRET" : "PUBLIC_DEMO"),
         selectionUsesCurrentMembership: false,
         failedFormationMonth: month,
         error: listing.error ?? null,
@@ -849,7 +837,8 @@ async function buildPitMembershipMomentumStress() {
   return {
     status,
     provider: "alpha-vantage-listing-status",
-    providerConfigured: true,
+    providerConfigured: apiKeyPresent,
+    credentialMode: apiKeyPresent ? "CONFIGURED_SECRET" : "PUBLIC_DEMO",
     providerHistoricalMembershipAsOfDate: true,
     selectionUsesCurrentMembership: false,
     currentMembershipUsedForSelection: false,
