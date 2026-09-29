@@ -99,6 +99,111 @@ test('review dataset shows anonymization and excluded fields', async ({ page }) 
   await expect(page.getByRole('status')).toContainText('외부 전송은 없습니다');
 });
 
+test('default unified-ledger transport accepts reconciled non-zero read-only provider request counts', async ({ page }) => {
+  const errors = captureErrors(page);
+  const result = {
+    integrationBaseSha: 'transport-e2e',
+    generatedAt: '2026-09-25T00:00:00.000Z',
+    trades: [],
+    integrityIssues: [],
+    toss: {
+      provider: 'TOSS',
+      officialSpecVersion: '1.2.13',
+      paidStatus: 'PAID_STATUS_UNVERIFIED',
+      liveReadIntegration: 'BLOCKED_BY_FREE_STATUS_UNVERIFIED',
+      contractNormalizerAvailable: true,
+      executionGranularity: 'ORDER_CUMULATIVE_AGGREGATE_NO_FILL_ID',
+      livePrivateRequests: 0,
+      actualOrders: 0,
+    },
+    aiReviewStatus: 'AI_EXTERNAL_REVIEW_DISABLED_FREE_ONLY',
+    safety: {
+      finalCostDelta: '0_KRW',
+      actualOrderRequests: 0,
+      cancelRequests: 0,
+      amendRequests: 0,
+      transferRequests: 0,
+      withdrawalRequests: 0,
+      privateBrokerRequests: 8,
+    },
+    liveAccountHistory: {
+      requestedRange: '30D',
+      effectiveDays: 30,
+      rangeCapped: false,
+      persisted: false,
+      privateProviderRequests: 8,
+      truncated: false,
+      providers: [
+        { provider: 'kiwoom', configured: true, enabled: true, status: 'READY', records: 2, privateProviderRequests: 3, truncated: false, errorCode: null },
+        { provider: 'upbit', configured: true, enabled: true, status: 'READY', records: 2, privateProviderRequests: 4, truncated: false, errorCode: null },
+        { provider: 'bitget', configured: true, enabled: true, status: 'READY', records: 1, privateProviderRequests: 1, truncated: false, errorCode: null },
+      ],
+      realizedEvidence: [{
+        provider: 'kiwoom',
+        market: 'KR',
+        evidenceType: 'DAILY_CASH_REALIZED',
+        date: '20260924',
+        symbol: '005930',
+        buyAveragePrice: 70000,
+        buyQuantity: 10,
+        sellAveragePrice: 71000,
+        sellQuantity: 10,
+        feesAndTax: 1500,
+        providerReportedPnl: 8500,
+        providerReportedReturnPercent: 1.2142,
+        canonicalAnalyticsPromoted: false,
+      }],
+      safety: {
+        orderRequests: 0,
+        cancelRequests: 0,
+        amendRequests: 0,
+        transferRequests: 0,
+        withdrawalRequests: 0,
+        credentialsReturned: false,
+        liveTradingEnabled: false,
+        autoTradingEnabled: false,
+      },
+    },
+    analytics: {
+      sampleSize: 0,
+      openTrades: 0,
+      closedTrades: 0,
+      winRate: null,
+      profitFactor: null,
+      averageReturnPercent: null,
+      maximumConsecutiveLosses: null,
+      netPnlByCurrency: [],
+      totalCostsByCurrency: [],
+      byMarket: [],
+      bySource: [],
+      byStrategy: [],
+      byTimeframe: [],
+      byGrade: [],
+      mistakes: [],
+      monthlyReport: [],
+      warnings: [],
+    },
+  };
+
+  await page.route('**/api/paper-journal/unified-ledger**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ mode: 'analysis-only', externalAiCalled: false, ok: true, result }),
+    });
+  });
+
+  await page.goto(`${PATH}?unifiedTransport=api`);
+  await expect(page.getByTestId('phase7-e2e-page')).toBeVisible();
+  await expect(page.getByTestId('journal-zero-cost-status')).toContainText('실계좌 조회 8회');
+  await expect(page.getByTestId('live-account-history-status')).toContainText('KIWOOM READY · 2건 · 요청 3회');
+  await expect(page.getByTestId('live-account-history-status')).toContainText('UPBIT READY · 2건 · 요청 4회');
+  await expect(page.getByTestId('live-account-history-status')).toContainText('BITGET READY · 1건 · 요청 1회');
+  await expect(page.getByTestId('kiwoom-realized-evidence')).toContainText('8,500 KRW');
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 test('unified trade journal separates performance, quality, snapshots, and free-only status', async ({ page }) => {
   const errors = captureErrors(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -107,6 +212,19 @@ test('unified trade journal separates performance, quality, snapshots, and free-
   await expect(journal).toContainText('통합 매매일지·매매 품질 복기');
   await expect(page.getByTestId('toss-free-status')).toContainText('BLOCKED_BY_FREE_STATUS_UNVERIFIED');
   await expect(page.getByTestId('journal-zero-cost-status')).toContainText('0_KRW');
+  await expect(page.getByTestId('journal-zero-cost-status')).toContainText('실계좌 조회 8회');
+  const liveHistory = page.getByTestId('live-account-history-status');
+  await expect(liveHistory).toContainText('실계좌 거래이력 · READ-ONLY');
+  await expect(liveHistory).toContainText('최근 30일');
+  await expect(liveHistory).toContainText('KIWOOM READY · 2건 · 요청 3회');
+  await expect(liveHistory).toContainText('UPBIT READY · 2건 · 요청 4회');
+  await expect(liveHistory).toContainText('BITGET READY · 1건 · 요청 1회');
+  await expect(page.getByTestId('kiwoom-realized-evidence')).toContainText('Kiwoom 국내 현금 실현손익 증거 · 1건');
+  await expect(page.getByTestId('kiwoom-realized-evidence')).toContainText('canonical 승률·Profit Factor·평균수익률 통계에는 넣지 않습니다.');
+  await expect(page.getByTestId('kiwoom-realized-evidence')).toContainText('8,500 KRW');
+  await expect(page.getByLabel('출처')).toContainText('Upbit 실계좌');
+  await expect(page.getByLabel('출처')).toContainText('Bitget 실계좌');
+  await expect(page.getByLabel('출처')).toContainText('Kiwoom 실계좌');
 
   const linkage = page.getByTestId('journal-paper-linkage');
   await expect(linkage).toContainText('Paper 기록 연결 상태');
