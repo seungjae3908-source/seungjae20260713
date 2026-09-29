@@ -1,0 +1,59 @@
+name: Research Upbit BOS Retest Rebreak V7
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/run-upbit-bos-retest-rebreak-v7.mjs
+      - .github/workflows/research-upbit-bos-retest-rebreak-v7.yml
+      - market-prediction-lab/src/adaptive-multi-evidence-price-structure-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-point-in-time-v2.js
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-upbit-bos-retest-rebreak-v7-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Verify public research-only boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/scripts/run-upbit-bos-retest-rebreak-v7.mjs
+          ! grep -Eiq 'UPBIT_ACCESS_KEY|UPBIT_SECRET_KEY|LIVE_TRADING|REAL_ORDER_ENABLED|PRIVATE_TRADING_API_ALLOWED|(^|[^A-Za-z])withdraw([^A-Za-z]|$)|(^|[^A-Za-z])transfer([^A-Za-z]|$)|(^|[^A-Za-z])orderSubmitted([^A-Za-z]|$)' market-prediction-lab/scripts/run-upbit-bos-retest-rebreak-v7.mjs
+      - name: Run fixed retest-rebreak V7 on fresh cohort
+        working-directory: market-prediction-lab
+        run: node scripts/run-upbit-bos-retest-rebreak-v7.mjs docs/upbit-bos-retest-rebreak-v7.json
+      - name: Assert fresh cohort and chronology
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('docs/upbit-bos-retest-rebreak-v7.json','utf8'));
+          if(r.status!=='pass') throw new Error('STATUS');
+          if(r.fixedPolicy.parameterSearchPerformed!==false||r.fixedPolicy.familySearchPerformed!==false) throw new Error('SEARCH_FORBIDDEN');
+          if(r.universe.freshHoldout.length!==12||r.universe.freshHoldoutRanks!=='61-72') throw new Error('FRESH_HOLDOUT');
+          if(r.lookahead.freshHoldoutSymbolsUsedForDesign!==false||!r.lookahead.guardPassed||!r.lookahead.BOSRetestRebreakUseCompleted15mOnly||!r.lookahead.entryNext15mOpen) throw new Error('LOOKAHEAD');
+          if(!r.intradayRetestV6Baseline||!r.intradayRebreakV7||!r.hybridV7) throw new Error('RESULT_MISSING');
+          if(r.safety.researchOnly!==true||r.safety.publicDataOnly!==true||r.safety.executionAuthority!=='NONE'||r.safety.profitabilityPromotionAllowed!==false) throw new Error('SAFETY');
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: upbit-bos-retest-rebreak-v7-${{ github.event.pull_request.head.sha }}
+          path: market-prediction-lab/docs/upbit-bos-retest-rebreak-v7.json
+          if-no-files-found: error
+          retention-days: 30
