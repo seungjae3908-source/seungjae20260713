@@ -894,7 +894,7 @@ async function main() {
         automaticPromotionAllowed: false,
       },
       PEAD_EARNINGS_SURPRISE_V1: {
-        status: "RESEARCH_HOLD_TRANSFER_FAILED",
+        status: "RESEARCH_HOLD_TEMPORAL_GENERALIZATION_FAILED",
         reason: "RECENT analyst-SUE proxy spread does not transfer to PRIOR window; canonical I/B/E/S/FOS SUE unavailable",
         overlayResearchAllowed: false,
         automaticPromotionAllowed: false,
