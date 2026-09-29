@@ -1001,6 +1001,42 @@ function deterministicPitSample(rows) {
     .sort((left, right) => pitSampleHash(left.symbol).localeCompare(pitSampleHash(right.symbol)) || left.symbol.localeCompare(right.symbol))
     .slice(0, PIT_SAMPLE_SIZE);
 }
+function addMonthKey(month, offset) {
+  const [year, monthNumber] = month.split("-").map(Number);
+  return new Date(Date.UTC(year, monthNumber - 1 + offset, 1)).toISOString().slice(0, 7);
+}
+function buildMonthlyHoldingReturns(candles, formationMonth) {
+  const out = [];
+  let previousMonthEndClose = null;
+  let terminalGapSeen = false;
+  for (let offset = 1; offset <= 6; offset += 1) {
+    const month = addMonthKey(formationMonth, offset);
+    const bars = candles.filter((bar) => nyParts(bar.timestamp).date.startsWith(month));
+    if (!bars.length || terminalGapSeen) {
+      out.push({
+        month,
+        status: terminalGapSeen ? "AFTER_TERMINAL_GAP" : "MONTH_PRICE_MISSING",
+        netReturn: null,
+        wipeoutStressReturn: terminalGapSeen ? 0 : -1,
+      });
+      terminalGapSeen = true;
+      continue;
+    }
+    const rawStart = offset === 1 ? bars[0].open : previousMonthEndClose;
+    const rawEnd = bars.at(-1).close;
+    if (!(rawStart > 0) || !(rawEnd > 0)) {
+      out.push({ month, status: "MONTH_PRICE_INVALID", netReturn: null, wipeoutStressReturn: -1 });
+      terminalGapSeen = true;
+      continue;
+    }
+    const startFill = offset === 1 ? rawStart * (1 + NORMAL_COST) : rawStart;
+    const endFill = offset === 6 ? rawEnd * (1 - NORMAL_COST) : rawEnd;
+    const netReturn = endFill / startFill - 1;
+    out.push({ month, status: "COMPLETE", netReturn, wipeoutStressReturn: netReturn });
+    previousMonthEndClose = rawEnd;
+  }
+  return out;
+}
 function academicPitRecord(row, month) {
   const candles = row.daily;
   const index = monthEndIndex(candles, month);
@@ -1015,6 +1051,7 @@ function academicPitRecord(row, month) {
   if (!(high52 > 0)) return null;
   const entry = candles[entryIndex].open * (1 + NORMAL_COST);
   const exitIndex = index + 126;
+  const monthlyHoldingReturns = buildMonthlyHoldingReturns(candles, month);
   const base = {
     symbol: row.symbol,
     bucket: row.bucket ?? "PIT",
@@ -1024,6 +1061,7 @@ function academicPitRecord(row, month) {
     entryDate: nyParts(candles[entryIndex].timestamp).date,
     jt6mSignal,
     high52Ratio: candles[index].close / high52,
+    monthlyHoldingReturns,
   };
   if (exitIndex < candles.length) {
     const exit = candles[exitIndex].close * (1 - NORMAL_COST);
@@ -1049,6 +1087,7 @@ function academicPitRecord(row, month) {
     exitDate: null,
   };
 }
+
 function pitDecileSummary(records, signalKey) {
   const valid = records.filter((row) => Number.isFinite(row[signalKey])).sort((a, b) => a[signalKey] - b[signalKey]);
   if (!valid.length) {
@@ -1119,6 +1158,114 @@ function pitDecileSummary(records, signalKey) {
     tradableLongShortClaimAllowed: false,
   };
 }
+function selectPitDecileRows(records, signalKey) {
+  const valid = records.filter((row) => Number.isFinite(row[signalKey])).sort((a, b) => a[signalKey] - b[signalKey]);
+  if (!valid.length) return { decileN: 0, top: [], bottom: [] };
+  const decileN = Math.max(1, Math.ceil(valid.length * 0.10));
+  return { decileN, top: valid.slice(-decileN), bottom: valid.slice(0, decileN) };
+}
+function formationMonthlySleeve(records, signalKey) {
+  const selected = selectPitDecileRows(records, signalKey);
+  const monthKeys = [...new Set(
+    [...selected.top, ...selected.bottom].flatMap((row) => (row.monthlyHoldingReturns ?? []).map((item) => item.month)),
+  )].sort();
+  const sideMetrics = (rows, month) => {
+    const cells = rows.map((row) => (row.monthlyHoldingReturns ?? []).find((item) => item.month === month) ?? null);
+    const completed = cells.filter((cell) => Number.isFinite(cell?.netReturn));
+    const observed = completed.map((cell) => cell.netReturn);
+    const stress = cells.map((cell) => Number.isFinite(cell?.netReturn) ? cell.netReturn : Number(cell?.wipeoutStressReturn ?? -1));
+    return {
+      selected: rows.length,
+      completed: completed.length,
+      outcomeCoverage: rows.length ? completed.length / rows.length : 0,
+      allOutcomesProven: completed.length === rows.length,
+      meanNetReturn: completed.length === rows.length && rows.length ? mean(observed) : null,
+      observedOnlyMeanReturn: observed.length ? mean(observed) : null,
+      wipeoutStressMeanReturn: stress.length ? mean(stress) : null,
+    };
+  };
+  return {
+    decileN: selected.decileN,
+    topSymbols: selected.top.map((row) => row.symbol),
+    bottomSymbols: selected.bottom.map((row) => row.symbol),
+    months: monthKeys.map((month) => {
+      const top = sideMetrics(selected.top, month);
+      const bottom = sideMetrics(selected.bottom, month);
+      return {
+        month,
+        top,
+        bottom,
+        allOutcomesProven: top.allOutcomesProven && bottom.allOutcomesProven,
+        spread: top.meanNetReturn != null && bottom.meanNetReturn != null ? top.meanNetReturn - bottom.meanNetReturn : null,
+        observedOnlySpread: top.observedOnlyMeanReturn != null && bottom.observedOnlyMeanReturn != null
+          ? top.observedOnlyMeanReturn - bottom.observedOnlyMeanReturn
+          : null,
+        wipeoutStressSpread: top.wipeoutStressMeanReturn != null && bottom.wipeoutStressMeanReturn != null
+          ? top.wipeoutStressMeanReturn - bottom.wipeoutStressMeanReturn
+          : null,
+      };
+    }),
+  };
+}
+function compoundReturns(values) {
+  return values.reduce((equity, value) => equity * (1 + value), 1) - 1;
+}
+function aggregateOverlappingMonthly(formations, field) {
+  const byMonth = new Map();
+  for (const formation of formations) {
+    const sleeve = formation.overlappingMonthly?.[field];
+    for (const row of sleeve?.months ?? []) {
+      const bucket = byMonth.get(row.month) ?? [];
+      bucket.push({ formationMonth: formation.month, ...row });
+      byMonth.set(row.month, bucket);
+    }
+  }
+  const series = [...byMonth.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([month, rows]) => {
+    const proven = rows.filter((row) => row.allOutcomesProven && Number.isFinite(row.top.meanNetReturn) && Number.isFinite(row.bottom.meanNetReturn));
+    const topObserved = rows.map((row) => row.top.observedOnlyMeanReturn).filter(Number.isFinite);
+    const bottomObserved = rows.map((row) => row.bottom.observedOnlyMeanReturn).filter(Number.isFinite);
+    const stressSpreads = rows.map((row) => row.wipeoutStressSpread).filter(Number.isFinite);
+    const allOutcomesProven = proven.length === rows.length;
+    const winnerReturn = allOutcomesProven ? mean(proven.map((row) => row.top.meanNetReturn)) : null;
+    const loserReturn = allOutcomesProven ? mean(proven.map((row) => row.bottom.meanNetReturn)) : null;
+    return {
+      month,
+      activeCohorts: rows.length,
+      allOutcomesProven,
+      winnerReturn,
+      loserReturn,
+      spread: winnerReturn != null && loserReturn != null ? winnerReturn - loserReturn : null,
+      observedOnlyWinnerReturn: topObserved.length ? mean(topObserved) : null,
+      observedOnlyLoserReturn: bottomObserved.length ? mean(bottomObserved) : null,
+      observedOnlySpread: topObserved.length && bottomObserved.length ? mean(topObserved) - mean(bottomObserved) : null,
+      wipeoutStressSpread: stressSpreads.length ? mean(stressSpreads) : null,
+    };
+  });
+  const proven = series.filter((row) => row.allOutcomesProven && Number.isFinite(row.spread));
+  const winner = proven.map((row) => row.winnerReturn);
+  const loser = proven.map((row) => row.loserReturn);
+  const spreads = proven.map((row) => row.spread);
+  const stress = series.map((row) => row.wipeoutStressSpread).filter(Number.isFinite);
+  return {
+    method: "equal-weight signal deciles; monthly formations; six calendar-month holding sleeves; equal-weight active cohorts",
+    monthlyTransactionCostPolicy: "entry cost applied in holding month 1; exit cost applied in holding month 6",
+    formationMonths: formations.length,
+    seriesMonths: series.length,
+    allOutcomeProvenMonths: proven.length,
+    meanMonthlyWinnerReturn: winner.length ? mean(winner) : null,
+    meanMonthlyLoserReturn: loser.length ? mean(loser) : null,
+    meanMonthlySpread: spreads.length ? mean(spreads) : null,
+    positiveSpreadRate: spreads.length ? spreads.filter((value) => value > 0).length / spreads.length : null,
+    winnerCompoundedReturn: winner.length ? compoundReturns(winner) : null,
+    loserCompoundedReturn: loser.length ? compoundReturns(loser) : null,
+    longShortCompoundedDiagnostic: spreads.length ? compoundReturns(spreads) : null,
+    meanWipeoutStressSpread: stress.length ? mean(stress) : null,
+    canonicalReplicationClaimAllowed: false,
+    automaticPromotionAllowed: false,
+    series,
+  };
+}
+
 function aggregateFormationMetric(formations, key) {
   const usable = formations.map((formation) => formation[key]).filter((value) => value?.top && value?.bottom);
   const proven = usable.filter((value) => value.allOutcomesProven && value.top.meanNetReturn != null && value.bottom.meanNetReturn != null);
@@ -1260,6 +1407,10 @@ async function buildPitMembershipMomentumStress(requestedMode = "AUTO") {
       terminalValueBlockedRecords: records.filter((row) => row.outcomeStatus === "TERMINAL_VALUE_UNPROVEN").length,
       jtMomentumJ6K6Skip1: pitDecileSummary(records, "jt6mSignal"),
       high52WeekK6: pitDecileSummary(records, "high52Ratio"),
+      overlappingMonthly: {
+        jtMomentumJ6K6Skip1: formationMonthlySleeve(records, "jt6mSignal"),
+        high52WeekK6: formationMonthlySleeve(records, "high52Ratio"),
+      },
     };
   });
   const minimumHistoryReady = formations.length ? Math.min(...formations.map((formation) => formation.historyReady)) : 0;
@@ -1316,6 +1467,10 @@ async function buildPitMembershipMomentumStress(requestedMode = "AUTO") {
     high52WeekK6: {
       recipeId: "FIFTY_TWO_WEEK_HIGH_MOMENTUM_V1",
       aggregate: aggregateFormationMetric(formations, "high52WeekK6"),
+    },
+    overlappingMonthly: {
+      jtMomentumJ6K6Skip1: aggregateOverlappingMonthly(formations, "jtMomentumJ6K6Skip1"),
+      high52WeekK6: aggregateOverlappingMonthly(formations, "high52WeekK6"),
     },
   };
 }
@@ -1592,6 +1747,12 @@ async function main() {
         nasdaq100Spread: pitMembershipStress.high52WeekK6?.aggregate?.meanDescriptiveTopMinusBottomReturn ?? null,
         sp500Spread: sp500MembershipStress.high52WeekK6?.aggregate?.meanDescriptiveTopMinusBottomReturn ?? null,
       },
+      overlappingMonthlyJ6K6: {
+        nasdaq100MeanMonthlySpread: pitMembershipStress.overlappingMonthly?.jtMomentumJ6K6Skip1?.meanMonthlySpread ?? null,
+        nasdaq100LongShortCompoundedDiagnostic: pitMembershipStress.overlappingMonthly?.jtMomentumJ6K6Skip1?.longShortCompoundedDiagnostic ?? null,
+        sp500MeanMonthlySpread: sp500MembershipStress.overlappingMonthly?.jtMomentumJ6K6Skip1?.meanMonthlySpread ?? null,
+        sp500LongShortCompoundedDiagnostic: sp500MembershipStress.overlappingMonthly?.jtMomentumJ6K6Skip1?.longShortCompoundedDiagnostic ?? null,
+      },
       sameRecipeNoRetuning: true,
       automaticPromotionAllowed: false,
     },
@@ -1673,7 +1834,7 @@ async function main() {
       "PEAD uses an analyst-SUE proxy from Nasdaq actual/consensus EPS scaled by a one-month-prior price and reports PRIOR/RECENT windows separately. Nasdaq does not prove the exact 30-day I/B/E/S forecast vintage, so this is not canonical SUEAF.",
       "Canonical Foster-Olsen-Shevlin SUE needs current EPS, EPS four quarters earlier, and the standard deviation of quarterly EPS changes over prior quarters; those fields are not available in the current repository and remain fail-closed.",
       "No historical guidance, revenue-growth, analyst-revision, news-text, order-book, short-interest, wave/candle or AI overlay is used in the baseline.",
-      "Academic momentum and 52-week-high outputs apply a $5 formation-price floor, use current-snapshot symbols, daily approximations to monthly portfolio formation, and do not construct the papers' full overlapping monthly portfolio return series.",
+      "Academic momentum and 52-week-high current-snapshot outputs remain bounded approximations. Historical-membership PIT lanes additionally build equal-weight six-calendar-month overlapping monthly sleeves, but they are not a full CRSP/NYSE-breakpoint replication of the papers.",
       "The Alpha Vantage PIT membership stress lane uses historical active membership only for deterministic sampling, but Yahoo history is not canonical removed-listing terminal-price or corporate-action evidence, so it cannot set materializedUsPitDatasetReady=true.",
       "Historical replay is not genuine OOS/Forward, broker fill evidence, or PROFITABILITY_PROVEN.",
     ],
@@ -1701,6 +1862,8 @@ async function main() {
     sp500PitStatus: report.sp500MembershipStress.status,
     sp500PitMomentumSpread: report.sp500MembershipStress.jtMomentumJ6K6Skip1.aggregate.meanDescriptiveTopMinusBottomReturn,
     sp500PitHigh52Spread: report.sp500MembershipStress.high52WeekK6.aggregate.meanDescriptiveTopMinusBottomReturn,
+    ndxOverlapMonthlyJ6K6Spread: report.pitMembershipStress.overlappingMonthly?.jtMomentumJ6K6Skip1?.meanMonthlySpread ?? null,
+    sp500OverlapMonthlyJ6K6Spread: report.sp500MembershipStress.overlappingMonthly?.jtMomentumJ6K6Skip1?.meanMonthlySpread ?? null,
     earningsAvailableSymbols,
   }));
 }
