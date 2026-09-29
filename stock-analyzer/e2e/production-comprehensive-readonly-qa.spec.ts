@@ -157,6 +157,7 @@ async function installSafety(page: Page, blocked: Diagnostic[]) {
 }
 
 const LOGIN_READY_BUDGET_MS = 15_000;
+const LOGIN_NAVIGATION_TIMEOUT_RETRIES = 1;
 const CACHED_AUTH_TIMEOUT_RETRIES = 1;
 type CachedAuthState = Awaited<ReturnType<BrowserContext['storageState']>>;
 const authStateByViewport = new Map<string, CachedAuthState>();
@@ -164,6 +165,23 @@ const authStateByViewport = new Map<string, CachedAuthState>();
 function authCacheKey(page: Page) {
   const viewport = page.viewportSize();
   return viewport ? `${viewport.width}x${viewport.height}` : 'default';
+}
+
+function isPlaywrightTimeout(error: unknown) {
+  return error instanceof Error
+    && (error.name === 'TimeoutError' || /Timeout \d+ms exceeded/i.test(error.message));
+}
+
+async function gotoLoginWithTimeoutRetry(page: Page) {
+  for (let attempt = 0; attempt <= LOGIN_NAVIGATION_TIMEOUT_RETRIES; attempt += 1) {
+    try {
+      await page.goto('/login', { waitUntil: 'commit', timeout: LOGIN_READY_BUDGET_MS });
+      return;
+    } catch (error) {
+      if (!isPlaywrightTimeout(error) || attempt >= LOGIN_NAVIGATION_TIMEOUT_RETRIES) throw error;
+    }
+  }
+  throw new Error('PRODUCTION_QA_LOGIN_NAVIGATION_UNAVAILABLE');
 }
 
 async function restoreCachedAuthState(page: Page, state: CachedAuthState) {
@@ -229,8 +247,7 @@ async function validateCachedAuthState(page: Page, state: CachedAuthState) {
       });
       break;
     } catch (error) {
-      const timeoutOnly = error instanceof Error
-        && (error.name === 'TimeoutError' || /Timeout \d+ms exceeded/i.test(error.message));
+      const timeoutOnly = isPlaywrightTimeout(error);
       if (!timeoutOnly || attempt >= CACHED_AUTH_TIMEOUT_RETRIES) throw error;
     }
   }
@@ -273,13 +290,13 @@ async function login(
       return;
     }
 
-    // Judge readiness by the actual interactive login surface while preserving
-    // one total 15s readiness budget. Do not extend the gate through serial waits.
+    // A cold Production document transport timeout gets exactly one bounded
+    // retry. Status/auth failures still fail closed, and the interactive login
+    // surface must then settle inside its own strict 15s readiness budget.
+    await gotoLoginWithTimeoutRetry(page);
     const readinessStartedAt = Date.now();
     const remainingReadinessMs = () =>
       Math.max(1, LOGIN_READY_BUDGET_MS - (Date.now() - readinessStartedAt));
-
-    await page.goto('/login', { waitUntil: 'commit', timeout: remainingReadinessMs() });
     const loginId = page.getByLabel('아이디');
     const loginPassword = page.getByLabel('비밀번호');
     const loginButton = page.getByRole('button', { name: '로그인', exact: true });
@@ -643,17 +660,29 @@ function responseMatchesChart(rawUrl: string, market: string, timeframe: string)
 }
 
 async function chartMatrix(page: Page, onProgress: (audits: ChartAudit[]) => void): Promise<ChartAudit[]> {
+  const bootstrapStatuses = new Map<string, number[]>();
+  const bootstrapListener = (response: { url(): string; status(): number }) => {
+    for (const market of CHART_MARKETS) {
+      for (const timeframe of TIMEFRAMES) {
+        if (!responseMatchesChart(response.url(), market, timeframe)) continue;
+        const key = `${market}:${timeframe}`;
+        bootstrapStatuses.set(key, [...(bootstrapStatuses.get(key) ?? []), response.status()]);
+      }
+    }
+  };
+  page.on('response', bootstrapListener);
   await page.goto('/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m', {
     waitUntil: 'domcontentloaded',
     timeout: 15_000,
   });
   await expect(page.getByTestId('unified-analysis-chart')).toBeVisible({ timeout: 12_000 });
+  page.off('response', bootstrapListener);
   const audits: ChartAudit[] = [];
   for (const market of CHART_MARKETS) {
     await page.getByTestId(`market-${market}`).click({ timeout: 2_500 }).catch(() => undefined);
     await expect(page).toHaveURL(new RegExp(`market=${market}`), { timeout: 4_000 }).catch(() => undefined);
     for (const timeframe of TIMEFRAMES) {
-      const statuses: number[] = [];
+      const statuses: number[] = [...(bootstrapStatuses.get(`${market}:${timeframe}`) ?? [])];
       const listener = (response: { url(): string; status(): number }) => {
         if (responseMatchesChart(response.url(), market, timeframe)) statuses.push(response.status());
       };
