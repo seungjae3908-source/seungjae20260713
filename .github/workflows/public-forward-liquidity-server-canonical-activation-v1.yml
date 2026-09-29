@@ -387,7 +387,8 @@ jobs:
             echo "- canonical authority comment: $AUTHORITY_COMMENT_ID"
             echo '- prior SHADOW timer disabled only after readiness record succeeds'
             echo '- canonical timer: exact UTC :17/:27/:37, Persistent=false'
-            echo '- minimum future lead: +1 whole V3 slot from authority timestamp'
+            echo '- cutover readiness lead: +1 whole V3 slot from OWNER authority timestamp'
+            echo '- canonical capture lead: +1 whole V3 slot from actual runtime activation time'
             echo '- historical SHADOW promotion: forbidden / zero credit'
             echo '- canonical ingest executed: false'
             echo '- canonical economic credit at activation: 0'
