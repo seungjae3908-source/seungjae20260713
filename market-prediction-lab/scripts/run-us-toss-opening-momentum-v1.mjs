@@ -900,17 +900,22 @@ async function wikipediaNasdaq100Snapshot(asOfDate) {
 let wikipediaSp500Cache = null;
 async function loadWikipediaSp500History() {
   if (wikipediaSp500Cache) return wikipediaSp500Cache;
-  const sourceUrl = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies";
-  const html = await fetchWikipediaHtml(sourceUrl, "WIKIPEDIA_SP500");
-  const tables = [...html.matchAll(/<table\b[\s\S]*?<\/table>/giu)].map((match) => match[0]);
+  const currentUrl = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies";
+  const historyUrl = "https://en.wikipedia.org/wiki/Historical_components_of_the_S%26P_500";
+  const [currentHtml, historyHtml] = await Promise.all([
+    fetchWikipediaHtml(currentUrl, "WIKIPEDIA_SP500_CURRENT"),
+    fetchWikipediaHtml(historyUrl, "WIKIPEDIA_SP500_HISTORY"),
+  ]);
+  const currentTables = [...currentHtml.matchAll(/<table\b[\s\S]*?<\/table>/giu)].map((match) => match[0]);
+  const historyTables = [...historyHtml.matchAll(/<table\b[\s\S]*?<\/table>/giu)].map((match) => match[0]);
 
-  const currentCandidates = tables.map((table) => {
+  const currentCandidates = currentTables.map((table) => {
     const symbols = htmlRows(table)
       .map((cells) => cleanPitTicker(cells[0]))
       .filter((symbol) => symbol && symbol !== "SYMBOL" && symbol !== "TICKER");
     return { symbols: [...new Set(symbols)] };
   }).filter((candidate) => candidate.symbols.length >= 450 && candidate.symbols.length <= 550);
-  if (!currentCandidates.length) throw new Error(`WIKIPEDIA_SP500_CURRENT_TABLE_MISSING_${tables.length}`);
+  if (!currentCandidates.length) throw new Error(`WIKIPEDIA_SP500_CURRENT_TABLE_MISSING_${currentTables.length}`);
   currentCandidates.sort((left, right) => right.symbols.length - left.symbols.length);
   const current = currentCandidates[0].symbols;
 
@@ -933,23 +938,24 @@ async function loadWikipediaSp500History() {
     }
     return output;
   }
-  const historyCandidates = tables
+  const historyCandidates = historyTables
     .map((table) => ({ changes: extractChanges(table) }))
     .filter((candidate) => candidate.changes.length >= 50)
     .sort((left, right) => right.changes.length - left.changes.length);
-  if (!historyCandidates.length) throw new Error(`WIKIPEDIA_SP500_CHANGE_TABLE_MISSING_${tables.length}`);
+  if (!historyCandidates.length) throw new Error(`WIKIPEDIA_SP500_CHANGE_TABLE_MISSING_${historyTables.length}`);
   const changes = historyCandidates[0].changes;
   changes.sort((a, b) => b.date.localeCompare(a.date));
 
   wikipediaSp500Cache = {
     current,
     changes,
-    sourceId: "wikipedia-sp500-current-plus-change-history",
-    sourceDigest: sha256Text(html),
-    sourceUrl,
+    sourceId: "wikipedia-sp500-current-plus-historical-components",
+    sourceDigest: sha256Text(currentHtml + "\n" + historyHtml),
+    sourceUrls: [currentUrl, historyUrl],
   };
   return wikipediaSp500Cache;
 }
+
 async function wikipediaSp500Snapshot(asOfDate) {
   const history = await loadWikipediaSp500History();
   const members = new Set(history.current);
