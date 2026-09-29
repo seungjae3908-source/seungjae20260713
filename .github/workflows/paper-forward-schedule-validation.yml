@@ -183,6 +183,7 @@ on:
       - .github/workflows/paper-forward-no-deploy-readonly-diagnostics.yml
       - .github/workflows/paper-forward-schedule-disable.yml
       - .github/workflows/paper-forward-schedule-validation.yml
+      - .github/scripts/verify-research-workspace-sync-v3.mjs
       - .github/workflows/prediction-lab-scanner-spot-4h-dataset-evidence.yml
       - .github/workflows/prediction-lab-scanner-spot-spread-archive-validation.yml
       - .github/workflows/prediction-lab-scanner-spot-spread-forward-collector-dormant.yml
@@ -284,6 +285,7 @@ jobs:
           allowed=(
             .github/workflows/authoritative-paper-runtime-factory-v1.yml
             .github/workflows/paper-forward-schedule-validation.yml
+            .github/scripts/verify-research-workspace-sync-v3.mjs
             api-server/scripts/build-authoritative-paper-runtime-package.mjs
             api-server/src/services/authoritative-paper-callback-owners.service.ts
             api-server/src/services/authoritative-paper-evidence-sources.service.ts
