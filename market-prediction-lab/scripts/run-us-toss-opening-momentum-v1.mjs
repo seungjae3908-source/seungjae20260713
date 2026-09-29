@@ -880,6 +880,43 @@ async function main() {
       earningsEventTradeUsesSameOrPreviousReportDateOnly: true,
       peadEntersFirstFullSessionStrictlyAfterReportDate: true,
     },
+    promotionAssessment: {
+      QULLAMAGGIE_COMMON_BREAKOUT_V1: {
+        status: "RESEARCH_HOLD_BASELINE_NEGATIVE",
+        reason: "bounded broad-cohort baseline is negative after costs; do not tune to rescue",
+        overlayResearchAllowed: true,
+        automaticPromotionAllowed: false,
+      },
+      QULLAMAGGIE_EP_V1: {
+        status: "RESEARCH_HOLD_SOURCE_EVIDENCE_INCOMPLETE",
+        reason: "small EPS-catalyst sample and historical revenue/guidance evidence incomplete",
+        overlayResearchAllowed: true,
+        automaticPromotionAllowed: false,
+      },
+      PEAD_EARNINGS_SURPRISE_V1: {
+        status: "RESEARCH_HOLD_TRANSFER_FAILED",
+        reason: "RECENT analyst-SUE proxy spread does not transfer to PRIOR window; canonical I/B/E/S/FOS SUE unavailable",
+        overlayResearchAllowed: false,
+        automaticPromotionAllowed: false,
+      },
+      CROSS_SECTIONAL_PRICE_MOMENTUM_V1: {
+        status: "BLOCKED_PIT_UNIVERSE_AND_OUTLIER_CONCENTRATION",
+        reason: "large descriptive spread is current-snapshot survivorship-biased and materially concentrated in extreme winners",
+        nextRequiredEvidence: "materialized US point-in-time membership + removed/delisted listings + corporate actions + same recipe rerun",
+        automaticPromotionAllowed: false,
+      },
+      FIFTY_TWO_WEEK_HIGH_MOMENTUM_V1: {
+        status: "RESEARCH_HOLD_UNSTABLE_FORMATION_SIGN",
+        reason: "descriptive six-month spreads change sign across fixed formation cohorts and PIT universe remains missing",
+        automaticPromotionAllowed: false,
+      },
+      pitUniverseEvidence: {
+        canonicalAdapterOnMain: true,
+        adapter: "stock-point-in-time-evidence-adapter-v1",
+        materializedUsPitDatasetReady: false,
+        firstZero: "US_PIT_MEMBERSHIP_REMOVED_LISTINGS_CORPORATE_ACTION_DATASET_NOT_MATERIALIZED",
+      },
+    },
     safety: {
       researchOnly: true,
       publicMarketDataOnly: true,
