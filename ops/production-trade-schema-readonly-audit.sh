@@ -9,6 +9,7 @@ const { spawnSync } = require('node:child_process');
 
 const pm2Name = process.argv[2] || 'stock-app';
 const schemaVersion = 'production-trade-schema-readonly-audit-v1';
+const transientProductionDatabaseUrl = String(process.env.PROD_DATABASE_URL ?? '').trim();
 const common = {
   schemaVersion,
   readOnlyEnforced: true,
@@ -149,6 +150,7 @@ function runPsql(sql, pgEnv) {
   for (const key of Object.keys(baseEnv)) {
     if (key.startsWith('PG')) delete baseEnv[key];
   }
+  delete baseEnv.PROD_DATABASE_URL;
   return spawnSync(
     'psql',
     ['-X', '--no-psqlrc', '--set=ON_ERROR_STOP=1', '--quiet', '--tuples-only', '--no-align'],
@@ -188,7 +190,7 @@ if (!env || typeof env !== 'object' || Array.isArray(env)) {
 }
 
 const uriPattern = /^postgres(?:ql)?:\/\//i;
-const uriValues = Object.values(env)
+const uriValues = [transientProductionDatabaseUrl, ...Object.values(env)]
   .filter((value) => typeof value === 'string')
   .map((value) => value.trim())
   .filter((value) => uriPattern.test(value));
