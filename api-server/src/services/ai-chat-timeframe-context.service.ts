@@ -22,6 +22,9 @@ export type AiChatTimeframeEvidence = {
   status: 'complete' | 'partial' | 'unavailable';
   provider: string | null;
   asOf: string | null;
+  freshness: 'current' | 'delayed' | 'stale' | 'unavailable';
+  freshnessAgeMs: number | null;
+  expectedCandleIntervalMs: number | null;
   candleCount: number;
   lastClosedCandle: {
     time: string;
@@ -64,6 +67,29 @@ const TIMEFRAME_MS: Readonly<Record<string, number>> = Object.freeze({
   '4H': 4 * 60 * 60_000,
   '1D': 24 * 60 * 60_000,
 });
+
+function timeframeFreshness(
+  last: NormalizedCandle | null,
+  timeframe: string,
+  nowMs: number,
+): Pick<AiChatTimeframeEvidence, 'freshness' | 'freshnessAgeMs' | 'expectedCandleIntervalMs'> {
+  const interval = TIMEFRAME_MS[timeframe] ?? null;
+  if (!last || interval == null) {
+    return {
+      freshness: last ? 'delayed' : 'unavailable',
+      freshnessAgeMs: last ? Math.max(0, nowMs - last.timestamp) : null,
+      expectedCandleIntervalMs: interval,
+    };
+  }
+  const closedAt = last.timestamp + interval;
+  const ageMs = Math.max(0, nowMs - closedAt);
+  const freshness = ageMs <= interval
+    ? 'current'
+    : ageMs <= interval * 3
+      ? 'delayed'
+      : 'stale';
+  return { freshness, freshnessAgeMs: ageMs, expectedCandleIntervalMs: interval };
+}
 
 function number(value: unknown): number | null {
   if (value == null || value === '') return null;
@@ -224,6 +250,7 @@ export function buildAiChatTimeframeEvidence(input: {
   asOf: string | null;
   candles: readonly NormalizedCandle[];
   warnings?: readonly string[];
+  nowMs?: number;
 }): AiChatTimeframeEvidence {
   const sanitized = sanitizeClosedCandles(input.candles);
   const candles = sanitized.data;
@@ -233,8 +260,11 @@ export function buildAiChatTimeframeEvidence(input: {
   const rsi14 = rsiSeries(closes, 14);
   const atr14 = atrSeries(candles, 14);
   const last = candles.at(-1) ?? null;
+  const recency = timeframeFreshness(last, input.timeframe, input.nowMs ?? Date.now());
   const warnings = [...new Set([...(input.warnings ?? []), ...sanitized.warnings])];
   if (candles.length < 50) warnings.push('EMA50 계산에 필요한 닫힌 캔들 표본이 부족할 수 있습니다.');
+  if (recency.freshness === 'delayed') warnings.push('선택 시간봉 최신성이 지연 상태입니다.');
+  if (recency.freshness === 'stale') warnings.push('선택 시간봉 최신성이 오래되어 현재 판단 근거로 사용하면 안 됩니다.');
   const complete = candles.length >= 50
     && latest(ema20) != null
     && latest(ema50) != null
@@ -249,6 +279,9 @@ export function buildAiChatTimeframeEvidence(input: {
     status: candles.length < 2 ? 'unavailable' : complete ? 'complete' : 'partial',
     provider: input.provider,
     asOf: last ? new Date(last.timestamp).toISOString() : input.asOf,
+    freshness: recency.freshness,
+    freshnessAgeMs: recency.freshnessAgeMs,
+    expectedCandleIntervalMs: recency.expectedCandleIntervalMs,
     candleCount: candles.length,
     lastClosedCandle: last ? {
       time: new Date(last.timestamp).toISOString(),
@@ -292,6 +325,7 @@ export async function loadAiChatTimeframeEvidence(
         warnings: result.evidence?.completeness === 'partial'
           ? [`시장 데이터 표본이 부분 수집 상태입니다: ${result.evidence.reason}`]
           : [],
+        nowMs,
       });
     }
 
@@ -305,6 +339,7 @@ export async function loadAiChatTimeframeEvidence(
         asOf: result.updatedAt,
         candles: result.data,
         warnings: result.warnings,
+        nowMs,
       });
     }
 
@@ -316,6 +351,7 @@ export async function loadAiChatTimeframeEvidence(
       provider: 'upbit-public',
       asOf: new Date(nowMs).toISOString(),
       candles: rows,
+      nowMs,
     });
   } catch (cause) {
     if (signal?.aborted) throw cause;
@@ -327,6 +363,9 @@ export async function loadAiChatTimeframeEvidence(
       status: 'unavailable',
       provider: null,
       asOf: null,
+      freshness: 'unavailable',
+      freshnessAgeMs: null,
+      expectedCandleIntervalMs: TIMEFRAME_MS[timeframe] ?? null,
       candleCount: 0,
       lastClosedCandle: null,
       indicators: { ema20: null, ema50: null, rsi14: null, atr14: null },
