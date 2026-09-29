@@ -1,0 +1,53 @@
+name: Research US Equity Cross Sectional Holdout V4
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/run-us-equity-cross-sectional-holdout-v4.mjs
+      - .github/workflows/research-us-equity-cross-sectional-holdout-v4.yml
+      - market-prediction-lab/src/yahoo-stock-history.js
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Verify research boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/scripts/run-us-equity-cross-sectional-holdout-v4.mjs
+          ! grep -Eiq 'LIVE_TRADING|REAL_ORDER_ENABLED|PRIVATE_TRADING_API_ALLOWED|(^|[^A-Za-z])withdraw([^A-Za-z]|$)|(^|[^A-Za-z])transfer([^A-Za-z]|$)|(^|[^A-Za-z])orderSubmitted([^A-Za-z]|$)' market-prediction-lab/scripts/run-us-equity-cross-sectional-holdout-v4.mjs
+      - name: Run unseen-symbol holdout and portfolio diagnostic
+        working-directory: market-prediction-lab
+        run: node scripts/run-us-equity-cross-sectional-holdout-v4.mjs docs/us-equity-cross-sectional-holdout-v4.json
+      - name: Assert holdout and safety
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('docs/us-equity-cross-sectional-holdout-v4.json','utf8'));
+          if(r.status!=='pass') throw new Error('STATUS');
+          if(r.rankingPolicy.weightsRetunedOnHoldout!==false) throw new Error('RANKING_RETUNED');
+          if(!(r.normalCost.history.successes>=120)) throw new Error('HISTORY_COVERAGE');
+          if(r.portfolioPolicy.maxPositions!==5||r.portfolioPolicy.riskBudgetPerTrade!==0.005) throw new Error('PORTFOLIO_POLICY_DRIFT');
+          if(r.safety.researchOnly!==true||r.safety.liveExecutionAllowed!==false||r.safety.executionAuthority!=='NONE') throw new Error('SAFETY');
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: us-equity-cross-sectional-holdout-v4-${{ github.event.pull_request.head.sha }}
+          path: market-prediction-lab/docs/us-equity-cross-sectional-holdout-v4.json
+          if-no-files-found: error
+          retention-days: 30
