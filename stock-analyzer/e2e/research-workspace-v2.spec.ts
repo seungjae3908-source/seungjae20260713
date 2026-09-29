@@ -94,6 +94,7 @@ async function setup(page:Page,payload:unknown={available:true,workspace},status
     return route.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,items:[],rows:[],results:[]})});
   });
   await page.goto('/research-center');
+  await page.getByRole('button',{name:'영상',exact:true}).click();
   await page.getByRole('button',{name:'전략 연구',exact:true}).click();
   return requests;
 }
