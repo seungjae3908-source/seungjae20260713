@@ -33,7 +33,8 @@ const loadWatchlistPage = () => import('@/pages/watchlist');
 const WatchlistPage = lazy(loadWatchlistPage);
 const loadAlertsPage = () => import('@/pages/alerts');
 const AlertsPage = lazy(loadAlertsPage);
-const ScannerPage = lazy(() => import('@/pages/scanner'));
+const loadScannerPage = () => import('@/pages/scanner');
+const ScannerPage = lazy(loadScannerPage);
 const loadSignalScannerPage = () => import('@/pages/signal-scanner');
 const SignalScannerPage = lazy(loadSignalScannerPage);
 const TelegramSignalOrderPage = lazy(() => import('@/pages/telegram-signal-order'));
@@ -52,7 +53,8 @@ const loadLearnPage = () => import('@/pages/learn');
 const LearnPage = lazy(loadLearnPage);
 const loadMorePage = () => import('@/pages/more');
 const MorePage = lazy(loadMorePage);
-const PortfolioPage = lazy(() => import('@/pages/portfolio'));
+const loadPortfolioPage = () => import('@/pages/portfolio');
+const PortfolioPage = lazy(loadPortfolioPage);
 const PortfolioV2Page = lazy(() => import('@/pages/portfolio-v2'));
 const loadStrategyPromotionPage = () => import('@/pages/strategy-promotion');
 const StrategyPromotionPage = lazy(loadStrategyPromotionPage);
@@ -449,6 +451,8 @@ function AuthenticatedApp() {
     void Promise.allSettled([
       loadMarketInformationPage(),
       loadWatchlistPage(),
+      loadScannerPage(),
+      loadPortfolioPage(),
       loadBacktestsPage(),
       loadStrategyPromotionPage(),
       loadMorePage(),
