@@ -1,0 +1,57 @@
+name: Research Overnight Intraday Replay V2
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/run-overnight-intraday-replay-v2.mjs
+      - .github/workflows/research-overnight-intraday-replay-v2.yml
+      - market-prediction-lab/src/adaptive-multi-evidence-price-structure-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-point-in-time-v2.js
+      - market-prediction-lab/src/yahoo-stock-history.js
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Verify research-only contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/scripts/run-overnight-intraday-replay-v2.mjs
+          ! grep -Eiq 'LIVE_TRADING|REAL_ORDER_ENABLED|PRIVATE_TRADING_API_ALLOWED|(^|[^A-Za-z])withdraw([^A-Za-z]|$)|(^|[^A-Za-z])transfer([^A-Za-z]|$)|(^|[^A-Za-z])orderSubmitted([^A-Za-z]|$)' market-prediction-lab/scripts/run-overnight-intraday-replay-v2.mjs
+      - name: Run chronological one-month 5m replay
+        working-directory: market-prediction-lab
+        run: node scripts/run-overnight-intraday-replay-v2.mjs docs/overnight-intraday-replay-v2.json
+      - name: Assert chronology and safety
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('docs/overnight-intraday-replay-v2.json','utf8'));
+          if(r.status!=='pass') throw new Error('STATUS');
+          if(r.selectionContract.testUsedForSelection!==false||r.lookahead.testUsedForSelection!==false) throw new Error('TEST_SELECTION');
+          if(r.selectionContract.actualHistoricalLlmCalled!==false) throw new Error('HISTORICAL_LLM_FABRICATION');
+          if(!r.lookahead.guardPassed||!r.lookahead.D1UsesPriorDayOrEarlier||!r.lookahead.intradayCompleted5m15mOnly||!r.lookahead.entryNext5mOpen) throw new Error('LOOKAHEAD');
+          if(r.dataWindow.testDates.some(d=>d>='2026-09-22')) throw new Error('OBSERVED_WINDOW_LEAK');
+          if(r.dataWindow.calibrationDates.length<5||r.dataWindow.validationDates.length<3||r.dataWindow.testDates.length<3) throw new Error('SPLIT_TOO_SMALL');
+          if(r.safety.researchOnly!==true||r.safety.executionAuthority!=='NONE'||r.safety.profitabilityPromotionAllowed!==false) throw new Error('SAFETY');
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: overnight-intraday-replay-v2-${{ github.event.pull_request.head.sha }}
+          path: market-prediction-lab/docs/overnight-intraday-replay-v2.json
+          if-no-files-found: error
+          retention-days: 30
