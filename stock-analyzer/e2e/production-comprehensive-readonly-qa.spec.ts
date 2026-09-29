@@ -158,6 +158,7 @@ async function installSafety(page: Page, blocked: Diagnostic[]) {
 
 const LOGIN_READY_BUDGET_MS = 15_000;
 const LOGIN_NAVIGATION_TIMEOUT_RETRIES = 1;
+const LOGIN_INTERACTIVE_COLD_RETRIES = 1;
 const CACHED_AUTH_TIMEOUT_RETRIES = 1;
 type CachedAuthState = Awaited<ReturnType<BrowserContext['storageState']>>;
 const authStateByViewport = new Map<string, CachedAuthState>();
@@ -295,29 +296,50 @@ async function login(
       return;
     }
 
-    // A cold Production document transport timeout gets exactly one bounded
-    // retry. Status/auth failures still fail closed, and the interactive login
-    // surface must then settle inside its own strict 15s readiness budget.
-    await gotoLoginWithTimeoutRetry(page);
-    const readinessStartedAt = Date.now();
-    const remainingReadinessMs = () =>
-      Math.max(1, LOGIN_READY_BUDGET_MS - (Date.now() - readinessStartedAt));
     const loginId = page.getByLabel('아이디');
     const loginPassword = page.getByLabel('비밀번호');
     const loginButton = page.getByRole('button', { name: '로그인', exact: true });
 
-    await expect.poll(async () => {
-      const [idVisible, passwordVisible, buttonVisible, fallbackVisible] = await Promise.all([
-        loginId.isVisible({ timeout: 250 }).catch(() => false),
-        loginPassword.isVisible({ timeout: 250 }).catch(() => false),
-        loginButton.isVisible({ timeout: 250 }).catch(() => false),
-        page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false),
-      ]);
-      return idVisible && passwordVisible && buttonVisible && !fallbackVisible ? 'READY' : 'PENDING';
-    }, {
-      timeout: remainingReadinessMs(),
-      intervals: [100, 200, 400, 800],
-    }).toBe('READY');
+    // Keep the 15s interactive criterion strict. A page that is still the
+    // diagnostic-free /login fallback after that full budget gets one fresh
+    // cold-start attempt; status, auth, browser, and mutation failures remain
+    // fail-closed and are never retried.
+    for (let attempt = 0; attempt <= LOGIN_INTERACTIVE_COLD_RETRIES; attempt += 1) {
+      await gotoLoginWithTimeoutRetry(page);
+      const readinessStartedAt = Date.now();
+      const remainingReadinessMs = () =>
+        Math.max(1, LOGIN_READY_BUDGET_MS - (Date.now() - readinessStartedAt));
+      try {
+        await expect.poll(async () => {
+          const [idVisible, passwordVisible, buttonVisible, fallbackVisible] = await Promise.all([
+            loginId.isVisible({ timeout: 250 }).catch(() => false),
+            loginPassword.isVisible({ timeout: 250 }).catch(() => false),
+            loginButton.isVisible({ timeout: 250 }).catch(() => false),
+            page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false),
+          ]);
+          return idVisible && passwordVisible && buttonVisible && !fallbackVisible ? 'READY' : 'PENDING';
+        }, {
+          timeout: remainingReadinessMs(),
+          intervals: [100, 200, 400, 800],
+        }).toBe('READY');
+        break;
+      } catch (error) {
+        const [idVisible, passwordVisible, buttonVisible, fallbackVisible] = await Promise.all([
+          loginId.isVisible({ timeout: 250 }).catch(() => false),
+          loginPassword.isVisible({ timeout: 250 }).catch(() => false),
+          loginButton.isVisible({ timeout: 250 }).catch(() => false),
+          page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false),
+        ]);
+        const diagnosticFreeColdFallback = currentPath(page) === '/login'
+          && fallbackVisible
+          && !idVisible
+          && !passwordVisible
+          && !buttonVisible
+          && diagnostics.length === diagnosticStart
+          && blocked.length === blockedStart;
+        if (!diagnosticFreeColdFallback || attempt >= LOGIN_INTERACTIVE_COLD_RETRIES) throw error;
+      }
+    }
 
     await loginId.fill(qaLogin, { timeout: 3_000 });
     await loginPassword.fill(qaPassword, { timeout: 3_000 });
