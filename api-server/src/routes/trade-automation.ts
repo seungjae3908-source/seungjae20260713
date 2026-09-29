@@ -4,6 +4,7 @@ import { automaticLiveExecutionEnabled, liveExecutionEnabled, TradeAutomationSer
 import { TradeCancelReconciliationService } from '../services/trade-cancel-reconciliation.service';
 import { TradeExecutionService } from '../services/trade-execution.service';
 import { TradeOrderAmendmentService } from '../services/trade-order-amendment.service';
+import { TradeExecutionLedgerProjectionService } from '../services/trade-execution-ledger-projection.service';
 import {
   buildSplitLegRevalidationEvidence,
   TradeSplitOrderExecutionService,
@@ -87,6 +88,7 @@ function context(req: AuthenticatedRequest) {
     automation,
     execution: new TradeExecutionService(repository),
     amendment: new TradeOrderAmendmentService(repository),
+    ledger: new TradeExecutionLedgerProjectionService(repository),
     splitExecution,
     cancellation: new TradeCancelReconciliationService(repository),
   };
@@ -325,6 +327,22 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
     }
     return errorResponse(res, error);
   }
+});
+
+router.get('/execution-ledger', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, ledger } = context(req);
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    const snapshot = await ledger.list(userId);
+    return res.json({
+      ok: true,
+      ...snapshot,
+      orderSubmitted: false,
+      orderCanceled: false,
+      orderAmended: false,
+      privateTradingRequestSent: false,
+    });
+  } catch (error) { return errorResponse(res, error); }
 });
 
 router.get('/approval-queue', async (req: AuthenticatedRequest, res) => {
