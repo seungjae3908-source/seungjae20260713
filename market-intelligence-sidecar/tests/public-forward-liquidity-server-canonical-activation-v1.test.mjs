@@ -98,6 +98,11 @@ function validInputs() {
   const slot99 = buildSuccessorScheduleReliabilityV3SlotDescriptor(99, contract);
   const authorizedAtMs = slot99.nominalScheduledAtMs + 20 * 60_000;
   const shadow = shadowReceipt({ authorizedAtMs, slotIndex: 100 });
+  const runtimeActivationSlot = buildSuccessorScheduleReliabilityV3SlotDescriptor(100, contract);
+  const runtimeActivatedAtMs = Math.max(
+    shadow.serverStartedAtMs + 1,
+    runtimeActivationSlot.nominalScheduledAtMs + 20 * 60_000,
+  );
   return {
     currentMainSha: MAIN,
     activationBindingDigest: bindingDigest,
@@ -181,6 +186,7 @@ function validInputs() {
     activationReceiptCommentId: RECEIPT_ID,
     authorityCommentId: AUTHORITY_ID,
     authorizedAtMs,
+    runtimeActivatedAtMs,
     baselineEvidence: {
       canonicalTrainReceiptN: 4,
       independentN: 4,
@@ -200,9 +206,12 @@ function validInputs() {
 
 test('protected activation stays future-only and zero-credit', () => {
   const record = prepareProtectedServerCanonicalActivation(validInputs());
-  assert.equal(record.firstEligibleSlotIndex, 100);
+  assert.equal(record.cutoverAuthority.firstEligibleSlotIndex, 100);
+  assert.equal(record.firstEligibleSlotIndex, 101);
   assert.equal(record.cutoverReadiness.readyForFutureCanonicalCutover, true);
   assert.equal(record.runtimeActivation.activationApplied, true);
+  assert.equal(record.runtimeActivation.authorizedAtMs, record.runtimeActivatedAtMs);
+  assert.equal(record.runtimeActivation.firstEligibleSlotIndex, 101);
   assert.equal(record.canonicalEconomicCredit, 0);
   assert.equal(record.canonicalIngestPerformed, false);
   assert.equal(record.independencePerformed, false);
@@ -211,6 +220,19 @@ test('protected activation stays future-only and zero-credit', () => {
     valid: true,
     blockers: [],
   });
+});
+
+
+test('runtime activation in the shadow slot forces the following whole slot', () => {
+  const input = validInputs();
+  const record = prepareProtectedServerCanonicalActivation(input);
+  const runtimeSlot = Math.floor(
+    (record.runtimeActivatedAtMs - contract.policyCore.cohort.startInclusiveMs)
+      / contract.policyCore.cohort.slotCadenceMs,
+  );
+  assert.equal(runtimeSlot, 100);
+  assert.equal(record.firstEligibleSlotIndex, runtimeSlot + 1);
+  assert.ok(record.firstEligibleSlotIndex > record.cutoverAuthority.firstEligibleSlotIndex);
 });
 
 test('readiness rejects a shadow receipt from before the +1 future slot', () => {
