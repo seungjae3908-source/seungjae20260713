@@ -1,0 +1,408 @@
+name: Public Forward Liquidity Server Canonical Activation V1
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/public-forward-liquidity-server-canonical-activation-v1.yml'
+      - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-canonical-runtime-v1.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-runtime-v1.mjs'
+      - 'market-intelligence-sidecar/deploy/public-forward-liquidity-server-canonical-runtime-v1.service'
+      - 'market-intelligence-sidecar/deploy/public-forward-liquidity-server-canonical-runtime-v1.timer'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-activation-v1.test.mjs'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  actions: read
+  issues: read
+  statuses: read
+
+concurrency:
+  group: ${{ github.event_name == 'issue_comment' && 'public-forward-liquidity-server-canonical-production' || format('public-forward-liquidity-server-canonical-pr-{0}', github.event.pull_request.number || github.run_id) }}
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Syntax and focused regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-canonical-runtime-v1.mjs
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-runtime-v1.mjs
+          node --test market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-activation-v1.test.mjs
+          node --test market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-runtime-v1.test.mjs
+          node --test market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-cutover-readiness-v1.test.mjs
+
+      - name: Prove protected activation boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          workflow='.github/workflows/public-forward-liquidity-server-canonical-activation-v1.yml'
+          service='market-intelligence-sidecar/deploy/public-forward-liquidity-server-canonical-runtime-v1.service'
+          timer='market-intelligence-sidecar/deploy/public-forward-liquidity-server-canonical-runtime-v1.timer'
+          runner='market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-canonical-runtime-v1.mjs'
+          grep -Fq '/authorize-public-forward-liquidity-server-canonical-cutover-v1 ' "$workflow"
+          grep -Fq '/activate-public-forward-liquidity-server-canonical-v1 ' "$workflow"
+          grep -Fq 'environment: production' "$workflow"
+          grep -Fq 'SERVER_CANONICAL_AUTHORITY_COMMENT_STALE' "$workflow"
+          grep -Fq 'SERVER_CANONICAL_REQUIRED_CI_REJECTED' "$workflow"
+          grep -Fq 'SERVER_EVIDENCE_SERVER_CANONICAL=true' "$service"
+          grep -Fq 'Persistent=false' "$timer"
+          grep -Fq 'OnCalendar=*-*-* *:17:00 UTC' "$timer"
+          grep -Fq 'OnCalendar=*-*-* *:27:00 UTC' "$timer"
+          grep -Fq 'OnCalendar=*-*-* *:37:00 UTC' "$timer"
+          grep -Fq 'canonicalTrainReceiptN: 4' "$runner"
+          grep -Fq 'independentN: 4' "$runner"
+          grep -Fq 'validationN: 0' "$runner"
+          grep -Fq 'oosN: 0' "$runner"
+          ! grep -Eq 'LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true' "$workflow" "$service" "$runner"
+          ! grep -Eq 'contents:[[:space:]]+write|issues:[[:space:]]+write|actions:[[:space:]]+write|deployments:[[:space:]]+write|id-token:[[:space:]]+write' "$workflow"
+
+      - name: Zero-network default-off self-check
+        run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-canonical-runtime-v1.mjs self-check
+
+  authority-gate:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 23 &&
+      !github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/authorize-public-forward-liquidity-server-canonical-cutover-v1 ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Parse exact OWNER cutover authority
+        id: command
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const parts = String(context.payload.comment?.body ?? '').trim().split(/\s+/u);
+            if (parts.length !== 4 || parts[0] !== '/authorize-public-forward-liquidity-server-canonical-cutover-v1') {
+              core.setFailed('SERVER_CANONICAL_AUTHORITY_COMMAND_INVALID'); return;
+            }
+            if (context.payload.comment?.user?.login !== context.repo.owner
+                || context.payload.comment?.author_association !== 'OWNER') {
+              core.setFailed('SERVER_CANONICAL_AUTHORITY_OWNER_REQUIRED'); return;
+            }
+            if (context.payload.issue?.state !== 'open' || context.payload.issue?.title !== 'Staging Readiness Control') {
+              core.setFailed('SERVER_CANONICAL_RELEASE_CONTROL_INVALID'); return;
+            }
+            if (!/^[a-f0-9]{40}$/u.test(parts[1]) || !/^[1-9][0-9]*$/u.test(parts[2]) || !/^[a-f0-9]{64}$/u.test(parts[3])) {
+              core.setFailed('SERVER_CANONICAL_AUTHORITY_ARGUMENT_INVALID'); return;
+            }
+            core.setOutput('target_sha', parts[1]);
+            core.setOutput('receipt_comment_id', parts[2]);
+            core.setOutput('binding_digest', parts[3]);
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.command.outputs.target_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require exact current main
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          git fetch --no-tags --depth=1 origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$TARGET_SHA"
+
+      - name: Require exact-main Required CI 6/6
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const required = ['application-ci/verified','browser-ui/verified','database-rls/verified','security-integration/verified','ai-privacy/verified','futures-public-network-smoke/verified'];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, { owner: context.repo.owner, repo: context.repo.repo, ref: process.env.TARGET_SHA, per_page: 100 });
+            statuses.sort((a,b) => Number(b.id)-Number(a.id));
+            const latest = new Map(); for (const s of statuses) if (!latest.has(s.context)) latest.set(s.context,s);
+            const missing = required.filter((name) => latest.get(name)?.state !== 'success');
+            if (missing.length) { core.setFailed('SERVER_CANONICAL_REQUIRED_CI_REJECTED:' + missing.join(',')); return; }
+            const runIds = new Set(required.map((name) => String(latest.get(name)?.target_url ?? '').match(/\/actions\/runs\/(\d+)/)?.[1]).filter(Boolean).map(Number));
+            if (runIds.size !== 1) { core.setFailed('SERVER_CANONICAL_REQUIRED_CI_REJECTED:NOT_COHERENT'); return; }
+            const runId = [...runIds][0];
+            const run = (await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: runId })).data;
+            if (run.head_sha !== process.env.TARGET_SHA || run.head_branch !== 'main' || run.status !== 'completed' || run.conclusion !== 'success'
+                || run.name !== 'Application CI' || Number(run.workflow_id) !== 325169344 || run.path !== '.github/workflows/futures-public-network-smoke.yml'
+                || !['push','workflow_dispatch'].includes(run.event) || Number(run.run_attempt) !== 1) {
+              core.setFailed('SERVER_CANONICAL_REQUIRED_CI_REJECTED:' + runId);
+            }
+
+      - name: Require latest exact current-main V3 OWNER receipt and binding
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+          RECEIPT_ID: ${{ steps.command.outputs.receipt_comment_id }}
+          BINDING: ${{ steps.command.outputs.binding_digest }}
+        with:
+          script: |
+            const authorize = '/authorize-public-only-partial-fill-v3-schedule-activation';
+            const revoke = '/revoke-public-only-partial-fill-v3-schedule-activation';
+            const comments = await github.paginate(github.rest.issues.listComments, { owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, per_page: 100 });
+            comments.sort((a,b)=>Number(a.id)-Number(b.id));
+            let latest = null;
+            for (const c of comments) {
+              if (c.user?.login !== context.repo.owner || c.author_association !== 'OWNER') continue;
+              const p = String(c.body ?? '').trim().split(/\s+/u);
+              if (p.length !== 3 || (p[0] !== authorize && p[0] !== revoke)) continue;
+              if (p[1] !== process.env.TARGET_SHA || p[2] !== process.env.BINDING) continue;
+              latest = { id:Number(c.id), action:p[0]===authorize?'AUTHORIZE':'REVOKE', body:String(c.body ?? '').trim() };
+            }
+            const expected = `${authorize} ${process.env.TARGET_SHA} ${process.env.BINDING}`;
+            if (!latest || latest.action !== 'AUTHORIZE' || latest.id !== Number(process.env.RECEIPT_ID) || latest.body !== expected) {
+              core.setFailed('SERVER_CANONICAL_V3_OWNER_RECEIPT_INVALID');
+            }
+
+      - name: Validate immutable activation binding digest
+        shell: bash
+        env:
+          BINDING: ${{ steps.command.outputs.binding_digest }}
+        run: |
+          set -Eeuo pipefail
+          actual="$(node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          import { canonicalJson, sha256 } from './market-intelligence-sidecar/src/public-forward-liquidity-calibration.mjs';
+          const value = JSON.parse(await readFile('./market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json','utf8'));
+          process.stdout.write(sha256(canonicalJson(value)));
+          NODE
+          )"
+          test "$actual" = "$BINDING"
+          echo 'Cutover authority validated. No runtime mutation performed.' >> "$GITHUB_STEP_SUMMARY"
+
+  activation-gate:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 23 &&
+      !github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/activate-public-forward-liquidity-server-canonical-v1 ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      target_sha: ${{ steps.command.outputs.target_sha }}
+      receipt_comment_id: ${{ steps.command.outputs.receipt_comment_id }}
+      binding_digest: ${{ steps.command.outputs.binding_digest }}
+      authority_comment_id: ${{ steps.command.outputs.authority_comment_id }}
+      authority_created_at_ms: ${{ steps.authority.outputs.authority_created_at_ms }}
+    steps:
+      - name: Parse exact OWNER activation command
+        id: command
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const p = String(context.payload.comment?.body ?? '').trim().split(/\s+/u);
+            if (p.length !== 5 || p[0] !== '/activate-public-forward-liquidity-server-canonical-v1') { core.setFailed('SERVER_CANONICAL_ACTIVATION_COMMAND_INVALID'); return; }
+            if (context.payload.comment?.user?.login !== context.repo.owner || context.payload.comment?.author_association !== 'OWNER') { core.setFailed('SERVER_CANONICAL_ACTIVATION_OWNER_REQUIRED'); return; }
+            if (context.payload.issue?.state !== 'open' || context.payload.issue?.title !== 'Staging Readiness Control') { core.setFailed('SERVER_CANONICAL_RELEASE_CONTROL_INVALID'); return; }
+            if (!/^[a-f0-9]{40}$/u.test(p[1]) || !/^[1-9][0-9]*$/u.test(p[2]) || !/^[a-f0-9]{64}$/u.test(p[3]) || !/^[1-9][0-9]*$/u.test(p[4])) { core.setFailed('SERVER_CANONICAL_ACTIVATION_ARGUMENT_INVALID'); return; }
+            core.setOutput('target_sha', p[1]); core.setOutput('receipt_comment_id', p[2]); core.setOutput('binding_digest', p[3]); core.setOutput('authority_comment_id', p[4]);
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.command.outputs.target_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require exact current main
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          git fetch --no-tags --depth=1 origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$TARGET_SHA"
+
+      - name: Validate referenced cutover authority comment
+        id: authority
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+          RECEIPT_ID: ${{ steps.command.outputs.receipt_comment_id }}
+          BINDING: ${{ steps.command.outputs.binding_digest }}
+          AUTHORITY_ID: ${{ steps.command.outputs.authority_comment_id }}
+        with:
+          script: |
+            const authority = (await github.rest.issues.getComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: Number(process.env.AUTHORITY_ID) })).data;
+            const expected = `/authorize-public-forward-liquidity-server-canonical-cutover-v1 ${process.env.TARGET_SHA} ${process.env.RECEIPT_ID} ${process.env.BINDING}`;
+            if (authority.user?.login !== context.repo.owner || authority.author_association !== 'OWNER' || String(authority.body ?? '').trim() !== expected) {
+              core.setFailed('SERVER_CANONICAL_AUTHORITY_COMMENT_INVALID'); return;
+            }
+            if (Date.parse(authority.created_at) >= Date.parse(context.payload.comment.created_at)) {
+              core.setFailed('SERVER_CANONICAL_AUTHORITY_COMMENT_STALE'); return;
+            }
+            core.setOutput('authority_created_at_ms', String(Date.parse(authority.created_at)));
+
+      - name: Require exact-main Required CI 6/6
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const required = ['application-ci/verified','browser-ui/verified','database-rls/verified','security-integration/verified','ai-privacy/verified','futures-public-network-smoke/verified'];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, { owner: context.repo.owner, repo: context.repo.repo, ref: process.env.TARGET_SHA, per_page: 100 });
+            statuses.sort((a,b)=>Number(b.id)-Number(a.id)); const latest=new Map(); for(const s of statuses) if(!latest.has(s.context)) latest.set(s.context,s);
+            const missing=required.filter((n)=>latest.get(n)?.state!=='success'); if(missing.length){core.setFailed('SERVER_CANONICAL_REQUIRED_CI_REJECTED:'+missing.join(','));return;}
+            const ids=new Set(required.map((n)=>String(latest.get(n)?.target_url??'').match(/\/actions\/runs\/(\d+)/)?.[1]).filter(Boolean).map(Number)); if(ids.size!==1){core.setFailed('SERVER_CANONICAL_REQUIRED_CI_REJECTED:NOT_COHERENT');return;}
+            const id=[...ids][0]; const run=(await github.rest.actions.getWorkflowRun({owner:context.repo.owner,repo:context.repo.repo,run_id:id})).data;
+            if(run.head_sha!==process.env.TARGET_SHA||run.head_branch!=='main'||run.status!=='completed'||run.conclusion!=='success'||run.name!=='Application CI'||Number(run.workflow_id)!==325169344||run.path!=='.github/workflows/futures-public-network-smoke.yml'||!['push','workflow_dispatch'].includes(run.event)||Number(run.run_attempt)!==1){core.setFailed('SERVER_CANONICAL_REQUIRED_CI_REJECTED:'+id);}
+
+      - name: Require latest exact V3 OWNER receipt
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+          RECEIPT_ID: ${{ steps.command.outputs.receipt_comment_id }}
+          BINDING: ${{ steps.command.outputs.binding_digest }}
+        with:
+          script: |
+            const authorize='/authorize-public-only-partial-fill-v3-schedule-activation', revoke='/revoke-public-only-partial-fill-v3-schedule-activation';
+            const comments=await github.paginate(github.rest.issues.listComments,{owner:context.repo.owner,repo:context.repo.repo,issue_number:23,per_page:100}); comments.sort((a,b)=>Number(a.id)-Number(b.id)); let latest=null;
+            for(const c of comments){if(c.user?.login!==context.repo.owner||c.author_association!=='OWNER')continue;const p=String(c.body??'').trim().split(/\s+/u);if(p.length!==3||(p[0]!==authorize&&p[0]!==revoke))continue;if(p[1]!==process.env.TARGET_SHA||p[2]!==process.env.BINDING)continue;latest={id:Number(c.id),action:p[0]===authorize?'AUTHORIZE':'REVOKE'};}
+            if(!latest||latest.action!=='AUTHORIZE'||latest.id!==Number(process.env.RECEIPT_ID)){core.setFailed('SERVER_CANONICAL_V3_OWNER_RECEIPT_INVALID');}
+
+  activate-production:
+    needs: activation-gate
+    if: needs.activation-gate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      TARGET_SHA: ${{ needs.activation-gate.outputs.target_sha }}
+      RECEIPT_ID: ${{ needs.activation-gate.outputs.receipt_comment_id }}
+      BINDING: ${{ needs.activation-gate.outputs.binding_digest }}
+      AUTHORITY_ID: ${{ needs.activation-gate.outputs.authority_comment_id }}
+      AUTHORIZED_AT_MS: ${{ needs.activation-gate.outputs.authority_created_at_ms }}
+    steps:
+      - name: Revalidate exact main after Production approval
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ env.TARGET_SHA }}
+          RECEIPT_ID: ${{ env.RECEIPT_ID }}
+          BINDING: ${{ env.BINDING }}
+          AUTHORITY_ID: ${{ env.AUTHORITY_ID }}
+        with:
+          script: |
+            const branch=(await github.rest.repos.getBranch({owner:context.repo.owner,repo:context.repo.repo,branch:'main'})).data;
+            if(branch.commit.sha!==process.env.TARGET_SHA){core.setFailed('SERVER_CANONICAL_MAIN_MOVED_DURING_PRODUCTION_APPROVAL:'+branch.commit.sha);return;}
+            const authority=(await github.rest.issues.getComment({owner:context.repo.owner,repo:context.repo.repo,comment_id:Number(process.env.AUTHORITY_ID)})).data;
+            const expected=`/authorize-public-forward-liquidity-server-canonical-cutover-v1 ${process.env.TARGET_SHA} ${process.env.RECEIPT_ID} ${process.env.BINDING}`;
+            if(authority.user?.login!==context.repo.owner||authority.author_association!=='OWNER'||String(authority.body??'').trim()!==expected){core.setFailed('SERVER_CANONICAL_AUTHORITY_CHANGED');return;}
+            const authorize='/authorize-public-only-partial-fill-v3-schedule-activation', revoke='/revoke-public-only-partial-fill-v3-schedule-activation';
+            const comments=await github.paginate(github.rest.issues.listComments,{owner:context.repo.owner,repo:context.repo.repo,issue_number:23,per_page:100});comments.sort((a,b)=>Number(a.id)-Number(b.id));let latest=null;
+            for(const c of comments){if(c.user?.login!==context.repo.owner||c.author_association!=='OWNER')continue;const p=String(c.body??'').trim().split(/\s+/u);if(p.length!==3||(p[0]!==authorize&&p[0]!==revoke))continue;if(p[1]!==process.env.TARGET_SHA||p[2]!==process.env.BINDING)continue;latest={id:Number(c.id),action:p[0]===authorize?'AUTHORIZE':'REVOKE'};}
+            if(!latest||latest.action!=='AUTHORIZE'||latest.id!==Number(process.env.RECEIPT_ID)){core.setFailed('SERVER_CANONICAL_V3_RECEIPT_CHANGED_DURING_APPROVAL');}
+
+      - name: Configure Production SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RECEIPT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$BINDING" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$AUTHORITY_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$AUTHORIZED_AT_MS" =~ ^[1-9][0-9]*$ ]]
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" ]]
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts; else ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts; fi
+
+      - name: Activate protected server canonical runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q RECEIPT_ID=%q BINDING=%q AUTHORITY_ID=%q AUTHORIZED_AT_MS=%q' "$TARGET_SHA" "$RECEIPT_ID" "$BINDING" "$AUTHORITY_ID" "$AUTHORIZED_AT_MS")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          ROOT=/opt/stock-app-server-evidence-shadow-v1
+          CURRENT="$ROOT/current"
+          ENV_FILE=/etc/stock-app/server-evidence-shadow-v1.env
+          SHADOW_TIMER=public-forward-liquidity-server-shadow-worker-v1.timer
+          CANONICAL_SERVICE=public-forward-liquidity-server-canonical-runtime-v1.service
+          CANONICAL_TIMER=public-forward-liquidity-server-canonical-runtime-v1.timer
+          SYSTEMD_DIR=/etc/systemd/system
+          RUNNER="$CURRENT/market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-canonical-runtime-v1.mjs"
+          SERVICE_SOURCE="$CURRENT/market-intelligence-sidecar/deploy/$CANONICAL_SERVICE"
+          TIMER_SOURCE="$CURRENT/market-intelligence-sidecar/deploy/$CANONICAL_TIMER"
+          privileged() { if [[ "$(id -u)" == 0 ]]; then "$@"; else sudo -n "$@"; fi; }
+          rollback() { status=$?; trap - EXIT; if ((status!=0)); then privileged systemctl disable --now "$CANONICAL_TIMER" >/dev/null 2>&1 || true; privileged systemctl enable --now "$SHADOW_TIMER" >/dev/null 2>&1 || true; fi; exit "$status"; }
+          trap rollback EXIT
+          [[ "$(tr -d '[:space:]' < "$CURRENT/.deploy/current-sha")" == "$TARGET_SHA" ]]
+          [[ -r "$RUNNER" && -r "$SERVICE_SOURCE" && -r "$TIMER_SOURCE" && -r "$ENV_FILE" ]]
+          grep -Fqx "SERVER_EVIDENCE_ACTIVATION_RECEIPT_COMMENT_ID=$RECEIPT_ID" "$ENV_FILE"
+          grep -Fqx "SERVER_EVIDENCE_ACTIVATION_RECEIPT_MAIN_SHA=$TARGET_SHA" "$ENV_FILE"
+          grep -Fqx "SERVER_EVIDENCE_EXPECTED_BINDING_DIGEST=$BINDING" "$ENV_FILE"
+          privileged systemctl is-enabled --quiet "$SHADOW_TIMER"
+          privileged systemctl is-active --quiet "$SHADOW_TIMER"
+          privileged test ! -e "$ROOT/canonical-cutover-readiness.json"
+          privileged test ! -e "$ROOT/canonical-runtime-activation.json"
+          privileged env \
+            SERVER_CANONICAL_TARGET_SHA="$TARGET_SHA" \
+            SERVER_CANONICAL_V3_RECEIPT_COMMENT_ID="$RECEIPT_ID" \
+            SERVER_EVIDENCE_EXPECTED_BINDING_DIGEST="$BINDING" \
+            SERVER_CANONICAL_AUTHORITY_COMMENT_ID="$AUTHORITY_ID" \
+            SERVER_CANONICAL_AUTHORIZED_AT_MS="$AUTHORIZED_AT_MS" \
+            SERVER_EVIDENCE_STATE_ROOT=/var/lib/stock-app-server-evidence-shadow-v1 \
+            node "$RUNNER" prepare-activation
+          privileged test -s "$ROOT/canonical-cutover-readiness.json"
+          privileged test -s "$ROOT/canonical-runtime-activation.json"
+          privileged install -m 0644 "$SERVICE_SOURCE" "$SYSTEMD_DIR/$CANONICAL_SERVICE"
+          privileged install -m 0644 "$TIMER_SOURCE" "$SYSTEMD_DIR/$CANONICAL_TIMER"
+          privileged systemctl daemon-reload
+          privileged systemctl disable --now "$SHADOW_TIMER"
+          privileged systemctl enable --now "$CANONICAL_TIMER"
+          privileged systemctl is-enabled --quiet "$CANONICAL_TIMER"
+          privileged systemctl is-active --quiet "$CANONICAL_TIMER"
+          ! privileged systemctl is-enabled --quiet "$SHADOW_TIMER"
+          privileged node - "$ROOT/canonical-runtime-activation.json" "$TARGET_SHA" "$RECEIPT_ID" "$AUTHORITY_ID" <<'NODE'
+          const fs=require('fs');
+          const [path,targetSha,receiptId,authorityId]=process.argv.slice(2);
+          const v=JSON.parse(fs.readFileSync(path,'utf8'));
+          if(v?.activationApplied!==true||v?.targetMainSha!==targetSha||v?.activationReceiptCommentId!==Number(receiptId)||v?.authorityCommentId!==Number(authorityId)||v?.executionAuthority!=='NONE')process.exit(1);
+          NODE
+          trap - EXIT
+          echo 'SERVER_CANONICAL_ACTIVATED_FUTURE_ONLY'
+          REMOTE
+
+      - name: Activation summary
+        shell: bash
+        run: |
+          {
+            echo '## Server Canonical V1 activated'
+            echo "- target SHA: $TARGET_SHA"
+            echo "- V3 OWNER receipt: $RECEIPT_ID"
+            echo "- cutover authority comment: $AUTHORITY_ID"
+            echo '- source precedence: GitHub V3 schedule > server natural timer'
+            echo '- existing historical shadow credit: 0 / no reclassification'
+            echo '- baseline preserved: TRAIN=4, Independent=4, VALIDATION=0, OOS=0'
+            echo '- timer: UTC :17/:27/:37, Persistent=false'
+            echo '- immediate/manual capture: false'
+            echo '- canonical ingest/independence: not performed by activation'
+            echo '- LIVE/AUTO/real-order/private-API authority: none'
+            echo '- executionAuthority=NONE'
+          } >> "$GITHUB_STEP_SUMMARY"
