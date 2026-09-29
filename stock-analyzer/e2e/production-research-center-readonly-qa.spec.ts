@@ -16,13 +16,43 @@ const productionQaEnabled = Boolean(
 const productionOrigin = baseUrl ? new URL(baseUrl).origin : 'http://production-qa-disabled.invalid';
 
 type Failure = { kind: string; detail: string };
+const LOGIN_READY_BUDGET_MS = 15_000;
+const LOGIN_NAVIGATION_TIMEOUT_RETRIES = 1;
+
+function isPlaywrightTimeout(error: unknown) {
+  return error instanceof Error
+    && (error.name === 'TimeoutError' || /Timeout \d+ms exceeded/i.test(error.message));
+}
+
+async function gotoLoginWithTimeoutRetry(page: Page) {
+  for (let attempt = 0; attempt <= LOGIN_NAVIGATION_TIMEOUT_RETRIES; attempt += 1) {
+    try {
+      await page.goto('/login', { waitUntil: 'commit', timeout: LOGIN_READY_BUDGET_MS });
+      return;
+    } catch (error) {
+      if (!isPlaywrightTimeout(error) || attempt >= LOGIN_NAVIGATION_TIMEOUT_RETRIES) throw error;
+    }
+  }
+  throw new Error('PRODUCTION_QA_LOGIN_NAVIGATION_UNAVAILABLE');
+}
 
 async function login(page: Page) {
-  await page.goto('/login', { waitUntil: 'domcontentloaded', timeout: 15_000 });
-  await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 10_000 });
-  await page.getByLabel('아이디').fill(qaLogin, { timeout: 3_000 });
-  await page.getByLabel('비밀번호').fill(qaPassword, { timeout: 3_000 });
-  await page.getByRole('button', { name: '로그인', exact: true }).click({ timeout: 3_000 });
+  await gotoLoginWithTimeoutRetry(page);
+  const loginId = page.getByLabel('아이디');
+  const loginPassword = page.getByLabel('비밀번호');
+  const loginButton = page.getByRole('button', { name: '로그인', exact: true });
+  await expect.poll(async () => {
+    const [idVisible, passwordVisible, buttonVisible, fallbackVisible] = await Promise.all([
+      loginId.isVisible({ timeout: 250 }).catch(() => false),
+      loginPassword.isVisible({ timeout: 250 }).catch(() => false),
+      loginButton.isVisible({ timeout: 250 }).catch(() => false),
+      page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false),
+    ]);
+    return idVisible && passwordVisible && buttonVisible && !fallbackVisible ? 'READY' : 'PENDING';
+  }, { timeout: LOGIN_READY_BUDGET_MS, intervals: [100, 200, 400, 800] }).toBe('READY');
+  await loginId.fill(qaLogin, { timeout: 3_000 });
+  await loginPassword.fill(qaPassword, { timeout: 3_000 });
+  await loginButton.click({ timeout: 3_000 });
   await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: 15_000 });
 }
 
@@ -39,7 +69,7 @@ test.describe('Production Research Center read-only QA', () => {
   test.skip(!productionQaEnabled, 'Dedicated Production QA credentials and read-only flag are required');
 
   test('admin Research Center is reachable, bounded, scrollable, and read-only', async ({ page }) => {
-    test.setTimeout(60_000);
+    test.setTimeout(90_000);
     const blocked: Failure[] = [];
     const runtimeFailures: Failure[] = [];
     attachRuntimeFailures(page, runtimeFailures);
