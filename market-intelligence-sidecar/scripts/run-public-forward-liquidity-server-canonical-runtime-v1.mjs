@@ -520,6 +520,7 @@ async function prepareActivation() {
     activationReceiptCommentId,
     authorityCommentId,
     authorizedAtMs,
+    runtimeActivatedAtMs: Date.now(),
     baselineEvidence: baselineEvidence(),
     historicalShadowLedger: shadow.historicalShadowLedger,
   });
@@ -530,6 +531,8 @@ async function prepareActivation() {
     targetSha,
     activationReceiptCommentId,
     authorityCommentId,
+    cutoverAuthorizedAtMs: record.authorizedAtMs,
+    runtimeActivatedAtMs: record.runtimeActivatedAtMs,
     firstEligibleSlotIndex: record.firstEligibleSlotIndex,
     recordDigest: record.recordDigest,
     shadowReceiptDigest: shadow.latest.receiptDigest,
@@ -663,6 +666,8 @@ async function status() {
   process.stdout.write(`${JSON.stringify({
     status: 'ACTIVE_PROTECTED_CANONICAL_RUNTIME',
     targetSha: record.targetMainSha,
+    cutoverAuthorizedAtMs: record.authorizedAtMs,
+    runtimeActivatedAtMs: record.runtimeActivatedAtMs,
     firstEligibleSlotIndex: record.firstEligibleSlotIndex,
     activationRecordDigest: record.recordDigest,
     canonicalSlotDirectoryN: slotN,
