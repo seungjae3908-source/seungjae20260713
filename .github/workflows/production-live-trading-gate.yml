@@ -64,6 +64,9 @@ jobs:
           grep -Fq "LIVE_TRADING_EXACT_ACCOUNT_QA_REQUIRED" "$workflow"
           grep -Fq 'production-comprehensive-readonly-${run.id}' "$workflow"
           grep -Fq 'production-account-readonly-live-${target}' "$workflow"
+          grep -Fq 'actions/download-artifact@v4' "$workflow"
+          grep -Fq 'testedProviders' "$workflow"
+          grep -Fq 'reconciliationPassed' "$workflow"
           grep -Fq "const disableTradingGates = () =>" "$workflow"
           grep -Fq "LIVE_TRADING_ACTIVATION_FAILED_ROLLED_BACK" "$workflow"
           grep -Fq "LIVE_TRADING_ACTIVATION_FAILED_AND_ROLLBACK_FAILED" "$workflow"
@@ -311,6 +314,69 @@ jobs:
             if (!account) return;
             core.setOutput('comprehensive_run_id', String(comprehensive.id));
             core.setOutput('account_run_id', String(account.id));
+
+      - name: Download exact-SHA target-provider Account QA evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: production-account-readonly-live-${{ steps.command.outputs.sha }}
+          path: ${{ runner.temp }}/production-account-readonly-live-qa
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.production_qa.outputs.account_run_id }}
+
+      - name: Require every activation provider to pass the same Account QA artifact
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          PROVIDERS: ${{ steps.command.outputs.providers }}
+          ACCOUNT_QA_EVIDENCE: ${{ runner.temp }}/production-account-readonly-live-qa/production-account-readonly-live-qa.json
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const target = String(process.env.TARGET_SHA ?? '');
+          const requestedProviders = String(process.env.PROVIDERS ?? '').split(',').filter(Boolean);
+          const allowedProviders = new Set(['toss', 'kiwoom', 'upbit']);
+          const evidence = JSON.parse(fs.readFileSync(process.env.ACCOUNT_QA_EVIDENCE, 'utf8'));
+          const testedProviders = Array.isArray(evidence?.testedProviders) ? evidence.testedProviders : [];
+          const providers = Array.isArray(evidence?.providers) ? evidence.providers : [];
+          if (!/^[0-9a-f]{40}$/.test(target)
+            || requestedProviders.length === 0
+            || new Set(requestedProviders).size !== requestedProviders.length
+            || requestedProviders.some((provider) => !allowedProviders.has(provider))) {
+            throw new Error('LIVE_TRADING_ACCOUNT_QA_TARGET_PROVIDER_SET_INVALID');
+          }
+          if (evidence?.schemaVersion !== 'production-account-readonly-live-qa-v1'
+            || evidence?.targetSha !== target
+            || evidence?.orderRequests !== 0
+            || evidence?.cancelRequests !== 0
+            || evidence?.amendRequests !== 0
+            || evidence?.transferRequests !== 0
+            || evidence?.withdrawalRequests !== 0
+            || evidence?.blockedMutationRequests !== 0
+            || evidence?.observedAppMutationRequests !== 0
+            || evidence?.liveTradingAuthorityGranted !== false
+            || evidence?.autoTradingAuthorityGranted !== false) {
+            throw new Error('LIVE_TRADING_ACCOUNT_QA_EVIDENCE_SAFETY_INVALID');
+          }
+          for (const provider of requestedProviders) {
+            if (!testedProviders.includes(provider)) {
+              throw new Error(`LIVE_TRADING_ACCOUNT_QA_TARGET_NOT_TESTED:${provider}`);
+            }
+            const row = providers.find((candidate) => candidate?.provider === provider);
+            if (!row
+              || row.connected !== true
+              || row.status !== 'CONNECTED'
+              || row.stale !== false
+              || row.fresh !== true
+              || row.errorCode !== null
+              || row.checkedAtPresent !== true
+              || row.lastGoodAtPresent !== true
+              || row.reconciliation !== 'PASS'
+              || row.reconciliationPassed !== true) {
+              throw new Error(`LIVE_TRADING_ACCOUNT_QA_TARGET_NOT_READY:${provider}`);
+            }
+          }
+          NODE
 
       - name: Configure protected Production SSH
         shell: bash
