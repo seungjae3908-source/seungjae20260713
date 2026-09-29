@@ -15,6 +15,10 @@ import {
   type PaperJournalRepository,
 } from '../services/paper-journal.types';
 import { hasCapability } from '../../../packages/member-access/src/index.js';
+import {
+  readAccountJournalHistory,
+  type AccountJournalHistoryResult,
+} from '../features/account-readonly/account-readonly.journal-history';
 import { buildAiReviewDataset, generateTradingAiReview, previewAiReview } from '../services/trading-ai-review.service';
 import { configuredTradingReviewProvider, type TradingReviewProvider } from '../services/trading-review-provider';
 import { registerCanonicalPortfolioAdvisorRoute } from './paper-journal-portfolio-advisor';
@@ -34,6 +38,10 @@ import {
   type UnifiedJournalFilters,
 } from '../services/unified-trade-journal.service';
 import {
+  bindCanonicalResearchToUnifiedJournal,
+  readCanonicalResearchOwnerStateForJournalBinding,
+} from '../services/unified-trade-journal-canonical-binding.service';
+import {
   PaperJournalSignalPerformanceRepository,
   buildSignalPerformanceReadModel,
   type PerformanceQuery,
@@ -47,6 +55,7 @@ type PaperJournalDependencies = {
   now: () => Date;
   reviewProvider: TradingReviewProvider | null;
   allowTossContractPreview: boolean;
+  accountHistoryReader: typeof readAccountJournalHistory;
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -136,6 +145,27 @@ export function createPaperJournalRouter(
   const now = dependencies.now ?? (() => new Date());
   const reviewProvider = dependencies.reviewProvider === undefined ? configuredTradingReviewProvider() : dependencies.reviewProvider;
   const allowTossContractPreview = dependencies.allowTossContractPreview === true;
+  const accountHistoryReader = dependencies.accountHistoryReader ?? readAccountJournalHistory;
+
+  const accountHistoryProviders = (request: AuthenticatedRequest) => {
+    if (!request.member) return [] as Array<'kiwoom' | 'upbit' | 'bitget'>;
+    const providers: Array<'kiwoom' | 'upbit' | 'bitget'> = ['kiwoom'];
+    if (hasCapability(request.member, 'canAccessSpot')) providers.push('upbit');
+    if (hasCapability(request.member, 'canAccessFutures')) providers.push('bitget');
+    return providers;
+  };
+
+  const historySummary = (history: AccountJournalHistoryResult) => ({
+    requestedRange: history.requestedRange,
+    effectiveDays: history.effectiveDays,
+    rangeCapped: history.rangeCapped,
+    persisted: history.persisted,
+    privateProviderRequests: history.privateProviderRequests,
+    providers: history.providers,
+    realizedEvidence: history.realizedEvidence,
+    truncated: history.truncated,
+    safety: history.safety,
+  });
 
   const requireAiReview = (request: AuthenticatedRequest) => {
     if (!request.member || !hasCapability(request.member, 'canAccessAiTradingReview')) throw new PaperJournalError('CAPABILITY_REQUIRED', 'AI 거래 복기는 정회원과 관리자만 사용할 수 있습니다.', request.member ? 403 : 401);
@@ -278,10 +308,38 @@ export function createPaperJournalRouter(
 
   router.get('/paper-journal/unified-ledger', async (request: AuthenticatedRequest, response) => {
     try {
-      const payloads = await repositoryFactory(request).listJournalPayloads(request.member?.id ?? '');
+      const ownerId = request.member?.id ?? '';
+      const filters = unifiedFilters(request.query);
+      const observedAt = now();
+      const [storedPayloads, liveHistory] = await Promise.all([
+        repositoryFactory(request).listJournalPayloads(ownerId),
+        accountHistoryReader({
+          userId: ownerId,
+          range: filters.range ?? '30D',
+          providers: accountHistoryProviders(request),
+          now: observedAt,
+        }),
+      ]);
+      const journal = buildUnifiedTradeJournal(
+        [...storedPayloads, ...liveHistory.payloads],
+        filters,
+        observedAt,
+      );
+      const ownerReadback = await readCanonicalResearchOwnerStateForJournalBinding({
+        authenticatedAccountId: ownerId,
+        nowMs: observedAt.getTime(),
+      });
+      const bound = bindCanonicalResearchToUnifiedJournal(journal, ownerReadback, observedAt.getTime());
       return response.json(analysisEnvelope({
         ok: true,
-        result: buildUnifiedTradeJournal(payloads, unifiedFilters(request.query), now()),
+        result: {
+          ...bound,
+          liveAccountHistory: historySummary(liveHistory),
+          safety: {
+            ...bound.safety,
+            privateBrokerRequests: liveHistory.privateProviderRequests,
+          },
+        },
       }));
     } catch (cause) {
       return handleError(response, cause, 'UNIFIED_JOURNAL_FAILED', '통합 매매일지를 처리하지 못했습니다.', analysisEnvelope);

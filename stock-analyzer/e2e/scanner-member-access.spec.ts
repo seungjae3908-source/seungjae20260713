@@ -30,11 +30,13 @@ test('associate scanner access uses the unified workspace while advanced capabil
   expect(associateBlock).toContain('canAccessSpot: true');
   expect(associateBlock).not.toContain('canAccessFutures: true');
   expect(associateBlock).not.toContain('canAccessRiskPreview: true');
+  expect(associateBlock).toContain('canAccessPaperTrading: true');
+  expect(associateBlock).toContain('canAccessAutoTrading: true');
   expect(associateBlock).not.toContain('canPlaceOrders: true');
 
   expect(technicalItem('scanner').capability).toBe('canAccessBasicInfo');
   expect(technicalItem('ai-chart').capability).toBe('canAccessRiskPreview');
-  expect(technicalItem('auto-trading').capability).toBe('canPlaceOrders');
+  expect(technicalItem('auto-trading').capability).toBe('canAccessAutoTrading');
 
   expect(appSource).toContain("return gated('canAccessBasicInfo', <TechnicalWorkspacePage />);");
   expect(appSource).not.toContain('function BasicScannerWorkspace()');
@@ -42,7 +44,7 @@ test('associate scanner access uses the unified workspace while advanced capabil
 
   expect(technicalWorkspaceSource).toContain("const canAccessRiskPreview = phase11FullCapabilityFixture || auth.can('canAccessRiskPreview')");
   expect(technicalWorkspaceSource).toContain("const canAccessBacktests = phase11FullCapabilityFixture || auth.can('canAccessBacktests')");
-  expect(technicalWorkspaceSource).toContain("const canPlaceOrders = phase11FullCapabilityFixture || auth.can('canPlaceOrders')");
+  expect(technicalWorkspaceSource).toContain("const canAccessAutoTrading = phase11FullCapabilityFixture || auth.can('canAccessAutoTrading')");
   expect(technicalWorkspaceSource).toContain('if (!canAccessRiskPreview)');
   expect(technicalWorkspaceSource).toContain("import.meta.env.VITE_PHASE11_E2E === 'true'");
   expect(technicalWorkspaceSource).toContain("location.startsWith('/__phase11-technical-workspace-e2e')");
@@ -56,6 +58,6 @@ test('associate scanner access uses the unified workspace while advanced capabil
   expect(aiChartAccess).toContain("builder('AI_CHART', <AiChartPage />)");
 
   const autoTradingAccess = appSource.match(/function AutoTradingAccess\(\) \{([^\n]+)\}/)?.[1] ?? '';
-  expect(autoTradingAccess).toContain("gated('canPlaceOrders'");
+  expect(autoTradingAccess).toContain("gated('canAccessAutoTrading'");
   expect(autoTradingAccess).toContain("builder('AUTO_TRADING', <AutoTradingPage />)");
 });

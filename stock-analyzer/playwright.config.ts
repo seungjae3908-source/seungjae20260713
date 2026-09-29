@@ -20,7 +20,7 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   fullyParallel: false,
   workers: process.env.CI ? 1 : undefined,
-  retries: stagingMode ? 0 : process.env.CI ? 1 : 0,
+  retries: 0,
   reporter: stagingMode ? [
     ['list'],
     ['json', { outputFile: path.join(artifactDir, 'playwright-report.json') }],
@@ -42,7 +42,7 @@ export default defineConfig({
     ignoreHTTPSErrors: false,
   },
   webServer: stagingMode ? undefined : {
-    command: 'VITE_SUPABASE_URL=http://127.0.0.1:4173/__e2e-supabase VITE_SUPABASE_ANON_KEY=e2e-public-anon-key VITE_PHASE4_E2E=true VITE_PHASE5_E2E=true VITE_PHASE6_E2E=true VITE_PHASE7_E2E=true VITE_PHASE8_E2E=true VITE_PHASE9_E2E=true VITE_PHASE11_E2E=true VITE_PHASE12_E2E=true pnpm exec vite --config vite.config.ts --host 127.0.0.1 --port 4173',
+    command: 'node ./e2e/support/start-vite-e2e-server.mjs vite.config.ts',
     url: 'http://127.0.0.1:4173',
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

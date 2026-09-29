@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { AlertTriangle, Loader2, ShieldCheck, ShieldX, X } from 'lucide-react';
 import type { TradeApprovalQueueItem } from '@/components/trade-approval-queue';
+import { SOLID_MODAL_SURFACE_STYLE } from '@/components/ui/modal-surface';
 import {
   accountModeLabel,
   approvalCountdown,
@@ -13,7 +14,8 @@ import { cn } from '@/lib/utils';
 const EXCHANGE_LABEL: Record<TradeApprovalQueueItem['exchange'], string> = {
   bitget: 'Bitget 선물',
   upbit: 'Upbit 현물',
-  kiwoom: 'Kiwoom 국내주식',
+  kiwoom: 'Kiwoom 주식',
+  toss: 'Toss 주식',
 };
 
 function formatNumber(value: number | null | undefined, maximumFractionDigits = 0) {
@@ -53,7 +55,7 @@ export function TradeApprovalConfirmationDialog({
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const [now, setNow] = useState(() => Date.now());
   const countdown = approvalCountdown(item.approval.expiresAt, now);
-  const liveBlocked = item.accountMode === 'live';
+  const liveBlocked = item.accountMode === 'live' && item.approval.reasonCode === 'LIVE_EXECUTION_DISABLED';
   const signalMaintained = item.signalState === 'READY_FOR_APPROVAL'
     && item.approval.signalState === 'READY_FOR_APPROVAL';
   const enabled = item.approval.approvalEnabled
@@ -67,7 +69,7 @@ export function TradeApprovalConfirmationDialog({
   const returnFocusTestId = `approve-plan-${item.id}`;
 
   const blockedReason = useMemo(() => {
-    if (liveBlocked) return '실전 계좌 주문은 현재 활성화되지 않았습니다.';
+    if (liveBlocked) return '실전 주문 서버게이트가 꺼져 있어 실제 주문을 보낼 수 없습니다.';
     if (countdown.expired) return '승인 가능 시간이 지나 주문 요청을 보낼 수 없습니다.';
     if (!signalMaintained) return approvalMessage(item.approval.reasonCode, item.signalInvalidationReason);
     if (!item.approval.approvalEnabled || item.state !== 'APPROVAL_PENDING') {
@@ -152,7 +154,8 @@ export function TradeApprovalConfirmationDialog({
         aria-labelledby="trade-approval-dialog-title"
         aria-describedby="trade-approval-dialog-description"
         onKeyDown={onKeyDown}
-        className="relative z-10 flex max-h-[calc(100dvh-1.5rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-card-border bg-card shadow-2xl sm:max-h-[min(90dvh,760px)]"
+        className="relative z-10 flex max-h-[calc(100dvh-1.5rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-card-border shadow-2xl sm:max-h-[min(90dvh,760px)]"
+        style={SOLID_MODAL_SURFACE_STYLE}
       >
         <div className="flex shrink-0 items-start justify-between gap-3 border-b border-card-border p-4">
           <div className="min-w-0">
@@ -163,7 +166,7 @@ export function TradeApprovalConfirmationDialog({
                 'rounded-full border px-2 py-1 text-[10px] font-black',
                 liveBlocked
                   ? 'border-destructive/40 bg-destructive/10 text-destructive'
-                  : item.accountMode === 'mock'
+                  : item.accountMode === 'live' || item.accountMode === 'mock'
                     ? 'border-warning/40 bg-warning/10 text-warning'
                     : 'border-primary/30 bg-primary/10 text-primary',
               )}>
@@ -189,7 +192,12 @@ export function TradeApprovalConfirmationDialog({
           {liveBlocked ? (
             <div className="mb-3 flex items-start gap-2 rounded-2xl border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive" role="alert">
               <ShieldX className="mt-0.5 h-4 w-4 shrink-0" />
-              <p className="font-extrabold">실전 주문은 차단 상태입니다. 이 확인창에서는 주문 API를 호출할 수 없습니다.</p>
+              <p className="font-extrabold">실전 주문 서버게이트가 꺼져 있습니다. 이 확인창에서는 실제 주문 API를 호출할 수 없습니다.</p>
+            </div>
+          ) : item.accountMode === 'live' ? (
+            <div className="mb-3 flex items-start gap-2 rounded-2xl border border-warning/40 bg-warning/10 p-3 text-xs text-warning" role="alert">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <p className="font-extrabold">실전 계좌 실제 자금 주문입니다. 확인 후에도 서버가 신호·가격·유동성·손실한도·실주문 게이트를 다시 검사합니다.</p>
             </div>
           ) : null}
 
@@ -264,7 +272,7 @@ export function TradeApprovalConfirmationDialog({
           </details>
         </div>
 
-        <div className="grid shrink-0 grid-cols-2 gap-2 border-t border-card-border bg-card p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+        <div className="grid shrink-0 grid-cols-2 gap-2 border-t border-card-border p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
           <button
             ref={cancelButtonRef}
             type="button"
@@ -282,7 +290,13 @@ export function TradeApprovalConfirmationDialog({
             className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-primary px-3 text-sm font-extrabold text-primary-foreground disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
           >
             {validating || submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-            {submitting ? '승인 처리 중' : liveBlocked ? '실전 주문 차단' : '서버 최종검증 후 승인'}
+            {submitting
+              ? '승인 처리 중'
+              : liveBlocked
+                ? '실전 주문 차단'
+                : item.accountMode === 'live'
+                  ? '실전 주문 최종승인'
+                  : '서버 최종검증 후 승인'}
           </button>
         </div>
       </div>

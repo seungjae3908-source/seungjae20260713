@@ -1,8 +1,11 @@
 import { Router, type IRouter } from 'express';
+import { requireAdmin } from '../middleware/auth';
 import {
   createDefaultStrategyPromotionService,
   type StrategyPromotionService,
 } from '../services/strategy-promotion.service';
+import { loadResearchPromotionBridge } from '../services/strategy-promotion-research-bridge.service';
+import { buildResearchAdoptionReview } from '../services/research-adoption-review-gate.service';
 
 export function createStrategyPromotionRouter(service: StrategyPromotionService = createDefaultStrategyPromotionService()): IRouter {
   const router: IRouter = Router();
@@ -15,6 +18,19 @@ export function createStrategyPromotionRouter(service: StrategyPromotionService 
       status: typeof req.query.status === 'string' ? req.query.status : undefined,
     });
     return res.json({ ok: true, ...result });
+  });
+
+  router.get('/strategy-promotion/research-bridge', requireAdmin, async (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    const bridge = await loadResearchPromotionBridge();
+    return res.json({ ok: true, bridge });
+  });
+
+  router.get('/strategy-promotion/research-adoption-review', requireAdmin, async (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    const bridge = await loadResearchPromotionBridge();
+    const adoptionReview = buildResearchAdoptionReview(bridge);
+    return res.json({ ok: true, adoptionReview });
   });
 
   router.get('/strategy-promotion/:strategyId/history', (req, res) => {

@@ -4,6 +4,7 @@ import { createHmac } from 'node:crypto';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
 import { TradeExecutionService } from './trade-execution.service';
+import { setTradingPlanMarketIntelligenceRunnerForTests } from './trade-market-intelligence.service';
 import { encryptTradingCredentials, decryptTradingCredentials } from './trade-credential-vault.service';
 import {
   buildBitgetSignature, buildUpbitJwt, prepareBitgetOrder, prepareBitgetTicker, prepareKiwoomOrder,
@@ -12,10 +13,52 @@ import {
 import { evaluateTradingPlan, normalizeTradingPolicy, upbitKrwPriceStep } from './trade-automation-risk.service';
 import { assertOrderTransition, canTransitionOrder } from './trade-order-state-machine.service';
 import { DEFAULT_TRADING_POLICY, type TradingPlanInput } from './trade-automation.types';
+import {
+  SPOT_LIVE_HARD_DENIED_CAPABILITIES,
+  spotLiveCapabilityDecision,
+  spotLivePlanCapabilityDecision,
+  spotLiveRuntimeStatus,
+} from './spot-live-limited-capability.service';
 
 const USER_A = '11111111-1111-1111-1111-111111111111';
 const USER_B = '22222222-2222-2222-2222-222222222222';
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
+const SPOT_LIVE_TEST_KEYS = [
+  'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED',
+  'SPOT_LIVE_CAPABILITY_ALLOWLIST',
+  'SPOT_LIVE_MARKET_ALLOWLIST',
+] as const;
+
+function spotLiveEnvironmentSnapshot() {
+  return Object.fromEntries(SPOT_LIVE_TEST_KEYS.map((key) => [key, process.env[key]]));
+}
+
+function enableSpotLiveTestEnvironment() {
+  process.env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED = 'true';
+  process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST = 'BALANCE_READ,POSITION_READ,OPEN_ORDER_READ,ORDER_CREATE,ORDER_CANCEL,ORDER_AMEND';
+  process.env.SPOT_LIVE_MARKET_ALLOWLIST = 'KR_STOCK,US_STOCK,CRYPTO_SPOT';
+  process.env.executionAuthority = 'SPOT_LIVE_LIMITED';
+}
+
+function spotLiveCapabilityEnvironment(overrides: Record<string, string> = {}) {
+  return {
+    executionAuthority: 'SPOT_LIVE_LIMITED',
+    LIVE_TRADING: 'true',
+    ORDER_EXECUTION_ENABLED: 'true',
+    LIVE_TRADING_ACTIVATION_APPROVED: 'true',
+    SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: 'true',
+    REAL_ORDER_ENABLED: 'true',
+    PRIVATE_TRADING_API_ALLOWED: 'true',
+    BITGET_LIVE_ORDER_ENABLED: 'false',
+    UPBIT_LIVE_ORDER_ENABLED: 'true',
+    KIWOOM_LIVE_ORDER_ENABLED: 'true',
+    TOSS_LIVE_ORDER_ENABLED: 'true',
+    SPOT_LIVE_CAPABILITY_ALLOWLIST:
+      'BALANCE_READ,POSITION_READ,OPEN_ORDER_READ,ORDER_CREATE,ORDER_CANCEL,ORDER_AMEND',
+    SPOT_LIVE_MARKET_ALLOWLIST: 'KR_STOCK,US_STOCK,CRYPTO_SPOT',
+    ...overrides,
+  };
+}
 
 function plan(overrides: Partial<TradingPlanInput> = {}): TradingPlanInput {
   const observedAt = new Date().toISOString();
@@ -43,30 +86,202 @@ test('automatic trading and every exchange default to OFF', () => {
   assert.equal(policy.mode, 'approval');
   assert.equal(policy.automaticEnabled, false);
   assert.equal(policy.emergencyStopped, false);
-  assert.deepEqual(policy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false });
-  assert.deepEqual(policy.enabledAssets, { bitget: [], upbit: [], kiwoom: [] });
+  assert.deepEqual(policy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
+  assert.deepEqual(policy.enabledAssets, { bitget: [], upbit: [], kiwoom: [], toss: [] });
   assert.equal(policy.bitgetLeverage, 2);
 });
 
-test('automatic policy fields can restrict eligibility but cannot bypass user approval', async () => {
+test('spot live create is capability allowlisted and exact-authority bound', () => {
+  assert.equal(
+    spotLivePlanCapabilityDecision(plan(), 'ORDER_CREATE', spotLiveCapabilityEnvironment()).allowed,
+    true,
+  );
+
+  const legacy = spotLivePlanCapabilityDecision(
+    plan(),
+    'ORDER_CREATE',
+    spotLiveCapabilityEnvironment({ executionAuthority: 'AUTOMATIC' }),
+  );
+  assert.equal(legacy.allowed, false);
+  assert.ok(legacy.blockCodes.includes('SPOT_LIVE_EXECUTION_AUTHORITY_MISMATCH'));
+
+  const missingRead = spotLivePlanCapabilityDecision(
+    plan(),
+    'ORDER_CREATE',
+    spotLiveCapabilityEnvironment({ SPOT_LIVE_CAPABILITY_ALLOWLIST: 'ORDER_CREATE' }),
+  );
+  assert.equal(missingRead.allowed, false);
+  assert.ok(missingRead.blockCodes.includes('SPOT_LIVE_CAPABILITY_MISSING_BALANCE_READ'));
+  assert.ok(missingRead.blockCodes.includes('SPOT_LIVE_CAPABILITY_MISSING_POSITION_READ'));
+  assert.ok(missingRead.blockCodes.includes('SPOT_LIVE_CAPABILITY_MISSING_OPEN_ORDER_READ'));
+});
+
+test('spot live permanently rejects futures, margin, short, leverage, and denied capabilities', () => {
+  const futures = spotLivePlanCapabilityDecision(
+    plan({ exchange: 'bitget', market: 'USDT', side: 'long', leverage: 2, marginMode: 'crossed' }),
+    'ORDER_CREATE',
+    spotLiveCapabilityEnvironment({ BITGET_LIVE_ORDER_ENABLED: 'true' }),
+  );
+  assert.equal(futures.allowed, false);
+  for (const code of [
+    'FUTURES_HARD_DISABLED',
+    'SHORT_HARD_DISABLED',
+    'LEVERAGE_HARD_DISABLED',
+    'MARGIN_HARD_DISABLED',
+  ]) {
+    assert.ok(futures.blockCodes.includes(code), `missing blocker ${code}`);
+  }
+
+  const denied = spotLiveCapabilityDecision({
+    exchange: 'upbit',
+    capability: 'ORDER_CREATE',
+    environment: spotLiveCapabilityEnvironment({
+      SPOT_LIVE_CAPABILITY_ALLOWLIST:
+        'BALANCE_READ,POSITION_READ,OPEN_ORDER_READ,ORDER_CREATE,WITHDRAW',
+    }),
+  });
+  assert.equal(denied.allowed, false);
+  assert.ok(denied.blockCodes.includes('SPOT_LIVE_DENIED_CAPABILITY_REQUESTED'));
+});
+
+test('spot live supports only the three spot market/provider combinations', () => {
+  const cases: Array<[Partial<TradingPlanInput>, boolean]> = [
+    [{ exchange: 'kiwoom', stockBroker: 'kiwoom', market: 'KR' }, true],
+    [{ exchange: 'kiwoom', stockBroker: 'kiwoom', market: 'US' }, true],
+    [{ exchange: 'toss', stockBroker: 'toss', market: 'KR' }, true],
+    [{ exchange: 'toss', stockBroker: 'toss', market: 'US' }, true],
+    [{ exchange: 'upbit', stockBroker: null, market: 'KRW' }, true],
+    [{ exchange: 'upbit', stockBroker: null, market: 'USDT' }, false],
+  ];
+  for (const [overrides, expected] of cases) {
+    assert.equal(
+      spotLivePlanCapabilityDecision(
+        plan(overrides),
+        'ORDER_CREATE',
+        spotLiveCapabilityEnvironment(),
+      ).allowed,
+      expected,
+      JSON.stringify(overrides),
+    );
+  }
+});
+
+test('crypto spot allows cancel but never amend', () => {
+  assert.equal(
+    spotLivePlanCapabilityDecision(plan(), 'ORDER_CANCEL', spotLiveCapabilityEnvironment()).allowed,
+    true,
+  );
+  const amend = spotLivePlanCapabilityDecision(
+    plan(),
+    'ORDER_AMEND',
+    spotLiveCapabilityEnvironment(),
+  );
+  assert.equal(amend.allowed, false);
+  assert.ok(amend.blockCodes.includes('SPOT_LIVE_PROVIDER_CAPABILITY_UNSUPPORTED_ORDER_AMEND'));
+  assert.ok(amend.blockCodes.includes('CRYPTO_SPOT_AMEND_HARD_DISABLED'));
+});
+
+test('spot live runtime status publishes every permanent deny as false', () => {
+  const status = spotLiveRuntimeStatus(spotLiveCapabilityEnvironment());
+  assert.equal(status.executionAuthority, 'SPOT_LIVE_LIMITED');
+  assert.equal(status.providerCapabilities.bitget.ORDER_CREATE, false);
+  assert.equal(status.providerCapabilities.upbit.ORDER_CREATE, true);
+  for (const capability of SPOT_LIVE_HARD_DENIED_CAPABILITIES) {
+    assert.equal(status.hardDeniedCapabilities[capability], false);
+  }
+});
+
+test('stock broker selection is per market, backward compatible, and enforced for automatic stock Paper plans', () => {
+  const legacy = normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, stockBrokerByMarket: undefined });
+  assert.deepEqual(legacy.stockBrokerByMarket, { domestic_stock: 'kiwoom', us_stock: 'kiwoom' });
+
+  const policy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    mode: 'automatic',
+    automaticEnabled: true,
+    marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true },
+    stockBrokerByMarket: { domestic_stock: 'toss', us_stock: 'kiwoom' },
+    exchangeEnabled: { bitget: true, upbit: true, kiwoom: true, toss: true },
+  });
+
+  const domesticToss = evaluateTradingPlan(
+    plan({
+      exchange: 'toss',
+      stockBroker: 'toss',
+      accountMode: 'paper',
+      market: 'KR',
+      symbol: '005930',
+      side: 'buy',
+      quantity: 1,
+      quoteAmount: null,
+    }),
+    policy,
+    { emergencyStopped: false, serverLiveEnabled: true },
+  );
+  assert.equal(domesticToss.blockCodes.includes('STOCK_BROKER_MISMATCH'), false);
+
+  const domesticWrongBroker = evaluateTradingPlan(
+    plan({
+      exchange: 'kiwoom',
+      stockBroker: 'kiwoom',
+      accountMode: 'paper',
+      market: 'KR',
+      symbol: '005930',
+      side: 'buy',
+      quantity: 1,
+      quoteAmount: null,
+    }),
+    policy,
+    { emergencyStopped: false, serverLiveEnabled: true },
+  );
+  assert.ok(domesticWrongBroker.blockCodes.includes('STOCK_BROKER_MISMATCH'));
+
+  const usKiwoom = evaluateTradingPlan(
+    plan({
+      exchange: 'kiwoom',
+      stockBroker: 'kiwoom',
+      stockExchange: 'NASDAQ',
+      accountMode: 'paper',
+      market: 'US',
+      symbol: 'AAPL',
+      side: 'buy',
+      quantity: 1,
+      quoteAmount: null,
+    }),
+    policy,
+    { emergencyStopped: false, serverLiveEnabled: true },
+  );
+  assert.equal(usKiwoom.blockCodes.includes('STOCK_BROKER_MISMATCH'), false);
+});
+
+test('automatic policy fields restrict eligibility and standing activation removes per-order approval', async () => {
   const automatic = normalizeTradingPolicy({
-    ...DEFAULT_TRADING_POLICY, mode: 'automatic', automaticEnabled: true,
-    exchangeEnabled: { bitget: false, upbit: true, kiwoom: false },
-    enabledAssets: { bitget: [], upbit: ['ETH'], kiwoom: [] }, enabledStrategies: ['breakout-v1'],
+    ...DEFAULT_TRADING_POLICY,
+    mode: 'automatic',
+    automaticEnabled: true,
+    marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true },
+    exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
+    enabledAssets: { bitget: [], upbit: ['ETH'], kiwoom: [], toss: [] },
+    enabledStrategies: ['breakout-v1'],
   });
   const blocked = evaluateTradingPlan(plan(), automatic, { emergencyStopped: false, serverLiveEnabled: true });
   assert.ok(blocked.blockCodes.includes('ASSET_NOT_ENABLED'));
   const allowedPolicy = { ...automatic, enabledAssets: { ...automatic.enabledAssets, upbit: ['BTC'] } };
   const allowed = evaluateTradingPlan(plan(), allowedPolicy, { emergencyStopped: false, serverLiveEnabled: true });
   assert.equal(allowed.allowed, true);
+
   const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER_A, allowedPolicy);
   const service = new TradeAutomationService(repository);
-  const created = await service.createPlan(USER_A, plan({ signalId: 'automatic-still-needs-user' }), allowedPolicy, false);
+  const created = await service.createPlan(USER_A, plan({ signalId: 'automatic-standing-authorization' }), allowedPolicy, false);
   assert.equal(created.plan?.state, 'APPROVAL_PENDING');
-  await assert.rejects(() => service.beginAutomaticPlan(USER_A, created.plan!.id), /USER_APPROVAL_REQUIRED/);
+
+  const submitted = await service.beginAutomaticPlan(USER_A, created.plan!.id);
+  assert.equal(submitted.state, 'SUBMITTED');
+  assert.ok(submitted.approvedAt);
+  assert.ok((submitted as TradingPlanInput & { riskEnvelope?: unknown }).riskEnvelope);
   assert.equal(await repository.findOrderByPlan(USER_A, created.plan!.id), null);
 });
-
 test('risk engine blocks emergency, stale/volatile markets, loss limits, and insufficient balance', () => {
   const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
   const decision = evaluateTradingPlan(plan({
@@ -124,17 +339,37 @@ test('Upbit enforces KRW spot, no short, 5,000 KRW minimum, and market buy/sell 
   assert.match(sell.body ?? '', /"volume":"0.01"/);
 });
 
-test('Kiwoom adapter is domestic-only and keeps mock/live account mode in the plan risk gate', () => {
+test('Kiwoom US stock requires an explicit supported exchange venue while KR order contracts stay intact', () => {
   const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
-  const invalid = evaluateTradingPlan(plan({ exchange: 'kiwoom', market: 'US', symbol: 'AAPL', side: 'buy', quantity: 1 }), policy,
-    { emergencyStopped: false, serverLiveEnabled: true });
-  assert.ok(invalid.blockCodes.includes('KIWOOM_DOMESTIC_ONLY'));
+
+  const missingVenue = evaluateTradingPlan(
+    plan({ exchange: 'kiwoom', accountMode: 'paper', market: 'US', symbol: 'AAPL', side: 'buy', quantity: 1 }),
+    policy,
+    { emergencyStopped: false, serverLiveEnabled: true },
+  );
+  assert.ok(missingVenue.blockCodes.includes('KIWOOM_US_EXCHANGE_REQUIRED'));
+
+  const paperUs = evaluateTradingPlan(
+    plan({
+      exchange: 'kiwoom',
+      accountMode: 'paper',
+      market: 'US',
+      stockExchange: 'NASDAQ',
+      symbol: 'AAPL',
+      side: 'buy',
+      quantity: 1,
+    }),
+    policy,
+    { emergencyStopped: false, serverLiveEnabled: true },
+  );
+  assert.equal(paperUs.blockCodes.includes('STOCK_MARKET_NOT_SUPPORTED'), false);
+  assert.equal(paperUs.blockCodes.includes('KIWOOM_US_EXCHANGE_REQUIRED'), false);
+
   const request = prepareKiwoomOrder({ appKey: 'app', secretKey: 'secret', accessToken: 'token' },
     plan({ exchange: 'kiwoom', accountMode: 'mock', market: 'KR', symbol: '005930', side: 'buy', quantity: 2, quoteAmount: null }));
   assert.equal(request.headers['api-id'], 'kt10000');
   assert.match(request.body ?? '', /"stk_cd":"005930"/);
 });
-
 test('official signature formats are deterministic and secret headers redact completely', () => {
   const message = '1000POST/api/v2/mix/order/place-order{"a":1}';
   assert.equal(buildBitgetSignature('secret', '1000', 'POST', '/api/v2/mix/order/place-order', '', '{"a":1}'),
@@ -191,7 +426,81 @@ test('approval rechecks signal freshness and expires stale plans before order cr
   assert.equal(await repository.findOrderByPlan(USER_A, created.plan!.id), null);
 });
 
-test('persistent global emergency stop blocks plan creation and approval; automatic policy still cannot submit', async () => {
+test('automatic live plans require separate global automatic-live authority', async () => {
+  const previous = {
+    ...spotLiveEnvironmentSnapshot(),
+    ORDER_EXECUTION_ENABLED: process.env.ORDER_EXECUTION_ENABLED,
+    LIVE_TRADING_ACTIVATION_APPROVED: process.env.LIVE_TRADING_ACTIVATION_APPROVED,
+    REAL_ORDER_ENABLED: process.env.REAL_ORDER_ENABLED,
+    PRIVATE_TRADING_API_ALLOWED: process.env.PRIVATE_TRADING_API_ALLOWED,
+    UPBIT_LIVE_ORDER_ENABLED: process.env.UPBIT_LIVE_ORDER_ENABLED,
+    LIVE_AUTOMATIC_TRADING_ENABLED: process.env.LIVE_AUTOMATIC_TRADING_ENABLED,
+    LIVE_TRADING: process.env.LIVE_TRADING,
+    AUTO_TRADING: process.env.AUTO_TRADING,
+    executionAuthority: process.env.executionAuthority,
+  };
+  try {
+    setTradingPlanMarketIntelligenceRunnerForTests(async () => ({
+      status: 'READY',
+      warnings: [],
+      autoTrading: {
+        mode: 'ELIGIBLE_FOR_PARENT_GATE',
+        orderAllowed: false,
+        evidenceReady: true,
+        parentEligibilityReady: true,
+        hardBlockReason: null,
+      },
+    } as any));
+    process.env.ORDER_EXECUTION_ENABLED = 'true';
+    process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+    process.env.REAL_ORDER_ENABLED = 'true';
+    process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
+    process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+    process.env.LIVE_TRADING = 'true';
+    process.env.AUTO_TRADING = 'true';
+    process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'false';
+    enableSpotLiveTestEnvironment();
+
+    const repository = new InMemoryTradingRepository();
+    const service = new TradeAutomationService(repository);
+    const policy = normalizeTradingPolicy({
+      ...DEFAULT_TRADING_POLICY,
+      mode: 'automatic',
+      automaticEnabled: true,
+      marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: false },
+      exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
+      enabledAssets: { bitget: [], upbit: ['BTC'], kiwoom: [], toss: [] },
+      enabledStrategies: ['breakout-v1'],
+    });
+
+    const blocked = await service.createPlan(
+      USER_A,
+      plan({ accountMode: 'live', signalId: 'auto-live-global-gate-off' }),
+      policy,
+      false,
+    );
+    assert.equal(blocked.plan, null);
+    assert.ok(blocked.decision.blockCodes.includes('LIVE_EXECUTION_DISABLED'));
+
+    process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'true';
+    const authorizedGate = await service.createPlan(
+      USER_A,
+      plan({ accountMode: 'live', signalId: 'auto-live-global-gate-on' }),
+      policy,
+      false,
+    );
+    assert.equal(authorizedGate.decision.blockCodes.includes('LIVE_EXECUTION_DISABLED'), false);
+    assert.ok(authorizedGate.decision.blockCodes.includes('AUTOMATIC_ECONOMICS_REQUIRED'));
+  } finally {
+    setTradingPlanMarketIntelligenceRunnerForTests(null);
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('persistent global emergency stop blocks new work and standing automatic resumes only after stop clears', async () => {
   const repository = new InMemoryTradingRepository();
   const service = new TradeAutomationService(repository);
   const approvalPolicy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
@@ -204,19 +513,450 @@ test('persistent global emergency stop blocks plan creation and approval; automa
   assert.equal(blocked.plan, null);
   assert.ok(blocked.decision.blockCodes.includes('EMERGENCY_STOP_ACTIVE'));
 
-  await repository.setGlobalEmergencyStop(false, USER_A);
   const automaticPolicy = normalizeTradingPolicy({
     ...DEFAULT_TRADING_POLICY,
-    mode: 'automatic', automaticEnabled: true,
-    exchangeEnabled: { bitget: false, upbit: true, kiwoom: false },
-    enabledAssets: { bitget: [], upbit: ['BTC'], kiwoom: [] },
+    mode: 'automatic',
+    automaticEnabled: true,
+    marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true },
+    exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
+    enabledAssets: { bitget: [], upbit: ['BTC'], kiwoom: [], toss: [] },
     enabledStrategies: ['breakout-v1'],
   });
   await repository.savePolicy(USER_A, automaticPolicy);
-  const automaticPlan = await service.createPlan(USER_A, plan({ signalId: 'global-stop-automatic' }), automaticPolicy, false);
+
+  const whileStopped = await service.createPlan(
+    USER_A,
+    plan({ signalId: 'global-stop-automatic-blocked' }),
+    automaticPolicy,
+    false,
+  );
+  assert.equal(whileStopped.plan, null);
+  assert.ok(whileStopped.decision.blockCodes.includes('EMERGENCY_STOP_ACTIVE'));
+
+  await repository.setGlobalEmergencyStop(false, USER_A);
+  const automaticPlan = await service.createPlan(
+    USER_A,
+    plan({ signalId: 'global-stop-automatic-resumed' }),
+    automaticPolicy,
+    false,
+  );
   assert.equal(automaticPlan.plan?.state, 'APPROVAL_PENDING');
-  await assert.rejects(() => service.beginAutomaticPlan(USER_A, automaticPlan.plan!.id), /USER_APPROVAL_REQUIRED/);
+  const submitted = await service.beginAutomaticPlan(USER_A, automaticPlan.plan!.id);
+  assert.equal(submitted.state, 'SUBMITTED');
+  assert.ok(submitted.riskEnvelope);
   assert.equal(await repository.findOrderByPlan(USER_A, automaticPlan.plan!.id), null);
+});
+test('live provider execution is blocked until the saved credential is explicitly verified', async () => {
+  const previous = {
+    ...spotLiveEnvironmentSnapshot(),
+    ORDER_EXECUTION_ENABLED: process.env.ORDER_EXECUTION_ENABLED,
+    LIVE_TRADING_ACTIVATION_APPROVED: process.env.LIVE_TRADING_ACTIVATION_APPROVED,
+    REAL_ORDER_ENABLED: process.env.REAL_ORDER_ENABLED,
+    PRIVATE_TRADING_API_ALLOWED: process.env.PRIVATE_TRADING_API_ALLOWED,
+    UPBIT_LIVE_ORDER_ENABLED: process.env.UPBIT_LIVE_ORDER_ENABLED,
+    TRADING_CREDENTIAL_MASTER_KEY: process.env.TRADING_CREDENTIAL_MASTER_KEY,
+    LIVE_TRADING: process.env.LIVE_TRADING,
+    executionAuthority: process.env.executionAuthority,
+  };
+  const nativeFetch = globalThis.fetch;
+  try {
+    process.env.ORDER_EXECUTION_ENABLED = 'true';
+    process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+    process.env.REAL_ORDER_ENABLED = 'true';
+    process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
+    process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+    process.env.LIVE_TRADING = 'true';
+    process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
+    enableSpotLiveTestEnvironment();
+
+    const repository = new InMemoryTradingRepository();
+    const automation = new TradeAutomationService(repository);
+    const created = await automation.createPlan(
+      USER_A,
+      plan({ signalId: 'unverified-live-connection' }),
+      normalizeTradingPolicy(DEFAULT_TRADING_POLICY),
+      false,
+    );
+    const approved = await automation.approvePlan(USER_A, created.plan!.id);
+    const order = (await automation.createOrder(USER_A, approved)).order;
+    const livePlan = { ...approved, accountMode: 'live' as const };
+    await repository.savePlan(livePlan);
+    await repository.saveConnection({
+      userId: USER_A,
+      exchange: 'upbit',
+      accountMode: 'live',
+      configured: true,
+      encryptedCredentials: encryptTradingCredentials({ accessKey: 'live-access', secretKey: 'live-secret' }, MASTER_KEY),
+      lastVerifiedAt: null,
+      lastErrorCode: 'LIVE_EXECUTION_NOT_VERIFIED',
+      updatedAt: new Date().toISOString(),
+    });
+
+    let outbound = 0;
+    globalThis.fetch = (async () => {
+      outbound += 1;
+      throw new Error('PROVIDER_REQUEST_MUST_NOT_HAPPEN');
+    }) as typeof fetch;
+
+    const executed = await new TradeExecutionService(repository).execute(USER_A, livePlan, order);
+    assert.equal(executed.state, 'REJECTED');
+    assert.equal(executed.lastErrorCode, 'LIVE_EXECUTION_CONNECTION_NOT_VERIFIED');
+    assert.equal(outbound, 0);
+  } finally {
+    globalThis.fetch = nativeFetch;
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('provider submission rechecks canonical LIVE_TRADING and blocks before outbound request', async () => {
+  const previous = {
+    ...spotLiveEnvironmentSnapshot(),
+    ORDER_EXECUTION_ENABLED: process.env.ORDER_EXECUTION_ENABLED,
+    LIVE_TRADING_ACTIVATION_APPROVED: process.env.LIVE_TRADING_ACTIVATION_APPROVED,
+    REAL_ORDER_ENABLED: process.env.REAL_ORDER_ENABLED,
+    PRIVATE_TRADING_API_ALLOWED: process.env.PRIVATE_TRADING_API_ALLOWED,
+    UPBIT_LIVE_ORDER_ENABLED: process.env.UPBIT_LIVE_ORDER_ENABLED,
+    TRADING_CREDENTIAL_MASTER_KEY: process.env.TRADING_CREDENTIAL_MASTER_KEY,
+    LIVE_TRADING: process.env.LIVE_TRADING,
+    executionAuthority: process.env.executionAuthority,
+  };
+  const nativeFetch = globalThis.fetch;
+  try {
+    process.env.ORDER_EXECUTION_ENABLED = 'true';
+    process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+    process.env.REAL_ORDER_ENABLED = 'true';
+    process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
+    process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+    process.env.LIVE_TRADING = 'false';
+    process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
+    enableSpotLiveTestEnvironment();
+
+    const repository = new InMemoryTradingRepository();
+    const automation = new TradeAutomationService(repository);
+    const approvalPolicy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+    const created = await automation.createPlan(
+      USER_A,
+      plan({ signalId: 'final-canonical-live-flag-recheck' }),
+      approvalPolicy,
+      false,
+    );
+    const approved = await automation.approvePlan(USER_A, created.plan!.id);
+    const order = (await automation.createOrder(USER_A, approved)).order;
+    const livePlan = { ...approved, accountMode: 'live' as const };
+    await repository.savePlan(livePlan);
+    await repository.saveConnection({
+      userId: USER_A,
+      exchange: 'upbit',
+      accountMode: 'live',
+      configured: true,
+      encryptedCredentials: encryptTradingCredentials({ accessKey: 'live-access', secretKey: 'live-secret' }, MASTER_KEY),
+      lastVerifiedAt: new Date().toISOString(),
+      lastErrorCode: null,
+      updatedAt: new Date().toISOString(),
+    });
+
+    let outbound = 0;
+    globalThis.fetch = (async () => {
+      outbound += 1;
+      throw new Error('PROVIDER_REQUEST_MUST_NOT_HAPPEN');
+    }) as typeof fetch;
+
+    const executed = await new TradeExecutionService(repository).execute(USER_A, livePlan, order);
+    assert.equal(executed.state, 'REJECTED');
+    assert.equal(executed.lastErrorCode, 'LIVE_TRADING_OFF');
+    assert.equal(outbound, 0);
+  } finally {
+    globalThis.fetch = nativeFetch;
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('provider submission rechecks canonical AUTO_TRADING and blocks automatic live before outbound request', async () => {
+  const previous = {
+    ...spotLiveEnvironmentSnapshot(),
+    ORDER_EXECUTION_ENABLED: process.env.ORDER_EXECUTION_ENABLED,
+    LIVE_TRADING_ACTIVATION_APPROVED: process.env.LIVE_TRADING_ACTIVATION_APPROVED,
+    REAL_ORDER_ENABLED: process.env.REAL_ORDER_ENABLED,
+    PRIVATE_TRADING_API_ALLOWED: process.env.PRIVATE_TRADING_API_ALLOWED,
+    UPBIT_LIVE_ORDER_ENABLED: process.env.UPBIT_LIVE_ORDER_ENABLED,
+    LIVE_AUTOMATIC_TRADING_ENABLED: process.env.LIVE_AUTOMATIC_TRADING_ENABLED,
+    TRADING_CREDENTIAL_MASTER_KEY: process.env.TRADING_CREDENTIAL_MASTER_KEY,
+    LIVE_TRADING: process.env.LIVE_TRADING,
+    AUTO_TRADING: process.env.AUTO_TRADING,
+    executionAuthority: process.env.executionAuthority,
+  };
+  const nativeFetch = globalThis.fetch;
+  try {
+    process.env.ORDER_EXECUTION_ENABLED = 'true';
+    process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+    process.env.REAL_ORDER_ENABLED = 'true';
+    process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
+    process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+    process.env.LIVE_TRADING = 'true';
+    process.env.AUTO_TRADING = 'false';
+    process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'true';
+    process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
+    enableSpotLiveTestEnvironment();
+
+    const repository = new InMemoryTradingRepository();
+    const automation = new TradeAutomationService(repository);
+    const approvalPolicy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+    const created = await automation.createPlan(
+      USER_A,
+      plan({ signalId: 'final-canonical-auto-flag-recheck' }),
+      approvalPolicy,
+      false,
+    );
+    const approved = await automation.approvePlan(USER_A, created.plan!.id);
+    const order = (await automation.createOrder(USER_A, approved)).order;
+    const livePlan = { ...approved, accountMode: 'live' as const };
+    await repository.savePlan(livePlan);
+    await repository.saveConnection({
+      userId: USER_A,
+      exchange: 'upbit',
+      accountMode: 'live',
+      configured: true,
+      encryptedCredentials: encryptTradingCredentials({ accessKey: 'live-access', secretKey: 'live-secret' }, MASTER_KEY),
+      lastVerifiedAt: new Date().toISOString(),
+      lastErrorCode: null,
+      updatedAt: new Date().toISOString(),
+    });
+    await repository.savePolicy(USER_A, normalizeTradingPolicy({
+      ...DEFAULT_TRADING_POLICY,
+      mode: 'automatic',
+      automaticEnabled: true,
+      marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: false },
+      exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
+      enabledAssets: { bitget: [], upbit: ['BTC'], kiwoom: [], toss: [] },
+      enabledStrategies: ['breakout-v1'],
+    }));
+
+    let outbound = 0;
+    globalThis.fetch = (async () => {
+      outbound += 1;
+      throw new Error('PROVIDER_REQUEST_MUST_NOT_HAPPEN');
+    }) as typeof fetch;
+
+    const executed = await new TradeExecutionService(repository).execute(USER_A, livePlan, order);
+    assert.equal(executed.state, 'REJECTED');
+    assert.equal(executed.lastErrorCode, 'LIVE_EXECUTION_DISABLED');
+    assert.equal(outbound, 0);
+  } finally {
+    globalThis.fetch = nativeFetch;
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('provider submission rechecks automatic live authority and blocks before outbound request', async () => {
+  const previous = {
+    ...spotLiveEnvironmentSnapshot(),
+    ORDER_EXECUTION_ENABLED: process.env.ORDER_EXECUTION_ENABLED,
+    LIVE_TRADING_ACTIVATION_APPROVED: process.env.LIVE_TRADING_ACTIVATION_APPROVED,
+    REAL_ORDER_ENABLED: process.env.REAL_ORDER_ENABLED,
+    PRIVATE_TRADING_API_ALLOWED: process.env.PRIVATE_TRADING_API_ALLOWED,
+    UPBIT_LIVE_ORDER_ENABLED: process.env.UPBIT_LIVE_ORDER_ENABLED,
+    LIVE_AUTOMATIC_TRADING_ENABLED: process.env.LIVE_AUTOMATIC_TRADING_ENABLED,
+    TRADING_CREDENTIAL_MASTER_KEY: process.env.TRADING_CREDENTIAL_MASTER_KEY,
+    LIVE_TRADING: process.env.LIVE_TRADING,
+    AUTO_TRADING: process.env.AUTO_TRADING,
+    executionAuthority: process.env.executionAuthority,
+  };
+  const nativeFetch = globalThis.fetch;
+  try {
+    process.env.ORDER_EXECUTION_ENABLED = 'true';
+    process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+    process.env.REAL_ORDER_ENABLED = 'true';
+    process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
+    process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+    process.env.LIVE_TRADING = 'true';
+    process.env.AUTO_TRADING = 'true';
+    process.env.LIVE_AUTOMATIC_TRADING_ENABLED = 'false';
+    process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
+    enableSpotLiveTestEnvironment();
+
+    const repository = new InMemoryTradingRepository();
+    const automation = new TradeAutomationService(repository);
+    const approvalPolicy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+    const created = await automation.createPlan(
+      USER_A,
+      plan({ signalId: 'final-auto-live-recheck-fixture' }),
+      approvalPolicy,
+      false,
+    );
+    const approved = await automation.approvePlan(USER_A, created.plan!.id);
+    const order = (await automation.createOrder(USER_A, approved)).order;
+    const livePlan = { ...approved, accountMode: 'live' as const };
+    await repository.savePlan(livePlan);
+    await repository.saveConnection({
+      userId: USER_A,
+      exchange: 'upbit',
+      accountMode: 'live',
+      configured: true,
+      encryptedCredentials: encryptTradingCredentials({ accessKey: 'live-access', secretKey: 'live-secret' }, MASTER_KEY),
+      lastVerifiedAt: new Date().toISOString(),
+      lastErrorCode: null,
+      updatedAt: new Date().toISOString(),
+    });
+    await repository.savePolicy(USER_A, normalizeTradingPolicy({
+      ...DEFAULT_TRADING_POLICY,
+      mode: 'automatic',
+      automaticEnabled: true,
+      marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: false },
+      exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
+      enabledAssets: { bitget: [], upbit: ['BTC'], kiwoom: [], toss: [] },
+      enabledStrategies: ['breakout-v1'],
+    }));
+
+    let outbound = 0;
+    globalThis.fetch = (async () => {
+      outbound += 1;
+      throw new Error('PROVIDER_REQUEST_MUST_NOT_HAPPEN');
+    }) as typeof fetch;
+
+    const executed = await new TradeExecutionService(repository).execute(USER_A, livePlan, order);
+    assert.equal(executed.state, 'REJECTED');
+    assert.equal(executed.lastErrorCode, 'LIVE_EXECUTION_DISABLED');
+    assert.equal(outbound, 0);
+  } finally {
+    globalThis.fetch = nativeFetch;
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('live connection verification authenticates the three spot providers with zero order mutation', async () => {
+  const previous = {
+    ...spotLiveEnvironmentSnapshot(),
+    TRADING_CREDENTIAL_MASTER_KEY: process.env.TRADING_CREDENTIAL_MASTER_KEY,
+    ORDER_EXECUTION_ENABLED: process.env.ORDER_EXECUTION_ENABLED,
+    LIVE_TRADING_ACTIVATION_APPROVED: process.env.LIVE_TRADING_ACTIVATION_APPROVED,
+    REAL_ORDER_ENABLED: process.env.REAL_ORDER_ENABLED,
+    PRIVATE_TRADING_API_ALLOWED: process.env.PRIVATE_TRADING_API_ALLOWED,
+    UPBIT_LIVE_ORDER_ENABLED: process.env.UPBIT_LIVE_ORDER_ENABLED,
+    KIWOOM_LIVE_ORDER_ENABLED: process.env.KIWOOM_LIVE_ORDER_ENABLED,
+    TOSS_LIVE_ORDER_ENABLED: process.env.TOSS_LIVE_ORDER_ENABLED,
+    LIVE_TRADING: process.env.LIVE_TRADING,
+    executionAuthority: process.env.executionAuthority,
+  };
+  process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
+  process.env.ORDER_EXECUTION_ENABLED = 'true';
+  process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+  process.env.REAL_ORDER_ENABLED = 'true';
+  process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
+  process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+  process.env.KIWOOM_LIVE_ORDER_ENABLED = 'true';
+  process.env.TOSS_LIVE_ORDER_ENABLED = 'true';
+  process.env.LIVE_TRADING = 'true';
+  enableSpotLiveTestEnvironment();
+  const nativeFetch = globalThis.fetch;
+  const financialMutations: string[] = [];
+  const seen: string[] = [];
+  try {
+    const providers = [
+      { exchange: 'upbit', credentials: { accessKey: 'upbit-access', secretKey: 'upbit-secret' } },
+      { exchange: 'kiwoom', credentials: { appKey: 'kiwoom-key', secretKey: 'kiwoom-secret' } },
+      { exchange: 'toss', credentials: { clientId: 'toss-client', clientSecret: 'toss-secret', accountSeq: 'account-1' } },
+    ] as const;
+
+    const repository = new InMemoryTradingRepository();
+    for (const row of providers) {
+      await repository.saveConnection({
+        userId: USER_A,
+        exchange: row.exchange,
+        accountMode: 'live',
+        configured: true,
+        encryptedCredentials: encryptTradingCredentials(row.credentials, MASTER_KEY),
+        lastVerifiedAt: null,
+        lastErrorCode: 'LIVE_EXECUTION_NOT_VERIFIED',
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      const method = String(init?.method ?? 'GET').toUpperCase();
+      seen.push(`${method} ${url}`);
+      if (
+        (url.includes('api.upbit.com/v1/orders') && method !== 'GET')
+        || url.includes('api.bitget.com/api/v2/mix/order/place-order')
+        || url.includes('api.kiwoom.com/api/dostk/ordr')
+        || url.includes('api.kiwoom.com/api/us/ordr')
+        || (url.includes('openapi.tossinvest.com/api/v1/orders') && method !== 'GET')
+      ) {
+        financialMutations.push(`${method} ${url}`);
+        throw new Error('TEST_FINANCIAL_MUTATION_FORBIDDEN');
+      }
+      if (url.includes('api.upbit.com/v1/accounts')) {
+        return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (url.includes('api.bitget.com/api/v2/mix/account/accounts')
+        || url.includes('api.bitget.com/api/v2/mix/position/all-position')) {
+        return new Response(JSON.stringify({ code: '00000', data: [] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.includes('api.kiwoom.com/oauth2/token')) {
+        return new Response(JSON.stringify({ return_code: 0, token: 'kiwoom-token' }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.includes('api.kiwoom.com/api/dostk/acnt')) {
+        return new Response(JSON.stringify({ return_code: 0 }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.includes('openapi.tossinvest.com/oauth2/token')) {
+        return new Response(JSON.stringify({ access_token: 'toss-token' }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.includes('openapi.tossinvest.com/api/v1/accounts')) {
+        return new Response(JSON.stringify({ result: [] }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.includes('openapi.tossinvest.com/api/v1/buying-power')) {
+        return new Response(JSON.stringify({ result: { buyingPower: '0' } }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      throw new Error(`UNEXPECTED_VERIFICATION_REQUEST:${method}:${url}`);
+    }) as typeof fetch;
+
+    const execution = new TradeExecutionService(repository);
+    for (const row of providers) {
+      const result = await execution.verifyLiveConnection(USER_A, row.exchange);
+      assert.equal(result.verified, true, row.exchange);
+      assert.equal(result.orderRequests, 0, row.exchange);
+      assert.equal(result.cancelRequests, 0, row.exchange);
+      assert.equal(result.amendRequests, 0, row.exchange);
+      assert.equal(result.transferRequests, 0, row.exchange);
+      assert.equal(result.withdrawalRequests, 0, row.exchange);
+      assert.equal(result.realOrderSubmitted, false, row.exchange);
+      const connection = await repository.getConnection(USER_A, row.exchange);
+      assert.ok(connection?.lastVerifiedAt, row.exchange);
+      assert.equal(connection?.lastErrorCode, null, row.exchange);
+    }
+    assert.deepEqual(financialMutations, []);
+    assert.ok(seen.length >= 6);
+  } finally {
+    globalThis.fetch = nativeFetch;
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
 
 test('paper execution has zero outbound calls and restart scan marks an accepted order for reconciliation', async () => {

@@ -3,6 +3,8 @@ import test from 'node:test';
 
 import {
   fanoutMemberHoldingScannerAlert,
+  memberHoldingProfileEligibleForPersonalTelegram,
+  memberHoldingsNewsIntelligenceEnabled,
   memberHoldingsTelegramProducerEnabled,
   type MemberHoldingProducerRepository,
   type MemberHoldingStockHolder,
@@ -61,6 +63,9 @@ test('member holdings producer is true-token opt-in and otherwise stays disabled
   assert.equal(memberHoldingsTelegramProducerEnabled('false'), false);
   assert.equal(memberHoldingsTelegramProducerEnabled('1'), false);
   assert.equal(memberHoldingsTelegramProducerEnabled('TRUE'), true);
+  assert.equal(memberHoldingsNewsIntelligenceEnabled(undefined), false);
+  assert.equal(memberHoldingsNewsIntelligenceEnabled('false'), false);
+  assert.equal(memberHoldingsNewsIntelligenceEnabled('TRUE'), true);
 
   let reads = 0;
   const result = await fanoutMemberHoldingScannerAlert(stockAlert(), {
@@ -79,6 +84,33 @@ test('member holdings producer is true-token opt-in and otherwise stays disabled
   });
 });
 
+test('holdings Telegram eligibility reuses the canonical #804 member capability contract', () => {
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'approved', membership_level: 'associate', is_active: true,
+  }), true);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'approved', membership_level: 'regular', is_active: true,
+  }), true);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'approved', membership_level: 'admin', is_active: true,
+  }), true);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'approved', membership_level: null, role: 'full', is_active: true,
+  }), true);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'approved', membership_level: 'pending', role: 'admin', is_active: true,
+  }), false);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'approved', membership_level: 'regular', is_active: false,
+  }), false);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'suspended', membership_level: 'regular', is_active: true,
+  }), false);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'rejected', membership_level: 'admin', role: 'admin', is_active: true,
+  }), false);
+});
+
 test('canonical stock holder fanout uses one public quote and never fabricates AI evidence', async () => {
   let quoteReads = 0;
   const captured: MemberHoldingTelegramEvidence[] = [];
@@ -89,6 +121,21 @@ test('canonical stock holder fanout uses one public quote and never fabricates A
       quoteReads += 1;
       assert.equal(symbol, '005930');
       return { price: 82_000, changePercent: 1.25 };
+    },
+    newsEnabled: true,
+    newsReader: async (symbol, market, companyName) => {
+      assert.equal(symbol, '005930');
+      assert.equal(market, 'KR');
+      assert.equal(companyName, '삼성전자');
+      return [{
+        kind: 'DISCLOSURE',
+        title: '신규 공급계약 공시',
+        source: 'DART',
+        url: 'https://dart.example.test/report/1',
+        publishedAt: '2026-08-25T05:30:00.000Z',
+        impact: 'POSITIVE',
+        impactReason: '공식 공급계약 공시이며 세부 계약 조건은 원문 확인이 필요합니다.',
+      }];
     },
     now: () => new Date('2026-08-25T06:00:00.000Z'),
     deliver: async (evidence) => {
@@ -116,7 +163,10 @@ test('canonical stock holder fanout uses one public quote and never fabricates A
     assert.equal(evidence.tradePlan?.entryPrices, undefined);
     assert.equal(evidence.ai, undefined);
     assert.equal(evidence.performance, undefined);
-    assert.equal(evidence.news, undefined);
+    assert.equal(evidence.news?.length, 1);
+    assert.equal(evidence.news?.[0].kind, 'DISCLOSURE');
+    assert.equal(evidence.news?.[0].source, 'DART');
+    assert.match(evidence.news?.[0].impactReason ?? '', /공급계약/);
     assert.equal('quantity' in evidence, false);
     assert.match(evidence.eventId, /^scanner-holding:/u);
   }

@@ -50,15 +50,38 @@ test.describe('Production Research Center read-only QA', () => {
 
     await page.goto('/research-center', { waitUntil: 'domcontentloaded', timeout: 15_000 });
     await expect(page).toHaveURL(/\/research-center(?:$|[?#])/i, { timeout: 5_000 });
-    await expect(page.getByTestId('research-center-page')).toBeVisible({ timeout: 12_000 });
+
+    const researchWorkspace = page.getByTestId('research-center-workspace');
+    const capabilityDenied = page.getByTestId('capability-denied');
+    await expect.poll(async () => (
+      await researchWorkspace.isVisible({ timeout: 250 }).catch(() => false)
+      || await capabilityDenied.isVisible({ timeout: 250 }).catch(() => false)
+    ), { timeout: 12_000, intervals: [100, 200, 400, 800] }).toBe(true);
+
+    if (!await researchWorkspace.isVisible({ timeout: 250 }).catch(() => false)) {
+      await expect(capabilityDenied).toBeVisible();
+      await expect(capabilityDenied).toContainText('회원 관리');
+      await expect(researchWorkspace).toHaveCount(0);
+      test.info().annotations.push({
+        type: 'coverage',
+        description: 'ADMIN_RESEARCH_CENTER_NOT_EVALUATED: Production QA credential lacks canManageMembers',
+      });
+      expect(blocked, 'Research Center denial QA attempted a blocked mutation').toEqual([]);
+      expect(runtimeFailures, 'Research Center denial browser/runtime failures detected').toEqual([]);
+      return;
+    }
+
+    await expect(researchWorkspace).toBeVisible();
+    await expect(page.getByTestId('research-general-view')).toBeVisible({ timeout: 12_000 });
+    await expect(page.getByTestId('research-workspace-selection')).toContainText('현재 · 요약');
     await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 5_000 });
 
-    const pending = page.getByText('연구 상태를 불러오는 중입니다.', { exact: true });
+    const pending = page.getByRole('region', { name: '연구 상태 확인 중' });
     if (await pending.isVisible({ timeout: 500 }).catch(() => false)) {
       await expect(pending).toBeHidden({ timeout: 8_000 });
     }
 
-    const surface = page.getByTestId('research-center-page');
+    const surface = page.getByTestId('research-general-view').locator('main');
     const metrics = await surface.evaluate((main) => {
       const element = main as HTMLElement;
       const rootOverflow = Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth ?? 0) - window.innerWidth;
@@ -75,10 +98,17 @@ test.describe('Production Research Center read-only QA', () => {
       };
     });
 
+    await expect(page.getByRole('heading', { name: '현재 어디까지 왔나요?', exact: true })).toBeVisible();
+    await expect(page.getByTestId('research-workspace-tabs').getByRole('button')).toHaveCount(4);
+    await expect(page.getByRole('button', { name: '연구 상태 새로고침' })).toBeVisible();
+
+    await page.getByRole('button', { name: '상세', exact: true }).click();
+    await expect(page.getByRole('button', { name: '상세', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('research-center-page')).toBeVisible();
     await expect(page.getByRole('heading', { name: '연구센터', exact: true })).toBeVisible();
-    await expect(page.getByText('관리자 전용', { exact: true })).toBeVisible();
-    await expect(page.getByText('조회 전용', { exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: '연구센터 새로고침' })).toBeVisible();
+    await expect(page.getByText('READ ONLY', { exact: true })).toBeVisible();
+    await expect(page.getByRole('tab')).toHaveCount(4);
+    await expect(page.getByRole('tab').allTextContents()).resolves.toEqual(['연구 현황', 'AI 분석실', '검증 리포트', '모의매매']);
 
     expect(metrics.horizontalOverflowPx, 'Research Center horizontal overflow').toBeLessThanOrEqual(2);
     expect(metrics.moved, 'Research Center scroll container could not move').toBe(true);

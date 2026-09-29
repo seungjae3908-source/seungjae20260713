@@ -227,6 +227,32 @@ test('scalping 3m request reaches scanner with explicit separated strategy', asy
   assert.equal(capturedTimeframe, '3m');
 });
 
+test('US swing 4H canonical mobile request reaches scanner instead of returning HTTP 400', async () => {
+  let capturedMarket = '';
+  let capturedStrategy = '';
+  let capturedTimeframe = '';
+  await withServer(
+    {
+      scan: async (request) => {
+        capturedMarket = request.market;
+        capturedStrategy = request.strategyMode ?? '';
+        capturedTimeframe = String(request.filters.timeframe ?? '');
+        return completeResult({ market: 'US', timeframe: '4H' });
+      },
+    },
+    async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/market/scan?market=US&strategy=swing&timeframe=4H`);
+      assert.equal(response.status, 200);
+      const body = await response.json() as ScanResponseBody;
+      assert.equal(body.ok, true);
+      assert.equal(body.error, undefined);
+    },
+  );
+  assert.equal(capturedMarket, 'US');
+  assert.equal(capturedStrategy, 'swing');
+  assert.equal(capturedTimeframe, '4H');
+});
+
 test('some item timeouts return explicit partial HTTP 200', async () => {
   await withServer(
     {
@@ -262,7 +288,10 @@ test('some item timeouts return explicit partial HTTP 200', async () => {
 test('route deadline returns explicit unavailable partial HTTP 200 and aborts scanner work', async () => {
   let scannerAborted = false;
   const scanner: StockScannerRunner = {
-    scan: async (request) => await new Promise<ScannerResponse>((_resolve, reject) => {
+    // Return the promise directly so an abort rejection can win Promise.race
+    // before the route-deadline rejection. The route must still emit its
+    // bounded HTTP 200 fallback instead of leaving the browser hanging.
+    scan: (request) => new Promise<ScannerResponse>((_resolve, reject) => {
       const onAbort = () => {
         scannerAborted = true;
         reject(request.signal?.reason ?? new Error('aborted'));
@@ -340,7 +369,7 @@ test('scanner smoke path sends zero order-capable requests', async () => {
   await withServer(
     { scan: async () => completeResult({ market: 'US' }) },
     async (baseUrl) => {
-      const url = `${baseUrl}/api/market/scan?market=US&strategy=swing&timeframe=1D`;
+      const url = `${baseUrl}/api/market/scan?market=US&strategy=position&timeframe=1D`;
       requestedPaths.push(new URL(url).pathname);
       const response = await fetch(url);
       assert.equal(response.status, 200);

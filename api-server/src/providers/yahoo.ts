@@ -14,6 +14,7 @@ type YahooChartResult = {
     symbol?: string;
     currency?: string;
     regularMarketPrice?: number;
+    regularMarketTime?: number;
     previousClose?: number;
     chartPreviousClose?: number;
   };
@@ -188,6 +189,25 @@ function lastValidIndex(values: Array<number | null | undefined>) {
   return -1;
 }
 
+function yahooProviderTimestamp(result: YahooChartResult, index: number): string {
+  const regularMarketTime = safeNumber(result.meta?.regularMarketTime, Number.NaN);
+  const candleTime = safeNumber(result.timestamp?.[index], Number.NaN);
+  const providerSeconds = Number.isFinite(regularMarketTime) && regularMarketTime > 0
+    ? regularMarketTime
+    : candleTime;
+  const providerMs = providerSeconds * 1000;
+
+  if (
+    !Number.isFinite(providerMs)
+    || providerMs <= 0
+    || providerMs > Date.now() + 5 * 60 * 1000
+  ) {
+    throw new Error('YAHOO_PROVIDER_TIMESTAMP_INVALID');
+  }
+
+  return new Date(providerMs).toISOString();
+}
+
 function normalizeYahooCandles(result: YahooChartResult): Candle[] {
   const quote = result.indicators?.quote?.[0];
   if (!result.timestamp?.length || !quote) return [];
@@ -330,7 +350,7 @@ export async function getQuote(
     open: safeNumber(quote.open?.[index]),
     high: safeNumber(quote.high?.[index]),
     low: safeNumber(quote.low?.[index]),
-    updatedAt: new Date().toISOString(),
+    updatedAt: yahooProviderTimestamp(result, index),
   } as Partial<Quote>;
 }
 
@@ -425,7 +445,7 @@ export async function getIndexQuote(symbol: string): Promise<YahooIndexQuote> {
     spark: quote.close
       .map((value) => safeNumber(value))
       .filter((value) => value > 0),
-    updatedAt: new Date().toISOString(),
+    updatedAt: yahooProviderTimestamp(result, index),
   };
 }
 

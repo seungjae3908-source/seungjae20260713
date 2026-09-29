@@ -19,6 +19,7 @@ const POSTGRES_URI_PATTERN = /^postgres(?:ql)?:\/\//i;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const expectedActiveSha = String(process.env.EXPECTED_ACTIVE_SHA ?? '').trim().toLowerCase();
 const approvedTargetSha = String(process.env.APPROVED_TARGET_SHA ?? '').trim().toLowerCase();
+const transientProductionDatabaseUrl = String(process.env.PROD_DATABASE_URL ?? '').trim();
 
 function fail(classification) {
   console.error(`[production-personal-telegram-storage] ${classification}`);
@@ -118,8 +119,8 @@ function productionDatabaseTarget(raw, projectRef) {
   };
 }
 
-function resolveProductionPostgresConnection(runtime, projectRef) {
-  const values = Object.values(runtime)
+function resolveProductionPostgresConnection(runtime, projectRef, transientDatabaseUrl) {
+  const values = [transientDatabaseUrl, ...Object.values(runtime)]
     .filter((value) => typeof value === 'string')
     .map((value) => value.trim())
     .filter((value) => POSTGRES_URI_PATTERN.test(value));
@@ -183,11 +184,15 @@ try {
 } catch {
   fail('production_project_mismatch');
 }
-const database = resolveProductionPostgresConnection(runtime, projectRef);
+const database = resolveProductionPostgresConnection(runtime, projectRef, transientProductionDatabaseUrl);
 
 const migrationPaths = [
   'api-server/supabase/migrations/2026081501_personal_telegram_storage.sql',
   'api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql',
+  'api-server/supabase/migrations/2026082701_personal_telegram_generic_outbox.sql',
+  'api-server/supabase/migrations/2026082702_telegram_signal_followup_ledger.sql',
+  'api-server/supabase/migrations/2026082703_personal_telegram_digest_outbox.sql',
+  'api-server/supabase/migrations/2026092503_telegram_signal_message_edit_state.sql',
 ];
 let migrationBodies;
 try {
@@ -205,6 +210,7 @@ declare
   target_table text;
   expected_policy text;
   missing_column_count integer;
+  event_id_nullable text;
 begin
   if to_regclass('public.notification_preferences') is null then
     raise exception 'canonical notification preferences table is missing';
@@ -263,6 +269,78 @@ begin
       raise exception 'service role lacks personal Telegram storage access';
     end if;
   end loop;
+
+  select count(*) into missing_column_count
+  from unnest(array['delivery_kind', 'payload']) as required(column_name)
+  where not exists (
+    select 1 from information_schema.columns candidate
+    where candidate.table_schema = 'public'
+      and candidate.table_name = 'notification_deliveries'
+      and candidate.column_name = required.column_name
+  );
+  if missing_column_count <> 0 then
+    raise exception 'durable personal Telegram outbox columns are missing';
+  end if;
+
+  select is_nullable into event_id_nullable
+  from information_schema.columns
+  where table_schema = 'public'
+    and table_name = 'notification_deliveries'
+    and column_name = 'event_id';
+  if event_id_nullable is distinct from 'YES' then
+    raise exception 'notification delivery event_id must permit personal alert payloads';
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.notification_deliveries'::regclass
+      and conname = 'notification_deliveries_kind_check'
+  ) or not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.notification_deliveries'::regclass
+      and conname = 'notification_deliveries_payload_contract_check'
+  ) then
+    raise exception 'durable personal Telegram outbox constraints are missing';
+  end if;
+
+  if to_regclass('public.telegram_signal_followup_ledger') is null then
+    raise exception 'Telegram signal followup ledger is missing';
+  end if;
+  if not (select relrowsecurity from pg_class where oid = 'public.telegram_signal_followup_ledger'::regclass) then
+    raise exception 'Telegram signal followup ledger RLS is not enabled';
+  end if;
+  if exists (
+    select 1 from information_schema.table_privileges privilege
+    where privilege.table_schema = 'public'
+      and privilege.table_name = 'telegram_signal_followup_ledger'
+      and privilege.grantee in ('PUBLIC', 'anon', 'authenticated')
+  ) then
+    raise exception 'Telegram signal followup ledger is exposed to an API role';
+  end if;
+  if not (
+    has_table_privilege('service_role', 'public.telegram_signal_followup_ledger', 'SELECT')
+    and has_table_privilege('service_role', 'public.telegram_signal_followup_ledger', 'INSERT')
+    and has_table_privilege('service_role', 'public.telegram_signal_followup_ledger', 'UPDATE')
+    and has_table_privilege('service_role', 'public.telegram_signal_followup_ledger', 'DELETE')
+  ) then
+    raise exception 'service role lacks Telegram signal followup ledger access';
+  end if;
+
+  select count(*) into missing_column_count
+  from unnest(array['telegram_message_id', 'telegram_message_kind', 'base_message_text']) as required(column_name)
+  where not exists (
+    select 1 from information_schema.columns candidate
+    where candidate.table_schema = 'public'
+      and candidate.table_name = 'telegram_signal_followup_ledger'
+      and candidate.column_name = required.column_name
+  );
+  if missing_column_count <> 0 then
+    raise exception 'Telegram edit-in-place columns are missing';
+  end if;
+
+  if to_regprocedure('public.append_personal_telegram_digest_item(uuid,uuid,text,timestamptz,jsonb,text,timestamptz)') is null then
+    raise exception 'personal Telegram digest append function is missing';
+  end if;
 end
 $production_personal_telegram_storage_verify$;
 
@@ -272,8 +350,12 @@ select json_build_object(
   'approved_target_sha', current_setting('app.approved_target_sha'),
   'production_project_match', true,
   'atomic_transaction', true,
-  'migrations_applied', 2,
-  'tables_verified', 4,
+  'migrations_applied', 6,
+  'tables_verified', 5,
+  'generic_outbox_verified', true,
+  'signal_followup_verified', true,
+  'message_edit_state_verified', true,
+  'digest_outbox_verified', true,
   'canonical_preferences_verified', true,
   'api_roles_revoked', true,
   'policies_fail_closed', true,
@@ -301,6 +383,7 @@ const sql = [
 
 const baseEnv = { ...process.env };
 for (const key of Object.keys(baseEnv)) if (key.startsWith('PG')) delete baseEnv[key];
+delete baseEnv.PROD_DATABASE_URL;
 const result = spawnSync('psql', [
   '-X',
   '--no-psqlrc',
@@ -338,7 +421,12 @@ if (artifact?.status !== 'passed'
   || artifact?.approved_target_sha !== approvedTargetSha
   || artifact?.production_project_match !== true
   || artifact?.atomic_transaction !== true
-  || artifact?.tables_verified !== 4
+  || artifact?.migrations_applied !== 6
+  || artifact?.tables_verified !== 5
+  || artifact?.generic_outbox_verified !== true
+  || artifact?.signal_followup_verified !== true
+  || artifact?.message_edit_state_verified !== true
+  || artifact?.digest_outbox_verified !== true
   || artifact?.policies_fail_closed !== true
   || artifact?.database_changed !== true
   || artifact?.credentials_recorded !== false

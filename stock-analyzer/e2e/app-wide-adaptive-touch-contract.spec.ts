@@ -17,13 +17,17 @@ test('shared structural layouts use the 1200px desktop contract', async () => {
   expect(technical).toContain('ADAPTIVE_VIEWPORT_BREAKPOINTS.desktopMin');
   expect(tabs).toContain('min-[1200px]:grid');
   expect(tabs).not.toContain('lg:grid lg:overflow-visible');
-  expect(autoTrading).toContain('min-[1200px]:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]');
-  expect(autoTrading).not.toContain('lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]');
+  expect(autoTrading).toContain('mx-auto w-full max-w-6xl space-y-3');
+  expect(autoTrading).toContain('grid grid-cols-2 gap-2 sm:grid-cols-4');
+  expect(autoTrading).not.toContain('min-[1200px]:grid-cols-[minmax(0,1.05fr)_minmax(380px,0.95fr)]');
 });
 
-test('alert filters preserve the app-wide 44px touch target contract', async () => {
+test('alert filters preserve the app-wide 44px touch target and 12px minimum caption contract', async () => {
   const alerts = await source('src/pages/alerts.tsx');
 
-  expect(alerts).toContain("compact ? 'flex min-h-11 gap-0.5 px-1 text-[11px]' : 'flex min-h-11 gap-1 px-2 text-xs sm:text-sm'");
+  expect(alerts).toContain("'flex min-h-11 min-w-0 items-center justify-center rounded-xl border font-semibold transition-colors'");
+  expect(alerts).toContain("compact ? 'gap-0.5 px-1 text-xs' : 'gap-1 px-2 text-sm'");
+  expect(alerts).not.toContain('text-[11px]');
+  expect(alerts).not.toContain('text-[10px]');
   expect(alerts).not.toContain('min-h-10');
 });

@@ -1,4 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { buildChartAnalysis, type ChartAnalysisInput } from '../src/lib/chart-analysis';
 import {
   aggregateMultiTimeframe,
   buildTechnicalTimeframeEvidence,
@@ -156,6 +157,42 @@ test('AI Chart 2.0 domain helpers preserve lifecycle, price-plan gaps, and highe
   expect(aggregate.conflictTimeframes).toEqual(['4H']);
 });
 
+test('AI Chart analysis requires complete identity and provenance before confirmation', () => {
+  const baseInput: ChartAnalysisInput = {
+    symbol: 'BTCUSDT',
+    market: 'BITGET',
+    timeframe: '15m',
+    latestTime: 1_790_254_800,
+    currentPrice: 100,
+    previousClose: 99,
+    trend: '상승',
+    rsi: 58,
+    macd: 1.2,
+    volumeRatio: 1.4,
+    support: 95,
+    resistance: 105,
+    signal: 'ENTER',
+    confidence: 90,
+    title: 'BTC 구조 분석',
+    summary: '완료봉 기준 구조 분석',
+    patterns: [],
+    source: 'ai-chart-v2',
+    isClosedCandle: true,
+    dataStatus: 'ok',
+  };
+
+  expect(buildChartAnalysis(baseInput).status).toBe('confirmed');
+  for (const field of ['symbol', 'market', 'timeframe', 'source'] as const) {
+    for (const missing of ['', '   ']) {
+      const result = buildChartAnalysis({ ...baseInput, [field]: missing });
+      expect(result.status).toBe('expired');
+      expect(result.confirmedAt).toBeUndefined();
+      expect(result.expiredAt).toBe(result.detectedAt);
+      expect(result.reasons).toContain('분석 식별자/출처: unavailable');
+    }
+  }
+});
+
 test('desktop AI Chart 2.0 preserves one initial chart request, loads MTF on demand, and stays read-only', async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   const mock = await installMocks(context);
@@ -187,10 +224,11 @@ test('desktop AI Chart 2.0 preserves one initial chart request, loads MTF on dem
   await expect.poll(() => mock.calls.size).toBeGreaterThanOrEqual(4);
 
   await expect(page.getByTestId('ai-evidence-panel')).toBeVisible();
-  await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('ENTRY 3');
-  await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('UNAVAILABLE');
-  await expect(page.getByTestId('ai-chart-data-provenance')).toContainText('Historical Performance');
-  await expect(page.getByTestId('ai-chart-data-provenance')).toContainText('UNAVAILABLE');
+  await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('확인된 진입·손절·목표 가격이 없습니다.');
+  await expect(page.getByTestId('ai-chart-order-plan-preview')).toContainText('빈 계획을 0이나 임의 가격으로 채우지 않습니다.');
+  await expect(page.getByTestId('ai-chart-order-plan-preview')).not.toContainText('진입 3');
+  await expect(page.getByTestId('ai-chart-data-provenance')).toContainText('과거 성과 검증');
+  await expect(page.getByTestId('ai-chart-data-provenance')).toContainText('미검증');
 
   await page.getByRole('button', { name: '30분', exact: true }).click();
   await expect(page).toHaveURL(/timeframe=30m/);
