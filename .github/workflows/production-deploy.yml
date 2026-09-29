@@ -25,6 +25,8 @@ on:
       - .github/workflows/staging-readiness.yml
       - ops/deploy-production.sh
       - ops/production-verification-diagnostics.sh
+      - ops/production-trade-schema-readonly-audit.sh
+      - ops/verify-production-trade-schema-readonly-audit.mjs
       - ops/deploy-staging.sh
       - api-server/scripts/production-ci-provenance.cjs
       - api-server/scripts/verify-production-ci-provenance-contract.mjs
@@ -62,6 +64,7 @@ jobs:
           set -Eeuo pipefail
           bash -n ops/deploy-production.sh
           bash -n ops/production-verification-diagnostics.sh
+          bash -n ops/production-trade-schema-readonly-audit.sh
           bash -n ops/deploy-staging.sh
       - name: Verify Phase 10 deployment safety contract
         run: node api-server/scripts/verify-phase10-deployment-safety.mjs
@@ -71,6 +74,8 @@ jobs:
         run: node api-server/scripts/verify-production-data-plane-probe-contract.mjs
       - name: Verify Production post-switch verification contract
         run: node api-server/scripts/verify-production-verification-contract.mjs
+      - name: Verify Production trade schema read-only gate contract
+        run: node ops/verify-production-trade-schema-readonly-audit.mjs --static
 
   approval-gate:
     name: Validate immutable main revision, CI provenance, and exact staging verdict
@@ -250,6 +255,10 @@ jobs:
       PUBLIC_BASE_URL: https://lsj119.com
       REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          persist-credentials: false
       - name: Validate production secrets
         run: |
           set -Eeuo pipefail
@@ -267,6 +276,40 @@ jobs:
           else
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
           fi
+      - name: Require canonical Production trade schema before application mutation
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          audit_artifact="$(mktemp "$RUNNER_TEMP/production-trade-schema-audit.XXXXXX.json")"
+          audit_stderr="$(mktemp "$RUNNER_TEMP/production-trade-schema-audit.XXXXXX.stderr")"
+          cleanup() { rm -f "$audit_artifact" "$audit_stderr"; }
+          trap cleanup EXIT
+
+          set +e
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "PM2_NAME=stock-app bash -s" \
+            < ops/production-trade-schema-readonly-audit.sh \
+            > "$audit_artifact" 2> "$audit_stderr"
+          audit_status=$?
+          set -e
+
+          [[ -s "$audit_artifact" ]] || {
+            echo 'Production trade schema audit produced no sanitized evidence; remote stderr is intentionally not printed.' >&2
+            exit 1
+          }
+          node ops/verify-production-trade-schema-readonly-audit.mjs --artifact "$audit_artifact"
+          if (( audit_status != 0 )); then
+            node - "$audit_artifact" <<'NODE'
+          const fs = require('node:fs');
+          const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          console.error('Production trade schema gate blocked application deployment.');
+          console.error('code=' + String(value.code ?? 'UNKNOWN'));
+          console.error('missingTables=' + JSON.stringify(value.missingTables ?? []));
+          console.error('missingFunctions=' + JSON.stringify(value.missingFunctions ?? []));
+          NODE
+            exit "$audit_status"
+          fi
+
       - name: Deploy exact approved revision
         run: |
           set -Eeuo pipefail
