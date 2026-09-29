@@ -1,0 +1,74 @@
+name: Research Crypto TSMOM Reference V1
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/run-crypto-tsmom-reference-v1.mjs
+      - market-prediction-lab/src/binance-vision-futures-archive.js
+      - .github/workflows/research-crypto-tsmom-reference-v1.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-crypto-tsmom-reference-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Verify exact head and research-only boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          node --check market-prediction-lab/scripts/run-crypto-tsmom-reference-v1.mjs
+          ! grep -Eiq '/api/v1/orders|X-Tossinvest-Account|PRIVATE_TRADING_API_ALLOWED|REAL_ORDER_ENABLED|LIVE_TRADING|(^|[^A-Za-z])withdraw([^A-Za-z]|$)|(^|[^A-Za-z])transfer([^A-Za-z]|$)' market-prediction-lab/scripts/run-crypto-tsmom-reference-v1.mjs
+
+      - name: Self-test source recipe math
+        working-directory: market-prediction-lab
+        run: node scripts/run-crypto-tsmom-reference-v1.mjs --self-test
+
+      - name: Run public crypto TSMOM reference replay
+        working-directory: market-prediction-lab
+        run: node scripts/run-crypto-tsmom-reference-v1.mjs docs/crypto-tsmom-reference-v1.json
+
+      - name: Assert source fidelity, controls and safety
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('docs/crypto-tsmom-reference-v1.json','utf8'));
+          if(r.status!=='pass') throw new Error('STATUS');
+          if(r.sourceContract.recipeId!=='TIME_SERIES_MOMENTUM_V1') throw new Error('RECIPE_ID');
+          if(r.sourceContract.sourceVolatilityTargetAnnualized!==0.40||r.sourceContract.parameterSearch!==false||r.sourceContract.sourceScaledPositionCap!==null) throw new Error('SOURCE_RULE');
+          if(Math.abs(r.sourceContract.sourceVolatilityEstimator.ewmaLambda-(60/61))>1e-12||r.sourceContract.sourceVolatilityEstimator.centerOfMassDays!==60) throw new Error('VOL_ESTIMATOR');
+          if(r.controls.unscaledEqualWeightTsmom!==true||r.controls.scaledBuyAndHoldControl!==true||r.controls.unscaledBuyAndHoldControl!==true) throw new Error('CONTROLS');
+          if(r.transferBoundary.canonicalMopReplication!==false||r.transferBoundary.perpetualFundingIncluded!==true||r.transferBoundary.crossVenueProxy!==true) throw new Error('TRANSFER_TRUTH');
+          if(r.period.reserved2026ForLaterIndependentCheck!==true||r.period.outcomeSelectionUsesNoGrid!==true) throw new Error('HOLDOUT_TRUTH');
+          if(r.summary.all.sourceScaledNormal.months<48||r.summary.all.unscaledNormal.months<48) throw new Error('MONTH_COVERAGE');
+          if(r.decisionBoundary.winnerSelectionFromObservedWindows!==false||r.decisionBoundary.automaticPromotionAllowed!==false||r.decisionBoundary.economicSampleCredit!==0||r.decisionBoundary.profitabilityClaimAllowed!==false) throw new Error('PROMOTION_BOUNDARY');
+          if(r.safety.researchOnly!==true||r.safety.publicDataOnly!==true||r.safety.liveExecutionAllowed!==false||r.safety.privateAccountRequestAllowed!==false||r.safety.orderRouteCalled!==false||r.safety.executionAuthority!=='NONE'||r.safety.actualOrders!==0) throw new Error('SAFETY');
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crypto-tsmom-reference-v1-${{ github.event.pull_request.head.sha }}
+          path: market-prediction-lab/docs/crypto-tsmom-reference-v1.json
+          if-no-files-found: error
+          retention-days: 30
