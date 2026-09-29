@@ -178,6 +178,33 @@ function fullCostPositionReady(position: Record<string, any>, expectedMainSha: s
   ));
 }
 
+function fullCostPositionIdentity(position: Record<string, any>): string | null {
+  if (!nonEmpty(position?.positionId)
+    || !nonEmpty(position?.paperSampleId)
+    || !nonEmpty(position?.candidateId)) {
+    return null;
+  }
+  return `${position.positionId}|${position.paperSampleId}|${position.candidateId}`;
+}
+
+function countUniquePositionEvidence(
+  positions: readonly Record<string, any>[],
+  predicate: (position: Record<string, any>) => boolean,
+): number {
+  const identities = new Set<string>();
+  let anonymousCount = 0;
+  for (const position of positions) {
+    if (!predicate(position)) continue;
+    const identity = fullCostPositionIdentity(position);
+    if (identity) {
+      identities.add(identity);
+    } else {
+      anonymousCount += 1;
+    }
+  }
+  return identities.size + anonymousCount;
+}
+
 function ownerPacketPayload(packet: Record<string, any>) {
   return {
     schemaVersion: packet.schemaVersion,
@@ -499,15 +526,17 @@ export async function probeManualPaperCanonicalRuntimeReadiness(
           : []),
       ]
     : [];
-  const fullCostReadyPositions = durablePositions.filter((position: any) => (
-    fullCostPositionReady(position, expectedMainSha)
-  )).length;
+  const fullCostReadyPositions = countUniquePositionEvidence(
+    durablePositions,
+    (position) => fullCostPositionReady(position, expectedMainSha),
+  );
   const fullCostComponentEvidenceCounts = Object.freeze(Object.fromEntries(
     ENTRY_COMPONENTS.map((name) => [
       name,
-      durablePositions.filter((position: any) => (
-        fullCostComponentReady(position, expectedMainSha, name)
-      )).length,
+      countUniquePositionEvidence(
+        durablePositions,
+        (position) => fullCostComponentReady(position, expectedMainSha, name),
+      ),
     ]),
   ) as Record<EntryCostComponentName, number>);
   const fullCostComponentsReady = fullCostReadyPositions > 0;
