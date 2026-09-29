@@ -55,6 +55,9 @@ jobs:
           if(r.pead.canonicalIbesSueafReplication!==false||r.pead.canonicalTimeSeriesSueStatus!=='BLOCKED_QUARTERLY_EPS_HISTORY_AND_FORECAST_VINTAGE') throw new Error('SUE_TRUTH');
           if(!r.academicMomentum?.jtMomentumJ6K6Skip1?.aggregate||!r.academicMomentum?.high52WeekK6?.aggregate) throw new Error('ACADEMIC_BASELINES');
           if(r.academicMomentum.jtMomentumJ6K6Skip1.aggregate.canonicalReplicationClaimAllowed!==false||r.academicMomentum.high52WeekK6.aggregate.canonicalReplicationClaimAllowed!==false) throw new Error('ACADEMIC_TRUTH');
+          if(r.promotionAssessment?.CROSS_SECTIONAL_PRICE_MOMENTUM_V1?.status!=='BLOCKED_PIT_UNIVERSE_AND_OUTLIER_CONCENTRATION') throw new Error('MOMENTUM_PROMOTION_BOUNDARY');
+          if(r.promotionAssessment?.PEAD_EARNINGS_SURPRISE_V1?.status!=='RESEARCH_HOLD_TRANSFER_FAILED') throw new Error('PEAD_PROMOTION_BOUNDARY');
+          if(r.promotionAssessment?.pitUniverseEvidence?.materializedUsPitDatasetReady!==false||r.promotionAssessment?.pitUniverseEvidence?.firstZero!=='US_PIT_MEMBERSHIP_REMOVED_LISTINGS_CORPORATE_ACTION_DATASET_NOT_MATERIALIZED') throw new Error('PIT_TRUTH');
           if(r.safety.researchOnly!==true||r.safety.publicMarketDataOnly!==true||r.safety.privateAccountRequestAllowed!==false||r.safety.orderRouteCalled!==false||r.safety.executionAuthority!=='NONE'||r.safety.economicSampleCredit!==0) throw new Error('SAFETY');
           NODE
       - uses: actions/upload-artifact@v4
