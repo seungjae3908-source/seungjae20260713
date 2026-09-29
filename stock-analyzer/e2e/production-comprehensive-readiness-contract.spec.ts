@@ -36,6 +36,7 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(auditRoute).not.toContain('page.goto(route');
   expect(qa).toContain('const LOGIN_READY_BUDGET_MS = 15_000;');
   expect(qa).toContain('const LOGIN_NAVIGATION_TIMEOUT_RETRIES = 1;');
+  expect(qa).toContain('const LOGIN_INTERACTIVE_COLD_RETRIES = 1;');
   expect(qa).toContain('const CACHED_AUTH_TIMEOUT_RETRIES = 1;');
   const timeoutHelperStart = qa.indexOf('function isPlaywrightTimeout');
   const navigationRetryStart = qa.indexOf('async function gotoLoginWithTimeoutRetry');
@@ -62,6 +63,11 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(validateCachedAuth).toContain('if (response.status() !== 200)');
   expect(validateCachedAuth).toContain('PRODUCTION_QA_CACHED_SESSION_PROFILE_INVALID');
   expect(login).toContain('Math.max(1, LOGIN_READY_BUDGET_MS - (Date.now() - readinessStartedAt))');
+  expect(login).toContain('attempt <= LOGIN_INTERACTIVE_COLD_RETRIES');
+  expect(login).toContain("currentPath(page) === '/login'");
+  expect(login).toContain('diagnostics.length === diagnosticStart');
+  expect(login).toContain('blocked.length === blockedStart');
+  expect(login).toContain('attempt >= LOGIN_INTERACTIVE_COLD_RETRIES');
   expect(login).toContain("page.getByLabel('아이디')");
   expect(login).toContain("page.getByLabel('비밀번호')");
   expect(login).toContain("page.getByTestId('page-fallback').isVisible");
@@ -74,7 +80,7 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(validateCachedAuth).toContain("throw new Error(`PRODUCTION_QA_CACHED_SESSION_PROFILE_${response.status()}`)");
   expect(login).toContain('const state = await page.context().storageState();');
   expect(login).toContain('authStateByViewport.set(cacheKey, state);');
-  const cachedBranch = login.slice(login.indexOf('if (cached) {'), login.indexOf('// A cold Production'));
+  const cachedBranch = login.slice(login.indexOf('if (cached) {'), login.indexOf('const loginId'));
   expect(cachedBranch).not.toContain('loginButton.click');
   expect(cachedBranch).not.toContain('loginPassword.fill');
   expect(cachedBranch).not.toContain('page.context().storageState()');
@@ -118,17 +124,35 @@ test('Production chart audit waits for the matching settled query before accepti
   expect(marketData).toContain('void cached(cacheKey, candleCacheTtl(timeframeText), load)');
 });
 
-test('Production Research Center login keeps the same bounded cold-transport and interactive readiness contract', () => {
-  const qa = source('e2e/production-research-center-readonly-qa.spec.ts');
-  expect(qa).toContain('const LOGIN_READY_BUDGET_MS = 15_000;');
-  expect(qa).toContain('const LOGIN_NAVIGATION_TIMEOUT_RETRIES = 1;');
-  expect(qa).toContain("page.goto('/login', { waitUntil: 'commit', timeout: LOGIN_READY_BUDGET_MS })");
-  expect(qa).toContain('if (!isPlaywrightTimeout(error) || attempt >= LOGIN_NAVIGATION_TIMEOUT_RETRIES) throw error;');
-  expect(qa).toContain("page.getByLabel('아이디')");
-  expect(qa).toContain("page.getByLabel('비밀번호')");
-  expect(qa).toContain("page.getByTestId('page-fallback').isVisible");
-  expect(qa).toContain("}).toBe('READY')");
-  expect(qa).not.toContain("expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 10_000 })");
+test('Production read-only suites share the bounded cold login contract', () => {
+  const loginSupport = source('e2e/support/production-readonly-login.ts');
+  const consumers = [
+    'e2e/production-critical-http-readonly-qa.spec.ts',
+    'e2e/production-mobile-scroll-readonly-qa.spec.ts',
+    'e2e/production-performance-readonly-qa.spec.ts',
+    'e2e/production-research-center-readonly-qa.spec.ts',
+    'e2e/production-account-readonly-live-qa.spec.ts',
+  ];
+  expect(loginSupport).toContain('const LOGIN_READY_BUDGET_MS = 15_000;');
+  expect(loginSupport).toContain('const LOGIN_NAVIGATION_TIMEOUT_RETRIES = 1;');
+  expect(loginSupport).toContain('const LOGIN_INTERACTIVE_COLD_RETRIES = 1;');
+  expect(loginSupport).toContain("page.goto('/login', { waitUntil: 'commit', timeout: LOGIN_READY_BUDGET_MS })");
+  expect(loginSupport).toContain('if (!isPlaywrightTimeout(error) || attempt >= LOGIN_NAVIGATION_TIMEOUT_RETRIES) throw error;');
+  expect(loginSupport).toContain("page.getByLabel('아이디')");
+  expect(loginSupport).toContain("page.getByLabel('비밀번호')");
+  expect(loginSupport).toContain("page.getByTestId('page-fallback').isVisible");
+  expect(loginSupport).toContain("new URL(page.url()).pathname === '/login'");
+  expect(loginSupport).toContain('attempt >= LOGIN_INTERACTIVE_COLD_RETRIES');
+  expect(loginSupport).toContain("}).toBe('READY')");
+  for (const consumer of consumers) {
+    const qa = source(consumer);
+    const wrapperStart = qa.indexOf('async function login(');
+    const wrapper = qa.slice(wrapperStart, qa.indexOf('\n}', wrapperStart) + 2);
+    expect(qa).toContain("import { loginProductionReadOnly } from './support/production-readonly-login';");
+    expect(wrapperStart).toBeGreaterThanOrEqual(0);
+    expect(wrapper).toContain('await loginProductionReadOnly(page, { login: qaLogin, password: qaPassword });');
+    expect(wrapper).not.toContain('page.goto');
+  }
 });
 
 test('Production cold-route modules settle before primary market data prewarm without competing with direct AI Chart bootstrap', () => {
@@ -140,6 +164,8 @@ test('Production cold-route modules settle before primary market data prewarm wi
   expect(marketDataWarmup).toBeGreaterThan(moduleWarmup);
   expect(app).toContain('loadMarketInformationPage()');
   expect(app).toContain('loadWatchlistPage()');
+  expect(app).toContain('loadScannerPage()');
+  expect(app).toContain('loadPortfolioPage()');
   expect(app).toContain("prewarmPrimaryMarketInformation(auth.can('canAccessFutures'))");
   expect(app).toContain("prefetchMarketInformationRoom(queryClient, '/stocks/kr')");
   expect(app).toContain('if (includeFutures)');
