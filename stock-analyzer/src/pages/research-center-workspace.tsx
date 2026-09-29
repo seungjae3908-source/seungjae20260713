@@ -1,12 +1,13 @@
 import { useState } from 'react';
-import { Bot, Clapperboard, LayoutDashboard, ListTree } from 'lucide-react';
+import { Bot, Clapperboard, FlaskConical, LayoutDashboard, ListTree } from 'lucide-react';
 import ResearchCenterPage from './research-center';
 import { ResearchCenterGeneral } from '@/components/research-center-general';
 import { ResearchCopilotPanel } from '@/components/research-copilot-panel';
 import { ResearchVideoPanel } from '@/components/research-video-panel';
+import { ResearchWorkspacePanel } from '@/components/research-workspace-panel';
 import { cn } from '@/lib/utils';
 
-type ResearchWorkspaceView = 'general' | 'expert' | 'copilot' | 'video';
+type ResearchWorkspaceView = 'general' | 'strategy' | 'expert' | 'copilot' | 'video';
 
 const WORKSPACE_TABS = [
   {
@@ -14,6 +15,12 @@ const WORKSPACE_TABS = [
     label: '요약',
     description: '지금 상태와 다음에 볼 것만 간단히 보여줍니다.',
     icon: LayoutDashboard,
+  },
+  {
+    value: 'strategy',
+    label: '전략 연구',
+    description: '수식·AI 검토·백테스트·Validation/OOS·Registry·승격 근거를 한 흐름으로 봅니다.',
+    icon: FlaskConical,
   },
   {
     value: 'expert',
@@ -47,7 +54,7 @@ export default function ResearchCenterWorkspace() {
     <div className="flex h-full min-h-0 flex-col bg-background" data-testid="research-center-workspace">
       <div className="shrink-0 border-b border-border bg-background/95 px-3 py-2 backdrop-blur sm:px-4">
         <div
-          className="mx-auto grid w-full max-w-3xl grid-cols-4 gap-1 rounded-2xl border border-card-border bg-card p-1"
+          className="mx-auto grid w-full max-w-4xl grid-cols-5 gap-1 rounded-2xl border border-card-border bg-card p-1"
           data-testid="research-workspace-tabs"
           aria-label="연구센터 보기"
         >
@@ -85,6 +92,7 @@ export default function ResearchCenterWorkspace() {
 
       <div className="min-h-0 flex-1">
         {view === 'general' ? <ResearchCenterGeneral onOpenExpert={() => setView('expert')} /> : null}
+        {view === 'strategy' ? <ResearchWorkspacePanel /> : null}
         {view === 'expert' ? <ResearchCenterPage /> : null}
         {view === 'copilot' ? <ResearchCopilotPanel /> : null}
         {view === 'video' ? <ResearchVideoPanel /> : null}
