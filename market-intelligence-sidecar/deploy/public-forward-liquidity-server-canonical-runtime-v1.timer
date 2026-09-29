@@ -1,0 +1,16 @@
+[Unit]
+Description=Run Stock App public Forward server canonical capture at frozen V3 trigger minutes
+
+[Timer]
+OnCalendar=*-*-* *:17:00 UTC
+OnCalendar=*-*-* *:27:00 UTC
+OnCalendar=*-*-* *:37:00 UTC
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=false
+Unit=public-forward-liquidity-server-canonical-runtime-v1.service
+
+[Install]
+WantedBy=timers.target
+
+# Persistent=false: never replay/backfill missed natural slots.
