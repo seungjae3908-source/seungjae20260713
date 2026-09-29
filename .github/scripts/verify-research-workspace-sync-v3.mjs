@@ -121,6 +121,7 @@ const resourceGovernorReviewed=[
  'research-production/test/research-resource-budget.test.mjs',
  'research-production/src/engine.mjs',
  'research-production/test/research-engine.test.mjs',
+ '.github/workflows/paper-forward-schedule-validation.yml',
 ];
 const original=git('diff','--name-only',BASE,OWNER).split('\n');
 const allowed=new Set([...original,...added,...supplemental,...resourceGovernorReviewed]);
