@@ -1,0 +1,62 @@
+name: Research Upbit Pullback Reclaim V4
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/run-upbit-pullback-reclaim-v4.mjs
+      - .github/workflows/research-upbit-pullback-reclaim-v4.yml
+      - market-prediction-lab/src/adaptive-multi-evidence-price-structure-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-point-in-time-v2.js
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-upbit-pullback-reclaim-v4-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Verify public research-only contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/scripts/run-upbit-pullback-reclaim-v4.mjs
+          ! grep -Eiq 'UPBIT_ACCESS_KEY|UPBIT_SECRET_KEY|LIVE_TRADING|REAL_ORDER_ENABLED|PRIVATE_TRADING_API_ALLOWED|(^|[^A-Za-z])withdraw([^A-Za-z]|$)|(^|[^A-Za-z])transfer([^A-Za-z]|$)|(^|[^A-Za-z])orderSubmitted([^A-Za-z]|$)' market-prediction-lab/scripts/run-upbit-pullback-reclaim-v4.mjs
+      - name: Run event-driven unseen historical pullback-reclaim replay
+        working-directory: market-prediction-lab
+        run: node scripts/run-upbit-pullback-reclaim-v4.mjs docs/upbit-pullback-reclaim-v4.json
+      - name: Assert holdback, event-driven data, and safety
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('docs/upbit-pullback-reclaim-v4.json','utf8'));
+          if(r.status!=='pass'||r.schemaVersion!==4) throw new Error('STATUS');
+          if(r.selectionContract.selectedByCalibrationOnly!==true||r.selectionContract.validationCanChangeSelectedFamily!==false) throw new Error('SELECTION');
+          if(r.selectionContract.testUsedForSelection!==false||r.selectionContract.holdoutSymbolsUsedForSelection!==false) throw new Error('LEAK');
+          if(r.selectionContract.actualHistoricalLlmCalled!==false) throw new Error('LLM_FABRICATION');
+          if(r.dataEfficiency.fullUniverseIntradayDownloaded!==false) throw new Error('DATA_EFFICIENCY');
+          if(!(r.dataEfficiency.candidateMarketDaysAvailable>0)) throw new Error('NO_INTRADAY_EVIDENCE');
+          if(!r.lookahead.guardPassed||!r.lookahead.D1UsesPriorCompletedDailyCandle||!r.lookahead.BTCRegimeUsesPriorCompletedDailyCandle||!r.lookahead.intradayUsesCompleted15mAnd1hOnly||!r.lookahead.entryNext15mOpen) throw new Error('LOOKAHEAD');
+          if(r.universe.discovery.length!==12||r.universe.holdout.length!==12) throw new Error('COHORT');
+          if(r.safety.researchOnly!==true||r.safety.publicDataOnly!==true||r.safety.executionAuthority!=='NONE'||r.safety.profitabilityPromotionAllowed!==false) throw new Error('SAFETY');
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: upbit-pullback-reclaim-v4-${{ github.event.pull_request.head.sha }}
+          path: market-prediction-lab/docs/upbit-pullback-reclaim-v4.json
+          if-no-files-found: error
+          retention-days: 30
