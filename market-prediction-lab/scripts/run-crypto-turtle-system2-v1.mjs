@@ -131,6 +131,10 @@ function summarize(trades, initialCapital) {
     horizonExits: trades.filter((row) => row.exitReason === "SEGMENT_END").length,
     totalExecutionCost: trades.reduce((sum, row) => sum + row.costs.total, 0),
     fundingCost: trades.reduce((sum, row) => sum + row.costs.funding, 0),
+    grossBeforeExecutionCosts: trades.reduce((sum, row) => sum + row.netPnl + row.costs.total, 0),
+    grossBeforeExecutionCostsReturn: initialCapital > 0
+      ? trades.reduce((sum, row) => sum + row.netPnl + row.costs.total, 0) / initialCapital
+      : null,
     finalCapital: equity,
   };
 }
@@ -425,6 +429,10 @@ async function main() {
     };
   }
 
+  const crossSymbolTransferPassed = ["PRIOR", "MID", "RECENT"].every((segmentName) =>
+    segmentAggregate[segmentName].symbolsPositiveStress === datasets.length
+  );
+
   const report = {
     schemaVersion: 1,
     status: "pass",
@@ -468,11 +476,19 @@ async function main() {
     results,
     segmentAggregate,
     promotionAssessment: {
-      status: "REFERENCE_BASELINE_ONLY",
+      status: crossSymbolTransferPassed
+        ? "REFERENCE_CANDIDATE_REQUIRES_FUTURE_OOS"
+        : "RESEARCH_HOLD_CROSS_SYMBOL_GENERALIZATION_FAILED",
+      crossSymbolTransferPassed,
       automaticPromotionAllowed: false,
       economicSampleCredit: 0,
       profitabilityClaimAllowed: false,
-      nextRule: "evaluate fixed System 2 across PRIOR/MID/RECENT and cost stress; do not optimize lookbacks, N, stop, pyramiding, or unit risk on these observed windows",
+      symbolSpecificWinnerSelectionAllowed: false,
+      observedHistoryMaySelectETHOnly: false,
+      reason: crossSymbolTransferPassed
+        ? "fixed source rules remained positive across both symbols and all three fixed windows under 1.5x cost stress, but historical replay still cannot promote"
+        : "ETH is positive across fixed windows, but BTC fails MID and RECENT even before modeled execution costs; selecting ETH after seeing these results would be post-hoc symbol selection",
+      nextRule: "do not optimize lookbacks, N, stop, pyramiding, unit risk, or symbol selection on these observed windows; move to a different independent source recipe or genuinely unused future evidence",
     },
     safeguards: {
       researchOnly: true,
@@ -507,6 +523,10 @@ async function main() {
     midPositive: report.segmentAggregate.MID.symbolsPositiveNormal,
     recentPositive: report.segmentAggregate.RECENT.symbolsPositiveNormal,
     recentStressPositive: report.segmentAggregate.RECENT.symbolsPositiveStress,
+    crossSymbolTransferPassed: report.promotionAssessment.crossSymbolTransferPassed,
+    promotionStatus: report.promotionAssessment.status,
+    btcMidGrossBeforeCosts: report.results.BTCUSDT?.MID?.normal?.metrics?.grossBeforeExecutionCostsReturn ?? null,
+    btcRecentGrossBeforeCosts: report.results.BTCUSDT?.RECENT?.normal?.metrics?.grossBeforeExecutionCostsReturn ?? null,
   }));
 }
 await main();
