@@ -77,6 +77,8 @@ test('Production route audit keeps the authenticated document mounted during str
   const cachedBranch = login.slice(login.indexOf('if (cached) {'), login.indexOf('// A cold Production'));
   expect(cachedBranch).not.toContain('loginButton.click');
   expect(cachedBranch).not.toContain('loginPassword.fill');
+  expect(cachedBranch).not.toContain('page.context().storageState()');
+  expect(cachedBranch).toContain('The new page is still about:blank here.');
   expect(auditRoute).not.toContain("expect(page.getByTestId('page-fallback')).toHaveCount(0");
   expect(qa).toContain("expect(audits.filter((item) => item.busyAfter5s > 0)");
 });
