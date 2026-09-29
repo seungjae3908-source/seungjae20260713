@@ -1,0 +1,55 @@
+name: Public Forward Liquidity Server Canonical Cutover Readiness V1
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/public-forward-liquidity-server-canonical-cutover-readiness-v1-validation.yml'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-cutover-readiness-v1.test.mjs'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Verify drift-only cutover boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          workflow='.github/workflows/public-forward-liquidity-server-canonical-cutover-readiness-v1-validation.yml'
+          source='market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs'
+
+          ! grep -Eq '^[[:space:]]{2}(schedule|workflow_dispatch|issue_comment):' "$workflow"
+          ! grep -Eq 'contents:[[:space:]]+write|actions:[[:space:]]+write|issues:[[:space:]]+write|deployments:[[:space:]]+write|id-token:[[:space:]]+write' "$workflow"
+          grep -Fq "activationApplied: false" "$source"
+          grep -Fq "currentShadowReceiptCanonical: false" "$source"
+          grep -Fq "currentShadowReceiptEconomicCredit: 0" "$source"
+          grep -Fq "futureCanonicalCreditPermittedByThisReadinessCheck: false" "$source"
+          grep -Fq "requiresSeparateProtectedRuntimeActivation: true" "$source"
+          grep -Fq "SERVER_CANONICAL_RETROACTIVE_SHADOW_RECEIPT_FORBIDDEN" "$source"
+          grep -Fq "SERVER_CANONICAL_CUTOVER_FUTURE_SLOT_LEAD_REQUIRED" "$source"
+          grep -Fq "executionAuthority: 'NONE'" "$source"
+
+      - name: Syntax check cutover contract
+        run: node --check market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs
+
+      - name: Run future-only cutover regressions
+        run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-cutover-readiness-v1.test.mjs
+
+      - name: Verify repository remained clean
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain=v1)"
