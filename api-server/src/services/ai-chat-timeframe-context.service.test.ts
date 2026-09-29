@@ -35,6 +35,7 @@ test('AI timeframe evidence uses only closed candles and canonical indicators', 
     provider: 'fixture-public',
     asOf: '2026-01-01T01:00:00.000Z',
     candles: candles(61, { lastOpen: true }),
+    nowMs: Date.UTC(2026, 0, 1, 1, 0, 30),
   });
 
   assert.equal(evidence.status, 'complete');
@@ -42,6 +43,9 @@ test('AI timeframe evidence uses only closed candles and canonical indicators', 
   assert.equal(evidence.closedCandlesOnly, true);
   assert.equal(evidence.publicMarketDataOnly, true);
   assert.equal(evidence.orderCapability, false);
+  assert.equal(evidence.freshness, 'current');
+  assert.equal(evidence.freshnessAgeMs, 30_000);
+  assert.equal(evidence.expectedCandleIntervalMs, 60_000);
   assert.equal(evidence.lastClosedCandle?.close, 129.5);
   assert.ok(evidence.indicators.ema20 != null);
   assert.ok(evidence.indicators.ema50 != null);
@@ -58,9 +62,11 @@ test('AI timeframe evidence stays partial instead of fabricating missing long-wi
     provider: 'fixture-public',
     asOf: null,
     candles: candles(20),
+    nowMs: Date.UTC(2026, 0, 1, 0, 35, 0),
   });
 
   assert.equal(evidence.status, 'partial');
+  assert.equal(evidence.freshness, 'current');
   assert.equal(evidence.candleCount, 20);
   assert.equal(evidence.indicators.ema50, null);
   assert.ok(evidence.warnings.some((value) => value.includes('EMA50')));
@@ -77,6 +83,26 @@ test('AI timeframe evidence returns unavailable on unusable candle evidence', ()
   });
 
   assert.equal(evidence.status, 'unavailable');
+  assert.equal(evidence.freshness, 'unavailable');
+  assert.equal(evidence.freshnessAgeMs, null);
   assert.equal(evidence.lastClosedCandle, null);
   assert.deepEqual(evidence.indicators, { ema20: null, ema50: null, rsi14: null, atr14: null });
+});
+
+
+test('AI timeframe evidence marks old closed candles stale instead of treating them as current', () => {
+  const evidence = buildAiChatTimeframeEvidence({
+    market: 'BITGET',
+    symbol: 'BTCUSDT',
+    timeframe: '1m',
+    provider: 'fixture-public',
+    asOf: null,
+    candles: candles(60),
+    nowMs: Date.UTC(2026, 0, 1, 1, 5, 0),
+  });
+
+  assert.equal(evidence.status, 'complete');
+  assert.equal(evidence.freshness, 'stale');
+  assert.equal(evidence.freshnessAgeMs, 5 * 60_000);
+  assert.ok(evidence.warnings.some((value) => value.includes('현재 판단 근거로 사용하면 안 됩니다')));
 });
