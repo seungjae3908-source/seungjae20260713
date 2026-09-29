@@ -286,7 +286,12 @@ async function login(
       // whether the session is still accepted. This remains fail-closed while
       // avoiding a redundant / navigation that previously timed out under load.
       await validateCachedAuthState(page, cached);
-      authStateByViewport.set(cacheKey, await page.context().storageState());
+      // The new page is still about:blank here. restoreCachedAuthState installs
+      // the Production-origin localStorage seed for the next navigation, but it
+      // has not materialized that origin yet. Recapturing storageState now can
+      // therefore replace the valid cache with a tokenless state and make the
+      // following read-only test fail before navigation. The exact cached token
+      // was just proven by the profile GET, so preserve that verified state.
       return;
     }
 
