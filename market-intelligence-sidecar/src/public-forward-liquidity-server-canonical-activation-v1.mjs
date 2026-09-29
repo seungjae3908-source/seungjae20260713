@@ -210,9 +210,26 @@ export function verifyProtectedServerCanonicalActivationRecord(
     || record.recordDigest !== sha256(canonicalJson(body))) {
     blockers.push('SERVER_CANONICAL_ACTIVATION_RECORD_DIGEST_INVALID');
   }
+  const {
+    activationDigest: runtimeActivationDigest,
+    ...runtimeActivationBody
+  } = record?.runtimeActivation ?? {};
   if (record?.cutoverReadiness?.readyForFutureCanonicalCutover !== true
     || record?.runtimeActivation?.activationApplied !== true
-    || record?.runtimeActivation?.activationDigest == null
+    || !exactDigest(runtimeActivationDigest)
+    || runtimeActivationDigest !== sha256(canonicalJson(runtimeActivationBody))
+    || record?.runtimeActivation?.readinessDigest
+      !== sha256(canonicalJson(record?.cutoverReadiness ?? null))
+    || record?.runtimeActivation?.targetMainSha !== record?.targetMainSha
+    || record?.runtimeActivation?.activationBindingDigest !== record?.activationBindingDigest
+    || record?.runtimeActivation?.activationReceiptCommentId !== record?.activationReceiptCommentId
+    || record?.runtimeActivation?.authorityCommentId !== record?.authorityCommentId
+    || record?.runtimeActivation?.authorizedAtMs !== record?.authorizedAtMs
+    || record?.cutoverAuthority?.targetMainSha !== record?.targetMainSha
+    || record?.cutoverAuthority?.activationBindingDigest !== record?.activationBindingDigest
+    || record?.cutoverAuthority?.activationReceiptCommentId !== record?.activationReceiptCommentId
+    || record?.cutoverAuthority?.authorityCommentId !== record?.authorityCommentId
+    || record?.cutoverAuthority?.authorizedAtMs !== record?.authorizedAtMs
     || record?.firstEligibleSlotIndex !== record?.runtimeActivation?.firstEligibleSlotIndex
     || record?.firstEligibleSlotIndex !== record?.cutoverAuthority?.firstEligibleSlotIndex) {
     blockers.push('SERVER_CANONICAL_ACTIVATION_RECORD_LINEAGE_INVALID');
