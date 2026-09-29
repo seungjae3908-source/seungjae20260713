@@ -59,6 +59,25 @@ export type FuturesMarketSnapshot = {
   warnings: string[];
 };
 
+export type FuturesMarketFlow = {
+  symbol: string;
+  longRatio: number | null;
+  shortRatio: number | null;
+  longShortRatio: number | null;
+  ratioObservedAt: string | null;
+  longLiquidationAmount: number | null;
+  shortLiquidationAmount: number | null;
+  liquidationCount: number;
+  liquidationObservedAt: string | null;
+  status: DataStatus;
+  updatedAt: string;
+  warnings: string[];
+  publicDataOnly: true;
+  directionalScoreImpact: 0;
+  probabilityImpact: 0;
+  executionAuthority: 'NONE';
+};
+
 export type FuturesStatusResponse = {
   ok: true;
   provider: 'bitget';
@@ -621,6 +640,131 @@ async function buildSnapshot(symbol: string): Promise<FuturesMarketSnapshot> {
     updatedAt: new Date(sourceTimestamp ?? now).toISOString(),
     warnings: uniqueWarnings(warnings),
   };
+}
+
+export function normalizeFuturesMarketFlowEvidence(input: {
+  symbol: string;
+  longShortPayload: unknown;
+  liquidationPayload: unknown;
+  now?: number;
+}): FuturesMarketFlow {
+  const now = input.now ?? Date.now();
+  const warnings: string[] = [];
+  const ratioData = payloadData(input.longShortPayload);
+  const ratioRow = firstObject(ratioData);
+  const longRatio = toFiniteNumber(ratioRow?.longRatio);
+  const shortRatio = toFiniteNumber(ratioRow?.shortRatio);
+  const longShortRatio = toFiniteNumber(ratioRow?.longShortRatio);
+  const ratioObservedAt = safeIso(ratioRow?.ts ?? payloadRequestTime(input.longShortPayload));
+
+  let longLiquidationAmount = 0;
+  let shortLiquidationAmount = 0;
+  let longObserved = 0;
+  let shortObserved = 0;
+  const liquidationTimes: number[] = [];
+  const liquidationData = payloadData(input.liquidationPayload);
+  const liquidationRows = isObject(liquidationData) && Array.isArray(liquidationData.list)
+    ? liquidationData.list.filter(isObject)
+    : [];
+  let liquidationCount = 0;
+  for (const row of liquidationRows) {
+    const rowSymbol = normalizeFuturesSymbol(row.symbol);
+    if (rowSymbol !== input.symbol) continue;
+    const amount = toFiniteNumber(row.amount);
+    const occurredAt = normalizeTimestamp(row.ts);
+    if (occurredAt != null && occurredAt <= now + 5 * 60_000) liquidationTimes.push(occurredAt);
+    const side = String(row.side ?? '').trim().toLowerCase();
+    if (side === 'buy' && amount != null && amount >= 0) {
+      longLiquidationAmount += amount;
+      longObserved += 1;
+      liquidationCount += 1;
+    } else if (side === 'sell' && amount != null && amount >= 0) {
+      shortLiquidationAmount += amount;
+      shortObserved += 1;
+      liquidationCount += 1;
+    }
+  }
+
+  const liquidationObservedAt = liquidationTimes.length
+    ? new Date(Math.max(...liquidationTimes)).toISOString()
+    : null;
+  if (longRatio == null || shortRatio == null || longShortRatio == null) {
+    warnings.push('선택 종목의 롱·숏 비율 근거를 확인하지 못했습니다.');
+  }
+  if (liquidationCount === 0) {
+    warnings.push('최근 공개 청산 표본에서 선택 종목의 청산 이벤트를 확인하지 못했습니다.');
+  }
+  const timestamps = [ratioObservedAt, liquidationObservedAt]
+    .filter((value): value is string => Boolean(value))
+    .map((value) => Date.parse(value))
+    .filter(Number.isFinite);
+  const latest = timestamps.length ? Math.max(...timestamps) : null;
+  const status = latest == null
+    ? 'insufficient'
+    : now - latest > 5 * 60_000
+      ? 'delayed'
+      : 'live';
+
+  return {
+    symbol: input.symbol,
+    longRatio,
+    shortRatio,
+    longShortRatio,
+    ratioObservedAt,
+    longLiquidationAmount: longObserved > 0 ? longLiquidationAmount : null,
+    shortLiquidationAmount: shortObserved > 0 ? shortLiquidationAmount : null,
+    liquidationCount,
+    liquidationObservedAt,
+    status,
+    updatedAt: new Date(latest ?? now).toISOString(),
+    warnings: uniqueWarnings(warnings),
+    publicDataOnly: true,
+    directionalScoreImpact: 0,
+    probabilityImpact: 0,
+    executionAuthority: 'NONE',
+  };
+}
+
+async function buildFuturesMarketFlow(symbol: string): Promise<FuturesMarketFlow> {
+  const [ratioResult, liquidationResult] = await Promise.allSettled([
+    fetchBitget('/api/v3/market/futures-long-short', { symbol, period: '5m' }),
+    fetchBitget('/api/v3/market/liquidations', { category: BITGET_PRODUCT_TYPE, limit: '100' }),
+  ]);
+  if (ratioResult.status === 'rejected' && liquidationResult.status === 'rejected') {
+    throw new Error('BITGET_FLOW_UNAVAILABLE');
+  }
+  const emptyPayload = { code: '00000', data: [] };
+  const result = normalizeFuturesMarketFlowEvidence({
+    symbol,
+    longShortPayload: ratioResult.status === 'fulfilled' ? ratioResult.value : emptyPayload,
+    liquidationPayload: liquidationResult.status === 'fulfilled'
+      ? liquidationResult.value
+      : { code: '00000', data: { list: [] } },
+  });
+  const warnings = [...result.warnings];
+  if (ratioResult.status === 'rejected') warnings.push('Bitget 롱·숏 비율 응답을 확인하지 못했습니다.');
+  if (liquidationResult.status === 'rejected') warnings.push('Bitget 청산 응답을 확인하지 못했습니다.');
+  return { ...result, warnings: uniqueWarnings(warnings) };
+}
+
+export async function getFuturesMarketFlow(value: unknown): Promise<FuturesMarketFlow> {
+  const symbol = await assertSupportedSymbol(value);
+  const key = `futures:flow:${symbol}`;
+  try {
+    const loaded = await loadWithCache(key, 15_000, () => buildFuturesMarketFlow(symbol));
+    if (!loaded.fallback) return loaded.value;
+    return {
+      ...loaded.value,
+      status: 'cached',
+      warnings: uniqueWarnings([
+        ...loaded.value.warnings,
+        '거래소 연결 실패로 마지막 정상 수급·청산 근거를 반환했습니다.',
+      ]),
+    };
+  } catch (error) {
+    if (error instanceof FuturesMarketDataError) throw error;
+    throw new FuturesMarketDataError(503, 'FUTURES_FLOW_UNAVAILABLE', '선물 롱·숏·청산 공개 근거를 불러올 수 없습니다.');
+  }
 }
 
 export async function getFuturesMarketStatus(): Promise<FuturesStatusResponse> {
