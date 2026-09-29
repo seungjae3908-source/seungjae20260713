@@ -33,7 +33,8 @@ const loadWatchlistPage = () => import('@/pages/watchlist');
 const WatchlistPage = lazy(loadWatchlistPage);
 const loadAlertsPage = () => import('@/pages/alerts');
 const AlertsPage = lazy(loadAlertsPage);
-const ScannerPage = lazy(() => import('@/pages/scanner'));
+const loadScannerPage = () => import('@/pages/scanner');
+const ScannerPage = lazy(loadScannerPage);
 const loadSignalScannerPage = () => import('@/pages/signal-scanner');
 const SignalScannerPage = lazy(loadSignalScannerPage);
 const TelegramSignalOrderPage = lazy(() => import('@/pages/telegram-signal-order'));
@@ -46,17 +47,24 @@ const MarketInformationPage = lazy(loadMarketInformationPage);
 const MarketOverviewPage = lazy(() => import('@/pages/market-overview'));
 const StocksPage = lazy(() => import('@/pages/stocks'));
 const UnifiedAssetSearchPage = lazy(() => import('@/pages/unified-asset-search'));
-const ThemesPage = lazy(() => import('@/pages/themes'));
+const loadThemesPage = () => import('@/pages/themes');
+const ThemesPage = lazy(loadThemesPage);
 const loadLearnPage = () => import('@/pages/learn');
 const LearnPage = lazy(loadLearnPage);
 const loadMorePage = () => import('@/pages/more');
 const MorePage = lazy(loadMorePage);
-const PortfolioPage = lazy(() => import('@/pages/portfolio'));
+const loadPortfolioPage = () => import('@/pages/portfolio');
+const PortfolioPage = lazy(loadPortfolioPage);
 const PortfolioV2Page = lazy(() => import('@/pages/portfolio-v2'));
 const loadStrategyPromotionPage = () => import('@/pages/strategy-promotion');
 const StrategyPromotionPage = lazy(loadStrategyPromotionPage);
 const ResearchCenterPage = lazy(() => import('@/pages/research-center-workspace'));
-const AccountPage = lazy(() => import('@/pages/account'));
+const loadAccountPage = () => import('@/pages/account');
+const directLoginColdRoute = typeof window !== 'undefined' && window.location.pathname.endsWith('/login');
+if (directLoginColdRoute) {
+  void loadAccountPage();
+}
+const AccountPage = lazy(loadAccountPage);
 const AdminPage = lazy(() => import('@/pages/admin'));
 const AgentHubControlPage = lazy(() => import('@/pages/agent-hub-control'));
 const InstallPage = lazy(() => import('@/pages/install'));
@@ -102,7 +110,8 @@ if (directAiChartColdRoute) {
   void loadAiChartPage();
 }
 const AiChartPage = lazy(loadAiChartPage);
-const AiChatPage = lazy(() => import('@/pages/ai-chat'));
+const loadAiChatPage = () => import('@/pages/ai-chat');
+const AiChatPage = lazy(loadAiChatPage);
 const loadTechnicalWorkspacePage = () => import('@/pages/technical-workspace');
 const TechnicalWorkspacePage = lazy(loadTechnicalWorkspacePage);
 const Phase12TradeAutomationE2EPage = lazy(() => import('@/pages/phase12-trade-automation-e2e'));
@@ -442,6 +451,8 @@ function AuthenticatedApp() {
     void Promise.allSettled([
       loadMarketInformationPage(),
       loadWatchlistPage(),
+      loadScannerPage(),
+      loadPortfolioPage(),
       loadBacktestsPage(),
       loadStrategyPromotionPage(),
       loadMorePage(),
@@ -450,6 +461,8 @@ function AuthenticatedApp() {
       loadTechnicalWorkspacePage(),
       loadSignalScannerPage(),
       loadAiChartPage(),
+      loadAiChatPage(),
+      loadThemesPage(),
       loadLearnPage(),
       loadAlertsPage(),
     ]).then(() => prewarmPrimaryMarketInformation(auth.can('canAccessFutures'))).catch(() => undefined);
