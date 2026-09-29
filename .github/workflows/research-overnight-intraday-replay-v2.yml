@@ -17,6 +17,10 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    environment: production
+    env:
+      PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+      PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,6 +51,8 @@ jobs:
           if(!r.lookahead.guardPassed||!r.lookahead.D1UsesPriorDayOrEarlier||!r.lookahead.intradayCompleted5m15mOnly||!r.lookahead.entryNext5mOpen) throw new Error('LOOKAHEAD');
           if(r.dataWindow.testDates.some(d=>d>='2026-09-22')) throw new Error('OBSERVED_WINDOW_LEAK');
           if(r.dataWindow.calibrationDates.length<5||r.dataWindow.validationDates.length<3||r.dataWindow.testDates.length<3) throw new Error('SPLIT_TOO_SMALL');
+          if(r.selectionContract.productionQaAuthUsedForReadOnlyCandles!==true) throw new Error('QA_AUTH_NOT_ATTESTED');
+          if(r.selectionContract.productionMutationRoutesCalled!==false||r.selectionContract.privateAccountRoutesCalled!==false) throw new Error('READ_ONLY_BOUNDARY');
           if(r.safety.researchOnly!==true||r.safety.executionAuthority!=='NONE'||r.safety.profitabilityPromotionAllowed!==false) throw new Error('SAFETY');
           NODE
       - uses: actions/upload-artifact@v4
