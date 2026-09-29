@@ -1,4 +1,4 @@
-name: Research US Reference Recipes V5
+name: Research US Reference Recipes V6
 
 on:
   pull_request:
@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: research-us-reference-recipes-v5-${{ github.event.pull_request.number || github.ref }}
+  group: research-us-reference-recipes-v6-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -76,6 +76,13 @@ jobs:
           if(sp.status==='PIT_HISTORICAL_MEMBERSHIP_STRESS_COMPLETE'&&(sp.provider!=='wikipedia-sp500-change-history'||sp.providerUniverseScope!=='SP500_RECONSTRUCTED_COMPONENTS'||sp.credentialMode!=='PUBLIC_NO_KEY')) throw new Error('SP500_PIT_IDENTITY');
           if(sp.terminalValueMissingDoesNotDisappearFromDecile!==true) throw new Error('SP500_TERMINAL_BIAS_GUARD');
           if(r.crossUniversePitComparison?.sameRecipeNoRetuning!==true||r.crossUniversePitComparison?.automaticPromotionAllowed!==false) throw new Error('CROSS_UNIVERSE_TRUTH');
+          const ndxOverlap=pit.overlappingMonthly?.jtMomentumJ6K6Skip1;
+          const spOverlap=sp.overlappingMonthly?.jtMomentumJ6K6Skip1;
+          if(!ndxOverlap||!spOverlap||ndxOverlap.canonicalReplicationClaimAllowed!==false||spOverlap.canonicalReplicationClaimAllowed!==false) throw new Error('OVERLAP_PRESENT');
+          if(ndxOverlap.automaticPromotionAllowed!==false||spOverlap.automaticPromotionAllowed!==false) throw new Error('OVERLAP_PROMOTION_BOUNDARY');
+          if(ndxOverlap.seriesMonths<6||spOverlap.seriesMonths<6) throw new Error('OVERLAP_SERIES_TOO_SHORT');
+          if(r.crossUniversePitComparison?.overlappingMonthlyJ6K6?.nasdaq100MeanMonthlySpread!==ndxOverlap.meanMonthlySpread) throw new Error('OVERLAP_NDX_BINDING');
+          if(r.crossUniversePitComparison?.overlappingMonthlyJ6K6?.sp500MeanMonthlySpread!==spOverlap.meanMonthlySpread) throw new Error('OVERLAP_SP500_BINDING');
           if(r.promotionAssessment?.FIFTY_TWO_WEEK_HIGH_MOMENTUM_V1?.status!=='RESEARCH_HOLD_PIT_CROSS_UNIVERSE_NEGATIVE') throw new Error('HIGH52_PROMOTION_BOUNDARY');
           if(sp.status==='PIT_HISTORICAL_MEMBERSHIP_STRESS_COMPLETE'&&sp.jtMomentumJ6K6Skip1?.aggregate?.concentrationStress?.meanLeaveBest1TopMinusBottomReturn>=0.01) throw new Error('SP500_MOMENTUM_CONCENTRATION_STRESS_UNEXPECTEDLY_POSITIVE');
           if(r.safety.researchOnly!==true||r.safety.publicMarketDataOnly!==true||r.safety.privateAccountRequestAllowed!==false||r.safety.orderRouteCalled!==false||r.safety.executionAuthority!=='NONE'||r.safety.economicSampleCredit!==0) throw new Error('SAFETY');
