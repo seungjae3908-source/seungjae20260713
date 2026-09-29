@@ -1,0 +1,55 @@
+name: Prediction Lab US Pullback Six Month Fixed V1
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/prediction-lab-us-pullback-six-month-fixed-v1.yml'
+      - 'market-prediction-lab/scripts/run-us-pullback-six-month-fixed-v1.js'
+      - 'market-prediction-lab/src/stock-pullback-optimizer.js'
+      - 'market-prediction-lab/src/yahoo-stock-history.js'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Verify research-only contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/scripts/run-us-pullback-six-month-fixed-v1.js
+          ! grep -Eiq 'LIVE_TRADING|REAL_ORDER_ENABLED|PRIVATE_TRADING_API_ALLOWED|executionAuthority.*LIVE|withdraw|transfer|orderSubmitted' market-prediction-lab/scripts/run-us-pullback-six-month-fixed-v1.js
+      - name: Run frozen six-month evaluation
+        working-directory: market-prediction-lab
+        run: node scripts/run-us-pullback-six-month-fixed-v1.js docs/us-pullback-six-month-fixed-v1.json
+      - name: Assert fixed window and safety
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r = JSON.parse(fs.readFileSync('docs/us-pullback-six-month-fixed-v1.json','utf8'));
+          if (r.status !== 'pass') throw new Error('SIX_MONTH_NOT_PASS');
+          if (r.evaluation.startInclusive !== '2026-03-29T00:00:00.000Z') throw new Error('START_DRIFT');
+          if (r.evaluation.endExclusive !== '2026-09-29T00:00:00.000Z') throw new Error('END_DRIFT');
+          if (r.evaluation.parameterRetuningPerformed !== false) throw new Error('RETUNING_FORBIDDEN');
+          if (r.researchOnly !== true || r.liveExecutionAllowed !== false || r.privateAccountRequestAllowed !== false) throw new Error('RESEARCH_BOUNDARY_VIOLATION');
+          if (!Number.isFinite(r.normalCost.equalWeightEightSymbolReturn)) throw new Error('NORMAL_RETURN_MISSING');
+          if (!Number.isFinite(r.stressedCost.equalWeightEightSymbolReturn)) throw new Error('STRESS_RETURN_MISSING');
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: us-pullback-six-month-fixed-v1-${{ github.event.pull_request.head.sha }}
+          path: market-prediction-lab/docs/us-pullback-six-month-fixed-v1.json
+          if-no-files-found: error
+          retention-days: 30
