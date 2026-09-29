@@ -1,0 +1,58 @@
+name: Research Upbit Pre-Breakout Retest V3
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/run-upbit-prebreakout-retest-v3.mjs
+      - .github/workflows/research-upbit-prebreakout-retest-v3.yml
+      - market-prediction-lab/src/adaptive-multi-evidence-price-structure-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-point-in-time-v2.js
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Verify public research-only contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/scripts/run-upbit-prebreakout-retest-v3.mjs
+          ! grep -Eiq 'UPBIT_ACCESS_KEY|UPBIT_SECRET_KEY|LIVE_TRADING|REAL_ORDER_ENABLED|PRIVATE_TRADING_API_ALLOWED|(^|[^A-Za-z])withdraw([^A-Za-z]|$)|(^|[^A-Za-z])transfer([^A-Za-z]|$)|(^|[^A-Za-z])orderSubmitted([^A-Za-z]|$)' market-prediction-lab/scripts/run-upbit-prebreakout-retest-v3.mjs
+      - name: Run pre-breakout retest/rebreak holdout replay
+        working-directory: market-prediction-lab
+        run: node scripts/run-upbit-prebreakout-retest-v3.mjs docs/upbit-prebreakout-retest-v3.json
+      - name: Assert unseen-symbol holdout and temporal safety
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('docs/upbit-prebreakout-retest-v3.json','utf8'));
+          if(r.status!=='pass') throw new Error('STATUS');
+          if(r.strategyContract.firstExpansionBarEntryForbidden!==true||r.strategyContract.failedBreakoutEntryForbidden!==true||r.strategyContract.entryRequiresBreakoutThenRetestThenRebreak!==true) throw new Error('ENTRY_CONTRACT');
+          if(r.holdoutPolicy.freshHoldoutExcludesAllPreviouslyObserved!==true||r.holdoutPolicy.freshHoldoutSymbolsUsedForFamilySelection!==false) throw new Error('HOLDOUT');
+          const seen=new Set(r.holdoutPolicy.previouslyObservedSymbols);
+          if(r.universe.freshHoldout.some(x=>seen.has(x.symbol))) throw new Error('HOLDOUT_OVERLAP');
+          if(r.universe.freshHoldout.length!==10) throw new Error('HOLDOUT_SIZE');
+          if(!r.lookahead.guardPassed||!r.lookahead.D1UsesPriorCompletedDailyCandle||!r.lookahead.priorHighExcludesD1Candle||!r.lookahead.intradayUsesCompleted15mAnd1hOnly||!r.lookahead.entryNext15mOpen) throw new Error('LOOKAHEAD');
+          if(r.selectionContract.holdoutSymbolsUsedForSelection!==false||r.selectionContract.actualHistoricalLlmCalled!==false) throw new Error('SELECTION_LEAK');
+          if(r.safety.researchOnly!==true||r.safety.publicDataOnly!==true||r.safety.executionAuthority!=='NONE'||r.safety.profitabilityPromotionAllowed!==false) throw new Error('SAFETY');
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: upbit-prebreakout-retest-v3-${{ github.event.pull_request.head.sha }}
+          path: market-prediction-lab/docs/upbit-prebreakout-retest-v3.json
+          if-no-files-found: error
+          retention-days: 30
