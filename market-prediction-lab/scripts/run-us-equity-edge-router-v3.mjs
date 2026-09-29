@@ -174,8 +174,15 @@ function parseFilingEvents(payload) {
   return out.sort((a,b)=>a.at-b.at);
 }
 async function loadSecEvents(smallRows) {
-  const tickerMap=await buildSecMap();
   const results=new Map();
+  let tickerMap;
+  try {
+    tickerMap=await buildSecMap();
+  } catch (error) {
+    const reason=String(error?.message??error);
+    for(const row of smallRows) results.set(row.symbol,{available:false,events:[],reason});
+    return {results,coverage:{requested:smallRows.length,mapped:0,loaded:0,sourceAvailable:false,error:reason}};
+  }
   let mapped=0,loaded=0;
   for(const row of smallRows){
     const cik=tickerMap.get(row.symbol);
@@ -190,7 +197,7 @@ async function loadSecEvents(smallRows) {
     }
     await sleep(130);
   }
-  return {results,coverage:{requested:smallRows.length,mapped,loaded}};
+  return {results,coverage:{requested:smallRows.length,mapped,loaded,sourceAvailable:true,error:null}};
 }
 function latestEventWithin(events,forms,signalAt,days) {
   if(!(days>0)) return false;
@@ -275,7 +282,7 @@ function simulateOverlay({row,base,overlay,range,cost,benchmarkByTs,benchmarkCan
       &&dollarAccel!=null&&dollarAccel>=overlay.minDollarVolumeAcceleration
       &&(!overlay.requireBenchmarkUptrend||marketUp===true)
       &&(!overlay.issuerEventRequired||(secRecord?.available===true&&issuerEvent))
-      &&(!overlay.rejectDilution||!(secRecord?.available===true&&dilutionRisk));
+      &&(!overlay.rejectDilution||(secRecord?.available===true&&!dilutionRisk));
     if(!overlayPass){signalIndex+=1;continue;}
     const entryIndex=signalIndex+1;
     if(entryIndex>bounds.end) break;
@@ -404,7 +411,7 @@ async function main() {
       testUsedForSelection:false,currentSnapshotUsedForUniverse:true,currentSnapshotBiasAcknowledged:true,
       baseV2ParametersFrozen:true,overlayParametersSelectedTrainValidationOnly:true,
       secIssuerEventDefinition:[...ISSUER_EVENT_FORMS],secDilutionRiskDefinition:[...DILUTION_RISK_FORMS],
-      issuerEventIsDirectionalPositiveCatalyst:false,
+      issuerEventIsDirectionalPositiveCatalyst:false,secSourceAvailable:sec.coverage.sourceAvailable,
     },
     universe:{...diag,selectedCounts:{MID:selected.MID.length,SMALL:selected.SMALL.length},historyAttempts:flat.length,historySuccesses:ok.length,historyFailures:bad.length},
     secCoverage:sec.coverage,
