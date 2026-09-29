@@ -116,7 +116,34 @@ const supplemental=[
  '.github/workflows/research-workspace-integration-v1.yml',
 ];
 const original=git('diff','--name-only',BASE,OWNER).split('\n');
-const allowed=new Set([...original,...added,...supplemental]);
+const portfolioReviewed=[
+ 'api-server/src/features/account-readonly/account-readonly.journal-history.test.ts',
+ 'api-server/src/features/account-readonly/account-readonly.journal-history.ts',
+ 'api-server/src/features/account-readonly/account-readonly.portfolio-adapter.test.ts',
+ 'api-server/src/features/account-readonly/account-readonly.portfolio-adapter.ts',
+ 'api-server/src/features/account-readonly/account-readonly.portfolio-source.test.ts',
+ 'api-server/src/features/account-readonly/account-readonly.portfolio-source.ts',
+ 'api-server/src/features/account-readonly/account-readonly.runtime-service.ts',
+ 'api-server/src/features/account-readonly/providers/kiwoom-readonly.provider.ts',
+ 'api-server/src/routes/index.ts',
+ 'api-server/src/routes/paper-journal.ts',
+ 'api-server/src/routes/portfolio-intelligence.ts',
+ 'api-server/src/routes/unified-trade-journal.route.test.ts',
+ 'api-server/src/services/portfolio-intelligence.service.ts',
+ 'api-server/src/services/trade-exchange-adapters.service.ts',
+ 'api-server/src/services/unified-trade-journal.service.test.ts',
+ 'api-server/src/services/unified-trade-journal.service.ts',
+ 'stock-analyzer/e2e/phase7-journal-sync.spec.ts',
+ 'stock-analyzer/playwright.critical.config.ts',
+ 'stock-analyzer/src/components/unified-trade-journal-panel.tsx',
+ 'stock-analyzer/src/lib/labels.ts',
+ 'stock-analyzer/src/lib/paper-journal-sync.ts',
+ 'stock-analyzer/src/lib/unified-journal-safety.test.ts',
+ 'stock-analyzer/src/lib/unified-journal-safety.ts',
+ 'stock-analyzer/src/pages/phase7-journal-sync-e2e.tsx',
+ 'stock-analyzer/src/pages/portfolio-v2.tsx',
+];
+const allowed=new Set([...original,...added,...supplemental,...portfolioReviewed]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
 for(const p of changed)if(!allowed.has(p))throw new Error('UNREVIEWED_PATH:'+p);
 git('merge-base','--is-ancestor',MAIN,'HEAD');
@@ -129,6 +156,18 @@ const mount="\n\n// Read pre-existing sanitized research only; the nested worksp
 let current=git('show','HEAD:api-server/src/routes/index.ts');
 if(!isAncestor(OWNER,MAIN))current=current
  .replace("\nimport videoResearchEvidenceRouter from './video-research-evidence';",'').replace(mount,'');
+// #1463 intentionally shares one existing READ_ONLY account service instance so
+// portfolio intelligence and the account screen reuse token/last-good caches.
+// Normalize that reviewed refactor back to current-main text for preservation proof.
+current=current
+ .replace(
+   "import { createAccountReadonlyRouter } from '../features/account-readonly/account-readonly.route';\nimport { accountReadonlyRuntimeService } from '../features/account-readonly/account-readonly.runtime-service';",
+   "import { createAccountReadonlyRouter, accountReadFlags } from '../features/account-readonly/account-readonly.route';\nimport { AccountReadonlyService } from '../features/account-readonly/account-readonly.service';\nimport { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';\nimport { accountReadonlyCredentialConfigured } from '../features/account-readonly/account-readonly.repository';",
+ )
+ .replace(
+   "  createAccountReadonlyRouter(accountReadonlyRuntimeService),",
+   "  createAccountReadonlyRouter(new AccountReadonlyService(\n    createVaultBackedAccountReaders(),\n    accountReadFlags(),\n    () => new Date(),\n    accountReadonlyCredentialConfigured,\n  )),",
+ );
 if(current!==git('show',`${MAIN}:api-server/src/routes/index.ts`))throw new Error('MAIN_ROUTE_CHANGE_NOT_PRESERVED');
 const protectedPaths=['market-prediction-lab','research-production','research-dashboard','api-server/src/middleware/auth.ts','stock-analyzer/src/pages/research-center.tsx','stock-analyzer/vite.config.ts','packages/member-access','pnpm-lock.yaml'];
 for(const p of protectedPaths)if(git('rev-parse',`HEAD:${p}`)!==git('rev-parse',`${MAIN}:${p}`))throw new Error('PROTECTED_PATH_CHANGED:'+p);
