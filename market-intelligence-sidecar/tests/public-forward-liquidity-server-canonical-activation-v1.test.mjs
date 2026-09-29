@@ -7,26 +7,51 @@ import {
   verifyProtectedServerCanonicalActivationRecord,
 } from '../src/public-forward-liquidity-server-canonical-activation-v1.mjs';
 import {
+  SERVER_EVIDENCE_SHADOW_MODE,
   SERVER_EVIDENCE_SHADOW_SCHEMA,
+  SERVER_EVIDENCE_STATE_CONTRACT,
 } from '../src/public-forward-liquidity-server-shadow-worker-v1.mjs';
 import {
-  SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
   buildSuccessorScheduleReliabilityV3SlotDescriptor,
+  materializeSuccessorScheduleReliabilityV3Contract,
 } from '../src/public-forward-liquidity-successor-schedule-reliability-v3.mjs';
+
+const ACTIVATION_BINDING = Object.freeze({
+  schemaVersion: 'public-forward-liquidity-successor-schedule-reliability-activation-binding-v3',
+  authorityIssue: 23,
+  authorityCommentId: 5805902930,
+  hubFreezeAuthorityCommentId: 5804802177,
+  hubFreezeTimestampCommentId: 5804808369,
+  frozenCohortFreezeBlobSha: '65ef02d9ef5611c767755e71b40b840737b0658a',
+  frozenCohortFreezeMs: 1790207015000,
+  frozenCohortEffectiveStartMs: 1790263020000,
+  activationBoundaryMs: 1790212089000,
+  cutoverStartMs: 1790263020000,
+  authorizedCurrentMainSha: '24d9c8b4bbca54c1b3bce4ad28a8c1286beaff92',
+  numericFreezeSha256: '10b157de8e1902865f9b386a02439bb56d67b5c2fcd20dd48870d851bdb97ff1',
+  minActivationLeadSlots: 1,
+  priorV2CreditImported: 0,
+  priorV2MissedSlotRecovery: 0,
+  priorV2DiagnosticArtifactCredit: 0,
+  replayCredit: 0,
+  backfillCredit: 0,
+  syntheticCredit: 0,
+});
+const contract = materializeSuccessorScheduleReliabilityV3Contract(ACTIVATION_BINDING);
 
 const MAIN = 'a'.repeat(40);
 const OLD_MAIN = 'b'.repeat(40);
 const RECEIPT_ID = 12345;
 const AUTHORITY_ID = 23456;
-const contract = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT;
-const bindingDigest = sha256(canonicalJson(contract.policyCore.activationBinding));
+const bindingDigest = sha256(canonicalJson(ACTIVATION_BINDING));
 
 function shadowReceipt({ authorizedAtMs, slotIndex = 100 } = {}) {
   const slot = buildSuccessorScheduleReliabilityV3SlotDescriptor(slotIndex, contract);
   const body = {
     schemaVersion: SERVER_EVIDENCE_SHADOW_SCHEMA,
-    stateContract: 'public-forward-liquidity-server-shadow-state-root-v1',
-    mode: 'SHADOW_ONLY',
+    stateContract: SERVER_EVIDENCE_STATE_CONTRACT,
+    mode: SERVER_EVIDENCE_SHADOW_MODE,
+    captureStatus: 'PRESENT_SHADOW',
     shadowOnly: true,
     serverCanonical: false,
     codeSha: MAIN,
@@ -182,7 +207,7 @@ test('protected activation stays future-only and zero-credit', () => {
   assert.equal(record.canonicalIngestPerformed, false);
   assert.equal(record.independencePerformed, false);
   assert.equal(record.executionAuthority, 'NONE');
-  assert.deepEqual(verifyProtectedServerCanonicalActivationRecord(record), {
+  assert.deepEqual(verifyProtectedServerCanonicalActivationRecord(record, contract), {
     valid: true,
     blockers: [],
   });
@@ -208,7 +233,7 @@ test('readiness rejects a shadow receipt from before the +1 future slot', () => 
 test('activation record digest is fail-closed', () => {
   const record = prepareProtectedServerCanonicalActivation(validInputs());
   const tampered = { ...record, canonicalEconomicCredit: 1 };
-  const verdict = verifyProtectedServerCanonicalActivationRecord(tampered);
+  const verdict = verifyProtectedServerCanonicalActivationRecord(tampered, contract);
   assert.equal(verdict.valid, false);
   assert.ok(verdict.blockers.includes('SERVER_CANONICAL_ACTIVATION_RECORD_DIGEST_INVALID'));
   assert.ok(verdict.blockers.includes('SERVER_CANONICAL_ACTIVATION_RECORD_SAFETY_INVALID'));
