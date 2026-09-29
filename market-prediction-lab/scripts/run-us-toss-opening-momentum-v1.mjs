@@ -1203,6 +1203,8 @@ async function main() {
     jtMomentumSpread: report.academicMomentum.jtMomentumJ6K6Skip1.aggregate.meanDescriptiveTopMinusBottomReturn,
     high52Spread: report.academicMomentum.high52WeekK6.aggregate.meanDescriptiveTopMinusBottomReturn,
     pitMembershipStatus: report.pitMembershipStress.status,
+    pitCredentialMode: report.pitMembershipStress.credentialMode ?? null,
+    pitError: report.pitMembershipStress.error ?? null,
     pitMomentumSpread: report.pitMembershipStress.jtMomentumJ6K6Skip1.aggregate.meanDescriptiveTopMinusBottomReturn,
     pitHigh52Spread: report.pitMembershipStress.high52WeekK6.aggregate.meanDescriptiveTopMinusBottomReturn,
     earningsAvailableSymbols,
