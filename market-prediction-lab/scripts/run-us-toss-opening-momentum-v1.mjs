@@ -815,35 +815,46 @@ async function loadWikipediaNasdaq100History() {
 
   const currentTables = [...currentHtml.matchAll(/<table\b[\s\S]*?<\/table>/giu)].map((match) => match[0]);
   const historyTables = [...historyHtml.matchAll(/<table\b[\s\S]*?<\/table>/giu)].map((match) => match[0]);
-  const currentTable = currentTables.find((table) => /ICB\s*(?:Industry|Subsector)/iu.test(table) && /Ticker/iu.test(table));
-  const changesTable = historyTables.find((table) => /Reason/iu.test(table) && /Added/iu.test(table) && /Removed/iu.test(table) && /Date/iu.test(table));
-  if (!currentTable) throw new Error("WIKIPEDIA_NDX_CURRENT_COMPONENTS_TABLE_MISSING");
-  if (!changesTable) throw new Error("WIKIPEDIA_NDX_CHANGE_HISTORY_TABLE_MISSING");
 
-  const currentSymbols = [];
-  for (const cells of htmlRows(currentTable)) {
-    const symbol = cleanPitTicker(cells[0]);
-    if (symbol && symbol !== "TICKER") currentSymbols.push(symbol);
+  const currentCandidates = currentTables.map((table) => {
+    const symbols = htmlRows(table)
+      .map((cells) => cleanPitTicker(cells[0]))
+      .filter((symbol) => symbol && symbol !== "TICKER" && symbol !== "SYMBOL");
+    return { symbols: [...new Set(symbols)] };
+  }).filter((candidate) => candidate.symbols.length >= 90 && candidate.symbols.length <= 120);
+  if (!currentCandidates.length) {
+    throw new Error(`WIKIPEDIA_NDX_CURRENT_COMPONENTS_TABLE_MISSING_${currentTables.length}`);
   }
-  const current = [...new Set(currentSymbols)];
-  if (current.length < 90 || current.length > 120) throw new Error(`WIKIPEDIA_NDX_CURRENT_COMPONENTS_INVALID_${current.length}`);
+  currentCandidates.sort((left, right) => right.symbols.length - left.symbols.length);
+  const current = currentCandidates[0].symbols;
 
-  const changes = [];
-  let lastDate = null;
-  for (const cells of htmlRows(changesTable)) {
-    if (!cells.length) continue;
-    const maybeDate = parseChangeDate(cells[0]);
-    let offset = 0;
-    if (maybeDate) {
-      lastDate = maybeDate;
-      offset = 1;
+  function extractChangeRows(table) {
+    const output = [];
+    let lastDate = null;
+    for (const cells of htmlRows(table)) {
+      if (!cells.length) continue;
+      const maybeDate = parseChangeDate(cells[0]);
+      let offset = 0;
+      if (maybeDate) {
+        lastDate = maybeDate;
+        offset = 1;
+      }
+      if (!lastDate) continue;
+      const added = cleanPitTicker(cells[offset] ?? "");
+      const removed = cleanPitTicker(cells[offset + 2] ?? "");
+      if (!added && !removed) continue;
+      output.push({ date: lastDate, added, removed });
     }
-    if (!lastDate) continue;
-    const added = cleanPitTicker(cells[offset] ?? "");
-    const removed = cleanPitTicker(cells[offset + 2] ?? "");
-    if (!added && !removed) continue;
-    changes.push({ date: lastDate, added, removed });
+    return output;
   }
+  const historyCandidates = historyTables
+    .map((table) => ({ changes: extractChangeRows(table) }))
+    .filter((candidate) => candidate.changes.length >= 20)
+    .sort((left, right) => right.changes.length - left.changes.length);
+  if (!historyCandidates.length) {
+    throw new Error(`WIKIPEDIA_NDX_CHANGE_HISTORY_TABLE_MISSING_${historyTables.length}`);
+  }
+  const changes = historyCandidates[0].changes;
   if (changes.length < 100) throw new Error(`WIKIPEDIA_NDX_CHANGE_HISTORY_INSUFFICIENT_${changes.length}`);
   changes.sort((a, b) => b.date.localeCompare(a.date));
 
