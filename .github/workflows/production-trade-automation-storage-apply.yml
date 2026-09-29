@@ -53,6 +53,13 @@ jobs:
           grep -Fq "'trade_functions_verified',10" ops/apply-production-trade-automation-storage.mjs
           grep -Fq "'trade_user_rows_created',0" ops/apply-production-trade-automation-storage.mjs
           grep -Fq "'private_trading_api_count',0" ops/apply-production-trade-automation-storage.mjs
+          grep -Fq 'process.env.PROD_DATABASE_URL' ops/apply-production-trade-automation-storage.mjs
+          grep -Fq 'delete baseEnv.PROD_DATABASE_URL' ops/apply-production-trade-automation-storage.mjs
+          grep -Fq 'PROD_DATABASE_URL:' .github/workflows/production-trade-automation-storage-apply.yml
+          grep -Fq 'secrets.PROD_DATABASE_URL' .github/workflows/production-trade-automation-storage-apply.yml
+          grep -Fq 'IFS= read -r PROD_DATABASE_URL && export PROD_DATABASE_URL' .github/workflows/production-trade-automation-storage-apply.yml
+          grep -Fq 'printf '\''%s\n'\'' "$PROD_DATABASE_URL" | ssh' .github/workflows/production-trade-automation-storage-apply.yml
+          ! grep -Eq 'PROD_DATABASE_URL[=]%q' .github/workflows/production-trade-automation-storage-apply.yml
           grep -Fq "to_regprocedure('public.current_membership_level()') is null" api-server/supabase/migrations/2026092801_trade_membership_compatibility.sql
           grep -Fq "coalesce(p.status::text, 'pending') <> 'approved'" api-server/supabase/migrations/2026092801_trade_membership_compatibility.sql
           ! grep -Eiq '\b(update|delete|insert)[[:space:]]+public[.]profiles\b' api-server/supabase/migrations/2026092801_trade_membership_compatibility.sql
@@ -222,10 +229,16 @@ jobs:
         env:
           TARGET_SHA: ${{ steps.command.outputs.target_sha }}
           ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
         run: |
           set -Eeuo pipefail
+          [[ -n "$PROD_DATABASE_URL" && "$PROD_DATABASE_URL" =~ ^postgres(ql)?:// ]] || {
+            echo 'Protected Production database credential is missing or invalid.' >&2
+            exit 1
+          }
           artifact="$RUNNER_TEMP/production-trade-automation-storage.json"
           archive="$RUNNER_TEMP/production-trade-automation-storage-tooling.tar.gz"
+          stderr_file="$RUNNER_TEMP/production-trade-automation-storage.stderr"
           remote_dir="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" 'mktemp -d /tmp/trade-automation-storage.XXXXXX')"
           [[ "$remote_dir" =~ ^/tmp/trade-automation-storage\.[A-Za-z0-9]+$ ]]
           quoted_remote_dir="$(printf '%q' "$remote_dir")"
@@ -246,8 +259,8 @@ jobs:
             api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.sql \
             api-server/supabase/migrations/2026092502_trade_live_execution_toss_provider.sql
           scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$archive" "$SSH_USER@$SSH_HOST:$remote_dir/tooling.tar.gz"
-          remote_command="$(printf 'cd %q && tar -xzf tooling.tar.gz && EXPECTED_ACTIVE_SHA=%q APPROVED_TARGET_SHA=%q node ops/apply-production-trade-automation-storage.mjs' "$remote_dir" "$ACTIVE_SHA" "$TARGET_SHA")"
-          if ! ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" "$remote_command" > "$artifact"; then
+          remote_command="$(printf 'cd %q && tar -xzf tooling.tar.gz && IFS= read -r PROD_DATABASE_URL && export PROD_DATABASE_URL && EXPECTED_ACTIVE_SHA=%q APPROVED_TARGET_SHA=%q node ops/apply-production-trade-automation-storage.mjs' "$remote_dir" "$ACTIVE_SHA" "$TARGET_SHA")"
+          if ! printf '%s\n' "$PROD_DATABASE_URL" | ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" "$remote_command" > "$artifact" 2> "$stderr_file"; then
             echo 'Production trade storage apply failed safely; remote diagnostics are intentionally not printed.' >&2
             exit 1
           fi
