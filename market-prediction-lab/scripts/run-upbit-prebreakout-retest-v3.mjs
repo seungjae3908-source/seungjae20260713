@@ -243,45 +243,78 @@ function simulateExit(day,entryIndex,entryRaw,stopRaw,cost){
   if(rem>0){ret+=rem*(fill(day.at(-1).close)/entry-1);reason=tp2?"RUNNER_DAY_END":tp1?"PARTIAL_DAY_END":"DAY_END";}
   return {netReturn:ret,stopDistancePct:risk/entryRaw,tp1,tp2,exitTime:day[exitIndex].timestamp,exitReason:reason};
 }
-function replayOne(f,cand,day,cost){
+function bump(funnel,key){funnel[key]=(funnel[key]??0)+1;}
+function replayOne(f,cand,day,cost,funnel){
+  bump(funnel,"candidateDaysScanned");
   const h1=aggregate1h(day);
   let breakoutSeen=false;
   for(let i=10;i<day.length-1;i++){
     const decision=day[i].timestamp+15*60_000;
     const closed=day.slice(0,i+1).map(x=>({...x,closeTime:x.timestamp+15*60_000}));
     const ps15=structure(cand.symbol,"15m",closed,decision+1);
-    if(ps15.status!=="READY_FOR_SPECIALIST_RESEARCH_ONLY")continue;
+    if(ps15.status!=="READY_FOR_SPECIALIST_RESEARCH_ONLY"){bump(funnel,"structureUnavailable");continue;}
     const f15=ps15.features;
     const bar=day[i],previousBar=i>0?day[i-1]:null;
     if(f15.priceStructure.structureEvent==="FAILED_BREAKOUT"){
+      if(breakoutSeen)bump(funnel,"failedBreakoutAfterBreak");
       breakoutSeen=false;
       continue;
     }
     const closeOverLevel=bar.close>cand.breakoutLevel*(1+f.breakoutBuffer);
     const extension=bar.close/cand.breakoutLevel-1;
-    if(!breakoutSeen&&closeOverLevel&&extension<=f.maxBreakoutExtension){
-      breakoutSeen=true;
-      continue; // never enter the first expansion bar
+    if(!breakoutSeen&&closeOverLevel){
+      bump(funnel,"breakoutCloses");
+      if(extension<=f.maxBreakoutExtension){
+        breakoutSeen=true;
+        bump(funnel,"acceptedFirstBreakouts");
+      }else{
+        bump(funnel,"overextendedFirstBreakouts");
+      }
+      continue;
     }
     if(!breakoutSeen)continue;
 
     const available1h=h1.filter(x=>x.closeTime<=decision);
     const ps1h=available1h.length>=5?structure(cand.symbol,"1H",available1h,decision+1):null;
     const f1h=ps1h?.status==="READY_FOR_SPECIALIST_RESEARCH_ONLY"?ps1h.features:null;
-    const vw=vwap(day,decision);if(!(vw>0))continue;
+    if(f15.priceStructure.trend==="BEARISH"||f1h?.priceStructure?.trend==="BEARISH"){bump(funnel,"bearishStructureRejected");continue;}
+    if(f.require1hBullish&&f1h?.priceStructure?.trend!=="BULLISH"){bump(funnel,"oneHourBullishRejected");continue;}
+
+    const level=cand.breakoutLevel;
+    const touched=bar.low<=level*(1+f.retestTolerance)&&bar.low>=level*(1-f.retestTolerance*2.0);
+    if(!touched)continue;
+    bump(funnel,"retestTouches");
+    const reclaimed=bar.close>level*(1+f.breakoutBuffer*0.25);
+    if(!reclaimed){bump(funnel,"reclaimRejected");continue;}
+    bump(funnel,"reclaims");
+    const rebreak=previousBar?bar.close>previousBar.high:false;
+    if(!rebreak){bump(funnel,"rebreakRejected");continue;}
+    bump(funnel,"rebreaks");
+    const notExtended=bar.close<=level*(1+f.maxBreakoutExtension);
+    if(!notExtended){bump(funnel,"retestOverextendedRejected");continue;}
+
+    const vw=vwap(day,decision);
+    if(!(vw>0)){bump(funnel,"vwapUnavailable");continue;}
     const prevVol=day.slice(Math.max(0,i-8),i).map(x=>x.volume).filter(x=>x>0);
     const vr=prevVol.length?bar.volume/median(prevVol):1;
     const vwd=bar.close/vw-1;
-    if(!retestPass(f,cand,bar,previousBar,f15,f1h,vwd,vr,breakoutSeen))continue;
+    if(vwd<0||vwd>f.maxVwapDistance){bump(funnel,"vwapDistanceRejected");continue;}
+    if(vr<f.minVolumeReaccel){bump(funnel,"volumeRejected");continue;}
+    const candle=f15.candle;
+    if(candle.direction!=="UP"||(candle.bodyRangeRatio??0)<f.minBody||(candle.closeLocation??0)<f.minCloseLoc){
+      bump(funnel,"candleRejected");continue;
+    }
+    bump(funnel,"triggerQualityPassed");
 
     const entryIndex=i+1,entryRaw=day[entryIndex].open;
     const retestLow=bar.low;
     const structural=Math.min(retestLow*0.997,cand.breakoutLevel*(1-f.retestTolerance));
     let risk=(entryRaw-structural)/entryRaw;
     risk=Math.max(0.005,risk);
-    if(!(risk>0&&risk<=0.035))continue;
+    if(!(risk>0&&risk<=0.035)){bump(funnel,"stopWidthRejected");continue;}
 
     const result=simulateExit(day,entryIndex,entryRaw,entryRaw*(1-risk),cost);
+    bump(funnel,"entries");
     const triggerScore=+Math.min(100,cand.setupScore
       +10*clamp((vr-f.minVolumeReaccel)/1.5)
       +10*clamp(((f15.candle.closeLocation??0)-f.minCloseLoc)/0.35)
@@ -315,13 +348,28 @@ function dayMetrics(days){
   return {days:days.length,totalReturn:eq-1,averageDailyReturn:mean(r),medianDailyReturn:median(r),positiveDayRate:r.length?pos.length/r.length:0,averageWinningDay:mean(pos),averageLosingDay:mean(neg),bestDay:r.length?Math.max(...r):0,worstDay:r.length?Math.min(...r):0,maxDrawdown:mdd,daysAtLeast1Pct:r.filter(x=>x>=.01).length,daysAtLeast3Pct:r.filter(x=>x>=.03).length,daysAtLeast5Pct:r.filter(x=>x>=.05).length,daysAtLeast10Pct:r.filter(x=>x>=.10).length};
 }
 function runPeriod(f,dates,candidates,intraday,cost){
-  const days=[],trades=[];
+  const days=[],trades=[],funnel={
+    preparedCandidates:0,candidateDaysScanned:0,structureUnavailable:0,breakoutCloses:0,
+    acceptedFirstBreakouts:0,overextendedFirstBreakouts:0,failedBreakoutAfterBreak:0,
+    bearishStructureRejected:0,oneHourBullishRejected:0,retestTouches:0,reclaimRejected:0,
+    reclaims:0,rebreakRejected:0,rebreaks:0,retestOverextendedRejected:0,vwapUnavailable:0,
+    vwapDistanceRejected:0,volumeRejected:0,candleRejected:0,triggerQualityPassed:0,
+    stopWidthRejected:0,entries:0,
+  };
   for(const date of dates){
+    const prepared=candidates.get(date)??[];
+    funnel.preparedCandidates+=prepared.length;
     const triggered=[];
-    for(const c of candidates.get(date)??[]){const day=intraday.get(c.market)?.get(date);if(!day)continue;const t=replayOne(f,c,day,cost);if(t){triggered.push(t);trades.push(t);}}
-    const p=portfolio(triggered);days.push({date,candidateCount:(candidates.get(date)??[]).length,triggered:triggered.length,...p});
+    for(const cand of prepared){
+      const day=intraday.get(cand.market)?.get(date);
+      if(!day)continue;
+      const t=replayOne(f,cand,day,cost,funnel);
+      if(t){triggered.push(t);trades.push(t);}
+    }
+    const p=portfolio(triggered);
+    days.push({date,candidateCount:prepared.length,triggered:triggered.length,...p});
   }
-  return {metrics:dayMetrics(days),days,trades};
+  return {metrics:dayMetrics(days),days,trades,funnel};
 }
 function selectionScore(r){if(r.trades.length<6)return -999;return r.metrics.totalReturn-1.5*r.metrics.maxDrawdown+0.30*r.metrics.averageDailyReturn;}
 function robustGate(cal,calStress,val,valStress){
@@ -386,7 +434,7 @@ async function main(){
 
   const report={
     schemaVersion:3,status:"pass",market:"CRYPTO_SPOT",exchange:"UPBIT",
-    purpose:"D-1 pre-breakout compression candidate -> first D-day breakout retest/rebreak cross-symbol holdout",
+    purpose:"D-1 pre-breakout compression candidate -> first D-day breakout retest/rebreak cross-symbol holdout; funnel-instrumented diagnostic",
     dataWindow:{allDates:dates,developmentCalibrationDates:calibration,developmentValidationDates:validation,
       holdoutDates:dates,holdoutDatesPreviouslyObservedInPriorResearch:true},
     universe:{currentSnapshotBias:true,totalKrwMarkets:u.totalKrw,stablecoinsExcluded:[...STABLECOINS],
@@ -403,19 +451,19 @@ async function main(){
       holdoutSymbolsUsedForSelection:false,actualHistoricalLlmCalled:false,critic:"DETERMINISTIC_AI_READY_PREBREAKOUT_RETEST_V3"},
     costs:{normalPerSide:NORMAL_COST,stressPerSide:STRESS_COST},accountPolicy:ACCOUNT,
     familyResults:familyResults.map(x=>({family:x.family,selectionScore:x.selectionScore,gatePass:x.gatePass,
-      calibration:{metrics:x.calibration.metrics,trades:x.calibration.trades.length},
-      calibrationStress:{metrics:x.calibrationStress.metrics,trades:x.calibrationStress.trades.length},
-      validation:{metrics:x.validation.metrics,trades:x.validation.trades.length},
-      validationStress:{metrics:x.validationStress.metrics,trades:x.validationStress.trades.length}})),
+      calibration:{metrics:x.calibration.metrics,trades:x.calibration.trades.length,funnel:x.calibration.funnel},
+      calibrationStress:{metrics:x.calibrationStress.metrics,trades:x.calibrationStress.trades.length,funnel:x.calibrationStress.funnel},
+      validation:{metrics:x.validation.metrics,trades:x.validation.trades.length,funnel:x.validation.funnel},
+      validationStress:{metrics:x.validationStress.metrics,trades:x.validationStress.trades.length,funnel:x.validationStress.funnel}})),
     selectedFamily:selected.family,
     selectedStatus:eligible.length?"ROBUST_GATE_PASS":"RESEARCH_HOLD_NO_FAMILY_PASSED_ROBUST_GATE",
     freshCrossSymbolHoldout:{
-      normal:{metrics:holdoutNormal.metrics,days:holdoutNormal.days,trades:holdoutNormal.trades.map(t=>({
+      normal:{metrics:holdoutNormal.metrics,days:holdoutNormal.days,funnel:holdoutNormal.funnel,trades:holdoutNormal.trades.map(t=>({
         symbol:t.symbol,date:t.date,family:t.family,setupScore:t.setupScore,triggerScore:t.triggerScore,
         breakoutLevel:t.breakoutLevel,entryTime:new Date(t.entryTime).toISOString(),exitTime:new Date(t.exitTime).toISOString(),
         netReturn:t.netReturn,stopDistancePct:t.stopDistancePct,tp1:t.tp1,tp2:t.tp2,exitReason:t.exitReason,aiInputBundle:t.aiInputBundle}))},
-      stress:{metrics:holdoutStress.metrics,days:holdoutStress.days,trades:holdoutStress.trades.length},
-      last5Diagnostic:{metrics:holdoutLast5.metrics,trades:holdoutLast5.trades.length}},
+      stress:{metrics:holdoutStress.metrics,days:holdoutStress.days,funnel:holdoutStress.funnel,trades:holdoutStress.trades.length},
+      last5Diagnostic:{metrics:holdoutLast5.metrics,funnel:holdoutLast5.funnel,trades:holdoutLast5.trades.length}},
     lookahead:{D1UsesPriorCompletedDailyCandle:true,priorHighExcludesD1Candle:true,intradayUsesCompleted15mAnd1hOnly:true,
       firstExpansionBarEntryForbidden:true,entryNext15mOpen:true,holdoutSymbolsUsedForSelection:false,guardPassed:true},
     safety:{researchOnly:true,publicDataOnly:true,liveExecutionAllowed:false,privateAccountRequestAllowed:false,
