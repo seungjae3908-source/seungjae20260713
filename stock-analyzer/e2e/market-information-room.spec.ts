@@ -92,13 +92,22 @@ function meta(room: RoomId, options: { partial?: boolean; stale?: boolean } = {}
 
 function roomRows(room: RoomId) {
   if (room === 'stocks-kr') {
-    return [{
-      symbol: '005930', name: '삼성전자', exchange: 'KRX', currency: 'KRW', price: 78000,
-      changePercent: 0.7, high24h: 79000, low24h: 77000, volume24h: 700000,
-      tradingValue24h: 54000000000, marketCap: null, warning: false, tradingStatus: null,
-      fundingRatePercent: null, nextFundingAt: null, openInterest: null,
-      rangeVolatility24hPercent: null, providerUpdatedAt: NOW,
-    }];
+    return [
+      {
+        symbol: '005930', name: '삼성전자', exchange: 'KRX', currency: 'KRW', price: 78000,
+        changePercent: 0.7, high24h: 79000, low24h: 77000, volume24h: 700000,
+        tradingValue24h: 54000000000, marketCap: null, warning: false, tradingStatus: null,
+        fundingRatePercent: null, nextFundingAt: null, openInterest: null,
+        rangeVolatility24hPercent: null, providerUpdatedAt: NOW,
+      },
+      {
+        symbol: '000660', name: 'SK하이닉스', exchange: 'KRX', currency: 'KRW', price: 210000,
+        changePercent: 1.1, high24h: 213000, low24h: 205000, volume24h: 500000,
+        tradingValue24h: 42000000000, marketCap: null, warning: false, tradingStatus: null,
+        fundingRatePercent: null, nextFundingAt: null, openInterest: null,
+        rangeVolatility24hPercent: null, providerUpdatedAt: NOW,
+      },
+    ];
   }
   if (room === 'stocks-us') {
     return [{
@@ -211,7 +220,23 @@ function roomResponse(room: RoomId, options: MockOptions) {
       news: stock
         ? {
           status: 'ready',
-          data: [{
+          data: room === 'stocks-kr' ? [
+            {
+              id: 'kr-news-hynix', kind: 'news', symbol: '000660',
+              title: 'SK하이닉스 신규 투자 발표', summary: '최신 투자 뉴스', provider: '테스트뉴스A',
+              source: '테스트뉴스A', url: 'https://example.com/hynix-news', publishedAt: NOW,
+            },
+            {
+              id: 'kr-news-samsung-a', kind: 'news', symbol: '005930',
+              title: '삼성전자 공급계약 체결', summary: '공급계약 관련 공개 뉴스', provider: '테스트뉴스A',
+              source: '테스트뉴스A', url: 'https://example.com/samsung-news-a', publishedAt: '2026-08-04T23:45:00.000Z',
+            },
+            {
+              id: 'kr-news-samsung-b', kind: 'news', symbol: '005930',
+              title: '삼성전자 공급계약 체결', summary: '같은 이벤트의 다른 공개 출처', provider: '테스트뉴스B',
+              source: '테스트뉴스B', url: 'https://example.com/samsung-news-b', publishedAt: '2026-08-04T23:46:00.000Z',
+            },
+          ] : [{
             id: `${room}-news`, kind: 'news', symbol: rows[0].symbol,
             title: `${config.title} 공개 뉴스`, summary: '공개 정보', provider: '테스트뉴스',
             source: '테스트뉴스', url: 'https://example.com/news', publishedAt: NOW,
@@ -234,7 +259,12 @@ function roomResponse(room: RoomId, options: MockOptions) {
       disclosures: stock
         ? {
           status: 'ready',
-          data: [{
+          data: room === 'stocks-kr' ? [{
+            id: 'kr-filing-samsung', kind: 'disclosure', symbol: '005930',
+            title: '삼성전자 공급계약 체결', summary: '금융감독원 공식 공급계약 공시',
+            provider: 'OpenDART', source: '금융감독원 전자공시',
+            url: 'https://example.com/samsung-filing', publishedAt: '2026-08-04T23:47:00.000Z',
+          }] : [{
             id: `${room}-filing`, kind: 'disclosure', symbol: rows[0].symbol,
             title: `${config.title} 공식 공시`, summary: '공식 공시',
             provider: config.market === 'KR' ? 'OpenDART' : 'SEC EDGAR',
@@ -381,23 +411,23 @@ test('all four information rooms support direct routes, reload, history, source 
 
   for (const [path, title, exchange] of ROUTES) {
     await page.goto(path);
-    await expect(page.getByRole('heading', { name: title })).toBeVisible();
+    await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
     await expect(page.getByText(exchange, { exact: true })).toBeVisible();
     await expect(page.getByText('공개 데이터', { exact: true })).toBeVisible();
     await expect(page.getByText('private 요청 0', { exact: true })).toHaveCount(0);
     await expect(page.getByLabel('데이터 상태').first()).toContainText('출처');
     await page.reload();
-    await expect(page.getByRole('heading', { name: title })).toBeVisible();
+    await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
     await page.getByRole('button', { name: '시장정보 새로고침' }).click();
-    await expect(page.getByRole('heading', { name: title })).toBeVisible();
+    await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
   }
 
   await page.goto('/stocks/kr');
   await page.goto('/stocks/us');
   await page.goBack();
-  await expect(page.getByRole('heading', { name: '국내주식 정보' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '국내주식 정보', exact: true })).toBeVisible();
   await page.goForward();
-  await expect(page.getByRole('heading', { name: '미국주식 정보' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '미국주식 정보', exact: true })).toBeVisible();
 
   await page.goto('/coins/spot');
   await expect(page.getByText('검증된 코인 뉴스 provider가 아직 연결되지 않았습니다.').first()).toBeVisible();
@@ -430,7 +460,7 @@ test('partial, stale, unsupported, 429, and provider error states remain card-sc
   const limitedPage = await page.context().newPage();
   const limitedDiagnostics = await mockInformationApi(limitedPage, { errorRoom: 'coins-spot', errorStatus: 429 });
   await limitedPage.goto('/coins/spot');
-  await expect(limitedPage.getByRole('heading', { name: '코인 현물 정보' })).toBeVisible();
+  await expect(limitedPage.getByRole('heading', { name: '코인 현물 정보', exact: true })).toBeVisible();
   await expect(limitedPage.getByText('제공기관 호출 한도에 도달했습니다.').first()).toBeVisible();
   await expect(limitedPage.getByText('검증된 코인 뉴스 provider가 아직 연결되지 않았습니다.').first()).toBeVisible();
   limitedDiagnostics.assertClean();
@@ -439,11 +469,66 @@ test('partial, stale, unsupported, 429, and provider error states remain card-sc
   const outagePage = await page.context().newPage();
   const outageDiagnostics = await mockInformationApi(outagePage, { errorRoom: 'coins-futures', errorStatus: 503 });
   await outagePage.goto('/coins/futures');
-  await expect(outagePage.getByRole('heading', { name: '코인 선물 정보' })).toBeVisible();
+  await expect(outagePage.getByRole('heading', { name: '코인 선물 정보', exact: true })).toBeVisible();
   await expect(outagePage.getByText('제공기관 장애입니다.').first()).toBeVisible();
   await expect(outagePage.getByText('선물 지표')).toBeVisible();
   outageDiagnostics.assertClean();
   await outagePage.close();
+});
+
+test('news disclosure timeline deduplicates sources and prioritizes held or watched symbols without fabricating AI scores', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('seungjae_watchlist_v1', JSON.stringify([
+      { ticker: '005930', name: '삼성전자', market: 'KR', currency: 'KRW' },
+    ]));
+    localStorage.setItem('sa-portfolio-chart-overlays-v1', JSON.stringify([
+      {
+        ticker: '005930', name: '삼성전자', market: 'KR', currency: 'KRW',
+        averagePrice: 70000, quantity: 2, purchaseDate: '2026-08-01',
+        currentPrice: 78000, rate: ((78000 - 70000) / 70000) * 100,
+        updatedAt: '2026-08-05T00:00:00.000Z',
+      },
+    ]));
+  });
+  const diagnostics = await mockInformationApi(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/stocks/kr');
+  await page.getByRole('tab', { name: '소식', exact: true }).click();
+
+  const timeline = page.getByTestId('market-event-timeline');
+  await expect(timeline).toBeVisible();
+  const events = timeline.locator('article');
+  await expect(events).toHaveCount(2);
+
+  const first = events.first();
+  await expect(first).toHaveAttribute('data-event-symbol', '005930');
+  await expect(first).toContainText('공식공시');
+  await expect(first).toContainText('보유');
+  await expect(first).toContainText('출처 3개');
+  await expect(first.getByRole('link', { name: '원문 1', exact: true })).toBeVisible();
+  await expect(first.getByRole('link', { name: '원문 2', exact: true })).toBeVisible();
+  await expect(first.getByRole('link', { name: '원문 3', exact: true })).toBeVisible();
+  await expect(first).not.toContainText('AI 중요도');
+  await expect(first).not.toContainText('AI 감성');
+
+  const second = events.nth(1);
+  await expect(second).toHaveAttribute('data-event-symbol', '000660');
+  await expect(second).toContainText('SK하이닉스 신규 투자 발표');
+
+  const detail = first.getByRole('button', { name: '종목 상세', exact: true });
+  await detail.click();
+  await expect(page).toHaveURL(/\/stock-info\?asset=stock&market=KR&ticker=005930$/u);
+  diagnostics.assertClean();
+});
+
+test('market information source keeps a 12px floor and no nested event scroller', async () => {
+  const fs = await import('node:fs/promises');
+  const source = await fs.readFile(new URL('../src/pages/market-information.tsx', import.meta.url), 'utf8');
+  expect(source).not.toContain('text-[9px]');
+  expect(source).not.toContain('text-[10px]');
+  expect(source).not.toContain('font-black');
+  expect(source).toContain('data-testid="market-event-timeline"');
+  expect(source).not.toContain('max-h-');
 });
 
 test('360, 390, 430, and desktop layouts avoid overflow and keep 44px primary touch targets', async ({ page }) => {
@@ -451,7 +536,7 @@ test('360, 390, 430, and desktop layouts avoid overflow and keep 44px primary to
   for (const width of [360, 390, 430, 1440]) {
     await page.setViewportSize({ width, height: width >= 1000 ? 900 : 844 });
     await page.goto('/coins/futures');
-    await expect(page.getByRole('heading', { name: '코인 선물 정보' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '코인 선물 정보', exact: true })).toBeVisible();
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     expect(overflow).toBeLessThanOrEqual(0);
     const refresh = page.getByRole('button', { name: '시장정보 새로고침' });
