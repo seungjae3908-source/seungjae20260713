@@ -136,6 +136,31 @@ function buyHold(candles,window,costPerSide) {
   if(rows.length<2) return null;
   return rows.at(-1).close*(1-costPerSide)/(rows[0].open*(1+costPerSide))-1;
 }
+async function collectLongYahooHistory(symbol) {
+  const split = Date.parse("2018-01-01T00:00:00.000Z");
+  const parts = [];
+  for (const [startTime, endTime] of [[START, split], [split - 7 * 86400000, END]]) {
+    parts.push(await collectYahooStockHistory({
+      market: "US_STOCK",
+      symbol,
+      startTime,
+      endTime,
+      timeoutMs: 20000,
+    }));
+  }
+  const byTimestamp = new Map();
+  for (const part of parts) {
+    for (const candle of part.candles) byTimestamp.set(candle.timestamp, candle);
+  }
+  const candles = [...byTimestamp.values()].sort((a, b) => a.timestamp - b.timestamp);
+  return {
+    source: "yahoo-public-chart",
+    candles,
+    firstTimestamp: candles[0]?.timestamp ?? null,
+    lastTimestamp: candles.at(-1)?.timestamp ?? null,
+  };
+}
+
 function selfTest(){
   const candles=[]; let p=100;
   for(let i=0;i<260;i+=1){
@@ -151,7 +176,7 @@ async function main(){
   if(process.argv.includes("--self-test")){ selfTest(); return; }
   const datasets=[];
   for(const symbol of SYMBOLS){
-    const data=await collectYahooStockHistory({market:"US_STOCK",symbol,startTime:START,endTime:END,timeoutMs:20000});
+    const data=await collectLongYahooHistory(symbol);
     if(data.candles.length<3000) throw new Error(`${symbol}_INSUFFICIENT_HISTORY_${data.candles.length}`);
     datasets.push({symbol,candles:data.candles,report:{symbol,provider:data.source,candleCount:data.candles.length,firstDate:dateOf(data.firstTimestamp),lastDate:dateOf(data.lastTimestamp)}});
   }
