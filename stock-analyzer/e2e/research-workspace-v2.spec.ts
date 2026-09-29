@@ -104,6 +104,15 @@ for (const width of [390,768,1024,1440]) test(`mounted workspace filters and dis
   await expect(lifecycle).toContainText('수식 → 검증 → Registry → 승격 검토');
   await expect(lifecycle).toContainText('SYNTH_RESEARCH_V1');
   await expect(lifecycle).toContainText('TRAIN');
+  const reproducibility=lifecycle.getByTestId('research-reproducibility-identity');
+  await expect(reproducibility).toContainText('candidate-v1');
+  await expect(reproducibility).toContainText('v1');
+  await expect(reproducibility).toContainText('p'.repeat(64));
+  await expect(reproducibility).toContainText('1'.repeat(40));
+  await expect(reproducibility).toContainText('cost-v1');
+  await expect(reproducibility).toContainText('exec-v1');
+  await expect(reproducibility).toContainText('CRYPTO_FUTURES · 4H');
+  await expect(reproducibility).toContainText('LONG_SHORT');
   await expect(lifecycle.getByTestId('research-formula-dsl')).toContainText('CROSS_ABOVE / CROSS_BELOW');
   await expect(lifecycle.getByRole('link',{name:'백테스터 열기'})).toHaveAttribute('href',/backtests/);
   await expect(lifecycle.getByRole('link',{name:'승격 근거 전체 보기'})).toHaveAttribute('href',/strategy-promotion/);
