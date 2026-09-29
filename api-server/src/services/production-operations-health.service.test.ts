@@ -18,6 +18,7 @@ test('operations health reports required read failures without throwing or mutat
   });
 
   assert.equal(snapshot.state, 'BLOCKED');
+  assert.equal(snapshot.releaseDecision, 'MANUAL_RECOVERY_REQUIRED');
   assert.equal(snapshot.components.find((row) => row.id === 'database')?.state, 'BLOCKED');
   assert.equal(snapshot.components.find((row) => row.id === 'trade-storage')?.state, 'GREEN');
   assert.equal(snapshot.deployment.deploySha, '0ae83ffdc98e6214477c5f0e47ff8d91bdbb37df');
@@ -52,6 +53,7 @@ test('operations health exposes configuration presence without returning secret 
   assert.equal(snapshot.components.find((row) => row.id === 'ai-provider-config')?.state, 'GREEN');
   assert.equal(snapshot.components.find((row) => row.id === 'telegram-config')?.state, 'GREEN');
   assert.equal(snapshot.deployment.rollbackTargetKnown, true);
+  assert.equal(snapshot.releaseDecision, 'HOLD');
   assert.deepEqual(snapshot.executionGates, {
     liveTrading: true,
     autoTrading: true,
@@ -74,9 +76,30 @@ test('optional integration gaps degrade the snapshot but do not mark the API or 
   });
 
   assert.equal(snapshot.state, 'DEGRADED');
+  assert.equal(snapshot.releaseDecision, 'HOLD');
   assert.equal(snapshot.components.find((row) => row.id === 'api-runtime')?.state, 'GREEN');
   assert.equal(snapshot.components.find((row) => row.id === 'database')?.state, 'GREEN');
   assert.equal(snapshot.components.find((row) => row.id === 'trade-storage')?.state, 'DEGRADED');
   assert.equal(snapshot.components.find((row) => row.id === 'ai-provider-config')?.state, 'DEGRADED');
   assert.equal(snapshot.components.find((row) => row.id === 'telegram-config')?.state, 'DEGRADED');
+});
+
+
+test('BLOCKED health with a known rollback target recommends rollback without performing it', async () => {
+  const snapshot = await buildOperationsHealthSnapshot({
+    env: {
+      DEPLOY_SHA: 'abcdef1234567',
+      PREVIOUS_DEPLOY_SHA: '1234567abcdef',
+    },
+    checkDatabase: async () => { throw new Error('DB_DOWN'); },
+    checkTradeStorage: async () => {},
+  });
+
+  assert.equal(snapshot.state, 'BLOCKED');
+  assert.equal(snapshot.releaseDecision, 'ROLLBACK_RECOMMENDED');
+  assert.equal(snapshot.deployment.rollbackTargetKnown, true);
+  assert.equal(snapshot.safety.readOnlySnapshot, true);
+  assert.equal(snapshot.safety.providerProbePerformed, false);
+  assert.equal(snapshot.safety.orderSubmitted, false);
+  assert.equal(snapshot.safety.transferPerformed, false);
 });
