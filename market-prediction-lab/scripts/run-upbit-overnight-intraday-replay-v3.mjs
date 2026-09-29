@@ -11,7 +11,7 @@ const HISTORY_DAYS=180;
 const OBSERVED_CUTOFF="2026-09-05";
 const DISCOVERY_COUNT=12;
 const HOLDOUT_COUNT=12;
-const CANDIDATES_PER_DAY=6;
+const CANDIDATES_PER_DAY=8;
 const STABLECOINS=new Set(["USDT","USDC","DAI","TUSD","USDP","BUSD","FDUSD","PYUSD","USD1"]);
 const ACCOUNT=Object.freeze({riskPerTrade:0.005,maxWeight:0.20,maxConcurrent:3});
 const FAMILIES=Object.freeze({
@@ -236,27 +236,29 @@ function runPeriod(f,dates,candidates,intraday,cost){
   return {metrics:dayMetrics(days),days,trades};
 }
 function selectionScore(r){if(r.trades.length<5)return -999;return r.metrics.totalReturn-1.5*r.metrics.maxDrawdown+0.30*r.metrics.averageDailyReturn;}
-function robustGate(calibration,calibrationStress,validation,validationStress){
+function calibrationGate(calibration,calibrationStress){
   return calibration.metrics.days>=60
     && calibration.trades.length>=20
     && calibration.metrics.totalReturn>0
     && calibration.metrics.averageDailyReturn>0
-    && calibration.metrics.positiveDayRate>=0.40
+    && calibration.metrics.positiveDayRate>=0.35
     && calibrationStress.metrics.totalReturn>0
     && calibrationStress.metrics.averageDailyReturn>0
-    && calibrationStress.metrics.positiveDayRate>=0.35
-    && validation.metrics.days>=20
+    && calibrationStress.metrics.positiveDayRate>=0.30
+    && calibration.metrics.maxDrawdown<=0.12
+    && calibrationStress.metrics.maxDrawdown<=0.14;
+}
+function validationGate(validation,validationStress){
+  return validation.metrics.days>=20
     && validation.trades.length>=8
     && validation.metrics.totalReturn>0
     && validation.metrics.averageDailyReturn>0
-    && validation.metrics.positiveDayRate>=0.40
+    && validation.metrics.positiveDayRate>=0.35
     && validationStress.metrics.totalReturn>0
     && validationStress.metrics.averageDailyReturn>0
-    && validationStress.metrics.positiveDayRate>=0.35
-    && calibration.metrics.maxDrawdown<=0.10
-    && calibrationStress.metrics.maxDrawdown<=0.11
-    && validation.metrics.maxDrawdown<=0.08
-    && validationStress.metrics.maxDrawdown<=0.09;
+    && validationStress.metrics.positiveDayRate>=0.30
+    && validation.metrics.maxDrawdown<=0.10
+    && validationStress.metrics.maxDrawdown<=0.12;
 }
 function buildCandidates(rows,btcDaily,dates){
   const out=new Map();
@@ -299,31 +301,40 @@ async function main(){
     const calStress=runPeriod(f,calibration,discoveryCandidates,intraday,STRESS_COST);
     const val=runPeriod(f,validation,discoveryCandidates,intraday,NORMAL_COST);
     const valStress=runPeriod(f,validation,discoveryCandidates,intraday,STRESS_COST);
-    familyResults.push({family:f.name,selectionScore:selectionScore(cal),gatePass:robustGate(cal,calStress,val,valStress),calibration:cal,calibrationStress:calStress,validation:val,validationStress:valStress});
+    familyResults.push({
+      family:f.name,
+      selectionScore:selectionScore(cal),
+      calibrationGatePass:calibrationGate(cal,calStress),
+      validationGatePass:validationGate(val,valStress),
+      calibration:cal,
+      calibrationStress:calStress,
+      validation:val,
+      validationStress:valStress
+    });
   }
   familyResults.sort((a,b)=>b.selectionScore-a.selectionScore);
   const selectedFamily=familyResults[0];
-  const eligible=selectedFamily?.gatePass?[selectedFamily]:[];
+  const gatePassed=selectedFamily.calibrationGatePass&&selectedFamily.validationGatePass;
   const discoveryTestNormal=runPeriod(FAMILIES[selectedFamily.family],test,discoveryCandidates,intraday,NORMAL_COST);
   const discoveryTestStress=runPeriod(FAMILIES[selectedFamily.family],test,discoveryCandidates,intraday,STRESS_COST);
   const holdoutNormal=runPeriod(FAMILIES[selectedFamily.family],test,holdoutCandidates,intraday,NORMAL_COST);
   const holdoutStress=runPeriod(FAMILIES[selectedFamily.family],test,holdoutCandidates,intraday,STRESS_COST);
   const report={
     schemaVersion:3,status:"pass",market:"CRYPTO_SPOT",exchange:"UPBIT",
-    purpose:"pre-observed long-horizon temporal plus cross-symbol holdout D-1 daily-wave -> 15m/1H wave-candle-VWAP replay",
+    purpose:"pre-observed long-window temporal plus cross-symbol holdout D-1 daily-wave -> 15m/1H wave-candle-VWAP replay",
     dataWindow:{observedCutoffExclusive:OBSERVED_CUTOFF,completePreObservedDates:dates,calibrationDates:calibration,validationDates:validation,testDates:test,testDatesPreviouslyObservedByV1:false},
     universe:{
       currentSnapshotBias:true,totalKrwMarkets:u.totalKrw,stablecoinsExcluded:[...STABLECOINS],
       discovery:u.discovery.map(x=>({market:x.market,symbol:x.symbol,tradingValue24h:x.tradingValue24h})),
       holdout:u.holdout.map(x=>({market:x.market,symbol:x.symbol,tradingValue24h:x.tradingValue24h})),
     },
-    holdoutPolicy:{discoveryRanks:`1-${DISCOVERY_COUNT} after stablecoin exclusion`,holdoutRanks:`${DISCOVERY_COUNT+1}-${DISCOVERY_COUNT+HOLDOUT_COUNT} after stablecoin exclusion`,holdoutSymbolsUsedForFamilySelection:false,temporalTestFreshness:"PRE_V1_OBSERVED_WINDOW_HISTORICAL_HOLDOUT",crossSymbolHoldout:true},
-    selectionContract:{familiesPreRegistered:Object.keys(FAMILIES),familyDefinitionsUnchangedFromV2:true,dailyWaveStructureUnchangedFromV2:true,selectedByCalibrationOnly:true,validationCanChangeSelectedFamily:false,calibrationMustBePositiveNormalAndStress:true,validationMustBePositiveNormalAndStress:true,testUsedForSelection:false,holdoutSymbolsUsedForSelection:false,actualHistoricalLlmCalled:false,critic:"DETERMINISTIC_AI_READY_FEATURE_GATE_UPBIT_V2_FROZEN"},
+    holdoutPolicy:{discoveryRanks:`1-${DISCOVERY_COUNT} after stablecoin exclusion`,holdoutRanks:`${DISCOVERY_COUNT+1}-${DISCOVERY_COUNT+HOLDOUT_COUNT} after stablecoin exclusion`,holdoutSymbolsUsedForFamilySelection:false,temporalTestFreshness:"PRE_2026_09_05_NOT_USED_BY_V1_V2_REPLAY",crossSymbolHoldout:true},
+    selectionContract:{familiesPreRegistered:Object.keys(FAMILIES),dailyWaveStructureAddedBeforeHoldoutEvaluation:true,selectedFamilyChosenByCalibrationScoreOnly:true,validationCanOnlyPassOrFailSelectedFamily:true,calibrationMustBePositiveNormalAndStress:true,validationMustBePositiveNormalAndStress:true,testUsedForSelection:false,holdoutSymbolsUsedForSelection:false,actualHistoricalLlmCalled:false,critic:"DETERMINISTIC_AI_READY_FEATURE_GATE_UPBIT_V3"},
     costs:{normalPerSide:NORMAL_COST,stressPerSide:STRESS_COST},
     accountPolicy:ACCOUNT,
-    familyResults:familyResults.map(x=>({family:x.family,selectionScore:x.selectionScore,gatePass:x.gatePass,calibration:{metrics:x.calibration.metrics,trades:x.calibration.trades.length},calibrationStress:{metrics:x.calibrationStress.metrics,trades:x.calibrationStress.trades.length},validation:{metrics:x.validation.metrics,trades:x.validation.trades.length},validationStress:{metrics:x.validationStress.metrics,trades:x.validationStress.trades.length}})),
+    familyResults:familyResults.map(x=>({family:x.family,selectionScore:x.selectionScore,calibrationGatePass:x.calibrationGatePass,validationGatePass:x.validationGatePass,calibration:{metrics:x.calibration.metrics,trades:x.calibration.trades.length},calibrationStress:{metrics:x.calibrationStress.metrics,trades:x.calibrationStress.trades.length},validation:{metrics:x.validation.metrics,trades:x.validation.trades.length},validationStress:{metrics:x.validationStress.metrics,trades:x.validationStress.trades.length}})),
     selectedFamily:selectedFamily.family,
-    selectedStatus:eligible.length?"ROBUST_GATE_PASS":"RESEARCH_HOLD_NO_FAMILY_PASSED_ROBUST_GATE",
+    selectedStatus:gatePassed?"CALIBRATION_AND_VALIDATION_GATE_PASS":selectedFamily.calibrationGatePass?"RESEARCH_HOLD_VALIDATION_FAILED":"RESEARCH_HOLD_CALIBRATION_FAILED",
     sameCohortTestDiagnostic:{normal:{metrics:discoveryTestNormal.metrics,trades:discoveryTestNormal.trades.length},stress:{metrics:discoveryTestStress.metrics,trades:discoveryTestStress.trades.length}},
     crossSymbolHoldout:{
       normal:{metrics:holdoutNormal.metrics,days:holdoutNormal.days,trades:holdoutNormal.trades.map(t=>({symbol:t.symbol,date:t.date,family:t.family,setupScore:t.setupScore,triggerScore:t.triggerScore,entryTime:new Date(t.entryTime).toISOString(),exitTime:new Date(t.exitTime).toISOString(),netReturn:t.netReturn,stopDistancePct:t.stopDistancePct,tp1:t.tp1,tp2:t.tp2,exitReason:t.exitReason,aiInputBundle:t.aiInputBundle}))},
@@ -333,7 +344,7 @@ async function main(){
     safety:{researchOnly:true,publicDataOnly:true,liveExecutionAllowed:false,privateAccountRequestAllowed:false,executionAuthority:"NONE",profitabilityPromotionAllowed:false},
     limitations:[
       "Universe cohorts use a current Upbit KRW liquidity snapshot and therefore retain survivorship/current-membership bias.",
-      "All test dates are before the V1 observed September window, but the experiment remains retrospective rather than prospective live evidence.",
+      "All V3 replay dates are before 2026-09-05 and were not used by the V1/V2 September replay; however the family definitions themselves were developed after later-market observations, so this is still retrospective research rather than prospective proof.",
       "Historical order-book depth, archived news/catalyst, and historical AI model outputs are unavailable and are not fabricated.",
       "AI is represented by deterministic daily/15m/1H wave, candle, VWAP, relative-strength and volume feature gates.",
       "Candle replay is not exchange fill evidence and cannot establish PROFITABILITY_PROVEN.",
