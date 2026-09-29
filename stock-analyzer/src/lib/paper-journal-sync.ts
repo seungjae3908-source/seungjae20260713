@@ -1,4 +1,5 @@
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { assertUnifiedTradeJournalSafety } from './unified-journal-safety';
 import { createBatchIdempotencyKey, JOURNAL_SYNC_BATCH_SIZE } from './paper-journal-batching';
 export { createBatchIdempotencyKey, JOURNAL_SYNC_BATCH_SIZE, MAX_IDEMPOTENCY_KEY_LENGTH } from './paper-journal-batching';
 
@@ -49,7 +50,7 @@ export type TradingAiReviewResult = { summary: string; strengths: Array<{ title:
 export type AiReviewPreview = { dataset: TradingReviewDataset; includedFields:string[]; excludedFields:string[]; warnings:string[] };
 export type GeneratedAiReview = { providerRequestId:string|null; model:string; generatedAt:string; result:TradingAiReviewResult; usage:{inputUnits:number|null;outputUnits:number|null} };
 export type AiProviderCallState = { attempted:boolean; completed:boolean; reused:boolean };
-export type UnifiedTradeSource = 'TOSS_MANUAL'|'TOSS_API'|'APP_PAPER'|'APP_SHADOW'|'APP_AUTO';
+export type UnifiedTradeSource = 'TOSS_MANUAL'|'TOSS_API'|'UPBIT_API'|'BITGET_API'|'KIWOOM_API'|'APP_PAPER'|'APP_SHADOW'|'APP_AUTO';
 export type UnifiedTradeMarket = 'KR_STOCK'|'US_STOCK'|'CRYPTO_SPOT'|'CRYPTO_FUTURES';
 export type UnifiedTradeRange = 'TODAY'|'7D'|'30D'|'90D'|'1Y'|'ALL';
 export type UnifiedTradeGrade = 'A'|'B'|'C'|'D';
@@ -96,6 +97,7 @@ export type UnifiedTradeCycle = {
   positionSide:'LONG'|'SHORT'; currency:'KRW'|'USD'|'USDT'; status:'OPEN'|'CLOSED'; openedAt:string; closedAt:string|null;
   entryPrice:number; exitPrice:number|null; totalQuantity:number; closedQuantity:number; remainingQuantity:number;
   holdingTimeMs:number|null; grossPnl:number; fees:number|null; tax:number|null; costEvidence:UnifiedJournalCostEvidence; netPnl:number|null; netReturnPercent:number|null;
+  providerReportedNetPnl?:number|null; providerReportedNetPnlBasis?:string|null;
   strategy:string|null; timeframe:string|null; stopLossPrice:number|null; targetPrice:number|null; ruleViolation:boolean;
   warnings:string[]; technicalSnapshot:UnifiedTechnicalSnapshot; review:UnifiedTradeReview;
   initialEntry:UnifiedTradeLeg;
@@ -123,7 +125,13 @@ export type UnifiedTradeJournal = {
   integrityIssues:Array<{code:string;orderId:string|null;message:string}>;
   toss:{provider:'TOSS';officialSpecVersion:string;paidStatus:'PAID_STATUS_UNVERIFIED';liveReadIntegration:'BLOCKED_BY_FREE_STATUS_UNVERIFIED';contractNormalizerAvailable:true;executionGranularity:string;livePrivateRequests:0;actualOrders:0};
   aiReviewStatus:'AI_EXTERNAL_REVIEW_DISABLED_FREE_ONLY';
-  safety:{finalCostDelta:'0_KRW';actualOrderRequests:0;cancelRequests:0;amendRequests:0;transferRequests:0;withdrawalRequests:0;privateBrokerRequests:0};
+  safety:{finalCostDelta:'0_KRW';actualOrderRequests:0;cancelRequests:0;amendRequests:0;transferRequests:0;withdrawalRequests:0;privateBrokerRequests:number};
+  liveAccountHistory?:{
+    requestedRange:UnifiedTradeRange; effectiveDays:number; rangeCapped:boolean; persisted:false; privateProviderRequests:number; truncated:boolean;
+    providers:Array<{provider:'kiwoom'|'upbit'|'bitget';configured:boolean|null;enabled:boolean;status:'READY'|'PARTIAL'|'NOT_CONFIGURED'|'DISABLED'|'UNAVAILABLE';records:number;privateProviderRequests:number;truncated:boolean;errorCode:string|null}>;
+    realizedEvidence?:Array<{provider:'kiwoom';market:'KR';evidenceType:'DAILY_CASH_REALIZED';date:string;symbol:string;buyAveragePrice:number|null;buyQuantity:number|null;sellAveragePrice:number;sellQuantity:number;feesAndTax:number|null;providerReportedPnl:number|null;providerReportedReturnPercent:number|null;canonicalAnalyticsPromoted:false}>;
+    safety:{orderRequests:0;cancelRequests:0;amendRequests:0;transferRequests:0;withdrawalRequests:0;credentialsReturned:false;liveTradingEnabled:false;autoTradingEnabled:false};
+  };
   canonicalResearchBinding?:UnifiedCanonicalResearchBindingSummary;
 };
 export type UnifiedJournalFilters = {
@@ -258,18 +266,7 @@ export async function getUnifiedTradeJournal(filters: UnifiedJournalFilters = {}
   assertAnalysisEnvelope(body);
   if (!response.ok || body?.ok !== true) throw new Error(safeError(body, '통합 매매일지를 불러오지 못했습니다.'));
   const result = body.result as UnifiedTradeJournal | undefined;
-  if (!result
-    || result.aiReviewStatus !== 'AI_EXTERNAL_REVIEW_DISABLED_FREE_ONLY'
-    || result.toss.liveReadIntegration !== 'BLOCKED_BY_FREE_STATUS_UNVERIFIED'
-    || result.safety.finalCostDelta !== '0_KRW'
-    || result.safety.actualOrderRequests !== 0
-    || result.safety.cancelRequests !== 0
-    || result.safety.amendRequests !== 0
-    || result.safety.transferRequests !== 0
-    || result.safety.withdrawalRequests !== 0
-    || result.safety.privateBrokerRequests !== 0) {
-    throw new Error('통합 매매일지의 무료·무주문 안전 계약을 확인하지 못했습니다.');
-  }
+  assertUnifiedTradeJournalSafety(result);
   const binding = result.canonicalResearchBinding;
   if (binding && (
     binding.schemaVersion !== 'unified-journal-canonical-research-binding-v1'
