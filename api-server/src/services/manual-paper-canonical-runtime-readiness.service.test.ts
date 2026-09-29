@@ -305,6 +305,16 @@ test('complete read-only evidence is ready for activation review without enablin
     liquidityImpact: 1,
     partialFillImpact: 1,
   });
+  assert.deepEqual(result.fullCostComponentFailureReasons, {
+    commission: [],
+    tax: [],
+    spread: [],
+    slippage: [],
+    funding: [],
+    latency: [],
+    liquidityImpact: [],
+    partialFillImpact: [],
+  });
   assert.equal(result.settlementDurablePacketReady, true);
   assert.equal(result.closePositionCanonicalRebindReady, true);
   assert.equal(result.forwardObserverArtifactsReady, true);
@@ -485,6 +495,8 @@ test('Full Cost component diagnostics identify the exact missing cost without we
   assert.equal(result.fullCostComponentsReady, false);
   assert.equal(result.fullCostComponentEvidenceCounts.funding, 0);
   assert.equal(result.fullCostComponentEvidenceCounts.partialFillImpact, 1);
+  assert.deepEqual(result.fullCostComponentFailureReasons.funding, ['COMPONENT_MISSING']);
+  assert.deepEqual(result.fullCostComponentFailureReasons.partialFillImpact, []);
   assert.ok(result.blockers.includes('PAPER_CANONICAL_FULL_COST_EIGHT_COMPONENTS_NOT_READY'));
   assert.ok(result.blockers.includes('PAPER_CANONICAL_FULL_COST_COMPONENT_FUNDING_NOT_READY'));
   assert.equal(result.readyForActivationReview, false);
@@ -499,6 +511,8 @@ test('missing Full Cost, settlement packet, or canonical rebind stays fail-close
   assert.equal(noCost.fullCostComponentsReady, false);
   assert.equal(noCost.fullCostComponentEvidenceCounts.partialFillImpact, 0);
   assert.equal(noCost.fullCostComponentEvidenceCounts.commission, 1);
+  assert.deepEqual(noCost.fullCostComponentFailureReasons.partialFillImpact, ['COMPONENT_MISSING']);
+  assert.deepEqual(noCost.fullCostComponentFailureReasons.commission, []);
   assert.ok(noCost.blockers.includes('PAPER_CANONICAL_FULL_COST_EIGHT_COMPONENTS_NOT_READY'));
   assert.ok(noCost.blockers.includes('PAPER_CANONICAL_FULL_COST_COMPONENT_PARTIAL_FILL_IMPACT_NOT_READY'));
 
