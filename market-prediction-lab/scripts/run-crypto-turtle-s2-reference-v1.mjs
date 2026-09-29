@@ -420,6 +420,24 @@ const independentWindows = {
   singleUnitControl: buildIndependentWindows({ datasets, maxUnits: 1, costMultiplier: 1 }),
 };
 
+const sourcePrior = independentWindows.sourceNormal.PRIOR_2021_2023.aggregate;
+const sourceRecent = independentWindows.sourceNormal.RECENT_2024_2025.aggregate;
+const stressPrior = independentWindows.sourceStress.PRIOR_2021_2023.aggregate;
+const stressRecent = independentWindows.sourceStress.RECENT_2024_2025.aggregate;
+const singlePrior = independentWindows.singleUnitControl.PRIOR_2021_2023.aggregate;
+const singleRecent = independentWindows.singleUnitControl.RECENT_2024_2025.aggregate;
+const allSymbolsPositive = (aggregate) => Object.values(aggregate.perSymbol).every((row) => row.finalCapital > INITIAL_CAPITAL);
+const sourceTemporalTransferPassed = sourcePrior.totalReturn > 0 && sourceRecent.totalReturn > 0
+  && stressPrior.totalReturn > 0 && stressRecent.totalReturn > 0;
+const sourceCrossSymbolTransferPassed = allSymbolsPositive(sourcePrior) && allSymbolsPositive(sourceRecent);
+const singleUnitTemporalTransferPassed = singlePrior.totalReturn > 0 && singleRecent.totalReturn > 0;
+const singleUnitCrossSymbolTransferPassed = allSymbolsPositive(singlePrior) && allSymbolsPositive(singleRecent);
+const pyramidingWindowDelta = {
+  PRIOR_2021_2023: sourcePrior.totalReturn - singlePrior.totalReturn,
+  RECENT_2024_2025: sourceRecent.totalReturn - singleRecent.totalReturn,
+};
+const pyramidingContributionStableAcrossWindows = Object.values(pyramidingWindowDelta).every((value) => value > 0);
+
 const report = {
   schemaVersion: 1,
   status: "pass",
@@ -472,14 +490,30 @@ const report = {
     system1SkipRuleNotImplementedInThisBaseline: true,
     exactContractTickSizeAndExchangeMarginNotModeled: true,
   },
+  promotionAssessment: {
+    status: "RESEARCH_HOLD_TEMPORAL_AND_CROSS_SYMBOL_TRANSFER_FAILED",
+    sourceTemporalTransferPassed,
+    sourceCrossSymbolTransferPassed,
+    singleUnitTemporalTransferPassed,
+    singleUnitCrossSymbolTransferPassed,
+    pyramidingContributionStableAcrossWindows,
+    pyramidingWindowDelta,
+    holdout2026MayBeOpened: false,
+    reason: "frozen 4-unit System 2 is negative in PRIOR and positive in RECENT, BTC is negative in both source windows, and pyramiding helps RECENT while hurting PRIOR; the single-unit control is more stable in aggregate but still fails recent BTC transfer",
+    automaticPromotionAllowed: false,
+    economicSampleCredit: 0,
+    profitabilityClaimAllowed: false,
+  },
   decisionBoundary: {
     observedHistoryUsedForParameterSelection: false,
     temporalWindowReplayIndependentCapital: true,
     windowWarmupMayUsePreWindowPricesButNotPreWindowPnl: true,
+    observedWindowsMayNotAuthorizeRuleRetuning: true,
+    holdout2026RemainsSealed: true,
     automaticPromotionAllowed: false,
     economicSampleCredit: 0,
     profitabilityClaimAllowed: false,
-    nextRequiredEvidence: "read frozen System-2 result versus single-unit control and temporal windows before deciding whether any independent 2026 check is justified",
+    nextRequiredEvidence: "do not open 2026 or retune Turtle parameters; move to a genuinely independent recipe or broader canonical diversified futures replication",
   },
   safety: {
     researchOnly: true,
@@ -515,4 +549,9 @@ console.log(JSON.stringify({
   recentReturn: report.results.independentWindows.sourceNormal.RECENT_2024_2025.aggregate.totalReturn,
   priorStressReturn: report.results.independentWindows.sourceStress.PRIOR_2021_2023.aggregate.totalReturn,
   recentStressReturn: report.results.independentWindows.sourceStress.RECENT_2024_2025.aggregate.totalReturn,
+  singlePriorReturn: report.results.independentWindows.singleUnitControl.PRIOR_2021_2023.aggregate.totalReturn,
+  singleRecentReturn: report.results.independentWindows.singleUnitControl.RECENT_2024_2025.aggregate.totalReturn,
+  pyramidPriorDelta: report.promotionAssessment.pyramidingWindowDelta.PRIOR_2021_2023,
+  pyramidRecentDelta: report.promotionAssessment.pyramidingWindowDelta.RECENT_2024_2025,
+  promotionStatus: report.promotionAssessment.status,
 }));
