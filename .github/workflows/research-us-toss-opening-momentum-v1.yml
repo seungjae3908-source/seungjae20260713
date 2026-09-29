@@ -52,6 +52,9 @@ jobs:
           if(!r.lookahead.D1CandidateUsesOnlyPriorCompletedDailyBars||!r.lookahead.ORHEntryUsesNextCompleted5mOpenAfterTriggerBar||!r.lookahead.lowOfDayStopUsesOnlyLowObservedBeforeEntry||!r.lookahead.peadEntersFirstFullSessionStrictlyAfterReportDate) throw new Error('LOOKAHEAD');
           if(r.universe.dailyReadySymbols<240) throw new Error('DAILY_COVERAGE');
           if(r.episodicPivot.trueEpRequiresCatalyst!==true) throw new Error('EP_CATALYST');
+          if(r.pead.canonicalIbesSueafReplication!==false||r.pead.canonicalTimeSeriesSueStatus!=='BLOCKED_QUARTERLY_EPS_HISTORY_AND_FORECAST_VINTAGE') throw new Error('SUE_TRUTH');
+          if(!r.academicMomentum?.jtMomentumJ6K6Skip1?.aggregate||!r.academicMomentum?.high52WeekK6?.aggregate) throw new Error('ACADEMIC_BASELINES');
+          if(r.academicMomentum.jtMomentumJ6K6Skip1.aggregate.canonicalReplicationClaimAllowed!==false||r.academicMomentum.high52WeekK6.aggregate.canonicalReplicationClaimAllowed!==false) throw new Error('ACADEMIC_TRUTH');
           if(r.safety.researchOnly!==true||r.safety.publicMarketDataOnly!==true||r.safety.privateAccountRequestAllowed!==false||r.safety.orderRouteCalled!==false||r.safety.executionAuthority!=='NONE'||r.safety.economicSampleCredit!==0) throw new Error('SAFETY');
           NODE
       - uses: actions/upload-artifact@v4
