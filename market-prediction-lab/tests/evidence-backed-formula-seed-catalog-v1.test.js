@@ -12,6 +12,7 @@ import {
 } from "../src/autonomous-strategy-formula-generator-v1.js";
 import {
   EVIDENCE_BACKED_FORMULA_FAMILIES,
+  EVIDENCE_BACKED_REFERENCE_RECIPES,
   FUTURES_DERIVATIVES_EVIDENCE_REQUIREMENTS,
   buildEvidenceBackedFormulaSeedCatalogV1,
   createEvidenceBackedFormulaTemplatesV1,
@@ -144,6 +145,44 @@ test("catalog exposes exactly 12 market-horizon profiles with 9 cash READY and 3
     assert.deepEqual(profile.directions, ["LONG"]);
     assert.deepEqual(profile.formulaFamilies, EVIDENCE_BACKED_FORMULA_FAMILIES);
   }
+});
+
+test("catalog carries primary-source strategy recipes before any local formula invention", () => {
+  const catalog = buildEvidenceBackedFormulaSeedCatalogV1();
+  assert.equal(catalog.referenceRecipeCount, 7);
+  assert.deepEqual(catalog.referenceRecipes, EVIDENCE_BACKED_REFERENCE_RECIPES);
+  assert.equal(new Set(catalog.referenceRecipes.map((recipe) => recipe.recipeId)).size, 7);
+  assert.equal(Object.isFrozen(catalog.referenceRecipes), true);
+
+  const ep = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "QULLAMAGGIE_EP_V1");
+  assert.equal(ep.confirmation.gapUpMinFraction, 0.10);
+  assert.deepEqual(ep.confirmation.openingRangeHighMinutes, [1, 5, 60]);
+  assert.equal(ep.sourceEvidence[0].independentlyAuditedPerformance, false);
+  assert.equal(ep.localReplicationRequired, true);
+  assert.equal(ep.automaticActivationAllowed, false);
+
+  const breakout = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "QULLAMAGGIE_COMMON_BREAKOUT_V1");
+  assert.ok(breakout.candidatePreparation.includes("RANK_TOP_1_TO_2_PERCENT_BY_1M_3M_6M_PERFORMANCE"));
+  assert.deepEqual(breakout.confirmation.typicalConsolidationWeeksRange, [2, 8]);
+
+  for (const id of [
+    "CROSS_SECTIONAL_PRICE_MOMENTUM_V1",
+    "PEAD_EARNINGS_SURPRISE_V1",
+    "FIFTY_TWO_WEEK_HIGH_MOMENTUM_V1",
+    "TIME_SERIES_MOMENTUM_V1",
+  ]) {
+    const recipe = catalog.referenceRecipes.find((entry) => entry.recipeId === id);
+    assert.equal(recipe.origin, "ACADEMIC_PEER_REVIEWED", id);
+    assert.match(recipe.sourceEvidence[0].doi, /^10\./u, id);
+    assert.equal(recipe.localReplicationRequired, true, id);
+    assert.equal(recipe.automaticActivationAllowed, false, id);
+  }
+
+  const orb = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "ORB_STANDALONE_COST_CONTROL_V1");
+  assert.equal(orb.researchRole, "NEGATIVE_CONTROL");
+  assert.equal(orb.confirmation.preRegisteredCells, 225);
+  assert.equal(orb.confirmation.simpleCellsPassingPositiveBarAfterCosts, 0);
+  assert.equal(orb.automaticActivationAllowed, false);
 });
 
 test("every ready profile builds three deterministic early-profit safe DSL templates", () => {
