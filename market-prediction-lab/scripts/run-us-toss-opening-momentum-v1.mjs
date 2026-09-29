@@ -766,7 +766,15 @@ function htmlRows(table) {
   ).filter((cells) => cells.length);
 }
 function parseChangeDate(value) {
-  const parsed = Date.parse(String(value ?? "").trim());
+  const text = String(value ?? "").replace(/\s+/gu, " ").trim();
+  const iso = /(20\d{2}|19\d{2})-(\d{2})-(\d{2})/u.exec(text);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const named = /(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),\s*((?:19|20)\d{2})/iu.exec(text);
+  if (named) {
+    const parsed = Date.parse(`${named[1]} ${named[2]}, ${named[3]} UTC`);
+    if (Number.isFinite(parsed)) return new Date(parsed).toISOString().slice(0, 10);
+  }
+  const parsed = Date.parse(text);
   return Number.isFinite(parsed) ? new Date(parsed).toISOString().slice(0, 10) : null;
 }
 let wikipediaNasdaq100Cache = null;
@@ -940,7 +948,7 @@ async function loadWikipediaSp500History() {
   }
   const historyCandidates = historyTables
     .map((table) => ({ changes: extractChanges(table) }))
-    .filter((candidate) => candidate.changes.length >= 50)
+    .filter((candidate) => candidate.changes.length >= 10)
     .sort((left, right) => right.changes.length - left.changes.length);
   if (!historyCandidates.length) throw new Error(`WIKIPEDIA_SP500_CHANGE_TABLE_MISSING_${historyTables.length}`);
   const changes = historyCandidates[0].changes;
