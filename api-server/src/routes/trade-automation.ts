@@ -13,6 +13,7 @@ import type { SplitOrderRepository } from '../services/trade-split-order.reposit
 import { createSupabaseSplitOrderRepository } from '../services/trade-split-order-supabase.repository';
 import { credentialConfigurationStatus, encryptTradingCredentials } from '../services/trade-credential-vault.service';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
+import { spotLiveRuntimeStatus } from '../services/spot-live-limited-capability.service';
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
 import type {
@@ -304,6 +305,7 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
         kiwoom: automaticLiveExecutionEnabled('kiwoom'),
         toss: automaticLiveExecutionEnabled('toss'),
       },
+      spotLiveLimited: spotLiveRuntimeStatus(),
       credentialVault: vaultStatus,
       liveExecutionReadiness,
       lastOrder: orders[0] ?? null,

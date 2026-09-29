@@ -116,11 +116,14 @@ async function setup() {
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
   process.env.ORDER_EXECUTION_ENABLED = 'true';
   process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+  process.env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED = 'true';
   process.env.REAL_ORDER_ENABLED = 'true';
   process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
   process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
   process.env.LIVE_TRADING = 'true';
-  process.env.executionAuthority = 'MANUAL';
+  process.env.executionAuthority = 'SPOT_LIVE_LIMITED';
+  process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST = 'BALANCE_READ,POSITION_READ,OPEN_ORDER_READ,ORDER_CREATE,ORDER_CANCEL,ORDER_AMEND';
+  process.env.SPOT_LIVE_MARKET_ALLOWLIST = 'KR_STOCK,US_STOCK,CRYPTO_SPOT';
   setTradingPlanMarketIntelligenceRunnerForTests(eligibleMarketIntelligence);
   setTradeProfitabilityAttestationRunnerForTests(allowServerProfitabilityAttestationForTests);
   const repository = new InMemoryTradingRepository();
@@ -224,11 +227,14 @@ function resetEnvironment() {
   delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
   delete process.env.ORDER_EXECUTION_ENABLED;
   delete process.env.LIVE_TRADING_ACTIVATION_APPROVED;
+  delete process.env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED;
   delete process.env.REAL_ORDER_ENABLED;
   delete process.env.PRIVATE_TRADING_API_ALLOWED;
   delete process.env.UPBIT_LIVE_ORDER_ENABLED;
   delete process.env.LIVE_TRADING;
   delete process.env.executionAuthority;
+  delete process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST;
+  delete process.env.SPOT_LIVE_MARKET_ALLOWLIST;
 }
 
 test.afterEach(resetEnvironment);
