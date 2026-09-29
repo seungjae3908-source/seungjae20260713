@@ -122,6 +122,7 @@ export function prepareProtectedServerCanonicalActivation({
   activationReceiptCommentId,
   authorityCommentId,
   authorizedAtMs,
+  runtimeActivatedAtMs,
   baselineEvidence,
   historicalShadowLedger,
   contract = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
@@ -151,14 +152,27 @@ export function prepareProtectedServerCanonicalActivation({
     error.readiness = readiness;
     throw error;
   }
+  if (!positiveInteger(runtimeActivatedAtMs)
+    || runtimeActivatedAtMs < authorizedAtMs) {
+    throw new Error('SERVER_CANONICAL_RUNTIME_ACTIVATION_TIME_INVALID');
+  }
+  const runtimeActivationSlotIndex = activationSlotIndex(runtimeActivatedAtMs, contract);
+  const runtimeFirstEligibleSlotIndex = runtimeActivationSlotIndex + 1;
+  if (runtimeFirstEligibleSlotIndex >= contract.policyCore.cohort.totalSlotN) {
+    throw new Error('SERVER_CANONICAL_RUNTIME_ACTIVATION_NO_FUTURE_SLOT');
+  }
+  const firstEligibleSlotIndex = Math.max(
+    cutoverAuthority.firstEligibleSlotIndex,
+    runtimeFirstEligibleSlotIndex,
+  );
   const runtimeActivation = buildProtectedServerCanonicalRuntimeActivation({
     currentMainSha,
     activationBindingDigest,
     activationReceiptCommentId,
     authorityCommentId,
-    authorizedAtMs,
+    authorizedAtMs: runtimeActivatedAtMs,
     cutoverReadiness: readiness,
-    firstEligibleSlotIndex: cutoverAuthority.firstEligibleSlotIndex,
+    firstEligibleSlotIndex,
   });
   const body = Object.freeze({
     schemaVersion: SERVER_CANONICAL_PROTECTED_ACTIVATION_RECORD_SCHEMA,
@@ -167,7 +181,8 @@ export function prepareProtectedServerCanonicalActivation({
     activationReceiptCommentId,
     authorityCommentId,
     authorizedAtMs,
-    firstEligibleSlotIndex: cutoverAuthority.firstEligibleSlotIndex,
+    runtimeActivatedAtMs,
+    firstEligibleSlotIndex,
     cutoverAuthority,
     cutoverReadiness: readiness,
     runtimeActivation,
@@ -224,21 +239,28 @@ export function verifyProtectedServerCanonicalActivationRecord(
     || record?.runtimeActivation?.activationBindingDigest !== record?.activationBindingDigest
     || record?.runtimeActivation?.activationReceiptCommentId !== record?.activationReceiptCommentId
     || record?.runtimeActivation?.authorityCommentId !== record?.authorityCommentId
-    || record?.runtimeActivation?.authorizedAtMs !== record?.authorizedAtMs
+    || record?.runtimeActivation?.authorizedAtMs !== record?.runtimeActivatedAtMs
+    || !positiveInteger(record?.runtimeActivatedAtMs)
+    || record.runtimeActivatedAtMs < record?.authorizedAtMs
     || record?.cutoverAuthority?.targetMainSha !== record?.targetMainSha
     || record?.cutoverAuthority?.activationBindingDigest !== record?.activationBindingDigest
     || record?.cutoverAuthority?.activationReceiptCommentId !== record?.activationReceiptCommentId
     || record?.cutoverAuthority?.authorityCommentId !== record?.authorityCommentId
     || record?.cutoverAuthority?.authorizedAtMs !== record?.authorizedAtMs
     || record?.firstEligibleSlotIndex !== record?.runtimeActivation?.firstEligibleSlotIndex
-    || record?.firstEligibleSlotIndex !== record?.cutoverAuthority?.firstEligibleSlotIndex) {
+    || record?.firstEligibleSlotIndex < record?.cutoverAuthority?.firstEligibleSlotIndex) {
     blockers.push('SERVER_CANONICAL_ACTIVATION_RECORD_LINEAGE_INVALID');
   }
   const expectedAuthoritySlot = (() => {
     try { return activationSlotIndex(record?.authorizedAtMs, contract); } catch { return null; }
   })();
+  const expectedRuntimeActivationSlot = (() => {
+    try { return activationSlotIndex(record?.runtimeActivatedAtMs, contract); } catch { return null; }
+  })();
   if (expectedAuthoritySlot == null
-    || record?.firstEligibleSlotIndex < expectedAuthoritySlot + 1) {
+    || expectedRuntimeActivationSlot == null
+    || record?.cutoverAuthority?.firstEligibleSlotIndex < expectedAuthoritySlot + 1
+    || record?.firstEligibleSlotIndex < expectedRuntimeActivationSlot + 1) {
     blockers.push('SERVER_CANONICAL_ACTIVATION_RECORD_FUTURE_SLOT_INVALID');
   }
   if (record?.canonicalEconomicCredit !== 0
