@@ -422,7 +422,7 @@ function buildCandidates(rows,btcDaily,dates){
 }
 async function main(){
   const u=await markets();
-  const cohortMap=new Map([...u.discovery,...u.holdout,u.btcReference].map(x=>[x.market,x]));
+  const cohortMap=new Map([...u.holdout,u.btcReference].map(x=>[x.market,x]));
   const data=[];
   for(const row of cohortMap.values()){
     const daily=await dailyCandles(row.market);
@@ -431,9 +431,8 @@ async function main(){
   }
   const byMarket=new Map(data.map(x=>[x.market,x]));
   const btc=byMarket.get("KRW-BTC");if(!btc)throw new Error("BTC_REFERENCE_MISSING");
-  const discoveryData=u.discovery.map(x=>byMarket.get(x.market)).filter(Boolean);
   const holdoutData=u.holdout.map(x=>byMarket.get(x.market)).filter(Boolean);
-  if(discoveryData.length!==DISCOVERY_COUNT||holdoutData.length!==HOLDOUT_COUNT)throw new Error("COHORT_HISTORY_INCOMPLETE");
+  if(holdoutData.length!==HOLDOUT_COUNT)throw new Error("COHORT_HISTORY_INCOMPLETE");
   const dates=completeDates(btc.minute15).filter((date)=>date<OBSERVED_CUTOFF);
   if(dates.length<100)throw new Error(`PRE_OBSERVED_COMPLETE_DAYS_INSUFFICIENT_${dates.length}`);
   const testCount=Math.max(20,Math.floor(dates.length*0.20));
@@ -444,7 +443,6 @@ async function main(){
   const validation=dates.slice(calibrationCount,calibrationCount+validationCount);
   const test=dates.slice(calibrationCount+validationCount);
   const intraday=new Map(data.map(x=>[x.market,groupDays(x.minute15)]));
-  const discoveryCandidates=buildCandidates(discoveryData,btc.daily,dates);
   const holdoutCandidates=buildCandidates(holdoutData,btc.daily,dates);
   const overnightNormal=runPeriod(V4_FIXED_PROFILE,dates,holdoutCandidates,intraday,NORMAL_COST);
   const overnightStress=runPeriod(V4_FIXED_PROFILE,dates,holdoutCandidates,intraday,STRESS_COST);
