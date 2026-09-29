@@ -23,6 +23,15 @@ const REQUIRED_CI_CONTEXTS = Object.freeze([
   'futures-public-network-smoke/verified',
 ]);
 const SERVER_TRIGGER_MINUTES = Object.freeze([17, 27, 37]);
+const SERVER_ON_CALENDAR_UTC = Object.freeze([
+  '*-*-* *:17:00 UTC',
+  '*-*-* *:27:00 UTC',
+  '*-*-* *:37:00 UTC',
+]);
+export const SERVER_CANONICAL_SOURCE_PRECEDENCE = Object.freeze([
+  'GITHUB_V3_SCHEDULE',
+  'SERVER_NATURAL_TIMER',
+]);
 
 function add(blockers, code) {
   if (!blockers.includes(code)) blockers.push(code);
@@ -51,6 +60,17 @@ function sameArray(left, right) {
     && left.every((value, index) => value === right[index]);
 }
 
+function exactString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function canonicalCreditKey({ policyDigest, cohortDigest, slotIndex } = {}) {
+  if (!exactDigest(policyDigest)
+    || !exactDigest(cohortDigest)
+    || !nonNegativeInteger(slotIndex)) return null;
+  return Object.freeze({ policyDigest, cohortDigest, slotIndex });
+}
+
 function shadowReceiptBody(receipt) {
   const { receiptDigest: _receiptDigest, ...body } = receipt ?? {};
   return body;
@@ -77,6 +97,7 @@ export function buildServerCanonicalCutoverReadiness({
   serverRuntime,
   cutoverAuthority,
   shadowReceipt,
+  canonicalCreditLedger,
   contract = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
 } = {}) {
   const blockers = [];
@@ -101,10 +122,20 @@ export function buildServerCanonicalCutoverReadiness({
     add(blockers, 'SERVER_CANONICAL_BINDING_DIGEST_MISMATCH');
   }
 
-  if (latestActivationReceipt?.action !== 'AUTHORIZE'
+  const expectedActivationReceiptBody = [
+    '/authorize-public-only-partial-fill-v3-schedule-activation',
+    currentMainSha,
+    activationBindingDigest,
+  ].join(' ');
+  if (latestActivationReceipt?.issueNumber !== 23
+    || latestActivationReceipt?.action !== 'AUTHORIZE'
     || latestActivationReceipt?.targetMainSha !== currentMainSha
     || latestActivationReceipt?.activationBindingDigest !== activationBindingDigest
-    || !positiveInteger(latestActivationReceipt?.commentId)) {
+    || !positiveInteger(latestActivationReceipt?.commentId)
+    || latestActivationReceipt?.authorAssociation !== 'OWNER'
+    || !exactString(latestActivationReceipt?.actorLogin)
+    || latestActivationReceipt?.body !== expectedActivationReceiptBody
+    || latestActivationReceipt?.latestForTargetBinding !== true) {
     add(blockers, 'SERVER_CANONICAL_CURRENT_MAIN_OWNER_RECEIPT_INVALID');
   }
 
@@ -112,7 +143,8 @@ export function buildServerCanonicalCutoverReadiness({
   const requiredContextsReady = REQUIRED_CI_CONTEXTS.every(
     (name) => contexts?.[name] === 'success',
   );
-  if (requiredCi?.headSha !== currentMainSha
+  if (!positiveInteger(requiredCi?.runId)
+    || requiredCi?.headSha !== currentMainSha
     || requiredCi?.workflowId !== 325169344
     || requiredCi?.workflowName !== 'Application CI'
     || requiredCi?.workflowPath !== '.github/workflows/futures-public-network-smoke.yml'
@@ -129,6 +161,13 @@ export function buildServerCanonicalCutoverReadiness({
     || githubDelivery?.targetWorkflowState !== 'active') {
     add(blockers, 'SERVER_CANONICAL_GITHUB_TARGET_WORKFLOW_NOT_ACTIVE');
   }
+  if (githubDelivery?.targetLatestScheduleWorkflowId !== 347888347
+    || githubDelivery?.targetLatestScheduleEvent !== 'schedule'
+    || !exactSha(githubDelivery?.targetLatestScheduleHeadSha)
+    || githubDelivery?.targetLatestScheduleHeadSha === currentMainSha
+    || githubDelivery?.targetCurrentMainScheduleRunCount !== 0) {
+    add(blockers, 'SERVER_CANONICAL_CURRENT_MAIN_GITHUB_SCHEDULE_ABSENCE_UNPROVEN');
+  }
   if (!positiveInteger(githubDelivery?.targetLatestScheduleCreatedAtMs)
     || !positiveInteger(githubDelivery?.observedAtMs)
     || githubDelivery.observedAtMs - githubDelivery.targetLatestScheduleCreatedAtMs
@@ -136,6 +175,10 @@ export function buildServerCanonicalCutoverReadiness({
     add(blockers, 'SERVER_CANONICAL_GITHUB_TARGET_OUTAGE_NOT_MATURED');
   }
   if (!positiveInteger(githubDelivery?.repositoryLatestScheduleCreatedAtMs)
+    || !positiveInteger(githubDelivery?.repositoryLatestScheduleWorkflowId)
+    || githubDelivery?.repositoryLatestScheduleWorkflowId === 347888347
+    || githubDelivery?.repositoryLatestScheduleEvent !== 'schedule'
+    || githubDelivery?.repositoryLatestScheduleHeadSha !== currentMainSha
     || githubDelivery.repositoryLatestScheduleCreatedAtMs
       <= githubDelivery.targetLatestScheduleCreatedAtMs) {
     add(blockers, 'SERVER_CANONICAL_REPOSITORY_SCHEDULE_HEALTH_NOT_OBSERVED');
@@ -145,10 +188,18 @@ export function buildServerCanonicalCutoverReadiness({
     || serverRuntime?.timerEnabled !== true
     || serverRuntime?.timerActive !== true
     || serverRuntime?.persistent !== false
+    || serverRuntime?.timerUnit !== 'public-forward-liquidity-server-shadow-worker-v1.timer'
+    || serverRuntime?.serviceUnit !== 'public-forward-liquidity-server-shadow-worker-v1.service'
+    || serverRuntime?.timerTimezone !== 'UTC'
+    || !sameArray(serverRuntime?.onCalendarUtc, SERVER_ON_CALENDAR_UTC)
+    || serverRuntime?.accuracySec !== 1
+    || serverRuntime?.randomizedDelaySec !== 0
     || serverRuntime?.ntpSynchronized !== true
     || serverRuntime?.shadowOnly !== true
     || serverRuntime?.serverCanonical !== false
+    || serverRuntime?.receiptPersistence !== 'CREATE_ONLY_WX'
     || serverRuntime?.productionAppMutationPerformed !== false
+    || serverRuntime?.manualCapturePerformed !== false
     || serverRuntime?.executionAuthority !== 'NONE'
     || !sameArray(serverRuntime?.triggerMinutesUtc, SERVER_TRIGGER_MINUTES)) {
     add(blockers, 'SERVER_CANONICAL_SHADOW_RUNTIME_NOT_READY');
@@ -235,6 +286,25 @@ export function buildServerCanonicalCutoverReadiness({
     add(blockers, 'SERVER_CANONICAL_SHADOW_SLOT_IDENTITY_INVALID');
   }
 
+  const creditKey = canonicalCreditKey({
+    policyDigest: shadowReceipt?.policyDigest,
+    cohortDigest: shadowReceipt?.cohortDigest,
+    slotIndex: shadowReceipt?.slotIndex,
+  });
+  if (!creditKey
+    || canonicalCreditLedger?.lookupComplete !== true
+    || canonicalCreditLedger?.sourcePrecedence?.length !== 2
+    || !sameArray(
+      canonicalCreditLedger?.sourcePrecedence,
+      SERVER_CANONICAL_SOURCE_PRECEDENCE,
+    )
+    || canonicalJson(canonicalCreditLedger?.creditKey ?? null) !== canonicalJson(creditKey)
+    || !Array.isArray(canonicalCreditLedger?.matchingCanonicalCredits)
+    || canonicalCreditLedger.matchingCanonicalCredits.length !== 0
+    || canonicalCreditLedger?.maximumCanonicalEconomicCredit !== 1) {
+    add(blockers, 'SERVER_CANONICAL_PRIOR_CREDIT_DEDUPE_UNPROVEN');
+  }
+
   if (positiveInteger(cutoverAuthority?.authorizedAtMs)
     && positiveInteger(shadowReceipt?.serverStartedAtMs)
     && shadowReceipt.serverStartedAtMs <= cutoverAuthority.authorizedAtMs) {
@@ -262,6 +332,13 @@ export function buildServerCanonicalCutoverReadiness({
       nonNegativeInteger(cutoverAuthority?.firstEligibleSlotIndex)
         ? cutoverAuthority.firstEligibleSlotIndex
         : null,
+    canonicalCreditKey: creditKey,
+    sourcePrecedence: SERVER_CANONICAL_SOURCE_PRECEDENCE,
+    githubRecoveryPolicy: 'STOP_SERVER_CANONICAL_AND_EMIT_NO_CREDIT',
+    maximumCanonicalEconomicCreditPerPolicyCohortSlot: 1,
+    observedAtMs: positiveInteger(githubDelivery?.observedAtMs)
+      ? githubDelivery.observedAtMs
+      : null,
     blockers: Object.freeze(blockers),
     safety: Object.freeze({
       replayCredit: 0,
