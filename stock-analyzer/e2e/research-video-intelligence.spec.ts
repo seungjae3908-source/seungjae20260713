@@ -30,7 +30,7 @@ async function install(page:Page,payload:unknown){
   await page.goto('/research-center');
   await expect(page.getByRole('button',{name:'요약',exact:true})).toHaveAttribute('aria-pressed','true');
   await page.getByRole('button',{name:'영상',exact:true}).click();
-  await expect(page.getByText('영상 근거와 기술 상태',{exact:true})).toBeVisible();
+  await expect(page.getByText('기술 상태 자세히 보기',{exact:true})).toBeVisible();
   const panel=page.getByTestId('research-video-panel');await expect(panel).toBeVisible();
   return {panel,calls,external,errors};
 }
