@@ -356,6 +356,9 @@ test('exit preview re-reads the real position in read-only mode and never submit
     'LIVE_TRADING',
     'ORDER_EXECUTION_ENABLED',
     'LIVE_TRADING_ACTIVATION_APPROVED',
+    'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED',
+    'SPOT_LIVE_CAPABILITY_ALLOWLIST',
+    'SPOT_LIVE_MARKET_ALLOWLIST',
     'REAL_ORDER_ENABLED',
     'PRIVATE_TRADING_API_ALLOWED',
     'TOSS_LIVE_ORDER_ENABLED',
@@ -654,10 +657,13 @@ test('exit preview re-reads the real position in read-only mode and never submit
       lastErrorCode: null,
       updatedAt: verifiedAt,
     });
-    process.env.executionAuthority = 'MANUAL';
+    process.env.executionAuthority = 'SPOT_LIVE_LIMITED';
     process.env.LIVE_TRADING = 'true';
     process.env.ORDER_EXECUTION_ENABLED = 'true';
     process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+    process.env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED = 'true';
+    process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST = 'BALANCE_READ,POSITION_READ,OPEN_ORDER_READ,ORDER_CREATE,ORDER_CANCEL,ORDER_AMEND';
+    process.env.SPOT_LIVE_MARKET_ALLOWLIST = 'KR_STOCK,US_STOCK,CRYPTO_SPOT';
     process.env.REAL_ORDER_ENABLED = 'true';
     process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
     process.env.TOSS_LIVE_ORDER_ENABLED = 'true';
