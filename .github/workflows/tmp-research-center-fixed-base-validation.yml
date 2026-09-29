@@ -1,0 +1,60 @@
+name: Temporary Research Center Fixed-Base Validation
+# validation-revision: 2
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/tmp-research-center-fixed-base-validation.yml'
+      - 'stock-analyzer/e2e/research-workspace-v2.spec.ts'
+      - 'stock-analyzer/src/components/research-strategy-lifecycle.tsx'
+      - 'stock-analyzer/src/components/research-video-panel.tsx'
+      - 'stock-analyzer/src/components/research-workspace-panel.tsx'
+      - 'stock-analyzer/src/pages/research-center-workspace.tsx'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tmp-research-center-fixed-base-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  LIVE_TRADING: 'false'
+  AUTO_TRADING: 'false'
+  REAL_ORDER_ENABLED: 'false'
+  PRIVATE_TRADING_API_ALLOWED: 'false'
+  ENABLE_REPLIT_EDITOR_PLUGINS: 'false'
+
+jobs:
+  validate:
+    if: github.event.pull_request.draft == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.11.0'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install pinned dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Frontend semantic typecheck
+        run: pnpm --dir stock-analyzer typecheck
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+      - name: Research Workspace browser suite
+        run: pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+      - name: Safety boundary
+        run: |
+          test "$LIVE_TRADING" = false
+          test "$AUTO_TRADING" = false
+          test "$REAL_ORDER_ENABLED" = false
+          test "$PRIVATE_TRADING_API_ALLOWED" = false
+          echo 'Validation only: no Ready/Merge/Staging/Production/runtime activation.'
