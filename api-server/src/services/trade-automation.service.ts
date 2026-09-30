@@ -92,9 +92,23 @@ export function liveCapabilityDecision(
   exchange: TradingPlanInput['exchange'],
   capability: LimitedLiveCapability,
 ) {
-  return exchange === 'bitget'
-    ? futuresLiveCapabilityDecision({ exchange, capability: capability as FuturesLiveCapability })
-    : spotLiveCapabilityDecision({ exchange, capability: capability as SpotLiveCapability });
+  if (exchange !== 'bitget') {
+    return spotLiveCapabilityDecision({ exchange, capability: capability as SpotLiveCapability });
+  }
+  const futuresDecision = futuresLiveCapabilityDecision({
+    exchange,
+    capability: capability as FuturesLiveCapability,
+  });
+  if (futuresDecision.allowed || capability !== 'OPEN_ORDER_READ') return futuresDecision;
+
+  // Preserve the pre-existing query-only Bitget recovery lane for orders that
+  // predate FUTURES_LIVE_LIMITED. Production SPOT activation keeps the Bitget
+  // provider gate off, so this cannot open a new-order path.
+  const legacyRecoveryRead = spotLiveCapabilityDecision({
+    exchange,
+    capability: 'OPEN_ORDER_READ',
+  });
+  return legacyRecoveryRead.allowed ? legacyRecoveryRead : futuresDecision;
 }
 
 export function livePlanCapabilityDecision(
