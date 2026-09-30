@@ -1,0 +1,89 @@
+name: Prediction Lab Evidence-backed 3Y Benchmark V1
+
+on:
+  push:
+    branches:
+      - research/evidence-backed-3y-benchmark-v1-20260930
+    paths:
+      - market-prediction-lab/src/evidence-backed-3y-benchmark-v1.js
+      - market-prediction-lab/tests/evidence-backed-3y-benchmark-v1.test.js
+      - market-prediction-lab/scripts/run-evidence-backed-3y-benchmark-v1.js
+      - .github/workflows/prediction-lab-evidence-backed-3y-benchmark-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evidence-backed-3y-benchmark-v1-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    name: Evidence-backed 3Y public benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - name: Checkout exact branch revision
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Verify research-only safety envelope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$LIVE_TRADING" = "false"
+          test "$AUTO_TRADING" = "false"
+          test "$REAL_ORDER_ENABLED" = "false"
+          test "$PRIVATE_TRADING_API_ALLOWED" = "false"
+          test "$EXECUTION_AUTHORITY" = "NONE"
+
+      - name: Run focused benchmark contract tests
+        working-directory: market-prediction-lab
+        run: node --test tests/evidence-backed-3y-benchmark-v1.test.js
+
+      - name: Run three-year public-data benchmark
+        working-directory: market-prediction-lab
+        run: node scripts/run-evidence-backed-3y-benchmark-v1.js docs/evidence-backed-3y-benchmark-v1-result.json
+
+      - name: Assert result safety and bounded truth
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const report = JSON.parse(await readFile("docs/evidence-backed-3y-benchmark-v1-result.json", "utf8"));
+          if (report?.safety?.executionAuthority !== "NONE") throw new Error("EXECUTION_AUTHORITY_ESCALATION");
+          if (report?.safety?.profitabilityProven !== false) throw new Error("PROFITABILITY_CLAIM_FORBIDDEN");
+          if (report?.safety?.economicCreditGranted !== false) throw new Error("ECONOMIC_CREDIT_FORBIDDEN");
+          if (report?.methodology?.marketSpecificFullCostClaimed !== false) throw new Error("FULL_COST_FALSE_CLAIM");
+          if (!Array.isArray(report?.profileReports) || report.profileReports.length !== 12) throw new Error("PROFILE_MATRIX_INCOMPLETE");
+          if (!Array.isArray(report?.strategyRows)) throw new Error("STRATEGY_ROWS_MISSING");
+          console.log(JSON.stringify({
+            status: report.status,
+            measuredRows: report.strategyRows.filter((row) => row.status === "MEASURED_PROXY").length,
+            readyProfiles: report.profileReports.filter((row) => row.resultStatus === "READY").map((row) => row.profileId),
+            baseCostComparison: report.baseCostComparison,
+          }, null, 2));
+          NODE
+
+      - name: Upload immutable benchmark artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-backed-3y-benchmark-v1-${{ github.sha }}
+          path: market-prediction-lab/docs/evidence-backed-3y-benchmark-v1-result.json
+          if-no-files-found: error
+          retention-days: 14
