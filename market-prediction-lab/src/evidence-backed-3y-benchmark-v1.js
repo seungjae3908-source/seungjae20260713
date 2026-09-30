@@ -354,6 +354,71 @@ export function runCrossSectionalMomentumProxy({
   });
 }
 
+export function runFundingCarryProxy({
+  spotCandles,
+  futuresCandles,
+  fundingRecords,
+  perSideCostBps = 10,
+  trailingFundingDays = 7,
+} = {}) {
+  if (!Array.isArray(spotCandles) || !Array.isArray(futuresCandles) || !Array.isArray(fundingRecords)) {
+    throw new TypeError("spotCandles, futuresCandles and fundingRecords must be arrays");
+  }
+  if (!Number.isSafeInteger(trailingFundingDays) || trailingFundingDays < 1) {
+    throw new RangeError("trailingFundingDays must be >= 1");
+  }
+  const spotMap = new Map(spotCandles.map((row) => [row.timestamp, row.close]));
+  const futuresMap = new Map(futuresCandles.map((row) => [row.timestamp, row.close]));
+  const timestamps = [...spotMap.keys()].filter((timestamp) => futuresMap.has(timestamp)).sort((a, b) => a - b);
+  const funding = fundingRecords
+    .filter((row) => Number.isInteger(row?.timestamp) && Number.isFinite(row?.rate))
+    .sort((a, b) => a.timestamp - b.timestamp);
+  const costRate = perSideCostBps / 10_000;
+  const returns = [];
+  let active = 0;
+
+  for (let index = 1; index < timestamps.length; index += 1) {
+    const previousTimestamp = timestamps[index - 1];
+    const currentTimestamp = timestamps[index];
+    const signalCutoff = previousTimestamp;
+    const trailingStart = signalCutoff - trailingFundingDays * 24 * 60 * 60 * 1000;
+    const trailingFunding = funding
+      .filter((row) => row.timestamp > trailingStart && row.timestamp <= signalCutoff)
+      .reduce((sum, row) => sum + row.rate, 0);
+    const nextActive = trailingFunding > 0 ? 1 : 0;
+    const turnover = Math.abs(nextActive - active);
+
+    const spotPrevious = spotMap.get(previousTimestamp);
+    const spotCurrent = spotMap.get(currentTimestamp);
+    const futuresPrevious = futuresMap.get(previousTimestamp);
+    const futuresCurrent = futuresMap.get(currentTimestamp);
+    if (!(spotPrevious > 0 && spotCurrent > 0 && futuresPrevious > 0 && futuresCurrent > 0)) continue;
+
+    const intervalFunding = funding
+      .filter((row) => row.timestamp > previousTimestamp && row.timestamp <= currentTimestamp)
+      .reduce((sum, row) => sum + row.rate, 0);
+
+    const hedgedPriceReturn = nextActive * (
+      0.5 * (spotCurrent / spotPrevious - 1)
+      - 0.5 * (futuresCurrent / futuresPrevious - 1)
+    );
+    const fundingIncome = nextActive * 0.5 * intervalFunding;
+    const transactionCost = turnover * costRate;
+    returns.push(hedgedPriceReturn + fundingIncome - transactionCost);
+    active = nextActive;
+  }
+
+  return Object.freeze({
+    family: "SAME_VENUE_FUNDING_CARRY_PROXY",
+    sourceFaithfulReplication: false,
+    crossVenueReplication: false,
+    deltaNeutralTarget: true,
+    trailingFundingDays,
+    perSideCostBps,
+    performance: summarizeReturnSeries(returns, { barsPerYear: 365 }),
+  });
+}
+
 export function barsPerYearForProfile(market, horizon) {
   if (horizon === "SHORT") {
     if (market === "KR_STOCK") return 252 * 6.5 * 4;
