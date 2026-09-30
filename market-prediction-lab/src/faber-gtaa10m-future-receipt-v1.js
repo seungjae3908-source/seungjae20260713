@@ -24,7 +24,7 @@ function canonicalHash(value) {
 }
 
 function normalizeSeries(symbol, rows) {
-  if (!Array.isArray(rows) || rows.length < PERIOD + 2) {
+  if (!Array.isArray(rows) || rows.length < PERIOD + 1) {
     throw new Error(`FABER_FUTURE_${symbol}_MONTHLY_HISTORY_INSUFFICIENT`);
   }
   const normalized = rows.map((row) => {
