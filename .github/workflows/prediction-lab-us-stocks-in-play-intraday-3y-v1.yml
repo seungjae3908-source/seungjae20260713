@@ -1,0 +1,128 @@
+name: Prediction Lab US Stocks-in-Play Intraday 3Y V1
+
+on:
+  push:
+    branches:
+      - research/us-stocks-in-play-intraday-3y-v1-20260930
+    paths:
+      - market-prediction-lab/scripts/run-us-stocks-in-play-intraday-3y-v1.py
+      - .github/workflows/prediction-lab-us-stocks-in-play-intraday-3y-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: us-stocks-in-play-intraday-3y-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  chunk:
+    name: Intraday chunk ${{ matrix.id }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: y1
+            start: 2023-04-01
+            end: 2024-03-31
+          - id: y2
+            start: 2024-04-01
+            end: 2025-03-31
+          - id: y3
+            start: 2025-04-01
+            end: 2026-03-31
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+      PYTHONHASHSEED: "42"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned research dependencies
+        run: python -m pip install --disable-pip-version-check "duckdb==1.4.1" "numpy==2.2.6" "pandas==2.2.3" "requests==2.32.5" "pytz==2026.2"
+      - name: Verify research-only safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$LIVE_TRADING" = "false"
+          test "$AUTO_TRADING" = "false"
+          test "$REAL_ORDER_ENABLED" = "false"
+          test "$PRIVATE_TRADING_API_ALLOWED" = "false"
+          test "$EXECUTION_AUTHORITY" = "NONE"
+      - name: Causal/risk self-test
+        run: python market-prediction-lab/scripts/run-us-stocks-in-play-intraday-3y-v1.py --mode self-test
+      - name: Run chunk
+        run: |
+          python market-prediction-lab/scripts/run-us-stocks-in-play-intraday-3y-v1.py             --mode chunk             --start "${{ matrix.start }}"             --end "${{ matrix.end }}"             --output "market-prediction-lab/docs/stocks-in-play-chunk-${{ matrix.id }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stocks-in-play-chunk-${{ matrix.id }}-${{ github.sha }}
+          path: market-prediction-lab/docs/stocks-in-play-chunk-${{ matrix.id }}.json
+          if-no-files-found: error
+          retention-days: 14
+
+  combine:
+    name: Combine 3Y Stocks-in-Play results
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    needs: [chunk]
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --disable-pip-version-check "duckdb==1.4.1" "numpy==2.2.6" "pandas==2.2.3" "requests==2.32.5" "pytz==2026.2"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: stocks-in-play-chunk-*-${{ github.sha }}
+          path: /tmp/stocks-in-play-chunks
+          merge-multiple: true
+      - name: Combine exactly three years
+        run: |
+          python market-prediction-lab/scripts/run-us-stocks-in-play-intraday-3y-v1.py             --mode combine             --input-dir /tmp/stocks-in-play-chunks             --output market-prediction-lab/docs/us-stocks-in-play-intraday-3y-v1-result.json
+      - name: Assert bounded truth and profitable survivor contract
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          p="market-prediction-lab/docs/us-stocks-in-play-intraday-3y-v1-result.json"
+          r=json.load(open(p))
+          assert r["safety"]["profitabilityProven"] is False
+          assert r["safety"]["executionAuthority"] == "NONE"
+          assert r["period"]["exactThreeCalendarYears"] is True
+          assert r["methodology"]["sourceFaithfulSignalRules"] is True
+          assert r["methodology"]["slippageInOriginalPaper"] is False
+          for x in r["profitableSurvivorsOnly"]:
+              m=x["stress5bpsPerSide"]
+              assert m["totalReturn"] > 0
+              assert m["dailyProfitFactor"] > 1
+              assert x["tradeCount"] >= 100
+          print(json.dumps({
+              "survivorCount":len(r["profitableSurvivorsOnly"]),
+              "survivors":r["profitableSurvivorsOnly"],
+          },indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: us-stocks-in-play-intraday-3y-v1-${{ github.sha }}
+          path: market-prediction-lab/docs/us-stocks-in-play-intraday-3y-v1-result.json
+          if-no-files-found: error
+          retention-days: 14
