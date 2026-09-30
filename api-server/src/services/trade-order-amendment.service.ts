@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { TradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
-import { spotLivePlanCapabilityDecision } from './spot-live-limited-capability.service';
+import { livePlanCapabilityDecision } from './trade-automation.service';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
 import { tradingProviderHttpErrorCode, tradingProviderNetworkErrorCode, tradingProviderTimeoutCode } from './trade-provider-http-error.service';
 import {
@@ -294,7 +294,7 @@ export class TradeOrderAmendmentService {
     assertAmendRiskBounds(order, plan, price, quantity);
 
     if (plan.accountMode !== 'live') throw new Error('LIVE_ACCOUNT_REQUIRED_FOR_PROVIDER_AMEND');
-    const capabilityDecision = spotLivePlanCapabilityDecision(plan, 'ORDER_AMEND');
+    const capabilityDecision = livePlanCapabilityDecision(plan, 'ORDER_AMEND');
     if (!capabilityDecision.allowed) {
       throw new Error(`SPOT_LIVE_AMEND_CAPABILITY_BLOCKED:${capabilityDecision.blockCodes.join(',')}`);
     }
