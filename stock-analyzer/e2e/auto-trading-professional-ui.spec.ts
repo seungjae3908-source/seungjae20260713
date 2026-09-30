@@ -43,3 +43,13 @@ test('trading shell keeps professional typography and standing-authorization saf
   expect(page).toContain('<TradeAutomationSettings fixture={fixture} selectedMarket={market} />');
   expect(page).toContain('<UserBrokerTelegramPanel />');
 });
+
+test('automatic trading settings surface the four evidence-backed strategy lanes without granting automatic live promotion', () => {
+  const settings = source('src/components/trade-automation-settings.tsx');
+
+  expect(settings).toContain('data-testid="evidence-backed-auto-strategies"');
+  expect(settings).toContain('연구 기반 자동매매 전략');
+  expect(settings).toContain('기본 상태 {strategy.defaultState} · 자동 실주문 승격 없음');
+  expect(settings).toContain('evidence-strategy-${strategy.strategyId}');
+  expect(settings).toContain('로컬 OOS·Walk-forward·Full Cost·전략건강성 준비도가 확인되기 전에는 NO_TRADE');
+});
