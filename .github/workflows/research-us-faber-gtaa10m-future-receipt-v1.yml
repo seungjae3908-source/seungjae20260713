@@ -15,10 +15,9 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
-  group: faber-gtaa10m-future-receipt-v1-\${{ github.event_name }}-\${{ github.ref }}
+  group: faber-gtaa10m-future-receipt-v1-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -29,12 +28,12 @@ jobs:
       - name: Checkout immutable revision
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Verify exact revision
         shell: bash
         env:
-          EXPECTED_SHA: \${{ github.event.pull_request.head.sha || github.sha }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -Eeuo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
@@ -62,8 +61,26 @@ jobs:
             market-prediction-lab/src/faber-gtaa10m-future-receipt-v1.js \
             market-prediction-lab/scripts/run-faber-gtaa10m-future-receipt-v1.mjs
 
+  collect:
+    if: github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout immutable revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Collect public future evidence
-        if: github.event_name != 'pull_request'
         working-directory: market-prediction-lab
         shell: bash
         run: |
@@ -71,7 +88,6 @@ jobs:
           node scripts/run-faber-gtaa10m-future-receipt-v1.mjs docs/us-faber-gtaa10m-future-receipt-v1.json
 
       - name: Verify future receipt truth boundary
-        if: github.event_name != 'pull_request'
         working-directory: market-prediction-lab
         shell: bash
         run: |
@@ -94,21 +110,19 @@ jobs:
           NODE
 
       - name: Upload immutable future receipt
-        if: github.event_name != 'pull_request'
         id: upload
         uses: actions/upload-artifact@v4
         with:
-          name: faber-gtaa10m-future-receipt-\${{ github.sha }}
+          name: faber-gtaa10m-future-receipt-${{ github.sha }}
           path: market-prediction-lab/docs/us-faber-gtaa10m-future-receipt-v1.json
           if-no-files-found: error
           retention-days: 90
 
       - name: Report sanitized receipt to Central Hub
-        if: github.event_name != 'pull_request'
         uses: actions/github-script@v7
         env:
-          ARTIFACT_DIGEST: \${{ steps.upload.outputs.artifact-digest }}
-          ARTIFACT_URL: \${{ steps.upload.outputs.artifact-url }}
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
         with:
           script: |
             const fs = require('node:fs');
@@ -133,7 +147,7 @@ jobs:
               '',
               'Public data only. No live order, account, DB, Secret, Env, deploy, or trading-authority mutation.',
               'Replit not used.',
-            ].join('\\n');
+            ].join('\n');
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
