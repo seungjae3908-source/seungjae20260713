@@ -108,6 +108,48 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
+const requiredConfigBlocks = [
+  ['const requiredConfigKeys = [', 'TELEGRAM_PREFLIGHT_REQUIRED_CONFIG'],
+  ['const requiredTelegramConfigKeys = [', 'TELEGRAM_SMOKE_REQUIRED_CONFIG'],
+];
+for (const [marker, label] of requiredConfigBlocks) {
+  const start = source.indexOf(marker);
+  const end = start >= 0 ? source.indexOf('];', start) : -1;
+  if (start < 0 || end <= start) throw new Error(`${label}_BLOCK_MISSING`);
+  const block = source.slice(start, end);
+  for (const key of [
+    'TELEGRAM_BOT_TOKEN',
+    'TELEGRAM_CHAT_ID',
+    'TELEGRAM_STOCK_CHAT_ID',
+    'TELEGRAM_CRYPTO_CHAT_ID',
+    'TELEGRAM_BOT_USERNAME',
+    'TELEGRAM_WEBHOOK_SECRET',
+  ]) {
+    if (!block.includes(key)) throw new Error(`${label}_CORE_KEY_MISSING:${key}`);
+  }
+  for (const optionalKey of [
+    'TELEGRAM_KR_STOCK_CHAT_ID',
+    'TELEGRAM_US_STOCK_CHAT_ID',
+    'TELEGRAM_CRYPTO_SPOT_CHAT_ID',
+    'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
+    'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID',
+    'TELEGRAM_AUTO_TRADING_CHAT_ID',
+    'TELEGRAM_OWNER_MEMBER_ID',
+  ]) {
+    if (block.includes(optionalKey)) throw new Error(`${label}_OPTIONAL_KEY_MUST_NOT_BLOCK_RELEASE:${optionalKey}`);
+  }
+}
+for (const fragment of [
+  "String(env.TELEGRAM_KR_STOCK_CHAT_ID ?? '').trim() || stockLegacyChatId",
+  "String(env.TELEGRAM_US_STOCK_CHAT_ID ?? '').trim() || stockLegacyChatId",
+  "String(env.TELEGRAM_CRYPTO_SPOT_CHAT_ID ?? '').trim() || cryptoLegacyChatId",
+  "String(env.TELEGRAM_CRYPTO_FUTURES_CHAT_ID ?? '').trim() || cryptoLegacyChatId",
+  "if (holdingsChatId) uniqueRoomTargets.set(holdingsChatId, 'HOLDINGS_CHAT')",
+  "if (autoTradingChatId) uniqueRoomTargets.set(autoTradingChatId, 'AUTO_TRADING_CHAT')",
+]) {
+  if (!source.includes(fragment)) throw new Error(`TELEGRAM_RUNTIME_FALLBACK_CONTRACT_MISSING:${fragment}`);
+}
+
 if (!personalWorkerSource.includes("console.log('[user-telegram-worker] started')")) {
   throw new Error('Personal Telegram delivery worker must emit a sanitized startup marker for Production proof');
 }
