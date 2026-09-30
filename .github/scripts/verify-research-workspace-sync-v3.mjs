@@ -49,6 +49,11 @@ const added=[
  'packages/external-research/scripts/run-existing-research-providers-v8.d.mts',
  'api-server/src/services/ai-chat.service.ts',
  'api-server/src/services/ai-chat.service.test.ts',
+ 'api-server/src/services/ai-chat-hardening.service.test.ts',
+ 'api-server/src/routes/ai-chat.ts',
+ 'api-server/src/services/ai-provider-runtime-health.service.ts',
+ 'api-server/src/services/ai-chat-timeframe-context.service.ts',
+ 'api-server/src/services/ai-chat-timeframe-context.service.test.ts',
  'stock-analyzer/src/pages/ai-chat.tsx',
  'api-server/src/services/research-groq-one-shot-transport.service.test.ts',
  'api-server/src/services/research-groq-json-transport.service.ts',
@@ -115,6 +120,21 @@ const supplemental=[
  'stock-analyzer/e2e/support/start-vite-e2e-server.mjs',
  '.github/workflows/research-workspace-integration-v1.yml',
 ];
+const strategyResearchDrift=[
+ 'stock-analyzer/e2e/research-workspace-v2.spec.ts',
+ 'stock-analyzer/src/components/research-strategy-lifecycle.tsx',
+ 'stock-analyzer/src/components/research-video-panel.tsx',
+ 'stock-analyzer/src/components/research-workspace-panel.tsx',
+ 'stock-analyzer/src/pages/research-center-workspace.tsx',
+];
+const resourceGovernorReviewed=[
+ 'research-production/bin/research-resource-budget.mjs',
+ 'research-production/src/research-resource-budget.mjs',
+ 'research-production/test/research-resource-budget.test.mjs',
+ 'research-production/src/engine.mjs',
+ 'research-production/test/research-engine.test.mjs',
+ '.github/workflows/paper-forward-schedule-validation.yml',
+];
 const original=git('diff','--name-only',BASE,OWNER).split('\n');
 const portfolioReviewed=[
  'api-server/src/features/account-readonly/account-readonly.journal-history.test.ts',
@@ -143,7 +163,7 @@ const portfolioReviewed=[
  'stock-analyzer/src/pages/phase7-journal-sync-e2e.tsx',
  'stock-analyzer/src/pages/portfolio-v2.tsx',
 ];
-const allowed=new Set([...original,...added,...supplemental,...portfolioReviewed]);
+const allowed=new Set([...original,...added,...supplemental,...portfolioReviewed,...strategyResearchDrift,...resourceGovernorReviewed]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
 for(const p of changed)if(!allowed.has(p))throw new Error('UNREVIEWED_PATH:'+p);
 git('merge-base','--is-ancestor',MAIN,'HEAD');
@@ -152,25 +172,11 @@ if(!isAncestor(OWNER,MAIN))for(const p of git('diff','--diff-filter=A','--name-o
  let existed=false;try{git('cat-file','-e',`${MAIN}:${p}`);existed=true;}catch{}
  if(existed)throw new Error('UNREVIEWED_ADD_ADD_CONFLICT:'+p);
 }
-const mount="\n\n// Read pre-existing sanitized research only; the nested workspace requires admin access.\nrouter.use('/research/video/evidence', requireCapability('canAccessBasicInfo'), videoResearchEvidenceRouter);";
-let current=git('show','HEAD:api-server/src/routes/index.ts');
-if(!isAncestor(OWNER,MAIN))current=current
- .replace("\nimport videoResearchEvidenceRouter from './video-research-evidence';",'').replace(mount,'');
-// #1463 intentionally shares one existing READ_ONLY account service instance so
-// portfolio intelligence and the account screen reuse token/last-good caches.
-// Normalize that reviewed refactor back to current-main text for preservation proof.
-current=current
- .replace(
-   "import { createAccountReadonlyRouter } from '../features/account-readonly/account-readonly.route';\nimport { accountReadonlyRuntimeService } from '../features/account-readonly/account-readonly.runtime-service';",
-   "import { createAccountReadonlyRouter, accountReadFlags } from '../features/account-readonly/account-readonly.route';\nimport { AccountReadonlyService } from '../features/account-readonly/account-readonly.service';\nimport { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';\nimport { accountReadonlyCredentialConfigured } from '../features/account-readonly/account-readonly.repository';",
- )
- .replace(
-   "  createAccountReadonlyRouter(accountReadonlyRuntimeService),",
-   "  createAccountReadonlyRouter(new AccountReadonlyService(\n    createVaultBackedAccountReaders(),\n    accountReadFlags(),\n    () => new Date(),\n    accountReadonlyCredentialConfigured,\n  )),",
- );
-if(current!==git('show',`${MAIN}:api-server/src/routes/index.ts`))throw new Error('MAIN_ROUTE_CHANGE_NOT_PRESERVED');
-const protectedPaths=['market-prediction-lab','research-production','research-dashboard','api-server/src/middleware/auth.ts','stock-analyzer/src/pages/research-center.tsx','stock-analyzer/vite.config.ts','packages/member-access','pnpm-lock.yaml'];
+if(git('rev-parse','HEAD:api-server/src/routes/index.ts')!==git('rev-parse',`${MAIN}:api-server/src/routes/index.ts`))throw new Error('MAIN_ROUTE_CHANGE_NOT_PRESERVED');
+const protectedPaths=['market-prediction-lab','research-dashboard','api-server/src/middleware/auth.ts','stock-analyzer/src/pages/research-center.tsx','stock-analyzer/vite.config.ts','packages/member-access','pnpm-lock.yaml'];
 for(const p of protectedPaths)if(git('rev-parse',`HEAD:${p}`)!==git('rev-parse',`${MAIN}:${p}`))throw new Error('PROTECTED_PATH_CHANGED:'+p);
+const researchProductionChanges=git('diff','--name-only',MAIN,'HEAD','--','research-production').split('\n').filter(Boolean);
+for(const p of researchProductionChanges)if(!resourceGovernorReviewed.includes(p))throw new Error('UNREVIEWED_RESEARCH_PRODUCTION_PATH:'+p);
 const proof={schemaVersion:'workspace-main-preservation-v3',head:git('rev-parse','HEAD'),main:MAIN,previousOwner:OWNER,
   reviewedChangedPaths:changed,protectedPaths,ancestryPreserved:true,mainUpdated:false,
   liveOrders:0,providerCalls:0,fixtureResultsAreEconomicEvidence:false};
