@@ -14,6 +14,7 @@ import {
   coverageSummary,
   runCrossSectionalMomentumProxy,
   runFundingCarryProxy,
+  runEqualWeightBuyHoldBaseline,
   runTimeSeriesMomentumProxy,
   summarizeReturnSeries,
 } from "../src/evidence-backed-3y-benchmark-v1.js";
@@ -124,6 +125,24 @@ test("return summary emits comparable return, CAGR, Sharpe and drawdown metrics"
   assert.ok(result.annualizedSharpe > 0);
   assert.ok(result.maximumDrawdown > 0);
   assert.ok(result.barProfitFactor > 1);
+});
+
+test("equal-weight buy-hold baseline charges entry and exit friction and stays deterministic", () => {
+  const a = candles({ count: 320, drift: 0.001 });
+  const b = candles({ count: 320, drift: 0.0005 });
+  const lowCost = runEqualWeightBuyHoldBaseline({
+    datasets: [{ symbol: "A", candles: a }, { symbol: "B", candles: b }],
+    perSideCostBps: 5,
+    barsPerYear: 252,
+  });
+  const highCost = runEqualWeightBuyHoldBaseline({
+    datasets: [{ symbol: "A", candles: a }, { symbol: "B", candles: b }],
+    perSideCostBps: 20,
+    barsPerYear: 252,
+  });
+  assert.equal(lowCost.family, "EQUAL_WEIGHT_BUY_HOLD_BASELINE");
+  assert.equal(lowCost.fixedBasketBaseline, true);
+  assert.ok(lowCost.performance.totalReturn > highCost.performance.totalReturn);
 });
 
 test("TSMOM proxy uses only prior closed bars and applies turnover cost", () => {
