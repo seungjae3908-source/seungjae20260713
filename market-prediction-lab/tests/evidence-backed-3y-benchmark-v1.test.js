@@ -1,0 +1,187 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  BENCHMARK_HORIZONS,
+  BENCHMARK_PERIOD,
+  BENCHMARK_PROFILE_PLAN,
+  COMMON_FRICTION_STRESS_BPS_PER_SIDE,
+  SOURCE_REFERENCE_RECIPES,
+  barsPerYearForProfile,
+  benchmarkSafetyEnvelope,
+  buildTsmomSignalEvaluator,
+  costModelFromCommonFrictionBps,
+  coverageSummary,
+  runCrossSectionalMomentumProxy,
+  summarizeReturnSeries,
+} from "../src/evidence-backed-3y-benchmark-v1.js";
+
+function candles({ start = BENCHMARK_PERIOD.startTime, count = 400, intervalMs = 86_400_000, drift = 0.001 } = {}) {
+  const rows = [];
+  let close = 100;
+  for (let index = 0; index < count; index += 1) {
+    const open = close;
+    close = open * (1 + drift);
+    rows.push(Object.freeze({
+      timestamp: start + index * intervalMs,
+      open,
+      high: Math.max(open, close) * 1.002,
+      low: Math.min(open, close) * 0.998,
+      close,
+      volume: 1_000 + index,
+      isClosed: true,
+      observedAt: start + index * intervalMs,
+    }));
+  }
+  return Object.freeze(rows);
+}
+
+test("3y benchmark preserves the predeclared 2026 final-holdout end and 12 profiles", () => {
+  assert.equal(BENCHMARK_PERIOD.label, "2023-08-10_to_2026-08-09");
+  assert.equal(BENCHMARK_PERIOD.selectionUsesPost2025Data, false);
+  assert.equal(BENCHMARK_PERIOD.finalHoldoutBoundaryPreserved, true);
+  assert.equal(BENCHMARK_PROFILE_PLAN.length, 12);
+  assert.equal(new Set(BENCHMARK_PROFILE_PLAN.map((row) => row.profileId)).size, 12);
+  assert.equal(BENCHMARK_PROFILE_PLAN.filter((row) => row.status === "BLOCKED_DATA").length, 4);
+  assert.deepEqual(Object.keys(BENCHMARK_HORIZONS), ["SHORT", "SWING", "POSITION"]);
+});
+
+test("stock 3y intraday profiles fail closed instead of substituting daily candles", () => {
+  for (const market of ["KR_STOCK", "US_STOCK"]) {
+    for (const horizon of ["SHORT", "SWING"]) {
+      const row = BENCHMARK_PROFILE_PLAN.find((item) => item.profileId === `${market}:${horizon}`);
+      assert.equal(row.status, "BLOCKED_DATA");
+      assert.ok(row.blockers.includes("APPROVED_PUBLIC_3Y_EXACT_INTRADAY_STOCK_COLLECTOR_NOT_AVAILABLE"));
+    }
+    assert.equal(
+      BENCHMARK_PROFILE_PLAN.find((item) => item.profileId === `${market}:POSITION`).status,
+      "READY_FOR_PUBLIC_BENCHMARK",
+    );
+  }
+});
+
+test("new public recipes cannot masquerade as completed local replications", () => {
+  assert.equal(SOURCE_REFERENCE_RECIPES.length, 5);
+  const byId = Object.fromEntries(SOURCE_REFERENCE_RECIPES.map((row) => [row.recipeId, row]));
+  assert.equal(byId.CHARTING_BY_MACHINES_V1.benchmarkStatus, "BLOCKED_REPLICATION");
+  assert.equal(byId.STOCKS_IN_PLAY_ORB_5M_V1.benchmarkStatus, "BLOCKED_DATA");
+  assert.equal(byId.CRYPTO_RISK_MANAGED_MOMENTUM_V1.benchmarkStatus, "PROXY_ONLY");
+  assert.equal(byId.FUNDING_RATE_ARBITRAGE_CEX_DEX_V1.benchmarkStatus, "PROXY_ONLY");
+  assert.equal(byId.MLLM_VISUAL_CHART_CRYPTO_V1.benchmarkStatus, "BLOCKED_REPLICATION");
+});
+
+test("common-friction cost grid is explicit stress, not market-specific full cost", () => {
+  assert.deepEqual(COMMON_FRICTION_STRESS_BPS_PER_SIDE, [5, 10, 20]);
+  const cost = costModelFromCommonFrictionBps(10);
+  assert.equal(cost.entryFeeRate, 0.001);
+  assert.equal(cost.exitFeeRate, 0.001);
+  assert.equal(cost.taxRate, 0);
+  assert.match(cost.evidenceRole, /COMMON_FRICTION_STRESS/u);
+  assert.throws(() => costModelFromCommonFrictionBps(-1), /perSideBps/u);
+});
+
+test("TSMOM evaluator is causal and direction symmetric", () => {
+  const rows = candles({ count: 20, drift: 0.01 });
+  const longSignal = buildTsmomSignalEvaluator({ lookbackBars: 5 });
+  assert.equal(longSignal({ side: "long", candles: rows, index: 4 }), null);
+  const long = longSignal({ side: "long", candles: rows, index: 10 });
+  assert.equal(long.family, "TSMOM_FIXED");
+  assert.equal(long.direction, "UP");
+  assert.equal(long.lookbackBars, 5);
+  assert.equal(longSignal({ side: "short", candles: rows, index: 10 }), null);
+
+  const downRows = candles({ count: 20, drift: -0.005 });
+  const short = longSignal({ side: "short", candles: downRows, index: 10 });
+  assert.equal(short.direction, "DOWN");
+});
+
+test("coverage requires nearly the full fixed three-year span", () => {
+  const complete = coverageSummary({
+    candles: [
+      { timestamp: BENCHMARK_PERIOD.startTime },
+      { timestamp: BENCHMARK_PERIOD.endTime },
+    ],
+  });
+  assert.equal(complete.status, "READY");
+
+  const late = coverageSummary({
+    candles: [
+      { timestamp: BENCHMARK_PERIOD.startTime + 100 * 86_400_000 },
+      { timestamp: BENCHMARK_PERIOD.endTime },
+    ],
+  });
+  assert.equal(late.status, "BLOCKED_DATA");
+  assert.ok(late.blockers.includes("START_COVERAGE_LATE"));
+});
+
+test("return summary emits comparable return, CAGR, Sharpe and drawdown metrics", () => {
+  const result = summarizeReturnSeries([0.01, -0.005, 0.015, -0.002, 0.004], { barsPerYear: 252 });
+  assert.equal(result.sampleCount, 5);
+  assert.ok(result.totalReturn > 0);
+  assert.ok(result.cagr > 0);
+  assert.ok(result.annualizedSharpe > 0);
+  assert.ok(result.maximumDrawdown > 0);
+  assert.ok(result.barProfitFactor > 1);
+});
+
+test("relative momentum proxy is deterministic and cost-aware", () => {
+  const intervalMs = 86_400_000;
+  const first = candles({ count: 320, intervalMs, drift: 0.002 });
+  const second = candles({ count: 320, intervalMs, drift: 0.0005 });
+  const a = runCrossSectionalMomentumProxy({
+    datasets: [
+      { symbol: "A", candles: first },
+      { symbol: "B", candles: second },
+    ],
+    lookbackBars: 20,
+    rebalanceBars: 5,
+    perSideCostBps: 10,
+    longShort: false,
+    barsPerYear: 252,
+  });
+  const b = runCrossSectionalMomentumProxy({
+    datasets: [
+      { symbol: "A", candles: first },
+      { symbol: "B", candles: second },
+    ],
+    lookbackBars: 20,
+    rebalanceBars: 5,
+    perSideCostBps: 10,
+    longShort: false,
+    barsPerYear: 252,
+  });
+  assert.deepEqual(a, b);
+  assert.equal(a.family, "RELATIVE_MOMENTUM_PROXY");
+  assert.equal(a.fixedBasketProxy, true);
+  assert.ok(a.performance.sampleCount > 0);
+});
+
+test("volatility-managed proxy remains capped and research-only envelope grants no authority", () => {
+  const rowsA = candles({ count: 320, drift: 0.003 });
+  const rowsB = candles({ count: 320, drift: -0.001 });
+  const result = runCrossSectionalMomentumProxy({
+    datasets: [
+      { symbol: "A", candles: rowsA },
+      { symbol: "B", candles: rowsB },
+    ],
+    lookbackBars: 20,
+    rebalanceBars: 5,
+    perSideCostBps: 20,
+    longShort: true,
+    volatilityManaged: true,
+    volatilityLookbackBars: 20,
+    targetAnnualVolatility: 0.15,
+    barsPerYear: 365,
+  });
+  assert.equal(result.family, "RISK_MANAGED_RELATIVE_MOMENTUM_PROXY");
+  assert.equal(result.longShort, true);
+  assert.equal(result.sourceFaithfulReplication, false);
+
+  assert.equal(barsPerYearForProfile("CRYPTO_SPOT", "SHORT"), 365 * 24 * 4);
+  assert.equal(barsPerYearForProfile("US_STOCK", "POSITION"), 252);
+  const safety = benchmarkSafetyEnvelope();
+  assert.equal(safety.profitabilityProven, false);
+  assert.equal(safety.economicCreditGranted, false);
+  assert.equal(safety.executionAuthority, "NONE");
+  assert.equal(safety.realOrderEnabled, false);
+});
