@@ -29,6 +29,7 @@ const WINDOWS = Object.freeze({
 });
 const SOURCE_SSRN = "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=962461";
 const SOURCE_RULES = "https://mebfaber.com/2017/12/13/episode-86-quantitative-approach-tactical-asset-allocation/";
+const FRED_TB3MS_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=TB3MS";
 
 function mean(values) { return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null; }
 function maxDrawdown(equity) {
@@ -45,6 +46,206 @@ function annualizedReturn(start, end, months) {
   return Math.pow(end / start, 12 / months) - 1;
 }
 function monthKey(ms) { return new Date(ms).toISOString().slice(0, 7); }
+
+async function fetchJson(url, label) {
+  let last = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error(`${label}_TIMEOUT`)), 20_000);
+    try {
+      const response = await fetch(url, {
+        signal: controller.signal,
+        redirect: "follow",
+        headers: {
+          accept: "application/json,text/plain,*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "user-agent": "Mozilla/5.0 faber-gtaa-research/2.0",
+        },
+      });
+      if (!response.ok) throw new Error(`${label}_HTTP_${response.status}`);
+      return await response.json();
+    } catch (error) {
+      last = error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw last ?? new Error(`${label}_FAILED`);
+}
+async function fetchText(url, label) {
+  let last = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error(`${label}_TIMEOUT`)), 20_000);
+    try {
+      const response = await fetch(url, {
+        signal: controller.signal,
+        redirect: "follow",
+        headers: { accept: "text/csv,text/plain,*/*", "user-agent": "faber-gtaa-research/2.0" },
+      });
+      if (!response.ok) throw new Error(`${label}_HTTP_${response.status}`);
+      return await response.text();
+    } catch (error) {
+      last = error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw last ?? new Error(`${label}_FAILED`);
+}
+async function collectYahooAdjusted(symbol) {
+  const byTimestamp = new Map();
+  for (const [startTime, endTime] of [[START, SPLIT], [SPLIT - 10 * 86_400_000, END]]) {
+    const query = `period1=${Math.floor(startTime / 1000)}&period2=${Math.ceil(endTime / 1000)}&interval=1d&events=history&includeAdjustedClose=true`;
+    let payload = null;
+    let error = null;
+    for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
+      try {
+        payload = await fetchJson(`https://${host}/v8/finance/chart/${encodeURIComponent(symbol)}?${query}`, "YAHOO_ADJUSTED");
+        if (payload?.chart?.result?.[0]) break;
+      } catch (caught) {
+        error = caught;
+      }
+    }
+    const result = payload?.chart?.result?.[0];
+    if (!result) throw error ?? new Error(`YAHOO_ADJUSTED_EMPTY_${symbol}`);
+    const timestamps = Array.isArray(result.timestamp) ? result.timestamp : [];
+    const quote = result?.indicators?.quote?.[0] ?? {};
+    const adj = result?.indicators?.adjclose?.[0]?.adjclose ?? [];
+    for (let i = 0; i < timestamps.length; i += 1) {
+      const timestamp = Number(timestamps[i]) * 1000;
+      const open = Number(quote.open?.[i]);
+      const close = Number(quote.close?.[i]);
+      const adjustedClose = Number(adj?.[i]);
+      if (![timestamp, open, close, adjustedClose].every(Number.isFinite)) continue;
+      if (!(timestamp > 0 && open > 0 && close > 0 && adjustedClose > 0)) continue;
+      const factor = adjustedClose / close;
+      byTimestamp.set(timestamp, {
+        timestamp,
+        adjustedOpen: open * factor,
+        adjustedClose,
+      });
+    }
+  }
+  const rows = [...byTimestamp.values()].sort((a, b) => a.timestamp - b.timestamp);
+  if (rows.length < 3_500) throw new Error(`${symbol}_ADJUSTED_HISTORY_INSUFFICIENT_${rows.length}`);
+  return rows;
+}
+async function collectTb3ms() {
+  const text = await fetchText(FRED_TB3MS_URL, "FRED_TB3MS");
+  const rows = text.trim().split(/\r?\n/u);
+  const header = rows.shift()?.split(",") ?? [];
+  const dateIndex = header.findIndex((value) => /DATE|observation_date/iu.test(value));
+  const valueIndex = header.findIndex((value) => value.trim().toUpperCase() === "TB3MS");
+  if (dateIndex < 0 || valueIndex < 0) throw new Error("FRED_TB3MS_SCHEMA");
+  const monthly = new Map();
+  for (const line of rows) {
+    const cells = line.split(",");
+    const date = String(cells[dateIndex] ?? "").trim();
+    const annualPercent = Number(cells[valueIndex]);
+    if (!/^\d{4}-\d{2}-\d{2}$/u.test(date) || !Number.isFinite(annualPercent)) continue;
+    monthly.set(date.slice(0, 7), annualPercent / 1200);
+  }
+  if (monthly.size < 200) throw new Error(`FRED_TB3MS_INSUFFICIENT_${monthly.size}`);
+  return { monthly, source: "FRED:TB3MS", approximation: "monthly simple cash return = annual discount-basis percent / 1200" };
+}
+function monthlyAdjustedBars(rows) {
+  const map = new Map();
+  for (const row of rows) {
+    const key = monthKey(row.timestamp);
+    const list = map.get(key) ?? [];
+    list.push(row);
+    map.set(key, list);
+  }
+  return [...map.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([month, list]) => {
+    list.sort((a, b) => a.timestamp - b.timestamp);
+    return {
+      month,
+      firstOpen: list[0].adjustedOpen,
+      lastClose: list.at(-1).adjustedClose,
+      dailyCount: list.length,
+    };
+  });
+}
+function cashReturnFor(month, tbills) {
+  const value = tbills.get(month);
+  return Number.isFinite(value) ? value : 0;
+}
+function sourceCloseSleeve(monthly, window, tbills) {
+  const indexByMonth = new Map(monthly.map((row, index) => [row.month, index]));
+  let equity = 1;
+  const curve = [];
+  for (const month of monthly) {
+    if (!inWindow(month.month, window)) continue;
+    const index = indexByMonth.get(month.month);
+    if (!(index > 0)) continue;
+    const priorSignal = signalAt(monthly, index - 1);
+    if (priorSignal == null) continue;
+    const priorClose = monthly[index - 1].lastClose;
+    const monthlyReturn = priorSignal
+      ? month.lastClose / priorClose - 1
+      : cashReturnFor(month.month, tbills);
+    equity *= 1 + monthlyReturn;
+    curve.push({ month: month.month, equity, invested: priorSignal === true, monthlyReturn });
+  }
+  const equities = curve.map((row) => row.equity);
+  return {
+    months: curve.length,
+    totalReturn: (equities.at(-1) ?? 1) - 1,
+    annualizedReturn: annualizedReturn(1, equities.at(-1) ?? 1, curve.length),
+    maxDrawdown: maxDrawdown(equities),
+    investedMonthRate: curve.length ? curve.filter((row) => row.invested).length / curve.length : null,
+    curve,
+  };
+}
+function causalAdjustedSleeve(monthly, window, costPerSide, tbills) {
+  const indexByMonth = new Map(monthly.map((row, index) => [row.month, index]));
+  let cash = 1;
+  let units = 0;
+  let transactionCount = 0;
+  const curve = [];
+
+  for (const month of monthly) {
+    if (!inWindow(month.month, window)) continue;
+    const index = indexByMonth.get(month.month);
+    if (!(index > 0)) continue;
+    const desiredLong = signalAt(monthly, index - 1);
+    if (desiredLong == null) continue;
+
+    if (desiredLong && units === 0) {
+      const fill = month.firstOpen * (1 + costPerSide);
+      units = cash / fill;
+      cash = 0;
+      transactionCount += 1;
+    } else if (!desiredLong && units > 0) {
+      cash = units * month.firstOpen * (1 - costPerSide);
+      units = 0;
+      transactionCount += 1;
+    }
+
+    if (units === 0) cash *= 1 + cashReturnFor(month.month, tbills);
+    const equity = cash + units * month.lastClose;
+    curve.push({ month: month.month, equity, invested: units > 0 });
+  }
+
+  if (units > 0 && curve.length) {
+    const lastMonth = monthly.find((row) => row.month === curve.at(-1).month);
+    cash = units * lastMonth.lastClose * (1 - costPerSide);
+    units = 0;
+    transactionCount += 1;
+    curve[curve.length - 1] = { ...curve.at(-1), equity: cash };
+  }
+  const equities = curve.map((row) => row.equity);
+  return {
+    months: curve.length,
+    totalReturn: (equities.at(-1) ?? 1) - 1,
+    annualizedReturn: annualizedReturn(1, equities.at(-1) ?? 1, curve.length),
+    maxDrawdown: maxDrawdown(equities),
+    investedMonthRate: curve.length ? curve.filter((row) => row.invested).length / curve.length : null,
+    transactionCount,
+    curve,
+  };
+}
 
 async function collectLong(symbol) {
   const parts = [];
@@ -242,13 +443,24 @@ function selfTest() {
 async function main() {
   if (process.argv.includes("--self-test")) { selfTest(); return; }
 
+  const tb3ms = await collectTb3ms();
   const datasets = [];
   for (const asset of ASSETS) {
-    const data = await collectLong(asset.symbol);
-    datasets.push({ ...asset, ...data, monthly: monthlyBars(data.candles) });
+    const [data, adjustedRows] = await Promise.all([
+      collectLong(asset.symbol),
+      collectYahooAdjusted(asset.symbol),
+    ]);
+    datasets.push({
+      ...asset,
+      ...data,
+      monthly: monthlyBars(data.candles),
+      adjustedMonthly: monthlyAdjustedBars(adjustedRows),
+      adjustedDailyCount: adjustedRows.length,
+    });
   }
 
   const results = {};
+  const highFidelity = {};
   for (const [windowName, window] of Object.entries(WINDOWS)) {
     const normal = {};
     const stress = {};
@@ -263,9 +475,24 @@ async function main() {
       stress15x: { portfolio: combinePortfolio(stress), perAsset: stress },
       priceOnlyBuyHold: { portfolio: combineBuyHold(buyHold), perAsset: buyHold },
     };
+
+    const paperLike = {};
+    const causal = {};
+    const causalStress = {};
+    for (const dataset of datasets) {
+      paperLike[dataset.symbol] = sourceCloseSleeve(dataset.adjustedMonthly, window, tb3ms.monthly);
+      causal[dataset.symbol] = causalAdjustedSleeve(dataset.adjustedMonthly, window, COST_PER_SIDE, tb3ms.monthly);
+      causalStress[dataset.symbol] = causalAdjustedSleeve(dataset.adjustedMonthly, window, STRESS_COST_PER_SIDE, tb3ms.monthly);
+    }
+    highFidelity[windowName] = {
+      paperLikeTotalReturnCloseTbill: { portfolio: combinePortfolio(paperLike), perAsset: paperLike },
+      causalTotalReturnNextOpenTbill: { portfolio: combinePortfolio(causal), perAsset: causal },
+      causalStress15x: { portfolio: combinePortfolio(causalStress), perAsset: causalStress },
+    };
   }
 
   const crossWindowStressPositive = Object.values(results).every((row) => row.stress15x.portfolio.totalReturn > 0);
+  const highFidelityCrossWindowPositive = Object.values(highFidelity).every((row) => row.causalStress15x.portfolio.totalReturn > 0);
   const report = {
     schemaVersion: 1,
     status: "pass",
@@ -290,6 +517,13 @@ async function main() {
       priceReturnOnly: true,
       dividendsIncluded: false,
       treasuryBillCashReturnIncluded: false,
+      highFidelityApproximation: {
+        adjustedCloseTotalReturnProxy: "Yahoo adjusted close; adjusted open derived with same-day adjustment factor",
+        cashSeries: tb3ms.source,
+        cashReturnApproximation: tb3ms.approximation,
+        paperLikeExecution: "month-end adjusted close, no costs",
+        causalExecution: "next-month adjusted open after completed month-end signal, explicit costs",
+      },
       costPerSide: COST_PER_SIDE,
       stressCostPerSide: STRESS_COST_PER_SIDE,
     },
@@ -297,13 +531,28 @@ async function main() {
       provider: "Yahoo public daily price chart",
       requestedStart: new Date(START).toISOString(),
       requestedEndExclusive: new Date(END).toISOString(),
-      datasets: datasets.map((row) => ({ ...row.report, assetClass: row.assetClass, monthlyBars: row.monthly.length })),
+      datasets: datasets.map((row) => ({
+        ...row.report,
+        assetClass: row.assetClass,
+        monthlyBars: row.monthly.length,
+        adjustedDailyCount: row.adjustedDailyCount,
+        adjustedMonthlyBars: row.adjustedMonthly.length,
+      })),
+      tb3ms: {
+        source: tb3ms.source,
+        observations: tb3ms.monthly.size,
+        approximation: tb3ms.approximation,
+      },
     },
     windows: WINDOWS,
     results,
+    highFidelityApprox,
     promotionAssessment: {
-      status: crossWindowStressPositive ? "REFERENCE_CANDIDATE_REQUIRES_FUTURE_OOS" : "RESEARCH_HOLD_CROSS_WINDOW_GENERALIZATION_FAILED",
+      status: highFidelityCrossWindowPositive
+        ? "REFERENCE_CANDIDATE_REQUIRES_FUTURE_OOS"
+        : "RESEARCH_HOLD_HIGH_FIDELITY_CROSS_WINDOW_FAILED",
       crossWindowStressPositive,
+      highFidelityCrossWindowPositive,
       automaticPromotionAllowed: false,
       economicSampleCredit: 0,
       profitabilityClaimAllowed: false,
@@ -320,7 +569,8 @@ async function main() {
       liveExecutionAllowed: false,
     },
     limitations: [
-      "This ETF implementation is not an exact replication of the paper because Yahoo price OHLC excludes total-return distributions and cash earns 0% instead of 90-day T-bill returns.",
+      "The primary V1 lane remains price-only with zero cash for continuity. A second high-fidelity approximation uses Yahoo adjusted close plus FRED TB3MS cash, but TB3MS/12 is still an approximation to 90-day T-bill holding-period returns.",
+      "The high-fidelity paper-like lane uses month-end adjusted close with no costs; the causal lane executes the same frozen signal at the next month's adjusted open with explicit costs.",
       "Execution is shifted to the next month's first open for causality; the original paper describes signal-day close execution.",
       "DBC/VNQ/EFA/IEF/SPY are ETF proxies for the five original asset classes, not the original index series.",
       "No 6/8/12-month alternative is tested because that would be parameter search after observing the result.",
@@ -340,6 +590,12 @@ async function main() {
     priorStress: report.results.PRIOR.stress15x.portfolio.totalReturn,
     midStress: report.results.MID.stress15x.portfolio.totalReturn,
     recentStress: report.results.RECENT.stress15x.portfolio.totalReturn,
+    hfPrior: report.highFidelityApprox.PRIOR.causalTotalReturnNextOpenTbill.portfolio.totalReturn,
+    hfMid: report.highFidelityApprox.MID.causalTotalReturnNextOpenTbill.portfolio.totalReturn,
+    hfRecent: report.highFidelityApprox.RECENT.causalTotalReturnNextOpenTbill.portfolio.totalReturn,
+    hfPriorStress: report.highFidelityApprox.PRIOR.causalStress15x.portfolio.totalReturn,
+    hfMidStress: report.highFidelityApprox.MID.causalStress15x.portfolio.totalReturn,
+    hfRecentStress: report.highFidelityApprox.RECENT.causalStress15x.portfolio.totalReturn,
   }));
 }
 await main();
