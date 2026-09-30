@@ -180,7 +180,7 @@ jobs:
                 repo: context.repo.repo,
                 workflow_id: 'fast-profitability-v1-activation.yml',
                 event: 'issue_comment',
-                status: 'completed',
+                status: 'success',
                 per_page: 100,
                 page,
               });
@@ -226,7 +226,7 @@ jobs:
                 repo: context.repo.repo,
                 workflow_id: 'fast-profitability-v1-activation.yml',
                 event: 'issue_comment',
-                status: 'completed',
+                status: 'success',
                 per_page: 100,
                 page,
               });
