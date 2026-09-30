@@ -1,0 +1,65 @@
+name: Research US Faber GTAA 10M V1
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/run-us-faber-gtaa10m-v1.mjs
+      - .github/workflows/research-us-faber-gtaa10m-v1.yml
+      - market-prediction-lab/src/yahoo-stock-history.js
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-us-faber-gtaa10m-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Validate frozen Faber contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/scripts/run-us-faber-gtaa10m-v1.mjs
+          node market-prediction-lab/scripts/run-us-faber-gtaa10m-v1.mjs --self-test
+          grep -Fq 'FABER_GTAA_10M_SMA_V1' market-prediction-lab/scripts/run-us-faber-gtaa10m-v1.mjs
+          grep -Fq 'movingAverageMonths: 10' market-prediction-lab/scripts/run-us-faber-gtaa10m-v1.mjs
+          ! grep -Eiq '/api/v1/orders|PRIVATE_TRADING_API_ALLOWED|REAL_ORDER_ENABLED|LIVE_TRADING|TOSS_CLIENT_SECRET|(^|[^A-Za-z])withdraw([^A-Za-z]|$)|(^|[^A-Za-z])transfer([^A-Za-z]|$)' market-prediction-lab/scripts/run-us-faber-gtaa10m-v1.mjs
+      - name: Run public Faber GTAA replay
+        working-directory: market-prediction-lab
+        run: node scripts/run-us-faber-gtaa10m-v1.mjs docs/us-faber-gtaa10m-v1.json
+      - name: Assert truth and safety
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('docs/us-faber-gtaa10m-v1.json','utf8'));
+          if(r.status!=='pass'||r.recipeId!=='FABER_GTAA_10M_SMA_V1') throw new Error('STATUS');
+          if(r.implementation?.parameterSearch!==false||r.implementation?.ruleRetuning!==false||r.implementation?.cashReturnAssumption!==0) throw new Error('FROZEN');
+          if(r.implementation?.dividendsIncluded!==false||r.implementation?.treasuryBillCashReturnIncluded!==false) throw new Error('PROXY_TRUTH');
+          for(const w of ['PRIOR','MID','RECENT']){
+            if(!r.results?.[w]?.normal?.portfolio||!r.results?.[w]?.stress15x?.portfolio) throw new Error('WINDOW_'+w);
+          }
+          if(r.promotionAssessment?.automaticPromotionAllowed!==false||r.promotionAssessment?.economicSampleCredit!==0||r.promotionAssessment?.profitabilityClaimAllowed!==false) throw new Error('PROMOTION');
+          if(r.promotionAssessment?.movingAverageRetuningAllowedAfterObservation!==false||r.promotionAssessment?.assetReplacementAllowedAfterObservation!==false) throw new Error('POST_HOC');
+          if(r.safeguards?.researchOnly!==true||r.safeguards?.actualOrders!==0||r.safeguards?.orderRouteCalled!==false||r.safeguards?.executionAuthority!=='NONE') throw new Error('SAFETY');
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: us-faber-gtaa10m-v1-${{ github.event.pull_request.head.sha }}
+          path: market-prediction-lab/docs/us-faber-gtaa10m-v1.json
+          if-no-files-found: error
+          retention-days: 30
