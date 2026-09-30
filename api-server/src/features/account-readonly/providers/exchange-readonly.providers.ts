@@ -364,28 +364,19 @@ async function readBitgetUtaSnapshot(
   };
 }
 
-function isBitgetModeProbeFallbackError(error: unknown) {
-  return error instanceof AccountReadonlyError
-    && (
-      error.code === 'BITGET_NOT_UTA'
-      || error.code === 'BITGET_PERMISSION_DENIED'
-      || error.code === 'BITGET_REQUEST_REJECTED'
-      || error.code === 'BITGET_PARAMETER_REJECTED'
-    );
-}
-
-async function readBitgetUnknownModeSnapshot(
-  credentials: BitgetCredentials,
-  transport: SignedReadonlyTransport,
-  signal?: AbortSignal,
-  now = new Date(),
-): Promise<CanonicalAccountSnapshot> {
-  try {
-    return await readBitgetClassicSnapshot(credentials, transport, signal, now);
-  } catch (classicError) {
-    if (!isBitgetModeProbeFallbackError(classicError)) throw classicError;
-  }
-  return readBitgetUtaSnapshot(credentials, transport, signal, now);
+function withBitgetFallbackAttempt(transport: SignedReadonlyTransport): SignedReadonlyTransport {
+  return (request, signal) => transport(
+    request.bitgetReadonlyDiagnostic
+      ? {
+        ...request,
+        bitgetReadonlyDiagnostic: {
+          ...request.bitgetReadonlyDiagnostic,
+          fallbackAttempted: true,
+        },
+      }
+      : request,
+    signal,
+  );
 }
 
 export async function readBitgetSnapshot(
@@ -395,39 +386,32 @@ export async function readBitgetSnapshot(
   now = new Date(),
 ): Promise<CanonicalAccountSnapshot> {
   let mode: 'classic' | 'uta';
+  let selectedTransport = transport;
   try {
     mode = bitgetAccountMode(
       await transport(prepareBitgetUtaAccountSettings(credentials), signal),
     );
   } catch (error) {
-    if (error instanceof AccountReadonlyError && error.code === 'BITGET_NOT_UTA') {
-      mode = 'classic';
-    } else if (error instanceof AccountReadonlyError
-      && (error.code === 'BITGET_PERMISSION_DENIED' || error.code === 'BITGET_REQUEST_REJECTED')) {
-      try {
-        mode = bitgetModeFromAccountInfo(
-          await transport(prepareBitgetUtaAccountInfo(credentials), signal),
-        );
-      } catch (infoError) {
-        if (!isBitgetModeProbeFallbackError(infoError)) throw infoError;
-        return readBitgetUnknownModeSnapshot(credentials, transport, signal, now);
-      }
-    } else {
-      throw error;
-    }
+    if (!(error instanceof AccountReadonlyError) || error.code !== 'BITGET_NOT_UTA') throw error;
+    mode = 'classic';
+    selectedTransport = withBitgetFallbackAttempt(transport);
   }
 
   if (mode === 'classic') {
-    return readBitgetClassicSnapshot(credentials, transport, signal, now);
+    return readBitgetClassicSnapshot(credentials, selectedTransport, signal, now);
   }
 
   try {
-    return await readBitgetUtaSnapshot(credentials, transport, signal, now);
+    return await readBitgetUtaSnapshot(credentials, selectedTransport, signal, now);
   } catch (error) {
     if (error instanceof AccountReadonlyError && error.code === 'BITGET_NOT_UTA') {
-      return readBitgetClassicSnapshot(credentials, transport, signal, now);
+      return readBitgetClassicSnapshot(
+        credentials,
+        withBitgetFallbackAttempt(selectedTransport),
+        signal,
+        now,
+      );
     }
     throw error;
   }
 }
-
