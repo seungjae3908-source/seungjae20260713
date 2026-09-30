@@ -180,6 +180,64 @@ def binance_month(kind: str, symbol: str, month: str) -> pd.DataFrame:
     return parse_binance_zip(verified_binance_zip(url), symbol)
 
 
+def parse_funding_zip(raw: bytes) -> pd.DataFrame:
+    with zipfile.ZipFile(io.BytesIO(raw)) as z:
+        names = [n for n in z.namelist() if n.lower().endswith(".csv")]
+        if len(names) != 1:
+            raise RuntimeError("BINANCE_FUNDING_ZIP_SHAPE")
+        text = z.read(names[0]).decode("utf-8-sig")
+    lines = [line.strip().split(",") for line in text.splitlines() if line.strip()]
+    if not lines:
+        return pd.DataFrame(columns=["timestamp", "funding_rate"])
+    header_like = any(any(ch.isalpha() for ch in cell) for cell in lines[0])
+    if header_like:
+        header = [cell.lower() for cell in lines[0]]
+        data = lines[1:]
+        def idx(names, fallback):
+            for name in names:
+                if name in header:
+                    return header.index(name)
+            return fallback
+        ti = idx(["calc_time", "funding_time", "fundingtime", "timestamp", "time"], 0)
+        ri = idx(["last_funding_rate", "funding_rate", "fundingrate", "rate"], len(header)-1)
+    else:
+        data = lines
+        ti, ri = 0, 2
+    rows = []
+    for row in data:
+        try:
+            t = normalize_binance_ts(row[ti])
+            rate = float(row[ri])
+        except (ValueError, IndexError):
+            continue
+        rows.append((pd.to_datetime(t, unit="ms", utc=True), rate))
+    return pd.DataFrame(rows, columns=["timestamp", "funding_rate"])
+
+
+def binance_funding_month(symbol: str, month: str) -> pd.DataFrame:
+    url = f"https://data.binance.vision/data/futures/um/monthly/fundingRate/{symbol}/{symbol}-fundingRate-{month}.zip"
+    return parse_funding_zip(verified_binance_zip(url))
+
+
+def binance_funding_history(symbol: str) -> pd.DataFrame:
+    months = months_between(WARMUP_START, BENCHMARK_END)
+    frames: Dict[str, pd.DataFrame] = {}
+    errors = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        future_map = {pool.submit(binance_funding_month, symbol, month): month for month in months}
+        for fut in concurrent.futures.as_completed(future_map):
+            month = future_map[fut]
+            try:
+                frames[month] = fut.result()
+            except Exception as e:
+                errors.append((month, str(e)))
+    if errors:
+        raise RuntimeError(f"BINANCE_FUNDING_MONTH_FAILED:{symbol}:{errors[:3]}")
+    df = pd.concat([frames[m] for m in months], ignore_index=True)
+    df = df[(df["timestamp"] >= WARMUP_START) & (df["timestamp"] <= BENCHMARK_END)]
+    return df.drop_duplicates("timestamp").sort_values("timestamp").reset_index(drop=True)
+
+
 def binance_history(kind: str, symbol: str) -> pd.DataFrame:
     months = months_between(WARMUP_START, BENCHMARK_END)
     frames: Dict[str, pd.DataFrame] = {}
@@ -207,8 +265,20 @@ def load_market(market: str) -> pd.DataFrame:
     if cfg["kind"] == "stock":
         frames = [yahoo_daily(symbol, ticker) for symbol, ticker in cfg["symbols"].items()]
     else:
-        frames = [binance_history(cfg["kind"], symbol) for symbol in cfg["symbols"]]
-    return pd.concat(frames, ignore_index=True).sort_values(["symbol", "timestamp"]).reset_index(drop=True)
+        frames = []
+        for symbol in cfg["symbols"]:
+            history = binance_history(cfg["kind"], symbol)
+            if cfg["kind"] == "futures":
+                funding = binance_funding_history(symbol)
+                funding_map = dict(zip(funding["timestamp"], funding["funding_rate"]))
+                history["funding_rate"] = history["timestamp"].map(funding_map).fillna(0.0)
+            else:
+                history["funding_rate"] = 0.0
+            frames.append(history)
+    out = pd.concat(frames, ignore_index=True).sort_values(["symbol", "timestamp"]).reset_index(drop=True)
+    if "funding_rate" not in out.columns:
+        out["funding_rate"] = 0.0
+    return out
 
 
 def ema(s: pd.Series, span: int) -> pd.Series:
@@ -361,6 +431,11 @@ def engineer_symbol(g: pd.DataFrame, horizon: int, is_crypto: bool) -> pd.DataFr
     g["entry_time"] = g["timestamp"].shift(-1)
     g["exit_time"] = g["timestamp"].shift(-horizon)
     g["future_ret"] = g["close"].shift(-horizon) / g["open"].shift(-1) - 1
+    funding = g.get("funding_rate", pd.Series(0.0, index=g.index)).fillna(0.0)
+    future_funding = pd.Series(0.0, index=g.index)
+    for step in range(1, horizon + 1):
+        future_funding = future_funding.add(funding.shift(-step).fillna(0.0), fill_value=0.0)
+    g["future_funding"] = future_funding
     return g
 
 
@@ -454,16 +529,21 @@ def period_windows(trades: pd.DataFrame) -> dict:
     }
 
 
+def apply_rebalance_schedule(work: pd.DataFrame, horizon: int) -> pd.DataFrame:
+    if horizon <= 1 or work.empty:
+        return work
+    anchor_hour = int(BENCHMARK_START.timestamp() // 3600)
+    hours = (work["timestamp"].astype("int64") // 3_600_000_000_000).astype("int64")
+    return work[((hours - anchor_hour) % horizon) == 0]
+
+
 def select_trades_from_prob(df: pd.DataFrame, probs: np.ndarray, threshold: float, market: str) -> pd.DataFrame:
     cfg = MARKET_CONFIG[market]
-    work = df[["timestamp", "exit_time", "symbol", "future_ret", "market"]].copy()
+    work = df[["timestamp", "exit_time", "symbol", "future_ret", "future_funding", "market"]].copy()
     work["prob"] = probs
     work = work[(work["timestamp"] >= BENCHMARK_START) & (work["timestamp"] <= BENCHMARK_END)]
-    # Avoid overlapping crypto positions by only acting every horizon bars.
-    if cfg["horizon"] > 1:
-        uniq = sorted(work["timestamp"].drop_duplicates())
-        allowed = set(uniq[::cfg["horizon"]])
-        work = work[work["timestamp"].isin(allowed)]
+    # Avoid overlapping positions on one deterministic global schedule.
+    work = apply_rebalance_schedule(work, cfg["horizon"])
     picks = []
     for _, g in work.groupby("timestamp"):
         if cfg["allow_short"]:
@@ -480,7 +560,7 @@ def select_trades_from_prob(df: pd.DataFrame, probs: np.ndarray, threshold: floa
             if row["prob"] < threshold:
                 continue
             side = 1
-        gross = side * float(row["future_ret"])
+        gross = side * float(row["future_ret"]) - side * float(row.get("future_funding", 0.0))
         picks.append({
             "timestamp": row["timestamp"], "exit_time": row["exit_time"], "symbol": row["symbol"],
             "side": side, "gross_ret": gross, "net_ret": gross - cfg["cost"], "market": market,
@@ -494,9 +574,7 @@ def select_formula_trades(df: pd.DataFrame, variant: str, market: str) -> pd.Dat
     work["signal"] = work.apply(lambda row: formula_signal(row, variant), axis=1)
     if not cfg["allow_short"]:
         work.loc[work["signal"] < 0, "signal"] = 0
-    if cfg["horizon"] > 1:
-        uniq = sorted(work["timestamp"].drop_duplicates())
-        work = work[work["timestamp"].isin(set(uniq[::cfg["horizon"]]))]
+    work = apply_rebalance_schedule(work, cfg["horizon"])
     picks = []
     for _, g in work.groupby("timestamp"):
         g = g[g["signal"] != 0].copy()
@@ -505,7 +583,7 @@ def select_formula_trades(df: pd.DataFrame, variant: str, market: str) -> pd.Dat
         g["rank"] = g["ret20"].abs() + g["trend_strength"].abs().fillna(0) * .02 + g["latest_leg_atr"].fillna(0) * .01
         row = g.sort_values(["rank", "symbol"], ascending=[False, True]).iloc[0]
         side = int(row["signal"])
-        gross = side * float(row["future_ret"])
+        gross = side * float(row["future_ret"]) - side * float(row.get("future_funding", 0.0))
         picks.append({
             "timestamp": row["timestamp"], "exit_time": row["exit_time"], "symbol": row["symbol"],
             "side": side, "gross_ret": gross, "net_ret": gross - cfg["cost"], "market": market,
@@ -514,7 +592,7 @@ def select_formula_trades(df: pd.DataFrame, variant: str, market: str) -> pd.Dat
 
 
 def valid_rows(df: pd.DataFrame, features: List[str]) -> pd.DataFrame:
-    cols = features + ["future_ret", "exit_time", "timestamp", "symbol", "market"]
+    cols = features + ["future_ret", "future_funding", "exit_time", "timestamp", "symbol", "market"]
     return df.dropna(subset=cols).replace([np.inf, -np.inf], np.nan).dropna(subset=features)
 
 
@@ -682,6 +760,8 @@ def main() -> int:
             "stocksFixedRepresentativeBasket": True,
             "cryptoSymbols": CRYPTO,
             "transactionCostsIncluded": True,
+            "historicalFundingIncludedForCryptoFutures": True,
+            "nonOverlappingGlobalRebalanceSchedule": True,
             "paperReturnsNotUsedAsExpectedLocalReturn": True,
             "finalHoldoutIsNotUntouchedBecausePriorResearchAlreadyInspectedThisHistoricalWindow": True,
         },
