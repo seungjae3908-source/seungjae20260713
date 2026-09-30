@@ -309,15 +309,20 @@ jobs:
                 exit 1
               fi
 
-              comments_json="$(gh api --paginate --slurp "repos/$REPOSITORY/issues/$HUB_ISSUE_NUMBER/comments?per_page=100")"
-              recovery_approval_id="$(printf '%s' "$comments_json" | RECOVERY_OWNER="${REPOSITORY%%/*}" RECOVERY_TARGET_SHA="$TARGET_SHA" node -e '
-                let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
-                  const pages=JSON.parse(s);const rows=pages.flat();
-                  const expected=`/approve-canonical-shadow-recovery ${process.env.RECOVERY_TARGET_SHA}`;
-                  const matches=rows.filter(x=>x?.user?.login===process.env.RECOVERY_OWNER&&String(x?.body??"").trim()===expected)
-                    .sort((a,b)=>Number(b.id)-Number(a.id));
-                  if(matches[0])process.stdout.write(String(matches[0].id));
-                });')"
+              recovery_owner="${REPOSITORY%%/*}"
+              recovery_expected="/approve-canonical-shadow-recovery $TARGET_SHA"
+              recovery_approval_id="$(
+                gh api --paginate "repos/$REPOSITORY/issues/$HUB_ISSUE_NUMBER/comments?per_page=100" \
+                  | jq -sr --arg owner "$recovery_owner" --arg expected "$recovery_expected" '
+                      flatten(1)
+                      | map(select(
+                          (.user.login // "") == $owner
+                          and ((.body // "") | gsub("^\\s+|\\s+$"; "")) == $expected
+                        ))
+                      | sort_by(.id)
+                      | (last.id // empty)
+                    '
+              )"
               [[ "$recovery_approval_id" =~ ^[1-9][0-9]*$ ]] || {
                 echo "No successfully published canonical predecessor receipt found; exact #$HUB_ISSUE_NUMBER approval /approve-canonical-shadow-recovery $TARGET_SHA is required" >&2
                 exit 1
