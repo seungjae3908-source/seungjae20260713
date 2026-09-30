@@ -33,6 +33,7 @@ import {
   type MemberAutoTradingFxQuote,
 } from './member-auto-trading-fx.service';
 import { persistMemberAutoTradingPaperPositionBridge } from './member-auto-trading-paper-position-bridge.service';
+import { evaluateEvidenceBackedAutoStrategyGate } from './evidence-backed-auto-strategy-catalog.service';
 
 const DEFAULT_INTERVAL_MS = 30_000;
 const MIN_INTERVAL_MS = 10_000;
@@ -200,6 +201,14 @@ function costPercent(entry: MemberAutoTradingPaperHandoffEntry, key: string) {
   const cost = record(entry.execution.costPolicy);
   const rate = Number(cost?.[key]);
   return finite(rate) && rate >= 0 ? rate * 100 : null;
+}
+
+function evidenceBackedStrategyGate(entry: MemberAutoTradingPaperHandoffEntry) {
+  return evaluateEvidenceBackedAutoStrategyGate({
+    strategyId: entry.identity.strategyId,
+    market: entry.identity.market,
+    learningSnapshot: entry.signal.learningSnapshot,
+  });
 }
 
 function policyAllowsEntry(member: EligibleMember, entry: MemberAutoTradingPaperHandoffEntry) {
@@ -391,6 +400,7 @@ function buildPlanInput(
   }
 
   const side = sideFor(entry.identity.direction);
+  const evidenceStrategyGate = evidenceBackedStrategyGate(entry);
   const observedAt = new Date(observedAtMs).toISOString();
   const signalObservedAt = typeof entry.signal.timestampMs === 'number'
     ? new Date(entry.signal.timestampMs).toISOString()
@@ -422,6 +432,12 @@ function buildPlanInput(
       `HANDOFF_ID:${entry.handoffId}`,
       `FX:${fx.source}`,
       ...(mapping.stockBroker ? [`STOCK_BROKER:${mapping.stockBroker.toUpperCase()}`] : []),
+      ...(evidenceStrategyGate.recognized
+        ? [
+          `EVIDENCE_BACKED_STRATEGY:${entry.identity.strategyId}`,
+          `EVIDENCE_BACKED_GATE:${evidenceStrategyGate.state}`,
+        ]
+        : []),
       'TOP_OF_BOOK_GAP_PROXY',
     ],
     marketSnapshot: {
@@ -536,6 +552,11 @@ export class MemberAutoTradingBackgroundWorker {
         }
 
         for (const entry of entries) {
+          const evidenceStrategyGate = evidenceBackedStrategyGate(entry);
+          if (evidenceStrategyGate.recognized && !evidenceStrategyGate.paperAllowed) {
+            result.blocked += 1;
+            continue;
+          }
           if (!policyAllowsEntry(member, entry)) {
             result.skipped += 1;
             continue;
