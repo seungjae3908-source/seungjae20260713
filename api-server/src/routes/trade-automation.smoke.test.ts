@@ -1418,12 +1418,25 @@ test('status is authenticated, automatic execution defaults off, and never retur
       policy: { mode: string; automaticEnabled: boolean };
       liveExecutionServerEnabled: Record<string, boolean>;
       liveAutomaticExecutionServerEnabled: Record<string, boolean>;
+      evidenceBackedStrategies: Array<{
+        strategyId: string;
+        defaultState: string;
+        automaticLivePromotionAllowed: boolean;
+      }>;
       actualOrderSubmittedByStatusRequest: boolean;
     };
     assert.equal(body.policy.mode, 'approval');
     assert.equal(body.policy.automaticEnabled, false);
     assert.deepEqual(body.liveExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
     assert.deepEqual(body.liveAutomaticExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
+    assert.deepEqual(body.evidenceBackedStrategies.map((row) => row.strategyId), [
+      'CEX_DEX_ARBITRAGE_V1',
+      'US_STOCKS_IN_PLAY_ORB_V1',
+      'CRYPTO_WORLD_ORDER_FLOW_ML_V1',
+      'KR_ML_CHARTING_V1',
+    ]);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.defaultState === 'NO_TRADE'), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.automaticLivePromotionAllowed === false), true);
     assert.equal(body.actualOrderSubmittedByStatusRequest, false);
   } finally { await close(authenticated.server); }
 });
