@@ -8,7 +8,10 @@ const source = readFileSync(
 
 test('read-only account provider requests are aborted when the consumer unmounts', () => {
   expect(source).toContain('const controllerRef = useRef<AbortController | null>(null);');
-  expect(source).toContain("jsonRequest<CanonicalAccountSnapshot>(`/api/accounts/read-only/${provider}`, { signal: controller.signal })");
+  expect(source).toContain('const result = await accountSnapshotRequest(provider, controller.signal);');
+  expect(source).toMatch(
+    /authorizedFetch\(`\/api\/accounts\/read-only\/\$\{provider\}`,\s*\{\s*signal,/,
+  );
 
   const cleanupMatch = source.match(
     /return \(\) => \{([\s\S]*?)document\.removeEventListener\('visibilitychange', onVisibility\);/,
