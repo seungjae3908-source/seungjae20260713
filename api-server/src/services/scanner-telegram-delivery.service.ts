@@ -1,6 +1,7 @@
 import { logger } from '../lib/logger';
 import { deliverMemberNotification } from './notification.service';
 import {
+  buildTelegramSignalAppButtons,
   buildTelegramSignalIntelligenceInput,
   collectTelegramSignalIntelligence,
   type TelegramSignalDeliveryContext,
@@ -45,25 +46,11 @@ export type ScannerMemberNotificationDeliverer = typeof deliverMemberNotificatio
 
 const MAX_RICH_ALERTS_PER_BATCH = 3;
 
-function entryReference(alert: ScannerAlertCandidate): number | null {
-  if (!alert.entryZone) return null;
-  const { from, to } = alert.entryZone;
-  if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to <= 0) return null;
-  return (from + to) / 2;
-}
-
-function planPercent(alert: ScannerAlertCandidate, price: number | null): number | null {
-  const entry = entryReference(alert);
-  if (entry == null || price == null || !Number.isFinite(price) || price <= 0) return null;
-  const raw = alert.direction === 'SHORT'
-    ? ((entry - price) / entry) * 100
-    : ((price - entry) / entry) * 100;
-  return Number(raw.toFixed(2));
-}
-
-function formatPlanPercent(value: number | null): string {
-  if (value == null) return 'N/A';
-  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+function formatSignalPrice(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return 'N/A';
+  return value.toLocaleString('ko-KR', {
+    maximumFractionDigits: value >= 1_000 ? 2 : 8,
+  });
 }
 
 function signalLabel(alert: ScannerAlertCandidate): string {
@@ -71,33 +58,59 @@ function signalLabel(alert: ScannerAlertCandidate): string {
   return '매수';
 }
 
-function formatTargetPlan(alert: ScannerAlertCandidate): string {
-  if (!alert.targets.length) return 'N/A';
-  return alert.targets.slice(0, 3).map((target, index) =>
-    `TP${index + 1} ${target} (${formatPlanPercent(planPercent(alert, target))})`).join(' · ');
+function tradePlanLines(alert: ScannerAlertCandidate): string[] {
+  const firstEntry = alert.entryZone
+    ? (alert.direction === 'SHORT' ? alert.entryZone.from : alert.entryZone.to)
+    : null;
+  const secondEntry = alert.entryZone
+    ? (alert.direction === 'SHORT' ? alert.entryZone.to : alert.entryZone.from)
+    : null;
+  const stop = formatSignalPrice(alert.stopLoss);
+  const target1 = formatSignalPrice(alert.targets[0] ?? null);
+  const target2 = formatSignalPrice(alert.targets[1] ?? null);
+  const target3 = alert.targets[2] == null ? null : formatSignalPrice(alert.targets[2]);
+  return [
+    `🟢 신호: ${signalLabel(alert)}`,
+    '',
+    `1차 진입 ${formatSignalPrice(firstEntry)} · 기본 60%`,
+    `2차 진입 ${formatSignalPrice(secondEntry)} · 기본 40%`,
+    `1차 목표 ${target1} · 2차 목표 ${target2}`,
+    target3 ? `3차 목표 ${target3}` : null,
+    `손절/무효 ${stop}`,
+  ].filter((line): line is string => line != null);
 }
 
-function tradePlanLines(alert: ScannerAlertCandidate): string[] {
-  const entry = alert.entryZone
-    ? `${alert.entryZone.from}~${alert.entryZone.to}`
-    : 'N/A';
-  const stop = alert.stopLoss == null ? 'N/A' : String(alert.stopLoss);
-  const actionState = alert.orderSubmitted || alert.exchangeRequestSent
-    ? '실행 상태 확인 필요'
-    : '주문 미제출 · 거래소 요청 없음';
-  return [
-    `신호: ${signalLabel(alert)}`,
-    `진입구간: ${entry}`,
-    `목표가: ${formatTargetPlan(alert)}`,
-    `손절/무효: ${stop} (${formatPlanPercent(planPercent(alert, alert.stopLoss))})`,
-    `주문상태: ${actionState}`,
-  ];
+function basicMarketLabel(alert: ScannerAlertCandidate): string {
+  if (alert.assetClass === 'coin_futures') return '코인선물';
+  if (alert.assetClass === 'coin_spot') return '코인현물';
+  return alert.market.trim().toUpperCase().includes('US') ? '해외주식' : '국내주식';
+}
+
+function basicStrategyLabel(context: TelegramSignalDeliveryContext): string {
+  if (context.strategyMode === 'scalping') return '단타';
+  if (context.strategyMode === 'position') return '중장기';
+  return '스윙';
+}
+
+function withBasicSignalLinks(
+  input: TelegramAlertInput,
+  alert: ScannerAlertCandidate,
+  context: TelegramSignalDeliveryContext,
+): TelegramAlertInput {
+  return {
+    ...input,
+    title: input.title ?? `${alert.symbol} / ${basicMarketLabel(alert)} · ${basicStrategyLabel(context)}`,
+    buttons: input.buttons?.length
+      ? input.buttons
+      : buildTelegramSignalAppButtons(alert, context, { orderEnabled: true }),
+    linkPreview: false,
+  };
 }
 
 function pricePlanDetails(alert: ScannerAlertCandidate): string {
-  const lines = ['🚨 진입가능', ...tradePlanLines(alert)];
-  if (alert.evidence.length) lines.push(`판단 이유: ${alert.evidence.slice(0, 4).join(' · ')}`);
-  else lines.push('판단 이유: N/A');
+  const lines = [...tradePlanLines(alert)];
+  if (alert.evidence.length) lines.push('', '근거:', alert.evidence.slice(0, 4).join(' · '));
+  else lines.push('', '근거: N/A');
   return lines.join('\n');
 }
 
@@ -225,19 +238,6 @@ export function scannerTelegramInput(
   return null;
 }
 
-function normalizeRichTradePlan(
-  input: TelegramAlertInput,
-  alert: ScannerAlertCandidate,
-): TelegramAlertInput {
-  if (!input.details) return input;
-  const lines = input.details.split('\n');
-  // buildTelegramSignalIntelligenceInput puts its legacy compact price-plan on
-  // line 2. Replace only that canonical line so evidence/news/AI stay intact.
-  if (lines.length >= 2) lines.splice(1, 1, ...tradePlanLines(alert));
-  else lines.push(...tradePlanLines(alert));
-  return { ...input, details: lines.join('\n') };
-}
-
 function freshnessWarning(freshness: TelegramSignalFreshness): string | null {
   if (freshness.status === 'FRESH') return null;
   if (freshness.status === 'PARTIAL') return '⚠️ 일부 Evidence 미확인 · 표시된 근거만 사용';
@@ -262,7 +262,13 @@ export function addTelegramSignalFreshness(
   const lines = input.details ? input.details.split('\n') : [];
 
   if (freshness.status !== 'FRESH' && warning) lines.push(warning);
-  return { ...input, details: lines.join('\n') };
+  const orderStillReviewable = freshness.status === 'FRESH' || freshness.status === 'PARTIAL';
+  const buttons = orderStillReviewable
+    ? input.buttons
+    : input.buttons
+      ?.map((row) => row.filter((button) => !button.text.includes('주문')))
+      .filter((row) => row.length > 0);
+  return { ...input, details: lines.join('\n'), buttons };
 }
 
 async function richInput(
@@ -270,16 +276,14 @@ async function richInput(
   alert: ScannerAlertCandidate,
   context: TelegramSignalDeliveryContext,
 ): Promise<TelegramAlertInput> {
+  const fallback = withBasicSignalLinks(base, alert, context);
   if (process.env.TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED !== 'true') {
-    return addTelegramSignalFreshness(base, alert, context);
+    return addTelegramSignalFreshness(fallback, alert, context);
   }
   try {
     const evidence = await collectTelegramSignalIntelligence(alert, context);
     return addTelegramSignalFreshness(
-      normalizeRichTradePlan(
-        buildTelegramSignalIntelligenceInput(base, alert, evidence, context),
-        alert,
-      ),
+      buildTelegramSignalIntelligenceInput(base, alert, evidence, context),
       alert,
       context,
       evidence,
@@ -289,7 +293,7 @@ async function richInput(
       { signalId: alert.signalId, errorName: error instanceof Error ? error.name : 'UnknownError' },
       'scanner Telegram rich evidence unavailable; falling back to base alert',
     );
-    return addTelegramSignalFreshness(base, alert, context);
+    return addTelegramSignalFreshness(fallback, alert, context);
   }
 }
 
