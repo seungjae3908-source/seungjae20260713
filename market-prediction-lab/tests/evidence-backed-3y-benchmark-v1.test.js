@@ -128,8 +128,9 @@ test("return summary emits comparable return, CAGR, Sharpe and drawdown metrics"
 });
 
 test("equal-weight buy-hold baseline charges entry and exit friction and stays deterministic", () => {
-  const a = candles({ count: 320, drift: 0.001 });
-  const b = candles({ count: 320, drift: 0.0005 });
+  const warmupStart = BENCHMARK_PERIOD.startTime - 20 * 86_400_000;
+  const a = candles({ start: warmupStart, count: 340, drift: 0.001 });
+  const b = candles({ start: warmupStart, count: 340, drift: 0.0005 });
   const lowCost = runEqualWeightBuyHoldBaseline({
     datasets: [{ symbol: "A", candles: a }, { symbol: "B", candles: b }],
     perSideCostBps: 5,
