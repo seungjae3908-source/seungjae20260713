@@ -25,16 +25,21 @@ function scannerMarket(intent: TelegramScannerIntent): FrontendScannerMarket {
   return 'CRYPTO_FUTURES';
 }
 
+const TELEGRAM_ORDER_TIMEFRAMES = new Set<SignalScannerRequest['timeframe']>([
+  '1m', '3m', '5m', '15m', '60m', '4H', '1D',
+]);
+
 function requestFor(intent: TelegramScannerIntent): SignalScannerRequest {
   const market = scannerMarket(intent);
   const strategy = intent.strategyMode as UnifiedScannerStrategyMode;
   const profile = getScannerUiProfile(market, strategy);
   const stock = intent.market === 'KR' || intent.market === 'US';
+  const requested = intent.timeframe as SignalScannerRequest['timeframe'] | null;
   return {
     assetClass: stock ? 'stock' : intent.market === 'UPBIT' ? 'coin_spot' : 'coin_futures',
     market: intent.market,
     strategy,
-    timeframe: profile.timeframe,
+    timeframe: requested && TELEGRAM_ORDER_TIMEFRAMES.has(requested) ? requested : profile.timeframe,
     conditions: [],
     condition: !stock && strategy === 'scalping' ? 'williams' : 'trend',
     cursor: 0,
@@ -48,11 +53,27 @@ function actionMatches(card: ScannerSignalCard, intent: TelegramScannerIntent): 
   return intent.action == null || card.action === intent.action;
 }
 
+const ORDER_ACTIVE_STATES = new Set<ScannerSignalCard['signalState']>([
+  'ENTRY_ZONE',
+  'APPROVAL_PENDING',
+  'READY_FOR_APPROVAL',
+]);
+
 function currentCandidateIsUsable(card: ScannerSignalCard): boolean {
-  if (card.dataState !== 'complete') return false;
+  if (card.dataState !== 'complete' || !card.strongSignalEligible) return false;
+  if (!ORDER_ACTIVE_STATES.has(card.signalState)) return false;
   if (!card.pricePlan.entryZone || card.pricePlan.stopLoss == null || card.pricePlan.targets.length < 1) return false;
   const expiresAt = Date.parse(card.expiresAt);
-  return Number.isFinite(expiresAt) && expiresAt > Date.now();
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return false;
+  const low = Math.min(card.pricePlan.entryZone.from, card.pricePlan.entryZone.to);
+  const high = Math.max(card.pricePlan.entryZone.from, card.pricePlan.entryZone.to);
+  return Number.isFinite(card.price) && card.price >= low && card.price <= high;
+}
+
+function currentEntryRange(card: ScannerSignalCard): string {
+  const zone = card.pricePlan.entryZone;
+  if (!zone) return '미확인';
+  return `${zone.from.toLocaleString('ko-KR')}~${zone.to.toLocaleString('ko-KR')}`;
 }
 
 function selectionFromCard(
@@ -119,9 +140,20 @@ export default function TelegramSignalOrderPage() {
           return;
         }
         if (!currentCandidateIsUsable(card)) {
+          const activeState = ORDER_ACTIVE_STATES.has(card.signalState);
+          const zone = card.pricePlan.entryZone;
+          const low = zone ? Math.min(zone.from, zone.to) : null;
+          const high = zone ? Math.max(zone.from, zone.to) : null;
+          const outOfRange = low != null && high != null
+            && Number.isFinite(card.price)
+            && (card.price < low || card.price > high);
           setState({
             status: 'blocked',
-            message: '현재 데이터가 불완전하거나 신호가 만료됐거나 가격계획이 무효입니다. 주문 준비를 차단했습니다.',
+            message: !activeState
+              ? '현재 신호가 관망·무효·만료 또는 체결 후 상태라 주문 버튼을 사용할 수 없습니다. 새 활성 신호를 기다려 주세요.'
+              : outOfRange
+                ? `현재가 ${card.price.toLocaleString('ko-KR')}가 진입구간 ${currentEntryRange(card)}을 벗어나 주문 준비를 차단했습니다.`
+                : '현재 데이터가 불완전하거나 신호가 만료됐거나 가격계획이 유효하지 않아 주문 준비를 차단했습니다.',
             card: null,
             selection: null,
           });
@@ -131,7 +163,7 @@ export default function TelegramSignalOrderPage() {
         analysisSelection.select(selection);
         setState({
           status: 'verified',
-          message: '현재 시장데이터로 재검증했습니다. 아래 진입·목표·손절은 Telegram 과거 가격이 아니라 최신 Scanner 계획입니다.',
+          message: `🛒 주문을 누르면 앱에서 최신 시장데이터로 다시 검증합니다. 현재가 ${card.price.toLocaleString('ko-KR')} · 진입구간 ${currentEntryRange(card)} · 현재 신호 활성 확인 완료.`,
           card,
           selection,
         });
@@ -158,7 +190,7 @@ export default function TelegramSignalOrderPage() {
           <p className="text-xs font-black text-primary">Telegram → 앱 주문 준비</p>
           <h1 className="mt-1 text-xl font-black">현재가 재검증형 주문 초안</h1>
           <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">
-            Telegram 링크의 사용자·계좌 식별자는 신뢰하지 않습니다. 로그인된 앱 세션으로 Scanner를 새로 조회하고, 결정론적 규칙 엔진이 현재 후보를 유지할 때만 주문 초안을 표시합니다. AI는 설명만 하며 주문 허용 여부를 결정하지 않습니다.
+            Telegram의 과거 가격을 그대로 사용하지 않습니다. 이 화면을 열 때마다 현재가·신호 상태·진입구간·만료 여부를 다시 확인하고, 모두 유효할 때만 주문 초안을 표시합니다. AI는 설명만 하며 주문 허용 여부를 결정하지 않습니다.
           </p>
         </header>
 
