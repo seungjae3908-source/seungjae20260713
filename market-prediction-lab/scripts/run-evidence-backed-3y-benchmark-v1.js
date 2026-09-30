@@ -360,19 +360,45 @@ function selectBenchmarkRows(rows) {
   const measured = rows.filter((row) => row.status === "MEASURED_PROXY"
     && Number.isFinite(row.performance?.cagr)
     && Number.isFinite(row.performance?.maximumDrawdown));
-  const byCagr = [...measured].sort((a, b) =>
+  const passive = measured.filter((row) => row.strategy === "EQUAL_WEIGHT_BUY_HOLD_BASELINE");
+  const active = measured.filter((row) => row.strategy !== "EQUAL_WEIGHT_BUY_HOLD_BASELINE");
+  const baselineByProfile = new Map(passive.map((row) => [row.profileId, row]));
+  const byCagr = [...active].sort((a, b) =>
     b.performance.cagr - a.performance.cagr
     || (b.performance.annualizedSharpe ?? Number.NEGATIVE_INFINITY)
       - (a.performance.annualizedSharpe ?? Number.NEGATIVE_INFINITY));
-  const bySharpe = [...measured].sort((a, b) =>
+  const bySharpe = [...active].sort((a, b) =>
     (b.performance.annualizedSharpe ?? Number.NEGATIVE_INFINITY)
       - (a.performance.annualizedSharpe ?? Number.NEGATIVE_INFINITY)
     || b.performance.cagr - a.performance.cagr);
+  const activeVsPassive = active.map((row) => {
+    const baseline = baselineByProfile.get(row.profileId) ?? null;
+    return Object.freeze({
+      profileId: row.profileId,
+      strategy: row.strategy,
+      baselineStrategy: baseline?.strategy ?? null,
+      cagr: row.performance.cagr,
+      baselineCagr: baseline?.performance?.cagr ?? null,
+      cagrExcess: baseline ? row.performance.cagr - baseline.performance.cagr : null,
+      totalReturnExcess: baseline ? row.performance.totalReturn - baseline.performance.totalReturn : null,
+      sharpeDelta: baseline && Number.isFinite(row.performance.annualizedSharpe)
+        && Number.isFinite(baseline.performance.annualizedSharpe)
+        ? row.performance.annualizedSharpe - baseline.performance.annualizedSharpe
+        : null,
+      drawdownImprovement: baseline
+        ? baseline.performance.maximumDrawdown - row.performance.maximumDrawdown
+        : null,
+    });
+  }).sort((a, b) =>
+    (b.cagrExcess ?? Number.NEGATIVE_INFINITY) - (a.cagrExcess ?? Number.NEGATIVE_INFINITY)
+    || b.cagr - a.cagr);
   return Object.freeze({
     comparisonOnly: true,
     noPromotionAuthority: true,
+    passiveBaselines: Object.freeze(passive),
     highestCagrMeasuredProxy: byCagr[0] ?? null,
     highestSharpeMeasuredProxy: bySharpe[0] ?? null,
+    activeVsPassive: Object.freeze(activeVsPassive),
   });
 }
 
