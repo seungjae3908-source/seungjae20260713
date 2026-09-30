@@ -20,9 +20,9 @@ import concurrent.futures
 from huggingface_hub import snapshot_download
 from sklearn.ensemble import HistGradientBoostingRegressor
 
-START = pd.Timestamp("2023-08-10", tz="UTC")
-END = pd.Timestamp("2026-08-09 23:59:59", tz="UTC")
-WARMUP = pd.Timestamp("2022-01-01", tz="UTC")
+START = pd.Timestamp("2023-09-26", tz="UTC")
+END = pd.Timestamp("2026-09-25 23:59:59", tz="UTC")
+WARMUP = pd.Timestamp("2023-07-14", tz="UTC")
 STOOQ_URL = "https://static.stooq.com/db/h/d_us_txt.zip"
 
 ROUND_TRIP_COST = 0.0020
@@ -122,6 +122,48 @@ def yahoo_symbol_history(symbol: str) -> pd.DataFrame:
             last = error
             time.sleep(0.5 * (attempt + 1))
     raise RuntimeError(f"YAHOO_FAILED:{symbol}:{last}")
+
+
+def load_stratos_us_universe() -> tuple[pd.DataFrame, list[pd.Timestamp], dict]:
+    url = "https://huggingface.co/datasets/stratos-org/ohlcv-750/resolve/main/data/ohlcv.parquet?download=true"
+    response = SESSION.get(url, timeout=120)
+    response.raise_for_status()
+    if len(response.content) < 5_000_000:
+        raise RuntimeError(f"STRATOS_PARQUET_TOO_SMALL:{len(response.content)}")
+    frame = pd.read_parquet(io.BytesIO(response.content))
+    required = {"ticker", "market", "date", "open", "high", "low", "close", "volume"}
+    if not required.issubset(set(frame.columns)):
+        raise RuntimeError(f"STRATOS_SCHEMA_MISMATCH:{sorted(frame.columns)}")
+    frame = frame[frame["market"].astype(str).str.upper().eq("US")].copy()
+    frame["timestamp"] = pd.to_datetime(frame["date"], utc=True, errors="coerce")
+    frame["symbol"] = frame["ticker"].astype(str).str.upper()
+    frame = frame.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
+    frame = frame[(frame.timestamp >= WARMUP) & (frame.timestamp <= END)]
+    if frame["symbol"].nunique() < 100:
+        raise RuntimeError(f"STRATOS_US_SYMBOL_COVERAGE_TOO_LOW:{frame['symbol'].nunique()}")
+
+    candidates = []
+    trading_dates: set[pd.Timestamp] = set()
+    candidate_symbols = 0
+    for symbol, g in frame.groupby("symbol", sort=False):
+        g = g[["symbol", "timestamp", "open", "high", "low", "close", "volume"]].sort_values("timestamp").reset_index(drop=True)
+        if len(g) < 60:
+            continue
+        for dt in g.loc[(g.timestamp >= START) & (g.timestamp <= END), "timestamp"].tolist():
+            trading_dates.add(dt)
+        cand = candidate_features(g)
+        if not cand.empty:
+            candidate_symbols += 1
+            candidates.append(cand)
+    if not candidates:
+        raise RuntimeError("NO_STRATOS_DAILY_MOVER_CANDIDATES")
+    data = pd.concat(candidates, ignore_index=True).sort_values(["timestamp", "symbol"]).reset_index(drop=True)
+    return data, sorted(trading_dates), {
+        "datasetRows": int(len(frame)),
+        "usableSymbols": int(frame["symbol"].nunique()),
+        "candidateSymbols": candidate_symbols,
+        "candidateRows": int(len(data)),
+    }
 
 
 def load_hf_yahoo_universe() -> tuple[pd.DataFrame, list[pd.Timestamp], dict]:
@@ -717,27 +759,40 @@ def main() -> None:
                 "fallbackUsed": False,
             }
         except Exception as stooq_error:
-            print(json.dumps({"stooqBulkUnavailable": str(stooq_error), "fallback": "HF_YAHOO_DAILY"}), flush=True)
+            print(json.dumps({"stooqBulkUnavailable": str(stooq_error), "fallback": "STRATOS_US_DAILY"}), flush=True)
             try:
-                data, trading_dates, universe = load_hf_yahoo_universe()
+                data, trading_dates, universe = load_stratos_us_universe()
                 source_meta = {
-                    "provider": "Hugging Face AmirTrader/YahooFinance daily parquet",
-                    "url": "https://huggingface.co/datasets/AmirTrader/YahooFinance",
-                    "scope": "large public U.S. equity daily-history collection, dynamically re-ranked each trading day",
+                    "provider": "Hugging Face stratos-org/ohlcv-750 daily parquet",
+                    "url": "https://huggingface.co/datasets/stratos-org/ohlcv-750",
+                    "scope": "U.S. S&P500-oriented equity universe from multi-market 750 dataset, dynamically re-ranked each trading day",
                     "fallbackUsed": True,
                     "stooqBulkError": str(stooq_error),
                 }
-            except Exception as hf_error:
-                print(json.dumps({"hfYahooUnavailable": str(hf_error), "fallback": "APP_CATALOG_YAHOO"}), flush=True)
-                data, trading_dates, universe = load_catalog_yahoo_universe()
-                source_meta = {
-                    "provider": "Yahoo Finance daily chart via app US stock catalog",
-                    "url": "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
-                    "scope": "current app curated U.S. stock catalog, dynamically re-ranked each trading day",
-                    "fallbackUsed": True,
-                    "stooqBulkError": str(stooq_error),
-                    "hfYahooError": str(hf_error),
-                }
+            except Exception as stratos_error:
+                print(json.dumps({"stratosUnavailable": str(stratos_error), "fallback": "HF_YAHOO_DAILY"}), flush=True)
+                try:
+                    data, trading_dates, universe = load_hf_yahoo_universe()
+                    source_meta = {
+                        "provider": "Hugging Face AmirTrader/YahooFinance daily parquet",
+                        "url": "https://huggingface.co/datasets/AmirTrader/YahooFinance",
+                        "scope": "large public U.S. equity daily-history collection, dynamically re-ranked each trading day",
+                        "fallbackUsed": True,
+                        "stooqBulkError": str(stooq_error),
+                        "stratosError": str(stratos_error),
+                    }
+                except Exception as hf_error:
+                    print(json.dumps({"hfYahooUnavailable": str(hf_error), "fallback": "APP_CATALOG_YAHOO"}), flush=True)
+                    data, trading_dates, universe = load_catalog_yahoo_universe()
+                    source_meta = {
+                        "provider": "Yahoo Finance daily chart via app US stock catalog",
+                        "url": "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
+                        "scope": "current app curated U.S. stock catalog, dynamically re-ranked each trading day",
+                        "fallbackUsed": True,
+                        "stooqBulkError": str(stooq_error),
+                        "stratosError": str(stratos_error),
+                        "hfYahooError": str(hf_error),
+                    }
 
     candidates = rule_candidates(data, trading_dates)
     candidates.append(walk_forward_ai(data, BASIC_FEATURES, "DAILY_MOVER_AI_BASIC", trading_dates))
