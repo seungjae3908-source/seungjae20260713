@@ -406,6 +406,43 @@ def portfolio_from_scores(rows: pd.DataFrame, score_col: str, threshold: float |
     return series, int(p["trades"].sum()) if not p.empty else 0
 
 
+
+def portfolio_from_scores_short(rows: pd.DataFrame, score_col: str, threshold: float | None, trading_dates: list[pd.Timestamp]) -> tuple[pd.Series, int]:
+    picks = []
+    for dt, g in rows.groupby("timestamp"):
+        ranked = g.sort_values([score_col, "symbol"], ascending=[False, True])
+        if threshold is not None:
+            ranked = ranked[ranked[score_col] >= threshold]
+        ranked = ranked.head(MAX_DAILY_SELECTIONS)
+        if ranked.empty:
+            continue
+        daily_return = float((-ranked["gross_return"] - ROUND_TRIP_COST).mean())
+        picks.append((dt, daily_return, len(ranked)))
+    p = pd.DataFrame(picks, columns=["timestamp", "return", "trades"]) if picks else pd.DataFrame(columns=["timestamp", "return", "trades"])
+    series = p.set_index("timestamp")["return"] if not p.empty else pd.Series(dtype=float)
+    index = pd.DatetimeIndex([d for d in trading_dates if START <= d <= END])
+    series = series.reindex(index, fill_value=0.0)
+    return series, int(p["trades"].sum()) if not p.empty else 0
+
+
+def portfolio_from_directional_predictions(rows: pd.DataFrame, threshold: float, trading_dates: list[pd.Timestamp]) -> tuple[pd.Series, int]:
+    picks = []
+    for dt, g in rows.groupby("timestamp"):
+        eligible = g[g["pred"].abs() >= threshold].copy()
+        if eligible.empty:
+            continue
+        eligible["score"] = eligible["pred"].abs()
+        selected = eligible.sort_values(["score", "symbol"], ascending=[False, True]).head(MAX_DAILY_SELECTIONS)
+        side = np.where(selected["pred"] >= 0, 1.0, -1.0)
+        daily_return = float((side * selected["gross_return"].to_numpy() - ROUND_TRIP_COST).mean())
+        picks.append((dt, daily_return, len(selected)))
+    p = pd.DataFrame(picks, columns=["timestamp", "return", "trades"]) if picks else pd.DataFrame(columns=["timestamp", "return", "trades"])
+    series = p.set_index("timestamp")["return"] if not p.empty else pd.Series(dtype=float)
+    index = pd.DatetimeIndex([d for d in trading_dates if START <= d <= END])
+    series = series.reindex(index, fill_value=0.0)
+    return series, int(p["trades"].sum()) if not p.empty else 0
+
+
 def rule_candidates(data: pd.DataFrame, trading_dates: list[pd.Timestamp]) -> list[dict]:
     work = data[(data.timestamp >= START) & (data.timestamp <= END)].copy()
     out = []
@@ -418,7 +455,13 @@ def rule_candidates(data: pd.DataFrame, trading_dates: list[pd.Timestamp]) -> li
         ("DAILY_MOVER_GAP_RVOL_TOP3", positive, "GAP_RVOL_SCORE"),
     ]:
         daily, trades = portfolio_from_scores(frame, col, None, trading_dates)
-        out.append({"candidate": name, "daily": daily, "trades": trades, "meta": {"kind": "RULE_CONTINUATION"}})
+        out.append({"candidate": name, "daily": daily, "trades": trades, "meta": {"kind": "RULE_CONTINUATION_LONG"}})
+    for name, frame, col in [
+        ("DAILY_MOVER_GAP_UP_FADE_SHORT_TOP3", positive, "GAP_SCORE"),
+        ("DAILY_MOVER_GAP_UP_RVOL_FADE_SHORT_TOP3", positive, "GAP_RVOL_SCORE"),
+    ]:
+        daily, trades = portfolio_from_scores_short(frame, col, None, trading_dates)
+        out.append({"candidate": name, "daily": daily, "trades": trades, "meta": {"kind": "RULE_MEAN_REVERSION_SHORT", "borrowCostIncluded": False}})
 
     negative = work[work["gap"] < 0].copy()
     negative["GAP_DOWN_SCORE"] = -negative["gap"]
@@ -428,7 +471,13 @@ def rule_candidates(data: pd.DataFrame, trading_dates: list[pd.Timestamp]) -> li
         ("DAILY_MOVER_GAP_DOWN_RVOL_REBOUND_TOP3", negative, "GAP_DOWN_RVOL_SCORE"),
     ]:
         daily, trades = portfolio_from_scores(frame, col, None, trading_dates)
-        out.append({"candidate": name, "daily": daily, "trades": trades, "meta": {"kind": "RULE_MEAN_REVERSION"}})
+        out.append({"candidate": name, "daily": daily, "trades": trades, "meta": {"kind": "RULE_MEAN_REVERSION_LONG"}})
+    for name, frame, col in [
+        ("DAILY_MOVER_GAP_DOWN_CONTINUATION_SHORT_TOP3", negative, "GAP_DOWN_SCORE"),
+        ("DAILY_MOVER_GAP_DOWN_RVOL_CONTINUATION_SHORT_TOP3", negative, "GAP_DOWN_RVOL_SCORE"),
+    ]:
+        daily, trades = portfolio_from_scores_short(frame, col, None, trading_dates)
+        out.append({"candidate": name, "daily": daily, "trades": trades, "meta": {"kind": "RULE_CONTINUATION_SHORT", "borrowCostIncluded": False}})
     return out
 
 def months() -> list[tuple[pd.Timestamp, pd.Timestamp]]:
@@ -511,6 +560,72 @@ def walk_forward_ai(data: pd.DataFrame, features: list[str], name: str, trading_
     }
 
 
+
+def walk_forward_ai_directional(data: pd.DataFrame, features: list[str], name: str, trading_dates: list[pd.Timestamp]) -> dict:
+    rows = data.dropna(subset=features + ["gross_return"]).copy()
+    pieces = []
+    threshold_history = []
+    trade_count = 0
+
+    for test_start, test_end in months():
+        train_end = test_start - pd.Timedelta(seconds=1)
+        train_start = train_end - pd.DateOffset(months=18) + pd.Timedelta(seconds=1)
+        val_start = train_end - pd.DateOffset(months=3) + pd.Timedelta(seconds=1)
+        core = rows[(rows.timestamp >= train_start) & (rows.timestamp < val_start)]
+        val = rows[(rows.timestamp >= val_start) & (rows.timestamp <= train_end)].copy()
+        full = rows[(rows.timestamp >= train_start) & (rows.timestamp <= train_end)]
+        test = rows[(rows.timestamp >= test_start) & (rows.timestamp <= test_end)].copy()
+        if len(core) < 500 or len(val) < 100 or len(full) < 700 or test.empty:
+            continue
+
+        pre = HistGradientBoostingRegressor(
+            learning_rate=0.06, max_iter=70, max_leaf_nodes=15,
+            min_samples_leaf=25, l2_regularization=1.0, random_state=42,
+        )
+        pre.fit(core[features], core["gross_return"])
+        val["pred"] = pre.predict(val[features])
+        local_dates = sorted(val["timestamp"].unique())
+        scored = []
+        for threshold in THRESHOLDS:
+            daily, trades = portfolio_from_directional_predictions(val, threshold, local_dates)
+            scored.append((validation_score(daily, trades), threshold))
+        _, threshold = max(scored, key=lambda item: (item[0], item[1]))
+
+        model = HistGradientBoostingRegressor(
+            learning_rate=0.06, max_iter=90, max_leaf_nodes=15,
+            min_samples_leaf=25, l2_regularization=1.0, random_state=42,
+        )
+        model.fit(full[features], full["gross_return"])
+        test["pred"] = model.predict(test[features])
+
+        for dt, g in test.groupby("timestamp"):
+            eligible = g[g["pred"].abs() >= threshold].copy()
+            if eligible.empty:
+                continue
+            eligible["score"] = eligible["pred"].abs()
+            selected = eligible.sort_values(["score", "symbol"], ascending=[False, True]).head(MAX_DAILY_SELECTIONS)
+            side = np.where(selected["pred"] >= 0, 1.0, -1.0)
+            pieces.append((dt, float((side * selected["gross_return"].to_numpy() - ROUND_TRIP_COST).mean()), int(len(selected))))
+            trade_count += len(selected)
+        threshold_history.append({"testStart": test_start.isoformat(), "threshold": threshold})
+
+    p = pd.DataFrame(pieces, columns=["timestamp", "return", "trades"]) if pieces else pd.DataFrame(columns=["timestamp", "return", "trades"])
+    series = p.groupby("timestamp")["return"].first() if not p.empty else pd.Series(dtype=float)
+    index = pd.DatetimeIndex([d for d in trading_dates if START <= d <= END])
+    series = series.reindex(index, fill_value=0.0)
+    return {
+        "candidate": name,
+        "daily": series,
+        "trades": int(trade_count),
+        "meta": {
+            "kind": "ROLLING_WALK_FORWARD_AI_DIRECTIONAL",
+            "features": features,
+            "thresholdHistory": threshold_history,
+            "borrowCostIncluded": False,
+        },
+    }
+
+
 def self_test() -> None:
     # Same-day close/volume may never be a scanner input.
     feature_names = set(BASIC_FEATURES + RICH_FEATURES)
@@ -558,6 +673,8 @@ def main() -> None:
     candidates = rule_candidates(data, trading_dates)
     candidates.append(walk_forward_ai(data, BASIC_FEATURES, "DAILY_MOVER_AI_BASIC", trading_dates))
     candidates.append(walk_forward_ai(data, RICH_FEATURES, "DAILY_MOVER_AI_WAVE_CANDLE", trading_dates))
+    candidates.append(walk_forward_ai_directional(data, BASIC_FEATURES, "DAILY_MOVER_AI_DIRECTIONAL_BASIC", trading_dates))
+    candidates.append(walk_forward_ai_directional(data, RICH_FEATURES, "DAILY_MOVER_AI_DIRECTIONAL_WAVE_CANDLE", trading_dates))
 
     rows = []
     for item in candidates:
@@ -594,6 +711,8 @@ def main() -> None:
             "minimumPrior20dAverageDollarVolume": MIN_AVG_DOLLAR_VOLUME,
             "maxDailySelections": MAX_DAILY_SELECTIONS,
             "roundTripCost": ROUND_TRIP_COST,
+            "shortBorrowAvailabilityModeled": False,
+            "shortBorrowCostIncluded": False,
         },
         "results": rows,
         "profitableSurvivorsOnly": survivors,
