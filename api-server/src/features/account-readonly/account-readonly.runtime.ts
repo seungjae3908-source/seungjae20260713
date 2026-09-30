@@ -1,4 +1,9 @@
-import type { PreparedExchangeRequest, BitgetCredentials, UpbitCredentials } from '../../services/trade-exchange-adapters.service';
+import type {
+  BitgetCredentials,
+  BitgetReadonlyDiagnostic,
+  PreparedExchangeRequest,
+  UpbitCredentials,
+} from '../../services/trade-exchange-adapters.service';
 import { decryptTradingCredentials } from '../../services/trade-credential-vault.service';
 import { AccountReadonlyError } from './account-readonly.errors';
 import {
@@ -113,20 +118,21 @@ async function upbitFailureName(response: Response) {
   }
 }
 
+function bitgetApplicationCode(value: unknown): string | null {
+  const code = objectRecord(value)?.code;
+  const normalized = typeof code === 'string' || typeof code === 'number' ? String(code) : '';
+  return /^\d+$/.test(normalized) ? normalized : null;
+}
+
 async function bitgetFailureCode(response: Response) {
   try {
-    const body: unknown = await response.clone().json();
-    const root = objectRecord(body);
-    const code = root?.code;
-    return typeof code === 'string' || typeof code === 'number'
-      ? String(code)
-      : '';
+    return bitgetApplicationCode(await response.clone().json());
   } catch {
-    return '';
+    return null;
   }
 }
 
-function classifyBitgetApplicationCode(code: string) {
+function classifyBitgetApplicationCode(code: string | null) {
   if (code === '25245') return new AccountReadonlyError('BITGET_NOT_UTA');
   if (code === '40018' || code === '40038') return new AccountReadonlyError('BITGET_IP_NOT_ALLOWED');
   if (code === '40014' || code === '40025' || code === '40040') return new AccountReadonlyError('BITGET_PERMISSION_DENIED');
@@ -142,6 +148,52 @@ function classifyBitgetApplicationCode(code: string) {
   }
   if (code === '429') return new AccountReadonlyError('RATE_LIMITED', true);
   return null;
+}
+
+function classifyBitgetHttpFailure(status: number, applicationCode: string | null) {
+  if (status === 429) return new AccountReadonlyError('RATE_LIMITED', true);
+  if (status >= 500) return new AccountReadonlyError('PROVIDER_UNAVAILABLE', true);
+
+  const application = classifyBitgetApplicationCode(applicationCode);
+  if (application) return application;
+  if (status === 401) return new AccountReadonlyError('BITGET_AUTH_FAILED');
+  if (status === 403) return new AccountReadonlyError('BITGET_PERMISSION_DENIED');
+  return new AccountReadonlyError('BITGET_REQUEST_REJECTED');
+}
+
+function withBitgetFailureDiagnostic(
+  error: AccountReadonlyError,
+  request: PreparedExchangeRequest,
+  expectedOrigin: string,
+  httpStatus: number,
+  applicationCode: string | null,
+) {
+  const metadata = request.bitgetReadonlyDiagnostic;
+  if (!metadata || metadata.provider !== 'bitget') return error;
+
+  const diagnostic: BitgetReadonlyDiagnostic = {
+    provider: 'bitget',
+    requestMethod: 'GET',
+    requestPath: request.path,
+    endpointFamily: metadata.endpointFamily,
+    probe: metadata.probe,
+    httpStatus,
+    applicationCode,
+    sanitizedClassification: error.code === 'BITGET_AUTH_FAILED'
+      && httpStatus === 401
+      && applicationCode === null
+      ? 'BITGET_HTTP_401_NO_APPLICATION_CODE'
+      : error.code,
+    fallbackAttempted: metadata.fallbackAttempted === true,
+    timestampRejected: error.code === 'BITGET_TIMESTAMP_REJECTED',
+    productionHost: expectedOrigin === 'https://api.bitget.com',
+    credentialPresence: {
+      key: metadata.credentialPresence.key === true,
+      secret: metadata.credentialPresence.secret === true,
+      passphrase: metadata.credentialPresence.passphrase === true,
+    },
+  };
+  return new AccountReadonlyError(error.code, error.retryable, error.retryAfterMs, diagnostic);
 }
 
 async function classifyReadonlyHttpFailure(provider: ReadonlyHttpProvider, response: Response) {
@@ -164,11 +216,7 @@ async function classifyReadonlyHttpFailure(provider: ReadonlyHttpProvider, respo
     return new AccountReadonlyError('UPBIT_REQUEST_REJECTED');
   }
 
-  const application = classifyBitgetApplicationCode(await bitgetFailureCode(response));
-  if (application) return application;
-  if (response.status === 401) return new AccountReadonlyError('BITGET_AUTH_FAILED');
-  if (response.status === 403) return new AccountReadonlyError('BITGET_PERMISSION_DENIED');
-  return new AccountReadonlyError('BITGET_REQUEST_REJECTED');
+  return classifyBitgetHttpFailure(response.status, await bitgetFailureCode(response));
 }
 
 function createReadonlyTransport(
@@ -204,11 +252,33 @@ function createReadonlyTransport(
       throw error;
     }
 
-    if (!response.ok) throw await classifyReadonlyHttpFailure(provider, response);
+    if (!response.ok) {
+      if (provider === 'bitget') {
+        const applicationCode = await bitgetFailureCode(response);
+        throw withBitgetFailureDiagnostic(
+          classifyBitgetHttpFailure(response.status, applicationCode),
+          request,
+          expectedOrigin,
+          response.status,
+          applicationCode,
+        );
+      }
+      throw await classifyReadonlyHttpFailure(provider, response);
+    }
 
     try {
-      return await response.json();
-    } catch {
+      const payload: unknown = await response.json();
+      if (provider === 'bitget') {
+        const applicationCode = bitgetApplicationCode(payload);
+        if (applicationCode !== null && applicationCode !== '00000') {
+          const error = classifyBitgetApplicationCode(applicationCode)
+            ?? new AccountReadonlyError('BITGET_REQUEST_REJECTED');
+          throw withBitgetFailureDiagnostic(error, request, expectedOrigin, response.status, applicationCode);
+        }
+      }
+      return payload;
+    } catch (error) {
+      if (error instanceof AccountReadonlyError) throw error;
       throw new AccountReadonlyError('PROVIDER_RESPONSE_INVALID');
     }
   };

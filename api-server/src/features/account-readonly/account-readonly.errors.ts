@@ -1,5 +1,33 @@
+import type { BitgetReadonlyDiagnostic } from '../../services/trade-exchange-adapters.service';
+
 export class AccountReadonlyError extends Error {
-  constructor(public readonly code: string, public readonly retryable = false, public readonly retryAfterMs: number | null = null) { super(code); }
+  constructor(
+    public readonly code: string,
+    public readonly retryable = false,
+    public readonly retryAfterMs: number | null = null,
+    public readonly bitgetDiagnostic: BitgetReadonlyDiagnostic | null = null,
+  ) { super(code); }
+}
+
+export function serializeBitgetReadonlyDiagnostic(diagnostic: BitgetReadonlyDiagnostic) {
+  return JSON.stringify({
+    provider: 'bitget',
+    requestMethod: 'GET',
+    requestPath: diagnostic.requestPath,
+    endpointFamily: diagnostic.endpointFamily,
+    probe: diagnostic.probe,
+    httpStatus: diagnostic.httpStatus,
+    applicationCode: diagnostic.applicationCode,
+    sanitizedClassification: diagnostic.sanitizedClassification,
+    fallbackAttempted: diagnostic.fallbackAttempted,
+    timestampRejected: diagnostic.timestampRejected,
+    productionHost: diagnostic.productionHost,
+    credentialPresence: {
+      key: diagnostic.credentialPresence.key,
+      secret: diagnostic.credentialPresence.secret,
+      passphrase: diagnostic.credentialPresence.passphrase,
+    },
+  });
 }
 
 const CREDENTIAL_ACCESS_FAILURES = new Set([

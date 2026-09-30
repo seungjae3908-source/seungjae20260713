@@ -68,6 +68,7 @@ jobs:
           requireText(spec, 'Persist bounded, sanitized provider state before any connectivity assertion', 'SANITIZED_FAILURE_DIAGNOSTICS_REQUIRED');
           requireText(spec, 'testedProviders', 'TESTED_PROVIDERS_EVIDENCE_REQUIRED');
           requireText(spec, 'reconciliationPassed', 'TARGET_PROVIDER_RECONCILIATION_REQUIRED');
+          requireText(spec, 'bitgetDiagnostic', 'BITGET_SANITIZED_DIAGNOSTIC_REQUIRED');
           requireText(bridge, "new Set(['toss', 'kiwoom', 'upbit', 'bitget'])", 'BRIDGE_ALLOWED_TARGET_PROVIDERS_REQUIRED');
           requireText(bridge, 'inputs: { sha: target, providers }', 'BRIDGE_TARGET_PROVIDER_DISPATCH_REQUIRED');
           const adapter = fs.readFileSync('api-server/src/services/trade-exchange-adapters.service.ts', 'utf8');
@@ -208,7 +209,7 @@ jobs:
             throw new Error('PRODUCTION_ACCOUNT_QA_TARGET_PROVIDER_SET_INVALID');
           }
           const providers = Array.isArray(value?.providers) ? value.providers : [];
-          if (value?.schemaVersion !== 'production-account-readonly-live-qa-v1'
+          if (value?.schemaVersion !== 'production-account-readonly-live-qa-v2'
             || value?.targetSha !== expectedSha
             || !Array.isArray(value?.testedProviders)
             || JSON.stringify(value.testedProviders) !== JSON.stringify(expectedTestedProviders)
@@ -240,10 +241,103 @@ jobs:
               throw new Error('PRODUCTION_ACCOUNT_QA_TARGET_PROVIDER_FAILED_' + provider.toUpperCase());
             }
           }
-          const serialized = JSON.stringify(value);
-          if (/(clientSecret|secretKey|accessKey|apiKey|passphrase|accountRef|balances|positions|openOrders)/i.test(serialized)) {
-            throw new Error('PRODUCTION_ACCOUNT_QA_SECRET_OR_ACCOUNT_VALUE_LEAK');
+          const diagnosticFields = new Set([
+            'provider',
+            'requestMethod',
+            'requestPath',
+            'endpointFamily',
+            'probe',
+            'httpStatus',
+            'applicationCode',
+            'sanitizedClassification',
+            'fallbackAttempted',
+            'timestampRejected',
+            'productionHost',
+            'credentialPresence',
+          ]);
+          const allowedPaths = new Set([
+            '/api/v3/account/settings',
+            '/api/v3/account/info',
+            '/api/v3/account/assets',
+            '/api/v3/position/current-position',
+            '/api/v3/trade/unfilled-orders',
+            '/api/v2/mix/account/accounts',
+            '/api/v2/mix/position/all-position',
+            '/api/v2/mix/order/orders-pending',
+          ]);
+          for (const row of providers) {
+            const diagnostic = row?.provider === 'bitget' ? row?.bitgetDiagnostic : null;
+            if (diagnostic === null || diagnostic === undefined) continue;
+            if (typeof diagnostic !== 'object' || Array.isArray(diagnostic)
+              || Object.keys(diagnostic).some((key) => !diagnosticFields.has(key))
+              || diagnostic.provider !== 'bitget'
+              || diagnostic.requestMethod !== 'GET'
+              || !allowedPaths.has(diagnostic.requestPath)
+              || !['UTA_V3', 'CLASSIC'].includes(diagnostic.endpointFamily)
+              || !['ACCOUNT_SETTINGS', 'ACCOUNT_INFO', 'ASSETS', 'POSITIONS', 'OPEN_ORDERS'].includes(diagnostic.probe)
+              || !Number.isInteger(diagnostic.httpStatus)
+              || diagnostic.httpStatus < 100
+              || diagnostic.httpStatus > 599
+              || (diagnostic.applicationCode !== null
+                && (typeof diagnostic.applicationCode !== 'string' || !/^\\d+$/.test(diagnostic.applicationCode)))
+              || ![
+                'BITGET_NOT_UTA',
+                'BITGET_AUTH_FAILED',
+                'BITGET_HTTP_401_NO_APPLICATION_CODE',
+                'BITGET_IP_NOT_ALLOWED',
+                'BITGET_PERMISSION_DENIED',
+                'BITGET_TIMESTAMP_REJECTED',
+                'BITGET_PARAMETER_REJECTED',
+                'BITGET_REQUEST_REJECTED',
+                'PROVIDER_UNAVAILABLE',
+                'RATE_LIMITED',
+              ].includes(diagnostic.sanitizedClassification)
+              || typeof diagnostic.fallbackAttempted !== 'boolean'
+              || typeof diagnostic.timestampRejected !== 'boolean'
+              || typeof diagnostic.productionHost !== 'boolean'
+              || typeof diagnostic.credentialPresence !== 'object'
+              || diagnostic.credentialPresence === null
+              || Object.keys(diagnostic.credentialPresence).length !== 3
+              || typeof diagnostic.credentialPresence.key !== 'boolean'
+              || typeof diagnostic.credentialPresence.secret !== 'boolean'
+              || typeof diagnostic.credentialPresence.passphrase !== 'boolean') {
+              throw new Error('PRODUCTION_ACCOUNT_QA_BITGET_DIAGNOSTIC_NOT_SANITIZED');
+            }
           }
+          const forbiddenEvidenceKeys = new Set([
+            'clientSecret',
+            'secretKey',
+            'accessKey',
+            'apiKey',
+            'signature',
+            'prehash',
+            'authorization',
+            'accountUid',
+            'accountRef',
+            'user_id',
+            'vaultRowId',
+            'balances',
+            'positions',
+            'openOrders',
+          ]);
+          const inspectEvidence = (node, path = []) => {
+            if (Array.isArray(node)) {
+              node.forEach((item, index) => inspectEvidence(item, [...path, String(index)]));
+              return;
+            }
+            if (!node || typeof node !== 'object') return;
+            for (const [key, child] of Object.entries(node)) {
+              const isCredentialPresencePassphrase = key === 'passphrase'
+                && path.length >= 2
+                && path.at(-1) === 'credentialPresence'
+                && path.at(-2) === 'bitgetDiagnostic';
+              if (forbiddenEvidenceKeys.has(key) || (key === 'passphrase' && !isCredentialPresencePassphrase)) {
+                throw new Error('PRODUCTION_ACCOUNT_QA_SECRET_OR_ACCOUNT_VALUE_LEAK');
+              }
+              inspectEvidence(child, [...path, key]);
+            }
+          };
+          inspectEvidence(value);
           NODE
 
       - name: Upload sanitized Production account QA evidence
