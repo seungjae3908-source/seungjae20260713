@@ -749,3 +749,40 @@ test('Kiwoom malformed open-order identity or quantity fails closed instead of f
     }));
   }
 });
+
+test('vault-backed Bitget treats production 40084 for Classic Account mode as a Classic fallback', async () => {
+  const paths: string[] = [];
+  const readers = createVaultBackedAccountReaders({
+    repositoryFactory: () => repositoryFor('bitget'),
+    decryptCredentials: () => ({
+      apiKey: 'BITGET_KEY_40084_RUNTIME_TEST_ONLY',
+      secretKey: 'BITGET_SECRET_40084_RUNTIME_TEST_ONLY',
+      passphrase: 'BITGET_PASSPHRASE_40084_RUNTIME_TEST_ONLY',
+    }),
+    fetchImpl: async (input) => {
+      const url = new URL(String(input));
+      paths.push(url.pathname);
+      if (url.pathname === '/api/v3/account/settings') {
+        return new Response(JSON.stringify({ code: '40084', data: null }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ code: '40006', data: null }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    },
+  });
+
+  await assert.rejects(
+    () => readers.bitget!(SCOPE),
+    (error: unknown) => error instanceof AccountReadonlyError
+      && error.code === 'BITGET_AUTH_FAILED'
+      && error.bitgetDiagnostic?.endpointFamily === 'CLASSIC'
+      && error.bitgetDiagnostic.fallbackAttempted === true,
+  );
+  assert.equal(paths[0], '/api/v3/account/settings');
+  assert.ok(paths.includes('/api/v2/mix/account/accounts'));
+  assert.ok(paths.every((path) => path === '/api/v3/account/settings' || path.startsWith('/api/v2/mix/')));
+});
