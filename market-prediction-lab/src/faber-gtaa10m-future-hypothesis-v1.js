@@ -40,10 +40,11 @@ export const FABER_GTAA_10M_FUTURE_HYPOTHESIS_V1 = Object.freeze({
     observedHistoryMayCountAsProfitabilityProof: false,
   }),
   freezeBoundary: Object.freeze({
-    declarationCommitSha: null,
-    declarationCommittedAt: null,
-    evidenceSignalTimestampMustBeStrictlyAfterDeclaration: true,
-    declarationCommitRecordedAfterCommit: true,
+    declarationCommitSha: "1b541e27e32332af63fe0255d257aac152f46dbf",
+    observedHistoryThrough: "2026-08",
+    firstEligibleSignalMonth: "2026-09",
+    evidenceSignalMonthMustBeAfterObservedHistory: true,
+    evidenceCodeMustDescendFromDeclarationCommit: true,
   }),
   futureEvidencePolicy: Object.freeze({
     parameterRetuningAllowed: false,
