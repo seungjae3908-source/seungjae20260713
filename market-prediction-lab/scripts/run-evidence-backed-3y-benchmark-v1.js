@@ -476,7 +476,23 @@ if (cryptoPositionSpot && cryptoPositionFutures) {
   const spotBtc = cryptoPositionSpot.find((row) => row.symbol === "BTCUSDT");
   const futuresBtc = cryptoPositionFutures.find((row) => row.symbol === "BTCUSDT");
   if (spotBtc && futuresBtc) {
-    try {
+    const sameVenueBinance = String(spotBtc.provider).startsWith("binance-spot-public-rest")
+      && String(futuresBtc.provider).startsWith("binance-usdm-public-rest");
+    if (!sameVenueBinance) {
+      strategyRows.push(Object.freeze({
+        profileId: "CRYPTO_FUTURES:POSITION",
+        market: "CRYPTO_FUTURES",
+        horizon: "POSITION",
+        timeframe: "1d",
+        strategy: "SAME_VENUE_FUNDING_CARRY_PROXY",
+        sourceRecipeId: "FUNDING_RATE_ARBITRAGE_CEX_DEX_V1",
+        status: "BLOCKED_DATA",
+        blockers: Object.freeze(["SAME_VENUE_BINANCE_SPOT_PERP_PRICE_PROVENANCE_REQUIRED"]),
+        profitabilityCredit: 0,
+        promotionEligible: false,
+        executionAuthority: "NONE",
+      }));
+    } else try {
       const fundingRecords = await collectFundingRecords(
         BENCHMARK_PERIOD.startTime - 14 * DAY_MS,
         BENCHMARK_PERIOD.endTime,
