@@ -17,6 +17,7 @@ import {
   runEqualWeightBuyHoldBaseline,
   runTimeSeriesMomentumProxy,
   summarizeReturnSeries,
+  summarizePerformanceWindows,
 } from "../src/evidence-backed-3y-benchmark-v1.js";
 
 function candles({ start = BENCHMARK_PERIOD.startTime, count = 400, intervalMs = 86_400_000, drift = 0.001 } = {}) {
@@ -125,6 +126,32 @@ test("return summary emits comparable return, CAGR, Sharpe and drawdown metrics"
   assert.ok(result.annualizedSharpe > 0);
   assert.ok(result.maximumDrawdown > 0);
   assert.ok(result.barProfitFactor > 1);
+});
+
+test("rolling performance windows report daily weekly monthly 6m 1y and 3y without cherry-picking", () => {
+  const start = BENCHMARK_PERIOD.startTime;
+  const observations = [];
+  for (let day = 0; day < 1096; day += 1) {
+    observations.push({ timestamp: start + day * 86_400_000, return: 0.001 });
+  }
+  const result = summarizePerformanceWindows(observations);
+  assert.deepEqual(Object.keys(result.windows), [
+    "DAILY",
+    "WEEKLY",
+    "MONTHLY",
+    "SIX_MONTH",
+    "YEARLY",
+    "THREE_YEAR",
+  ]);
+  assert.equal(result.dailyObservationCount, 1096);
+  assert.ok(result.windows.DAILY.sampleCount > 1000);
+  assert.ok(result.windows.WEEKLY.sampleCount > 1000);
+  assert.ok(result.windows.MONTHLY.latestReturn > result.windows.WEEKLY.latestReturn);
+  assert.ok(result.windows.SIX_MONTH.latestReturn > result.windows.MONTHLY.latestReturn);
+  assert.ok(result.windows.YEARLY.latestReturn > result.windows.SIX_MONTH.latestReturn);
+  assert.ok(result.windows.THREE_YEAR.latestReturn > result.windows.YEARLY.latestReturn);
+  assert.equal(result.windows.DAILY.positiveRate, 1);
+  assert.equal(result.windows.THREE_YEAR.sampleCount, 1);
 });
 
 test("equal-weight buy-hold baseline charges entry and exit friction and stays deterministic", () => {
