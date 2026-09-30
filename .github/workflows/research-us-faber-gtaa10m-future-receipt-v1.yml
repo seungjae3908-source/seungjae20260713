@@ -61,6 +61,26 @@ jobs:
             market-prediction-lab/src/faber-gtaa10m-future-receipt-v1.js \
             market-prediction-lab/scripts/run-faber-gtaa10m-future-receipt-v1.mjs
 
+      - name: Smoke real public Yahoo and FRED collector without canonical credit
+        if: github.event_name == 'pull_request'
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node scripts/run-faber-gtaa10m-future-receipt-v1.mjs /tmp/us-faber-gtaa10m-future-receipt-v1.json
+          node <<'NODE'
+          const fs = require('node:fs');
+          const r = JSON.parse(fs.readFileSync('/tmp/us-faber-gtaa10m-future-receipt-v1.json', 'utf8'));
+          if (r?.dataProvenance?.equityProvider !== 'Yahoo public chart adjusted price') throw new Error('FABER_FUTURE_YAHOO_PROVENANCE');
+          if (r?.dataProvenance?.cashProvider !== 'FRED TB3MS') throw new Error('FABER_FUTURE_FRED_PROVENANCE');
+          if (r?.dataProvenance?.privateProviderUsed !== false || r?.dataProvenance?.accountDataUsed !== false) throw new Error('FABER_FUTURE_PUBLIC_ONLY');
+          if (r?.historicalBackfillCredit !== 0 || r?.profitabilityClaimAllowed !== false || r?.executionAuthority !== 'NONE') throw new Error('FABER_FUTURE_SMOKE_SAFETY');
+          for (const receipt of r.receipts ?? []) {
+            if (receipt.signalMonth < '2026-09') throw new Error('FABER_FUTURE_SMOKE_PRE_FREEZE');
+            if (receipt.futureOosEconomicSampleCredit === 1 && receipt.status !== 'SETTLED_FUTURE_OOS') throw new Error('FABER_FUTURE_SMOKE_UNSETTLED_CREDIT');
+          }
+          NODE
+
   collect:
     if: github.event_name != 'pull_request'
     needs: validate
