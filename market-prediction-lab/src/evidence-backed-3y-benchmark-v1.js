@@ -213,6 +213,120 @@ export function summarizeReturnSeries(returns, { barsPerYear, initialCapital = 1
   });
 }
 
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export const PERFORMANCE_WINDOW_DEFINITIONS = Object.freeze({
+  DAILY: Object.freeze({ label: "1d", durationMs: DAY_MS }),
+  WEEKLY: Object.freeze({ label: "1w", durationMs: 7 * DAY_MS }),
+  MONTHLY: Object.freeze({ label: "1m", durationMs: 30 * DAY_MS }),
+  SIX_MONTH: Object.freeze({ label: "6m", durationMs: 182 * DAY_MS }),
+  YEARLY: Object.freeze({ label: "1y", durationMs: 365 * DAY_MS }),
+  THREE_YEAR: Object.freeze({
+    label: "3y",
+    durationMs: BENCHMARK_PERIOD.endTime - BENCHMARK_PERIOD.startTime,
+  }),
+});
+
+function median(values) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle];
+}
+
+function aggregateObservationsToDaily(observations) {
+  const byDay = new Map();
+  for (const row of observations ?? []) {
+    if (!Number.isInteger(row?.timestamp) || !Number.isFinite(row?.return) || row.return <= -1) continue;
+    const day = Math.floor(row.timestamp / DAY_MS) * DAY_MS;
+    const current = byDay.get(day) ?? 1;
+    byDay.set(day, current * (1 + row.return));
+  }
+  return [...byDay.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([timestamp, wealth]) => Object.freeze({ timestamp, return: wealth - 1 }));
+}
+
+function compoundReturns(rows) {
+  let wealth = 1;
+  for (const row of rows) wealth *= 1 + row.return;
+  return wealth - 1;
+}
+
+function rollingWindowReturns(dailyRows, durationMs) {
+  if (!dailyRows.length) return [];
+  if (durationMs <= DAY_MS) return dailyRows.map((row) => row.return);
+  const results = [];
+  let left = 0;
+  for (let right = 0; right < dailyRows.length; right += 1) {
+    const end = dailyRows[right].timestamp;
+    const targetStart = end - durationMs + DAY_MS;
+    while (left < right && dailyRows[left].timestamp < targetStart) left += 1;
+    const observedSpan = end - dailyRows[left].timestamp + DAY_MS;
+    const tolerance = durationMs <= 7 * DAY_MS ? 3 * DAY_MS : 7 * DAY_MS;
+    if (observedSpan + tolerance < durationMs) continue;
+    results.push(compoundReturns(dailyRows.slice(left, right + 1)));
+  }
+  return results;
+}
+
+function windowStats(values) {
+  const clean = values.filter((value) => Number.isFinite(value));
+  if (!clean.length) {
+    return Object.freeze({
+      sampleCount: 0,
+      latestReturn: null,
+      averageReturn: null,
+      medianReturn: null,
+      positiveRate: null,
+      bestReturn: null,
+      worstReturn: null,
+    });
+  }
+  return Object.freeze({
+    sampleCount: clean.length,
+    latestReturn: clean.at(-1),
+    averageReturn: mean(clean),
+    medianReturn: median(clean),
+    positiveRate: clean.filter((value) => value > 0).length / clean.length,
+    bestReturn: Math.max(...clean),
+    worstReturn: Math.min(...clean),
+  });
+}
+
+export function summarizePerformanceWindows(observations = []) {
+  const dailyRows = aggregateObservationsToDaily(observations);
+  const windows = {};
+  for (const [key, definition] of Object.entries(PERFORMANCE_WINDOW_DEFINITIONS)) {
+    if (key === "THREE_YEAR") {
+      const observedSpan = dailyRows.length
+        ? dailyRows.at(-1).timestamp - dailyRows[0].timestamp + DAY_MS
+        : 0;
+      const benchmarkSpan = BENCHMARK_PERIOD.endTime - BENCHMARK_PERIOD.startTime;
+      const complete = observedSpan >= benchmarkSpan * 0.98;
+      const value = complete ? compoundReturns(dailyRows) : null;
+      windows[key] = Object.freeze({
+        sampleCount: value == null ? 0 : 1,
+        latestReturn: value,
+        averageReturn: value,
+        medianReturn: value,
+        positiveRate: value == null ? null : value > 0 ? 1 : 0,
+        bestReturn: value,
+        worstReturn: value,
+      });
+      continue;
+    }
+    windows[key] = windowStats(rollingWindowReturns(dailyRows, definition.durationMs));
+  }
+  return Object.freeze({
+    dailyObservationCount: dailyRows.length,
+    windows: Object.freeze(windows),
+  });
+}
+
 function intersectTimestamps(datasets) {
   if (!Array.isArray(datasets) || datasets.length < 2) return [];
   const maps = datasets.map(({ candles }) => new Map(candles.map((row) => [row.timestamp, row])));
@@ -248,6 +362,7 @@ export function runEqualWeightBuyHoldBaseline({
   const weight = 1 / symbols.length;
   const costRate = perSideCostBps / 10_000;
   const returns = [];
+  const observations = [];
   for (let index = startIndex + 1; index <= endIndex; index += 1) {
     const currentTimestamp = timestamps[index];
     const priorTimestamp = timestamps[index - 1];
@@ -261,6 +376,7 @@ export function runEqualWeightBuyHoldBaseline({
     if (index === startIndex + 1) barReturn -= costRate;
     if (index === endIndex) barReturn -= costRate;
     returns.push(barReturn);
+    observations.push(Object.freeze({ timestamp: currentTimestamp, return: barReturn }));
   }
 
   return Object.freeze({
@@ -269,6 +385,7 @@ export function runEqualWeightBuyHoldBaseline({
     fixedBasketBaseline: true,
     perSideCostBps,
     performance: summarizeReturnSeries(returns, { barsPerYear }),
+    periodAnalysis: summarizePerformanceWindows(observations),
   });
 }
 
@@ -290,6 +407,7 @@ export function runTimeSeriesMomentumProxy({
   const costRate = perSideCostBps / 10_000;
   const positions = Object.fromEntries(symbols.map((symbol) => [symbol, 0]));
   const returns = [];
+  const observations = [];
 
   for (let index = lookbackBars + 1; index < timestamps.length; index += 1) {
     const currentTimestamp = timestamps[index];
@@ -314,6 +432,7 @@ export function runTimeSeriesMomentumProxy({
       positions[symbol] = nextPosition;
     }
     returns.push(portfolioReturn);
+    observations.push(Object.freeze({ timestamp: currentTimestamp, return: portfolioReturn }));
   }
 
   return Object.freeze({
@@ -324,6 +443,7 @@ export function runTimeSeriesMomentumProxy({
     lookbackBars,
     perSideCostBps,
     performance: summarizeReturnSeries(returns, { barsPerYear }),
+    periodAnalysis: summarizePerformanceWindows(observations),
   });
 }
 
@@ -349,6 +469,7 @@ export function runCrossSectionalMomentumProxy({
   const symbols = datasets.map((item) => item.symbol);
   const costRate = perSideCostBps / 10_000;
   const returns = [];
+  const observations = [];
   let weights = Object.fromEntries(symbols.map((symbol) => [symbol, 0]));
   const portfolioReturnHistory = [];
   const firstEligibleIndex = timestamps.findIndex((timestamp, index) =>
@@ -363,6 +484,7 @@ export function runCrossSectionalMomentumProxy({
       rebalanceBars,
       perSideCostBps,
       performance: summarizeReturnSeries([], { barsPerYear }),
+      periodAnalysis: summarizePerformanceWindows([]),
     });
   }
 
@@ -412,6 +534,7 @@ export function runCrossSectionalMomentumProxy({
     barReturn -= turnover * costRate;
     portfolioReturnHistory.push(barReturn);
     returns.push(barReturn);
+    observations.push(Object.freeze({ timestamp, return: barReturn }));
   }
 
   return Object.freeze({
@@ -423,6 +546,7 @@ export function runCrossSectionalMomentumProxy({
     rebalanceBars,
     perSideCostBps,
     performance: summarizeReturnSeries(returns, { barsPerYear }),
+    periodAnalysis: summarizePerformanceWindows(observations),
   });
 }
 
@@ -449,6 +573,7 @@ export function runFundingCarryProxy({
     .sort((a, b) => a.timestamp - b.timestamp);
   const costRate = perSideCostBps / 10_000;
   const returns = [];
+  const observations = [];
   let active = 0;
 
   for (let index = 1; index < timestamps.length; index += 1) {
@@ -480,7 +605,9 @@ export function runFundingCarryProxy({
     );
     const fundingIncome = nextActive * 0.5 * intervalFunding;
     const transactionCost = turnover * costRate;
-    returns.push(hedgedPriceReturn + fundingIncome - transactionCost);
+    const intervalReturn = hedgedPriceReturn + fundingIncome - transactionCost;
+    returns.push(intervalReturn);
+    observations.push(Object.freeze({ timestamp: currentTimestamp, return: intervalReturn }));
     active = nextActive;
   }
 
@@ -492,6 +619,7 @@ export function runFundingCarryProxy({
     trailingFundingDays,
     perSideCostBps,
     performance: summarizeReturnSeries(returns, { barsPerYear: 365 }),
+    periodAnalysis: summarizePerformanceWindows(observations),
   });
 }
 
