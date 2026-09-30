@@ -1,6 +1,5 @@
 import type { TradingRepository } from './trade-automation.repository';
-import { TradeAutomationService } from './trade-automation.service';
-import { liveCapabilityDecision } from './trade-automation.service';
+import { TradeAutomationService, liveCapabilityDecision } from './trade-automation.service';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
 import { isTransientTradingProviderError, tradingProviderHttpErrorCode, tradingProviderNetworkErrorCode, tradingProviderTimeoutCode } from './trade-provider-http-error.service';
 import {
