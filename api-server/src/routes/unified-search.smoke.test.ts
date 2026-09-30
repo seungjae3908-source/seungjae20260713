@@ -2,13 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import unifiedSearchRouter from './unified-search';
+import unifiedSearchRouter, {
+  UNIFIED_SEARCH_FALLBACK_MARGIN_MS,
+  UNIFIED_SEARCH_HARD_DEADLINE_MS,
+} from './unified-search';
 import {
   replaceUnifiedAssetSearchSnapshotForTests,
   resetUnifiedAssetSearchStateForTests,
   type UnifiedAssetSearchSnapshot,
 } from '../services/unified-asset-search.service';
 import { deriveUnifiedSearchState } from '../services/unified-search-state';
+import { SPOT_SEARCH_SOFT_DEADLINE_MS } from '../services/unified-spot-search-fallback';
 import { createUnifiedAssetId, type UnifiedAssetDocument } from '../lib/search-normalization';
 
 const builtAt = new Date().toISOString();
@@ -43,6 +47,13 @@ test('unified search state separates full, partial, degraded and empty success s
   assert.equal(deriveUnifiedSearchState({ resultCount: 0, partial: true, stale: false }), 'DEGRADED');
   assert.equal(deriveUnifiedSearchState({ resultCount: 1, partial: false, stale: true }), 'DEGRADED');
   assert.equal(deriveUnifiedSearchState({ resultCount: 0, partial: false, stale: false }), 'EMPTY');
+});
+
+test('search fallback deadlines always leave a bounded server response margin', () => {
+  assert.ok(
+    SPOT_SEARCH_SOFT_DEADLINE_MS <= UNIFIED_SEARCH_HARD_DEADLINE_MS - UNIFIED_SEARCH_FALLBACK_MARGIN_MS,
+    'spot fallback must complete before the server terminal deadline margin',
+  );
 });
 
 test('unified search suggest route supports Korean, English, codes and market separation', async () => {
@@ -102,6 +113,19 @@ test('unified search suggest route supports Korean, English, codes and market se
     assert.equal(exactUsBody.providers.length, 1);
     assert.equal(exactUsBody.providers[0]?.provider, 'finnhub');
     assert.equal(exactUsBody.providers[0]?.status, 'stale');
+
+    const allMarketExact = await fetch(`${base}/api/search/suggest?q=AAPL&asset=stock`);
+    assert.equal(allMarketExact.status, 200);
+    const allMarketExactBody = await allMarketExact.json() as Record<string, any>;
+    assert.equal(allMarketExactBody.ok, true);
+    assert.equal(allMarketExactBody.state, 'PARTIAL');
+    assert.equal(allMarketExactBody.partial, true);
+    assert.equal(allMarketExactBody.stale, true);
+    assert.equal(allMarketExactBody.market, null);
+    assert.equal(allMarketExactBody.results[0]?.ticker, 'AAPL');
+    assert.equal(allMarketExactBody.results[0]?.market, 'US');
+    assert.equal(allMarketExactBody.results[0]?.provider, 'STATIC_US_CATALOG');
+    assert.equal(allMarketExactBody.results[0]?.active, false);
 
     const missing = await fetch(`${base}/api/search/suggest?q=${encodeURIComponent('없는자산')}`);
     assert.equal(missing.status, 200);
