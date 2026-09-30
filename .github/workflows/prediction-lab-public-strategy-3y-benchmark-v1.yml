@@ -1,0 +1,76 @@
+name: Prediction Lab Public Strategy 3Y Benchmark V1
+
+on:
+  pull_request:
+    paths:
+      - "market-prediction-lab/src/public-strategy-benchmark-v1.js"
+      - "market-prediction-lab/src/public-strategy-futures-position-data-v1.js"
+      - "market-prediction-lab/scripts/run-public-strategy-3y-benchmark-v1.js"
+      - "market-prediction-lab/tests/public-strategy-benchmark-v1.test.js"
+      - "market-prediction-lab/tests/public-strategy-futures-position-data-v1.test.js"
+      - ".github/workflows/prediction-lab-public-strategy-3y-benchmark-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-strategy-3y-benchmark-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: Public Strategy 3Y Benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact research revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact HEAD
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run focused benchmark contract tests
+        working-directory: market-prediction-lab
+        run: node --test tests/public-strategy-benchmark-v1.test.js tests/public-strategy-futures-position-data-v1.test.js
+
+      - name: Run exact three-year public benchmark
+        working-directory: market-prediction-lab
+        run: node scripts/run-public-strategy-3y-benchmark-v1.js docs/public-strategy-3y-benchmark-v1.json docs/public-strategy-3y-benchmark-v1.md
+
+      - name: Assert no execution authority was introduced
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require("fs");
+          const report = JSON.parse(fs.readFileSync("docs/public-strategy-3y-benchmark-v1.json", "utf8"));
+          if (report?.safety?.executionAuthority !== "NONE") throw new Error("EXECUTION_AUTHORITY_CHANGED");
+          if (report?.safety?.profitabilityProven !== false) throw new Error("PROFITABILITY_FALSE_REQUIRED");
+          if (report?.safety?.winnerDeclared !== false) throw new Error("WINNER_DECLARATION_FORBIDDEN");
+          NODE
+
+      - name: Upload immutable benchmark artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-strategy-3y-benchmark-v1-${{ github.run_id }}
+          path: |
+            market-prediction-lab/docs/public-strategy-3y-benchmark-v1.json
+            market-prediction-lab/docs/public-strategy-3y-benchmark-v1.md
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Reassert exact HEAD
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
