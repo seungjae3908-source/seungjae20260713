@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loginProductionReadOnly } from './support/production-readonly-login';
 import { installProductionReadOnlyPolicy } from './support/production-readonly-policy';
+import { parseBitgetReadonlyDiagnosticHeader, type SanitizedBitgetReadonlyDiagnostic } from './production-account-readonly-live-qa-diagnostic';
 
 const baseUrl = String(process.env.PRODUCTION_BASE_URL ?? '').replace(/\/$/, '');
 const qaLogin = String(process.env.PRODUCTION_QA_LOGIN ?? '');
@@ -117,6 +118,7 @@ test('Production real-account read-only providers return fresh connected snapsho
   const blocked: Array<{ method: string; path: string; reason: string }> = [];
   const observedAppMutations: Array<{ method: string; path: string }> = [];
   const snapshots = new Map<Provider, SafetySnapshot>();
+  const bitgetDiagnostics = new Map<Provider, SanitizedBitgetReadonlyDiagnostic>();
   let credentialStatus: CredentialStatus | null = null;
 
   await installProductionReadOnlyPolicy(page, productionOrigin, (request, reason) => {
@@ -149,6 +151,12 @@ test('Production real-account read-only providers return fresh connected snapsho
 
     const match = /^\/api\/accounts\/read-only\/(toss|kiwoom|upbit|bitget)$/.exec(url.pathname);
     if (!match || !response.ok()) return;
+    if (match[1] === 'bitget') {
+      const diagnostic = parseBitgetReadonlyDiagnosticHeader(
+        response.headers()['x-account-readonly-bitget-diagnostic'],
+      );
+      if (diagnostic) bitgetDiagnostics.set('bitget', diagnostic);
+    }
     try {
       snapshots.set(match[1] as Provider, await response.json() as SafetySnapshot);
     } catch {
@@ -236,6 +244,9 @@ test('Production real-account read-only providers return fresh connected snapsho
         provider,
         typeof snapshot.errorCode === 'string' ? snapshot.errorCode : null,
       ),
+      ...(provider === 'bitget'
+        ? { bitgetDiagnostic: bitgetDiagnostics.get('bitget') ?? null }
+        : {}),
     };
   });
 
@@ -243,7 +254,7 @@ test('Production real-account read-only providers return fresh connected snapsho
   // Production failure identifies the exact provider status/error without retaining
   // account values, credentials, traces, screenshots, or mutation payloads.
   writeEvidence({
-    schemaVersion: 'production-account-readonly-live-qa-v1',
+    schemaVersion: 'production-account-readonly-live-qa-v2',
     targetSha: expectedDeploySha,
     officialProductionOrigin: true,
     authenticatedProductionSession: true,
