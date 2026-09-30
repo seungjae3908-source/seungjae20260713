@@ -370,3 +370,40 @@ test('last-good fallback is same-user only and auth failure evicts it fail-close
   assert.equal(afterEviction.stale, false);
   assert.equal(afterEviction.balances, null);
 });
+
+test('Bitget Classic fallback is selected when UTA returns 40084 for Classic Account mode', async () => {
+  const seen: string[] = [];
+  const result = await readBitgetSnapshot(
+    { apiKey: 'BITGET_KEY_40084_TEST_ONLY', secretKey: 'BITGET_SECRET_40084_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_40084_TEST_ONLY' },
+    async (request) => {
+      seen.push(request.path);
+      if (request.path === '/api/v3/account/settings') {
+        return { code: '40084', msg: 'Classic Account mode does not support Unified Account API', data: null };
+      }
+      if (request.path === '/api/v2/mix/account/accounts') {
+        return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '80', locked: '20' }] };
+      }
+      if (request.path === '/api/v2/mix/position/all-position') {
+        return { code: '00000', data: [] };
+      }
+      if (request.path === '/api/v2/mix/order/orders-pending') {
+        return { code: '00000', data: { entrustedList: [] } };
+      }
+      throw new Error('UNEXPECTED_BITGET_40084_CLASSIC_FALLBACK_PATH');
+    },
+  );
+
+  assert.deepEqual(new Set(seen), new Set([
+    '/api/v3/account/settings',
+    '/api/v2/mix/account/accounts',
+    '/api/v2/mix/position/all-position',
+    '/api/v2/mix/order/orders-pending',
+  ]));
+  assert.equal(result.connected, true);
+  assert.equal(result.status, 'CONNECTED');
+  assert.equal(result.orderRequests, 0);
+  assert.equal(result.cancelRequests, 0);
+  assert.equal(result.amendRequests, 0);
+  assert.equal(result.transferRequests, 0);
+  assert.equal(result.withdrawalRequests, 0);
+});
