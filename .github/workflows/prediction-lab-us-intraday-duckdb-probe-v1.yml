@@ -23,5 +23,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install --disable-pip-version-check "duckdb==1.4.1" "pytz==2026.2"
+      - run: python -m pip install --disable-pip-version-check "duckdb==1.4.1" "pytz==2026.2" "pytz==2026.2"
       - run: python market-prediction-lab/scripts/probe-hf-us-intraday-duckdb-v1.py
