@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Loader2, AlertCircle, SearchX, Copy } from 'lucide-react';
+import { Loader2, AlertCircle, SearchX, Copy, Inbox } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatSafeErrorDiagnostics, readPublicDeploySha } from '@/lib/safe-error-diagnostics';
 
@@ -8,6 +8,43 @@ export function LoadingState({ label = '불러오는 중...' }: { label?: string
     <div data-testid="loading-state" className="flex flex-col items-center justify-center gap-3 py-16 text-muted-foreground">
       <Loader2 className="h-6 w-6 animate-spin" />
       <span className="text-sm">{label}</span>
+    </div>
+  );
+}
+
+export function EmptyState({
+  title = '표시할 데이터가 없습니다',
+  description,
+  actionLabel,
+  onAction,
+  compact = false,
+}: {
+  title?: string;
+  description?: string;
+  actionLabel?: string;
+  onAction?: () => void;
+  compact?: boolean;
+}) {
+  return (
+    <div
+      data-testid="empty-state"
+      className={cn(
+        'flex flex-col items-center justify-center rounded-2xl border border-card-border bg-card text-center',
+        compact ? 'gap-2 px-4 py-6' : 'gap-3 px-5 py-10',
+      )}
+    >
+      <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-secondary text-muted-foreground">
+        <Inbox className="h-5 w-5" aria-hidden="true" />
+      </span>
+      <div>
+        <p className="text-sm font-semibold text-foreground">{title}</p>
+        {description ? <p className="mt-1 max-w-md break-keep text-xs font-medium leading-5 text-muted-foreground">{description}</p> : null}
+      </div>
+      {actionLabel && onAction ? (
+        <button type="button" onClick={onAction} className="min-h-11 rounded-xl border border-card-border px-4 text-sm font-semibold">
+          {actionLabel}
+        </button>
+      ) : null}
     </div>
   );
 }
