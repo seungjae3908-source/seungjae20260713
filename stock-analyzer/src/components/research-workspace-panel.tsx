@@ -1,5 +1,4 @@
 import { ResearchWorkspaceProviders } from './research-workspace-providers';
-import { ResearchStrategyLifecycle } from './research-strategy-lifecycle';
 import { ResearchWorkspaceWorker } from './research-workspace-worker';
 import { ResearchWorkspaceOrchestrator } from './research-workspace-orchestrator';
 import { ResearchWorkspaceOneShotReview } from './research-workspace-one-shot-review';
@@ -44,15 +43,14 @@ export function ResearchWorkspacePanel() {
   return <section className="h-full min-h-0 overflow-y-auto bg-background p-3 sm:p-4" data-testid="research-workspace-panel">
     <div className="mx-auto max-w-6xl space-y-4">
       <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0"><h2 className="text-xl font-black">전략 연구소</h2><p className="mt-1 text-sm text-muted-foreground">수식 후보·AI 반대검토·백테스트·검증·Registry·승격 근거를 한 흐름에서 확인합니다. 실거래 성과나 검증 완료 표시는 아닙니다.</p></div>
+        <div className="min-w-0"><h2 className="text-xl font-black">전략·백테스트</h2><p className="mt-1 text-sm text-muted-foreground">저장된 연구 기록과 근거를 확인합니다. 실거래 성과나 검증 완료 표시는 아닙니다.</p></div>
         <button type="button" className={btn} disabled={load.status === 'loading'} onClick={() => setRevision(n=>n+1)}>다시 확인</button>
       </header>
-      <ResearchStrategyLifecycle />
       <ResearchWorkspaceProviders revision={revision}/>
       <ResearchWorkspaceWorker revision={revision}/>
       <ResearchWorkspaceOrchestrator revision={revision}/>
       <ResearchWorkspaceOneShotReview revision={revision}/>
-      <div className="rounded-xl border border-card-border bg-muted/30 p-3 text-xs text-muted-foreground">24시간 작업자·자동 연구 체인: 상태 조회만 연결 · 일 목표: 독립 검증 전 미확정 · 전략 적용/자동 승격: 비활성</div>
+      <div className="rounded-xl border border-card-border bg-muted/30 p-3 text-xs text-muted-foreground">24시간 작업자·자동 연구 체인: 별도 활성화 · 일 목표: 미검증 · 전략 적용: 비활성</div>
       <div className="flex flex-wrap items-center gap-2" aria-label="연구 시장 필터">
         {(['ALL','STOCK','CRYPTO'] as const).map(g=><button key={g} type="button" aria-pressed={group===g} className={`${btn} ${group===g?'bg-primary text-primary-foreground':'bg-card'}`} onClick={()=>{setGroup(g);setMarket('ALL');}}>{g==='ALL'?'전체':g==='STOCK'?'주식':'코인'}</button>)}
         <label className="sr-only" htmlFor="workspace-market">세부 시장</label>
