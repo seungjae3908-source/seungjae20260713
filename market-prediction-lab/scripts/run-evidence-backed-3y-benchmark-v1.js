@@ -336,6 +336,7 @@ function resultRow({
     commonFrictionBpsPerSide: costBps,
     sourceFaithfulReplication: result.sourceFaithfulReplication === true,
     performance: result.performance,
+    periodAnalysis: result.periodAnalysis ?? null,
     profitabilityCredit: 0,
     promotionEligible: false,
     executionAuthority: "NONE",
