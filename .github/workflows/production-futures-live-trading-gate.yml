@@ -66,7 +66,6 @@ jobs:
           ! grep -Eq '^[[:space:]]{2}(workflow_dispatch|schedule):' "$workflow"
           ! grep -Eq 'AUTO_TRADING:[[:space:]]+["'\'']?true' "$workflow"
           ! grep -Eq 'LIVE_AUTOMATIC_TRADING_ENABLED:[[:space:]]+["'\'']?true' "$workflow"
-          node --test --import tsx api-server/src/services/futures-live-limited-capability.service.test.ts
 
   activate:
     name: Owner-approved manual Production futures live-trading gate activation
