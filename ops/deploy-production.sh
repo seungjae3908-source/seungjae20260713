@@ -16,7 +16,6 @@ BACKUP_ROOT="${BACKUP_ROOT:-/opt/stock-app-backups}"
 MIN_FREE_KB="${MIN_FREE_KB:-1200000}"
 LOCK_FILE="${LOCK_FILE:-/var/lock/stock-app-deploy.lock}"
 DEPLOY_STATE_DIR="${DEPLOY_STATE_DIR:-$LIVE_DIR/.deploy}"
-readonly PRODUCTION_NODE_OPTIONS="--dns-result-order=ipv4first --no-network-family-autoselection"
 
 if [[ -z "$TARGET_SHA" ]]; then
   echo "[deploy] target SHA is required" >&2
@@ -336,7 +335,7 @@ restart_application_preserving_telegram() {
     read -r approved worker <<< "$TELEGRAM_PREDEPLOY_STATE"
   fi
   normalize_pm2_watch_before_restart || return 1
-  NODE_OPTIONS="$PRODUCTION_NODE_OPTIONS" \
+  NODE_OPTIONS="--dns-result-order=ipv4first --no-network-family-autoselection" \
   LIVE_TELEGRAM_ACTIVATION_APPROVED="$approved" TELEGRAM_INTELLIGENCE_WORKER_ENABLED="$worker" \
     LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false \
     ORDER_EXECUTION_ENABLED=false LIVE_TRADING_ACTIVATION_APPROVED=false SPOT_LIVE_LIMITED_ACTIVATION_APPROVED=false LIVE_AUTOMATIC_TRADING_ENABLED=false \
@@ -501,7 +500,7 @@ rm -f "$PM2_JSON"
 
 (
   cd "$RELEASE_DIR/api-server"
-  nohup env PORT="$CANARY_PORT" API_PORT="$CANARY_PORT" NODE_ENV=production DEPLOY_SHA="$TARGET_SHA" NODE_OPTIONS="$PRODUCTION_NODE_OPTIONS" \
+  nohup env PORT="$CANARY_PORT" API_PORT="$CANARY_PORT" NODE_ENV=production DEPLOY_SHA="$TARGET_SHA" NODE_OPTIONS="--dns-result-order=ipv4first --no-network-family-autoselection" \
     LIVE_TELEGRAM_ACTIVATION_APPROVED=false TELEGRAM_INTELLIGENCE_WORKER_ENABLED=false \
     LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false \
     ORDER_EXECUTION_ENABLED=false LIVE_TRADING_ACTIVATION_APPROVED=false SPOT_LIVE_LIMITED_ACTIVATION_APPROVED=false LIVE_AUTOMATIC_TRADING_ENABLED=false \
