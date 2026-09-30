@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import test from 'node:test';
+import assert from 'node:assert/strict';
 import {
   evidenceBackedAutoStrategyCatalog,
   evaluateEvidenceBackedAutoStrategyGate,
@@ -19,33 +20,34 @@ function readiness(strategyId: string, extra: Record<string, boolean> = {}) {
   };
 }
 
-describe('evidence-backed auto strategy catalog', () => {
-  it('registers exactly the four requested strategy axes as NO_TRADE by default', () => {
+// Node's built-in test runner is used throughout api-server.
+
+  test('registers exactly the four requested strategy axes as NO_TRADE by default', () => {
     const catalog = evidenceBackedAutoStrategyCatalog();
-    expect(catalog.map((row) => row.strategyId)).toEqual([
+    assert.deepEqual(catalog.map((row) => row.strategyId), [
       'CEX_DEX_ARBITRAGE_V1',
       'US_STOCKS_IN_PLAY_ORB_V1',
       'CRYPTO_WORLD_ORDER_FLOW_ML_V1',
       'KR_ML_CHARTING_V1',
     ]);
-    expect(catalog.every((row) => row.defaultState === 'NO_TRADE')).toBe(true);
-    expect(catalog.every((row) => row.automaticLivePromotionAllowed === false)).toBe(true);
+    assert.equal(catalog.every((row) => row.defaultState === 'NO_TRADE'), true);
+    assert.equal(catalog.every((row) => row.automaticLivePromotionAllowed === false), true);
   });
 
-  it('fails closed when readiness evidence is absent', () => {
+  test('fails closed when readiness evidence is absent', () => {
     const result = evaluateEvidenceBackedAutoStrategyGate({
       strategyId: 'US_STOCKS_IN_PLAY_ORB_V1',
       market: 'US_STOCK',
       learningSnapshot: null,
     });
-    expect(result.recognized).toBe(true);
-    expect(result.state).toBe('NO_TRADE');
-    expect(result.paperAllowed).toBe(false);
-    expect(result.liveAllowed).toBe(false);
-    expect(result.blockers).toContain('EVIDENCE_STRATEGY_READINESS_REQUIRED');
+    assert.equal(result.recognized, true);
+    assert.equal(result.state, 'NO_TRADE');
+    assert.equal(result.paperAllowed, false);
+    assert.equal(result.liveAllowed, false);
+    assert.ok(result.blockers.includes('EVIDENCE_STRATEGY_READINESS_REQUIRED'));
   });
 
-  it('allows US Stocks-in-Play only after exact intraday/OOS/full-cost readiness', () => {
+  test('allows US Stocks-in-Play only after exact intraday/OOS/full-cost readiness', () => {
     const blocked = evaluateEvidenceBackedAutoStrategyGate({
       strategyId: 'US_STOCKS_IN_PLAY_ORB_V1',
       market: 'US_STOCK',
@@ -56,8 +58,8 @@ describe('evidence-backed auto strategy catalog', () => {
         openingRangeReady: true,
       }),
     });
-    expect(blocked.paperAllowed).toBe(false);
-    expect(blocked.blockers.some((code) => code.includes('INTRADAY5M'))).toBe(true);
+    assert.equal(blocked.paperAllowed, false);
+    assert.equal(blocked.blockers.some((code) => code.includes('INTRADAY5M')), true);
 
     const ready = evaluateEvidenceBackedAutoStrategyGate({
       strategyId: 'US_STOCKS_IN_PLAY_ORB_V1',
@@ -69,12 +71,12 @@ describe('evidence-backed auto strategy catalog', () => {
         openingRangeReady: true,
       }),
     });
-    expect(ready.state).toBe('PAPER_CANDIDATE');
-    expect(ready.paperAllowed).toBe(true);
-    expect(ready.liveAllowed).toBe(false);
+    assert.equal(ready.state, 'PAPER_CANDIDATE');
+    assert.equal(ready.paperAllowed, true);
+    assert.equal(ready.liveAllowed, false);
   });
 
-  it('requires multi-exchange flow and frozen model for Crypto World Order Flow ML', () => {
+  test('requires multi-exchange flow and frozen model for Crypto World Order Flow ML', () => {
     const result = evaluateEvidenceBackedAutoStrategyGate({
       strategyId: 'CRYPTO_WORLD_ORDER_FLOW_ML_V1',
       market: 'CRYPTO_SPOT',
@@ -83,11 +85,11 @@ describe('evidence-backed auto strategy catalog', () => {
         modelFrozen: true,
       }),
     });
-    expect(result.paperAllowed).toBe(true);
-    expect(result.liveAllowed).toBe(false);
+    assert.equal(result.paperAllowed, true);
+    assert.equal(result.liveAllowed, false);
   });
 
-  it('requires PIT universe and frozen model for KR ML Charting', () => {
+  test('requires PIT universe and frozen model for KR ML Charting', () => {
     const result = evaluateEvidenceBackedAutoStrategyGate({
       strategyId: 'KR_ML_CHARTING_V1',
       market: 'KR_STOCK',
@@ -96,11 +98,11 @@ describe('evidence-backed auto strategy catalog', () => {
         modelFrozen: true,
       }),
     });
-    expect(result.paperAllowed).toBe(true);
-    expect(result.liveAllowed).toBe(false);
+    assert.equal(result.paperAllowed, true);
+    assert.equal(result.liveAllowed, false);
   });
 
-  it('keeps CEX↔DEX arbitrage NO_TRADE until the canonical engine supports atomic multi-leg execution', () => {
+  test('keeps CEX↔DEX arbitrage NO_TRADE until the canonical engine supports atomic multi-leg execution', () => {
     const result = evaluateEvidenceBackedAutoStrategyGate({
       strategyId: 'CEX_DEX_ARBITRAGE_V1',
       market: 'CRYPTO_FUTURES',
@@ -111,19 +113,18 @@ describe('evidence-backed auto strategy catalog', () => {
         multiLegExecutionAdapterReady: true,
       }),
     });
-    expect(result.paperAllowed).toBe(false);
-    expect(result.state).toBe('NO_TRADE');
-    expect(result.blockers).toContain('EVIDENCE_STRATEGY_CROSS_VENUE_ATOMIC_EXECUTION_REQUIRED');
+    assert.equal(result.paperAllowed, false);
+    assert.equal(result.state, 'NO_TRADE');
+    assert.ok(result.blockers.includes('EVIDENCE_STRATEGY_CROSS_VENUE_ATOMIC_EXECUTION_REQUIRED'));
   });
 
-  it('passes unknown strategies through so existing automation behavior is unchanged', () => {
+  test('passes unknown strategies through so existing automation behavior is unchanged', () => {
     const result = evaluateEvidenceBackedAutoStrategyGate({
       strategyId: 'EXISTING_STRATEGY',
       market: 'US_STOCK',
       learningSnapshot: null,
     });
-    expect(result.recognized).toBe(false);
-    expect(result.state).toBe('PASS_THROUGH');
-    expect(result.paperAllowed).toBe(true);
+    assert.equal(result.recognized, false);
+    assert.equal(result.state, 'PASS_THROUGH');
+    assert.equal(result.paperAllowed, true);
   });
-});
