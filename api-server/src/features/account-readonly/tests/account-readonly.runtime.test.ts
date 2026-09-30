@@ -786,3 +786,52 @@ test('vault-backed Bitget treats production 40084 for Classic Account mode as a 
   assert.ok(paths.includes('/api/v2/mix/account/accounts'));
   assert.ok(paths.every((path) => path === '/api/v3/account/settings' || path.startsWith('/api/v2/mix/')));
 });
+
+test('Toss OAuth token uses the official form contract and preserves 401 versus 403 without credential leakage', async () => {
+  for (const fixture of [
+    { status: 401, code: 'TOSS_AUTH_FAILED' },
+    { status: 403, code: 'TOSS_IP_NOT_ALLOWED' },
+  ] as const) {
+    const clientId = 'TOSS_CLIENT_RUNTIME_TEST_ONLY';
+    const clientSecret = 'TOSS_SECRET_RUNTIME_TEST_ONLY';
+    const providerMessage = 'UNTRUSTED_TOSS_PROVIDER_MESSAGE';
+    const seen: Array<{ url: URL; method: string; headers: Headers; body: string }> = [];
+    const readers = createVaultBackedAccountReaders({
+      repositoryFactory: () => repositoryFor('toss'),
+      decryptCredentials: () => ({ clientId, clientSecret }),
+      fetchImpl: async (input, init) => {
+        const url = new URL(String(input));
+        const headers = new Headers(init?.headers);
+        seen.push({ url, method: String(init?.method), headers, body: String(init?.body ?? '') });
+        return new Response(JSON.stringify({ error: 'invalid_client', error_description: providerMessage }), {
+          status: fixture.status,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    });
+
+    await assert.rejects(
+      () => readers.toss!(SCOPE),
+      (error: unknown) => error instanceof AccountReadonlyError
+        && error.code === fixture.code
+        && !error.message.includes(providerMessage)
+        && !error.message.includes(clientId)
+        && !error.message.includes(clientSecret),
+    );
+
+    assert.equal(seen.length, 1);
+    const request = seen[0]!;
+    assert.equal(request.url.origin, 'https://openapi.tossinvest.com');
+    assert.equal(request.url.pathname, '/oauth2/token');
+    assert.equal(request.url.search, '');
+    assert.equal(request.method, 'POST');
+    assert.equal(request.headers.get('content-type'), 'application/x-www-form-urlencoded');
+    assert.equal(request.headers.get('authorization'), null);
+    const form = new URLSearchParams(request.body);
+    assert.equal(form.get('grant_type'), 'client_credentials');
+    assert.equal(form.get('client_id'), clientId);
+    assert.equal(form.get('client_secret'), clientSecret);
+    assert.equal(JSON.stringify({ code: fixture.code }).includes(clientSecret), false);
+  }
+});
+
