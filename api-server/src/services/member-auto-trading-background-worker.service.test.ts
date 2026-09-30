@@ -396,3 +396,65 @@ test('market OFF policy skips candidate without creating a plan', async () => {
   assert.equal(result.createdPlans, 0);
   assert.equal((await repository.listPlans(USER)).length, 0);
 });
+
+
+test('evidence-backed strategy is blocked before plan creation when research readiness is missing', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readHandoff() {
+      const value = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
+      value.entries[0].identity.strategyId = 'CRYPTO_WORLD_ORDER_FLOW_ML_V1';
+      value.entries[0].signal.strategyIdentity.strategyId = 'CRYPTO_WORLD_ORDER_FLOW_ML_V1';
+      return value;
+    },
+  });
+
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(result.blocked, 1);
+  assert.equal(result.evaluated, 0);
+  assert.equal(result.createdPlans, 0);
+  assert.equal((await repository.listPlans(USER)).length, 0);
+  assert.equal((await repository.listOrders(USER)).length, 0);
+});
+
+test('evidence-backed strategy can enter canonical Paper lane only after local readiness gates pass', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readHandoff() {
+      const value = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
+      value.entries[0].identity.strategyId = 'CRYPTO_WORLD_ORDER_FLOW_ML_V1';
+      value.entries[0].signal.strategyIdentity.strategyId = 'CRYPTO_WORLD_ORDER_FLOW_ML_V1';
+      value.entries[0].signal.learningSnapshot.evidenceBackedStrategyReadiness = {
+        strategyId: 'CRYPTO_WORLD_ORDER_FLOW_ML_V1',
+        publicDataReady: true,
+        sourceFaithfulReplicationReady: true,
+        oosPassed: true,
+        walkForwardPassed: true,
+        fullCostPassed: true,
+        strategyHealthPassed: true,
+        multiExchangeOrderFlowReady: true,
+        modelFrozen: true,
+      };
+      return value;
+    },
+  });
+
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(result.blocked, 0);
+  assert.equal(result.evaluated, 1);
+  assert.equal(result.createdPlans, 1);
+  assert.equal(result.filledOrders, 1);
+  const plans = await repository.listPlans(USER);
+  assert.equal(plans.length, 1);
+  assert.ok(plans[0].signalReasons.includes('EVIDENCE_BACKED_STRATEGY:CRYPTO_WORLD_ORDER_FLOW_ML_V1'));
+  assert.ok(plans[0].signalReasons.includes('EVIDENCE_BACKED_GATE:PAPER_CANDIDATE'));
+  assert.equal(plans[0].accountMode, 'paper');
+});
