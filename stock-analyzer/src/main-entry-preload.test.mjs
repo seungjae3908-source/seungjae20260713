@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-test('settles the direct AI Chart route preload before the application graph without prewarming its renderer', () => {
+test('starts direct AI Chart page preloading before the application graph without serializing bootstrap or prewarming its renderer', () => {
   const indexSource = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   const mainSource = readFileSync(new URL('./main.tsx', import.meta.url), 'utf8');
   const aiChartPreloadIndex = mainSource.indexOf("import('@/pages/ai-chart')");
@@ -19,8 +19,9 @@ test('settles the direct AI Chart route preload before the application graph wit
   assert.equal(aiChartPreloadIndex < appLoadIndex, true);
   assert.equal(aiChartPreloadIndex < runtimeLoadIndex, true);
   assert.match(mainSource, /\.then\(\(\) => undefined, \(\) => undefined\)/);
-  assert.match(mainSource, /void aiChartCriticalPreload\.then\(async \(\) => \{/);
-  assert.match(mainSource, /Promise\.all\(\[\s*import\('\.\/App'\),\s*import\('\.\/app-runtime'\),\s*\]\)/);
+  assert.match(mainSource, /void aiChartCriticalPreload;/);
+  assert.doesNotMatch(mainSource, /void aiChartCriticalPreload\.then\(/);
+  assert.match(mainSource, /void \(async \(\) => \{\s*const \[\{ default: App \}, \{ mountApp \}\] = await Promise\.all\(\[\s*import\('\.\/App'\),\s*import\('\.\/app-runtime'\),\s*\]\)/);
   assert.doesNotMatch(mainSource, /import\(['"]@\/components\/unified-analysis-chart['"]\)/);
   assert.doesNotMatch(mainSource, /^import\s/m);
 });
