@@ -736,14 +736,21 @@ jobs:
               ORDER_EXECUTION_ENABLED: 'false',
               LIVE_TRADING_ACTIVATION_APPROVED: 'false',
               SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: 'false',
+              FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: 'false',
               LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
               SPOT_LIVE_CAPABILITY_ALLOWLIST: '',
               SPOT_LIVE_MARKET_ALLOWLIST: '',
+              FUTURES_LIVE_CAPABILITY_ALLOWLIST: '',
+              FUTURES_LIVE_MARKET_ALLOWLIST: '',
+              FUTURES_LIVE_MAX_LEVERAGE: '',
+              FUTURES_LIVE_MARGIN_MODE: '',
               BITGET_LIVE_ORDER_ENABLED: 'false',
+              BITGET_FUTURES_LIVE_ORDER_ENABLED: 'false',
               UPBIT_LIVE_ORDER_ENABLED: 'false',
               KIWOOM_LIVE_ORDER_ENABLED: 'false',
               TOSS_LIVE_ORDER_ENABLED: 'false',
               executionAuthority: 'NONE',
+              FUTURES_LIVE_EXECUTION_AUTHORITY: 'NONE',
               DEPLOY_SHA: target,
             },
             stdio: ['ignore', 'ignore', 'pipe'],
@@ -765,16 +772,21 @@ jobs:
           for (const key of [
             'LIVE_TRADING', 'AUTO_TRADING', 'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED',
             'ORDER_EXECUTION_ENABLED', 'LIVE_TRADING_ACTIVATION_APPROVED', 'LIVE_AUTOMATIC_TRADING_ENABLED',
-            'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED',
-            'BITGET_LIVE_ORDER_ENABLED', 'UPBIT_LIVE_ORDER_ENABLED', 'KIWOOM_LIVE_ORDER_ENABLED', 'TOSS_LIVE_ORDER_ENABLED',
+            'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED', 'FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED',
+            'BITGET_LIVE_ORDER_ENABLED', 'BITGET_FUTURES_LIVE_ORDER_ENABLED', 'UPBIT_LIVE_ORDER_ENABLED', 'KIWOOM_LIVE_ORDER_ENABLED', 'TOSS_LIVE_ORDER_ENABLED',
           ]) {
             if (flag(key)) throw new Error(`LIVE_TRADING_DISABLE_FLAG_STILL_ENABLED:${key}`);
           }
-          if (String(postEnv.executionAuthority ?? 'NONE').toUpperCase() !== 'NONE') {
+          if (String(postEnv.executionAuthority ?? 'NONE').toUpperCase() !== 'NONE'
+            || String(postEnv.FUTURES_LIVE_EXECUTION_AUTHORITY ?? 'NONE').toUpperCase() !== 'NONE') {
             throw new Error('LIVE_TRADING_DISABLE_AUTHORITY_STILL_ENABLED');
           }
           if (String(postEnv.SPOT_LIVE_CAPABILITY_ALLOWLIST ?? '')
-            || String(postEnv.SPOT_LIVE_MARKET_ALLOWLIST ?? '')) {
+            || String(postEnv.SPOT_LIVE_MARKET_ALLOWLIST ?? '')
+            || String(postEnv.FUTURES_LIVE_CAPABILITY_ALLOWLIST ?? '')
+            || String(postEnv.FUTURES_LIVE_MARKET_ALLOWLIST ?? '')
+            || String(postEnv.FUTURES_LIVE_MAX_LEVERAGE ?? '')
+            || String(postEnv.FUTURES_LIVE_MARGIN_MODE ?? '')) {
             throw new Error('LIVE_TRADING_DISABLE_ALLOWLIST_STILL_ENABLED');
           }
 
@@ -826,6 +838,7 @@ jobs:
                 'ORDER_EXECUTION_ENABLED=false',
                 'LIVE_TRADING_ACTIVATION_APPROVED=false',
                 'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED=false',
+                'FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED=false',
                 'LIVE_AUTOMATIC_TRADING_ENABLED=false',
                 'SPOT_LIVE_CAPABILITY_ALLOWLIST=',
                 'SPOT_LIVE_MARKET_ALLOWLIST=',
