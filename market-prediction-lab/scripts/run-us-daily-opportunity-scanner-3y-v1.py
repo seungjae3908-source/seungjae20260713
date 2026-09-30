@@ -267,8 +267,8 @@ def candidate_features(g: pd.DataFrame) -> pd.DataFrame:
 
     candidate = (
         (g["timestamp"] >= WARMUP)
-        & (g["gap"] >= MIN_GAP)
-        & (g["gap"] <= MAX_GAP)
+        & (g["gap"].abs() >= MIN_GAP)
+        & (g["gap"].abs() <= MAX_GAP)
         & (g["prior_close"] >= MIN_PRICE)
         & (g["prior_avg_dollar_volume"] >= MIN_AVG_DOLLAR_VOLUME)
         & np.isfinite(g["prior_rvol"])
@@ -408,14 +408,28 @@ def portfolio_from_scores(rows: pd.DataFrame, score_col: str, threshold: float |
 
 def rule_candidates(data: pd.DataFrame, trading_dates: list[pd.Timestamp]) -> list[dict]:
     work = data[(data.timestamp >= START) & (data.timestamp <= END)].copy()
-    work["GAP_SCORE"] = work["gap"]
-    work["GAP_RVOL_SCORE"] = work["gap"] * np.clip(work["prior_rvol"], 0.5, 5.0) * np.log1p(work["prior_avg_dollar_volume"] if "prior_avg_dollar_volume" in work.columns else np.exp(work["prior_log_dollar_volume"]))
     out = []
-    for name, col in [("DAILY_MOVER_GAP_TOP3", "GAP_SCORE"), ("DAILY_MOVER_GAP_RVOL_TOP3", "GAP_RVOL_SCORE")]:
-        daily, trades = portfolio_from_scores(work, col, None, trading_dates)
-        out.append({"candidate": name, "daily": daily, "trades": trades, "meta": {"kind": "RULE"}})
-    return out
 
+    positive = work[work["gap"] > 0].copy()
+    positive["GAP_SCORE"] = positive["gap"]
+    positive["GAP_RVOL_SCORE"] = positive["gap"] * np.clip(positive["prior_rvol"], 0.5, 5.0) * positive["prior_log_dollar_volume"]
+    for name, frame, col in [
+        ("DAILY_MOVER_GAP_TOP3", positive, "GAP_SCORE"),
+        ("DAILY_MOVER_GAP_RVOL_TOP3", positive, "GAP_RVOL_SCORE"),
+    ]:
+        daily, trades = portfolio_from_scores(frame, col, None, trading_dates)
+        out.append({"candidate": name, "daily": daily, "trades": trades, "meta": {"kind": "RULE_CONTINUATION"}})
+
+    negative = work[work["gap"] < 0].copy()
+    negative["GAP_DOWN_SCORE"] = -negative["gap"]
+    negative["GAP_DOWN_RVOL_SCORE"] = (-negative["gap"]) * np.clip(negative["prior_rvol"], 0.5, 5.0) * negative["prior_log_dollar_volume"]
+    for name, frame, col in [
+        ("DAILY_MOVER_GAP_DOWN_REBOUND_TOP3", negative, "GAP_DOWN_SCORE"),
+        ("DAILY_MOVER_GAP_DOWN_RVOL_REBOUND_TOP3", negative, "GAP_DOWN_RVOL_SCORE"),
+    ]:
+        daily, trades = portfolio_from_scores(frame, col, None, trading_dates)
+        out.append({"candidate": name, "daily": daily, "trades": trades, "meta": {"kind": "RULE_MEAN_REVERSION"}})
+    return out
 
 def months() -> list[tuple[pd.Timestamp, pd.Timestamp]]:
     result = []
@@ -573,8 +587,9 @@ def main() -> None:
         "selection": {
             "decisionTime": "same-day open",
             "sameDayHighLowCloseVolumeUsedForSelection": False,
-            "minimumGap": MIN_GAP,
-            "maximumGap": MAX_GAP,
+            "minimumAbsoluteGap": MIN_GAP,
+            "maximumAbsoluteGap": MAX_GAP,
+            "gapDirectionsEvaluated": ["UP", "DOWN"],
             "minimumPriorClose": MIN_PRICE,
             "minimumPrior20dAverageDollarVolume": MIN_AVG_DOLLAR_VOLUME,
             "maxDailySelections": MAX_DAILY_SELECTIONS,
