@@ -360,8 +360,20 @@ def candidate_features(g: pd.DataFrame) -> pd.DataFrame:
     g["bullish_harami_prev"] = (p2bear & pbull & (prev_o >= pc2) & (prev_c <= po2)).astype(float)
     g["bearish_harami_prev"] = (p2bull & pbear & (prev_o <= pc2) & (prev_c >= po2)).astype(float)
 
-    # Entry is today's open, exit today's close.
+    # Entry is today's open. Bracket execution uses same-day high/low only
+    # after selection; those fields never enter scanner/model features.
     g["gross_return"] = c / o - 1
+    g["prior_close"] = prev_c
+    g["bracket_risk"] = g["atr_pct_prev"].clip(lower=0.015, upper=0.04)
+    stop_hit = l <= o * (1 - g["bracket_risk"])
+    target_hit = h >= o * (1 + 2 * g["bracket_risk"])
+    # Conservative ambiguity rule: if both stop and target are touched in one daily
+    # candle, assume the stop happened first.
+    g["bracket_net_return"] = np.select(
+        [stop_hit, target_hit],
+        [-g["bracket_risk"] - ROUND_TRIP_COST, 2 * g["bracket_risk"] - ROUND_TRIP_COST],
+        default=g["gross_return"] - ROUND_TRIP_COST,
+    )
     g["prior_close"] = prev_c
 
     candidate = (
@@ -372,7 +384,7 @@ def candidate_features(g: pd.DataFrame) -> pd.DataFrame:
         & (g["prior_avg_dollar_volume"] >= MIN_AVG_DOLLAR_VOLUME)
         & np.isfinite(g["prior_rvol"])
     )
-    keep = ["symbol", "timestamp", "gross_return", "prior_close"] + sorted(set(BASIC_FEATURES + RICH_FEATURES))
+    keep = ["symbol", "timestamp", "gross_return", "bracket_net_return", "bracket_risk", "prior_close"] + sorted(set(BASIC_FEATURES + RICH_FEATURES))
     return g.loc[candidate, keep].replace([np.inf, -np.inf], np.nan).dropna().copy()
 
 
@@ -506,6 +518,24 @@ def portfolio_from_scores(rows: pd.DataFrame, score_col: str, threshold: float |
 
 
 
+def portfolio_from_scores_bracket(rows: pd.DataFrame, score_col: str, threshold: float | None, trading_dates: list[pd.Timestamp]) -> tuple[pd.Series, int]:
+    picks = []
+    for dt, g in rows.groupby("timestamp"):
+        ranked = g.sort_values([score_col, "symbol"], ascending=[False, True])
+        if threshold is not None:
+            ranked = ranked[ranked[score_col] >= threshold]
+        ranked = ranked.head(MAX_DAILY_SELECTIONS)
+        if ranked.empty:
+            continue
+        daily_return = float(ranked["bracket_net_return"].mean())
+        picks.append((dt, daily_return, len(ranked)))
+    p = pd.DataFrame(picks, columns=["timestamp", "return", "trades"]) if picks else pd.DataFrame(columns=["timestamp", "return", "trades"])
+    series = p.set_index("timestamp")["return"] if not p.empty else pd.Series(dtype=float)
+    index = pd.DatetimeIndex([d for d in trading_dates if START <= d <= END])
+    series = series.reindex(index, fill_value=0.0)
+    return series, int(p["trades"].sum()) if not p.empty else 0
+
+
 def portfolio_from_scores_short(rows: pd.DataFrame, score_col: str, threshold: float | None, trading_dates: list[pd.Timestamp]) -> tuple[pd.Series, int]:
     picks = []
     for dt, g in rows.groupby("timestamp"):
@@ -577,6 +607,23 @@ def rule_candidates(data: pd.DataFrame, trading_dates: list[pd.Timestamp]) -> li
     ]:
         daily, trades = portfolio_from_scores_short(frame, col, None, trading_dates)
         out.append({"candidate": name, "daily": daily, "trades": trades, "meta": {"kind": "RULE_CONTINUATION_SHORT", "borrowCostIncluded": False}})
+    # Same candidate scores, but with prior-ATR 1R stop / 2R target execution.
+    for name, frame, col in [
+        ("DAILY_MOVER_GAP_RVOL_TOP3_BRACKET_1R_2R", positive, "GAP_RVOL_SCORE"),
+        ("DAILY_MOVER_GAP_DOWN_RVOL_REBOUND_TOP3_BRACKET_1R_2R", negative, "GAP_DOWN_RVOL_SCORE"),
+    ]:
+        daily, trades = portfolio_from_scores_bracket(frame, col, None, trading_dates)
+        out.append({
+            "candidate": name,
+            "daily": daily,
+            "trades": trades,
+            "meta": {
+                "kind": "RULE_BRACKET_LONG",
+                "stopRisk": "prior_ATR_pct_clipped_1.5_to_4pct",
+                "targetRiskMultiple": 2.0,
+                "sameBarAmbiguity": "STOP_FIRST",
+            },
+        })
     return out
 
 def months() -> list[tuple[pd.Timestamp, pd.Timestamp]]:
@@ -660,6 +707,69 @@ def walk_forward_ai(data: pd.DataFrame, features: list[str], name: str, trading_
 
 
 
+def walk_forward_ai_bracket(data: pd.DataFrame, features: list[str], name: str, trading_dates: list[pd.Timestamp]) -> dict:
+    rows = data.dropna(subset=features + ["bracket_net_return"]).copy()
+    pieces = []
+    threshold_history = []
+    trade_count = 0
+
+    for test_start, test_end in months():
+        train_end = test_start - pd.Timedelta(seconds=1)
+        train_start = train_end - pd.DateOffset(months=18) + pd.Timedelta(seconds=1)
+        val_start = train_end - pd.DateOffset(months=3) + pd.Timedelta(seconds=1)
+        core = rows[(rows.timestamp >= train_start) & (rows.timestamp < val_start)]
+        val = rows[(rows.timestamp >= val_start) & (rows.timestamp <= train_end)].copy()
+        full = rows[(rows.timestamp >= train_start) & (rows.timestamp <= train_end)]
+        test = rows[(rows.timestamp >= test_start) & (rows.timestamp <= test_end)].copy()
+        if len(core) < 500 or len(val) < 100 or len(full) < 700 or test.empty:
+            continue
+
+        pre = HistGradientBoostingRegressor(
+            learning_rate=0.06, max_iter=70, max_leaf_nodes=15,
+            min_samples_leaf=25, l2_regularization=1.0, random_state=42,
+        )
+        pre.fit(core[features], core["bracket_net_return"])
+        val["pred"] = pre.predict(val[features])
+        local_dates = sorted(val["timestamp"].unique())
+        scored = []
+        for threshold in THRESHOLDS:
+            daily, trades = portfolio_from_scores_bracket(val, "pred", threshold, local_dates)
+            scored.append((validation_score(daily, trades), threshold))
+        _, threshold = max(scored, key=lambda item: (item[0], item[1]))
+
+        model = HistGradientBoostingRegressor(
+            learning_rate=0.06, max_iter=90, max_leaf_nodes=15,
+            min_samples_leaf=25, l2_regularization=1.0, random_state=42,
+        )
+        model.fit(full[features], full["bracket_net_return"])
+        test["pred"] = model.predict(test[features])
+        for dt, g in test.groupby("timestamp"):
+            selected = g[g["pred"] >= threshold].sort_values(["pred", "symbol"], ascending=[False, True]).head(MAX_DAILY_SELECTIONS)
+            if selected.empty:
+                continue
+            pieces.append((dt, float(selected["bracket_net_return"].mean()), int(len(selected))))
+            trade_count += len(selected)
+        threshold_history.append({"testStart": test_start.isoformat(), "threshold": threshold})
+
+    p = pd.DataFrame(pieces, columns=["timestamp", "return", "trades"]) if pieces else pd.DataFrame(columns=["timestamp", "return", "trades"])
+    series = p.groupby("timestamp")["return"].first() if not p.empty else pd.Series(dtype=float)
+    index = pd.DatetimeIndex([d for d in trading_dates if START <= d <= END])
+    series = series.reindex(index, fill_value=0.0)
+    return {
+        "candidate": name,
+        "daily": series,
+        "trades": int(trade_count),
+        "meta": {
+            "kind": "ROLLING_WALK_FORWARD_AI_BRACKET",
+            "features": features,
+            "thresholdHistory": threshold_history,
+            "stopRisk": "prior_ATR_pct_clipped_1.5_to_4pct",
+            "targetRiskMultiple": 2.0,
+            "sameBarAmbiguity": "STOP_FIRST",
+        },
+    }
+
+
 def walk_forward_ai_directional(data: pd.DataFrame, features: list[str], name: str, trading_dates: list[pd.Timestamp]) -> dict:
     rows = data.dropna(subset=features + ["gross_return"]).copy()
     pieces = []
@@ -732,6 +842,8 @@ def self_test() -> None:
     assert "close" not in feature_names
     assert "volume" not in feature_names
     assert "gap" in feature_names  # current open vs prior close is known at the open
+    assert "bracket_net_return" not in feature_names
+    assert "bracket_risk" not in feature_names
     assert ROUND_TRIP_COST == 0.0020
     print("SELF_TEST_PASS")
 
@@ -797,6 +909,7 @@ def main() -> None:
     candidates = rule_candidates(data, trading_dates)
     candidates.append(walk_forward_ai(data, BASIC_FEATURES, "DAILY_MOVER_AI_BASIC", trading_dates))
     candidates.append(walk_forward_ai(data, RICH_FEATURES, "DAILY_MOVER_AI_WAVE_CANDLE", trading_dates))
+    candidates.append(walk_forward_ai_bracket(data, RICH_FEATURES, "DAILY_MOVER_AI_WAVE_CANDLE_BRACKET_1R_2R", trading_dates))
     candidates.append(walk_forward_ai_directional(data, BASIC_FEATURES, "DAILY_MOVER_AI_DIRECTIONAL_BASIC", trading_dates))
     candidates.append(walk_forward_ai_directional(data, RICH_FEATURES, "DAILY_MOVER_AI_DIRECTIONAL_WAVE_CANDLE", trading_dates))
 
