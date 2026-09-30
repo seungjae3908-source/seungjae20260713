@@ -233,6 +233,8 @@ export function runTimeSeriesMomentumProxy({
   perSideCostBps = 10,
   longShort = false,
   barsPerYear,
+  startTime = BENCHMARK_PERIOD.startTime,
+  endTime = BENCHMARK_PERIOD.endTime,
 } = {}) {
   if (!Array.isArray(datasets) || datasets.length < 1) throw new TypeError("at least one dataset is required");
   if (!Number.isSafeInteger(lookbackBars) || lookbackBars < 2) throw new RangeError("lookbackBars must be >= 2");
@@ -247,6 +249,8 @@ export function runTimeSeriesMomentumProxy({
   for (let index = lookbackBars + 1; index < timestamps.length; index += 1) {
     const currentTimestamp = timestamps[index];
     const priorTimestamp = timestamps[index - 1];
+    if (currentTimestamp < startTime) continue;
+    if (currentTimestamp > endTime) break;
     const signalTimestamp = timestamps[index - 1];
     const lookbackTimestamp = timestamps[index - 1 - lookbackBars];
     let portfolioReturn = 0;
@@ -288,6 +292,8 @@ export function runCrossSectionalMomentumProxy({
   volatilityLookbackBars = 20,
   targetAnnualVolatility = 0.15,
   barsPerYear,
+  startTime = BENCHMARK_PERIOD.startTime,
+  endTime = BENCHMARK_PERIOD.endTime,
 } = {}) {
   if (!Array.isArray(datasets) || datasets.length < 2) throw new TypeError("at least two datasets are required");
   if (!Number.isSafeInteger(lookbackBars) || lookbackBars < 2) throw new RangeError("lookbackBars must be >= 2");
@@ -300,13 +306,28 @@ export function runCrossSectionalMomentumProxy({
   const returns = [];
   let weights = Object.fromEntries(symbols.map((symbol) => [symbol, 0]));
   const portfolioReturnHistory = [];
+  const firstEligibleIndex = timestamps.findIndex((timestamp, index) =>
+    index >= lookbackBars + 1 && timestamp >= startTime);
+  if (firstEligibleIndex < 0) {
+    return Object.freeze({
+      family: volatilityManaged ? "RISK_MANAGED_RELATIVE_MOMENTUM_PROXY" : "RELATIVE_MOMENTUM_PROXY",
+      sourceFaithfulReplication: false,
+      fixedBasketProxy: true,
+      longShort,
+      lookbackBars,
+      rebalanceBars,
+      perSideCostBps,
+      performance: summarizeReturnSeries([], { barsPerYear }),
+    });
+  }
 
-  for (let index = lookbackBars + 1; index < timestamps.length; index += 1) {
+  for (let index = firstEligibleIndex; index < timestamps.length; index += 1) {
     const timestamp = timestamps[index];
+    if (timestamp > endTime) break;
     const priorTimestamp = timestamps[index - 1];
     let turnover = 0;
 
-    if ((index - (lookbackBars + 1)) % rebalanceBars === 0) {
+    if ((index - firstEligibleIndex) % rebalanceBars === 0) {
       const lookbackTimestamp = timestamps[index - lookbackBars];
       const ranked = symbols.map((symbol) => {
         const now = closeMaps[symbol].get(timestamp);
@@ -360,6 +381,8 @@ export function runFundingCarryProxy({
   fundingRecords,
   perSideCostBps = 10,
   trailingFundingDays = 7,
+  startTime = BENCHMARK_PERIOD.startTime,
+  endTime = BENCHMARK_PERIOD.endTime,
 } = {}) {
   if (!Array.isArray(spotCandles) || !Array.isArray(futuresCandles) || !Array.isArray(fundingRecords)) {
     throw new TypeError("spotCandles, futuresCandles and fundingRecords must be arrays");
@@ -380,6 +403,8 @@ export function runFundingCarryProxy({
   for (let index = 1; index < timestamps.length; index += 1) {
     const previousTimestamp = timestamps[index - 1];
     const currentTimestamp = timestamps[index];
+    if (currentTimestamp < startTime) continue;
+    if (currentTimestamp > endTime) break;
     const signalCutoff = previousTimestamp;
     const trailingStart = signalCutoff - trailingFundingDays * 24 * 60 * 60 * 1000;
     const trailingFunding = funding
