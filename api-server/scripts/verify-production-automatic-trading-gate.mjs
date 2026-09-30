@@ -1,0 +1,63 @@
+import { readFileSync } from 'node:fs';
+
+const read = (path) => readFileSync(path, 'utf8');
+const workflow = read('.github/workflows/production-automatic-trading-gate.yml');
+const manualGate = read('.github/workflows/production-live-trading-gate.yml');
+const tradeService = read('api-server/src/services/trade-automation.service.ts');
+const deploy = read('ops/deploy-production.sh');
+
+const requireText = (source, token, code) => {
+  if (!source.includes(token)) throw new Error(code + ':' + token);
+};
+const forbid = (source, pattern, code) => {
+  if (pattern.test(source)) throw new Error(code + ':' + pattern);
+};
+
+requireText(workflow, 'name: Production Automatic Trading Gate', 'AUTO_GATE_NAME_MISSING');
+requireText(workflow, '/activate-production-auto-trading ', 'AUTO_GATE_ACTIVATE_COMMAND_MISSING');
+requireText(workflow, '/disable-production-auto-trading ', 'AUTO_GATE_DISABLE_COMMAND_MISSING');
+requireText(workflow, 'environment: production', 'AUTO_GATE_PROTECTED_ENV_MISSING');
+requireText(workflow, "const allowed = new Set(['upbit']);", 'AUTO_GATE_UPBIT_ONLY_MISSING');
+requireText(workflow, "AUTO_TRADING: 'true'", 'AUTO_GATE_AUTO_TRUE_MISSING');
+requireText(workflow, "LIVE_AUTOMATIC_TRADING_ENABLED: 'true'", 'AUTO_GATE_LIVE_AUTO_TRUE_MISSING');
+requireText(workflow, "AUTO_TRADING: 'false'", 'AUTO_GATE_AUTO_ROLLBACK_MISSING');
+requireText(workflow, "LIVE_AUTOMATIC_TRADING_ENABLED: 'false'", 'AUTO_GATE_LIVE_AUTO_ROLLBACK_MISSING');
+requireText(workflow, 'AUTOMATIC_TRADING_EXACT_PRODUCTION_DEPLOY_REQUIRED', 'AUTO_GATE_DEPLOY_PROVENANCE_MISSING');
+requireText(workflow, 'AUTOMATIC_TRADING_EXACT_COMPREHENSIVE_QA_REQUIRED', 'AUTO_GATE_COMPREHENSIVE_QA_MISSING');
+requireText(workflow, 'AUTOMATIC_TRADING_EXACT_ACCOUNT_QA_REQUIRED', 'AUTO_GATE_ACCOUNT_QA_MISSING');
+requireText(workflow, 'ACTIVATED_SPOT_LIVE_LIMITED_MANUAL', 'AUTO_GATE_MANUAL_RECEIPT_MISSING');
+requireText(workflow, "executionAuthority === 'SPOT_LIVE_LIMITED'", 'AUTO_GATE_AUTHORITY_RECHECK_MISSING');
+requireText(workflow, "REAL_ORDER_SUBMITTED=false", 'AUTO_GATE_NO_ORDER_RECEIPT_MISSING');
+requireText(workflow, 'AUTOMATIC_TRADING_ACTIVATION_FAILED_ROLLED_BACK', 'AUTO_GATE_ROLLBACK_RECEIPT_MISSING');
+requireText(workflow, 'AUTOMATIC_TRADING_DISABLED_MANUAL_LIVE_PRESERVED', 'AUTO_GATE_DISABLE_RECEIPT_MISSING');
+requireText(workflow, 'production-account-readonly-live-', 'AUTO_GATE_ACCOUNT_ARTIFACT_MISSING');
+requireText(workflow, 'reconciliationPassed', 'AUTO_GATE_RECONCILIATION_MISSING');
+
+forbid(workflow, /^\s{2}(workflow_dispatch|schedule):/m, 'AUTO_GATE_UNATTENDED_TRIGGER_FORBIDDEN');
+forbid(workflow, /BITGET_FUTURES_LIVE_ORDER_ENABLED[^\n]*true/, 'AUTO_GATE_FUTURES_ENABLE_FORBIDDEN');
+forbid(workflow, /FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED[^\n]*true/, 'AUTO_GATE_FUTURES_AUTHORITY_FORBIDDEN');
+
+requireText(manualGate, "AUTO_TRADING: 'false'", 'MANUAL_GATE_MUST_KEEP_AUTO_FALSE');
+requireText(manualGate, "LIVE_AUTOMATIC_TRADING_ENABLED: 'false'", 'MANUAL_GATE_MUST_KEEP_LIVE_AUTO_FALSE');
+
+const autoFn = tradeService.match(/export function automaticLiveExecutionEnabled[\s\S]*?\n}\n/);
+if (!autoFn) throw new Error('AUTOMATIC_LIVE_EXECUTION_FUNCTION_MISSING');
+for (const token of [
+  "process.env.AUTO_TRADING === 'true'",
+  "process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'",
+  'liveExecutionEnabled(exchange)',
+  "'SPOT_LIVE_LIMITED'",
+]) {
+  requireText(autoFn[0], token, 'AUTOMATIC_LIVE_EXECUTION_CONTRACT_DRIFT');
+}
+
+requireText(deploy, 'LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false', 'DEPLOY_AUTO_RESET_MISSING');
+requireText(deploy, 'LIVE_AUTOMATIC_TRADING_ENABLED=false', 'DEPLOY_LIVE_AUTO_RESET_MISSING');
+
+console.log(JSON.stringify({
+  ok: true,
+  provider: 'upbit',
+  activationRequiresManualSpotAuthority: true,
+  activationSubmitsOrder: false,
+  disablePreservesManualSpotAuthority: true,
+}));
