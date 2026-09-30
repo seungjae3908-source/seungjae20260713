@@ -4,8 +4,10 @@ on:
   pull_request:
     paths:
       - "market-prediction-lab/src/public-strategy-benchmark-v1.js"
+      - "market-prediction-lab/src/public-strategy-futures-position-data-v1.js"
       - "market-prediction-lab/scripts/run-public-strategy-3y-benchmark-v1.js"
       - "market-prediction-lab/tests/public-strategy-benchmark-v1.test.js"
+      - "market-prediction-lab/tests/public-strategy-futures-position-data-v1.test.js"
       - ".github/workflows/prediction-lab-public-strategy-3y-benchmark-v1.yml"
   workflow_dispatch:
 
@@ -41,7 +43,7 @@ jobs:
 
       - name: Run focused benchmark contract tests
         working-directory: market-prediction-lab
-        run: node --test tests/public-strategy-benchmark-v1.test.js
+        run: node --test tests/public-strategy-benchmark-v1.test.js tests/public-strategy-futures-position-data-v1.test.js
 
       - name: Run exact three-year public benchmark
         working-directory: market-prediction-lab
