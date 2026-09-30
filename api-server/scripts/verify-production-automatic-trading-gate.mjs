@@ -18,15 +18,15 @@ requireText(workflow, '/activate-production-auto-trading ', 'AUTO_GATE_ACTIVATE_
 requireText(workflow, '/disable-production-auto-trading ', 'AUTO_GATE_DISABLE_COMMAND_MISSING');
 requireText(workflow, 'environment: production', 'AUTO_GATE_PROTECTED_ENV_MISSING');
 requireText(workflow, "const allowed = new Set(['upbit']);", 'AUTO_GATE_UPBIT_ONLY_MISSING');
-requireText(workflow, "AUTO_TRADING: 'true'", 'AUTO_GATE_AUTO_TRUE_MISSING');
-requireText(workflow, "LIVE_AUTOMATIC_TRADING_ENABLED: 'true'", 'AUTO_GATE_LIVE_AUTO_TRUE_MISSING');
+requireText(workflow, "AUTO_TRADING: enabled ? 'true' : 'false'", 'AUTO_GATE_AUTO_TRUE_MISSING');
+requireText(workflow, "LIVE_AUTOMATIC_TRADING_ENABLED: enabled ? 'true' : 'false'", 'AUTO_GATE_LIVE_AUTO_TRUE_MISSING');
 requireText(workflow, "AUTO_TRADING: 'false'", 'AUTO_GATE_AUTO_ROLLBACK_MISSING');
 requireText(workflow, "LIVE_AUTOMATIC_TRADING_ENABLED: 'false'", 'AUTO_GATE_LIVE_AUTO_ROLLBACK_MISSING');
 requireText(workflow, 'AUTOMATIC_TRADING_EXACT_PRODUCTION_DEPLOY_REQUIRED', 'AUTO_GATE_DEPLOY_PROVENANCE_MISSING');
 requireText(workflow, 'AUTOMATIC_TRADING_EXACT_COMPREHENSIVE_QA_REQUIRED', 'AUTO_GATE_COMPREHENSIVE_QA_MISSING');
 requireText(workflow, 'AUTOMATIC_TRADING_EXACT_ACCOUNT_QA_REQUIRED', 'AUTO_GATE_ACCOUNT_QA_MISSING');
 requireText(workflow, 'ACTIVATED_SPOT_LIVE_LIMITED_MANUAL', 'AUTO_GATE_MANUAL_RECEIPT_MISSING');
-requireText(workflow, "executionAuthority === 'SPOT_LIVE_LIMITED'", 'AUTO_GATE_AUTHORITY_RECHECK_MISSING');
+requireText(workflow, "executionAuthority !== 'SPOT_LIVE_LIMITED'", 'AUTO_GATE_AUTHORITY_RECHECK_MISSING');
 requireText(workflow, "REAL_ORDER_SUBMITTED=false", 'AUTO_GATE_NO_ORDER_RECEIPT_MISSING');
 requireText(workflow, 'AUTOMATIC_TRADING_ACTIVATION_FAILED_ROLLED_BACK', 'AUTO_GATE_ROLLBACK_RECEIPT_MISSING');
 requireText(workflow, 'AUTOMATIC_TRADING_DISABLED_MANUAL_LIVE_PRESERVED', 'AUTO_GATE_DISABLE_RECEIPT_MISSING');
