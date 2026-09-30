@@ -50,7 +50,7 @@ jobs:
             console.error('Exact command required: /run-production-account-readonly-live-qa <40-character-current-production-sha> <provider[,provider...]>');
             process.exit(1);
           }
-          const allowed = new Set(['toss', 'kiwoom', 'upbit']);
+          const allowed = new Set(['toss', 'kiwoom', 'upbit', 'bitget']);
           const providers = match[2].split(',');
           if (providers.length === 0
             || new Set(providers).size !== providers.length
