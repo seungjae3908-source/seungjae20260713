@@ -44,6 +44,15 @@ type Status = {
   credentialVault: { encryptionConfigured: boolean; keyValueExposed: false };
   lastOrder: { exchange: Exchange; state: string; updatedAt: string; lastErrorCode: string | null } | null;
   liveExecutionServerEnabled?: Record<Exchange, boolean>;
+  evidenceBackedStrategies?: Array<{
+    strategyId: string;
+    label: string;
+    market: 'US_STOCK' | 'KR_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES' | 'CROSS_VENUE_CRYPTO';
+    researchRole: string;
+    defaultState: 'NO_TRADE';
+    paperRequirements: string[];
+    automaticLivePromotionAllowed: false;
+  }>;
 };
 
 const EXCHANGE_LABELS: Record<Exchange, string> = {
@@ -198,6 +207,18 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
         mode: 'automatic',
         marketEnabled,
         exchangeEnabled: exchangesForMarkets(marketEnabled, current.stockBrokerByMarket),
+      };
+    });
+  }
+
+  function toggleStrategy(strategyId: string) {
+    setDraft((current) => {
+      const enabled = current.enabledStrategies.includes(strategyId);
+      return {
+        ...current,
+        enabledStrategies: enabled
+          ? current.enabledStrategies.filter((item) => item !== strategyId)
+          : [...current.enabledStrategies, strategyId],
       };
     });
   }
@@ -425,7 +446,43 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
       <NumberField label="연속 손실 제한" value={draft.maxConsecutiveLosses} onChange={(value) => updateNumber('maxConsecutiveLosses', value)} suffix="회" />
     </div>
 
-    <label className="mt-3 block rounded-2xl border border-card-border bg-background p-3 text-xs font-extrabold">
+    {(status?.evidenceBackedStrategies?.length ?? 0) > 0 ? <div className="mt-4 rounded-2xl border border-card-border bg-background p-3" data-testid="evidence-backed-auto-strategies">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-extrabold">연구 기반 자동매매 전략</p>
+          <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
+            전략은 자동매매에 등록되어 있지만, 로컬 OOS·Walk-forward·Full Cost·전략건강성 준비도가 확인되기 전에는 NO_TRADE입니다.
+          </p>
+        </div>
+        <ShieldAlert className="h-4 w-4 shrink-0 text-muted-foreground" />
+      </div>
+      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {status!.evidenceBackedStrategies!.map((strategy) => {
+          const selected = draft.enabledStrategies.includes(strategy.strategyId);
+          return <button
+            key={strategy.strategyId}
+            type="button"
+            onClick={() => toggleStrategy(strategy.strategyId)}
+            className="rounded-xl border border-card-border bg-card p-3 text-left"
+            data-testid={`evidence-strategy-${strategy.strategyId}`}
+            aria-pressed={selected}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-extrabold">{strategy.label}</span>
+              <span className="rounded-full border border-card-border px-2 py-0.5 text-[10px] font-bold">
+                {selected ? '선택됨' : '대기'}
+              </span>
+            </div>
+            <p className="mt-1 text-[10px] leading-4 text-muted-foreground">{strategy.researchRole}</p>
+            <p className="mt-2 text-[10px] font-bold text-muted-foreground">
+              기본 상태 {strategy.defaultState} · 자동 실주문 승격 없음
+            </p>
+          </button>;
+        })}
+      </div>
+    </div> : null}
+
+        <label className="mt-3 block rounded-2xl border border-card-border bg-background p-3 text-xs font-extrabold">
       허용 전략
       <input
         aria-label="허용 전략"
