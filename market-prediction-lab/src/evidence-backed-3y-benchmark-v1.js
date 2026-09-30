@@ -227,6 +227,51 @@ function closesBySymbol(datasets) {
   ]));
 }
 
+export function runEqualWeightBuyHoldBaseline({
+  datasets,
+  perSideCostBps = 10,
+  barsPerYear,
+  startTime = BENCHMARK_PERIOD.startTime,
+  endTime = BENCHMARK_PERIOD.endTime,
+} = {}) {
+  if (!Array.isArray(datasets) || datasets.length < 1) throw new TypeError("at least one dataset is required");
+  if (!(barsPerYear > 0)) throw new RangeError("barsPerYear must be positive");
+  const timestamps = intersectTimestamps(datasets);
+  const closeMaps = closesBySymbol(datasets);
+  const symbols = datasets.map((item) => item.symbol);
+  const startIndex = timestamps.findIndex((timestamp) => timestamp >= startTime);
+  if (startIndex < 1) throw new Error("BUY_HOLD_START_NOT_AVAILABLE");
+  let endIndex = timestamps.length - 1;
+  while (endIndex >= 0 && timestamps[endIndex] > endTime) endIndex -= 1;
+  if (endIndex <= startIndex) throw new Error("BUY_HOLD_END_NOT_AVAILABLE");
+
+  const weight = 1 / symbols.length;
+  const costRate = perSideCostBps / 10_000;
+  const returns = [];
+  for (let index = startIndex; index <= endIndex; index += 1) {
+    const currentTimestamp = timestamps[index];
+    const priorTimestamp = timestamps[index - 1];
+    let barReturn = 0;
+    for (const symbol of symbols) {
+      const prior = closeMaps[symbol].get(priorTimestamp);
+      const current = closeMaps[symbol].get(currentTimestamp);
+      if (!(prior > 0 && current > 0)) continue;
+      barReturn += weight * (current / prior - 1);
+    }
+    if (index === startIndex) barReturn -= costRate;
+    if (index === endIndex) barReturn -= costRate;
+    returns.push(barReturn);
+  }
+
+  return Object.freeze({
+    family: "EQUAL_WEIGHT_BUY_HOLD_BASELINE",
+    sourceFaithfulReplication: true,
+    fixedBasketBaseline: true,
+    perSideCostBps,
+    performance: summarizeReturnSeries(returns, { barsPerYear }),
+  });
+}
+
 export function runTimeSeriesMomentumProxy({
   datasets,
   lookbackBars,
