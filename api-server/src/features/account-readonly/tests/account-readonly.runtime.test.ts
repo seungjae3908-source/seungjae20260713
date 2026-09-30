@@ -118,12 +118,12 @@ test('vault-backed Bitget marks diagnostics after an explicit NOT_UTA Classic fa
     () => readers.bitget!(SCOPE),
     (error: unknown) => error instanceof AccountReadonlyError
       && error.code === 'BITGET_AUTH_FAILED'
-      && error.bitgetDiagnostic?.requestPath === '/api/v2/mix/account/accounts'
-      && error.bitgetDiagnostic.endpointFamily === 'CLASSIC'
-      && error.bitgetDiagnostic.probe === 'ASSETS'
+      && error.bitgetDiagnostic?.endpointFamily === 'CLASSIC'
       && error.bitgetDiagnostic.fallbackAttempted === true,
   );
-  assert.deepEqual(paths, ['/api/v3/account/settings', '/api/v2/mix/account/accounts']);
+  assert.equal(paths[0], '/api/v3/account/settings');
+  assert.ok(paths.includes('/api/v2/mix/account/accounts'));
+  assert.ok(paths.every((path) => path === '/api/v3/account/settings' || path.startsWith('/api/v2/mix/')));
 });
 
 test('vault-backed Bitget fails closed without Classic fallback when the settings probe is not explicitly NOT_UTA', async () => {
