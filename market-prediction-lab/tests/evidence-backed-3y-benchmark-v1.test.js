@@ -13,6 +13,7 @@ import {
   costModelFromCommonFrictionBps,
   coverageSummary,
   runCrossSectionalMomentumProxy,
+  runFundingCarryProxy,
   runTimeSeriesMomentumProxy,
   summarizeReturnSeries,
 } from "../src/evidence-backed-3y-benchmark-v1.js";
@@ -186,6 +187,34 @@ test("relative momentum proxy is deterministic and cost-aware", () => {
   assert.equal(a.family, "RELATIVE_MOMENTUM_PROXY");
   assert.equal(a.fixedBasketProxy, true);
   assert.ok(a.performance.sampleCount > 0);
+});
+
+test("funding carry proxy is causal, same-venue only, and includes turnover cost", () => {
+  const start = BENCHMARK_PERIOD.startTime;
+  const spot = candles({ start, count: 40, drift: 0.001 });
+  const futures = candles({ start, count: 40, drift: 0.0008 });
+  const funding = [];
+  for (let day = 0; day < 40; day += 1) {
+    for (const hour of [0, 8, 16]) {
+      funding.push({
+        timestamp: start + day * 86_400_000 + hour * 3_600_000,
+        rate: 0.0001,
+      });
+    }
+  }
+  const result = runFundingCarryProxy({
+    spotCandles: spot,
+    futuresCandles: futures,
+    fundingRecords: funding,
+    perSideCostBps: 10,
+    trailingFundingDays: 7,
+  });
+  assert.equal(result.family, "SAME_VENUE_FUNDING_CARRY_PROXY");
+  assert.equal(result.deltaNeutralTarget, true);
+  assert.equal(result.crossVenueReplication, false);
+  assert.equal(result.sourceFaithfulReplication, false);
+  assert.ok(result.performance.sampleCount > 0);
+  assert.ok(result.performance.totalReturn > -1);
 });
 
 test("volatility-managed proxy remains capped and research-only envelope grants no authority", () => {
