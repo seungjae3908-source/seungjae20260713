@@ -408,13 +408,14 @@ def trade_metrics(trades: pd.DataFrame) -> dict:
     ordered = trades.sort_values("exit_time")
     rs = ordered["net_ret"].to_numpy()
     wealth = float(np.prod(1 + rs))
-    start, end = ordered["exit_time"].min(), ordered["exit_time"].max()
-    years = max((end - start).total_seconds() / (365.25 * 86400), 1 / 365.25)
+    years = max((BENCHMARK_END - BENCHMARK_START).total_seconds() / (365.25 * 86400), 1 / 365.25)
     cagr = wealth ** (1/years) - 1 if wealth > 0 else -1.0
-    daily = ordered.assign(day=ordered["exit_time"].dt.floor("D")).groupby("day")["net_ret"].apply(lambda x: float(np.prod(1+x)-1))
+    observed_daily = ordered.assign(day=ordered["exit_time"].dt.floor("D")).groupby("day")["net_ret"].apply(lambda x: float(np.prod(1+x)-1))
+    full_days = pd.date_range(BENCHMARK_START.floor("D"), BENCHMARK_END.floor("D"), freq="D")
+    daily = observed_daily.reindex(full_days, fill_value=0.0)
     sharpe = None
     if len(daily) > 1 and daily.std(ddof=1) > 0:
-        sharpe = float(daily.mean() / daily.std(ddof=1) * math.sqrt(365 if ordered["market"].iloc[0].startswith("CRYPTO") else 252))
+        sharpe = float(daily.mean() / daily.std(ddof=1) * math.sqrt(365.25))
     pos = ordered.loc[ordered["net_ret"] > 0, "net_ret"].sum()
     neg = -ordered.loc[ordered["net_ret"] < 0, "net_ret"].sum()
     pf = float(pos / neg) if neg > 0 else (999.0 if pos > 0 else 0.0)
