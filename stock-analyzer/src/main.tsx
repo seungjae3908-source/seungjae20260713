@@ -1,14 +1,10 @@
 // Keep the HTML entry intentionally dependency-free. On a direct AI Chart
-// document, start the user-critical route preloads first, promote those exact
-// modulepreload links, then yield one task before adding the much larger App and
-// runtime preload graphs. This gives the cold route a real network scheduling
-// head start without delaying any non-AI-Chart document.
+// document, settle the user-critical page module before adding the wider App and
+// runtime graphs. The chart renderer remains behind the page's React.lazy
+// boundary so its loading state can paint before that heavier graph is usable.
 const directAiChartRoute = window.location.pathname.endsWith('/ai-chart');
 const aiChartCriticalPreload = directAiChartRoute
-	? Promise.all([
-		import('@/pages/ai-chart'),
-		import('@/components/unified-analysis-chart'),
-	]).then(() => undefined, () => undefined)
+	? import('@/pages/ai-chart').then(() => undefined, () => undefined)
 	: Promise.resolve();
 
 void aiChartCriticalPreload.then(async () => {
