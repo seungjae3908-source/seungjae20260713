@@ -99,7 +99,8 @@ export class TossTokenManager {
       body,
       signal,
     });
-    if (response.status === 401 || response.status === 403) throw new AccountReadonlyError('AUTH_FAILED');
+    if (response.status === 401) throw new AccountReadonlyError('TOSS_AUTH_FAILED');
+    if (response.status === 403) throw new AccountReadonlyError('TOSS_IP_NOT_ALLOWED');
     if (response.status === 429) throw new AccountReadonlyError('RATE_LIMITED', true);
     if (response.status >= 400) throw new AccountReadonlyError(`TOSS_HTTP_${response.status}`, response.status >= 500);
     const row = record(response.body);
