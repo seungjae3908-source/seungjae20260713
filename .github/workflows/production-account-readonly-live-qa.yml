@@ -5,6 +5,8 @@ on:
     paths:
       - '.github/workflows/production-account-readonly-live-qa.yml'
       - '.github/workflows/production-account-readonly-live-qa-dispatch-bridge.yml'
+      - '.github/scripts/production-deploy-provenance.cjs'
+      - '.github/scripts/production-deploy-provenance.test.cjs'
       - 'stock-analyzer/playwright.production-account-readonly.config.ts'
       - 'stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts'
       - 'stock-analyzer/e2e/support/production-readonly-policy.ts'
@@ -18,6 +20,10 @@ on:
         type: string
       providers:
         description: Comma-separated limited-live activation target providers (toss,kiwoom,upbit,bitget)
+        required: true
+        type: string
+      production_deploy_run_id:
+        description: Exact latest successful official Production Deploy Run ID verified by the dispatch bridge
         required: true
         type: string
 
@@ -63,14 +69,18 @@ jobs:
           requireText(live, 'PRODUCTION_BASE_URL: https://lsj119.com', 'LIVE_QA_OFFICIAL_HOST_REQUIRED');
           requireText(live, 'ref: ' + '$' + '{{ inputs.sha }}', 'LIVE_QA_EXACT_SHA_CHECKOUT_REQUIRED');
           requireText(live, 'PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS: ' + '$' + '{{ inputs.providers }}', 'LIVE_QA_TARGET_PROVIDERS_REQUIRED');
+          requireText(live, 'PRODUCTION_DEPLOY_RUN_ID: ' + '$' + '{{ inputs.production_deploy_run_id }}', 'LIVE_QA_DEPLOY_RUN_ID_INPUT_REQUIRED');
+          requireText(live, 'getWorkflowRun', 'LIVE_QA_EXACT_DEPLOY_RUN_LOOKUP_REQUIRED');
+          requireText(live, 'assertProductionDeployProvenance', 'LIVE_QA_DEPLOY_PROVENANCE_VALIDATION_REQUIRED');
           requireText(spec, 'installProductionReadOnlyPolicy', 'READONLY_BROWSER_POLICY_REQUIRED');
           requireText(spec, '/api/accounts/read-only/credentials/status', 'CREDENTIAL_STATUS_READ_REQUIRED');
           requireText(spec, 'Persist bounded, sanitized provider state before any connectivity assertion', 'SANITIZED_FAILURE_DIAGNOSTICS_REQUIRED');
           requireText(spec, 'testedProviders', 'TESTED_PROVIDERS_EVIDENCE_REQUIRED');
           requireText(spec, 'reconciliationPassed', 'TARGET_PROVIDER_RECONCILIATION_REQUIRED');
           requireText(spec, 'bitgetDiagnostic', 'BITGET_SANITIZED_DIAGNOSTIC_REQUIRED');
-          requireText(bridge, "new Set(['toss', 'kiwoom', 'upbit', 'bitget'])", 'BRIDGE_ALLOWED_TARGET_PROVIDERS_REQUIRED');
-          requireText(bridge, 'inputs: { sha: target, providers }', 'BRIDGE_TARGET_PROVIDER_DISPATCH_REQUIRED');
+          requireText(bridge, 'canonicalizeProductionAccountProviders', 'BRIDGE_ALLOWED_TARGET_PROVIDERS_REQUIRED');
+          requireText(bridge, 'inputs: { sha: target, providers, production_deploy_run_id: productionDeployRunId }', 'BRIDGE_TARGET_PROVIDER_DISPATCH_REQUIRED');
+          requireText(bridge, 'assertProductionDeployProvenance', 'BRIDGE_DEPLOY_PROVENANCE_VALIDATION_REQUIRED');
           const adapter = fs.readFileSync('api-server/src/services/trade-exchange-adapters.service.ts', 'utf8');
           const runtime = fs.readFileSync('api-server/src/features/account-readonly/account-readonly.runtime.ts', 'utf8');
           const exchange = fs.readFileSync('api-server/src/features/account-readonly/providers/exchange-readonly.providers.ts', 'utf8');
@@ -93,6 +103,9 @@ jobs:
           }
           NODE
 
+      - name: Run Production Deploy provenance regression tests
+        run: node --test .github/scripts/production-deploy-provenance.test.cjs
+
   production-account-readonly-live-qa:
     name: Real Production account read-only provider QA
     if: github.event_name == 'workflow_dispatch'
@@ -106,6 +119,7 @@ jobs:
       PRODUCTION_ACCOUNT_READONLY_LIVE_QA: "true"
       PRODUCTION_ACCOUNT_READONLY_ARTIFACT_DIR: production-account-readonly-artifacts
       EXPECTED_DEPLOY_SHA: ${{ inputs.sha }}
+      PRODUCTION_DEPLOY_RUN_ID: ${{ inputs.production_deploy_run_id }}
       PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS: ${{ inputs.providers }}
     steps:
       - uses: actions/checkout@v4
@@ -120,29 +134,35 @@ jobs:
           [[ "$EXPECTED_DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$EXPECTED_DEPLOY_SHA"
 
-      - name: Require latest successful official Production Deploy
+      - name: Require exact bridge-validated official Production Deploy provenance
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ inputs.sha }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ inputs.production_deploy_run_id }}
         with:
           script: |
+            const { assertProductionDeployProvenance } = require('./.github/scripts/production-deploy-provenance.cjs');
             const target = process.env.TARGET_SHA;
-            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'production-deploy.yml',
-              event: 'workflow_dispatch',
-              status: 'completed',
-              per_page: 100,
-            });
-            const latest = runs
-              .filter((run) => run.conclusion === 'success')
-              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
-            if (!latest || String(latest.head_sha).toLowerCase() !== target) {
-              core.setFailed('Target is not latest successful Production Deploy: target=' + target + ' latest=' + String(latest?.head_sha ?? 'missing'));
+            const productionDeployRunId = String(process.env.PRODUCTION_DEPLOY_RUN_ID ?? '').trim();
+            if (!/^[1-9][0-9]*$/.test(productionDeployRunId)) {
+              core.setFailed('PRODUCTION_DEPLOY_PROVENANCE_RUN_ID_INVALID');
               return;
             }
-            core.info('Production Deploy provenance accepted from Run ' + latest.id + '.');
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: Number(productionDeployRunId),
+            })).data;
+            try {
+              assertProductionDeployProvenance(run, {
+                targetSha: target,
+                productionDeployRunId,
+              });
+            } catch (error) {
+              core.setFailed(String(error?.message ?? 'PRODUCTION_DEPLOY_PROVENANCE_INVALID'));
+              return;
+            }
+            core.info('Production Deploy provenance accepted from exact Run ' + productionDeployRunId + '.');
 
       - name: Require exact Production runtime identity
         run: |
@@ -150,17 +170,9 @@ jobs:
           curl --fail --silent --show-error --max-time 15 "$PRODUCTION_BASE_URL/api/health" -o /tmp/production-account-qa-health.json
           node - <<'NODE'
           const fs = require('node:fs');
+          const { assertProductionRuntimeIdentity } = require('./.github/scripts/production-deploy-provenance.cjs');
           const health = JSON.parse(fs.readFileSync('/tmp/production-account-qa-health.json', 'utf8'));
-          const expected = String(process.env.EXPECTED_DEPLOY_SHA ?? '').toLowerCase();
-          const deploySha = String(health?.deploySha ?? '').toLowerCase();
-          if (health?.ok !== true
-            || deploySha !== expected
-            || String(health?.processDeploySha ?? '').toLowerCase() !== expected
-            || String(health?.deployMarkerSha ?? '').toLowerCase() !== expected
-            || health?.identityMatch !== true
-            || health?.identityStatus !== 'match') {
-            throw new Error('PRODUCTION_ACCOUNT_QA_IDENTITY_MISMATCH');
-          }
+          assertProductionRuntimeIdentity(health, process.env.EXPECTED_DEPLOY_SHA);
           NODE
 
       - name: Require Production QA login credential
