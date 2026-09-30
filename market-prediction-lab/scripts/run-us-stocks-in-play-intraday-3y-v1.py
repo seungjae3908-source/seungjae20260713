@@ -313,6 +313,8 @@ def simulate_one(group: pd.DataFrame) -> dict:
 
 
 def variant_members(candidates: pd.DataFrame, variant: dict) -> pd.DataFrame:
+    if candidates.empty:
+        return candidates.copy()
     x = candidates[
         (candidates["rvol"] >= variant["min_rvol"])
         & (candidates["rank"] <= variant["top_n"])
