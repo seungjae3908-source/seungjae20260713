@@ -460,7 +460,7 @@ async function main() {
   }
 
   const results = {};
-  const highFidelity = {};
+  const highFidelityApprox = {};
   for (const [windowName, window] of Object.entries(WINDOWS)) {
     const normal = {};
     const stress = {};
@@ -484,7 +484,7 @@ async function main() {
       causal[dataset.symbol] = causalAdjustedSleeve(dataset.adjustedMonthly, window, COST_PER_SIDE, tb3ms.monthly);
       causalStress[dataset.symbol] = causalAdjustedSleeve(dataset.adjustedMonthly, window, STRESS_COST_PER_SIDE, tb3ms.monthly);
     }
-    highFidelity[windowName] = {
+    highFidelityApprox[windowName] = {
       paperLikeTotalReturnCloseTbill: { portfolio: combinePortfolio(paperLike), perAsset: paperLike },
       causalTotalReturnNextOpenTbill: { portfolio: combinePortfolio(causal), perAsset: causal },
       causalStress15x: { portfolio: combinePortfolio(causalStress), perAsset: causalStress },
@@ -492,7 +492,7 @@ async function main() {
   }
 
   const crossWindowStressPositive = Object.values(results).every((row) => row.stress15x.portfolio.totalReturn > 0);
-  const highFidelityCrossWindowPositive = Object.values(highFidelity).every((row) => row.causalStress15x.portfolio.totalReturn > 0);
+  const highFidelityCrossWindowPositive = Object.values(highFidelityApprox).every((row) => row.causalStress15x.portfolio.totalReturn > 0);
   const report = {
     schemaVersion: 1,
     status: "pass",
