@@ -171,13 +171,21 @@ function simulateSleeve(monthly, window, costPerSide) {
 function buyHoldSleeve(monthly, window, costPerSide) {
   const months = monthly.filter((row) => inWindow(row.month, window));
   if (months.length < 2) return null;
-  const entry = months[0].firstOpen * (1 + costPerSide);
-  const exit = months.at(-1).lastClose * (1 - costPerSide);
-  const totalReturn = exit / entry - 1;
+  const entryFill = months[0].firstOpen * (1 + costPerSide);
+  const units = 1 / entryFill;
+  const curve = months.map((row, index) => {
+    const gross = units * row.lastClose;
+    const equity = index === months.length - 1 ? gross * (1 - costPerSide) : gross;
+    return { month: row.month, equity };
+  });
+  const equities = curve.map((row) => row.equity);
+  const totalReturn = (equities.at(-1) ?? 1) - 1;
   return {
     months: months.length,
     totalReturn,
     annualizedReturn: annualizedReturn(1, 1 + totalReturn, months.length),
+    maxDrawdown: maxDrawdown(equities),
+    curve,
   };
 }
 function combinePortfolio(perAsset) {
@@ -202,9 +210,22 @@ function combinePortfolio(perAsset) {
 }
 function combineBuyHold(perAsset) {
   const rows = Object.values(perAsset);
+  const monthSet = new Set();
+  for (const result of rows) for (const row of result.curve) monthSet.add(row.month);
+  const months = [...monthSet].sort();
+  const curve = months.map((month) => {
+    const values = rows.map((result) => result.curve.find((row) => row.month === month)?.equity ?? null);
+    if (values.some((value) => !Number.isFinite(value))) return null;
+    return { month, equity: mean(values) };
+  }).filter(Boolean);
+  const equities = curve.map((row) => row.equity);
+  const totalReturn = (equities.at(-1) ?? 1) - 1;
   return {
-    totalReturn: mean(rows.map((row) => row.totalReturn)),
-    annualizedReturn: mean(rows.map((row) => row.annualizedReturn)),
+    months: curve.length,
+    totalReturn,
+    annualizedReturn: annualizedReturn(1, 1 + totalReturn, curve.length),
+    maxDrawdown: maxDrawdown(equities),
+    curve,
   };
 }
 function selfTest() {
