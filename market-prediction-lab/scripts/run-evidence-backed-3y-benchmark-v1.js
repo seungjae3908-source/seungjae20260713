@@ -7,6 +7,7 @@ import {
   BinanceFuturesPublicClient,
   collectBinanceFuturesFundingRates,
 } from "../src/binance-futures-history.js";
+import { collectVisionFuturesDailyKlines } from "../src/binance-vision-futures-archive.js";
 import { collectYahooStockHistory } from "../src/yahoo-stock-history.js";
 import {
   BENCHMARK_HORIZONS,
@@ -182,6 +183,28 @@ async function collectCryptoKlines(input) {
   try {
     return await collectBinanceKlines(input);
   } catch (binanceError) {
+    let visionError = null;
+    if (input.market === "CRYPTO_FUTURES" && input.timeframe === "1d") {
+      try {
+        const vision = await collectVisionFuturesDailyKlines({
+          symbol: input.symbol,
+          startTime: input.startTime,
+          endTime: input.endTime,
+          concurrency: 6,
+        });
+        return Object.freeze({
+          provider: vision.provider,
+          market: input.market,
+          symbol: input.symbol,
+          timeframe: input.timeframe,
+          pages: vision.manifests?.length ?? null,
+          candles: vision.candles,
+          fallbackReason: serializeError(binanceError),
+        });
+      } catch (error) {
+        visionError = error;
+      }
+    }
     const client = new BitgetPublicClient({
       minIntervalMs: 125,
       maxRetries: 4,
@@ -220,6 +243,7 @@ async function collectCryptoKlines(input) {
       const error = new Error(`CRYPTO_PUBLIC_COLLECTION_FAILED:${input.market}:${input.symbol}:${input.timeframe}`);
       error.details = {
         binance: serializeError(binanceError),
+        vision: visionError ? serializeError(visionError) : null,
         bitget: serializeError(bitgetError),
       };
       throw error;
