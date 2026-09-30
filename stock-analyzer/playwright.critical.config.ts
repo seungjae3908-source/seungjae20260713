@@ -3,7 +3,6 @@ import baseConfig from './playwright.config';
 
 export const CRITICAL_BROWSER_SPECS = [
   /full-product-browser-flow\.spec\.ts$/u,
-  /stocks-canonical-search-route\.spec\.ts$/u,
   /app-navigation\.spec\.ts$/u,
   /ai-chart-v2\.spec\.ts$/u,
   /ai-chart-position-readonly\.spec\.ts$/u,
