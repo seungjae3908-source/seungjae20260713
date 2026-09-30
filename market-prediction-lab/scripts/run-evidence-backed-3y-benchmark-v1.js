@@ -20,6 +20,7 @@ import {
   coverageSummary,
   runCrossSectionalMomentumProxy,
   runFundingCarryProxy,
+  runEqualWeightBuyHoldBaseline,
   runTimeSeriesMomentumProxy,
 } from "../src/evidence-backed-3y-benchmark-v1.js";
 
@@ -427,6 +428,20 @@ for (const profile of BENCHMARK_PROFILE_PLAN) {
     const longShort = profile.market === "CRYPTO_FUTURES";
 
     for (const costBps of COMMON_FRICTION_STRESS_BPS_PER_SIDE) {
+      const buyHold = runEqualWeightBuyHoldBaseline({
+        datasets,
+        perSideCostBps: costBps,
+        barsPerYear,
+      });
+      strategyRows.push(resultRow({
+        profile,
+        strategy: "EQUAL_WEIGHT_BUY_HOLD_BASELINE",
+        costBps,
+        result: buyHold,
+        evidenceRole: "FIXED_BASKET_PASSIVE_BASELINE",
+        sourceRecipeId: null,
+      }));
+
       const tsmom = runTimeSeriesMomentumProxy({
         datasets,
         lookbackBars: definition.tsmomLookbackBars,
