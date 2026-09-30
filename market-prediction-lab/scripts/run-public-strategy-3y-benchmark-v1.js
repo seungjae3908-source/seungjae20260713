@@ -3,6 +3,10 @@ import { dirname, resolve } from "node:path";
 import { BitgetPublicClient } from "../src/bitget-public-client.js";
 import { collectBitgetCandles } from "../src/bitget-candle-collector.js";
 import { collectFundingRateHistory } from "../src/derivatives-history.js";
+import {
+  assertFundingCoverageV1,
+  collectExactThreeYearFuturesPositionDataV1,
+} from "../src/public-strategy-futures-position-data-v1.js";
 import { collectYahooStockHistory } from "../src/yahoo-stock-history.js";
 import {
   BENCHMARK_END_TIME,
@@ -130,6 +134,7 @@ async function collectStockPosition(market) {
 
 async function collectFuturesFunding(client) {
   const funding = {};
+  const coverage = {};
   for (const symbol of CRYPTO_SYMBOLS) {
     const result = await collectFundingRateHistory({
       client,
@@ -139,9 +144,44 @@ async function collectFuturesFunding(client) {
       pageSize: 100,
       maxPages: 60,
     });
+    coverage[symbol] = assertFundingCoverageV1(
+      result.records,
+      BENCHMARK_START_TIME,
+      BENCHMARK_END_TIME,
+      `BITGET:${symbol}`,
+    );
     funding[symbol] = result.records;
   }
-  return funding;
+  return { funding, coverage };
+}
+
+async function collectFuturesPositionProfile() {
+  const datasets = [];
+  const fundingRatesBySymbol = {};
+  const archiveCoverage = {};
+  for (const symbol of CRYPTO_SYMBOLS) {
+    const collected = await collectExactThreeYearFuturesPositionDataV1({
+      symbol,
+      startTime: BENCHMARK_START_TIME,
+      endTimeExclusive: BENCHMARK_END_TIME,
+    });
+    datasets.push({
+      symbol,
+      candles: collected.candles,
+      source: collected.provider,
+      candleCount: collected.candles.length,
+      firstTimestamp: collected.candles[0]?.timestamp ?? null,
+      lastTimestamp: collected.candles.at(-1)?.timestamp ?? null,
+      crossVenueProxy: true,
+      checksumVerifiedArchive: collected.checksumVerifiedArchive,
+    });
+    fundingRatesBySymbol[symbol] = collected.fundingRates;
+    archiveCoverage[symbol] = {
+      price: collected.priceCoverage,
+      funding: collected.fundingCoverage,
+    };
+  }
+  return { datasets, fundingRatesBySymbol, archiveCoverage };
 }
 
 function compactTsmom(result) {
@@ -329,6 +369,7 @@ const plan = buildPublicStrategyBenchmarkPlanV1();
 const client = new BitgetPublicClient({ minIntervalMs: 110, maxRetries: 5, timeoutMs: 12_000 });
 const profiles = [];
 let futuresFunding = null;
+let futuresFundingCoverage = null;
 
 for (const market of ["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"]) {
   for (const horizon of ["SHORT", "SWING", "POSITION"]) {
@@ -347,17 +388,36 @@ for (const market of ["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"]) 
         }));
         continue;
       }
+      if (market === "CRYPTO_FUTURES" && horizon === "POSITION") {
+        const positionData = await collectFuturesPositionProfile();
+        profiles.push({
+          ...benchmarkProfile({
+            market,
+            horizon,
+            datasets: positionData.datasets,
+            fundingRatesBySymbol: positionData.fundingRatesBySymbol,
+            providerRisk: "BINANCE_PRICE_FUNDING_CROSS_VENUE_PROXY_WITH_BITGET_EXECUTION_COST_ASSUMPTION",
+          }),
+          archiveCoverage: positionData.archiveCoverage,
+        });
+        continue;
+      }
       if (market === "CRYPTO_FUTURES" && futuresFunding === null) {
-        futuresFunding = await collectFuturesFunding(client);
+        const fundingResult = await collectFuturesFunding(client);
+        futuresFunding = fundingResult.funding;
+        futuresFundingCoverage = fundingResult.coverage;
       }
       const datasets = await collectCryptoProfile({ client, market, horizon });
-      profiles.push(benchmarkProfile({
-        market,
-        horizon,
-        datasets,
-        fundingRatesBySymbol: market === "CRYPTO_FUTURES" ? futuresFunding : {},
-        providerRisk: null,
-      }));
+      profiles.push({
+        ...benchmarkProfile({
+          market,
+          horizon,
+          datasets,
+          fundingRatesBySymbol: market === "CRYPTO_FUTURES" ? futuresFunding : {},
+          providerRisk: null,
+        }),
+        ...(market === "CRYPTO_FUTURES" ? { fundingCoverage: futuresFundingCoverage } : {}),
+      });
     } catch (error) {
       profiles.push({
         ...blockedProfile(market, horizon, "PUBLIC_DATA_COLLECTION_OR_PROXY_EXECUTION_FAILED"),
@@ -397,6 +457,7 @@ const report = {
   limitations: [
     "Executed TSMOM and relative-momentum rows are fixed local proxies, not source-faithful replications of every paper.",
     "Stock POSITION rows use current survivor symbols from Yahoo and therefore receive no economic/profitability credit.",
+    "Crypto futures POSITION uses checksum-verified Binance Vision price/funding history plus recent Binance funding as a cross-venue historical proxy while retaining the target Bitget research cost assumption.",
     "Stock SHORT/SWING remain blocked until a reproducible three-year point-in-time intraday stock provider is integrated.",
     "Charting-by-Machines, Stocks-in-Play ORB, risk-managed crypto momentum, CEX-DEX funding arbitrage, and MLLM chart strategies remain blocked until their exact required evidence exists.",
     "Descriptive proxyOrdering is not a promotion ranking and cannot set app defaults.",
