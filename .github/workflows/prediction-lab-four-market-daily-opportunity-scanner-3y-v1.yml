@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: four-market-daily-opportunity-scanner-3y-v1-${{ github.ref }}
+  group: four-market-daily-opportunity-scanner-3y-v1-r2-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
