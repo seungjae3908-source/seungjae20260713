@@ -281,9 +281,28 @@ def load_us_universe() -> tuple[pd.DataFrame, list[pd.Timestamp], dict]:
     configure_us_module("US_STOCK")
     with tempfile.TemporaryDirectory() as td:
         path = Path(td) / "d_us_txt.zip"
-        us.download_bulk(path)
-        data, dates, meta = us.load_universe(path)
-    return data, dates, meta
+        try:
+            us.download_bulk(path)
+            data, dates, meta = us.load_universe(path)
+            meta = {**meta, "provider": "Stooq bulk daily US ASCII", "fallbackUsed": False}
+            return data, dates, meta
+        except Exception as stooq_error:
+            print(json.dumps({"usStooqUnavailable": str(stooq_error), "fallback": "STRATOS_US_DAILY"}), flush=True)
+            try:
+                data, dates, meta = us.load_stratos_us_universe()
+                meta = {**meta, "provider": "Hugging Face stratos-org/ohlcv-750", "fallbackUsed": True, "stooqError": str(stooq_error)}
+                return data, dates, meta
+            except Exception as stratos_error:
+                print(json.dumps({"usStratosUnavailable": str(stratos_error), "fallback": "HF_YAHOO_DAILY"}), flush=True)
+                try:
+                    data, dates, meta = us.load_hf_yahoo_universe()
+                    meta = {**meta, "provider": "Hugging Face AmirTrader/YahooFinance", "fallbackUsed": True, "stooqError": str(stooq_error), "stratosError": str(stratos_error)}
+                    return data, dates, meta
+                except Exception as hf_error:
+                    print(json.dumps({"usHfYahooUnavailable": str(hf_error), "fallback": "APP_CATALOG_YAHOO"}), flush=True)
+                    data, dates, meta = us.load_catalog_yahoo_universe()
+                    meta = {**meta, "provider": "Yahoo Finance via app US catalog", "fallbackUsed": True, "stooqError": str(stooq_error), "stratosError": str(stratos_error), "hfYahooError": str(hf_error)}
+                    return data, dates, meta
 
 
 def custom_metrics(daily: pd.Series, trade_count: int, market: str) -> dict:
