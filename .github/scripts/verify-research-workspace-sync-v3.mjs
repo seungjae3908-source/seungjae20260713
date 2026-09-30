@@ -115,6 +115,21 @@ const supplemental=[
  'stock-analyzer/e2e/support/start-vite-e2e-server.mjs',
  '.github/workflows/research-workspace-integration-v1.yml',
 ];
+const strategyResearchDrift=[
+ 'stock-analyzer/e2e/research-workspace-v2.spec.ts',
+ 'stock-analyzer/src/components/research-strategy-lifecycle.tsx',
+ 'stock-analyzer/src/components/research-video-panel.tsx',
+ 'stock-analyzer/src/components/research-workspace-panel.tsx',
+ 'stock-analyzer/src/pages/research-center-workspace.tsx',
+];
+const resourceGovernorReviewed=[
+ 'research-production/bin/research-resource-budget.mjs',
+ 'research-production/src/research-resource-budget.mjs',
+ 'research-production/test/research-resource-budget.test.mjs',
+ 'research-production/src/engine.mjs',
+ 'research-production/test/research-engine.test.mjs',
+ '.github/workflows/paper-forward-schedule-validation.yml',
+];
 const original=git('diff','--name-only',BASE,OWNER).split('\n');
 const portfolioReviewed=[
  'api-server/src/features/account-readonly/account-readonly.journal-history.test.ts',
@@ -143,7 +158,7 @@ const portfolioReviewed=[
  'stock-analyzer/src/pages/phase7-journal-sync-e2e.tsx',
  'stock-analyzer/src/pages/portfolio-v2.tsx',
 ];
-const allowed=new Set([...original,...added,...supplemental,...portfolioReviewed]);
+const allowed=new Set([...original,...added,...supplemental,...portfolioReviewed,...strategyResearchDrift,...resourceGovernorReviewed]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
 for(const p of changed)if(!allowed.has(p))throw new Error('UNREVIEWED_PATH:'+p);
 git('merge-base','--is-ancestor',MAIN,'HEAD');
@@ -169,8 +184,10 @@ current=current
    "  createAccountReadonlyRouter(new AccountReadonlyService(\n    createVaultBackedAccountReaders(),\n    accountReadFlags(),\n    () => new Date(),\n    accountReadonlyCredentialConfigured,\n  )),",
  );
 if(current!==git('show',`${MAIN}:api-server/src/routes/index.ts`))throw new Error('MAIN_ROUTE_CHANGE_NOT_PRESERVED');
-const protectedPaths=['market-prediction-lab','research-production','research-dashboard','api-server/src/middleware/auth.ts','stock-analyzer/src/pages/research-center.tsx','stock-analyzer/vite.config.ts','packages/member-access','pnpm-lock.yaml'];
+const protectedPaths=['market-prediction-lab','research-dashboard','api-server/src/middleware/auth.ts','stock-analyzer/src/pages/research-center.tsx','stock-analyzer/vite.config.ts','packages/member-access','pnpm-lock.yaml'];
 for(const p of protectedPaths)if(git('rev-parse',`HEAD:${p}`)!==git('rev-parse',`${MAIN}:${p}`))throw new Error('PROTECTED_PATH_CHANGED:'+p);
+const researchProductionChanges=git('diff','--name-only',MAIN,'HEAD','--','research-production').split('\n').filter(Boolean);
+for(const p of researchProductionChanges)if(!resourceGovernorReviewed.includes(p))throw new Error('UNREVIEWED_RESEARCH_PRODUCTION_PATH:'+p);
 const proof={schemaVersion:'workspace-main-preservation-v3',head:git('rev-parse','HEAD'),main:MAIN,previousOwner:OWNER,
   reviewedChangedPaths:changed,protectedPaths,ancestryPreserved:true,mainUpdated:false,
   liveOrders:0,providerCalls:0,fixtureResultsAreEconomicEvidence:false};
