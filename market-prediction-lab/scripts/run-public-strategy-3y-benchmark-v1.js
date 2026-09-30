@@ -49,6 +49,35 @@ function maxCandlesFor(horizon) {
   return 2_000;
 }
 
+function intervalMsFor(horizon) {
+  if (horizon === "SHORT") return 15 * 60 * 1000;
+  if (horizon === "SWING") return 60 * 60 * 1000;
+  return 24 * 60 * 60 * 1000;
+}
+
+function assertRequestedCoverage({ candles, horizon, market, symbol }) {
+  if (!Array.isArray(candles) || candles.length === 0) throw new Error(`NO_CANDLES:${market}:${symbol}:${horizon}`);
+  const intervalMs = intervalMsFor(horizon);
+  const startTolerance = market === "KR_STOCK" || market === "US_STOCK" ? 4 * intervalMs : 2 * intervalMs;
+  const endTolerance = market === "KR_STOCK" || market === "US_STOCK" ? 4 * intervalMs : 2 * intervalMs;
+  const firstTimestamp = candles[0].timestamp;
+  const lastTimestamp = candles.at(-1).timestamp;
+  if (firstTimestamp > BENCHMARK_START_TIME + startTolerance) {
+    throw Object.assign(new Error(`THREE_YEAR_START_COVERAGE_MISSING:${market}:${symbol}:${horizon}`), {
+      code: "THREE_YEAR_START_COVERAGE_MISSING",
+      firstTimestamp,
+      requiredStartTime: BENCHMARK_START_TIME,
+    });
+  }
+  if (lastTimestamp < BENCHMARK_END_TIME - endTolerance) {
+    throw Object.assign(new Error(`THREE_YEAR_END_COVERAGE_MISSING:${market}:${symbol}:${horizon}`), {
+      code: "THREE_YEAR_END_COVERAGE_MISSING",
+      lastTimestamp,
+      requiredEndTime: BENCHMARK_END_TIME,
+    });
+  }
+}
+
 async function collectCryptoProfile({ client, market, horizon }) {
   const timeframe = BENCHMARK_HORIZONS_V1[horizon].timeframe;
   const datasets = [];
@@ -62,6 +91,7 @@ async function collectCryptoProfile({ client, market, horizon }) {
       endTime: BENCHMARK_END_TIME,
       maxCandles: maxCandlesFor(horizon),
     });
+    assertRequestedCoverage({ candles: collected.candles, horizon, market, symbol });
     datasets.push({
       symbol,
       candles: collected.candles,
@@ -84,6 +114,7 @@ async function collectStockPosition(market) {
       endTime: BENCHMARK_END_TIME,
       timeoutMs: 20_000,
     });
+    assertRequestedCoverage({ candles: collected.candles, horizon: "POSITION", market, symbol });
     datasets.push({
       symbol,
       candles: collected.candles,
