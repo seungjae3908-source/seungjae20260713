@@ -51,6 +51,37 @@ VARIANTS = [
     ],
 ]
 
+LONG_GAP_VARIANTS = [
+    {
+        "id": "ORB5_RVOL1_TOP20_LONG_GAP_ALIGNED_NEXT_MIN_STOP",
+        "min_rvol": 1.0,
+        "top_n": 20,
+        "stop_delay_bars": 1,
+        "execution_model": "QUANTCONNECT_MINUTE_BACKTEST_NEXT_MINUTE_STOP",
+        "long_only": True,
+        "min_overnight_gap": 0.002,
+    },
+    {
+        "id": "ORB5_RVOL1_TOP10_LONG_GAP_ALIGNED_NEXT_MIN_STOP",
+        "min_rvol": 1.0,
+        "top_n": 10,
+        "stop_delay_bars": 1,
+        "execution_model": "QUANTCONNECT_MINUTE_BACKTEST_NEXT_MINUTE_STOP",
+        "long_only": True,
+        "min_overnight_gap": 0.002,
+    },
+    {
+        "id": "ORB5_RVOL1_TOP5_LONG_GAP_ALIGNED_NEXT_MIN_STOP",
+        "min_rvol": 1.0,
+        "top_n": 5,
+        "stop_delay_bars": 1,
+        "execution_model": "QUANTCONNECT_MINUTE_BACKTEST_NEXT_MINUTE_STOP",
+        "long_only": True,
+        "min_overnight_gap": 0.002,
+    },
+]
+VARIANTS = VARIANTS + LONG_GAP_VARIANTS
+
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": "market-prediction-lab/stocks-in-play-intraday-3y-v1"})
 
@@ -186,6 +217,8 @@ def with_rolling_metrics(history: pd.DataFrame) -> pd.DataFrame:
         lambda s: s.shift(1).rolling(14, min_periods=14).mean()
     )
     df["rvol"] = df["first5_volume"] / df["avg_first5_volume14"].replace(0, np.nan)
+    df["prior_close"] = prev_close
+    df["overnight_gap"] = df["day_open"] / prev_close - 1.0
     df["direction"] = np.where(
         df["or_close"] > df["or_open"], 1,
         np.where(df["or_close"] < df["or_open"], -1, 0),
@@ -221,8 +254,8 @@ def candidate_rows(history: pd.DataFrame, month: pd.Timestamp, start: pd.Timesta
     return eligible[
         [
             "ticker", "trade_date", "direction", "entry_level",
-            "atr14", "rvol", "rank", "day_open", "avg_volume14",
-            "first5_volume", "avg_first5_volume14",
+            "atr14", "rvol", "rank", "day_open", "prior_close", "overnight_gap",
+            "avg_volume14", "first5_volume", "avg_first5_volume14",
         ]
     ].sort_values(["trade_date", "rank", "ticker"])
 
@@ -336,6 +369,11 @@ def variant_members(candidates: pd.DataFrame, variant: dict) -> pd.DataFrame:
         (candidates["rvol"] >= variant["min_rvol"])
         & (candidates["rank"] <= variant["top_n"])
     ].copy()
+    if variant.get("long_only") is True:
+        x = x[x["direction"] > 0].copy()
+    min_gap = variant.get("min_overnight_gap")
+    if min_gap is not None:
+        x = x[x["overnight_gap"] >= float(min_gap)].copy()
     return x
 
 
@@ -476,6 +514,11 @@ def run_chunk(start: pd.Timestamp, end: pd.Timestamp, output: Path) -> None:
             "sameMinuteEntryStopAmbiguity": "CONSERVATIVE_STOP_ASSUMED_IF_BOTH_TOUCHED",
             "shortBorrowAvailabilityModeled": False,
             "shortBorrowCostIncluded": False,
+            "longGapAlignedVariants": {
+                "direction": "LONG_ONLY",
+                "minimumOvernightGap": 0.002,
+                "publicEvidenceBasis": "TrueTrader 2026 ORB reproduction: long and gap-aligned cells concentrated edge",
+            },
         },
     }
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -631,6 +674,11 @@ def combine(input_dir: Path, output: Path) -> None:
                 "same-minute stop conservative",
                 "next-minute stop activation matching QuantConnect minute-resolution implementation behavior",
             ],
+            "longGapAlignedChallenge": {
+                "direction": "long only",
+                "overnightGapThreshold": 0.002,
+                "basis": "independent 2020-2026 ORB reproduction found edge concentrated in long and with-gap cells",
+            },
             "untouchedFinalHoldout": False,
         },
         "results": results,
@@ -667,8 +715,9 @@ def self_test() -> None:
     assert leverage * (stop_distance / fill) <= 0.0100000001
     assert MAX_LEVERAGE == 4.0
     assert STOP_ATR_FRACTION == 0.10
-    assert len(VARIANTS) == len(BASE_VARIANTS) * 2
+    assert len(VARIANTS) == len(BASE_VARIANTS) * 2 + len(LONG_GAP_VARIANTS)
     assert {v["stop_delay_bars"] for v in VARIANTS} == {0, 1}
+    assert all(v["long_only"] is True and v["min_overnight_gap"] == 0.002 for v in LONG_GAP_VARIANTS)
     print("SELF_TEST_PASS")
 
 
