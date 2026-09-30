@@ -19,6 +19,7 @@ import { credentialConfigurationStatus, encryptTradingCredentials } from '../ser
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { spotLiveRuntimeStatus } from '../services/spot-live-limited-capability.service';
 import { futuresLiveRuntimeStatus } from '../services/futures-live-limited-capability.service';
+import { evidenceBackedAutoStrategyCatalog } from '../services/evidence-backed-auto-strategy-catalog.service';
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
 import type {
@@ -674,6 +675,15 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       futuresLiveLimited: futuresLiveRuntimeStatus(),
       credentialVault: vaultStatus,
       liveExecutionReadiness,
+      evidenceBackedStrategies: evidenceBackedAutoStrategyCatalog().map((strategy) => ({
+        strategyId: strategy.strategyId,
+        label: strategy.label,
+        market: strategy.market,
+        researchRole: strategy.researchRole,
+        defaultState: strategy.defaultState,
+        paperRequirements: strategy.paperRequirements,
+        automaticLivePromotionAllowed: false,
+      })),
       lastOrder: orders[0] ?? null,
       actualOrderSubmittedByStatusRequest: false,
     });
