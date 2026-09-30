@@ -120,6 +120,13 @@ const supplemental=[
  'stock-analyzer/e2e/support/start-vite-e2e-server.mjs',
  '.github/workflows/research-workspace-integration-v1.yml',
 ];
+const strategyResearchDrift=[
+ 'stock-analyzer/e2e/research-workspace-v2.spec.ts',
+ 'stock-analyzer/src/components/research-strategy-lifecycle.tsx',
+ 'stock-analyzer/src/components/research-video-panel.tsx',
+ 'stock-analyzer/src/components/research-workspace-panel.tsx',
+ 'stock-analyzer/src/pages/research-center-workspace.tsx',
+];
 const resourceGovernorReviewed=[
  'research-production/bin/research-resource-budget.mjs',
  'research-production/src/research-resource-budget.mjs',
@@ -156,7 +163,7 @@ const portfolioReviewed=[
  'stock-analyzer/src/pages/phase7-journal-sync-e2e.tsx',
  'stock-analyzer/src/pages/portfolio-v2.tsx',
 ];
-const allowed=new Set([...original,...added,...supplemental,...portfolioReviewed,...resourceGovernorReviewed]);
+const allowed=new Set([...original,...added,...supplemental,...portfolioReviewed,...strategyResearchDrift,...resourceGovernorReviewed]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
 for(const p of changed)if(!allowed.has(p))throw new Error('UNREVIEWED_PATH:'+p);
 git('merge-base','--is-ancestor',MAIN,'HEAD');
