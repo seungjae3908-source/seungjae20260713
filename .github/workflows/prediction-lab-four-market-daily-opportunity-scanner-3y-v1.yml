@@ -1,0 +1,98 @@
+name: Prediction Lab Four-Market Daily Opportunity Scanner 3Y V1
+
+on:
+  push:
+    branches:
+      - research/four-market-daily-opportunity-scanner-3y-v1-20260930
+    paths:
+      - market-prediction-lab/scripts/run-four-market-daily-opportunity-scanner-3y-v1.py
+      - market-prediction-lab/scripts/run-us-daily-opportunity-scanner-3y-v1.py
+      - .github/workflows/prediction-lab-four-market-daily-opportunity-scanner-3y-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: four-market-daily-opportunity-scanner-3y-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: Four-market daily opportunity walk-forward
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+      PYTHONHASHSEED: "42"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned dependencies
+        run: python -m pip install --disable-pip-version-check "numpy==2.2.6" "pandas==2.2.3" "requests==2.32.5" "scikit-learn==1.6.1" "huggingface_hub==0.36.0" "pyarrow==21.0.0"
+
+      - name: Verify research-only safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$LIVE_TRADING" = "false"
+          test "$AUTO_TRADING" = "false"
+          test "$REAL_ORDER_ENABLED" = "false"
+          test "$PRIVATE_TRADING_API_ALLOWED" = "false"
+          test "$EXECUTION_AUTHORITY" = "NONE"
+
+      - name: Compile and self-test
+        run: |
+          python -m py_compile market-prediction-lab/scripts/run-four-market-daily-opportunity-scanner-3y-v1.py
+          python market-prediction-lab/scripts/run-four-market-daily-opportunity-scanner-3y-v1.py --self-test
+
+      - name: Run four-market three-year benchmark
+        run: python market-prediction-lab/scripts/run-four-market-daily-opportunity-scanner-3y-v1.py --output market-prediction-lab/docs/four-market-daily-opportunity-scanner-3y-v1-result.json
+
+      - name: Assert truth boundary and print summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          p="market-prediction-lab/docs/four-market-daily-opportunity-scanner-3y-v1-result.json"
+          r=json.load(open(p))
+          assert set(r["markets"]) == {"US_STOCK","KR_STOCK","CRYPTO_SPOT","CRYPTO_FUTURES"}
+          assert r["safety"]["profitabilityProven"] is False
+          assert r["safety"]["executionAuthority"] == "NONE"
+          assert r["safety"]["liveTrading"] is False
+          assert r["safety"]["autoTrading"] is False
+          assert r["truthBoundary"]["sameDayHighLowCloseVolumeUsedForSelection"] is False
+          assert r["truthBoundary"]["historicalMembershipAndDelistingComplete"] is False
+          print(json.dumps({
+              "markets": {
+                  m: {
+                      "universe": v["universe"],
+                      "survivorCount": len(v["profitableSurvivorsOnly"]),
+                      "topObserved": [
+                          {"candidate": x["candidate"], "metrics": x["metrics"], "periods": x["periods"]}
+                          for x in v["results"][:3]
+                      ],
+                  } for m,v in r["markets"].items()
+              },
+              "combinedFixedFamily": r["combinedFixedFamily"],
+              "truthBoundary": r["truthBoundary"],
+          }, ensure_ascii=False, indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: four-market-daily-opportunity-scanner-3y-v1-${{ github.sha }}
+          path: market-prediction-lab/docs/four-market-daily-opportunity-scanner-3y-v1-result.json
+          if-no-files-found: error
+          retention-days: 14
