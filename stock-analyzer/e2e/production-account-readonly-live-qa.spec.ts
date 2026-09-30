@@ -27,7 +27,7 @@ if (productionLiveQaEnabled) {
 const productionOrigin = productionLiveQaEnabled ? new URL(baseUrl).origin : 'https://lsj119.com';
 const cryptoProviders = ['upbit', 'bitget'] as const;
 const stockProviders = ['toss', 'kiwoom'] as const;
-const activationProviders = ['toss', 'kiwoom', 'upbit'] as const;
+const activationProviders = ['toss', 'kiwoom', 'upbit', 'bitget'] as const;
 type Provider = typeof cryptoProviders[number] | typeof stockProviders[number];
 type ActivationProvider = typeof activationProviders[number];
 
@@ -39,7 +39,7 @@ if (productionLiveQaEnabled && rawTargetProviders !== '') {
   if (requestedProviders.length === 0
     || new Set(requestedProviders).size !== requestedProviders.length
     || requestedProviders.some((provider) => !activationProviderSet.has(provider))) {
-    throw new Error('PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS must be a unique toss,kiwoom,upbit subset');
+    throw new Error('PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS must be a unique toss,kiwoom,upbit,bitget subset');
   }
 }
 

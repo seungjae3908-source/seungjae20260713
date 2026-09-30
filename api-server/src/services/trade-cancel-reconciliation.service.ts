@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { TradingRepository } from './trade-automation.repository';
-import { TradeAutomationService } from './trade-automation.service';
-import { spotLivePlanCapabilityDecision } from './spot-live-limited-capability.service';
+import { TradeAutomationService, livePlanCapabilityDecision } from './trade-automation.service';
 import { TradeOrderRecoveryService } from './trade-order-recovery.service';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
 import { tradingProviderHttpErrorCode, tradingProviderNetworkErrorCode, tradingProviderTimeoutCode } from './trade-provider-http-error.service';
@@ -168,7 +167,7 @@ export class TradeCancelReconciliationService {
     }
 
     const mockKiwoom = plan.exchange === 'kiwoom' && plan.accountMode === 'mock';
-    const cancelCapability = spotLivePlanCapabilityDecision(plan, 'ORDER_CANCEL');
+    const cancelCapability = livePlanCapabilityDecision(plan, 'ORDER_CANCEL');
     if ((!mockKiwoom && !cancelCapability.allowed)
       || (mockKiwoom && process.env.KIWOOM_MOCK_ORDER_ENABLED !== 'true')) {
       order.lastErrorCode = cancelCapability.blockCodes[0] ?? 'CANCEL_EXECUTION_DISABLED';

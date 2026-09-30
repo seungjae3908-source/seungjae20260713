@@ -1,0 +1,647 @@
+name: Production Futures Live Trading Gate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/production-futures-live-trading-gate.yml
+      - .github/workflows/production-account-readonly-live-qa.yml
+      - .github/workflows/production-account-readonly-live-qa-dispatch-bridge.yml
+      - api-server/src/services/futures-live-limited-capability.service.ts
+      - api-server/src/services/futures-live-limited-capability.service.test.ts
+      - api-server/src/services/trade-automation.service.ts
+      - api-server/src/services/trade-execution.service.ts
+      - api-server/src/services/trade-cancel-reconciliation.service.ts
+      - api-server/src/services/trade-order-amendment.service.ts
+      - api-server/src/services/trade-order-recovery.service.ts
+      - ops/deploy-production.sh
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: >-
+    ${{ github.event_name == 'issue_comment'
+        && github.event.issue.number == 23
+        && github.event.comment.user.login == 'seungjae3908-source'
+        && github.event.comment.author_association == 'OWNER'
+        && (startsWith(github.event.comment.body, '/activate-production-futures-live-trading ')
+            || startsWith(github.event.comment.body, '/disable-production-futures-live-trading '))
+        && 'production-futures-live-trading-gate'
+        || format('production-futures-live-trading-gate-validation-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    name: Validate Production futures live-trading gate safety contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Validate fail-closed futures authority contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          workflow=.github/workflows/production-futures-live-trading-gate.yml
+          grep -Fq "/activate-production-futures-live-trading " "$workflow"
+          grep -Fq "/disable-production-futures-live-trading " "$workflow"
+          grep -Fq "environment: production" "$workflow"
+          grep -Fq "FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: 'true'" "$workflow"
+          grep -Fq "BITGET_FUTURES_LIVE_ORDER_ENABLED: 'true'" "$workflow"
+          grep -Fq "FUTURES_LIVE_EXECUTION_AUTHORITY: 'FUTURES_LIVE_LIMITED'" "$workflow"
+          grep -Fq "FUTURES_LIVE_CAPABILITY_ALLOWLIST" "$workflow"
+          grep -Fq "FUTURES_LIVE_MARKET_ALLOWLIST: 'CRYPTO_FUTURES'" "$workflow"
+          grep -Fq "FUTURES_LIVE_MARGIN_MODE: 'isolated'" "$workflow"
+          grep -Fq "AUTO_TRADING=false" "$workflow"
+          grep -Fq "LIVE_AUTOMATIC_TRADING_ENABLED=false" "$workflow"
+          grep -Fq "REAL_ORDER_SUBMITTED=false" "$workflow"
+          grep -Fq "CONFIRM_NO_OPEN_FUTURES_POSITIONS_OR_ORDERS" "$workflow"
+          ! grep -Eq '^[[:space:]]{2}(workflow_dispatch|schedule):' "$workflow"
+          ! grep -Eq 'AUTO_TRADING:[[:space:]]+["'\'']?true' "$workflow"
+          ! grep -Eq 'LIVE_AUTOMATIC_TRADING_ENABLED:[[:space:]]+["'\'']?true' "$workflow"
+
+  activate:
+    name: Owner-approved manual Production futures live-trading gate activation
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/activate-production-futures-live-trading ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: production
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      statuses: read
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Parse exact owner futures activation command
+        id: command
+        shell: bash
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/activate-production-futures-live-trading ([0-9a-f]{40}) bitget (2|3) isolated$/u.exec(body);
+          if (!match) {
+            throw new Error('Expected /activate-production-futures-live-trading <40-char-current-main-sha> bitget <2|3> isolated');
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1]}\nmax_leverage=${match[2]}\n`);
+          NODE
+
+      - name: Require exact current main and coherent Required CI 6/6
+        id: gate
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const branch = (await github.rest.repos.getBranch({
+              owner: context.repo.owner, repo: context.repo.repo, branch: 'main',
+            })).data;
+            if (branch.commit.sha !== target) {
+              core.setFailed(`FUTURES_LIVE_MAIN_SHA_MISMATCH:target=${target}:main=${branch.commit.sha}`);
+              return;
+            }
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner, repo: context.repo.repo, ref: target, per_page: 100,
+            });
+            statuses.sort((a, b) => Number(b.id) - Number(a.id));
+            const latest = new Map();
+            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+            const missing = required.filter((name) => latest.get(name)?.state !== 'success');
+            if (missing.length) {
+              core.setFailed(`FUTURES_LIVE_REQUIRED_CI_NOT_6_OF_6:${missing.join(',')}`);
+              return;
+            }
+            const runIds = new Set(required.map((name) => {
+              const match = String(latest.get(name)?.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
+              return match ? Number(match[1]) : null;
+            }));
+            if (runIds.size !== 1 || runIds.has(null)) {
+              core.setFailed('FUTURES_LIVE_REQUIRED_CI_NOT_COHERENT');
+              return;
+            }
+            core.setOutput('ci_run_id', String([...runIds][0]));
+
+      - name: Require exact-SHA Production deploy and post-deploy read-only QA
+        id: prerequisites
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, head_sha: target,
+              branch: 'main', status: 'completed', per_page: 100,
+            });
+            const production = runs
+              .filter((run) => run.name === 'Production Deploy'
+                && run.path === '.github/workflows/production-deploy.yml'
+                && run.event === 'workflow_dispatch'
+                && run.head_sha === target
+                && run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            if (!production) {
+              core.setFailed(`FUTURES_LIVE_EXACT_PRODUCTION_DEPLOY_REQUIRED:${target}`);
+              return;
+            }
+            const productionCompletedAt = Date.parse(production.updated_at ?? '');
+            const afterDeploy = (run, name, path) => run.name === name
+              && run.path === path
+              && run.event === 'workflow_dispatch'
+              && run.head_sha === target
+              && run.head_branch === 'main'
+              && run.status === 'completed'
+              && run.conclusion === 'success'
+              && Date.parse(run.run_started_at ?? run.created_at) >= productionCompletedAt;
+
+            const comprehensive = runs
+              .filter((run) => afterDeploy(
+                run,
+                'Production Comprehensive Read-Only QA',
+                '.github/workflows/production-comprehensive-readonly-qa.yml',
+              ))
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            if (!comprehensive) {
+              core.setFailed(`FUTURES_LIVE_EXACT_COMPREHENSIVE_QA_REQUIRED:${target}`);
+              return;
+            }
+
+            const account = runs
+              .filter((run) => afterDeploy(
+                run,
+                'Production Account Read-only Live QA',
+                '.github/workflows/production-account-readonly-live-qa.yml',
+              ))
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            if (!account) {
+              core.setFailed(`FUTURES_LIVE_EXACT_BITGET_ACCOUNT_QA_REQUIRED:${target}`);
+              return;
+            }
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner, repo: context.repo.repo, run_id: account.id, per_page: 100,
+            });
+            const artifact = artifacts.find((candidate) =>
+              candidate.name === `production-account-readonly-live-${target}`
+              && candidate.expired !== true
+              && Number(candidate.size_in_bytes) > 0);
+            if (!artifact) {
+              core.setFailed(`FUTURES_LIVE_ACCOUNT_QA_ARTIFACT_MISSING:${account.id}`);
+              return;
+            }
+            core.setOutput('production_run_id', String(production.id));
+            core.setOutput('comprehensive_run_id', String(comprehensive.id));
+            core.setOutput('account_run_id', String(account.id));
+
+      - name: Download exact Bitget account QA evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: production-account-readonly-live-${{ steps.command.outputs.sha }}
+          path: /tmp/futures-account-qa
+          run-id: ${{ steps.prerequisites.outputs.account_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate Bitget account QA evidence
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          evidence="$(find /tmp/futures-account-qa -name production-account-readonly-live-qa.json -print -quit)"
+          test -n "$evidence" && test -s "$evidence"
+          node - "$evidence" "$TARGET_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const [file, target] = process.argv.slice(2);
+          const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+          const providers = Array.isArray(value?.providers) ? value.providers : [];
+          const bitget = providers.find((row) => row?.provider === 'bitget');
+          if (value?.targetSha !== target
+            || !Array.isArray(value?.testedProviders)
+            || !value.testedProviders.includes('bitget')
+            || value?.credentialVaultEncryptionConfigured !== true
+            || value?.secretValuesRecorded !== false
+            || value?.accountValuesRecorded !== false
+            || value?.orderRequests !== 0
+            || value?.cancelRequests !== 0
+            || value?.amendRequests !== 0
+            || value?.transferRequests !== 0
+            || value?.withdrawalRequests !== 0
+            || value?.blockedMutationRequests !== 0
+            || value?.observedAppMutationRequests !== 0
+            || value?.autoTradingAuthorityGranted !== false) {
+            throw new Error('FUTURES_LIVE_BITGET_ACCOUNT_QA_EVIDENCE_INVALID');
+          }
+          if (!bitget
+            || bitget.connected !== true
+            || bitget.status !== 'CONNECTED'
+            || bitget.stale !== false
+            || bitget.fresh !== true
+            || bitget.errorCode !== null
+            || bitget.checkedAtPresent !== true
+            || bitget.lastGoodAtPresent !== true
+            || bitget.reconciliation !== 'PASS'
+            || bitget.reconciliationPassed !== true) {
+            throw new Error('FUTURES_LIVE_BITGET_ACCOUNT_QA_NOT_READY');
+          }
+          NODE
+
+      - name: Configure protected Production SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Activate Bitget futures limited live gates without submitting an order
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          MAX_LEVERAGE: ${{ steps.command.outputs.max_leverage }}
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q MAX_LEVERAGE=%q' "$TARGET_SHA" "$MAX_LEVERAGE")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env node --input-type=module -" <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { existsSync, readFileSync } from 'node:fs';
+
+          const target = String(process.env.TARGET_SHA ?? '');
+          const maxLeverage = String(process.env.MAX_LEVERAGE ?? '');
+          const capabilityAllowlist = 'BALANCE_READ,POSITION_READ,OPEN_ORDER_READ,ORDER_CREATE,ORDER_CANCEL,ORDER_AMEND';
+          const marketAllowlist = 'CRYPTO_FUTURES';
+          if (!/^[0-9a-f]{40}$/.test(target) || !['2', '3'].includes(maxLeverage)) {
+            throw new Error('FUTURES_LIVE_ACTIVATION_INPUT_INVALID');
+          }
+          const markerPath = '/opt/stock-app/.deploy/current-sha';
+          if (!existsSync(markerPath) || readFileSync(markerPath, 'utf8').trim() !== target) {
+            throw new Error('FUTURES_LIVE_DEPLOY_MARKER_MISMATCH');
+          }
+
+          const readRuntime = () => {
+            const rows = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+            const matches = rows.filter((row) => row?.name === 'stock-app');
+            if (matches.length !== 1 || !matches[0]?.pm2_env) throw new Error('FUTURES_LIVE_PM2_RUNTIME_AMBIGUOUS');
+            const env = matches[0].pm2_env;
+            const bool = (key) => {
+              const value = env[key];
+              if (value === undefined || value === false || value === 'false') return false;
+              if (value === true || value === 'true') return true;
+              throw new Error(`FUTURES_LIVE_FLAG_MALFORMED:${key}`);
+            };
+            return {
+              status: String(env.status ?? ''),
+              deploySha: String(env.DEPLOY_SHA ?? ''),
+              live: bool('LIVE_TRADING'),
+              auto: bool('AUTO_TRADING'),
+              real: bool('REAL_ORDER_ENABLED'),
+              privateApi: bool('PRIVATE_TRADING_API_ALLOWED'),
+              orderExecution: bool('ORDER_EXECUTION_ENABLED'),
+              activationApproved: bool('LIVE_TRADING_ACTIVATION_APPROVED'),
+              spotApproved: bool('SPOT_LIVE_LIMITED_ACTIVATION_APPROVED'),
+              automaticLive: bool('LIVE_AUTOMATIC_TRADING_ENABLED'),
+              upbitSpot: bool('UPBIT_LIVE_ORDER_ENABLED'),
+              spotAuthority: String(env.executionAuthority ?? 'NONE').toUpperCase(),
+              futuresApproved: bool('FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED'),
+              bitgetFutures: bool('BITGET_FUTURES_LIVE_ORDER_ENABLED'),
+              futuresAuthority: String(env.FUTURES_LIVE_EXECUTION_AUTHORITY ?? 'NONE').toUpperCase(),
+              futuresCapabilities: String(env.FUTURES_LIVE_CAPABILITY_ALLOWLIST ?? ''),
+              futuresMarkets: String(env.FUTURES_LIVE_MARKET_ALLOWLIST ?? ''),
+              futuresMaxLeverage: String(env.FUTURES_LIVE_MAX_LEVERAGE ?? ''),
+              futuresMarginMode: String(env.FUTURES_LIVE_MARGIN_MODE ?? ''),
+            };
+          };
+
+          const pre = readRuntime();
+          if (pre.status !== 'online' || pre.deploySha !== target
+            || pre.live !== true || pre.auto !== false || pre.real !== true || pre.privateApi !== true
+            || pre.orderExecution !== true || pre.activationApproved !== true
+            || pre.spotApproved !== true || pre.automaticLive !== false
+            || pre.upbitSpot !== true || pre.spotAuthority !== 'SPOT_LIVE_LIMITED') {
+            throw new Error('FUTURES_LIVE_REQUIRES_ACTIVE_UPBIT_SPOT_LIMITED_SAME_SHA');
+          }
+
+          const alreadyDesired = pre.futuresApproved
+            && pre.bitgetFutures
+            && pre.futuresAuthority === 'FUTURES_LIVE_LIMITED'
+            && pre.futuresCapabilities === capabilityAllowlist
+            && pre.futuresMarkets === marketAllowlist
+            && pre.futuresMaxLeverage === maxLeverage
+            && pre.futuresMarginMode === 'isolated';
+
+          const restorePre = () => {
+            execFileSync('pm2', ['restart', 'stock-app', '--update-env'], {
+              env: {
+                ...process.env,
+                FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: String(pre.futuresApproved),
+                BITGET_FUTURES_LIVE_ORDER_ENABLED: String(pre.bitgetFutures),
+                FUTURES_LIVE_EXECUTION_AUTHORITY: pre.futuresAuthority,
+                FUTURES_LIVE_CAPABILITY_ALLOWLIST: pre.futuresCapabilities,
+                FUTURES_LIVE_MARKET_ALLOWLIST: pre.futuresMarkets,
+                FUTURES_LIVE_MAX_LEVERAGE: pre.futuresMaxLeverage,
+                FUTURES_LIVE_MARGIN_MODE: pre.futuresMarginMode,
+                DEPLOY_SHA: target,
+              },
+              stdio: ['ignore', 'ignore', 'pipe'],
+            });
+            execFileSync('pm2', ['save'], { stdio: ['ignore', 'ignore', 'pipe'] });
+          };
+
+          try {
+            if (!alreadyDesired) {
+              if (pre.futuresApproved || pre.bitgetFutures || pre.futuresAuthority !== 'NONE'
+                || pre.futuresCapabilities || pre.futuresMarkets || pre.futuresMaxLeverage || pre.futuresMarginMode) {
+                throw new Error('FUTURES_LIVE_ALREADY_ACTIVE_DIFFERENT_SCOPE');
+              }
+              execFileSync('pm2', ['restart', 'stock-app', '--update-env'], {
+                env: {
+                  ...process.env,
+                  AUTO_TRADING: 'false',
+                  LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
+                  FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: 'true',
+                  BITGET_FUTURES_LIVE_ORDER_ENABLED: 'true',
+                  FUTURES_LIVE_EXECUTION_AUTHORITY: 'FUTURES_LIVE_LIMITED',
+                  FUTURES_LIVE_CAPABILITY_ALLOWLIST: capabilityAllowlist,
+                  FUTURES_LIVE_MARKET_ALLOWLIST: marketAllowlist,
+                  FUTURES_LIVE_MAX_LEVERAGE: maxLeverage,
+                  FUTURES_LIVE_MARGIN_MODE: 'isolated',
+                  DEPLOY_SHA: target,
+                },
+                stdio: ['ignore', 'ignore', 'pipe'],
+              });
+              execFileSync('pm2', ['save'], { stdio: ['ignore', 'ignore', 'pipe'] });
+            }
+
+            const post = readRuntime();
+            if (post.status !== 'online' || post.deploySha !== target
+              || post.live !== true || post.auto !== false || post.real !== true || post.privateApi !== true
+              || post.orderExecution !== true || post.activationApproved !== true
+              || post.spotApproved !== true || post.automaticLive !== false
+              || post.upbitSpot !== true || post.spotAuthority !== 'SPOT_LIVE_LIMITED'
+              || post.futuresApproved !== true || post.bitgetFutures !== true
+              || post.futuresAuthority !== 'FUTURES_LIVE_LIMITED'
+              || post.futuresCapabilities !== capabilityAllowlist
+              || post.futuresMarkets !== marketAllowlist
+              || post.futuresMaxLeverage !== maxLeverage
+              || post.futuresMarginMode !== 'isolated') {
+              throw new Error('FUTURES_LIVE_POST_ACTIVATION_STATE_INVALID');
+            }
+
+            let healthOk = false;
+            for (let attempt = 0; attempt < 10; attempt += 1) {
+              try {
+                const response = await fetch('http://127.0.0.1:8080/api/health', { signal: AbortSignal.timeout(8000) });
+                const value = response.ok ? await response.json() : null;
+                if (value?.ok === true && value?.deploySha === target && value?.identityMatch === true) {
+                  healthOk = true;
+                  break;
+                }
+              } catch {}
+              if (attempt < 9) await new Promise((resolve) => setTimeout(resolve, 2000));
+            }
+            if (!healthOk) throw new Error('FUTURES_LIVE_POST_ACTIVATION_HEALTH_INVALID');
+          } catch (error) {
+            try {
+              restorePre();
+            } catch (rollbackError) {
+              throw new Error(
+                `FUTURES_LIVE_ACTIVATION_FAILED_AND_ROLLBACK_FAILED:${error instanceof Error ? error.message : 'UNKNOWN'}:${rollbackError instanceof Error ? rollbackError.message : 'UNKNOWN'}`,
+              );
+            }
+            throw error;
+          }
+
+          process.stdout.write(JSON.stringify({
+            status: 'ACTIVATED_FUTURES_LIVE_LIMITED_MANUAL',
+            targetSha: target,
+            provider: 'bitget',
+            maxLeverage: Number(maxLeverage),
+            marginMode: 'isolated',
+            autoTrading: false,
+            automaticLiveTrading: false,
+            realOrderSubmitted: false,
+          }));
+          NODE
+
+      - name: Record sanitized futures live activation receipt
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          MAX_LEVERAGE: ${{ steps.command.outputs.max_leverage }}
+          CI_RUN_ID: ${{ steps.gate.outputs.ci_run_id }}
+          PRODUCTION_RUN_ID: ${{ steps.prerequisites.outputs.production_run_id }}
+          COMPREHENSIVE_QA_RUN_ID: ${{ steps.prerequisites.outputs.comprehensive_run_id }}
+          ACCOUNT_QA_RUN_ID: ${{ steps.prerequisites.outputs.account_run_id }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                '[PRODUCTION_FUTURES_LIVE_TRADING_GATE]',
+                'status: ACTIVATED_FUTURES_LIVE_LIMITED_MANUAL',
+                `target_sha: ${process.env.TARGET_SHA}`,
+                'provider: bitget',
+                `max_leverage: ${process.env.MAX_LEVERAGE}`,
+                'margin_mode: isolated',
+                `required_ci_run: ${process.env.CI_RUN_ID}`,
+                `production_deploy_run: ${process.env.PRODUCTION_RUN_ID}`,
+                `production_comprehensive_qa_run: ${process.env.COMPREHENSIVE_QA_RUN_ID}`,
+                `production_account_qa_run: ${process.env.ACCOUNT_QA_RUN_ID}`,
+                'FUTURES_LIVE_EXECUTION_AUTHORITY=FUTURES_LIVE_LIMITED',
+                'FUTURES_LIVE_CAPABILITY_ALLOWLIST=BALANCE_READ,POSITION_READ,OPEN_ORDER_READ,ORDER_CREATE,ORDER_CANCEL,ORDER_AMEND',
+                'FUTURES_LIVE_MARKET_ALLOWLIST=CRYPTO_FUTURES',
+                'AUTO_TRADING=false',
+                'LIVE_AUTOMATIC_TRADING_ENABLED=false',
+                'REAL_ORDER_SUBMITTED=false',
+                'transfer_withdrawal_authority=false',
+                `workflow_run: ${context.runId}`,
+              ].join('\n'),
+            });
+
+  disable:
+    name: Owner-approved Production futures live-trading gate disable
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/disable-production-futures-live-trading ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+      issues: write
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - name: Parse exact futures disable command
+        id: command
+        shell: bash
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/disable-production-futures-live-trading ([0-9a-f]{40}) CONFIRM_NO_OPEN_FUTURES_POSITIONS_OR_ORDERS$/u.exec(body);
+          if (!match) {
+            throw new Error('Expected /disable-production-futures-live-trading <40-char-deployed-sha> CONFIRM_NO_OPEN_FUTURES_POSITIONS_OR_ORDERS');
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1]}\n`);
+          NODE
+
+      - name: Configure protected Production SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Disable only futures limited live authority
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env node --input-type=module -" <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { existsSync, readFileSync } from 'node:fs';
+          const target = String(process.env.TARGET_SHA ?? '');
+          const markerPath = '/opt/stock-app/.deploy/current-sha';
+          if (!/^[0-9a-f]{40}$/.test(target)
+            || !existsSync(markerPath)
+            || readFileSync(markerPath, 'utf8').trim() !== target) {
+            throw new Error('FUTURES_LIVE_DISABLE_DEPLOYED_SHA_MISMATCH');
+          }
+          const rows = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+          const matches = rows.filter((row) => row?.name === 'stock-app');
+          if (matches.length !== 1 || matches[0]?.pm2_env?.DEPLOY_SHA !== target) {
+            throw new Error('FUTURES_LIVE_DISABLE_RUNTIME_IDENTITY_INVALID');
+          }
+          execFileSync('pm2', ['restart', 'stock-app', '--update-env'], {
+            env: {
+              ...process.env,
+              FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: 'false',
+              BITGET_FUTURES_LIVE_ORDER_ENABLED: 'false',
+              FUTURES_LIVE_EXECUTION_AUTHORITY: 'NONE',
+              FUTURES_LIVE_CAPABILITY_ALLOWLIST: '',
+              FUTURES_LIVE_MARKET_ALLOWLIST: '',
+              FUTURES_LIVE_MAX_LEVERAGE: '',
+              FUTURES_LIVE_MARGIN_MODE: '',
+              DEPLOY_SHA: target,
+            },
+            stdio: ['ignore', 'ignore', 'pipe'],
+          });
+          execFileSync('pm2', ['save'], { stdio: ['ignore', 'ignore', 'pipe'] });
+
+          const postRows = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+          const post = postRows.find((row) => row?.name === 'stock-app')?.pm2_env;
+          if (!post || post.status !== 'online' || post.DEPLOY_SHA !== target
+            || String(post.FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED ?? 'false') === 'true'
+            || String(post.BITGET_FUTURES_LIVE_ORDER_ENABLED ?? 'false') === 'true'
+            || String(post.FUTURES_LIVE_EXECUTION_AUTHORITY ?? 'NONE').toUpperCase() !== 'NONE'
+            || String(post.FUTURES_LIVE_CAPABILITY_ALLOWLIST ?? '')
+            || String(post.FUTURES_LIVE_MARKET_ALLOWLIST ?? '')
+            || String(post.FUTURES_LIVE_MAX_LEVERAGE ?? '')
+            || String(post.FUTURES_LIVE_MARGIN_MODE ?? '')) {
+            throw new Error('FUTURES_LIVE_DISABLE_POST_RUNTIME_INVALID');
+          }
+          process.stdout.write(JSON.stringify({
+            status: 'DISABLED_FUTURES_LIVE_LIMITED',
+            targetSha: target,
+            realOrderSubmitted: false,
+          }));
+          NODE
+
+      - name: Record sanitized futures live disable receipt
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                '[PRODUCTION_FUTURES_LIVE_TRADING_GATE]',
+                'status: DISABLED_FUTURES_LIVE_LIMITED',
+                'owner_attestation: CONFIRM_NO_OPEN_FUTURES_POSITIONS_OR_ORDERS',
+                `target_sha: ${process.env.TARGET_SHA}`,
+                'FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED=false',
+                'BITGET_FUTURES_LIVE_ORDER_ENABLED=false',
+                'FUTURES_LIVE_EXECUTION_AUTHORITY=NONE',
+                'REAL_ORDER_SUBMITTED=false',
+                `workflow_run: ${context.runId}`,
+              ].join('\n'),
+            });

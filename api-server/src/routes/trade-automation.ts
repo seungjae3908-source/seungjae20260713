@@ -18,6 +18,7 @@ import { createSupabaseSplitOrderRepository } from '../services/trade-split-orde
 import { credentialConfigurationStatus, encryptTradingCredentials } from '../services/trade-credential-vault.service';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { spotLiveRuntimeStatus } from '../services/spot-live-limited-capability.service';
+import { futuresLiveRuntimeStatus } from '../services/futures-live-limited-capability.service';
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
 import type {
@@ -670,6 +671,7 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
         toss: automaticLiveExecutionEnabled('toss'),
       },
       spotLiveLimited: spotLiveRuntimeStatus(),
+      futuresLiveLimited: futuresLiveRuntimeStatus(),
       credentialVault: vaultStatus,
       liveExecutionReadiness,
       lastOrder: orders[0] ?? null,
