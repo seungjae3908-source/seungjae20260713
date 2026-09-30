@@ -16,7 +16,7 @@ permissions:
 
 concurrency:
   group: evidence-backed-3y-benchmark-v1-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   benchmark:
