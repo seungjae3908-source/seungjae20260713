@@ -63,7 +63,7 @@ jobs:
               assert x["metrics"]["totalReturn"]>0
               assert x["metrics"]["profitFactor"]>1
               assert x["metrics"]["positionChanges"]>=30
-          print(json.dumps({"survivors":[{"candidate":x["candidate"],**x["metrics"],"windows":x["windows"]} for x in r["profitableSurvivorsOnly"]},indent=2))
+          print(json.dumps({"survivors":[{"candidate":x["candidate"],**x["metrics"],"windows":x["windows"]} for x in r["profitableSurvivorsOnly"]]},indent=2))
           PY
       - uses: actions/upload-artifact@v4
         with:
