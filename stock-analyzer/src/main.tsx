@@ -3,26 +3,18 @@
 // modulepreload links, then yield one task before adding the much larger App and
 // runtime preload graphs. This gives the cold route a real network scheduling
 // head start without delaying any non-AI-Chart document.
-const directAiChartColdRoute = window.location.pathname.endsWith('/ai-chart');
+const directAiChartRoute = window.location.pathname.endsWith('/ai-chart');
+const aiChartCriticalPreload = directAiChartRoute
+	? Promise.all([
+		import('@/pages/ai-chart'),
+		import('@/components/unified-analysis-chart'),
+	]).then(() => undefined, () => undefined)
+	: Promise.resolve();
 
-if (directAiChartColdRoute) {
-	void import('@/pages/ai-chart').catch(() => undefined);
-	for (const link of document.querySelectorAll<HTMLLinkElement>('link[rel="modulepreload"]')) {
-		link.setAttribute('fetchpriority', 'high');
-	}
-}
-
-function startApplicationGraph() {
-	const appModulePromise = import('./App');
-	const runtimeModulePromise = import('./app-runtime');
-
-	void Promise.all([appModulePromise, runtimeModulePromise]).then(([{ default: App }, { mountApp }]) => {
-		mountApp(App);
-	});
-}
-
-if (directAiChartColdRoute) {
-	window.setTimeout(startApplicationGraph, 0);
-} else {
-	startApplicationGraph();
-}
+void aiChartCriticalPreload.then(async () => {
+	const [{ default: App }, { mountApp }] = await Promise.all([
+		import('./App'),
+		import('./app-runtime'),
+	]);
+	mountApp(App);
+});
