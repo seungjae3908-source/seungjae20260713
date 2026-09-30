@@ -273,38 +273,23 @@ test('Bitget account-mode transition fails closed as retryable instead of guessi
   );
 });
 
-test('Bitget uses UTA trade-read endpoints when settings access is denied but account-info proves uta_trade read permission', async () => {
+test('Bitget settings permission denial fails closed without an account-info or Classic fallback', async () => {
   const seen: any[] = [];
-  const result = await readBitgetSnapshot(
-    { apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' },
-    async (request) => {
-      seen.push(request);
-      if (request.path === '/api/v3/account/settings') return { code: '40025', data: null };
-      if (request.path === '/api/v3/account/info') return { code: '00000', data: { permissions: ['uta_trade'] } };
-      if (request.path === '/api/v3/account/assets') {
-        return { code: '00000', data: { assets: [{ coin: 'USDT', equity: '100', available: '90', locked: '10' }] } };
-      }
-      if (request.path === '/api/v3/position/current-position') return { code: '00000', data: { list: [] } };
-      if (request.path === '/api/v3/trade/unfilled-orders') return { code: '00000', data: { list: [] } };
-      throw new Error('UNEXPECTED_BITGET_UTA_PERMISSION_PROBE_PATH');
-    },
+  await assert.rejects(
+    () => readBitgetSnapshot(
+      { apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' },
+      async (request) => {
+        seen.push(request);
+        if (request.path === '/api/v3/account/settings') return { code: '40025', data: null };
+        throw new Error('UNEXPECTED_BITGET_FALLBACK_PATH');
+      },
+    ),
+    (error: unknown) => error instanceof AccountReadonlyError
+      && error.code === 'BITGET_PERMISSION_DENIED',
   );
 
-  assert.deepEqual(seen.map((row) => row.path).sort(), [
-    '/api/v3/account/assets',
-    '/api/v3/account/info',
-    '/api/v3/account/settings',
-    '/api/v3/position/current-position',
-    '/api/v3/trade/unfilled-orders',
-  ].sort());
+  assert.deepEqual(seen.map((row) => row.path), ['/api/v3/account/settings']);
   assert.ok(seen.every((row) => row.method === 'GET' && row.body === null));
-  assert.equal(result.connected, true);
-  assert.equal(result.balances?.[0]?.total, 100);
-  assert.equal(result.orderRequests, 0);
-  assert.equal(result.cancelRequests, 0);
-  assert.equal(result.amendRequests, 0);
-  assert.equal(result.transferRequests, 0);
-  assert.equal(result.withdrawalRequests, 0);
 });
 
 test('Bitget UTA wrapper maps v3 account, position, and open-order envelopes without mutation authority', async () => {
