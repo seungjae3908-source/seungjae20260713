@@ -1,0 +1,142 @@
+name: Research US Faber GTAA 10M Future Receipt V1
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/research-us-faber-gtaa10m-future-receipt-v1.yml"
+      - "market-prediction-lab/src/faber-gtaa10m-future-hypothesis-v1.js"
+      - "market-prediction-lab/src/faber-gtaa10m-future-receipt-v1.js"
+      - "market-prediction-lab/scripts/run-faber-gtaa10m-future-receipt-v1.mjs"
+      - "market-prediction-lab/tests/faber-gtaa10m-future-hypothesis-v1.test.js"
+      - "market-prediction-lab/tests/faber-gtaa10m-future-receipt-v1.test.js"
+  workflow_dispatch:
+  schedule:
+    - cron: "30 23 5 * *"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: faber-gtaa10m-future-receipt-v1-\${{ github.event_name }}-\${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout immutable revision
+        uses: actions/checkout@v4
+        with:
+          ref: \${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact revision
+        shell: bash
+        env:
+          EXPECTED_SHA: \${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate frozen future-only contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/src/faber-gtaa10m-future-hypothesis-v1.js
+          node --check market-prediction-lab/src/faber-gtaa10m-future-receipt-v1.js
+          node --check market-prediction-lab/scripts/run-faber-gtaa10m-future-receipt-v1.mjs
+          node --test \
+            market-prediction-lab/tests/faber-gtaa10m-future-hypothesis-v1.test.js \
+            market-prediction-lab/tests/faber-gtaa10m-future-receipt-v1.test.js
+          grep -Fq 'firstEligibleSignalMonth: "2026-09"' market-prediction-lab/src/faber-gtaa10m-future-hypothesis-v1.js
+          grep -Fq 'historicalBackfillCredit: 0' market-prediction-lab/src/faber-gtaa10m-future-receipt-v1.js
+          grep -Fq 'profitabilityClaimAllowed: false' market-prediction-lab/src/faber-gtaa10m-future-receipt-v1.js
+          grep -Fq 'executionAuthority: "NONE"' market-prediction-lab/src/faber-gtaa10m-future-receipt-v1.js
+          ! grep -Eiq '/api/v1/orders|PRIVATE_TRADING_API_ALLOWED|REAL_ORDER_ENABLED|LIVE_TRADING|TOSS_CLIENT_SECRET|(^|[^A-Za-z])withdraw([^A-Za-z]|$)|(^|[^A-Za-z])transfer([^A-Za-z]|$)' \
+            market-prediction-lab/src/faber-gtaa10m-future-receipt-v1.js \
+            market-prediction-lab/scripts/run-faber-gtaa10m-future-receipt-v1.mjs
+
+      - name: Collect public future evidence
+        if: github.event_name != 'pull_request'
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node scripts/run-faber-gtaa10m-future-receipt-v1.mjs docs/us-faber-gtaa10m-future-receipt-v1.json
+
+      - name: Verify future receipt truth boundary
+        if: github.event_name != 'pull_request'
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const r = JSON.parse(fs.readFileSync('docs/us-faber-gtaa10m-future-receipt-v1.json', 'utf8'));
+          if (r.schemaVersion !== 1 || r.hypothesisId !== 'FABER_GTAA_10M_FUTURE_V1') throw new Error('FABER_FUTURE_SCHEMA');
+          if (r.declarationCommitSha !== '1b541e27e32332af63fe0255d257aac152f46dbf') throw new Error('FABER_FUTURE_DECLARATION');
+          if (r.observedHistoryThrough !== '2026-08' || r.firstEligibleSignalMonth !== '2026-09') throw new Error('FABER_FUTURE_BOUNDARY');
+          if (r.historicalBackfillCredit !== 0 || r.profitabilityClaimAllowed !== false || r.automaticPromotionAllowed !== false) throw new Error('FABER_FUTURE_CREDIT');
+          if (r.executionAuthority !== 'NONE') throw new Error('FABER_FUTURE_AUTHORITY');
+          for (const receipt of r.receipts ?? []) {
+            if (receipt.signalMonth < '2026-09') throw new Error('FABER_FUTURE_PRE_FREEZE_RECEIPT');
+            if (receipt.historicalBackfillCredit !== 0) throw new Error('FABER_FUTURE_BACKFILL_CREDIT');
+            if (receipt.futureOosEconomicSampleCredit === 1 && receipt.status !== 'SETTLED_FUTURE_OOS') {
+              throw new Error('FABER_FUTURE_UNSETTLED_CREDIT');
+            }
+          }
+          NODE
+
+      - name: Upload immutable future receipt
+        if: github.event_name != 'pull_request'
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: faber-gtaa10m-future-receipt-\${{ github.sha }}
+          path: market-prediction-lab/docs/us-faber-gtaa10m-future-receipt-v1.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Report sanitized receipt to Central Hub
+        if: github.event_name != 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          ARTIFACT_DIGEST: \${{ steps.upload.outputs.artifact-digest }}
+          ARTIFACT_URL: \${{ steps.upload.outputs.artifact-url }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const r = JSON.parse(fs.readFileSync('market-prediction-lab/docs/us-faber-gtaa10m-future-receipt-v1.json', 'utf8'));
+            const latest = Array.isArray(r.receipts) && r.receipts.length ? r.receipts[r.receipts.length - 1] : null;
+            const body = [
+              '[FABER_GTAA10M_FUTURE_RECEIPT_V1]',
+              '',
+              '- workflow SHA: ' + context.sha,
+              '- hypothesis: ' + r.hypothesisId,
+              '- declaration commit: ' + r.declarationCommitSha,
+              '- status: ' + r.status,
+              '- latest signal month: ' + (r.latestSignalMonth ?? 'NONE'),
+              '- settled genuine future OOS samples: ' + r.settledFutureOosSamples,
+              '- economicSampleCredit: ' + r.economicSampleCredit,
+              '- profitabilityClaimAllowed: false',
+              '- executionAuthority: NONE',
+              '- historicalBackfillCredit: 0',
+              '- artifact digest: ' + (process.env.ARTIFACT_DIGEST || 'unavailable'),
+              '- artifact: ' + (process.env.ARTIFACT_URL || 'unavailable'),
+              latest ? '- latest receipt: ' + latest.signalMonth + ' / ' + latest.status + ' / ' + latest.receiptDigest : '- latest receipt: NONE',
+              '',
+              'Public data only. No live order, account, DB, Secret, Env, deploy, or trading-authority mutation.',
+              'Replit not used.',
+            ].join('\\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 1102,
+              body,
+            });
