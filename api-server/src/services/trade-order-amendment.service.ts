@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { TradingRepository } from './trade-automation.repository';
-import { TradeAutomationService } from './trade-automation.service';
-import { livePlanCapabilityDecision } from './trade-automation.service';
+import { TradeAutomationService, livePlanCapabilityDecision } from './trade-automation.service';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
 import { tradingProviderHttpErrorCode, tradingProviderNetworkErrorCode, tradingProviderTimeoutCode } from './trade-provider-http-error.service';
 import {
