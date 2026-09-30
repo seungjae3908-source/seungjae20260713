@@ -38,7 +38,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install pinned dependencies
-        run: python -m pip install --disable-pip-version-check "numpy==2.2.6" "pandas==2.2.3" "requests==2.32.5" "scikit-learn==1.6.1"
+        run: python -m pip install --disable-pip-version-check "numpy==2.2.6" "pandas==2.2.3" "requests==2.32.5" "scikit-learn==1.6.1" "huggingface_hub==0.36.0" "pyarrow==21.0.0"
 
       - name: Verify research-only safety
         shell: bash
