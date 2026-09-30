@@ -1,0 +1,106 @@
+name: Prediction Lab Multi-Evidence Profit Tournament V1
+
+on:
+  push:
+    branches:
+      - research/multi-evidence-profit-tournament-v1-20260930
+    paths:
+      - market-prediction-lab/scripts/run-multi-evidence-profit-tournament-v1.py
+      - .github/workflows/prediction-lab-multi-evidence-profit-tournament-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: multi-evidence-profit-tournament-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tournament:
+    name: Formula wave candle AI walk-forward tournament
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+      PYTHONHASHSEED: "42"
+    steps:
+      - name: Checkout exact branch revision
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install pinned research dependencies
+        run: python -m pip install --disable-pip-version-check "numpy==2.2.6" "pandas==2.2.3" "requests==2.32.5" "scikit-learn==1.6.1"
+
+      - name: Verify research-only safety envelope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$LIVE_TRADING" = "false"
+          test "$AUTO_TRADING" = "false"
+          test "$REAL_ORDER_ENABLED" = "false"
+          test "$PRIVATE_TRADING_API_ALLOWED" = "false"
+          test "$EXECUTION_AUTHORITY" = "NONE"
+
+      - name: Run causal self-test
+        run: python market-prediction-lab/scripts/run-multi-evidence-profit-tournament-v1.py --self-test
+
+      - name: Run four-market walk-forward tournament
+        run: python market-prediction-lab/scripts/run-multi-evidence-profit-tournament-v1.py --output market-prediction-lab/docs/multi-evidence-profit-tournament-v1-result.json
+
+      - name: Assert bounded truth
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("market-prediction-lab/docs/multi-evidence-profit-tournament-v1-result.json")
+          report = json.loads(p.read_text())
+          safety = report["safety"]
+          assert safety["profitabilityProven"] is False
+          assert safety["economicCreditGranted"] is False
+          assert safety["promotionEligible"] is False
+          assert safety["executionAuthority"] == "NONE"
+          assert report["methodology"]["thresholdSelectedOnPriorValidationOnly"] is True
+          assert report["methodology"]["testMonthNeverUsedForThresholdSelection"] is True
+          for row in report["profitableSurvivorsOnly"]:
+              m = row["metrics"]
+              assert m["total_return"] > 0
+              assert m["profit_factor"] > 1
+              assert m["trades"] >= 30
+          print(json.dumps({
+              "profitableSurvivorCount": len(report["profitableSurvivorsOnly"]),
+              "survivors": [
+                  {
+                      "market": r["market"],
+                      "candidate": r["candidate"],
+                      "totalReturn": r["metrics"]["total_return"],
+                      "sharpe": r["metrics"]["sharpe"],
+                      "mdd": r["metrics"]["mdd"],
+                      "trades": r["metrics"]["trades"],
+                  }
+                  for r in report["profitableSurvivorsOnly"]
+              ],
+              "errors": report["errors"],
+          }, indent=2))
+          PY
+
+      - name: Upload tournament artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: multi-evidence-profit-tournament-v1-${{ github.sha }}
+          path: market-prediction-lab/docs/multi-evidence-profit-tournament-v1-result.json
+          if-no-files-found: error
+          retention-days: 14
