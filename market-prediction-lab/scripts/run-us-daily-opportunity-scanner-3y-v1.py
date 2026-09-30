@@ -15,6 +15,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import requests
+import re
+import concurrent.futures
 from sklearn.ensemble import HistGradientBoostingRegressor
 
 START = pd.Timestamp("2023-08-10", tz="UTC")
@@ -63,6 +65,100 @@ def download_bulk(path: Path) -> None:
                     size += len(chunk)
         if size < 10_000_000:
             raise RuntimeError(f"STOOQ_BULK_TOO_SMALL:{size}")
+
+
+def catalog_us_stock_symbols() -> list[str]:
+    path = Path("api-server/src/data/catalog.ts")
+    text = path.read_text(encoding="utf-8")
+    stock_section = text.split("// US ETF / leveraged / inverse", 1)[0]
+    symbols = re.findall(r'ticker:\s*"([^"]+)"[^\n]+market:\s*"US"', stock_section)
+    return sorted({s.strip().upper() for s in symbols if s.strip()})
+
+
+def yahoo_symbol_history(symbol: str) -> pd.DataFrame:
+    hosts = ["https://query1.finance.yahoo.com", "https://query2.finance.yahoo.com"]
+    params = {
+        "period1": int(WARMUP.timestamp()),
+        "period2": int((END + pd.Timedelta(days=2)).timestamp()),
+        "interval": "1d",
+        "events": "history",
+        "includeAdjustedClose": "true",
+    }
+    last = None
+    for attempt in range(6):
+        host = hosts[attempt % len(hosts)]
+        try:
+            response = SESSION.get(
+                f"{host}/v8/finance/chart/{symbol}",
+                params=params,
+                timeout=20,
+            )
+            if response.status_code in (429, 500, 502, 503, 504):
+                raise RuntimeError(f"HTTP_{response.status_code}")
+            response.raise_for_status()
+            payload = response.json()
+            result = payload.get("chart", {}).get("result")
+            if not result:
+                raise RuntimeError("YAHOO_EMPTY_RESULT")
+            row = result[0]
+            quote = row.get("indicators", {}).get("quote", [{}])[0]
+            timestamps = row.get("timestamp") or []
+            frame = pd.DataFrame({
+                "symbol": symbol,
+                "timestamp": pd.to_datetime(timestamps, unit="s", utc=True),
+                "open": quote.get("open", []),
+                "high": quote.get("high", []),
+                "low": quote.get("low", []),
+                "close": quote.get("close", []),
+                "volume": quote.get("volume", []),
+            })
+            frame = frame.dropna(subset=["open", "high", "low", "close", "volume"])
+            frame = frame[(frame.timestamp >= WARMUP) & (frame.timestamp <= END)]
+            if len(frame) < 80:
+                raise RuntimeError("YAHOO_HISTORY_TOO_SHORT")
+            return frame.sort_values("timestamp").reset_index(drop=True)
+        except Exception as error:
+            last = error
+            time.sleep(0.5 * (attempt + 1))
+    raise RuntimeError(f"YAHOO_FAILED:{symbol}:{last}")
+
+
+def load_catalog_yahoo_universe() -> tuple[pd.DataFrame, list[pd.Timestamp], dict]:
+    symbols = catalog_us_stock_symbols()
+    frames = []
+    failures = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
+        future_map = {pool.submit(yahoo_symbol_history, symbol): symbol for symbol in symbols}
+        for future in concurrent.futures.as_completed(future_map):
+            symbol = future_map[future]
+            try:
+                frames.append(future.result())
+            except Exception as error:
+                failures.append({"symbol": symbol, "error": str(error)})
+    if len(frames) < 25:
+        raise RuntimeError(f"YAHOO_CATALOG_COVERAGE_TOO_LOW:{len(frames)}")
+
+    candidates = []
+    trading_dates: set[pd.Timestamp] = set()
+    candidate_symbols = 0
+    for g in frames:
+        for dt in g.loc[(g.timestamp >= START) & (g.timestamp <= END), "timestamp"].tolist():
+            trading_dates.add(dt)
+        cand = candidate_features(g)
+        if not cand.empty:
+            candidate_symbols += 1
+            candidates.append(cand)
+    if not candidates:
+        raise RuntimeError("NO_YAHOO_DAILY_MOVER_CANDIDATES")
+    data = pd.concat(candidates, ignore_index=True).sort_values(["timestamp", "symbol"]).reset_index(drop=True)
+    return data, sorted(trading_dates), {
+        "requestedSymbols": len(symbols),
+        "usableSymbols": len(frames),
+        "failedSymbols": len(failures),
+        "candidateSymbols": candidate_symbols,
+        "candidateRows": int(len(data)),
+        "failurePreview": failures[:10],
+    }
 
 
 def ema(s: pd.Series, span: int) -> pd.Series:
@@ -422,10 +518,28 @@ def main() -> None:
         return
 
     started = time.time()
+    source_meta = None
     with tempfile.TemporaryDirectory() as td:
         zip_path = Path(td) / "d_us_txt.zip"
-        download_bulk(zip_path)
-        data, trading_dates, universe = load_universe(zip_path)
+        try:
+            download_bulk(zip_path)
+            data, trading_dates, universe = load_universe(zip_path)
+            source_meta = {
+                "provider": "Stooq bulk daily US ASCII",
+                "url": STOOQ_URL,
+                "scope": "NASDAQ/NYSE/NYSE MKT stock files with a bar on each historical date",
+                "fallbackUsed": False,
+            }
+        except Exception as stooq_error:
+            print(json.dumps({"stooqBulkUnavailable": str(stooq_error), "fallback": "APP_CATALOG_YAHOO"}), flush=True)
+            data, trading_dates, universe = load_catalog_yahoo_universe()
+            source_meta = {
+                "provider": "Yahoo Finance daily chart via app US stock catalog",
+                "url": "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
+                "scope": "current app curated U.S. stock catalog, dynamically re-ranked each trading day",
+                "fallbackUsed": True,
+                "stooqBulkError": str(stooq_error),
+            }
 
     candidates = rule_candidates(data, trading_dates)
     candidates.append(walk_forward_ai(data, BASIC_FEATURES, "DAILY_MOVER_AI_BASIC", trading_dates))
@@ -450,12 +564,10 @@ def main() -> None:
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "period": {"start": START.isoformat(), "end": END.isoformat()},
         "source": {
-            "provider": "Stooq bulk daily US ASCII",
-            "url": STOOQ_URL,
-            "scope": "NASDAQ/NYSE/NYSE MKT stock files with a bar on each historical date",
+            **source_meta,
             "pointInTimeMembershipProven": False,
             "delistedCoverageProven": False,
-            "researchRole": "broad-universe daily-mover proxy, not source-faithful 5m Stocks-in-Play replication",
+            "researchRole": "dynamic daily-mover proxy, not source-faithful 5m Stocks-in-Play replication",
         },
         "universe": universe,
         "selection": {
