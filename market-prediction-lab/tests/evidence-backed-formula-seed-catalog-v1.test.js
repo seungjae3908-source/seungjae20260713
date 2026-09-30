@@ -149,9 +149,9 @@ test("catalog exposes exactly 12 market-horizon profiles with 9 cash READY and 3
 
 test("catalog carries primary-source strategy recipes before any local formula invention", () => {
   const catalog = buildEvidenceBackedFormulaSeedCatalogV1();
-  assert.equal(catalog.referenceRecipeCount, 12);
+  assert.equal(catalog.referenceRecipeCount, 17);
   assert.deepEqual(catalog.referenceRecipes, EVIDENCE_BACKED_REFERENCE_RECIPES);
-  assert.equal(new Set(catalog.referenceRecipes.map((recipe) => recipe.recipeId)).size, 12);
+  assert.equal(new Set(catalog.referenceRecipes.map((recipe) => recipe.recipeId)).size, 17);
   assert.equal(Object.isFrozen(catalog.referenceRecipes), true);
 
   const ep = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "QULLAMAGGIE_EP_V1");
@@ -243,6 +243,66 @@ test("catalog carries primary-source strategy recipes before any local formula i
   assert.equal(faber.localReplicationEvidence.crossWindowStressPositive, true);
   assert.equal(faber.localReplicationEvidence.leaveOneAssetOutStressPositive, true);
   assert.equal(faber.automaticActivationAllowed, false);
+
+  const charting = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "CHARTING_BY_MACHINES_V1");
+  assert.equal(charting.origin, "ACADEMIC_PEER_REVIEWED");
+  assert.equal(charting.markets[0], "US_STOCK");
+  assert.equal(charting.confirmation.outputRole, "CROSS_SECTIONAL_RETURN_RANKING");
+  assert.equal(charting.confirmation.outOfSampleEvaluationRequired, true);
+  assert.equal(charting.sourceEvidence[0].doi, "10.1016/j.jfineco.2024.103791");
+  assert.equal(charting.localReadiness.status, "REFERENCE_ONLY_REQUIRES_LOCAL_REPLICATION");
+  assert.equal(charting.automaticActivationAllowed, false);
+
+  const stocksInPlayOrb = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "STOCKS_IN_PLAY_ORB_5M_V1");
+  assert.equal(stocksInPlayOrb.origin, "ACADEMIC_WORKING_PAPER");
+  assert.equal(stocksInPlayOrb.confirmation.primaryOpeningRangeMinutes, 5);
+  assert.equal(stocksInPlayOrb.confirmation.primaryStocksInPlayCount, 20);
+  assert.deepEqual(stocksInPlayOrb.confirmation.comparisonOpeningRangeMinutes, [15, 30, 60]);
+  assert.equal(stocksInPlayOrb.confirmation.transactionCostsRequired, true);
+  assert.equal(stocksInPlayOrb.sourceEvidence[0].ssrnAbstractId, "4729284");
+  assert.equal(stocksInPlayOrb.localReadiness.status, "REFERENCE_ONLY_REQUIRES_LOCAL_REPLICATION");
+  assert.equal(stocksInPlayOrb.automaticActivationAllowed, false);
+
+  const riskManagedMomentum = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "CRYPTO_RISK_MANAGED_MOMENTUM_V1");
+  assert.equal(riskManagedMomentum.origin, "ACADEMIC_PEER_REVIEWED");
+  assert.equal(riskManagedMomentum.confirmation.formationWeeks, 2);
+  assert.equal(riskManagedMomentum.confirmation.holdingWeeks, 1);
+  assert.equal(riskManagedMomentum.confirmation.portfolioCount, 5);
+  assert.equal(riskManagedMomentum.confirmation.portfolioDefinition, "WINNER_MINUS_LOSER");
+  assert.equal(riskManagedMomentum.sourceEvidence[0].doi, "10.1016/j.frl.2025.107879");
+  assert.equal(riskManagedMomentum.localReadiness.status, "BLOCKED_DATA");
+  assert.equal(riskManagedMomentum.automaticActivationAllowed, false);
+
+  const funding = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "FUNDING_RATE_ARBITRAGE_CEX_DEX_V1");
+  assert.equal(funding.origin, "ACADEMIC_PEER_REVIEWED");
+  assert.deepEqual(funding.markets, ["CRYPTO_FUTURES"]);
+  assert.equal(funding.confirmation.marketNeutralityRequired, true);
+  assert.deepEqual(funding.confirmation.leverageGridFromSourceStudy, [1, 3, 5, 7]);
+  assert.equal(funding.confirmation.sourceReportedBestCaseMayNotSetLocalExpectedReturn, true);
+  assert.equal(funding.requiredDataEvidence.fundingHistoryRequired, true);
+  assert.equal(funding.requiredDataEvidence.liquidationTierHistoryRequired, true);
+  assert.equal(funding.sourceEvidence[0].doi, "10.1016/j.bcra.2025.100354");
+  assert.equal(funding.localReadiness.status, "BLOCKED_DATA");
+  assert.equal(funding.automaticActivationAllowed, false);
+
+  const visualAi = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "MLLM_VISUAL_CHART_CRYPTO_V1");
+  assert.equal(visualAi.origin, "ACADEMIC_IN_PRESS");
+  assert.equal(visualAi.researchRole, "AI_CONTEXT_REFERENCE");
+  assert.deepEqual(visualAi.confirmation.sourceStrategies, [
+    "7_DAY_TRENDLINE",
+    "30_DAY_TRENDLINE_SUPPORT_RESISTANCE",
+    "30_DAY_TAKE_PROFIT_STOP_LOSS",
+  ]);
+  assert.equal(visualAi.confirmation.evaluationDesign, "MONTHLY_ROLLING_ORIGIN");
+  assert.equal(visualAi.confirmation.modelOutputAuthority, "RANKING_CONTEXT_ONLY_NO_EXECUTION_AUTHORITY");
+  assert.equal(visualAi.sourceEvidence[0].doi, "10.1016/j.frl.2026.110663");
+  assert.equal(visualAi.localReadiness.status, "REFERENCE_ONLY_REQUIRES_LOCAL_REPLICATION");
+  assert.equal(visualAi.automaticActivationAllowed, false);
+
+  for (const recipe of [charting, stocksInPlayOrb, riskManagedMomentum, funding, visualAi]) {
+    assert.equal(recipe.localReplicationRequired, true, recipe.recipeId);
+    assert.equal(recipe.automaticActivationAllowed, false, recipe.recipeId);
+  }
 
   const orb = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "ORB_STANDALONE_COST_CONTROL_V1");
   assert.equal(orb.researchRole, "NEGATIVE_CONTROL");
