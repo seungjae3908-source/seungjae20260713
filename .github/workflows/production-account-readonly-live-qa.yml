@@ -17,7 +17,7 @@ on:
         required: true
         type: string
       providers:
-        description: Comma-separated SPOT_LIVE_LIMITED activation target providers (toss,kiwoom,upbit)
+        description: Comma-separated limited-live activation target providers (toss,kiwoom,upbit,bitget)
         required: true
         type: string
 
@@ -68,7 +68,7 @@ jobs:
           requireText(spec, 'Persist bounded, sanitized provider state before any connectivity assertion', 'SANITIZED_FAILURE_DIAGNOSTICS_REQUIRED');
           requireText(spec, 'testedProviders', 'TESTED_PROVIDERS_EVIDENCE_REQUIRED');
           requireText(spec, 'reconciliationPassed', 'TARGET_PROVIDER_RECONCILIATION_REQUIRED');
-          requireText(bridge, "new Set(['toss', 'kiwoom', 'upbit'])", 'BRIDGE_ALLOWED_TARGET_PROVIDERS_REQUIRED');
+          requireText(bridge, "new Set(['toss', 'kiwoom', 'upbit', 'bitget'])", 'BRIDGE_ALLOWED_TARGET_PROVIDERS_REQUIRED');
           requireText(bridge, 'inputs: { sha: target, providers }', 'BRIDGE_TARGET_PROVIDER_DISPATCH_REQUIRED');
           const adapter = fs.readFileSync('api-server/src/services/trade-exchange-adapters.service.ts', 'utf8');
           const runtime = fs.readFileSync('api-server/src/features/account-readonly/account-readonly.runtime.ts', 'utf8');
@@ -199,7 +199,7 @@ jobs:
           const fs = require('node:fs');
           const [file, expectedSha, rawTargetProviders] = process.argv.slice(2);
           const value = JSON.parse(fs.readFileSync(file, 'utf8'));
-          const allowedTargets = new Set(['toss', 'kiwoom', 'upbit']);
+          const allowedTargets = new Set(['toss', 'kiwoom', 'upbit', 'bitget']);
           const requestedProviders = String(rawTargetProviders ?? '').split(',').filter(Boolean);
           const expectedTestedProviders = [...requestedProviders].sort();
           if (requestedProviders.length === 0
@@ -266,7 +266,7 @@ jobs:
             echo '- Credential source: member-scoped encrypted Production Vault'
             echo "- Activation target providers: $PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS"
             echo '- Target provider contract: CONNECTED, fresh, reconciliation PASS'
-            echo '- Bitget: retained as non-blocking read-only diagnostic unless it becomes an allowed activation target'
+            echo '- Bitget: non-blocking diagnostic unless explicitly selected as a futures activation target'
             echo '- Account/holding/order values retained in evidence: false'
             echo '- Provider Secret values retained in evidence: false'
             echo '- Actual orders/cancels/amends/transfers/withdrawals: 0'
