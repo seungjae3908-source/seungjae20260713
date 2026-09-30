@@ -3,7 +3,9 @@ import type { TradingRepository } from './trade-automation.repository';
 import {
   TradeAutomationService,
   automaticLiveExecutionEnabled,
+  liveCapabilityDecision,
   liveExecutionEnabled,
+  livePlanCapabilityDecision,
 } from './trade-automation.service';
 import { TradeCancelReconciliationService } from './trade-cancel-reconciliation.service';
 import { TradeOrderRecoveryService } from './trade-order-recovery.service';
@@ -70,10 +72,6 @@ import {
   type PreSubmissionRiskResult,
 } from './trade-pre-submission-risk.service';
 import { getScannerSignalLifecycleSnapshot } from './scanner-signal-lifecycle.service';
-import {
-  spotLiveCapabilityDecision,
-  spotLivePlanCapabilityDecision,
-} from './spot-live-limited-capability.service';
 import type {
   TradingExchange,
   TradingOrder,
@@ -416,7 +414,7 @@ export class TradeExecutionService {
 
     try {
       for (const capability of ['BALANCE_READ', 'POSITION_READ'] as const) {
-        const decision = spotLiveCapabilityDecision({ exchange, capability });
+        const decision = liveCapabilityDecision(exchange, capability);
         if (!decision.allowed) {
           throw new Error(`SPOT_LIVE_CAPABILITY_BLOCKED:${decision.blockCodes.join(',')}`);
         }
@@ -545,7 +543,7 @@ export class TradeExecutionService {
       }
       const currentPolicy = await this.repository.getPolicy(userId);
       const automaticLive = currentPolicy.mode === 'automatic' && currentPolicy.automaticEnabled;
-      const capabilityDecision = spotLivePlanCapabilityDecision(plan, 'ORDER_CREATE');
+      const capabilityDecision = livePlanCapabilityDecision(plan, 'ORDER_CREATE');
       const currentLiveAuthority = automaticLive
         ? automaticLiveExecutionEnabled(plan.exchange)
         : liveExecutionEnabled(plan.exchange);
