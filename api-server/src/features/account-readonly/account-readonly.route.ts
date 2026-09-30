@@ -10,6 +10,7 @@ import {
   type AccountReadonlyCredentialRepository,
   type ReadonlyCredentialProvider,
 } from './account-readonly.repository';
+import { serializeBitgetReadonlyDiagnostic } from './account-readonly.errors';
 import { AccountReadonlyService } from './account-readonly.service';
 
 const PROVIDERS = new Set<AccountProvider>(['toss', 'kiwoom', 'upbit', 'bitget']);
@@ -256,6 +257,10 @@ export function createAccountReadonlyRouter(service: AccountReadonlyService): IR
     const cleanupDisconnectAbort = bindAccountReadonlyDisconnectAbort(req, res, controller);
     try {
       const snapshot = await service.read({ userId, accessToken }, provider, controller.signal);
+      const bitgetDiagnostic = service.bitgetDiagnosticFor(snapshot);
+      if (bitgetDiagnostic) {
+        res.setHeader('X-Account-Readonly-Bitget-Diagnostic', serializeBitgetReadonlyDiagnostic(bitgetDiagnostic));
+      }
       if (!res.writableEnded) return res.json(snapshot);
     } finally {
       cleanupDisconnectAbort();
