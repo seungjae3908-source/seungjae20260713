@@ -1,6 +1,5 @@
 import type { TradingRepository } from './trade-automation.repository';
-import { TradeAutomationService } from './trade-automation.service';
-import { spotLiveCapabilityDecision } from './spot-live-limited-capability.service';
+import { TradeAutomationService, liveCapabilityDecision } from './trade-automation.service';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
 import { isTransientTradingProviderError, tradingProviderHttpErrorCode, tradingProviderNetworkErrorCode, tradingProviderTimeoutCode } from './trade-provider-http-error.service';
 import {
@@ -580,10 +579,7 @@ export class TradeOrderRecoveryService {
     if (plan.accountMode === 'paper' || plan.accountMode === 'mock') {
       return this.pending(order, 'PAPER_ORDER_RECOVERY_REQUIRES_REVIEW', true);
     }
-    const readCapability = spotLiveCapabilityDecision({
-      exchange: plan.exchange,
-      capability: 'OPEN_ORDER_READ',
-    });
+    const readCapability = liveCapabilityDecision(plan.exchange, 'OPEN_ORDER_READ');
     if (!readCapability.allowed) {
       return this.pending(
         order,
