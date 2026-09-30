@@ -133,7 +133,7 @@ async function bitgetFailureCode(response: Response) {
 }
 
 function classifyBitgetApplicationCode(code: string | null) {
-  if (code === '25245') return new AccountReadonlyError('BITGET_NOT_UTA');
+  if (code === '25245' || code === '40084') return new AccountReadonlyError('BITGET_NOT_UTA');
   if (code === '40018' || code === '40038') return new AccountReadonlyError('BITGET_IP_NOT_ALLOWED');
   if (code === '40014' || code === '40025' || code === '40040') return new AccountReadonlyError('BITGET_PERMISSION_DENIED');
   if (code === '40006' || code === '40009' || code === '40012' || code === '40036' || code === '40037') {
