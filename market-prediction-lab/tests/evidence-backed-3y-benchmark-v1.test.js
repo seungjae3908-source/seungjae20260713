@@ -157,6 +157,31 @@ test("TSMOM proxy uses only prior closed bars and applies turnover cost", () => 
   assert.equal(longOnly.sourceFaithfulReplication, false);
 });
 
+test("relative momentum ranking uses the prior closed bar and cannot capture the ranking bar move", () => {
+  const start = BENCHMARK_PERIOD.startTime;
+  const intervalMs = 86_400_000;
+  const a = [];
+  const b = [];
+  for (let index = 0; index < 20; index += 1) {
+    const aClose = index === 6 ? 200 : index > 6 ? 200 : 100;
+    const bClose = 100 + index * 2;
+    a.push({ timestamp: start + index * intervalMs, close: aClose });
+    b.push({ timestamp: start + index * intervalMs, close: bClose });
+  }
+  const result = runCrossSectionalMomentumProxy({
+    datasets: [
+      { symbol: "A", candles: a },
+      { symbol: "B", candles: b },
+    ],
+    lookbackBars: 5,
+    rebalanceBars: 1,
+    perSideCostBps: 0,
+    longShort: false,
+    barsPerYear: 252,
+  });
+  assert.ok(result.performance.totalReturn < 0.5, "current-bar spike must not be captured by same-bar ranking");
+});
+
 test("relative momentum proxy is deterministic and cost-aware", () => {
   const intervalMs = 86_400_000;
   const first = candles({ count: 320, intervalMs, drift: 0.002 });
