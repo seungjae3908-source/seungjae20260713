@@ -1,0 +1,93 @@
+name: Prediction Lab Public Evidence Alpha 3Y V1
+
+on:
+  push:
+    branches:
+      - research/public-evidence-alpha-3y-v1-20260930
+    paths:
+      - market-prediction-lab/src/public-evidence-alpha-3y-v1.js
+      - market-prediction-lab/tests/public-evidence-alpha-3y-v1.test.js
+      - market-prediction-lab/scripts/run-public-evidence-alpha-3y-v1.js
+      - .github/workflows/prediction-lab-public-evidence-alpha-3y-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-evidence-alpha-3y-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: Public evidence alpha 3Y benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - name: Checkout exact branch revision
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Verify research-only safety envelope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$LIVE_TRADING" = "false"
+          test "$AUTO_TRADING" = "false"
+          test "$REAL_ORDER_ENABLED" = "false"
+          test "$PRIVATE_TRADING_API_ALLOWED" = "false"
+          test "$EXECUTION_AUTHORITY" = "NONE"
+
+      - name: Run focused evidence-alpha tests
+        working-directory: market-prediction-lab
+        run: node --test tests/public-evidence-alpha-3y-v1.test.js
+
+      - name: Run three-year public evidence-alpha benchmark
+        working-directory: market-prediction-lab
+        run: node scripts/run-public-evidence-alpha-3y-v1.js docs/public-evidence-alpha-3y-v1-result.json
+
+      - name: Assert bounded truth
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const report = JSON.parse(await readFile("docs/public-evidence-alpha-3y-v1-result.json", "utf8"));
+          if (report?.safety?.executionAuthority !== "NONE") throw new Error("EXECUTION_AUTHORITY_ESCALATION");
+          if (report?.safety?.profitabilityProven !== false) throw new Error("PROFITABILITY_FALSE_CLAIM");
+          if (report?.safety?.economicCreditGranted !== false) throw new Error("ECONOMIC_CREDIT_FALSE_CLAIM");
+          if (report?.methodology?.sourcePaperReturnsUsedAsLocalExpectedReturn !== false) throw new Error("SOURCE_RETURN_GENERALIZATION");
+          if (!Array.isArray(report?.results)) throw new Error("RESULTS_MISSING");
+          for (const row of report.results.filter((item) => item.status === "MEASURED_PROXY")) {
+            const keys = Object.keys(row?.periodAnalysis?.windows ?? {});
+            const required = ["DAILY","WEEKLY","MONTHLY","SIX_MONTH","YEARLY","THREE_YEAR"];
+            if (required.some((key) => !keys.includes(key))) throw new Error(`PERIOD_WINDOWS_MISSING:${row.market}`);
+            if (row.promotionEligible !== false || row.profitabilityCredit !== 0) throw new Error(`UNSAFE_PROMOTION:${row.market}`);
+          }
+          console.log(JSON.stringify({
+            status: report.status,
+            measuredCount: report.results.filter((row) => row.status === "MEASURED_PROXY").length,
+            errors: report.errors,
+          }, null, 2));
+          NODE
+
+      - name: Upload benchmark artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-evidence-alpha-3y-v1-${{ github.sha }}
+          path: market-prediction-lab/docs/public-evidence-alpha-3y-v1-result.json
+          if-no-files-found: error
+          retention-days: 14
