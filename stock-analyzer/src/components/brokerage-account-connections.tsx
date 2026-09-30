@@ -18,9 +18,63 @@ type CanonicalAccountSnapshot = {
   credentialsReturned: false; liveTradingEnabled: false; autoTradingEnabled: false;
 };
 type CredentialDraft = { first: string; second: string; third: string };
+type BitgetUiDiagnostic = {
+  httpStatus: number;
+  applicationCode: string | null;
+  endpointFamily: 'UTA_V3' | 'CLASSIC';
+  probe: 'ACCOUNT_SETTINGS' | 'ACCOUNT_INFO' | 'ASSETS' | 'POSITIONS' | 'OPEN_ORDERS';
+  sanitizedClassification: string;
+  fallbackAttempted: boolean;
+  timestampRejected: boolean;
+  productionHost: boolean;
+};
 type Props = { canAccessSpot?: boolean; canAccessFutures?: boolean };
 
 const EMPTY_CREDENTIALS: CredentialDraft = { first: '', second: '', third: '' };
+const BITGET_ENDPOINT_FAMILIES = new Set<BitgetUiDiagnostic['endpointFamily']>(['UTA_V3', 'CLASSIC']);
+const BITGET_PROBES = new Set<BitgetUiDiagnostic['probe']>(['ACCOUNT_SETTINGS', 'ACCOUNT_INFO', 'ASSETS', 'POSITIONS', 'OPEN_ORDERS']);
+
+function parseBitgetUiDiagnostic(value: string | null): BitgetUiDiagnostic | null {
+  if (!value) return null;
+  try {
+    const raw: unknown = JSON.parse(value);
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const row = raw as Record<string, unknown>;
+    const httpStatus = Number(row.httpStatus);
+    const endpointFamily = typeof row.endpointFamily === 'string' ? row.endpointFamily : '';
+    const probe = typeof row.probe === 'string' ? row.probe : '';
+    const applicationCode = typeof row.applicationCode === 'string' || typeof row.applicationCode === 'number'
+      ? String(row.applicationCode) : null;
+    const sanitizedClassification = typeof row.sanitizedClassification === 'string'
+      ? row.sanitizedClassification : '';
+    if (
+      row.provider !== 'bitget'
+      || row.requestMethod !== 'GET'
+      || !Number.isInteger(httpStatus)
+      || httpStatus < 100
+      || httpStatus > 599
+      || !BITGET_ENDPOINT_FAMILIES.has(endpointFamily as BitgetUiDiagnostic['endpointFamily'])
+      || !BITGET_PROBES.has(probe as BitgetUiDiagnostic['probe'])
+      || (applicationCode !== null && !/^\d+$/.test(applicationCode))
+      || !/^[A-Z0-9_]{1,80}$/.test(sanitizedClassification)
+      || typeof row.fallbackAttempted !== 'boolean'
+      || typeof row.timestampRejected !== 'boolean'
+      || typeof row.productionHost !== 'boolean'
+    ) return null;
+    return {
+      httpStatus,
+      applicationCode,
+      endpointFamily: endpointFamily as BitgetUiDiagnostic['endpointFamily'],
+      probe: probe as BitgetUiDiagnostic['probe'],
+      sanitizedClassification,
+      fallbackAttempted: row.fallbackAttempted,
+      timestampRejected: row.timestampRejected,
+      productionHost: row.productionHost,
+    };
+  } catch {
+    return null;
+  }
+}
 
 function evidenceAvailable(snapshot?: CanonicalAccountSnapshot) {
   if (!snapshot) return true;
@@ -90,8 +144,24 @@ async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
   return payload;
 }
 
+async function accountSnapshotRequest(provider: Provider, signal: AbortSignal) {
+  const response = await authorizedFetch(`/api/accounts/read-only/${provider}`, {
+    signal,
+    headers: { 'Content-Type': 'application/json' },
+  });
+  const payload = await response.json() as CanonicalAccountSnapshot & { error?: string; errorCode?: string };
+  if (!response.ok) throw new Error(payload.errorCode ?? payload.error ?? `HTTP_${response.status}`);
+  return {
+    snapshot: payload,
+    bitgetDiagnostic: provider === 'bitget'
+      ? parseBitgetUiDiagnostic(response.headers.get('X-Account-Readonly-Bitget-Diagnostic'))
+      : null,
+  };
+}
+
 export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFutures = true }: Props) {
   const [snapshots, setSnapshots] = useState<Partial<Record<Provider, CanonicalAccountSnapshot>>>({});
+  const [bitgetDiagnostic, setBitgetDiagnostic] = useState<BitgetUiDiagnostic | null>(null);
   const [kiwoomSupported, setKiwoomSupported] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -118,15 +188,17 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
     setLoading(true); setError('');
     const results = await Promise.all(enabledProviders().map(async (provider) => {
       try {
-        const value = await jsonRequest<CanonicalAccountSnapshot>(`/api/accounts/read-only/${provider}`, { signal: controller.signal });
-        return { provider, value, error: null as string | null };
+        const result = await accountSnapshotRequest(provider, controller.signal);
+        return { provider, value: result.snapshot, bitgetDiagnostic: result.bitgetDiagnostic, error: null as string | null };
       } catch (cause) {
-        if (controller.signal.aborted) return { provider, value: null, error: null };
-        return { provider, value: null, error: cause instanceof Error ? cause.message : 'ACCOUNT_READ_FAILED' };
+        if (controller.signal.aborted) return { provider, value: null, bitgetDiagnostic: null, error: null };
+        return { provider, value: null, bitgetDiagnostic: null, error: cause instanceof Error ? cause.message : 'ACCOUNT_READ_FAILED' };
       }
     }));
     if (controller.signal.aborted || sequence !== requestSequence.current) return;
     setSnapshots((current) => { const next = { ...current }; for (const result of results) if (result.value) next[result.provider] = result.value; return next; });
+    const bitgetResult = results.find((result) => result.provider === 'bitget');
+    setBitgetDiagnostic(bitgetResult?.value?.connected === true ? null : bitgetResult?.bitgetDiagnostic ?? null);
     setError(results.filter((result) => result.error).map((result) => `${result.provider.toUpperCase()}: ${result.error}`).join(' · '));
     setLoading(false);
   }, [enabledProviders]);
@@ -240,18 +312,18 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
       <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-toss"><div className="flex min-w-0 items-center justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-semibold">Toss · 국내/미국주식</p><p className="mt-0.5 text-xs text-muted-foreground">국내·미국 보유자산 조회</p></div><Status snapshot={toss} /></div>
         <div className="mt-3 grid grid-cols-3 gap-2 text-xs"><Metric label="연결 계좌" value={countMetric(toss, Array.isArray(toss?.accounts) ? toss.accounts.length : null, '개 시장')} /><Metric label="보유 종목" value={countMetric(toss, Array.isArray(toss?.positions) ? knownNonZeroCount(tossPositions, (row) => row.quantity) : null, '종목')} /><Metric label="미체결" value={countMetric(toss, Array.isArray(toss?.openOrders) ? toss.openOrders.length : null, '건')} /></div>
         <div className="mt-2 max-h-44 space-y-1 overflow-y-auto overscroll-contain">{visibleTossPositions.slice(0, 8).map((row, index) => <div key={`${row.symbol}-${index}`} className="rounded-xl bg-secondary/60 px-3 py-2 text-xs"><div className="flex min-w-0 items-center justify-between gap-3"><span className="min-w-0 truncate font-semibold">{row.symbol} · {row.market}</span><span className="shrink-0">{amount(toss, row.quantity)}</span></div><p className="mt-1 text-xs text-muted-foreground">평가 {amount(toss, row.marketValue)} · 손익 {amount(toss, row.unrealizedPnl)}</p></div>)}</div>
-        <ConnectionActions provider="toss" configured={credentialKnownConfigured(toss)} disconnecting={disconnecting === 'toss'} onSetup={() => openSetup('toss')} onDisconnect={() => void disconnect('toss')} /><ErrorLine value={toss?.errorCode} />
+        <ProviderReadMetadata provider="toss" snapshot={toss} /><ConnectionActions provider="toss" configured={credentialKnownConfigured(toss)} disconnecting={disconnecting === 'toss'} onSetup={() => openSetup('toss')} onDisconnect={() => void disconnect('toss')} /><ErrorLine value={toss?.errorCode} />
       </article>
 
       {kiwoomSupported ? <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-kiwoom"><div className="flex min-w-0 items-center justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-semibold">Kiwoom · 국내/미국주식</p><p className="mt-0.5 text-xs text-muted-foreground">공식 REST KR/US 잔고·미체결 조회</p></div><Status snapshot={kiwoom} /></div>
         <div className="mt-3 grid grid-cols-2 gap-2 text-xs"><Metric label="예수금" value={amount(kiwoom, Array.isArray(kiwoom?.balances) ? kiwoom.balances.find((row) => row.currency === 'KRW')?.total ?? null : null, 'KRW')} /><Metric label="주문가능" value={amount(kiwoom, Array.isArray(kiwoom?.accounts) ? kiwoom.accounts.find((row) => row.market === 'KR')?.buyingPower ?? null : null, 'KRW')} /><Metric label="보유 종목" value={countMetric(kiwoom, Array.isArray(kiwoom?.positions) ? knownNonZeroCount(kiwoomPositions, (row) => row.quantity) : null, '종목')} /><Metric label="미체결" value={countMetric(kiwoom, Array.isArray(kiwoom?.openOrders) ? kiwoom.openOrders.length : null, '건')} /></div>
         <div className="mt-2 max-h-44 space-y-1 overflow-y-auto overscroll-contain">{visibleKiwoomPositions.slice(0, 8).map((row, index) => <div key={`${row.symbol}-${index}`} className="rounded-xl bg-secondary/60 px-3 py-2 text-xs"><div className="flex min-w-0 items-center justify-between gap-3"><span className="min-w-0 truncate font-semibold">{row.symbol} · {row.market}</span><span className="shrink-0">{amount(kiwoom, row.quantity)}</span></div><p className="mt-1 text-xs text-muted-foreground">평가 {amount(kiwoom, row.marketValue, 'KRW')} · 손익 {amount(kiwoom, row.unrealizedPnl, 'KRW')}</p></div>)}</div>
-        <ConnectionActions provider="kiwoom" configured={credentialKnownConfigured(kiwoom)} disconnecting={disconnecting === 'kiwoom'} onSetup={() => openSetup('kiwoom')} onDisconnect={() => void disconnect('kiwoom')} /><ErrorLine value={kiwoom?.errorCode} />
+        <ProviderReadMetadata provider="kiwoom" snapshot={kiwoom} /><ConnectionActions provider="kiwoom" configured={credentialKnownConfigured(kiwoom)} disconnecting={disconnecting === 'kiwoom'} onSetup={() => openSetup('kiwoom')} onDisconnect={() => void disconnect('kiwoom')} /><ErrorLine value={kiwoom?.errorCode} />
       </article> : null}
 
-      {canAccessSpot ? <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-upbit"><div className="flex min-w-0 items-center justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-semibold">Upbit · 코인 현물</p><p className="mt-0.5 text-xs text-muted-foreground">현물 보유자산·미체결 조회</p></div><Status snapshot={upbit} /></div><div className="mt-3 grid grid-cols-2 gap-2 text-xs"><Metric label="보유 자산" value={countMetric(upbit, Array.isArray(upbit?.balances) ? knownNonZeroCount(upbitBalances, (row) => row.total) : null, '개')} /><Metric label="미체결" value={countMetric(upbit, Array.isArray(upbit?.openOrders) ? upbit.openOrders.length : null, '건')} /></div><div className="mt-2 max-h-40 space-y-1 overflow-y-auto overscroll-contain">{visibleUpbitBalances.slice(0, 10).map((row) => <div key={row.currency} className="flex min-w-0 items-center justify-between gap-3 rounded-xl bg-secondary/60 px-3 py-2 text-xs"><span className="min-w-0 truncate font-semibold">{row.currency}</span><span className="shrink-0 tabular-nums">{amount(upbit, row.total, row.currency)}</span></div>)}</div><ConnectionActions provider="upbit" configured={credentialKnownConfigured(upbit)} disconnecting={disconnecting === 'upbit'} onSetup={() => openSetup('upbit')} onDisconnect={() => void disconnect('upbit')} /><ErrorLine value={upbit?.errorCode} /></article> : null}
+      {canAccessSpot ? <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-upbit"><div className="flex min-w-0 items-center justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-semibold">Upbit · 코인 현물</p><p className="mt-0.5 text-xs text-muted-foreground">현물 보유자산·미체결 조회</p></div><Status snapshot={upbit} /></div><div className="mt-3 grid grid-cols-2 gap-2 text-xs"><Metric label="보유 자산" value={countMetric(upbit, Array.isArray(upbit?.balances) ? knownNonZeroCount(upbitBalances, (row) => row.total) : null, '개')} /><Metric label="미체결" value={countMetric(upbit, Array.isArray(upbit?.openOrders) ? upbit.openOrders.length : null, '건')} /></div><div className="mt-2 max-h-40 space-y-1 overflow-y-auto overscroll-contain">{visibleUpbitBalances.slice(0, 10).map((row) => <div key={row.currency} className="flex min-w-0 items-center justify-between gap-3 rounded-xl bg-secondary/60 px-3 py-2 text-xs"><span className="min-w-0 truncate font-semibold">{row.currency}</span><span className="shrink-0 tabular-nums">{amount(upbit, row.total, row.currency)}</span></div>)}</div><ProviderReadMetadata provider="upbit" snapshot={upbit} /><ConnectionActions provider="upbit" configured={credentialKnownConfigured(upbit)} disconnecting={disconnecting === 'upbit'} onSetup={() => openSetup('upbit')} onDisconnect={() => void disconnect('upbit')} /><ErrorLine value={upbit?.errorCode} /></article> : null}
 
-      {canAccessFutures ? <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-bitget"><div className="flex min-w-0 items-center justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-semibold">Bitget · 코인 선물</p><p className="mt-0.5 text-xs text-muted-foreground">선물 포지션·미체결 조회</p></div><Status snapshot={bitget} /></div><div className="mt-3 grid grid-cols-3 gap-2 text-xs"><Metric label="선물 계정" value={countMetric(bitget, Array.isArray(bitget?.accounts) ? bitget.accounts.length : null, '개')} /><Metric label="열린 포지션" value={countMetric(bitget, Array.isArray(bitget?.positions) ? knownNonZeroCount(bitgetPositions, (row) => row.quantity) : null, '개')} /><Metric label="미체결" value={countMetric(bitget, Array.isArray(bitget?.openOrders) ? bitget.openOrders.length : null, '건')} /></div><div className="mt-2 max-h-44 space-y-1 overflow-y-auto overscroll-contain">{visibleBitgetPositions.slice(0, 8).map((row, index) => <div key={`${row.symbol}-${row.side}-${index}`} className="rounded-xl bg-secondary/60 px-3 py-2 text-xs"><div className="flex min-w-0 items-center justify-between gap-3"><span className="min-w-0 truncate font-semibold">{row.symbol} · {accountEvidence(bitget, row.side)}</span><span className="shrink-0">{amount(bitget, row.quantity)}</span></div><p className="mt-1 break-words text-xs text-muted-foreground">레버리지 {amount(bitget, row.leverage, null, 'x')} · 미실현 {amount(bitget, row.unrealizedPnl)}</p></div>)}</div><ConnectionActions provider="bitget" configured={credentialKnownConfigured(bitget)} disconnecting={disconnecting === 'bitget'} onSetup={() => openSetup('bitget')} onDisconnect={() => void disconnect('bitget')} /><ErrorLine value={bitget?.errorCode} /></article> : null}
+      {canAccessFutures ? <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-bitget"><div className="flex min-w-0 items-center justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-semibold">Bitget · 코인 선물</p><p className="mt-0.5 text-xs text-muted-foreground">선물 포지션·미체결 조회</p></div><Status snapshot={bitget} /></div><div className="mt-3 grid grid-cols-3 gap-2 text-xs"><Metric label="선물 계정" value={countMetric(bitget, Array.isArray(bitget?.accounts) ? bitget.accounts.length : null, '개')} /><Metric label="열린 포지션" value={countMetric(bitget, Array.isArray(bitget?.positions) ? knownNonZeroCount(bitgetPositions, (row) => row.quantity) : null, '개')} /><Metric label="미체결" value={countMetric(bitget, Array.isArray(bitget?.openOrders) ? bitget.openOrders.length : null, '건')} /></div><div className="mt-2 max-h-44 space-y-1 overflow-y-auto overscroll-contain">{visibleBitgetPositions.slice(0, 8).map((row, index) => <div key={`${row.symbol}-${row.side}-${index}`} className="rounded-xl bg-secondary/60 px-3 py-2 text-xs"><div className="flex min-w-0 items-center justify-between gap-3"><span className="min-w-0 truncate font-semibold">{row.symbol} · {accountEvidence(bitget, row.side)}</span><span className="shrink-0">{amount(bitget, row.quantity)}</span></div><p className="mt-1 break-words text-xs text-muted-foreground">레버리지 {amount(bitget, row.leverage, null, 'x')} · 미실현 {amount(bitget, row.unrealizedPnl)}</p></div>)}</div><ProviderReadMetadata provider="bitget" snapshot={bitget} /><ConnectionActions provider="bitget" configured={credentialKnownConfigured(bitget)} disconnecting={disconnecting === 'bitget'} onSetup={() => openSetup('bitget')} onDisconnect={() => void disconnect('bitget')} /><ErrorLine value={bitget?.errorCode} /><BitgetDiagnosticLine snapshot={bitget} diagnostic={bitgetDiagnostic} /></article> : null}
     </div>
 
     <p className="mt-3 text-center text-xs text-muted-foreground">최근 확인 {latestCheckedAt(enabledProviders().map((provider) => snapshots[provider]))}</p>
@@ -267,6 +339,8 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
 function providerLabel(provider: CredentialProvider) { return provider === 'toss' ? 'Toss' : provider === 'kiwoom' ? 'Kiwoom' : provider === 'upbit' ? 'Upbit' : 'Bitget'; }
 function latestCheckedAt(values: Array<CanonicalAccountSnapshot | undefined>) { const timestamps = values.map((value) => value?.checkedAt).filter((value): value is string => Boolean(value)); if (!timestamps.length) return resolveEvidenceDisplay({ value: null }).display; return new Date(timestamps.sort().at(-1)!).toLocaleString('ko-KR'); }
 function errorGuide(value: string) {
+  if (value === 'TOSS_AUTH_FAILED') return 'Toss Client ID / Client Secret 인증을 확인해 주세요.';
+  if (value === 'TOSS_IP_NOT_ALLOWED') return 'Toss Open API 허용 IP를 확인해 주세요.';
   if (value === 'UPBIT_IP_NOT_ALLOWED') return 'Upbit API 허용 IP에 서버 출구 IP를 등록해 주세요.';
   if (value === 'UPBIT_PERMISSION_DENIED') return 'Upbit API Key의 자산·주문조회 권한을 확인해 주세요.';
   if (value === 'UPBIT_AUTH_FAILED') return 'Upbit Access/Secret Key를 다시 확인해 주세요.';
@@ -284,6 +358,19 @@ function errorGuide(value: string) {
 function ErrorLine({ value }: { value?: string | null }) {
   if (!value || value === 'ACCOUNT_READ_DISABLED' || value === 'ACCOUNT_NOT_CONFIGURED') return null;
   return <p className="mt-2 break-words text-center text-xs font-semibold text-warning">{errorGuide(value)} <span className="font-mono text-[10px] opacity-70">({value})</span></p>;
+}
+function ProviderReadMetadata({ provider, snapshot }: { provider: Provider; snapshot?: CanonicalAccountSnapshot }) {
+  const configured = credentialKnownConfigured(snapshot);
+  const checkedAt = snapshot?.checkedAt ? new Date(snapshot.checkedAt).toLocaleString('ko-KR') : '확인 전';
+  const freshness = snapshot ? (snapshot.stale ? '오래된 데이터' : snapshot.connected ? '최신' : '확인 불가') : '확인 전';
+  const connection = snapshot?.connected ? '연결됨' : '미연결';
+  return <p data-testid={`account-readonly-metadata-${provider}`} className="mt-2 text-center text-[11px] leading-5 text-muted-foreground">조회 키 {configured ? '저장됨' : '미저장'} · 마지막 확인 {checkedAt} · {connection} · {freshness} · 최근 오류 {snapshot?.errorCode ?? '없음'}</p>;
+}
+function BitgetDiagnosticLine({ snapshot, diagnostic }: { snapshot?: CanonicalAccountSnapshot; diagnostic: BitgetUiDiagnostic | null }) {
+  if (snapshot?.connected === true || !diagnostic) return null;
+  const mode = diagnostic.endpointFamily === 'UTA_V3' ? 'UTA' : 'Classic';
+  const code = diagnostic.applicationCode ? ` · code ${diagnostic.applicationCode}` : '';
+  return <p data-testid="bitget-readonly-diagnostic" className="mt-2 break-words text-center text-xs font-semibold text-warning">Bitget 인증 진단 · HTTP {diagnostic.httpStatus}{code} · {mode} · {diagnostic.probe} · fallback={String(diagnostic.fallbackAttempted)} · {diagnostic.sanitizedClassification} · timestampRejected={String(diagnostic.timestampRejected)} · productionHost={String(diagnostic.productionHost)}</p>;
 }
 function Metric({ label, value }: { label: string; value: string }) { return <div className="min-w-0 rounded-xl bg-secondary/60 p-2 text-center"><p className="truncate text-xs text-muted-foreground">{label}{' '}</p><p className="mt-1 truncate font-semibold">{value}</p></div>; }
 function ConnectionActions({ provider, configured, disconnecting, onSetup, onDisconnect }: { provider: CredentialProvider; configured: boolean; disconnecting: boolean; onSetup: () => void; onDisconnect: () => void }) {
