@@ -29,6 +29,10 @@ type StrategyReadinessKey =
   | 'crossVenueCostReady'
   | 'multiLegExecutionAdapterReady';
 
+function readinessRequirements(...keys: StrategyReadinessKey[]): readonly StrategyReadinessKey[] {
+  return Object.freeze(keys);
+}
+
 export type EvidenceBackedAutoStrategyDefinition = Readonly<{
   strategyId: EvidenceBackedAutoStrategyId;
   label: string;
@@ -48,7 +52,7 @@ export const EVIDENCE_BACKED_AUTO_STRATEGIES: readonly EvidenceBackedAutoStrateg
       market: 'CROSS_VENUE_CRYPTO',
       researchRole: 'market-neutral cross-venue arbitrage',
       defaultState: 'NO_TRADE',
-      paperRequirements: Object.freeze([
+      paperRequirements: readinessRequirements(
         'publicDataReady',
         'sourceFaithfulReplicationReady',
         'oosPassed',
@@ -59,7 +63,7 @@ export const EVIDENCE_BACKED_AUTO_STRATEGIES: readonly EvidenceBackedAutoStrateg
         'atomicHedgeReady',
         'crossVenueCostReady',
         'multiLegExecutionAdapterReady',
-      ]),
+      ),
       livePromotionAlwaysServerAttested: true,
       automaticLivePromotionAllowed: false,
     }),
@@ -69,7 +73,7 @@ export const EVIDENCE_BACKED_AUTO_STRATEGIES: readonly EvidenceBackedAutoStrateg
       market: 'US_STOCK',
       researchRole: 'intraday candidate selection + opening-range continuation',
       defaultState: 'NO_TRADE',
-      paperRequirements: Object.freeze([
+      paperRequirements: readinessRequirements(
         'publicDataReady',
         'sourceFaithfulReplicationReady',
         'oosPassed',
@@ -80,7 +84,7 @@ export const EVIDENCE_BACKED_AUTO_STRATEGIES: readonly EvidenceBackedAutoStrateg
         'intraday5mReady',
         'first5mRvolReady',
         'openingRangeReady',
-      ]),
+      ),
       livePromotionAlwaysServerAttested: true,
       automaticLivePromotionAllowed: false,
     }),
@@ -90,7 +94,7 @@ export const EVIDENCE_BACKED_AUTO_STRATEGIES: readonly EvidenceBackedAutoStrateg
       market: 'CRYPTO_SPOT',
       researchRole: 'multi-exchange order-flow candidate ranker + selective long',
       defaultState: 'NO_TRADE',
-      paperRequirements: Object.freeze([
+      paperRequirements: readinessRequirements(
         'publicDataReady',
         'sourceFaithfulReplicationReady',
         'oosPassed',
@@ -99,7 +103,7 @@ export const EVIDENCE_BACKED_AUTO_STRATEGIES: readonly EvidenceBackedAutoStrateg
         'strategyHealthPassed',
         'multiExchangeOrderFlowReady',
         'modelFrozen',
-      ]),
+      ),
       livePromotionAlwaysServerAttested: true,
       automaticLivePromotionAllowed: false,
     }),
@@ -109,7 +113,7 @@ export const EVIDENCE_BACKED_AUTO_STRATEGIES: readonly EvidenceBackedAutoStrateg
       market: 'KR_STOCK',
       researchRole: 'Korea nonlinear chart ranker + selective long',
       defaultState: 'NO_TRADE',
-      paperRequirements: Object.freeze([
+      paperRequirements: readinessRequirements(
         'publicDataReady',
         'sourceFaithfulReplicationReady',
         'oosPassed',
@@ -118,7 +122,7 @@ export const EVIDENCE_BACKED_AUTO_STRATEGIES: readonly EvidenceBackedAutoStrateg
         'strategyHealthPassed',
         'pitUniverseReady',
         'modelFrozen',
-      ]),
+      ),
       livePromotionAlwaysServerAttested: true,
       automaticLivePromotionAllowed: false,
     }),
