@@ -424,13 +424,6 @@ jobs:
               'TELEGRAM_CHAT_ID',
               'TELEGRAM_STOCK_CHAT_ID',
               'TELEGRAM_CRYPTO_CHAT_ID',
-              'TELEGRAM_KR_STOCK_CHAT_ID',
-              'TELEGRAM_US_STOCK_CHAT_ID',
-              'TELEGRAM_CRYPTO_SPOT_CHAT_ID',
-              'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
-              'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID',
-              'TELEGRAM_AUTO_TRADING_CHAT_ID',
-              'TELEGRAM_OWNER_MEMBER_ID',
               'TELEGRAM_BOT_USERNAME',
               'TELEGRAM_WEBHOOK_SECRET',
             ];
@@ -467,17 +460,20 @@ jobs:
               errors.push('BOT_IDENTITY_CHECK_FAILED');
             }
 
-            for (const [label, chatId] of [
+            const stockLegacyChatId = String(env.TELEGRAM_STOCK_CHAT_ID).trim();
+            const cryptoLegacyChatId = String(env.TELEGRAM_CRYPTO_CHAT_ID).trim();
+            const roomTargets = [
               ['DEFAULT_CHAT', String(env.TELEGRAM_CHAT_ID).trim()],
-              ['STOCK_CHAT_LEGACY', String(env.TELEGRAM_STOCK_CHAT_ID).trim()],
-              ['CRYPTO_CHAT_LEGACY', String(env.TELEGRAM_CRYPTO_CHAT_ID).trim()],
-              ['KR_STOCK_CHAT', String(env.TELEGRAM_KR_STOCK_CHAT_ID).trim()],
-              ['US_STOCK_CHAT', String(env.TELEGRAM_US_STOCK_CHAT_ID).trim()],
-              ['CRYPTO_SPOT_CHAT', String(env.TELEGRAM_CRYPTO_SPOT_CHAT_ID).trim()],
-              ['CRYPTO_FUTURES_CHAT', String(env.TELEGRAM_CRYPTO_FUTURES_CHAT_ID).trim()],
-              ['HOLDINGS_CHAT', String(env.TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID).trim()],
-              ['AUTO_TRADING_CHAT', String(env.TELEGRAM_AUTO_TRADING_CHAT_ID).trim()],
-            ]) {
+              ['STOCK_CHAT_LEGACY', stockLegacyChatId],
+              ['CRYPTO_CHAT_LEGACY', cryptoLegacyChatId],
+              ['KR_STOCK_CHAT', String(env.TELEGRAM_KR_STOCK_CHAT_ID ?? '').trim() || stockLegacyChatId],
+              ['US_STOCK_CHAT', String(env.TELEGRAM_US_STOCK_CHAT_ID ?? '').trim() || stockLegacyChatId],
+              ['CRYPTO_SPOT_CHAT', String(env.TELEGRAM_CRYPTO_SPOT_CHAT_ID ?? '').trim() || cryptoLegacyChatId],
+              ['CRYPTO_FUTURES_CHAT', String(env.TELEGRAM_CRYPTO_FUTURES_CHAT_ID ?? '').trim() || cryptoLegacyChatId],
+              ['HOLDINGS_CHAT', String(env.TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID ?? '').trim()],
+              ['AUTO_TRADING_CHAT', String(env.TELEGRAM_AUTO_TRADING_CHAT_ID ?? '').trim()],
+            ].filter(([, chatId]) => Boolean(chatId));
+            for (const [label, chatId] of roomTargets) {
               try {
                 const chat = await api('getChat', { chat_id: chatId });
                 if (!chat.ok) errors.push(`${label}_UNREACHABLE`);
@@ -800,13 +796,6 @@ jobs:
               'TELEGRAM_CHAT_ID',
               'TELEGRAM_STOCK_CHAT_ID',
               'TELEGRAM_CRYPTO_CHAT_ID',
-              'TELEGRAM_KR_STOCK_CHAT_ID',
-              'TELEGRAM_US_STOCK_CHAT_ID',
-              'TELEGRAM_CRYPTO_SPOT_CHAT_ID',
-              'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
-              'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID',
-              'TELEGRAM_AUTO_TRADING_CHAT_ID',
-              'TELEGRAM_OWNER_MEMBER_ID',
               'TELEGRAM_BOT_USERNAME',
               'TELEGRAM_WEBHOOK_SECRET',
             ];
@@ -823,17 +812,19 @@ jobs:
 
             const preflightBotToken = String(env.TELEGRAM_BOT_TOKEN).trim();
             const preflightBotUsername = String(env.TELEGRAM_BOT_USERNAME).trim().replace(/^@/, '').toLowerCase();
+            const stockLegacyChatId = String(env.TELEGRAM_STOCK_CHAT_ID).trim();
+            const cryptoLegacyChatId = String(env.TELEGRAM_CRYPTO_CHAT_ID).trim();
             const preflightRooms = [
               ['DEFAULT_CHAT', String(env.TELEGRAM_CHAT_ID).trim()],
-              ['STOCK_CHAT_LEGACY', String(env.TELEGRAM_STOCK_CHAT_ID).trim()],
-              ['CRYPTO_CHAT_LEGACY', String(env.TELEGRAM_CRYPTO_CHAT_ID).trim()],
-              ['KR_STOCK_CHAT', String(env.TELEGRAM_KR_STOCK_CHAT_ID).trim()],
-              ['US_STOCK_CHAT', String(env.TELEGRAM_US_STOCK_CHAT_ID).trim()],
-              ['CRYPTO_SPOT_CHAT', String(env.TELEGRAM_CRYPTO_SPOT_CHAT_ID).trim()],
-              ['CRYPTO_FUTURES_CHAT', String(env.TELEGRAM_CRYPTO_FUTURES_CHAT_ID).trim()],
-              ['HOLDINGS_CHAT', String(env.TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID).trim()],
-              ['AUTO_TRADING_CHAT', String(env.TELEGRAM_AUTO_TRADING_CHAT_ID).trim()],
-            ];
+              ['STOCK_CHAT_LEGACY', stockLegacyChatId],
+              ['CRYPTO_CHAT_LEGACY', cryptoLegacyChatId],
+              ['KR_STOCK_CHAT', String(env.TELEGRAM_KR_STOCK_CHAT_ID ?? '').trim() || stockLegacyChatId],
+              ['US_STOCK_CHAT', String(env.TELEGRAM_US_STOCK_CHAT_ID ?? '').trim() || stockLegacyChatId],
+              ['CRYPTO_SPOT_CHAT', String(env.TELEGRAM_CRYPTO_SPOT_CHAT_ID ?? '').trim() || cryptoLegacyChatId],
+              ['CRYPTO_FUTURES_CHAT', String(env.TELEGRAM_CRYPTO_FUTURES_CHAT_ID ?? '').trim() || cryptoLegacyChatId],
+              ['HOLDINGS_CHAT', String(env.TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID ?? '').trim()],
+              ['AUTO_TRADING_CHAT', String(env.TELEGRAM_AUTO_TRADING_CHAT_ID ?? '').trim()],
+            ].filter(([, roomId]) => Boolean(roomId));
             async function telegramApiRead(method, params = {}) {
               const url = new URL(`https://api.telegram.org/bot${encodeURIComponent(preflightBotToken)}/${method}`);
               for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value));
@@ -964,10 +955,12 @@ jobs:
             }
             const botToken = String(env.TELEGRAM_BOT_TOKEN ?? '').trim();
             const chatId = String(env.TELEGRAM_CHAT_ID ?? '').trim();
-            const krStockChatId = String(env.TELEGRAM_KR_STOCK_CHAT_ID ?? '').trim();
-            const usStockChatId = String(env.TELEGRAM_US_STOCK_CHAT_ID ?? '').trim();
-            const cryptoSpotChatId = String(env.TELEGRAM_CRYPTO_SPOT_CHAT_ID ?? '').trim();
-            const cryptoFuturesChatId = String(env.TELEGRAM_CRYPTO_FUTURES_CHAT_ID ?? '').trim();
+            const stockLegacyChatIdAfterRestart = String(env.TELEGRAM_STOCK_CHAT_ID ?? '').trim();
+            const cryptoLegacyChatIdAfterRestart = String(env.TELEGRAM_CRYPTO_CHAT_ID ?? '').trim();
+            const krStockChatId = String(env.TELEGRAM_KR_STOCK_CHAT_ID ?? '').trim() || stockLegacyChatIdAfterRestart;
+            const usStockChatId = String(env.TELEGRAM_US_STOCK_CHAT_ID ?? '').trim() || stockLegacyChatIdAfterRestart;
+            const cryptoSpotChatId = String(env.TELEGRAM_CRYPTO_SPOT_CHAT_ID ?? '').trim() || cryptoLegacyChatIdAfterRestart;
+            const cryptoFuturesChatId = String(env.TELEGRAM_CRYPTO_FUTURES_CHAT_ID ?? '').trim() || cryptoLegacyChatIdAfterRestart;
             const holdingsChatId = String(env.TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID ?? '').trim();
             const autoTradingChatId = String(env.TELEGRAM_AUTO_TRADING_CHAT_ID ?? '').trim();
             const botUsername = String(env.TELEGRAM_BOT_USERNAME ?? '').trim();
@@ -1132,8 +1125,8 @@ jobs:
             uniqueRoomTargets.set(usStockChatId, 'US_STOCK_CHAT');
             uniqueRoomTargets.set(cryptoSpotChatId, 'CRYPTO_SPOT_CHAT');
             uniqueRoomTargets.set(cryptoFuturesChatId, 'CRYPTO_FUTURES_CHAT');
-            uniqueRoomTargets.set(holdingsChatId, 'HOLDINGS_CHAT');
-            uniqueRoomTargets.set(autoTradingChatId, 'AUTO_TRADING_CHAT');
+            if (holdingsChatId) uniqueRoomTargets.set(holdingsChatId, 'HOLDINGS_CHAT');
+            if (autoTradingChatId) uniqueRoomTargets.set(autoTradingChatId, 'AUTO_TRADING_CHAT');
             for (const [roomId, label] of uniqueRoomTargets) {
               if (roomId === chatId) continue;
               let roomResponse;
