@@ -15,10 +15,19 @@ import {
 } from './trade-market-intelligence.service';
 import {
   liveExecutionAuthority,
+  spotLiveCapabilityDecision,
   spotLiveCapabilityEnabled,
   spotLivePlanCapabilityDecision,
   type LiveExecutionAuthority,
+  type SpotLiveCapability,
 } from './spot-live-limited-capability.service';
+import {
+  futuresLiveCapabilityDecision,
+  futuresLiveCapabilityEnabled,
+  futuresLiveExecutionAuthority,
+  futuresLivePlanCapabilityDecision,
+  type FuturesLiveCapability,
+} from './futures-live-limited-capability.service';
 import type {
   TradingMarketSnapshot,
   TradingOrder, TradingOrderEvent, TradingOrderState, TradingPlan, TradingPlanInput, TradingPolicy,
@@ -77,12 +86,51 @@ export function tradingIdempotencyKey(userId: string, input: TradingPlanInput) {
 
 export { liveExecutionAuthority, type LiveExecutionAuthority };
 
+type LimitedLiveCapability = SpotLiveCapability | FuturesLiveCapability;
+
+export function liveCapabilityDecision(
+  exchange: TradingPlanInput['exchange'],
+  capability: LimitedLiveCapability,
+) {
+  if (exchange !== 'bitget') {
+    return spotLiveCapabilityDecision({ exchange, capability: capability as SpotLiveCapability });
+  }
+  const futuresDecision = futuresLiveCapabilityDecision({
+    exchange,
+    capability: capability as FuturesLiveCapability,
+  });
+  if (futuresDecision.allowed || capability !== 'OPEN_ORDER_READ') return futuresDecision;
+
+  // Preserve the pre-existing query-only Bitget recovery lane for orders that
+  // predate FUTURES_LIVE_LIMITED. Production SPOT activation keeps the Bitget
+  // provider gate off, so this cannot open a new-order path.
+  const legacyRecoveryRead = spotLiveCapabilityDecision({
+    exchange,
+    capability: 'OPEN_ORDER_READ',
+  });
+  return legacyRecoveryRead.allowed ? legacyRecoveryRead : futuresDecision;
+}
+
+export function livePlanCapabilityDecision(
+  plan: Pick<TradingPlanInput, 'exchange' | 'market' | 'side' | 'leverage' | 'marginMode' | 'stockBroker' | 'reduceOnly'>,
+  capability: LimitedLiveCapability,
+) {
+  return plan.exchange === 'bitget'
+    ? futuresLivePlanCapabilityDecision(plan, capability as FuturesLiveCapability)
+    : spotLivePlanCapabilityDecision(plan, capability as SpotLiveCapability);
+}
+
 export function liveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
-  return spotLiveCapabilityEnabled(exchange, 'ORDER_CREATE');
+  return exchange === 'bitget'
+    ? futuresLiveCapabilityEnabled('ORDER_CREATE')
+    : spotLiveCapabilityEnabled(exchange, 'ORDER_CREATE');
 }
 
 export function automaticLiveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
-  return liveExecutionAuthority() === 'SPOT_LIVE_LIMITED'
+  const authorityEnabled = exchange === 'bitget'
+    ? futuresLiveExecutionAuthority() === 'FUTURES_LIVE_LIMITED'
+    : liveExecutionAuthority() === 'SPOT_LIVE_LIMITED';
+  return authorityEnabled
     && process.env.AUTO_TRADING === 'true'
     && process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'
     && liveExecutionEnabled(exchange);
@@ -90,7 +138,7 @@ export function automaticLiveExecutionEnabled(exchange: TradingPlanInput['exchan
 
 function serverLiveEnabledForPlan(input: TradingPlanInput, policy: TradingPolicy) {
   if (input.accountMode !== 'live') return true;
-  if (!spotLivePlanCapabilityDecision(input, 'ORDER_CREATE').allowed) return false;
+  if (!livePlanCapabilityDecision(input, 'ORDER_CREATE').allowed) return false;
   if (policy.mode === 'automatic' && policy.automaticEnabled) {
     return automaticLiveExecutionEnabled(input.exchange);
   }
