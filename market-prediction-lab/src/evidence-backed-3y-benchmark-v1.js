@@ -328,11 +328,17 @@ export function runCrossSectionalMomentumProxy({
     let turnover = 0;
 
     if ((index - firstEligibleIndex) % rebalanceBars === 0) {
-      const lookbackTimestamp = timestamps[index - lookbackBars];
+      const signalTimestamp = timestamps[index - 1];
+      const lookbackTimestamp = timestamps[index - 1 - lookbackBars];
       const ranked = symbols.map((symbol) => {
-        const now = closeMaps[symbol].get(timestamp);
+        const signalClose = closeMaps[symbol].get(signalTimestamp);
         const prior = closeMaps[symbol].get(lookbackTimestamp);
-        return { symbol, momentum: now > 0 && prior > 0 ? now / prior - 1 : Number.NEGATIVE_INFINITY };
+        return {
+          symbol,
+          momentum: signalClose > 0 && prior > 0
+            ? signalClose / prior - 1
+            : Number.NEGATIVE_INFINITY,
+        };
       }).sort((a, b) => b.momentum - a.momentum || a.symbol.localeCompare(b.symbol));
 
       const next = Object.fromEntries(symbols.map((symbol) => [symbol, 0]));
