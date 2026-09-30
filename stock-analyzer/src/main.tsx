@@ -1,8 +1,8 @@
 // Keep the HTML entry intentionally dependency-free. On a direct AI Chart
-// document, start the user-critical route preloads first, promote those exact
-// modulepreload links, then yield one task before adding the much larger App and
-// runtime preload graphs. This gives the cold route a real network scheduling
-// head start without delaying any non-AI-Chart document.
+// document, start the user-critical route request first, then yield one task
+// before adding the wider App and runtime graphs. This lets restored-profile
+// bootstrap overlap the route request while keeping the chart renderer behind
+// the page's React.lazy boundary.
 const directAiChartColdRoute = window.location.pathname.endsWith('/ai-chart');
 
 if (directAiChartColdRoute) {
