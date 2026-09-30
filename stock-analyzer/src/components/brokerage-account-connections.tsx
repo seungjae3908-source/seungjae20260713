@@ -363,7 +363,7 @@ function ProviderReadMetadata({ provider, snapshot }: { provider: Provider; snap
   const configured = credentialKnownConfigured(snapshot);
   const checkedAt = snapshot?.checkedAt ? new Date(snapshot.checkedAt).toLocaleString('ko-KR') : '확인 전';
   const freshness = snapshot ? (snapshot.stale ? '오래된 데이터' : snapshot.connected ? '최신' : '확인 불가') : '확인 전';
-  const connection = snapshot?.connected ? '연결됨' : '미연결';
+  const connection = snapshot?.connected ? '연결됨' : configured ? '연결 검증 전' : '미연결';
   return <p data-testid={`account-readonly-metadata-${provider}`} className="mt-2 text-center text-[11px] leading-5 text-muted-foreground">조회 키 {configured ? '저장됨' : '미저장'} · 마지막 확인 {checkedAt} · {connection} · {freshness} · 최근 오류 {snapshot?.errorCode ?? '없음'}</p>;
 }
 function BitgetDiagnosticLine({ snapshot, diagnostic }: { snapshot?: CanonicalAccountSnapshot; diagnostic: BitgetUiDiagnostic | null }) {
