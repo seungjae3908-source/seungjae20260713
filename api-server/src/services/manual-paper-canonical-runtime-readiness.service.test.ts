@@ -295,6 +295,26 @@ test('complete read-only evidence is ready for activation review without enablin
   assert.equal(result.paperStateSnapshotReady, true);
   assert.equal(result.naturalPaperStateReady, true);
   assert.equal(result.fullCostComponentsReady, true);
+  assert.deepEqual(result.fullCostComponentEvidenceCounts, {
+    commission: 1,
+    tax: 1,
+    spread: 1,
+    slippage: 1,
+    funding: 1,
+    latency: 1,
+    liquidityImpact: 1,
+    partialFillImpact: 1,
+  });
+  assert.deepEqual(result.fullCostComponentFailureReasons, {
+    commission: [],
+    tax: [],
+    spread: [],
+    slippage: [],
+    funding: [],
+    latency: [],
+    liquidityImpact: [],
+    partialFillImpact: [],
+  });
   assert.equal(result.settlementDurablePacketReady, true);
   assert.equal(result.closePositionCanonicalRebindReady, true);
   assert.equal(result.forwardObserverArtifactsReady, true);
@@ -303,10 +323,15 @@ test('complete read-only evidence is ready for activation review without enablin
   assert.deepEqual(result.evidenceCounts, {
     naturalPositions: 1,
     naturalSettlements: 1,
-    fullCostReadyPositions: 2,
+    fullCostReadyPositions: 1,
     durableSettlementPackets: 1,
     canonicalRebinds: 1,
   });
+  assert.equal(
+    result.fullCostComponentEvidenceCounts.commission,
+    1,
+    'the same canonical position must not be double-counted through positions + settlement owner evidence',
+  );
   assert.deepEqual(result.blockers, []);
   assert.deepEqual(result.safety, {
     liveTrading: false,
@@ -460,6 +485,23 @@ test('DEPLOY_SHA must equal the explicitly supplied current main', async () => {
 });
 
 
+test('Full Cost component diagnostics identify the exact missing cost without weakening all-eight readiness', async () => {
+  const result = await probeManualPaperCanonicalRuntimeReadiness({
+    expectedMainSha: SHA,
+    env: env(),
+    dependencies: dependencies({ missingCostComponent: 'funding' }),
+  });
+
+  assert.equal(result.fullCostComponentsReady, false);
+  assert.equal(result.fullCostComponentEvidenceCounts.funding, 0);
+  assert.equal(result.fullCostComponentEvidenceCounts.partialFillImpact, 1);
+  assert.deepEqual(result.fullCostComponentFailureReasons.funding, ['COMPONENT_MISSING']);
+  assert.deepEqual(result.fullCostComponentFailureReasons.partialFillImpact, []);
+  assert.ok(result.blockers.includes('PAPER_CANONICAL_FULL_COST_EIGHT_COMPONENTS_NOT_READY'));
+  assert.ok(result.blockers.includes('PAPER_CANONICAL_FULL_COST_COMPONENT_FUNDING_NOT_READY'));
+  assert.equal(result.readyForActivationReview, false);
+});
+
 test('missing Full Cost, settlement packet, or canonical rebind stays fail-closed', async () => {
   const noCost = await probeManualPaperCanonicalRuntimeReadiness({
     expectedMainSha: SHA,
@@ -467,7 +509,12 @@ test('missing Full Cost, settlement packet, or canonical rebind stays fail-close
     dependencies: dependencies({ missingCostComponent: 'partialFillImpact' }),
   });
   assert.equal(noCost.fullCostComponentsReady, false);
+  assert.equal(noCost.fullCostComponentEvidenceCounts.partialFillImpact, 0);
+  assert.equal(noCost.fullCostComponentEvidenceCounts.commission, 1);
+  assert.deepEqual(noCost.fullCostComponentFailureReasons.partialFillImpact, ['COMPONENT_MISSING']);
+  assert.deepEqual(noCost.fullCostComponentFailureReasons.commission, []);
   assert.ok(noCost.blockers.includes('PAPER_CANONICAL_FULL_COST_EIGHT_COMPONENTS_NOT_READY'));
+  assert.ok(noCost.blockers.includes('PAPER_CANONICAL_FULL_COST_COMPONENT_PARTIAL_FILL_IMPACT_NOT_READY'));
 
   const noSettlement = await probeManualPaperCanonicalRuntimeReadiness({
     expectedMainSha: SHA,
