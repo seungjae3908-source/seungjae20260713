@@ -1,0 +1,46 @@
+name: Market Information Room Validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/market-information-room-validation.yml
+      - stock-analyzer/src/pages/market-information.tsx
+      - stock-analyzer/e2e/market-information-room.spec.ts
+
+permissions:
+  contents: read
+
+jobs:
+  market-information-room:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact PR HEAD
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Verify exact HEAD
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Run exact market information room browser regression
+        run: pnpm --dir stock-analyzer exec playwright test e2e/market-information-room.spec.ts --config=playwright.config.ts --retries=0 --reporter=list
