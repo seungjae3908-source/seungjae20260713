@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import type { TradingPlanInput } from './trade-automation.types';
 import {
   FUTURES_LIVE_HARD_DENIED_CAPABILITIES,
   futuresLiveCapabilityDecision,
@@ -25,7 +26,10 @@ function environment(overrides: Record<string, string> = {}) {
   };
 }
 
-function plan(overrides: Record<string, unknown> = {}) {
+type FuturesPlan = Pick<TradingPlanInput,
+  'exchange' | 'market' | 'side' | 'leverage' | 'marginMode' | 'reduceOnly'>;
+
+function plan(overrides: Partial<FuturesPlan> = {}): FuturesPlan {
   return {
     exchange: 'bitget' as const,
     market: 'USDT-FUTURES',
