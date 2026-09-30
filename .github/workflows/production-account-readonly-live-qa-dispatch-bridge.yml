@@ -50,15 +50,11 @@ jobs:
             console.error('Exact command required: /run-production-account-readonly-live-qa <40-character-current-production-sha> <provider[,provider...]>');
             process.exit(1);
           }
-          const allowed = new Set(['toss', 'kiwoom', 'upbit', 'bitget']);
-          const providers = match[2].split(',');
-          if (providers.length === 0
-            || new Set(providers).size !== providers.length
-            || providers.some((provider) => !allowed.has(provider))) {
-            throw new Error('PRODUCTION_ACCOUNT_QA_TARGET_PROVIDER_SET_INVALID');
-          }
+          const { canonicalizeProductionAccountProviders } = require('./.github/scripts/production-deploy-provenance.cjs');
+          const providers = canonicalizeProductionAccountProviders(match[2]);
+          if (!providers) throw new Error('PRODUCTION_ACCOUNT_QA_TARGET_PROVIDER_SET_INVALID');
           fs.appendFileSync(process.env.GITHUB_OUTPUT, 'sha=' + match[1].toLowerCase() + '\n');
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'providers=' + [...providers].sort().join(',') + '\n');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'providers=' + providers.join(',') + '\n');
           NODE
 
       - name: Require deployed target SHA to remain in current main history
@@ -81,6 +77,10 @@ jobs:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
         with:
           script: |
+            const {
+              assertProductionDeployProvenance,
+              selectLatestSuccessfulProductionDeploy,
+            } = require('./.github/scripts/production-deploy-provenance.cjs');
             const target = process.env.TARGET_SHA;
             const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
               owner: context.repo.owner,
@@ -89,15 +89,18 @@ jobs:
               event: 'workflow_dispatch',
               per_page: 100,
             });
-            const latest = runs
-              .filter((run) => run.status === 'completed' && run.conclusion === 'success')
-              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            const latest = selectLatestSuccessfulProductionDeploy(runs);
             if (!latest) {
-              core.setFailed('No successful Production Deploy run exists.');
+              core.setFailed('No successful official Production Deploy run exists.');
               return;
             }
-            if (String(latest.head_sha).toLowerCase() !== target) {
-              core.setFailed('Target is not latest successful Production Deploy SHA: latest=' + latest.head_sha);
+            try {
+              assertProductionDeployProvenance(latest, {
+                targetSha: target,
+                productionDeployRunId: String(latest.id),
+              });
+            } catch (error) {
+              core.setFailed(String(error?.message ?? 'PRODUCTION_DEPLOY_PROVENANCE_INVALID'));
               return;
             }
             core.setOutput('deploy_run_id', String(latest.id));
@@ -108,10 +111,16 @@ jobs:
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
           TARGET_PROVIDERS: ${{ steps.command.outputs.providers }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ steps.production.outputs.deploy_run_id }}
         with:
           script: |
             const target = process.env.TARGET_SHA;
             const providers = process.env.TARGET_PROVIDERS;
+            const productionDeployRunId = String(process.env.PRODUCTION_DEPLOY_RUN_ID ?? '').trim();
+            if (!/^[1-9][0-9]*$/.test(productionDeployRunId)) {
+              core.setFailed('PRODUCTION_DEPLOY_PROVENANCE_RUN_ID_INVALID');
+              return;
+            }
             const workflowId = 'production-account-readonly-live-qa.yml';
             const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
               owner: context.repo.owner,
@@ -133,7 +142,7 @@ jobs:
               repo: context.repo.repo,
               workflow_id: workflowId,
               ref: 'main',
-              inputs: { sha: target, providers },
+              inputs: { sha: target, providers, production_deploy_run_id: productionDeployRunId },
               return_run_details: true,
               headers: {
                 accept: 'application/vnd.github+json',
