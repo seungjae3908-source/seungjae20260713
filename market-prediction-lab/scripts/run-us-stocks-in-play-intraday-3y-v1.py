@@ -25,7 +25,7 @@ MAX_LEVERAGE = 4.0
 RISK_FRACTION_OF_BUCKET = 0.01
 TOP_N_MAX = 20
 
-VARIANTS = [
+BASE_VARIANTS = [
     {"id": "ORB5_RVOL1_TOP20", "min_rvol": 1.0, "top_n": 20},
     {"id": "ORB5_RVOL1_TOP10", "min_rvol": 1.0, "top_n": 10},
     {"id": "ORB5_RVOL1_TOP5", "min_rvol": 1.0, "top_n": 5},
@@ -33,6 +33,22 @@ VARIANTS = [
     {"id": "ORB5_RVOL5_TOP20", "min_rvol": 5.0, "top_n": 20},
     {"id": "ORB5_RVOL10_TOP20", "min_rvol": 10.0, "top_n": 20},
     {"id": "ORB5_RVOL30_TOP20", "min_rvol": 30.0, "top_n": 20},
+]
+
+VARIANTS = [
+    *[
+        {**variant, "stop_delay_bars": 0, "execution_model": "SAME_MINUTE_STOP_CONSERVATIVE"}
+        for variant in BASE_VARIANTS
+    ],
+    *[
+        {
+            **variant,
+            "id": variant["id"] + "_NEXT_MIN_STOP",
+            "stop_delay_bars": 1,
+            "execution_model": "QUANTCONNECT_MINUTE_BACKTEST_NEXT_MINUTE_STOP",
+        }
+        for variant in BASE_VARIANTS
+    ],
 ]
 
 SESSION = requests.Session()
@@ -248,7 +264,7 @@ def candidate_bars(path: Path, candidates: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def simulate_one(group: pd.DataFrame) -> dict:
+def simulate_one(group: pd.DataFrame, stop_delay_bars: int = 0) -> dict:
     first = group.iloc[0]
     direction = int(first["direction"])
     level = float(first["entry_level"])
@@ -277,10 +293,11 @@ def simulate_one(group: pd.DataFrame) -> dict:
         return {"triggered": False}
 
     leverage = min(MAX_LEVERAGE, RISK_FRACTION_OF_BUCKET / (stop_distance / fill))
-    after = group.iloc[entry_idx:]
+    stop_start = min(entry_idx + max(0, int(stop_delay_bars)), len(group) - 1)
+    after = group.iloc[stop_start:]
     stop_hit = False
-    exit_price = float(after.iloc[-1]["close"])
-    exit_time = after.iloc[-1]["local_ts"]
+    exit_price = float(group.iloc[-1]["close"])
+    exit_time = group.iloc[-1]["local_ts"]
     for row in after.itertuples(index=False):
         if direction > 0 and float(row.low) <= stop:
             exit_price = min(stop, float(row.open)) if float(row.open) < stop else stop
@@ -336,8 +353,13 @@ def process_month(
 
     sim = {}
     if not bars.empty:
+        stop_delays = sorted({int(v.get("stop_delay_bars", 0)) for v in VARIANTS})
         for (trade_date, ticker), group in bars.groupby(["trade_date", "ticker"], sort=False):
-            sim[(pd.Timestamp(trade_date), ticker)] = simulate_one(group)
+            for stop_delay in stop_delays:
+                sim[(pd.Timestamp(trade_date), ticker, stop_delay)] = simulate_one(
+                    group,
+                    stop_delay_bars=stop_delay,
+                )
 
     trading_dates = sorted(
         d for d in summary["trade_date"].drop_duplicates().tolist()
@@ -359,7 +381,14 @@ def process_month(
                 candidate_count = len(group)
                 # Each selected stock gets one of 20 capital slots; unused slots stay in cash.
                 for row in group.itertuples(index=False):
-                    result = sim.get((pd.Timestamp(row.trade_date), row.ticker), {"triggered": False})
+                    result = sim.get(
+                        (
+                            pd.Timestamp(row.trade_date),
+                            row.ticker,
+                            int(variant.get("stop_delay_bars", 0)),
+                        ),
+                        {"triggered": False},
+                    )
                     if not result.get("triggered"):
                         continue
                     triggered_count += 1
@@ -371,6 +400,8 @@ def process_month(
                         "ticker": row.ticker,
                         "rvol": float(row.rvol),
                         "rank": float(row.rank),
+                        "execution_model": variant.get("execution_model"),
+                        "stop_delay_bars": int(variant.get("stop_delay_bars", 0)),
                         **result,
                     })
             daily_rows.append({
@@ -596,6 +627,10 @@ def combine(input_dir: Path, output: Path) -> None:
             "slippageInOriginalPaper": False,
             "shortBorrowAvailabilityModeled": False,
             "multipleVariantsPredeclared": [v["id"] for v in VARIANTS],
+            "executionModelSensitivity": [
+                "same-minute stop conservative",
+                "next-minute stop activation matching QuantConnect minute-resolution implementation behavior",
+            ],
             "untouchedFinalHoldout": False,
         },
         "results": results,
@@ -632,6 +667,8 @@ def self_test() -> None:
     assert leverage * (stop_distance / fill) <= 0.0100000001
     assert MAX_LEVERAGE == 4.0
     assert STOP_ATR_FRACTION == 0.10
+    assert len(VARIANTS) == len(BASE_VARIANTS) * 2
+    assert {v["stop_delay_bars"] for v in VARIANTS} == {0, 1}
     print("SELF_TEST_PASS")
 
 
