@@ -13,6 +13,7 @@ import {
   costModelFromCommonFrictionBps,
   coverageSummary,
   runCrossSectionalMomentumProxy,
+  runTimeSeriesMomentumProxy,
   summarizeReturnSeries,
 } from "../src/evidence-backed-3y-benchmark-v1.js";
 
@@ -122,6 +123,37 @@ test("return summary emits comparable return, CAGR, Sharpe and drawdown metrics"
   assert.ok(result.annualizedSharpe > 0);
   assert.ok(result.maximumDrawdown > 0);
   assert.ok(result.barProfitFactor > 1);
+});
+
+test("TSMOM proxy uses only prior closed bars and applies turnover cost", () => {
+  const rowsA = candles({ count: 320, drift: 0.002 });
+  const rowsB = candles({ count: 320, drift: -0.001 });
+  const longOnly = runTimeSeriesMomentumProxy({
+    datasets: [
+      { symbol: "A", candles: rowsA },
+      { symbol: "B", candles: rowsB },
+    ],
+    lookbackBars: 20,
+    perSideCostBps: 10,
+    longShort: false,
+    barsPerYear: 252,
+  });
+  const longShort = runTimeSeriesMomentumProxy({
+    datasets: [
+      { symbol: "A", candles: rowsA },
+      { symbol: "B", candles: rowsB },
+    ],
+    lookbackBars: 20,
+    perSideCostBps: 10,
+    longShort: true,
+    barsPerYear: 252,
+  });
+  assert.equal(longOnly.family, "TSMOM_FIXED_PROXY");
+  assert.equal(longOnly.longShort, false);
+  assert.equal(longShort.longShort, true);
+  assert.ok(longOnly.performance.sampleCount > 0);
+  assert.ok(longShort.performance.sampleCount > 0);
+  assert.equal(longOnly.sourceFaithfulReplication, false);
 });
 
 test("relative momentum proxy is deterministic and cost-aware", () => {
