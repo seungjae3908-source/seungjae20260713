@@ -149,9 +149,9 @@ test("catalog exposes exactly 12 market-horizon profiles with 9 cash READY and 3
 
 test("catalog carries primary-source strategy recipes before any local formula invention", () => {
   const catalog = buildEvidenceBackedFormulaSeedCatalogV1();
-  assert.equal(catalog.referenceRecipeCount, 9);
+  assert.equal(catalog.referenceRecipeCount, 12);
   assert.deepEqual(catalog.referenceRecipes, EVIDENCE_BACKED_REFERENCE_RECIPES);
-  assert.equal(new Set(catalog.referenceRecipes.map((recipe) => recipe.recipeId)).size, 9);
+  assert.equal(new Set(catalog.referenceRecipes.map((recipe) => recipe.recipeId)).size, 12);
   assert.equal(Object.isFrozen(catalog.referenceRecipes), true);
 
   const ep = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "QULLAMAGGIE_EP_V1");
@@ -208,6 +208,41 @@ test("catalog carries primary-source strategy recipes before any local formula i
   assert.equal(turtle.riskFramework.fixedProfitTarget, false);
   assert.equal(turtle.sourceEvidence[0].independentlyAuditedPerformance, false);
   assert.equal(turtle.automaticActivationAllowed, false);
+
+  const connors = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "CONNORS_RSI2_CLASSIC_V1");
+  assert.equal(connors.origin, "PRACTITIONER_BOOK_METHOD");
+  assert.equal(connors.confirmation.rsiPeriod, 2);
+  assert.equal(connors.confirmation.rsiEntryBelow, 5);
+  assert.equal(connors.confirmation.trendSmaDays, 200);
+  assert.equal(connors.confirmation.exitSmaDays, 5);
+  assert.equal(connors.confirmation.fixedStopInClassicBaseline, false);
+  assert.equal(connors.localReplicationEvidence.prNumber, 1503);
+  assert.equal(connors.localReplicationEvidence.status, "RESEARCH_HOLD_CROSS_SYMBOL_OR_WINDOW_GENERALIZATION_FAILED");
+  assert.equal(connors.localReplicationEvidence.sourceCloseMayCountAsExecutableFill, false);
+  assert.equal(connors.automaticActivationAllowed, false);
+
+  const williams = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "LARRY_WILLIAMS_VOLATILITY_BREAKOUT_K05_V1");
+  assert.equal(williams.origin, "PRACTITIONER_BOOK_METHOD");
+  assert.equal(williams.confirmation.k, 0.5);
+  assert.equal(williams.confirmation.exit, "SAME_SESSION_CLOSE");
+  assert.equal(williams.confirmation.stopAddedToBaseline, false);
+  assert.equal(williams.confirmation.trendFilterAddedToBaseline, false);
+  assert.equal(williams.localReplicationEvidence.prNumber, 1504);
+  assert.equal(williams.localReplicationEvidence.status, "RESEARCH_HOLD_CROSS_SYMBOL_OR_WINDOW_GENERALIZATION_FAILED");
+  assert.equal(williams.localReplicationEvidence.kOptimizationAllowed, false);
+  assert.equal(williams.automaticActivationAllowed, false);
+
+  const faber = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "FABER_GTAA_10M_SMA_V1");
+  assert.equal(faber.origin, "ACADEMIC_PEER_REVIEWED");
+  assert.equal(faber.confirmation.movingAverageMonths, 10);
+  assert.equal(faber.confirmation.rebalanceFrequency, "MONTHLY");
+  assert.equal(faber.confirmation.parameterSearchAllowed, false);
+  assert.equal(faber.sourceEvidence[0].ssrnAbstractId, "962461");
+  assert.equal(faber.localReplicationEvidence.prNumber, 1506);
+  assert.equal(faber.localReplicationEvidence.status, "REFERENCE_CANDIDATE_REQUIRES_FUTURE_OOS");
+  assert.equal(faber.localReplicationEvidence.crossWindowStressPositive, true);
+  assert.equal(faber.localReplicationEvidence.leaveOneAssetOutStressPositive, true);
+  assert.equal(faber.automaticActivationAllowed, false);
 
   const orb = catalog.referenceRecipes.find((recipe) => recipe.recipeId === "ORB_STANDALONE_COST_CONTROL_V1");
   assert.equal(orb.researchRole, "NEGATIVE_CONTROL");
