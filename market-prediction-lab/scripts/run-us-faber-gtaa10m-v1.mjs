@@ -389,6 +389,12 @@ function buyHoldSleeve(monthly, window, costPerSide) {
     curve,
   };
 }
+function combinePortfolioExcluding(perAsset, excludedSymbol) {
+  const subset = Object.fromEntries(Object.entries(perAsset).filter(([symbol]) => symbol !== excludedSymbol));
+  if (Object.keys(subset).length < 2) throw new Error("LEAVE_ONE_OUT_REQUIRES_MULTIPLE_ASSETS");
+  return combinePortfolio(subset);
+}
+
 function combinePortfolio(perAsset) {
   const monthSet = new Set();
   for (const result of Object.values(perAsset)) for (const row of result.curve) monthSet.add(row.month);
@@ -484,15 +490,25 @@ async function main() {
       causal[dataset.symbol] = causalAdjustedSleeve(dataset.adjustedMonthly, window, COST_PER_SIDE, tb3ms.monthly);
       causalStress[dataset.symbol] = causalAdjustedSleeve(dataset.adjustedMonthly, window, STRESS_COST_PER_SIDE, tb3ms.monthly);
     }
+    const leaveOneOutStress = Object.fromEntries(ASSETS.map((asset) => [
+      asset.symbol,
+      combinePortfolioExcluding(causalStress, asset.symbol),
+    ]));
     highFidelityApprox[windowName] = {
       paperLikeTotalReturnCloseTbill: { portfolio: combinePortfolio(paperLike), perAsset: paperLike },
       causalTotalReturnNextOpenTbill: { portfolio: combinePortfolio(causal), perAsset: causal },
       causalStress15x: { portfolio: combinePortfolio(causalStress), perAsset: causalStress },
+      leaveOneOutStress15x: {
+        byExcludedAsset: leaveOneOutStress,
+        minimumTotalReturn: Math.min(...Object.values(leaveOneOutStress).map((row) => row.totalReturn)),
+        allPositive: Object.values(leaveOneOutStress).every((row) => row.totalReturn > 0),
+      },
     };
   }
 
   const crossWindowStressPositive = Object.values(results).every((row) => row.stress15x.portfolio.totalReturn > 0);
   const highFidelityCrossWindowPositive = Object.values(highFidelityApprox).every((row) => row.causalStress15x.portfolio.totalReturn > 0);
+  const highFidelityLeaveOneOutPositive = Object.values(highFidelityApprox).every((row) => row.leaveOneOutStress15x.allPositive === true);
   const report = {
     schemaVersion: 1,
     status: "pass",
@@ -548,11 +564,12 @@ async function main() {
     results,
     highFidelityApprox,
     promotionAssessment: {
-      status: highFidelityCrossWindowPositive
+      status: highFidelityCrossWindowPositive && highFidelityLeaveOneOutPositive
         ? "REFERENCE_CANDIDATE_REQUIRES_FUTURE_OOS"
-        : "RESEARCH_HOLD_HIGH_FIDELITY_CROSS_WINDOW_FAILED",
+        : "RESEARCH_HOLD_HIGH_FIDELITY_ROBUSTNESS_FAILED",
       crossWindowStressPositive,
       highFidelityCrossWindowPositive,
+      highFidelityLeaveOneOutPositive,
       automaticPromotionAllowed: false,
       economicSampleCredit: 0,
       profitabilityClaimAllowed: false,
@@ -574,6 +591,7 @@ async function main() {
       "Execution is shifted to the next month's first open for causality; the original paper describes signal-day close execution.",
       "DBC/VNQ/EFA/IEF/SPY are ETF proxies for the five original asset classes, not the original index series.",
       "No 6/8/12-month alternative is tested because that would be parameter search after observing the result.",
+      "A leave-one-asset-out stress is reported without changing the rule; it is a concentration diagnostic, not a selector for replacing any asset.",
       "Historical replay cannot change PROFITABILITY_PROVEN or create Forward/OOS economic credit.",
     ],
   };
@@ -596,6 +614,10 @@ async function main() {
     hfPriorStress: report.highFidelityApprox.PRIOR.causalStress15x.portfolio.totalReturn,
     hfMidStress: report.highFidelityApprox.MID.causalStress15x.portfolio.totalReturn,
     hfRecentStress: report.highFidelityApprox.RECENT.causalStress15x.portfolio.totalReturn,
+    hfPriorLeaveOneOutMin: report.highFidelityApprox.PRIOR.leaveOneOutStress15x.minimumTotalReturn,
+    hfMidLeaveOneOutMin: report.highFidelityApprox.MID.leaveOneOutStress15x.minimumTotalReturn,
+    hfRecentLeaveOneOutMin: report.highFidelityApprox.RECENT.leaveOneOutStress15x.minimumTotalReturn,
+    hfLeaveOneOutAllPositive: report.promotionAssessment.highFidelityLeaveOneOutPositive,
   }));
 }
 await main();
