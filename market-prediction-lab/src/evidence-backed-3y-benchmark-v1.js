@@ -240,7 +240,7 @@ export function runEqualWeightBuyHoldBaseline({
   const closeMaps = closesBySymbol(datasets);
   const symbols = datasets.map((item) => item.symbol);
   const startIndex = timestamps.findIndex((timestamp) => timestamp >= startTime);
-  if (startIndex < 1) throw new Error("BUY_HOLD_START_NOT_AVAILABLE");
+  if (startIndex < 0) throw new Error("BUY_HOLD_START_NOT_AVAILABLE");
   let endIndex = timestamps.length - 1;
   while (endIndex >= 0 && timestamps[endIndex] > endTime) endIndex -= 1;
   if (endIndex <= startIndex) throw new Error("BUY_HOLD_END_NOT_AVAILABLE");
@@ -248,7 +248,7 @@ export function runEqualWeightBuyHoldBaseline({
   const weight = 1 / symbols.length;
   const costRate = perSideCostBps / 10_000;
   const returns = [];
-  for (let index = startIndex; index <= endIndex; index += 1) {
+  for (let index = startIndex + 1; index <= endIndex; index += 1) {
     const currentTimestamp = timestamps[index];
     const priorTimestamp = timestamps[index - 1];
     let barReturn = 0;
@@ -258,7 +258,7 @@ export function runEqualWeightBuyHoldBaseline({
       if (!(prior > 0 && current > 0)) continue;
       barReturn += weight * (current / prior - 1);
     }
-    if (index === startIndex) barReturn -= costRate;
+    if (index === startIndex + 1) barReturn -= costRate;
     if (index === endIndex) barReturn -= costRate;
     returns.push(barReturn);
   }
