@@ -227,6 +227,57 @@ function closesBySymbol(datasets) {
   ]));
 }
 
+export function runTimeSeriesMomentumProxy({
+  datasets,
+  lookbackBars,
+  perSideCostBps = 10,
+  longShort = false,
+  barsPerYear,
+} = {}) {
+  if (!Array.isArray(datasets) || datasets.length < 1) throw new TypeError("at least one dataset is required");
+  if (!Number.isSafeInteger(lookbackBars) || lookbackBars < 2) throw new RangeError("lookbackBars must be >= 2");
+  if (!(barsPerYear > 0)) throw new RangeError("barsPerYear must be positive");
+  const timestamps = intersectTimestamps(datasets);
+  const closeMaps = closesBySymbol(datasets);
+  const symbols = datasets.map((item) => item.symbol);
+  const costRate = perSideCostBps / 10_000;
+  const positions = Object.fromEntries(symbols.map((symbol) => [symbol, 0]));
+  const returns = [];
+
+  for (let index = lookbackBars + 1; index < timestamps.length; index += 1) {
+    const currentTimestamp = timestamps[index];
+    const priorTimestamp = timestamps[index - 1];
+    const signalTimestamp = timestamps[index - 1];
+    const lookbackTimestamp = timestamps[index - 1 - lookbackBars];
+    let portfolioReturn = 0;
+
+    for (const symbol of symbols) {
+      const signalClose = closeMaps[symbol].get(signalTimestamp);
+      const lookbackClose = closeMaps[symbol].get(lookbackTimestamp);
+      const priorClose = closeMaps[symbol].get(priorTimestamp);
+      const currentClose = closeMaps[symbol].get(currentTimestamp);
+      if (!(signalClose > 0 && lookbackClose > 0 && priorClose > 0 && currentClose > 0)) continue;
+      const momentum = signalClose / lookbackClose - 1;
+      const nextPosition = momentum > 0 ? 1 : momentum < 0 && longShort ? -1 : 0;
+      const turnover = Math.abs(nextPosition - positions[symbol]);
+      const barReturn = nextPosition * (currentClose / priorClose - 1) - turnover * costRate;
+      portfolioReturn += barReturn / symbols.length;
+      positions[symbol] = nextPosition;
+    }
+    returns.push(portfolioReturn);
+  }
+
+  return Object.freeze({
+    family: "TSMOM_FIXED_PROXY",
+    sourceFaithfulReplication: false,
+    fixedHorizonAdaptation: true,
+    longShort,
+    lookbackBars,
+    perSideCostBps,
+    performance: summarizeReturnSeries(returns, { barsPerYear }),
+  });
+}
+
 export function runCrossSectionalMomentumProxy({
   datasets,
   lookbackBars,
