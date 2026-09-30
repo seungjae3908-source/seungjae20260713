@@ -1,0 +1,75 @@
+name: Prediction Lab US Stocks-in-Play ORB 3Y V1
+
+on:
+  push:
+    branches:
+      - research/us-stocks-in-play-intraday-3y-v1-20260930
+    paths:
+      - market-prediction-lab/scripts/run-us-stocks-in-play-orb-3y-v1.py
+      - .github/workflows/prediction-lab-us-stocks-in-play-orb-3y-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: us-stocks-in-play-orb-3y-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: US Stocks-in-Play 5m ORB 3Y benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned dependencies
+        run: python -m pip install --disable-pip-version-check "duckdb==1.4.1" "pandas==2.2.3" "numpy==2.2.6" "pytz==2026.2"
+      - name: Verify safety envelope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$LIVE_TRADING" = "false"
+          test "$AUTO_TRADING" = "false"
+          test "$REAL_ORDER_ENABLED" = "false"
+          test "$PRIVATE_TRADING_API_ALLOWED" = "false"
+          test "$EXECUTION_AUTHORITY" = "NONE"
+      - name: Run strategy self-test
+        run: python market-prediction-lab/scripts/run-us-stocks-in-play-orb-3y-v1.py --self-test
+      - name: Run exact three-year intraday benchmark
+        run: python market-prediction-lab/scripts/run-us-stocks-in-play-orb-3y-v1.py --output market-prediction-lab/docs/us-stocks-in-play-orb-3y-v1-result.json
+      - name: Assert result truth boundary
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          p="market-prediction-lab/docs/us-stocks-in-play-orb-3y-v1-result.json"
+          r=json.load(open(p))
+          assert r["period"]["months"] == 36
+          assert r["safety"]["profitabilityProven"] is False
+          assert r["safety"]["executionAuthority"] == "NONE"
+          for key in ["DAILY","WEEKLY","MONTHLY","SIX_MONTH","YEARLY","THREE_YEAR"]:
+              assert key in r["periods"]
+          print(json.dumps({
+              "profitableSurvivor": r["profitableSurvivor"],
+              "metrics": r["metrics"],
+              "periods": r["periods"],
+          }, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: us-stocks-in-play-orb-3y-v1-${{ github.sha }}
+          path: market-prediction-lab/docs/us-stocks-in-play-orb-3y-v1-result.json
+          if-no-files-found: error
+          retention-days: 14
