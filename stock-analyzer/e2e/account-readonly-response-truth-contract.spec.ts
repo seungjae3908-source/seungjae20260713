@@ -385,7 +385,8 @@ test('central authenticated transport guards every read-only provider snapshot',
   expect(authFetch).toContain('throw new Error(INVALID_ACCOUNT_READONLY_RESPONSE)');
 
   expect(component).toContain("if (snapshot.connected) return snapshot.stale ? '이전 정상값' : '연결됨';");
-  expect(component).toContain('jsonRequest<CanonicalAccountSnapshot>(`/api/accounts/read-only/${provider}`');
+  expect(component).toContain('const result = await accountSnapshotRequest(provider, controller.signal);');
+  expect(component).toContain('authorizedFetch(`/api/accounts/read-only/${provider}`');
 
   expect(backendContract).toContain('provider: AccountProvider; readOnly: true; connected: boolean; status: AccountReadStatus;');
   expect(backendContract).toContain('orderRequests: 0; cancelRequests: 0; amendRequests: 0; transferRequests: 0; withdrawalRequests: 0;');
