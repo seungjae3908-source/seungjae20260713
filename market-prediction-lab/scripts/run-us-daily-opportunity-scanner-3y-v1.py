@@ -17,6 +17,7 @@ import pandas as pd
 import requests
 import re
 import concurrent.futures
+from huggingface_hub import snapshot_download
 from sklearn.ensemble import HistGradientBoostingRegressor
 
 START = pd.Timestamp("2023-08-10", tz="UTC")
@@ -121,6 +122,62 @@ def yahoo_symbol_history(symbol: str) -> pd.DataFrame:
             last = error
             time.sleep(0.5 * (attempt + 1))
     raise RuntimeError(f"YAHOO_FAILED:{symbol}:{last}")
+
+
+def load_hf_yahoo_universe() -> tuple[pd.DataFrame, list[pd.Timestamp], dict]:
+    local_dir = Path(snapshot_download(
+        repo_id="AmirTrader/YahooFinance",
+        repo_type="dataset",
+        allow_patterns=["data/daily/*.parquet"],
+    ))
+    files = sorted((local_dir / "data" / "daily").glob("*.parquet"))
+    if len(files) < 100:
+        raise RuntimeError(f"HF_DAILY_FILE_COUNT_TOO_LOW:{len(files)}")
+
+    candidates = []
+    trading_dates: set[pd.Timestamp] = set()
+    usable = 0
+    candidate_symbols = 0
+    failures = []
+
+    for index, file in enumerate(files, 1):
+        symbol = file.stem.upper()
+        try:
+            g = pd.read_parquet(
+                file,
+                columns=["date", "open", "high", "low", "close", "volume"],
+            )
+            g = g.rename(columns={"date": "timestamp"})
+            g["timestamp"] = pd.to_datetime(g["timestamp"], utc=True, errors="coerce")
+            g["symbol"] = symbol
+            g = g.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
+            g = g[(g.timestamp >= WARMUP) & (g.timestamp <= END)]
+            if len(g) < 80:
+                continue
+            g = g[["symbol", "timestamp", "open", "high", "low", "close", "volume"]].sort_values("timestamp").reset_index(drop=True)
+            usable += 1
+            for dt in g.loc[(g.timestamp >= START) & (g.timestamp <= END), "timestamp"].tolist():
+                trading_dates.add(dt)
+            cand = candidate_features(g)
+            if not cand.empty:
+                candidate_symbols += 1
+                candidates.append(cand)
+        except Exception as error:
+            failures.append({"symbol": symbol, "error": str(error)[:300]})
+        if index % 1000 == 0:
+            print(json.dumps({"hfFilesParsed": index, "usableSymbols": usable, "candidateSymbols": candidate_symbols}), flush=True)
+
+    if not candidates:
+        raise RuntimeError("NO_HF_DAILY_MOVER_CANDIDATES")
+    data = pd.concat(candidates, ignore_index=True).sort_values(["timestamp", "symbol"]).reset_index(drop=True)
+    return data, sorted(trading_dates), {
+        "requestedFiles": len(files),
+        "usableSymbols": usable,
+        "failedSymbols": len(failures),
+        "candidateSymbols": candidate_symbols,
+        "candidateRows": int(len(data)),
+        "failurePreview": failures[:10],
+    }
 
 
 def load_catalog_yahoo_universe() -> tuple[pd.DataFrame, list[pd.Timestamp], dict]:
@@ -660,15 +717,27 @@ def main() -> None:
                 "fallbackUsed": False,
             }
         except Exception as stooq_error:
-            print(json.dumps({"stooqBulkUnavailable": str(stooq_error), "fallback": "APP_CATALOG_YAHOO"}), flush=True)
-            data, trading_dates, universe = load_catalog_yahoo_universe()
-            source_meta = {
-                "provider": "Yahoo Finance daily chart via app US stock catalog",
-                "url": "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
-                "scope": "current app curated U.S. stock catalog, dynamically re-ranked each trading day",
-                "fallbackUsed": True,
-                "stooqBulkError": str(stooq_error),
-            }
+            print(json.dumps({"stooqBulkUnavailable": str(stooq_error), "fallback": "HF_YAHOO_DAILY"}), flush=True)
+            try:
+                data, trading_dates, universe = load_hf_yahoo_universe()
+                source_meta = {
+                    "provider": "Hugging Face AmirTrader/YahooFinance daily parquet",
+                    "url": "https://huggingface.co/datasets/AmirTrader/YahooFinance",
+                    "scope": "large public U.S. equity daily-history collection, dynamically re-ranked each trading day",
+                    "fallbackUsed": True,
+                    "stooqBulkError": str(stooq_error),
+                }
+            except Exception as hf_error:
+                print(json.dumps({"hfYahooUnavailable": str(hf_error), "fallback": "APP_CATALOG_YAHOO"}), flush=True)
+                data, trading_dates, universe = load_catalog_yahoo_universe()
+                source_meta = {
+                    "provider": "Yahoo Finance daily chart via app US stock catalog",
+                    "url": "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
+                    "scope": "current app curated U.S. stock catalog, dynamically re-ranked each trading day",
+                    "fallbackUsed": True,
+                    "stooqBulkError": str(stooq_error),
+                    "hfYahooError": str(hf_error),
+                }
 
     candidates = rule_candidates(data, trading_dates)
     candidates.append(walk_forward_ai(data, BASIC_FEATURES, "DAILY_MOVER_AI_BASIC", trading_dates))
