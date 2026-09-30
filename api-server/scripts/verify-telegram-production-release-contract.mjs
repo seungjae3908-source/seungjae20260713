@@ -231,7 +231,6 @@ if (/PROD_DATABASE_URL=%q/.test(source)
 }
 
 const deployRequiredFragments = [
-  'PRODUCTION_NODE_OPTIONS="--dns-result-order=ipv4first --no-network-family-autoselection"',
   'read_telegram_activation_state()',
   'restart_application_preserving_telegram()',
   'application_runtime_ready()',
@@ -258,7 +257,7 @@ if (!canaryBlock.includes('LIVE_TELEGRAM_ACTIVATION_APPROVED=false')
   console.error('[telegram-production-release-contract] canary must remain Telegram fail-closed');
   process.exit(1);
 }
-if (!canaryBlock.includes('NODE_OPTIONS="$PRODUCTION_NODE_OPTIONS"')) {
+if (!canaryBlock.includes('NODE_OPTIONS="--dns-result-order=ipv4first --no-network-family-autoselection"')) {
   throw new Error('Production canary must use the IPv4-first Node network policy');
 }
 const restartStart = deploySource.indexOf('restart_application_preserving_telegram() {');
@@ -267,7 +266,7 @@ if (restartStart < 0 || restartEnd <= restartStart) {
   throw new Error('Production restart block was not found');
 }
 const restartBlock = deploySource.slice(restartStart, restartEnd);
-if (!restartBlock.includes('NODE_OPTIONS="$PRODUCTION_NODE_OPTIONS"')) {
+if (!restartBlock.includes('NODE_OPTIONS="--dns-result-order=ipv4first --no-network-family-autoselection"')) {
   throw new Error('Production PM2 restart must persist the IPv4-first Node network policy');
 }
 
