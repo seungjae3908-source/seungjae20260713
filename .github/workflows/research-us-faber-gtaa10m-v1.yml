@@ -1,4 +1,4 @@
-name: Research US Faber GTAA 10M V2
+name: Research US Faber GTAA 10M V3
 
 on:
   pull_request:
@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: research-us-faber-gtaa10m-v2-${{ github.event.pull_request.number || github.ref }}
+  group: research-us-faber-gtaa10m-v3-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -55,7 +55,10 @@ jobs:
             if(!r.highFidelityApprox?.[w]?.paperLikeTotalReturnCloseTbill?.portfolio) throw new Error('HF_PAPER_'+w);
             if(!r.highFidelityApprox?.[w]?.causalTotalReturnNextOpenTbill?.portfolio) throw new Error('HF_CAUSAL_'+w);
             if(!r.highFidelityApprox?.[w]?.causalStress15x?.portfolio) throw new Error('HF_STRESS_'+w);
+            if(!r.highFidelityApprox?.[w]?.leaveOneOutStress15x||r.highFidelityApprox[w].leaveOneOutStress15x.allPositive!==true) throw new Error('HF_LEAVE_ONE_OUT_'+w);
           }
+          if(r.promotionAssessment?.highFidelityCrossWindowPositive!==true||r.promotionAssessment?.highFidelityLeaveOneOutPositive!==true) throw new Error('HF_ROBUSTNESS');
+          if(r.promotionAssessment?.status!=='REFERENCE_CANDIDATE_REQUIRES_FUTURE_OOS') throw new Error('HF_STATUS');
           if(r.promotionAssessment?.automaticPromotionAllowed!==false||r.promotionAssessment?.economicSampleCredit!==0||r.promotionAssessment?.profitabilityClaimAllowed!==false) throw new Error('PROMOTION');
           if(r.promotionAssessment?.movingAverageRetuningAllowedAfterObservation!==false||r.promotionAssessment?.assetReplacementAllowedAfterObservation!==false) throw new Error('POST_HOC');
           if(r.safeguards?.researchOnly!==true||r.safeguards?.actualOrders!==0||r.safeguards?.orderRouteCalled!==false||r.safeguards?.executionAuthority!=='NONE') throw new Error('SAFETY');
@@ -63,7 +66,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: us-faber-gtaa10m-v2-${{ github.event.pull_request.head.sha }}
+          name: us-faber-gtaa10m-v3-${{ github.event.pull_request.head.sha }}
           path: market-prediction-lab/docs/us-faber-gtaa10m-v1.json
           if-no-files-found: error
           retention-days: 30
