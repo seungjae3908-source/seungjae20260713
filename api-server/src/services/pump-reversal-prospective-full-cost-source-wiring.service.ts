@@ -1,4 +1,9 @@
-import { createRequire } from 'node:module';
+// @ts-ignore -- canonical Prediction Lab JS is contract-tested but has no TS declaration yet.
+import { BitgetPublicClient as BitgetPublicClientRuntime } from '../../../market-prediction-lab/src/bitget-public-client.js';
+// @ts-ignore -- canonical Prediction Lab JS is contract-tested but has no TS declaration yet.
+import { createNaturalPaperAuthoritativeSettlementCostCollector as createCollectorRuntime } from '../../../market-prediction-lab/src/natural-paper-authoritative-settlement-cost-collector-v1.js';
+// @ts-ignore -- canonical Prediction Lab JS is contract-tested but has no TS declaration yet.
+import { createPumpProspectiveFullCostSettlementOwnerV1 as createSettlementOwnerRuntime } from '../../../market-prediction-lab/src/crypto-pump-reversal-full-cost-settlement-v1.js';
 import {
   buildPaperSimulatedExecutionEvidence,
 } from './paper-simulated-execution-evidence.service';
@@ -31,16 +36,11 @@ type SettlementOwnerFactory = (input: Readonly<{
   clock: () => number;
 }>) => (context: PumpFullCostContext) => Promise<Readonly<Record<string, any>>>;
 
-const requirePredictionLab = createRequire(import.meta.url);
-const { BitgetPublicClient } = requirePredictionLab(
-  '../../../market-prediction-lab/src/bitget-public-client.js',
-) as Readonly<{ BitgetPublicClient: new () => BitgetPublicClientLike }>;
-const { createNaturalPaperAuthoritativeSettlementCostCollector } = requirePredictionLab(
-  '../../../market-prediction-lab/src/natural-paper-authoritative-settlement-cost-collector-v1.js',
-) as Readonly<{ createNaturalPaperAuthoritativeSettlementCostCollector: CollectorFactory }>;
-const { createPumpProspectiveFullCostSettlementOwnerV1 } = requirePredictionLab(
-  '../../../market-prediction-lab/src/crypto-pump-reversal-full-cost-settlement-v1.js',
-) as Readonly<{ createPumpProspectiveFullCostSettlementOwnerV1: SettlementOwnerFactory }>;
+const BitgetPublicClient = BitgetPublicClientRuntime as unknown as new () => BitgetPublicClientLike;
+const createNaturalPaperAuthoritativeSettlementCostCollector =
+  createCollectorRuntime as unknown as CollectorFactory;
+const createPumpProspectiveFullCostSettlementOwnerV1 =
+  createSettlementOwnerRuntime as unknown as SettlementOwnerFactory;
 
 type PumpFullCostContext = Readonly<{
   record: Readonly<Record<string, any>>;
