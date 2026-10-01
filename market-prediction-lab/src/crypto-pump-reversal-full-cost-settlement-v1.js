@@ -181,7 +181,7 @@ export function buildPumpCanonicalSettlementBridgeV1({
       immutableContractDigest,
       pendingExit: canonicalTrigger,
       sampleEligibility: Object.freeze({
-        provenanceClass: "PUMP_PROSPECTIVE",
+        provenanceClass: "NATURAL_FORWARD",
       }),
     }),
   });
@@ -209,7 +209,7 @@ export function buildPumpCanonicalSettlementBridgeV1({
       close: triggerBar.close,
     }),
     naturalEvidence: Object.freeze({
-      provenanceClass: "PUMP_PROSPECTIVE",
+      provenanceClass: "NATURAL_FORWARD",
       synthetic: false,
       replay: false,
       testOnly: false,
