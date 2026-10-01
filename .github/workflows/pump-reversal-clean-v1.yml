@@ -61,7 +61,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          node --test             tests/crypto-pump-reversal-clean-v1.test.js             tests/crypto-pump-reversal-public-source-v1.test.js             tests/crypto-pump-reversal-execution-public-source-v1.test.js             tests/crypto-pump-reversal-prospective-policy-v1.test.js             tests/crypto-pump-reversal-prospective-state-v1.test.js             tests/crypto-pump-reversal-prospective-runtime-v1.test.js             tests/crypto-pump-reversal-prospective-store-v1.test.js
+          node --test             tests/crypto-pump-reversal-clean-v1.test.js             tests/crypto-pump-reversal-public-source-v1.test.js             tests/crypto-pump-reversal-execution-public-source-v1.test.js             tests/crypto-pump-reversal-prospective-execution-sample-v1.test.js             tests/crypto-pump-reversal-prospective-policy-v1.test.js             tests/crypto-pump-reversal-prospective-state-v1.test.js             tests/crypto-pump-reversal-prospective-runtime-v1.test.js             tests/crypto-pump-reversal-prospective-store-v1.test.js
 
       - name: Run Pump API risk-owner contracts
         working-directory: api-server
