@@ -230,7 +230,9 @@ export function sizePumpReversalPaperRisk(
     || !positive(rules?.minimumQuantity)
     || !positive(rules?.minimumNotional)
     || !positive(rules?.maximumLeverage)
-    || rules.maximumLeverage < LEVERAGE);
+    || rules.maximumLeverage < LEVERAGE
+    || !nonNegative(rules?.maintenanceMarginRate)
+    || Number(rules.maintenanceMarginRate) >= 1);
 
   add(blockers, 'PUMP_BITGET_PUBLIC_EVIDENCE_REQUIRED',
     publicEvidence?.provider !== 'bitget'
