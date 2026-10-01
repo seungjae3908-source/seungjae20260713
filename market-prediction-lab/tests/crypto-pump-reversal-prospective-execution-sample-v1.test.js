@@ -119,6 +119,7 @@ test("builds an OPEN simulated prospective execution sample without inventing Pr
   assert.equal(sample.profitabilityClaimAllowed, false);
   assert.equal(sample.fill.status, "FILLED");
   assert.equal(sample.fill.filledQuantity, 0.1);
+  assert.equal(sample.identity.parameterDigest, sample.identity.parameterHash);
   assert.ok(sample.fill.fillPrice < 99.9);
   assert.equal(sample.fundingChargedAtEntry, false);
   assert.equal(sample.executionAuthority, "NONE");
