@@ -113,6 +113,7 @@ export function buildPumpPaperAccountRiskSnapshot(
 export function createPumpReversalProspectiveRiskOwner(input: Readonly<{
   sources: PumpReversalProspectiveRiskOwnerSources;
   sizeRisk?: typeof sizePumpReversalPaperRisk;
+  now?: () => number;
 }>): (context: Readonly<{
   record: PumpProspectiveOpenRecord;
   state?: unknown;
@@ -120,13 +121,15 @@ export function createPumpReversalProspectiveRiskOwner(input: Readonly<{
 }>) => Promise<PumpRiskSizingResult | PumpReversalProspectiveRiskOwnerBlocked> {
   const sources = input?.sources;
   const sizeRisk = input?.sizeRisk ?? sizePumpReversalPaperRisk;
+  const now = input?.now ?? Date.now;
   if (!sources
     || typeof sources.paperStateSnapshotForRecord !== 'function'
     || typeof sources.contractRulesForRecord !== 'function'
     || typeof sources.publicEvidenceForRecord !== 'function'
     || typeof sources.depthForRecord !== 'function'
     || typeof sources.supplementalCostEvidenceForRecord !== 'function'
-    || typeof sizeRisk !== 'function') {
+    || typeof sizeRisk !== 'function'
+    || typeof now !== 'function') {
     throw new TypeError('Pump prospective risk owner sources are required');
   }
 
@@ -174,6 +177,10 @@ export function createPumpReversalProspectiveRiskOwner(input: Readonly<{
       return blocked('AUTHORITATIVE_SOURCES', ['PUMP_RISK_OWNER_AUTHORITATIVE_SOURCE_MISSING']);
     }
 
+    const sizingNowMs = now();
+    if (!safeTime(sizingNowMs) || sizingNowMs < observedAtMs) {
+      return blocked('RISK_SIZING', ['PUMP_RISK_OWNER_SIZING_CLOCK_INVALID']);
+    }
     try {
       return sizeRisk({
         record,
@@ -182,7 +189,7 @@ export function createPumpReversalProspectiveRiskOwner(input: Readonly<{
         publicEvidence,
         depth,
         supplementalCostEvidence,
-        nowMs: observedAtMs,
+        nowMs: sizingNowMs,
       });
     } catch {
       return blocked('RISK_SIZING', ['PUMP_RISK_OWNER_SIZING_FAILED']);
