@@ -185,3 +185,19 @@ test('price drift above 2% from the exact next-bar reference blocks sizing', () 
   assert.equal(result.status, 'BLOCKED');
   assert.ok(result.blockers.includes('PUMP_ENTRY_REFERENCE_PRICE_DRIFT'));
 });
+
+
+test('missing maintenance-margin tier evidence blocks sizing instead of using a scalar default', () => {
+  const result = sizePumpReversalPaperRisk({
+    record: record(),
+    account: account(),
+    contractRules: { ...rules(), maintenanceMarginRate: null },
+    publicEvidence: publicEvidence(),
+    depth: depth(),
+    supplementalCostEvidence: supplemental(),
+    nowMs: NOW,
+  });
+  assert.equal(result.status, 'BLOCKED');
+  assert.ok(result.blockers.includes('PUMP_CONTRACT_RULES_REQUIRED'));
+  assert.equal(result.finalQuantity, null);
+});
