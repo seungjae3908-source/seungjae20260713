@@ -44,7 +44,8 @@ const CREDENTIAL_ACCESS_FAILURES = new Set([
 ]);
 
 export function isAccountReadonlyCredentialAccessError(code: string) {
-  return CREDENTIAL_ACCESS_FAILURES.has(code);
+  return CREDENTIAL_ACCESS_FAILURES.has(code)
+    || code.startsWith('KIWOOM_AUTH_OR_IP_REJECTED_');
 }
 
 export function classifyProviderError(value: unknown): AccountReadonlyError {
