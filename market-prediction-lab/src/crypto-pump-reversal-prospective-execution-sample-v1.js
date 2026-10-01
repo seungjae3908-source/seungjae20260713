@@ -52,7 +52,7 @@ export function buildPumpProspectiveExecutionSampleV1({
   record,
   sizingResult,
 } = {}) {
-  if (record?.status !== "OPEN"
+  if (!["OPEN", "EXIT_TRIGGERED"].includes(record?.status)
     || record?.signal?.strategyId !== "CRYPTO_PUMP_REVERSAL_SHORT_CLEAN_V1"
     || record?.signal?.direction !== "SHORT"
     || record?.signal?.market !== "CRYPTO_FUTURES"
