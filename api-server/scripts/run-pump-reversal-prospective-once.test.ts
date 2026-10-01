@@ -30,6 +30,7 @@ test('one-shot hard-preflights only policy and keeps Paper/cost reads lazy', asy
     paperStateSnapshotPath: PAPER,
     supplementalCostEvidencePath: COST,
     ownerId: 'test-owner',
+    scheduleActive: true,
     now: () => NOW,
     readJson: async (path) => {
       reads.push(path);
@@ -92,6 +93,7 @@ test('one-shot hard-preflights only policy and keeps Paper/cost reads lazy', asy
   assert.equal(result.summary?.fullCostSettled, 1);
   assert.equal(result.summary?.netEconomicOutcomesAvailable, 1);
   assert.equal(result.profitabilityProven, false);
+  assert.equal(result.scheduleActive, true);
   assert.equal(result.executionAuthority, 'NONE');
   assert.equal(result.realOrderCount, 0);
   assert.equal(result.sensitiveValuesEmitted, false);
