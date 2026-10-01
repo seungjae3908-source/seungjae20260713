@@ -149,6 +149,68 @@ function validateReadyRiskSizing(record) {
   }
 }
 
+function validateFullCostSettlement(record, policy) {
+  const settlement = record.fullCostSettlement;
+  if (!settlement
+    || settlement.schemaVersion !== "crypto-pump-reversal-full-cost-settlement-v1"
+    || settlement.status !== "SETTLED"
+    || settlement.recordId !== record.recordId
+    || settlement.signalId !== record.signal.signalId
+    || settlement.candidateId !== record.observation.candidateId
+    || settlement.symbol !== record.observation.symbol
+    || settlement.direction !== "SHORT"
+    || settlement.exitTriggerId !== record.exitTrigger?.exitTriggerId
+    || settlement.riskSizingEvidenceDigest !== record.riskSizing?.evidenceDigest
+    || !Number.isSafeInteger(settlement.settledAtMs)
+    || settlement.settledAtMs < record.exitTrigger?.triggerTimestampMs
+    || !Number.isFinite(settlement.netPnl)
+    || !Number.isFinite(settlement.netReturnPercent)
+    || !Number.isFinite(settlement.grossPnl)
+    || !Number.isFinite(settlement.grossReturnPercent)
+    || !nonEmpty(settlement.costPolicyVersion)
+    || settlement.executionAuthority !== "NONE"
+    || settlement.liveOrderAllowed !== false
+    || settlement.privateTradingApiAllowed !== false
+    || settlement.orderSubmitted !== false
+    || settlement.exchangeRequestSent !== false
+    || settlement.profitabilityClaimAllowed !== false
+    || settlement.economicSampleCredit !== 1) {
+    throw new Error("PUMP_PROSPECTIVE_FULL_COST_SETTLEMENT_INVALID");
+  }
+  const required = policy?.fullCostPolicy?.requiredComponents;
+  const components = settlement.fullCostEvidence?.components;
+  if (!Array.isArray(required) || !components || typeof components !== "object") {
+    throw new Error("PUMP_PROSPECTIVE_FULL_COST_COMPONENTS_REQUIRED");
+  }
+  const qualities = new Set(["OBSERVED", "DOCUMENTED", "ESTIMATED", "NOT_APPLICABLE"]);
+  for (const name of required) {
+    const component = components[name];
+    if (!component
+      || component.status !== "PRESENT"
+      || !Number.isFinite(component.valuePercent)
+      || component.valuePercent < 0
+      || !qualities.has(component.quality)
+      || !nonEmpty(component.source)
+      || !nonEmpty(component.provenance)
+      || component.countsAsExecutionCost !== true
+      || component.unavailableIsZero !== false) {
+      throw new Error(`PUMP_PROSPECTIVE_FULL_COST_COMPONENT_INVALID:${name}`);
+    }
+  }
+  if (Object.keys(components).length < required.length
+    || settlement.fullCostEvidence.fullCostReady !== true
+    || settlement.fullCostEvidence.unknownIsZero !== false
+    || settlement.fullCostEvidence.unavailableCostConvertedToZero !== false) {
+    throw new Error("PUMP_PROSPECTIVE_FULL_COST_EVIDENCE_INVALID");
+  }
+  if (record.netPnl !== settlement.netPnl
+    || record.netReturnPercent !== settlement.netReturnPercent
+    || record.grossReturnPercent !== settlement.grossReturnPercent
+    || record.fullCostSettlementId !== settlement.settlementId) {
+    throw new Error("PUMP_PROSPECTIVE_FULL_COST_ECONOMICS_MISMATCH");
+  }
+}
+
 function validateRecord(record, policy) {
   if (!record
     || record.schemaVersion !== "crypto-pump-reversal-prospective-record-v1"
@@ -206,9 +268,18 @@ function validateRecord(record, policy) {
     }
   }
 
-  if (record.netReturnPercent !== null || record.netPnl !== null
-    || record.fullCostSettlementStatus !== "MISSING_CANONICAL_FULL_COST") {
-    throw new Error("PUMP_PROSPECTIVE_PRE_FULL_COST_ECONOMICS_FORBIDDEN");
+  if (record.fullCostSettlementStatus === "MISSING_CANONICAL_FULL_COST") {
+    if (record.netReturnPercent !== null || record.netPnl !== null
+      || record.fullCostSettlementId !== null || record.fullCostSettlement != null) {
+      throw new Error("PUMP_PROSPECTIVE_PRE_FULL_COST_ECONOMICS_FORBIDDEN");
+    }
+  } else if (record.fullCostSettlementStatus === "CANONICAL_FULL_COST_SETTLED") {
+    if (record.status !== "EXIT_TRIGGERED" || record.riskSizingStatus !== "READY") {
+      throw new Error("PUMP_PROSPECTIVE_FULL_COST_WITHOUT_SIZED_EXIT_FORBIDDEN");
+    }
+    validateFullCostSettlement(record, policy);
+  } else {
+    throw new Error("PUMP_PROSPECTIVE_FULL_COST_STATUS_INVALID");
   }
 }
 
@@ -363,6 +434,8 @@ export function admitPumpProspectiveSignalToStateV1(state, signal, observedAtMs)
     netPnl: null,
     fullCostSettlementStatus: "MISSING_CANONICAL_FULL_COST",
     fullCostSettlementId: null,
+    fullCostSettlement: null,
+    economicSampleCredit: 0,
     profitabilityCredit: 0,
     profitabilityClaimAllowed: false,
     executionAuthority: "NONE",
@@ -671,6 +744,8 @@ export function advancePumpProspectiveRecordV1(state, {
     netPnl: null,
     fullCostSettlementStatus: "MISSING_CANONICAL_FULL_COST",
     fullCostSettlementId: null,
+    fullCostSettlement: null,
+    economicSampleCredit: 0,
   });
   const records = state.records.map((record, rowIndex) => rowIndex === index ? updatedRecord : clone(record));
   const next = withDigest({
@@ -679,6 +754,48 @@ export function advancePumpProspectiveRecordV1(state, {
     records: Object.freeze(records),
   });
   return deepFreeze({ status: "EXIT_TRIGGERED", state: next, record: updatedRecord });
+}
+
+export function attachPumpProspectiveFullCostSettlementV1(state, {
+  recordId,
+  settlement,
+  observedAtMs,
+} = {}) {
+  validatePumpProspectiveStateV1(state);
+  const index = state.records.findIndex((record) => record.recordId === recordId);
+  if (index < 0) throw new Error("PUMP_PROSPECTIVE_RECORD_NOT_FOUND");
+  const current = state.records[index];
+  if (current.status !== "EXIT_TRIGGERED" || current.riskSizingStatus !== "READY") {
+    throw new Error("PUMP_PROSPECTIVE_FULL_COST_SIZED_EXIT_REQUIRED");
+  }
+  if (current.fullCostSettlementStatus === "CANONICAL_FULL_COST_SETTLED") {
+    return deepFreeze({ status: "ALREADY_SETTLED", state, record: current });
+  }
+  if (!Number.isSafeInteger(observedAtMs)
+    || observedAtMs < current.exitTrigger.triggerTimestampMs) {
+    throw new Error("PUMP_PROSPECTIVE_FULL_COST_OBSERVED_AT_INVALID");
+  }
+  const normalized = deepFreeze(clone(settlement));
+  const updatedRecord = deepFreeze({
+    ...current,
+    netReturnPercent: normalized?.netReturnPercent ?? null,
+    netPnl: normalized?.netPnl ?? null,
+    grossReturnPercent: normalized?.grossReturnPercent ?? current.grossReturnPercent,
+    fullCostSettlementStatus: "CANONICAL_FULL_COST_SETTLED",
+    fullCostSettlementId: normalized?.settlementId ?? null,
+    fullCostSettlement: normalized,
+    economicSampleCredit: 1,
+    profitabilityCredit: 0,
+    profitabilityClaimAllowed: false,
+  });
+  validateFullCostSettlement(updatedRecord, state.policy);
+  const records = state.records.map((record, rowIndex) => rowIndex === index ? updatedRecord : clone(record));
+  const next = withDigest({
+    ...stateDigestPayload(state),
+    updatedAtMs: Math.max(state.updatedAtMs, observedAtMs),
+    records: Object.freeze(records),
+  });
+  return deepFreeze({ status: "SETTLED", state: next, record: updatedRecord });
 }
 
 export function pumpProspectiveStateSummaryV1(state) {
