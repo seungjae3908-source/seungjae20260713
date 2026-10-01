@@ -8,6 +8,7 @@ import {
   admitPumpProspectiveSignalToStateV1,
   advancePumpProspectiveRecordV1,
   attachPumpProspectiveRiskSizingV1,
+  attachPumpProspectiveFullCostSettlementV1,
   markPumpProspectiveRiskSizingExpiredV1,
   markPumpProspectiveEntryMissedV1,
   markPumpProspectiveSignalScanCompletedV1,
@@ -64,6 +65,7 @@ export async function runPumpProspectivePaperCycleV1({
   collectNextBarOpen,
   collectMinutePath,
   sizePaperRisk = null,
+  settleFullCost = null,
 } = {}) {
   validatePumpProspectiveStateV1(state);
   if (!Number.isSafeInteger(nowMs) || nowMs < state.updatedAtMs) {
@@ -74,6 +76,9 @@ export async function runPumpProspectivePaperCycleV1({
   }
   if (sizePaperRisk != null && typeof sizePaperRisk !== "function") {
     throw new TypeError("Pump risk sizing owner must be a function or null");
+  }
+  if (settleFullCost != null && typeof settleFullCost !== "function") {
+    throw new TypeError("Pump Full Cost settlement owner must be a function or null");
   }
 
   let nextState = state;
@@ -330,6 +335,65 @@ export async function runPumpProspectivePaperCycleV1({
     }
   }
 
+  const unsettledSizedExits = nextState.records.filter(
+    (record) => record.status === "EXIT_TRIGGERED"
+      && record.riskSizingStatus === "READY"
+      && record.fullCostSettlementStatus === "MISSING_CANONICAL_FULL_COST",
+  );
+  if (settleFullCost != null) {
+    for (const record of unsettledSizedExits) {
+      try {
+        const settlement = await settleFullCost({
+          record,
+          state: nextState,
+          observedAtMs: nowMs,
+        });
+        if (settlement?.status !== "SETTLED") {
+          const sourceCodes = Array.isArray(settlement?.blockers) && settlement.blockers.length > 0
+            ? settlement.blockers.map(String)
+            : ["PUMP_FULL_COST_SETTLEMENT_BLOCKED"];
+          blockers.push(...sourceCodes);
+          events.push(Object.freeze({
+            stage: "SETTLEMENT",
+            symbol: record.observation.symbol,
+            recordId: record.recordId,
+            status: "BLOCKED",
+            blockers: Object.freeze([...new Set(sourceCodes)]),
+          }));
+          continue;
+        }
+        const attached = attachPumpProspectiveFullCostSettlementV1(nextState, {
+          recordId: record.recordId,
+          settlement,
+          observedAtMs: nowMs,
+        });
+        nextState = attached.state;
+        events.push(Object.freeze({
+          stage: "SETTLEMENT",
+          symbol: record.observation.symbol,
+          recordId: record.recordId,
+          status: attached.status,
+          settlementId: attached.record.fullCostSettlementId,
+          netPnl: attached.record.netPnl,
+          netReturnPercent: attached.record.netReturnPercent,
+          economicSampleCredit: attached.record.economicSampleCredit,
+          profitabilityClaimAllowed: false,
+          executionAuthority: "NONE",
+        }));
+      } catch (error) {
+        const code = String(error?.code ?? error?.message ?? "PUMP_FULL_COST_SETTLEMENT_FAILED");
+        blockers.push(code);
+        events.push(Object.freeze({
+          stage: "SETTLEMENT",
+          symbol: record.observation.symbol,
+          recordId: record.recordId,
+          status: "BLOCKED",
+          blockers: Object.freeze([code]),
+        }));
+      }
+    }
+  }
+
   const summary = pumpProspectiveStateSummaryV1(nextState);
   const uniqueBlockers = unique(blockers);
   return deepFreeze({
@@ -348,12 +412,12 @@ export async function runPumpProspectivePaperCycleV1({
     state: nextState,
     summary,
     riskSizingOwnerConnected: sizePaperRisk != null,
-    canonicalFullCostSettlementConnected: false,
+    canonicalFullCostSettlementConnected: settleFullCost != null,
     canonicalProfitAdmissionConnected: false,
     nextBlocker: summary.exitTriggered > summary.riskSizedExitTriggered
       ? "PUMP_RISK_SIZING_EVIDENCE_MISSING"
-      : summary.riskSizedExitTriggered > 0
-        ? "CANONICAL_FULL_COST_SETTLEMENT_NOT_CONNECTED"
+      : summary.riskSizedExitTriggered > summary.fullCostSettled
+        ? (settleFullCost == null ? "CANONICAL_FULL_COST_SETTLEMENT_NOT_CONNECTED" : "CANONICAL_FULL_COST_SETTLEMENT_NOT_READY")
         : summary.riskSizingExpired > 0
           ? "PUMP_RISK_SIZING_EVIDENCE_EXPIRED"
           : summary.openPositions > summary.riskSizedOpen
@@ -369,6 +433,7 @@ export function createPumpProspectivePaperRuntimeV1({
   collectNextBarOpen = collectPumpNextBarOpenReferenceV1,
   collectMinutePath = collectPumpClosedOneMinutePathV1,
   sizePaperRisk = null,
+  settleFullCost = null,
 } = {}) {
   if (!client || typeof client.get !== "function") throw new TypeError("Bitget public client is required");
   return Object.freeze({
@@ -380,6 +445,7 @@ export function createPumpProspectivePaperRuntimeV1({
         collectNextBarOpen: (input) => collectNextBarOpen({ ...input, client }),
         collectMinutePath: (input) => collectMinutePath({ ...input, client }),
         sizePaperRisk,
+        settleFullCost,
       });
     },
     executionAuthority: "NONE",
