@@ -379,6 +379,34 @@ function withBitgetFallbackAttempt(transport: SignedReadonlyTransport): SignedRe
   );
 }
 
+function isBitgetModeProbeFallbackError(error: unknown) {
+  if (error instanceof AccountReadonlyError) {
+    return error.code === 'BITGET_NOT_UTA'
+      || error.code === 'BITGET_PERMISSION_DENIED'
+      || error.code === 'BITGET_REQUEST_REJECTED'
+      || error.code === 'BITGET_PARAMETER_REJECTED';
+  }
+  const message = error instanceof Error ? error.message : '';
+  return message === 'BITGET_ACCOUNT_SETTINGS_RESPONSE_INVALID'
+    || message === 'BITGET_ACCOUNT_MODE_INVALID'
+    || message === 'BITGET_ACCOUNT_INFO_RESPONSE_INVALID';
+}
+
+async function readBitgetUnknownModeSnapshot(
+  credentials: BitgetCredentials,
+  transport: SignedReadonlyTransport,
+  signal?: AbortSignal,
+  now = new Date(),
+): Promise<CanonicalAccountSnapshot> {
+  const fallbackTransport = withBitgetFallbackAttempt(transport);
+  try {
+    return await readBitgetClassicSnapshot(credentials, fallbackTransport, signal, now);
+  } catch (classicError) {
+    if (!isBitgetModeProbeFallbackError(classicError)) throw classicError;
+  }
+  return readBitgetUtaSnapshot(credentials, fallbackTransport, signal, now);
+}
+
 export async function readBitgetSnapshot(
   credentials: BitgetCredentials,
   transport: SignedReadonlyTransport,
@@ -392,9 +420,22 @@ export async function readBitgetSnapshot(
       await transport(prepareBitgetUtaAccountSettings(credentials), signal),
     );
   } catch (error) {
-    if (!(error instanceof AccountReadonlyError) || error.code !== 'BITGET_NOT_UTA') throw error;
-    mode = 'classic';
-    selectedTransport = withBitgetFallbackAttempt(transport);
+    if (error instanceof AccountReadonlyError && error.code === 'BITGET_NOT_UTA') {
+      mode = 'classic';
+      selectedTransport = withBitgetFallbackAttempt(transport);
+    } else if (isBitgetModeProbeFallbackError(error)) {
+      try {
+        mode = bitgetModeFromAccountInfo(
+          await transport(prepareBitgetUtaAccountInfo(credentials), signal),
+        );
+        selectedTransport = withBitgetFallbackAttempt(transport);
+      } catch (infoError) {
+        if (!isBitgetModeProbeFallbackError(infoError)) throw infoError;
+        return readBitgetUnknownModeSnapshot(credentials, transport, signal, now);
+      }
+    } else {
+      throw error;
+    }
   }
 
   if (mode === 'classic') {
