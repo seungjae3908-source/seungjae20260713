@@ -67,6 +67,7 @@ jobs:
           grep -Fq 'actions/download-artifact@v4' "$workflow"
           grep -Fq 'testedProviders' "$workflow"
           grep -Fq 'reconciliationPassed' "$workflow"
+          grep -Fq 'production-account-readonly-live-qa-v2' "$workflow"
           grep -Fq "const disableTradingGates = () =>" "$workflow"
           grep -Fq "LIVE_TRADING_ACTIVATION_FAILED_ROLLED_BACK" "$workflow"
           grep -Fq "LIVE_TRADING_ACTIVATION_FAILED_AND_ROLLBACK_FAILED" "$workflow"
@@ -345,7 +346,7 @@ jobs:
             || requestedProviders.some((provider) => !allowedProviders.has(provider))) {
             throw new Error('LIVE_TRADING_ACCOUNT_QA_TARGET_PROVIDER_SET_INVALID');
           }
-          if (evidence?.schemaVersion !== 'production-account-readonly-live-qa-v1'
+          if (evidence?.schemaVersion !== 'production-account-readonly-live-qa-v2'
             || evidence?.targetSha !== target
             || evidence?.orderRequests !== 0
             || evidence?.cancelRequests !== 0
