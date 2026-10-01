@@ -807,7 +807,9 @@ export function attachPumpProspectiveFullCostSettlementV1(state, {
     return deepFreeze({ status: "ALREADY_SETTLED", state, record: current });
   }
   if (!Number.isSafeInteger(observedAtMs)
-    || observedAtMs < current.exitTrigger.triggerTimestampMs) {
+    || observedAtMs < current.exitTrigger.triggerTimestampMs
+    || !Number.isSafeInteger(settlement?.settledAtMs)
+    || observedAtMs < settlement.settledAtMs) {
     throw new Error("PUMP_PROSPECTIVE_FULL_COST_OBSERVED_AT_INVALID");
   }
   const normalized = deepFreeze(clone(settlement));
