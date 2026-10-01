@@ -65,6 +65,8 @@ jobs:
           grep -Fq "PRIVATE_TRADING_API_ALLOWED: 'false'" "$file"
           grep -Fq "executionAuthority: 'NONE'" "$file"
           grep -Fq "pnpm exec playwright test --config=playwright.production-account-readonly.config.ts" "$file"
+          grep -Fq 'PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS: "toss,kiwoom,upbit,bitget"' "$file"
+          grep -Fq "production-account-readonly-live-qa-v2" "$file"
           grep -Fq "UPBIT_OPEN_ORDERS_UPBIT_PERMISSION_DENIED" "$file"
           grep -Fq "Rollback provider read flags after downstream failure" "$file"
           grep -Fq "key_value_exposed: false" "$file"
@@ -512,6 +514,7 @@ jobs:
       - name: Run authenticated zero-mutation real-account QA
         env:
           EXPECTED_DEPLOY_SHA: ${{ steps.command.outputs.active_sha }}
+          PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS: "toss,kiwoom,upbit,bitget"
         working-directory: stock-analyzer
         run: pnpm exec playwright test --config=playwright.production-account-readonly.config.ts
 
@@ -528,11 +531,9 @@ jobs:
           const [file, expectedSha] = process.argv.slice(2);
           const value = JSON.parse(fs.readFileSync(file, 'utf8'));
           const providers = Array.isArray(value?.providers) ? value.providers : [];
-          const requiredCrypto = ['upbit', 'bitget'];
-          const stockProviders = ['toss', 'kiwoom'];
-          const providerErrorAccepted = (provider, errorCode) => errorCode === null
-            || (provider === 'upbit' && errorCode === 'UPBIT_OPEN_ORDERS_UPBIT_PERMISSION_DENIED');
-          if (value?.schemaVersion !== 'production-account-readonly-live-qa-v1'
+          const requiredProviders = ['bitget', 'kiwoom', 'toss', 'upbit'];
+          const testedProviders = Array.isArray(value?.testedProviders) ? value.testedProviders : [];
+          if (value?.schemaVersion !== 'production-account-readonly-live-qa-v2'
             || value?.targetSha !== expectedSha
             || value?.officialProductionOrigin !== true
             || value?.authenticatedProductionSession !== true
@@ -547,26 +548,19 @@ jobs:
             || value?.blockedMutationRequests !== 0
             || value?.observedAppMutationRequests !== 0
             || value?.liveTradingAuthorityGranted !== false
-            || value?.autoTradingAuthorityGranted !== false) {
+            || value?.autoTradingAuthorityGranted !== false
+            || JSON.stringify(testedProviders) !== JSON.stringify(requiredProviders)) {
             throw new Error('ACCOUNT_READ_ACTIVATION_QA_EVIDENCE_CONTRACT_FAILED');
           }
-          for (const provider of requiredCrypto) {
+          for (const provider of requiredProviders) {
             const row = providers.find((item) => item?.provider === provider);
             if (!row || row.connected !== true || row.status !== 'CONNECTED'
-              || row.stale !== false || !providerErrorAccepted(provider, row.errorCode)
-              || row.checkedAtPresent !== true || row.lastGoodAtPresent !== true) {
+              || row.stale !== false || row.errorCode !== null
+              || row.checkedAtPresent !== true || row.lastGoodAtPresent !== true
+              || row.reconciliationPassed !== true) {
               throw new Error('ACCOUNT_READ_ACTIVATION_QA_PROVIDER_FAILED_' + provider.toUpperCase());
             }
           }
-          const connectedStock = providers.filter((item) =>
-            stockProviders.includes(item?.provider)
-            && item?.connected === true
-            && item?.status === 'CONNECTED'
-            && item?.stale === false
-            && item?.errorCode === null
-            && item?.checkedAtPresent === true
-            && item?.lastGoodAtPresent === true);
-          if (connectedStock.length < 1) throw new Error('ACCOUNT_READ_ACTIVATION_QA_STOCK_PROVIDER_NOT_CONNECTED');
           const serialized = JSON.stringify(value);
           if (/(clientSecret|secretKey|accessKey|apiKey|passphrase|accountRef|balances|positions|openOrders)/i.test(serialized)) {
             throw new Error('ACCOUNT_READ_ACTIVATION_QA_SECRET_OR_ACCOUNT_VALUE_LEAK');
