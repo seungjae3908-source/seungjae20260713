@@ -7,6 +7,7 @@ import {
   detectPumpProspectiveExit,
   openPumpProspectiveResearchPosition,
 } from "./crypto-pump-reversal-clean-v1.js";
+import { buildPumpProspectiveExecutionSampleV1 } from "./crypto-pump-reversal-prospective-execution-sample-v1.js";
 
 export const PUMP_PROSPECTIVE_STATE_VERSION = "crypto-pump-reversal-prospective-state-v1";
 
@@ -147,6 +148,17 @@ function validateReadyRiskSizing(record) {
     || evidence.attachedAtMs - calculatedAtMs > PUMP_RISK_SIZING_CAPTURE_WINDOW_MS) {
     throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_TIME_INVALID");
   }
+  if (record.prospectiveExecutionSampleStatus !== "READY"
+    || !record.prospectiveExecutionSample) {
+    throw new Error("PUMP_PROSPECTIVE_EXECUTION_SAMPLE_REQUIRED");
+  }
+  const expectedSample = buildPumpProspectiveExecutionSampleV1({
+    record,
+    sizingResult: result,
+  });
+  if (stableSerialize(record.prospectiveExecutionSample) !== stableSerialize(expectedSample)) {
+    throw new Error("PUMP_PROSPECTIVE_EXECUTION_SAMPLE_MISMATCH");
+  }
 }
 
 function validateFullCostSettlement(record, policy) {
@@ -229,7 +241,9 @@ function validateRecord(record, policy) {
     throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_STATUS_INVALID");
   }
   if (record.riskSizingStatus === "MISSING"
-    && (record.riskSizing != null || record.riskSizingBlocker != null)) {
+    && (record.riskSizing != null || record.riskSizingBlocker != null
+      || record.prospectiveExecutionSampleStatus !== "MISSING"
+      || record.prospectiveExecutionSample != null)) {
     throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_MISSING_MUTATED");
   }
   if (record.riskSizingStatus === "READY") {
@@ -237,7 +251,9 @@ function validateRecord(record, policy) {
     validateReadyRiskSizing(record);
   }
   if (record.riskSizingStatus === "EXPIRED") {
-    if (record.riskSizing != null || !nonEmpty(record.riskSizingBlocker)) {
+    if (record.riskSizing != null || !nonEmpty(record.riskSizingBlocker)
+      || record.prospectiveExecutionSampleStatus !== "EXPIRED"
+      || record.prospectiveExecutionSample != null) {
       throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_EXPIRED_INVALID");
     }
   }
@@ -425,6 +441,8 @@ export function admitPumpProspectiveSignalToStateV1(state, signal, observedAtMs)
     riskSizingStatus: "MISSING",
     riskSizing: null,
     riskSizingBlocker: null,
+    prospectiveExecutionSampleStatus: "MISSING",
+    prospectiveExecutionSample: null,
     position: null,
     exitTrigger: null,
     lastMinuteObservedAtMs: null,
@@ -608,6 +626,8 @@ export function markPumpProspectiveRiskSizingExpiredV1(state, {
     riskSizingStatus: "EXPIRED",
     riskSizing: null,
     riskSizingBlocker: blocker,
+    prospectiveExecutionSampleStatus: "EXPIRED",
+    prospectiveExecutionSample: null,
   });
   const records = state.records.map((record, rowIndex) => rowIndex === index ? updatedRecord : clone(record));
   const next = withDigest({
@@ -648,11 +668,17 @@ export function attachPumpProspectiveRiskSizingV1(state, {
     ...evidenceCore,
     evidenceDigest: sha256(evidenceCore),
   });
+  const prospectiveExecutionSample = buildPumpProspectiveExecutionSampleV1({
+    record: current,
+    sizingResult: result,
+  });
   const updatedRecord = deepFreeze({
     ...current,
     riskSizingStatus: "READY",
     riskSizing,
     riskSizingBlocker: null,
+    prospectiveExecutionSampleStatus: "READY",
+    prospectiveExecutionSample,
   });
   validateReadyRiskSizing(updatedRecord);
   const records = state.records.map((record, rowIndex) => rowIndex === index ? updatedRecord : clone(record));
@@ -805,6 +831,9 @@ export function pumpProspectiveStateSummaryV1(state) {
   const open = state.records.filter((record) => record.status === "OPEN").length;
   const exited = state.records.filter((record) => record.status === "EXIT_TRIGGERED").length;
   const riskSized = state.records.filter((record) => record.riskSizingStatus === "READY").length;
+  const prospectiveExecutionSamples = state.records.filter(
+    (record) => record.prospectiveExecutionSampleStatus === "READY",
+  ).length;
   const riskSizingExpired = state.records.filter((record) => record.riskSizingStatus === "EXPIRED").length;
   const riskSizedOpen = state.records.filter(
     (record) => record.status === "OPEN" && record.riskSizingStatus === "READY",
@@ -824,6 +853,7 @@ export function pumpProspectiveStateSummaryV1(state) {
     openPositions: open,
     exitTriggered: exited,
     riskSized,
+    prospectiveExecutionSamples,
     riskSizingExpired,
     riskSizedOpen,
     riskSizedExitTriggered,
