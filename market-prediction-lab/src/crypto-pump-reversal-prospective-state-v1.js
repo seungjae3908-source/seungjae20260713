@@ -11,6 +11,7 @@ import {
 export const PUMP_PROSPECTIVE_STATE_VERSION = "crypto-pump-reversal-prospective-state-v1";
 
 const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
 const RECORD_STATUSES = new Set([
   "WAITING_NEXT_BAR",
   "ENTRY_MISSED",
@@ -161,6 +162,13 @@ export function validatePumpProspectiveStateV1(state) {
     || state.createdAtMs <= 0 || state.updatedAtMs < state.createdAtMs) {
     throw new Error("PUMP_PROSPECTIVE_STATE_TIME_INVALID");
   }
+  if (state.lastSignalScanBarCloseMs != null
+    && (!Number.isSafeInteger(state.lastSignalScanBarCloseMs)
+      || state.lastSignalScanBarCloseMs <= 0
+      || state.lastSignalScanBarCloseMs > state.updatedAtMs
+      || state.lastSignalScanBarCloseMs % HOUR_MS !== 0)) {
+    throw new Error("PUMP_PROSPECTIVE_SIGNAL_SCAN_CURSOR_INVALID");
+  }
   if (!state.lastEntryAtBySymbol || typeof state.lastEntryAtBySymbol !== "object" || Array.isArray(state.lastEntryAtBySymbol)) {
     throw new Error("PUMP_PROSPECTIVE_COOLDOWN_STATE_INVALID");
   }
@@ -200,6 +208,7 @@ export function createPumpProspectiveStateV1({ policy, createdAtMs } = {}) {
     createdAtMs,
     updatedAtMs: createdAtMs,
     records: Object.freeze([]),
+    lastSignalScanBarCloseMs: null,
     lastEntryAtBySymbol: Object.freeze({}),
     ...safety(),
   });
@@ -221,6 +230,31 @@ export function restorePumpProspectiveStateV1(serialized, expectedPolicy) {
     throw new Error("PUMP_PROSPECTIVE_RESTORE_POLICY_MISMATCH");
   }
   return deepFreeze(parsed);
+}
+
+export function markPumpProspectiveSignalScanCompletedV1(state, {
+  scanBarCloseMs,
+  observedAtMs,
+} = {}) {
+  validatePumpProspectiveStateV1(state);
+  if (!Number.isSafeInteger(scanBarCloseMs) || scanBarCloseMs <= 0 || scanBarCloseMs % HOUR_MS !== 0) {
+    throw new Error("PUMP_PROSPECTIVE_SIGNAL_SCAN_BAR_CLOSE_INVALID");
+  }
+  if (!Number.isSafeInteger(observedAtMs) || observedAtMs < scanBarCloseMs || observedAtMs < state.updatedAtMs) {
+    throw new Error("PUMP_PROSPECTIVE_SIGNAL_SCAN_OBSERVED_AT_INVALID");
+  }
+  if (state.lastSignalScanBarCloseMs != null && scanBarCloseMs < state.lastSignalScanBarCloseMs) {
+    throw new Error("PUMP_PROSPECTIVE_SIGNAL_SCAN_CURSOR_REGRESSION");
+  }
+  if (state.lastSignalScanBarCloseMs === scanBarCloseMs) {
+    return deepFreeze({ status: "ALREADY_SCANNED", state });
+  }
+  const next = withDigest({
+    ...stateDigestPayload(state),
+    updatedAtMs: observedAtMs,
+    lastSignalScanBarCloseMs: scanBarCloseMs,
+  });
+  return deepFreeze({ status: "MARKED", state: next });
 }
 
 export function admitPumpProspectiveSignalToStateV1(state, signal, observedAtMs) {
