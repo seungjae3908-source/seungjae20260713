@@ -22,7 +22,33 @@
 		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 		<meta name="apple-mobile-web-app-title" content="지식정보" />
 		<script type="module" crossorigin src="/seungjae3908-source/seungjae20260713/ui-vnext-functional-site/assets/index-BR8X9iF6.js"></script>
-	<meta name="ui-vnext-preview" content="6c0fdef101cb737d68e5b01cd273af73a50b880e"></head>
+	<meta name="ui-vnext-preview" content="6c0fdef101cb737d68e5b01cd273af73a50b880e"><script data-ui-vnext-api-bridge>
+(() => {
+  const apiBase = 'https://lsj119.com/api';
+  const nativeFetch = window.fetch.bind(window);
+  const rewrite = (value) => {
+    try {
+      const url = new URL(value, window.location.origin);
+      if (url.origin === window.location.origin && url.pathname.startsWith('/api/')) {
+        return apiBase + url.pathname.slice(4) + url.search + url.hash;
+      }
+    } catch {}
+    return value;
+  };
+  window.fetch = (input, init = {}) => {
+    const method = String(init.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+    const original = input instanceof Request ? input.url : String(input);
+    const rewritten = rewrite(original);
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && String(rewritten).startsWith(apiBase + '/trade-automation')) {
+      return Promise.reject(new Error('UI_VNEXT_PREVIEW_FINANCIAL_MUTATION_BLOCKED'));
+    }
+    if (input instanceof Request && rewritten !== original) {
+      return nativeFetch(new Request(rewritten, input), init);
+    }
+    return nativeFetch(rewritten !== original ? rewritten : input, init);
+  };
+})();
+</script></head>
 	<body>
 		<div id="root"></div>
 	</body>
