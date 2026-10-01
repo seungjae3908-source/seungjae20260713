@@ -11,6 +11,17 @@ export const PAPER_CANONICAL_SEVEN_BLOCKERS = Object.freeze([
   "PAPER_CANONICAL_VALIDATION_RECEIPT_MAXIMUM_AGE_UNCONFIGURED",
 ]);
 
+export const PAPER_CANONICAL_FULL_COST_COMPONENT_BLOCKERS = Object.freeze([
+  "PAPER_CANONICAL_FULL_COST_COMPONENT_COMMISSION_NOT_READY",
+  "PAPER_CANONICAL_FULL_COST_COMPONENT_TAX_NOT_READY",
+  "PAPER_CANONICAL_FULL_COST_COMPONENT_SPREAD_NOT_READY",
+  "PAPER_CANONICAL_FULL_COST_COMPONENT_SLIPPAGE_NOT_READY",
+  "PAPER_CANONICAL_FULL_COST_COMPONENT_FUNDING_NOT_READY",
+  "PAPER_CANONICAL_FULL_COST_COMPONENT_LATENCY_NOT_READY",
+  "PAPER_CANONICAL_FULL_COST_COMPONENT_LIQUIDITY_IMPACT_NOT_READY",
+  "PAPER_CANONICAL_FULL_COST_COMPONENT_PARTIAL_FILL_IMPACT_NOT_READY",
+]);
+
 const TECHNICAL_BLOCKERS = new Set([
   "PAPER_CANONICAL_PAPER_STATE_BINDING_NOT_READY",
   "PAPER_CANONICAL_PAPER_STATE_SNAPSHOT_NOT_READY",
@@ -105,6 +116,20 @@ function evidenceCounts(input) {
   });
 }
 
+function fullCostComponentEvidenceCounts(input) {
+  const source = input?.fullCostComponentEvidenceCounts ?? {};
+  return Object.freeze({
+    commission: nonNegativeInteger(source.commission),
+    tax: nonNegativeInteger(source.tax),
+    spread: nonNegativeInteger(source.spread),
+    slippage: nonNegativeInteger(source.slippage),
+    funding: nonNegativeInteger(source.funding),
+    latency: nonNegativeInteger(source.latency),
+    liquidityImpact: nonNegativeInteger(source.liquidityImpact),
+    partialFillImpact: nonNegativeInteger(source.partialFillImpact),
+  });
+}
+
 function safetyEnvelope() {
   return Object.freeze({
     executionAuthority: "NONE",
@@ -127,21 +152,31 @@ function safetyEnvelope() {
 export function buildPaperCanonicalSevenBlockerRepairPlan(readiness = {}) {
   const blockers = uniqueStrings(readiness.blockers);
   const seven = blockers.filter((value) => PAPER_CANONICAL_SEVEN_BLOCKERS.includes(value));
-  const unrelated = blockers.filter((value) => !PAPER_CANONICAL_SEVEN_BLOCKERS.includes(value));
+  const fullCostComponents = blockers.filter((value) => (
+    PAPER_CANONICAL_FULL_COST_COMPONENT_BLOCKERS.includes(value)
+  ));
+  const unrelated = blockers.filter((value) => (
+    !PAPER_CANONICAL_SEVEN_BLOCKERS.includes(value)
+    && !PAPER_CANONICAL_FULL_COST_COMPONENT_BLOCKERS.includes(value)
+  ));
   const counts = evidenceCounts(readiness);
+  const componentCounts = fullCostComponentEvidenceCounts(readiness);
 
   if (unrelated.length > 0) {
     return Object.freeze({
       schemaVersion: PAPER_CANONICAL_SEVEN_BLOCKER_REPAIR_PLAN_VERSION,
       status: "BLOCKED_UNRELATED",
       sevenBlockers: Object.freeze(seven),
+      fullCostComponentBlockers: Object.freeze(fullCostComponents),
       unrelatedBlockers: Object.freeze(unrelated),
       actions: Object.freeze([]),
       technicalRepairPending: seven.some((value) => TECHNICAL_BLOCKERS.has(value)),
-      genuineEvidencePending: seven.some((value) => GENUINE_EVIDENCE_BLOCKERS.has(value)),
+      genuineEvidencePending: seven.some((value) => GENUINE_EVIDENCE_BLOCKERS.has(value))
+        || fullCostComponents.length > 0,
       readyForActivationReview: false,
       activationApplied: false,
       evidenceCounts: counts,
+      fullCostComponentEvidenceCounts: componentCounts,
       safety: safetyEnvelope(),
     });
   }
@@ -151,6 +186,7 @@ export function buildPaperCanonicalSevenBlockerRepairPlan(readiness = {}) {
       schemaVersion: PAPER_CANONICAL_SEVEN_BLOCKER_REPAIR_PLAN_VERSION,
       status: "READY_FOR_ACTIVATION_REVIEW",
       sevenBlockers: Object.freeze([]),
+      fullCostComponentBlockers: Object.freeze([]),
       unrelatedBlockers: Object.freeze([]),
       actions: Object.freeze([]),
       technicalRepairPending: false,
@@ -158,6 +194,7 @@ export function buildPaperCanonicalSevenBlockerRepairPlan(readiness = {}) {
       readyForActivationReview: true,
       activationApplied: false,
       evidenceCounts: counts,
+      fullCostComponentEvidenceCounts: componentCounts,
       safety: safetyEnvelope(),
     });
   }
@@ -170,7 +207,8 @@ export function buildPaperCanonicalSevenBlockerRepairPlan(readiness = {}) {
     }));
 
   const technicalRepairPending = seven.some((value) => TECHNICAL_BLOCKERS.has(value));
-  const genuineEvidencePending = seven.some((value) => GENUINE_EVIDENCE_BLOCKERS.has(value));
+  const genuineEvidencePending = seven.some((value) => GENUINE_EVIDENCE_BLOCKERS.has(value))
+    || fullCostComponents.length > 0;
 
   const status = technicalRepairPending
     ? "REPAIR_REQUIRED"
@@ -182,6 +220,7 @@ export function buildPaperCanonicalSevenBlockerRepairPlan(readiness = {}) {
     schemaVersion: PAPER_CANONICAL_SEVEN_BLOCKER_REPAIR_PLAN_VERSION,
     status,
     sevenBlockers: Object.freeze(seven),
+    fullCostComponentBlockers: Object.freeze(fullCostComponents),
     unrelatedBlockers: Object.freeze([]),
     actions: Object.freeze(actions),
     technicalRepairPending,
@@ -189,6 +228,7 @@ export function buildPaperCanonicalSevenBlockerRepairPlan(readiness = {}) {
     readyForActivationReview: false,
     activationApplied: false,
     evidenceCounts: counts,
+    fullCostComponentEvidenceCounts: componentCounts,
     safety: safetyEnvelope(),
   });
 }
