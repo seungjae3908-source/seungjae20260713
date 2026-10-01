@@ -8,11 +8,13 @@ import {
   admitPumpProspectiveSignalToStateV1,
   advancePumpProspectiveRecordV1,
   attachPumpProspectiveRiskSizingV1,
+  markPumpProspectiveRiskSizingExpiredV1,
   markPumpProspectiveEntryMissedV1,
   markPumpProspectiveSignalScanCompletedV1,
   openPumpProspectiveRecordV1,
   pumpProspectiveStateSummaryV1,
   validatePumpProspectiveStateV1,
+  PUMP_RISK_SIZING_CAPTURE_WINDOW_MS,
 } from "./crypto-pump-reversal-prospective-state-v1.js";
 
 export const PUMP_PROSPECTIVE_RUNTIME_VERSION =
@@ -204,6 +206,21 @@ export async function runPumpProspectivePaperCycleV1({
   );
   if (sizePaperRisk != null) {
     for (const record of unsizedOpenRecords) {
+      if (nowMs - record.position.entryTimestampMs > PUMP_RISK_SIZING_CAPTURE_WINDOW_MS) {
+        const expired = markPumpProspectiveRiskSizingExpiredV1(nextState, {
+          recordId: record.recordId,
+          observedAtMs: nowMs,
+        });
+        nextState = expired.state;
+        events.push(Object.freeze({
+          stage: "RISK",
+          symbol: record.observation.symbol,
+          recordId: record.recordId,
+          status: "EXPIRED",
+          blocker: expired.record.riskSizingBlocker,
+        }));
+        continue;
+      }
       try {
         const sizing = await sizePaperRisk({
           record,
@@ -333,9 +350,11 @@ export async function runPumpProspectivePaperCycleV1({
       ? "PUMP_RISK_SIZING_EVIDENCE_MISSING"
       : summary.riskSizedExitTriggered > 0
         ? "CANONICAL_FULL_COST_SETTLEMENT_NOT_CONNECTED"
-        : summary.openPositions > summary.riskSizedOpen
-          ? (sizePaperRisk == null ? "PUMP_RISK_SIZING_OWNER_NOT_CONNECTED" : "PUMP_RISK_SIZING_NOT_READY")
-          : "COLLECT_GENUINE_FUTURE_PROSPECTIVE_EVENTS",
+        : summary.riskSizingExpired > 0
+          ? "PUMP_RISK_SIZING_EVIDENCE_EXPIRED"
+          : summary.openPositions > summary.riskSizedOpen
+            ? (sizePaperRisk == null ? "PUMP_RISK_SIZING_OWNER_NOT_CONNECTED" : "PUMP_RISK_SIZING_NOT_READY")
+            : "COLLECT_GENUINE_FUTURE_PROSPECTIVE_EVENTS",
     ...publicSafety(),
   });
 }
