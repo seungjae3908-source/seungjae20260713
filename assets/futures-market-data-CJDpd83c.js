@@ -1,0 +1,1 @@
+import{apiGet as e}from"./api-kjTpWdot.js";function r(){return e("/crypto/futures/status")}async function o(t){return(await e(`/crypto/futures/${encodeURIComponent(t)}/snapshot`)).data}async function a(t){return(await e(`/crypto/futures/${encodeURIComponent(t)}/contract-rules`)).data}export{o as a,a as b,r as g};
