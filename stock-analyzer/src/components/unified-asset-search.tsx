@@ -108,6 +108,8 @@ export function UnifiedAssetSearch({
   const popupRef = useRef<HTMLDivElement>(null);
   const requestSequence = useRef(0);
   const activeRequestController = useRef<AbortController | null>(null);
+  const accessTokenRef = useRef<string | null>(auth.session?.access_token ?? null);
+  accessTokenRef.current = auth.session?.access_token ?? null;
   const [query, setQuery] = useState('');
   const [focused, setFocused] = useState(false);
   const [composing, setComposing] = useState(false);
@@ -223,7 +225,14 @@ export function UnifiedAssetSearch({
     setLoading(true);
     setError(null);
     try {
-      const raw = await fetchUnifiedAssetSuggestions({ q: value, asset, market, limit: value.length === 1 ? 25 : 30, signal });
+      const raw = await fetchUnifiedAssetSuggestions({
+        q: value,
+        asset,
+        market,
+        limit: value.length === 1 ? 25 : 30,
+        accessToken: accessTokenRef.current,
+        signal,
+      });
       if (sequence !== requestSequence.current) return;
       const next = filterResponse(raw);
       setResponse(next);
