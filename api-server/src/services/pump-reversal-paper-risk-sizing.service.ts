@@ -82,6 +82,42 @@ export type PumpRiskSizingInput = Readonly<{
   nowMs?: number;
 }>;
 
+export type PumpProspectiveEntryExecutionSnapshot = Readonly<{
+  schemaVersion: 'crypto-pump-reversal-prospective-entry-execution-v1';
+  style: 'SWING';
+  timeframe: '1h';
+  horizon: 72;
+  quantity: number;
+  evaluatedAtMs: number;
+  marketAdapterIdentity: Readonly<{ id: 'crypto-futures-bitget-execution'; version: 'v2' }>;
+  costPolicy: Readonly<{
+    version: string;
+    commissionRate: number;
+    taxRate: 0;
+    spreadRate: number;
+    slippageRate: number;
+    fundingRate: 0;
+    latencyRate: number;
+    liquidityImpactRate: number;
+    partialFillImpactRate: number;
+  }>;
+  executionPolicy: Readonly<{
+    version: 'crypto-pump-reversal-prospective-entry-execution-v1';
+    fillModel: 'DEPTH_PARTICIPATION';
+    sameBarPolicy: 'STOP_FIRST';
+    allowPartialFill: false;
+    maxParticipationRate: 1;
+  }>;
+  dataEvidence: Readonly<Record<string, unknown>>;
+  quote: Readonly<{ bid: number; ask: number; last: number; asOfMs: number; maxAgeMs: number }>;
+  depth: Readonly<{ bidSize: number; askSize: number }>;
+  observedSlippagePercent: number;
+  visibleCoverageRatio: number;
+  projectedFundingRiskRate: number;
+  fundingChargedAtEntry: false;
+  actualExchangeFillClaim: false;
+}>;
+
 export type PumpRiskSizingResult = Readonly<{
   status: 'READY' | 'BLOCKED';
   version: typeof PUMP_REVERSAL_PAPER_RISK_SIZING_VERSION;
@@ -95,6 +131,7 @@ export type PumpRiskSizingResult = Readonly<{
   conservativeFundingRiskRate: number | null;
   finalQuantity: number | null;
   finalNotional: number | null;
+  prospectiveEntryExecution: PumpProspectiveEntryExecutionSnapshot | null;
   riskPercent: typeof RISK_PERCENT;
   leverage: typeof LEVERAGE;
   marginMode: 'isolated';
@@ -144,7 +181,7 @@ function result(
   partial: Partial<Pick<PumpRiskSizingResult,
     'riskInput' | 'riskResult' | 'maximumProbeNotional' | 'maximumProbeQuantity'
     | 'observedSlippagePercent' | 'observedSpreadPercent' | 'conservativeFundingRiskRate'
-    | 'finalQuantity' | 'finalNotional'>> = {},
+    | 'finalQuantity' | 'finalNotional' | 'prospectiveEntryExecution'>> = {},
 ): PumpRiskSizingResult {
   return Object.freeze({
     status: blockers.length === 0 ? 'READY' : 'BLOCKED',
@@ -159,6 +196,7 @@ function result(
     conservativeFundingRiskRate: partial.conservativeFundingRiskRate ?? null,
     finalQuantity: partial.finalQuantity ?? null,
     finalNotional: partial.finalNotional ?? null,
+    prospectiveEntryExecution: partial.prospectiveEntryExecution ?? null,
     riskPercent: RISK_PERCENT,
     leverage: LEVERAGE,
     marginMode: 'isolated',
@@ -178,6 +216,19 @@ function validateCostEvidence(
     || typeof evidence.source !== 'string'
     || !evidence.source.trim()
     || !fresh(evidence.observedAtMs, nowMs));
+}
+
+function depthLevelSize(level: DepthLevel): number | null {
+  const raw = Array.isArray(level) ? level[1] : (level.size ?? level.qty);
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function visibleDepthSize(levels: readonly DepthLevel[]): number {
+  return levels.reduce((sum, level) => {
+    const size = depthLevelSize(level);
+    return sum + (size ?? 0);
+  }, 0);
 }
 
 function spreadPercent(bid: number, ask: number): number | null {
@@ -361,6 +412,143 @@ export function sizePumpReversalPaperRisk(
     positive(riskResult.notionalValue)
     && riskResult.notionalValue > maximumProbeNotional + Math.max(1e-9, maximumProbeNotional * 1e-12));
 
+  let prospectiveEntryExecution: PumpProspectiveEntryExecutionSnapshot | null = null;
+  if (riskResult.allowed === true
+    && positive(riskResult.recommendedQuantity)
+    && positive(riskResult.notionalValue)
+    && observedSpreadPercent != null) {
+    const finalExecution = buildPaperSimulatedExecutionEvidence({
+      source: 'BITGET_PUBLIC_L2_PUMP_FINAL_ENTRY_EXECUTION',
+      market: 'CRYPTO_FUTURES',
+      symbol: record.signal.symbol,
+      direction: 'SHORT',
+      targetQuantity: riskResult.recommendedQuantity,
+      bids: depth.bids,
+      asks: depth.asks,
+      observedAtMs: depth.observedAtMs,
+      requestStartedAtMs: depth.requestStartedAtMs ?? depth.observedAtMs,
+      requestCompletedAtMs: depth.requestCompletedAtMs ?? depth.observedAtMs,
+      maximumAgeMs: MAX_EVIDENCE_AGE_MS,
+      provenance: ['SIMULATED', 'public-L2', ...depth.provenance],
+      calibratedFillModel: null,
+      nowMs,
+    }) as Readonly<Record<string, any>>;
+    const finalSlippagePercent = Number(finalExecution?.estimated?.slippageEstimate?.percent);
+    const visibleCoverageRatio = Number(finalExecution?.estimated?.liquidityEvidence?.visibleCoverageRatio);
+    const liquidationPrice = riskResult.estimatedLiquidationPrice;
+    const liquidationDistancePct = positive(liquidationPrice)
+      ? Math.abs(record.position.entryPrice - liquidationPrice) / record.position.entryPrice * 100
+      : null;
+    add(blockers, 'PUMP_FINAL_ENTRY_SIMULATION_NOT_READY',
+      finalExecution?.paperSimulation?.status !== 'READY'
+      || !nonNegative(finalSlippagePercent)
+      || !finite(visibleCoverageRatio)
+      || visibleCoverageRatio < 1);
+    add(blockers, 'PUMP_LIQUIDATION_DISTANCE_NOT_EVIDENCED', !positive(liquidationDistancePct));
+
+    if (blockers.length === 0 && liquidationDistancePct != null) {
+      const bidSize = visibleDepthSize(depth.bids);
+      const askSize = visibleDepthSize(depth.asks);
+      add(blockers, 'PUMP_VISIBLE_DEPTH_SIZE_INVALID', !positive(bidSize) || !positive(askSize));
+      if (blockers.length === 0) {
+        const providerProvenance = [
+          'BITGET_PUBLIC_V2',
+          'BITGET_PUBLIC_UTA_V3_ORDERBOOK',
+          ...depth.provenance,
+        ].join('+');
+        prospectiveEntryExecution = Object.freeze({
+          schemaVersion: 'crypto-pump-reversal-prospective-entry-execution-v1',
+          style: 'SWING',
+          timeframe: '1h',
+          horizon: 72,
+          quantity: riskResult.recommendedQuantity,
+          evaluatedAtMs: nowMs,
+          marketAdapterIdentity: Object.freeze({
+            id: 'crypto-futures-bitget-execution',
+            version: 'v2',
+          }),
+          costPolicy: Object.freeze({
+            version: supplemental.costPolicyId.trim(),
+            commissionRate: publicEvidence.takerFeeRate,
+            taxRate: 0,
+            spreadRate: observedSpreadPercent / 100,
+            slippageRate: finalSlippagePercent / 100,
+            fundingRate: 0,
+            latencyRate: supplemental.latency.valuePercent / 100,
+            liquidityImpactRate: supplemental.liquidityImpact.valuePercent / 100,
+            partialFillImpactRate: supplemental.partialFillImpact.valuePercent / 100,
+          }),
+          executionPolicy: Object.freeze({
+            version: 'crypto-pump-reversal-prospective-entry-execution-v1',
+            fillModel: 'DEPTH_PARTICIPATION',
+            sameBarPolicy: 'STOP_FIRST',
+            allowPartialFill: false,
+            maxParticipationRate: 1,
+          }),
+          dataEvidence: Object.freeze({
+            provider: 'bitget',
+            provenance: providerProvenance,
+            publicOnly: true,
+            dataQuality: 'READY',
+            asOfMs: Math.min(publicEvidence.tickerTimestampMs, depth.observedAtMs, supplemental.observedAtMs),
+            maxAgeMs: MAX_EVIDENCE_AGE_MS,
+            tickSize: publicEvidence.priceStep,
+            barProxyRealtimeAllowed: false,
+            quoteEvidence: Object.freeze({
+              available: true,
+              bid: publicEvidence.bidPrice,
+              ask: publicEvidence.askPrice,
+              last: publicEvidence.lastPrice,
+              asOfMs: publicEvidence.tickerTimestampMs,
+              maxAgeMs: MAX_EVIDENCE_AGE_MS,
+            }),
+            depthEvidence: Object.freeze({
+              available: true,
+              bidSize,
+              askSize,
+            }),
+            contractStatus: 'TRADABLE',
+            minQty: rules.minimumQuantity,
+            qtyStep: rules.quantityStep,
+            quantityPrecision: rules.quantityPrecision,
+            markPrice: publicEvidence.markPrice,
+            indexPrice: publicEvidence.indexPrice,
+            fundingRate: publicEvidence.fundingRate,
+            openInterest: publicEvidence.openInterest,
+            leverage: LEVERAGE,
+            maxLeverage: rules.maximumLeverage,
+            marginMode: 'ISOLATED',
+            liquidationDistancePct,
+            privateApiUsed: false,
+            executionMode: 'SIMULATED_EXECUTION_ONLY',
+            publicL2Only: true,
+            realFillObserved: false,
+            realFillClaim: false,
+            publicDepthIsFillProof: false,
+            liveSubmittedExecutionSampleCredit: 0,
+            privateTradingApiAllowed: false,
+            liveOrderAllowed: false,
+            orderSubmitted: false,
+            exchangeRequestSent: false,
+          }),
+          quote: Object.freeze({
+            bid: publicEvidence.bidPrice,
+            ask: publicEvidence.askPrice,
+            last: publicEvidence.lastPrice,
+            asOfMs: publicEvidence.tickerTimestampMs,
+            maxAgeMs: MAX_EVIDENCE_AGE_MS,
+          }),
+          depth: Object.freeze({ bidSize, askSize }),
+          observedSlippagePercent: finalSlippagePercent,
+          visibleCoverageRatio,
+          projectedFundingRiskRate: conservativeFundingRiskRate,
+          fundingChargedAtEntry: false,
+          actualExchangeFillClaim: false,
+        });
+      }
+    }
+  }
+
   return result(blockers, {
     riskInput,
     riskResult,
@@ -369,9 +557,10 @@ export function sizePumpReversalPaperRisk(
     observedSlippagePercent,
     observedSpreadPercent,
     conservativeFundingRiskRate,
-    finalQuantity: riskResult.allowed && positive(riskResult.recommendedQuantity)
+    finalQuantity: blockers.length === 0 && riskResult.allowed && positive(riskResult.recommendedQuantity)
       ? riskResult.recommendedQuantity : null,
-    finalNotional: riskResult.allowed && positive(riskResult.notionalValue)
+    finalNotional: blockers.length === 0 && riskResult.allowed && positive(riskResult.notionalValue)
       ? riskResult.notionalValue : null,
+    prospectiveEntryExecution: blockers.length === 0 ? prospectiveEntryExecution : null,
   });
 }
