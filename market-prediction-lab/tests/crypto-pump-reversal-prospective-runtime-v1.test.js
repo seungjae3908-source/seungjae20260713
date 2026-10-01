@@ -281,3 +281,69 @@ test("same closed-hour bucket skips the expensive universe scan but continues 1m
   assert.equal(second.sourceStatus, "SKIPPED_ALREADY_SCANNED");
   assert.equal(second.state.records[0].pathMinuteCount, 3);
 });
+
+
+test("blocked entry sizing expires on the next minute and is never retried again", async () => {
+  const entryNow = ELIGIBLE + HOUR + 10_000;
+  let sizingCalls = 0;
+  const first = await runPumpProspectivePaperCycleV1({
+    state: createPumpProspectiveStateV1({ policy: policy(), createdAtMs: ELIGIBLE }),
+    nowMs: entryNow,
+    collectSignals: async () => sourceResult(),
+    collectNextBarOpen: async ({ expectedOpenAtMs }) => ({
+      status: "READY",
+      sourceCandleTimestampMs: expectedOpenAtMs,
+      entryReferencePrice: 100,
+    }),
+    collectMinutePath: async () => ({ status: "READY", candles: [] }),
+    sizePaperRisk: async () => {
+      sizingCalls += 1;
+      return { status: "BLOCKED", blockers: ["PUMP_PAPER_ACCOUNT_EVIDENCE_STALE"] };
+    },
+  });
+  assert.equal(sizingCalls, 1);
+  assert.equal(first.state.records[0].riskSizingStatus, "MISSING");
+
+  const secondNow = ELIGIBLE + HOUR + MINUTE + 10_000;
+  const second = await runPumpProspectivePaperCycleV1({
+    state: first.state,
+    nowMs: secondNow,
+    collectSignals: async () => sourceResult(),
+    collectNextBarOpen: async () => { throw new Error("SHOULD_NOT_CALL_ENTRY"); },
+    collectMinutePath: async ({ startTime }) => ({
+      status: "READY",
+      candles: [{
+        timestampMs: startTime,
+        open: 100, high: 101, low: 99, close: 100, quoteVolume: 1000,
+      }],
+    }),
+    sizePaperRisk: async () => {
+      sizingCalls += 1;
+      throw new Error("EXPIRED_SIZING_MUST_NOT_RETRY");
+    },
+  });
+  assert.equal(sizingCalls, 1);
+  assert.equal(second.state.records[0].riskSizingStatus, "EXPIRED");
+  assert.equal(second.summary.riskSizingExpired, 1);
+  assert.equal(second.nextBlocker, "PUMP_RISK_SIZING_EVIDENCE_EXPIRED");
+
+  const third = await runPumpProspectivePaperCycleV1({
+    state: second.state,
+    nowMs: secondNow + MINUTE,
+    collectSignals: async () => sourceResult(),
+    collectNextBarOpen: async () => { throw new Error("SHOULD_NOT_CALL_ENTRY"); },
+    collectMinutePath: async ({ startTime }) => ({
+      status: "READY",
+      candles: [{
+        timestampMs: startTime,
+        open: 100, high: 101, low: 99, close: 100, quoteVolume: 1000,
+      }],
+    }),
+    sizePaperRisk: async () => {
+      sizingCalls += 1;
+      throw new Error("EXPIRED_SIZING_MUST_NOT_RETRY");
+    },
+  });
+  assert.equal(sizingCalls, 1);
+  assert.equal(third.state.records[0].riskSizingStatus, "EXPIRED");
+});
