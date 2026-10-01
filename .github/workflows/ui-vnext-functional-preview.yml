@@ -1,5 +1,5 @@
 name: UI vNext Functional Preview
-# Functional preview only. The live lsj119.com root application is never replaced.
+# Functional preview only. Publishes the real app build to a dedicated preview branch.
 
 on:
   push:
@@ -11,19 +11,17 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: ui-vnext-functional-preview
   cancel-in-progress: true
 
 jobs:
-  build-preview:
-    name: Build real app functional preview
+  publish-preview:
+    name: Build and publish functional preview
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
     environment: production
     env:
       TARGET_SHA: ${{ github.sha }}
@@ -34,29 +32,33 @@ jobs:
       SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
       REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
       LIVE_DIR: /opt/stock-app
-      PAGES_BASE_PATH: /seungjae20260713/
+      SITE_BRANCH: ui-vnext-functional-site
+      SITE_BASE_PATH: /seungjae3908-source/seungjae20260713/ui-vnext-functional-site/
       PUBLIC_API_BASE: https://lsj119.com/api
+      PREVIEW_URL: https://raw.githack.com/seungjae3908-source/seungjae20260713/ui-vnext-functional-site/index.html
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TARGET_SHA }}
-          fetch-depth: 1
+          fetch-depth: 0
 
-      - name: Verify preview-only contract
+      - name: Verify functional preview contract
         run: |
           set -Eeuo pipefail
           node - <<'NODE'
           const fs = require('node:fs');
+          const app = fs.readFileSync('stock-analyzer/src/App.tsx', 'utf8');
           const runtime = fs.readFileSync('stock-analyzer/src/app-runtime.tsx', 'utf8');
           const authFetch = fs.readFileSync('stock-analyzer/src/lib/auth-fetch.ts', 'utf8');
           const css = fs.readFileSync('stock-analyzer/src/ui-vnext-preview.css', 'utf8');
+          if (!app.includes('usePreviewHashLocation')) throw new Error('preview hash router missing');
           if (!runtime.includes("VITE_UI_VNEXT_PREVIEW === 'true'")) throw new Error('preview runtime flag missing');
           if (!runtime.includes("import './ui-vnext-preview.css'")) throw new Error('preview stylesheet missing');
           if (!authFetch.includes('UI_VNEXT_PREVIEW_FINANCIAL_MUTATION_BLOCKED')) throw new Error('preview mutation guard missing');
           if (!css.includes("[data-testid='unified-analysis-chart']")) throw new Error('real chart styling contract missing');
           NODE
 
-      - name: Configure read-only SSH access for build environment
+      - name: Configure SSH
         run: |
           set -Eeuo pipefail
           umask 077
@@ -68,17 +70,17 @@ jobs:
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
           fi
 
-      - name: Build branch frontend with existing public production browser env
+      - name: Build exact branch frontend using existing public browser configuration
         run: |
           set -Eeuo pipefail
-          remote_archive="/tmp/ui-vnext-pages-${TARGET_SHA}.tar.gz"
-          remote_env="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q LIVE_DIR=%q PAGES_BASE_PATH=%q PUBLIC_API_BASE=%q REMOTE_ARCHIVE=%q' \
-            "$TARGET_SHA" "$REPOSITORY_URL" "$LIVE_DIR" "$PAGES_BASE_PATH" "$PUBLIC_API_BASE" "$remote_archive")"
+          remote_archive="/tmp/ui-vnext-githack-${TARGET_SHA}.tar.gz"
+          remote_env="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q LIVE_DIR=%q SITE_BASE_PATH=%q PUBLIC_API_BASE=%q REMOTE_ARCHIVE=%q' \
+            "$TARGET_SHA" "$REPOSITORY_URL" "$LIVE_DIR" "$SITE_BASE_PATH" "$PUBLIC_API_BASE" "$remote_archive")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'REMOTE'
           set -Eeuo pipefail
           umask 077
-          SOURCE_DIR="$(mktemp -d /tmp/ui-vnext-pages-source.XXXXXX)"
+          SOURCE_DIR="$(mktemp -d /tmp/ui-vnext-githack-source.XXXXXX)"
           cleanup() { rm -rf -- "$SOURCE_DIR"; }
           trap cleanup EXIT
 
@@ -100,12 +102,12 @@ jobs:
           (
             cd "$SOURCE_DIR"
             pnpm install --frozen-lockfile
-            BASE_PATH="$PAGES_BASE_PATH" \
+            BASE_PATH="$SITE_BASE_PATH" \
             VITE_API_BASE_URL="$PUBLIC_API_BASE" \
             VITE_UI_VNEXT_PREVIEW=true \
             NODE_ENV=production \
             pnpm --filter @workspace/stock-analyzer run typecheck
-            BASE_PATH="$PAGES_BASE_PATH" \
+            BASE_PATH="$SITE_BASE_PATH" \
             VITE_API_BASE_URL="$PUBLIC_API_BASE" \
             VITE_UI_VNEXT_PREVIEW=true \
             NODE_ENV=production \
@@ -115,61 +117,68 @@ jobs:
           DIST="$SOURCE_DIR/stock-analyzer/dist/public"
           [[ -f "$DIST/index.html" ]] || { echo 'Preview build output missing' >&2; exit 11; }
           rm -f "$DIST/sw.js" "$DIST/registerSW.js"
-          cp "$DIST/index.html" "$DIST/404.html"
-          touch "$DIST/.nojekyll"
+          node - "$DIST/index.html" "$TARGET_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const [file, sha] = process.argv.slice(2);
+          let html = fs.readFileSync(file, 'utf8');
+          html = html.replace('</head>', `<meta name="ui-vnext-preview" content="${sha}"></head>`);
+          fs.writeFileSync(file, html);
+          NODE
+          printf '%s\n' "$TARGET_SHA" > "$DIST/ui-vnext-preview-sha.txt"
           rm -f -- "$REMOTE_ARCHIVE"
           tar -C "$DIST" -czf "$REMOTE_ARCHIVE" .
           chmod 600 "$REMOTE_ARCHIVE"
-          echo '[preview] isolated Pages artifact built; production files and PM2 unchanged'
+          echo '[preview] isolated site artifact built; production files and PM2 unchanged'
           REMOTE
 
-          mkdir -p pages-preview
+          rm -rf site-preview
+          mkdir -p site-preview
           scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
-            "$SSH_USER@$SSH_HOST:$remote_archive" ./ui-vnext-pages.tar.gz
+            "$SSH_USER@$SSH_HOST:$remote_archive" ./ui-vnext-site.tar.gz
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes \
             "$SSH_USER@$SSH_HOST" "rm -f -- $(printf '%q' "$remote_archive")"
-          tar -xzf ./ui-vnext-pages.tar.gz -C pages-preview
-          rm -f ./ui-vnext-pages.tar.gz
-          grep -q '/seungjae20260713/' pages-preview/index.html
-          test -f pages-preview/404.html
+          tar -xzf ./ui-vnext-site.tar.gz -C site-preview
+          rm -f ./ui-vnext-site.tar.gz
+          grep -q "ui-vnext-preview" site-preview/index.html
+          grep -q "$TARGET_SHA" site-preview/ui-vnext-preview-sha.txt
 
-      - name: Configure GitHub Pages for isolated preview origin
-        uses: actions/configure-pages@v5
-        with:
-          enablement: true
-
-      - name: Upload Pages preview artifact
-        uses: actions/upload-pages-artifact@v4
-        with:
-          path: pages-preview
-
-  deploy-preview:
-    name: Deploy isolated Pages preview
-    needs: build-preview
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-
-      - name: Verify preview page responds
-        env:
-          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+      - name: Publish preview artifact to dedicated branch
         run: |
           set -Eeuo pipefail
-          for attempt in $(seq 1 12); do
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan "$SITE_BRANCH"
+          git rm -rf . >/dev/null 2>&1 || true
+          cp -a site-preview/. .
+          rm -rf site-preview
+          git add -A
+          git commit -m "preview(ui): functional vNext ${TARGET_SHA}"
+          git push --force origin "HEAD:$SITE_BRANCH"
+
+      - name: Verify raw.githack functional preview
+        run: |
+          set -Eeuo pipefail
+          for attempt in $(seq 1 18); do
             body="$(mktemp)"
-            if curl --fail --silent --show-error --max-time 20 "$PAGE_URL" > "$body" \
-              && grep -qi '<div id="root"' "$body"; then
+            if curl --fail --silent --show-error --max-time 20 "${PREVIEW_URL}?sha=${TARGET_SHA}" > "$body" \
+              && grep -q "ui-vnext-preview" "$body" \
+              && grep -q "$TARGET_SHA" "$body"; then
               rm -f "$body"
+              {
+                echo '## UI vNext functional preview ready'
+                echo
+                echo "- Source SHA: \`$TARGET_SHA\`"
+                echo "- Preview: ${PREVIEW_URL}#/"
+                echo '- Real React routes/components: `preserved`'
+                echo '- AI chart renderer: `preserved`'
+                echo '- Service worker collision: `not applicable (separate origin)`'
+                echo '- Production root files / PM2 / DB / Secret mutation: `none`'
+                echo '- Replit / Replit Agent: `not used`'
+              } >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
             rm -f "$body"
             sleep 5
           done
-          echo 'Pages preview did not become readable within the verification window.' >&2
+          echo 'raw.githack preview did not expose the exact preview marker in time.' >&2
           exit 1
