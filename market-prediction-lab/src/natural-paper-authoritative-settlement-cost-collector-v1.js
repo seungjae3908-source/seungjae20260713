@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { BitgetPublicClient } from "./bitget-public-client.js";
 import { collectFundingRateHistory } from "./derivatives-history.js";
-import { collectBitgetFundingCostOnlyHistory } from "./bitget-funding-cost-owner-v1.js";
 import { AUTHORITATIVE_NATURAL_PAPER_TRIGGER_SETTLEMENT_EVIDENCE_VERSION } from "./natural-paper-trigger-bound-settlement-cost-producer-v1.js";
 
 export const NATURAL_PAPER_AUTHORITATIVE_SETTLEMENT_COST_COLLECTOR_VERSION =
@@ -448,7 +447,6 @@ export function createNaturalPaperAuthoritativeSettlementCostCollector({
   readSupplementalCostInput,
   bitgetClient = new BitgetPublicClient(),
   collectFundingHistory = collectFundingRateHistory,
-  collectFundingCostHistory = collectBitgetFundingCostOnlyHistory,
   collectExitSnapshot = collectBitgetExitSnapshot,
   now = Date.now,
 } = {}) {
@@ -463,7 +461,6 @@ export function createNaturalPaperAuthoritativeSettlementCostCollector({
   }
   if (!bitgetClient || typeof bitgetClient.get !== "function"
     || typeof collectFundingHistory !== "function"
-    || typeof collectFundingCostHistory !== "function"
     || typeof collectExitSnapshot !== "function"
     || typeof now !== "function") {
     throw new TypeError("public settlement evidence dependencies are required");
@@ -529,36 +526,18 @@ export function createNaturalPaperAuthoritativeSettlementCostCollector({
       }
     }
 
-    const fundingCostHistory = await collectFundingCostHistory({
+    const fundingHistory = await collectFundingHistory({
       client: bitgetClient,
       symbol,
-      direction,
-      quantity: position.quantity,
       startTime: position.entryTimestampMs,
       endTime: exitTrigger.triggeredAtMs,
-      collectFundingHistory,
-      now,
+      maxPages: 200,
     });
-    if (fundingCostHistory?.status !== "PRESENT"
-      || fundingCostHistory?.complete !== true
-      || fundingCostHistory?.fullCoverage !== true
-      || !Array.isArray(fundingCostHistory?.payments)
-      || !nonNegative(fundingCostHistory?.totalFundingCost)
-      || !safeTime(fundingCostHistory?.collectedAtMs)) {
-      return blocked(fundingCostHistory?.blockers ?? ["PAPER_SETTLEMENT_FUNDING_COST_EVIDENCE_INCOMPLETE"]);
+    if (fundingHistory?.exhausted !== true || !Array.isArray(fundingHistory.records)) {
+      return blocked(["PAPER_SETTLEMENT_FUNDING_HISTORY_INCOMPLETE"]);
     }
-
-    const fundingPayments = Object.freeze(fundingCostHistory.payments.map((payment) => Object.freeze({
-      asOfMs: payment.asOfMs,
-      amount: payment.amount,
-      source: payment.source,
-      provenance: payment.provenance,
-      version: payment.version,
-    })));
-    const entryNotional = position.sample.fill.notional;
-    const fundingCostRate = fundingCostHistory.totalFundingCost / entryNotional;
-    if (!nonNegative(fundingCostRate)) {
-      return blocked(["PAPER_SETTLEMENT_FUNDING_COST_RATE_INVALID"]);
+    if (fundingHistory.records.length > 0) {
+      return blocked(["PAPER_SETTLEMENT_FUNDING_AMOUNT_REQUIRES_HISTORICAL_MARK_OWNER"]);
     }
 
     const rates = {
@@ -566,7 +545,7 @@ export function createNaturalPaperAuthoritativeSettlementCostCollector({
       tax: 0,
       spread: snapshot.spreadPercent / 100,
       slippage: snapshot.slippagePercent / 100,
-      funding: fundingCostRate,
+      funding: 0,
       latency: snapshot.latencyEvidence.valuePercent / 100,
       liquidityImpact: supplemental.liquidityImpact.valuePercent / 100,
       partialFillImpact: supplemental.partialFillImpact.valuePercent / 100,
@@ -584,11 +563,9 @@ export function createNaturalPaperAuthoritativeSettlementCostCollector({
       exitTriggerId: exitTrigger.exitTriggerId,
       supplementalCostPolicyId: supplemental.costPolicyId,
       publicObservedAtMs: snapshot.observedAtMs,
-      fundingHistoryStart: fundingCostHistory.startTime,
-      fundingHistoryEnd: fundingCostHistory.endTime,
-      fundingHistoryCount: fundingCostHistory.fundingEventCount,
-      fundingCostOnlyPolicy: fundingCostHistory.costOnlyPolicy,
-      fundingMarkPricePolicy: fundingCostHistory.markPricePolicy,
+      fundingHistoryStart: fundingHistory.startTime,
+      fundingHistoryEnd: fundingHistory.endTime,
+      fundingHistoryCount: fundingHistory.records.length,
     });
     const positionIdentityValue = positionIdentity(position);
     const exitExecutionIdentityValue = exitExecutionIdentity(
@@ -598,12 +575,13 @@ export function createNaturalPaperAuthoritativeSettlementCostCollector({
       provenanceId,
       exitExecution,
     );
+    const fundingPayments = Object.freeze([]);
     const componentObservedAt = {
       commission: snapshot.collectedAtMs,
       tax: snapshot.collectedAtMs,
       spread: snapshot.observedAtMs,
       slippage: snapshot.observedAtMs,
-      funding: fundingCostHistory.collectedAtMs,
+      funding: snapshot.collectedAtMs,
       latency: snapshot.latencyEvidence.observedAtMs,
       liquidityImpact: supplemental.liquidityImpact.observedAtMs,
       partialFillImpact: supplemental.partialFillImpact.observedAtMs,
@@ -634,23 +612,15 @@ export function createNaturalPaperAuthoritativeSettlementCostCollector({
         exitExecutionIdentityValue, costPolicyVersion: position.costPolicyVersion,
       }),
       funding: component({
-        name: "funding", valuePercent: rates.funding * 100, quality: "OBSERVED",
-        source: fundingCostHistory.fundingEventCount === 0
-          ? "BITGET_PUBLIC_V2_FUNDING_HISTORY_NO_SETTLEMENT_IN_HOLDING_PERIOD"
-          : "BITGET_PUBLIC_FUNDING_RATE_X_EXACT_1M_MARK_OPEN",
-        provenance: fundingCostHistory.fundingEventCount === 0
-          ? "bitget-public-v2:history-fund-rate:complete-range"
-          : "bitget-public-v2:history-fund-rate+history-mark-candles:1m",
+        name: "funding", valuePercent: 0, quality: "OBSERVED",
+        source: "BITGET_PUBLIC_V2_FUNDING_HISTORY_NO_SETTLEMENT_IN_HOLDING_PERIOD",
+        provenance: "bitget-public-v2:history-fund-rate:complete-range",
         observedAtMs: componentObservedAt.funding, maximumAgeMs, positionIdentityValue,
         exitExecutionIdentityValue, costPolicyVersion: position.costPolicyVersion,
         extras: {
           realized: true,
           projectedIsRealized: false,
           evidenceClass: "OBSERVED_COMPONENT",
-          costOnlyPolicy: fundingCostHistory.costOnlyPolicy,
-          markPricePolicy: fundingCostHistory.markPricePolicy,
-          excludedFundingCredit: fundingCostHistory.excludedFundingCredit,
-          fundingEventCount: fundingCostHistory.fundingEventCount,
           holdingPeriod: {
             entryTimestampMs: position.entryTimestampMs,
             exitTriggerTimestampMs: exitTrigger.triggeredAtMs,
@@ -698,8 +668,6 @@ export function createNaturalPaperAuthoritativeSettlementCostCollector({
         entryTimestampMs: position.entryTimestampMs,
         exitTimestampMs: exitTrigger.triggeredAtMs,
         payments: fundingPayments,
-        costOnlyPolicy: fundingCostHistory.costOnlyPolicy,
-        excludedFundingCredit: fundingCostHistory.excludedFundingCredit,
       },
     });
     const settlementCostEvidence = deepFreeze({
@@ -716,8 +684,6 @@ export function createNaturalPaperAuthoritativeSettlementCostCollector({
       components,
       costPolicyIdentity: { version: position.costPolicyVersion },
       projectedFundingRealized: false,
-      fundingReceiptCreditIncluded: false,
-      excludedFundingCredit: fundingCostHistory.excludedFundingCredit,
       unknownIsZero: false,
       unavailableCostConvertedToZero: false,
     });
@@ -758,8 +724,6 @@ export const NATURAL_PAPER_AUTHORITATIVE_SETTLEMENT_COST_COLLECTOR_SAFETY = Obje
   supplementalCanonicalEvidenceRequired: true,
   fundingHistoryCompleteRangeRequired: true,
   fundingPaymentAmountApproximationAllowed: false,
-  fundingMarkPricePolicy: "EXACT_FUNDING_MINUTE_MARK_CANDLE_OPEN",
-  fundingReceiptCreditIncluded: false,
   missingCostConvertedToZero: false,
   replayBackfillSyntheticCredit: 0,
   executionAuthority: "NONE",
