@@ -7,6 +7,7 @@ on:
       - 'market-prediction-lab/src/crypto-pump-reversal-*.js'
       - 'market-prediction-lab/tests/crypto-pump-reversal-*.test.js'
       - 'api-server/src/services/pump-reversal-*.ts'
+      - 'api-server/scripts/run-pump-reversal-*.ts'
       - '.github/workflows/pump-reversal-clean-v1.yml'
 
 permissions:
@@ -72,7 +73,8 @@ jobs:
           trap 'rm -rf "$tmp"' EXIT
           for test_file in             src/services/pump-reversal-paper-risk-sizing.service.test.ts             src/services/pump-reversal-prospective-risk-owner.service.test.ts             src/services/pump-reversal-prospective-risk-source-wiring.service.test.ts \
             src/services/pump-reversal-prospective-full-cost-source-wiring.service.test.ts \
-            src/services/pump-reversal-prospective-runtime-dependencies.service.test.ts
+            src/services/pump-reversal-prospective-runtime-dependencies.service.test.ts \
+            scripts/run-pump-reversal-prospective-once.test.ts
           do
             output="$tmp/$(basename "$test_file" .ts).cjs"
             pnpm exec esbuild "$test_file"               --bundle --platform=node --format=cjs --target=node22               --define:import.meta.env='{}' --outfile="$output"
