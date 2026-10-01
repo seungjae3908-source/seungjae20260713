@@ -95,6 +95,115 @@ test('vault-backed Bitget Classic reader probes v3 safely then emits only allowl
   assert.equal(serialized.includes('BITGET_KEY_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('BITGET_PASSPHRASE_RUNTIME_TEST_ONLY'), false);
 });
 
+test('vault-backed Bitget Classic normalizes null-ish empty pending-order payloads to zero open orders', async () => {
+  const emptyPendingPayloads: unknown[] = [
+    null,
+    [],
+    {},
+    { entrustedList: null, endId: null },
+  ];
+
+  for (const pendingData of emptyPendingPayloads) {
+    const readers = createVaultBackedAccountReaders({
+      repositoryFactory: () => repositoryFor('bitget'),
+      decryptCredentials: () => ({
+        apiKey: 'BITGET_KEY_RUNTIME_TEST_ONLY',
+        secretKey: 'BITGET_SECRET_RUNTIME_TEST_ONLY',
+        passphrase: 'BITGET_PASSPHRASE_RUNTIME_TEST_ONLY',
+      }),
+      fetchImpl: async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname === '/api/v3/account/settings') {
+          return new Response(JSON.stringify({ code: '25245', data: null }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.pathname === '/api/v2/mix/account/accounts') {
+          return new Response(JSON.stringify({
+            code: '00000',
+            data: [{ marginCoin: 'USDT', accountEquity: '100', available: '100' }],
+          }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        if (url.pathname === '/api/v2/mix/position/all-position') {
+          return new Response(JSON.stringify({ code: '00000', data: [] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.pathname === '/api/v2/mix/order/orders-pending') {
+          return new Response(JSON.stringify({ code: '00000', data: pendingData }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } });
+      },
+    });
+
+    const result = await readers.bitget!(SCOPE);
+    assert.equal(result.connected, true);
+    assert.equal(result.status, 'CONNECTED');
+    assert.deepEqual(result.openOrders, []);
+    assert.equal(result.errorCode, null);
+    assert.equal(result.orderRequests, 0);
+    assert.equal(result.cancelRequests, 0);
+    assert.equal(result.amendRequests, 0);
+    assert.equal(result.transferRequests, 0);
+    assert.equal(result.withdrawalRequests, 0);
+  }
+});
+
+test('vault-backed Bitget Classic still rejects non-empty malformed pending-order payloads', async () => {
+  const readers = createVaultBackedAccountReaders({
+    repositoryFactory: () => repositoryFor('bitget'),
+    decryptCredentials: () => ({
+      apiKey: 'BITGET_KEY_RUNTIME_TEST_ONLY',
+      secretKey: 'BITGET_SECRET_RUNTIME_TEST_ONLY',
+      passphrase: 'BITGET_PASSPHRASE_RUNTIME_TEST_ONLY',
+    }),
+    fetchImpl: async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/v3/account/settings') {
+        return new Response(JSON.stringify({ code: '25245', data: null }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.pathname === '/api/v2/mix/account/accounts') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: [{ marginCoin: 'USDT', accountEquity: '100', available: '100' }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v2/mix/position/all-position') {
+        return new Response(JSON.stringify({ code: '00000', data: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.pathname === '/api/v2/mix/order/orders-pending') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: { unexpected: true },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+
+  await assert.rejects(
+    () => readers.bitget!(SCOPE),
+    (error: unknown) => error instanceof AccountReadonlyError
+      && error.code === 'PROVIDER_UNAVAILABLE'
+      && error.bitgetDiagnostic?.requestPath === '/api/v2/mix/order/orders-pending'
+      && error.bitgetDiagnostic.endpointFamily === 'CLASSIC'
+      && error.bitgetDiagnostic.probe === 'OPEN_ORDERS'
+      && error.bitgetDiagnostic.sanitizedClassification === 'BITGET_RESPONSE_SHAPE_INVALID'
+      && error.bitgetDiagnostic.fallbackAttempted === true,
+  );
+});
+
 test('vault-backed Bitget marks diagnostics after an explicit NOT_UTA Classic fallback', async () => {
   const paths: string[] = [];
   const readers = createVaultBackedAccountReaders({
