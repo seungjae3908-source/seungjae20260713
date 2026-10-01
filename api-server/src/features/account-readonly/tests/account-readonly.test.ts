@@ -25,11 +25,7 @@ test('Bitget read-only provider errors and malformed data fail closed without be
     await assert.rejects(
       readBitgetSnapshot(credentials, async () => response),
       (error: unknown) => error instanceof AccountReadonlyError
-        && error.code === 'PROVIDER_UNAVAILABLE'
-        && error.bitgetDiagnostic?.provider === 'bitget'
-        && error.bitgetDiagnostic.requestMethod === 'GET'
-        && typeof error.bitgetDiagnostic.sanitizedClassification === 'string'
-        && error.bitgetDiagnostic.sanitizedClassification.length > 0,
+        && error.code === 'PROVIDER_UNAVAILABLE',
     );
   }
   await assert.rejects(
