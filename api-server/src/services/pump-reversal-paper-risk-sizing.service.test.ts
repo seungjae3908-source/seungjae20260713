@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import type { BitgetFuturesPublicEvidence } from './bitget-futures-public-evidence.service';
 import { sizePumpReversalPaperRisk } from './pump-reversal-paper-risk-sizing.service';
 
 const NOW = 1_800_000_000_000;
@@ -59,7 +60,7 @@ function rules() {
   } as const;
 }
 
-function publicEvidence() {
+function publicEvidence(): BitgetFuturesPublicEvidence {
   return {
     provider: 'bitget',
     productType: 'USDT-FUTURES',
@@ -89,7 +90,7 @@ function publicEvidence() {
     benchmarkBtc1d: [],
     observedAtMs: NOW,
     dataQuality: 'ready',
-  } as const;
+  };
 }
 
 function supplemental() {
