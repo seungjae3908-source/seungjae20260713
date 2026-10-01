@@ -1,0 +1,427 @@
+name: Pump Reversal Prospective Paper Activation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/pump-reversal-prospective-activation.yml'
+      - 'ops/install-pump-reversal-prospective-schedule.sh'
+      - 'ops/disable-pump-reversal-prospective-schedule.sh'
+      - 'api-server/scripts/run-pump-reversal-prospective-once.ts'
+      - 'api-server/scripts/run-pump-reversal-prospective-once.test.ts'
+      - 'market-prediction-lab/scripts/materialize-pump-reversal-prospective-policy-v1.mjs'
+      - 'market-prediction-lab/scripts/verify-pump-reversal-prospective-activation.mjs'
+      - 'market-prediction-lab/tests/materialize-pump-reversal-prospective-policy-v1.test.js'
+      - 'market-prediction-lab/tests/verify-pump-reversal-prospective-activation.test.js'
+      - 'market-prediction-lab/tests/pump-reversal-prospective-schedule-install-contract-v1.test.js'
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  statuses: read
+
+concurrency:
+  group: pump-reversal-prospective-paper-activation-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact PR head and parse workflow
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          ruby -e "require 'yaml'; abort('YAML_PARSE_FAILED') unless YAML.parse_file(ARGV.fetch(0))"             .github/workflows/pump-reversal-prospective-activation.yml
+          bash -n ops/install-pump-reversal-prospective-schedule.sh
+          bash -n ops/disable-pump-reversal-prospective-schedule.sh
+          node --check market-prediction-lab/scripts/materialize-pump-reversal-prospective-policy-v1.mjs
+          node --check market-prediction-lab/scripts/verify-pump-reversal-prospective-activation.mjs
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.11.0'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Bundle Pump one-shot runner
+        run: >-
+          pnpm --dir api-server exec esbuild
+          scripts/run-pump-reversal-prospective-once.ts
+          --bundle --platform=node --format=esm --target=node22 --packages=bundle
+          --outfile=../pump-prospective-runner.mjs
+
+      - name: Run Pump activation focused contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --test             market-prediction-lab/tests/materialize-pump-reversal-prospective-policy-v1.test.js             market-prediction-lab/tests/verify-pump-reversal-prospective-activation.test.js             market-prediction-lab/tests/pump-reversal-prospective-schedule-install-contract-v1.test.js             market-prediction-lab/tests/crypto-pump-reversal-prospective-store-v1.test.js             market-prediction-lab/tests/crypto-pump-reversal-prospective-runtime-v1.test.js
+          pnpm --dir api-server exec esbuild             scripts/run-pump-reversal-prospective-once.test.ts             --bundle --platform=node --format=cjs --target=node22             --define:import.meta.env='{}'             --outfile=../pump-prospective-one-shot.test.cjs
+          node --test pump-prospective-one-shot.test.cjs
+
+      - name: Verify activation remains Paper-only and no-deploy
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          install=ops/install-pump-reversal-prospective-schedule.sh
+          workflow=.github/workflows/pump-reversal-prospective-activation.yml
+          grep -F "CRON_EXPRESSION=\"* * * * *\"" "$install" >/dev/null
+          grep -F "PUMP_PROSPECTIVE_SCHEDULE_ACTIVE='true'" "$install" >/dev/null
+          grep -F "LIVE_TRADING='false'" "$install" >/dev/null
+          grep -F "AUTO_TRADING='false'" "$install" >/dev/null
+          grep -F "REAL_ORDER_ENABLED='false'" "$install" >/dev/null
+          grep -F "PRIVATE_TRADING_API_ALLOWED='false'" "$install" >/dev/null
+          grep -F "ACTIVE_WAITING_FOR_24H_FUTURE_BOUNDARY" "$install" >/dev/null
+          grep -F "rawProspectiveCreditBeforeEligibleAfterMs: 0" "$install" >/dev/null
+          grep -F "missingEconomicEvidenceMayBecomeZero: false" "$install" >/dev/null
+          grep -F "/activate-pump-paper-natural " "$workflow" >/dev/null
+          grep -F "environment: production" "$workflow" >/dev/null
+          ! grep -E 'deploy-production\.sh|pm2 (start|restart|reload|delete|stop)|supabase db|psql .*-(c|f)' "$workflow" >/dev/null
+          ! grep -E '/api/v2/mix/order/|/api/v2/mix/account/' "$install" >/dev/null
+
+  gate:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 23 &&
+      startsWith(github.event.comment.body, '/activate-pump-paper-natural ')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      target_sha: ${{ steps.command.outputs.sha }}
+      required_ci_run_id: ${{ steps.required.outputs.run_id }}
+      provenance_run_id: ${{ steps.provenance.outputs.run_id }}
+    steps:
+      - name: Parse exact owner activation command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$COMMENT_AUTHOR" == "seungjae3908-source" ]]
+          [[ "$AUTHOR_ASSOCIATION" == "OWNER" ]]
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/activate-pump-paper-natural ([0-9a-f]{40})$/.exec(body);
+          if (!match) process.exit(1);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1]}\n`);
+          NODE
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.command.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require exact current main and Required CI 6/6
+        id: required
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const main = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: 'main' });
+            if (main.data.commit.sha !== target) {
+              core.setFailed(`Activation target is stale: target=${target} main=${main.data.commit.sha}`);
+              return;
+            }
+            const required = new Set([
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ]);
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner, repo: context.repo.repo, ref: target, per_page: 100,
+            });
+            const latest = new Map();
+            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+            const evidence = [...required].map((contextName) => latest.get(contextName));
+            if (evidence.length !== 6 || evidence.some((status) => status?.state !== 'success')) {
+              core.setFailed('Exact current main does not have Required CI 6/6 SUCCESS.');
+              return;
+            }
+            const runIds = new Set(evidence.map((status) => /\/actions\/runs\/(\d+)/.exec(String(status.target_url ?? ''))?.[1] ?? null));
+            if (runIds.size !== 1 || runIds.has(null)) {
+              core.setFailed('Required CI 6/6 does not share one coherent provenance run.');
+              return;
+            }
+            const runId = Number([...runIds][0]);
+            const run = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: runId });
+            if (run.data.head_sha !== target || run.data.status !== 'completed' || run.data.conclusion !== 'success') {
+              core.setFailed('Required CI provenance is not an exact successful target run.');
+              return;
+            }
+            core.setOutput('run_id', String(runId));
+
+      - name: Require successful post-merge provenance for exact main
+        id: provenance
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, head_sha: target, per_page: 100,
+            });
+            const match = runs.find((run) =>
+              run.name === 'Post-Merge Release Provenance'
+              && run.head_sha === target
+              && run.status === 'completed'
+              && run.conclusion === 'success'
+            );
+            if (!match) {
+              core.setFailed(`No successful Post-Merge Release Provenance exists for ${target}.`);
+              return;
+            }
+            core.setOutput('run_id', String(match.id));
+
+      - name: Verify exact checkout and Paper activation contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ steps.command.outputs.sha }}"
+          test -r api-server/scripts/run-pump-reversal-prospective-once.ts
+          test -r market-prediction-lab/scripts/materialize-pump-reversal-prospective-policy-v1.mjs
+          test -r ops/install-pump-reversal-prospective-schedule.sh
+          test -r ops/disable-pump-reversal-prospective-schedule.sh
+
+  activate:
+    if: github.event_name == 'issue_comment'
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: production
+    env:
+      TARGET_SHA: ${{ needs.gate.outputs.target_sha }}
+      REQUIRED_CI_RUN_ID: ${{ needs.gate.outputs.required_ci_run_id }}
+      PROVENANCE_RUN_ID: ${{ needs.gate.outputs.provenance_run_id }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      EVIDENCE_DIR: ${{ github.workspace }}/pump-paper-activation-evidence
+    steps:
+      - name: Revalidate exact current main after Production approval
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ env.TARGET_SHA }}
+        with:
+          script: |
+            const main = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: 'main' });
+            if (main.data.commit.sha !== process.env.TARGET_SHA) {
+              core.setFailed(`Pump activation target became stale: ${process.env.TARGET_SHA} != ${main.data.commit.sha}`);
+            }
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.11.0'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned dependencies and build isolated Pump runtime
+        id: build
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm install --frozen-lockfile --ignore-scripts
+          mkdir -p "$EVIDENCE_DIR" pump-activation-build
+          pnpm --dir api-server exec esbuild             scripts/run-pump-reversal-prospective-once.ts             --bundle --platform=node --format=esm --target=node22 --packages=bundle             --outfile="$GITHUB_WORKSPACE/pump-activation-build/pump-runtime.mjs"
+          POLICY_FROZEN_AT_MS="$(date +%s%3N)"
+          PUMP_PROSPECTIVE_RESEARCH_SHA="$TARGET_SHA"           PUMP_PROSPECTIVE_POLICY_FROZEN_AT_MS="$POLICY_FROZEN_AT_MS"           PUMP_PROSPECTIVE_POLICY_PATH="$GITHUB_WORKSPACE/pump-activation-build/pump-policy.json"             node market-prediction-lab/scripts/materialize-pump-reversal-prospective-policy-v1.mjs             > "$EVIDENCE_DIR/policy-materialization.json"
+          echo "policy_frozen_at_ms=$POLICY_FROZEN_AT_MS" >> "$GITHUB_OUTPUT"
+
+      - name: Configure Paper-only SSH access
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Capture immutable Production application identity
+        id: app_before
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          app_sha="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$SSH_USER@$SSH_HOST" "tr -d '[:space:]' < /opt/stock-app/.deploy/current-sha")"
+          [[ "$app_sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$app_sha" >> "$GITHUB_OUTPUT"
+          printf '{"productionAppShaBefore":"%s"}\n' "$app_sha" > "$EVIDENCE_DIR/application-before.json"
+
+      - name: Install isolated exact-SHA Pump Paper cron without application deployment
+        id: install
+        env:
+          PRODUCTION_APP_SHA: ${{ steps.app_before.outputs.sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_runtime="/tmp/pump-runtime-${TARGET_SHA}-${GITHUB_RUN_ID}.mjs"
+          remote_policy="/tmp/pump-policy-${TARGET_SHA}-${GITHUB_RUN_ID}.json"
+          remote_verify="/tmp/pump-verify-${TARGET_SHA}-${GITHUB_RUN_ID}.mjs"
+          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT"             pump-activation-build/pump-runtime.mjs             "$SSH_USER@$SSH_HOST:$remote_runtime"
+          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT"             pump-activation-build/pump-policy.json             "$SSH_USER@$SSH_HOST:$remote_policy"
+          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT"             market-prediction-lab/scripts/verify-pump-reversal-prospective-activation.mjs             "$SSH_USER@$SSH_HOST:$remote_verify"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$SSH_USER@$SSH_HOST"             "PUMP_RUNTIME_BUNDLE_SOURCE='$remote_runtime' PUMP_POLICY_SOURCE='$remote_policy' PRODUCTION_APP_SHA='$PRODUCTION_APP_SHA' bash -s '$TARGET_SHA'"             < ops/install-pump-reversal-prospective-schedule.sh             > "$EVIDENCE_DIR/activation.json"
+          echo "remote_verify=$remote_verify" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Production application identity remained unchanged
+        env:
+          PRODUCTION_APP_SHA: ${{ steps.app_before.outputs.sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          app_sha_after="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$SSH_USER@$SSH_HOST" "tr -d '[:space:]' < /opt/stock-app/.deploy/current-sha")"
+          [[ "$app_sha_after" == "$PRODUCTION_APP_SHA" ]]
+          printf '{"productionAppShaBefore":"%s","productionAppShaAfter":"%s","productionAppDeployPerformed":false}\n'             "$PRODUCTION_APP_SHA" "$app_sha_after" > "$EVIDENCE_DIR/application-after.json"
+
+      - name: Wait for and verify first Pump natural cron cycle
+        env:
+          PRODUCTION_APP_SHA: ${{ steps.app_before.outputs.sha }}
+          REMOTE_VERIFY: ${{ steps.install.outputs.remote_verify }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          evidence="$EVIDENCE_DIR/first-natural-cycle.json"
+          for attempt in $(seq 1 24); do
+            set +e
+            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15               "$SSH_USER@$SSH_HOST"               "node '$REMOTE_VERIFY' '$TARGET_SHA' '$PRODUCTION_APP_SHA'"               > "$evidence.tmp"
+            status=$?
+            set -e
+            if [[ "$status" == 0 ]]; then
+              mv "$evidence.tmp" "$evidence"
+              exit 0
+            fi
+            rm -f "$evidence.tmp"
+            if [[ "$status" != 75 ]]; then exit "$status"; fi
+            sleep 10
+          done
+          echo 'No Pump natural cron cycle observed within bounded window.' >&2
+          exit 78
+
+      - name: Revalidate current main after first natural cycle
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ env.TARGET_SHA }}
+        with:
+          script: |
+            const main = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: 'main' });
+            if (main.data.commit.sha !== process.env.TARGET_SHA) {
+              core.setFailed(`Pump schedule target became stale after activation: ${process.env.TARGET_SHA} != ${main.data.commit.sha}`);
+            }
+
+      - name: Disable Pump schedule automatically on any post-install failure
+        if: failure() && steps.install.outcome == 'success'
+        shell: bash
+        run: |
+          set +e
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$SSH_USER@$SSH_HOST" 'bash -s'             < ops/disable-pump-reversal-prospective-schedule.sh             > "$EVIDENCE_DIR/automatic-disable.json" 2>&1
+          exit 0
+
+      - name: Clean remote activation transfer files
+        if: always() && steps.install.outcome != 'skipped'
+        env:
+          REMOTE_VERIFY: ${{ steps.install.outputs.remote_verify }}
+        shell: bash
+        run: |
+          set +e
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$SSH_USER@$SSH_HOST"             "rm -f '/tmp/pump-runtime-${TARGET_SHA}-${GITHUB_RUN_ID}.mjs' '/tmp/pump-policy-${TARGET_SHA}-${GITHUB_RUN_ID}.json' '$REMOTE_VERIFY'"
+          exit 0
+
+      - name: Upload sanitized Pump activation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pump-paper-natural-activation-${{ env.TARGET_SHA }}
+          path: pump-paper-activation-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report successful Pump Paper natural-sample activation
+        if: success()
+        uses: actions/github-script@v7
+        env:
+          EVIDENCE_FILE: ${{ env.EVIDENCE_DIR }}/first-natural-cycle.json
+          ACTIVATION_FILE: ${{ env.EVIDENCE_DIR }}/activation.json
+          PRODUCTION_APP_SHA: ${{ steps.app_before.outputs.sha }}
+        with:
+          script: |
+            const fs = require('fs');
+            const evidence = JSON.parse(fs.readFileSync(process.env.EVIDENCE_FILE, 'utf8'));
+            const activation = JSON.parse(fs.readFileSync(process.env.ACTIVATION_FILE, 'utf8'));
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                '[PUMP_PAPER_NATURAL_ACTIVATED]',
+                `TARGET_SHA=${process.env.TARGET_SHA}`,
+                `REQUIRED_CI_RUN_ID=${process.env.REQUIRED_CI_RUN_ID}`,
+                `POST_MERGE_PROVENANCE_RUN_ID=${process.env.PROVENANCE_RUN_ID}`,
+                `PRODUCTION_APP_SHA_UNCHANGED=${process.env.PRODUCTION_APP_SHA}`,
+                'PRODUCTION_APP_DEPLOY_PERFORMED=false',
+                'SCHEDULE_ACTIVE=true',
+                'POLL_CADENCE=EVERY_1_MINUTE',
+                'SIGNAL_UNIVERSE_SCAN=ONCE_PER_CLOSED_1H_BAR',
+                `POLICY_FROZEN_AT_MS=${activation.policyFrozenAtMs}`,
+                `GENUINE_PROSPECTIVE_ELIGIBLE_AFTER_MS=${activation.eligibleAfterMs}`,
+                'PRE_ELIGIBILITY_SAMPLE_CREDIT=0',
+                `PAPER_STATE_AVAILABLE_AT_ACTIVATION=${activation.paperStateSnapshotAvailableAtActivation === true}`,
+                `SUPPLEMENTAL_COST_AVAILABLE_AT_ACTIVATION=${activation.supplementalCostEvidenceAvailableAtActivation === true}`,
+                `ECONOMIC_SIZING_READY_AT_ACTIVATION=${activation.economicSizingReadyAtActivation === true}`,
+                `FIRST_CYCLE_RECORDS=${Number(evidence.firstCycle?.records ?? 0)}`,
+                `FULL_COST_SETTLED=${Number(evidence.firstCycle?.fullCostSettled ?? 0)}`,
+                'PROFITABILITY_PROVEN=false',
+                'CURRENT_VALIDATED_CHAMPION=NONE',
+                'LIVE_TRADING=false',
+                'AUTO_TRADING=false',
+                'PRIVATE_TRADING_API_ALLOWED=false',
+                'REAL_ORDER_COUNT=0',
+                'FINANCIAL_MUTATION_COUNT=0',
+              ].join('\n'),
+            });
