@@ -213,11 +213,15 @@ jobs:
         run: |
           echo 'Application Fast CI is a development accelerator only.'
           echo 'It MUST NOT publish or replace any of the six Required CI contexts.'
-          echo 'Final Ready/Merge/Staging gates still require canonical Application CI 6/6.'
+          echo 'Final Ready/Merge still require canonical pre-merge Application CI 6/6; Staging/Production require verified post-merge tree provenance.'
   browser-critical:
-    name: Critical browser journeys before Ready
+    name: Critical browser journeys before Ready — shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
     timeout-minutes: 14
+    strategy:
+      fail-fast: true
+      matrix:
+        shard: [1, 2, 3, 4]
     env:
       FAST_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       FAST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -287,15 +291,99 @@ jobs:
         run: pnpm --dir stock-analyzer exec playwright install chromium
 
       - name: Pre-Ready runtime capability drift gate
-        if: steps.impact.outputs.frontend == 'true' || steps.impact.outputs.ci == 'true'
+        if: (steps.impact.outputs.frontend == 'true' || steps.impact.outputs.ci == 'true') && matrix.shard == 1
         run: pnpm --dir stock-analyzer run test:e2e:runtime-drift
 
       - name: Run critical browser journeys without retry-to-pass
         if: steps.impact.outputs.frontend == 'true' || steps.impact.outputs.ci == 'true'
-        run: pnpm --dir stock-analyzer run test:e2e:critical
+        run: pnpm --dir stock-analyzer exec playwright test -c playwright.critical.config.ts --shard=${{ matrix.shard }}/4
 
       - name: Development-only boundary
         run: |
-          echo 'Critical browser journeys are a Fast CI preflight only.'
-          echo 'They do not replace the canonical full Browser Required context.'
+          echo 'Critical browser journeys are a four-shard Fast CI preflight only.'
+          echo 'All four shards must succeed; they do not replace the canonical full Browser Required context.'
+
+  dispatch-full-ci:
+    name: Dispatch canonical pre-merge Full CI
+    needs: [fast, browser-critical]
+    if: ${{ always() && needs.fast.result == 'success' && needs.browser-critical.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Dispatch exact-head canonical Application CI once
+        uses: actions/github-script@v8
+        env:
+          TARGET_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        with:
+          script: |
+            const targetSha = String(process.env.TARGET_SHA || '').toLowerCase();
+            const prNumber = Number(process.env.PR_NUMBER || 0);
+            const baseRef = String(process.env.BASE_REF || '');
+            const headRef = String(process.env.HEAD_REF || '');
+            if (!/^[0-9a-f]{40}$/u.test(targetSha) || !Number.isInteger(prNumber) || prNumber <= 0 || !baseRef || !headRef) {
+              core.setFailed('[PREMERGE_DISPATCH_INPUT_INVALID]');
+              return;
+            }
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            if (pr.state !== 'open') {
+              core.setFailed(`[PREMERGE_PR_NOT_OPEN] state=${pr.state}`);
+              return;
+            }
+            if (String(pr.head.sha || '').toLowerCase() !== targetSha) {
+              core.setFailed(`[PREMERGE_HEAD_MOVED] expected=${targetSha} actual=${pr.head.sha}`);
+              return;
+            }
+            if (String(pr.base.ref || '') !== baseRef || String(pr.head.ref || '') !== headRef) {
+              core.setFailed('[PREMERGE_REF_IDENTITY_CHANGED]');
+              return;
+            }
+
+            const workflowId = 'futures-public-network-smoke.yml';
+            const existing = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+              event: 'workflow_dispatch',
+              per_page: 100,
+            });
+            const exactRuns = existing
+              .filter((run) => String(run.head_sha || '').toLowerCase() === targetSha)
+              .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+            const reusable = exactRuns.find((run) => run.status !== 'completed')
+              ?? exactRuns.find((run) => run.status === 'completed' && run.conclusion === 'success');
+            if (reusable) {
+              core.notice(`Canonical Full CI already exists for exact PR head: run=${reusable.id} status=${reusable.status} conclusion=${reusable.conclusion ?? 'pending'}`);
+              return;
+            }
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+              ref: headRef,
+              inputs: {
+                target_sha: targetSha,
+                checkout_ref: targetSha,
+                pr_number: String(prNumber),
+                base_ref: baseRef,
+              },
+            });
+            core.info(`Dispatched canonical pre-merge Application CI for ${pr.draft ? 'Draft' : 'Ready'} PR #${prNumber} at exact head ${targetSha}.`);
+
+      - name: Boundary
+        run: |
+          echo 'Full CI dispatch occurs only after both Fast CI jobs succeed on the exact current PR head.'
+          echo 'This job grants no Ready, merge, staging, production, database, secret, live-trading, or real-order authority.'
 
