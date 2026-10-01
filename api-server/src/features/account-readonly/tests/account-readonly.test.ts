@@ -24,8 +24,10 @@ test('Bitget read-only provider errors and malformed data fail closed without be
   for (const response of [{}, { code: '00000' }, { code: '00000', data: [null] }]) {
     await assert.rejects(
       readBitgetSnapshot(credentials, async () => response),
-      (error: unknown) => error instanceof Error
-        && error.message === 'PROVIDER_UNAVAILABLE',
+      (error: unknown) => typeof error === 'object'
+        && error !== null
+        && 'message' in error
+        && String((error as { message?: unknown }).message) === 'PROVIDER_UNAVAILABLE',
     );
   }
   await assert.rejects(
