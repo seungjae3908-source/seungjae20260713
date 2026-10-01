@@ -111,6 +111,55 @@ function readySizing(record, observedAtMs) {
   });
 }
 
+
+function settledFullCost(record, observedAtMs) {
+  const names = [
+    "commission", "tax", "spread", "slippage",
+    "funding", "latency", "liquidityImpact", "partialFillImpact",
+  ];
+  const components = Object.fromEntries(names.map((name) => [name, {
+    status: "PRESENT",
+    valuePercent: name === "tax" ? 0 : 0.01,
+    quality: name === "tax" ? "NOT_APPLICABLE" : name === "commission" ? "DOCUMENTED" : "OBSERVED",
+    source: `runtime-${name}`,
+    provenance: "runtime-full-cost",
+    countsAsExecutionCost: true,
+    unavailableIsZero: false,
+  }]));
+  return Object.freeze({
+    schemaVersion: "crypto-pump-reversal-full-cost-settlement-v1",
+    status: "SETTLED",
+    settlementId: "runtime-settlement-" + record.recordId,
+    recordId: record.recordId,
+    signalId: record.signal.signalId,
+    candidateId: record.observation.candidateId,
+    symbol: record.observation.symbol,
+    direction: "SHORT",
+    exitTriggerId: record.exitTrigger.exitTriggerId,
+    riskSizingEvidenceDigest: record.riskSizing.evidenceDigest,
+    settledAtMs: observedAtMs,
+    grossPnl: -1,
+    grossReturnPercent: record.grossReturnPercent,
+    netPnl: -1.2,
+    netReturnPercent: -1.2,
+    costPolicyVersion: "pump-cost-v1",
+    fullCostEvidence: Object.freeze({
+      schemaVersion: "authoritative-paper-execution-cost-sources-v1",
+      fullCostReady: true,
+      components: Object.freeze(components),
+      unknownIsZero: false,
+      unavailableCostConvertedToZero: false,
+    }),
+    economicSampleCredit: 1,
+    profitabilityClaimAllowed: false,
+    executionAuthority: "NONE",
+    liveOrderAllowed: false,
+    privateTradingApiAllowed: false,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+  });
+}
+
 test("one cycle admits a genuine signal, captures exact next-bar open, and advances closed 1m path", async () => {
   const now = ELIGIBLE + HOUR + 2 * MINUTE + 10_000;
   const result = await runPumpProspectivePaperCycleV1({
@@ -346,4 +395,63 @@ test("blocked entry sizing expires on the next minute and is never retried again
   });
   assert.equal(sizingCalls, 1);
   assert.equal(third.state.records[0].riskSizingStatus, "EXPIRED");
+});
+
+
+test("risk-sized exit becomes one net economic sample only after the eight-component settlement owner returns SETTLED", async () => {
+  const entryNow = ELIGIBLE + HOUR + 10_000;
+  const first = await runPumpProspectivePaperCycleV1({
+    state: createPumpProspectiveStateV1({ policy: policy(), createdAtMs: ELIGIBLE }),
+    nowMs: entryNow,
+    collectSignals: async () => sourceResult(),
+    collectNextBarOpen: async ({ expectedOpenAtMs }) => ({
+      status: "READY",
+      sourceCandleTimestampMs: expectedOpenAtMs,
+      entryReferencePrice: 100,
+    }),
+    collectMinutePath: async () => ({ status: "READY", candles: [] }),
+    sizePaperRisk: async ({ record, observedAtMs }) => readySizing(record, observedAtMs),
+    settleFullCost: async () => {
+      throw new Error("SETTLEMENT_MUST_WAIT_FOR_EXIT");
+    },
+  });
+  assert.equal(first.summary.riskSized, 1);
+  assert.equal(first.summary.fullCostSettled, 0);
+
+  const secondNow = ELIGIBLE + HOUR + 2 * MINUTE + 10_000;
+  let settlements = 0;
+  const second = await runPumpProspectivePaperCycleV1({
+    state: first.state,
+    nowMs: secondNow,
+    collectSignals: async () => sourceResult(),
+    collectNextBarOpen: async () => ({ status: "BLOCKED_DATA", blocker: "SHOULD_NOT_BE_USED" }),
+    collectMinutePath: async ({ startTime }) => ({
+      status: "READY",
+      candles: [{
+        timestampMs: startTime,
+        open: 100, high: 101, low: 99, close: 100, quoteVolume: 1000,
+      }, {
+        timestampMs: startTime + MINUTE,
+        open: 130, high: 131, low: 129, close: 130, quoteVolume: 1000,
+      }],
+    }),
+    sizePaperRisk: async () => {
+      throw new Error("SIZING_MUST_NOT_REPEAT_AFTER_READY");
+    },
+    settleFullCost: async ({ record, observedAtMs }) => {
+      settlements += 1;
+      return settledFullCost(record, observedAtMs);
+    },
+  });
+
+  assert.equal(settlements, 1);
+  assert.equal(second.summary.exitTriggered, 1);
+  assert.equal(second.summary.riskSizedExitTriggered, 1);
+  assert.equal(second.summary.fullCostSettled, 1);
+  assert.equal(second.summary.netEconomicOutcomesAvailable, 1);
+  assert.equal(second.state.records[0].netPnl, -1.2);
+  assert.equal(second.state.records[0].economicSampleCredit, 1);
+  assert.equal(second.state.records[0].profitabilityClaimAllowed, false);
+  assert.equal(second.canonicalFullCostSettlementConnected, true);
+  assert.equal(second.nextBlocker, "COLLECT_GENUINE_FUTURE_PROSPECTIVE_EVENTS");
 });
