@@ -49,6 +49,16 @@ test('fast CI covers commit changes for Draft and Ready PRs without rerunning on
   assert.match(document, /Application Fast CI is a development accelerator only/u);
 });
 
+test('critical browser Fast CI is four-way sharded without reducing coverage', async () => {
+  const document = await readFile('.github/workflows/application-fast-ci.yml', 'utf8');
+  assert.match(document, /^  browser-critical:/mu);
+  assert.match(document, /shard: \[1, 2, 3, 4\]/u);
+  assert.match(document, /--shard=\$\{\{ matrix\.shard \}\}\/4/u);
+  assert.match(document, /matrix\.shard == 1/u);
+  assert.match(document, /All four shards must succeed/u);
+  assert.match(document, /needs\.browser-critical\.result == 'success'/u);
+});
+
 test('Fast CI directly dispatches canonical full CI only after both lanes succeed', async () => {
   const document = await readFile('.github/workflows/application-fast-ci.yml', 'utf8');
   assert.match(document, /^  dispatch-full-ci:/mu);
