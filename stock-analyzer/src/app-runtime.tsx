@@ -8,6 +8,7 @@ import { configureUnifiedChartFetch } from '@/lib/unified-chart-data';
 import './index.css';
 import './unified-analysis-chart-touch.css';
 import './professional-ui-foundation.css';
+import './ui-vnext-preview.css';
 
 const ACCENTS: Record<string, string> = {
 	blue: '221 83% 53%',
@@ -19,6 +20,12 @@ const ACCENTS: Record<string, string> = {
 };
 
 const AI_CHART_SERVICE_WORKER_DELAY_MS = 6_000;
+const UI_VNEXT_PREVIEW = import.meta.env.VITE_UI_VNEXT_PREVIEW === 'true';
+
+function applyUiVnextPreviewMode() {
+	if (!UI_VNEXT_PREVIEW) return;
+	document.documentElement.dataset.uiVnextPreview = 'true';
+}
 
 function applyInitialAccent() {
 	try {
@@ -33,6 +40,7 @@ function applyInitialAccent() {
 }
 
 function registerServiceWorker() {
+	if (UI_VNEXT_PREVIEW) return;
 	if (!import.meta.env.PROD) return;
 	if (import.meta.env.VITE_PHASE4_E2E === 'true' || import.meta.env.VITE_PHASE11_E2E === 'false') return;
 	if (!('serviceWorker' in navigator)) return;
@@ -63,6 +71,7 @@ function registerServiceWorker() {
 void primeInitialAuthBootstrap()?.catch(() => undefined);
 configureUnifiedChartFetch(authorizedFetch);
 installDeferredScannerResponseGuard();
+applyUiVnextPreviewMode();
 applyInitialAccent();
 registerServiceWorker();
 
