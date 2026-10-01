@@ -117,12 +117,11 @@ export async function collectBitgetFundingCostOnlyHistory({
     }
   }
 
-  const collectedAtMs = now();
-  if (!safeTime(collectedAtMs) || collectedAtMs < endTime) {
-    return blocked(["FUNDING_COLLECTION_TIME_INVALID"]);
-  }
-
   if (records.length === 0) {
+    const collectedAtMs = now();
+    if (!safeTime(collectedAtMs) || collectedAtMs < endTime) {
+      return blocked(["FUNDING_COLLECTION_TIME_INVALID"]);
+    }
     return deepFreeze({
       schemaVersion: BITGET_FUNDING_COST_OWNER_VERSION,
       status: "PRESENT",
@@ -221,6 +220,11 @@ export async function collectBitgetFundingCostOnlyHistory({
       receiptCreditExcluded: excludedCredit,
     });
   });
+
+  const collectedAtMs = now();
+  if (!safeTime(collectedAtMs) || collectedAtMs < endTime) {
+    return blocked(["FUNDING_COLLECTION_TIME_INVALID"]);
+  }
 
   return deepFreeze({
     schemaVersion: BITGET_FUNDING_COST_OWNER_VERSION,
