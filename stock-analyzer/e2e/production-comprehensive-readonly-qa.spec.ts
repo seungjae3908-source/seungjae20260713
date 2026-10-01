@@ -57,6 +57,13 @@ const SEARCH_MATRIX: Record<'국내' | '미국' | '코인 현물' | '코인 선�
   ],
 };
 
+const SEARCH_MARKET_PARAMS: Record<keyof typeof SEARCH_MATRIX, 'KR' | 'US' | 'spot' | 'futures'> = {
+  '국내': 'KR',
+  '미국': 'US',
+  '코인 현물': 'spot',
+  '코인 선물': 'futures',
+};
+
 const TIMEFRAMES = ['1m','3m','5m','15m','30m','1H','4H','1D'] as const;
 const CHART_MARKETS = ['KR','US','UPBIT','BITGET'] as const;
 
@@ -80,13 +87,24 @@ type RouteAudit = {
 };
 
 type SearchAudit = {
-  market: string;
+  market: keyof typeof SEARCH_MATRIX;
   query: string;
   durationMs: number;
   resultCount: number;
   matched: boolean;
   outcome: string | null;
   sample: string[];
+  requests: SearchRequestAudit[];
+};
+
+type SearchRequestAudit = {
+  endpoint: string;
+  query: string | null;
+  market: string | null;
+  startedAfterInputMs: number;
+  responseLatencyMs: number | null;
+  status: number | null;
+  failure: string | null;
 };
 
 type ChartAudit = {
@@ -619,7 +637,7 @@ async function searchMatrix(
   for (const label of labels) {
     let marketButton = page.getByRole('button', { name: label, exact: true });
     if (!(await marketButton.isVisible({ timeout: 1_500 }).catch(() => false))) {
-      results.push({ market: label, query: '[MARKET_TAB_MISSING]', durationMs: 0, resultCount: 0, matched: false, outcome: 'MARKET_TAB_MISSING', sample: [] });
+      results.push({ market: label, query: '[MARKET_TAB_MISSING]', durationMs: 0, resultCount: 0, matched: false, outcome: 'MARKET_TAB_MISSING', sample: [], requests: [] });
       onProgress(results);
       continue;
     }
@@ -629,6 +647,42 @@ async function searchMatrix(
       const started = Date.now();
       let outcome: string | null = null;
       let optionTexts: string[] = [];
+      const requests: SearchRequestAudit[] = [];
+      const requestsByObject = new Map<Request, SearchRequestAudit>();
+      const requestStartedAt = new Map<Request, number>();
+      const requestListener = (request: Request) => {
+        let url: URL;
+        try { url = new URL(request.url()); } catch { return; }
+        if (url.pathname !== '/api/search/suggest' || url.searchParams.get('q') !== query) return;
+        const record: SearchRequestAudit = {
+          endpoint: `${url.pathname}?${url.searchParams.toString()}`,
+          query: url.searchParams.get('q'),
+          market: url.searchParams.get('market'),
+          startedAfterInputMs: Date.now() - started,
+          responseLatencyMs: null,
+          status: null,
+          failure: null,
+        };
+        requests.push(record);
+        requestsByObject.set(request, record);
+        requestStartedAt.set(request, Date.now());
+      };
+      const responseListener = (response: { request(): Request; status(): number }) => {
+        const request = response.request();
+        const record = requestsByObject.get(request);
+        if (!record) return;
+        record.status = response.status();
+        record.responseLatencyMs = Date.now() - (requestStartedAt.get(request) ?? Date.now());
+      };
+      const requestFailedListener = (request: Request) => {
+        const record = requestsByObject.get(request);
+        if (!record) return;
+        record.failure = request.failure()?.errorText ?? 'REQUEST_FAILED';
+        record.responseLatencyMs = Date.now() - (requestStartedAt.get(request) ?? Date.now());
+      };
+      page.on('request', requestListener);
+      page.on('response', responseListener);
+      page.on('requestfailed', requestFailedListener);
       try {
         let input = page.getByRole('combobox', { name: '통합 자산 검색' });
         await input.fill(query, { timeout: 2_000 });
@@ -652,6 +706,10 @@ async function searchMatrix(
           marketButton = page.getByRole('button', { name: label, exact: true });
           await marketButton.click({ timeout: 1_500 }).catch(() => undefined);
         }
+      } finally {
+        page.off('request', requestListener);
+        page.off('response', responseListener);
+        page.off('requestfailed', requestFailedListener);
       }
       const needle = query.replace(/[^A-Z0-9]/gi, '').toUpperCase();
       const matched = optionTexts.some((item) => item.replace(/[^A-Z0-9]/gi, '').toUpperCase().includes(needle));
@@ -663,6 +721,7 @@ async function searchMatrix(
         matched,
         outcome,
         sample: optionTexts.slice(0, 3),
+        requests,
       });
       onProgress(results);
       await page.waitForTimeout(80).catch(() => undefined);
@@ -876,14 +935,17 @@ test.describe('Production comprehensive read-only QA', () => {
   });
 
   test('Production market search matrix uses real UI and dozens of symbols', async ({ page }, testInfo) => {
-    test.skip(!['prod-desktop-1440','prod-mobile-390'].includes(testInfo.project.name));
     test.setTimeout(testInfo.project.name === 'prod-desktop-1440' ? 10 * 60_000 : 4 * 60_000);
     const diagnostics: Diagnostic[] = [];
     const blocked: Diagnostic[] = [];
     attachDiagnostics(page, diagnostics);
     await installSafety(page, blocked);
     await login(page, testInfo, diagnostics, blocked, 'search');
-    const perMarket = testInfo.project.name === 'prod-desktop-1440' ? 20 : 5;
+    const perMarket = testInfo.project.name === 'prod-desktop-1440'
+      ? 20
+      : testInfo.project.name === 'prod-mobile-390'
+        ? 5
+        : 1;
     const filename = `${slug(testInfo.project.name)}-search.json`;
     const audits = await searchMatrix(page, ['국내','미국','코인 현물','코인 선물'], perMarket, (progress) => {
       writeJson(filename, { project: testInfo.project.name, audits: progress, diagnostics, blocked, complete: false });
@@ -892,7 +954,19 @@ test.describe('Production comprehensive read-only QA', () => {
     expect(blocked, 'search QA attempted a blocked mutation').toEqual([]);
     expect(audits.filter((item) => !item.matched), 'search query did not return the requested market symbol').toEqual([]);
     expect(audits.filter((item) => item.durationMs > 5_500), 'search exceeded user-visible budget').toEqual([]);
-    expect(diagnostics.filter((item) => item.kind === 'pageerror' || item.kind === 'requestfailed'), 'search browser failures detected').toEqual([]);
+    expect(audits.filter((item) => item.requests.length !== 1), 'search issued a missing or duplicate request').toEqual([]);
+    expect(audits.flatMap((item) => item.requests).filter((request) => request.status !== 200 || request.failure),
+      'search request did not complete exactly once with HTTP 200').toEqual([]);
+    expect(audits.filter((item) => item.requests.some((request) => request.market !== SEARCH_MARKET_PARAMS[item.market])),
+      'search request used the wrong market route').toEqual([]);
+    expect(audits.flatMap((item) => item.requests)
+      .filter((request) => request.startedAfterInputMs < 150 || request.startedAfterInputMs > 1_000),
+    'search debounce delayed or dispatched the request outside its bounded window').toEqual([]);
+    expect(diagnostics.filter((item) => item.kind === 'console' || item.kind === 'pageerror' || item.kind === 'requestfailed'),
+      'search browser failures detected').toEqual([]);
+    expect(diagnostics.filter((item) => item.kind === 'http'
+      && (item.status === 401 || item.status === 403 || (item.status ?? 0) >= 500)),
+      'unexpected authenticated GET 401/403/5xx detected during search').toEqual([]);
   });
 
   test('Production chart matrix checks 4 markets x 8 timeframes and chart controls', async ({ page }, testInfo) => {
