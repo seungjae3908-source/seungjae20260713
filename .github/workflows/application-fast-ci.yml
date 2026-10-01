@@ -213,7 +213,7 @@ jobs:
         run: |
           echo 'Application Fast CI is a development accelerator only.'
           echo 'It MUST NOT publish or replace any of the six Required CI contexts.'
-          echo 'Final Ready/Merge/Staging gates still require canonical Application CI 6/6.'
+          echo 'Final Ready/Merge still require canonical pre-merge Application CI 6/6; Staging/Production require verified post-merge tree provenance.'
   browser-critical:
     name: Critical browser journeys before Ready
     runs-on: ubuntu-latest
