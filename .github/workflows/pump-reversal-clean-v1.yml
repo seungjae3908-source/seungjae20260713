@@ -1,0 +1,89 @@
+name: Pump Reversal CLEAN V1 Exact-Head
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'market-prediction-lab/src/crypto-pump-reversal-*.js'
+      - 'market-prediction-lab/tests/crypto-pump-reversal-*.test.js'
+      - 'api-server/src/services/pump-reversal-*.ts'
+      - '.github/workflows/pump-reversal-clean-v1.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pump-reversal-clean-v1-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+  LIVE_TRADING: 'false'
+  AUTO_TRADING: 'false'
+  REAL_ORDER_ENABLED: 'false'
+  PRIVATE_TRADING_API_ALLOWED: 'false'
+  ENABLE_REPLIT_EDITOR_PLUGINS: 'false'
+
+jobs:
+  focused:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact PR head
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.11.0'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Backend semantic typecheck
+        run: pnpm --dir api-server exec tsc -p tsconfig.json --noEmit
+
+      - name: Run Pump Prediction Lab contracts
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --test             tests/crypto-pump-reversal-clean-v1.test.js             tests/crypto-pump-reversal-public-source-v1.test.js             tests/crypto-pump-reversal-execution-public-source-v1.test.js             tests/crypto-pump-reversal-prospective-policy-v1.test.js             tests/crypto-pump-reversal-prospective-state-v1.test.js             tests/crypto-pump-reversal-prospective-runtime-v1.test.js             tests/crypto-pump-reversal-prospective-store-v1.test.js
+
+      - name: Run Pump API risk-owner contracts
+        working-directory: api-server
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          for test_file in             src/services/pump-reversal-paper-risk-sizing.service.test.ts             src/services/pump-reversal-prospective-risk-owner.service.test.ts
+          do
+            output="$tmp/$(basename "$test_file" .ts).cjs"
+            pnpm exec esbuild "$test_file"               --bundle --platform=node --format=cjs --target=node22               --define:import.meta.env='{}' --outfile="$output"
+            node --test "$output"
+          done
+
+      - name: Verify Paper-only safety boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$LIVE_TRADING" = false
+          test "$AUTO_TRADING" = false
+          test "$REAL_ORDER_ENABLED" = false
+          test "$PRIVATE_TRADING_API_ALLOWED" = false
+          grep -R --include='*pump-reversal*' -F 'executionAuthority: "NONE"' market-prediction-lab/src >/dev/null
+          grep -R --include='*pump-reversal*' -F "executionAuthority: 'NONE'" api-server/src/services >/dev/null
