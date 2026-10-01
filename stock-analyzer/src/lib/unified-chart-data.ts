@@ -65,7 +65,7 @@ export function configureUnifiedChartFetch(fetcher: UnifiedChartFetch | null): v
 const DEFAULT_TIMEOUT_MS = 12_000;
 const US_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS = 3_500;
 const KR_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS = 3_500;
-const STOCK_ALTERNATE_HEDGE_DELAY_MS = 2_000;
+const STOCK_ALTERNATE_HEDGE_DELAY_MS = 1_000;
 const INSUFFICIENT_CANDLE_RETRY_DELAY_MS = 150;
 
 export function marketAssetType(market: AnalysisMarket): AnalysisAssetType {
@@ -240,7 +240,7 @@ async function waitForSignalAwareDelay(ms: number, signal: AbortSignal): Promise
   });
 }
 
-function primaryStockEndpointTimeoutMs(market: AnalysisMarket, totalTimeoutMs: number): number {
+function primaryStockEndpointSoftDeadlineMs(market: AnalysisMarket, totalTimeoutMs: number): number {
   /*
    * The app-facing stock candle backends already terminate their live-provider
    * work before the 5s release gate: KR has a 2s hard terminal, while a cold US
@@ -248,7 +248,9 @@ function primaryStockEndpointTimeoutMs(market: AnalysisMarket, totalTimeoutMs: n
    * Yahoo hedge before auth/transport/JSON overhead. A 2.5s US browser cutoff
    * can therefore abort a healthy bounded primary request and restart the same
    * candle chain through /chart. Keep the 5s release gate unchanged and give
-   * both stock markets a 3.5s primary budget so bounded /candles can terminate.
+   * both stock markets a 3.5s primary selection budget. Crossing that budget
+   * selects the hedged /chart response without aborting the still-bounded
+   * /candles request, so browser QA does not see an intentional ERR_ABORTED.
    */
   const endpointBudgetMs = market === 'KR'
     ? KR_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS
@@ -300,26 +302,52 @@ export async function fetchUnifiedChartData(input: {
         return { promise, release };
       })()
     : null;
+  let alternateStarted = false;
   const alternateResponse = alternateHedge && alternateGate
     ? Promise.race([
         waitForSignalAwareDelay(STOCK_ALTERNATE_HEDGE_DELAY_MS, alternateHedge.signal),
         alternateGate.promise,
-      ]).then(() => fetcher(urls[1], requestInit(alternateHedge.signal)))
+      ]).then(() => {
+        alternateStarted = true;
+        return fetcher(urls[1], requestInit(alternateHedge.signal));
+      })
     : null;
   void alternateResponse?.catch(() => undefined);
 
   try {
     for (const [index, url] of urls.entries()) {
       const alternateAvailable = index < urls.length - 1;
-      const attempt = alternateAvailable
-        ? createLinkedSignal(linked.signal, primaryStockEndpointTimeoutMs(input.market, totalTimeoutMs))
-        : null;
-      const attemptSignal = attempt?.signal ?? linked.signal;
-
       try {
-        const response = index === 1 && alternateResponse
-          ? await alternateResponse
-          : await fetcher(url, requestInit(attemptSignal));
+        let response: Response;
+        if (index === 0 && alternateAvailable) {
+          const primaryRequest = fetcher(url, requestInit(linked.signal));
+          // Keep the primary request alive after the selection deadline. A soft
+          // deadline chooses the already-hedged alternate path without turning
+          // a healthy but slow browser request into net::ERR_ABORTED.
+          void primaryRequest.catch(() => undefined);
+          const selected = await Promise.race([
+            primaryRequest.then((value) => ({ kind: 'response' as const, value })),
+            waitForSignalAwareDelay(
+              primaryStockEndpointSoftDeadlineMs(input.market, totalTimeoutMs),
+              linked.signal,
+            ).then(() => ({ kind: 'deadline' as const })),
+          ]);
+          if (selected.kind === 'deadline') {
+            lastError = new UnifiedChartDataError(
+              '기본 차트 데이터 경로가 지연되어 대체 경로를 확인합니다.',
+              'timeout',
+              null,
+              true,
+            );
+            alternateGate?.release();
+            continue;
+          }
+          response = selected.value;
+        } else {
+          response = index === 1 && alternateResponse
+            ? await alternateResponse
+            : await fetcher(url, requestInit(linked.signal));
+        }
         let payload = await parsePayload(response);
         if (!response.ok) {
           const error = httpError(response.status, payload);
@@ -336,8 +364,8 @@ export async function fetchUnifiedChartData(input: {
           input.timeframe as ChartCandleTimeframe,
         );
         if (normalization.candles.length < 2) {
-          await waitForSignalAwareDelay(INSUFFICIENT_CANDLE_RETRY_DELAY_MS, attemptSignal);
-          const retryResponse = await fetcher(url, requestInit(attemptSignal));
+          await waitForSignalAwareDelay(INSUFFICIENT_CANDLE_RETRY_DELAY_MS, linked.signal);
+          const retryResponse = await fetcher(url, requestInit(linked.signal));
           payload = await parsePayload(retryResponse);
           if (!retryResponse.ok) throw httpError(retryResponse.status, payload);
           normalization = normalizeChartCandles(
@@ -354,7 +382,8 @@ export async function fetchUnifiedChartData(input: {
           alternateGate?.release();
           continue;
         }
-        alternateHedge?.abort();
+        if (!alternateStarted) alternateHedge?.abort();
+        alternateHedge?.cleanup();
         return {
           market: input.market,
           symbol,
@@ -375,23 +404,9 @@ export async function fetchUnifiedChartData(input: {
             alternateGate?.release();
             continue;
           }
-          alternateHedge?.abort();
+          if (!alternateStarted) alternateHedge?.abort();
+          alternateHedge?.cleanup();
           throw error;
-        }
-
-        if (attempt?.signal.aborted && attempt.timedOut() && !linked.signal.aborted) {
-          const timeoutError = new UnifiedChartDataError(
-            '기본 차트 데이터 경로가 지연되어 대체 경로를 확인합니다.',
-            'timeout',
-            null,
-            true,
-          );
-          lastError = timeoutError;
-          if (alternateAvailable) {
-            alternateGate?.release();
-            continue;
-          }
-          throw timeoutError;
         }
 
         if (linked.signal.aborted) {
@@ -420,8 +435,6 @@ export async function fetchUnifiedChartData(input: {
         lastError = networkError;
         if (alternateAvailable && canTryAlternateEndpoint(networkError)) continue;
         throw networkError;
-      } finally {
-        attempt?.cleanup();
       }
     }
     throw lastError ?? new UnifiedChartDataError(
@@ -431,7 +444,7 @@ export async function fetchUnifiedChartData(input: {
       true,
     );
   } finally {
-    alternateHedge?.abort();
+    if (!alternateStarted) alternateHedge?.abort();
     alternateHedge?.cleanup();
     linked.cleanup();
   }
