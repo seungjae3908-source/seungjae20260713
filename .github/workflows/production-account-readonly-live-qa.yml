@@ -287,9 +287,10 @@ jobs:
               || !allowedPaths.has(diagnostic.requestPath)
               || !['UTA_V3', 'CLASSIC'].includes(diagnostic.endpointFamily)
               || !['ACCOUNT_SETTINGS', 'ACCOUNT_INFO', 'ASSETS', 'POSITIONS', 'OPEN_ORDERS'].includes(diagnostic.probe)
-              || !Number.isInteger(diagnostic.httpStatus)
-              || diagnostic.httpStatus < 100
-              || diagnostic.httpStatus > 599
+              || (diagnostic.httpStatus !== null
+                && (!Number.isInteger(diagnostic.httpStatus)
+                  || diagnostic.httpStatus < 100
+                  || diagnostic.httpStatus > 599))
               || (diagnostic.applicationCode !== null
                 && (typeof diagnostic.applicationCode !== 'string' || !/^\\d+$/.test(diagnostic.applicationCode)))
               || ![
@@ -303,6 +304,11 @@ jobs:
                 'BITGET_REQUEST_REJECTED',
                 'PROVIDER_UNAVAILABLE',
                 'RATE_LIMITED',
+                'BITGET_TRANSPORT_DNS',
+                'BITGET_TRANSPORT_TLS',
+                'BITGET_TRANSPORT_CONNECT',
+                'BITGET_TRANSPORT_TIMEOUT',
+                'BITGET_TRANSPORT_NETWORK',
               ].includes(diagnostic.sanitizedClassification)
               || typeof diagnostic.fallbackAttempted !== 'boolean'
               || typeof diagnostic.timestampRejected !== 'boolean'
