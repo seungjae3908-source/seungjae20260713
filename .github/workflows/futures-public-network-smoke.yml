@@ -307,7 +307,7 @@ jobs:
           ref: ${{ env.APPLICATION_CHECKOUT_REF }}
           persist-credentials: false
 
-      - name: Find latest successful main adaptive weights
+      - name: Find latest successful Application CI adaptive weights
         id: adaptive
         uses: actions/github-script@v8
         with:
@@ -316,7 +316,7 @@ jobs:
             const repo = context.repo.repo;
             const workflowId = 'futures-public-network-smoke.yml';
             const { data: runPage } = await github.rest.actions.listWorkflowRuns({
-              owner, repo, workflow_id: workflowId, branch: 'main', event: 'push', status: 'success', per_page: 20,
+              owner, repo, workflow_id: workflowId, event: 'workflow_dispatch', status: 'success', per_page: 50,
             });
             const runs = runPage.workflow_runs ?? [];
             for (const run of runs) {
@@ -337,7 +337,7 @@ jobs:
               return;
             }
             core.setOutput('found', 'false');
-            core.info('No prior successful main adaptive Browser weights; using repository baseline.');
+            core.info('No prior successful Application CI adaptive Browser weights; using repository baseline.');
 
       - name: Download prior adaptive Browser weights
         if: steps.adaptive.outputs.found == 'true'
@@ -357,7 +357,7 @@ jobs:
             adaptive_file="$(find /tmp/browser-prior-adaptive -type f -name 'browser-runtime-weights-next.json' -print -quit)"
             [[ -n "$adaptive_file" ]] || { echo '[ADAPTIVE_BROWSER_WEIGHTS_FILE_MISSING]' >&2; exit 1; }
             cp "$adaptive_file" /tmp/browser-active/browser-runtime-weights-active.json
-            echo 'weight_source=ADAPTIVE_MAIN_ARTIFACT' >> "$GITHUB_STEP_SUMMARY"
+            echo 'weight_source=ADAPTIVE_PREMERGE_ARTIFACT' >> "$GITHUB_STEP_SUMMARY"
             echo 'source_run=${{ steps.adaptive.outputs.run_id }}' >> "$GITHUB_STEP_SUMMARY"
             echo 'source_sha=${{ steps.adaptive.outputs.source_sha }}' >> "$GITHUB_STEP_SUMMARY"
           else
