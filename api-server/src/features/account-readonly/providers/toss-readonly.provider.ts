@@ -23,6 +23,37 @@ export type ReadonlyTransport = (request: {
 const PRIVATE_GETS = new Set(['/api/v1/accounts', '/api/v1/holdings', '/api/v1/orders']);
 const TOSS_API_ORIGIN = 'https://openapi.tossinvest.com';
 const TOSS_OAUTH_ORIGIN = TOSS_API_ORIGIN;
+const TOSS_RATE_LIMIT_FALLBACK_DELAY_MS = 1_000;
+const TOSS_RATE_LIMIT_MAX_DELAY_MS = 3_000;
+
+function tossRetryDelayMs(headers: Record<string, string>) {
+  const raw = headers['retry-after'] ?? headers['x-ratelimit-reset'];
+  const seconds = nullableNumber(raw);
+  if (seconds === null || seconds < 0) return TOSS_RATE_LIMIT_FALLBACK_DELAY_MS;
+  return Math.min(
+    TOSS_RATE_LIMIT_MAX_DELAY_MS,
+    Math.max(250, Math.ceil(seconds * 1_000)),
+  );
+}
+
+async function waitForTossRetry(delayMs: number, signal?: AbortSignal) {
+  if (signal?.aborted) throw new AccountReadonlyError('PROVIDER_TIMEOUT', true);
+  if (!signal) {
+    await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new AccountReadonlyError('PROVIDER_TIMEOUT', true));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
 
 function credentialKey(credentials: TossCredentials) {
   return createHash('sha256')
@@ -53,19 +84,28 @@ export function createTossReadonlyTransport(
     const url = new URL(request.path, origin);
     if (request.query) url.search = request.query;
     if (url.origin !== origin || url.pathname !== request.path) throw new AccountReadonlyError('READONLY_REQUEST_REJECTED');
-    const response = await fetchImpl(url, {
-      method: request.method,
-      headers: request.headers,
-      body: request.body,
-      signal: request.signal,
-      redirect: 'error',
-      cache: 'no-store',
-    });
-    const headers: Record<string, string> = {};
-    response.headers.forEach((value, key) => { headers[key.toLowerCase()] = value; });
-    let body: unknown = null;
-    try { body = await response.json(); } catch { body = null; }
-    return { status: response.status, headers, body };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await fetchImpl(url, {
+        method: request.method,
+        headers: request.headers,
+        body: request.body,
+        signal: request.signal,
+        redirect: 'error',
+        cache: 'no-store',
+      });
+      const headers: Record<string, string> = {};
+      response.headers.forEach((value, key) => { headers[key.toLowerCase()] = value; });
+      let body: unknown = null;
+      try { body = await response.json(); } catch { body = null; }
+
+      if (response.status !== 429 || attempt === 1) {
+        return { status: response.status, headers, body };
+      }
+
+      await waitForTossRetry(tossRetryDelayMs(headers), request.signal);
+    }
+
+    throw new AccountReadonlyError('PROVIDER_UNAVAILABLE', true);
   };
 }
 
