@@ -70,7 +70,7 @@ export default defineConfig({
       registerType: 'autoUpdate',
       // The Replit dev preview is proxied under a sub-path with HMR; a service
       // worker there conflicts with tooling, so PWA is production-only.
-      disable: process.env.NODE_ENV !== 'production',
+      disable: process.env.NODE_ENV !== 'production' || process.env.VITE_UI_VNEXT_PREVIEW === 'true',
       manifest: {
         name: '지식정보',
         short_name: '지식정보',
