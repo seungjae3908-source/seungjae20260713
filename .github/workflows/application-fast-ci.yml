@@ -215,9 +215,13 @@ jobs:
           echo 'It MUST NOT publish or replace any of the six Required CI contexts.'
           echo 'Final Ready/Merge still require canonical pre-merge Application CI 6/6; Staging/Production require verified post-merge tree provenance.'
   browser-critical:
-    name: Critical browser journeys before Ready
+    name: Critical browser journeys before Ready — shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
     timeout-minutes: 14
+    strategy:
+      fail-fast: true
+      matrix:
+        shard: [1, 2, 3, 4]
     env:
       FAST_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       FAST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -287,17 +291,17 @@ jobs:
         run: pnpm --dir stock-analyzer exec playwright install chromium
 
       - name: Pre-Ready runtime capability drift gate
-        if: steps.impact.outputs.frontend == 'true' || steps.impact.outputs.ci == 'true'
+        if: (steps.impact.outputs.frontend == 'true' || steps.impact.outputs.ci == 'true') && matrix.shard == 1
         run: pnpm --dir stock-analyzer run test:e2e:runtime-drift
 
       - name: Run critical browser journeys without retry-to-pass
         if: steps.impact.outputs.frontend == 'true' || steps.impact.outputs.ci == 'true'
-        run: pnpm --dir stock-analyzer run test:e2e:critical
+        run: pnpm --dir stock-analyzer exec playwright test -c playwright.critical.config.ts --shard=${{ matrix.shard }}/4
 
       - name: Development-only boundary
         run: |
-          echo 'Critical browser journeys are a Fast CI preflight only.'
-          echo 'They do not replace the canonical full Browser Required context.'
+          echo 'Critical browser journeys are a four-shard Fast CI preflight only.'
+          echo 'All four shards must succeed; they do not replace the canonical full Browser Required context.'
 
   dispatch-full-ci:
     name: Dispatch canonical pre-merge Full CI
