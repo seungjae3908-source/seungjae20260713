@@ -241,10 +241,14 @@ export async function runPumpProspectivePaperCycleV1({
           }));
           continue;
         }
+        const calculatedAtMs = Date.parse(String(sizing?.riskResult?.calculatedAt ?? ""));
+        const sizingObservedAtMs = Number.isSafeInteger(calculatedAtMs)
+          ? calculatedAtMs
+          : nowMs;
         const attached = attachPumpProspectiveRiskSizingV1(nextState, {
           recordId: record.recordId,
           sizing,
-          observedAtMs: nowMs,
+          observedAtMs: sizingObservedAtMs,
         });
         nextState = attached.state;
         events.push(Object.freeze({
