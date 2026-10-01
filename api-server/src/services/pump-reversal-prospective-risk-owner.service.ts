@@ -19,6 +19,7 @@ export const PUMP_REVERSAL_PROSPECTIVE_RISK_OWNER_VERSION =
 type SourceContext = Readonly<{
   record: PumpProspectiveOpenRecord;
   observedAtMs: number;
+  account?: PumpPaperAccountRiskSnapshot;
 }>;
 
 export type PumpReversalProspectiveRiskOwnerSources = Readonly<{
@@ -133,11 +134,11 @@ export function createPumpReversalProspectiveRiskOwner(input: Readonly<{
     if (!safeTime(observedAtMs) || record?.status !== 'OPEN') {
       return blocked('PAPER_STATE', ['PUMP_RISK_OWNER_OPEN_RECORD_AND_TIME_REQUIRED']);
     }
-    const context = Object.freeze({ record, observedAtMs });
+    const snapshotContext = Object.freeze({ record, observedAtMs });
 
     let snapshot: unknown;
     try {
-      snapshot = await sources.paperStateSnapshotForRecord(context);
+      snapshot = await sources.paperStateSnapshotForRecord(snapshotContext);
     } catch {
       return blocked('PAPER_STATE', ['PUMP_RISK_OWNER_PAPER_STATE_SOURCE_FAILED']);
     }
@@ -153,6 +154,7 @@ export function createPumpReversalProspectiveRiskOwner(input: Readonly<{
       ]);
     }
 
+    const context = Object.freeze({ record, observedAtMs, account });
     let contractRules: PaperContractRules;
     let publicEvidence: BitgetFuturesPublicEvidence;
     let depth: PumpPublicDepthSnapshot;
