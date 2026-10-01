@@ -56,6 +56,61 @@ function sourceResult(item = signal()) {
   });
 }
 
+function readySizing(record, observedAtMs) {
+  return Object.freeze({
+    status: "READY",
+    version: "pump-reversal-paper-risk-sizing-v1",
+    blockers: Object.freeze([]),
+    riskInput: Object.freeze({
+      market: "crypto-futures",
+      symbol: record.observation.symbol,
+      side: "short",
+      accountBalance: 1_000_000,
+      entryPrice: record.position.entryPrice,
+      stopLossPrice: record.position.stopPrice,
+      targetPrice1: null,
+      targetPrice2: null,
+      leverage: 2,
+      riskPercent: 0.25,
+      entryFeeRate: 0.0006,
+      exitFeeRate: 0.0006,
+      slippageRate: 0.001,
+      estimatedFundingRate: 0.0009,
+      dataStatus: "live",
+    }),
+    riskResult: Object.freeze({
+      allowed: true,
+      blockCodes: Object.freeze([]),
+      recommendedQuantity: 0.1,
+      actualRiskPercent: 0.2,
+      riskReward1: null,
+      riskReward2: null,
+      estimatedLiquidationPrice: 180,
+      calculatedAt: new Date(observedAtMs - 1_000).toISOString(),
+    }),
+    maximumProbeNotional: 10_000,
+    maximumProbeQuantity: 100,
+    observedSlippagePercent: 0.1,
+    observedSpreadPercent: 0.05,
+    conservativeFundingRiskRate: 0.0009,
+    finalQuantity: 0.1,
+    finalNotional: 10,
+    riskPercent: 0.25,
+    leverage: 2,
+    marginMode: "isolated",
+    fundingDirectionalFilterUsed: false,
+    fundingCountsAsProfitabilityEvidence: false,
+    simulatedOnly: true,
+    canonicalProfitAdmissionEligible: false,
+    profitabilityClaimAllowed: false,
+    executionAuthority: "NONE",
+    liveOrderAllowed: false,
+    privateTradingApiAllowed: false,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+  });
+}
+
 test("one cycle admits a genuine signal, captures exact next-bar open, and advances closed 1m path", async () => {
   const now = ELIGIBLE + HOUR + 2 * MINUTE + 10_000;
   const result = await runPumpProspectivePaperCycleV1({
@@ -85,20 +140,41 @@ test("one cycle admits a genuine signal, captures exact next-bar open, and advan
   assert.equal(result.state.records[0].pathMinuteCount, 2);
   assert.equal(result.state.records[0].position.entryPrice, 100);
   assert.equal(result.canonicalFullCostSettlementConnected, false);
+  assert.equal(result.riskSizingOwnerConnected, false);
+  assert.equal(result.summary.riskSized, 0);
+  assert.equal(result.nextBlocker, "PUMP_RISK_SIZING_OWNER_NOT_CONNECTED");
   assert.equal(result.executionAuthority, "NONE");
 });
 
-test("next cycle can trigger stop but still exposes no net economics", async () => {
-  const firstNow = ELIGIBLE + HOUR + 2 * MINUTE + 10_000;
+test("entry-causal Risk sizing lets a later stop reach the Full Cost blocker without net economics", async () => {
+  const entryNow = ELIGIBLE + HOUR + 10_000;
+  let sizingCalls = 0;
   const first = await runPumpProspectivePaperCycleV1({
     state: createPumpProspectiveStateV1({ policy: policy(), createdAtMs: ELIGIBLE }),
-    nowMs: firstNow,
+    nowMs: entryNow,
     collectSignals: async () => sourceResult(),
     collectNextBarOpen: async ({ expectedOpenAtMs }) => ({
       status: "READY",
       sourceCandleTimestampMs: expectedOpenAtMs,
       entryReferencePrice: 100,
     }),
+    collectMinutePath: async () => ({ status: "READY", candles: [] }),
+    sizePaperRisk: async ({ record, observedAtMs }) => {
+      sizingCalls += 1;
+      return readySizing(record, observedAtMs);
+    },
+  });
+
+  assert.equal(sizingCalls, 1);
+  assert.equal(first.summary.riskSized, 1);
+  assert.equal(first.state.records[0].riskSizingStatus, "READY");
+  assert.equal(first.state.records[0].riskSizing.result.finalQuantity, 0.1);
+
+  const second = await runPumpProspectivePaperCycleV1({
+    state: first.state,
+    nowMs: ELIGIBLE + HOUR + 2 * MINUTE + 10_000,
+    collectSignals: async () => sourceResult(),
+    collectNextBarOpen: async () => ({ status: "BLOCKED_DATA", blocker: "SHOULD_NOT_BE_USED" }),
     collectMinutePath: async ({ startTime }) => ({
       status: "READY",
       candles: [{
@@ -106,26 +182,16 @@ test("next cycle can trigger stop but still exposes no net economics", async () 
         open: 100, high: 101, low: 99, close: 100, quoteVolume: 1000,
       }, {
         timestampMs: startTime + MINUTE,
-        open: 100, high: 101, low: 99, close: 100, quoteVolume: 1000,
-      }],
-    }),
-  });
-
-  const second = await runPumpProspectivePaperCycleV1({
-    state: first.state,
-    nowMs: firstNow + 2 * MINUTE,
-    collectSignals: async () => sourceResult(),
-    collectNextBarOpen: async () => ({ status: "BLOCKED_DATA", blocker: "SHOULD_NOT_BE_USED" }),
-    collectMinutePath: async ({ startTime }) => ({
-      status: "READY",
-      candles: [{
-        timestampMs: startTime,
         open: 130, high: 131, low: 129, close: 130, quoteVolume: 1000,
       }],
     }),
+    sizePaperRisk: async () => {
+      throw new Error("SIZING_MUST_NOT_REPEAT_AFTER_READY");
+    },
   });
 
   assert.equal(second.summary.exitTriggered, 1);
+  assert.equal(second.summary.riskSizedExitTriggered, 1);
   assert.equal(second.summary.netEconomicOutcomesAvailable, 0);
   assert.equal(second.state.records[0].exitTrigger.reason, "STOP_25_PERCENT");
   assert.equal(second.state.records[0].netReturnPercent, null);
