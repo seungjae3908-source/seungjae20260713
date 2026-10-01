@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   admitPumpProspectiveSignalToStateV1,
   advancePumpProspectiveRecordV1,
+  attachPumpProspectiveRiskSizingV1,
   createPumpProspectiveStateV1,
   markPumpProspectiveEntryMissedV1,
   openPumpProspectiveRecordV1,
@@ -214,4 +215,113 @@ test("duplicate signal is idempotent and does not create a second record", () =>
   const second = admitPumpProspectiveSignalToStateV1(first.state, signal(), ELIGIBLE + HOUR + 1);
   assert.equal(second.status, "DUPLICATE_SIGNAL");
   assert.equal(second.state.records.length, 1);
+});
+
+
+function readySizing(record, calculatedAtMs) {
+  return Object.freeze({
+    status: "READY",
+    version: "pump-reversal-paper-risk-sizing-v1",
+    blockers: Object.freeze([]),
+    riskInput: Object.freeze({
+      market: "crypto-futures",
+      symbol: record.observation.symbol,
+      side: "short",
+      accountBalance: 1_000_000,
+      entryPrice: record.position.entryPrice,
+      stopLossPrice: record.position.stopPrice,
+      targetPrice1: null,
+      targetPrice2: null,
+      leverage: 2,
+      riskPercent: 0.25,
+      entryFeeRate: 0.0006,
+      exitFeeRate: 0.0006,
+      slippageRate: 0.001,
+      estimatedFundingRate: 0.0009,
+      dataStatus: "live",
+    }),
+    riskResult: Object.freeze({
+      allowed: true,
+      blockCodes: Object.freeze([]),
+      recommendedQuantity: 0.1,
+      actualRiskPercent: 0.2,
+      riskReward1: null,
+      riskReward2: null,
+      estimatedLiquidationPrice: 180,
+      calculatedAt: new Date(calculatedAtMs).toISOString(),
+    }),
+    maximumProbeNotional: 10_000,
+    maximumProbeQuantity: 100,
+    observedSlippagePercent: 0.1,
+    observedSpreadPercent: 0.05,
+    conservativeFundingRiskRate: 0.0009,
+    finalQuantity: 0.1,
+    finalNotional: 10,
+    riskPercent: 0.25,
+    leverage: 2,
+    marginMode: "isolated",
+    fundingDirectionalFilterUsed: false,
+    fundingCountsAsProfitabilityEvidence: false,
+    simulatedOnly: true,
+    canonicalProfitAdmissionEligible: false,
+    profitabilityClaimAllowed: false,
+    executionAuthority: "NONE",
+    liveOrderAllowed: false,
+    privateTradingApiAllowed: false,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+  });
+}
+
+test("causal risk sizing attaches within 30s and becomes economic-Paper prerequisite evidence", () => {
+  const p = policy();
+  const admitted = admitPumpProspectiveSignalToStateV1(
+    createPumpProspectiveStateV1({ policy: p, createdAtMs: ELIGIBLE }),
+    signal(),
+    ELIGIBLE + HOUR,
+  );
+  const opened = openPumpProspectiveRecordV1(admitted.state, {
+    recordId: admitted.record.recordId,
+    nextHourCandle: { timestampMs: admitted.record.signal.nextBarOpenTimestampMs, open: 100 },
+    observedAtMs: admitted.record.signal.nextBarOpenTimestampMs + 1,
+  });
+  const attachedAtMs = admitted.record.signal.nextBarOpenTimestampMs + 10_000;
+  const attached = attachPumpProspectiveRiskSizingV1(opened.state, {
+    recordId: admitted.record.recordId,
+    sizing: readySizing(opened.record, attachedAtMs - 1_000),
+    observedAtMs: attachedAtMs,
+  });
+  assert.equal(attached.status, "READY");
+  assert.equal(attached.record.riskSizingStatus, "READY");
+  assert.equal(attached.record.riskSizing.result.finalQuantity, 0.1);
+  assert.equal(attached.record.riskSizing.result.riskPercent, 0.25);
+  assert.equal(attached.record.riskSizing.result.leverage, 2);
+  assert.equal(attached.record.riskSizing.result.marginMode, "isolated");
+  const summary = pumpProspectiveStateSummaryV1(attached.state);
+  assert.equal(summary.riskSized, 1);
+  assert.equal(summary.riskSizedOpen, 1);
+  assert.equal(summary.netEconomicOutcomesAvailable, 0);
+});
+
+test("risk sizing cannot be backfilled after the 30s entry evidence window", () => {
+  const p = policy();
+  const admitted = admitPumpProspectiveSignalToStateV1(
+    createPumpProspectiveStateV1({ policy: p, createdAtMs: ELIGIBLE }),
+    signal(),
+    ELIGIBLE + HOUR,
+  );
+  const opened = openPumpProspectiveRecordV1(admitted.state, {
+    recordId: admitted.record.recordId,
+    nextHourCandle: { timestampMs: admitted.record.signal.nextBarOpenTimestampMs, open: 100 },
+    observedAtMs: admitted.record.signal.nextBarOpenTimestampMs + 1,
+  });
+  const late = admitted.record.signal.nextBarOpenTimestampMs + 30_001;
+  assert.throws(
+    () => attachPumpProspectiveRiskSizingV1(opened.state, {
+      recordId: admitted.record.recordId,
+      sizing: readySizing(opened.record, late),
+      observedAtMs: late,
+    }),
+    /PUMP_PROSPECTIVE_RISK_SIZING_CAPTURE_WINDOW_EXPIRED/,
+  );
 });
