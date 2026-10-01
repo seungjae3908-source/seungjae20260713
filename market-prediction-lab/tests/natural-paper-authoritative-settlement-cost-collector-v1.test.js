@@ -220,19 +220,18 @@ test("collector binds genuine 8/8 cost evidence when the holding period has no f
   assert.equal(result.observation.triggerBoundSettlementEvidence.executionAuthority, "NONE");
 });
 
-test("a funding boundary fails closed when exact funding-minute mark evidence is unavailable", async () => {
+test("a real funding boundary fails closed until historical mark/notional evidence is connected", async () => {
   const row = fixture();
   const collector = createNaturalPaperAuthoritativeSettlementCostCollector({
     runtimePackage: runtimePackage(),
     readSupplementalCostInput: async () => supplemental(),
     bitgetClient: { get: async () => ({}) },
     collectExitSnapshot: async () => snapshot(),
-    collectFundingCostHistory: async () => ({
-      status: "BLOCKED_DATA",
-      complete: false,
-      fullCoverage: false,
-      blockers: ["FUNDING_MARK_PRICE_EVIDENCE_MISSING"],
-      unknownIsZero: false,
+    collectFundingHistory: async () => ({
+      exhausted: true,
+      startTime: row.position.entryTimestampMs,
+      endTime: row.trigger.triggeredAtMs,
+      records: [{ timestamp: T0 - 30_000, rate: 0.0001, rateRaw: "0.0001" }],
     }),
     now: () => T0 + 200,
   });
@@ -244,69 +243,8 @@ test("a funding boundary fails closed when exact funding-minute mark evidence is
   });
   assert.equal(result.status, "BLOCKED_DATA");
   assert.equal(result.fullCostReady, false);
-  assert.deepEqual(result.blockers, ["FUNDING_MARK_PRICE_EVIDENCE_MISSING"]);
+  assert.deepEqual(result.blockers, ["PAPER_SETTLEMENT_FUNDING_AMOUNT_REQUIRES_HISTORICAL_MARK_OWNER"]);
   assert.equal(result.unknownIsZero, false);
-});
-
-test("a funding boundary becomes 8/8 Full Cost ready with exact owner evidence and excludes receipt credit", async () => {
-  const row = fixture();
-  const payment = Object.freeze({
-    asOfMs: T0,
-    amount: 0.1,
-    source: "BITGET_PUBLIC_FUNDING_RATE_X_EXACT_1M_MARK_OPEN",
-    provenance: "bitget-public-v2:history-fund-rate+history-mark-candles:1m:BTCUSDT",
-    version: "bitget-funding-cost-only-owner-v1",
-  });
-  const collector = createNaturalPaperAuthoritativeSettlementCostCollector({
-    runtimePackage: runtimePackage(),
-    readSupplementalCostInput: async () => supplemental(),
-    bitgetClient: { get: async () => ({}) },
-    collectExitSnapshot: async () => snapshot(),
-    collectFundingCostHistory: async () => ({
-      schemaVersion: "bitget-funding-cost-only-owner-v1",
-      status: "PRESENT",
-      complete: true,
-      fullCoverage: true,
-      symbol: "BTCUSDT",
-      direction: "LONG",
-      quantity: row.position.quantity,
-      startTime: row.position.entryTimestampMs,
-      endTime: row.trigger.triggeredAtMs,
-      collectedAtMs: T0 + 200,
-      fundingEventCount: 1,
-      markCandleCount: 1,
-      payments: [payment],
-      totalFundingCost: 0.1,
-      excludedFundingCredit: 0.2,
-      costOnlyPolicy: "PAYMENTS_COUNT_AS_COST; RECEIPTS_EXCLUDED_FROM_PROFIT",
-      markPricePolicy: "EXACT_FUNDING_MINUTE_MARK_CANDLE_OPEN",
-      blockers: [],
-      unknownIsZero: false,
-      unavailableCostConvertedToZero: false,
-    }),
-    now: () => T0 + 200,
-  });
-  const producer = createNaturalPaperTriggerBoundSettlementCostProducer({
-    collectAuthoritativeEvidence: collector,
-    clock: () => T0 + 250,
-  });
-  const result = await producer({
-    position: row.position,
-    observation: row.observation,
-    evaluatedAtMs: T0 + 50,
-  });
-  assert.equal(result.status, "PRESENT");
-  assert.equal(result.fullCostReady, true);
-  assert.equal(result.observation.settlementCostEvidence.components.funding.valuePercent, 0.01);
-  assert.equal(result.observation.settlementCostEvidence.components.funding.quality, "OBSERVED");
-  assert.equal(
-    result.observation.settlementCostEvidence.components.funding.markPricePolicy,
-    "EXACT_FUNDING_MINUTE_MARK_CANDLE_OPEN",
-  );
-  assert.equal(result.observation.settlementCostEvidence.fundingReceiptCreditIncluded, false);
-  assert.equal(result.observation.settlementCostEvidence.excludedFundingCredit, 0.2);
-  assert.deepEqual(result.observation.settlementInput.fundingEvidence.payments, [payment]);
-  assert.equal(result.observation.settlementInput.fundingEvidence.excludedFundingCredit, 0.2);
 });
 
 test("missing supplemental liquidity or partial-fill evidence is never converted to zero", async () => {
