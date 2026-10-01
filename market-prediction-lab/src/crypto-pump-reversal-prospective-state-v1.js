@@ -10,6 +10,14 @@ import {
 
 export const PUMP_PROSPECTIVE_STATE_VERSION = "crypto-pump-reversal-prospective-state-v1";
 
+const MINUTE_MS = 60_000;
+const RECORD_STATUSES = new Set([
+  "WAITING_NEXT_BAR",
+  "ENTRY_MISSED",
+  "OPEN",
+  "EXIT_TRIGGERED",
+]);
+
 function stableSerialize(value) {
   if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
   if (value && typeof value === "object") {
@@ -36,6 +44,10 @@ function exactDigest(value) {
   return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
 }
 
+function nonEmpty(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 function safety() {
   return Object.freeze({
     profitabilityProven: false,
@@ -59,6 +71,20 @@ function withDigest(payload) {
   return deepFreeze({ ...payload, stateDigest: sha256(payload) });
 }
 
+function validatePathCursor(record) {
+  if (!Number.isSafeInteger(record.pathMinuteCount) || record.pathMinuteCount < 0) {
+    throw new Error("PUMP_PROSPECTIVE_PATH_COUNT_INVALID");
+  }
+  if (record.lastMinuteObservedAtMs != null
+    && (!Number.isSafeInteger(record.lastMinuteObservedAtMs) || record.lastMinuteObservedAtMs <= 0)) {
+    throw new Error("PUMP_PROSPECTIVE_PATH_CURSOR_INVALID");
+  }
+  if (record.position && record.lastMinuteObservedAtMs != null
+    && record.lastMinuteObservedAtMs < record.position.entryTimestampMs) {
+    throw new Error("PUMP_PROSPECTIVE_PATH_CURSOR_BEFORE_ENTRY");
+  }
+}
+
 function validateRecord(record, policy) {
   if (!record
     || record.schemaVersion !== "crypto-pump-reversal-prospective-record-v1"
@@ -68,18 +94,35 @@ function validateRecord(record, policy) {
     || record.observation?.policyDigest !== policy.policyDigest
     || record.signal?.signalId !== record.observation?.signalId
     || record.signal?.symbol !== record.observation?.symbol
-    || !["WAITING_NEXT_BAR", "OPEN", "EXIT_TRIGGERED"].includes(record.status)) {
+    || !RECORD_STATUSES.has(record.status)) {
     throw new Error("PUMP_PROSPECTIVE_RECORD_INVALID");
   }
-  if (record.status === "WAITING_NEXT_BAR" && (record.position != null || record.exitTrigger != null)) {
-    throw new Error("PUMP_PROSPECTIVE_WAITING_RECORD_MUTATED");
+
+  validatePathCursor(record);
+
+  if (record.status === "WAITING_NEXT_BAR") {
+    if (record.position != null || record.exitTrigger != null || record.entryBlocker != null
+      || record.lastMinuteObservedAtMs != null || record.pathMinuteCount !== 0) {
+      throw new Error("PUMP_PROSPECTIVE_WAITING_RECORD_MUTATED");
+    }
   }
-  if (record.status === "OPEN" && (!record.position || record.exitTrigger != null)) {
-    throw new Error("PUMP_PROSPECTIVE_OPEN_RECORD_INVALID");
+  if (record.status === "ENTRY_MISSED") {
+    if (record.position != null || record.exitTrigger != null || !nonEmpty(record.entryBlocker)
+      || record.lastMinuteObservedAtMs != null || record.pathMinuteCount !== 0) {
+      throw new Error("PUMP_PROSPECTIVE_MISSED_RECORD_INVALID");
+    }
   }
-  if (record.status === "EXIT_TRIGGERED" && (!record.position || !record.exitTrigger)) {
-    throw new Error("PUMP_PROSPECTIVE_EXIT_RECORD_INVALID");
+  if (record.status === "OPEN") {
+    if (!record.position || record.exitTrigger != null || record.entryBlocker != null) {
+      throw new Error("PUMP_PROSPECTIVE_OPEN_RECORD_INVALID");
+    }
   }
+  if (record.status === "EXIT_TRIGGERED") {
+    if (!record.position || !record.exitTrigger || record.entryBlocker != null) {
+      throw new Error("PUMP_PROSPECTIVE_EXIT_RECORD_INVALID");
+    }
+  }
+
   if (record.netReturnPercent !== null || record.netPnl !== null
     || record.fullCostSettlementStatus !== "MISSING_CANONICAL_FULL_COST") {
     throw new Error("PUMP_PROSPECTIVE_PRE_FULL_COST_ECONOMICS_FORBIDDEN");
@@ -98,6 +141,7 @@ export function validatePumpProspectiveStateV1(state) {
     throw new Error("PUMP_PROSPECTIVE_STATE_IDENTITY_MISMATCH");
   }
   if (!Array.isArray(state.records)) throw new Error("PUMP_PROSPECTIVE_STATE_RECORDS_INVALID");
+
   const recordIds = new Set();
   const signalIds = new Set();
   const openSymbols = new Set();
@@ -112,6 +156,7 @@ export function validatePumpProspectiveStateV1(state) {
       openSymbols.add(record.observation.symbol);
     }
   }
+
   if (!Number.isSafeInteger(state.createdAtMs) || !Number.isSafeInteger(state.updatedAtMs)
     || state.createdAtMs <= 0 || state.updatedAtMs < state.createdAtMs) {
     throw new Error("PUMP_PROSPECTIVE_STATE_TIME_INVALID");
@@ -189,8 +234,11 @@ export function admitPumpProspectiveSignalToStateV1(state, signal, observedAtMs)
     observation: clone(admission.observation),
     signal: clone(signal),
     status: "WAITING_NEXT_BAR",
+    entryBlocker: null,
     position: null,
     exitTrigger: null,
+    lastMinuteObservedAtMs: null,
+    pathMinuteCount: 0,
     grossReturnPercent: null,
     netReturnPercent: null,
     netPnl: null,
@@ -209,6 +257,37 @@ export function admitPumpProspectiveSignalToStateV1(state, signal, observedAtMs)
   return deepFreeze({ status: "ADMITTED", state: next, record });
 }
 
+export function markPumpProspectiveEntryMissedV1(state, {
+  recordId,
+  blocker,
+  observedAtMs,
+} = {}) {
+  validatePumpProspectiveStateV1(state);
+  const index = state.records.findIndex((record) => record.recordId === recordId);
+  if (index < 0) throw new Error("PUMP_PROSPECTIVE_RECORD_NOT_FOUND");
+  const current = state.records[index];
+  if (current.status !== "WAITING_NEXT_BAR") {
+    return deepFreeze({ status: "NOT_WAITING", state, record: current });
+  }
+  if (!nonEmpty(blocker)) throw new Error("PUMP_PROSPECTIVE_ENTRY_BLOCKER_REQUIRED");
+  if (!Number.isSafeInteger(observedAtMs) || observedAtMs < current.observation.nextBarOpenTimestampMs) {
+    throw new Error("PUMP_PROSPECTIVE_ENTRY_MISSED_TIME_INVALID");
+  }
+
+  const updatedRecord = deepFreeze({
+    ...current,
+    status: "ENTRY_MISSED",
+    entryBlocker: blocker,
+  });
+  const records = state.records.map((record, rowIndex) => rowIndex === index ? updatedRecord : clone(record));
+  const next = withDigest({
+    ...stateDigestPayload(state),
+    updatedAtMs: Math.max(state.updatedAtMs, observedAtMs),
+    records: Object.freeze(records),
+  });
+  return deepFreeze({ status: "ENTRY_MISSED", state: next, record: updatedRecord });
+}
+
 export function openPumpProspectiveRecordV1(state, {
   recordId,
   nextHourCandle,
@@ -224,6 +303,7 @@ export function openPumpProspectiveRecordV1(state, {
   if (!Number.isSafeInteger(observedAtMs) || observedAtMs < current.observation.nextBarOpenTimestampMs) {
     throw new Error("PUMP_PROSPECTIVE_ENTRY_OBSERVED_AT_INVALID");
   }
+
   const positionBase = openPumpProspectiveResearchPosition({
     signal: current.signal,
     nextHourCandle,
@@ -246,7 +326,14 @@ export function openPumpProspectiveRecordV1(state, {
     profitabilityClaimAllowed: false,
     executionAuthority: "NONE",
   });
-  const updatedRecord = deepFreeze({ ...current, status: "OPEN", position });
+  const updatedRecord = deepFreeze({
+    ...current,
+    status: "OPEN",
+    entryBlocker: null,
+    position,
+    lastMinuteObservedAtMs: null,
+    pathMinuteCount: 0,
+  });
   const records = state.records.map((record, rowIndex) => rowIndex === index ? updatedRecord : clone(record));
   const lastEntryAtBySymbol = Object.freeze({
     ...state.lastEntryAtBySymbol,
@@ -265,6 +352,45 @@ function shortGrossReturnPercent(entryPrice, exitPrice) {
   return ((entryPrice - exitPrice) / entryPrice) * 100;
 }
 
+function normalizeIncrementalMinuteCandles(record, minuteCandles) {
+  if (!Array.isArray(minuteCandles)) throw new Error("PUMP_PROSPECTIVE_1M_CANDLES_REQUIRED");
+  const normalized = minuteCandles
+    .map((candle) => ({
+      timestampMs: Number(candle?.timestampMs ?? candle?.timestamp),
+      open: Number(candle?.open),
+      high: Number(candle?.high),
+      low: Number(candle?.low),
+      close: Number(candle?.close),
+      quoteVolume: candle?.quoteVolume == null ? null : Number(candle.quoteVolume),
+    }))
+    .filter((candle) => record.lastMinuteObservedAtMs == null
+      || candle.timestampMs > record.lastMinuteObservedAtMs)
+    .sort((left, right) => left.timestampMs - right.timestampMs);
+
+  for (let index = 0; index < normalized.length; index += 1) {
+    const candle = normalized[index];
+    if (!Number.isSafeInteger(candle.timestampMs)
+      || ![candle.open, candle.high, candle.low, candle.close].every((value) => Number.isFinite(value) && value > 0)
+      || candle.high < candle.low || candle.open > candle.high || candle.open < candle.low
+      || candle.close > candle.high || candle.close < candle.low) {
+      throw new Error("PUMP_PROSPECTIVE_1M_CANDLE_INVALID");
+    }
+    if (index > 0 && candle.timestampMs - normalized[index - 1].timestampMs !== MINUTE_MS) {
+      throw new Error("PUMP_PROSPECTIVE_1M_PATH_GAP");
+    }
+  }
+
+  if (normalized.length > 0) {
+    const expectedFirst = record.lastMinuteObservedAtMs == null
+      ? record.position.entryTimestampMs
+      : record.lastMinuteObservedAtMs + MINUTE_MS;
+    if (normalized[0].timestampMs !== expectedFirst) {
+      throw new Error("PUMP_PROSPECTIVE_1M_PATH_CURSOR_GAP");
+    }
+  }
+  return normalized;
+}
+
 export function advancePumpProspectiveRecordV1(state, {
   recordId,
   minuteCandles,
@@ -275,17 +401,44 @@ export function advancePumpProspectiveRecordV1(state, {
   if (index < 0) throw new Error("PUMP_PROSPECTIVE_RECORD_NOT_FOUND");
   const current = state.records[index];
   if (current.status === "WAITING_NEXT_BAR") throw new Error("PUMP_PROSPECTIVE_POSITION_NOT_OPEN");
+  if (current.status === "ENTRY_MISSED") {
+    return deepFreeze({ status: "ENTRY_MISSED", state, record: current });
+  }
   if (current.status === "EXIT_TRIGGERED") {
     return deepFreeze({ status: "ALREADY_EXIT_TRIGGERED", state, record: current });
   }
-  const trigger = detectPumpProspectiveExit({
-    position: current.position,
-    minuteCandles,
-    observedAtMs,
-  });
-  if (trigger.status !== "EXIT_TRIGGERED") {
+  if (!Number.isSafeInteger(observedAtMs) || observedAtMs < current.position.entryTimestampMs) {
+    throw new Error("PUMP_PROSPECTIVE_EXIT_OBSERVED_AT_INVALID");
+  }
+
+  const incremental = normalizeIncrementalMinuteCandles(current, minuteCandles);
+  if (incremental.length === 0) {
     return deepFreeze({ status: "HOLD", state, record: current });
   }
+
+  const trigger = detectPumpProspectiveExit({
+    position: current.position,
+    minuteCandles: incremental,
+    observedAtMs,
+  });
+  const latestMinute = incremental.at(-1).timestampMs;
+  const nextPathMinuteCount = current.pathMinuteCount + incremental.length;
+
+  if (trigger.status !== "EXIT_TRIGGERED") {
+    const updatedRecord = deepFreeze({
+      ...current,
+      lastMinuteObservedAtMs: latestMinute,
+      pathMinuteCount: nextPathMinuteCount,
+    });
+    const records = state.records.map((record, rowIndex) => rowIndex === index ? updatedRecord : clone(record));
+    const next = withDigest({
+      ...stateDigestPayload(state),
+      updatedAtMs: Math.max(state.updatedAtMs, observedAtMs),
+      records: Object.freeze(records),
+    });
+    return deepFreeze({ status: "HOLD", state: next, record: updatedRecord });
+  }
+
   const grossReturnPercent = shortGrossReturnPercent(
     current.position.entryPrice,
     trigger.referenceExitPrice,
@@ -311,6 +464,8 @@ export function advancePumpProspectiveRecordV1(state, {
     ...current,
     status: "EXIT_TRIGGERED",
     exitTrigger,
+    lastMinuteObservedAtMs: latestMinute,
+    pathMinuteCount: nextPathMinuteCount,
     grossReturnPercent,
     netReturnPercent: null,
     netPnl: null,
@@ -329,6 +484,7 @@ export function advancePumpProspectiveRecordV1(state, {
 export function pumpProspectiveStateSummaryV1(state) {
   validatePumpProspectiveStateV1(state);
   const waiting = state.records.filter((record) => record.status === "WAITING_NEXT_BAR").length;
+  const missed = state.records.filter((record) => record.status === "ENTRY_MISSED").length;
   const open = state.records.filter((record) => record.status === "OPEN").length;
   const exited = state.records.filter((record) => record.status === "EXIT_TRIGGERED").length;
   const fullCostSettled = state.records.filter(
@@ -339,6 +495,7 @@ export function pumpProspectiveStateSummaryV1(state) {
     candidateId: state.candidateId,
     records: state.records.length,
     waitingNextBar: waiting,
+    entryMissed: missed,
     openPositions: open,
     exitTriggered: exited,
     fullCostSettled,
