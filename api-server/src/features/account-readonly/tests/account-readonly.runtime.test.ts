@@ -522,6 +522,51 @@ test('Bitget pre-HTTP transport failures retain bounded sanitized diagnostics wi
   }
 });
 
+test('Bitget provider deadline preserves sanitized timeout diagnostics through the outer deadline guard', async () => {
+  const readers = createVaultBackedAccountReaders({
+    repositoryFactory: () => repositoryFor('bitget'),
+    decryptCredentials: () => ({
+      apiKey: 'BITGET_KEY_DEADLINE_TEST_ONLY',
+      secretKey: 'BITGET_SECRET_DEADLINE_TEST_ONLY',
+      passphrase: 'BITGET_PASSPHRASE_DEADLINE_TEST_ONLY',
+    }),
+    providerTimeoutMs: 10,
+    fetchImpl: async (_input, init) => new Promise<Response>((_resolve, reject) => {
+      const rejectTimeout = () => {
+        const cause = Object.assign(new Error('UNTRUSTED_DEADLINE_DETAIL'), { code: 'UND_ERR_CONNECT_TIMEOUT' });
+        reject(Object.assign(new TypeError('fetch failed'), { cause }));
+      };
+      if (init?.signal?.aborted) {
+        rejectTimeout();
+        return;
+      }
+      init?.signal?.addEventListener('abort', rejectTimeout, { once: true });
+    }),
+  });
+
+  await assert.rejects(
+    () => readers.bitget!(SCOPE),
+    (error: unknown) => {
+      if (!(error instanceof AccountReadonlyError)) return false;
+      const diagnostic = error.bitgetDiagnostic;
+      if (!diagnostic) return false;
+      const serialized = JSON.stringify(diagnostic);
+      return error.code === 'PROVIDER_TIMEOUT'
+        && error.retryable === true
+        && diagnostic.httpStatus === null
+        && diagnostic.applicationCode === null
+        && diagnostic.sanitizedClassification === 'BITGET_TRANSPORT_TIMEOUT'
+        && diagnostic.requestPath === '/api/v3/account/settings'
+        && diagnostic.endpointFamily === 'UTA_V3'
+        && diagnostic.probe === 'ACCOUNT_SETTINGS'
+        && !serialized.includes('BITGET_KEY_DEADLINE_TEST_ONLY')
+        && !serialized.includes('BITGET_SECRET_DEADLINE_TEST_ONLY')
+        && !serialized.includes('BITGET_PASSPHRASE_DEADLINE_TEST_ONLY')
+        && !serialized.includes('UNTRUSTED_DEADLINE_DETAIL');
+    },
+  );
+});
+
 test('credential, IP or permission loss evicts same-user last-good account facts instead of serving stale balances', async () => {
   const connected = {
     provider: 'upbit' as const,
