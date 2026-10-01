@@ -91,7 +91,14 @@ async function withProviderDeadline<T>(
   try {
     return await operation(controller.signal);
   } catch (error) {
-    if (deadlineExpired) throw new AccountReadonlyError('PROVIDER_TIMEOUT', true);
+    if (deadlineExpired) {
+      if (error instanceof AccountReadonlyError
+        && error.code === 'PROVIDER_TIMEOUT'
+        && error.bitgetDiagnostic !== null) {
+        throw error;
+      }
+      throw new AccountReadonlyError('PROVIDER_TIMEOUT', true);
+    }
     throw error;
   } finally {
     clearTimeout(timer);
