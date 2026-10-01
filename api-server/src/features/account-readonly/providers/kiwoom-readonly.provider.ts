@@ -67,7 +67,9 @@ function classifyPayloadFailure(payload: Row) {
     ? topLevel
     : embedded ?? topLevel;
   if (KIWOOM_RATE_LIMIT_CODES.has(effective)) return new AccountReadonlyError('RATE_LIMITED', true);
-  if (KIWOOM_AUTH_CODES.has(effective)) return new AccountReadonlyError('KIWOOM_AUTH_OR_IP_REJECTED');
+  if (KIWOOM_AUTH_CODES.has(effective)) {
+    return new AccountReadonlyError(`KIWOOM_AUTH_OR_IP_REJECTED_CODE_${effective}`);
+  }
   return new AccountReadonlyError('KIWOOM_REQUEST_REJECTED');
 }
 
@@ -79,7 +81,7 @@ function safeJson(response: Response, code: string) {
 
 function classifyHttpFailure(response: Response) {
   if (response.status === 401 || response.status === 403) {
-    return new AccountReadonlyError('KIWOOM_AUTH_OR_IP_REJECTED');
+    return new AccountReadonlyError(`KIWOOM_AUTH_OR_IP_REJECTED_HTTP_${response.status}`);
   }
   if (response.status === 429) return new AccountReadonlyError('RATE_LIMITED', true);
   if (response.status >= 500) return new AccountReadonlyError('PROVIDER_UNAVAILABLE', true);
