@@ -20,7 +20,7 @@ function policy() {
   };
 }
 
-test('one-shot preflights all read-only files before invocation and exposes no financial authority', async () => {
+test('one-shot hard-preflights only policy and keeps Paper/cost reads lazy', async () => {
   const reads: string[] = [];
   const factoryCalls: any[] = [];
   let invoked = 0;
@@ -84,7 +84,7 @@ test('one-shot preflights all read-only files before invocation and exposes no f
     },
   });
 
-  assert.deepEqual(reads.slice(0, 3).sort(), [COST, PAPER, POLICY].sort());
+  assert.deepEqual(reads, [POLICY]);
   assert.equal(invoked, 1);
   assert.equal(factoryCalls.length, 1);
   assert.equal(result.schemaVersion, PUMP_REVERSAL_ONE_SHOT_RUNNER_VERSION);
@@ -97,34 +97,61 @@ test('one-shot preflights all read-only files before invocation and exposes no f
   assert.equal(result.sensitiveValuesEmitted, false);
 });
 
-test('missing read-only input blocks before runtime dependency or lease creation', async () => {
-  let factories = 0;
-  let invocations = 0;
-  await assert.rejects(
-    () => runPumpReversalProspectiveOnce({
-      stateRoot: ROOT,
-      policyPath: POLICY,
-      paperStateSnapshotPath: PAPER,
-      supplementalCostEvidencePath: COST,
-      now: () => NOW,
-      readJson: async (path) => {
-        if (path === COST) throw new Error('missing');
-        return path === POLICY ? policy() : {};
-      },
-      verifyPolicy: () => ({ valid: true, blockers: [] }),
-      runtimeDependenciesFactory: (() => {
-        factories += 1;
-        throw new Error('SHOULD_NOT_CALL');
-      }) as any,
-      runtimeFactory: (() => { throw new Error('SHOULD_NOT_CALL'); }) as any,
-      invocationRunner: async () => {
-        invocations += 1;
-        throw new Error('SHOULD_NOT_CALL');
-      },
-    }),
-  );
-  assert.equal(factories, 0);
-  assert.equal(invocations, 0);
+test('missing Paper/cost inputs do not suppress raw prospective cycle creation', async () => {
+  let invoked = 0;
+  let capturedDependencies: any = null;
+  const result = await runPumpReversalProspectiveOnce({
+    stateRoot: ROOT,
+    policyPath: POLICY,
+    paperStateSnapshotPath: PAPER,
+    supplementalCostEvidencePath: COST,
+    now: () => NOW,
+    readJson: async (path) => {
+      if (path === POLICY) return policy();
+      throw new Error('missing');
+    },
+    verifyPolicy: () => ({ valid: true, blockers: [] }),
+    runtimeDependenciesFactory: ((input: any) => {
+      capturedDependencies = input;
+      return {
+        sizePaperRisk: async () => ({ status: 'BLOCKED', blockers: ['MISSING_ECONOMIC_EVIDENCE'] }),
+        settleFullCost: async () => ({ status: 'BLOCKED_DATA', blockers: ['MISSING_ECONOMIC_EVIDENCE'] }),
+        executionAuthority: 'NONE',
+        liveTrading: false,
+        privateTradingApiAllowed: false,
+        financialMutationAllowed: false,
+        scheduleActivationAuthority: false,
+      };
+    }) as any,
+    runtimeFactory: ((input: any) => ({ async run() { return input; } })) as any,
+    invocationRunner: async () => {
+      invoked += 1;
+      return {
+        status: 'COMPLETED',
+        cycleId: 'raw-cycle',
+        runtime: {
+          status: 'COMPLETED',
+          blockers: [],
+          summary: {
+            records: 0,
+            waitingNextBar: 0,
+            entryMissed: 0,
+            openPositions: 0,
+            exitTriggered: 0,
+            riskSized: 0,
+            riskSizingExpired: 0,
+            prospectiveExecutionSamples: 0,
+            fullCostSettled: 0,
+            netEconomicOutcomesAvailable: 0,
+          },
+        },
+      };
+    },
+  });
+  assert.equal(invoked, 1);
+  assert.equal(result.status, 'COMPLETED');
+  await assert.rejects(() => capturedDependencies.paperStateSnapshotForRecord({}), /missing/);
+  await assert.rejects(() => capturedDependencies.supplementalCostEvidenceForRecord({}), /missing/);
 });
 
 test('invalid policy blocks before cycle creation', async () => {
