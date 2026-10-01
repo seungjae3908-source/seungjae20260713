@@ -219,7 +219,12 @@ function validateCostEvidence(
 }
 
 function depthLevelSize(level: DepthLevel): number | null {
-  const raw = Array.isArray(level) ? level[1] : (level.size ?? level.qty);
+  const objectLevel = level as Readonly<{
+    price: number | string;
+    size?: number | string;
+    qty?: number | string;
+  }>;
+  const raw = Array.isArray(level) ? level[1] : (objectLevel.size ?? objectLevel.qty);
   const value = Number(raw);
   return Number.isFinite(value) && value > 0 ? value : null;
 }
