@@ -95,7 +95,7 @@ export function buildPumpProspectiveExecutionSampleV1({
     strategyId: record.signal.strategyId,
     strategyVersion: record.observation.strategyVersion,
     parameterHash: record.observation.parameterHash,
-    parameterDigest: null,
+    parameterDigest: record.observation.parameterHash,
     researchCodeSha: record.observation.researchCodeSha,
     accountMode: "PAPER",
   });
