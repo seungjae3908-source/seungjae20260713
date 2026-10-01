@@ -121,6 +121,8 @@ test('scanner Telegram keeps freshness checks but hides verbose diagnostics from
   expect(source).not.toContain('신호 생성 ${freshness.signalGeneratedAt');
   expect(source).not.toContain('데이터 기준 ${freshness.dataAsOf');
   expect(source).not.toContain('신호 만료 ${freshness.expiresAt');
-  expect(source).toContain('return addTelegramSignalFreshness(base, alert, context);');
+  expect(source).toContain('return addTelegramSignalFreshness(fallback, alert, context);');
+  expect(source).toContain("button.text.includes('주문')");
+  expect(source).toContain('buildTelegramSignalAppButtons');
   expect(source).not.toContain('ordersSubmitted: 1');
 });
