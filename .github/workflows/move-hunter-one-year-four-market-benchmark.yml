@@ -1,0 +1,81 @@
+name: Move Hunter One-Year Four-Market Benchmark
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - research-lab/move-hunter-v1/**
+      - .github/workflows/move-hunter-one-year-four-market-benchmark.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: move-hunter-one-year-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: Research-only 1Y 4-market benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify immutable head
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain=v1)"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run Move Hunter contract tests
+        shell: bash
+        run: node --test research-lab/move-hunter-v1/test/*.test.mjs
+
+      - name: Run bounded public one-year benchmark
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/move-hunter-one-year"
+          node research-lab/move-hunter-v1/scripts/run-one-year-public-benchmark.mjs \
+            "$RUNNER_TEMP/move-hunter-one-year/result.json" \
+            "$RUNNER_TEMP/move-hunter-one-year/result.md"
+
+      - name: Show benchmark summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$RUNNER_TEMP/move-hunter-one-year/result.md" ]; then
+            cat "$RUNNER_TEMP/move-hunter-one-year/result.md"
+            cat "$RUNNER_TEMP/move-hunter-one-year/result.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload immutable research result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: move-hunter-one-year-four-market-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/move-hunter-one-year/result.json
+            ${{ runner.temp }}/move-hunter-one-year/result.md
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Assert no repository mutation
+        if: always()
+        shell: bash
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain=v1)"
