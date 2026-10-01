@@ -189,3 +189,37 @@ test('safety contract keeps every trading authority disabled', () => {
   assert.equal(PUMP_REVERSAL_PUBLIC_RISK_SOURCE_WIRING_SAFETY.privateTradingApiAllowed, false);
   assert.equal(PUMP_REVERSAL_PUBLIC_RISK_SOURCE_WIRING_SAFETY.financialMutationAllowed, false);
 });
+
+
+test('wiring rejects a decreasing maintenance-margin tier schedule before Risk sizing', async () => {
+  const wiring = createPumpReversalPublicRiskSourceWiring({
+    researchCodeSha: SHA,
+    paperStateSnapshotForRecord: async () => paperSnapshot(),
+    supplementalCostEvidenceForRecord: async () => supplemental(),
+    publicEvidenceForRecord: async () => publicEvidence(),
+    now: () => NOW,
+    fetchPublicJson: async (url) => {
+      const parsed = new URL(String(url));
+      if (parsed.pathname.endsWith('/query-position-lever')) {
+        return {
+          code: '00000',
+          data: [
+            { startUnit: '0', keepMarginRate: '0.010' },
+            { startUnit: '1000', keepMarginRate: '0.005' },
+          ],
+        };
+      }
+      if (parsed.pathname.endsWith('/orderbook')) {
+        return {
+          code: '00000',
+          data: { ts: String(NOW), b: [['99.9', '10']], a: [['100.1', '10']] },
+        };
+      }
+      throw new Error('UNEXPECTED_URL');
+    },
+  });
+  const result = await wiring.createOwner()({ record: record(), observedAtMs: NOW });
+  assert.equal(result.status, 'BLOCKED');
+  assert.ok(result.blockers.includes('PUMP_RISK_OWNER_AUTHORITATIVE_SOURCE_FAILED'));
+  assert.equal(result.executionAuthority, 'NONE');
+});
