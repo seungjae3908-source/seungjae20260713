@@ -7,6 +7,7 @@ import {
   attachPumpProspectiveRiskSizingV1,
   createPumpProspectiveStateV1,
   markPumpProspectiveEntryMissedV1,
+  markPumpProspectiveRiskSizingExpiredV1,
   openPumpProspectiveRecordV1,
   pumpProspectiveStateSummaryV1,
   restorePumpProspectiveStateV1,
@@ -323,5 +324,40 @@ test("risk sizing cannot be backfilled after the 30s entry evidence window", () 
       observedAtMs: late,
     }),
     /PUMP_PROSPECTIVE_RISK_SIZING_CAPTURE_WINDOW_EXPIRED/,
+  );
+});
+
+
+test("expired risk sizing window is durable and cannot later receive sizing evidence", () => {
+  const p = policy();
+  const admitted = admitPumpProspectiveSignalToStateV1(
+    createPumpProspectiveStateV1({ policy: p, createdAtMs: ELIGIBLE }),
+    signal(),
+    ELIGIBLE + HOUR,
+  );
+  const opened = openPumpProspectiveRecordV1(admitted.state, {
+    recordId: admitted.record.recordId,
+    nextHourCandle: { timestampMs: admitted.record.signal.nextBarOpenTimestampMs, open: 100 },
+    observedAtMs: admitted.record.signal.nextBarOpenTimestampMs + 1,
+  });
+  const expiredAt = admitted.record.signal.nextBarOpenTimestampMs + 30_001;
+  const expired = markPumpProspectiveRiskSizingExpiredV1(opened.state, {
+    recordId: admitted.record.recordId,
+    observedAtMs: expiredAt,
+  });
+  assert.equal(expired.status, "EXPIRED");
+  assert.equal(expired.record.riskSizingStatus, "EXPIRED");
+  assert.equal(
+    expired.record.riskSizingBlocker,
+    "PUMP_PROSPECTIVE_RISK_SIZING_CAPTURE_WINDOW_EXPIRED",
+  );
+  assert.equal(pumpProspectiveStateSummaryV1(expired.state).riskSizingExpired, 1);
+  assert.throws(
+    () => attachPumpProspectiveRiskSizingV1(expired.state, {
+      recordId: admitted.record.recordId,
+      sizing: readySizing(expired.record, expiredAt),
+      observedAtMs: expiredAt,
+    }),
+    /PUMP_PROSPECTIVE_RISK_SIZING_OPEN_RECORD_REQUIRED|PUMP_PROSPECTIVE_RISK_SIZING_CAPTURE_WINDOW_EXPIRED/,
   );
 });
