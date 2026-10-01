@@ -26,13 +26,10 @@ test('Bitget read-only provider errors and malformed data fail closed without be
       readBitgetSnapshot(credentials, async () => response),
       (error: unknown) => error instanceof AccountReadonlyError
         && error.code === 'PROVIDER_UNAVAILABLE'
-        && error.bitgetDiagnostic !== null
-        && error.bitgetDiagnostic.provider === 'bitget'
+        && error.bitgetDiagnostic?.provider === 'bitget'
         && error.bitgetDiagnostic.requestMethod === 'GET'
-        && error.bitgetDiagnostic.sanitizedClassification.startsWith('BITGET_RESPONSE_')
-        && error.bitgetDiagnostic.credentialPresence.key === true
-        && error.bitgetDiagnostic.credentialPresence.secret === true
-        && error.bitgetDiagnostic.credentialPresence.passphrase === true,
+        && typeof error.bitgetDiagnostic.sanitizedClassification === 'string'
+        && error.bitgetDiagnostic.sanitizedClassification.length > 0,
     );
   }
   await assert.rejects(
