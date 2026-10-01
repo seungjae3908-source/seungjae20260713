@@ -10,6 +10,7 @@ import { validatePortfolioHoldingRows } from '@/lib/portfolio-holding-truth';
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+const appApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') || '/api';
 
 export const isSupabaseConfigured = Boolean(url && anonKey);
 
@@ -141,7 +142,7 @@ async function boundedSupabaseFetch(input: RequestInfo | URL, init: RequestInit 
   try {
     const selfProfileHeaders = sameOriginSelfProfileHeaders(input, init);
     const response = selfProfileHeaders
-      ? await fetch('/api/auth/profile', {
+      ? await fetch(`${appApiBase}/auth/profile`, {
         method: 'GET',
         headers: selfProfileHeaders,
         signal: controller.signal,
