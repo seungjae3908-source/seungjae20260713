@@ -287,14 +287,22 @@ function validateRecord(record, policy) {
     }
   }
 
+  if (record.profitabilityCredit !== 0
+    || record.profitabilityClaimAllowed !== false
+    || record.executionAuthority !== "NONE") {
+    throw new Error("PUMP_PROSPECTIVE_RECORD_SAFETY_INVALID");
+  }
+
   if (record.fullCostSettlementStatus === "MISSING_CANONICAL_FULL_COST") {
-    if (record.netReturnPercent !== null || record.netPnl !== null
+    if (record.economicSampleCredit !== 0
+      || record.netReturnPercent !== null || record.netPnl !== null
       || record.economicGrossPnl !== null || record.economicGrossReturnPercent !== null
       || record.fullCostSettlementId !== null || record.fullCostSettlement != null) {
       throw new Error("PUMP_PROSPECTIVE_PRE_FULL_COST_ECONOMICS_FORBIDDEN");
     }
   } else if (record.fullCostSettlementStatus === "CANONICAL_FULL_COST_SETTLED") {
-    if (record.status !== "EXIT_TRIGGERED" || record.riskSizingStatus !== "READY") {
+    if (record.status !== "EXIT_TRIGGERED" || record.riskSizingStatus !== "READY"
+      || record.economicSampleCredit !== 1) {
       throw new Error("PUMP_PROSPECTIVE_FULL_COST_WITHOUT_SIZED_EXIT_FORBIDDEN");
     }
     validateFullCostSettlement(record, policy);
@@ -318,6 +326,7 @@ export function validatePumpProspectiveStateV1(state) {
 
   const recordIds = new Set();
   const signalIds = new Set();
+  const settlementIds = new Set();
   const openSymbols = new Set();
   for (const record of state.records) {
     validateRecord(record, state.policy);
@@ -325,6 +334,12 @@ export function validatePumpProspectiveStateV1(state) {
     if (signalIds.has(record.observation.signalId)) throw new Error("PUMP_PROSPECTIVE_DUPLICATE_SIGNAL_ID");
     recordIds.add(record.recordId);
     signalIds.add(record.observation.signalId);
+    if (record.fullCostSettlementId != null) {
+      if (settlementIds.has(record.fullCostSettlementId)) {
+        throw new Error("PUMP_PROSPECTIVE_DUPLICATE_SETTLEMENT_ID");
+      }
+      settlementIds.add(record.fullCostSettlementId);
+    }
     if (record.status === "OPEN") {
       if (openSymbols.has(record.observation.symbol)) throw new Error("PUMP_PROSPECTIVE_DUPLICATE_OPEN_SYMBOL");
       openSymbols.add(record.observation.symbol);
@@ -813,6 +828,14 @@ export function attachPumpProspectiveFullCostSettlementV1(state, {
     throw new Error("PUMP_PROSPECTIVE_FULL_COST_OBSERVED_AT_INVALID");
   }
   const normalized = deepFreeze(clone(settlement));
+  if (!nonEmpty(normalized?.settlementId)) {
+    throw new Error("PUMP_PROSPECTIVE_FULL_COST_SETTLEMENT_ID_REQUIRED");
+  }
+  if (state.records.some((record, rowIndex) => (
+    rowIndex !== index && record.fullCostSettlementId === normalized.settlementId
+  ))) {
+    throw new Error("PUMP_PROSPECTIVE_DUPLICATE_SETTLEMENT_ID");
+  }
   const updatedRecord = deepFreeze({
     ...current,
     netReturnPercent: normalized?.netReturnPercent ?? null,
