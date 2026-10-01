@@ -49,16 +49,19 @@ test('fast CI covers commit changes for Draft and Ready PRs without rerunning on
   assert.match(document, /Application Fast CI is a development accelerator only/u);
 });
 
-test('pre-merge dispatcher sequences full CI after successful exact-head Fast CI for Draft or Ready', async () => {
-  const document = await readFile('.github/workflows/application-full-ci-ready-dispatch.yml', 'utf8');
-  assert.match(document, /workflow_run:/u);
-  assert.match(document, /Application Fast CI/u);
-  assert.match(document, /github\.event\.workflow_run\.conclusion == 'success'/u);
-  assert.match(document, /run\.head_sha/u);
-  assert.doesNotMatch(document, /if \(pr\.draft\)/u);
-  assert.match(document, /target_sha: targetSha/u);
+test('Fast CI directly dispatches canonical full CI only after both lanes succeed', async () => {
+  const document = await readFile('.github/workflows/application-fast-ci.yml', 'utf8');
+  assert.match(document, /^  dispatch-full-ci:/mu);
+  assert.match(document, /needs: \[fast, browser-critical\]/u);
+  assert.match(document, /needs\.fast\.result == 'success'/u);
+  assert.match(document, /needs\.browser-critical\.result == 'success'/u);
+  assert.match(document, /actions: write/u);
+  assert.match(document, /workflowId = 'futures-public-network-smoke\.yml'/u);
   assert.match(document, /createWorkflowDispatch/u);
-  assert.match(document, /Failed, skipped, cancelled, missing, or stale Fast CI cannot dispatch/u);
+  assert.match(document, /target_sha: targetSha/u);
+  assert.match(document, /checkout_ref: targetSha/u);
+  assert.match(document, /PREMERGE_HEAD_MOVED/u);
+  assert.match(document, /Canonical Full CI already exists/u);
 });
 
 test('canonical full CI is pre-merge/manual only and independently requires green Fast CI', async () => {
@@ -95,7 +98,6 @@ test('canonical full CI is pre-merge/manual only and independently requires gree
 test('V3 does not grant deployment or trading authority', async () => {
   for (const file of [
     '.github/workflows/application-fast-ci.yml',
-    '.github/workflows/application-full-ci-ready-dispatch.yml',
     '.github/workflows/futures-public-network-smoke.yml',
     '.github/workflows/post-merge-release-provenance.yml',
   ]) {
