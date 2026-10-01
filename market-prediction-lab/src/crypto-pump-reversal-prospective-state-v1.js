@@ -12,7 +12,7 @@ export const PUMP_PROSPECTIVE_STATE_VERSION = "crypto-pump-reversal-prospective-
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
-export const PUMP_PUMP_RISK_SIZING_CAPTURE_WINDOW_MS = 30_000;
+export const PUMP_RISK_SIZING_CAPTURE_WINDOW_MS = 30_000;
 const RECORD_STATUSES = new Set([
   "WAITING_NEXT_BAR",
   "ENTRY_MISSED",
