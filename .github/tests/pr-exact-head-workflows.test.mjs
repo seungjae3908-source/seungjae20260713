@@ -8,6 +8,7 @@ const WORKFLOWS = {
   applicationFast: ".github/workflows/application-fast-ci.yml",
   applicationReadyDispatch: ".github/workflows/application-full-ci-ready-dispatch.yml",
   applicationMainFallback: ".github/workflows/application-ci-main-fallback.yml",
+  postMergeProvenance: ".github/workflows/post-merge-release-provenance.yml",
   research: ".github/workflows/prediction-lab-pr-head-unit.yml",
   multiMarket: ".github/workflows/prediction-lab-52d-validation.yml",
   longHistory: ".github/workflows/prediction-lab-long-history-v1.yml",
@@ -70,10 +71,9 @@ test("workflow syntax and PR event contracts are explicit", () => {
   assert.doesNotMatch(documents.applicationFast, /if: github\.event\.pull_request\.draft == true/u);
 
   const applicationOn = indentedBlock(documents.application, "on", 0);
-  const applicationPullRequest = indentedBlock(applicationOn, "pull_request", 2);
-  assert.match(applicationPullRequest, /- ready_for_review/u);
-  assert.doesNotMatch(applicationPullRequest, /^\s+branches:/mu, "stacked PR bases must not be excluded");
   assert.match(applicationOn, /^\s+workflow_dispatch:/mu);
+  assert.doesNotMatch(applicationOn, /^\s+pull_request:/mu, "canonical full CI is dispatched after Fast CI, not by Ready transition");
+  assert.doesNotMatch(applicationOn, /^\s+push:/mu, "main push must not repeat canonical full CI");
 
   const dispatcherOn = indentedBlock(documents.applicationReadyDispatch, "on", 0);
   const workflowRun = indentedBlock(dispatcherOn, "workflow_run", 2);
@@ -81,7 +81,11 @@ test("workflow syntax and PR event contracts are explicit", () => {
   assert.match(workflowRun, /- completed/u);
   assert.doesNotMatch(dispatcherOn, /^\s+pull_request:/mu);
   assert.match(documents.applicationReadyDispatch, /github\.event\.workflow_run\.conclusion == 'success'/u);
-  assert.match(documents.applicationReadyDispatch, /if \(pr\.draft\)/u);
+  assert.doesNotMatch(documents.applicationReadyDispatch, /if \(pr\.draft\)/u, "Draft PRs must receive full pre-merge CI");
+
+  const postMergeOn = indentedBlock(documents.postMergeProvenance, "on", 0);
+  const postMergePush = indentedBlock(postMergeOn, "push", 2);
+  assert.match(postMergePush, /^\s+branches:\s*\n\s+- main$/mu);
 
   for (const name of ["research", "multiMarket", "longHistory"]) {
     const pullRequest = indentedBlock(indentedBlock(documents[name], "on", 0), "pull_request", 2);
@@ -92,12 +96,12 @@ test("workflow syntax and PR event contracts are explicit", () => {
   }
 });
 
-test("authoritative main push CI and required status publishers remain intact", () => {
-  const push = indentedBlock(indentedBlock(documents.application, "on", 0), "push", 2);
-  assert.match(push, /^\s+branches:\s*\n\s+- main$/mu);
-  assert.match(push, /^\s+- market-intelligence-sidecar\/\*\*$/mu);
-  assert.match(push, /^\s+- market-prediction-lab\/\*\*$/mu);
-  assert.match(push, /^\s+- \.github\/workflows\/public-forward-liquidity-\*\.yml$/mu);
+test("pre-merge full CI owns Required contexts and main push uses provenance only", () => {
+  const applicationOn = indentedBlock(documents.application, "on", 0);
+  assert.match(applicationOn, /^\s+workflow_dispatch:/mu);
+  assert.doesNotMatch(applicationOn, /^\s+push:/mu);
+  assert.doesNotMatch(applicationOn, /^\s+pull_request:/mu);
+
   for (const context of [
     "application-ci/verified",
     "browser-ui/verified",
@@ -110,6 +114,13 @@ test("authoritative main push CI and required status publishers remain intact", 
     assert.doesNotMatch(documents.applicationFast, new RegExp(context.replaceAll("/", "\\/"), "u"));
     assert.doesNotMatch(documents.applicationReadyDispatch, new RegExp(context.replaceAll("/", "\\/"), "u"));
   }
+
+  assert.match(documents.postMergeProvenance, /post-merge-provenance\/verified/u);
+  assert.match(documents.postMergeProvenance, /evaluateReleaseCandidateProvenance/u);
+  assert.match(documents.postMergeProvenance, /targetTreeSha/u);
+  assert.match(documents.postMergeProvenance, /headTreeSha/u);
+  assert.match(documents.postMergeProvenance, /Pre-merge 6\/6 \+ merged tree identity verified/u);
+
   for (const name of ["application", "multiMarket", "longHistory"]) {
     assert.match(indentedBlock(documents[name], "on", 0), /^\s+workflow_dispatch:/mu);
   }
@@ -117,16 +128,15 @@ test("authoritative main push CI and required status publishers remain intact", 
   assert.doesNotMatch(indentedBlock(documents.applicationReadyDispatch, "on", 0), /^\s+workflow_dispatch:/mu);
 });
 
-test("exact-current-main CI recovery command dispatches only canonical full CI", () => {
+test("exact-current-main CI recovery is manual-only", () => {
   const document = documents.applicationMainFallback;
   const on = indentedBlock(document, "on", 0);
-  assert.match(on, /^\s+push:/mu);
+  assert.doesNotMatch(on, /^\s+push:/mu, "main push must not auto-repeat full CI");
   assert.match(on, /^\s+issue_comment:/mu);
   assert.match(document, /github\.event\.issue\.number == 23/u);
   assert.match(document, /github\.event\.comment\.user\.login == github\.repository_owner/u);
   assert.match(document, /github\.event\.comment\.author_association == 'OWNER'/u);
   assert.match(document, /startsWith\(github\.event\.comment\.body, '\/run-application-ci-main '\)/u);
-  assert.match(document, /\^\\\/run-application-ci-main \(\[0-9a-f\]\{40\}\)\$/u);
   assert.match(document, /officialWorkflowId = 'futures-public-network-smoke\.yml'/u);
   assert.match(document, /createWorkflowDispatch/u);
   assert.match(document, /inputs: \{ target_sha: sha, checkout_ref: sha \}/u);
@@ -134,10 +144,11 @@ test("exact-current-main CI recovery command dispatches only canonical full CI",
   assert.doesNotMatch(document, /merge_pull_request|REAL_ORDER_ENABLED\s*:\s*true|LIVE_TRADING\s*:\s*true/u);
 });
 
-test("fast CI remains development-only while canonical full CI remains the release authority", () => {
+test("fast CI remains development-only while pre-merge full CI remains the validation authority", () => {
   assert.match(documents.applicationFast, /Application Fast CI is a development accelerator only/u);
   assert.match(documents.applicationFast, /MUST NOT publish or replace any of the six Required CI contexts/u);
-  assert.match(documents.applicationFast, /Final Ready\/Merge\/Staging gates still require canonical Application CI 6\/6/u);
+  assert.match(documents.applicationFast, /Final Ready\/Merge still require canonical pre-merge Application CI 6\/6/u);
+  assert.match(documents.applicationFast, /Staging\/Production require verified post-merge tree provenance/u);
   assert.match(documents.application, /Publish verified Application CI result/u);
   assert.match(documents.application, /Playwright desktop and mobile application UI/u);
   assert.match(documents.application, /Disposable PostgreSQL migration and RLS integration/u);
@@ -146,7 +157,7 @@ test("fast CI remains development-only while canonical full CI remains the relea
   assert.match(documents.application, /Bitget public API smoke/u);
 });
 
-test("successful exact-head Fast CI is required for both commit-change and Ready-transition full CI", () => {
+test("successful exact-head Fast CI dispatches full CI for Draft or Ready PRs", () => {
   const document = documents.applicationReadyDispatch;
   assert.match(document, /actions: write/u);
   assert.match(document, /workflowId = 'futures-public-network-smoke\.yml'/u);
@@ -155,14 +166,13 @@ test("successful exact-head Fast CI is required for both commit-change and Ready
   assert.match(document, /checkout_ref: targetSha/u);
   assert.match(document, /run\.head_sha/u);
   assert.match(document, /String\(pr\.head\.sha\)\.toLowerCase\(\) !== targetSha/u);
-  assert.match(document, /if \(pr\.draft\)/u);
-  assert.match(document, /Failed, skipped, cancelled, missing, stale, or Draft Fast CI cannot dispatch/u);
+  assert.doesNotMatch(document, /if \(pr\.draft\)/u);
+  assert.match(document, /Failed, skipped, cancelled, missing, or stale Fast CI cannot dispatch/u);
   assert.match(document, /grants no merge, staging, production, database, secret, environment, live-trading, or real-order authority/u);
 
   const fastPullRequest = indentedBlock(indentedBlock(documents.applicationFast, "on", 0), "pull_request", 2);
   assert.doesNotMatch(fastPullRequest, /- ready_for_review/u);
-  const applicationPullRequest = indentedBlock(indentedBlock(documents.application, "on", 0), "pull_request", 2);
-  assert.match(applicationPullRequest, /- ready_for_review/u);
+  assert.doesNotMatch(indentedBlock(documents.application, "on", 0), /^\s+pull_request:/mu);
   assert.match(documents.application, /READY_FAST_CI_NOT_GREEN/u);
   assert.match(documents.application, /latestFast\.conclusion !== 'success'/u);
 });
