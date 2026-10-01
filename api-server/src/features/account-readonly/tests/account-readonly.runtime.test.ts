@@ -648,9 +648,27 @@ test('Kiwoom HTTP 200 auth failure is classified from embedded official code wit
   await assert.rejects(
     () => provider.snapshot({ appKey: 'KIWOOM_APP_RUNTIME_TEST_ONLY', appSecret: 'KIWOOM_SECRET_RUNTIME_TEST_ONLY' }),
     (error: unknown) => error instanceof AccountReadonlyError
-      && error.code === 'KIWOOM_AUTH_OR_IP_REJECTED'
+      && error.code === 'KIWOOM_AUTH_OR_IP_REJECTED_CODE_8005'
       && !error.message.includes('SECRET_TOKEN_PROVIDER_TEXT'),
   );
+});
+
+test('Kiwoom HTTP auth rejection preserves only sanitized HTTP status', async () => {
+  for (const fixture of [
+    { status: 401, code: 'KIWOOM_AUTH_OR_IP_REJECTED_HTTP_401' },
+    { status: 403, code: 'KIWOOM_AUTH_OR_IP_REJECTED_HTTP_403' },
+  ] as const) {
+    const provider = new KiwoomReadonlyProvider(async () => new Response(
+      JSON.stringify({ return_msg: 'SECRET_KIWOOM_PROVIDER_MESSAGE' }),
+      { status: fixture.status, headers: { 'Content-Type': 'application/json' } },
+    ));
+    await assert.rejects(
+      () => provider.snapshot({ appKey: 'KIWOOM_APP_RUNTIME_TEST_ONLY', appSecret: 'KIWOOM_SECRET_RUNTIME_TEST_ONLY' }),
+      (error: unknown) => error instanceof AccountReadonlyError
+        && error.code === fixture.code
+        && !error.message.includes('SECRET_KIWOOM_PROVIDER_MESSAGE'),
+    );
+  }
 });
 
 test('Kiwoom payload rate-limit codes stay retryable without exposing provider messages', async () => {
@@ -785,6 +803,40 @@ test('vault-backed Bitget treats production 40084 for Classic Account mode as a 
   assert.equal(paths[0], '/api/v3/account/settings');
   assert.ok(paths.includes('/api/v2/mix/account/accounts'));
   assert.ok(paths.every((path) => path === '/api/v3/account/settings' || path.startsWith('/api/v2/mix/')));
+});
+
+test('Toss authenticated account GET preserves 401 versus 403 without credential leakage', async () => {
+  for (const fixture of [
+    { status: 401, code: 'TOSS_AUTH_FAILED' },
+    { status: 403, code: 'TOSS_IP_NOT_ALLOWED' },
+  ] as const) {
+    const readers = createVaultBackedAccountReaders({
+      repositoryFactory: () => repositoryFor('toss'),
+      decryptCredentials: () => ({ clientId: 'TOSS_CLIENT_RUNTIME_TEST_ONLY', clientSecret: 'TOSS_SECRET_RUNTIME_TEST_ONLY' }),
+      fetchImpl: async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname === '/oauth2/token') {
+          return new Response(JSON.stringify({ access_token: 'TOSS_TOKEN_RUNTIME_TEST_ONLY', expires_in: 3600 }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(JSON.stringify({ message: 'SECRET_TOSS_PROVIDER_MESSAGE' }), {
+          status: fixture.status,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    });
+
+    await assert.rejects(
+      () => readers.toss!(SCOPE),
+      (error: unknown) => error instanceof AccountReadonlyError
+        && error.code === fixture.code
+        && !error.message.includes('SECRET_TOSS_PROVIDER_MESSAGE')
+        && !error.message.includes('TOSS_CLIENT_RUNTIME_TEST_ONLY')
+        && !error.message.includes('TOSS_SECRET_RUNTIME_TEST_ONLY'),
+    );
+  }
 });
 
 test('Toss OAuth token uses the official form contract and preserves 401 versus 403 without credential leakage', async () => {
