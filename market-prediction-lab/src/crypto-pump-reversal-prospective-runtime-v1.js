@@ -362,10 +362,13 @@ export async function runPumpProspectivePaperCycleV1({
           }));
           continue;
         }
+        const settlementObservedAtMs = Number.isSafeInteger(settlement?.settledAtMs)
+          ? Math.max(nowMs, settlement.settledAtMs)
+          : nowMs;
         const attached = attachPumpProspectiveFullCostSettlementV1(nextState, {
           recordId: record.recordId,
           settlement,
-          observedAtMs: nowMs,
+          observedAtMs: settlementObservedAtMs,
         });
         nextState = attached.state;
         events.push(Object.freeze({
