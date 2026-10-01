@@ -7,6 +7,7 @@ import {
 import {
   admitPumpProspectiveSignalToStateV1,
   advancePumpProspectiveRecordV1,
+  attachPumpProspectiveRiskSizingV1,
   markPumpProspectiveEntryMissedV1,
   markPumpProspectiveSignalScanCompletedV1,
   openPumpProspectiveRecordV1,
@@ -60,6 +61,7 @@ export async function runPumpProspectivePaperCycleV1({
   collectSignals,
   collectNextBarOpen,
   collectMinutePath,
+  sizePaperRisk = null,
 } = {}) {
   validatePumpProspectiveStateV1(state);
   if (!Number.isSafeInteger(nowMs) || nowMs < state.updatedAtMs) {
@@ -67,6 +69,9 @@ export async function runPumpProspectivePaperCycleV1({
   }
   for (const dependency of [collectSignals, collectNextBarOpen, collectMinutePath]) {
     if (typeof dependency !== "function") throw new TypeError("Pump runtime dependencies must be functions");
+  }
+  if (sizePaperRisk != null && typeof sizePaperRisk !== "function") {
+    throw new TypeError("Pump risk sizing owner must be a function or null");
   }
 
   let nextState = state;
@@ -192,6 +197,64 @@ export async function runPumpProspectivePaperCycleV1({
     }
   }
 
+  // Risk sizing is entry-causal evidence. It may be absent for raw prospective
+  // observations, but only READY sizing can later qualify a record for Full Cost.
+  const unsizedOpenRecords = nextState.records.filter(
+    (record) => record.status === "OPEN" && record.riskSizingStatus === "MISSING",
+  );
+  if (sizePaperRisk != null) {
+    for (const record of unsizedOpenRecords) {
+      try {
+        const sizing = await sizePaperRisk({
+          record,
+          state: nextState,
+          observedAtMs: nowMs,
+        });
+        if (sizing?.status !== "READY") {
+          const sourceCodes = Array.isArray(sizing?.blockers) && sizing.blockers.length > 0
+            ? sizing.blockers.map(String)
+            : ["PUMP_RISK_SIZING_BLOCKED"];
+          blockers.push(...sourceCodes);
+          events.push(Object.freeze({
+            stage: "RISK",
+            symbol: record.observation.symbol,
+            recordId: record.recordId,
+            status: "BLOCKED",
+            blockers: Object.freeze([...new Set(sourceCodes)]),
+          }));
+          continue;
+        }
+        const attached = attachPumpProspectiveRiskSizingV1(nextState, {
+          recordId: record.recordId,
+          sizing,
+          observedAtMs: nowMs,
+        });
+        nextState = attached.state;
+        events.push(Object.freeze({
+          stage: "RISK",
+          symbol: record.observation.symbol,
+          recordId: record.recordId,
+          status: attached.status,
+          riskPercent: attached.record.riskSizing.result.riskPercent,
+          leverage: attached.record.riskSizing.result.leverage,
+          finalQuantity: attached.record.riskSizing.result.finalQuantity,
+          finalNotional: attached.record.riskSizing.result.finalNotional,
+          executionAuthority: "NONE",
+        }));
+      } catch (error) {
+        const code = String(error?.code ?? error?.message ?? "PUMP_RISK_SIZING_FAILED");
+        blockers.push(code);
+        events.push(Object.freeze({
+          stage: "RISK",
+          symbol: record.observation.symbol,
+          recordId: record.recordId,
+          status: "BLOCKED",
+          blockers: Object.freeze([code]),
+        }));
+      }
+    }
+  }
+
   // Process all currently open positions, including positions opened above.
   const openRecords = nextState.records.filter((record) => record.status === "OPEN");
   for (const record of openRecords) {
@@ -263,11 +326,16 @@ export async function runPumpProspectivePaperCycleV1({
     blockers: uniqueBlockers,
     state: nextState,
     summary,
+    riskSizingOwnerConnected: sizePaperRisk != null,
     canonicalFullCostSettlementConnected: false,
     canonicalProfitAdmissionConnected: false,
-    nextBlocker: summary.exitTriggered > 0
-      ? "CANONICAL_FULL_COST_SETTLEMENT_NOT_CONNECTED"
-      : "COLLECT_GENUINE_FUTURE_PROSPECTIVE_EVENTS",
+    nextBlocker: summary.exitTriggered > summary.riskSizedExitTriggered
+      ? "PUMP_RISK_SIZING_EVIDENCE_MISSING"
+      : summary.riskSizedExitTriggered > 0
+        ? "CANONICAL_FULL_COST_SETTLEMENT_NOT_CONNECTED"
+        : summary.openPositions > summary.riskSizedOpen
+          ? (sizePaperRisk == null ? "PUMP_RISK_SIZING_OWNER_NOT_CONNECTED" : "PUMP_RISK_SIZING_NOT_READY")
+          : "COLLECT_GENUINE_FUTURE_PROSPECTIVE_EVENTS",
     ...publicSafety(),
   });
 }
@@ -277,6 +345,7 @@ export function createPumpProspectivePaperRuntimeV1({
   collectSignals = collectPumpReversalCleanPublicSignals,
   collectNextBarOpen = collectPumpNextBarOpenReferenceV1,
   collectMinutePath = collectPumpClosedOneMinutePathV1,
+  sizePaperRisk = null,
 } = {}) {
   if (!client || typeof client.get !== "function") throw new TypeError("Bitget public client is required");
   return Object.freeze({
@@ -287,6 +356,7 @@ export function createPumpProspectivePaperRuntimeV1({
         collectSignals: (input) => collectSignals({ ...input, client }),
         collectNextBarOpen: (input) => collectNextBarOpen({ ...input, client }),
         collectMinutePath: (input) => collectMinutePath({ ...input, client }),
+        sizePaperRisk,
       });
     },
     executionAuthority: "NONE",
