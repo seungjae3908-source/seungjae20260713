@@ -52,9 +52,11 @@ jobs:
           const authFetch = fs.readFileSync('stock-analyzer/src/lib/auth-fetch.ts', 'utf8');
           const css = fs.readFileSync('stock-analyzer/src/ui-vnext-preview.css', 'utf8');
           if (!app.includes('usePreviewHashLocation')) throw new Error('preview hash router missing');
+          if (!app.includes('<WouterRouter hook={usePreviewHashLocation}>')) throw new Error('preview hash router is defined but not mounted');
           if (!runtime.includes("VITE_UI_VNEXT_PREVIEW === 'true'")) throw new Error('preview runtime flag missing');
           if (!runtime.includes("import './ui-vnext-preview.css'")) throw new Error('preview stylesheet missing');
           if (!authFetch.includes('UI_VNEXT_PREVIEW_FINANCIAL_MUTATION_BLOCKED')) throw new Error('preview mutation guard missing');
+          if (!authFetch.includes('resolveConfiguredAppApiInput')) throw new Error('configured preview API resolver missing');
           if (!css.includes("[data-testid='unified-analysis-chart']")) throw new Error('real chart styling contract missing');
           NODE
 
