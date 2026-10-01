@@ -12,7 +12,7 @@ export const PUMP_PROSPECTIVE_STATE_VERSION = "crypto-pump-reversal-prospective-
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
-const RISK_SIZING_CAPTURE_WINDOW_MS = 30_000;
+export const PUMP_PUMP_RISK_SIZING_CAPTURE_WINDOW_MS = 30_000;
 const RECORD_STATUSES = new Set([
   "WAITING_NEXT_BAR",
   "ENTRY_MISSED",
@@ -94,7 +94,7 @@ function validateReadyRiskSizing(record) {
     || evidence.schemaVersion !== "crypto-pump-reversal-risk-sizing-evidence-v1"
     || !Number.isSafeInteger(evidence.attachedAtMs)
     || evidence.attachedAtMs < record.position.entryTimestampMs
-    || evidence.attachedAtMs - record.position.entryTimestampMs > RISK_SIZING_CAPTURE_WINDOW_MS
+    || evidence.attachedAtMs - record.position.entryTimestampMs > PUMP_RISK_SIZING_CAPTURE_WINDOW_MS
     || !exactDigest(evidence.evidenceDigest)) {
     throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_EVIDENCE_INVALID");
   }
@@ -144,7 +144,7 @@ function validateReadyRiskSizing(record) {
   const calculatedAtMs = Date.parse(risk.calculatedAt);
   if (!Number.isFinite(calculatedAtMs)
     || calculatedAtMs > evidence.attachedAtMs
-    || evidence.attachedAtMs - calculatedAtMs > RISK_SIZING_CAPTURE_WINDOW_MS) {
+    || evidence.attachedAtMs - calculatedAtMs > PUMP_RISK_SIZING_CAPTURE_WINDOW_MS) {
     throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_TIME_INVALID");
   }
 }
@@ -163,18 +163,28 @@ function validateRecord(record, policy) {
   }
 
   validatePathCursor(record);
-  if (record.riskSizingStatus !== "MISSING" && record.riskSizingStatus !== "READY") {
+  if (!["MISSING", "READY", "EXPIRED"].includes(record.riskSizingStatus)) {
     throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_STATUS_INVALID");
   }
-  if (record.riskSizingStatus === "MISSING" && record.riskSizing != null) {
+  if (record.riskSizingStatus === "MISSING"
+    && (record.riskSizing != null || record.riskSizingBlocker != null)) {
     throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_MISSING_MUTATED");
   }
-  if (record.riskSizingStatus === "READY") validateReadyRiskSizing(record);
+  if (record.riskSizingStatus === "READY") {
+    if (record.riskSizingBlocker != null) throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_READY_BLOCKER_FORBIDDEN");
+    validateReadyRiskSizing(record);
+  }
+  if (record.riskSizingStatus === "EXPIRED") {
+    if (record.riskSizing != null || !nonEmpty(record.riskSizingBlocker)) {
+      throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_EXPIRED_INVALID");
+    }
+  }
 
   if (record.status === "WAITING_NEXT_BAR") {
     if (record.position != null || record.exitTrigger != null || record.entryBlocker != null
       || record.lastMinuteObservedAtMs != null || record.pathMinuteCount !== 0
-      || record.riskSizingStatus !== "MISSING") {
+      || record.riskSizingStatus !== "MISSING"
+      || record.riskSizingBlocker != null) {
       throw new Error("PUMP_PROSPECTIVE_WAITING_RECORD_MUTATED");
     }
   }
@@ -343,6 +353,7 @@ export function admitPumpProspectiveSignalToStateV1(state, signal, observedAtMs)
     entryBlocker: null,
     riskSizingStatus: "MISSING",
     riskSizing: null,
+    riskSizingBlocker: null,
     position: null,
     exitTrigger: null,
     lastMinuteObservedAtMs: null,
@@ -499,6 +510,41 @@ function normalizeIncrementalMinuteCandles(record, minuteCandles) {
   return normalized;
 }
 
+export function markPumpProspectiveRiskSizingExpiredV1(state, {
+  recordId,
+  observedAtMs,
+  blocker = "PUMP_PROSPECTIVE_RISK_SIZING_CAPTURE_WINDOW_EXPIRED",
+} = {}) {
+  validatePumpProspectiveStateV1(state);
+  const index = state.records.findIndex((record) => record.recordId === recordId);
+  if (index < 0) throw new Error("PUMP_PROSPECTIVE_RECORD_NOT_FOUND");
+  const current = state.records[index];
+  if (current.status !== "OPEN") {
+    throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_OPEN_RECORD_REQUIRED");
+  }
+  if (current.riskSizingStatus === "READY" || current.riskSizingStatus === "EXPIRED") {
+    return deepFreeze({ status: current.riskSizingStatus, state, record: current });
+  }
+  if (!Number.isSafeInteger(observedAtMs)
+    || observedAtMs <= current.position.entryTimestampMs + PUMP_RISK_SIZING_CAPTURE_WINDOW_MS) {
+    throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_NOT_YET_EXPIRED");
+  }
+  if (!nonEmpty(blocker)) throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_BLOCKER_REQUIRED");
+  const updatedRecord = deepFreeze({
+    ...current,
+    riskSizingStatus: "EXPIRED",
+    riskSizing: null,
+    riskSizingBlocker: blocker,
+  });
+  const records = state.records.map((record, rowIndex) => rowIndex === index ? updatedRecord : clone(record));
+  const next = withDigest({
+    ...stateDigestPayload(state),
+    updatedAtMs: Math.max(state.updatedAtMs, observedAtMs),
+    records: Object.freeze(records),
+  });
+  return deepFreeze({ status: "EXPIRED", state: next, record: updatedRecord });
+}
+
 export function attachPumpProspectiveRiskSizingV1(state, {
   recordId,
   sizing,
@@ -516,7 +562,7 @@ export function attachPumpProspectiveRiskSizingV1(state, {
   }
   if (!Number.isSafeInteger(observedAtMs)
     || observedAtMs < current.position.entryTimestampMs
-    || observedAtMs - current.position.entryTimestampMs > RISK_SIZING_CAPTURE_WINDOW_MS) {
+    || observedAtMs - current.position.entryTimestampMs > PUMP_RISK_SIZING_CAPTURE_WINDOW_MS) {
     throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_CAPTURE_WINDOW_EXPIRED");
   }
   const result = clone(sizing);
@@ -533,6 +579,7 @@ export function attachPumpProspectiveRiskSizingV1(state, {
     ...current,
     riskSizingStatus: "READY",
     riskSizing,
+    riskSizingBlocker: null,
   });
   validateReadyRiskSizing(updatedRecord);
   const records = state.records.map((record, rowIndex) => rowIndex === index ? updatedRecord : clone(record));
@@ -641,6 +688,7 @@ export function pumpProspectiveStateSummaryV1(state) {
   const open = state.records.filter((record) => record.status === "OPEN").length;
   const exited = state.records.filter((record) => record.status === "EXIT_TRIGGERED").length;
   const riskSized = state.records.filter((record) => record.riskSizingStatus === "READY").length;
+  const riskSizingExpired = state.records.filter((record) => record.riskSizingStatus === "EXPIRED").length;
   const riskSizedOpen = state.records.filter(
     (record) => record.status === "OPEN" && record.riskSizingStatus === "READY",
   ).length;
@@ -659,6 +707,7 @@ export function pumpProspectiveStateSummaryV1(state) {
     openPositions: open,
     exitTriggered: exited,
     riskSized,
+    riskSizingExpired,
     riskSizedOpen,
     riskSizedExitTriggered,
     fullCostSettled,
