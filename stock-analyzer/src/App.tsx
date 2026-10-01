@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { Route, Switch, Router as WouterRouter, useLocation, useRoute } from 'wouter';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from '@/components/ui/toaster';
@@ -131,6 +131,35 @@ function retryUnifiedChartBootstrap(failureCount: number, error: unknown): boole
   if (failureCount >= 1) return false;
   if (error instanceof UnifiedChartDataError) return error.retryable && error.kind !== 'aborted';
   return true;
+}
+
+const UI_VNEXT_PREVIEW = import.meta.env.VITE_UI_VNEXT_PREVIEW === 'true';
+
+function usePreviewHashLocation() {
+  const readHashPath = () => {
+    const raw = window.location.hash.replace(/^#/, '').trim();
+    if (!raw) return '/';
+    return raw.startsWith('/') ? raw : `/${raw}`;
+  };
+  const [path, setPath] = useState(readHashPath);
+
+  useEffect(() => {
+    const handleHashChange = () => setPath(readHashPath());
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  const navigate = useCallback((to: string, options?: { replace?: boolean }) => {
+    const normalized = to.startsWith('/') ? to : `/${to}`;
+    if (options?.replace) {
+      window.history.replaceState(window.history.state, '', `#${normalized}`);
+      setPath(normalized);
+      return;
+    }
+    window.location.hash = normalized;
+  }, []);
+
+  return [path, navigate] as const;
 }
 
 const queryClient = new QueryClient({
