@@ -111,3 +111,32 @@ test("missing exact funding-minute mark evidence fails closed", async () => {
   assert.ok(result.blockers.includes("FUNDING_MARK_PRICE_EVIDENCE_MISSING"));
   assert.equal(result.unknownIsZero, false);
 });
+
+
+test("funding evidence collection time is recorded only after exact mark evidence is fetched", async () => {
+  let markFetched = false;
+  let clockCalls = 0;
+  const result = await collectBitgetFundingCostOnlyHistory({
+    client: {
+      async get(path) {
+        assert.match(path, /history-mark-candles$/);
+        markFetched = true;
+        return { code: "00000", data: [markRow(FUNDING, 100)] };
+      },
+    },
+    symbol: "ALTUSDT",
+    direction: "LONG",
+    quantity: 2,
+    startTime: T0,
+    endTime: FUNDING + MINUTE,
+    collectFundingHistory: fundingHistory(0.001),
+    now: () => {
+      clockCalls += 1;
+      assert.equal(markFetched, true, "completion clock must be sampled after mark evidence");
+      return FUNDING + 2 * MINUTE;
+    },
+  });
+  assert.equal(result.status, "PRESENT");
+  assert.equal(result.collectedAtMs, FUNDING + 2 * MINUTE);
+  assert.equal(clockCalls, 1);
+});
