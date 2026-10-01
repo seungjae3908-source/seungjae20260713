@@ -1598,40 +1598,17 @@ async function auditAuthenticatedViewport(
     http: diagnostics.unexpected_http_errors.length,
   };
   await page.setViewportSize({ width, height });
-  const scannerOrigin = new URL(page.url()).origin;
-  let scannerResponse: Response | null = null;
+  await expectHealthyRoute(page, route);
   if (route === '/scanner') {
-    scannerResponse = await expectHealthyRoute(
-      page,
-      route,
-      () => page.waitForResponse((response) => {
-        try {
-          const url = new URL(response.url());
-          return response.request().method() === 'GET'
-            && url.origin === scannerOrigin
-            && url.pathname === '/api/market/scan';
-        } catch {
-          return false;
-        }
-      }, { timeout: 15_000 }),
-    );
-  } else {
-    await expectHealthyRoute(page, route);
-  }
-  if (scannerResponse) {
-    expect(
-      scannerResponse.status(),
-      `scanner viewport API returned HTTP ${scannerResponse.status()}`,
-    ).toBe(200);
-    const scannerError = await scannerResponse.finished();
-    expect(scannerError, 'scanner viewport response must finish before the verifier leaves /scanner').toBeNull();
-    const scannerBody = await scannerResponse.json().catch(() => null) as { ok?: boolean; elapsedMs?: number } | null;
-    expect(scannerBody?.ok, 'scanner viewport API must return an explicit successful scanner envelope').toBe(true);
-    expect(
-      Number(scannerBody?.elapsedMs),
-      'scanner viewport API must remain inside the existing 12s scanner contract',
-    ).toBeLessThanOrEqual(12_000);
-    await settle(page);
+    // Viewport certification is a layout/route audit. It must not require a
+    // fresh /api/market/scan response because the scanner can legitimately
+    // reuse already-loaded state on a responsive-only viewport pass.
+    //
+    // The real scanner network/readiness contract remains independently
+    // enforced by the dedicated scanner readiness test and
+    // expectScannerAfterFutures(), including HTTP status, dataState, 12s
+    // deadline, and zero order-capable requests.
+    await expect(page.getByTestId('scanner-root')).toBeVisible();
   }
   const layout = await page.evaluate(() => {
     const visible = (element: Element) => {
