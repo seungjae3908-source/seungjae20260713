@@ -22,7 +22,15 @@ test('read-only account numbers reject coercion and preserve actual zero', () =>
 test('Bitget read-only provider errors and malformed data fail closed without becoming a connected empty account', async () => {
   const credentials = { apiKey: 'fixture', secretKey: 'fixture', passphrase: 'fixture' };
   for (const response of [{}, { code: '00000' }, { code: '00000', data: [null] }]) {
-    await assert.rejects(readBitgetSnapshot(credentials, async () => response), /RESPONSE_INVALID/);
+    await assert.rejects(
+      readBitgetSnapshot(credentials, async () => response),
+      (error: unknown) => error instanceof AccountReadonlyError
+        && error.code === 'PROVIDER_UNAVAILABLE'
+        && error.bitgetDiagnostic?.endpointFamily === 'UTA_V3'
+        && error.bitgetDiagnostic.probe === 'ASSETS'
+        && error.bitgetDiagnostic.sanitizedClassification === 'BITGET_RESPONSE_SHAPE_INVALID'
+        && error.bitgetDiagnostic.fallbackAttempted === true,
+    );
   }
   await assert.rejects(
     readBitgetSnapshot(credentials, async () => ({ code: '40009', msg: 'provider-secret-text', data: [] })),
@@ -30,10 +38,19 @@ test('Bitget read-only provider errors and malformed data fail closed without be
       && error.code === 'BITGET_AUTH_FAILED'
       && !error.message.includes('provider-secret-text'),
   );
-  await assert.rejects(readBitgetSnapshot(credentials, async (request) => {
-    if (request.path === '/api/v3/account/settings') return { code: '25245', msg: 'The account is not the unified account mode', data: null };
-    return { code: '00000', data: request.path.includes('position') ? [] : [{ accountEquity: '1' }] };
-  }), /IDENTITY_INVALID/);
+  await assert.rejects(
+    readBitgetSnapshot(credentials, async (request) => {
+      if (request.path === '/api/v3/account/settings') return { code: '25245', msg: 'The account is not the unified account mode', data: null };
+      return { code: '00000', data: request.path.includes('position') ? [] : [{ accountEquity: '1' }] };
+    }),
+    (error: unknown) => error instanceof AccountReadonlyError
+      && error.code === 'PROVIDER_UNAVAILABLE'
+      && error.bitgetDiagnostic?.requestPath === '/api/v2/mix/account/accounts'
+      && error.bitgetDiagnostic.endpointFamily === 'CLASSIC'
+      && error.bitgetDiagnostic.probe === 'ASSETS'
+      && error.bitgetDiagnostic.sanitizedClassification === 'BITGET_RESPONSE_IDENTITY_INVALID'
+      && error.bitgetDiagnostic.fallbackAttempted === true,
+  );
 });
 
 test('client response close aborts unfinished account read and cleanup removes both listeners', () => {
