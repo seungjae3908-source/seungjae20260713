@@ -752,6 +752,7 @@ export function advancePumpProspectiveRecordV1(state, {
       reason: trigger.reason,
       triggerTimestampMs: trigger.triggerTimestampMs,
       referenceExitPrice: trigger.referenceExitPrice,
+      bar: trigger.bar,
     }),
     grossReturnPercent,
     netReturnPercent: null,
