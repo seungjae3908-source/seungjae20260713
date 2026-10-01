@@ -6,6 +6,7 @@ import type { ReadonlyCredentialProvider } from '../account-readonly.repository'
 import { createVaultBackedAccountReaders } from '../account-readonly.runtime';
 import { AccountReadonlyService } from '../account-readonly.service';
 import { KiwoomReadonlyProvider } from '../providers/kiwoom-readonly.provider';
+import { createTossReadonlyTransport } from '../providers/toss-readonly.provider';
 
 const SCOPE = { userId: 'user-runtime-test', accessToken: 'SUPABASE_ACCESS_RUNTIME_TEST_ONLY' };
 
@@ -637,6 +638,62 @@ test('vault-backed Bitget UTA reader uses only v3 signed GET reads and maps asse
   assert.equal(serialized.includes('BITGET_KEY_RUNTIME_TEST_ONLY'), false);
   assert.equal(serialized.includes('BITGET_SECRET_RUNTIME_TEST_ONLY'), false);
   assert.equal(serialized.includes('BITGET_PASSPHRASE_RUNTIME_TEST_ONLY'), false);
+});
+
+test('Toss read-only transport retries one 429 using provider Retry-After guidance', async () => {
+  let calls = 0;
+  const transport = createTossReadonlyTransport(async () => {
+    calls += 1;
+    if (calls === 1) {
+      return new Response(JSON.stringify({ error: 'RATE_LIMITED' }), {
+        status: 429,
+        headers: {
+          'Content-Type': 'application/json',
+          'Retry-After': '0',
+          'X-RateLimit-Remaining': '0',
+        },
+      });
+    }
+    return new Response(JSON.stringify({ result: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  });
+
+  const response = await transport({
+    method: 'GET',
+    path: '/api/v1/accounts',
+    headers: { Accept: 'application/json' },
+    body: null,
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(response.status, 200);
+});
+
+test('Toss read-only transport caps rate-limit retries at one attempt', async () => {
+  let calls = 0;
+  const transport = createTossReadonlyTransport(async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ error: 'RATE_LIMITED' }), {
+      status: 429,
+      headers: {
+        'Content-Type': 'application/json',
+        'Retry-After': '0',
+        'X-RateLimit-Remaining': '0',
+      },
+    });
+  });
+
+  const response = await transport({
+    method: 'GET',
+    path: '/api/v1/accounts',
+    headers: { Accept: 'application/json' },
+    body: null,
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(response.status, 429);
 });
 
 test('vault-backed Toss reader parses the canonical OpenAPI accounts and holdings envelopes', async () => {
