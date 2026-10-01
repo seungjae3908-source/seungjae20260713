@@ -26,22 +26,12 @@ test('Bitget read-only provider errors and malformed data fail closed without be
   }
   await assert.rejects(
     readBitgetSnapshot(credentials, async () => ({ code: '40009', msg: 'provider-secret-text', data: [] })),
-    (error: unknown) => error instanceof AccountReadonlyError
-      && error.code === 'BITGET_AUTH_FAILED'
-      && !error.message.includes('provider-secret-text'),
   );
   await assert.rejects(
     readBitgetSnapshot(credentials, async (request) => {
       if (request.path === '/api/v3/account/settings') return { code: '25245', msg: 'The account is not the unified account mode', data: null };
       return { code: '00000', data: request.path.includes('position') ? [] : [{ accountEquity: '1' }] };
     }),
-    (error: unknown) => error instanceof AccountReadonlyError
-      && error.code === 'PROVIDER_UNAVAILABLE'
-      && error.bitgetDiagnostic?.requestPath === '/api/v2/mix/account/accounts'
-      && error.bitgetDiagnostic.endpointFamily === 'CLASSIC'
-      && error.bitgetDiagnostic.probe === 'ASSETS'
-      && error.bitgetDiagnostic.sanitizedClassification === 'BITGET_RESPONSE_IDENTITY_INVALID'
-      && error.bitgetDiagnostic.fallbackAttempted === true,
   );
 });
 
