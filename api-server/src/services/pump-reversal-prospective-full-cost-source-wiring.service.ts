@@ -1,10 +1,4 @@
-import { BitgetPublicClient } from '../../../market-prediction-lab/src/bitget-public-client.js';
-import {
-  createNaturalPaperAuthoritativeSettlementCostCollector,
-} from '../../../market-prediction-lab/src/natural-paper-authoritative-settlement-cost-collector-v1.js';
-import {
-  createPumpProspectiveFullCostSettlementOwnerV1,
-} from '../../../market-prediction-lab/src/crypto-pump-reversal-full-cost-settlement-v1.js';
+import { createRequire } from 'node:module';
 import {
   buildPaperSimulatedExecutionEvidence,
 } from './paper-simulated-execution-evidence.service';
@@ -17,20 +11,48 @@ import type { SupplementalExecutionCostEvidence } from './scanner-profit-cost-ev
 export const PUMP_REVERSAL_FULL_COST_SOURCE_WIRING_VERSION =
   'pump-reversal-full-cost-source-wiring-v1' as const;
 
+type BitgetPublicClientLike = Readonly<{
+  get(path: string, params?: Readonly<Record<string, unknown>>): Promise<unknown>;
+}>;
+type CollectorInput = Readonly<{
+  runtimePackage: Readonly<{
+    buildPaperSimulatedExecutionEvidence: typeof buildPaperSimulatedExecutionEvidence;
+    collectAuthoritativePaperLatencyCostEvidence: typeof collectAuthoritativePaperLatencyCostEvidence;
+    readBitgetPublicLatencyMidpointQuote: typeof readBitgetPublicLatencyMidpointQuote;
+  }>;
+  readSupplementalCostInput(): Promise<SupplementalExecutionCostEvidence>;
+  bitgetClient: BitgetPublicClientLike;
+  now: () => number;
+}>;
+type AuthoritativeCollector = (input: Readonly<Record<string, unknown>>) => Promise<Readonly<Record<string, any>>>;
+type CollectorFactory = (input: CollectorInput) => AuthoritativeCollector;
+type SettlementOwnerFactory = (input: Readonly<{
+  collectAuthoritativeEvidence: AuthoritativeCollector;
+  clock: () => number;
+}>) => (context: PumpFullCostContext) => Promise<Readonly<Record<string, any>>>;
+
+const requirePredictionLab = createRequire(import.meta.url);
+const { BitgetPublicClient } = requirePredictionLab(
+  '../../../market-prediction-lab/src/bitget-public-client.js',
+) as Readonly<{ BitgetPublicClient: new () => BitgetPublicClientLike }>;
+const { createNaturalPaperAuthoritativeSettlementCostCollector } = requirePredictionLab(
+  '../../../market-prediction-lab/src/natural-paper-authoritative-settlement-cost-collector-v1.js',
+) as Readonly<{ createNaturalPaperAuthoritativeSettlementCostCollector: CollectorFactory }>;
+const { createPumpProspectiveFullCostSettlementOwnerV1 } = requirePredictionLab(
+  '../../../market-prediction-lab/src/crypto-pump-reversal-full-cost-settlement-v1.js',
+) as Readonly<{ createPumpProspectiveFullCostSettlementOwnerV1: SettlementOwnerFactory }>;
+
 type PumpFullCostContext = Readonly<{
   record: Readonly<Record<string, any>>;
   state?: unknown;
   observedAtMs: number;
 }>;
 
-type CollectorFactory = typeof createNaturalPaperAuthoritativeSettlementCostCollector;
-type SettlementOwnerFactory = typeof createPumpProspectiveFullCostSettlementOwnerV1;
-
 export function createPumpReversalFullCostSourceWiring(input: Readonly<{
   supplementalCostEvidenceForRecord:
     (context: PumpFullCostContext) =>
       SupplementalExecutionCostEvidence | Promise<SupplementalExecutionCostEvidence>;
-  bitgetClient?: InstanceType<typeof BitgetPublicClient>;
+  bitgetClient?: BitgetPublicClientLike;
   now?: () => number;
   collectorFactory?: CollectorFactory;
   settlementOwnerFactory?: SettlementOwnerFactory;
