@@ -1,9 +1,6 @@
 name: Application CI
 
 on:
-  pull_request:
-    types:
-      - ready_for_review
   workflow_dispatch:
     inputs:
       target_sha:
@@ -15,30 +12,13 @@ on:
         required: false
         type: string
       pr_number:
-        description: Optional pull request number for Ready Gate validation.
+        description: Optional pull request number for pre-merge gate validation.
         required: false
         type: string
       base_ref:
         description: Optional pull request base ref for current-base validation.
         required: false
         type: string
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/futures-public-network-smoke.yml
-      - .github/scripts/**
-      - .github/tests/**
-      - .github/fixtures/**
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
-      - package.json
-      - api-server/**
-      - stock-analyzer/**
-      - packages/**
-      - market-intelligence-sidecar/**
-      - market-prediction-lab/**
-      - .github/workflows/public-forward-liquidity-*.yml
 
 permissions:
   actions: read
@@ -92,7 +72,7 @@ jobs:
           echo "checkout_mode=DETACHED"
 
   ready-gate:
-    name: Ready preflight and current-base virtual merge gate
+    name: Pre-merge current-base virtual merge gate
     needs: exact-head
     if: always()
     runs-on: ubuntu-latest
@@ -111,7 +91,7 @@ jobs:
         with:
           script: |
             const sha = process.env.APPLICATION_STATUS_SHA;
-            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state: 'pending', target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Application CI run ${context.runId}: ready preflight`, context: 'application-ci/verified' });
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state: 'pending', target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Application CI run ${context.runId}: pre-merge gate`, context: 'application-ci/verified' });
 
       - name: Checkout exact candidate
         uses: actions/checkout@v4
@@ -163,11 +143,11 @@ jobs:
               core.setFailed(`[READY_FAST_CI_NOT_GREEN] latest=${latestFast ? `${latestFast.id}:${latestFast.conclusion}` : 'MISSING'}`);
               return;
             }
-            core.info(`Ready Gate PASS for PR #${prNumber}, head ${targetSha}, Fast CI ${latestFast.id}.`);
+            core.info(`Pre-merge Gate PASS for PR #${prNumber}, head ${targetSha}, Fast CI ${latestFast.id}.`);
 
       - name: Non-PR dispatch boundary
         if: env.APPLICATION_PR_NUMBER == ''
-        run: echo 'No PR metadata supplied; exact-SHA canonical CI remains allowed for main/manual control paths.'
+        run: echo 'No PR metadata supplied; exact-SHA canonical CI remains available only as a manual recovery path.'
 
       - name: Publish Ready Gate failure
         if: failure() || cancelled()
@@ -176,7 +156,7 @@ jobs:
           script: |
             const sha = process.env.APPLICATION_STATUS_SHA;
             const state = '${{ job.status }}' === 'cancelled' ? 'error' : 'failure';
-            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Application CI run ${context.runId}: Ready Gate failed`, context: 'application-ci/verified' });
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Application CI run ${context.runId}: Pre-merge Gate failed`, context: 'application-ci/verified' });
 
   application-build:
     name: Typecheck and build exact candidate once
