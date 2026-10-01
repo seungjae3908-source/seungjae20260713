@@ -508,7 +508,12 @@ function AuthenticatedApp() {
 }
 
 function App() {
-  return <QueryClientProvider client={queryClient}><AuthProvider><DirectAiChartDataPrewarm /><SettingsProvider><AssetModeProvider><AnalysisSelectionProvider><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><AppShell><RootRouter /></AppShell></WouterRouter><Toaster /></TooltipProvider></AnalysisSelectionProvider></AssetModeProvider></SettingsProvider></AuthProvider></QueryClientProvider>;
+  const routedApp = <AppShell><RootRouter /></AppShell>;
+  const router = UI_VNEXT_PREVIEW
+    ? <WouterRouter hook={usePreviewHashLocation}>{routedApp}</WouterRouter>
+    : <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>{routedApp}</WouterRouter>;
+
+  return <QueryClientProvider client={queryClient}><AuthProvider><DirectAiChartDataPrewarm /><SettingsProvider><AssetModeProvider><AnalysisSelectionProvider><TooltipProvider>{router}<Toaster /></TooltipProvider></AnalysisSelectionProvider></AssetModeProvider></SettingsProvider></AuthProvider></QueryClientProvider>;
 }
 
 export default App;
