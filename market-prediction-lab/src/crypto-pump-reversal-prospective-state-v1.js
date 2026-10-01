@@ -12,6 +12,7 @@ export const PUMP_PROSPECTIVE_STATE_VERSION = "crypto-pump-reversal-prospective-
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
+const RISK_SIZING_CAPTURE_WINDOW_MS = 30_000;
 const RECORD_STATUSES = new Set([
   "WAITING_NEXT_BAR",
   "ENTRY_MISSED",
@@ -86,6 +87,68 @@ function validatePathCursor(record) {
   }
 }
 
+function validateReadyRiskSizing(record) {
+  const evidence = record.riskSizing;
+  const result = evidence?.result;
+  if (!evidence
+    || evidence.schemaVersion !== "crypto-pump-reversal-risk-sizing-evidence-v1"
+    || !Number.isSafeInteger(evidence.attachedAtMs)
+    || evidence.attachedAtMs < record.position.entryTimestampMs
+    || evidence.attachedAtMs - record.position.entryTimestampMs > RISK_SIZING_CAPTURE_WINDOW_MS
+    || !exactDigest(evidence.evidenceDigest)) {
+    throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_EVIDENCE_INVALID");
+  }
+  const { evidenceDigest, ...payload } = evidence;
+  if (sha256(payload) !== evidenceDigest) {
+    throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_DIGEST_MISMATCH");
+  }
+  if (result?.status !== "READY"
+    || result?.version !== "pump-reversal-paper-risk-sizing-v1"
+    || !Array.isArray(result?.blockers)
+    || result.blockers.length !== 0
+    || !(Number.isFinite(result?.finalQuantity) && result.finalQuantity > 0)
+    || !(Number.isFinite(result?.finalNotional) && result.finalNotional > 0)
+    || !(Number.isFinite(result?.maximumProbeNotional) && result.maximumProbeNotional > 0)
+    || result.finalNotional > result.maximumProbeNotional + 1e-9
+    || result.riskPercent !== 0.25
+    || result.leverage !== 2
+    || result.marginMode !== "isolated"
+    || result.fundingDirectionalFilterUsed !== false
+    || result.fundingCountsAsProfitabilityEvidence !== false
+    || result.simulatedOnly !== true
+    || result.canonicalProfitAdmissionEligible !== false
+    || result.profitabilityClaimAllowed !== false
+    || result.executionAuthority !== "NONE"
+    || result.liveOrderAllowed !== false
+    || result.privateTradingApiAllowed !== false
+    || result.orderSubmitted !== false
+    || result.exchangeRequestSent !== false) {
+    throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_RESULT_INVALID");
+  }
+  const input = result.riskInput;
+  const risk = result.riskResult;
+  if (input?.market !== "crypto-futures"
+    || input?.symbol !== record.observation.symbol
+    || input?.side !== "short"
+    || input?.entryPrice !== record.position.entryPrice
+    || input?.stopLossPrice !== record.position.stopPrice
+    || input?.leverage !== 2
+    || input?.riskPercent !== 0.25
+    || risk?.allowed !== true
+    || !Array.isArray(risk?.blockCodes)
+    || risk.blockCodes.length !== 0
+    || !(Number.isFinite(risk?.recommendedQuantity) && risk.recommendedQuantity > 0)
+    || result.finalQuantity > risk.recommendedQuantity + 1e-12) {
+    throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_LINEAGE_INVALID");
+  }
+  const calculatedAtMs = Date.parse(risk.calculatedAt);
+  if (!Number.isFinite(calculatedAtMs)
+    || calculatedAtMs > evidence.attachedAtMs
+    || evidence.attachedAtMs - calculatedAtMs > RISK_SIZING_CAPTURE_WINDOW_MS) {
+    throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_TIME_INVALID");
+  }
+}
+
 function validateRecord(record, policy) {
   if (!record
     || record.schemaVersion !== "crypto-pump-reversal-prospective-record-v1"
@@ -100,16 +163,25 @@ function validateRecord(record, policy) {
   }
 
   validatePathCursor(record);
+  if (record.riskSizingStatus !== "MISSING" && record.riskSizingStatus !== "READY") {
+    throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_STATUS_INVALID");
+  }
+  if (record.riskSizingStatus === "MISSING" && record.riskSizing != null) {
+    throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_MISSING_MUTATED");
+  }
+  if (record.riskSizingStatus === "READY") validateReadyRiskSizing(record);
 
   if (record.status === "WAITING_NEXT_BAR") {
     if (record.position != null || record.exitTrigger != null || record.entryBlocker != null
-      || record.lastMinuteObservedAtMs != null || record.pathMinuteCount !== 0) {
+      || record.lastMinuteObservedAtMs != null || record.pathMinuteCount !== 0
+      || record.riskSizingStatus !== "MISSING") {
       throw new Error("PUMP_PROSPECTIVE_WAITING_RECORD_MUTATED");
     }
   }
   if (record.status === "ENTRY_MISSED") {
     if (record.position != null || record.exitTrigger != null || !nonEmpty(record.entryBlocker)
-      || record.lastMinuteObservedAtMs != null || record.pathMinuteCount !== 0) {
+      || record.lastMinuteObservedAtMs != null || record.pathMinuteCount !== 0
+      || record.riskSizingStatus !== "MISSING") {
       throw new Error("PUMP_PROSPECTIVE_MISSED_RECORD_INVALID");
     }
   }
@@ -269,6 +341,8 @@ export function admitPumpProspectiveSignalToStateV1(state, signal, observedAtMs)
     signal: clone(signal),
     status: "WAITING_NEXT_BAR",
     entryBlocker: null,
+    riskSizingStatus: "MISSING",
+    riskSizing: null,
     position: null,
     exitTrigger: null,
     lastMinuteObservedAtMs: null,
@@ -425,6 +499,51 @@ function normalizeIncrementalMinuteCandles(record, minuteCandles) {
   return normalized;
 }
 
+export function attachPumpProspectiveRiskSizingV1(state, {
+  recordId,
+  sizing,
+  observedAtMs,
+} = {}) {
+  validatePumpProspectiveStateV1(state);
+  const index = state.records.findIndex((record) => record.recordId === recordId);
+  if (index < 0) throw new Error("PUMP_PROSPECTIVE_RECORD_NOT_FOUND");
+  const current = state.records[index];
+  if (current.status !== "OPEN") {
+    throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_OPEN_RECORD_REQUIRED");
+  }
+  if (current.riskSizingStatus === "READY") {
+    return deepFreeze({ status: "ALREADY_READY", state, record: current });
+  }
+  if (!Number.isSafeInteger(observedAtMs)
+    || observedAtMs < current.position.entryTimestampMs
+    || observedAtMs - current.position.entryTimestampMs > RISK_SIZING_CAPTURE_WINDOW_MS) {
+    throw new Error("PUMP_PROSPECTIVE_RISK_SIZING_CAPTURE_WINDOW_EXPIRED");
+  }
+  const result = clone(sizing);
+  const evidenceCore = {
+    schemaVersion: "crypto-pump-reversal-risk-sizing-evidence-v1",
+    attachedAtMs: observedAtMs,
+    result,
+  };
+  const riskSizing = deepFreeze({
+    ...evidenceCore,
+    evidenceDigest: sha256(evidenceCore),
+  });
+  const updatedRecord = deepFreeze({
+    ...current,
+    riskSizingStatus: "READY",
+    riskSizing,
+  });
+  validateReadyRiskSizing(updatedRecord);
+  const records = state.records.map((record, rowIndex) => rowIndex === index ? updatedRecord : clone(record));
+  const next = withDigest({
+    ...stateDigestPayload(state),
+    updatedAtMs: Math.max(state.updatedAtMs, observedAtMs),
+    records: Object.freeze(records),
+  });
+  return deepFreeze({ status: "READY", state: next, record: updatedRecord });
+}
+
 export function advancePumpProspectiveRecordV1(state, {
   recordId,
   minuteCandles,
@@ -521,6 +640,13 @@ export function pumpProspectiveStateSummaryV1(state) {
   const missed = state.records.filter((record) => record.status === "ENTRY_MISSED").length;
   const open = state.records.filter((record) => record.status === "OPEN").length;
   const exited = state.records.filter((record) => record.status === "EXIT_TRIGGERED").length;
+  const riskSized = state.records.filter((record) => record.riskSizingStatus === "READY").length;
+  const riskSizedOpen = state.records.filter(
+    (record) => record.status === "OPEN" && record.riskSizingStatus === "READY",
+  ).length;
+  const riskSizedExitTriggered = state.records.filter(
+    (record) => record.status === "EXIT_TRIGGERED" && record.riskSizingStatus === "READY",
+  ).length;
   const fullCostSettled = state.records.filter(
     (record) => record.fullCostSettlementStatus === "CANONICAL_FULL_COST_SETTLED",
   ).length;
@@ -532,6 +658,9 @@ export function pumpProspectiveStateSummaryV1(state) {
     entryMissed: missed,
     openPositions: open,
     exitTriggered: exited,
+    riskSized,
+    riskSizedOpen,
+    riskSizedExitTriggered,
     fullCostSettled,
     rawExitOutcomesAvailable: exited,
     netEconomicOutcomesAvailable: fullCostSettled,
