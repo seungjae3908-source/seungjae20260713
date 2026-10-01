@@ -1,0 +1,95 @@
+name: Research Selective Opportunity Exit Attribution V5
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/selective_opportunity_exit_attribution_v5.py
+      - market-prediction-lab/tests/test_selective_opportunity_exit_attribution_v5.py
+      - market-prediction-lab/docs/selective-opportunity-exit-v5.md
+      - .github/workflows/research-selective-opportunity-exit-v5.yml
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: selective-exit-v5-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  offline-exit-attribution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RESEARCH_CODE_SHA: ${{ github.event.pull_request.head.sha }}
+      LIVE_TRADING: 'false'
+      AUTO_TRADING: 'false'
+      REAL_ORDER_ENABLED: 'false'
+      PRIVATE_TRADING_API_ALLOWED: 'false'
+    steps:
+      - name: Checkout exact research head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RESEARCH_CODE_SHA }}
+          persist-credentials: false
+      - name: Assert head and preserved V3
+        run: |
+          test "$(git rev-parse HEAD)" = "$RESEARCH_CODE_SHA"
+          test "$(git hash-object market-prediction-lab/scripts/selective_opportunity_discovery_v3.py)" = 8245eb79ab18c955eb7c9a80d314e94b286e3c05
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13.5'
+      - name: All causality and cash regressions
+        run: python -m unittest discover -s market-prediction-lab/tests -p 'test_selective_opportunity_*.py' -v
+      - name: Download only immutable existing research artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p /tmp/selective-exit-v5/input
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/10842828161/zip" > /tmp/selective-exit-v5/input/v2.zip
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/10844551652/zip" > /tmp/selective-exit-v5/input/v3.zip
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/10844599643/zip" > /tmp/selective-exit-v5/input/v4.zip
+      - name: Baseline reproduction and all sixteen exit comparisons
+        run: |
+          python market-prediction-lab/scripts/selective_opportunity_exit_attribution_v5.py \
+            --v2-zip /tmp/selective-exit-v5/input/v2.zip \
+            --v3-zip /tmp/selective-exit-v5/input/v3.zip \
+            --v4-zip /tmp/selective-exit-v5/input/v4.zip \
+            --output /tmp/selective-exit-v5/result
+      - name: Repeat exactly the same archived-source computation
+        run: |
+          python market-prediction-lab/scripts/selective_opportunity_exit_attribution_v5.py \
+            --v2-zip /tmp/selective-exit-v5/input/v2.zip \
+            --v3-zip /tmp/selective-exit-v5/input/v3.zip \
+            --v4-zip /tmp/selective-exit-v5/input/v4.zip \
+            --output /tmp/selective-exit-v5/replay
+      - name: Verify exact equality and no economic or execution promotion
+        run: |
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root=Path('/tmp/selective-exit-v5');a=root/'result';b=root/'replay'
+          for p in a.iterdir():
+              assert p.read_bytes()==(b/p.name).read_bytes(),p.name
+          r=json.loads((a/'result.json').read_bytes())
+          assert len(r['summary'])==16
+          assert r['baselineReproduced'] is True
+          assert r['independentOos'] is False and r['profitabilityProven'] is False
+          assert r['actualOrders']==0 and r['canonicalSampleDelta']==0
+          assert r['executionAuthority']=='NONE' and r['combinedReturn'] is None
+          assert r['selectedChampion'] is None and r['contract']['parameterGrid'] is False
+          digest=hashlib.sha256((a/'result.json').read_bytes()).hexdigest()
+          assert digest=='f326cddc5e2001e6a1a72f33cf76431f8a034faf9280b245aaafe33261167e2e'
+          p={'researchCodeSha':os.environ['RESEARCH_CODE_SHA'],'resultSha256':digest,
+             'baselineReproduced':True,'exactReplay':True,'all16ComparisonsRetained':True,
+             'providerCalls':0,'actualOrders':0,'independentOos':False,'profitabilityProven':False}
+          (a/'ci-verification.json').write_text(json.dumps(p,indent=2)+'\n')
+          print('V5_BASELINE_EXACT_REPLAY_AND_RESEARCH_BOUNDARY_PASS')
+          PY
+      - name: Upload immutable attribution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selective-opportunity-exit-v5-${{ github.run_id }}
+          path: /tmp/selective-exit-v5/result
+          if-no-files-found: warn
+          retention-days: 90
