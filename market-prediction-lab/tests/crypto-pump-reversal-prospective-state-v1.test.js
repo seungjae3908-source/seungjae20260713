@@ -570,3 +570,37 @@ test("Full Cost settlement fails closed when any one of the eight components is 
     /PUMP_PROSPECTIVE_FULL_COST_COMPONENT_INVALID:funding/,
   );
 });
+
+
+test("persisted state cannot claim economic credit before canonical Full Cost", () => {
+  const p = policy();
+  const admitted = admitPumpProspectiveSignalToStateV1(
+    createPumpProspectiveStateV1({ policy: p, createdAtMs: ELIGIBLE }),
+    signal(),
+    ELIGIBLE + HOUR,
+  );
+  const serialized = serializePumpProspectiveStateV1(admitted.state);
+  const tampered = JSON.parse(serialized);
+  tampered.records[0].economicSampleCredit = 1;
+  assert.throws(
+    () => restorePumpProspectiveStateV1(JSON.stringify(tampered), p),
+    /PUMP_PROSPECTIVE_PRE_FULL_COST_ECONOMICS_FORBIDDEN/,
+  );
+});
+
+test("persisted settled state must retain exactly one economic sample credit", () => {
+  const { exited } = sizedExitedState();
+  const settledAtMs = exited.record.exitTrigger.triggerTimestampMs + 1_000;
+  const settled = attachPumpProspectiveFullCostSettlementV1(exited.state, {
+    recordId: exited.record.recordId,
+    settlement: fullCostSettlement(exited.record, settledAtMs),
+    observedAtMs: settledAtMs,
+  });
+  const serialized = serializePumpProspectiveStateV1(settled.state);
+  const tampered = JSON.parse(serialized);
+  tampered.records[0].economicSampleCredit = 0;
+  assert.throws(
+    () => restorePumpProspectiveStateV1(JSON.stringify(tampered), policy()),
+    /PUMP_PROSPECTIVE_FULL_COST_WITHOUT_SIZED_EXIT_FORBIDDEN/,
+  );
+});
