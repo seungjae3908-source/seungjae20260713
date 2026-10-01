@@ -135,7 +135,12 @@ export function createFilePumpProspectiveStoreV1({ rootDirectory } = {}) {
         records: state.records.length,
         openPositions: state.records.filter((row) => row.status === "OPEN").length,
         exitTriggered: state.records.filter((row) => row.status === "EXIT_TRIGGERED").length,
-        fullCostSettled: 0,
+        fullCostSettled: Number.isInteger(runtimeSummary?.fullCostSettled)
+          ? runtimeSummary.fullCostSettled
+          : 0,
+        netEconomicOutcomesAvailable: Number.isInteger(runtimeSummary?.netEconomicOutcomesAvailable)
+          ? runtimeSummary.netEconomicOutcomesAvailable
+          : 0,
         runtimeSummary: runtimeSummary ?? null,
         profitabilityProven: false,
         profitabilityClaimAllowed: false,
@@ -233,6 +238,8 @@ export async function runPumpProspectiveScheduledInvocationV1({
         records: result.summary.records,
         openPositions: result.summary.openPositions,
         exitTriggered: result.summary.exitTriggered,
+        fullCostSettled: result.summary.fullCostSettled,
+        netEconomicOutcomesAvailable: result.summary.netEconomicOutcomesAvailable,
       },
     });
     return Object.freeze({
