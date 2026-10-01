@@ -64,7 +64,7 @@ async function defaultReadJson(path: string): Promise<JsonRecord> {
   }
 }
 
-function safeOutput(result: Readonly<Record<string, any>>) {
+function safeOutput(result: Readonly<Record<string, any>>, scheduleActive = false) {
   const runtime = result?.runtime;
   const summary = runtime?.summary ?? result?.receipt?.runtimeSummary ?? null;
   return Object.freeze({
@@ -87,7 +87,7 @@ function safeOutput(result: Readonly<Record<string, any>>) {
       profitabilityProven: false,
       currentValidatedChampion: 'NONE',
     }),
-    scheduleActive: false,
+    scheduleActive: scheduleActive === true,
     financialMutationCount: 0,
     realOrderCount: 0,
     privateRequestCount: 0,
@@ -113,6 +113,7 @@ export async function runPumpReversalProspectiveOnce(input: Readonly<{
   runtimeFactory?: RuntimeFactory;
   invocationRunner?: InvocationRunner;
   verifyPolicy?: PolicyVerifier;
+  scheduleActive?: boolean;
 }>): Promise<ReturnType<typeof safeOutput>> {
   const stateRoot = absolutePath(input?.stateRoot, 'PUMP_ONE_SHOT_STATE_ROOT_REQUIRED');
   const policyPath = absolutePath(input?.policyPath, 'PUMP_ONE_SHOT_POLICY_PATH_REQUIRED');
@@ -192,7 +193,7 @@ export async function runPumpReversalProspectiveOnce(input: Readonly<{
     ownerId,
     runtime,
   });
-  return safeOutput(result);
+  return safeOutput(result, input.scheduleActive === true);
 }
 
 const invokedAsScript = Boolean(process.argv[1])
@@ -205,6 +206,7 @@ if (invokedAsScript) {
     paperStateSnapshotPath: process.env.PUMP_PAPER_STATE_SNAPSHOT_PATH ?? '',
     supplementalCostEvidencePath: process.env.PUMP_SUPPLEMENTAL_COST_EVIDENCE_PATH ?? '',
     ownerId: process.env.PUMP_PROSPECTIVE_OWNER_ID,
+    scheduleActive: process.env.PUMP_PROSPECTIVE_SCHEDULE_ACTIVE === 'true',
   }).then((result) => {
     process.stdout.write(`${JSON.stringify(result)}\n`);
   }).catch((error) => {
