@@ -16,7 +16,7 @@ import {
 export const PUMP_REVERSAL_PROSPECTIVE_RISK_OWNER_VERSION =
   'pump-reversal-prospective-risk-owner-v1' as const;
 
-export type PumpReversalProspectiveRiskPumpReversalProspectiveRiskSourceContext = Readonly<{
+export type PumpReversalProspectiveRiskSourceContext = Readonly<{
   record: PumpProspectiveOpenRecord;
   observedAtMs: number;
   account?: PumpPaperAccountRiskSnapshot;
