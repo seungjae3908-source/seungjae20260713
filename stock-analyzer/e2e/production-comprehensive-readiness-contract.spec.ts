@@ -124,6 +124,32 @@ test('Production chart audit waits for the matching settled query before accepti
   expect(marketData).toContain('void cached(cacheKey, candleCacheTtl(timeframeText), load)');
 });
 
+test('Production search audit records one settled HTTP request at every configured viewport', () => {
+  const qa = source('e2e/production-comprehensive-readonly-qa.spec.ts');
+  const config = source('playwright.production-comprehensive.config.ts');
+  const searchTestStart = qa.indexOf("test('Production market search matrix uses real UI and dozens of symbols'");
+  const searchTestEnd = qa.indexOf("test('Production chart matrix", searchTestStart);
+  const searchTest = qa.slice(searchTestStart, searchTestEnd);
+
+  expect(searchTestStart).toBeGreaterThanOrEqual(0);
+  expect(searchTestEnd).toBeGreaterThan(searchTestStart);
+  expect(searchTest).not.toContain('test.skip(');
+  expect(searchTest).toContain("testInfo.project.name === 'prod-desktop-1440'");
+  expect(searchTest).toContain("testInfo.project.name === 'prod-mobile-390'");
+  expect(searchTest).toContain("item.requests.length !== 1");
+  expect(searchTest).toContain("request.status !== 200 || request.failure");
+  expect(searchTest).toContain("request.market !== SEARCH_MARKET_PARAMS[item.market]");
+  expect(searchTest).toContain("request.startedAfterInputMs < 150 || request.startedAfterInputMs > 1_000");
+  expect(searchTest).toContain("item.kind === 'console' || item.kind === 'pageerror' || item.kind === 'requestfailed'");
+  expect(searchTest).toContain("item.status === 401 || item.status === 403 || (item.status ?? 0) >= 500");
+  expect(qa).toContain("url.pathname !== '/api/search/suggest' || url.searchParams.get('q') !== query");
+  expect(qa).toContain('startedAfterInputMs: Date.now() - started');
+  expect(qa).toContain('record.responseLatencyMs = Date.now() - (requestStartedAt.get(request) ?? Date.now())');
+  for (const width of [1920, 1440, 1024, 800, 430, 390, 360, 320]) {
+    expect(config).toContain(`width: ${width}`);
+  }
+});
+
 test('Production read-only suites share the bounded cold login contract', () => {
   const loginSupport = source('e2e/support/production-readonly-login.ts');
   const consumers = [
