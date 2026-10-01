@@ -25,7 +25,43 @@
 	<meta name="ui-vnext-preview" content="6c0fdef101cb737d68e5b01cd273af73a50b880e"><script data-ui-vnext-api-bridge>
 (() => {
   const apiBase = 'https://lsj119.com/api';
+  const supabaseBase = 'https://bawcbkoyovbeajkrnduq.supabase.co';
+  const supabaseAnonKey = 'sb_publishable_l5iOTxTerk7gv3eDYouXcg_Q-YmVsZU';
   const nativeFetch = window.fetch.bind(window);
+
+  const bearerSubject = (authorization) => {
+    if (!authorization || !authorization.toLowerCase().startsWith('bearer ')) return null;
+    const token = authorization.slice(7).trim();
+    const encoded = token.split('.')[1];
+    if (!encoded) return null;
+    try {
+      const normalized = encoded.replace(/-/g, '+').replace(/_/g, '/');
+      const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+      const payload = JSON.parse(atob(padded));
+      return typeof payload.sub === 'string' ? payload.sub : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const directProfileRead = async (headers, signal) => {
+    const authorization = headers.get('authorization');
+    const subject = bearerSubject(authorization);
+    if (!authorization || !subject) return null;
+    const url = supabaseBase + '/rest/v1/profiles?id=eq.' + encodeURIComponent(subject) + '&select=*';
+    const directHeaders = new Headers();
+    directHeaders.set('apikey', supabaseAnonKey);
+    directHeaders.set('authorization', authorization);
+    directHeaders.set('accept', 'application/vnd.pgrst.object+json');
+    const response = await nativeFetch(url, {
+      method: 'GET',
+      headers: directHeaders,
+      signal,
+      cache: 'no-store',
+    });
+    return response;
+  };
+
   const rewrite = (value) => {
     try {
       const url = new URL(value, window.location.origin);
@@ -35,17 +71,50 @@
     } catch {}
     return value;
   };
-  window.fetch = (input, init = {}) => {
+
+  window.fetch = async (input, init = {}) => {
     const method = String(init.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
     const original = input instanceof Request ? input.url : String(input);
     const rewritten = rewrite(original);
+    const headers = new Headers(input instanceof Request ? input.headers : undefined);
+    new Headers(init.headers).forEach((value, key) => headers.set(key, value));
+
     if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && String(rewritten).startsWith(apiBase + '/trade-automation')) {
-      return Promise.reject(new Error('UI_VNEXT_PREVIEW_FINANCIAL_MUTATION_BLOCKED'));
+      throw new Error('UI_VNEXT_PREVIEW_FINANCIAL_MUTATION_BLOCKED');
     }
+
+    if (String(rewritten).startsWith(apiBase + '/auth/profile') && method === 'GET') {
+      try {
+        const primary = await nativeFetch(rewritten, { ...init, headers });
+        if (primary.ok) return primary;
+        const fallback = await directProfileRead(headers, init.signal);
+        return fallback || primary;
+      } catch (error) {
+        const fallback = await directProfileRead(headers, init.signal);
+        if (fallback) return fallback;
+        throw error;
+      }
+    }
+
+    let response;
     if (input instanceof Request && rewritten !== original) {
-      return nativeFetch(new Request(rewritten, input), init);
+      response = await nativeFetch(new Request(rewritten, input), init);
+    } else {
+      response = await nativeFetch(rewritten !== original ? rewritten : input, init);
     }
-    return nativeFetch(rewritten !== original ? rewritten : input, init);
+
+    try {
+      const url = new URL(input instanceof Request ? input.url : String(input), window.location.origin);
+      if (url.hostname.endsWith('.supabase.co') && url.pathname.includes('/auth/v1/token') && !response.ok) {
+        const body = await response.clone().json().catch(() => null);
+        window.sessionStorage.setItem('ui-vnext-login-diagnostic', JSON.stringify({
+          status: response.status,
+          code: body?.code ?? body?.error_code ?? null,
+          message: body?.msg ?? body?.message ?? body?.error_description ?? null,
+        }));
+      }
+    } catch {}
+    return response;
   };
 })();
 </script></head>
