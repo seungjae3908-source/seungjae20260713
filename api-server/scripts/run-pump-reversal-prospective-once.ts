@@ -145,12 +145,11 @@ export async function runPumpReversalProspectiveOnce(input: Readonly<{
     throw new TypeError('Pump one-shot runner dependencies are required');
   }
 
-  // Preflight every read-only input before a lease/cycle can be created.
-  const [policy, paperStateSnapshot, supplementalCostEvidence] = await Promise.all([
-    readJson(policyPath),
-    readJson(paperStateSnapshotPath),
-    readJson(supplementalCostEvidencePath),
-  ]);
+  // Only the frozen policy is a hard preflight. Paper account and supplemental
+  // cost inputs are read lazily by the Risk / Full Cost owners so missing or
+  // stale evidence blocks economic credit without suppressing raw prospective
+  // market observations.
+  const policy = await readJson(policyPath);
   const verdict = verifyPolicy(policy);
   if (!verdict?.valid) {
     throw new Error(`PUMP_ONE_SHOT_POLICY_INVALID:${(verdict?.blockers ?? []).join(',')}`);
@@ -176,12 +175,6 @@ export async function runPumpReversalProspectiveOnce(input: Readonly<{
     || runtimeDependencies?.scheduleActivationAuthority !== false) {
     throw new Error('PUMP_ONE_SHOT_RUNTIME_AUTHORITY_INVALID');
   }
-
-  // Preflight objects are intentionally referenced only to guarantee they were
-  // readable before lease acquisition; authoritative validation remains owned
-  // by the existing Paper state / cost evidence validators.
-  void paperStateSnapshot;
-  void supplementalCostEvidence;
 
   const runtime = runtimeFactory({
     sizePaperRisk: runtimeDependencies.sizePaperRisk,
