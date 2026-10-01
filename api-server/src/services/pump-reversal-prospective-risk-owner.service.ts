@@ -16,19 +16,19 @@ import {
 export const PUMP_REVERSAL_PROSPECTIVE_RISK_OWNER_VERSION =
   'pump-reversal-prospective-risk-owner-v1' as const;
 
-type SourceContext = Readonly<{
+export type PumpReversalProspectiveRiskPumpReversalProspectiveRiskSourceContext = Readonly<{
   record: PumpProspectiveOpenRecord;
   observedAtMs: number;
   account?: PumpPaperAccountRiskSnapshot;
 }>;
 
 export type PumpReversalProspectiveRiskOwnerSources = Readonly<{
-  paperStateSnapshotForRecord: (context: SourceContext) => unknown | Promise<unknown>;
-  contractRulesForRecord: (context: SourceContext) => PaperContractRules | Promise<PaperContractRules>;
-  publicEvidenceForRecord: (context: SourceContext) => BitgetFuturesPublicEvidence | Promise<BitgetFuturesPublicEvidence>;
-  depthForRecord: (context: SourceContext) => PumpPublicDepthSnapshot | Promise<PumpPublicDepthSnapshot>;
+  paperStateSnapshotForRecord: (context: PumpReversalProspectiveRiskSourceContext) => unknown | Promise<unknown>;
+  contractRulesForRecord: (context: PumpReversalProspectiveRiskSourceContext) => PaperContractRules | Promise<PaperContractRules>;
+  publicEvidenceForRecord: (context: PumpReversalProspectiveRiskSourceContext) => BitgetFuturesPublicEvidence | Promise<BitgetFuturesPublicEvidence>;
+  depthForRecord: (context: PumpReversalProspectiveRiskSourceContext) => PumpPublicDepthSnapshot | Promise<PumpPublicDepthSnapshot>;
   supplementalCostEvidenceForRecord:
-    (context: SourceContext) => SupplementalExecutionCostEvidence | Promise<SupplementalExecutionCostEvidence>;
+    (context: PumpReversalProspectiveRiskSourceContext) => SupplementalExecutionCostEvidence | Promise<SupplementalExecutionCostEvidence>;
 }>;
 
 export type PumpReversalProspectiveRiskOwnerBlocked = Readonly<{
