@@ -38,6 +38,7 @@ import {
 // first paint after 4 seconds. Keep the client transport guard outside that
 // server budget so the browser cannot abort before the fail-closed fallback.
 const MARKET_INFORMATION_REQUEST_TIMEOUT_MS = 6_000;
+const UI_VNEXT_PREVIEW = import.meta.env.VITE_UI_VNEXT_PREVIEW === 'true';
 
 let pageReadLifecycleController: AbortController | null = null;
 let pageReadLifecycleListenersBound = false;
@@ -88,6 +89,18 @@ function requestMethod(input: RequestInfo | URL, init: RequestInit): string {
   if (init.method) return init.method.toUpperCase();
   if (typeof Request !== 'undefined' && input instanceof Request) return input.method.toUpperCase();
   return 'GET';
+}
+
+function assertUiVnextPreviewMutationBoundary(
+  input: RequestInfo | URL,
+  init: RequestInit,
+): void {
+  if (!UI_VNEXT_PREVIEW) return;
+  const method = requestMethod(input, init);
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return;
+  const path = requestPath(input);
+  if (!path.startsWith('/api/trade-automation')) return;
+  throw new Error('UI_VNEXT_PREVIEW_FINANCIAL_MUTATION_BLOCKED');
 }
 
 function marketMoversRequestedMarket(input: RequestInfo | URL): 'KR' | 'US' | null {
@@ -234,6 +247,7 @@ export async function authorizedFetch(
   init: RequestInit = {},
   options: AuthorizedFetchOptions = {},
 ): Promise<Response> {
+  assertUiVnextPreviewMutationBoundary(input, init);
   const headers = new Headers(init.headers);
   const resolvedAccessToken = options.accessToken?.trim();
   if (!headers.has('Authorization') && resolvedAccessToken) {
