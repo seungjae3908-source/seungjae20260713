@@ -353,6 +353,13 @@ async function persistCaptureResult({ batch, captureReceipt, runId, runAttempt }
       && canonicalJson(captureReceipt.blockers) === canonicalJson([
         'PHASE2_UTC27_ZERO_ADDITIONAL_CREDIT',
       ]),
+    duplicateSlotZeroCreditDiagnostic: captureReceipt.captureStatus === 'DIAGNOSTIC_ONLY'
+      && captureReceipt.prospectiveSlotCredit === 0
+      && batch === null
+      && captureReceipt.priorCreditedSlotCheck === 'PRESENT'
+      && canonicalJson(captureReceipt.blockers) === canonicalJson([
+        'SUCCESSOR_V3_DUPLICATE_SLOT_ATTEMPT_ZERO_CREDIT',
+      ]),
     canonicalRawArtifactName: captureReceipt.slotIndex == null
       ? null
       : canonicalRawArtifactName(captureReceipt),
@@ -379,6 +386,7 @@ async function persistCaptureResult({ batch, captureReceipt, runId, runAttempt }
     canonical_raw_artifact_name: terminal.canonicalRawArtifactName ?? '',
     attempt_artifact_name: terminal.attemptArtifactName ?? '',
     phase2_utc27_diagnostic: terminal.phase2Utc27Diagnostic,
+    duplicate_slot_zero_credit_diagnostic: terminal.duplicateSlotZeroCreditDiagnostic,
   });
   console.log(JSON.stringify(terminal));
 }

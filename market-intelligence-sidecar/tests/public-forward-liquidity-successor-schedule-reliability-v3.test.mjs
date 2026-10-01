@@ -604,3 +604,33 @@ test('merged V3 binding stays inert until an explicit exact-main OWNER activatio
     /Merging an activation binding to the default branch is the activation event/u,
   );
 });
+
+test('scheduled workflow accepts only the exact already-credited slot diagnostic as a zero-credit no-op', async () => {
+  const workflow = await readFile(
+    new URL(
+      '../../.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  const runner = await readFile(
+    new URL(
+      '../scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+
+  assert.match(runner, /duplicateSlotZeroCreditDiagnostic: captureReceipt\.captureStatus === 'DIAGNOSTIC_ONLY'/u);
+  assert.match(runner, /captureReceipt\.priorCreditedSlotCheck === 'PRESENT'/u);
+  assert.match(runner, /SUCCESSOR_V3_DUPLICATE_SLOT_ATTEMPT_ZERO_CREDIT/u);
+  assert.match(runner, /duplicate_slot_zero_credit_diagnostic: terminal\.duplicateSlotZeroCreditDiagnostic/u);
+
+  assert.match(workflow, /DUPLICATE_SLOT_ZERO_CREDIT_DIAGNOSTIC:/u);
+  assert.match(workflow, /test "\$CAPTURE_STATUS" = 'DIAGNOSTIC_ONLY'/u);
+  assert.match(workflow, /test "\$PROSPECTIVE_SLOT_CREDIT" = '0'/u);
+  assert.match(workflow, /test "\$RAW_BATCH_PRESENT" = 'false'/u);
+  assert.match(workflow, /test "\$CAPTURE_STATUS" = 'PRESENT'/u);
+  assert.match(workflow, /test "\$PROSPECTIVE_SLOT_CREDIT" = '1'/u);
+  assert.match(workflow, /test "\$RAW_BATCH_PRESENT" = 'true'/u);
+});
