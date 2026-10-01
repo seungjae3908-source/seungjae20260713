@@ -184,11 +184,9 @@ export async function runPumpProspectiveScheduledInvocationV1({
   }
 
   const store = createFilePumpProspectiveStoreV1({ rootDirectory });
-  let state = await store.load(policy);
-  if (state == null) state = await store.initialize(policy);
   const cycle = cycleFor(nowMs);
   const leaseStore = createFilePaperSchedulerLeaseStore({ directory: store.paths.leases });
-  const leaseKey = `pump:${state.candidateId}:${cycle.cycleId}`;
+  const leaseKey = `pump:${policy.candidate.candidateId}:${cycle.cycleId}`;
   const lease = await leaseStore.acquire({
     leaseKey,
     cycleId: cycle.cycleId,
@@ -197,12 +195,13 @@ export async function runPumpProspectiveScheduledInvocationV1({
     leaseDurationMs,
   });
   if (!lease.acquired) {
+    const existingState = await store.load(policy);
     return Object.freeze({
       schemaVersion: "crypto-pump-reversal-scheduled-invocation-v1",
       status: lease.status === "COMPLETED" ? "REPLAYED" : "BUSY",
       cycleId: cycle.cycleId,
       leaseStatus: lease.status,
-      state,
+      state: existingState,
       schedule: PUMP_PROSPECTIVE_SCHEDULE_CONTRACT,
       executionAuthority: "NONE",
       realOrderCount: 0,
@@ -211,6 +210,8 @@ export async function runPumpProspectiveScheduledInvocationV1({
   }
 
   try {
+    let state = await store.load(policy);
+    if (state == null) state = await store.initialize(policy);
     const previousStateDigest = state.stateDigest;
     const result = await runtime.run({ state, nowMs });
     state = result.state;
