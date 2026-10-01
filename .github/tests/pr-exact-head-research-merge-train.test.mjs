@@ -81,6 +81,17 @@ test("local validation failure blocks a candidate without granting any authority
   assert.equal(passed.localValidation.status, "PASS");
 });
 
+test("workflow shell variables expand instead of remaining escaped literals", async () => {
+  const workflow = await readFile(".github/workflows/research-merge-train-pre-ready.yml", "utf8");
+  assert.doesNotMatch(workflow, /\\\\\$\{[A-Z_]+/u);
+  assert.match(workflow, /"\$\{GITHUB_SHA\}"/u);
+  assert.match(workflow, /"\$\{GITHUB_REPOSITORY\}"/u);
+  assert.match(workflow, /"\$\{GITHUB_OUTPUT\}"/u);
+  assert.match(workflow, /"\$\{actual,,\}"/u);
+  assert.match(workflow, /"\$\{EXPECTED_SHA,,\}"/u);
+  assert.match(workflow, /"\$\{GITHUB_STEP_SUMMARY\}"/u);
+});
+
 test("workflow keeps GitHub expressions unescaped so checkout and matrix refs resolve", async () => {
   const workflow = await readFile(".github/workflows/research-merge-train-pre-ready.yml", "utf8");
   assert.doesNotMatch(workflow, /\\\\\$\{\{/u);

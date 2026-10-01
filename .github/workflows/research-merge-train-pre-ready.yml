@@ -46,7 +46,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "\${GITHUB_SHA}"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
           test -z "$(git symbolic-ref --quiet --short HEAD || true)"
 
       - name: Build read-only target matrix
@@ -56,10 +56,10 @@ jobs:
         run: |
           set -euo pipefail
           node .github/scripts/research-merge-train-pre-ready.mjs discover \
-            --repository "\${GITHUB_REPOSITORY}" \
+            --repository "${GITHUB_REPOSITORY}" \
             --min "${{ inputs.target_min }}" \
             --max "${{ inputs.target_max }}" \
-            --github-output "\${GITHUB_OUTPUT}" \
+            --github-output "${GITHUB_OUTPUT}" \
             --json-output /tmp/research-merge-train-discovery.json
 
       - name: Retain discovery evidence
@@ -111,7 +111,7 @@ jobs:
           actual="$(git -C target rev-parse HEAD)"
           branch="$(git -C target symbolic-ref --quiet --short HEAD || true)"
           test -z "$branch"
-          test "\${actual,,}" = "\${EXPECTED_SHA,,}"
+          test "${actual,,}" = "${EXPECTED_SHA,,}"
 
       - name: Read drift, dependency, review and existing CI state
         id: audit
@@ -121,11 +121,11 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/research-train
           node auditor/.github/scripts/research-merge-train-pre-ready.mjs audit \
-            --repository "\${GITHUB_REPOSITORY}" \
+            --repository "${GITHUB_REPOSITORY}" \
             --pr "${{ matrix.pr }}" \
             --head-sha "${{ matrix.head_sha }}" \
             --parent-pr "${{ matrix.parent_pr }}" \
-            --github-output "\${GITHUB_OUTPUT}" \
+            --github-output "${GITHUB_OUTPUT}" \
             --json-output "/tmp/research-train/pr-${{ matrix.pr }}.audit.json" \
             --markdown-output "/tmp/research-train/pr-${{ matrix.pr }}.audit.md"
 
@@ -239,7 +239,7 @@ jobs:
             --input-dir /tmp/research-merge-train-results \
             --json-output /tmp/research-merge-train-matrix.json \
             --markdown-output /tmp/research-merge-train-matrix.md
-          cat /tmp/research-merge-train-matrix.md >> "\${GITHUB_STEP_SUMMARY}"
+          cat /tmp/research-merge-train-matrix.md >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Retain combined Drift Matrix
         if: needs.discover.outputs.count != '0'
