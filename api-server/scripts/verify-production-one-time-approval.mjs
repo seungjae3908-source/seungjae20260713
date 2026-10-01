@@ -10,6 +10,7 @@ const staging = fs.readFileSync(path.join(root, '.github/workflows/staging-readi
 const postgresGate = fs.readFileSync(path.join(root, '.github/workflows/staging-postgres-auth-gate.yml'), 'utf8');
 const verdictVerifier = fs.readFileSync(path.join(root, 'api-server/scripts/verify-staging-verdict.mjs'), 'utf8');
 const ciProvenance = fs.readFileSync(path.join(root, 'api-server/scripts/production-ci-provenance.cjs'), 'utf8');
+const releaseProvenance = fs.readFileSync(path.join(root, 'api-server/scripts/release-candidate-provenance.cjs'), 'utf8');
 const legacyApprovalFixture = JSON.parse(fs.readFileSync(path.join(root, 'ops/production-approval.json'), 'utf8'));
 const require = createRequire(import.meta.url);
 const {
@@ -111,10 +112,12 @@ for (const status of [
 ]) {
   requireText(ciProvenance, `'${status}'`, `shared required status ${status}`);
 }
-requireText(workflow, 'production-ci-provenance.cjs', 'shared exact CI provenance contract');
-requireText(workflow, 'inspectRequiredStatusEvidence', 'same-run required status evidence');
-requireText(workflow, 'evaluateProductionCiProvenance', 'official Application CI provenance evaluation');
-requireText(workflow, "core.setOutput('run_id', String(verified.runId))", 'Application CI Run ID audit output');
+requireText(releaseProvenance, 'REQUIRED_PRODUCTION_STATUSES', 'release provenance consumes canonical Required CI contexts');
+requireText(releaseProvenance, 'evaluateReleaseCandidateProvenance', 'release candidate tree and pre-merge CI evaluator');
+requireText(workflow, 'release-candidate-provenance.cjs', 'shared release provenance contract');
+requireText(workflow, 'inspectPostMergeStatusEvidence', 'official post-merge status evidence');
+requireText(workflow, 'evaluatePostMergeStatusProvenance', 'official post-merge provenance evaluation');
+requireText(workflow, "core.setOutput('run_id', String(verified.runId))", 'Post-Merge Provenance Run ID audit output');
 
 requireText(workflow, 'Require successful exact-SHA PostgreSQL Auth Gate', 'PostgreSQL gate');
 requireText(workflow, "run.name === 'Staging PostgreSQL Auth Gate'", 'PostgreSQL gate workflow identity');
@@ -170,7 +173,7 @@ requireText(workflow, 'issues: write', 'audit comment permission');
 
 requireText(workflow, 'Write sanitized approval audit evidence', 'sanitized audit evidence generation');
 requireText(workflow, 'approvalRunId', 'approval Run ID audit field');
-requireText(workflow, 'applicationCiRunId', 'Application CI Run ID audit field');
+requireText(workflow, 'postMergeProvenanceRunId', 'Post-Merge Provenance Run ID audit field');
 requireText(workflow, 'postgresGateRunId', 'PostgreSQL Gate Run ID audit field');
 requireText(workflow, 'stagingRunId', 'Staging Run ID audit field');
 requireText(workflow, 'stagingArtifactId', 'Staging artifact ID audit field');
@@ -211,7 +214,7 @@ if (failures.length) {
 console.log('One-time production approval contract verified.');
 console.log('- workflow_dispatch target_sha is explicit, exact, current-main-equal, and non-mutating');
 console.log('- Missing/39/41/branch/stale/other-branch/PR-synthetic/current-main mismatch targets are blocked');
-console.log('- Required CI 6/6 same-run exact Application CI provenance is preserved in the shared contract');
+console.log('- Required CI 6/6 is proven before merge and exact merged-tree identity is verified by the post-merge release provenance gate');
 console.log('- Exact-SHA PostgreSQL Auth Gate and unexpired artifact are required');
 console.log('- Exact-SHA Staging release_ready, health, Desktop/Mobile, DB, cleanup, zero-error evidence is required');
 console.log('- Production Deploy receives exactly the approved target SHA and revalidates current main');
