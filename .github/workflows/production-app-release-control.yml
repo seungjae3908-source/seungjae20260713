@@ -16,10 +16,10 @@ jobs:
     name: Owner-approved exact-main Production app release bridge
     if: >-
       github.event.action == 'created' &&
-      github.event.issue.number == 23 &&
+      github.event.issue.number == 1555 &&
       github.event.issue.pull_request == null &&
       github.event.issue.state == 'open' &&
-      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
       github.event.comment.user.login == 'seungjae3908-source' &&
       github.event.comment.author_association == 'OWNER' &&
       startsWith(github.event.comment.body, '/run-production-app ')
@@ -239,7 +239,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
               body: [
                 'Production application deploy dispatched behind the protected `production` environment.',
                 '',
