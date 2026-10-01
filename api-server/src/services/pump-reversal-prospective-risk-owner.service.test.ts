@@ -113,6 +113,7 @@ test('risk owner passes only validated authoritative sources into the existing s
       depthForRecord: async () => ({ observedAtMs: NOW } as never),
       supplementalCostEvidenceForRecord: async () => ({ costPolicyId: 'cost-v1' } as never),
     },
+    now: () => NOW,
     sizeRisk: ((input: any) => {
       seen.push(input);
       return expected;
@@ -139,6 +140,7 @@ test('invalid or unavailable paper state fails closed before sizing', async () =
       depthForRecord: async () => { throw new Error('SHOULD_NOT_CALL'); },
       supplementalCostEvidenceForRecord: async () => { throw new Error('SHOULD_NOT_CALL'); },
     },
+    now: () => NOW,
     sizeRisk: ((input: any) => {
       sized += 1;
       return input;
