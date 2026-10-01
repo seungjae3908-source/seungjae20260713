@@ -48,16 +48,16 @@ test('adaptive weights use bounded EWMA and reject failed telemetry', () => {
   assert.throws(() => adaptWeights(base, failed, ['a.spec.ts', 'b.spec.ts', 'c.spec.ts'], 0.5), /FAILED_BROWSER_TELEMETRY_NOT_CREDITABLE/u);
 });
 
-test('workflow consumes adaptive weights only from successful main push runs', async () => {
+test('workflow consumes adaptive weights only from successful Application CI dispatch runs', async () => {
   const workflow = await readFile('.github/workflows/futures-public-network-smoke.yml', 'utf8');
   assert.match(workflow, /^  browser-ui-weights:/mu);
-  assert.match(workflow, /branch:\s*'main'/u);
-  assert.match(workflow, /event:\s*'push'/u);
+  assert.doesNotMatch(workflow, /branch:\s*'main'/u);
+  assert.match(workflow, /event:\s*'workflow_dispatch'/u);
   assert.match(workflow, /status:\s*'success'/u);
   assert.match(workflow, /browser-runtime-weights-next-/u);
-  assert.match(workflow, /No prior successful main adaptive Browser weights/u);
+  assert.match(workflow, /No prior successful Application CI adaptive Browser weights/u);
   assert.match(workflow, /REPOSITORY_BASELINE/u);
-  assert.match(workflow, /ADAPTIVE_MAIN_ARTIFACT/u);
+  assert.match(workflow, /ADAPTIVE_PREMERGE_ARTIFACT/u);
 });
 
 test('adaptive telemetry is credited only after all Browser shards succeed', async () => {
