@@ -5,6 +5,9 @@ import { pathToFileURL } from 'node:url';
 import {
   createPumpReversalProspectiveRuntimeDependencies,
 } from '../src/services/pump-reversal-prospective-runtime-dependencies.service';
+import type {
+  SupplementalExecutionCostEvidence,
+} from '../src/services/scanner-profit-cost-evidence-adapter.service';
 
 // @ts-ignore -- canonical Prediction Lab JS is exact-head contract tested.
 import { createPumpProspectivePaperRuntimeV1 as createRuntimeDefault } from '../../market-prediction-lab/src/crypto-pump-reversal-prospective-runtime-v1.js';
@@ -161,7 +164,9 @@ export async function runPumpReversalProspectiveOnce(input: Readonly<{
   const runtimeDependencies = runtimeDependenciesFactory({
     researchCodeSha: policy.candidate.researchCodeSha,
     paperStateSnapshotForRecord: async () => readJson(paperStateSnapshotPath),
-    supplementalCostEvidenceForRecord: async () => readJson(supplementalCostEvidencePath),
+    supplementalCostEvidenceForRecord: async () => (
+      await readJson(supplementalCostEvidencePath)
+    ) as SupplementalExecutionCostEvidence,
     now,
   });
   if (runtimeDependencies?.executionAuthority !== 'NONE'
