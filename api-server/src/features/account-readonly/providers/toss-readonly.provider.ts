@@ -234,7 +234,8 @@ export class TossReadonlyProvider {
       headers['X-Tossinvest-Account'] = selected;
     }
     const response = await this.transport({ method: 'GET', path, headers, body: null, query, signal });
-    if (response.status === 401 || response.status === 403) throw new AccountReadonlyError('AUTH_FAILED');
+    if (response.status === 401) throw new AccountReadonlyError('TOSS_AUTH_FAILED');
+    if (response.status === 403) throw new AccountReadonlyError('TOSS_IP_NOT_ALLOWED');
     if (response.status === 429) {
       const retryAfter = nullableNumber(response.headers?.['retry-after']);
       throw new AccountReadonlyError('RATE_LIMITED', true, retryAfter === null ? null : retryAfter * 1000);
