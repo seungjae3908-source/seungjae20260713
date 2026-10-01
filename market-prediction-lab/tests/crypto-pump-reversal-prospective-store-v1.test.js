@@ -61,7 +61,9 @@ test("scheduled invocation persists one minute-cycle exactly once and replay is 
           summary: {
             records: state.records.length,
             openPositions: 0,
-            exitTriggered: 0,
+            exitTriggered: 1,
+            fullCostSettled: 1,
+            netEconomicOutcomesAvailable: 1,
           },
         };
       },
@@ -96,7 +98,10 @@ test("scheduled invocation persists one minute-cycle exactly once and replay is 
     );
     const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
     assert.equal(receipt.profitabilityProven, false);
-    assert.equal(receipt.fullCostSettled, 0);
+    assert.equal(receipt.fullCostSettled, 1);
+    assert.equal(receipt.netEconomicOutcomesAvailable, 1);
+    assert.equal(first.receipt.fullCostSettled, 1);
+    assert.equal(first.receipt.netEconomicOutcomesAvailable, 1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
