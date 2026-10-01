@@ -11,15 +11,15 @@ permissions:
   statuses: read
 
 concurrency:
-  group: staging-postgres-auth-gate-${{ github.event.issue.number == 23 && (startsWith(github.event.comment.body, '/run-staging-auth ') || startsWith(github.event.comment.body, '/run-staging-auth-only ')) && 'command' || github.event.comment.id }}
+  group: staging-postgres-auth-gate-${{ github.event.issue.number == 1555 && (startsWith(github.event.comment.body, '/run-staging-auth ') || startsWith(github.event.comment.body, '/run-staging-auth-only ')) && 'command' || github.event.comment.id }}
   cancel-in-progress: false
 
 jobs:
   authenticate-before-deploy:
     name: Read-only PostgreSQL authentication before staging deployment
     if: >-
-      github.event.issue.number == 23 &&
-      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
       (startsWith(github.event.comment.body, '/run-staging-auth ') ||
       startsWith(github.event.comment.body, '/run-staging-auth-only '))
     runs-on: ubuntu-latest
@@ -163,7 +163,7 @@ jobs:
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: 23,
+                issue_number: 1555,
                 body: [
                   authOnly
                     ? 'Paper-only PostgreSQL authentication gate failed safely without Staging dispatch.'
@@ -195,7 +195,7 @@ jobs:
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: 23,
+                issue_number: 1555,
                 body: [
                   'Paper-only PostgreSQL authentication succeeded without Staging dispatch.',
                   '',
@@ -246,7 +246,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
               body: [
                 'Staging PostgreSQL authentication succeeded before deployment.',
                 '',
