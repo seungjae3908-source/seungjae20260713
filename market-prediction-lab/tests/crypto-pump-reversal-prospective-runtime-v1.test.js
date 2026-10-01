@@ -165,3 +165,53 @@ test("public source failure is fail-closed and never mutates financial state", a
   assert.equal(result.financialMutationCount, 0);
   assert.equal(result.realOrderCount, 0);
 });
+
+
+test("same closed-hour bucket skips the expensive universe scan but continues 1m position monitoring", async () => {
+  const firstNow = ELIGIBLE + HOUR + 2 * MINUTE + 10_000;
+  const first = await runPumpProspectivePaperCycleV1({
+    state: createPumpProspectiveStateV1({ policy: policy(), createdAtMs: ELIGIBLE }),
+    nowMs: firstNow,
+    collectSignals: async () => sourceResult(),
+    collectNextBarOpen: async ({ expectedOpenAtMs }) => ({
+      status: "READY",
+      sourceCandleTimestampMs: expectedOpenAtMs,
+      entryReferencePrice: 100,
+    }),
+    collectMinutePath: async ({ startTime }) => ({
+      status: "READY",
+      candles: [{
+        timestampMs: startTime,
+        open: 100, high: 101, low: 99, close: 100, quoteVolume: 1000,
+      }, {
+        timestampMs: startTime + MINUTE,
+        open: 100, high: 101, low: 99, close: 100, quoteVolume: 1000,
+      }],
+    }),
+  });
+
+  let scans = 0;
+  const second = await runPumpProspectivePaperCycleV1({
+    state: first.state,
+    nowMs: firstNow + MINUTE,
+    collectSignals: async () => {
+      scans += 1;
+      return sourceResult();
+    },
+    collectNextBarOpen: async () => {
+      throw new Error("SHOULD_NOT_CALL_ENTRY");
+    },
+    collectMinutePath: async ({ startTime }) => ({
+      status: "READY",
+      candles: [{
+        timestampMs: startTime,
+        open: 100, high: 101, low: 99, close: 100, quoteVolume: 1000,
+      }],
+    }),
+  });
+
+  assert.equal(scans, 0);
+  assert.equal(second.signalScanRequired, false);
+  assert.equal(second.sourceStatus, "SKIPPED_ALREADY_SCANNED");
+  assert.equal(second.state.records[0].pathMinuteCount, 3);
+});
