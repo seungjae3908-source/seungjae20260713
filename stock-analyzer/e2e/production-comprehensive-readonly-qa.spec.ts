@@ -622,8 +622,24 @@ async function auditRoute(page: Page, route: string, testInfo: TestInfo): Promis
 }
 
 async function ensureSearchPage(page: Page) {
-  await page.goto('/stocks', { waitUntil: 'domcontentloaded', timeout: 15_000 });
-  await expect(page.getByTestId('unified-asset-search-page')).toBeVisible({ timeout: 10_000 });
+  const searchPage = page.getByTestId('unified-asset-search-page');
+  let lastNavigationError: unknown = null;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await page.goto('/stocks', { waitUntil: 'domcontentloaded', timeout: 15_000 });
+    } catch (error) {
+      lastNavigationError = error;
+    }
+
+    if (await searchPage.isVisible({ timeout: 5_000 }).catch(() => false)) return;
+    if (attempt === 0) await page.waitForTimeout(500);
+  }
+
+  if (lastNavigationError) {
+    console.warn('[production-comprehensive] /stocks navigation remained slow after one bounded retry');
+  }
+  await expect(searchPage).toBeVisible({ timeout: 10_000 });
 }
 
 async function searchMatrix(
