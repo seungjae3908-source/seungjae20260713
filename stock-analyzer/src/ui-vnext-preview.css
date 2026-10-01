@@ -310,3 +310,33 @@ html[data-ui-vnext-preview='true'] main:has([aria-label='설정']) {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
 }
+
+
+/* Preview command bar */
+html[data-ui-vnext-preview='true'] [data-testid='professional-command-bar'] {
+  min-height: 64px !important;
+  height: 64px !important;
+  padding-inline: clamp(18px, 2.2vw, 34px) !important;
+  gap: 14px !important;
+  border-bottom-color: hsl(var(--card-border) / 0.92) !important;
+  background:
+    linear-gradient(180deg, rgb(16 31 52 / 0.98), rgb(12 24 41 / 0.96)) !important;
+  box-shadow: 0 12px 30px rgb(0 0 0 / 0.14) !important;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='professional-command-bar'] > button:first-child {
+  border: 1px solid hsl(var(--card-border) / 0.8) !important;
+  background: hsl(var(--card) / 0.72) !important;
+  padding-inline: 10px !important;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='professional-command-bar'] [data-testid='professional-network-status'],
+html[data-ui-vnext-preview='true'] [data-testid='professional-command-bar'] [data-testid='professional-query-status'] {
+  background: hsl(var(--card) / 0.68) !important;
+  border-color: hsl(var(--card-border) / 0.9) !important;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='professional-command-bar'] button[aria-label='계정 열기'] {
+  background: hsl(var(--card) / 0.72) !important;
+  border-color: hsl(var(--card-border) / 0.9) !important;
+}
