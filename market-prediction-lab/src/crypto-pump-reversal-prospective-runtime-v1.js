@@ -8,6 +8,7 @@ import {
   admitPumpProspectiveSignalToStateV1,
   advancePumpProspectiveRecordV1,
   markPumpProspectiveEntryMissedV1,
+  markPumpProspectiveSignalScanCompletedV1,
   openPumpProspectiveRecordV1,
   pumpProspectiveStateSummaryV1,
   validatePumpProspectiveStateV1,
@@ -17,6 +18,7 @@ export const PUMP_PROSPECTIVE_RUNTIME_VERSION =
   "crypto-pump-reversal-prospective-runtime-v1";
 
 const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
 
 function deepFreeze(value) {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
@@ -71,47 +73,56 @@ export async function runPumpProspectivePaperCycleV1({
   const events = [];
   const blockers = [];
 
-  let source;
-  try {
-    source = await collectSignals({
-      nowMs,
-      lastEntryAtBySymbol: nextState.lastEntryAtBySymbol,
-    });
-  } catch (error) {
-    blockers.push(String(error?.code ?? error?.message ?? "PUMP_SIGNAL_SOURCE_FAILED"));
-    source = null;
-  }
+  const scanBarCloseMs = Math.floor(nowMs / HOUR_MS) * HOUR_MS;
+  const scanRequired = nextState.lastSignalScanBarCloseMs !== scanBarCloseMs;
+  let source = null;
 
-  if (source && source.status === "READY") {
-    for (const item of source.signals ?? []) {
-      try {
-        const admitted = admitPumpProspectiveSignalToStateV1(
-          nextState,
-          item.signal,
-          nowMs,
-        );
-        nextState = admitted.state;
-        events.push(Object.freeze({
-          stage: "SIGNAL",
-          symbol: item.signal.symbol,
-          signalId: item.signal.signalId,
-          status: admitted.status,
-          recordId: admitted.record?.recordId ?? null,
-        }));
-      } catch (error) {
-        const code = String(error?.code ?? error?.message ?? "PUMP_SIGNAL_ADMISSION_FAILED");
-        blockers.push(code);
-        events.push(Object.freeze({
-          stage: "SIGNAL",
-          symbol: item?.signal?.symbol ?? null,
-          signalId: item?.signal?.signalId ?? null,
-          status: "BLOCKED",
-          blocker: code,
-        }));
-      }
+  if (scanRequired) {
+    try {
+      source = await collectSignals({
+        nowMs,
+        lastEntryAtBySymbol: nextState.lastEntryAtBySymbol,
+      });
+    } catch (error) {
+      blockers.push(String(error?.code ?? error?.message ?? "PUMP_SIGNAL_SOURCE_FAILED"));
+      source = null;
     }
-  } else if (source) {
-    blockers.push(source.blocker ?? "PUMP_SIGNAL_SOURCE_BLOCKED");
+
+    if (source && source.status === "READY") {
+      for (const item of source.signals ?? []) {
+        try {
+          const admitted = admitPumpProspectiveSignalToStateV1(
+            nextState,
+            item.signal,
+            nowMs,
+          );
+          nextState = admitted.state;
+          events.push(Object.freeze({
+            stage: "SIGNAL",
+            symbol: item.signal.symbol,
+            signalId: item.signal.signalId,
+            status: admitted.status,
+            recordId: admitted.record?.recordId ?? null,
+          }));
+        } catch (error) {
+          const code = String(error?.code ?? error?.message ?? "PUMP_SIGNAL_ADMISSION_FAILED");
+          blockers.push(code);
+          events.push(Object.freeze({
+            stage: "SIGNAL",
+            symbol: item?.signal?.symbol ?? null,
+            signalId: item?.signal?.signalId ?? null,
+            status: "BLOCKED",
+            blocker: code,
+          }));
+        }
+      }
+      nextState = markPumpProspectiveSignalScanCompletedV1(nextState, {
+        scanBarCloseMs,
+        observedAtMs: nowMs,
+      }).state;
+    } else if (source) {
+      blockers.push(source.blocker ?? "PUMP_SIGNAL_SOURCE_BLOCKED");
+    }
   }
 
   // Entry is attempted only while the exact next 1H bar is still current.
@@ -239,11 +250,13 @@ export async function runPumpProspectivePaperCycleV1({
   const uniqueBlockers = unique(blockers);
   return deepFreeze({
     schemaVersion: PUMP_PROSPECTIVE_RUNTIME_VERSION,
-    status: source == null || (source && source.status !== "READY" && events.length === 0)
+    status: scanRequired && (source == null || (source.status !== "READY" && events.length === 0))
       ? "BLOCKED_DATA"
       : "COMPLETED",
     observedAtMs: nowMs,
-    sourceStatus: source?.status ?? "FAILED",
+    signalScanRequired: scanRequired,
+    scanBarCloseMs,
+    sourceStatus: scanRequired ? (source?.status ?? "FAILED") : "SKIPPED_ALREADY_SCANNED",
     sourceDecision: source?.decision ?? null,
     sourceSignalCount: Number(source?.signalCount ?? 0),
     events,
