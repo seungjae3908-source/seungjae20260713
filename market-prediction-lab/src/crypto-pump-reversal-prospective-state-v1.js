@@ -172,6 +172,7 @@ function validateFullCostSettlement(record, policy) {
     || settlement.symbol !== record.observation.symbol
     || settlement.direction !== "SHORT"
     || settlement.exitTriggerId !== record.exitTrigger?.exitTriggerId
+    || !nonEmpty(settlement.settlementId)
     || settlement.riskSizingEvidenceDigest !== record.riskSizing?.evidenceDigest
     || !Number.isSafeInteger(settlement.settledAtMs)
     || settlement.settledAtMs < record.exitTrigger?.triggerTimestampMs
@@ -209,7 +210,8 @@ function validateFullCostSettlement(record, policy) {
       throw new Error(`PUMP_PROSPECTIVE_FULL_COST_COMPONENT_INVALID:${name}`);
     }
   }
-  if (Object.keys(components).length < required.length
+  if (Object.keys(components).length !== required.length
+    || settlement.fullCostEvidence.schemaVersion !== "authoritative-paper-execution-cost-sources-v1"
     || settlement.fullCostEvidence.fullCostReady !== true
     || settlement.fullCostEvidence.unknownIsZero !== false
     || settlement.fullCostEvidence.unavailableCostConvertedToZero !== false) {
