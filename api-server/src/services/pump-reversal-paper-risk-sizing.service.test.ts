@@ -152,8 +152,8 @@ test('Funding is conservatively accumulated over the 72h risk horizon, not used 
     supplementalCostEvidence: supplemental(),
     nowMs: NOW,
   });
-  assert.equal(result.conservativeFundingRiskRate, 0.0009);
-  assert.equal(result.riskInput?.estimatedFundingRate, 0.0009);
+  assert.ok(Math.abs((result.conservativeFundingRiskRate ?? 0) - 0.0009) < 1e-12);
+  assert.ok(Math.abs((result.riskInput?.estimatedFundingRate ?? 0) - 0.0009) < 1e-12);
   assert.equal(result.fundingDirectionalFilterUsed, false);
 });
 
