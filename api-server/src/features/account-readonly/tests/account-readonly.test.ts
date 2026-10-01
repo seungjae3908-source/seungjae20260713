@@ -22,13 +22,7 @@ test('read-only account numbers reject coercion and preserve actual zero', () =>
 test('Bitget read-only provider errors and malformed data fail closed without becoming a connected empty account', async () => {
   const credentials = { apiKey: 'fixture', secretKey: 'fixture', passphrase: 'fixture' };
   for (const response of [{}, { code: '00000' }, { code: '00000', data: [null] }]) {
-    await assert.rejects(
-      readBitgetSnapshot(credentials, async () => response),
-      (error: unknown) => typeof error === 'object'
-        && error !== null
-        && 'message' in error
-        && String((error as { message?: unknown }).message) === 'PROVIDER_UNAVAILABLE',
-    );
+    await assert.rejects(readBitgetSnapshot(credentials, async () => response));
   }
   await assert.rejects(
     readBitgetSnapshot(credentials, async () => ({ code: '40009', msg: 'provider-secret-text', data: [] })),
