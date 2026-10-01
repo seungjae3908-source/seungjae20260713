@@ -86,13 +86,35 @@ function quantityPrecision(step: number): number | null {
   const digits = text.length - dot - 1;
   return Number.isInteger(digits) && digits >= 0 && digits <= 12 ? digits : null;
 }
-function tierRows(payload: unknown): readonly unknown[] {
+function tierRows(payload: unknown): readonly Readonly<{
+  startUnit: number;
+  keepMarginRate: number;
+}>[] {
   const envelope = record(payload);
   if (!envelope || envelope.code !== '00000'
     || !Array.isArray(envelope.data) || envelope.data.length === 0) {
     throw new Error('PUMP_POSITION_TIER_EVIDENCE_REQUIRED');
   }
-  return Object.freeze([...envelope.data]);
+  const rows = envelope.data.map((raw) => {
+    const row = record(raw);
+    const startUnit = Number(row?.startUnit);
+    const keepMarginRate = Number(row?.keepMarginRate);
+    if (!Number.isFinite(startUnit) || startUnit < 0
+      || !Number.isFinite(keepMarginRate) || keepMarginRate < 0 || keepMarginRate >= 1) {
+      throw new Error('PUMP_POSITION_TIER_ROW_INVALID');
+    }
+    return Object.freeze({ startUnit, keepMarginRate });
+  }).sort((left, right) => left.startUnit - right.startUnit);
+  if (rows[0]?.startUnit !== 0) throw new Error('PUMP_POSITION_TIER_FIRST_FLOOR_INVALID');
+  for (let index = 1; index < rows.length; index += 1) {
+    if (rows[index].startUnit <= rows[index - 1].startUnit) {
+      throw new Error('PUMP_POSITION_TIER_START_NOT_STRICT');
+    }
+    if (rows[index].keepMarginRate < rows[index - 1].keepMarginRate) {
+      throw new Error('PUMP_POSITION_TIER_MMR_NOT_MONOTONIC');
+    }
+  }
+  return Object.freeze(rows);
 }
 function depthLevels(value: unknown): readonly (readonly [number | string, number | string])[] {
   if (!Array.isArray(value)) return Object.freeze([]);
@@ -217,7 +239,7 @@ export function createPumpReversalPublicRiskSourceWiring(
         quantityPrecision: precision,
         riskPolicy: riskPolicy(evidence),
         observedAtMs: evidence.observedAtMs,
-        nowMs: context.observedAtMs,
+        nowMs: now(),
         maximumAgeMs: MAXIMUM_AGE_MS,
       }).contractRules;
     },
@@ -267,7 +289,7 @@ export function createPumpReversalPublicRiskSourceWiring(
 
   return Object.freeze({
     sources,
-    createOwner: () => createPumpReversalProspectiveRiskOwner({ sources }),
+    createOwner: () => createPumpReversalProspectiveRiskOwner({ sources, now }),
     executionAuthority: 'NONE',
     liveTrading: false,
     privateTradingApiAllowed: false,
