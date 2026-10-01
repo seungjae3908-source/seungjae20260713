@@ -309,10 +309,10 @@ jobs:
                 'BITGET_TRANSPORT_CONNECT',
                 'BITGET_TRANSPORT_TIMEOUT',
                 'BITGET_TRANSPORT_NETWORK',
-  'BITGET_RESPONSE_SHAPE_INVALID',
-  'BITGET_RESPONSE_IDENTITY_INVALID',
-  'BITGET_RESPONSE_VALUE_INVALID',
-  'BITGET_RESPONSE_DUPLICATE_IDENTITY',
+                'BITGET_RESPONSE_SHAPE_INVALID',
+                'BITGET_RESPONSE_IDENTITY_INVALID',
+                'BITGET_RESPONSE_VALUE_INVALID',
+                'BITGET_RESPONSE_DUPLICATE_IDENTITY',
               ].includes(diagnostic.sanitizedClassification)
               || typeof diagnostic.fallbackAttempted !== 'boolean'
               || typeof diagnostic.timestampRejected !== 'boolean'
