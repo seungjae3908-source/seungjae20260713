@@ -1,4 +1,5 @@
 name: UI vNext Functional Preview
+# Functional preview only; production root replacement is forbidden.
 
 on:
   push:
