@@ -1,3 +1,4 @@
+import './pump-reversal-paper-risk-sizing.service.test';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import './crypto-futures-derivatives-evidence.service.test';
