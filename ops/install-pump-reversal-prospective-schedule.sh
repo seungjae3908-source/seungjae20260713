@@ -181,11 +181,16 @@ MATCH_COUNT="$(crontab -l | grep -Fxc "$CRON_LINE" || true)"
 [[ "$MATCH_COUNT" == 1 ]] || fail "exactly one Pump Paper cron entry is required" 10
 
 ACTIVATION_AT_MS="$("$NODE_BIN" -e 'process.stdout.write(String(Date.now()))')"
-"$NODE_BIN" --input-type=module - "$STATE_ROOT/activation.json" "$TARGET_SHA" "$DEPLOYED_SHA" "$ACTIVATION_AT_MS" "$POLICY_FROZEN_AT_MS" "$ELIGIBLE_AFTER_MS" "$CANDIDATE_ID" "$POLICY_DIGEST" "$SOURCE_BUNDLE_DIGEST" "$BACKUP_PATH" <<'NODE'
+PAPER_STATE_AVAILABLE=false
+SUPPLEMENTAL_COST_AVAILABLE=false
+[[ -r "$PAPER_STATE_SNAPSHOT_PATH" ]] && PAPER_STATE_AVAILABLE=true
+[[ -r "$SUPPLEMENTAL_COST_EVIDENCE_PATH" ]] && SUPPLEMENTAL_COST_AVAILABLE=true
+"$NODE_BIN" --input-type=module - "$STATE_ROOT/activation.json" "$TARGET_SHA" "$DEPLOYED_SHA" "$ACTIVATION_AT_MS" "$POLICY_FROZEN_AT_MS" "$ELIGIBLE_AFTER_MS" "$CANDIDATE_ID" "$POLICY_DIGEST" "$SOURCE_BUNDLE_DIGEST" "$BACKUP_PATH" "$PAPER_STATE_AVAILABLE" "$SUPPLEMENTAL_COST_AVAILABLE" <<'NODE'
 import fs from 'node:fs';
 const [
   path, targetSha, productionAppSha, activationAtMsRaw, policyFrozenAtMsRaw,
   eligibleAfterMsRaw, candidateId, policyDigest, runtimeDigest, backupPath,
+  paperStateAvailableRaw, supplementalCostAvailableRaw,
 ] = process.argv.slice(2);
 const value = {
   schemaVersion: 'pump-reversal-prospective-schedule-activation-v1',
@@ -210,6 +215,9 @@ const value = {
   positionMonitoringCadence: 'INCREMENTAL_CLOSED_1M',
   rawProspectiveCollectionActive: true,
   rawProspectiveCreditBeforeEligibleAfterMs: 0,
+  paperStateSnapshotAvailableAtActivation: paperStateAvailableRaw === 'true',
+  supplementalCostEvidenceAvailableAtActivation: supplementalCostAvailableRaw === 'true',
+  economicSizingReadyAtActivation: paperStateAvailableRaw === 'true' && supplementalCostAvailableRaw === 'true',
   economicSizingRequiresAuthoritativeEvidence: true,
   fullCostRequiresEightComponents: true,
   missingEconomicEvidenceMayBecomeZero: false,
