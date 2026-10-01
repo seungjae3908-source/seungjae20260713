@@ -178,6 +178,7 @@ export function buildPumpProspectiveExecutionSampleV1({
     paperSampleId,
     recordId: record.recordId,
     sampleClass: "GENUINE_FUTURE_PROSPECTIVE_EXECUTION_ONLY",
+    status: "OPEN",
     identity,
     profitGate: Object.freeze({
       decision: "NOT_PROFIT_ADMITTED",
