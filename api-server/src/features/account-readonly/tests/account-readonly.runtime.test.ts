@@ -475,6 +475,98 @@ test('Bitget application error codes map to bounded account-access causes withou
   }
 });
 
+test('Bitget pre-HTTP transport failures retain bounded sanitized diagnostics without credential leakage', async () => {
+  for (const fixture of [
+    { causeCode: 'ENOTFOUND', expectedCode: 'PROVIDER_UNAVAILABLE', classification: 'BITGET_TRANSPORT_DNS' },
+    { causeCode: 'ERR_TLS_CERT_ALTNAME_INVALID', expectedCode: 'PROVIDER_UNAVAILABLE', classification: 'BITGET_TRANSPORT_TLS' },
+    { causeCode: 'ECONNRESET', expectedCode: 'PROVIDER_UNAVAILABLE', classification: 'BITGET_TRANSPORT_CONNECT' },
+    { causeCode: 'ETIMEDOUT', expectedCode: 'PROVIDER_TIMEOUT', classification: 'BITGET_TRANSPORT_TIMEOUT' },
+    { causeCode: 'UNKNOWN_NETWORK_FAILURE', expectedCode: 'PROVIDER_UNAVAILABLE', classification: 'BITGET_TRANSPORT_NETWORK' },
+  ] as const) {
+    const readers = createVaultBackedAccountReaders({
+      repositoryFactory: () => repositoryFor('bitget'),
+      decryptCredentials: () => ({
+        apiKey: 'BITGET_KEY_TRANSPORT_TEST_ONLY',
+        secretKey: 'BITGET_SECRET_TRANSPORT_TEST_ONLY',
+        passphrase: 'BITGET_PASSPHRASE_TRANSPORT_TEST_ONLY',
+      }),
+      fetchImpl: async () => {
+        const cause = Object.assign(new Error('UNTRUSTED_TRANSPORT_DETAIL'), { code: fixture.causeCode });
+        throw Object.assign(new TypeError('fetch failed'), { cause });
+      },
+    });
+
+    await assert.rejects(
+      () => readers.bitget!(SCOPE),
+      (error: unknown) => {
+        if (!(error instanceof AccountReadonlyError)) return false;
+        const diagnostic = error.bitgetDiagnostic;
+        if (!diagnostic) return false;
+        const serialized = JSON.stringify(diagnostic);
+        return error.code === fixture.expectedCode
+          && diagnostic.httpStatus === null
+          && diagnostic.applicationCode === null
+          && diagnostic.sanitizedClassification === fixture.classification
+          && diagnostic.requestPath === '/api/v3/account/settings'
+          && diagnostic.endpointFamily === 'UTA_V3'
+          && diagnostic.probe === 'ACCOUNT_SETTINGS'
+          && diagnostic.credentialPresence.key === true
+          && diagnostic.credentialPresence.secret === true
+          && diagnostic.credentialPresence.passphrase === true
+          && !serialized.includes('BITGET_KEY_TRANSPORT_TEST_ONLY')
+          && !serialized.includes('BITGET_SECRET_TRANSPORT_TEST_ONLY')
+          && !serialized.includes('BITGET_PASSPHRASE_TRANSPORT_TEST_ONLY')
+          && !serialized.includes('UNTRUSTED_TRANSPORT_DETAIL');
+      },
+    );
+  }
+});
+
+test('Bitget provider deadline preserves sanitized timeout diagnostics through the outer deadline guard', async () => {
+  const readers = createVaultBackedAccountReaders({
+    repositoryFactory: () => repositoryFor('bitget'),
+    decryptCredentials: () => ({
+      apiKey: 'BITGET_KEY_DEADLINE_TEST_ONLY',
+      secretKey: 'BITGET_SECRET_DEADLINE_TEST_ONLY',
+      passphrase: 'BITGET_PASSPHRASE_DEADLINE_TEST_ONLY',
+    }),
+    providerTimeoutMs: 10,
+    fetchImpl: async (_input, init) => new Promise<Response>((_resolve, reject) => {
+      const rejectTimeout = () => {
+        const cause = Object.assign(new Error('UNTRUSTED_DEADLINE_DETAIL'), { code: 'UND_ERR_CONNECT_TIMEOUT' });
+        reject(Object.assign(new TypeError('fetch failed'), { cause }));
+      };
+      if (init?.signal?.aborted) {
+        rejectTimeout();
+        return;
+      }
+      init?.signal?.addEventListener('abort', rejectTimeout, { once: true });
+    }),
+  });
+
+  await assert.rejects(
+    () => readers.bitget!(SCOPE),
+    (error: unknown) => {
+      if (!(error instanceof AccountReadonlyError)) return false;
+      const diagnostic = error.bitgetDiagnostic;
+      if (!diagnostic) return false;
+      const serialized = JSON.stringify(diagnostic);
+      return error.code === 'PROVIDER_TIMEOUT'
+        && error.retryable === true
+        && diagnostic.httpStatus === null
+        && diagnostic.applicationCode === null
+        && diagnostic.sanitizedClassification === 'BITGET_TRANSPORT_TIMEOUT'
+        && diagnostic.requestPath === '/api/v3/account/settings'
+        && diagnostic.endpointFamily === 'UTA_V3'
+        && diagnostic.probe === 'ACCOUNT_SETTINGS'
+        && !serialized.includes('BITGET_KEY_DEADLINE_TEST_ONLY')
+        && !serialized.includes('BITGET_SECRET_DEADLINE_TEST_ONLY')
+        && !serialized.includes('BITGET_PASSPHRASE_DEADLINE_TEST_ONLY')
+        && !serialized.includes('UNTRUSTED_DEADLINE_DETAIL');
+    },
+  );
+});
+
 test('credential, IP or permission loss evicts same-user last-good account facts instead of serving stale balances', async () => {
   const connected = {
     provider: 'upbit' as const,

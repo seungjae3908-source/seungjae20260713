@@ -23,7 +23,7 @@ export type BitgetReadonlyDiagnostic = {
   requestPath: string;
   endpointFamily: BitgetReadonlyEndpointFamily;
   probe: BitgetReadonlyProbe;
-  httpStatus: number;
+  httpStatus: number | null;
   applicationCode: string | null;
   sanitizedClassification: string;
   fallbackAttempted: boolean;
