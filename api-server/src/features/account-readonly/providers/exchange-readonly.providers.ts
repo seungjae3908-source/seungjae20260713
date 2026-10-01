@@ -287,8 +287,23 @@ async function readBitgetClassicSnapshot(
           return { orders: null as CanonicalReadonlyOrder[] | null, error: partialOpenOrdersError('BITGET', bitgetApplicationFailure(code)) };
         }
         const payload = envelope.data;
-        if (!record(payload)) throw new Error('BITGET_OPEN_ORDERS_RESPONSE_INVALID');
-        const orders = rows(payload.entrustedList, 'BITGET_OPEN_ORDERS_RESPONSE_INVALID').map((row) => {
+        let pendingRows: Row[];
+        if (payload == null || (Array.isArray(payload) && payload.length === 0)) {
+          pendingRows = [];
+        } else {
+          if (!record(payload)) throw new Error('BITGET_OPEN_ORDERS_RESPONSE_INVALID');
+          const entrustedList = payload.entrustedList;
+          if (entrustedList == null) {
+            const payloadKeys = Object.keys(payload);
+            if (!payloadKeys.every((key) => key === 'entrustedList' || key === 'endId')) {
+              throw new Error('BITGET_OPEN_ORDERS_RESPONSE_INVALID');
+            }
+            pendingRows = [];
+          } else {
+            pendingRows = rows(entrustedList, 'BITGET_OPEN_ORDERS_RESPONSE_INVALID');
+          }
+        }
+        const orders = pendingRows.map((row) => {
           const quantity = optionalNonNegative(row.size, 'BITGET_OPEN_ORDER_QUANTITY_INVALID');
           const filled = optionalNonNegative(row.baseVolume, 'BITGET_OPEN_ORDER_FILLED_INVALID');
           return {
