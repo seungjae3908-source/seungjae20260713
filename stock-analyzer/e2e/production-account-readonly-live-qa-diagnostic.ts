@@ -4,7 +4,7 @@ export type SanitizedBitgetReadonlyDiagnostic = {
   requestPath: string;
   endpointFamily: 'UTA_V3' | 'CLASSIC';
   probe: 'ACCOUNT_SETTINGS' | 'ACCOUNT_INFO' | 'ASSETS' | 'POSITIONS' | 'OPEN_ORDERS';
-  httpStatus: number;
+  httpStatus: number | null;
   applicationCode: string | null;
   sanitizedClassification: string;
   fallbackAttempted: boolean;
@@ -42,6 +42,11 @@ const classifications = new Set([
   'BITGET_REQUEST_REJECTED',
   'PROVIDER_UNAVAILABLE',
   'RATE_LIMITED',
+  'BITGET_TRANSPORT_DNS',
+  'BITGET_TRANSPORT_TLS',
+  'BITGET_TRANSPORT_CONNECT',
+  'BITGET_TRANSPORT_TIMEOUT',
+  'BITGET_TRANSPORT_NETWORK',
 ]);
 
 function record(value: unknown): value is RecordValue {
@@ -76,9 +81,8 @@ export function parseBitgetReadonlyDiagnosticHeader(
     || !endpointFamilies.has(raw.endpointFamily)
     || typeof raw.probe !== 'string'
     || !probes.has(raw.probe)
-    || !Number.isInteger(raw.httpStatus)
-    || raw.httpStatus < 100
-    || raw.httpStatus > 599
+    || (raw.httpStatus !== null
+      && (!Number.isInteger(raw.httpStatus) || Number(raw.httpStatus) < 100 || Number(raw.httpStatus) > 599))
     || (raw.applicationCode !== null
       && (typeof raw.applicationCode !== 'string' || !/^\d+$/.test(raw.applicationCode)))
     || typeof raw.sanitizedClassification !== 'string'
