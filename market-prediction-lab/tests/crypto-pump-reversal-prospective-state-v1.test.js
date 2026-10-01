@@ -5,6 +5,7 @@ import {
   admitPumpProspectiveSignalToStateV1,
   advancePumpProspectiveRecordV1,
   attachPumpProspectiveRiskSizingV1,
+  attachPumpProspectiveFullCostSettlementV1,
   createPumpProspectiveStateV1,
   markPumpProspectiveEntryMissedV1,
   markPumpProspectiveRiskSizingExpiredV1,
@@ -360,6 +361,87 @@ function readySizing(record, calculatedAtMs) {
   });
 }
 
+
+function fullCostSettlement(record, settledAtMs) {
+  const names = [
+    "commission", "tax", "spread", "slippage",
+    "funding", "latency", "liquidityImpact", "partialFillImpact",
+  ];
+  const components = Object.fromEntries(names.map((name) => [name, {
+    status: "PRESENT",
+    valuePercent: name === "tax" ? 0 : 0.01,
+    quality: name === "tax" ? "NOT_APPLICABLE" : name === "commission" ? "DOCUMENTED" : "OBSERVED",
+    source: `test-${name}`,
+    provenance: "test-full-cost",
+    countsAsExecutionCost: true,
+    unavailableIsZero: false,
+  }]));
+  return Object.freeze({
+    schemaVersion: "crypto-pump-reversal-full-cost-settlement-v1",
+    status: "SETTLED",
+    settlementId: "settlement-" + record.recordId,
+    recordId: record.recordId,
+    signalId: record.signal.signalId,
+    candidateId: record.observation.candidateId,
+    symbol: record.observation.symbol,
+    direction: "SHORT",
+    exitTriggerId: record.exitTrigger.exitTriggerId,
+    riskSizingEvidenceDigest: record.riskSizing.evidenceDigest,
+    settledAtMs,
+    grossPnl: -1,
+    grossReturnPercent: record.grossReturnPercent,
+    netPnl: -1.25,
+    netReturnPercent: -1.25,
+    costPolicyVersion: "pump-cost-v1",
+    fullCostEvidence: Object.freeze({
+      schemaVersion: "authoritative-paper-execution-cost-sources-v1",
+      fullCostReady: true,
+      components: Object.freeze(components),
+      unknownIsZero: false,
+      unavailableCostConvertedToZero: false,
+    }),
+    economicSampleCredit: 1,
+    profitabilityClaimAllowed: false,
+    executionAuthority: "NONE",
+    liveOrderAllowed: false,
+    privateTradingApiAllowed: false,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+  });
+}
+
+function sizedExitedState() {
+  const p = policy();
+  const admitted = admitPumpProspectiveSignalToStateV1(
+    createPumpProspectiveStateV1({ policy: p, createdAtMs: ELIGIBLE }),
+    signal(),
+    ELIGIBLE + HOUR,
+  );
+  const opened = openPumpProspectiveRecordV1(admitted.state, {
+    recordId: admitted.record.recordId,
+    nextHourCandle: { timestampMs: admitted.record.signal.nextBarOpenTimestampMs, open: 100 },
+    observedAtMs: admitted.record.signal.nextBarOpenTimestampMs + 1,
+  });
+  const attachedAtMs = admitted.record.signal.nextBarOpenTimestampMs + 10_000;
+  const sized = attachPumpProspectiveRiskSizingV1(opened.state, {
+    recordId: admitted.record.recordId,
+    sizing: readySizing(opened.record, attachedAtMs - 1_000),
+    observedAtMs: attachedAtMs,
+  });
+  const exited = advancePumpProspectiveRecordV1(sized.state, {
+    recordId: admitted.record.recordId,
+    minuteCandles: [{
+      timestampMs: admitted.record.signal.nextBarOpenTimestampMs,
+      open: 100,
+      high: 130,
+      low: 99,
+      close: 125,
+    }],
+    observedAtMs: admitted.record.signal.nextBarOpenTimestampMs + MINUTE,
+  });
+  return { p, exited };
+}
+
 test("causal risk sizing attaches within 30s and becomes economic-Paper prerequisite evidence", () => {
   const p = policy();
   const admitted = admitPumpProspectiveSignalToStateV1(
@@ -445,5 +527,46 @@ test("expired risk sizing window is durable and cannot later receive sizing evid
       observedAtMs: expiredAt,
     }),
     /PUMP_PROSPECTIVE_RISK_SIZING_OPEN_RECORD_REQUIRED|PUMP_PROSPECTIVE_RISK_SIZING_CAPTURE_WINDOW_EXPIRED/,
+  );
+});
+
+
+test("eight-component Full Cost settlement is the first point where net economics may enter state", () => {
+  const { exited } = sizedExitedState();
+  assert.equal(exited.record.status, "EXIT_TRIGGERED");
+  assert.equal(exited.record.netPnl, null);
+  assert.equal(exited.record.fullCostSettlementStatus, "MISSING_CANONICAL_FULL_COST");
+
+  const settledAtMs = exited.record.exitTrigger.triggerTimestampMs + 1_000;
+  const result = attachPumpProspectiveFullCostSettlementV1(exited.state, {
+    recordId: exited.record.recordId,
+    settlement: fullCostSettlement(exited.record, settledAtMs),
+    observedAtMs: settledAtMs,
+  });
+  assert.equal(result.status, "SETTLED");
+  assert.equal(result.record.fullCostSettlementStatus, "CANONICAL_FULL_COST_SETTLED");
+  assert.equal(result.record.netPnl, -1.25);
+  assert.equal(result.record.netReturnPercent, -1.25);
+  assert.equal(result.record.economicSampleCredit, 1);
+  assert.equal(result.record.profitabilityCredit, 0);
+  assert.equal(result.record.profitabilityClaimAllowed, false);
+  const summary = pumpProspectiveStateSummaryV1(result.state);
+  assert.equal(summary.fullCostSettled, 1);
+  assert.equal(summary.netEconomicOutcomesAvailable, 1);
+  assert.equal(summary.profitabilityProven, false);
+});
+
+test("Full Cost settlement fails closed when any one of the eight components is missing", () => {
+  const { exited } = sizedExitedState();
+  const settledAtMs = exited.record.exitTrigger.triggerTimestampMs + 1_000;
+  const settlement = structuredClone(fullCostSettlement(exited.record, settledAtMs));
+  delete settlement.fullCostEvidence.components.funding;
+  assert.throws(
+    () => attachPumpProspectiveFullCostSettlementV1(exited.state, {
+      recordId: exited.record.recordId,
+      settlement,
+      observedAtMs: settledAtMs,
+    }),
+    /PUMP_PROSPECTIVE_FULL_COST_COMPONENT_INVALID:funding/,
   );
 });
