@@ -219,7 +219,8 @@ function validateFullCostSettlement(record, policy) {
   }
   if (record.netPnl !== settlement.netPnl
     || record.netReturnPercent !== settlement.netReturnPercent
-    || record.grossReturnPercent !== settlement.grossReturnPercent
+    || record.economicGrossPnl !== settlement.grossPnl
+    || record.economicGrossReturnPercent !== settlement.grossReturnPercent
     || record.fullCostSettlementId !== settlement.settlementId) {
     throw new Error("PUMP_PROSPECTIVE_FULL_COST_ECONOMICS_MISMATCH");
   }
@@ -288,6 +289,7 @@ function validateRecord(record, policy) {
 
   if (record.fullCostSettlementStatus === "MISSING_CANONICAL_FULL_COST") {
     if (record.netReturnPercent !== null || record.netPnl !== null
+      || record.economicGrossPnl !== null || record.economicGrossReturnPercent !== null
       || record.fullCostSettlementId !== null || record.fullCostSettlement != null) {
       throw new Error("PUMP_PROSPECTIVE_PRE_FULL_COST_ECONOMICS_FORBIDDEN");
     }
@@ -450,6 +452,8 @@ export function admitPumpProspectiveSignalToStateV1(state, signal, observedAtMs)
     lastMinuteObservedAtMs: null,
     pathMinuteCount: 0,
     grossReturnPercent: null,
+    economicGrossReturnPercent: null,
+    economicGrossPnl: null,
     netReturnPercent: null,
     netPnl: null,
     fullCostSettlementStatus: "MISSING_CANONICAL_FULL_COST",
@@ -755,6 +759,8 @@ export function advancePumpProspectiveRecordV1(state, {
       bar: trigger.bar,
     }),
     grossReturnPercent,
+    economicGrossReturnPercent: null,
+    economicGrossPnl: null,
     netReturnPercent: null,
     netPnl: null,
     fullCostSettlementStatus: "MISSING_CANONICAL_FULL_COST",
@@ -809,7 +815,8 @@ export function attachPumpProspectiveFullCostSettlementV1(state, {
     ...current,
     netReturnPercent: normalized?.netReturnPercent ?? null,
     netPnl: normalized?.netPnl ?? null,
-    grossReturnPercent: normalized?.grossReturnPercent ?? current.grossReturnPercent,
+    economicGrossReturnPercent: normalized?.grossReturnPercent ?? null,
+    economicGrossPnl: normalized?.grossPnl ?? null,
     fullCostSettlementStatus: "CANONICAL_FULL_COST_SETTLED",
     fullCostSettlementId: normalized?.settlementId ?? null,
     fullCostSettlement: normalized,
