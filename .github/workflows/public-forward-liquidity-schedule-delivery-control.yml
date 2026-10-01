@@ -33,6 +33,8 @@ jobs:
           grep -Fq "/diagnose-public-forward-liquidity-schedule-delivery " "$workflow"
           grep -Fq "/enable-public-forward-liquidity-schedule-delivery " "$workflow"
           grep -Fq "/refresh-public-forward-liquidity-schedule-delivery " "$workflow"
+          grep -Fq "route-control:" "$workflow"
+          grep -Fq "SCHEDULE_DELIVERY_ROUTED_COMMAND" "$workflow"
           grep -Fq "github.rest.actions.getWorkflow" "$workflow"
           grep -Fq "github.rest.actions.disableWorkflow" "$workflow"
           grep -Fq "github.rest.actions.enableWorkflow" "$workflow"
@@ -415,3 +417,213 @@ jobs:
               economic_credit_created: 0,
               replay_backfill_manual_credit: 0,
             }));
+
+  route-control:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 23
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+      issues: read
+      statuses: read
+    steps:
+      - name: Route exact #23 OWNER command without body-prefix job gating
+        id: route
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = String(context.payload.comment?.body ?? '').trim();
+            const actor = context.payload.comment?.user?.login;
+            const association = context.payload.comment?.author_association;
+            const issue = context.payload.issue ?? {};
+            const allowed = new Map([
+              ['/diagnose-public-forward-liquidity-schedule-delivery', 'DIAGNOSE'],
+              ['/enable-public-forward-liquidity-schedule-delivery', 'ENABLE'],
+              ['/refresh-public-forward-liquidity-schedule-delivery', 'REFRESH'],
+            ]);
+            const parts = body.split(/\s+/u);
+            let command = 'IGNORE';
+            let targetSha = '';
+            if (actor === context.repo.owner
+                && association === 'OWNER'
+                && issue.state === 'open'
+                && issue.title === 'Staging Readiness Control'
+                && parts.length === 2
+                && allowed.has(parts[0])
+                && /^[a-f0-9]{40}$/u.test(parts[1])) {
+              command = allowed.get(parts[0]);
+              targetSha = parts[1];
+            }
+            core.setOutput('command', command);
+            core.setOutput('target_sha', targetSha);
+            core.setOutput('comment_created_at', String(context.payload.comment?.created_at ?? ''));
+            core.info('SCHEDULE_DELIVERY_ROUTED_COMMAND=' + command);
+
+      - uses: actions/checkout@v4
+        if: steps.route.outputs.command != 'IGNORE'
+        with:
+          ref: ${{ steps.route.outputs.target_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require exact current main and frozen cron contract
+        if: steps.route.outputs.command != 'IGNORE'
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.route.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          git fetch --no-tags --depth=1 origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$TARGET_SHA"
+          target='.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
+          test "$(grep -Ec "^[[:space:]]{4}- cron: '17 \\* \\* \\* \\*'[[:space:]]*$" "$target")" -eq 1
+          test "$(grep -Ec "^[[:space:]]{4}- cron: '27 \\* \\* \\* \\*'[[:space:]]*$" "$target")" -eq 1
+          test "$(grep -Ec "^[[:space:]]{4}- cron: '37 \\* \\* \\* \\*'[[:space:]]*$" "$target")" -eq 1
+
+      - name: Execute routed read/enable/refresh control
+        if: steps.route.outputs.command != 'IGNORE'
+        uses: actions/github-script@v7
+        env:
+          COMMAND: ${{ steps.route.outputs.command }}
+          TARGET_SHA: ${{ steps.route.outputs.target_sha }}
+          COMMENT_CREATED_AT: ${{ steps.route.outputs.comment_created_at }}
+        with:
+          script: |
+            const workflowId = 347888347;
+            const command = process.env.COMMAND;
+            const targetSha = process.env.TARGET_SHA;
+            const nowMs = Date.parse(process.env.COMMENT_CREATED_AT);
+            if (!Number.isFinite(nowMs)) {
+              core.setFailed('SCHEDULE_DELIVERY_ROUTER_TIME_INVALID');
+              return;
+            }
+
+            const before = (await github.rest.actions.getWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+            })).data;
+            const targetRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+              event: 'schedule',
+              per_page: 100,
+            });
+            const repositoryRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              event: 'schedule',
+              per_page: 100,
+            });
+            const summarize = (run) => run ? {
+              id: run.id,
+              head_sha: run.head_sha,
+              status: run.status,
+              conclusion: run.conclusion,
+              created_at: run.created_at,
+              updated_at: run.updated_at,
+              run_attempt: run.run_attempt,
+            } : null;
+            const diagnostic = {
+              workflow_id: before.id,
+              workflow_name: before.name,
+              workflow_path: before.path,
+              workflow_state: before.state,
+              target_latest_schedule_run: summarize(targetRuns[0]),
+              repository_latest_schedule_run: summarize(repositoryRuns[0]),
+              target_schedule_run_count_scanned: targetRuns.length,
+              repository_schedule_run_count_scanned: repositoryRuns.length,
+            };
+            core.info('SCHEDULE_DELIVERY_ROUTER_DIAGNOSTIC=' + JSON.stringify(diagnostic));
+            if (command === 'DIAGNOSE') {
+              core.info('SCHEDULE_DELIVERY_ROUTER_RESULT=' + JSON.stringify({
+                command,
+                mutation_performed: false,
+                economic_credit_created: 0,
+              }));
+              return;
+            }
+
+            const provenance = require(process.env.GITHUB_WORKSPACE + '/api-server/scripts/production-ci-provenance.cjs');
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: targetSha,
+              per_page: 100,
+            });
+            const evidence = provenance.inspectRequiredStatusEvidence(statuses);
+            if (!evidence.ok) {
+              core.setFailed('SCHEDULE_DELIVERY_ROUTER_REQUIRED_CI_REJECTED:' + evidence.reason);
+              return;
+            }
+
+            let mutationPerformed = false;
+            if (command === 'ENABLE') {
+              if (before.state !== 'active') {
+                if (!['disabled_manually', 'disabled_inactivity'].includes(before.state)) {
+                  core.setFailed('SCHEDULE_DELIVERY_ROUTER_UNEXPECTED_WORKFLOW_STATE:' + before.state);
+                  return;
+                }
+                await github.rest.actions.enableWorkflow({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  workflow_id: workflowId,
+                });
+                mutationPerformed = true;
+              }
+            } else if (command === 'REFRESH') {
+              if (before.state !== 'active') {
+                core.setFailed('SCHEDULE_DELIVERY_ROUTER_REFRESH_REQUIRES_ACTIVE:' + before.state);
+                return;
+              }
+              const lastTargetMs = targetRuns[0] ? Date.parse(targetRuns[0].created_at) : 0;
+              const lastRepositoryMs = repositoryRuns[0] ? Date.parse(repositoryRuns[0].created_at) : 0;
+              const maturedMs = 45 * 60 * 1000;
+              if (!(lastTargetMs > 0 && nowMs - lastTargetMs > maturedMs)) {
+                core.setFailed('SCHEDULE_DELIVERY_ROUTER_TARGET_OUTAGE_NOT_MATURED');
+                return;
+              }
+              if (!(lastRepositoryMs > 0 && nowMs - lastRepositoryMs > maturedMs)) {
+                core.setFailed('SCHEDULE_DELIVERY_ROUTER_REPOSITORY_OUTAGE_NOT_MATURED');
+                return;
+              }
+              await github.rest.actions.disableWorkflow({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: workflowId,
+              });
+              await github.rest.actions.enableWorkflow({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: workflowId,
+              });
+              mutationPerformed = true;
+            } else {
+              core.setFailed('SCHEDULE_DELIVERY_ROUTER_COMMAND_INVALID:' + command);
+              return;
+            }
+
+            const after = (await github.rest.actions.getWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+            })).data;
+            if (after.state !== 'active') {
+              core.setFailed('SCHEDULE_DELIVERY_ROUTER_DID_NOT_REACH_ACTIVE:' + after.state);
+              return;
+            }
+            core.info('SCHEDULE_DELIVERY_ROUTER_RESULT=' + JSON.stringify({
+              command,
+              before_state: before.state,
+              after_state: after.state,
+              mutation_performed: mutationPerformed,
+              capture_dispatched: false,
+              economic_credit_created: 0,
+              replay_backfill_manual_credit: 0,
+            }));
+
