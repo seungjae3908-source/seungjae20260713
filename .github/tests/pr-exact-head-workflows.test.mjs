@@ -128,7 +128,7 @@ test("exact-current-main CI recovery is manual-only", () => {
   const on = indentedBlock(document, "on", 0);
   assert.doesNotMatch(on, /^\s+push:/mu, "main push must not auto-repeat full CI");
   assert.match(on, /^\s+issue_comment:/mu);
-  assert.match(document, /github\.event\.issue\.number == 23/u);
+  assert.match(document, /contains\(fromJSON\('\[23,1102\]'\), github\.event\.issue\.number\)/u);
   assert.match(document, /github\.event\.comment\.user\.login == github\.repository_owner/u);
   assert.match(document, /github\.event\.comment\.author_association == 'OWNER'/u);
   assert.match(document, /startsWith\(github\.event\.comment\.body, '\/run-application-ci-main '\)/u);
