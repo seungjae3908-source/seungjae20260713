@@ -1,13 +1,19 @@
 import { expect, test, type Route } from '@playwright/test';
 
-function searchResponse(query: string, displayName: string, ticker: string) {
+function searchResponse(
+  query: string,
+  displayName: string,
+  ticker: string,
+  asset: 'all' | 'stock' = 'all',
+  market: 'US' | null = null,
+) {
   const dataAsOf = new Date().toISOString();
   return {
     ok: true,
     state: 'FULL',
     q: query,
-    asset: 'all',
-    market: null,
+    asset,
+    market,
     results: [{
       id: `stock:US:NASDAQ:${ticker}`,
       assetType: 'stock',
@@ -102,7 +108,7 @@ test('selecting a suggestion does not launch a second search before navigation',
   await page.route('**/api/search/suggest**', async (route) => {
     const query = new URL(route.request().url()).searchParams.get('q') ?? '';
     queries.push(query);
-    await fulfillJson(route, searchResponse(query, 'Apple', 'AAPL'));
+    await fulfillJson(route, searchResponse(query, 'Apple', 'AAPL', 'stock', 'US'));
   });
 
   await page.goto('/__phase11-unified-search-e2e');
