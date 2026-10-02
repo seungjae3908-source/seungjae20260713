@@ -27,12 +27,8 @@ for unit in "${units[@]}"; do
   systemd-analyze verify "$source_path" >/dev/null
 done
 
-for unit in "${units[@]}"; do
-  source_path="$RESEARCH_RELEASE_ROOT/research-production/deploy/$unit"
-  "${SUDO[@]}" install -o root -g root -m 0644 "$source_path" "/etc/systemd/system/$unit"
-done
-"${SUDO[@]}" systemctl daemon-reload
-
+# Refuse to rewrite unit definitions while a prior timer is active/enabled.
+# This check happens before any /etc/systemd/system mutation.
 for timer in research-production-ai-review.timer research-production-video-discovery.timer; do
   if systemctl is-enabled --quiet "$timer" 2>/dev/null; then
     echo "Refusing implicit activation: $timer is already enabled" >&2
@@ -43,5 +39,11 @@ for timer in research-production-ai-review.timer research-production-video-disco
     exit 67
   fi
 done
+
+for unit in "${units[@]}"; do
+  source_path="$RESEARCH_RELEASE_ROOT/research-production/deploy/$unit"
+  "${SUDO[@]}" install -o root -g root -m 0644 "$source_path" "/etc/systemd/system/$unit"
+done
+"${SUDO[@]}" systemctl daemon-reload
 
 printf '%s\n'   "RESEARCH_AI_UNITS_INSTALLED=true"   "AI_REVIEW_TIMER_ENABLED=false"   "VIDEO_DISCOVERY_TIMER_ENABLED=false"   "LIVE_TRADING=false"   "PRIVATE_TRADING_API_ALLOWED=false"   "REAL_ORDER_ENABLED=false"   "executionAuthority=NONE"
