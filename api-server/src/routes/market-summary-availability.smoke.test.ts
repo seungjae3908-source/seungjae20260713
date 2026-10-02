@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import test from 'node:test';
 import express from 'express';
 import marketSummaryAvailabilityRouter from './market-summary-availability';
-import { createVideoResearchEvidenceRouter } from './video-research-evidence';
+import { createVideoResearchEvidenceRouter, loadVideoResearchRuntimeEvidenceSnapshot } from './video-research-evidence';
 
 type Fixture = {
   status: number;
@@ -183,6 +183,13 @@ function videoEvidenceSnapshot() {
       executionAuthority: 'NONE',
     }],
     safety: VIDEO_SAFETY,
+    automation: {
+      schemaVersion: 'research-video-discovery-scan-v1', status: 'COMPLETE', observedAt: '2026-09-13T00:00:00.000Z',
+      researchSha: 'a'.repeat(40), provider: 'YOUTUBE_DATA_API_V3', query: 'TEST_ONLY video strategy', queryIndex: 0,
+      queryCount: 4, nextQueryIndex: 1, sourceCount: 1, snapshotDigest: 'b'.repeat(64), providerNetworkCalls: 1,
+      invocationMode: 'SYSTEMD_TIMER', scheduledInvocationObserved: true, reason: null,
+      nextRequiredStep: 'SOURCE_REVIEW_THEN_EXISTING_GEMINI_GROQ_ORCHESTRATOR',
+    },
     snapshotProvenance: {
       schemaVersion: 'video-research-sanitized-snapshot-v1',
       sourceHeadSha: 'a'.repeat(40),
@@ -252,6 +259,10 @@ test('video research evidence reader projects only sanitized official public run
   assert.equal(provenance.observedAt, '2026-09-13T00:00:00.000Z');
   assert.equal(provenance.publisherMode, 'LOCAL_ATOMIC_FILE');
   assert.equal(provenance.executionAuthority, 'NONE');
+  const automation = result.body.automation as Record<string, unknown>;
+  assert.equal(automation.invocationMode, 'SYSTEMD_TIMER');
+  assert.equal(automation.scheduledInvocationObserved, true);
+  assert.equal(automation.snapshotBound, true);
 });
 
 test('video research evidence reader requires exact sanitized snapshot provenance before MEASURED', async () => {
@@ -328,4 +339,29 @@ test('video research evidence reader fails closed on secret-bearing or authority
   assert.equal(authorityResult.body.dataState, 'UNKNOWN');
   assert.equal(authorityResult.body.reason, 'SANITIZED_RUNTIME_EVIDENCE_INVALID');
   assert.equal(Object.prototype.hasOwnProperty.call(authorityResult.body, 'sourceCount'), false);
+});
+
+
+test('video automation stays visible but cannot bind to a different snapshot identity', async () => {
+  const snapshot = videoEvidenceSnapshot();
+  snapshot.automation = { ...snapshot.automation, observedAt: '2026-09-13T01:00:00.000Z' };
+  const result = await requestVideoEvidence(async () => snapshot);
+  assert.equal(result.body.available, true);
+  const automation = result.body.automation as Record<string, unknown>;
+  assert.equal(automation.scheduledInvocationObserved, true);
+  assert.equal(automation.snapshotBound, false);
+});
+
+test('video runtime loader falls back only to fixed local Research Dashboard endpoint', async () => {
+  let seenUrl = '';
+  const fakeFetch = (async (input: string | URL | Request) => {
+    seenUrl = String(input);
+    return new Response(JSON.stringify({ ok: true, available: true, ...videoEvidenceSnapshot() }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+  const result = await loadVideoResearchRuntimeEvidenceSnapshot(fakeFetch, []);
+  assert.equal(seenUrl, 'http://127.0.0.1:18090/api/research/video/evidence');
+  assert.equal((result as Record<string, unknown>).provider, 'YOUTUBE_DATA_API_V3');
 });
