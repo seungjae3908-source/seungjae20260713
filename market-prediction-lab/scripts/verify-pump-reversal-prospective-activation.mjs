@@ -57,6 +57,10 @@ export async function verifyPumpProspectiveActivation({
     && ["ACTIVE_WAITING_FOR_24H_FUTURE_BOUNDARY", "ACTIVE_GENUINE_PROSPECTIVE_ELIGIBLE"].includes(activation?.status)
     && activation?.targetSha === targetSha
     && activation?.paperRuntimeSourceSha === targetSha
+    && exactSha(activation?.policyResearchCodeSha)
+    && (activation.policyResearchCodeSha === targetSha
+      ? activation?.operationalRetryEquivalenceVerified === false
+      : activation?.operationalRetryEquivalenceVerified === true)
     && activation?.productionAppShaBefore === expectedProductionAppSha
     && activation?.productionAppDeployPerformed === false
     && activation?.productionAppMutationAllowed === false
@@ -87,7 +91,7 @@ export async function verifyPumpProspectiveActivation({
   if (!activationValid) fail("PUMP_ACTIVATION_RECEIPT_INVALID");
 
   const policyValid = policy?.schemaVersion === "crypto-pump-reversal-prospective-policy-v1"
-    && policy?.candidate?.researchCodeSha === targetSha
+    && policy?.candidate?.researchCodeSha === activation.policyResearchCodeSha
     && policy?.candidate?.strategyId === "CRYPTO_PUMP_REVERSAL_SHORT_CLEAN_V1"
     && policy?.candidate?.direction === "SHORT"
     && policy?.candidate?.market === "CRYPTO_FUTURES"
@@ -156,6 +160,8 @@ export async function verifyPumpProspectiveActivation({
     schemaVersion: PUMP_PROSPECTIVE_ACTIVATION_VERIFIER_VERSION,
     status: "PASSED",
     targetSha,
+    policyResearchCodeSha: activation.policyResearchCodeSha,
+    operationalRetryEquivalenceVerified: activation.operationalRetryEquivalenceVerified === true,
     productionAppSha: expectedProductionAppSha,
     activationAtMs: activation.activationAtMs,
     eligibleAfterMs: activation.eligibleAfterMs,
