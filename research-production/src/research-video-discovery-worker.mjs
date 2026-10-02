@@ -186,11 +186,12 @@ export async function runResearchVideoDiscoveryScan({
   const queryIndex = Number.isSafeInteger(candidateIndex) && candidateIndex >= 0 && candidateIndex < policy.queries.length
     ? candidateIndex : 0;
   const query = policy.queries[queryIndex];
+  const stagingDir = join(root, 'provider-staging', `${observedAt.replace(/[:.]/g, '-')}-${process.pid}`);
 
   try {
     const outcome = await discover({
       query,
-      outputDir: join(root, 'provider-staging', observedAt.replace(/[:.]/g, '-')),
+      outputDir: stagingDir,
       sourceHeadSha: base.researchSha,
       observedAt,
       env: { YOUTUBE_DATA_API_KEY: policy.apiKey },
@@ -203,18 +204,12 @@ export async function runResearchVideoDiscoveryScan({
     }
     const snapshot = outcome.snapshot;
     const snapshotDigest = digest(snapshot);
-    const sourceReviewDigest = digest({
-      query,
-      sources: (Array.isArray(snapshot.records) ? snapshot.records : []).map((record) => ({
-        videoId: record.videoId,
-        canonicalUrl: record.canonicalUrl,
-        title: record.title,
-        channelOrPublisher: record.channelOrPublisher,
-        publishedAt: record.publishedAt,
-        transcriptStatus: record.transcriptStatus,
-        sourceTrustTier: record.sourceTrustTier,
-      })),
-    });
+    const sourceCount = Number(snapshot.sourceCount ?? 0);
+    const sourceIds = (Array.isArray(snapshot.records) ? snapshot.records : [])
+      .map((record) => String(record.videoId ?? ''))
+      .filter(Boolean)
+      .sort();
+    const sourceReviewDigest = sourceCount > 0 ? digest({ sourceIds }) : null;
     const historyId = `${observedAt.replace(/[:.]/g, '-')}-${snapshotDigest}`;
     await exclusiveJson(join(root, 'history', `${historyId}.json`), snapshot, env);
 
@@ -225,7 +220,7 @@ export async function runResearchVideoDiscoveryScan({
       query,
       snapshotDigest,
       sourceReviewDigest,
-      sourceCount: Number(snapshot.sourceCount ?? 0),
+      sourceCount,
       sources: Object.freeze((Array.isArray(snapshot.records) ? snapshot.records : []).map((record) => Object.freeze({
         videoId: record.videoId,
         canonicalUrl: record.canonicalUrl,
@@ -242,11 +237,13 @@ export async function runResearchVideoDiscoveryScan({
       executionAuthority: 'NONE',
     });
     let inboxCreated = false;
-    try {
-      await exclusiveJson(join(root, 'inbox', `${sourceReviewDigest}.json`), inbox, env);
-      inboxCreated = true;
-    } catch (error) {
-      if (error?.code !== 'EEXIST') throw error;
+    if (sourceReviewDigest) {
+      try {
+        await exclusiveJson(join(root, 'inbox', `${sourceReviewDigest}.json`), inbox, env);
+        inboxCreated = true;
+      } catch (error) {
+        if (error?.code !== 'EEXIST') throw error;
+      }
     }
     await atomicJson(join(root, 'current', 'video-research-public-provider-runtime-v3.json'), snapshot, env);
 
@@ -280,7 +277,7 @@ export async function runResearchVideoDiscoveryScan({
       safety: RESEARCH_VIDEO_DISCOVERY_SAFETY,
     });
     await atomicJson(latestPath, result, env);
-    await rm(join(root, 'provider-staging'), { recursive: true, force: true });
+    await rm(stagingDir, { recursive: true, force: true });
     return result;
   } catch (error) {
     const blocked = Object.freeze({
@@ -302,7 +299,7 @@ export async function runResearchVideoDiscoveryScan({
       safety: RESEARCH_VIDEO_DISCOVERY_SAFETY,
     });
     await atomicJson(latestPath, blocked, env);
-    await rm(join(root, 'provider-staging'), { recursive: true, force: true }).catch(() => {});
+    await rm(stagingDir, { recursive: true, force: true }).catch(() => {});
     return blocked;
   }
 }

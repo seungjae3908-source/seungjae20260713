@@ -210,3 +210,34 @@ test('repeated identical sources do not duplicate the source-review inbox', asyn
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('zero-source discovery stores measured current/history without creating a review inbox', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'research-video-zero-'));
+  const env = {
+    RESEARCH_VIDEO_DISCOVERY_APPROVED: 'true',
+    RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON: JSON.stringify(['empty query']),
+    YOUTUBE_DATA_API_KEY: SECRET,
+  };
+  try {
+    const discover = async ({ query, observedAt }) => {
+      const value = snapshot(query, observedAt);
+      value.sourceCount = 0;
+      value.records = [];
+      return { published: true, snapshot: value };
+    };
+    const result = await runResearchVideoDiscoveryScan({
+      repoRoot: '/TEST_ONLY/repo', stateRoot: root, researchSha: SHA, env,
+      verifyGitHead: false, preflight: fakePreflight(root), discover,
+      clock: () => '2026-10-02T09:00:00.000Z',
+    });
+    assert.equal(result.status, 'COMPLETE');
+    assert.equal(result.sourceCount, 0);
+    assert.equal(result.sourceReviewDigest, null);
+    assert.equal(result.reviewInboxCreated, false);
+    await assert.rejects(() => readdir(join(root, 'video-research', 'inbox')), /ENOENT/);
+    const history = await readdir(join(root, 'video-research', 'history'));
+    assert.equal(history.length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
