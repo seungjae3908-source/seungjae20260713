@@ -7,6 +7,7 @@ on:
       - .github/workflows/production-automatic-trading-gate.yml
       - api-server/scripts/verify-production-automatic-trading-gate.mjs
       - api-server/src/services/trade-automation.service.ts
+      - api-server/src/services/member-auto-trading-background-worker.service.ts
       - api-server/src/services/spot-live-limited-capability.service.ts
       - api-server/src/services/futures-live-limited-capability.service.ts
       - .github/workflows/production-live-trading-gate.yml
@@ -295,7 +296,7 @@ jobs:
           const requiredProviders = ['toss', 'kiwoom', 'upbit', 'bitget'];
           const evidence = JSON.parse(fs.readFileSync(process.env.ACCOUNT_QA_EVIDENCE, 'utf8'));
 
-          if (evidence?.schemaVersion !== 'production-account-readonly-live-qa-v1'
+          if (evidence?.schemaVersion !== 'production-account-readonly-live-qa-v2'
             || evidence?.targetSha !== target
             || evidence?.orderRequests !== 0
             || evidence?.cancelRequests !== 0
@@ -435,7 +436,9 @@ jobs:
               if (!futuresCaps.has(capability)) throw new Error('AUTOMATIC_TRADING_FUTURES_CAPABILITY_MISSING:' + capability);
             }
             if (bool(env, 'AUTO_TRADING') !== expectedAuto
-              || bool(env, 'LIVE_AUTOMATIC_TRADING_ENABLED') !== expectedAuto) {
+              || bool(env, 'LIVE_AUTOMATIC_TRADING_ENABLED') !== expectedAuto
+              || bool(env, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED') !== expectedAuto
+              || bool(env, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED') !== expectedAuto) {
               throw new Error('AUTOMATIC_TRADING_FLAG_STATE_MISMATCH');
             }
           };
@@ -446,6 +449,8 @@ jobs:
                 ...process.env,
                 AUTO_TRADING: enabled ? 'true' : 'false',
                 LIVE_AUTOMATIC_TRADING_ENABLED: enabled ? 'true' : 'false',
+                MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: enabled ? 'true' : 'false',
+                MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: enabled ? 'true' : 'false',
                 DEPLOY_SHA: target,
               },
             });
@@ -471,6 +476,10 @@ jobs:
               providers: ['toss','kiwoom','upbit','bitget'],
               AUTO_TRADING: true,
               LIVE_AUTOMATIC_TRADING_ENABLED: true,
+              MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: true,
+              MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: true,
+              PAPER_AUTOMATIC_EXECUTION: true,
+              LIVE_AUTOMATIC_BACKGROUND_EXECUTION: true,
               REAL_ORDER_SUBMITTED: false,
             }));
           } catch (cause) {
@@ -524,6 +533,10 @@ jobs:
                 'futures_margin_mode: isolated',
                 'AUTO_TRADING=true',
                 'LIVE_AUTOMATIC_TRADING_ENABLED=true',
+                'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=true',
+                'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=true',
+                'paper_automatic_execution=true',
+                'live_automatic_background_execution=true',
                 'spot_executionAuthority=SPOT_LIVE_LIMITED',
                 'futures_executionAuthority=FUTURES_LIVE_LIMITED',
                 'transfer_withdrawal_authority=false',
@@ -650,13 +663,18 @@ jobs:
               ...process.env,
               AUTO_TRADING: 'false',
               LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
+              MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
+              MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false',
               DEPLOY_SHA: target,
             },
           });
           execFileSync('pm2', ['save'], { stdio: 'inherit' });
 
           const after = readEnv();
-          if (bool(after, 'AUTO_TRADING') || bool(after, 'LIVE_AUTOMATIC_TRADING_ENABLED')) {
+          if (bool(after, 'AUTO_TRADING')
+            || bool(after, 'LIVE_AUTOMATIC_TRADING_ENABLED')
+            || bool(after, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED')
+            || bool(after, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED')) {
             throw new Error('AUTOMATIC_TRADING_DISABLE_POSTCHECK_FAILED');
           }
           if (JSON.stringify(manual(after)) !== JSON.stringify(preserved)) {
@@ -682,6 +700,10 @@ jobs:
                 'target_sha: ' + process.env.TARGET_SHA,
                 'AUTO_TRADING=false',
                 'LIVE_AUTOMATIC_TRADING_ENABLED=false',
+                'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false',
+                'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false',
+                'paper_automatic_execution=false',
+                'live_automatic_background_execution=false',
                 'manual_spot_and_futures_authority_preserved=true',
                 'REAL_ORDER_SUBMITTED=false',
                 'workflow_run: ' + context.runId,
