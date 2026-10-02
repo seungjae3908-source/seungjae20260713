@@ -108,22 +108,34 @@ function providerPresence(env) {
   });
 }
 
+function uniqueConfigured(env, names) {
+  const values = names.map((name) => String(env[name] ?? '').trim()).filter(Boolean);
+  const unique = [...new Set(values)];
+  return unique.length === 1 ? { value: unique[0], conflict: false }
+    : unique.length > 1 ? { value: null, conflict: true }
+      : { value: null, conflict: false };
+}
+
 export function resolveResearchFreeAiPolicy(env = process.env) {
   if (String(env.RESEARCH_AI_FREE_TIER_CONFIRMED ?? '').trim().toLowerCase() !== 'true') {
     return Object.freeze({ provider: null, model: null, apiKey: null, reason: 'FREE_TIER_NOT_CONFIRMED' });
   }
   const selected = String(env.AI_CHAT_PROVIDER ?? '').trim().toLowerCase();
   if (selected === 'groq') {
-    const model = String(env.AI_CHAT_MODEL ?? env.GROQ_MODEL ?? GROQ_MODEL).trim();
-    const apiKey = String(env.AI_CHAT_API_KEY ?? env.GROQ_API_KEY ?? '').trim();
-    if (model === GROQ_MODEL && apiKey) return Object.freeze({ provider: 'groq', model, apiKey, reason: 'CONFIGURED_FREE_ONLY_QUOTA_UNKNOWN' });
+    const keys = uniqueConfigured(env, ['GROQ_API_KEY', 'AI_CHAT_API_KEY']);
+    const models = uniqueConfigured(env, ['GROQ_MODEL', 'AI_CHAT_MODEL']);
+    if (keys.conflict || models.conflict) return Object.freeze({ provider: null, model: null, apiKey: null, reason: 'PROVIDER_CONFIGURATION_CONFLICT' });
+    const model = models.value ?? GROQ_MODEL;
+    if (model === GROQ_MODEL && keys.value) return Object.freeze({ provider: 'groq', model, apiKey: keys.value, reason: 'CONFIGURED_FREE_ONLY_QUOTA_UNKNOWN' });
     return Object.freeze({ provider: null, model: null, apiKey: null, reason: 'ISOLATED_FREE_PROVIDER_REQUIRED' });
   }
   if (selected === 'gemini' || selected === 'google' || selected === 'google-gemini') {
-    const model = String(env.AI_CHAT_MODEL ?? env.GEMINI_MODEL ?? GEMINI_MODEL).trim();
-    const apiKey = String(env.AI_CHAT_API_KEY ?? env.GEMINI_API_KEY ?? env.GOOGLE_API_KEY ?? '').trim();
-    if (model === GEMINI_MODEL && apiKey) {
-      return Object.freeze({ provider: 'gemini', model, apiKey, reason: 'CONFIGURED_FREE_ONLY_QUOTA_UNKNOWN' });
+    const keys = uniqueConfigured(env, ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'AI_CHAT_API_KEY']);
+    const models = uniqueConfigured(env, ['GEMINI_MODEL', 'AI_CHAT_MODEL']);
+    if (keys.conflict || models.conflict) return Object.freeze({ provider: null, model: null, apiKey: null, reason: 'PROVIDER_CONFIGURATION_CONFLICT' });
+    const model = models.value ?? GEMINI_MODEL;
+    if (model === GEMINI_MODEL && keys.value) {
+      return Object.freeze({ provider: 'gemini', model, apiKey: keys.value, reason: 'CONFIGURED_FREE_ONLY_QUOTA_UNKNOWN' });
     }
     return Object.freeze({ provider: null, model: null, apiKey: null, reason: 'ISOLATED_FREE_PROVIDER_REQUIRED' });
   }
