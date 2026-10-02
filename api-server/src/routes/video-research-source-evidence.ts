@@ -280,8 +280,11 @@ function safeAiReview(value: unknown): SafeAiReview | null {
   if (!researchSha || provider === undefined || model === undefined || !reason) return null;
   if (value.invocationMode !== 'MANUAL' && value.invocationMode !== 'SYSTEMD_TIMER') return null;
   if (typeof value.scheduledInvocationObserved !== 'boolean') return null;
-  if (countKeys.some((key) => typeof value[key] !== 'number' || !Number.isSafeInteger(value[key]) || value[key] < 0 || value[key] > 3)) return null;
-  if (value.proposerReviewCount + value.criticReviewCount !== value.reviewCount) return null;
+  if (countKeys.some((key) => typeof value[key] !== 'number' || !Number.isSafeInteger(value[key]) || (value[key] as number) < 0 || (value[key] as number) > 3)) return null;
+  const reviewCount = value.reviewCount as number;
+  const proposerReviewCount = value.proposerReviewCount as number;
+  const criticReviewCount = value.criticReviewCount as number;
+  if (proposerReviewCount + criticReviewCount !== reviewCount) return null;
   return {
     status: value.status as SafeAiReview['status'],
     observedAt: value.observedAt,
@@ -291,9 +294,9 @@ function safeAiReview(value: unknown): SafeAiReview | null {
     reason,
     providerNetworkCalls: value.providerNetworkCalls as number,
     cacheHits: value.cacheHits as number,
-    reviewCount: value.reviewCount as number,
-    proposerReviewCount: value.proposerReviewCount as number,
-    criticReviewCount: value.criticReviewCount as number,
+    reviewCount,
+    proposerReviewCount,
+    criticReviewCount,
     missingProfileCount: value.missingProfileCount as number,
     blockedProfileCount: value.blockedProfileCount as number,
     deferredProfileCount: value.deferredProfileCount as number,
