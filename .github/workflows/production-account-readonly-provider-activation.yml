@@ -88,6 +88,7 @@ jobs:
           grep -Fq "requiredSnapshotsHealthy" "$spec"
           grep -Fq "new URL('/api/auth/profile'" "$login"
           grep -Fq "Do not submit credentials a second time" "$login"
+          grep -Fq "ACCOUNT_READ_ACTIVATION_LATEST_PRE_QA_NOT_SUCCESS" "$file"
           grep -Fq "ACCOUNT_READ_ACTIVATION_PRE_QA_SUCCESS_MISSING_OR_RELEVANT_DRIFT" "$file"
           grep -Fq "production-account-readonly-live-qa.spec.ts" "$file"
           grep -Fq "brokerage-account-connections.tsx" "$file"
@@ -213,13 +214,19 @@ jobs:
               per_page: 100,
             });
             const expectedProviders = 'bitget,kiwoom,toss,upbit';
-            const candidates = runs
+            const relevantRuns = runs
               .filter((run) =>
-                run.status === 'completed'
-                && run.conclusion === 'success'
-                && String(run.display_title ?? '').includes(active)
+                String(run.display_title ?? '').includes(active)
                 && String(run.display_title ?? '').includes(expectedProviders))
               .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+            const latestRelevant = relevantRuns[0];
+            if (!latestRelevant
+              || latestRelevant.status !== 'completed'
+              || latestRelevant.conclusion !== 'success') {
+              core.setFailed('ACCOUNT_READ_ACTIVATION_LATEST_PRE_QA_NOT_SUCCESS');
+              return;
+            }
+            const candidates = [latestRelevant];
 
             const criticalExact = new Set([
               '.github/workflows/production-account-readonly-live-qa.yml',
