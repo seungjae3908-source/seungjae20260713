@@ -6,6 +6,7 @@ const successorIssue = '1555';
 const successorTitle = 'Staging Readiness Control — Rollover 2026-10-02';
 
 const currentReleasePath = [
+  '.github/workflows/application-ci-main-fallback.yml',
   '.github/workflows/staging-postgres-auth-gate.yml',
   '.github/workflows/production-app-release-control.yml',
   '.github/workflows/production-comprehensive-readonly-dispatch-bridge.yml',
