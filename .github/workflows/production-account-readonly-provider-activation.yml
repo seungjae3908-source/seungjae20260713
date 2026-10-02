@@ -87,6 +87,8 @@ jobs:
           grep -Fq "new URL('/api/auth/profile'" "$login"
           grep -Fq "Do not submit credentials a second time" "$login"
           grep -Fq "ACCOUNT_READ_ACTIVATION_PROVIDER_CODE_DRIFT_REQUIRES_REDEPLOY" "$file"
+          grep -Fq "ACCOUNT_READ_ACTIVATION_MAIN_MOVED_BEFORE_MUTATION" "$file"
+          grep -Fq "ACCOUNT_READ_ACTIVATION_MAIN_MOVED_DURING_QA" "$file"
           if grep -Eq "bitgetRequest\([^,]+,[[:space:]]*'(POST|DELETE)'[[:space:]]*,[[:space:]]*'/api/v3/(account/info|account/assets|position/current-position|trade/unfilled-orders)'" "$adapter"; then
             echo 'Bitget UTA read-only endpoints must remain GET-only.' >&2
             exit 1
@@ -218,6 +220,40 @@ jobs:
           else
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
           fi
+
+      - name: Revalidate current main and Production immediately before activation
+        uses: actions/github-script@v7
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const active = String(process.env.ACTIVE_SHA ?? '').toLowerCase();
+            const target = String(process.env.TARGET_SHA ?? '').toLowerCase();
+            const branch = await github.rest.repos.getBranch({
+              owner: context.repo.owner, repo: context.repo.repo, branch: 'main',
+            });
+            if (String(branch.data.commit.sha).toLowerCase() !== target) {
+              core.setFailed('ACCOUNT_READ_ACTIVATION_MAIN_MOVED_BEFORE_MUTATION');
+              return;
+            }
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'production-deploy.yml',
+              event: 'workflow_dispatch',
+              per_page: 100,
+            });
+            const latest = runs
+              .filter((run) => run.status === 'completed' && run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            if (!latest || String(latest.head_sha).toLowerCase() !== active) {
+              core.setFailed('ACCOUNT_READ_ACTIVATION_PRODUCTION_MOVED_BEFORE_MUTATION');
+              return;
+            }
+            if (runs.some((run) => run.status !== 'completed')) {
+              core.setFailed('ACCOUNT_READ_ACTIVATION_DEPLOY_STARTED_BEFORE_MUTATION');
+            }
 
       - name: Activate four read-only providers with rollback
         id: activation
@@ -599,6 +635,40 @@ jobs:
             throw new Error('ACCOUNT_READ_ACTIVATION_QA_SECRET_OR_ACCOUNT_VALUE_LEAK');
           }
           NODE
+
+      - name: Require activation target remains current after QA
+        uses: actions/github-script@v7
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const active = String(process.env.ACTIVE_SHA ?? '').toLowerCase();
+            const target = String(process.env.TARGET_SHA ?? '').toLowerCase();
+            const branch = await github.rest.repos.getBranch({
+              owner: context.repo.owner, repo: context.repo.repo, branch: 'main',
+            });
+            if (String(branch.data.commit.sha).toLowerCase() !== target) {
+              core.setFailed('ACCOUNT_READ_ACTIVATION_MAIN_MOVED_DURING_QA');
+              return;
+            }
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'production-deploy.yml',
+              event: 'workflow_dispatch',
+              per_page: 100,
+            });
+            const latest = runs
+              .filter((run) => run.status === 'completed' && run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            if (!latest || String(latest.head_sha).toLowerCase() !== active) {
+              core.setFailed('ACCOUNT_READ_ACTIVATION_PRODUCTION_MOVED_DURING_QA');
+              return;
+            }
+            if (runs.some((run) => run.status !== 'completed')) {
+              core.setFailed('ACCOUNT_READ_ACTIVATION_DEPLOY_STARTED_DURING_QA');
+            }
 
       - name: Upload sanitized QA evidence
         if: always()
