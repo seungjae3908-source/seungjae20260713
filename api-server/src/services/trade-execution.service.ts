@@ -343,14 +343,15 @@ function bitgetPreflight(data: unknown[], plan: TradingPlan, clientOrderId: stri
   const positions = Array.isArray(positionsRaw) ? positionsRaw.filter(isRecord) : [];
   const pending = bitgetPendingRows(pendingRaw);
   const account = accounts.find((row) => String(row.marginCoin ?? '').toUpperCase() === 'USDT');
-  if (!account || Number(account.available ?? 0) <= 0) throw new Error('BITGET_INSUFFICIENT_MARGIN');
+  if (!account) throw new Error('BITGET_ACCOUNT_UNAVAILABLE');
+  if (!plan.reduceOnly && Number(account.available ?? 0) <= 0) throw new Error('BITGET_INSUFFICIENT_MARGIN');
   if (String(account.posMode ?? '').toLowerCase() === 'hedge_mode') throw new Error('BITGET_ONE_WAY_MODE_REQUIRED');
   const ticker = Array.isArray(tickerRaw) ? tickerRaw.find(isRecord) : isRecord(tickerRaw) ? tickerRaw : null;
   const markPrice = Number(ticker?.markPrice ?? ticker?.lastPr ?? 0);
   const requestedQuantity = Number(plan.quantity ?? 0);
   const requiredMargin = markPrice * requestedQuantity / Math.max(1, Number(plan.leverage ?? 1));
-  if (!Number.isFinite(requiredMargin) || requiredMargin <= 0
-    || Number(account.available ?? 0) < requiredMargin * 1.01) {
+  if (!Number.isFinite(requiredMargin) || requiredMargin <= 0) throw new Error('BITGET_ORDER_SIZE_INVALID');
+  if (!plan.reduceOnly && Number(account.available ?? 0) < requiredMargin * 1.01) {
     throw new Error('BITGET_INSUFFICIENT_MARGIN');
   }
   for (const position of positions) {
@@ -359,17 +360,22 @@ function bitgetPreflight(data: unknown[], plan: TradingPlan, clientOrderId: stri
     const positionMarkPrice = Number(position.markPrice ?? markPrice);
     const liquidationDistance = positionMarkPrice > 0 && liquidationPrice > 0
       ? Math.abs(positionMarkPrice - liquidationPrice) / positionMarkPrice * 100 : Number.POSITIVE_INFINITY;
-    if (liquidationDistance <= 5) throw new Error('BITGET_LIQUIDATION_RISK');
+    if (!plan.reduceOnly && liquidationDistance <= 5) throw new Error('BITGET_LIQUIDATION_RISK');
     const currentMarginMode = String(position.marginMode ?? '').toLowerCase();
     if (currentMarginMode && currentMarginMode !== plan.marginMode) throw new Error('BITGET_MARGIN_MODE_MISMATCH');
   }
   const opposite = plan.side === 'long' || plan.side === 'buy' ? 'short' : 'long';
-  if (positions.some((row) => String(row.symbol).toUpperCase() === plan.symbol.toUpperCase()
-    && String(row.holdSide).toLowerCase() === opposite && Number(row.total ?? 0) > 0)) {
-    throw new Error('BITGET_OPPOSITE_POSITION_DUPLICATE');
+  const oppositePosition = positions.find((row) => String(row.symbol).toUpperCase() === plan.symbol.toUpperCase()
+    && String(row.holdSide).toLowerCase() === opposite && Number(row.total ?? 0) > 0);
+  if (!plan.reduceOnly && oppositePosition) throw new Error('BITGET_OPPOSITE_POSITION_DUPLICATE');
+  if (plan.reduceOnly) {
+    const closable = Number(oppositePosition?.available ?? oppositePosition?.total ?? 0);
+    if (!Number.isFinite(closable) || closable <= 0 || closable + 1e-12 < requestedQuantity) {
+      throw new Error('BITGET_REDUCE_ONLY_POSITION_INSUFFICIENT');
+    }
   }
   if (pending.some((row) => String(row.clientOid ?? '') === clientOrderId)) throw new Error('DUPLICATE_EXCHANGE_ORDER');
-  return pending.length === 0
+  return !plan.reduceOnly && pending.length === 0
     && !positions.some((row) => String(row.symbol).toUpperCase() === plan.symbol.toUpperCase() && Number(row.total ?? 0) > 0);
 }
 
@@ -579,11 +585,22 @@ export class TradeExecutionService {
         });
         const metadata = this.riskMetadata(risk, false);
         await this.automation.transition(order, 'ACCEPTED', 'PAPER_BROKER_ACCEPTED', metadata);
+        const filledQuantity = plan.quantity ?? 0;
+        const averageFillPrice = plan.limitPrice ?? (plan.quoteAmount && plan.quantity ? plan.quoteAmount / plan.quantity : null);
+        const feePercent = Number(risk.snapshot.estimatedFeePercent);
+        const feeAmount = Number.isFinite(averageFillPrice) && Number.isFinite(filledQuantity)
+          && averageFillPrice! > 0 && filledQuantity > 0 && Number.isFinite(feePercent) && feePercent >= 0
+          ? averageFillPrice! * filledQuantity * feePercent / 100
+          : null;
+        const feeCurrency = plan.exchange === 'upbit' || plan.market === 'KR'
+          ? 'KRW'
+          : plan.exchange === 'bitget' ? 'USDT' : 'USD';
         return this.automation.transition(order, 'FILLED', 'PAPER_BROKER_FILLED', {
           ...metadata,
           exchangeOrderId: `paper-${order.clientOrderId}`,
-          filledQuantity: plan.quantity ?? 0,
-          averageFillPrice: plan.limitPrice ?? (plan.quoteAmount && plan.quantity ? plan.quoteAmount / plan.quantity : null),
+          filledQuantity,
+          averageFillPrice,
+          ...(feeAmount == null ? {} : { feeAmount, feeCurrency }),
         });
       }
 
@@ -734,12 +751,14 @@ export class TradeExecutionService {
       }),
       serverLiveEnabled: liveExecutionEnabled('bitget'),
     });
-    if (canChangeMarginMode) {
+    if (!plan.reduceOnly && canChangeMarginMode) {
       assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
         prepareBitgetMarginMode(credentials, plan.symbol, plan.marginMode ?? 'isolated'), PREFLIGHT_TIMEOUT_MS));
     }
-    assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
-      prepareBitgetLeverage(credentials, plan.symbol, plan.leverage === 3 ? 3 : 2), PREFLIGHT_TIMEOUT_MS));
+    if (!plan.reduceOnly) {
+      assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
+        prepareBitgetLeverage(credentials, plan.symbol, plan.leverage === 3 ? 3 : 2), PREFLIGHT_TIMEOUT_MS));
+    }
     if (!await this.beginSubmissionIntent(order, risk)) {
       return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };
     }
