@@ -155,6 +155,13 @@ export class TradeAutomationService {
   }
 
   private async marketIntelligenceDecision(input: TradingPlanInput) {
+    if (input.reduceOnly === true) {
+      return {
+        allowed: true,
+        blockCode: null,
+        warnings: ['RISK_REDUCING_EXIT_MARKET_INTELLIGENCE_ENTRY_GATE_SKIPPED'],
+      };
+    }
     const intelligence = await fetchTradingPlanMarketIntelligence(input);
     return marketIntelligenceTradeDecision(intelligence, input.accountMode);
   }
