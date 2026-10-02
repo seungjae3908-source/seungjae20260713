@@ -324,8 +324,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       <UnifiedTradeJournalPanel
         forcedMarket={marketMeta.journalMarket}
         title="매매일지"
-        description="직접매매 · 자동매매 · 자동모의매매를 분리해서 보고, 기간조회와 엑셀 다운로드를 지원합니다."
-        description={marketMeta.label + ' 거래만 표시합니다. 비용 근거가 없으면 순손익을 임의로 0으로 만들지 않습니다.'}
+        description={marketMeta.label + ' · 직접매매/자동매매/자동모의매매를 분리하고 기간조회·엑셀 다운로드를 지원합니다. 비용 근거가 없으면 순손익을 임의로 0으로 만들지 않습니다.'}
       />
       {mode === 'paper' && userId ? (
         <details className="rounded-2xl border border-card-border bg-card" data-testid="paper-journal-sync-tools">
