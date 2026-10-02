@@ -74,8 +74,10 @@ import {
 import { getScannerSignalLifecycleSnapshot } from './scanner-signal-lifecycle.service';
 import type {
   TradingExchange,
+  TradingMarketSnapshot,
   TradingOrder,
   TradingPlan,
+  TradingPlanInput,
   TradingRiskDecision,
 } from './trade-automation.types';
 
@@ -404,6 +406,180 @@ export class TradeExecutionService {
     this.recovery = new TradeOrderRecoveryService(repository);
     this.cancelService = new TradeCancelReconciliationService(repository);
     this.riskService = new TradePreSubmissionRiskService(repository);
+  }
+
+  async previewLiveRiskSnapshot(
+    userId: string,
+    input: TradingPlanInput,
+    options: { fxKrwPerQuoteCurrency?: number; now?: Date } = {},
+  ): Promise<{
+    snapshot: TradingMarketSnapshot;
+    providerRequests: number;
+    orderRequests: 0;
+    cancelRequests: 0;
+    amendRequests: 0;
+    transferRequests: 0;
+    withdrawalRequests: 0;
+  }> {
+    if (input.accountMode !== 'live') throw new Error('LIVE_PREVIEW_ACCOUNT_MODE_REQUIRED');
+    const connection = await this.repository.getConnection(userId, input.exchange);
+    if (!connection?.configured || connection.accountMode !== 'live' || !connection.encryptedCredentials) {
+      throw new Error('LIVE_EXECUTION_CONNECTION_NOT_CONFIGURED');
+    }
+    if (!connection.lastVerifiedAt || connection.lastErrorCode) {
+      throw new Error('LIVE_EXECUTION_CONNECTION_NOT_VERIFIED');
+    }
+    const now = options.now ?? new Date();
+    const fx = Number(options.fxKrwPerQuoteCurrency ?? 1);
+    if (!Number.isFinite(fx) || fx <= 0) throw new Error('LIVE_PREVIEW_FX_REQUIRED');
+    const provisional: TradingPlan = {
+      ...input,
+      executionMode: 'automatic',
+      id: '00000000-0000-0000-0000-000000000001',
+      userId,
+      idempotencyKey: 'live-preview',
+      state: 'APPROVAL_PENDING',
+      version: 0,
+      approvalExpiresAt: new Date(now.getTime() + 60_000).toISOString(),
+      approvedAt: null,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+    const credentials = decryptTradingCredentials(connection.encryptedCredentials);
+    const signal = provisional.marketSnapshot.signalState && provisional.marketSnapshot.signalObservedAt
+      ? { state: provisional.marketSnapshot.signalState, observedAt: provisional.marketSnapshot.signalObservedAt }
+      : null;
+    let providerRequests = 0;
+    const request = async <T>(operation: () => Promise<T>) => {
+      providerRequests += 1;
+      return operation();
+    };
+    let snapshot: TradingMarketSnapshot;
+
+    if (input.exchange === 'bitget') {
+      const bitget = credentials as BitgetCredentials;
+      const [accounts, positions, pending, contracts, ticker, depth] = await Promise.all([
+        request(() => sendExchangeRequest(BASE_URLS.bitget, prepareBitgetAccount(bitget), PREFLIGHT_TIMEOUT_MS).then(assertBitgetSuccess)),
+        request(() => sendExchangeRequest(BASE_URLS.bitget, prepareBitgetPositions(bitget), PREFLIGHT_TIMEOUT_MS).then(assertBitgetSuccess)),
+        request(() => sendExchangeRequest(BASE_URLS.bitget, prepareBitgetPendingOrders(bitget, provisional.symbol), PREFLIGHT_TIMEOUT_MS).then(assertBitgetSuccess)),
+        request(() => sendExchangeRequest(BASE_URLS.bitget, prepareBitgetContractConfig(provisional.symbol), PREFLIGHT_TIMEOUT_MS).then(assertBitgetSuccess)),
+        request(() => sendExchangeRequest(BASE_URLS.bitget, prepareBitgetTicker(provisional.symbol), PREFLIGHT_TIMEOUT_MS).then(assertBitgetSuccess)),
+        request(() => sendExchangeRequest(BASE_URLS.bitget, prepareBitgetExecutionDepth(provisional.symbol), PREFLIGHT_TIMEOUT_MS).then(assertBitgetSuccess)),
+      ]);
+      const contractRows = Array.isArray(contracts) ? contracts.filter(isRecord) : [];
+      const contract = contractRows.find((row) => String(row.symbol ?? '').toUpperCase() === provisional.symbol.toUpperCase());
+      if (!contract) throw new Error('BITGET_CONTRACT_RULES_UNAVAILABLE');
+      const tickerRows = Array.isArray(ticker) ? ticker.filter(isRecord) : [];
+      const tickerRow = tickerRows.find((row) => String(row.symbol ?? '').toUpperCase() === provisional.symbol.toUpperCase()) ?? tickerRows[0];
+      validateBitgetContractRules(provisional, contract, Number(tickerRow?.markPrice ?? tickerRow?.lastPr ?? 0));
+      bitgetPreflight([accounts, positions, pending, ticker], provisional, 'live-preview-no-order');
+      const built = buildBitgetExecutionSnapshot({ plan: provisional, accounts, positions, ticker, depth, contract, signal });
+      const accountRows = Array.isArray(accounts) ? accounts.filter(isRecord) : [];
+      const account = accountRows.find((row) => String(row.marginCoin ?? '').toUpperCase() === 'USDT') ?? accountRows[0];
+      const equityNative = Number(account?.accountEquity ?? account?.usdtEquity ?? account?.equity ?? 0);
+      snapshot = {
+        ...built,
+        accountValueKrw: Number.isFinite(equityNative) && equityNative > 0
+          ? equityNative * fx
+          : Math.max(1, built.availableBalance),
+      };
+    } else if (input.exchange === 'upbit') {
+      const upbit = credentials as UpbitCredentials;
+      const [accounts, chance, ticker, orderbook, waitOrders, watchOrders] = await Promise.all([
+        request(() => sendExchangeRequest(BASE_URLS.upbit, prepareUpbitAccounts(upbit), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess)),
+        request(() => sendExchangeRequest(BASE_URLS.upbit, prepareUpbitOrderChance(upbit, provisional.symbol), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess)),
+        request(() => sendExchangeRequest(BASE_URLS.upbit, prepareUpbitExecutionTicker(provisional.symbol), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess)),
+        request(() => sendExchangeRequest(BASE_URLS.upbit, prepareUpbitExecutionOrderbook(provisional.symbol), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess)),
+        request(() => sendExchangeListRequest(BASE_URLS.upbit, prepareUpbitOpenOrders(upbit, provisional.symbol, 'wait'), PREFLIGHT_TIMEOUT_MS)),
+        request(() => sendExchangeListRequest(BASE_URLS.upbit, prepareUpbitOpenOrders(upbit, provisional.symbol, 'watch'), PREFLIGHT_TIMEOUT_MS)),
+      ]);
+      assertNoOrphanExchangeOrders('upbit', upbitPendingRefs([...waitOrders, ...watchOrders]), await this.repository.listOrders(userId));
+      const built = buildUpbitExecutionSnapshot({ plan: provisional, accounts, chance, ticker, orderbook, signal });
+      const accountRows = isRecord(accounts) && Array.isArray(accounts.data) ? accounts.data.filter(isRecord) : [];
+      const krw = accountRows.find((row) => String(row.currency ?? '').toUpperCase() === 'KRW');
+      const base = provisional.symbol.toUpperCase().replace(/^KRW-/, '');
+      const asset = accountRows.find((row) => String(row.currency ?? '').toUpperCase() === base);
+      const krwValue = Math.max(0, Number(krw?.balance ?? 0)) + Math.max(0, Number(krw?.locked ?? 0));
+      const assetQuantity = Math.max(0, Number(asset?.balance ?? 0)) + Math.max(0, Number(asset?.locked ?? 0));
+      const assetValue = assetQuantity * Math.max(0, Number(built.currentPrice ?? 0));
+      const equity = krwValue + assetValue;
+      snapshot = {
+        ...built,
+        accountValueKrw: equity > 0 ? equity : Math.max(1, built.availableBalance),
+        assetExposurePercent: equity > 0 ? assetValue / equity * 100 : built.assetExposurePercent,
+      };
+    } else if (input.exchange === 'kiwoom') {
+      const kiwoom = credentials as KiwoomCredentials;
+      const tokenPayload = assertKiwoomSuccess(await request(() => sendExchangeRequest(
+        BASE_URLS.kiwoom, prepareKiwoomToken(kiwoom), PREFLIGHT_TIMEOUT_MS,
+      )));
+      const token = String(tokenPayload.token ?? (isRecord(tokenPayload.data) ? tokenPayload.data.token : '') ?? '');
+      if (!token) throw new Error('KIWOOM_TOKEN_MISSING');
+      const authenticated = { ...kiwoom, accessToken: token };
+      if (provisional.market.toUpperCase() === 'US') {
+        const [orderable, holdings, unfilled, orderbook] = await Promise.all([
+          request(() => sendExchangeRequest(BASE_URLS.kiwoom, prepareKiwoomUsOrderable(authenticated, provisional), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess)),
+          request(() => sendExchangeRequest(BASE_URLS.kiwoom, prepareKiwoomUsHoldings(authenticated, provisional), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess)),
+          request(() => sendExchangeRequest(BASE_URLS.kiwoom, prepareKiwoomUsUnfilled(authenticated, provisional), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess)),
+          request(() => sendExchangeRequest(BASE_URLS.kiwoom, prepareKiwoomUsOrderbook(authenticated, provisional), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess)),
+        ]);
+        assertNoOrphanExchangeOrders('kiwoom', kiwoomPendingRefs(unfilled), await this.repository.listOrders(userId));
+        const built = buildKiwoomUsExecutionSnapshot({
+          plan: provisional, orderable, holdings, unfilled, orderbook, signal, observedAt: now,
+        });
+        snapshot = { ...built, accountValueKrw: Math.max(1, built.availableBalance) };
+      } else {
+        if (!marketOpenInSeoul(now) && process.env.KIWOOM_ALLOW_OFF_HOURS !== 'true') throw new Error('KIWOOM_MARKET_CLOSED');
+        const [orderable, unfilled, orderbook] = await Promise.all([
+          request(() => sendExchangeRequest(BASE_URLS.kiwoom, prepareKiwoomOrderable(authenticated), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess)),
+          request(() => sendExchangeRequest(BASE_URLS.kiwoom, prepareKiwoomUnfilled(authenticated), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess)),
+          request(() => sendExchangeRequest(BASE_URLS.kiwoom, prepareKiwoomExecutionOrderbook(token, provisional.symbol), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess)),
+        ]);
+        assertNoOrphanExchangeOrders('kiwoom', kiwoomPendingRefs(unfilled), await this.repository.listOrders(userId));
+        const built = buildKiwoomExecutionSnapshot({
+          plan: provisional, orderable, unfilled, orderbook, signal, observedAt: now,
+        });
+        snapshot = { ...built, accountValueKrw: Math.max(1, built.availableBalance) };
+      }
+    } else {
+      const toss = credentials as TossCredentials;
+      const tokenPayload = await request(() => sendExchangeRequest(BASE_URLS.toss, prepareTossToken(toss), PREFLIGHT_TIMEOUT_MS));
+      const authenticated = { ...toss, accessToken: tossToken(tokenPayload) };
+      const market = provisional.market.toUpperCase() as 'KR' | 'US';
+      if (market !== 'KR' && market !== 'US') throw new Error('TOSS_MARKET_INVALID');
+      const currency = market === 'KR' ? 'KRW' as const : 'USD' as const;
+      const [accounts, orderbook, prices, buyingPower, sellableQuantity, commissions, marketCalendar, openOrders] = await Promise.all([
+        request(() => sendExchangeRequest(BASE_URLS.toss, prepareTossAccounts(authenticated), PREFLIGHT_TIMEOUT_MS)),
+        request(() => sendExchangeRequest(BASE_URLS.toss, prepareTossOrderbook(authenticated, provisional.symbol), PREFLIGHT_TIMEOUT_MS)),
+        request(() => sendExchangeRequest(BASE_URLS.toss, prepareTossPrices(authenticated, provisional.symbol), PREFLIGHT_TIMEOUT_MS)),
+        request(() => sendExchangeRequest(BASE_URLS.toss, prepareTossBuyingPower(authenticated, currency), PREFLIGHT_TIMEOUT_MS)),
+        provisional.side === 'sell'
+          ? request(() => sendExchangeRequest(BASE_URLS.toss, prepareTossSellableQuantity(authenticated, provisional.symbol), PREFLIGHT_TIMEOUT_MS))
+          : Promise.resolve({ result: { sellableQuantity: '0' } } as ExchangePayload),
+        request(() => sendExchangeRequest(BASE_URLS.toss, prepareTossCommissions(authenticated), PREFLIGHT_TIMEOUT_MS)),
+        request(() => sendExchangeRequest(BASE_URLS.toss, prepareTossMarketCalendar(authenticated, market), PREFLIGHT_TIMEOUT_MS)),
+        request(() => sendExchangeRequest(BASE_URLS.toss, prepareTossOpenOrders(authenticated, provisional.symbol), PREFLIGHT_TIMEOUT_MS)),
+      ]);
+      assertNoOrphanExchangeOrders('toss', tossPendingRefs(openOrders), await this.repository.listOrders(userId));
+      const built = buildTossExecutionSnapshot({
+        plan: provisional,
+        accountSeq: authenticated.accountSeq,
+        payloads: { accounts, orderbook, prices, buyingPower, sellableQuantity, commissions, marketCalendar },
+        signal,
+        now,
+      });
+      snapshot = { ...built, accountValueKrw: Math.max(1, built.availableBalance) };
+    }
+
+    return {
+      snapshot,
+      providerRequests,
+      orderRequests: 0,
+      cancelRequests: 0,
+      amendRequests: 0,
+      transferRequests: 0,
+      withdrawalRequests: 0,
+    };
   }
 
   async verifyLiveConnection(userId: string, exchange: TradingExchange) {
