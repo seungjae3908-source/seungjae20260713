@@ -86,6 +86,7 @@ jobs:
           grep -Fq "Persist bounded, sanitized provider state before any connectivity assertion" "$spec"
           grep -Fq "new URL('/api/auth/profile'" "$login"
           grep -Fq "Do not submit credentials a second time" "$login"
+          grep -Fq "ACCOUNT_READ_ACTIVATION_PROVIDER_CODE_DRIFT_REQUIRES_REDEPLOY" "$file"
           if grep -Eq "bitgetRequest\([^,]+,[[:space:]]*'(POST|DELETE)'[[:space:]]*,[[:space:]]*'/api/v3/(account/info|account/assets|position/current-position|trade/unfilled-orders)'" "$adapter"; then
             echo 'Bitget UTA read-only endpoints must remain GET-only.' >&2
             exit 1
@@ -186,6 +187,21 @@ jobs:
               return;
             }
             core.info('Production provenance and shared live concurrency gate accepted.');
+
+      - name: Require account read-only code identity with active Production
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags --depth=1 origin "$ACTIVE_SHA" "$TARGET_SHA"
+          if ! git diff --quiet "$ACTIVE_SHA" "$TARGET_SHA" -- \
+            api-server/src/features/account-readonly \
+            api-server/src/services/trade-exchange-adapters.service.ts
+          then
+            echo 'ACCOUNT_READ_ACTIVATION_PROVIDER_CODE_DRIFT_REQUIRES_REDEPLOY' >&2
+            exit 1
+          fi
 
       - name: Configure canonical Production SSH
         run: |
