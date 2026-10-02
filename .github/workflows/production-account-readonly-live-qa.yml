@@ -86,6 +86,8 @@ jobs:
           requireText(spec, 'installProductionReadOnlyPolicy', 'READONLY_BROWSER_POLICY_REQUIRED');
           requireText(spec, '/api/accounts/read-only/credentials/status', 'CREDENTIAL_STATUS_READ_REQUIRED');
           requireText(spec, 'Persist bounded, sanitized provider state before any connectivity assertion', 'SANITIZED_FAILURE_DIAGNOSTICS_REQUIRED');
+          requireText(spec, 'Do not immediately add a third', 'REDUNDANT_PROVIDER_REFRESH_GUARD_REQUIRED');
+          requireText(spec, 'requiredSnapshotsHealthy', 'HEALTHY_SNAPSHOT_RETRY_GATE_REQUIRED');
           requireText(spec, 'testedProviders', 'TESTED_PROVIDERS_EVIDENCE_REQUIRED');
           requireText(spec, 'reconciliationPassed', 'TARGET_PROVIDER_RECONCILIATION_REQUIRED');
           requireText(spec, 'bitgetDiagnostic', 'BITGET_SANITIZED_DIAGNOSTIC_REQUIRED');
