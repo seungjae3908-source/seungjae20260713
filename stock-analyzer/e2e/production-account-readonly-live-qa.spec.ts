@@ -207,25 +207,34 @@ test('Production real-account read-only providers return fresh connected snapsho
   // provider fan-out from QA; that previously increased Toss rate-limit risk.
   // Reuse the real UI's initial snapshots when they arrive, and issue exactly
   // one bounded manual refresh only if a required provider is still missing.
-  let initialSnapshotsReady = false;
+  const requiredSnapshotsHealthy = () => requiredSnapshots.every((provider) => {
+    const snapshot = snapshots.get(provider);
+    return snapshot?.connected === true
+      && snapshot.status === 'CONNECTED'
+      && snapshot.stale === false
+      && snapshot.errorCode === null
+      && Array.isArray(snapshot.openOrders);
+  });
+
+  let initialSnapshotsHealthy = false;
   try {
     await expect.poll(
-      () => requiredSnapshots.every((provider) => snapshots.has(provider)),
-      { timeout: 20_000, intervals: [200, 500, 1_000] },
+      requiredSnapshotsHealthy,
+      { timeout: 20_000, intervals: [200, 500, 1_000, 2_000] },
     ).toBe(true);
-    initialSnapshotsReady = true;
+    initialSnapshotsHealthy = true;
   } catch {
-    initialSnapshotsReady = false;
+    initialSnapshotsHealthy = false;
   }
 
-  if (!initialSnapshotsReady) {
+  if (!initialSnapshotsHealthy) {
     const refresh = page.getByRole('button', { name: '계좌 연결 새로고침' });
     await expect(refresh).toBeVisible({ timeout: 10_000 });
     await expect(refresh).toBeEnabled({ timeout: 15_000 });
     await refresh.click();
     await expect.poll(
-      () => requiredSnapshots.every((provider) => snapshots.has(provider)),
-      { timeout: 45_000, intervals: [500, 1_000, 2_000] },
+      requiredSnapshotsHealthy,
+      { timeout: 45_000, intervals: [500, 1_000, 2_000, 5_000] },
     ).toBe(true);
   }
 
