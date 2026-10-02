@@ -223,7 +223,7 @@ jobs:
             if (!account) return;
 
             const comments = await github.paginate(github.rest.issues.listComments, {
-              owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, per_page: 100,
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: 1555, per_page: 100,
             });
             const postDeploy = comments.filter((comment) =>
               Date.parse(comment.created_at || '') >= productionCompletedAt);
@@ -516,7 +516,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
               body: [
                 '[PRODUCTION_AUTOMATIC_TRADING_GATE]',
                 'status: ACTIVATED_ALL4_AUTO',
@@ -693,7 +693,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
               body: [
                 '[PRODUCTION_AUTOMATIC_TRADING_GATE]',
                 'status: DISABLED_ALL4_MANUAL_LIVE_PRESERVED',
