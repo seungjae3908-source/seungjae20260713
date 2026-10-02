@@ -88,7 +88,9 @@ jobs:
           grep -Fq "requiredSnapshotsHealthy" "$spec"
           grep -Fq "new URL('/api/auth/profile'" "$login"
           grep -Fq "Do not submit credentials a second time" "$login"
-          grep -Fq "ACCOUNT_READ_ACTIVATION_PRE_QA_SUCCESS_MISSING" "$file"
+          grep -Fq "ACCOUNT_READ_ACTIVATION_PRE_QA_SUCCESS_MISSING_OR_RELEVANT_DRIFT" "$file"
+          grep -Fq "production-account-readonly-live-qa.spec.ts" "$file"
+          grep -Fq "brokerage-account-connections.tsx" "$file"
           grep -Fq "post-merge-provenance/verified" "$file"
           grep -Fq "ACCOUNT_READ_ACTIVATION_PROVIDER_CODE_DRIFT_REQUIRES_REDEPLOY" "$file"
           grep -Fq "ACCOUNT_READ_ACTIVATION_MAIN_MOVED_BEFORE_MUTATION" "$file"
@@ -211,19 +213,60 @@ jobs:
               per_page: 100,
             });
             const expectedProviders = 'bitget,kiwoom,toss,upbit';
-            const match = runs
+            const candidates = runs
               .filter((run) =>
                 run.status === 'completed'
                 && run.conclusion === 'success'
-                && String(run.head_sha).toLowerCase() === target
                 && String(run.display_title ?? '').includes(active)
                 && String(run.display_title ?? '').includes(expectedProviders))
-              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+
+            const criticalExact = new Set([
+              '.github/workflows/production-account-readonly-live-qa.yml',
+              '.github/workflows/production-account-readonly-live-qa-dispatch-bridge.yml',
+              'api-server/src/services/trade-exchange-adapters.service.ts',
+              'stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts',
+              'stock-analyzer/e2e/production-account-readonly-live-qa-diagnostic.ts',
+              'stock-analyzer/e2e/support/production-readonly-login.ts',
+              'stock-analyzer/e2e/support/production-readonly-policy.ts',
+              'stock-analyzer/playwright.production-account-readonly.config.ts',
+              'stock-analyzer/src/components/brokerage-account-connections.tsx',
+              'stock-analyzer/src/pages/account.tsx',
+              'stock-analyzer/src/lib/auth-fetch.ts',
+              'stock-analyzer/src/main.tsx',
+              'pnpm-lock.yaml',
+              'package.json',
+              'stock-analyzer/package.json',
+            ]);
+            const criticalPrefix = ['api-server/src/features/account-readonly/'];
+            const isCritical = (filename) =>
+              criticalExact.has(filename) || criticalPrefix.some((prefix) => filename.startsWith(prefix));
+
+            let match = null;
+            for (const run of candidates) {
+              const qaHead = String(run.head_sha ?? '').toLowerCase();
+              if (!/^[0-9a-f]{40}$/.test(qaHead)) continue;
+              const compare = await github.rest.repos.compareCommits({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                base: qaHead,
+                head: target,
+                per_page: 100,
+              });
+              if (!['ahead', 'identical'].includes(compare.data.status)) continue;
+              const files = Array.isArray(compare.data.files) ? compare.data.files : [];
+              if (files.length >= 300) continue;
+              const drift = files.some((file) => isCritical(String(file.filename ?? '')));
+              if (drift) continue;
+              match = run;
+              break;
+            }
             if (!match) {
-              core.setFailed('ACCOUNT_READ_ACTIVATION_PRE_QA_SUCCESS_MISSING');
+              core.setFailed('ACCOUNT_READ_ACTIVATION_PRE_QA_SUCCESS_MISSING_OR_RELEVANT_DRIFT');
               return;
             }
-            core.info('Pre-activation four-provider Production QA accepted from Run ' + match.id + '.');
+            core.info('Pre-activation four-provider Production QA accepted from Run ' + match.id
+              + ' with no relevant drift through current main.');
 
       - name: Require verified post-merge provenance for exact current main
         uses: actions/github-script@v7
