@@ -1,10 +1,12 @@
-import { readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { open } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 const SNAPSHOT_FILE='video-research-public-provider-runtime-v3.json';
 const SHA=/^[0-9a-f]{40}$/u,DIGEST=/^[0-9a-f]{64}$/u,SAFE_CODE=/^[A-Z0-9_:-]{1,160}$/u;
 const FORBIDDEN_KEY=/(?:api.?key|access.?token|refresh.?token|secret|password|private.?key)/iu;
 const SAFE_CREDENTIAL_KEYS=new Set(['credentialConfigured','credentialValueExposed','credentialMutation']);
+const MAX_READ_BYTES=512*1024;
 const TRANSCRIPT=new Set(['AVAILABLE','UNAVAILABLE','NOT_AUTHORIZED','NOT_PROVIDED','UNSUPPORTED','PROVIDER_NOT_CONFIGURED','RATE_LIMITED','QUOTA_EXCEEDED','PARSE_FAILED','UNKNOWN']);
 const TRUST=new Set(['TIER_A_OFFICIAL','TIER_B_ACADEMIC','TIER_C_PRIMARY_EXPERT','TIER_D_SECONDARY_EDUCATIONAL','TIER_E_UNVERIFIED_CREATOR','UNKNOWN']);
 const object=value=>value&&typeof value==='object'&&!Array.isArray(value)?value:null;
@@ -15,7 +17,19 @@ function containsForbiddenKey(value){
  const row=object(value);if(!row)return false;
  return Object.entries(row).some(([key,nested])=>SAFE_CREDENTIAL_KEYS.has(key)?containsForbiddenKey(nested):FORBIDDEN_KEY.test(key)||containsForbiddenKey(nested));
 }
-async function optional(path){try{return JSON.parse(await readFile(path,'utf8'));}catch(error){if(error?.code==='ENOENT')return null;throw error;}}
+async function optional(path){
+ let handle;
+ try{
+  handle=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+  const before=await handle.stat();
+  if(!before.isFile()||before.size>MAX_READ_BYTES)throw new Error('VIDEO_RESEARCH_STATE_FILE_UNSAFE');
+  const bytes=Buffer.alloc(before.size);let offset=0;
+  while(offset<bytes.length){const chunk=await handle.read(bytes,offset,bytes.length-offset,offset);if(!chunk.bytesRead)break;offset+=chunk.bytesRead;}
+  const after=await handle.stat();
+  if(offset!==before.size||after.size!==before.size||after.mtimeMs!==before.mtimeMs||after.ctimeMs!==before.ctimeMs)throw new Error('VIDEO_RESEARCH_STATE_FILE_CHANGED');
+  return JSON.parse(bytes.toString('utf8'));
+ }catch(error){if(error?.code==='ENOENT')return null;throw error;}finally{await handle?.close();}
+}
 function safeSnapshot(row){
  if(!object(row)||containsForbiddenKey(row)||row.runtimeVersion!=='video-research-public-provider-runtime-v3'||row.status!=='SUCCESS'||row.provider!=='YOUTUBE_DATA_API_V3'||row.providerAccess!=='OFFICIAL_PUBLIC_API'||row.requestMode!=='READ_ONLY_GET')return null;
  if(row.credentialConfigured!==true||row.credentialValueExposed!==false||typeof row.query!=='string'||!row.query.trim()||!Number.isSafeInteger(row.pagesUsed)||row.pagesUsed<0||row.pagesUsed>1||typeof row.quotaState!=='string'||!row.quotaState)return null;
@@ -34,6 +48,8 @@ function safeSnapshot(row){
 }
 function safeAutomation(row){
  if(!object(row)||row.schemaVersion!=='research-video-discovery-scan-v1'||!['COMPLETE','BLOCKED','WAITING_CONFIGURATION'].includes(row.status)||!iso(row.observedAt)||!SHA.test(String(row.researchSha??''))||row.provider!=='YOUTUBE_DATA_API_V3')return null;
+ const safety=object(row.safety);
+ if(!safety||safety.researchOnly!==true||safety.metadataDiscoveryOnly!==true||safety.transcriptDownloadEnabled!==false||safety.automaticGeminiExecution!==false||safety.automaticGroqExecution!==false||safety.automaticAdoption!==false||safety.paidFallback!==false||safety.economicEvidenceCredit!==0||safety.profitabilityCredit!==0||safety.executionAuthority!=='NONE'||safety.liveTrading!==false||safety.privateTradingApiAllowed!==false||safety.realOrderEnabled!==false)return null;
  if(!['MANUAL','SYSTEMD_TIMER'].includes(row.invocationMode)||typeof row.scheduledInvocationObserved!=='boolean'||!Number.isSafeInteger(row.providerNetworkCalls)||row.providerNetworkCalls<0||row.providerNetworkCalls>1)return null;
  if(row.query!==null&&(typeof row.query!=='string'||!row.query.trim()||row.query.length>120))return null;
  if(row.sourceCount!==null&&(!Number.isSafeInteger(row.sourceCount)||row.sourceCount<0||row.sourceCount>5))return null;
