@@ -127,9 +127,11 @@ test('timer-configured service never claims scheduler observation without separa
     const history = await readdir(join(root, 'video-research', 'history'));
     const inbox = await readdir(join(root, 'video-research', 'inbox'));
     assert.equal(history.length, 2);
-    assert.equal(inbox.length, 2);
+    // The synthetic fixture intentionally returns the same source for both queries,
+    // so source-review identity is deduplicated even while discovery history remains complete.
+    assert.equal(inbox.length, 1);
     assert.equal(first.reviewInboxCreated, true);
-    assert.equal(second.reviewInboxCreated, true);
+    assert.equal(second.reviewInboxCreated, false);
     const latest = await readFile(join(root, 'video-research', 'latest.json'), 'utf8');
     assert.equal(latest.includes(SECRET), false);
     assert.match(latest, /SOURCE_REVIEW_THEN_EXISTING_GEMINI_GROQ_ORCHESTRATOR/);
