@@ -17,3 +17,9 @@ test('AI research unit installer installs only and never activates timers', asyn
   assert.ok(preflightIndex >= 0 && installIndex >= 0 && preflightIndex < installIndex,
     'active/enabled timer preflight must occur before unit-file mutation');
 });
+
+test('AI and video services reuse one provider-only Research environment file', async () => {
+  const ai=await readFile(new URL('../deploy/research-production-ai-review.service', import.meta.url),'utf8');
+  const video=await readFile(new URL('../deploy/research-production-video-discovery.service', import.meta.url),'utf8');
+  for(const unit of [ai,video])assert.match(unit,/EnvironmentFile=-\/etc\/investment-research\/research-providers\.env/);
+});
