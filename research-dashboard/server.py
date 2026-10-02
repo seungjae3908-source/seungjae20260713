@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from v3_independence import read_v3_independence_summary
+from video_research_readback import read_video_research_readback
 
 MODULE_DIR = Path(__file__).resolve().parent
 DEFAULT_STATE_ROOT = Path('/var/lib/investment-research-production')
@@ -942,6 +943,8 @@ class ResearchDashboardHandler(BaseHTTPRequestHandler):
                 }, head_only)
             if pathname == '/api/research/overview':
                 return self._json(200, build_research_overview(self.server.state_root), head_only)
+            if pathname == '/api/research/video/evidence':
+                return self._json(200, read_video_research_readback(self.server.state_root), head_only)
             if pathname.startswith('/api/'):
                 return self._json(404, {'ok': False, 'error': 'not_found'}, head_only)
 
