@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import test from "node:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+
+import { buildPumpProspectivePolicyV1 } from "../src/crypto-pump-reversal-prospective-policy-v1.js";
 
 const installPath = new URL("../../ops/install-pump-reversal-prospective-schedule.sh", import.meta.url);
 const disablePath = new URL("../../ops/disable-pump-reversal-prospective-schedule.sh", import.meta.url);
@@ -56,6 +58,32 @@ test("Pump installer is isolated, minute-cadence, exact-SHA and Paper-only", asy
     "/api/v2/mix/order/",
     "/api/v2/mix/account/",
   ]) assert.equal(source.includes(forbidden), false, forbidden);
+});
+
+test("Pump installer rejects a corrupted frozen policy before cron mutation", async () => {
+  const source = await readFile(installPath, "utf8");
+  const block = /(policy_summary_for_path\(\) \{\n[\s\S]*?\n\})\n\nSOURCE_POLICY_SUMMARY=/u.exec(source)?.[1];
+  assert.ok(block, "policy_summary_for_path block");
+
+  const root = await mkdtemp(join(tmpdir(), "pump-policy-preflight-"));
+  try {
+    const validPath = join(root, "valid.json");
+    const corruptPath = join(root, "corrupt.json");
+    const policy = buildPumpProspectivePolicyV1({
+      researchCodeSha: "a".repeat(40),
+      policyFrozenAtMs: 1_800_000_000_000,
+    });
+    await writeFile(validPath, JSON.stringify(policy));
+    await writeFile(corruptPath, JSON.stringify({ ...policy, policyDigest: "0".repeat(64) }));
+
+    const shell = ["set -Eeuo pipefail", block, 'policy_summary_for_path "$1" >/dev/null'].join("\n");
+    await execFileAsync("bash", ["-c", shell, "pump-policy-test", validPath]);
+    await assert.rejects(
+      () => execFileAsync("bash", ["-c", shell, "pump-policy-test", corruptPath]),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("Pump wrapper generation defers runtime variables under set -u", async () => {
