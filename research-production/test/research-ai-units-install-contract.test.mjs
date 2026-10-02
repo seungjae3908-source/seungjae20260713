@@ -29,3 +29,15 @@ test('AI service marks timer contract but does not self-claim timer proof', asyn
   assert.match(unit,/Environment=RESEARCH_AI_INVOCATION_MODE=SYSTEMD_TIMER/);
   assert.doesNotMatch(unit,/scheduledInvocationObserved=true/);
 });
+
+test('provider credentials load after policy files so empty policy values cannot shadow secrets', async () => {
+  const ai=await readFile(new URL('../deploy/research-production-ai-review.service', import.meta.url),'utf8');
+  const video=await readFile(new URL('../deploy/research-production-video-discovery.service', import.meta.url),'utf8');
+  assert.ok(ai.indexOf('research-ai.env') < ai.indexOf('research-providers.env'));
+  assert.ok(video.indexOf('research-video.env') < video.indexOf('research-providers.env'));
+  const aiPolicy=await readFile(new URL('../deploy/research-ai.env.example', import.meta.url),'utf8');
+  const videoPolicy=await readFile(new URL('../deploy/research-video.env.example', import.meta.url),'utf8');
+  assert.doesNotMatch(aiPolicy,/^GROQ_API_KEY=/m);
+  assert.doesNotMatch(aiPolicy,/^GEMINI_API_KEY=/m);
+  assert.doesNotMatch(videoPolicy,/^YOUTUBE_DATA_API_KEY=/m);
+});
