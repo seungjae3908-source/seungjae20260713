@@ -153,7 +153,12 @@ function importedHistoryRecord(payload: Record<string, unknown>, observedAt: Dat
     ...payload,
     observedAt: sourceTime,
     warnings: Array.isArray(payload.warnings)
-      ? [...new Set([...payload.warnings.filter((item): item is string => typeof item === 'string'), 'BROKER_HISTORY_IMPORTED_PERSISTENTLY'])]
+      ? [...new Set([
+          ...payload.warnings.filter((item): item is string => (
+            typeof item === 'string' && item !== 'REAL_ACCOUNT_HISTORY_NOT_PERSISTED'
+          )),
+          'BROKER_HISTORY_IMPORTED_PERSISTENTLY',
+        ])]
       : ['BROKER_HISTORY_IMPORTED_PERSISTENTLY'],
   };
   return {
@@ -415,11 +420,13 @@ export function createPaperJournalRouter(
           ? readTradeAutomationJournalPayloads(createSupabaseTradingRepository(request.accessToken, ownerId), ownerId)
           : Promise.resolve([]),
       ]);
-      const appBrokerOrderIds = new Set(
-        automationPayloads.map((payload) => String(payload.brokerOrderId ?? '')).filter(Boolean),
+      const knownBrokerOrderIds = new Set(
+        [...storedPayloads, ...automationPayloads]
+          .map((payload) => String(payload.brokerOrderId ?? ''))
+          .filter(Boolean),
       );
       const externalHistoryPayloads = liveHistory.payloads.filter(
-        (payload) => !appBrokerOrderIds.has(String(payload.brokerOrderId ?? '')),
+        (payload) => !knownBrokerOrderIds.has(String(payload.brokerOrderId ?? '')),
       );
       const journal = buildUnifiedTradeJournal(
         [...storedPayloads, ...automationPayloads, ...externalHistoryPayloads],
