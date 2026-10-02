@@ -77,6 +77,14 @@ test('free provider policy fails closed unless an exact approved free route is c
   });
   assert.equal(coexist.provider, 'gemini');
   assert.equal(coexist.model, 'gemini-3.1-flash-lite');
+  const conflict = resolveResearchFreeAiPolicy({
+    RESEARCH_AI_FREE_TIER_CONFIRMED: 'true',
+    AI_CHAT_PROVIDER: 'groq',
+    GROQ_API_KEY: 'PROVIDER_KEY_A',
+    AI_CHAT_API_KEY: 'PROVIDER_KEY_B',
+  });
+  assert.equal(conflict.provider, null);
+  assert.equal(conflict.reason, 'PROVIDER_CONFIGURATION_CONFLICT');
 });
 
 test('provider presence maps a generic AI key only to its explicitly selected provider', async () => {
