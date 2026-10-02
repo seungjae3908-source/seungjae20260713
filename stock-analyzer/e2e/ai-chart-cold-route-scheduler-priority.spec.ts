@@ -26,3 +26,29 @@ test('direct AI Chart prioritizes the route request without adding document-leve
   expect(main).toContain('function startApplicationGraph()');
   expect(main).toMatch(/if \(directAiChartColdRoute\) \{\s*window\.setTimeout\(startApplicationGraph, 0\);\s*\} else \{\s*startApplicationGraph\(\);\s*\}/);
 });
+
+
+test('direct desktop cold route defers non-critical evidence chunks until the critical chart renderer mounts', () => {
+  const page = fs
+    .readFileSync(path.resolve(process.cwd(), 'src/pages/ai-chart.tsx'), 'utf8')
+    .replace(/\r\n?/g, '\n');
+
+  expect(page).toContain("const DIRECT_AI_CHART_COLD_ROUTE = typeof window !== 'undefined' && window.location.pathname.endsWith('/ai-chart');");
+  expect(page).toContain('const [criticalRendererMounted, setCriticalRendererMounted] = useState(() => !DIRECT_AI_CHART_COLD_ROUTE);');
+  expect(page).toContain('setCriticalRendererMounted(true);');
+  expect(page).toContain('onAnalysisChange={handleAnalysisChange}');
+  expect(page).toMatch(/const deferNonCriticalEvidence = DIRECT_AI_CHART_COLD_ROUTE\s*&& desktop\s*&& !embedded\s*&& !externalMode\s*&& !criticalRendererMounted;/);
+  expect(page).toContain('hasSelection && !deferNonCriticalEvidence');
+  expect(page).toContain('data-testid="ai-chart-cold-evidence-deferred"');
+
+  const detailsStart = page.indexOf('const details = hasSelection ?');
+  const detailsEnd = page.indexOf('const mobile = !desktop', detailsStart);
+  const details = page.slice(detailsStart, detailsEnd);
+  const guard = details.indexOf('deferNonCriticalEvidence ?');
+  const intelligence = details.indexOf('{intelligencePanel}', guard);
+  const futures = details.indexOf('<LazyFuturesPublicContextPanel', guard);
+  expect(guard).toBeGreaterThanOrEqual(0);
+  expect(intelligence).toBeGreaterThan(guard);
+  expect(futures).toBeGreaterThan(guard);
+  expect(page).not.toContain('setTimeout(() => setCriticalRendererMounted');
+});
