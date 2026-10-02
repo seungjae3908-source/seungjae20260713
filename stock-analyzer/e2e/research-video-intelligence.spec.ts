@@ -49,7 +49,7 @@ for(const width of [320,1440]){
     await expect(h.panel).toContainText('AI review');
     await expect(page.getByTestId('video-validation-state')).toContainText('TIMER 실행 확인');
     await expect(page.getByTestId('video-validation-state')).toContainText('0 / 1');
-    await expect(page.getByTestId('video-phase2-safety-footer')).toContainText('timer evidence shown separately');
+    await expect(page.getByTestId('video-phase2-safety-footer')).toContainText('timer evidence proven from systemd trigger correlation');
     expect(h.calls.length).toBeGreaterThan(0);expect(h.calls.every(x=>x.method==='GET'&&x.auth)).toBe(true);
     expect(h.external).toEqual([]);expect(h.errors).toEqual([]);
     expect(await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBeLessThanOrEqual(2);
