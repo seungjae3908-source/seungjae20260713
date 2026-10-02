@@ -345,6 +345,32 @@ test('video research evidence reader fails closed on secret-bearing or authority
 });
 
 
+test('video automation authority violation is discarded without discarding valid source evidence', async () => {
+  const snapshot = videoEvidenceSnapshot();
+  snapshot.automation = {
+    ...snapshot.automation,
+    safety: {
+      researchOnly: true,
+      metadataDiscoveryOnly: true,
+      transcriptDownloadEnabled: false,
+      automaticGeminiExecution: false,
+      automaticGroqExecution: false,
+      automaticAdoption: true,
+      paidFallback: false,
+      economicEvidenceCredit: 0,
+      profitabilityCredit: 0,
+      executionAuthority: 'NONE',
+      liveTrading: false,
+      privateTradingApiAllowed: false,
+      realOrderEnabled: false,
+    },
+  };
+  const result = await requestVideoEvidence(async () => snapshot);
+  assert.equal(result.body.available, true);
+  assert.equal(result.body.automation, null);
+  assert.equal(result.body.executionAuthority, 'NONE');
+});
+
 test('video automation stays visible but cannot bind to a different snapshot identity', async () => {
   const snapshot = videoEvidenceSnapshot();
   snapshot.automation = { ...snapshot.automation, observedAt: '2026-09-13T01:00:00.000Z' };

@@ -223,7 +223,23 @@ function safeAutomation(
 ): SafeAutomation | null {
   if (!isRecord(value)
     || value.schemaVersion !== 'research-video-discovery-scan-v1'
+    || value.provider !== PROVIDER
     || !['COMPLETE', 'BLOCKED', 'WAITING_CONFIGURATION'].includes(String(value.status ?? ''))) return null;
+  const automationSafety = isRecord(value.safety) ? value.safety : null;
+  if (!automationSafety
+    || automationSafety.researchOnly !== true
+    || automationSafety.metadataDiscoveryOnly !== true
+    || automationSafety.transcriptDownloadEnabled !== false
+    || automationSafety.automaticGeminiExecution !== false
+    || automationSafety.automaticGroqExecution !== false
+    || automationSafety.automaticAdoption !== false
+    || automationSafety.paidFallback !== false
+    || automationSafety.economicEvidenceCredit !== 0
+    || automationSafety.profitabilityCredit !== 0
+    || automationSafety.executionAuthority !== 'NONE'
+    || automationSafety.liveTrading !== false
+    || automationSafety.privateTradingApiAllowed !== false
+    || automationSafety.realOrderEnabled !== false) return null;
   const observedAt = canonicalIsoTimestamp(value.observedAt);
   const researchSha = exactSha(value.researchSha);
   if (!observedAt || !researchSha
