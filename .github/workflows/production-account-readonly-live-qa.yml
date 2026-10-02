@@ -1,4 +1,5 @@
 name: Production Account Read-only Live QA
+run-name: Production Account Read-only Live QA ${{ inputs.sha || github.event.pull_request.head.sha }} ${{ inputs.providers || 'contract' }}
 
 on:
   pull_request:
@@ -66,6 +67,7 @@ jobs:
           const requireText = (source, value, code) => {
             if (!source.includes(value)) throw new Error(code);
           };
+          requireText(workflow, 'run-name: Production Account Read-only Live QA', 'LIVE_QA_TARGETED_RUN_NAME_REQUIRED');
           requireText(live, "if: github.event_name == 'workflow_dispatch'", 'LIVE_QA_MUST_BE_DISPATCH_ONLY');
           requireText(live, 'environment: production', 'LIVE_QA_MUST_USE_PRODUCTION_ENVIRONMENT');
           requireText(live, 'PRODUCTION_BASE_URL: https://lsj119.com', 'LIVE_QA_OFFICIAL_HOST_REQUIRED');
