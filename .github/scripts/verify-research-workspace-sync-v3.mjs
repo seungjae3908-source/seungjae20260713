@@ -160,10 +160,11 @@ const mainRoute=git('show',`${MAIN}:api-server/src/routes/index.ts`);
 // not contain that reviewed mount. Never delete content that main now owns.
 if(!isAncestor(OWNER,MAIN) && !mainRoute.includes("import videoResearchEvidenceRouter from './video-research-evidence';"))current=current
  .replace("\nimport videoResearchEvidenceRouter from './video-research-evidence';",'').replace(mount,'');
-// #1463 intentionally shares one existing READ_ONLY account service instance so
-// portfolio intelligence and the account screen reuse token/last-good caches.
-// Normalize that reviewed refactor back to current-main text for preservation proof.
-current=current
+// #1463 intentionally shares one existing READ_ONLY account service instance.
+// Only normalize that reviewed refactor when exact current main still uses the
+// older constructor form. If current main already owns accountReadonlyRuntimeService,
+// preserving main means leaving it byte-for-byte unchanged.
+if(!mainRoute.includes("import { accountReadonlyRuntimeService } from '../features/account-readonly/account-readonly.runtime-service';"))current=current
  .replace(
    "import { createAccountReadonlyRouter } from '../features/account-readonly/account-readonly.route';\nimport { accountReadonlyRuntimeService } from '../features/account-readonly/account-readonly.runtime-service';",
    "import { createAccountReadonlyRouter, accountReadFlags } from '../features/account-readonly/account-readonly.route';\nimport { AccountReadonlyService } from '../features/account-readonly/account-readonly.service';\nimport { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';\nimport { accountReadonlyCredentialConfigured } from '../features/account-readonly/account-readonly.repository';",
