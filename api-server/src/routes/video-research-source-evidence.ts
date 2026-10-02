@@ -364,7 +364,7 @@ export async function loadVideoResearchRuntimeEvidenceSnapshot(): Promise<unknow
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 750);
+  const timer = setTimeout(() => controller.abort(), 1500);
   try {
     const response = await fetch('http://127.0.0.1:18090/api/research/video/evidence', {
       method: 'GET',
