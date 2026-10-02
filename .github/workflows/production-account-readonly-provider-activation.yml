@@ -196,7 +196,8 @@ jobs:
           TARGET_SHA: ${{ steps.command.outputs.target_sha }}
         run: |
           set -Eeuo pipefail
-          git fetch --no-tags --depth=1 origin "$ACTIVE_SHA" "$TARGET_SHA"
+          git cat-file -e "$ACTIVE_SHA^{commit}"
+          git cat-file -e "$TARGET_SHA^{commit}"
           if ! git diff --quiet "$ACTIVE_SHA" "$TARGET_SHA" -- \
             api-server/src/features/account-readonly \
             api-server/src/services/trade-exchange-adapters.service.ts
