@@ -149,6 +149,10 @@ if [[ -e "$POLICY_PATH" ]]; then
     [[ "$EXISTING_CANDIDATE_ID" == "$SOURCE_CANDIDATE_ID" ]]       || fail "existing Pump policy candidate identity mismatch; refusing retry" 9
   else
     [[ "$PUMP_OPERATIONAL_RETRY_EQUIVALENCE_VERIFIED" == true       && "$PUMP_ALLOWED_POLICY_RESEARCH_SHA" == "$EXISTING_RESEARCH_SHA" ]]       || fail "cross-SHA Pump policy reuse requires verified operational-only retry" 9
+    EXISTING_POLICY_RUNTIME="$RELEASE_ROOT/$EXISTING_RESEARCH_SHA/pump-runtime.mjs"
+    [[ -r "$EXISTING_POLICY_RUNTIME" ]]       || fail "cross-SHA Pump retry requires prior frozen runtime bundle" 9
+    EXISTING_POLICY_RUNTIME_DIGEST="$(sha256sum "$EXISTING_POLICY_RUNTIME" | awk '{print $1}')"
+    [[ "$EXISTING_POLICY_RUNTIME_DIGEST" == "$SOURCE_BUNDLE_DIGEST" ]]       || fail "cross-SHA Pump runtime bundle changed; refusing frozen policy reuse" 9
   fi
 else
   cp "$POLICY_SOURCE" "$POLICY_PATH.tmp-$$"
