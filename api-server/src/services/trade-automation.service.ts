@@ -80,7 +80,7 @@ function withMarketIntelligenceWarnings(decision: TradingRiskDecision, warnings:
 
 export function tradingIdempotencyKey(userId: string, input: TradingPlanInput) {
   return createHash('sha256').update([
-    userId, input.exchange, input.stockBroker ?? 'none', input.signalId, input.strategyId, input.market, input.symbol.toUpperCase(), input.side,
+    userId, input.accountMode, input.exchange, input.stockBroker ?? 'none', input.signalId, input.strategyId, input.market, input.symbol.toUpperCase(), input.side,
   ].join(':')).digest('hex');
 }
 

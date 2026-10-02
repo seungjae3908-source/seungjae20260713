@@ -6,6 +6,7 @@ import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import type { PaperJournalRepository } from './paper-journal.types';
 import {
   MemberAutoTradingBackgroundWorker,
+  marketMapping,
   resolveMemberStockBroker,
   startMemberAutoTradingBackgroundWorker,
   type MemberAutoTradingBackgroundSource,
@@ -285,6 +286,28 @@ test('member stock broker routing is user-selectable for stocks and fixed away f
   const legacy = normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, stockBrokerByMarket: undefined });
   assert.equal(resolveMemberStockBroker(legacy, 'KR_STOCK'), 'kiwoom');
   assert.equal(resolveMemberStockBroker(legacy, 'US_STOCK'), 'kiwoom');
+});
+
+test('stock automatic routing uses the selected Toss or Kiwoom provider as the canonical exchange', () => {
+  const base = policy();
+  const toss = normalizeTradingPolicy({
+    ...base,
+    stockBrokerByMarket: { domestic_stock: 'toss', us_stock: 'toss' },
+    exchangeEnabled: { ...base.exchangeEnabled, toss: true, kiwoom: false },
+  });
+  assert.deepEqual(marketMapping('KR_STOCK', toss), {
+    exchange: 'toss', assetClass: 'domestic_stock', planMarket: 'KR', stockBroker: 'toss',
+  });
+  assert.deepEqual(marketMapping('US_STOCK', toss), {
+    exchange: 'toss', assetClass: 'us_stock', planMarket: 'US', stockBroker: 'toss',
+  });
+  const kiwoom = normalizeTradingPolicy({
+    ...base,
+    stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'kiwoom' },
+    exchangeEnabled: { ...base.exchangeEnabled, toss: false, kiwoom: true },
+  });
+  assert.equal(marketMapping('KR_STOCK', kiwoom).exchange, 'kiwoom');
+  assert.equal(marketMapping('US_STOCK', kiwoom).exchange, 'kiwoom');
 });
 
 test('background worker is default OFF without explicit activation flag', () => {
