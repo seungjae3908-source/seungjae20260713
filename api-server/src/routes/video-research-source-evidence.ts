@@ -88,6 +88,25 @@ type SafeAutomation = {
   nextRequiredStep: string;
 };
 
+type SafeAiReview = {
+  status: 'WAITING_FOR_FREE_AI' | 'PARTIAL_AI_UNAVAILABLE' | 'COMPLETE' | 'NO_NEW_EVIDENCE';
+  observedAt: number;
+  researchSha: string;
+  provider: 'groq' | 'gemini' | null;
+  model: 'openai/gpt-oss-20b' | 'gemini-3.1-flash-lite' | null;
+  reason: string;
+  providerNetworkCalls: number;
+  cacheHits: number;
+  reviewCount: number;
+  proposerReviewCount: number;
+  criticReviewCount: number;
+  missingProfileCount: number;
+  blockedProfileCount: number;
+  deferredProfileCount: number;
+  invocationMode: 'MANUAL' | 'SYSTEMD_TIMER';
+  scheduledInvocationObserved: boolean;
+};
+
 type SafeSnapshotProvenance = {
   schemaVersion: typeof SNAPSHOT_SCHEMA;
   sourceHeadSha: string;
@@ -115,6 +134,7 @@ type SafeEvidence = {
   safety: typeof REQUIRED_SAFETY;
   snapshotProvenance: SafeSnapshotProvenance;
   automation: SafeAutomation | null;
+  aiReview: SafeAiReview | null;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -246,6 +266,42 @@ function safeAutomation(value: unknown): SafeAutomation | null {
   };
 }
 
+function safeAiReview(value: unknown): SafeAiReview | null {
+  if (value == null) return null;
+  if (!isRecord(value)) return null;
+  const statuses = new Set(['WAITING_FOR_FREE_AI','PARTIAL_AI_UNAVAILABLE','COMPLETE','NO_NEW_EVIDENCE']);
+  if (!statuses.has(String(value.status ?? ''))) return null;
+  if (typeof value.observedAt !== 'number' || !Number.isSafeInteger(value.observedAt) || value.observedAt <= 0) return null;
+  const researchSha = exactSha(value.researchSha);
+  const provider = value.provider === null ? null : value.provider === 'groq' || value.provider === 'gemini' ? value.provider : undefined;
+  const model = value.model === null ? null : value.model === 'openai/gpt-oss-20b' || value.model === 'gemini-3.1-flash-lite' ? value.model : undefined;
+  const reason = typeof value.reason === 'string' && /^[A-Z0-9_.:-]{1,160}$/u.test(value.reason) ? value.reason : null;
+  const countKeys = ['providerNetworkCalls','cacheHits','reviewCount','proposerReviewCount','criticReviewCount','missingProfileCount','blockedProfileCount','deferredProfileCount'] as const;
+  if (!researchSha || provider === undefined || model === undefined || !reason) return null;
+  if (value.invocationMode !== 'MANUAL' && value.invocationMode !== 'SYSTEMD_TIMER') return null;
+  if (typeof value.scheduledInvocationObserved !== 'boolean') return null;
+  if (countKeys.some((key) => typeof value[key] !== 'number' || !Number.isSafeInteger(value[key]) || value[key] < 0 || value[key] > 3)) return null;
+  if (value.proposerReviewCount + value.criticReviewCount !== value.reviewCount) return null;
+  return {
+    status: value.status as SafeAiReview['status'],
+    observedAt: value.observedAt,
+    researchSha,
+    provider,
+    model,
+    reason,
+    providerNetworkCalls: value.providerNetworkCalls as number,
+    cacheHits: value.cacheHits as number,
+    reviewCount: value.reviewCount as number,
+    proposerReviewCount: value.proposerReviewCount as number,
+    criticReviewCount: value.criticReviewCount as number,
+    missingProfileCount: value.missingProfileCount as number,
+    blockedProfileCount: value.blockedProfileCount as number,
+    deferredProfileCount: value.deferredProfileCount as number,
+    invocationMode: value.invocationMode as SafeAiReview['invocationMode'],
+    scheduledInvocationObserved: value.scheduledInvocationObserved,
+  };
+}
+
 function safetyMatches(value: unknown): value is typeof REQUIRED_SAFETY {
   if (!isRecord(value)) return false;
   return Object.entries(REQUIRED_SAFETY).every(([key, expected]) => value[key] === expected);
@@ -264,7 +320,8 @@ export function sanitizeVideoResearchRuntimeEvidence(value: unknown): SafeEviden
   if (!safetyMatches(value.safety)) return null;
   const snapshotProvenance = safeSnapshotProvenance(value.snapshotProvenance);
   const automation = safeAutomation(value.automation);
-  if (!snapshotProvenance || (value.automation != null && !automation)) return null;
+  const aiReview = safeAiReview(value.aiReview);
+  if (!snapshotProvenance || (value.automation != null && !automation) || (value.aiReview != null && !aiReview)) return null;
 
   const records = value.records.map(safeRecord);
   if (records.some((record) => record === null)) return null;
@@ -285,6 +342,7 @@ export function sanitizeVideoResearchRuntimeEvidence(value: unknown): SafeEviden
     safety: REQUIRED_SAFETY,
     snapshotProvenance,
     automation,
+    aiReview,
   };
 }
 
