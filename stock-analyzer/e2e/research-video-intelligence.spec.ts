@@ -5,7 +5,9 @@ const USER='99999999-9999-4999-8999-999999999999';
 const PROFILE={id:USER,login_name:'video-test-admin',display_name:'검증용 관리자',role:'admin',status:'approved',membership_level:'admin',is_active:true};
 const safety={researchOnly:true,economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE',paidProviderEnabled:false,scheduleActive:false,automaticDiscoveryEnabled:false,liveTrading:false,privateTradingApi:false,realOrderEnabled:false,credentialMutation:false,transcriptDownloadEnabled:false};
 const row={videoId:'TEST_ONLY_VIDEO',canonicalUrl:'https://www.youtube.com/watch?v=TEST_ONLY_VIDEO',title:'TEST_ONLY source',channelOrPublisher:'TEST_ONLY channel',publishedAt:'2026-09-12T00:00:00.000Z',discoveredAt:'2026-09-13T00:00:00.000Z',language:'ko',durationSec:321,transcriptStatus:'NOT_PROVIDED',captionsKnownPresent:false,sourceTrustTier:'UNKNOWN',contentAuthority:'UNTRUSTED_EXTERNAL_DATA',economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE'};
-const evidence={ok:true,available:true,dataState:'MEASURED',runtimeVersion:'video-research-public-provider-runtime-v3',status:'SUCCESS',provider:'YOUTUBE_DATA_API_V3',providerAccess:'OFFICIAL_PUBLIC_API',requestMode:'READ_ONLY_GET',query:'TEST_ONLY research',pagesUsed:1,quotaState:'BOUNDED_ESTIMATE_USED_100_UNITS',credentialConfigured:true,credentialValueExposed:false,sourceCount:1,records:[row],safety,snapshotProvenance:{schemaVersion:'video-research-sanitized-snapshot-v1',sourceHeadSha:'a'.repeat(40),observedAt:'2026-09-13T00:00:00.000Z',publisherMode:'LOCAL_ATOMIC_FILE',providerRuntimeVersion:'video-research-public-provider-runtime-v3',economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE'},economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE'};
+const automation={schemaVersion:'research-video-discovery-scan-v1',status:'COMPLETE',observedAt:'2026-10-02T03:00:00.000Z',researchSha:'a'.repeat(40),query:'TEST_ONLY research',sourceCount:1,snapshotDigest:'b'.repeat(64),providerNetworkCalls:1,invocationMode:'SYSTEMD_TIMER',scheduledInvocationObserved:true,reason:null,nextRequiredStep:'SOURCE_REVIEW_THEN_EXISTING_GEMINI_GROQ_ORCHESTRATOR'};
+const aiReview={status:'COMPLETE',observedAt:Date.parse('2026-10-02T03:00:30.000Z'),researchSha:'a'.repeat(40),provider:'groq',model:'openai/gpt-oss-20b',reason:'CONFIGURED_FREE_ONLY_QUOTA_UNKNOWN',providerNetworkCalls:1,cacheHits:0,reviewCount:1,proposerReviewCount:0,criticReviewCount:1,missingProfileCount:0,blockedProfileCount:0,deferredProfileCount:0,invocationMode:'SYSTEMD_TIMER',scheduledInvocationObserved:true};
+const evidence={ok:true,available:true,dataState:'MEASURED',runtimeVersion:'video-research-public-provider-runtime-v3',status:'SUCCESS',provider:'YOUTUBE_DATA_API_V3',providerAccess:'OFFICIAL_PUBLIC_API',requestMode:'READ_ONLY_GET',query:'TEST_ONLY research',pagesUsed:1,quotaState:'BOUNDED_ESTIMATE_USED_100_UNITS',credentialConfigured:true,credentialValueExposed:false,sourceCount:1,records:[row],safety,snapshotProvenance:{schemaVersion:'video-research-sanitized-snapshot-v1',sourceHeadSha:'a'.repeat(40),observedAt:'2026-09-13T00:00:00.000Z',publisherMode:'LOCAL_ATOMIC_FILE',providerRuntimeVersion:'video-research-public-provider-runtime-v3',economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE'},automation,aiReview,economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE'};
 async function install(page:Page,payload:unknown){
   const calls:Array<{method:string;auth:boolean}>=[],external:string[]=[],errors:string[]=[];
   page.on('pageerror',error=>errors.push(error.message));
@@ -43,7 +45,11 @@ for(const width of [320,1440]){
     await expect(page.getByTestId('video-strategy-state')).toContainText('BLOCKED_TRANSCRIPT_NOT_PROVIDED');
     await expect(page.getByTestId('video-evidence-state')).toContainText('aaaaaaaaaaaa');
     for(const word of ['FACT','CREATOR CLAIM','AI INFERENCE','UNKNOWN','CONTRADICTED'])await expect(page.getByTestId('video-truth-legend')).toContainText(word);
-    await expect(page.getByTestId('video-phase2-safety-footer')).toContainText('Schedule OFF');
+    await expect(page.getByTestId('video-discovery-state')).toContainText('TIMER-MODE 실행 확인');
+    await expect(h.panel).toContainText('AI review');
+    await expect(page.getByTestId('video-validation-state')).toContainText('TIMER 실행 확인');
+    await expect(page.getByTestId('video-validation-state')).toContainText('0 / 1');
+    await expect(page.getByTestId('video-phase2-safety-footer')).toContainText('timer evidence proven from systemd trigger correlation');
     expect(h.calls.length).toBeGreaterThan(0);expect(h.calls.every(x=>x.method==='GET'&&x.auth)).toBe(true);
     expect(h.external).toEqual([]);expect(h.errors).toEqual([]);
     expect(await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBeLessThanOrEqual(2);
@@ -56,9 +62,12 @@ for(const width of [320,1440]){
     await expect(page.getByTestId('video-transcript-state')).toContainText('MULTI_SOURCE');
   });
 }
-test('missing source stays unknown, not a measured zero',async({page})=>{
-  const {panel}=await install(page,{available:false,dataState:'UNKNOWN'});
+test('missing source stays unknown while safe AI status remains visible',async({page})=>{
+  const waitingAutomation={...automation,status:'WAITING_CONFIGURATION',query:null,sourceCount:null,snapshotDigest:null,providerNetworkCalls:0,scheduledInvocationObserved:false,reason:'YOUTUBE_PROVIDER_NOT_CONFIGURED',nextRequiredStep:'CONFIGURE_APPROVED_READ_ONLY_YOUTUBE_DISCOVERY'};
+  const {panel}=await install(page,{available:false,dataState:'UNKNOWN',reason:'VIDEO_RESEARCH_SNAPSHOT_MISSING',automation:waitingAutomation,aiReview});
   await expect(panel).toContainText('UNKNOWN — sanitized runtime snapshot unavailable');
+  await expect(panel).toContainText('설정 대기');
+  await expect(panel).toContainText('TIMER 실행 확인');
   await expect(page.getByTestId('video-evidence-state')).toContainText('UNKNOWN — missing runtime snapshot != 0');
   await expect(page.getByTestId('video-cluster-empty-state')).toContainText('missing을 0으로 만들지 않습니다');
 });
