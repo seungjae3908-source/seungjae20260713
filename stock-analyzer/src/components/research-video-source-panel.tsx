@@ -289,9 +289,11 @@ export function ResearchVideoPanel() {
       ? `BLOCKED · ${automation.reason ?? '원인 미확인'}`
       : automation.status === 'WAITING_CONFIGURATION'
         ? '설정 대기'
-        : automation.invocationMode === 'SYSTEMD_TIMER'
-          ? `최근 TIMER 실행 · ${formatAutomationTime(automation.observedAt)} · ${automation.snapshotBound ? 'snapshot 일치' : 'snapshot 미결합'}`
-          : `최근 MANUAL 실행 · ${formatAutomationTime(automation.observedAt)}`;
+        : automation.scheduledInvocationObserved
+          ? `timer trigger 확인 · ${formatAutomationTime(automation.observedAt)} · ${automation.snapshotBound ? 'snapshot 일치' : 'snapshot 미결합'}`
+          : automation.invocationMode === 'SYSTEMD_TIMER'
+            ? `SYSTEMD_TIMER 모드 실행 기록 · 실제 timer trigger 미검증 · ${formatAutomationTime(automation.observedAt)} · ${automation.snapshotBound ? 'snapshot 일치' : 'snapshot 미결합'}`
+            : `최근 MANUAL 실행 · ${formatAutomationTime(automation.observedAt)}`;
 
   const statusRows = [
     ['Video discovery', automationState],
@@ -311,8 +313,14 @@ export function ResearchVideoPanel() {
         ['Provider runtime', runtimeEvidence ? `${runtimeEvidence.providerAccess} / ${runtimeEvidence.requestMode}` : 'UNKNOWN — sanitized runtime snapshot unavailable'],
         ['Browser credential', 'NOT_EXPOSED'],
         ['최근 discovery evidence', runtimeEvidence ? `${runtimeEvidence.status} · ${runtimeEvidence.query}` : runtimeState],
-        ['자동 수집', automation?.status === 'COMPLETE' ? (automation.invocationMode === 'SYSTEMD_TIMER' ? '최근 TIMER-MODE 실행 증거 있음' : '최근 MANUAL 실행') : automationState],
-        ['Schedule', automation?.scheduledInvocationObserved ? '최근 timer 실행 증거 있음 · 현재 enabled/active는 운영 QA 필요' : '현재 enabled/active 미검증'],
+        ['자동 수집', automation?.status === 'COMPLETE'
+          ? automation.scheduledInvocationObserved
+            ? 'timer trigger 확인됨'
+            : automation.invocationMode === 'SYSTEMD_TIMER'
+              ? 'SYSTEMD_TIMER 모드 기록만 확인 · trigger 미검증'
+              : '최근 MANUAL 실행'
+          : automationState],
+        ['Schedule', automation?.scheduledInvocationObserved ? '과거 trigger 확인 · 현재 enabled/active는 운영 QA 필요' : 'timer trigger / enabled / active 미검증'],
         ['Quota', runtimeEvidence?.quotaState ?? 'UNKNOWN — sanitized runtime snapshot unavailable'],
       ],
     },
