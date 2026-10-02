@@ -37,6 +37,15 @@ import { createVaultBackedAccountReaders } from '../features/account-readonly/ac
 import type { AccountProvider, CanonicalAccountSnapshot } from '../features/account-readonly/account-readonly.contract';
 import { readTradeAutomationJournalPayloads } from './trade-automation-unified-journal-adapter';
 import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
+import {
+  automaticExitReason,
+  buildAutomaticExitPlanInput,
+  type MemberAutoTradingExitReason,
+} from './member-auto-trading-exit-plan.service';
+import {
+  readMemberAutoTradingMarketMark,
+  type MemberAutoTradingMarketMark,
+} from './member-auto-trading-market-mark.service';
 
 const DEFAULT_INTERVAL_MS = 30_000;
 const MIN_INTERVAL_MS = 10_000;
@@ -74,6 +83,10 @@ export interface MemberAutoTradingBackgroundSource {
     nowMs: number,
   ): Promise<MemberAutoTradingFxQuote>;
   readLiveAccountSnapshot(userId: string, provider: AccountProvider): Promise<CanonicalAccountSnapshot>;
+  readMarketMark(
+    market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
+    symbol: string,
+  ): Promise<MemberAutoTradingMarketMark>;
 }
 
 export type MemberAutoTradingBackgroundRunResult = {
@@ -91,6 +104,9 @@ export type MemberAutoTradingBackgroundRunResult = {
   failures: number;
   livePlans: number;
   liveOrders: number;
+  paperExitOrders: number;
+  liveExitOrders: number;
+  exitBlocked: number;
   privateTradingRequests: number;
 };
 
@@ -226,6 +242,97 @@ function policyAllowsEntry(member: EligibleMember, entry: MemberAutoTradingPaper
   return true;
 }
 
+const EXIT_PARENT_REASON_PREFIX = 'AUTO_EXIT_ENTRY_PLAN:';
+const POSITION_QUANTITY_TOLERANCE = 1e-8;
+
+function reasonValue(plan: TradingPlan, prefix: string) {
+  const reason = plan.signalReasons.find((value) => value.startsWith(prefix));
+  return reason ? reason.slice(prefix.length) : null;
+}
+
+function backgroundAutomaticPlan(plan: TradingPlan) {
+  return plan.executionMode === 'automatic'
+    || plan.signalReasons.includes('CANONICAL_PAPER_HANDOFF')
+    || plan.signalReasons.includes('CANONICAL_LIVE_AUTO_HANDOFF')
+    || Boolean(reasonValue(plan, EXIT_PARENT_REASON_PREFIX));
+}
+
+type TrackedAutomaticPosition = Readonly<{
+  plan: TradingPlan;
+  order: TradingOrder;
+  remainingQuantity: number;
+  activeExit: boolean;
+}>;
+
+function trackedAutomaticPositions(
+  runtime: MemberRuntimeState,
+  accountMode: 'paper' | 'live',
+): TrackedAutomaticPosition[] {
+  const orderByPlan = new Map(runtime.orders.map((order) => [order.planId, order]));
+  const exitsByParent = new Map<string, TradingOrder[]>();
+  for (const exitPlan of runtime.plans) {
+    if (exitPlan.accountMode !== accountMode || exitPlan.reduceOnly !== true || !backgroundAutomaticPlan(exitPlan)) continue;
+    const parentId = reasonValue(exitPlan, EXIT_PARENT_REASON_PREFIX);
+    if (!parentId) continue;
+    const exitOrder = orderByPlan.get(exitPlan.id);
+    if (!exitOrder) continue;
+    const rows = exitsByParent.get(parentId) ?? [];
+    rows.push(exitOrder);
+    exitsByParent.set(parentId, rows);
+  }
+  return runtime.plans.flatMap((plan) => {
+    if (plan.accountMode !== accountMode || plan.reduceOnly === true || !backgroundAutomaticPlan(plan)) return [];
+    const order = orderByPlan.get(plan.id);
+    if (!order || !['PARTIALLY_FILLED', 'FILLED'].includes(order.state) || !(order.filledQuantity > 0)) return [];
+    const exits = exitsByParent.get(plan.id) ?? [];
+    const exited = exits.reduce((sum, row) => (
+      ['PARTIALLY_FILLED', 'FILLED'].includes(row.state) && row.filledQuantity > 0
+        ? sum + row.filledQuantity
+        : sum
+    ), 0);
+    const remainingQuantity = Math.max(0, order.filledQuantity - exited);
+    if (!(remainingQuantity > POSITION_QUANTITY_TOLERANCE)) return [];
+    return [{
+      plan,
+      order,
+      remainingQuantity,
+      activeExit: exits.some((row) => ['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'RECOVERY_REQUIRED'].includes(row.state)),
+    }];
+  });
+}
+
+function openAutomaticPlans(runtime: MemberRuntimeState, accountMode: 'paper' | 'live') {
+  const openPositionIds = new Set(trackedAutomaticPositions(runtime, accountMode).map((row) => row.plan.id));
+  const orderByPlan = new Map(runtime.orders.map((order) => [order.planId, order]));
+  return runtime.plans.filter((plan) => {
+    if (plan.accountMode !== accountMode || plan.reduceOnly === true || !backgroundAutomaticPlan(plan)) return false;
+    if (openPositionIds.has(plan.id)) return true;
+    const order = orderByPlan.get(plan.id);
+    return Boolean(order && ['SUBMITTED', 'ACCEPTED', 'RECOVERY_REQUIRED'].includes(order.state));
+  });
+}
+
+function providerPositionQuantity(snapshot: CanonicalAccountSnapshot, position: TrackedAutomaticPosition) {
+  if (!snapshot.connected || snapshot.stale || snapshot.status !== 'CONNECTED') {
+    throw new Error('BACKGROUND_LIVE_ACCOUNT_SNAPSHOT_NOT_FRESH');
+  }
+  const symbol = normalizedSymbol(position.plan.symbol);
+  const matches = (snapshot.positions ?? []).filter((row) =>
+    normalizedSymbol(row.symbol) === symbol && finite(row.quantity) && Math.abs(row.quantity!) > POSITION_QUANTITY_TOLERANCE);
+  if (matches.length !== 1) throw new Error('BACKGROUND_LIVE_POSITION_RECONCILIATION_REQUIRED');
+  const row = matches[0]!;
+  if (position.plan.exchange === 'bitget' && row.side) {
+    const expected = position.plan.side === 'short' ? 'short' : 'long';
+    if (String(row.side).toLowerCase() !== expected) throw new Error('BACKGROUND_LIVE_POSITION_SIDE_MISMATCH');
+  }
+  const quantity = Math.abs(Number(row.availableQuantity ?? row.quantity));
+  if (!finite(quantity) || quantity <= 0
+    || Math.abs(quantity - position.remainingQuantity) > Math.max(POSITION_QUANTITY_TOLERANCE, position.remainingQuantity * 1e-6)) {
+    throw new Error('BACKGROUND_LIVE_POSITION_QUANTITY_DRIFT');
+  }
+  return quantity;
+}
+
 function activePlans(plans: readonly TradingPlan[], orders: readonly TradingOrder[]) {
   const planById = new Map(plans.map((plan) => [plan.id, plan]));
   return orders
@@ -299,7 +406,7 @@ function exposureState(
   nowMs: number,
   accountMode: TradingPlan['accountMode'] = 'paper',
 ) {
-  const active = activePlans(runtime.plans, runtime.orders).filter((plan) => plan.accountMode === accountMode);
+  const active = openAutomaticPlans(runtime, accountMode === 'live' ? 'live' : 'paper');
   const mapping = marketMapping(entry.identity.market, policy);
   const side = sideFor(entry.identity.direction);
   const sameInstrument = active.filter((plan) => plan.exchange === mapping.exchange
@@ -512,7 +619,7 @@ function normalizedSymbol(value: unknown) {
 }
 
 function activeLivePlans(runtime: MemberRuntimeState) {
-  return activePlans(runtime.plans, runtime.orders).filter((plan) => plan.accountMode === 'live');
+  return openAutomaticPlans(runtime, 'live');
 }
 
 function expectedBalanceCurrency(market: MemberAutoTradingPaperHandoffEntry['identity']['market']) {
