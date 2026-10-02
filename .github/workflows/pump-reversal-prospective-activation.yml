@@ -95,6 +95,9 @@ jobs:
           grep -F "rawProspectiveCreditBeforeEligibleAfterMs: 0" "$install" >/dev/null
           grep -F "missingEconomicEvidenceMayBecomeZero: false" "$install" >/dev/null
           grep -F "/activate-pump-paper-natural " "$workflow" >/dev/null
+          grep -F "github.event.issue.number == 1555" "$workflow" >/dev/null
+          grep -F "Staging Readiness Control — Rollover 2026-10-02" "$workflow" >/dev/null
+          grep -F "github.event.issue.pull_request == null" "$workflow" >/dev/null
           grep -F "environment: production" "$workflow" >/dev/null
           ! grep -E 'deploy-production\.sh|pm2 (start|restart|reload|delete|stop)|supabase db|psql .*-(c|f)' "$workflow" >/dev/null
           ! grep -E '/api/v2/mix/order/|/api/v2/mix/account/' "$install" >/dev/null
@@ -102,7 +105,10 @@ jobs:
   gate:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 23 &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
       startsWith(github.event.comment.body, '/activate-pump-paper-natural ')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -397,7 +403,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
               body: [
                 '[PUMP_PAPER_NATURAL_ACTIVATED]',
                 `TARGET_SHA=${process.env.TARGET_SHA}`,
