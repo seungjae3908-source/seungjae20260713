@@ -90,21 +90,69 @@ fi
 policy_summary_for_path() {
   node --input-type=module - "$1" <<'NODE'
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 const [path] = process.argv.slice(2);
 const value = JSON.parse(fs.readFileSync(path, 'utf8'));
+const stable = (input) => {
+  if (Array.isArray(input)) return `[${input.map(stable).join(',')}]`;
+  if (input && typeof input === 'object') {
+    return `{${Object.keys(input).sort().map((key) => `${JSON.stringify(key)}:${stable(input[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(input) ?? 'null';
+};
+const sha256 = (input) => createHash('sha256').update(
+  typeof input === 'string' ? input : stable(input),
+).digest('hex');
+const requiredCosts = [
+  'commission', 'tax', 'spread', 'slippage',
+  'funding', 'latency', 'liquidityImpact', 'partialFillImpact',
+];
+const expectedStages = {
+  functionalCheckN: 10,
+  firstEconomicReviewN: 30,
+  regimeReviewN: 50,
+  fullValidationReviewN: 100,
+};
+const candidate = value?.candidate ?? {};
+const { candidateId, ...candidateCore } = candidate;
+const expectedCandidateDigest = sha256(candidateCore);
+const { policyDigest, ...policyCore } = value ?? {};
+const expectedPolicyDigest = sha256(policyCore);
 const valid = value?.schemaVersion === 'crypto-pump-reversal-prospective-policy-v1'
   && value?.status === 'FROZEN_PROSPECTIVE_RESEARCH_ONLY'
-  && /^[0-9a-f]{40}$/u.test(String(value?.candidate?.researchCodeSha ?? ''))
-  && value?.candidate?.strategyId === 'CRYPTO_PUMP_REVERSAL_SHORT_CLEAN_V1'
-  && value?.candidate?.market === 'CRYPTO_FUTURES'
-  && value?.candidate?.direction === 'SHORT'
-  && typeof value?.candidate?.candidateId === 'string'
-  && typeof value?.candidate?.parameterHash === 'string'
+  && /^[0-9a-f]{40}$/u.test(String(candidate?.researchCodeSha ?? ''))
+  && candidate?.strategyId === 'CRYPTO_PUMP_REVERSAL_SHORT_CLEAN_V1'
+  && candidate?.market === 'CRYPTO_FUTURES'
+  && candidate?.direction === 'SHORT'
+  && candidate?.symbolBinding === 'DYNAMIC_EVENT_SYMBOL'
+  && /^[0-9a-f]{64}$/u.test(String(candidate?.parameterHash ?? ''))
+  && /^[0-9a-f]{64}$/u.test(String(value?.candidateDigest ?? ''))
+  && value.candidateDigest === expectedCandidateDigest
+  && candidateId === `paper-candidate-v1:${expectedCandidateDigest}`
+  && /^[0-9a-f]{64}$/u.test(String(policyDigest ?? ''))
+  && policyDigest === expectedPolicyDigest
   && Number.isSafeInteger(value?.policyFrozenAtMs)
   && Number.isSafeInteger(value?.eligibleAfterMs)
   && value.eligibleAfterMs >= value.policyFrozenAtMs + 86400000
+  && stable(value?.stageThresholds) === stable(expectedStages)
+  && stable(value?.fullCostPolicy?.requiredComponents) === stable(requiredCosts)
+  && value?.fullCostPolicy?.allEightRequired === true
+  && value?.fullCostPolicy?.missingCostAsZeroAllowed === false
+  && value?.fullCostPolicy?.fundingDirectionalFilterAllowed === false
+  && value?.fullCostPolicy?.settlementBeforeFullCostAllowed === false
+  && value?.antiTuning?.performanceBasedUniverseExclusionAllowed === false
+  && value?.antiTuning?.samePeriodBadCoinExclusionAllowed === false
+  && value?.antiTuning?.oosParameterRetuningAllowed === false
+  && value?.antiTuning?.outcomeAwareCandidateSelectionAllowed === false
+  && value?.antiTuning?.thresholdRelaxationAfterResultsAllowed === false
+  && value?.bootstrap?.canonicalProfitAdmissionBeforeObservedCalibration === false
+  && value?.bootstrap?.fabricatedExpectedEdgeAllowed === false
+  && value?.bootstrap?.fabricatedSampleSizeAllowed === false
   && value?.bootstrap?.rawProspectiveSampleEconomicCredit === 0
   && value?.safety?.profitabilityProven === false
+  && value?.safety?.profitabilityClaimAllowed === false
+  && value?.safety?.profitabilityCredit === 0
+  && value?.safety?.championPromotionAllowed === false
   && value?.safety?.executionAuthority === 'NONE'
   && value?.safety?.liveTrading === false
   && value?.safety?.autoTrading === false
@@ -114,13 +162,14 @@ if (!valid) process.exit(1);
 process.stdout.write(JSON.stringify({
   policyFrozenAtMs: value.policyFrozenAtMs,
   eligibleAfterMs: value.eligibleAfterMs,
-  candidateId: value.candidate.candidateId,
-  parameterHash: value.candidate.parameterHash,
-  researchCodeSha: value.candidate.researchCodeSha,
-  strategyId: value.candidate.strategyId,
-  market: value.candidate.market,
-  direction: value.candidate.direction,
-  policyDigest: value.policyDigest,
+  candidateId,
+  candidateDigest: value.candidateDigest,
+  parameterHash: candidate.parameterHash,
+  researchCodeSha: candidate.researchCodeSha,
+  strategyId: candidate.strategyId,
+  market: candidate.market,
+  direction: candidate.direction,
+  policyDigest,
 }));
 NODE
 }
