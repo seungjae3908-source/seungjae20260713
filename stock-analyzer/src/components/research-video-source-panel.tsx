@@ -174,8 +174,11 @@ function parseAiReview(value: unknown): AiReviewStatus | null {
   if (value.invocationMode !== 'MANUAL' && value.invocationMode !== 'SYSTEMD_TIMER') return null;
   if (typeof value.scheduledInvocationObserved !== 'boolean') return null;
   const keys = ['providerNetworkCalls','cacheHits','reviewCount','proposerReviewCount','criticReviewCount','missingProfileCount','blockedProfileCount','deferredProfileCount'] as const;
-  if (keys.some((key) => typeof value[key] !== 'number' || !Number.isSafeInteger(value[key]) || value[key] < 0 || value[key] > 3)) return null;
-  if (value.proposerReviewCount + value.criticReviewCount !== value.reviewCount) return null;
+  if (keys.some((key) => typeof value[key] !== 'number' || !Number.isSafeInteger(value[key]) || (value[key] as number) < 0 || (value[key] as number) > 3)) return null;
+  const reviewCount = value.reviewCount as number;
+  const proposerReviewCount = value.proposerReviewCount as number;
+  const criticReviewCount = value.criticReviewCount as number;
+  if (proposerReviewCount + criticReviewCount !== reviewCount) return null;
   return value as unknown as AiReviewStatus;
 }
 
